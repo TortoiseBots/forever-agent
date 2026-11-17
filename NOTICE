@@ -4,7 +4,12 @@ Copyright (c) 2026 pjerra
 forever-agent is derived from turtle-agent (https://github.com/pjerra/turtle-agent) and is licensed under the
 GNU Affero General Public License v3.0 or later (see LICENSE). turtle-agent's notice follows unchanged.
 
-----------------------------------------------------------------------------------------------------------------
+internal/trials (the scoring half of the trials bench, the trial definitions under
+internal/trials/trialdefs and the data under internal/trials/data) is ported from tortoise-trials
+(https://github.com/pjerra/tortoise-trials), GNU Affero General Public License v3.0 or later.
+The JSON files are copied unchanged.
+
+----------------------------------------------------------------------------------------------
 
 turtle-agent
 Copyright (c) 2026 pjerra

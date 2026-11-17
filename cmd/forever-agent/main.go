@@ -130,6 +130,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return raidAutopilotCmd(ctx, args[1:], stdout, stderr)
 	case "walk-preflight":
 		return walkPreflightCmd(ctx, args[1:], stdout, stderr)
+	case "trials":
+		return trialsCmd(args[1:], stdout, stderr)
 	case "decisions":
 		return decisionsCmd(ctx, args[1:], stdout, stderr)
 	case "plan-diff":
