@@ -87,7 +87,7 @@ type fakeGame struct {
 func newFake(known ...uint32) *fakeGame {
 	clk := newClock()
 	st := spellstate.New(clk.Now)
-	st.SetInitial(game.InitialSpells{Spells: known})
+	st.SetInitial(world.InitialSpells{Spells: known})
 	return &fakeGame{clk: clk, st: st, selfOK: true,
 		self: world.Unit{GUID: selfG, Type: "player", Name: "Leader", Class: 8, Level: 30, Health: 800, MaxHealth: 800,
 			PowerType: 0, Power: manaFull, MaxPower: manaFull, StandState: "stand", Auras: []world.Aura{}}}
@@ -155,7 +155,7 @@ func (f *fakeGame) Face(ctx context.Context, g world.GUID) error {
 	f.faces = append(f.faces, g)
 	for _, u := range f.units {
 		if u.GUID == g {
-			f.self.O = game.Facing(f.self.X, f.self.Y, u.X, u.Y)
+			f.self.O = world.Facing(f.self.X, f.self.Y, u.X, u.Y)
 		}
 	}
 	return nil

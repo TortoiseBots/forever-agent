@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The spells below, with their template numbers (internal/spells/meta_test.go):
@@ -28,7 +29,7 @@ func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 func newState(known ...uint32) (*State, *clock) {
 	c := &clock{t: time.Unix(1_700_000_000, 0)}
 	st := New(c.now)
-	st.SetInitial(game.InitialSpells{Spells: known})
+	st.SetInitial(world.InitialSpells{Spells: known})
 	return st, c
 }
 
@@ -279,10 +280,10 @@ func TestServerCooldownsAndLogin(t *testing.T) {
 	}
 
 	// SMSG_INITIAL_SPELLS: a running cooldown, a category lock, an infinite one, and an item's.
-	st.SetInitial(game.InitialSpells{Spells: []uint32{fireBlast, bloodrage, pummel, counterspell}, Cooldowns: []game.InitialCooldown{
+	st.SetInitial(world.InitialSpells{Spells: []uint32{fireBlast, bloodrage, pummel, counterspell}, Cooldowns: []world.InitialCooldown{
 		{Spell: fireBlast, Category: 19, Cooldown: 5000, CategoryCooldown: 5000},
 		{Spell: pummel, Category: 88, Cooldown: 0, CategoryCooldown: 7000},
-		{Spell: bloodrage, Cooldown: 1, CategoryCooldown: game.InfiniteCooldown},
+		{Spell: bloodrage, Cooldown: 1, CategoryCooldown: world.InfiniteCooldown},
 		{Spell: 5, Item: 6948, Cooldown: 30000},
 	}})
 	if left, _ := st.Remaining(fireBlast); left != 5*time.Second {

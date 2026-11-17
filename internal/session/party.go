@@ -12,43 +12,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 )
 
-type PartyMember struct {
-	Name      string      `json:"name"`
-	GUID      packet.GUID `json:"guid"`
-	Online    bool        `json:"online"`
-	Dead      bool        `json:"dead"`
-	Leader    bool        `json:"leader"`
-	Assistant bool        `json:"assistant,omitempty"` // a raid assistant
-	Subgroup  int         `json:"subgroup,omitempty"`  // raid subgroup 1-8, as the raid frame numbers them; 0 in a party
-	Health    uint16      `json:"health"`
-	MaxHealth uint16      `json:"max_health"`
-	PowerType uint8       `json:"power_type"`
-	Power     uint16      `json:"power"`
-	MaxPower  uint16      `json:"max_power"`
-	Level     uint16      `json:"level"`
-	Zone      uint16      `json:"zone"`
-}
-
-// PartyInfo is the group seen from the player; Members never includes the player.
-type PartyInfo struct {
-	InGroup       bool          `json:"in_group"`
-	Raid          bool          `json:"raid,omitempty"`      // a raid group, not a party
-	Assistant     bool          `json:"assistant,omitempty"` // the player is a raid assistant
-	Subgroup      int           `json:"subgroup,omitempty"`  // the player's raid subgroup 1-8; 0 in a party
-	Leader        packet.GUID   `json:"leader,omitempty"`
-	Members       []PartyMember `json:"members"`
-	PendingInvite string        `json:"pending_invite,omitempty"`
-	// LootMethod, LootMaster and LootThreshold are the group's loot rules from SMSG_GROUP_LIST: the method by name
-	// (free_for_all, round_robin, master_loot, group_loot, need_before_greed), the master looter (master_loot only) and
-	// the quality threshold (2 uncommon). Under round_robin, group_loot and need_before_greed an item below the threshold
-	// is shown only to the member whose turn it was at the kill until that member closes the window (LootMgr.cpp:922-946).
-	LootMethod    string      `json:"loot_method,omitempty"`
-	LootMaster    packet.GUID `json:"loot_master,omitempty"`
-	LootThreshold uint8       `json:"loot_threshold,omitempty"`
-	// Marks are the group's raid icons by name (skull, cross, ...), from MSG_RAID_TARGET_UPDATE.
-	Marks map[string]packet.GUID `json:"marks,omitempty"`
-}
-
 func (s *Session) registerParty() {
 	s.handlers[opcode.SMSGGroupInvite] = s.onGroupInvite
 	s.handlers[opcode.SMSGPartyCommandResult] = s.onPartyResult
@@ -307,8 +270,10 @@ func (s *Session) onGroupSetLeader(body []byte) error {
 	return nil
 }
 
-// apply merges the fields st's mask carries into m.
-func (m *PartyMember) apply(st game.MemberStats) {
+// applyMember merges the fields st's mask carries into m. A method cannot live on the
+// aliased PartyMember (methods move with their type to world, which must not import game),
+// so the merge stays here as a session-local function.
+func applyMember(m *PartyMember, st game.MemberStats) {
 	if st.Mask&game.GroupUpdateStatus != 0 {
 		m.Online, m.Dead = st.Status&game.MemberOnline != 0, st.Status&(game.MemberDead|game.MemberGhost) != 0
 	}
@@ -354,7 +319,7 @@ func (s *Session) onMemberStats(body []byte) error {
 	if idx >= 0 {
 		merged = s.party.Members[idx]
 	}
-	merged.apply(st)
+	applyMember(&merged, st)
 	if idx >= 0 {
 		s.party.Members[idx] = merged
 	}

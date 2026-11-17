@@ -45,18 +45,18 @@ func TestPlanTrade(t *testing.T) {
 		want  []want
 		err   string
 	}{
-		{"exact stack goes whole", []objects.Item{water20, bread4}, []TradeItemReq{{breadEntry, 4}}, []want{{bread4, false, [2]uint8{}, 4}}, ""},
-		{"count 0 is one", []objects.Item{bread4}, []TradeItemReq{{breadEntry, 0}}, []want{{bread4, true, [2]uint8{255, 23}, 1}}, ""},
-		{"part of a stack splits", []objects.Item{water20, bread4}, []TradeItemReq{{waterEntry, 5}}, []want{{water20, true, [2]uint8{255, 23}, 5}}, ""},
-		{"the smallest stack that has enough is split", []objects.Item{water20, water20b, water7}, []TradeItemReq{{waterEntry, 5}}, []want{{water7, true, [2]uint8{255, 23}, 5}}, ""},
-		{"an exact stack beats a split", []objects.Item{water20, water7}, []TradeItemReq{{waterEntry, 7}}, []want{{water7, false, [2]uint8{}, 7}}, ""},
-		{"several stacks: whole ones, then the last piece", []objects.Item{water20, water20b, water7}, []TradeItemReq{{waterEntry, 30}},
+		{"exact stack goes whole", []objects.Item{water20, bread4}, []TradeItemReq{{Entry: breadEntry, Count: 4}}, []want{{bread4, false, [2]uint8{}, 4}}, ""},
+		{"count 0 is one", []objects.Item{bread4}, []TradeItemReq{{Entry: breadEntry, Count: 0}}, []want{{bread4, true, [2]uint8{255, 23}, 1}}, ""},
+		{"part of a stack splits", []objects.Item{water20, bread4}, []TradeItemReq{{Entry: waterEntry, Count: 5}}, []want{{water20, true, [2]uint8{255, 23}, 5}}, ""},
+		{"the smallest stack that has enough is split", []objects.Item{water20, water20b, water7}, []TradeItemReq{{Entry: waterEntry, Count: 5}}, []want{{water7, true, [2]uint8{255, 23}, 5}}, ""},
+		{"an exact stack beats a split", []objects.Item{water20, water7}, []TradeItemReq{{Entry: waterEntry, Count: 7}}, []want{{water7, false, [2]uint8{}, 7}}, ""},
+		{"several stacks: whole ones, then the last piece", []objects.Item{water20, water20b, water7}, []TradeItemReq{{Entry: waterEntry, Count: 30}},
 			[]want{{water20b, false, [2]uint8{}, 20}, {water20, true, [2]uint8{255, 23}, 10}}, ""},
-		{"two asks for one entry add up", []objects.Item{water20, water7}, []TradeItemReq{{waterEntry, 3}, {waterEntry, 4}}, []want{{water7, false, [2]uint8{}, 7}}, ""},
-		{"too few", []objects.Item{water20}, []TradeItemReq{{waterEntry, 21}}, nil, "have 20 of item 1179"},
-		{"absent", []objects.Item{water20}, []TradeItemReq{{breadEntry, 1}}, nil, "have 0 of item 4540"},
-		{"no entry", []objects.Item{water20}, []TradeItemReq{{0, 1}}, nil, "needs its entry"},
-		{"an item without its create block is not counted", []objects.Item{{Bag: 255, Slot: 30, GUID: 5}}, []TradeItemReq{{waterEntry, 1}}, nil, "have 0"},
+		{"two asks for one entry add up", []objects.Item{water20, water7}, []TradeItemReq{{Entry: waterEntry, Count: 3}, {Entry: waterEntry, Count: 4}}, []want{{water7, false, [2]uint8{}, 7}}, ""},
+		{"too few", []objects.Item{water20}, []TradeItemReq{{Entry: waterEntry, Count: 21}}, nil, "have 20 of item 1179"},
+		{"absent", []objects.Item{water20}, []TradeItemReq{{Entry: breadEntry, Count: 1}}, nil, "have 0 of item 4540"},
+		{"no entry", []objects.Item{water20}, []TradeItemReq{{Entry: 0, Count: 1}}, nil, "needs its entry"},
+		{"an item without its create block is not counted", []objects.Item{{Bag: 255, Slot: 30, GUID: 5}}, []TradeItemReq{{Entry: waterEntry, Count: 1}}, nil, "have 0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := planTrade(tc.items, free, tc.ask)
@@ -84,7 +84,7 @@ func TestPlanTrade(t *testing.T) {
 	}
 
 	t.Run("no free slot for a split", func(t *testing.T) {
-		if _, err := planTrade([]objects.Item{water20}, nil, []TradeItemReq{{waterEntry, 5}}); err == nil || !strings.Contains(err.Error(), "no free bag slot") {
+		if _, err := planTrade([]objects.Item{water20}, nil, []TradeItemReq{{Entry: waterEntry, Count: 5}}); err == nil || !strings.Contains(err.Error(), "no free bag slot") {
 			t.Fatal(err)
 		}
 	})
@@ -93,7 +93,7 @@ func TestPlanTrade(t *testing.T) {
 		var ask []TradeItemReq
 		for i := uint32(1); i <= 7; i++ {
 			items = append(items, st(i, 1, 255, uint8(23+i)))
-			ask = append(ask, TradeItemReq{i, 1})
+			ask = append(ask, TradeItemReq{Entry: i, Count: 1})
 		}
 		if _, err := planTrade(items, free, ask); err == nil || !strings.Contains(err.Error(), "takes 7 trade slots") {
 			t.Fatal(err)
@@ -155,7 +155,7 @@ func replaceSlot(h *harness, slot uint8, g packet.GUID, entry, count uint32) {
 
 func TestTradeHandsOverASplitStackWholeStackAndGold(t *testing.T) {
 	h := tradeRig(t, 3)
-	done := startTrade(h, TradeRequest{Name: "gorm", Items: []TradeItemReq{{waterEntry, 5}, {breadEntry, 4}}, Gold: 150})
+	done := startTrade(h, TradeRequest{Name: "gorm", Items: []TradeItemReq{{Entry: waterEntry, Count: 5}, {Entry: breadEntry, Count: 4}}, Gold: 150})
 
 	if p := h.expect(opcode.CMSGInitiateTrade); string(p.Body) != string(game.BuildInitiateTrade(botGUID)) {
 		t.Fatalf("initiate % X", p.Body)
@@ -223,7 +223,7 @@ func TestTradeHandsOverASplitStackWholeStackAndGold(t *testing.T) {
 
 func TestTradeByGuidWithoutAnythingToSplit(t *testing.T) {
 	h := tradeRig(t, 9.5)
-	done := startTrade(h, TradeRequest{To: botGUID, Items: []TradeItemReq{{breadEntry, 4}}})
+	done := startTrade(h, TradeRequest{To: botGUID, Items: []TradeItemReq{{Entry: breadEntry, Count: 4}}})
 	h.expect(opcode.CMSGInitiateTrade)
 	h.tradeStatus(game.TradeOpenWindow)
 	if p := h.expect(opcode.CMSGSetTradeItem); string(p.Body) != string(game.BuildSetTradeItem(0, 255, 31)) {
@@ -295,7 +295,7 @@ func TestTradeTimesOutAndCancels(t *testing.T) {
 	}
 
 	// The window opens but the other side never accepts: the cancel goes out and the bags are as they were.
-	done = startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{breadEntry, 4}}, Wait: 150 * time.Millisecond})
+	done = startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{Entry: breadEntry, Count: 4}}, Wait: 150 * time.Millisecond})
 	h.expect(opcode.CMSGInitiateTrade)
 	h.tradeStatus(game.TradeOpenWindow)
 	h.expect(opcode.CMSGSetTradeItem)
@@ -343,7 +343,7 @@ func TestTradeRefusedAndCancelledByTheServer(t *testing.T) {
 // The core cancels the trade when it refuses an item (a soulbound one) while the agent fills the window.
 func TestTradeCancelledWhileFillingTheWindow(t *testing.T) {
 	h := tradeRig(t, 3)
-	done := startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{breadEntry, 4}}})
+	done := startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{Entry: breadEntry, Count: 4}}})
 	h.expect(opcode.CMSGInitiateTrade)
 	h.tradeStatus(game.TradeOpenWindow)
 	h.expect(opcode.CMSGSetTradeItem)
@@ -374,8 +374,8 @@ func TestTradeChecksBeforeItTouchesAnything(t *testing.T) {
 		{"a creature is no one to trade with", TradeRequest{To: wolfGUID, Gold: 1}, "not a player in view"},
 		{"yourself", TradeRequest{To: me.GUID, Gold: 1}, "cannot trade with yourself"},
 		{"too much gold", TradeRequest{Name: "Gorm", Gold: 501}, "501 copper wanted, the purse holds 500"},
-		{"too many items", TradeRequest{Name: "Gorm", Items: []TradeItemReq{{breadEntry, 5}}}, "have 4 of item 4540"},
-		{"item not carried", TradeRequest{Name: "Gorm", Items: []TradeItemReq{{9999, 1}}}, "have 0 of item 9999"},
+		{"too many items", TradeRequest{Name: "Gorm", Items: []TradeItemReq{{Entry: breadEntry, Count: 5}}}, "have 4 of item 4540"},
+		{"item not carried", TradeRequest{Name: "Gorm", Items: []TradeItemReq{{Entry: 9999, Count: 1}}}, "have 0 of item 9999"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := <-startTrade(h, tc.req)
@@ -470,7 +470,7 @@ func TestTradeVerifiedCountsGoldReceived(t *testing.T) {
 // The split goes to a slot that is free when it is sent, not the one the plan saw.
 func TestTradeSplitPicksTheSlotAtSplitTime(t *testing.T) {
 	h := tradeRig(t, 3)
-	done := startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{waterEntry, 5}}})
+	done := startTrade(h, TradeRequest{Name: "Gorm", Items: []TradeItemReq{{Entry: waterEntry, Count: 5}}})
 	h.expect(opcode.CMSGInitiateTrade)
 	// Something lands in slot 23, the planned destination, before the window opens.
 	replaceSlot(h, 23, packet.GUID(0x4000000000000030), 2589, 1)

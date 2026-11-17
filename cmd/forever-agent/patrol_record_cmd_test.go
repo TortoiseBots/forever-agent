@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/patrols"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -33,9 +32,9 @@ type patrolRecordFake struct {
 	statusCalls int
 	unitsCalls  int
 
-	status func(call int) session.StatusInfo
+	status func(call int) world.StatusInfo
 	units  func(call int) []world.Unit
-	party  session.PartyInfo
+	party  world.PartyInfo
 	own    world.Unit
 }
 
@@ -188,8 +187,8 @@ func patrolRecordMoving(tick int) world.Unit {
 // matched to its world-export spawn; the run exits 0 and prints the patrol.
 func TestPatrolRecordHappyPath(t *testing.T) {
 	f := &patrolRecordFake{
-		status: func(int) session.StatusInfo {
-			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
+		status: func(int) world.StatusInfo {
+			return world.StatusInfo{State: world.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
 		units: func(call int) []world.Unit { return []world.Unit{patrolRecordMoving(call - 1)} },
 	}
@@ -239,7 +238,7 @@ func TestPatrolRecordHappyPath(t *testing.T) {
 // TestPatrolRecordRefusesGroupedAgent: a grouped agent is refused before any
 // stance line; the recording would land in a bound raid's instance.
 func TestPatrolRecordRefusesGroupedAgent(t *testing.T) {
-	f := &patrolRecordFake{party: session.PartyInfo{InGroup: true}}
+	f := &patrolRecordFake{party: world.PartyInfo{InGroup: true}}
 	clock := &patrolRecordClock{now: time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)}
 	out := filepath.Join(t.TempDir(), "patrols.json")
 
@@ -267,8 +266,8 @@ func TestPatrolRecordRefusesGroupedAgent(t *testing.T) {
 func TestPatrolRecordStopsOnCombat(t *testing.T) {
 	const own = world.GUID(0x00000000000000AA)
 	f := &patrolRecordFake{
-		status: func(int) session.StatusInfo {
-			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: own}
+		status: func(int) world.StatusInfo {
+			return world.StatusInfo{State: world.StatusInWorld, Map: 249, GUID: own}
 		},
 		units: func(call int) []world.Unit {
 			if call == 5 {
@@ -311,8 +310,8 @@ func TestPatrolRecordStopsOnCombat(t *testing.T) {
 // Mutation: sending .gm visible on first fails the order assert.
 func TestPatrolRecordSendsOnlyAllowedLines(t *testing.T) {
 	f := &patrolRecordFake{
-		status: func(int) session.StatusInfo {
-			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
+		status: func(int) world.StatusInfo {
+			return world.StatusInfo{State: world.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
 		units: func(call int) []world.Unit { return []world.Unit{patrolRecordMoving(call - 1)} },
 	}

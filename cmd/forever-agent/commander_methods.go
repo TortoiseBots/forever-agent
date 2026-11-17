@@ -546,7 +546,7 @@ func (g remoteGame) Record(now time.Time) error       { return g.c.ledger.Record
 
 func (g remoteGame) AgentPlace() (dungeon.Point, uint32, bool) {
 	st := g.c.cur().Status()
-	return dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, st.Map, st.State == session.StatusInWorld
+	return dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, st.Map, st.State == world.StatusInWorld
 }
 
 // Appear sends ".appear <player>"; the name is checked first.

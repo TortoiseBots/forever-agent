@@ -17,8 +17,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // scoutFakeAgent is the scout's GM on a fake test server: it queues the module's and the toolkit's replies.
@@ -31,7 +31,7 @@ type scoutFakeAgent struct {
 	tt     []string
 	events []events.Event
 	seq    uint64
-	status session.StatusInfo
+	status world.StatusInfo
 
 	gmOn      bool // answer `.gm on` with "GM mode is ON"
 	cfg       bool // answer `.bot scout cfg`
@@ -68,7 +68,7 @@ type scoutFakeAgent struct {
 
 func newScoutFakeAgent(t *testing.T, clock *fakeClock) *scoutFakeAgent {
 	return &scoutFakeAgent{t: t, clock: clock, gmOn: true, cfg: true, toolkit: true, walkReply: true,
-		status:    session.StatusInfo{State: session.StatusInWorld, Map: 1, Character: "Scout"},
+		status:    world.StatusInfo{State: world.StatusInWorld, Map: 1, Character: "Scout"},
 		instCalls: func(int) float64 { return 1 }, losIn: map[string]bool{}}
 }
 
@@ -88,7 +88,7 @@ func (a *scoutFakeAgent) Call(_ context.Context, method string, params, out any,
 	switch method {
 	case "status":
 		st := a.status
-		if p, ok := out.(*session.StatusInfo); ok {
+		if p, ok := out.(*world.StatusInfo); ok {
 			*p = st
 		}
 	case "gm":

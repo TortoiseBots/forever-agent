@@ -22,7 +22,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -33,7 +32,7 @@ type prepullAgent struct {
 	t     *testing.T
 	clock time.Time
 
-	bots    []session.PartyMember
+	bots    []world.PartyMember
 	classes map[world.GUID]uint8
 	auras   map[world.GUID]map[uint32]bool
 
@@ -167,7 +166,7 @@ func newPrepullAgent(t *testing.T) *prepullAgent {
 		g := world.GUID(0x100 + i)
 		a.classes[g] = b.class
 		a.auras[g] = map[uint32]bool{}
-		a.bots = append(a.bots, session.PartyMember{Name: b.name, GUID: g, Online: true})
+		a.bots = append(a.bots, world.PartyMember{Name: b.name, GUID: g, Online: true})
 	}
 	return a
 }
@@ -225,7 +224,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 	case "party":
 		// The player's own group: empty in every TurtleBots walk (the hired bots raid without the player), so a fire
 		// that reads it sees 0 bots. The tests below prove the walk does not.
-		v = session.PartyInfo{}
+		v = world.PartyInfo{}
 	case "gm":
 		var p struct {
 			Text string `json:"text"`
@@ -291,7 +290,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 		fr.Truncated = a.viewTruncated
 		v = botViewResult{Have: true, N: 1, Frame: &fr}
 	case "status":
-		v = session.StatusInfo{Character: a.selfName, GUID: a.selfGUID, State: session.StatusInWorld,
+		v = world.StatusInfo{Character: a.selfName, GUID: a.selfGUID, State: world.StatusInWorld,
 			Map: a.selfMap, X: a.selfX, Y: a.selfY, TeleportSeq: a.selfSeq}
 	case "unit":
 		var p struct {
@@ -664,7 +663,7 @@ func prepullRoleAgent(t *testing.T, hs []prepullHire) *prepullAgent {
 		g := world.GUID(0x100 + i)
 		a.classes[g] = h.class
 		a.auras[g] = map[uint32]bool{}
-		a.bots = append(a.bots, session.PartyMember{Name: h.name, GUID: g, Online: true})
+		a.bots = append(a.bots, world.PartyMember{Name: h.name, GUID: g, Online: true})
 	}
 	return a
 }

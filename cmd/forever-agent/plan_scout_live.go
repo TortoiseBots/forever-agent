@@ -24,7 +24,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/planscout"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -556,7 +555,7 @@ func (sl *scoutLive) loginPhase(ctx context.Context) error {
 	}
 	for {
 		st, err := sl.status(ctx)
-		if err == nil && st.State == session.StatusInWorld {
+		if err == nil && st.State == world.StatusInWorld {
 			break
 		}
 		if held {
@@ -1299,8 +1298,8 @@ func (sl *scoutLive) releaseLease() {
 }
 
 // status is the agent's status RPC.
-func (sl *scoutLive) status(ctx context.Context) (session.StatusInfo, error) {
-	var st session.StatusInfo
+func (sl *scoutLive) status(ctx context.Context) (world.StatusInfo, error) {
+	var st world.StatusInfo
 	err := sl.agent.Call(ctx, "status", nil, &st, 10*time.Second)
 	return st, err
 }

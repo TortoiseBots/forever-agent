@@ -5,14 +5,13 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The loot_object, use_item and team parts of the dungeon driver's Game (dungeon.ObjectActor, dungeon.TeamSource) over the session.
 
-func lootedOf(r session.LootedObject) dungeon.Looted {
-	conv := func(slots []session.LootSlot) []dungeon.ItemCount {
+func lootedOf(r world.LootedObject) dungeon.Looted {
+	conv := func(slots []world.LootSlot) []dungeon.ItemCount {
 		var out []dungeon.ItemCount
 		for _, s := range slots {
 			out = append(out, dungeon.ItemCount{Entry: s.Item, Count: s.Count})
@@ -33,11 +32,11 @@ func (g *sessionGame) LootCorpse(ctx context.Context, guid world.GUID) (dungeon.
 }
 
 func (g *sessionGame) UseItem(ctx context.Context, entry uint32) error {
-	_, err := g.cur().UseItem(ctx, session.EquipRef{Entry: entry}, 0)
+	_, err := g.cur().UseItem(ctx, world.EquipRef{Entry: entry}, 0)
 	return err
 }
 
-// Team is the leader's side from its race (session.Team); "" until the race is known.
+// Team is the leader's side from its race (world.Team); "" until the race is known.
 func (g *sessionGame) Team() string { return g.cur().Team() }
 
 // LootRules is the group's loot method from the session's group list (dungeon.LootRuler); false outside a group.
@@ -50,7 +49,7 @@ func (g *sessionGame) LootRules() (dungeon.LootRules, bool) {
 	return dungeon.LootRules{Method: p.LootMethod, Master: p.LootMaster, Threshold: p.LootThreshold, Leader: p.Leader != 0 && p.Leader == s.Status().GUID}, true
 }
 
-// SetLootRules sets the group's loot method (session.SetLootMethod); the leader must lead the group.
+// SetLootRules sets the group's loot method (world.SetLootMethod); the leader must lead the group.
 func (g *sessionGame) SetLootRules(ctx context.Context, r dungeon.LootRules) error {
 	return g.cur().SetLootMethod(ctx, r.Method, r.Master, "", r.Threshold)
 }

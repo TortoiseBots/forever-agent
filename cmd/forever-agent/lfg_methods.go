@@ -562,7 +562,7 @@ func (v *lfgService) runAuto(a *lfgAuto, s *session.Session, log *events.Log, cu
 			return
 		case <-tick.C:
 		}
-		if v.cur() != s || s.State() != session.StatusInWorld {
+		if v.cur() != s || s.State() != world.StatusInWorld {
 			return
 		}
 		self := s.Status().GUID

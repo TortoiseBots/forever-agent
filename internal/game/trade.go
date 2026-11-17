@@ -131,14 +131,6 @@ func ParseTradeStatus(body []byte) (TradeStatusMsg, error) {
 	return m, nil
 }
 
-// TradeItem is one filled slot of SMSG_TRADE_STATUS_EXTENDED.
-type TradeItem struct {
-	Slot      uint8  `json:"slot"`
-	Entry     uint32 `json:"item_entry"`
-	DisplayID uint32 `json:"display_id,omitempty"`
-	Count     uint32 `json:"count"`
-}
-
 // TradeView is one side of the window as SMSG_TRADE_STATUS_EXTENDED shows it: the gold and the
 // items in the slots (WorldSession::SendUpdateTrade, TradeHandler.cpp:84-132).
 type TradeView struct {

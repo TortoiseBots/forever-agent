@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -50,9 +49,9 @@ func (g remoteGame) Trade(ctx context.Context, to string, items []dungeon.ItemCo
 	if !botName.MatchString(to) {
 		return dungeon.TradeOutcome{}, fmt.Errorf("trade: %q is not a bot name", to)
 	}
-	req := session.TradeRequest{Name: to, OpenWait: 8 * time.Second, Wait: 12 * time.Second}
+	req := world.TradeRequest{Name: to, OpenWait: 8 * time.Second, Wait: 12 * time.Second}
 	for _, it := range items {
-		req.Items = append(req.Items, session.TradeItemReq{Entry: it.Entry, Count: it.Count})
+		req.Items = append(req.Items, world.TradeItemReq{Entry: it.Entry, Count: it.Count})
 	}
 	r, err := g.c.cur().Trade(ctx, req)
 	return dungeon.TradeOutcome{Result: r.Result, Verified: r.Verified, Detail: r.Detail}, err

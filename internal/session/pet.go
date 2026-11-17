@@ -143,52 +143,6 @@ func (s *Session) watchPet() {
 	}
 }
 
-// PetSpell is one spell of the pet's action bar or spell list.
-type PetSpell struct {
-	SpellID  uint32 `json:"spell_id"`
-	Name     string `json:"name,omitempty"`
-	Slot     int    `json:"slot"`     // the bar button (3 to 6 for a spell), -1 when it is not on the bar
-	Autocast bool   `json:"autocast"` // the button is the autocast one (0xC1)
-	Passive  bool   `json:"passive,omitempty"`
-}
-
-// PetInfo is the pet RPC's answer: whether the player has a pet and its state. Without a pet only Present (false) and Bar (false) are
-// set. Health, power and target are the pet's own unit row; the bar, reaction and command state are the last SMSG_PET_SPELLS with the
-// orders sent since applied (see the file's header).
-type PetInfo struct {
-	Present bool        `json:"present"`
-	GUID    packet.GUID `json:"guid,omitempty"`
-	Entry   uint32      `json:"entry,omitempty"`
-	Name    string      `json:"name,omitempty"`
-	Level   uint32      `json:"level,omitempty"`
-	Dead    bool        `json:"dead"`
-
-	Health    uint32 `json:"health"`
-	MaxHealth uint32 `json:"max_health"`
-	PowerType uint8  `json:"power_type"` // 0 mana (a demon), 2 focus (a hunter's pet)
-	Power     uint32 `json:"power"`
-	MaxPower  uint32 `json:"max_power"`
-	// Happiness is the pet's POWER5, 0 to 1,000,000; HappinessState 1 unhappy, 2 content, 3 happy. Both are 0 for a pet that has none (a demon).
-	Happiness      uint32 `json:"happiness,omitempty"`
-	HappinessState uint8  `json:"happiness_state,omitempty"`
-	Loyalty        uint8  `json:"loyalty,omitempty"` // 1 to 6 for a hunter's pet (UNIT_FIELD_BYTES_1 byte 1)
-
-	InCombat bool        `json:"in_combat"`
-	Target   packet.GUID `json:"target,omitempty"` // what the pet attacks
-	Distance float32     `json:"distance"`
-	Moving   bool        `json:"moving"`
-
-	// Bar is true when the session has the pet's action bar (SMSG_PET_SPELLS). React is "passive", "defensive" or "aggressive"; Command is
-	// "stay" or "follow" (an attack order does not change it). Enabled is false while the bar is off (the player is mounted).
-	Bar     bool       `json:"bar"`
-	React   string     `json:"react,omitempty"`
-	Command string     `json:"command,omitempty"`
-	Enabled bool       `json:"enabled"`
-	Spells  []PetSpell `json:"spells,omitempty"`
-	// Refused is the reason of the pet's last refused cast (SMSG_PET_CAST_FAILED), kept until the next summon.
-	Refused string `json:"refused,omitempty"`
-}
-
 var (
 	petReactNames   = []string{"passive", "defensive", "aggressive"}
 	petCommandNames = []string{"stay", "follow", "attack", "dismiss"}
@@ -260,22 +214,6 @@ func (s *Session) Pet() PetInfo {
 		info.Spells = petSpells(b)
 	}
 	return info
-}
-
-// PetOrder is one order to the pet (pet_action). Action is one of:
-//   - "attack": the pet attacks Target (0: the player's target). The server refuses a target the player may not attack and one the pet
-//     cannot reach, with SMSG_PET_ACTION_FEEDBACK (a pet_error event).
-//   - "follow", "stay": the command buttons. Follow also ends an attack.
-//   - "passive", "defensive", "aggressive": the reaction buttons. Passive also stops the pet's attack.
-//   - "cast": a pet spell by Slot (the bar button, 3 to 6), SpellID or Name (the spell must be on the bar), at Target (0: the player's target; the
-//     server drops a target the spell does not need).
-//   - "autocast_on", "autocast_off": switch the autocast of a spell of the pet (SpellID, Name or Slot).
-type PetOrder struct {
-	Action  string
-	Target  packet.GUID
-	Slot    *int
-	SpellID uint32
-	Name    string
 }
 
 // ErrNoPet is the answer to an order when the player has no pet.

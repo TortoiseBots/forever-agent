@@ -37,7 +37,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbdash"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -1855,15 +1854,15 @@ func (w *walk) gm(ctx context.Context, line string) error {
 }
 
 // status is the agent's status RPC.
-func (w *walk) status(ctx context.Context) (session.StatusInfo, error) {
-	var st session.StatusInfo
+func (w *walk) status(ctx context.Context) (world.StatusInfo, error) {
+	var st world.StatusInfo
 	err := w.agent.Call(ctx, "status", nil, &st, 10*time.Second)
 	return st, err
 }
 
 // party is the agent's party RPC.
-func (w *walk) party(ctx context.Context) (session.PartyInfo, error) {
-	var p session.PartyInfo
+func (w *walk) party(ctx context.Context) (world.PartyInfo, error) {
+	var p world.PartyInfo
 	err := w.agent.Call(ctx, "party", nil, &p, 10*time.Second)
 	return p, err
 }

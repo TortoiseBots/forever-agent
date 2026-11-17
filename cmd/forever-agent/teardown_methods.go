@@ -52,7 +52,7 @@ type teardownGame interface {
 	Character() string
 	BotCommand(ctx context.Context, cmd string, wait time.Duration) (tbm.Reply, error)
 	GMReply(ctx context.Context, text string, match func(string) bool, wait time.Duration) (string, bool, error)
-	Party() session.PartyInfo
+	Party() world.PartyInfo
 	VisibleNames() []string
 	LeaveGroup(ctx context.Context) error
 	Logout(ctx context.Context) (string, error)
@@ -120,7 +120,7 @@ func (g sessionTeardownGame) GMReply(ctx context.Context, text string, match fun
 	}
 }
 
-func (g sessionTeardownGame) Party() session.PartyInfo { return g.cur().Party() }
+func (g sessionTeardownGame) Party() world.PartyInfo { return g.cur().Party() }
 
 // VisibleNames are the names of player-type units in view.
 func (g sessionTeardownGame) VisibleNames() []string {

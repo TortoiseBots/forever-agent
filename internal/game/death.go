@@ -18,17 +18,6 @@ const CorpseReclaimRadius = 39
 // player who is alive or already a ghost (:68-69).
 func BuildRepopRequest() []byte { return nil }
 
-// ResurrectRequest is SMSG_RESURRECT_REQUEST: a player's or creature's spell offers to resurrect the player
-// (Spells/Spell.cpp:5153-5174): u64 caster guid, u32 name length, the caster's name as a C string (empty for a
-// player: the client knows the name), u8 sickness (accepting costs resurrection sickness: a spirit healer), u8 timer
-// (the corpse reclaim delay applies; 0 for spells with SPELL_ATTR_EX3_NO_RES_TIMER).
-type ResurrectRequest struct {
-	Caster   packet.GUID `json:"caster"`
-	Name     string      `json:"name,omitempty"`
-	Sickness bool        `json:"sickness"`
-	Timer    bool        `json:"timer"`
-}
-
 // ParseResurrectRequest decodes SMSG_RESURRECT_REQUEST.
 func ParseResurrectRequest(body []byte) (ResurrectRequest, error) {
 	r := packet.NewReader(body)
@@ -75,21 +64,6 @@ func ParseCorpseReclaimDelay(body []byte) (ms uint32, err error) {
 func BuildCorpseQuery() []byte { return nil }
 
 // Corpse is the answer to MSG_CORPSE_QUERY (Handlers/QueryHandler.cpp:271-327): Found false is a single zero byte.
-// Otherwise i32 map, three floats and u32 corpse map. When the corpse lies in a dungeon the ghost is not in, Map is the
-// map of the dungeon's entrance and X, Y, Z the entrance (the map's ghostEntrance), CorpseMap the dungeon's own map
-// (:288-311); else Map equals CorpseMap and the position is the corpse's.
-type Corpse struct {
-	Found     bool    `json:"found"`
-	Map       int32   `json:"map"`
-	X         float32 `json:"x"`
-	Y         float32 `json:"y"`
-	Z         float32 `json:"z"`
-	CorpseMap uint32  `json:"corpse_map"`
-}
-
-// Inside reports a corpse inside a dungeon other than the map the ghost is on: the position is the entrance to run to.
-func (c Corpse) Inside() bool { return c.Found && c.Map >= 0 && uint32(c.Map) != c.CorpseMap }
-
 // ParseCorpseQuery decodes MSG_CORPSE_QUERY from the server.
 func ParseCorpseQuery(body []byte) (Corpse, error) {
 	r := packet.NewReader(body)

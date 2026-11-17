@@ -37,7 +37,7 @@ func registerBrainMethods(srv *rpc.Server, cur func() *session.Session, tracesDi
 	ctl := brain.NewController(root, &sessionBrainGame{cur: cur, trace: bt}, brain.Config{})
 	lease := &brainLease{}
 	srv.Register("brain_start", rpc.Typed(func(ctx context.Context, p brainStartParams) (brain.Status, error) {
-		if st := cur().Status().State; st != session.StatusInWorld {
+		if st := cur().Status().State; st != world.StatusInWorld {
 			return brain.Status{}, &rpc.Error{Code: rpc.CodeNotInWorld, Message: "brain_start needs the character in the world (state " + string(st) + ")"}
 		}
 		if err := lease.check("brain_start"); err != nil {
@@ -243,7 +243,7 @@ func (g *sessionBrainGame) CastOnMainHand(ctx context.Context, spell uint32) err
 }
 
 func (g *sessionBrainGame) UseItem(ctx context.Context, entry uint32) error {
-	_, err := g.cur().UseItem(ctx, session.EquipRef{Entry: entry}, 0)
+	_, err := g.cur().UseItem(ctx, world.EquipRef{Entry: entry}, 0)
 	return err
 }
 
@@ -269,15 +269,15 @@ func (g *sessionBrainGame) Pet() (brain.PetState, bool) {
 }
 
 func (g *sessionBrainGame) PetAttack(ctx context.Context, target world.GUID) error {
-	return g.cur().PetAction(ctx, session.PetOrder{Action: "attack", Target: target})
+	return g.cur().PetAction(ctx, world.PetOrder{Action: "attack", Target: target})
 }
 
 func (g *sessionBrainGame) PetFollow(ctx context.Context) error {
-	return g.cur().PetAction(ctx, session.PetOrder{Action: "follow"})
+	return g.cur().PetAction(ctx, world.PetOrder{Action: "follow"})
 }
 
 func (g *sessionBrainGame) PetReact(ctx context.Context, react string) error {
-	return g.cur().PetAction(ctx, session.PetOrder{Action: react})
+	return g.cur().PetAction(ctx, world.PetOrder{Action: react})
 }
 
 func (g *sessionBrainGame) PetAutocast(ctx context.Context, spell uint32, on bool) error {
@@ -285,7 +285,7 @@ func (g *sessionBrainGame) PetAutocast(ctx context.Context, spell uint32, on boo
 	if on {
 		act = "autocast_on"
 	}
-	return g.cur().PetAction(ctx, session.PetOrder{Action: act, SpellID: spell})
+	return g.cur().PetAction(ctx, world.PetOrder{Action: act, SpellID: spell})
 }
 
 var _ brain.PetGame = (*sessionBrainGame)(nil)

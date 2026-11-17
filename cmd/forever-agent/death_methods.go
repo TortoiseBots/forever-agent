@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type areaTriggerParams struct {
@@ -15,17 +15,17 @@ type areaTriggerParams struct {
 // registerDeathMethods wires the player's death: death_status, accept_resurrect, release_spirit, corpse_query,
 // reclaim_corpse and area_trigger (README "Death and the corpse run").
 func registerDeathMethods(srv *rpc.Server, cur func() *session.Session) {
-	srv.Register("death_status", rpc.Typed(func(ctx context.Context, _ empty) (session.DeathInfo, error) {
+	srv.Register("death_status", rpc.Typed(func(ctx context.Context, _ empty) (world.DeathInfo, error) {
 		return cur().Death(), nil
 	}))
-	srv.Register("accept_resurrect", rpc.Typed(func(ctx context.Context, _ empty) (game.ResurrectRequest, error) {
+	srv.Register("accept_resurrect", rpc.Typed(func(ctx context.Context, _ empty) (world.ResurrectRequest, error) {
 		r, err := cur().AcceptResurrect(ctx)
 		return r, rpcErr(err)
 	}))
 	srv.Register("release_spirit", rpc.Typed(func(ctx context.Context, _ empty) (empty, error) {
 		return empty{}, rpcErr(cur().ReleaseSpirit(ctx))
 	}))
-	srv.Register("corpse_query", rpc.Typed(func(ctx context.Context, _ empty) (game.Corpse, error) {
+	srv.Register("corpse_query", rpc.Typed(func(ctx context.Context, _ empty) (world.Corpse, error) {
 		c, err := cur().CorpseQuery(ctx)
 		return c, rpcErr(err)
 	}))

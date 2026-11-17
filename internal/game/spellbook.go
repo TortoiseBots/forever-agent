@@ -8,21 +8,6 @@ import (
 
 // InfiniteCooldown is the category cooldown the core sends for a cooldown it keeps for a
 // month, "infinity" (Player.cpp:4232-4238).
-const InfiniteCooldown uint32 = 0x80000000
-
-// InitialCooldown is one cooldown of SMSG_INITIAL_SPELLS. Item is the item whose spell it is
-// (0 for a spell of the spellbook), Cooldown and CategoryCooldown the milliseconds left.
-type InitialCooldown struct {
-	Spell, Item, Category      uint32
-	Cooldown, CategoryCooldown uint32
-}
-
-// InitialSpells is SMSG_INITIAL_SPELLS: the spellbook and the cooldowns running at login.
-type InitialSpells struct {
-	Spells    []uint32
-	Cooldowns []InitialCooldown
-}
-
 // ParseInitialSpells decodes SMSG_INITIAL_SPELLS (Player::SendInitialSpells, Player.cpp:4175-4247):
 // u8 0, u16 count, count x (u16 spell, u16 0), u16 cooldown count, then per cooldown u16 spell,
 // u16 item, u16 category, u32 cooldown ms, u32 category cooldown ms. Spell ids are u16 on the

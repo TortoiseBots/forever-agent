@@ -27,17 +27,6 @@ type resurrectOffer struct {
 }
 
 // DeathInfo is the player's death state: alive, dead (health 0, before the spirit was released) or ghost.
-type DeathInfo struct {
-	Dead  bool `json:"dead"`  // health 0: the body lies where the player died
-	Ghost bool `json:"ghost"` // the spirit was released (PLAYER_FLAGS_GHOST); health is 1
-	// Resurrect is the offer of a resurrection spell cast at the player that is still open (SMSG_RESURRECT_REQUEST),
-	// nil when none; accept_resurrect answers it.
-	Resurrect *game.ResurrectRequest `json:"resurrect,omitempty"`
-	// ReclaimInMS is how long until the corpse may be reclaimed (SMSG_CORPSE_RECLAIM_DELAY after the release), 0 when it
-	// may be, or when the server named no delay.
-	ReclaimInMS int64 `json:"reclaim_in_ms"`
-}
-
 func (s *Session) registerDeath() {
 	s.handlers[opcode.SMSGResurrectRequest] = s.onResurrectRequest
 	s.handlers[opcode.SMSGCorpseReclaimDelay] = s.onCorpseReclaimDelay

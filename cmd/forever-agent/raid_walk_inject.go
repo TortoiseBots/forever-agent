@@ -32,7 +32,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -347,7 +346,7 @@ func (r *raidInjector) selectUnit(ctx context.Context, a raidwalk.InjectAction) 
 
 // knownPos is where the selected unit is known to stand: the commander's own status position, or the hire's newest
 // frame position.
-func (r *raidInjector) knownPos(g world.GUID, self bool, st session.StatusInfo) (dungeon.Point, bool) {
+func (r *raidInjector) knownPos(g world.GUID, self bool, st world.StatusInfo) (dungeon.Point, bool) {
 	if self {
 		return dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, true
 	}

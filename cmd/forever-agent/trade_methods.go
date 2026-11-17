@@ -12,11 +12,11 @@ import (
 )
 
 type tradeParams struct {
-	To         string                 `json:"to"`                     // a player's name, or a guid ("0x0000000000001234")
-	Items      []session.TradeItemReq `json:"items,omitempty"`        // [{"item": entry, "count": n}]; count defaults to 1
-	Gold       uint32                 `json:"gold,omitempty"`         // copper
-	WaitMS     int                    `json:"wait_ms,omitempty"`      // for the other side to accept; 12 s when omitted
-	OpenWaitMS int                    `json:"open_wait_ms,omitempty"` // for the window to open; 8 s when omitted
+	To         string               `json:"to"`                     // a player's name, or a guid ("0x0000000000001234")
+	Items      []world.TradeItemReq `json:"items,omitempty"`        // [{"item": entry, "count": n}]; count defaults to 1
+	Gold       uint32               `json:"gold,omitempty"`         // copper
+	WaitMS     int                  `json:"wait_ms,omitempty"`      // for the other side to accept; 12 s when omitted
+	OpenWaitMS int                  `json:"open_wait_ms,omitempty"` // for the window to open; 8 s when omitted
 }
 
 // playerRef reads the "to" of trade: a guid when it is "0x..." or all digits (a character name has no digits),
@@ -37,21 +37,21 @@ func playerRefField(field, to string) (world.GUID, string, error) {
 }
 
 // tradeRequest turns the RPC parameters into a session request; a bad "to" is an error.
-func tradeRequest(p tradeParams) (session.TradeRequest, error) {
+func tradeRequest(p tradeParams) (world.TradeRequest, error) {
 	g, name, err := playerRef(p.To)
 	if err != nil {
-		return session.TradeRequest{}, err
+		return world.TradeRequest{}, err
 	}
-	return session.TradeRequest{To: g, Name: name, Items: p.Items, Gold: p.Gold,
+	return world.TradeRequest{To: g, Name: name, Items: p.Items, Gold: p.Gold,
 		Wait: time.Duration(p.WaitMS) * time.Millisecond, OpenWait: time.Duration(p.OpenWaitMS) * time.Millisecond}, nil
 }
 
 // registerTradeMethods wires trade, which hands items and gold to a player in trade range.
 func registerTradeMethods(srv *rpc.Server, cur func() *session.Session) {
-	srv.Register("trade", rpc.Typed(func(ctx context.Context, p tradeParams) (session.TradeResult, error) {
+	srv.Register("trade", rpc.Typed(func(ctx context.Context, p tradeParams) (world.TradeResult, error) {
 		req, err := tradeRequest(p)
 		if err != nil {
-			return session.TradeResult{}, rpcErr(err)
+			return world.TradeResult{}, rpcErr(err)
 		}
 		r, err := cur().Trade(ctx, req)
 		return r, rpcErr(err)
@@ -83,30 +83,30 @@ type tradeAcceptParams struct {
 // registerTradeStepMethods wires the step trade: trade_open and trade_expect open a window that stays open, trade_set_item,
 // cast (with trade_slot) and trade_accept drive it, trade_status shows it and trade_cancel closes it.
 func registerTradeStepMethods(srv *rpc.Server, cur func() *session.Session) {
-	srv.Register("trade_open", rpc.Typed(func(ctx context.Context, p tradeOpenParams) (session.TradeStepState, error) {
+	srv.Register("trade_open", rpc.Typed(func(ctx context.Context, p tradeOpenParams) (world.TradeStepState, error) {
 		g, name, err := playerRefField("to", p.To)
 		if err != nil {
-			return session.TradeStepState{}, rpcErr(err)
+			return world.TradeStepState{}, rpcErr(err)
 		}
 		st, err := cur().TradeOpen(ctx, g, name, time.Duration(p.OpenWaitMS)*time.Millisecond)
 		return st, rpcErr(err)
 	}))
-	srv.Register("trade_expect", rpc.Typed(func(ctx context.Context, p tradeExpectParams) (session.TradeStepState, error) {
+	srv.Register("trade_expect", rpc.Typed(func(ctx context.Context, p tradeExpectParams) (world.TradeStepState, error) {
 		g, name, err := playerRefField("from", p.From)
 		if err != nil {
-			return session.TradeStepState{}, rpcErr(err)
+			return world.TradeStepState{}, rpcErr(err)
 		}
 		st, err := cur().TradeExpect(ctx, g, name, time.Duration(p.WaitMS)*time.Millisecond)
 		return st, rpcErr(err)
 	}))
-	srv.Register("trade_set_item", rpc.Typed(func(ctx context.Context, p tradeSetItemParams) (session.TradeSetResult, error) {
+	srv.Register("trade_set_item", rpc.Typed(func(ctx context.Context, p tradeSetItemParams) (world.TradeSetResult, error) {
 		if p.TradeSlot == nil || *p.TradeSlot > 6 {
-			return session.TradeSetResult{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "invalid params: trade_set_item needs trade_slot 0-6"}
+			return world.TradeSetResult{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "invalid params: trade_set_item needs trade_slot 0-6"}
 		}
-		r, err := cur().TradeSetItem(ctx, *p.TradeSlot, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot})
+		r, err := cur().TradeSetItem(ctx, *p.TradeSlot, world.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot})
 		return r, rpcErr(err)
 	}))
-	srv.Register("trade_accept", rpc.Typed(func(ctx context.Context, p tradeAcceptParams) (session.TradeResult, error) {
+	srv.Register("trade_accept", rpc.Typed(func(ctx context.Context, p tradeAcceptParams) (world.TradeResult, error) {
 		r, err := cur().TradeAccept(ctx, time.Duration(p.WaitMS)*time.Millisecond)
 		return r, rpcErr(err)
 	}))
@@ -114,7 +114,7 @@ func registerTradeStepMethods(srv *rpc.Server, cur func() *session.Session) {
 		st, err := cur().TradeCancel(ctx)
 		return map[string]string{"status": st}, rpcErr(err)
 	}))
-	srv.Register("trade_status", rpc.Typed(func(ctx context.Context, _ empty) (session.TradeStepState, error) {
+	srv.Register("trade_status", rpc.Typed(func(ctx context.Context, _ empty) (world.TradeStepState, error) {
 		return cur().TradeStatus(), nil
 	}))
 }

@@ -62,7 +62,7 @@ func (s *Session) stepReleased() bool { return !s.trade.active && !s.trade.ended
 func (s *Session) stepCancelled(res TradeResult) *TradeFailed {
 	r, _ := s.tradeSnapshot(res)
 	r.Result, r.Detail = "cancelled", "the trade was cancelled (trade_cancel)"
-	return &TradeFailed{r}
+	return &TradeFailed{Result: r}
 }
 
 // errNoStepWindow is the answer to a step call made with no step trade open.
@@ -70,34 +70,6 @@ var errNoStepWindow = errors.New("no trade window is open: trade_open or trade_e
 
 // TradeStepState is the step trade as trade_status shows it: both sides of the window (SMSG_TRADE_STATUS_EXTENDED,
 // trader_state 1 is the partner's side and 0 our own), the last status and an armed accept.
-type TradeStepState struct {
-	Active      bool             `json:"active"` // a trade exists (a one-shot trade too)
-	Step        bool             `json:"step"`   // it is a step trade
-	Open        bool             `json:"open"`   // the window is open
-	Partner     packet.GUID      `json:"partner,omitempty"`
-	PartnerName string           `json:"partner_name,omitempty"`
-	Status      string           `json:"status,omitempty"` // the last SMSG_TRADE_STATUS, by name
-	TheirItems  []game.TradeItem `json:"their_items"`
-	TheirGold   uint32           `json:"their_gold"`
-	TheirSpell  uint32           `json:"their_spell,omitempty"`
-	MyItems     []game.TradeItem `json:"my_items"`
-	MyGold      uint32           `json:"my_gold"`
-	MySpell     uint32           `json:"my_spell,omitempty"` // the enchant our own trade-slot cast has pending
-	TheirAccept bool             `json:"their_accept"`
-	ArmedFrom   string           `json:"armed_from,omitempty"` // trade_expect waits for a request from this guid or name
-}
-
-// TradeSetResult is what TradeSetItem put in the window.
-type TradeSetResult struct {
-	TradeSlot uint8       `json:"trade_slot"`
-	Bag       uint8       `json:"bag"`
-	Slot      uint8       `json:"slot"`
-	GUID      packet.GUID `json:"guid"`
-	ItemEntry uint32      `json:"item_entry"`
-	// Unchanged is true when the slot already held that item: nothing was sent and nothing changed.
-	Unchanged bool `json:"unchanged,omitempty"`
-}
-
 // activeTrade reports whether a trade is running that a new one must not replace. A step trade whose window has closed
 // is not (its state stays until the next call, or the next request, releases it). Owner loop only.
 func (s *Session) activeTrade() bool {
@@ -176,7 +148,7 @@ func (s *Session) stepFailed(res TradeResult, result, detail string) *TradeFaile
 	if !ended {
 		r.Result, r.Detail = result, detail
 	}
-	return &TradeFailed{r}
+	return &TradeFailed{Result: r}
 }
 
 // cleanStaleIncoming cancels a declined incoming trade that may still be closing on the core, which would drop our request,
@@ -431,7 +403,7 @@ func (s *Session) TradeAccept(ctx context.Context, wait time.Duration) (TradeRes
 		if r.Result == "completed" {
 			return r, nil
 		}
-		return r, &TradeFailed{r}
+		return r, &TradeFailed{Result: r}
 	}
 	if err := s.tradeWait(ctx, s.opts.TradeSettle, func() bool { return s.trade.ended || !s.trade.active }); err != nil && !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		return res, err
@@ -459,7 +431,7 @@ func (s *Session) TradeAccept(ctx context.Context, wait time.Duration) (TradeRes
 		r, _ := s.tradeSnapshot(res)
 		r.Result = "timeout"
 		r.Detail = fmt.Sprintf("the other side did not accept within %s; our accept was withdrawn and the window is still open (a bot that refuses a trade says why in a whisper: see chat_log)", wait)
-		return r, &TradeFailed{r}
+		return r, &TradeFailed{Result: r}
 	} else if err != nil {
 		s.unaccept()
 		return res, err

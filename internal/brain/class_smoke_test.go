@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -31,7 +30,7 @@ func (s *swingGame) Attack(ctx context.Context) error {
 	sel := s.selected
 	refused := false
 	for _, u := range s.units {
-		if u.GUID == sel && math.Abs(angleDiff(s.self.O, game.Facing(s.self.X, s.self.Y, u.X, u.Y))) > ConeHalfAngle {
+		if u.GUID == sel && math.Abs(angleDiff(s.self.O, world.Facing(s.self.X, s.self.Y, u.X, u.Y))) > ConeHalfAngle {
 			refused = true
 		}
 	}

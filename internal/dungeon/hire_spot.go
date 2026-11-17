@@ -10,7 +10,7 @@ import (
 )
 
 // AgentPositioner is the optional part of a Preparer that tells where the agent's own character stands, and whether its height is a guess
-// (session.StatusInfo.ZUnknown). A teleport or a climb leaves z a guess until the server sends a position; a guessed height over two floors
+// (world.StatusInfo.ZUnknown). A teleport or a climb leaves z a guess until the server sends a position; a guessed height over two floors
 // is settled with one short walk before the hire spot is judged (see hireSpotProblem).
 type AgentPositioner interface {
 	AgentPosition() (pos Point, zUnknown bool)

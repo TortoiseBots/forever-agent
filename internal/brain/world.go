@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -59,8 +58,8 @@ func unitPos(u *world.Unit) Vec3 {
 
 func dist2(a, b Vec3) float64 { return math.Hypot(float64(a[0]-b[0]), float64(a[1]-b[1])) }
 
-// bearing is the direction from a to b, as game.Facing.
-func bearing(a, b Vec3) float64 { return float64(game.Facing(a[0], a[1], b[0], b[1])) }
+// bearing is the direction from a to b, as world.Facing.
+func bearing(a, b Vec3) float64 { return float64(world.Facing(a[0], a[1], b[0], b[1])) }
 
 // ---- what the brain remembers for positioning, interrupts and items ----
 

@@ -68,19 +68,6 @@ func ParseCreatureQueryResponse(body []byte) (CreatureInfo, error) {
 // for an item it only knows by entry.
 func BuildItemQuery(entry uint32) []byte { return packet.NewWriter().U32(entry).U64(0).Bytes() }
 
-// ItemInfo is what SMSG_ITEM_QUERY_SINGLE_RESPONSE says of an item prototype that matters to a gear check.
-type ItemInfo struct {
-	Entry         uint32
-	Found         bool
-	Name          string
-	Class         uint32
-	SubClass      uint32
-	Quality       uint32 // 0 poor, 1 common, 2 uncommon (green), 3 rare (blue), 4 epic, 5 legendary
-	InventoryType uint32
-	ItemLevel     uint32
-	RequiredLevel uint32
-}
-
 // ParseItemQueryResponse decodes SMSG_ITEM_QUERY_SINGLE_RESPONSE up to the required level (ItemHandler.cpp:370-398). An unknown entry comes as
 // the entry with bit 31 set and nothing else (:488); a core only answers for an item the account has seen unless it is a GM's.
 func ParseItemQueryResponse(body []byte) (ItemInfo, error) {

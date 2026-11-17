@@ -27,7 +27,7 @@ import (
 // creatures and the game objects. ok is false before the character is in the world.
 func SessionFrame(s *session.Session, t time.Time, leader *Pos) (f Frame, ok bool) {
 	st := s.Status()
-	if st.State != session.StatusInWorld {
+	if st.State != world.StatusInWorld {
 		return Frame{}, false
 	}
 	f = Frame{T: t, Map: st.Map}

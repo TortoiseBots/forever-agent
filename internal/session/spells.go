@@ -201,69 +201,6 @@ func (s *Session) CastState() (CastStateInfo, error) {
 		GCD: GCDInfo{Active: left > 0, RemainingMS: left.Milliseconds(), TotalMS: total.Milliseconds()}}, nil
 }
 
-// EffectRow is one effect of a spell.
-type EffectRow struct {
-	Effect        uint8   `json:"effect"`              // SPELL_EFFECT_*
-	Aura          uint8   `json:"aura,omitempty"`      // SPELL_AURA_* of an apply-aura effect
-	Base          int32   `json:"base"`                // EffectBasePoints
-	Dice          int32   `json:"dice,omitempty"`      // EffectBaseDice, added to a value of one die side or none
-	Sides         int32   `json:"sides,omitempty"`     // EffectDieSides: above 1 a roll of dice..sides is added
-	PerLevel      float32 `json:"per_level,omitempty"` // per caster level above the spell's level
-	PerComboPoint float32 `json:"per_combo_point,omitempty"`
-}
-
-// ReagentRow is an item a spell uses up.
-type ReagentRow struct {
-	Item  uint32 `json:"item_entry"`
-	Count uint32 `json:"count"`
-}
-
-// SpellRow is one spell of the spellbook with its metadata and whether it can be cast now.
-type SpellRow struct {
-	SpellID uint32 `json:"spell_id"`
-	Name    string `json:"name"`
-	Rank    uint8  `json:"rank,omitempty"`
-	// Highest is true for the highest known rank of the name (the only one of a spell without ranks).
-	Highest bool `json:"highest"`
-	// Meta is false for a spell the generated table does not hold: only its id and name are known.
-	Meta         bool         `json:"meta"`
-	Level        uint8        `json:"level,omitempty"`
-	Passive      bool         `json:"passive,omitempty"`
-	Flags        []string     `json:"flags"`
-	CastMS       uint32       `json:"cast_ms"`
-	RangeMin     float32      `json:"range_min,omitempty"`
-	RangeMax     float32      `json:"range_max,omitempty"`
-	Power        string       `json:"power,omitempty"` // mana, rage, focus, energy, health; omitted for a spell with no cost
-	Cost         uint32       `json:"cost,omitempty"`
-	CostPct      uint32       `json:"cost_pct,omitempty"` // percent of base mana instead of Cost
-	CooldownMS   uint32       `json:"cooldown_ms,omitempty"`
-	Category     uint32       `json:"category,omitempty"`
-	CategoryCDMS uint32       `json:"category_cd_ms,omitempty"`
-	GCDMS        uint32       `json:"gcd_ms"`
-	School       string       `json:"school,omitempty"`
-	Dispel       string       `json:"dispel,omitempty"`
-	Mechanic     uint8        `json:"mechanic,omitempty"`
-	DurationMS   int32        `json:"duration_ms,omitempty"`
-	Effects      []EffectRow  `json:"effects"`
-	Reagents     []ReagentRow `json:"reagents,omitempty"`
-	// Ready is false while the spell's cooldown, its category's or the global cooldown runs, or the
-	// server refused it as not ready a moment ago; RemainingMS says how long, Why what holds it.
-	Ready       bool   `json:"ready"`
-	RemainingMS int64  `json:"remaining_ms"`
-	Why         string `json:"why,omitempty"`
-	// Affordable is whether the player holds the flat cost now; null for a cost in percent of base
-	// mana, which the agent cannot work out.
-	Affordable *bool `json:"affordable,omitempty"`
-}
-
-// SpellsFilter selects the rows of Spells.
-type SpellsFilter struct {
-	SpellID uint32
-	Name    string // a part of the name, case-insensitive
-	Highest bool   // only the highest known rank of each name
-	Passive bool   // include passive spells (talents, proficiencies, racials)
-}
-
 var schoolNames = []string{"physical", "holy", "fire", "nature", "frost", "shadow", "arcane"}
 var powerNames = map[int8]string{spells.PowerMana: "mana", spells.PowerRage: "rage", spells.PowerFocus: "focus", spells.PowerEnergy: "energy", spells.PowerHealth: "health"}
 var dispelNames = []string{"", "magic", "curse", "disease", "poison", "stealth", "invisibility", "all", "npc_only", "enrage", "zg_ticket"}

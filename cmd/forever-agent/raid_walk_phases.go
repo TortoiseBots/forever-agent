@@ -21,7 +21,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -375,7 +374,7 @@ func (w *walk) phaseLogin(ctx context.Context) error {
 			return stopf(exitRaidWalkFailed, "interrupted")
 		}
 		st, err := w.status(ctx)
-		if err == nil && st.State == session.StatusInWorld {
+		if err == nil && st.State == world.StatusInWorld {
 			return nil
 		}
 		if held {
@@ -391,7 +390,7 @@ func (w *walk) phaseLogin(ctx context.Context) error {
 	}
 }
 
-func stateWord(st session.StatusInfo) string {
+func stateWord(st world.StatusInfo) string {
 	if st.State == "" {
 		return "?"
 	}
@@ -1988,13 +1987,13 @@ func (w *walk) stopRun(ctx context.Context, line string) error {
 // original incident's ending.
 func (w *walk) waitMap(ctx context.Context, mapID uint32, timeout time.Duration, deadline time.Time) error {
 	return w.waitStatus(ctx, timeout, deadline, fmt.Sprintf("the commander is not on map %d", mapID),
-		func(st session.StatusInfo) bool { return st.Map == mapID })
+		func(st world.StatusInfo) bool { return st.Map == mapID })
 }
 
 // waitStatus polls the agent's status until ok accepts it, up to timeout. The deadline is a recovery entry
 // deadline (zero: no recovery bounds this wait): every loop turn and sleep checks it first, and past it the wait
 // fails with the timed-out recovery the caller turns into the original incident's ending.
-func (w *walk) waitStatus(ctx context.Context, timeout time.Duration, deadline time.Time, what string, ok func(session.StatusInfo) bool) error {
+func (w *walk) waitStatus(ctx context.Context, timeout time.Duration, deadline time.Time, what string, ok func(world.StatusInfo) bool) error {
 	statusDue := w.env.now().Add(timeout)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -2026,7 +2025,7 @@ func (w *walk) waitStatus(ctx context.Context, timeout time.Duration, deadline t
 func (w *walk) waitRevivePoint(ctx context.Context, p dungeon.Point, fromMap uint32, beforeSeq uint64, haveSeq bool, deadline time.Time) error {
 	return w.waitStatus(ctx, reviveTeleportWait, deadline,
 		fmt.Sprintf("the commander is not within %d yd of the revive point on map %d", reviveLandingYd, w.plan.Map),
-		func(st session.StatusInfo) bool { return reviveLanded(p, w.plan.Map, fromMap, st, beforeSeq, haveSeq) })
+		func(st world.StatusInfo) bool { return reviveLanded(p, w.plan.Map, fromMap, st, beforeSeq, haveSeq) })
 }
 
 // reviveSeq reads the session's acked-teleport count just before a revive `.go xyz`, the landing signal that works
@@ -2170,7 +2169,7 @@ func (w *walk) appearAtHire(ctx context.Context, name string, deadline time.Time
 		return false, fmt.Sprintf(".appear %s failed: %v", name, err), nil
 	}
 	werr := w.waitStatus(ctx, appearWait, deadline, "the appear did not land",
-		func(st session.StatusInfo) bool { return appearLanded(st, hire.mapID, hire, before, beforeSeq) })
+		func(st world.StatusInfo) bool { return appearLanded(st, hire.mapID, hire, before, beforeSeq) })
 	if werr == nil {
 		return true, "", nil
 	}
@@ -2187,7 +2186,7 @@ func (w *walk) appearAtHire(ctx context.Context, name string, deadline time.Time
 // frames last saw the hire, and a fresh teleport since the read before the appear (an ack the session counted in
 // TeleportSeq, or a moved position/map). The seq term covers an appear that lands the commander where it already
 // stands: the destination is right and the position does not change, but the server teleport has landed (walk 24 C2).
-func appearLanded(st session.StatusInfo, mapID uint32, hire botPos, before session.StatusInfo, beforeSeq uint64) bool {
+func appearLanded(st world.StatusInfo, mapID uint32, hire botPos, before world.StatusInfo, beforeSeq uint64) bool {
 	if st.Map != mapID || math.Hypot(float64(st.X-hire.x), float64(st.Y-hire.y)) > appearLandingYd {
 		return false
 	}
@@ -2215,7 +2214,7 @@ const (
 // the commander waited on map 0 at the portal); the map change alone is not the landing, only the worldport ack the
 // session counts (Codex HIGH). An unread beforeSeq (haveSeq false) lands nothing: the wait times out rather than
 // summon blind. Falling still blocks: a dropToFloor fall must finish first.
-func reviveLanded(p dungeon.Point, mapID, fromMap uint32, st session.StatusInfo, beforeSeq uint64, haveSeq bool) bool {
+func reviveLanded(p dungeon.Point, mapID, fromMap uint32, st world.StatusInfo, beforeSeq uint64, haveSeq bool) bool {
 	if st.Map != mapID || st.Falling {
 		return false
 	}

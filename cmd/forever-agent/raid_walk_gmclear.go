@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
@@ -315,7 +314,7 @@ func (w *walk) gmClearSeq(ctx context.Context) (seq uint64, have bool, err error
 // position within the revive-landing slack of the stop. The seq is required: it is the only term that ties the status
 // to THIS go (the session reports the go's destination itself at once, flagged ZUnknown or not). Over a navmesh hole
 // the z guess never settles, and the seq is the landing there, exactly as for a near revive teleport.
-func gmClearLanded(st session.StatusInfo, mapID uint32, x, y, z float32, beforeSeq uint64, haveSeq bool) bool {
+func gmClearLanded(st world.StatusInfo, mapID uint32, x, y, z float32, beforeSeq uint64, haveSeq bool) bool {
 	if st.Map != mapID || st.Falling || !haveSeq || st.TeleportSeq <= beforeSeq {
 		return false
 	}

@@ -28,18 +28,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
-type Status string
-
-const (
-	StatusConnecting   Status = "connecting"
-	StatusCharSelect   Status = "char_select"
-	StatusLoggingIn    Status = "logging_in"
-	StatusInWorld      Status = "in_world"
-	StatusLoggingOut   Status = "logging_out"
-	StatusLoggedOut    Status = "logged_out"
-	StatusDisconnected Status = "disconnected"
-)
-
 var (
 	ErrClosed       = errors.New("session closed")
 	ErrDisconnected = errors.New("disconnected by the server")
@@ -131,52 +119,6 @@ const maxLoginRetries = 5
 // maxEnumRetries bounds the CMSG_CHAR_ENUM re-reads after a successful create whose character the list does not show
 // yet (the core saves a new character asynchronously, after it has sent SMSG_CHAR_CREATE).
 const maxEnumRetries = 3
-
-type StatusInfo struct {
-	State     Status `json:"state"`
-	Character string `json:"character,omitempty"`
-	// Team is the player's side ("alliance" or "horde") from its race, empty until the create block
-	// arrives (Team). The module hires a commander's own faction only, so a raid roster's
-	// commander_faction is checked against it before the first hire.
-	Team      string      `json:"team,omitempty"`
-	GUID      packet.GUID `json:"guid,omitempty"`
-	Level     uint8       `json:"level,omitempty"`
-	Map       uint32      `json:"map"`
-	X         float32     `json:"x"`
-	Y         float32     `json:"y"`
-	Z         float32     `json:"z"`
-	O         float32     `json:"o"`
-	Target    packet.GUID `json:"target,omitempty"`
-	Health    uint32      `json:"health"`
-	MaxHealth uint32      `json:"max_health"`
-	Power     uint32      `json:"power"`
-	MaxPower  uint32      `json:"max_power"`
-	Falling   bool        `json:"falling"`   // in the air: a knockback, or a fall after a teleport
-	ZUnknown  bool        `json:"z_unknown"` // z is a guess (GM teleport, climb, landing) until the server sends a position
-	// TeleportSeq counts the server teleports this session has ACKED (a near `.go xyz` teleport ack, a far
-	// worldport): it advances when the client's ack has gone out, so the server has placed the player by the
-	// time it reads any later chat line. raid-walk's reviveLanded reads it as the landing signal over a navmesh
-	// hole, where the z guess never settles (walk 24 test2 r3), and as the far landing itself: a worldport's map,
-	// position and bump land together only after the ack write.
-	TeleportSeq  uint64         `json:"teleport_seq"`
-	LatencyMS    uint32         `json:"latency_ms"`
-	Unknown      map[string]int `json:"unknown_opcodes"`
-	ParseErrors  int            `json:"parse_errors"`
-	LastSeq      uint64         `json:"last_seq"`
-	MonoMS       int64          `json:"mono_ms"`        // ms since base_time on the monotonic clock, as in events
-	BaseTime     time.Time      `json:"base_time"`      // wall time of mono_ms 0
-	WallOffsetMS int64          `json:"wall_offset_ms"` // wall clock now minus base_time + mono_ms: host clock steps and drift
-	Error        string         `json:"error,omitempty"`
-
-	// The agent's own spell state (README "Agent state").
-	ComboPoints uint8       `json:"combo_points"`           // 0-5, from the player's own update fields
-	ComboTarget packet.GUID `json:"combo_target,omitempty"` // the unit they are on; absent without points
-	GCDMS       int64       `json:"gcd_ms"`                 // global cooldown left; 0 when none
-
-	// Dead is health 0 with the spirit not released; Ghost is a released spirit (health 1). Both false: alive.
-	Dead  bool `json:"dead"`
-	Ghost bool `json:"ghost"`
-}
 
 type handler func(body []byte) error
 

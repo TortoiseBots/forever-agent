@@ -2,7 +2,6 @@ package game
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/pjerra/forever-agent/internal/packet"
 )
@@ -66,15 +65,6 @@ func BuildMovement(m MoveInfo) []byte {
 	w := packet.NewWriter()
 	WriteMoveInfo(w, m)
 	return w.Bytes()
-}
-
-// Facing is the orientation from (x0, y0) towards (x1, y1), in [0, 2π).
-func Facing(x0, y0, x1, y1 float32) float32 {
-	a := math.Atan2(float64(y1-y0), float64(x1-x0))
-	if a < 0 {
-		a += 2 * math.Pi
-	}
-	return float32(a)
 }
 
 type TeleportAck struct {

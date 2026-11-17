@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -259,7 +258,7 @@ var ValConeMobs = &Value[int]{Name: "cone_mobs", Calc: func(c *Ctx) int {
 		if !hostileMob(u) || !u.InCombat || u.Distance < 0 || u.Distance > ConeRange {
 			continue
 		}
-		if math.Abs(angleDiff(c.Self.O, game.Facing(c.Self.X, c.Self.Y, u.X, u.Y))) <= ConeHalfAngle {
+		if math.Abs(angleDiff(c.Self.O, world.Facing(c.Self.X, c.Self.Y, u.X, u.Y))) <= ConeHalfAngle {
 			n++
 		}
 	}
@@ -403,7 +402,7 @@ func faceTargetAction() *Action {
 		},
 		Useful: func(c *Ctx) bool {
 			m := ValFight.Get(c).Mob
-			return m != nil && math.Abs(angleDiff(c.Self.O, game.Facing(c.Self.X, c.Self.Y, m.X, m.Y))) > ConeHalfAngle/2
+			return m != nil && math.Abs(angleDiff(c.Self.O, world.Facing(c.Self.X, c.Self.Y, m.X, m.Y))) > ConeHalfAngle/2
 		},
 		Do: func(ctx context.Context, c *Ctx) error {
 			m := ValFight.Get(c).Mob

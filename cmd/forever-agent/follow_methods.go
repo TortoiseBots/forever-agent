@@ -216,7 +216,7 @@ func (s *followService) statusLocked() followStatusJSON {
 func (s *followService) Start(ctx context.Context, p followStartParams) (followStatusJSON, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if st := s.cur().Status(); st.State != session.StatusInWorld {
+	if st := s.cur().Status(); st.State != world.StatusInWorld {
 		return followStatusJSON{}, &rpc.Error{Code: rpc.CodeNotInWorld, Message: "follow_start needs the character in the world (state " + string(st.State) + ")"}
 	}
 	if !planName.MatchString(p.Plan) {

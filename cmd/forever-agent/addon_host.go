@@ -176,7 +176,7 @@ func (r *addonRunner) start(p addonStartParams) (addonStartResult, error) {
 	r.cursor, r.sent, r.lastTick = log.Last(), nil, time.Now()
 	w := r.worldJSON(s)
 	r.world = w
-	res, outs, err := h.Call("load", map[string]any{"world": json.RawMessage(w), "in_world": s.State() == session.StatusInWorld})
+	res, outs, err := h.Call("load", map[string]any{"world": json.RawMessage(w), "in_world": s.State() == world.StatusInWorld})
 	if err != nil {
 		h.Close()
 		r.h = nil

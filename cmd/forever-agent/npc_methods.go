@@ -70,14 +70,14 @@ func registerNPCMethods(srv *rpc.Server, cur func() *session.Session) {
 			if p.Count > 255 {
 				return errors.New("buy: count is at most 255 per call")
 			}
-			return s.Buy(ctx, p.GUID, session.BuyRef{Entry: p.ItemEntry, Count: uint8(p.Count), Bag: p.Bag, Slot: p.Slot})
+			return s.Buy(ctx, p.GUID, world.BuyRef{Entry: p.ItemEntry, Count: uint8(p.Count), Bag: p.Bag, Slot: p.Slot})
 		})
 	}))
 	srv.Register("sell", rpc.Typed(func(ctx context.Context, p npcParams) (npcResult, error) {
 		var item world.Item
 		res, err := call(ctx, p, sellKinds, func(s *session.Session) (err error) {
 			// A slot with no bag is the backpack, as for equip.
-			item, err = s.Sell(ctx, p.GUID, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot}, p.Count)
+			item, err = s.Sell(ctx, p.GUID, world.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot}, p.Count)
 			return err
 		})
 		if err == nil {

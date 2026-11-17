@@ -62,23 +62,6 @@ type lootAnswer struct {
 }
 
 // LootSlot is one item of a loot window. Slot is what loot_take addresses.
-type LootSlot struct {
-	Slot           uint8  `json:"slot"`
-	Item           uint32 `json:"item_entry"`
-	Count          uint32 `json:"count"`
-	DisplayID      uint32 `json:"display_id"`
-	RandomProperty uint32 `json:"random_property,omitempty"`
-	SlotType       string `json:"slot_type"` // allow_loot, roll_ongoing, master, locked, owner; only allow_loot and owner can be taken
-}
-
-// LootWindow is what the server shows for a corpse: the copper and the items.
-type LootWindow struct {
-	GUID  packet.GUID `json:"guid"`
-	Type  string      `json:"type"` // corpse, pickpocket, fishing, disenchant
-	Money uint32      `json:"money"`
-	Items []LootSlot  `json:"items"`
-}
-
 func windowOf(r *game.LootResponse) *LootWindow {
 	if r == nil {
 		return nil
@@ -229,24 +212,6 @@ func (s *Session) await(ctx context.Context, wait time.Duration, n *notifier, re
 
 // LootTake says what loot_take takes: one Slot, or All the items the player may take, plus
 // the money (also alone, with Money).
-type LootTake struct {
-	Slot  *uint8
-	All   bool
-	Money bool
-}
-
-// LootTaken is the outcome of a take. Taken are the slots the server removed; Left the
-// requested slots still in the window when the wait ended (a full bag refuses with an
-// inventory_error event). Skipped are slots the player may not take (a running roll, the
-// master looter's items).
-type LootTaken struct {
-	Taken   []int       `json:"taken"` // ints: a []uint8 would marshal as base64
-	Left    []int       `json:"left,omitempty"`
-	Skipped []int       `json:"skipped,omitempty"`
-	Money   uint32      `json:"money,omitempty"` // copper asked for
-	Window  *LootWindow `json:"window"`          // what remains; nil once the window closed
-}
-
 // TakeLoot takes items out of the open window with CMSG_AUTOSTORE_LOOT_ITEM and the money
 // with CMSG_LOOT_MONEY, then waits up to wait for the server to remove them. The window
 // closes by itself once empty.

@@ -191,7 +191,7 @@ type methodOptions struct {
 // the methods started (the addon host); call it before the process ends.
 func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts methodOptions) func() {
 	log := cur().Log()
-	srv.Register("status", rpc.Typed(func(ctx context.Context, _ empty) (session.StatusInfo, error) {
+	srv.Register("status", rpc.Typed(func(ctx context.Context, _ empty) (world.StatusInfo, error) {
 		return cur().Status(), nil
 	}))
 	srv.Register("chat", rpc.Typed(func(ctx context.Context, p chatParams) (empty, error) {
@@ -246,7 +246,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 	srv.Register("leave_group", rpc.Typed(func(ctx context.Context, _ empty) (empty, error) {
 		return empty{}, rpcErr(cur().LeaveGroup(ctx))
 	}))
-	srv.Register("party", rpc.Typed(func(ctx context.Context, _ empty) (session.PartyInfo, error) {
+	srv.Register("party", rpc.Typed(func(ctx context.Context, _ empty) (world.PartyInfo, error) {
 		return cur().Party(), nil
 	}))
 	// viewFrame is the commander service's newest TBM:VIEW frame; set once that service is registered below.
@@ -317,12 +317,12 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		}
 		return empty{}, rpcErr(cur().Teleport(ctx, p.X, p.Y, p.Z, m))
 	}))
-	srv.Register("mark", rpc.Typed(func(ctx context.Context, p markParams) (session.MarkResult, error) {
+	srv.Register("mark", rpc.Typed(func(ctx context.Context, p markParams) (world.MarkResult, error) {
 		res, err := cur().Mark(ctx, p.GUID, p.Name, p.Icon)
 		return res, rpcErr(err)
 	}))
-	srv.Register("roll", rpc.Typed(func(ctx context.Context, p rollParams) (session.RollInfo, error) {
-		res, err := cur().Roll(ctx, session.RollRef{ID: p.RollID, Slot: p.ItemSlot, Looted: p.Looted}, p.Choice)
+	srv.Register("roll", rpc.Typed(func(ctx context.Context, p rollParams) (world.RollInfo, error) {
+		res, err := cur().Roll(ctx, world.RollRef{ID: p.RollID, Slot: p.ItemSlot, Looted: p.Looted}, p.Choice)
 		return res, rpcErr(err)
 	}))
 	srv.Register("inventory", rpc.Typed(func(ctx context.Context, p inventoryParams) ([]world.Item, error) {
@@ -343,7 +343,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		return rows, nil
 	}))
 	srv.Register("equip", rpc.Typed(func(ctx context.Context, p equipParams) (world.Item, error) {
-		it, err := cur().Equip(ctx, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot})
+		it, err := cur().Equip(ctx, world.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot})
 		return it, rpcErr(err)
 	}))
 	registerSocialMethods(srv, cur)
@@ -421,7 +421,7 @@ func readEvents(ctx context.Context, log *events.Log, q events.Query, waitMS int
 func rpcErr(err error) error {
 	var le *session.LogoutError
 	var te *session.TaughtError
-	var tf *session.TradeFailed
+	var tf *world.TradeFailed
 	switch {
 	case err == nil:
 		return nil

@@ -27,14 +27,6 @@ func (s *Session) Equipment() []objects.Item {
 	return s.store.Equipment(s.selfGUID())
 }
 
-// EquipRef picks an item: the first item with Entry in the backpack or the bags, or
-// Bag/Slot (Bag defaults to the backpack, 255).
-type EquipRef struct {
-	Entry uint32
-	Bag   *uint8
-	Slot  *uint8
-}
-
 // Equip equips an item with CMSG_AUTOEQUIP_ITEM, as a right-click in the bags does. The
 // server answers a refusal with SMSG_INVENTORY_CHANGE_FAILURE (an inventory_error event)
 // and a success with the player's changed inventory fields (ItemHandler.cpp:159-200).

@@ -8,7 +8,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -86,7 +85,7 @@ func (b *realRezBrain) CanRez() bool { return b.b.CanRez() }
 func newRealRezBrain(t *testing.T, g *fakeGame) (*realRezBrain, *rezGame, Clock) {
 	t.Helper()
 	st := spellstate.New(func() time.Time { return g.now })
-	st.SetInitial(game.InitialSpells{Spells: []uint32{2010, 2054}}) // Resurrection rank 2, Heal rank 1
+	st.SetInitial(world.InitialSpells{Spells: []uint32{2010, 2054}}) // Resurrection rank 2, Heal rank 1
 	rg := &rezGame{g: g, st: st}
 	cfg := brain.DefaultConfig()
 	cfg.Now = func() time.Time { return g.now }

@@ -24,6 +24,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/netutil"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // exitFleet: a child failed or the fleet did not reach the world in time.
@@ -459,7 +460,7 @@ func runFleet(ctx context.Context, members []fleetMember, deps fleetDeps, o flee
 				s = "starting"
 			}
 			states[i] = s
-			if s != string(session.StatusInWorld) {
+			if s != string(world.StatusInWorld) {
 				ready = false
 			}
 		}
@@ -501,7 +502,7 @@ func runFleet(ctx context.Context, members []fleetMember, deps fleetDeps, o flee
 	printFleetTable(stdout, members, states)
 	inWorld := 0
 	for _, s := range states {
-		if s == string(session.StatusInWorld) {
+		if s == string(world.StatusInWorld) {
 			inWorld++
 		}
 	}

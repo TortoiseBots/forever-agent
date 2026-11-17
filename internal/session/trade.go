@@ -181,64 +181,6 @@ func (s *Session) onTradeStatusExtended(body []byte) error {
 	return nil
 }
 
-// TradeItemReq asks for Count of the item Entry from the bags (0: one).
-type TradeItemReq struct {
-	Entry uint32 `json:"item"`
-	Count uint32 `json:"count,omitempty"`
-}
-
-// TradeRequest says what Trade hands over and to whom: To (a guid) or Name (a player in view),
-// the items and the gold in copper. OpenWait bounds the wait for the window to open and Wait the wait for
-// the other side to accept; 0: 8 s and 12 s.
-type TradeRequest struct {
-	To       packet.GUID
-	Name     string
-	Items    []TradeItemReq
-	Gold     uint32
-	OpenWait time.Duration
-	Wait     time.Duration
-}
-
-// TradeGave is what went into the window: an item entry and the count.
-type TradeGave struct {
-	Entry uint32 `json:"item"`
-	Count uint32 `json:"count"`
-	Split bool   `json:"split,omitempty"` // the count was split off a larger stack first
-}
-
-// TradeResult is how a trade ended. Result is completed, or why not: cancelled, timeout, too_far, busy, rejected,
-// no_target, wrong_faction, ignored, and the player's own and the target's states (you_dead, target_dead, ...).
-type TradeResult struct {
-	Result          string           `json:"result"`
-	Status          string           `json:"status,omitempty"` // the last SMSG_TRADE_STATUS, by name
-	Partner         packet.GUID      `json:"partner,omitempty"`
-	PartnerName     string           `json:"partner_name,omitempty"`
-	Gave            []TradeGave      `json:"gave"`
-	Gold            uint32           `json:"gold,omitempty"` // copper put in the window
-	Received        []game.TradeItem `json:"received"`       // what the other side had in the window
-	ReceivedGold    uint32           `json:"received_gold,omitempty"`
-	PartnerAccepted bool             `json:"partner_accepted"`
-	Verified        bool             `json:"verified"` // completed, and the bags and the purse show the items and gold gone
-	Detail          string           `json:"detail,omitempty"`
-	// TradeStatus is the window as it stands after a step trade_accept ended with result "changed": the other side (or the
-	// core) changed the window, so the accept no longer stands.
-	TradeStatus *TradeStepState `json:"trade_status,omitempty"`
-}
-
-// TradeFailed is the error of a trade that did not complete; Result says how far it got.
-type TradeFailed struct{ Result TradeResult }
-
-func (e *TradeFailed) Error() string {
-	m := "trade " + e.Result.Result
-	if e.Result.PartnerName != "" {
-		m += " with " + e.Result.PartnerName
-	}
-	if e.Result.Detail != "" {
-		m += ": " + e.Result.Detail
-	}
-	return m
-}
-
 // tradeStep is one window slot's worth of items from the plan.
 type tradeStep struct {
 	Item  objects.Item // the stack to put in the window: whole, or the part split off Src into Dst
@@ -481,7 +423,7 @@ func (s *Session) Trade(ctx context.Context, req TradeRequest) (TradeResult, err
 		if !ended {
 			r.Result, r.Detail = result, detail
 		}
-		return r, &TradeFailed{r}
+		return r, &TradeFailed{Result: r}
 	}
 	// stopped is the answer to an error from a wait or a send that is not about the trade: the context or the session.
 	stopped := func(err error) bool {

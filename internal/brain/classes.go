@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -33,7 +32,7 @@ func swingFaceBlocked(c *Ctx, m *world.Unit) bool {
 	c.mem.mel.mu.Lock()
 	until := c.mem.mel.swingFaceUntil
 	c.mem.mel.mu.Unlock()
-	return c.Now.Before(until) && math.Abs(angleDiff(c.Self.O, game.Facing(c.Self.X, c.Self.Y, m.X, m.Y))) > ConeHalfAngle/2
+	return c.Now.Before(until) && math.Abs(angleDiff(c.Self.O, world.Facing(c.Self.X, c.Self.Y, m.X, m.Y))) > ConeHalfAngle/2
 }
 
 // swingSentRecently says the attack order at the mob went out less than swingResend ago.

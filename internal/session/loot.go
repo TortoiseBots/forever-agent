@@ -40,20 +40,6 @@ type openRoll struct {
 const rollGrace = 10 * time.Second
 
 // RollRef picks an open roll: by ID, or by loot Slot (with Looted when two corpses share a slot).
-type RollRef struct {
-	ID     uint64
-	Slot   *uint32
-	Looted packet.GUID
-}
-
-type RollInfo struct {
-	ID     uint64      `json:"roll_id"`
-	Looted packet.GUID `json:"looted"`
-	Slot   uint32      `json:"item_slot"`
-	Item   uint32      `json:"item_entry"`
-	Choice string      `json:"choice"`
-}
-
 // Roll votes need, greed or pass on an open group-loot roll with CMSG_LOOT_ROLL, as the
 // roll frame's buttons do. The server reports the vote back as a loot_roll event; a vote
 // on a roll it no longer holds is ignored (Group.cpp:926-938).

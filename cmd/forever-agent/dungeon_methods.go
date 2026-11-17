@@ -545,7 +545,7 @@ func (r *dungeonRunner) run(p dungeonRunParams) (res dungeonRunResult, err error
 	}
 	if !remote && strings.EqualFold(strings.TrimSpace(p.Mode), modeLeader) && p.Brain == "" {
 		// Leader mode plays: the preset of the character's class (and role) when the run names none.
-		if st := r.cur().Status().State; st != session.StatusInWorld {
+		if st := r.cur().Status().State; st != world.StatusInWorld {
 			return dungeonRunResult{}, &rpc.Error{Code: rpc.CodeNotInWorld, Message: "dungeon_run needs the character in the world (state " + string(st) + ")"}
 		}
 		preset, err := leaderPreset(r.selfClass(), p.Role)
@@ -617,7 +617,7 @@ func (r *dungeonRunner) run(p dungeonRunParams) (res dungeonRunResult, err error
 			return dungeonRunResult{}, err
 		}
 	}
-	if st := r.cur().Status().State; st != session.StatusInWorld {
+	if st := r.cur().Status().State; st != world.StatusInWorld {
 		return dungeonRunResult{}, &rpc.Error{Code: rpc.CodeNotInWorld, Message: "dungeon_run needs the character in the world (state " + string(st) + ")"}
 	}
 	// A second run is refused before it pays for a plan check; the check itself follows.

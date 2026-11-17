@@ -141,13 +141,6 @@ func (s *Session) openWith(ctx context.Context, g packet.GUID, spell uint32, wai
 }
 
 // LootedObject is what LootObject got out of an object: the window as the server opened it and the slots now in the bags.
-type LootedObject struct {
-	Window *LootWindow `json:"window"`
-	Taken  []LootSlot  `json:"taken"`
-	Money  uint32      `json:"money,omitempty"`
-	Left   []LootSlot  `json:"left,omitempty"` // slots still in the window that could not be taken (a full bag, a roll)
-}
-
 // LootObject opens the object (OpenObject), takes everything the player may take (TakeLoot) and closes the window. A slot the server
 // did not remove within takeWait is in Left.
 func (s *Session) LootObject(ctx context.Context, g packet.GUID, spell uint32, openWait, takeWait time.Duration) (LootedObject, error) {

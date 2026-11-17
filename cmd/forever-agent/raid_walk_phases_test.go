@@ -16,7 +16,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -518,8 +517,8 @@ func TestRaidWalkSelfRegroupSummonsNobody(t *testing.T) {
 // never settles; still falling blocks it.
 func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	p := dungeon.Point{X: 100, Y: 200, Z: 50}
-	at := func(x, y, z float32) session.StatusInfo {
-		return session.StatusInfo{State: session.StatusInWorld, Map: 309, X: x, Y: y, Z: z}
+	at := func(x, y, z float32) world.StatusInfo {
+		return world.StatusInfo{State: world.StatusInWorld, Map: 309, X: x, Y: y, Z: z}
 	}
 	zUnknown := at(100, 200, 50)
 	zUnknown.ZUnknown = true
@@ -529,7 +528,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	otherMap.Map = 1
 	for _, c := range []struct {
 		name string
-		st   session.StatusInfo
+		st   world.StatusInfo
 		want bool
 	}{
 		{"settled on the point", at(100, 200, 50), true},
@@ -548,7 +547,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	// A far go (from map 0, walk 23): ZUnknown stays set for good after SMSG_NEW_WORLD, so it no longer blocks the
 	// landing; the session's worldport ack (TeleportSeq > beforeSeq) is the landing itself, since the session
 	// publishes the map no earlier than that write. Every other rule still holds.
-	farSeq := func(x, y, z float32) session.StatusInfo {
+	farSeq := func(x, y, z float32) world.StatusInfo {
 		st := at(x, y, z)
 		st.TeleportSeq = 5
 		return st
@@ -559,7 +558,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	otherFarMap.Map = 1
 	for _, c := range []struct {
 		name string
-		st   session.StatusInfo
+		st   world.StatusInfo
 		want bool
 	}{
 		{"destination reported with z unknown", farZUnknown, true},
@@ -597,7 +596,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	zUnknownFalling.ZUnknown, zUnknownFalling.TeleportSeq, zUnknownFalling.Falling = true, 5, true
 	for _, c := range []struct {
 		name      string
-		st        session.StatusInfo
+		st        world.StatusInfo
 		beforeSeq uint64
 		haveSeq   bool
 		want      bool
@@ -1009,14 +1008,14 @@ func TestRaidWalkSelfRegroupJoinsAfterTheRevives(t *testing.T) {
 // on the plan's map, within 15 yd (x/y) of the hire's last frame position, and moved since the read before the appear.
 func TestRaidWalkAppearLandedCheck(t *testing.T) {
 	hire := botPos{mapID: 309, x: 100, y: 100, z: 10}
-	at := func(m uint32, x, y, z float32) session.StatusInfo {
-		return session.StatusInfo{State: session.StatusInWorld, Map: m, X: x, Y: y, Z: z}
+	at := func(m uint32, x, y, z float32) world.StatusInfo {
+		return world.StatusInfo{State: world.StatusInWorld, Map: m, X: x, Y: y, Z: z}
 	}
 	portal := at(0, -11915.8, -1236.43, 96.15)
 	for _, c := range []struct {
 		name   string
-		st     session.StatusInfo
-		before session.StatusInfo
+		st     world.StatusInfo
+		before world.StatusInfo
 		want   bool
 	}{
 		{"landed next to the hire", at(309, 101, 100, 12), portal, true},

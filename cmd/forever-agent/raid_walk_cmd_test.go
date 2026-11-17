@@ -22,7 +22,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbdash"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -147,7 +146,7 @@ type walkFakeAgent struct {
 	talentTrees     map[string][3]int // the build each hire has (default: the Survival premade)
 
 	entered  bool
-	status   session.StatusInfo
+	status   world.StatusInfo
 	lines    []queuedEvent
 	history  []queuedEvent // every served line, in serve order (seq i+1); a cursor rewind re-serves from it
 	since    uint64        // the `since` cursor of the in-flight events call
@@ -391,7 +390,7 @@ type walkFakeAgent struct {
 
 func newFakeAgent(t *testing.T, clock *fakeClock) *walkFakeAgent {
 	return &walkFakeAgent{t: t, clock: clock, dead: map[string]bool{},
-		status: session.StatusInfo{State: session.StatusInWorld, Map: 1, Character: "Commander"}}
+		status: world.StatusInfo{State: world.StatusInWorld, Map: 1, Character: "Commander"}}
 }
 
 func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any, timeout time.Duration) error {
@@ -470,15 +469,15 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			}
 			delete(f.uninvitePending, name)
 		}
-		members := make([]session.PartyMember, 0, len(f.party))
+		members := make([]world.PartyMember, 0, len(f.party))
 		for i, n := range f.party {
 			if f.partyJoinAt > 0 && i == len(f.party)-1 && f.clock.now().Sub(f.lastHireAt) < f.partyJoinAt {
 				continue // the last hire's join has not landed yet: the group list names it, its join does not
 			}
-			members = append(members, session.PartyMember{Name: n, GUID: world.GUID(1000 + i), Online: true})
+			members = append(members, world.PartyMember{Name: n, GUID: world.GUID(1000 + i), Online: true})
 		}
 		f.mu.Unlock()
-		v = session.PartyInfo{InGroup: len(members) > 0, Members: members}
+		v = world.PartyInfo{InGroup: len(members) > 0, Members: members}
 	case "gm":
 		var p struct {
 			Text string `json:"text"`

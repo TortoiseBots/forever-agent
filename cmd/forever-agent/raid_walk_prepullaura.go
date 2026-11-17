@@ -87,7 +87,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -1439,7 +1438,7 @@ func (w *walk) prepullAuraJoinRaid(ctx context.Context, raid []tbm.PartyRec, whe
 // nearest the commander (x/y; a cross-map distance is only the log's number). Names are matched case-insensitively,
 // like the rest of the fire: the frame's spelling may differ from the roster's. living is false when the frame holds
 // no living hire of the walk's.
-func (w *walk) prepullJoinTarget(st session.StatusInfo, raid []tbm.PartyRec) (target tbm.PartyRec, dist float64, living bool) {
+func (w *walk) prepullJoinTarget(st world.StatusInfo, raid []tbm.PartyRec) (target tbm.PartyRec, dist float64, living bool) {
 	var mt tbm.PartyRec
 	mtDist := math.Inf(1)
 	best := math.Inf(1)

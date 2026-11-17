@@ -18,7 +18,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/trashcheck"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -1348,8 +1347,8 @@ func (a *gmLandAgent) Call(ctx context.Context, method string, params, out any, 
 			a.bumped = true
 			a.seq++ // the server's teleport ack, counted by the session
 		}
-		st := out.(*session.StatusInfo)
-		*st = session.StatusInfo{State: session.StatusInWorld, Map: 309, X: 10, Y: 20, Z: 30, TeleportSeq: a.seq}
+		st := out.(*world.StatusInfo)
+		*st = world.StatusInfo{State: world.StatusInWorld, Map: 309, X: 10, Y: 20, Z: 30, TeleportSeq: a.seq}
 		if !a.never && a.landing && a.reads < a.landAt {
 			st.ZUnknown = true // the destination is reported, the position is still the session's guess
 		}

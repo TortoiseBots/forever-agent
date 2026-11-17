@@ -10,6 +10,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // tdFakeGame is a fake teardownGame recording every command it gets.
@@ -20,7 +21,7 @@ type tdFakeGame struct {
 	gmCmds     []string
 	replies    map[string]func() (tbm.Reply, error)
 	gmReplies  map[string]func() (string, bool, error)
-	party      session.PartyInfo
+	party      world.PartyInfo
 	visible    []string
 	leaveErr   error
 	left       bool
@@ -62,7 +63,7 @@ func (f *tdFakeGame) GMReply(ctx context.Context, text string, match func(string
 	return "", false, fmt.Errorf("unexpected gm %q", text)
 }
 
-func (f *tdFakeGame) Party() session.PartyInfo { f.mu.Lock(); defer f.mu.Unlock(); return f.party }
+func (f *tdFakeGame) Party() world.PartyInfo { f.mu.Lock(); defer f.mu.Unlock(); return f.party }
 
 func (f *tdFakeGame) VisibleNames() []string {
 	f.mu.Lock()
@@ -147,7 +148,7 @@ func tdBaseFake() *tdFakeGame {
 			},
 			".gm off": func() (string, bool, error) { return "GM mode is OFF", true, nil },
 		},
-		party: session.PartyInfo{InGroup: true, Members: []session.PartyMember{{Name: "Bo"}, {Name: "Beardmeister"}}},
+		party: world.PartyInfo{InGroup: true, Members: []world.PartyMember{{Name: "Bo"}, {Name: "Beardmeister"}}},
 		runOn: true, runState: "stopped", brainOn: true,
 		logouts: []error{nil},
 	}
@@ -193,7 +194,7 @@ func TestTeardownOrder(t *testing.T) {
 
 func TestTeardownNeverRemovesInAMixedGroup(t *testing.T) {
 	f := tdBaseFake()
-	f.party.Members = append(f.party.Members, session.PartyMember{Name: "Pipwren"})
+	f.party.Members = append(f.party.Members, world.PartyMember{Name: "Pipwren"})
 	res, err := runTeardown(context.Background(), f, teardownParams{WaitMS: 4000}, func(time.Duration) {})
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +225,7 @@ func TestTeardownRemovesOnlyListedNames(t *testing.T) {
 	f.replies["commander status"] = func() (tbm.Reply, error) {
 		return tdAck("You command Ragnar's group: Ragnar, Bo."), nil
 	}
-	f.party.Members = []session.PartyMember{{Name: "Bo"}}
+	f.party.Members = []world.PartyMember{{Name: "Bo"}}
 	delete(f.gmReplies, ".bot remove Beardmeister")
 	res, err := runTeardown(context.Background(), f, teardownParams{WaitMS: 4000}, func(time.Duration) {})
 	if err != nil {

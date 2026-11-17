@@ -64,22 +64,6 @@ func (s *Session) UseItem(ctx context.Context, ref EquipRef, target packet.GUID)
 	return v.(objects.Item), nil
 }
 
-// MountRef says what mounts the player: an item from the bags (Item) or a spell cast on
-// the player (Spell).
-type MountRef struct {
-	Item  EquipRef
-	Spell uint32
-}
-
-// MountInfo is the state after mount or dismount.
-type MountInfo struct {
-	Mounted   bool   `json:"mounted"`
-	DisplayID uint32 `json:"display_id,omitempty"`    // UNIT_FIELD_MOUNTDISPLAYID
-	Via       string `json:"via,omitempty"`           // item or spell
-	Result    string `json:"result,omitempty"`        // the server's mount result when it sent one
-	Learned   uint32 `json:"learned_spell,omitempty"` // the spell a bridle taught, which the agent cast
-}
-
 // Mounted reports whether the player's mount display is set.
 func (s *Session) Mounted() bool { return s.store.Field(s.selfGUID(), objects.UnitMountDisplay) != 0 }
 
@@ -196,8 +180,6 @@ func (s *Session) learnCount(ctx context.Context) (uint64, error) {
 	return v.(uint64), nil
 }
 
-// TaughtError is a mount by item that stopped because the item taught a spell the agent did not
-// cast. Spell is that spell, or 0 when the use taught several (see castLearned).
 type TaughtError struct {
 	Spell uint32
 	msg   string

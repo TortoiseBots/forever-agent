@@ -60,13 +60,6 @@ func (s *Session) VendorList(ctx context.Context, vendor packet.GUID) error {
 
 // BuyRef says what to buy. Bag and Slot, when set, name where the item goes (CMSG_BUY_ITEM_IN_SLOT):
 // bag 255 is the backpack, 19-22 a bag, and the slot is inside it. Without them the server picks.
-type BuyRef struct {
-	Entry uint32
-	Count uint8 // purchases, 0: one; each hands over the item's buy_count
-	Bag   *uint8
-	Slot  *uint8
-}
-
 // Buy buys an item from a vendor (CMSG_BUY_ITEM, or CMSG_BUY_ITEM_IN_SLOT with a slot). The
 // result is a vendor_buy or vendor_buy_failed event; a full bag is an inventory_error event.
 // The vendor need not have been listed first: the server checks its own list.

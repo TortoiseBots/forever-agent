@@ -24,7 +24,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/patrols"
-	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -235,7 +234,7 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		return exitSlotRefused
 	}
 	// Never record inside a group: the teleport would land in a bound raid's instance.
-	var party session.PartyInfo
+	var party world.PartyInfo
 	if err := client.Call(ctx, "party", nil, &party, 10*time.Second); err != nil {
 		fmt.Fprintf(stderr, "patrol-record: party: %v\n", err)
 		return patrolRecordErrCode(err)
@@ -244,12 +243,12 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stderr, "patrol-record: the slot agent is in a group; a recording goes into the GM's own instance, so leave the group first")
 		return exitSlotRefused
 	}
-	var st session.StatusInfo
+	var st world.StatusInfo
 	if err := client.Call(ctx, "status", nil, &st, 10*time.Second); err != nil {
 		fmt.Fprintf(stderr, "patrol-record: status: %v\n", err)
 		return patrolRecordErrCode(err)
 	}
-	if st.State != session.StatusInWorld || st.Dead || st.Ghost {
+	if st.State != world.StatusInWorld || st.Dead || st.Ghost {
 		fmt.Fprintf(stderr, "patrol-record: the slot agent is not a live character in the world (state %q, dead %v, ghost %v)\n",
 			st.State, st.Dead, st.Ghost)
 		return exitSlotRefused
@@ -376,12 +375,12 @@ func patrolRecordAllowedLine(line string) bool {
 func patrolRecordWaitForMap(ctx context.Context, client *slotClient, env patrolRecordEnv, o patrolRecordOptions, stderr io.Writer) int {
 	deadline := env.now().Add(patrolRecordArriveWait)
 	for {
-		var st session.StatusInfo
+		var st world.StatusInfo
 		if err := client.Call(ctx, "status", nil, &st, 10*time.Second); err != nil {
 			fmt.Fprintf(stderr, "patrol-record: status: %v\n", err)
 			return patrolRecordErrCode(err)
 		}
-		if st.State != session.StatusInWorld || st.Dead || st.Ghost {
+		if st.State != world.StatusInWorld || st.Dead || st.Ghost {
 			fmt.Fprintf(stderr, "patrol-record: the slot agent left the world (state %q, dead %v, ghost %v)\n",
 				st.State, st.Dead, st.Ghost)
 			return exitSlotRefused
@@ -411,12 +410,12 @@ func patrolRecordLoop(ctx context.Context, client *slotClient, env patrolRecordE
 	tracked := map[world.GUID]bool{}
 	var samples []patrols.Sample
 	for i := range total {
-		var st session.StatusInfo
+		var st world.StatusInfo
 		if err := client.Call(ctx, "status", nil, &st, 10*time.Second); err != nil {
 			return samples, "lost the agent: " + err.Error()
 		}
 		switch {
-		case st.State != session.StatusInWorld:
+		case st.State != world.StatusInWorld:
 			return samples, fmt.Sprintf("lost world (%s)", st.State)
 		case st.Dead:
 			return samples, "dead"

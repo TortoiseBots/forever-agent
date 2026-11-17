@@ -26,11 +26,6 @@ type markWaiter struct {
 	done chan struct{}
 }
 
-type MarkResult struct {
-	Icon string      `json:"icon"` // the icon set or cleared
-	GUID packet.GUID `json:"guid"`
-}
-
 // Mark sets a raid icon (skull, cross, square, moon, triangle, diamond, circle, star) on a
 // unit given by guid or name, or with icon "clear" takes the unit's icon off, as the 1.12
 // client's SetRaidTarget does. It waits for the server's MSG_RAID_TARGET_UPDATE echo: the

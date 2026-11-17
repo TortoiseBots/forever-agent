@@ -130,7 +130,7 @@ type Started struct {
 // ---- the spellbook ----
 
 // SetInitial replaces the spellbook and the cooldowns with SMSG_INITIAL_SPELLS.
-func (st *State) SetInitial(in game.InitialSpells) {
+func (st *State) SetInitial(in world.InitialSpells) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := st.now()
@@ -141,7 +141,7 @@ func (st *State) SetInitial(in game.InitialSpells) {
 	st.cds, st.cats = map[uint32]cooldown{}, map[uint32]time.Time{}
 	for _, c := range in.Cooldowns {
 		own, cat := ms(c.Cooldown), ms(c.CategoryCooldown)
-		if c.CategoryCooldown == game.InfiniteCooldown {
+		if c.CategoryCooldown == world.InfiniteCooldown {
 			cat = infinite
 			if c.Cooldown <= 1 {
 				own = infinite

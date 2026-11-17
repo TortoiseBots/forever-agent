@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The place-unfreeze safety net (walks 54 and 55, Jin'do): after a `--place` two bots of every raid could stay frozen
@@ -289,7 +289,7 @@ func (w *walk) unfreezeGoOntoMT(ctx context.Context, p dungeon.Point) error {
 	}
 	return w.waitStatus(ctx, unfreezeLandWait, time.Time{},
 		fmt.Sprintf("the commander did not land within %.0f yd of %s %s %s", unfreezeLandYd, num32(p.X), num32(p.Y), num32(p.Z)),
-		func(st session.StatusInfo) bool {
+		func(st world.StatusInfo) bool {
 			return reviveLanded(p, w.plan.Map, w.plan.Map, st, beforeSeq, haveSeq) && unfreezeFlat(st.X, st.Y, p.X, p.Y) <= unfreezeLandYd
 		})
 }
