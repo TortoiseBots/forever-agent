@@ -23,10 +23,10 @@ type ResurrectRequest struct {
 	Timer    bool   `json:"timer"`
 }
 
-// Corpse is where MSG_CORPSE_QUERY says the corpse is. When the corpse lies
-// in a dungeon the ghost is not in, Map is the map of the dungeon's entrance
-// and X, Y, Z the entrance (the map's ghostEntrance), CorpseMap the dungeon's
-// own map; else Map equals CorpseMap and the position is the corpse's.
+// Corpse is the answer to MSG_CORPSE_QUERY (Handlers/QueryHandler.cpp:271-327): Found false is a single zero byte.
+// Otherwise i32 map, three floats and u32 corpse map. When the corpse lies in a dungeon the ghost is not in, Map is the
+// map of the dungeon's entrance and X, Y, Z the entrance (the map's ghostEntrance), CorpseMap the dungeon's own map
+// (:288-311); else Map equals CorpseMap and the position is the corpse's.
 type Corpse struct {
 	Found     bool    `json:"found"`
 	Map       int32   `json:"map"`

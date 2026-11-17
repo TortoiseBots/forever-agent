@@ -130,7 +130,7 @@ type GameObject struct {
 	Flags     uint32 `json:"flags"`     // GAMEOBJECT_FLAGS, GO_FLAG_*
 	DynFlags  uint32 `json:"dyn_flags"` // GAMEOBJECT_DYN_FLAGS, bit 0: the client shows it as ready to interact (a chest's sparkle)
 	Locked    bool   `json:"locked"`    // GO_FLAG_LOCKED: needs a key, spell or event
-	Usable    bool   `json:"usable"`
+	Usable    bool   `json:"usable"`    // see GOUsable
 	DisplayID uint32 `json:"display_id"`
 	CreatedBy GUID   `json:"created_by,omitempty"` // the unit that summoned it
 }

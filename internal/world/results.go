@@ -160,6 +160,7 @@ type RollInfo struct {
 	Choice string `json:"choice"`
 }
 
+// TradeItemReq asks for Count of the item Entry from the bags (0: one).
 type TradeItemReq struct {
 	Entry uint32 `json:"item"`
 	Count uint32 `json:"count,omitempty"`
@@ -301,6 +302,14 @@ type PetInfo struct {
 	Refused string `json:"refused,omitempty"`
 }
 
+// PetOrder is one order to the pet (pet_action). Action is one of:
+//   - "attack": the pet attacks Target (0: the player's target). The server refuses a target the player may not attack and one the pet
+//     cannot reach, with SMSG_PET_ACTION_FEEDBACK (a pet_error event).
+//   - "follow", "stay": the command buttons. Follow also ends an attack.
+//   - "passive", "defensive", "aggressive": the reaction buttons. Passive also stops the pet's attack.
+//   - "cast": a pet spell by Slot (the bar button, 3 to 6), SpellID or Name (the spell must be on the bar), at Target (0: the player's target; the
+//     server drops a target the spell does not need).
+//   - "autocast_on", "autocast_off": switch the autocast of a spell of the pet (SpellID, Name or Slot).
 type PetOrder struct {
 	Action  string
 	Target  GUID
@@ -320,6 +329,8 @@ type DeathInfo struct {
 	ReclaimInMS int64 `json:"reclaim_in_ms"`
 }
 
+// MountRef says what mounts the player: an item from the bags (Item) or a spell cast on
+// the player (Spell).
 type MountRef struct {
 	Item  EquipRef
 	Spell uint32
@@ -334,6 +345,8 @@ type MountInfo struct {
 	Learned   uint32 `json:"learned_spell,omitempty"` // the spell a bridle taught, which the agent cast
 }
 
+// EquipRef picks an item: the first item with Entry in the backpack or the bags, or
+// Bag/Slot (Bag defaults to the backpack, 255).
 type EquipRef struct {
 	Entry uint32
 	Bag   *uint8

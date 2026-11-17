@@ -686,7 +686,7 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 		if u.Dead {
 			continue
 		}
-		low := world.SpawnLow(u.GUID)
+		low := world.Low24(u.GUID)
 		var reach float64
 		hostile := u.Hostile && u.Level > 1
 		if sp, ok := spawns[uint64(low)]; ok {
@@ -786,7 +786,7 @@ func liveJoinersCheck(st *StepResult, row planexport.StepRow, idx int, rows []pl
 		if u.Dead {
 			continue
 		}
-		at[world.SpawnLow(u.GUID)] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
+		at[world.Low24(u.GUID)] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
 	}
 	lmobs := make([]aggroest.Mob, len(mobs))
 	copy(lmobs, mobs)

@@ -12,33 +12,47 @@ import (
 // gameobject_test.go), Hogger's chat sender (internal/game/chat_test.go), the
 // loot corpse (internal/game/lootwindow_test.go), a pet (bogus entry: pets
 // carry a pet number where creatures carry an entry) and a player's item guid.
+//
+// wantMask is the value the OLD unguarded expression gives, by hand:
+// uint32(uint64(g) & 0x00FFFFFF). wantSpawn is the OLD guarded value from
+// internal/raidwalk/quiet.go's spawnLow: 0 unless the high word is HighUnit.
 func TestSpawnLow(t *testing.T) {
 	cases := []struct {
-		in   GUID
-		want uint32
+		in        GUID
+		wantMask  uint32
+		wantSpawn uint32
 	}{
-		{0xF13000012B000001, 1},      // wolf, entry 299
-		{0xF130000000001234, 0x1234}, // chat sender, entry 0
-		{0xF11001E5D3003839, 0},      // Keystone door: SpawnLow is creature-only
-		{0xF130002001000001, 1},      // vendor, entry 8193
-		{0xF140000000000099, 0},      // pet number, not a spawn
-		{0x4000000000000003, 0},      // item guid
-		{0x2A, 0},                    // player guid
-		{0xF130000123000001, 1},      // loot corpse, entry 291
+		{0xF13000012B000001, 0x000001, 1},      // wolf, entry 299
+		{0xF130000000001234, 0x001234, 0x1234}, // chat sender, entry 0
+		{0xF11001E5D3003839, 0x003839, 0},      // Keystone door, game object
+		{0xF130002001000001, 0x000001, 1},      // vendor, entry 8193
+		{0xF140000000000099, 0x000099, 0},      // pet number, not a spawn
+		{0x4000000000000003, 0x000003, 0},      // item guid
+		{0x2A, 0x00002A, 0},                    // player guid
+		{0xF130000123000001, 0x000001, 1},      // loot corpse, entry 291
 	}
 	for _, c := range cases {
-		if got := SpawnLow(c.in); got != c.want {
-			t.Errorf("SpawnLow(%s) = %d, want %d", c.in, got, c.want)
+		if got := Low24(c.in); got != c.wantMask {
+			t.Errorf("Low24(%s) = %#x, want %#x", c.in, got, c.wantMask)
 		}
-		// The old expression from quiet.go and gmclear.go.
-		var old uint32
+		if got := SpawnLow(c.in); got != c.wantSpawn {
+			t.Errorf("SpawnLow(%s) = %d, want %d", c.in, got, c.wantSpawn)
+		}
+		// The old expressions from main, by hand: the unguarded mask the
+		// plan_scout_live.go, raid_walk_place.go, planscout/live.go and
+		// gmclear.go sites inlined, and quiet.go's guarded spawnLow.
+		oldMask := uint32(uint64(c.in) & 0x00FFFFFF)
+		var oldGuarded uint32
 		if c.in.High() != packet.HighUnit {
-			old = 0
+			oldGuarded = 0
 		} else {
-			old = uint32(uint64(c.in) & 0x00FFFFFF)
+			oldGuarded = uint32(uint64(c.in) & 0x00FFFFFF)
 		}
-		if old != c.want {
-			t.Errorf("old mask for %s = %d, want %d", c.in, old, c.want)
+		if oldMask != c.wantMask {
+			t.Errorf("old unguarded mask for %s = %#x, want %#x", c.in, oldMask, c.wantMask)
+		}
+		if oldGuarded != c.wantSpawn {
+			t.Errorf("old guarded spawnLow for %s = %d, want %d", c.in, oldGuarded, c.wantSpawn)
 		}
 	}
 }
@@ -100,15 +114,37 @@ func TestIsPet(t *testing.T) {
 	}
 }
 
-func TestGUIDAliasRoundTrip(t *testing.T) {
-	// world.GUID is packet.GUID: parses and marshals the same hex.
-	for _, s := range []string{"0xF13000012B000001", "0xF11001E5D3003839", "0x2A"} {
-		g, err := ParseGUID(s)
-		if err != nil {
-			t.Fatalf("ParseGUID(%s): %v", s, err)
+// Low24 feeds the dedupe keys and spawn lookups the old unguarded sites fed:
+// a built creature guid decodes back to its spawn, and non-creature guids
+// keep their low bits instead of collapsing to 0 the way SpawnLow maps them.
+func TestLow24KeepsNonCreatureBits(t *testing.T) {
+	for _, c := range []struct {
+		entry, spawn uint32
+	}{
+		{299, 1},
+		{8193, 0xABCDEF},
+		{291, 0xFFFFFF},
+	} {
+		g := CreatureGUID(c.entry, c.spawn)
+		if Low24(g) != c.spawn&0x00FFFFFF {
+			t.Errorf("Low24(CreatureGUID(%d, %#x)) = %#x", c.entry, c.spawn, Low24(g))
 		}
-		if packet.GUID(g).String() != GUID(g).String() {
-			t.Errorf("%s string mismatch", s)
+	}
+	for _, c := range []struct {
+		in   GUID
+		want uint32
+	}{
+		{0xF140000000000099, 0x99},     // pet
+		{0xF11001E5D3003839, 0x003839}, // game object
+		{0x000000000000002A, 0x2A},     // player
+		{0x4000000000000003, 0x3},      // item
+		{0xF13000012B000001, 0x1},      // creature still works
+	} {
+		if got := Low24(c.in); got != c.want {
+			t.Errorf("Low24(%s) = %#x, want %#x", c.in, got, c.want)
+		}
+		if SpawnLow(c.in) != 0 && c.in.High() != packet.HighUnit {
+			t.Errorf("SpawnLow(%s) leaks non-creature bits", c.in)
 		}
 	}
 }

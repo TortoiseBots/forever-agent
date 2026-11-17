@@ -837,7 +837,7 @@ func (sl *scoutLive) spotPass(ctx context.Context) error {
 				}
 				ou := sl.objectUnit(u)
 				if sl.withinReach(ou, spot.Point, radius) {
-					losUnits = append(losUnits, planscout.LiveTarget{Guid: world.SpawnLow(ou.GUID), Entry: ou.Entry})
+					losUnits = append(losUnits, planscout.LiveTarget{Guid: world.Low24(ou.GUID), Entry: ou.Entry})
 				}
 			}
 			if err := sl.losAt(ctx, spot.LOSPoint, spot.Step, losUnits); err != nil {
@@ -964,7 +964,7 @@ func (sl *scoutLive) withinReach(u world.Unit, p dungeon.Point, fallback float64
 	reach := fallback
 	if sl.world != nil {
 		for _, sp := range sl.world.Spawns {
-			if sp.GUID == uint64(world.SpawnLow(u.GUID)) {
+			if sp.GUID == uint64(world.Low24(u.GUID)) {
 				if r := float64(worldspawn.AggroRadius(sp, sl.partyLevel(), sl.aggroRate())); r > 0 {
 					reach = r
 				}
@@ -1023,7 +1023,7 @@ func scoutLowGUID(s string) (uint32, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return world.SpawnLow(world.GUID(v)), true
+	return world.Low24(world.GUID(v)), true
 }
 
 // walkPass is step 9: the ranked risky hops, walked for real within the budget.
