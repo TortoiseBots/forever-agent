@@ -12,6 +12,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -686,7 +687,7 @@ func liveAggroCheck(st *StepResult, units []objects.Unit, w *worldspawn.World, o
 		if u.Dead {
 			continue
 		}
-		low := uint32(u.GUID) & 0xffffff
+		low := world.SpawnLow(u.GUID)
 		var reach float64
 		hostile := u.Hostile && u.Level > 1
 		if sp, ok := spawns[uint64(low)]; ok {
@@ -786,7 +787,7 @@ func liveJoinersCheck(st *StepResult, row planexport.StepRow, idx int, rows []pl
 		if u.Dead {
 			continue
 		}
-		at[uint32(u.GUID)&0xffffff] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
+		at[world.SpawnLow(u.GUID)] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
 	}
 	lmobs := make([]aggroest.Mob, len(mobs))
 	copy(lmobs, mobs)

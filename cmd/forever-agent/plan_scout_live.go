@@ -23,7 +23,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planscout"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
@@ -840,7 +839,7 @@ func (sl *scoutLive) spotPass(ctx context.Context) error {
 				}
 				ou := sl.objectUnit(u)
 				if sl.withinReach(ou, spot.Point, radius) {
-					losUnits = append(losUnits, planscout.LiveTarget{Guid: uint32(ou.GUID) & 0xffffff, Entry: ou.Entry})
+					losUnits = append(losUnits, planscout.LiveTarget{Guid: world.SpawnLow(ou.GUID), Entry: ou.Entry})
 				}
 			}
 			if err := sl.losAt(ctx, spot.LOSPoint, spot.Step, losUnits); err != nil {
@@ -951,7 +950,7 @@ func (sl *scoutLive) objectUnit(u ttUnit) objects.Unit {
 			break
 		}
 	}
-	guid := world.GUID(packet.HighUnit)<<48 | world.GUID(entry)<<24 | world.GUID(u.Spawn)
+	guid := world.CreatureGUID(entry, u.Spawn)
 	return objects.Unit{GUID: guid, Type: "creature", Entry: entry, Name: u.Name, X: u.X, Y: u.Y, Z: u.Z,
 		Health: uint32(u.MaxHP), MaxHealth: uint32(u.MaxHP), Level: level, Faction: faction, Dead: u.Dead, Hostile: hostile}
 }
@@ -967,7 +966,7 @@ func (sl *scoutLive) withinReach(u objects.Unit, p dungeon.Point, fallback float
 	reach := fallback
 	if sl.world != nil {
 		for _, sp := range sl.world.Spawns {
-			if sp.GUID == uint64(uint32(u.GUID)&0xffffff) {
+			if sp.GUID == uint64(world.SpawnLow(u.GUID)) {
 				if r := float64(worldspawn.AggroRadius(sp, sl.partyLevel(), sl.aggroRate())); r > 0 {
 					reach = r
 				}
@@ -1013,7 +1012,7 @@ func (sl *scoutLive) losAt(ctx context.Context, p dungeon.Point, step int, targe
 
 // scoutFullGUID is a `q los` guid: the creature GUID the toolkit's findByHex parses (entry and counter).
 func scoutFullGUID(t planscout.LiveTarget) string {
-	return fmt.Sprintf("0x%X", uint64(packet.HighUnit)<<48|uint64(t.Entry)<<24|uint64(t.Guid))
+	return world.CreatureGUID(t.Entry, t.Guid).String()
 }
 
 // scoutLowGUID reads the counter (the low 24 bits) of a guid the toolkit answered.
@@ -1026,7 +1025,7 @@ func scoutLowGUID(s string) (uint32, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return uint32(v) & 0xffffff, true
+	return world.SpawnLow(world.GUID(v)), true
 }
 
 // walkPass is step 9: the ranked risky hops, walked for real within the budget.

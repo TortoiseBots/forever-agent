@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -456,7 +455,7 @@ func (s *Stepper) stepOnce(st *Step) (a Action, advance bool) {
 		if ew, isEntry := s.w.(EntryWorld); isEntry && ref.Entry != 0 && ew.EntryTargets() {
 			base.Kind, base.Entry = kind, ref.Entry
 			if ref.Spawn != 0 {
-				base.SpawnGUID = world.GUID(uint64(packet.HighGameObject)<<48 | uint64(ref.Entry)<<24 | uint64(ref.Spawn))
+				base.SpawnGUID = world.GameObjectGUID(ref.Entry, ref.Spawn)
 			}
 			switch {
 			case ref.Near != nil:

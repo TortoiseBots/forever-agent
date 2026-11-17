@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/world"
 	"math"
 	"sort"
 	"strings"
@@ -237,12 +237,7 @@ func PatrolPackDone(step int, pulled bool, progress int, hostileHP []int) bool {
 }
 
 // spawnLow is the spawn guid low a creature unit's GUID carries (bits 0-23): 0 when the GUID has no creature form.
-func spawnLow(u *objects.Unit) uint32 {
-	if u.GUID.High() != packet.HighUnit {
-		return 0
-	}
-	return uint32(uint64(u.GUID) & 0xFFFFFF)
-}
+func spawnLow(u *objects.Unit) uint32 { return world.SpawnLow(u.GUID) }
 
 // atHome says the unit stands at its HOME spawn: within quietHomeYd (3D) of a same-entry plan spawn — the exact one
 // when the plan names its spawn guid and the unit's GUID carries one, else any spawn of that entry — and never for a

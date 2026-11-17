@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Big packs (owner decision 2026-10-14): the party takes at most about BigPack mobs at once. Zul'Farrak's packs of 5 to 10 were too much
@@ -227,7 +227,7 @@ func (d *RemoteDriver) ccStillOn(h tbm.HostileRec) bool {
 // landed), an entry of the plan's kill_first that is not cc_always too (the healers and wards that are killed first, never sheeped: the Witch Doctor 5650 was sheeped ten
 // times against the plan), an entry of no_cc (undead: nine orders at Zombies and Dead Heroes, one cast), or a unit with a pet's GUID.
 func (d *RemoteDriver) ccAllowed(h tbm.HostileRec) bool {
-	if h.GUID.High() == packet.HighPet { // a Polymorph at a pet's GUID lands nowhere
+	if world.IsPet(h.GUID) { // a Polymorph at a pet's GUID lands nowhere
 		return false
 	}
 	if d.plan == nil {

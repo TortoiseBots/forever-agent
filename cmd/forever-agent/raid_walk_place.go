@@ -1637,7 +1637,7 @@ func (w *walk) placeEnemy(now time.Time) string {
 	for _, f := range foes {
 		low := uint32(0)
 		if g, err := world.ParseGUID(f.guid); err == nil {
-			low = uint32(uint64(g) & 0xFFFFFF)
+			low = world.SpawnLow(g)
 		}
 		key := fmt.Sprintf("%d/%d", f.state.entry, low)
 		if seen[key] {

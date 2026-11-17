@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -462,5 +461,5 @@ func dist3(a, b dungeon.Point) float32 {
 
 // guidHex renders a creature spawn's world GUID (ObjectGuid.h: high unit, the entry, then the spawn guid).
 func guidHex(entry uint32, guid uint64) string {
-	return world.GUID(uint64(packet.HighUnit)<<48 | uint64(entry)<<24 | guid&0x00FFFFFF).String()
+	return world.CreatureGUID(entry, uint32(guid&0x00FFFFFF)).String()
 }

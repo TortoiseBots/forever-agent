@@ -374,7 +374,7 @@ const gmSamePathYd = 0.05
 
 // SpawnGUID is the DB spawn guid of a creature's world guid: its low 24 bits (ObjectGuid.h: high, entry, counter), the number the world
 // export lists as the spawn's guid.
-func SpawnGUID(g world.GUID) uint64 { return uint64(g) & 0x00FFFFFF }
+func SpawnGUID(g world.GUID) uint64 { return uint64(world.SpawnLow(g)) }
 
 // SeenMembers picks, from the units a read shows, the members of the pack: a creature whose spawn guid and entry both match a member,
 // dead or alive (the caller tells them apart). The order is by guid.
