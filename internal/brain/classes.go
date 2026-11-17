@@ -9,7 +9,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // What the class presets of step 4b share (issue #80): the rogue, the hunter and the retribution paladin (rogue.go, hunter.go,
@@ -57,7 +57,7 @@ func swingAction(name string, mobOf func(*Ctx) *objects.Unit) *Action {
 		return m
 	}
 	return &Action{Name: name, Harmful: true, Threat: ThreatSingle, Pre: []string{"face_target"},
-		Target: func(c *Ctx) packet.GUID {
+		Target: func(c *Ctx) world.GUID {
 			if m := mobOf(c); m != nil {
 				return m.GUID
 			}
@@ -168,4 +168,4 @@ func setKey(c *Ctx, key string, d time.Duration, reason string) {
 	c.mem.holdAction(key, c.Now.Add(d), reason)
 }
 
-func guidStr(g packet.GUID) string { return strconv.FormatUint(uint64(g), 10) }
+func guidStr(g world.GUID) string { return strconv.FormatUint(uint64(g), 10) }

@@ -7,8 +7,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The agent's own hands in a remote run (dungeon.AgentHands): what an object step falls back on when the carrier bot's order fails twice.
@@ -18,11 +18,11 @@ func (g remoteGame) hands() *sessionGame {
 	return &sessionGame{cur: g.c.cur, probeWindow: g.c.probeWindow}
 }
 
-func (g remoteGame) LootObject(ctx context.Context, guid packet.GUID) (dungeon.Looted, error) {
+func (g remoteGame) LootObject(ctx context.Context, guid world.GUID) (dungeon.Looted, error) {
 	return g.hands().LootObject(ctx, guid)
 }
 
-func (g remoteGame) LootCorpse(ctx context.Context, guid packet.GUID) (dungeon.Looted, error) {
+func (g remoteGame) LootCorpse(ctx context.Context, guid world.GUID) (dungeon.Looted, error) {
 	return g.hands().LootCorpse(ctx, guid)
 }
 
@@ -30,7 +30,7 @@ func (g remoteGame) UseItem(ctx context.Context, entry uint32) error {
 	return g.hands().UseItem(ctx, entry)
 }
 
-func (g remoteGame) UseObject(ctx context.Context, guid packet.GUID) error {
+func (g remoteGame) UseObject(ctx context.Context, guid world.GUID) error {
 	return g.hands().UseObject(ctx, guid)
 }
 

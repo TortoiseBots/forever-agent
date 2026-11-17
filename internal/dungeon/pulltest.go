@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The pull-test scenario (remote mode; dungeon_run pulltest, owner-approved 2026-10-14). One pull group of one leg is pulled `tries` times
@@ -99,17 +99,17 @@ type ptSampler struct {
 	radius  float32
 	healer  string
 	last    time.Time
-	pack    map[packet.GUID]bool // each hostile seen: of the pack (true) or not, decided when it was first seen
-	adds    map[packet.GUID]uint32
-	off     map[packet.GUID]float64 // seconds a mob was engaged with the party and not on the tank
-	minMana int                     // 101: none seen
-	kills   int                     // units a won pull of the try killed
-	pullAt  time.Time               // the first pull order that went through
-	killAt  time.Time               // the last kill of the fight
+	pack    map[world.GUID]bool // each hostile seen: of the pack (true) or not, decided when it was first seen
+	adds    map[world.GUID]uint32
+	off     map[world.GUID]float64 // seconds a mob was engaged with the party and not on the tank
+	minMana int                    // 101: none seen
+	kills   int                    // units a won pull of the try killed
+	pullAt  time.Time              // the first pull order that went through
+	killAt  time.Time              // the last kill of the fight
 }
 
 func newSampler(g PullGroup, radius float32, healer string) *ptSampler {
-	return &ptSampler{g: g, radius: radius, healer: healer, pack: map[packet.GUID]bool{}, adds: map[packet.GUID]uint32{}, off: map[packet.GUID]float64{}, minMana: 101}
+	return &ptSampler{g: g, radius: radius, healer: healer, pack: map[world.GUID]bool{}, adds: map[world.GUID]uint32{}, off: map[world.GUID]float64{}, minMana: 101}
 }
 
 // ptObserve is called by look for each new frame.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The melee half of the brain's Game (brain.Melee) over the agent's session: what the player's swings did, read off the session's
@@ -21,9 +21,9 @@ type meleeWatch struct {
 	mu       sync.Mutex
 	log      *events.Log // the log the cursor belongs to; a new session has a new log
 	cursor   uint64
-	dodged   map[packet.GUID]time.Time
+	dodged   map[world.GUID]time.Time
 	avoided  time.Time
-	swinging packet.GUID
+	swinging world.GUID
 	facings  uint64 // the swings the server refused for facing since the first look
 }
 
@@ -42,7 +42,7 @@ func (g *sessionBrainGame) syncMelee() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.log != l {
-		w.log, w.cursor, w.dodged, w.avoided, w.swinging = l, l.Last(), map[packet.GUID]time.Time{}, time.Time{}, 0
+		w.log, w.cursor, w.dodged, w.avoided, w.swinging = l, l.Last(), map[world.GUID]time.Time{}, time.Time{}, 0
 		w.facings = 0
 		// The auto attack the player already had when the brain looked first (an attack order from the RPC, a fight pulled before the
 		// brain started) is on: the server does not announce it again, so without this the brain would think it was idle and order it
@@ -109,7 +109,7 @@ func (g *sessionBrainGame) syncMelee() {
 	}
 }
 
-func (g *sessionBrainGame) LastDodge(target packet.GUID) time.Time {
+func (g *sessionBrainGame) LastDodge(target world.GUID) time.Time {
 	g.syncMelee()
 	g.melee.mu.Lock()
 	defer g.melee.mu.Unlock()
@@ -123,7 +123,7 @@ func (g *sessionBrainGame) LastAvoided() time.Time {
 	return g.melee.avoided
 }
 
-func (g *sessionBrainGame) Swinging() packet.GUID {
+func (g *sessionBrainGame) Swinging() world.GUID {
 	g.syncMelee()
 	g.melee.mu.Lock()
 	defer g.melee.mu.Unlock()

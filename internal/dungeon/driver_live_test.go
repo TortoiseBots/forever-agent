@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Tests for the fixes of the first live Uldaman run (issue #73): stealthed packs, the rest gate, the revive race,
@@ -33,7 +33,7 @@ func TestDriverWalksThroughAStealthedGroup(t *testing.T) {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
 	// The lurkers were never targeted; the ordinary group after them was pulled as usual.
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{203}) || g.count(".bot action pullback") != 1 || g.count(".bot action follow") != 1 {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{203}) || g.count(".bot action pullback") != 1 || g.count(".bot action follow") != 1 {
 		t.Fatalf("targets %v chats %q", g.targets, g.chats)
 	}
 	if fmt.Sprint(g.walks[:2]) != "[{30 0 0} {34 0 0}]" {
@@ -104,7 +104,7 @@ func TestDriverPullsTheVisibleMemberOfAMixedPack(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{202, 203}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{202, 203}) {
 		t.Fatalf("targets %v", g.targets)
 	}
 	if l := d.Report().Legs[0]; l.Ambushes != 0 || l.Pulls != 2 || l.PullRetries != 0 {
@@ -426,7 +426,7 @@ func TestStealthed(t *testing.T) {
 // A pack with Stealth Detection is an ordinary pack: it is pulled, not walked past.
 func TestDriverPullsAPackWithAStealthDetectionAura(t *testing.T) {
 	g := newFake()
-	for _, e := range []packet.GUID{201, 202} {
+	for _, e := range []world.GUID{201, 202} {
 		u := g.add(e, 10, Point{30 + float32(e-201)*4, 0, 0})
 		u.Auras = []objects.Aura{{SpellID: 8279, Name: "Stealth Detection"}}
 	}
@@ -435,7 +435,7 @@ func TestDriverPullsAPackWithAStealthDetectionAura(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if l := d.Report().Legs[0]; l.Ambushes != 0 || l.Pulls != 2 || fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{201, 203}) {
+	if l := d.Report().Legs[0]; l.Ambushes != 0 || l.Pulls != 2 || fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{201, 203}) {
 		t.Fatalf("%+v targets %v", l, g.targets)
 	}
 }
@@ -497,7 +497,7 @@ func TestRestGateWaitsOutALowHealer(t *testing.T) {
 	// A mage at 25% that does not drink passes; the healer is at full mana.
 	g = newFake()
 	g.add(201, 1, Point{20, 0, 0})
-	const mage packet.GUID = 0x13
+	const mage world.GUID = 0x13
 	g.party = append(g.party, Member{Name: "Mage", GUID: mage, Online: true, Health: 500, MaxHealth: 500, PowerType: 0, Power: 100, MaxPower: 400})
 	g.partyClass[mage] = 8
 	d = NewDriver(mustPlan(t, restPlan), g, Config{}, g.clock())

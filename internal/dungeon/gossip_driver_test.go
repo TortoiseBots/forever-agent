@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The gossip step with the agent's own character (gossip.go, driver_gossip.go, remote_gossip.go).
 
 const (
 	npcWeegli     uint32 = 7607
-	guidWeegli           = packet.GUID(0xF130001DB7000001)
+	guidWeegli           = world.GUID(0xF130001DB7000001)
 	menuBefore    uint32 = 1511
 	menuReady     uint32 = 1513
 	weegliName           = "Weegli Blastfuse"
@@ -43,7 +43,7 @@ func menuOf(textID uint32, opts ...GossipLine) GossipAnswer {
 	return GossipAnswer{Kind: GossipAnswerMenu, TextID: textID, Options: opts}
 }
 
-func (n *npcTalk) GossipHello(ctx context.Context, npc packet.GUID, wait time.Duration) (GossipAnswer, error) {
+func (n *npcTalk) GossipHello(ctx context.Context, npc world.GUID, wait time.Duration) (GossipAnswer, error) {
 	n.hellos++
 	d := n.dist()
 	n.helloAt = append(n.helloAt, d)
@@ -60,7 +60,7 @@ func (n *npcTalk) GossipHello(ctx context.Context, npc packet.GUID, wait time.Du
 	return n.menus[i], nil
 }
 
-func (n *npcTalk) GossipSelect(ctx context.Context, npc packet.GUID, option uint32, wait time.Duration) (GossipAnswer, error) {
+func (n *npcTalk) GossipSelect(ctx context.Context, npc world.GUID, option uint32, wait time.Duration) (GossipAnswer, error) {
 	n.selects = append(n.selects, option)
 	return n.sel, nil
 }
@@ -80,11 +80,11 @@ type gossipGroup struct {
 	talk *npcTalk
 }
 
-func (g *gossipGroup) GossipHello(ctx context.Context, npc packet.GUID, w time.Duration) (GossipAnswer, error) {
+func (g *gossipGroup) GossipHello(ctx context.Context, npc world.GUID, w time.Duration) (GossipAnswer, error) {
 	return g.talk.GossipHello(ctx, npc, w)
 }
 
-func (g *gossipGroup) GossipSelect(ctx context.Context, npc packet.GUID, o uint32, w time.Duration) (GossipAnswer, error) {
+func (g *gossipGroup) GossipSelect(ctx context.Context, npc world.GUID, o uint32, w time.Duration) (GossipAnswer, error) {
 	return g.talk.GossipSelect(ctx, npc, o, w)
 }
 

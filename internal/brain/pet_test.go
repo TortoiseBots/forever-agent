@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells and units of the pet tests (ids from internal/spells/meta.tsv.gz; TestPetSpellData checks the facts the rules rely on).
@@ -19,7 +19,7 @@ const (
 	spMendPet   = 13544 // rank 7, level 60
 	spGrowl     = 14921 // rank 7 (the pet's, level 60)
 	spTorment   = 3716
-	petG        = packet.GUID(0xF140000000000007)
+	petG        = world.GUID(0xF140000000000007)
 )
 
 // petFake is the fake game with the pet half of the Game: the test sets the pet, the brain's orders are written down.
@@ -47,7 +47,7 @@ func (f *petFake) note(s string) {
 	f.pmu.Unlock()
 }
 
-func (f *petFake) PetAttack(ctx context.Context, target packet.GUID) error {
+func (f *petFake) PetAttack(ctx context.Context, target world.GUID) error {
 	f.note("attack:" + guidStr(target))
 	return nil
 }
@@ -109,7 +109,7 @@ func newPetRig(t *testing.T, preset string, class uint8, level uint32, power uin
 	if tune != nil {
 		tune(&g.self)
 	}
-	pf := &petFake{meleeFake: &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}}
+	pf := &petFake{meleeFake: &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}}
 	cfg := DefaultConfig()
 	cfg.Now = g.clk.Now
 	if p.Strategies == nil {

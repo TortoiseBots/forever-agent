@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The enter phase (remote_enter.go) against a fake commander whose bots start outside the plan's map (plan map 70, the bots on map 0).
@@ -29,7 +29,7 @@ type enterFake struct {
 	level      int
 	known      bool
 	log        []string
-	pending    map[packet.GUID]time.Time
+	pending    map[world.GUID]time.Time
 	stuck      map[string]bool // bots a summon does not bring
 	teleFails  bool            // `.tele name` changes nothing
 	portal     *Point
@@ -42,15 +42,15 @@ type enterFake struct {
 }
 
 func newEnterFake(t *testing.T) *enterFake {
-	g := &enterFake{fakeRemote: newFakeRemote(t), pending: map[packet.GUID]time.Time{}, stuck: map[string]bool{}, swallow: map[string]int{}, known: true, level: 3}
-	g.memberMap = map[packet.GUID]uint32{}
+	g := &enterFake{fakeRemote: newFakeRemote(t), pending: map[world.GUID]time.Time{}, stuck: map[string]bool{}, swallow: map[string]int{}, known: true, level: 3}
+	g.memberMap = map[world.GUID]uint32{}
 	g.plan = remotePlan(Leg{Name: "a", To: Point{5, 0, 0}})
 	g.plan.Map, g.plan.EntranceTele = insideMap, "ulda"
 	g.onTick = g.tick
 	return g
 }
 
-func (g *enterFake) guidOf(name string) packet.GUID {
+func (g *enterFake) guidOf(name string) world.GUID {
 	for _, p := range g.party {
 		if strings.EqualFold(p.Name, name) {
 			return p.GUID

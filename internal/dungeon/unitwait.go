@@ -4,14 +4,14 @@ import (
 	"slices"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The unit waits (UnitWait: wait_for unit, the expect of an area_trigger) judge a list of sightings, whatever the driver they come from.
 
 // unitSight is one creature as a driver sees it: the bots' feed (a hostile, alive or dead) or the agent's own object store.
 type unitSight struct {
-	guid    packet.GUID
+	guid    world.GUID
 	entry   uint32
 	at      Point
 	dead    bool
@@ -56,7 +56,7 @@ func (u *UnitWait) holds(sights []unitSight, known bool) bool {
 
 // storeSights turns the creatures of an object store into sightings, leaving out the GUIDs already seen (the feed is the fresher record) and
 // the units with no position yet.
-func storeSights(us []objects.Unit, have map[packet.GUID]bool) []unitSight {
+func storeSights(us []objects.Unit, have map[world.GUID]bool) []unitSight {
 	var out []unitSight
 	for _, u := range us {
 		if u.Type != "creature" || u.PosAgeMS < 0 || have[u.GUID] {

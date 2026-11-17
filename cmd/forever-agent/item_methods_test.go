@@ -8,8 +8,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/objects/objtest"
 	"github.com/pjerra/forever-agent/internal/opcode"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // callAsync starts an RPC that waits on the server and returns a channel for its answer.
@@ -20,7 +20,7 @@ func (r *agentRig) callAsync(method, params string) chan map[string]any {
 }
 
 // giveSelf sends the player's create block with a stack of potions in the backpack slot 23.
-func (r *agentRig) giveSelf(item packet.GUID, entry uint32, extra map[uint16]uint32) {
+func (r *agentRig) giveSelf(item world.GUID, entry uint32, extra map[uint16]uint32) {
 	w := objtest.Header(2).U8(uint8(objects.BlockCreate2)).PackedGUID(item).U8(objects.TypeItem).U8(0x10).U32(1)
 	objtest.Values(w, 0x30, map[uint16]uint32{objects.FieldEntry: entry, objects.ItemStackCount: 3})
 	w.U8(uint8(objects.BlockCreate2)).PackedGUID(0x2A).U8(objects.TypePlayer)
@@ -66,7 +66,7 @@ func TestUseItemMethod(t *testing.T) {
 }
 
 func TestLootMethods(t *testing.T) {
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	r := newRig(t)
 	if out := r.call("loot", "{}"); out["error"] != nil || out["result"] != nil {
 		t.Fatalf("no window: %v", out)

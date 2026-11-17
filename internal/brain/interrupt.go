@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Interrupts (issue #80 step 3b). An enemy's SMSG_SPELL_START shows on its unit as Casting (spell, end, the unit it is aimed at).
@@ -148,7 +148,7 @@ func interruptStrategy(name string) *Strategy {
 		Name: name,
 		Actions: []*Action{{Name: "interrupt",
 			Resolve: func(c *Ctx) (uint32, bool) { p := plan.Get(c); return p.ID, p.ID != 0 },
-			Target: func(c *Ctx) packet.GUID {
+			Target: func(c *Ctx) world.GUID {
 				if u := plan.Get(c).Unit; u != nil {
 					return u.GUID
 				}

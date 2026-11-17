@@ -34,7 +34,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/mapview"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/privfile"
@@ -43,6 +42,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbdash"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -1094,16 +1094,16 @@ type walk struct {
 	// Counted once, 10 s after the pull: pullJoinsAt is zero afterwards.
 	pullJoinsAt    time.Time
 	pullJoinsStep  int
-	pullSeed       packet.GUID
+	pullSeed       world.GUID
 	pullEntry      uint32
 	pullRow        raidwalk.PackRow
 	pullPackSeeded bool
 	pullSeedTries  int
 	pullNoRow      bool
 	pullBossAdds   map[uint32]bool
-	pullPack       map[packet.GUID]bool
-	pullJoinsSeen  map[packet.GUID]bool
-	pullAddsSeen   map[packet.GUID]bool
+	pullPack       map[world.GUID]bool
+	pullJoinsSeen  map[world.GUID]bool
+	pullAddsSeen   map[world.GUID]bool
 	// bossPullArmed are the boss steps whose joiner window was armed: a boss
 	// pull has no "pulling" line (the tank engages on arrival), so the first
 	// fighting line of the step arms it, once per step. The latch also clears
@@ -1340,7 +1340,7 @@ type hostileState struct {
 }
 
 type botPos struct {
-	guid     packet.GUID
+	guid     world.GUID
 	x, y, z  float32
 	inCombat bool
 	mapID    uint32

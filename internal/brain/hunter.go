@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The hunter (issue #80 step 4b, preset marksman_hunter): a ranged damage dealer that shoots from 8 to 35 yards. The rotation is the
@@ -90,7 +90,7 @@ func incomingMob(c *Ctx) *objects.Unit {
 	return m
 }
 
-func incomingMobGUID(c *Ctx) packet.GUID {
+func incomingMobGUID(c *Ctx) world.GUID {
 	if m := incomingMob(c); m != nil {
 		return m.GUID
 	}
@@ -250,7 +250,7 @@ func hunterMarksman() *Strategy {
 				}},
 			swingAction("hunter_swing", hunterMelee),
 			{Name: "raptor_strike", Spell: "Raptor Strike", Harmful: true, Threat: ThreatSingle, Pre: []string{"face_target"},
-				Target: func(c *Ctx) packet.GUID {
+				Target: func(c *Ctx) world.GUID {
 					if m := hunterMelee(c); m != nil {
 						return m.GUID
 					}

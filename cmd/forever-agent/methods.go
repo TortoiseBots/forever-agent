@@ -11,10 +11,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
@@ -60,13 +60,13 @@ type unitsParams struct {
 }
 
 type targetParams struct {
-	GUID packet.GUID `json:"guid,omitempty"`
-	Name string      `json:"name,omitempty"`
+	GUID world.GUID `json:"guid,omitempty"`
+	Name string     `json:"name,omitempty"`
 }
 
 type castParams struct {
-	SpellID uint32      `json:"spell_id"`
-	Target  packet.GUID `json:"target,omitempty"`
+	SpellID uint32     `json:"spell_id"`
+	Target  world.GUID `json:"target,omitempty"`
 	// TradeSlot casts at the trade partner's item in that trade slot (0-6; an enchant takes slot 6) instead of at a target.
 	TradeSlot *uint8 `json:"trade_slot,omitempty"`
 }
@@ -76,21 +76,21 @@ type cancelCastParams struct {
 }
 
 type guidParams struct {
-	GUID packet.GUID `json:"guid"`
+	GUID world.GUID `json:"guid"`
 }
 
 // gmSetHPParams is gm_set_hp: the creature only. The session restores the unit to its own MaxHealth (it reads the unit
 // and sends `.modify hp <max> <max>`), so an explicit hp is refused: no caller can lower a unit's maximum.
 type gmSetHPParams struct {
-	GUID packet.GUID `json:"guid"`
+	GUID world.GUID `json:"guid"`
 	// HP is refused when present, whatever its value: the parameter was removed from the RPC.
 	HP *uint32 `json:"hp,omitempty"`
 }
 
 // gmAuraParams is gm_aura: the player to put one aura on and the spell id of the aura.
 type gmAuraParams struct {
-	GUID    packet.GUID `json:"guid"`
-	SpellID uint32      `json:"spell_id"`
+	GUID    world.GUID `json:"guid"`
+	SpellID uint32     `json:"spell_id"`
 }
 
 type walkParams struct {
@@ -107,16 +107,16 @@ type pointParams struct {
 }
 
 type markParams struct {
-	GUID packet.GUID `json:"guid,omitempty"`
-	Name string      `json:"name,omitempty"`
-	Icon string      `json:"icon"` // skull, cross, square, moon, triangle, diamond, circle, star or clear
+	GUID world.GUID `json:"guid,omitempty"`
+	Name string     `json:"name,omitempty"`
+	Icon string     `json:"icon"` // skull, cross, square, moon, triangle, diamond, circle, star or clear
 }
 
 type rollParams struct {
-	RollID   uint64      `json:"roll_id,omitempty"`
-	ItemSlot *uint32     `json:"item_slot,omitempty"`
-	Looted   packet.GUID `json:"looted,omitempty"`
-	Choice   string      `json:"choice"` // need, greed or pass
+	RollID   uint64     `json:"roll_id,omitempty"`
+	ItemSlot *uint32    `json:"item_slot,omitempty"`
+	Looted   world.GUID `json:"looted,omitempty"`
+	Choice   string     `json:"choice"` // need, greed or pass
 }
 
 type inventoryParams struct {
@@ -125,11 +125,11 @@ type inventoryParams struct {
 
 // equipmentRow is one worn item of the equipment method. ItemEntry is 0 until the item's create block arrives, as in inventory.
 type equipmentRow struct {
-	Slot        uint8       `json:"slot"`
-	SlotName    string      `json:"slot_name"`
-	GUID        packet.GUID `json:"guid"`
-	ItemEntry   uint32      `json:"item_entry"`
-	TempEnchant uint32      `json:"temp_enchant,omitempty"`
+	Slot        uint8      `json:"slot"`
+	SlotName    string     `json:"slot_name"`
+	GUID        world.GUID `json:"guid"`
+	ItemEntry   uint32     `json:"item_entry"`
+	TempEnchant uint32     `json:"temp_enchant,omitempty"`
 }
 
 // equipmentSlotNames are the worn slots 0-18 in index order (EQUIPMENT_SLOT_HEAD to EQUIPMENT_SLOT_TABARD).
@@ -261,7 +261,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 			limit = 5000 // look past the nearest 100: the caller's limit applies to the bound rows, below
 		}
 		us := cur().Units(objects.Filter{Near: p.Within, Entry: p.Entry, Hostile: p.Hostile, Name: p.Name, Limit: limit})
-		var bound map[packet.GUID]bool
+		var bound map[world.GUID]bool
 		if viewFrame != nil {
 			fr, ok := viewFrame()
 			bound = boundGUIDs(fr, ok, time.Now())

@@ -7,15 +7,15 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planlint"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 // unitGUID builds the creature GUID the toolkit's `db` guid and entry encode (ObjectGuid: entry << 24 | counter).
-func unitGUID(entry, low uint32) packet.GUID {
-	return packet.GUID(0xF130)<<48 | packet.GUID(entry)<<24 | packet.GUID(low)
+func unitGUID(entry, low uint32) world.GUID {
+	return world.GUID(0xF130)<<48 | world.GUID(entry)<<24 | world.GUID(low)
 }
 
 // zgF23Rows are walk-31 f steps 21-23 (the stand 18.3 yd above its anchor, spec test 1).

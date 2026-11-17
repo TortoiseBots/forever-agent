@@ -13,12 +13,13 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestPlayerRef(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
-		guid packet.GUID
+		guid world.GUID
 		name string
 		bad  bool
 	}{
@@ -40,7 +41,7 @@ func TestPlayerRef(t *testing.T) {
 // trade over JSON-RPC: it validates, hands a stack and gold to a nearby player, and a trade that fails answers an
 // error whose data is the result.
 func TestTradeMethod(t *testing.T) {
-	const bread packet.GUID = 0x4000000000000003
+	const bread world.GUID = 0x4000000000000003
 	r := newRigAt(t, session.Options{TradeSettle: 20 * time.Millisecond}, [3]float32{1, 2, 3})
 	r.giveSelf(bread, 4540, map[uint16]uint32{objects.PlayerCoinage: 300})
 	w := objtest.Header(1).U8(uint8(objects.BlockCreate2)).PackedGUID(0x99).U8(objects.TypePlayer)
@@ -149,7 +150,7 @@ func TestTradeStepMethodsParams(t *testing.T) {
 // The whole step trade over JSON-RPC, as the Eluna smoke drives it: expect, begin, set the item in slot 6, cast the
 // enchant at it, accept, complete; every client packet body is checked.
 func TestTradeStepMethodsFlow(t *testing.T) {
-	const bracers packet.GUID = 0x4000000000000041
+	const bracers world.GUID = 0x4000000000000041
 	r := newRigAt(t, session.Options{TradeSettle: 20 * time.Millisecond}, [3]float32{1, 2, 3})
 	r.giveSelf(bracers, 1420, nil)
 	r.gormNearby()

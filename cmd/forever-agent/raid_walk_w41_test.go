@@ -17,9 +17,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // TestBossEngagedWhilePausedOnBossRowResumes is walk 41 tj-8. The run stood on Jeklik's own boss step and paused
@@ -50,7 +50,7 @@ func TestBossEngagedWhilePausedOnBossRowResumes(t *testing.T) {
 	f.agent.mu.Unlock()
 	// Her own late pull: the frames hold her engaged (a target, 40 %) under the pause.
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000), X: -12289.1, Y: -1384.1, Z: 134.3}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000), X: -12289.1, Y: -1384.1, Z: 134.3}}
 	}
 	// The resume's answer: the run goes on at her step (its own page, so the wait's
 	// newest-status check sees running), then ends at its until on a later poll.
@@ -175,7 +175,7 @@ func pausedBossFixture(t *testing.T, answer func(f *fixture, boss, total int)) (
 	f.agent.mu.Unlock()
 	// Her own late pull: the frames hold her engaged (a target, 40 %) under the pause.
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000), X: -12289.1, Y: -1384.1, Z: 134.3}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000), X: -12289.1, Y: -1384.1, Z: 134.3}}
 	}
 	if answer != nil {
 		answer(f, boss, total)
@@ -576,7 +576,7 @@ func TestRunningBossHandoffHasNoResumeNote(t *testing.T) {
 		Ack:  &tbm.Ack{Intent: "run start", Scope: "party", Count: 1, Executor: "-"},
 		Line: start, Lines: []string{start, "TBM:ACTION_ACK|run start|party|1|-"}}}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000)}}
 	}
 	// The run is RUNNING on her row when the boss incident fires; its own ending arrives after that.
 	f.agent.viewHook = func() {
@@ -645,7 +645,7 @@ func TestFightRecordKillAtWalkStartNeedsNoLiveSighting(t *testing.T) {
 			w.bossRows = map[uint32]hostileState{}
 			if tc.alive {
 				// The walk's own frames hold Jeklik alive (and engaged) on her row.
-				w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000)}}})
+				w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000)}}})
 			}
 			// The run stopped on her own row before any kill: the frames never reported the kill.
 			feedStatus(w, tbm.RunStatus{Step: goal, Kind: "boss", Note: "fighting"}, now)
@@ -820,7 +820,7 @@ func TestSaveFightsFailedFirstReadThenKillIsCredited(t *testing.T) {
 			now := time.Now()
 			w, d := fightCreditWalk(t, goal, goal, now)
 			w.manifest.Character = "Bot"
-			w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000)}}})
+			w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000)}}})
 			feedStatus(w, tbm.RunStatus{Step: goal, Kind: "boss", Note: "fighting"}, now)
 			d.fightsErr = errors.New("dashboard timeout")
 			w.saveFightsAtStart() // the pre-placement read fails
@@ -847,7 +847,7 @@ func TestSaveFightsLiveAtStartRecordStaysAtStart(t *testing.T) {
 	now := time.Now()
 	w, d := fightCreditWalk(t, goal, goal, now)
 	w.manifest.Character = "Bot"
-	w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000)}}})
+	w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000)}}})
 	feedStatus(w, tbm.RunStatus{Step: goal, Kind: "boss", Note: "fighting"}, now)
 	live := jeklikKillRow("68-1", true, now.Unix()-600)
 	live.Step = uint32(goal)

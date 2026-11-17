@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The gossip step (Gossip in plan.go): the agent's own character talks to an NPC. The remote driver also lets a bot do it (remote_gossip.go);
@@ -41,9 +41,9 @@ type GossipAnswer struct {
 // CMSG_GOSSIP_SELECT_OPTION, each with the wait for the server's answer.
 type GossipTalker interface {
 	// GossipHello talks to the NPC and waits up to wait for the menu (or the close, or another panel).
-	GossipHello(ctx context.Context, npc packet.GUID, wait time.Duration) (GossipAnswer, error)
+	GossipHello(ctx context.Context, npc world.GUID, wait time.Duration) (GossipAnswer, error)
 	// GossipSelect picks the option of the open menu and waits up to wait for the answer.
-	GossipSelect(ctx context.Context, npc packet.GUID, option uint32, wait time.Duration) (GossipAnswer, error)
+	GossipSelect(ctx context.Context, npc world.GUID, option uint32, wait time.Duration) (GossipAnswer, error)
 }
 
 // Waits and distances of the step.

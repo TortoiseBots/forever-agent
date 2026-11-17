@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the rogue tests (ids from internal/spells/meta.tsv.gz; TestRogueSpellData checks the facts the rotation relies on).
@@ -35,7 +35,7 @@ func newClassRig(t *testing.T, preset string, class uint8, level uint32, power u
 	if tune != nil {
 		tune(&g.self)
 	}
-	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}
+	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}
 	cfg := DefaultConfig()
 	cfg.Now = g.clk.Now
 	if p.Strategies == nil {
@@ -61,7 +61,7 @@ func setHealth(g *fakeGame, pct uint32) {
 	g.setSelf(func(u *objects.Unit) { u.Health = u.MaxHealth * pct / 100 })
 }
 
-func setCombo(g *fakeGame, n uint8, on packet.GUID) {
+func setCombo(g *fakeGame, n uint8, on world.GUID) {
 	g.setSelf(func(u *objects.Unit) { u.ComboPoints, u.ComboTarget = n, on })
 }
 
@@ -72,7 +72,7 @@ func addAura(g *fakeGame, name string, id uint32, left *int64) {
 }
 
 // onMe puts the mob on the player.
-func onMe(g *fakeGame, id packet.GUID) { g.mutate(id, func(u *objects.Unit) { u.Target = selfG }) }
+func onMe(g *fakeGame, id world.GUID) { g.mutate(id, func(u *objects.Unit) { u.Target = selfG }) }
 
 func TestRogueBuildsComboPointsThenFinishes(t *testing.T) {
 	r, mf := newRogueRig(t, Params{})

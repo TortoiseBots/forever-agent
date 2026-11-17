@@ -19,12 +19,12 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // noUntilText is the refusal of a server whose run leader has no `until` (spec 3.3 phase 9).
@@ -2423,7 +2423,7 @@ func (w *walk) pullStarted(now time.Time, st tbm.RunStatus) {
 		return
 	}
 	if entry, guid, ok := raidwalk.PullingTarget(raidwalk.CleanLine(st.Note)); ok {
-		w.pullPack = map[packet.GUID]bool{guid: true}
+		w.pullPack = map[world.GUID]bool{guid: true}
 		w.pullSeed = guid
 		w.pullEntry = entry
 		w.pullRow = packRowOf(w.rows, st.Step)
@@ -2436,8 +2436,8 @@ func (w *walk) pullStarted(now time.Time, st tbm.RunStatus) {
 		w.pullNoRow = false
 		w.pullBossAdds = w.bossAddsOf(st.Step)
 		w.pullJoinsAt, w.pullJoinsStep = now, st.Step
-		w.pullJoinsSeen = map[packet.GUID]bool{}
-		w.pullAddsSeen = map[packet.GUID]bool{}
+		w.pullJoinsSeen = map[world.GUID]bool{}
+		w.pullAddsSeen = map[world.GUID]bool{}
 		if st.Kind == planexport.KindBoss {
 			// The boss step's pull line (a stand pull of one of its adds) opened
 			// the window: the fight-start line below must not open a second one.
@@ -2514,7 +2514,7 @@ func (w *walk) bossPullStarted(now time.Time, st tbm.RunStatus) {
 		w.pullJoinersFlush(time.Time{})
 	}
 	w.bossPullArmedOf()[st.Step] = true
-	w.pullPack = map[packet.GUID]bool{}
+	w.pullPack = map[world.GUID]bool{}
 	w.pullSeed = 0 // the row owns the boss and its adds by position
 	w.pullEntry = 0
 	w.pullRow = row
@@ -2523,8 +2523,8 @@ func (w *walk) bossPullStarted(now time.Time, st tbm.RunStatus) {
 	w.pullNoRow = false
 	w.pullBossAdds = w.bossAddsOf(st.Step)
 	w.pullJoinsAt, w.pullJoinsStep = now, st.Step
-	w.pullJoinsSeen = map[packet.GUID]bool{}
-	w.pullAddsSeen = map[packet.GUID]bool{}
+	w.pullJoinsSeen = map[world.GUID]bool{}
+	w.pullAddsSeen = map[world.GUID]bool{}
 }
 
 func (w *walk) bossPullArmedOf() map[int]bool {
@@ -2598,10 +2598,10 @@ func rowHasEntry(s planexport.StepRow, entry uint32) bool {
 	return false
 }
 
-func (w *walk) packPositions() map[packet.GUID][3]float32 {
-	out := make(map[packet.GUID][3]float32, len(w.hostiles))
+func (w *walk) packPositions() map[world.GUID][3]float32 {
+	out := make(map[world.GUID][3]float32, len(w.hostiles))
 	for gs, h := range w.hostiles {
-		g, err := packet.ParseGUID(gs)
+		g, err := world.ParseGUID(gs)
 		if err != nil || g == 0 {
 			continue
 		}
@@ -2626,10 +2626,10 @@ func (w *walk) pullFramed(now time.Time, f *tbm.ViewFrame) {
 		return
 	}
 	if w.pullJoinsSeen == nil {
-		w.pullJoinsSeen = map[packet.GUID]bool{}
+		w.pullJoinsSeen = map[world.GUID]bool{}
 	}
 	if w.pullAddsSeen == nil {
-		w.pullAddsSeen = map[packet.GUID]bool{}
+		w.pullAddsSeen = map[world.GUID]bool{}
 	}
 	// The first frame of the window sees the pack where it was pulled from
 	// (trackFrame already recorded this frame's positions): its other members
@@ -2691,12 +2691,12 @@ func (w *walk) pullJoinersFlush(now time.Time) {
 		return
 	}
 	// pullFramed never adds a pack guid to the seen set: what it holds is the joiners.
-	guids := make([]packet.GUID, 0, len(w.pullJoinsSeen))
+	guids := make([]world.GUID, 0, len(w.pullJoinsSeen))
 	for g := range w.pullJoinsSeen {
 		guids = append(guids, g)
 	}
 	rec := raidwalk.SortJoinerGUIDs(guids)
-	adds := make([]packet.GUID, 0, len(w.pullAddsSeen))
+	adds := make([]world.GUID, 0, len(w.pullAddsSeen))
 	for g := range w.pullAddsSeen {
 		adds = append(adds, g)
 	}
@@ -2727,7 +2727,7 @@ func (w *walk) pullJoinersFlush(now time.Time) {
 }
 
 // joinerGUIDs formats guids for the "boss add" note the way JoinersNote does its own.
-func joinerGUIDs(guids []packet.GUID) string {
+func joinerGUIDs(guids []world.GUID) string {
 	var b strings.Builder
 	for i, g := range guids {
 		if i > 0 {
@@ -4185,10 +4185,10 @@ func (w *walk) bossCorpse(ctx context.Context, boss uint32, units []uint32, now 
 }
 
 // bossCorpseKey is the frame-map key of a toolkit corpse guid: the frames key w.hostiles by
-// packet.GUID.String ("0x%016X"), the toolkit sends the same hex (TT.guidHex). The key matches
+// world.GUID.String ("0x%016X"), the toolkit sends the same hex (TT.guidHex). The key matches
 // only when the hex parses, so a malformed guid never links to the attempt.
 func bossCorpseKey(guid string) (string, error) {
-	g, err := packet.ParseGUID(guid)
+	g, err := world.ParseGUID(guid)
 	if err != nil || g == 0 {
 		return "", fmt.Errorf("bad guid %q", guid)
 	}

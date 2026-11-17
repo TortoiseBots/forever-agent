@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The follow-ups of the review of #102 (druid and shaman), step 4e of #80.
@@ -102,7 +102,7 @@ func (m *mhGame) MainHand() (MainHand, bool) {
 	return m.mh, m.seen
 }
 
-func (m *mhGame) hold(item packet.GUID, enchant uint32) {
+func (m *mhGame) hold(item world.GUID, enchant uint32) {
 	m.mu.Lock()
 	m.mh, m.seen = MainHand{Item: item, TempEnchant: enchant}, true
 	m.mu.Unlock()

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Looted is what an open-and-take brought out of an object or a corpse: the items now in the bags, the copper, and the slots the
@@ -31,8 +31,8 @@ type ItemCount struct {
 // and takes everything (session.LootObject), LootCorpse loots a dead creature (session.LootCorpse), UseItem uses an item from the
 // bags by entry (CMSG_USE_ITEM on the leader itself).
 type ObjectActor interface {
-	LootObject(ctx context.Context, guid packet.GUID) (Looted, error)
-	LootCorpse(ctx context.Context, guid packet.GUID) (Looted, error)
+	LootObject(ctx context.Context, guid world.GUID) (Looted, error)
+	LootCorpse(ctx context.Context, guid world.GUID) (Looted, error)
 	UseItem(ctx context.Context, entry uint32) error
 }
 
@@ -55,7 +55,7 @@ func (w stepWorld) Team() string {
 // the group leader may change the setting).
 type LootRules struct {
 	Method    string
-	Master    packet.GUID
+	Master    world.GUID
 	Threshold uint8
 	Leader    bool
 }
@@ -78,7 +78,7 @@ type LootRuler interface {
 
 // seesBossLoot reports whether the rules show every item of a corpse to the leader: free_for_all, or master_loot with the leader
 // as the master looter.
-func seesBossLoot(r LootRules, self packet.GUID) bool {
+func seesBossLoot(r LootRules, self world.GUID) bool {
 	return r.Method == LootFreeForAll || (r.Method == "master_loot" && r.Master != 0 && r.Master == self)
 }
 
@@ -384,7 +384,7 @@ func (d *Driver) lootBoss(ctx context.Context, a Action) error {
 		d.rep.note(fmt.Sprintf("%s: the leader carries %s, which %s is only for; the corpse is left alone", a.Label, p, b.LootItem))
 		return nil
 	}
-	var corpse packet.GUID
+	var corpse world.GUID
 	var at Point
 	best := 1e9
 	for _, u := range d.g.Units() {

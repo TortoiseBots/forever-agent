@@ -7,17 +7,17 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
-	gMt = packet.GUID(101)
-	gOt = packet.GUID(102)
-	gR1 = packet.GUID(201)
-	gR2 = packet.GUID(202)
-	gR3 = packet.GUID(203)
+	gMt = world.GUID(101)
+	gOt = world.GUID(102)
+	gR1 = world.GUID(201)
+	gR2 = world.GUID(202)
+	gR3 = world.GUID(203)
 )
 
 func injectRoster(withOT bool) *Roster {
@@ -126,7 +126,7 @@ func TestParseInjects(t *testing.T) {
 	}
 }
 
-func killObsAt(now time.Time, kind string, hp int, mtDead bool, h1, h2 packet.GUID) InjectObs {
+func killObsAt(now time.Time, kind string, hp int, mtDead bool, h1, h2 world.GUID) InjectObs {
 	o := InjectObs{Now: now, Run: runAt(now, kind, 10), HaveRun: true, Lead: "Mt", Bots: injectBots(now)}
 	o.Bots["Mt"] = BotObs{GUID: gMt, Pos: dungeon.Point{}, At: now, Dead: mtDead}
 	if h1 != 0 {
@@ -563,7 +563,7 @@ func partyHostile() HostileObs {
 	return HostileObs{GUID: 401, Entry: 501, HPPct: 100, Pos: dungeon.Point{Y: 10}, Target: gR1, Reaction: "h", Kind: "-", Flags: "-"}
 }
 
-func idleHostile(guid packet.GUID, x, y float32) HostileObs {
+func idleHostile(guid world.GUID, x, y float32) HostileObs {
 	return HostileObs{GUID: guid, Entry: 502, HPPct: 100, Pos: dungeon.Point{X: x, Y: y}, Reaction: "h", Kind: "-", Flags: "-"}
 }
 

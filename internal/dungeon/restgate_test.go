@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
-const mageGUID packet.GUID = 0x13
+const mageGUID world.GUID = 0x13
 
 // restFake is the fake party with a mage (class 8, mana) added: the healer is the priest.
 func restFake() *fakeGame {

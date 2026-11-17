@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The shaman, the sixth class of the brain (issue #80 step 4c): a healer (resto_shaman), a caster (elemental_shaman) and a melee fighter
@@ -105,9 +105,9 @@ type shamMem struct {
 	totems     [elements]totemRec
 	imbueAt    time.Time // the last imbue that went out
 	imbueSpell uint32
-	imbueTry   time.Time   // an imbue that was refused: the next try waits for imbueRetry
-	imbueItem  packet.GUID // the main-hand item the imbue was sent to
-	fieldSeen  bool        // the main hand's temporary enchantment has read as set once: the server sends the field, so a zero means no imbue
+	imbueTry   time.Time  // an imbue that was refused: the next try waits for imbueRetry
+	imbueItem  world.GUID // the main-hand item the imbue was sent to
+	fieldSeen  bool       // the main hand's temporary enchantment has read as set once: the server sends the field, so a zero means no imbue
 	failSeen   uint64
 	failInit   bool
 	pend       *totemPend // a totem whose cast is on its way: it is recorded when the spell goes off
@@ -362,7 +362,7 @@ func shamanTotems(name string, prefs totemPrefs, rel float32) *Strategy {
 		Before: noteTotemGo,
 		Actions: []*Action{{Name: "drop_totem",
 			Resolve: func(c *Ctx) (uint32, bool) { p, ok := plan(c); return p.Spell, ok },
-			Target:  func(c *Ctx) packet.GUID { return c.Self.GUID },
+			Target:  func(c *Ctx) world.GUID { return c.Self.GUID },
 			Do: func(ctx context.Context, c *Ctx) error {
 				p, ok := plan(c)
 				if !ok {
@@ -400,7 +400,7 @@ type WeaponImbuer interface {
 
 // MainHand is the weapon in the main hand as the player's own item rows show it.
 type MainHand struct {
-	Item        packet.GUID
+	Item        world.GUID
 	TempEnchant uint32 // the temporary enchantment (ITEM_FIELD_ENCHANTMENT, slot 1): a weapon imbue, 0 for none
 }
 

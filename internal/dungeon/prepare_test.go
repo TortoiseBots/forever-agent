@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The prepare step (prepare.go) against a fake game with a roster: `.bot add` logs a bot in after a delay, a tele changes the map of the
@@ -17,11 +17,11 @@ import (
 const (
 	outsideMap  = 0
 	prepAgent   = "Glacienne"
-	prepAgentID = packet.GUID(0x20D)
+	prepAgentID = world.GUID(0x20D)
 )
 
 type prepBot struct {
-	guid    packet.GUID
+	guid    world.GUID
 	state   string // online, starting, offline
 	readyAt time.Time
 }
@@ -168,8 +168,8 @@ func (g *prepFake) TeleName(ctx context.Context, player, loc string) error {
 	return nil
 }
 
-func (g *prepFake) AgentName() string      { return prepAgent }
-func (g *prepFake) AgentGUID() packet.GUID { return prepAgentID }
+func (g *prepFake) AgentName() string     { return prepAgent }
+func (g *prepFake) AgentGUID() world.GUID { return prepAgentID }
 func (g *prepFake) Sees(name string) bool {
 	if g.agentMap == insideMap {
 		return false
@@ -191,7 +191,7 @@ func (g *prepFake) GMVisible(_ context.Context, on bool) error {
 }
 
 // UnbindInstances models HandleInstanceUnbindCommand: the selected player is unbound only from account level 4; below it the SENDER is.
-func (g *prepFake) UnbindInstances(_ context.Context, who string, guid packet.GUID) error {
+func (g *prepFake) UnbindInstances(_ context.Context, who string, guid world.GUID) error {
 	g.log("unbind %s %d", who, uint32(guid))
 	if g.level >= AdministratorLevel {
 		g.binds[who] = false
@@ -233,7 +233,7 @@ func (g *prepFake) Command(ctx context.Context, command string) (tbm.Reply, erro
 
 // GroupUnbind models HandleInstanceGroupUnbindCommand: every member of the selected player's group is unbound and the group disbanded
 // (and the binding with it), whatever the sender's level (it needs a developer); a player in no group gets "is not in a group".
-func (g *prepFake) GroupUnbind(_ context.Context, who string, guid packet.GUID) (GroupUnbindResult, error) {
+func (g *prepFake) GroupUnbind(_ context.Context, who string, guid world.GUID) (GroupUnbindResult, error) {
 	g.log("groupunbind %s %d", who, uint32(guid))
 	if g.noGroupAnswer {
 		return GroupNoAnswer, nil

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote driver's side of the watchdog (watchdog.go).
@@ -39,8 +39,8 @@ func (d *RemoteDriver) wdLook() (wdPos, Point, bool) {
 }
 
 // hostilesHP is each hostile's health percent, for the watchdog's per-mob lows (watchdog.lowLocked).
-func hostilesHP(hs []tbm.HostileRec) map[packet.GUID]int {
-	out := make(map[packet.GUID]int, len(hs))
+func hostilesHP(hs []tbm.HostileRec) map[world.GUID]int {
+	out := make(map[world.GUID]int, len(hs))
 	for _, h := range hs {
 		out[h.GUID] = max(h.HPPct, 0)
 	}

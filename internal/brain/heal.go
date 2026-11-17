@@ -12,8 +12,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The healer role (issue #80 step 4a). The role is the discipline a healing player shares whatever the class: who to heal first, with
@@ -311,12 +311,12 @@ type hpSample struct {
 
 type healCastRec struct {
 	spell  uint32
-	target packet.GUID
+	target world.GUID
 	at     time.Time
 }
 
 type dispelKey struct {
-	target packet.GUID
+	target world.GUID
 	aura   uint32
 }
 
@@ -324,19 +324,19 @@ type dispelKey struct {
 // sent, the dispels it tried, and the last friendly cast (a refusal for line of sight names the spell, not the target).
 type healMem struct {
 	mu       sync.Mutex
-	hist     map[packet.GUID][]hpSample
-	shielded map[packet.GUID]time.Time
+	hist     map[world.GUID][]hpSample
+	shielded map[world.GUID]time.Time
 	dispels  map[dispelKey]time.Time
 	last     healCastRec
 	failSeen uint64
 	failInit bool
 }
 
-func (h *healMem) observe(now time.Time, g packet.GUID, hp uint32) {
+func (h *healMem) observe(now time.Time, g world.GUID, hp uint32) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.hist == nil {
-		h.hist = map[packet.GUID][]hpSample{}
+		h.hist = map[world.GUID][]hpSample{}
 	}
 	s := append(h.hist[g], hpSample{now, hp})
 	for len(s) > 0 && now.Sub(s[0].at) > histKeep {
@@ -351,7 +351,7 @@ func (h *healMem) observe(now time.Time, g packet.GUID, hp uint32) {
 }
 
 // lost is the health a member lost within burstWindow: the most it had in that time less what it has now.
-func (h *healMem) lost(now time.Time, g packet.GUID, hp uint32) uint32 {
+func (h *healMem) lost(now time.Time, g world.GUID, hp uint32) uint32 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	top := hp
@@ -363,17 +363,17 @@ func (h *healMem) lost(now time.Time, g packet.GUID, hp uint32) uint32 {
 	return top - hp
 }
 
-func (h *healMem) shieldedAt(g packet.GUID) time.Time {
+func (h *healMem) shieldedAt(g world.GUID) time.Time {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.shielded[g]
 }
 
-func (h *healMem) noteShield(g packet.GUID, at time.Time) {
+func (h *healMem) noteShield(g world.GUID, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.shielded == nil {
-		h.shielded = map[packet.GUID]time.Time{}
+		h.shielded = map[world.GUID]time.Time{}
 	}
 	h.shielded[g] = at
 }
@@ -394,7 +394,7 @@ func (h *healMem) noteDispel(k dispelKey, until time.Time) {
 }
 
 // healCast sends a cast at a friendly unit and remembers where it went: a refusal for line of sight (Before) is a wall to that unit.
-func healCast(ctx context.Context, c *Ctx, spell uint32, target packet.GUID) error {
+func healCast(ctx context.Context, c *Ctx, spell uint32, target world.GUID) error {
 	h := &c.mem.heal
 	h.mu.Lock()
 	h.last = healCastRec{spell: spell, target: target, at: c.Now}
@@ -458,9 +458,9 @@ func memberHealth(c *Ctx, u *objects.Unit) (hp, max float64) {
 }
 
 // incomingHeal is the healing other party members have in flight on a member (their casts read off their units), and the player's own.
-func incomingHeal(c *Ctx, g packet.GUID) float64 {
+func incomingHeal(c *Ctx, g world.GUID) float64 {
 	var sum float64
-	add := func(spell uint32, target packet.GUID, endsIn *int64) {
+	add := func(spell uint32, target world.GUID, endsIn *int64) {
 		if target != g {
 			return
 		}
@@ -700,7 +700,7 @@ func init() {
 	strategyBuilders["rest_drink"] = restDrink
 }
 
-func targetGUID(u *objects.Unit) packet.GUID {
+func targetGUID(u *objects.Unit) world.GUID {
 	if u == nil {
 		return 0
 	}
@@ -734,7 +734,7 @@ func roleHealer() *Strategy {
 			faceTargetAction(),
 			{Name: "heal",
 				Resolve: func(c *Ctx) (uint32, bool) { p := plan(c); return p.Spell.ID, p.Target != nil && p.Spell.ID != 0 },
-				Target:  func(c *Ctx) packet.GUID { return targetGUID(plan(c).Target) },
+				Target:  func(c *Ctx) world.GUID { return targetGUID(plan(c).Target) },
 				Do: func(ctx context.Context, c *Ctx) error {
 					p := plan(c)
 					if p.Target == nil {
@@ -744,7 +744,7 @@ func roleHealer() *Strategy {
 				}},
 			{Name: "hot_tank",
 				Resolve: func(c *Ctx) (uint32, bool) { h := valHot.Get(c); return h.Spell, h.Target != nil },
-				Target:  func(c *Ctx) packet.GUID { return targetGUID(valHot.Get(c).Target) },
+				Target:  func(c *Ctx) world.GUID { return targetGUID(valHot.Get(c).Target) },
 				Do: func(ctx context.Context, c *Ctx) error {
 					h := valHot.Get(c)
 					if h.Target == nil {
@@ -754,7 +754,7 @@ func roleHealer() *Strategy {
 				}},
 			{Name: "dispel",
 				Resolve: func(c *Ctx) (uint32, bool) { d := ValDispel.Get(c); return d.Spell, d.Target != nil },
-				Target:  func(c *Ctx) packet.GUID { return targetGUID(ValDispel.Get(c).Target) },
+				Target:  func(c *Ctx) world.GUID { return targetGUID(ValDispel.Get(c).Target) },
 				Do: func(ctx context.Context, c *Ctx) error {
 					d := ValDispel.Get(c)
 					if d.Target == nil {

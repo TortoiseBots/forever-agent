@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The kill ledger (remote_ledger.go): a boss that dies in a fight the step does not track still counts as killed.
@@ -232,9 +232,9 @@ func TestLedgerDoesNotKillALiveBoss(t *testing.T) {
 // A pack the pulls passed over that walked up by itself and died in an untracked fight counts as killed (ZF-2); a mob that is not
 // known dead, or one the bots refused, does not.
 func TestPassedDeadInLedger(t *testing.T) {
-	d := &RemoteDriver{ledger: map[packet.GUID]*ledgerMob{1: {dead: true}, 2: {dead: true}, 3: {}}}
-	pass := func(gs ...packet.GUID) fightSpec {
-		sp := fightSpec{passed: map[packet.GUID]bool{}}
+	d := &RemoteDriver{ledger: map[world.GUID]*ledgerMob{1: {dead: true}, 2: {dead: true}, 3: {}}}
+	pass := func(gs ...world.GUID) fightSpec {
+		sp := fightSpec{passed: map[world.GUID]bool{}}
 		for _, g := range gs {
 			sp.passed[g] = true
 		}

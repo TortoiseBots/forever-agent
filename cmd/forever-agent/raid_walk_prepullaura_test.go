@@ -21,11 +21,11 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // prepullAgent is the agent side of a --prepull-aura test: a party of players whose auras the gm_aura RPC changes,
@@ -35,10 +35,10 @@ type prepullAgent struct {
 	clock time.Time
 
 	bots    []session.PartyMember
-	classes map[packet.GUID]uint8
-	auras   map[packet.GUID]map[uint32]bool
+	classes map[world.GUID]uint8
+	auras   map[world.GUID]map[uint32]bool
 
-	selfGUID packet.GUID
+	selfGUID world.GUID
 	selfName string
 	caster   map[uint32]bool
 	// selfCombat is the commander's own combat state (the party's is `combat`): a pull the commander started alone.
@@ -107,10 +107,10 @@ type prepullAgent struct {
 	// applyToSelf makes every ".aura" land on the commander instead of the target: the selection did not hold.
 	applyToSelf bool
 	// drop is the ids a bot never shows after its ".aura" (an aura the server refuses, or a selection that did not hold).
-	drop map[packet.GUID]map[uint32]bool
+	drop map[world.GUID]map[uint32]bool
 	// combatBots are the bots whose own row reports combat whatever `combat` says (a pull from a member the flag's
 	// lists do not cover).
-	combatBots map[packet.GUID]bool
+	combatBots map[world.GUID]bool
 	// The commander's view (bot_view): noView answers with no frame, hidden leaves named bots out of the party,
 	// deadBots marks them dead (in the view and in their unit rows, as the server's would), viewTruncated sets the
 	// frame's truncation flag, and extra appends members the walk never hired (another group's bot in the frame).
@@ -153,19 +153,19 @@ type prepullAgent struct {
 func newPrepullAgent(t *testing.T) *prepullAgent {
 	t.Helper()
 	a := &prepullAgent{t: t, clock: time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC), answers: true, holdPause: true, statusStep: 4,
-		classes: map[packet.GUID]uint8{}, auras: map[packet.GUID]map[uint32]bool{}, caster: map[uint32]bool{},
-		drop: map[packet.GUID]map[uint32]bool{}, combatBots: map[packet.GUID]bool{},
+		classes: map[world.GUID]uint8{}, auras: map[world.GUID]map[uint32]bool{}, caster: map[uint32]bool{},
+		drop: map[world.GUID]map[uint32]bool{}, combatBots: map[world.GUID]bool{},
 		hidden: map[string]bool{}, deadBots: map[string]bool{}, silent: map[string]bool{},
 		unseenUntil: map[string]time.Time{},
 		botStates:   map[string]string{}, botStateMissing: map[string]bool{}, botStateNoSpecs: map[string]bool{},
 		botMap: 309, frameName: map[string]string{}}
-	a.selfGUID, a.selfName = packet.GUID(0x0000000000000AAA), "Commander"
+	a.selfGUID, a.selfName = world.GUID(0x0000000000000AAA), "Commander"
 	// Mtbot (warrior mt), Otbot (warrior ot), Rank (rogue), Flitz (hunter), Zap (mage), Holi (priest).
 	for i, b := range []struct {
 		name  string
 		class uint8
 	}{{"Mtbot", 1}, {"Otbot", 1}, {"Rank", 4}, {"Flitz", 3}, {"Zap", 8}, {"Holi", 5}} {
-		g := packet.GUID(0x100 + i)
+		g := world.GUID(0x100 + i)
 		a.classes[g] = b.class
 		a.auras[g] = map[uint32]bool{}
 		a.bots = append(a.bots, session.PartyMember{Name: b.name, GUID: g, Online: true})
@@ -206,7 +206,7 @@ func (a *prepullAgent) queueBotStates() {
 }
 
 // aurasOf is the auras the unit RPC reports for a bot, in id order.
-func (a *prepullAgent) aurasOf(g packet.GUID) []objects.Aura {
+func (a *prepullAgent) aurasOf(g world.GUID) []objects.Aura {
 	ids := make([]uint32, 0, len(a.auras[g]))
 	for id := range a.auras[g] {
 		ids = append(ids, id)
@@ -300,7 +300,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 		}
 		_ = json.Unmarshal(raw, &p)
 		a.unitReads++
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			return err
 		}
@@ -334,7 +334,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 			SpellID uint32 `json:"spell_id"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			return err
 		}
@@ -472,7 +472,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 	return nil
 }
 
-func (a *prepullAgent) nameOf(g packet.GUID) string {
+func (a *prepullAgent) nameOf(g world.GUID) string {
 	if g == a.selfGUID {
 		return a.selfName
 	}
@@ -491,7 +491,7 @@ func (a *prepullAgent) nameOf(g packet.GUID) string {
 
 // stranger puts a member the walk never hired in the commander's frame, with a unit row the store answers (so the
 // fire's combat read can see it); inCombat is that row's combat state.
-func (a *prepullAgent) stranger(g packet.GUID, name string, inCombat bool) {
+func (a *prepullAgent) stranger(g world.GUID, name string, inCombat bool) {
 	a.extra = append(a.extra, tbm.PartyRec{GUID: g, Name: name, HP: 6000, MaxHP: 6000, Map: 309, State: "n"})
 	a.auras[g] = map[uint32]bool{}
 	a.combatBots[g] = inCombat
@@ -660,9 +660,9 @@ func newPrepullWalk(t *testing.T, a *prepullAgent, flags ...string) *walk {
 func prepullRoleAgent(t *testing.T, hs []prepullHire) *prepullAgent {
 	t.Helper()
 	a := newPrepullAgent(t)
-	a.bots, a.classes, a.auras = nil, map[packet.GUID]uint8{}, map[packet.GUID]map[uint32]bool{}
+	a.bots, a.classes, a.auras = nil, map[world.GUID]uint8{}, map[world.GUID]map[uint32]bool{}
 	for i, h := range hs {
-		g := packet.GUID(0x100 + i)
+		g := world.GUID(0x100 + i)
 		a.classes[g] = h.class
 		a.auras[g] = map[uint32]bool{}
 		a.bots = append(a.bots, session.PartyMember{Name: h.name, GUID: g, Online: true})
@@ -2183,7 +2183,7 @@ func TestPrepullAuraDruidWithoutASpecFails(t *testing.T) {
 // a raid member all the same, so its combat state is watched. This is the r1 HIGH, widened by the r2 HIGH.
 func TestPrepullAuraSkipsAnUnhiredFrameMember(t *testing.T) {
 	a := newPrepullAgent(t)
-	a.stranger(packet.GUID(0x900), "Stranger", false)
+	a.stranger(world.GUID(0x900), "Stranger", false)
 	w := newPrepullWalk(t, a, "role=all:22888")
 	if fired, err := w.prepullAuraSendPending(context.Background(), prepullRest(4), false); err != nil || !fired {
 		t.Fatalf("fire: fired %v err %v", fired, err)
@@ -2220,7 +2220,7 @@ func TestPrepullAuraSkipsAnUnhiredFrameMember(t *testing.T) {
 // unhired member that was only skipped went unchecked.
 func TestPrepullAuraUnhiredMemberInCombatStopsTheBatch(t *testing.T) {
 	a := newPrepullAgent(t)
-	a.stranger(packet.GUID(0x900), "Stranger", true)
+	a.stranger(world.GUID(0x900), "Stranger", true)
 	w := newPrepullWalk(t, a, "role=all:22888")
 	fired, err := w.prepullAuraSendPending(context.Background(), prepullRest(4), false)
 	code, reason := stopInfo(err)
@@ -2245,7 +2245,7 @@ func TestPrepullAuraUnhiredMemberInCombatStopsTheBatch(t *testing.T) {
 func TestPrepullAuraUnhiredMemberUnreadableStopsTheBatch(t *testing.T) {
 	a := newPrepullAgent(t)
 	// In the commander's frame but not in the agent's unit store: `unit` refuses it.
-	a.extra = []tbm.PartyRec{{GUID: packet.GUID(0x900), Name: "Stranger", HP: 6000, MaxHP: 6000, Map: 309, State: "n"}}
+	a.extra = []tbm.PartyRec{{GUID: world.GUID(0x900), Name: "Stranger", HP: 6000, MaxHP: 6000, Map: 309, State: "n"}}
 	w := newPrepullWalk(t, a, "role=all:22888")
 	fired, err := w.prepullAuraSendPending(context.Background(), prepullRest(4), false)
 	code, reason := stopInfo(err)
@@ -2719,7 +2719,7 @@ func TestPrepullAuraStartLogsTheCoverageAtThePull(t *testing.T) {
 		t.Fatalf("start fire: %v", err)
 	}
 	// Mtbot loses its flask before the pull: the coverage line must say which ids are missing.
-	delete(a.auras[packet.GUID(0x100)], 17626)
+	delete(a.auras[world.GUID(0x100)], 17626)
 	sent := len(a.sent)
 	// The step BEFORE the boss row is not the pull: no read line, however long the walk takes to get there.
 	if fired, err := w.prepullAuraSendPending(ctx, prepullRest(4), false); err != nil || fired {

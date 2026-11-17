@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Ritual steps in remote mode (remote_ritual.go; TortoiseBots `cmd ritual`).
@@ -36,9 +36,9 @@ type ritualGame struct {
 
 func newRitualGame(t *testing.T, need int) *ritualGame {
 	g := &ritualGame{entryGame: newEntryGame(t, 3, true), need: need}
-	g.world = []*worldObj{{guid: packet.GUID(0x1F1000000000BBB1), entry: goAltar, at: altarAt, state: "ready"}}
+	g.world = []*worldObj{{guid: world.GUID(0x1F1000000000BBB1), entry: goAltar, at: altarAt, state: "ready"}}
 	for i, n := range []string{"Dpsy", "Rogy"} {
-		g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x4000 + i), Name: n, HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, State: "n"})
+		g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x4000 + i), Name: n, HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, State: "n"})
 	}
 	return g
 }
@@ -180,7 +180,7 @@ func TestRitualStepOrdersThreeBotsAndTheAckIsTheResult(t *testing.T) {
 func TestRitualStepThenAWaitOnWhatLastsGoesOn(t *testing.T) {
 	g := newRitualGame(t, 3)
 	doorAt := Point{40, 0, 0}
-	g.world = append(g.world, &worldObj{guid: packet.GUID(0x1F1000000000BBB2), entry: 124367, at: doorAt, state: "ready"})
+	g.world = append(g.world, &worldObj{guid: world.GUID(0x1F1000000000BBB2), entry: 124367, at: doorAt, state: "ready"})
 	g.onDone = func(g *ritualGame) { g.world[1].state = "active" } // the Keepers died: the door opened
 	plan := ritualPlan(3)
 	plan.Legs[0].Steps = append(plan.Legs[0].Steps, Step{WaitFor: &WaitFor{GameObject: &ObjectState{ObjectRef: ObjectRef{Entry: 124367, Near: &doorAt}, State: "active"}, TimeoutS: 20}})

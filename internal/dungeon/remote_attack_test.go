@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The cadence of the party's attack order (attackAllowed). Group B's tank wipes: after a pull the driver sent `cmd attack <same guid>`
@@ -141,11 +141,11 @@ func TestAttackAllowedWhoHoldsTheMob(t *testing.T) {
 	mob := tbm.HostileRec{GUID: 0xF130000001, Entry: 299, HPPct: 100, X: 10, Y: 0, Z: 0}
 	for _, c := range []struct {
 		name   string
-		tank   packet.GUID // the named tank (0: none known)
-		holder packet.GUID
-		dead   packet.GUID // a member that is dead
-		far    packet.GUID // a member standing 60 yd from the mob
-		want   bool        // the order is sent again
+		tank   world.GUID // the named tank (0: none known)
+		holder world.GUID
+		dead   world.GUID // a member that is dead
+		far    world.GUID // a member standing 60 yd from the mob
+		want   bool       // the order is sent again
 	}{
 		{"the named tank holds it", gTank, gTank, 0, 0, false},
 		{"the named tank is dead", gTank, gTank, gTank, 0, true},

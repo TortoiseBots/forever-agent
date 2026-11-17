@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // directPlan is a lip walk and two direct steps, as the Uldaman pit crossing.
@@ -25,7 +25,7 @@ func lagMage(g *fakeRemote, x float32, lag time.Duration) {
 		m := g.party[2]
 		m.X, m.Y, m.Z = g.lead().X-6, g.lead().Y, g.lead().Z
 		if g.lagUntil == nil {
-			g.lagUntil = map[packet.GUID]time.Time{}
+			g.lagUntil = map[world.GUID]time.Time{}
 		}
 		g.lagUntil[m.GUID] = g.now.Add(lag)
 	}
@@ -113,7 +113,7 @@ func TestDirectStepAcceptsAFollowerWithinFiveYards(t *testing.T) {
 		}
 		m := g.party[2]
 		m.X, m.Y, m.Z = g.lead().X-4.5, g.lead().Y, g.lead().Z // always 4.5 yd behind
-		g.lagUntil = map[packet.GUID]time.Time{m.GUID: g.now.Add(time.Hour)}
+		g.lagUntil = map[world.GUID]time.Time{m.GUID: g.now.Add(time.Hour)}
 	}
 	rep, err := runRemote(t, g, viaRemotePlan(), opts(), nil)
 	if err != nil {

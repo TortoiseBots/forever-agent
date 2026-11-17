@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Object steps by entry (remote mode, issue #83; TortoiseBots #933, player-controls.md section 1a "Targets by entry"). The agent's
@@ -326,7 +326,7 @@ func (d *RemoteDriver) stateWaitError(a Action) error {
 // agentGUID is the GUID the agent's own hands act on in the fallback of an object step. An action by entry may have none (the agent did
 // not see the object when the step began): then the GUID the module chose for the carrier's order (ACTION_TARGET), else the object in the
 // agent's store now that it stands at it, looked for a few seconds.
-func (d *RemoteDriver) agentGUID(ctx context.Context, a Action, rec *objRec) (packet.GUID, error) {
+func (d *RemoteDriver) agentGUID(ctx context.Context, a Action, rec *objRec) (world.GUID, error) {
 	if a.GUID != 0 {
 		return a.GUID, nil
 	}

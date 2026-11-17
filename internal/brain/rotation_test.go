@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ---- the shipped files ----
@@ -236,9 +236,9 @@ func TestMobsNearMob(t *testing.T) {
 	r := testRotationFile(t, testMobsNearMob)
 	g := newFake(spFrostbolt)
 	buffUp(g)
-	tankFights(g, 5, 8, 0)                         // the tank at 5 yd, its mob at 8
-	g.addUnit(mob(packet.GUID(101), tankG), 11, 0) // 3 yd off the fight's mob
-	g.addUnit(mob(packet.GUID(102), tankG), 17, 0) // 9 yd off it: out of the 8 yd count
+	tankFights(g, 5, 8, 0)                        // the tank at 5 yd, its mob at 8
+	g.addUnit(mob(world.GUID(101), tankG), 11, 0) // 3 yd off the fight's mob
+	g.addUnit(mob(world.GUID(102), tankG), 17, 0) // 9 yd off it: out of the 8 yd count
 	rig := newRig(t, g, Params{Strategies: []string{"frost_mage"}, Rotation: r.Name})
 	if got := actions(rig, 100*time.Millisecond, 2200*time.Millisecond); slices.Contains(got, "near_three") {
 		t.Fatalf("two mobs within 8 yd and one at 9 yd fired it: %v", got)
@@ -246,7 +246,7 @@ func TestMobsNearMob(t *testing.T) {
 	if c := g.castList(); len(c) != 0 {
 		t.Fatalf("casts: %v", c)
 	}
-	g.addUnit(mob(packet.GUID(103), tankG), 6, 0) // 2 yd off the fight's mob: three within 8
+	g.addUnit(mob(world.GUID(103), tankG), 6, 0) // 2 yd off the fight's mob: three within 8
 	if got := actions(rig, 2200*time.Millisecond); !slices.Contains(got, "near_three") {
 		t.Fatalf("three mobs within 8 yd did not fire it: %v", got)
 	}
@@ -493,4 +493,4 @@ const (
 	spScorch         = 2948
 )
 
-var _ = packet.GUID(0)
+var _ = world.GUID(0)

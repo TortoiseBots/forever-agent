@@ -11,9 +11,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The spells of the tests, with their template numbers (internal/spells/meta.tsv.gz).
@@ -28,9 +28,9 @@ const (
 	spIntellect  = 1459
 	spConjure    = 5504 // Conjure Water rank 1
 	itemWater    = 5350
-	selfG        = packet.GUID(1)
-	tankG        = packet.GUID(2)
-	mobA, mobB   = packet.GUID(100), packet.GUID(101)
+	selfG        = world.GUID(1)
+	tankG        = world.GUID(2)
+	mobA, mobB   = world.GUID(100), world.GUID(101)
 	manaFull     = 1000
 )
 
@@ -55,7 +55,7 @@ func (c *fakeClock) advance(d time.Duration) {
 
 type castCall struct {
 	spell  uint32
-	target packet.GUID
+	target world.GUID
 }
 
 // fakeGame is a scripted world: the test sets the units, the party and the spellbook, and reads back what the
@@ -68,16 +68,16 @@ type fakeGame struct {
 	selfOK   bool
 	units    []objects.Unit
 	party    []Member
-	selected packet.GUID
+	selected world.GUID
 	items    []objects.Item
 	castErr  error
 	slow     bool // a cast stays in progress (SPELL_START without SPELL_GO)
 	block    chan struct{}
 
 	casts   []castCall
-	faces   []packet.GUID
+	faces   []world.GUID
 	used    []uint32
-	targets []packet.GUID
+	targets []world.GUID
 	attacks int
 	stops   int
 	cancels int
@@ -114,7 +114,7 @@ func (f *fakeGame) Party() []Member {
 	return append([]Member{}, f.party...)
 }
 
-func (f *fakeGame) Selected() packet.GUID {
+func (f *fakeGame) Selected() world.GUID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.selected
@@ -128,7 +128,7 @@ func (f *fakeGame) Items() []objects.Item {
 	return append([]objects.Item{}, f.items...)
 }
 
-func (f *fakeGame) Cast(ctx context.Context, spell uint32, target packet.GUID) error {
+func (f *fakeGame) Cast(ctx context.Context, spell uint32, target world.GUID) error {
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -150,7 +150,7 @@ func (f *fakeGame) Cast(ctx context.Context, spell uint32, target packet.GUID) e
 	return nil
 }
 
-func (f *fakeGame) Face(ctx context.Context, g packet.GUID) error {
+func (f *fakeGame) Face(ctx context.Context, g world.GUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.faces = append(f.faces, g)
@@ -162,7 +162,7 @@ func (f *fakeGame) Face(ctx context.Context, g packet.GUID) error {
 	return nil
 }
 
-func (f *fakeGame) Target(ctx context.Context, g packet.GUID) error {
+func (f *fakeGame) Target(ctx context.Context, g world.GUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.targets = append(f.targets, g)
@@ -267,7 +267,7 @@ func (f *fakeGame) addUnit(u objects.Unit, x, y float32) *objects.Unit {
 }
 
 // mutate changes a unit of the scene by guid.
-func (f *fakeGame) mutate(g packet.GUID, fn func(u *objects.Unit)) {
+func (f *fakeGame) mutate(g world.GUID, fn func(u *objects.Unit)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.units {
@@ -290,7 +290,7 @@ func (f *fakeGame) partyWithTank() {
 	f.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 25, 0)
 }
 
-func mob(g packet.GUID, target packet.GUID) objects.Unit {
+func mob(g world.GUID, target world.GUID) objects.Unit {
 	return objects.Unit{GUID: g, Type: "creature", Name: "Mob", Hostile: true, InCombat: true, Health: 500, MaxHealth: 500, Target: target}
 }
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The prepare step of a run (issue #83, owner request 2026-10-14: "why does setup take 11 minutes?"). A tester used to spend the setup
@@ -230,7 +230,7 @@ type Preparer interface {
 	TeleName(ctx context.Context, player, location string) error
 	// AgentName and AgentGUID are the agent's own character; AgentMap the map it stands on.
 	AgentName() string
-	AgentGUID() packet.GUID
+	AgentGUID() world.GUID
 	AgentMap() uint32
 	// Sees says whether the agent's own character has the player in view (its object store lists it).
 	Sees(name string) bool
@@ -238,14 +238,14 @@ type Preparer interface {
 	GMVisible(ctx context.Context, on bool) error
 	// UnbindInstances selects the player with the GUID and sends `.instance unbind all`, as one operation. who is the name, for errors.
 	// The core runs it on the selected player only from account level 4; below, on the sender. Its reply goes to the unbound player.
-	UnbindInstances(ctx context.Context, who string, guid packet.GUID) error
+	UnbindInstances(ctx context.Context, who string, guid world.GUID) error
 	// GroupUnbind selects the player with the GUID and sends `.instance groupunbind all`, as one operation, and reads the reply the
 	// sender gets: "Group unbound. Disbanding." (every in-world member of the player's group is unbound and the group disbanded) or
 	// "<name> is not in a group." It works from account level 3.
 	// The line acts on the SELECTED player, and a wrong one is another player's group: the implementation selects the GUID, waits until the
 	// server shows that selection (an error when it does not, with nothing sent), and classifies the reply: a "not in a group" naming the
 	// agent is GroupWrongTarget, one naming a third player GroupThirdPlayer.
-	GroupUnbind(ctx context.Context, who string, guid packet.GUID) (GroupUnbindResult, error)
+	GroupUnbind(ctx context.Context, who string, guid world.GUID) (GroupUnbindResult, error)
 }
 
 // GroupUnbindResult is what the sender's reply to `.instance groupunbind all` said.
@@ -546,7 +546,7 @@ func (e *prepEnv) fresh(ctx context.Context) (string, error) {
 			return "", err
 		}
 	}
-	guids := map[string]packet.GUID{}
+	guids := map[string]world.GUID{}
 	var off []string
 	for _, n := range e.bots {
 		r, ok := e.rowOf(n)
@@ -554,7 +554,7 @@ func (e *prepEnv) fresh(ctx context.Context) (string, error) {
 			off = append(off, n+" ("+e.stateOf(n)+")")
 			continue
 		}
-		guids[n] = packet.GUID(r.GUID)
+		guids[n] = world.GUID(r.GUID)
 	}
 	if len(off) > 0 {
 		return "", fmt.Errorf("%s not online: fresh needs the bots in the world (prepare online true)", strings.Join(off, ", "))
@@ -657,7 +657,7 @@ func (e *prepEnv) waitUngrouped(ctx context.Context, bots []string) error {
 //
 // The bots are never sent `leave` on this path: a bot the bind has to take from an old group of its own is told to leave only when the
 // bind refuses it (member-grouped), and then the bind is made again.
-func (e *prepEnv) groupReset(ctx context.Context, guids map[string]packet.GUID) error {
+func (e *prepEnv) groupReset(ctx context.Context, guids map[string]world.GUID) error {
 	if e.command == nil {
 		return errors.New("below account level 4 fresh binds the bots, unbinds their group and binds again, and this game cannot send commander commands")
 	}

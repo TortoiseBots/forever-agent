@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Runners and bodies, in remote mode.
@@ -63,7 +63,7 @@ type fleeSeen struct {
 
 // fledMob is a runner that left the feed alive.
 type fledMob struct {
-	guid  packet.GUID
+	guid  world.GUID
 	entry uint32
 	last  tbm.HostileRec
 	since time.Time
@@ -72,21 +72,21 @@ type fledMob struct {
 
 // fleeState is the driver's memory of runners; its maps are made on first use.
 type fleeState struct {
-	prev    map[packet.GUID]fleeSeen
-	running map[packet.GUID]tbm.HostileRec // the runners as the last frame that showed them left them
-	absent  map[packet.GUID]int
-	fled    map[packet.GUID]*fledMob
-	orderAt map[packet.GUID]time.Time
-	orderN  map[packet.GUID]int
-	noted   map[packet.GUID]bool
-	gone    map[packet.GUID]uint64 // the frame a runner was first missing from (a whole frame)
+	prev    map[world.GUID]fleeSeen
+	running map[world.GUID]tbm.HostileRec // the runners as the last frame that showed them left them
+	absent  map[world.GUID]int
+	fled    map[world.GUID]*fledMob
+	orderAt map[world.GUID]time.Time
+	orderN  map[world.GUID]int
+	noted   map[world.GUID]bool
+	gone    map[world.GUID]uint64 // the frame a runner was first missing from (a whole frame)
 }
 
 func (f *fleeState) init() {
 	if f.prev == nil {
-		f.prev, f.running, f.absent = map[packet.GUID]fleeSeen{}, map[packet.GUID]tbm.HostileRec{}, map[packet.GUID]int{}
-		f.fled, f.orderAt, f.orderN, f.noted = map[packet.GUID]*fledMob{}, map[packet.GUID]time.Time{}, map[packet.GUID]int{}, map[packet.GUID]bool{}
-		f.gone = map[packet.GUID]uint64{}
+		f.prev, f.running, f.absent = map[world.GUID]fleeSeen{}, map[world.GUID]tbm.HostileRec{}, map[world.GUID]int{}
+		f.fled, f.orderAt, f.orderN, f.noted = map[world.GUID]*fledMob{}, map[world.GUID]time.Time{}, map[world.GUID]int{}, map[world.GUID]bool{}
+		f.gone = map[world.GUID]uint64{}
 	}
 }
 
@@ -134,7 +134,7 @@ func (d *RemoteDriver) isRunner(h tbm.HostileRec, movingAway bool) bool {
 func (d *RemoteDriver) noteFleeing() {
 	f := &d.fl
 	f.init()
-	seen := make(map[packet.GUID]bool, len(d.fr.Hostiles))
+	seen := make(map[world.GUID]bool, len(d.fr.Hostiles))
 	for _, h := range d.fr.Hostiles {
 		if h.Entry == 0 {
 			continue
@@ -245,7 +245,7 @@ func (d *RemoteDriver) diedInView(h tbm.HostileRec) bool {
 }
 
 // botTargets says whether a living bot of the newest frame has g as its target (or victim).
-func (d *RemoteDriver) botTargets(g packet.GUID) bool {
+func (d *RemoteDriver) botTargets(g world.GUID) bool {
 	for _, m := range d.fr.Party {
 		if !m.Dead && m.Target == g {
 			return true
@@ -255,13 +255,13 @@ func (d *RemoteDriver) botTargets(g packet.GUID) bool {
 }
 
 // isRunning says whether the mob was a runner when the feed last showed it.
-func (d *RemoteDriver) isRunning(g packet.GUID) bool {
+func (d *RemoteDriver) isRunning(g world.GUID) bool {
 	_, ok := d.fl.running[g]
 	return ok
 }
 
 // wasFled says whether the mob left the feed as a runner.
-func (d *RemoteDriver) wasFled(g packet.GUID) bool {
+func (d *RemoteDriver) wasFled(g world.GUID) bool {
 	_, ok := d.fl.fled[g]
 	return ok
 }

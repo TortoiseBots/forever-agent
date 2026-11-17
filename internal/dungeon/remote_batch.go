@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Batched chest opening (Zum'rah's graves, owner 2026-10-15: "make them open 3-6 graveyards, then use aoe to kill them", then "test how many
@@ -84,7 +84,7 @@ type batchRun struct {
 	left    int // chests still to take
 	began   time.Time
 	fightAt time.Time
-	adds    map[packet.GUID]bool
+	adds    map[world.GUID]bool
 	deaths0 int
 	stayed  bool // the party was told to stay at the centre
 	// agentHome is where the agent stood before it opened the batch's chests (graves_open_by agent); it goes back there after the last one.
@@ -209,7 +209,7 @@ func (d *RemoteDriver) batchBegin(ctx context.Context, a Action) error {
 	cut := size < want
 	gb.n++
 	b := &batchRun{
-		left: size, sectionLeft: len(a.Section) - size, began: d.clk.Now(), adds: map[packet.GUID]bool{},
+		left: size, sectionLeft: len(a.Section) - size, began: d.clk.Now(), adds: map[world.GUID]bool{},
 		deaths0: len(d.rep.snapshot().Deaths),
 		rec: GraveBatch{Leg: max(d.curLeg, 0), N: gb.n, Mode: mode, Wanted: wanted, Size: size, TankMin: -1, HealMin: -1,
 			RadiusYd: BatchSpread(pts), Centre: BatchCentre(pts), OpenedBy: d.gravesOpenBy()},
@@ -614,8 +614,8 @@ const batchManaLowPct = 20
 const leftoverRounds = 8
 
 // idleLeftovers are the living hostiles of the entries that do not fight the party and stand within LeftoverRadius of centre, nearest first.
-func (d *RemoteDriver) idleLeftovers(entries []uint32, centre Point, tried map[packet.GUID]bool) []tbm.HostileRec {
-	engaged := map[packet.GUID]bool{}
+func (d *RemoteDriver) idleLeftovers(entries []uint32, centre Point, tried map[world.GUID]bool) []tbm.HostileRec {
+	engaged := map[world.GUID]bool{}
 	for _, h := range d.fr.EngagedHostiles() {
 		engaged[h.GUID] = true
 	}
@@ -646,7 +646,7 @@ func (d *RemoteDriver) sweepLeftovers(ctx context.Context, when string, centre P
 	if len(entries) == 0 {
 		return nil
 	}
-	tried := map[packet.GUID]bool{}
+	tried := map[world.GUID]bool{}
 	d.remote(func(r *RemoteReport) { r.LeftoverSweeps++ })
 	for round := 0; round < leftoverRounds; round++ {
 		d.look()
@@ -656,7 +656,7 @@ func (d *RemoteDriver) sweepLeftovers(ctx context.Context, when string, centre P
 				d.rep.note(fmt.Sprintf("graves-batch: leftover sweep %s: no idle summon of %v within %.0f yd of %.0f %.0f %.0f", when, entries, LeftoverRadius, centre.X, centre.Y, centre.Z))
 			}
 			if round > 0 {
-				if left := d.idleLeftovers(entries, centre, map[packet.GUID]bool{}); len(left) > 0 {
+				if left := d.idleLeftovers(entries, centre, map[world.GUID]bool{}); len(left) > 0 {
 					d.rep.note(fmt.Sprintf("graves-batch: leftover sweep %s: %d idle summon(s) could not be pulled and stay within %.0f yd of %.0f %.0f %.0f; going on", when, len(left), LeftoverRadius, centre.X, centre.Y, centre.Z))
 				} else {
 					d.rep.note(fmt.Sprintf("graves-batch: leftover sweep %s: no idle summon is left within %.0f yd of %.0f %.0f %.0f", when, LeftoverRadius, centre.X, centre.Y, centre.Z))
@@ -677,7 +677,7 @@ func (d *RemoteDriver) sweepLeftovers(ctx context.Context, when string, centre P
 		}
 	}
 	d.look()
-	if left := d.idleLeftovers(entries, centre, map[packet.GUID]bool{}); len(left) > 0 {
+	if left := d.idleLeftovers(entries, centre, map[world.GUID]bool{}); len(left) > 0 {
 		d.rep.note(fmt.Sprintf("graves-batch: leftover sweep %s: %d idle summon(s) are still within %.0f yd of %.0f %.0f %.0f after %d rounds; going on", when, len(left), LeftoverRadius, centre.X, centre.Y, centre.Z, leftoverRounds))
 	}
 	return nil

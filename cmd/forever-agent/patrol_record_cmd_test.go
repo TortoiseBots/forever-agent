@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // patrolRecordFake scripts one slot agent's answers; call counts start at 1.
@@ -174,7 +174,7 @@ func patrolRecordSquare(t float64) (float32, float32) {
 func patrolRecordMoving(tick int) objects.Unit {
 	x, y := patrolRecordSquare(float64(tick) * 0.5)
 	return objects.Unit{
-		GUID:   packet.GUID(0xF130002F61000ABC),
+		GUID:   world.GUID(0xF130002F61000ABC),
 		Type:   "creature",
 		Entry:  12129,
 		Name:   "Onyxian Warder",
@@ -190,7 +190,7 @@ func patrolRecordMoving(tick int) objects.Unit {
 func TestPatrolRecordHappyPath(t *testing.T) {
 	f := &patrolRecordFake{
 		status: func(int) session.StatusInfo {
-			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: packet.GUID(0x00000000000000AA)}
+			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
 		units: func(call int) []objects.Unit { return []objects.Unit{patrolRecordMoving(call - 1)} },
 	}
@@ -266,7 +266,7 @@ func TestPatrolRecordRefusesGroupedAgent(t *testing.T) {
 // at once, restores visibility, writes the file with the reason and exits 22.
 // Mutation: skipping the target check records to the end and exits 0.
 func TestPatrolRecordStopsOnCombat(t *testing.T) {
-	const own = packet.GUID(0x00000000000000AA)
+	const own = world.GUID(0x00000000000000AA)
 	f := &patrolRecordFake{
 		status: func(int) session.StatusInfo {
 			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: own}
@@ -274,7 +274,7 @@ func TestPatrolRecordStopsOnCombat(t *testing.T) {
 		units: func(call int) []objects.Unit {
 			if call == 5 {
 				return []objects.Unit{{
-					GUID:   packet.GUID(0xF130002F61000ABC),
+					GUID:   world.GUID(0xF130002F61000ABC),
 					Type:   "creature",
 					Entry:  12129,
 					Name:   "Onyxian Warder",
@@ -313,7 +313,7 @@ func TestPatrolRecordStopsOnCombat(t *testing.T) {
 func TestPatrolRecordSendsOnlyAllowedLines(t *testing.T) {
 	f := &patrolRecordFake{
 		status: func(int) session.StatusInfo {
-			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: packet.GUID(0x00000000000000AA)}
+			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
 		units: func(call int) []objects.Unit { return []objects.Unit{patrolRecordMoving(call - 1)} },
 	}

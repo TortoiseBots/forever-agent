@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // What the brain counts about the character's own play (leader-mode pull test, README "Pull test in leader mode"): the numbers an A/B of
@@ -75,7 +75,7 @@ type statsMem struct {
 	mu         sync.Mutex
 	s          Stats
 	last       time.Time
-	mobs       map[packet.GUID]bool
+	mobs       map[world.GUID]bool
 	prevPower  uint32
 	havePrev   bool
 	prevPowerT uint8
@@ -85,7 +85,7 @@ func (m *statsMem) reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.s = Stats{Actions: map[string]int{}, CastFailed: map[string]int{}, MinPowerPct: -1}
-	m.mobs = map[packet.GUID]bool{}
+	m.mobs = map[world.GUID]bool{}
 	m.havePrev = false
 	m.last = time.Time{}
 }

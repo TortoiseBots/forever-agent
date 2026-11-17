@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // fakeWorld is a World the test moves by hand.
@@ -28,7 +28,7 @@ func (f *fakeWorld) GameObjects() []objects.GameObject {
 	return out
 }
 
-func (f *fakeWorld) set(guid packet.GUID, state string) {
+func (f *fakeWorld) set(guid world.GUID, state string) {
 	for i := range f.objs {
 		if f.objs[i].GUID == guid {
 			f.objs[i].State = state
@@ -50,8 +50,8 @@ func mustPlan(t *testing.T, s string) *Plan {
 }
 
 const (
-	keystone packet.GUID = 0xF11001E5D3003839
-	seal     packet.GUID = 0xF11001E5D4003856
+	keystone world.GUID = 0xF11001E5D3003839
+	seal     world.GUID = 0xF11001E5D4003856
 )
 
 func doors() []objects.GameObject {

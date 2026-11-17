@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The frost mage, the first class of the brain (issue #80 step 2). Numbers come from the harvest of
@@ -78,7 +78,7 @@ func drinkEntry(c *Ctx, anyOK bool) uint32 {
 	return 0
 }
 
-func meleeMobGUID(c *Ctx) packet.GUID {
+func meleeMobGUID(c *Ctx) world.GUID {
 	if u := ValMeleeMob.Get(c); u != nil {
 		return u.GUID
 	}

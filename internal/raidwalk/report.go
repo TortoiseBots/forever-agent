@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The walk report (`forever-agent raid-walk report <dir>`): the per-pull table the raid walks keep making by hand. It reads what a walk
@@ -394,7 +394,7 @@ func statusNote(st *tbm.RunStatus) string { return untilTail.ReplaceAllString(st
 // starting with "pulling" counts: a "waiting for the tank to stand still
 // before pulling <entry> <guid>" line says the pull is still waiting, and
 // must not arm the window (only the actual pull line does).
-func PullingTarget(note string) (entry uint32, guid packet.GUID, ok bool) {
+func PullingTarget(note string) (entry uint32, guid world.GUID, ok bool) {
 	note = strings.TrimSpace(note)
 	if !isPullStart(note) {
 		return 0, 0, false
@@ -407,7 +407,7 @@ func PullingTarget(note string) (entry uint32, guid packet.GUID, ok bool) {
 	if err != nil || e <= 0 {
 		return 0, 0, false
 	}
-	g, err := packet.ParseGUID(m[2])
+	g, err := world.ParseGUID(m[2])
 	if err != nil {
 		return 0, 0, false
 	}

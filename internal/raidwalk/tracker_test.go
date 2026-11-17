@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func newOnyTracker(t *testing.T) *Tracker {
@@ -38,7 +38,7 @@ func partyBot(guid uint64, name string, dead bool) tbm.PartyRec {
 	if dead {
 		state = "d"
 	}
-	return tbm.PartyRec{GUID: packet.GUID(guid), Name: name, HP: 1, MaxHP: 1, Dead: dead, State: state}
+	return tbm.PartyRec{GUID: world.GUID(guid), Name: name, HP: 1, MaxHP: 1, Dead: dead, State: state}
 }
 
 func party(n int, dead bool) []tbm.PartyRec {

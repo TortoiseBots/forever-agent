@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func allowCtx() InjectCtx {
@@ -115,7 +115,7 @@ func TestAllowedInjectLine(t *testing.T) {
 
 // TestAllowedInjectOrder pins spec 1.4's commander order: attack the chosen candidate with a hire, under add-pack only.
 func TestAllowedInjectOrder(t *testing.T) {
-	guid := packet.GUID(0xF1300000001E240)
+	guid := world.GUID(0xF1300000001E240)
 	hex := fmt.Sprintf("0x%016X", uint64(guid))
 	ctx := InjectCtx{
 		Hires:     map[string]bool{"R1": true, "R2": true},

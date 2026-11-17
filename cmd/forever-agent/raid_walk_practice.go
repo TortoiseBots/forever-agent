@@ -53,10 +53,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // practiceMaxAttempts is the most boss attempts one practice run makes (each reset is a new attempt).
@@ -103,10 +103,10 @@ type practiceState struct {
 	mech raidwalk.PracticeMechanic
 	// bossGUID and bossMax are the practice boss's guid and the client's MaxHealth for it, bound once at the practice
 	// start: every GM action names this guid and no other.
-	bossGUID packet.GUID
+	bossGUID world.GUID
 	bossMax  uint32
 	// sons is the Son set recorded at the attempt start (guid -> entry), and sonsKnown its size when recorded.
-	sons      map[packet.GUID]uint32
+	sons      map[world.GUID]uint32
 	sonsKnown int
 
 	cycles         int // all cycle rows collected
@@ -313,7 +313,7 @@ func (w *walk) recordSons(ctx context.Context) {
 	if p == nil || len(p.mech.RespawnEntries) == 0 {
 		return
 	}
-	p.sons = map[packet.GUID]uint32{}
+	p.sons = map[world.GUID]uint32{}
 	us, err := w.unitsAt(ctx, 0)
 	if err != nil {
 		w.note("practice: the Son set could not be read (%v): a reset respawns none", err)
@@ -551,7 +551,7 @@ func (w *walk) practiceCastCounted(p *practiceState, cast time.Time) bool {
 // practiceHostileRow finds one guid's row in the tracked hostiles. The frames key the map by GUID.String()
 // ("0x%016X", a creature's 0xF130/0xF140 high part included); a key written in another case is the same unit, so the
 // lookup falls back to a case-insensitive compare instead of reading it as absent.
-func practiceHostileRow(m map[string]hostileState, g packet.GUID) (hostileState, bool) {
+func practiceHostileRow(m map[string]hostileState, g world.GUID) (hostileState, bool) {
 	key := g.String()
 	if h, ok := m[key]; ok {
 		return h, true
@@ -861,7 +861,7 @@ func (w *walk) practiceAllHiresDead() bool {
 // boss, whatever else the entry lists. A candidate list that does not hold the engaged guid is refused before any GM
 // action; only without an engaged guid does a single candidate of the entry bind. The practice never guesses which
 // creature to reset (a trash unit of the same entry must never be touched).
-func (w *walk) practiceBossBind(ctx context.Context) (packet.GUID, uint32, error) {
+func (w *walk) practiceBossBind(ctx context.Context) (world.GUID, uint32, error) {
 	p := w.practice
 	engaged, engagedOK := w.practiceEngagedGUID(p.mech.Entry)
 	us, err := w.unitsAt(ctx, 0)
@@ -906,9 +906,9 @@ func (w *walk) practiceBossBind(ctx context.Context) (packet.GUID, uint32, error
 
 // practiceEngagedGUID is the one engaged unit's guid of entry in fresh frames (hurt, or holding a party target); ok is
 // false when none or several are engaged (several is ambiguous, never guessed).
-func (w *walk) practiceEngagedGUID(entry uint32) (packet.GUID, bool) {
+func (w *walk) practiceEngagedGUID(entry uint32) (world.GUID, bool) {
 	now := w.env.now()
-	var found packet.GUID
+	var found world.GUID
 	n := 0
 	for g, h := range w.hostiles {
 		if h.entry != entry || h.hppct <= 0 || now.Sub(h.at) > 30*time.Second {
@@ -917,7 +917,7 @@ func (w *walk) practiceEngagedGUID(entry uint32) (packet.GUID, bool) {
 		if h.hppct >= 100 && !(h.target != 0 && w.partyG[h.target]) {
 			continue
 		}
-		guid, err := packet.ParseGUID(g)
+		guid, err := world.ParseGUID(g)
 		if err != nil || guid == 0 {
 			continue
 		}
@@ -928,7 +928,7 @@ func (w *walk) practiceEngagedGUID(entry uint32) (packet.GUID, bool) {
 }
 
 // practiceUnitMax reads one unit's MaxHealth through the unit RPC (0 when the read fails).
-func (w *walk) practiceUnitMax(ctx context.Context, guid packet.GUID) uint32 {
+func (w *walk) practiceUnitMax(ctx context.Context, guid world.GUID) uint32 {
 	var u objects.Unit
 	if err := w.agent.Call(ctx, "unit", map[string]string{"guid": guid.String()}, &u, 10*time.Second); err == nil {
 		return u.MaxHealth
@@ -1249,7 +1249,7 @@ func (w *walk) practiceRespawnSons(ctx context.Context, p *practiceState) error 
 		w.note("practice: the Son set could not be re-read (%v): no Son respawned", err)
 		return nil
 	}
-	held := map[packet.GUID]objects.Unit{}
+	held := map[world.GUID]objects.Unit{}
 	for _, u := range us {
 		held[u.GUID] = u
 	}
@@ -1334,7 +1334,7 @@ func (w *walk) practiceGM(ctx context.Context, method string, params any) error 
 	return nil
 }
 
-func (w *walk) practiceGMEvade(ctx context.Context, guid packet.GUID) error {
+func (w *walk) practiceGMEvade(ctx context.Context, guid world.GUID) error {
 	if guid == 0 {
 		return stopf(exitRaidWalkFailed, "practice: no boss guid to evade")
 	}
@@ -1343,14 +1343,14 @@ func (w *walk) practiceGMEvade(ctx context.Context, guid packet.GUID) error {
 
 // practiceGMSetHP restores the bound boss to its own MaxHealth. The RPC takes the guid only: the session reads the
 // unit's MaxHealth itself and sends `.modify hp <max> <max>`, so no caller can lower a boss's maximum.
-func (w *walk) practiceGMSetHP(ctx context.Context, guid packet.GUID) error {
+func (w *walk) practiceGMSetHP(ctx context.Context, guid world.GUID) error {
 	if guid == 0 {
 		return stopf(exitRaidWalkFailed, "practice: no boss guid for the hp restore")
 	}
 	return w.practiceGM(ctx, "gm_set_hp", map[string]any{"guid": guid.String()})
 }
 
-func (w *walk) practiceGMRespawn(ctx context.Context, guid packet.GUID) error {
+func (w *walk) practiceGMRespawn(ctx context.Context, guid world.GUID) error {
 	return w.practiceGM(ctx, "gm_respawn", map[string]any{"guid": guid.String()})
 }
 

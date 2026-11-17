@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // frameLines builds a frame the way the module writes it (docs/guides/player-controls.md, "Perception feed").
@@ -272,7 +272,7 @@ func TestPendingBound(t *testing.T) {
 }
 
 func TestParseGUIDField(t *testing.T) {
-	for in, want := range map[string]packet.GUID{"0": 0, "0x2A": 0x2A, "0xF130000C5E0012AB": 0xF130000C5E0012AB, "42": 42} {
+	for in, want := range map[string]world.GUID{"0": 0, "0x2A": 0x2A, "0xF130000C5E0012AB": 0xF130000C5E0012AB, "42": 42} {
 		if g, err := ParseGUIDField(in); err != nil || g != want {
 			t.Errorf("%q: %v %v", in, g, err)
 		}

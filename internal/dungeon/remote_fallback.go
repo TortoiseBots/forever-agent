@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The agent as the fallback of an object step (remote mode, RemoteOptions.ObjectFallback "agent", the default). When the carrier's
@@ -29,7 +29,7 @@ import (
 type AgentHands interface {
 	ObjectActor
 	ItemSource
-	UseObject(ctx context.Context, guid packet.GUID) error
+	UseObject(ctx context.Context, guid world.GUID) error
 	// GM sends a GM line (".gm visible on|off").
 	GM(ctx context.Context, text string) error
 	// Trade hands items to the player `to` (a character name) in trade range and waits for the trade to end.

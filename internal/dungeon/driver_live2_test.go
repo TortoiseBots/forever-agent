@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Fixes from the second live Uldaman run (forever-agent #73).
@@ -65,13 +65,13 @@ func TestAnUnreachableMobIsSkippedAndTheNextMemberPulled(t *testing.T) {
 	g := newFake()
 	g.add(101, 1, Point{30, 0, 0}).noJoin = true
 	g.add(102, 2, Point{32, 0, 0})
-	g.refuseTargets = map[packet.GUID][]Refusal{101: {refuse("pullback", "unreachable", "The tank could not start moving to a firing position for the pull.")}}
+	g.refuseTargets = map[world.GUID][]Refusal{101: {refuse("pullback", "unreachable", "The tank could not start moving to a firing position for the pull.")}}
 	d := NewDriver(mustPlan(t, onePackPlan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
 	rep := d.Report()
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 102}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 102}) {
 		t.Fatalf("targets %v", g.targets)
 	}
 	if len(rep.Refusals) != 1 || rep.Refusals[0].Code != "unreachable" || rep.Refusals[0].Intent != "pullback" || rep.Refusals[0].Count != 1 || rep.Refusals[0].Leg != 0 {
@@ -92,7 +92,7 @@ func TestAGroupWhoseMembersAreAllRefusedCountsAsCleared(t *testing.T) {
 	g.add(101, 1, Point{30, 0, 0})
 	g.add(102, 2, Point{32, 0, 0})
 	ev := refuse("pullback", "unreachable", "x")
-	g.refuseTargets = map[packet.GUID][]Refusal{101: {ev, ev, ev}, 102: {ev, ev, ev}}
+	g.refuseTargets = map[world.GUID][]Refusal{101: {ev, ev, ev}, 102: {ev, ev, ev}}
 	d := NewDriver(mustPlan(t, onePackPlan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -110,12 +110,12 @@ func TestAnEvadingMobIsSkipped(t *testing.T) {
 	g := newFake()
 	g.add(101, 1, Point{30, 0, 0}).noJoin = true
 	g.add(102, 2, Point{32, 0, 0})
-	g.refuseTargets = map[packet.GUID][]Refusal{101: {refuse("pullback", "evading", "mob1 is evading")}}
+	g.refuseTargets = map[world.GUID][]Refusal{101: {refuse("pullback", "evading", "mob1 is evading")}}
 	d := NewDriver(mustPlan(t, onePackPlan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 102}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 102}) {
 		t.Fatalf("targets %v", g.targets)
 	}
 }
@@ -125,7 +125,7 @@ func TestADeadOrLostTargetIsPickedAgain(t *testing.T) {
 	g := newFake()
 	g.add(101, 1, Point{30, 0, 0})
 	g.add(102, 2, Point{32, 0, 0})
-	g.refuseTargets = map[packet.GUID][]Refusal{101: {
+	g.refuseTargets = map[world.GUID][]Refusal{101: {
 		refuse("pullback", "dead-target", "The target is dead."),
 		refuse("pullback", "no-target", "Select a live non-bot target first."),
 	}}
@@ -133,7 +133,7 @@ func TestADeadOrLostTargetIsPickedAgain(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 101, 101}) || len(d.Report().Refusals) != 2 {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 101, 101}) || len(d.Report().Refusals) != 2 {
 		t.Fatalf("targets %v refusals %+v", g.targets, d.Report().Refusals)
 	}
 }
@@ -171,7 +171,7 @@ func TestProgressDoesNotUseUpPullAttempts(t *testing.T) {
  {"name":"a","to":{"x":10,"y":0,"z":0},
   "pull_groups":[{"entries":[5,5,5,5,5,5],"positions":[{"x":30,"y":0,"z":0},{"x":31,"y":0,"z":0},{"x":32,"y":0,"z":0},{"x":33,"y":0,"z":0},{"x":34,"y":0,"z":0},{"x":35,"y":0,"z":0}]}]}]}`
 	for i := 0; i < 6; i++ {
-		g.add(packet.GUID(200+i), 5, Point{30 + float32(i), 0, 0}).noJoin = true
+		g.add(world.GUID(200+i), 5, Point{30 + float32(i), 0, 0}).noJoin = true
 	}
 	d := NewDriver(mustPlan(t, plan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
@@ -194,7 +194,7 @@ func TestAStuckLastMobAfterProgressCountsAsCleared(t *testing.T) {
 	build := func(stuck ...int) *fakeGame {
 		g := newFake()
 		for i := 0; i < 3; i++ {
-			u := g.add(packet.GUID(200+i), 5, Point{30 + float32(i), 0, 0})
+			u := g.add(world.GUID(200+i), 5, Point{30 + float32(i), 0, 0})
 			u.noJoin = true
 			for _, s := range stuck {
 				u.stuck = u.stuck || s == i
@@ -243,7 +243,7 @@ func leaderAuras(g *fakeGame) int { return len(g.auras[leader]) }
 // selection is made again, the command is sent once more, and the self-aura is not taken for success.
 func TestABuffThatLandsOnTheLeaderIsSentAgain(t *testing.T) {
 	g, p := runFixture(t)
-	g.failGMOn = map[packet.GUID]int{healer: 1}
+	g.failGMOn = map[world.GUID]int{healer: 1}
 	d := NewDriver(p, g, Config{Buffs: worldBuffs(t)}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -266,7 +266,7 @@ func TestABuffThatLandsOnTheLeaderIsSentAgain(t *testing.T) {
 // Twice on the leader: the batch stops (the rest would land on the leader as well) and the run says so.
 func TestABuffThatKeepsLandingOnTheLeaderFailsTheRun(t *testing.T) {
 	g, p := runFixture(t)
-	g.failGMOn = map[packet.GUID]int{tank: 5}
+	g.failGMOn = map[world.GUID]int{tank: 5}
 	d := NewDriver(p, g, Config{Buffs: worldBuffs(t)}, g.clock())
 	err := d.Run(context.Background(), 0)
 	if err == nil || !strings.Contains(err.Error(), "GM .aura on Tank had no effect") || !strings.Contains(err.Error(), "landed on the leader itself") {
@@ -284,7 +284,7 @@ func TestABuffThatKeepsLandingOnTheLeaderFailsTheRun(t *testing.T) {
 func TestNoBuffIsSentToACompanionOutOfView(t *testing.T) {
 	g, p := runFixture(t)
 	t0 := g.now
-	g.hidden = map[packet.GUID]bool{healer: true}
+	g.hidden = map[world.GUID]bool{healer: true}
 	sentWhileHidden := 0
 	g.onTick = func(g *fakeGame) {
 		if g.now.Sub(t0) >= 5*time.Second {
@@ -329,7 +329,7 @@ const overlappingGroupsPlan = `{"version":1,"name":"t","map":70,"entrance":{"x":
 func TestAPassedOverMobIsStillTheNextGroupsToPull(t *testing.T) {
 	g := newFake()
 	for i, x := range []float32{30, 31, 40} {
-		u := g.add(packet.GUID(301+i), 5, Point{x, 0, 0})
+		u := g.add(world.GUID(301+i), 5, Point{x, 0, 0})
 		u.noJoin = true
 	}
 	g.units[0].stuckPulls = 1
@@ -337,7 +337,7 @@ func TestAPassedOverMobIsStillTheNextGroupsToPull(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{301, 302, 303, 301}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{301, 302, 303, 301}) {
 		t.Fatalf("targets %v: the second group must pull the mob the first passed over", g.targets)
 	}
 	if strings.Contains(notes(d), "already dead") {
@@ -346,9 +346,9 @@ func TestAPassedOverMobIsStillTheNextGroupsToPull(t *testing.T) {
 	// A refusal, in contrast, is the run's.
 	g = newFake()
 	for i, x := range []float32{30, 31, 40} {
-		g.add(packet.GUID(301+i), 5, Point{x, 0, 0}).noJoin = true
+		g.add(world.GUID(301+i), 5, Point{x, 0, 0}).noJoin = true
 	}
-	g.refuseTargets = map[packet.GUID][]Refusal{301: {refuse("pullback", "unreachable", "x")}}
+	g.refuseTargets = map[world.GUID][]Refusal{301: {refuse("pullback", "unreachable", "x")}}
 	d = NewDriver(mustPlan(t, overlappingGroupsPlan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -420,7 +420,7 @@ func TestACorpseElsewhereDoesNotMakeAGroupAlreadyDead(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{502}) || strings.Contains(notes(d), "already dead") {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{502}) || strings.Contains(notes(d), "already dead") {
 		t.Fatalf("targets %v notes %q", g.targets, notes(d))
 	}
 }
@@ -430,12 +430,12 @@ func TestAnEvadingWhisperAnswersThePullback(t *testing.T) {
 	g := newFake()
 	g.add(101, 1, Point{30, 0, 0}).noJoin = true
 	g.add(102, 2, Point{32, 0, 0})
-	g.refuseTargets = map[packet.GUID][]Refusal{101: {{Code: "evading", Message: "mob1 is evading"}}}
+	g.refuseTargets = map[world.GUID][]Refusal{101: {{Code: "evading", Message: "mob1 is evading"}}}
 	d := NewDriver(mustPlan(t, onePackPlan), g, Config{}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 102}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 102}) {
 		t.Fatalf("targets %v", g.targets)
 	}
 	if r := d.Report().Refusals; len(r) != 1 || r[0].Intent != "pullback" || r[0].Code != "evading" {
@@ -466,8 +466,8 @@ func TestARefusingBotIsNotAskedEveryPoll(t *testing.T) {
 // An aura the leader already carried is not a misfire: the first aura that lands nowhere is "on nobody", not "on the leader".
 func TestALeadersOwnAuraIsNotAMisfire(t *testing.T) {
 	g, p := runFixture(t)
-	g.auras = map[packet.GUID][]objects.Aura{leader: {{SpellID: 22888}}}
-	g.failGMOn = map[packet.GUID]int{tank: 1}
+	g.auras = map[world.GUID][]objects.Aura{leader: {{SpellID: 22888}}}
+	g.failGMOn = map[world.GUID]int{tank: 1}
 	d := NewDriver(p, g, Config{Buffs: worldBuffs(t)[:1]}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())

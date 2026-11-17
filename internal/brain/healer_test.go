@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The spells of the priest tests, with their template numbers (internal/spells/meta.tsv.gz). Ranks: Lesser Heal 1-3, Heal 1-4,
@@ -34,7 +34,7 @@ const (
 	prSilence                       = 15487
 	prShadowform                    = 15473
 
-	dpsG1, dpsG2, dpsG3 = packet.GUID(30), packet.GUID(31), packet.GUID(32)
+	dpsG1, dpsG2, dpsG3 = world.GUID(30), world.GUID(31), world.GUID(32)
 
 	// debuffs
 	auraPolymorph = 118   // magic, mechanic polymorph
@@ -59,17 +59,17 @@ func priestFake(known ...uint32) *fakeGame {
 }
 
 // member adds a party member in combat with the given health at (x, y).
-func (g *fakeGame) member(guid packet.GUID, name string, class uint8, hp, max uint32, x, y float32) {
+func (g *fakeGame) member(guid world.GUID, name string, class uint8, hp, max uint32, x, y float32) {
 	g.party = append(g.party, Member{Name: name, GUID: guid, Online: true})
 	g.addUnit(objects.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: hp, MaxHealth: max, InCombat: true,
 		Auras: []objects.Aura{{Name: "Power Word: Fortitude", SpellID: prFort1}}}, x, y)
 }
 
-func (g *fakeGame) setHP(guid packet.GUID, hp uint32) {
+func (g *fakeGame) setHP(guid world.GUID, hp uint32) {
 	g.mutate(guid, func(u *objects.Unit) { u.Health = hp })
 }
 
-func (g *fakeGame) addAura(guid packet.GUID, a objects.Aura) {
+func (g *fakeGame) addAura(guid world.GUID, a objects.Aura) {
 	g.mutate(guid, func(u *objects.Unit) { u.Auras = append(u.Auras, a) })
 }
 

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the warrior tests (ids from internal/spells/meta.tsv.gz; TestWarriorSpellData checks the facts the brain relies on).
@@ -41,7 +41,7 @@ const (
 	spThunder     = 6343
 	spDemo        = 1160
 	spFear        = 5782
-	healG         = packet.GUID(3)
+	healG         = world.GUID(3)
 )
 
 var warriorSpells = []uint32{spBattleSt, spDefSt, spBerserkSt, spHeroic, spBloodrage, spBattleShout, spExecute, spOverpower, spMortal, spRend,
@@ -52,13 +52,13 @@ var warriorSpells = []uint32{spBattleSt, spDefSt, spBerserkSt, spHeroic, spBlood
 // stays on its target.
 type meleeFake struct {
 	*posFake
-	dodged  map[packet.GUID]time.Time
+	dodged  map[world.GUID]time.Time
 	avoided time.Time
-	swing   packet.GUID
+	swing   world.GUID
 	mmu     sync.Mutex
 }
 
-func (f *meleeFake) LastDodge(t packet.GUID) time.Time {
+func (f *meleeFake) LastDodge(t world.GUID) time.Time {
 	f.mmu.Lock()
 	defer f.mmu.Unlock()
 	return f.dodged[t]
@@ -70,19 +70,19 @@ func (f *meleeFake) LastAvoided() time.Time {
 	return f.avoided
 }
 
-func (f *meleeFake) Swinging() packet.GUID {
+func (f *meleeFake) Swinging() world.GUID {
 	f.mmu.Lock()
 	defer f.mmu.Unlock()
 	return f.swing
 }
 
-func (f *meleeFake) setSwing(g packet.GUID) {
+func (f *meleeFake) setSwing(g world.GUID) {
 	f.mmu.Lock()
 	f.swing = g
 	f.mmu.Unlock()
 }
 
-func (f *meleeFake) dodge(t packet.GUID, at time.Time) {
+func (f *meleeFake) dodge(t world.GUID, at time.Time) {
 	f.mmu.Lock()
 	f.dodged[t] = at
 	f.mmu.Unlock()
@@ -114,7 +114,7 @@ func newWarriorRig(t *testing.T, preset, stance string, p Params, known ...uint3
 	if stance != "" {
 		g.self.Auras = append(g.self.Auras, stanceAura(stance, stanceSpells[stance]))
 	}
-	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}
+	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}
 	cfg := DefaultConfig()
 	cfg.Now = g.clk.Now
 	if p.Strategies == nil {
@@ -129,7 +129,7 @@ func newWarriorRig(t *testing.T, preset, stance string, p Params, known ...uint3
 
 func setRage(g *fakeGame, tenths uint32) { g.setSelf(func(u *objects.Unit) { u.Power = tenths }) }
 
-func setMobHP(g *fakeGame, id packet.GUID, pct uint32) {
+func setMobHP(g *fakeGame, id world.GUID, pct uint32) {
 	g.mutate(id, func(u *objects.Unit) { u.Health = u.MaxHealth * pct / 100 })
 }
 
@@ -514,7 +514,7 @@ func TestChargeOutOfCombatAfterTheOpeningDelayAndOnlyIntoATankedPull(t *testing.
 		if tank {
 			tankFights(r.g, 17, 15, 0)
 		} else {
-			r.g.addUnit(mob(mobA, packet.GUID(0)), 15, 0)
+			r.g.addUnit(mob(mobA, world.GUID(0)), 15, 0)
 			r.g.selected = mobA
 		}
 	}

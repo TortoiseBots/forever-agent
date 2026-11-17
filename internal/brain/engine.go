@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Relevance bands. An action's relevance is the band of the rule that asks for it, which multipliers scale and
@@ -66,7 +66,7 @@ type Action struct {
 	Harmful bool   // aimed at an enemy: the opening delay holds it back
 	Threat  ThreatKind
 	// Target is the unit the action works on; nil means the player itself. Zero means there is none.
-	Target   func(*Ctx) packet.GUID
+	Target   func(*Ctx) world.GUID
 	Possible func(*Ctx) bool
 	Useful   func(*Ctx) bool
 	// Do runs the action; nil for a cast action, which casts its spell on Target.
@@ -196,7 +196,7 @@ type Ctx struct {
 	b     *Brain          // the brain, for what a step on its own goroutine reports
 	run   context.Context // the tick's context: a step outlives the action that started it, so it hangs on this one
 	act   string          // the action that runs now
-	byID  map[packet.GUID]*objects.Unit
+	byID  map[world.GUID]*objects.Unit
 	mem   *memory
 	trace []Decision
 }
@@ -204,7 +204,7 @@ type Ctx struct {
 // cast sends a cast and remembers its target: the server's refusal names the spell but not the target, and a refusal for line of
 // sight is only a wall to the fight's mob when that was what the last cast aimed at (observeFailures). Every cast of the brain goes
 // through here (TestEveryCastGoesThroughCtxCast).
-func (c *Ctx) cast(ctx context.Context, spell uint32, target packet.GUID) error {
+func (c *Ctx) cast(ctx context.Context, spell uint32, target world.GUID) error {
 	c.mem.mu.Lock()
 	c.mem.lastCastTarget = target
 	c.mem.mu.Unlock()
@@ -212,23 +212,23 @@ func (c *Ctx) cast(ctx context.Context, spell uint32, target packet.GUID) error 
 }
 
 // Unit finds a unit by guid in the snapshot (the player included).
-func (c *Ctx) Unit(g packet.GUID) (*objects.Unit, bool) {
+func (c *Ctx) Unit(g world.GUID) (*objects.Unit, bool) {
 	u, ok := c.byID[g]
 	return u, ok
 }
 
 // Decision is one candidate action of a tick and what became of it.
 type Decision struct {
-	Trigger string      `json:"trigger"`
-	Action  string      `json:"action"`
-	Rel     float32     `json:"relevance"`
-	Result  Result      `json:"result"`
-	Why     string      `json:"why,omitempty"` // the veto's multiplier, or what made the action impossible
-	Via     string      `json:"via,omitempty"` // "pre" or "alt" when the action ran as a chain member
-	Spell   uint32      `json:"spell_id,omitempty"`
-	Target  packet.GUID `json:"target,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	AgoMS   int64       `json:"ago_ms,omitempty"` // set by Status
+	Trigger string     `json:"trigger"`
+	Action  string     `json:"action"`
+	Rel     float32    `json:"relevance"`
+	Result  Result     `json:"result"`
+	Why     string     `json:"why,omitempty"` // the veto's multiplier, or what made the action impossible
+	Via     string     `json:"via,omitempty"` // "pre" or "alt" when the action ran as a chain member
+	Spell   uint32     `json:"spell_id,omitempty"`
+	Target  world.GUID `json:"target,omitempty"`
+	Error   string     `json:"error,omitempty"`
+	AgoMS   int64      `json:"ago_ms,omitempty"` // set by Status
 	at      time.Time
 }
 

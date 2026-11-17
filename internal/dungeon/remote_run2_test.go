@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"strings"
 	"testing"
 	"time"
@@ -392,16 +392,16 @@ func TestRemoteTeamGateSkipsAfterTheLook(t *testing.T) {
 // "Seen alive and not killed" is per unit: one of two spawns of an entry killed does not clear the other.
 func TestHostileSeenIsPerGUID(t *testing.T) {
 	d := NewRemoteDriver(remotePlan(), newFakeRemote(t), DefaultConfig(), opts(), RealClock())
-	a, b := packet.GUID(0xF130000000000001), packet.GUID(0xF130000000000002)
-	d.seenHostile = map[packet.GUID]uint32{a: 6907, b: 6907}
+	a, b := world.GUID(0xF130000000000001), world.GUID(0xF130000000000002)
+	d.seenHostile = map[world.GUID]uint32{a: 6907, b: 6907}
 	if !d.hostileSeen([]uint32{6907}) || d.hostileSeen([]uint32{6908}) {
 		t.Fatal("seen units not counted")
 	}
-	d.killedGUID = map[packet.GUID]bool{a: true}
+	d.killedGUID = map[world.GUID]bool{a: true}
 	if !d.hostileSeen([]uint32{6907}) {
 		t.Fatal("one spawn killed cleared the other")
 	}
-	d.ledger = map[packet.GUID]*ledgerMob{b: {dead: true}}
+	d.ledger = map[world.GUID]*ledgerMob{b: {dead: true}}
 	if d.hostileSeen([]uint32{6907}) {
 		t.Fatal("both dead still counted")
 	}

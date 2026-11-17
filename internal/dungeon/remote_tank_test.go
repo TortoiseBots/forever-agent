@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Remote mode, tank first. The walk aggro path is the fight here: the mobs engage the party when the lead bot passes x 90, and the
@@ -417,7 +417,7 @@ func TestRemotePullWaitsForAwayTank(t *testing.T) {
 	g.cmdErr["pullback"] = []string{"too-far"}
 	healy := g.party[1]
 	healy.X = -200
-	g.lagUntil = map[packet.GUID]time.Time{healy.GUID: g.now.Add(20 * time.Second)}
+	g.lagUntil = map[world.GUID]time.Time{healy.GUID: g.now.Add(20 * time.Second)}
 	o := opts()
 	o.Tank = "Healy"
 	plan := remotePlan(Leg{Name: "a", To: Point{10, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{60, 0, 0}}}}})

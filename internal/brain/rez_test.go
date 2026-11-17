@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The resurrections of the tests (ids from internal/spells/meta.tsv.gz; TestRezSpellData checks them against the core's data).
@@ -18,11 +18,11 @@ const (
 	rzRebirth3                       = 20742        // druid, level 40, reagent 17036
 	rzSeedOfLife                     = 17036
 
-	deadG1, deadG2 = packet.GUID(40), packet.GUID(41)
+	deadG1, deadG2 = world.GUID(40), world.GUID(41)
 )
 
 // deadMember adds a dead party member, the body where it fell.
-func (g *fakeGame) deadMember(guid packet.GUID, name string, class uint8, x, y float32) {
+func (g *fakeGame) deadMember(guid world.GUID, name string, class uint8, x, y float32) {
 	g.party = append(g.party, Member{Name: name, GUID: guid, Online: true, Dead: true})
 	g.addUnit(objects.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: 0, MaxHealth: 1000, Dead: true}, x, y)
 }

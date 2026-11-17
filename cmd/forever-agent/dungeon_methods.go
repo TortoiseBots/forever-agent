@@ -17,10 +17,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // legParam is a leg of a plan given as its index or its name.
@@ -1012,7 +1012,7 @@ func (g *sessionGame) ProbeAccount(ctx context.Context) (level int, known bool, 
 // classifyAccountProbe reads the events after the line cmd was sent: the reply "Your account level is: N" gives N; the
 // player's own line coming back in "say" means the server did not run it, level 0. Anything else, system lines
 // included, is ignored. known is false when neither came.
-func classifyAccountProbe(evs []events.Event, self packet.GUID, cmd string) (level int, known bool) {
+func classifyAccountProbe(evs []events.Event, self world.GUID, cmd string) (level int, known bool) {
 	for _, e := range evs {
 		switch e.Kind {
 		case events.KindSystem:
@@ -1060,12 +1060,12 @@ func (g *sessionGame) PathPoints(ctx context.Context, to dungeon.Point) ([]dunge
 	return pts, nil
 }
 
-func (g *sessionGame) UseObject(ctx context.Context, guid packet.GUID) error {
+func (g *sessionGame) UseObject(ctx context.Context, guid world.GUID) error {
 	_, err := g.cur().UseObject(ctx, guid)
 	return err
 }
 
-func (g *sessionGame) Target(ctx context.Context, guid packet.GUID) error {
+func (g *sessionGame) Target(ctx context.Context, guid world.GUID) error {
 	_, err := g.cur().Target(ctx, guid, "")
 	return err
 }
@@ -1076,7 +1076,7 @@ func (g *sessionGame) Chat(ctx context.Context, channel, text string) error {
 
 func (g *sessionGame) GM(ctx context.Context, text string) error { return g.cur().GM(ctx, text) }
 
-func (g *sessionGame) GMOn(ctx context.Context, guid packet.GUID, text string) error {
+func (g *sessionGame) GMOn(ctx context.Context, guid world.GUID, text string) error {
 	return g.cur().GMOn(ctx, guid, text)
 }
 

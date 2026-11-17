@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ---- zf-r5 findings ----
@@ -264,7 +264,7 @@ func TestWipeRecoveryBringsAPartyReleasedOutsideBackIn(t *testing.T) {
 	if shortcuts != 3 {
 		t.Fatalf("setup shortcuts %v", rep.SetupShortcuts)
 	}
-	_ = packet.GUID(0)
+	_ = world.GUID(0)
 }
 
 // Without a GM account nothing is summoned: the party is waited for outside for a bounded time, then the recovery fails and says why.

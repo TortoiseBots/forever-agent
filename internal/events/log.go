@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -177,9 +177,9 @@ type Event struct {
 	MonoMS     int64          `json:"mono_ms"` // ms since BaseTime on the monotonic clock; unaffected by wall-clock steps (time is the wall clock)
 	Kind       string         `json:"kind"`
 	Source     string         `json:"source,omitempty"`
-	SourceGUID packet.GUID    `json:"source_guid,omitempty"`
+	SourceGUID world.GUID     `json:"source_guid,omitempty"`
 	Target     string         `json:"target,omitempty"`
-	TargetGUID packet.GUID    `json:"target_guid,omitempty"`
+	TargetGUID world.GUID     `json:"target_guid,omitempty"`
 	SpellID    uint32         `json:"spell_id,omitempty"`
 	Amount     int64          `json:"amount,omitempty"`
 	Crit       bool           `json:"crit,omitempty"`

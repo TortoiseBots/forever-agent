@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Resurrecting the party (issue #80 step 4e). The healer presets share one strategy, `rez`: the priest's Resurrection, the paladin's
@@ -54,11 +54,11 @@ var rezSpellNames = map[uint8]string{
 // resurrect (read by another goroutine through CanRez).
 type rezMem struct {
 	mu     sync.Mutex
-	sent   map[packet.GUID]rezSent
-	tries  map[packet.GUID]rezTries
+	sent   map[world.GUID]rezSent
+	tries  map[world.GUID]rezTries
 	seenNS atomic.Int64 // unix nanoseconds of the last tick that had a candidate for an out-of-combat resurrection
 
-	lastTank packet.GUID // the tank the brain saw last (a dead tank is not found by findTank)
+	lastTank world.GUID // the tank the brain saw last (a dead tank is not found by findTank)
 	failSeen uint64
 	failInit bool
 }
@@ -75,15 +75,15 @@ type rezSent struct {
 	at    time.Time
 }
 
-func (r *rezMem) note(g packet.GUID, spell uint32, at, until time.Time) {
+func (r *rezMem) note(g world.GUID, spell uint32, at, until time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sent == nil {
-		r.sent = map[packet.GUID]rezSent{}
+		r.sent = map[world.GUID]rezSent{}
 	}
 	r.sent[g] = rezSent{until: until, spell: spell, at: at}
 	if r.tries == nil {
-		r.tries = map[packet.GUID]rezTries{}
+		r.tries = map[world.GUID]rezTries{}
 	}
 	t := r.tries[g]
 	t.n++
@@ -94,7 +94,7 @@ func (r *rezMem) note(g packet.GUID, spell uint32, at, until time.Time) {
 }
 
 // capped says the member has had its resurrections and is left alone (it stays dead and keeps declining).
-func (r *rezMem) capped(g packet.GUID, now time.Time) bool {
+func (r *rezMem) capped(g world.GUID, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t, ok := r.tries[g]
@@ -106,13 +106,13 @@ func (r *rezMem) capped(g packet.GUID, now time.Time) bool {
 }
 
 // forget drops the count of a member who is alive.
-func (r *rezMem) forget(g packet.GUID) {
+func (r *rezMem) forget(g world.GUID) {
 	r.mu.Lock()
 	delete(r.tries, g)
 	r.mu.Unlock()
 }
 
-func (r *rezMem) held(g packet.GUID, now time.Time) bool {
+func (r *rezMem) held(g world.GUID, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sent[g]
@@ -159,7 +159,7 @@ func rezSpell(c *Ctx) (uint32, bool) {
 }
 
 // rezPending says a resurrection is in flight on the unit: a cast of a resurrection spell aimed at it by anyone in view.
-func rezPending(c *Ctx, g packet.GUID) bool {
+func rezPending(c *Ctx, g world.GUID) bool {
 	for i := range c.Units {
 		u := &c.Units[i]
 		if u.Casting == nil || u.Casting.Target != g {
@@ -360,7 +360,7 @@ func rezStrategy() *Strategy {
 		Actions: []*Action{
 			{Name: "rez", Dead: true,
 				Resolve: func(c *Ctx) (uint32, bool) { p := plan(c); return p.Spell, p.Target != nil },
-				Target:  func(c *Ctx) packet.GUID { return targetGUID(plan(c).Target) },
+				Target:  func(c *Ctx) world.GUID { return targetGUID(plan(c).Target) },
 				Do: func(ctx context.Context, c *Ctx) error {
 					p := plan(c)
 					if p.Target == nil {

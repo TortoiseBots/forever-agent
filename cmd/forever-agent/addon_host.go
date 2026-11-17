@@ -14,10 +14,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/addonhost"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The addon host (README "Addon host"): the real TortoiseBotsManager addon runs in a lua5.1
@@ -328,7 +328,7 @@ func (r *addonRunner) perform(o addonhost.Out) error {
 		if g != 0 {
 			name = ""
 		}
-		_, err := s.Target(ctx, packet.GUID(g), name)
+		_, err := s.Target(ctx, world.GUID(g), name)
 		return err
 	}
 	return fmt.Errorf("unknown request %q from the addon", o.Out)
@@ -468,7 +468,7 @@ func (r *addonRunner) worldJSON(s *session.Session) string {
 	return string(b)
 }
 
-func guidString(g packet.GUID) string {
+func guidString(g world.GUID) string {
 	if g == 0 {
 		return ""
 	}

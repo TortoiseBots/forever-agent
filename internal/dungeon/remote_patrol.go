@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Patrols and reactive CC (Zul'Farrak hires-3, 2026-10-14: every run that got to the road at x 1650-1690 wiped there). The pack of three
@@ -69,7 +69,7 @@ type patrolState struct {
 	spent     time.Duration // the group's waits so far
 	timedOut  bool
 	pulls     int
-	passed    map[packet.GUID]bool // members a patrol pull did not win against: not pulled again by this group
+	passed    map[world.GUID]bool // members a patrol pull did not win against: not pulled again by this group
 	// the look for a patrol out of view: located says a member was seen on its path (or one was seen in the last patrolKnown),
 	// locating that the party is waiting to see one, locateDone that the look ran out unrewarded.
 	located    bool
@@ -141,7 +141,7 @@ type patrolObs struct {
 // seen standing in one spot for patrolStaticAfter is a mob that stands on the path, not a member.
 func (d *RemoteDriver) patrolMembers(p *Patrol) []tbm.HostileRec {
 	if d.patrolSeen == nil {
-		d.patrolSeen = map[packet.GUID]*patrolObs{}
+		d.patrolSeen = map[world.GUID]*patrolObs{}
 	}
 	now := d.clk.Now()
 	var out []tbm.HostileRec
@@ -234,7 +234,7 @@ func (d *RemoteDriver) patrolGate(ctx context.Context, t tbm.HostileRec, sp figh
 		return false, nil
 	}
 	if st.passed == nil {
-		st.passed = map[packet.GUID]bool{}
+		st.passed = map[world.GUID]bool{}
 	}
 	stop := func() {
 		if st.waiting {
@@ -405,7 +405,7 @@ func (d *RemoteDriver) pullPatrol(ctx context.Context, h tbm.HostileRec, sp figh
 			track = append(track, o.Entry)
 		}
 	}
-	psp := fightSpec{pick: []uint32{target.Entry}, track: track, skip: sp.skip, anchors: []Point{hostilePoint(target)}, limit: d.cfg.FightTimeout, passed: map[packet.GUID]bool{}}
+	psp := fightSpec{pick: []uint32{target.Entry}, track: track, skip: sp.skip, anchors: []Point{hostilePoint(target)}, limit: d.cfg.FightTimeout, passed: map[world.GUID]bool{}}
 	d.legStat(func(l *LegReport) { l.Pulls++ })
 	res, err := d.tracedFight(ctx, target, psp)
 	if err != nil {
@@ -426,7 +426,7 @@ func (d *RemoteDriver) pullPatrol(ctx context.Context, h tbm.HostileRec, sp figh
 // reactiveCC runs every look of a fight (mobs are the mobs fighting the party; pulled is the pull's target, 0 for a fight on the way). It
 // puts the cc bot's Polymorph on a mob that joined: a cc_always entry at once, or any by cc_priority once the fight has big_pack mobs. The
 // cc bot holds one CC at a time: a CC that holds stays, unless it is on a mob that is not cc_always and a cc_always one is free.
-func (d *RemoteDriver) reactiveCC(ctx context.Context, pulled packet.GUID, mobs []tbm.HostileRec) error {
+func (d *RemoteDriver) reactiveCC(ctx context.Context, pulled world.GUID, mobs []tbm.HostileRec) error {
 	if d.tx.BigPack <= 0 || len(mobs) < 2 {
 		return nil
 	}
@@ -448,9 +448,9 @@ func (d *RemoteDriver) reactiveCC(ctx context.Context, pulled packet.GUID, mobs 
 	}
 	d.tf.init()
 	if d.rccN == nil {
-		d.rccN = map[packet.GUID]int{}
+		d.rccN = map[world.GUID]int{}
 	}
-	var tankTarget packet.GUID
+	var tankTarget world.GUID
 	var tankAt *Point
 	if m, ok := d.fr.Member(d.tank); ok && d.tank != 0 {
 		tankTarget = m.Target

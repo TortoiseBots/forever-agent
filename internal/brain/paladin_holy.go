@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The holy paladin (issue #80 step 4e, preset holy_paladin): the healer role (heal.go) with the paladin's kit, its blessings on the
@@ -103,7 +103,7 @@ func carriedBlessing(u *objects.Unit) string {
 const blessingHold = 6 * time.Second // after a blessing went out, its aura takes a moment to show
 
 // blessingPlan is the blessing to cast now: the member and the spell. The paladin itself first, then the members in view, in reach and sight.
-func blessingPlan(c *Ctx) (packet.GUID, uint32) {
+func blessingPlan(c *Ctx) (world.GUID, uint32) {
 	if !buffsAllowed(c) {
 		return 0, 0
 	}
@@ -264,7 +264,7 @@ func holyPaladin() *Strategy {
 			{Name: "holy_aura", Resolve: spellByName(holyAuraWanted), Possible: func(c *Ctx) bool { return onHoly(c) && holyAuraWanted(c) != "" }},
 			{Name: "bless_member",
 				Resolve:  func(c *Ctx) (uint32, bool) { g, id := blessingPlan(c); return id, g != 0 },
-				Target:   func(c *Ctx) packet.GUID { g, _ := blessingPlan(c); return g },
+				Target:   func(c *Ctx) world.GUID { g, _ := blessingPlan(c); return g },
 				Possible: func(c *Ctx) bool { g, _ := blessingPlan(c); return onHoly(c) && g != 0 },
 				Do: func(ctx context.Context, c *Ctx) error {
 					g, id := blessingPlan(c)
@@ -275,10 +275,10 @@ func holyPaladin() *Strategy {
 					return c.cast(ctx, id, g)
 				}},
 			{Name: "lay_on_hands", Resolve: spellByName(func(*Ctx) string { return "Lay on Hands" }),
-				Target:   func(c *Ctx) packet.GUID { return targetGUID(layOnHandsTarget(c)) },
+				Target:   func(c *Ctx) world.GUID { return targetGUID(layOnHandsTarget(c)) },
 				Possible: func(c *Ctx) bool { return onHoly(c) && layOnHandsTarget(c) != nil }},
 			{Name: "hand_of_protection", Resolve: spellByName(func(*Ctx) string { return "Hand of Protection" }),
-				Target:   func(c *Ctx) packet.GUID { return targetGUID(protectTarget(c)) },
+				Target:   func(c *Ctx) world.GUID { return targetGUID(protectTarget(c)) },
 				Possible: func(c *Ctx) bool { return onHoly(c) && protectTarget(c) != nil }},
 			{Name: "divine_shield", Resolve: spellByName(func(*Ctx) string { return "Divine Shield" }),
 				Possible: func(c *Ctx) bool { return onHoly(c) && shieldWanted(c) }},

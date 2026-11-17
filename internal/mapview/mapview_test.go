@@ -16,7 +16,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
@@ -508,7 +508,7 @@ func TestParseEventsReadsArraysPagesAndLines(t *testing.T) {
 	e2 := `{"seq":2,"time":"2026-10-13T12:00:01Z","mono_ms":2,"kind":"death"}`
 	for name, in := range map[string]string{"array": "[" + e1 + "," + e2 + "]", "page": `{"events":[` + e1 + "," + e2 + `],"next":2}`, "lines": e1 + "\n" + e2 + "\n"} {
 		evs, err := ParseEvents([]byte(in))
-		if err != nil || len(evs) != 2 || evs[0].Kind != "kill" || evs[0].TargetGUID != packet.GUID(0xF130000100000001) || evs[1].Seq != 2 {
+		if err != nil || len(evs) != 2 || evs[0].Kind != "kill" || evs[0].TargetGUID != world.GUID(0xF130000100000001) || evs[1].Seq != 2 {
 			t.Errorf("%s: %v %+v", name, err, evs)
 		}
 	}

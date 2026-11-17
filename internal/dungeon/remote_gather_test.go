@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ZF-1 (2026-10-14): the hunter stood 35 yd back, drinking, when the party went at the pack. A pull now waits (bounded) for every living
@@ -18,7 +18,7 @@ func TestRemoteStrungOutPartyGathersBeforeThePull(t *testing.T) {
 	// Magey stands 30 yd behind (inside the rest gate's GatherRadius of 40) and only comes up 6 s into the run.
 	g.party[2].X = -30
 	released := g.now.Add(6 * time.Second)
-	g.lagUntil = map[packet.GUID]time.Time{gMage: released}
+	g.lagUntil = map[world.GUID]time.Time{gMage: released}
 	plan := remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{m.pos}}}})
 	rep, err := runRemote(t, g, plan, opts(), nil)
 	if err != nil || rep.State != "done" {
@@ -41,7 +41,7 @@ func TestRemoteGatherWaitHasACeiling(t *testing.T) {
 	g := newFakeRemote(t)
 	m := g.addMob(299, Point{40, 0, 0})
 	g.party[2].X = -30
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(time.Hour)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(time.Hour)}
 	plan := remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{m.pos}}}})
 	began := g.now
 	rep, err := runRemote(t, g, plan, opts(), nil)
@@ -106,7 +106,7 @@ func TestRemoteLookStopsOutOfAggroRange(t *testing.T) {
 func TestRemoteHalfThePartyDeadStopsTheLeg(t *testing.T) {
 	g := newFakeRemote(t)
 	for i, n := range []string{"Roguey", "Huntey"} {
-		g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + packet.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
+		g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + world.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
 	}
 	g.killRate = 1 // a long fight
 	m := g.addMob(299, Point{40, 0, 0})
@@ -142,7 +142,7 @@ func TestRemoteHalfThePartyDeadStopsTheLeg(t *testing.T) {
 func TestRemoteHalfThePartyDeadIsRecoveredWithRecoverWipe(t *testing.T) {
 	g := newFakeRemote(t)
 	for i, n := range []string{"Roguey", "Huntey"} {
-		g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + packet.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
+		g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + world.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
 	}
 	m := g.addMob(299, Point{40, 0, 0})
 	died := false
@@ -171,7 +171,7 @@ func TestRemoteStuckBotCostsOneGatherWaitPerLeg(t *testing.T) {
 	g.addMob(299, Point{40, 0, 0})
 	g.addMob(299, Point{140, 0, 0})
 	g.party[2].X = -30
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(25 * time.Second)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(25 * time.Second)}
 	plan := remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{40, 0, 0}}}, {Entries: []uint32{299}, Positions: []Point{{140, 0, 0}}}}})
 	rep, err := runRemote(t, g, plan, opts(), nil)
 	if err != nil || rep.State != "done" {
@@ -238,7 +238,7 @@ func TestRemoteRestGateSkipsABotTheGathersGaveUpOn(t *testing.T) {
 	g.addMob(299, Point{40, 0, 0})
 	g.addMob(299, Point{140, 0, 0})
 	g.party[2].X = -30
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(time.Hour)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(time.Hour)}
 	plan := remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{40, 0, 0}}}, {Entries: []uint32{299}, Positions: []Point{{140, 0, 0}}}}})
 	rep, err := runRemote(t, g, plan, opts(), nil)
 	if err != nil || rep.State != "done" {

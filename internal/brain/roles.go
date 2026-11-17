@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Roles (issue #80 step 3c). A role is a set of strategies that share a discipline: what to fight, when to start, where to stand.
@@ -79,7 +79,7 @@ const tankPickupRange = 30.0
 // tankMob is the mob a tanking player holds: first a loose add (a mob in combat that attacks a party member), then a mob that
 // attacks the player, then the player's own selected target when it is in combat. Nearest first within each.
 func tankMob(c *Ctx) (*objects.Unit, string) {
-	party := map[packet.GUID]bool{}
+	party := map[world.GUID]bool{}
 	for _, m := range c.Party {
 		if m.Online && !m.Dead {
 			party[m.GUID] = true

@@ -8,11 +8,11 @@ import (
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/trace"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type brainStartParams struct {
@@ -189,21 +189,21 @@ func (g *sessionBrainGame) Party() []brain.Member {
 	return out
 }
 
-func (g *sessionBrainGame) Selected() packet.GUID { return g.cur().Status().Target }
+func (g *sessionBrainGame) Selected() world.GUID { return g.cur().Status().Target }
 
 func (g *sessionBrainGame) Spells() *spellstate.State { return g.cur().SpellState() }
 
 func (g *sessionBrainGame) Items() []objects.Item { return g.cur().Items() }
 
-func (g *sessionBrainGame) Cast(ctx context.Context, spell uint32, target packet.GUID) error {
+func (g *sessionBrainGame) Cast(ctx context.Context, spell uint32, target world.GUID) error {
 	return g.cur().Cast(ctx, spell, target)
 }
 
-func (g *sessionBrainGame) Face(ctx context.Context, t packet.GUID) error {
+func (g *sessionBrainGame) Face(ctx context.Context, t world.GUID) error {
 	return g.cur().Face(ctx, t)
 }
 
-func (g *sessionBrainGame) Target(ctx context.Context, t packet.GUID) error {
+func (g *sessionBrainGame) Target(ctx context.Context, t world.GUID) error {
 	_, err := g.cur().Target(ctx, t, "")
 	return err
 }
@@ -269,7 +269,7 @@ func (g *sessionBrainGame) Pet() (brain.PetState, bool) {
 	return st, true
 }
 
-func (g *sessionBrainGame) PetAttack(ctx context.Context, target packet.GUID) error {
+func (g *sessionBrainGame) PetAttack(ctx context.Context, target world.GUID) error {
 	return g.cur().PetAction(ctx, session.PetOrder{Action: "attack", Target: target})
 }
 

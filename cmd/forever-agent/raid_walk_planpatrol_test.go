@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // planPatrolPlan is one pull group of entry 51344 at the origin with a plan patrol looping 10 yd around it.
@@ -182,7 +182,7 @@ func TestTrackFrameBindsPatrolMembersByFirstSighting(t *testing.T) {
 		bossRows: map[uint32]hostileState{}, botAt: map[string]botPos{}}
 	w.trackFrame(now, &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 51344, X: 500, HPPct: 100}}})
 	w.trackFrame(now.Add(time.Second), &tbm.ViewFrame{Hostiles: []tbm.HostileRec{{GUID: 9, Entry: 51344, X: 10, HPPct: 0}}})
-	h, ok := w.hostiles[packet.GUID(9).String()]
+	h, ok := w.hostiles[world.GUID(9).String()]
 	if !ok || h.first != (dungeon.Point{X: 500}) || h.hppct != 0 {
 		t.Fatalf("hostile %+v: want first seen at 500 yd and last seen dead", h)
 	}

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The druid, the fifth class of the brain (issue #80 step 4c): a healer (resto_druid), a caster (balance_druid), a cat (feral_cat_druid)
@@ -256,7 +256,7 @@ const (
 // druMem remembers the refused Mark of the Wild casts.
 type druMem struct {
 	mu       sync.Mutex
-	fails    map[packet.GUID]motwFail
+	fails    map[world.GUID]motwFail
 	failSeen uint64
 	failInit bool
 }
@@ -267,7 +267,7 @@ type motwFail struct {
 }
 
 // motwSkipped says the member is left alone for now.
-func (d *druMem) motwSkipped(g packet.GUID, now time.Time) bool {
+func (d *druMem) motwSkipped(g world.GUID, now time.Time) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return now.Before(d.fails[g].skipUntil)
@@ -301,7 +301,7 @@ func noteMotwFailure(c *Ctx) {
 		return
 	}
 	if d.fails == nil {
-		d.fails = map[packet.GUID]motwFail{}
+		d.fails = map[world.GUID]motwFail{}
 	}
 	f := d.fails[g]
 	f.n++
@@ -313,7 +313,7 @@ func noteMotwFailure(c *Ctx) {
 
 // motwTarget is the first of the player and the members in view that lacks Mark of the Wild (the player's own also when it has under
 // a minute left, if the server says how long), leaving out a member the spell keeps failing on.
-func motwTarget(c *Ctx) packet.GUID {
+func motwTarget(c *Ctx) world.GUID {
 	for _, u := range healMembers(c) {
 		if u.GUID == c.Self.GUID {
 			if auraMissing(u, motwAuras...) && !c.mem.dru.motwSkipped(u.GUID, c.Now) {
@@ -329,7 +329,7 @@ func motwTarget(c *Ctx) packet.GUID {
 }
 
 // thornsTarget is the tank when it is in view and lacks Thorns (the thorns are for the one who is hit).
-func thornsTarget(c *Ctx) packet.GUID {
+func thornsTarget(c *Ctx) world.GUID {
 	t := ValTank.Get(c)
 	if t == nil || t.GUID == c.Self.GUID || float64(t.Distance) > buffReach || HasAura(t, "Thorns") || !sightOK(c, t) {
 		return 0
@@ -412,7 +412,7 @@ func druidBalance() *Strategy {
 	}
 	starfire.Alt = []string{"wrath"}
 	roots := &Action{Name: "entangling_roots", Spell: "Entangling Roots", Harmful: true, Threat: ThreatSingle, Pre: []string{"face_target"},
-		Target: func(c *Ctx) packet.GUID {
+		Target: func(c *Ctx) world.GUID {
 			if m := ValMobOnMe.Get(c); m != nil {
 				return m.GUID
 			}
@@ -490,7 +490,7 @@ func druidHome(name string, homes []string) *Strategy {
 		Actions: []*Action{
 			{Name: "enter_form",
 				Resolve:  func(c *Ctx) (uint32, bool) { return homeFormSpell(c, homes) },
-				Target:   func(c *Ctx) packet.GUID { return c.Self.GUID },
+				Target:   func(c *Ctx) world.GUID { return c.Self.GUID },
 				Possible: func(c *Ctx) bool { return formOf(c) == "" && c.Self.PowerType == powerMana },
 				Useful:   func(c *Ctx) bool { return !isHome(c) },
 				Do: func(ctx context.Context, c *Ctx) error {

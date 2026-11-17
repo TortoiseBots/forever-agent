@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 var shadowKnown = []uint32{prSWP, prMindBlast, prMindFlay, prSmite, prVampiric, prShadowform, prSilence, prShield1, prInnerFire, prFort1, spShoot}
@@ -102,7 +102,7 @@ func TestShieldAMemberTakingBurst(t *testing.T) {
 
 func meleeMobsOn(g *fakeGame, n int) {
 	for i := 0; i < n; i++ {
-		g.addUnit(mob(mobA+packet.GUID(i), selfG), float32(3+i), 0)
+		g.addUnit(mob(mobA+world.GUID(i), selfG), float32(3+i), 0)
 	}
 }
 

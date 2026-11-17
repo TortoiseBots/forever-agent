@@ -22,6 +22,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/trashcheck"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -220,30 +221,30 @@ func TestGMClearClearsOnlyTheRowsOwnZGPatrol(t *testing.T) {
 }
 
 // gmClearPack plans the ZG pack of leg 2 group 2 (nine members: the walk-26b pack 0 stand pull) from the export in dir and returns it with its members' world guids.
-func gmClearPack(t *testing.T, dir string) (raidwalk.GMClearPack, []packet.GUID) {
+func gmClearPack(t *testing.T, dir string) (raidwalk.GMClearPack, []world.GUID) {
 	t.Helper()
 	res, err := planexport.Build(zgPlan(t), planexport.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	world, _, err := worldspawn.Load(dir, 309)
+	wexp, _, err := worldspawn.Load(dir, 309)
 	if err != nil {
 		t.Fatal(err)
 	}
-	packs, _, err := raidwalk.PlanGMClear(res.Rows, world, []raidwalk.GMClearSpec{{Leg: "2", Groups: []int{2}}})
+	packs, _, err := raidwalk.PlanGMClear(res.Rows, wexp, []raidwalk.GMClearSpec{{Leg: "2", Groups: []int{2}}})
 	if err != nil || len(packs) != 1 {
 		t.Fatalf("packs %v, err %v", packs, err)
 	}
-	var guids []packet.GUID
+	var guids []world.GUID
 	for _, g := range packs[0].SpawnGUIDs() {
-		guids = append(guids, packet.GUID(uint64(packet.HighUnit)<<48|uint64(packs[0].Members[g])<<24|g))
+		guids = append(guids, world.GUID(uint64(packet.HighUnit)<<48|uint64(packs[0].Members[g])<<24|g))
 	}
 	return packs[0], guids
 }
 
 // gmClearView is the fake client's view: the pack's units whose spawn point lies within the read radius of where the commander stands
 // (the fake agent's last .go), each dead or alive as dead says. Units outside the radius are not in the object store.
-func gmClearView(f *fixture, pack raidwalk.GMClearPack, guids []packet.GUID, dead func(packet.GUID) bool) []objects.Unit {
+func gmClearView(f *fixture, pack raidwalk.GMClearPack, guids []world.GUID, dead func(world.GUID) bool) []objects.Unit {
 	f.agent.mu.Lock()
 	cx, cy := float64(f.agent.x), float64(f.agent.y)
 	f.agent.mu.Unlock()
@@ -311,10 +312,10 @@ func TestPlaceGMClearKillsWholePackAndMarksSummary(t *testing.T) {
 		t.Fatalf("the test pack must hold linked members, has %d", len(guids))
 	}
 	// A unit outside the pack stands in the room too, and one member is a corpse already: neither is killed.
-	stranger := packet.GUID(uint64(packet.HighUnit)<<48 | 11111<<24 | 777)
+	stranger := world.GUID(uint64(packet.HighUnit)<<48 | 11111<<24 | 777)
 	corpse := guids[0]
 	f.agent.unitsFn = func(int) []objects.Unit {
-		us := gmClearView(f, pack, guids, func(g packet.GUID) bool {
+		us := gmClearView(f, pack, guids, func(g world.GUID) bool {
 			f.agent.mu.Lock()
 			defer f.agent.mu.Unlock()
 			return f.agent.killed[g] || g == corpse
@@ -428,7 +429,7 @@ func TestPlaceGMClearRetriesOnceAndReportsSurvivors(t *testing.T) {
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
 	slow, stubborn := guids[0], guids[1]
-	f.agent.killFn = func(g packet.GUID, tries int) bool {
+	f.agent.killFn = func(g world.GUID, tries int) bool {
 		switch g {
 		case slow:
 			return tries >= 2
@@ -438,7 +439,7 @@ func TestPlaceGMClearRetriesOnceAndReportsSurvivors(t *testing.T) {
 		return true
 	}
 	f.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f, pack, guids, func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] })
+		return gmClearView(f, pack, guids, func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] })
 	}
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitOK {
@@ -508,7 +509,7 @@ func TestPlaceGMClearVisitsMembersOutsideTheViewAndReadsPerStop(t *testing.T) {
 	}
 	reads := 0
 	f.agent.unitsFn = func(int) []objects.Unit {
-		dead := func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
+		dead := func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
 		if quiet.Load() { // the walk's quiet check, after the clear
 			return gmClearView(f, pack, guids, dead)
 		}
@@ -612,7 +613,7 @@ func TestPlaceGMClearSkipsTheSecondRoundOfADeadPack(t *testing.T) {
 	}
 	reads := 0
 	f.agent.unitsFn = func(int) []objects.Unit {
-		dead := func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
+		dead := func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
 		if !quiet.Load() {
 			reads++
 		}
@@ -684,13 +685,13 @@ func TestPlaceGMClearSecondStopInstanceMismatchStopsTheClear(t *testing.T) {
 	}
 	postFlipReads, postFlipKills := 0, 0
 	f.agent.unitsFn = func(int) []objects.Unit {
-		dead := func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
+		dead := func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
 		if armed.Load() {
 			postFlipReads++
 		}
 		return gmClearView(f, pack, guids, dead)
 	}
-	f.agent.killFn = func(g packet.GUID, tries int) bool {
+	f.agent.killFn = func(g world.GUID, tries int) bool {
 		if armed.Load() {
 			postFlipKills++
 		}
@@ -752,7 +753,7 @@ func TestPlaceGMClearSecondRoundKillsAMemberMissedInRoundOne(t *testing.T) {
 	}
 	reads := 0
 	f.agent.unitsFn = func(int) []objects.Unit {
-		dead := func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
+		dead := func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
 		if quiet.Load() { // the walk's quiet check, after the clear
 			return gmClearView(f, pack, guids, dead)
 		}
@@ -826,11 +827,11 @@ func TestPlaceGMClearFinalInstanceCheckFailureSendsNoKill(t *testing.T) {
 		return tk.answer(cmd)
 	}
 	f.agent.unitsFn = func(int) []objects.Unit {
-		dead := func(g packet.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
+		dead := func(g world.GUID) bool { f.agent.mu.Lock(); defer f.agent.mu.Unlock(); return f.agent.killed[g] }
 		return gmClearView(f, pack, guids, dead)
 	}
 	postFlipKills := 0
-	f.agent.killFn = func(g packet.GUID, tries int) bool {
+	f.agent.killFn = func(g world.GUID, tries int) bool {
 		if armed.Load() {
 			postFlipKills++
 		}
@@ -897,7 +898,7 @@ func TestPlaceGMClearLogsOneLinePerGroup(t *testing.T) {
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
 	f.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f, pack, guids, func(g packet.GUID) bool {
+		return gmClearView(f, pack, guids, func(g world.GUID) bool {
 			f.agent.mu.Lock()
 			defer f.agent.mu.Unlock()
 			return f.agent.killed[g]
@@ -929,7 +930,7 @@ func TestPlaceGMClearLogsOneLinePerGroup(t *testing.T) {
 		return out
 	}
 	f2.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f2, pack, guids, func(g packet.GUID) bool { return false })
+		return gmClearView(f2, pack, guids, func(g world.GUID) bool { return false })
 	}
 	f2.agent.startReply = zgPlaceReply(t)
 	if code := f2.run(context.Background()); code != exitOK {
@@ -1106,9 +1107,9 @@ func TestPlaceGMClearUnclearedGroupDoesNotFailThePlacement(t *testing.T) {
 	f.opts.gmClear = stringList{"2:2"}
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.killFn = func(packet.GUID, int) bool { return false }
+	f.agent.killFn = func(world.GUID, int) bool { return false }
 	f.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f, pack, guids, func(packet.GUID) bool { return false })
+		return gmClearView(f, pack, guids, func(world.GUID) bool { return false })
 	}
 	// The quiet sees one of the pack's units inside the landing reach on every read: only the skip list keeps it out
 	// of the placement's verdict (before the fix this refused the placement, exit 18).
@@ -1200,7 +1201,7 @@ func TestPlaceGMClearSkipsMembersTheCorridorClearRemoved(t *testing.T) {
 	}
 	f.agent.unitsFn = func(int) []objects.Unit {
 		// The stale store still lists the despawned unit as alive, exactly as the walk-35 client did.
-		return gmClearView(f, pack, guids, func(g packet.GUID) bool {
+		return gmClearView(f, pack, guids, func(g world.GUID) bool {
 			f.agent.mu.Lock()
 			defer f.agent.mu.Unlock()
 			return f.agent.killed[g] && g != gone
@@ -1317,7 +1318,7 @@ func (c *fakeClock) advance(d time.Duration) {
 // gmLandUnit is the pack member the fake's units read reports: the guid the tests poll for. gmLandPack keys it by its
 // spawn guid, as a pack's SpawnGUIDs does.
 var (
-	gmLandUnit = packet.GUID(0xF13000012B000001)
+	gmLandUnit = world.GUID(0xF13000012B000001)
 	gmLandPack = []uint64{raidwalk.SpawnGUID(gmLandUnit)}
 )
 
@@ -1490,9 +1491,9 @@ func TestPlaceGMClearStopsAtTheBudget(t *testing.T) {
 	f.opts.gmClear = stringList{"2:2"}
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.killFn = func(packet.GUID, int) bool { return false } // nothing dies
+	f.agent.killFn = func(world.GUID, int) bool { return false } // nothing dies
 	f.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f, pack, guids, func(packet.GUID) bool { return false })
+		return gmClearView(f, pack, guids, func(world.GUID) bool { return false })
 	}
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitOK {

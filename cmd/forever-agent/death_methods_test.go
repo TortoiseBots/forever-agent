@@ -12,9 +12,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/objects/objtest"
 	"github.com/pjerra/forever-agent/internal/opcode"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // selfValues creates (or updates) the player's own object with the given values over health 800.
@@ -141,7 +141,7 @@ func TestDungeonRunNonGM(t *testing.T) {
 
 // The probe reads the level from the reply to .account, whatever else the server says meanwhile.
 func TestClassifyAccountProbe(t *testing.T) {
-	const me packet.GUID = 0x2A
+	const me world.GUID = 0x2A
 	sys := func(text string) events.Event { return events.Event{Kind: events.KindSystem, Text: text} }
 	echo := events.Event{Kind: events.KindChat, SourceGUID: me, Text: ".account", Data: map[string]any{"type": "say"}}
 	other := events.Event{Kind: events.KindChat, SourceGUID: 0x99, Text: ".account"}

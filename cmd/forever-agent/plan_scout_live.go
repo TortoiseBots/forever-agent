@@ -29,6 +29,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -920,7 +921,7 @@ func (sl *scoutLive) unitsOnce(ctx context.Context, p dungeon.Point, r float64) 
 
 // addUnits appends a spot's units to the step, one per GUID.
 func (sl *scoutLive) addUnits(step int, units []ttUnit) {
-	have := map[packet.GUID]bool{}
+	have := map[world.GUID]bool{}
 	for _, u := range sl.data.Units[step] {
 		have[u.GUID] = true
 	}
@@ -950,7 +951,7 @@ func (sl *scoutLive) objectUnit(u ttUnit) objects.Unit {
 			break
 		}
 	}
-	guid := packet.GUID(packet.HighUnit)<<48 | packet.GUID(entry)<<24 | packet.GUID(u.Spawn)
+	guid := world.GUID(packet.HighUnit)<<48 | world.GUID(entry)<<24 | world.GUID(u.Spawn)
 	return objects.Unit{GUID: guid, Type: "creature", Entry: entry, Name: u.Name, X: u.X, Y: u.Y, Z: u.Z,
 		Health: uint32(u.MaxHP), MaxHealth: uint32(u.MaxHP), Level: level, Faction: faction, Dead: u.Dead, Hostile: hostile}
 }

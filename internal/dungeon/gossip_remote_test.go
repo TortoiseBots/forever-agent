@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The gossip step in remote mode (remote_gossip.go): by the agent, by a bot's `cmd gossip` order, and the agent as the fallback of a module
@@ -41,11 +41,11 @@ func (g *gossipRemote) Units() []objects.Unit {
 	return out
 }
 
-func (g *gossipRemote) GossipHello(ctx context.Context, npc packet.GUID, w time.Duration) (GossipAnswer, error) {
+func (g *gossipRemote) GossipHello(ctx context.Context, npc world.GUID, w time.Duration) (GossipAnswer, error) {
 	return g.talk.GossipHello(ctx, npc, w)
 }
 
-func (g *gossipRemote) GossipSelect(ctx context.Context, npc packet.GUID, o uint32, w time.Duration) (GossipAnswer, error) {
+func (g *gossipRemote) GossipSelect(ctx context.Context, npc world.GUID, o uint32, w time.Duration) (GossipAnswer, error) {
 	return g.talk.GossipSelect(ctx, npc, o, w)
 }
 

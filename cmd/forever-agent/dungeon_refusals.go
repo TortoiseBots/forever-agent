@@ -8,8 +8,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // refusalCursor reads the refusals of TortoiseBots out of the event log for a dungeon run: the TBM:ACTION_ERR replies
@@ -97,4 +97,4 @@ func (g *sessionGame) SelfAuras() ([]objects.Aura, bool) {
 func (g *sessionGame) Items() []objects.Item { return g.cur().Items() }
 
 // RaidMarks implements dungeon.MarkSource: the group's raid icons by name and the unit each is on.
-func (g *sessionGame) RaidMarks() map[string]packet.GUID { return g.cur().Party().Marks }
+func (g *sessionGame) RaidMarks() map[string]world.GUID { return g.cur().Party().Marks }

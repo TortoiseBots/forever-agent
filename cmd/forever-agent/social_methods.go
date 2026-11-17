@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type addonParams struct {
@@ -35,17 +35,17 @@ type channelParams struct {
 }
 
 type gossipParams struct {
-	GUID   packet.GUID `json:"guid"`
-	Option uint32      `json:"option"`
-	Code   string      `json:"code,omitempty"`
-	WaitMS int         `json:"wait_ms,omitempty"`
+	GUID   world.GUID `json:"guid"`
+	Option uint32     `json:"option"`
+	Code   string     `json:"code,omitempty"`
+	WaitMS int        `json:"wait_ms,omitempty"`
 }
 
 // taxiParams is a flight master and the route's taxi nodes, source first.
 type taxiParams struct {
-	GUID   packet.GUID `json:"guid"`
-	Nodes  []uint32    `json:"nodes"`
-	WaitMS int         `json:"wait_ms,omitempty"`
+	GUID   world.GUID `json:"guid"`
+	Nodes  []uint32   `json:"nodes"`
+	WaitMS int        `json:"wait_ms,omitempty"`
 }
 
 // gossipResult is the log cursor before the request and, with wait_ms, the first gossip

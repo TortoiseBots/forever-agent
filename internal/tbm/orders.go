@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The per-bot player orders of the remote commander (docs/guides/player-controls.md section 1a of TortoiseBots, "Player orders"):
@@ -63,10 +63,10 @@ const TargetPrefix = "TBM:ACTION_TARGET|"
 // Target is a TBM:ACTION_TARGET|cmd <verb>|bot:<Name>|<guid decimal>|<entry> line: the object that an `entry:<id>[@x,y,z]` order picked
 // (after the range checks, before ACTION_PENDING and the final answer), so the client can log it and use the GUID later.
 type Target struct {
-	Intent string      `json:"intent"`
-	Bot    string      `json:"bot"`
-	GUID   packet.GUID `json:"guid"`
-	Entry  uint32      `json:"entry"`
+	Intent string     `json:"intent"`
+	Bot    string     `json:"bot"`
+	GUID   world.GUID `json:"guid"`
+	Entry  uint32     `json:"entry"`
 }
 
 // ParseTarget reads an ACTION_TARGET line: four fields after the prefix, a bot: scope, and a decimal GUID and entry.
@@ -87,17 +87,17 @@ func ParseTarget(line string) (Target, bool) {
 	if err != nil {
 		return Target{}, false
 	}
-	return Target{Intent: f[0], Bot: f[1][4:], GUID: packet.GUID(g), Entry: uint32(e)}, true
+	return Target{Intent: f[0], Bot: f[1][4:], GUID: world.GUID(g), Entry: uint32(e)}, true
 }
 
 // GOState is what `cmd state` answers: guid:<dec>,entry:<n>,type:<n>,state:<active|ready|alternative>,loot:<...>,flags:<...>.
 type GOState struct {
-	GUID  packet.GUID `json:"guid"`
-	Entry uint32      `json:"entry"`
-	Type  uint32      `json:"type"`
-	State string      `json:"state"` // active (a door open, a lever pulled), ready (at rest) or alternative
-	Loot  string      `json:"loot,omitempty"`
-	Flags string      `json:"flags,omitempty"`
+	GUID  world.GUID `json:"guid"`
+	Entry uint32     `json:"entry"`
+	Type  uint32     `json:"type"`
+	State string     `json:"state"` // active (a door open, a lever pulled), ready (at rest) or alternative
+	Loot  string     `json:"loot,omitempty"`
+	Flags string     `json:"flags,omitempty"`
 }
 
 // ParseGOState reads the payload of a `cmd state` ACK. ok is false without a numeric guid and entry and a state.
@@ -115,7 +115,7 @@ func ParseGOState(payload string) (GOState, bool) {
 			if err != nil {
 				return GOState{}, false
 			}
-			s.GUID, haveGUID = packet.GUID(n), true
+			s.GUID, haveGUID = world.GUID(n), true
 		case "entry":
 			n, err := strconv.ParseUint(v, 10, 32)
 			if err != nil {

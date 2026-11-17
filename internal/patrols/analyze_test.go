@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // A 40 yd square walked at 2.5 yd/s: one lap takes 64 s (160 yd).
@@ -35,7 +35,7 @@ func squarePoint(d float64) (float32, float32) {
 
 // squareSamples walks cycles laps of the square with one sample per second. A second named in stops holds the unit at
 // that corner for two extra samples (the arrival sample plus two resting ones: 2 s of rest), and time moves on.
-func squareSamples(guid packet.GUID, entry uint32, name string, cycles int, stops map[int]bool, dx, dy float32) []Sample {
+func squareSamples(guid world.GUID, entry uint32, name string, cycles int, stops map[int]bool, dx, dy float32) []Sample {
 	base := baseTime()
 	t := 0
 	var out []Sample
@@ -60,7 +60,7 @@ func squareSamples(guid packet.GUID, entry uint32, name string, cycles int, stop
 }
 
 func TestAnalyzeSquareLoopPeriod(t *testing.T) {
-	guid := packet.GUID(0xF130002F61000001)
+	guid := world.GUID(0xF130002F61000001)
 	samples := squareSamples(guid, 12129, "Onyxian Warder", 3, nil, 0, 0)
 
 	ps, st, ws, notes := Analyze(samples, Options{})
@@ -105,7 +105,7 @@ func TestAnalyzeSquareLoopPeriod(t *testing.T) {
 }
 
 func TestAnalyzeWaitsAtCorners(t *testing.T) {
-	guid := packet.GUID(0xF130002F61000002)
+	guid := world.GUID(0xF130002F61000002)
 	samples := squareSamples(guid, 12129, "Onyxian Warder", 1, map[int]bool{16: true, 32: true}, 0, 0)
 
 	ps, _, _, _ := Analyze(samples, Options{})
@@ -146,9 +146,9 @@ func waitAt(t *testing.T, p Patrol, x, y float32) int {
 }
 
 func TestAnalyzeFormationMerged(t *testing.T) {
-	a := packet.GUID(0xF130002F6100000A)
-	b := packet.GUID(0xF130002F61000003)
-	c := packet.GUID(0xF130002F61000007)
+	a := world.GUID(0xF130002F6100000A)
+	b := world.GUID(0xF130002F61000003)
+	c := world.GUID(0xF130002F61000007)
 	var samples []Sample
 	samples = append(samples, squareSamples(a, 100, "Lead", 2, nil, 0, 0)...)
 	samples = append(samples, squareSamples(b, 101, "Second", 2, nil, 3, 0)...)
@@ -177,8 +177,8 @@ func TestAnalyzeFormationMerged(t *testing.T) {
 }
 
 func TestAnalyzePassingUnitNotMerged(t *testing.T) {
-	a := packet.GUID(0xF130002F6100000A)
-	b := packet.GUID(0xF130002F6100000B)
+	a := world.GUID(0xF130002F6100000A)
+	b := world.GUID(0xF130002F6100000B)
 	lead := squareSamples(a, 100, "Lead", 3, nil, 0, 0)
 	passing := make([]Sample, len(lead))
 	copy(passing, lead)
@@ -199,7 +199,7 @@ func TestAnalyzePassingUnitNotMerged(t *testing.T) {
 }
 
 func TestAnalyzeFigureEightCrossesItsStartMidLoop(t *testing.T) {
-	guid := packet.GUID(0xF130002F6100000C)
+	guid := world.GUID(0xF130002F6100000C)
 	base := baseTime()
 	var samples []Sample
 	// A Lissajous figure eight of period 80 s through the start at 0, 40 and 80 s. The recording stops at 50 s, so the only
@@ -227,8 +227,8 @@ func TestAnalyzeFigureEightCrossesItsStartMidLoop(t *testing.T) {
 
 func TestAnalyzeStaticAndWanderer(t *testing.T) {
 	base := baseTime()
-	still := packet.GUID(0xF130002F6100000D)
-	drift := packet.GUID(0xF130002F6100000E)
+	still := world.GUID(0xF130002F6100000D)
+	drift := world.GUID(0xF130002F6100000E)
 	var samples []Sample
 	for i := 0; i <= 120; i++ {
 		j := 0.5 * math.Sin(float64(i))
@@ -263,7 +263,7 @@ func TestAnalyzeStaticAndWanderer(t *testing.T) {
 }
 
 func TestAnalyzeIncompleteLoop(t *testing.T) {
-	guid := packet.GUID(0xF130002F6100000F)
+	guid := world.GUID(0xF130002F6100000F)
 	base := baseTime()
 	var samples []Sample
 	for i := 0; i <= 40; i++ {

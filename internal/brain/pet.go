@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Pets (issue #80 step 4d): the hunter's pet and the warlock's demon. The strategy "pet" is shared by both classes; what differs is
@@ -41,7 +41,7 @@ type PetSpell struct {
 
 // PetState is the pet as the brain sees it: the session's copy of its unit row and action bar.
 type PetState struct {
-	GUID              packet.GUID
+	GUID              world.GUID
 	Dead              bool
 	Health, MaxHealth uint32
 	// Happiness is 1 (unhappy), 2 (content) or 3 (happy) for a hunter's pet, 0 for a pet that has none.
@@ -50,7 +50,7 @@ type PetState struct {
 	React, Command string
 	BarKnown       bool
 	Enabled        bool // the bar is on (it is off while the player is mounted)
-	Target         packet.GUID
+	Target         world.GUID
 	InCombat       bool
 	Distance       float32
 	Spells         []PetSpell
@@ -60,7 +60,7 @@ type PetState struct {
 // the unit, follow, a reaction ("passive", "defensive", "aggressive") and the autocast of a spell.
 type PetGame interface {
 	Pet() (PetState, bool)
-	PetAttack(ctx context.Context, target packet.GUID) error
+	PetAttack(ctx context.Context, target world.GUID) error
 	PetFollow(ctx context.Context) error
 	PetReact(ctx context.Context, react string) error
 	PetAutocast(ctx context.Context, spell uint32, on bool) error
@@ -173,7 +173,7 @@ func petMob(c *Ctx) *objects.Unit {
 	return m
 }
 
-func petMobGUID(c *Ctx) packet.GUID {
+func petMobGUID(c *Ctx) world.GUID {
 	if m := petMob(c); m != nil {
 		return m.GUID
 	}
@@ -227,11 +227,11 @@ func petTauntOn(c *Ctx) (PetSpell, bool) {
 	return PetSpell{}, false
 }
 
-func onceKey(what string, g packet.GUID, spell uint32) string {
-	return "pet_once:" + what + ":" + guidStr(g) + ":" + guidStr(packet.GUID(spell))
+func onceKey(what string, g world.GUID, spell uint32) string {
+	return "pet_once:" + what + ":" + guidStr(g) + ":" + guidStr(world.GUID(spell))
 }
 
-func petOnceHeld(c *Ctx, what string, g packet.GUID, spell uint32) bool {
+func petOnceHeld(c *Ctx, what string, g world.GUID, spell uint32) bool {
 	_, held := heldKey(c, onceKey(what, g, spell))
 	return held
 }
@@ -280,7 +280,7 @@ func petMissing(c *Ctx) bool {
 	return petClass(c) && restNow(c) && ValPet.Get(c) == nil && petCapable(c)
 }
 
-func selfTarget(c *Ctx) packet.GUID { return c.Self.GUID }
+func selfTarget(c *Ctx) world.GUID { return c.Self.GUID }
 
 func petCapable(c *Ctx) bool { _, ok := c.G.(PetGame); return ok }
 
@@ -306,7 +306,7 @@ func petStrategy(name string) *Strategy {
 					setKey(c, keyPetAttack, petAttackHold, guidStr(m.GUID))
 					return c.G.(PetGame).PetAttack(ctx, m.GUID)
 				}},
-			{Name: "pet_recall", Free: true, Target: func(c *Ctx) packet.GUID {
+			{Name: "pet_recall", Free: true, Target: func(c *Ctx) world.GUID {
 				if p := ValPet.Get(c); p != nil {
 					return p.GUID
 				}
@@ -369,7 +369,7 @@ func petStrategy(name string) *Strategy {
 				}},
 			{Name: "pet_mend",
 				Resolve: spellByName(func(c *Ctx) string { return kitOf(c).Mend }),
-				Target: func(c *Ctx) packet.GUID {
+				Target: func(c *Ctx) world.GUID {
 					if p := ValPet.Get(c); p != nil {
 						return p.GUID
 					}

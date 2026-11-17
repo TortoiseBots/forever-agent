@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The CC never takes a boss, a kill_first entry, a no_cc entry (undead) or a pet's GUID (live 2026-10-15: Velratha sheeped 8 times, the Witch
@@ -17,9 +17,9 @@ func TestCCNeverTakesABossAKillFirstEntryUndeadOrAPet(t *testing.T) {
 	d.plan.Legs = []Leg{{Name: "b", Boss: &Boss{Entry: 7795, First: []uint32{8130}, Position: Point{1, 0, 0}}}}
 	d.plan.CCPriority = []uint32{7246, 5648}
 	mk := func(guid uint64, entry uint32) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-"}
+		return tbm.HostileRec{GUID: world.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-"}
 	}
-	pet := tbm.HostileRec{GUID: packet.GUID(0xF140000000000009), Entry: 1234, HPPct: 100, Flags: "-"}
+	pet := tbm.HostileRec{GUID: world.GUID(0xF140000000000009), Entry: 1234, HPPct: 100, Flags: "-"}
 	for name, h := range map[string]tbm.HostileRec{"boss": mk(1, 7795), "kill_first": mk(3, 5650), "kill_first healer": mk(4, 7247), "undead": mk(5, 7286), "undead hero": mk(6, 7276), "pet": pet} {
 		if d.ccAllowed(h) {
 			t.Errorf("%s may be crowd-controlled", name)
@@ -61,7 +61,7 @@ func TestCCKeepsUldamanBossFirstAdds(t *testing.T) {
 		}
 		for _, e := range l.Boss.First {
 			n++
-			if !d.ccAllowed(tbm.HostileRec{GUID: packet.GUID(0xF130000000000000 | uint64(e)), Entry: e, HPPct: 100}) {
+			if !d.ccAllowed(tbm.HostileRec{GUID: world.GUID(0xF130000000000000 | uint64(e)), Entry: e, HPPct: 100}) {
 				t.Errorf("%s: the add %d of boss %d lost its CC", l.Name, e, l.Boss.Entry)
 			}
 		}
@@ -74,7 +74,7 @@ func TestCCKeepsUldamanBossFirstAdds(t *testing.T) {
 // In a boss fight the attack order goes out again after 3 s (the tank held Zum'rah in 1 of 4 fights), not after the pack fights' 5-10 s.
 func TestBossFightResendsTheAttackOrderAfterThreeSeconds(t *testing.T) {
 	d := ledgerDriver(t)
-	h := tbm.HostileRec{GUID: packet.GUID(0xF130000000000099), Entry: 7271, HPPct: 100}
+	h := tbm.HostileRec{GUID: world.GUID(0xF130000000000099), Entry: 7271, HPPct: 100}
 	d.tf.init()
 	d.tf.sentGUID, d.tf.sentAt = h.GUID, d.clk.Now().Add(-4*time.Second)
 	if d.attackAllowed(h) {
@@ -94,11 +94,11 @@ func TestBossFightResendsTheAttackOrderAfterThreeSeconds(t *testing.T) {
 func TestSummonedKillFirstUnitIsNeverHeldForThreat(t *testing.T) {
 	d := ledgerDriver(t)
 	d.plan.KillFirst, d.plan.SummonedKillFirst = []uint32{7785}, []uint32{7785}
-	ward := tbm.HostileRec{GUID: packet.GUID(0xF130000000000077), Entry: 7785, HPPct: 100, Target: gMage}
+	ward := tbm.HostileRec{GUID: world.GUID(0xF130000000000077), Entry: 7785, HPPct: 100, Target: gMage}
 	if !d.threatAllows(ward) {
 		t.Fatal("the ward was held for the tank's threat")
 	}
-	other := tbm.HostileRec{GUID: packet.GUID(0xF130000000000078), Entry: 299, HPPct: 100, Target: gMage}
+	other := tbm.HostileRec{GUID: world.GUID(0xF130000000000078), Entry: 299, HPPct: 100, Target: gMage}
 	if d.threatAllows(other) {
 		t.Fatal("an ordinary mob on the mage is not sent at without the tank's threat")
 	}

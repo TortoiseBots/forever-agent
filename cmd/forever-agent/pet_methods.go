@@ -3,18 +3,18 @@ package main
 import (
 	"context"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type petActionParams struct {
 	// Action is attack, follow, stay, passive, defensive, aggressive, cast, autocast_on or autocast_off.
-	Action  string      `json:"action"`
-	Target  packet.GUID `json:"target,omitempty"`
-	Slot    *int        `json:"slot,omitempty"`
-	SpellID uint32      `json:"spell_id,omitempty"`
-	Name    string      `json:"name,omitempty"`
+	Action  string     `json:"action"`
+	Target  world.GUID `json:"target,omitempty"`
+	Slot    *int       `json:"slot,omitempty"`
+	SpellID uint32     `json:"spell_id,omitempty"`
+	Name    string     `json:"name,omitempty"`
 }
 
 // registerPetMethods wires the pet: `pet` (status) and `pet_action` (README "Pets").

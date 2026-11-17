@@ -18,8 +18,8 @@ import (
 	"sync"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Rotations as data (DESIGN-DUNGEON-MODES P2, TA-D). A rotation file is the priority list of one class and spec for the agent's own
@@ -672,7 +672,7 @@ func (p *Priority) action(swings []string) *Action {
 	case "melee_mob":
 		a.Target = meleeMobGUID
 	case "heal":
-		a.Target = func(c *Ctx) packet.GUID { return targetGUID(ValHealPlan.Get(c).Target) }
+		a.Target = func(c *Ctx) world.GUID { return targetGUID(ValHealPlan.Get(c).Target) }
 		a.Do = func(ctx context.Context, c *Ctx) error {
 			plan := ValHealPlan.Get(c)
 			if plan.Target == nil {

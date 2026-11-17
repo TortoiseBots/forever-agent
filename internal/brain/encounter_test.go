@@ -6,8 +6,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tactics"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Entries of the tests: a boss, a shard that must die first, a ward that is never attacked.
@@ -15,8 +15,8 @@ const (
 	entBoss  uint32 = 7023
 	entShard uint32 = 7209
 	entWard  uint32 = 9001
-	shardG          = packet.GUID(110)
-	wardG           = packet.GUID(111)
+	shardG          = world.GUID(110)
+	wardG           = world.GUID(111)
 )
 
 func withEntry(u objects.Unit, entry uint32) objects.Unit {

@@ -17,9 +17,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/objects/objtest"
 	"github.com/pjerra/forever-agent/internal/opcode"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestBrainIsOffUntilStarted(t *testing.T) {
@@ -90,10 +90,10 @@ func TestBrainStartStopAndEvents(t *testing.T) {
 // casts it; a decision event names the trigger and the spell, and brain_stop ends the casting.
 func TestBrainCastsOnAMobThatAttacksTheLeader(t *testing.T) {
 	r := newRig(t)
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	w := objtest.Header(2)
 	for _, u := range []struct {
-		g      packet.GUID
+		g      world.GUID
 		typ    uint8
 		x      float32
 		hp, mx uint32
@@ -410,7 +410,7 @@ func TestBrainStartTakesTheRoleOfItsPreset(t *testing.T) {
 func TestSessionMeleeWatchReadsTheEventLog(t *testing.T) {
 	r := newRig(t)
 	g := &sessionBrainGame{cur: func() *session.Session { return r.s }}
-	const mob, other packet.GUID = 0xF13000012B000001, 0xF13000012B000002
+	const mob, other world.GUID = 0xF13000012B000001, 0xF13000012B000002
 	self := r.s.Status().GUID
 	log := r.s.Log()
 	log.Append(events.Event{Kind: events.KindMelee, SourceGUID: self, TargetGUID: mob, Data: map[string]any{"outcome": "dodge"}}) // before the brain looked
@@ -451,7 +451,7 @@ func TestSessionMeleeWatchReadsTheEventLog(t *testing.T) {
 func TestSessionMeleeWatchFindsTheSwingThatBeganBeforeTheFirstLook(t *testing.T) {
 	r := newRig(t)
 	g := &sessionBrainGame{cur: func() *session.Session { return r.s }}
-	const mob, other packet.GUID = 0xF13000012B000001, 0xF13000012B000002
+	const mob, other world.GUID = 0xF13000012B000001, 0xF13000012B000002
 	self := r.s.Status().GUID
 	log := r.s.Log()
 	log.Append(events.Event{Kind: events.KindAttackStart, SourceGUID: self, TargetGUID: other})

@@ -2,8 +2,8 @@ package dungeon
 
 import (
 	"fmt"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"slices"
 	"testing"
 )
@@ -87,7 +87,7 @@ func TestUldamanPackCCPicksTheCasterAndNeverTheElemental(t *testing.T) {
 	d := ledgerDriver(t)
 	d.plan = loadPlan(t, uldamanPlan)
 	mk := func(guid uint64, entry uint32, x float32) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-", X: x}
+		return tbm.HostileRec{GUID: world.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-", X: x}
 	}
 	target := mk(1, 4855, 0)
 	pick, ok := d.ccPick(target, []tbm.HostileRec{target, mk(2, 4855, 30), mk(3, 4853, 5), mk(8, 4855, 40), mk(9, 4855, 40)}, false)
@@ -140,7 +140,7 @@ func TestUldamanGrimlokFightSelectsNoFirstAddForCC(t *testing.T) {
 	}
 	d.curLeg = li
 	mk := func(guid uint64, entry uint32, x float32) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-", X: x}
+		return tbm.HostileRec{GUID: world.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-", X: x}
 	}
 	target := mk(1, 4855, 0)
 	pack := []tbm.HostileRec{target, mk(2, 4855, 20), mk(3, 4853, 30), mk(4, 4863, 25), mk(5, 4855, 10), mk(6, 4855, 12)}

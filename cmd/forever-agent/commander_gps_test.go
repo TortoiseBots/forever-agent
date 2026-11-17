@@ -10,6 +10,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func gpsSys(l *events.Log, text string) { l.Append(events.Event{Kind: events.KindSystem, Text: text}) }
@@ -55,7 +56,7 @@ func TestReadGPSReplyQuietAndTimeout(t *testing.T) {
 // `.gps` reports the unit the commander has selected, so the read selects the agent's own character (guid 0x2A) first and sends the line
 // only once the server shows that selection. A stranger left selected (a mob, a bot) must not be read in its place.
 func TestGPSSelectsTheCommanderBeforeTheLine(t *testing.T) {
-	const stranger = packet.GUID(0x4D2)
+	const stranger = world.GUID(0x4D2)
 	r := newRig(t)
 	r.srv.Send(opcode.SMSGUpdateObject, selfBlock(stranger)) // the server shows a stranger selected
 	g := remoteGame{c: &commanderService{cur: func() *session.Session { return r.s }}}

@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
-	chestG packet.GUID = 0xF11001E1C1000001 // Baelog's Chest, entry 123329
-	bossG  packet.GUID = 107                // the fixture's boss (entry 7)
+	chestG world.GUID = 0xF11001E1C1000001 // Baelog's Chest, entry 123329
+	bossG  world.GUID = 107                // the fixture's boss (entry 7)
 )
 
 func medallion() objects.Item { return objects.Item{Bag: 255, Slot: 24, Entry: 7740, Count: 1} }
@@ -28,8 +28,8 @@ type lootGame struct {
 	corpse  []objects.Item // what the boss's corpse holds
 	made    []objects.Item // what using an item makes
 	err     error          // LootObject fails with this
-	opened  []packet.GUID
-	corpses []packet.GUID
+	opened  []world.GUID
+	corpses []world.GUID
 	items   []uint32
 	tries   int
 	atLoot  []int // how many targets had been picked when each chest was opened
@@ -37,7 +37,7 @@ type lootGame struct {
 
 func (g *lootGame) Team() string { return g.team }
 
-func (g *lootGame) LootObject(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g *lootGame) LootObject(ctx context.Context, guid world.GUID) (Looted, error) {
 	g.moved("loot")
 	g.tries++
 	if g.err != nil {
@@ -48,7 +48,7 @@ func (g *lootGame) LootObject(ctx context.Context, guid packet.GUID) (Looted, er
 	return g.take(&g.chest), nil
 }
 
-func (g *lootGame) LootCorpse(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g *lootGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, error) {
 	g.moved("loot")
 	g.corpses = append(g.corpses, guid)
 	return g.take(&g.corpse), nil
@@ -114,7 +114,7 @@ func TestLootObjectStepForTheAlliance(t *testing.T) {
 	if len(g.targets) != 0 || g.count(".bot action pullback") != 0 {
 		t.Fatalf("the Horde's pack was pulled: targets %v chats %q", g.targets, g.chats)
 	}
-	if fmt.Sprint(g.opened) != fmt.Sprint([]packet.GUID{chestG}) || fmt.Sprint(g.walks) != fmt.Sprint([]Point{{10, 0, 0}, {60, 0, 0}}) {
+	if fmt.Sprint(g.opened) != fmt.Sprint([]world.GUID{chestG}) || fmt.Sprint(g.walks) != fmt.Sprint([]Point{{10, 0, 0}, {60, 0, 0}}) {
 		t.Fatalf("opened %v walks %v", g.opened, g.walks)
 	}
 	notes := strings.Join(d.Report().Notes, "\n")
@@ -138,7 +138,7 @@ func TestTeamGateRunsForTheHorde(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 107}) || g.count(".bot action pullback") != 2 || len(g.opened) != 1 {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 107}) || g.count(".bot action pullback") != 2 || len(g.opened) != 1 {
 		t.Fatalf("targets %v chats %q opened %v", g.targets, g.chats, g.opened)
 	}
 	if strings.Contains(strings.Join(d.Report().Notes, "\n"), "skipped") {
@@ -297,7 +297,7 @@ func TestBossLootItem(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.corpses) != fmt.Sprint([]packet.GUID{bossG}) {
+	if fmt.Sprint(g.corpses) != fmt.Sprint([]world.GUID{bossG}) {
 		t.Fatalf("corpses %v", g.corpses)
 	}
 	if last := g.walks[len(g.walks)-1]; last != (Point{90, 0, 0}) {
@@ -423,7 +423,7 @@ func TestCompanionsLootOrdersClearTheBotSelection(t *testing.T) {
 	g, p := lootFixture(t, plan)
 	g.corpse = []objects.Item{shaft()}
 	g.targeted = healer
-	var selected []packet.GUID
+	var selected []world.GUID
 	g.onChat = func(f *fakeGame, text string) {
 		if strings.HasPrefix(text, ".bot action loot ") {
 			selected = append(selected, f.targeted)
@@ -433,7 +433,7 @@ func TestCompanionsLootOrdersClearTheBotSelection(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(selected) != fmt.Sprint([]packet.GUID{leader, leader}) {
+	if fmt.Sprint(selected) != fmt.Sprint([]world.GUID{leader, leader}) {
 		t.Fatalf("the loot orders went out with %v selected, chats %q", selected, g.chats)
 	}
 	for _, guid := range g.targets {
@@ -467,7 +467,7 @@ func TestRestoreLootAttributesARefusalToLootOn(t *testing.T) {
 
 type corpseErrGame struct{ *lootGame }
 
-func (g corpseErrGame) LootCorpse(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g corpseErrGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, error) {
 	return Looted{}, errors.New("the server closed the loot at once: nothing to loot there, out of reach, or already looted")
 }
 
@@ -563,7 +563,7 @@ func (g *ruledGame) SetLootRules(ctx context.Context, r LootRules) error {
 	return nil
 }
 
-func (g *ruledGame) LootCorpse(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g *ruledGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, error) {
 	g.order = append(g.order, "loot")
 	if g.rules.Method != LootFreeForAll {
 		g.moved("loot")

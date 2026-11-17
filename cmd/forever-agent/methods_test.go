@@ -23,6 +23,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldconn"
 	"github.com/pjerra/forever-agent/internal/worldconn/worldtest"
 )
@@ -374,10 +375,10 @@ func TestUnitsAndStatusHealth(t *testing.T) {
 	if out := r.call("units", "{}"); out["error"] != nil || out["result"] == nil || len(out["result"].([]any)) != 0 {
 		t.Fatalf("no units: %v", out)
 	}
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	w := objtest.Header(2)
 	for _, u := range []struct {
-		g      packet.GUID
+		g      world.GUID
 		typ    uint8
 		x      float32
 		hp, mx uint32
@@ -446,7 +447,7 @@ func TestUnitsAndStatusHealth(t *testing.T) {
 // TestActionMethodShapes sends the params the Task 29 MCP tools and the MVP script send.
 func TestActionMethodShapes(t *testing.T) {
 	r := newRig(t)
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	w := objtest.Header(1).U8(uint8(objects.BlockCreate2)).PackedGUID(wolf).U8(objects.TypeUnit)
 	objtest.Living(w, 0x20, game.MoveInfo{X: 11, Y: 2, Z: 3}, nil)
 	objtest.Values(w, 192, map[uint16]uint32{objects.UnitHealth: 50, objects.UnitMaxHealth: 50})
@@ -517,7 +518,7 @@ func (r *agentRig) eventually(method, params string, ok func(map[string]any) boo
 
 func TestMarkMethod(t *testing.T) {
 	r := newRig(t)
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	if out := r.call("mark", `{"guid":"0xF13000012B000001","icon":"skull"}`); errCode(out) != rpc.CodeGame {
 		t.Fatalf("mark outside a group: %v", out)
 	}
@@ -552,7 +553,7 @@ func TestMarkMethod(t *testing.T) {
 
 func TestRollMethod(t *testing.T) {
 	r := newRig(t)
-	const wolf packet.GUID = 0xF13000012B000001
+	const wolf world.GUID = 0xF13000012B000001
 	r.srv.Send(opcode.SMSGGroupList, gametest.GroupList(0x2A, game.GroupMember{Name: "Gorm", GUID: 0x30, Status: game.MemberOnline}))
 	r.expect(opcode.CMSGRequestPartyMemberStats)
 	r.srv.Send(opcode.SMSGLootStartRoll, gametest.LootStartRoll(wolf, 2, 2589, 0, 60000))
@@ -594,7 +595,7 @@ func TestInventoryAndEquipMethods(t *testing.T) {
 	if out := r.call("inventory", "{}"); out["error"] != nil || len(out["result"].([]any)) != 0 {
 		t.Fatalf("empty: %v", out)
 	}
-	const sword packet.GUID = 0x4000000000000003
+	const sword world.GUID = 0x4000000000000003
 	w := objtest.Header(2).U8(uint8(objects.BlockCreate2)).PackedGUID(sword).U8(objects.TypeItem).U8(0x10).U32(1)
 	objtest.Values(w, 0x30, map[uint16]uint32{objects.FieldEntry: 2589, objects.ItemStackCount: 1})
 	w.U8(uint8(objects.BlockCreate2)).PackedGUID(0x2A).U8(objects.TypePlayer)
@@ -663,7 +664,7 @@ func TestEquipmentMethod(t *testing.T) {
 	if out := r.call("equipment", "{}"); out["error"] != nil || out["result"] == nil || len(out["result"].([]any)) != 0 {
 		t.Fatalf("empty must be [], not null: %v", out)
 	}
-	const shield, pack packet.GUID = 0x4000000000000005, 0x4000000000000006
+	const shield, pack world.GUID = 0x4000000000000005, 0x4000000000000006
 	w := objtest.Header(3).U8(uint8(objects.BlockCreate2)).PackedGUID(shield).U8(objects.TypeItem).U8(0x10).U32(1)
 	objtest.Values(w, 0x30, map[uint16]uint32{objects.FieldEntry: 1200, objects.ItemStackCount: 1})
 	w.U8(uint8(objects.BlockCreate2)).PackedGUID(pack).U8(objects.TypeItem).U8(0x10).U32(1)
@@ -689,7 +690,7 @@ func TestEquipmentMethod(t *testing.T) {
 // before anything is selected or sent (Codex HIGH: no caller can lower a unit's max health).
 func TestGMSetHPRPCRefusesHPArgument(t *testing.T) {
 	r := newRig(t)
-	guid := packet.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x77)
+	guid := world.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x77)
 	for _, params := range []string{
 		`{"guid":"` + guid.String() + `","hp":1}`,
 		`{"guid":"` + guid.String() + `","hp":0}`,

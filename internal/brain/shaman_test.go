@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The spells of the shaman tests, with their template numbers (internal/spells/meta.tsv.gz; TestShamanSpellData checks the facts the
@@ -362,13 +362,13 @@ func totemCasts(g *fakeGame) []uint32 {
 }
 
 // totemUnit is the creature a totem leaves, standing 2 yards from where the shaman dropped it.
-func totemUnit(g *fakeGame, guid packet.GUID, name string) {
+func totemUnit(g *fakeGame, guid world.GUID, name string) {
 	g.addUnit(objects.Unit{GUID: guid, Type: "creature", Name: name, Health: 5, MaxHealth: 5}, 2, 0)
 }
 
 const (
-	searingG = packet.GUID(0xF1000000A1)
-	springG  = packet.GUID(0xF1000000A2)
+	searingG = world.GUID(0xF1000000A1)
+	springG  = world.GUID(0xF1000000A2)
 )
 
 // dropBoth runs the two drops of the elemental preset, the creatures standing after each: Searing Totem (45 s at rank 4), then Mana Spring Totem (60 s).
@@ -379,7 +379,7 @@ func dropBoth(r *rig, g *casterGame) {
 	totemUnit(g.fakeGame, springG, "Mana Spring Totem II")
 }
 
-func removeUnit(g *casterGame, guid packet.GUID) {
+func removeUnit(g *casterGame, guid world.GUID) {
 	g.fakeGame.mu.Lock()
 	defer g.fakeGame.mu.Unlock()
 	var keep []objects.Unit

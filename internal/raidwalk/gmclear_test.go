@@ -11,6 +11,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -277,8 +278,8 @@ func TestPlanGMClearSkipsAGroupWithNoSpawn(t *testing.T) {
 	}
 }
 
-func unitGUID(entry, spawn uint32) packet.GUID {
-	return packet.GUID(uint64(packet.HighUnit)<<48 | uint64(entry)<<24 | uint64(spawn))
+func unitGUID(entry, spawn uint32) world.GUID {
+	return world.GUID(uint64(packet.HighUnit)<<48 | uint64(entry)<<24 | uint64(spawn))
 }
 
 // LiveMembers takes the live creatures whose spawn guid AND entry are the pack's: a corpse, a player, another spawn of the same entry and
@@ -292,9 +293,9 @@ func TestGMClearLiveMembers(t *testing.T) {
 		{GUID: unitGUID(300, 3)},
 		{GUID: unitGUID(100, 1)},
 		{GUID: unitGUID(200, 2), Dead: true},
-		{GUID: unitGUID(100, 4)},                               // another pack
-		{GUID: unitGUID(999, 2)},                               // member's spawn number, wrong entry
-		{GUID: packet.GUID(uint64(packet.HighPlayer)<<48 | 1)}, // a player
+		{GUID: unitGUID(100, 4)},                              // another pack
+		{GUID: unitGUID(999, 2)},                              // member's spawn number, wrong entry
+		{GUID: world.GUID(uint64(packet.HighPlayer)<<48 | 1)}, // a player
 	}
 	got := packs[0].LiveMembers(units)
 	if len(got) != 2 || got[0].GUID != unitGUID(100, 1) || got[1].GUID != unitGUID(300, 3) {

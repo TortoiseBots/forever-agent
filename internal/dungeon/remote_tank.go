@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Tank first, in remote mode: the party follows the tank's threat. Behaviour after mod-playerbots (ThreatStrategy, DpsTargetValue,
@@ -44,20 +44,20 @@ const (
 
 // tankFirst is the driver's state for the rules; its maps are made on first use.
 type tankFirst struct {
-	looseOff   bool                      // the module answered a loose-add order party-scoped (it ignores the bot name): no more of them
-	focus      packet.GUID               // the mob the party was last sent at
-	sentGUID   packet.GUID               // the mob of the last attack order the module accepted
-	sentAt     time.Time                 // ... and when it went (an order answered with a refusal is forgotten, so that it can go again)
-	heldAt     map[packet.GUID]time.Time // when the tank was first seen holding a mob (the opener delay counts from here)
-	ccHeld     map[packet.GUID]bool      // mobs a cc order was accepted for
-	ccNoted    map[packet.GUID]bool      // crowd-controlled mobs already counted in cc_respected
-	addAt      map[packet.GUID]time.Time // the last tank order at a loose add
-	addN       map[packet.GUID]int
-	lastAdd    packet.GUID               // the loose add the tank was last sent at
-	lastAddAt  time.Time                 // ... and when
-	offTankAt  map[packet.GUID]time.Time // when a mob was first seen on a bot that is not the tank (it is taken back to 0 when it goes back)
-	sampledN   uint64                    // the frame the tank's share was last sampled at
-	shareSum   float64                   // the sum of the samples
+	looseOff   bool                     // the module answered a loose-add order party-scoped (it ignores the bot name): no more of them
+	focus      world.GUID               // the mob the party was last sent at
+	sentGUID   world.GUID               // the mob of the last attack order the module accepted
+	sentAt     time.Time                // ... and when it went (an order answered with a refusal is forgotten, so that it can go again)
+	heldAt     map[world.GUID]time.Time // when the tank was first seen holding a mob (the opener delay counts from here)
+	ccHeld     map[world.GUID]bool      // mobs a cc order was accepted for
+	ccNoted    map[world.GUID]bool      // crowd-controlled mobs already counted in cc_respected
+	addAt      map[world.GUID]time.Time // the last tank order at a loose add
+	addN       map[world.GUID]int
+	lastAdd    world.GUID               // the loose add the tank was last sent at
+	lastAddAt  time.Time                // ... and when
+	offTankAt  map[world.GUID]time.Time // when a mob was first seen on a bot that is not the tank (it is taken back to 0 when it goes back)
+	sampledN   uint64                   // the frame the tank's share was last sampled at
+	shareSum   float64                  // the sum of the samples
 	shareCount int
 	farUntil   time.Time // loose-add orders to the tank wait until then (the module answered one too-far)
 	farNoted   bool      // the wait for a tank that is away is noted once per absence
@@ -65,8 +65,8 @@ type tankFirst struct {
 
 func (t *tankFirst) init() {
 	if t.heldAt == nil {
-		t.heldAt, t.ccHeld, t.ccNoted = map[packet.GUID]time.Time{}, map[packet.GUID]bool{}, map[packet.GUID]bool{}
-		t.addAt, t.addN, t.offTankAt = map[packet.GUID]time.Time{}, map[packet.GUID]int{}, map[packet.GUID]time.Time{}
+		t.heldAt, t.ccHeld, t.ccNoted = map[world.GUID]time.Time{}, map[world.GUID]bool{}, map[world.GUID]bool{}
+		t.addAt, t.addN, t.offTankAt = map[world.GUID]time.Time{}, map[world.GUID]int{}, map[world.GUID]time.Time{}
 	}
 }
 
@@ -168,7 +168,7 @@ func (d *RemoteDriver) tankShare(h tbm.HostileRec) int {
 // the order is the nearest first, as it was.
 func (d *RemoteDriver) rankByTank(mobs []tbm.HostileRec) []tbm.HostileRec {
 	out := slices.Clone(mobs)
-	var tankTarget packet.GUID
+	var tankTarget world.GUID
 	if m, ok := d.fr.Member(d.tank); ok && d.tank != 0 {
 		tankTarget = m.Target
 	}
@@ -322,7 +322,7 @@ func (d *RemoteDriver) tankAtLooseAdds(ctx context.Context, mobs []tbm.HostileRe
 
 // onHealer says whether g is the healer: the named one (RemoteOptions.Healer), or, with none named, any mana user of the party that is
 // not the tank.
-func (d *RemoteDriver) onHealer(g packet.GUID) bool {
+func (d *RemoteDriver) onHealer(g world.GUID) bool {
 	if g == 0 || g == d.tank {
 		return false
 	}
@@ -337,7 +337,7 @@ func (d *RemoteDriver) onHealer(g packet.GUID) bool {
 }
 
 // noteFocus records the mob the party was sent at, counting a switch when the one before is still among mobs.
-func (d *RemoteDriver) noteFocus(g packet.GUID, mobs []tbm.HostileRec) {
+func (d *RemoteDriver) noteFocus(g world.GUID, mobs []tbm.HostileRec) {
 	prev := d.tf.focus
 	d.tf.focus = g
 	if prev != 0 && prev != g && slices.ContainsFunc(mobs, func(h tbm.HostileRec) bool { return h.GUID == prev }) {

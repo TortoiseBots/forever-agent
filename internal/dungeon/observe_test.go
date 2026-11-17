@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/trace"
 	"github.com/pjerra/forever-agent/internal/tracecheck"
 	"github.com/pjerra/forever-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // leaderStep is a status the fake run leader reaches after `at` of running time.
@@ -350,8 +350,8 @@ func deathsOnTicks(g *fakeLeader, deadTicks int, reviveAt int, deadAgainTo int) 
 // party coming back alive lets the next wipe count again. The run leader owns the run, so the watch neither stops nor revives.
 func TestObserveCountsAWipeOnItsRisingEdge(t *testing.T) {
 	g := newFakeLeader(t, wipeScript()...)
-	g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
-		&tbm.PartyRec{GUID: packet.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
+	g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
+		&tbm.PartyRec{GUID: world.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
 	deathsOnTicks(g, 3, 4, 6)
 	rep, err := runRemote(t, g, observePlan(), observeOpts(ObserveSpec{}), nil)
 	if err != nil || rep.State != "done" || rep.Remote.Observe.Ended != "done" {
@@ -367,8 +367,8 @@ func TestObserveCountsAWipeOnItsRisingEdge(t *testing.T) {
 // deaths oracle reads them ("%d wipes" in its detail: stepFailedRecover never runs in an observed run).
 func TestObserveWipeLatchReArmsBelowThreeDead(t *testing.T) {
 	g := newFakeLeader(t, wipeScript()...)
-	g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
-		&tbm.PartyRec{GUID: packet.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
+	g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
+		&tbm.PartyRec{GUID: world.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
 	// the dead count of the tick, alive when negative
 	deadOf := map[int]int{1: 5, 2: 4, 3: 5, 4: 0, 5: 5}
 	base := g.onTick
@@ -439,8 +439,8 @@ func TestObserveTraceNamesTheLeadAsTheTank(t *testing.T) {
 // A party with one bot alive is no wipe: four dead of five count nothing.
 func TestObserveCountsNoWipeWhileABotLives(t *testing.T) {
 	g := newFakeLeader(t, wipeScript()...)
-	g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
-		&tbm.PartyRec{GUID: packet.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
+	g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
+		&tbm.PartyRec{GUID: world.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
 	base := g.onTick
 	ticks := 0
 	g.onTick = func(fr *fakeRemote) {
@@ -510,8 +510,8 @@ func deathsOnTickTable(g *fakeLeader, table map[int][]int) {
 // fiveBotLeader is the party of the wipe tests: five bots, the lead bot first (the frame's Lead).
 func fiveBotLeader(t *testing.T, script ...leaderStep) *fakeLeader {
 	g := newFakeLeader(t, script...)
-	g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
-		&tbm.PartyRec{GUID: packet.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
+	g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x2D), Name: "Loxy", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"},
+		&tbm.PartyRec{GUID: world.GUID(0x2E), Name: "Grok", HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
 	return g
 }
 

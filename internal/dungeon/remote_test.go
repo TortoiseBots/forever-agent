@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 var (
@@ -21,17 +21,17 @@ var (
 )
 
 const (
-	gTank   = packet.GUID(0x2A)
-	gHealer = packet.GUID(0x2B)
-	gMage   = packet.GUID(0x2C)
+	gTank   = world.GUID(0x2A)
+	gHealer = world.GUID(0x2B)
+	gMage   = world.GUID(0x2C)
 )
 
 type rmob struct {
-	guid     packet.GUID
+	guid     world.GUID
 	entry    uint32
 	pos      Point
 	hp       float64
-	target   packet.GUID
+	target   world.GUID
 	engaged  bool
 	pulled   bool
 	pullAt   time.Time
@@ -39,7 +39,7 @@ type rmob struct {
 	flags    string
 	// the tank-first tests: hold keeps the mob on that bot (until a `cmd attack <guid> <tank>` at it sends the tank), noTarget leaves it with no
 	// target (a sheep), tankPct is the tank's share in the T record while the mob is on another bot (0: not listed).
-	hold     packet.GUID
+	hold     world.GUID
 	noTarget bool
 	tankPct  int
 	// inert: a pull at it is acknowledged and does nothing (the mob never comes: no fight)
@@ -134,7 +134,7 @@ type fakeRemote struct {
 	followAt time.Time
 	// the careful-walk tests (remote_gather_test.go): a bot in lagUntil stays where it stands, out of the formation, until that time; aggro
 	// > 0 makes a mob that is not fighting yet come at the party when a living bot gets within that many yards of it (a walk into it).
-	lagUntil map[packet.GUID]time.Time
+	lagUntil map[world.GUID]time.Time
 	aggro    float64
 	// minMove > 0: a `cmd move` to a point nearer the lead bot than this is acknowledged and does nothing, as the module does with a move
 	// under about 6 yd. ccLasts > 0: a `cmd cc` puts the mob in crowd control (flag c, no target) for that long.
@@ -157,7 +157,7 @@ type fakeRemote struct {
 
 	// the enter-phase tests: memberMap puts single bots on another map than mapID; busyFor keeps the tank (the first bot) in combat that
 	// long after a tank-busy refusal.
-	memberMap   map[packet.GUID]uint32
+	memberMap   map[world.GUID]uint32
 	busyFor     time.Duration
 	combatUntil time.Time
 
@@ -180,7 +180,7 @@ type fakeRemote struct {
 
 func newFakeRemote(t *testing.T) *fakeRemote {
 	g := &fakeRemote{t: t, now: time.Unix(1_000_000, 0), speed: 10, engageDelay: 2 * time.Second, holdDelay: 0, killRate: 25, healRate: 20, cmdErr: map[string][]string{}}
-	mk := func(guid packet.GUID, name string, ptype uint8, hp uint32) *tbm.PartyRec {
+	mk := func(guid world.GUID, name string, ptype uint8, hp uint32) *tbm.PartyRec {
 		return &tbm.PartyRec{GUID: guid, Name: name, HP: hp, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: ptype, State: "n"}
 	}
 	g.party = []*tbm.PartyRec{mk(gTank, "Tanky", 1, 1000), mk(gHealer, "Healy", 0, 1000), mk(gMage, "Magey", 0, 1000)}
@@ -202,7 +202,7 @@ func (g *fakeRemote) clock() Clock {
 }
 
 func (g *fakeRemote) addMob(entry uint32, at Point) *rmob {
-	m := &rmob{guid: packet.GUID(0xF130000000000000 | uint64(entry)<<24 | uint64(len(g.mobs)+1)), entry: entry, pos: at, hp: 100, flags: "-"}
+	m := &rmob{guid: world.GUID(0xF130000000000000 | uint64(entry)<<24 | uint64(len(g.mobs)+1)), entry: entry, pos: at, hp: 100, flags: "-"}
 	g.mobs = append(g.mobs, m)
 	return m
 }
@@ -574,7 +574,7 @@ func (g *fakeRemote) Command(ctx context.Context, command string) (tbm.Reply, er
 					if p.Name == name {
 						p.X, p.Y, p.Z = g.lead().X-10, g.lead().Y, g.lead().Z
 						if g.lagUntil == nil {
-							g.lagUntil = map[packet.GUID]time.Time{}
+							g.lagUntil = map[world.GUID]time.Time{}
 						}
 						g.lagUntil[p.GUID] = g.now.Add(time.Hour)
 					}
@@ -735,7 +735,7 @@ func (g *fakeRemote) runToMob(m *rmob) {
 }
 
 func (g *fakeRemote) mobByArg(a string) *rmob {
-	v, err := packet.ParseGUID(a)
+	v, err := world.ParseGUID(a)
 	if err != nil {
 		return nil
 	}

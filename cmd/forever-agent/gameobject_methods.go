@@ -9,9 +9,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // goTypeParam is a game object type given as a name ("door", "spell_focus") or a number.
@@ -44,8 +44,8 @@ type gameObjectsParams struct {
 }
 
 type useObjectParams struct {
-	GUID   packet.GUID `json:"guid"`
-	WaitMS int         `json:"wait_ms,omitempty"`
+	GUID   world.GUID `json:"guid"`
+	WaitMS int        `json:"wait_ms,omitempty"`
 }
 
 // useObjectResult is the object as it stood when the use was sent, the log cursor before it,
@@ -72,7 +72,7 @@ var useObjectKinds = []string{events.KindLootOpen, events.KindLootError, events.
 // when the object casts it, or when the player casts it with the object as target (spell_start and
 // spell_go carry the target guid, an object included), so an unrelated buff or heal landing in
 // the window does not.
-func useAnswers(e events.Event, object, self packet.GUID) bool {
+func useAnswers(e events.Event, object, self world.GUID) bool {
 	switch e.Kind {
 	case events.KindSpellStart, events.KindSpellGo:
 		return e.SourceGUID == object || (e.SourceGUID == self && e.TargetGUID == object)

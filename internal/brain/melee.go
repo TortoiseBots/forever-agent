@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Melee fighting (issue #80 step 3c): the part of the brain that every melee class shares. A melee fighter swings (auto attack),
@@ -20,11 +20,11 @@ import (
 // memory. The session's implementation reads the event log (cmd/forever-agent/brain_melee.go).
 type Melee interface {
 	// LastDodge is when the unit last dodged an attack of the player's, the zero time if the brain has not seen one.
-	LastDodge(target packet.GUID) time.Time
+	LastDodge(target world.GUID) time.Time
 	// LastAvoided is when the player last dodged, parried or blocked an attack, the zero time if never.
 	LastAvoided() time.Time
 	// Swinging is the unit the player's auto attack is on, 0 when it is not attacking.
-	Swinging() packet.GUID
+	Swinging() world.GUID
 }
 
 // SwingWatcher is the optional part of Melee that counts the swings the server refused for facing (SMSG_ATTACKSWING_BADFACING). It is
@@ -40,11 +40,11 @@ func meleeOf(c *Ctx) Melee { m, _ := c.G.(Melee); return m }
 // melMem is what the melee strategies remember between ticks.
 type melMem struct {
 	mu          sync.Mutex
-	swingTarget packet.GUID // the unit the last attack order named (a game without Melee)
+	swingTarget world.GUID // the unit the last attack order named (a game without Melee)
 	swingAt     time.Time
 	stanceAt    time.Time // the last stance change the brain made
 	errSeen     uint64    // the bad_facing refusals the brain has answered (SwingWatcher)
-	faces       map[packet.GUID]faceTry
+	faces       map[world.GUID]faceTry
 
 	swingFaceUntil time.Time // how long a swing refused for facing waits for the turn to the mob (observeSwing, swingFaceBlocked)
 }
@@ -118,7 +118,7 @@ func faceNoted(c *Ctx, m *objects.Unit) {
 	c.mem.mel.mu.Lock()
 	defer c.mem.mel.mu.Unlock()
 	if c.mem.mel.faces == nil {
-		c.mem.mel.faces = map[packet.GUID]faceTry{}
+		c.mem.mel.faces = map[world.GUID]faceTry{}
 	}
 	for g, t := range c.mem.mel.faces {
 		if c.Now.Sub(t.at) > faceKeep {

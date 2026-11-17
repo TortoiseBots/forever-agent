@@ -9,11 +9,12 @@ import (
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
 	npcHex           = "0xF130002001000001"
-	npcGUID          = packet.GUID(0xF130002001000001)
+	npcGUID          = world.GUID(0xF130002001000001)
 	npcCreatureEntry = 0x2001
 	npcCreatureName  = "Booty Vendor"
 )

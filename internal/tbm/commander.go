@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote commander (TortoiseBots issue #884, docs/guides/player-controls.md section 1a): a player leads a bot-only party
@@ -287,7 +287,7 @@ func (c *Commander) Cmd(ctx context.Context, verb string, args ...string) (Reply
 }
 
 // GUIDArg is a GUID as `.bot cmd` takes it.
-func GUIDArg(g packet.GUID) string { return fmt.Sprintf("0x%X", uint64(g)) }
+func GUIDArg(g world.GUID) string { return fmt.Sprintf("0x%X", uint64(g)) }
 
 // EntryArg names a game object (or, for `cmd loot`, a corpse) by its entry as `.bot cmd open|loot|use|state` takes it: `entry:<id>`, or
 // `entry:<id>@x,y,z` with the point to search around (the server picks the nearest of that entry within 30 yd of it). The point is

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // AllowedInjectLine says whether the fault injector may send line through the gm RPC (spec raid-walk-addons 1.4).
@@ -85,4 +85,4 @@ func AllowedInjectOrder(verb string, args []string, c InjectCtx) bool {
 }
 
 // candidateHex is the GUID form the commander's `cmd attack` takes: 0x and 16 uppercase hex digits.
-func candidateHex(g packet.GUID) string { return g.String() }
+func candidateHex(g world.GUID) string { return g.String() }

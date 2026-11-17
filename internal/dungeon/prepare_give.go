@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // give_items (prepare.go): `.additem <entry>` on a bot, for a test run. The line acts on the SELECTED player, so the bot is selected by GUID
@@ -19,7 +19,7 @@ import (
 // ItemGiver is the optional part of a Preparer that sends `.additem <entry>` to a selected player: as one operation, with the GUID selected and
 // confirmed first, like UnbindInstances. who is the name, for errors.
 type ItemGiver interface {
-	GiveItem(ctx context.Context, who string, guid packet.GUID, entry uint32) error
+	GiveItem(ctx context.Context, who string, guid world.GUID, entry uint32) error
 }
 
 // giveBagWait is how long the bag is read until the item shows after the `.additem`.
@@ -101,7 +101,7 @@ func (e *prepEnv) giveName(g GiveItem) string {
 }
 
 // guidOf is a bot's GUID: from the agent's own group or view (the hires, before the bind), else from the roster.
-func (e *prepEnv) guidOf(ctx context.Context, name string) (packet.GUID, error) {
+func (e *prepEnv) guidOf(ctx context.Context, name string) (world.GUID, error) {
 	if hg, ok := e.g.(HireGame); ok {
 		if m, ok := hg.Player(name); ok && m.GUID != 0 {
 			return m.GUID, nil
@@ -113,7 +113,7 @@ func (e *prepEnv) guidOf(ctx context.Context, name string) (packet.GUID, error) 
 		}
 	}
 	if r, ok := e.rowOf(name); ok && r.GUID != 0 {
-		return packet.GUID(r.GUID), nil
+		return world.GUID(r.GUID), nil
 	}
 	return 0, fmt.Errorf("no GUID of %s: it is neither in the agent's group or view nor on the roster", name)
 }

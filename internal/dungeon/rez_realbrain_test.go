@@ -10,8 +10,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // rezGame is the leader's priest as the real brain sees it, over the driver's fake: the tank alive, the healer's body 5 yd away while
@@ -19,7 +19,7 @@ import (
 type rezGame struct {
 	g     *fakeGame
 	st    *spellstate.State
-	casts []packet.GUID
+	casts []world.GUID
 	endAt time.Time
 	spell uint32
 }
@@ -50,17 +50,17 @@ func (r *rezGame) Party() []brain.Member {
 	return out
 }
 
-func (r *rezGame) Selected() packet.GUID                     { return 0 }
-func (r *rezGame) Spells() *spellstate.State                 { return r.st }
-func (r *rezGame) Items() []objects.Item                     { return nil }
-func (r *rezGame) Face(context.Context, packet.GUID) error   { return nil }
-func (r *rezGame) Target(context.Context, packet.GUID) error { return nil }
-func (r *rezGame) Attack(context.Context) error              { return nil }
-func (r *rezGame) StopAttack(context.Context) error          { return nil }
-func (r *rezGame) UseItem(context.Context, uint32) error     { return nil }
-func (r *rezGame) Emit(events.Event)                         {}
+func (r *rezGame) Selected() world.GUID                     { return 0 }
+func (r *rezGame) Spells() *spellstate.State                { return r.st }
+func (r *rezGame) Items() []objects.Item                    { return nil }
+func (r *rezGame) Face(context.Context, world.GUID) error   { return nil }
+func (r *rezGame) Target(context.Context, world.GUID) error { return nil }
+func (r *rezGame) Attack(context.Context) error             { return nil }
+func (r *rezGame) StopAttack(context.Context) error         { return nil }
+func (r *rezGame) UseItem(context.Context, uint32) error    { return nil }
+func (r *rezGame) Emit(events.Event)                        {}
 
-func (r *rezGame) Cast(_ context.Context, spell uint32, target packet.GUID) error {
+func (r *rezGame) Cast(_ context.Context, spell uint32, target world.GUID) error {
 	r.casts = append(r.casts, target)
 	r.st.CastStarted(spell, 10000, target)
 	r.spell, r.endAt = spell, r.g.now.Add(10*time.Second)

@@ -5,7 +5,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote driver finds what the gossip step needs by asserting these interfaces on remoteGame (d.g.(X)): a missing method is no compile
@@ -20,7 +20,7 @@ var (
 )
 
 func TestGossipAnswerOf(t *testing.T) {
-	menu := &events.Event{Kind: events.KindGossip, SourceGUID: packet.GUID(7), Data: map[string]any{
+	menu := &events.Event{Kind: events.KindGossip, SourceGUID: world.GUID(7), Data: map[string]any{
 		"text_id": uint32(1513),
 		"options": []map[string]any{
 			{"index": uint32(0), "icon": uint8(0), "coded": false, "text": "Weegli, blow the door!"},

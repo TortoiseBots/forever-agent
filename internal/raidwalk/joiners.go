@@ -14,8 +14,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // JoinWindow is how long after the pull starts a hostile may join and still count.
@@ -27,12 +27,12 @@ const JoinWindow = 10 * time.Second
 // not in the pulled pack. pack holds the pulled pack's guids (spawn/guid
 // ownership from the plan). The count stops at the first frame past the window;
 // later arrivals are the fight's own adds, not joiners of the pull.
-func JoinersOfPull(pullAt time.Time, pack map[packet.GUID]bool, frames []tbm.ViewFrame, window time.Duration) []packet.GUID {
+func JoinersOfPull(pullAt time.Time, pack map[world.GUID]bool, frames []tbm.ViewFrame, window time.Duration) []world.GUID {
 	if window <= 0 {
 		window = JoinWindow
 	}
-	seen := map[packet.GUID]bool{}
-	var out []packet.GUID
+	seen := map[world.GUID]bool{}
+	var out []world.GUID
 	for _, f := range frames {
 		if f.At.Before(pullAt) || f.At.Sub(pullAt) > window {
 			continue
@@ -50,7 +50,7 @@ func JoinersOfPull(pullAt time.Time, pack map[packet.GUID]bool, frames []tbm.Vie
 }
 
 // JoinersNote formats the pull note tail: "joiners N (guids...)", or "" when none joined.
-func JoinersNote(guids []packet.GUID) string {
+func JoinersNote(guids []world.GUID) string {
 	if len(guids) == 0 {
 		return ""
 	}

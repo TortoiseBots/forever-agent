@@ -7,22 +7,22 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // npcParams serves the vendor, trainer and quest methods; each reads the fields it needs.
 type npcParams struct {
-	GUID      packet.GUID `json:"guid"`
-	ItemEntry uint32      `json:"item_entry,omitempty"`
-	Count     uint32      `json:"count,omitempty"`
-	Bag       *uint8      `json:"bag,omitempty"`
-	Slot      *uint8      `json:"slot,omitempty"`
-	SpellID   uint32      `json:"spell_id,omitempty"`
-	QuestID   uint32      `json:"quest_id,omitempty"`
-	Choice    *uint32     `json:"choice,omitempty"`
-	WaitMS    int         `json:"wait_ms,omitempty"`
+	GUID      world.GUID `json:"guid"`
+	ItemEntry uint32     `json:"item_entry,omitempty"`
+	Count     uint32     `json:"count,omitempty"`
+	Bag       *uint8     `json:"bag,omitempty"`
+	Slot      *uint8     `json:"slot,omitempty"`
+	SpellID   uint32     `json:"spell_id,omitempty"`
+	QuestID   uint32     `json:"quest_id,omitempty"`
+	Choice    *uint32    `json:"choice,omitempty"`
+	WaitMS    int        `json:"wait_ms,omitempty"`
 }
 
 // npcResult is the log cursor before the request and, with wait_ms, the first event that

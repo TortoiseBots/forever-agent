@@ -6,13 +6,13 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The agent's own gossip (dungeon.GossipTalker): the same session calls as the gossip_hello and gossip_select methods, each with the wait for
 // the server's answer in the event log.
 
-func (g *sessionGame) GossipHello(ctx context.Context, npc packet.GUID, wait time.Duration) (dungeon.GossipAnswer, error) {
+func (g *sessionGame) GossipHello(ctx context.Context, npc world.GUID, wait time.Duration) (dungeon.GossipAnswer, error) {
 	s := g.cur()
 	log := s.Log()
 	since := log.Last()
@@ -22,7 +22,7 @@ func (g *sessionGame) GossipHello(ctx context.Context, npc packet.GUID, wait tim
 	return gossipAnswerOf(nextGossip(ctx, log, since, int(wait.Milliseconds()))), nil
 }
 
-func (g *sessionGame) GossipSelect(ctx context.Context, npc packet.GUID, option uint32, wait time.Duration) (dungeon.GossipAnswer, error) {
+func (g *sessionGame) GossipSelect(ctx context.Context, npc world.GUID, option uint32, wait time.Duration) (dungeon.GossipAnswer, error) {
 	s := g.cur()
 	log := s.Log()
 	since := log.Last()
@@ -33,11 +33,11 @@ func (g *sessionGame) GossipSelect(ctx context.Context, npc packet.GUID, option 
 }
 
 // GossipHello and GossipSelect: the remote driver's agent talks with the same calls (the agent's own character is not in the group).
-func (g remoteGame) GossipHello(ctx context.Context, npc packet.GUID, wait time.Duration) (dungeon.GossipAnswer, error) {
+func (g remoteGame) GossipHello(ctx context.Context, npc world.GUID, wait time.Duration) (dungeon.GossipAnswer, error) {
 	return g.hands().GossipHello(ctx, npc, wait)
 }
 
-func (g remoteGame) GossipSelect(ctx context.Context, npc packet.GUID, option uint32, wait time.Duration) (dungeon.GossipAnswer, error) {
+func (g remoteGame) GossipSelect(ctx context.Context, npc world.GUID, option uint32, wait time.Duration) (dungeon.GossipAnswer, error) {
 	return g.hands().GossipSelect(ctx, npc, option, wait)
 }
 

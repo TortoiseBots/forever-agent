@@ -3,8 +3,8 @@ package dungeon
 import (
 	"slices"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The kill ledger: a run-wide record of every hostile the party fought, whichever pull it came to. A pull's fight tracks the pulled
@@ -27,9 +27,9 @@ type ledgerMob struct {
 // noteLedger folds a new frame into the ledger. It runs once per new frame (look).
 func (d *RemoteDriver) noteLedger() {
 	if d.ledger == nil {
-		d.ledger = map[packet.GUID]*ledgerMob{}
+		d.ledger = map[world.GUID]*ledgerMob{}
 	}
-	seen := make(map[packet.GUID]bool, len(d.fr.Hostiles))
+	seen := make(map[world.GUID]bool, len(d.fr.Hostiles))
 	for _, h := range d.fr.Hostiles {
 		if h.Entry == 0 {
 			continue
@@ -37,7 +37,7 @@ func (d *RemoteDriver) noteLedger() {
 		seen[h.GUID] = true
 		if h.HPPct > 0 {
 			if d.seenHostile == nil {
-				d.seenHostile = map[packet.GUID]uint32{}
+				d.seenHostile = map[world.GUID]uint32{}
 			}
 			d.seenHostile[h.GUID] = h.Entry
 		}

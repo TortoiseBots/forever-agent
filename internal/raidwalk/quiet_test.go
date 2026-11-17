@@ -8,6 +8,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // quietNow is the read time the quiet tests use.
@@ -147,7 +148,7 @@ func TestQuietHomeSpawnMatchesByGuid(t *testing.T) {
 	withGUID := func(low uint32) objects.Unit {
 		u := hostileAt("Razzashi Venombrood", 35, false, false)
 		u.Entry = 14532
-		u.GUID = packet.GUID(uint64(packet.HighUnit)<<48 | uint64(14532)<<24 | uint64(low))
+		u.GUID = world.GUID(uint64(packet.HighUnit)<<48 | uint64(14532)<<24 | uint64(low))
 		return u
 	}
 	if ok, reason := quietProven([]objects.Unit{withGUID(1234)}, nil, p, homes); !ok {

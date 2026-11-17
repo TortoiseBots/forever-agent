@@ -14,10 +14,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote commander (README "Remote leader"): the agent binds a TortoiseBots bot party it is not in (`.bot commander bind`),
@@ -239,7 +239,7 @@ func (g remoteGame) ViewStats() tbm.ViewStats                 { return g.c.feed.
 func (g remoteGame) Team() string { return g.c.cur().Team() }
 
 // BotTeam implements dungeon.BotTeamer: a unit's side from its race in the agent's object store ("" when the unit is not in view).
-func (g remoteGame) BotTeam(guid packet.GUID) string { return session.Team(g.c.cur().RaceOf(guid)) }
+func (g remoteGame) BotTeam(guid world.GUID) string { return session.Team(g.c.cur().RaceOf(guid)) }
 
 // BotLines implements dungeon.BotLiner: a plain `.bot maintenance|inv|logout <bot>` and the lines it was answered with.
 func (g remoteGame) BotLines(ctx context.Context, command string, wait time.Duration, done func(line string) bool) ([]string, bool, error) {
@@ -371,8 +371,8 @@ func (g remoteGame) TeleName(ctx context.Context, player, location string) error
 // text from this file, not from the caller: a name and a GUID are all that vary.
 
 // AgentName and AgentGUID are the agent's own character.
-func (g remoteGame) AgentName() string      { return g.c.cur().Status().Character }
-func (g remoteGame) AgentGUID() packet.GUID { return g.c.cur().Status().GUID }
+func (g remoteGame) AgentName() string     { return g.c.cur().Status().Character }
+func (g remoteGame) AgentGUID() world.GUID { return g.c.cur().Status().GUID }
 
 // Sees says whether the agent's own object store lists the named player.
 func (g remoteGame) Sees(name string) bool {
@@ -402,7 +402,7 @@ var gmSelectConfirmWait = 3 * time.Second
 // `.instance groupunbind all` answered "Glacienne is not in a group" for a selected Lcwarra; issue #296: a stale echo of the lead, with a
 // stranger's select pending behind it, let `.additem` run on the stranger. An error, with nothing sent, when the server does not show the
 // selection in time.
-func (g remoteGame) selectConfirmed(ctx context.Context, guid packet.GUID) error {
+func (g remoteGame) selectConfirmed(ctx context.Context, guid world.GUID) error {
 	return g.c.cur().SelectConfirmed(ctx, guid, gmSelectConfirmWait)
 }
 
@@ -417,7 +417,7 @@ var gmAfterConfirm func()
 // selection of its own (GMOnConfirmed): the line is sent only while the confirmed selection still stands. A selection sent right before a
 // chat line would not be in force when the line runs (the core handles the two on different threads). If another request changed the selection
 // after the confirmation, nothing is sent and the unit is selected and confirmed again, up to gmSelectAttempts times.
-func (g remoteGame) selectThenGM(ctx context.Context, guid packet.GUID, line string) error {
+func (g remoteGame) selectThenGM(ctx context.Context, guid world.GUID, line string) error {
 	var err error
 	for try := 0; try < gmSelectAttempts; try++ {
 		if err = g.selectConfirmed(ctx, guid); err != nil {
@@ -436,7 +436,7 @@ func (g remoteGame) selectThenGM(ctx context.Context, guid packet.GUID, line str
 // UnbindInstances selects the player with the GUID and sends ".instance unbind all" as one operation of the session (GMOn): the core
 // runs it on the selected player (from account level 4; below it on the sender), so the target is chosen by GUID and never left to
 // whatever the agent had selected. The selection is confirmed by the server first.
-func (g remoteGame) UnbindInstances(ctx context.Context, who string, guid packet.GUID) error {
+func (g remoteGame) UnbindInstances(ctx context.Context, who string, guid world.GUID) error {
 	if !botName.MatchString(who) || guid == 0 {
 		return fmt.Errorf("instance unbind: %q (%v) is not a character name and a GUID", who, guid)
 	}
@@ -446,7 +446,7 @@ func (g remoteGame) UnbindInstances(ctx context.Context, who string, guid packet
 // GiveItem implements dungeon.ItemGiver: it selects the bot by GUID, waits until the server shows that selection, and sends ".additem <entry>"
 // as one operation of the session (GMOn), so the line acts on that bot and never on whatever the agent had selected. The core runs it on the
 // selected player (HandleAddItemCommand), from account level 3; the caller checks the level and the bag afterwards.
-func (g remoteGame) GiveItem(ctx context.Context, who string, guid packet.GUID, entry uint32) error {
+func (g remoteGame) GiveItem(ctx context.Context, who string, guid world.GUID, entry uint32) error {
 	if !botName.MatchString(who) || guid == 0 || entry == 0 {
 		return fmt.Errorf("additem: %q (%v) item %d is not a character name, a GUID and an item entry", who, guid, entry)
 	}
@@ -457,7 +457,7 @@ func (g remoteGame) GiveItem(ctx context.Context, who string, guid packet.GUID, 
 // operation (GMOn), then reads the reply the sender gets: "Group unbound. Disbanding." or "<name> is not in a group."
 // (Commands.cpp, HandleInstanceGroupUnbindCommand). A "not in a group" that names the agent is GroupWrongTarget (the line ran on the sender),
 // one that names a third player is GroupThirdPlayer (it ran on somebody else's selection).
-func (g remoteGame) GroupUnbind(ctx context.Context, who string, guid packet.GUID) (dungeon.GroupUnbindResult, error) {
+func (g remoteGame) GroupUnbind(ctx context.Context, who string, guid world.GUID) (dungeon.GroupUnbindResult, error) {
 	if !botName.MatchString(who) || guid == 0 {
 		return "", fmt.Errorf("instance groupunbind: %q (%v) is not a character name and a GUID", who, guid)
 	}
@@ -603,7 +603,7 @@ func (g remoteGame) AgentLevel() int { return int(g.c.cur().Status().Level) }
 func (g remoteGame) Members() []dungeon.HireMember {
 	s := g.c.cur()
 	party := s.Party()
-	units := map[packet.GUID]objects.Unit{}
+	units := map[world.GUID]objects.Unit{}
 	for _, u := range s.Units(objects.Filter{Limit: 5000}) {
 		if u.Type == "player" {
 			units[u.GUID] = u
@@ -639,7 +639,7 @@ func (g remoteGame) Player(name string) (dungeon.HireMember, bool) {
 }
 
 // PetOf is the name of the pet the player has out in the agent's view.
-func (g remoteGame) PetOf(guid packet.GUID) (string, bool) {
+func (g remoteGame) PetOf(guid world.GUID) (string, bool) {
 	u, ok := g.c.cur().PetOfPlayer(guid)
 	if !ok {
 		return "", false

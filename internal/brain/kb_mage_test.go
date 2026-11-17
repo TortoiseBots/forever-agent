@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The knowledge-base rotations of the mage, the warlock and the hunter (tasks K2a-K2d, this file's mage specs): each recipe's
@@ -21,7 +21,7 @@ func kbScene(t *testing.T, class uint8, preset, rotation string, known []uint32,
 	g.self.Class, g.self.Level = class, 60
 	g.self.PowerType, g.self.Power, g.self.MaxPower = powerMana, manaFull, manaFull
 	g.self.Health, g.self.MaxHealth = 1000, 1000
-	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}
+	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}
 	cfg := DefaultConfig()
 	cfg.Now = g.clk.Now
 	b, err := New(mf, cfg, Params{Strategies: []string{preset}, Rotation: rotation})

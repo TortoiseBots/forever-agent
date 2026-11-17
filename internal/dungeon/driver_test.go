@@ -13,7 +13,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type fakeUnit struct {
@@ -26,7 +26,7 @@ type fakeUnit struct {
 
 type lateAura struct {
 	at  time.Time
-	who packet.GUID
+	who world.GUID
 	id  uint32
 }
 
@@ -50,66 +50,66 @@ type fakeGame struct {
 	canned []WalkResult  // results of the next walks; after them every walk arrives
 
 	chats, gms         []string
-	targets            []packet.GUID
+	targets            []world.GUID
 	walks              []Point
-	used               []packet.GUID
+	used               []world.GUID
 	teleports          []Point
 	events             []fakeEvent
 	onChat             func(g *fakeGame, text string)
 	onTick             func(g *fakeGame)
-	onUse              func(g *fakeGame, guid packet.GUID)
+	onUse              func(g *fakeGame, guid world.GUID)
 	walkNeverMoves     bool
 	noEngage           bool
 	healOnRest         bool
 	resting            bool
-	targeted           packet.GUID
+	targeted           world.GUID
 	pathErr            error
 	partyInViewNearMax float32 // distance the party members show at, 0: not in view
 
-	partyClass  map[packet.GUID]uint8       // class ids the members' unit rows show (the healer is a priest)
-	partyTarget map[packet.GUID]packet.GUID // the targets the members' unit rows show
-	marks       map[string]packet.GUID      // the group's raid icons (MarkSource)
-	reviveDelay time.Duration               // a GM revive shows in the party list this long after (negative: never)
-	revAt       map[string]time.Time        // revives under way, by member name
+	partyClass  map[world.GUID]uint8      // class ids the members' unit rows show (the healer is a priest)
+	partyTarget map[world.GUID]world.GUID // the targets the members' unit rows show
+	marks       map[string]world.GUID     // the group's raid icons (MarkSource)
+	reviveDelay time.Duration             // a GM revive shows in the party list this long after (negative: never)
+	revAt       map[string]time.Time      // revives under way, by member name
 	onWalk      func(g *fakeGame, to Point)
 	// walkHook replaces WalkPath (it may block until ctx ends, as a long walk does). It must not touch the units: the
 	// driver's combat watch reads them from another goroutine meanwhile; aggro is the way to start a fight there.
 	walkHook  func(ctx context.Context, g *fakeGame, to Point) (WalkResult, error)
 	aggro     atomic.Bool
-	aggroGUID packet.GUID       // the unit that is in combat with the leader while aggro is set
+	aggroGUID world.GUID        // the unit that is in combat with the leader while aggro is set
 	afterGate func(g *fakeGame) // runs as the first rest gate looks at the party
 	selfLooks int
 
-	auras       map[packet.GUID][]objects.Aura // auras the party members' unit rows show, put there by ".aura <id>"
-	auraRefused bool                           // the server ignores ".aura" (no developer level): nothing lands on the target
-	auraErr     error                          // GM fails for ".aura"
-	gmOnGUIDs   []packet.GUID                  // the unit each GMOn selected
-	hidden      map[packet.GUID]bool           // party members that are not in view
+	auras       map[world.GUID][]objects.Aura // auras the party members' unit rows show, put there by ".aura <id>"
+	auraRefused bool                          // the server ignores ".aura" (no developer level): nothing lands on the target
+	auraErr     error                         // GM fails for ".aura"
+	gmOnGUIDs   []world.GUID                  // the unit each GMOn selected
+	hidden      map[world.GUID]bool           // party members that are not in view
 
-	refusals      []Refusal                 // what the bots refused since the last look (the Driver reads them through RefusalSource)
-	refuseTargets map[packet.GUID][]Refusal // a pullback at this target is refused with the first of these (and it is dropped), no fight starts
-	auraDelay     time.Duration             // an ".aura" shows on its target only this long after
+	refusals      []Refusal                // what the bots refused since the last look (the Driver reads them through RefusalSource)
+	refuseTargets map[world.GUID][]Refusal // a pullback at this target is refused with the first of these (and it is dropped), no fight starts
+	auraDelay     time.Duration            // an ".aura" shows on its target only this long after
 	lateAuras     []lateAura
-	failGMOn      map[packet.GUID]int // the next n ".aura" commands selecting this unit land on the leader instead
-	dead          fakeDeath           // the leader's death (fake_death_test.go)
-	moveHeld      func() int          // the holds of the brain's move lock now (nil: not recorded)
-	moveLog       []string            // "walk:1", "teleport:1" ...: each movement of the leader and the holds standing at it
+	failGMOn      map[world.GUID]int // the next n ".aura" commands selecting this unit land on the leader instead
+	dead          fakeDeath          // the leader's death (fake_death_test.go)
+	moveHeld      func() int         // the holds of the brain's move lock now (nil: not recorded)
+	moveLog       []string           // "walk:1", "teleport:1" ...: each movement of the leader and the holds standing at it
 
 	onEmit func(kind string, data map[string]any) // sees each event as it is emitted
 	bag    []objects.Item                         // what the leader carries (ItemSource)
 }
 
 const (
-	leader packet.GUID = 0x10
-	tank   packet.GUID = 0x11
-	healer packet.GUID = 0x12
+	leader world.GUID = 0x10
+	tank   world.GUID = 0x11
+	healer world.GUID = 0x12
 )
 
 func newFake() *fakeGame {
 	g := &fakeGame{now: time.Unix(1_000_000, 0), mapID: 70, dieIn: 8 * time.Second, partyInViewNearMax: 5,
 		self:  Self{GUID: leader, Name: "Lead", Health: 1000, MaxHealth: 1000},
 		party: []Member{{Name: "Tank", GUID: tank, Online: true, Health: 900, MaxHealth: 900, PowerType: 1, Power: 50, MaxPower: 100}, {Name: "Heal", GUID: healer, Online: true, Health: 500, MaxHealth: 500, PowerType: 0, Power: 400, MaxPower: 400}}}
-	g.partyClass = map[packet.GUID]uint8{tank: 1, healer: 5}
+	g.partyClass = map[world.GUID]uint8{tank: 1, healer: 5}
 	return g
 }
 
@@ -156,7 +156,7 @@ func (g *fakeGame) clock() Clock {
 	}}
 }
 
-func (g *fakeGame) add(guid packet.GUID, entry uint32, at Point) *fakeUnit {
+func (g *fakeGame) add(guid world.GUID, entry uint32, at Point) *fakeUnit {
 	u := &fakeUnit{Unit: objects.Unit{GUID: guid, Type: "creature", Entry: entry, Name: fmt.Sprintf("mob%d", entry), X: at.X, Y: at.Y, Z: at.Z,
 		Hostile: true, Health: 100, MaxHealth: 100}}
 	g.units = append(g.units, u)
@@ -253,7 +253,7 @@ func (g *fakeGame) PathPoints(ctx context.Context, to Point) ([]Point, error) {
 	return []Point{g.at(), to}, nil
 }
 
-func (g *fakeGame) UseObject(ctx context.Context, guid packet.GUID) error {
+func (g *fakeGame) UseObject(ctx context.Context, guid world.GUID) error {
 	g.moved("use")
 	g.used = append(g.used, guid)
 	if g.onUse != nil {
@@ -262,14 +262,14 @@ func (g *fakeGame) UseObject(ctx context.Context, guid packet.GUID) error {
 	return nil
 }
 
-func (g *fakeGame) Target(ctx context.Context, guid packet.GUID) error {
+func (g *fakeGame) Target(ctx context.Context, guid world.GUID) error {
 	g.targets = append(g.targets, guid)
 	g.targeted = guid
 	return nil
 }
 
 // RaidMarks implements MarkSource.
-func (g *fakeGame) RaidMarks() map[string]packet.GUID { return g.marks }
+func (g *fakeGame) RaidMarks() map[string]world.GUID { return g.marks }
 
 func (g *fakeGame) Chat(ctx context.Context, channel, text string) error {
 	g.chats = append(g.chats, text)
@@ -320,7 +320,7 @@ func (g *fakeGame) pull() {
 }
 
 // GMOn selects and sends in one step, as the session does: a selection changed by somebody else in between cannot happen.
-func (g *fakeGame) GMOn(ctx context.Context, guid packet.GUID, text string) error {
+func (g *fakeGame) GMOn(ctx context.Context, guid world.GUID, text string) error {
 	g.gmOnGUIDs = append(g.gmOnGUIDs, guid)
 	g.targeted = guid
 	return g.GM(ctx, text)
@@ -334,7 +334,7 @@ func (g *fakeGame) GM(ctx context.Context, text string) error {
 		}
 		if n, err := strconv.ParseUint(id, 10, 32); err == nil && !g.auraRefused {
 			if g.auras == nil {
-				g.auras = map[packet.GUID][]objects.Aura{}
+				g.auras = map[world.GUID][]objects.Aura{}
 			}
 			who := g.targeted
 			if g.failGMOn[who] > 0 {
@@ -426,7 +426,7 @@ func runFixture(t *testing.T) (*fakeGame, *Plan) {
 	g.add(107, 7, Point{90, 0, 0})
 	g.add(103, 3, Point{130, 0, 0})
 	g.objs = []objects.GameObject{{GUID: keystone, Entry: 124371, X: 20, State: "ready"}, {GUID: seal, Entry: 124372, X: 30, State: "ready"}}
-	g.onUse = func(g *fakeGame, guid packet.GUID) {
+	g.onUse = func(g *fakeGame, guid world.GUID) {
 		if guid == keystone {
 			g.objs[1].State = "active"
 		}
@@ -446,7 +446,7 @@ func TestDriverRunsAPlan(t *testing.T) {
 	}
 	// Pack (101 is the nearest), then the boss's brother (the boss stands next to it and joins: it dies with it),
 	// then leg b's single mob.
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{101, 108, 103}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{101, 108, 103}) {
 		t.Fatalf("targets %v", g.targets)
 	}
 	if g.count(".bot action pullback") != 3 || len(g.used) != 1 || g.used[0] != keystone || g.gms[0] != ".gm visible on" || g.count(".bot action rest") != 0 {
@@ -774,7 +774,7 @@ func TestDriverIgnoresSkippedEntries(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v", err)
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{201}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{201}) {
 		t.Fatalf("%v", g.targets)
 	}
 }
@@ -835,7 +835,7 @@ func TestDriverKillsFirstThenBoss(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v", err)
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{308, 307}) || fmt.Sprint(g.walks) != "[{22 0 0} {52 0 0}]" {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{308, 307}) || fmt.Sprint(g.walks) != "[{22 0 0} {52 0 0}]" {
 		t.Fatalf("targets %v walks %v", g.targets, g.walks)
 	}
 	if l := d.Report().Legs[0]; l.Pulls != 2 || l.Result != "done" {
@@ -972,7 +972,7 @@ func TestDriverWalksToAnOutOfViewBoss(t *testing.T) {
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
 	}
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{107}) || strings.Contains(notes(d), "dead already") || strings.Contains(notes(d), "taken as already dead") {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{107}) || strings.Contains(notes(d), "dead already") || strings.Contains(notes(d), "taken as already dead") {
 		t.Fatalf("targets %v notes %q", g.targets, notes(d))
 	}
 

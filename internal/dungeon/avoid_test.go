@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The avoid boxes (avoid.go, remote_avoid.go): Ragefire Chasm's lava basin is ground in the navmesh tiles and killed 11 bots in
@@ -257,7 +257,7 @@ func (r *silentRig) frame(ps ...tbm.PartyRec) {
 	r.g.advance(time.Second)
 }
 
-func member(g packet.GUID, name string, hp uint32, state string, at Point) tbm.PartyRec {
+func member(g world.GUID, name string, hp uint32, state string, at Point) tbm.PartyRec {
 	return tbm.PartyRec{GUID: g, Name: name, HP: hp, MaxHP: 500, State: state, X: at.X, Y: at.Y, Z: at.Z}
 }
 

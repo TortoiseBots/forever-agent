@@ -18,9 +18,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Remote-leader mode (issue #83). The agent leads a bot group it is not in, through the TortoiseBots remote commander
@@ -555,16 +555,16 @@ type RemoteDriver struct {
 	downSaid      bool      // partyDown has stopped the leg for this round of deaths
 	gatherSt      gatherState
 	// aheadPassedLeg: hostiles a pull on the way passed over (no fight, evaded, refused), with the leg it happened in
-	aheadPassedLeg map[packet.GUID]int
+	aheadPassedLeg map[world.GUID]int
 	// deadly is the avoid state (remote_avoid.go): the spots where bots died with no wound and the last frame of each living member.
 	deadly           deadlyState
 	endsAtBind       int
 	stats0           tbm.ViewStats
 	statsMu          sync.Mutex // guards stats0: Status reads it from another goroutine while begin writes it
-	prevDead         map[packet.GUID]bool
+	prevDead         map[world.GUID]bool
 	deadSeen         bool
-	revived          map[packet.GUID]int
-	lastRevive       map[packet.GUID]time.Time
+	revived          map[world.GUID]int
+	lastRevive       map[world.GUID]time.Time
 	wipeRecover      int
 	wipeRecoverLeg   map[int]int // recovered wipes per leg
 	batch            *batchRun   // the grave batch that is being opened and fought (remote_batch.go)
@@ -576,19 +576,19 @@ type RemoteDriver struct {
 	floorCapped      int        // leg+1 of the leg whose rest gates stopped waiting for the pull floors (Config.RestPullExtra ran out)
 	bossFight        bool       // a boss fight (doKill) is on
 
-	tank        packet.GUID
-	engagedAt   map[packet.GUID]time.Time // when a mob was first seen fighting the party
-	attacked    map[packet.GUID]bool      // mobs the party was sent at
-	heldNoted   map[packet.GUID]bool
-	waitNoted   map[packet.GUID]bool
+	tank        world.GUID
+	engagedAt   map[world.GUID]time.Time // when a mob was first seen fighting the party
+	attacked    map[world.GUID]bool      // mobs the party was sent at
+	heldNoted   map[world.GUID]bool
+	waitNoted   map[world.GUID]bool
 	warned      map[string]bool
-	ccDone      map[packet.GUID]bool
-	ccOrdered   map[packet.GUID]time.Time  // when a big-pack CC order went out for a mob (remote_cc.go)
-	rccLast     time.Time                  // the last reactive CC order (remote_patrol.go)
-	midStart    bool                       // the run began mid-plan (from_leg, from_pull_group, start_here, resume) ...
-	midStartLeg int                        // ... in this leg
-	rccN        map[packet.GUID]int        // reactive CC orders per mob
-	patrolSeen  map[packet.GUID]*patrolObs // units of patrol entries seen on a patrol path (remote_patrol.go)
+	ccDone      map[world.GUID]bool
+	ccOrdered   map[world.GUID]time.Time  // when a big-pack CC order went out for a mob (remote_cc.go)
+	rccLast     time.Time                 // the last reactive CC order (remote_patrol.go)
+	midStart    bool                      // the run began mid-plan (from_leg, from_pull_group, start_here, resume) ...
+	midStartLeg int                       // ... in this leg
+	rccN        map[world.GUID]int        // reactive CC orders per mob
+	patrolSeen  map[world.GUID]*patrolObs // units of patrol entries seen on a patrol path (remote_patrol.go)
 	// patrolWalkedAt is when a member of each patrol was last seen walking (the next group of the leg does not look for it again at once).
 	patrolWalkedAt map[*Patrol]time.Time
 	// wantParty is how many bots the party has when the run starts (the lead bot and the named bots; the feed's party when none are
@@ -599,7 +599,7 @@ type RemoteDriver struct {
 	shortSaid  bool
 	// paused: Pause was called; the run ends stopped and keeps its binding (dungeon_pause).
 	paused     atomic.Bool
-	skipped    map[packet.GUID]string
+	skipped    map[world.GUID]string
 	lastAssist time.Time
 	lastMove   time.Time // when the last `cmd move` went out (MoveGap keeps the orders apart)
 	moveTo     Point     // the point of the last `cmd move` the module took: the lead bot's stay spot
@@ -608,10 +608,10 @@ type RemoteDriver struct {
 	// it just walked. A launch waypoint's tighten (tightenTo) sends the lead bot back along it and never off it.
 	trail        []Point
 	tf           tankFirst                 // the tank-first state of the fights (remote_tank.go)
-	outSince     map[packet.GUID]time.Time // since when each living member stands on another map than the plan's (outsideAlive)
-	offSince     map[packet.GUID]time.Time // when a bot dead outside the dungeon was first left to run back (no GM account)
-	gmRevived    map[packet.GUID]int       // `.revive` lines sent for a bot dead outside the dungeon (reviveOffMap)
-	lastGMRevive map[packet.GUID]time.Time //
+	outSince     map[world.GUID]time.Time  // since when each living member stands on another map than the plan's (outsideAlive)
+	offSince     map[world.GUID]time.Time  // when a bot dead outside the dungeon was first left to run back (no GM account)
+	gmRevived    map[world.GUID]int        // `.revive` lines sent for a bot dead outside the dungeon (reviveOffMap)
+	lastGMRevive map[world.GUID]time.Time  //
 	unitMem      map[*UnitWait]*unitMemory // what each "gone" unit wait has seen (remote_trigger.go)
 	home         *agentHome                // the agent's safe point after an area trigger it took itself (remote_trigger.go)
 	legLoot      bool                      // the leg under way has companions_loot false and it was turned off (legMuted: for whom)
@@ -620,16 +620,16 @@ type RemoteDriver struct {
 	maint        maintState                // the automatic `.bot maintenance` that is due (remote_maint.go)
 	// objectTouched is set when the Stepper asked for game objects, i.e. it is on an object step.
 	objectTouched bool
-	obj           objState                   // the object steps' carrier, corpses and step reports (remote_objects.go)
-	team          string                     // the party's team for the team gate ("" when unknown: everything runs)
-	killedAt      map[uint32][]Point         // where mobs of an entry were killed in this run (evidence that a pack is gone)
-	ledger        map[packet.GUID]*ledgerMob // every hostile seen fighting the party in this run (remote_ledger.go)
-	near          nearState                  // the agent kept near the party (remote_near.go)
-	gmCrossing    bool                       // a gm_cross is being done: the start phase's helpers book their notes and GM lines as the crossing's (remote_gmcross.go)
-	rejoin        rejoinState                // bots brought back to the lead bot with cmd summon (remote_rejoin.go)
-	entry         entryState                 // object steps by entry and game-object waits on cmd state (remote_entry.go)
-	seenHostile   map[packet.GUID]uint32     // units listed alive in the feed at some point of the run, with their entry (the team gate's evidence)
-	killedGUID    map[packet.GUID]bool       // units a won pull killed
+	obj           objState                  // the object steps' carrier, corpses and step reports (remote_objects.go)
+	team          string                    // the party's team for the team gate ("" when unknown: everything runs)
+	killedAt      map[uint32][]Point        // where mobs of an entry were killed in this run (evidence that a pack is gone)
+	ledger        map[world.GUID]*ledgerMob // every hostile seen fighting the party in this run (remote_ledger.go)
+	near          nearState                 // the agent kept near the party (remote_near.go)
+	gmCrossing    bool                      // a gm_cross is being done: the start phase's helpers book their notes and GM lines as the crossing's (remote_gmcross.go)
+	rejoin        rejoinState               // bots brought back to the lead bot with cmd summon (remote_rejoin.go)
+	entry         entryState                // object steps by entry and game-object waits on cmd state (remote_entry.go)
+	seenHostile   map[world.GUID]uint32     // units listed alive in the feed at some point of the run, with their entry (the team gate's evidence)
+	killedGUID    map[world.GUID]bool       // units a won pull killed
 
 	pts        *ptSampler         // the pull-test try being scored (pulltest.go); nil outside one
 	tr         *tracerun.Recorder // the run id and the trace (nil-safe; no file when tracing is off)
@@ -662,9 +662,9 @@ func NewRemoteDriver(plan *Plan, g RemoteGame, cfg Config, opt RemoteOptions, cl
 		clk = RealClock()
 	}
 	d := &RemoteDriver{plan: plan, g: g, cfg: cfg.withDefaults(), opt: opt.withDefaults(), clk: clk, curLeg: -1,
-		prevDead: map[packet.GUID]bool{}, revived: map[packet.GUID]int{}, lastRevive: map[packet.GUID]time.Time{},
-		engagedAt: map[packet.GUID]time.Time{}, attacked: map[packet.GUID]bool{}, heldNoted: map[packet.GUID]bool{}, waitNoted: map[packet.GUID]bool{},
-		warned: map[string]bool{}, ccDone: map[packet.GUID]bool{}, ccOrdered: map[packet.GUID]time.Time{}, skipped: map[packet.GUID]string{}, killedAt: map[uint32][]Point{}, patrolWalkedAt: map[*Patrol]time.Time{}}
+		prevDead: map[world.GUID]bool{}, revived: map[world.GUID]int{}, lastRevive: map[world.GUID]time.Time{},
+		engagedAt: map[world.GUID]time.Time{}, attacked: map[world.GUID]bool{}, heldNoted: map[world.GUID]bool{}, waitNoted: map[world.GUID]bool{},
+		warned: map[string]bool{}, ccDone: map[world.GUID]bool{}, ccOrdered: map[world.GUID]time.Time{}, skipped: map[world.GUID]string{}, killedAt: map[uint32][]Point{}, patrolWalkedAt: map[*Patrol]time.Time{}}
 	d.tx = defaultTuneExtra()
 	d.initLive()
 	d.rep.init(plan, clk.Now)
@@ -1753,7 +1753,7 @@ func (d *RemoteDriver) outsideAlive() int {
 	n := 0
 	now := d.clk.Now()
 	if d.outSince == nil {
-		d.outSince = map[packet.GUID]time.Time{}
+		d.outSince = map[world.GUID]time.Time{}
 	}
 	for _, p := range d.fr.Party {
 		if p.Dead || p.Map == d.plan.Map || d.curLeg < 0 {
@@ -1817,7 +1817,7 @@ func (d *RemoteDriver) memberByName(name string) (tbm.PartyRec, bool) {
 	return tbm.PartyRec{}, false
 }
 
-func (d *RemoteDriver) memberByGUID(g packet.GUID) (tbm.PartyRec, bool) {
+func (d *RemoteDriver) memberByGUID(g world.GUID) (tbm.PartyRec, bool) {
 	for _, p := range d.fr.Party {
 		if p.GUID == g {
 			return p, true
@@ -2769,7 +2769,7 @@ const lateCorpseWait = 20 * time.Second
 // live hostile near its own body is released at once (a resurrection in place would put the healer back on the floor); another after lateCorpseWait,
 // which leaves a living healer the time to raise it in place. A bot already ordered in the last 20 s is left to run back. since holds when each
 // bot was first seen dead during this wait.
-func (d *RemoteDriver) releaseLateDead(ctx context.Context, dead []tbm.PartyRec, since map[packet.GUID]time.Time) error {
+func (d *RemoteDriver) releaseLateDead(ctx context.Context, dead []tbm.PartyRec, since map[world.GUID]time.Time) error {
 	now := d.clk.Now()
 	for _, m := range dead {
 		if _, ok := since[m.GUID]; !ok {
@@ -2826,7 +2826,7 @@ func (d *RemoteDriver) waitForRez(ctx context.Context, why string) error {
 	last := began
 	var calm time.Duration
 	noted := false
-	seenDead := map[packet.GUID]bool{} // every bot seen dead during the wait, including ones that fell meanwhile
+	seenDead := map[world.GUID]bool{} // every bot seen dead during the wait, including ones that fell meanwhile
 	defer func() {
 		raised := 0
 		for g := range seenDead {
@@ -2941,7 +2941,7 @@ const revivedRejoinWait = 120 * time.Second
 func (d *RemoteDriver) waitRevivedRejoin(ctx context.Context) error {
 	until := d.clk.Now().Add(revivedRejoinWait)
 	noted := false
-	deadSince := map[packet.GUID]time.Time{}
+	deadSince := map[world.GUID]time.Time{}
 	for {
 		d.look()
 		missing := d.awayFromLead(float64(d.tx.GatherNear))

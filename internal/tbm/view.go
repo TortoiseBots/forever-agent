@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The perception feed of the remote commander (TortoiseBots issue #884 phase 2, docs/guides/player-controls.md
@@ -45,24 +45,24 @@ const staleSeqWindow = 3
 
 // PartyRec is one bot of the commanded party (a P record).
 type PartyRec struct {
-	GUID      packet.GUID `json:"guid"`
-	Name      string      `json:"name"`
-	HP        uint32      `json:"hp"`
-	MaxHP     uint32      `json:"max_hp"`
-	Power     uint32      `json:"power"`
-	MaxPower  uint32      `json:"max_power"`
-	PowerType uint8       `json:"power_type"` // 0 mana, 1 rage, 2 focus, 3 energy
-	X         float32     `json:"x"`
-	Y         float32     `json:"y"`
-	Z         float32     `json:"z"`
-	O         float32     `json:"o"`
-	Map       uint32      `json:"map"`
-	Instance  uint32      `json:"instance"`
-	Target    packet.GUID `json:"target,omitempty"` // the bot's target, else its victim
-	Spell     uint32      `json:"spell,omitempty"`  // the spell it casts or channels
-	Dead      bool        `json:"dead"`
-	State     string      `json:"state"`            // c combat, n non-combat, d dead, r reaction
-	Action    string      `json:"action,omitempty"` // the last action its AI ran
+	GUID      world.GUID `json:"guid"`
+	Name      string     `json:"name"`
+	HP        uint32     `json:"hp"`
+	MaxHP     uint32     `json:"max_hp"`
+	Power     uint32     `json:"power"`
+	MaxPower  uint32     `json:"max_power"`
+	PowerType uint8      `json:"power_type"` // 0 mana, 1 rage, 2 focus, 3 energy
+	X         float32    `json:"x"`
+	Y         float32    `json:"y"`
+	Z         float32    `json:"z"`
+	O         float32    `json:"o"`
+	Map       uint32     `json:"map"`
+	Instance  uint32     `json:"instance"`
+	Target    world.GUID `json:"target,omitempty"` // the bot's target, else its victim
+	Spell     uint32     `json:"spell,omitempty"`  // the spell it casts or channels
+	Dead      bool       `json:"dead"`
+	State     string     `json:"state"`            // c combat, n non-combat, d dead, r reaction
+	Action    string     `json:"action,omitempty"` // the last action its AI ran
 	// Result and Reason are the verdict on that action (TB #924, fields 19 and 20, absent from older modules): Result is one letter
 	// (O ok, F failed, I impossible, U useless, P prerequisites queued, V dropped), Reason why a failed cast check did not run
 	// (no-item, oom, range, los, cd, moving, casting, no-target). Empty when the module sent none.
@@ -100,15 +100,15 @@ func pctOf(v, max uint32) int {
 
 // HostileRec is one hostile the bots fight or see (an H record).
 type HostileRec struct {
-	GUID   packet.GUID `json:"guid"`
-	Entry  uint32      `json:"entry"` // 0 for a player
-	X      float32     `json:"x"`
-	Y      float32     `json:"y"`
-	Z      float32     `json:"z"`
-	HPPct  int         `json:"hp_pct"`
-	Target packet.GUID `json:"target,omitempty"`
-	Spell  uint32      `json:"spell,omitempty"`
-	Flags  string      `json:"flags"` // s stealthed, e evading, c crowd-controlled, "-" none
+	GUID   world.GUID `json:"guid"`
+	Entry  uint32     `json:"entry"` // 0 for a player
+	X      float32    `json:"x"`
+	Y      float32    `json:"y"`
+	Z      float32    `json:"z"`
+	HPPct  int        `json:"hp_pct"`
+	Target world.GUID `json:"target,omitempty"`
+	Spell  uint32     `json:"spell,omitempty"`
+	Flags  string     `json:"flags"` // s stealthed, e evading, c crowd-controlled, "-" none
 	// Reaction and Kind are the optional tenth and eleventh fields (TortoiseBots #943; empty from an older module, which lists only
 	// what it takes for hostile): Reaction is the unit's reaction to the party, h hostile, n neutral, f friendly, "-" unknown; Kind holds
 	// k critter, v civilian, g guard, u not attackable, or is "-".
@@ -133,13 +133,13 @@ func (h HostileRec) CrowdControlled() bool { return strings.Contains(h.Flags, "c
 
 // ThreatEntry is one entry of a hostile's threat list: Pct is the share of the top entry's threat (the top is 100).
 type ThreatEntry struct {
-	GUID packet.GUID `json:"guid"`
-	Pct  int         `json:"pct"`
+	GUID world.GUID `json:"guid"`
+	Pct  int        `json:"pct"`
 }
 
 // ThreatRec is the top (up to three) of one hostile's threat list, highest first.
 type ThreatRec struct {
-	Hostile packet.GUID   `json:"hostile"`
+	Hostile world.GUID    `json:"hostile"`
 	Top     []ThreatEntry `json:"top"`
 }
 
@@ -147,7 +147,7 @@ type ThreatRec struct {
 type ViewFrame struct {
 	Version  string       `json:"version"`
 	Seq      uint64       `json:"seq"`
-	Lead     packet.GUID  `json:"lead"`
+	Lead     world.GUID   `json:"lead"`
 	Party    []PartyRec   `json:"party"`
 	Hostiles []HostileRec `json:"hostiles"`
 	Threats  []ThreatRec  `json:"threats"`
@@ -168,7 +168,7 @@ func (f ViewFrame) LeadRec() (PartyRec, bool) {
 }
 
 // Member finds a party bot by GUID.
-func (f ViewFrame) Member(g packet.GUID) (PartyRec, bool) {
+func (f ViewFrame) Member(g world.GUID) (PartyRec, bool) {
 	for _, p := range f.Party {
 		if p.GUID == g {
 			return p, true
@@ -178,13 +178,13 @@ func (f ViewFrame) Member(g packet.GUID) (PartyRec, bool) {
 }
 
 // IsMember says whether g is a bot of the party.
-func (f ViewFrame) IsMember(g packet.GUID) bool {
+func (f ViewFrame) IsMember(g world.GUID) bool {
 	_, ok := f.Member(g)
 	return ok
 }
 
 // Hostile finds a hostile by GUID.
-func (f ViewFrame) Hostile(g packet.GUID) (HostileRec, bool) {
+func (f ViewFrame) Hostile(g world.GUID) (HostileRec, bool) {
 	for _, h := range f.Hostiles {
 		if h.GUID == g {
 			return h, true
@@ -194,7 +194,7 @@ func (f ViewFrame) Hostile(g packet.GUID) (HostileRec, bool) {
 }
 
 // Threat finds the threat record of a hostile.
-func (f ViewFrame) Threat(hostile packet.GUID) (ThreatRec, bool) {
+func (f ViewFrame) Threat(hostile world.GUID) (ThreatRec, bool) {
 	for _, t := range f.Threats {
 		if t.Hostile == hostile {
 			return t, true
@@ -204,7 +204,7 @@ func (f ViewFrame) Threat(hostile packet.GUID) (ThreatRec, bool) {
 }
 
 // ThreatHolder is the bot at the top of the hostile's threat list (the one the unit should be hitting).
-func (f ViewFrame) ThreatHolder(hostile packet.GUID) (packet.GUID, bool) {
+func (f ViewFrame) ThreatHolder(hostile world.GUID) (world.GUID, bool) {
 	t, ok := f.Threat(hostile)
 	if !ok || len(t.Top) == 0 {
 		return 0, false
@@ -214,7 +214,7 @@ func (f ViewFrame) ThreatHolder(hostile packet.GUID) (packet.GUID, bool) {
 
 // ThreatOf is the share of the top entry's threat that who has on the hostile, and whether the list shows who at all (the
 // record keeps only the top three: a bot not listed is below them all).
-func (f ViewFrame) ThreatOf(hostile, who packet.GUID) (pct int, listed bool) {
+func (f ViewFrame) ThreatOf(hostile, who world.GUID) (pct int, listed bool) {
 	t, ok := f.Threat(hostile)
 	if !ok {
 		return 0, false
@@ -307,7 +307,7 @@ func ParseViewLine(line string) (ViewLine, error) {
 }
 
 // ParseGUIDField reads a GUID of the feed: "0x" + hex, or decimal, or "0" for none.
-func ParseGUIDField(s string) (packet.GUID, error) {
+func ParseGUIDField(s string) (world.GUID, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, ErrViewFormat
@@ -322,7 +322,7 @@ func ParseGUIDField(s string) (packet.GUID, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: guid %q", ErrViewFormat, s)
 	}
-	return packet.GUID(v), nil
+	return world.GUID(v), nil
 }
 
 // fieldReader reads typed fields of a record and keeps the first error.
@@ -337,7 +337,7 @@ func (r *fieldReader) fail(i int, what string) {
 	}
 }
 
-func (r *fieldReader) guid(i int, what string) packet.GUID {
+func (r *fieldReader) guid(i int, what string) world.GUID {
 	g, err := ParseGUIDField(r.f[i])
 	if err != nil {
 		r.fail(i, what)
@@ -453,7 +453,7 @@ func ParseThreatRec(s string) (ThreatRec, error) {
 
 // beginRec is the body of a B line.
 type beginRec struct {
-	lead                       packet.GUID
+	lead                       world.GUID
 	party, hostiles, threatCnt int
 	truncated                  bool
 }

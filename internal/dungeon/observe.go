@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Observe mode (dungeon_run mode "observe"; README "Observe mode"). A TortoiseBots run leader (`.bot run`, TortoiseBots
@@ -215,18 +215,18 @@ type observeState struct {
 	startedAt  time.Time
 	last       tbm.RunStatus
 	haveLast   bool
-	lastAt     time.Time           // when the status last changed, or a fight was last seen to progress (noteFightProgress)
-	fight      map[packet.GUID]int // engaged hostile -> hp % in the previous frame (nil: no fight seen yet)
-	fightDead  int                 // members dead in the previous frame
+	lastAt     time.Time          // when the status last changed, or a fight was last seen to progress (noteFightProgress)
+	fight      map[world.GUID]int // engaged hostile -> hp % in the previous frame (nil: no fight seen yet)
+	fightDead  int                // members dead in the previous frame
 	pausedAt   time.Time
 	seenN      uint64
 	baseN      uint64 // lines read before the start: older ones are another run's
 	lastPoll   time.Time
-	serverEnd  bool                      // the module said the run is done: no stop is needed
-	wiped      bool                      // the feed showed the whole party dead: one rising edge of it is one wipe
-	wasDead    map[packet.GUID]bool      // dead in the previous frame (nil until the first frame)
-	deathAt    map[packet.GUID]time.Time // when each member last went dead
-	leadDownAt time.Time                 // when the lead bot last went dead
+	serverEnd  bool                     // the module said the run is done: no stop is needed
+	wiped      bool                     // the feed showed the whole party dead: one rising edge of it is one wipe
+	wasDead    map[world.GUID]bool      // dead in the previous frame (nil until the first frame)
+	deathAt    map[world.GUID]time.Time // when each member last went dead
+	leadDownAt time.Time                // when the lead bot last went dead
 	leadDown   bool
 	lastWipeAt time.Time // when the last wipe was counted
 	restSince  time.Time // when the run leader's current rest phase began
@@ -471,7 +471,7 @@ func (d *RemoteDriver) noteFightProgress(now time.Time) {
 		o.fight, o.fightDead = nil, 0
 		return
 	}
-	cur := map[packet.GUID]int{}
+	cur := map[world.GUID]int{}
 	for _, h := range d.fr.EngagedHostiles() {
 		if !h.Evading() {
 			cur[h.GUID] = h.HPPct
@@ -1115,7 +1115,7 @@ func (d *RemoteDriver) trackObservedDeaths(now time.Time) bool {
 		return false
 	}
 	if o.wasDead == nil { // the first frame is the baseline: a bot already dead in it is not a death
-		o.wasDead, o.deathAt = map[packet.GUID]bool{}, map[packet.GUID]time.Time{}
+		o.wasDead, o.deathAt = map[world.GUID]bool{}, map[world.GUID]time.Time{}
 		for _, p := range d.fr.Party {
 			o.wasDead[p.GUID] = p.Dead
 		}

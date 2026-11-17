@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Every tunable is read by the driver and takes effect at the next boundary and not before: a value written to the tunables file during
@@ -87,7 +87,7 @@ func strungOut(t *testing.T) (*fakeRemote, *Plan) {
 	g.aggro = 10
 	m := g.addMob(299, Point{40, 0, 0})
 	g.party[2].X = -30 // the mage stands 30 yd behind and does not come up
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(time.Hour)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(time.Hour)}
 	return g, remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{m.pos}}}})
 }
 
@@ -200,7 +200,7 @@ func TestTunedPartyDownDead(t *testing.T) {
 	run := func(tune string) (Report, error) {
 		g := newFakeRemote(t)
 		for i, n := range []string{"Roguey", "Huntey"} {
-			g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + packet.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
+			g.party = append(g.party, &tbm.PartyRec{GUID: gMage + 1 + world.GUID(i), Name: n, HP: 1000, MaxHP: 1000, Power: 100, MaxPower: 100, PowerType: 3, State: "n"})
 		}
 		g.killRate = 1
 		m := g.addMob(299, Point{40, 0, 0})

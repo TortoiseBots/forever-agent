@@ -15,11 +15,11 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The walk-22 fix tests: the revive must wait for its own landing before it summons (F4, Q3's stuck lead), the
@@ -239,7 +239,7 @@ func TestRaidWalkFramesCarryBotTargets(t *testing.T) {
 	f.defaultRun("onyxias_lair")
 	f.agent.mu.Lock()
 	f.agent.partyExtra = map[string]tbm.PartyRec{
-		"Bot02": {Target: packet.GUID(0xDEAD), Spell: 116, Action: "cast", Result: "F"},
+		"Bot02": {Target: world.GUID(0xDEAD), Spell: 116, Action: "cast", Result: "F"},
 	}
 	f.agent.mu.Unlock()
 	if code := f.run(context.Background()); code != exitOK {
@@ -262,7 +262,7 @@ func TestRaidWalkFramesCarryBotTargets(t *testing.T) {
 	if err := json.Unmarshal(lines[0], &rec); err != nil {
 		t.Fatalf("frames.jsonl line 1: %v", err)
 	}
-	want := packet.GUID(0xDEAD).String()
+	want := world.GUID(0xDEAD).String()
 	found := false
 	for _, p := range rec.Party {
 		if p.Name != "Bot02" {
@@ -1265,7 +1265,7 @@ func TestRaidWalkQuietPatrolExemptionIsPerPoint(t *testing.T) {
 	// p's reads never exempt it) and ~126 yd from the entrance (>= 80, and farther than p's 60).
 	dx, dy, dz := float64(rev.X-e.X), float64(rev.Y-e.Y), float64(rev.Z-e.Z)
 	norm := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	member := objects.Unit{Type: "creature", Name: "Zulian Patrolman", Hostile: true, GUID: packet.GUID(0x52050),
+	member := objects.Unit{Type: "creature", Name: "Zulian Patrolman", Hostile: true, GUID: world.GUID(0x52050),
 		X: rev.X + float32(dx/norm*60), Y: rev.Y + float32(dy/norm*60), Z: rev.Z + float32(dz/norm*60)}
 	pat := filepath.Join(t.TempDir(), "patrols.json")
 	content := fmt.Sprintf(`{"format":"tb-patrols","version":1,"map":%d,"source":"db","patrols":[{"id":"52050","spawn_guids":[335952],"path":[{"x":%v,"y":%v,"z":%v},{"x":%v,"y":%v,"z":%v}],"period_s":60}]}`,

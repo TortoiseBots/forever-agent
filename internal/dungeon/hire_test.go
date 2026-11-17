@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The hire step (hire.go, hire_check.go) against a fake commander that behaves like the server for what the step relies on: `.bot hire`
@@ -434,9 +434,9 @@ func (g *hireFake) preBind() {
 func (g *hireFake) setParty(names []string) {
 	g.party = g.party[:0]
 	for i, n := range names {
-		g.party = append(g.party, &tbm.PartyRec{GUID: packet.GUID(0x40 + i), Name: n, HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
+		g.party = append(g.party, &tbm.PartyRec{GUID: world.GUID(0x40 + i), Name: n, HP: 1000, MaxHP: 1000, Power: 1000, MaxPower: 1000, PowerType: 0, State: "n"})
 	}
-	g.memberMap = map[packet.GUID]uint32{}
+	g.memberMap = map[world.GUID]uint32{}
 }
 
 func (g *hireFake) Command(ctx context.Context, command string) (tbm.Reply, error) {
@@ -518,7 +518,7 @@ func (g *hireFake) InGroup() bool {
 }
 
 func (g *hireFake) member(h *fhire, inGroup bool) HireMember {
-	m := HireMember{Name: h.name, GUID: packet.GUID(0x900 + len(h.name) + int(h.name[0])), Level: h.level, InGroup: inGroup, Online: true, Dead: h.dead, MaxHP: 1500 + uint32(h.level)*10}
+	m := HireMember{Name: h.name, GUID: world.GUID(0x900 + len(h.name) + int(h.name[0])), Level: h.level, InGroup: inGroup, Online: true, Dead: h.dead, MaxHP: 1500 + uint32(h.level)*10}
 	if h.inView {
 		m.Class = h.class
 	}
@@ -550,7 +550,7 @@ func (g *hireFake) Player(name string) (HireMember, bool) {
 	return HireMember{}, false
 }
 
-func (g *hireFake) PetOf(guid packet.GUID) (string, bool) {
+func (g *hireFake) PetOf(guid world.GUID) (string, bool) {
 	for _, h := range g.hires {
 		if g.member(h, false).GUID == guid && h.pet {
 			if g.petLate > 0 {
@@ -587,18 +587,18 @@ func (g *hireFake) ItemInfos(_ context.Context, entries []uint32, _ time.Duratio
 	return out, nil
 }
 
-func (g *hireFake) AgentName() string      { return prepAgent }
-func (g *hireFake) AgentGUID() packet.GUID { return prepAgentID }
-func (g *hireFake) Sees(string) bool       { return true }
+func (g *hireFake) AgentName() string     { return prepAgent }
+func (g *hireFake) AgentGUID() world.GUID { return prepAgentID }
+func (g *hireFake) Sees(string) bool      { return true }
 func (g *hireFake) GMVisible(_ context.Context, on bool) error {
 	g.log("visible %v", on)
 	return nil
 }
-func (g *hireFake) UnbindInstances(_ context.Context, who string, _ packet.GUID) error {
+func (g *hireFake) UnbindInstances(_ context.Context, who string, _ world.GUID) error {
 	g.t.Errorf("the hire step sent .instance unbind all on %s", who)
 	return nil
 }
-func (g *hireFake) GroupUnbind(_ context.Context, who string, _ packet.GUID) (GroupUnbindResult, error) {
+func (g *hireFake) GroupUnbind(_ context.Context, who string, _ world.GUID) (GroupUnbindResult, error) {
 	g.t.Errorf("the hire step sent .instance groupunbind all on %s", who)
 	return GroupNoAnswer, nil
 }

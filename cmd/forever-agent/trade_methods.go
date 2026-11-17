@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type tradeParams struct {
@@ -21,16 +21,16 @@ type tradeParams struct {
 
 // playerRef reads the "to" of trade: a guid when it is "0x..." or all digits (a character name has no digits),
 // else a name.
-func playerRef(to string) (packet.GUID, string, error) { return playerRefField("to", to) }
+func playerRef(to string) (world.GUID, string, error) { return playerRefField("to", to) }
 
 // playerRefField is playerRef for the parameter called field ("to" of trade and trade_open, "from" of trade_expect).
-func playerRefField(field, to string) (packet.GUID, string, error) {
+func playerRefField(field, to string) (world.GUID, string, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
 		return 0, "", fmt.Errorf("trade needs %q: a player's name or guid", field)
 	}
 	if strings.HasPrefix(strings.ToLower(to), "0x") || strings.Trim(to, "0123456789") == "" {
-		g, err := packet.ParseGUID(to)
+		g, err := world.ParseGUID(to)
 		return g, "", err
 	}
 	return 0, to, nil

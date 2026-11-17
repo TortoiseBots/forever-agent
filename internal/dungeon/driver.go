@@ -11,8 +11,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Game is what the Driver does to the game and what it reads of it. The agent implements it over a session
@@ -29,15 +29,15 @@ type Game interface {
 	WalkPath(ctx context.Context, to Point) (WalkResult, error)
 	// PathPoints plans the walk to the point without moving: the corners of the path, the first being the player.
 	PathPoints(ctx context.Context, to Point) ([]Point, error)
-	UseObject(ctx context.Context, guid packet.GUID) error
-	Target(ctx context.Context, guid packet.GUID) error
+	UseObject(ctx context.Context, guid world.GUID) error
+	Target(ctx context.Context, guid world.GUID) error
 	// Chat says text in channel ("party"); the bot orders go as party chat, like /p .bot action attack.
 	Chat(ctx context.Context, channel, text string) error
 	// GM runs a GM command (".revive Name").
 	GM(ctx context.Context, text string) error
 	// GMOn selects the unit, waits until the server is known to have that selection in force, and runs a GM command that
 	// acts on the selected unit (".aura <id>") only while it stands; an error, with nothing sent, when it is not confirmed.
-	GMOn(ctx context.Context, guid packet.GUID, text string) error
+	GMOn(ctx context.Context, guid world.GUID, text string) error
 	Teleport(ctx context.Context, to Point, mapID uint32) error
 	// ProbeAccount sends ".account" (SEC_PLAYER, Chat.cpp:77) and reads the account's security level from the server's reply
 	// "Your account level is: N" (0 player, 1 observer, 2 moderator, 3 developer ...). With PlayerCommands = 0 the line is
@@ -77,7 +77,7 @@ type Brain interface {
 
 // Self is the leader as the session sees it.
 type Self struct {
-	GUID      packet.GUID
+	GUID      world.GUID
 	Name      string
 	Health    uint32
 	MaxHealth uint32
@@ -90,7 +90,7 @@ func (s Self) Dead() bool { return s.Ghost || (s.MaxHealth > 0 && s.Health == 0)
 // Member is a party member as the session's party list shows it.
 type Member struct {
 	Name      string
-	GUID      packet.GUID
+	GUID      world.GUID
 	Online    bool
 	Dead      bool
 	Health    uint32
@@ -358,17 +358,17 @@ type Driver struct {
 
 	st      *Stepper
 	curLeg  int
-	prevDea map[packet.GUID]bool // who was dead at the last look, to count each death once
+	prevDea map[world.GUID]bool // who was dead at the last look, to count each death once
 	seen    bool
-	party   map[packet.GUID]bool // guids of the leader and the members, for "who is the unit hitting"
+	party   map[world.GUID]bool // guids of the leader and the members, for "who is the unit hitting"
 	// buffedAt is the leg a member last had its buffs given or topped up at: a leg tops a member up once.
-	buffedAt   map[packet.GUID]int
+	buffedAt   map[world.GUID]int
 	brainNoted bool            // the brain failed to start once and was noted
 	leaderBase map[uint32]bool // the leader's own auras before the buff batch under way
 	lastOrder  string          // the intent of the last "/p .bot action ..." order, which a refusal whisper (no intent of its own) answers
 	// skipped are the mobs the run gave up on (the tank could not reach them, they evaded, or they drew no fight twice):
 	// no later pick or pull group looks at them again. The value says why, for the report.
-	skipped    map[packet.GUID]string
+	skipped    map[world.GUID]string
 	pendingRef []Refusal // refusals seen by a sleep and not yet looked at by a fight
 	tg         groupTank // the tank-first state of the fights (driver_tank.go)
 
@@ -403,7 +403,7 @@ func NewDriver(plan *Plan, g Game, cfg Config, clk Clock) *Driver {
 	if clk.Now == nil || clk.Sleep == nil {
 		clk = RealClock()
 	}
-	d := &Driver{plan: plan, g: g, cfg: cfg.withDefaults(), clk: clk, curLeg: -1, prevDea: map[packet.GUID]bool{}, party: map[packet.GUID]bool{}, buffedAt: map[packet.GUID]int{}, skipped: map[packet.GUID]string{}}
+	d := &Driver{plan: plan, g: g, cfg: cfg.withDefaults(), clk: clk, curLeg: -1, prevDea: map[world.GUID]bool{}, party: map[world.GUID]bool{}, buffedAt: map[world.GUID]int{}, skipped: map[world.GUID]string{}}
 	d.rep.init(plan, clk.Now)
 	d.initWatchdog()
 	d.rep.r.SetupShortcuts = slices.Clone(cfg.Setup)
@@ -846,7 +846,7 @@ func (d *Driver) sleepHeld(ctx context.Context, dur time.Duration) error {
 
 func (d *Driver) observeInit() {
 	self := d.g.Self()
-	d.party = map[packet.GUID]bool{self.GUID: true}
+	d.party = map[world.GUID]bool{self.GUID: true}
 	d.prevDea[self.GUID] = self.Dead()
 	for _, m := range d.g.Party() {
 		d.party[m.GUID] = true
@@ -870,7 +870,7 @@ func (d *Driver) countDeaths() (wholePartyDead bool) {
 		d.observeInit()
 	}
 	self := d.g.Self()
-	died := func(name string, g packet.GUID, dead bool) {
+	died := func(name string, g world.GUID, dead bool) {
 		if dead && !d.prevDea[g] {
 			d.rep.update(func(r *Report) {
 				r.Deaths = append(r.Deaths, Death{Name: name, Leg: d.curLeg, At: d.clk.Now()})
@@ -1129,7 +1129,7 @@ func (d *Driver) attackers() []objects.Unit {
 	return attackersOf(d.g.Units(), d.party)
 }
 
-func attackersOf(units []objects.Unit, party map[packet.GUID]bool) []objects.Unit {
+func attackersOf(units []objects.Unit, party map[world.GUID]bool) []objects.Unit {
 	var out []objects.Unit
 	for _, u := range units {
 		if u.Type != "player" && u.Hostile && !u.Dead && u.InCombat && u.Distance >= 0 && u.Distance <= 60 && party[u.Target] {
@@ -1146,7 +1146,7 @@ func (d *Driver) partyInCombat() bool { return len(d.attackers()) > 0 }
 // cancel when it is (that stops the walk). The returned func ends the look and says whether it cancelled. It reads
 // the game from another goroutine, which the Game must allow (the session does).
 func (d *Driver) watchCombat(ctx context.Context, cancel context.CancelFunc) func() bool {
-	party := make(map[packet.GUID]bool, len(d.party))
+	party := make(map[world.GUID]bool, len(d.party))
 	for g := range d.party {
 		party[g] = true
 	}
@@ -1313,9 +1313,9 @@ func (d *Driver) restGateWalk(ctx context.Context, walk *walkRest) (err error) {
 	held := false // the gate has waited for something: its first frame did not pass it
 	calm := began // the rest timeout counts from here: the start of the gate, or the end of the last fight
 	var fightBegan, lastAssist time.Time
-	revived := map[packet.GUID]int{}
-	rebuff := map[packet.GUID]bool{} // revived members still to get their buffs back
-	var rez rezWatch                 // the wait for the leader's brain to resurrect the dead members
+	revived := map[world.GUID]int{}
+	rebuff := map[world.GUID]bool{} // revived members still to get their buffs back
+	var rez rezWatch                // the wait for the leader's brain to resurrect the dead members
 	rw := newRestWatch(tgt)
 	// Whatever resets the other clocks (an attacker that flickers across the 60 yd line, a mob that evades but keeps
 	// its combat flag), the gate as a whole is bounded.
@@ -1474,7 +1474,7 @@ func (d *Driver) restGateWalk(ctx context.Context, walk *walkRest) (err error) {
 
 // waitRevived polls the party list for up to ReviveWait until the member's dead flag is clear (the sleep also counts
 // deaths and notices a wipe). A member still dead afterwards is left to the caller.
-func (d *Driver) waitRevived(ctx context.Context, g packet.GUID) error {
+func (d *Driver) waitRevived(ctx context.Context, g world.GUID) error {
 	deadline := d.clk.Now().Add(d.cfg.ReviveWait)
 	for {
 		if err := d.sleep(ctx, d.cfg.Poll); err != nil {
@@ -1525,7 +1525,7 @@ func (d *Driver) restState(rw *restWatch) restReport {
 	var low []string
 	now := d.clk.Now()
 	tgt := rw.tgt
-	classes := map[packet.GUID]uint8{}
+	classes := map[world.GUID]uint8{}
 	for _, u := range d.g.Units() {
 		if u.Type == "player" && u.Class != 0 {
 			classes[u.GUID] = u.Class
@@ -1632,7 +1632,7 @@ func (d *Driver) orderEach(ctx context.Context, rw *restWatch, rec *gateRec, st 
 // doPull pulls each member group of the action: the leader targets the nearest member and the tank walks up and
 // pulls it (.bot action pullback); the fight ends when the pack is dead.
 func (d *Driver) doPull(ctx context.Context, a Action) error {
-	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: a.Radius, passed: map[packet.GUID]bool{}}
+	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: a.Radius, passed: map[world.GUID]bool{}}
 	// A group whose members in view all carry a stealth aura cannot be pulled (the companions never attack what they
 	// cannot see); with none in view the plan's flag decides. Members in view without the aura are pulled as usual.
 	if cs := d.candidates(sp, sp.pick); (len(cs) == 0 && a.Ambush) || (len(cs) > 0 && allStealthed(cs)) {
@@ -1722,14 +1722,14 @@ type fightSpec struct {
 	skip     []uint32
 	anchors  []Point // where the pack stands
 	limit    time.Duration
-	required bool        // not finding the target fails the run (a boss), else the fight is taken as already won
-	sneak    bool        // a target that turns out stealthed is walked past (sneakPast) instead of pulled
-	seen     packet.GUID // the boss the search found away from his spot (remote searchBoss): it is a candidate wherever it stands
-	wide     bool        // a boss encounter: with none of the entries near the anchors, any within 80 yd counts
-	radius   float32     // yards a member may stand from an anchor (PullGroup.Radius); 0: PackRadius
+	required bool       // not finding the target fails the run (a boss), else the fight is taken as already won
+	sneak    bool       // a target that turns out stealthed is walked past (sneakPast) instead of pulled
+	seen     world.GUID // the boss the search found away from his spot (remote searchBoss): it is a candidate wherever it stands
+	wide     bool       // a boss encounter: with none of the entries near the anchors, any within 80 yd counts
+	radius   float32    // yards a member may stand from an anchor (PullGroup.Radius); 0: PackRadius
 	// passed are the mobs this group's pulls passed over (they drew no fight or evaded, nothing died): not picked again
 	// by this group, and not by another one (unlike the refused ones, which the whole run leaves alone).
-	passed map[packet.GUID]bool
+	passed map[world.GUID]bool
 	// patrol is the group's patrol (PullGroup.Patrol, remote mode only), and patrolSt what its gate has done for this group so far.
 	patrol   *Patrol
 	patrolSt *patrolState
@@ -1768,7 +1768,7 @@ type passedOver struct {
 
 func (d *Driver) engage(ctx context.Context, label string, sp fightSpec) error {
 	if sp.passed == nil {
-		sp.passed = map[packet.GUID]bool{}
+		sp.passed = map[world.GUID]bool{}
 	}
 	kills, retargets := 0, 0
 	var gaveUp []passedOver
@@ -2009,7 +2009,7 @@ func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fight
 		return fightResult{}, err
 	}
 	began := d.clk.Now()
-	tracked := map[packet.GUID]bool{t.GUID: true}
+	tracked := map[world.GUID]bool{t.GUID: true}
 	for _, u := range d.candidates(sp, sp.track) {
 		if dist3(Point{u.X, u.Y, u.Z}, Point{t.X, t.Y, t.Z}) <= float64(d.groupRadius(sp)) {
 			tracked[u.GUID] = true
@@ -2017,7 +2017,7 @@ func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fight
 	}
 	engaged := false
 	lastCombat, lastAssist := began, began
-	killed := map[packet.GUID]bool{} // members seen dead: the pull's progress
+	killed := map[world.GUID]bool{} // members seen dead: the pull's progress
 	assistRefusals := 0
 	d.tg.looseSent, d.tg.focus = nil, 0 // the fight's first attack order comes at AssistEvery, after the pull's own join delay
 	for {
@@ -2044,7 +2044,7 @@ func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fight
 			}
 		}
 		units := d.g.Units()
-		byGUID := make(map[packet.GUID]objects.Unit, len(units))
+		byGUID := make(map[world.GUID]objects.Unit, len(units))
 		for _, u := range units {
 			byGUID[u.GUID] = u
 			// A member of the encounter that joins is part of it.

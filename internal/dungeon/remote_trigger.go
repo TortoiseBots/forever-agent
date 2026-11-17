@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Area triggers and unit waits in remote mode (AreaTrigger, UnitWait), and the leg-wide corpse-loot mute (Leg.CompanionsLoot).
@@ -54,7 +54,7 @@ func (w remoteWorld) UnitHolds(u *UnitWait) bool { return w.d.unitHolds(u) }
 // feed does not (the friendly ones, a corpse the feed has dropped).
 func (d *RemoteDriver) unitSights() []unitSight {
 	var out []unitSight
-	have := map[packet.GUID]bool{}
+	have := map[world.GUID]bool{}
 	for _, h := range d.fr.Hostiles {
 		if h.Entry == 0 {
 			continue
@@ -640,7 +640,7 @@ func (d *RemoteDriver) reviveOffMap(ctx context.Context, m tbm.PartyRec) (handle
 	br, ok2 := d.g.(BotReviver)
 	if !ok || !ok2 || !d.agentGM(ctx, f) {
 		if d.offSince == nil {
-			d.offSince = map[packet.GUID]time.Time{}
+			d.offSince = map[world.GUID]time.Time{}
 		}
 		since, seen := d.offSince[m.GUID]
 		if !seen {
@@ -654,7 +654,7 @@ func (d *RemoteDriver) reviveOffMap(ctx context.Context, m tbm.PartyRec) (handle
 		return true, nil
 	}
 	if d.gmRevived == nil {
-		d.gmRevived = map[packet.GUID]int{}
+		d.gmRevived = map[world.GUID]int{}
 	}
 	if d.gmRevived[m.GUID] >= maxGMRevives {
 		return false, nil
@@ -663,7 +663,7 @@ func (d *RemoteDriver) reviveOffMap(ctx context.Context, m tbm.PartyRec) (handle
 		return true, nil
 	}
 	if d.lastGMRevive == nil {
-		d.lastGMRevive = map[packet.GUID]time.Time{}
+		d.lastGMRevive = map[world.GUID]time.Time{}
 	}
 	d.gmRevived[m.GUID]++
 	d.lastGMRevive[m.GUID] = d.clk.Now()

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The group driver's side of the watchdog (watchdog.go).
@@ -34,8 +34,8 @@ func wdObjectKind(k ActionKind) bool {
 }
 
 // unitsHP is each unit's health percent, for the watchdog's per-mob lows (watchdog.lowLocked).
-func unitsHP(us []objects.Unit) map[packet.GUID]int {
-	out := make(map[packet.GUID]int, len(us))
+func unitsHP(us []objects.Unit) map[world.GUID]int {
+	out := make(map[world.GUID]int, len(us))
 	for _, u := range us {
 		if u.MaxHealth > 0 {
 			out[u.GUID] = int(100 * uint64(u.Health) / uint64(u.MaxHealth))

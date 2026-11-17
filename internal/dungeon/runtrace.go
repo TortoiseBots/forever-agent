@@ -10,10 +10,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/trace"
 	"github.com/pjerra/forever-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Run traces (README "Run traces and checks"). Every run has a run id (Config.Trace.RunID, else generated) that goes into the
@@ -69,7 +69,7 @@ func outcomeName(o outcome) string {
 
 var classNames = map[uint8]string{1: "warrior", 2: "paladin", 3: "hunter", 4: "rogue", 5: "priest", 7: "shaman", 8: "mage", 9: "warlock", 11: "druid"}
 
-func guidText(g packet.GUID) string {
+func guidText(g world.GUID) string {
 	if g == 0 {
 		return ""
 	}
@@ -186,11 +186,11 @@ func (d *Driver) traceBegin(fromLeg int) {
 	if d.tr == nil || !d.cfg.Trace.On {
 		return
 	}
-	units := map[packet.GUID]objects.Unit{}
+	units := map[world.GUID]objects.Unit{}
 	for _, u := range d.g.Units() {
 		units[u.GUID] = u
 	}
-	member := func(name string, g packet.GUID, lead bool) trace.Member {
+	member := func(name string, g world.GUID, lead bool) trace.Member {
 		m := trace.Member{G: guidText(g), Name: name, Lead: lead}
 		if u, ok := units[g]; ok {
 			m.Class, m.Level = classNames[u.Class], int(u.Level)
@@ -226,7 +226,7 @@ func (d *Driver) traceSample() {
 	if !d.tr.Due() {
 		return
 	}
-	byG := map[packet.GUID]objects.Unit{}
+	byG := map[world.GUID]objects.Unit{}
 	units := d.g.Units()
 	for _, u := range units {
 		byG[u.GUID] = u
@@ -248,7 +248,7 @@ func (d *Driver) traceSample() {
 		mobPos[m.G] = m
 	}
 	// A member's row in the object store gives position, combat, target, facing and movement; one that is not in view has none.
-	bot := func(g packet.GUID, hp, mhp, pw, mpw uint32, ptype uint8, dead bool, lead bool) trace.Bot {
+	bot := func(g world.GUID, hp, mhp, pw, mpw uint32, ptype uint8, dead bool, lead bool) trace.Bot {
 		b := trace.Bot{G: guidText(g), Alive: !dead, HP: hp, MaxHP: mhp, Power: pw, MaxPow: mpw, PType: ptype, Lead: lead, State: "n"}
 		u, ok := byG[g]
 		switch {
@@ -460,7 +460,7 @@ func (d *RemoteDriver) roleOf(name string) string {
 // feedFrame turns a TBM:VIEW frame into a trace frame.
 func feedFrame(fr tbm.ViewFrame) trace.Frame {
 	out := trace.Frame{Via: "feed", Seq: fr.Seq, Cut: fr.Truncated}
-	hostile := map[packet.GUID]tbm.HostileRec{}
+	hostile := map[world.GUID]tbm.HostileRec{}
 	for _, h := range fr.Hostiles {
 		hostile[h.GUID] = h
 	}

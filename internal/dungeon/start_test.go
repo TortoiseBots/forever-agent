@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Starting anywhere (start.go) and the pull test (pulltest.go) against a fake commander. startFake is the fakeRemote of remote_test.go that
@@ -128,19 +128,19 @@ func (g *startFake) TeleName(_ context.Context, player, location string) error {
 	g.log("tele name %s %s", player, location)
 	return nil
 }
-func (g *startFake) AgentName() string      { return "Commander" }
-func (g *startFake) AgentGUID() packet.GUID { return packet.GUID(0x1) }
-func (g *startFake) AgentMap() uint32       { return g.agentMap }
-func (g *startFake) Sees(string) bool       { return true }
+func (g *startFake) AgentName() string     { return "Commander" }
+func (g *startFake) AgentGUID() world.GUID { return world.GUID(0x1) }
+func (g *startFake) AgentMap() uint32      { return g.agentMap }
+func (g *startFake) Sees(string) bool      { return true }
 func (g *startFake) GMVisible(_ context.Context, on bool) error {
 	g.log("gm visible %v", on)
 	return nil
 }
-func (g *startFake) UnbindInstances(_ context.Context, player string, _ packet.GUID) error {
+func (g *startFake) UnbindInstances(_ context.Context, player string, _ world.GUID) error {
 	g.log("instance unbind all %s", player)
 	return nil
 }
-func (g *startFake) GroupUnbind(_ context.Context, player string, _ packet.GUID) (GroupUnbindResult, error) {
+func (g *startFake) GroupUnbind(_ context.Context, player string, _ world.GUID) (GroupUnbindResult, error) {
 	g.log("group unbind %s", player)
 	g.unboundByFresh()
 	return GroupUnbound, nil
@@ -797,7 +797,7 @@ func TestPlanEquivLabel(t *testing.T) {
 	}
 }
 
-var _ = packet.GUID(0)
+var _ = world.GUID(0)
 
 // A step that needs an item only a skipped leg makes fails the start at once, naming the item and the leg: nothing is sent, the party is not
 // moved, and the step does not wait out its timeout for an item that cannot come.

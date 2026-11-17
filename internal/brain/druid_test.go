@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The spells of the druid tests, with their template numbers (internal/spells/meta.tsv.gz; TestDruidSpellData checks the facts the brain
@@ -122,7 +122,7 @@ func newCasterGame(known ...uint32) *casterGame {
 }
 
 func newMeleeGame(g *fakeGame) *meleeGame {
-	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}
+	mf := &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}
 	return &meleeGame{meleeFake: mf, classOps: &classOps{g: g}}
 }
 
@@ -179,7 +179,7 @@ func setManaTrue(g *fakeGame, pct uint32) {
 	})
 }
 
-func setCP(g *fakeGame, n uint8, target packet.GUID) {
+func setCP(g *fakeGame, n uint8, target world.GUID) {
 	g.setSelf(func(u *objects.Unit) { u.ComboPoints, u.ComboTarget = n, target })
 }
 
@@ -1111,7 +1111,7 @@ func TestBearSwipesAndRoarsWithTwoMobsOnIt(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	setRageB(r.g, 300)
-	for _, id := range []packet.GUID{mobA, mobB} {
+	for _, id := range []world.GUID{mobA, mobB} {
 		r.g.mutate(id, func(u *objects.Unit) {
 			u.Auras = append(u.Auras, objects.Aura{Name: "Demoralizing Roar", SpellID: drRoar, Harmful: true})
 		})

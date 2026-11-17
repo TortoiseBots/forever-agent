@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The party-strength half of the pre-run check (issue #266): the tank below the plan's tank_min_hp, and a hired bot of the other team than
@@ -14,7 +14,7 @@ import (
 // BotTeamer is the optional part of a RemoteGame that tells a bot's team from its race: "alliance", "horde", or "" when the unit is not in
 // view. The feed carries no race; the agent's object store has each visible unit's race byte (UNIT_FIELD_BYTES_0).
 type BotTeamer interface {
-	BotTeam(guid packet.GUID) string
+	BotTeam(guid world.GUID) string
 }
 
 // checkPartyStrength adds the party warnings the plan and the visible units allow before the first step.

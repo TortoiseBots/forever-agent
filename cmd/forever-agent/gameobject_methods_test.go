@@ -13,10 +13,11 @@ import (
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // goCreate sends the create block of a game object and answers its name query.
-func (r *agentRig) goCreate(g packet.GUID, entry uint32, name string, x, y, z float32, vals map[uint16]uint32) {
+func (r *agentRig) goCreate(g world.GUID, entry uint32, name string, x, y, z float32, vals map[uint16]uint32) {
 	w := objtest.Header(1).U8(uint8(objects.BlockCreate2)).PackedGUID(g).U8(objects.TypeGameObject)
 	objtest.Static(w, x, y, z, 0)
 	v := map[uint16]uint32{objects.FieldEntry: entry}
@@ -33,14 +34,14 @@ func (r *agentRig) goCreate(g packet.GUID, entry uint32, name string, x, y, z fl
 	r.srv.Send(opcode.SMSGGameobjectQueryResponse, resp.Bytes())
 }
 
-func (r *agentRig) goValues(g packet.GUID, vals map[uint16]uint32) {
+func (r *agentRig) goValues(g world.GUID, vals map[uint16]uint32) {
 	w := objtest.Header(1).U8(uint8(objects.BlockValues)).PackedGUID(g)
 	objtest.Values(w, 26, vals)
 	r.srv.Send(opcode.SMSGUpdateObject, w.Bytes())
 }
 
 func TestGameObjectsMethod(t *testing.T) {
-	const door, chest packet.GUID = 0xF11001E5D3003839, 0xF11001E5D4003856
+	const door, chest world.GUID = 0xF11001E5D3003839, 0xF11001E5D4003856
 	r := newRig(t) // the character stands at 1, 2, 3
 	if out := r.call("gameobjects", "{}"); out["error"] != nil || out["result"] == nil || len(out["result"].([]any)) != 0 {
 		t.Fatalf("an empty list is [], not null: %v", out)
@@ -99,7 +100,7 @@ func TestGameObjectsMethod(t *testing.T) {
 }
 
 func TestUseObjectMethod(t *testing.T) {
-	const door, far, lever packet.GUID = 0xF11001E5D3003839, 0xF11001E5D4003856, 0xF11001E5D5003857
+	const door, far, lever world.GUID = 0xF11001E5D3003839, 0xF11001E5D4003856, 0xF11001E5D5003857
 	r := newRig(t)
 	r.goCreate(door, 124371, "Keystone", 4, 6, 3, map[uint16]uint32{objects.GOFlags: 32, objects.GOState: objects.GOStateReady})
 	r.goCreate(far, 124372, "Seal of Khaz'Mul", 80, 6, 3, map[uint16]uint32{objects.GOFlags: 32})
@@ -158,10 +159,10 @@ func TestUseObjectMethod(t *testing.T) {
 
 	// A spell of the player's at the object answers, one landing in the same window at something else does not,
 	// and neither does an inventory error or a spell failure, which name no object.
-	const self, wolf packet.GUID = 0x2A, 0xF130000123000001
+	const self, wolf world.GUID = 0x2A, 0xF130000123000001
 	use = r.callAsync("use_object", `{"guid":"0xF11001E5D3003839","wait_ms":3000}`)
 	r.expect(opcode.CMSGGameobjUse)
-	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(self, 1459, []packet.GUID{wolf}, nil, nil, wolf))
+	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(self, 1459, []world.GUID{wolf}, nil, nil, wolf))
 	r.srv.Send(opcode.SMSGSpellStart, gametest.SpellStart(self, 1459, 0, wolf))
 	r.srv.Send(opcode.SMSGInventoryChangeFailure, gametest.InventoryChangeFailure(1, 0, 0, 0))
 	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(wolf, 133, nil, nil, nil, door))
@@ -174,7 +175,7 @@ func TestUseObjectMethod(t *testing.T) {
 	// With nothing but unrelated events, the use ends in none.
 	use = r.callAsync("use_object", `{"guid":"0xF11001E5D3003839","wait_ms":400}`)
 	r.expect(opcode.CMSGGameobjUse)
-	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(self, 1459, []packet.GUID{wolf}, nil, nil, wolf))
+	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(self, 1459, []world.GUID{wolf}, nil, nil, wolf))
 	if res = (<-use)["result"].(map[string]any); res["outcome"] != "none" {
 		t.Fatalf("%v", res)
 	}
@@ -192,8 +193,8 @@ func TestUseObjectMethod(t *testing.T) {
 
 // open_object casts the Opening spell at a chest (CMSG_CAST_SPELL, target mask 0x0800) and answers with the window; take loots it and closes.
 func TestOpenObjectMethod(t *testing.T) {
-	const chest packet.GUID = 0xF11001E1C1000001 // Baelog's Chest, entry 123329
-	r := newRig(t)                               // the character stands at 1, 2, 3
+	const chest world.GUID = 0xF11001E1C1000001 // Baelog's Chest, entry 123329
+	r := newRig(t)                              // the character stands at 1, 2, 3
 	r.goCreate(chest, 123329, "Baelog's Chest", 4, 2, 3, map[uint16]uint32{objects.GOTypeID: 3, objects.GOState: objects.GOStateReady})
 	r.eventually("gameobjects", "{}", func(m map[string]any) bool {
 		l := m["result"].([]any)

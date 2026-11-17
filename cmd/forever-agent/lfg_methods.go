@@ -10,9 +10,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/lft"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The LFG methods drive Turtle's group finder the way the LFG addon does: addon messages
@@ -381,7 +381,7 @@ func (v *lfgService) foldLocked(after uint64, match func(lft.Msg) bool) bool {
 
 // lfgLine is the spoof guard: an addon line on the guild channel, prefix TW_LFG, sent by
 // the player himself, naming an S2C_* kind.
-func lfgLine(e events.Event, self packet.GUID) (lft.Msg, bool) {
+func lfgLine(e events.Event, self world.GUID) (lft.Msg, bool) {
 	if self == 0 || e.SourceGUID != self {
 		return lft.Msg{}, false
 	}

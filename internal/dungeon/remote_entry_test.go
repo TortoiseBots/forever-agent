@@ -8,15 +8,15 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Object steps by entry and game-object waits on cmd state (remote_entry.go; TortoiseBots #933).
 
 // worldObj is a game object or a corpse the fake module knows, which the agent does not see.
 type worldObj struct {
-	guid   packet.GUID
+	guid   world.GUID
 	entry  uint32
 	at     Point
 	state  string // "ready", "active", "alternative"
@@ -427,7 +427,7 @@ func TestEntryTargetsWaitGoneNeedsTheModuleToLookAndFindNothing(t *testing.T) {
 // parkCarrier stands the carrier (Magey) at p for 30 s, out of the formation (the fake's lagUntil): where a gone_ok miss is read from.
 func parkCarrier(g *entryGame, p Point) {
 	if g.lagUntil == nil {
-		g.lagUntil = map[packet.GUID]time.Time{}
+		g.lagUntil = map[world.GUID]time.Time{}
 	}
 	g.lagUntil[gMage] = g.now.Add(30 * time.Second)
 	for _, m := range g.party {

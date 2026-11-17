@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // When is a pull group gone? The feed lists only what the bots see (their line of sight, a frame cut short drops hostiles), so a group
@@ -31,7 +31,7 @@ import (
 type deadAt struct {
 	entry uint32
 	at    Point
-	guid  packet.GUID // the corpse keeps it: a loot order names it
+	guid  world.GUID // the corpse keeps it: a loot order names it
 }
 
 // clearing is what one engage has learnt about the positions of its group.
@@ -55,7 +55,7 @@ func (d *RemoteDriver) noteKilled(res fightResult) {
 		d.killedAt[u.entry] = append(d.killedAt[u.entry], u.at)
 		if u.guid != 0 {
 			if d.killedGUID == nil {
-				d.killedGUID = map[packet.GUID]bool{}
+				d.killedGUID = map[world.GUID]bool{}
 			}
 			d.killedGUID[u.guid] = true
 		}
@@ -266,10 +266,10 @@ func (d *RemoteDriver) gatedLook(ctx context.Context, a Action) (skip bool, err 
 	var sp fightSpec
 	switch {
 	case a.Kind == ActPull:
-		sp = fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, radius: a.Radius, sneak: true, passed: map[packet.GUID]bool{}}
+		sp = fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, radius: a.Radius, sneak: true, passed: map[world.GUID]bool{}}
 	case a.Kind == ActKill && a.Boss != nil:
 		enc := append(slices.Clone(a.Boss.First), a.Boss.Entry)
-		sp = fightSpec{pick: enc, track: enc, skip: a.Skip, anchors: []Point{a.Boss.Position}, wide: true, passed: map[packet.GUID]bool{}}
+		sp = fightSpec{pick: enc, track: enc, skip: a.Skip, anchors: []Point{a.Boss.Position}, wide: true, passed: map[world.GUID]bool{}}
 	default:
 		return false, nil
 	}

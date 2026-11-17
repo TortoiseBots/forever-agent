@@ -21,13 +21,13 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/tbdash"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The fakes below stand in for the slot agent, the dashboard, the clock and the lease, so every phase runs
@@ -167,9 +167,9 @@ type walkFakeAgent struct {
 
 	// The --gm-clear fakes: gm_kill calls the killFn with the guid and the number of lines sent to it so far (nil: every kill works);
 	// a unit it lets die shows Dead in the unit RPC (killed).
-	killFn    func(g packet.GUID, tries int) bool
-	killTries map[packet.GUID]int
-	killed    map[packet.GUID]bool
+	killFn    func(g world.GUID, tries int) bool
+	killTries map[world.GUID]int
+	killed    map[world.GUID]bool
 
 	// instanceBinds is what `.instance listbinds` reports for the commander (the reuse bind check).
 	instanceBinds []fakeBind
@@ -232,12 +232,12 @@ type walkFakeAgent struct {
 	// The practice hands' game side (raid-walk --practice): each hook models what the GM command does to the test
 	// scenario; nil leaves the world unchanged. spellQueue holds the cast events the practice loop's own events read
 	// (kinds spell_start/spell_go) delivers once the fake clock reaches their time.
-	onEvade func(g packet.GUID)
-	onSetHP func(g packet.GUID)
+	onEvade func(g world.GUID)
+	onSetHP func(g world.GUID)
 	// setHPErr, when set, makes every gm_set_hp call answer it (a unit the client cannot find). It runs after the
 	// call is logged, so a test can count the attempts.
 	setHPErr   error
-	onRespawn  func(g packet.GUID)
+	onRespawn  func(g world.GUID)
 	onRevive   func(name string)
 	spellQueue []queuedSpell
 
@@ -259,8 +259,8 @@ type walkFakeAgent struct {
 	lastHireAt  time.Time
 
 	// The fault injector's fakes (raid_walk_inject_test.go): the server's selection (target/gps), the per-bot
-	ownGUID packet.GUID // the commander's GUID when a test sets one
-	ownPos  [3]float32  // the commander's own position (.go xyz updates it)
+	ownGUID world.GUID // the commander's GUID when a test sets one
+	ownPos  [3]float32 // the commander's own position (.go xyz updates it)
 	pos     map[string][3]float32
 	// goLag holds back the position of the recovery's `.go xyz` (the first one after `run start`) for that many
 	// status polls, while the map id takes effect at once: the live server answers the go at once and lands the
@@ -332,8 +332,8 @@ type walkFakeAgent struct {
 	summonDist []float64
 	// partyExtra are the P-record fields the module sends beyond the fake's own (F3: target, spell, action, result).
 	partyExtra           map[string]tbm.PartyRec
-	selGUID              packet.GUID  // the selection the server has in force
-	queuedSel            *packet.GUID // a target RPC the server applies after the next .gps (lagTargets)
+	selGUID              world.GUID  // the selection the server has in force
+	queuedSel            *world.GUID // a target RPC the server applies after the next .gps (lagTargets)
 	lagTargets           bool
 	noSelect             bool // .gps always reports the commander (a server that never applies the select)
 	statusTargetMismatch bool
@@ -356,16 +356,16 @@ type walkFakeAgent struct {
 	// the frame of the same poll): a test's scripted reaction to the walk reading a
 	// line, so a status line and the frames it belongs with arrive in one poll.
 	eventsHook  func(raw string)
-	targetCalls []packet.GUID
+	targetCalls []world.GUID
 	targetAt    []time.Time // when each target RPC arrived
 
 	// The identity read-back (`.pinfo`): pinfoGUID names that unit instead of the server's selection,
 	// pinfoLagTargets reports the selection one target RPC behind, prevSel is the selection before the newest
-	pinfoGUID       packet.GUID
+	pinfoGUID       world.GUID
 	pinfoName       string // names an untracked player instead of the selection's party record
 	noPInfo         bool   // .pinfo never answers (the reply waits out its own deadline)
 	pinfoLagTargets bool
-	prevSel         packet.GUID
+	prevSel         world.GUID
 	gmFail          func(line string) error
 	// noGMOn makes the `.gm on` probe answer "GM mode is OFF": the place phase must refuse (review round 1, item 12).
 	noGMOn bool
@@ -476,7 +476,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			if f.partyJoinAt > 0 && i == len(f.party)-1 && f.clock.now().Sub(f.lastHireAt) < f.partyJoinAt {
 				continue // the last hire's join has not landed yet: the group list names it, its join does not
 			}
-			members = append(members, session.PartyMember{Name: n, GUID: packet.GUID(1000 + i), Online: true})
+			members = append(members, session.PartyMember{Name: n, GUID: world.GUID(1000 + i), Online: true})
 		}
 		f.mu.Unlock()
 		v = session.PartyInfo{InGroup: len(members) > 0, Members: members}
@@ -561,7 +561,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			GUID string `json:"guid"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			f.t.Errorf("gm_kill %q: %v", p.GUID, err)
 		}
@@ -569,7 +569,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 		f.log = append(f.log, "gm_kill "+g.String())
 		f.killAt = append(f.killAt, f.clock.now())
 		if f.killTries == nil {
-			f.killTries, f.killed = map[packet.GUID]int{}, map[packet.GUID]bool{}
+			f.killTries, f.killed = map[world.GUID]int{}, map[world.GUID]bool{}
 		}
 		f.killTries[g]++
 		if f.killFn == nil || f.killFn(g, f.killTries[g]) {
@@ -581,13 +581,13 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			GUID string `json:"guid"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			f.t.Errorf("%s %q: %v", method, p.GUID, err)
 		}
 		f.mu.Lock()
 		f.log = append(f.log, method+" "+g.String())
-		h := map[string]func(packet.GUID){"gm_evade": f.onEvade, "gm_respawn": f.onRespawn}[method]
+		h := map[string]func(world.GUID){"gm_evade": f.onEvade, "gm_respawn": f.onRespawn}[method]
 		f.mu.Unlock()
 		if h != nil {
 			h(g)
@@ -602,7 +602,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			// The RPC takes the guid only: any explicit hp is refused before the session reads the unit.
 			return fmt.Errorf("gm_set_hp: the hp argument is refused (the unit is restored to its own max health): got %d", *p.HP)
 		}
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			f.t.Errorf("gm_set_hp %q: %v", p.GUID, err)
 		}
@@ -635,7 +635,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			GUID string `json:"guid"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		g, _ := packet.ParseGUID(p.GUID)
+		g, _ := world.ParseGUID(p.GUID)
 		f.mu.Lock()
 		f.log = append(f.log, "unit "+g.String())
 		dead := f.killed[g]
@@ -646,7 +646,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 			GUID string `json:"guid"`
 		}
 		_ = json.Unmarshal(raw, &p)
-		g, err := packet.ParseGUID(p.GUID)
+		g, err := world.ParseGUID(p.GUID)
 		if err != nil {
 			f.t.Errorf("target %q: %v", p.GUID, err)
 		}
@@ -994,7 +994,7 @@ func (f *walkFakeAgent) gpsSide() {
 	mapID := f.status.Map
 	if !f.noSelect && sel != 0 && sel != own {
 		for i, n := range f.party {
-			if packet.GUID(1000+i) == sel {
+			if world.GUID(1000+i) == sel {
 				if p, ok := f.pos[n]; ok {
 					pos = p
 				}
@@ -1054,7 +1054,7 @@ func (f *walkFakeAgent) pinfoSide() {
 		name = f.status.Character
 	} else if name == "" && sel != 0 {
 		for i, n := range f.party {
-			if packet.GUID(1000+i) == sel {
+			if world.GUID(1000+i) == sel {
 				name = n
 			}
 		}
@@ -1076,7 +1076,7 @@ func (f *walkFakeAgent) dieSide() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, n := range f.party {
-		if packet.GUID(1000+i) == f.selGUID {
+		if world.GUID(1000+i) == f.selGUID {
 			f.dead[n] = true
 			return
 		}
@@ -1482,7 +1482,7 @@ func (f *walkFakeAgent) viewPage() any {
 		if offMapBots[name] {
 			hm = 0
 		}
-		rec := tbm.PartyRec{GUID: packet.GUID(1000 + i), Name: name, HP: 1, MaxHP: 1, Map: hm, Dead: dead[name], State: state,
+		rec := tbm.PartyRec{GUID: world.GUID(1000 + i), Name: name, HP: 1, MaxHP: 1, Map: hm, Dead: dead[name], State: state,
 			X: p[0], Y: p[1], Z: p[2]}
 		if ex, ok := extra[name]; ok { // the P-record fields the module sends beyond the fake's own
 			rec.Target, rec.Spell, rec.Action, rec.Result = ex.Target, ex.Spell, ex.Action, ex.Result
@@ -2624,7 +2624,7 @@ func (f *fixture) allDeadFromHires() {
 // would hold it open, while the patrol binding keeps the stale track entry.
 func retirePack0Patrol(f *fixture) {
 	prev := f.agent.hostilesFn
-	dead := tbm.HostileRec{GUID: packet.GUID(0x5205001), Entry: 12129,
+	dead := tbm.HostileRec{GUID: world.GUID(0x5205001), Entry: 12129,
 		X: 49.8206, Y: -114.607, Z: -24.3112, HPPct: 0}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		var out []tbm.HostileRec
@@ -3051,7 +3051,7 @@ func TestRaidWalkNeverRevivesWhileTheBossHasATarget(t *testing.T) {
 		f.agent.targeted = targeted
 		f.agent.mu.Unlock()
 		if targeted {
-			return []tbm.HostileRec{{GUID: 9, Entry: 10184, HPPct: 100, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 10184, HPPct: 100, Target: world.GUID(1000)}}
 		}
 		return []tbm.HostileRec{{GUID: 9, Entry: 10184, HPPct: 100}}
 	}
@@ -3574,7 +3574,7 @@ func TestRaidWalkWipeResumeAfterEarlierBossKillRecovers(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Sub(t0) < 45*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -3630,7 +3630,7 @@ func TestRaidWalkWipeResumeBossStillEngagedRecovers(t *testing.T) {
 			}
 			f.agent.mu.Unlock()
 		}
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 	}
 	// The recovery's resume takes the run on: its status and the run's end arrive after the resume went out.
 	f.agent.onResume = func() {
@@ -3694,7 +3694,7 @@ func TestRaidWalkWipeResumeVisibleBossAfterKillRecovers(t *testing.T) {
 		}
 		if now.Sub(t0) < 45*time.Second {
 			// The boss row holds a target: engaged, latches, and notes the fight.
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		// The boss is killed and gone; from 150 s on a plan `first` add
 		// (Flamewaker Protector) stands as trash in view — alive, full
@@ -3805,7 +3805,7 @@ func TestRaidWalkWipeResumeDashOffRecentBossSkips(t *testing.T) {
 		name string
 		row  tbm.HostileRec
 	}{
-		{"target", tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}},
+		{"target", tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}},
 		{"hurt", tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 60, Target: 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3906,7 +3906,7 @@ func TestRaidWalkWipeResumeBossDeadFrameKills(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Before(wipeAt.Add(-100 * time.Second)) {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0, Target: 0}}
 	}
@@ -3964,7 +3964,7 @@ func dashLatchWipeFixture(t *testing.T, after func(elapsed time.Duration) []tbm.
 			f.agent.mu.Unlock()
 		}
 		if elapsed := now.Sub(t0); elapsed < 140*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		} else {
 			return after(elapsed)
 		}
@@ -4201,7 +4201,7 @@ func TestRaidWalkWipeResumeBossDeadThenDespawnedKills(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Before(wipeAt.Add(-100 * time.Second)) {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		if now.Before(wipeAt.Add(-30 * time.Second)) {
 			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0, Target: 0}}
@@ -4260,9 +4260,9 @@ func TestRaidWalkWipeResumeBossLowHpRecovers(t *testing.T) {
 		// Stale targeted 4 % row 100 s before the wipe: never a kill, so the
 		// unknown wait still fires.
 		if now.Before(wipeAt.Add(-100 * time.Second)) {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 4, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 4, Target: world.GUID(1000)}}
 	}
 	f.agent.onResume = func() {
 		f.agent.mu.Lock()
@@ -4317,7 +4317,7 @@ func TestRaidWalkWipeResumeBossResetFrameResumes(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Before(wipeAt.Add(-100 * time.Second)) {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: 0}}
 	}
@@ -4369,7 +4369,7 @@ func TestRaidWalkWipeResumeNoBossFrameStillSkips(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Before(wipeAt.Add(-100 * time.Second)) {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -4429,7 +4429,7 @@ func TestRaidWalkWipeResumeBossCorpseRecovers(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Sub(t0) < 45*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		// The boss is killed (corpse in view) from 150 s on, through the wipe:
 		// a 0 % row never latches, so the wipe can recover.
@@ -4490,10 +4490,10 @@ func TestRaidWalkWipeResumeRoutesNewBossToHandleBoss(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Sub(t0) < 45*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		if resumed {
-			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -4560,10 +4560,10 @@ func TestRaidWalkWipeResumeStaleBossStatusRoutesNewBossToHandleBoss(t *testing.T
 			f.agent.mu.Unlock()
 		}
 		if now.Sub(t0) < 45*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		if resumed {
-			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -4630,10 +4630,10 @@ func TestRaidWalkWipeResumeFreshBossStatusKeepsTheFight(t *testing.T) {
 			f.agent.mu.Unlock()
 		}
 		if now.Sub(t0) < 45*time.Second {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		if resumed {
-			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 11982, HPPct: 90, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -5253,7 +5253,7 @@ func TestRaidWalkWipeSelfRegroupBossEngagedNotes(t *testing.T) {
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 80, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 80, Target: world.GUID(1000)}}
 	}
 	selfRegroupKill(f, regroup)
 	code := f.run(context.Background())
@@ -6973,11 +6973,11 @@ func TestRaidWalkCountsPullJoinersFromFrames(t *testing.T) {
 	// of the pack and never counts, while 3 engaged units of another pack
 	// inside the 10 s window do: the record says 3.
 	f := joinerWalk(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)},
-		{GUID: 0xF130101, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF130102, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1002)},
-		{GUID: 0xF130103, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1000)},
+		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)},
+		{GUID: 0xF130101, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF130102, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1002)},
+		{GUID: 0xF130103, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1000)},
 	})
 	raw, err := os.ReadFile(filepath.Join(f.out, "run.log"))
 	if err != nil {
@@ -6996,11 +6996,11 @@ func TestRaidWalkCountsPullJoinersFromFrames(t *testing.T) {
 // pack is owned by spawn guid and position, not by creature entry.
 func TestRaidWalkCountsSameEntryNeighbourAsJoiner(t *testing.T) {
 	f := joinerWalk(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}, // pack mate
+		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}, // pack mate
 		// The next pull group's pack, 106 yd off, same entry 12129: joiners.
-		{GUID: 0xF130501, Entry: 12129, X: -52.9, Y: -96.9, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF130502, Entry: 12129, X: -53.1, Y: -97.0, HPPct: 100, Target: packet.GUID(1000)},
+		{GUID: 0xF130501, Entry: 12129, X: -52.9, Y: -96.9, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF130502, Entry: 12129, X: -53.1, Y: -97.0, HPPct: 100, Target: world.GUID(1000)},
 	})
 	raw, err := os.ReadFile(filepath.Join(f.out, "run.log"))
 	if err != nil {
@@ -7020,12 +7020,12 @@ func TestRaidWalkCountsSameEntryNeighbourAsJoiner(t *testing.T) {
 // hostiles of another pack inside the window make "joiners 3".
 func TestRaidWalkCountsStandPullJoiners(t *testing.T) {
 	f := joinerWalkNote(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}, // pack mate
+		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}, // pack mate
 		// The neighbouring pack, 106 yd off: the stand pull's joiners.
-		{GUID: 0xF130501, Entry: 12130, X: -52.9, Y: -96.9, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF130502, Entry: 12130, X: -53.1, Y: -97.0, HPPct: 100, Target: packet.GUID(1002)},
-		{GUID: 0xF130503, Entry: 12130, X: -52.8, Y: -97.4, HPPct: 100, Target: packet.GUID(1000)},
+		{GUID: 0xF130501, Entry: 12130, X: -52.9, Y: -96.9, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF130502, Entry: 12130, X: -53.1, Y: -97.0, HPPct: 100, Target: world.GUID(1002)},
+		{GUID: 0xF130503, Entry: 12130, X: -52.8, Y: -97.4, HPPct: 100, Target: world.GUID(1000)},
 	}, "TBM:RUN|onyxias_lair|running|2/21|onyxia|move|pull|pulling 12129 0xF130002C6C00C24B (order 1; shot from firing stand 1); joiners not read|until boss (step 21)")
 	raw, err := os.ReadFile(filepath.Join(f.out, "run.log"))
 	if err != nil {
@@ -7048,11 +7048,11 @@ func TestRaidWalkCountsStandPullJoiners(t *testing.T) {
 // and the 3 engaged units of the far pack do.
 func TestRaidWalkCountsStandPullJoinersOnMoveStep(t *testing.T) {
 	f := joinerWalkNote(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}, // pack mate
-		{GUID: 0xF130501, Entry: 12130, X: -52.9, Y: -96.9, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF130502, Entry: 12130, X: -53.1, Y: -97.0, HPPct: 100, Target: packet.GUID(1002)},
-		{GUID: 0xF130503, Entry: 12130, X: -52.8, Y: -97.4, HPPct: 100, Target: packet.GUID(1000)},
+		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}, // pack mate
+		{GUID: 0xF130501, Entry: 12130, X: -52.9, Y: -96.9, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF130502, Entry: 12130, X: -53.1, Y: -97.0, HPPct: 100, Target: world.GUID(1002)},
+		{GUID: 0xF130503, Entry: 12130, X: -52.8, Y: -97.4, HPPct: 100, Target: world.GUID(1000)},
 	}, "TBM:RUN|onyxias_lair|running|1/21|onyxia|move|pull|pulling 12129 0xF130002C6C00C24B (order 1; shot from firing stand 1); joiners not read|until boss (step 21)")
 	raw, err := os.ReadFile(filepath.Join(f.out, "run.log"))
 	if err != nil {
@@ -7096,14 +7096,14 @@ func TestRaidWalkCountsBossPullJoiners(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		return []tbm.HostileRec{
-			{GUID: 0xF13000000010, Entry: 10184, X: 0.7, Y: -212.0, HPPct: 99, Target: packet.GUID(1000)},
+			{GUID: 0xF13000000010, Entry: 10184, X: 0.7, Y: -212.0, HPPct: 99, Target: world.GUID(1000)},
 			// The boss row's own adds, within its radius: the boss pack.
-			{GUID: 0xF13000000011, Entry: 11368, X: 5.0, Y: -212.0, HPPct: 100, Target: packet.GUID(1000)},
-			{GUID: 0xF13000000012, Entry: 11368, X: -5.0, Y: -212.0, HPPct: 100, Target: packet.GUID(1001)},
+			{GUID: 0xF13000000011, Entry: 11368, X: 5.0, Y: -212.0, HPPct: 100, Target: world.GUID(1000)},
+			{GUID: 0xF13000000012, Entry: 11368, X: -5.0, Y: -212.0, HPPct: 100, Target: world.GUID(1001)},
 			// 3 hostiles of another pack, 100 yd off: joiners.
-			{GUID: 0xF13000000021, Entry: 12130, X: 100.7, Y: -212.0, HPPct: 100, Target: packet.GUID(1001)},
-			{GUID: 0xF13000000022, Entry: 12130, X: 101.0, Y: -213.0, HPPct: 100, Target: packet.GUID(1002)},
-			{GUID: 0xF13000000023, Entry: 12130, X: 100.0, Y: -211.0, HPPct: 100, Target: packet.GUID(1000)},
+			{GUID: 0xF13000000021, Entry: 12130, X: 100.7, Y: -212.0, HPPct: 100, Target: world.GUID(1001)},
+			{GUID: 0xF13000000022, Entry: 12130, X: 101.0, Y: -213.0, HPPct: 100, Target: world.GUID(1002)},
+			{GUID: 0xF13000000023, Entry: 12130, X: 100.0, Y: -211.0, HPPct: 100, Target: world.GUID(1000)},
 		}
 	}
 	if code := f.run(context.Background()); code != exitOK {
@@ -7179,11 +7179,11 @@ func TestRaidWalkBossWindowOpensOverOpenPullWindow(t *testing.T) {
 		}
 	}
 	others := []tbm.HostileRec{
-		{GUID: 0xF13000000021, Entry: 12130, X: 100.7, Y: -212.0, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF13000000022, Entry: 12130, X: 101.0, Y: -213.0, HPPct: 100, Target: packet.GUID(1002)},
-		{GUID: 0xF13000000023, Entry: 12130, X: 100.0, Y: -211.0, HPPct: 100, Target: packet.GUID(1000)},
+		{GUID: 0xF13000000021, Entry: 12130, X: 100.7, Y: -212.0, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF13000000022, Entry: 12130, X: 101.0, Y: -213.0, HPPct: 100, Target: world.GUID(1002)},
+		{GUID: 0xF13000000023, Entry: 12130, X: 100.0, Y: -211.0, HPPct: 100, Target: world.GUID(1000)},
 	}
-	pulled := tbm.HostileRec{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)}
+	pulled := tbm.HostileRec{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)}
 	// Views before the run starts (the hire wait) see no frames of the pull.
 	afterStart := 0
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
@@ -7236,9 +7236,9 @@ func TestRaidWalkBossWindowOpensOverOpenPullWindow(t *testing.T) {
 // is in range: the mate 2 yd off is owned and the far neighbour joins.
 func TestRaidWalkPullWithNoRowUsesSeedMates(t *testing.T) {
 	f := joinerWalkNote(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 77777, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 77777, X: 52.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}, // mate 2 yd off
-		{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1001)},
+		{GUID: 0xF130002C6C00C24B, Entry: 77777, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 77777, X: 52.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}, // mate 2 yd off
+		{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1001)},
 	}, "TBM:RUN|onyxias_lair|running|1/21|onyxia|move|pull|pulling 77777 0xF130002C6C00C24B (order 1; shot from where it stands); joiners not read|until boss (step 21)")
 	raw, err := os.ReadFile(filepath.Join(f.out, "run.log"))
 	if err != nil {
@@ -7273,9 +7273,9 @@ func TestRaidWalkPullSeedRetriesAfterFirstFrame(t *testing.T) {
 			f.clock.mu.Unlock()
 		}
 	}
-	mate := tbm.HostileRec{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}
-	joiner := tbm.HostileRec{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1001)}
-	seed := tbm.HostileRec{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)}
+	mate := tbm.HostileRec{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}
+	joiner := tbm.HostileRec{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1001)}
+	seed := tbm.HostileRec{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)}
 	views := 0
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		views++
@@ -7314,8 +7314,8 @@ func TestRaidWalkWaitingLineOpensNoWindow(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		return []tbm.HostileRec{
-			{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-			{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1001)},
+			{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+			{GUID: 0xF130501, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1001)},
 		}
 	}
 	if code := f.run(context.Background()); code != exitOK {
@@ -7340,22 +7340,22 @@ func TestRaidWalkPullFramedMarksBossAdds(t *testing.T) {
 		pullJoinsAt:   now,
 		pullJoinsStep: 7,
 		pullBossAdds:  map[uint32]bool{11368: true},
-		pullPack:      map[packet.GUID]bool{},
-		pullJoinsSeen: map[packet.GUID]bool{},
-		pullAddsSeen:  map[packet.GUID]bool{},
+		pullPack:      map[world.GUID]bool{},
+		pullJoinsSeen: map[world.GUID]bool{},
+		pullAddsSeen:  map[world.GUID]bool{},
 	}
 	f := &tbm.ViewFrame{
 		Party: []tbm.PartyRec{{GUID: 1000, Name: "Tank"}},
 		Hostiles: []tbm.HostileRec{
-			{GUID: 0xF13000000011, Entry: 11368, HPPct: 100, Target: packet.GUID(1000)},
-			{GUID: 0xF13000000021, Entry: 12130, HPPct: 100, Target: packet.GUID(1000)},
+			{GUID: 0xF13000000011, Entry: 11368, HPPct: 100, Target: world.GUID(1000)},
+			{GUID: 0xF13000000021, Entry: 12130, HPPct: 100, Target: world.GUID(1000)},
 		},
 	}
 	w.pullFramed(now.Add(time.Second), f)
-	if len(w.pullJoinsSeen) != 1 || !w.pullJoinsSeen[packet.GUID(0xF13000000021)] {
+	if len(w.pullJoinsSeen) != 1 || !w.pullJoinsSeen[world.GUID(0xF13000000021)] {
 		t.Fatalf("joins %+v, want only the 12130 neighbour", w.pullJoinsSeen)
 	}
-	if len(w.pullAddsSeen) != 1 || !w.pullAddsSeen[packet.GUID(0xF13000000011)] {
+	if len(w.pullAddsSeen) != 1 || !w.pullAddsSeen[world.GUID(0xF13000000011)] {
 		t.Fatalf("adds %+v, want the 11368 boss add marked instead", w.pullAddsSeen)
 	}
 	w.pullJoinersFlush(now.Add(11 * time.Second))
@@ -7501,7 +7501,7 @@ func TestTrackFrameKeepsPositionsAndKinds(t *testing.T) {
 	if dead := w.botAt["Dead"]; dead.guid != 8 || dead.inCombat || !dead.dead {
 		t.Fatalf("bot Dead %+v, want guid 8, dead and not in combat", dead)
 	}
-	h, ok := w.hostiles[packet.GUID(9).String()]
+	h, ok := w.hostiles[world.GUID(9).String()]
 	if !ok || h.entry != 10184 || h.x != -4 || h.y != -5 || h.z != -6 || h.kind != "u" || h.reaction != "h" || h.flags != "ce" {
 		t.Fatalf("hostile %+v, want its entry, position, kind, reaction and flags", h)
 	}
@@ -7675,7 +7675,7 @@ func TestRaidWalkUntilPastBossLetsTheRunFightIt(t *testing.T) {
 	}
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -7711,7 +7711,7 @@ func earlyEngageFixture(t *testing.T, step int, mtYd float32) (*fixture, int, in
 	f.agent.mu.Unlock()
 	f.agent.pos = map[string][3]float32{"Bot01": {rows.Steps[boss-1].X + mtYd, rows.Steps[boss-1].Y, rows.Steps[boss-1].Z}}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	return f, next, total
 }
@@ -7831,7 +7831,7 @@ func TestRaidWalkDefaultUntilStillStopsAtABoss(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 10184, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 10184, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	f.allDeadFromHires()
 	code := f.run(context.Background())
@@ -7874,7 +7874,7 @@ func TestRaidWalkEarlyBossWakeOtherLegStillStops(t *testing.T) {
 	}
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: entryBoss, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: entryBoss, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	code := f.run(context.Background())
 	if code != exitRaidWalkIncident {
@@ -7904,7 +7904,7 @@ func TestRaidWalkEarlyEngageUntilAtTheBossStillStops(t *testing.T) {
 	}
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	code := f.run(context.Background())
 	if code != exitRaidWalkIncident {
@@ -7928,7 +7928,7 @@ func TestRaidWalkEarlyEngageOtherBossStillStops(t *testing.T) {
 	}
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 11982, X: 1143.14, Y: -1016.66, Z: -185.75, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 11982, X: 1143.14, Y: -1016.66, Z: -185.75, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	code := f.run(context.Background())
 	if code != exitRaidWalkIncident {
@@ -7958,7 +7958,7 @@ func TestRaidWalkThekalEarlyEngageFirstAddLetsTheRunFightIt(t *testing.T) {
 	}
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 11348, X: -11703.2, Y: -1996.8, Z: 62.1, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 11348, X: -11703.2, Y: -1996.8, Z: 62.1, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -8058,7 +8058,7 @@ func TestRaidWalkBossNotFoundAfterKillSkips(t *testing.T) {
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		switch {
 		case n == 1:
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}} // the fight: this walk's attempt start
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}} // the fight: this walk's attempt start
 		case n == 2:
 			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0}} // the kill, seen alive first in this attempt
 		}
@@ -8102,11 +8102,11 @@ func TestRaidWalkBossNotFoundAfterPhaseKillSkips(t *testing.T) {
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		switch {
 		case n <= 1:
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		case n <= 2:
-			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 99, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 99, Target: world.GUID(1000)}}
 		case n <= 3:
-			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 0, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 0, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8144,7 +8144,7 @@ func TestRaidWalkBossNotFoundEvadeStillPauses(t *testing.T) {
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 20, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 20, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8192,7 +8192,7 @@ func TestRaidWalkBossNotFoundAfterWipeStillPauses(t *testing.T) {
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		switch {
 		case n == 1:
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}} // the fight: this walk's attempt start
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}} // the fight: this walk's attempt start
 		case n == 2:
 			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0}} // the kill, seen alive first in this attempt
 		}
@@ -8229,7 +8229,7 @@ func TestRaidWalkBossNotFoundSkipRefusedStillPauses(t *testing.T) {
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		switch {
 		case n == 1:
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}} // the fight: this walk's attempt start
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}} // the fight: this walk's attempt start
 		case n == 2:
 			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0}} // the kill, seen alive first in this attempt
 		}
@@ -8303,11 +8303,11 @@ func TestRaidWalkBossNotFoundAddCorpseStillPauses(t *testing.T) {
 		case n <= 1:
 			// The two guardians stand up together: 15068 is an add, and its corpses prove nothing.
 			return []tbm.HostileRec{
-				{GUID: 41, Entry: 15068, HPPct: 90, Target: packet.GUID(1000)},
-				{GUID: 42, Entry: 15068, HPPct: 80, Target: packet.GUID(1000)},
+				{GUID: 41, Entry: 15068, HPPct: 90, Target: world.GUID(1000)},
+				{GUID: 42, Entry: 15068, HPPct: 80, Target: world.GUID(1000)},
 			}
 		case n <= 2:
-			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 60, Target: world.GUID(1000)}}
 		case n <= 3:
 			return []tbm.HostileRec{{GUID: 41, Entry: 15068, HPPct: 0}}
 		}
@@ -8347,7 +8347,7 @@ func TestRaidWalkBossNotFoundToolkitCorpseSkips(t *testing.T) {
 		if n <= 1 {
 			// GUID 9 with the toolkit corpse's full unit guid: the frames saw this unit alive
 			// in this attempt, and the toolkit reports his corpse, 15 s apart.
-			return []tbm.HostileRec{{GUID: 0xF130002F56000009, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 0xF130002F56000009, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8391,7 +8391,7 @@ func TestRaidWalkBossNotFoundToolkitCorpseNeedsConfirmation(t *testing.T) {
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 0xF130002F56000009, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 0xF130002F56000009, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8435,7 +8435,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarGoFails(t *testing.T) {
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8475,7 +8475,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarStatusFails(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8519,7 +8519,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarVisibleOffFails(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8698,7 +8698,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarRereadRefusedLatches(t *testing.T
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8754,7 +8754,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarRereadCleanMovesOnce(t *testing.T
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8850,7 +8850,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarMovesAndRereads(t *testing.T) {
 		if !seenGo {
 			return ttResult{}, errors.New("rpc error -32003: eluna: point_far: point is 258 yd from you (max 150): .go xyz there first")
 		}
-		return ttReplyOf(t, map[string]any{"units": []map[string]any{{"g": packet.GUID(9).String(), "e": 14599, "dead": true, "d": 12.5, "hp": 0}}}), nil
+		return ttReplyOf(t, map[string]any{"units": []map[string]any{{"g": world.GUID(9).String(), "e": 14599, "dead": true, "d": 12.5, "hp": 0}}}), nil
 	}
 	f.agent.mu.Lock()
 	f.agent.startQueue = zgThekalPauseQueue(boss, total)
@@ -8862,7 +8862,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarMovesAndRereads(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8950,11 +8950,11 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarWaitsForLanding(t *testing.T) {
 			// Still standing far away: the read is refused, as the live toolkit is.
 			return ttResult{}, errors.New("rpc error -32003: eluna: point_far: point is 258 yd from you (max 150): .go xyz there first")
 		}
-		return ttReplyOf(t, map[string]any{"units": []map[string]any{{"g": packet.GUID(9).String(), "e": 14599, "dead": true, "d": 12.5, "hp": 0}}}), nil
+		return ttReplyOf(t, map[string]any{"units": []map[string]any{{"g": world.GUID(9).String(), "e": 14599, "dead": true, "d": 12.5, "hp": 0}}}), nil
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -8997,7 +8997,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarLandingNeverComes(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -9039,7 +9039,7 @@ func TestRaidWalkBossNotFoundToolkitFailureStillPauses(t *testing.T) {
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -9086,7 +9086,7 @@ func TestRaidWalkBossNotFoundToolkitTimeoutLatchesOnce(t *testing.T) {
 	f.agent.mu.Unlock()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		if n <= 1 {
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}}
 		}
 		return nil
 	}
@@ -9135,9 +9135,9 @@ func TestRaidWalkBossNotFoundLateEvidenceSkips(t *testing.T) {
 		frames++
 		switch {
 		case pauseFrame < 0 && frames <= 12:
-			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		case pauseFrame >= 0 && frames == pauseFrame+2:
-			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 99, Target: packet.GUID(1000)}} // reborn, alive first in this attempt
+			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 99, Target: world.GUID(1000)}} // reborn, alive first in this attempt
 		case pauseFrame >= 0 && frames > pauseFrame+3:
 			return []tbm.HostileRec{{GUID: 10, Entry: 14509, HPPct: 0}} // the kill, seen alive first in this attempt
 		}
@@ -9180,11 +9180,11 @@ func TestRaidWalkBossNotFoundRespawnedBossStillPauses(t *testing.T) {
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		switch {
 		case n <= 3:
-			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}} // this walk's attempt start
+			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}} // this walk's attempt start
 		case n <= 4:
 			return []tbm.HostileRec{{GUID: 9, Entry: 12118, HPPct: 0}} // the kill, seen alive first in this attempt
 		default:
-			return []tbm.HostileRec{{GUID: 10, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}} // the reset: the boss back alive
+			return []tbm.HostileRec{{GUID: 10, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}} // the reset: the boss back alive
 		}
 	}
 	code := f.run(context.Background())
@@ -9257,7 +9257,7 @@ const bossCorpseGUID = "0xF130002F56000009"
 // it returns the walk and the corpse guid's canonical key for the frame maps.
 func bossCorpseWalk(t *testing.T, corpse map[string]any) (*walk, string) {
 	t.Helper()
-	g, err := packet.ParseGUID(bossCorpseGUID)
+	g, err := world.ParseGUID(bossCorpseGUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9377,11 +9377,11 @@ func bossTestFrame(hostiles ...tbm.HostileRec) *tbm.ViewFrame {
 func TestBossAttemptCorpseFirstStartsNoAttempt(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
 	w := bossFrameWalk(t)
-	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 0, Target: packet.GUID(1000)}))
+	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 0, Target: world.GUID(1000)}))
 	if at := w.bossAttemptAt[12118]; !at.IsZero() {
 		t.Fatalf("bossAttemptAt = %v, want zero: a 0 %% row never starts the attempt", at)
 	}
-	if _, ok := w.bossAliveSeen[packet.GUID(9).String()]; ok {
+	if _, ok := w.bossAliveSeen[world.GUID(9).String()]; ok {
 		t.Fatalf("bossAliveSeen holds the corpse guid, want nothing: a corpse is no live sighting")
 	}
 	killAt := now.Add(16 * time.Second)
@@ -9399,14 +9399,14 @@ func TestBossAttemptEarlierSightingVoidsCorpse(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
 	w := bossFrameWalk(t)
 	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 100}))
-	if _, ok := w.bossAliveSeen[packet.GUID(9).String()]; !ok {
+	if _, ok := w.bossAliveSeen[world.GUID(9).String()]; !ok {
 		t.Fatalf("bossAliveSeen = %v, want the standing boss's sighting", w.bossAliveSeen)
 	}
 	if at := w.bossAttemptAt[12118]; !at.IsZero() {
 		t.Fatalf("bossAttemptAt = %v, want zero: a full hp row with no target starts nothing", at)
 	}
 	pullAt := now.Add(2 * time.Second)
-	w.trackFrame(pullAt, bossTestFrame(tbm.HostileRec{GUID: 10, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}))
+	w.trackFrame(pullAt, bossTestFrame(tbm.HostileRec{GUID: 10, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}))
 	if at := w.bossAttemptAt[12118]; !at.Equal(pullAt) {
 		t.Fatalf("bossAttemptAt = %v, want %v: the pull starts the attempt", at, pullAt)
 	}
@@ -9423,7 +9423,7 @@ func TestBossAttemptEarlierSightingVoidsCorpse(t *testing.T) {
 func TestBossAttemptLiveThenDeathKills(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
 	w := bossFrameWalk(t)
-	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}))
+	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}))
 	if at := w.bossAttemptAt[12118]; !at.Equal(now) {
 		t.Fatalf("bossAttemptAt = %v, want %v: the live engaged row starts the attempt", at, now)
 	}
@@ -9442,11 +9442,11 @@ func TestBossAttemptLiveThenDeathKills(t *testing.T) {
 func TestBossAttemptFakeDeathStillPauses(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
 	w := bossFrameWalk(t)
-	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 60, Target: packet.GUID(1000)}))
+	w.trackFrame(now, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 60, Target: world.GUID(1000)}))
 	deadAt := now.Add(20 * time.Second)
 	w.trackFrame(deadAt, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 0}))
 	raisedAt := deadAt.Add(5 * time.Second)
-	w.trackFrame(raisedAt, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 100, Target: packet.GUID(1000)}))
+	w.trackFrame(raisedAt, bossTestFrame(tbm.HostileRec{GUID: 9, Entry: 12118, HPPct: 100, Target: world.GUID(1000)}))
 	if at := w.bossAttemptAt[12118]; !at.Equal(now) {
 		t.Fatalf("bossAttemptAt = %v, want %v: the attempt started on the first live row", at, now)
 	}

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Buff is a spell the leader (a GM) puts on each companion with ".aura <id>" on the selected target.
@@ -112,7 +112,7 @@ func (d *Driver) memberView(m Member) (objects.Unit, bool) {
 
 // AuraTarget is one unit auras go on: its guid and the name the report and the core know it by.
 type AuraTarget struct {
-	GUID packet.GUID
+	GUID world.GUID
 	Name string
 }
 
@@ -533,7 +533,7 @@ func (d *Driver) topUpBuffs(ctx context.Context) error {
 }
 
 // rebuff gives a revived member all the buffs again (death strips them).
-func (d *Driver) rebuff(ctx context.Context, g packet.GUID) error {
+func (d *Driver) rebuff(ctx context.Context, g world.GUID) error {
 	if len(d.cfg.Buffs) == 0 {
 		return nil
 	}

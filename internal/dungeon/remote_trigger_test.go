@@ -12,6 +12,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The area_trigger step, wait_for unit, a leg's companions_loot and the boss's kill_first in remote mode (remote_trigger.go).
@@ -426,7 +427,7 @@ func TestAreaTriggerAlreadyDone(t *testing.T) {
 func TestWaitForUnitReadsTheAgentsStore(t *testing.T) {
 	g := newNearGame(t, 3)
 	g.agent = Point{-5, 0, 0}
-	me := objects.Unit{GUID: packet.GUID(0xF130000000001234), Type: "creature", Entry: 7271, X: 50, Y: 0, PosAgeMS: 100, Health: 100, MaxHealth: 100}
+	me := objects.Unit{GUID: world.GUID(0xF130000000001234), Type: "creature", Entry: 7271, X: 50, Y: 0, PosAgeMS: 100, Health: 100, MaxHealth: 100}
 	g.units = []objects.Unit{me}
 	flips := false
 	g.onTick = func(f *fakeRemote) {
@@ -955,7 +956,7 @@ func deadOffMapRun(t *testing.T, g interface {
 			died = true
 			fr.lead().Dead, fr.lead().HP = true, 0
 			fr.party[1].Dead, fr.party[1].HP = true, 0
-			fr.memberMap = map[packet.GUID]uint32{gHealer: 1}
+			fr.memberMap = map[world.GUID]uint32{gHealer: 1}
 		}
 	}
 	plan := remotePlan(Leg{Name: "a", To: Point{60, 0, 0}})
@@ -996,7 +997,7 @@ func TestRecoveryLeavesAGhostOutsideTheDungeonToRunBackWithoutAGM(t *testing.T) 
 				back = fr.now.Add(70 * time.Second) // longer than three revive orders (20 s apart)
 				fr.lead().Dead, fr.lead().HP = true, 0
 				fr.party[1].Dead, fr.party[1].HP = true, 0
-				fr.memberMap = map[packet.GUID]uint32{gHealer: 1}
+				fr.memberMap = map[world.GUID]uint32{gHealer: 1}
 			}
 			if died && !back.IsZero() && !fr.now.Before(back) && fr.party[1].Dead {
 				fr.party[1].Dead, fr.party[1].HP = false, fr.party[1].MaxHP
@@ -1076,7 +1077,7 @@ func TestRecoveryBringsALeadOutsideTheDungeonInFirst(t *testing.T) {
 		f.onTick = func(fr *fakeRemote) {
 			if !died && fr.lead().X > 5 {
 				died = true
-				fr.memberMap = map[packet.GUID]uint32{}
+				fr.memberMap = map[world.GUID]uint32{}
 				for _, i := range who {
 					fr.party[i].Dead, fr.party[i].HP = true, 0
 					fr.reviveStuck[fr.party[i].Name] = true
@@ -1119,7 +1120,7 @@ func TestRecoveryOfAGhostOutsideFailsAfterABoundedWaitWithoutAGM(t *testing.T) {
 			died, began = true, fr.now
 			fr.lead().Dead, fr.lead().HP = true, 0
 			fr.party[1].Dead, fr.party[1].HP = true, 0
-			fr.memberMap = map[packet.GUID]uint32{gHealer: 1}
+			fr.memberMap = map[world.GUID]uint32{gHealer: 1}
 		}
 	}
 	d := NewRemoteDriver(remotePlan(Leg{Name: "a", To: Point{60, 0, 0}}), g, DefaultConfig(), objOpts(), g.clock())
@@ -1137,7 +1138,7 @@ func graveLeg(n int) (Leg, []*fakeGrave) {
 	for i := 0; i < n; i++ {
 		at := Point{float32(30 + 10*i), 0, 0}
 		spawn := uint32(27000 + i)
-		guid := packet.GUID(uint64(packet.HighGameObject)<<48 | uint64(128403)<<24 | uint64(spawn))
+		guid := world.GUID(uint64(packet.HighGameObject)<<48 | uint64(128403)<<24 | uint64(spawn))
 		stand := Point{at.X - 3, 0, 0}
 		steps = append(steps, Step{LootObject: &LootObject{ObjectRef: ObjectRef{Entry: 128403, Near: &at, Range: 2, Spawn: spawn}, Stand: &stand}})
 		gs = append(gs, &fakeGrave{guid: guid, at: at, state: "ready"})
@@ -1148,7 +1149,7 @@ func graveLeg(n int) (Leg, []*fakeGrave) {
 
 func graveRun(t *testing.T, g *fakeCarrier, leg Leg, gs []*fakeGrave) (Report, error) {
 	t.Helper()
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}
@@ -1222,7 +1223,7 @@ func TestPartyAliveOutsideTheDungeonIsAWipeAndIsRecovered(t *testing.T) {
 	g.onTick = func(fr *fakeRemote) {
 		if !died && fr.lead().X > 5 {
 			died = true
-			fr.memberMap = map[packet.GUID]uint32{gTank: 1, gHealer: 1, gMage: 1} // all alive, on map 1
+			fr.memberMap = map[world.GUID]uint32{gTank: 1, gHealer: 1, gMage: 1} // all alive, on map 1
 		}
 	}
 	cfg := DefaultConfig()
@@ -1245,7 +1246,7 @@ func TestOneBotOutsideForAMomentIsNoWipe(t *testing.T) {
 	g.onTick = func(fr *fakeRemote) {
 		if back.IsZero() && fr.lead().X > 5 {
 			back = fr.now.Add(20 * time.Second)
-			fr.memberMap = map[packet.GUID]uint32{gHealer: 1, gMage: 1} // two outside: below the three that stop the leg
+			fr.memberMap = map[world.GUID]uint32{gHealer: 1, gMage: 1} // two outside: below the three that stop the leg
 		}
 		if !back.IsZero() && !fr.now.Before(back) {
 			fr.memberMap = nil
@@ -1298,7 +1299,7 @@ func TestHealerStragglerIsSummonedAtTheFirstGatherTimeout(t *testing.T) {
 			idx = 2
 		}
 		g.party[idx].X = -30
-		g.lagUntil = map[packet.GUID]time.Time{g.party[idx].GUID: g.now.Add(time.Hour)}
+		g.lagUntil = map[world.GUID]time.Time{g.party[idx].GUID: g.now.Add(time.Hour)}
 		plan := remotePlan(Leg{Name: "first", To: Point{0, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{40, 0, 0}}}}})
 		rep, err := nearRun(t, g, plan)
 		if err != nil || rep.State != "done" {
@@ -1343,7 +1344,7 @@ func TestRecoveryWaitsForRevivedBotsToRejoin(t *testing.T) {
 		g := newFakeRemote(t)
 		g.advance(time.Second)
 		g.party[1].X = 100 // Healy is far from the lead bot
-		g.lagUntil = map[packet.GUID]time.Time{gHealer: g.now.Add(lag + time.Second)}
+		g.lagUntil = map[world.GUID]time.Time{gHealer: g.now.Add(lag + time.Second)}
 		g.advance(time.Second) // the frame shows it
 		d := NewRemoteDriver(remotePlan(Leg{Name: "a", To: Point{10, 0, 0}}), g, DefaultConfig(), objOpts(), g.clock())
 		d.look()
@@ -1434,7 +1435,7 @@ func TestLeadAloneOutsideTheDungeonIsPartyDown(t *testing.T) {
 	g.onTick = func(fr *fakeRemote) {
 		if !died && fr.lead().X > 5 {
 			died = true
-			fr.memberMap = map[packet.GUID]uint32{gTank: 1}
+			fr.memberMap = map[world.GUID]uint32{gTank: 1}
 		}
 	}
 	cfg := DefaultConfig()
@@ -1499,7 +1500,7 @@ func TestRecoveryReleasesOnlyTheCorpseNearMobsAtOnce(t *testing.T) {
 	for _, i := range []int{1, 2} {
 		g.party[i].Dead, g.party[i].HP = true, 0
 	}
-	g.lagUntil = map[packet.GUID]time.Time{gHealer: g.now.Add(time.Hour), gMage: g.now.Add(time.Hour)} // the fake keeps followers on the lead bot otherwise
+	g.lagUntil = map[world.GUID]time.Time{gHealer: g.now.Add(time.Hour), gMage: g.now.Add(time.Hour)} // the fake keeps followers on the lead bot otherwise
 	g.advance(time.Second)
 	d := NewRemoteDriver(remotePlan(Leg{Name: "a", To: Point{10, 0, 0}}), g, DefaultConfig(), objOpts(), g.clock())
 	d.look()
@@ -1507,7 +1508,7 @@ func TestRecoveryReleasesOnlyTheCorpseNearMobsAtOnce(t *testing.T) {
 	if len(dead) != 2 {
 		t.Fatalf("dead %v", dead)
 	}
-	since := map[packet.GUID]time.Time{}
+	since := map[world.GUID]time.Time{}
 	if err := d.releaseLateDead(context.Background(), dead, since); err != nil {
 		t.Fatal(err)
 	}

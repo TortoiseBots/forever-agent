@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // wdRig is a watchdog on a clock the test moves, with the events and notes it produced.
@@ -298,25 +298,25 @@ func TestWatchdogProgressKinds(t *testing.T) {
 
 	// A fight: the first look takes the state; a kill and a mob's health at a new low (by 1 % or more) are progress, the same health is
 	// not, nor a mob that joins at full health.
-	const m1, m2 = packet.GUID(1), packet.GUID(2)
+	const m1, m2 = world.GUID(1), world.GUID(2)
 	r.w.fightBegin()
-	r.w.fightSignal(0, map[packet.GUID]int{m1: 100, m2: 100})
+	r.w.fightSignal(0, map[world.GUID]int{m1: 100, m2: 100})
 	r.adv(50)
-	r.w.fightSignal(0, map[packet.GUID]int{m1: 100, m2: 100})
+	r.w.fightSignal(0, map[world.GUID]int{m1: 100, m2: 100})
 	if got := r.w.report(); got.StalledForS != 90 {
 		t.Fatalf("%+v", got)
 	}
-	r.w.fightSignal(0, map[packet.GUID]int{m1: 90, m2: 100})
+	r.w.fightSignal(0, map[world.GUID]int{m1: 90, m2: 100})
 	if got := r.w.report(); got.LastProgress != "a fought mob's health fell to a new low" || got.StalledForS != 0 {
 		t.Fatalf("%+v", got)
 	}
 	r.adv(50)
-	r.w.fightSignal(1, map[packet.GUID]int{m2: 100})
+	r.w.fightSignal(1, map[world.GUID]int{m2: 100})
 	if got := r.w.report(); got.LastProgress != "kill" || got.StalledForS != 0 {
 		t.Fatalf("%+v", got)
 	}
 	r.adv(50)
-	r.w.fightSignal(1, map[packet.GUID]int{m2: 100, 3: 100}) // a mob joined: more health in the fight is no progress
+	r.w.fightSignal(1, map[world.GUID]int{m2: 100, 3: 100}) // a mob joined: more health in the fight is no progress
 	if got := r.w.report(); got.StalledForS != 50 {
 		t.Fatalf("%+v", got)
 	}
@@ -351,8 +351,8 @@ func TestWatchdogNilIsInert(t *testing.T) {
 	w.acked("x")
 	w.ordered("x")
 	w.fightBegin()
-	w.fightSignal(1, map[packet.GUID]int{1: 1})
-	w.mobHealth(map[packet.GUID]int{1: 1})
+	w.fightSignal(1, map[world.GUID]int{1: 1})
+	w.mobHealth(map[world.GUID]int{1: 1})
 	w.hold()()
 	w.enter("a", "b", nil)()
 	w.stop()
@@ -495,12 +495,12 @@ func TestWatchdogMovementAfterTheRecovery(t *testing.T) {
 func TestWatchdogFightHealthThatComesBackIsNoProgress(t *testing.T) {
 	r := newWDRig(t, WatchdogConfig{})
 	defer r.w.enter(wdFightPhase, "boss", func(context.Context) (string, error) { return "followed", nil })()
-	const boss, add = packet.GUID(7), packet.GUID(8)
+	const boss, add = world.GUID(7), world.GUID(8)
 	r.w.fightBegin()
 	start := r.now
 	var err error
 	for i := 0; i < 200 && err == nil; i++ {
-		hp := map[packet.GUID]int{boss: 100, add: 100}
+		hp := map[world.GUID]int{boss: 100, add: 100}
 		if i%4 >= 2 {
 			hp[boss] = 90
 		}
@@ -522,32 +522,32 @@ func TestWatchdogFightHealthThatComesBackIsNoProgress(t *testing.T) {
 	// A boss healed back by an add is no progress until it goes below its low; the add worn down is.
 	r = newWDRig(t, WatchdogConfig{})
 	r.w.fightBegin()
-	r.w.fightSignal(0, map[packet.GUID]int{boss: 50, add: 100})
+	r.w.fightSignal(0, map[world.GUID]int{boss: 50, add: 100})
 	r.adv(10)
-	r.w.fightSignal(0, map[packet.GUID]int{boss: 60, add: 100})
+	r.w.fightSignal(0, map[world.GUID]int{boss: 60, add: 100})
 	r.adv(10)
-	r.w.fightSignal(0, map[packet.GUID]int{boss: 55, add: 100})
+	r.w.fightSignal(0, map[world.GUID]int{boss: 55, add: 100})
 	if got := r.w.report(); got.StalledForS != 20 {
 		t.Fatalf("healed and worn back above the low: %+v", got)
 	}
-	r.w.fightSignal(0, map[packet.GUID]int{boss: 55, add: 99})
+	r.w.fightSignal(0, map[world.GUID]int{boss: 55, add: 99})
 	if got := r.w.report(); got.StalledForS != 0 {
 		t.Fatalf("the add lost 1 %%: %+v", got)
 	}
 	r.adv(10)
-	r.w.fightSignal(0, map[packet.GUID]int{boss: 49, add: 99})
+	r.w.fightSignal(0, map[world.GUID]int{boss: 49, add: 99})
 	if got := r.w.report(); got.StalledForS != 0 {
 		t.Fatalf("the boss below its low: %+v", got)
 	}
 	// A fight at a rest gate or on the way has no kill count: the same lows.
 	r.adv(10)
-	r.w.mobHealth(map[packet.GUID]int{boss: 60})
+	r.w.mobHealth(map[world.GUID]int{boss: 60})
 	r.adv(10)
-	r.w.mobHealth(map[packet.GUID]int{boss: 49})
+	r.w.mobHealth(map[world.GUID]int{boss: 49})
 	if got := r.w.report(); got.StalledForS != 20 {
 		t.Fatalf("%+v", got)
 	}
-	r.w.mobHealth(map[packet.GUID]int{boss: 48})
+	r.w.mobHealth(map[world.GUID]int{boss: 48})
 	if got := r.w.report(); got.StalledForS != 0 {
 		t.Fatalf("%+v", got)
 	}
@@ -563,7 +563,7 @@ func TestWatchdogSteadyWearNeverStalls(t *testing.T) {
 		if s%30 < 5 {
 			hp += 3 // healed for a moment
 		}
-		r.w.fightSignal(0, map[packet.GUID]int{7: min(hp, 100)})
+		r.w.fightSignal(0, map[world.GUID]int{7: min(hp, 100)})
 		if err := r.watch(); err != nil {
 			t.Fatalf("stalled at %d s: %v", s, err)
 		}

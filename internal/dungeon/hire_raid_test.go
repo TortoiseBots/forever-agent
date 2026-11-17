@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The raid hire flow (hire_raid.go): a raid plan runs raidHire against a fake
@@ -160,19 +160,19 @@ func (g *hireRaidFake) AgentName() string { return g.agentName }
 
 // Team is the commander's own faction (TeamSource): empty unless a test sets one.
 func (g *hireRaidFake) Team() string { return g.team }
-func (g *hireRaidFake) AgentGUID() packet.GUID {
-	return packet.GUID(0x20D)
+func (g *hireRaidFake) AgentGUID() world.GUID {
+	return world.GUID(0x20D)
 }
 func (g *hireRaidFake) Sees(string) bool { return true }
 func (g *hireRaidFake) GMVisible(_ context.Context, on bool) error {
 	g.log("visible %v", on)
 	return nil
 }
-func (g *hireRaidFake) UnbindInstances(_ context.Context, who string, _ packet.GUID) error {
+func (g *hireRaidFake) UnbindInstances(_ context.Context, who string, _ world.GUID) error {
 	g.t.Errorf("the raid hire step sent .instance unbind all on %s", who)
 	return nil
 }
-func (g *hireRaidFake) GroupUnbind(_ context.Context, who string, _ packet.GUID) (GroupUnbindResult, error) {
+func (g *hireRaidFake) GroupUnbind(_ context.Context, who string, _ world.GUID) (GroupUnbindResult, error) {
 	g.t.Errorf("the raid hire step sent .instance groupunbind all on %s", who)
 	return GroupNoAnswer, nil
 }
@@ -181,7 +181,7 @@ func (g *hireRaidFake) Members() []HireMember {
 	var out []HireMember
 	for _, h := range g.hires {
 		if g.arrived(h) {
-			out = append(out, HireMember{Name: h.name, GUID: packet.GUID(0x900 + len(h.name) + int(h.name[0])), Level: h.level, Class: h.class, InGroup: true, Online: true, MaxHP: 2100})
+			out = append(out, HireMember{Name: h.name, GUID: world.GUID(0x900 + len(h.name) + int(h.name[0])), Level: h.level, Class: h.class, InGroup: true, Online: true, MaxHP: 2100})
 		}
 	}
 	return out
@@ -199,7 +199,7 @@ func (g *hireRaidFake) Player(name string) (HireMember, bool) {
 	return HireMember{}, false
 }
 
-func (g *hireRaidFake) PetOf(packet.GUID) (string, bool) { return "", false }
+func (g *hireRaidFake) PetOf(world.GUID) (string, bool) { return "", false }
 
 func (g *hireRaidFake) ConvertRaid(context.Context) error { return nil }
 

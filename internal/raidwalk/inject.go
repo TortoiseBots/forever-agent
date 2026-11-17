@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Fault injection's pure side (spec raid-walk-addons 1.2-1.5): the injector never sleeps, never calls a clock and
@@ -199,7 +199,7 @@ type RosterNames struct {
 
 // BotObs is one hire's merged state (newest frame naming it, <= 10 s old).
 type BotObs struct {
-	GUID     packet.GUID
+	GUID     world.GUID
 	Pos      dungeon.Point
 	Dead     bool
 	InCombat bool
@@ -208,11 +208,11 @@ type BotObs struct {
 
 // HostileObs is one hostile's merged state (seen in the last 4 s).
 type HostileObs struct {
-	GUID     packet.GUID
+	GUID     world.GUID
 	Entry    uint32
 	Pos      dungeon.Point
 	HPPct    int
-	Target   packet.GUID
+	Target   world.GUID
 	Kind     string
 	Reaction string
 	Flags    string
@@ -237,7 +237,7 @@ type InjectObs struct {
 type InjectAction struct {
 	Kind ActionKind
 	Line string
-	GUID packet.GUID
+	GUID world.GUID
 	Verb string
 	Args []string
 	For  time.Duration
@@ -256,7 +256,7 @@ type InjectCtx struct {
 	SelectedHire string
 	Fault        InjectKind
 	Victim       string
-	Candidate    packet.GUID
+	Candidate    world.GUID
 }
 
 // InjectLine is one line the injector had the command send (for inject.json).
@@ -322,11 +322,11 @@ type injectFault struct {
 	leg        string
 	victim     string
 	q          dungeon.Point
-	mt         packet.GUID
-	attackers  map[packet.GUID]bool
-	candidate  packet.GUID
+	mt         world.GUID
+	attackers  map[world.GUID]bool
+	candidate  world.GUID
 	candEntry  uint32
-	pack       map[packet.GUID]bool
+	pack       map[world.GUID]bool
 	puller     string
 	measured   map[string]any
 	notes      []string
@@ -459,8 +459,8 @@ func newFault(sp InjectSpec) *injectFault {
 		spec:       sp,
 		state:      injectPending,
 		measured:   map[string]any{},
-		attackers:  map[packet.GUID]bool{},
-		pack:       map[packet.GUID]bool{},
+		attackers:  map[world.GUID]bool{},
+		pack:       map[world.GUID]bool{},
 		prevDead:   map[string]bool{},
 		lastReason: "the watch ended before the fault could fire",
 	}
@@ -573,8 +573,8 @@ func injectFightOn(o InjectObs) bool {
 	return false
 }
 
-func injectParty(o InjectObs) map[packet.GUID]bool {
-	p := make(map[packet.GUID]bool, len(o.Bots))
+func injectParty(o InjectObs) map[world.GUID]bool {
+	p := make(map[world.GUID]bool, len(o.Bots))
 	for _, b := range o.Bots {
 		if b.GUID != 0 {
 			p[b.GUID] = true
@@ -730,7 +730,7 @@ func (in *Injector) noFightFor(o InjectObs, d time.Duration) bool {
 	return !in.fightOn && !in.noFightSince.IsZero() && o.Now.Sub(in.noFightSince) >= d
 }
 
-func (in *Injector) hostileTargets(o InjectObs, g packet.GUID) bool {
+func (in *Injector) hostileTargets(o InjectObs, g world.GUID) bool {
 	for _, h := range o.Hostiles {
 		if h.Target == g {
 			return true
@@ -823,7 +823,7 @@ func (in *Injector) placement(f *injectFault, o InjectObs) (dungeon.Point, bool)
 }
 
 // addPackCandidate is the nearest idle hostile in add-pack's band (spec 1.3); 0 when none.
-func (in *Injector) addPackCandidate(f *injectFault, o InjectObs) (packet.GUID, uint32) {
+func (in *Injector) addPackCandidate(f *injectFault, o InjectObs) (world.GUID, uint32) {
 	lead, ok := o.Bots[o.Lead]
 	if !ok {
 		return 0, 0
@@ -835,7 +835,7 @@ func (in *Injector) addPackCandidate(f *injectFault, o InjectObs) (packet.GUID, 
 			targeted = append(targeted, h.Pos)
 		}
 	}
-	var best packet.GUID
+	var best world.GUID
 	var bestEntry uint32
 	bestD := math.Inf(1)
 	for _, h := range o.Hostiles {
@@ -872,8 +872,8 @@ func (in *Injector) addPackCandidate(f *injectFault, o InjectObs) (packet.GUID, 
 	return best, bestEntry
 }
 
-func (in *Injector) extraPack(o InjectObs, c packet.GUID) map[packet.GUID]bool {
-	pack := map[packet.GUID]bool{c: true}
+func (in *Injector) extraPack(o InjectObs, c world.GUID) map[world.GUID]bool {
+	pack := map[world.GUID]bool{c: true}
 	var at dungeon.Point
 	for _, h := range o.Hostiles {
 		if h.GUID == c {
@@ -1361,7 +1361,7 @@ func (in *Injector) trackPauses(f *injectFault, o InjectObs) {
 	}
 }
 
-func (in *Injector) packEngaged(o InjectObs, pack map[packet.GUID]bool) bool {
+func (in *Injector) packEngaged(o InjectObs, pack map[world.GUID]bool) bool {
 	party := injectParty(o)
 	for _, h := range o.Hostiles {
 		if pack[h.GUID] && h.Target != 0 && party[h.Target] {
@@ -1371,7 +1371,7 @@ func (in *Injector) packEngaged(o InjectObs, pack map[packet.GUID]bool) bool {
 	return false
 }
 
-func (in *Injector) packDeadAt(o InjectObs, pack map[packet.GUID]bool) bool {
+func (in *Injector) packDeadAt(o InjectObs, pack map[world.GUID]bool) bool {
 	for g := range pack {
 		for _, h := range o.Hostiles {
 			if h.GUID == g && h.HPPct > 0 {
@@ -1382,7 +1382,7 @@ func (in *Injector) packDeadAt(o InjectObs, pack map[packet.GUID]bool) bool {
 	return true
 }
 
-func (in *Injector) pickupTank(o InjectObs, mt packet.GUID, attackers map[packet.GUID]bool) string {
+func (in *Injector) pickupTank(o InjectObs, mt world.GUID, attackers map[world.GUID]bool) string {
 	tanks := in.tankGUIDs(o)
 	delete(tanks, mt)
 	for _, h := range o.Hostiles {
@@ -1393,7 +1393,7 @@ func (in *Injector) pickupTank(o InjectObs, mt packet.GUID, attackers map[packet
 	return ""
 }
 
-func (in *Injector) attackersTargetNonTank(o InjectObs, mt packet.GUID, attackers map[packet.GUID]bool) bool {
+func (in *Injector) attackersTargetNonTank(o InjectObs, mt world.GUID, attackers map[world.GUID]bool) bool {
 	tanks := in.tankGUIDs(o)
 	party := injectParty(o)
 	for _, h := range o.Hostiles {
@@ -1407,8 +1407,8 @@ func (in *Injector) attackersTargetNonTank(o InjectObs, mt packet.GUID, attacker
 	return false
 }
 
-func (in *Injector) tankGUIDs(o InjectObs) map[packet.GUID]bool {
-	tanks := map[packet.GUID]bool{}
+func (in *Injector) tankGUIDs(o InjectObs) map[world.GUID]bool {
+	tanks := map[world.GUID]bool{}
 	for _, n := range append(append([]string{}, in.names.Tanks...), in.names.OT...) {
 		if b, ok := o.Bots[n]; ok {
 			tanks[b.GUID] = true
@@ -1417,8 +1417,8 @@ func (in *Injector) tankGUIDs(o InjectObs) map[packet.GUID]bool {
 	return tanks
 }
 
-func (in *Injector) attackersAt(o InjectObs, mt packet.GUID, have map[packet.GUID]bool) map[packet.GUID]bool {
-	out := map[packet.GUID]bool{}
+func (in *Injector) attackersAt(o InjectObs, mt world.GUID, have map[world.GUID]bool) map[world.GUID]bool {
+	out := map[world.GUID]bool{}
 	for g := range have {
 		out[g] = true
 	}
@@ -1430,7 +1430,7 @@ func (in *Injector) attackersAt(o InjectObs, mt packet.GUID, have map[packet.GUI
 	return out
 }
 
-func setAttackers(f *injectFault, o InjectObs, attackers map[packet.GUID]bool) {
+func setAttackers(f *injectFault, o InjectObs, attackers map[world.GUID]bool) {
 	names := make([]string, 0, len(attackers))
 	for g := range attackers {
 		names = append(names, g.String())
@@ -1447,7 +1447,7 @@ func injectDead(o InjectObs) map[string]bool {
 	return out
 }
 
-func injectName(o InjectObs, g packet.GUID) string {
+func injectName(o InjectObs, g world.GUID) string {
 	for n, b := range o.Bots {
 		if b.GUID == g {
 			return n
@@ -1456,7 +1456,7 @@ func injectName(o InjectObs, g packet.GUID) string {
 	return ""
 }
 
-func entryPos(o InjectObs, g packet.GUID) dungeon.Point {
+func entryPos(o InjectObs, g world.GUID) dungeon.Point {
 	for _, h := range o.Hostiles {
 		if h.GUID == g {
 			return h.Pos
@@ -1500,7 +1500,7 @@ func (in *Injector) emitGM(f *injectFault, line string, at time.Time) {
 	in.emit(f, InjectAction{Kind: ActGM, Line: line}, at)
 }
 
-func (in *Injector) emitSelect(f *injectFault, g packet.GUID, at time.Time) {
+func (in *Injector) emitSelect(f *injectFault, g world.GUID, at time.Time) {
 	in.emit(f, InjectAction{Kind: ActSelect, GUID: g}, at)
 }
 

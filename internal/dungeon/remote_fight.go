@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Pulls and fights in remote mode. The hostiles come from the TBM:VIEW feed (what the bots see, not what the agent sees), the
@@ -23,7 +23,7 @@ func (d *RemoteDriver) doPull(ctx context.Context, a Action) error {
 	if skip, err := d.gatedLook(ctx, a); skip || err != nil {
 		return err
 	}
-	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: a.Radius, passed: map[packet.GUID]bool{},
+	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: a.Radius, passed: map[world.GUID]bool{},
 		patrol: a.Patrol, patrolSt: &patrolState{}}
 	// A group whose members in view are all stealthed cannot be pulled (the bots never attack what they cannot see); with none in
 	// view the plan's flag decides.
@@ -155,7 +155,7 @@ func (d *RemoteDriver) optCC() []CCRule { return d.opt.CC }
 // known dead.
 func (d *RemoteDriver) engage(ctx context.Context, label string, sp fightSpec) error {
 	if sp.passed == nil {
-		sp.passed = map[packet.GUID]bool{}
+		sp.passed = map[world.GUID]bool{}
 	}
 	kills, retargets := 0, 0
 	cl := newClearing()
@@ -337,12 +337,12 @@ func entriesList(es []uint32) string {
 // searchBoss waits up to Config.BossSearch for a boss that is not at his spot (a patrolling boss: Theka, Velratha) to walk back into
 // range. found says a living unit of the step's entries is in range now (the pick goes on); dead says the run knows him dead (bossDead:
 // a kill, the ledger, or his corpse in view). Neither: he did not come within the wait, and the step fails. Absence is never a kill.
-func (d *RemoteDriver) searchBoss(ctx context.Context, label string, sp fightSpec) (found packet.GUID, dead bool, err error) {
+func (d *RemoteDriver) searchBoss(ctx context.Context, label string, sp fightSpec) (found world.GUID, dead bool, err error) {
 	wait := d.cfg.BossSearch
 	began := d.clk.Now()
 	d.rep.note(fmt.Sprintf("%s: boss %s is not at his spot; waiting up to %.0f s for him to walk back into range", label, entriesList(sp.pick), wait.Seconds()))
 	d.remote(func(r *RemoteReport) { r.BossSearches++ })
-	noted := map[packet.GUID]bool{}
+	noted := map[world.GUID]bool{}
 	for d.clk.Now().Sub(began) < wait {
 		if err := d.tick(ctx, d.cfg.Poll); err != nil {
 			return 0, false, err
@@ -443,7 +443,7 @@ var bossWalkHops = 60 // a variable for the tests
 // walkToBoss walks the lead bot to the boss unit guid along the checked way, hop by hop: before each hop the way is checked again (bossWay,
 // from where the lead bot stands now), so a path that changed, a pack that came into it or a boss that went away stops the walk. It
 // returns why it stopped, or "" when the lead bot is within PullRange of him (the pull follows, with the pull's own checks).
-func (d *RemoteDriver) walkToBoss(ctx context.Context, label string, sp fightSpec, guid packet.GUID) (string, error) {
+func (d *RemoteDriver) walkToBoss(ctx context.Context, label string, sp fightSpec, guid world.GUID) (string, error) {
 	// Success is only the lead bot within PullRange of the boss's current position, seen at the top of a hop or after the last one. Every
 	// other way out (no stand point, an unknown lead position, a stand point reached short of the range, the hops used up) is a failure
 	// with its reason: the step must not hand the boss to the normal pull without the per-hop checks.
@@ -770,8 +770,8 @@ func (d *RemoteDriver) fight(ctx context.Context, t tbm.HostileRec, sp fightSpec
 	d.ptPulled()
 	began := d.clk.Now()
 	limit := sp.limit
-	tracked := map[packet.GUID]bool{t.GUID: true}
-	last := map[packet.GUID]tbm.HostileRec{t.GUID: t} // each tracked mob as the feed last showed it: where a kill happened
+	tracked := map[world.GUID]bool{t.GUID: true}
+	last := map[world.GUID]tbm.HostileRec{t.GUID: t} // each tracked mob as the feed last showed it: where a kill happened
 	for _, h := range d.candidates(sp, sp.track) {
 		if dist3(hostilePoint(h), hostilePoint(t)) <= float64(d.groupRadius(sp)) {
 			tracked[h.GUID], last[h.GUID] = true, h
@@ -780,12 +780,12 @@ func (d *RemoteDriver) fight(ctx context.Context, t tbm.HostileRec, sp fightSpec
 	engaged := false
 	lastCombat := began
 	var lastAssist time.Time
-	killed := map[packet.GUID]bool{}
+	killed := map[world.GUID]bool{}
 	// A mob is counted gone only when it is absent from two frames in a row, and never from a frame the module cut short (Truncated:
 	// records were dropped to fit, so its absence says nothing). A mob counts as killed only when the feed showed it fighting (or
 	// hurt) before it went; a mob that vanishes without that is no kill, and a pull that ends with no kill and no fight drew none.
-	fought := map[packet.GUID]bool{}
-	absent := map[packet.GUID]int{}
+	fought := map[world.GUID]bool{}
+	absent := map[world.GUID]int{}
 	for g := range tracked {
 		fought[g] = false
 	}
@@ -1097,7 +1097,7 @@ func (d *RemoteDriver) threatAllows(h tbm.HostileRec) bool {
 
 // tankLike says whether a holder may be taken for the tank when none is named: when the party has a rage user (a warrior, a bear
 // druid) only a rage user can be; else any bot. Naming the tank (dungeon_run tank) is the reliable way.
-func (d *RemoteDriver) tankLike(g packet.GUID) bool {
+func (d *RemoteDriver) tankLike(g world.GUID) bool {
 	rage := false
 	for _, p := range d.fr.Party {
 		rage = rage || p.PowerType == 1
@@ -1106,7 +1106,7 @@ func (d *RemoteDriver) tankLike(g packet.GUID) bool {
 	return ok && (!rage || m.PowerType == 1)
 }
 
-func (d *RemoteDriver) setTank(g packet.GUID) {
+func (d *RemoteDriver) setTank(g world.GUID) {
 	d.tank = g
 	name := g.String()
 	if m, ok := d.fr.Member(g); ok {

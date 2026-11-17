@@ -15,10 +15,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ttReplyOf is a one-reply toolkit answer out of a body object.
@@ -2815,7 +2815,7 @@ func TestPlacedUntilNoneBossEngageFiveStepsBackDoesNotStop(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|zul_gurub|done|%d/%d|thekal|move|walk|plan done (0 left): the party stays where it stands", n.total, n.total)},
 	}
 	f.agent.hostilesFn = func(int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: 14599, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -3542,7 +3542,7 @@ func TestPlaceCombatCheckNamesTheEnemy(t *testing.T) {
 	f.agent.combatAllFn = func(int) bool { return true }
 	f.agent.hostilesFn = func(int) []tbm.HostileRec {
 		return []tbm.HostileRec{{GUID: 0xF130002C5800CAFA, Entry: 11352, X: -12228.3, Y: -1680.7, Z: 126.7,
-			HPPct: 90, Target: packet.GUID(1000)}}
+			HPPct: 90, Target: world.GUID(1000)}}
 	}
 	code := f.run(context.Background())
 	if code != exitRaidWalkFailed {
@@ -3561,7 +3561,7 @@ func TestPlaceViewSavesFrames(t *testing.T) {
 	f.agent.combatAllFn = func(int) bool { return true }
 	f.agent.hostilesFn = func(int) []tbm.HostileRec {
 		return []tbm.HostileRec{{GUID: 0xF130002C5800CAFA, Entry: 11352, X: -12228.3, Y: -1680.7, Z: 126.7,
-			HPPct: 90, Target: packet.GUID(1000)}}
+			HPPct: 90, Target: world.GUID(1000)}}
 	}
 	code := f.run(context.Background())
 	if code != exitRaidWalkFailed {

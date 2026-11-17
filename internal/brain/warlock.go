@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The warlock (issue #80 step 4d, preset affliction_warlock): a ranged damage dealer that fights with damage over time, drains and its
@@ -142,7 +142,7 @@ func coilOK(c *Ctx) bool {
 	return m != nil && healthPct(c) < warlockCoilPct
 }
 
-func mobOnMeGUID(c *Ctx) packet.GUID {
+func mobOnMeGUID(c *Ctx) world.GUID {
 	if m := ValMobOnMe.Get(c); m != nil {
 		return m.GUID
 	}

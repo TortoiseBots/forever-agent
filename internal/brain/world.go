@@ -9,7 +9,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Vec3 is a WoW position (x, y, z), as navmesh.Vec3.
@@ -69,7 +69,7 @@ func bearing(a, b Vec3) float64 { return float64(game.Facing(a[0], a[1], b[0], b
 // inside memory.mu.
 type memExt struct {
 	mu          sync.Mutex
-	los         map[packet.GUID]losEntry
+	los         map[world.GUID]losEntry
 	spot        spotMemo
 	interrupted map[interruptKey]time.Time
 	prevHealth  uint32
@@ -79,7 +79,7 @@ type memExt struct {
 }
 
 type interruptKey struct {
-	caster packet.GUID
+	caster world.GUID
 	spell  uint32
 }
 
@@ -140,7 +140,7 @@ func (c *Ctx) LineOfSight(u *objects.Unit) (clear, known bool) {
 	clear, known = s.LineClear(from, to)
 	e.mu.Lock()
 	if e.los == nil {
-		e.los = map[packet.GUID]losEntry{}
+		e.los = map[world.GUID]losEntry{}
 	}
 	ne := losEntry{at: c.Now, from: from, to: to, clear: clear, known: known}
 	if old, ok := e.los[u.GUID]; ok && old.blockedNow(c.Now, from, to) {
@@ -167,7 +167,7 @@ func markLOSBlocked(c *Ctx, u *objects.Unit) {
 	e := &c.mem.ext
 	e.mu.Lock()
 	if e.los == nil {
-		e.los = map[packet.GUID]losEntry{}
+		e.los = map[world.GUID]losEntry{}
 	}
 	le := e.los[u.GUID]
 	le.at, le.from, le.to, le.clear, le.known = c.Now, from, to, false, true
@@ -206,7 +206,7 @@ const (
 
 type spotMemo struct {
 	kind   string
-	target packet.GUID
+	target world.GUID
 	at     time.Time
 	from   Vec3
 	spot   Vec3
@@ -306,7 +306,7 @@ func spotSafeAway(c *Ctx, p Vec3, target *objects.Unit, keep, busy float64) bool
 
 // memoSpot runs a spot search at most every spotPosTTL (spotNegTTL after a miss) for a kind and target, and again at once when
 // the player has moved more than spotMoved yards since.
-func memoSpot(c *Ctx, kind string, target packet.GUID, find func() (Vec3, bool)) (Vec3, bool) {
+func memoSpot(c *Ctx, kind string, target world.GUID, find func() (Vec3, bool)) (Vec3, bool) {
 	e := &c.mem.ext
 	e.mu.Lock()
 	m := e.spot

@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // boundFrameMaxAge is how old the newest TBM:VIEW frame may be for its party to mark units bound: the module sends one
@@ -25,11 +25,11 @@ type unitRow struct {
 }
 
 // boundGUIDs is the party of the newest view frame, or nil when there is none fresh enough.
-func boundGUIDs(fr tbm.ViewFrame, ok bool, now time.Time) map[packet.GUID]bool {
+func boundGUIDs(fr tbm.ViewFrame, ok bool, now time.Time) map[world.GUID]bool {
 	if !ok || len(fr.Party) == 0 || (!fr.At.IsZero() && now.Sub(fr.At) > boundFrameMaxAge) {
 		return nil
 	}
-	out := make(map[packet.GUID]bool, len(fr.Party))
+	out := make(map[world.GUID]bool, len(fr.Party))
 	for _, p := range fr.Party {
 		if p.GUID != 0 {
 			out[p.GUID] = true
@@ -39,7 +39,7 @@ func boundGUIDs(fr tbm.ViewFrame, ok bool, now time.Time) map[packet.GUID]bool {
 }
 
 // unitRows marks the bound units; with onlyBound it keeps only those.
-func unitRows(us []objects.Unit, bound map[packet.GUID]bool, onlyBound bool) []unitRow {
+func unitRows(us []objects.Unit, bound map[world.GUID]bool, onlyBound bool) []unitRow {
 	out := make([]unitRow, 0, len(us))
 	for _, u := range us {
 		b := bound[u.GUID]

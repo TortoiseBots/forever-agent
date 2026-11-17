@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/trace"
 	"github.com/pjerra/forever-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The gahzrilla leg's machinery (PR A, TortoiseBots #984): an optional leg that needs an item, the give_items run option that puts the item in
@@ -24,7 +24,7 @@ const (
 	npcGahz  = 7273
 )
 
-var gongGUID = packet.GUID(0x1F1000000000AAB1)
+var gongGUID = world.GUID(0x1F1000000000AAB1)
 
 var malletRef = &ItemRef{Entry: itMallet, Name: "Mallet of Zul'Farrak"}
 
@@ -257,7 +257,7 @@ func (g *giveFake) BotLines(ctx context.Context, command string, wait time.Durat
 	return append(lines, "TBM:INV_END|"+f[1]+"|10|16"), true, nil
 }
 
-func (g *giveFake) GiveItem(_ context.Context, who string, guid packet.GUID, entry uint32) error {
+func (g *giveFake) GiveItem(_ context.Context, who string, guid world.GUID, entry uint32) error {
 	g.log("additem %s %d", who, entry)
 	g.gave = append(g.gave, fmt.Sprintf("%s %d %d", who, uint32(guid), entry))
 	if !g.loseGive {

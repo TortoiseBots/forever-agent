@@ -21,6 +21,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // reuseCapLedger fills a ledger to the warn threshold at now and returns its path.
@@ -109,7 +110,7 @@ func TestReuseInstanceRunsGMClear(t *testing.T) {
 	f.agent.entered = true
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
 	f.agent.unitsFn = func(int) []objects.Unit {
-		return gmClearView(f, pack, guids, func(packet.GUID) bool { return false })
+		return gmClearView(f, pack, guids, func(world.GUID) bool { return false })
 	}
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitOK {
@@ -314,7 +315,7 @@ func TestReuseGatherStopsAtOnceWhenTheBossIsEngaged(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(int) []tbm.HostileRec {
 		return []tbm.HostileRec{{GUID: 0xF130002C5800CAFA, Entry: boss, X: -12228.3, Y: -1680.7, Z: 126.7,
-			HPPct: 90, Target: packet.GUID(1000)}}
+			HPPct: 90, Target: world.GUID(1000)}}
 	}
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitRaidWalkPlaceFailed {
@@ -401,13 +402,13 @@ func TestReuseInstanceBindResumeReadsTheQuietBeforeSummoning(t *testing.T) {
 	if d := placeDist2(-11806, -1693, point.X, point.Y); d > placeReachYd {
 		t.Fatalf("the patrol stands %.1f yd from the start point (%v %v %v), outside the %d yd reach", d, point.X, point.Y, point.Z, placeReachYd)
 	}
-	patrol := packet.GUID(uint64(packet.HighUnit)<<48 | 11359<<24 | 0x11F382)
+	patrol := world.GUID(uint64(packet.HighUnit)<<48 | 11359<<24 | 0x11F382)
 	// The first quiet read sees the patrol; the retry's read is clean.
 	p.quiet = func(n int) bool { return n >= 2 }
 	p.quietNear = []any{map[string]any{"g": patrol.String(), "e": 11359, "n": "Hakkari Bloodkeeper",
 		"p": []float32{-11806, -1693, 52.1}, "w": 1.0, "d": 2.4}}
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(packet.GUID) bool { return false }) }
+	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
 	until, err := raidwalk.PlaceStop(rows, []string{"until", "boss"}, start)
 	if err != nil {
 		t.Fatal(err)
@@ -477,13 +478,13 @@ func TestReuseInstancePlaceReuseReadsTheQuietBeforeSummoning(t *testing.T) {
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	f.agent.entered = true // the raid is alive in map 309: the placement is the reused copy
 	_, plan := placePlanRows(t)
-	patrol := packet.GUID(uint64(packet.HighUnit)<<48 | 11359<<24 | 0x11F382)
+	patrol := world.GUID(uint64(packet.HighUnit)<<48 | 11359<<24 | 0x11F382)
 	// The first quiet read sees the patrol; the retry's read is clean.
 	p.quiet = func(n int) bool { return n >= 2 }
 	p.quietNear = []any{map[string]any{"g": patrol.String(), "e": 11359, "n": "Hakkari Bloodkeeper",
 		"p": []float32{plan.Point.X + 2, plan.Point.Y, plan.Point.Z}, "w": 1.0, "d": 2.0}}
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(packet.GUID) bool { return false }) }
+	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())

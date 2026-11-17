@@ -15,7 +15,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -119,16 +119,16 @@ type PlayerFollower struct {
 	pending   string // a lead switch SetLead asked for; the loop picks it up at the next tick
 	runCtx    context.Context
 	failRun   int
-	holdGUID  packet.GUID
+	holdGUID  world.GUID
 	holdNote  bool
 	holdAt    time.Time
-	ahead     bool        // the ahead note is out (until the state is near again)
-	brain     bool        // the brain note is out
-	leash     bool        // the leash note is out
-	hitting   bool        // the melee swing is on
-	assistID  packet.GUID // the mob the swing is on (no re-target while the row keeps it as the target)
-	assistOn  bool        // the player's own row was seen with assistID as its target since the swing began
-	waitBack  bool        // after recovery: waiting until the lead is in view again
+	ahead     bool       // the ahead note is out (until the state is near again)
+	brain     bool       // the brain note is out
+	leash     bool       // the leash note is out
+	hitting   bool       // the melee swing is on
+	assistID  world.GUID // the mob the swing is on (no re-target while the row keeps it as the target)
+	assistOn  bool       // the player's own row was seen with assistID as its target since the swing began
+	waitBack  bool       // after recovery: waiting until the lead is in view again
 	zoneAt    time.Time
 	zoneN     int
 	zoneNote  bool
@@ -684,7 +684,7 @@ func (f *PlayerFollower) frontHold(dist float64) {
 // partyCombat reports whether the party is in a fight.
 func (f *PlayerFollower) partyCombat(lead string) bool {
 	selfGUID := f.g.Self().GUID
-	byGUID := map[packet.GUID]bool{selfGUID: true}
+	byGUID := map[world.GUID]bool{selfGUID: true}
 	byName := map[string]bool{}
 	for _, m := range f.g.Party() {
 		byGUID[m.GUID] = true

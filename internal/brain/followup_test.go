@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Follow-ups of the step 3b review (#80).
@@ -146,7 +146,7 @@ func TestEmergencyDuringAWalkCancelsItAndActsInTheSameTick(t *testing.T) {
 
 func TestInterruptDuringAWalkCancelsIt(t *testing.T) {
 	r, _ := runToTankMage(t)
-	cast := objects.Cast{SpellID: spLesserHeal, Target: packet.GUID(100), EndsInMS: ms(2000)}
+	cast := objects.Cast{SpellID: spLesserHeal, Target: world.GUID(100), EndsInMS: ms(2000)}
 	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &cast })
 	d := r.tick(200 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" {

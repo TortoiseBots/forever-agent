@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // A neighbouring pack with the same entry joins: counted, because the plan
 // pack is owned by spawn guid and position, not by creature entry.
 func TestPullPackMembersCountsSameEntryNeighbour(t *testing.T) {
 	row := PackRow{HasRow: true, CX: 0, CY: 0, Radius: 15}
-	seed := packet.GUID(0xF130001)
-	pos := map[packet.GUID][3]float32{
+	seed := world.GUID(0xF130001)
+	pos := map[world.GUID][3]float32{
 		seed:      {0, 0, 0},   // pulled unit
 		0xF130002: {5, 0, 0},   // pack mate within the radius: owned
 		0xF130101: {100, 0, 0}, // neighbour with the same entry, far off: a joiner
@@ -30,8 +30,8 @@ func TestPullPackMembersCountsSameEntryNeighbour(t *testing.T) {
 // pack mates within the row's radius are owned.
 func TestPullPackMembersOwnsPackMates(t *testing.T) {
 	row := PackRow{HasRow: true, CX: 10, CY: 0, Radius: 15}
-	seed := packet.GUID(0xF130001)
-	pos := map[packet.GUID][3]float32{
+	seed := world.GUID(0xF130001)
+	pos := map[world.GUID][3]float32{
 		seed:      {10, 0, 0},
 		0xF130002: {14, 0, 0},
 		0xF130003: {6, 0, 0},
@@ -51,8 +51,8 @@ func TestPullPackMembersOwnsPackMates(t *testing.T) {
 // radius row looked up from far away.
 func TestPullPackMembersCapsRowAtRadiusPlusSlack(t *testing.T) {
 	row := PackRow{HasRow: true, CX: 0, CY: 0, Radius: 10}
-	seed := packet.GUID(0xF130001)
-	pos := map[packet.GUID][3]float32{
+	seed := world.GUID(0xF130001)
+	pos := map[world.GUID][3]float32{
 		seed:      {100, 0, 0},
 		0xF130002: {30, 0, 0}, // past row + 15 of the centroid: a neighbour
 		0xF130003: {96, 0, 0}, // 4 yd from the seed but outside row + 15 of the centroid
@@ -65,8 +65,8 @@ func TestPullPackMembersCapsRowAtRadiusPlusSlack(t *testing.T) {
 // No row in range: the pack is the seed's aggro-together mates seen in the
 // first frame within 15 yd (3D).
 func TestSeedMatesOwnsMatesWithin15Yd(t *testing.T) {
-	seed := packet.GUID(0xF130001)
-	pos := map[packet.GUID][3]float32{
+	seed := world.GUID(0xF130001)
+	pos := map[world.GUID][3]float32{
 		seed:      {0, 0, 0},
 		0xF130002: {10, 0, 0},
 		0xF130003: {0, 10, 9},
@@ -83,7 +83,7 @@ func TestSeedMatesOwnsMatesWithin15Yd(t *testing.T) {
 
 // The run.log line names the pull step, so a reader ties the count to its pull.
 func TestPullJoinersLine(t *testing.T) {
-	guids := []packet.GUID{0xF130102, 0xF130101}
+	guids := []world.GUID{0xF130102, 0xF130101}
 	if got, want := PullJoinersLine(5, guids), "step 5: joiners 2 (0x000000000F130101 0x000000000F130102)"; got != want {
 		t.Fatalf("line %q, want %q", got, want)
 	}

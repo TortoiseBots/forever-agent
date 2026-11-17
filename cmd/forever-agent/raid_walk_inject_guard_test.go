@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // injectGMCount counts the gm lines with the prefix.
@@ -30,7 +30,7 @@ func (f *fixture) injectGMCount(prefix string) int {
 }
 
 // injectTargetCount counts the target RPCs for g.
-func (f *fixture) injectTargetCount(g packet.GUID) int {
+func (f *fixture) injectTargetCount(g world.GUID) int {
 	n := 0
 	for _, got := range f.targetGUIDs() {
 		if got == g {
@@ -59,7 +59,7 @@ func TestRaidWalkInjectKillMTNeedsIdentity(t *testing.T) {
 		f.injFight()
 		f.injectRun("pull", 20)
 		f.agent.mu.Lock()
-		f.agent.pinfoGUID = packet.GUID(1001) // Bot02, 1 yd from the MT: coordinates cannot tell them apart
+		f.agent.pinfoGUID = world.GUID(1001) // Bot02, 1 yd from the MT: coordinates cannot tell them apart
 		f.agent.mu.Unlock()
 		f.opts.injects = []string{"kill-mt"}
 		if code := f.run(context.Background()); code != exitOK {
@@ -74,7 +74,7 @@ func TestRaidWalkInjectKillMTNeedsIdentity(t *testing.T) {
 		if gps, pinfo := f.gmIndex(".gps"), f.gmIndex(".pinfo"); gps >= 0 && gps > pinfo {
 			t.Fatalf(".pinfo came before .gps: %v", f.agent.gmLines())
 		}
-		if got := f.injectTargetCount(packet.GUID(1000)); got != 1 {
+		if got := f.injectTargetCount(world.GUID(1000)); got != 1 {
 			t.Fatalf("%d MT targets, want 1 (an identity mismatch is not retried)", got)
 		}
 		sum := f.summary()
@@ -92,7 +92,7 @@ func TestRaidWalkInjectKillMTNeedsIdentity(t *testing.T) {
 		f.agent.mu.Lock()
 		f.agent.lagTargets = true
 		f.agent.pinfoLagTargets = true
-		f.agent.selGUID = packet.GUID(1001) // the previous selection, 1 yd from the MT
+		f.agent.selGUID = world.GUID(1001) // the previous selection, 1 yd from the MT
 		f.agent.mu.Unlock()
 		f.opts.injects = []string{"kill-mt"}
 		if code := f.run(context.Background()); code != exitOK {
@@ -116,7 +116,7 @@ func TestRaidWalkInjectFreezeNeedsIdentity(t *testing.T) {
 	f.setupInject() // Bot01..Bot30 one yard apart: a coordinate match cannot name its unit
 	f.defaultRun("onyxias_lair")
 	f.agent.mu.Lock()
-	f.agent.pinfoGUID = packet.GUID(0x4D2)
+	f.agent.pinfoGUID = world.GUID(0x4D2)
 	f.agent.pinfoName = "Stranger"
 	f.agent.mu.Unlock()
 	f.opts.injects = []string{"runaway"}
@@ -279,7 +279,7 @@ func TestRaidWalkInjectCleanupRetries(t *testing.T) {
 			if line == ".freeze "+victim {
 				// The release's selection now names an untracked nearby player: `.unfreeze` must not go out.
 				f.agent.mu.Lock()
-				f.agent.pinfoGUID = packet.GUID(0x4D2)
+				f.agent.pinfoGUID = world.GUID(0x4D2)
 				f.agent.pinfoName = "Stranger"
 				f.agent.mu.Unlock()
 			}

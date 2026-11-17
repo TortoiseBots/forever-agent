@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -24,8 +24,8 @@ const (
 )
 
 var (
-	chestGUID    = packet.GUID(0x1F1000000000AAA1)
-	keystoneGUID = packet.GUID(0x1F1000000000AAA2)
+	chestGUID    = world.GUID(0x1F1000000000AAA1)
+	keystoneGUID = world.GUID(0x1F1000000000AAA2)
 )
 
 // fakeCarrier is a fakeRemote that also gives the carrier orders: it answers `cmd open|loot|use|lootmethod` like the module would
@@ -43,15 +43,15 @@ type fakeCarrier struct {
 	recipe    func(bot string) string // after a `use`: what happened to the bags ("" nothing)
 	invErr    bool
 	cut       map[string]bool
-	noMute    map[string]bool            // bots that refuse `behavior loot off`
-	graves    map[packet.GUID]*fakeGrave // exact spawns the module answers `cmd state <guid>` for and opens by GUID
+	noMute    map[string]bool           // bots that refuse `behavior loot off`
+	graves    map[world.GUID]*fakeGrave // exact spawns the module answers `cmd state <guid>` for and opens by GUID
 	onGrave   func(g *fakeCarrier, gv *fakeGrave)
 	noUnmute  map[string]int // bots that refuse the next n `behavior loot on` orders after they were turned off (-1: all)
 }
 
 // fakeGrave is a chest of an exact spawn: state "ready" until it is opened, "active" after; gone: despawned.
 type fakeGrave struct {
-	guid  packet.GUID
+	guid  world.GUID
 	at    Point
 	state string
 	gone  bool
@@ -133,7 +133,7 @@ func (g *fakeCarrier) Order(ctx context.Context, command string) (tbm.OrderResul
 			r.State = &tbm.GOState{State: "ready"}
 			return r, nil
 		}
-		id, _ := packet.ParseGUID(f[2])
+		id, _ := world.ParseGUID(f[2])
 		gv := g.graves[id]
 		if gv == nil || gv.gone {
 			return errOrder(command, "not-found"), nil
@@ -144,7 +144,7 @@ func (g *fakeCarrier) Order(ctx context.Context, command string) (tbm.OrderResul
 	case "open":
 		bot := f[3]
 		g.advance(5 * time.Second)
-		if id, err := packet.ParseGUID(f[2]); err == nil && g.graves[id] != nil {
+		if id, err := world.ParseGUID(f[2]); err == nil && g.graves[id] != nil {
 			gv := g.graves[id]
 			if gv.gone || gv.state != "ready" {
 				return errOrder(command, "not-found"), nil
@@ -619,7 +619,7 @@ func TestCarrierSealInViewIsChecked(t *testing.T) {
 	g := carrierGame(t)
 	g.gobjs = []objects.GameObject{
 		{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"},
-		{GUID: packet.GUID(0x1F1000000000AAA3), Entry: goSeal, X: 20, Y: 50, Z: 0, Distance: 50, State: "ready"},
+		{GUID: world.GUID(0x1F1000000000AAA3), Entry: goSeal, X: 20, Y: 50, Z: 0, Distance: 50, State: "ready"},
 	}
 	g.bag("Magey")[itStaff] = 1
 	opened := false
@@ -894,4 +894,4 @@ func TestCarrierSealSettleStartsAgainAfterAWipe(t *testing.T) {
 	}
 }
 
-var _ = packet.GUID(0)
+var _ = world.GUID(0)

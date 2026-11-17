@@ -11,6 +11,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func (r *agentRig) system(lines ...string) {
@@ -32,7 +33,7 @@ func (r *agentRig) addonBody(text string) []byte {
 func (r *agentRig) groupWith(names ...string) {
 	var ms []game.GroupMember
 	for i, n := range names {
-		ms = append(ms, game.GroupMember{Name: n, GUID: packet.GUID(0x30 + i), Status: game.MemberOnline})
+		ms = append(ms, game.GroupMember{Name: n, GUID: world.GUID(0x30 + i), Status: game.MemberOnline})
 	}
 	r.srv.Send(opcode.SMSGGroupList, gametest.GroupList(0x2A, ms...))
 	r.expect(opcode.CMSGRequestPartyMemberStats)

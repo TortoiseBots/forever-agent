@@ -24,9 +24,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // exitPatrolRecordStopped is exit 22: the recording stopped for safety
@@ -409,7 +409,7 @@ func patrolRecordLoop(ctx context.Context, client *slotClient, env patrolRecordE
 	if total < 1 {
 		total = 1
 	}
-	tracked := map[packet.GUID]bool{}
+	tracked := map[world.GUID]bool{}
 	var samples []patrols.Sample
 	for i := range total {
 		var st session.StatusInfo

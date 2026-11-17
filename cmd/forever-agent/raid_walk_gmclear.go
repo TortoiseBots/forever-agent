@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
@@ -170,7 +170,7 @@ func (w *walk) gmClearUnits(ctx context.Context) ([]objects.Unit, error) {
 }
 
 // gmClearDead says whether the unit's frames show it dead. A unit the client no longer holds is not confirmed dead.
-func (w *walk) gmClearDead(ctx context.Context, g packet.GUID) bool {
+func (w *walk) gmClearDead(ctx context.Context, g world.GUID) bool {
 	var u objects.Unit
 	if err := w.agent.Call(ctx, "unit", map[string]string{"guid": g.String()}, &u, 10*time.Second); err != nil {
 		return false
@@ -230,11 +230,11 @@ func appendSkipEntries(skips, entries []uint32) []uint32 {
 
 // gmClearMember is what the walk knows about one expected pack member while it clears the pack.
 type gmClearMember struct {
-	guid      packet.GUID // the unit's world guid once a read showed it (0: never seen)
-	dead      bool        // the frames showed it dead, or this walk's own clear despawned it
-	tries     int         // kill lines sent
-	gaveUp    bool        // it survived gmClearTries lines: no more are sent
-	despawned bool        // the corridor clear or the quiet's extra round removed it before the tool ran
+	guid      world.GUID // the unit's world guid once a read showed it (0: never seen)
+	dead      bool       // the frames showed it dead, or this walk's own clear despawned it
+	tries     int        // kill lines sent
+	gaveUp    bool       // it survived gmClearTries lines: no more are sent
+	despawned bool       // the corridor clear or the quiet's extra round removed it before the tool ran
 }
 
 // gmClearAllSettled says every expected member of a pack has nothing left for this clear: its death is confirmed, or its

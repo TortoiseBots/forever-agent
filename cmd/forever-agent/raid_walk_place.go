@@ -17,10 +17,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -561,7 +561,7 @@ func (w *walk) placeUnits(ctx context.Context, r, x, y, z float32) ([]ttUnit, bo
 // no list leaves the set empty, and --gm-clear behaves as before.
 func (w *walk) placeRecordRemoved(body ttBody) {
 	for _, m := range body.list("removed") {
-		g, err := packet.ParseGUID(strOf(m, "g"))
+		g, err := world.ParseGUID(strOf(m, "g"))
 		if err != nil {
 			continue
 		}
@@ -1636,7 +1636,7 @@ func (w *walk) placeEnemy(now time.Time) string {
 	var out []string
 	for _, f := range foes {
 		low := uint32(0)
-		if g, err := packet.ParseGUID(f.guid); err == nil {
+		if g, err := world.ParseGUID(f.guid); err == nil {
 			low = uint32(uint64(g) & 0xFFFFFF)
 		}
 		key := fmt.Sprintf("%d/%d", f.state.entry, low)
@@ -2041,7 +2041,7 @@ func (w *walk) placeKillBlockers(ctx context.Context) bool {
 		if u.GUID == "" {
 			continue
 		}
-		g, err := packet.ParseGUID(u.GUID)
+		g, err := world.ParseGUID(u.GUID)
 		if err != nil {
 			w.note("place: the retreat's blocker %d has no readable guid (%q): not killed", u.Entry, u.GUID)
 			continue

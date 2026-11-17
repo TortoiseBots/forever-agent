@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The GM move of the enter phase (remote_portalgm.go): the portal is on map 0 at 300 0 0 and the bots start 300 yd away; the first Ragefire
@@ -42,7 +42,7 @@ func newPortalFake(t *testing.T, script ...tbm.OrderResult) *portalFake {
 
 // lagFollowers keeps the bots behind (the fake's followers otherwise stay with the lead bot wherever it is put).
 func (g *portalFake) lagFollowers() {
-	g.lagUntil = map[packet.GUID]time.Time{}
+	g.lagUntil = map[world.GUID]time.Time{}
 	for _, p := range g.party[1:] {
 		g.lagUntil[p.GUID] = g.now.Add(24 * time.Hour)
 	}

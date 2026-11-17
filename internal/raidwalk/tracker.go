@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The end reasons of a run (spec 3.4).
@@ -121,7 +121,7 @@ type Tracker struct {
 
 	hires    map[string]bool // names the walk hired
 	expected int             // hire count when hires is nil: the plan's raid size - 1
-	guidName map[packet.GUID]string
+	guidName map[world.GUID]string
 	state    map[string]botState
 	lastNow  time.Time
 
@@ -161,7 +161,7 @@ type Tracker struct {
 // plan's raid size - 1 as the hire count and waits until that many bots have been seen.
 func NewTracker(plan *dungeon.Plan, hires []string) *Tracker {
 	t := &Tracker{
-		guidName:    map[packet.GUID]string{},
+		guidName:    map[world.GUID]string{},
 		state:       map[string]botState{},
 		stepOpen:    -1,
 		pauseOpen:   -1,
@@ -310,7 +310,7 @@ func (t *Tracker) checkBoss(f tbm.ViewFrame) {
 	if t.bossFired {
 		return
 	}
-	party := make(map[packet.GUID]bool, len(f.Party))
+	party := make(map[world.GUID]bool, len(f.Party))
 	for _, p := range f.Party {
 		party[p.GUID] = true
 	}

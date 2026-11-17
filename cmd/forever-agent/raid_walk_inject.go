@@ -32,10 +32,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func init() { newWalkInjector = newRaidInjector }
@@ -348,7 +348,7 @@ func (r *raidInjector) selectUnit(ctx context.Context, a raidwalk.InjectAction) 
 
 // knownPos is where the selected unit is known to stand: the commander's own status position, or the hire's newest
 // frame position.
-func (r *raidInjector) knownPos(g packet.GUID, self bool, st session.StatusInfo) (dungeon.Point, bool) {
+func (r *raidInjector) knownPos(g world.GUID, self bool, st session.StatusInfo) (dungeon.Point, bool) {
 	if self {
 		return dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, true
 	}
@@ -361,7 +361,7 @@ func (r *raidInjector) knownPos(g packet.GUID, self bool, st session.StatusInfo)
 }
 
 // hireName is the hired name with that GUID ("" when the GUID is not a hire).
-func (r *raidInjector) hireName(g packet.GUID) string {
+func (r *raidInjector) hireName(g world.GUID) string {
 	for _, n := range r.w.hireList() {
 		if b, ok := r.w.botAt[n]; ok && b.guid == g {
 			return n
@@ -569,12 +569,12 @@ func (r *raidInjector) observe(now time.Time, notes []string, wipe bool) raidwal
 		if now.Sub(h.at) > injectHostileFresh {
 			continue
 		}
-		g, err := packet.ParseGUID(key)
+		g, err := world.ParseGUID(key)
 		if err != nil {
 			continue
 		}
 		o.Hostiles = append(o.Hostiles, raidwalk.HostileObs{GUID: g, Entry: h.entry, Pos: dungeon.Point{X: h.x, Y: h.y, Z: h.z},
-			HPPct: h.hppct, Target: packet.GUID(h.target), Kind: h.kind, Reaction: h.reaction, Flags: h.flags, At: h.at})
+			HPPct: h.hppct, Target: world.GUID(h.target), Kind: h.kind, Reaction: h.reaction, Flags: h.flags, At: h.at})
 	}
 	return o
 }

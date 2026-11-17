@@ -13,20 +13,20 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // zgWalk25BossGUID is the unit guid the Zul'Gurub walk 25 test2 r1 frames carried (frames.jsonl): the spawn's
 // guid, whose entry reads 14599 (High Priest Thekal) at first and 14509 after his phase change. A script that
 // changes a creature's entry (core UpdateEntry) keeps the guid, and the guid still carries the spawn's entry.
-const zgWalk25BossGUID = packet.GUID(0xF13000390700C09E)
+const zgWalk25BossGUID = world.GUID(0xF13000390700C09E)
 
 // zgWalk25AddGUIDs are the Zulian Guardian guids of the same dump: 0xF130003ADC... carries entry 15068, the pair
 // the encounter summons together (boss_thekal.cpp:41/:413), never the boss reborn.
-var zgWalk25AddGUIDs = []packet.GUID{0xF130003ADC3D0D34, 0xF130003ADC3D0D35}
+var zgWalk25AddGUIDs = []world.GUID{0xF130003ADC3D0D34, 0xF130003ADC3D0D35}
 
 // zgStageFrames keys the frames of a Thekal replay on the run status the same tick read: the events hook of the
 // fake runs before the view, so the frames answer for the line that just arrived.
@@ -88,13 +88,13 @@ func TestRaidWalkThekalWalk25R1BossKill(t *testing.T) {
 		}
 		switch {
 		case seen["live"] == 1:
-			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 100, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 100, Target: world.GUID(1000)}}
 		case seen["live"] == 2:
 			// The guid changes entry while the two 15068 Zulian Guardians stand up (22:49:19-22:49:45 of the dump).
 			return []tbm.HostileRec{
-				{GUID: zgWalk25BossGUID, Entry: 14509, HPPct: 6, Target: packet.GUID(1000)},
-				{GUID: zgWalk25AddGUIDs[0], Entry: 15068, HPPct: 90, Target: packet.GUID(1000)},
-				{GUID: zgWalk25AddGUIDs[1], Entry: 15068, HPPct: 80, Target: packet.GUID(1000)},
+				{GUID: zgWalk25BossGUID, Entry: 14509, HPPct: 6, Target: world.GUID(1000)},
+				{GUID: zgWalk25AddGUIDs[0], Entry: 15068, HPPct: 90, Target: world.GUID(1000)},
+				{GUID: zgWalk25AddGUIDs[1], Entry: 15068, HPPct: 80, Target: world.GUID(1000)},
 			}
 		}
 		return nil
@@ -194,13 +194,13 @@ func TestRaidWalkBossGUIDIsBossUnit(t *testing.T) {
 		}
 		switch {
 		case seen["live"] == 1:
-			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 60, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 60, Target: world.GUID(1000)}}
 		case seen["live"] <= 4:
 			// The boss's guid reads 14509 while another unit of the same entry stands: 14509 is an add entry by
 			// the pair rule then, and the boss's guid must still outrank it (bossKilled).
 			return []tbm.HostileRec{
-				{GUID: zgWalk25BossGUID, Entry: 14509, HPPct: 6, Target: packet.GUID(1000)},
-				{GUID: zgWalk25AddGUIDs[0], Entry: 14509, HPPct: 6, Target: packet.GUID(1000)},
+				{GUID: zgWalk25BossGUID, Entry: 14509, HPPct: 6, Target: world.GUID(1000)},
+				{GUID: zgWalk25AddGUIDs[0], Entry: 14509, HPPct: 6, Target: world.GUID(1000)},
 			}
 		}
 		return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14509, HPPct: 0}}
@@ -253,12 +253,12 @@ func TestRaidWalkGuardianDeathIsNoKill(t *testing.T) {
 		}
 		switch {
 		case seen["live"] == 1:
-			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 100, Target: packet.GUID(1000)}}
+			return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 100, Target: world.GUID(1000)}}
 		case seen["live"] <= 4:
 			// The pair the encounter summons together: two LIVE 15068 rows at once are an add, never the boss.
 			return []tbm.HostileRec{
-				{GUID: zgWalk25AddGUIDs[0], Entry: 15068, HPPct: 90, Target: packet.GUID(1000)},
-				{GUID: zgWalk25AddGUIDs[1], Entry: 15068, HPPct: 80, Target: packet.GUID(1000)},
+				{GUID: zgWalk25AddGUIDs[0], Entry: 15068, HPPct: 90, Target: world.GUID(1000)},
+				{GUID: zgWalk25AddGUIDs[1], Entry: 15068, HPPct: 80, Target: world.GUID(1000)},
 			}
 		case seen["live"] <= 7:
 			return []tbm.HostileRec{{GUID: zgWalk25AddGUIDs[0], Entry: 15068, HPPct: 0}}
@@ -302,7 +302,7 @@ func TestRaidWalkBossKillNotKilled(t *testing.T) {
 	}
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		// Hurt: the boss latch fires with no party frame to read a target from (the hires are gone).
-		return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 90, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: 14599, HPPct: 90, Target: world.GUID(1000)}}
 	}
 	f.agent.mu.Lock()
 	f.agent.startQueue = []queuedEvent{
@@ -498,7 +498,7 @@ func TestBossFormsWipeResetCountsOnlyTheRetry(t *testing.T) {
 		target uint64
 	}
 	bossFrames := func(fr frame) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: fr.entry, HPPct: fr.hppct, Target: packet.GUID(fr.target)}}
+		return []tbm.HostileRec{{GUID: zgWalk25BossGUID, Entry: fr.entry, HPPct: fr.hppct, Target: world.GUID(fr.target)}}
 	}
 
 	// The wipe-resume path: the wipe lands on the boss step before the run engaged him, the revive and the rest

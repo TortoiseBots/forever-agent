@@ -5,22 +5,22 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type useItemParams struct {
-	ItemEntry uint32      `json:"item_entry,omitempty"`
-	Bag       *uint8      `json:"bag,omitempty"`
-	Slot      *uint8      `json:"slot,omitempty"`
-	Target    packet.GUID `json:"target,omitempty"`
+	ItemEntry uint32     `json:"item_entry,omitempty"`
+	Bag       *uint8     `json:"bag,omitempty"`
+	Slot      *uint8     `json:"slot,omitempty"`
+	Target    world.GUID `json:"target,omitempty"`
 }
 
 type lootParams struct {
-	GUID   packet.GUID `json:"guid,omitempty"`
-	Name   string      `json:"name,omitempty"`
-	WaitMS int         `json:"wait_ms,omitempty"`
+	GUID   world.GUID `json:"guid,omitempty"`
+	Name   string     `json:"name,omitempty"`
+	WaitMS int        `json:"wait_ms,omitempty"`
 }
 
 type lootTakeParams struct {
@@ -31,10 +31,10 @@ type lootTakeParams struct {
 }
 
 type openObjectParams struct {
-	GUID    packet.GUID `json:"guid"`
-	SpellID uint32      `json:"spell_id,omitempty"` // the Opening spell; 6477 when omitted
-	Take    bool        `json:"take,omitempty"`     // take everything and close the window
-	WaitMS  int         `json:"wait_ms,omitempty"`  // for the cast and the window; 15 s when omitted
+	GUID    world.GUID `json:"guid"`
+	SpellID uint32     `json:"spell_id,omitempty"` // the Opening spell; 6477 when omitted
+	Take    bool       `json:"take,omitempty"`     // take everything and close the window
+	WaitMS  int        `json:"wait_ms,omitempty"`  // for the cast and the window; 15 s when omitted
 }
 
 type waitParams struct {

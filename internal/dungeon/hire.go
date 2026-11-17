@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The hired party of the prepare step (prepare.party "hire"; owner rule 2026-10-14: every commander group is five HIRED bots at the
@@ -183,7 +183,7 @@ func (h *HireSpec) Validate() error {
 // HireMember is a player the agent knows by name: a member of its own group (the hires, before the bind) or a player in its view.
 type HireMember struct {
 	Name    string
-	GUID    packet.GUID
+	GUID    world.GUID
 	Level   int
 	Class   string // "warrior", "priest", ... ; "" while the unit is not in the agent's view
 	InGroup bool   // a member of the agent's own group
@@ -215,7 +215,7 @@ type HireGame interface {
 	// Player looks a player up by name among the group and the units in view.
 	Player(name string) (HireMember, bool)
 	// PetOf says whether the player has a pet out (a hunter's or warlock's), by its name.
-	PetOf(guid packet.GUID) (string, bool)
+	PetOf(guid world.GUID) (string, bool)
 	// BotBurst sends a plain `.bot` line whose answer is a run of lines (tbm.Commander.Burst): from the first line begin accepts until the
 	// lines stop coming for quiet.
 	BotBurst(ctx context.Context, command string, wait, quiet time.Duration, begin func(line string) bool) (lines []string, began bool, err error)

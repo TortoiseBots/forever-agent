@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ---- plan: the batch checks of the loader ----
@@ -146,7 +146,7 @@ func runBatches(t *testing.T, g *fakeCarrier, leg Leg, gs []*fakeGrave, o Remote
 
 func runBatchesCfg(t *testing.T, g *fakeCarrier, leg Leg, gs []*fakeGrave, o RemoteOptions, mod func(*Config), wipeAt ...int) batchRunOut {
 	t.Helper()
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}
@@ -402,7 +402,7 @@ func TestGravesRampCountsTheLegsEarlierWipes(t *testing.T) {
 	leg, gs := batchGraves(9, 3, func(i int) string { return "g1" })
 	opt := objOpts()
 	opt.GravesRamp = &GravesRamp{}
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	cfg := DefaultConfig()
 	cfg.RecoverWipe = true
 	d := NewRemoteDriver(remotePlan(leg), g, cfg, opt, g.clock())
@@ -546,7 +546,7 @@ func TestAoEIsBackOnBeforeTheUnbindWhateverEndsTheRun(t *testing.T) {
 	t.Run("the run is cancelled", func(t *testing.T) {
 		g, leg, gs := setup()
 		ctx, cancel := context.WithCancel(context.Background())
-		g.graves = map[packet.GUID]*fakeGrave{}
+		g.graves = map[world.GUID]*fakeGrave{}
 		for _, gv := range gs {
 			g.graves[gv.guid] = gv
 		}
@@ -559,7 +559,7 @@ func TestAoEIsBackOnBeforeTheUnbindWhateverEndsTheRun(t *testing.T) {
 	})
 	t.Run("a panic", func(t *testing.T) {
 		g, leg, gs := setup()
-		g.graves = map[packet.GUID]*fakeGrave{}
+		g.graves = map[world.GUID]*fakeGrave{}
 		for _, gv := range gs {
 			g.graves[gv.guid] = gv
 		}
@@ -573,7 +573,7 @@ func TestAoEIsBackOnBeforeTheUnbindWhateverEndsTheRun(t *testing.T) {
 	})
 	t.Run("a wipe nobody recovers", func(t *testing.T) {
 		g, leg, gs := setup()
-		g.graves = map[packet.GUID]*fakeGrave{}
+		g.graves = map[world.GUID]*fakeGrave{}
 		for _, gv := range gs {
 			g.graves[gv.guid] = gv
 		}
@@ -651,7 +651,7 @@ func TestIdleLeftoversAfterABatchAreSweptBeforeTheNextBatch(t *testing.T) {
 	g := carrierGame(t)
 	leg, gs := batchGraves(6, 3, func(i int) string { return fmt.Sprintf("g%d", i/3+1) })
 	leg.LeftoverEntries = []uint32{7286}
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}
@@ -747,11 +747,11 @@ func TestLeftoverSelectorTakesOnlyHostileAttackableUnits(t *testing.T) {
 	g := carrierGame(t)
 	d := NewRemoteDriver(remotePlan(Leg{Name: "a", To: Point{0, 0, 0}}), g, DefaultConfig(), objOpts(), g.clock())
 	mk := func(n int, reaction, kind string) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0xF130001C76000000 + uint64(n)), Entry: 7286, X: 10, Y: 0, HPPct: 100, Reaction: reaction, Kind: kind, Flags: "-"}
+		return tbm.HostileRec{GUID: world.GUID(0xF130001C76000000 + uint64(n)), Entry: 7286, X: 10, Y: 0, HPPct: 100, Reaction: reaction, Kind: kind, Flags: "-"}
 	}
 	d.fr = tbm.ViewFrame{Hostiles: []tbm.HostileRec{mk(1, "f", ""), mk(2, "n", ""), mk(3, "h", "u"), mk(4, "", ""), mk(5, "h", ""), mk(6, "-", ""), mk(7, "h", "k"), mk(8, "h", "g")}}
 	var got []int
-	for _, h := range d.idleLeftovers([]uint32{7286}, Point{0, 0, 0}, map[packet.GUID]bool{}) {
+	for _, h := range d.idleLeftovers([]uint32{7286}, Point{0, 0, 0}, map[world.GUID]bool{}) {
 		got = append(got, int(h.GUID&0xFF))
 	}
 	slices.Sort(got)
@@ -762,7 +762,7 @@ func TestLeftoverSelectorTakesOnlyHostileAttackableUnits(t *testing.T) {
 	far, dead, evading := mk(9, "h", ""), mk(10, "h", ""), mk(11, "h", "")
 	far.X, dead.HPPct, evading.Flags = 80, 0, "e"
 	d.fr = tbm.ViewFrame{Hostiles: []tbm.HostileRec{far, dead, evading}}
-	if got := d.idleLeftovers([]uint32{7286}, Point{0, 0, 0}, map[packet.GUID]bool{}); len(got) != 0 {
+	if got := d.idleLeftovers([]uint32{7286}, Point{0, 0, 0}, map[world.GUID]bool{}); len(got) != 0 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -786,7 +786,7 @@ func TestWipeInALeftoverSweepKeepsTheBossSlot(t *testing.T) {
 		leg.LeftoverEntries = []uint32{7286}
 		g.addMob(7286, Point{40, 30, 0})
 		g.onTick = wipeOnFight
-		g.graves = map[packet.GUID]*fakeGrave{}
+		g.graves = map[world.GUID]*fakeGrave{}
 		for _, gv := range gs {
 			g.graves[gv.guid] = gv
 		}
@@ -876,7 +876,7 @@ func TestInvalidTargetWhileTheCarrierIsOutsideIsNotGone(t *testing.T) {
 	g := carrierGame(t)
 	leg, gs := batchGraves(3, 3, func(i int) string { return "g1" })
 	g.script = map[string][]tbm.OrderResult{"open": {errOrder("cmd open", "invalid-target"), errOrder("cmd open", "invalid-target")}}
-	g.memberMap = map[packet.GUID]uint32{gMage: 1} // Magey, the carrier, is on map 1
+	g.memberMap = map[world.GUID]uint32{gMage: 1} // Magey, the carrier, is on map 1
 	o := runBatches(t, g, leg, gs, objOpts())
 	if strings.Contains(notesOf(o.rep), "it is gone") {
 		t.Fatalf("%s", notesOf(o.rep))
@@ -890,7 +890,7 @@ func TestAgentFallbackThatTakesNothingIsNotAnOpen(t *testing.T) {
 	leg, gs := batchGraves(3, 3, func(i int) string { return "g1" })
 	g.script["open"] = openFails("failed", 2)
 	g.gobjs = []objects.GameObject{{GUID: gs[0].guid, Entry: 128403, X: gs[0].at.X, Y: gs[0].at.Y, Z: gs[0].at.Z, Distance: 10, State: "ready"}}
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}
@@ -975,7 +975,7 @@ func agentGravesRunCtx(t *testing.T, ctx context.Context, g *agentHandsGame, leg
 	plan := remotePlan(leg)
 	g.agentMap = plan.Map
 	g.agent = Point{-300, 0, 0}
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}
@@ -1066,7 +1066,7 @@ func TestAgentOpenIsRefusedWithoutGMOrInvisibility(t *testing.T) {
 	}
 	// A game without the agent's hands is refused too.
 	cg := carrierGame(t)
-	cg.graves = map[packet.GUID]*fakeGrave{}
+	cg.graves = map[world.GUID]*fakeGrave{}
 	o := objOpts()
 	o.GravesOpenBy = GravesOpenAgent
 	dd := NewRemoteDriver(remotePlan(leg), cg, DefaultConfig(), o, cg.clock())
@@ -1318,7 +1318,7 @@ func TestAgentHomeIsThePreBatchSpot(t *testing.T) {
 	plan := remotePlan(leg)
 	g.level = 3
 	g.agent, g.agentMap = Point{-300, 0, 0}, 1 // outside
-	g.graves = map[packet.GUID]*fakeGrave{}
+	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv
 	}

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The commander brings a far bot back to the lead bot with `cmd summon` (remote_rejoin.go).
@@ -34,7 +34,7 @@ func rejoinRun(t *testing.T, g *nearGame, plan *Plan, mod func(d *RemoteDriver))
 // farMage keeps Magey where it is (x yd on the x axis) until a summon lands: the fake's bots otherwise follow the lead bot at once.
 func farMage(g *fakeRemote, x float32) {
 	g.party[2].X = x
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(24 * time.Hour)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(24 * time.Hour)}
 }
 
 func rejoinPlan() *Plan { return remotePlan(Leg{Name: "a", To: Point{150, 0, 0}}) }
@@ -75,7 +75,7 @@ func TestRejoinBotOnAnotherMapIsSummoned(t *testing.T) {
 	// Magey is on the outer map from the second leg on (a bot that died there and came up at the graveyard).
 	g.onTick = func(f *fakeRemote) {
 		if f.lead().X >= 30 && f.memberMap == nil {
-			f.memberMap = map[packet.GUID]uint32{gMage: 99}
+			f.memberMap = map[world.GUID]uint32{gMage: 99}
 		}
 	}
 	rep, err := rejoinRun(t, g, remotePlan(Leg{Name: "a", To: Point{30, 0, 0}}, Leg{Name: "b", To: Point{150, 0, 0}}), nil)
@@ -223,7 +223,7 @@ func TestRejoinFarBotsNameOnlyTheRunsBots(t *testing.T) {
 	g := newFakeRemote(t)
 	d := NewRemoteDriver(rejoinPlan(), g, DefaultConfig(), opts(), g.clock())
 	rec := func(guid uint64, name string, x float32, mod func(*tbm.PartyRec)) tbm.PartyRec {
-		p := tbm.PartyRec{GUID: packet.GUID(guid), Name: name, X: x, HP: 10, MaxHP: 10, State: "n"}
+		p := tbm.PartyRec{GUID: world.GUID(guid), Name: name, X: x, HP: 10, MaxHP: 10, State: "n"}
 		if mod != nil {
 			mod(&p)
 		}

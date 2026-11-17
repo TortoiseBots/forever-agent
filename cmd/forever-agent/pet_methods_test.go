@@ -11,16 +11,16 @@ import (
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/objects/objtest"
 	"github.com/pjerra/forever-agent/internal/opcode"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
-	rigPet    = packet.GUID(0xF140000000000011)
-	rigMob    = packet.GUID(0xF130000000000099)
+	rigPet    = world.GUID(0xF140000000000011)
+	rigMob    = world.GUID(0xF130000000000099)
 	rigGrowl  = 2649
-	rigPlayer = packet.GUID(0x2A)
+	rigPlayer = world.GUID(0x2A)
 )
 
 // callPet creates the pet and tells the player it is theirs, with a bar of Growl (autocast on).

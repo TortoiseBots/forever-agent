@@ -15,10 +15,11 @@ import (
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // selfBlock is the agent's own create block (guid 0x2A) with the selection the server shows, as the core writes it.
-func selfBlock(target packet.GUID) []byte {
+func selfBlock(target world.GUID) []byte {
 	w := objtest.Header(1)
 	w.U8(uint8(objects.BlockCreate2)).PackedGUID(0x2A).U8(objects.TypePlayer)
 	objtest.Living(w, 0x20, game.MoveInfo{X: 1, Y: 2, Z: 3}, nil)
@@ -27,7 +28,7 @@ func selfBlock(target packet.GUID) []byte {
 	return w.Bytes()
 }
 
-func selfValues(target packet.GUID) []byte {
+func selfValues(target world.GUID) []byte {
 	w := objtest.Header(1).U8(uint8(objects.BlockValues)).PackedGUID(0x2A)
 	objtest.Values(w, 192, map[uint16]uint32{objects.UnitTarget: uint32(target), objects.UnitTarget + 1: uint32(target >> 32)})
 	return w.Bytes()
@@ -54,7 +55,7 @@ func TestGMLineWaitsForTheServerToShowTheSelection(t *testing.T) {
 	old := gmSelectConfirmWait
 	gmSelectConfirmWait = 300 * time.Millisecond
 	defer func() { gmSelectConfirmWait = old }()
-	const lead, stranger = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const lead, stranger = world.GUID(0x23A), world.GUID(0x4D2)
 
 	// The server shows a stranger as selected and never changes it.
 	r := newRig(t)
@@ -109,13 +110,13 @@ func TestGMLineWaitsForTheServerToShowTheSelection(t *testing.T) {
 // the interleaving, a line that goes out must find the server's selection on the unit it was meant for; the old way (a fresh, unconfirmed
 // selection sent right before the line) let it run on the stranger.
 func TestGMLineRunsOnTheConfirmedSelectionWhenSelectionAndChatAreOnSeparateThreads(t *testing.T) {
-	const lead, stranger = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const lead, stranger = world.GUID(0x23A), world.GUID(0x4D2)
 	r := newRig(t)
 	r.srv.Send(opcode.SMSGUpdateObject, selfBlock(0))
 	var mu sync.Mutex
-	var inForce packet.GUID
-	var ranOn []packet.GUID
-	mapThread := make(chan packet.GUID, 1000)
+	var inForce world.GUID
+	var ranOn []world.GUID
+	mapThread := make(chan world.GUID, 1000)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -209,7 +210,7 @@ func TestGMLineRunsOnTheConfirmedSelectionWhenSelectionAndChatAreOnSeparateThrea
 
 // When the selection changes after the server showed the confirmed one, nothing is sent and the unit is selected and confirmed again.
 func TestGMLineIsNotSentWhenTheConfirmedSelectionChanged(t *testing.T) {
-	const lead, stranger = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const lead, stranger = world.GUID(0x23A), world.GUID(0x4D2)
 	r := newRig(t)
 	ownSelection(t, r, lead)                                                  // the server shows the lead...
 	if _, err := r.s.Target(context.Background(), stranger, ""); err != nil { // ...but another request selected the stranger since
@@ -268,7 +269,7 @@ func selOps(r *agentRig, d time.Duration) []string {
 
 // The selection-log rule (session.SelectionConfirmed): an echo confirms a select only when it cannot answer an older one.
 func TestSelectionEchoMustAnswerTheSelectItConfirms(t *testing.T) {
-	const lead, stranger = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const lead, stranger = world.GUID(0x23A), world.GUID(0x4D2)
 
 	// A fresh echo: the server showed nothing selected, the lead is selected, the echo shows it.
 	r := newRig(t)
@@ -290,7 +291,7 @@ func TestSelectionEchoMustAnswerTheSelectItConfirms(t *testing.T) {
 	// pending, so it confirms nothing; the stranger's echo and then the lead's do.
 	r = newRig(t)
 	r.srv.Send(opcode.SMSGUpdateObject, selfBlock(0))
-	for _, g := range []packet.GUID{lead, stranger, lead} {
+	for _, g := range []world.GUID{lead, stranger, lead} {
 		if _, err := r.s.Target(context.Background(), g, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -318,7 +319,7 @@ func TestSelectionEchoMustAnswerTheSelectItConfirms(t *testing.T) {
 // The core sends no update when a selection does not change the target field: selecting the unit already confirmed is confirmed at once,
 // with no echo, and the line goes out without a wait.
 func TestGMLineOnTheUnchangedSelectionNeedsNoEcho(t *testing.T) {
-	const lead = packet.GUID(0x23A)
+	const lead = world.GUID(0x23A)
 	r := newRig(t)
 	ownSelection(t, r, lead)
 	g := remoteGame{c: &commanderService{cur: func() *session.Session { return r.s }}}
@@ -340,7 +341,7 @@ func TestGMLineOnTheUnchangedSelectionNeedsNoEcho(t *testing.T) {
 // stranger's select pending, an echo of a new select of the lead could not be told from the old one: selectConfirmed selects none first,
 // waits for that echo, then selects the lead, and the line runs on the lead.
 func TestGMLineSelectsNeutralFirstWhenAnEchoWouldBeAmbiguous(t *testing.T) {
-	const lead, stranger = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const lead, stranger = world.GUID(0x23A), world.GUID(0x4D2)
 	r := newRig(t)
 	ownSelection(t, r, lead)
 	if _, err := r.s.Target(context.Background(), stranger, ""); err != nil { // pending: the server has not shown it
@@ -382,7 +383,7 @@ func TestGMLineSelectsNeutralFirstWhenAnEchoWouldBeAmbiguous(t *testing.T) {
 
 // ownSelection makes g the confirmed selection the way a run does: the create block (which says nothing about the selection), the
 // session's own select of g and the server's echo of it. The select packet is read off the wire.
-func ownSelection(t *testing.T, r *agentRig, g packet.GUID) {
+func ownSelection(t *testing.T, r *agentRig, g world.GUID) {
 	t.Helper()
 	r.srv.Send(opcode.SMSGUpdateObject, selfBlock(0x777))
 	waitUntil(t, func() bool { _, ok := r.s.ServerSelection(); return ok })
@@ -415,8 +416,8 @@ func ownSelection(t *testing.T, r *agentRig, g packet.GUID) {
 // changed; rewrite changes the FIELD alone (combat, a stun), not the selection; a chat line is recorded with the selection in force.
 type coreLike struct {
 	r     *agentRig
-	sel   packet.GUID // what GM commands act on
-	field packet.GUID // UNIT_FIELD_TARGET as the client last saw it
+	sel   world.GUID // what GM commands act on
+	field world.GUID // UNIT_FIELD_TARGET as the client last saw it
 	ops   []string
 }
 
@@ -442,7 +443,7 @@ func (c *coreLike) run(t *testing.T, want int) {
 	}
 }
 
-func (c *coreLike) rewrite(t *testing.T, field packet.GUID) {
+func (c *coreLike) rewrite(t *testing.T, field world.GUID) {
 	t.Helper()
 	c.field = field
 	c.r.srv.Send(opcode.SMSGUpdateObject, selfValues(field))
@@ -458,7 +459,7 @@ func (c *coreLike) rewrite(t *testing.T, field packet.GUID) {
 // through a neutral selection (the agent itself: the field already shows 0, so a clear would get no echo), and the line runs with nothing
 // selected.
 func TestRespawnAfterAttackStopWaitsForTheRealClear(t *testing.T) {
-	const mob = packet.GUID(0xF130000000000077)
+	const mob = world.GUID(0xF130000000000077)
 	r := newRig(t)
 	ownSelection(t, r, mob)
 	c := &coreLike{r: r, sel: mob, field: mob}
@@ -483,7 +484,7 @@ func TestRespawnAfterAttackStopWaitsForTheRealClear(t *testing.T) {
 // for the lead must not go out on that; it selects the lead through a neutral selection (the field already shows the lead, so a select of
 // it would get no echo) and runs on the lead.
 func TestGMLineAfterAnAttackOnThePlayerSelectsItForReal(t *testing.T) {
-	const lead = packet.GUID(0x23A)
+	const lead = world.GUID(0x23A)
 	r := newRig(t)
 	ownSelection(t, r, 0)
 	c := &coreLike{r: r, sel: 0, field: 0}
@@ -518,7 +519,7 @@ func TestGMLineWaitsOutCombatWhenTheFieldIsRewrittenToThePendingUnit(t *testing.
 	old := session.SelectionCombatSettle
 	session.SelectionCombatSettle = 100 * time.Millisecond
 	defer func() { session.SelectionCombatSettle = old }()
-	const x, g = packet.GUID(0x23A), packet.GUID(0x4D2)
+	const x, g = world.GUID(0x23A), world.GUID(0x4D2)
 	r := newRig(t)
 	ownSelection(t, r, x)
 	if _, err := r.s.Target(context.Background(), g, ""); err != nil { // pending: the server has not applied it
@@ -559,7 +560,7 @@ func TestGMLineInCombatPastTheWaitSendsNothing(t *testing.T) {
 	old := gmSelectConfirmWait
 	gmSelectConfirmWait = 300 * time.Millisecond
 	defer func() { gmSelectConfirmWait = old }()
-	const lead = packet.GUID(0x23A)
+	const lead = world.GUID(0x23A)
 	r := newRig(t)
 	ownSelection(t, r, lead)
 	r.srv.Send(opcode.SMSGUpdateObject, selfFlags(objects.UnitFlagStunned))

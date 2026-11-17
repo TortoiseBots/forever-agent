@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Tank first, in group mode: the leader targets what the party attacks, so it targets what the tank holds best, leaves crowd-controlled
@@ -24,7 +24,7 @@ const (
 
 // MarkSource is the optional part of a Game that tells the group's raid icons by name (skull, moon, ...) and the unit each is on.
 type MarkSource interface {
-	RaidMarks() map[string]packet.GUID
+	RaidMarks() map[string]world.GUID
 }
 
 // TankFirstReport is the report's part for the tank-first rules of a group run (Report.TankFirst; a remote run has the same counters
@@ -55,12 +55,12 @@ func (t *groupTank) takeLooseAnswer(now time.Time) bool {
 
 // groupTank is the group driver's state for the rules.
 type groupTank struct {
-	focus      packet.GUID
-	heldAt     map[packet.GUID]time.Time
-	sent       map[packet.GUID]bool
-	ccNoted    map[packet.GUID]bool
-	addAt      map[packet.GUID]time.Time
-	addN       map[packet.GUID]int
+	focus      world.GUID
+	heldAt     map[world.GUID]time.Time
+	sent       map[world.GUID]bool
+	ccNoted    map[world.GUID]bool
+	addAt      map[world.GUID]time.Time
+	addN       map[world.GUID]int
 	looseSent  []time.Time // when the tank orders at loose adds went; a refused "pull" soon after one answers it, not the fight's own pull
 	shareSum   float64
 	shareCount int
@@ -68,8 +68,8 @@ type groupTank struct {
 
 func (t *groupTank) init() {
 	if t.heldAt == nil {
-		t.heldAt, t.sent, t.ccNoted = map[packet.GUID]time.Time{}, map[packet.GUID]bool{}, map[packet.GUID]bool{}
-		t.addAt, t.addN = map[packet.GUID]time.Time{}, map[packet.GUID]int{}
+		t.heldAt, t.sent, t.ccNoted = map[world.GUID]time.Time{}, map[world.GUID]bool{}, map[world.GUID]bool{}
+		t.addAt, t.addN = map[world.GUID]time.Time{}, map[world.GUID]int{}
 	}
 }
 

@@ -2,7 +2,7 @@ package brain
 
 import (
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The retribution paladin (issue #80 step 4b, preset ret_paladin): a melee damage dealer that stands behind its mob (melee_position),
@@ -138,7 +138,7 @@ func paladinRetribution() *Strategy {
 			{Name: "consecration", Spell: "Consecration", Harmful: true, Threat: ThreatAoE,
 				Possible: func(c *Ctx) bool { return ValMeleeMobs.Get(c) >= 2 && PowerPct(c) >= consecrationManaPc }},
 			{Name: "hammer_of_justice", Spell: "Hammer of Justice", Harmful: true, Threat: ThreatNone, Pre: []string{"face_target"},
-				Target: func(c *Ctx) packet.GUID {
+				Target: func(c *Ctx) world.GUID {
 					if m := meleeMob(c); m != nil {
 						return m.GUID
 					}

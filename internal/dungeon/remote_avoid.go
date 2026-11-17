@@ -7,8 +7,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote driver's side of the avoid boxes (avoid.go): the planner is told the plan's boxes, a hop never takes a straight line over
@@ -53,7 +53,7 @@ const (
 
 // deadlyState is the driver's memory of the deadly spots and of the members' last living frames.
 type deadlyState struct {
-	last  map[packet.GUID]aliveFrame
+	last  map[world.GUID]aliveFrame
 	spots []deadlySpot // two silent deaths within deadlySpotYd: summons refused near it
 	lone  []deadlySpot // a silent death with no second one yet
 	// safeLead is the lead bot's last position on safe ground (not in an avoid box, not on a deadly spot), and its map.
@@ -142,7 +142,7 @@ func (d *RemoteDriver) stepAvoid() []AvoidBox {
 func (d *RemoteDriver) observeDeadly(p tbm.PartyRec, died bool) {
 	st := &d.deadly
 	if st.last == nil {
-		st.last = map[packet.GUID]aliveFrame{}
+		st.last = map[world.GUID]aliveFrame{}
 	}
 	now := d.clk.Now()
 	if !p.Dead {

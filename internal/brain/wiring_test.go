@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Follow-ups of the move lock wiring (#80): the review leftovers of #91.
@@ -139,7 +139,7 @@ func TestLineOfSightRefusalOfACastAtAnotherTargetMarksNoWall(t *testing.T) {
 	los := codeOf(t, "line_of_sight")
 	for _, c := range []struct {
 		name   string
-		target packet.GUID
+		target world.GUID
 		marked bool
 	}{
 		{"a heal on a party member", tankG, false},

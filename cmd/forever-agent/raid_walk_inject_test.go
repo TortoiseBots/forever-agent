@@ -15,16 +15,16 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The onyxia plan's rows (planexport.Build of dungeons/onyxias_lair.json): step 1, the lead's stand (step 5) and the
 // runaway's Q (step 2): 153.0 yd from the lead, inside runaway's 120-200 yd band.
 const (
 	injLeadX, injLeadY, injLeadZ = -166.623, -196.003, -66.2619
-	injOwnGUID                   = packet.GUID(700)
+	injOwnGUID                   = world.GUID(700)
 )
 
 // setupInject gives the fake a commander GUID and the bots' positions: the party stands at the lead's stand, the last
@@ -63,8 +63,8 @@ func (f *fixture) injFight() {
 	f.agent.mu.Lock()
 	f.agent.hostilesFn = func(int) []tbm.HostileRec {
 		return []tbm.HostileRec{
-			{GUID: 9001, Entry: 12129, X: lead[0] + 5, Y: lead[1], Z: lead[2], HPPct: 60, Target: packet.GUID(1000)},
-			{GUID: 9002, Entry: 12129, X: lead[0] + 6, Y: lead[1], Z: lead[2], HPPct: 60, Target: packet.GUID(1000)},
+			{GUID: 9001, Entry: 12129, X: lead[0] + 5, Y: lead[1], Z: lead[2], HPPct: 60, Target: world.GUID(1000)},
+			{GUID: 9002, Entry: 12129, X: lead[0] + 6, Y: lead[1], Z: lead[2], HPPct: 60, Target: world.GUID(1000)},
 		}
 	}
 	f.agent.mu.Unlock()
@@ -95,10 +95,10 @@ func (f *fixture) gmIndex(prefix string) int {
 }
 
 // targetGUIDs is the fake's target RPC calls.
-func (f *fixture) targetGUIDs() []packet.GUID {
+func (f *fixture) targetGUIDs() []world.GUID {
 	f.agent.mu.Lock()
 	defer f.agent.mu.Unlock()
-	return append([]packet.GUID{}, f.agent.targetCalls...)
+	return append([]world.GUID{}, f.agent.targetCalls...)
 }
 
 func TestRaidWalkInjectDryRunListsFaultLines(t *testing.T) {
@@ -163,7 +163,7 @@ func TestRaidWalkInjectKillMTVerifiesSelectionBeforeDie(t *testing.T) {
 		var mt, self int
 		for _, g := range targets {
 			switch g {
-			case packet.GUID(1000):
+			case world.GUID(1000):
 				mt++
 			case injOwnGUID:
 				self++
@@ -215,7 +215,7 @@ func TestRaidWalkInjectSelectionWaitsOutALaggingServer(t *testing.T) {
 		}
 		var mtTargets int
 		for _, g := range f.targetGUIDs() {
-			if g == packet.GUID(1000) {
+			if g == world.GUID(1000) {
 				mtTargets++
 			}
 		}

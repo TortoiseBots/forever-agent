@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Runners and bodies in remote mode (remote_flee.go): a mob that runs off at low health is killed before it is out of reach, one that
@@ -234,7 +234,7 @@ func TestRemoteBystandersAreNoDangerToABody(t *testing.T) {
 // flf is one feed frame for the runner tests: the mage's target and the runner (nil: not in the frame). skip leaves out that many feed
 // frames before it (the driver missed them).
 type flf struct {
-	mageOn packet.GUID
+	mageOn world.GUID
 	mob    *tbm.HostileRec
 	skip   uint64
 }
@@ -262,12 +262,12 @@ func fleeFrames(d *RemoteDriver, frames ...flf) {
 // it is not a fled mob, and the ledger counts it dead. A runner that no bot targeted in its last frame (the target dropped first), one
 // healthier than fleeHeldDiedPct, one far from the party, or one that went while the driver missed a frame, still counts as fled.
 func TestRemoteRunnerGoneWhileABotHitsItDied(t *testing.T) {
-	const g = packet.GUID(0xF1300012F0006B61)
+	const g = world.GUID(0xF1300012F0006B61)
 	mob := func(x float32, hp int, flags string) *tbm.HostileRec {
 		return &tbm.HostileRec{GUID: g, Entry: 4848, X: x, HPPct: hp, Target: gTank, Flags: flags}
 	}
 	// at hp: 26 % at 3 yd, then hp and moving away (a runner), last seen at x.
-	run := func(on packet.GUID, x float32, hp int) []flf {
+	run := func(on world.GUID, x float32, hp int) []flf {
 		return []flf{{on, mob(3, 26, "-"), 0}, {on, mob(x-2, hp, "c"), 0}, {on, mob(x, hp, "c"), 0}}
 	}
 	cases := []struct {
@@ -310,7 +310,7 @@ func TestRemoteRunnerGoneWhileABotHitsItDied(t *testing.T) {
 
 // A mob at half health that a bot targets and that leaves the feed is no runner and no kill.
 func TestRemoteTargetedHealthyMobGoneIsNotDead(t *testing.T) {
-	const g = packet.GUID(0xF1300012F0006B62)
+	const g = world.GUID(0xF1300012F0006B62)
 	m := &tbm.HostileRec{GUID: g, Entry: 4848, X: 8, HPPct: 50, Target: gTank, Flags: "-"}
 	m2 := *m
 	m2.X = 12

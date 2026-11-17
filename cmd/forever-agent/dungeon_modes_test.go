@@ -8,8 +8,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestRunModeNames(t *testing.T) {
@@ -208,7 +208,7 @@ func TestRemoteGameGiveItemRefusesBadArguments(t *testing.T) {
 	g := remoteGame{}
 	for _, c := range []struct {
 		who  string
-		guid packet.GUID
+		guid world.GUID
 		item uint32
 	}{{"not a name", 1, 9240}, {"Lcwarra", 0, 9240}, {"Lcwarra", 1, 0}} {
 		if err := g.GiveItem(context.Background(), c.who, c.guid, c.item); err == nil || !strings.Contains(err.Error(), "additem") {

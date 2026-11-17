@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -73,7 +73,7 @@ type castInfo struct {
 	spell   uint32
 	start   time.Time
 	end     time.Time // the cast time's end; start for an instant spell
-	target  packet.GUID
+	target  world.GUID
 	gcdCat  uint32 // the GCD category this cast started; 0 with gcdSet false when none
 	gcdSet  bool
 	channel bool
@@ -445,7 +445,7 @@ func (st *State) GCD() (total, left time.Duration) {
 // an instant spell), its target, and whether it came from an item. The server starts the
 // global cooldown of the spell's group now (Spell::TriggerGlobalCooldown, Spell.cpp:8411-8441):
 // the GCD it started is returned (zero when the spell starts none).
-func (st *State) CastStarted(spell, castMS uint32, target packet.GUID) (gcdCat uint32, gcdMS uint32) {
+func (st *State) CastStarted(spell, castMS uint32, target world.GUID) (gcdCat uint32, gcdMS uint32) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := st.now()
@@ -577,13 +577,13 @@ func (st *State) CastBroken(spell uint32) {
 
 // Cast is the state of the player's cast.
 type Cast struct {
-	State     string      `json:"state"` // "idle", "casting" or "channelling"
-	SpellID   uint32      `json:"spell_id,omitempty"`
-	Name      string      `json:"name,omitempty"`
-	Target    packet.GUID `json:"target,omitempty"`
-	CastMS    uint32      `json:"cast_ms,omitempty"`    // the cast time or channel length the server gave
-	ElapsedMS int64       `json:"elapsed_ms,omitempty"` // since it started
-	EndsInMS  *int64      `json:"ends_in_ms,omitempty"` // to its end; negative a little past it, while the spell goes off
+	State     string     `json:"state"` // "idle", "casting" or "channelling"
+	SpellID   uint32     `json:"spell_id,omitempty"`
+	Name      string     `json:"name,omitempty"`
+	Target    world.GUID `json:"target,omitempty"`
+	CastMS    uint32     `json:"cast_ms,omitempty"`    // the cast time or channel length the server gave
+	ElapsedMS int64      `json:"elapsed_ms,omitempty"` // since it started
+	EndsInMS  *int64     `json:"ends_in_ms,omitempty"` // to its end; negative a little past it, while the spell goes off
 }
 
 // Failure is the last cast the server refused or broke.

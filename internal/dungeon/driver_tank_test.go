@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Group mode, tank first: the fake's two mobs (201 at 20 yd, 202 at 35 yd) are pulled together and fight for dieIn; an attack order
@@ -21,7 +21,7 @@ func tankFixture(t *testing.T) (*fakeGame, *fakeUnit, *fakeUnit) {
 	t.Helper()
 	g := newFake()
 	g.dieIn = 60 * time.Second
-	g.partyTarget = map[packet.GUID]packet.GUID{}
+	g.partyTarget = map[world.GUID]world.GUID{}
 	m1 := g.add(201, 1, Point{20, 0, 0})
 	m2 := g.add(202, 2, Point{35, 0, 0})
 	g.onChat = func(g *fakeGame, text string) {
@@ -50,7 +50,7 @@ func TestGroupTargetsTheMobTheTankHolds(t *testing.T) {
 	g.partyTarget[tank] = 202 // both mobs hit the tank; the tank's own target is the farther one
 	rep := runTank(t, g)
 	// The pull targets the nearest (201); the assist goes to 202, not the nearest; once it is dead the party is sent at 201 at once.
-	if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{201, 202, 201}) {
+	if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{201, 202, 201}) {
 		t.Fatalf("targets %v chats %q", g.targets, g.chats)
 	}
 	if tf := rep.TankFirst; tf == nil || tf.TankThreatShare != 100 || tf.TankThreatSamples == 0 || tf.LooseAddOrders != 0 || tf.TargetSwitches != 0 || tf.Tank != "Tank" {
@@ -62,7 +62,7 @@ func TestGroupSendsTheTankAtALooseAdd(t *testing.T) {
 	g, m1, m2 := tankFixture(t)
 	g.partyTarget[tank] = 202
 	var pullAt []time.Time
-	var pullTargets []packet.GUID
+	var pullTargets []world.GUID
 	g.onChat = func(g *fakeGame, text string) { // attack orders kill nothing here: the fight lasts its 60 s
 		switch text {
 		case ".bot action pullback":
@@ -115,11 +115,11 @@ func TestGroupLeavesACrowdControlledMobAlone(t *testing.T) {
 			case "name":
 				m1.Auras = []objects.Aura{{SpellID: 999999, Name: "Sap"}}
 			case "moon":
-				g.marks = map[string]packet.GUID{"moon": 201}
+				g.marks = map[string]world.GUID{"moon": 201}
 			}
 			rep := runTank(t, g)
 			// 201 is nearer and would be the first, but it is spared; it is attacked when it is the last one.
-			if fmt.Sprint(g.targets) != fmt.Sprint([]packet.GUID{201, 202, 201}) {
+			if fmt.Sprint(g.targets) != fmt.Sprint([]world.GUID{201, 202, 201}) {
 				t.Fatalf("targets %v", g.targets)
 			}
 			if rep.TankFirst == nil || rep.TankFirst.CCRespected != 1 {
@@ -153,7 +153,7 @@ func TestGroupSwitchesToTheMobTheTankHoldsBetter(t *testing.T) {
 
 func TestGroupOpenerWaitsForTheTank(t *testing.T) {
 	g := newFake()
-	g.partyTarget = map[packet.GUID]packet.GUID{tank: 201}
+	g.partyTarget = map[world.GUID]world.GUID{tank: 201}
 	m := g.add(201, 1, Point{20, 0, 0})
 	m.InCombat, m.Target = true, tank
 	d := NewDriver(mustPlan(t, tankPlan), g, Config{}, g.clock())
@@ -184,7 +184,7 @@ func TestGroupSendsTheTankAtAMobHittingTheLeader(t *testing.T) {
 	// The leader (the agent's own character) is a bot that is not the tank too.
 	g, m1, m2 := tankFixture(t)
 	g.partyTarget[tank] = 202
-	var pullTargets []packet.GUID
+	var pullTargets []world.GUID
 	g.onChat = func(g *fakeGame, text string) {
 		switch text {
 		case ".bot action pullback":

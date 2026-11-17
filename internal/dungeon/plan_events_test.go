@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The event steps of the Zul'Farrak events design (TortoiseBots #984): area_trigger, wait_for unit and the leg's companions_loot.
@@ -192,7 +192,7 @@ func TestStepperWaitsForAUnit(t *testing.T) {
 		t.Fatalf("%+v", a)
 	}
 	clk.t = clk.t.Add(2 * time.Second)
-	w.sights = []unitSight{{guid: packet.GUID(9), entry: 7271, hostile: true}}
+	w.sights = []unitSight{{guid: world.GUID(9), entry: 7271, hostile: true}}
 	if a := s.Next(); a.Kind != ActDone {
 		t.Fatalf("it holds: %+v", a)
 	}

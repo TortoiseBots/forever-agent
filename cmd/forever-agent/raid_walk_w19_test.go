@@ -10,8 +10,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Positions from ZG walk 19 test2 s4 frames.jsonl and dungeons/zul_gurub.json.
@@ -88,7 +88,7 @@ func w19Scenario(t *testing.T, jeklik bool, legLine string, rows func(now, wipeA
 		}
 		var out []tbm.HostileRec
 		if jeklik && el < 45*time.Second {
-			out = append(out, tbm.HostileRec{GUID: 9, Entry: 14517, HPPct: 40, Target: packet.GUID(1000), X: -12289.1, Y: -1384.1})
+			out = append(out, tbm.HostileRec{GUID: 9, Entry: 14517, HPPct: 40, Target: world.GUID(1000), X: -12289.1, Y: -1384.1})
 		}
 		if el >= 310*time.Second {
 			out = append(out, rows(now, wipeAt)...)
@@ -119,7 +119,7 @@ func w19StepRows(tigers [][2]float32) func(now, wipeAt time.Time) []tbm.HostileR
 		}
 		if !now.Before(wipeAt.Add(-150*time.Second)) && now.Before(wipeAt.Add(-88*time.Second)) {
 			for i, p := range tigers {
-				out = append(out, tbm.HostileRec{GUID: packet.GUID(30 + i), Entry: 11361, HPPct: 60 - 30*i, Target: packet.GUID(1001 + i), X: p[0], Y: p[1]})
+				out = append(out, tbm.HostileRec{GUID: world.GUID(30 + i), Entry: 11361, HPPct: 60 - 30*i, Target: world.GUID(1001 + i), X: p[0], Y: p[1]})
 			}
 		}
 		return out
@@ -195,8 +195,8 @@ func TestRaidWalkWipeResumeThekalPhase2Skips(t *testing.T) {
 	phase2 := func(now, wipeAt time.Time) []tbm.HostileRec {
 		if !now.Before(wipeAt.Add(-150*time.Second)) && now.Before(wipeAt.Add(-88*time.Second)) {
 			return []tbm.HostileRec{
-				{GUID: 40, Entry: 14509, HPPct: 70, Target: packet.GUID(1000), X: zgThekal[0] + 3, Y: zgThekal[1] - 2},
-				{GUID: 41, Entry: 15068, HPPct: 90, Target: packet.GUID(1001), X: zgThekal[0] + 8, Y: zgThekal[1] + 5},
+				{GUID: 40, Entry: 14509, HPPct: 70, Target: world.GUID(1000), X: zgThekal[0] + 3, Y: zgThekal[1] - 2},
+				{GUID: 41, Entry: 15068, HPPct: 90, Target: world.GUID(1001), X: zgThekal[0] + 8, Y: zgThekal[1] + 5},
 			}
 		}
 		return nil

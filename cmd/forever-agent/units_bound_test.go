@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // TestUnitsMarkTheBoundBots: after a raid bind the commander is out of the raid, so no bot is in_party; the view
@@ -39,7 +39,7 @@ func TestUnitsMarkTheBoundBots(t *testing.T) {
 		t.Fatalf("row json %s", s)
 	}
 	var back objects.Unit
-	if err := json.Unmarshal(raw, &back); err != nil || back.GUID != packet.GUID(0x10) {
+	if err := json.Unmarshal(raw, &back); err != nil || back.GUID != world.GUID(0x10) {
 		t.Fatalf("decode %+v %v", back, err)
 	}
 }

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The loot_object, use_item and team parts of the dungeon driver's Game (dungeon.ObjectActor, dungeon.TeamSource) over the session.
@@ -22,12 +22,12 @@ func lootedOf(r session.LootedObject) dungeon.Looted {
 	return dungeon.Looted{Items: conv(r.Taken), Money: r.Money, Left: conv(r.Left)}
 }
 
-func (g *sessionGame) LootObject(ctx context.Context, guid packet.GUID) (dungeon.Looted, error) {
+func (g *sessionGame) LootObject(ctx context.Context, guid world.GUID) (dungeon.Looted, error) {
 	r, err := g.cur().LootObject(ctx, guid, 0, 15*time.Second, 5*time.Second)
 	return lootedOf(r), err
 }
 
-func (g *sessionGame) LootCorpse(ctx context.Context, guid packet.GUID) (dungeon.Looted, error) {
+func (g *sessionGame) LootCorpse(ctx context.Context, guid world.GUID) (dungeon.Looted, error) {
 	r, err := g.cur().LootCorpse(ctx, guid, 5*time.Second)
 	return lootedOf(r), err
 }

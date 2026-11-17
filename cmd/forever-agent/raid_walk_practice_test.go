@@ -25,20 +25,21 @@ import (
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // practiceBossGUID and practiceSonGUID are the practice boss's and Son's frame keys: creature guids encode their entry.
-func practiceBossGUID() packet.GUID {
-	return packet.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x77)
+func practiceBossGUID() world.GUID {
+	return world.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x77)
 }
-func practiceSonGUID() packet.GUID {
-	return packet.GUID(uint64(packet.HighUnit)<<48 | 11357<<24 | 0x21)
+func practiceSonGUID() world.GUID {
+	return world.GUID(uint64(packet.HighUnit)<<48 | 11357<<24 | 0x21)
 }
 
 // practiceTrashGUID is a second unit of the boss's own entry (a duplicate-entry trash unit): the practice must never
 // touch it.
-func practiceTrashGUID() packet.GUID {
-	return packet.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x79)
+func practiceTrashGUID() world.GUID {
+	return world.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x79)
 }
 
 // practiceScenario is the fake test server's practice state: the boss's HP and target, the Son's death and which hires
@@ -47,7 +48,7 @@ type practiceScenario struct {
 	mu       sync.Mutex
 	armed    bool
 	bossHP   int
-	target   packet.GUID
+	target   world.GUID
 	sonDead  bool
 	dead     map[string]bool
 	dropAt   time.Time
@@ -101,7 +102,7 @@ func practiceFixture(t *testing.T, sc *practiceScenario, cycles int) (*fixture, 
 	f.agent.startReply = &commanderReply{Reply: tbm.Reply{Kind: tbm.KindAck, OK: true,
 		Ack:  &tbm.Ack{Intent: "run start", Scope: "party", Count: 1, Executor: "-"},
 		Line: start, Lines: []string{start, "TBM:ACTION_ACK|run start|party|1|-"}}}
-	sc.bossHP, sc.target, sc.dead = 100, packet.GUID(1000), map[string]bool{}
+	sc.bossHP, sc.target, sc.dead = 100, world.GUID(1000), map[string]bool{}
 	// The fake server's run-status lines for the practice reset: pauseRun waits for a status that shows this plan
 	// paused, and resumeRun for one that shows it running again. A test may replace either hook (an ACK with no
 	// status, a resume the server never confirms).
@@ -151,7 +152,7 @@ func practiceFixture(t *testing.T, sc *practiceScenario, cycles int) (*fixture, 
 		if started && !sc.reengaged && !sc.reengageAt.IsZero() && !sc.noReengage && !now.Before(sc.reengageAt) {
 			sc.reengaged = true
 			sc.castsAt = now
-			sc.target = packet.GUID(1000)
+			sc.target = world.GUID(1000)
 			if !sc.noCasts && !sc.killBoss {
 				enqueue(now)
 			}
@@ -202,7 +203,7 @@ func practiceFixture(t *testing.T, sc *practiceScenario, cycles int) (*fixture, 
 		}
 		return out
 	}
-	f.agent.onEvade = func(g packet.GUID) {
+	f.agent.onEvade = func(g world.GUID) {
 		sc.mu.Lock()
 		sc.evadeN++
 		sc.bossHP, sc.target = 100, 0
@@ -217,12 +218,12 @@ func practiceFixture(t *testing.T, sc *practiceScenario, cycles int) (*fixture, 
 			hook()
 		}
 	}
-	f.agent.onSetHP = func(g packet.GUID) {
+	f.agent.onSetHP = func(g world.GUID) {
 		sc.mu.Lock()
 		sc.bossHP = 100
 		sc.mu.Unlock()
 	}
-	f.agent.onRespawn = func(g packet.GUID) {
+	f.agent.onRespawn = func(g world.GUID) {
 		if g != practiceSonGUID() {
 			return
 		}
@@ -430,15 +431,15 @@ func TestPracticeBossKilledEnds(t *testing.T) {
 func TestPracticeFailedResetsStop(t *testing.T) {
 	sc := &practiceScenario{}
 	sc.mu.Lock()
-	sc.bossHP, sc.target = 100, packet.GUID(1000)
+	sc.bossHP, sc.target = 100, world.GUID(1000)
 	sc.mu.Unlock()
 	f, _, row := practiceFixture(t, sc, 10)
 	// Every hire is dead from the first frame on, so each attempt ends at once; the evade hook leaves the boss engaged
 	// (target 1000) so the reset never sees it reset, and the revive hook does nothing so the hires stay dead.
-	f.agent.onEvade = func(g packet.GUID) {
+	f.agent.onEvade = func(g world.GUID) {
 		sc.mu.Lock()
 		sc.evadeN++
-		sc.bossHP, sc.target = 100, packet.GUID(1000)
+		sc.bossHP, sc.target = 100, world.GUID(1000)
 		sc.mu.Unlock()
 	}
 	f.agent.onRevive = func(name string) { sc.mu.Lock(); sc.reviveN++; sc.mu.Unlock() }
@@ -452,7 +453,7 @@ func TestPracticeFailedResetsStop(t *testing.T) {
 			}
 		}
 		f.agent.mu.Unlock()
-		return []tbm.HostileRec{{GUID: practiceBossGUID(), Entry: 14834, X: row.X, Y: row.Y, Z: row.Z, HPPct: 100, Target: packet.GUID(1000), Flags: "-"}}
+		return []tbm.HostileRec{{GUID: practiceBossGUID(), Entry: 14834, X: row.X, Y: row.Y, Z: row.Z, HPPct: 100, Target: world.GUID(1000), Flags: "-"}}
 	}
 	if code := f.run(context.Background()); code != exitRaidWalkFailed {
 		t.Fatalf("exit %d, want %d (notes %v): %s", code, exitRaidWalkFailed, f.summaryNotes(), f.stderr.String())
@@ -1104,7 +1105,7 @@ func TestPracticeFailedResetCountedOnce(t *testing.T) {
 	f, _, row := practiceFixture(t, sc, 10)
 	// Every hire is dead from the first frame on: each attempt ends at once. The evade leaves the boss at 100 % with
 	// no target but still flagged in combat, so the reset never sees it home and the pull never re-engages.
-	f.agent.onEvade = func(g packet.GUID) {
+	f.agent.onEvade = func(g world.GUID) {
 		sc.mu.Lock()
 		sc.evadeN++
 		sc.bossHP, sc.target = 100, 0
@@ -1212,8 +1213,8 @@ func TestPracticeKeptPageTail(t *testing.T) {
 
 // attempt1BossGUID is the bound guid in the real attempt-1 frames (zgP-hk5p-1-1/frames.jsonl, 00:05:50-00:06:08):
 // a creature guid carrying the 0xF130 high part the frames print.
-func attempt1BossGUID() packet.GUID {
-	g, err := packet.ParseGUID("0xF1300039F200C20E")
+func attempt1BossGUID() world.GUID {
+	g, err := world.ParseGUID("0xF1300039F200C20E")
 	if err != nil {
 		panic(err)
 	}
@@ -1224,7 +1225,7 @@ func attempt1BossGUID() packet.GUID {
 // target 0x...0CF4 (a bot), with the party standing next to him. The practice must never call this boss gone.
 func attempt1Frame() *tbm.ViewFrame {
 	return &tbm.ViewFrame{Seq: 741, Hostiles: []tbm.HostileRec{
-		{GUID: attempt1BossGUID(), Entry: 14834, X: -11782, Y: -1654.4, Z: 54, HPPct: 94, Target: packet.GUID(0xCF4), Flags: "-"},
+		{GUID: attempt1BossGUID(), Entry: 14834, X: -11782, Y: -1654.4, Z: 54, HPPct: 94, Target: world.GUID(0xCF4), Flags: "-"},
 	}}
 }
 

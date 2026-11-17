@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // followFake is a fakeGame wrapped with the agent's own unit row and the melee
@@ -109,7 +109,7 @@ func lastNoteHas(st FollowStatus, sub string) bool {
 }
 
 // addHostile adds a living hostile creature row at at with an optional target.
-func addHostile(f *followFake, guid packet.GUID, at Point, inCombat bool, target packet.GUID) *fakeUnit {
+func addHostile(f *followFake, guid world.GUID, at Point, inCombat bool, target world.GUID) *fakeUnit {
 	u := f.add(guid, 7, at)
 	u.InCombat, u.Target = inCombat, target
 	return u

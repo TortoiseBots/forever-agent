@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Sample is one sighting of one unit at one moment.
 type Sample struct {
 	T       time.Time
-	GUID    packet.GUID
+	GUID    world.GUID
 	Entry   uint32
 	Name    string
 	X, Y, Z float32
@@ -82,7 +82,7 @@ func Analyze(samples []Sample, _ Options) ([]Patrol, []Static, []Wanderer, []str
 
 // track is every sighting of one guid, in time order.
 type track struct {
-	guid    packet.GUID
+	guid    world.GUID
 	samples []Sample
 }
 
@@ -95,14 +95,14 @@ func (t track) label() string {
 
 // group collects the positioned samples by guid, sorted by guid and by time.
 func group(samples []Sample) []track {
-	byGUID := make(map[packet.GUID][]Sample)
+	byGUID := make(map[world.GUID][]Sample)
 	for _, s := range samples {
 		if s.T.IsZero() {
 			continue
 		}
 		byGUID[s.GUID] = append(byGUID[s.GUID], s)
 	}
-	guids := make([]packet.GUID, 0, len(byGUID))
+	guids := make([]world.GUID, 0, len(byGUID))
 	for g := range byGUID {
 		guids = append(guids, g)
 	}

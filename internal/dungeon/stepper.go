@@ -8,6 +8,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // World is what the Stepper needs to see of the game. The driver implements it over a session; tests use a fake.
@@ -92,12 +93,12 @@ type Action struct {
 	Skip      []uint32            // pull and boss: entries not to wait for
 	Boss      *Boss               // boss
 	Object    *objects.GameObject // use
-	GUID      packet.GUID         // use (0 when the agent does not see the object: an entry-form action, see Entry)
+	GUID      world.GUID          // use (0 when the agent does not see the object: an entry-form action, see Entry)
 	// Entry and EntryAt are set when the World names objects by entry (EntryWorld): the order says `entry:<Entry>@EntryAt` and the server
 	// finds the object, so Object and GUID are only the agent's own copy, if it sees one (the fallback when the server finds nothing).
 	Entry     uint32
 	EntryAt   *Point
-	SpawnGUID packet.GUID // use_object, loot_object: the exact spawn (ObjectRef.Spawn as a GUID); 0 when the plan gives none
+	SpawnGUID world.GUID // use_object, loot_object: the exact spawn (ObjectRef.Spawn as a GUID); 0 when the plan gives none
 	// Batch is the loot_object step's batch id (LootObject.Batch; "" when it has none) and Section the chests from this step on of the run
 	// of consecutive loot_object steps that have a batch, so that the driver can group them into batches of the run's own size.
 	Batch        string
@@ -455,7 +456,7 @@ func (s *Stepper) stepOnce(st *Step) (a Action, advance bool) {
 		if ew, isEntry := s.w.(EntryWorld); isEntry && ref.Entry != 0 && ew.EntryTargets() {
 			base.Kind, base.Entry = kind, ref.Entry
 			if ref.Spawn != 0 {
-				base.SpawnGUID = packet.GUID(uint64(packet.HighGameObject)<<48 | uint64(ref.Entry)<<24 | uint64(ref.Spawn))
+				base.SpawnGUID = world.GUID(uint64(packet.HighGameObject)<<48 | uint64(ref.Entry)<<24 | uint64(ref.Spawn))
 			}
 			switch {
 			case ref.Near != nil:

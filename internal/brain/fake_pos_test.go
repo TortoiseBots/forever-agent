@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells and items of the step-3b tests (ids from internal/spells/meta.tsv.gz and the core's item_template).
@@ -161,7 +161,7 @@ func ms(v int64) *int64 { return &v }
 
 func here(g *fakeGame) Vec3 { return Vec3{g.self.X, g.self.Y, g.self.Z} }
 
-func unitXY(g *fakeGame, id packet.GUID) Vec3 {
+func unitXY(g *fakeGame, id world.GUID) Vec3 {
 	for _, u := range g.units {
 		if u.GUID == id {
 			return Vec3{u.X, u.Y, u.Z}

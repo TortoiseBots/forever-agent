@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The priest, the third class of the brain (issue #80 step 4a): a healer (holy_priest: the healer role with the priest's kit) and a damage
@@ -103,7 +103,7 @@ func priestHoly() *Strategy {
 		Name: "priest_holy",
 		Actions: []*Action{{Name: "shield",
 			Resolve: func(c *Ctx) (uint32, bool) { s := ValShield.Get(c); return s.Spell, s.Target != nil },
-			Target:  func(c *Ctx) packet.GUID { return targetGUID(ValShield.Get(c).Target) },
+			Target:  func(c *Ctx) world.GUID { return targetGUID(ValShield.Get(c).Target) },
 			Do: func(ctx context.Context, c *Ctx) error {
 				s := ValShield.Get(c)
 				if s.Target == nil {
@@ -138,7 +138,7 @@ func meleeMobs(c *Ctx) int {
 // looseMobs counts the living hostile mobs within the distance that the party is not fighting: not in combat (asleep, patrolling), or
 // in combat with someone who is not in the party. A fear sends the mobs it hits running, and they run into these.
 func looseMobs(c *Ctx, within float32) int {
-	party := map[packet.GUID]bool{c.Self.GUID: true}
+	party := map[world.GUID]bool{c.Self.GUID: true}
 	for _, m := range c.Party {
 		party[m.GUID] = true
 	}
@@ -187,7 +187,7 @@ var (
 
 // fortitudeTarget is the first of the player and the members in view that lacks Fortitude (the player's own also when it has under a
 // minute left, if the server says how long).
-func fortitudeTarget(c *Ctx) packet.GUID {
+func fortitudeTarget(c *Ctx) world.GUID {
 	for _, u := range healMembers(c) {
 		if u.GUID == c.Self.GUID {
 			if auraMissing(u, fortitudeAuras...) {

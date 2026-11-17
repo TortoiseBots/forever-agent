@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Gather, then kill pack by pack (Zul'Farrak hires-1, 2026-10-14; the owner: "they just run and aggro and die"). At pull group 3 the
@@ -64,7 +64,7 @@ func (d *RemoteDriver) legSkip() []uint32 {
 
 // awayBot is a living bot that stands too far from the lead bot.
 type awayBot struct {
-	guid packet.GUID
+	guid world.GUID
 	name string
 	dist float64
 }
@@ -74,14 +74,14 @@ type awayBot struct {
 // leg). They are not waited for again in this leg until they come within GatherNear of the lead bot by themselves.
 type gatherState struct {
 	leg       int
-	ignored   map[packet.GUID]bool
-	restNoted map[packet.GUID]bool // ignored bots the rest gate has said it does not wait for (once each per leg)
+	ignored   map[world.GUID]bool
+	restNoted map[world.GUID]bool // ignored bots the rest gate has said it does not wait for (once each per leg)
 }
 
 // gatherIgnored is the set of bots the gathers of the current leg no longer wait for (a new leg starts it empty).
-func (d *RemoteDriver) gatherIgnored() map[packet.GUID]bool {
+func (d *RemoteDriver) gatherIgnored() map[world.GUID]bool {
 	if d.gatherSt.ignored == nil || d.gatherSt.leg != d.curLeg {
-		d.gatherSt = gatherState{leg: d.curLeg, ignored: map[packet.GUID]bool{}, restNoted: map[packet.GUID]bool{}}
+		d.gatherSt = gatherState{leg: d.curLeg, ignored: map[world.GUID]bool{}, restNoted: map[world.GUID]bool{}}
 	}
 	return d.gatherSt.ignored
 }
@@ -131,7 +131,7 @@ func (d *RemoteDriver) gather(ctx context.Context, why string) error {
 	}
 	began := d.clk.Now()
 	waited := false
-	first := map[packet.GUID]float64{} // each away bot's distance when the wait first saw it
+	first := map[world.GUID]float64{} // each away bot's distance when the wait first saw it
 	for {
 		if len(d.fr.EngagedHostiles()) > 0 {
 			return nil
@@ -234,7 +234,7 @@ func (d *RemoteDriver) hostileAhead(here, wp Point) (tbm.HostileRec, bool) {
 		if d.aheadAcrossAvoid(here, p) {
 			// Not pulled: the tank would take the server's straight way to it, through the avoid box (remote_avoid.go).
 			if d.aheadPassedLeg == nil {
-				d.aheadPassedLeg = map[packet.GUID]int{}
+				d.aheadPassedLeg = map[world.GUID]int{}
 			}
 			d.aheadPassedLeg[h.GUID] = d.curLeg
 			d.rep.note(fmt.Sprintf("leg %d: %s at %.0f %.0f %.0f stands near the walk's next hop, but the way to it keeps out of the plan's avoid box only by a detour: it is not pulled on the way (the tank would cut through the box)", d.curLeg, d.hostileName(h), h.X, h.Y, h.Z))
@@ -287,7 +287,7 @@ func (d *RemoteDriver) planOwns(h tbm.HostileRec) bool {
 }
 
 // aheadPassed says whether a pull on the way passed g over in the current leg (it drew no fight or evaded).
-func (d *RemoteDriver) aheadPassed(g packet.GUID) bool {
+func (d *RemoteDriver) aheadPassed(g world.GUID) bool {
 	leg, ok := d.aheadPassedLeg[g]
 	return ok && leg == d.curLeg
 }
@@ -322,7 +322,7 @@ func (d *RemoteDriver) pullAheadNote(ctx context.Context, h tbm.HostileRec, why 
 			track = append(track, o.Entry)
 		}
 	}
-	sp := fightSpec{pick: []uint32{h.Entry}, track: track, skip: d.legSkip(), anchors: []Point{hostilePoint(h)}, limit: d.cfg.FightTimeout, sneak: true, passed: map[packet.GUID]bool{}}
+	sp := fightSpec{pick: []uint32{h.Entry}, track: track, skip: d.legSkip(), anchors: []Point{hostilePoint(h)}, limit: d.cfg.FightTimeout, sneak: true, passed: map[world.GUID]bool{}}
 	d.legStat(func(l *LegReport) { l.Pulls++ })
 	res, err := d.tracedFight(ctx, h, sp)
 	if err != nil {
@@ -335,7 +335,7 @@ func (d *RemoteDriver) pullAheadNote(ctx context.Context, h tbm.HostileRec, why 
 	// Passed over for the rest of the leg, like a refused pull for the run: a mob that drew no fight once is not pulled at every walk.
 	// It is never counted cleared (nothing marks its spot).
 	if d.aheadPassedLeg == nil {
-		d.aheadPassedLeg = map[packet.GUID]int{}
+		d.aheadPassedLeg = map[world.GUID]int{}
 	}
 	d.aheadPassedLeg[h.GUID] = d.curLeg
 	if res.out == refused {
@@ -349,7 +349,7 @@ func (d *RemoteDriver) pullAheadNote(ctx context.Context, h tbm.HostileRec, why 
 // timeout, on a GM account, out of combat and not summoned in the last rejoin gap: the same GM assist as the rejoin (run_gm_assists,
 // rejoin_tps). It waits up to rejoinLand for the bot to land by the lead bot and puts the party back on follow. It returns the GUIDs that
 // landed.
-func (d *RemoteDriver) summonHealerStraggler(ctx context.Context, away []awayBot) []packet.GUID {
+func (d *RemoteDriver) summonHealerStraggler(ctx context.Context, away []awayBot) []world.GUID {
 	if d.opt.Healer == "" || d.tx.RejoinTPDist <= 0 || d.inCombat() || d.leadOutside() {
 		return nil
 	}
@@ -364,7 +364,7 @@ func (d *RemoteDriver) summonHealerStraggler(ctx context.Context, away []awayBot
 		return nil
 	}
 	if d.rejoin.last == nil {
-		d.rejoin.last = map[packet.GUID]time.Time{}
+		d.rejoin.last = map[world.GUID]time.Time{}
 	}
 	if last, ok := d.rejoin.last[b.guid]; ok && d.clk.Now().Sub(last) < d.tx.RejoinGap {
 		return nil
@@ -382,7 +382,7 @@ func (d *RemoteDriver) summonHealerStraggler(ctx context.Context, away []awayBot
 				_ = r
 			}
 			delete(d.gatherIgnored(), b.guid)
-			return []packet.GUID{b.guid}
+			return []world.GUID{b.guid}
 		}
 	}
 	return nil

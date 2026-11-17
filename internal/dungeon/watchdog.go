@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The progress watchdog (README "Run watchdog"). A run that waits on something that never comes (an order nobody answers, a rest gate
@@ -202,7 +202,7 @@ type watchdog struct {
 	fightKill int
 	// low is each fought mob's lowest health percent since the stall began (the last progress other than movement or a new low): only a
 	// look below it by wdHealthStep is progress, so health that dips and comes back keeps nothing alive.
-	low map[packet.GUID]int
+	low map[world.GUID]int
 
 	warnings, recoveries int
 	longest              time.Duration
@@ -393,7 +393,7 @@ func (w *watchdog) fightBegin() {
 
 // fightSignal takes a pull's fight state at a look: the kills so far and the health percent of each mob being fought. A kill, or a mob
 // at a new low (lowLocked), is progress: a long boss fight that wears the boss down never stalls.
-func (w *watchdog) fightSignal(kills int, hp map[packet.GUID]int) {
+func (w *watchdog) fightSignal(kills int, hp map[world.GUID]int) {
 	if w == nil {
 		return
 	}
@@ -409,7 +409,7 @@ func (w *watchdog) fightSignal(kills int, hp map[packet.GUID]int) {
 }
 
 // mobHealth is fightSignal for a fight with no kill count of its own (one at a rest gate, one on the way): the mobs' health percent.
-func (w *watchdog) mobHealth(hp map[packet.GUID]int) {
+func (w *watchdog) mobHealth(hp map[world.GUID]int) {
 	if w == nil {
 		return
 	}
@@ -421,14 +421,14 @@ func (w *watchdog) mobHealth(hp map[packet.GUID]int) {
 // lowLocked takes the mobs' health at a look. A mob seen for the first time in the stall only sets its low; one at least wdHealthStep
 // below its low is progress. The lows are kept across the look (a mob that is out of the fight for a while, evading, keeps its low) and
 // across a new low; real progress of another kind starts them over (progressLocked).
-func (w *watchdog) lowLocked(hp map[packet.GUID]int) {
+func (w *watchdog) lowLocked(hp map[world.GUID]int) {
 	lower := false
 	for g, p := range hp {
 		low, ok := w.low[g]
 		switch {
 		case !ok:
 			if w.low == nil {
-				w.low = map[packet.GUID]int{}
+				w.low = map[world.GUID]int{}
 			}
 			w.low[g] = p
 		case p <= low-wdHealthStep:

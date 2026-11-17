@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Bring a bot that spawned far from the party back to it (owner order 2026-10-15: "if a party member dies and corpse-runs and spawns at
@@ -43,7 +43,7 @@ const (
 
 // rejoinState is the driver's state of the behaviour.
 type rejoinState struct {
-	last  map[packet.GUID]time.Time // when each bot was last summoned
+	last  map[world.GUID]time.Time // when each bot was last summoned
 	noted map[string]bool
 }
 
@@ -60,7 +60,7 @@ func (r *rejoinState) once(key string) bool {
 
 // rejoinBot is a living bot of the run that stands too far from the lead bot.
 type rejoinBot struct {
-	guid  packet.GUID
+	guid  world.GUID
 	name  string
 	dist  float64 // +Inf on another map
 	other bool
@@ -139,9 +139,9 @@ func (d *RemoteDriver) rejoinFar(ctx context.Context) error {
 	began := d.clk.Now()
 	calmFrom := began
 	if d.rejoin.last == nil {
-		d.rejoin.last = map[packet.GUID]time.Time{}
+		d.rejoin.last = map[world.GUID]time.Time{}
 	}
-	sent := map[packet.GUID]time.Time{} // summons of this call that have not landed yet
+	sent := map[world.GUID]time.Time{} // summons of this call that have not landed yet
 	landed := false
 	for {
 		d.look()
@@ -208,7 +208,7 @@ func (d *RemoteDriver) rejoinFar(ctx context.Context) error {
 	return nil
 }
 
-func farHas(far []rejoinBot, g packet.GUID) bool {
+func farHas(far []rejoinBot, g world.GUID) bool {
 	for _, b := range far {
 		if b.guid == g {
 			return true
@@ -221,7 +221,7 @@ func farHas(far []rejoinBot, g packet.GUID) bool {
 // setup_shortcuts line are the GM assist's.
 func (d *RemoteDriver) rejoinSummon(ctx context.Context, b rejoinBot) bool {
 	if d.rejoin.last == nil {
-		d.rejoin.last = map[packet.GUID]time.Time{}
+		d.rejoin.last = map[world.GUID]time.Time{}
 	}
 	if l, ok := d.fr.LeadRec(); ok {
 		if why, bad := d.deadlyAt(partyPoint(l), l.Map); bad {

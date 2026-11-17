@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // frameAt builds one frame at t with the given hostiles; party holds two bots
@@ -16,14 +16,14 @@ func frameAt(t time.Time, hs ...tbm.HostileRec) tbm.ViewFrame {
 	return f
 }
 
-func hostile(g packet.GUID, target packet.GUID) tbm.HostileRec {
+func hostile(g world.GUID, target world.GUID) tbm.HostileRec {
 	return tbm.HostileRec{GUID: g, Entry: 11368, HPPct: 100, Target: target}
 }
 
 // A pull of pack A where 3 units of pack B join: the note says "joiners 3".
 func TestJoinersOfPullCountsPackB(t *testing.T) {
 	t0 := time.Date(2026, 11, 2, 1, 0, 0, 0, time.UTC)
-	pack := map[packet.GUID]bool{0xF130001: true, 0xF130002: true} // the pulled pack A
+	pack := map[world.GUID]bool{0xF130001: true, 0xF130002: true} // the pulled pack A
 	frames := []tbm.ViewFrame{
 		frameAt(t0, hostile(0xF130001, 1000)),                    // the pulled unit, in combat
 		frameAt(t0.Add(2*time.Second), hostile(0xF130001, 1000)), // still only A
@@ -46,7 +46,7 @@ func TestJoinersOfPullCountsPackB(t *testing.T) {
 // The pulled pack itself never counts, nor do bystanders, corpses or untargeted rows.
 func TestJoinersOfPullIgnoresPackAndBystanders(t *testing.T) {
 	t0 := time.Date(2026, 11, 2, 1, 0, 0, 0, time.UTC)
-	pack := map[packet.GUID]bool{0xF130001: true}
+	pack := map[world.GUID]bool{0xF130001: true}
 	frames := []tbm.ViewFrame{
 		frameAt(t0,
 			hostile(0xF130001, 1000),                               // pulled: not a joiner
@@ -66,7 +66,7 @@ func TestJoinersOfPullIgnoresPackAndBystanders(t *testing.T) {
 // A hostile already fighting when the pull starts is the old fight, not a joiner of this pull.
 func TestJoinersOfPullIgnoresPrefight(t *testing.T) {
 	t0 := time.Date(2026, 11, 2, 1, 0, 0, 0, time.UTC)
-	pack := map[packet.GUID]bool{0xF130001: true}
+	pack := map[world.GUID]bool{0xF130001: true}
 	old := frameAt(t0.Add(-time.Minute), hostile(0xF130301, 1000))
 	if got := JoinersOfPull(t0, pack, []tbm.ViewFrame{old}, JoinWindow); len(got) != 0 {
 		t.Fatalf("joiners %v, want none (before the pull)", got)

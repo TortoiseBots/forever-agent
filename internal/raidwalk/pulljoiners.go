@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // PullJoiners is one pull attempt's joiner record: the pull's step and time,
@@ -22,12 +22,12 @@ import (
 // (pulljoiners.json) and hangs each on the fight of its step whose window
 // holds At.
 type PullJoiners struct {
-	Step     int           `json:"step"`
-	At       time.Time     `json:"at"`
-	Count    int           `json:"count"`
-	GUIDs    []packet.GUID `json:"guids"`
-	BossAdds []packet.GUID `json:"boss_adds,omitempty"`
-	NoRow    bool          `json:"no_row,omitempty"`
+	Step     int          `json:"step"`
+	At       time.Time    `json:"at"`
+	Count    int          `json:"count"`
+	GUIDs    []world.GUID `json:"guids"`
+	BossAdds []world.GUID `json:"boss_adds,omitempty"`
+	NoRow    bool         `json:"no_row,omitempty"`
 }
 
 // PullJoinersFName is the structured pull-joiner record the walk writes and the report reads.
@@ -44,7 +44,7 @@ type PackRow struct {
 
 // PullJoinersLine writes one pull's joiners as the run.log line:
 // "step <n>: joiners <count> (<guids...>)". Empty when nobody joined.
-func PullJoinersLine(step int, guids []packet.GUID) string {
+func PullJoinersLine(step int, guids []world.GUID) string {
 	if n := JoinersNote(SortJoinerGUIDs(guids)); n != "" {
 		return fmt.Sprintf("step %d: %s", step, n)
 	}
@@ -69,8 +69,8 @@ func ParsePullJoins(raw []byte) []PullJoiners {
 }
 
 // SortJoinerGUIDs orders joiner guids for stable records and notes.
-func SortJoinerGUIDs(guids []packet.GUID) []packet.GUID {
-	out := append([]packet.GUID(nil), guids...)
+func SortJoinerGUIDs(guids []world.GUID) []world.GUID {
+	out := append([]world.GUID(nil), guids...)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
@@ -83,11 +83,11 @@ func SortJoinerGUIDs(guids []packet.GUID) []packet.GUID {
 // whole map), as JoinersOfPull's pack map does. Units outside the radius
 // belong to a neighbouring pack, even when they share the entry. Without a
 // row nothing is owned by position: only the pulled guid is the pack.
-func PullPackMembers(seed packet.GUID, row PackRow, pos map[packet.GUID][3]float32) []packet.GUID {
+func PullPackMembers(seed world.GUID, row PackRow, pos map[world.GUID][3]float32) []world.GUID {
 	if !row.HasRow {
 		return nil
 	}
-	var members []packet.GUID
+	var members []world.GUID
 	for g, p := range pos {
 		if g == seed {
 			continue
@@ -108,12 +108,12 @@ const PackRowSlackYd = 15
 
 // SeedMates owns the pulled pack with no row in range: the seed's
 // aggro-together mates seen in the first frame within 15 yd (3D).
-func SeedMates(seed packet.GUID, pos map[packet.GUID][3]float32) []packet.GUID {
+func SeedMates(seed world.GUID, pos map[world.GUID][3]float32) []world.GUID {
 	seedPos, ok := pos[seed]
 	if !ok {
 		return nil
 	}
-	var members []packet.GUID
+	var members []world.GUID
 	for g, p := range pos {
 		if g == seed {
 			continue

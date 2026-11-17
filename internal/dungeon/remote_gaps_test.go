@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The remote Uldaman gaps (issue #83): the team gate, packs the bots do not see, the wait for a resurrection, the kit check and the end
@@ -236,7 +236,7 @@ func TestRemoteRezWaitSkippedForAFarCorpse(t *testing.T) {
 	g.addMob(299, Point{30, 0, 0})
 	g.party[2].Dead, g.party[2].HP, g.party[2].State = true, 0, "d"
 	g.party[2].X = -100 // its body lies 100 yd from the healer
-	g.lagUntil = map[packet.GUID]time.Time{gMage: g.now.Add(time.Hour)}
+	g.lagUntil = map[world.GUID]time.Time{gMage: g.now.Add(time.Hour)}
 	o := opts()
 	o.Healer = "Healy"
 	rep, err := runRemote(t, g, plan1(), o, nil)
@@ -453,15 +453,15 @@ func TestPreflightStrongTankAndNoFloorWarnNothing(t *testing.T) {
 type teamBotFake struct {
 	*botFake
 	team     string
-	botTeams map[packet.GUID]string
+	botTeams map[world.GUID]string
 }
 
-func (g teamBotFake) Team() string                    { return g.team }
-func (g teamBotFake) BotTeam(guid packet.GUID) string { return g.botTeams[guid] }
+func (g teamBotFake) Team() string                   { return g.team }
+func (g teamBotFake) BotTeam(guid world.GUID) string { return g.botTeams[guid] }
 
 // #266: a hired bot of the other faction is flagged before the first step (the feed carries no race; the object store has it).
 func TestPreflightFlagsAHireOfTheOtherFaction(t *testing.T) {
-	teams := map[packet.GUID]string{gTank: "horde", gHealer: "alliance", gMage: "horde"}
+	teams := map[world.GUID]string{gTank: "horde", gHealer: "alliance", gMage: "horde"}
 	g := teamBotFake{botFake: kitFake(t), team: "horde", botTeams: teams}
 	rep, err := runRemote(t, g, plan1(), kitOpts(), nil)
 	if err != nil || rep.State != "done" {
@@ -509,7 +509,7 @@ func TestPreflightFlagsAHireOfTheOtherFaction(t *testing.T) {
 		t.Fatalf("a game without BotTeamer warned:\n%s", all)
 	}
 	// ... and neither does a bot out of view (BotTeam ""), which the report notes once.
-	g2 := teamBotFake{botFake: kitFake(t), team: "horde", botTeams: map[packet.GUID]string{}}
+	g2 := teamBotFake{botFake: kitFake(t), team: "horde", botTeams: map[world.GUID]string{}}
 	rep, err = runRemote(t, g2, plan1(), kitOpts(), nil)
 	if err != nil || rep.Remote.Preflight == nil {
 		t.Fatalf("%v", err)
@@ -522,7 +522,7 @@ func TestPreflightFlagsAHireOfTheOtherFaction(t *testing.T) {
 	}
 
 	// One of three out of view: one note, with both counts.
-	g3 := teamBotFake{botFake: kitFake(t), team: "horde", botTeams: map[packet.GUID]string{gTank: "horde", gHealer: "alliance"}}
+	g3 := teamBotFake{botFake: kitFake(t), team: "horde", botTeams: map[world.GUID]string{gTank: "horde", gHealer: "alliance"}}
 	rep, err = runRemote(t, g3, plan1(), kitOpts(), nil)
 	if err != nil || rep.Remote.Preflight == nil {
 		t.Fatalf("%v", err)
@@ -539,7 +539,7 @@ func TestPreflightFlagsAHireOfTheOtherFaction(t *testing.T) {
 // hires walk to their vendors.
 type movedByMaintenance struct{ *teamBotFake }
 
-func (g movedByMaintenance) BotTeam(guid packet.GUID) string {
+func (g movedByMaintenance) BotTeam(guid world.GUID) string {
 	for _, l := range g.teamBotFake.botFake.lines {
 		if strings.HasPrefix(l, "maintenance ") {
 			return ""
@@ -550,7 +550,7 @@ func (g movedByMaintenance) BotTeam(guid packet.GUID) string {
 
 // #266: the faction check runs before the maintenance orders, so a hire the maintenance moves out of view is still warned about.
 func TestPreflightFactionCheckRunsBeforeMaintenance(t *testing.T) {
-	teams := map[packet.GUID]string{gTank: "horde", gHealer: "alliance", gMage: "horde"}
+	teams := map[world.GUID]string{gTank: "horde", gHealer: "alliance", gMage: "horde"}
 	g := &teamBotFake{botFake: kitFake(t), team: "horde", botTeams: teams}
 	rep, err := runRemote(t, movedByMaintenance{g}, plan1(), kitOpts(), nil)
 	if err != nil || rep.State != "done" {

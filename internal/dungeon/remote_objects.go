@@ -12,8 +12,8 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Object steps in remote mode (issue #83, gap G2). The agent's character is not with the group, so a bot does what a player does at a
@@ -107,7 +107,7 @@ func cloneObjectSteps(in []ObjectStepReport) []ObjectStepReport {
 
 // corpseRef is where a killed unit lay and its GUID.
 type corpseRef struct {
-	guid packet.GUID
+	guid world.GUID
 	at   Point
 	// ageMS is the agent's own copy's position age when the corpse came from its unit store (0 for the bots' frames and kills this
 	// run saw): a copy older than staleCorpseMS that the server calls an invalid target is gone.
@@ -304,10 +304,10 @@ type objRec struct {
 	d      *RemoteDriver
 	idx    int
 	at     time.Time
-	target packet.GUID // the object the module chose for the step's last order by entry (ACTION_TARGET)
+	target world.GUID // the object the module chose for the step's last order by entry (ACTION_TARGET)
 }
 
-func (o *objRec) targetGUID() packet.GUID { return o.target }
+func (o *objRec) targetGUID() world.GUID { return o.target }
 
 func (d *RemoteDriver) newObjRec(leg int, label, kind, carrier string) *objRec {
 	return d.newObjRecAs(leg, label, kind, carrier, true)

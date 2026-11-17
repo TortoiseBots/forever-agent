@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the hunter tests (ids from internal/spells/meta.tsv.gz; TestHunterSpellData checks the facts the rotation relies on).
@@ -23,7 +23,7 @@ const (
 	spViper      = 45651 // Turtle, level 56
 	spFeignDeath = 5384
 	spRaptor     = 14266 // rank 8, level 56
-	mobC         = packet.GUID(102)
+	mobC         = world.GUID(102)
 )
 
 var hunterSpells = []uint32{spAutoShot, spMark, spSerpent, spArcane, spMulti, spConcussive, spHawk, spCheetah, spViper, spFeignDeath, spRaptor}

@@ -3,35 +3,35 @@ package main
 import (
 	"context"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // memberParams names a group member by guid or by name; the player itself counts.
 type memberParams struct {
-	GUID packet.GUID `json:"guid,omitempty"`
-	Name string      `json:"name,omitempty"`
+	GUID world.GUID `json:"guid,omitempty"`
+	Name string     `json:"name,omitempty"`
 }
 
 type assistantParams struct {
-	GUID  packet.GUID `json:"guid,omitempty"`
-	Name  string      `json:"name,omitempty"`
-	Clear bool        `json:"clear,omitempty"` // take the flag away instead of setting it
+	GUID  world.GUID `json:"guid,omitempty"`
+	Name  string     `json:"name,omitempty"`
+	Clear bool       `json:"clear,omitempty"` // take the flag away instead of setting it
 }
 
 type raidMoveParams struct {
-	GUID     packet.GUID `json:"guid,omitempty"`
-	Name     string      `json:"name,omitempty"`
-	Subgroup int         `json:"subgroup"`            // 1-8
-	SwapWith string      `json:"swap_with,omitempty"` // trade places with this member of the target subgroup
+	GUID     world.GUID `json:"guid,omitempty"`
+	Name     string     `json:"name,omitempty"`
+	Subgroup int        `json:"subgroup"`            // 1-8
+	SwapWith string     `json:"swap_with,omitempty"` // trade places with this member of the target subgroup
 }
 
 type lootMethodParams struct {
-	Method     string      `json:"method"`                // free_for_all, round_robin, master_loot, group_loot, need_before_greed
-	Master     packet.GUID `json:"master,omitempty"`      // master_loot: the master looter's guid ...
-	MasterName string      `json:"master_name,omitempty"` // ... or name; the player when neither is given
-	Threshold  uint8       `json:"threshold,omitempty"`   // item quality 1-5; 0 keeps the group's
+	Method     string     `json:"method"`                // free_for_all, round_robin, master_loot, group_loot, need_before_greed
+	Master     world.GUID `json:"master,omitempty"`      // master_loot: the master looter's guid ...
+	MasterName string     `json:"master_name,omitempty"` // ... or name; the player when neither is given
+	Threshold  uint8      `json:"threshold,omitempty"`   // item quality 1-5; 0 keeps the group's
 }
 
 // registerGroupMethods wires group control: promote, assistant, convert_raid, raid_move, disband, loot_method.

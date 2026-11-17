@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // zgBossRowOf is the 1-based step of the ZG plan row whose boss is entry, its short leg label and the row.
@@ -70,7 +70,7 @@ func zgBossWipeFixture(t *testing.T, entry uint32, until, label, wipeNote string
 		Line: start, Lines: []string{start, "TBM:ACTION_ACK|run start|party|1|-"}}}
 	// The boss the frames hold: engaged on the main tank on every poll (the gate must see it at the wipe).
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
-		return []tbm.HostileRec{{GUID: 9, Entry: entry, X: row.X, Y: row.Y, Z: row.Z, HPPct: 100, Target: packet.GUID(1000)}}
+		return []tbm.HostileRec{{GUID: 9, Entry: entry, X: row.X, Y: row.Y, Z: row.Z, HPPct: 100, Target: world.GUID(1000)}}
 	}
 	f.agent.unitsFn = func(n int) []objects.Unit { return nil }
 	selfRegroupKill(f, zgRunLine(step, total, leg, "boss", "begin", wipeNote, label))

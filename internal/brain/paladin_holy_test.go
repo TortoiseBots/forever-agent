@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the holy paladin tests (ids from internal/spells/meta.tsv.gz; TestHolyPaladinSpellData checks the facts the brain relies on).
@@ -22,7 +22,7 @@ const (
 	plSoLight3, plSoWisdom4 = 20348, 51745       // Seals of Light (level 50) and Wisdom (48)
 	plRedemption            = 20772              // Redemption rank 4, level 48
 	plForbearance           = 25771              // the debuff of Divine Shield and Hand of Protection
-	plMobC                  = packet.GUID(102)   // a third mob
+	plMobC                  = world.GUID(102)    // a third mob
 )
 
 var holyPalKnown = []uint32{plHL4, plHL7, plFoL3, plFoL5, plCleanse, plPurify, plWisdom4, spMight, spKings, plSalvation, plConcentration, spDevotionAur,
@@ -171,7 +171,7 @@ func TestHolyPaladinDispelsWithCleanseElsePurify(t *testing.T) {
 
 // ---- blessings ----
 
-func blessed(g *fakeGame, guid packet.GUID, name string) {
+func blessed(g *fakeGame, guid world.GUID, name string) {
 	if guid == selfG {
 		g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: name}) })
 		return
@@ -192,7 +192,7 @@ func TestBlessingsGoOnByRoleAndNeverSalvationOnTheTank(t *testing.T) {
 	r, g := holyPalRig(t)
 	partyOfFive(g)
 	var got []struct {
-		to   packet.GUID
+		to   world.GUID
 		name string
 	}
 	for i := 0; i < 6; i++ {
@@ -204,13 +204,13 @@ func TestBlessingsGoOnByRoleAndNeverSalvationOnTheTank(t *testing.T) {
 			t.Fatalf("%+v", d)
 		}
 		got = append(got, struct {
-			to   packet.GUID
+			to   world.GUID
 			name string
 		}{d.Target, nameOf(d.Spell)})
 		blessed(g, d.Target, nameOf(d.Spell))
 	}
 	want := []struct {
-		to   packet.GUID
+		to   world.GUID
 		name string
 	}{{selfG, "Blessing of Wisdom"}, {tankG, "Blessing of Kings"}, {dpsG1, "Blessing of Wisdom"}, {dpsG2, "Blessing of Might"}, {dpsG3, "Blessing of Wisdom"}}
 	if len(got) != len(want) {
@@ -342,7 +342,7 @@ func TestHolyPaladinKeepsOneAuraAndDoesNotFightACompanions(t *testing.T) {
 
 // ---- the emergencies ----
 
-func mobsOn(g *fakeGame, target packet.GUID, x, y float32, guids ...packet.GUID) {
+func mobsOn(g *fakeGame, target world.GUID, x, y float32, guids ...world.GUID) {
 	for i, m := range guids {
 		g.addUnit(mob(m, target), x, y+float32(i))
 	}

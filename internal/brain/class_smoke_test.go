@@ -10,7 +10,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Tests for the fixes from the live class smoke test (issue #80): each one plays the symptom of the live run on the fake game.
@@ -64,7 +64,7 @@ func swingRig(t *testing.T, preset string, class uint8, level uint32, power uint
 	if tune != nil {
 		tune(&g.self)
 	}
-	sg := &swingGame{meleeFake: &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[packet.GUID]time.Time{}}, forget: forget}
+	sg := &swingGame{meleeFake: &meleeFake{posFake: &posFake{fakeGame: g}, dodged: map[world.GUID]time.Time{}}, forget: forget}
 	return rigOn(t, sg, g, Params{Strategies: []string{preset}}), sg
 }
 
@@ -204,7 +204,7 @@ func TestBadTargetsOfACastAtThePlayerBacksOffForLong(t *testing.T) {
 	bad := codeOf(t, "bad_targets")
 	for _, c := range []struct {
 		name   string
-		target packet.GUID
+		target world.GUID
 		held   time.Duration
 	}{{"a cast at the mob", mobA, 2 * time.Second}, {"a cast at the player", selfG, selfBadTargetsHold}} {
 		r.g.clk.advance(time.Minute)

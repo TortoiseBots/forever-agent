@@ -11,15 +11,15 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Member is a party member as the brain needs to know them.
 type Member struct {
 	Name   string
-	GUID   packet.GUID
+	GUID   world.GUID
 	Online bool
 	Dead   bool
 }
@@ -34,13 +34,13 @@ type Game interface {
 	Units() []objects.Unit
 	Party() []Member
 	// Selected is the unit the player has targeted.
-	Selected() packet.GUID
+	Selected() world.GUID
 	Spells() *spellstate.State
 	Items() []objects.Item
 
-	Cast(ctx context.Context, spell uint32, target packet.GUID) error
-	Face(ctx context.Context, g packet.GUID) error
-	Target(ctx context.Context, g packet.GUID) error
+	Cast(ctx context.Context, spell uint32, target world.GUID) error
+	Face(ctx context.Context, g world.GUID) error
+	Target(ctx context.Context, g world.GUID) error
 	Attack(ctx context.Context) error
 	StopAttack(ctx context.Context) error
 	UseItem(ctx context.Context, entry uint32) error
@@ -163,7 +163,7 @@ type memory struct {
 	drink drinkMem // rest_drink's "no drink" line, once per rest (heal.go)
 
 	// lastCastTarget is the target of the last cast sent (Ctx.cast); a refusal says which spell, not at whom.
-	lastCastTarget packet.GUID
+	lastCastTarget world.GUID
 }
 
 func (m *memory) hold(spell uint32, until time.Time, reason string) {
@@ -333,7 +333,7 @@ func (b *Brain) Strategies() []string { return slices.Clone(b.names) }
 func (b *Brain) newCtx(now time.Time) *Ctx {
 	b.tick++
 	c := &Ctx{G: b.g, Now: now, Tick: b.tick, Spells: b.g.Spells(), P: b.p, vals: b.vals, mem: b.mem, RestOK: b.restOK(), lock: b.lock, b: b,
-		byID: map[packet.GUID]*objects.Unit{}}
+		byID: map[world.GUID]*objects.Unit{}}
 	c.Self, c.SelfOK = b.g.Self()
 	c.Units = b.g.Units()
 	c.Party = b.g.Party()

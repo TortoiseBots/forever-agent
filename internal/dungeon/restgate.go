@@ -5,8 +5,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The rest gate's shared parts: the targets a leg asks for, the watch on members whose mana is short, and the per-gate record
@@ -82,19 +82,19 @@ func (t restTarget) manaNeed(healer bool) int {
 // restWatch is the state a gate keeps between two looks at the party: the windows on members short of mana, and who has had a
 // drink order already (one per member per gate).
 type restWatch struct {
-	mana   map[packet.GUID]manaWatch
-	nudged map[packet.GUID]bool
+	mana   map[world.GUID]manaWatch
+	nudged map[world.GUID]bool
 	tgt    restTarget
 	gather bool // remote mode: the followers must be near the lead bot too (a gate before a pull), not only rested
 }
 
 func newRestWatch(tgt restTarget) *restWatch {
-	return &restWatch{mana: map[packet.GUID]manaWatch{}, nudged: map[packet.GUID]bool{}, tgt: tgt}
+	return &restWatch{mana: map[world.GUID]manaWatch{}, nudged: map[world.GUID]bool{}, tgt: tgt}
 }
 
 // shortMana is a member below its mana target.
 type shortMana struct {
-	GUID packet.GUID
+	GUID world.GUID
 	Name string
 	Pct  int
 }
@@ -103,7 +103,7 @@ func (s shortMana) String() string { return fmt.Sprintf("%s mana %d%%", s.Name, 
 
 // look updates the member's window and says whether it is due a drink order: its mana has not risen at all in DrinkNudge since the
 // window began (it began when the member was first seen short, and starts again whenever its mana rises), and it has had none yet.
-func (rw *restWatch) look(cfg Config, now time.Time, guid packet.GUID, power uint32) (w manaWatch, nudge bool) {
+func (rw *restWatch) look(cfg Config, now time.Time, guid world.GUID, power uint32) (w manaWatch, nudge bool) {
 	w, ok := rw.mana[guid]
 	if !ok {
 		w = manaWatch{power: power, since: now, base: power, baseAt: now}
@@ -117,7 +117,7 @@ func (rw *restWatch) look(cfg Config, now time.Time, guid packet.GUID, power uin
 
 // stalled is the ManaStall rule shared by both drivers: after ManaStall the member is "not drinking" unless it gained
 // ManaStallPct of its maximum, which starts the window again.
-func (rw *restWatch) stalled(cfg Config, now time.Time, guid packet.GUID, w manaWatch, power, maxPower uint32) bool {
+func (rw *restWatch) stalled(cfg Config, now time.Time, guid world.GUID, w manaWatch, power, maxPower uint32) bool {
 	if now.Sub(w.since) < cfg.ManaStall {
 		return false
 	}

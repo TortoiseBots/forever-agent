@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // kill_first (issue #190): the plan's healers and the summoned healing ward are killed before the rest of the fight.
@@ -36,7 +36,7 @@ func TestKillFirstEntriesComeFirstInTheListsOrder(t *testing.T) {
 	d := ledgerDriver(t)
 	d.plan.KillFirst = []uint32{8179, 5650, 7247}
 	mk := func(guid uint64, entry uint32) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0x100 + guid), Entry: entry, HPPct: 100, Flags: "-"}
+		return tbm.HostileRec{GUID: world.GUID(0x100 + guid), Entry: entry, HPPct: 100, Flags: "-"}
 	}
 	// rankByTank's order: the tank's mob 299 first, then 7247, the ward 8179 last.
 	in := []tbm.HostileRec{mk(1, 299), mk(2, 7247), mk(3, 300), mk(4, 5650), mk(5, 8179)}
@@ -156,7 +156,7 @@ func wardDriver(t *testing.T, hs ...tbm.HostileRec) (*fakeRemote, *RemoteDriver)
 	d.tank = gTank
 	d.fr = tbm.ViewFrame{Lead: gTank, Party: []tbm.PartyRec{{GUID: gTank, Name: "Tanky"}}, Hostiles: hs}
 	d.haveFr = true
-	d.engagedAt = map[packet.GUID]time.Time{}
+	d.engagedAt = map[world.GUID]time.Time{}
 	return g, d
 }
 
@@ -245,7 +245,7 @@ func TestKillFirstThatIsCCAlwaysIsSheepedOnceAndTheOthersKilledFirst(t *testing.
 		t.Fatalf("Ragefire: kill_first %v cc_always %v", d.plan.KillFirst, d.plan.CCAlways)
 	}
 	mk := func(guid uint64, entry uint32) tbm.HostileRec {
-		return tbm.HostileRec{GUID: packet.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-"}
+		return tbm.HostileRec{GUID: world.GUID(0xF130000000000000 | guid), Entry: entry, HPPct: 100, Flags: "-"}
 	}
 	trogg1, trogg2, shamanA, shamanB := mk(1, 11318), mk(2, 11318), mk(3, 11319), mk(4, 11319)
 	if !d.ccAllowed(shamanA) || !d.ccAllowed(trogg1) {

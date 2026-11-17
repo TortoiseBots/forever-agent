@@ -10,7 +10,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Strategies and presets. A preset is a list of strategies; a strategy is a Go literal built by a constructor, so
@@ -314,7 +314,7 @@ func auraMissing(u *objects.Unit, names ...string) bool {
 	return true
 }
 
-func fightTarget(c *Ctx) packet.GUID {
+func fightTarget(c *Ctx) world.GUID {
 	if m := ValFight.Get(c).Mob; m != nil {
 		return m.GUID
 	}

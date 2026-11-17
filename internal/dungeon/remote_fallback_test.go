@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/objects"
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The approach to an object and the agent's fallback (remote_approach.go, remote_fallback.go).
@@ -41,7 +41,7 @@ func newHandsGame(t *testing.T, level int) *handsGame {
 	return &handsGame{nearGame: n, mine: map[uint32]uint32{}, made: map[uint32]uint32{}}
 }
 
-func (g *handsGame) LootObject(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g *handsGame) LootObject(ctx context.Context, guid world.GUID) (Looted, error) {
 	g.log = append(g.log, "loot")
 	g.loots++
 	if g.onLoot != nil {
@@ -62,7 +62,7 @@ func (g *handsGame) LootObject(ctx context.Context, guid packet.GUID) (Looted, e
 	return Looted{Items: g.chestHas, Money: 5}, nil
 }
 
-func (g *handsGame) LootCorpse(ctx context.Context, guid packet.GUID) (Looted, error) {
+func (g *handsGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, error) {
 	return Looted{}, errors.New("not in this test")
 }
 
@@ -75,7 +75,7 @@ func (g *handsGame) UseItem(ctx context.Context, entry uint32) error {
 	return nil
 }
 
-func (g *handsGame) UseObject(ctx context.Context, guid packet.GUID) error {
+func (g *handsGame) UseObject(ctx context.Context, guid world.GUID) error {
 	g.log = append(g.log, "useobject")
 	g.useObjs++
 	return nil

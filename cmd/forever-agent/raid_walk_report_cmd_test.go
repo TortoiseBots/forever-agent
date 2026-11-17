@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const reportCmdFight = `{"fight":{"id":"3-1","commander":"Cmd","plan":"zul_gurub","leg":"jeklik","step":2,"kind":"move","start":1793387810,"dur_ms":100000,"outcome":"end",
@@ -62,10 +62,10 @@ func TestRaidWalkReportPrintsMarkdown(t *testing.T) {
 // the same step.
 func TestRaidWalkReportShowsPullJoiners(t *testing.T) {
 	f := joinerWalk(t, []tbm.HostileRec{
-		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: packet.GUID(1000)},
-		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: packet.GUID(1000)}, // pack mate
-		{GUID: 0xF130101, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1001)},
-		{GUID: 0xF130102, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: packet.GUID(1002)},
+		{GUID: 0xF130002C6C00C24B, Entry: 12129, X: 49.8, Y: -114.6, HPPct: 90, Target: world.GUID(1000)},
+		{GUID: 0xF130002, Entry: 12129, X: 53.0, Y: -114.6, HPPct: 100, Target: world.GUID(1000)}, // pack mate
+		{GUID: 0xF130101, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1001)},
+		{GUID: 0xF130102, Entry: 12130, X: 0, Y: 0, HPPct: 100, Target: world.GUID(1002)},
 	})
 	fight := `{"fight":{"id":"2-1","plan":"onyxias_lair","step":2,"kind":"pull","start":1793387810,"dur_ms":30000,"outcome":"end",
 "engaged":[{"e":12129,"n":"Onyxian Whelp","c":2}],"deaths":[],"log":[]}}`
