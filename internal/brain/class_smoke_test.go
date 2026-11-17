@@ -199,7 +199,7 @@ func TestSliceAndDiceIsCastAtTheComboMobNotAtThePlayer(t *testing.T) {
 func TestBadTargetsOfACastAtThePlayerBacksOffForLong(t *testing.T) {
 	r, _ := newRogueRig(t, Params{})
 	r.tick(100 * time.Millisecond)
-	bad := codeOf(t, "bad_targets")
+	bad := reasonOf(t, "bad_targets")
 	for _, c := range []struct {
 		name   string
 		target world.GUID

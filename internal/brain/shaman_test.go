@@ -871,7 +871,7 @@ func TestImbueRefusedIsTriedAgainAfterAMinute(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	// The server says there is no weapon: the spell is held back and the imbue is forgotten.
-	r.g.st.CastRefused(shWindfuryW2, codeOf(t, "item_gone"))
+	r.g.st.CastRefused(shWindfuryW2, reasonOf(t, "item_gone"))
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}

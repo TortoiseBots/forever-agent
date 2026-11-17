@@ -187,7 +187,7 @@ func TestRezIsTriedAgainAtOnceWhenTheServerRefusedIt(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "rez" {
 		t.Fatalf("%+v", d)
 	}
-	g.st.CastRefused(rzResurrection2, codeOf(t, "out_of_range"))
+	g.st.CastRefused(rzResurrection2, reasonOf(t, "out_of_range"))
 	if d := r.tick(2 * time.Second); d != nil && d.Action == "rez" {
 		t.Fatalf("a refused spell is held back for a moment first: %+v", d)
 	}

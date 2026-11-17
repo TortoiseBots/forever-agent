@@ -135,7 +135,7 @@ func TestLineOfSightRefusalOfACastAtAnotherTargetMarksNoWall(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	tankFights(r.g, 22, 24, 0)
 	r.tick(100 * time.Millisecond) // the fight's mob is mobA
-	los := codeOf(t, "line_of_sight")
+	los := reasonOf(t, "line_of_sight")
 	for _, c := range []struct {
 		name   string
 		target world.GUID

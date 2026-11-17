@@ -375,7 +375,7 @@ func TestStatusShowsStrategiesDecisionsAndHolds(t *testing.T) {
 	if d := b.Tick(ctx); d == nil || d.Action != "fire_blast" {
 		t.Fatalf("%+v", d)
 	}
-	g.st.CastRefused(spFireBlast, codeOf(t, "line_of_sight"))
+	g.st.CastRefused(spFireBlast, reasonOf(t, "line_of_sight"))
 	g.clk.advance(2 * time.Second)
 	b.Tick(ctx)
 	st = ctl.Status()

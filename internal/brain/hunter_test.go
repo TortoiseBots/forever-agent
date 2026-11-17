@@ -396,7 +396,7 @@ func TestHunterStopsShootingWithoutAmmo(t *testing.T) {
 	r, _ := newHunterRig(t, Params{})
 	rangedFight(r)
 	open(r)
-	r.g.st.CastRefused(spAutoShot, codeOf(t, "no_ammo"))
+	r.g.st.CastRefused(spAutoShot, reasonOf(t, "no_ammo"))
 	r.g.st.Clear(spAutoShot)
 	markAndSting(r.g)
 	// Held for 30 s; the ticks go on every 1.5 s, as the fight's clock needs, and the shots resume when the hold ends.

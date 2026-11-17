@@ -22,7 +22,7 @@ func TestATotemRefusedByTheServerLeavesNoRecordAndIsDroppedAgain(t *testing.T) {
 	if rec := r.b.mem.sham.totem(elFire); rec.spell != 0 {
 		t.Fatalf("recorded before the spell went off: %+v", rec)
 	}
-	g.st.CastRefused(shSearing4, codeOf(t, "no_power"))
+	g.st.CastRefused(shSearing4, reasonOf(t, "no_power"))
 	r.tick(100 * time.Millisecond) // the refusal is seen: the pending cast is forgotten and the spell is held for a moment
 	if r.b.mem.sham.pending(elFire) {
 		t.Fatal("still pending after the refusal")
@@ -191,7 +191,7 @@ func TestMarkOfTheWildSkipsAMemberItFailedOnTwiceFor60Seconds(t *testing.T) {
 	if d == nil || d.Action != "mark_of_the_wild" || d.Target != tankG {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	g.st.CastRefused(drMotw5, codeOf(t, "out_of_range"))
+	g.st.CastRefused(drMotw5, reasonOf(t, "out_of_range"))
 	// The first refusal: the spell is held for the refusal's three seconds and then tried again.
 	if d := r.tick(2 * time.Second); d != nil && d.Action == "mark_of_the_wild" {
 		t.Fatalf("%+v", d)
@@ -199,7 +199,7 @@ func TestMarkOfTheWildSkipsAMemberItFailedOnTwiceFor60Seconds(t *testing.T) {
 	if d := r.tick(2 * time.Second); d == nil || d.Action != "mark_of_the_wild" || d.Target != tankG {
 		t.Fatalf("one failure does not skip the member: %+v idle %q", d, r.idle())
 	}
-	g.st.CastRefused(drMotw5, codeOf(t, "out_of_range"))
+	g.st.CastRefused(drMotw5, reasonOf(t, "out_of_range"))
 	r.tick(2 * time.Second)
 	// The second: the member is left alone, so the druid has nothing to buff and keeps its form.
 	for i := 0; i < 5; i++ {

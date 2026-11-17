@@ -19,7 +19,7 @@ func TestServerLineOfSightRefusalMakesTheMageMoveNotCastIntoTheWall(t *testing.T
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Action != "frostbolt" {
 		t.Fatalf("%+v", d)
 	}
-	r.g.st.CastRefused(spFrostbolt, codeOf(t, "line_of_sight")) // a wall the mesh does not know
+	r.g.st.CastRefused(spFrostbolt, reasonOf(t, "line_of_sight")) // a wall the mesh does not know
 	r.g.st.Clear(spFrostbolt)
 	d := r.tick(400 * time.Millisecond) // past the cast's settle
 	if d == nil || d.Action != "reposition" || d.Trigger != "bad_position" {

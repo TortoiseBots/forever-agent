@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -293,15 +292,15 @@ func mob(g world.GUID, target world.GUID) world.Unit {
 	return world.Unit{GUID: g, Type: "creature", Name: "Mob", Hostile: true, InCombat: true, Health: 500, MaxHealth: 500, Target: target}
 }
 
-// codeOf finds the SpellCastResult code of a reason name.
-func codeOf(t *testing.T, name string) uint8 {
+// reasonOf finds the cast-failure reason with a name.
+func reasonOf(t *testing.T, name string) world.CastFailure {
 	t.Helper()
-	for i := 0; i < 200; i++ {
-		if game.CastFailName(uint8(i)) == name {
-			return uint8(i)
+	for i := 0; i < 256; i++ {
+		if r := world.CastFailure(i); r.String() == name {
+			return r
 		}
 	}
-	t.Fatalf("no cast result named %q", name)
+	t.Fatalf("no cast failure named %q", name)
 	return 0
 }
 

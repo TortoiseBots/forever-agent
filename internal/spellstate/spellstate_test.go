@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -156,7 +155,7 @@ func TestCategoryIsShared(t *testing.T) {
 
 func TestNotReadyHold(t *testing.T) {
 	st, c := newState(fireball)
-	if reason := st.CastRefused(fireball, game.CastFailedNotReady); reason != "not_ready" {
+	if reason := st.CastRefused(fireball, world.CastFailureNotReady); reason != "not_ready" {
 		t.Errorf("reason %q", reason)
 	}
 	if left, why := st.Remaining(fireball); left != NotReadyHold || why != WhyNotReady {
@@ -355,7 +354,7 @@ func TestRefusalOfANewAttemptKeepsTheRunningCast(t *testing.T) {
 	st.CastStarted(fireball, 3000, 0x77)
 	c.advance(500 * time.Millisecond)
 	// The same spell sent again while it casts: SPELL_FAILED_SPELL_IN_PROGRESS.
-	st.CastRefused(fireball, game.CastFailedInProgress)
+	st.CastRefused(fireball, 97)
 	cs := st.CastState()
 	if cs.Cast.State != "casting" || cs.Cast.SpellID != fireball || cs.LastFailure.ReasonName != "spell_in_progress" {
 		t.Fatalf("%+v", cs)
@@ -372,7 +371,7 @@ func TestRefusalOfANewAttemptKeepsTheRunningCast(t *testing.T) {
 	// An instant spell sent again between its start and its go: not ready, and its GCD stays.
 	st2, _ := newState(fireBlast, fireball)
 	st2.CastStarted(fireBlast, 0, 0)
-	st2.CastRefused(fireBlast, game.CastFailedNotReady)
+	st2.CastRefused(fireBlast, world.CastFailureNotReady)
 	if left, why := st2.Remaining(fireball); left != 1500*time.Millisecond || why != WhyGCD {
 		t.Errorf("the GCD went: %v %s", left, why)
 	}
@@ -381,7 +380,7 @@ func TestRefusalOfANewAttemptKeepsTheRunningCast(t *testing.T) {
 	}
 	// Only SMSG_SPELL_FAILED_OTHER ends the cast, and the pair of an interrupt counts once.
 	st.CastBroken(fireball)
-	st.CastRefused(fireball, game.CastFailedInterrupted)
+	st.CastRefused(fireball, world.CastFailureInterrupted)
 	cs = st.CastState()
 	if cs.Cast.State != "idle" || !st.Ready(fireBlast) || cs.LastFailure.ReasonName != "interrupted" {
 		t.Errorf("%+v", cs)

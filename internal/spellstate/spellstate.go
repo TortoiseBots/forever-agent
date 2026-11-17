@@ -29,7 +29,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/game"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -86,10 +85,10 @@ type lastCast struct {
 }
 
 type lastFail struct {
-	spell uint32
-	code  uint8
-	name  string // game.CastFailName, or "interrupted"
-	at    time.Time
+	spell  uint32
+	reason world.CastFailure
+	name   string // reason.String(): world.CastFailureInterrupted is "interrupted"
+	at     time.Time
 }
 
 // State is safe for concurrent use: the session's loop writes it, RPC calls read it.
@@ -530,7 +529,8 @@ func (st *State) CastDelayed(delayMS uint32) {
 // dupWindow is how long an interrupt's SMSG_SPELL_FAILED_OTHER and its SMSG_CAST_RESULT(interrupted) count as one failure.
 const dupWindow = 250 * time.Millisecond
 
-// CastRefused records an SMSG_CAST_RESULT failure: the server refused or broke a cast of spell. It
+// CastRefused records an SMSG_CAST_RESULT failure: the server refused or broke a cast of spell, and
+// reason is the neutral cause the session mapped the 1.12 code to (game.CastFailureReason). It
 // changes nothing about the cast in progress or the GCD. A refusal of a new attempt (Spell::prepare:
 // spell_in_progress, not_ready, out_of_range, no_power, ...) comes from a fresh Spell object that is
 // not the running cast (Spell.cpp:3545-3551), and its finish(false) leaves the running cast and its
@@ -538,22 +538,22 @@ const dupWindow = 250 * time.Millisecond
 // the running cast is always preceded by SMSG_SPELL_FAILED_OTHER (Spell::SendInterrupted,
 // Spell.cpp:3704, :3725, :3786, :3828), which is CastBroken. A refusal as not ready holds the spell
 // back for NotReadyHold. It returns the reason name.
-func (st *State) CastRefused(spell uint32, code uint8) (reason string) {
+func (st *State) CastRefused(spell uint32, reason world.CastFailure) (name string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := st.now()
-	reason = game.CastFailName(code)
-	if code == game.CastFailedNotReady {
+	name = reason.String()
+	if reason == world.CastFailureNotReady {
 		st.notReady[spell] = now.Add(NotReadyHold)
 	}
 	// An interrupt sends both packets: count the pair once.
-	dup := code == game.CastFailedInterrupted && st.fail != nil && st.fail.spell == spell &&
-		st.fail.code == code && now.Sub(st.fail.at) < dupWindow
+	dup := reason == world.CastFailureInterrupted && st.fail != nil && st.fail.spell == spell &&
+		st.fail.reason == reason && now.Sub(st.fail.at) < dupWindow
 	if !dup {
 		st.failCount++
 	}
-	st.fail = &lastFail{spell: spell, code: code, name: reason, at: now}
-	return reason
+	st.fail = &lastFail{spell: spell, reason: reason, name: name, at: now}
+	return name
 }
 
 // CastBroken records SMSG_SPELL_FAILED_OTHER for the player's own cast: the running cast of spell
@@ -572,7 +572,7 @@ func (st *State) CastBroken(spell uint32) {
 		st.channel = nil
 	}
 	st.failCount++
-	st.fail = &lastFail{spell: spell, code: game.CastFailedInterrupted, name: game.CastFailName(game.CastFailedInterrupted), at: st.now()}
+	st.fail = &lastFail{spell: spell, reason: world.CastFailureInterrupted, name: world.CastFailureInterrupted.String(), at: st.now()}
 }
 
 // Cast is the state of the player's cast.
@@ -588,11 +588,11 @@ type Cast struct {
 
 // Failure is the last cast the server refused or broke.
 type Failure struct {
-	SpellID    uint32 `json:"spell_id"`
-	Name       string `json:"name,omitempty"`
-	Reason     uint8  `json:"reason"`      // SpellCastResult
-	ReasonName string `json:"reason_name"` // out_of_range, no_power, interrupted, ...
-	AgoMS      int64  `json:"ago_ms"`
+	SpellID    uint32            `json:"spell_id"`
+	Name       string            `json:"name,omitempty"`
+	Reason     world.CastFailure `json:"reason"`      // the 1.12 SpellCastResult number, as sent
+	ReasonName string            `json:"reason_name"` // out_of_range, no_power, interrupted, ...
+	AgoMS      int64             `json:"ago_ms"`
 }
 
 // Done is the last cast that went off.
@@ -632,7 +632,7 @@ func (st *State) CastState() CastState {
 		out.LastCast = &Done{SpellID: st.last.spell, Name: spells.Name(st.last.spell), AgoMS: now.Sub(st.last.at).Milliseconds()}
 	}
 	if f := st.fail; f != nil {
-		out.LastFailure = &Failure{SpellID: f.spell, Name: spells.Name(f.spell), Reason: f.code, ReasonName: f.name, AgoMS: now.Sub(f.at).Milliseconds()}
+		out.LastFailure = &Failure{SpellID: f.spell, Name: spells.Name(f.spell), Reason: f.reason, ReasonName: f.name, AgoMS: now.Sub(f.at).Milliseconds()}
 	}
 	return out
 }

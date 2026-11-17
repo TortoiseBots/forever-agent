@@ -200,7 +200,7 @@ func TestHealRefusedForLineOfSightLeavesTheMemberAlone(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	// The server says the wall is there: the mesh could not see it.
-	g.st.CastRefused(d.Spell, codeOf(t, "line_of_sight"))
+	g.st.CastRefused(d.Spell, reasonOf(t, "line_of_sight"))
 	g.st.Clear(d.Spell)
 	d = r.tick(2 * time.Second)
 	if d == nil || d.Action != "heal" || d.Target != dpsG2 {
@@ -827,7 +827,7 @@ func TestNotStandingRefusalBacksTheSpellOff(t *testing.T) {
 	if d == nil || d.Spell != spFrostbolt {
 		t.Fatalf("%+v", d)
 	}
-	g.st.CastRefused(spFrostbolt, codeOf(t, "not_standing"))
+	g.st.CastRefused(spFrostbolt, reasonOf(t, "not_standing"))
 	g.st.Clear(spFrostbolt)
 	if d := r.tick(200 * time.Millisecond); d != nil && d.Spell == spFrostbolt {
 		t.Fatalf("sent again at once: %+v", d)

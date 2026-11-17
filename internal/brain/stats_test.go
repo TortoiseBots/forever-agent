@@ -16,7 +16,7 @@ func TestStatsCountActionsRefusalsIdleAndMobsOnTheLeader(t *testing.T) {
 	r.tick(2200 * time.Millisecond) // frostbolt
 	r.tick(1600 * time.Millisecond) // frostbolt
 	// A refusal of the server: out of range.
-	r.g.st.CastRefused(spFrostbolt, codeOf(t, "out_of_range"))
+	r.g.st.CastRefused(spFrostbolt, reasonOf(t, "out_of_range"))
 	r.tick(100 * time.Millisecond)
 	// A mob has the leader; nothing to cast at it in melee range for a while (the cooldowns): idle seconds.
 	r.g.mutate(mobA, func(u *world.Unit) { u.Target = selfG })

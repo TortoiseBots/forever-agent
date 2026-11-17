@@ -384,7 +384,7 @@ func TestARefusedCastBacksOffByTheServersReason(t *testing.T) {
 			r.g.addUnit(mob(mobA, tankG), 28, 0)
 			r.tick(100 * time.Millisecond)
 			r.tick(2200 * time.Millisecond) // the first Frostbolt
-			r.g.st.CastRefused(spFrostbolt, codeOf(t, c.reason))
+			r.g.st.CastRefused(spFrostbolt, reasonOf(t, c.reason))
 			r.g.st.Clear(spFrostbolt) // the refusal gave the GCD back; only the hold is under test
 			// Looking every 100 ms, the brain sends nothing before the hold ended and tries again soon after it.
 			var d *Decision
@@ -411,7 +411,7 @@ func TestOneRefusalHoldsOnlyOnce(t *testing.T) {
 	r.g.addUnit(mob(mobA, tankG), 28, 0)
 	r.tick(100 * time.Millisecond)
 	r.tick(2200 * time.Millisecond)
-	r.g.st.CastRefused(spFrostbolt, codeOf(t, "out_of_range"))
+	r.g.st.CastRefused(spFrostbolt, reasonOf(t, "out_of_range"))
 	r.tick(100 * time.Millisecond)
 	r.tick(2 * time.Second)                             // cast again after the hold
 	if d := r.tick(1600 * time.Millisecond); d == nil { // the refusal was not seen a second time
@@ -424,7 +424,7 @@ func TestNotInFrontMakesTheMageFaceItsTarget(t *testing.T) {
 	r.g.addUnit(mob(mobA, tankG), 0, 28) // due north; the mage faces east
 	r.tick(100 * time.Millisecond)
 	r.tick(2200 * time.Millisecond)
-	r.g.st.CastRefused(spFrostbolt, codeOf(t, "not_infront"))
+	r.g.st.CastRefused(spFrostbolt, reasonOf(t, "not_infront"))
 	r.g.st.Clear(spFrostbolt)
 	d := r.tick(300 * time.Millisecond)
 	if d == nil || d.Action != "face_target" || d.Via != "pre" || len(r.g.faces) != 1 || r.g.faces[0] != mobA {

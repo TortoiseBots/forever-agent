@@ -129,7 +129,7 @@ func (s *Session) onCastResult(body []byte) error {
 		return err
 	}
 	s.store.EndCast(s.selfGUID(), c.SpellID)
-	reason := s.spellState.CastRefused(c.SpellID, c.Reason)
+	reason := s.spellState.CastRefused(c.SpellID, game.CastFailureReason(c.Reason))
 	s.emit(events.Event{Kind: events.KindSpellFail, SourceGUID: s.selfGUID(), SpellID: c.SpellID, Data: map[string]any{"reason": c.Reason, "reason_name": reason}})
 	s.noteCastFailed(fmt.Sprintf("%s, SpellCastResult %d", reason, c.Reason), c.Reason)
 	return nil

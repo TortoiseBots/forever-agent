@@ -462,7 +462,7 @@ func TestWandIsLeftAloneWhenTheTargetIsOutOfWandRangeOrNoWandIsEquipped(t *testi
 	if d := r2.tick(2200 * time.Millisecond); d == nil || d.Action != "wand" {
 		t.Fatalf("%+v", d)
 	}
-	r2.g.st.CastRefused(spShoot, codeOf(t, "equipped_item_class"))
+	r2.g.st.CastRefused(spShoot, reasonOf(t, "equipped_item_class"))
 	for i := 0; i < 28; i++ { // one tick a second keeps the fight (and its opening delay) running
 		if d := r2.tick(time.Second); d != nil && d.Action == "wand" {
 			t.Fatalf("Shoot again after %d s without a wand: %+v", i+1, d)

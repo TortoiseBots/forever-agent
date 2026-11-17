@@ -339,7 +339,7 @@ func TestRendOnlyWhereItCanPayOff(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	// A mob that cannot bleed: the server says immune, and Rend is left alone for a while.
-	r.g.st.CastRefused(spRend, codeOf(t, "immune"))
+	r.g.st.CastRefused(spRend, reasonOf(t, "immune"))
 	r.g.st.Clear(spRend)
 	if d := r.tick(1600 * time.Millisecond); d != nil {
 		t.Fatalf("Rend again right after 'immune': %+v", d)
