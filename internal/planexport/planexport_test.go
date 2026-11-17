@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 func parsePlan(t *testing.T, js string) *dungeon.Plan {
@@ -235,7 +235,7 @@ func TestUldaman(t *testing.T) {
 	if !IsLive(p) || Refusal(p, false) != "" {
 		t.Fatalf("uldaman status %q", p.Status)
 	}
-	res, err := Build(p, Options{Source: "turtle-agent test dungeons/uldaman.json"})
+	res, err := Build(p, Options{Source: "forever-agent test dungeons/uldaman.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestUldamanPullOrderExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Build(p, Options{Source: "turtle-agent test dungeons/uldaman.json"})
+	res, err := Build(p, Options{Source: "forever-agent test dungeons/uldaman.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestCutBeforeTheFirstLegWithAStepTheRunLeaderCannotDo(t *testing.T) {
 // The shipped Zul'Farrak plan, with the courtyard and Zum'rah legs, still exports: the area trigger is the walk into the zone.
 func TestZulfarrakWithZumrahExports(t *testing.T) {
 	p := zulfarrakThroughZumrah(t)
-	res, err := Build(p, Options{Source: "turtle-agent test dungeons/zulfarrak.json", DropCompanionsLoot: true})
+	res, err := Build(p, Options{Source: "forever-agent test dungeons/zulfarrak.json", DropCompanionsLoot: true})
 	if err != nil {
 		t.Fatal(err)
 	}

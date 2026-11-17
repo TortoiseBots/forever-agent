@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/dungeons"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/dungeons"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // planName limits a plan name to what a plan file name can be (the same rule dungeon_run applies).
@@ -135,7 +135,7 @@ func (c *planCache) builtin(name string) (*dungeon.Plan, Geometry, PlanSource, s
 		return nil, Geometry{}, PlanSource{}, "no plan file " + name + ".json in the plans folders or in this build"
 	}
 	sum := sha256.Sum256(data)
-	e := &planEntry{src: PlanSource{Role: "build", Path: "(built into this turtle-agent) " + name + ".json", SHA256: hex.EncodeToString(sum[:])}}
+	e := &planEntry{src: PlanSource{Role: "build", Path: "(built into this forever-agent) " + name + ".json", SHA256: hex.EncodeToString(sum[:])}}
 	if p, err := dungeon.Parse(name+".json", data); err != nil {
 		e.err = firstLine(err.Error())
 	} else {

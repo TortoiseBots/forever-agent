@@ -11,11 +11,11 @@ import (
 
 // serverMmaps finds the navmesh files of maps 808, 818 and 820 (808.mmap and the
 // 808*.mmtile tiles, and the same for the others): $TURTLE_AGENT_MMAPS or
-// ~/turtle-agent-mmaps, as in zulfarrakMmaps
+// ~/forever-agent-mmaps, as in zulfarrakMmaps
 // (internal/dungeon/zulfarrak_test.go:410-425).
 func serverMmaps() string {
 	home, _ := os.UserHomeDir()
-	for _, d := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, d := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if d == "" {
 			continue
 		}

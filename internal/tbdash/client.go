@@ -1,4 +1,4 @@
-// Package tbdash is turtle-agent's client for the TortoiseBots dashboard daemon's JSON API.
+// Package tbdash is forever-agent's client for the TortoiseBots dashboard daemon's JSON API.
 // It logs in with a password read from a private file and keeps the daemon's session cookie in
 // a jar; the raid tools use it to save the commander snapshots and combat fights of a walk.
 //
@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/privfile"
+	"github.com/pjerra/forever-agent/internal/privfile"
 )
 
 const (

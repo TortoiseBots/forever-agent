@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // The live sequence of a staged leg for the TortoiseBots run leader: the
@@ -211,7 +211,7 @@ func (s *Stager) Stage(ctx context.Context, req StageRequest) (StageReport, erro
 	}
 	steps := listedSteps(planList, req.Plan.Name)
 	if steps == 0 {
-		rep.Refusal = fmt.Sprintf("the server's run leader has no plan %s (it lists: %s): export it with turtle-agent plan-export, apply the migration and restart the server", req.Plan.Name, planList)
+		rep.Refusal = fmt.Sprintf("the server's run leader has no plan %s (it lists: %s): export it with forever-agent plan-export, apply the migration and restart the server", req.Plan.Name, planList)
 		return done()
 	}
 	if req.FirstRow != nil {

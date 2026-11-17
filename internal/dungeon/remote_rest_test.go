@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/tbm"
-	"github.com/pjerra/turtle-agent/internal/trace"
-	"github.com/pjerra/turtle-agent/internal/tracecheck"
-	"github.com/pjerra/turtle-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/trace"
+	"github.com/pjerra/forever-agent/internal/tracecheck"
+	"github.com/pjerra/forever-agent/internal/tracerun"
 )
 
 // refillFake is a kitFake whose bags fill when `.bot maintenance <bot>` is sent a second time (the preflight sent the first): after

@@ -5,13 +5,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // The plan attributes the run leader's rows cannot carry: each one the plan sets is a warning (TortoiseBots #984: nothing is dropped
 // silently), naming every place it stands and what the run leader does instead. The attributes the rows do carry (the points, pull
 // groups, bosses, holds, steps, unit lists, team and ambush flags, direct and exact via points) are not listed, nor are those that are
-// no run attribute at all: the plan's name, version, status, kind, map and notes, a via's check_skip (turtle-agent's plan check only),
+// no run attribute at all: the plan's name, version, status, kind, map and notes, a via's check_skip (forever-agent's plan check only),
 // a pull group's equiv (the pull-test scenario only), a step's fail_text and a use_item's name (both in the row's comment).
 var unexpressedWhy = map[string]string{
 	"entrance/teleports/portal": "the run leader starts inside the instance (`.bot run start` checks the party is in it); getting there is the caller's",

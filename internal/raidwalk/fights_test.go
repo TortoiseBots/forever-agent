@@ -10,7 +10,7 @@ import (
 // TestFightDetailOfReadsTheRecap reads a saved dashboard fight detail (Onyxia walk, step 22: two deaths to the
 // Onyxian Warders) into the summary digest.
 func TestFightDetailOfReadsTheRecap(t *testing.T) {
-	raw, err := os.ReadFile("../../cmd/turtle-agent/testdata/fights/combat-fight-5-4.json")
+	raw, err := os.ReadFile("../../cmd/forever-agent/testdata/fights/combat-fight-5-4.json")
 	if err != nil {
 		t.Fatal(err)
 	}

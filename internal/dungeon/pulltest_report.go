@@ -10,7 +10,7 @@ import (
 )
 
 // The pull-test scenario's result (dungeon_run pulltest, pulltest.go): one pull group pulled `tries` times, each try scored, a compact table
-// to read and JSON to compare two builds with (`turtle-agent pulltest --compare a.json b.json`). The same pull, the same party, 3+ tries
+// to read and JSON to compare two builds with (`forever-agent pulltest --compare a.json b.json`). The same pull, the same party, 3+ tries
 // each is the A/B rule of the auto-improve loop; this is what makes a try cheap.
 
 // PulltestVersion is the version of the result JSON. The leader fields (mode, brain, character, tries[].leader, summary.leader) were added

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 const mageGUID packet.GUID = 0x13

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/objects"
 )
 
 // frost is a mage that knows the combat spells, in a party with a warrior tank 25 yards east.

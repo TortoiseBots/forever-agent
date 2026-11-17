@@ -1,9 +1,9 @@
 package trashcheck
 
 import (
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 // ClearedPacks are the packs a pull, boss or hold row clears: the same rule Check uses to say which row clears a pack

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 func TestZulfarrakArenaRows(t *testing.T) {

@@ -4,7 +4,7 @@
 #
 # Usage: walk-super.sh <cmd-file> <max-restarts> <restart-log>
 #
-# <cmd-file>: one line, the full `turtle-agent raid-walk ...` command
+# <cmd-file>: one line, the full `forever-agent raid-walk ...` command
 #   (see tests/raid-zg-walk23/cmd-*.txt). Its --out DIR names the first run's folder.
 #   Read as words, never eval'd: plain words and "double-quoted" words only. $, backticks, backslashes, ;, &, |,
 #   <, >, parentheses, quotes other than double, globs, ~, # and a second line are refused (exit 2, nothing runs).

@@ -37,7 +37,7 @@ func TestParseGMInstanceDataRefusals(t *testing.T) {
 	// Unknown leg names are refused at validate against the rows, with exit 2
 	// and a clear message; a malformed command (not two integers) is refused
 	// the same way. Both are pinned at the command level in
-	// cmd/turtle-agent (TestParseGMInstanceDataFlags).
+	// cmd/forever-agent (TestParseGMInstanceDataFlags).
 	for _, bad := range []string{"hakkar:1", "hakkar:1 2 3"} {
 		if _, err := ParseGMInstanceData(bad); err == nil {
 			t.Errorf("ParseGMInstanceData(%q) accepted", bad)

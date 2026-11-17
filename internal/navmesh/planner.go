@@ -50,7 +50,7 @@ const smallMap = 16
 const MaxTiles = 64
 
 // ErrNoEngine says the binary was built without cgo, so it has no Detour.
-var ErrNoEngine = errors.New("navmesh: this turtle-agent was built without cgo, so it has no Detour engine; " +
+var ErrNoEngine = errors.New("navmesh: this forever-agent was built without cgo, so it has no Detour engine; " +
 	"rebuild with CGO_ENABLED=1 and a C++ compiler")
 
 type Status string

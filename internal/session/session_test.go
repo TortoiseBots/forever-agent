@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/auth"
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/worldconn"
-	"github.com/pjerra/turtle-agent/internal/worldconn/worldtest"
+	"github.com/pjerra/forever-agent/internal/auth"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/worldconn"
+	"github.com/pjerra/forever-agent/internal/worldconn/worldtest"
 )
 
 var testKey = bytes.Repeat([]byte{0x5A, 0xA5}, 20)

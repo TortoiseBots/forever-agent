@@ -1,14 +1,24 @@
-# turtle-agent
+# forever-agent
 
-[![test](https://github.com/pjerra/turtle-agent/actions/workflows/test.yml/badge.svg)](https://github.com/pjerra/turtle-agent/actions/workflows/test.yml)
+A headless World of Warcraft client for **WoW Forever (Classic 1.60.1)** servers built on
+[ForeverCore](https://github.com/Karrz1/TrinityCore). One process logs one character in, with no game window, and
+exposes it over a local JSON-RPC API, so server-side behaviour can be tested from scripts.
 
-A headless World of Warcraft client for **vanilla 1.12 / Turtle WoW 1.18.1** servers (login build 7272, world build 5875).
-One process logs one character in, with no game window, and exposes it over a local JSON-RPC API. It was built to test
-server-side bots ([TortoiseBots](https://github.com/Sagiroth/TortoiseBots)) on a private test server: log in, hire or
-invite bots, start a fight, then read back the combat log and what each bot did.
+**Status: early port, not usable on a Forever server yet.** This repository starts as a copy of
+[turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers). The code
+still speaks the 1.12 protocol. The Forever login, world socket, packets and object fields are being written; until
+they land, the parts that need no server (plans, route tools, tests) are what works here.
 
-Testing TortoiseBots with it? Follow the maintainer's vision in [docs/TORTOISEBOTS-VISION.md](docs/TORTOISEBOTS-VISION.md)
-and the rules for agents in [AGENTS.md](AGENTS.md).
+| Part | State |
+|---|---|
+| Login through bnetserver | not started |
+| World socket (encrypted, compressed) | not started |
+| Packets and object fields for build 70938 | not started |
+| Game layer on the new packets | not started |
+| Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
+
+For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
+describes the 1.12 client.
 
 > Use it only on servers you run or are allowed to test on. It has no Warden emulation and does no rendering.
 

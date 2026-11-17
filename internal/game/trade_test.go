@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 func TestTradeBuilders(t *testing.T) {

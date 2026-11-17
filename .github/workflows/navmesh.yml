@@ -80,7 +80,7 @@ jobs:
 
       # Every test file that skips without navmesh files (grep "TURTLE_AGENT_MMAPS" or the skip message): the navmesh
       # planner and server-path tests, the dungeon plan/zulfarrak/uldaman/deadmines/ragefire/wailing-caverns/leave
-      # tests, and the commanded path/stage/plan checks in cmd/turtle-agent. internal/dashboard has no navmesh test of
+      # tests, and the commanded path/stage/plan checks in cmd/forever-agent. internal/dashboard has no navmesh test of
       # its own; it is listed because its dashboards read the same plans and routes.
       - name: navmesh tests
         if: steps.token.outputs.skip != 'true'
@@ -96,5 +96,5 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set -euo pipefail
-          go build -o "$RUNNER_TEMP/turtle-agent" ./cmd/turtle-agent
-          tools/ci/plan-check-all.sh --bin "$RUNNER_TEMP/turtle-agent" --dir dungeons --mmaps "$TURTLE_AGENT_MMAPS"
+          go build -o "$RUNNER_TEMP/forever-agent" ./cmd/forever-agent
+          tools/ci/plan-check-all.sh --bin "$RUNNER_TEMP/forever-agent" --dir dungeons --mmaps "$TURTLE_AGENT_MMAPS"

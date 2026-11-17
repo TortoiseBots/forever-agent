@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/game/gametest"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/game/gametest"
 )
 
 const corpse = 0xF130000123000001

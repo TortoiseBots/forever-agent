@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
 // TestHTTPCallerSendsTheTokenAndHidesIt pins the client's auth behaviour:

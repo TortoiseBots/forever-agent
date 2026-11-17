@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // mustRoute runs the check on a synthetic plan: a refused export is the test's own failure, never a finding.

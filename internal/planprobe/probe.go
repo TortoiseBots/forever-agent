@@ -15,10 +15,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/mapview"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/mapview"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // Format and Version are the report's file format (tb-plan-probe v1).

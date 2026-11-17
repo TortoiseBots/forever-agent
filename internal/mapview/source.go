@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/capture"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/session"
-	"github.com/pjerra/turtle-agent/internal/worldconn"
+	"github.com/pjerra/forever-agent/internal/capture"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
 // SessionFrame is the frame a session shows now: its own position (leader, when given, overrides it with where

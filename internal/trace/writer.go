@@ -292,7 +292,7 @@ func (w *Writer) Close() error {
 // ---- summary ----
 
 // Scorer names this scorer in a summary.
-const Scorer = "turtle-agent tracecheck v1"
+const Scorer = "forever-agent tracecheck v1"
 
 // Summary is the small file beside the trace, <run_id>.summary.json, in the shape the server's summary has (the fields up to
 // trace_complete and bad_lines), so a dashboard lists runs of both producers: enough to list runs and their verdicts without parsing

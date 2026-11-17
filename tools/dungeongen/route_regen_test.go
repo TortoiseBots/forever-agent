@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/navmesh/navfixture"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 func regenUphillEdges(l [][]float64, order []int) []int {

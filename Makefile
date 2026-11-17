@@ -8,7 +8,7 @@ export GOTOOLCHAIN := local
 
 .PHONY: test fuzz fmt fmt-check vet nocgo build opcodes spellnames tbm-contract addon-host
 
-# The package timeout is 20m: cmd/turtle-agent runs about 700 tests under -race and takes 8-10 minutes, so Go's 10m
+# The package timeout is 20m: cmd/forever-agent runs about 700 tests under -race and takes 8-10 minutes, so Go's 10m
 # default leaves no room on a loaded machine.
 test: fmt-check vet nocgo
 	$(GO) test -race -count=1 -timeout 20m ./...
@@ -40,7 +40,7 @@ nocgo:
 	CGO_ENABLED=0 $(GO) build ./...
 
 build:
-	$(GO) build -o bin/turtle-agent ./cmd/turtle-agent
+	$(GO) build -o bin/forever-agent ./cmd/forever-agent
 
 opcodes:
 	$(GO) run ./tools/opcodegen -in $(CORE)/src/game/Protocol/Opcodes_1_12_1.h -out internal/opcode/opcodes_gen.go
@@ -49,10 +49,10 @@ opcodes:
 # shipped plan with the live flags and diff it against the delivered file. Run it at the delivered commit: the
 # plan row's source column names the exporting commit.
 ZG_SQL ?= $(HOME)/TortoiseBots-audit/tests/zg-w38/20261105190000_world.sql
-MMAPS ?= $(HOME)/turtle-agent-mmaps
+MMAPS ?= $(HOME)/forever-agent-mmaps
 zg-export:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-	$(GO) run ./cmd/turtle-agent plan-export --dir dungeons --mmaps "$(MMAPS)" --approach-hops --floor-aware --gm-cross-direct \
+	$(GO) run ./cmd/forever-agent plan-export --dir dungeons --mmaps "$(MMAPS)" --approach-hops --floor-aware --gm-cross-direct \
 		--stamp 20261105190000 --out "$$tmp" zul_gurub >/dev/null && \
 	diff -u "$(ZG_SQL)" "$$tmp/20261105190000_world.sql" && \
 	echo "zg-export: $(ZG_SQL) is this head's export"
@@ -69,7 +69,7 @@ tbm-contract:
 # The addon host's end-to-end tests against the real addon (README "Addon host"). `make test` runs them when the addon
 # is cached and lua5.1 is installed; this target fetches the addon first and fails instead of skipping.
 addon-host:
-	TBM_ADDON_DIR="$$(tools/tbmcontract/fetch.sh)" TBM_ADDON_HOST_STRICT=1 $(GO) test -race -count=1 -run 'AddonHost|TestHost' ./cmd/turtle-agent ./internal/addonhost
+	TBM_ADDON_DIR="$$(tools/tbmcontract/fetch.sh)" TBM_ADDON_HOST_STRICT=1 $(GO) test -race -count=1 -run 'AddonHost|TestHost' ./cmd/forever-agent ./internal/addonhost
 
 # Regenerate the knowledge-base rotations and the spells oracle from tools/kbrotgen/recipes and the KB. Needs PyYAML and
 # the KB checkout; not part of `make test` (the committed files and recipes are checked by TestKBRotationsMatchRecipes).

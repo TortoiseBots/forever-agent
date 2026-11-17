@@ -3,7 +3,7 @@ package plandiff
 import (
 	"encoding/json"
 
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // Format and Version are the tb-plan-diff file's header.

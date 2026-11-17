@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
 // maxReply caps one RPC reply at 4 MiB.
@@ -116,7 +116,7 @@ func defaultTokenFile(addr string) string {
 	if err != nil || port == "" {
 		return ""
 	}
-	return "~/.config/turtle-agent/rpc-" + strings.TrimSpace(port) + ".token"
+	return "~/.config/forever-agent/rpc-" + strings.TrimSpace(port) + ".token"
 }
 
 var _ = defaultTokenFile

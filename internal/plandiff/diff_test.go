@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 func fixture(t *testing.T, stamp string) planexport.Rows {

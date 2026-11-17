@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/events"
 )
 
 // The pull test in leader mode (dungeon_run mode "leader" with pulltest). The same scenario as the commander's (pulltest.go): one pull
 // group of one leg is pulled `tries` times with the same party and each try scored, but here the agent's own character is in the party and
 // plays with the bot brain, and the score is its own: damage and healing per second and per power, casts the server refused by reason,
-// seconds idle in combat, the mobs it took off the tank, its deaths. So `turtle-agent pulltest --compare a.json b.json` can A/B two
+// seconds idle in combat, the mobs it took off the tank, its deaths. So `forever-agent pulltest --compare a.json b.json` can A/B two
 // rotations (or a rotation against the Go strategy it replaces) on the same pull.
 //
 // The party stands in the instance at the pack (like the commander's start_here): the run does not walk the plan to it. Per try the party

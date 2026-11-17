@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/navmesh/navfixture"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
 
 // The fixtures are synthetic meshes (navfixture's L corridor: a row along x from 10 to 50 at

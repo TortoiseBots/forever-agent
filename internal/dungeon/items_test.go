@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/objects"
 )
 
 // Items implements ItemSource.

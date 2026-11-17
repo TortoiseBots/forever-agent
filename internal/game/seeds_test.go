@@ -1,10 +1,10 @@
 package game_test
 
 import (
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/game/gametest"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/game/gametest"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // builtSeeds are well-formed packets from the gametest builders for the opcodes that no

@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // zgMandokirLeg is leg 5 (bloodlord_mandokir) of the ZG plan.
@@ -140,7 +140,7 @@ func TestZulGurubMandokirPatrollerIsStandPull(t *testing.T) {
 }
 
 // zgMandokirExportCut is plan-export's own cutter
-// (cmd/turtle-agent plan_export_cmd.go cutWith, the --floor-aware route kept
+// (cmd/forever-agent plan_export_cmd.go cutWith, the --floor-aware route kept
 // in step with it): the floor-aware walk of the navmesh path from a to b,
 // with the wet points dropped. The live export (plan-export --floor-aware
 // --approach-hops --mmaps) cuts the hops of the Mandokir leg with it; the
@@ -314,7 +314,7 @@ func mandokirFloorAwareSeg(a, b navmesh.Vec3) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
-// mandokirFloorAwareCut is the floor-aware cutter of cmd/turtle-agent
+// mandokirFloorAwareCut is the floor-aware cutter of cmd/forever-agent
 // plan_export_cmd.go (floorAwareCut, kept in step with it): the path's
 // corners are merged (under FloorAwareMergeYd), unneeded (a turn under
 // FloorAwareTurnDeg) or pushed FloorAwarePushYd off the nearest wall, then
@@ -375,7 +375,7 @@ func mandokirFloorAwareCut(pl *navmesh.Planner, mapID uint32, path navmesh.Path)
 }
 
 // mandokirDropWetCut drops the cut points that stand in or under a liquid
-// (cmd/turtle-agent plan_export_cmd.go dropWetCut, kept in step with it).
+// (cmd/forever-agent plan_export_cmd.go dropWetCut, kept in step with it).
 func mandokirDropWetCut(pl *navmesh.Planner, mapID uint32, via []dungeon.Point, notes *[]planexport.CutNote) ([]dungeon.Point, []planexport.CutNote, error) {
 	if len(via) == 0 {
 		return via, *notes, nil
@@ -401,7 +401,7 @@ func mandokirDropWetCut(pl *navmesh.Planner, mapID uint32, via []dungeon.Point, 
 }
 
 // mandokirPushOffWall moves a path corner FloorAwarePushYd away from the
-// nearest mesh edge it can see within FloorAwareEdgeScanYd (cmd/turtle-agent
+// nearest mesh edge it can see within FloorAwareEdgeScanYd (cmd/forever-agent
 // plan_export_cmd.go pushOffWall, kept in step with it).
 func mandokirPushOffWall(pl *navmesh.Planner, mapID uint32, p navmesh.Vec3) (navmesh.Vec3, bool, string) {
 	dirs := 16
@@ -436,7 +436,7 @@ func mandokirPushOffWall(pl *navmesh.Planner, mapID uint32, p navmesh.Vec3) (nav
 
 // mandokirSplitFloor is the floor a split point takes its z from: the
 // highest plain ground within FloorAwareFloorYd of meanZ at (x, y)
-// (cmd/turtle-agent plan_export_cmd.go splitFloor, kept in step with it).
+// (cmd/forever-agent plan_export_cmd.go splitFloor, kept in step with it).
 func mandokirSplitFloor(pl *navmesh.Planner, mapID uint32, x, y, meanZ float32) (navmesh.Floor, bool, error) {
 	fl, err := pl.Floors(mapID, x, y, meanZ-planexport.FloorAwareFloorYd, meanZ+planexport.FloorAwareFloorYd)
 	if err != nil {
@@ -454,7 +454,7 @@ func mandokirSplitFloor(pl *navmesh.Planner, mapID uint32, x, y, meanZ float32) 
 	return best, ok, nil
 }
 
-// mandokirGroundFloor is the floor at p nearest p's z (cmd/turtle-agent
+// mandokirGroundFloor is the floor at p nearest p's z (cmd/forever-agent
 // plan_export_cmd.go groundFloor, kept in step with it).
 func mandokirGroundFloor(pl *navmesh.Planner, mapID uint32, p navmesh.Vec3) (navmesh.Floor, bool, error) {
 	fl, err := pl.Floors(mapID, p[0], p[1], p[2]-6, p[2]+6)
@@ -471,7 +471,7 @@ func mandokirGroundFloor(pl *navmesh.Planner, mapID uint32, p navmesh.Vec3) (nav
 }
 
 // mandokirCanDrop says the walk from a to b may skip the corner between them
-// (cmd/turtle-agent plan_export_cmd.go canDrop, kept in step with it).
+// (cmd/forever-agent plan_export_cmd.go canDrop, kept in step with it).
 func mandokirCanDrop(pl *navmesh.Planner, mapID uint32, a, b navmesh.Vec3) bool {
 	d := mandokirFloorAwareSeg(a, b)
 	if d > planexport.FloorAwareHopYd {
@@ -487,7 +487,7 @@ func mandokirCanDrop(pl *navmesh.Planner, mapID uint32, a, b navmesh.Vec3) bool 
 	return err == nil && ok
 }
 
-// mandokirTurnDeg is the 3D change of direction at b (cmd/turtle-agent
+// mandokirTurnDeg is the 3D change of direction at b (cmd/forever-agent
 // plan_export_cmd.go turnDeg, kept in step with it).
 func mandokirTurnDeg(a, b, c navmesh.Vec3) float64 {
 	u := navmesh.Vec3{b[0] - a[0], b[1] - a[1], b[2] - a[2]}

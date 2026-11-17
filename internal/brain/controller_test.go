@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/events"
 )
 
 func TestTheDefaultTickIs200ms(t *testing.T) {

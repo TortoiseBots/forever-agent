@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // zgW37TankShotYd is the run leader's shot minus its stand margin (TortoiseBots PatrolStandPullGate:
@@ -36,7 +36,7 @@ func zgW37LegByName(t *testing.T, p *dungeon.Plan, name string) (*dungeon.Leg, i
 	return nil, -1
 }
 
-// zgW37ExportCut is cmd/turtle-agent plan_export_cmd.go's floor-aware cutter (floorAwareCut and its helpers,
+// zgW37ExportCut is cmd/forever-agent plan_export_cmd.go's floor-aware cutter (floorAwareCut and its helpers,
 // kept in step with it): the path's corners are merged (under FloorAwareMergeYd), dropped (a turn under
 // FloorAwareTurnDeg, when canDrop says the walk may skip it) or pushed FloorAwarePushYd off the nearest wall,
 // then joined in hops of at most FloorAwareHopYd, each split point taking its z from the plain ground there

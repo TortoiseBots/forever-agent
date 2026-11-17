@@ -222,7 +222,7 @@ func TestReleaseRules(t *testing.T) {
 	fp.agents["/tmp/ta-w-a"] = 80353
 	fp.mu.Unlock()
 	if _, err := st.Release("m910q", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
-		!strings.Contains(err.Error(), "run turtle-agent teardown") {
+		!strings.Contains(err.Error(), "run forever-agent teardown") {
 		t.Fatalf("got %v, want a teardown-first refusal", err)
 	}
 	if _, err := st.Release("m910q", "1", "w-b", "bogus-id", true); err != nil {

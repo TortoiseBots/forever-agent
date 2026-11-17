@@ -7,9 +7,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/opcode"
 )
 
 // Planner plans a path on the navmesh (navmesh.Planner; a fake in tests).

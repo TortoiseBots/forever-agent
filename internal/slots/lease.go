@@ -489,7 +489,7 @@ func (s *Store) Release(server, slot, holder, leaseID string, force bool) (Lease
 					server, slot, holder)}
 			}
 			if pid, alive := s.agentAlive(existing.Dir); alive {
-				return &Refusal{Msg: fmt.Sprintf("%s/%s: its agent (pid %d) is still running: run turtle-agent teardown <dir> first",
+				return &Refusal{Msg: fmt.Sprintf("%s/%s: its agent (pid %d) is still running: run forever-agent teardown <dir> first",
 					server, slot, pid)}
 			}
 		}

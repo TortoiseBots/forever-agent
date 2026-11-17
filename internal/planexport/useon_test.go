@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // A use_object with via_item is the run leader's use_on row (TortoiseBots kind use_on: entry = the object, x,y,z = its near point,

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // The agent as the fallback of an object step (remote mode, RemoteOptions.ObjectFallback "agent", the default). When the carrier's

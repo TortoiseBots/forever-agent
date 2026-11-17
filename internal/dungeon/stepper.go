@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // World is what the Stepper needs to see of the game. The driver implements it over a session; tests use a fake.

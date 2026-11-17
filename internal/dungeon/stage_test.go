@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // stageNav is the spec's stage_fake: fakeNav plus a ServerPath method so the

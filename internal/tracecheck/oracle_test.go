@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/trace"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 const gPet = "0xf1400001"

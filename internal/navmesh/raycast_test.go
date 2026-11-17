@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh/navfixture"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
 
 func TestRaycastAlongTheCorridorIsClearAndRoundTheCornerIsBlocked(t *testing.T) {

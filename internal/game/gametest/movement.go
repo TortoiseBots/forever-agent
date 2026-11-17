@@ -1,6 +1,6 @@
 package gametest
 
-import "github.com/pjerra/turtle-agent/internal/packet"
+import "github.com/pjerra/forever-agent/internal/packet"
 
 // KnockBack is MovementPacketSender::SendKnockBackToController (MovementPacketSender.cpp:198-205).
 // speedZ is what the server writes: -verticalSpeed (Unit.cpp:10674), negative for a throw up.

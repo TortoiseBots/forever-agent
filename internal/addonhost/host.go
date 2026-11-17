@@ -82,7 +82,7 @@ func Start(addonDir string, sink Sink) (*Host, error) {
 	if _, err := os.Stat(filepath.Join(addonDir, "TortoiseBotsManager.toc")); err != nil {
 		return nil, fmt.Errorf("no TortoiseBotsManager.toc in %s", addonDir)
 	}
-	dir, err := os.MkdirTemp("", "turtle-agent-addonhost-")
+	dir, err := os.MkdirTemp("", "forever-agent-addonhost-")
 	if err != nil {
 		return nil, err
 	}

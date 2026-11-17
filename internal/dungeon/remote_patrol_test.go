@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // runRemoteTx is runRemote with a hook on the driver before the run (its tunables).

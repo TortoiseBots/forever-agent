@@ -3,7 +3,7 @@ package session
 import (
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // npcState is what the session remembers of its dealings with vendors, trainers and quest

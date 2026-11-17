@@ -3,7 +3,7 @@ package scenario
 import (
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/events"
 )
 
 // TestMatcherReadsTheRawSystemLine pins the G1 gotcha: a system event's text

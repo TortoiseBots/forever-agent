@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/netutil"
-	"github.com/pjerra/turtle-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/netutil"
+	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
-// Agent is one running turtle-agent the dashboard watches.
+// Agent is one running forever-agent the dashboard watches.
 type Agent struct {
 	ID        string // the normalized RPC address (host:port, IPv6 bracketed): unique even when two hosts share a port
 	Addr      string // the same address: loopback only
@@ -37,9 +37,9 @@ type Agent struct {
 func DefaultConfigDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".config/turtle-agent"
+		return ".config/forever-agent"
 	}
-	return filepath.Join(home, ".config", "turtle-agent")
+	return filepath.Join(home, ".config", "forever-agent")
 }
 
 // settingsFields are the two fields of a settings file the dashboard reads: where the agent listens and which folder its runs read

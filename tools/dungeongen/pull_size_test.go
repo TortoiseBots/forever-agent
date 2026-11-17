@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/aggroest"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/aggroest"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 // The Arlokk terrace rows (leg 4, pulls 20-26 after the 2026-11-05 re-route) are per formation, in the loop's walking

@@ -3,7 +3,7 @@ package game
 import (
 	"fmt"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // NPC gossip. Line numbers cite the core at 187af78, the checkout deployed on the test

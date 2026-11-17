@@ -7,16 +7,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
-// probePlanner is a planner over the real map 249 tiles ($TURTLE_AGENT_MMAPS or ~/turtle-agent-mmaps); the test skips without
+// probePlanner is a planner over the real map 249 tiles ($TURTLE_AGENT_MMAPS or ~/forever-agent-mmaps); the test skips without
 // them.
 func probePlanner(t *testing.T) *navmesh.Planner {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}

@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
-// The walk report (`turtle-agent raid-walk report <dir>`): the per-pull table the raid walks keep making by hand. It reads what a walk
+// The walk report (`forever-agent raid-walk report <dir>`): the per-pull table the raid walks keep making by hand. It reads what a walk
 // saved (the dashboard's fights and the run log of TBM:RUN lines) and writes nothing to a server. This file is the pure part: parsing,
-// the join of fights and status lines, and the Markdown and JSON texts. cmd/turtle-agent/raid_walk_report_cmd.go reads the folder.
+// the join of fights and status lines, and the Markdown and JSON texts. cmd/forever-agent/raid_walk_report_cmd.go reads the folder.
 
 // ReportFormat and ReportVersion name the JSON.
 const (

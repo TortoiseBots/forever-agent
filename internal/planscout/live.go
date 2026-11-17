@@ -5,14 +5,14 @@ import (
 	"math"
 	"sort"
 
-	"github.com/pjerra/turtle-agent/internal/aggroest"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/planlint"
-	"github.com/pjerra/turtle-agent/internal/raidwalk"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/aggroest"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/planlint"
+	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 // This file is the live half of the scout (spec 5.6): the lists the live pass walks (hops, spots, stops) and MergeLive, which

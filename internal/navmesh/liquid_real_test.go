@@ -10,11 +10,11 @@ import (
 
 // TestLiquidAtZulGurubWaterPoints reads the server's own tiles: the Hakkar lake bed the walk-33 lead stalled on and the canal
 // under its rim are liquid to the mmaps' NavWater floors, and the lake point's own floor is dry ground (a steep slope), so
-// only the nearby surface finds it. It runs when the map 309 tiles are present (TURTLE_AGENT_MMAPS or ~/turtle-agent-mmaps).
+// only the nearby surface finds it. It runs when the map 309 tiles are present (TURTLE_AGENT_MMAPS or ~/forever-agent-mmaps).
 func TestLiquidAtZulGurubWaterPoints(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	dir := ""
-	for _, d := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, d := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if d == "" {
 			continue
 		}

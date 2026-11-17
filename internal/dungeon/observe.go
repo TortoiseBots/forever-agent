@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // Observe mode (dungeon_run mode "observe"; README "Observe mode"). A TortoiseBots run leader (`.bot run`, TortoiseBots
@@ -283,7 +283,7 @@ func runLeaderRefusal(verb, plan string, e *tbm.Err) string {
 	hint := map[string]string{
 		"disabled":         "the server's run leader is off (AiPlayerbot.DungeonSelfClear and AiPlayerbot.RemoteCommander must both be 1)",
 		"not-bound":        "the commander binding is gone",
-		"no-plan":          fmt.Sprintf("the server has no dungeon plan %q: export it with `turtle-agent plan-export`, apply the migration and restart the server (`.bot run list` names what is loaded)", plan),
+		"no-plan":          fmt.Sprintf("the server has no dungeon plan %q: export it with `forever-agent plan-export`, apply the migration and restart the server (`.bot run list` names what is loaded)", plan),
 		"wrong-map":        "the lead bot is not on the plan's map: the party must be inside the dungeon first",
 		"busy":             "a run is already going on the server",
 		"lead-unavailable": "the lead bot is between maps",
@@ -321,7 +321,7 @@ func (d *RemoteDriver) probeRunLeader(ctx context.Context) error {
 		return errors.New("observe mode needs the TortoiseBots run leader (`.bot run`, TortoiseBots PRs #962 and #963): this server did not answer .bot run list, so it has no run leader. Use mode \"commander\" (the agent leads the bots) or \"leader\" instead")
 	}
 	if list != "" && !strings.Contains(" "+strings.ReplaceAll(strings.ReplaceAll(list, ",", " "), "(", " ")+" ", " "+spec.Plan+" ") {
-		return fmt.Errorf("observe mode: the server's run leader has no plan %q (it lists: %s): export the plan with `turtle-agent plan-export`, apply the migration and restart the server", spec.Plan, list)
+		return fmt.Errorf("observe mode: the server's run leader has no plan %q (it lists: %s): export the plan with `forever-agent plan-export`, apply the migration and restart the server", spec.Plan, list)
 	}
 	d.planSteps = listedSteps(list, spec.Plan)
 	if d.opt.StartFrom != nil {

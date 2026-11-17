@@ -52,7 +52,7 @@ func DefaultPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "turtle-agent", "slots.json")
+	return filepath.Join(home, ".config", "forever-agent", "slots.json")
 }
 
 func ExpandTilde(p string) string {

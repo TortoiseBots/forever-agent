@@ -183,7 +183,7 @@ func TestConvertWalk2(t *testing.T) {
 }
 
 // The daemon's own types, mirrored with only the fields a replay needs
-// (turtle-agent cannot import tools/observability).
+// (forever-agent cannot import tools/observability).
 type mirrorCommandersPayload struct {
 	V          int               `json:"v"`
 	Session    uint64            `json:"session"`

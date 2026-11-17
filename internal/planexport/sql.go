@@ -32,8 +32,8 @@ func entriesText(es []uint32) string {
 }
 
 // Header is the comment at the top of a migration.
-const Header = `-- Dungeon plans for the run leader (.bot run), exported by turtle-agent (plan-export). Plan format v1; the mapping is
--- docs/guides/dungeon-run-leader.md ("From plan v1 to rows"). The plan file in turtle-agent is the single source: edit it
+const Header = `-- Dungeon plans for the run leader (.bot run), exported by forever-agent (plan-export). Plan format v1; the mapping is
+-- docs/guides/dungeon-run-leader.md ("From plan v1 to rows"). The plan file in forever-agent is the single source: edit it
 -- there and export again, never these rows by hand. The plan row carries the unit lists cc_priority, cc_always and kill_first
 -- (columns from 20261015200000_world.sql). Never edit this file once applied; export a new one.
 --
@@ -79,7 +79,7 @@ var planTables = map[string]bool{"ai_dungeon_plan": true, "ai_dungeon_leg": true
 // ParseMigration reads a deployed migration like Parse, but skips whole the statements of tables other than the plan's three, each
 // skipped table named once in notes, and skips every other statement that is no INSERT up to its `;` (a hand edit such as an
 // UPDATE, or a START TRANSACTION wrapper), each named in notes with the warning that its hand edits are NOT applied: the plan rows
-// are what turtle-agent exports and what the server runs, while the hand edits around them (an ai_dungeon_boss or ai_boss_tactic
+// are what forever-agent exports and what the server runs, while the hand edits around them (an ai_dungeon_boss or ai_boss_tactic
 // block, an UPDATE) are not rows Parse can read and must not stop it or hide the rows after them.
 func ParseMigration(sql string) ([]Rows, []string, error) { return parse(sql, true) }
 

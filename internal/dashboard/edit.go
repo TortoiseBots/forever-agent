@@ -20,8 +20,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/routeedit"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
 // The route editor's write side (README "Route editor"). It is off unless the dashboard is started with --edit; this file is all of it that is

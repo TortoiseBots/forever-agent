@@ -30,7 +30,7 @@ package aggroest
 import (
 	"math"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // The run-leader constants this package mirrors.

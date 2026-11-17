@@ -16,10 +16,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/raidwalk"
-	"github.com/pjerra/turtle-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/slots"
 )
 
 // Check names, numbered as the brief's checks.
@@ -124,10 +124,10 @@ type Options struct {
 	Servers []string
 	// SlotsPath is the slot table (default slots.DefaultPath()).
 	SlotsPath string
-	// KeysPath is the required-keys file (default ~/.config/turtle-agent/preflight-keys.json).
+	// KeysPath is the required-keys file (default ~/.config/forever-agent/preflight-keys.json).
 	KeysPath string
-	// Binary is the turtle-agent a target that names none is checked as (a targets.txt line, or a command whose
-	// binary is the bare `turtle-agent` name). Default: this executable, exactly what the autopilot launches without
+	// Binary is the forever-agent a target that names none is checked as (a targets.txt line, or a command whose
+	// binary is the bare `forever-agent` name). Default: this executable, exactly what the autopilot launches without
 	// its own --binary.
 	Binary string
 	Deps   Deps
@@ -139,7 +139,7 @@ func DefaultKeysPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "turtle-agent", "preflight-keys.json")
+	return filepath.Join(home, ".config", "forever-agent", "preflight-keys.json")
 }
 
 type check struct {

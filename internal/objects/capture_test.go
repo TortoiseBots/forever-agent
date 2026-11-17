@@ -3,11 +3,11 @@ package objects
 import (
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/capture"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/testfixture"
-	"github.com/pjerra/turtle-agent/internal/worldconn"
+	"github.com/pjerra/forever-agent/internal/capture"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/testfixture"
+	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
 // Review Focus 2 and 3, pinned by captures: every update packet the server sent parses

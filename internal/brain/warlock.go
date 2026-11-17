@@ -3,9 +3,9 @@ package brain
 import (
 	"context"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/spells"
 )
 
 // The warlock (issue #80 step 4d, preset affliction_warlock): a ranged damage dealer that fights with damage over time, drains and its

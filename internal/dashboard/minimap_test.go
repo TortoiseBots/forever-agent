@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/dungeons"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/minimap"
+	"github.com/pjerra/forever-agent/dungeons"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/minimap"
 )
 
-// uldamanWorldMap is what `turtle-agent minimap-extract --maps 70` writes for the client's Uldaman world map
+// uldamanWorldMap is what `forever-agent minimap-extract --maps 70` writes for the client's Uldaman world map
 // (WorldMapArea.dbc: left 645.12, right -248.55, top 204.31, bottom -391.47; a 1002 x 668 picture).
 var uldamanWorldMap = minimap.Meta{Map: 70, Name: "Uldaman", Source: "worldmap", Width: 1002, Height: 668, PxPerYard: 1002 / (645.12 + 248.55),
 	North: 204.31, South: -391.47, West: 645.12, East: -248.55}

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/minimap"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/minimap"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 func TestSVGMarksAndCoordinates(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/events"
 )
 
 // drain fetches new events for every open session until no page reports more,

@@ -6,7 +6,7 @@ package minimap
 //	TURTLE_CLIENT_DATA  the client Data folder
 //	TURTLE_MINIMAP_DIR  a minimap-extract output folder (its <id>.navmesh.png for the WMO-only proof maps)
 //	TURTLE_MMAPS_DIR    the server's mmaps folder (the z-band navmesh of the ADT proof maps)
-//	TURTLE_PLANS_DIR    turtle-agent's dungeons folder (the entrances and bosses)
+//	TURTLE_PLANS_DIR    forever-agent's dungeons folder (the entrances and bosses)
 //	TURTLE_W2B_DIR      optional: write the all-dungeon overlay pictures there
 //
 // The thresholds are W2a's numbers, with margin: 70 IoU >= 0.60, 429 IoU >= 0.70, 129 art-on-navmesh >= 0.80,
@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/mpq"
+	"github.com/pjerra/forever-agent/internal/mpq"
 )
 
 type mapPoint struct {

@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // HighDynamicObject is the high word of a dynamic object's guid (HIGHGUID_DYNAMICOBJECT).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# plan-check-all runs `turtle-agent plan-check` on every shipped plan that is live or prepped for a live run.
+# plan-check-all runs `forever-agent plan-check` on every shipped plan that is live or prepped for a live run.
 #
 # The rule: a plan is checked when its status starts with "live-checked" or "mapped" (mapped means it was written
 # against the world export and the navmesh but has not had its live walk yet). A "draft" is left out: its route has
@@ -23,7 +23,7 @@ set -euo pipefail
 
 dir=dungeons
 mmaps=${TURTLE_AGENT_MMAPS:-}
-bin=${TURTLE_AGENT_BIN:-turtle-agent}
+bin=${TURTLE_AGENT_BIN:-forever-agent}
 jsonout=
 strictlints=0
 usage() {
@@ -81,7 +81,7 @@ if [[ $bin == */* ]]; then
 else
 	bin=$(command -v "$bin" || true)
 	[[ -n $bin ]] || {
-		echo "plan-check-all: turtle-agent binary not found; pass --bin" >&2
+		echo "plan-check-all: forever-agent binary not found; pass --bin" >&2
 		exit 2
 	}
 fi

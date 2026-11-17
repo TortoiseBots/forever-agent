@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/raidwalk"
-	"github.com/pjerra/turtle-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/slots"
 )
 
 const runTimeout = 20 * time.Second
@@ -36,7 +36,7 @@ func (c *check) checkBinaries(ctx context.Context) {
 			c.add(Fail, CheckBinary, path, err.Error(), "build the binary or fix --binary/the command path")
 			continue
 		} else if fi.IsDir() || fi.Mode().Perm()&0o111 == 0 {
-			c.add(Fail, CheckBinary, path, "not an executable file", "point the command at the built turtle-agent")
+			c.add(Fail, CheckBinary, path, "not an executable file", "point the command at the built forever-agent")
 			continue
 		}
 		help, code, err := c.run(ctx, path, "--help")
@@ -349,7 +349,7 @@ func (c *check) checkLeases() {
 			c.add(OK, CheckLease, subj, fmt.Sprintf("held by this walk (pid %d, dir %s)", pid, l.Dir), "")
 		case ours && !alive && !stale:
 			c.add(Fail, CheckLease, subj, fmt.Sprintf("this walk's lease (holder %s) has no live agent (dir %s)", l.Holder, l.Dir),
-				"run turtle-agent teardown on the old output dir")
+				"run forever-agent teardown on the old output dir")
 		case stale:
 			c.add(Warn, CheckLease, subj, fmt.Sprintf("stale lease of %s (expired %s): acquire takes it over", l.Holder, l.Expires.UTC().Format("15:04:05Z")),
 				"nothing to do; the walk takes it over")
@@ -500,7 +500,7 @@ func (c *check) checkPlans() {
 			}
 		}
 		if len(problems) > 0 {
-			c.add(Warn, CheckPlan, subj, strings.Join(problems, "; "), "export the plan again (turtle-agent plan-export) and redeploy it")
+			c.add(Warn, CheckPlan, subj, strings.Join(problems, "; "), "export the plan again (forever-agent plan-export) and redeploy it")
 			continue
 		}
 		c.add(OK, CheckPlan, subj, fmt.Sprintf("%s matches %s: map %d, %s", planPath, filepath.Base(sqlPath), p.Map, pl(len(exp.legs))), "")

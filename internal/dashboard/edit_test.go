@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/navmesh/navfixture"
-	"github.com/pjerra/turtle-agent/internal/routeedit"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
+	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
 const (

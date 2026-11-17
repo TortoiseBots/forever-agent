@@ -17,9 +17,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/spells"
 )
 
 // Rotations as data (DESIGN-DUNGEON-MODES P2, TA-D). A rotation file is the priority list of one class and spec for the agent's own
@@ -30,7 +30,7 @@ import (
 //
 // The files are reimplemented from understanding the behaviour of mod-playerbots' class strategies (GPL-2.0+; ideas and thresholds
 // only, no code, see each file's "sources") and checked against the Turtle core's spell data: every spell name must exist, the level
-// of the first rank must match (`turtle-agent rotation check`), and `rotation show <name> --level N` lists the rank cast at level N.
+// of the first rank must match (`forever-agent rotation check`), and `rotation show <name> --level N` lists the rank cast at level N.
 //
 // Format, version 1 (unknown fields are refused):
 //

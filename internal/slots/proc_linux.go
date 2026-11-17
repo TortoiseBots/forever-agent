@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/privfile"
+	"github.com/pjerra/forever-agent/internal/privfile"
 )
 
 type LinuxProbe struct{}
@@ -38,13 +38,13 @@ func (LinuxProbe) AgentPID(dir string) (int, bool) {
 		return pid, false
 	}
 	exe = strings.TrimSuffix(exe, " (deleted)")
-	want := filepath.Join(dir, "turtle-agent")
+	want := filepath.Join(dir, "forever-agent")
 	abs, err := filepath.Abs(dir)
 	if err == nil {
 		if evaled, err := filepath.EvalSymlinks(abs); err == nil {
-			want = filepath.Join(evaled, "turtle-agent")
+			want = filepath.Join(evaled, "forever-agent")
 		} else {
-			want = filepath.Join(abs, "turtle-agent")
+			want = filepath.Join(abs, "forever-agent")
 		}
 	}
 	return pid, exe == want

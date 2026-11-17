@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/netutil"
-	"github.com/pjerra/turtle-agent/internal/worldconn"
+	"github.com/pjerra/forever-agent/internal/netutil"
+	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
 // Spot is a place near hostile mobs used by the live checks (map id and world coordinates).
@@ -91,9 +91,9 @@ func (s Settings) AuthOn() bool { return s.RPCAuth != "off" }
 func DefaultPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "turtle-agent", "settings.json")
+		return filepath.Join(".config", "forever-agent", "settings.json")
 	}
-	return filepath.Join(home, ".config", "turtle-agent", "settings.json")
+	return filepath.Join(home, ".config", "forever-agent", "settings.json")
 }
 
 func Load(path string) (Settings, error) {

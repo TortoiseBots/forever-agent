@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // ---- plan: the batch checks of the loader ----
@@ -604,7 +604,7 @@ func TestBatchCountsSkippedChests(t *testing.T) {
 	}
 }
 
-// graves_batch and graves_ramp are refused in observe mode and together (the rpc layer): see cmd/turtle-agent.
+// graves_batch and graves_ramp are refused in observe mode and together (the rpc layer): see cmd/forever-agent.
 
 // ---- leftover summons ----
 

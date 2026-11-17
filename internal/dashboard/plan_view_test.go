@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // flaggedPlan has an area trigger with a stand point, a gossip step with a stand, a use_object with a stand, a needs_walk end, a check_skip hop and a
@@ -292,7 +292,7 @@ func TestPlanCopyFollowsTheFileTheRunReports(t *testing.T) {
 }
 
 // A run started with a route edit says so in its trace header (trace_meta.route_edit); the card carries the tag when it has the shape
-// `turtle-agent route-edits export` prints, and nothing else (the text is the caller's).
+// `forever-agent route-edits export` prints, and nothing else (the text is the caller's).
 func TestTraceHeaderCarriesTheRouteEditTag(t *testing.T) {
 	sha := strings.Repeat("ab", 32)
 	tag := "zulfarrak@v0007 sha256=" + sha

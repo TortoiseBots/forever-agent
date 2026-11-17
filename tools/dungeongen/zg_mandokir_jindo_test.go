@@ -11,9 +11,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 	"math"
 	"os"
 	"path/filepath"
@@ -808,7 +808,7 @@ func zgReadMovementPaths(path string) (map[uint64][]dungeon.Point, error) {
 func zgPlannerOrNil(t *testing.T) *navmesh.Planner {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}

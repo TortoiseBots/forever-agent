@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/opcode"
 )
 
 // Review M2: a peer that stops reading cannot block a write past writeTimeout; the failed

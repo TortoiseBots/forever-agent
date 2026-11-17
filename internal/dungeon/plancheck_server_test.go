@@ -3,7 +3,7 @@ package dungeon
 import (
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // planServerMmaps finds the navmesh files like mapMmaps, for the plan-check

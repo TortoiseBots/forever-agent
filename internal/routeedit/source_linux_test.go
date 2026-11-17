@@ -53,7 +53,7 @@ func TestCheckHeldKeepsEditsOutOfASlotsPlanFolder(t *testing.T) {
 	root := t.TempDir()
 	slot := filepath.Join(root, "ta-r4-s1", "dungeons")
 	edits := filepath.Join(root, "edits")
-	src := filepath.Join(root, "turtle-agent", "dungeons")
+	src := filepath.Join(root, "forever-agent", "dungeons")
 	for _, d := range []string{slot, src} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)

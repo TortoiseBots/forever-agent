@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/mpq"
+	"github.com/pjerra/forever-agent/internal/mpq"
 )
 
 func near(a, b, eps float64) bool { return math.Abs(a-b) <= eps }

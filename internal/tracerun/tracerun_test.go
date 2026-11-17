@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/trace"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 type clock struct{ t time.Time }

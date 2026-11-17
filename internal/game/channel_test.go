@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/game/gametest"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/game/gametest"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // HandleJoinChannelOpcode reads the name, then the password (ChannelHandler.cpp:30-49);

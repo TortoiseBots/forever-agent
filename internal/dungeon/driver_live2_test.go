@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
-// Fixes from the second live Uldaman run (turtle-agent #73).
+// Fixes from the second live Uldaman run (forever-agent #73).
 
 const onePackPlan = `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"z":0},"legs":[
  {"name":"a","to":{"x":10,"y":0,"z":0},

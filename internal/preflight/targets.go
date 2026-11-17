@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/raidwalk"
-	"github.com/pjerra/turtle-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/raidwalk"
+	"github.com/pjerra/forever-agent/internal/slots"
 )
 
 // target is one raid-walk invocation of the walk directory, already split for the multi-slot form: one slot, one
@@ -69,7 +69,7 @@ var switchFlags = map[string]bool{
 	"instance-cap-fail": true, "instance-cap-unsafe": true, "instance-cap-reset": true,
 }
 
-// readTargets reads every cmd-*.txt and targets.txt of the walk directory. binary is the turtle-agent a target that
+// readTargets reads every cmd-*.txt and targets.txt of the walk directory. binary is the forever-agent a target that
 // names none is checked as.
 func readTargets(dir, binary string) ([]target, []fileError) {
 	var targets []target
@@ -125,7 +125,7 @@ func readTargets(dir, binary string) ([]target, []fileError) {
 	for i := range targets {
 		// A command's own path stays (it is a literal invocation); the bare default name is --binary's, as the
 		// autopilot replaces its own launcher and nothing else.
-		if targets[i].binary == "" || targets[i].binary == "turtle-agent" {
+		if targets[i].binary == "" || targets[i].binary == "forever-agent" {
 			targets[i].binary = binary
 		}
 	}
@@ -141,8 +141,8 @@ func parseCommand(line, source string) ([]target, error) {
 	if len(words) < 2 {
 		return nil, fmt.Errorf("not a command: %q", line)
 	}
-	if filepath.Base(words[0]) != "turtle-agent" || words[1] != "raid-walk" {
-		return nil, fmt.Errorf("not a turtle-agent raid-walk command: %q", line)
+	if filepath.Base(words[0]) != "forever-agent" || words[1] != "raid-walk" {
+		return nil, fmt.Errorf("not a forever-agent raid-walk command: %q", line)
 	}
 	cmd, err := parseRawCmd(words[2:], source)
 	if err != nil {
@@ -350,7 +350,7 @@ func parseTargetsFile(data, path string) ([]target, []fileError) {
 			errs = append(errs, fileError{file: path, msg: fmt.Sprintf("line %d: %v", n+1, err)})
 			continue
 		}
-		if len(words) >= 2 && filepath.Base(words[0]) == "turtle-agent" && words[1] == "raid-walk" {
+		if len(words) >= 2 && filepath.Base(words[0]) == "forever-agent" && words[1] == "raid-walk" {
 			ts, err := parseCommand(line, fmt.Sprintf("%s:%d", filepath.Base(path), n+1))
 			if err != nil {
 				errs = append(errs, fileError{file: path, msg: fmt.Sprintf("line %d: %v", n+1, err)})
@@ -386,7 +386,7 @@ func targetsFromAuto(at raidwalk.AutoTarget, source string) ([]target, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.binary = "turtle-agent"
+	cmd.binary = "forever-agent"
 	cmd.flags = append(cmd.flags,
 		rawFlag{name: "server", value: at.Server},
 		rawFlag{name: "slot", value: at.Slot},

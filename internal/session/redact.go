@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/events"
 )
 
 // redactedMark replaces a secret in event text and names.

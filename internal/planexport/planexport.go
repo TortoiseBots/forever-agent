@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // Step kinds of ai_dungeon_step.kind.
@@ -227,7 +227,7 @@ type CutFunc func(mapID uint32, from, to dungeon.Point) (via []dungeon.Point, no
 
 // Options are the exporter's choices.
 type Options struct {
-	// Source is the text of ai_dungeon_plan.source (where the rows came from); empty: "turtle-agent dungeons/<name>.json".
+	// Source is the text of ai_dungeon_plan.source (where the rows came from); empty: "forever-agent dungeons/<name>.json".
 	Source string
 	// Cut, when set, cuts a hop longer than MoveGapWarnYd between two moves into via points: it returns the points to walk through
 	// (not including the two ends), e.g. a navmesh path, with a note for every point it dropped or moved. Nil: the long hops stay and
@@ -341,7 +341,7 @@ func Build(p *dungeon.Plan, opt Options) (Result, error) {
 	}
 	source := opt.Source
 	if source == "" {
-		source = "turtle-agent dungeons/" + name + ".json"
+		source = "forever-agent dungeons/" + name + ".json"
 	}
 	for _, l := range []struct {
 		col string

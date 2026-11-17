@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 var t0 = time.Date(2026, 10, 14, 16, 40, 0, 0, time.UTC)
@@ -440,7 +440,7 @@ func TestFilesHandlerServesOnlyTheTestsFolder(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("foreign host: %d", resp.StatusCode)
 	}
-	if code, body := get("/"); code != 200 || !strings.Contains(body, "turtle-agent live dashboard") {
+	if code, body := get("/"); code != 200 || !strings.Contains(body, "forever-agent live dashboard") {
 		t.Errorf("index: %d", code)
 	}
 	for _, f := range []string{"/app.js", "/app.css"} {

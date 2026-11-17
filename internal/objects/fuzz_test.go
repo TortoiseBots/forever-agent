@@ -3,9 +3,9 @@ package objects
 import (
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/objects/objtest"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/testfixture"
+	"github.com/pjerra/forever-agent/internal/objects/objtest"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/testfixture"
 )
 
 // Fuzz targets for the object parsers (see internal/game/fuzz_test.go): any bytes must give

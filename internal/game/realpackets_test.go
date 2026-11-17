@@ -3,16 +3,16 @@ package game_test
 import (
 	"encoding/hex"
 
-	"github.com/pjerra/turtle-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/opcode"
 )
 
 // Server packet bodies copied byte for byte from live captures of a TortoiseBots server
-// (Tortoise WoW 1.18.1) that `turtle-agent login --capture` wrote on the m910q test server, read
+// (Tortoise WoW 1.18.1) that `forever-agent login --capture` wrote on the m910q test server, read
 // back with the capture reader. They come from the run directories under ~/TortoiseBots-audit
 // (t2, gate-b17, ta23, ta-16-17, 139, t1) and from agent2.cap in its scratchpad-backup folder.
 // #N is the record index in that capture. They are literal so that the parsers are tested
 // against what the real core sends, not what gametest writes. Checked before committing: a
-// capture holding exactly these packets passes `turtle-agent scrub-check` against every
+// capture holding exactly these packets passes `forever-agent scrub-check` against every
 // account in the test settings files, and none of the packets carries a player name (the only
 // text is NPC gossip and a vendor's goods).
 //

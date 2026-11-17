@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/spells"
-	"github.com/pjerra/turtle-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/spellstate"
 )
 
 // Member is a party member as the brain needs to know them.
@@ -24,7 +24,7 @@ type Member struct {
 	Dead   bool
 }
 
-// Game is what the brain reads and does. The agent implements it over a session (cmd/turtle-agent/brain_methods.go);
+// Game is what the brain reads and does. The agent implements it over a session (cmd/forever-agent/brain_methods.go);
 // the tests use a scripted fake. Reads may be called from the brain's goroutine while the session loop runs; the
 // calls that act go through the session like any RPC and never block its loop.
 type Game interface {

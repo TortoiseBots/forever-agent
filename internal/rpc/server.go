@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/netutil"
+	"github.com/pjerra/forever-agent/internal/netutil"
 )
 
 const (

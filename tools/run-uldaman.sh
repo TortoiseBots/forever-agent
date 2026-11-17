@@ -15,9 +15,9 @@
 #                  `.bot behavior <bot> loot on` (observe only; a driven run always sends it).
 #                  With --pulltest, leader mode runs the pull test on the character (README "Pull test in leader mode"): the party stands at the pack, the
 #                  character plays with the brain, and the result scores it (dps, casts failed by reason, idle in combat...). A/B two rotations:
-#                  run it twice with --rotation A and --rotation B (3 or more tries each), then `turtle-agent pulltest --compare a.json b.json`.
+#                  run it twice with --rotation A and --rotation B (3 or more tries each), then `forever-agent pulltest --compare a.json b.json`.
 #   --brain P      leader mode: the brain preset that plays the character (frost_mage, arms_warrior, ...; default: by the character's class and --role)
-#   --rotation R   leader mode: a rotation file that takes the place of the preset's class rotation (README "Rotations as data"; `turtle-agent
+#   --rotation R   leader mode: a rotation file that takes the place of the preset's class rotation (README "Rotations as data"; `forever-agent
 #                  rotation list`); the report names it with its file's digest, so two arms of an A/B test are told apart
 #   --role R       leader mode: dps (default), tank or healer
 #   --hire         the owner's rule: the party is five HIRED bots at the plan's level, the commander outside the group (prepare.party "hire",
@@ -39,7 +39,7 @@
 #   --start-here   with --from-leg: no move, the run starts where the lead bot stands (the old behaviour)
 #   --pulltest LEG:GROUP[:TRIES[:RESET]]
 #                  the pull-test scenario instead of the dungeon: pull that one pack TRIES times (default 3; RESET auto, equivalent, respawn or none, default
-#                  auto), score each try, print the table and save pulltest.json in OUT; compare two with `turtle-agent pulltest --compare a.json b.json`
+#                  auto), score each try, print the table and save pulltest.json in OUT; compare two with `forever-agent pulltest --compare a.json b.json`
 #   --force-start  pass force_start: run a --from-leg / --pull-group / --pulltest start that is under 30 yd from a live pack or boss of a
 #                  skipped step. The script asks for a fresh instance (unless --no-fresh; a hired party counts as fresh), where such a start
 #                  is refused; from a leg past a boss it always is, the boss stands on the start point (README "Start anywhere")
@@ -47,8 +47,8 @@
 #   --print-params print the dungeon_run params and exit (nothing is sent, no login, no build)
 #
 # Environment (all optional):
-#   TURTLE_AGENT_DIR  the checkout (default ~/turtle-agent); the binary goes to its bin/turtle-agent-<sha8>
-#   SETTINGS          the agent's settings file (default ~/.config/turtle-agent/settings-2.json); only its "rpc" and (if set) "rpc_token" keys
+#   TURTLE_AGENT_DIR  the checkout (default ~/forever-agent); the binary goes to its bin/forever-agent-<sha8>
+#   SETTINGS          the agent's settings file (default ~/.config/forever-agent/settings-2.json); only its "rpc" and (if set) "rpc_token" keys
 #                     are read, and neither is ever printed. The token file rpc-<port>.token next to it is read when there is no rpc_token.
 #   CHARACTER         the agent's character (default Glacienne, a GM)
 #   LEAD, BOTS, TANK, HEALER   the party (default Lcwarra; Lcpriest,Lchunter,Lcrogue,Lcwarlock; Lcwarra; Lcpriest)
@@ -63,8 +63,8 @@
 # preflight and the enter phase. See docs/LIVE-CHECKS.md "Remote Uldaman in one command".
 set -euo pipefail
 
-ROOT=${TURTLE_AGENT_DIR:-$HOME/turtle-agent}
-SETTINGS=${SETTINGS:-$HOME/.config/turtle-agent/settings-2.json}
+ROOT=${TURTLE_AGENT_DIR:-$HOME/forever-agent}
+SETTINGS=${SETTINGS:-$HOME/.config/forever-agent/settings-2.json}
 CHARACTER=${CHARACTER:-Glacienne}
 LEAD=${LEAD:-Lcwarra}
 BOTS=${BOTS:-Lcpriest,Lchunter,Lcrogue,Lcwarlock}
@@ -261,7 +261,7 @@ rpc() {
 if [ "${NO_FETCH:-0}" != 1 ]; then git -C "$ROOT" fetch -q origin; fi
 SHA8=$(git -C "$ROOT" rev-parse --short=8 origin/main)
 sha_label=$SHA8
-BIN="$ROOT/bin/turtle-agent-$SHA8"
+BIN="$ROOT/bin/forever-agent-$SHA8"
 if [ -x "$BIN" ]; then
   say "binary: $BIN (already built)"
 else
@@ -272,7 +272,7 @@ else
   git -C "$ROOT" worktree add -q --detach "$wt" "$SHA8"
   "$VMTEST" "$wt" 'make build' >&2
   mkdir -p "$ROOT/bin"
-  scp -q -o LogLevel=ERROR "$VM:tb-ci/work/$(basename "$wt")/bin/turtle-agent" "$BIN.part"
+  scp -q -o LogLevel=ERROR "$VM:tb-ci/work/$(basename "$wt")/bin/forever-agent" "$BIN.part"
   chmod 755 "$BIN.part"
   mv "$BIN.part" "$BIN"
   git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
@@ -346,7 +346,7 @@ if [ "$(field result.report.start.kind <<<"$ST")" != "" ]; then
   say "start: kind=$(field result.report.start.kind <<<"$ST") method=$(field result.report.start.method <<<"$ST") start_s=$(field result.report.start.seconds <<<"$ST") gm_lines=$(field result.report.start.gm_commands <<<"$ST") skipped=$(field result.report.start.skipped <<<"$ST")"
 fi
 if [ -n "$PULLTEST" ]; then
-  # The scenario's result: saved for `turtle-agent pulltest --compare`, printed as a table. A scenario run is not a dungeon run, so no trace-score.
+  # The scenario's result: saved for `forever-agent pulltest --compare`, printed as a table. A scenario run is not a dungeon run, so no trace-score.
   PT_OUT=${OUT:-/tmp/run-uldaman-$(date +%Y%m%dT%H%M%S)}
   mkdir -p "$PT_OUT"
   field result.report.pulltest <<<"$ST" >"$PT_OUT/pulltest.json"

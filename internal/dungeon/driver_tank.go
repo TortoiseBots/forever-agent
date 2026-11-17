@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // Tank first, in group mode: the leader targets what the party attacks, so it targets what the tank holds best, leaves crowd-controlled

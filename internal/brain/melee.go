@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // Melee fighting (issue #80 step 3c): the part of the brain that every melee class shares. A melee fighter swings (auto attack),
@@ -17,7 +17,7 @@ import (
 
 // Melee is the optional half of the brain's Game that knows how the player's swings went. It is asked by type assertion, like Sight:
 // a game without it never sees a dodge (no Overpower) or an avoided attack (no Revenge) and starts its auto attack from its own
-// memory. The session's implementation reads the event log (cmd/turtle-agent/brain_melee.go).
+// memory. The session's implementation reads the event log (cmd/forever-agent/brain_melee.go).
 type Melee interface {
 	// LastDodge is when the unit last dodged an attack of the player's, the zero time if the brain has not seen one.
 	LastDodge(target packet.GUID) time.Time

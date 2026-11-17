@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 	tableFile = "../../docs/PLANS.md"
 )
 
-// instanceMaps are the 40 instance maps of the server (the folders of ~/turtle-agent-minimaps): vanilla dungeons and raids and Turtle's customs 800-822.
+// instanceMaps are the 40 instance maps of the server (the folders of ~/forever-agent-minimaps): vanilla dungeons and raids and Turtle's customs 800-822.
 var instanceMaps = []uint32{33, 34, 35, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 269, 289, 309, 329, 349, 389, 409, 429, 469, 509, 531, 532, 533,
 	800, 802, 807, 808, 814, 815, 816, 818, 819, 820, 822}
 
@@ -510,11 +510,11 @@ func TestZulGurubMarliStandsOutOfSpiderAggro(t *testing.T) {
 }
 
 // marliMmapsPlanner is the server's navmesh for the leg-2 export check ($TURTLE_AGENT_MMAPS or
-// ~/turtle-agent-mmaps, as planprobe and navmesh's own real tests use); the test skips without it.
+// ~/forever-agent-mmaps, as planprobe and navmesh's own real tests use); the test skips without it.
 func marliMmapsPlanner(t *testing.T) *navmesh.Planner {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}
@@ -532,7 +532,7 @@ func marliMmapsPlanner(t *testing.T) *navmesh.Planner {
 	return nil
 }
 
-// marliExportCut is plan-export's own cutter (cmd/turtle-agent plan_export_cmd.go cutWith, kept in step with it): the
+// marliExportCut is plan-export's own cutter (cmd/forever-agent plan_export_cmd.go cutWith, kept in step with it): the
 // navmesh path from a to b, a point at each corner and equal hops of MoveGapCutYd along the long stretches. The
 // exporter trims the points within approachStandoffYd of the target itself.
 func marliExportCut(pl *navmesh.Planner) planexport.CutFunc {
@@ -1081,11 +1081,11 @@ func checkArlokkTerraceWalk(t *testing.T, how string, a, b planexport.StepRow, s
 }
 
 // arlokkTerracePlanner is the server's navmesh for the terrace route check ($TURTLE_AGENT_MMAPS or
-// ~/turtle-agent-mmaps, as planprobe and navmesh's own real tests use); nil without one, so the caller logs and keeps
+// ~/forever-agent-mmaps, as planprobe and navmesh's own real tests use); nil without one, so the caller logs and keeps
 // the straight-line fallback.
 func arlokkTerracePlanner() *navmesh.Planner {
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}
@@ -1899,12 +1899,12 @@ func marliPolyDiff(committed []marliVec, poly []dungeon.Point) string {
 	return ""
 }
 
-// marliPlannerOrNil is the server's navmesh for the Mar'li checks ($TURTLE_AGENT_MMAPS or ~/turtle-agent-mmaps);
+// marliPlannerOrNil is the server's navmesh for the Mar'li checks ($TURTLE_AGENT_MMAPS or ~/forever-agent-mmaps);
 // nil without one, so the straight-line checks always run and the caller logs the skipped polyline check.
 func marliPlannerOrNil(t *testing.T) *navmesh.Planner {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}

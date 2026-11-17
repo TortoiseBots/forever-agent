@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/spells"
 )
 
 // Pets (issue #80 step 4d): the hunter's pet and the warlock's demon. The strategy "pet" is shared by both classes; what differs is
 // the class's row in petKits (the spells that bring the pet back and look after it).
 //
-// The game side is the optional PetGame half of the Game (the session's pet state and CMSG_PET_ACTION, cmd/turtle-agent/brain_methods.go);
+// The game side is the optional PetGame half of the Game (the session's pet state and CMSG_PET_ACTION, cmd/forever-agent/brain_methods.go);
 // a game without it has no pet, and every rule here stays quiet.
 //
 //   - Attack. The pet is sent at the fight's mob only once the damage dealer's opening delay is over and the mob is held: it attacks the

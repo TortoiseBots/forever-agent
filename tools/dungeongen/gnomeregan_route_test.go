@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // gnomerDevWalkYd is the walk before the re-order: origin/dev's plan, measured here the same way (the sum of the navmesh
@@ -84,7 +84,7 @@ var gnomerDropped = [][3]float64{
 func gnomerPlannerOrNil(t *testing.T) *navmesh.Planner {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "turtle-agent-mmaps")} {
+	for _, dir := range []string{os.Getenv("TURTLE_AGENT_MMAPS"), filepath.Join(home, "forever-agent-mmaps")} {
 		if dir == "" {
 			continue
 		}

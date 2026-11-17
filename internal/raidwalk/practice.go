@@ -20,7 +20,7 @@
 //     selected form is used.
 //   - `.revive <name>` (Commands.cpp HandleReviveCommand ~3024): ResurrectPlayer(1.f), full health.
 //
-// This file is pure: no clock, no network, no files. The walk's practice loop (cmd/turtle-agent/raid_walk_practice.go)
+// This file is pure: no clock, no network, no files. The walk's practice loop (cmd/forever-agent/raid_walk_practice.go)
 // owns the timers and the GM calls.
 package raidwalk
 

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/routeedit"
+	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
 // Slice 1 of #183: the run controls (README "Controls (--control)"). The tests drive the real handler with a fake agent that answers

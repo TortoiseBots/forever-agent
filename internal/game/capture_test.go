@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/capture"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/testfixture"
-	"github.com/pjerra/turtle-agent/internal/worldconn"
+	"github.com/pjerra/forever-agent/internal/capture"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/testfixture"
+	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
 // fixture loads a capture recorded on m910q by a milestone's live step (ruling P11:
@@ -30,7 +30,7 @@ func TestM2ChatFromCapture(t *testing.T) {
 			t.Fatalf("% X: %v", body, err)
 		}
 		sawVersion = sawVersion || (m.Type == ChatSystem && strings.HasPrefix(m.Text, "TBM:VERSION|"))
-		sawSay = sawSay || (m.Type == ChatSay && m.Text == "turtle-agent milestone 2")
+		sawSay = sawSay || (m.Type == ChatSay && m.Text == "forever-agent milestone 2")
 		sawBotList = sawBotList || (m.Type == ChatSystem && strings.HasPrefix(m.Text, "No owned PlayerBots"))
 	}
 	if !sawVersion || !sawSay || !sawBotList {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // TestWailingCavernsExportNeedsNoGMFlagAndNoCut: the mapped route (15 legs to Verdan) has no gm_cross and no step the run leader cannot

@@ -245,7 +245,7 @@ func shortSHA(s string) string {
 // routeEditTag is the shape of a run's route_edit tag: <plan>@v0007 sha256=<64 hex>.
 var routeEditTag = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,39}@v\d{4} sha256=[0-9a-f]{64}$`)
 
-// cleanRouteEdit keeps a run's route_edit tag when it has the shape `turtle-agent route-edits export` prints, else nothing: the text is the
+// cleanRouteEdit keeps a run's route_edit tag when it has the shape `forever-agent route-edits export` prints, else nothing: the text is the
 // caller's, and the page shows it.
 func cleanRouteEdit(s string) string {
 	if routeEditTag.MatchString(s) {

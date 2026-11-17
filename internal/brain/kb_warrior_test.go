@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/objects"
 )
 
 // The KB warrior rotations play: one fake warrior of level 60 per spec, full rage, one mob in reach (kb_rotations_test.go's

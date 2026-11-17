@@ -6,7 +6,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // LoadBackground reads the navmesh polygons under a box. It never fails the picture: when there is no planner, no
@@ -18,7 +18,7 @@ func LoadBackground(p *navmesh.Planner, mapID uint32, box Box) (polys []navmesh.
 	polys, truncated, err := p.Polygons(mapID, box.MinX, box.MinY, box.MaxX, box.MaxY)
 	switch {
 	case errors.Is(err, navmesh.ErrNoEngine):
-		return nil, false, "no navmesh background: this turtle-agent was built without cgo"
+		return nil, false, "no navmesh background: this forever-agent was built without cgo"
 	case err != nil:
 		return nil, false, "no navmesh background: " + err.Error()
 	case len(polys) == 0:

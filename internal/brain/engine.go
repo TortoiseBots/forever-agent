@@ -13,9 +13,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/spellstate"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/spellstate"
 )
 
 // Relevance bands. An action's relevance is the band of the rule that asks for it, which multipliers scale and

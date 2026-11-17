@@ -1,5 +1,5 @@
 // autopilot.go: the raid autopilot's targets file and its decision rule, as pure functions. The command
-// (cmd/turtle-agent/raid_autopilot_cmd.go) owns the processes, files and timers; this file answers one question: for
+// (cmd/forever-agent/raid_autopilot_cmd.go) owns the processes, files and timers; this file answers one question: for
 // this run and this goal, what should the autopilot do next? Walk 37 is the fixture set: an exit 0 after the walk's own
 // `.bot run stop`, restarts used up, a 65-minute no-progress fight, and a failed placement that burned instances.
 package raidwalk

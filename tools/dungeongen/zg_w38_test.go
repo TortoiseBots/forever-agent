@@ -2,7 +2,7 @@
 // Jin'do hall (the review's H1/H2 and the round-2 A-1/A-6: the run leader's real family-assist model, RingYd
 // 10 and one hop; the hall's east side is its own four pull groups again, each over its original ceiling by a
 // pinned known limit, and walk 39 GM-clears them), the Hakkar outer leg's step-601 wall (M4, on the real
-// export in cmd/turtle-agent), the Jeklik step-43 patrol pull and its camp stands and walks against every
+// export in cmd/forever-agent), the Jeklik step-43 patrol pull and its camp stands and walks against every
 // loop (M3/A-5), and the corridor's stand coverage (L2). The hall test below is the rule: a pull row before
 // the boss row must not bring more bodies than its ceiling unless the plan note pins the known limit, it must
 // not bring Jin'do unless the note does, and the hall's lone mistresses and stands keep their own groups.
@@ -15,12 +15,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/aggroest"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/navmesh"
-	"github.com/pjerra/turtle-agent/internal/planexport"
-	"github.com/pjerra/turtle-agent/internal/planlint"
-	"github.com/pjerra/turtle-agent/internal/worldspawn"
+	"github.com/pjerra/forever-agent/internal/aggroest"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/planlint"
+	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
 
 // zgW38PullCeiling is the ceiling a pull row without max_bodies gets in the live run: the run leader's

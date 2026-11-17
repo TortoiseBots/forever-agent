@@ -3,8 +3,8 @@
 package gametest
 
 import (
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // AttackerStateUpdate is Unit::SendAttackStateUpdate with one sub-damage (Unit.cpp:4888-4921).

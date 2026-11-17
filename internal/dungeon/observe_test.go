@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
-	"github.com/pjerra/turtle-agent/internal/trace"
-	"github.com/pjerra/turtle-agent/internal/tracecheck"
-	"github.com/pjerra/turtle-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/trace"
+	"github.com/pjerra/forever-agent/internal/tracecheck"
+	"github.com/pjerra/forever-agent/internal/tracerun"
 )
 
 // leaderStep is a status the fake run leader reaches after `at` of running time.

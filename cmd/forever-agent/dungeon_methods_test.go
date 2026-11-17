@@ -1,0 +1,305 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/session"
+)
+
+const rigPlan = `{"version":1,"name":"rig","map":0,"entrance":{"x":1,"y":2,"z":3},"legs":[
+ {"name":"first","to":{"x":1,"y":2,"z":3},"pull_groups":[{"entries":[299],"positions":[{"x":5,"y":2,"z":3}]}]},
+ {"name":"second","to":{"x":9,"y":2,"z":3},"pull_groups":[{"entries":[299],"positions":[{"x":12,"y":2,"z":3}]}]}]}`
+
+func dungeonRig(t *testing.T) *agentRig {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rig.json"), []byte(rigPlan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return newRigWith(t, session.Options{}, [3]float32{1, 2, 3}, methodOptions{DungeonsDir: dir, AccountProbeWindow: 50 * time.Millisecond})
+}
+
+func TestDungeonStatusIsIdleAtFirst(t *testing.T) {
+	r := dungeonRig(t)
+	for _, m := range []string{"dungeon_status", "dungeon_stop", "dungeon_pause"} {
+		if res := r.call(m, "{}")["result"].(map[string]any); res["state"] != "idle" || res["running"] != false || res["report"] != nil {
+			t.Fatalf("%s: %v", m, res)
+		}
+	}
+}
+
+func TestDungeonRunRefusals(t *testing.T) {
+	r := dungeonRig(t)
+	for _, c := range []struct{ params, want string }{
+		{`{"name":"../rig"}`, "name must be a plan file name"},
+		{`{"name":""}`, "name must be a plan file name"},
+		{`{"name":"nowhere"}`, "dungeon plan: "},
+		{`{"name":"broken"}`, "name: required"},
+		{`{"name":"rig","from_leg":2}`, "from_leg: the plan has legs [first second] (numbers 0-1)"},
+		{`{"name":"rig","from_leg":"third"}`, "from_leg: the plan has legs"},
+		{`{"name":"rig","from_leg":true}`, "from_leg must be a leg number"},
+		{`{"name":"rig","colour":1}`, "colour"},
+		{`{"name":"rig","buffs":"worldly"}`, `buffs: unknown preset "worldly"`},
+		{`{"name":"rig","buffs":true}`, "buffs must be a preset name"},
+		{`{"name":"rig","buffs":[0]}`, "buffs must be a preset name"},
+		{`{"name":"rig","buffs":[22888,{}]}`, "buffs must be a preset name"},
+		{`{"name":"rig","buffs":[22888,22888,22888,22888,22888,"world","world",1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}`, "at most 20"},
+		{`{"name":"rig","watchdog":{"warn_s":300}}`, "recover_s (240) must be above warn_s (300)"},
+		{`{"name":"rig","watchdog":{"fail_s":100}}`, "fail_s (100) must be above recover_s (240)"},
+		{`{"name":"rig","watchdog":{"stall_s":100}}`, "stall_s"},
+		{`{"name":"rig","setup":["go entrance",""]}`, "setup[1]: needs 1-400 characters"},
+		{`{"name":"rig","setup":["` + strings.Repeat("x", 401) + `"]}`, "setup[0]: needs 1-400 characters"},
+	} {
+		out := r.call("dungeon_run", c.params)
+		msg, _ := out["error"].(map[string]any)["message"].(string)
+		if errCode(out) != rpc.CodeInvalidParams || !strings.Contains(msg, c.want) {
+			t.Errorf("%s: %v", c.params, out)
+		}
+	}
+}
+
+// A run starts in the background, ends in the report and the events, and a second one may follow.
+func TestDungeonRunWithoutAPartyFailsInTheReport(t *testing.T) {
+	r := dungeonRig(t)
+	res := r.call("dungeon_run", `{"name":"rig","from_leg":"second"}`)["result"].(map[string]any)
+	if res["started"] != true || res["plan"] != "rig" || res["from_leg"] != float64(1) || res["map"] != float64(0) {
+		t.Fatalf("%v", res)
+	}
+	// A final state is never read before its event: the run emits dungeon_failed, then publishes "failed". Wait until the run has ended.
+	st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool {
+		ds := m["result"].(map[string]any)
+		return ds["state"] == "failed" && ds["running"] == false
+	})["result"].(map[string]any)
+	rep := st["report"].(map[string]any)
+	if st["running"] != false || rep["plan"] != "rig" || rep["from_leg"] != float64(1) || !strings.Contains(rep["error"].(string), "no party") ||
+		len(rep["gm_shortcuts"].([]any)) != 0 || rep["wipes"] != float64(0) {
+		t.Fatalf("%v", st)
+	}
+	evs := r.eventually("events", `{"since":0,"kinds":["dungeon_failed","dungeon_done","dungeon_leg","dungeon_step"]}`, func(m map[string]any) bool {
+		return len(m["result"].(map[string]any)["events"].([]any)) == 1
+	})["result"].(map[string]any)["events"].([]any)
+	if len(evs) != 1 || evs[0].(map[string]any)["kind"] != "dungeon_failed" || !strings.Contains(evs[0].(map[string]any)["data"].(map[string]any)["error"].(string), "no party") {
+		t.Fatalf("%v", evs)
+	}
+	// The finished run is replaced by the next.
+	if out := r.call("dungeon_run", `{"name":"rig","teleport":true,"no_shortcuts":true}`); out["error"] != nil || out["result"].(map[string]any)["from_leg"] != float64(0) {
+		t.Fatalf("%v", out)
+	}
+}
+
+// dungeon_status is one consistent snapshot: a state that is not final is a run that goes on, "running: false" is a final state, and
+// a final state is read only once its event is in the log (the driver emits it first).
+func TestDungeonStatusNeverRunsAheadOfItsEvent(t *testing.T) {
+	r := dungeonRig(t)
+	if out := r.call("dungeon_run", `{"name":"rig"}`); out["error"] != nil {
+		t.Fatalf("%v", out)
+	}
+	final := map[string]bool{"done": true, "failed": true, "stopped": true, "refused": true}
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		ds := r.call("dungeon_status", "{}")["result"].(map[string]any)
+		state, running := ds["state"].(string), ds["running"].(bool)
+		if !final[state] && !running {
+			t.Fatalf("state %s but not running: %v", state, ds)
+		}
+		if final[state] {
+			// The event was in the log before the state could be read.
+			evs := r.call("events", `{"since":0,"kinds":["dungeon_failed","dungeon_done"]}`)["result"].(map[string]any)["events"].([]any)
+			if len(evs) != 1 {
+				t.Fatalf("state %s read with %d end events in the log: %v", state, len(evs), evs)
+			}
+			if !running {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the run never ended: %v", ds)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A run that goes on shows as running, refuses a second, and dungeon_stop ends it with the report of what it did.
+func TestDungeonStopEndsARun(t *testing.T) {
+	r := dungeonRig(t)
+	r.groupWith("Gorm") // a party, who is not in view: the first rest gate waits for him
+	if out := r.call("dungeon_run", `{"name":"rig"}`); out["error"] != nil {
+		t.Fatalf("%v", out)
+	}
+	r.expect(opcode.CMSGMessagechat) // .gm visible on
+	st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool {
+		rep, _ := m["result"].(map[string]any)["report"].(map[string]any)
+		return rep != nil && len(rep["legs"].([]any)) == 1
+	})["result"].(map[string]any)
+	if st["running"] != true || st["state"] != "running" {
+		t.Fatalf("%v", st)
+	}
+	if out := r.call("dungeon_run", `{"name":"rig"}`); errCode(out) != rpc.CodeGame || !strings.Contains(out["error"].(map[string]any)["message"].(string), "dungeon_stop it first") {
+		t.Fatalf("%v", out)
+	}
+	// dungeon_pause keeps a remote run's binding; a group-mode run has none, so it is refused and the run goes on.
+	if out := r.call("dungeon_pause", "{}"); errCode(out) != rpc.CodeGame || !strings.Contains(out["error"].(map[string]any)["message"].(string), "no commander binding") {
+		t.Fatalf("%v", out)
+	}
+	if st := r.call("dungeon_status", "{}")["result"].(map[string]any); st["running"] != true {
+		t.Fatalf("a refused pause stopped the run: %v", st)
+	}
+	stopped := r.call("dungeon_stop", "{}")["result"].(map[string]any)
+	rep := stopped["report"].(map[string]any)
+	if stopped["running"] != false || stopped["state"] != "stopped" || rep["error"] != "stopped" || rep["legs"].([]any)[0].(map[string]any)["result"] != "stopped" {
+		t.Fatalf("%v", stopped)
+	}
+	b, _ := json.Marshal(r.call("events", `{"since":0,"kinds":["dungeon_leg","dungeon_failed"]}`)["result"])
+	if !strings.Contains(string(b), `"phase":"start"`) || !strings.Contains(string(b), `"kind":"dungeon_failed"`) || !strings.Contains(string(b), `"error":"stopped"`) {
+		t.Fatalf("%s", b)
+	}
+}
+
+// The setup commands the caller names come back in the report, trimmed, whatever the run does.
+func TestDungeonRunReportsTheSetupShortcuts(t *testing.T) {
+	r := dungeonRig(t)
+	if res := r.call("dungeon_run", `{"name":"rig","setup":[" go entrance ","levelup -15"]}`); res["error"] != nil {
+		t.Fatalf("%v", res)
+	}
+	st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool { return m["result"].(map[string]any)["state"] == "failed" })["result"].(map[string]any)
+	got, _ := json.Marshal(st["report"].(map[string]any)["setup_shortcuts"])
+	if string(got) != `["go entrance","levelup -15"]` {
+		t.Fatalf("%s", got)
+	}
+	// Without any, the field is an empty list, not null.
+	r = dungeonRig(t)
+	r.call("dungeon_run", `{"name":"rig"}`)
+	st = r.eventually("dungeon_status", "{}", func(m map[string]any) bool { return m["result"].(map[string]any)["state"] == "failed" })["result"].(map[string]any)
+	if l, ok := st["report"].(map[string]any)["setup_shortcuts"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("%v", st["report"])
+	}
+}
+
+// buffs takes a preset name, a spell id or a list of both; the result names what the run will put on the party.
+func TestDungeonRunBuffsParameter(t *testing.T) {
+	for _, c := range []struct {
+		params string
+		n      int
+		first  string
+	}{
+		{`{"name":"rig"}`, 0, ""},
+		{`{"name":"rig","buffs":null}`, 0, ""},
+		{`{"name":"rig","buffs":[]}`, 0, ""},
+		{`{"name":"rig","buffs":"world"}`, 7, "Rallying Cry of the Dragonslayer (22888)"},
+		{`{"name":"rig","buffs":["world",22888,1]}`, 8, "Rallying Cry of the Dragonslayer (22888)"},
+		{`{"name":"rig","buffs":22888}`, 1, "Rallying Cry of the Dragonslayer (22888)"},
+	} {
+		r := dungeonRig(t)
+		res := r.call("dungeon_run", c.params)["result"].(map[string]any)
+		b, ok := res["buffs"].([]any)
+		if !ok || len(b) != c.n || (c.n > 0 && b[0] != c.first) {
+			t.Errorf("%s: %v", c.params, res)
+		}
+		st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool { return m["result"].(map[string]any)["state"] == "failed" })["result"].(map[string]any)
+		if rb, ok := st["report"].(map[string]any)["buffs"].([]any); !ok || len(rb) != c.n {
+			t.Errorf("%s: report %v", c.params, st["report"])
+		}
+	}
+}
+
+// The driver's Game reads the leader's team from its race (UNIT_FIELD_BYTES_0, low byte) and uses an item by entry.
+func TestSessionGameTeamAndUseItem(t *testing.T) {
+	r := newRig(t)
+	g := &sessionGame{cur: func() *session.Session { return r.s }}
+	if got := g.Team(); got != "" {
+		t.Fatalf("race unknown: %q", got)
+	}
+	r.giveSelf(0x4000000000000003, 7740, map[uint16]uint32{objects.UnitBytes0: 2 | 1<<8}) // an orc warrior
+	if got := g.Team(); got != "horde" {
+		t.Fatalf("an orc: %q", got)
+	}
+	if err := g.UseItem(context.Background(), 7740); err != nil {
+		t.Fatal(err)
+	}
+	r.expectBody(opcode.CMSGUseItem, game.BuildUseItem(255, 23, 0))
+	if err := g.UseItem(context.Background(), 1); err == nil {
+		t.Fatal("an item that is not carried")
+	}
+}
+
+// dungeon_status shows the progress watchdog at a glance: the last progress, the seconds since, the stall level, and the limits in effect
+// (the defaults, or the run parameter's).
+func TestDungeonStatusShowsTheWatchdog(t *testing.T) {
+	r := dungeonRig(t)
+	if res := r.call("dungeon_status", "{}")["result"].(map[string]any); res["stall_level"] != "none" || res["stalled_for_s"] != float64(0) || res["last_progress_at"] != nil {
+		t.Fatalf("idle: %v", res)
+	}
+	for _, c := range []struct {
+		params string
+		limits [3]float64
+	}{
+		{`{"name":"rig"}`, [3]float64{120, 240, 420}},
+		{`{"name":"rig","watchdog":{"warn_s":30,"recover_s":60,"fail_s":90}}`, [3]float64{30, 60, 90}},
+		{`{"name":"rig","watchdog":{"recover_s":-1}}`, [3]float64{120, 0, 420}},
+	} {
+		if out := r.call("dungeon_run", c.params); out["error"] != nil {
+			t.Fatalf("%s: %v", c.params, out)
+		}
+		st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool {
+			ds := m["result"].(map[string]any)
+			return ds["state"] == "failed" && ds["running"] == false
+		})["result"].(map[string]any)
+		w, _ := st["report"].(map[string]any)["watchdog"].(map[string]any)
+		if w == nil || [3]float64{w["warn_s"].(float64), w["recover_s"].(float64), w["fail_s"].(float64)} != c.limits || w["stall_level"] != "none" || w["last_progress"] == "" {
+			t.Fatalf("%s: %v", c.params, st["report"])
+		}
+		if st["stall_level"] != "none" || st["last_progress_at"] != w["last_progress_at"] || st["stalled_for_s"] != w["stalled_for_s"] {
+			t.Fatalf("%s: the status mirrors the report's watchdog: %v", c.params, st)
+		}
+	}
+}
+
+// A draft plan needs allow_draft; a raid plan runs in observe mode with prepare.party "hire".
+func TestPlanRunRefusal(t *testing.T) {
+	load := func(status, kind, extra string) *dungeon.Plan {
+		doc := `{"version":1,"name":"p","map":1,` + status + kind + `"entrance":{"x":0,"y":0,"z":0},` + extra + `"legs":[{"to":{"x":0,"y":0,"z":0},"pull_groups":[{"entries":[1],"positions":[{"x":0,"y":0,"z":0}]}]}]}`
+		p, err := dungeon.Parse("p.json", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	draft := load(`"status":"draft (not mapped, not live-checked)",`, "", "")
+	if m := planRunRefusal(draft, dungeonRunParams{}); !strings.Contains(m, "is a draft") || !strings.Contains(m, "allow_draft") {
+		t.Errorf("a draft without allow_draft: %q", m)
+	}
+	if m := planRunRefusal(draft, dungeonRunParams{AllowDraft: true}); m != "" {
+		t.Errorf("a draft with allow_draft: %q", m)
+	}
+	for _, status := range []string{``, `"status":"mapped",`, `"status":"live-checked",`} {
+		if m := planRunRefusal(load(status, "", ""), dungeonRunParams{}); m != "" {
+			t.Errorf("%q: %q", status, m)
+		}
+	}
+	raid := load(`"status":"live-checked",`, `"kind":"raid",`, `"raid":{"size":10,"tanks":2,"healers":3,"dps":5},`)
+	if m := planRunRefusal(raid, dungeonRunParams{AllowDraft: true}); !strings.Contains(m, "raid plan") ||
+		!strings.Contains(m, `mode "observe"`) || !strings.Contains(m, `prepare.party "hire"`) {
+		t.Errorf("a raid plan without observe+hire: %q", m)
+	}
+	raidObserveHire := dungeonRunParams{Mode: "observe", AllowDraft: true, Prepare: &dungeon.PrepareSpec{Party: "hire"}}
+	if m := planRunRefusal(raid, raidObserveHire); m != "" {
+		t.Errorf("a raid plan in observe with party hire: %q", m)
+	}
+	raidRemoteHire := dungeonRunParams{Mode: "remote", Prepare: &dungeon.PrepareSpec{Party: "hire"}}
+	if m := planRunRefusal(raid, raidRemoteHire); !strings.Contains(m, "raid plan") {
+		t.Errorf("a raid plan in remote: %q", m)
+	}
+}

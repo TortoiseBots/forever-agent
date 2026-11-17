@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/spells"
-	"github.com/pjerra/turtle-agent/internal/tactics"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/tactics"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // Version is the plan format this package reads and writes.

@@ -2,10 +2,10 @@ package raidwalk
 
 import (
 	"fmt"
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/planexport"
 	"math"
 	"sort"
 	"strings"
@@ -20,7 +20,7 @@ import (
 // unit at 30 yd or closer still blocks, and every unit in combat, holding a target or moving keeps the 45/80 yd rules
 // below.
 //
-// Being still proves nothing about where home is (Codex HIGH, turtle-agent#360): a patrol that paused at 31-45 yd
+// Being still proves nothing about where home is (Codex HIGH, forever-agent#360): a patrol that paused at 31-45 yd
 // passed the old stillness check, and the raid could be summoned next to it. So the exemption also needs a proven
 // home (PlanHomeSpawns, from the plan): the unit must stand within quietHomeYd of a plan spawn of its entry — by
 // spawn GUID when the plan names it (a creature's low bits are its spawn guid), else by entry — and units of a group
@@ -31,7 +31,7 @@ import (
 // quietIdleMoveYd how close to the same spot, so a mob that was idle once and starts to move is not waved through on
 // the strength of one stale sighting.
 //
-// A critter never counts (turtle-agent#379): the frame's own critter flag is the primary test (the walk's reset
+// A critter never counts (forever-agent#379): the frame's own critter flag is the primary test (the walk's reset
 // wait reads it off the frame row), and the fallback here is a level-1 unit whose max health is absolute and inside
 // the place phase's max-HP band — no threat to a revive, so not a blocker at any distance or state. Walk 27 C
 // restart 2 waited 115 s on a moving Snake 2914 at 72 yd beside an idle Mad Servant off its spawn; with the critter
@@ -50,7 +50,7 @@ const (
 	// or from before a stretch of failed reads, is no evidence about the unit now.
 	quietIdleMaxGap = 30 * time.Second
 	// quietCritterHP is the top of a critter's max-HP band, the place phase's own (placeCritterHP): a level-1 unit
-	// whose max health is really inside this band is a critter and never counts in the quiet check (turtle-agent#379).
+	// whose max health is really inside this band is a critter and never counts in the quiet check (forever-agent#379).
 	// Really: a percent read carries MaxHealth 100 exactly (the store passes health through as sent), so the band
 	// test is strict — a MaxHealth of 100 is ambiguous with a percent read and fails closed. The units read has no
 	// rank or kind field, so the level is the rank the frame/toolkit would carry: critters are level 1.
@@ -366,7 +366,7 @@ func QuietBlockers(units []objects.Unit, patrols []QuietPatrol, p dungeon.Point,
 	seen := map[string]bool{}
 	for i := range units {
 		u := &units[i]
-		// A critter never counts, at any distance and in any state (turtle-agent#379: the moving Snake 2914 at 72 yd
+		// A critter never counts, at any distance and in any state (forever-agent#379: the moving Snake 2914 at 72 yd
 		// made all_idle false beside an idle Mad Servant). It is skipped before the read memory, so it is never a
 		// blocker and never a reason to wait.
 		if !u.Hostile || u.Dead || u.Type == "player" || critter(u) {

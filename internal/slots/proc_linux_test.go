@@ -11,7 +11,7 @@ import (
 )
 
 // 11. AgentPID trusts only the dir's own binary: the test binary is refused,
-// a copied sleep started as <dir>/turtle-agent is alive, then dead after kill.
+// a copied sleep started as <dir>/forever-agent is alive, then dead after kill.
 func TestAgentPIDNeedsTheDirsBinary(t *testing.T) {
 	p := LinuxProbe{}
 	dir := t.TempDir()
@@ -25,7 +25,7 @@ func TestAgentPIDNeedsTheDirsBinary(t *testing.T) {
 	if err != nil {
 		t.Skip("no /bin/sleep")
 	}
-	bin := filepath.Join(dir, "turtle-agent")
+	bin := filepath.Join(dir, "forever-agent")
 	if err := os.WriteFile(bin, raw, 0o755); err != nil {
 		t.Fatal(err)
 	}

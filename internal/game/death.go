@@ -3,7 +3,7 @@ package game
 import (
 	"fmt"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // Death, resurrection and the corpse run. Core cites are tortoise-wow 5d79486 (the checkout the layouts were

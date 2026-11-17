@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 const (

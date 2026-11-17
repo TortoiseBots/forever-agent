@@ -14,7 +14,7 @@ import (
 
 // Live tuning (README "Live tuning"): the thresholds of the remote driver as named, bounded tunables that a tunables file (hot reloaded)
 // or the `tune_set` RPC can change during a run, at a leg start or a pull-group start and never in the middle of a step. Every change is
-// an event (`tune_change`) and a line of the report, so a fix made on the spot can become a PR afterwards (`turtle-agent tune-diff`).
+// an event (`tune_change`) and a line of the report, so a fix made on the spot can become a PR afterwards (`forever-agent tune-diff`).
 //
 // Rule 3 of the driver rules: no tunable can make a wait unbounded. Each has a hard Min and Max below; a value outside is refused, a file
 // with one bad value is refused whole (the old values stay), and the watchdog's levels are not tunables.

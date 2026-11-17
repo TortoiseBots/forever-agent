@@ -1,12 +1,12 @@
-// Package raidwalk holds the pure parts of `turtle-agent raid-walk`: the roster grammar, the `until`/`from`
+// Package raidwalk holds the pure parts of `forever-agent raid-walk`: the roster grammar, the `until`/`from`
 // clauses, the run-line reader, the run tracker, the GM allow-list, the revive-point quiet check and the summary.
-// Nothing here talks to a server; cmd/turtle-agent/raid_walk_phases.go feeds it.
+// Nothing here talks to a server; cmd/forever-agent/raid_walk_phases.go feeds it.
 package raidwalk
 
 import (
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // CleanLine removes the control bytes a TBM line may carry (C0, DEL and C1) before it is parsed. The raw event text

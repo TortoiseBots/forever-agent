@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // gossipPlan is a one-leg plan with one gossip step (the fields of its JSON object) followed by the End Door wait.

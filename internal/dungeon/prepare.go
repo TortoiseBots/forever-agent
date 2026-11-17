@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // The prepare step of a run (issue #83, owner request 2026-10-14: "why does setup take 11 minutes?"). A tester used to spend the setup
@@ -221,7 +221,7 @@ func (p *PrepareReport) clone() *PrepareReport {
 }
 
 // Preparer is what the prepare step needs of the game: plain `.bot` lines (roster, add, command <bot> leave), the account level, the
-// GM lines it may send and a look at the agent's own surroundings. The agent implements it over the session (cmd/turtle-agent).
+// GM lines it may send and a look at the agent's own surroundings. The agent implements it over the session (cmd/forever-agent).
 type Preparer interface {
 	BotLiner
 	// AccountLevel is the agent's account security level (the group driver's `.account` probe).

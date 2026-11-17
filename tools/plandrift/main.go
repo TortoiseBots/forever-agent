@@ -1,4 +1,4 @@
-// Command plandrift compares the dungeon plans in turtle-agent's dungeons/ folder with the newest export of each plan
+// Command plandrift compares the dungeon plans in forever-agent's dungeons/ folder with the newest export of each plan
 // in TortoiseBots' world migrations (tb/data/sql/world/*.sql).
 //
 // The plan file is the source: plan-export writes the ai_dungeon_plan/leg/step rows. This tool builds the rows the
@@ -29,8 +29,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 const (

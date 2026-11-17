@@ -6,8 +6,8 @@ import (
 	"compress/zlib"
 	"sort"
 
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // Header starts an SMSG_UPDATE_OBJECT body: u32 block count, u8 has transport 0

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/pjerra/turtle-agent/internal/minimap"
+	"github.com/pjerra/forever-agent/internal/minimap"
 )
 
 // The page always gets the three picture slots of a map in the order Zul'Farrak has them: the world map (the main image, then
@@ -43,7 +43,7 @@ type MinimapPicture struct {
 
 // MinimapLayer is one picture slot of a map, ready for the page: the rectangle it covers in the drawing's plane (the plane
 // Project makes) and the URL it is served at. An unavailable slot has no picture fields (the embedded pointer is nil) and a
-// reason instead. The images come from `turtle-agent minimap-extract` and stay local.
+// reason instead. The images come from `forever-agent minimap-extract` and stay local.
 type MinimapLayer struct {
 	Name      string `json:"name"`   // what the page's picker shows, the same as Label: "World map", "World map 2f", "Minimap", ...
 	Source    string `json:"source"` // minimap, worldmap or navmesh

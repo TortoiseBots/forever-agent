@@ -16,11 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tbm"
-	"github.com/pjerra/turtle-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/tracerun"
 )
 
 // Remote-leader mode (issue #83). The agent leads a bot group it is not in, through the TortoiseBots remote commander
@@ -37,7 +37,7 @@ type Runner interface {
 }
 
 // RemoteGame is what the RemoteDriver does to the game: send commander commands, read the feed. The agent implements it over
-// the session (cmd/turtle-agent/commander_methods.go); the tests use a fake with a fake clock. A RemoteGame may also implement
+// the session (cmd/forever-agent/commander_methods.go); the tests use a fake with a fake clock. A RemoteGame may also implement
 // PathPlanner.
 type RemoteGame interface {
 	// Command sends ".bot <command>" ("commander bind Tanky", "cmd move 1 2 3") and returns its ACK or ERR reply (Kind
@@ -475,7 +475,7 @@ type RemoteReport struct {
 	Observe *ObserveReport `json:"observe,omitempty"`
 
 	// Live tuning (tune.go, remote_tune.go): the tunables changed during the run and the reloads of the plan file, each with when, old
-	// and new. `turtle-agent tune-diff <trace>` turns them into a patch for the tunables file and the plan file.
+	// and new. `forever-agent tune-diff <trace>` turns them into a patch for the tunables file and the plan file.
 	TuneChanges []TuneChange `json:"tune_changes"`
 	PlanReloads []PlanReload `json:"plan_reloads"`
 

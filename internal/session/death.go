@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/opcode"
 )
 
 // Death, resurrection and the corpse run (README "Death and the corpse run"). The packets are the ones a 1.12 client

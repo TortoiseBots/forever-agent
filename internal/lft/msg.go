@@ -9,7 +9,7 @@
 // hold ';' and only the leading fields may be split (LFTUserGroups.cpp:616-632).
 //
 // The package is pure: it builds texts, parses them and folds them into a State. It does not
-// talk to a session; cmd/turtle-agent's lfg methods carry the lines.
+// talk to a session; cmd/forever-agent's lfg methods carry the lines.
 package lft
 
 import (

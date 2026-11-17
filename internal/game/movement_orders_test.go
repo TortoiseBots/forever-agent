@@ -5,9 +5,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/game/gametest"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/game/gametest"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 const self = packet.GUID(0x2A)

@@ -7,11 +7,11 @@ import (
 	"math"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/game"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/opcode"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/game"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/opcode"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 const (
@@ -726,7 +726,7 @@ func (s *Session) onTransferPending(body []byte) error {
 // Nothing is published before MSG_MOVE_WORLDPORT_ACK has gone out: the new map, the position and
 // the TeleportSeq bump land in one locked update after that write succeeds (Codex HIGH). The ack
 // goes out before any later chat line, and the core places the player when it reads it
-// (MovementHandler.cpp:43-49), so raid-walk's reviveLanded (cmd/turtle-agent) takes that worldport
+// (MovementHandler.cpp:43-49), so raid-walk's reviveLanded (cmd/forever-agent) takes that worldport
 // seq as the far landing and never the map change alone. An ack write error publishes nothing:
 // no map, position or seq changes, so the landing stays pending and raid-walk's landing timeout
 // fires instead of a `.summon`.

@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/events"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
-	"github.com/pjerra/turtle-agent/internal/tracerun"
+	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/tracerun"
 )
 
 // Game is what the Driver does to the game and what it reads of it. The agent implements it over a session
-// (cmd/turtle-agent/dungeon_methods.go); the tests use a fake with a fake clock.
+// (cmd/forever-agent/dungeon_methods.go); the tests use a fake with a fake clock.
 type Game interface {
 	Position() Point
 	Map() uint32

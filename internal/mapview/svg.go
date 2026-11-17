@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/pjerra/turtle-agent/internal/navmesh"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // Layout of the image, in pixels.
@@ -162,7 +162,7 @@ func (s *Scene) subtitle() string {
 }
 
 func (s *Scene) footer() string {
-	return "turtle-agent map: drawn from what the agent saw, not from the game world. North is up."
+	return "forever-agent map: drawn from what the agent saw, not from the game world. North is up."
 }
 
 func (s *Scene) writeBackground(w *svgw, floor int) {

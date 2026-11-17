@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/planexport"
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 // fakeProbe answers AgentPID from a map of dir → pid.
@@ -35,13 +35,13 @@ func (f fakeConf) EffectiveKeys(_ context.Context, server string) (map[string]st
 	return f.keys[server], nil
 }
 
-const goodHelp = "usage: turtle-agent raid-walk <plan> [--instance-cap-per-account N]"
+const goodHelp = "usage: forever-agent raid-walk <plan> [--instance-cap-per-account N]"
 
-// fakeBinary writes a shell script that behaves like turtle-agent for the checks. capSupport adds the cap flag to
+// fakeBinary writes a shell script that behaves like forever-agent for the checks. capSupport adds the cap flag to
 // its raid-walk help; schemaUnknown makes lease list fail with an unknown-field error.
 func fakeBinary(t *testing.T, dir, name string, capSupport, schemaUnknown bool) string {
 	t.Helper()
-	help := "usage: turtle-agent (no cap flag)"
+	help := "usage: forever-agent (no cap flag)"
 	if capSupport {
 		help = goodHelp
 	}
@@ -51,7 +51,7 @@ func fakeBinary(t *testing.T, dir, name string, capSupport, schemaUnknown bool) 
 	}
 	body := "#!/bin/sh\ncase \"$1\" in\n" +
 		"--help) echo " + shellQuote(help) + "; exit 2;;\n" +
-		"version) echo 'turtle-agent 1.2.3';;\n" +
+		"version) echo 'forever-agent 1.2.3';;\n" +
 		"lease) " + lease + ";;\n" +
 		"raid-walk) echo " + shellQuote(help) + "; exit 2;;\n" +
 		"esac\nexit 0\n"
@@ -82,7 +82,7 @@ func newFixture(t *testing.T) *fixture {
 		{"id":"4","account":"TAGENT4","character":"Tacmdbilo","port":8774,"settings_from":"/x/4.json"}]}]}`
 	writeFile(t, f.slots, 0o600, slotsJSON)
 	writeFile(t, filepath.Join(cfg, "instance-cap-per-account.json"), 0o600, `{"m910q": 30}`)
-	f.bin = fakeBinary(t, t.TempDir(), "turtle-agent", true, false)
+	f.bin = fakeBinary(t, t.TempDir(), "forever-agent", true, false)
 	writeFile(t, filepath.Join(walk, "dungeons", "zul_gurub.json"), 0o644, planJSON)
 	return f
 }
@@ -182,7 +182,7 @@ func TestCheckBinaries(t *testing.T) {
 		t.Fatalf("one binary warned: %+v", find(rep, CheckBinary))
 	}
 	// A second binary is a warning.
-	other := fakeBinary(t, t.TempDir(), "turtle-agent", true, false)
+	other := fakeBinary(t, t.TempDir(), "forever-agent", true, false)
 	f.cmd(t, "cmd-b.txt", other+" raid-walk zul_gurub --server m910q --slot 2 --dir "+filepath.Join(f.walk, "dungeons")+" --until none")
 	rep = f.run(t, Deps{})
 	warn := findSubject(rep, CheckBinary, "the walk")
@@ -191,7 +191,7 @@ func TestCheckBinaries(t *testing.T) {
 	}
 	// A missing binary is a failure.
 	f2 := newFixture(t)
-	f2.cmd(t, "cmd-a.txt", "/nonexistent/turtle-agent raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f2.walk, "dungeons"))
+	f2.cmd(t, "cmd-a.txt", "/nonexistent/forever-agent raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f2.walk, "dungeons"))
 	rep = f2.run(t, Deps{})
 	if !hasStatus(rep, CheckBinary, Fail) {
 		t.Fatalf("missing binary: %+v", find(rep, CheckBinary))
@@ -200,7 +200,7 @@ func TestCheckBinaries(t *testing.T) {
 
 func TestCheckSchema(t *testing.T) {
 	f := newFixture(t)
-	bad := fakeBinary(t, t.TempDir(), "turtle-agent", false, true)
+	bad := fakeBinary(t, t.TempDir(), "forever-agent", false, true)
 	f.cmd(t, "cmd-a.txt", bad+" raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
 	rep := f.run(t, Deps{})
 	res := findSubject(rep, CheckSchema, bad)
@@ -229,7 +229,7 @@ func TestCheckSlotsPath(t *testing.T) {
 
 func TestCheckInstanceCaps(t *testing.T) {
 	f := newFixture(t)
-	old := fakeBinary(t, t.TempDir(), "turtle-agent", false, false)
+	old := fakeBinary(t, t.TempDir(), "forever-agent", false, false)
 	f.cmd(t, "cmd-a.txt", old+" raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
 	rep := f.run(t, Deps{})
 	res := findSubject(rep, CheckCap, "m910q")
@@ -372,7 +372,7 @@ func TestCheckPlacement(t *testing.T) {
 func sqlExport(t *testing.T, name string, mapID uint32, legs []string) string {
 	t.Helper()
 	rows := planexport.Rows{
-		Plan: planexport.PlanRow{Plan: name, Map: mapID, Source: "turtle-agent abc12345 dungeons/" + name + ".json"},
+		Plan: planexport.PlanRow{Plan: name, Map: mapID, Source: "forever-agent abc12345 dungeons/" + name + ".json"},
 	}
 	for i, l := range legs {
 		rows.Legs = append(rows.Legs, planexport.LegRow{Plan: name, Leg: i, Name: l})
@@ -489,7 +489,7 @@ func TestCheckRosters(t *testing.T) {
 }
 
 func TestTargetsPairForm(t *testing.T) {
-	cmd, err := parseCommand("/bin/turtle-agent raid-walk zul_gurub --server m910q --slot 2,4 --holder 4=h4 "+
+	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2,4 --holder 4=h4 "+
 		`--from 2="leg hakkar" --out /tmp/o --until none`, "cmd-x.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +514,7 @@ func TestTargetsFile(t *testing.T) {
 zg1 m910q 1 zg1-a boss:14515 -- zul_gurub --sql /x.sql --until none
 zg1 m910q 2 zg1-b full -- zul_gurub --sql /x.sql --until none
 `)
-	ts, errs := readTargets(dir, "turtle-agent")
+	ts, errs := readTargets(dir, "forever-agent")
 	if len(errs) != 0 {
 		t.Fatalf("errors: %+v", errs)
 	}
@@ -537,7 +537,7 @@ func TestTargetsFilePracticeGoal(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, `zg9 m910q 1 zg9-a practice:14834:10 -- zul_gurub --sql /x.sql
 zg8 m910q 2 zg8-b practice:14834 -- zul_gurub --sql /x.sql
 `)
-	ts, errs := readTargets(dir, "turtle-agent")
+	ts, errs := readTargets(dir, "forever-agent")
 	if len(ts) != 1 {
 		t.Fatalf("%d targets, want 1: %+v", len(ts), errs)
 	}
@@ -568,7 +568,7 @@ func TestTargetsFileMultiWordValues(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644,
 		"hk13mh-1 m910q 13 zg74-hk13mh-1 boss:14834 -- zul_gurub --dir /plans --sql /x.sql "+
 			"--place --from leg hakkar --gm-clear-spawns /spawns --gm-instance-data hakkar:1 3;2 3;3 3;4 3\n")
-	ts, errs := readTargets(dir, "turtle-agent")
+	ts, errs := readTargets(dir, "forever-agent")
 	if len(errs) != 0 || len(ts) != 1 {
 		t.Fatalf("%d targets, %+v", len(ts), errs)
 	}
@@ -576,7 +576,7 @@ func TestTargetsFileMultiWordValues(t *testing.T) {
 		t.Fatalf("targets.txt line: %+v", t0)
 	}
 	// The cmd-*.txt form has the same two shapes, unquoted.
-	cmd, err := parseCommand("/bin/turtle-agent raid-walk zul_gurub --server m910q --slot 2 --from leg hakkar "+
+	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2 --from leg hakkar "+
 		"--gm-instance-data hakkar:1 3;2 3", "cmd-a.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -587,20 +587,20 @@ func TestTargetsFileMultiWordValues(t *testing.T) {
 }
 
 // A target that names no binary is checked as --binary, not as a name under the walk directory: the live proof
-// reported `<walk-dir>/turtle-agent: no such file` for every targets.txt line, and the fix hint named a --binary flag
+// reported `<walk-dir>/forever-agent: no such file` for every targets.txt line, and the fix hint named a --binary flag
 // that did not exist (round 2). A command's own path is a literal invocation and stays.
 func TestTargetsBinaryResolution(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, "zg1 m910q 1 zg1-a full -- zul_gurub --sql /x.sql\n")
-	writeFile(t, filepath.Join(dir, "cmd-a.txt"), 0o644, "/opt/ta/bin/turtle-agent raid-walk zul_gurub --server m910q --slot 2 --sql /x.sql\n")
-	ts, errs := readTargets(dir, "/opt/ta/default/turtle-agent")
+	writeFile(t, filepath.Join(dir, "cmd-a.txt"), 0o644, "/opt/ta/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2 --sql /x.sql\n")
+	ts, errs := readTargets(dir, "/opt/ta/default/forever-agent")
 	if len(errs) != 0 || len(ts) != 2 {
 		t.Fatalf("%d targets, %+v", len(ts), errs)
 	}
-	if ts[0].binary != "/opt/ta/bin/turtle-agent" {
+	if ts[0].binary != "/opt/ta/bin/forever-agent" {
 		t.Fatalf("a command's own path was replaced: %q", ts[0].binary)
 	}
-	if ts[1].binary != "/opt/ta/default/turtle-agent" {
+	if ts[1].binary != "/opt/ta/default/forever-agent" {
 		t.Fatalf("targets.txt binary: %q, want --binary's", ts[1].binary)
 	}
 

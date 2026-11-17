@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test-walk-super.sh -- cases for tools/walk-super.sh, driven by a fake turtle-agent.
+# test-walk-super.sh -- cases for tools/walk-super.sh, driven by a fake forever-agent.
 #
 # The fake stands in for the real binary path in the cmd file: it writes a
 # run.log with a chosen last TBM:RUN line into its --out dir and exits with a

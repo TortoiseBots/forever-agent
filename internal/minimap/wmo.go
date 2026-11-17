@@ -17,8 +17,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pjerra/turtle-agent/internal/blp"
-	"github.com/pjerra/turtle-agent/internal/mpq"
+	"github.com/pjerra/forever-agent/internal/blp"
+	"github.com/pjerra/forever-agent/internal/mpq"
 )
 
 const (

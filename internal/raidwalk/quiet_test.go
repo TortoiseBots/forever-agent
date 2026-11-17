@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/turtle-agent/internal/dungeon"
-	"github.com/pjerra/turtle-agent/internal/objects"
-	"github.com/pjerra/turtle-agent/internal/packet"
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // quietNow is the read time the quiet tests use.
@@ -51,7 +51,7 @@ func quietProven(units []objects.Unit, patrols []QuietPatrol, p dungeon.Point, h
 	return quietProvenAt(units, patrols, p, nil, homes)
 }
 
-// Codex HIGH (turtle-agent#360): stillness is not proof of home. A paused
+// Codex HIGH (forever-agent#360): stillness is not proof of home. A paused
 // patrol at 31-45 yd passed the old stillness check, and the raid could be
 // summoned next to it. The idle exemption now needs a proven home: a plan
 // spawn (by spawn guid when the plan names one, else by entry) within 3 yd of
@@ -366,7 +366,7 @@ func critterAt(name string, x float32, moving bool) objects.Unit {
 	return u
 }
 
-// turtle-agent#379: walk 27 C restart 2 was refused because a moving Snake 2914 at 72 yd and an idle Mad Servant off
+// forever-agent#379: walk 27 C restart 2 was refused because a moving Snake 2914 at 72 yd and an idle Mad Servant off
 // its spawn were the last blockers, so all_idle was false. A critter never counts, at any distance and in any state;
 // a real hostile off its spawn still blocks (the home-proof rule is unchanged).
 func TestQuietAtIgnoresCritters(t *testing.T) {
@@ -400,7 +400,7 @@ func TestQuietAtIgnoresCritters(t *testing.T) {
 	}
 }
 
-// turtle-agent#379, round 2: the quiet fallback only trusts an absolute max health. A percent read carries MaxHealth
+// forever-agent#379, round 2: the quiet fallback only trusts an absolute max health. A percent read carries MaxHealth
 // 100 (the store passes health through as sent), which sits at the band top: a level-1 unit read at 100 max HP is
 // ambiguous with "60 %", so it still blocks.
 func TestQuietAtPercentLevel1StillBlocks(t *testing.T) {
@@ -424,7 +424,7 @@ func mustQuiet(t *testing.T, p QuietPatrol) bool {
 	return ok
 }
 
-// TestZulGurubCubPatrolBlocksTheRevivePoint (turtle-agent#392): the placed Arlokk walk revives at leg 4's via point,
+// TestZulGurubCubPatrolBlocksTheRevivePoint (forever-agent#392): the placed Arlokk walk revives at leg 4's via point,
 // which the Zulian Cub patrol of the Last pull group of the Thekal leg walks within 5.7 yd of. The plan's patrol
 // block makes the quiet check refuse that point by path, the reason naming the patrol and its distance (the 392 run
 // saw only the cub's paused position, 32.6 yd away, and waited 568 s on a point the patrol walks through).
