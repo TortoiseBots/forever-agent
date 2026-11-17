@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -101,13 +100,13 @@ func buffNames(l []Buff) []string {
 }
 
 // memberView finds the member's unit row among the units in view; ok is false when it is not in view.
-func (d *Driver) memberView(m Member) (objects.Unit, bool) {
+func (d *Driver) memberView(m Member) (world.Unit, bool) {
 	for _, u := range d.g.Units() {
 		if u.Type == "player" && (u.GUID == m.GUID || (u.GUID == 0 && u.Name == m.Name)) {
 			return u, true
 		}
 	}
-	return objects.Unit{}, false
+	return world.Unit{}, false
 }
 
 // AuraTarget is one unit auras go on: its guid and the name the report and the core know it by.
@@ -133,9 +132,9 @@ type AuraPort interface {
 	// SendAura selects t and sends the GM line that puts b on it, only while that selection stands.
 	SendAura(ctx context.Context, t AuraTarget, b Buff) error
 	// ViewUnit returns t's unit row as the client holds it; false when it cannot be seen.
-	ViewUnit(ctx context.Context, t AuraTarget) (objects.Unit, bool)
+	ViewUnit(ctx context.Context, t AuraTarget) (world.Unit, bool)
 	// CasterAuras lists the caster's own auras; false when that cannot be told.
-	CasterAuras(ctx context.Context) ([]objects.Aura, bool)
+	CasterAuras(ctx context.Context) ([]world.Aura, bool)
 	Sleep(ctx context.Context, d time.Duration) error
 	// Note reports one line in the caller's own words.
 	Note(msg string)
@@ -163,7 +162,7 @@ func AurasMissing(ctx context.Context, p AuraPort, t AuraTarget, want []Buff) (m
 		return nil, false
 	}
 	for _, b := range want {
-		if !slices.ContainsFunc(u.Auras, func(a objects.Aura) bool { return a.SpellID == b.ID }) {
+		if !slices.ContainsFunc(u.Auras, func(a world.Aura) bool { return a.SpellID == b.ID }) {
 			missing = append(missing, b)
 		}
 	}
@@ -339,11 +338,11 @@ func (a driverAuras) SendAura(ctx context.Context, t AuraTarget, b Buff) error {
 	return a.d.sendBuff(ctx, Member{GUID: t.GUID, Name: t.Name}, b)
 }
 
-func (a driverAuras) ViewUnit(_ context.Context, t AuraTarget) (objects.Unit, bool) {
+func (a driverAuras) ViewUnit(_ context.Context, t AuraTarget) (world.Unit, bool) {
 	return a.d.memberView(Member{GUID: t.GUID, Name: t.Name})
 }
 
-func (a driverAuras) CasterAuras(context.Context) ([]objects.Aura, bool) {
+func (a driverAuras) CasterAuras(context.Context) ([]world.Aura, bool) {
 	src, ok := a.d.g.(SelfAuraSource)
 	if !ok {
 		return nil, false

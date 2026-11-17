@@ -22,15 +22,6 @@ const (
 	questStateFail     uint32 = 0x02
 )
 
-// QuestSlot is one entry of the quest log.
-type QuestSlot struct {
-	Slot     uint8    `json:"slot"`
-	ID       uint32   `json:"quest_id"`
-	Complete bool     `json:"complete"`
-	Failed   bool     `json:"failed"`
-	Counts   [4]uint8 `json:"counts"` // kills or items collected per objective
-}
-
 // QuestLog lists the quests in player's log, in slot order, from the player's own update
 // fields (empty until its create block arrives).
 func (s *Store) QuestLog(player packet.GUID) []QuestSlot {

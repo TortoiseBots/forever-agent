@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -184,9 +183,9 @@ func TestMarkOfTheWildSkipsAMemberItFailedOnTwiceFor60Seconds(t *testing.T) {
 	r, g := restoRig(t)
 	g.self.InCombat = false
 	g.member(tankG, "Tankard", 1, 1000, 1000, 6, 0)
-	g.mutate(tankG, func(u *objects.Unit) {
+	g.mutate(tankG, func(u *world.Unit) {
 		u.InCombat = false
-		u.Auras = []objects.Aura{{Name: "Thorns", SpellID: drThorns4}}
+		u.Auras = []world.Aura{{Name: "Thorns", SpellID: drThorns4}}
 	})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "mark_of_the_wild" || d.Target != tankG {
@@ -216,7 +215,7 @@ func TestMarkOfTheWildSkipsAMemberItFailedOnTwiceFor60Seconds(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// A member who got the buff has no count left.
-	g.addAura(tankG, objects.Aura{Name: "Mark of the Wild", SpellID: drMotw5})
+	g.addAura(tankG, world.Aura{Name: "Mark of the Wild", SpellID: drMotw5})
 	r.tick(2 * time.Second)
 	if n := len(r.b.mem.dru.fails); n != 0 {
 		t.Fatalf("%d counts kept", n)

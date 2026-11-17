@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -97,7 +96,7 @@ func (f *meleeFake) Attack(ctx context.Context) error {
 	return nil
 }
 
-func stanceAura(name string, id uint32) objects.Aura { return objects.Aura{Name: name, SpellID: id} }
+func stanceAura(name string, id uint32) world.Aura { return world.Aura{Name: name, SpellID: id} }
 
 // newWarriorRig is a warrior of level 40 in the stance, with Battle Shout up and no rage, on a fake game that can walk, see and
 // follow the swings; it knows the spells given (all the warrior spells of the tests when none).
@@ -110,7 +109,7 @@ func newWarriorRig(t *testing.T, preset, stance string, p Params, known ...uint3
 	g.self.Class, g.self.Level = ClassWarrior, 40
 	g.self.PowerType, g.self.Power, g.self.MaxPower = 1, 0, 1000
 	g.self.Health, g.self.MaxHealth = 1200, 1200
-	g.self.Auras = []objects.Aura{stanceAura("Battle Shout", spBattleShout)}
+	g.self.Auras = []world.Aura{stanceAura("Battle Shout", spBattleShout)}
 	if stance != "" {
 		g.self.Auras = append(g.self.Auras, stanceAura(stance, stanceSpells[stance]))
 	}
@@ -127,10 +126,10 @@ func newWarriorRig(t *testing.T, preset, stance string, p Params, known ...uint3
 	return &rig{t: t, g: g, b: b}, mf
 }
 
-func setRage(g *fakeGame, tenths uint32) { g.setSelf(func(u *objects.Unit) { u.Power = tenths }) }
+func setRage(g *fakeGame, tenths uint32) { g.setSelf(func(u *world.Unit) { u.Power = tenths }) }
 
 func setMobHP(g *fakeGame, id world.GUID, pct uint32) {
-	g.mutate(id, func(u *objects.Unit) { u.Health = u.MaxHealth * pct / 100 })
+	g.mutate(id, func(u *world.Unit) { u.Health = u.MaxHealth * pct / 100 })
 }
 
 // meleeFight is the standard fight: the tank holds a mob 4 yards east of the warrior, the mob faces away from the warrior (east),
@@ -163,7 +162,7 @@ func TestArmsWaitsForTheTankThenSwingsAndStrikes(t *testing.T) {
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "rend" || d.Spell != spRend {
 		t.Fatalf("%+v", d)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "heroic_strike" || d.Spell != spHeroic || d.Trigger != "rage_dump" {
 		t.Fatalf("rage 60 and nothing else to spend it on: %+v idle %q", d, r.idle())
 	}
@@ -292,7 +291,7 @@ func TestWarriorKeepsItsHomeStanceAndChangesItOnlyWhenCheap(t *testing.T) {
 	}
 	// In combat with 40 rage a stance change would cost it: the warrior keeps the stance and fights in it.
 	r, mf := newWarriorRig(t, "arms_warrior", stanceBerserker, Params{}, spBattleSt, spBerserkSt, spBattleShout, spMortal)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 400; u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 400; u.InCombat = true })
 	meleeFight(r, mf)
 	open(r)
 	for _, id := range casts(r.g) {
@@ -331,11 +330,11 @@ func TestRendOnlyWhereItCanPayOff(t *testing.T) {
 		t.Fatalf("Rend on a mob about to die: %+v", d)
 	}
 	setMobHP(r.g, mobA, 90)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
 	if d := r.tick(1600 * time.Millisecond); d != nil {
 		t.Fatalf("a second Rend on a bleeding mob: %+v", d)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = nil })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Auras = nil })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "rend" {
 		t.Fatalf("%+v", d)
 	}
@@ -385,7 +384,7 @@ func TestSweepingStrikesWithTwoMobs(t *testing.T) {
 	if d := open(r); d == nil || d.Action != "sweeping_strikes" || d.Spell != spSweeping {
 		t.Fatalf("%+v", d)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, stanceAura("Sweeping Strikes", spSweeping)) })
+	r.g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, stanceAura("Sweeping Strikes", spSweeping)) })
 	if d := r.tick(1600 * time.Millisecond); d != nil {
 		t.Fatalf("again while up: %+v", d)
 	}
@@ -430,8 +429,8 @@ func TestBerserkerRageBreaksAFear(t *testing.T) {
 	r, mf := newWarriorRig(t, "fury_warrior", stanceBerserker, Params{})
 	meleeFight(r, mf)
 	setRage(r.g, 0)
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Fear", SpellID: spFear, Harmful: true})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Fear", SpellID: spFear, Harmful: true})
 	})
 	d := r.tick(100 * time.Millisecond) // before the opening delay: it is no attack
 	if d == nil || d.Action != "berserker_rage" || d.Spell != spBerserkRage || d.Rel != RelDispel-5 || d.Trigger != "feared" {
@@ -440,8 +439,8 @@ func TestBerserkerRageBreaksAFear(t *testing.T) {
 	// Arms has no Berserker Rage: it is not in the stance.
 	r, mf = newWarriorRig(t, "arms_warrior", stanceBattle, Params{})
 	meleeFight(r, mf)
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Fear", SpellID: spFear, Harmful: true})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Fear", SpellID: spFear, Harmful: true})
 	})
 	if d := r.tick(time.Second); d != nil && d.Spell == spBerserkRage {
 		t.Fatalf("%+v", d)
@@ -450,8 +449,8 @@ func TestBerserkerRageBreaksAFear(t *testing.T) {
 
 func TestInterruptPummelInBattleOrBerserkerShieldBashInBattleOrDefensive(t *testing.T) {
 	cast := func(r *rig) {
-		r.g.mutate(mobA, func(u *objects.Unit) {
-			u.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+		r.g.mutate(mobA, func(u *world.Unit) {
+			u.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 		})
 	}
 	try := func(preset, stance string, known ...uint32) (*rig, *Decision) {
@@ -501,7 +500,7 @@ func TestInterruptPummelInBattleOrBerserkerShieldBashInBattleOrDefensive(t *test
 	r, mf := newWarriorRig(t, "fury_warrior", stanceBerserker, Params{})
 	meleeFight(r, mf)
 	caster := mob(mobB, tankG)
-	caster.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	caster.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(caster, 12, 0)
 	setRage(r.g, 500)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "interrupt" {
@@ -552,7 +551,7 @@ func TestChargeOutOfCombatAfterTheOpeningDelayAndOnlyIntoATankedPull(t *testing.
 	r, mf = newWarriorRig(t, "arms_warrior", stanceBattle, Params{NoMove: true})
 	far(r, true)
 	mf.setSwing(mobA)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 	r.tick(2200 * time.Millisecond)
 	for _, id := range casts(r.g) {
@@ -567,7 +566,7 @@ func TestInterceptInCombatFromBerserkerStance(t *testing.T) {
 	tankFights(r.g, 17, 15, 0)
 	mf.setSwing(mobA)
 	setRage(r.g, 300)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 	d := open(r)
 	if d == nil || d.Action != "intercept" || d.Spell != spIntercept || d.Trigger != "mob_far_in_combat" {
@@ -586,7 +585,7 @@ func TestHamstringOnlyAMobThatRuns(t *testing.T) {
 	if d := open(r); d != nil {
 		t.Fatalf("a mob that stands: %+v", d)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Moving = true })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Moving = true })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "hamstring" || d.Spell != spHamstring {
 		t.Fatalf("%+v", d)
 	}
@@ -594,7 +593,7 @@ func TestHamstringOnlyAMobThatRuns(t *testing.T) {
 	r, mf = newWarriorRig(t, "arms_warrior", stanceBattle, Params{}, spBattleSt, spHamstring, spBattleShout)
 	meleeFight(r, mf)
 	setRage(r.g, 300)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Moving = true })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Moving = true })
 	if d := open(r); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -602,8 +601,8 @@ func TestHamstringOnlyAMobThatRuns(t *testing.T) {
 
 func TestBattleShoutAtRestBloodrageAtTheStart(t *testing.T) {
 	r, _ := newWarriorRig(t, "arms_warrior", stanceBattle, Params{})
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{stanceAura("Battle Stance", spBattleSt)}
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{stanceAura("Battle Stance", spBattleSt)}
 		u.Power = 100
 	}) // no shout, 10 rage
 	d := r.tick(time.Second)
@@ -613,8 +612,8 @@ func TestBattleShoutAtRestBloodrageAtTheStart(t *testing.T) {
 	// In a dungeon run upkeep waits for a rest gate.
 	r, _ = newWarriorRig(t, "arms_warrior", stanceBattle, Params{RestGate: true})
 	r.b.restOK = func() bool { return false } // the controller's gate: no rest gate open
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{stanceAura("Battle Stance", spBattleSt)}
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{stanceAura("Battle Stance", spBattleSt)}
 		u.Power = 100
 	})
 	if d := r.tick(time.Second); d != nil {
@@ -631,7 +630,7 @@ func TestBattleShoutAtRestBloodrageAtTheStart(t *testing.T) {
 	r, mf = newWarriorRig(t, "arms_warrior", stanceBattle, Params{})
 	tankFights(r.g, 7, 4, 0)
 	mf.setSwing(mobA)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 500 })
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("Bloodrage at 40%% health: %+v", d)
 	}
@@ -726,7 +725,7 @@ func TestClassTables(t *testing.T) {
 // The drink a class picks from the same bags: the mage takes its conjured water, the priest only what a vendor sells.
 func TestDrinkTableByClass(t *testing.T) {
 	g := newFake()
-	g.items = []objects.Item{{Entry: 8077, Count: 5}, {Entry: 1645, Count: 5}} // Conjured Mineral Water (35), Moonberry Juice (35)
+	g.items = []world.Item{{Entry: 8077, Count: 5}, {Entry: 1645, Count: 5}} // Conjured Mineral Water (35), Moonberry Juice (35)
 	g.self.Level = 40
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}})
 	c := r.b.newCtx(g.clk.Now())
@@ -822,7 +821,7 @@ func TestMeleeWalksUpToAMobOnItThatKeepsItsDistance(t *testing.T) {
 	r, mf := newWarriorRig(t, "arms_warrior", stanceBattle, Params{})
 	m := mob(mobA, selfG)
 	r.g.addUnit(m, 20, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "melee_reposition" || len(mf.walkList()) != 1 {
 		t.Fatalf("%+v walks %v idle %q", d, mf.walkList(), r.idle())
@@ -838,7 +837,7 @@ func TestInterceptAMobOnTheLeaderWithoutATank(t *testing.T) {
 	r.g.addUnit(mob(mobA, selfG), 20, 0)
 	mf.setSwing(mobA)
 	setRage(r.g, 300)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "intercept" || d.Spell != spIntercept {
 		t.Fatalf("%+v idle %q", d, r.idle())

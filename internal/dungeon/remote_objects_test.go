@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -33,7 +32,7 @@ var (
 type fakeCarrier struct {
 	*fakeRemote
 	bags      map[string]map[uint32]int
-	gobjs     []objects.GameObject
+	gobjs     []world.GameObject
 	script    map[string][]tbm.OrderResult // verb -> answers given first, in order
 	method    string
 	methods   []string // every lootmethod ordered
@@ -207,7 +206,7 @@ func (g *fakeCarrier) Behavior(ctx context.Context, bot, key string, on bool) (t
 	return tbm.Reply{Kind: tbm.KindAck, OK: true, Ack: &a, Lines: []string{}}, nil
 }
 
-func (g *fakeCarrier) GameObjects() []objects.GameObject { return g.gobjs }
+func (g *fakeCarrier) GameObjects() []world.GameObject { return g.gobjs }
 
 func (g *fakeCarrier) BotLines(ctx context.Context, command string, wait time.Duration, done func(string) bool) ([]string, bool, error) {
 	f := strings.Fields(command)
@@ -230,8 +229,8 @@ func (g *fakeCarrier) BotLines(ctx context.Context, command string, wait time.Du
 	return lines, true, nil
 }
 
-func chestObj() objects.GameObject {
-	return objects.GameObject{GUID: chestGUID, Entry: goChest, X: 30, Y: 0, Z: 0, Distance: 80, State: "ready"}
+func chestObj() world.GameObject {
+	return world.GameObject{GUID: chestGUID, Entry: goChest, X: 30, Y: 0, Z: 0, Distance: 80, State: "ready"}
 }
 
 func objOpts() RemoteOptions {
@@ -259,7 +258,7 @@ func lootChestStep() Step {
 
 func carrierGame(t *testing.T) *fakeCarrier {
 	g := newFakeCarrier(t)
-	g.gobjs = []objects.GameObject{chestObj()}
+	g.gobjs = []world.GameObject{chestObj()}
 	g.chestLoot = []tbm.ItemCount{{Entry: itMedallion, Count: 1}}
 	return g
 }
@@ -591,7 +590,7 @@ func keystoneStep() []Step {
 
 func TestCarrierOpensTheKeystone(t *testing.T) {
 	g := carrierGame(t)
-	g.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	g.bag("Magey")[itStaff] = 1
 	plan := remotePlan(Leg{Name: "k", To: Point{20, 0, 0}, Steps: keystoneStep()})
 	rep, err := runCarrier(t, g, plan, objOpts())
@@ -617,7 +616,7 @@ func TestCarrierOpensTheKeystone(t *testing.T) {
 
 func TestCarrierSealInViewIsChecked(t *testing.T) {
 	g := carrierGame(t)
-	g.gobjs = []objects.GameObject{
+	g.gobjs = []world.GameObject{
 		{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"},
 		{GUID: world.GUID(0x1F1000000000AAA3), Entry: goSeal, X: 20, Y: 50, Z: 0, Distance: 50, State: "ready"},
 	}
@@ -641,7 +640,7 @@ func TestCarrierSealInViewIsChecked(t *testing.T) {
 	}
 	// A Seal that stays closed fails after its timeout.
 	g2 := carrierGame(t)
-	g2.gobjs = []objects.GameObject{g.gobjs[0], g.gobjs[1]}
+	g2.gobjs = []world.GameObject{g.gobjs[0], g.gobjs[1]}
 	g2.gobjs[1].State = "ready"
 	g2.bag("Magey")[itStaff] = 1
 	if _, err := runCarrier(t, g2, plan, objOpts()); err == nil || !strings.Contains(err.Error(), "waited 60 s") {
@@ -651,7 +650,7 @@ func TestCarrierSealInViewIsChecked(t *testing.T) {
 
 func TestCarrierKeystoneNeedsTheStaffInTheCarriersBags(t *testing.T) {
 	g := carrierGame(t)
-	g.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	g.bag("Healy")[itStaff] = 1 // another bot holds it
 	plan := remotePlan(Leg{Name: "k", To: Point{20, 0, 0}, Steps: keystoneStep()})
 	_, err := runCarrier(t, g, plan, objOpts())
@@ -660,7 +659,7 @@ func TestCarrierKeystoneNeedsTheStaffInTheCarriersBags(t *testing.T) {
 	}
 	// A locked answer from the module is shown.
 	g = carrierGame(t)
-	g.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	g.bag("Magey")[itStaff] = 1
 	g.script["open"] = []tbm.OrderResult{errOrder("cmd open", "no-item")}
 	if _, err := runCarrier(t, g, plan, objOpts()); err == nil || !strings.Contains(err.Error(), "refused: no-item") {

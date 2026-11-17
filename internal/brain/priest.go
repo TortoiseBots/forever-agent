@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -53,11 +52,11 @@ func init() {
 // ---- Power Word: Shield ----
 
 // shielded says the unit carries a shield or the Weakened Soul it leaves: no second shield can be cast on it.
-func shielded(u *objects.Unit) bool { return HasAura(u, "Power Word: Shield", "Weakened Soul") }
+func shielded(u *world.Unit) bool { return HasAura(u, "Power Word: Shield", "Weakened Soul") }
 
 // shieldPlan is the shield of the tick.
 type shieldPlan struct {
-	Target *objects.Unit
+	Target *world.Unit
 	Spell  uint32
 	Burst  bool // a member who is losing health fast, against the tank before a pull
 }
@@ -72,10 +71,10 @@ var ValShield = &Value[shieldPlan]{Name: "shield_plan", Calc: func(c *Ctx) shiel
 		return shieldPlan{}
 	}
 	mana := PowerPct(c)
-	free := func(u *objects.Unit) bool {
+	free := func(u *world.Unit) bool {
 		return !shielded(u) && c.Now.Sub(c.mem.heal.shieldedAt(u.GUID)) > shieldHold && inHealReach(u) && sightOK(c, u)
 	}
-	var burst *objects.Unit
+	var burst *world.Unit
 	var most uint32
 	if mana >= shieldBurstMana {
 		for _, u := range healMembers(c) {

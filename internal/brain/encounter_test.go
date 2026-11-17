@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tactics"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -19,7 +18,7 @@ const (
 	wardG           = world.GUID(111)
 )
 
-func withEntry(u objects.Unit, entry uint32) objects.Unit {
+func withEntry(u world.Unit, entry uint32) world.Unit {
 	u.Entry = entry
 	return u
 }
@@ -47,7 +46,7 @@ func TestKillFirstTakesTheShardBeforeTheBoss(t *testing.T) {
 		t.Fatalf("the shard is first: %+v", d)
 	}
 	// The shard dies: the boss is the target again.
-	g.mutate(shardG, func(u *objects.Unit) { u.Dead = true })
+	g.mutate(shardG, func(u *world.Unit) { u.Dead = true })
 	if d := r.tick(2 * time.Second); d == nil || d.Target != mobA {
 		t.Fatalf("%+v", d)
 	}
@@ -64,8 +63,8 @@ func TestWithoutTacticsTheTanksMobIsFought(t *testing.T) {
 func TestKillFirstWaitsForTheEncounterToBeOn(t *testing.T) {
 	// The boss is not in view: the encounter is off and the shard is just a mob.
 	r, g := bossFight(t, oneEncounter(tactics.Tactics{KillFirst: []uint32{entShard}}))
-	g.mutate(mobA, func(u *objects.Unit) { u.Dead = true })
-	g.mutate(tankG, func(u *objects.Unit) { u.Target = shardG })
+	g.mutate(mobA, func(u *world.Unit) { u.Dead = true })
+	g.mutate(tankG, func(u *world.Unit) { u.Target = shardG })
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Target != shardG {
 		t.Fatalf("%+v", d)
@@ -82,14 +81,14 @@ func TestNeverTargetIsLeftAloneUnlessItAttacksTheLeader(t *testing.T) {
 	buffUp(g)
 	g.addUnit(withEntry(mob(mobB, tankG), entBoss), 28, 3)
 	g.addUnit(withEntry(mob(wardG, tankG), entWard), 28, 0)
-	g.mutate(tankG, func(u *objects.Unit) { u.Target = wardG })
+	g.mutate(tankG, func(u *world.Unit) { u.Target = wardG })
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}, Encounters: enc})
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d != nil && d.Target == wardG {
 		t.Fatalf("the ward was attacked: %+v", d)
 	}
 	// It attacks the leader: it is fought like any mob that has the player.
-	g.mutate(wardG, func(u *objects.Unit) { u.Target = selfG })
+	g.mutate(wardG, func(u *world.Unit) { u.Target = selfG })
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Target != wardG {
 		t.Fatalf("%+v", d)
 	}
@@ -103,7 +102,7 @@ func TestEncounterIsReportedWhenItStartsAndEnds(t *testing.T) {
 	if len(evs) != 1 || evs[0].Data["state"] != "encounter" || evs[0].Data["encounter"] != "test/boss" {
 		t.Fatalf("%+v", evs)
 	}
-	g.mutate(mobA, func(u *objects.Unit) { u.Dead = true })
+	g.mutate(mobA, func(u *world.Unit) { u.Dead = true })
 	r.tick(100 * time.Millisecond)
 	evs = g.events(events.KindBrainState)
 	if len(evs) != 2 || evs[1].Data["state"] != "encounter_end" {
@@ -120,10 +119,10 @@ func TestPlannedCastIsInterruptedBeforeAHeal(t *testing.T) {
 		buffUp(g)
 		g.addUnit(withEntry(mob(mobA, tankG), entBoss), 28, 0)
 		healer := withEntry(mob(mobB, 0), 5000)
-		healer.Casting = &objects.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(2000)}
+		healer.Casting = &world.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(2000)}
 		g.addUnit(healer, 20, 4)
 		caster := withEntry(mob(shardG, 0), 5001)
-		caster.Casting = &objects.Cast{SpellID: spShadowBolt, Target: 0, EndsInMS: ms(2000)}
+		caster.Casting = &world.Cast{SpellID: spShadowBolt, Target: 0, EndsInMS: ms(2000)}
 		g.addUnit(caster, 20, -4)
 		r := newRig(t, g, Params{Strategies: []string{"frost_mage"}, Encounters: enc})
 		return r.tick(100 * time.Millisecond)
@@ -145,7 +144,7 @@ func TestPlannedCastIsInterruptedBeforeAHeal(t *testing.T) {
 
 func TestHealerDispelsThePlannedAuraAndSparesTheOneThePlanForbids(t *testing.T) {
 	boss := func(g *fakeGame) { g.addUnit(withEntry(mob(mobA, tankG), entBoss), 20, 0) }
-	run := func(enc []Encounter, aura objects.Aura, mana uint32, bossIn bool) *Decision {
+	run := func(enc []Encounter, aura world.Aura, mana uint32, bossIn bool) *Decision {
 		g := priestFake(holyKnown...)
 		if bossIn {
 			boss(g)
@@ -157,8 +156,8 @@ func TestHealerDispelsThePlannedAuraAndSparesTheOneThePlanForbids(t *testing.T) 
 		g.addAura(dpsG1, aura)
 		return r.tick(100 * time.Millisecond)
 	}
-	slow := objects.Aura{SpellID: auraFrostbolt, Name: "Frostbolt"}
-	poly := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
+	slow := world.Aura{SpellID: auraFrostbolt, Name: "Frostbolt"}
+	poly := world.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
 	planned := oneEncounter(tactics.Tactics{Dispel: []tactics.SpellRef{{Name: "Frostbolt"}}})
 	if d := run(nil, slow, 30, true); d != nil {
 		t.Fatalf("a slow is not worth the mana at 30%%: %+v", d)
@@ -184,7 +183,7 @@ func TestLeavesTheCircleOfAPlannedCast(t *testing.T) {
 	enc := oneEncounter(tactics.Tactics{MoveOut: []tactics.MoveOut{{Cast: &tactics.SpellRef{Name: "Shadow Bolt"}, Yards: 12}}})
 	r, pf := newPosRig(t, Params{Encounters: enc})
 	boss := withEntry(mob(mobA, tankG), entBoss)
-	boss.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}
+	boss.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}
 	r.g.addUnit(boss, 6, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_ground_aoe" {
@@ -199,12 +198,12 @@ func TestStaysWhenTheCastIsAnotherSpellOrFarEnough(t *testing.T) {
 	enc := oneEncounter(tactics.Tactics{MoveOut: []tactics.MoveOut{{Cast: &tactics.SpellRef{Name: "Shadow Bolt"}, Yards: 12}}})
 	r, pf := newPosRig(t, Params{Encounters: enc})
 	boss := withEntry(mob(mobA, tankG), entBoss)
-	boss.Casting = &objects.Cast{SpellID: spLesserHeal, EndsInMS: ms(2000)}
+	boss.Casting = &world.Cast{SpellID: spLesserHeal, EndsInMS: ms(2000)}
 	r.g.addUnit(boss, 6, 0)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "leave_ground_aoe" {
 		t.Fatalf("another spell: %+v", d)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}; u.X = 20 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}; u.X = 20 })
 	if d := r.tick(1500 * time.Millisecond); d != nil && d.Action == "leave_ground_aoe" {
 		t.Fatalf("20 yd away: %+v", d)
 	}
@@ -217,7 +216,7 @@ func TestATankHoldsItsPlaceInACastCircle(t *testing.T) {
 	enc := oneEncounter(tactics.Tactics{MoveOut: []tactics.MoveOut{{Cast: &tactics.SpellRef{Name: "Shadow Bolt"}}}})
 	r, _ := newPosRig(t, Params{Encounters: enc})
 	boss := withEntry(mob(mobA, tankG), entBoss)
-	boss.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}
+	boss.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(2000)}
 	r.g.addUnit(boss, 4, 0)
 	c := r.b.newCtx(r.g.clk.Now())
 	if hs := tacticCastHazards(c); len(hs) != 1 || hs[0].Radius != tactics.DefaultYard {
@@ -231,10 +230,10 @@ func TestATankHoldsItsPlaceInACastCircle(t *testing.T) {
 
 func TestLeavesAGroundEffectOfAPlannedSpellWhoeverCastIt(t *testing.T) {
 	// A Blizzard of the tank's is the party's own and is ignored; the plan names it, so it is a hazard.
-	area := objects.DynamicObject{GUID: 0xF100000000000001, Spell: spBlizzard, Caster: tankG, Radius: 8, X: 1, Y: 0}
+	area := world.DynamicObject{GUID: 0xF100000000000001, Spell: spBlizzard, Caster: tankG, Radius: 8, X: 1, Y: 0}
 	plain, pfPlain := newPosRig(t, Params{})
 	plain.g.partyWithTank()
-	pfPlain.areas = []objects.DynamicObject{area}
+	pfPlain.areas = []world.DynamicObject{area}
 	if d := plain.tick(100 * time.Millisecond); d != nil && d.Action == "leave_ground_aoe" {
 		t.Fatalf("the party's own area: %+v", d)
 	}
@@ -242,7 +241,7 @@ func TestLeavesAGroundEffectOfAPlannedSpellWhoeverCastIt(t *testing.T) {
 	r, pf := newPosRig(t, Params{Encounters: enc})
 	r.g.partyWithTank()
 	r.g.addUnit(withEntry(mob(mobA, tankG), entBoss), 28, 0)
-	pf.areas = []objects.DynamicObject{area}
+	pf.areas = []world.DynamicObject{area}
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "leave_ground_aoe" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -37,7 +36,7 @@ type Sight interface {
 
 // Ground lists the ground effects (dynamic objects) in view.
 type Ground interface {
-	DynamicObjects() []objects.DynamicObject
+	DynamicObjects() []world.DynamicObject
 }
 
 func sightOf(c *Ctx) Sight   { s, _ := c.G.(Sight); return s }
@@ -54,7 +53,7 @@ func canMove(c *Ctx) bool {
 }
 
 func selfPos(c *Ctx) Vec3 { return Vec3{c.Self.X, c.Self.Y, c.Self.Z} }
-func unitPos(u *objects.Unit) Vec3 {
+func unitPos(u *world.Unit) Vec3 {
 	return Vec3{u.X, u.Y, u.Z}
 }
 
@@ -119,7 +118,7 @@ func (e losEntry) blockedNow(now time.Time, from, to Vec3) bool {
 // LineOfSight is whether the player has sight of the unit, by the navmesh ray (see Sight.LineClear), cached per target for
 // 250 ms while neither end moves a yard. known false means the brain cannot tell, which callers treat as clear. A target the
 // server refused a cast at for line of sight is known blocked for a few seconds, whatever the mesh says (markLOSBlocked).
-func (c *Ctx) LineOfSight(u *objects.Unit) (clear, known bool) {
+func (c *Ctx) LineOfSight(u *world.Unit) (clear, known bool) {
 	s := sightOf(c)
 	if s == nil || u == nil || !c.SelfOK || u.Distance < 0 {
 		return true, false
@@ -159,7 +158,7 @@ func (c *Ctx) LineOfSight(u *objects.Unit) (clear, known bool) {
 // markLOSBlocked records that the server refused a cast at the unit for line of sight: it is known blocked for losBlockFor from
 // where the player and the unit stand now. A repeated refusal extends it. The remembered standing spot is dropped, so that the
 // next search looks again (and, with the block standing, for a place away from here).
-func markLOSBlocked(c *Ctx, u *objects.Unit) {
+func markLOSBlocked(c *Ctx, u *world.Unit) {
 	if u == nil || !c.SelfOK {
 		return
 	}
@@ -178,7 +177,7 @@ func markLOSBlocked(c *Ctx, u *objects.Unit) {
 }
 
 // losBlocked says the server's refusal stands for this unit from where the player is.
-func losBlocked(c *Ctx, u *objects.Unit) bool {
+func losBlocked(c *Ctx, u *world.Unit) bool {
 	if u == nil || !c.SelfOK {
 		return false
 	}
@@ -219,8 +218,8 @@ type spotSpec struct {
 	kind   string
 	center Vec3
 	radii  []float64
-	base   float64       // bearing of the first candidate
-	target *objects.Unit // when set: the spot has sight of it, and stays within the ranged band of it
+	base   float64     // bearing of the first candidate
+	target *world.Unit // when set: the spot has sight of it, and stays within the ranged band of it
 	extra  func(p Vec3) bool
 	// keepAway and busyAway override mobKeepAway and mobBusyAway (0: the default). A negative busyAway lets the spot be anywhere
 	// near mobs that are fighting, as a melee fighter's is.
@@ -284,7 +283,7 @@ func findSpot(c *Ctx, sp spotSpec) (Vec3, bool) {
 // spotSafeAway keeps a candidate away from mobs that are not the target: from sleeping ones (keep yards; 0: mobKeepAway) so that
 // standing there does not pull them, from fighting ones (busy yards; 0: mobBusyAway, below 0: no limit) so that standing there is
 // not in their way.
-func spotSafeAway(c *Ctx, p Vec3, target *objects.Unit, keep, busy float64) bool {
+func spotSafeAway(c *Ctx, p Vec3, target *world.Unit, keep, busy float64) bool {
 	if keep <= 0 {
 		keep = mobKeepAway
 	}
@@ -334,7 +333,7 @@ func forgetSpot(c *Ctx) {
 }
 
 // bandSpot is a standing place in the ranged band of the unit with sight of it, out of its front, near the player.
-func bandSpot(c *Ctx, kind string, u *objects.Unit) (Vec3, bool) {
+func bandSpot(c *Ctx, kind string, u *world.Unit) (Vec3, bool) {
 	blocked := losBlocked(c, u)
 	return memoSpot(c, kind, u.GUID, func() (Vec3, bool) {
 		lo, hi := rangedBand(c)
@@ -356,6 +355,6 @@ func bandSpot(c *Ctx, kind string, u *objects.Unit) (Vec3, bool) {
 const frontalHalf = math.Pi / 4
 
 // inFront reports whether a point is in the frontal cone of a unit.
-func inFront(u *objects.Unit, p Vec3) bool {
+func inFront(u *world.Unit, p Vec3) bool {
 	return math.Abs(angleDiff(u.O, float32(bearing(unitPos(u), p)))) < frontalHalf
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -26,7 +25,7 @@ func (t *goTypeParam) UnmarshalJSON(b []byte) error {
 		}
 		name = fmt.Sprint(n)
 	}
-	id, ok := objects.GOTypeByName(name)
+	id, ok := world.GOTypeByName(name)
 	if !ok {
 		return fmt.Errorf("unknown game object type %q: use a name such as door, button, chest, goober or its number 0-30", name)
 	}
@@ -51,8 +50,8 @@ type useObjectParams struct {
 // useObjectResult is the object as it stood when the use was sent, the log cursor before it,
 // and the first thing the server did about it within wait_ms.
 type useObjectResult struct {
-	Since  uint64             `json:"since"`
-	Object objects.GameObject `json:"object"`
+	Since  uint64           `json:"since"`
+	Object world.GameObject `json:"object"`
 	// Outcome is the kind of the first answering event (loot_open, loot_error, gossip, a quest
 	// panel, vendor_list, trainer_list, gameobject, spell_start, spell_go), or "none".
 	Outcome string        `json:"outcome"`
@@ -84,18 +83,18 @@ func useAnswers(e events.Event, object, self world.GUID) bool {
 // call (see registerMethodsFor).
 func registerGameObjectMethods(srv *rpc.Server, cur func() *session.Session) {
 	log := cur().Log()
-	srv.Register("gameobjects", rpc.Typed(func(ctx context.Context, p gameObjectsParams) ([]objects.GameObject, error) {
+	srv.Register("gameobjects", rpc.Typed(func(ctx context.Context, p gameObjectsParams) ([]world.GameObject, error) {
 		if p.Within == 0 {
 			p.Within = p.Radius
 		}
-		f := objects.GOFilter{Near: p.Within, Entry: p.Entry, Name: p.Name, Limit: p.Limit}
+		f := world.GOFilter{Near: p.Within, Entry: p.Entry, Name: p.Name, Limit: p.Limit}
 		if p.Type != nil {
 			t := uint8(*p.Type)
 			f.Type = &t
 		}
 		gs := cur().GameObjects(f)
 		if gs == nil {
-			gs = []objects.GameObject{}
+			gs = []world.GameObject{}
 		}
 		return gs, nil
 	}))
@@ -148,7 +147,7 @@ func answerEvent(ctx context.Context, log *events.Log, since uint64, waitMS int,
 }
 
 // noUseAnswerHint names the likely reasons for an unanswered use, from what the update fields say.
-func noUseAnswerHint(o objects.GameObject) string {
+func noUseAnswerHint(o world.GameObject) string {
 	var why []string
 	if o.Distance < 0 {
 		why = append(why, "its position is unknown")

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/trace"
 	"github.com/pjerra/forever-agent/internal/tracerun"
@@ -186,7 +185,7 @@ func (d *Driver) traceBegin(fromLeg int) {
 	if d.tr == nil || !d.cfg.Trace.On {
 		return
 	}
-	units := map[world.GUID]objects.Unit{}
+	units := map[world.GUID]world.Unit{}
 	for _, u := range d.g.Units() {
 		units[u.GUID] = u
 	}
@@ -226,7 +225,7 @@ func (d *Driver) traceSample() {
 	if !d.tr.Due() {
 		return
 	}
-	byG := map[world.GUID]objects.Unit{}
+	byG := map[world.GUID]world.Unit{}
 	units := d.g.Units()
 	for _, u := range units {
 		byG[u.GUID] = u
@@ -323,7 +322,7 @@ func (d *Driver) tracedWalk(ctx context.Context, p Point) error {
 }
 
 // tracedFight is fight with the pull's start and end in the trace.
-func (d *Driver) tracedFight(ctx context.Context, t objects.Unit, sp fightSpec) (fightResult, error) {
+func (d *Driver) tracedFight(ctx context.Context, t world.Unit, sp fightSpec) (fightResult, error) {
 	began := d.clk.Now()
 	d.tr.Event("pull_start", map[string]any{"leg": d.curLeg, "target": t.Name, "entry": t.Entry, "guid": guidText(t.GUID), "x": t.X, "y": t.Y, "z": t.Z})
 	d.wd.softProgress("pull started: " + t.Name)

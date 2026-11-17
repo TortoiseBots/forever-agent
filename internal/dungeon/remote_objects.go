@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -39,7 +38,7 @@ type OrderGame interface {
 	// Behavior sends `.bot behavior <bot> <key> on|off`.
 	Behavior(ctx context.Context, bot, key string, on bool) (tbm.Reply, error)
 	// GameObjects are the game objects the agent's own character has in view, with the GUIDs of their spawns.
-	GameObjects() []objects.GameObject
+	GameObjects() []world.GameObject
 }
 
 // Limits of the object steps.
@@ -145,12 +144,12 @@ func (d *RemoteDriver) orderGame() (OrderGame, bool) {
 }
 
 // objectsInView are the agent's game objects, as the Stepper's find wants them: in reach, because the carrier does the walking.
-func (d *RemoteDriver) objectsInView() []objects.GameObject {
+func (d *RemoteDriver) objectsInView() []world.GameObject {
 	og, ok := d.orderGame()
 	if !ok {
 		return nil
 	}
-	var out []objects.GameObject
+	var out []world.GameObject
 	for _, o := range og.GameObjects() {
 		if o.Distance < 0 {
 			continue // its position was never sent

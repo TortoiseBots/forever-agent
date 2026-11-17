@@ -20,7 +20,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
@@ -162,7 +161,7 @@ type walkFakeAgent struct {
 	pageSize int
 
 	hostilesFn func(viewN int) []tbm.HostileRec
-	unitsFn    func(n int) []objects.Unit
+	unitsFn    func(n int) []world.Unit
 	unitsN     int
 
 	// The --gm-clear fakes: gm_kill calls the killFn with the guid and the number of lines sent to it so far (nil: every kill works);
@@ -552,7 +551,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 		fn := f.unitsFn
 		f.mu.Unlock()
 		if fn == nil {
-			v = []objects.Unit{}
+			v = []world.Unit{}
 		} else {
 			v = fn(n)
 		}
@@ -640,7 +639,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 		f.log = append(f.log, "unit "+g.String())
 		dead := f.killed[g]
 		f.mu.Unlock()
-		v = objects.Unit{GUID: g, Type: "creature", Dead: dead, Health: map[bool]uint32{true: 0, false: 100}[dead], MaxHealth: 100}
+		v = world.Unit{GUID: g, Type: "creature", Dead: dead, Health: map[bool]uint32{true: 0, false: 100}[dead], MaxHealth: 100}
 	case "target":
 		var p struct {
 			GUID string `json:"guid"`
@@ -666,7 +665,7 @@ func (f *walkFakeAgent) Call(ctx context.Context, method string, params, out any
 		f.targetCalls = append(f.targetCalls, g)
 		f.targetAt = append(f.targetAt, f.clock.now())
 		f.mu.Unlock()
-		v = objects.Unit{GUID: g}
+		v = world.Unit{GUID: g}
 	case "commander":
 		var p commanderReq
 		_ = json.Unmarshal(raw, &p)
@@ -2643,14 +2642,14 @@ func TestRaidWalkWipeRevivesOnlyWhenQuiet(t *testing.T) {
 		f := newFixture(t)
 		f.agent.startReply = startAt("onyxias_lair", 13)
 		retirePack0Patrol(f)
-		f.agent.unitsFn = func(n int) []objects.Unit {
+		f.agent.unitsFn = func(n int) []world.Unit {
 			if neverQuiet || n <= 3 {
 				f.agent.mu.Lock()
 				x, y, z := f.agent.x, f.agent.y, f.agent.z
 				f.agent.mu.Unlock()
-				return []objects.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
+				return []world.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
 			}
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
 		f.allDeadFromHires()
 		if !neverQuiet {
@@ -2706,12 +2705,12 @@ func TestRaidWalkWipeRevivesOnlyWhenQuiet(t *testing.T) {
 
 // placedFollower is placedIdleBlocker for a unit that follows the commander at yd out: every fallback point of the
 // revive, the entrance included, is blocked too (the fallback rows sit hundreds of yards from the place point).
-func placedFollower(f *fixture, yd float32, entry uint32, name string, inCombat bool) func(int) []objects.Unit {
-	return func(int) []objects.Unit {
+func placedFollower(f *fixture, yd float32, entry uint32, name string, inCombat bool) func(int) []world.Unit {
+	return func(int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: name, Entry: entry, Hostile: true, InCombat: inCombat,
+		return []world.Unit{{Type: "creature", Name: name, Entry: entry, Hostile: true, InCombat: inCombat,
 			X: x + yd, Y: y, Z: z}}
 	}
 }
@@ -2773,8 +2772,8 @@ func TestRaidWalkWipeRevivesPastIdleHomeMob(t *testing.T) {
 		f := newFixture(t)
 		f.agent.startReply = startAt("onyxias_lair", 13)
 		retirePack0Patrol(f)
-		f.agent.unitsFn = func(int) []objects.Unit {
-			return []objects.Unit{{Type: "creature", Name: "Onyxian Warder", Entry: 12129, Hostile: true,
+		f.agent.unitsFn = func(int) []world.Unit {
+			return []world.Unit{{Type: "creature", Name: "Onyxian Warder", Entry: 12129, Hostile: true,
 				X: -52.9699, Y: -96.8813, Z: -38.6419}}
 		}
 		f.allDeadFromHires()
@@ -2806,15 +2805,15 @@ func TestRaidWalkReviveWaitsForBlockerToLeave(t *testing.T) {
 	// after 30 reads, a few of which are the D-C wait's.
 	const leaves = 30
 	unitsAtSummon := 0
-	f.agent.unitsFn = func(reads int) []objects.Unit {
+	f.agent.unitsFn = func(reads int) []world.Unit {
 		unitsAtSummon = reads
 		if reads > leaves {
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true,
+		return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true,
 			X: x + 30, Y: y, Z: z}}
 	}
 	wipeOnceAfterStart(f)
@@ -2854,9 +2853,9 @@ func TestRaidWalkReviveQuietNeedsCommanderOnTheMap(t *testing.T) {
 	rows, place := placePlanRows(t)
 	// D-C starts after the revive point's 24-read check, one read per row fallback, and the entrance's 24-read check.
 	moved := 24 + len(reviveFallbackRows(rows, place.Start)) + 24 + 1
-	f.agent.unitsFn = func(reads int) []objects.Unit {
+	f.agent.unitsFn = func(reads int) []world.Unit {
 		if reads > moved {
-			return []objects.Unit{} // the area reads empty from where the commander now stands
+			return []world.Unit{} // the area reads empty from where the commander now stands
 		}
 		if reads == moved {
 			f.agent.mu.Lock()
@@ -2866,7 +2865,7 @@ func TestRaidWalkReviveQuietNeedsCommanderOnTheMap(t *testing.T) {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true,
+		return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true,
 			X: x + 30, Y: y, Z: z}}
 	}
 	wipeOnceAfterStart(f)
@@ -2918,11 +2917,11 @@ func TestRaidWalkReviveRefusalSummary(t *testing.T) {
 		n := zgPlaceSteps(t)
 		f.agent.startReply = zgPlaceReply(t)
 		// Two blockers, both fighting: the summary and the reason name the nearest, and the run.log line lists both.
-		f.agent.unitsFn = func(int) []objects.Unit {
+		f.agent.unitsFn = func(int) []world.Unit {
 			f.agent.mu.Lock()
 			x, y, z := f.agent.x, f.agent.y, f.agent.z
 			f.agent.mu.Unlock()
-			return []objects.Unit{
+			return []world.Unit{
 				{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true,
 					X: x + 30, Y: y, Z: z},
 				{Type: "creature", Name: "Razzashi Venombrood", Entry: 14532, Hostile: true, InCombat: true,
@@ -2998,11 +2997,11 @@ func TestRaidWalkReviveRefusalSummary(t *testing.T) {
 		// its spawn). The critter is still in the read, as it was in the evidence. The two stand relative to the
 		// commander, so the point, the fallback rows and the entrance all stay refused and the refusal reaches the
 		// summary (#392's entrance fallback runs before it).
-		f.agent.unitsFn = func(int) []objects.Unit {
+		f.agent.unitsFn = func(int) []world.Unit {
 			f.agent.mu.Lock()
 			x, y, z := f.agent.x, f.agent.y, f.agent.z
 			f.agent.mu.Unlock()
-			return []objects.Unit{
+			return []world.Unit{
 				{Type: "creature", Name: "Mad Servant", Entry: 15111, Hostile: true, Level: 61, MaxHealth: 4000,
 					X: x + 16.8, Y: y, Z: z},
 				{Type: "creature", Name: "Snake", Entry: 2914, Hostile: true, Level: 1, MaxHealth: 8, Moving: true,
@@ -3083,7 +3082,7 @@ func TestRaidWalkNeverRevivesWhileTheBossHasATarget(t *testing.T) {
 func TestRaidWalkNearWipePauseResumes(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.agent.mu.Lock()
@@ -3119,7 +3118,7 @@ func TestRaidWalkSecondWipeEndsTheWalk(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.allDeadFromHires()
@@ -3168,7 +3167,7 @@ func TestRaidWalkWipeResumeZeroKeepsOldBehaviour(t *testing.T) {
 	f.opts.wipeResume = 0
 	f.agent.startReply = startAt("onyxias_lair", 13)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	code := f.run(context.Background())
 	if code != exitRaidWalkIncident {
@@ -3209,7 +3208,7 @@ func TestRaidWalkWipeEndFastSkipsResetAndReviveAtABoss(t *testing.T) {
 	f.opts.wipeEndFast = true
 	f.agent.startReply = startAt("onyxias_lair", 20) // step 21 is the boss row
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	if code := f.run(context.Background()); code != exitRaidWalkIncident {
 		t.Fatalf("exit %d, want 19: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -3323,7 +3322,7 @@ func TestRaidWalkWipeEndFastKeepsTheReviveAwayFromABoss(t *testing.T) {
 	f.opts.wipeEndFast = true
 	f.agent.startReply = startAt("onyxias_lair", 13)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	if code := f.run(context.Background()); code != exitRaidWalkIncident {
 		t.Fatalf("exit %d, want 19: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -3365,7 +3364,7 @@ func TestRaidWalkWipeResumesOnce(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.allDeadFromHires()
@@ -3420,7 +3419,7 @@ func TestRaidWalkWipeResumesOnce(t *testing.T) {
 func TestRaidWalkWipeResumeBossUnknownEndsOld(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fightsErr = errors.New("daemon down")
 	f.allDeadFromHires()
@@ -3451,7 +3450,7 @@ func TestRaidWalkWipeResumeWithDashboardRecovers(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	resumes := 0
 	var resumeAt time.Time
@@ -3503,7 +3502,7 @@ func TestRaidWalkWipeResumeAfterBossWinRecovers(t *testing.T) {
 			f := newFixture(t)
 			f.agent.startReply = startAt("onyxias_lair", 10)
 			retirePack0Patrol(f)
-			f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 			f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 			f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: tc.outcome, BossName: "Onyxia", Leg: "onyxia", Step: 3, Deaths: 1}}
 			resumes := 0
@@ -3554,7 +3553,7 @@ func TestRaidWalkWipeResumeAfterEarlierBossKillRecovers(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	// The boss shows in the frames only at the start of the walk, then the
@@ -3616,7 +3615,7 @@ func TestRaidWalkWipeResumeBossStillEngagedRecovers(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -3673,7 +3672,7 @@ func TestRaidWalkWipeResumeVisibleBossAfterKillRecovers(t *testing.T) {
 		{raw: "TBM:RUN|molten_core|running|35/235|lucifron|move|walk|walking"},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -3819,7 +3818,7 @@ func TestRaidWalkWipeResumeDashOffRecentBossSkips(t *testing.T) {
 				{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 			}
 			f.agent.mu.Unlock()
-			f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 			killed := false
 			row := tc.row
 			// Wipe at 240 s: like the walk-17 s4 shape, the engaged row
@@ -3887,7 +3886,7 @@ func TestRaidWalkWipeResumeBossDeadFrameKills(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	killed := false
 	// Engaged until 100 s before the wipe, then the 0 % corpse stays in the
 	// frames: stale past the engaged gate (> 15 s) and past the tracker's own
@@ -3948,7 +3947,7 @@ func dashLatchWipeFixture(t *testing.T, after func(elapsed time.Duration) []tbm.
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	killed := false
 	t0 := f.clock.now()
@@ -4091,7 +4090,7 @@ func TestRaidWalkWipeResumeBossDeadNoAttemptNoKill(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	killed := false
 	// The frames never show the boss alive in this attempt: only the 0 %
 	// row, with no party target, from 100 s before the wipe on. No live row
@@ -4184,7 +4183,7 @@ func TestRaidWalkWipeResumeBossDeadThenDespawnedKills(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	killed := false
 	// Engaged until 100 s before the wipe, the 0 % corpse for 70 s, then
 	// gone (despawned) for the last 30 s: the frames' last view was dead.
@@ -4243,7 +4242,7 @@ func TestRaidWalkWipeResumeBossLowHpRecovers(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	t0 := f.clock.now()
 	killed := false
 	wipeAt := t0.Add(240 * time.Second)
@@ -4299,7 +4298,7 @@ func TestRaidWalkWipeResumeBossResetFrameResumes(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	killed := false
 	// Engaged until 100 s before the wipe, then full HP with no target in
 	// the frames: the reset shape, inside the latch's 120 s window but stale
@@ -4352,7 +4351,7 @@ func TestRaidWalkWipeResumeNoBossFrameStillSkips(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	t0 := f.clock.now()
 	killed := false
 	// Engaged until 100 s before the wipe, then gone: the stale-row shape
@@ -4409,7 +4408,7 @@ func TestRaidWalkWipeResumeBossCorpseRecovers(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -4473,7 +4472,7 @@ func TestRaidWalkWipeResumeRoutesNewBossToHandleBoss(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -4543,7 +4542,7 @@ func TestRaidWalkWipeResumeStaleBossStatusRoutesNewBossToHandleBoss(t *testing.T
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -4613,7 +4612,7 @@ func TestRaidWalkWipeResumeFreshBossStatusKeepsTheFight(t *testing.T) {
 		{raw: fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|fight|fighting", next-1, total)},
 	}
 	f.agent.mu.Unlock()
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 	t0 := f.clock.now()
@@ -4674,7 +4673,7 @@ func TestRaidWalkWipeResumeStaleViewRestartsQuiet(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.wipeRest = 90 * time.Second
 	f.allDeadFromHires()
 	var resumeAt time.Time
@@ -4772,7 +4771,7 @@ func TestRaidWalkWipeRestCountsWallTime(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.allDeadFromHires()
@@ -4878,7 +4877,7 @@ func TestRaidWalkWipeSelfRegroupRecoversWithDashboard(t *testing.T) {
 		f.agent.startReply = zgStart(total, next)
 		step := next - 2
 		regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 		f.dash.fights = mcWipeFights()
 		selfRegroupKill(f, regroup)
@@ -4939,7 +4938,7 @@ func TestRaidWalkWipeSelfRegroupRecoversWithDashboard(t *testing.T) {
 		f.agent.startReply = zgStart(total, next)
 		step := next - 2
 		regroup := fmt.Sprintf("TBM:RUN|molten_core|paused|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 		f.dash.fights = mcWipeFights()
 		selfRegroupKill(f, regroup)
@@ -4984,7 +4983,7 @@ func TestRaidWalkWipeSelfRegroupOrderedLines(t *testing.T) {
 	step := next - 2
 	regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
 	waiting := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|regroup: waiting for Smashy (dead), Gorebrand (dead), reviving", step, total)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
 	selfRegroupPair(f, regroup, waiting)
@@ -5074,7 +5073,7 @@ func wipeSelfRegroupPage(t *testing.T, second func(step, total int) string) {
 	f.agent.startReply = zgStart(total, next)
 	step := next - 2
 	regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
 	selfRegroupPair(f, regroup, second(step, total))
@@ -5152,7 +5151,7 @@ func TestRaidWalkWipeSelfRegroupBudget(t *testing.T) {
 			f.opts.wipeResume = tc.wipeResume
 			f.agent.startReply = zgStart(total, next)
 			step := next - 2
-			f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 			f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 			f.dash.fights = mcWipeFights()
 			second := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (2 wipes, 2 near wipes this run): regrouping by itself (2 of 2 at this step)", step+2, total)
@@ -5249,7 +5248,7 @@ func TestRaidWalkWipeSelfRegroupBossEngagedNotes(t *testing.T) {
 	// The run is on its boss step and its kind is boss: the tracker's own engagement is absorbed
 	// by the run-leader exception, so the wipe is the incident that ends the walk.
 	regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|boss|begin|19 dead (2 wipes, 2 near wipes this run): regrouping by itself (1 of 2 at this step)", step, total)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
@@ -5294,7 +5293,7 @@ func TestRaidWalkWipeResumeSecondWipeDuringRestNotes(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var reviveAt time.Time
 	hireHook := f.agent.onGM
@@ -5334,7 +5333,7 @@ func TestRaidWalkWipeResumeRunWentOnDuringRest(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var reviveAt time.Time
 	hireHook := f.agent.onGM
@@ -5396,7 +5395,7 @@ func TestRaidWalkWipeResumeRunWentOnMultipleLines(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var reviveAt time.Time
 	hireHook := f.agent.onGM
@@ -5454,7 +5453,7 @@ func TestRaidWalkWipeResumeRunWentOnLaterStep(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var reviveAt time.Time
 	hireHook := f.agent.onGM
@@ -5510,7 +5509,7 @@ func TestRaidWalkWipeResumeRunWentOnLaterStep(t *testing.T) {
 func TestRaidWalkWipeResumeRunWentOnBeforeNearWipe(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.agent.mu.Lock()
@@ -5550,7 +5549,7 @@ func TestRaidWalkWipeResumeStaleSelfRegroupNote(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	f.agent.mu.Lock()
@@ -5606,7 +5605,7 @@ func TestRaidWalkWipeResumeNoteAtPreviousStep(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 9)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 20, &resumeAt)
 	note := "TBM:RUN|onyxias_lair|running|9/21|onyxia|move|walk|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)"
@@ -5677,7 +5676,7 @@ func TestRaidWalkWipeResumeSecondWipeSameStep(t *testing.T) {
 	}
 	const step, total = 3, 6
 	f.agent.startReply = startAt("lower_karazhan_halls", step)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
 	selfRegroupKill(f, fmt.Sprintf("TBM:RUN|lower_karazhan_halls|running|%d/%d|rend|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total))
@@ -5747,7 +5746,7 @@ func TestRaidWalkWipeResumeDeadline(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.wipeRest = 5 * time.Minute
 	f.allDeadFromHires()
 	f.agent.combatAllFn = func(n int) bool {
@@ -5775,11 +5774,11 @@ func TestRaidWalkWipeResumeDeadline(t *testing.T) {
 func TestRaidWalkWipeResumeDeadlineDuringRevive(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 10)
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
 	}
 	f.opts.wipeRest = time.Minute
 	f.allDeadFromHires()

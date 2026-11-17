@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -28,7 +27,7 @@ func TestEmergencyEscapeDuringASlowCancelIsRetriedNextTick(t *testing.T) {
 		t.Fatal("no step under way")
 	}
 	// Fire under the player: leaving it cancels the step, which does not stop within the wait.
-	pf.areas = []objects.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: mobA, Radius: 8, X: 0, Y: 0}}
+	pf.areas = []world.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: mobA, Radius: 8, X: 0, Y: 0}}
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_ground_aoe" || d.Result != ResultError {
 		t.Fatalf("%+v idle %q", d, r.idle())

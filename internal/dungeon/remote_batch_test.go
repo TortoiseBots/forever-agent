@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -889,7 +888,7 @@ func TestAgentFallbackThatTakesNothingIsNotAnOpen(t *testing.T) {
 	g.emptyChest = true
 	leg, gs := batchGraves(3, 3, func(i int) string { return "g1" })
 	g.script["open"] = openFails("failed", 2)
-	g.gobjs = []objects.GameObject{{GUID: gs[0].guid, Entry: 128403, X: gs[0].at.X, Y: gs[0].at.Y, Z: gs[0].at.Z, Distance: 10, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: gs[0].guid, Entry: 128403, X: gs[0].at.X, Y: gs[0].at.Y, Z: gs[0].at.Z, Distance: 10, State: "ready"}}
 	g.graves = map[world.GUID]*fakeGrave{}
 	for _, gv := range gs {
 		g.graves[gv.guid] = gv

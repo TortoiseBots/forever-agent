@@ -52,7 +52,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -868,7 +867,7 @@ func (w *walk) practiceBossBind(ctx context.Context) (world.GUID, uint32, error)
 	if err != nil {
 		return 0, 0, stopf(exitRaidWalkFailed, "practice: units: %v", err)
 	}
-	var cands []objects.Unit
+	var cands []world.Unit
 	for _, u := range us {
 		if u.Entry == p.mech.Entry {
 			cands = append(cands, u)
@@ -929,7 +928,7 @@ func (w *walk) practiceEngagedGUID(entry uint32) (world.GUID, bool) {
 
 // practiceUnitMax reads one unit's MaxHealth through the unit RPC (0 when the read fails).
 func (w *walk) practiceUnitMax(ctx context.Context, guid world.GUID) uint32 {
-	var u objects.Unit
+	var u world.Unit
 	if err := w.agent.Call(ctx, "unit", map[string]string{"guid": guid.String()}, &u, 10*time.Second); err == nil {
 		return u.MaxHealth
 	}
@@ -1249,7 +1248,7 @@ func (w *walk) practiceRespawnSons(ctx context.Context, p *practiceState) error 
 		w.note("practice: the Son set could not be re-read (%v): no Son respawned", err)
 		return nil
 	}
-	held := map[world.GUID]objects.Unit{}
+	held := map[world.GUID]world.Unit{}
 	for _, u := range us {
 		held[u.GUID] = u
 	}

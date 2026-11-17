@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -106,7 +105,7 @@ func (b *Brain) observeSwing(c *Ctx) {
 }
 
 // faceAllowed says the tank may walk again to turn the mob away from the group.
-func faceAllowed(c *Ctx, m *objects.Unit) bool {
+func faceAllowed(c *Ctx, m *world.Unit) bool {
 	c.mem.mel.mu.Lock()
 	defer c.mem.mel.mu.Unlock()
 	t, ok := c.mem.mel.faces[m.GUID]
@@ -114,7 +113,7 @@ func faceAllowed(c *Ctx, m *objects.Unit) bool {
 }
 
 // faceNoted records a walk to turn the mob away.
-func faceNoted(c *Ctx, m *objects.Unit) {
+func faceNoted(c *Ctx, m *world.Unit) {
 	c.mem.mel.mu.Lock()
 	defer c.mem.mel.mu.Unlock()
 	if c.mem.mel.faces == nil {
@@ -142,7 +141,7 @@ func canWalk(c *Ctx) bool {
 // ---- values ----
 
 // mobHealthPct is a mob's health in percent of its maximum (100 when unknown). A 1.12 client sees a mob's health as a percentage.
-func mobHealthPct(u *objects.Unit) int {
+func mobHealthPct(u *world.Unit) int {
 	if u == nil || u.MaxHealth == 0 {
 		return 100
 	}
@@ -224,7 +223,7 @@ func meleeIssue(c *Ctx) string {
 // meleeSpot is where the melee fighter should stand for the mob: behind it (a damage dealer), or on the far side of it from the group
 // (a tank), within reach. The spot is searched on rings of a few yards round the mob, over the navmesh when the game has one. A mob
 // too far for a search is approached in a straight line.
-func meleeSpot(c *Ctx, m *objects.Unit, issue string) (Vec3, bool) {
+func meleeSpot(c *Ctx, m *world.Unit, issue string) (Vec3, bool) {
 	kind := "melee"
 	if issue == issueFacesGroup {
 		kind = "melee_face"

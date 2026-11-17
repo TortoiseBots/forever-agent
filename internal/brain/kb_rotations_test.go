@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The rotation files generated from the Turtle knowledge base (tools/kbrotgen) are committed next to the recipes: the
@@ -290,7 +290,7 @@ const spKBShieldSlam uint32 = 23922
 func TestKBProtectionWarriorPlays(t *testing.T) {
 	r, mf := newWarriorRig(t, "tank_warrior", stanceDefensive, Params{Rotation: "kb_protection_warrior"},
 		spKBShieldSlam, spSunder, spHeroic)
-	r.g.setSelf(func(u *objects.Unit) { u.Level = 60 })
+	r.g.setSelf(func(u *world.Unit) { u.Level = 60 })
 	setRage(r.g, 600)
 	meleeFight(r, mf)
 	actions(r, 100*time.Millisecond, 2200*time.Millisecond, 1600*time.Millisecond)

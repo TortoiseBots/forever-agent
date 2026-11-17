@@ -1,4 +1,4 @@
-package objects
+package world
 
 import "testing"
 

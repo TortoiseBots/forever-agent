@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 const (
@@ -538,7 +538,7 @@ func TestUldamanAmbushGroupsAreTheStealthedOnes(t *testing.T) {
 func TestUldamanHonestRunSteps(t *testing.T) {
 	p := loadUldaman(t)
 	run := func(team string) (kinds []ActionKind, bosses []uint32, skipped []string) {
-		w := teamWorld{&fakeWorld{objs: []objects.GameObject{{GUID: 0x77, Entry: 123329, X: -356, Y: 112.8, Z: -43.2, State: "ready"}}}, team}
+		w := teamWorld{&fakeWorld{objs: []world.GameObject{{GUID: 0x77, Entry: 123329, X: -356, Y: 112.8, Z: -43.2, State: "ready"}}}, team}
 		s := NewStepperAt(p, w, nil, 0)
 		for i := 0; i < 80; i++ {
 			a := s.Next()
@@ -573,7 +573,7 @@ func TestUldamanHonestRunSteps(t *testing.T) {
 func TestUldamanRequiredItemsChain(t *testing.T) {
 	p := loadUldaman(t)
 	g := newFake()
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.checkRequiredItems(0); err != nil {
 		t.Fatalf("from the start the run makes the Staff: %v", err)
@@ -582,7 +582,7 @@ func TestUldamanRequiredItemsChain(t *testing.T) {
 	if err := d.checkRequiredItems(1); err == nil || !strings.Contains(err.Error(), "Gni'kiv Medallion") {
 		t.Fatalf("from revelosh the Medallion must be carried: %v", err)
 	}
-	g.bag = append(g.bag, objects.Item{Entry: 7740, Count: 1})
+	g.bag = append(g.bag, world.Item{Entry: 7740, Count: 1})
 	if err := d.checkRequiredItems(1); err != nil {
 		t.Fatalf("from revelosh the Shaft comes from the boss and the Staff from the use_item: %v", err)
 	}

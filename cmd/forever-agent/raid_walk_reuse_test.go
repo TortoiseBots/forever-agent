@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
@@ -109,7 +108,7 @@ func TestReuseInstanceRunsGMClear(t *testing.T) {
 	f.opts.gmClearSpawns = gmClearZGSpawns
 	f.agent.entered = true
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.unitsFn = func(int) []objects.Unit {
+	f.agent.unitsFn = func(int) []world.Unit {
 		return gmClearView(f, pack, guids, func(world.GUID) bool { return false })
 	}
 	f.agent.startReply = zgPlaceReply(t)
@@ -408,7 +407,7 @@ func TestReuseInstanceBindResumeReadsTheQuietBeforeSummoning(t *testing.T) {
 	p.quietNear = []any{map[string]any{"g": patrol.String(), "e": 11359, "n": "Hakkari Bloodkeeper",
 		"p": []float32{-11806, -1693, 52.1}, "w": 1.0, "d": 2.4}}
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
+	f.agent.unitsFn = func(int) []world.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
 	until, err := raidwalk.PlaceStop(rows, []string{"until", "boss"}, start)
 	if err != nil {
 		t.Fatal(err)
@@ -484,7 +483,7 @@ func TestReuseInstancePlaceReuseReadsTheQuietBeforeSummoning(t *testing.T) {
 	p.quietNear = []any{map[string]any{"g": patrol.String(), "e": 11359, "n": "Hakkari Bloodkeeper",
 		"p": []float32{plan.Point.X + 2, plan.Point.Y, plan.Point.Z}, "w": 1.0, "d": 2.0}}
 	pack, guids := gmClearPack(t, gmClearZGSpawns)
-	f.agent.unitsFn = func(int) []objects.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
+	f.agent.unitsFn = func(int) []world.Unit { return gmClearView(f, pack, guids, func(world.GUID) bool { return false }) }
 	f.agent.startReply = zgPlaceReply(t)
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())

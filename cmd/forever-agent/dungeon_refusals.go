@@ -7,7 +7,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -84,7 +83,7 @@ func (g *sessionGame) Refusals() []dungeon.Refusal {
 }
 
 // SelfAuras implements dungeon.SelfAuraSource: the leader's own auras from its object in the store.
-func (g *sessionGame) SelfAuras() ([]objects.Aura, bool) {
+func (g *sessionGame) SelfAuras() ([]world.Aura, bool) {
 	s := g.cur()
 	u, err := s.Unit(s.Status().GUID, "")
 	if err != nil {
@@ -94,7 +93,7 @@ func (g *sessionGame) SelfAuras() ([]objects.Aura, bool) {
 }
 
 // Items implements dungeon.ItemSource: the backpack and the bags of the leader.
-func (g *sessionGame) Items() []objects.Item { return g.cur().Items() }
+func (g *sessionGame) Items() []world.Item { return g.cur().Items() }
 
 // RaidMarks implements dungeon.MarkSource: the group's raid icons by name and the unit each is on.
 func (g *sessionGame) RaidMarks() map[string]world.GUID { return g.cur().Party().Marks }

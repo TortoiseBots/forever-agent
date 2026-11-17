@@ -12,10 +12,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // RPC teardown: one call that ends the agent's game presence (run, binding,
@@ -125,7 +125,7 @@ func (g sessionTeardownGame) Party() session.PartyInfo { return g.cur().Party() 
 // VisibleNames are the names of player-type units in view.
 func (g sessionTeardownGame) VisibleNames() []string {
 	var out []string
-	for _, u := range g.cur().Units(objects.Filter{Limit: 2000}) {
+	for _, u := range g.cur().Units(world.Filter{Limit: 2000}) {
 		if u.Type == "player" {
 			out = append(out, u.Name)
 		}

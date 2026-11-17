@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -43,7 +42,7 @@ func zgWalk19Fixture(t *testing.T, startLine string) *fixture {
 		Ack:   &tbm.Ack{Intent: "run start", Scope: "party", Count: 1, Executor: "-"},
 		Line:  "TBM:ACTION_ACK|run start|party|1|-",
 		Lines: []string{startLine, "TBM:ACTION_ACK|run start|party|1|-"}}}
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	return f
 }
 

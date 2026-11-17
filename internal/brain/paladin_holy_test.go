@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -41,13 +40,13 @@ func holyPalRig(t *testing.T, known ...uint32) (*rig, *fakeGame) {
 	g.self.Health, g.self.MaxHealth = 1000, 1000
 	g.self.PowerType, g.self.Power, g.self.MaxPower = 0, 3000, 3000
 	g.self.InCombat = true
-	g.self.Auras = []objects.Aura{{Name: "Concentration Aura", SpellID: plConcentration}}
+	g.self.Auras = []world.Aura{{Name: "Concentration Aura", SpellID: plConcentration}}
 	return newRig(t, g, Params{Strategies: []string{"holy_paladin"}}), g
 }
 
 // calm takes the fight out of the scene: the paladin and every member out of combat (a rest gate).
 func calm(g *fakeGame) {
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	g.mu.Lock()
 	for i := range g.units {
 		g.units[i].InCombat = false
@@ -110,7 +109,7 @@ func TestHolyPaladinHealsWithHolyLightAndKeepsFlashOfLightForLowHealth(t *testin
 
 func TestHolyPaladinWithDivineFavorUpCastsTheBigHealInAnEmergency(t *testing.T) {
 	r, g := holyPalRig(t)
-	g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: "Divine Favor", SpellID: 51316}) })
+	g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: "Divine Favor", SpellID: 51316}) })
 	g.member(dpsG1, "Mage", 8, 200, 1000, 5, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "heal" || nameOf(d.Spell) != "Holy Light" {
@@ -139,10 +138,10 @@ func TestDivineFavorOfThisDataIsATalentPassiveAndIsNeverCast(t *testing.T) {
 }
 
 func TestHolyPaladinDispelsWithCleanseElsePurify(t *testing.T) {
-	poly := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
-	poison := objects.Aura{SpellID: auraPoison, Name: "Deadly Poison", Harmful: true}
-	curse := objects.Aura{SpellID: auraCurse, Name: "Curse of Agony", Harmful: true}
-	try := func(known []uint32, a objects.Aura) *Decision {
+	poly := world.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
+	poison := world.Aura{SpellID: auraPoison, Name: "Deadly Poison", Harmful: true}
+	curse := world.Aura{SpellID: auraCurse, Name: "Curse of Agony", Harmful: true}
+	try := func(known []uint32, a world.Aura) *Decision {
 		r, g := holyPalRig(t, known...)
 		g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
 		g.addAura(dpsG1, a)
@@ -158,7 +157,7 @@ func TestHolyPaladinDispelsWithCleanseElsePurify(t *testing.T) {
 	if d := try(onlyPurify, poison); d == nil || d.Action != "dispel" || d.Spell != plPurify {
 		t.Errorf("poison with Purify: %+v", d)
 	}
-	if d := try(onlyPurify, objects.Aura{SpellID: auraRabies, Name: "Rabies", Harmful: true}); d == nil || d.Spell != plPurify {
+	if d := try(onlyPurify, world.Aura{SpellID: auraRabies, Name: "Rabies", Harmful: true}); d == nil || d.Spell != plPurify {
 		t.Errorf("disease with Purify: %+v", d)
 	}
 	if d := try(onlyPurify, poly); d != nil {
@@ -173,10 +172,10 @@ func TestHolyPaladinDispelsWithCleanseElsePurify(t *testing.T) {
 
 func blessed(g *fakeGame, guid world.GUID, name string) {
 	if guid == selfG {
-		g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: name}) })
+		g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: name}) })
 		return
 	}
-	g.addAura(guid, objects.Aura{Name: name})
+	g.addAura(guid, world.Aura{Name: name})
 }
 
 // partyOfFive is a calm party at a rest gate: the tank (a warrior), a mage, a rogue and a priest, all within reach.
@@ -263,13 +262,13 @@ func TestBlessingsOfThePaladinItselfAreRenewedUnderAMinute(t *testing.T) {
 	g.member(tankG, "Tankard", 1, 1000, 1000, 6, 0)
 	calm(g)
 	blessed(g, tankG, "Blessing of Kings")
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Blessing of Wisdom", SpellID: plWisdom4, RemainingMS: ms(400_000)})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Blessing of Wisdom", SpellID: plWisdom4, RemainingMS: ms(400_000)})
 	})
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		for i := range u.Auras {
 			if u.Auras[i].Name == "Blessing of Wisdom" {
 				u.Auras[i].RemainingMS = ms(30_000)
@@ -292,7 +291,7 @@ func TestBlessingsOnlyAtARestGateInReachAndWithMana(t *testing.T) {
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("a member out of reach was blessed: %+v", d)
 	}
-	g.mutate(dpsG1, func(u *objects.Unit) { u.X = 10 })
+	g.mutate(dpsG1, func(u *world.Unit) { u.X = 10 })
 	r.b.restOK = func() bool { return false }
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("blessed on the walk: %+v", d)
@@ -303,7 +302,7 @@ func TestBlessingsOnlyAtARestGateInReachAndWithMana(t *testing.T) {
 		t.Fatalf("blessed on low mana: %+v", d)
 	}
 	g.setMana(100)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	if d := r.tick(2 * time.Second); d != nil && d.Action == "bless_member" {
 		t.Fatalf("blessed in combat: %+v", d)
 	}
@@ -315,10 +314,10 @@ func TestHolyPaladinKeepsOneAuraAndDoesNotFightACompanions(t *testing.T) {
 	cast := func(known []uint32, auras ...string) *Decision {
 		r, g := holyPalRig(t, known...)
 		calm(g)
-		g.setSelf(func(u *objects.Unit) {
+		g.setSelf(func(u *world.Unit) {
 			u.Auras = nil
 			for _, a := range auras {
-				u.Auras = append(u.Auras, objects.Aura{Name: a})
+				u.Auras = append(u.Auras, world.Aura{Name: a})
 			}
 		})
 		return r.tick(100 * time.Millisecond)
@@ -365,7 +364,7 @@ func TestLayOnHandsOnTheMostCriticalBelowFifteenPercentInAFight(t *testing.T) {
 	// The paladin itself counts, and the one with the least health wins.
 	r3, g3 := holyPalRig(t)
 	g3.member(dpsG1, "Mage", 8, 140, 1000, 5, 0)
-	g3.setSelf(func(u *objects.Unit) { u.Health = 90 })
+	g3.setSelf(func(u *world.Unit) { u.Health = 90 })
 	if d := r3.tick(100 * time.Millisecond); d == nil || d.Action != "lay_on_hands" || d.Target != selfG {
 		t.Fatalf("%+v", d)
 	}
@@ -434,7 +433,7 @@ func TestHandOfProtectionOnAMemberBeatenInMeleeNeverTheTank(t *testing.T) {
 	// Not a member with Forbearance, nor one that is above 40%.
 	r, g = setup()
 	mobsOn(g, dpsG1, 6, 0, mobA, mobB)
-	g.addAura(dpsG1, objects.Aura{Name: "Forbearance", SpellID: plForbearance, Harmful: true})
+	g.addAura(dpsG1, world.Aura{Name: "Forbearance", SpellID: plForbearance, Harmful: true})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action == "hand_of_protection" {
 		t.Fatalf("Forbearance: %+v", d)
 	}
@@ -450,7 +449,7 @@ func TestDivineShieldWhenAboutToDieAndWithoutForbearance(t *testing.T) {
 	noLoH := []uint32{plHL4, plFoL5, plShield2, spHammerJ}
 	setup := func(hp uint32, known []uint32) (*rig, *fakeGame) {
 		r, g := holyPalRig(t, known...)
-		g.setSelf(func(u *objects.Unit) { u.Health = hp })
+		g.setSelf(func(u *world.Unit) { u.Health = hp })
 		g.addUnit(mob(mobA, selfG), 3, 0)
 		return r, g
 	}
@@ -460,11 +459,11 @@ func TestDivineShieldWhenAboutToDieAndWithoutForbearance(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// The healing goes on under the shield: in this data it only cuts the damage the paladin does (no pacify, no silence).
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Divine Shield", SpellID: plShield2})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Divine Shield", SpellID: plShield2})
 	})
 	g.member(dpsG1, "Mage", 8, 400, 1000, 5, 0)
-	g.mutate(mobA, func(u *objects.Unit) { u.Target = dpsG1 })
+	g.mutate(mobA, func(u *world.Unit) { u.Target = dpsG1 })
 	if d := r.tick(3 * time.Second); d == nil || d.Action != "heal" {
 		t.Fatalf("no heal under Divine Shield: %+v", d)
 	}
@@ -475,8 +474,8 @@ func TestDivineShieldWhenAboutToDieAndWithoutForbearance(t *testing.T) {
 	}
 	// Not with Forbearance, not above 15%, not with nothing hitting it.
 	r3, g3 := setup(120, noLoH)
-	g3.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Forbearance", SpellID: plForbearance, Harmful: true})
+	g3.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Forbearance", SpellID: plForbearance, Harmful: true})
 	})
 	if d := r3.tick(100 * time.Millisecond); d == nil || d.Action == "divine_shield" {
 		t.Fatalf("Forbearance: %+v", d)
@@ -486,7 +485,7 @@ func TestDivineShieldWhenAboutToDieAndWithoutForbearance(t *testing.T) {
 		t.Fatalf("at 30%%: %+v", d)
 	}
 	r5, g5 := holyPalRig(t, noLoH...)
-	g5.setSelf(func(u *objects.Unit) { u.Health = 120 })
+	g5.setSelf(func(u *world.Unit) { u.Health = 120 })
 	if d := r5.tick(100 * time.Millisecond); d != nil && d.Action == "divine_shield" {
 		t.Fatalf("nothing on it, no burst: %+v", d)
 	}
@@ -496,8 +495,8 @@ func TestHammerOfJusticeStunsACastThatHurtsTheParty(t *testing.T) {
 	r, g := holyPalRig(t)
 	g.member(tankG, "Tankard", 1, 1000, 1000, 12, 0)
 	g.addUnit(mob(mobA, tankG), 8, 0)
-	g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" || d.Spell != spHammerJ || d.Target != mobA || d.Rel != RelInterrupt {
@@ -514,7 +513,7 @@ func judgeRig(t *testing.T, strategies []string, known ...uint32) *rig {
 	g.self.Health, g.self.MaxHealth = 1000, 1000
 	g.self.PowerType, g.self.Power, g.self.MaxPower = 0, 3000, 3000
 	g.self.InCombat = true
-	g.self.Auras = []objects.Aura{{Name: "Concentration Aura", SpellID: plConcentration}}
+	g.self.Auras = []world.Aura{{Name: "Concentration Aura", SpellID: plConcentration}}
 	tankFights(g, 7, 4, 0)
 	return newRig(t, g, Params{Strategies: strategies})
 }
@@ -551,7 +550,7 @@ func TestJudgeIsOffByDefaultAndSealsAndJudgesWhenAskedFor(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	r5 := judgeRig(t, []string{"holy_paladin", "paladin_judge"}, known...)
-	r5.g.mutate(mobA, func(u *objects.Unit) { u.Target = selfG })
+	r5.g.mutate(mobA, func(u *world.Unit) { u.Target = selfG })
 	if d := r5.tick(100 * time.Millisecond); d != nil && (d.Action == "judge_seal" || d.Action == "judge") {
 		t.Fatalf("%+v", d)
 	}

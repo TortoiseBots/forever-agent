@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -69,8 +68,8 @@ const (
 
 // findGossipNPC is the NPC of the step in the agent's object store: the living creature of its entry nearest to Near within
 // gossipFindRadius, else (when the store has only a corpse of it) the nearest corpse, which the caller fails on.
-func findGossipNPC(units []objects.Unit, g *Gossip) (objects.Unit, gossipStatus) {
-	var best, corpse *objects.Unit
+func findGossipNPC(units []world.Unit, g *Gossip) (world.Unit, gossipStatus) {
+	var best, corpse *world.Unit
 	var bd, cd float64
 	for i := range units {
 		u := &units[i]
@@ -97,11 +96,11 @@ func findGossipNPC(units []objects.Unit, g *Gossip) (objects.Unit, gossipStatus)
 	case corpse != nil:
 		return *corpse, gossipDead
 	}
-	return objects.Unit{}, gossipMissing
+	return world.Unit{}, gossipMissing
 }
 
 // npcName is how a failure names the NPC.
-func (g *Gossip) npcName(u objects.Unit) string {
+func (g *Gossip) npcName(u world.Unit) string {
 	if u.Name != "" {
 		return u.Name
 	}
@@ -159,7 +158,7 @@ type gossipTalk struct {
 	now   func() time.Time
 	pause func(ctx context.Context, d time.Duration) error
 	// npc is the NPC in the agent's view now, and how far the agent stands from it (-1: unknown).
-	npc  func() (objects.Unit, gossipStatus)
+	npc  func() (world.Unit, gossipStatus)
 	note func(string)
 	// attempts is how many hellos were sent.
 	attempts int
@@ -224,7 +223,7 @@ func (g *Gossip) menuFailure(name string, ans GossipAnswer) string {
 	return fmt.Sprintf("%s shows menu %d, which lacks %s (it offers: %s)", name, ans.TextID, g.OptionText(), listOptions(ans.Options))
 }
 
-func (t *gossipTalk) selectOption(ctx context.Context, u objects.Unit, name string, line GossipLine) error {
+func (t *gossipTalk) selectOption(ctx context.Context, u world.Unit, name string, line GossipLine) error {
 	if line.Coded {
 		return fmt.Errorf("%s: option %d (%q) asks for a code: a gossip step cannot pick it", name, line.Index, line.Text)
 	}

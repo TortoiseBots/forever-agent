@@ -1,6 +1,8 @@
 package dungeon
 
-import "github.com/pjerra/forever-agent/internal/objects"
+import (
+	"github.com/pjerra/forever-agent/internal/world"
+)
 
 // StealthSpells are the auras that hide a unit from the party's companions: they never attack what they cannot see,
 // so a pull of such a unit draws no fight. 5916 is Shadowstalker Stealth, which the Uldaman Cave Lurkers (4850) carry
@@ -24,7 +26,7 @@ func StealthedAuras(ids []uint32) bool {
 
 // Stealthed reports a unit that carries one of StealthSpells. It goes by spell id only: names would also catch
 // "Stealth Detection" (8279, 18950 ...), an aura many ordinary spawns have, and "Sneaky".
-func Stealthed(u objects.Unit) bool {
+func Stealthed(u world.Unit) bool {
 	for _, a := range u.Auras {
 		if StealthSpells[a.SpellID] {
 			return true

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -18,11 +17,11 @@ import (
 // swing the follow mode needs (SelfRow/Attack/StopAttack).
 type followFake struct {
 	*fakeGame
-	row            objects.Unit
+	row            world.Unit
 	attacks, stops int
 }
 
-func (f *followFake) SelfRow() (objects.Unit, bool) { return f.row, true }
+func (f *followFake) SelfRow() (world.Unit, bool) { return f.row, true }
 
 func (f *followFake) Attack(ctx context.Context) error {
 	f.attacks++

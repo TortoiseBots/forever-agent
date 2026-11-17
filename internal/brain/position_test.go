@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestLineOfSightIsCachedPerTargetFor250msAndFollowsMovement(t *testing.T) {
@@ -45,7 +45,7 @@ func TestLineOfSightIsCachedPerTargetFor250msAndFollowsMovement(t *testing.T) {
 	}
 	// A wall appears and the target moves two yards: asked at once, and blocked now.
 	pf.blocked = wallRect(10, -8, 12, 8)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X += 2 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X += 2 })
 	c = at(10 * time.Millisecond)
 	m, _ = c.Unit(mobA)
 	if clear, known := c.LineOfSight(m); clear || !known {
@@ -89,7 +89,7 @@ func TestRangedBandStepsBackFromTooCloseAndOutOfTheMobsFront(t *testing.T) {
 	if got := dist2(w[0], mobAt); got < rangedMin || got > rangedMax {
 		t.Fatalf("spot %v is %.1f yd from the mob, want %v-%v", w[0], got, rangedMin, rangedMax)
 	}
-	if inFront(&objects.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
+	if inFront(&world.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
 		t.Fatalf("spot %v is in the mob's front", w[0])
 	}
 	// There now: nothing more to do but wait for the tank's hold (the opening delay holds Frostbolt back).
@@ -110,7 +110,7 @@ func TestRangedBandLeavesAMobsFrontEvenAtTheRightDistance(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	w := pf.walkList()
-	if inFront(&objects.Unit{X: 24, Y: 0, O: math.Pi}, w[0]) || dist2(w[0], Vec3{24, 0, 0}) > rangedMax {
+	if inFront(&world.Unit{X: 24, Y: 0, O: math.Pi}, w[0]) || dist2(w[0], Vec3{24, 0, 0}) > rangedMax {
 		t.Fatalf("spot %v", w[0])
 	}
 }
@@ -163,8 +163,8 @@ func TestPositioningKeepsToAnotherGroupOfSleepers(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
 	tankFights(r.g, 8, 12, math.Pi)
 	// Sleeping packs where the two nearest spots are: no spot may stand within reach of them.
-	r.g.addUnit(objects.Unit{GUID: 300, Type: "creature", Hostile: true, Health: 100, MaxHealth: 100, Level: 30}, 1, 19)
-	r.g.addUnit(objects.Unit{GUID: 301, Type: "creature", Hostile: true, Health: 100, MaxHealth: 100, Level: 30}, 1, -19)
+	r.g.addUnit(world.Unit{GUID: 300, Type: "creature", Hostile: true, Health: 100, MaxHealth: 100, Level: 30}, 1, 19)
+	r.g.addUnit(world.Unit{GUID: 301, Type: "creature", Hostile: true, Health: 100, MaxHealth: 100, Level: 30}, 1, -19)
 	r.tick(100 * time.Millisecond)
 	for _, w := range pf.walkList() {
 		for _, s := range []Vec3{{1, 19, 0}, {1, -19, 0}} {
@@ -178,7 +178,7 @@ func TestPositioningKeepsToAnotherGroupOfSleepers(t *testing.T) {
 func TestPositioningIsQuietWithoutAWalkerOrWithMovementOff(t *testing.T) {
 	// A game that cannot walk: no reposition, no trace of it either.
 	r := frost(t)
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 8, 0)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 8, 0)
 	m := mob(mobA, tankG)
 	m.O = math.Pi
 	r.g.addUnit(m, 12, 0)
@@ -315,7 +315,7 @@ const errTest = testErr("no route")
 func TestLeavesAGroundEffectOfAnEnemyAlongTheMesh(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, tankG), 20, 0)
-	pf.areas = []objects.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: mobA, Radius: 8, X: 1, Y: 0}}
+	pf.areas = []world.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: mobA, Radius: 8, X: 1, Y: 0}}
 	// A Frostbolt is being cast: leaving the fire outranks it.
 	r.g.st.CastStarted(spFrostbolt, 2600, mobA)
 	d := r.tick(100 * time.Millisecond)
@@ -334,9 +334,9 @@ func TestLeavesAGroundEffectOfAnEnemyAlongTheMesh(t *testing.T) {
 
 func TestIgnoresThePartysOwnGroundEffects(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Class: 2, InParty: true, Health: 900, MaxHealth: 900}, 5, 0)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Class: 2, InParty: true, Health: 900, MaxHealth: 900}, 5, 0)
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	pf.areas = []objects.DynamicObject{
+	pf.areas = []world.DynamicObject{
 		{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: tankG, Radius: 8, X: 0, Y: 0},  // a party member's
 		{GUID: 0xF100000000000002, Spell: spBlizzard, Caster: selfG, Radius: 8, X: 0, Y: 0},    // the leader's own
 		{GUID: 0xF100000000000003, Spell: spRainOfFire, Caster: mobA, Radius: 8, X: 40, Y: 40}, // an enemy's, far away
@@ -350,14 +350,14 @@ func TestIgnoresThePartysOwnGroundEffects(t *testing.T) {
 
 func TestAGroundEffectWithTheCasterOutOfViewCountsByItsSpell(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
-	pf.areas = []objects.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: 0xF130000000000099, Radius: 8, X: 0, Y: 0}}
+	pf.areas = []world.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: 0xF130000000000099, Radius: 8, X: 0, Y: 0}}
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_ground_aoe" {
 		t.Fatalf("a harmful spell of an unseen caster: %+v", d)
 	}
 	// A spell that does nothing harmful, from an unseen caster, is let be.
 	r2, pf2 := newPosRig(t, Params{})
-	pf2.areas = []objects.DynamicObject{{GUID: 0xF100000000000001, Spell: spFrostArmor, Caster: 0xF130000000000099, Radius: 8, X: 0, Y: 0}}
+	pf2.areas = []world.DynamicObject{{GUID: 0xF100000000000001, Spell: spFrostArmor, Caster: 0xF130000000000099, Radius: 8, X: 0, Y: 0}}
 	r2.tick(100 * time.Millisecond)
 	if len(pf2.walkList()) != 0 {
 		t.Fatal("left a harmless area")
@@ -367,12 +367,12 @@ func TestAGroundEffectWithTheCasterOutOfViewCountsByItsSpell(t *testing.T) {
 func TestAPeriodicDamageAuraOnTheLeaderMarksItsGroundEffectAsHarmful(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
 	// The area's caster reads as a party member (a mis-attribution the aura corrects): the aura on the leader wins.
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 0)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 0)
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Slot: 33, SpellID: spRainOfFire, Harmful: true})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Slot: 33, SpellID: spRainOfFire, Harmful: true})
 	})
-	pf.areas = []objects.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: tankG, Radius: 6, X: 0, Y: 0}}
+	pf.areas = []world.DynamicObject{{GUID: 0xF100000000000001, Spell: spRainOfFire, Caster: tankG, Radius: 6, X: 0, Y: 0}}
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "leave_ground_aoe" {
 		t.Fatalf("%+v", d)
 	}

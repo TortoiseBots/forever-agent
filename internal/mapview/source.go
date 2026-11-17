@@ -15,10 +15,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
@@ -36,7 +36,7 @@ func SessionFrame(s *session.Session, t time.Time, leader *Pos) (f Frame, ok boo
 		self = *leader
 	}
 	f.Members = append(f.Members, MemberFrame{Name: st.Character, GUID: uint64(st.GUID), Pos: self, Self: true})
-	for _, u := range s.Units(objects.Filter{Limit: 5000}) {
+	for _, u := range s.Units(world.Filter{Limit: 5000}) {
 		if u.PosAgeMS < 0 {
 			continue
 		}
@@ -48,7 +48,7 @@ func SessionFrame(s *session.Session, t time.Time, leader *Pos) (f Frame, ok boo
 				Health: u.Health, MaxHealth: u.MaxHealth, InCombat: u.InCombat, Dead: u.Dead, Pos: Pos{u.X, u.Y, u.Z}})
 		}
 	}
-	for _, g := range s.GameObjects(objects.GOFilter{Limit: 5000}) {
+	for _, g := range s.GameObjects(world.GOFilter{Limit: 5000}) {
 		if g.Distance < 0 { // a transport's: the server never sent where it is
 			continue
 		}

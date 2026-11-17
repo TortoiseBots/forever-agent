@@ -9,7 +9,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -24,20 +23,20 @@ type rezGame struct {
 	spell uint32
 }
 
-func (r *rezGame) Self() (objects.Unit, bool) {
-	return objects.Unit{GUID: leader, Type: "player", Name: "Lead", Class: 5, Level: 30, Health: 1000, MaxHealth: 1000, PowerType: 0,
-		Power: 1000, MaxPower: 1000, StandState: "stand", Auras: []objects.Aura{}}, true
+func (r *rezGame) Self() (world.Unit, bool) {
+	return world.Unit{GUID: leader, Type: "player", Name: "Lead", Class: 5, Level: 30, Health: 1000, MaxHealth: 1000, PowerType: 0,
+		Power: 1000, MaxPower: 1000, StandState: "stand", Auras: []world.Aura{}}, true
 }
 
-func (r *rezGame) Units() []objects.Unit {
-	var out []objects.Unit
+func (r *rezGame) Units() []world.Unit {
+	var out []world.Unit
 	for _, m := range r.g.party {
 		class := uint8(1)
 		if m.GUID == healer {
 			class = 5
 		}
-		out = append(out, objects.Unit{GUID: m.GUID, Type: "player", Name: m.Name, Class: class, InParty: true, Dead: m.Dead, Health: m.Health,
-			MaxHealth: m.MaxHealth, X: 5, Distance: 5, Distance2D: 5, Auras: []objects.Aura{}})
+		out = append(out, world.Unit{GUID: m.GUID, Type: "player", Name: m.Name, Class: class, InParty: true, Dead: m.Dead, Health: m.Health,
+			MaxHealth: m.MaxHealth, X: 5, Distance: 5, Distance2D: 5, Auras: []world.Aura{}})
 	}
 	return out
 }
@@ -52,7 +51,7 @@ func (r *rezGame) Party() []brain.Member {
 
 func (r *rezGame) Selected() world.GUID                     { return 0 }
 func (r *rezGame) Spells() *spellstate.State                { return r.st }
-func (r *rezGame) Items() []objects.Item                    { return nil }
+func (r *rezGame) Items() []world.Item                      { return nil }
 func (r *rezGame) Face(context.Context, world.GUID) error   { return nil }
 func (r *rezGame) Target(context.Context, world.GUID) error { return nil }
 func (r *rezGame) Attack(context.Context) error             { return nil }

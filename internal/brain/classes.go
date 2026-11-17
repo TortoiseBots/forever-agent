@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -27,7 +26,7 @@ const swingResend = 3 * time.Second
 
 // swingFaceBlocked says the server refused the swing for facing (observeSwing) and the player still has its back to the mob: the
 // swing waits and face_target, its prerequisite, turns the player first.
-func swingFaceBlocked(c *Ctx, m *objects.Unit) bool {
+func swingFaceBlocked(c *Ctx, m *world.Unit) bool {
 	if m == nil {
 		return false
 	}
@@ -38,7 +37,7 @@ func swingFaceBlocked(c *Ctx, m *objects.Unit) bool {
 }
 
 // swingSentRecently says the attack order at the mob went out less than swingResend ago.
-func swingSentRecently(c *Ctx, m *objects.Unit) bool {
+func swingSentRecently(c *Ctx, m *world.Unit) bool {
 	c.mem.mel.mu.Lock()
 	defer c.mem.mel.mu.Unlock()
 	return m != nil && c.mem.mel.swingTarget == m.GUID && c.Now.Sub(c.mem.mel.swingAt) < swingResend
@@ -48,8 +47,8 @@ func swingSentRecently(c *Ctx, m *objects.Unit) bool {
 // reach, the swing is not on it already (see swingingAt for how the swing is known) and the order was not sent a moment ago. A swing
 // the server refused for facing is not ordered again; the player turns to the mob first (swingFaceBlocked), so that the swing does not
 // shut out face_target and the abilities.
-func swingAction(name string, mobOf func(*Ctx) *objects.Unit) *Action {
-	inReach := func(c *Ctx) *objects.Unit {
+func swingAction(name string, mobOf func(*Ctx) *world.Unit) *Action {
+	inReach := func(c *Ctx) *world.Unit {
 		m := mobOf(c)
 		if m == nil || m.Distance < 0 || float64(m.Distance2D) > meleeReach {
 			return nil
@@ -99,7 +98,7 @@ func onPower(c *Ctx, power uint8) bool { return c.SelfOK && c.Self.PowerType == 
 func restNow(c *Ctx) bool { return c.RestOK && c.SelfOK && !inCombat(c) && ValFight.Get(c).Mob == nil }
 
 // seenAura is the first of the aura names the unit carries, "" when it carries none.
-func seenAura(u *objects.Unit, names ...string) string {
+func seenAura(u *world.Unit, names ...string) string {
 	for _, n := range names {
 		if HasAura(u, n) {
 			return n
@@ -109,7 +108,7 @@ func seenAura(u *objects.Unit, names ...string) string {
 }
 
 // auraWithPrefix is the first aura of the unit whose name starts with prefix ("Seal of "), "" when there is none.
-func auraWithPrefix(u *objects.Unit, prefix string) string {
+func auraWithPrefix(u *world.Unit, prefix string) string {
 	for _, a := range u.Auras {
 		if strings.HasPrefix(strings.ToLower(a.Name), strings.ToLower(prefix)) {
 			return a.Name
@@ -136,12 +135,12 @@ func spellByName(name func(*Ctx) string) func(*Ctx) (uint32, bool) {
 }
 
 // tankInView is the tank the brain sees, nil without one in view (findTank).
-func tankInView(c *Ctx) *objects.Unit { return findTank(c) }
+func tankInView(c *Ctx) *world.Unit { return findTank(c) }
 
 // ---- small helpers over the units in view ----
 
 // mobsNear counts the living hostile mobs in combat within r yards of the unit (the unit included when it is one).
-func mobsNear(c *Ctx, around *objects.Unit, r float64) int {
+func mobsNear(c *Ctx, around *world.Unit, r float64) int {
 	if around == nil {
 		return 0
 	}

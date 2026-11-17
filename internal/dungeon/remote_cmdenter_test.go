@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The `cmd enter` entry (remote_cmdenter.go) against a fake commander whose bots start outside the plan's map: a player's account, a plan
@@ -52,7 +52,7 @@ func (g *enterOrders) Order(ctx context.Context, command string) (tbm.OrderResul
 func (g *enterOrders) Behavior(context.Context, string, string, bool) (tbm.Reply, error) {
 	return tbm.Reply{Kind: tbm.KindAck, OK: true, Lines: []string{}}, nil
 }
-func (g *enterOrders) GameObjects() []objects.GameObject { return nil }
+func (g *enterOrders) GameObjects() []world.GameObject { return nil }
 
 func enterAck(n int) tbm.OrderResult {
 	a := tbm.Ack{Intent: "cmd enter", Scope: "party", Count: n, Executor: "entered"}

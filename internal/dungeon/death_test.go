@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -542,7 +541,7 @@ func TestResurrectionSicknessIsNotedOrWaitedOut(t *testing.T) {
 		g.onTick = func(g *fakeGame) {
 			prev(g)
 			if sick && !g.self.Dead() && g.dead.reclaims > 0 {
-				g.auras = map[world.GUID][]objects.Aura{leader: auraNamed("Resurrection Sickness", &rem)}
+				g.auras = map[world.GUID][]world.Aura{leader: auraNamed("Resurrection Sickness", &rem)}
 			}
 			if g.auras[leader] != nil && g.now.After(g.dead.reclaimAt.Add(100*time.Second)) {
 				g.auras, sick = nil, false

@@ -6,21 +6,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // fakeWorld is a World the test moves by hand.
 type fakeWorld struct {
 	pos      Point
-	objs     []objects.GameObject
+	objs     []world.GameObject
 	hostiles int
 }
 
 func (f *fakeWorld) Position() Point                   { return f.pos }
 func (f *fakeWorld) HostilesWithin(Point, float32) int { return f.hostiles }
-func (f *fakeWorld) GameObjects() []objects.GameObject {
-	out := make([]objects.GameObject, len(f.objs))
+func (f *fakeWorld) GameObjects() []world.GameObject {
+	out := make([]world.GameObject, len(f.objs))
 	for i, o := range f.objs {
 		o.Distance = float32(dist3(f.pos, Point{o.X, o.Y, o.Z}))
 		out[i] = o
@@ -54,8 +53,8 @@ const (
 	seal     world.GUID = 0xF11001E5D4003856
 )
 
-func doors() []objects.GameObject {
-	return []objects.GameObject{
+func doors() []world.GameObject {
+	return []world.GameObject{
 		{GUID: keystone, Entry: 124371, X: 20, Y: 0, Z: 0, State: "ready"},
 		{GUID: seal, Entry: 124372, X: 30, Y: 0, Z: 0, State: "ready"},
 	}
@@ -382,9 +381,9 @@ func TestStepperLooksWhereThePlanSays(t *testing.T) {
 
 // Of two objects with the same entry the one nearest to the given position is used, and one out of range is not.
 func TestStepperPicksTheNearestToNear(t *testing.T) {
-	near := objects.GameObject{GUID: 1, Entry: 77, X: 101, Y: 0, Z: 0}
-	far := objects.GameObject{GUID: 2, Entry: 77, X: 120, Y: 0, Z: 0}
-	w := &fakeWorld{pos: Point{100, 0, 0}, objs: []objects.GameObject{far, near}}
+	near := world.GameObject{GUID: 1, Entry: 77, X: 101, Y: 0, Z: 0}
+	far := world.GameObject{GUID: 2, Entry: 77, X: 120, Y: 0, Z: 0}
+	w := &fakeWorld{pos: Point{100, 0, 0}, objs: []world.GameObject{far, near}}
 	p := mustPlan(t, `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"z":0},"legs":[
 	  {"to":{"x":100,"y":0,"z":0},"steps":[{"use_object":{"near":{"x":119,"y":0,"z":0},"entry":77,"range":4}}]}]}`)
 	s := NewStepper(p, w, nil)
@@ -492,7 +491,7 @@ func TestStepperTeamGate(t *testing.T) {
 	var kinds []ActionKind
 	run := func(team string) []ActionKind {
 		p := mustPlan(t, teamPlan)
-		w := teamWorld{&fakeWorld{objs: []objects.GameObject{{GUID: 0x77, Entry: 123329, X: 30, State: "ready"}}}, team}
+		w := teamWorld{&fakeWorld{objs: []world.GameObject{{GUID: 0x77, Entry: 123329, X: 30, State: "ready"}}}, team}
 		s := NewStepper(p, w, nil)
 		kinds = nil
 		var skipped []string
@@ -532,7 +531,7 @@ func TestStepperTeamGate(t *testing.T) {
 // A loot_object step walks to the chest like a use_object, then asks for the loot with the item it expects.
 func TestStepperLootAndItemActions(t *testing.T) {
 	p := mustPlan(t, teamPlan)
-	w := &fakeWorld{objs: []objects.GameObject{{GUID: 0x77, Entry: 123329, X: 30, State: "ready"}}}
+	w := &fakeWorld{objs: []world.GameObject{{GUID: 0x77, Entry: 123329, X: 30, State: "ready"}}}
 	s := NewStepper(p, w, nil)
 	s.Complete() // walk
 	s.Complete() // pull 1 (team unknown: not skipped)

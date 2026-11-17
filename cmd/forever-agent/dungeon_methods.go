@@ -16,7 +16,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -931,11 +930,11 @@ func (g *sessionGame) Position() dungeon.Point {
 
 func (g *sessionGame) Map() uint32 { return g.cur().Status().Map }
 
-func (g *sessionGame) GameObjects() []objects.GameObject {
-	return g.cur().GameObjects(objects.GOFilter{Limit: 5000})
+func (g *sessionGame) GameObjects() []world.GameObject {
+	return g.cur().GameObjects(world.GOFilter{Limit: 5000})
 }
 
-func (g *sessionGame) Units() []objects.Unit { return g.cur().Units(objects.Filter{Limit: 5000}) }
+func (g *sessionGame) Units() []world.Unit { return g.cur().Units(world.Filter{Limit: 5000}) }
 
 func (g *sessionGame) Self() dungeon.Self {
 	st := g.cur().Status()

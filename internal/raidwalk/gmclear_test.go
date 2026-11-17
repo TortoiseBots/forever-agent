@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -289,7 +288,7 @@ func TestGMClearLiveMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	units := []objects.Unit{
+	units := []world.Unit{
 		{GUID: unitGUID(300, 3)},
 		{GUID: unitGUID(100, 1)},
 		{GUID: unitGUID(200, 2), Dead: true},
@@ -436,7 +435,7 @@ func TestGMClearSeenMembersKeepsCorpses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	units := []objects.Unit{{GUID: unitGUID(100, 1)}, {GUID: unitGUID(200, 2), Dead: true}, {GUID: unitGUID(100, 4)}}
+	units := []world.Unit{{GUID: unitGUID(100, 1)}, {GUID: unitGUID(200, 2), Dead: true}, {GUID: unitGUID(100, 4)}}
 	if got := packs[0].SeenMembers(units); len(got) != 2 {
 		t.Fatalf("seen %+v", got)
 	}

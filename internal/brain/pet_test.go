@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -90,7 +89,7 @@ func (f *petFake) withPet() {
 	f.pet = &PetState{GUID: petG, Health: 400, MaxHealth: 400, Happiness: 3, React: "defensive", Command: "follow", BarKnown: true, Enabled: true, Distance: 4,
 		Spells: []PetSpell{{ID: 17253, Name: "Bite", Autocast: true, OnBar: true}}}
 	f.pmu.Unlock()
-	f.addUnit(objects.Unit{GUID: petG, Type: "creature", Name: "Pet", Health: 400, MaxHealth: 400}, 4, 0)
+	f.addUnit(world.Unit{GUID: petG, Type: "creature", Name: "Pet", Health: 400, MaxHealth: 400}, 4, 0)
 }
 
 func (f *petFake) addGrowl() {
@@ -100,7 +99,7 @@ func (f *petFake) addGrowl() {
 }
 
 // newPetRig is a brain of the preset on a fake game with a pet half, the player as the class on the power with its full pool.
-func newPetRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, p Params, known []uint32, tune func(*objects.Unit)) (*rig, *petFake) {
+func newPetRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, p Params, known []uint32, tune func(*world.Unit)) (*rig, *petFake) {
 	t.Helper()
 	g := newFake(known...)
 	g.self.Class, g.self.Level = class, level
@@ -127,8 +126,8 @@ func newPetHunter(t *testing.T, p Params, known ...uint32) (*rig, *petFake) {
 	if len(known) == 0 {
 		known = append(append([]uint32{}, hunterSpells...), spCallPet, spRevivePet, spMendPet)
 	}
-	return newPetRig(t, "marksman_hunter", ClassHunter, 60, 0, 1000, p, known, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
+	return newPetRig(t, "marksman_hunter", ClassHunter, 60, 0, 1000, p, known, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
 	})
 }
 
@@ -170,7 +169,7 @@ func TestPetWaitsWhileTheMobIsNotOnTheTank(t *testing.T) {
 	r, pf := newPetHunter(t, Params{})
 	pf.withPet()
 	tankFights(r.g, 25, 28, 0)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Target = 0 }) // the tank has not got it: the mob is on nobody
+	r.g.mutate(mobA, func(u *world.Unit) { u.Target = 0 }) // the tank has not got it: the mob is on nobody
 	r.tick(100 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		r.tick(1100 * time.Millisecond)
@@ -178,7 +177,7 @@ func TestPetWaitsWhileTheMobIsNotOnTheTank(t *testing.T) {
 	if o := pf.orderList(); len(o) != 0 {
 		t.Fatalf("a mob nobody holds: %v", o)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Target = tankG })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Target = tankG })
 	if d := r.tick(400 * time.Millisecond); d == nil || d.Action != "pet_attack" {
 		t.Fatalf("the tank holds it now: %+v idle %q", d, r.idle())
 	}
@@ -188,7 +187,7 @@ func TestPetNeverPulls(t *testing.T) {
 	r, pf := newPetHunter(t, Params{})
 	pf.withPet()
 	tankFights(r.g, 25, 28, 0)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.InCombat = false }) // the tank targets a mob nobody has pulled
+	r.g.mutate(mobA, func(u *world.Unit) { u.InCombat = false }) // the tank targets a mob nobody has pulled
 	r.tick(100 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		r.tick(1100 * time.Millisecond)
@@ -228,9 +227,9 @@ func TestPetIsCalledBackWhenTheFightEndsAndNotTwice(t *testing.T) {
 	r.g.units = r.g.units[:0]
 	r.g.mu.Unlock()
 	r.g.partyWithTank()
-	r.g.mutate(tankG, func(u *objects.Unit) { u.Target = 0 })
-	r.g.addUnit(objects.Unit{GUID: petG, Type: "creature", Name: "Pet", Health: 400, MaxHealth: 400}, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	r.g.mutate(tankG, func(u *world.Unit) { u.Target = 0 })
+	r.g.addUnit(world.Unit{GUID: petG, Type: "creature", Name: "Pet", Health: 400, MaxHealth: 400}, 4, 0)
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	var follow *Decision
 	for i := 0; i < 8 && follow == nil; i++ {
 		if d := r.tick(1100 * time.Millisecond); d != nil && d.Action == "pet_recall" {
@@ -281,8 +280,8 @@ func TestPetIsCalledBackWhenTheLeaderFlees(t *testing.T) {
 	open(r)
 	// The pet chases a mob 50 yd from the leader, who is running in combat.
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X = 50 })
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true; u.Moving = true })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X = 50 })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true; u.Moving = true })
 	var d *Decision
 	for i := 0; i < 4 && (d == nil || d.Action != "pet_recall"); i++ {
 		d = r.tick(300 * time.Millisecond)
@@ -301,8 +300,8 @@ func TestPetIsCalledBackWhenTheLeaderFlees(t *testing.T) {
 		t.Fatalf("ping-pong while the leader flees: %v", pf.orderList())
 	}
 	// The leader stops running: the tank still holds the mob, and the pet goes back in.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X = 28 })
-	r.g.setSelf(func(u *objects.Unit) { u.Moving = false })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X = 28 })
+	r.g.setSelf(func(u *world.Unit) { u.Moving = false })
 	if d := r.tick(1500 * time.Millisecond); d == nil || d.Action != "pet_attack" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -312,7 +311,7 @@ func TestPetIsCalledBackWhenTheLeaderFlees(t *testing.T) {
 	tankHolds(r)
 	open(r)
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	for i := 0; i < 5; i++ {
 		r.tick(1100 * time.Millisecond)
 	}
@@ -327,7 +326,7 @@ func TestPetStaysOnTheMobThatIsOnAHurtLeader(t *testing.T) {
 	pf.withPet()
 	r.g.addUnit(mob(mobA, selfG), 8, 0)
 	setHealth(r.g, 20)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true; u.Moving = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true; u.Moving = true })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "pet_attack" || d.Target != mobA {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -400,7 +399,7 @@ func TestPetTauntAutocastGoesOffWithATankAndStaysOnSolo(t *testing.T) {
 		r.tick(2 * time.Second)
 	}
 	r.g.party = []Member{{Name: "Mage", GUID: 5, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: 5, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 0)
+	r.g.addUnit(world.Unit{GUID: 5, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 0)
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
 	}
@@ -441,7 +440,7 @@ func TestHunterCallsReviveAndMendsThePet(t *testing.T) {
 	pf.withPet()
 	pf.setPet(func(p *PetState) { p.Dead, p.Health = true, 0 })
 	tankHolds(r)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
 	}
@@ -454,20 +453,20 @@ func TestHunterCallsReviveAndMendsThePet(t *testing.T) {
 	r, pf = newPetHunter(t, Params{})
 	pf.withPet()
 	pf.setPet(func(p *PetState) { p.Health = 250 }) // 62%: out of combat Mend Pet starts below 70
-	r.g.mutate(petG, func(u *objects.Unit) { u.Health = 250 })
+	r.g.mutate(petG, func(u *world.Unit) { u.Health = 250 })
 	d = r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "pet_mend" || d.Spell != spMendPet || d.Target != petG {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	r.g.mutate(petG, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Mend Pet", SpellID: spMendPet}} })
+	r.g.mutate(petG, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Mend Pet", SpellID: spMendPet}} })
 	if d := r.tick(6 * time.Second); d != nil && d.Action == "pet_mend" {
 		t.Fatalf("mending already: %+v", d)
 	}
 	r, pf = newPetHunter(t, Params{})
 	pf.withPet()
 	pf.setPet(func(p *PetState) { p.Health = 250 })
-	r.g.mutate(petG, func(u *objects.Unit) { u.Health = 250 })
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.mutate(petG, func(u *world.Unit) { u.Health = 250 })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	tankHolds(r)
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
@@ -481,7 +480,7 @@ func TestHunterCallsReviveAndMendsThePet(t *testing.T) {
 	r, pf = newPetHunter(t, Params{})
 	pf.withPet()
 	pf.setPet(func(p *PetState) { p.Health = 100 })
-	r.g.mutate(petG, func(u *objects.Unit) { u.Health = 100; u.X = 40 })
+	r.g.mutate(petG, func(u *world.Unit) { u.Health = 100; u.X = 40 })
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
 	}

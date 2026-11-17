@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -320,7 +319,7 @@ func TestPausedBossResumeRunningThenDoneInOnePageRoutesToHandleBoss(t *testing.T
 // wipe during the wait is a failed handoff.
 func TestPausedBossResumeWipeInsideWaitRunsWipeRecovery(t *testing.T) {
 	f, boss, total := pausedBossFixture(t, func(f *fixture, boss, total int) {
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		running := fmt.Sprintf("TBM:RUN|zul_gurub|running|%d/%d|high_priestess_jeklik|boss|fight|fighting|until step %d (step %d)", boss, total, boss+1, boss+1)
 		// The resume's answer: the run goes on at her step — and the whole raid dies on that
 		// same poll, so the wait drains both the running line and the wipe.
@@ -368,7 +367,7 @@ func TestPausedBossResumeWipeRecoveredInsideWaitKeepsWatching(t *testing.T) {
 	f, boss, _ := pausedBossFixture(t, func(f *fixture, boss, total int) {
 		f.opts.wipeResume = 2
 		f.opts.wipeRest = 5 * time.Minute
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		// The resume's answer: the run goes on at her step, and the whole raid dies on that same
 		// poll. The line is the run's own self-regroup ("regrouping by itself", walk 17b), so the
 		// drained wipe recovers without a rest and without a second resume.

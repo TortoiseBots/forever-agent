@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestStatsCountActionsRefusalsIdleAndMobsOnTheLeader(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), 28, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 	r.tick(2200 * time.Millisecond) // frostbolt
 	r.tick(1600 * time.Millisecond) // frostbolt
@@ -19,7 +19,7 @@ func TestStatsCountActionsRefusalsIdleAndMobsOnTheLeader(t *testing.T) {
 	r.g.st.CastRefused(spFrostbolt, codeOf(t, "out_of_range"))
 	r.tick(100 * time.Millisecond)
 	// A mob has the leader; nothing to cast at it in melee range for a while (the cooldowns): idle seconds.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Target = selfG })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Target = selfG })
 	for i := 0; i < 5; i++ {
 		r.tick(500 * time.Millisecond)
 	}
@@ -45,7 +45,7 @@ func TestStatsCountActionsRefusalsIdleAndMobsOnTheLeader(t *testing.T) {
 func TestStatsCountPowerSpentAndIdleInCombat(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), 45, 0) // out of range: the mage waits
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 	for i := 0; i < 4; i++ {
 		r.tick(time.Second)
@@ -54,9 +54,9 @@ func TestStatsCountPowerSpentAndIdleInCombat(t *testing.T) {
 	if s.IdleCombatS < 3 {
 		t.Fatalf("a mage in combat with nothing to cast at idles: %+v", s)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.Power -= 100 })
+	r.g.setSelf(func(u *world.Unit) { u.Power -= 100 })
 	r.tick(time.Second)
-	r.g.setSelf(func(u *objects.Unit) { u.Power += 300 }) // regeneration or a drink is not spending
+	r.g.setSelf(func(u *world.Unit) { u.Power += 300 }) // regeneration or a drink is not spending
 	r.tick(time.Second)
 	if s := r.b.mem.stat.snapshot(); s.PowerSpent != 100 {
 		t.Fatalf("%+v", s)

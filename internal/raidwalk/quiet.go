@@ -3,7 +3,6 @@ package raidwalk
 import (
 	"fmt"
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/world"
 	"math"
@@ -62,7 +61,7 @@ const (
 // the test here is the fallback: a level-1 unit whose max health is absolute and inside the place phase's band. A
 // percent read's MaxHealth is the band top itself, which is why the band test is strict; a unit with no level read
 // (0) is never a critter (fail closed).
-func critter(u *objects.Unit) bool {
+func critter(u *world.Unit) bool {
 	return u.Type == "creature" && u.Level == 1 && u.MaxHealth > 0 && u.MaxHealth < quietCritterHP
 }
 
@@ -237,12 +236,12 @@ func PatrolPackDone(step int, pulled bool, progress int, hostileHP []int) bool {
 }
 
 // spawnLow is the spawn guid low a creature unit's GUID carries (bits 0-23): 0 when the GUID has no creature form.
-func spawnLow(u *objects.Unit) uint32 { return world.SpawnLow(u.GUID) }
+func spawnLow(u *world.Unit) uint32 { return world.SpawnLow(u.GUID) }
 
 // atHome says the unit stands at its HOME spawn: within quietHomeYd (3D) of a same-entry plan spawn — the exact one
 // when the plan names its spawn guid and the unit's GUID carries one, else any spawn of that entry — and never for a
 // patrol-group unit. A nil list is no data: no exemption.
-func (homes QuietHomeSpawns) atHome(u *objects.Unit) bool {
+func (homes QuietHomeSpawns) atHome(u *world.Unit) bool {
 	if homes == nil {
 		return false
 	}
@@ -293,7 +292,7 @@ func NewQuietIdleReads() *QuietIdleReads { return &QuietIdleReads{prev: map[stri
 // idleHome records this read of u and says whether it is the second of two reads quietIdleHold apart that both saw u
 // idle within quietIdleMoveYd of the same spot (x/y: an idle mob's z does not wander). A read that does not see u idle
 // forgets the earlier one.
-func (r *QuietIdleReads) idleHome(u *objects.Unit, now time.Time) bool {
+func (r *QuietIdleReads) idleHome(u *world.Unit, now time.Time) bool {
 	key := strings.ToUpper(u.GUID.String())
 	if u.InCombat || u.Target != 0 || u.Moving {
 		delete(r.prev, key)
@@ -349,7 +348,7 @@ func (b QuietBlocker) Reason() string {
 // QuietBlockers lists every blocker of the revive point p, the nearest first within its own rule (a unit inside the
 // 45 yd still rule before a moving one, units before patrols, so the first one is the one QuietAt names). QuietAt uses
 // it for its answer; the revive's run.log line and its summary refusal (D-E) use the whole list.
-func QuietBlockers(units []objects.Unit, patrols []QuietPatrol, p dungeon.Point, idle *QuietIdleReads, homes QuietHomeSpawns, now time.Time) []QuietBlocker {
+func QuietBlockers(units []world.Unit, patrols []QuietPatrol, p dungeon.Point, idle *QuietIdleReads, homes QuietHomeSpawns, now time.Time) []QuietBlocker {
 	// rank orders the list the way QuietAt reports: still units (0), then moving ones (1), then patrols (2). The key is
 	// the distance within a rank; a patrol keeps its file order (key 0 with a stable sort).
 	type ranked struct {
@@ -418,7 +417,7 @@ func QuietBlockers(units []objects.Unit, patrols []QuietPatrol, p dungeon.Point,
 	return out
 }
 
-func unitBlocker(u *objects.Unit, d float64) QuietBlocker {
+func unitBlocker(u *world.Unit, d float64) QuietBlocker {
 	return QuietBlocker{GUID: u.GUID.String(), Entry: u.Entry, Name: u.Name, Dist: d,
 		Moving: u.Moving, InCombat: u.InCombat, Target: uint64(u.Target)}
 }
@@ -426,7 +425,7 @@ func unitBlocker(u *objects.Unit, d float64) QuietBlocker {
 // QuietAt says whether the revive point p is clear of hosts and patrols. idle is the read memory D-A's two-read
 // exemption needs; a nil one exempts no idle unit. homes is the plan's home spawns the proven-home rule reads; a nil
 // one (no plan data) exempts nothing.
-func QuietAt(units []objects.Unit, patrols []QuietPatrol, p dungeon.Point, idle *QuietIdleReads, homes QuietHomeSpawns, now time.Time) (bool, string) {
+func QuietAt(units []world.Unit, patrols []QuietPatrol, p dungeon.Point, idle *QuietIdleReads, homes QuietHomeSpawns, now time.Time) (bool, string) {
 	bs := QuietBlockers(units, patrols, p, idle, homes, now)
 	if len(bs) == 0 {
 		return true, ""

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -33,7 +32,7 @@ type posFake struct {
 	offMesh func(p Vec3) bool    // true for a point that is not walkable
 	walkErr error
 	hold    chan struct{} // when set, WalkTo waits on it (or on the context)
-	areas   []objects.DynamicObject
+	areas   []world.DynamicObject
 
 	walks    []Vec3
 	rays     int
@@ -90,10 +89,10 @@ func (f *posFake) snapCount() int {
 	return f.snaps
 }
 
-func (f *posFake) DynamicObjects() []objects.DynamicObject {
+func (f *posFake) DynamicObjects() []world.DynamicObject {
 	f.fakeGame.mu.Lock()
 	defer f.fakeGame.mu.Unlock()
-	out := append([]objects.DynamicObject{}, f.areas...)
+	out := append([]world.DynamicObject{}, f.areas...)
 	for i := range out {
 		out[i].Distance = float32(math.Hypot(float64(out[i].X-f.self.X), float64(out[i].Y-f.self.Y)))
 	}
@@ -151,7 +150,7 @@ func newPosRig(t *testing.T, p Params, known ...uint32) (*rig, *posFake) {
 // tankFights puts a warrior tank at (tx, 0) and a mob at (mx, 0) that faces mobO, fought by the tank.
 func tankFights(g *fakeGame, tx, mx, mobO float32) {
 	g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, tx, 0)
+	g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, tx, 0)
 	m := mob(mobA, tankG)
 	m.O = mobO
 	g.addUnit(m, mx, 0)

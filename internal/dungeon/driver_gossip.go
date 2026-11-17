@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // doGossip is the gossip step of the group driver: the leader is the agent's own character, so it is the one that talks, whatever `by`
@@ -51,7 +51,7 @@ func (d *Driver) doGossip(ctx context.Context, a Action) error {
 	}
 	t := &gossipTalk{
 		g: g, tk: tk, now: d.clk.Now, pause: d.sleepHeld, note: d.rep.note,
-		npc: func() (objects.Unit, gossipStatus) { return findGossipNPC(d.g.Units(), g) },
+		npc: func() (world.Unit, gossipStatus) { return findGossipNPC(d.g.Units(), g) },
 	}
 	err := d.holdingMove(ctx, func() error { return t.run(ctx) })
 	if cerr := d.check(ctx); cerr != nil {

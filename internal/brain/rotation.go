@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -751,7 +750,7 @@ func (p *Priority) trigger() func(*Ctx) bool {
 }
 
 // mobOf is the mob the mob_* conditions look at: the one on the player when melee_mob is set, else the fight's.
-func (w *Conditions) mobOf(c *Ctx) *objects.Unit {
+func (w *Conditions) mobOf(c *Ctx) *world.Unit {
 	if w.MeleeMob {
 		return ValMeleeMob.Get(c)
 	}
@@ -896,7 +895,7 @@ func knownRank(c *Ctx, name string, rank int) (uint32, bool) {
 }
 
 // stacksOn is how many stacks of the aura the unit carries.
-func stacksOn(u *objects.Unit, aura string) int {
+func stacksOn(u *world.Unit, aura string) int {
 	for _, a := range u.Auras {
 		if strings.EqualFold(a.Name, aura) {
 			return max(a.Stacks, 1)

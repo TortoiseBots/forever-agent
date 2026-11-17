@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // TestRaidWalkSelfRegroupReviveWaitsTenSecondsAfterRelease (CRASH-2026-11-03): TB releases the party at its
@@ -25,7 +25,7 @@ func TestRaidWalkSelfRegroupReviveWaitsTenSecondsAfterRelease(t *testing.T) {
 	_, party := selfRegroupWipeWith(t, nil, func(f *fixture) {
 		// No hostile near the revive point: the walk reaches its revive straight after the release, as it did live
 		// (the crash's release and revive were 170 ms apart). With a quiet-check wait the 10 s would pass anyway.
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		prevEvents := f.agent.eventsHook
 		f.agent.eventsHook = func(served string) {
 			if prevEvents != nil {

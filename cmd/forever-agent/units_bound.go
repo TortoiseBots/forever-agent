@@ -3,7 +3,6 @@ package main
 import (
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -20,7 +19,7 @@ const boundFrameMaxAge = 60 * time.Second
 // only what the agent's own client sees: bots on another map (inside the instance while the commander waits outside)
 // are not in `units` at all; `bot_view` lists them from the module's frame.
 type unitRow struct {
-	objects.Unit
+	world.Unit
 	Bound bool `json:"bound,omitempty"`
 }
 
@@ -39,7 +38,7 @@ func boundGUIDs(fr tbm.ViewFrame, ok bool, now time.Time) map[world.GUID]bool {
 }
 
 // unitRows marks the bound units; with onlyBound it keeps only those.
-func unitRows(us []objects.Unit, bound map[world.GUID]bool, onlyBound bool) []unitRow {
+func unitRows(us []world.Unit, bound map[world.GUID]bool, onlyBound bool) []unitRow {
 	out := make([]unitRow, 0, len(us))
 	for _, u := range us {
 		b := bound[u.GUID]

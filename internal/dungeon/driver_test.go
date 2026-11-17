@@ -12,12 +12,11 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
 type fakeUnit struct {
-	objects.Unit
+	world.Unit
 	dieAt      time.Time
 	noJoin     bool // pulling a neighbour does not bring it into the fight (stationary mobs with no link)
 	stuck      bool // pulling it draws no fight at all
@@ -43,7 +42,7 @@ type fakeGame struct {
 	posMu  sync.Mutex // pos: a walk moves it while the combat watch (another goroutine) reads it through Units
 	mapID  uint32
 	units  []*fakeUnit
-	objs   []objects.GameObject
+	objs   []world.GameObject
 	self   Self
 	party  []Member
 	dieIn  time.Duration // how long a pulled pack member fights before it dies
@@ -80,11 +79,11 @@ type fakeGame struct {
 	afterGate func(g *fakeGame) // runs as the first rest gate looks at the party
 	selfLooks int
 
-	auras       map[world.GUID][]objects.Aura // auras the party members' unit rows show, put there by ".aura <id>"
-	auraRefused bool                          // the server ignores ".aura" (no developer level): nothing lands on the target
-	auraErr     error                         // GM fails for ".aura"
-	gmOnGUIDs   []world.GUID                  // the unit each GMOn selected
-	hidden      map[world.GUID]bool           // party members that are not in view
+	auras       map[world.GUID][]world.Aura // auras the party members' unit rows show, put there by ".aura <id>"
+	auraRefused bool                        // the server ignores ".aura" (no developer level): nothing lands on the target
+	auraErr     error                       // GM fails for ".aura"
+	gmOnGUIDs   []world.GUID                // the unit each GMOn selected
+	hidden      map[world.GUID]bool         // party members that are not in view
 
 	refusals      []Refusal                // what the bots refused since the last look (the Driver reads them through RefusalSource)
 	refuseTargets map[world.GUID][]Refusal // a pullback at this target is refused with the first of these (and it is dropped), no fight starts
@@ -96,7 +95,7 @@ type fakeGame struct {
 	moveLog       []string           // "walk:1", "teleport:1" ...: each movement of the leader and the holds standing at it
 
 	onEmit func(kind string, data map[string]any) // sees each event as it is emitted
-	bag    []objects.Item                         // what the leader carries (ItemSource)
+	bag    []world.Item                           // what the leader carries (ItemSource)
 }
 
 const (
@@ -127,7 +126,7 @@ func (g *fakeGame) clock() Clock {
 		}
 		for i := 0; i < len(g.lateAuras); i++ {
 			if l := g.lateAuras[i]; !g.now.Before(l.at) {
-				g.auras[l.who] = append(g.auras[l.who], objects.Aura{SpellID: l.id})
+				g.auras[l.who] = append(g.auras[l.who], world.Aura{SpellID: l.id})
 				g.lateAuras = append(g.lateAuras[:i], g.lateAuras[i+1:]...)
 				i--
 			}
@@ -157,7 +156,7 @@ func (g *fakeGame) clock() Clock {
 }
 
 func (g *fakeGame) add(guid world.GUID, entry uint32, at Point) *fakeUnit {
-	u := &fakeUnit{Unit: objects.Unit{GUID: guid, Type: "creature", Entry: entry, Name: fmt.Sprintf("mob%d", entry), X: at.X, Y: at.Y, Z: at.Z,
+	u := &fakeUnit{Unit: world.Unit{GUID: guid, Type: "creature", Entry: entry, Name: fmt.Sprintf("mob%d", entry), X: at.X, Y: at.Y, Z: at.Z,
 		Hostile: true, Health: 100, MaxHealth: 100}}
 	g.units = append(g.units, u)
 	return u
@@ -187,16 +186,16 @@ func (g *fakeGame) Self() Self {
 	return g.self
 }
 func (g *fakeGame) Party() []Member { return append([]Member(nil), g.party...) }
-func (g *fakeGame) GameObjects() []objects.GameObject {
-	out := append([]objects.GameObject(nil), g.objs...)
+func (g *fakeGame) GameObjects() []world.GameObject {
+	out := append([]world.GameObject(nil), g.objs...)
 	for i := range out {
 		out[i].Distance = float32(dist3(g.at(), Point{out[i].X, out[i].Y, out[i].Z}))
 	}
 	return out
 }
 
-func (g *fakeGame) Units() []objects.Unit {
-	var out []objects.Unit
+func (g *fakeGame) Units() []world.Unit {
+	var out []world.Unit
 	for _, u := range g.units {
 		c := u.Unit
 		if g.aggro.Load() && c.GUID == g.aggroGUID && !c.Dead {
@@ -212,8 +211,8 @@ func (g *fakeGame) Units() []objects.Unit {
 			if g.hidden[m.GUID] {
 				continue
 			}
-			out = append(out, objects.Unit{GUID: m.GUID, Type: "player", Name: m.Name, Distance: g.partyInViewNearMax, Class: g.partyClass[m.GUID], Target: g.partyTarget[m.GUID],
-				Auras: append([]objects.Aura(nil), g.auras[m.GUID]...)})
+			out = append(out, world.Unit{GUID: m.GUID, Type: "player", Name: m.Name, Distance: g.partyInViewNearMax, Class: g.partyClass[m.GUID], Target: g.partyTarget[m.GUID],
+				Auras: append([]world.Aura(nil), g.auras[m.GUID]...)})
 		}
 	}
 	return out
@@ -334,7 +333,7 @@ func (g *fakeGame) GM(ctx context.Context, text string) error {
 		}
 		if n, err := strconv.ParseUint(id, 10, 32); err == nil && !g.auraRefused {
 			if g.auras == nil {
-				g.auras = map[world.GUID][]objects.Aura{}
+				g.auras = map[world.GUID][]world.Aura{}
 			}
 			who := g.targeted
 			if g.failGMOn[who] > 0 {
@@ -344,7 +343,7 @@ func (g *fakeGame) GM(ctx context.Context, text string) error {
 			if g.auraDelay > 0 {
 				g.lateAuras = append(g.lateAuras, lateAura{at: g.now.Add(g.auraDelay), who: who, id: uint32(n)})
 			} else {
-				g.auras[who] = append(g.auras[who], objects.Aura{SpellID: uint32(n)})
+				g.auras[who] = append(g.auras[who], world.Aura{SpellID: uint32(n)})
 			}
 		}
 	}
@@ -371,7 +370,7 @@ func stealthedFake(u *fakeUnit) bool { return Stealthed(u.Unit) }
 
 // stealth gives a unit the Shadowstalker Stealth aura the Uldaman Cave Lurkers carry.
 func (u *fakeUnit) stealth() *fakeUnit {
-	u.Auras = []objects.Aura{{SpellID: 5916, Name: "Shadowstalker Stealth"}}
+	u.Auras = []world.Aura{{SpellID: 5916, Name: "Shadowstalker Stealth"}}
 	return u
 }
 
@@ -425,7 +424,7 @@ func runFixture(t *testing.T) (*fakeGame, *Plan) {
 	g.add(108, 8, Point{88, 0, 0})
 	g.add(107, 7, Point{90, 0, 0})
 	g.add(103, 3, Point{130, 0, 0})
-	g.objs = []objects.GameObject{{GUID: keystone, Entry: 124371, X: 20, State: "ready"}, {GUID: seal, Entry: 124372, X: 30, State: "ready"}}
+	g.objs = []world.GameObject{{GUID: keystone, Entry: 124371, X: 20, State: "ready"}, {GUID: seal, Entry: 124372, X: 30, State: "ready"}}
 	g.onUse = func(g *fakeGame, guid world.GUID) {
 		if guid == keystone {
 			g.objs[1].State = "active"
@@ -959,7 +958,7 @@ func (g *fakeGame) Refusals() []Refusal {
 }
 
 // SelfAuras implements SelfAuraSource.
-func (g *fakeGame) SelfAuras() ([]objects.Aura, bool) { return g.auras[leader], true }
+func (g *fakeGame) SelfAuras() ([]world.Aura, bool) { return g.auras[leader], true }
 
 // A boss out of view at the end of the leg's walk is not taken as dead: the leader walks toward its position, sees it and kills it.
 // A boss whose corpse lies there is dead already, and the note says the corpse was seen.

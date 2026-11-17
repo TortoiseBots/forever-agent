@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/trace"
 	"github.com/pjerra/forever-agent/internal/tracerun"
@@ -45,7 +44,7 @@ func gongLeg() Leg {
 // gongGame is a carrier game with the gong at the leg's stand and a pack; ringing it (the first `cmd use` of the Mallet on it) puts Gahz'rilla in view.
 func gongGame(t *testing.T) *fakeCarrier {
 	g := newFakeCarrier(t)
-	g.gobjs = []objects.GameObject{{GUID: gongGUID, Entry: goGong, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: gongGUID, Entry: goGong, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	g.addMob(299, Point{40, 5, 0})
 	rung := false
 	g.fakeRemote.onTick = func(*fakeRemote) {
@@ -189,7 +188,7 @@ func TestOptionalLegIsLeftOutOfTheStartChecks(t *testing.T) {
 	}
 	// Leader mode: the bags are known and hold no Mallet.
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	if err := NewDriver(p, g, Config{GM: GMNone}, g.clock()).checkRequiredItems(1); err == nil || !strings.Contains(err.Error(), "does not carry Mallet of Zul'Farrak") {
 		t.Fatalf("%v", err)
 	}
@@ -202,7 +201,7 @@ func TestOptionalLegIsLeftOutOfTheStartChecks(t *testing.T) {
 func TestGroupDriverSkipsAnOptionalLeg(t *testing.T) {
 	src := strings.Replace(runPlanKey, `{"name":"a","to":{"x":10,"y":0,"z":0},`, `{"name":"a","to":{"x":10,"y":0,"z":0},"optional":{"item":7733,"name":"Staff of Prehistoria"},`, 1)
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	d := NewDriver(mustPlan(t, src), g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -212,7 +211,7 @@ func TestGroupDriverSkipsAnOptionalLeg(t *testing.T) {
 		t.Fatalf("%+v used %v", rep.Legs, g.used)
 	}
 	g, _ = runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}, staff()}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}, staff()}
 	d = NewDriver(mustPlan(t, src), g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -35,7 +34,7 @@ func (g remoteGame) UseObject(ctx context.Context, guid world.GUID) error {
 }
 
 // Items is what the agent's own character carries.
-func (g remoteGame) Items() []objects.Item { return g.c.cur().Items() }
+func (g remoteGame) Items() []world.Item { return g.c.cur().Items() }
 
 // GM sends one of the two visibility lines of a hand-over (a GM that the run's setup made invisible is visible for the trade only).
 func (g remoteGame) GM(ctx context.Context, text string) error {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -27,7 +26,7 @@ const (
 var ccMechanics = map[uint8]bool{1: true, 5: true, 10: true, 12: true, 14: true, 17: true, 24: true}
 
 // castPriority rates an enemy cast for interruption: 0 leaves it, 3 heals and crowd control, 2 damage on the party.
-func castPriority(c *Ctx, caster *objects.Unit, cast *objects.Cast) int {
+func castPriority(c *Ctx, caster *world.Unit, cast *world.Cast) int {
 	meta, known := spells.Lookup(cast.SpellID)
 	if known && !cast.Channel && !meta.Flags.Has(spells.FlagInterruptible) {
 		return 0
@@ -56,12 +55,12 @@ func castPriority(c *Ctx, caster *objects.Unit, cast *objects.Cast) int {
 }
 
 // interruptTargetID finds the enemy cast to interrupt with a spell id.
-func interruptTargetID(c *Ctx, id uint32) *objects.Unit {
+func interruptTargetID(c *Ctx, id uint32) *world.Unit {
 	meta, ok := spells.Lookup(id)
 	if !ok {
 		return nil
 	}
-	var best *objects.Unit
+	var best *world.Unit
 	bestPri := 0
 	e := &c.mem.ext
 	for i := range c.Units {
@@ -89,7 +88,7 @@ func interruptTargetID(c *Ctx, id uint32) *objects.Unit {
 	return best
 }
 
-func endsIn(c *objects.Cast) int64 {
+func endsIn(c *world.Cast) int64 {
 	if c.EndsInMS == nil {
 		return 1 << 40
 	}
@@ -100,7 +99,7 @@ func endsIn(c *objects.Cast) int64 {
 type interruptPlan struct {
 	Spell string
 	ID    uint32
-	Unit  *objects.Unit
+	Unit  *world.Unit
 }
 
 // planInterrupt picks the interrupt from the class's table: the first spell that is known, has a cast to answer in its range, and

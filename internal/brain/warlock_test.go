@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the warlock tests (ids from internal/spells/meta.tsv.gz; TestWarlockSpellData checks the facts the rotation relies on).
@@ -38,10 +38,10 @@ func newWarlock(t *testing.T, p Params, known ...uint32) (*rig, *petFake) {
 	if len(known) == 0 {
 		known = warlockSpells
 	}
-	r, pf := newPetRig(t, "affliction_warlock", ClassWarlock, 60, 0, 3000, p, known, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Demon Armor", SpellID: spDemonArmor}}
+	r, pf := newPetRig(t, "affliction_warlock", ClassWarlock, 60, 0, 3000, p, known, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Demon Armor", SpellID: spDemonArmor}}
 	})
-	r.g.items = []objects.Item{{Entry: itemMajorHS, Count: 1}}
+	r.g.items = []world.Item{{Entry: itemMajorHS, Count: 1}}
 	return r, pf
 }
 
@@ -50,10 +50,10 @@ func setItems(g *fakeGame, shards uint32, entries ...uint32) {
 	defer g.mu.Unlock()
 	g.items = nil
 	if shards > 0 {
-		g.items = append(g.items, objects.Item{Entry: itemShard, Count: shards})
+		g.items = append(g.items, world.Item{Entry: itemShard, Count: shards})
 	}
 	for _, e := range entries {
-		g.items = append(g.items, objects.Item{Entry: e, Count: 1})
+		g.items = append(g.items, world.Item{Entry: e, Count: 1})
 	}
 }
 
@@ -82,15 +82,15 @@ func TestWarlockOpensWithDamageOverTimeThenFillsWithShadowBolt(t *testing.T) {
 	if d == nil || d.Action != "corruption" || d.Spell != spCorruption || d.Rel != RelNormal+6 || d.Target != mobA {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
 	})
 	d = r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "curse" || d.Spell != spAgony || d.Rel != RelNormal+5 {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Curse of Agony", SpellID: spAgony, Harmful: true})
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Curse of Agony", SpellID: spAgony, Harmful: true})
 	})
 	for i := 0; i < 2; i++ {
 		if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "shadow_bolt" || d.Spell != spBolt {
@@ -107,8 +107,8 @@ func TestWarlockCursesOncePerMobAndNeverOverAnotherWarlocks(t *testing.T) {
 		r, pf := newWarlock(t, Params{})
 		warlockFight(r, pf)
 		pf.setPet(func(p *PetState) { p.Target = mobA })
-		r.g.mutate(mobA, func(u *objects.Unit) {
-			u.Auras = []objects.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}, {Name: foreign, SpellID: 1, Harmful: true}}
+		r.g.mutate(mobA, func(u *world.Unit) {
+			u.Auras = []world.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}, {Name: foreign, SpellID: 1, Harmful: true}}
 		})
 		for i := 0; i < 3; i++ {
 			r.tick(1600 * time.Millisecond)
@@ -126,8 +126,8 @@ func TestWarlockCursesOncePerMobAndNeverOverAnotherWarlocks(t *testing.T) {
 	r, pf := newWarlock(t, Params{})
 	warlockFight(r, pf)
 	setMobHP(r.g, mobA, 35)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
 	})
 	for i := 0; i < 3; i++ {
 		r.tick(1600 * time.Millisecond)
@@ -143,12 +143,12 @@ func TestWarlockPicksTheElementsCurseWhenOtherCastersAreInTheGroup(t *testing.T)
 	r, pf := newWarlock(t, Params{})
 	warlockFight(r, pf)
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}}
 	})
 	r.g.party = append(r.g.party, Member{Name: "Mage", GUID: 5, Online: true}, Member{Name: "Priest", GUID: 6, Online: true})
-	r.g.addUnit(objects.Unit{GUID: 5, Type: "player", Name: "Mage", Class: ClassMage, InParty: true, Health: 500, MaxHealth: 500}, 10, 3)
-	r.g.addUnit(objects.Unit{GUID: 6, Type: "player", Name: "Priest", Class: ClassPriest, InParty: true, Health: 500, MaxHealth: 500}, 10, -3)
+	r.g.addUnit(world.Unit{GUID: 5, Type: "player", Name: "Mage", Class: ClassMage, InParty: true, Health: 500, MaxHealth: 500}, 10, 3)
+	r.g.addUnit(world.Unit{GUID: 6, Type: "player", Name: "Priest", Class: ClassPriest, InParty: true, Health: 500, MaxHealth: 500}, 10, -3)
 	if d := open(r); d == nil || d.Action != "curse" || d.Spell != spElements {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -159,7 +159,7 @@ func TestWarlockStandsStillForCastsWithACastTime(t *testing.T) {
 	warlockFight(r, pf)
 	open(r)
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.setSelf(func(u *objects.Unit) { u.Moving = true })
+	r.g.setSelf(func(u *world.Unit) { u.Moving = true })
 	for i := 0; i < 3; i++ {
 		r.tick(1600 * time.Millisecond)
 	}
@@ -168,7 +168,7 @@ func TestWarlockStandsStillForCastsWithACastTime(t *testing.T) {
 			t.Fatalf("a cast with a cast time on the move: %v", casts(r.g))
 		}
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.Moving = false })
+	r.g.setSelf(func(u *world.Unit) { u.Moving = false })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "corruption" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -179,7 +179,7 @@ func TestWarlockLifeTapsInCombatOnlyWithHealthToSpare(t *testing.T) {
 	warlockFight(r, pf)
 	open(r)
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true; u.Power = 600 }) // 20%
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true; u.Power = 600 }) // 20%
 	setHealth(r.g, 50)
 	for i := 0; i < 2; i++ {
 		r.tick(1600 * time.Millisecond)
@@ -198,7 +198,7 @@ func TestWarlockLifeTapsInCombatOnlyWithHealthToSpare(t *testing.T) {
 	r, pf = newWarlock(t, Params{})
 	warlockFight(r, pf)
 	open(r)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	for i := 0; i < 3; i++ {
 		r.tick(1600 * time.Millisecond)
 	}
@@ -212,7 +212,7 @@ func TestWarlockLifeTapsInCombatOnlyWithHealthToSpare(t *testing.T) {
 func TestWarlockLifeTapsBeforeTheDrinkOutOfCombat(t *testing.T) {
 	r, pf := newWarlock(t, Params{})
 	pf.withPet()
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 900 }) // 30%
+	r.g.setSelf(func(u *world.Unit) { u.Power = 900 }) // 30%
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "life_tap" || d.Spell != spLifeTap {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -220,7 +220,7 @@ func TestWarlockLifeTapsBeforeTheDrinkOutOfCombat(t *testing.T) {
 	// Not when health is short.
 	r, pf = newWarlock(t, Params{})
 	pf.withPet()
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 900 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 900 })
 	setHealth(r.g, 70)
 	for i := 0; i < 2; i++ {
 		r.tick(2 * time.Second)
@@ -237,7 +237,7 @@ func TestWarlockDrainsLifeWhenHurtAndNotOnADyingMob(t *testing.T) {
 	r.tick(100 * time.Millisecond)
 	open(r)
 	setHealth(r.g, 40)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	pf.setPet(func(p *PetState) { p.Target = mobA })
 	d := r.tick(400 * time.Millisecond)
 	if d == nil || d.Action != "drain_life" || d.Spell != spDrainLife || d.Trigger != "health_low" || d.Rel != RelNormal+8 {
@@ -279,9 +279,9 @@ func TestWarlockDrainsSoulOnADyingMobWhenShardsAreLow(t *testing.T) {
 		warlockFight(r, pf)
 		open(r)
 		pf.setPet(func(p *PetState) { p.Target = mobA })
-		r.g.mutate(mobA, func(u *objects.Unit) {
+		r.g.mutate(mobA, func(u *world.Unit) {
 			u.Level = c.level
-			u.Auras = []objects.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}, {Name: "Curse of Agony", SpellID: spAgony, Harmful: true}}
+			u.Auras = []world.Aura{{Name: "Corruption", SpellID: spCorruption, Harmful: true}, {Name: "Curse of Agony", SpellID: spAgony, Harmful: true}}
 		})
 		setMobHP(r.g, mobA, c.pct)
 		d := r.tick(1600 * time.Millisecond)
@@ -294,7 +294,7 @@ func TestWarlockDrainsSoulOnADyingMobWhenShardsAreLow(t *testing.T) {
 
 func TestWarlockFearIsAnEmergencyNeverBesideATankOrANearbyPack(t *testing.T) {
 	hurt := func(r *rig) {
-		r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+		r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 		setHealth(r.g, 30)
 	}
 	// Alone with a mob on it: Death Coil first (it is the stronger answer), then Fear.
@@ -340,7 +340,7 @@ func TestWarlockFearIsAnEmergencyNeverBesideATankOrANearbyPack(t *testing.T) {
 	// Healthy: neither.
 	r, _ = newWarlock(t, Params{})
 	r.g.addUnit(mob(mobA, selfG), 8, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
 	}
@@ -356,7 +356,7 @@ func TestWarlockWardsShadowCastsAtIt(t *testing.T) {
 	warlockFight(r, pf)
 	open(r)
 	pf.setPet(func(p *PetState) { p.Target = mobA })
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &objects.Cast{SpellID: spShadowBolt, Target: selfG} })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &world.Cast{SpellID: spShadowBolt, Target: selfG} })
 	d := r.tick(400 * time.Millisecond)
 	if d == nil || d.Action != "shadow_ward" || d.Spell != spWard || d.Rel != RelInterrupt+1 || d.Target != selfG {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -365,7 +365,7 @@ func TestWarlockWardsShadowCastsAtIt(t *testing.T) {
 	r, pf = newWarlock(t, Params{})
 	warlockFight(r, pf)
 	open(r)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &objects.Cast{SpellID: 133, Target: selfG} }) // Fireball
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &world.Cast{SpellID: 133, Target: selfG} }) // Fireball
 	for i := 0; i < 2; i++ {
 		r.tick(1600 * time.Millisecond)
 	}
@@ -380,7 +380,7 @@ func TestWarlockUpkeepArmorAndHealthstone(t *testing.T) {
 	// Armor down: Demon Armor, out of combat.
 	r, pf := newWarlock(t, Params{})
 	pf.withPet()
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = nil })
+	r.g.setSelf(func(u *world.Unit) { u.Auras = nil })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "demon_armor" || d.Spell != spDemonArmor {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -410,10 +410,10 @@ func TestWarlockUpkeepArmorAndHealthstone(t *testing.T) {
 			pf.withPet()
 		}
 		setItems(r.g, c.shards, c.stones...)
-		r.g.setSelf(func(u *objects.Unit) { u.Power = c.mana })
+		r.g.setSelf(func(u *world.Unit) { u.Power = c.mana })
 		if c.inFight {
 			tankFights(r.g, 22, 24, 0)
-			r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+			r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 		}
 		for i := 0; i < 3; i++ {
 			r.tick(2 * time.Second)
@@ -471,7 +471,7 @@ func TestWarlockSummonsTheVoidwalkerWithAShardElseTheImp(t *testing.T) {
 	r, _ = newWarlock(t, Params{})
 	setItems(r.g, 1, itemMajorHS)
 	tankFights(r.g, 22, 24, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	for i := 0; i < 3; i++ {
 		r.tick(2 * time.Second)
 	}

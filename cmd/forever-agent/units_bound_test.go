@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -16,7 +15,7 @@ import (
 func TestUnitsMarkTheBoundBots(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	fr := tbm.ViewFrame{At: now.Add(-2 * time.Second), Party: []tbm.PartyRec{{GUID: 0x10, Name: "Tumble"}, {GUID: 0x11, Name: "Moonface"}}}
-	us := []objects.Unit{
+	us := []world.Unit{
 		{GUID: 0x10, Type: "player", Name: "Tumble"},
 		{GUID: 0x99, Type: "player", Name: "Stranger"},
 		{GUID: 0x11, Type: "player", Name: "Moonface"},
@@ -34,11 +33,11 @@ func TestUnitsMarkTheBoundBots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the unit's own fields stay flat, so callers that read []objects.Unit still decode a row
+	// the unit's own fields stay flat, so callers that read []world.Unit still decode a row
 	if s := string(raw); !strings.Contains(s, `"bound":true`) || !strings.Contains(s, `"name":"Tumble"`) || strings.Contains(s, `"Unit"`) {
 		t.Fatalf("row json %s", s)
 	}
-	var back objects.Unit
+	var back world.Unit
 	if err := json.Unmarshal(raw, &back); err != nil || back.GUID != world.GUID(0x10) {
 		t.Fatalf("decode %+v %v", back, err)
 	}
@@ -53,7 +52,7 @@ func TestUnitsBoundNeedsAFreshFrame(t *testing.T) {
 	if b := boundGUIDs(tbm.ViewFrame{}, false, now); b != nil {
 		t.Fatalf("no frame marked %v", b)
 	}
-	if rows := unitRows([]objects.Unit{{GUID: 0x10}}, nil, true); len(rows) != 0 {
+	if rows := unitRows([]world.Unit{{GUID: 0x10}}, nil, true); len(rows) != 0 {
 		t.Fatalf("bound only without a frame: %+v", rows)
 	}
 	if rows := unitRows(nil, nil, false); rows == nil {

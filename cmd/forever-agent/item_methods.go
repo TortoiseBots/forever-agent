@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -57,7 +56,7 @@ type dismountParams struct {
 // registerItemMethods wires item use, corpse loot and mounts to the session cur returns at
 // each call (see registerMethodsFor).
 func registerItemMethods(srv *rpc.Server, cur func() *session.Session) {
-	srv.Register("use_item", rpc.Typed(func(ctx context.Context, p useItemParams) (objects.Item, error) {
+	srv.Register("use_item", rpc.Typed(func(ctx context.Context, p useItemParams) (world.Item, error) {
 		it, err := cur().UseItem(ctx, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot}, p.Target)
 		return it, rpcErr(err)
 	}))

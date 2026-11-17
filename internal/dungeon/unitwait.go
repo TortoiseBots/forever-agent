@@ -3,7 +3,6 @@ package dungeon
 import (
 	"slices"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -56,7 +55,7 @@ func (u *UnitWait) holds(sights []unitSight, known bool) bool {
 
 // storeSights turns the creatures of an object store into sightings, leaving out the GUIDs already seen (the feed is the fresher record) and
 // the units with no position yet.
-func storeSights(us []objects.Unit, have map[world.GUID]bool) []unitSight {
+func storeSights(us []world.Unit, have map[world.GUID]bool) []unitSight {
 	var out []unitSight
 	for _, u := range us {
 		if u.Type != "creature" || u.PosAgeMS < 0 || have[u.GUID] {

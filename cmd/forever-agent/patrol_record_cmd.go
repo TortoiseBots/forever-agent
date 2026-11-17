@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -426,14 +425,14 @@ func patrolRecordLoop(ctx context.Context, client *slotClient, env patrolRecordE
 		case st.Map != o.mapID:
 			return samples, fmt.Sprintf("left map %d (now on map %d)", o.mapID, st.Map)
 		}
-		var own objects.Unit
+		var own world.Unit
 		if err := client.Call(ctx, "unit", targetParams{GUID: st.GUID}, &own, 10*time.Second); err != nil {
 			return samples, "lost the agent: " + err.Error()
 		}
 		if own.InCombat {
 			return samples, "in combat"
 		}
-		var units []objects.Unit
+		var units []world.Unit
 		if err := client.Call(ctx, "units", unitsParams{Within: o.r + patrolRecordNearYd}, &units, 10*time.Second); err != nil {
 			return samples, "lost the agent: " + err.Error()
 		}
@@ -472,7 +471,7 @@ func patrolRecordLoop(ctx context.Context, client *slotClient, env patrolRecordE
 
 // patrolRecordUnitName is the unit's name for a stop reason, its entry when
 // no name is known.
-func patrolRecordUnitName(u objects.Unit) string {
+func patrolRecordUnitName(u world.Unit) string {
 	if u.Name != "" {
 		return u.Name
 	}

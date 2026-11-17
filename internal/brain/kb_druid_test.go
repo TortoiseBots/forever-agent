@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The druid rotations generated from the Turtle knowledge base (tools/kbrotgen/recipes/kb_*_druid.json): each spec's
@@ -44,7 +44,7 @@ func TestKBBalanceDruidRotationPlays(t *testing.T) {
 	if d := r.tick(2500 * time.Millisecond); d == nil || d.Action != "starfire" {
 		t.Fatalf("Arcane Eclipse: %+v idle %q", d, r.idle())
 	}
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Nature Eclipse", SpellID: 51442}} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Nature Eclipse", SpellID: 51442}} })
 	if d := r.tick(2500 * time.Millisecond); d == nil || d.Action != "wrath" || spells.Name(d.Spell) != "Wrath" {
 		t.Fatalf("Nature Eclipse: %+v idle %q", d, r.idle())
 	}
@@ -110,7 +110,7 @@ func kbBearRig(t *testing.T) (*rig, *meleeGame) {
 	m := mob(mobA, selfG)
 	m.O = math.Pi
 	g.addUnit(m, 3, 0)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true; u.Power = 300 })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true; u.Power = 300 })
 	mg.setSwing(mobA)
 	return r, mg
 }
@@ -151,7 +151,7 @@ func TestKBRestorationDruidRotationPlays(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "rejuvenation" || d.Target != tankG || spells.Name(d.Spell) != "Rejuvenation" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	g.addAura(tankG, objects.Aura{Name: "Rejuvenation", SpellID: drRejuv7})
+	g.addAura(tankG, world.Aura{Name: "Rejuvenation", SpellID: drRejuv7})
 	if d := r.tick(2 * time.Second); d == nil || d.Action != "regrowth" || spells.Name(d.Spell) != "Regrowth" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}

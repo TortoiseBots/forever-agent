@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The agent kept near the party (remote_near.go).
@@ -32,7 +32,7 @@ type nearGame struct {
 	onWalk       func(g *nearGame, to Point)
 	blockWalk    bool        // WalkSelf waits for its context to end (a long walk)
 	walking      atomic.Bool // a walk is under way
-	units        []objects.Unit
+	units        []world.Unit
 	noVisibleOff bool // the setup does not list `gm visible off`
 }
 
@@ -201,7 +201,7 @@ func TestObjectStepBringsTheAgentUp(t *testing.T) {
 	g := newNearGame(t, 3)
 	g.chestLoot = []tbm.ItemCount{{Entry: itMedallion, Count: 1}}
 	g.appearErr = []error{errors.New("not now")} // the walk's own appear fails; the object step's retry works
-	g.onAppear = func(n *nearGame) { n.gobjs = []objects.GameObject{chestObj()} }
+	g.onAppear = func(n *nearGame) { n.gobjs = []world.GameObject{chestObj()} }
 	plan := remotePlan(Leg{Name: "c", To: Point{200, 0, 0}, Steps: []Step{lootChestStep()}})
 	rep, err := nearRun(t, g, plan)
 	if err != nil {
@@ -212,10 +212,10 @@ func TestObjectStepBringsTheAgentUp(t *testing.T) {
 	}
 }
 
-func (n *nearGame) Units() []objects.Unit { return n.units }
+func (n *nearGame) Units() []world.Unit { return n.units }
 
-func corpseOf(entry uint32, at Point) objects.Unit {
-	return objects.Unit{GUID: 0xF130000309000099, Type: "creature", Entry: entry, X: at.X, Y: at.Y, Z: at.Z, PosAgeMS: 100, MaxHealth: 5000, Dead: true}
+func corpseOf(entry uint32, at Point) world.Unit {
+	return world.Unit{GUID: 0xF130000309000099, Type: "creature", Entry: entry, X: at.X, Y: at.Y, Z: at.Z, PosAgeMS: 100, MaxHealth: 5000, Dead: true}
 }
 
 func nearBossPlan() *Plan {
@@ -227,7 +227,7 @@ func nearBossPlan() *Plan {
 func TestResumedBossCorpseInTheAgentsStorePassesTheBossStep(t *testing.T) {
 	g := newNearGame(t, 3)
 	g.appearErr = []error{errors.New("not now")} // the walk's appear fails; the boss step's own keep-near works
-	g.onAppear = func(n *nearGame) { n.units = []objects.Unit{corpseOf(777, Point{62, 3, 0})} }
+	g.onAppear = func(n *nearGame) { n.units = []world.Unit{corpseOf(777, Point{62, 3, 0})} }
 	rep, err := nearRun(t, g, nearBossPlan())
 	if err != nil || len(g.appears) != 2 || !strings.Contains(notesOf(rep), "its corpse is in the agent's view") {
 		t.Fatalf("%v appears %v\n%s", err, g.appears, notesOf(rep))
@@ -244,7 +244,7 @@ func TestBossStepWithoutACorpseOrLedgerStillFails(t *testing.T) {
 	g = newNearGame(t, 3)
 	alive := corpseOf(777, Point{60, 0, 0})
 	alive.Dead, alive.Health = false, 5000
-	g.units = []objects.Unit{corpseOf(778, Point{60, 0, 0}), alive, corpseOf(777, Point{900, 900, 0})}
+	g.units = []world.Unit{corpseOf(778, Point{60, 0, 0}), alive, corpseOf(777, Point{900, 900, 0})}
 	if _, err := nearRun(t, g, nearBossPlan()); err == nil || !strings.Contains(err.Error(), "no living [777]") {
 		t.Fatalf("%v", err)
 	}
@@ -282,7 +282,7 @@ func TestNoAppearInACombat(t *testing.T) {
 // A step without positions takes no corpse as proof.
 func TestBossCorpseNeedsTheStepsPositions(t *testing.T) {
 	g := newNearGame(t, 3)
-	g.units = []objects.Unit{corpseOf(777, Point{60, 0, 0})}
+	g.units = []world.Unit{corpseOf(777, Point{60, 0, 0})}
 	d := NewRemoteDriver(nearBossPlan(), g, DefaultConfig(), opts(), g.clock())
 	if d.bossCorpseSeen(fightSpec{pick: []uint32{777}}) {
 		t.Fatal("a corpse counted for a step with no positions")
@@ -297,8 +297,8 @@ func TestBossCorpseNeedsTheStepsPositions(t *testing.T) {
 // sealAt is the Seal of Khaz'Mul 60 yd on from the Keystone, where the lead bot stands: out of the agent's view until it has walked toward it.
 var sealAt = Point{20, 60, 0}
 
-func sealObj(state string) objects.GameObject {
-	return objects.GameObject{GUID: 0x1F1000000000AAA3, Entry: goSeal, X: sealAt.X, Y: sealAt.Y, Z: sealAt.Z, Distance: 40, State: state}
+func sealObj(state string) world.GameObject {
+	return world.GameObject{GUID: 0x1F1000000000AAA3, Entry: goSeal, X: sealAt.X, Y: sealAt.Y, Z: sealAt.Z, Distance: 40, State: state}
 }
 
 func sealStep() []Step {
@@ -310,7 +310,7 @@ func sealStep() []Step {
 
 func nearKeystoneGame(t *testing.T, level int) *nearGame {
 	g := newNearGame(t, level)
-	g.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+	g.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	g.bag("Magey")[itStaff] = 1
 	return g
 }
@@ -401,7 +401,7 @@ func TestAgentDoesNotWalkPastAMobInTheMiddleOfALongWay(t *testing.T) {
 		}
 		// Only in the agent's store.
 		g = newNearGame(t, level)
-		g.units = []objects.Unit{{GUID: 0xF130000309000077, Type: "creature", Entry: 299, Name: "Stonevault Ambusher", X: 22, Y: 80, PosAgeMS: 100, Health: 900, MaxHealth: 900, Hostile: true}}
+		g.units = []world.Unit{{GUID: 0xF130000309000077, Type: "creature", Entry: 299, Name: "Stonevault Ambusher", X: 22, Y: 80, PosAgeMS: 100, Health: 900, MaxHealth: 900, Hostile: true}}
 		rep, err = nearRun(t, g, plan())
 		if err == nil || !strings.Contains(notesOf(rep), "Stonevault Ambusher (in the agent's view) stands near its way") {
 			t.Fatalf("level %d store: %v walks %v\n%s", level, err, g.walks, notesOf(rep))
@@ -413,7 +413,7 @@ func TestAgentDoesNotWalkPastAMobInTheMiddleOfALongWay(t *testing.T) {
 		}
 		// A dead one, a friendly one and a player do not block.
 		g = newNearGame(t, level)
-		g.units = []objects.Unit{
+		g.units = []world.Unit{
 			{GUID: 0xF130000309000078, Type: "creature", Entry: 299, X: 22, Y: 80, PosAgeMS: 100, Dead: true, Hostile: true},
 			{GUID: 0xF130000309000079, Type: "creature", Entry: 300, X: 22, Y: 90, PosAgeMS: 100, Health: 9, MaxHealth: 9},
 			{GUID: 0xF13000030900007A, Type: "player", X: 22, Y: 100, PosAgeMS: 100, Health: 9, MaxHealth: 9, Hostile: true},

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -66,7 +65,7 @@ func (o *classOps) CancelAura(ctx context.Context, spell uint32) error {
 	}
 	o.g.mu.Lock()
 	defer o.g.mu.Unlock()
-	var keep []objects.Aura
+	var keep []world.Aura
 	for _, a := range o.g.self.Auras {
 		if a.SpellID == spell {
 			// Leaving a form puts the mana back in the power.
@@ -142,15 +141,15 @@ func druidSelf(g *fakeGame) {
 	g.self.Class, g.self.Level = ClassDruid, 40
 	g.self.Health, g.self.MaxHealth = 1200, 1200
 	g.self.PowerType, g.self.Power, g.self.MaxPower = 0, 1000, 1000
-	g.self.Auras = []objects.Aura{{Name: "Mark of the Wild", SpellID: drMotw5}}
+	g.self.Auras = []world.Aura{{Name: "Mark of the Wild", SpellID: drMotw5}}
 }
 
 // formAura is the aura of a form.
-func formAura(name string, id uint32) objects.Aura { return objects.Aura{Name: name, SpellID: id} }
+func formAura(name string, id uint32) world.Aura { return world.Aura{Name: name, SpellID: id} }
 
 // shiftTo puts the druid into a form: the form's aura, the form's power (energy 100 or rage 0), the mana kept aside.
 func shiftTo(g *fakeGame, name string, id uint32) {
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		mana, max := u.Power, u.MaxPower
 		if u.PowerType != 0 {
 			mana, max = u.Mana, u.MaxMana
@@ -170,7 +169,7 @@ func shiftTo(g *fakeGame, name string, id uint32) {
 }
 
 func setManaTrue(g *fakeGame, pct uint32) {
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		if u.PowerType == 0 {
 			u.Power = u.MaxPower * pct / 100
 		} else {
@@ -180,15 +179,15 @@ func setManaTrue(g *fakeGame, pct uint32) {
 }
 
 func setCP(g *fakeGame, n uint8, target world.GUID) {
-	g.setSelf(func(u *objects.Unit) { u.ComboPoints, u.ComboTarget = n, target })
+	g.setSelf(func(u *world.Unit) { u.ComboPoints, u.ComboTarget = n, target })
 }
 
 func mobAura(g *fakeGame, name string, id uint32) {
-	g.mutate(mobA, func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: name, SpellID: id, Harmful: true}) })
+	g.mutate(mobA, func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: name, SpellID: id, Harmful: true}) })
 }
 
 func selfAura(g *fakeGame, name string, id uint32) {
-	g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: name, SpellID: id}) })
+	g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: name, SpellID: id}) })
 }
 
 // ---- the spell data the druid relies on ----
@@ -415,7 +414,7 @@ func TestRestoKeepsRejuvenationOnTheTank(t *testing.T) {
 	if d == nil || d.Action != "hot_tank" || d.Target != tankG || spells.Name(d.Spell) != "Rejuvenation" || d.Spell != drRejuv7 {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(tankG, objects.Aura{Name: "Rejuvenation", SpellID: drRejuv7})
+	g.addAura(tankG, world.Aura{Name: "Rejuvenation", SpellID: drRejuv7})
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("the HoT is on: %+v", d)
 	}
@@ -430,13 +429,13 @@ func TestRestoKeepsRejuvenationOnTheTank(t *testing.T) {
 func TestRestoDispelsPoisonAndCurse(t *testing.T) {
 	r, g := restoRig(t)
 	g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g.addAura(dpsG1, objects.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
+	g.addAura(dpsG1, world.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "dispel" || d.Spell != drAbolish || d.Target != dpsG1 {
 		t.Fatalf("%+v", d)
 	}
 	// The cure is working on it: left alone. Without Abolish Poison the plain cure goes.
-	g.addAura(dpsG1, objects.Aura{Name: "Abolish Poison", SpellID: drAbolish})
+	g.addAura(dpsG1, world.Aura{Name: "Abolish Poison", SpellID: drAbolish})
 	if d := r.tick(5 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -448,13 +447,13 @@ func TestRestoDispelsPoisonAndCurse(t *testing.T) {
 	}
 	r2, g2 := restoRig(t, noAbolish...)
 	g2.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g2.addAura(dpsG1, objects.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
+	g2.addAura(dpsG1, world.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Spell != drCurePoison {
 		t.Fatalf("%+v", d)
 	}
 	r3, g3 := restoRig(t)
 	g3.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g3.addAura(dpsG1, objects.Aura{Name: "Curse of Agony", SpellID: auraCurse, Harmful: true})
+	g3.addAura(dpsG1, world.Aura{Name: "Curse of Agony", SpellID: auraCurse, Harmful: true})
 	if d := r3.tick(100 * time.Millisecond); d == nil || d.Spell != drRemoveCurse || d.Target != dpsG1 {
 		t.Fatalf("%+v", d)
 	}
@@ -545,9 +544,9 @@ func TestInnervateOnTheDruidWhenDry(t *testing.T) {
 func TestDruidBuffsOutOfCombatInCasterFormOnly(t *testing.T) {
 	r, g := restoRig(t)
 	g.self.InCombat = false
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	g.member(tankG, "Tankard", 1, 1000, 1000, 6, 0)
-	g.mutate(tankG, func(u *objects.Unit) { u.InCombat = false; u.Auras = []objects.Aura{} })
+	g.mutate(tankG, func(u *world.Unit) { u.InCombat = false; u.Auras = []world.Aura{} })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "mark_of_the_wild" || d.Target != selfG || d.Spell != drMotw5 {
 		t.Fatalf("%+v", d)
@@ -556,21 +555,21 @@ func TestDruidBuffsOutOfCombatInCasterFormOnly(t *testing.T) {
 	if d = r.tick(2 * time.Second); d == nil || d.Action != "mark_of_the_wild" || d.Target != tankG {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(tankG, objects.Aura{Name: "Gift of the Wild", SpellID: 21849})
+	g.addAura(tankG, world.Aura{Name: "Gift of the Wild", SpellID: 21849})
 	d = r.tick(2 * time.Second)
 	if d == nil || d.Action != "thorns" || d.Target != tankG || d.Spell != drThorns4 {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(tankG, objects.Aura{Name: "Thorns", SpellID: drThorns4})
+	g.addAura(tankG, world.Aura{Name: "Thorns", SpellID: drThorns4})
 	if d = r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
 	// Nothing in combat, nothing at a walk (no rest gate), nothing with little mana.
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{}; u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{}; u.InCombat = true })
 	if d = r.tick(2 * time.Second); d != nil && d.Action == "mark_of_the_wild" {
 		t.Fatalf("buffed in combat: %+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	r.b.restOK = func() bool { return false }
 	if d = r.tick(2 * time.Second); d != nil {
 		t.Fatalf("buffed on the walk: %+v", d)
@@ -632,7 +631,7 @@ func TestBalanceRotation(t *testing.T) {
 func TestBalanceMovesOnlyWithInstants(t *testing.T) {
 	r, g := balanceRig(t)
 	r.tick(100 * time.Millisecond)
-	g.setSelf(func(u *objects.Unit) { u.Moving = true })
+	g.setSelf(func(u *world.Unit) { u.Moving = true })
 	if d := open(r); d == nil || d.Action != "moonfire" {
 		t.Fatalf("an instant goes on the move: %+v", d)
 	}
@@ -666,14 +665,14 @@ func TestBalanceRootsAMobThatHasPickedIt(t *testing.T) {
 	if d != nil && d.Action == "entangling_roots" {
 		t.Fatalf("the druid is healthy: %+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Health = 800 }) // 67%
+	g.setSelf(func(u *world.Unit) { u.Health = 800 }) // 67%
 	d = r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "entangling_roots" || d.Target != mobB || d.Spell != drRoots {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// Rooted, it is not rooted again.
-	g.mutate(mobB, func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Entangling Roots", SpellID: drRoots, Harmful: true})
+	g.mutate(mobB, func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Entangling Roots", SpellID: drRoots, Harmful: true})
 	})
 	if d := r.tick(2 * time.Second); d != nil && d.Action == "entangling_roots" {
 		t.Fatalf("%+v", d)
@@ -693,7 +692,7 @@ func TestBalanceStepsAwayFromTheRootedMob(t *testing.T) {
 	cf := newMeleeGame(g)
 	r := rigOn(t, cf, g, Params{Strategies: []string{"balance_druid"}})
 	rooted := mob(mobB, selfG)
-	rooted.Auras = []objects.Aura{{Name: "Entangling Roots", SpellID: drRoots, Harmful: true}}
+	rooted.Auras = []world.Aura{{Name: "Entangling Roots", SpellID: drRoots, Harmful: true}}
 	g.addUnit(rooted, 4, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "step_away" || len(cf.walkList()) != 1 {
@@ -817,9 +816,9 @@ func TestCatShredsOnlyFromBehind(t *testing.T) {
 		t.Fatalf("Claw is the builder from the front: %+v idle %q", d, r.idle())
 	}
 	// Walked round behind the mob (the melee position's work), the same cat shreds.
-	g.setSelf(func(u *objects.Unit) { u.X = 8 })
-	g.mutate(tankG, func(u *objects.Unit) {})
-	g.mutate(mobA, func(u *objects.Unit) {})
+	g.setSelf(func(u *world.Unit) { u.X = 8 })
+	g.mutate(tankG, func(u *world.Unit) {})
+	g.mutate(mobA, func(u *world.Unit) {})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "shred" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -861,9 +860,9 @@ func TestCatEnergyDecidesWhatItCanDo(t *testing.T) {
 func TestCatNeverLeavesItsFormInCombat(t *testing.T) {
 	r, mg := catRig(t)
 	catFight(r, mg)
-	r.g.items = []objects.Item{{Entry: itemSpringWater, Count: 5}, {Entry: itemBread, Count: 5}, {Entry: 929, Count: 2}}
+	r.g.items = []world.Item{{Entry: itemSpringWater, Count: 5}, {Entry: itemBread, Count: 5}, {Entry: 929, Count: 2}}
 	setManaTrue(r.g, 5)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 200; u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 200; u.InCombat = true })
 	for i := 0; i < 4; i++ {
 		d := r.tick(1600 * time.Millisecond)
 		if d != nil && (d.Action == "leave_form" || d.Action == "drink" || d.Action == "eat" || d.Action == "health_potion") {
@@ -877,7 +876,7 @@ func TestCatNeverLeavesItsFormInCombat(t *testing.T) {
 
 func TestCatLeavesItsFormToDrinkAndShiftsBack(t *testing.T) {
 	r, mg := catRig(t)
-	r.g.items = []objects.Item{{Entry: itemSpringWater, Count: 5}}
+	r.g.items = []world.Item{{Entry: itemSpringWater, Count: 5}}
 	setManaTrue(r.g, 20)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_form" || d.Result != ResultOK {
@@ -895,8 +894,8 @@ func TestCatLeavesItsFormToDrinkAndShiftsBack(t *testing.T) {
 		t.Fatalf("%+v used %v", d, r.g.used)
 	}
 	// While it drinks it does not shift (that would break the meal) ...
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Drink", SpellID: 430})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Drink", SpellID: 430})
 		u.StandState = "sit_chair"
 	})
 	if d := r.tick(2 * time.Second); d != nil && d.Action == "enter_form" {
@@ -904,8 +903,8 @@ func TestCatLeavesItsFormToDrinkAndShiftsBack(t *testing.T) {
 	}
 	// ... when it has drunk, it shifts back.
 	setManaTrue(r.g, 100)
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Mark of the Wild", SpellID: drMotw5}}
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Mark of the Wild", SpellID: drMotw5}}
 		u.StandState = "stand"
 	})
 	d = r.tick(2 * time.Second)
@@ -915,12 +914,12 @@ func TestCatLeavesItsFormToDrinkAndShiftsBack(t *testing.T) {
 }
 
 // PowerPctOf is the power of a unit row in percent, for the tests.
-func PowerPctOf(u objects.Unit) int { return int(uint64(u.Power) * 100 / uint64(u.MaxPower)) }
+func PowerPctOf(u world.Unit) int { return int(uint64(u.Power) * 100 / uint64(u.MaxPower)) }
 
 func TestCatLeavesItsFormToEat(t *testing.T) {
 	r, mg := catRig(t)
-	r.g.items = []objects.Item{{Entry: itemBread, Count: 5}}
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 600 })
+	r.g.items = []world.Item{{Entry: itemBread, Count: 5}}
+	r.g.setSelf(func(u *world.Unit) { u.Health = 600 })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_form" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -933,7 +932,7 @@ func TestCatLeavesItsFormToEat(t *testing.T) {
 	}
 	// With nothing to eat it stays in its form: the meal would not be there.
 	r2, mg2 := catRig(t)
-	r2.g.setSelf(func(u *objects.Unit) { u.Health = 600 })
+	r2.g.setSelf(func(u *world.Unit) { u.Health = 600 })
 	if d := r2.tick(100 * time.Millisecond); d != nil || len(mg2.cancelList()) != 0 {
 		t.Fatalf("%+v cancels %v", d, mg2.cancelList())
 	}
@@ -943,7 +942,7 @@ func TestCatLeavesItsFormToEat(t *testing.T) {
 // as no_items_in_form every 3 s.
 func TestCatAsksForNoMealInItsFormWithNothingToEat(t *testing.T) {
 	r, _ := catRig(t)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 600 }) // half of its 1200
+	r.g.setSelf(func(u *world.Unit) { u.Health = 600 }) // half of its 1200
 	r.g.evs = nil
 	for i := 0; i < 3; i++ {
 		if d := r.tick(time.Second); d != nil {
@@ -975,7 +974,7 @@ func TestCatDoesNotAskForRipOrBiteShortOfItsPoints(t *testing.T) {
 
 func TestCatLeavesItsFormToBuffWhenTheManaIsGood(t *testing.T) {
 	r, mg := catRig(t)
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{formAura(formCat, drCat)} }) // no Mark of the Wild
+	r.g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{formAura(formCat, drCat)} }) // no Mark of the Wild
 	setManaTrue(r.g, 90)
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "leave_form" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -992,7 +991,7 @@ func TestCatLeavesItsFormToBuffWhenTheManaIsGood(t *testing.T) {
 	}
 	// With the mana low the shift back would not be affordable: it stays in the form unbuffed.
 	r2, mg2 := catRig(t)
-	r2.g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{formAura(formCat, drCat)} })
+	r2.g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{formAura(formCat, drCat)} })
 	setManaTrue(r2.g, 40)
 	if d := r2.tick(100 * time.Millisecond); d != nil || len(mg2.cancelList()) != 0 {
 		t.Fatalf("%+v cancels %v", d, mg2.cancelList())
@@ -1001,16 +1000,16 @@ func TestCatLeavesItsFormToBuffWhenTheManaIsGood(t *testing.T) {
 
 func TestCatLeavesAFormThatIsNotItsOwnOutOfCombatOnly(t *testing.T) {
 	r, mg := catRig(t)
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{formAura(formTravel, drTravel), {Name: "Mark of the Wild", SpellID: drMotw5}}
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{formAura(formTravel, drTravel), {Name: "Mark of the Wild", SpellID: drMotw5}}
 	})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "leave_form" || mg.cancelList()[0] != drTravel {
 		t.Fatalf("%+v cancels %v", d, mg.cancelList())
 	}
 	r2, mg2 := catRig(t)
-	r2.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{formAura(formBear, drBear)}
+	r2.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{formAura(formBear, drBear)}
 		u.InCombat = true
 	})
 	tankFights(r2.g, 7, 4, 0)
@@ -1039,7 +1038,7 @@ func bearRig(t *testing.T, known ...uint32) (*rig, *meleeGame) {
 	return rigOn(t, mg, g, Params{Strategies: []string{"bear_tank_druid"}}), mg
 }
 
-func setRageB(g *fakeGame, tenths uint32) { g.setSelf(func(u *objects.Unit) { u.Power = tenths }) }
+func setRageB(g *fakeGame, tenths uint32) { g.setSelf(func(u *world.Unit) { u.Power = tenths }) }
 
 // bearFight puts a mob on the bear, 3 yards east, the bear swinging at it. The bear has 30 rage and Enrage up, so that a test starts from
 // a quiet bear.
@@ -1047,10 +1046,10 @@ func bearFight(r *rig, mg *meleeGame) {
 	m := mob(mobA, selfG)
 	m.O = math.Pi // the mob faces the bear: the bear is the tank
 	r.g.addUnit(m, 3, 0)
-	r.g.setSelf(func(u *objects.Unit) {
+	r.g.setSelf(func(u *world.Unit) {
 		u.InCombat = true
 		u.Power = 300
-		u.Auras = append(u.Auras, objects.Aura{Name: "Enrage", SpellID: drEnrage})
+		u.Auras = append(u.Auras, world.Aura{Name: "Enrage", SpellID: drEnrage})
 	})
 	mg.setSwing(mobA)
 }
@@ -1061,7 +1060,7 @@ func TestBearShiftsIntoDireBearFormWhenItKnowsIt(t *testing.T) {
 	mg := newMeleeGame(g)
 	r := rigOn(t, mg, g, Params{Strategies: []string{"bear_tank_druid"}})
 	g.addUnit(mob(mobA, selfG), 3, 0)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "enter_form" || d.Spell != drDire {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -1071,7 +1070,7 @@ func TestBearShiftsIntoDireBearFormWhenItKnowsIt(t *testing.T) {
 	mg2 := newMeleeGame(g2)
 	r2 := rigOn(t, mg2, g2, Params{Strategies: []string{"bear_tank_druid"}})
 	g2.addUnit(mob(mobA, selfG), 3, 0)
-	g2.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g2.setSelf(func(u *world.Unit) { u.InCombat = true })
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Action != "enter_form" || d.Spell != drBear {
 		t.Fatalf("%+v", d)
 	}
@@ -1080,7 +1079,7 @@ func TestBearShiftsIntoDireBearFormWhenItKnowsIt(t *testing.T) {
 func TestBearRotation(t *testing.T) {
 	r, mg := bearRig(t)
 	bearFight(r, mg)
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = u.Auras[:len(u.Auras)-1]; u.Power = 50 }) // 5 rage and no Enrage: the start of a fight
+	r.g.setSelf(func(u *world.Unit) { u.Auras = u.Auras[:len(u.Auras)-1]; u.Power = 50 }) // 5 rage and no Enrage: the start of a fight
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "enrage" || d.Spell != drEnrage {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -1112,8 +1111,8 @@ func TestBearSwipesAndRoarsWithTwoMobsOnIt(t *testing.T) {
 	}
 	setRageB(r.g, 300)
 	for _, id := range []world.GUID{mobA, mobB} {
-		r.g.mutate(id, func(u *objects.Unit) {
-			u.Auras = append(u.Auras, objects.Aura{Name: "Demoralizing Roar", SpellID: drRoar, Harmful: true})
+		r.g.mutate(id, func(u *world.Unit) {
+			u.Auras = append(u.Auras, world.Aura{Name: "Demoralizing Roar", SpellID: drRoar, Harmful: true})
 		})
 	}
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "swipe" {
@@ -1125,7 +1124,7 @@ func TestBearGrowlsAtALooseAddOnlyInBearForm(t *testing.T) {
 	r, mg := bearRig(t)
 	bearFight(r, mg)
 	r.g.party = []Member{{Name: "Mage", GUID: dpsG1, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
+	r.g.addUnit(world.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
 	r.g.addUnit(mob(mobB, dpsG1), 4, 3) // 5 yards: Growl reaches 5
 	d := r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "taunt" || d.Spell != drGrowl || d.Target != mobB {
@@ -1134,12 +1133,12 @@ func TestBearGrowlsAtALooseAddOnlyInBearForm(t *testing.T) {
 	// In another form the taunt is not possible (it would be refused): the druid cannot growl as a cat.
 	r2, mg2 := bearRig(t)
 	bearFight(r2, mg2)
-	r2.g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{formAura(formCat, drCat), {Name: "Enrage", SpellID: drEnrage}}
+	r2.g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{formAura(formCat, drCat), {Name: "Enrage", SpellID: drEnrage}}
 		u.PowerType, u.Power, u.MaxPower = 3, 100, 100
 	})
 	r2.g.party = []Member{{Name: "Mage", GUID: dpsG1, Online: true}}
-	r2.g.addUnit(objects.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
+	r2.g.addUnit(world.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: 8, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
 	r2.g.addUnit(mob(mobB, dpsG1), 4, 3)
 	if d := r2.tick(1600 * time.Millisecond); d != nil && d.Action == "taunt" {
 		t.Fatalf("%+v", d)
@@ -1149,7 +1148,7 @@ func TestBearGrowlsAtALooseAddOnlyInBearForm(t *testing.T) {
 func TestBearFrenziedRegenerationIsTheEmergency(t *testing.T) {
 	r, mg := bearRig(t)
 	bearFight(r, mg)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 600; u.Power = 400 }) // 30%, 40 rage
+	r.g.setSelf(func(u *world.Unit) { u.Health = 600; u.Power = 400 }) // 30%, 40 rage
 	d := r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "frenzied_regeneration" || d.Spell != drFrenzied || d.Rel < RelInterrupt {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -1157,13 +1156,13 @@ func TestBearFrenziedRegenerationIsTheEmergency(t *testing.T) {
 	// Without the rage to turn into health it is no help, and at 40% health it is not yet the hour.
 	r2, mg2 := bearRig(t)
 	bearFight(r2, mg2)
-	r2.g.setSelf(func(u *objects.Unit) { u.Health = 600; u.Power = 50 })
+	r2.g.setSelf(func(u *world.Unit) { u.Health = 600; u.Power = 50 })
 	if d := r2.tick(1600 * time.Millisecond); d != nil && d.Action == "frenzied_regeneration" {
 		t.Fatalf("%+v", d)
 	}
 	r3, mg3 := bearRig(t)
 	bearFight(r3, mg3)
-	r3.g.setSelf(func(u *objects.Unit) { u.Health = 800; u.Power = 300 })
+	r3.g.setSelf(func(u *world.Unit) { u.Health = 800; u.Power = 300 })
 	if d := r3.tick(1600 * time.Millisecond); d != nil && d.Action == "frenzied_regeneration" {
 		t.Fatalf("%+v", d)
 	}
@@ -1172,9 +1171,9 @@ func TestBearFrenziedRegenerationIsTheEmergency(t *testing.T) {
 func TestBearNeverLeavesItsFormInCombat(t *testing.T) {
 	r, mg := bearRig(t)
 	bearFight(r, mg)
-	r.g.items = []objects.Item{{Entry: itemSpringWater, Count: 5}, {Entry: itemBread, Count: 5}}
+	r.g.items = []world.Item{{Entry: itemSpringWater, Count: 5}, {Entry: itemBread, Count: 5}}
 	setManaTrue(r.g, 5)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 700 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 700 })
 	for i := 0; i < 3; i++ {
 		if d := r.tick(1600 * time.Millisecond); d != nil && (d.Action == "leave_form" || d.Action == "eat" || d.Action == "drink") {
 			t.Fatalf("%+v", d)
@@ -1191,18 +1190,18 @@ func TestUnitManaWhileShapeshifted(t *testing.T) {
 	g := newFake()
 	druidSelf(g)
 	shiftTo(g, formCat, drCat)
-	g.setSelf(func(u *objects.Unit) { u.Mana, u.MaxMana = 300, 1000 })
+	g.setSelf(func(u *world.Unit) { u.Mana, u.MaxMana = 300, 1000 })
 	r := rigOn(t, g, g, Params{Strategies: []string{"frost_mage"}})
 	c := r.b.newCtx(g.clk.Now())
 	if pct, ok := manaPct(c); !ok || pct != 30 {
 		t.Fatalf("%d %v", pct, ok)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Mana, u.MaxMana = 0, 0 })
+	g.setSelf(func(u *world.Unit) { u.Mana, u.MaxMana = 0, 0 })
 	c = r.b.newCtx(g.clk.Now())
 	if _, ok := manaPct(c); ok {
 		t.Fatal("a game that does not say has no answer")
 	}
-	g.setSelf(func(u *objects.Unit) { u.PowerType, u.Power, u.MaxPower = 0, 250, 1000 })
+	g.setSelf(func(u *world.Unit) { u.PowerType, u.Power, u.MaxPower = 0, 250, 1000 })
 	c = r.b.newCtx(g.clk.Now())
 	if pct, ok := manaPct(c); !ok || pct != 25 {
 		t.Fatalf("%d %v", pct, ok)

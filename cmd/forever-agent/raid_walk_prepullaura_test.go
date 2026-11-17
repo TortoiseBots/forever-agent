@@ -20,7 +20,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
@@ -206,15 +205,15 @@ func (a *prepullAgent) queueBotStates() {
 }
 
 // aurasOf is the auras the unit RPC reports for a bot, in id order.
-func (a *prepullAgent) aurasOf(g world.GUID) []objects.Aura {
+func (a *prepullAgent) aurasOf(g world.GUID) []world.Aura {
 	ids := make([]uint32, 0, len(a.auras[g]))
 	for id := range a.auras[g] {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	out := make([]objects.Aura, len(ids))
+	out := make([]world.Aura, len(ids))
 	for i, id := range ids {
-		out[i] = objects.Aura{Slot: i, SpellID: id}
+		out[i] = world.Aura{Slot: i, SpellID: id}
 	}
 	return out
 }
@@ -305,9 +304,9 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 			return err
 		}
 		if g == a.selfGUID {
-			u := objects.Unit{GUID: g, Type: "player", Name: a.selfName, InCombat: a.selfCombat}
+			u := world.Unit{GUID: g, Type: "player", Name: a.selfName, InCombat: a.selfCombat}
 			for id := range a.caster {
-				u.Auras = append(u.Auras, objects.Aura{SpellID: id})
+				u.Auras = append(u.Auras, world.Aura{SpellID: id})
 			}
 			v = u
 			break
@@ -326,7 +325,7 @@ func (a *prepullAgent) Call(ctx context.Context, method string, params, out any,
 		if until, ok := a.unseenUntil[a.nameOf(g)]; ok && a.clock.Before(until) {
 			return errors.New("unit: no such unit")
 		}
-		v = objects.Unit{GUID: g, Type: "player", Name: a.nameOf(g), Class: a.classes[g],
+		v = world.Unit{GUID: g, Type: "player", Name: a.nameOf(g), Class: a.classes[g],
 			InCombat: a.combat || a.combatBots[g], Dead: a.deadBots[a.nameOf(g)], Auras: a.aurasOf(g)}
 	case "gm_aura":
 		var p struct {

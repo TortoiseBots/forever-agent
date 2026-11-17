@@ -22,7 +22,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/config"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planscout"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
@@ -160,7 +159,7 @@ func (sl *scoutLive) run(ctx context.Context, preFixes []planscout.Fix) (plansco
 	sl.data.Paths = map[int]planscout.ScoutPath{}
 	sl.data.ExtraPaths = map[int][]planscout.ScoutPath{}
 	sl.data.Walks = map[int]planscout.WalkResult{}
-	sl.data.Units = map[int][]objects.Unit{}
+	sl.data.Units = map[int][]world.Unit{}
 	sl.data.LOS = map[planscout.LOSKey]bool{}
 	if err := sl.openLog(); err != nil {
 		return sl.data, exitUsage, err.Error()
@@ -935,7 +934,7 @@ func (sl *scoutLive) addUnits(step int, units []ttUnit) {
 }
 
 // objectUnit joins a toolkit unit to the world export (its level, faction and hostility) and gives it its full GUID.
-func (sl *scoutLive) objectUnit(u ttUnit) objects.Unit {
+func (sl *scoutLive) objectUnit(u ttUnit) world.Unit {
 	entry := u.Entry
 	level, hostile, faction := uint32(0), false, uint32(0)
 	if sl.world != nil {
@@ -951,12 +950,12 @@ func (sl *scoutLive) objectUnit(u ttUnit) objects.Unit {
 		}
 	}
 	guid := world.CreatureGUID(entry, u.Spawn)
-	return objects.Unit{GUID: guid, Type: "creature", Entry: entry, Name: u.Name, X: u.X, Y: u.Y, Z: u.Z,
+	return world.Unit{GUID: guid, Type: "creature", Entry: entry, Name: u.Name, X: u.X, Y: u.Y, Z: u.Z,
 		Health: uint32(u.MaxHP), MaxHealth: uint32(u.MaxHP), Level: level, Faction: faction, Dead: u.Dead, Hostile: hostile}
 }
 
 // withinReach says a live unit stands within its aggro reach plus the stand spread of a spot.
-func (sl *scoutLive) withinReach(u objects.Unit, p dungeon.Point, fallback float64) bool {
+func (sl *scoutLive) withinReach(u world.Unit, p dungeon.Point, fallback float64) bool {
 	spread := float64(planscout.StandPullMarginYd)
 	if sl.options().Raid {
 		spread = 10

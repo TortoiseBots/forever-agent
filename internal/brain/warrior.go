@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The warrior, the second class of the brain (issue #80 step 3c): Arms and Fury as damage dealers, a basic tank. The rotation is
@@ -68,7 +68,7 @@ const (
 // ---- helpers ----
 
 // InStance reports whether the unit carries one of the stance auras.
-func InStance(u *objects.Unit, names ...string) bool { return HasAura(u, names...) }
+func InStance(u *world.Unit, names ...string) bool { return HasAura(u, names...) }
 
 // stanceSpell is the stance's spell id when the player knows it.
 func stanceSpell(c *Ctx, name string) (uint32, bool) {
@@ -124,12 +124,12 @@ func feared(c *Ctx) bool {
 }
 
 // fleeing is the stand-in for "the mob runs away at low health": a mob at low health that moves while within reach of a hamstring.
-func fleeing(m *objects.Unit) bool {
+func fleeing(m *world.Unit) bool {
 	return m != nil && m.Moving && mobHealthPct(m) <= hamstringPct && m.Distance >= 0 && m.Distance <= 7 && !HasAura(m, "Hamstring")
 }
 
 // sunderStacksOn is how many Sunder Armor stacks the mob carries.
-func sunderStacksOn(m *objects.Unit) int {
+func sunderStacksOn(m *world.Unit) int {
 	if m == nil {
 		return 0
 	}
@@ -315,7 +315,7 @@ func nextSwing(name, spell string, threat ThreatKind) *Action {
 
 // swingingAt says the player's auto attack is on the mob. A game that knows (Melee) is asked; otherwise the brain remembers its last
 // attack order, and repeats it every swingRefresh.
-func swingingAt(c *Ctx, m *objects.Unit) bool {
+func swingingAt(c *Ctx, m *world.Unit) bool {
 	if m == nil {
 		return true
 	}

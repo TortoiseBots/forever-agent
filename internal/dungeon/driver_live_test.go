@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -293,7 +292,7 @@ const stepPlan = `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"z":0
 func stepFixture(t *testing.T) (*fakeGame, *fakeUnit, *Plan) {
 	g := newFake()
 	m := g.add(99, 99, Point{5, 0, 0})
-	g.objs = append(g.objs, objects.GameObject{GUID: keystone, Entry: 124371, X: 20, State: "ready"})
+	g.objs = append(g.objs, world.GameObject{GUID: keystone, Entry: 124371, X: 20, State: "ready"})
 	g.afterGate = func(g *fakeGame) {
 		m.InCombat, m.Target, m.Health = true, leader, 50
 		m.dieAt = g.now.Add(8 * time.Second)
@@ -410,14 +409,14 @@ func TestStealthed(t *testing.T) {
 	}
 	// Decided by spell id: detection auras (common on ordinary spawns) and look-alike names are no stealth.
 	u := g.add(3, 1, Point{})
-	for _, a := range []objects.Aura{{SpellID: 8279, Name: "Stealth Detection"}, {SpellID: 18950, Name: "Invisibility and Stealth Detection"},
+	for _, a := range []world.Aura{{SpellID: 8279, Name: "Stealth Detection"}, {SpellID: 18950, Name: "Invisibility and Stealth Detection"},
 		{SpellID: 23330, Name: "No Stealth Detection"}, {SpellID: 6151, Name: "Sneaky"}, {SpellID: 7165, Name: "Battle Stance"}} {
-		u.Auras = []objects.Aura{a}
+		u.Auras = []world.Aura{a}
 		if Stealthed(u.Unit) {
 			t.Errorf("%s (%d) is not stealth", a.Name, a.SpellID)
 		}
 	}
-	u.Auras = []objects.Aura{{SpellID: 22766}} // Sneak, no name known
+	u.Auras = []world.Aura{{SpellID: 22766}} // Sneak, no name known
 	if !Stealthed(u.Unit) {
 		t.Error("sneak by id")
 	}
@@ -428,7 +427,7 @@ func TestDriverPullsAPackWithAStealthDetectionAura(t *testing.T) {
 	g := newFake()
 	for _, e := range []world.GUID{201, 202} {
 		u := g.add(e, 10, Point{30 + float32(e-201)*4, 0, 0})
-		u.Auras = []objects.Aura{{SpellID: 8279, Name: "Stealth Detection"}}
+		u.Auras = []world.Aura{{SpellID: 8279, Name: "Stealth Detection"}}
 	}
 	g.add(203, 3, Point{60, 0, 0})
 	d := NewDriver(mustPlan(t, ambushPlan), g, Config{}, g.clock())
@@ -444,7 +443,7 @@ func TestDriverPullsAPackWithAStealthDetectionAura(t *testing.T) {
 func TestDriverFightsABossWithAStealthDetectionAura(t *testing.T) {
 	g := newFake()
 	b := g.add(307, 7, Point{40, 0, 0})
-	b.Auras = []objects.Aura{{SpellID: 18950, Name: "Invisibility and Stealth Detection"}}
+	b.Auras = []world.Aura{{SpellID: 18950, Name: "Invisibility and Stealth Detection"}}
 	p := mustPlan(t, `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"z":0},"legs":[
 	 {"name":"boss","to":{"x":0,"y":0,"z":0},"boss":{"entry":7,"position":{"x":40,"y":0,"z":0}}}]}`)
 	d := NewDriver(p, g, Config{}, g.clock())

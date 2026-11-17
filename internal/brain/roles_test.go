@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func TestRoleResolution(t *testing.T) {
@@ -102,12 +102,12 @@ func TestWarriorPresetsListTheirStrategies(t *testing.T) {
 
 func addHealer(g *fakeGame, x, y float32) {
 	g.party = append(g.party, Member{Name: "Hilda", GUID: healG, Online: true})
-	g.addUnit(objects.Unit{GUID: healG, Type: "player", Name: "Hilda", Class: 5, InParty: true, Health: 700, MaxHealth: 700}, x, y)
+	g.addUnit(world.Unit{GUID: healG, Type: "player", Name: "Hilda", Class: 5, InParty: true, Health: 700, MaxHealth: 700}, x, y)
 }
 
 func tankRig(t *testing.T, known ...uint32) (*rig, *meleeFake) {
 	r, mf := newWarriorRig(t, "tank_warrior", stanceDefensive, Params{}, known...)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	return r, mf
 }
 
@@ -127,7 +127,7 @@ func TestTankTurnsTheMobAwayFromTheGroup(t *testing.T) {
 		t.Fatalf("the tank walked to %v, which is not across the mob from the healer", w)
 	}
 	// The mob turns to the tank's new place: the group is behind it and the tank holds it, no more walking, and no opening delay.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.O = float32(bearing(Vec3{u.X, u.Y, u.Z}, here(r.g))) })
+	r.g.mutate(mobA, func(u *world.Unit) { u.O = float32(bearing(Vec3{u.X, u.Y, u.Z}, here(r.g))) })
 	d = r.tick(3 * time.Second)
 	if d == nil || d.Action != "auto_attack" || len(mf.walkList()) != 1 {
 		t.Fatalf("%+v walks %v", d, mf.walkList())
@@ -149,7 +149,7 @@ func TestTankLeavesTheMobAloneWhenTheGroupIsToTheSide(t *testing.T) {
 func TestTankTauntsALooseAddAndOnlyInDefensiveStance(t *testing.T) {
 	setup := func(stance string) (*rig, *meleeFake) {
 		r, mf := newWarriorRig(t, "tank_warrior", stance, Params{})
-		r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+		r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 		held := mob(mobA, selfG)
 		held.O = 0
 		r.g.addUnit(held, 3, 0)
@@ -183,8 +183,8 @@ func TestTankKit(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "sunder" || d.Spell != spSunder {
 		t.Fatalf("no opening delay for a tank: %+v idle %q", d, r.idle())
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Sunder Armor", SpellID: spSunder, Stacks: 5, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Sunder Armor", SpellID: spSunder, Stacks: 5, Harmful: true}}
 	})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "heroic_strike" {
 		t.Fatalf("five stacks are enough: %+v", d)
@@ -210,7 +210,7 @@ func TestTankKit(t *testing.T) {
 
 	// Thunder Clap, then Demoralizing Shout, with two mobs on the tank; neither again once the mobs carry it.
 	r, mf = tankRig(t)
-	sundered := []objects.Aura{{Name: "Sunder Armor", SpellID: spSunder, Stacks: 5, Harmful: true}}
+	sundered := []world.Aura{{Name: "Sunder Armor", SpellID: spSunder, Stacks: 5, Harmful: true}}
 	a, b := mob(mobA, selfG), mob(mobB, selfG)
 	a.Auras, b.Auras = sundered, sundered
 	r.g.addUnit(a, 3, 0)
@@ -223,9 +223,9 @@ func TestTankKit(t *testing.T) {
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "demoralizing_shout" || d.Spell != spDemo {
 		t.Fatalf("%+v", d)
 	}
-	both := append([]objects.Aura{{Name: "Thunder Clap", Harmful: true}, {Name: "Demoralizing Shout", Harmful: true}}, sundered...)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = both })
-	r.g.mutate(mobB, func(u *objects.Unit) { u.Auras = both })
+	both := append([]world.Aura{{Name: "Thunder Clap", Harmful: true}, {Name: "Demoralizing Shout", Harmful: true}}, sundered...)
+	r.g.mutate(mobA, func(u *world.Unit) { u.Auras = both })
+	r.g.mutate(mobB, func(u *world.Unit) { u.Auras = both })
 	r.tick(7 * time.Second)
 	if got := casts(r.g); !eq(got, []uint32{spThunder, spDemo}) {
 		t.Fatalf("it kept clapping: %v", got)
@@ -236,7 +236,7 @@ func TestTankKit(t *testing.T) {
 	r.g.addUnit(mob(mobA, selfG), 3, 0)
 	mf.setSwing(mobA)
 	setRage(r.g, 300)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 800 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 800 })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "shield_block" || d.Spell != spShieldBlock {
 		t.Fatalf("%+v", d)
 	}
@@ -288,7 +288,7 @@ func TestTankDoesNotWalkForeverToTurnAMobThatStaysPut(t *testing.T) {
 			sunders++
 		}
 		setRage(r.g, 100)
-		r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = nil })
+		r.g.mutate(mobA, func(u *world.Unit) { u.Auras = nil })
 	}
 	if walkTicks != 2 || len(mf.walkList()) != 2 {
 		t.Fatalf("walked %d times: %v", walkTicks, mf.walkList())

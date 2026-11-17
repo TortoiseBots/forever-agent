@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -993,11 +992,11 @@ func TestPlacedReviveTriesEveryRowThenTheEntrance(t *testing.T) {
 	f.opts.wipeResume = 0
 	f.agent.startReply = zgPlaceReply(t)
 	// A hostile unit that follows the commander: every point is refused, so the walk runs the whole chain.
-	f.agent.unitsFn = func(int) []objects.Unit {
+	f.agent.unitsFn = func(int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Warder", Hostile: true, X: x + 10, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Warder", Hostile: true, X: x + 10, Y: y, Z: z}}
 	}
 	wipeAfterStart(f)
 	code := f.run(context.Background())
@@ -1120,9 +1119,9 @@ func TestPlacedReviveFallsBackToAnEarlierMoveRow(t *testing.T) {
 	}
 	dx, dy, dz := float64(p.X-prev.X), float64(p.Y-prev.Y), float64(p.Z-prev.Z)
 	norm := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	u := objects.Unit{Type: "creature", Name: "Zulian Cub", Entry: 11360, Hostile: true,
+	u := world.Unit{Type: "creature", Name: "Zulian Cub", Entry: 11360, Hostile: true,
 		X: p.X + float32(dx/norm*44), Y: p.Y + float32(dy/norm*44), Z: p.Z + float32(dz/norm*44)}
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{u} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{u} }
 	code := f.run(context.Background())
 	if code != exitRaidWalkIncident {
 		t.Fatalf("exit %d, want 19: %s\n%s", code, f.stderr.String(), f.stdout.String())

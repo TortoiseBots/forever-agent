@@ -10,7 +10,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -64,12 +63,12 @@ type fakeGame struct {
 	mu       sync.Mutex
 	clk      *fakeClock
 	st       *spellstate.State
-	self     objects.Unit
+	self     world.Unit
 	selfOK   bool
-	units    []objects.Unit
+	units    []world.Unit
 	party    []Member
 	selected world.GUID
-	items    []objects.Item
+	items    []world.Item
 	castErr  error
 	slow     bool // a cast stays in progress (SPELL_START without SPELL_GO)
 	block    chan struct{}
@@ -90,20 +89,20 @@ func newFake(known ...uint32) *fakeGame {
 	st := spellstate.New(clk.Now)
 	st.SetInitial(game.InitialSpells{Spells: known})
 	return &fakeGame{clk: clk, st: st, selfOK: true,
-		self: objects.Unit{GUID: selfG, Type: "player", Name: "Leader", Class: 8, Level: 30, Health: 800, MaxHealth: 800,
-			PowerType: 0, Power: manaFull, MaxPower: manaFull, StandState: "stand", Auras: []objects.Aura{}}}
+		self: world.Unit{GUID: selfG, Type: "player", Name: "Leader", Class: 8, Level: 30, Health: 800, MaxHealth: 800,
+			PowerType: 0, Power: manaFull, MaxPower: manaFull, StandState: "stand", Auras: []world.Aura{}}}
 }
 
-func (f *fakeGame) Self() (objects.Unit, bool) {
+func (f *fakeGame) Self() (world.Unit, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.self, f.selfOK
 }
 
-func (f *fakeGame) Units() []objects.Unit {
+func (f *fakeGame) Units() []world.Unit {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := append([]objects.Unit{}, f.units...)
+	out := append([]world.Unit{}, f.units...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Distance < out[j].Distance })
 	return out
 }
@@ -122,10 +121,10 @@ func (f *fakeGame) Selected() world.GUID {
 
 func (f *fakeGame) Spells() *spellstate.State { return f.st }
 
-func (f *fakeGame) Items() []objects.Item {
+func (f *fakeGame) Items() []world.Item {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]objects.Item{}, f.items...)
+	return append([]world.Item{}, f.items...)
 }
 
 func (f *fakeGame) Cast(ctx context.Context, spell uint32, target world.GUID) error {
@@ -198,7 +197,7 @@ func (f *fakeGame) Stand(ctx context.Context) error {
 	defer f.mu.Unlock()
 	f.stands++
 	f.self.StandState = "stand"
-	var keep []objects.Aura
+	var keep []world.Aura
 	for _, a := range f.self.Auras {
 		if a.Name != "Drink" && a.Name != "Food" {
 			keep = append(keep, a)
@@ -249,17 +248,17 @@ func (f *fakeGame) lastCast(t *testing.T) castCall {
 }
 
 // place puts a unit at x, y and gives it its distance from the player.
-func (f *fakeGame) place(u objects.Unit, x, y float32) objects.Unit {
+func (f *fakeGame) place(u world.Unit, x, y float32) world.Unit {
 	u.X, u.Y = x, y
 	u.Distance = float32(math.Hypot(float64(x-f.self.X), float64(y-f.self.Y)))
 	u.Distance2D = u.Distance
 	if u.Auras == nil {
-		u.Auras = []objects.Aura{}
+		u.Auras = []world.Aura{}
 	}
 	return u
 }
 
-func (f *fakeGame) addUnit(u objects.Unit, x, y float32) *objects.Unit {
+func (f *fakeGame) addUnit(u world.Unit, x, y float32) *world.Unit {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.units = append(f.units, f.place(u, x, y))
@@ -267,7 +266,7 @@ func (f *fakeGame) addUnit(u objects.Unit, x, y float32) *objects.Unit {
 }
 
 // mutate changes a unit of the scene by guid.
-func (f *fakeGame) mutate(g world.GUID, fn func(u *objects.Unit)) {
+func (f *fakeGame) mutate(g world.GUID, fn func(u *world.Unit)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.units {
@@ -278,7 +277,7 @@ func (f *fakeGame) mutate(g world.GUID, fn func(u *objects.Unit)) {
 	}
 }
 
-func (f *fakeGame) setSelf(fn func(u *objects.Unit)) {
+func (f *fakeGame) setSelf(fn func(u *world.Unit)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	fn(&f.self)
@@ -287,11 +286,11 @@ func (f *fakeGame) setSelf(fn func(u *objects.Unit)) {
 // A party of the leader and a warrior tank 25 yards east, with the tank's mob 30 yards east: the standard fight.
 func (f *fakeGame) partyWithTank() {
 	f.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	f.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 25, 0)
+	f.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 25, 0)
 }
 
-func mob(g world.GUID, target world.GUID) objects.Unit {
-	return objects.Unit{GUID: g, Type: "creature", Name: "Mob", Hostile: true, InCombat: true, Health: 500, MaxHealth: 500, Target: target}
+func mob(g world.GUID, target world.GUID) world.Unit {
+	return world.Unit{GUID: g, Type: "creature", Name: "Mob", Hostile: true, InCombat: true, Health: 500, MaxHealth: 500, Target: target}
 }
 
 // codeOf finds the SpellCastResult code of a reason name.

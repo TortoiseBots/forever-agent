@@ -7,7 +7,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/spellstate"
@@ -173,13 +172,13 @@ type sessionBrainGame struct {
 	trace *brainTrace // copies the brain's events into the session's trace; nil in tests that build the game bare
 }
 
-func (g *sessionBrainGame) Self() (objects.Unit, bool) {
+func (g *sessionBrainGame) Self() (world.Unit, bool) {
 	s := g.cur()
 	u, err := s.Unit(s.Status().GUID, "")
 	return u, err == nil
 }
 
-func (g *sessionBrainGame) Units() []objects.Unit { return g.cur().Units(objects.Filter{Limit: 2000}) }
+func (g *sessionBrainGame) Units() []world.Unit { return g.cur().Units(world.Filter{Limit: 2000}) }
 
 func (g *sessionBrainGame) Party() []brain.Member {
 	var out []brain.Member
@@ -193,7 +192,7 @@ func (g *sessionBrainGame) Selected() world.GUID { return g.cur().Status().Targe
 
 func (g *sessionBrainGame) Spells() *spellstate.State { return g.cur().SpellState() }
 
-func (g *sessionBrainGame) Items() []objects.Item { return g.cur().Items() }
+func (g *sessionBrainGame) Items() []world.Item { return g.cur().Items() }
 
 func (g *sessionBrainGame) Cast(ctx context.Context, spell uint32, target world.GUID) error {
 	return g.cur().Cast(ctx, spell, target)

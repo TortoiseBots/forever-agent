@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // ---- aggro: a mob that has picked the leader ----
 
 // interruptTarget finds the enemy cast to interrupt with the named spell: in the spell's range, the highest priority, the soonest
 // to end among those.
-func interruptTarget(c *Ctx, spell string) *objects.Unit {
+func interruptTarget(c *Ctx, spell string) *world.Unit {
 	id, ok := c.Spells.Highest(spell)
 	if !ok {
 		return nil
@@ -27,7 +27,7 @@ func TestRootedMobOnTheMageMakesItStepBackOutOfReach(t *testing.T) {
 	if d == nil || d.Action != "frost_nova" {
 		t.Fatalf("a mob in melee is answered with Frost Nova: %+v", d)
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Frost Nova", SpellID: spFrostNova}} })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Frost Nova", SpellID: spFrostNova}} })
 	d = r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "step_away" || d.Trigger != "rooted_mob_close" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -48,7 +48,7 @@ func TestBlinkOutOfMeleeWhenHurtAndFrostNovaIsNotThere(t *testing.T) {
 		r, pf := newPosRig(t, Params{})
 		r.g.st.StartCooldown(spFrostNova, "cast")
 		r.g.addUnit(mob(mobA, selfG), 5, 0)
-		r.g.setSelf(func(u *objects.Unit) { u.Health = 350; u.O = math.Pi }) // 44%, facing away from the mob
+		r.g.setSelf(func(u *world.Unit) { u.Health = 350; u.O = math.Pi }) // 44%, facing away from the mob
 		return r, pf
 	}
 	r, _ := novaDown(t)
@@ -61,20 +61,20 @@ func TestBlinkOutOfMeleeWhenHurtAndFrostNovaIsNotThere(t *testing.T) {
 	}
 	// Facing the mob, Blink would land in it.
 	r, _ = novaDown(t)
-	r.g.setSelf(func(u *objects.Unit) { u.O = 0 })
+	r.g.setSelf(func(u *world.Unit) { u.O = 0 })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "blink" {
 		t.Fatalf("blinked into the mob: %+v", d)
 	}
 	// Not hurt: no Blink.
 	r, _ = novaDown(t)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 700 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 700 })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "blink" {
 		t.Fatalf("blinked at 87%% health: %+v", d)
 	}
 	// Frost Nova ready: it comes first.
 	r, _ = newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, selfG), 5, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 350; u.O = math.Pi })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 350; u.O = math.Pi })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "frost_nova" {
 		t.Fatalf("%+v", d)
 	}
@@ -89,34 +89,34 @@ func TestBlinkOutOfMeleeWhenHurtAndFrostNovaIsNotThere(t *testing.T) {
 func TestIceBlockAtCriticalHealthWithAMobOnTheMage(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, selfG), 5, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 120; u.InCombat = true }) // 15%
+	r.g.setSelf(func(u *world.Unit) { u.Health = 120; u.InCombat = true }) // 15%
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "ice_block" || d.Rel != RelDispel || d.Spell != spIceBlock {
 		t.Fatalf("%+v", d)
 	}
 	// Frozen in the block, the potion and the healthstone stay in the bags.
-	r.g.items = []objects.Item{{Entry: 5509, Count: 1}, {Entry: 929, Count: 1}}
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: "Ice Block"}) })
+	r.g.items = []world.Item{{Entry: 5509, Count: 1}, {Entry: 929, Count: 1}}
+	r.g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: "Ice Block"}) })
 	if d := r.tick(2 * time.Second); d != nil && (d.Action == "healthstone" || d.Action == "health_potion" || d.Action == "ice_block") {
 		t.Fatalf("%+v", d)
 	}
 	// Not at 30%, and not without a mob on the mage.
 	r, _ = newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, selfG), 5, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 240 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 240 })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "ice_block" {
 		t.Fatalf("%+v", d)
 	}
 	r, _ = newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, tankG), 20, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 120 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 120 })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "ice_block" {
 		t.Fatalf("%+v", d)
 	}
 	// A mage without the talent has no Ice Block to cast.
 	r, _ = newPosRig(t, Params{}, spFrostbolt, spFrostNova, spBlink)
 	r.g.addUnit(mob(mobA, selfG), 5, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 120 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 120 })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "ice_block" {
 		t.Fatalf("%+v", d)
 	}
@@ -125,7 +125,7 @@ func TestIceBlockAtCriticalHealthWithAMobOnTheMage(t *testing.T) {
 func TestRunsTowardTheTankWithAMobOnTheLeaderThatIsStillComing(t *testing.T) {
 	r, pf := newPosRig(t, Params{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
 	r.g.addUnit(mob(mobA, selfG), 15, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "run_to_tank" || d.Trigger != "mob_on_me_far" {
@@ -138,7 +138,7 @@ func TestRunsTowardTheTankWithAMobOnTheLeaderThatIsStillComing(t *testing.T) {
 	// The mob is in melee: Frost Nova, not a run with the mob on the leader's back.
 	r, pf = newPosRig(t, Params{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
 	r.g.addUnit(mob(mobA, selfG), 6, 0)
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "frost_nova" || len(pf.walkList()) != 0 {
 		t.Fatalf("%+v", d)
@@ -146,7 +146,7 @@ func TestRunsTowardTheTankWithAMobOnTheLeaderThatIsStillComing(t *testing.T) {
 	// The tank is close already: nothing to run to.
 	r, pf = newPosRig(t, Params{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 4, 4)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 4, 4)
 	r.g.addUnit(mob(mobA, selfG), 15, 0)
 	r.tick(100 * time.Millisecond)
 	if len(pf.walkList()) != 0 {
@@ -155,7 +155,7 @@ func TestRunsTowardTheTankWithAMobOnTheLeaderThatIsStillComing(t *testing.T) {
 	// A mob that is not on the leader: no run.
 	r, pf = newPosRig(t, Params{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 30, 6)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 30, 6)
 	r.g.addUnit(mob(mobA, tankG), 15, 0)
 	r.tick(100 * time.Millisecond)
 	for _, w := range pf.walkList() {
@@ -170,7 +170,7 @@ func TestAreaSpellStaysVetoedWhileALooseMobIsNear(t *testing.T) {
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 6, 1)
 	r.g.addUnit(mob(mobB, tankG), 7, -1)
-	r.g.addUnit(objects.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 9, 0)
+	r.g.addUnit(world.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 9, 0)
 	r.tick(100 * time.Millisecond)
 	d := r.tick(2200 * time.Millisecond)
 	if d != nil && d.Action == "cone_of_cold" {
@@ -183,8 +183,8 @@ func TestAreaSpellStaysVetoedWhileALooseMobIsNear(t *testing.T) {
 func TestCounterspellsAHealAndBreaksTheMagesOwnCast(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	r.g.addUnit(mob(mobA, tankG), 20, 0)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spLesserHeal, EndsInMS: ms(1500), Target: mobB}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spLesserHeal, EndsInMS: ms(1500), Target: mobB}
 	})
 	r.g.st.CastStarted(spFrostbolt, 2600, mobA) // the mage's own Frostbolt is in progress
 	d := r.tick(100 * time.Millisecond)
@@ -220,7 +220,7 @@ func TestInterruptChoosesByWhatTheCastDoesAndWhoItIsAimedAt(t *testing.T) {
 			if c.onTank {
 				tgt = tankG
 			}
-			r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &objects.Cast{SpellID: c.spell, EndsInMS: ms(c.ends), Target: tgt} })
+			r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &world.Cast{SpellID: c.spell, EndsInMS: ms(c.ends), Target: tgt} })
 			d := r.tick(100 * time.Millisecond)
 			got := d != nil && d.Action == "interrupt"
 			if got != c.want {
@@ -235,11 +235,11 @@ func TestInterruptPrefersCrowdControlOverDamageAndTheSoonestCast(t *testing.T) {
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 18, 0)
 	r.g.addUnit(mob(mobB, tankG), 22, 3)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1000), Target: tankG}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1000), Target: tankG}
 	})
-	r.g.mutate(mobB, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spPolymorph, EndsInMS: ms(1800), Target: tankG}
+	r.g.mutate(mobB, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spPolymorph, EndsInMS: ms(1800), Target: tankG}
 	})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "interrupt" || d.Target != mobB {
 		t.Fatalf("%+v", d)
@@ -250,13 +250,13 @@ func TestAnInterruptedCastIsNotInterruptedAgainAndAFailedCallIsBackedOff(t *test
 	r, _ := newPosRig(t, Params{})
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 20, 0)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spLesserHeal, EndsInMS: ms(5000), Target: tankG}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spLesserHeal, EndsInMS: ms(5000), Target: tankG}
 	})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "interrupt" {
 		t.Fatalf("%+v", d)
 	}
-	at := func(d time.Duration) *objects.Unit {
+	at := func(d time.Duration) *world.Unit {
 		r.g.clk.advance(d)
 		return interruptTarget(r.b.newCtx(r.g.clk.Now()), "Counterspell")
 	}
@@ -271,8 +271,8 @@ func TestAnInterruptedCastIsNotInterruptedAgainAndAFailedCallIsBackedOff(t *test
 	r2, _ := newPosRig(t, Params{})
 	r2.g.partyWithTank()
 	r2.g.addUnit(mob(mobA, tankG), 20, 0)
-	r2.g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spLesserHeal, EndsInMS: ms(5000), Target: tankG}
+	r2.g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spLesserHeal, EndsInMS: ms(5000), Target: tankG}
 	})
 	r2.g.castErr = errTest
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Result != ResultError {
@@ -290,7 +290,7 @@ func TestAnInterruptedCastIsNotInterruptedAgainAndAFailedCallIsBackedOff(t *test
 func TestNoInterruptWithoutTheSpell(t *testing.T) {
 	r, _ := newPosRig(t, Params{}, spFrostbolt)
 	r.g.addUnit(mob(mobA, tankG), 20, 0)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &objects.Cast{SpellID: spLesserHeal, EndsInMS: ms(1500)} })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &world.Cast{SpellID: spLesserHeal, EndsInMS: ms(1500)} })
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -302,8 +302,8 @@ func TestHealthstoneThenPotionBelowCriticalHealthAndNothingTwice(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	// Major Healthstone needs level 48; the leader is 30: Healthstone (24) is the best in the bags, and Healing Potion (12) the
 	// best potion (Major, 45, is out of reach).
-	r.g.items = []objects.Item{{Entry: 9421, Count: 1}, {Entry: 5509, Count: 1}, {Entry: 13446, Count: 1}, {Entry: 929, Count: 1}}
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 150; u.InCombat = true })
+	r.g.items = []world.Item{{Entry: 9421, Count: 1}, {Entry: 5509, Count: 1}, {Entry: 13446, Count: 1}, {Entry: 929, Count: 1}}
+	r.g.setSelf(func(u *world.Unit) { u.Health = 150; u.InCombat = true })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "healthstone" || d.Rel != RelDispel-3 {
 		t.Fatalf("%+v", d)
@@ -331,12 +331,12 @@ func TestHealthstoneThenPotionBelowCriticalHealthAndNothingTwice(t *testing.T) {
 
 func TestNoPotionAboveCriticalHealthOrOutOfCombat(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
-	r.g.items = []objects.Item{{Entry: 5509, Count: 1}, {Entry: 929, Count: 1}}
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 300; u.InCombat = true }) // 37%: bandage territory, not potion
+	r.g.items = []world.Item{{Entry: 5509, Count: 1}, {Entry: 929, Count: 1}}
+	r.g.setSelf(func(u *world.Unit) { u.Health = 300; u.InCombat = true }) // 37%: bandage territory, not potion
 	if d := r.tick(100 * time.Millisecond); d != nil && (d.Action == "healthstone" || d.Action == "health_potion") {
 		t.Fatalf("%+v", d)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 100; u.InCombat = false })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 100; u.InCombat = false })
 	if d := r.tick(100 * time.Millisecond); d != nil && (d.Action == "healthstone" || d.Action == "health_potion") {
 		t.Fatalf("out of combat: %+v", d)
 	}
@@ -344,10 +344,10 @@ func TestNoPotionAboveCriticalHealthOrOutOfCombat(t *testing.T) {
 
 func TestBandageOnlyOutsideTheCombatDamageWindowAndNotAgainWhenItStartedNoChannel(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 300; u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 300; u.InCombat = true })
 	r.tick(100 * time.Millisecond) // the baseline
-	r.g.items = []objects.Item{{Entry: 1251, Count: 5}}
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 250 }) // hurt just now
+	r.g.items = []world.Item{{Entry: 1251, Count: 5}}
+	r.g.setSelf(func(u *world.Unit) { u.Health = 250 }) // hurt just now
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "bandage" {
 		t.Fatalf("bandaged inside the damage window: %+v", d)
 	}
@@ -370,9 +370,9 @@ func TestBandageOnlyOutsideTheCombatDamageWindowAndNotAgainWhenItStartedNoChanne
 
 func TestBandageNeedsNoMobOnTheLeaderAndNoRecentBandage(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
-	r.g.items = []objects.Item{{Entry: 1251, Count: 5}}
+	r.g.items = []world.Item{{Entry: 1251, Count: 5}}
 	r.g.addUnit(mob(mobA, selfG), 15, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 300; u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 300; u.InCombat = true })
 	r.tick(5 * time.Second)
 	for _, u := range r.g.used {
 		if u == 1251 {
@@ -380,11 +380,11 @@ func TestBandageNeedsNoMobOnTheLeaderAndNoRecentBandage(t *testing.T) {
 		}
 	}
 	r2, _ := newPosRig(t, Params{})
-	r2.g.items = []objects.Item{{Entry: 1251, Count: 5}}
-	r2.g.setSelf(func(u *objects.Unit) {
+	r2.g.items = []world.Item{{Entry: 1251, Count: 5}}
+	r2.g.setSelf(func(u *world.Unit) {
 		u.Health = 300
 		u.InCombat = true
-		u.Auras = append(u.Auras, objects.Aura{Name: "Recently Bandaged"})
+		u.Auras = append(u.Auras, world.Aura{Name: "Recently Bandaged"})
 	})
 	r2.tick(5 * time.Second)
 	if len(r2.g.used) != 0 {
@@ -398,8 +398,8 @@ func TestManaPotionWhenABossFightLeavesTheMageDry(t *testing.T) {
 	boss := mob(mobA, tankG)
 	boss.Level, boss.MaxHealth, boss.Health = 36, 20000, 20000
 	r.g.addUnit(boss, 25, 0)
-	r.g.items = []objects.Item{{Entry: 6149, Count: 1}, {Entry: 3827, Count: 1}} // Greater (31) is out of reach at level 30
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 50; u.InCombat = true })       // 5%
+	r.g.items = []world.Item{{Entry: 6149, Count: 1}, {Entry: 3827, Count: 1}} // Greater (31) is out of reach at level 30
+	r.g.setSelf(func(u *world.Unit) { u.Power = 50; u.InCombat = true })       // 5%
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "mana_potion" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -411,8 +411,8 @@ func TestManaPotionWhenABossFightLeavesTheMageDry(t *testing.T) {
 	r, _ = newPosRig(t, Params{})
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 25, 0)
-	r.g.items = []objects.Item{{Entry: 3827, Count: 1}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 50; u.InCombat = true })
+	r.g.items = []world.Item{{Entry: 3827, Count: 1}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 50; u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Action != "wand" || len(r.g.used) != 0 {
 		t.Fatalf("%+v used %v", d, r.g.used)
@@ -425,7 +425,7 @@ func TestWandFillsInWhenTheMageCannotPayForFrostbolt(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 24, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 40 }) // 4%: Frostbolt costs 65
+	r.g.setSelf(func(u *world.Unit) { u.Power = 40 }) // 4%: Frostbolt costs 65
 	r.tick(100 * time.Millisecond)
 	d := r.tick(2200 * time.Millisecond)
 	if d == nil || d.Action != "wand" || d.Spell != spShoot || d.Target != mobA || d.Rel != RelNormal-1 {
@@ -438,7 +438,7 @@ func TestWandFillsInWhenTheMageCannotPayForFrostbolt(t *testing.T) {
 		}
 	}
 	// With the mana back, Frostbolt is the filler again.
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 600 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 600 })
 	if d := r.tick(1500 * time.Millisecond); d == nil || d.Action != "frostbolt" {
 		t.Fatalf("%+v", d)
 	}
@@ -448,7 +448,7 @@ func TestWandIsLeftAloneWhenTheTargetIsOutOfWandRangeOrNoWandIsEquipped(t *testi
 	r, _ := newPosRig(t, Params{NoMove: true}) // standing still, so the mob stays out of range
 	r.g.partyWithTank()
 	r.g.addUnit(mob(mobA, tankG), 40, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 40 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 40 })
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d != nil && d.Action == "wand" {
 		t.Fatalf("out of range: %+v", d)
@@ -457,7 +457,7 @@ func TestWandIsLeftAloneWhenTheTargetIsOutOfWandRangeOrNoWandIsEquipped(t *testi
 	r2, _ := newPosRig(t, Params{NoMove: true})
 	r2.g.partyWithTank()
 	r2.g.addUnit(mob(mobA, tankG), 24, 0)
-	r2.g.setSelf(func(u *objects.Unit) { u.Power = 40 })
+	r2.g.setSelf(func(u *world.Unit) { u.Power = 40 })
 	r2.tick(100 * time.Millisecond)
 	if d := r2.tick(2200 * time.Millisecond); d == nil || d.Action != "wand" {
 		t.Fatalf("%+v", d)

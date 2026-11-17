@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pjerra/forever-agent/internal/brain"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The movement and sight half of the brain's Game (brain.Mover, brain.Sight, brain.Ground) over the agent's session. The brain
@@ -37,4 +37,4 @@ func (g *sessionBrainGame) LineClear(a, b brain.Vec3) (clear, known bool) {
 
 func (g *sessionBrainGame) SnapToMesh(p brain.Vec3) (brain.Vec3, bool) { return g.cur().SnapToMesh(p) }
 
-func (g *sessionBrainGame) DynamicObjects() []objects.DynamicObject { return g.cur().DynamicObjects() }
+func (g *sessionBrainGame) DynamicObjects() []world.DynamicObject { return g.cur().DynamicObjects() }

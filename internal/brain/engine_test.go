@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // A test strategy: actions that only record that they ran.
@@ -421,11 +421,11 @@ func TestAFailedActionThatIsNoCastIsHeldToo(t *testing.T) {
 func TestAGhostDoesNothing(t *testing.T) {
 	g, l := newFake(), &log{}
 	r := engine(t, g, &Strategy{Name: "s", Actions: []*Action{l.act("a", nil, nil)}, Rules: []Rule{{Trigger: always(""), Do: []Next{{"a", RelNormal}}}}})
-	g.setSelf(func(u *objects.Unit) { u.Health = 1; u.Ghost = true })
+	g.setSelf(func(u *world.Unit) { u.Health = 1; u.Ghost = true })
 	if d := r.tick(time.Second); d != nil || r.idle() != "dead" || len(l.ran) != 0 {
 		t.Fatalf("%+v %q %v", d, r.idle(), l.ran)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Health = 400; u.Ghost = false })
+	g.setSelf(func(u *world.Unit) { u.Health = 400; u.Ghost = false })
 	if d := r.tick(time.Second); d == nil {
 		t.Fatal("alive again: it acts")
 	}

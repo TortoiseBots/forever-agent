@@ -1,7 +1,6 @@
 package brain
 
 import (
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -117,7 +116,7 @@ func hasSeal(c *Ctx) bool { return currentSeal(c) != "" }
 func pacified(c *Ctx) bool { return HasAura(&c.Self, "Divine Protection", "Divine Shield") }
 
 func paladinRetribution() *Strategy {
-	meleeMob := func(c *Ctx) *objects.Unit { return ValMeleeMob.Get(c) }
+	meleeMob := func(c *Ctx) *world.Unit { return ValMeleeMob.Get(c) }
 	return &Strategy{
 		Name: "paladin_retribution",
 		Mult: []Multiplier{{Name: "pacified", F: func(c *Ctx, a *Action, rel float32) float32 {

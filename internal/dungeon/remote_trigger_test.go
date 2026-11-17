@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -427,8 +426,8 @@ func TestAreaTriggerAlreadyDone(t *testing.T) {
 func TestWaitForUnitReadsTheAgentsStore(t *testing.T) {
 	g := newNearGame(t, 3)
 	g.agent = Point{-5, 0, 0}
-	me := objects.Unit{GUID: world.GUID(0xF130000000001234), Type: "creature", Entry: 7271, X: 50, Y: 0, PosAgeMS: 100, Health: 100, MaxHealth: 100}
-	g.units = []objects.Unit{me}
+	me := world.Unit{GUID: world.GUID(0xF130000000001234), Type: "creature", Entry: 7271, X: 50, Y: 0, PosAgeMS: 100, Health: 100, MaxHealth: 100}
+	g.units = []world.Unit{me}
 	flips := false
 	g.onTick = func(f *fakeRemote) {
 		if !flips && f.now.After(time.Unix(1_000_000, 0).Add(12*time.Second)) {
@@ -789,7 +788,7 @@ func TestWaitForUnitGoneNeedsASightingAndSteadyAbsence(t *testing.T) {
 // A resumed run whose Zum'rah is dead already (his corpse in the agent's view) does not send the trigger.
 func TestAreaTriggerSkippedWhenTheUnitIsDeadAlready(t *testing.T) {
 	g := newTriggerGame(t, 3)
-	g.units = []objects.Unit{corpseOf(7271, Point{118, 0, 0})}
+	g.units = []world.Unit{corpseOf(7271, Point{118, 0, 0})}
 	rep, err := runTrigger(t, g, zumrahLeg("agent", 15))
 	if err != nil || len(g.sent) != 0 || triggerOf(t, rep).By != "already" || !strings.Contains(notesOf(rep), "is dead already: the trigger is not sent") {
 		t.Fatalf("%v sent %v\n%s", err, g.sent, notesOf(rep))

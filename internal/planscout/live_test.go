@@ -6,7 +6,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -96,9 +95,9 @@ func TestLiveAggroNeedsLOS(t *testing.T) {
 		{GUID: 500, Entry: 100, LevelMax: 60, DetectionYd: 20, Faction: 14},
 		{GUID: 600, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14},
 	}}
-	u := objects.Unit{GUID: unitGUID(200, 600), Entry: 200, Name: "Stranger", X: 3, Y: 0, Z: 0, Level: 60, Hostile: true}
+	u := world.Unit{GUID: unitGUID(200, 600), Entry: 200, Name: "Stranger", X: 3, Y: 0, Z: 0, Level: 60, Hostile: true}
 	rep := mergeOn(t, rows, nil, w, LiveData{
-		Units: map[int][]objects.Unit{2: {u}},
+		Units: map[int][]world.Unit{2: {u}},
 		LOS:   map[LOSKey]bool{{Step: 2, Guid: 600}: false},
 	})
 	c := checkAt(t, rep, 2, CheckLiveAggro)
@@ -106,7 +105,7 @@ func TestLiveAggroNeedsLOS(t *testing.T) {
 		t.Fatalf("out of sight: %+v", c)
 	}
 	rep = mergeOn(t, rows, nil, w, LiveData{
-		Units: map[int][]objects.Unit{2: {u}},
+		Units: map[int][]world.Unit{2: {u}},
 		LOS:   map[LOSKey]bool{{Step: 2, Guid: 600}: true},
 	})
 	c = checkAt(t, rep, 2, CheckLiveAggro)
@@ -121,8 +120,8 @@ func TestLiveAggroSkipsOwnedPack(t *testing.T) {
 	w := &worldspawn.World{Spawns: []worldspawn.Spawn{
 		{GUID: 500, Entry: 100, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 10}},
 	}}
-	u := objects.Unit{GUID: unitGUID(100, 500), Entry: 100, X: 10, Y: 0, Z: 0, Level: 60, Hostile: true}
-	rep := mergeOn(t, rows, nil, w, LiveData{Units: map[int][]objects.Unit{2: {u}},
+	u := world.Unit{GUID: unitGUID(100, 500), Entry: 100, X: 10, Y: 0, Z: 0, Level: 60, Hostile: true}
+	rep := mergeOn(t, rows, nil, w, LiveData{Units: map[int][]world.Unit{2: {u}},
 		LOS: map[LOSKey]bool{{Step: 2, Guid: 500}: true}})
 	c := checkAt(t, rep, 2, CheckLiveAggro)
 	if c == nil || c.Verdict != VerdictOK {
@@ -178,12 +177,12 @@ func TestMergeLiveJoiners(t *testing.T) {
 		{GUID: 602, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 14, Y: 1}},
 		{GUID: 603, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 15}},
 	}}
-	units := []objects.Unit{
+	units := []world.Unit{
 		{GUID: unitGUID(200, 601), Entry: 200, Name: "j1", X: 14, Y: 0, Z: 0, Level: 60, Hostile: true},
 		{GUID: unitGUID(200, 602), Entry: 200, Name: "j2", X: 14, Y: 1, Z: 0, Level: 60, Hostile: true},
 		{GUID: unitGUID(200, 603), Entry: 200, Name: "j3", X: 15, Y: 0, Z: 0, Level: 60, Hostile: true},
 	}
-	rep := mergeOn(t, rows, nil, w, LiveData{Units: map[int][]objects.Unit{3: units},
+	rep := mergeOn(t, rows, nil, w, LiveData{Units: map[int][]world.Unit{3: units},
 		LOS: map[LOSKey]bool{{Step: 3, Guid: 601}: true, {Step: 3, Guid: 602}: true, {Step: 3, Guid: 603}: true}})
 	if c := checkAt(t, rep, 3, planlint.LintJoiners); c != nil {
 		t.Fatalf("the offline joiners check was kept: %+v", c)

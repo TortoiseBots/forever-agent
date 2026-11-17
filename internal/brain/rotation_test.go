@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -269,7 +268,7 @@ func TestHealTargetEntry(t *testing.T) {
 	if c := g.castList(); len(c) == 0 || c[0] != want {
 		t.Fatalf("casts %v, want %v first", c, want)
 	}
-	g.addAura(tankG, objects.Aura{Name: "Renew", SpellID: prRenew1})
+	g.addAura(tankG, world.Aura{Name: "Renew", SpellID: prRenew1})
 	if got := actions(rig, 2200*time.Millisecond, 2200*time.Millisecond); slices.Contains(got, "renew_tank") {
 		t.Fatalf("the tank carries Renew and got it again: %v", got)
 	}
@@ -387,7 +386,7 @@ func TestFrostMageDataTwinPlaysLikeTheGoStrategy(t *testing.T) {
 		},
 		"a rooted mob in melee": func(g *fakeGame) {
 			m := mob(mobA, selfG)
-			m.Auras = []objects.Aura{{Name: "Frost Nova", SpellID: spFrostNova, Harmful: true}}
+			m.Auras = []world.Aura{{Name: "Frost Nova", SpellID: spFrostNova, Harmful: true}}
 			g.addUnit(m, 4, 0)
 		},
 		"two mobs in front": func(g *fakeGame) {
@@ -413,7 +412,7 @@ func TestArmsWarriorDataTwinPlaysLikeTheGoStrategies(t *testing.T) {
 		tankFights(r.g, 7, 4, 0)
 		var out []string
 		out = append(out, actions(r, 100*time.Millisecond, 2200*time.Millisecond, 1600*time.Millisecond, 1600*time.Millisecond)...)
-		r.g.mutate(mobA, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
+		r.g.mutate(mobA, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Rend", SpellID: spRend, Harmful: true}} })
 		out = append(out, actions(r, 1600*time.Millisecond, 400*time.Millisecond)...)
 		mf.dodge(mobA, r.g.clk.Now())
 		out = append(out, actions(r, 100*time.Millisecond, 1600*time.Millisecond)...)
@@ -438,8 +437,8 @@ func TestShadowPriestFileCastsTheRotation(t *testing.T) {
 	r := newRig(t, g, Params{Strategies: []string{"shadow_priest"}, Rotation: "shadow_priest"})
 	got := actions(r, 100*time.Millisecond, 2200*time.Millisecond)
 	// Shadow Word: Pain first (the mob carries none), then Mind Blast; Smite is the filler as there is no Mind Flay or Shadowform.
-	g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Shadow Word: Pain", SpellID: spShadowWordPain, Harmful: true}}
+	g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Shadow Word: Pain", SpellID: spShadowWordPain, Harmful: true}}
 	})
 	got = append(got, actions(r, 1600*time.Millisecond)...)
 	if got[1] != "shadow_word_pain" || got[2] != "mind_blast" {
@@ -457,8 +456,8 @@ func TestFireMageFallsBackToFrostboltOnAFireImmuneMob(t *testing.T) {
 	if got[1] != "scorch" {
 		t.Fatalf("a full-health mob with no Fire Vulnerability starts with Scorch: %v", got)
 	}
-	g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Fire Vulnerability", SpellID: 22959, Stacks: 5, Harmful: true}}
+	g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Fire Vulnerability", SpellID: 22959, Stacks: 5, Harmful: true}}
 	})
 	if d := r.tick(1700 * time.Millisecond); d == nil || d.Action != "fireball" {
 		t.Fatalf("%+v", d)
@@ -475,7 +474,7 @@ func TestFireMageMovesAndStillCasts(t *testing.T) {
 	g.partyWithTank()
 	buffUp(g)
 	g.addUnit(mob(mobA, tankG), 18, 0)
-	g.setSelf(func(u *objects.Unit) { u.Moving = true })
+	g.setSelf(func(u *world.Unit) { u.Moving = true })
 	r := newRig(t, g, Params{Strategies: []string{"fire_mage"}})
 	got := actions(r, 100*time.Millisecond, 2200*time.Millisecond)
 	if got[1] != "fire_blast_moving" {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Positioning (issue #80 step 3b). Ideas from mod-playerbots' ranged distance rules, tank facing and area avoidance (GPL-2.0+;
@@ -57,7 +57,7 @@ func rangedBand(c *Ctx) (lo, hi float64) {
 	return rangedMin, rangedMax
 }
 
-func fightMob(c *Ctx) *objects.Unit { return ValFight.Get(c).Mob }
+func fightMob(c *Ctx) *world.Unit { return ValFight.Get(c).Mob }
 
 // ValHazard is the ground effect the player stands in: a dynamic object of an enemy (or a harmful spell) that covers the player.
 type Hazard struct {
@@ -83,7 +83,7 @@ func periodicDamage(spell uint32) bool {
 // harmfulArea says whether a ground effect is the party's enemy: its caster is a hostile mob in view, or it is the source of a
 // periodic damage aura the player carries, or (its caster out of view) its spell is a harmful or damaging one. The party's own
 // areas (a bot's Blizzard, a paladin's Consecration) are not.
-func harmfulArea(c *Ctx, d objects.DynamicObject) bool {
+func harmfulArea(c *Ctx, d world.DynamicObject) bool {
 	if d.Caster == c.Self.GUID {
 		return false
 	}
@@ -153,8 +153,8 @@ var ValStandingIn = &Value[*Hazard]{Name: "standing_in", Calc: func(c *Ctx) *Haz
 
 // findTank is the party member the brain sees as the tank, in view and alive: the one Params.Tank names, else the first of
 // warrior, paladin and druid.
-func findTank(c *Ctx) *objects.Unit {
-	var best *objects.Unit
+func findTank(c *Ctx) *world.Unit {
+	var best *world.Unit
 	for _, m := range c.Party {
 		if !m.Online || m.Dead {
 			continue
@@ -272,7 +272,7 @@ func runToTankPoint(c *Ctx) *Vec3 {
 }
 
 // pointByTank is the point tankMeet yards from the tank on the way from the tank to the player.
-func pointByTank(c *Ctx, tank *objects.Unit) Vec3 {
+func pointByTank(c *Ctx, tank *world.Unit) Vec3 {
 	me, tp := selfPos(c), unitPos(tank)
 	f := float32(tankMeet / math.Max(dist2(me, tp), 0.1))
 	return Vec3{tp[0] + (me[0]-tp[0])*f, tp[1] + (me[1]-tp[1])*f, tp[2]}
@@ -280,7 +280,7 @@ func pointByTank(c *Ctx, tank *objects.Unit) Vec3 {
 
 // ValRootedMob is the nearest mob on the player within 12 yards that carries a root of the party's own casters (a mage's Frost Nova,
 // a druid's Entangling Roots).
-var ValRootedMob = &Value[*objects.Unit]{Name: "rooted_mob", Calc: func(c *Ctx) *objects.Unit {
+var ValRootedMob = &Value[*world.Unit]{Name: "rooted_mob", Calc: func(c *Ctx) *world.Unit {
 	for i := range c.Units {
 		u := &c.Units[i]
 		if hostileMob(u) && u.InCombat && u.Target == c.Self.GUID && u.Distance >= 0 && u.Distance <= 12 && HasAura(u, "Frost Nova", "Entangling Roots") {

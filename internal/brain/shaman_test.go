@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -44,7 +43,7 @@ var (
 		shEarth5, 3599, 6363, 6364, shSearing4, 8227, shFlametongueT2, 5675, shManaSpring2}
 	shEnhKnown = []uint32{shStormstrike, shFlame1, 8052, 8053, shFlame4, shEarth1, 8044, 8045, 8046, shEarth5, shWindfuryW1, shWindfuryW2, 8024, 8027, shFlametongueW3,
 		16339, shRockbiter1, 8018, 8019, 10399, 3599, 6363, 6364, shSearing4, shWindfuryT, 8075, 8160, shStrength3}
-	allTools = []objects.Item{{Entry: toolEarth, Count: 1}, {Entry: toolFire, Count: 1}, {Entry: toolWater, Count: 1}, {Entry: toolAir, Count: 1}}
+	allTools = []world.Item{{Entry: toolEarth, Count: 1}, {Entry: toolFire, Count: 1}, {Entry: toolWater, Count: 1}, {Entry: toolAir, Count: 1}}
 )
 
 // shamanSelf makes the fake's player a level 40 shaman with a full pool of 1000 mana and 1200 health, with a Lightning Shield up.
@@ -52,7 +51,7 @@ func shamanSelf(g *fakeGame) {
 	g.self.Class, g.self.Level = ClassShaman, 40
 	g.self.Health, g.self.MaxHealth = 1200, 1200
 	g.self.PowerType, g.self.Power, g.self.MaxPower = 0, 1000, 1000
-	g.self.Auras = []objects.Aura{{Name: "Lightning Shield", SpellID: shLShield5}}
+	g.self.Auras = []world.Aura{{Name: "Lightning Shield", SpellID: shLShield5}}
 }
 
 // ---- the spell data the shaman relies on ----
@@ -192,8 +191,8 @@ func restoShamanRig(t *testing.T, known ...uint32) (*rig, *casterGame) {
 	g := newCasterGame(known...)
 	shamanSelf(g.fakeGame)
 	g.self.InCombat = true
-	g.self.Auras = []objects.Aura{{Name: "Water Shield", SpellID: shWShield2}}
-	g.items = append([]objects.Item{}, allTools...)
+	g.self.Auras = []world.Aura{{Name: "Water Shield", SpellID: shWShield2}}
+	g.items = append([]world.Item{}, allTools...)
 	return rigOn(t, g, g.fakeGame, Params{Strategies: []string{"resto_shaman"}}), g
 }
 
@@ -254,20 +253,20 @@ func TestRestoShamanHasNoHealOverTimeForTheTank(t *testing.T) {
 func TestRestoShamanCuresPoisonAndDisease(t *testing.T) {
 	r, g := restoShamanRig(t)
 	g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g.addAura(dpsG1, objects.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
+	g.addAura(dpsG1, world.Aura{Name: "Deadly Poison", SpellID: auraPoison, Harmful: true})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "dispel" || d.Spell != shCurePoison || d.Target != dpsG1 {
 		t.Fatalf("%+v", d)
 	}
 	r2, g2 := restoShamanRig(t)
 	g2.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g2.addAura(dpsG1, objects.Aura{Name: "Rabies", SpellID: auraRabies, Harmful: true})
+	g2.addAura(dpsG1, world.Aura{Name: "Rabies", SpellID: auraRabies, Harmful: true})
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Action != "dispel" || d.Spell != shCureDisease {
 		t.Fatalf("%+v", d)
 	}
 	// Magic and curses are not for a shaman.
 	r3, g3 := restoShamanRig(t)
 	g3.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g3.addAura(dpsG1, objects.Aura{Name: "Curse of Agony", SpellID: auraCurse, Harmful: true})
+	g3.addAura(dpsG1, world.Aura{Name: "Curse of Agony", SpellID: auraCurse, Harmful: true})
 	if d := r3.tick(100 * time.Millisecond); d != nil && d.Action == "dispel" {
 		t.Fatalf("%+v", d)
 	}
@@ -290,7 +289,7 @@ func TestRestoShamanHealsBeforeItDropsATotem(t *testing.T) {
 func TestShamanShieldPicksWaterShieldForAHealer(t *testing.T) {
 	r, g := restoShamanRig(t)
 	g.self.InCombat = false
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "shield" || d.Spell != shWShield2 || d.Target != selfG {
 		t.Fatalf("%+v", d)
@@ -302,13 +301,13 @@ func TestShamanShieldPicksWaterShieldForAHealer(t *testing.T) {
 	// A healer who has no Water Shield yet keeps a Lightning Shield; a damage dealer never takes the Water Shield.
 	r2, g2 := restoShamanRig(t, append(append([]uint32{}, shHealKnown...), 324, 325)...)
 	g2.self.InCombat = false
-	g2.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g2.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Action != "shield" || spells.Name(d.Spell) != "Lightning Shield" {
 		t.Fatalf("%+v", d)
 	}
 	g3 := newCasterGame(append(append([]uint32{}, shElemKnown...), shShields...)...)
 	shamanSelf(g3.fakeGame)
-	g3.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g3.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	r3 := rigOn(t, g3, g3.fakeGame, Params{Strategies: []string{"elemental_shaman"}})
 	if d := r3.tick(100 * time.Millisecond); d == nil || d.Action != "shield" || d.Spell != shLShield5 {
 		t.Fatalf("%+v", d)
@@ -319,7 +318,7 @@ func TestShamanShieldInCombatNeedsMana(t *testing.T) {
 	g := newCasterGame(append(append([]uint32{}, shElemKnown...), shShields...)...)
 	shamanSelf(g.fakeGame)
 	g.self.InCombat = true
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{}; u.Power = 400 })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{}; u.Power = 400 })
 	r := rigOn(t, g, g.fakeGame, Params{Strategies: []string{"elemental_shaman"}})
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("40%% mana: %+v", d)
@@ -339,7 +338,7 @@ func elementalRig(t *testing.T, known ...uint32) (*rig, *casterGame) {
 	}
 	g := newCasterGame(known...)
 	shamanSelf(g.fakeGame)
-	g.items = append([]objects.Item{}, allTools...)
+	g.items = append([]world.Item{}, allTools...)
 	tankFights(g.fakeGame, 8, 12, 0)
 	return rigOn(t, g, g.fakeGame, Params{Strategies: []string{"elemental_shaman"}}), g
 }
@@ -363,7 +362,7 @@ func totemCasts(g *fakeGame) []uint32 {
 
 // totemUnit is the creature a totem leaves, standing 2 yards from where the shaman dropped it.
 func totemUnit(g *fakeGame, guid world.GUID, name string) {
-	g.addUnit(objects.Unit{GUID: guid, Type: "creature", Name: name, Health: 5, MaxHealth: 5}, 2, 0)
+	g.addUnit(world.Unit{GUID: guid, Type: "creature", Name: name, Health: 5, MaxHealth: 5}, 2, 0)
 }
 
 const (
@@ -382,7 +381,7 @@ func dropBoth(r *rig, g *casterGame) {
 func removeUnit(g *casterGame, guid world.GUID) {
 	g.fakeGame.mu.Lock()
 	defer g.fakeGame.mu.Unlock()
-	var keep []objects.Unit
+	var keep []world.Unit
 	for _, u := range g.fakeGame.units {
 		if u.GUID != guid {
 			keep = append(keep, u)
@@ -482,17 +481,17 @@ func TestTotemsLeftBehindAreDroppedAgain(t *testing.T) {
 	dropBoth(r, g)
 	r.tick(9 * time.Second)
 	// The party moves 40 yards on; the totems stand where they were.
-	g.setSelf(func(u *objects.Unit) { u.X = 40 })
-	g.mutate(tankG, func(u *objects.Unit) { u.X = 48 })
-	g.mutate(mobA, func(u *objects.Unit) { u.X = 52 })
-	g.mutate(searingG, func(u *objects.Unit) {})
-	g.mutate(springG, func(u *objects.Unit) {})
+	g.setSelf(func(u *world.Unit) { u.X = 40 })
+	g.mutate(tankG, func(u *world.Unit) { u.X = 48 })
+	g.mutate(mobA, func(u *world.Unit) { u.X = 52 })
+	g.mutate(searingG, func(u *world.Unit) {})
+	g.mutate(springG, func(u *world.Unit) {})
 	d := r.tick(2 * time.Second)
 	if d == nil || d.Action != "drop_totem" || d.Spell != shSearing4 {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	totemUnit(g.fakeGame, 0xF1000000A3, "Searing Totem IV")
-	g.mutate(0xF1000000A3, func(u *objects.Unit) { u.X = 42 })
+	g.mutate(0xF1000000A3, func(u *world.Unit) { u.X = 42 })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "drop_totem" || d.Spell != shManaSpring2 {
 		t.Fatalf("%+v", d)
 	}
@@ -527,7 +526,7 @@ func TestTotemCreatureNamesAreRecognisedLoosely(t *testing.T) {
 	r2, g2 := totemRig(t)
 	r2.tick(100 * time.Millisecond)
 	g2.addUnit(mob(mobB+9, tankG), 2, 0)
-	g2.mutate(mobB+9, func(u *objects.Unit) { u.Name = "Searing Totem IV" })
+	g2.mutate(mobB+9, func(u *world.Unit) { u.Name = "Searing Totem IV" })
 	r2.tick(1600 * time.Millisecond)
 	for i := 0; i < 5; i++ {
 		r2.tick(2500 * time.Millisecond)
@@ -539,7 +538,7 @@ func TestTotemCreatureNamesAreRecognisedLoosely(t *testing.T) {
 
 func TestNoTotemsWithoutTheToolOrTheMana(t *testing.T) {
 	r, g := totemRig(t)
-	g.items = []objects.Item{{Entry: toolWater, Count: 1}} // only the water tool
+	g.items = []world.Item{{Entry: toolWater, Count: 1}} // only the water tool
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "drop_totem" || d.Spell != shManaSpring2 {
 		t.Fatalf("%+v", d)
@@ -564,7 +563,7 @@ func TestNoTotemsWithoutTheToolOrTheMana(t *testing.T) {
 
 func TestNoTotemsAwayFromTheTankOrForADyingMobOrOutOfAFight(t *testing.T) {
 	r, g := totemRig(t)
-	g.mutate(tankG, func(u *objects.Unit) { u.X = 35 })
+	g.mutate(tankG, func(u *world.Unit) { u.X = 35 })
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("the tank is 35 yards off: %+v", d)
 	}
@@ -595,7 +594,7 @@ func TestNoTotemsAwayFromTheTankOrForADyingMobOrOutOfAFight(t *testing.T) {
 func TestEnhancementDropsItsTotems(t *testing.T) {
 	r, mg := enhRig(t, shStormstrike, 3599, 6365, shWindfuryT, 8161, 8075, shLShield5)
 	enhFight(r, mg)
-	r.g.items = append([]objects.Item{}, allTools...)
+	r.g.items = append([]world.Item{}, allTools...)
 	var got []uint32
 	for i := 0; i < 5; i++ {
 		if d := r.tick(1600 * time.Millisecond); d != nil && d.Action == "drop_totem" {
@@ -679,7 +678,7 @@ func TestElementalCastsNoBoltOnTheMove(t *testing.T) {
 	r, g := elementalRig(t)
 	g.items = nil
 	r.tick(100 * time.Millisecond)
-	g.setSelf(func(u *objects.Unit) { u.Moving = true })
+	g.setSelf(func(u *world.Unit) { u.Moving = true })
 	d := open(r)
 	if d == nil || d.Action != "flame_shock" {
 		t.Fatalf("an instant goes on the move: %+v", d)
@@ -695,7 +694,7 @@ func TestElementalInterruptsWithEarthShock(t *testing.T) {
 	g.items = nil
 	r.tick(100 * time.Millisecond)
 	caster := mob(mobB, tankG)
-	caster.Casting = &objects.Cast{SpellID: 2050, Target: mobA, EndsInMS: ms(1500)} // a Lesser Heal
+	caster.Casting = &world.Cast{SpellID: 2050, Target: mobA, EndsInMS: ms(1500)} // a Lesser Heal
 	g.addUnit(caster, 12, 5)
 	d := r.tick(300 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" || d.Spell != shEarth5 || d.Target != mobB || d.Rel < RelInterrupt {
@@ -706,7 +705,7 @@ func TestElementalInterruptsWithEarthShock(t *testing.T) {
 	g2.items = nil
 	r2.tick(100 * time.Millisecond)
 	far := mob(mobB, tankG)
-	far.Casting = &objects.Cast{SpellID: 2050, Target: mobA, EndsInMS: ms(1500)}
+	far.Casting = &world.Cast{SpellID: 2050, Target: mobA, EndsInMS: ms(1500)}
 	g2.addUnit(far, 28, 0)
 	if d := r2.tick(300 * time.Millisecond); d != nil && d.Action == "interrupt" {
 		t.Fatalf("%+v", d)
@@ -730,7 +729,7 @@ func enhRig(t *testing.T, known ...uint32) (*rig, *meleeGame) {
 func enhFight(r *rig, mg *meleeGame) {
 	tankFights(r.g, 7, 4, 0)
 	mg.setSwing(mobA)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(100 * time.Millisecond)
 }
 
@@ -788,7 +787,7 @@ func TestEnhancementWithoutStormstrikeShocksAndSwings(t *testing.T) {
 	// With no swing under way the first thing is the attack.
 	r2, mg2 := enhRig(t, shFlame1, shLShield5)
 	tankFights(r2.g, 7, 4, 0)
-	r2.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r2.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r2.tick(100 * time.Millisecond)
 	if d := open(r2); d == nil || d.Action != "auto_attack" || len(mg2.targets) != 1 || mg2.attacks != 1 {
 		t.Fatalf("%+v", d)
@@ -847,11 +846,11 @@ func TestImbueTakesTheBestOneTheSpellbookHas(t *testing.T) {
 
 func TestImbueNeitherInCombatNorOnTheWalkNorWithLittleMana(t *testing.T) {
 	r, mg := imbueRig(t)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "imbue" {
 		t.Fatalf("%+v", d)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	r.b.restOK = func() bool { return false }
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)

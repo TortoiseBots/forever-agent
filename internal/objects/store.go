@@ -40,97 +40,6 @@ type Change struct {
 	Old, New uint32
 }
 
-// Unit is a player or creature snapshot. When the server's ShowHealthValues option is
-// off, units the client may not see the health of arrive as a percent: Health 1..100
-// (0 only when dead) and MaxHealth 100 (Object.cpp:727-748). The store passes those
-// values through as sent, so Dead and ChangeHealth deltas then work on percents.
-type Unit struct {
-	GUID  packet.GUID `json:"guid"`
-	Type  string      `json:"type"` // "player" or "creature"
-	Entry uint32      `json:"entry,omitempty"`
-	Name  string      `json:"name"`
-	X     float32     `json:"x"`
-	Y     float32     `json:"y"`
-	Z     float32     `json:"z"`
-	O     float32     `json:"o"`
-	// PosAgeMS is how long ago the server last said where the unit is (a create or
-	// movement block, a movement relay or a spline); -1 when it never did, and the
-	// distances are then -1 too. While Moving, x/y/z are the spline's current point.
-	PosAgeMS   int64       `json:"pos_age_ms"`
-	Moving     bool        `json:"moving"`
-	Distance   float32     `json:"distance"`    // 3D, from the player
-	Distance2D float32     `json:"distance_2d"` // ignoring height
-	Health     uint32      `json:"health"`
-	MaxHealth  uint32      `json:"max_health"`
-	PowerType  uint8       `json:"power_type"`
-	Power      uint32      `json:"power"`
-	MaxPower   uint32      `json:"max_power"`
-	Level      uint32      `json:"level"`
-	Class      uint8       `json:"class,omitempty"` // class id 1-11 from UNIT_FIELD_BYTES_0 (5 priest); creatures have one too
-	Faction    uint32      `json:"faction"`
-	Target     packet.GUID `json:"target,omitempty"`
-	Flags      uint32      `json:"flags"`
-	NPCFlags   uint32      `json:"npc_flags"`
-	InCombat   bool        `json:"in_combat"`
-	Dead       bool        `json:"dead"`
-	Hostile    bool        `json:"hostile"`
-	InParty    bool        `json:"in_party"`
-	Ghost      bool        `json:"ghost,omitempty"` // a player who released the spirit (PLAYER_FLAGS_GHOST): its health is 1, so Dead is false
-	// StandState names byte 0 of UNIT_FIELD_BYTES_1 as the stand_state event does.
-	StandState string `json:"stand_state"`
-	// ComboPoints and ComboTarget are the player's own combo points (0-5) and the unit they are on,
-	// from PLAYER_FIELD_BYTES and PLAYER_FIELD_COMBO_TARGET. The core writes them on the player's own object
-	// (Player::SetComboPoints), so the player's own row is the one to read. The target is left out when there
-	// are no points: the core leaves the old guid in the field.
-	ComboPoints uint8       `json:"combo_points,omitempty"`
-	ComboTarget packet.GUID `json:"combo_target,omitempty"`
-	// GCDMS is the global cooldown left, set by the session on the player's own row only.
-	GCDMS   int64  `json:"gcd_ms,omitempty"`
-	Auras   []Aura `json:"auras"`   // in slot order, never null
-	Casting *Cast  `json:"casting"` // null when not casting
-	// Mana and MaxMana are the mana pool of a unit that plays on another power: a druid in Cat Form (energy) or Bear Form (rage) keeps
-	// its mana in UNIT_FIELD_POWER1, which Power then does not show. Left out when the unit plays on mana (Power is the mana) or has none.
-	Mana    uint32 `json:"mana,omitempty"`
-	MaxMana uint32 `json:"max_mana,omitempty"`
-	// BaseMana and BaseHealth are UNIT_FIELD_BASE_MANA and UNIT_FIELD_BASE_HEALTH, what the core takes a spell's percent cost of (Summon
-	// Voidwalker: 100% of the base mana, not of the maximum). 0 when the server did not send them.
-	BaseMana   uint32 `json:"base_mana,omitempty"`
-	BaseHealth uint32 `json:"base_health,omitempty"`
-}
-
-// Aura is a spell in one of a unit's 48 aura slots (UNIT_FIELD_AURA).
-type Aura struct {
-	Slot    int    `json:"slot"`
-	SpellID uint32 `json:"spell_id"`
-	Name    string `json:"name,omitempty"`
-	Stacks  int    `json:"stacks"`  // proc charges x stacks when the aura has charges (SpellAuras.cpp:7565)
-	Harmful bool   `json:"harmful"` // slots 32-47 (SpellAuraDefines.h:25-26)
-	// RemainingMS is the time left as the server last said (SMSG_UPDATE_AURA_DURATION,
-	// which it sends only for the player's own auras); omitted when unknown or endless.
-	RemainingMS *int64 `json:"remaining_ms,omitempty"`
-}
-
-// Cast is the spell a unit is casting: from SMSG_SPELL_START with a cast time until its
-// SMSG_SPELL_GO or a failure, or the channel in UNIT_CHANNEL_SPELL.
-type Cast struct {
-	SpellID uint32 `json:"spell_id"`
-	Name    string `json:"name,omitempty"`
-	Channel bool   `json:"channel"`
-	// Target is the unit the cast is aimed at, as SMSG_SPELL_START names it (0: none, or an area).
-	Target packet.GUID `json:"target,omitempty"`
-	// EndsInMS is the time to the cast's end (negative a little past it, while the spell
-	// goes off); a channel's end is not sent to other clients, so it has none.
-	EndsInMS *int64 `json:"ends_in_ms,omitempty"`
-}
-
-type Filter struct {
-	Near    float32 // 3D yards; 0: any distance (units with no known position never match)
-	Entry   uint32
-	Hostile *bool
-	Name    string // applied by the session after names are filled in
-	Limit   int    // 0: 100
-}
-
 type object struct {
 	guid       packet.GUID
 	typ        uint8
@@ -656,18 +565,6 @@ func toUnit(o *object, now time.Time, ox, oy, oz float32) Unit {
 	u.Distance = float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
 	u.Distance2D = float32(math.Hypot(dx, dy))
 	return u
-}
-
-// Item is an item the player carries, at bag/slot as CMSG_AUTOEQUIP_ITEM addresses it.
-type Item struct {
-	Bag   uint8       `json:"bag"`
-	Slot  uint8       `json:"slot"`
-	GUID  packet.GUID `json:"guid"`
-	Entry uint32      `json:"item_entry"` // 0, like Count, until the item's create block arrives
-	Count uint32      `json:"count"`
-	// TempEnchant is the id of the item's temporary enchantment (a shaman's weapon imbue, a poison), 0 for none: the first word of
-	// ITEM_FIELD_ENCHANTMENT slot 1.
-	TempEnchant uint32 `json:"temp_enchant,omitempty"`
 }
 
 // Backpack lists the items in player's backpack, in slot order, from the player's own

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -25,7 +24,7 @@ type gossipRemote struct {
 
 func newGossipRemote(t *testing.T, menus ...GossipAnswer) *gossipRemote {
 	g := &gossipRemote{nearGame: newNearGame(t, 3)}
-	g.units = []objects.Unit{{GUID: guidWeegli, Type: "creature", Entry: npcWeegli, Name: weegliName, X: weegliAt.X, Y: weegliAt.Y, Z: weegliAt.Z, Health: 100, MaxHealth: 100}}
+	g.units = []world.Unit{{GUID: guidWeegli, Type: "creature", Entry: npcWeegli, Name: weegliName, X: weegliAt.X, Y: weegliAt.Y, Z: weegliAt.Z, Health: 100, MaxHealth: 100}}
 	g.talk = &npcTalk{menus: menus, sel: closeAnswer, reach: gossipReachYd,
 		dist: func() float64 { return dist3(g.agent, weegliAt) },
 		tick: func() { g.advance(time.Second) }}
@@ -33,8 +32,8 @@ func newGossipRemote(t *testing.T, menus ...GossipAnswer) *gossipRemote {
 }
 
 // Units shows the distance from the agent, as the session's store does.
-func (g *gossipRemote) Units() []objects.Unit {
-	out := append([]objects.Unit(nil), g.units...)
+func (g *gossipRemote) Units() []world.Unit {
+	out := append([]world.Unit(nil), g.units...)
 	for i := range out {
 		out[i].Distance = float32(dist3(g.agent, Point{out[i].X, out[i].Y, out[i].Z}))
 	}

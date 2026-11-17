@@ -16,18 +16,18 @@ const (
 	bossG  world.GUID = 107                // the fixture's boss (entry 7)
 )
 
-func medallion() objects.Item { return objects.Item{Bag: 255, Slot: 24, Entry: 7740, Count: 1} }
-func shaft() objects.Item     { return objects.Item{Bag: 255, Slot: 25, Entry: 7741, Count: 1} }
+func medallion() world.Item { return world.Item{Bag: 255, Slot: 24, Entry: 7740, Count: 1} }
+func shaft() world.Item     { return world.Item{Bag: 255, Slot: 25, Entry: 7741, Count: 1} }
 
 // lootGame is the fixture's game with the optional parts a loot_object, use_item or boss loot needs: the team of the leader and
 // the opening, looting and using, which put items in the bag as the server does.
 type lootGame struct {
 	*fakeGame
 	team    string
-	chest   []objects.Item // what the chest holds; opening it moves them to the bag
-	corpse  []objects.Item // what the boss's corpse holds
-	made    []objects.Item // what using an item makes
-	err     error          // LootObject fails with this
+	chest   []world.Item // what the chest holds; opening it moves them to the bag
+	corpse  []world.Item // what the boss's corpse holds
+	made    []world.Item // what using an item makes
+	err     error        // LootObject fails with this
 	opened  []world.GUID
 	corpses []world.GUID
 	items   []uint32
@@ -54,7 +54,7 @@ func (g *lootGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, err
 	return g.take(&g.corpse), nil
 }
 
-func (g *lootGame) take(from *[]objects.Item) Looted {
+func (g *lootGame) take(from *[]world.Item) Looted {
 	var l Looted
 	for _, it := range *from {
 		g.bag = append(g.bag, it)
@@ -67,7 +67,7 @@ func (g *lootGame) take(from *[]objects.Item) Looted {
 func (g *lootGame) UseItem(ctx context.Context, entry uint32) error {
 	g.moved("item")
 	g.items = append(g.items, entry)
-	var rest []objects.Item
+	var rest []world.Item
 	for _, it := range g.bag { // the item is used up, as the Medallion is
 		if it.Entry != entry {
 			rest = append(rest, it)
@@ -82,8 +82,8 @@ func lootFixture(t *testing.T, plan string) (*lootGame, *Plan) {
 	g := &lootGame{fakeGame: newFake()}
 	g.add(101, 1, Point{30, 0, 0})
 	g.add(107, 7, Point{90, 0, 0})
-	g.objs = []objects.GameObject{{GUID: chestG, Entry: 123329, X: 60, Type: objects.GOTypeChest, TypeName: "chest", State: "ready"}}
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.objs = []world.GameObject{{GUID: chestG, Entry: 123329, X: 60, Type: objects.GOTypeChest, TypeName: "chest", State: "ready"}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	return g, mustPlan(t, plan)
 }
 
@@ -106,7 +106,7 @@ func hasEvent(g *fakeGame, action string) bool {
 // An Alliance leader skips the pack and the boss (noted), walks next to the chest, loots it and finds the Medallion in the bags.
 func TestLootObjectStepForTheAlliance(t *testing.T) {
 	g, p := lootFixture(t, lootPlan)
-	g.team, g.chest = "alliance", []objects.Item{medallion()}
+	g.team, g.chest = "alliance", []world.Item{medallion()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -133,7 +133,7 @@ func TestLootObjectStepForTheAlliance(t *testing.T) {
 // A Horde leader fights what the gate holds for its team; the chest it loots all the same.
 func TestTeamGateRunsForTheHorde(t *testing.T) {
 	g, p := lootFixture(t, lootPlan)
-	g.team, g.chest = "horde", []objects.Item{medallion()}
+	g.team, g.chest = "horde", []world.Item{medallion()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -149,7 +149,7 @@ func TestTeamGateRunsForTheHorde(t *testing.T) {
 // A leader whose team is unknown (a game that cannot tell) runs everything, as before the gate existed.
 func TestTeamGatePassesWhenTheTeamIsUnknown(t *testing.T) {
 	g, p := lootFixture(t, lootPlan)
-	g.chest = []objects.Item{medallion()}
+	g.chest = []world.Item{medallion()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v", err)
@@ -163,7 +163,7 @@ func TestTeamGatePassesWhenTheTeamIsUnknown(t *testing.T) {
 func TestLootObjectStepFailures(t *testing.T) {
 	g, p := lootFixture(t, lootPlan)
 	g.team = "alliance" // the chest opens but holds something else
-	g.chest = []objects.Item{{Bag: 255, Slot: 24, Entry: 5, Count: 1}}
+	g.chest = []world.Item{{Bag: 255, Slot: 24, Entry: 5, Count: 1}}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	err := d.Run(context.Background(), 0)
 	if err == nil || !strings.Contains(err.Error(), "Gni'kiv Medallion (item 7740) is not in the leader's bags") || d.Report().State != "failed" {
@@ -212,8 +212,8 @@ const usePlan = `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"z":0}
 func useFixture(t *testing.T) (*lootGame, *Plan) {
 	t.Helper()
 	g, p := lootFixture(t, usePlan)
-	g.objs = []objects.GameObject{{GUID: keystone, Entry: 124371, X: 20, State: "ready"}}
-	g.made = []objects.Item{{Bag: 255, Slot: 24, Entry: 7733, Count: 1}}
+	g.objs = []world.GameObject{{GUID: keystone, Entry: 124371, X: 20, State: "ready"}}
+	g.made = []world.Item{{Bag: 255, Slot: 24, Entry: 7733, Count: 1}}
 	return g, p
 }
 
@@ -256,7 +256,7 @@ func TestUseItemStepFailsWhenTheItemDoesNotCome(t *testing.T) {
 // With the Staff already carried (a GM gave it) the Medallion is left unused and the Shaft is not asked for.
 func TestUseItemStepSkippedWhenTheResultIsCarried(t *testing.T) {
 	g, p := useFixture(t)
-	g.bag = append(g.bag, medallion(), objects.Item{Entry: 7733, Count: 1})
+	g.bag = append(g.bag, medallion(), world.Item{Entry: 7733, Count: 1})
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v", err)
@@ -269,7 +269,7 @@ func TestUseItemStepSkippedWhenTheResultIsCarried(t *testing.T) {
 // A run that starts at a leg whose step needs the Staff, with neither the Staff nor a step that makes it, fails before it moves.
 func TestRequiredItemMadeByAnEarlierStep(t *testing.T) {
 	g, p := useFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}, medallion()}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}, medallion()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	err := d.checkRequiredItems(0)
 	if err == nil || !strings.Contains(err.Error(), "The Shaft of Tsol (item 7741)") {
@@ -292,7 +292,7 @@ const bossLootPlan = `{"version":1,"name":"t","map":70,"entrance":{"x":0,"y":0,"
 // After the kill the leader walks to the corpse, loots it and checks that the Shaft is in its bags.
 func TestBossLootItem(t *testing.T) {
 	g, p := lootFixture(t, bossLootPlan)
-	g.corpse = []objects.Item{shaft()}
+	g.corpse = []world.Item{shaft()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -343,7 +343,7 @@ func TestAfterBossStepsRunAfterTheKill(t *testing.T) {
 		targets int
 	}{{"horde", 1}, {"alliance", 0}} {
 		g, p := lootFixture(t, afterPlan)
-		g.team, g.chest = c.team, []objects.Item{medallion()}
+		g.team, g.chest = c.team, []world.Item{medallion()}
 		d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 		if err := d.Run(context.Background(), 0); err != nil {
 			t.Fatalf("%s: %v\n%+v", c.team, err, d.Report())
@@ -354,7 +354,7 @@ func TestAfterBossStepsRunAfterTheKill(t *testing.T) {
 	}
 	// The label tells an after-boss step from a step.
 	g, p := lootFixture(t, afterPlan)
-	g.team, g.chest = "alliance", []objects.Item{medallion()}
+	g.team, g.chest = "alliance", []world.Item{medallion()}
 	if err := NewDriver(p, g, Config{GM: GMNone}, g.clock()).Run(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestBossCompanionsLootOffAroundTheFight(t *testing.T) {
 		return
 	}
 	g, p := lootFixture(t, plan)
-	g.corpse = []objects.Item{shaft()}
+	g.corpse = []world.Item{shaft()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -407,7 +407,7 @@ func TestBossCompanionsLootOffAroundTheFight(t *testing.T) {
 	}
 	// Left alone, a boss without the field orders nothing.
 	g, p = lootFixture(t, bossLootPlan)
-	g.corpse = []objects.Item{shaft()}
+	g.corpse = []world.Item{shaft()}
 	if err := NewDriver(p, g, Config{GM: GMNone}, g.clock()).Run(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestBossCompanionsLootOffAroundTheFight(t *testing.T) {
 func TestCompanionsLootOrdersClearTheBotSelection(t *testing.T) {
 	plan := strings.Replace(bossLootPlan, `"position":{"x":90,"y":0,"z":0},`, `"position":{"x":90,"y":0,"z":0},"companions_loot":false,`, 1)
 	g, p := lootFixture(t, plan)
-	g.corpse = []objects.Item{shaft()}
+	g.corpse = []world.Item{shaft()}
 	g.targeted = healer
 	var selected []world.GUID
 	g.onChat = func(f *fakeGame, text string) {
@@ -447,7 +447,7 @@ func TestCompanionsLootOrdersClearTheBotSelection(t *testing.T) {
 func TestRestoreLootAttributesARefusalToLootOn(t *testing.T) {
 	plan := strings.Replace(bossLootPlan, `"position":{"x":90,"y":0,"z":0},`, `"position":{"x":90,"y":0,"z":0},"companions_loot":false,`, 1)
 	g, p := lootFixture(t, plan)
-	g.corpse = []objects.Item{shaft()}
+	g.corpse = []world.Item{shaft()}
 	g.onChat = func(f *fakeGame, text string) {
 		if text == ".bot action loot on" {
 			f.refusals = append(f.refusals, Refusal{Code: "no-bot", Message: "No live owned party bots are controllable."})
@@ -488,7 +488,7 @@ func TestBossLootPassesWhenTheProductIsCarried(t *testing.T) {
   "boss":{"entry":7,"position":{"x":90,"y":0,"z":0},"loot_item":{"entry":7741,"name":"The Shaft of Tsol"},"companions_loot":false},
   "after_boss":[{"use_item":{"entry":7740,"requires_item":{"entry":7741},"expect_item":{"entry":7733,"name":"Staff of Prehistoria"}}}]}]}`
 	g, p := lootFixture(t, plan)
-	g.bag = append(g.bag, objects.Item{Bag: 255, Slot: 24, Entry: 7733, Count: 1})
+	g.bag = append(g.bag, world.Item{Bag: 255, Slot: 24, Entry: 7733, Count: 1})
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -501,7 +501,7 @@ func TestBossLootPassesWhenTheProductIsCarried(t *testing.T) {
 // The start-of-run check asks for the item a use_item step uses, unless it is carried or an earlier step makes it; the message says it is the item the step uses.
 func TestStartCheckWantsTheUsedItem(t *testing.T) {
 	g, p := useFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}, shaft()}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}, shaft()}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	err := d.checkRequiredItems(0)
 	if err == nil || !strings.Contains(err.Error(), "Gni'kiv Medallion (item 7740)") || !strings.Contains(err.Error(), "the item this step uses") || strings.Contains(err.Error(), "which using") {
@@ -512,7 +512,7 @@ func TestStartCheckWantsTheUsedItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Run, not only checked: it fails before anything moves.
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}, shaft()}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}, shaft()}
 	if err := NewDriver(p, g, Config{GM: GMNone}, g.clock()).Run(context.Background(), 0); err == nil || len(g.walks) != 0 {
 		t.Fatalf("%v walks %v", err, g.walks)
 	}
@@ -523,7 +523,7 @@ func TestStartCheckWantsTheUsedItem(t *testing.T) {
 	}
 	// A run that uses the Medallion with the Staff carried is fine without it.
 	p.Legs[0].Steps = p.Legs[0].Steps[1:]
-	g.bag = []objects.Item{{Entry: 7733, Count: 1}}
+	g.bag = []world.Item{{Entry: 7733, Count: 1}}
 	if err := d.checkRequiredItems(0); err != nil {
 		t.Fatalf("the Staff is carried: %v", err)
 	}
@@ -577,7 +577,7 @@ func (g *ruledGame) LootCorpse(ctx context.Context, guid world.GUID) (Looted, er
 // the corpse, takes the Shaft, and puts the old method back.
 func TestBossLootSwitchesToFreeForAllForTheLeadersLoot(t *testing.T) {
 	lg, p := lootFixture(t, bossLootPlan)
-	lg.corpse = []objects.Item{shaft()}
+	lg.corpse = []world.Item{shaft()}
 	g := &ruledGame{lootGame: lg, rules: LootRules{Method: "group_loot", Threshold: 2, Leader: true}}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
@@ -597,7 +597,7 @@ func TestBossLootSwitchesToFreeForAllForTheLeadersLoot(t *testing.T) {
 // Without the switch (the same game, the leader not leading the group) the run fails before it starts, naming the fix.
 func TestBossLootNeedsTheGroupLeaderOrFreeForAll(t *testing.T) {
 	lg, p := lootFixture(t, bossLootPlan)
-	lg.corpse = []objects.Item{shaft()}
+	lg.corpse = []world.Item{shaft()}
 	g := &ruledGame{lootGame: lg, rules: LootRules{Method: "group_loot", Threshold: 2}}
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	err := d.Run(context.Background(), 0)
@@ -609,7 +609,7 @@ func TestBossLootNeedsTheGroupLeaderOrFreeForAll(t *testing.T) {
 	}
 	// A group on free_for_all needs no leader and no switch.
 	lg, p = lootFixture(t, bossLootPlan)
-	lg.corpse = []objects.Item{shaft()}
+	lg.corpse = []world.Item{shaft()}
 	g = &ruledGame{lootGame: lg, rules: LootRules{Method: LootFreeForAll, Threshold: 2}}
 	d = NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {

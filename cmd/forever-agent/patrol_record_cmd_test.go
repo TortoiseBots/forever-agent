@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -35,9 +34,9 @@ type patrolRecordFake struct {
 	unitsCalls  int
 
 	status func(call int) session.StatusInfo
-	units  func(call int) []objects.Unit
+	units  func(call int) []world.Unit
 	party  session.PartyInfo
-	own    objects.Unit
+	own    world.Unit
 }
 
 func (f *patrolRecordFake) client(t *testing.T) *slotClient {
@@ -171,9 +170,9 @@ func patrolRecordSquare(t float64) (float32, float32) {
 }
 
 // patrolRecordMoving is the warder sample at one 500 ms tick.
-func patrolRecordMoving(tick int) objects.Unit {
+func patrolRecordMoving(tick int) world.Unit {
 	x, y := patrolRecordSquare(float64(tick) * 0.5)
-	return objects.Unit{
+	return world.Unit{
 		GUID:   world.GUID(0xF130002F61000ABC),
 		Type:   "creature",
 		Entry:  12129,
@@ -192,7 +191,7 @@ func TestPatrolRecordHappyPath(t *testing.T) {
 		status: func(int) session.StatusInfo {
 			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
-		units: func(call int) []objects.Unit { return []objects.Unit{patrolRecordMoving(call - 1)} },
+		units: func(call int) []world.Unit { return []world.Unit{patrolRecordMoving(call - 1)} },
 	}
 	clock := &patrolRecordClock{now: time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)}
 
@@ -271,9 +270,9 @@ func TestPatrolRecordStopsOnCombat(t *testing.T) {
 		status: func(int) session.StatusInfo {
 			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: own}
 		},
-		units: func(call int) []objects.Unit {
+		units: func(call int) []world.Unit {
 			if call == 5 {
-				return []objects.Unit{{
+				return []world.Unit{{
 					GUID:   world.GUID(0xF130002F61000ABC),
 					Type:   "creature",
 					Entry:  12129,
@@ -315,7 +314,7 @@ func TestPatrolRecordSendsOnlyAllowedLines(t *testing.T) {
 		status: func(int) session.StatusInfo {
 			return session.StatusInfo{State: session.StatusInWorld, Map: 249, GUID: world.GUID(0x00000000000000AA)}
 		},
-		units: func(call int) []objects.Unit { return []objects.Unit{patrolRecordMoving(call - 1)} },
+		units: func(call int) []world.Unit { return []world.Unit{patrolRecordMoving(call - 1)} },
 	}
 	clock := &patrolRecordClock{now: time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)}
 	out := filepath.Join(t.TempDir(), "patrols.json")

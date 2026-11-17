@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -29,14 +28,14 @@ type Member struct {
 // calls that act go through the session like any RPC and never block its loop.
 type Game interface {
 	// Self is the player's own unit row (position, facing, health, power, auras, combat flag); false until known.
-	Self() (objects.Unit, bool)
+	Self() (world.Unit, bool)
 	// Units lists the units in view, nearest first, the player excluded; Distance is from the player.
-	Units() []objects.Unit
+	Units() []world.Unit
 	Party() []Member
 	// Selected is the unit the player has targeted.
 	Selected() world.GUID
 	Spells() *spellstate.State
-	Items() []objects.Item
+	Items() []world.Item
 
 	Cast(ctx context.Context, spell uint32, target world.GUID) error
 	Face(ctx context.Context, g world.GUID) error
@@ -333,7 +332,7 @@ func (b *Brain) Strategies() []string { return slices.Clone(b.names) }
 func (b *Brain) newCtx(now time.Time) *Ctx {
 	b.tick++
 	c := &Ctx{G: b.g, Now: now, Tick: b.tick, Spells: b.g.Spells(), P: b.p, vals: b.vals, mem: b.mem, RestOK: b.restOK(), lock: b.lock, b: b,
-		byID: map[world.GUID]*objects.Unit{}}
+		byID: map[world.GUID]*world.Unit{}}
 	c.Self, c.SelfOK = b.g.Self()
 	c.Units = b.g.Units()
 	c.Party = b.g.Party()

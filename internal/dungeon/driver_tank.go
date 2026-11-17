@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -84,8 +83,8 @@ func (d *Driver) tankReport(f func(*TankFirstReport)) {
 
 // groupTankOf finds the tank among the units: a warrior, paladin or druid of the party (the first of them by that order) whose target
 // is a living hostile mob in combat, else the first of them by that order. The leader is not among the units.
-func (d *Driver) groupTankOf(units []objects.Unit) (objects.Unit, bool) {
-	var cands []objects.Unit
+func (d *Driver) groupTankOf(units []world.Unit) (world.Unit, bool) {
+	var cands []world.Unit
 	for _, u := range units {
 		if u.Type == "player" && d.party[u.GUID] && !u.Dead && !u.Ghost && tankClassRank(u.Class) < 3 {
 			cands = append(cands, u)
@@ -102,7 +101,7 @@ func (d *Driver) groupTankOf(units []objects.Unit) (objects.Unit, bool) {
 	if len(cands) > 0 {
 		return cands[0], true
 	}
-	return objects.Unit{}, false
+	return world.Unit{}, false
 }
 
 // tankClassRank orders the classes by how likely they are to be the tank: warrior, paladin, druid (3: none of them).
@@ -119,7 +118,7 @@ func tankClassRank(class uint8) int {
 }
 
 // ccdUnit says whether the party leaves the mob alone: it carries a crowd-control aura or the moon icon.
-func (d *Driver) ccdUnit(u objects.Unit) bool {
+func (d *Driver) ccdUnit(u world.Unit) bool {
 	if u.CrowdControlled() {
 		return true
 	}
@@ -131,10 +130,10 @@ func (d *Driver) ccdUnit(u objects.Unit) bool {
 
 // respectCCUnits drops the crowd-controlled and moon-marked mobs, counting each once in cc_respected; when nothing else is left the
 // list stays: the mob is the last of the fight.
-func (d *Driver) respectCCUnits(mobs []objects.Unit) []objects.Unit {
+func (d *Driver) respectCCUnits(mobs []world.Unit) []world.Unit {
 	d.tg.init()
-	free := make([]objects.Unit, 0, len(mobs))
-	var held []objects.Unit
+	free := make([]world.Unit, 0, len(mobs))
+	var held []world.Unit
 	for _, u := range mobs {
 		if d.ccdUnit(u) {
 			held = append(held, u)
@@ -156,7 +155,7 @@ func (d *Driver) respectCCUnits(mobs []objects.Unit) []objects.Unit {
 
 // holdScore says how well the tank holds the mob: 3 when the mob hits the tank and the tank targets it, 2 when the mob hits the tank,
 // 1 when the tank targets it, 0 otherwise.
-func holdScore(tank, u objects.Unit) int {
+func holdScore(tank, u world.Unit) int {
 	s := 0
 	if u.Target == tank.GUID {
 		s += 2
@@ -169,7 +168,7 @@ func holdScore(tank, u objects.Unit) int {
 
 // rankGroup orders the mobs the way the party takes them: the mob the tank holds best first, the nearest after; the mob fought
 // already stays first while the tank holds it. Without a tank: the nearest first.
-func (d *Driver) rankGroup(mobs []objects.Unit, tank objects.Unit, haveTank bool) []objects.Unit {
+func (d *Driver) rankGroup(mobs []world.Unit, tank world.Unit, haveTank bool) []world.Unit {
 	out := slices.Clone(mobs)
 	sort.SliceStable(out, func(i, j int) bool {
 		if haveTank {
@@ -180,7 +179,7 @@ func (d *Driver) rankGroup(mobs []objects.Unit, tank objects.Unit, haveTank bool
 		return out[i].Distance < out[j].Distance
 	})
 	if f := d.tg.focus; f != 0 {
-		if i := slices.IndexFunc(out, func(u objects.Unit) bool { return u.GUID == f }); i > 0 && (!haveTank || holdScore(tank, out[i]) >= 2) {
+		if i := slices.IndexFunc(out, func(u world.Unit) bool { return u.GUID == f }); i > 0 && (!haveTank || holdScore(tank, out[i]) >= 2) {
 			u := out[i]
 			copy(out[1:i+1], out[:i])
 			out[0] = u
@@ -192,10 +191,10 @@ func (d *Driver) rankGroup(mobs []objects.Unit, tank objects.Unit, haveTank bool
 // pickAssist chooses the mob the leader targets for the party's attack order: crowd-controlled mobs out, the rest by how well the tank
 // holds them. A mob the tank has held for less than groupOpenerDelay and the party was not sent at yet is passed over (the opener).
 // ok is false when no mob is ready.
-func (d *Driver) pickAssist(mobs []objects.Unit) (objects.Unit, bool) {
+func (d *Driver) pickAssist(mobs []world.Unit) (world.Unit, bool) {
 	d.tg.init()
 	if len(mobs) == 0 {
-		return objects.Unit{}, false
+		return world.Unit{}, false
 	}
 	now := d.clk.Now()
 	tank, haveTank := d.groupTankOf(d.g.Units())
@@ -210,11 +209,11 @@ func (d *Driver) pickAssist(mobs []objects.Unit) (objects.Unit, bool) {
 		}
 		return u, true
 	}
-	return objects.Unit{}, false
+	return world.Unit{}, false
 }
 
 // assistOrder targets u and says "attack" in party chat, noting the switch of focus. It reports whether the order went.
-func (d *Driver) assistOrder(ctx context.Context, u objects.Unit, among []objects.Unit) (bool, error) {
+func (d *Driver) assistOrder(ctx context.Context, u world.Unit, among []world.Unit) (bool, error) {
 	if err := d.g.Target(ctx, u.GUID); err != nil {
 		return false, nil
 	}
@@ -223,7 +222,7 @@ func (d *Driver) assistOrder(ctx context.Context, u objects.Unit, among []object
 	}
 	d.tg.init()
 	d.tg.sent[u.GUID] = true
-	if prev := d.tg.focus; prev != 0 && prev != u.GUID && slices.ContainsFunc(among, func(x objects.Unit) bool { return x.GUID == prev && !x.Dead }) {
+	if prev := d.tg.focus; prev != 0 && prev != u.GUID && slices.ContainsFunc(among, func(x world.Unit) bool { return x.GUID == prev && !x.Dead }) {
 		d.tankReport(func(r *TankFirstReport) { r.TargetSwitches++ })
 	}
 	d.tg.focus = u.GUID
@@ -231,16 +230,16 @@ func (d *Driver) assistOrder(ctx context.Context, u objects.Unit, among []object
 }
 
 // focusGoneIn says whether the mob the party was last sent at is no longer among the mobs.
-func (d *Driver) focusGoneIn(mobs []objects.Unit) bool {
+func (d *Driver) focusGoneIn(mobs []world.Unit) bool {
 	f := d.tg.focus
-	return f != 0 && !slices.ContainsFunc(mobs, func(u objects.Unit) bool { return u.GUID == f })
+	return f != 0 && !slices.ContainsFunc(mobs, func(u world.Unit) bool { return u.GUID == f })
 }
 
 // tankFirstGroup runs at every look of a fight: it samples how many of the mobs are on the tank and sends the tank at a loose add (a mob
 // hitting a party member that is not the tank): the leader targets it and says ".bot action pull 0" (the tank walks up and keeps the mob,
 // briefly holding the others), then targets the mob of the party's attack again. At most one order per look; groupAddCooldown apart for the
 // same mob, three for the fight.
-func (d *Driver) tankFirstGroup(ctx context.Context, mobs []objects.Unit) error {
+func (d *Driver) tankFirstGroup(ctx context.Context, mobs []world.Unit) error {
 	d.tg.init()
 	units := d.g.Units()
 	tank, ok := d.groupTankOf(units)

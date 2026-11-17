@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -34,12 +33,12 @@ func newHunterRig(t *testing.T, p Params, known ...uint32) (*rig, *meleeFake) {
 	if len(known) == 0 {
 		known = hunterSpells
 	}
-	return newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, p, known, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
+	return newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, p, known, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
 	})
 }
 
-func setMana(g *fakeGame, n uint32) { g.setSelf(func(u *objects.Unit) { u.Power = n }) }
+func setMana(g *fakeGame, n uint32) { g.setSelf(func(u *world.Unit) { u.Power = n }) }
 
 // rangedFight is the standard fight: the tank holds a mob 28 yards east of the hunter, the mob faces east, away from the hunter.
 func rangedFight(r *rig) {
@@ -49,8 +48,8 @@ func rangedFight(r *rig) {
 
 // markAndSting puts Hunter's Mark and Serpent Sting on the mob.
 func markAndSting(g *fakeGame) {
-	g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}, {Name: "Serpent Sting", SpellID: spSerpent, Harmful: true}}
+	g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}, {Name: "Serpent Sting", SpellID: spSerpent, Harmful: true}}
 	})
 }
 
@@ -71,8 +70,8 @@ func TestHunterShootsInOrderAndSendsAutoShotOnce(t *testing.T) {
 		after  func()
 	}{
 		{"hunters_mark", spMark, func() {
-			r.g.mutate(mobA, func(u *objects.Unit) {
-				u.Auras = []objects.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
+			r.g.mutate(mobA, func(u *world.Unit) {
+				u.Auras = []world.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
 			})
 		}},
 		{"serpent_sting", spSerpent, func() { markAndSting(r.g) }},
@@ -99,8 +98,8 @@ func TestHunterManaDecidesWhichShotsFire(t *testing.T) {
 	open(r)
 	r.tick(1550 * time.Millisecond)
 	markAndSting(r.g)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
 	})
 	for i := 0; i < 3; i++ {
 		r.tick(1550 * time.Millisecond)
@@ -180,8 +179,8 @@ func TestMultiShotNeedsTwoMobsAtTheTargetAndTheAreaVetoToAllowIt(t *testing.T) {
 }
 
 func TestHunterAspects(t *testing.T) {
-	mk := func(inCombat bool, mana uint32, auras []objects.Aura, known ...uint32) *rig {
-		r, _ := newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, known, func(u *objects.Unit) {
+	mk := func(inCombat bool, mana uint32, auras []world.Aura, known ...uint32) *rig {
+		r, _ := newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, known, func(u *world.Unit) {
 			u.Auras, u.Power, u.InCombat = auras, mana, inCombat
 		})
 		return r
@@ -191,7 +190,7 @@ func TestHunterAspects(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 	// Cheetah out of combat: left alone (the player runs); in combat: the Hawk.
-	cheetah := []objects.Aura{{Name: "Aspect of the Cheetah", SpellID: spCheetah}}
+	cheetah := []world.Aura{{Name: "Aspect of the Cheetah", SpellID: spCheetah}}
 	if d := mk(false, 1000, cheetah, hunterSpells...).tick(time.Second); d != nil {
 		t.Fatalf("the Cheetah out of combat: %+v", d)
 	}
@@ -209,8 +208,8 @@ func TestHunterAspects(t *testing.T) {
 		}
 	}
 	// Low mana in combat: the Viper. Mana back: the Hawk. Without the Viper in the spellbook: nothing (the drink is for rest).
-	hawk := []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
-	viper := []objects.Aura{{Name: "Aspect of the Viper", SpellID: spViper}}
+	hawk := []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
+	viper := []world.Aura{{Name: "Aspect of the Viper", SpellID: spViper}}
 	if d := mk(true, 150, hawk, hunterSpells...).tick(time.Second); d == nil || d.Action != "aspect_viper" || d.Spell != spViper || d.Rel != RelHigh {
 		t.Fatalf("%+v", d)
 	}
@@ -233,19 +232,19 @@ func TestHunterAspects(t *testing.T) {
 }
 
 func TestHunterDrinksAtRestWhenTheViperIsNotThere(t *testing.T) {
-	r, _ := newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, hunterSpells, func(u *objects.Unit) {
-		u.Auras, u.Power = []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}, 400
+	r, _ := newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, hunterSpells, func(u *world.Unit) {
+		u.Auras, u.Power = []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}, 400
 	})
-	r.g.items = []objects.Item{{Entry: 159, Count: 5}} // Refreshing Spring Water
+	r.g.items = []world.Item{{Entry: 159, Count: 5}} // Refreshing Spring Water
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "drink" || len(r.g.used) != 1 || r.g.used[0] != 159 {
 		t.Fatalf("%+v used %v idle %q", d, r.g.used, r.idle())
 	}
 	// Not in combat only, and not while the Drink aura is there.
-	r, _ = newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, hunterSpells, func(u *objects.Unit) {
-		u.Auras, u.Power = []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}, {Name: "Drink", SpellID: 430}}, 400
+	r, _ = newClassRig(t, "marksman_hunter", ClassHunter, 58, 0, 1000, Params{}, hunterSpells, func(u *world.Unit) {
+		u.Auras, u.Power = []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}, {Name: "Drink", SpellID: 430}}, 400
 	})
-	r.g.items = []objects.Item{{Entry: 159, Count: 5}}
+	r.g.items = []world.Item{{Entry: 159, Count: 5}}
 	if d := r.tick(time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -266,7 +265,7 @@ func TestConcussiveShotOnAMobRunningAtTheHunter(t *testing.T) {
 	rangedFight(r)
 	m = mob(mobB, selfG)
 	m.Moving = true
-	m.Auras = []objects.Aura{{Name: "Concussive Shot", Harmful: true}}
+	m.Auras = []world.Aura{{Name: "Concussive Shot", Harmful: true}}
 	r.g.addUnit(m, 20, 0)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "concussive_shot" {
 		t.Fatalf("%+v", d)
@@ -288,8 +287,8 @@ func TestFeignDeathWhenAMobHasTheHunterAndATankIsThere(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// The shots and the swing wait while it lasts (6 s), then go on.
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Feign Death", SpellID: spFeignDeath})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Feign Death", SpellID: spFeignDeath})
 	})
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("shooting while feigning: %+v", d)
@@ -305,9 +304,9 @@ func TestFeignDeathWhenAMobHasTheHunterAndATankIsThere(t *testing.T) {
 	// Without a tank: no feint; the mob is fought with the swing and Raptor Strike.
 	r, mf = newHunterRig(t, Params{})
 	m := mob(mobA, selfG)
-	m.Auras = []objects.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
+	m.Auras = []world.Aura{{Name: "Hunter's Mark", SpellID: spMark, Harmful: true}}
 	r.g.addUnit(m, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	d = r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "hunter_swing" || mf.attacks != 1 {
 		t.Fatalf("%+v attacks %d idle %q", d, mf.attacks, r.idle())
@@ -361,7 +360,7 @@ func TestHunterStepsOutOfTheDeadZone(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "hunter_reposition" {
 		t.Fatalf("in the mob's front: %+v idle %q", d, r.idle())
 	}
-	if w := mf.walkList(); len(w) != 1 || inFront(&objects.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
+	if w := mf.walkList(); len(w) != 1 || inFront(&world.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
 		t.Fatalf("walked to %v, in front of the mob", w)
 	}
 	// No walking when the run switched movement off: the hunter still shoots from where it stands.
@@ -381,12 +380,12 @@ func TestHunterWalkingEndsTheShotsSoTheyStartAgain(t *testing.T) {
 		t.Fatalf("%v", shots)
 	}
 	// The mob moves into the dead zone: the hunter walks away, and sends Auto Shot again at once.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X = 5 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X = 5 })
 	if d := r.tick(300 * time.Millisecond); d == nil || d.Action != "hunter_reposition" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	markAndSting(r.g)
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X = 15 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X = 15 })
 	d := r.tick(1550 * time.Millisecond)
 	if d == nil || d.Action != "auto_shot" {
 		t.Fatalf("%+v walks %v", d, mf.walkList())
@@ -513,9 +512,9 @@ func TestAutoShotIsNotSentAgainWhileShotsAreSeen(t *testing.T) {
 		t.Fatalf("Auto Shot sent %d times after the shots stopped: %v", shots, casts(r.g))
 	}
 	// A new mob needs a new send.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Dead = true })
-	r.g.addUnit(func() objects.Unit { m := mob(mobB, tankG); return m }(), 28, 0)
-	r.g.mutate(tankG, func(u *objects.Unit) { u.Target = mobB })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Dead = true })
+	r.g.addUnit(func() world.Unit { m := mob(mobB, tankG); return m }(), 28, 0)
+	r.g.mutate(tankG, func(u *world.Unit) { u.Target = mobB })
 	r.g.st.CastWent(spAutoShot)
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "auto_shot" || d.Target != mobB {
@@ -533,8 +532,8 @@ func TestFeignDeathSwitchesAutoShotOffAndItStartsAgainAfterTheWait(t *testing.T)
 	if d == nil || d.Action != "feign_death" || r.g.cancels != 1 {
 		t.Fatalf("%+v cancels %d idle %q", d, r.g.cancels, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Feign Death", SpellID: spFeignDeath})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Feign Death", SpellID: spFeignDeath})
 	})
 	before := len(r.g.castList())
 	var resumedAt time.Duration

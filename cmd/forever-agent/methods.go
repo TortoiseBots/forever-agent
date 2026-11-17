@@ -10,7 +10,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -260,7 +259,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		if p.Bound {
 			limit = 5000 // look past the nearest 100: the caller's limit applies to the bound rows, below
 		}
-		us := cur().Units(objects.Filter{Near: p.Within, Entry: p.Entry, Hostile: p.Hostile, Name: p.Name, Limit: limit})
+		us := cur().Units(world.Filter{Near: p.Within, Entry: p.Entry, Hostile: p.Hostile, Name: p.Name, Limit: limit})
 		var bound map[world.GUID]bool
 		if viewFrame != nil {
 			fr, ok := viewFrame()
@@ -272,11 +271,11 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		}
 		return rows, nil
 	}))
-	srv.Register("unit", rpc.Typed(func(ctx context.Context, p targetParams) (objects.Unit, error) {
+	srv.Register("unit", rpc.Typed(func(ctx context.Context, p targetParams) (world.Unit, error) {
 		u, err := cur().Unit(p.GUID, p.Name)
 		return u, rpcErr(err)
 	}))
-	srv.Register("target", rpc.Typed(func(ctx context.Context, p targetParams) (objects.Unit, error) {
+	srv.Register("target", rpc.Typed(func(ctx context.Context, p targetParams) (world.Unit, error) {
 		u, err := cur().Target(ctx, p.GUID, p.Name)
 		return u, rpcErr(err)
 	}))
@@ -326,13 +325,13 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		res, err := cur().Roll(ctx, session.RollRef{ID: p.RollID, Slot: p.ItemSlot, Looted: p.Looted}, p.Choice)
 		return res, rpcErr(err)
 	}))
-	srv.Register("inventory", rpc.Typed(func(ctx context.Context, p inventoryParams) ([]objects.Item, error) {
+	srv.Register("inventory", rpc.Typed(func(ctx context.Context, p inventoryParams) ([]world.Item, error) {
 		inv := cur().Inventory()
 		if p.Bags {
 			inv = cur().Items()
 		}
 		if inv == nil {
-			inv = []objects.Item{}
+			inv = []world.Item{}
 		}
 		return inv, nil
 	}))
@@ -343,7 +342,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 		}
 		return rows, nil
 	}))
-	srv.Register("equip", rpc.Typed(func(ctx context.Context, p equipParams) (objects.Item, error) {
+	srv.Register("equip", rpc.Typed(func(ctx context.Context, p equipParams) (world.Item, error) {
 		it, err := cur().Equip(ctx, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot})
 		return it, rpcErr(err)
 	}))

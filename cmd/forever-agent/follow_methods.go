@@ -12,9 +12,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/brain"
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // followStartParams are follow_start's parameters (spec 1a, JSON names).
@@ -96,12 +96,12 @@ type followGame struct {
 	*sessionGame
 }
 
-func (g *followGame) SelfRow() (objects.Unit, bool) {
+func (g *followGame) SelfRow() (world.Unit, bool) {
 	s := g.cur()
 	st := s.Status()
 	row, err := s.Unit(st.GUID, "")
 	if err != nil {
-		return objects.Unit{}, false
+		return world.Unit{}, false
 	}
 	return row, true
 }

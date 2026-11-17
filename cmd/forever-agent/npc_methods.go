@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -29,7 +28,7 @@ type npcParams struct {
 // answers it (nil when none arrived in time). Item is the item a sell picked.
 type npcResult struct {
 	Since uint64        `json:"since"`
-	Item  *objects.Item `json:"item,omitempty"`
+	Item  *world.Item   `json:"item,omitempty"`
 	Event *events.Event `json:"event"`
 }
 
@@ -46,7 +45,7 @@ var (
 )
 
 type questLogResult struct {
-	Quests []objects.QuestSlot `json:"quests"`
+	Quests []world.QuestSlot `json:"quests"`
 }
 
 // registerNPCMethods wires vendors, trainers and quest givers to the session cur returns at
@@ -75,7 +74,7 @@ func registerNPCMethods(srv *rpc.Server, cur func() *session.Session) {
 		})
 	}))
 	srv.Register("sell", rpc.Typed(func(ctx context.Context, p npcParams) (npcResult, error) {
-		var item objects.Item
+		var item world.Item
 		res, err := call(ctx, p, sellKinds, func(s *session.Session) (err error) {
 			// A slot with no bag is the backpack, as for equip.
 			item, err = s.Sell(ctx, p.GUID, session.EquipRef{Entry: p.ItemEntry, Bag: p.Bag, Slot: p.Slot}, p.Count)
@@ -123,7 +122,7 @@ func registerNPCMethods(srv *rpc.Server, cur func() *session.Session) {
 	srv.Register("quest_log", rpc.Typed(func(ctx context.Context, _ empty) (questLogResult, error) {
 		q := cur().QuestLog()
 		if q == nil {
-			q = []objects.QuestSlot{}
+			q = []world.QuestSlot{}
 		}
 		return questLogResult{q}, nil
 	}))

@@ -3,7 +3,6 @@ package dungeon
 import (
 	"context"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -34,7 +33,7 @@ func wdObjectKind(k ActionKind) bool {
 }
 
 // unitsHP is each unit's health percent, for the watchdog's per-mob lows (watchdog.lowLocked).
-func unitsHP(us []objects.Unit) map[world.GUID]int {
+func unitsHP(us []world.Unit) map[world.GUID]int {
 	out := make(map[world.GUID]int, len(us))
 	for _, u := range us {
 		if u.MaxHealth > 0 {

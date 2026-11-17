@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The knowledge base priest rotations (tools/kbrotgen): shadow and discipline are replacements of priest_shadow,
@@ -47,8 +47,8 @@ func TestKBShadowPriestPlays(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "shadowform" || d.Spell != prShadowform {
 		t.Fatalf("Shadowform first: %+v idle %q", d, r.idle())
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: prShadowform})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: prShadowform})
 	})
 	got := actions(r, 2200*time.Millisecond, 1600*time.Millisecond, 1600*time.Millisecond)
 	if !slices.Contains(got, "shadow_word_pain") {
@@ -67,8 +67,8 @@ func TestKBDisciplinePriestPlays(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "enlighten" || d.Spell != spirEnlighten {
 		t.Fatalf("Enlighten first: %+v idle %q", d, r.idle())
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Enlighten", SpellID: spirEnlighten})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Enlighten", SpellID: spirEnlighten})
 	})
 	got := actions(r, 2200*time.Millisecond, 1600*time.Millisecond, 1600*time.Millisecond)
 	if !slices.Contains(got, "holy_fire") {

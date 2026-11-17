@@ -33,7 +33,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/config"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/mapview"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/patrols"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/privfile"
@@ -1870,11 +1869,11 @@ func (w *walk) party(ctx context.Context) (session.PartyInfo, error) {
 }
 
 // unitsAt asks for the hostile units within d yards of the agent.
-func (w *walk) unitsAt(ctx context.Context, d float32) ([]objects.Unit, error) {
-	var us []objects.Unit
+func (w *walk) unitsAt(ctx context.Context, d float32) ([]world.Unit, error) {
+	var us []world.Unit
 	err := w.agent.Call(ctx, "units", map[string]any{"within": d, "hostile": true}, &us, 15*time.Second)
 	if us == nil {
-		us = []objects.Unit{}
+		us = []world.Unit{}
 	}
 	return us, err
 }

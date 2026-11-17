@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The KB warrior rotations play: one fake warrior of level 60 per spec, full rage, one mob in reach (kb_rotations_test.go's
@@ -23,7 +23,7 @@ const (
 func kbFullWarrior(t *testing.T, preset, stance, rotation string, known ...uint32) (*rig, *meleeFake) {
 	t.Helper()
 	r, mf := newWarriorRig(t, preset, stance, Params{Rotation: rotation}, known...)
-	r.g.setSelf(func(u *objects.Unit) { u.Level = 60 })
+	r.g.setSelf(func(u *world.Unit) { u.Level = 60 })
 	setRage(r.g, 1000)
 	meleeFight(r, mf)
 	return r, mf
@@ -32,8 +32,8 @@ func kbFullWarrior(t *testing.T, preset, stance, rotation string, known ...uint3
 // kbSunderFull gives the mob the five stacks the file's opener Sunder waits on: the fake does not apply the aura itself, and
 // without the stacks the opener would cast again instead of the next entry.
 func kbSunderFull(r *rig) {
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Sunder Armor", SpellID: spSunder, Harmful: true, Stacks: 5}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Sunder Armor", SpellID: spSunder, Harmful: true, Stacks: 5}}
 	})
 }
 

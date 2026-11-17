@@ -16,7 +16,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -2047,7 +2046,7 @@ func (w *walk) placeKillBlockers(ctx context.Context) bool {
 			continue
 		}
 		// The retreat's blockers are killed under the tool's own budget: a blocker that will not die must not hold the retreat.
-		tries, dead, err := w.gmClearKill(ctx, objects.Unit{GUID: g, Entry: u.Entry, Name: u.Name}, w.env.now().Add(gmClearBudget))
+		tries, dead, err := w.gmClearKill(ctx, world.Unit{GUID: g, Entry: u.Entry, Name: u.Name}, w.env.now().Add(gmClearBudget))
 		tried = true
 		if err != nil {
 			w.note("place: the retreat's gm_kill of %d %s: %v", u.Entry, u.GUID, err)

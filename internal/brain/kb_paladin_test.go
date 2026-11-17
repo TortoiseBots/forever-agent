@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The knowledge base paladin rotations (tools/kbrotgen): retribution replaces paladin_retribution, protection plays on
@@ -44,7 +44,7 @@ func TestKBPaladinPresetsAreTheSiblingClones(t *testing.T) {
 func kbPaladinRig(t *testing.T, preset, rotation string, known ...uint32) (*rig, *meleeFake) {
 	t.Helper()
 	return newClassRig(t, preset, ClassPaladin, 60, 0, 3000, Params{Strategies: []string{preset}, Rotation: rotation}, known,
-		func(u *objects.Unit) { u.Auras = append([]objects.Aura{}, paladinBuffed...) })
+		func(u *world.Unit) { u.Auras = append([]world.Aura{}, paladinBuffed...) })
 }
 
 // The retribution KB file: the seal first, then the strike that keeps Holy Might up.
@@ -55,8 +55,8 @@ func TestKBRetributionPaladinPlays(t *testing.T) {
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Action != "seal_of_righteousness" {
 		t.Fatalf("the seal first: %+v idle %q", d, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Seal of Righteousness", SpellID: kbpSoR1})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Seal of Righteousness", SpellID: kbpSoR1})
 	})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "holy_strike" {
 		t.Fatalf("a core spell after the seal: %+v idle %q", d, r.idle())
@@ -71,20 +71,20 @@ func TestKBProtectionPaladinPlays(t *testing.T) {
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Action != "righteous_fury" {
 		t.Fatalf("Righteous Fury first: %+v idle %q", d, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Righteous Fury", SpellID: kbpRighteousFury})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Righteous Fury", SpellID: kbpRighteousFury})
 	})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "sanctity_aura" {
 		t.Fatalf("Sanctity Aura second: %+v idle %q", d, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Sanctity Aura", SpellID: kbpSanctityAura})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Sanctity Aura", SpellID: kbpSanctityAura})
 	})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "seal_of_righteousness" {
 		t.Fatalf("the seal third: %+v idle %q", d, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Seal of Righteousness", SpellID: kbpSoR1})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Seal of Righteousness", SpellID: kbpSoR1})
 	})
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "holy_strike" {
 		t.Fatalf("a core spell after the buffs: %+v idle %q", d, r.idle())
@@ -99,8 +99,8 @@ func TestKBHolyPaladinPlays(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "seal_of_wisdom" || d.Spell != kbpSoWisdom1 {
 		t.Fatalf("Seal of Wisdom first: %+v idle %q", d, r.idle())
 	}
-	r.g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Seal of Wisdom", SpellID: kbpSoWisdom1})
+	r.g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Seal of Wisdom", SpellID: kbpSoWisdom1})
 	})
 	got := actions(r, 1600*time.Millisecond, 1600*time.Millisecond)
 	if !slices.Contains(got, "holy_light") {

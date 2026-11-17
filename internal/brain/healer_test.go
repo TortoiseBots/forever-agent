@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -54,27 +53,27 @@ func priestFake(known ...uint32) *fakeGame {
 	g.self.Class, g.self.Level = 5, 30
 	g.self.MaxHealth, g.self.Health = 1000, 1000
 	g.self.InCombat = true
-	g.self.Auras = []objects.Aura{{Name: "Inner Fire", SpellID: prInnerFire}, {Name: "Power Word: Fortitude", SpellID: prFort1}}
+	g.self.Auras = []world.Aura{{Name: "Inner Fire", SpellID: prInnerFire}, {Name: "Power Word: Fortitude", SpellID: prFort1}}
 	return g
 }
 
 // member adds a party member in combat with the given health at (x, y).
 func (g *fakeGame) member(guid world.GUID, name string, class uint8, hp, max uint32, x, y float32) {
 	g.party = append(g.party, Member{Name: name, GUID: guid, Online: true})
-	g.addUnit(objects.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: hp, MaxHealth: max, InCombat: true,
-		Auras: []objects.Aura{{Name: "Power Word: Fortitude", SpellID: prFort1}}}, x, y)
+	g.addUnit(world.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: hp, MaxHealth: max, InCombat: true,
+		Auras: []world.Aura{{Name: "Power Word: Fortitude", SpellID: prFort1}}}, x, y)
 }
 
 func (g *fakeGame) setHP(guid world.GUID, hp uint32) {
-	g.mutate(guid, func(u *objects.Unit) { u.Health = hp })
+	g.mutate(guid, func(u *world.Unit) { u.Health = hp })
 }
 
-func (g *fakeGame) addAura(guid world.GUID, a objects.Aura) {
-	g.mutate(guid, func(u *objects.Unit) { u.Auras = append(u.Auras, a) })
+func (g *fakeGame) addAura(guid world.GUID, a world.Aura) {
+	g.mutate(guid, func(u *world.Unit) { u.Auras = append(u.Auras, a) })
 }
 
 func (g *fakeGame) setMana(pct uint32) {
-	g.setSelf(func(u *objects.Unit) { u.Power = u.MaxPower * pct / 100 })
+	g.setSelf(func(u *world.Unit) { u.Power = u.MaxPower * pct / 100 })
 }
 
 func holyRig(t *testing.T, known ...uint32) (*rig, *fakeGame) {
@@ -119,7 +118,7 @@ func TestHealTriageLowestHealthFirst(t *testing.T) {
 func TestHealTriageIncludesThePlayer(t *testing.T) {
 	r, g := holyRig(t)
 	g.member(dpsG1, "Mage", 8, 700, 1000, 5, 0)
-	g.setSelf(func(u *objects.Unit) { u.Health = 300 })
+	g.setSelf(func(u *world.Unit) { u.Health = 300 })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "heal" || d.Target != selfG {
 		t.Fatalf("the priest heals itself first: %+v", d)
 	}
@@ -152,7 +151,7 @@ func TestHealTriageDistancePenalty(t *testing.T) {
 func TestHealSkipsTheDeadTheFarAndTheOffline(t *testing.T) {
 	r, g := holyRig(t)
 	g.member(dpsG1, "Dead", 8, 0, 1000, 5, 0)
-	g.mutate(dpsG1, func(u *objects.Unit) { u.Dead = true })
+	g.mutate(dpsG1, func(u *world.Unit) { u.Dead = true })
 	g.party[0].Dead = true
 	g.member(dpsG2, "TooFar", 8, 100, 1000, 45, 0)
 	g.member(dpsG3, "Offline", 8, 100, 1000, 6, 0)
@@ -321,8 +320,8 @@ func TestHealCountsHealsInFlight(t *testing.T) {
 	g.member(dpsG2, "Rogue", 4, 500, 1000, 5, 3)
 	g.member(dpsG3, "Mage", 8, 700, 1000, 5, -3)
 	// Another healer is casting Greater Heal (920) on the rogue: it will be topped.
-	g.mutate(dpsG1, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: prGreater1, Target: dpsG2, EndsInMS: ms(1500)}
+	g.mutate(dpsG1, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: prGreater1, Target: dpsG2, EndsInMS: ms(1500)}
 	})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "heal" || d.Target != dpsG3 {
 		t.Fatalf("the rogue is being healed already: %+v", d)
@@ -337,15 +336,15 @@ func TestHealHoTOnTheTankWhenIdle(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "hot_tank" || d.Spell != prRenew1 || d.Target != tankG {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(tankG, objects.Aura{Name: "Renew", SpellID: prRenew1})
+	g.addAura(tankG, world.Aura{Name: "Renew", SpellID: prRenew1})
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("the HoT is on: %+v", d)
 	}
 	// Out of combat the tank needs none.
 	r2, g2 := holyRig(t)
 	g2.member(tankG, "Tankard", 1, 960, 1000, 5, 0)
-	g2.mutate(tankG, func(u *objects.Unit) { u.InCombat = false })
-	g2.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	g2.mutate(tankG, func(u *world.Unit) { u.InCombat = false })
+	g2.setSelf(func(u *world.Unit) { u.InCombat = false })
 	if d := r2.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -353,9 +352,9 @@ func TestHealHoTOnTheTankWhenIdle(t *testing.T) {
 
 func TestHealOutOfCombatOnlyAtRestGates(t *testing.T) {
 	r, g := holyRig(t)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	g.member(dpsG1, "Mage", 8, 500, 1000, 5, 0)
-	g.mutate(dpsG1, func(u *objects.Unit) { u.InCombat = false })
+	g.mutate(dpsG1, func(u *world.Unit) { u.InCombat = false })
 	r.b.restOK = func() bool { return false } // the driver is walking
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("the priest does not stop the walk to heal: %+v", d)
@@ -373,24 +372,24 @@ func TestHealOutOfCombatOnlyAtRestGates(t *testing.T) {
 
 func TestHealerDrinksBeforeTheTopUpAtARestGate(t *testing.T) {
 	r, g := holyRig(t)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	g.setMana(60)
-	g.items = []objects.Item{{Entry: 159}} // Refreshing Spring Water
+	g.items = []world.Item{{Entry: 159}} // Refreshing Spring Water
 	g.member(dpsG1, "Mage", 8, 800, 1000, 5, 0)
-	g.mutate(dpsG1, func(u *objects.Unit) { u.InCombat = false })
+	g.mutate(dpsG1, func(u *world.Unit) { u.InCombat = false })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "drink" || len(g.used) != 1 || g.used[0] != 159 {
 		t.Fatalf("%+v used %v", d, g.used)
 	}
 	// A healer drinks up to 80%, the shadow priest (a damage dealer) only below 65%.
 	g.setMana(85)
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		u.StandState = "sit"
-		u.Auras = append(u.Auras, objects.Aura{Name: "Drink"})
+		u.Auras = append(u.Auras, world.Aura{Name: "Drink"})
 	})
 	if d := r.tick(8 * time.Second); d != nil {
 		t.Fatalf("the top-up waits for the end of the drink: %+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Auras = u.Auras[:len(u.Auras)-1] }) // the drink ends, the priest still sits
+	g.setSelf(func(u *world.Unit) { u.Auras = u.Auras[:len(u.Auras)-1] }) // the drink ends, the priest still sits
 	if d := r.tick(2 * time.Second); d == nil || d.Action != "stand_up" {
 		t.Fatalf("%+v", d)
 	}
@@ -400,7 +399,7 @@ func TestHealerDrinksBeforeTheTopUpAtARestGate(t *testing.T) {
 }
 
 func TestDispelsByTheDebuffsType(t *testing.T) {
-	cast := func(known []uint32, aura objects.Aura, mana uint32) *Decision {
+	cast := func(known []uint32, aura world.Aura, mana uint32) *Decision {
 		g := priestFake(known...)
 		r := newRig(t, g, Params{Strategies: []string{"holy_priest"}})
 		g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
@@ -409,25 +408,25 @@ func TestDispelsByTheDebuffsType(t *testing.T) {
 		g.addAura(dpsG1, aura)
 		return r.tick(100 * time.Millisecond)
 	}
-	poly := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
-	slow := objects.Aura{SpellID: auraFrostbolt, Name: "Frostbolt"}
+	poly := world.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
+	slow := world.Aura{SpellID: auraFrostbolt, Name: "Frostbolt"}
 	if d := cast(holyKnown, poly, 100); d == nil || d.Action != "dispel" || d.Spell != prDispelMagic || d.Target != dpsG1 {
 		t.Errorf("magic: %+v", d)
 	}
-	if d := cast(holyKnown, objects.Aura{SpellID: auraRabies, Name: "Rabies"}, 100); d == nil || d.Spell != prCureDisease {
+	if d := cast(holyKnown, world.Aura{SpellID: auraRabies, Name: "Rabies"}, 100); d == nil || d.Spell != prCureDisease {
 		t.Errorf("disease: %+v", d)
 	}
 	withAbolish := append([]uint32{prAbolishDisease}, holyKnown...)
-	if d := cast(withAbolish, objects.Aura{SpellID: auraRabies, Name: "Rabies"}, 100); d == nil || d.Spell != prAbolishDisease {
+	if d := cast(withAbolish, world.Aura{SpellID: auraRabies, Name: "Rabies"}, 100); d == nil || d.Spell != prAbolishDisease {
 		t.Errorf("abolish first: %+v", d)
 	}
-	for _, a := range []objects.Aura{{SpellID: auraPoison, Name: "Deadly Poison"}, {SpellID: auraCurse, Name: "Curse of Agony"}, {SpellID: auraMutating, Name: "Mutating Injection"}} {
+	for _, a := range []world.Aura{{SpellID: auraPoison, Name: "Deadly Poison"}, {SpellID: auraCurse, Name: "Curse of Agony"}, {SpellID: auraMutating, Name: "Mutating Injection"}} {
 		if d := cast(holyKnown, a, 100); d != nil {
 			t.Errorf("a priest cannot (or must not) dispel %s: %+v", a.Name, d)
 		}
 	}
 	// A beneficial aura is not dispelled (Dispel Magic on a friend removes harmful magic).
-	good := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
+	good := world.Aura{SpellID: auraPolymorph, Name: "Polymorph"}
 	g := priestFake(holyKnown...)
 	r := newRig(t, g, Params{Strategies: []string{"holy_priest"}})
 	g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
@@ -449,8 +448,8 @@ func TestDispelsByTheDebuffsType(t *testing.T) {
 	g = priestFake(withAbolish...)
 	r = newRig(t, g, Params{Strategies: []string{"holy_priest"}})
 	g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g.addAura(dpsG1, objects.Aura{SpellID: auraRabies, Name: "Rabies", Harmful: true})
-	g.addAura(dpsG1, objects.Aura{SpellID: prAbolishDisease, Name: "Abolish Disease"})
+	g.addAura(dpsG1, world.Aura{SpellID: auraRabies, Name: "Rabies", Harmful: true})
+	g.addAura(dpsG1, world.Aura{SpellID: prAbolishDisease, Name: "Abolish Disease"})
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Errorf("%+v", d)
 	}
@@ -460,8 +459,8 @@ func TestDispelPicksCrowdControlFirstAndTriesOncePerAura(t *testing.T) {
 	r, g := holyRig(t)
 	g.member(dpsG1, "Rogue", 4, 1000, 1000, 5, 0)
 	g.member(dpsG2, "Mage", 8, 1000, 1000, 5, 3)
-	g.addAura(dpsG1, objects.Aura{SpellID: auraFrostbolt, Name: "Frostbolt", Harmful: true})
-	g.addAura(dpsG2, objects.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true})
+	g.addAura(dpsG1, world.Aura{SpellID: auraFrostbolt, Name: "Frostbolt", Harmful: true})
+	g.addAura(dpsG2, world.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "dispel" || d.Target != dpsG2 {
 		t.Fatalf("%+v", d)
 	}
@@ -532,7 +531,7 @@ func TestHealerStandsBehindTheTankAtRange(t *testing.T) {
 	if got := dist2(w[0], Vec3{10, 0, 0}); got < healerMin || got > healerMax {
 		t.Fatalf("spot %v is %.1f yd from the tank, want %v-%v", w[0], got, healerMin, healerMax)
 	}
-	if inFront(&objects.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
+	if inFront(&world.Unit{X: 12, Y: 0, O: math.Pi}, w[0]) {
 		t.Fatalf("spot %v is in the mob's front", w[0])
 	}
 	// Once there, it stays put.
@@ -557,7 +556,7 @@ func TestHealerNeedsAFightAndMovementOn(t *testing.T) {
 	}
 	r2, pf2 := healPosRig(t, Params{})
 	pf2.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	pf2.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000}, 5, 0)
+	pf2.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000}, 5, 0)
 	if d := r2.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("no fight, no walk: %+v", d)
 	}
@@ -628,7 +627,7 @@ func TestHealerRunsToTheTankWithAMobThatPickedIt(t *testing.T) {
 	r, pf := healPosRig(t, Params{})
 	g := pf.fakeGame
 	g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000, Target: mobB, InCombat: true}, 30, 0)
+	g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000, Target: mobB, InCombat: true}, 30, 0)
 	g.addUnit(mob(mobA, selfG), 14, 0) // far from melee, on the priest
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "run_to_tank" {
@@ -653,8 +652,8 @@ func TestHealerUsesAManaPotionInABossFight(t *testing.T) {
 	r, pf := healPosRig(t, Params{NoMove: true})
 	g := pf.fakeGame
 	tankFights(g, 24, 26, 0)
-	g.mutate(mobA, func(u *objects.Unit) { u.Level = 40; u.MaxHealth = 20000; u.Health = 20000 })
-	g.items = []objects.Item{{Entry: 2455}} // Minor Mana Potion
+	g.mutate(mobA, func(u *world.Unit) { u.Level = 40; u.MaxHealth = 20000; u.Health = 20000 })
+	g.items = []world.Item{{Entry: 2455}} // Minor Mana Potion
 	g.setMana(9)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "mana_potion" || len(g.used) != 1 || g.used[0] != 2455 {
@@ -663,7 +662,7 @@ func TestHealerUsesAManaPotionInABossFight(t *testing.T) {
 	// Not in an ordinary fight.
 	r2, pf2 := healPosRig(t, Params{NoMove: true})
 	tankFights(pf2.fakeGame, 24, 26, 0)
-	pf2.items = []objects.Item{{Entry: 2455}}
+	pf2.items = []world.Item{{Entry: 2455}}
 	pf2.setMana(9)
 	if d := r2.tick(100 * time.Millisecond); d != nil && d.Action == "mana_potion" {
 		t.Fatalf("%+v", d)
@@ -673,7 +672,7 @@ func TestHealerUsesAManaPotionInABossFight(t *testing.T) {
 // ---- review round 1 ----
 
 func TestDispelRangeIsTheSpellsOwn(t *testing.T) {
-	poly := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
+	poly := world.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
 	r, pf := healPosRig(t, Params{NoMove: true})
 	g := pf.fakeGame
 	g.member(tankG, "Tankard", 1, 1000, 1000, 32, 0) // inside the heal's 38.5 yd, outside the dispel's 30
@@ -695,7 +694,7 @@ func TestDispelRangeIsTheSpellsOwn(t *testing.T) {
 }
 
 func TestHealerWalksIntoDispelRangeForCrowdControlOnly(t *testing.T) {
-	poly := objects.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
+	poly := world.Aura{SpellID: auraPolymorph, Name: "Polymorph", Harmful: true}
 	r, pf := healPosRig(t, Params{})
 	pf.member(tankG, "Tankard", 1, 1000, 1000, 32, 0)
 	pf.addAura(tankG, poly)
@@ -712,7 +711,7 @@ func TestHealerWalksIntoDispelRangeForCrowdControlOnly(t *testing.T) {
 	// A slow is not worth a walk.
 	r2, pf2 := healPosRig(t, Params{})
 	pf2.member(tankG, "Tankard", 1, 1000, 1000, 32, 0)
-	pf2.addAura(tankG, objects.Aura{SpellID: auraFrostbolt, Name: "Frostbolt", Harmful: true})
+	pf2.addAura(tankG, world.Aura{SpellID: auraFrostbolt, Name: "Frostbolt", Harmful: true})
 	if d := r2.tick(100 * time.Millisecond); d != nil || len(pf2.walkList()) != 0 {
 		t.Fatalf("%+v %v", d, pf2.walkList())
 	}
@@ -757,7 +756,7 @@ func TestEffectAmountMatchesTheCoresRoll(t *testing.T) {
 
 func TestNoCastWhileEatingOutOfCombatAndStandsForAFight(t *testing.T) {
 	g := newFake(spFrostbolt, spIntellect, spFrostArmor, spIceArmor)
-	g.self.Auras = []objects.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}, {Name: "Drink", SpellID: 430}}
+	g.self.Auras = []world.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}, {Name: "Drink", SpellID: 430}}
 	g.self.StandState = "sit"
 	g.setMana(50)
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}})
@@ -767,7 +766,7 @@ func TestNoCastWhileEatingOutOfCombatAndStandsForAFight(t *testing.T) {
 	}
 	// A mob on the mage: the drink is broken, the mage stands (that is the tick), and casts the next.
 	g.addUnit(mob(mobA, selfG), 20, 0)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "stand_up" || g.stands != 1 || len(g.castList()) != 0 {
 		t.Fatalf("%+v stands %d", d, g.stands)
@@ -782,7 +781,7 @@ func TestNoCastWhileEatingOutOfCombatAndStandsForAFight(t *testing.T) {
 
 func TestStandsUpAfterAMealForUpkeep(t *testing.T) {
 	g := newFake(spIntellect, spFrostArmor)
-	g.self.Auras = []objects.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}} // no Drink aura: the meal is over, the mage still sits
+	g.self.Auras = []world.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}} // no Drink aura: the meal is over, the mage still sits
 	g.self.StandState = "sit"
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}})
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "stand_up" {
@@ -795,13 +794,13 @@ func TestStandsUpAfterAMealForUpkeep(t *testing.T) {
 
 func TestPriestHealsWaitForTheMealUnlessItIsAnEmergency(t *testing.T) {
 	r, g := holyRig(t)
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		u.InCombat = false
 		u.StandState = "sit"
-		u.Auras = append(u.Auras, objects.Aura{Name: "Drink"})
+		u.Auras = append(u.Auras, world.Aura{Name: "Drink"})
 	})
 	g.member(dpsG1, "Mage", 8, 500, 1000, 5, 0) // 50%: a medium heal, buffs missing, none breaks the meal
-	g.mutate(dpsG1, func(u *objects.Unit) { u.InCombat = false; u.Auras = []objects.Aura{} })
+	g.mutate(dpsG1, func(u *world.Unit) { u.InCombat = false; u.Auras = []world.Aura{} })
 	if d := r.tick(100 * time.Millisecond); d != nil || g.stands != 0 {
 		t.Fatalf("%+v stands %d", d, g.stands)
 	}

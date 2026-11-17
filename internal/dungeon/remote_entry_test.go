@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -200,7 +199,7 @@ func TestEntryTargetsOpenAChestTheAgentNeverSees(t *testing.T) {
 func TestEntryTargetsGUIDIsTheRetryWhenTheServerFindsNothing(t *testing.T) {
 	g := entryChestGame(t, 3, true)
 	g.world[0].at = Point{100, 0, 0} // 70 yd from the plan's point: the search around the point finds nothing
-	g.gobjs = []objects.GameObject{chestObj()}
+	g.gobjs = []world.GameObject{chestObj()}
 	plan := remotePlan(Leg{Name: "c", To: Point{20, 0, 0}, Steps: []Step{entryChestStep()}})
 	rep, err := entryRun(t, g, plan)
 	// The by-entry order is refused (not-found); the agent's own GUID of the chest then goes out. (The fake only answers the GUID order
@@ -554,7 +553,7 @@ func TestEntryProbeAnswersThatTurnItOff(t *testing.T) {
 		set(g)
 		plan := remotePlan(Leg{Name: "k", To: Point{20, 0, 0}, Steps: entrySealStep(5)[:1]})
 		g.onAppear = func(n *nearGame) {
-			n.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+			n.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 		}
 		rep, err := entryRun(t, g, plan)
 		if err != nil || !strings.HasPrefix(rep.Remote.EntryTargets, "off: ") || g.indexOf("cmd open "+tbm.GUIDArg(keystoneGUID)) < 0 || g.indexOf("cmd open entry:") >= 0 {
@@ -570,7 +569,7 @@ func TestEntryProbeAnswersThatTurnItOff(t *testing.T) {
 func TestEntryOffKeepsTheUncheckedWait(t *testing.T) {
 	g := entryKeystoneGame(t, 3, false)
 	g.onAppear = func(n *nearGame) {
-		n.gobjs = []objects.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
+		n.gobjs = []world.GameObject{{GUID: keystoneGUID, Entry: goKeystone, X: 20, Y: 0, Z: 0, Distance: 3, State: "ready"}}
 	}
 	plan := remotePlan(Leg{Name: "k", To: Point{20, 0, 0}, Steps: entrySealStep(60)}, Leg{Name: "i", To: Point{20, 20, 0}})
 	rep, err := entryRun(t, g, plan)
@@ -646,7 +645,7 @@ func TestEntryTargetsFallbackUsesTheModulesGUID(t *testing.T) {
 // the agent is brought up once for the boss step and its view of the corpse is the evidence (one counted GM assist).
 func TestEntryTargetsResumedBossBringsTheAgentUpOnce(t *testing.T) {
 	g := entryChestGame(t, 3, true)
-	g.onAppear = func(n *nearGame) { n.units = []objects.Unit{corpseOf(777, Point{62, 3, 0})} }
+	g.onAppear = func(n *nearGame) { n.units = []world.Unit{corpseOf(777, Point{62, 3, 0})} }
 	plan := remotePlan(Leg{Name: "b", To: Point{20, 0, 0}, Steps: []Step{entryChestStep()}, Boss: &Boss{Entry: 777, Position: Point{60, 0, 0}}})
 	rep, err := entryRun(t, g, plan)
 	if err != nil {

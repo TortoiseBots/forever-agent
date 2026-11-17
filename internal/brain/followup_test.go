@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -73,7 +72,7 @@ func TestLineOfSightBlockHoldsForFiveSecondsWhereTheRefusalHappenedAndIsExtended
 	}
 	// Walking away ends it at once.
 	markLOSBlocked(c, m)
-	r.g.setSelf(func(u *objects.Unit) { u.X += 5 })
+	r.g.setSelf(func(u *world.Unit) { u.X += 5 })
 	c = at(10 * time.Millisecond)
 	m, _ = c.Unit(mobA)
 	if clear, _ := c.LineOfSight(m); !clear {
@@ -88,7 +87,7 @@ func runToTankMage(t *testing.T) (*rig, *posFake) {
 	r, pf := newPosRig(t, Params{})
 	pf.hold = make(chan struct{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900}, 30, 6)
 	r.g.addUnit(mob(mobA, selfG), 15, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "run_to_tank" || d.Result != ResultOK {
@@ -123,7 +122,7 @@ func TestAWalkDoesNotBlockTheTickAndHoldsBackOrdinaryActions(t *testing.T) {
 
 func TestEmergencyDuringAWalkCancelsItAndActsInTheSameTick(t *testing.T) {
 	r, pf := runToTankMage(t)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 120 }) // 12%: Ice Block (RelDispel)
+	r.g.setSelf(func(u *world.Unit) { u.Health = 120 }) // 12%: Ice Block (RelDispel)
 	d := r.tick(200 * time.Millisecond)
 	if d == nil || d.Action != "ice_block" || d.Result != ResultOK {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -146,8 +145,8 @@ func TestEmergencyDuringAWalkCancelsItAndActsInTheSameTick(t *testing.T) {
 
 func TestInterruptDuringAWalkCancelsIt(t *testing.T) {
 	r, _ := runToTankMage(t)
-	cast := objects.Cast{SpellID: spLesserHeal, Target: world.GUID(100), EndsInMS: ms(2000)}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &cast })
+	cast := world.Cast{SpellID: spLesserHeal, Target: world.GUID(100), EndsInMS: ms(2000)}
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &cast })
 	d := r.tick(200 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -181,10 +180,10 @@ func TestWalkIsASecondGuardAgainstNoMoveAndTheDriversHold(t *testing.T) {
 func TestInterruptedMemoryForgetsOldCasts(t *testing.T) {
 	r, _ := newPosRig(t, Params{})
 	r.g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 22, 0)
+	r.g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 900, MaxHealth: 900, Target: mobA}, 22, 0)
 	r.g.addUnit(mob(mobA, tankG), 24, 0)
-	cast := objects.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(2000)}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Casting = &cast })
+	cast := world.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(2000)}
+	r.g.mutate(mobA, func(u *world.Unit) { u.Casting = &cast })
 	e := &r.b.mem.ext
 	e.mu.Lock()
 	e.interrupted = map[interruptKey]time.Time{{caster: 999, spell: 1}: r.g.clk.Now().Add(-time.Minute)}

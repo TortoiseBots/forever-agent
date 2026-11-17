@@ -5,7 +5,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -76,7 +75,7 @@ func isHealSpell(m spells.Meta) bool {
 // ---- blessings ----
 
 // blessingPrefs are the blessings a member gets, best first, by its role and class.
-func blessingPrefs(c *Ctx, u *objects.Unit) []string {
+func blessingPrefs(c *Ctx, u *world.Unit) []string {
 	const (
 		wisdom, might, kings, salvation = "Blessing of Wisdom", "Blessing of Might", "Blessing of Kings", "Blessing of Salvation"
 	)
@@ -93,7 +92,7 @@ func blessingPrefs(c *Ctx, u *objects.Unit) []string {
 }
 
 // carriedBlessing is the first blessing of a paladin that the unit carries (Blessing of ... or Greater Blessing of ...), "" for none.
-func carriedBlessing(u *objects.Unit) string {
+func carriedBlessing(u *world.Unit) string {
 	if n := auraWithPrefix(u, "Blessing of "); n != "" {
 		return n
 	}
@@ -158,7 +157,7 @@ func holyAuraWanted(c *Ctx) string {
 // ---- the emergencies ----
 
 // memberPct is a member's health in percent, 100 when it has no maximum.
-func memberPct(c *Ctx, u *objects.Unit) float64 {
+func memberPct(c *Ctx, u *world.Unit) float64 {
 	hp, max := memberHealth(c, u)
 	if max <= 0 {
 		return 100
@@ -167,7 +166,7 @@ func memberPct(c *Ctx, u *objects.Unit) float64 {
 }
 
 // meleeOn counts the hostile mobs in combat that have the unit as their target and stand within protectMelee of it.
-func meleeOn(c *Ctx, u *objects.Unit) int {
+func meleeOn(c *Ctx, u *world.Unit) int {
 	n := 0
 	for i := range c.Units {
 		m := &c.Units[i]
@@ -179,15 +178,15 @@ func meleeOn(c *Ctx, u *objects.Unit) int {
 }
 
 // forbearance says the unit cannot take another Divine Shield or Hand of Protection.
-func forbearance(u *objects.Unit) bool { return HasAura(u, "Forbearance") }
+func forbearance(u *world.Unit) bool { return HasAura(u, "Forbearance") }
 
 // layOnHandsTarget is the member (or the paladin) to cast Lay on Hands on: the one with the least health below layOnHandsHolyPct, in
 // reach and in sight, in a fight.
-func layOnHandsTarget(c *Ctx) *objects.Unit {
+func layOnHandsTarget(c *Ctx) *world.Unit {
 	if !healCombat(c) {
 		return nil
 	}
-	var best *objects.Unit
+	var best *world.Unit
 	bestPct := float64(layOnHandsHolyPct)
 	for _, u := range healMembers(c) {
 		if p := memberPct(c, u); p < bestPct && inHealReach(u) && sightOK(c, u) {
@@ -199,12 +198,12 @@ func layOnHandsTarget(c *Ctx) *objects.Unit {
 
 // protectTarget is the member to cast Hand of Protection on: not the tank and not the paladin, below protectPct health, with a mob
 // hitting it in melee and either two on it or a quarter of its health lost within three seconds; without Forbearance, in reach and sight.
-func protectTarget(c *Ctx) *objects.Unit {
+func protectTarget(c *Ctx) *world.Unit {
 	if !healCombat(c) {
 		return nil
 	}
 	tank := ValTank.Get(c)
-	var best *objects.Unit
+	var best *world.Unit
 	bestPct := float64(protectPct)
 	for _, u := range healMembers(c) {
 		if u.GUID == c.Self.GUID || (tank != nil && tank.GUID == u.GUID) || forbearance(u) || HasAura(u, "Hand of Protection", "Divine Shield") {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Keeping the agent near the party (remote mode). The object steps need the agent's own character in view of the chest, the corpse
@@ -491,7 +491,7 @@ func (d *RemoteDriver) objectStepNext() ([2]int, bool) {
 // UnitSource is the optional part of a RemoteGame that lists the units in the agent's own view (its object store). A boss killed
 // before this driver started (a resumed run) is in no ledger and no frame, but its corpse is in the store of an agent standing near it.
 type UnitSource interface {
-	Units() []objects.Unit
+	Units() []world.Unit
 }
 
 // bossCorpseSeen says whether the agent's own view holds a corpse of one of the entries (health 0 or the dead flag) in the boss's area:

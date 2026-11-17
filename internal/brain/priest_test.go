@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -26,9 +25,9 @@ func shadowRig(t *testing.T, known ...uint32) (*rig, *fakeGame) {
 // pull puts the tank next to the priest with a mob that is not in combat yet as its target.
 func pull(g *fakeGame) {
 	g.party = append(g.party, Member{Name: "Tankard", GUID: tankG, Online: true})
-	g.addUnit(objects.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000, Target: mobA,
-		Auras: []objects.Aura{{Name: "Power Word: Fortitude", SpellID: prFort1}}}, 6, 0)
-	g.addUnit(objects.Unit{GUID: mobA, Type: "creature", Name: "Mob", Hostile: true, Health: 500, MaxHealth: 500}, 30, 0)
+	g.addUnit(world.Unit{GUID: tankG, Type: "player", Name: "Tankard", Class: 1, InParty: true, Health: 1000, MaxHealth: 1000, Target: mobA,
+		Auras: []world.Aura{{Name: "Power Word: Fortitude", SpellID: prFort1}}}, 6, 0)
+	g.addUnit(world.Unit{GUID: mobA, Type: "creature", Name: "Mob", Hostile: true, Health: 500, MaxHealth: 500}, 30, 0)
 }
 
 func TestShieldTheTankAtThePull(t *testing.T) {
@@ -50,13 +49,13 @@ func TestShieldTheTankAtThePull(t *testing.T) {
 func TestShieldNeedsNoWeakenedSoulAndMana(t *testing.T) {
 	r, g := holyRig(t)
 	pull(g)
-	g.addAura(tankG, objects.Aura{Name: "Weakened Soul", SpellID: 6788, Harmful: true})
+	g.addAura(tankG, world.Aura{Name: "Weakened Soul", SpellID: 6788, Harmful: true})
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("a second shield would be refused: %+v", d)
 	}
 	r2, g2 := holyRig(t)
 	pull(g2)
-	g2.addAura(tankG, objects.Aura{Name: "Power Word: Shield", SpellID: prShield1})
+	g2.addAura(tankG, world.Aura{Name: "Power Word: Shield", SpellID: prShield1})
 	if d := r2.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -113,7 +112,7 @@ func TestFadeWhenAMobHasThePriest(t *testing.T) {
 	if d == nil || d.Action != "fade" || d.Spell != prFade {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: "Fade", SpellID: prFade}) })
+	g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: "Fade", SpellID: prFade}) })
 	if d := r.tick(2 * time.Second); d != nil {
 		t.Fatalf("Fade is on: %+v", d)
 	}
@@ -122,7 +121,7 @@ func TestFadeWhenAMobHasThePriest(t *testing.T) {
 func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 	r, g := holyRig(t)
 	meleeMobsOn(g, 2)
-	g.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	g.setSelf(func(u *world.Unit) { u.Health = 500 })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "psychic_scream" || d.Spell != prScream || d.Rel < RelInterrupt {
 		t.Fatalf("%+v", d)
@@ -130,7 +129,7 @@ func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 	// A pack that sleeps within 30 yd would be pulled by the scattering mobs: Fade instead.
 	r2, g2 := holyRig(t)
 	meleeMobsOn(g2, 2)
-	g2.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	g2.setSelf(func(u *world.Unit) { u.Health = 500 })
 	sleeper := mob(mobB+5, 0)
 	sleeper.InCombat = false
 	g2.addUnit(sleeper, 22, 0)
@@ -140,7 +139,7 @@ func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 	// One mob, or a priest in good health, does not scream.
 	r3, g3 := holyRig(t)
 	meleeMobsOn(g3, 1)
-	g3.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	g3.setSelf(func(u *world.Unit) { u.Health = 500 })
 	if d := r3.tick(100 * time.Millisecond); d == nil || d.Action == "psychic_scream" {
 		t.Fatalf("%+v", d)
 	}
@@ -152,7 +151,7 @@ func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 	// A mob fighting someone outside the party counts as loose; one fighting the tank does not.
 	r5, g5 := holyRig(t)
 	meleeMobsOn(g5, 2)
-	g5.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	g5.setSelf(func(u *world.Unit) { u.Health = 500 })
 	g5.member(tankG, "Tankard", 1, 1000, 1000, 8, 0)
 	g5.addUnit(mob(mobB+6, tankG), 12, 0)
 	if d := r5.tick(100 * time.Millisecond); d == nil || d.Action != "psychic_scream" {
@@ -160,7 +159,7 @@ func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 	}
 	r6, g6 := holyRig(t)
 	meleeMobsOn(g6, 2)
-	g6.setSelf(func(u *objects.Unit) { u.Health = 500 })
+	g6.setSelf(func(u *world.Unit) { u.Health = 500 })
 	g6.addUnit(mob(mobB+6, 999), 12, 0)
 	if d := r6.tick(100 * time.Millisecond); d == nil || d.Action == "psychic_scream" {
 		t.Fatalf("%+v", d)
@@ -171,37 +170,37 @@ func TestPsychicScreamIsAnEmergencyWithNoLooseMobs(t *testing.T) {
 
 func TestPriestBuffsOutOfCombatAtTheGate(t *testing.T) {
 	r, g := holyRig(t)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false; u.Auras = []objects.Aura{} })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false; u.Auras = []world.Aura{} })
 	g.member(dpsG1, "Mage", 8, 1000, 1000, 5, 0)
-	g.mutate(dpsG1, func(u *objects.Unit) { u.InCombat = false; u.Auras = []objects.Aura{} })
+	g.mutate(dpsG1, func(u *world.Unit) { u.InCombat = false; u.Auras = []world.Aura{} })
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "inner_fire" || d.Spell != prInnerFire {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Inner Fire", SpellID: prInnerFire})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Inner Fire", SpellID: prInnerFire})
 	})
 	if d = r.tick(2 * time.Second); d == nil || d.Action != "fortitude" || d.Target != selfG {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Power Word: Fortitude", SpellID: prFort1})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Power Word: Fortitude", SpellID: prFort1})
 	})
 	if d = r.tick(2 * time.Second); d == nil || d.Action != "fortitude" || d.Target != dpsG1 {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(dpsG1, objects.Aura{Name: "Prayer of Fortitude", SpellID: 21562})
+	g.addAura(dpsG1, world.Aura{Name: "Prayer of Fortitude", SpellID: 21562})
 	if d = r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
 	// With the walk going on (no rest gate) or in combat nothing is buffed; nor in Shadowform, which forbids Holy spells.
 	r.b.restOK = func() bool { return false }
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	if d = r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
 	r.b.restOK = func() bool { return true }
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Shadowform", SpellID: prShadowform}} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Shadowform", SpellID: prShadowform}} })
 	if d = r.tick(2 * time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -215,17 +214,17 @@ func TestShadowRotation(t *testing.T) {
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Spell != prShadowform {
 		t.Fatalf("Shadowform first: %+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: prShadowform})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: prShadowform})
 	})
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Spell != prVampiric {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(mobA, objects.Aura{Name: "Vampiric Embrace", SpellID: prVampiric, Harmful: true})
+	g.addAura(mobA, world.Aura{Name: "Vampiric Embrace", SpellID: prVampiric, Harmful: true})
 	if d := r.tick(2 * time.Second); d == nil || d.Spell != prSWP {
 		t.Fatalf("%+v", d)
 	}
-	g.addAura(mobA, objects.Aura{Name: "Shadow Word: Pain", SpellID: prSWP, Harmful: true})
+	g.addAura(mobA, world.Aura{Name: "Shadow Word: Pain", SpellID: prSWP, Harmful: true})
 	if d := r.tick(2 * time.Second); d == nil || d.Spell != prMindBlast {
 		t.Fatalf("%+v", d)
 	}
@@ -248,7 +247,7 @@ func TestShadowRotation(t *testing.T) {
 func TestShadowDoesNotPainANearlyDeadMob(t *testing.T) {
 	r, g := shadowRig(t, prSWP, prMindFlay, spShoot)
 	tankFights(g, 25, 18, 0)
-	g.mutate(mobA, func(u *objects.Unit) { u.Health = 100 }) // 20%
+	g.mutate(mobA, func(u *world.Unit) { u.Health = 100 }) // 20%
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Spell != prMindFlay {
 		t.Fatalf("%+v", d)
@@ -264,8 +263,8 @@ func TestShadowSmiteWhenMindFlayCannotReach(t *testing.T) {
 	}
 	// In Shadowform the Holy spell is not cast.
 	r2, g2 := shadowRig(t, prSmite, prMindFlay, prShadowform, spShoot)
-	g2.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: prShadowform})
+	g2.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: prShadowform})
 	})
 	tankFights(g2, 30, 25, 0)
 	r2.tick(100 * time.Millisecond)
@@ -277,8 +276,8 @@ func TestShadowSmiteWhenMindFlayCannotReach(t *testing.T) {
 func TestShadowSilenceInterruptsAHeal(t *testing.T) {
 	r, g := shadowRig(t)
 	tankFights(g, 25, 15, 0)
-	g.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(1500)}
+	g.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(1500)}
 	})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" || d.Spell != prSilence || d.Rel < RelInterrupt {
@@ -287,8 +286,8 @@ func TestShadowSilenceInterruptsAHeal(t *testing.T) {
 	// The healer does not interrupt.
 	r2, g2 := holyRig(t, append([]uint32{prSilence}, holyKnown...)...)
 	tankFights(g2, 25, 15, 0)
-	g2.mutate(mobA, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(1500)}
+	g2.mutate(mobA, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: spLesserHeal, Target: mobA, EndsInMS: ms(1500)}
 	})
 	if d := r2.tick(100 * time.Millisecond); d != nil && d.Action == "interrupt" {
 		t.Fatalf("%+v", d)
@@ -308,7 +307,7 @@ func TestShadowWandsWhenDry(t *testing.T) {
 func TestShadowShieldsItselfWhenAMobHasIt(t *testing.T) {
 	r, g := shadowRig(t, prShield1, prSWP)
 	g.addUnit(mob(mobA, selfG), 4, 0)
-	g.setSelf(func(u *objects.Unit) { u.Health = 600 })
+	g.setSelf(func(u *world.Unit) { u.Health = 600 })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "shield_self" || d.Spell != prShield1 {
 		t.Fatalf("%+v", d)
 	}
@@ -317,9 +316,9 @@ func TestShadowShieldsItselfWhenAMobHasIt(t *testing.T) {
 	}
 	r2, g2 := shadowRig(t, prShield1, prSWP, prShadowform)
 	g2.addUnit(mob(mobA, selfG), 4, 0)
-	g2.setSelf(func(u *objects.Unit) {
+	g2.setSelf(func(u *world.Unit) {
 		u.Health = 600
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: prShadowform})
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: prShadowform})
 	})
 	if d := r2.tick(100 * time.Millisecond); d != nil && d.Spell == prShield1 {
 		t.Fatalf("a Holy spell in Shadowform: %+v", d)
@@ -328,7 +327,7 @@ func TestShadowShieldsItselfWhenAMobHasIt(t *testing.T) {
 
 func TestShadowPriestStandsNearerThanAMage(t *testing.T) {
 	r, pf := newPosRig(t, Params{Strategies: []string{"shadow_priest"}}, shadowKnown...)
-	pf.setSelf(func(u *objects.Unit) { u.Class, u.Level = 5, 30 })
+	pf.setSelf(func(u *world.Unit) { u.Class, u.Level = 5, 30 })
 	tankFights(pf.fakeGame, 36, 30, 0) // 30 yd from the mob: too far for Mind Flay
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "reposition" {
@@ -345,11 +344,11 @@ func TestShadowPriestStandsNearerThanAMage(t *testing.T) {
 
 func TestShadowDrinksBelowSixtyFiveNotEighty(t *testing.T) {
 	r, g := shadowRig(t)
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		u.InCombat = false
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: prShadowform})
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: prShadowform})
 	})
-	g.items = []objects.Item{{Entry: 159}}
+	g.items = []world.Item{{Entry: 159}}
 	g.setMana(70)
 	if d := r.tick(100 * time.Millisecond); d != nil {
 		t.Fatalf("%+v", d)
@@ -385,10 +384,10 @@ func TestPriestClassRow(t *testing.T) {
 	if ci.Heals == nil || !ci.Drinks || !ci.ManaPotions || ci.ConjuredDrinks || len(ci.Interrupts) != 1 || ci.Interrupts[0].Spell != "Silence" {
 		t.Fatalf("%+v", ci)
 	}
-	if lo, hi := rangedBand(&Ctx{Self: objects.Unit{Class: ClassPriest}}); lo != 14 || hi != 19 {
+	if lo, hi := rangedBand(&Ctx{Self: world.Unit{Class: ClassPriest}}); lo != 14 || hi != 19 {
 		t.Fatalf("band %v-%v", lo, hi)
 	}
-	if lo, hi := rangedBand(&Ctx{Self: objects.Unit{Class: ClassMage}}); lo != rangedMin || hi != rangedMax {
+	if lo, hi := rangedBand(&Ctx{Self: world.Unit{Class: ClassMage}}); lo != rangedMin || hi != rangedMax {
 		t.Fatalf("band %v-%v", lo, hi)
 	}
 	// Every spell of the kit exists under that name.
@@ -515,25 +514,25 @@ func TestPriestSpellData(t *testing.T) {
 
 func TestShadowPriestBuffsBeforeTheForm(t *testing.T) {
 	r, g := shadowRig(t)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false; u.Auras = []objects.Aura{} })
+	g.setSelf(func(u *world.Unit) { u.InCombat = false; u.Auras = []world.Aura{} })
 	if d := r.tick(100 * time.Millisecond); d == nil || d.Action != "inner_fire" {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Inner Fire", SpellID: prInnerFire})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Inner Fire", SpellID: prInnerFire})
 	})
 	if d := r.tick(2 * time.Second); d == nil || d.Action != "fortitude" {
 		t.Fatalf("%+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Power Word: Fortitude", SpellID: prFort1})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Power Word: Fortitude", SpellID: prFort1})
 	})
 	if d := r.tick(2 * time.Second); d == nil || d.Spell != prShadowform {
 		t.Fatalf("then the form: %+v", d)
 	}
 	// In a fight the form does not wait for a missing buff.
 	r2, g2 := shadowRig(t)
-	g2.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{} })
+	g2.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{} })
 	if d := r2.tick(100 * time.Millisecond); d == nil || d.Spell != prShadowform {
 		t.Fatalf("%+v", d)
 	}

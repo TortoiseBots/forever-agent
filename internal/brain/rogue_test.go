@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -26,7 +25,7 @@ var rogueSpells = []uint32{spSinister, spEvisc, spSnD, spKick, spEvasion, spFein
 
 // newClassRig is a brain of the preset on a fake game that can walk, see and follow the swings, with the player as the class, on the
 // power with its full pool, in a party of nobody (the test adds a tank). tune adjusts the player's row.
-func newClassRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, p Params, known []uint32, tune func(*objects.Unit)) (*rig, *meleeFake) {
+func newClassRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, p Params, known []uint32, tune func(*world.Unit)) (*rig, *meleeFake) {
 	t.Helper()
 	g := newFake(known...)
 	g.self.Class, g.self.Level = class, level
@@ -55,24 +54,24 @@ func newRogueRig(t *testing.T, p Params, known ...uint32) (*rig, *meleeFake) {
 	return newClassRig(t, "combat_rogue", ClassRogue, 40, 3, 100, p, known, nil)
 }
 
-func setEnergy(g *fakeGame, n uint32) { g.setSelf(func(u *objects.Unit) { u.Power = n }) }
+func setEnergy(g *fakeGame, n uint32) { g.setSelf(func(u *world.Unit) { u.Power = n }) }
 
 func setHealth(g *fakeGame, pct uint32) {
-	g.setSelf(func(u *objects.Unit) { u.Health = u.MaxHealth * pct / 100 })
+	g.setSelf(func(u *world.Unit) { u.Health = u.MaxHealth * pct / 100 })
 }
 
 func setCombo(g *fakeGame, n uint8, on world.GUID) {
-	g.setSelf(func(u *objects.Unit) { u.ComboPoints, u.ComboTarget = n, on })
+	g.setSelf(func(u *world.Unit) { u.ComboPoints, u.ComboTarget = n, on })
 }
 
 func addAura(g *fakeGame, name string, id uint32, left *int64) {
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: name, SpellID: id, RemainingMS: left})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: name, SpellID: id, RemainingMS: left})
 	})
 }
 
 // onMe puts the mob on the player.
-func onMe(g *fakeGame, id world.GUID) { g.mutate(id, func(u *objects.Unit) { u.Target = selfG }) }
+func onMe(g *fakeGame, id world.GUID) { g.mutate(id, func(u *world.Unit) { u.Target = selfG }) }
 
 func TestRogueBuildsComboPointsThenFinishes(t *testing.T) {
 	r, mf := newRogueRig(t, Params{})
@@ -190,7 +189,7 @@ func TestRogueKicksACasterInReachAndNotOneOutOfIt(t *testing.T) {
 	r, mf := newRogueRig(t, Params{})
 	meleeFight(r, mf)
 	caster := mob(mobB, tankG)
-	caster.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	caster.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(caster, 3, 2)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" || d.Spell != spKick || d.Target != mobB || d.Rel != RelInterrupt {
@@ -200,7 +199,7 @@ func TestRogueKicksACasterInReachAndNotOneOutOfIt(t *testing.T) {
 	r, mf = newRogueRig(t, Params{})
 	meleeFight(r, mf)
 	far := mob(mobB, tankG)
-	far.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	far.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(far, 12, 0)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "interrupt" {
 		t.Fatalf("a kick from 12 yards: %+v", d)
@@ -209,7 +208,7 @@ func TestRogueKicksACasterInReachAndNotOneOutOfIt(t *testing.T) {
 	r, mf = newRogueRig(t, Params{})
 	meleeFight(r, mf)
 	caster = mob(mobB, tankG)
-	caster.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	caster.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(caster, 3, 2)
 	setEnergy(r.g, 20)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "interrupt" {
@@ -268,7 +267,7 @@ func TestFeintOnlyWhenTheMobHasTheRogueAndATankCanTakeIt(t *testing.T) {
 	r, mf = newRogueRig(t, Params{})
 	m := mob(mobA, selfG)
 	r.g.addUnit(m, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	mf.setSwing(mobA)
 	r.tick(100 * time.Millisecond)
 	for _, id := range casts(r.g) {

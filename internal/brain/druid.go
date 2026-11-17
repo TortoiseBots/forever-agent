@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -87,7 +86,7 @@ var (
 )
 
 // formAuraOf is the form the unit carries and the aura's spell, "" when it is in caster form.
-func formAuraOf(u *objects.Unit) (string, uint32) {
+func formAuraOf(u *world.Unit) (string, uint32) {
 	for _, a := range u.Auras {
 		for _, f := range druidForms {
 			if strings.EqualFold(a.Name, f.Name) {
@@ -146,12 +145,12 @@ func manaPct(c *Ctx) (int, bool) {
 
 // behindMob says the player stands behind the mob: the way from the mob to the player is more than rearMin off the mob's facing, a
 // margin inside the half plane the core wants for Shred (SPELL_FAILED_NOT_BEHIND).
-func behindMob(c *Ctx, m *objects.Unit) bool {
+func behindMob(c *Ctx, m *world.Unit) bool {
 	return m != nil && math.Abs(angleDiff(m.O, float32(bearing(unitPos(m), selfPos(c))))) > rearMin
 }
 
 // comboPoints is how many combo points the player has on the mob.
-func comboPoints(c *Ctx, m *objects.Unit) int {
+func comboPoints(c *Ctx, m *world.Unit) int {
 	if m == nil || c.Self.ComboTarget != m.GUID {
 		return 0
 	}

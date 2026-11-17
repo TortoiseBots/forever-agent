@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Refusal is TortoiseBots saying no to one of the driver's orders: the TBM:ACTION_ERR|<intent>|<code>|<message> reply to
@@ -28,13 +28,13 @@ type RefusalSource interface {
 // SelfAuraSource is the optional part of a Game that tells the leader's own auras (the unit list leaves the leader
 // out). ok is false when they cannot be told. The buff batch uses it to see a ".aura" that landed on the leader.
 type SelfAuraSource interface {
-	SelfAuras() (auras []objects.Aura, ok bool)
+	SelfAuras() (auras []world.Aura, ok bool)
 }
 
 // ItemSource is the optional part of a Game that tells what the leader carries (the backpack and the bags). A Game without
 // it never fails a required_item check.
 type ItemSource interface {
-	Items() []objects.Item
+	Items() []world.Item
 }
 
 // RefusalReport is one kind of refusal in the report, with how often it came in the leg.

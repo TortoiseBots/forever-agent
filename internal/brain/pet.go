@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -157,7 +156,7 @@ func groupedWithOthers(c *Ctx) bool {
 
 // petMob is the mob the pet may be sent at now: the fight's mob, in combat, held by someone (the tank, the player, the pet itself), and
 // the pet is out, alive, not told to stay. nil otherwise.
-func petMob(c *Ctx) *objects.Unit {
+func petMob(c *Ctx) *world.Unit {
 	p := petUsable(c)
 	if p == nil || p.Command == "stay" {
 		return nil

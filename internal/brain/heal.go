@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -405,14 +404,14 @@ func healCast(ctx context.Context, c *Ctx, spell uint32, target world.GUID) erro
 // ---- values ----
 
 // ValTank is the tank the healer looks after (findTank).
-var ValTank = &Value[*objects.Unit]{Name: "heal_tank", Calc: findTank}
+var ValTank = &Value[*world.Unit]{Name: "heal_tank", Calc: findTank}
 
 // healMembers lists the units the healer looks after: the player, then each online member of the party in view and alive.
-func healMembers(c *Ctx) []*objects.Unit {
+func healMembers(c *Ctx) []*world.Unit {
 	if !c.SelfOK {
 		return nil
 	}
-	out := []*objects.Unit{&c.Self}
+	out := []*world.Unit{&c.Self}
 	for _, m := range c.Party {
 		if !m.Online || m.Dead || m.GUID == c.Self.GUID {
 			continue
@@ -440,10 +439,10 @@ func healCombat(c *Ctx) bool {
 // healAllowed says the healer may cast now: in a fight always, otherwise where upkeep is allowed (the dungeon driver's rest gates).
 func healAllowed(c *Ctx) bool { return c.SelfOK && (c.RestOK || healCombat(c)) }
 
-func inHealReach(u *objects.Unit) bool { return u.Distance >= 0 && float64(u.Distance) <= healReach }
+func inHealReach(u *world.Unit) bool { return u.Distance >= 0 && float64(u.Distance) <= healReach }
 
 // sightOK is the line of sight to a member, taken as clear when the mesh cannot tell. The player itself is always in sight.
-func sightOK(c *Ctx, u *objects.Unit) bool {
+func sightOK(c *Ctx, u *world.Unit) bool {
 	if u.GUID == c.Self.GUID {
 		return true
 	}
@@ -453,7 +452,7 @@ func sightOK(c *Ctx, u *objects.Unit) bool {
 
 // memberHealth reads a member's health and its maximum. A party member's health is absolute (the party stats the core sends), so
 // the numbers are used as they are.
-func memberHealth(c *Ctx, u *objects.Unit) (hp, max float64) {
+func memberHealth(c *Ctx, u *world.Unit) (hp, max float64) {
 	return float64(u.Health), float64(u.MaxHealth)
 }
 
@@ -486,13 +485,13 @@ func incomingHeal(c *Ctx, g world.GUID) float64 {
 
 // HealPlan is the healer's choice of the tick.
 type HealPlan struct {
-	Target *objects.Unit
+	Target *world.Unit
 	Pct    float64 // the target's health in percent, counting heals in flight
 	Need   float64 // the health to make up
 	Tank   bool
 	Spell  healOption
 	// Far is the most hurt member the player cannot reach or see, when no member in reach needs a heal: the healer walks toward it.
-	Far *objects.Unit
+	Far *world.Unit
 }
 
 // ValHealPlan is the triage of the tick (see the package comment): who to heal, and with which spell.
@@ -508,7 +507,7 @@ func calcHealPlan(c *Ctx) HealPlan {
 	tank := ValTank.Get(c)
 	var best HealPlan
 	bestScore := math.MaxFloat64
-	var far *objects.Unit
+	var far *world.Unit
 	farPct := 70.0
 	for _, u := range healMembers(c) {
 		hp, max := memberHealth(c, u)
@@ -565,14 +564,14 @@ func calcHealPlan(c *Ctx) HealPlan {
 
 // DispelPlan is the dispel of the tick.
 type DispelPlan struct {
-	Target *objects.Unit
+	Target *world.Unit
 	Spell  uint32
 	Name   string
 	Aura   uint32
 	Urgent bool
 	// Far is a member with crowd control on it that the dispel does not reach (Dispel Magic reaches 30 yd, Heal 40), when no dispel is
 	// in reach: the healer walks into range (healer_position).
-	Far *objects.Unit
+	Far *world.Unit
 }
 
 // dispelSlack is the margin kept inside the dispel's own range.
@@ -589,7 +588,7 @@ func calcDispel(c *Ctx) DispelPlan {
 	}
 	tank := ValTank.Get(c)
 	var best DispelPlan
-	var far *objects.Unit
+	var far *world.Unit
 	bestPct, bestRank := 0.0, -1
 	for _, u := range healMembers(c) {
 		if u.Distance < 0 {
@@ -669,7 +668,7 @@ func calcDispel(c *Ctx) DispelPlan {
 
 // hotPlan is the tank to keep a heal over time on: in combat, hurt or taking damage, without the HoT, with mana to spare.
 type hotPlan struct {
-	Target *objects.Unit
+	Target *world.Unit
 	Spell  uint32
 }
 
@@ -700,7 +699,7 @@ func init() {
 	strategyBuilders["rest_drink"] = restDrink
 }
 
-func targetGUID(u *objects.Unit) world.GUID {
+func targetGUID(u *world.Unit) world.GUID {
 	if u == nil {
 		return 0
 	}
@@ -841,7 +840,7 @@ func healerIssue(c *Ctx) string {
 
 // healerSpot is a standing place 20 to 30 yd from the tank with sight of the tank, out of the mob's front and of ground effects, and,
 // when there is one, with sight of every other member in view; else of the tank alone.
-func healerSpot(c *Ctx, tank, mob *objects.Unit) (Vec3, bool) {
+func healerSpot(c *Ctx, tank, mob *world.Unit) (Vec3, bool) {
 	blocked := losBlocked(c, tank)
 	return memoSpot(c, "heal_band", tank.GUID, func() (Vec3, bool) {
 		spec := func(all bool) spotSpec {
@@ -877,7 +876,7 @@ func healerSpot(c *Ctx, tank, mob *objects.Unit) (Vec3, bool) {
 
 // approachTarget is the member the healer walks toward: a hurt one out of heal reach or sight, else one with crowd control out of
 // dispel range.
-func approachTarget(c *Ctx) *objects.Unit {
+func approachTarget(c *Ctx) *world.Unit {
 	if f := ValHealPlan.Get(c).Far; f != nil {
 		return f
 	}

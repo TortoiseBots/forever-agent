@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -198,10 +197,10 @@ func healerClass(class uint8) bool {
 
 // rezPlan is the resurrection of the tick.
 type rezPlan struct {
-	Target *objects.Unit // a member to cast on now
+	Target *world.Unit // a member to cast on now
 	Spell  uint32
 	// Far is the nearest dead member in view that the player cannot reach or see from here, when no member is in reach.
-	Far *objects.Unit
+	Far *world.Unit
 	// Combat says the plan is Rebirth's (in a fight); false is the out-of-combat resurrection.
 	Combat bool
 	// Waiting says a dead member in view has a resurrection on its way (the brain's own, in its hold, or another caster's in flight): the
@@ -237,7 +236,7 @@ func calcRez(c *Ctx) rezPlan {
 	lastTank := c.mem.rez.lastTank
 	c.mem.rez.mu.Unlock()
 	// The tank is dead and so not found: the one seen last, the one named, or, with no tank in view, a warrior.
-	isTank := func(m Member, u *objects.Unit) bool {
+	isTank := func(m Member, u *world.Unit) bool {
 		switch {
 		case tank != nil:
 			return tank.GUID == u.GUID
@@ -248,7 +247,7 @@ func calcRez(c *Ctx) rezPlan {
 		}
 		return u.Class == ClassWarrior
 	}
-	var best, far *objects.Unit
+	var best, far *world.Unit
 	waiting := false
 	bestRank := 99
 	for _, m := range c.Party {

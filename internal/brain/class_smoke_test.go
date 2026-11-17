@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -55,7 +54,7 @@ func (s *swingGame) BadFacings() uint64 {
 }
 
 // swingRig is a preset's brain on a swingGame: the player as the class, at (0,0) facing east.
-func swingRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, known []uint32, forget bool, tune func(*objects.Unit)) (*rig, *swingGame) {
+func swingRig(t *testing.T, preset string, class uint8, level uint32, power uint8, pool uint32, known []uint32, forget bool, tune func(*world.Unit)) (*rig, *swingGame) {
 	t.Helper()
 	g := newFake(known...)
 	g.self.Class, g.self.Level = class, level
@@ -69,8 +68,8 @@ func swingRig(t *testing.T, preset string, class uint8, level uint32, power uint
 }
 
 func warriorSwingRig(t *testing.T, forget bool) (*rig, *swingGame) {
-	return swingRig(t, "arms_warrior", ClassWarrior, 40, 1, 1000, warriorSpells, forget, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{stanceAura("Battle Shout", spBattleShout), stanceAura(stanceBattle, stanceSpells[stanceBattle])}
+	return swingRig(t, "arms_warrior", ClassWarrior, 40, 1, 1000, warriorSpells, forget, func(u *world.Unit) {
+		u.Auras = []world.Aura{stanceAura("Battle Shout", spBattleShout), stanceAura(stanceBattle, stanceSpells[stanceBattle])}
 		u.Power = 600
 	})
 }
@@ -112,7 +111,7 @@ func TestSwingRefusedForFacingTurnsToTheMobBeforeAnythingElse(t *testing.T) {
 	// The live run: the warrior stands with its back to the mob; bad_facing at once, then auto_attack every 200 ms and no face_target.
 	r, sg := warriorSwingRig(t, false)
 	tankFights(r.g, 7, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.O = math.Pi })
+	r.g.setSelf(func(u *world.Unit) { u.O = math.Pi })
 	r.tick(100 * time.Millisecond)
 	if d := open(r); d == nil || d.Action != "auto_attack" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -142,7 +141,7 @@ func TestSwingWaitsForTheTurnWhenTheGameDoesNotShowTheSwing(t *testing.T) {
 	// Without a swing in view the order would be sent again at once; refused for facing, it waits and the turn comes first.
 	r, sg := warriorSwingRig(t, true)
 	tankFights(r.g, 7, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.O = math.Pi; u.Power = 0 })
+	r.g.setSelf(func(u *world.Unit) { u.O = math.Pi; u.Power = 0 })
 	r.tick(100 * time.Millisecond)
 	open(r)
 	for i := 0; i < 10; i++ {
@@ -162,17 +161,17 @@ func TestEveryMeleeClassKeepsItsSwingOrderToOnePerFewSeconds(t *testing.T) {
 		power  uint8
 		pool   uint32
 		known  []uint32
-		tune   func(*objects.Unit)
+		tune   func(*world.Unit)
 	}{
 		{"rogue", "combat_rogue", ClassRogue, 40, 3, 100, rogueSpells, nil},
-		{"hunter", "marksman_hunter", ClassHunter, 58, 0, 1000, hunterSpells, func(u *objects.Unit) {
-			u.Auras = []objects.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
+		{"hunter", "marksman_hunter", ClassHunter, 58, 0, 1000, hunterSpells, func(u *world.Unit) {
+			u.Auras = []world.Aura{{Name: "Aspect of the Hawk", SpellID: spHawk}}
 		}},
 	} {
 		r, sg := swingRig(t, c.preset, c.class, c.level, c.power, c.pool, c.known, true, c.tune)
 		m := mob(mobA, selfG)
 		r.g.addUnit(m, 4, 0)
-		r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+		r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 		for i := 0; i < 25; i++ { // 5 s of ticks
 			r.tick(200 * time.Millisecond)
 		}
@@ -275,7 +274,7 @@ func TestNoHealthstoneNoLineAboutIt(t *testing.T) {
 	meleeFight(r, mf)
 	r.g.items = nil
 	onMe(r.g, mobA)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 150; u.InCombat = true }) // 12%
+	r.g.setSelf(func(u *world.Unit) { u.Health = 150; u.InCombat = true }) // 12%
 	setRage(r.g, 0)
 	for i := 0; i < 8; i++ {
 		r.tick(3 * time.Second)
@@ -289,7 +288,7 @@ func TestNoHealthstoneNoLineAboutIt(t *testing.T) {
 		}
 	}
 	// With a potion in the bags it is drunk.
-	r.g.items = []objects.Item{{Entry: 929, Count: 1}}
+	r.g.items = []world.Item{{Entry: 929, Count: 1}}
 	if d := r.tick(3 * time.Second); d == nil || d.Action != "health_potion" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -297,7 +296,7 @@ func TestNoHealthstoneNoLineAboutIt(t *testing.T) {
 
 func TestBattleShoutWithoutRageIsNotTried(t *testing.T) {
 	r, _ := newWarriorRig(t, "arms_warrior", stanceBattle, Params{})
-	r.g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{stanceAura("Battle Stance", spBattleSt)}; u.Power = 0 })
+	r.g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{stanceAura("Battle Stance", spBattleSt)}; u.Power = 0 })
 	for i := 0; i < 5; i++ {
 		if d := r.tick(3 * time.Second); d != nil {
 			t.Fatalf("%+v", d)
@@ -306,7 +305,7 @@ func TestBattleShoutWithoutRageIsNotTried(t *testing.T) {
 			t.Fatalf("a shout without rage is reported: %q", got)
 		}
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 100 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 100 })
 	if d := r.tick(3 * time.Second); d == nil || d.Action != "battle_shout" {
 		t.Fatalf("with the rage it shouts: %+v", d)
 	}
@@ -354,7 +353,7 @@ func TestPercentCostIsOfTheBaseManaNotTheMaximum(t *testing.T) {
 	} {
 		r, _ := newWarlock(t, Params{})
 		setItems(r.g, 1, itemMajorHS)
-		r.g.setSelf(func(u *objects.Unit) { u.Power, u.MaxPower, u.BaseMana = c.power, c.max, c.bas })
+		r.g.setSelf(func(u *world.Unit) { u.Power, u.MaxPower, u.BaseMana = c.power, c.max, c.bas })
 		d := r.tick(100 * time.Millisecond)
 		got := d != nil && d.Action == "pet_summon" && d.Spell == spVoidwalker
 		if got != c.want {
@@ -423,13 +422,13 @@ func TestSwingRefusalCountThatFellBackIsNewsAgain(t *testing.T) {
 	// A new session starts its count over: the refusal after a reconnect is answered like the first.
 	r, sg := warriorSwingRig(t, true)
 	tankFights(r.g, 7, 4, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.O = math.Pi })
+	r.g.setSelf(func(u *world.Unit) { u.O = math.Pi })
 	r.tick(100 * time.Millisecond)
 	open(r)
 	if d := r.tick(200 * time.Millisecond); d == nil || d.Action != "face_target" {
 		t.Fatalf("%+v", d)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.O = math.Pi })
+	r.g.setSelf(func(u *world.Unit) { u.O = math.Pi })
 	sg.smu.Lock()
 	sg.errs = 0
 	sg.smu.Unlock()

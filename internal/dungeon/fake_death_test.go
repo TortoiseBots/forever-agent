@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // fakeDeath scripts the leader's death for fakeGame: a resurrection offer, the release to a graveyard, the corpse query,
@@ -120,6 +120,6 @@ func (g *fakeGame) ProbeAccount(ctx context.Context) (int, bool, error) {
 	return g.dead.probeLevel, g.dead.probeKnown, g.dead.probeErr
 }
 
-func auraNamed(name string, remainingMS *int64) []objects.Aura {
-	return []objects.Aura{{SpellID: 15007, Name: name, Harmful: true, RemainingMS: remainingMS}}
+func auraNamed(name string, remainingMS *int64) []world.Aura {
+	return []world.Aura{{SpellID: 15007, Name: name, Harmful: true, RemainingMS: remainingMS}}
 }

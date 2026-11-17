@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -111,9 +110,9 @@ func TestGroupLeavesACrowdControlledMobAlone(t *testing.T) {
 			g.partyTarget[tank] = 202
 			switch how {
 			case "aura":
-				m1.Auras = []objects.Aura{{SpellID: 118}} // Polymorph (mechanic 17)
+				m1.Auras = []world.Aura{{SpellID: 118}} // Polymorph (mechanic 17)
 			case "name":
-				m1.Auras = []objects.Aura{{SpellID: 999999, Name: "Sap"}}
+				m1.Auras = []world.Aura{{SpellID: 999999, Name: "Sap"}}
 			case "moon":
 				g.marks = map[string]world.GUID{"moon": 201}
 			}
@@ -158,7 +157,7 @@ func TestGroupOpenerWaitsForTheTank(t *testing.T) {
 	m.InCombat, m.Target = true, tank
 	d := NewDriver(mustPlan(t, tankPlan), g, Config{}, g.clock())
 	d.observeInit()
-	mobs := []objects.Unit{m.Unit}
+	mobs := []world.Unit{m.Unit}
 	if _, ok := d.pickAssist(mobs); ok {
 		t.Fatal("the party was sent at once")
 	}
@@ -175,7 +174,7 @@ func TestGroupOpenerWaitsForTheTank(t *testing.T) {
 	d2.observeInit()
 	m2 := m.Unit
 	m2.Target = healer
-	if _, ok := d2.pickAssist([]objects.Unit{m2}); !ok {
+	if _, ok := d2.pickAssist([]world.Unit{m2}); !ok {
 		t.Fatal("a mob on the healer was held back")
 	}
 }

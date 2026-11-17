@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tracerun"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -20,9 +19,9 @@ import (
 type Game interface {
 	Position() Point
 	Map() uint32
-	GameObjects() []objects.GameObject
+	GameObjects() []world.GameObject
 	// Units lists the units in view, players included; the Driver filters.
-	Units() []objects.Unit
+	Units() []world.Unit
 	Self() Self
 	Party() []Member
 	// WalkPath walks the navmesh to the point and reports how it went (the session's walk_path).
@@ -900,8 +899,8 @@ func (d *Driver) countDeaths() (wholePartyDead bool) {
 // stepWorld is the Stepper's World over a Game.
 type stepWorld struct{ d *Driver }
 
-func (w stepWorld) Position() Point                   { return w.d.g.Position() }
-func (w stepWorld) GameObjects() []objects.GameObject { return w.d.g.GameObjects() }
+func (w stepWorld) Position() Point                 { return w.d.g.Position() }
+func (w stepWorld) GameObjects() []world.GameObject { return w.d.g.GameObjects() }
 func (w stepWorld) PartyNear(c Point, r float32) bool {
 	if dist3(w.d.g.Position(), c) <= float64(r) {
 		return true
@@ -1125,12 +1124,12 @@ const maxWalkAggros = 12
 
 // attackers are the living hostile units in combat with the party within 60 yards: what "the party is in combat"
 // means to the walk and the rest gate.
-func (d *Driver) attackers() []objects.Unit {
+func (d *Driver) attackers() []world.Unit {
 	return attackersOf(d.g.Units(), d.party)
 }
 
-func attackersOf(units []objects.Unit, party map[world.GUID]bool) []objects.Unit {
-	var out []objects.Unit
+func attackersOf(units []world.Unit, party map[world.GUID]bool) []world.Unit {
+	var out []world.Unit
 	for _, u := range units {
 		if u.Type != "player" && u.Hostile && !u.Dead && u.InCombat && u.Distance >= 0 && u.Distance <= 60 && party[u.Target] {
 			out = append(out, u)
@@ -1641,7 +1640,7 @@ func (d *Driver) doPull(ctx context.Context, a Action) error {
 	return d.engage(ctx, a.Label, sp)
 }
 
-func allStealthed(us []objects.Unit) bool {
+func allStealthed(us []world.Unit) bool {
 	for _, u := range us {
 		if !Stealthed(u) {
 			return false
@@ -1883,7 +1882,7 @@ func (d *Driver) groupRadius(sp fightSpec) float32 {
 }
 
 // nearAnchor says whether the unit stands within the group's radius of one of the anchors.
-func (d *Driver) nearAnchor(sp fightSpec, u objects.Unit) bool {
+func (d *Driver) nearAnchor(sp fightSpec, u world.Unit) bool {
 	for _, a := range sp.anchors {
 		if dist3(Point{u.X, u.Y, u.Z}, a) <= float64(d.groupRadius(sp)) {
 			return true
@@ -1918,8 +1917,8 @@ func (d *Driver) deadInView(sp fightSpec) bool {
 // tank answered "unreachable"). Without anchors, or with wide (a boss encounter, whose brothers may stand off the boss's
 // spot) and none near, every unit within 80 yards counts. Mobs the run was refused (d.skipped) and mobs this group passed
 // over (sp.passed) are left out.
-func (d *Driver) candidates(sp fightSpec, entries []uint32) []objects.Unit {
-	var all, near, fighting []objects.Unit
+func (d *Driver) candidates(sp fightSpec, entries []uint32) []world.Unit {
+	var all, near, fighting []world.Unit
 	for _, u := range d.g.Units() {
 		if u.Type == "player" || u.Dead || !u.Hostile || u.Distance < 0 || !slices.Contains(entries, u.Entry) || slices.Contains(sp.skip, u.Entry) {
 			continue
@@ -1948,7 +1947,7 @@ func (d *Driver) candidates(sp fightSpec, entries []uint32) []objects.Unit {
 
 // pickTarget finds the unit to pull, walking up to PullStandoff yards from it when it is out of PullRange (or from
 // the anchor when nothing is in view yet).
-func (d *Driver) pickTarget(ctx context.Context, sp fightSpec) (objects.Unit, bool, error) {
+func (d *Driver) pickTarget(ctx context.Context, sp fightSpec) (world.Unit, bool, error) {
 	const looks = 3
 	for look := 1; look <= looks; look++ {
 		if cs := d.candidates(sp, sp.pick); len(cs) > 0 {
@@ -1956,7 +1955,7 @@ func (d *Driver) pickTarget(ctx context.Context, sp fightSpec) (objects.Unit, bo
 			if c := cs[0]; c.Distance <= d.cfg.PullRange || look == looks {
 				return c, true, nil
 			} else if err := d.approach(ctx, Point{c.X, c.Y, c.Z}); err != nil {
-				return objects.Unit{}, false, err
+				return world.Unit{}, false, err
 			}
 			continue
 		}
@@ -1964,18 +1963,18 @@ func (d *Driver) pickTarget(ctx context.Context, sp fightSpec) (objects.Unit, bo
 			break
 		}
 		if err := d.approach(ctx, sp.anchors[0]); err != nil {
-			return objects.Unit{}, false, err
+			return world.Unit{}, false, err
 		}
 		if err := d.sleep(ctx, d.cfg.Poll); err != nil {
-			return objects.Unit{}, false, err
+			return world.Unit{}, false, err
 		}
 	}
-	return objects.Unit{}, false, nil
+	return world.Unit{}, false, nil
 }
 
 // preferVisible puts the units without a stealth aura first (a companion can be sent at those), keeping the order.
-func preferVisible(cs []objects.Unit) []objects.Unit {
-	out := make([]objects.Unit, 0, len(cs))
+func preferVisible(cs []world.Unit) []world.Unit {
+	out := make([]world.Unit, 0, len(cs))
 	for _, u := range cs {
 		if !Stealthed(u) {
 			out = append(out, u)
@@ -2000,7 +1999,7 @@ func (d *Driver) approach(ctx context.Context, p Point) error {
 	return d.doWalk(ctx, stand)
 }
 
-func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fightResult, error) {
+func (d *Driver) fight(ctx context.Context, t world.Unit, sp fightSpec) (fightResult, error) {
 	if err := d.g.Target(ctx, t.GUID); err != nil {
 		return fightResult{}, fmt.Errorf("target %s: %w", t.Name, err)
 	}
@@ -2044,7 +2043,7 @@ func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fight
 			}
 		}
 		units := d.g.Units()
-		byGUID := make(map[world.GUID]objects.Unit, len(units))
+		byGUID := make(map[world.GUID]world.Unit, len(units))
 		for _, u := range units {
 			byGUID[u.GUID] = u
 			// A member of the encounter that joins is part of it.
@@ -2053,7 +2052,7 @@ func (d *Driver) fight(ctx context.Context, t objects.Unit, sp fightSpec) (fight
 			}
 		}
 		alive, fighting := 0, false
-		var fighters []objects.Unit
+		var fighters []world.Unit
 		for g := range tracked {
 			u, ok := byGUID[g]
 			if !ok { // out of view: gone
@@ -2114,7 +2113,7 @@ func (d *Driver) afterFight(ctx context.Context) error {
 	}
 	deadline := d.clk.Now().Add(d.cfg.AddsWait)
 	for d.clk.Now().Before(deadline) {
-		var add *objects.Unit
+		var add *world.Unit
 		for _, u := range d.g.Units() {
 			if u.Type != "player" && u.Hostile && !u.Dead && u.InCombat && u.Distance >= 0 && u.Distance <= 40 && d.party[u.Target] {
 				c := u

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/packet"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
@@ -185,21 +184,21 @@ func practiceFixture(t *testing.T, sc *practiceScenario, cycles int) (*fixture, 
 		}
 		return out
 	}
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		sc.mu.Lock()
 		hp, sonDead, trash := sc.bossHP, sc.sonDead, sc.extraTrash
 		gone := !sc.goneAt.IsZero() && !f.clock.now().Before(sc.goneAt)
 		sc.mu.Unlock()
-		var out []objects.Unit
+		var out []world.Unit
 		if !gone {
-			out = append(out, objects.Unit{
+			out = append(out, world.Unit{
 				GUID: practiceBossGUID(), Entry: 14834, Type: "creature", Health: uint32(hp * 420), MaxHealth: 42000, Dead: hp == 0})
 		}
-		out = append(out, objects.Unit{GUID: practiceSonGUID(), Entry: 11357, Type: "creature", Health: map[bool]uint32{true: 0, false: 100}[sonDead],
+		out = append(out, world.Unit{GUID: practiceSonGUID(), Entry: 11357, Type: "creature", Health: map[bool]uint32{true: 0, false: 100}[sonDead],
 			MaxHealth: 100, Dead: sonDead})
 		if trash {
 			// A second unit of the boss's entry the client holds (a duplicate-entry trash unit): never the boss.
-			out = append(out, objects.Unit{GUID: practiceTrashGUID(), Entry: 14834, Type: "creature", Health: 42000, MaxHealth: 42000})
+			out = append(out, world.Unit{GUID: practiceTrashGUID(), Entry: 14834, Type: "creature", Health: 42000, MaxHealth: 42000})
 		}
 		return out
 	}
@@ -1150,8 +1149,8 @@ func TestPracticeBindRefusesUnengagedCandidate(t *testing.T) {
 		return []tbm.HostileRec{{GUID: practiceBossGUID(), Entry: 14834, X: row.X, Y: row.Y, Z: row.Z,
 			HPPct: 100, Target: 1000, Flags: "-"}}
 	}
-	f.agent.unitsFn = func(n int) []objects.Unit {
-		return []objects.Unit{
+	f.agent.unitsFn = func(n int) []world.Unit {
+		return []world.Unit{
 			{GUID: practiceTrashGUID(), Entry: 14834, Type: "creature", Health: 42000, MaxHealth: 42000},
 			{GUID: practiceSonGUID(), Entry: 11357, Type: "creature", Health: 100, MaxHealth: 100},
 		}
@@ -1297,16 +1296,16 @@ func TestPracticeCommanderDeadIsDead(t *testing.T) {
 	now := time.Date(2026, 11, 12, 0, 6, 8, 0, time.Local)
 	for _, tc := range []struct {
 		name string
-		unit objects.Unit
+		unit world.Unit
 	}{
-		{"dead flag", objects.Unit{GUID: attempt1BossGUID(), Entry: 14834, Health: 42000, MaxHealth: 42000, Dead: true}},
-		{"raw health 0", objects.Unit{GUID: attempt1BossGUID(), Entry: 14834, Health: 0, MaxHealth: 42000}},
+		{"dead flag", world.Unit{GUID: attempt1BossGUID(), Entry: 14834, Health: 42000, MaxHealth: 42000, Dead: true}},
+		{"raw health 0", world.Unit{GUID: attempt1BossGUID(), Entry: 14834, Health: 0, MaxHealth: 42000}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &walk{
 				env:      walkEnv{now: func() time.Time { return now }},
 				opts:     raidWalkOptions{server: "m910q", practiceSustain: true, practiceBossFloor: 40},
-				agent:    &practiceUnitsAgent{units: []objects.Unit{tc.unit}},
+				agent:    &practiceUnitsAgent{units: []world.Unit{tc.unit}},
 				hostiles: map[string]hostileState{attempt1BossGUID().String(): {entry: 14834, hppct: 0, at: now}},
 			}
 			p := &practiceState{bossGUID: attempt1BossGUID(), bossMax: 42000, bossSeenAt: now}
@@ -1334,10 +1333,10 @@ func TestPracticeFrameZeroIsNotDead(t *testing.T) {
 	}}
 	for _, tc := range []struct {
 		name   string
-		units  []objects.Unit
+		units  []world.Unit
 		wantHP int
 	}{
-		{"live commander", []objects.Unit{{GUID: attempt1BossGUID(), Entry: 14834, Health: 1, MaxHealth: 200}}, 1},
+		{"live commander", []world.Unit{{GUID: attempt1BossGUID(), Entry: 14834, Health: 1, MaxHealth: 200}}, 1},
 		{"no commander unit", nil, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1397,7 +1396,7 @@ func TestPracticeFrameHealthSurvivesPartyTargets(t *testing.T) {
 // least 1 %, never the practice's kill ending.
 func TestPracticeBossLiveUnderOnePercentIsNotDead(t *testing.T) {
 	now := time.Date(2026, 11, 12, 0, 6, 8, 0, time.Local)
-	a := &practiceUnitsAgent{units: []objects.Unit{{
+	a := &practiceUnitsAgent{units: []world.Unit{{
 		GUID: attempt1BossGUID(), Entry: 14834, Health: 1, MaxHealth: 200,
 	}}}
 	w := &walk{
@@ -1501,7 +1500,7 @@ func (a *practiceMissAgent) Call(ctx context.Context, method string, params, out
 // practiceUnitsAgent is the commander's own client with a fixed unit list: the units read answers units, or its error
 // when err is set (an unreadable source). Every other RPC answers nil, so no GM hand is faked.
 type practiceUnitsAgent struct {
-	units []objects.Unit
+	units []world.Unit
 	err   error
 }
 
@@ -1512,7 +1511,7 @@ func (a *practiceUnitsAgent) Call(ctx context.Context, method string, params, ou
 	if a.err != nil {
 		return a.err
 	}
-	if us, ok := out.(*[]objects.Unit); ok {
+	if us, ok := out.(*[]world.Unit); ok {
 		*us = a.units
 	}
 	return nil

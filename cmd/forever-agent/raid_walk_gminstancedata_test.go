@@ -20,10 +20,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func instDataArgs(extra ...string) []string {
@@ -110,7 +110,7 @@ func TestGMInstanceDataFiresAfterPlacement(t *testing.T) {
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3;6 3;0 0"}
 	n := zgPlaceSteps(t)
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	old := gmInstanceDataGap
 	defer func() { gmInstanceDataGap = old }()
 	if code := f.run(context.Background()); code != exitOK {
@@ -167,7 +167,7 @@ func TestGMInstanceDataResendsAfterReuseRestart(t *testing.T) {
 		f.env.capLedger = ledger
 		f.agent.entered = true
 		f.agent.startReply = instDataStartReply(t, n)
-		f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 		if code := f.run(context.Background()); code != exitOK {
 			t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 		}
@@ -202,7 +202,7 @@ func TestGMInstanceDataFreshWalkSends(t *testing.T) {
 	f.env.capLedger = ledger
 	f.agent.entered = true
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 	}
@@ -216,7 +216,7 @@ func TestGMInstanceDataFreshWalkSends(t *testing.T) {
 	g.env.capLedger = ledger
 	g.agent.entered = true
 	g.agent.startReply = instDataStartReply(t, n)
-	g.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	g.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := g.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, g.stderr.String(), g.stdout.String())
 	}
@@ -239,7 +239,7 @@ func TestGMInstanceDataRefiresAfterReuseFreshFallback(t *testing.T) {
 	first.env.capLedger = ledger
 	first.agent.entered = true
 	first.agent.startReply = instDataStartReply(t, n)
-	first.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	first.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := first.run(context.Background()); code != exitOK {
 		t.Fatalf("first walk exit %d: %s\n%s", code, first.stderr.String(), first.stdout.String())
 	}
@@ -254,7 +254,7 @@ func TestGMInstanceDataRefiresAfterReuseFreshFallback(t *testing.T) {
 	second.env.capLedger = ledger
 	second.agent.entered = false
 	second.agent.startReply = instDataStartReply(t, n)
-	second.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	second.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := second.run(context.Background()); code != exitOK {
 		t.Fatalf("second walk exit %d: %s\n%s", code, second.stderr.String(), second.stdout.String())
 	}
@@ -271,7 +271,7 @@ func TestGMInstanceDataSentOncePerInstance(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 	}
@@ -320,7 +320,7 @@ func TestGMInstanceDataUsesTheWalksGMPath(t *testing.T) {
 func TestGMInstanceDataOffByDefault(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.agent.startReply = zgPlaceReply(t)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s", code, f.stderr.String())
 	}
@@ -371,7 +371,7 @@ func TestGMInstanceDataInterruptResendsRest(t *testing.T) {
 	first.env.capLedger = ledger
 	first.agent.entered = true
 	first.agent.startReply = instDataStartReply(t, n)
-	first.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	first.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	first.env.sleep = func(ctx context.Context, d time.Duration) error {
 		if d == gmInstanceDataGap {
 			return interrupted
@@ -390,7 +390,7 @@ func TestGMInstanceDataInterruptResendsRest(t *testing.T) {
 	second.env.capLedger = ledger
 	second.agent.entered = true
 	second.agent.startReply = instDataStartReply(t, n)
-	second.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	second.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := second.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d, want 0: %s\n%s", code, second.stderr.String(), second.stdout.String())
 	}
@@ -418,7 +418,7 @@ func TestGMInstanceDataPlacedStartSendsBeforeRunStart(t *testing.T) {
 		f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 		n := zgPlaceSteps(t)
 		f.agent.startReply = instDataStartReply(t, n)
-		f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 		if code := f.run(context.Background()); code != exitOK {
 			t.Fatalf("until %s: exit %d: %s\n%s", until, code, f.stderr.String(), f.stdout.String())
 		}
@@ -459,7 +459,7 @@ func TestGMInstanceDataMidRunHoldsNextPull(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	mid := fmt.Sprintf("TBM:RUN|zul_gurub|running|%d/%d|high_priestess_arlokk|move|rest|resting|until boss (step %d)", n.start+1, n.total, n.until)
 	f.agent.mu.Lock()
 	last := f.agent.startQueue[len(f.agent.startQueue)-1]
@@ -500,7 +500,7 @@ func TestGMInstanceDataLogsServerReply(t *testing.T) {
 		f, _ := newPlaceFixture(t)
 		f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 		f.agent.startReply = instDataStartReply(t, n)
-		f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 		// A non-refusal system line on the wire is the command's confirmation.
 		f.agent.onGM = func(line string) {
 			if strings.HasPrefix(line, ".debug instancedata") {
@@ -519,7 +519,7 @@ func TestGMInstanceDataLogsServerReply(t *testing.T) {
 		f, _ := newPlaceFixture(t)
 		f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 		f.agent.startReply = instDataStartReply(t, n)
-		f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 		if code := f.run(context.Background()); code != exitOK {
 			t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 		}
@@ -685,7 +685,7 @@ func TestGMInstanceDataConfirmedIsRecorded(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	f.agent.onGM = func(line string) {
 		if strings.HasPrefix(line, ".debug instancedata") {
 			f.agent.push("command ok", "")
@@ -724,7 +724,7 @@ func TestGMInstanceDataResumesAfterFailedPause(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	mid := fmt.Sprintf("TBM:RUN|zul_gurub|running|%d/%d|high_priestess_arlokk|move|rest|resting|until boss (step %d)", n.start+1, n.total, n.until)
 	f.agent.mu.Lock()
 	last := f.agent.startQueue[len(f.agent.startQueue)-1]
@@ -769,7 +769,7 @@ func TestGMInstanceDataFiringBreaksPollLoop(t *testing.T) {
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	f.agent.pageSize = 2
 	run := func(step int) queuedEvent {
 		return queuedEvent{raw: fmt.Sprintf("TBM:RUN|zul_gurub|running|%d/%d|high_priestess_arlokk|move|rest|resting|until boss (step %d)", step, n.total, n.until)}
@@ -832,7 +832,7 @@ func TestGMInstanceDataFromStepFiresBeforeRunStart(t *testing.T) {
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 	n := zgPlaceSteps(t)
 	f.agent.startReply = placeStartReply("zul_gurub", step, n.total, n.until)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	if code := f.run(context.Background()); code != exitOK {
 		t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 	}
@@ -904,7 +904,7 @@ func TestGMInstanceDataResendsAfterWipeRecovery(t *testing.T) {
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 	f.opts.wipeResume = 1
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	// The run's own status lines name the plan's full leg, as the live server
 	// does. One running line before the wipe; the run goes on after the raid
 	// was revived.
@@ -986,7 +986,7 @@ func TestGMInstanceDataReuseResumeFromStepSendsOnceBeforeRunStart(t *testing.T) 
 			}
 			n := zgPlaceSteps(t)
 			f.agent.startReply = placeStartReply("zul_gurub", step, n.total, n.until)
-			f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 			if code := f.run(context.Background()); code != exitOK {
 				t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())
 			}
@@ -1031,7 +1031,7 @@ func bossRowFixture(t *testing.T, pageSize int, build func(st func(state string,
 	f, _ := newPlaceFixture(t)
 	f.opts.gmInstanceData = stringList{"high_priest_thekal:1 3"}
 	f.agent.startReply = instDataStartReply(t, n)
-	f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 	st := func(state string, step int, kind, phase, note string) queuedEvent {
 		return queuedEvent{raw: fmt.Sprintf("TBM:RUN|zul_gurub|%s|%d/%d|high_priest_thekal|%s|%s|%s", state, step, n.total, kind, phase, note)}
 	}
@@ -1229,7 +1229,7 @@ func TestGMInstanceDataFirstLegStatusAtBossRowSendsNothingUntilARest(t *testing.
 			f, _ := newPlaceFixture(t)
 			f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 			f.agent.startReply = instDataStartReply(t, n)
-			f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 			q := []queuedEvent{
 				st(boss, "boss", "begin", "starting the boss row"),
 				st(boss+1, "move", "walk", "walking"),
@@ -1299,7 +1299,7 @@ func TestGMInstanceDataFiresOnlyAtAnOutOfCombatRest(t *testing.T) {
 			f, _ := newPlaceFixture(t)
 			f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 			f.agent.startReply = instDataStartReply(t, n)
-			f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 			f.agent.startQueue = []queuedEvent{
 				{raw: fmt.Sprintf("TBM:RUN|zul_gurub|running|%d/%d|high_priestess_arlokk|%s|%s|%s", c.step, n.total, c.kind, c.phase, c.note)},
 				{raw: fmt.Sprintf("TBM:RUN|zul_gurub|done|%d/%d|high_priestess_arlokk|move|walk|stopped before step %d (until boss): the party stays where it stands", c.step, n.total, n.until)},
@@ -1417,7 +1417,7 @@ func TestGMInstanceDataUnsentIsReported(t *testing.T) {
 			f, _ := newPlaceFixture(t)
 			f.opts.gmInstanceData = stringList{"high_priestess_arlokk:1 3"}
 			f.agent.startReply = instDataStartReply(t, n)
-			f.agent.unitsFn = func(int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(int) []world.Unit { return []world.Unit{} }
 			f.agent.startQueue = c.queue
 			if code := f.run(context.Background()); code != exitOK {
 				t.Fatalf("exit %d: %s\n%s", code, f.stderr.String(), f.stdout.String())

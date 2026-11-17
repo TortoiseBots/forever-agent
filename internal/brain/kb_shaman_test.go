@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The shaman rotations generated from the Turtle knowledge base (tools/kbrotgen/recipes/kb_*_shaman.json), one play
@@ -78,7 +78,7 @@ func kbEnhRig(t *testing.T) (*rig, *meleeGame) {
 	mg := newMeleeGame(g)
 	r := rigOn(t, mg, g, Params{Strategies: []string{"enhancement_shaman"}, Rotation: "kb_enhancement_shaman"})
 	tankFights(g, 7, 4, 0)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	return r, mg
 }
 
@@ -124,7 +124,7 @@ func kbEnhTankRig(t *testing.T) (*rig, *meleeGame) {
 	m := mob(mobA, selfG)
 	m.O = math.Pi // the mob faces the shaman: the shaman is the tank
 	g.addUnit(m, 3, 0)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	return r, mg
 }
 
@@ -142,7 +142,7 @@ func TestKBEnhancementTankShamanRotationPlays(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// Water Shield below ~66% mana: the KB's swap away from the Lightning Shield.
-	r.g.setSelf(func(u *objects.Unit) { u.Power = u.MaxPower * 50 / 100 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = u.MaxPower * 50 / 100 })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "water_shield" || spells.Name(d.Spell) != "Water Shield" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
@@ -152,7 +152,7 @@ func TestKBEnhancementTankShamanRotationPlays(t *testing.T) {
 func TestKBEnhancementTankShamanTauntsWithEarthshakerSlam(t *testing.T) {
 	r, _ := kbEnhTankRig(t)
 	r.g.party = []Member{{Name: "Mage", GUID: dpsG1, Online: true}}
-	r.g.addUnit(objects.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: ClassMage, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
+	r.g.addUnit(world.Unit{GUID: dpsG1, Type: "player", Name: "Mage", Class: ClassMage, InParty: true, Health: 500, MaxHealth: 500}, 6, 3)
 	r.g.addUnit(mob(mobB, dpsG1), 4, 3) // loose: it attacks the mage
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "taunt" || d.Spell != shEarthshaker || d.Target != mobB {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -167,8 +167,8 @@ func kbRestoShamanRig(t *testing.T) (*rig, *casterGame) {
 	shamanSelf(g.fakeGame)
 	g.self.Level = 60
 	g.self.InCombat = true
-	g.self.Auras = []objects.Aura{{Name: "Water Shield", SpellID: shWShield2}}
-	g.items = append([]objects.Item{}, allTools...)
+	g.self.Auras = []world.Aura{{Name: "Water Shield", SpellID: shWShield2}}
+	g.items = append([]world.Item{}, allTools...)
 	return rigOn(t, g, g.fakeGame, Params{Strategies: []string{"resto_shaman"}, Rotation: "kb_restoration_shaman"}), g
 }
 

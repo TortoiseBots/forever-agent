@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/trashcheck"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -378,8 +377,8 @@ func SpawnGUID(g world.GUID) uint64 { return uint64(world.SpawnLow(g)) }
 
 // SeenMembers picks, from the units a read shows, the members of the pack: a creature whose spawn guid and entry both match a member,
 // dead or alive (the caller tells them apart). The order is by guid.
-func (p GMClearPack) SeenMembers(units []objects.Unit) []objects.Unit {
-	var out []objects.Unit
+func (p GMClearPack) SeenMembers(units []world.Unit) []world.Unit {
+	var out []world.Unit
 	for _, u := range units {
 		if !u.GUID.IsCreature() {
 			continue
@@ -393,8 +392,8 @@ func (p GMClearPack) SeenMembers(units []objects.Unit) []objects.Unit {
 }
 
 // LiveMembers is SeenMembers without the dead: a corpse needs no second kill.
-func (p GMClearPack) LiveMembers(units []objects.Unit) []objects.Unit {
-	var out []objects.Unit
+func (p GMClearPack) LiveMembers(units []world.Unit) []world.Unit {
+	var out []world.Unit
 	for _, u := range p.SeenMembers(units) {
 		if !u.Dead {
 			out = append(out, u)

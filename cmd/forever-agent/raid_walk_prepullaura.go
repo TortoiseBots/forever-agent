@@ -85,11 +85,11 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The --prepull-aura-when modes: boss (the default) fires the lists before each boss row, start fires them once,
@@ -1586,7 +1586,7 @@ func (w *walk) prepullAuraStartWait(ctx context.Context) ([]tbm.PartyRec, error)
 // and only when the first read missed, so a raid the store holds whole costs no line per bot per boss row. The read
 // stays fail-closed: the caller decides what an unseen unit means, and the wait is no licence to fire on a unit the
 // walk cannot read. waited is the time spent, for the caller's own failure line.
-func (w *walk) prepullAuraUnitWait(ctx context.Context, port walkAuras, where string, t dungeon.AuraTarget, shared time.Time) (u objects.Unit, seen bool, waited time.Duration, err error) {
+func (w *walk) prepullAuraUnitWait(ctx context.Context, port walkAuras, where string, t dungeon.AuraTarget, shared time.Time) (u world.Unit, seen bool, waited time.Duration, err error) {
 	begin := w.env.now()
 	if u, seen = port.ViewUnit(ctx, t); seen {
 		return u, true, 0, nil
@@ -1597,7 +1597,7 @@ func (w *walk) prepullAuraUnitWait(ctx context.Context, port walkAuras, where st
 	}
 	for w.env.now().Before(deadline) {
 		if err := w.env.sleep(ctx, prepullUnitReadPoll); err != nil {
-			return objects.Unit{}, false, 0, err
+			return world.Unit{}, false, 0, err
 		}
 		if u, seen = port.ViewUnit(ctx, t); seen {
 			break
@@ -2141,20 +2141,20 @@ func (p walkAuras) SendAura(ctx context.Context, t dungeon.AuraTarget, b dungeon
 }
 
 // ViewUnit reads the target's unit row from the agent's store (auras included); false when the store does not hold it.
-func (p walkAuras) ViewUnit(ctx context.Context, t dungeon.AuraTarget) (objects.Unit, bool) {
-	var u objects.Unit
+func (p walkAuras) ViewUnit(ctx context.Context, t dungeon.AuraTarget) (world.Unit, bool) {
+	var u world.Unit
 	if err := p.w.agent.Call(ctx, "unit", map[string]any{"guid": t.GUID.String()}, &u, 10*time.Second); err != nil {
-		return objects.Unit{}, false
+		return world.Unit{}, false
 	}
 	if u.GUID != t.GUID {
-		return objects.Unit{}, false
+		return world.Unit{}, false
 	}
 	return u, true
 }
 
 // CasterAuras is the commander's own auras: an aura that lands on it is a miss (the selection did not hold, or the
 // account is below developer level and the core puts every aura on the sender).
-func (p walkAuras) CasterAuras(ctx context.Context) ([]objects.Aura, bool) {
+func (p walkAuras) CasterAuras(ctx context.Context) ([]world.Aura, bool) {
 	st, err := p.w.status(ctx)
 	if err != nil || st.Character == "" {
 		return nil, false

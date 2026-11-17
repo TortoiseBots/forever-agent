@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 	"io"
 	"os"
 	"path/filepath"
@@ -227,7 +227,7 @@ func TestRaidWalkReviveAtRaidNearWipeBringsRevivedHiresBack(t *testing.T) {
 			f := newFixture(t)
 			f.opts.reviveAtRaid = on
 			f.agent.startReply = startAt("onyxias_lair", 10)
-			f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 			var resumeAt time.Time
 			resumeHook(f, 11, 28, &resumeAt)
 			f.agent.mu.Lock()
@@ -320,7 +320,7 @@ func nearWipeRevive(t *testing.T, setup func(f *fixture)) (*fixture, []string) {
 	f := newFixture(t)
 	f.opts.reviveAtRaid = true
 	f.agent.startReply = startAt("onyxias_lair", 10)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	var resumeAt time.Time
 	resumeHook(f, 11, 28, &resumeAt)
 	f.agent.mu.Lock()

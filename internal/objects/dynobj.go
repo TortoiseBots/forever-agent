@@ -3,26 +3,10 @@ package objects
 import (
 	"math"
 	"sort"
-
-	"github.com/pjerra/forever-agent/internal/packet"
 )
 
 // HighDynamicObject is the high word of a dynamic object's guid (HIGHGUID_DYNAMICOBJECT).
 const HighDynamicObject uint16 = 0xF100
-
-// DynamicObject is the area a ground spell leaves: Blizzard, Rain of Fire, a consecration, a fire patch under a boss. The
-// server sends it as an object of its own with the spell, the caster and the radius.
-type DynamicObject struct {
-	GUID   packet.GUID `json:"guid"`
-	Spell  uint32      `json:"spell_id"`
-	Caster packet.GUID `json:"caster,omitempty"`
-	Radius float32     `json:"radius"`
-	X      float32     `json:"x"`
-	Y      float32     `json:"y"`
-	Z      float32     `json:"z"`
-	// Distance is the flat distance from the player to the object's centre, -1 without a position.
-	Distance float32 `json:"distance"`
-}
 
 func isDynamicObject(o *object) bool {
 	if o.typ == TypeDynamic {

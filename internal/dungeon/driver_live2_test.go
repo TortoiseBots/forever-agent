@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -466,7 +465,7 @@ func TestARefusingBotIsNotAskedEveryPoll(t *testing.T) {
 // An aura the leader already carried is not a misfire: the first aura that lands nowhere is "on nobody", not "on the leader".
 func TestALeadersOwnAuraIsNotAMisfire(t *testing.T) {
 	g, p := runFixture(t)
-	g.auras = map[world.GUID][]objects.Aura{leader: {{SpellID: 22888}}}
+	g.auras = map[world.GUID][]world.Aura{leader: {{SpellID: 22888}}}
 	g.failGMOn = map[world.GUID]int{tank: 1}
 	d := NewDriver(p, g, Config{Buffs: worldBuffs(t)[:1]}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {

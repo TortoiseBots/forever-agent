@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 func allConjureRanks() []uint32 {
@@ -90,13 +90,13 @@ func TestConjureOnlyConsidersKnownRanks(t *testing.T) {
 // Live run 3: a level 45 mage that knew every rank conjured Conjured Crystal Water (level 55) with rank 7 and could not drink it.
 func TestMageConjuresAWaterItsLevelCanDrink(t *testing.T) {
 	r := restRig(t, allConjureRanks()...)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 600; u.Level = 45 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 600; u.Level = 45 })
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "conjure_water" || d.Spell != 10139 {
 		t.Fatalf("%+v", d)
 	}
 	r = restRig(t, allConjureRanks()...)
-	r.g.setSelf(func(u *objects.Unit) { u.Health = 300; u.Level = 45 })
+	r.g.setSelf(func(u *world.Unit) { u.Health = 300; u.Level = 45 })
 	if d := r.tick(time.Second); d == nil || d.Action != "conjure_food" || d.Spell != 10145 {
 		t.Fatalf("%+v", d)
 	}

@@ -9,10 +9,10 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // stageParams are dungeon_stage's params.
@@ -291,7 +291,7 @@ func (g remoteGame) CommandWait(ctx context.Context, command string, wait time.D
 func (g remoteGame) StageUnits() []dungeon.StageUnit {
 	st := g.c.cur().Status()
 	out := make([]dungeon.StageUnit, 0, 64)
-	for _, u := range g.c.cur().Units(objects.Filter{Limit: 500}) {
+	for _, u := range g.c.cur().Units(world.Filter{Limit: 500}) {
 		out = append(out, dungeon.StageUnit{
 			Name: u.Name, Entry: u.Entry, Player: u.Type == "player",
 			At:      dungeon.Point{X: u.X, Y: u.Y, Z: u.Z},

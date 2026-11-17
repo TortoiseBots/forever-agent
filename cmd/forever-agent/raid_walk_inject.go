@@ -31,7 +31,6 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -289,7 +288,7 @@ func (r *raidInjector) selectUnit(ctx context.Context, a raidwalk.InjectAction) 
 	wantCounter := uint64(uint32(guid))
 	var last error
 	for range 2 {
-		var u objects.Unit
+		var u world.Unit
 		if err := w.agent.Call(ctx, "target", map[string]string{"guid": guid.String()}, &u, 10*time.Second); err != nil {
 			last = fmt.Errorf("selection not confirmed: target %s: %v", guid, err)
 			continue

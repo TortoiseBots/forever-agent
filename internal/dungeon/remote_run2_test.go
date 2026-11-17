@@ -3,7 +3,6 @@ package dungeon
 import (
 	"context"
 	"fmt"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 	"strings"
@@ -173,13 +172,13 @@ func TestRemoteTeamGateRemembersHostileSightings(t *testing.T) {
 // unitCarrier is a fakeCarrier whose agent has a unit store.
 type unitCarrier struct {
 	*fakeCarrier
-	units []objects.Unit
+	units []world.Unit
 }
 
-func (u *unitCarrier) Units() []objects.Unit { return u.units }
+func (u *unitCarrier) Units() []world.Unit { return u.units }
 
-func bossCorpse(age int64) objects.Unit {
-	return objects.Unit{GUID: 0xF130001AFE000777, Type: "creature", Entry: 6910, X: 52, Y: 1, Z: 0, PosAgeMS: age, MaxHealth: 5000, Dead: true}
+func bossCorpse(age int64) world.Unit {
+	return world.Unit{GUID: 0xF130001AFE000777, Type: "creature", Entry: 6910, X: 52, Y: 1, Z: 0, PosAgeMS: age, MaxHealth: 5000, Dead: true}
 }
 
 func runUnitCarrier(t *testing.T, g *unitCarrier, plan *Plan) (Report, error) {
@@ -194,7 +193,7 @@ func runUnitCarrier(t *testing.T, g *unitCarrier, plan *Plan) (Report, error) {
 
 // A boss killed out of the bots' sight is looted from the corpse in the agent's own unit store.
 func TestBossLootUsesTheCorpseInTheAgentsStore(t *testing.T) {
-	g := &unitCarrier{fakeCarrier: carrierGame(t), units: []objects.Unit{bossCorpse(2000)}}
+	g := &unitCarrier{fakeCarrier: carrierGame(t), units: []world.Unit{bossCorpse(2000)}}
 	g.recipe = combineRecipe(g.fakeCarrier)
 	g.bag("Magey")[itMedallion] = 1
 	rep, err := runUnitCarrier(t, g, bossPlan(true))
@@ -209,7 +208,7 @@ func TestBossLootUsesTheCorpseInTheAgentsStore(t *testing.T) {
 
 // A store corpse far from the boss's position is not its corpse.
 func TestBossLootIgnoresACorpseFarFromTheBoss(t *testing.T) {
-	d := lootDriver(t, &unitCarrier{fakeCarrier: carrierGame(t), units: []objects.Unit{func() objects.Unit { u := bossCorpse(10); u.X = 500; return u }()}})
+	d := lootDriver(t, &unitCarrier{fakeCarrier: carrierGame(t), units: []world.Unit{func() world.Unit { u := bossCorpse(10); u.X = 500; return u }()}})
 	if _, ok := d.corpseOf(6910, &Point{50, 0, 0}); ok {
 		t.Fatal("a corpse 450 yd away counted")
 	}
@@ -249,7 +248,7 @@ func TestBossLootCorpseGoneOnTheServer(t *testing.T) {
 		age   int64
 		stale bool
 	}{{400_000, true}, {5_000, false}} {
-		g := &unitCarrier{fakeCarrier: carrierGame(t), units: []objects.Unit{bossCorpse(tc.age)}}
+		g := &unitCarrier{fakeCarrier: carrierGame(t), units: []world.Unit{bossCorpse(tc.age)}}
 		g.script["loot"] = []tbm.OrderResult{errOrder("cmd loot", "invalid-target")}
 		err := lootBoss(t, g)
 		if err == nil || !strings.Contains(err.Error(), "gone on the server") || !strings.Contains(err.Error(), "can't be reached") || strings.Contains(err.Error(), "stale") != tc.stale {

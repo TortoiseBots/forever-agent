@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/game"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -139,8 +138,8 @@ func ResolveFor(want []string, o ResolveOpts) (out []*Strategy, names []string, 
 
 // Fight is what the brain is fighting: the mob, who made it the mob, and how long the fight has gone on.
 type Fight struct {
-	Mob    *objects.Unit
-	Tank   *objects.Unit
+	Mob    *world.Unit
+	Tank   *world.Unit
 	Source string        // "tank" (the tank's target), "self" (a mob that attacks the player), "selected", or "loose" (a tanking player's add)
 	Since  time.Duration // how long a mob has been there to fight, 0 when none
 }
@@ -161,7 +160,7 @@ func tankRank(class uint8) int {
 	return 3
 }
 
-func hostileMob(u *objects.Unit) bool { return u != nil && u.Type != "player" && u.Hostile && !u.Dead }
+func hostileMob(u *world.Unit) bool { return u != nil && u.Type != "player" && u.Hostile && !u.Dead }
 
 // ValFight finds the mob to fight. The tank's target comes first: the party member named by Params.Tank, else the
 // first of warrior, paladin and druid among the party members in view whose target is a living hostile mob that is
@@ -174,7 +173,7 @@ var ValFight = &Value[Fight]{Name: "fight", Calc: func(c *Ctx) Fight {
 		f.Tank = &c.Self
 		f.Mob, f.Source = tankMob(c)
 	}
-	var tanks []*objects.Unit
+	var tanks []*world.Unit
 	for _, m := range c.Party {
 		if tankRole || !m.Online || m.Dead {
 			continue
@@ -225,7 +224,7 @@ var ValFight = &Value[Fight]{Name: "fight", Calc: func(c *Ctx) Fight {
 }}
 
 // ValMobOnMe is the nearest living hostile mob in combat whose target is the player.
-var ValMobOnMe = &Value[*objects.Unit]{Name: "mob_on_me", Calc: func(c *Ctx) *objects.Unit {
+var ValMobOnMe = &Value[*world.Unit]{Name: "mob_on_me", Calc: func(c *Ctx) *world.Unit {
 	for i := range c.Units { // nearest first
 		u := &c.Units[i]
 		if hostileMob(u) && u.InCombat && u.Target == c.Self.GUID {
@@ -239,7 +238,7 @@ var ValMobOnMe = &Value[*objects.Unit]{Name: "mob_on_me", Calc: func(c *Ctx) *ob
 const MeleeRange = 8
 
 // ValMeleeMob is the mob on the player that stands within MeleeRange.
-var ValMeleeMob = &Value[*objects.Unit]{Name: "melee_mob", Calc: func(c *Ctx) *objects.Unit {
+var ValMeleeMob = &Value[*world.Unit]{Name: "melee_mob", Calc: func(c *Ctx) *world.Unit {
 	if u := ValMobOnMe.Get(c); u != nil && u.Distance >= 0 && u.Distance <= MeleeRange {
 		return u
 	}
@@ -287,7 +286,7 @@ func PowerPct(c *Ctx) int {
 }
 
 // HasAura reports whether the unit carries an aura of one of the names.
-func HasAura(u *objects.Unit, names ...string) bool {
+func HasAura(u *world.Unit, names ...string) bool {
 	if u == nil {
 		return false
 	}
@@ -303,7 +302,7 @@ func HasAura(u *objects.Unit, names ...string) bool {
 
 // auraMissing reports a named aura on the player that is missing or, when the server told how long it has left,
 // has under a minute left.
-func auraMissing(u *objects.Unit, names ...string) bool {
+func auraMissing(u *world.Unit, names ...string) bool {
 	for _, a := range u.Auras {
 		for _, n := range names {
 			if strings.EqualFold(a.Name, n) {

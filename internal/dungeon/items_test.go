@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Items implements ItemSource.
-func (g *fakeGame) Items() []objects.Item { return append([]objects.Item(nil), g.bag...) }
+func (g *fakeGame) Items() []world.Item { return append([]world.Item(nil), g.bag...) }
 
 // runPlanKey is runPlan with the keystone step asking for the Staff of Prehistoria.
 var runPlanKey = strings.Replace(runPlan, `{"use_object":{"entry":124371}}`,
 	`{"use_object":{"entry":124371,"requires_item":{"entry":7733,"name":"Staff of Prehistoria"}}}`, 1)
 
-func staff() objects.Item { return objects.Item{Bag: 255, Slot: 23, Entry: 7733, Count: 1} }
+func staff() world.Item { return world.Item{Bag: 255, Slot: 23, Entry: 7733, Count: 1} }
 
 func TestPlanRequiresItemParses(t *testing.T) {
 	p := mustPlan(t, runPlanKey)
@@ -44,7 +44,7 @@ func TestPlanRequiresItemParses(t *testing.T) {
 // A non-GM leader without the key item: the run fails before it moves or says anything, naming the item.
 func TestDriverFailsEarlyWithoutTheRequiredItem(t *testing.T) {
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}} // the bags are listed, and the staff is not in them
+	g.bag = []world.Item{{Entry: 6948, Count: 1}} // the bags are listed, and the staff is not in them
 	p := mustPlan(t, runPlanKey)
 	d := NewDriver(p, g, Config{GM: GMNone}, g.clock())
 	err := d.Run(context.Background(), 0)
@@ -58,7 +58,7 @@ func TestDriverFailsEarlyWithoutTheRequiredItem(t *testing.T) {
 
 func TestDriverRunsWithTheRequiredItem(t *testing.T) {
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}, staff()}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}, staff()}
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMNone}, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d.Report())
@@ -71,7 +71,7 @@ func TestDriverRunsWithTheRequiredItem(t *testing.T) {
 // A leg that starts after the keystone's does not ask for the staff.
 func TestDriverChecksOnlyTheLegsItRuns(t *testing.T) {
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMNone}, g.clock())
 	if err := d.checkRequiredItems(1); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestDriverLetsAGMOpenWithoutTheItem(t *testing.T) {
 func TestDriverChecksAProbedGMAccount(t *testing.T) {
 	g, _ := runFixture(t)
 	g.dead.probeLevel, g.dead.probeKnown = 3, true
-	g.bag = []objects.Item{{Entry: 6948, Count: 1}}
+	g.bag = []world.Item{{Entry: 6948, Count: 1}}
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMProbe}, g.clock())
 	err := d.Run(context.Background(), 0)
 	if err == nil || !strings.Contains(err.Error(), "does not carry Staff of Prehistoria") || !d.gm || len(g.walks) != 0 {
@@ -110,7 +110,7 @@ func TestDriverWaitsForTheInventoryBeforeTheUse(t *testing.T) {
 	ticks := 0
 	g.onTick = func(g *fakeGame) {
 		if ticks++; ticks == 3 {
-			g.bag = []objects.Item{staff()}
+			g.bag = []world.Item{staff()}
 		}
 	}
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMNone}, g.clock())
@@ -145,7 +145,7 @@ func TestDriverFailsWhenTheBagsStayEmpty(t *testing.T) {
 // Bags whose items have not all arrived (entry 0) are no proof that the item is missing; a Game without an ItemSource is not asked.
 func TestDriverDoesNotGuessWhenTheBagsAreNotKnown(t *testing.T) {
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{{Slot: 23}}
+	g.bag = []world.Item{{Slot: 23}}
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMNone}, g.clock())
 	if err := d.checkRequiredItems(0); err != nil {
 		t.Fatal(err)
@@ -162,8 +162,8 @@ type noItems struct{ Game }
 // The staff goes missing on the way (sold, destroyed): the check right before the use fails the step.
 func TestDriverChecksTheItemAgainBeforeTheUse(t *testing.T) {
 	g, _ := runFixture(t)
-	g.bag = []objects.Item{staff()}
-	g.onWalk = func(g *fakeGame, to Point) { g.bag = []objects.Item{{Entry: 6948, Count: 1}} }
+	g.bag = []world.Item{staff()}
+	g.onWalk = func(g *fakeGame, to Point) { g.bag = []world.Item{{Entry: 6948, Count: 1}} }
 	d := NewDriver(mustPlan(t, runPlanKey), g, Config{GM: GMNone}, g.clock())
 	err := d.Run(context.Background(), 0)
 	if err == nil || !strings.Contains(err.Error(), "does not carry Staff of Prehistoria") || len(g.used) != 0 {

@@ -3,7 +3,6 @@ package brain
 import (
 	"context"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -54,7 +53,7 @@ func onWarlock(c *Ctx) bool { return onPower(c, powerMana) && c.Self.Class == Cl
 func moving(c *Ctx) bool { return c.Self.Moving }
 
 // hasCurse says the mob carries a curse, whoever cast it.
-func hasCurse(m *objects.Unit) bool { return m != nil && auraWithPrefix(m, "Curse of ") != "" }
+func hasCurse(m *world.Unit) bool { return m != nil && auraWithPrefix(m, "Curse of ") != "" }
 
 // castersInGroup counts the other party members in view whose class casts spells a curse of the Elements helps.
 func castersInGroup(c *Ctx) int {
@@ -103,7 +102,7 @@ func grayLevel(level uint32) uint32 {
 }
 
 // mobYieldsXP says a kill of the mob gives experience, so Drain Soul on it can yield a shard. An unknown level counts as yes.
-func mobYieldsXP(c *Ctx, m *objects.Unit) bool {
+func mobYieldsXP(c *Ctx, m *world.Unit) bool {
 	return m == nil || m.Level == 0 || m.Level > grayLevel(c.Self.Level)
 }
 

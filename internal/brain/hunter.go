@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -70,7 +69,7 @@ func autoShotSpell(c *Ctx) (uint32, bool) {
 }
 
 // shootingAt says Auto Shot was ordered at the mob a moment ago and is taken to run.
-func shootingAt(c *Ctx, m *objects.Unit) bool {
+func shootingAt(c *Ctx, m *world.Unit) bool {
 	who, held := heldKey(c, keyAutoShot)
 	return held && m != nil && who == guidStr(m.GUID)
 }
@@ -82,7 +81,7 @@ func feigning(c *Ctx) bool { _, held := heldKey(c, keyFeign); return held }
 func hunterManaOK(c *Ctx) bool { return PowerPct(c) >= hunterShotsManaPct }
 
 // incomingMob is the mob that has picked the hunter and is running at it from out of the dead zone.
-func incomingMob(c *Ctx) *objects.Unit {
+func incomingMob(c *Ctx) *world.Unit {
 	m := ValMobOnMe.Get(c)
 	if m == nil || !m.Moving || m.Distance < hunterDeadZone+1 || m.Distance > 30 || HasAura(m, "Concussive Shot") {
 		return nil
@@ -98,7 +97,7 @@ func incomingMobGUID(c *Ctx) world.GUID {
 }
 
 // hunterMelee is the mob on the hunter that is within the melee reach, nil when there is none.
-func hunterMelee(c *Ctx) *objects.Unit {
+func hunterMelee(c *Ctx) *world.Unit {
 	if feigning(c) {
 		return nil // a swing would end the feint
 	}
@@ -324,7 +323,7 @@ func hunterIssue(c *Ctx) string {
 // mob that has picked the hunter toward the tank. It is all movement, so it is off when the game cannot walk or see the mesh, when the
 // run switched it off, and while the dungeon driver holds the move lock.
 func hunterPosition() *Strategy {
-	spot := func(c *Ctx, m *objects.Unit) (Vec3, bool) { return bandSpot(c, "hunter", m) }
+	spot := func(c *Ctx, m *world.Unit) (Vec3, bool) { return bandSpot(c, "hunter", m) }
 	return &Strategy{
 		Name: "hunter_position",
 		Actions: []*Action{

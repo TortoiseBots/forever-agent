@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -24,7 +23,7 @@ const (
 // deadMember adds a dead party member, the body where it fell.
 func (g *fakeGame) deadMember(guid world.GUID, name string, class uint8, x, y float32) {
 	g.party = append(g.party, Member{Name: name, GUID: guid, Online: true, Dead: true})
-	g.addUnit(objects.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: 0, MaxHealth: 1000, Dead: true}, x, y)
+	g.addUnit(world.Unit{GUID: guid, Type: "player", Name: name, Class: class, InParty: true, Health: 0, MaxHealth: 1000, Dead: true}, x, y)
 }
 
 // rezRig is a healer preset out of combat at a rest gate, with 1000 mana, that knows the spells and can walk when walk is set.
@@ -67,7 +66,7 @@ func TestPriestResurrectsADeadMemberOutOfCombat(t *testing.T) {
 		t.Fatalf("paladin: %+v idle %q", d, rp.idle())
 	}
 	rs, gs := restoShamanRig(t, append([]uint32{rzAncestral2, rzAncestral3}, shHealKnown...)...)
-	gs.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	gs.setSelf(func(u *world.Unit) { u.InCombat = false })
 	gs.deadMember(deadG1, "Mage", 8, 10, 0)
 	if d := rs.tick(100 * time.Millisecond); d == nil || d.Action != "rez" || d.Spell != rzAncestral3 || d.Target != deadG1 {
 		t.Fatalf("shaman: %+v idle %q", d, rs.idle())
@@ -89,24 +88,24 @@ func TestRezWaitsForAnEndToTheFightAndTheRestGate(t *testing.T) {
 		}
 	}
 	r, g := setup()
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	noRez("the priest in combat", r)
 	r, g = setup()
-	g.mutate(tankG, func(u *objects.Unit) { u.InCombat = true })
+	g.mutate(tankG, func(u *world.Unit) { u.InCombat = true })
 	noRez("a member in combat", r)
 	r, _ = setup()
 	r.b.restOK = func() bool { return false }
 	noRez("a walk, not a rest gate", r)
 	r, g = setup()
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = append(u.Auras, objects.Aura{Name: "Shadowform", SpellID: spellShadowform})
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = append(u.Auras, world.Aura{Name: "Shadowform", SpellID: spellShadowform})
 	})
 	noRez("Shadowform", r)
 	r, g = setup()
-	g.mutate(deadG1, func(u *objects.Unit) { u.Dead, u.Ghost, u.Health = false, true, 1 })
+	g.mutate(deadG1, func(u *world.Unit) { u.Dead, u.Ghost, u.Health = false, true, 1 })
 	noRez("a ghost", r)
 	r, g = setup()
-	g.mutate(deadG1, func(u *objects.Unit) { u.Dead = false })
+	g.mutate(deadG1, func(u *world.Unit) { u.Dead = false })
 	noRez("a member the unit row calls alive", r)
 	// Without the spell nothing happens either.
 	r2, g2, _ := rezRig(t, "holy_priest", ClassPriest, 30, []uint32{prLesser1}, false)
@@ -157,16 +156,16 @@ func TestRezSkipsAMemberWhoseResurrectionIsAlreadyInFlight(t *testing.T) {
 	g.deadMember(deadG2, "Rogue", 4, 12, 0)
 	calm(g)
 	// The paladin is casting Redemption at the mage (SMSG_SPELL_START names the target).
-	g.mutate(dpsG1, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(7000)}
+	g.mutate(dpsG1, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(7000)}
 	})
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "rez" || d.Target != deadG2 {
 		t.Fatalf("the rogue, not the mage: %+v", d)
 	}
 	// With the cast over (a long past its end) the mage is a candidate again.
-	g.mutate(dpsG1, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(-3000)}
+	g.mutate(dpsG1, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(-3000)}
 	})
 	if d := r.tick(rezSentHold + time.Second); d == nil || d.Action != "rez" || d.Target != deadG1 {
 		t.Fatalf("%+v", d)
@@ -174,8 +173,8 @@ func TestRezSkipsAMemberWhoseResurrectionIsAlreadyInFlight(t *testing.T) {
 	// Anyone's resurrection counts, not only a party member's.
 	r2, g2, _ := rezRig(t, "holy_priest", ClassPriest, 30, priestRezKnown, false)
 	g2.deadMember(deadG1, "Mage", 8, 6, 0)
-	g2.addUnit(objects.Unit{GUID: 77, Type: "player", Name: "Stranger", Class: 5, Health: 900, MaxHealth: 900,
-		Casting: &objects.Cast{SpellID: rzResurrection2, Target: deadG1, EndsInMS: ms(5000)}}, 9, 0)
+	g2.addUnit(world.Unit{GUID: 77, Type: "player", Name: "Stranger", Class: 5, Health: 900, MaxHealth: 900,
+		Casting: &world.Cast{SpellID: rzResurrection2, Target: deadG1, EndsInMS: ms(5000)}}, 9, 0)
 	if d := r2.tick(100 * time.Millisecond); d != nil && d.Action == "rez" {
 		t.Fatalf("%+v", d)
 	}
@@ -241,8 +240,8 @@ func TestRezReachAndSight(t *testing.T) {
 func TestRezWaitsForManaAndTheHealerDrinksToTheTop(t *testing.T) {
 	// A shaman needs 90% of the base mana for Ancestral Spirit: at 85% it drinks (a healer drinks only below 80% otherwise).
 	r, g := restoShamanRig(t, append([]uint32{rzAncestral3}, shHealKnown...)...)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = false })
-	g.items = append(g.items, objects.Item{Entry: 159})
+	g.setSelf(func(u *world.Unit) { u.InCombat = false })
+	g.items = append(g.items, world.Item{Entry: 159})
 	g.deadMember(deadG1, "Mage", 8, 10, 0)
 	g.setMana(85)
 	d := r.tick(100 * time.Millisecond)
@@ -250,15 +249,15 @@ func TestRezWaitsForManaAndTheHealerDrinksToTheTop(t *testing.T) {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	g.setMana(95)
-	g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: "Drink"}) })
+	g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: "Drink"}) })
 	g.stand()
 	if d := r.tick(2 * time.Second); d == nil || d.Action != "rez" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
 	// Once the dead member is up, the healer drinks as ever: not at 85%.
 	r2, g2 := restoShamanRig(t, append([]uint32{rzAncestral3}, shHealKnown...)...)
-	g2.setSelf(func(u *objects.Unit) { u.InCombat = false })
-	g2.items = append(g2.items, objects.Item{Entry: 159})
+	g2.setSelf(func(u *world.Unit) { u.InCombat = false })
+	g2.items = append(g2.items, world.Item{Entry: 159})
 	g2.setMana(85)
 	if d := r2.tick(100 * time.Millisecond); d != nil && d.Action == "drink" {
 		t.Fatalf("%+v", d)
@@ -268,7 +267,7 @@ func TestRezWaitsForManaAndTheHealerDrinksToTheTop(t *testing.T) {
 func (g *fakeGame) stand() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	var keep []objects.Aura
+	var keep []world.Aura
 	for _, a := range g.self.Auras {
 		if a.Name != "Drink" {
 			keep = append(keep, a)
@@ -285,7 +284,7 @@ func rebirthRig(t *testing.T, known ...uint32) (*rig, *casterGame) {
 		known = append([]uint32{rzRebirth3}, drRestoKnown...)
 	}
 	r, g := restoRig(t, known...)
-	g.items = []objects.Item{{Entry: rzSeedOfLife, Count: 1}}
+	g.items = []world.Item{{Entry: rzSeedOfLife, Count: 1}}
 	return r, g
 }
 
@@ -319,7 +318,7 @@ func TestRebirthInACombatOnAKeyMemberOnly(t *testing.T) {
 	r5, g5 := rebirthRig(t)
 	g5.member(tankG, "Tankard", 2, 1000, 1000, 6, 0) // a paladin tank
 	r5.tick(100 * time.Millisecond)
-	g5.mutate(tankG, func(u *objects.Unit) { u.Dead, u.Health = true, 0 })
+	g5.mutate(tankG, func(u *world.Unit) { u.Dead, u.Health = true, 0 })
 	g5.party[0].Dead = true
 	if d := r5.tick(2 * time.Second); d == nil || d.Action != "rez" || d.Target != tankG {
 		t.Fatalf("%+v idle %q", d, r5.idle())
@@ -340,7 +339,7 @@ func TestRebirthNeedsTheSpellTheReagentAndAFightAndCasterForm(t *testing.T) {
 		"no reagent":   func(r *rig, g *casterGame) { g.items = nil },
 		"out of fight": func(r *rig, g *casterGame) { calm(g.fakeGame) },
 		"Moonkin Form": func(r *rig, g *casterGame) {
-			g.setSelf(func(u *objects.Unit) { u.Auras = append(u.Auras, objects.Aura{Name: "Moonkin Form", SpellID: 24858}) })
+			g.setSelf(func(u *world.Unit) { u.Auras = append(u.Auras, world.Aura{Name: "Moonkin Form", SpellID: 24858}) })
 		},
 		"on cooldown": func(r *rig, g *casterGame) { g.st.ServerCooldown(rzRebirth3, 1_800_000) },
 	} {
@@ -356,7 +355,7 @@ func TestRebirthNeedsTheSpellTheReagentAndAFightAndCasterForm(t *testing.T) {
 	}
 	// Other healers do not resurrect in a fight: the spells are barred in combat.
 	rp, gp, _ := rezRig(t, "holy_priest", ClassPriest, 30, priestRezKnown, false)
-	gp.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	gp.setSelf(func(u *world.Unit) { u.InCombat = true })
 	gp.deadMember(deadG1, "Tankard", 1, 10, 0)
 	if d := rp.tick(100 * time.Millisecond); d != nil && d.Action == "rez" {
 		t.Fatalf("%+v", d)
@@ -383,7 +382,7 @@ func TestCanRezIsSetByATickThatSawAMemberItCouldResurrect(t *testing.T) {
 	}
 	// A druid at a rest gate cannot (Rebirth is for a fight), and a class without a resurrection cannot.
 	rd, gd := restoRig(t, append([]uint32{rzRebirth3}, drRestoKnown...)...)
-	gd.items = []objects.Item{{Entry: rzSeedOfLife, Count: 1}}
+	gd.items = []world.Item{{Entry: rzSeedOfLife, Count: 1}}
 	calm(gd.fakeGame)
 	gd.deadMember(deadG1, "Tankard", 1, 10, 0)
 	rd.tick(100 * time.Millisecond)
@@ -476,18 +475,18 @@ func TestCanRezHoldsThroughTheCastAndWhileAnotherHealersIsInFlight(t *testing.T)
 	g2.member(dpsG1, "Paladin", 2, 1000, 1000, 8, 0)
 	g2.deadMember(deadG1, "Mage", 8, 6, 0)
 	calm(g2)
-	g2.mutate(dpsG1, func(u *objects.Unit) {
-		u.Casting = &objects.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(30000)}
+	g2.mutate(dpsG1, func(u *world.Unit) {
+		u.Casting = &world.Cast{SpellID: rzRedemption1, Target: deadG1, EndsInMS: ms(30000)}
 	})
 	for i := 0; i < 5; i++ {
 		r2.tick(2 * time.Second)
-		g2.mutate(dpsG1, func(u *objects.Unit) { u.Casting.EndsInMS = ms(30000) })
+		g2.mutate(dpsG1, func(u *world.Unit) { u.Casting.EndsInMS = ms(30000) })
 		if !r2.b.CanRez() {
 			t.Fatalf("tick %d: CanRez false while another healer casts", i)
 		}
 	}
 	// Once the member is up there is nothing to wait for.
-	g2.mutate(deadG1, func(u *objects.Unit) { u.Dead, u.Health = false, 500 })
+	g2.mutate(deadG1, func(u *world.Unit) { u.Dead, u.Health = false, 500 })
 	r2.tick(2 * time.Second)
 	g2.clk.advance(rezSeenFor + time.Second)
 	if r2.b.CanRez() {
@@ -533,9 +532,9 @@ func TestAMemberWhoStaysDeadIsOfferedThreeResurrectionsThenLeftAloneFiveMinutes(
 	calm(g2)
 	r2.tick(100 * time.Millisecond)
 	r2.tick(rezSentHold + time.Second)
-	g2.mutate(deadG1, func(u *objects.Unit) { u.Dead, u.Health = false, 500 })
+	g2.mutate(deadG1, func(u *world.Unit) { u.Dead, u.Health = false, 500 })
 	r2.tick(2 * time.Second)
-	g2.mutate(deadG1, func(u *objects.Unit) { u.Dead, u.Health = true, 0 })
+	g2.mutate(deadG1, func(u *world.Unit) { u.Dead, u.Health = true, 0 })
 	for i := 0; i < 3; i++ {
 		if d := r2.tick(rezSentHold + time.Second); d == nil || d.Action != "rez" {
 			t.Fatalf("offer %d after the member died again: %+v", i, d)

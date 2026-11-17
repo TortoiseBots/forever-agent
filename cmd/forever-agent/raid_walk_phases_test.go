@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
@@ -41,7 +40,7 @@ func TestRaidWalkReviveSummonsOnlyAfterTheLanding(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var resumeAt time.Time
 	resumeHook(f, 31, 37, &resumeAt)
@@ -104,7 +103,7 @@ func TestRaidWalkSelfRegroupNeverSummonsTheLiving(t *testing.T) {
 		f.agent.startReply = zgStart(total, next)
 		step := next - 2
 		regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 		f.dash.fights = mcWipeFights()
 		// The wipe the agent acts on comes from the dashboard, which still reports every hire down; the frame rule
@@ -191,7 +190,7 @@ func TestRaidWalkSelfRegroupNeverSummonsTheLiving(t *testing.T) {
 		f.agent.startReply = zgStart(total, next)
 		step := next - 2
 		regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 		f.dash.fights = mcWipeFights()
 		selfRegroupKill(f, regroup)
@@ -398,14 +397,14 @@ func selfRegroupWipeWith(t *testing.T, live func(party []string) []string, setup
 	f.agent.startReply = zgStart(total, next)
 	step := next - 2
 	regroup := fmt.Sprintf("TBM:RUN|molten_core|running|%d/%d|lucifron|move|begin|19 dead (1 wipe, 1 near wipe this run): regrouping by itself (1 of 2 at this step)", step, total)
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		if n > 3 {
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
 	}
 	f.opts.dashURL, f.opts.dashPassFile = "http://dash.test", "/tmp/pass"
 	f.dash.fights = mcWipeFights()
@@ -626,7 +625,7 @@ func TestRaidWalkReviveWaitsForTheSettledLanding(t *testing.T) {
 			f := newFixture(t)
 			f.agent.startReply = startAt("onyxias_lair", 30)
 			retirePack0Patrol(f)
-			f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+			f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 			f.allDeadFromHires()
 			var resumeAt time.Time
 			resumeHook(f, 31, 37, &resumeAt)
@@ -672,15 +671,15 @@ func TestRaidWalkEntranceFallbackWaitsForTheLanding(t *testing.T) {
 	}
 	// A warder 60 yd out keeps the FIRST point loud for the whole quiet check; once the entrance go went out the
 	// units are quiet again.
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		gos := recoveryGos
 		f.agent.mu.Unlock()
 		if gos >= 2 {
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
-		return []objects.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Onyxian Warder", Hostile: true, Moving: true, X: x + 60, Y: y, Z: z}}
 	}
 	var resumeAt time.Time
 	resumeHook(f, 31, 37, &resumeAt)
@@ -715,7 +714,7 @@ func TestRaidWalkReviveAppearsAtAHireFirst(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var resumeAt time.Time
 	resumeHook(f, 31, 37, &resumeAt)
@@ -797,7 +796,7 @@ func TestRaidWalkReviveWaitsForTheFreshAppearLanding(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var resumeAt time.Time
 	resumeHook(f, 31, 37, &resumeAt)
@@ -823,7 +822,7 @@ func TestRaidWalkReviveWaitsForTheFreshAppearLanding(t *testing.T) {
 func TestRaidWalkReviveUnverifiedAppearStops(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	f.agent.mu.Lock()
 	f.agent.appearRefused = true
@@ -887,7 +886,7 @@ func ghostRevive(t *testing.T, statusFails int) (*fixture, int) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
 	retirePack0Patrol(f)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	var resumeAt time.Time
 	resumeHook(f, 31, 37, &resumeAt)
@@ -954,7 +953,7 @@ func TestRaidWalkReviveRetriesThePreAppearRead(t *testing.T) {
 		f := newFixture(t)
 		f.agent.startReply = startAt("onyxias_lair", 30)
 		retirePack0Patrol(f)
-		f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+		f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 		f.allDeadFromHires()
 		var resumeAt time.Time
 		resumeHook(f, 31, 37, &resumeAt)
@@ -1072,7 +1071,7 @@ func neverLanding(f *fixture) {
 func TestRaidWalkReviveNeverLanding(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.allDeadFromHires()
 	neverLanding(f)
 	if code := f.run(context.Background()); code != exitRaidWalkIncident {
@@ -1097,7 +1096,7 @@ func TestRaidWalkReviveNeverLanding(t *testing.T) {
 func TestRaidWalkReviveLandingHonoursTheRecoveryDeadline(t *testing.T) {
 	f := newFixture(t)
 	f.agent.startReply = startAt("onyxias_lair", 30)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{} }
 	f.opts.wipeRest = 30 * time.Second
 	f.allDeadFromHires()
 	neverLanding(f)
@@ -1202,14 +1201,14 @@ func TestRaidWalkEntranceGoNeverLands(t *testing.T) {
 	f.agent.startReply = startAt("onyxias_lair", 30)
 	// An in-combat unit 30 yd from the revive point keeps it loud through the 120 s check; from the entrance go on
 	// the units are quiet, so the read the old code ran at the entrance would have said quiet.
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z, gos := f.agent.x, f.agent.y, f.agent.z, f.agent.recoveryGos
 		f.agent.mu.Unlock()
 		if gos >= 2 {
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
-		return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
 	}
 	f.allDeadFromHires()
 	f.agent.mu.Lock()
@@ -1265,7 +1264,7 @@ func TestRaidWalkQuietPatrolExemptionIsPerPoint(t *testing.T) {
 	// p's reads never exempt it) and ~126 yd from the entrance (>= 80, and farther than p's 60).
 	dx, dy, dz := float64(rev.X-e.X), float64(rev.Y-e.Y), float64(rev.Z-e.Z)
 	norm := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	member := objects.Unit{Type: "creature", Name: "Zulian Patrolman", Hostile: true, GUID: world.GUID(0x52050),
+	member := world.Unit{Type: "creature", Name: "Zulian Patrolman", Hostile: true, GUID: world.GUID(0x52050),
 		X: rev.X + float32(dx/norm*60), Y: rev.Y + float32(dy/norm*60), Z: rev.Z + float32(dz/norm*60)}
 	pat := filepath.Join(t.TempDir(), "patrols.json")
 	content := fmt.Sprintf(`{"format":"tb-patrols","version":1,"map":%d,"source":"db","patrols":[{"id":"52050","spawn_guids":[335952],"path":[{"x":%v,"y":%v,"z":%v},{"x":%v,"y":%v,"z":%v}],"period_s":60}]}`,
@@ -1277,7 +1276,7 @@ func TestRaidWalkQuietPatrolExemptionIsPerPoint(t *testing.T) {
 	f.opts.patrols = pat
 	f.opts.wipeResume = 0 // the boss-wipe ending: no D-C, so the refusal follows the reads themselves
 	f.agent.startReply = startAt("onyxias_lair", 30)
-	f.agent.unitsFn = func(n int) []objects.Unit { return []objects.Unit{member} }
+	f.agent.unitsFn = func(n int) []world.Unit { return []world.Unit{member} }
 	f.allDeadFromHires()
 	if code := f.run(context.Background()); code != exitRaidWalkIncident {
 		t.Fatalf("exit %d, want 19: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -1330,14 +1329,14 @@ func TestRaidWalkQuietWaitInterrupt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// The point never goes quiet, so the checks run out and D-C starts; the 50th units read is well inside the wait
 	// (the checks are 24 reads each, and the wait runs for many minutes).
-	f.agent.unitsFn = func(n int) []objects.Unit {
+	f.agent.unitsFn = func(n int) []world.Unit {
 		if n >= 50 {
 			cancel()
 		}
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
 	}
 	f.allDeadFromHires()
 	if code := f.run(ctx); code != exitRaidWalkFailed {
@@ -1365,11 +1364,11 @@ func TestRaidWalkSelfRegroupQuietWaitIsCapped(t *testing.T) {
 	f.dash.fights = mcWipeFights()
 	selfRegroupKill(f, regroup)
 	// The point never goes quiet: an in-combat unit 30 yd out on every read.
-	f.agent.unitsFn = func(int) []objects.Unit {
+	f.agent.unitsFn = func(int) []world.Unit {
 		f.agent.mu.Lock()
 		x, y, z := f.agent.x, f.agent.y, f.agent.z
 		f.agent.mu.Unlock()
-		return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
+		return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
 	}
 	if code := f.run(context.Background()); code != exitRaidWalkIncident {
 		t.Fatalf("exit %d, want 19: %s\n%s", code, f.stderr.String(), f.stdout.String())
@@ -1415,14 +1414,14 @@ func TestRaidWalkGhostsRecheckAfterTheWait(t *testing.T) {
 		}
 		// The revive point AND the entrance stay loud through their own 120 s checks, then go quiet so that the D-C
 		// wait finds quiet: what happens at the END of that wait is the point of this test.
-		f.agent.unitsFn = func(int) []objects.Unit {
+		f.agent.unitsFn = func(int) []world.Unit {
 			if entranceAt.IsZero() || f.clock.now().Sub(entranceAt) < 125*time.Second {
 				f.agent.mu.Lock()
 				x, y, z := f.agent.x, f.agent.y, f.agent.z
 				f.agent.mu.Unlock()
-				return []objects.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
+				return []world.Unit{{Type: "creature", Name: "Razzashi Skitterer", Entry: 11338, Hostile: true, InCombat: true, X: x + 30, Y: y, Z: z}}
 			}
-			return []objects.Unit{}
+			return []world.Unit{}
 		}
 	})
 	gm := f.agent.gmLines()

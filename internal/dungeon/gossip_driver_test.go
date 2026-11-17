@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -243,4 +242,4 @@ func TestGroupGossipNeedsHands(t *testing.T) {
 	}
 }
 
-var _ = objects.Unit{}
+var _ = world.Unit{}

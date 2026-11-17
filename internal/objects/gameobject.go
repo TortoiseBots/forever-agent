@@ -4,41 +4,9 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/pjerra/forever-agent/internal/packet"
 )
-
-// goTypeNames is GameobjectTypes (SharedDefines.h:253-284) by id, for the type_name column.
-var goTypeNames = [...]string{
-	"door", "button", "questgiver", "chest", "binder", "generic", "trap", "chair", "spell_focus", "text",
-	"goober", "transport", "areadamage", "camera", "map_object", "mo_transport", "duel_arbiter", "fishing_node",
-	"summoning_ritual", "mailbox", "auction_house", "guardpost", "spellcaster", "meeting_stone", "flagstand",
-	"fishing_hole", "flagdrop", "mini_game", "lottery_kiosk", "capture_point", "aura_generator",
-}
-
-// GOTypeName names a game object type id; an id the core does not know prints as its number.
-func GOTypeName(t uint8) string {
-	if int(t) < len(goTypeNames) {
-		return goTypeNames[t]
-	}
-	return strconv.Itoa(int(t))
-}
-
-// GOTypeByName is the id of a type given by name (case-insensitive, "spell_focus" or "spell focus")
-// or by number.
-func GOTypeByName(name string) (uint8, bool) {
-	name = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), " ", "_")
-	for i, n := range goTypeNames {
-		if n == name {
-			return uint8(i), true
-		}
-	}
-	if n, err := strconv.ParseUint(name, 10, 8); err == nil && int(n) < len(goTypeNames) {
-		return uint8(n), true
-	}
-	return 0, false
-}
 
 // GOStateName names a GOState; the client's own wording for a door is open (active) and closed (ready).
 func GOStateName(st uint32) string {
@@ -53,33 +21,6 @@ func GOStateName(st uint32) string {
 	return strconv.FormatUint(uint64(st), 10)
 }
 
-// GameObject is a game object around the player: a door, lever, chest, altar, brazier, node.
-// Name is filled in by the session from the query response; empty until that arrives.
-type GameObject struct {
-	GUID     packet.GUID `json:"guid"`
-	Entry    uint32      `json:"entry"`
-	Name     string      `json:"name"`
-	Type     uint8       `json:"type"` // GameobjectTypes id
-	TypeName string      `json:"type_name"`
-	X        float32     `json:"x"`
-	Y        float32     `json:"y"`
-	Z        float32     `json:"z"`
-	O        float32     `json:"o"`
-	// Distance and Distance2D are from the player, -1 for an object whose position the server never
-	// sent (a ship's or elevator's, which ride a transport path).
-	Distance   float32 `json:"distance"`
-	Distance2D float32 `json:"distance_2d"`
-	// State is the GOState as the client reads it: ready (a door closed), active (open or used) or
-	// active_alt.
-	State     string      `json:"state"`
-	Flags     uint32      `json:"flags"`     // GAMEOBJECT_FLAGS, GO_FLAG_*
-	DynFlags  uint32      `json:"dyn_flags"` // GAMEOBJECT_DYN_FLAGS, bit 0: the client shows it as ready to interact (a chest's sparkle)
-	Locked    bool        `json:"locked"`    // GO_FLAG_LOCKED: needs a key, spell or event
-	Usable    bool        `json:"usable"`    // see GOUsable
-	DisplayID uint32      `json:"display_id"`
-	CreatedBy packet.GUID `json:"created_by,omitempty"` // the unit that summoned it
-}
-
 // GOUsable is a hint, from what the update fields say, that CMSG_GAMEOBJ_USE can do something: the
 // core ignores a use of a generic object or one flagged no-interact (SpellHandler.cpp:286-318, the
 // HandleGameObjectUseOpcode checks), and the client does not offer one flagged in use or with an
@@ -87,15 +28,6 @@ type GameObject struct {
 // by the server alone, without an answer.
 func GOUsable(typ uint8, flags uint32) bool {
 	return typ != GOTypeGeneric && flags&(GOFlagNoInteract|GOFlagInUse|GOFlagInteractCond) == 0
-}
-
-// GOFilter picks game objects for GameObjects. Type is nil for any type.
-type GOFilter struct {
-	Near  float32 // 3D yards; 0: any distance (objects with no known position never match a distance)
-	Entry uint32
-	Type  *uint8
-	Name  string // applied by the session after names are filled in
-	Limit int    // 0: DefaultLimit
 }
 
 // IsGameObject reports whether g is a game object the store holds, or knows only from values.

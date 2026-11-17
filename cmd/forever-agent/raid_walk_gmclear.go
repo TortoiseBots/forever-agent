@@ -18,7 +18,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/slots"
@@ -163,15 +162,15 @@ func (w *walk) validateGMClear() error {
 }
 
 // gmClearUnits reads the objects the commander's client holds around it (no hostile filter: the pack decides who matters).
-func (w *walk) gmClearUnits(ctx context.Context) ([]objects.Unit, error) {
-	var us []objects.Unit
+func (w *walk) gmClearUnits(ctx context.Context) ([]world.Unit, error) {
+	var us []world.Unit
 	err := w.agent.Call(ctx, "units", map[string]any{"within": gmClearReadYd, "limit": gmClearReadLimit}, &us, 15*time.Second)
 	return us, err
 }
 
 // gmClearDead says whether the unit's frames show it dead. A unit the client no longer holds is not confirmed dead.
 func (w *walk) gmClearDead(ctx context.Context, g world.GUID) bool {
-	var u objects.Unit
+	var u world.Unit
 	if err := w.agent.Call(ctx, "unit", map[string]string{"guid": g.String()}, &u, 10*time.Second); err != nil {
 		return false
 	}
@@ -181,7 +180,7 @@ func (w *walk) gmClearDead(ctx context.Context, g world.GUID) bool {
 // gmClearKill sends the kill line for one unit (up to gmClearTries times, gmClearRetryGap apart) and reads its death from the frames
 // after each. It returns the number of lines sent and whether the death was seen. No line goes out at or after deadline: the tool's
 // budget is checked before every line, so a unit that cannot die stops the tool on its current try.
-func (w *walk) gmClearKill(ctx context.Context, u objects.Unit, deadline time.Time) (tries int, dead bool, err error) {
+func (w *walk) gmClearKill(ctx context.Context, u world.Unit, deadline time.Time) (tries int, dead bool, err error) {
 	for tries < gmClearTries {
 		if !w.env.now().Before(deadline) {
 			return tries, false, nil
@@ -331,9 +330,9 @@ func gmClearLanded(st session.StatusInfo, mapID uint32, x, y, z float32, beforeS
 // on the walk's clock, and each units RPC gets a context capped at the time left (Codex round 2): a read that the cap
 // cuts ends the poll with the last units instead of stretching it, while a read that fails on its own still stops the
 // walk.
-func (w *walk) gmClearStopUnits(ctx context.Context, label string, guids []uint64) ([]objects.Unit, error) {
+func (w *walk) gmClearStopUnits(ctx context.Context, label string, guids []uint64) ([]world.Unit, error) {
 	due := w.env.now().Add(gmClearUnitWait)
-	var last []objects.Unit
+	var last []world.Unit
 	for {
 		readCtx := ctx
 		cancel := func() {}
@@ -367,7 +366,7 @@ func (w *walk) gmClearStopUnits(ctx context.Context, label string, guids []uint6
 
 // gmClearUnitsShown says the units read holds at least one of the pack's spawn guids: the client's object store has the
 // pack the stop was walked to, so the read can name its members.
-func gmClearUnitsShown(units []objects.Unit, guids []uint64) bool {
+func gmClearUnitsShown(units []world.Unit, guids []uint64) bool {
 	want := make(map[uint64]bool, len(guids))
 	for _, g := range guids {
 		want[g] = true

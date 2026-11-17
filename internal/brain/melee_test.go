@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // behind reports whether a point is at least rearMin round from the way the mob faces, and within the melee spot's rings.
-func behind(m objects.Unit, p Vec3) bool {
+func behind(m world.Unit, p Vec3) bool {
 	return math.Abs(angleDiff(float32(bearing(Vec3{m.X, m.Y, m.Z}, p)), m.O)) > rearMin && dist2(p, Vec3{m.X, m.Y, m.Z}) <= 4.7
 }
 
@@ -108,7 +108,7 @@ func TestMeleeHoldsItsGroundWhenTheMobIsOnIt(t *testing.T) {
 	r.g.addUnit(m, 4, 0)
 	mf.setSwing(mobA)
 	setRage(r.g, 600)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	d := r.tick(100 * time.Millisecond) // a mob that attacks the warrior is fought at once
 	if d == nil || d.Action != "mortal_strike" || len(mf.walkList()) != 0 {
 		t.Fatalf("%+v walks %v", d, mf.walkList())
@@ -120,7 +120,7 @@ func TestMeleeHoldsItsGroundWhenTheMobIsOnIt(t *testing.T) {
 func TestMeleeWithoutAWalkerOrAMeleeLog(t *testing.T) {
 	g := newFake(warriorSpells...)
 	g.self.Class, g.self.Level, g.self.PowerType, g.self.MaxPower = ClassWarrior, 40, 1, 1000
-	g.self.Auras = []objects.Aura{stanceAura("Battle Shout", spBattleShout), stanceAura("Battle Stance", spBattleSt)}
+	g.self.Auras = []world.Aura{stanceAura("Battle Shout", spBattleShout), stanceAura("Battle Stance", spBattleSt)}
 	tankFights(g, 8, 4, math.Pi)
 	r := newRig(t, g, Params{Strategies: []string{"arms_warrior"}})
 	r.tick(100 * time.Millisecond)

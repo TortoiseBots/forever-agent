@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -78,14 +77,14 @@ const tankPickupRange = 30.0
 
 // tankMob is the mob a tanking player holds: first a loose add (a mob in combat that attacks a party member), then a mob that
 // attacks the player, then the player's own selected target when it is in combat. Nearest first within each.
-func tankMob(c *Ctx) (*objects.Unit, string) {
+func tankMob(c *Ctx) (*world.Unit, string) {
 	party := map[world.GUID]bool{}
 	for _, m := range c.Party {
 		if m.Online && !m.Dead {
 			party[m.GUID] = true
 		}
 	}
-	var onMe *objects.Unit
+	var onMe *world.Unit
 	for i := range c.Units { // nearest first
 		u := &c.Units[i]
 		if !hostileMob(u) || !u.InCombat || u.Distance < 0 || u.Distance > tankPickupRange {

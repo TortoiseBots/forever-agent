@@ -13,7 +13,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spellstate"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -182,9 +181,9 @@ type Ctx struct {
 	Now    time.Time
 	Tick   uint64
 	Spells *spellstate.State
-	Self   objects.Unit // the player's own row; SelfOK false until the game has it
+	Self   world.Unit // the player's own row; SelfOK false until the game has it
 	SelfOK bool
-	Units  []objects.Unit // in view, nearest first, the player excluded
+	Units  []world.Unit // in view, nearest first, the player excluded
 	Party  []Member
 	P      Params
 	// RestOK says out-of-combat upkeep (buffs, drinking) may run now. A brain started by hand always allows it;
@@ -196,7 +195,7 @@ type Ctx struct {
 	b     *Brain          // the brain, for what a step on its own goroutine reports
 	run   context.Context // the tick's context: a step outlives the action that started it, so it hangs on this one
 	act   string          // the action that runs now
-	byID  map[world.GUID]*objects.Unit
+	byID  map[world.GUID]*world.Unit
 	mem   *memory
 	trace []Decision
 }
@@ -212,7 +211,7 @@ func (c *Ctx) cast(ctx context.Context, spell uint32, target world.GUID) error {
 }
 
 // Unit finds a unit by guid in the snapshot (the player included).
-func (c *Ctx) Unit(g world.GUID) (*objects.Unit, bool) {
+func (c *Ctx) Unit(g world.GUID) (*world.Unit, bool) {
 	u, ok := c.byID[g]
 	return u, ok
 }

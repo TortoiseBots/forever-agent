@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/tracerun"
 	"github.com/pjerra/forever-agent/internal/world"
@@ -1139,7 +1138,7 @@ func (w remoteWorld) EntryTargets() bool {
 	return true
 }
 
-func (w remoteWorld) GameObjects() []objects.GameObject {
+func (w remoteWorld) GameObjects() []world.GameObject {
 	w.d.objectTouched = true // only the object steps and game-object waits ask
 	return w.d.objectsInView()
 }

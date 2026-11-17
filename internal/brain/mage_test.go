@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // frost is a mage that knows the combat spells, in a party with a warrior tank 25 yards east.
@@ -20,7 +20,7 @@ func frost(t *testing.T) *rig {
 
 // buffUp gives the leader both buffs, so that the upkeep has nothing to do.
 func buffUp(g *fakeGame) {
-	g.self.Auras = []objects.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}, {Name: "Arcane Intellect", SpellID: spIntellect}}
+	g.self.Auras = []world.Aura{{Name: "Frost Armor", SpellID: spFrostArmor}, {Name: "Arcane Intellect", SpellID: spIntellect}}
 }
 
 func spellSeq(g *fakeGame) []uint32 {
@@ -87,7 +87,7 @@ func TestFrostMageStaysIdleOutOfRangeAndCastsOnceInRange(t *testing.T) {
 	if d := r.tick(2200 * time.Millisecond); d != nil || r.idle() != "not_possible:frostbolt:out_of_range" {
 		t.Fatalf("%+v idle %q", d, r.idle())
 	}
-	r.g.mutate(mobA, func(u *objects.Unit) { u.X = 29 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.X = 29 })
 	if d := r.tick(200 * time.Millisecond); d == nil || d.Action != "frostbolt" {
 		t.Fatalf("%+v", d)
 	}
@@ -96,7 +96,7 @@ func TestFrostMageStaysIdleOutOfRangeAndCastsOnceInRange(t *testing.T) {
 func TestFrostMageNeedsManaForTheSpell(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), 28, 0)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 60 }) // Frostbolt rank 4 costs 65
+	r.g.setSelf(func(u *world.Unit) { u.Power = 60 }) // Frostbolt rank 4 costs 65
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d != nil || r.idle() != "not_possible:frostbolt:no_power" {
 		t.Fatalf("%+v idle %q", d, r.idle())
@@ -112,7 +112,7 @@ func TestFrostMageAnswersAMobInMeleeWithNovaThenFireBlastThenFrostbolt(t *testin
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "frost_nova" || d.Trigger != "mob_in_melee" || d.Target != selfG {
 		t.Fatalf("Nova first: %+v", d)
 	}
-	r.g.mutate(mobB, func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Frost Nova"}} }) // it is rooted
+	r.g.mutate(mobB, func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Frost Nova"}} }) // it is rooted
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "fire_blast" || d.Target != mobB {
 		t.Fatalf("then Fire Blast on the mob that stands on the mage: %+v", d)
 	}
@@ -127,7 +127,7 @@ func TestFrostMageAnswersAMobInMeleeWithNovaThenFireBlastThenFrostbolt(t *testin
 func TestFrostMageDoesNotNovaAMobThatIsAlreadyRooted(t *testing.T) {
 	r := frost(t)
 	m := mob(mobB, selfG)
-	m.Auras = []objects.Aura{{Name: "Frost Nova"}}
+	m.Auras = []world.Aura{{Name: "Frost Nova"}}
 	r.g.addUnit(m, 4, 0)
 	r.g.addUnit(mob(mobA, tankG), 28, 0)
 	// The mob on the mage needs no opening delay; Nova would be wasted on it.
@@ -164,8 +164,8 @@ func TestATankNamedInTheParamsIsTheOneFollowed(t *testing.T) {
 	g := newFake(spFrostbolt)
 	buffUp(g)
 	g.party = []Member{{Name: "Tankard", GUID: tankG, Online: true}, {Name: "Other", GUID: 3, Online: true}}
-	g.addUnit(objects.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 1, MaxHealth: 1, Target: mobA}, 25, 0)
-	g.addUnit(objects.Unit{GUID: 3, Type: "player", Class: 2, InParty: true, Health: 1, MaxHealth: 1, Target: mobB}, 25, 5)
+	g.addUnit(world.Unit{GUID: tankG, Type: "player", Class: 1, InParty: true, Health: 1, MaxHealth: 1, Target: mobA}, 25, 0)
+	g.addUnit(world.Unit{GUID: 3, Type: "player", Class: 2, InParty: true, Health: 1, MaxHealth: 1, Target: mobB}, 25, 5)
 	g.addUnit(mob(mobA, tankG), 28, 0)
 	g.addUnit(mob(mobB, 3), 28, 5)
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}, Tank: "other"})
@@ -181,7 +181,7 @@ func TestTheFightEndsWhenTheMobsAreGoneAndTheNextOneWaitsAgain(t *testing.T) {
 	r.tick(100 * time.Millisecond)
 	r.tick(2200 * time.Millisecond)
 	// Dead: it leaves the list. Combat is over; the mage does nothing.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Dead, u.Health = true, 0 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Dead, u.Health = true, 0 })
 	for i := 0; i < 3; i++ {
 		if d := r.tick(1600 * time.Millisecond); d != nil {
 			t.Fatalf("after the kill: %+v", d)
@@ -191,7 +191,7 @@ func TestTheFightEndsWhenTheMobsAreGoneAndTheNextOneWaitsAgain(t *testing.T) {
 		t.Fatalf("idle %q", r.idle())
 	}
 	// A new mob: a new fight, so the opening delay starts again.
-	r.g.mutate(mobA, func(u *objects.Unit) { u.Dead, u.Health = false, 500 })
+	r.g.mutate(mobA, func(u *world.Unit) { u.Dead, u.Health = false, 500 })
 	if d := r.tick(200 * time.Millisecond); d != nil || r.idle() != "vetoed:opening_delay" {
 		t.Fatalf("%+v %q", d, r.idle())
 	}
@@ -200,9 +200,9 @@ func TestTheFightEndsWhenTheMobsAreGoneAndTheNextOneWaitsAgain(t *testing.T) {
 	r2.g.addUnit(mob(mobA, tankG), 28, 0)
 	r2.tick(100 * time.Millisecond)
 	r2.tick(2200 * time.Millisecond)
-	r2.g.mutate(mobA, func(u *objects.Unit) { u.Dead = true })
+	r2.g.mutate(mobA, func(u *world.Unit) { u.Dead = true })
 	r2.g.addUnit(mob(mobB, tankG), 28, 0)
-	r2.g.mutate(tankG, func(u *objects.Unit) { u.Target = mobB })
+	r2.g.mutate(tankG, func(u *world.Unit) { u.Target = mobB })
 	if d := r2.tick(1600 * time.Millisecond); d == nil || d.Target != mobB {
 		t.Fatalf("%+v", d)
 	}
@@ -212,14 +212,14 @@ func TestConeOfColdNeedsTwoInFrontAndNoLooseMob(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), 6, 1)
 	r.g.addUnit(mob(mobB, tankG), 7, -1)
-	r.g.mutate(tankG, func(u *objects.Unit) { u.Target = mobA })
+	r.g.mutate(tankG, func(u *world.Unit) { u.Target = mobA })
 	r.tick(100 * time.Millisecond)
 	d := r.tick(2200 * time.Millisecond)
 	if d == nil || d.Action != "cone_of_cold" || d.Spell != spCone {
 		t.Fatalf("two mobs in front on the tank: %+v", d)
 	}
 	// A third mob nobody fights stands in reach: the area spell would pull it.
-	r.g.addUnit(objects.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 9, 0)
+	r.g.addUnit(world.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 9, 0)
 	r.g.st.Clear(spCone)
 	d = r.tick(1600 * time.Millisecond)
 	if d == nil || d.Action != "frostbolt" || r.idle() != "" && false {
@@ -231,7 +231,7 @@ func TestConeOfColdIgnoresMobsBehind(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), -6, 1)
 	r.g.addUnit(mob(mobB, tankG), -7, -1)
-	r.g.mutate(tankG, func(u *objects.Unit) { u.Target = mobA })
+	r.g.mutate(tankG, func(u *world.Unit) { u.Target = mobA })
 	r.tick(100 * time.Millisecond)
 	if d := r.tick(2200 * time.Millisecond); d == nil || d.Action != "frostbolt" {
 		t.Fatalf("%+v", d)
@@ -254,7 +254,7 @@ func TestMageBuffsOutOfCombatWithTheArmorItKnows(t *testing.T) {
 	if d == nil || d.Action != "frost_armor" || d.Via != "alt" || d.Target != selfG || d.Spell != spFrostArmor {
 		t.Fatalf("Ice Armor is unknown, Frost Armor stands in: %+v", d)
 	}
-	g.setSelf(func(u *objects.Unit) { u.Auras = []objects.Aura{{Name: "Frost Armor"}} })
+	g.setSelf(func(u *world.Unit) { u.Auras = []world.Aura{{Name: "Frost Armor"}} })
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "arcane_intellect" || d.Target != selfG {
 		t.Fatalf("%+v", d)
 	}
@@ -264,8 +264,8 @@ func TestMageBuffsOutOfCombatWithTheArmorItKnows(t *testing.T) {
 	}
 	// A buff the server says has under a minute left is renewed.
 	left := int64(30_000)
-	g.setSelf(func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Frost Armor"}, {Name: "Arcane Intellect", RemainingMS: &left}}
+	g.setSelf(func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Frost Armor"}, {Name: "Arcane Intellect", RemainingMS: &left}}
 	})
 	if d := r.tick(time.Second); d == nil || d.Action != "arcane_intellect" {
 		t.Fatalf("%+v", d)
@@ -274,7 +274,7 @@ func TestMageBuffsOutOfCombatWithTheArmorItKnows(t *testing.T) {
 
 func TestMageBuffsNeverRunInCombat(t *testing.T) {
 	g := newFake(spFrostArmor, spIntellect)
-	g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r := newRig(t, g, Params{Strategies: []string{"frost_mage"}})
 	if d := r.tick(time.Second); d != nil {
 		t.Fatalf("%+v", d)
@@ -283,19 +283,19 @@ func TestMageBuffsNeverRunInCombat(t *testing.T) {
 
 func TestMageDrinksWhenLowOnManaOutOfCombat(t *testing.T) {
 	r := restRig(t, spEvocation)
-	r.g.items = []objects.Item{{Entry: 4540, Count: 5}, {Entry: itemWater, Count: 2}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 500 }) // 50 %
+	r.g.items = []world.Item{{Entry: 4540, Count: 5}, {Entry: itemWater, Count: 2}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 500 }) // 50 %
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "drink" || len(r.g.used) != 1 || r.g.used[0] != itemWater {
 		t.Fatalf("%+v used %v", d, r.g.used)
 	}
 	// Sitting and drinking: nothing more to do.
-	r.g.setSelf(func(u *objects.Unit) { u.StandState = "sit"; u.Auras = append(u.Auras, objects.Aura{Name: "Drink"}) })
+	r.g.setSelf(func(u *world.Unit) { u.StandState = "sit"; u.Auras = append(u.Auras, world.Aura{Name: "Drink"}) })
 	if d := r.tick(6 * time.Second); d != nil || r.idle() != "not_useful:drink" {
 		t.Fatalf("%+v %q", d, r.idle())
 	}
 	// Full: no trigger.
-	r.g.setSelf(func(u *objects.Unit) { u.Power = manaFull })
+	r.g.setSelf(func(u *world.Unit) { u.Power = manaFull })
 	if d := r.tick(time.Second); d != nil || r.idle() != "no_trigger" {
 		t.Fatalf("%+v %q", d, r.idle())
 	}
@@ -303,8 +303,8 @@ func TestMageDrinksWhenLowOnManaOutOfCombat(t *testing.T) {
 
 func TestMagePrefersTheBestDrinkInTheBags(t *testing.T) {
 	r := restRig(t)
-	r.g.items = []objects.Item{{Entry: 1179, Count: 5}, {Entry: 8078, Count: 20}, {Entry: itemWater, Count: 2}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 300; u.Level = 50 })
+	r.g.items = []world.Item{{Entry: 1179, Count: 5}, {Entry: 8078, Count: 20}, {Entry: itemWater, Count: 2}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 300; u.Level = 50 })
 	r.tick(time.Second)
 	if len(r.g.used) != 1 || r.g.used[0] != 8078 {
 		t.Fatalf("%v", r.g.used)
@@ -313,8 +313,8 @@ func TestMagePrefersTheBestDrinkInTheBags(t *testing.T) {
 
 func TestMageEvocatesWhenNearlyOutOfManaAndFallsBackToDrinking(t *testing.T) {
 	r := restRig(t, spEvocation)
-	r.g.items = []objects.Item{{Entry: itemWater, Count: 2}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 100 }) // 10 %
+	r.g.items = []world.Item{{Entry: itemWater, Count: 2}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 100 }) // 10 %
 	if d := r.tick(time.Second); d == nil || d.Action != "evocation" || d.Target != selfG {
 		t.Fatalf("%+v", d)
 	}
@@ -326,7 +326,7 @@ func TestMageEvocatesWhenNearlyOutOfManaAndFallsBackToDrinking(t *testing.T) {
 
 func TestMageConjuresWaterWhenItHasNoneToDrink(t *testing.T) {
 	r := restRig(t, spConjure)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 300 })
+	r.g.setSelf(func(u *world.Unit) { u.Power = 300 })
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "conjure_water" || d.Via != "pre" || d.Spell != spConjure || len(r.g.used) != 0 {
 		t.Fatalf("%+v", d)
@@ -335,12 +335,12 @@ func TestMageConjuresWaterWhenItHasNoneToDrink(t *testing.T) {
 
 func TestMageDoesNotSitInCombatOrWhileFightingAMob(t *testing.T) {
 	r := restRig(t)
-	r.g.items = []objects.Item{{Entry: itemWater, Count: 2}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 100; u.InCombat = true })
+	r.g.items = []world.Item{{Entry: itemWater, Count: 2}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 100; u.InCombat = true })
 	if d := r.tick(time.Second); d != nil || len(r.g.used) != 0 {
 		t.Fatalf("%+v", d)
 	}
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = false })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = false })
 	r.g.addUnit(mob(mobA, selfG), 3, 0) // a mob still attacks the mage
 	if d := r.tick(time.Second); d != nil && d.Action == "drink" {
 		t.Fatalf("%+v", d)
@@ -350,8 +350,8 @@ func TestMageDoesNotSitInCombatOrWhileFightingAMob(t *testing.T) {
 func TestDriverGatedUpkeepWaitsForTheRestGate(t *testing.T) {
 	g := newFake()
 	buffUp(g)
-	g.items = []objects.Item{{Entry: itemWater, Count: 2}}
-	g.setSelf(func(u *objects.Unit) { u.Power = 300 })
+	g.items = []world.Item{{Entry: itemWater, Count: 2}}
+	g.setSelf(func(u *world.Unit) { u.Power = 300 })
 	cfg := DefaultConfig()
 	cfg.Now = g.clk.Now
 	cfg.NewTicker = func(time.Duration) (<-chan time.Time, func()) { return make(chan time.Time), func() {} }
@@ -497,8 +497,8 @@ func TestEventsCarryTheSpellAndTarget(t *testing.T) {
 func TestMageOnlyDrinksWhatItsLevelAllows(t *testing.T) {
 	r := restRig(t) // level 30
 	// Moonberry Juice and Conjured Mineral Water need level 35: the leader never sends them.
-	r.g.items = []objects.Item{{Entry: 1645, Count: 5}, {Entry: 8077, Count: 20}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 300 })
+	r.g.items = []world.Item{{Entry: 1645, Count: 5}, {Entry: 8077, Count: 20}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 300 })
 	for i := 0; i < 5; i++ {
 		if d := r.tick(200 * time.Millisecond); d != nil {
 			t.Fatalf("%+v", d)
@@ -508,22 +508,22 @@ func TestMageOnlyDrinksWhatItsLevelAllows(t *testing.T) {
 		t.Fatalf("used %v", r.g.used)
 	}
 	// A drink of level 25 in the bags is used, though the better ones are there.
-	r.g.items = append(r.g.items, objects.Item{Entry: 1708, Count: 3})
+	r.g.items = append(r.g.items, world.Item{Entry: 1708, Count: 3})
 	if d := r.tick(200 * time.Millisecond); d == nil || d.Action != "drink" || len(r.g.used) != 1 || r.g.used[0] != 1708 {
 		t.Fatalf("%+v used %v", d, r.g.used)
 	}
 	// Level 35: the vendor drink of 35 then comes after the conjured water of 35.
 	r2 := restRig(t)
-	r2.g.items = []objects.Item{{Entry: 1645, Count: 5}, {Entry: 8077, Count: 20}, {Entry: 8766, Count: 1}}
-	r2.g.setSelf(func(u *objects.Unit) { u.Power = 300; u.Level = 35 })
+	r2.g.items = []world.Item{{Entry: 1645, Count: 5}, {Entry: 8077, Count: 20}, {Entry: 8766, Count: 1}}
+	r2.g.setSelf(func(u *world.Unit) { u.Power = 300; u.Level = 35 })
 	r2.tick(time.Second)
 	if len(r2.g.used) != 1 || r2.g.used[0] != 8077 {
 		t.Fatalf("%v", r2.g.used)
 	}
 	// Level 45: Morning Glory Dew (45) leads the vendor drinks.
 	r3 := restRig(t)
-	r3.g.items = []objects.Item{{Entry: 1645, Count: 5}, {Entry: 8766, Count: 1}}
-	r3.g.setSelf(func(u *objects.Unit) { u.Power = 300; u.Level = 45 })
+	r3.g.items = []world.Item{{Entry: 1645, Count: 5}, {Entry: 8766, Count: 1}}
+	r3.g.setSelf(func(u *world.Unit) { u.Power = 300; u.Level = 45 })
 	r3.tick(time.Second)
 	if len(r3.g.used) != 1 || r3.g.used[0] != 8766 {
 		t.Fatalf("%v", r3.g.used)
@@ -532,8 +532,8 @@ func TestMageOnlyDrinksWhatItsLevelAllows(t *testing.T) {
 
 func TestADrinkIsNotUsedTwiceBeforeTheAuraShows(t *testing.T) {
 	r := restRig(t)
-	r.g.items = []objects.Item{{Entry: itemWater, Count: 2}}
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 300 })
+	r.g.items = []world.Item{{Entry: itemWater, Count: 2}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 300 })
 	if d := r.tick(time.Second); d == nil || d.Action != "drink" {
 		t.Fatalf("%+v", d)
 	}
@@ -554,8 +554,8 @@ func TestADrinkIsNotUsedTwiceBeforeTheAuraShows(t *testing.T) {
 
 func TestAnUnusableDrinkLetsTheNextLowerOneBeTried(t *testing.T) {
 	r := restRig(t)
-	r.g.items = []objects.Item{{Entry: 2136, Count: 5}, {Entry: itemWater, Count: 2}} // 15 and 1
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 300 })
+	r.g.items = []world.Item{{Entry: 2136, Count: 5}, {Entry: itemWater, Count: 2}} // 15 and 1
+	r.g.setSelf(func(u *world.Unit) { u.Power = 300 })
 	r.tick(time.Second)
 	r.tick(2 * time.Second) // settled, the aura never came
 	if len(r.g.used) != 2 || r.g.used[0] != 2136 || r.g.used[1] != itemWater {
@@ -567,7 +567,7 @@ func TestFrostNovaCountsAsAnAreaSpell(t *testing.T) {
 	r := frost(t)
 	r.g.addUnit(mob(mobA, tankG), 28, 0)
 	r.g.addUnit(mob(mobB, selfG), 4, 0)
-	r.g.addUnit(objects.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 0, 8) // nobody fights it
+	r.g.addUnit(world.Unit{GUID: 102, Type: "creature", Hostile: true, Health: 10, MaxHealth: 10}, 0, 8) // nobody fights it
 	r.tick(100 * time.Millisecond)
 	d := r.tick(2200 * time.Millisecond)
 	if d == nil || d.Action == "frost_nova" {
@@ -579,7 +579,7 @@ func TestFrostNovaCountsAsAnAreaSpell(t *testing.T) {
 		}
 	}
 	// With the loose mob gone, Nova goes.
-	r.g.mutate(102, func(u *objects.Unit) { u.Dead = true })
+	r.g.mutate(102, func(u *world.Unit) { u.Dead = true })
 	r.g.st.Clear(spFireBlast)
 	if d := r.tick(1600 * time.Millisecond); d == nil || d.Action != "frost_nova" {
 		t.Fatalf("%+v", d)

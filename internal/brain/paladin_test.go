@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Spells of the paladin tests (ids from internal/spells/meta.tsv.gz; TestPaladinSpellData checks the facts the rotation relies on).
@@ -33,7 +33,7 @@ var paladinSpells = []uint32{spSoCommand, spSoRight, spSoWisdom, spJudgement, sp
 // allPaladin is the spellbook with Seal of the Crusader too (the plain one chooses Command on a fresh mob).
 var allPaladin = append(append([]uint32{}, paladinSpells...), spSoCrusader)
 
-var paladinBuffed = []objects.Aura{{Name: "Retribution Aura", SpellID: spRetribAura}, {Name: "Blessing of Might", SpellID: spMight}}
+var paladinBuffed = []world.Aura{{Name: "Retribution Aura", SpellID: spRetribAura}, {Name: "Blessing of Might", SpellID: spMight}}
 
 // newPaladinRig is a paladin of level 50 with 3000 mana, its aura and blessing up, on a fake game that can walk, see and follow the swings.
 func newPaladinRig(t *testing.T, p Params, known ...uint32) (*rig, *meleeFake) {
@@ -41,13 +41,13 @@ func newPaladinRig(t *testing.T, p Params, known ...uint32) (*rig, *meleeFake) {
 	if len(known) == 0 {
 		known = paladinSpells
 	}
-	return newClassRig(t, "ret_paladin", ClassPaladin, 50, 0, 3000, p, known, func(u *objects.Unit) {
-		u.Auras = append([]objects.Aura{}, paladinBuffed...)
+	return newClassRig(t, "ret_paladin", ClassPaladin, 50, 0, 3000, p, known, func(u *world.Unit) {
+		u.Auras = append([]world.Aura{}, paladinBuffed...)
 	})
 }
 
 func setSeal(g *fakeGame, name string, id uint32) {
-	g.setSelf(func(u *objects.Unit) {
+	g.setSelf(func(u *world.Unit) {
 		keep := u.Auras[:0:0]
 		for _, a := range u.Auras {
 			if len(a.Name) < 8 || a.Name[:8] != "Seal of " {
@@ -55,7 +55,7 @@ func setSeal(g *fakeGame, name string, id uint32) {
 			}
 		}
 		if name != "" {
-			keep = append(keep, objects.Aura{Name: name, SpellID: id})
+			keep = append(keep, world.Aura{Name: name, SpellID: id})
 		}
 		u.Auras = keep
 	})
@@ -96,9 +96,9 @@ func TestPaladinSealsJudgesAndStrikes(t *testing.T) {
 }
 
 func TestPaladinSealChoice(t *testing.T) {
-	first := func(known []uint32, mana uint32, tuneMob func(*objects.Unit)) uint32 {
+	first := func(known []uint32, mana uint32, tuneMob func(*world.Unit)) uint32 {
 		r, mf := newPaladinRig(t, Params{}, known...)
-		r.g.setSelf(func(u *objects.Unit) { u.Power = mana })
+		r.g.setSelf(func(u *world.Unit) { u.Power = mana })
 		tankFights(r.g, 7, 4, 0)
 		mf.setSwing(mobA)
 		if tuneMob != nil {
@@ -115,13 +115,13 @@ func TestPaladinSealChoice(t *testing.T) {
 	if got := first(allPaladin, 3000, nil); got != spSoCrusader {
 		t.Errorf("a fresh mob: seal %d", got)
 	}
-	jotc := func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Judgement of the Crusader", SpellID: 21183, Harmful: true}}
+	jotc := func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Judgement of the Crusader", SpellID: 21183, Harmful: true}}
 	}
 	if got := first(allPaladin, 3000, jotc); got != spSoCommand {
 		t.Errorf("a mob with Judgement of the Crusader: seal %d", got)
 	}
-	if got := first(allPaladin, 3000, func(u *objects.Unit) { u.Health = u.MaxHealth / 2 }); got != spSoCommand {
+	if got := first(allPaladin, 3000, func(u *world.Unit) { u.Health = u.MaxHealth / 2 }); got != spSoCommand {
 		t.Errorf("a mob at 50%%: seal %d", got)
 	}
 	if got := first(allPaladin, 1200, nil); got != spSoCommand {
@@ -131,8 +131,8 @@ func TestPaladinSealChoice(t *testing.T) {
 	if got := first(allPaladin, 600, nil); got != spSoWisdom {
 		t.Errorf("at 20%% mana: seal %d", got)
 	}
-	jow := func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Judgement of Wisdom", SpellID: 20186, Harmful: true}}
+	jow := func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Judgement of Wisdom", SpellID: 20186, Harmful: true}}
 	}
 	if got := first(allPaladin, 600, jow); got != spSoCommand {
 		t.Errorf("at 20%% mana on a mob with Judgement of Wisdom: seal %d", got)
@@ -159,7 +159,7 @@ func TestPaladinASealThatIsUpIsNeverSwapped(t *testing.T) {
 	tankFights(r.g, 7, 4, 0)
 	mf.setSwing(mobA)
 	setSeal(r.g, "Seal of Righteousness", spSoRight)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 500 }) // low mana: Wisdom would be wanted, but a seal is up
+	r.g.setSelf(func(u *world.Unit) { u.Power = 500 }) // low mana: Wisdom would be wanted, but a seal is up
 	for i := 0; i < 4; i++ {
 		r.tick(1600 * time.Millisecond)
 	}
@@ -206,15 +206,15 @@ func TestConsecrationOnlyWithAPackAndWhenTheAreaVetoAllowsIt(t *testing.T) {
 	}
 	r, mf = newPaladinRig(t, Params{}, known...)
 	pack(r, mf)
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 1000 }) // 33%
+	r.g.setSelf(func(u *world.Unit) { u.Power = 1000 }) // 33%
 	if d := open(r); d != nil {
 		t.Fatalf("at 33%% mana: %+v", d)
 	}
 }
 
 func TestPaladinKeepsAnAuraAndABlessingAtRest(t *testing.T) {
-	bare := func(p Params, auras ...objects.Aura) *rig {
-		r, _ := newClassRig(t, "ret_paladin", ClassPaladin, 50, 0, 3000, p, paladinSpells, func(u *objects.Unit) { u.Auras = auras })
+	bare := func(p Params, auras ...world.Aura) *rig {
+		r, _ := newClassRig(t, "ret_paladin", ClassPaladin, 50, 0, 3000, p, paladinSpells, func(u *world.Unit) { u.Auras = auras })
 		return r
 	}
 	r := bare(Params{})
@@ -232,7 +232,7 @@ func TestPaladinKeepsAnAuraAndABlessingAtRest(t *testing.T) {
 		t.Fatalf("everything up: %+v", d)
 	}
 	// A companion's Devotion Aura is a different aura: ours still goes up. Its Kings is a blessing: ours does not go over it.
-	r = bare(Params{}, objects.Aura{Name: "Devotion Aura", SpellID: spDevotionAur}, objects.Aura{Name: "Blessing of Kings", SpellID: spKings})
+	r = bare(Params{}, world.Aura{Name: "Devotion Aura", SpellID: spDevotionAur}, world.Aura{Name: "Blessing of Kings", SpellID: spKings})
 	if d := r.tick(time.Second); d == nil || d.Spell != spRetribAura {
 		t.Fatalf("%+v", d)
 	}
@@ -241,16 +241,16 @@ func TestPaladinKeepsAnAuraAndABlessingAtRest(t *testing.T) {
 		t.Fatalf("a blessing is up: %+v", d)
 	}
 	// The same blessing ending (under a minute left) is renewed.
-	r = bare(Params{}, objects.Aura{Name: "Retribution Aura", SpellID: spRetribAura}, objects.Aura{Name: "Blessing of Might", SpellID: spMight, RemainingMS: ms(30000)})
+	r = bare(Params{}, world.Aura{Name: "Retribution Aura", SpellID: spRetribAura}, world.Aura{Name: "Blessing of Might", SpellID: spMight, RemainingMS: ms(30000)})
 	if d := r.tick(time.Second); d == nil || d.Action != "blessing" || d.Spell != spMight {
 		t.Fatalf("%+v", d)
 	}
-	r = bare(Params{}, objects.Aura{Name: "Retribution Aura", SpellID: spRetribAura}, objects.Aura{Name: "Blessing of Kings", SpellID: spKings, RemainingMS: ms(30000)})
+	r = bare(Params{}, world.Aura{Name: "Retribution Aura", SpellID: spRetribAura}, world.Aura{Name: "Blessing of Kings", SpellID: spKings, RemainingMS: ms(30000)})
 	if d := r.tick(time.Second); d == nil || d.Action != "blessing" || d.Spell != spKings {
 		t.Fatalf("the blessing it has is renewed, not swapped: %+v", d)
 	}
 	// Only Devotion known: Devotion. No aura known: none.
-	r, _ = newClassRig(t, "ret_paladin", ClassPaladin, 20, 0, 3000, Params{}, []uint32{spDevotionAur, spMight}, func(u *objects.Unit) { u.Auras = nil })
+	r, _ = newClassRig(t, "ret_paladin", ClassPaladin, 20, 0, 3000, Params{}, []uint32{spDevotionAur, spMight}, func(u *world.Unit) { u.Auras = nil })
 	if d := r.tick(time.Second); d == nil || d.Spell != spDevotionAur {
 		t.Fatalf("%+v", d)
 	}
@@ -262,7 +262,7 @@ func TestPaladinKeepsAnAuraAndABlessingAtRest(t *testing.T) {
 	}
 	r = bare(Params{})
 	r.b.restOK = func() bool { return false }
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	if d := r.tick(time.Second); d == nil || d.Action != "paladin_aura" {
 		t.Fatalf("%+v", d)
 	}
@@ -278,7 +278,7 @@ func TestPaladinEmergencies(t *testing.T) {
 		r, mf := newPaladinRig(t, Params{}, known...)
 		setSeal(r.g, "Seal of Command", spSoCommand)
 		meleeFight(r, mf)
-		r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+		r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 		if onPaladin {
 			onMe(r.g, mobA)
 		}
@@ -317,8 +317,8 @@ func TestPaladinEmergencies(t *testing.T) {
 	}
 	// A mob already stunned is not stunned again.
 	r, _ = hurt(40, true)
-	r.g.mutate(mobA, func(u *objects.Unit) {
-		u.Auras = []objects.Aura{{Name: "Hammer of Justice", SpellID: spHammerJ, Harmful: true}}
+	r.g.mutate(mobA, func(u *world.Unit) {
+		u.Auras = []world.Aura{{Name: "Hammer of Justice", SpellID: spHammerJ, Harmful: true}}
 	})
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "hammer_of_justice" {
 		t.Fatalf("%+v", d)
@@ -344,7 +344,7 @@ func TestHammerOfJusticeInterruptsACast(t *testing.T) {
 	setSeal(r.g, "Seal of Command", spSoCommand)
 	meleeFight(r, mf)
 	caster := mob(mobB, tankG)
-	caster.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	caster.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(caster, 6, 0)
 	d := r.tick(100 * time.Millisecond)
 	if d == nil || d.Action != "interrupt" || d.Spell != spHammerJ || d.Target != mobB || d.Rel != RelInterrupt {
@@ -355,7 +355,7 @@ func TestHammerOfJusticeInterruptsACast(t *testing.T) {
 	setSeal(r.g, "Seal of Command", spSoCommand)
 	meleeFight(r, mf)
 	far := mob(mobB, tankG)
-	far.Casting = &objects.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
+	far.Casting = &world.Cast{SpellID: spShadowBolt, EndsInMS: ms(1500), Target: tankG}
 	r.g.addUnit(far, 15, 0)
 	if d := r.tick(100 * time.Millisecond); d != nil && d.Action == "interrupt" {
 		t.Fatalf("%+v", d)
@@ -364,26 +364,26 @@ func TestHammerOfJusticeInterruptsACast(t *testing.T) {
 
 func TestPaladinDrinksAtRestOnly(t *testing.T) {
 	r, _ := newPaladinRig(t, Params{})
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 1200 })
-	r.g.items = []objects.Item{{Entry: 1645, Count: 5}} // Moonberry Juice, level 35
+	r.g.setSelf(func(u *world.Unit) { u.Power = 1200 })
+	r.g.items = []world.Item{{Entry: 1645, Count: 5}} // Moonberry Juice, level 35
 	d := r.tick(time.Second)
 	if d == nil || d.Action != "drink" || len(r.g.used) != 1 || r.g.used[0] != 1645 {
 		t.Fatalf("%+v used %v idle %q", d, r.g.used, r.idle())
 	}
 	// A mob to fight, or a closed rest gate: no drink.
 	r, mf := newPaladinRig(t, Params{})
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 1200 })
-	r.g.items = []objects.Item{{Entry: 1645, Count: 5}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 1200 })
+	r.g.items = []world.Item{{Entry: 1645, Count: 5}}
 	meleeFight(r, mf)
-	r.g.setSelf(func(u *objects.Unit) { u.InCombat = true })
+	r.g.setSelf(func(u *world.Unit) { u.InCombat = true })
 	r.tick(2200 * time.Millisecond)
 	if len(r.g.used) != 0 {
 		t.Fatalf("drank in a fight: %v", r.g.used)
 	}
 	r, _ = newPaladinRig(t, Params{})
 	r.b.restOK = func() bool { return false }
-	r.g.setSelf(func(u *objects.Unit) { u.Power = 1200 })
-	r.g.items = []objects.Item{{Entry: 1645, Count: 5}}
+	r.g.setSelf(func(u *world.Unit) { u.Power = 1200 })
+	r.g.items = []world.Item{{Entry: 1645, Count: 5}}
 	if d := r.tick(time.Second); d != nil {
 		t.Fatalf("%+v", d)
 	}
@@ -485,7 +485,7 @@ func TestPaladinManaFloor(t *testing.T) {
 	// Below 30% mana a Seal of Command is not judged (Judgement and the next seal cost mana); a Seal of Wisdom is.
 	run := func(seal string, id uint32, mana uint32, known ...uint32) (*rig, *meleeFake) {
 		r, mf := newPaladinRig(t, Params{}, known...)
-		r.g.setSelf(func(u *objects.Unit) { u.Power = mana })
+		r.g.setSelf(func(u *world.Unit) { u.Power = mana })
 		setSeal(r.g, seal, id)
 		tankFights(r.g, 7, 4, 0)
 		mf.setSwing(mobA)

@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -72,7 +71,7 @@ func zgBossWipeFixture(t *testing.T, entry uint32, until, label, wipeNote string
 	f.agent.hostilesFn = func(n int) []tbm.HostileRec {
 		return []tbm.HostileRec{{GUID: 9, Entry: entry, X: row.X, Y: row.Y, Z: row.Z, HPPct: 100, Target: world.GUID(1000)}}
 	}
-	f.agent.unitsFn = func(n int) []objects.Unit { return nil }
+	f.agent.unitsFn = func(n int) []world.Unit { return nil }
 	selfRegroupKill(f, zgRunLine(step, total, leg, "boss", "begin", wipeNote, label))
 	done := fmt.Sprintf("TBM:RUN|zul_gurub|done|%d/%d|%s|boss|begin|plan done (speed 1.0 (test); 1 wipe this run)", step, total, leg)
 	f.agent.mu.Lock()

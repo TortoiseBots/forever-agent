@@ -8,7 +8,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/aggroest"
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
@@ -82,7 +81,7 @@ type LiveData struct {
 	ExtraPaths map[int][]ScoutPath
 	Walks      map[int]WalkResult
 	// Units is the `q units` read at that step's spot (stand, anchor or pull row).
-	Units map[int][]objects.Unit
+	Units map[int][]world.Unit
 	LOS   map[LOSKey]bool
 	// Aborted says the live pass stopped part-way; AbortReason says why.
 	Aborted     bool
@@ -670,7 +669,7 @@ func above(z, at float32) string {
 }
 
 // liveAggroCheck judges the live hostiles within reach + spread of a stand or anchor (spec 3.4).
-func liveAggroCheck(st *StepResult, units []objects.Unit, w *worldspawn.World, owned map[uint64]int, pullIdx int,
+func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, owned map[uint64]int, pullIdx int,
 	level int, rate float32, spread float64, live LiveData) Check {
 	c := Check{Name: CheckLiveAggro, Source: SourceLive, Verdict: VerdictOK}
 	spawns := map[uint64]worldspawn.Spawn{}
@@ -779,7 +778,7 @@ func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 
 // liveJoinersCheck recomputes the pull's joiner estimate with live positions and live sight (spec 3.4).
 func liveJoinersCheck(st *StepResult, row planexport.StepRow, idx int, rows []planlint.PullRow, owned map[uint64]int,
-	mobs []aggroest.Mob, entries map[uint32]uint32, units []objects.Unit, ceiling int, spread float64, level int,
+	mobs []aggroest.Mob, entries map[uint32]uint32, units []world.Unit, ceiling int, spread float64, level int,
 	rate float32, killFirst []uint32, live LiveData) Check {
 	c := Check{Name: CheckLiveJoiners, Source: SourceLive, Verdict: VerdictOK}
 	at := map[uint32]dungeon.Point{}

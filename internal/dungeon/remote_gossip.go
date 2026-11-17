@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The gossip step in remote mode (Gossip in plan.go). `by` says who talks:
@@ -166,7 +166,7 @@ func (d *RemoteDriver) gossipByAgent(ctx context.Context, a Action) error {
 	if err := d.fallbackGate(ctx, "talk to an NPC"); err != nil {
 		return err
 	}
-	units := func() (objects.Unit, gossipStatus) { return findGossipNPC(us.Units(), g) }
+	units := func() (world.Unit, gossipStatus) { return findGossipNPC(us.Units(), g) }
 	if _, err := d.keepNearOpt(ctx, true); err != nil {
 		return err
 	}

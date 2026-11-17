@@ -13,7 +13,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/navmesh"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/session"
 	"github.com/pjerra/forever-agent/internal/tbm"
@@ -223,8 +222,8 @@ func (g remoteGame) Behavior(ctx context.Context, bot, key string, on bool) (tbm
 }
 
 // GameObjects implements dungeon.OrderGame: the game objects the agent's own character has in view.
-func (g remoteGame) GameObjects() []objects.GameObject {
-	return g.c.cur().GameObjects(objects.GOFilter{Limit: 5000})
+func (g remoteGame) GameObjects() []world.GameObject {
+	return g.c.cur().GameObjects(world.GOFilter{Limit: 5000})
 }
 
 func (g remoteGame) Frame() (tbm.ViewFrame, uint64, bool) { return g.c.feed.Latest() }
@@ -376,7 +375,7 @@ func (g remoteGame) AgentGUID() world.GUID { return g.c.cur().Status().GUID }
 
 // Sees says whether the agent's own object store lists the named player.
 func (g remoteGame) Sees(name string) bool {
-	for _, u := range g.c.cur().Units(objects.Filter{Limit: 5000}) {
+	for _, u := range g.c.cur().Units(world.Filter{Limit: 5000}) {
 		if u.Type == "player" && strings.EqualFold(u.Name, name) {
 			return true
 		}
@@ -589,7 +588,7 @@ func (g remoteGame) WalkSelf(ctx context.Context, to dungeon.Point) (dungeon.Wal
 }
 
 // Units implements dungeon.UnitSource: the units in the agent's own view (a boss corpse the feed does not list).
-func (g remoteGame) Units() []objects.Unit { return g.c.cur().Units(objects.Filter{Limit: 5000}) }
+func (g remoteGame) Units() []world.Unit { return g.c.cur().Units(world.Filter{Limit: 5000}) }
 
 // The hire step of the prepare block (dungeon.HireGame): the agent's own group, the players in its view, their pets and the item
 // prototypes of what they wear.
@@ -603,8 +602,8 @@ func (g remoteGame) AgentLevel() int { return int(g.c.cur().Status().Level) }
 func (g remoteGame) Members() []dungeon.HireMember {
 	s := g.c.cur()
 	party := s.Party()
-	units := map[world.GUID]objects.Unit{}
-	for _, u := range s.Units(objects.Filter{Limit: 5000}) {
+	units := map[world.GUID]world.Unit{}
+	for _, u := range s.Units(world.Filter{Limit: 5000}) {
 		if u.Type == "player" {
 			units[u.GUID] = u
 		}
@@ -630,7 +629,7 @@ func (g remoteGame) Player(name string) (dungeon.HireMember, bool) {
 			return m, true
 		}
 	}
-	for _, u := range g.c.cur().Units(objects.Filter{Limit: 5000}) {
+	for _, u := range g.c.cur().Units(world.Filter{Limit: 5000}) {
 		if u.Type == "player" && strings.EqualFold(u.Name, name) {
 			return dungeon.HireMember{Name: u.Name, GUID: u.GUID, Level: int(u.Level), Class: classNames[u.Class], Online: true, Dead: u.Dead, MaxHP: u.MaxHealth}, true
 		}

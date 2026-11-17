@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // The leader's death (issue #80 step 3a). A leader that dies is not a wipe while a member lives: the driver pauses its
@@ -542,9 +542,9 @@ func (d *Driver) watchUntil(ctx context.Context, cancel context.CancelFunc, cond
 // noteSickness reports resurrection sickness on the leader after it came back, and with WaitSickness waits it out.
 func (d *Driver) noteSickness(ctx context.Context) error {
 	src, _ := d.g.(SelfAuraSource)
-	find := func() (objects.Aura, bool) {
+	find := func() (world.Aura, bool) {
 		if src == nil {
-			return objects.Aura{}, false
+			return world.Aura{}, false
 		}
 		auras, _ := src.SelfAuras()
 		for _, a := range auras {
@@ -552,7 +552,7 @@ func (d *Driver) noteSickness(ctx context.Context) error {
 				return a, true
 			}
 		}
-		return objects.Aura{}, false
+		return world.Aura{}, false
 	}
 	// The aura shows a moment after the revive.
 	a, ok := find()

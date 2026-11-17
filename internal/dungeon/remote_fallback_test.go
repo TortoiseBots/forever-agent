@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/tbm"
 	"github.com/pjerra/forever-agent/internal/world"
 )
@@ -37,7 +36,7 @@ type handsGame struct {
 
 func newHandsGame(t *testing.T, level int) *handsGame {
 	n := newNearGame(t, level)
-	n.gobjs = []objects.GameObject{chestObj()}
+	n.gobjs = []world.GameObject{chestObj()}
 	return &handsGame{nearGame: n, mine: map[uint32]uint32{}, made: map[uint32]uint32{}}
 }
 
@@ -81,11 +80,11 @@ func (g *handsGame) UseObject(ctx context.Context, guid world.GUID) error {
 	return nil
 }
 
-func (g *handsGame) Items() []objects.Item {
-	var out []objects.Item
+func (g *handsGame) Items() []world.Item {
+	var out []world.Item
 	for e, n := range g.mine {
 		if n > 0 {
-			out = append(out, objects.Item{Entry: e, Count: n})
+			out = append(out, world.Item{Entry: e, Count: n})
 		}
 	}
 	return out
@@ -416,7 +415,7 @@ func keystoneGame(t *testing.T) *handsGame {
 	g := newHandsGame(t, 3)
 	k := chestObj()
 	k.GUID, k.Entry = keystoneGUID, goKeystone
-	g.gobjs = []objects.GameObject{k}
+	g.gobjs = []world.GameObject{k}
 	return g
 }
 

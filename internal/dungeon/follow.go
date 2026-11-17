@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -57,7 +56,7 @@ const (
 // Teleport (section 4 "never").
 type FollowGame interface {
 	Game
-	SelfRow() (objects.Unit, bool) // the agent's own unit row: in_combat, stand_state, target
+	SelfRow() (world.Unit, bool) // the agent's own unit row: in_combat, stand_state, target
 	Attack(ctx context.Context) error
 	StopAttack(ctx context.Context) error
 }
@@ -347,7 +346,7 @@ func (f *PlayerFollower) tick() string {
 	f.mu.Unlock()
 
 	// 3. Lead row.
-	var leadRow *objects.Unit
+	var leadRow *world.Unit
 	for _, u := range f.g.Units() {
 		if u.Type == "player" && strings.EqualFold(u.Name, lead) {
 			c := u
@@ -895,7 +894,7 @@ func (f *PlayerFollower) combatTick(dist float64, l, self Point) string {
 	f.mu.Unlock()
 	brainRuns := cfg.BrainRunning != nil && cfg.BrainRunning()
 	if cfg.Assist && !brainRuns {
-		var leadRow *objects.Unit
+		var leadRow *world.Unit
 		for _, u := range f.g.Units() {
 			if u.Type == "player" && strings.EqualFold(u.Name, f.leadName()) {
 				c := u
@@ -903,7 +902,7 @@ func (f *PlayerFollower) combatTick(dist float64, l, self Point) string {
 				break
 			}
 		}
-		var mob *objects.Unit
+		var mob *world.Unit
 		if leadRow != nil && leadRow.Target != 0 {
 			for _, u := range f.g.Units() {
 				if u.GUID == leadRow.Target && u.Type == "creature" && u.Hostile && !u.Dead && u.InCombat &&

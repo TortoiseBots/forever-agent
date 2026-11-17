@@ -4,9 +4,9 @@ import (
 	"slices"
 
 	"github.com/pjerra/forever-agent/internal/events"
-	"github.com/pjerra/forever-agent/internal/objects"
 	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/tactics"
+	"github.com/pjerra/forever-agent/internal/world"
 )
 
 // Boss tactics for the agent's own character (DESIGN-DUNGEON-MODES P2). A dungeon plan lists, per boss, what a player does on the fight
@@ -36,7 +36,7 @@ type Encounter struct {
 // ActiveEncounter is the encounter that is on now and the unit that switched it on (the nearest).
 type ActiveEncounter struct {
 	E    *Encounter
-	Unit *objects.Unit
+	Unit *world.Unit
 }
 
 // killFirstRange is how far a kill_first unit may stand and still be taken as the target.
@@ -71,7 +71,7 @@ func tacticsNow(c *Ctx) *tactics.Tactics {
 
 // neverTarget says the plan wants the unit left alone (ValFight skips it as the tank's mob or the selected one; a mob that attacks the
 // player is fought as ever).
-func neverTarget(c *Ctx, u *objects.Unit) bool {
+func neverTarget(c *Ctx, u *world.Unit) bool {
 	t := tacticsNow(c)
 	return t != nil && u != nil && slices.Contains(t.NeverTarget, u.Entry)
 }
@@ -109,7 +109,7 @@ func tacticInterrupt(c *Ctx, spell uint32) bool {
 }
 
 // tacticDispel says the plan wants this aura dispelled first.
-func tacticDispel(c *Ctx, a objects.Aura) bool {
+func tacticDispel(c *Ctx, a world.Aura) bool {
 	t := tacticsNow(c)
 	if t == nil {
 		return false
@@ -123,7 +123,7 @@ func tacticDispel(c *Ctx, a objects.Aura) bool {
 }
 
 // tacticNoDispel says the plan wants this aura left alone.
-func tacticNoDispel(c *Ctx, a objects.Aura) bool {
+func tacticNoDispel(c *Ctx, a world.Aura) bool {
 	t := tacticsNow(c)
 	if t == nil {
 		return false
