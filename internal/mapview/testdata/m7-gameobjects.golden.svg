@@ -27,5 +27,5 @@
 <text x="583.3" y="200.0" fill="#666666" font-size="10">- only what the agent saw is drawn: units</text>
 <text x="583.3" y="213.0" fill="#666666" font-size="10">  outside its view distance are missing</text>
 <text x="583.3" y="226.0" fill="#666666" font-size="10">- no navmesh background</text>
-<text x="24.0" y="1072.0" fill="#666666">turtle-agent map: drawn from what the agent saw, not from the game world. North is up.</text>
+<text x="24.0" y="1072.0" fill="#666666">forever-agent map: drawn from what the agent saw, not from the game world. North is up.</text>
 </svg>

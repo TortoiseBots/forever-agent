@@ -86,5 +86,5 @@
 <text x="996.3" y="601.0" fill="#666666" font-size="10">- only what the agent saw is drawn: units</text>
 <text x="996.3" y="614.0" fill="#666666" font-size="10">  outside its view distance are missing</text>
 <text x="996.3" y="627.0" fill="#666666" font-size="10">- 2 floors, split at z 10: one image per floor</text>
-<text x="24.0" y="1072.0" fill="#666666">turtle-agent map: drawn from what the agent saw, not from the game world. North is up.</text>
+<text x="24.0" y="1072.0" fill="#666666">forever-agent map: drawn from what the agent saw, not from the game world. North is up.</text>
 </svg>

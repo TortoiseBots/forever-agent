@@ -30,7 +30,8 @@ func TestM2ChatFromCapture(t *testing.T) {
 			t.Fatalf("% X: %v", body, err)
 		}
 		sawVersion = sawVersion || (m.Type == ChatSystem && strings.HasPrefix(m.Text, "TBM:VERSION|"))
-		sawSay = sawSay || (m.Type == ChatSay && m.Text == "forever-agent milestone 2")
+		// The say text is the one the milestone 2 live step sent before the rename; the recorded packet keeps those bytes.
+		sawSay = sawSay || (m.Type == ChatSay && m.Text == "turtle-agent milestone 2")
 		sawBotList = sawBotList || (m.Type == ChatSystem && strings.HasPrefix(m.Text, "No owned PlayerBots"))
 	}
 	if !sawVersion || !sawSay || !sawBotList {
