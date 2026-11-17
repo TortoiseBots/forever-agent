@@ -381,6 +381,8 @@ into per-area interfaces (as `brain.Game` already does) is optional; one struct 
 Every step keeps `*session.Session` as the only implementation, so the 1.12 tests keep proving
 behaviour. Steps 1-4 use Go type aliases (`type X = Y`), which change no behaviour.
 
+Status: steps 1-4 done on `refactor/world-types` (VM suite green after each).
+
 1. **Neutral package with GUID alias.** Add `internal/world` with `type GUID = packet.GUID`.
    Rewrite upstream imports of `packet.GUID`/`ParseGUID`: 539 uses in 95 non-test files, plus
    114 test files (765 `packet.` uses). Mechanical (gofmt/sed).
