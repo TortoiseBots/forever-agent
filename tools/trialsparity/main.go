@@ -15,10 +15,25 @@
 // the events the run recorded. A run without raw input falls back to comparing the recorded
 // normalised files, and is counted separately in the summary.
 //
-// It exits non-zero on any difference and prints the first differing run with a short diff.
-// The run folders are only read: every score writes into a temporary copy.
+// A run where EITHER side errors is never equal: it is counted as errored, both messages are
+// printed, and the program exits non-zero. --expect-error names a run whose error is the
+// expected result; no recorded run needs it.
 //
-//	go run ./tools/trialsparity --runs DIR --python-root DIR [--verbose]
+// What the harness cannot prove:
+//
+//   - samples.jsonl is both an input and an output (the normaliser rewrites it in place), so a
+//     difference in it can come from either side's read as well as its write; it is compared
+//     like output but cannot show that the scorer read it.
+//   - a repeat without a raw agent trace keeps its recorded events.jsonl, so for those repeats
+//     the normaliser is not exercised: only the recorded normalised files are compared, and
+//     the summary counts them as pre-normalised.
+//   - symlinks are not copied: only regular files and directories reach the temporary copies.
+//
+// It exits non-zero on any difference or unexpected error and prints the first differing run
+// with a short diff. It also exits non-zero when no run was compared. The run folders are only
+// read: every score writes into a temporary copy.
+//
+//	go run ./tools/trialsparity --runs DIR --python-root DIR [--verbose] [--expect-error RUN]
 //
 // A folder still being written (no RUN.json, or a RUN.json newer than 10 minutes) is skipped.
 package main
@@ -40,16 +55,53 @@ import (
 	"github.com/pjerra/forever-agent/internal/trials/score"
 )
 
+// expectList is the --expect-error flag: run names, repeatable and comma-separated.
+type expectList []string
+
+func (e *expectList) String() string { return strings.Join(*e, ",") }
+
+func (e *expectList) Set(value string) error {
+	for _, name := range strings.Split(value, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			*e = append(*e, name)
+		}
+	}
+	return nil
+}
+
+// runResult is one run's comparison. Either class may be "error": that run is never equal.
+type runResult struct {
+	diff          string
+	raw           bool
+	pythonClass   string
+	goClass       string
+	pythonMessage string
+	goMessage     string
+}
+
 func main() {
 	runs := flag.String("runs", "", "directory whose child folders are run folders")
 	pythonRoot := flag.String("python-root", "", "checkout of tortoise-trials (read only; holds trials.py)")
 	python := flag.String("python", "python3", "python interpreter")
 	limit := flag.Int("limit", 0, "score at most this many runs (0 = all)")
 	verbose := flag.Bool("verbose", false, "print the generated files deleted in each copy")
+	var expectError expectList
+	flag.Var(&expectError, "expect-error", "run name whose error is the expected result (repeatable, comma-separated)")
+	flag.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(), "usage: trialsparity --runs DIR --python-root DIR [--python CMD] [--limit N] [--verbose] [--expect-error RUN]")
+		fmt.Fprintln(flag.CommandLine.Output(), "Compares the Python and Go scorers on every finished run folder under --runs.")
+		fmt.Fprintln(flag.CommandLine.Output(), "Cannot prove: samples.jsonl is input and output; a repeat without a raw trace")
+		fmt.Fprintln(flag.CommandLine.Output(), "keeps events.jsonl; symlinks are not copied.")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 	if *runs == "" || *pythonRoot == "" {
-		fmt.Fprintln(os.Stderr, "usage: trialsparity --runs DIR --python-root DIR [--python CMD] [--limit N] [--verbose]")
+		flag.Usage()
 		os.Exit(2)
+	}
+	expected := map[string]bool{}
+	for _, name := range expectError {
+		expected[filepath.Base(name)] = true
 	}
 	entries, err := os.ReadDir(*runs)
 	if err != nil {
@@ -63,38 +115,68 @@ func main() {
 		}
 	}
 	sort.Strings(dirs)
-	compared, equal, skipped, rawRuns := 0, 0, 0, 0
+	total := len(dirs)
+	compared, equal, differ, errored, skipped, notRun, rawRuns := 0, 0, 0, 0, 0, 0, 0
 	failures := 0
 	for _, dir := range dirs {
+		name := filepath.Base(dir)
 		if *limit > 0 && compared >= *limit {
-			break
+			notRun++
+			continue
 		}
 		reason := skipReason(dir)
 		if reason != "" {
-			fmt.Printf("skip %s: %s\n", filepath.Base(dir), reason)
+			fmt.Printf("skip %s: %s\n", name, reason)
 			skipped++
 			continue
 		}
 		compared++
-		diff, raw, err := compareRun(dir, *pythonRoot, *python, *verbose)
-		if raw {
+		result, err := compareRun(dir, *pythonRoot, *python, *verbose)
+		if result.raw {
 			rawRuns++
 		}
 		if err != nil {
 			failures++
-			fmt.Printf("ERROR %s: %v\n", filepath.Base(dir), err)
+			fmt.Printf("ERROR %s: %v\n", name, err)
 			continue
 		}
-		if diff != "" {
+		if result.pythonClass == "error" || result.goClass == "error" {
+			// A run either scorer errored on is never equal, even if the other side
+			// also errored: an exception is not a result both sides agreed on.
+			errored++
+			marker := "ERROR"
+			if expected[name] {
+				marker = "error (expected)"
+			} else {
+				failures++
+			}
+			fmt.Printf("%s %s: python=%s (%s), go=%s (%s)\n", marker, name,
+				result.pythonClass, result.pythonMessage, result.goClass, result.goMessage)
+			continue
+		}
+		if result.diff != "" {
+			differ++
 			failures++
-			fmt.Printf("DIFF %s\n%s", filepath.Base(dir), diff)
+			fmt.Printf("DIFF %s\n%s", name, result.diff)
 		} else {
 			equal++
-			fmt.Printf("same %s%s\n", filepath.Base(dir), modeSuffix(raw))
+			fmt.Printf("same %s%s\n", name, modeSuffix(result.raw))
 		}
 	}
+	counted := compared + skipped + notRun
+	fmt.Printf("total %d runs, compared %d, equal %d, differ %d, errored %d, skipped %d, not run %d\n",
+		total, compared, equal, differ, errored, skipped, notRun)
 	fmt.Printf("compared %d runs, equal %d, differ %d, skipped %d, from raw input %d (pre-normalised %d)\n",
-		compared, equal, failures, skipped, rawRuns, compared-rawRuns)
+		compared, equal, differ, skipped, rawRuns, compared-rawRuns)
+	if counted != total {
+		fmt.Fprintf(os.Stderr, "trialsparity: %d compared + %d skipped + %d not run != %d total\n",
+			compared, skipped, notRun, total)
+		os.Exit(2)
+	}
+	if compared == 0 {
+		fmt.Fprintln(os.Stderr, "trialsparity: compared 0 runs: nothing was proved")
+		os.Exit(1)
+	}
 	if failures > 0 {
 		os.Exit(1)
 	}
@@ -119,30 +201,43 @@ func skipReason(dir string) string {
 	return ""
 }
 
-func compareRun(dir, pythonRoot, python string, verbose bool) (string, bool, error) {
+func compareRun(dir, pythonRoot, python string, verbose bool) (*runResult, error) {
+	result := &runResult{}
 	temp, err := os.MkdirTemp("", "trialsparity-")
 	if err != nil {
-		return "", false, err
+		return result, err
 	}
 	defer os.RemoveAll(temp)
 	pyDir := filepath.Join(temp, "py")
 	goDir := filepath.Join(temp, "go")
 	if err := copyTree(dir, pyDir); err != nil {
-		return "", false, fmt.Errorf("copy for python: %w", err)
+		return result, fmt.Errorf("copy for python: %w", err)
 	}
 	if err := copyTree(dir, goDir); err != nil {
-		return "", false, fmt.Errorf("copy for go: %w", err)
+		return result, fmt.Errorf("copy for go: %w", err)
+	}
+	// The stale-output check compares each expected output with its stamp BEFORE the
+	// generated files were removed: a file still carrying the old size and mtime was not
+	// written by this run (a rewrite, even of identical bytes, updates the mtime).
+	beforeDelete, err := stampTree(pyDir)
+	if err != nil {
+		return result, fmt.Errorf("stamp before delete: %w", err)
+	}
+	// A RUN.json that does not parse is not a run both scorers could score; it must never
+	// count equal just because both wrote nothing.
+	if _, err := pyjson.UnmarshalFile(filepath.Join(pyDir, "RUN.json")); err != nil {
+		result.pythonClass, result.goClass = "error", "error"
+		result.pythonMessage = "RUN.json does not parse: " + err.Error()
+		result.goMessage = "RUN.json does not parse: same input"
+		return result, nil
 	}
 	deleted, raw, err := deleteGenerated(pyDir)
 	if err != nil {
-		return "", false, fmt.Errorf("delete generated files: %w", err)
+		return result, fmt.Errorf("delete generated files: %w", err)
 	}
+	result.raw = raw
 	if _, _, err := deleteGenerated(goDir); err != nil {
-		return "", false, fmt.Errorf("delete generated files (go copy): %w", err)
-	}
-	afterDelete, err := manifest(pyDir)
-	if err != nil {
-		return "", false, fmt.Errorf("manifest after delete: %w", err)
+		return result, fmt.Errorf("delete generated files (go copy): %w", err)
 	}
 	if verbose {
 		fmt.Printf("delete %s:\n", filepath.Base(dir))
@@ -160,35 +255,48 @@ func compareRun(dir, pythonRoot, python string, verbose bool) (string, bool, err
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
-			return "", raw, fmt.Errorf("python score: %v: %s", err, errBuf.String())
+			return result, fmt.Errorf("python score: %v: %s", err, errBuf.String())
 		}
 		pyCode = exitErr.ExitCode()
 	}
 
 	runTrials, goErr := score.ScoreRunE(goDir)
 
-	pyClass := pythonClass(pyDir, pyCode)
-	goClass := goClass(runTrials, goErr)
+	result.pythonClass = pythonClass(pyDir, pyCode)
+	result.goClass = goClass(runTrials, goErr)
+	result.pythonMessage = errorMessage(errBuf.String(), pyCode)
+	result.goMessage = "none"
+	if goErr != nil {
+		result.goMessage = goErr.Error()
+	}
+	if result.pythonClass == "error" || result.goClass == "error" {
+		// The caller reports both messages and refuses to call this run equal; the trees
+		// of a crashed scorer are not a verdict to compare.
+		return result, nil
+	}
 	var diff strings.Builder
-	if pyClass != goClass {
-		fmt.Fprintf(&diff, "  result class differs: python=%s go=%s", pyClass, goClass)
-		if pyClass == "error" {
-			fmt.Fprintf(&diff, " (python exit %d: %s)", pyCode, firstLine(errBuf.String()))
-		}
-		if goClass == "error" {
-			fmt.Fprintf(&diff, " (go error: %v)", goErr)
-		}
-		diff.WriteString("\n")
+	if result.pythonClass != result.goClass {
+		fmt.Fprintf(&diff, "  result class differs: python=%s go=%s\n",
+			result.pythonClass, result.goClass)
 	}
 	if classDiff := compareTrees(pyDir, goDir); classDiff != "" {
 		diff.WriteString(classDiff)
 	}
-	if pyClass != "error" && goClass != "error" {
-		if missing := expectedOutputs(pyDir, raw, afterDelete); missing != "" {
-			diff.WriteString(missing)
-		}
+	if missing := expectedOutputs(pyDir, raw, beforeDelete); missing != "" {
+		diff.WriteString(missing)
 	}
-	return diff.String(), raw, nil
+	result.diff = diff.String()
+	return result, nil
+}
+
+// errorMessage is the one-line message printed for a scorer that errored: the Python
+// stderr collapsed, or a note that it printed none.
+func errorMessage(stderr string, code int) string {
+	text := strings.TrimSpace(stderr)
+	if text == "" {
+		return fmt.Sprintf("exit %d, no stderr", code)
+	}
+	return strings.ReplaceAll(text, "\n", " | ")
 }
 
 // pythonClass maps the Python scorer's exit and card to scored / fail / invalid / error.
@@ -344,7 +452,7 @@ func deleteGenerated(root string) ([]string, bool, error) {
 // expectedOutputs checks that every output the scorers must write exists after the run and did
 // not survive the delete step. samples.jsonl is the one exception: it is an input that the
 // normaliser rewrites in place.
-func expectedOutputs(root string, raw bool, afterDelete map[string]string) string {
+func expectedOutputs(root string, raw bool, beforeDelete map[string]fileStamp) string {
 	runDoc, err := pyjson.UnmarshalFile(filepath.Join(root, "RUN.json"))
 	if err != nil {
 		return ""
@@ -376,7 +484,7 @@ func expectedOutputs(root string, raw bool, afterDelete map[string]string) strin
 			continue
 		}
 		if filepath.Base(rel) != "samples.jsonl" {
-			if _, stale := afterDelete[rel]; stale {
+			if old, existed := beforeDelete[rel]; existed && !rewritten(filepath.Join(root, rel), old) {
 				problems = append(problems, rel+" (not written by this run)")
 			}
 		}
@@ -386,6 +494,42 @@ func expectedOutputs(root string, raw bool, afterDelete map[string]string) strin
 	}
 	sort.Strings(problems)
 	return fmt.Sprintf("  expected output problem: %s\n", strings.Join(problems, ", "))
+}
+
+// fileStamp is a file's size and modification time before the scorers run.
+type fileStamp struct {
+	size int64
+	mod  time.Time
+}
+
+// stampTree records every regular file's size and mtime below root.
+func stampTree(root string) (map[string]fileStamp, error) {
+	out := map[string]fileStamp{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !entry.Type().IsRegular() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out[rel] = fileStamp{size: info.Size(), mod: info.ModTime()}
+		return nil
+	})
+	return out, err
+}
+
+// rewritten reports whether path no longer matches its pre-run stamp.
+func rewritten(path string, old fileStamp) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Size() != old.size || !info.ModTime().Equal(old.mod)
 }
 
 func repDirs(trialDir string) []string {
@@ -405,13 +549,6 @@ func repDirs(trialDir string) []string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 // shortDiff prints the first differing lines of a line diff (a simple LCS-free walk: the first
