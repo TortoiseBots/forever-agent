@@ -140,8 +140,10 @@ deleted list. It compares:
 - every regular file in the two trees, in both directions: a file only one side wrote differs;
 - the result class: scored / FAIL / INVALID / error (the Go error against Python's exit code and
   missing card);
-- that every expected output exists after the run (`trial.json`, `verdicts.json`, `card.*`, and in
-  raw mode `events.jsonl`, `samples.jsonl`, `events_summary.json`).
+- that every expected output exists after the run and did not survive the delete step
+  (`trial.json`, `verdicts.json`, `card.*`, and in raw mode `events.jsonl`,
+  `events_summary.json`; `samples.jsonl` is an input the normaliser rewrites in place, so only its
+  content is compared).
 
 Deleting `events.jsonl` when the raw trace exists makes the default proof exercise the
 normaliser: both scorers rebuild it, and `samples.jsonl`/`events_summary.json`, from `raw-ta.jsonl`
@@ -182,7 +184,7 @@ The first review's findings and what now pins each one:
 | finding | go change | test |
 |---|---|---|
 | A1 the harness could compare a scorer that wrote nothing | delete every generated file in both copies; delete `events.jsonl` too when a raw trace exists, so both normalise; fallback counted separately | `tools/trialsparity` (`--verbose` shows the list) |
-| A2/A4 one-sided or missing outputs | recursive two-way manifest, every file; expected outputs must exist after the run | `tools/trialsparity` |
+| A2/A4 one-sided or missing outputs | recursive two-way manifest, every file; expected outputs must exist after the run and not survive the delete step | `tools/trialsparity` |
 | A3 ignored error | Go error class compared with Python's exit/card class | `tools/trialsparity` |
 | A5 summary | runs/equal/differ/skipped plus raw-input count | summary line below |
 | B1 row identity | `sameRow` is the map's header pointer (`cand is trig`) | `parityfix` B1, differential `b1_twin_rows_are_two_rows` |
