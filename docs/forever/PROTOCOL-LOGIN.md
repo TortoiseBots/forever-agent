@@ -1,9 +1,8 @@
 # ForeverCore Login & World-Entry Protocol (Classic 1.60.1 Build 70938)
 
-
 ForeverCore is a TrinityCore-based server for the WoW Classic 1.60.1 ("WoW: Forever") client (`doc/ForeverSetup.md:3-5`, `contrib/linux/configure_server.sh:34-61`). It targets client build `70938` (`contrib/linux/configure_server.sh:34,61`, `src/server/shared/Realm/ClientBuildInfo.cpp:36-47`). Client login spans two binaries and three TCP listeners: `bnetserver` (REST HTTP/S and Battle.net RPC) and `worldserver` (Realm and Instance world sockets) (`src/server/bnetserver/Main.cpp:218-253`, `src/server/worldserver/Main.cpp:401-419`).
 
-**Verification status (2026-11-18, round 1).** Sections 1-3 were checked line by line against the server code at commit `6517af05`; the corrections of `PROTOCOL-LOGIN-VERIFY.md` are applied in place and the remaining statements of those sections were re-read in the code. Section 4.1-4.2 was confirmed by the earlier verification except where corrected below. **Sections 5-9 are not verified against the code** (they come from the first write-up) and are marked as such; treat them as leads, not facts.
+**Verification status (2026-11-18, round 1).** Sections 1-3 were checked line by line against the server code at commit `6517af05`; the corrections of `PROTOCOL-LOGIN-VERIFY.md` are applied in place and the remaining statements of those sections were re-read in the code. Sections 4.1-4.2 were confirmed by the earlier verification except where corrected below. **Sections 5-9 are not verified against the code** (they come from the first write-up) and are marked as such; treat them as leads, not facts.
 
 ---
 

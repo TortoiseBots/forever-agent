@@ -6,18 +6,17 @@
 package bnet
 
 import (
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"math/big"
 	"strings"
-
-	"crypto/pbkdf2"
-	"crypto/sha512"
-	"hash"
 )
 
 // The SRP6 group parameters of the two Battle.net variants, copied from the server
@@ -45,10 +44,9 @@ type srpChallenge struct {
 // srpClient computes the client half of Battle.net SRP6 exactly as BnetSRP6v1Base/BnetSRP6v2Base verify it
 // (src/common/Cryptography/Authentication/SRP6.cpp:151-220).
 type srpClient struct {
-	version uint32
-	n       *big.Int
-	g       *big.Int
-	size    int // byte length of N, i.e. the padding length of every hashed value
+	n    *big.Int
+	g    *big.Int
+	size int // byte length of N, i.e. the padding length of every hashed value
 
 	salt []byte
 	b    *big.Int // server public
@@ -103,13 +101,12 @@ func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient
 	}
 
 	s := &srpClient{
-		version: c.Version,
-		n:       n,
-		g:       g,
-		size:    len(n.Bytes()),
-		salt:    c.Salt,
-		b:       new(big.Int).SetBytes(c.PublicB),
-		a:       private,
+		n:    n,
+		g:    g,
+		size: len(n.Bytes()),
+		salt: c.Salt,
+		b:    new(big.Int).SetBytes(c.PublicB),
+		a:    private,
 	}
 	if s.b.Sign() == 0 || new(big.Int).Mod(s.b, n).Sign() == 0 {
 		return nil, errors.New("srp: the server's public B is zero")
