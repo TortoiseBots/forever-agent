@@ -48,18 +48,21 @@ An input the Python raises on (a non-object JSONL line, an unhashable `seq`, a n
 trailing bytes after the snapshot) exits 1 with the error, naming the file and line where the
 input is a file: never a silent verdict. `validate` prints one line per file (`path: ok` or the
 errors) and exits 1 if any file fails; it adds the two checks `cmd_validate` has on top of
-`scenario.Validate`: trial id == file stem, and no duplicate rule id across the set. `compare` prints the same table as the
-Python `compare`, Fisher p and notes included. Python has no `report` subcommand (its `score`
-writes the card): `report` calls the same `write_card` over the run's stored `trial.json`
-files, without re-scoring, and prints `card.md`; it is idempotent on a scored run.
+`scenario.Validate`: trial id == file stem, and no duplicate rule id across the set. `compare`
+prints the same table as the Python `compare`, Fisher p and notes included. Python has no
+`report` subcommand (its `score` writes the card): `report` calls the same `write_card` over the
+run's stored `trial.json` files, without re-scoring, and prints `card.md`; it is idempotent on a
+scored run.
 `trials run` and `trials cleanup` are not ported and the help says so.
 
 ## Tests
 
-All translated tests live under `internal/trials/tests/<group>/`, one Go file per Python file,
-one Go test per Python test method (`Test<Class>_<Method>`), one package per group. The shared
-`support_test.go` in each package has the file/JSON helpers; every other helper carries a
-per-file prefix so the files of one package share one namespace.
+All translated black-box tests live under `internal/trials/tests/<group>/`, one Go file per
+Python file, one Go test per Python test method (`Test<Class>_<Method>`), one package per group.
+The shared `support_test.go` in each package has the file/JSON helpers; every other helper
+carries a per-file prefix so the files of one package share one namespace. The one white-box
+test is `internal/trials/score/order_test.go`, which needs the unexported per-repeat scorer
+seam to observe the rep order.
 
 | python test file | go package / file | translated | not translated |
 |---|---|---|---|
