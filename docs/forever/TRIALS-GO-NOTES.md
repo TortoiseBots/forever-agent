@@ -168,6 +168,7 @@ skips when `TRIALS_PYTHON_ROOT` is unset, so CI stays green without Python:
 
 ```
 TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
+go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
 ```
 
 Result with the reference: 38 cases (26 whole-run, 12 direct rule evaluations), all equal:

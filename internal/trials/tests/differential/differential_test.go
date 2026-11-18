@@ -2,11 +2,13 @@
 // inputs: the cases recorded runs do not cover (row identity, float counts, huge GUIDs,
 // non-object JSONL lines, null means, ...).
 //
-// The Go side runs in-process. The Python side runs only when TRIALS_PYTHON_ROOT points at a
-// checkout of the reference (the pinned tortoise-trials tree); without it the test is SKIPPED,
-// so CI stays green without Python. TRIALS_PYTHON names the interpreter (default python3).
+// The Go side runs in-process. The Python side runs only when -python-root (or
+// TRIALS_PYTHON_ROOT) points at a checkout of the reference (the pinned tortoise-trials tree);
+// without it the test is SKIPPED, so CI stays green without Python. TRIALS_PYTHON names the
+// interpreter (default python3).
 //
 //	TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
+//	go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
 //
 // Two kinds of case:
 //
@@ -20,6 +22,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -34,9 +37,20 @@ import (
 	"github.com/pjerra/forever-agent/internal/trials/score"
 )
 
+var pythonRootFlag = flag.String("python-root", "",
+	"checkout of the Python reference (else TRIALS_PYTHON_ROOT)")
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	os.Exit(m.Run())
+}
+
 func referenceRoot(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("TRIALS_PYTHON_ROOT")
+	root := *pythonRootFlag
+	if root == "" {
+		root = os.Getenv("TRIALS_PYTHON_ROOT")
+	}
 	if root == "" {
 		t.Skip("TRIALS_PYTHON_ROOT not set: differential parity needs the Python reference")
 	}
