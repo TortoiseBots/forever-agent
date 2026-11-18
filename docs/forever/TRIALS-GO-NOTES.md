@@ -134,12 +134,12 @@ Result on the recorded nightly runs (paths passed on the command line, never in 
 
 | runs directory | compared | equal |
 |---|---|---|
-| full nightly set, one night (58 runs) | 58 | 58 |
-| a second nightly set (50 runs) | 50 | 50 |
-| the third, short set (6 runs) | 6 | 6 |
+| full nightly set, one night | 58 | 58 |
+| a second nightly set | 52 | 52 |
+| the third, short set | 6 | 6 |
 
-114 run folders compared, 114 equal, 0 differing, 2 skipped (one still being written, one without
-a `RUN.json`).
+116 run folders compared, 116 equal, 0 differing; 1 folder skipped (no `RUN.json` yet: still
+being written).
 
 The normaliser path was checked the same way with `events.jsonl` deleted from the copies: the
 card, every verdict file, `events.jsonl`, `samples.jsonl` and `events_summary.json` are

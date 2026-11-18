@@ -184,6 +184,7 @@ func usage(w io.Writer) {
   forever-agent slot setup <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--character NAME] [--slots FILE]
   forever-agent teardown [--keep-lease] [--release-anyway] [--gm off|on|keep] [--dry-run] [--json] [--slots FILE] <dir>
   forever-agent rpc [--timeout DUR] [--raw] <dir> <method> [<params-json>|-]
+  forever-agent trials score <run-dir> | report <run-dir> | compare <run-dir> --baseline <dir>
   forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--plan NAME]...
   forever-agent route-edits list [--edit-dir DIR] [--json] [<plan>] | export [--edit-dir DIR] [--config-dir DIR] --to DIR <plan> [vN|latest] | promote [--edit-dir DIR] --worktree PATH <plan> vN
   forever-agent version`)

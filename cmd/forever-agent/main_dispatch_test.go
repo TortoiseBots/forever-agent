@@ -38,6 +38,7 @@ func TestRunDispatchesEveryUsageCommand(t *testing.T) {
 		"slot":            {"setup"},
 		"teardown":        {},
 		"rpc":             {},
+		"trials":          {},
 		"walk-preflight":  {},
 	} {
 		var out, errOut bytes.Buffer
