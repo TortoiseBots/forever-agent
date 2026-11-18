@@ -1,0 +1,152 @@
+{
+  "id": "dps-mage-cc-respect",
+  "title": "Frost mage: sheeps the moon mark and never damages it while it is sheeped",
+  "group": "ranged",
+  "class": "mage",
+  "spec": "frost",
+  "player": {
+    "class": "warrior",
+    "level": 45,
+    "talents": {
+      "tree": "arms",
+      "spells": [
+        16462,
+        12286
+      ]
+    },
+    "stance": 71,
+    "forced_role": "tank",
+    "auras": [],
+    "items": [],
+    "gear": "tier"
+  },
+  "bot": {
+    "class": "mage",
+    "spec": "frost",
+    "role": "dps",
+    "level": 45,
+    "gear": "blue",
+    "items": [
+      {
+        "name": "Sweet Nectar",
+        "count": 20
+      }
+    ],
+    "mana_pct": null,
+    "cc_mark": null
+  },
+  "extra_bots": [
+    {
+      "class": "priest",
+      "spec": "holy",
+      "role": "healer",
+      "level": 45,
+      "items": [
+        {
+          "name": "Sweet Nectar",
+          "count": 20
+        }
+      ]
+    }
+  ],
+  "situation": {
+    "kind": "cc_target",
+    "mobs": {
+      "role": "humanoid",
+      "count": 3,
+      "level_delta": -1,
+      "refill": true
+    },
+    "hp_band": [
+      40,
+      90
+    ],
+    "floor_pct": 12,
+    "victim": "player",
+    "pull_after_s": 0,
+    "ooc_wait_s": 0,
+    "debuff": null,
+    "max_rescues_per_min": 30
+  },
+  "setup_checks": [
+    "player_level",
+    "player_visible",
+    "player_talents",
+    "player_gear",
+    "player_stance",
+    "player_forced_role",
+    "bot_present",
+    "bot_level",
+    "bot_role",
+    "bot_spec",
+    "bot_items",
+    "grouped",
+    "extra_bots_present",
+    "extra_bots_role",
+    "extra_bots_in_group",
+    "mobs_ready",
+    "cc_mark_set",
+    "config_read"
+  ],
+  "duration_s": 180,
+  "repeats": 4,
+  "min_valid_s": 120,
+  "opportunity": {
+    "unit": "$marked",
+    "has_aura": [
+      118,
+      12824,
+      12825,
+      12826,
+      28270,
+      28271,
+      28272
+    ]
+  },
+  "rules": [
+    {
+      "id": "DPS-MAG-CC-RESPECT",
+      "desc": "No damage from the mage (direct, periodic or splash) lands on the moon-marked mob while it carries Polymorph",
+      "source": "ai/playerbot/strategy/values/PossibleAttackTargetsValue.cpp:53-108 (a mob in breakable CC leaves the target list unless nothing else is left), :131-173 (HasBreakableCC); ai/playerbot/strategy/triggers/GenericTriggers.cpp:830-860 (AoeTrigger: never AoE a pack holding a breakable CC); ai/playerbot/strategy/actions/GenericSpellActions.cpp:46-61 (BreaksCcInArea for Frost Nova, Blizzard, Cone of Cold); TortoiseBots upstream/dev abb91ff62",
+      "expect_today": "PASS",
+      "why_expect": "the sheeped mob is only a target when nothing else is left, and every area spell path checks for a breakable CC in its radius (commits 180024d15, 9ccede38a). Three mobs (the moon mark and two others, refilled when one dies) so an unmarked mob is almost always up. When both unmarked mobs are dead and the refill has not yet engaged, the sheep is the only possible target (PossibleAttackTargetsValue.cpp:97-107) and the mage would nuke it by design, so the runner writes an excluded span (cc_gap) from the moment no unmarked summon is alive until the next one has been up for 3 s, and nothing in that span counts. dst_has_aura names only the Polymorph ranks: marked_has_cc now knows them too (trl/rules.py, commit 5fa9e61) but also matches other CC, and here only the sheep matters",
+      "check": {
+        "metric": "count",
+        "where": {
+          "kind": "damage",
+          "src": "$bot",
+          "dst": "$marked",
+          "dst_has_aura": [
+            118,
+            12824,
+            12825,
+            12826,
+            28270,
+            28271,
+            28272
+          ]
+        }
+      },
+      "pass_if": "== 0",
+      "min_opportunity_s": 10
+    },
+    {
+      "id": "DPS-MAG-CC-POLYMORPH",
+      "desc": "Precondition: the mage casts Polymorph on the moon-marked mob at least once, so the respect rule has a sheep to respect",
+      "source": "ai/playerbot/strategy/mage/MageStrategy.cpp:446-448 (polymorph row, ACTION_INTERRUPT); ai/playerbot/strategy/mage/MageAiObjectContext.cpp:171,238; ai/playerbot/strategy/values/CcTargetValue.cpp (the assigned mark); TortoiseBots upstream/dev abb91ff62",
+      "expect_today": "PASS",
+      "why_expect": "the runner assigns the moon mark with .bot cc moon <bot> (setup check cc_mark_set); the polymorph row fires on the assigned mark; the cc chooser only sees mobs in combat with the group (TargetValue.cpp:19-22, AttackersValue.cpp:340,490), so the runner Taunts the marked mob into combat without damage before the fight counts",
+      "check": {
+        "metric": "count",
+        "where": {
+          "kind": "cast",
+          "src": "$bot",
+          "dst": "$marked",
+          "spell": "Polymorph"
+        }
+      },
+      "pass_if": ">= 1",
+      "min_reps": 3
+    }
+  ]
+}
