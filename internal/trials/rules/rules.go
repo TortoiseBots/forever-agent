@@ -8,6 +8,7 @@ package rules
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -99,6 +100,9 @@ type Result struct {
 	Guard    string
 	Reason   string
 	NoMatch  bool
+	// Err is the Python exception the bench would have raised on this input (a non-numeric
+	// walk mean, ...). The scorer turns it into an error instead of another verdict.
+	Err error
 }
 
 // Num is the bench's `_num`: a number (bool included, as Python's isinstance sees it), a
@@ -196,8 +200,9 @@ func UnitIDs(unit string, ctx *Ctx) map[string]bool {
 }
 
 func lowerOf(v any) string {
-	if v == nil {
-		return "none"
+	// Python: str(value or "").lower() — a missing/empty guid reads "" (never "none").
+	if !pyjson.Truthy(v) {
+		return ""
 	}
 	return strings.ToLower(pyjson.Str(v))
 }
@@ -878,6 +883,14 @@ func rowNum(row Row, key string) float64 {
 	return 0.0
 }
 
+// firstT is Python's `row.get("t", 0.0)`: the stored number (int or float), 0.0 when absent.
+func firstT(row Row) any {
+	if v, ok := row["t"]; ok {
+		return v
+	}
+	return 0.0
+}
+
 // EvidenceLine is one human line for one event row.
 func EvidenceLine(row Row) string {
 	spell := row["spell"]
@@ -1492,9 +1505,15 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			}
 		}
 		var n int64
-		if obj, ok := pyjson.Object(found); ok {
-			if v, ok := pyjson.Int64(obj["n"]); ok {
-				n = v
+		obj, isObj := pyjson.Object(found)
+		if isObj {
+			// Python: int(found.get("n", 0)), a float like 5.0 accepted; a bad value is 0.
+			if raw, ok := obj["n"]; ok {
+				if v, err := pyjson.PyInt(raw); err == nil {
+					if i, fits := pyjson.Int64(v); fits {
+						n = i
+					}
+				}
 			}
 		}
 		if found == nil || n == 0 {
@@ -1505,11 +1524,24 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			return Result{Value: nil, N: 0, Verdict: "INCONCLUSIVE", Evidence: []string{ev}, Guard: guardNote}
 		}
 		var value float64
-		obj, _ := pyjson.Object(found)
-		if mean, ok := pyjson.Float(obj["mean"]); ok {
+		if raw, hasMean := obj["mean"]; hasMean {
+			// Python checks `"mean" in found` and calls float(); None raises TypeError.
+			mean, ok := pyjson.Float(raw)
+			if !ok {
+				return Result{Verdict: "INCONCLUSIVE", Guard: guardNote,
+					Err: fmt.Errorf("walk metric %q: mean %s is not a number", name, pyjson.Str(raw))}
+			}
 			value = mean
 		} else {
-			k, _ := pyjson.Float(obj["k"])
+			var k float64
+			if raw, hasK := obj["k"]; hasK {
+				converted, ok := pyjson.Float(raw)
+				if !ok {
+					return Result{Verdict: "INCONCLUSIVE", Guard: guardNote,
+						Err: fmt.Errorf("walk metric %q: k %s is not a number", name, pyjson.Str(raw))}
+				}
+				k = converted
+			}
 			value = k / float64(n)
 		}
 		ok := Pass(rule["pass_if"], value)
@@ -1975,7 +2007,7 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 				}
 				sort.SliceStable(outside, func(i, j int) bool { return rowNum(outside[i], "t") < rowNum(outside[j], "t") })
 				if len(outside) > 0 {
-					firstT := rowNum(outside[0], "t")
+					firstTime := rowNum(outside[0], "t")
 					prevLast := math.Inf(-1)
 					hasPrev := false
 					for _, span := range cool {
@@ -1985,10 +2017,10 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 							hasPrev = true
 						}
 					}
-					if hasPrev && firstT-prevLast <= cooldown+1.0 {
+					if hasPrev && firstTime-prevLast <= cooldown+1.0 {
 						// the whole rep rode the carried-over cooldown
 						first := outside[0]
-						return Result{Value: rowNum(first, "t"), NoMatch: false, K: 0, N: 0,
+						return Result{Value: firstT(first), NoMatch: false, K: 0, N: 0,
 							Verdict: "INCONCLUSIVE", Evidence: []string{EvidenceLine(first)},
 							Reason: "item cooldown from rep N-1", Guard: guardNote}
 					}
@@ -2031,7 +2063,9 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			return Result{Value: nil, NoMatch: true, K: 0, N: 1, Verdict: verdict,
 				Evidence: []string{"no match"}, Guard: guardNote}
 		}
-		value := rowNum(hits[0], "t")
+		// Python stores the row's own t (an int stays an int in the verdicts JSON); only a
+		// missing t falls back to 0.0.
+		value := firstT(hits[0])
 		verdict := "FAIL"
 		if Pass(rule["pass_if"], value) {
 			verdict = "PASS"
@@ -2045,8 +2079,14 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 		}))
 		if pyjson.Str(check["per"]) == "mob_alive" {
 			alive := MobAliveSeconds(samples, excluded)
+			// Python: float(check.get("min_alive_s") or 10.0) — 0 is falsy, so it means 10 s.
 			floorS := 10.0
-			if f, ok := pyjson.Float(check["min_alive_s"]); ok {
+			if raw := check["min_alive_s"]; pyjson.Truthy(raw) {
+				f, ok := pyjson.Float(raw)
+				if !ok {
+					return Result{Verdict: "INCONCLUSIVE", Guard: guardNote,
+						Err: fmt.Errorf("rate min_alive_s %s is not a number", pyjson.Str(raw))}
+				}
 				floorS = f
 			}
 			if alive < floorS {
@@ -2080,13 +2120,15 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 		Evidence: []string{fmt.Sprintf("unknown metric %q", metricS)}, Guard: guardNote}
 }
 
-// sameRow reports whether two rows are the same event (the bench's `cand is not trig`).
-// Rows are maps, so identity is read as equal content: the normaliser dedupes identical rows,
-// so only the row itself compares equal.
+// sameRow reports whether a and b are the same row OBJECT (Python's `cand is trig`).
+// Equal content is not identity: the normaliser dedupes identical rows, but a trigger and a
+// different event can still serialise the same after crit/data are stripped, and Python treats
+// those as two rows. A map's header pointer is the row's identity in Go.
 func sameRow(a, b Row) bool {
-	ja, errA := pyjson.MarshalLine(a)
-	jb, errB := pyjson.MarshalLine(b)
-	return errA == nil && errB == nil && string(ja) == string(jb)
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
 
 func triggerSrc(trig Row) any {
