@@ -186,6 +186,6 @@ func usage(w io.Writer) {
   forever-agent rpc [--timeout DUR] [--raw] <dir> <method> [<params-json>|-]
   forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--plan NAME]...
   forever-agent route-edits list [--edit-dir DIR] [--json] [<plan>] | export [--edit-dir DIR] [--config-dir DIR] --to DIR <plan> [vN|latest] | promote [--edit-dir DIR] --worktree PATH <plan> vN
-  forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] --account EMAIL
+  forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL
   forever-agent version`)
 }

@@ -15,7 +15,7 @@ import (
 // server; the world socket comes later.
 func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] --account EMAIL")
+		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
 		return exitUsage
 	}
 	switch args[0] {
@@ -37,12 +37,13 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	rpcAddr := fs.String("rpc", "", "Battle.net RPC host:port")
 	caFile := fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate")
 	serverName := fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
+	clientBuild := fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts")
 	account := fs.String("account", "", "account e-mail or name")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] --account EMAIL")
+		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
 		return exitUsage
 	}
 	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" {
@@ -56,12 +57,13 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	}
 
 	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:   *restAddr,
-		RPCAddr:    *rpcAddr,
-		CAFile:     *caFile,
-		ServerName: *serverName,
-		Account:    *account,
-		Password:   password,
+		RESTAddr:    *restAddr,
+		RPCAddr:     *rpcAddr,
+		CAFile:      *caFile,
+		ServerName:  *serverName,
+		Account:     *account,
+		Password:    password,
+		ClientBuild: uint32(*clientBuild),
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(stdout, format+"\n", args...)
 		},

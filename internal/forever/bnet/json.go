@@ -137,17 +137,6 @@ type ipAddress struct {
 	Port uint32 `json:"port"`
 }
 
-// realmCharacterCountList is JSON.RealmList.RealmCharacterCountList; the counts are only reported, never needed
-// for the join (RealmList.proto:59-68).
-type realmCharacterCountList struct {
-	Counts []realmCharacterCountEntry `json:"counts"`
-}
-
-type realmCharacterCountEntry struct {
-	WowRealmAddress uint32 `json:"wowRealmAddress"`
-	Count           uint32 `json:"count"`
-}
-
 // decompressJSON reads a GameUtilities blob: uint32 LE uncompressed length (which counts the trailing NUL), zlib
 // data, then "<TypePrefix>:<json>\0" (src/server/bnetserver/Services/GameUtilitiesService.cpp:48-60).
 func decompressJSON(blob []byte) (string, []byte, error) {

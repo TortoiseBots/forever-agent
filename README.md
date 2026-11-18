@@ -11,11 +11,16 @@ they land, the parts that need no server (plans, route tools, tests) are what wo
 
 | Part | State |
 |---|---|
-| Login through bnetserver | not started |
+| Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | not started |
 | Packets and object fields for build 70938 | not started |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
+
+`forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
+login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
+name, id and address. It prints no ticket, key, proof or password, only their lengths. `--build` picks the client
+build to claim (default 70938); a realm only admits the builds it accepts. The world socket is the next round.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

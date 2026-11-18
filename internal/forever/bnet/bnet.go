@@ -20,14 +20,15 @@ const DefaultServerName = "trinity.actual.battle.net"
 
 // Options configures a login run. Password is never logged, never written anywhere and never sent as a flag value.
 type Options struct {
-	RESTAddr   string // host:port of the login REST port
-	RPCAddr    string // host:port of the Battle.net RPC port
-	CAFile     string // PEM file of the root CA that signed the login server's certificate
-	ServerName string // name to verify in the certificate (default DefaultServerName)
-	Account    string // account e-mail or name as typed into the login form
-	Password   string // password; case is significant for SRP v2 accounts
-	Timeout    time.Duration
-	Logf       func(format string, args ...any) // one line per completed step; may be nil
+	RESTAddr    string // host:port of the login REST port
+	RPCAddr     string // host:port of the Battle.net RPC port
+	CAFile      string // PEM file of the root CA that signed the login server's certificate
+	ServerName  string // name to verify in the certificate (default DefaultServerName)
+	Account     string // account e-mail or name as typed into the login form
+	Password    string // password; case is significant for SRP v2 accounts
+	ClientBuild uint32 // client build to claim (0 = build70938); a realm only lets in the builds it accepts
+	Timeout     time.Duration
+	Logf        func(format string, args ...any) // one line per completed step; may be nil
 }
 
 // Result is everything the login service handed out. The secrets are kept for the world-socket round; this client
@@ -84,6 +85,9 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 30 * time.Second
+	}
+	if opts.ClientBuild == 0 {
+		opts.ClientBuild = build70938
 	}
 	if opts.RESTAddr == "" {
 		return nil, errors.New("bnet: no REST address")
@@ -153,7 +157,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	opts.logf("rpc connect: server id %d/%d, server time %d, ciid %q, bindless %t",
 		connect.ServerID.Label, connect.ServerID.Epoch, connect.ServerTime, connect.Ciid, connect.UseBindlessRPC)
 
-	logon, err := rpc.logonRequest(ctx, login.LoginTicket)
+	logon, err := rpc.logonRequest(ctx, login.LoginTicket, opts.ClientBuild)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +165,8 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("bnet: logon succeeded but the account has no game account")
 	}
 	gameAccount := logon.GameAccountIDs[0]
-	opts.logf("logon: account id %d, %d game account(s), session key %d bytes",
-		logon.AccountID.Low, len(logon.GameAccountIDs), len(logon.SessionKey))
+	opts.logf("logon: build %d, account id %d, %d game account(s), session key %d bytes",
+		opts.ClientBuild, logon.AccountID.Low, len(logon.GameAccountIDs), len(logon.SessionKey))
 
 	result := &Result{
 		LoginTicket:   login.LoginTicket,
@@ -177,7 +181,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("bnet: client secret: %w", err)
 	}
 
-	ticketBlob, err := rpc.realmListTicket(ctx, uint32(gameAccount.Low), result.ClientSecret)
+	ticketBlob, err := rpc.realmListTicket(ctx, uint32(gameAccount.Low), result.ClientSecret, opts.ClientBuild)
 	if err != nil {
 		return nil, &RealmError{Err: err}
 	}
@@ -198,7 +202,8 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, &RealmError{Err: err}
 	}
-	opts.logf("realm list: realm %d %q, address 0x%08X, build %d", realm.CfgRealmsID, realm.Name, realm.WowRealmAddress, realm.Version.Build)
+	opts.logf("realm list: realm %d %q, address 0x%08X, build %d, population %d, flags 0x%02X",
+		realm.CfgRealmsID, realm.Name, realm.WowRealmAddress, realm.Version.Build, realm.PopulationState, realm.Flags)
 	result.RealmName = realm.Name
 	result.RealmID = realm.CfgRealmsID
 	result.RealmAddress = realm.WowRealmAddress
@@ -238,7 +243,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 
 // realmListTicket sends Command_RealmListTicketRequest_v1 with Param_Identity and Param_ClientInfo and returns the
 // ticket blob the server answers with (src/server/bnetserver/Services/GameUtilitiesService.cpp:240-301).
-func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, secret []byte) ([]byte, error) {
+func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, secret []byte, clientBuild uint32) ([]byte, error) {
 	identity, err := json.Marshal(realmListTicketIdentity{GameAccountID: gameAccountID, GameAccountRegion: 2})
 	if err != nil {
 		return nil, err
@@ -252,8 +257,8 @@ func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, 
 		CurrentTime:      now,
 		TextLocale:       fourCCEnUS,
 		AudioLocale:      fourCCEnUS,
-		VersionDataBuild: build70938,
-		Version:          clientVersion{Major: 1, Minor: 60, Revis: 1, Build: build70938},
+		VersionDataBuild: clientBuild,
+		Version:          clientVersion{Major: 1, Minor: 60, Revis: 1, Build: clientBuild},
 		Secret:           jsonBytes(secret),
 		ClientArch:       fourCCTextX64,
 		PlatformType:     fourCCWin,
