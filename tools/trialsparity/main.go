@@ -140,6 +140,10 @@ func compareRun(dir, pythonRoot, python string, verbose bool) (string, bool, err
 	if _, _, err := deleteGenerated(goDir); err != nil {
 		return "", false, fmt.Errorf("delete generated files (go copy): %w", err)
 	}
+	afterDelete, err := manifest(pyDir)
+	if err != nil {
+		return "", false, fmt.Errorf("manifest after delete: %w", err)
+	}
 	if verbose {
 		fmt.Printf("delete %s:\n", filepath.Base(dir))
 		for _, rel := range deleted {
@@ -180,7 +184,7 @@ func compareRun(dir, pythonRoot, python string, verbose bool) (string, bool, err
 		diff.WriteString(classDiff)
 	}
 	if pyClass != "error" && goClass != "error" {
-		if missing := expectedOutputs(pyDir, raw); missing != "" {
+		if missing := expectedOutputs(pyDir, raw, afterDelete); missing != "" {
 			diff.WriteString(missing)
 		}
 	}
@@ -337,8 +341,10 @@ func deleteGenerated(root string) ([]string, bool, error) {
 	return deleted, raw, err
 }
 
-// expectedOutputs checks that every output the scorers must write exists after the run.
-func expectedOutputs(root string, raw bool) string {
+// expectedOutputs checks that every output the scorers must write exists after the run and did
+// not survive the delete step. samples.jsonl is the one exception: it is an input that the
+// normaliser rewrites in place.
+func expectedOutputs(root string, raw bool, afterDelete map[string]string) string {
 	runDoc, err := pyjson.UnmarshalFile(filepath.Join(root, "RUN.json"))
 	if err != nil {
 		return ""
@@ -363,17 +369,23 @@ func expectedOutputs(root string, raw bool) string {
 			}
 		}
 	}
-	var missing []string
+	var problems []string
 	for _, rel := range want {
 		if !fileExists(filepath.Join(root, rel)) {
-			missing = append(missing, rel)
+			problems = append(problems, rel+" (missing)")
+			continue
+		}
+		if filepath.Base(rel) != "samples.jsonl" {
+			if _, stale := afterDelete[rel]; stale {
+				problems = append(problems, rel+" (not written by this run)")
+			}
 		}
 	}
-	if len(missing) == 0 {
+	if len(problems) == 0 {
 		return ""
 	}
-	sort.Strings(missing)
-	return fmt.Sprintf("  expected output missing after the run: %s\n", strings.Join(missing, ", "))
+	sort.Strings(problems)
+	return fmt.Sprintf("  expected output problem: %s\n", strings.Join(problems, ", "))
 }
 
 func repDirs(trialDir string) []string {
