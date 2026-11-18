@@ -129,7 +129,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// ---- REST: form, SRP challenge, proof, login ticket
-	rest, err := newRESTClient(opts.RESTAddr, opts.ServerName, roots, opts.Timeout)
+	rest, err := newRESTClient(opts.RESTAddr, opts.ServerName, opts.Account, roots, opts.Timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +175,11 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts.logf("rpc connect: server id %d/%d, server time %d, ciid %q, bindless %t",
-		connect.ServerID.Label, connect.ServerID.Epoch, connect.ServerTime, sanitizeServerText(connect.Ciid), connect.UseBindlessRPC)
+	// lengths only: the server id, the server time and the ciid identify one live run, and a step log is meant to
+	// be pasted into a report
+	opts.logf("rpc connect: server id label %d digits, epoch %d digits, server time %d digits, ciid %d chars, bindless %t",
+		digits(uint64(connect.ServerID.Label)), digits(uint64(connect.ServerID.Epoch)), digits(connect.ServerTime),
+		len(connect.Ciid), connect.UseBindlessRPC)
 
 	logon, err := rpc.sendLogon(ctx, login.LoginTicket, opts.ClientBuild)
 	if err != nil {
@@ -280,6 +283,17 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 func (r *Result) Summary() string {
 	return fmt.Sprintf("realm: %s (id %d, address 0x%08X, world %s:%d)",
 		sanitizeServerText(r.RealmName), r.RealmID, r.RealmAddress, sanitizeServerText(r.ServerIP), r.ServerPort)
+}
+
+// digits is the number of decimal digits of n. The step log prints it instead of a server id or a server time:
+// those values name one live run and must not end up in a report that is pasted around.
+func digits(n uint64) int {
+	d := 1
+	for n >= 10 {
+		n /= 10
+		d++
+	}
+	return d
 }
 
 // realmListTicket sends Command_RealmListTicketRequest_v1 with Param_Identity and Param_ClientInfo and returns the

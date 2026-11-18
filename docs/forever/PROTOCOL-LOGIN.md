@@ -150,7 +150,7 @@ Every `service_hash` below was re-read in round 1 from the `OriginalHash` consta
 
 ## 4. World Socket (Port 8085)
 
-*4.1-4.2 verified against the code (see corrections below); 4.3 and the packets after the first encrypted one are not verified.*
+*4.1-4.3 verified against the code; round 2 ran the whole stream against the live server (`WORLD-R1-NOTES.md`).*
 
 ### 4.1 Banners, Packet Framing, and `ClassicOpcodes` Translation
 
@@ -190,7 +190,7 @@ Every `service_hash` below was re-read in round 1 from the `OriginalHash` consta
 
 ## 5. After Auth (`InitializeSessionCallback` & Character List)
 
-*Not verified against the code in round 1.*
+*Verified against the code and a live server in round 2; corrections in `WORLD-R1-NOTES.md` (the list is regionwide, and the companions are sent unasked).*
 
 ### 5.1 Initial Burst After `CMSG_ENTER_ENCRYPTED_MODE_ACK`
 
@@ -226,16 +226,16 @@ Unless queued (`SMSG_WAIT_QUEUE_UPDATE` `0x450002` / wire `0x470002`, `SMSG_WAIT
 
 ## 6. Entering the World
 
-*Not verified against the code in round 1.*
+*Verified against the code and a live server in round 2 (`WORLD-R1-NOTES.md`).*
 
 1. **`CMSG_PLAYER_LOGIN`** (`0x430016`, wire `0x440016`): Packed `ObjectGuid Guid`, `float FarClip`, `Bits<1>(RPE)` (`src/server/game/Server/Packets/CharacterPackets.cpp:742-747`).
-2. **`SMSG_CONNECT_TO`** (`0x4C0008`, wire `0x4E0008`, 297B on Realm socket): `uint8 Signature[256]` (RSA-2048 over `WhereBuffer` + `uint32(Serial)`), `uint8 WhereBuffer[21]` (`uint8 Type = 1` + IPv4 + zero pad), `uint16 Port` (`8085`), `uint32 Serial` (`14`), `uint8 Con` (`1` = `CONNECTION_TYPE_INSTANCE`), `uint64 Key` (`_instanceConnectKey.Raw`) (`src/server/game/Server/WorldSession.cpp:919-951`, `src/server/game/Server/Packets/AuthenticationPackets.cpp:280-330`).
+2. **`SMSG_CONNECT_TO`** (`0x4C0008`, wire `0x4E0008`, 45B on the live server and in the capture): `Size<uint32>(Payload)`, `uint32 Serial`, `uint8 Con` (`1` = `CONNECTION_TYPE_INSTANCE`), `uint64 Key` (`_instanceConnectKey.Raw`), `uint32 NativeRealmAddress`, `uint32 Key3`, then per address `uint8 Type` (`1` = IPv4), the 4 address bytes, `uint16 Port`, and a bleep token (35 bits + flushed byte + a nanosecond duration; empty here) (`src/server/game/Server/WorldSession.cpp:912-957`, `src/server/game/Server/Packets/AuthenticationPackets.cpp:282-334`). The `Signature[256]`/`WhereBuffer` fields this section used to list belong to a later build.
 3. **Second TCP socket (`CONNECTION_TYPE_INSTANCE` on port `8085`)**: The Realm socket stays open while the client opens a second TCP connection to port `8085`, exchanges the 53-byte V2 banners, and receives a new `SMSG_AUTH_CHALLENGE` (`_serverChallenge_instance`) (`src/server/game/Server/WorldSocket.cpp:181-288`).
 4. **`CMSG_AUTH_CONTINUED_SESSION`** (`0x440003`, wire `0x460003`, plaintext, 80B on Instance socket) (`src/server/game/Server/Packets/AuthenticationPackets.cpp:95-100`, `src/server/game/Server/WorldSocket.cpp:983-1064`):
-   - Fields: `uint64 DosResponse` (`8B`), `uint64 Key` (`8B`), `uint8 LocalChallenge[32]` (`32B`), `uint8 Digest[24]` (`24B`).
-   - **Mandatory `Digest` check**: `First24Bytes(HMAC_SHA512(key = _sessionKey (40B), data = uint64_LE(Key) || LocalChallenge (32B) || _serverChallenge_instance (32B) || ContinuedSessionSeed (32B)))`, where `ContinuedSessionSeed` is `{ 0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2, 0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F, 0xF0, 0x32, 0x23, 0x25, 0xAD, 0xD2, 0xDB, 0xCA, 0x1A, 0x23, 0x2A, 0x93, 0x52, 0x91, 0x9C, 0xBE }` (`src/server/game/Server/WorldSocket.cpp:65-66,1040-1047`).
+   - Fields, in the order `AuthContinuedSession::Read` reads them: `uint64 DosResponse` (8B), `uint8 LocalChallenge[32]`, `uint8 Digest[24]`, `uint64 Key` (8B), `uint32 NativeRealmAddress`, `uint32 Key3` (80B total; `AuthenticationPackets.cpp:336-344`). The earlier order in this document (Key before the challenge) happens to be 80 bytes too but does not parse.
+   - **Mandatory `Digest` check**: `First24Bytes(HMAC_SHA512(key = _sessionKey (40B), data = uint64_LE(Key) || LocalChallenge (32B) || _serverChallenge_instance (32B) || ContinuedSessionSeed (32B)))`, where `ContinuedSessionSeed` is `{ 0x56, 0x5C, 0x61, 0x9C, 0x48, 0x3A, 0x52, 0x1F, 0x61, 0x5D, 0x05, 0x49, 0xB2, 0x9A, 0x39, 0xBF, 0x4B, 0x97, 0xB0, 0x1B, 0xF9, 0x6C, 0xDE, 0xD6, 0x80, 0x1D, 0xAB, 0x26, 0x02, 0xA9, 0x9B, 0x9D }` (`src/server/game/Server/WorldSocket.cpp:61-62,1040-1047`); round 2 corrected the bytes this section used to give.
    - Instance `_encryptKey` is derived with `_sessionKey`, `LocalChallenge`, `_serverChallenge_instance`, and `EncryptionKeySeed`, followed by plaintext `SMSG_ENTER_ENCRYPTED_MODE` (`0x4E0004`, 0 ms delay) and plaintext `CMSG_ENTER_ENCRYPTED_MODE_ACK` (`0x460005`), which starts `AES-256-GCM` at `Counter = 2` and invokes `HandleContinuePlayerLogin()` (`src/server/game/Server/WorldSocket.cpp:1049-1063,1152-1160`).
-5. **`SMSG_RESUME_COMMS` & `CMSG_QUEUED_MESSAGES_END`**: `HandleContinuePlayerLogin()` sends `SMSG_RESUME_COMMS` (`0x4C0006`, wire `0x4E0006`, 0B) and registers `SPECIAL_RESUME_COMMS_TIME_SYNC_COUNTER = 0xFFFFFFFE`; client replies with `CMSG_QUEUED_MESSAGES_END` (`0x44000A`, wire `0x46000A`: `int32 Timestamp`) (`src/server/game/Handlers/CharacterHandler.cpp:1389-1392`, `src/server/game/Handlers/MovementHandler.cpp:1033-1036`).
+5. **`SMSG_RESUME_COMMS` & `CMSG_QUEUED_MESSAGES_END`**: `HandleContinuePlayerLogin()` sends `SMSG_RESUME_COMMS` (`0x4C0006`, wire `0x4E0006`, 0B) **on the instance socket** (`ResumeComms(CONNECTION_TYPE_INSTANCE)`) and registers `SPECIAL_RESUME_COMMS_TIME_SYNC_COUNTER = 0xFFFFFFFE`; client replies with `CMSG_QUEUED_MESSAGES_END` (`0x44000A`, wire `0x46000A`: `int32 Timestamp`) (`src/server/game/Handlers/CharacterHandler.cpp:1389-1392`, `src/server/game/Handlers/MovementHandler.cpp:1033-1036`).
 6. **World Login Burst (`HandlePlayerLogin`, `src/server/game/Handlers/CharacterHandler.cpp:1439-1595`)**:
    - Sends `SMSG_ACCOUNT_DATA_TIMES`, `SMSG_TUTORIAL_FLAGS`, difficulty packets, **`SMSG_LOGIN_VERIFY_WORLD`** (`0x45002F`, wire `0x47002F`: `int32 MapID`, `float X, Y, Z, O`, `uint32 Reason = 0`), `SMSG_FEATURE_SYSTEM_STATUS` (`0x450063`, wire `0x470063`), `SMSG_SET_TIME_ZONE_INFORMATION` (`0x450123`, wire `0x470125`).
    - `SendInitialPacketsBeforeAddToMap()` sends **`SMSG_TIME_SYNC_REQUEST`** (`0x5E0000`, wire `0x600000`: `uint32 SequenceIndex = 0`), spells/talents/actions/factions/currencies, `SMSG_LOGIN_SET_TIME_SPEED` (`0x4501B9`, wire `0x4701BA`), `SMSG_INITIAL_SETUP` (`0x450014`, wire `0x470014`), and **`SMSG_MOVE_SET_ACTIVE_MOVER`** (`0x5E0003`, wire `0x600003`: packed `ObjectGuid MoverGUID`) (`src/server/game/Entities/Player/Player.cpp:26419-26529`, `src/server/game/Entities/Unit/Unit.cpp:10887-10896`).
@@ -250,7 +250,7 @@ Unless queued (`SMSG_WAIT_QUEUE_UPDATE` `0x450002` / wire `0x470002`, `SMSG_WAIT
 
 ## 7. Keep-Alive and Disconnect
 
-*Not verified against the code in round 1.*
+*Verified against the code and a live server in round 2 (the two logout packets travel on different sockets).*
 
 1. **BNet RPC (Port 1119)**: `HandshakeTimeout` is `30s` and `LoginTimeout` is `600s` (cancelled once `_authed = true`); there is no idle timeout after authentication (`src/server/bnetserver/Server/Session.cpp:139-140,273-294`). Client `ConnectionService::KeepAlive` (`0x65446991`, method `5`) sends `NoData` and receives no reply (`src/server/bnetserver/Services/ConnectionService.cpp:59-63`). Rate limit is `Network.RequestsPerSecond` (default `10/s`) (`src/server/bnetserver/Server/Session.cpp:141,395-404`).
 2. **World Socket Ping & Time Sync (Port 8085)**:
@@ -258,7 +258,7 @@ Unless queued (`SMSG_WAIT_QUEUE_UPDATE` `0x450002` / wire `0x470002`, `SMSG_WAIT
    - `WorldSession::Update()` sends `SMSG_TIME_SYNC_REQUEST` (`0x5E0000`, wire `0x600000`) at `5s`, `5s`, then every `10s` (`src/server/game/Server/WorldSession.cpp:1901-1938`).
    - `Player::ResetIdleTimers()` marks the player AFK after `5` minutes (`300000` ms) of no input (`src/server/game/Entities/Player/Player.cpp:33605-33650`).
 3. **Logout & Disconnect**:
-   - `CMSG_LOGOUT_REQUEST` (`0x3E0072`, wire `0x3F0074`: `Bits<1>(IdleLogout)` or empty 0B) -> `SMSG_LOGOUT_RESPONSE` (`0x45012F`, wire `0x470131`: `int32 LogoutResult`, `Bits<1>(Instant)`, `FlushBits()`) -> `SMSG_LOGOUT_COMPLETE` (`0x450130`, wire `0x470132`: `OptionalInit(SwitchGameMode = false)`, `FlushBits()` = `0x00`), which closes the Instance socket after `0s` (instant) or `20s` while keeping the Realm socket open (`src/server/game/Handlers/MiscHandler.cpp:243-292`, `src/server/game/Server/WorldSession.cpp:365-380,683-695`).
+   - `CMSG_LOGOUT_REQUEST` (`0x3E0072`, wire `0x3F0074`: `Bits<1>(IdleLogout)` or empty 0B) -> `SMSG_LOGOUT_RESPONSE` (`0x45012F`, wire `0x470130` for a 70707 client and `0x470131` for 70938: `int32 LogoutResult`, `Bits<1>(Instant)`, `FlushBits()`) -> `SMSG_LOGOUT_COMPLETE` (`0x450130`, wire `0x470131` for a 70707 client, `0x470132` for 70938: `OptionalInit(SwitchGameMode = false)`, `FlushBits()` = `0x00`). The response is an instance-only opcode and the completion a realm-only one (`Opcodes.cpp:1938-1939`), so the response goes to the instance socket and the completion to the realm socket, which closes the Instance socket after `0s` (instant) or `20s` while keeping the Realm socket open (`src/server/game/Handlers/MiscHandler.cpp:243-292`, `src/server/game/Server/WorldSession.cpp:365-380,683-695`).
    - `CMSG_LOGOUT_CANCEL` (`0x3E0073`, wire `0x3F0075`, 0B) -> `SMSG_LOGOUT_CANCEL_ACK` (`0x450131`, wire `0x470133`, 0B) (`src/server/game/Handlers/MiscHandler.cpp:294-316`).
    - `CMSG_LOG_DISCONNECT` (`0x440007`, wire `0x460007`: `uint32 Reason`) (`src/server/game/Server/WorldSocket.cpp:1137-1142`).
 

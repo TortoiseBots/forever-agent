@@ -51,7 +51,7 @@ func TestLoginAgainstFakeServer(t *testing.T) {
 	if err := json.Unmarshal(result.JoinTicket, &joinTicket); err != nil {
 		t.Fatalf("join ticket (%d bytes) is not the fake's JSON: %v", len(result.JoinTicket), err)
 	}
-	if joinTicket.GameAccount != "7#1" || joinTicket.Platform != fourCCWn64 || joinTicket.Type != fourCCWoW || joinTicket.ClientArch != fourCCTextX64 {
+	if joinTicket.GameAccount != "agent#0000" || joinTicket.Platform != fourCCWn64 || joinTicket.Type != fourCCWoW || joinTicket.ClientArch != fourCCTextX64 {
 		t.Errorf("join ticket names game account %q, variant %08X/%08X/%08X", joinTicket.GameAccount,
 			joinTicket.Platform, joinTicket.Type, joinTicket.ClientArch)
 	}
@@ -176,7 +176,8 @@ func TestServerRefusalIsSanitised(t *testing.T) {
 		ErrorCode:           "ERROR_LOGIN_INCORRECT_PASSWORD",
 		ErrorMessage:        "\x1b[31m" + secret + "\x00" + strings.Repeat("z", 300),
 	}
-	got := serverRefusal(&result)
+	c := &restClient{account: "Someone@Example.test"}
+	got := c.serverRefusal(&result)
 	if !strings.Contains(got, "ERROR_LOGIN_INCORRECT_PASSWORD") {
 		t.Fatalf("the error code was lost: %q", got)
 	}
@@ -191,9 +192,42 @@ func TestServerRefusalIsSanitised(t *testing.T) {
 			t.Fatalf("refusal carries byte %#x: %q", got[i], got)
 		}
 	}
-	empty := serverRefusal(&loginResultJSON{AuthenticationState: "DONE"})
+	empty := c.serverRefusal(&loginResultJSON{AuthenticationState: "DONE"})
 	if empty == "" {
 		t.Fatal("an empty refusal has no explanation")
+	}
+}
+
+// TestRefusalDoesNotEchoTheAccount: the login service answers a refusal with error_message; it can name the account
+// it was asked about. That name is the caller's, and no error may carry it, in any spelling the service uses
+// (the name is upper-cased before it is looked up).
+func TestRefusalDoesNotEchoTheAccount(t *testing.T) {
+	const account = "Someone@Example.test"
+	c := &restClient{account: account}
+	for _, echo := range []string{
+		account,
+		strings.ToUpper(account),
+		strings.ToLower(account),
+		"incorrect password for " + account,
+		"unknown account " + strings.ToUpper(account),
+	} {
+		got := c.serverRefusal(&loginResultJSON{ErrorCode: "ERROR_LOGIN_INCORRECT_PASSWORD", ErrorMessage: echo})
+		for _, form := range []string{account, strings.ToUpper(account), strings.ToLower(account)} {
+			if strings.Contains(got, form) {
+				t.Fatalf("refusal %q echoes the account as %q", got, form)
+			}
+		}
+		got = c.describeRESTFailure("401 Unauthorized", []byte(`{"error_code":"ERROR_LOGIN_INCORRECT_PASSWORD","error_message":"`+echo+`"}`))
+		for _, form := range []string{account, strings.ToUpper(account), strings.ToLower(account)} {
+			if strings.Contains(got, form) {
+				t.Fatalf("REST failure %q echoes the account as %q", got, form)
+			}
+		}
+	}
+	// a short name is still removed, even where it is an ordinary word in the server's message
+	c = &restClient{account: "bob"}
+	if got := c.serverRefusal(&loginResultJSON{ErrorMessage: "bob is banned"}); strings.Contains(got, "bob") {
+		t.Fatalf("refusal %q echoes the account", got)
 	}
 }
 

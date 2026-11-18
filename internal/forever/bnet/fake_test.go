@@ -761,7 +761,7 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte) error
 		if address != 0x46010046 {
 			f.fail("realm address %#x", address)
 		}
-		ticket := map[string]any{"gameAccount": fmt.Sprintf("%d#1", fakeGameAccountID), "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
+		ticket := map[string]any{"gameAccount": "agent#0000", "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
 		ticketJSON, err := json.Marshal(ticket)
 		if err != nil {
 			f.fail("join ticket: %v", err)

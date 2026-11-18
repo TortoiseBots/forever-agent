@@ -3019,6 +3019,9 @@ func TestRaidWalkReviveRefusalSummary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run.log: %v", err)
 		}
+		// the slot line prints the run's directory, whose random temp-dir suffix can contain the critter's entry;
+		// drop the fixture's own path so the check is about blocker lines only
+		raw = bytes.ReplaceAll(raw, []byte(f.out), nil)
 		if strings.Contains(string(raw), "2914") || strings.Contains(string(raw), "Snake") {
 			t.Fatalf("run.log names the critter as a blocker:\n%s", raw)
 		}

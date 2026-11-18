@@ -1,0 +1,223 @@
+package wire
+
+import "testing"
+
+// The live realm is build 70707 (auth.realmlist.gamebuild) and accepts only its own build
+// (Realm.AlsoAcceptBuilds is empty), so a client claims 70707 too. The 70938 column is what the protocol
+// document describes; a client that claims 70938 on that realm would be refused at the realm join.
+const (
+	realmBuild70707  = uint32(70707)
+	clientBuild70938 = uint32(70938)
+)
+
+// The expected wire numbers below are computed by hand from ClassicOpcodes.cpp at commit 6517af05 with the
+// shipped defaults (Classic.OpcodeGroupShift = -1, Classic.MainGroupInsertIndex = 0x98,
+// Classic.ClientMainGroupInsertIndex = 0x13B, Build70755.ClientNew = 0x440071,0x440072,
+// Build70755.ServerNew = 0x470125, Build70790.ServerRemoved = 0x470125, Build70790.ServerNew = 0x4700ED) and
+// the ClassicClientOpcodes.inc table. The arithmetic is spelled out per row:
+//
+//	70245 server number = (group+1)<<16 | index, with -1 for 0x45 index 0x17E..0x1C0, +2 for chat 0x4A
+//	index >= 4, -1 for guild 0x51 index >= 0x1C, and the explicit overrides above
+//	FROMLINE then: index >= 0x98 in group 0x46 gets +1, then every group 0x46..0x6B gets +1
+//	70755/70790 (only for a 70790 client): a server number >= 0x470125 gets +1; then >= 0x4700ED gets a net
+//	-1+1, i.e. +1, and the 0x470125 insert is taken out again
+func TestServerOpcodeTranslation(t *testing.T) {
+	cases := []struct {
+		core           uint32
+		name           string
+		w70707, w70938 uint32
+	}{
+		// 70245 group+1 only: 0x4C -> 0x4D, then shift -> 0x4E
+		{0x4C0000, "SMSG_AUTH_CHALLENGE", 0x4E0000, 0x4E0000},
+		{0x4C0004, "SMSG_ENTER_ENCRYPTED_MODE", 0x4E0004, 0x4E0004},
+		{0x4C0006, "SMSG_RESUME_COMMS", 0x4E0006, 0x4E0006},
+		{0x4C0008, "SMSG_CONNECT_TO", 0x4E0008, 0x4E0008},
+		{0x4C0009, "SMSG_PONG", 0x4E0009, 0x4E0009},
+		{0x4C000E, "SMSG_COMPRESSED_PACKET", 0x4E000E, 0x4E000E},
+		// 70245 0x46 index 0..0x97: group+1 -> 0x47, no index bump
+		{0x450001, "SMSG_AUTH_RESPONSE", 0x470001, 0x470001},
+		{0x450018, "SMSG_ENUM_CHARACTERS_RESULT", 0x470018, 0x470018},
+		{0x45002F, "SMSG_LOGIN_VERIFY_WORLD", 0x47002F, 0x47002F},
+		{0x450064, "SMSG_FEATURE_SYSTEM_STATUS_GLUE_SCREEN", 0x470064, 0x470064},
+		// 70245 override 0x4601B5, index >= 0x98 -> 0x1B6, group+1 -> 0x4701B6; a 70938 client adds the
+		// 70755 insert and cancels it with the 70790 remove+insert -> 0x4701B7
+		{0x4501B6, "SMSG_ACCOUNT_DATA_TIMES", 0x4701B6, 0x4701B7},
+		// 70245 0x460123 -> index 0x124 -> 0x470124; 70938 gets +1 from the 0x4700ED insert
+		{0x450123, "SMSG_SET_TIME_ZONE_INFORMATION", 0x470124, 0x470125},
+		{0x45012F, "SMSG_LOGOUT_RESPONSE", 0x470130, 0x470131},
+		{0x450130, "SMSG_LOGOUT_COMPLETE", 0x470131, 0x470132},
+		{0x450268, "SMSG_TUTORIAL_FLAGS", 0x470269, 0x47026A},
+		{0x4502B1, "SMSG_BATTLE_NET_CONNECTION_STATUS", 0x4702B2, 0x4702B3},
+		// 70245 0x4A index 1 (not chat) -> 0x4B0001
+		{0x490001, "SMSG_AVAILABLE_HOTFIXES", 0x4B0001, 0x4B0001},
+		{0x49000E, "SMSG_CACHE_VERSION", 0x4B000E, 0x4B000E},
+		// 70245 0x5F -> 0x60
+		{0x5E0000, "SMSG_TIME_SYNC_REQUEST", 0x600000, 0x600000},
+		{0x5E0003, "SMSG_MOVE_SET_ACTIVE_MOVER", 0x600003, 0x600003},
+		{0x450362, "SMSG_RECENT_ALLY_DATA_RESPONSE", 0x470363, 0x470364},
+		{0x45021E, "SMSG_BATTLE_PAY_GET_DISTRIBUTION_LIST_RESPONSE", 0x47021F, 0x470220},
+		{0x450360, "SMSG_ACCOUNT_ITEM_COLLECTION_DATA", 0x470361, 0x470362},
+		{0x45036F, "SMSG_MIRROR_VARS", 0x470372, 0x470373},
+	}
+	for _, c := range cases {
+		if got := NewOpcodeTable(realmBuild70707, realmBuild70707).TranslateServerCore(c.core); got != c.w70707 {
+			t.Errorf("%s (0x%06X) for a 70707 client: wire 0x%06X, want 0x%06X", c.name, c.core, got, c.w70707)
+		}
+		if got := NewOpcodeTable(clientBuild70938, realmBuild70707).TranslateServerCore(c.core); got != c.w70938 {
+			t.Errorf("%s (0x%06X) for a 70938 client: wire 0x%06X, want 0x%06X", c.name, c.core, got, c.w70938)
+		}
+		// and the inverse: the wire number the server sent must name the core opcode again
+		if got := NewOpcodeTable(realmBuild70707, realmBuild70707).TranslateServerWire(c.w70707); got != c.core {
+			t.Errorf("wire 0x%06X for a 70707 client named 0x%06X, want %s 0x%06X", c.w70707, got, c.name, c.core)
+		}
+		if got := NewOpcodeTable(clientBuild70938, realmBuild70707).TranslateServerWire(c.w70938); got != c.core {
+			t.Errorf("wire 0x%06X for a 70938 client named 0x%06X, want %s 0x%06X", c.w70938, got, c.name, c.core)
+		}
+		if ServerName(c.core) != c.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, ServerName(c.core), c.name)
+		}
+	}
+}
+
+// Classic has no SMSG_HEALTH_UPDATE and no SMSG_GUILD_CHALLENGE_COMPLETED (BlockedServerOpcodes,
+// ClassicOpcodes.cpp:62-76). Each shares its Classic number with a message the server does send:
+// SMSG_HEALTH_UPDATE (0x45017D, index 0x17D untouched) and SMSG_POWER_UPDATE (0x45017E, index -1) both land on
+// 0x46017D before the shift and on 0x47017E after it (index >= 0x98 gets +1), and SMSG_GUILD_CHALLENGE_COMPLETED
+// (0x51001B) and SMSG_GUILD_ITEM_LOOTED_NOTIFY (0x51001C, -1 from index 0x1C) both land on 0x52001B, 0x53001B
+// with the shift. The wire -> core direction must name the sendable one.
+func TestServerWirePrefersTheOpcodeTheServerSends(t *testing.T) {
+	for _, tc := range []struct {
+		clientBuild, realmBuild uint32
+		wire, want              uint32
+		name                    string
+	}{
+		{realmBuild70707, realmBuild70707, 0x47017E, 0x45017E, "SMSG_POWER_UPDATE"},
+		{realmBuild70707, realmBuild70707, 0x53001B, 0x51001C, "SMSG_GUILD_ITEM_LOOTED_NOTIFY"},
+		{clientBuild70938, realmBuild70707, 0x47017F, 0x45017E, "SMSG_POWER_UPDATE"},             // 70790 steps do not touch these
+		{clientBuild70938, realmBuild70707, 0x53001B, 0x51001C, "SMSG_GUILD_ITEM_LOOTED_NOTIFY"}, //
+		{realmBuild70707, 70245, 0x46017D, 0x45017E, "SMSG_POWER_UPDATE"},                        // no group shift
+		{realmBuild70707, 70245, 0x52001B, 0x51001C, "SMSG_GUILD_ITEM_LOOTED_NOTIFY"},            //
+	} {
+		table := NewOpcodeTable(tc.clientBuild, tc.realmBuild)
+		if got := table.TranslateServerWire(tc.wire); got != tc.want {
+			t.Errorf("build %d on realm %d: wire 0x%06X named 0x%06X, want %s 0x%06X", tc.clientBuild, tc.realmBuild, tc.wire, got, tc.name, tc.want)
+		}
+		if got := ServerName(tc.want); got != tc.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", tc.want, got, tc.name)
+		}
+	}
+	// the forward direction still maps both colliding cores to that number (the server drops the blocked one
+	// before it writes a packet, WorldSocket.cpp:522)
+	table := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	if got := table.TranslateServerCore(0x45017D); got != 0x47017E {
+		t.Errorf("SMSG_HEALTH_UPDATE forward = 0x%06X, want 0x47017E", got)
+	}
+	if got := table.TranslateServerCore(0x51001B); got != 0x53001B {
+		t.Errorf("SMSG_GUILD_CHALLENGE_COMPLETED forward = 0x%06X, want 0x53001B", got)
+	}
+}
+
+// The inverse table follows the realm build's group shift like the forward one: a realm below 70291 keeps
+// SMSG_AUTH_CHALLENGE on 0x4D0000, and the shifted number must not name it there.
+func TestServerWireUsesTheRealmShift(t *testing.T) {
+	noShift := NewOpcodeTable(realmBuild70707, 70245)
+	if got := noShift.TranslateServerWire(0x4D0000); got != 0x4C0000 {
+		t.Fatalf("no shift: wire 0x4D0000 named 0x%06X, want SMSG_AUTH_CHALLENGE", got)
+	}
+	if got := noShift.TranslateServerWire(0x4E0000); got != 0 {
+		t.Fatalf("no shift: wire 0x4E0000 named 0x%06X, want no opcode", got)
+	}
+	shifted := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	if got := shifted.TranslateServerWire(0x4E0000); got != 0x4C0000 {
+		t.Fatalf("shift 1: wire 0x4E0000 named 0x%06X, want SMSG_AUTH_CHALLENGE", got)
+	}
+	if got := shifted.TranslateServerCore(0x4C0000); got != 0x4E0000 {
+		t.Fatalf("shift 1: SMSG_AUTH_CHALLENGE wire 0x%06X, want 0x4E0000", got)
+	}
+}
+
+// TestClientOpcodeTranslation: the client direction, same hand computation. The 70755 client step inserts two
+// messages at 0x440071/0x440072, so every later number in the client main group 0x44 is two higher for a 70938
+// client; the connection group 0x45 is 0x46 in both (the shift), as the .inc table's 0x45xxxx entries show.
+func TestClientOpcodeTranslation(t *testing.T) {
+	cases := []struct {
+		core           uint32
+		name           string
+		w70707, w70938 uint32
+	}{
+		// .inc 0x450001..0x45000A; the shift moves the connection group to 0x46
+		{0x440001, "CMSG_AUTH_SESSION", 0x460001, 0x460001},
+		{0x440003, "CMSG_AUTH_CONTINUED_SESSION", 0x460003, 0x460003},
+		{0x440005, "CMSG_ENTER_ENCRYPTED_MODE_ACK", 0x460005, 0x460005},
+		{0x440006, "CMSG_PING", 0x460006, 0x460006},
+		{0x440007, "CMSG_LOG_DISCONNECT", 0x460007, 0x460007},
+		{0x44000A, "CMSG_QUEUED_MESSAGES_END", 0x46000A, 0x46000A},
+		// .inc 0x440014 -> 0x430014, 0x440016 -> 0x430016; index < 0x13B, no shift change
+		{0x430014, "CMSG_ENUM_CHARACTERS", 0x440014, 0x440014},
+		{0x430016, "CMSG_PLAYER_LOGIN", 0x440016, 0x440016},
+		// arithmetic group+1: 0x43 -> 0x44
+		{0x430024, "CMSG_LOADING_SCREEN_NOTIFY", 0x440024, 0x440024},
+		{0x4300AB, "CMSG_KEEP_ALIVE", 0x4400AB, 0x4400AD},
+		{0x430000, "CMSG_CONNECT_TO_FAILED", 0x440000, 0x440000},
+		// .inc 0x420064/0x42005C -> 0x410064/0x41005C (groups below 0x44: no shift)
+		{0x410064, "CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE", 0x420064, 0x420064},
+		{0x41005C, "CMSG_TIME_SYNC_RESPONSE", 0x42005C, 0x42005C},
+		// .inc 0x3F0074 -> 0x3E0072, a manual entry (the arithmetic would be 0x3F0073)
+		{0x3E0072, "CMSG_LOGOUT_REQUEST", 0x3F0074, 0x3F0074},
+		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
+		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
+		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},
+		{0x43000A, "CMSG_START_WAR_GAME", 0x44000A, 0x44000A},
+		{0x4300EA, "CMSG_BATTLE_PAY_GET_PURCHASE_LIST", 0x4400EA, 0x4400EC},
+		{0x43010F, "CMSG_GET_UNDELETE_CHARACTER_COOLDOWN_STATUS", 0x44010F, 0x440111},
+		// main-group insert: classic index >= 0x13B is one higher on the wire
+		{0x430134, "CMSG_CAN_REDEEM_TOKEN_FOR_BALANCE", 0x440133, 0x440135},
+		{0x430176, "CMSG_SOCIAL_CONTRACT_REQUEST", 0x440177, 0x440179},
+	}
+	for _, c := range cases {
+		for _, tc := range []struct {
+			build uint32
+			want  uint32
+		}{{realmBuild70707, c.w70707}, {clientBuild70938, c.w70938}} {
+			table := NewOpcodeTable(tc.build, realmBuild70707)
+			got, ok := table.WireForClient(c.core)
+			if !ok {
+				t.Errorf("%s (0x%06X) for build %d: no wire number", c.name, c.core, tc.build)
+				continue
+			}
+			if got != tc.want {
+				t.Errorf("%s (0x%06X) for build %d: wire 0x%06X, want 0x%06X", c.name, c.core, tc.build, got, tc.want)
+			}
+			if back := table.TranslateClientWire(got); back != c.core {
+				t.Errorf("wire 0x%06X for build %d named 0x%06X, want %s 0x%06X", got, tc.build, back, c.name, c.core)
+			}
+		}
+	}
+}
+
+// TestShiftFromRealmBuild: the group shift follows the realm's build, not the client's (ClassicOpcodes.cpp
+// ExtraGroupShift reads sRealmList->GetCurrentRealm()->Build). A realm below 70291 keeps the 70245 groups.
+func TestShiftFromRealmBuild(t *testing.T) {
+	old := NewOpcodeTable(realmBuild70707, 70245)
+	if got := old.TranslateServerCore(0x4C0000); got != 0x4D0000 {
+		t.Fatalf("no shift: SMSG_AUTH_CHALLENGE wire 0x%06X, want 0x4D0000", got)
+	}
+	if got := old.TranslateClientWire(0x450001); got != 0x440001 {
+		t.Fatalf("no shift: wire 0x450001 named 0x%06X, want 0x440001", got)
+	}
+	if _, ok := old.WireForClient(0x440001); !ok {
+		t.Fatal("no shift: CMSG_AUTH_SESSION has no wire number")
+	} else if wire, _ := old.WireForClient(0x440001); wire != 0x450001 {
+		t.Fatalf("no shift: CMSG_AUTH_SESSION wire 0x%06X, want 0x450001", wire)
+	}
+}
+
+// TestClientWireUnknownNames have no core counterpart: the 70755 client messages at 0x440071/0x440072.
+func TestClientWireUnknownNames(t *testing.T) {
+	table := NewOpcodeTable(clientBuild70938, realmBuild70707)
+	for _, wire := range []uint32{0x440071, 0x440072} {
+		if got := table.TranslateClientWire(wire); got != UnknownOpcode {
+			t.Errorf("70938 wire 0x%06X named 0x%06X, want UNKNOWN_OPCODE", wire, got)
+		}
+	}
+}

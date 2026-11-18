@@ -29,7 +29,7 @@ login form: LOGIN_FORM, SRP form at /bnetserver/login/srp/
 srp challenge: version 2, SHA-256, 15000 iterations, modulus 256 bytes, salt 32 bytes
 srp proof: client evidence M1 32 bytes accepted, server evidence M2 32 bytes verified
 login ticket: 43 bytes
-rpc connect: server id 1/1794972337, server time 1794975225932, ciid "000000016AFD1AB1-000000076AFD25F9", bindless true
+rpc connect: server id <server id>, server time <server time>, ciid <ciid>, bindless true
 logon: build 70707, account id 2, 1 game account(s), session key 64 bytes
 realm list ticket: 20 bytes
 sub-region: 70-1-70
@@ -37,6 +37,10 @@ realm list: realm 70 "<realm>", address 0x46010046, build 70707, population 1, f
 realm join: join ticket 76 bytes, world server 127.0.0.1:8085, join secret 32 bytes
 realm: <realm> (id 70, address 0x46010046, world 127.0.0.1:8085)
 ```
+
+The `rpc connect` line prints lengths only now (`server id label 1 digits, epoch 10 digits, server time 13 digits,
+ciid 33 chars, bindless true`); the placeholders in the transcript mark the values of that run, which are not in the
+notes.
 
 ## Where `PROTOCOL-LOGIN.md` was wrong or silent
 

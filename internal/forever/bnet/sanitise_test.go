@@ -7,6 +7,7 @@ package bnet
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -108,13 +109,47 @@ func TestServerTextIsSanitisedInEverySink(t *testing.T) {
 	}
 }
 
+// TestConnectStepPrintsLengthsOnly: the connect answer's server id, server time and ciid name one live run, and the
+// step log is the text a command copies to stdout (and a report pastes). The line prints their lengths instead.
+func TestConnectStepPrintsLengthsOnly(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+
+	var out strings.Builder
+	opts := f.options()
+	opts.Logf = func(format string, args ...any) {
+		out.WriteString(fmt.Sprintf(format, args...))
+		out.WriteByte('\n')
+	}
+	if _, err := Login(context.Background(), opts); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "rpc connect: ") {
+			line = l
+		}
+	}
+	// the fake answers server id 1/2, server time 1234567890 and ciid "fake-ciid"
+	want := "rpc connect: server id label 1 digits, epoch 1 digits, server time 10 digits, ciid 9 chars, bindless true"
+	if line != want {
+		t.Fatalf("connect step\n got: %q\nwant: %q", line, want)
+	}
+	for _, value := range []string{"fake-ciid", "1234567890", "1/2"} {
+		if strings.Contains(out.String(), value) {
+			t.Fatalf("the connect step prints the value %q", value)
+		}
+	}
+}
+
 // TestRESTStatusPhraseIsSanitised covers the one sink the fake cannot produce: net/http writes a standard reason
 // phrase, so a hostile one is fed to describeRESTFailure directly.
 func TestRESTStatusPhraseIsSanitised(t *testing.T) {
 	for _, payload := range hostilePayloads() {
 		t.Run(payload.name, func(t *testing.T) {
 			for _, body := range [][]byte{nil, []byte(`{"error_code":"` + payload.text + `"}`)} {
-				got := describeRESTFailure("500 "+payload.text, body)
+				got := (&restClient{}).describeRESTFailure("500 "+payload.text, body)
 				checkCleanOutput(t, "status/"+payload.name, got+"\n", payload.text)
 			}
 		})
@@ -144,5 +179,62 @@ func TestSRPChallengeTextIsSanitised(t *testing.T) {
 				checkCleanOutput(t, field, err.Error()+"\n", payload.text)
 			})
 		}
+	}
+}
+
+// The account is removed before the text is truncated: a name that straddles the 120-byte limit must not survive
+// as a fragment, which is what the old order (truncate, then replace the three spellings) allowed.
+func TestAccountIsScrubbedBeforeTruncation(t *testing.T) {
+	const account = "Notarealaccount"
+	c := &restClient{account: account}
+	text := strings.Repeat("x ", (maxServerText-8)/2) + account + " after"
+	got := c.scrubServerText(text)
+	// the marker itself can be cut by the bound (it is part of the text now), but no piece of the name may be
+	if !strings.Contains(got, "<acco") {
+		t.Fatalf("the account was not replaced: %q", got)
+	}
+	if strings.Contains(got, account[:6]) || strings.Contains(got, strings.ToLower(account[:6])) {
+		t.Fatalf("a fragment of the account survived: %q", got)
+	}
+	if len(got) > maxServerText {
+		t.Fatalf("%d bytes after the scrub, the bound is %d", len(got), maxServerText)
+	}
+}
+
+// Every spelling and identifier form the login service can echo: any case, the e-mail local part and the
+// Battle.net "Name#1234" discriminator.
+func TestAccountFormsAreScrubbed(t *testing.T) {
+	for _, tc := range []struct {
+		account, in, want string
+	}{
+		{"Testaccount", "TESTACCOUNT refused", "<account> refused"},
+		{"Testaccount", "tEsTaCcOuNt#1234 refused", "<account> refused"},
+		{"Testaccount", "Testaccount@example.com refused", "<account>@example.com refused"},
+		{"user@example.com", "USER@EXAMPLE.COM and user are one", "<account> and <account> are one"},
+		{"user#4711", "user#4711 and user", "<account> and <account>"},
+	} {
+		got := (&restClient{account: tc.account}).scrubServerText(tc.in)
+		if got != tc.want {
+			t.Errorf("account %q: %q became %q, want %q", tc.account, tc.in, got, tc.want)
+		}
+	}
+}
+
+// The request path is part of an error, and the server chooses it (srp_url); it carries the account scrub too.
+func TestRESTErrorPathIsScrubbed(t *testing.T) {
+	c := &restClient{
+		client:  &http.Client{Transport: &http.Transport{}},
+		base:    "https://127.0.0.1:1",
+		account: "Testaccount",
+	}
+	_, err := c.get(context.Background(), "/Testaccount/srp/Testaccount")
+	if err == nil {
+		t.Fatal("a request to a closed port succeeded")
+	}
+	if strings.Contains(err.Error(), "Testaccount") {
+		t.Fatalf("the account survived in the path of the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "<account>/srp/<account>") {
+		t.Fatalf("the error does not show the scrubbed path: %v", err)
 	}
 }

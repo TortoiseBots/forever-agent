@@ -11,16 +11,19 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/bnet"
 )
 
-// foreverCmd is the entry point of the Forever (Classic 1.60.1) commands. Round 1 only logs in through the login
-// server; the world socket comes later.
+// foreverCmd is the entry point of the Forever (Classic 1.60.1) commands: login-check stops at the realm join
+// answer, world-check enters the world with one character.
 func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
+		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
 		return exitUsage
 	}
 	switch args[0] {
 	case "login-check":
 		return foreverLoginCheckCmd(ctx, args[1:], stdout, stderr)
+	case "world-check":
+		return foreverWorldCheckCmd(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "forever-agent forever: unknown command %q\n", args[0])
 		return exitUsage
@@ -44,6 +47,7 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
+		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
 		return exitUsage
 	}
 	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" {

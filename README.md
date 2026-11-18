@@ -4,25 +4,35 @@ A headless World of Warcraft client for **WoW Forever (Classic 1.60.1)** servers
 [ForeverCore](https://github.com/Karrz1/TrinityCore). One process logs one character in, with no game window, and
 exposes it over a local JSON-RPC API, so server-side behaviour can be tested from scripts.
 
-**Status: early port, not usable on a Forever server yet.** This repository starts as a copy of
-[turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers). The code
-still speaks the 1.12 protocol. The Forever login, world socket, packets and object fields are being written; until
-they land, the parts that need no server (plans, route tools, tests) are what works here.
+**Status: early port; the character can log in and out, but there is no gameplay yet.** This repository starts as a
+copy of [turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers).
+The 1.12 game layer still speaks the 1.12 protocol. Rounds 1 and 2 wrote the Forever login and the world socket up
+to "the server treats the player as fully in the world"; movement, objects and gameplay come next.
 
 | Part | State |
 |---|---|
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
-| World socket (encrypted, compressed) | not started |
-| Packets and object fields for build 70938 | not started |
+| World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
+| Packets and object fields for build 70938 | login and character-select packets done; gameplay packets not started |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
-name, id and address. It prints no ticket, key, proof or password, only their lengths. `--build` picks the client
-build to claim (default 70938); a realm only admits the builds it accepts. Each RPC step and the login as a whole are
-deadline-bounded (30 s per request, 2 min overall), so a silent or slow-drip server cannot hold the command open.
-The world socket is the next round.
+name, id and address. It prints no ticket, key, proof or password, only their lengths; the connect step prints the
+ciid, the server id and the server time as counts (`ciid 33 chars`), never their values, so the output is safe to
+paste into a report. `--build` picks the client build to claim (default 70938); a realm only admits the builds it
+accepts. Each RPC step and the login as a whole are deadline-bounded (30 s per request, 2 min overall), so a silent
+or slow-drip server cannot hold the command open.
+
+`forever-agent forever world-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+does the same login and then enters the world with that character: world auth, character list, `CMSG_PLAYER_LOGIN`,
+the instance socket, the login burst (loading screen, time syncs, the active-mover exchange), `--stay` seconds of
+keep-alives (default 20 s), then a clean logout. It prints one line per step, a count of server packets by opcode
+name, and no key or ticket, only lengths. `--build` has to be the build the realm accepts (its
+`auth.realmlist.gamebuild`), because a realm admits only that build unless `Realm.AlsoAcceptBuilds` lists more. By
+default the instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
+`--allow-instance-redirect` permits a different host for clustered servers.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

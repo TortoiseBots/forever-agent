@@ -24,7 +24,10 @@ var longSecretRun = regexp.MustCompile(`[A-Za-z0-9+/=]{32,}`)
 
 // sanitizeServerText bounds and cleans text that came from the server before it goes into an error: printable ASCII
 // only, at most 120 bytes, and anything that looks like a long hex or base64 run replaced by "<redacted>".
-func sanitizeServerText(s string) string {
+func sanitizeServerText(s string) string { return truncateServerText(cleanServerText(s)) }
+
+// cleanServerText replaces control bytes and long secret runs, without the bound.
+func cleanServerText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := range len(s) {
@@ -38,11 +41,52 @@ func sanitizeServerText(s string) string {
 			b.WriteByte('?')
 		}
 	}
-	out := longSecretRun.ReplaceAllString(b.String(), "<redacted>")
-	if len(out) > maxServerText {
-		out = out[:maxServerText-3] + "..."
+	return longSecretRun.ReplaceAllString(b.String(), "<redacted>")
+}
+
+// truncateServerText bounds the result of cleanServerText. It runs after every replacement, never before one.
+func truncateServerText(s string) string {
+	if len(s) > maxServerText {
+		return s[:maxServerText-3] + "..."
 	}
-	return out
+	return s
+}
+
+// scrubServerText is for server text that can carry the account: it sanitises, removes the account in every
+// spelling, and only then bounds the text. The old order (sanitise and bound, then remove) left part of a name
+// that straddled the 120-byte limit in the output.
+func (c *restClient) scrubServerText(s string) string {
+	s = cleanServerText(s)
+	if c.account != "" {
+		s = c.removeAccount(s)
+	}
+	return truncateServerText(s)
+}
+
+// removeAccount replaces the account name, case-insensitively, in the forms the login service can echo: the name
+// as given, its e-mail local part (before "@"), and the Battle.net "#N" discriminator form (the digits are part
+// of the identifier). The longest form goes first so a whole address is removed before its local part.
+func (c *restClient) removeAccount(s string) string {
+	forms := []string{c.account}
+	if at := strings.IndexByte(c.account, '@'); at > 0 {
+		forms = append(forms, c.account[:at])
+	}
+	if hash := strings.IndexByte(c.account, '#'); hash > 0 {
+		forms = append(forms, c.account[:hash])
+	}
+	for i := 1; i < len(forms); i++ { // longest first; three forms at most
+		for j := i; j > 0 && len(forms[j]) > len(forms[j-1]); j-- {
+			forms[j], forms[j-1] = forms[j-1], forms[j]
+		}
+	}
+	for _, form := range forms {
+		if form == "" {
+			continue
+		}
+		pattern := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(form) + `(?:#[0-9]+)?`)
+		s = pattern.ReplaceAllString(s, "<account>")
+	}
+	return s
 }
 
 // printableASCII reports whether s is non-empty and every byte is printable ASCII: no control byte, no ESC and no
@@ -64,9 +108,15 @@ func printableASCII(s string) bool {
 type serverTextError struct {
 	prefix string
 	err    error
+	// scrub, when set, removes the account (and bounds the text) instead of the plain sanitizer; a transport error
+	// quotes the URL it failed on, and a URL can carry the account.
+	scrub func(string) string
 }
 
 func (e *serverTextError) Error() string {
+	if e.scrub != nil {
+		return e.scrub(e.prefix) + e.scrub(e.err.Error())
+	}
 	return sanitizeServerText(e.prefix) + sanitizeServerText(e.err.Error())
 }
 func (e *serverTextError) Unwrap() error { return e.err }
