@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1057,29 +1059,86 @@ func TestR3Survivor_RulesAtFutureSampleAndFirstNotLast(t *testing.T) {
 }
 
 func TestR3Survivor_InterruptibleEachConditionAlone(t *testing.T) {
-	// The Python test swaps the spell table for four synthetic rows; the Go port reads the
-	// same conditions straight from IsInterruptible, plus SpellIsInterruptible for an id the
-	// table does not know.
+	// The Python test swaps the spell table for four synthetic rows and goes through
+	// rules.evaluate. Go reads the embedded table, so each condition is pinned with a real
+	// id that carries it, and the rule's value is asserted exactly as Python does (1/0).
+	table := interruptibleSpellTable(t)
+	pick := func(name string, pred func(castMS, prevention, flags float64) bool) int64 {
+		id, ok := pickSpellID(table, pred)
+		if !ok {
+			t.Fatalf("the embedded spell table has no %s spell", name)
+		}
+		return id
+	}
 	cases := []struct {
 		name string
-		args [3]any
-		want bool
+		id   int64
+		want int64
 	}{
-		{"ok", [3]any{int64(1500), int64(1), int64(0x0F)}, true},
-		{"instant", [3]any{int64(0), int64(1), int64(0x0F)}, false},
-		{"pushback only", [3]any{int64(1500), int64(2), int64(0x0F)}, false},
-		{"no dmg flag", [3]any{int64(1500), int64(1), int64(0x01)}, false},
+		{"ok", pick("interruptible", func(cast, prev, flags float64) bool {
+			return cast > 0 && prev == spells.PreventionSilence && int64(flags)&spells.InterruptFlagDamage != 0
+		}), 1},
+		{"instant", pick("instant", func(cast, prev, flags float64) bool {
+			return cast == 0 && prev == spells.PreventionSilence && int64(flags)&spells.InterruptFlagDamage != 0
+		}), 0},
+		{"pushback only", pick("pushback-only", func(cast, prev, flags float64) bool {
+			return cast > 0 && prev == 2 && int64(flags)&spells.InterruptFlagDamage != 0
+		}), 0},
+		{"no dmg flag", pick("no-damage-flag", func(cast, prev, flags float64) bool {
+			return cast > 0 && prev == spells.PreventionSilence && int64(flags)&spells.InterruptFlagDamage == 0
+		}), 0},
+		{"unknown id", 99999999, 0},
 	}
+	rule := tcRuleWith(map[string]any{"metric": "count",
+		"where": map[string]any{"kind": "cast", "spell_interruptible": true}}, map[string]any{"pass_if": ">= 0"})
 	for _, c := range cases {
-		if got := spells.IsInterruptible(c.args[0], c.args[1], c.args[2]); got != c.want {
-			t.Fatalf("%s: IsInterruptible = %v, want %v", c.name, got, c.want)
+		row := tcCast(10.0, 80.0, "bot", "player", c.id)
+		res := rules.Evaluate(rule, []map[string]any{row}, nil, nil, tcCtx())
+		assertEqual(t, c.want, res.Value)
+	}
+}
+
+func interruptibleSpellTable(t *testing.T) map[string]any {
+	t.Helper()
+	doc, err := pyjson.Unmarshal(data.Read("spells.json"))
+	if err != nil {
+		t.Fatalf("spells.json: %v", err)
+	}
+	table, ok := pyjson.Object(pyjson.ObjectOrEmpty(doc)["by_id"])
+	if !ok {
+		t.Fatal("spells.json has no by_id object")
+	}
+	return table
+}
+
+// pickSpellID returns the first id (sorted, so the choice is stable) whose table row matches.
+func pickSpellID(table map[string]any, pred func(castMS, prevention, flags float64) bool) (int64, bool) {
+	ids := make([]string, 0, len(table))
+	for id := range table {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		row, ok := pyjson.Object(table[id])
+		if !ok {
+			continue
 		}
+		cast, okCast := pyjson.Float(row["cast_ms"])
+		prev, okPrev := pyjson.Float(row["prevention_type"])
+		flags, okFlags := pyjson.Float(row["interrupt_flags"])
+		if !okCast || !okPrev || !okFlags {
+			continue
+		}
+		if !pred(cast, prev, flags) {
+			continue
+		}
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			continue
+		}
+		return n, true
 	}
-	// The Python test swaps in a table where 999 is unknown; the embedded table is the real
-	// one, so an id it cannot know stands in for it.
-	if spells.SpellIsInterruptible(99999999) {
-		t.Fatal("an unknown spell id must not be interruptible")
-	}
+	return 0, false
 }
 
 func TestR3Survivor_RepeatWithoutSetupJSONIsInvalid(t *testing.T) {

@@ -296,8 +296,26 @@ func TestThreatCapBotTankTest_NoLevel60Kit(t *testing.T) {
 	}
 }
 
-// TestThreatCapBotTankTest_KitsAreVanillaEntries is skipped: it asserts
-// build_data.GEAR_MAX_ENTRY == 20000, and the Python build table has no Go counterpart.
+// TestThreatCapBotTankTest_KitsAreVanillaEntries is the Python test_kits_are_vanilla_entries:
+// every gear kit entry is below the 20000 vanilla-item boundary.
+func TestThreatCapBotTankTest_KitsAreVanillaEntries(t *testing.T) {
+	count := 0
+	for klass, roles := range gear.LoadKits() {
+		for role, levels := range roles {
+			for level, items := range levels {
+				for _, item := range items {
+					count++
+					if item.Entry >= 20000 {
+						t.Errorf("%s/%s/%s: entry %d >= 20000", klass, role, level, item.Entry)
+					}
+				}
+			}
+		}
+	}
+	if count == 0 {
+		t.Fatal("the embedded gear table has no items")
+	}
+}
 
 func TestThreatCapHeldScoringTest_TankHeldPassAndNoAggroFail(t *testing.T) {
 	samples := fixP1Series(200, []any{int64(2457)})

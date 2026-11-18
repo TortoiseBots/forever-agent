@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
+	"github.com/pjerra/forever-agent/internal/trials/scenario"
 )
 
 // trialsRunDir writes the smallest finished run the scorer accepts: one trial with one count
@@ -122,5 +123,71 @@ func TestTrialsCmdUsageAndUnportedCommands(t *testing.T) {
 	if code := run(context.Background(), []string{"trials", "cleanup"}, &out, &errOut); code != exitUsage ||
 		!strings.Contains(errOut.String(), "not ported yet") {
 		t.Fatalf("cleanup: exit %d, stderr %q", code, errOut.String())
+	}
+}
+
+// TestTrialsCmdValidateMatchesPython pins the two checks the Python cmd_validate adds on top
+// of scenario.validate: the trial id must equal the file stem, and a rule id may appear once
+// across the whole set (test_trials.py test_id_differs_from_file_stem_is_rejected and the
+// duplicate-rule-id loop).
+func TestTrialsCmdValidateMatchesPython(t *testing.T) {
+	trial, err := scenario.LoadTrial(scenario.TrialFiles()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := trial["id"].(string)
+	dir := t.TempDir()
+	writeTrial := func(name string, doc map[string]any) string {
+		t.Helper()
+		data, err := pyjson.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	// id != file stem -> exit 1 and the message.
+	badName := writeTrial("some-other-name.json", trial)
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"trials", "validate", badName}, &out, &errOut); code != 1 {
+		t.Fatalf("validate %s: exit %d, want 1 (stdout %q)", badName, code, out.String())
+	}
+	if !strings.Contains(out.String(), "!= file stem") {
+		t.Fatalf("validate stdout = %q, want != file stem", out.String())
+	}
+	// The right stem validates cleanly.
+	goodName := writeTrial(id+".json", trial)
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "validate", goodName}, &out, &errOut); code != exitOK {
+		t.Fatalf("validate %s: exit %d, stdout %q", goodName, code, out.String())
+	}
+	if !strings.HasSuffix(out.String(), ": ok\n") {
+		t.Fatalf("validate stdout = %q, want ok", out.String())
+	}
+	// The same rule id in two files is rejected.
+	rulesList, _ := pyjson.List(trial["rules"])
+	firstRule := pyjson.ObjectOrEmpty(rulesList[0])
+	ruleID := pyjson.Str(firstRule["id"])
+	one := map[string]any{}
+	two := map[string]any{}
+	for k, v := range trial {
+		one[k] = v
+		two[k] = v
+	}
+	one["id"] = "dup-one"
+	two["id"] = "dup-two"
+	onePath := writeTrial("dup-one.json", one)
+	twoPath := writeTrial("dup-two.json", two)
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "validate", onePath, twoPath}, &out, &errOut); code != 1 {
+		t.Fatalf("validate duplicates: exit %d, want 1 (stdout %q)", code, out.String())
+	}
+	if !strings.Contains(out.String(), "duplicate rule id "+ruleID) {
+		t.Fatalf("validate stdout = %q, want duplicate rule id %s", out.String(), ruleID)
 	}
 }

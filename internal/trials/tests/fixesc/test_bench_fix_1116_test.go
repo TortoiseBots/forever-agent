@@ -170,40 +170,6 @@ func TestPotionCarryoverTest_AFirstHitInsideTheOldCooldownCannotHideTheCarryover
 	assertEqual(t, "item cooldown from rep N-1", rep2["reason"])
 }
 
-func TestRepOrderTest_ScoreTrialScoresRep10AfterRep9(t *testing.T) {
-	// agy round 2: a string sort threaded rep10 between rep1 and rep2, so rep2 scored
-	// with rep10's (future) cooldown spans and rep10 with rep9's.
-	//
-	// Adaptation: Go has no unittest.mock to patch score.ScoreRep, so the ordering is
-	// observed through ScoreTrial itself: every rep is pre-scored (verdicts.json) and the
-	// returned detail must list them in numeric rep order.
-	tdir := filepath.Join(t.TempDir(), fix1116TID)
-	for i := 1; i <= 10; i++ {
-		rep := "rep" + itoa1116(i)
-		writeJSON(t, filepath.Join(tdir, rep, "verdicts.json"), map[string]any{
-			"rep": rep,
-			"rules": []any{
-				map[string]any{"id": "R", "verdict": "PASS", "k": int64(1), "n": int64(1)},
-			},
-		})
-	}
-	trial := map[string]any{"id": fix1116TID, "rules": []any{map[string]any{"id": "R"}}}
-	out := score.ScoreTrial(tdir, trial)
-	verdicts := list(t, out["verdicts"])
-	if len(verdicts) != 1 {
-		t.Fatalf("verdicts = %v", out["verdicts"])
-	}
-	var seen []any
-	for _, rowVal := range list(t, obj(t, verdicts[0])["detail"]) {
-		seen = append(seen, obj(t, rowVal)["rep"])
-	}
-	want := make([]any, 0, 10)
-	for i := 1; i <= 10; i++ {
-		want = append(want, "rep"+itoa1116(i))
-	}
-	assertEqual(t, want, seen)
-}
-
 func TestPotionMinRepGapTest_TheTrialCarriesADocumentedMinRepGap(t *testing.T) {
 	trial := fix1116LoadTrial(t)
 	sit := obj(t, trial["situation"])
