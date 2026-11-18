@@ -74,9 +74,12 @@ func runCases(t *testing.T) []runCase {
 		{
 			// B5: a null line in events.jsonl makes the Python raise AttributeError; it must
 			// never be dropped and scored.
-			name:  "b5_events_null_line",
-			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
-			reps:  []repCase{{eventsText: []string{"null"}}},
+			name:        "b5_events_null_line",
+			trial:       newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps:        []repCase{{eventsText: []string{"null"}}},
+			errorPython: "AttributeError: 'NoneType' object has no attribute 'get'",
+			errorGo:     "events.jsonl:1: expected a JSON object, got null",
+			errorStage:  "load",
 		},
 		{
 			// With a raw trace the Python normalises over a null events line (its condition
@@ -91,27 +94,39 @@ func runCases(t *testing.T) []runCase {
 		{
 			// But a seq row before the null line keeps the Python from normalising, and the
 			// null row then raises: both sides must fail.
-			name:  "b5_events_seq_then_null_with_raw_fails",
-			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			name:        "b5_events_seq_then_null_with_raw_fails",
+			errorPython: "AttributeError: 'NoneType' object has no attribute 'get'",
+			errorGo:     "events.jsonl:2: expected a JSON object, got null",
+			errorStage:  "load",
+			trial:       newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
 			reps: []repCase{{
 				eventsText: []string{`{"t": 1, "kind": "cast", "seq": 1}`, "null"},
 				raw:        []any{rawCast(1, "2026-01-01T00:00:05", 17, false)},
 			}},
 		},
 		{
-			name:  "b5_marks_number_line",
-			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
-			reps:  []repCase{{marksText: []string{"123"}}},
+			name:        "b5_marks_number_line",
+			errorPython: "AttributeError: 'int' object has no attribute 'get'",
+			errorGo:     "marks.jsonl:1: expected a JSON object, got a number",
+			errorStage:  "load",
+			trial:       newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps:        []repCase{{marksText: []string{"123"}}},
 		},
 		{
-			name:  "b5_samples_null_line",
-			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
-			reps:  []repCase{{samplesText: []string{"null"}}},
+			name:        "b5_samples_null_line",
+			errorPython: "AttributeError: 'NoneType' object has no attribute 'get'",
+			errorGo:     "samples.jsonl:1: expected a JSON object, got null",
+			errorStage:  "load",
+			trial:       newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps:        []repCase{{samplesText: []string{"null"}}},
 		},
 		{
 			// B6: a list seq is unhashable in Python's dedupe key.
-			name:  "b6_seq_list_unhashable",
-			trial: newTrial(metricRule("B6", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			name:        "b6_seq_list_unhashable",
+			errorPython: "TypeError: unhashable type: 'list'",
+			errorGo:     "unhashable seq a list",
+			errorStage:  "load",
+			trial:       newTrial(metricRule("B6", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
 			reps: []repCase{{raw: []any{map[string]any{
 				"seq": []any{int64(1)}, "time": "2026-01-01T00:00:05", "kind": "spell_go", "spell_id": int64(17),
 				"source": map[string]any{"name": "Bot", "guid": "0x2"},
@@ -120,9 +135,12 @@ func runCases(t *testing.T) []runCase {
 		},
 		{
 			// B4: trailing bytes after the snapshot's first JSON value are a JSONDecodeError.
-			name:      "b4_snapshot_trailing_data",
-			trialText: `{"id":"t1","min_valid_s":0,"rules":[]} 123`,
-			reps:      []repCase{{}},
+			name:        "b4_snapshot_trailing_data",
+			trialText:   `{"id":"t1","min_valid_s":0,"rules":[]} 123`,
+			reps:        []repCase{{}},
+			errorPython: "Extra data",
+			errorGo:     "trailing data after the first JSON value",
+			errorStage:  "load",
 		},
 		{
 			// B4: an integer outside int64 keeps arbitrary precision (spell id and name).
@@ -262,6 +280,150 @@ func runCases(t *testing.T) []runCase {
 			}()}}},
 		},
 		{
+			// B1: Python's json.loads accepts the NaN token; float(NaN) makes the
+			// min_valid check false without an error, so both sides score the rep.
+			name:      "b1_nan_token_in_snapshot",
+			trialText: `{"id":"t1","min_valid_s":NaN,"rules":[{"id":"R","check":{"metric":"count","where":{"kind":"cast"}},"pass_if":">= 1","source":"differential","desc":"R"}]}`,
+			reps:      []repCase{{events: []any{castRow(1, 17)}}},
+		},
+		{
+			// B1: a NaN the Python json.dumps sees in verdicts.json (before trial.json)
+			// raises allow_nan=False; Go returns the same class instead of panicking.
+			name:  "b1_nan_value_in_prescore_errors",
+			trial: newTrial(metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{noSetup: true, noMarks: true,
+				verdictsText: `{"rep":"rep1","rules":[{"id":"R","verdict":"PASS","value":NaN,"k":1,"n":1}]}`}},
+			errorPython: "Out of range float values are not JSON compliant",
+			errorGo:     "not allowed with allow_nan=False",
+			errorStage:  "write",
+		},
+		{
+			// C2: +Infinity reaching trial.json: Python raises ValueError, Go returns an
+			// error (ScoreTrialE/ScoreRunE), never a panic.
+			name:  "c2_inf_value_in_prescore_errors",
+			trial: newTrial(metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{noSetup: true, noMarks: true,
+				verdictsText: `{"rep":"rep1","rules":[{"id":"R","verdict":"PASS","value":1e999,"k":1,"n":1}]}`}},
+			errorPython: "Out of range float values are not JSON compliant",
+			errorGo:     "not allowed with allow_nan=False",
+			errorStage:  "write",
+		},
+		{
+			// B2: rep-level int(min_n) is unguarded in Python; "abc" raises.
+			name: "b2_rule_min_n_string_raises",
+			trial: newTrial(func() map[string]any {
+				rule := metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")
+				rule["min_n"] = "abc"
+				return rule
+			}()),
+			reps:        []repCase{{events: []any{castRow(1, 17)}}},
+			errorPython: "invalid literal for int() with base 10: 'abc'",
+			errorGo:     "min_n: pyjson: invalid literal for int()",
+			errorStage:  "evaluate",
+		},
+		{
+			// B2: the pooled path catches the same ValueError and uses 0.
+			name: "b2_pooled_min_n_string_guarded",
+			trial: newTrial(func() map[string]any {
+				rule := metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")
+				rule["pool"] = true
+				rule["min_n"] = "abc"
+				return rule
+			}()),
+			reps: []repCase{{events: []any{castRow(1, 17)}}},
+		},
+		{
+			// B3: min_valid_s is float(...) with no guard.
+			name:        "b3_min_valid_string_raises",
+			trialText:   `{"id":"t1","min_valid_s":"abc","rules":[]}`,
+			reps:        []repCase{{events: []any{castRow(1, 17)}}},
+			errorPython: "could not convert string to float: 'abc'",
+			errorGo:     "min_valid_s:",
+			errorStage:  "evaluate",
+		},
+		{
+			// B4: int(inf) raises OverflowError, which neither int() guard catches.
+			name:  "b4_prescore_n_inf_raises",
+			trial: newTrial(metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{noSetup: true, noMarks: true,
+				verdictsText: `{"rep":"rep1","rules":[{"id":"R","verdict":"PASS","value":0.5,"k":1,"n":1e999}]}`}},
+			errorPython: "OverflowError: cannot convert float infinity to integer",
+			errorGo:     "cannot convert float infinity to integer",
+			errorStage:  "pool",
+		},
+		{
+			// B4: min_reps catches only TypeError/ValueError; int(inf) escapes.
+			name:        "b4_min_reps_inf_raises",
+			trialText:   `{"id":"t1","min_valid_s":0,"rules":[{"id":"R","check":{"metric":"count","where":{"kind":"cast"}},"pass_if":">= 1","source":"differential","desc":"R","min_reps":1e999}]}`,
+			reps:        []repCase{{events: []any{castRow(1, 17)}}},
+			errorPython: "OverflowError: cannot convert float infinity to integer",
+			errorGo:     "min_reps",
+			errorStage:  "pool",
+		},
+		{
+			// B4: an inf in a raw row fails the normaliser's allow_nan=False dump before
+			// its guarded int(seq) (Go order matches: the dump happens first).
+			name:  "b4_raw_seq_inf_write_raises",
+			trial: newTrial(metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{rawText: []string{
+				`{"seq":1e999,"time":"2026-01-01T00:00:05","kind":"spell_go","spell_id":17,"source":{"name":"Bot","guid":"0x2"},"target":{"name":"Player","guid":"0x1"}}`,
+			}}},
+			errorPython: "Out of range float values are not JSON compliant",
+			errorGo:     "not allowed with allow_nan=False",
+			errorStage:  "normalise",
+		},
+		{
+			// B4: min_reps beyond int64 is still a Python int: INCONCLUSIVE, not an
+			// overflow. Go compares the exact digits.
+			name:      "b4_min_reps_beyond_int64",
+			trialText: `{"id":"t1","min_valid_s":0,"rules":[{"id":"R","check":{"metric":"count","where":{"kind":"cast"}},"pass_if":">= 1","source":"differential","desc":"R","min_reps":123456789012345678901234567890}]}`,
+			reps:      []repCase{{events: []any{castRow(1, 17)}}},
+		},
+		{
+			// B4: pooled min_n beyond int64 compares as a Python int: INCONCLUSIVE, not
+			// an overflow.
+			name: "b4_pooled_min_n_beyond_int64",
+			trial: newTrial(func() map[string]any {
+				rule := metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")
+				rule["pool"] = true
+				rule["min_n"] = bigValue(t, "123456789012345678901234567890")
+				return rule
+			}()),
+			reps: []repCase{{events: []any{castRow(1, 17)}}},
+		},
+		{
+			// B4: Python's int(text) / int(text, 16) underscore and sign rules.
+			name:  "b4_norm_guid_edges",
+			trial: newTrial(),
+			reps: []repCase{{raw: []any{
+				map[string]any{"seq": int64(1), "time": "2026-01-01T00:00:05", "kind": "spell_go", "spell_id": int64(17),
+					"source": map[string]any{"name": "Bot", "guid": "0x-5"},
+					"target": map[string]any{"name": "Player", "guid": "0x1"}},
+				map[string]any{"seq": int64(2), "time": "2026-01-01T00:00:06", "kind": "spell_go", "spell_id": int64(17),
+					"source": map[string]any{"name": "Bot", "guid": "1_0"},
+					"target": map[string]any{"name": "Player", "guid": "0x1"}},
+				map[string]any{"seq": int64(3), "time": "2026-01-01T00:00:07", "kind": "spell_go", "spell_id": int64(17),
+					"source": map[string]any{"name": "Bot", "guid": "0x1_f"},
+					"target": map[string]any{"name": "Player", "guid": "0x1"}},
+				map[string]any{"seq": int64(4), "time": "2026-01-01T00:00:08", "kind": "spell_go", "spell_id": int64(17),
+					"source": map[string]any{"name": "Bot", "guid": "0x+5"},
+					"target": map[string]any{"name": "Player", "guid": "0x1"}},
+			}}},
+		},
+		{
+			// C3: a spell id beyond int64 in a where filter: Python's set holds the
+			// arbitrary-precision int and matches; Go keys SpellIDs by int() digits.
+			name: "c3_spell_id_beyond_int64",
+			trial: newTrial(metricRule("C3", "count", map[string]any{
+				"where": map[string]any{"kind": "cast", "spell_id": bigValue(t, "123456789012345678901234567890")},
+			}, ">= 1")),
+			reps: []repCase{{events: []any{func() map[string]any {
+				row := castRow(1, 17)
+				row["spell_id"] = bigValue(t, "123456789012345678901234567890")
+				return row
+			}()}}},
+		},
+		{
 			name:  "edge_excluded_span",
 			trial: newTrial(metricRule("E", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, "== 1")),
 			reps: []repCase{{events: []any{
@@ -290,11 +452,14 @@ func ruleCases(t *testing.T) []ruleCase {
 		{name: "b2_walk_n_string", rule: walkRule(), ctx: walkCtx(map[string]any{
 			"walk_to_target": map[string]any{"k": int64(2), "n": "5"}}), rows: []any{}, samples: []any{}, marks: []any{}},
 		{name: "b2_walk_mean_null_raises", rule: walkRule(), ctx: walkCtx(map[string]any{
-			"walk_to_target": map[string]any{"n": 5.0, "mean": nil}}), rows: []any{}, samples: []any{}, marks: []any{}},
+			"walk_to_target": map[string]any{"n": 5.0, "mean": nil}}), rows: []any{}, samples: []any{}, marks: []any{},
+			errorPython: "float() argument must be a string or a real number, not 'NoneType'", errorGo: "mean None is not a number"},
 		{name: "b2_walk_mean_string_raises", rule: walkRule(), ctx: walkCtx(map[string]any{
-			"walk_to_target": map[string]any{"n": 5.0, "mean": "x"}}), rows: []any{}, samples: []any{}, marks: []any{}},
+			"walk_to_target": map[string]any{"n": 5.0, "mean": "x"}}), rows: []any{}, samples: []any{}, marks: []any{},
+			errorPython: "could not convert string to float: 'x'", errorGo: "mean x is not a number"},
 		{name: "b2_walk_k_null_raises", rule: walkRule(), ctx: walkCtx(map[string]any{
-			"walk_to_target": map[string]any{"n": 5.0, "k": nil}}), rows: []any{}, samples: []any{}, marks: []any{}},
+			"walk_to_target": map[string]any{"n": 5.0, "k": nil}}), rows: []any{}, samples: []any{}, marks: []any{},
+			errorPython: "float() argument must be a string or a real number, not 'NoneType'", errorGo: "k None is not a number"},
 		{name: "b2_walk_missing_n", rule: walkRule(), ctx: walkCtx(map[string]any{
 			"walk_to_target": map[string]any{"k": int64(2)}}), rows: []any{}, samples: []any{}, marks: []any{}},
 		{
@@ -336,6 +501,26 @@ func ruleCases(t *testing.T) []ruleCase {
 			rule: latencyRule("N", map[string]any{"kind": "cast", "spell_id": int64(17)},
 				map[string]any{"kind": "cast", "spell_id": int64(100)}, 2, ">= 1", nil),
 			rows: []any{}, samples: []any{}, marks: []any{}, ctx: emptyCtx,
+		},
+		{
+			// C1: int(5e18) is the int 5000000000000000000, not a big integer.
+			name: "c1_walk_n_5e18",
+			rule: walkRule(), ctx: walkCtx(map[string]any{
+				"walk_to_target": map[string]any{"k": int64(1), "n": 5e18}}),
+			rows: []any{}, samples: []any{}, marks: []any{},
+		},
+		{
+			// B3: latency within_s is float(...) with no try/except around it.
+			name: "b3_latency_within_s_string_raises",
+			rule: func() map[string]any {
+				rule := latencyRule("L", map[string]any{"kind": "cast", "spell_id": int64(17)},
+					map[string]any{"kind": "cast", "spell_id": int64(100)}, 0, ">= 1", nil)
+				pyjson.ObjectOrEmpty(rule["check"])["within_s"] = "abc"
+				return rule
+			}(),
+			rows: []any{castRow(1, 17)}, samples: []any{}, marks: []any{}, ctx: emptyCtx,
+			errorPython: "could not convert string to float: 'abc'",
+			errorGo:     "could not convert string to float",
 		},
 		{
 			name: "edge_first_no_match",

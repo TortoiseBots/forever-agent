@@ -51,3 +51,48 @@ jobs:
       # skip without mmaps. This builds the real binary with cgo explicitly.
       - name: cgo build
         run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
+
+  # The Go scorers against the Python reference on the hand-made differential table. The reference is a public
+  # repository checked out at the pinned commit; no secret is involved. A missing reference makes the tests SKIP, so
+  # this job greps its own verbose output and fails on a skip: the table cannot go green without Python.
+  differential:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: TortoiseBots/tortoise-trials
+          ref: 645642c8a1d4e82ace5bf64056c8b295e91b7e3a
+          path: .reference/tortoise-trials
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: differential table against the pinned reference
+        run: |
+          set -euo pipefail
+          out="$(TRIALS_PYTHON_ROOT="$PWD/.reference/tortoise-trials" go test -count=1 -v ./internal/trials/tests/differential 2>&1)" || {
+            printf '%s\n' "$out"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          if grep -q -- "--- SKIP" <<<"$out"; then
+            echo "differential tests skipped; a reference that is absent must fail this job" >&2
+            exit 1
+          fi
+          if grep -q -- "--- FAIL" <<<"$out"; then
+            exit 1
+          fi

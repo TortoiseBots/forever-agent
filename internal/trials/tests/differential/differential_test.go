@@ -34,6 +34,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/rules"
+	"github.com/pjerra/forever-agent/internal/trials/scenario"
 	"github.com/pjerra/forever-agent/internal/trials/score"
 )
 
@@ -55,7 +56,9 @@ func referenceRoot(t *testing.T) string {
 		t.Skip("TRIALS_PYTHON_ROOT not set: differential parity needs the Python reference")
 	}
 	if _, err := os.Stat(filepath.Join(root, "trials.py")); err != nil {
-		t.Skipf("TRIALS_PYTHON_ROOT=%s has no trials.py", root)
+		// A reference that was asked for but is absent must fail, not skip: a typo in
+		// the path cannot turn the parity table green.
+		t.Fatalf("reference %s has no trials.py: %v", root, err)
 	}
 	return root
 }
@@ -70,18 +73,19 @@ func pythonBin() string {
 // --- run cases ------------------------------------------------------------------------
 
 type repCase struct {
-	noSetup     bool
-	setup       map[string]any
-	noMarks     bool
-	marks       []any
-	marksText   []string
-	samples     []any
-	samplesText []string
-	events      []any
-	eventsText  []string
-	raw         []any
-	rawText     []string
-	verdicts    map[string]any
+	verdictsText string
+	noSetup      bool
+	setup        map[string]any
+	noMarks      bool
+	marks        []any
+	marksText    []string
+	samples      []any
+	samplesText  []string
+	events       []any
+	eventsText   []string
+	raw          []any
+	rawText      []string
+	verdicts     map[string]any
 }
 
 type runCase struct {
@@ -90,6 +94,12 @@ type runCase struct {
 	trialText string
 	run       map[string]any
 	reps      []repCase
+	// An error case names the stable part of each side's error, so "both errored" is not
+	// enough: the table also pins WHY. errorStage says which stage (load / normalise /
+	// evaluate / pool / write) was expected, for the failure message.
+	errorPython string
+	errorGo     string
+	errorStage  string
 }
 
 func defaultSetup() map[string]any {
@@ -222,6 +232,11 @@ func writeCase(t *testing.T, root string, c runCase) {
 		}
 		if rep.raw != nil || rep.rawText != nil {
 			writeLines(t, filepath.Join(dir, "raw-ta.jsonl"), rep.raw, rep.rawText)
+		}
+		if rep.verdictsText != "" {
+			if err := os.WriteFile(filepath.Join(dir, "verdicts.json"), []byte(rep.verdictsText), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if rep.verdicts != nil {
 			writeJSONFile(t, filepath.Join(dir, "verdicts.json"), rep.verdicts)
@@ -392,7 +407,8 @@ func sortedKeys(m map[string][]string) []string {
 }
 
 // verdictFields is the trial-level [verdict, value, k, n] of each rule, for a readable
-// difference when the trees differ.
+// difference when the trees differ. trial.json has no top-level "value": the per-repeat
+// values live in detail[*].value, so those are what is compared.
 func verdictFields(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	doc, err := pyjson.UnmarshalFile(filepath.Join(dir, "t1", "trial.json"))
@@ -403,11 +419,21 @@ func verdictFields(t *testing.T, dir string) map[string]string {
 	verdicts, _ := pyjson.List(pyjson.ObjectOrEmpty(doc)["verdicts"])
 	for _, rowVal := range verdicts {
 		row := pyjson.ObjectOrEmpty(rowVal)
-		value, _ := pyjson.MarshalLine(row["value"])
-		out[pyjson.Str(row["id"])] = fmt.Sprintf("verdict=%s value=%s k=%s n=%s",
-			pyjson.Str(row["verdict"]), value, pyjson.Str(row["k"]), pyjson.Str(row["n"]))
+		out[pyjson.Str(row["id"])] = verdictSummary(row)
 	}
 	return out
+}
+
+// verdictSummary is the fields a run case compares for one rule row.
+func verdictSummary(row map[string]any) string {
+	var values []string
+	details, _ := pyjson.List(row["detail"])
+	for _, detVal := range details {
+		value, _ := pyjson.MarshalLine(pyjson.ObjectOrEmpty(detVal)["value"])
+		values = append(values, string(value))
+	}
+	return fmt.Sprintf("verdict=%s k=%s n=%s detail value=[%s]",
+		pyjson.Str(row["verdict"]), pyjson.Str(row["k"]), pyjson.Str(row["n"]), strings.Join(values, ", "))
 }
 
 func runScoreCase(t *testing.T, root string, c runCase) {
@@ -431,6 +457,20 @@ func runScoreCase(t *testing.T, root string, c runCase) {
 		t.Fatalf("result class: python=%s (exit %d, %s), go=%s (%v)",
 			pyClass, code, firstLine(stderr), goClass, goErr)
 	}
+	if pyClass == "error" {
+		// Both errored: the case must also say WHICH error, or any crash would pass.
+		if c.errorPython == "" || c.errorGo == "" {
+			t.Fatalf("error case has no expected messages (python=%q go=%q); stage %q; python stderr=%q go error=%v",
+				c.errorPython, c.errorGo, c.errorStage, stderr, goErr)
+		}
+		if !strings.Contains(stderr, c.errorPython) {
+			t.Fatalf("stage %s: python error %q does not contain %q", c.errorStage, stderr, c.errorPython)
+		}
+		if goErr == nil || !strings.Contains(goErr.Error(), c.errorGo) {
+			t.Fatalf("stage %s: go error %v does not contain %q", c.errorStage, goErr, c.errorGo)
+		}
+		return
+	}
 	if diff := compareTree(t, pyDir, goDir); diff != "" {
 		t.Fatalf("python class %s vs go class %s\n%s", pyClass, goClass, diff)
 	}
@@ -441,9 +481,7 @@ func runScoreCase(t *testing.T, root string, c runCase) {
 			verdicts, _ := pyjson.List(trial["verdicts"])
 			for _, rowVal := range verdicts {
 				row := pyjson.ObjectOrEmpty(rowVal)
-				value, _ := pyjson.MarshalLine(row["value"])
-				goFields[pyjson.Str(row["id"])] = fmt.Sprintf("verdict=%s value=%s k=%s n=%s",
-					pyjson.Str(row["verdict"]), value, pyjson.Str(row["k"]), pyjson.Str(row["n"]))
+				goFields[pyjson.Str(row["id"])] = verdictSummary(row)
 			}
 		}
 		for id, py := range pyFields {
@@ -470,6 +508,9 @@ type ruleCase struct {
 	samples []any
 	marks   []any
 	ctx     map[string]any
+	// An error case names the stable part of each side's error.
+	errorPython string
+	errorGo     string
 }
 
 const ruleScript = `
@@ -484,7 +525,7 @@ try:
         "k": r.get("k"), "n": r.get("n"),
         "reason": r.get("reason"), "no_match": bool(r.get("no_match"))}}, allow_nan=False))
 except Exception as exc:
-    print(json.dumps({"ok": False, "error": type(exc).__name__}))
+    print(json.dumps({"ok": False, "error": type(exc).__name__, "msg": str(exc)}))
 `
 
 func runRuleCase(t *testing.T, root string, c ruleCase) {
@@ -527,6 +568,17 @@ func runRuleCase(t *testing.T, root string, c ruleCase) {
 		t.Fatalf("raise class: python ok=%v (%s), go err=%v", pyOK, pyjson.Str(py["error"]), res.Err)
 	}
 	if !pyOK {
+		if c.errorPython == "" || c.errorGo == "" {
+			t.Fatalf("error case has no expected messages (python=%q go=%q); python msg=%q go error=%v",
+				c.errorPython, c.errorGo, pyjson.Str(py["msg"]), res.Err)
+		}
+		msg := pyjson.Str(py["msg"])
+		if !strings.Contains(msg, c.errorPython) {
+			t.Fatalf("python error %q does not contain %q", msg, c.errorPython)
+		}
+		if res.Err == nil || !strings.Contains(res.Err.Error(), c.errorGo) {
+			t.Fatalf("go error %v does not contain %q", res.Err, c.errorGo)
+		}
 		return
 	}
 	// The bench omits k/n when it means 0 (walk_metric, unknown metric): compare the
@@ -573,4 +625,155 @@ func listRows(_ map[string]any, doc map[string]any, key string) []rules.Row {
 		out = append(out, pyjson.ObjectOrEmpty(item))
 	}
 	return out
+}
+
+// --- validate cases -------------------------------------------------------------------
+
+// validateCase writes a directory of trial files and compares `trials.py validate`'s stdout
+// and exit code with scenario.ValidateOutput.
+type validateCase struct {
+	name    string
+	files   map[string]map[string]any
+	raw     map[string]string
+	want    []string
+	notWant []string
+}
+
+func baseTrial(t *testing.T) map[string]any {
+	t.Helper()
+	doc, err := scenario.LoadTrial("_fixtures/smoke-priest-tank.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func cloneTrial(t *testing.T, doc map[string]any) map[string]any {
+	t.Helper()
+	body, err := pyjson.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy, err := pyjson.Unmarshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pyjson.ObjectOrEmpty(copy)
+}
+
+func setRuleID(t *testing.T, trial map[string]any, id any) {
+	t.Helper()
+	rules, ok := pyjson.List(trial["rules"])
+	if !ok || len(rules) == 0 {
+		t.Fatal("base trial has no rules")
+	}
+	pyjson.ObjectOrEmpty(rules[0])["id"] = id
+}
+
+func validateCases(t *testing.T) []validateCase {
+	with := func(id string, ruleID any) map[string]any {
+		trial := cloneTrial(t, baseTrial(t))
+		trial["id"] = id
+		setRuleID(t, trial, ruleID)
+		return trial
+	}
+	bad := cloneTrial(t, baseTrial(t))
+	bad["id"] = "zbad"
+	bad["rules"] = []any{"not-an-object"}
+	return []validateCase{
+		{
+			// B5: trial-id prefix, %r quoting of a stem with a quote, and int 1 vs "1"
+			// rule ids staying apart while int 1 duplicates int 1.
+			name: "b5_messages_rule_id_keys",
+			// The int key 1 must duplicate the int key 1 in alpha but not beta's "1",
+			// and the stem with a quote must use Python's double-quote repr.
+			want:    []string{"duplicate rule id 1 (also in alpha)", `trial id 'quote' != file stem "q'uote"`},
+			notWant: []string{`duplicate rule id 1 (also in beta)`},
+			files: map[string]map[string]any{
+				"alpha.json":  with("alpha", int64(1)),
+				"beta.json":   with("beta", "1"),
+				"gamma.json":  with("gamma", int64(1)),
+				"q'uote.json": with("quote", "unique-quote"),
+				"wrong.json":  with("not-wrong", "unique-wrong"),
+			},
+		},
+		{
+			// B5: a rule that is not an object makes cmd_validate raise after the files
+			// before it printed, exit 1.
+			name: "b5_non_object_rule_raises",
+			// The good file printed, then cmd_validate raised before printing bad.json.
+			want:    []string{"good.json: good:"},
+			notWant: []string{"zbad.json"},
+			files: map[string]map[string]any{
+				"good.json": with("good", "good-rule"),
+				"zbad.json": bad,
+			},
+		},
+	}
+}
+
+func runPythonValidate(t *testing.T, root string, paths []string) (string, string, int) {
+	t.Helper()
+	args := append([]string{filepath.Join(root, "trials.py"), "validate"}, paths...)
+	cmd := exec.Command(pythonBin(), args...)
+	cmd.Dir = root
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("python validate: %v", err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return out.String(), errBuf.String(), code
+}
+
+func runValidateCase(t *testing.T, root string, c validateCase) {
+	t.Helper()
+	dir := t.TempDir()
+	var paths []string
+	for name, doc := range c.files {
+		path := filepath.Join(dir, name)
+		writeJSONFile(t, path, doc)
+		paths = append(paths, path)
+	}
+	for name, text := range c.raw {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	pyOut, pyErr, pyCode := runPythonValidate(t, root, paths)
+	goOut, goCode, err := scenario.ValidateOutput(paths)
+	if pyCode != goCode {
+		t.Fatalf("exit code: python=%d go=%d (go error %v)\n--- python ---\n%s\n--- python stderr ---\n%s\n--- go ---\n%s",
+			pyCode, goCode, err, pyOut, pyErr, goOut)
+	}
+	if pyOut != goOut {
+		t.Fatalf("stdout differs:\n--- python ---\n%s\n--- go ---\n%s", pyOut, goOut)
+	}
+	for _, want := range c.want {
+		if !strings.Contains(pyOut, want) {
+			t.Fatalf("stdout does not contain %q:\n%s\n--- python stderr ---\n%s", want, pyOut, pyErr)
+		}
+	}
+	for _, notWant := range c.notWant {
+		if strings.Contains(pyOut, notWant) {
+			t.Fatalf("stdout unexpectedly contains %q:\n%s\n--- python stderr ---\n%s", notWant, pyOut, pyErr)
+		}
+	}
+}
+
+func TestDifferentialValidate(t *testing.T) {
+	root := referenceRoot(t)
+	for _, c := range validateCases(t) {
+		t.Run(c.name, func(t *testing.T) {
+			runValidateCase(t, root, c)
+		})
+	}
 }

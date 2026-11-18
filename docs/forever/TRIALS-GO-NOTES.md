@@ -152,31 +152,53 @@ counted separately in the summary line. A folder without `RUN.json`, or with a `
 than 10 minutes, is skipped. Run folders are read only: every score writes into a temporary copy.
 A difference exits 1 and prints the first differing run with a short diff.
 
+A run where either scorer errors is never equal: it is counted as `errored`, both messages are
+printed, and the tool exits 1. `--expect-error RUN` names a run whose error is the expected
+result (repeatable, comma-separated); no recorded run needs it. The summary prints total,
+compared, equal, differ, errored and skipped, and the tool fails if
+compared + skipped + not run != total and when compared == 0: "compared 0 runs" proves nothing.
+
+What the harness cannot prove, stated in its help as well:
+
+- `samples.jsonl` is both an input and an output: the normaliser rewrites it in place, so a
+  difference in it can come from either side's read as well as its write.
+- a repeat without a raw agent trace keeps its recorded `events.jsonl`, so those repeats do not
+  exercise the normaliser; they are counted as pre-normalised.
+- symlinks are not copied: only regular files and directories reach the temporary copies.
+
 Result on the recorded nightly runs (paths passed on the command line, never in the repo):
 
 | runs directory | summary line |
 |---|---|
-| `2026-11-15-t3-1115b-full` | compared 58 runs, equal 58, differ 0, skipped 0, from raw input 58 (pre-normalised 0) |
-| `2026-11-17-t3-1115b-test4` | compared 57 runs, equal 57, differ 0, skipped 1, from raw input 57 (pre-normalised 0) |
+| `2026-11-15-t3-1115b-full` | total 58 runs, compared 58, equal 58, differ 0, errored 0, skipped 0, not run 0 |
+| `2026-11-17-t3-1115b-test4` | total 58 runs, compared 58, equal 58, differ 0, errored 0, skipped 0, not run 0 |
 
 ## Differential table
 
 `internal/trials/tests/differential` runs small hand-made inputs through BOTH scorers: whole run
-folders (compared file for file, plus class and trial-level verdict/value/k/n) and single
-`rules.evaluate` calls (verdict, value with int/float kept apart, k, n, and raise-vs-not). It
-skips when `TRIALS_PYTHON_ROOT` is unset, so CI stays green without Python:
+folders (compared file for file, plus class and trial-level verdict/k/n and the per-repeat
+`detail[*].value`), single `rules.evaluate` calls (verdict, value with int/float kept apart, k, n,
+and raise-vs-not), and `trials validate` invocations (stdout byte for byte and the exit code). It
+skips only when no reference is given at all; a reference path that is set but has no `trials.py`
+FAILS the test, so a typo cannot turn the table green:
 
 ```
 TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
 go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
 ```
 
-Result with the reference: 38 cases (26 whole-run, 12 direct rule evaluations), all equal:
-`ok github.com/pjerra/forever-agent/internal/trials/tests/differential 1.8s`. The table covers
-B1-B6, plus empty/one-event runs, a latency tie at exactly half, an equal count boundary, negative
-times, duplicate raw rows, `seq` int vs string, unicode names, a three-rep majority, a trial with
-no rules, `min_n` masking, `min_alive_s` 0 and `"0"`, an integer `first` value, and an excluded
-span.
+Result with the reference: 55 cases (39 whole-run, 14 direct rule evaluations, 2 validate
+runs), all pass with no skips (fix round 2). Besides B1-B6 it covers the round-2 items: the NaN
+token in a snapshot and a NaN/+Inf value reaching a writer, `min_n` `"abc"` on the rep path
+(error) and the pooled path (guarded), `within_s` `"abc"`, `min_valid_s` `"abc"`, `int(inf)` in a
+pre-scored n and in `min_reps`, `min_reps` beyond int64, the four odd GUID strings
+(`0x-5`, `1_0`, `0x1_f`, `0x+5`), a spell id beyond int64 in a where filter, and validate's
+trial-id prefix, `%r` quoting, int 1 vs `"1"` rule ids and non-object rule (exit 1 after the
+earlier files printed).
+
+An error case also names WHICH error: `errorPython` must appear in Python's stderr (or the rule
+script's exception message) and `errorGo` in the Go error, plus the expected stage, so "both
+sides raised something" is not enough to pass.
 
 ## Fix round 1
 
@@ -203,14 +225,69 @@ The first review's findings and what now pins each one:
 
 - Python's `round()` and 3.12's compensated `sum()` are reproduced exactly; `%g`/`%f` go through
   Go's `strconv`, which rounds the same way C's printf does.
-- Python's `json.loads` also accepts the non-standard `NaN`/`Infinity` tokens; `pyjson` rejects
-  them (Go's decoder). No recorded or trial file carries them, and `allow_nan=False` would refuse
-  to write one anyway.
+- `pyjson` now accepts the non-standard `NaN`, `Infinity` and `-Infinity` value tokens, as
+  `json.loads` does; the writers still refuse them (`allow_nan=False`), which the scorer turns
+  into an error, never a verdict. Verified by differential `b1_*`, `c2_*`, `b4_raw_seq_inf_*`.
 - An integer outside int64 decodes to `*big.Int`, which the scorer keeps where Python keeps it
-  (serialisation, `seq`, `spell_id`, GUIDs). A conversion to `float64` beyond its range returns
-  "not a number" instead of Python's `OverflowError`; no recorded run reaches it.
-- Fixed in this round and no longer a difference: non-object JSONL lines, unhashable `seq`,
-  content-vs-identity row comparison, float counts and null means, huge GUIDs, trailing JSON.
+  (serialisation, `seq`, `spell_id`, GUIDs, a where filter). Two places still hold an int64 and
+  are pinned by `parityfix` instead of fixed: a `walk_metric` `n` beyond int64 (Go INCONCLUSIVE
+  "walk n == 0"; Python PASS with the exact big n) and the pooled k/n sums beyond int64 (Go
+  "does not fit int64" error; Python sums big integers and scores). Fixing either needs big
+  integers through `rules.Result`/the pooled sums and the report.
+- `int()` beyond float64's range (`int(inf)`) is an `OverflowError` in Python and is not caught
+  by the bench's `except (TypeError, ValueError)` guards. `pyjson.PyInt` keeps the exception class
+  and every guarded call site propagates only that class, so Go errors where Python errors.
 - The Python bench's tool-dir globs (`trials/`, `trials/_fixtures/`) are replaced by the embedded
-  file sets; a run folder is otherwise read exactly as before.
-- Validation messages reproduce Python's `%r` quoting via `scenario`'s `pythonRepr`.
+  file sets; a run folder is otherwise read exactly as before. `validate` falls back to the
+  embedded `_fixtures` set when no file is found, as `cmd_validate` does.
+- Validation messages reproduce Python's `%r` quoting via `scenario`'s `pythonRepr` (single
+  quotes, or double when the text holds a single quote but no double quote, with `\n`/`\xNN`
+  escapes). A `validate` load failure prints an OS error as Python's `str(exc)`; a malformed-JSON
+  load message still uses the Go decoder's wording, not Python's `JSONDecodeError` text (the exit
+  code and `path: cannot load: ` prefix match).
+
+## Conversion errors behind ignored results
+
+Fix round 2 replaced every ignored conversion error in `rules.go`, `score.go` and `events.go`
+with the Python behaviour at the same line. The `, _ :=` / `ok`-swallowed sites and what Python
+does there:
+
+| go site | Python line | Python | Go now |
+|---|---|---|---|
+| `rules.go` `Num` (`pyjson.Num`) | `rules.py:54-56` `_num` (isinstance guard) | guarded | guarded by `IsNum` |
+| `rules.go` latency `within_s` | `rules.py:1021` `float(check.get("within_s") or 0.0)` | unguarded: raises | `floatOrZero`, error |
+| `rules.go` latency `debounce_responder_s` | `rules.py:1026-1030` try/except `(TypeError, ValueError)` | guarded | `guardedFloatOrZero`, only `OverflowError` escapes |
+| `rules.go` `first` excluded span `from`/`to` | `rules.py:1173-1178` try/except, `continue` | guarded | `PyFloat`; `OverflowError` escapes, others skip the span |
+| `rules.go` `first` across-reps `debounce_responder_s` | `rules.py:1183-1190` try/except | guarded | `guardedFloatOrZero` |
+| `rules.go` walk `n` | `rules.py:926-929` try/except `(TypeError, ValueError)` | guarded | `PyInt`; `OverflowError` escapes, others are 0 |
+| `score.go` `min_valid_s` | `score.py:304` `float(trial.get("min_valid_s") or 0)` | unguarded | `floatOrZero`, error |
+| `score.go` `min_opportunity_s` | `score.py:324` and `333` `float(min_opp)` | unguarded where truthy and PASS/FAIL | `floatOrZero`, error |
+| `score.go` rep `min_n` | `score.py:343-345` `int(min_n)` | unguarded | `PyInt`, error (differential `b2_rule_min_n_string_raises`) |
+| `score.go` pooled `min_n` | `score.py:459-463` try/except | guarded | error only for `OverflowError` |
+| `score.go` `min_reps` | `score.py:478-482` try/except | guarded; big ints compare | error only for `OverflowError`; big ints compared exactly |
+| `score.go` pooled `k`/`n` sums | `score.py:450-451` `sum(int(...))` | unguarded | `intOrZero` error (big values pinned, see above) |
+| `events.go` attack `seq` | `events.py:206-209` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean "no seq" |
+| `events.go` normalise `seq`, `spell_id` | `events.py:385-393` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean null |
+
+The remaining `, _ :=` conversions after the sweep are `pyjson.List`/`pyjson.Object` shape
+checks (not numeric conversions) and `Num`'s `isinstance`-guarded case above.
+
+## Fix round 2
+
+| item | change | test |
+|---|---|---|
+| A1 either-side error | an errored run is counted `errored`, both messages printed, exit 1; `--expect-error RUN` names an expected one | `tools/trialsparity` run on the fabricated error run (summary `errored 1`) |
+| A2 compared 0 | summary is total/compared/equal/differ/errored/skipped/not run; exit 1 when compared == 0 and when compared+skipped+not run != total | empty `--runs` dir exits 1 for both reasons |
+| A3 harness limits | help and these notes name samples.jsonl as input+output, repeats without a raw trace, symlinks | tool help text |
+| B1 NaN/Infinity tokens | `pyjson.Unmarshal` accepts the three tokens; writers still refuse them | `pyjson` `TestUnmarshalNonFiniteTokens`, differential `b1_nan_token_in_snapshot`, `b1_nan_value_in_prescore_errors`, `c2_inf_value_in_prescore_errors` |
+| B2 `int(min_n)` | rep path errors on a value Python cannot convert; pooled path keeps the guard | differential `b2_rule_min_n_string_raises`, `b2_pooled_min_n_string_guarded` |
+| B3 ignored conversions | every site above matches Python | differential `b3_latency_within_s_string_raises`, `b3_min_valid_string_raises`; table above |
+| B4 int(inf), big ints, GUIDs | class-aware `PyInt`/`PyFloat`; `min_reps` big ints; Python `int(text, 16)` rules | differential `b4_prescore_n_inf_raises`, `b4_min_reps_inf_raises`, `b4_min_reps_beyond_int64`, `b4_pooled_min_n_beyond_int64`, `b4_raw_seq_inf_write_raises`, `b4_norm_guid_edges`; `events` `TestNormGUIDMatchesPython`; pinned `parityfix` big walk n / pooled k/n |
+| B5 validate | trial-id prefix, `%r` quoting, fixtures fallback, int 1 vs `"1"` keys, non-object rule exit 1, OS error text | differential `b5_messages_rule_id_keys`, `b5_non_object_rule_raises` |
+| B6 error identity | every error case names `errorPython`/`errorGo` (and the stage) | the differential table's error cases |
+| C1 float int canonicalisation | `PyInt(5e18)` is the int64 5000000000000000000 | `pyjson` `TestPyIntMatchesPython`, differential `c1_walk_n_5e18` |
+| C2 writers never panic | `verdicts.json`, `trial.json`, `card.md`, `card.json` return errors; `ScoreRepE`/`ScoreTrialE`/`ScoreRunE` propagate | differential `c2_*`, `b1_nan_value_in_prescore_errors` |
+| C3 big spell id filter | `SpellIDs` keys by Python `int()` digits; `IntKey` compares | differential `c3_spell_id_beyond_int64` |
+| C4 harness stale snapshot | stamps are taken before the delete and compare size+mtime; an unparseable RUN.json is an errored run | fabricated corrupt-RUN.json run reports `errored 1` and exits 1 |
+| C5 test reference/values | a set-but-wrong reference fails; `verdictFields` reads `detail[*].value` | `go test ... -args -python-root /bad` fails; differential run cases compare values |
+| C harness gate in CI | `.github/workflows/test.yml` job `differential` checks out the pinned reference and fails on `--- SKIP` | workflow YAML |
