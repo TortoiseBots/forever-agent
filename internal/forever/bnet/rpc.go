@@ -1,0 +1,369 @@
+package bnet
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"time"
+)
+
+// Service hashes and method ids the login sequence uses; they are the OriginalHash/MethodId constants of the
+// generated service classes (src/server/proto/Client/**/*.pb.h) and the dispatch numbers the core registers
+// (docs/forever/PROTOCOL-LOGIN.md section 3.2).
+const (
+	serviceIDRequest  = 0x00
+	serviceIDResponse = 0xFE
+
+	connectionServiceHash   = 0x65446991
+	connectionConnectMethod = 1
+
+	authenticationServiceHash   = 0x0DECFC01 // authentication.v1.AuthenticationService
+	authenticationLogonMethod   = 1
+	authenticationListenerHash  = 0x71240E35 // authentication.v1.AuthenticationListener
+	authenticationLogonComplete = 5
+
+	gameUtilitiesServiceHash        = 0x3FC1274D
+	gameUtilitiesProcessRequest     = 1
+	gameUtilitiesGetAllValuesMethod = 10
+)
+
+// maxRPCBody is the server's own cap on one message body (src/server/bnetserver/Server/Session.cpp:78).
+const maxRPCBody = 0x100000
+
+// rpcError is a non-zero status in a response header.
+type rpcError struct {
+	ServiceHash uint32
+	MethodID    uint32
+	Status      uint32
+}
+
+func (e *rpcError) Error() string {
+	return fmt.Sprintf("rpc: service 0x%08X method %d failed with status 0x%08X (%s)",
+		e.ServiceHash, e.MethodID, e.Status, rpcStatusName(e.Status))
+}
+
+// rpcStatusName names the statuses this round can produce; anything else is printed as a number.
+func rpcStatusName(status uint32) string {
+	switch status {
+	case 0x2:
+		return "ERROR_TIMED_OUT"
+	case 0x3:
+		return "ERROR_DENIED"
+	case 0x1C:
+		return "ERROR_BAD_VERSION"
+	case 0x34:
+		return "ERROR_GAME_ACCOUNT_BANNED"
+	case 0x35:
+		return "ERROR_GAME_ACCOUNT_SUSPENDED"
+	case 0x4D:
+		return "ERROR_BAD_PROGRAM"
+	case 0x4E:
+		return "ERROR_BAD_LOCALE"
+	case 0x4F:
+		return "ERROR_BAD_PLATFORM"
+	case 0x0BC3:
+		return "ERROR_RPC_INVALID_METHOD"
+	case 0x0BC5:
+		return "ERROR_RPC_MALFORMED_REQUEST"
+	case 0x0BC7:
+		return "ERROR_RPC_NOT_IMPLEMENTED"
+	case 0x80000069:
+		return "ERROR_UTIL_SERVER_UNKNOWN_REALM"
+	case 0x8000006E:
+		return "ERROR_UTIL_SERVER_INVALID_IDENTITY_ARGS"
+	case 0x80000073:
+		return "ERROR_UTIL_SERVER_FAILED_TO_SERIALIZE_RESPONSE"
+	case 0x800000E1:
+		return "ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM"
+	case 0x8000012C:
+		return "ERROR_WOW_SERVICES_TIMED_OUT"
+	case 0x80000132:
+		return "ERROR_WOW_SERVICES_DENIED_REALM_LIST_TICKET"
+	case 0x8000012E:
+		return "ERROR_WOW_SERVICES_INVALID_JOIN_TICKET"
+	}
+	return "unknown status"
+}
+
+// rpcSession is one TLS connection to the Battle.net RPC port.
+type rpcSession struct {
+	conn    net.Conn
+	timeout time.Duration
+	token   uint32
+	ciid    string
+
+	// what the pushes of this round fill in
+	logon *logonResult
+
+	logf func(string, ...any)
+}
+
+// dialRPC opens the TLS connection. The certificate is verified against roots for serverName; there is no way to
+// skip that check.
+func dialRPC(ctx context.Context, addr, serverName string, roots *x509.CertPool, timeout time.Duration) (*rpcSession, error) {
+	dialer := &net.Dialer{Timeout: timeout}
+	raw, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("bnet: rpc connect %s: %w", addr, err)
+	}
+	conn := tls.Client(raw, &tls.Config{
+		ServerName: serverName,
+		RootCAs:    roots,
+		MinVersion: tls.VersionTLS12,
+	})
+	hsCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := conn.HandshakeContext(hsCtx); err != nil {
+		raw.Close()
+		// the handshake error can quote the certificate's names, which are the server's text; the chain is kept
+		return nil, &serverTextError{prefix: fmt.Sprintf("bnet: rpc TLS handshake with %s as %q: ", addr, serverName), err: err}
+	}
+	return &rpcSession{conn: conn, timeout: timeout, logf: func(string, ...any) {}}, nil
+}
+
+func (s *rpcSession) Close() error { return s.conn.Close() }
+
+func (s *rpcSession) log(format string, args ...any) { s.logf(format, args...) }
+
+// maxIgnoredFrames caps how many frames one call may skip while it waits for its answer. A push that arrives before
+// the answer is legitimate; a stream of them is a server that never means to answer.
+const maxIgnoredFrames = 64
+
+// callDeadline is the one absolute deadline of an RPC call: the earlier of the context's deadline and the per-call
+// timeout. Traffic does not move it.
+func (s *rpcSession) callDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(s.timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
+}
+
+// armDeadline pins the connection deadline for one call and returns a stop function. Cancelling ctx unblocks a
+// pending read or write by setting a deadline in the past; without this, SetDeadline alone would not interrupt a
+// blocked Read and a context without a deadline would lose to traffic.
+//
+// stop is authoritative: it waits for the watcher, and the watcher re-checks stop before it writes. A cancellation
+// that lands at the same instant as the end of a call therefore cannot leave a past deadline on the connection
+// after the call returned and break the next call on the same session.
+func (s *rpcSession) armDeadline(ctx context.Context, deadline time.Time) func() {
+	_ = s.conn.SetDeadline(deadline)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = s.conn.SetDeadline(time.Unix(1, 0))
+		case <-stop:
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
+}
+
+// callContextError names a failed call. A context that ended during the call, or whose deadline passed while the
+// read was returning, is reported as context.Canceled / context.DeadlineExceeded (errors.Is), not as the bare i/o
+// timeout the watcher's past deadline produces; a per-call timeout with a live context stays an i/o timeout.
+func callContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("bnet: rpc call: %w", ctxErr)
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		// the socket deadline and the context deadline can fire in the same instant; the timer closes Done now
+		<-ctx.Done()
+		return fmt.Errorf("bnet: rpc call: %w", ctx.Err())
+	}
+	return err
+}
+
+// writeFrame sends one framed message: uint16 BE header length, the header, then body
+// (src/server/bnetserver/Server/Session.cpp:341-427). The deadline is the call's; armDeadline set it.
+func (s *rpcSession) writeFrame(h header, body []byte) error {
+	header := h.marshal()
+	if len(header) > 0xFFFF {
+		return errors.New("bnet: rpc header does not fit the length prefix")
+	}
+	frame := make([]byte, 2+len(header)+len(body))
+	binary.BigEndian.PutUint16(frame, uint16(len(header)))
+	copy(frame[2:], header)
+	copy(frame[2+len(header):], body)
+	if _, err := s.conn.Write(frame); err != nil {
+		return fmt.Errorf("bnet: rpc write: %w", err)
+	}
+	return nil
+}
+
+// readFrame reads one framed message.
+func (s *rpcSession) readFrame() (header, []byte, error) {
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(s.conn, lenBuf[:]); err != nil {
+		return header{}, nil, fmt.Errorf("bnet: rpc read: %w", err)
+	}
+	headerLen := binary.BigEndian.Uint16(lenBuf[:])
+	if headerLen == 0 {
+		return header{}, nil, errors.New("bnet: rpc frame with an empty header")
+	}
+	headerBuf := make([]byte, headerLen)
+	if _, err := io.ReadFull(s.conn, headerBuf); err != nil {
+		return header{}, nil, fmt.Errorf("bnet: rpc header: %w", err)
+	}
+	h, err := unmarshalHeader(headerBuf)
+	if err != nil {
+		return header{}, nil, err
+	}
+	if h.Size > maxRPCBody {
+		return header{}, nil, fmt.Errorf("bnet: rpc frame claims %d body bytes", h.Size)
+	}
+	var body []byte
+	if h.Size > 0 {
+		body = make([]byte, h.Size)
+		if _, err := io.ReadFull(s.conn, body); err != nil {
+			return header{}, nil, fmt.Errorf("bnet: rpc body: %w", err)
+		}
+	}
+	return h, body, nil
+}
+
+// call sends one request and returns the body of its response, handling pushes that arrive in between. The call has
+// one deadline (callDeadline) and may skip at most maxIgnoredFrames frames that are not its answer.
+func (s *rpcSession) call(ctx context.Context, serviceHash, methodID uint32, req []byte) ([]byte, error) {
+	stop := s.armDeadline(ctx, s.callDeadline(ctx))
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("bnet: rpc call: %w", err)
+	}
+
+	token := s.token
+	s.token++
+	h := header{ServiceID: serviceIDRequest, MethodID: methodID, Token: token, Size: uint32(len(req)), ServiceHash: serviceHash}
+	if err := s.writeFrame(h, req); err != nil {
+		return nil, callContextError(ctx, err)
+	}
+	ignored := 0
+	for {
+		got, body, err := s.readFrame()
+		if err != nil {
+			return nil, callContextError(ctx, err)
+		}
+		switch got.ServiceID {
+		case serviceIDResponse:
+			if got.Token != token {
+				ignored++
+				if ignored > maxIgnoredFrames {
+					return nil, fmt.Errorf("bnet: rpc call: the server sent %d frames that are not the answer to token %d", ignored, token)
+				}
+				continue
+			}
+			if got.Status != 0 {
+				return nil, &rpcError{ServiceHash: serviceHash, MethodID: methodID, Status: got.Status}
+			}
+			return body, nil
+		case serviceIDRequest:
+			ignored++
+			if ignored > maxIgnoredFrames {
+				return nil, fmt.Errorf("bnet: rpc call: the server sent %d pushes without answering token %d", ignored, token)
+			}
+			if err := s.handleRequest(got, body); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("bnet: rpc frame with service id 0x%X", got.ServiceID)
+		}
+	}
+}
+
+// handleRequest deals with a server-to-client message (a push in this round's vocabulary).
+func (s *rpcSession) handleRequest(h header, body []byte) error {
+	switch {
+	case h.ServiceHash == authenticationListenerHash && h.MethodID == authenticationLogonComplete:
+		result, err := unmarshalLogonResult(body)
+		if err != nil {
+			return fmt.Errorf("bnet: OnLogonComplete: %w", err)
+		}
+		if result.ErrorCode != 0 {
+			return fmt.Errorf("bnet: OnLogonComplete reports error %d", result.ErrorCode)
+		}
+		if len(result.SessionKey) != 64 {
+			return fmt.Errorf("bnet: OnLogonComplete carries a %d-byte session key, want 64", len(result.SessionKey))
+		}
+		s.logon = &result
+	default:
+		s.log("rpc: ignoring push service 0x%08X method %d (%d bytes)", h.ServiceHash, h.MethodID, len(body))
+	}
+	return nil
+}
+
+// waitLogon reads until the OnLogonComplete push arrived. It has its own one absolute deadline, so a server that
+// keeps sending other pushes cannot hold it open.
+func (s *rpcSession) waitLogon(ctx context.Context) (*logonResult, error) {
+	stop := s.armDeadline(ctx, s.callDeadline(ctx))
+	defer stop()
+	ignored := 0
+	for s.logon == nil {
+		h, body, err := s.readFrame()
+		if err != nil {
+			return nil, callContextError(ctx, err)
+		}
+		if h.ServiceID != serviceIDRequest {
+			ignored++
+			if ignored > maxIgnoredFrames {
+				return nil, fmt.Errorf("bnet: OnLogonComplete: %d frames without the push", ignored)
+			}
+			continue
+		}
+		ignored++
+		if ignored > maxIgnoredFrames {
+			return nil, fmt.Errorf("bnet: OnLogonComplete: %d pushes without the logon result", ignored)
+		}
+		if err := s.handleRequest(h, body); err != nil {
+			return nil, err
+		}
+	}
+	return s.logon, nil
+}
+
+// connect runs ConnectionService::Connect and returns the response (ciid, server time, bindless flag).
+func (s *rpcSession) connect(ctx context.Context) (connectResponse, error) {
+	body, err := s.call(ctx, connectionServiceHash, connectionConnectMethod, connectRequest{UseBindlessRPC: true}.marshal())
+	if err != nil {
+		return connectResponse{}, fmt.Errorf("bnet: Connect: %w", err)
+	}
+	resp, err := unmarshalConnectResponse(body)
+	if err != nil {
+		return connectResponse{}, fmt.Errorf("bnet: connectResponse: %w", err)
+	}
+	s.ciid = resp.Ciid
+	return resp, nil
+}
+
+// logon sends the login ticket and waits for OnLogonComplete.
+func (s *rpcSession) sendLogon(ctx context.Context, ticket string, clientBuild uint32) (*logonResult, error) {
+	req := logonRequest{
+		Program:              "WoW",
+		Platform:             "Wn64",
+		Locale:               "enUS",
+		ApplicationVersion:   int32(clientBuild),
+		CachedWebCredentials: []byte(ticket),
+	}
+	if _, err := s.call(ctx, authenticationServiceHash, authenticationLogonMethod, req.marshal()); err != nil {
+		return nil, fmt.Errorf("bnet: Logon: %w", err)
+	}
+	result, err := s.waitLogon(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bnet: Logon: %w", err)
+	}
+	return result, nil
+}
