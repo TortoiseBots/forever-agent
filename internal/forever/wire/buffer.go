@@ -25,6 +25,9 @@ type Buffer struct {
 	bitpos int // 8 = byte aligned; otherwise the number of bits used of curbit (the server's _bitpos)
 	curbit byte
 	err    error
+	// reading is set by NewReader. On a reader the server's FlushBits has no byte to write: it only means "the
+	// partial bit byte is finished", so FlushBits discards the rest of it there (ByteBuffer::ResetBitPos).
+	reading bool
 
 	// guidHook, when set, receives every GUID a read decodes, including the ones a parser drops. It exists for the
 	// fixture audits (a real identifier must not reach a committed fixture); no production path sets it.
@@ -35,7 +38,9 @@ type Buffer struct {
 func NewWriter() *Buffer { return &Buffer{bitpos: 8} }
 
 // NewReader returns a Buffer that reads from data.
-func NewReader(data []byte) *Buffer { return &Buffer{data: data, wpos: len(data), bitpos: 8} }
+func NewReader(data []byte) *Buffer {
+	return &Buffer{data: data, wpos: len(data), bitpos: 8, reading: true}
+}
 
 // SetGUIDHook makes every GUID this reader decodes pass through hook before it is returned or dropped. It is an
 // audit hook: call it before the first read, and leave it nil outside a test.
@@ -56,6 +61,9 @@ func (b *Buffer) Len() int { return b.wpos }
 // Remaining returns the number of unread bytes.
 func (b *Buffer) Remaining() int { return b.wpos - b.rpos }
 
+// Offset returns the read position: how many bytes of the window this reader was made from have been consumed.
+func (b *Buffer) Offset() int { return b.rpos }
+
 // Bytes returns the written bytes. The bit writer is not flushed; call FlushBits first for the last partial byte.
 func (b *Buffer) Bytes() []byte { return b.data[:b.wpos] }
 
@@ -75,8 +83,13 @@ func (b *Buffer) writeRaw(p []byte) {
 	b.wpos = len(b.data)
 }
 
-// FlushBits writes the pending partial bit byte, if any (ByteBuffer::FlushBits).
+// FlushBits writes the pending partial bit byte, if any (ByteBuffer::FlushBits). On a reader it discards the rest
+// of the partial bit byte instead, which is what the same boundary means there (ByteBuffer::ResetBitPos).
 func (b *Buffer) FlushBits() {
+	if b.reading {
+		b.resetBitPos()
+		return
+	}
 	if b.bitpos == 8 {
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -27,6 +28,12 @@ type Options struct {
 	Character    string        // character name (the surname may be omitted)
 	Stay         time.Duration // how long to stay in the world after the login burst
 	Deadline     time.Duration // whole run; default 2 minutes + Stay
+	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle, walk Dx/Dy yards from the
+	// spawn, wait WalkPause, walk back, report, log out. Stay is then the settle time instead of a plain stay.
+	WalkCheck bool
+	Dx, Dy    float32
+	WalkPause time.Duration
+	Settle    time.Duration
 	// AllowInstanceRedirect lets SMSG_CONNECT_TO name a host other than the realm socket's; refused by default.
 	AllowInstanceRedirect bool
 	Logf                  func(format string, args ...any)
@@ -56,6 +63,48 @@ type Report struct {
 	Latency         time.Duration
 	Logout          LogoutResponse
 	LogoutComplete  bool
+
+	// Round 3: what the client understood of the world and where it walked.
+	Objects       ObjectSummary
+	Units         []UnitRow
+	MonsterMoves  int
+	MoveRelays    int
+	Teleports     int
+	MapChanges    int
+	NamesAsked    int
+	NamesFound    int
+	Walked        bool
+	WalkFrom      [4]float32
+	WalkTo        [4]float32
+	BackAt        [4]float32
+	WalkClientPos [4]float32
+}
+
+// ObjectSummary counts the world model by object type, plus the update statistics.
+type ObjectSummary struct {
+	Map        uint16
+	Objects    int
+	Created    int
+	Updated    int
+	Destroyed  int
+	OutOfRange int
+	Updates    int
+	// Partial counts objects with a block that was not decoded to its declared end; Unparsed counts the blocks
+	// that were skipped whole, by object type and reason.
+	Partial  int
+	Unparsed map[string]int
+	ByType   map[string]int
+}
+
+// UnitRow is one line of the nearest-units table.
+type UnitRow struct {
+	Type      string
+	Entry     int32
+	Name      string
+	Level     int32
+	Health    int64
+	MaxHealth int64
+	Distance  float32
 }
 
 // Count is one line of the packet count.
@@ -113,6 +162,12 @@ type session struct {
 	// unknownKeys is how many distinct unknown wire opcodes the report has a key for. A flooding server that walks
 	// wire numbers must not grow the report per packet: past maxUnknownReportKeys everything collapses into one key.
 	unknownKeys int
+
+	// Round 3: the world model, the character's own GUID once the create block names it, and the mover.
+	world    *objects.World
+	self     wire.GUID
+	selfSeen bool
+	mover    *objects.Mover
 }
 
 const (
@@ -137,6 +192,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 
 	report := &Report{Counts: make(map[string]int)}
 	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now()}
+	s.world = objects.NewWorld(0)
 	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
 	defer s.pumpCancel()
 
@@ -331,10 +387,258 @@ func (s *session) enter(ctx context.Context) error {
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
 
 	// ---- stay: answer time syncs, the active-mover exchange and pings
+	if s.opts.WalkCheck {
+		if err := s.walkCheck(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if err := s.stay(ctx); err != nil {
 		return err
 	}
 	return s.logout(ctx)
+}
+
+// Send writes one client packet on the instance socket (the socket the real client sends gameplay on).
+func (s *session) Send(core uint32, payload []byte) error {
+	return s.instance.Send(s.ctx, core, payload)
+}
+
+// Now is the client clock the movement time field carries.
+func (s *session) Now() time.Time { return time.Now() }
+
+// WaitUntil answers server packets until the given time, so a walk keeps the session healthy (time syncs, pings and
+// object updates all arrive while it walks).
+func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
+	for {
+		remaining := time.Until(until)
+		if remaining <= 0 {
+			return nil
+		}
+		ev, err := s.next("the walk", remaining)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				return nil
+			}
+			return err
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return err
+		}
+	}
+}
+
+// collect answers the server for d and applies what it sends.
+func (s *session) collect(ctx context.Context, d time.Duration) error {
+	end := time.Now().Add(d)
+	for {
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			return nil
+		}
+		ev, err := s.next("the settle", remaining)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				return nil
+			}
+			return err
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return err
+		}
+	}
+}
+
+const (
+	// nameQueryDeadline bounds one wait for a name answer; the server answers both lookups immediately.
+	nameQueryDeadline = 3 * time.Second
+	// maxNameQueryRounds bounds how many batches of lookups one run sends.
+	maxNameQueryRounds = 4
+	// maxPlayerNamesPerQuery is the server's Array<ObjectGuid, 50> (QueryPackets.h:112).
+	maxPlayerNamesPerQuery = 50
+	// maxCreatureQueries is what the official client batches per query (QueryPackets.cpp:66-67).
+	maxCreatureQueries = 11
+)
+
+// queryNames asks for the names of the nearest units this client does not know yet, bounded in rounds and with a
+// deadline per answer.
+func (s *session) queryNames(ctx context.Context) {
+	x, y, z := s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2]
+	for round := 0; round < maxNameQueryRounds; round++ {
+		players, entries := s.world.UnknownUnits(x, y, z, maxPlayerNamesPerQuery)
+		if len(entries) > maxCreatureQueries {
+			entries = entries[:maxCreatureQueries]
+		}
+		if len(players) == 0 && len(entries) == 0 {
+			return
+		}
+		if len(players) > 0 {
+			if err := s.sendOn(sideInstance, wire.CMSGQueryPlayerNames, objects.BuildQueryPlayerNames(players)); err != nil {
+				return
+			}
+			s.report.NamesAsked += len(players)
+			s.opts.logf("world: CMSG_QUERY_PLAYER_NAMES for %d player(s)", len(players))
+			if _, err := s.waitFor("SMSG_QUERY_PLAYER_NAMES_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
+				return p.Core == wire.SMSGQueryPlayerNamesResponse
+			}); err != nil {
+				s.opts.logf("world: the player name answer did not come: %v", err)
+				return
+			}
+		}
+		if len(entries) > 0 {
+			// The 6-bit count cannot name more than 63 entries; BuildQueryCreature splits a longer list.
+			s.opts.logf("world: CMSG_QUERY_CREATURE for %d entr(y/ies)", len(entries))
+			for _, packet := range objects.BuildQueryCreature(uint32Entries(entries)) {
+				if err := s.sendOn(sideInstance, wire.CMSGQueryCreature, packet); err != nil {
+					return
+				}
+				if _, err := s.waitFor("SMSG_QUERY_CREATURE_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
+					return p.Core == wire.SMSGCreatureQueryResponse
+				}); err != nil {
+					s.opts.logf("world: the creature name answer did not come: %v", err)
+					return
+				}
+			}
+		}
+	}
+}
+
+// uint32Entries narrows the entries to the query's uint32 wire form.
+func uint32Entries(entries []int32) []uint32 {
+	out := make([]uint32, len(entries))
+	for i, e := range entries {
+		out[i] = uint32(e)
+	}
+	return out
+}
+
+// walkCheck is round 3's command: settle, summarise the world, walk dx/dy and back, report, and let Enter log out.
+func (s *session) walkCheck(ctx context.Context) error {
+	settle := s.opts.Settle
+	if settle <= 0 {
+		settle = 8 * time.Second
+	}
+	pause := s.opts.WalkPause
+	if pause <= 0 {
+		pause = 3 * time.Second
+	}
+	s.sendPing()
+	if err := s.collect(ctx, settle); err != nil {
+		return err
+	}
+	x, y, z, o := s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2], s.report.WalkClientPos[3]
+	s.queryNames(ctx)
+	s.summarise(x, y, z)
+
+	// The walk: from the position the server put the character at (the create block's, not the login's).
+	from := [4]float32{x, y, z, o}
+	s.report.WalkFrom = from
+	target := [4]float32{x + s.opts.Dx, y + s.opts.Dy, z, o}
+	s.report.WalkTo = target
+	if s.mover == nil {
+		s.report.Walked = false
+		s.opts.logf("walk-check: no create block of this character arrived, so the walk is skipped")
+		return nil
+	}
+	if err := s.mover.MoveTo(ctx, target[0], target[1], target[2]); err != nil {
+		return err
+	}
+	if err := s.collect(ctx, pause); err != nil {
+		return err
+	}
+	if err := s.mover.MoveTo(ctx, from[0], from[1], from[2]); err != nil {
+		return err
+	}
+	bx, by, bz, bo := s.mover.Position()
+	s.report.BackAt = [4]float32{bx, by, bz, bo}
+	s.report.WalkClientPos = s.report.BackAt
+	s.report.Walked = true
+	s.opts.logf("walk-check: back at the spawn, the client believes it is at %.2f %.2f %.2f (orientation %.2f)", bx, by, bz, bo)
+	return nil
+}
+
+// summarise fills the report's object summary and nearest-units table, and prints both.
+func (s *session) summarise(x, y, z float32) {
+	c := s.world.Counts()
+	summary := ObjectSummary{
+		Map:        s.world.MapID(),
+		Objects:    c.Objects,
+		Created:    c.Created,
+		Updated:    c.Updated,
+		Destroyed:  c.Destroyed,
+		OutOfRange: c.OutOfRange,
+		Updates:    c.Applied,
+		Partial:    c.Partial,
+		Unparsed:   make(map[string]int, len(c.Unparsed)),
+		ByType:     make(map[string]int),
+	}
+	for reason, n := range c.Unparsed {
+		summary.Unparsed[reason] = n
+	}
+	for t, n := range c.ByType {
+		summary.ByType[objects.TypeName(t)] = n
+	}
+	s.report.Objects = summary
+	var typeNames []string
+	for name := range summary.ByType {
+		typeNames = append(typeNames, name)
+	}
+	sort.Strings(typeNames)
+	s.opts.logf("world: %d object(s) in the model after %d update(s):", summary.Objects, summary.Updates)
+	for _, name := range typeNames {
+		s.opts.logf("  %-16s %d", name, summary.ByType[name])
+	}
+	s.opts.logf("world: %d created, %d updated, %d destroyed, %d out of range", summary.Created, summary.Updated, summary.Destroyed, summary.OutOfRange)
+	if c.Partial > 0 {
+		s.opts.logf("world: %d object(s) partial: a block naming them was not decoded to its declared end", c.Partial)
+	}
+	if len(c.Unparsed) > 0 {
+		total := 0
+		keys := make([]string, 0, len(c.Unparsed))
+		for key := range c.Unparsed {
+			total += c.Unparsed[key]
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		s.opts.logf("world: %d unparsed block(s), skipped by size:", total)
+		for _, key := range keys {
+			if detail := c.UnparsedDetail[key]; detail != "" {
+				s.opts.logf("  %-52s %d  (%s)", key, c.Unparsed[key], detail)
+				continue
+			}
+			s.opts.logf("  %-52s %d", key, c.Unparsed[key])
+		}
+	}
+	if c.UnknownMoves > 0 {
+		s.opts.logf("world: %d movement packet(s) for a GUID the model does not hold (not created)", c.UnknownMoves)
+	}
+
+	units := s.world.Units(x, y, z)
+	limit := 5
+	if len(units) < limit {
+		limit = len(units)
+	}
+	s.report.Units = make([]UnitRow, 0, limit)
+	for _, u := range units[:limit] {
+		row := UnitRow{
+			Type:      objects.TypeName(u.Type),
+			Entry:     u.Info.Entry,
+			Name:      s.world.Name(u),
+			Level:     u.Info.Level,
+			Health:    u.Info.Health,
+			MaxHealth: u.Info.MaxHealth,
+			Distance:  objects.Distance(u.X, u.Y, u.Z, x, y, z),
+		}
+		s.report.Units = append(s.report.Units, row)
+		s.opts.logf("  nearest: %-11s entry %-6d level %-3d health %d/%d  %5.1f yd  %s",
+			row.Type, row.Entry, row.Level, row.Health, row.MaxHealth, row.Distance, row.Name)
+	}
+	s.report.NamesFound = 0
+	for _, u := range units {
+		if s.world.Name(u) != "" {
+			s.report.NamesFound++
+		}
+	}
 }
 
 // stay answers the server until the stay time is over.
@@ -524,8 +828,134 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.report.Logout = r
 	case wire.SMSGLogoutComplete:
 		s.report.LogoutComplete = true
+	case wire.SMSGUpdateObject:
+		u, err := objects.ParseUpdateObject(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_UPDATE_OBJECT: %w", err)
+		}
+		s.applyUpdate(u)
+		s.world.Apply(u, time.Now())
+	case wire.SMSGOnMonsterMove:
+		m, err := objects.ParseMonsterMove(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_ON_MONSTER_MOVE: %w", err)
+		}
+		s.report.MonsterMoves++
+		s.world.ApplyMonsterMove(m, time.Now())
+	case wire.SMSGMoveUpdate:
+		m, err := objects.ParseMoveUpdate(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_MOVE_UPDATE: %w", err)
+		}
+		s.report.MoveRelays++
+		s.world.ApplyMoveUpdate(m.Info, nil, time.Now())
+	case wire.SMSGMoveUpdateTeleport:
+		m, err := objects.ParseMoveUpdateTeleport(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_MOVE_UPDATE_TELEPORT: %w", err)
+		}
+		s.report.MoveRelays++
+		s.world.ApplyMoveUpdate(m.Info, m.Speeds, time.Now())
+	case wire.SMSGMoveTeleport:
+		t, err := objects.ParseMoveTeleport(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_MOVE_TELEPORT: %w", err)
+		}
+		s.report.Teleports++
+		s.world.ApplyTeleport(t, time.Now())
+		if t.MoverGUID == s.self {
+			if t.Transport != nil || t.HasVehicle {
+				// An ack would tell the server the client is standing on the transport's seat, which this round
+				// cannot model: report it and end the walk instead of sending an ack the client cannot honour.
+				s.opts.logf("world: teleport onto a transport: not handled (transport %v, vehicle %v)", t.Transport != nil, t.HasVehicle)
+				return fmt.Errorf("world: teleport onto a transport: not handled (transport %v, vehicle %v)", t.Transport != nil, t.HasVehicle)
+			}
+			// The server waits for CMSG_MOVE_TELEPORT_ACK before it accepts movement from the new position
+			// (MovementHandler.cpp:424-480 reads it on the instance socket). Apply the destination, the facing and
+			// the sequence to the mover first, so the first packet after the ack starts from there.
+			sequence := t.Sequence
+			if s.mover != nil {
+				s.mover.SetTeleport(t.X, t.Y, t.Z, t.O, t.Sequence)
+				sequence = s.mover.Sequence
+				s.report.WalkClientPos = [4]float32{t.X, t.Y, t.Z, t.O}
+			}
+			if err := s.sendOn(sideInstance, wire.CMSGMoveTeleportAck, objects.BuildTeleportAck(t.MoverGUID, sequence, clientTimeMs())); err != nil {
+				return err
+			}
+			s.opts.logf("world: SMSG_MOVE_TELEPORT answered (map %d, client position %.2f %.2f %.2f)", s.world.MapID(), t.X, t.Y, t.Z)
+		}
+	case wire.SMSGMoveRoot, wire.SMSGMoveUnroot:
+		guid, _, err := objects.ParseMoverFlag(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: the root/unroot push: %w", err)
+		}
+		if guid == s.self {
+			// No ack: the server only validates the movement info an ack carries (HandleMovementAckMessage,
+			// MovementHandler.cpp:777-784) and rounds 1-2 left SMSG_MOVE_ROOT unanswered with a healthy session.
+			s.opts.logf("world: %s for the active mover (no ack sent, see OBJECTS-R1-NOTES.md)", wire.ServerName(p.Core))
+		}
+	case wire.SMSGNewWorld, wire.SMSGTransferPending:
+		s.report.MapChanges++
+		s.opts.logf("world: %s seen (map change: not handled in this round)", wire.ServerName(p.Core))
+	case wire.SMSGQueryPlayerNamesResponse:
+		names, err := objects.ParsePlayerNamesResponse(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_QUERY_PLAYER_NAMES_RESPONSE: %w", err)
+		}
+		for _, n := range names {
+			if n.Found && n.Name != "" {
+				s.world.SetName(n.GUID, n.Name)
+			}
+		}
+	case wire.SMSGCreatureQueryResponse:
+		creatures, err := objects.ParseCreatureQueryResponse(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_QUERY_CREATURE_RESPONSE: %w", err)
+		}
+		for _, c := range creatures {
+			if c.Found && c.Name != "" {
+				s.world.SetEntryName(int32(c.Entry), c.Name)
+			}
+		}
 	}
 	return nil
+}
+
+// applyUpdate records what the client learned about itself from an update: the create block of ThisIsYou carries the
+// character's GUID, position and run speed. A later ThisIsYou create (a map change or a fresh burst) puts the
+// character somewhere else, so the mover's belief follows it instead of keeping the first create's position.
+func (s *session) applyUpdate(u *objects.Update) {
+	for _, b := range u.Blocks {
+		if b.Movement == nil || !b.Movement.ThisIsYou {
+			continue
+		}
+		if !s.selfSeen {
+			s.selfSeen = true
+			s.self = b.GUID
+			if s.mover == nil {
+				s.mover = &objects.Mover{
+					GUID:       b.GUID,
+					Sender:     s,
+					ClientTime: func(time.Time) uint32 { return clientTimeMs() },
+					Logf:       s.opts.logf,
+					X:          b.Movement.X,
+					Y:          b.Movement.Y,
+					Z:          b.Movement.Z,
+					O:          b.Movement.O,
+					RunSpeed:   b.Movement.Run,
+					Flags:      b.Movement.Flags,
+				}
+				s.world.SetActiveMover(b.GUID)
+			}
+			s.opts.logf("world: own create block: position %.2f %.2f %.2f, run speed %.2f yd/s, walk %.2f yd/s",
+				b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.Run, b.Movement.Walk)
+		} else if s.mover != nil {
+			s.mover.SetPosition(b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.O)
+			s.opts.logf("world: own create again: position reset to %.2f %.2f %.2f",
+				b.Movement.X, b.Movement.Y, b.Movement.Z)
+		}
+		s.report.WalkClientPos = [4]float32{b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.O}
+	}
 }
 
 func (s *session) sendOn(side int, core uint32, payload []byte) error {

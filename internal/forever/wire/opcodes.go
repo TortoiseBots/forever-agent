@@ -21,6 +21,27 @@ const (
 	CMSGTimeSyncResponse        uint32 = 0x41005C
 	CMSGLogoutRequest           uint32 = 0x3E0072
 
+	// The movement the client sends (Opcodes.h:619-700) and the name lookups of round 3.
+	CMSGMoveStartForward       uint32 = 0x410000
+	CMSGMoveStartBackward      uint32 = 0x410001
+	CMSGMoveStop               uint32 = 0x410002
+	CMSGMoveStartStrafeLeft    uint32 = 0x410003
+	CMSGMoveStopStrafe         uint32 = 0x410005
+	CMSGMoveJump               uint32 = 0x410006
+	CMSGMoveStartTurnLeft      uint32 = 0x410008
+	CMSGMoveStopTurn           uint32 = 0x41000A
+	CMSGMoveSetRunMode         uint32 = 0x41000E
+	CMSGMoveSetWalkMode        uint32 = 0x41000F
+	CMSGMoveFallLand           uint32 = 0x410017
+	CMSGMoveStartSwim          uint32 = 0x410018
+	CMSGMoveStopSwim           uint32 = 0x410019
+	CMSGMoveSetFacing          uint32 = 0x410027
+	CMSGMoveHeartbeat          uint32 = 0x41002E
+	CMSGMoveSetFacingHeartbeat uint32 = 0x41007F
+	CMSGMoveTeleportAck        uint32 = 0x410016
+	CMSGQueryPlayerNames       uint32 = 0x440010
+	CMSGQueryCreature          uint32 = 0x3D0141
+
 	SMSGAuthChallenge        uint32 = 0x4C0000
 	SMSGEnterEncryptedMode   uint32 = 0x4C0004
 	SMSGCompressedPacket     uint32 = 0x4C000E
@@ -35,6 +56,19 @@ const (
 	SMSGLogoutResponse       uint32 = 0x45012F
 	SMSGCharacterLoginFailed uint32 = 0x4501B0
 	SMSGLogoutComplete       uint32 = 0x450130
+
+	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
+	SMSGUpdateObject             uint32 = 0x5C0000
+	SMSGOnMonsterMove            uint32 = 0x5E0002
+	SMSGMoveUpdate               uint32 = 0x5E000E
+	SMSGMoveUpdateTeleport       uint32 = 0x5E000F
+	SMSGMoveTeleport             uint32 = 0x5E0034
+	SMSGMoveRoot                 uint32 = 0x5E0029
+	SMSGMoveUnroot               uint32 = 0x5E002A
+	SMSGNewWorld                 uint32 = 0x45002B
+	SMSGTransferPending          uint32 = 0x450071
+	SMSGQueryPlayerNamesResponse uint32 = 0x640027
+	SMSGCreatureQueryResponse    uint32 = 0x490006
 )
 
 // clientNames names the client opcodes this client sends, for error messages.
@@ -51,6 +85,26 @@ var clientNames = map[uint32]string{
 	CMSGMoveInitActiveMoverDone: "CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE",
 	CMSGTimeSyncResponse:        "CMSG_TIME_SYNC_RESPONSE",
 	CMSGLogoutRequest:           "CMSG_LOGOUT_REQUEST",
+
+	CMSGMoveStartForward:       "CMSG_MOVE_START_FORWARD",
+	CMSGMoveStartBackward:      "CMSG_MOVE_START_BACKWARD",
+	CMSGMoveStop:               "CMSG_MOVE_STOP",
+	CMSGMoveStartStrafeLeft:    "CMSG_MOVE_START_STRAFE_LEFT",
+	CMSGMoveStopStrafe:         "CMSG_MOVE_STOP_STRAFE",
+	CMSGMoveJump:               "CMSG_MOVE_JUMP",
+	CMSGMoveStartTurnLeft:      "CMSG_MOVE_START_TURN_LEFT",
+	CMSGMoveStopTurn:           "CMSG_MOVE_STOP_TURN",
+	CMSGMoveSetRunMode:         "CMSG_MOVE_SET_RUN_MODE",
+	CMSGMoveSetWalkMode:        "CMSG_MOVE_SET_WALK_MODE",
+	CMSGMoveFallLand:           "CMSG_MOVE_FALL_LAND",
+	CMSGMoveStartSwim:          "CMSG_MOVE_START_SWIM",
+	CMSGMoveStopSwim:           "CMSG_MOVE_STOP_SWIM",
+	CMSGMoveSetFacing:          "CMSG_MOVE_SET_FACING",
+	CMSGMoveHeartbeat:          "CMSG_MOVE_HEARTBEAT",
+	CMSGMoveSetFacingHeartbeat: "CMSG_MOVE_SET_FACING_HEARTBEAT",
+	CMSGMoveTeleportAck:        "CMSG_MOVE_TELEPORT_ACK",
+	CMSGQueryPlayerNames:       "CMSG_QUERY_PLAYER_NAMES",
+	CMSGQueryCreature:          "CMSG_QUERY_CREATURE",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

@@ -13,7 +13,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 |---|---|
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
-| Packets and object fields for build 70938 | login and character-select packets done; gameplay packets not started |
+| Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
 
@@ -33,6 +33,16 @@ name, and no key or ticket, only lengths. `--build` has to be the build the real
 `auth.realmlist.gamebuild`), because a realm admits only that build unless `Realm.AlsoAcceptBuilds` lists more. By
 default the instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
+
+`forever-agent forever walk-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+runs the same login and stays in the world for `--stay` seconds (default 8 s), then prints what the client understood
+of the world around the character: the object count by type, the update statistics and the five nearest units with
+entry, name, level, health and distance. It then walks `--dx` and `--dy` yards from the spawn point (default 8 and 0,
+`CMSG_MOVE_SET_FACING`, `CMSG_MOVE_START_FORWARD`, `CMSG_MOVE_HEARTBEAT` every 500 ms, `CMSG_MOVE_STOP` inside
+0.5 yards), stands `--pause` seconds (default 3 s), walks back, prints where the client believes the character is and
+logs out. The walk is straight-line only: no pathfinding, and Z is interpolated between the start and the target, so
+use it on flat ground. Creature and player names come from `CMSG_QUERY_CREATURE` and `CMSG_QUERY_PLAYER_NAMES`, cached
+per entry and GUID, at most four batches of each per run with a 3 s deadline per answer.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

@@ -9,14 +9,18 @@ import (
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
@@ -43,8 +47,13 @@ const (
 	fakeCMSGPlayerLogin          = 0x440016
 	fakeCMSGLoadingScreenNotify  = 0x440024
 	fakeCMSGMoveInitActiveMover  = 0x420064
+	fakeCMSGMoveTeleportAck      = 0x420016
 	fakeCMSGTimeSyncResponse     = 0x42005C
 	fakeCMSGLogoutRequest        = 0x3F0074
+	fakeCMSGMoveSetFacing        = 0x420027
+	fakeCMSGMoveStartForward     = 0x420000
+	fakeCMSGMoveHeartbeat        = 0x42002E
+	fakeCMSGMoveStop             = 0x420002
 	fakeCMSGLogDisconnect        = 0x460007
 
 	fakeSMSGAuthChallenge        = 0x4E0000
@@ -61,6 +70,8 @@ const (
 	fakeSMSGLogoutResponse       = 0x470130
 	fakeSMSGLogoutComplete       = 0x470131
 	fakeSMSGCharacterLoginFailed = 0x4701B1
+	fakeSMSGUpdateObject         = 0x5E0000
+	fakeSMSGMoveTeleport         = 0x600034
 
 	// the unasked companions of the character list
 	fakeSMSGBattlePayDistribution = 0x47021F
@@ -112,9 +123,23 @@ type fakeServer struct {
 	// loop fails and Enter has to send the abort logout; abortDone is closed when the fake has seen it.
 	failAfterLogin bool
 	abortDone      chan struct{}
-	mu             sync.Mutex
-	realmWire      []uint32
-	instWire       []uint32
+	// walk makes the fake run round 3's walk scenario instead of the plain stay: it sends the character's own create
+	// block and expects CMSG_MOVE_SET_FACING / START_FORWARD / HEARTBEAT* / STOP with advancing positions.
+	walk      bool
+	walkFrom  [3]float32
+	walkTo    [3]float32
+	walkMoved int
+	// teleportDuringWalk sends SMSG_MOVE_TELEPORT in the middle of the first leg and then expects the ack and a
+	// movement packet at the destination.
+	teleportDuringWalk bool
+	teleportTransport  bool
+	teleportAt         [3]float32
+	teleportSeq        uint32
+	teleportAcked      bool
+	posAfterAck        [3]float32
+	mu                 sync.Mutex
+	realmWire          []uint32
+	instWire           []uint32
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -605,6 +630,11 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		}
 	}
 
+	if f.walk {
+		f.serveWalk(c, realm)
+		return
+	}
+
 	sawTimeSync, sawMover := false, false
 	for {
 		wire, payload, err := c.readFrame()
@@ -644,7 +674,7 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 			realm.writeFrame(fakeSMSGLogoutComplete, []byte{0})
 			f.logoutOnce.Do(func() { close(f.logoutDone) })
 			time.Sleep(20 * time.Millisecond)
-			conn.Close()
+			c.nc.Close()
 			return
 		default:
 			f.failf("instance: unexpected client wire 0x%06X", wire)
@@ -834,5 +864,538 @@ func TestShutdownWaitsForThePumps(t *testing.T) {
 	case <-finished:
 	default:
 		t.Fatal("shutdown returned before its pump finished")
+	}
+}
+
+// fakeCreateBlock builds one SMSG_UPDATE_OBJECT carrying this character's own create block: object type 0 (so the
+// values are ObjectData alone), ThisIsYou and MovementUpdate, the movement info with the given position and run
+// speed. The layout follows UpdateData.cpp:61-79, BaseEntity.cpp:96-129 and :252-398.
+func fakeCreateBlock(guid []byte, x, y, z, run float32) []byte {
+	values := make([]byte, 0, 16)
+	values = append(values, 0x01)          // field flags: owner
+	values = append(values, 3, 0xFF)       // fragment ids: CGObject, end
+	values = append(values, 0x01)          // CGObject is indirect: its exists byte
+	values = appendU32(values, 0)          // ObjectData::EntryID
+	values = appendU32(values, 0)          // DynamicFlags
+	values = appendU32(values, 0x3F800000) // Scale = 1.0f
+
+	block := make([]byte, 0, 96)
+	block = append(block, 1) // UPDATETYPE_CREATE_OBJECT
+	block = append(block, guid...)
+	block = append(block, 0) // TYPEID_OBJECT
+
+	// The 21 create-object flags, MSB first: HasEntityPosition, NoBirthAnim, EnablePortals, PlayHoverAnim,
+	// ThisIsYou, MovementUpdate, ...
+	bits := fakeBits{}
+	bits.bit(true)  // HasEntityPosition
+	bits.bit(false) // NoBirthAnim
+	bits.bit(false) // EnablePortals
+	bits.bit(false) // PlayHoverAnim
+	bits.bit(true)  // ThisIsYou
+	bits.bit(true)  // MovementUpdate
+	for range 15 {
+		bits.bit(false)
+	}
+	block = append(block, bits.flush()...)
+	block = appendU32(block, 0) // pause times
+
+	block = append(block, guid...)       // MoverGUID
+	block = appendU64(block, 0x80000000) // flags: TOUCHING_GROUND
+	block = appendU32(block, 150000)     // move time
+	block = append(block, fakeF32(x)...)
+	block = append(block, fakeF32(y)...)
+	block = append(block, fakeF32(z)...)
+	block = append(block, fakeF32(0)...) // orientation
+	block = append(block, fakeF32(0)...) // pitch
+	block = append(block, fakeF32(0)...) // step-up elevation
+	block = appendU32(block, 0)          // removed movement forces
+	block = appendU32(block, 0)          // move index
+	block = append(block, fakeF32(1)...) // gravity modifier
+	b2 := fakeBits{}
+	b2.bit(false) // standing on a game object
+	b2.bit(false) // has transport
+	b2.bit(false) // has fall
+	b2.bit(false) // has spline
+	b2.bit(false) // height change failed
+	b2.bit(false) // remote time valid
+	b2.bit(false) // has inertia
+	b2.bit(false) // has advanced flying
+	b2.bit(false) // has drive status
+	block = append(block, b2.flush()...)
+	// MOVE_WALK, MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK, MOVE_FLIGHT, MOVE_FLIGHT_BACK,
+	// MOVE_TURN_RATE, MOVE_PITCH_RATE (BaseEntity.cpp:390-398).
+	block = append(block, fakeF32(2.5)...)
+	block = append(block, fakeF32(run)...)
+	for range 7 {
+		block = append(block, fakeF32(2.5)...)
+	}
+	block = appendU32(block, 0)          // movement forces count
+	block = append(block, fakeF32(1)...) // movement forces mod magnitude
+	for range 17 {
+		block = append(block, fakeF32(0)...) // the advanced-flying speeds
+	}
+	b3 := fakeBits{}
+	b3.bit(false) // HasSpline
+	block = append(block, b3.flush()...)
+
+	block = appendU32(block, uint32(len(values)))
+	block = append(block, values...)
+
+	out := make([]byte, 0, len(block)+16)
+	out = appendU16(out, 0) // map
+	out = appendU32(out, 1) // block count
+	b4 := fakeBits{}
+	b4.bit(true)  // the constant unk bit
+	b4.bit(false) // no destroy or out-of-range lists
+	out = append(out, b4.flush()...)
+	out = appendU32(out, uint32(len(block)))
+	out = append(out, block...)
+	return out
+}
+
+// fakeBits packs bits the way the server's ByteBuffer does.
+type fakeBits struct {
+	cur   byte
+	used  int
+	bytes []byte
+}
+
+func (b *fakeBits) bit(v bool) {
+	b.cur <<= 1
+	if v {
+		b.cur |= 1
+	}
+	b.used++
+	if b.used == 8 {
+		b.bytes = append(b.bytes, b.cur)
+		b.cur, b.used = 0, 0
+	}
+}
+
+func (b *fakeBits) flush() []byte {
+	if b.used != 0 {
+		b.cur <<= 8 - b.used
+		b.bytes = append(b.bytes, b.cur)
+		b.cur, b.used = 0, 0
+	}
+	return b.bytes
+}
+
+func fakeF32(v float32) []byte {
+	return appendU32(nil, math.Float32bits(v))
+}
+
+// serveWalk is the walk scenario: the server puts the character down at walkFrom, sends its create and then reads the
+// client's movement, checking that every packet's position advances toward walkTo and that the stop lands on it.
+func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
+	f.mu.Lock()
+	guid := appendU16(nil, binary.LittleEndian.Uint16(f.enumResult[34:36]))
+	guid = append(guid, f.clientGUID...)
+	f.mu.Unlock()
+	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlock(guid, f.walkFrom[0], f.walkFrom[1], f.walkFrom[2], 40))
+
+	state := 0 // 0 = expecting facing, 1 = forward, 2 = heartbeats, 3 = stopped
+	last := f.walkFrom
+	for {
+		wire, payload, err := c.readFrame()
+		if err != nil {
+			select {
+			case <-f.logoutDone:
+				return
+			default:
+			}
+			f.failf("walk: %v", err)
+			return
+		}
+		f.mu.Lock()
+		f.instWire = append(f.instWire, wire)
+		f.mu.Unlock()
+		switch wire {
+		case fakeCMSGTimeSyncResponse:
+		case fakeCMSGPing:
+			c.writeFrame(fakeSMSGPong, payload[:4])
+		case fakeCMSGMoveInitActiveMover:
+			// the client's answer to SMSG_MOVE_SET_ACTIVE_MOVER, which the login burst already delivered
+		case fakeCMSGMoveSetFacing:
+			if state != 0 {
+				f.failf("walk: SET_FACING at state %d", state)
+				return
+			}
+			mi, err := parseFakeMovementInfo(payload)
+			if err != nil {
+				f.failf("walk: SET_FACING: %v", err)
+				return
+			}
+			if mi[0] != f.walkFrom[0] || mi[1] != f.walkFrom[1] {
+				f.failf("walk: SET_FACING at %.2f %.2f, want the spawn", mi[0], mi[1])
+				return
+			}
+			state = 1
+		case fakeCMSGMoveStartForward:
+			if state != 1 {
+				f.failf("walk: START_FORWARD at state %d", state)
+				return
+			}
+			if _, err := parseFakeMovementInfo(payload); err != nil {
+				f.failf("walk: START_FORWARD: %v", err)
+				return
+			}
+			state = 2
+			if f.teleportDuringWalk {
+				// Move the character mid-leg, exactly as a summon or a teleport spell would.
+				seq := f.teleportSeq
+				if seq == 0 {
+					seq = 77
+				}
+				tp := append([]byte{}, guid...)
+				tp = appendU32(tp, seq)
+				tp = append(tp, fakeF32(f.teleportAt[0])...)
+				tp = append(tp, fakeF32(f.teleportAt[1])...)
+				tp = append(tp, fakeF32(f.teleportAt[2])...)
+				// MoveTeleport::Write: Pos is Position::XYZ, then a separate Facing float (MovementPackets.cpp:813-816).
+				tp = append(tp, fakeF32(0.5)...) // facing, the orientation the mover adopts
+				if f.teleportTransport {
+					// transport bit set, vehicle and preload clear, then an empty transport GUID
+					tp = append(tp, 0xA0)
+					tp = append(tp, 0, 0)
+				} else {
+					tp = append(tp, 0) // three zero bits, flushed
+				}
+				c.writeFrame(fakeSMSGMoveTeleport, tp)
+				if f.teleportTransport {
+					// No ack is legal here: the client cannot honour a seat. It stops, then aborts the run.
+					state = 2
+				} else {
+					state = 4
+				}
+			}
+		case fakeCMSGMoveTeleportAck:
+			if state != 4 {
+				f.failf("walk: TELEPORT_ACK at state %d", state)
+				return
+			}
+			if len(payload) < 6 {
+				f.failf("walk: TELEPORT_ACK is %d bytes", len(payload))
+				return
+			}
+			mask := binary.LittleEndian.Uint16(payload)
+			n := bits.OnesCount16(mask)
+			off := 2 + n
+			if len(payload) < off+8 {
+				f.failf("walk: TELEPORT_ACK is %d bytes for a %d-byte guid", len(payload), n)
+				return
+			}
+			if got := binary.LittleEndian.Uint32(payload[off:]); got != f.teleportSeq && f.teleportSeq != 0 {
+				f.failf("walk: TELEPORT_ACK carries sequence %d, want %d", got, f.teleportSeq)
+				return
+			}
+			f.mu.Lock()
+			f.teleportAcked = true
+			f.mu.Unlock()
+			state = 5
+		case fakeCMSGLogDisconnect:
+			// the aborted walk's best-effort disconnect: the server has already been told the player is leaving
+			return
+		case fakeCMSGMoveHeartbeat:
+			if state != 2 {
+				f.failf("walk: HEARTBEAT at state %d", state)
+				return
+			}
+			mi, err := parseFakeMovementInfo(payload)
+			if err != nil {
+				f.failf("walk: HEARTBEAT: %v", err)
+				return
+			}
+			d0 := fakeDistance(last, f.walkTo)
+			d1 := fakeDistance(mi, f.walkTo)
+			if d1 > d0+0.01 {
+				f.failf("walk: a heartbeat moved away from the target (%.2f -> %.2f yards)", d0, d1)
+				return
+			}
+			last = mi
+			f.walkMoved++
+		case fakeCMSGMoveStop:
+			if state == 5 {
+				// The first movement packet after the ack: it must start at the teleported position.
+				mi, err := parseFakeMovementInfo(payload)
+				if err != nil {
+					f.failf("walk: STOP after the teleport: %v", err)
+					return
+				}
+				f.mu.Lock()
+				f.posAfterAck = mi
+				f.mu.Unlock()
+				state = 6
+				continue
+			}
+			if state != 2 {
+				f.failf("walk: STOP at state %d", state)
+				return
+			}
+			mi, err := parseFakeMovementInfo(payload)
+			if err != nil {
+				f.failf("walk: STOP: %v", err)
+				return
+			}
+			if !f.teleportTransport {
+				if d := fakeDistance(mi, f.walkTo); d > 0.5 {
+					f.failf("walk: the stop is %.2f yards from the target", d)
+					return
+				}
+			}
+			// The leg is over: the next SET_FACING starts the way back, from the target.
+			f.walkFrom, f.walkTo = f.walkTo, f.walkFrom
+			f.walkMoved++
+			state = 0
+		case fakeCMSGLogoutRequest:
+			if state != 0 && state != 6 {
+				f.failf("walk: logout in the middle of a leg")
+			}
+			// The instance reader has seen both legs: each stop counted one move and reset the walk.
+			_ = f.walkMoved
+			c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
+			time.Sleep(20 * time.Millisecond) // the completion travels on the other socket
+			realm.writeFrame(fakeSMSGLogoutComplete, []byte{0})
+			f.logoutOnce.Do(func() { close(f.logoutDone) })
+			time.Sleep(20 * time.Millisecond)
+			c.nc.Close()
+			return
+		default:
+			f.failf("walk: unexpected client wire 0x%06X", wire)
+			return
+		}
+	}
+}
+
+// parseFakeMovementInfo reads the client's movement info (MovementPackets.cpp:156-215) far enough for the position.
+func parseFakeMovementInfo(payload []byte) ([3]float32, error) {
+	var out [3]float32
+	if len(payload) < 15 {
+		return out, fmt.Errorf("%d bytes", len(payload))
+	}
+	mask := binary.LittleEndian.Uint16(payload)
+	n := bits.OnesCount16(mask)
+	off := 2 + n
+	if off+8+4+16 > len(payload) {
+		return out, fmt.Errorf("%d bytes", len(payload))
+	}
+	off += 8 // flags
+	off += 4 // time
+	out[0] = math.Float32frombits(binary.LittleEndian.Uint32(payload[off:]))
+	out[1] = math.Float32frombits(binary.LittleEndian.Uint32(payload[off+4:]))
+	out[2] = math.Float32frombits(binary.LittleEndian.Uint32(payload[off+8:]))
+	return out, nil
+}
+
+func fakeDistance(a, b [3]float32) float32 {
+	dx, dy, dz := a[0]-b[0], a[1]-b[1], a[2]-b[2]
+	return float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+}
+
+// TestWalkCheckAgainstFakeServer is the walk end to end: the server sends this character's own create block, the
+// client settles, prints the summary, walks 8 yards east, waits, walks back, and logs out. The fake checks the
+// sequence of the movement packets and that every position moves toward the target and that each stop lands on it.
+func TestWalkCheckAgainstFakeServer(t *testing.T) {
+	f := newFakeServer(t)
+	f.walk = true
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1030, 2000, 50}
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		Dx:              30,
+		Dy:              0,
+		Settle:          300 * time.Millisecond,
+		WalkPause:       100 * time.Millisecond,
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	}
+	report, err := Enter(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("the walk run failed: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if report == nil || !report.Walked {
+		t.Fatalf("the report does not say the walk happened: %+v", report)
+	}
+	if !report.InWorld || !report.LogoutComplete {
+		t.Fatalf("in world %v, logout complete %v", report.InWorld, report.LogoutComplete)
+	}
+	if report.Objects.Objects != 1 {
+		t.Fatalf("the model holds %d objects, want the one create block: %+v", report.Objects.Objects, report.Objects)
+	}
+	if got := report.WalkClientPos; !samePoint(got, [4]float32{1000, 2000, 50, got[3]}) {
+		t.Fatalf("the client ended at %.2f %.2f %.2f, want the spawn", got[0], got[1], got[2])
+	}
+	if !samePoint(report.WalkTo, [4]float32{1030, 2000, 50, report.WalkTo[3]}) {
+		t.Fatalf("the walk target is %v", report.WalkTo)
+	}
+	if !containsWire(f.instWire, fakeCMSGMoveSetFacing) || !containsWire(f.instWire, fakeCMSGMoveStartForward) ||
+		!containsWire(f.instWire, fakeCMSGMoveHeartbeat) || !containsWire(f.instWire, fakeCMSGMoveStop) {
+		t.Fatalf("the movement packet kinds are missing from % X", f.instWire)
+	}
+	// Two legs: two stops.
+	stops := 0
+	for _, w := range f.instWire {
+		if w == fakeCMSGMoveStop {
+			stops++
+		}
+	}
+	if stops != 2 {
+		t.Fatalf("%d stops, want one per leg (% X)", stops, f.instWire)
+	}
+}
+
+// TestSecondSelfCreateResetsTheMover: a later ThisIsYou create for the same character (a map change or a fresh
+// update burst) replaces the mover's belief about its position; the first create only builds it.
+func TestSecondSelfCreateResetsTheMover(t *testing.T) {
+	packed := []byte{0x03, 0x80, 0x11, 0x22, 0x33} // mask bits 0,1 and 15, then the three payload bytes
+	parse := func(x, y, z, run float32) *objects.Update {
+		t.Helper()
+		u, err := objects.ParseUpdateObject(fakeCreateBlock(packed, x, y, z, run))
+		if err != nil {
+			t.Fatalf("the create at %.0f %.0f %.0f: %v", x, y, z, err)
+		}
+		return u
+	}
+	s := &session{world: objects.NewWorld(0), report: &Report{Counts: map[string]int{}}, opts: Options{Logf: func(string, ...any) {}}}
+	s.applyUpdate(parse(1000, 2000, 50, 7))
+	if s.mover == nil {
+		t.Fatal("the first own create built no mover")
+	}
+	if x, y, z, _ := s.mover.Position(); x != 1000 || y != 2000 || z != 50 {
+		t.Fatalf("the mover starts at %.2f %.2f %.2f, want the first create's 1000 2000 50", x, y, z)
+	}
+	s.applyUpdate(parse(1010, 2020, 55, 7))
+	if x, y, z, _ := s.mover.Position(); x != 1010 || y != 2020 || z != 55 {
+		t.Fatalf("the mover is at %.2f %.2f %.2f after the second create, want 1010 2020 55", x, y, z)
+	}
+	if got := s.report.WalkClientPos; got[0] != 1010 || got[1] != 2020 || got[2] != 55 {
+		t.Fatalf("the report's walk position is %v, want the second create's", got)
+	}
+}
+
+func samePoint(a, b [4]float32) bool {
+	return math.Abs(float64(a[0]-b[0])) < 0.01 && math.Abs(float64(a[1]-b[1])) < 0.01 && math.Abs(float64(a[2]-b[2])) < 0.01
+}
+
+// TestTeleportDuringWalkStartsTheNextPacketAtTheDestination: the server teleports the character in the middle of a
+// leg. The client must ack it only after applying the destination, facing and sequence to its own mover, and the
+// first movement packet after the ack must carry the teleported position, not a point on the abandoned line.
+func TestTeleportDuringWalkStartsTheNextPacketAtTheDestination(t *testing.T) {
+	f := newFakeServer(t)
+	f.walk = true
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1030, 2000, 50}
+	f.teleportDuringWalk = true
+	f.teleportAt = [3]float32{1005, 2003, 50}
+	f.teleportSeq = 77
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		Dx:              30,
+		Settle:          300 * time.Millisecond,
+		WalkPause:       100 * time.Millisecond,
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	}
+	_, err := Enter(t.Context(), opts)
+	if err == nil || !errors.Is(err, objects.ErrTeleported) {
+		t.Fatalf("the walk was expected to end on the teleport, got %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	f.mu.Lock()
+	acked, pos := f.teleportAcked, f.posAfterAck
+	f.mu.Unlock()
+	if !acked {
+		t.Fatalf("the client never acknowledged the teleport; wire log % X", f.instWire)
+	}
+	if !samePoint([4]float32{pos[0], pos[1], pos[2], 0}, [4]float32{1005, 2003, 50, 0}) {
+		t.Fatalf("the first movement packet after the ack is at %.2f %.2f %.2f, want the teleport destination 1005 2003 50",
+			pos[0], pos[1], pos[2])
+	}
+	if containsWire(f.instWire, fakeCMSGMoveHeartbeat) {
+		t.Fatalf("the walk kept walking the abandoned line after the teleport; wire log % X", f.instWire)
+	}
+}
+
+// TestTeleportOntoATransportIsNotAcknowledged: a teleport that carries transport state is not applied as if the
+// character were standing on the ground. The client reports it, sends no ack and ends the walk with an error.
+func TestTeleportOntoATransportIsNotAcknowledged(t *testing.T) {
+	f := newFakeServer(t)
+	f.walk = true
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1030, 2000, 50}
+	f.teleportDuringWalk = true
+	f.teleportTransport = true
+	f.teleportAt = [3]float32{1005, 2003, 50}
+	f.teleportSeq = 78
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		Dx:              30,
+		Settle:          300 * time.Millisecond,
+		WalkPause:       100 * time.Millisecond,
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	}
+	_, err := Enter(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "teleport onto a transport: not handled") {
+		t.Fatalf("the run did not end on the transport teleport: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if !strings.Contains(joinLines(steps), "teleport onto a transport: not handled") {
+		t.Fatalf("the report line is missing; steps:\n%s", joinLines(steps))
+	}
+	if containsWire(f.instWire, fakeCMSGMoveTeleportAck) {
+		t.Fatalf("the client acknowledged a teleport it cannot honour; wire log % X", f.instWire)
 	}
 }

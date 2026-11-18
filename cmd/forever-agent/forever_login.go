@@ -12,11 +12,13 @@ import (
 )
 
 // foreverCmd is the entry point of the Forever (Classic 1.60.1) commands: login-check stops at the realm join
-// answer, world-check enters the world with one character.
+// answer, world-check enters the world with one character, walk-check enters it, reads the objects around the
+// character and walks.
 func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
 		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS]")
 		return exitUsage
 	}
 	switch args[0] {
@@ -24,6 +26,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverLoginCheckCmd(ctx, args[1:], stdout, stderr)
 	case "world-check":
 		return foreverWorldCheckCmd(ctx, args[1:], stdout, stderr)
+	case "walk-check":
+		return foreverWalkCheckCmd(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "forever-agent forever: unknown command %q\n", args[0])
 		return exitUsage

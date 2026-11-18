@@ -26,7 +26,33 @@ var (
 	ipv4Pattern = regexp.MustCompile(`\b[0-9]{1,3}(\.[0-9]{1,3}){3}\b`)
 	// a millisecond timestamp is 13 decimal digits; the world clock and the server time are such values.
 	millisPattern = regexp.MustCompile(`\b[0-9]{13}\b`)
+	// a coordinate triple is three signed decimals with a fractional part, separated by comma or space. Live
+	// positions are quotable only as offsets from a named spawn; the synthetic fixture points are allow-listed.
+	coordinateTriplePattern = regexp.MustCompile(`-?[0-9]{1,6}\.[0-9]+[ ,]+-?[0-9]{1,6}\.[0-9]+[ ,]+-?[0-9]{1,6}\.[0-9]+`)
 )
+
+// syntheticPositions are the coordinate triples the committed fixtures and fake servers use; they are not a run's
+// positions. A real position must be reported as an offset from <spawn> instead.
+var syntheticPositions = [][3]string{
+	{"1.25", "2.5", "3.75"}, // world/testdata login_verify_world
+	{"1000", "2000", "50"},  // the rewritten objects.json payloads
+	{"1008", "2000", "50"},  // the eastward walk target
+	{"1000", "2008", "50"},  // the northward walk target
+}
+
+// coordinateFinding reports a coordinate triple that is not one of the synthetic fixture points.
+func coordinateFinding(match string) (string, bool) {
+	parts := regexp.MustCompile(`[ ,]+`).Split(match, -1)
+	if len(parts) != 3 {
+		return "", false
+	}
+	for _, p := range syntheticPositions {
+		if parts[0] == p[0] && parts[1] == p[1] && parts[2] == p[2] {
+			return "", false
+		}
+	}
+	return "coordinates " + match, true
+}
 
 // isHostAddress reports whether a dotted quad names a host, i.e. is an address a run could have used. The two
 // loopback/wildcard literals are allowed, and so is a leading zero octet: 0/8 has no host address, and product
@@ -67,6 +93,11 @@ func runIdentifiers(text string) []string {
 		}
 		for _, m := range millisPattern.FindAllString(line, -1) {
 			out = append(out, "millisecond time "+m)
+		}
+		for _, m := range coordinateTriplePattern.FindAllString(line, -1) {
+			if finding, ok := coordinateFinding(m); ok {
+				out = append(out, finding)
+			}
 		}
 	}
 	return out
@@ -128,6 +159,7 @@ func TestCommittedTextCarriesNoRunIdentifiers(t *testing.T) {
 		{"account", "realm join: join ticket 76 bytes, gameAccount 1234#1, join secret 32 bytes", "account 1234#1"},
 		{"ipv4", "world server 10.1.2.3:8085", "ipv4 10.1.2.3"},
 		{"millisecond time", "server time 1234567890123", "millisecond time 1234567890123"},
+		{"coordinates", "the server saved the character at -1234.56 -765.43 21.09", "coordinates -1234.56 -765.43 21.09"},
 	} {
 		t.Run("negative/"+c.name, func(t *testing.T) {
 			got := runIdentifiers(c.text)
@@ -154,6 +186,8 @@ func TestCommittedTextCarriesNoRunIdentifiers(t *testing.T) {
 			"Run on 2026-11-18, account id 2",
 			"the SMSG_CONNECT_TO Key became 0x1122334455667788",
 			"PyInt(5e18) is the int64 5000000000000000000",
+			"the fake server puts the character at 1.25, 2.5, 3.75",
+			"the fixture's rewritten position is 1000 2000 50",
 		} {
 			if got := runIdentifiers(text); len(got) != 0 {
 				t.Errorf("runIdentifiers(%q) = %q, want no finding", text, got)
