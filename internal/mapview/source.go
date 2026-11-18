@@ -25,7 +25,7 @@ import (
 // SessionFrame is the frame a session shows now: its own position (leader, when given, overrides it with where
 // the agent last walked to, which a replay's session does not follow), the party members in view, the hostile
 // creatures and the game objects. ok is false before the character is in the world.
-func SessionFrame(s *session.Session, t time.Time, leader *Pos) (f Frame, ok bool) {
+func SessionFrame(s world.Client, t time.Time, leader *Pos) (f Frame, ok bool) {
 	st := s.Status()
 	if st.State != world.StatusInWorld {
 		return Frame{}, false
