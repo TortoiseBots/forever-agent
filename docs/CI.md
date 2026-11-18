@@ -11,8 +11,10 @@ Push-only: PR gating is unchanged (`test` and `navmesh` run on pushes to `ci/**`
 ## `test.yml` — the PR gate
 
 `test` runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
-branch). It runs `make fmt-check vet test` (gofmt, `go vet`, a no-cgo build, `go test -race ./...`), then a cgo build,
-and `staticcheck ./...` with the pinned release **2026.2.2** (`go install honnef.co/go/tools/cmd/staticcheck@2026.2.2`).
+branch). It runs `make fmt-check vet test` (gofmt, `go vet`, a no-cgo build, `go test -race ./...`), then the
+differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50
+passed sub-tests fails the step, so the table cannot go green without Python), then `staticcheck ./...` with the
+pinned release **2026.2.2** (`go install honnef.co/go/tools/cmd/staticcheck@2026.2.2`), then a cgo build.
 The repo has no suppressions: a staticcheck finding is fixed in the code or, when a check is a false positive, disabled
 one check at a time in a commented `staticcheck.conf` (never a whole category).
 

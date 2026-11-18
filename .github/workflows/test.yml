@@ -40,30 +40,11 @@ jobs:
       - name: gofmt, go vet, no-cgo build, go test -race
         run: make GOROOT_LOCAL="$(go env GOROOT)" fmt-check vet test
 
-      # Pinned: a new staticcheck release must not turn an unrelated PR red. No checks are disabled; a false positive
-      # is a single `-check` in a commented staticcheck.conf, never a whole category.
-      - name: staticcheck
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
-          "$(go env GOPATH)/bin/staticcheck" ./...
-
-      # `make test` builds the navmesh engine through cgo (the runner has g++) and runs the navmesh tests, which
-      # skip without mmaps. This builds the real binary with cgo explicitly.
-      - name: cgo build
-        run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
-
-  # The Go scorers against the Python reference on the hand-made differential table. The reference is a public
-  # repository checked out at the pinned commit; no secret is involved. A missing reference makes the tests SKIP, so
-  # this job greps its own verbose output and fails on a skip: the table cannot go green without Python.
-  differential:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
+      # The Go scorers against the Python reference on the hand-made differential table. The
+      # reference is a public repository checked out at the pinned commit; no secret is
+      # involved. A missing reference makes the tests SKIP, so this greps its own verbose
+      # output and fails on a skip; it also fails unless at least 50 sub-tests passed, so the
+      # table cannot go green without Python.
       - uses: actions/checkout@v4
         with:
           repository: TortoiseBots/tortoise-trials
@@ -71,17 +52,12 @@ jobs:
           path: .reference/tortoise-trials
           persist-credentials: false
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.mod
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: differential table against the pinned reference
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           out="$(TRIALS_PYTHON_ROOT="$PWD/.reference/tortoise-trials" go test -count=1 -v ./internal/trials/tests/differential 2>&1)" || {
@@ -96,3 +72,21 @@ jobs:
           if grep -q -- "--- FAIL" <<<"$out"; then
             exit 1
           fi
+          passed="$(grep -cE '^[[:space:]]+--- PASS: TestDifferential' <<<"$out" || true)"
+          echo "differential sub-tests passed: $passed"
+          if [ "$passed" -lt 50 ]; then
+            echo "only $passed differential sub-tests passed; at least 50 must run" >&2
+            exit 1
+          fi
+
+      # Pinned: a new staticcheck release must not turn an unrelated PR red. No checks are disabled; a false positive
+      # is a single `-check` in a commented staticcheck.conf, never a whole category.
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      # `make test` builds the navmesh engine through cgo (the runner has g++) and runs the navmesh tests, which
+      # skip without mmaps. This builds the real binary with cgo explicitly.
+      - name: cgo build
+        run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
