@@ -187,9 +187,9 @@ TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
 go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
 ```
 
-Result with the reference: 55 cases (39 whole-run, 14 direct rule evaluations, 2 validate
+Result with the reference: 56 cases (40 whole-run, 14 direct rule evaluations, 2 validate
 runs), all pass with no skips (fix round 2). Besides B1-B6 it covers the round-2 items: the NaN
-token in a snapshot and a NaN/+Inf value reaching a writer, `min_n` `"abc"` on the rep path
+token in a snapshot, in a raw row and in a written verdict, and a +Inf value reaching a writer, `min_n` `"abc"` on the rep path
 (error) and the pooled path (guarded), `within_s` `"abc"`, `min_valid_s` `"abc"`, `int(inf)` in a
 pre-scored n and in `min_reps`, `min_reps` beyond int64, the four odd GUID strings
 (`0x-5`, `1_0`, `0x1_f`, `0x+5`), a spell id beyond int64 in a where filter, and validate's
@@ -279,7 +279,7 @@ checks (not numeric conversions) and `Num`'s `isinstance`-guarded case above.
 | A1 either-side error | an errored run is counted `errored`, both messages printed, exit 1; `--expect-error RUN` names an expected one | `tools/trialsparity` run on the fabricated error run (summary `errored 1`) |
 | A2 compared 0 | summary is total/compared/equal/differ/errored/skipped/not run; exit 1 when compared == 0 and when compared+skipped+not run != total | empty `--runs` dir exits 1 for both reasons |
 | A3 harness limits | help and these notes name samples.jsonl as input+output, repeats without a raw trace, symlinks | tool help text |
-| B1 NaN/Infinity tokens | `pyjson.Unmarshal` accepts the three tokens; writers still refuse them | `pyjson` `TestUnmarshalNonFiniteTokens`, differential `b1_nan_token_in_snapshot`, `b1_nan_value_in_prescore_errors`, `c2_inf_value_in_prescore_errors` |
+| B1 NaN/Infinity tokens | `pyjson.Unmarshal` accepts the three tokens; writers still refuse them | `pyjson` `TestUnmarshalNonFiniteTokens`, differential `b1_nan_token_in_snapshot`, `b1_nan_token_in_raw_normalise_errors`, `b1_nan_value_in_prescore_errors`, `c2_inf_value_in_prescore_errors` |
 | B2 `int(min_n)` | rep path errors on a value Python cannot convert; pooled path keeps the guard | differential `b2_rule_min_n_string_raises`, `b2_pooled_min_n_string_guarded` |
 | B3 ignored conversions | every site above matches Python | differential `b3_latency_within_s_string_raises`, `b3_min_valid_string_raises`; table above |
 | B4 int(inf), big ints, GUIDs | class-aware `PyInt`/`PyFloat`; `min_reps` big ints; Python `int(text, 16)` rules | differential `b4_prescore_n_inf_raises`, `b4_min_reps_inf_raises`, `b4_min_reps_beyond_int64`, `b4_pooled_min_n_beyond_int64`, `b4_raw_seq_inf_write_raises`, `b4_norm_guid_edges`; `events` `TestNormGUIDMatchesPython`; pinned `parityfix` big walk n / pooled k/n |

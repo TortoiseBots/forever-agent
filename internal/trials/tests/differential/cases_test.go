@@ -287,6 +287,19 @@ func runCases(t *testing.T) []runCase {
 			reps:      []repCase{{events: []any{castRow(1, 17)}}},
 		},
 		{
+			// B1: the NaN token survives json.loads into the normaliser, whose
+			// allow_nan=False dump then raises; Go decodes the token and errors at the same
+			// writer.
+			name:  "b1_nan_token_in_raw_normalise_errors",
+			trial: newTrial(metricRule("R", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{rawText: []string{
+				`{"seq":NaN,"time":"2026-01-01T00:00:05","kind":"spell_go","spell_id":17,"source":{"name":"Bot","guid":"0x2"},"target":{"name":"Player","guid":"0x1"}}`,
+			}}},
+			errorPython: "Out of range float values are not JSON compliant",
+			errorGo:     "not allowed with allow_nan=False",
+			errorStage:  "normalise",
+		},
+		{
 			// B1: a NaN the Python json.dumps sees in verdicts.json (before trial.json)
 			// raises allow_nan=False; Go returns the same class instead of panicking.
 			name:  "b1_nan_value_in_prescore_errors",
