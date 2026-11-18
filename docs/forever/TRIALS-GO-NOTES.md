@@ -254,20 +254,20 @@ does there:
 
 | go site | Python line | Python | Go now |
 |---|---|---|---|
-| `rules.go` `Num` (`pyjson.Num`) | `rules.py:54-56` `_num` (isinstance guard) | guarded | guarded by `IsNum` |
-| `rules.go` latency `within_s` | `rules.py:1021` `float(check.get("within_s") or 0.0)` | unguarded: raises | `floatOrZero`, error |
-| `rules.go` latency `debounce_responder_s` | `rules.py:1026-1030` try/except `(TypeError, ValueError)` | guarded | `guardedFloatOrZero`, only `OverflowError` escapes |
-| `rules.go` `first` excluded span `from`/`to` | `rules.py:1173-1178` try/except, `continue` | guarded | `PyFloat`; `OverflowError` escapes, others skip the span |
-| `rules.go` `first` across-reps `debounce_responder_s` | `rules.py:1183-1190` try/except | guarded | `guardedFloatOrZero` |
-| `rules.go` walk `n` | `rules.py:926-929` try/except `(TypeError, ValueError)` | guarded | `PyInt`; `OverflowError` escapes, others are 0 |
-| `score.go` `min_valid_s` | `score.py:304` `float(trial.get("min_valid_s") or 0)` | unguarded | `floatOrZero`, error |
-| `score.go` `min_opportunity_s` | `score.py:324` and `333` `float(min_opp)` | unguarded where truthy and PASS/FAIL | `floatOrZero`, error |
-| `score.go` rep `min_n` | `score.py:343-345` `int(min_n)` | unguarded | `PyInt`, error (differential `b2_rule_min_n_string_raises`) |
-| `score.go` pooled `min_n` | `score.py:459-463` try/except | guarded | error only for `OverflowError` |
-| `score.go` `min_reps` | `score.py:478-482` try/except | guarded; big ints compare | error only for `OverflowError`; big ints compared exactly |
-| `score.go` pooled `k`/`n` sums | `score.py:450-451` `sum(int(...))` | unguarded | `intOrZero` error (big values pinned, see above) |
-| `events.go` attack `seq` | `events.py:206-209` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean "no seq" |
-| `events.go` normalise `seq`, `spell_id` | `events.py:385-393` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean null |
+| `rules.go:112` `Num` (`pyjson.Num`) | `rules.py:54-56` `_num` (isinstance guard) | guarded | guarded by `IsNum` |
+| `rules.go:1754` latency `within_s` | `rules.py:1021` `float(check.get("within_s") or 0.0)` | unguarded: raises | `floatOrZero`, error |
+| `rules.go:1758` latency `debounce_responder_s` | `rules.py:1026-1030` try/except `(TypeError, ValueError)` | guarded | `guardedFloatOrZero`, only `OverflowError` escapes |
+| `rules.go:2033-2034` `first` excluded span `from`/`to` | `rules.py:1173-1178` try/except, `continue` | guarded | `PyFloat`; `OverflowError` escapes, others skip the span |
+| `rules.go:2050` `first` across-reps `debounce_responder_s` | `rules.py:1183-1190` try/except | guarded | `guardedFloatOrZero` |
+| `rules.go:1555` walk `n` | `rules.py:926-929` try/except `(TypeError, ValueError)` | guarded | `PyInt`; `OverflowError` escapes, others are 0 |
+| `score.go:549` `min_valid_s` | `score.py:304` `float(trial.get("min_valid_s") or 0)` | unguarded | `floatOrZero`, error |
+| `score.go:595` `min_opportunity_s` | `score.py:324` and `333` `float(min_opp)` | unguarded where truthy and PASS/FAIL | `floatOrZero`, error |
+| `score.go:612` rep `min_n` | `score.py:343-345` `int(min_n)` | unguarded | `PyInt`, error (differential `b2_rule_min_n_string_raises`) |
+| `score.go:901` pooled `min_n` | `score.py:459-463` try/except | guarded | error only for `OverflowError` |
+| `score.go:931` `min_reps` | `score.py:478-482` try/except | guarded; big ints compare | error only for `OverflowError`; big ints compared exactly |
+| `score.go:879-884` pooled `k`/`n` sums | `score.py:450-451` `sum(int(...))` | unguarded | `intOrZero` error (big values pinned, see above) |
+| `events.go:432` attack `seq` | `events.py:206-209` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean "no seq" |
+| `events.go:670`, `events.go:681` normalise `seq`, `spell_id` | `events.py:385-393` try/except | guarded | `PyInt`; `OverflowError` escapes, others mean null |
 
 The remaining `, _ :=` conversions after the sweep are `pyjson.List`/`pyjson.Object` shape
 checks (not numeric conversions) and `Num`'s `isinstance`-guarded case above.
