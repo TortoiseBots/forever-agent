@@ -2,6 +2,7 @@ package bnet
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -65,6 +66,39 @@ func TestLoginWrongPassword(t *testing.T) {
 		t.Fatal("a wrong password logged in")
 	}
 	if !strings.Contains(err.Error(), "login refused") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestLoginOfflineRealm reports the server's "listed but offline" state before the join is refused.
+func TestLoginOfflineRealm(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realmPopulation = 0
+
+	_, err := Login(context.Background(), f.options())
+	if err == nil {
+		t.Fatal("an offline realm was joined")
+	}
+	var realmErr *RealmError
+	if !errors.As(err, &realmErr) || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestLoginBuildMismatch reports the realm's build when it is not the one the client claims.
+func TestLoginBuildMismatch(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realmBuild = 70707
+	f.realmFlags = realmFlagVersionMismatch
+
+	_, err := Login(context.Background(), f.options())
+	if err == nil {
+		t.Fatal("a realm for another build was joined")
+	}
+	var realmErr *RealmError
+	if !errors.As(err, &realmErr) || !strings.Contains(err.Error(), "does not accept client build 70938") {
 		t.Fatalf("err = %v", err)
 	}
 }

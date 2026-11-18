@@ -204,6 +204,10 @@ type fakeLogin struct {
 	caFile string
 	ticket string
 	errs   chan error
+
+	realmPopulation uint32
+	realmFlags      uint32
+	realmBuild      uint32
 }
 
 const fakeGameAccountID = 7
@@ -217,8 +221,9 @@ func newFakeLogin(t *testing.T) *fakeLogin {
 	}
 	f := &fakeLogin{
 		t: t, srp: newFakeSRP(t), caFile: caFile,
-		ticket: "TC-" + strings.Repeat("AB", 20),
-		errs:   make(chan error, 16),
+		ticket:          "TC-" + strings.Repeat("AB", 20),
+		errs:            make(chan error, 16),
+		realmPopulation: 1, realmBuild: build70938,
 	}
 
 	mux := http.NewServeMux()
@@ -501,10 +506,11 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h Header, body []byte) error
 				"wowRealmAddress": address,
 				"cfgRealmsID":     70,
 				"name":            "TestRealm",
-				"populationState": 1,
+				"populationState": f.realmPopulation,
 				"cfgContentSetID": 137,
 				"superDistrictID": 2,
-				"version":         map[string]any{"versionBuild": 70938},
+				"flags":           f.realmFlags,
+				"version":         map[string]any{"versionBuild": f.realmBuild},
 			},
 		}}}
 		counts := map[string]any{"counts": []any{map[string]any{"wowRealmAddress": address, "count": 0}}}
