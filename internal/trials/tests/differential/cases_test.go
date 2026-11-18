@@ -136,6 +136,22 @@ func runCases(t *testing.T) []runCase {
 			}}}},
 		},
 		{
+			// Pre-scored repeats with float k/n: Python sums int(5.0) == 5 and keeps the raw
+			// 5.0/10.0 in the detail rows.
+			name: "edge_prescore_float_k_n",
+			trial: newTrial(map[string]any{"id": "P", "pool": true, "pass_if": ">= 0.5",
+				"source": "differential", "desc": "P",
+				"check": map[string]any{"metric": "count", "where": map[string]any{"kind": "cast"}}}),
+			reps: []repCase{
+				{noSetup: true, noMarks: true, verdicts: map[string]any{"rep": "rep1",
+					"rules": []any{map[string]any{"id": "P", "verdict": "PASS",
+						"value": 0.5, "k": 5.0, "n": 10.0}}}},
+				{noSetup: true, noMarks: true, verdicts: map[string]any{"rep": "rep2",
+					"rules": []any{map[string]any{"id": "P", "verdict": "PASS",
+						"value": 0.5, "k": 1.0, "n": 2.0}}}},
+			},
+		},
+		{
 			name:  "edge_empty_events",
 			trial: newTrial(metricRule("E", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
 			reps:  []repCase{{eventsText: []string{}}},

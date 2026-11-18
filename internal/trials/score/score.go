@@ -825,12 +825,17 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 				verdict = "FAIL"
 			}
 			for _, v := range valid {
-				if n, ok := pyjson.Int64(v.Row["k"]); ok {
-					kSum += n
+				// Python: int(row.get("k", 0) or 0), so 5.0 counts as 5.
+				n, err := intOrZero(v.Row["k"])
+				if err != nil {
+					return nil, fmt.Errorf("rule %s: k: %w", rid, err)
 				}
-				if n, ok := pyjson.Int64(v.Row["n"]); ok {
-					nSum += n
+				kSum += n
+				n, err = intOrZero(v.Row["n"])
+				if err != nil {
+					return nil, fmt.Errorf("rule %s: n: %w", rid, err)
 				}
+				nSum += n
 			}
 			if pyjson.IsBool(rule["pool"]) && pyjson.Truthy(rule["pool"]) {
 				// POOLED: one verdict from the summed k/n over every valid repeat.
@@ -860,7 +865,7 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 					verdict = "FAIL"
 				}
 			}
-			minReps, _ := pyjson.Int64(rule["min_reps"])
+			minReps, _ := intOrZero(rule["min_reps"])
 			if minReps > 1 && int64(len(valid)) < minReps {
 				verdict = "INCONCLUSIVE"
 				reason = fmt.Sprintf("valid reps %d < min_reps %d", len(valid), minReps)
@@ -875,7 +880,7 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 			}
 			detail = append(detail, map[string]any{
 				"rep": v.Rep, "verdict": row["verdict"], "value": row["value"],
-				"k": defaultInt(row["k"]), "n": defaultInt(row["n"]),
+				"k": defaultField(row, "k"), "n": defaultField(row, "n"),
 				"evidence": evidence, "guard": orEmpty(row["guard"]),
 				"reason":         orEmpty(row["reason"]),
 				"no_match":       pyjson.Truthy(row["no_match"]),
@@ -922,14 +927,30 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 	return out, nil
 }
 
-func defaultInt(v any) any {
-	if v == nil {
-		return int64(0)
-	}
-	if n, ok := pyjson.Int64(v); ok {
-		return n
+// defaultField is Python's `row.get(key, 0)`: the raw value when the key is present (an int
+// stays an int, a float stays a float), 0 only when it is absent.
+func defaultField(row map[string]any, key string) any {
+	if v, ok := row[key]; ok {
+		return v
 	}
 	return int64(0)
+}
+
+// intOrZero is Python's int(value or 0): a falsy value is 0, a float is truncated, a numeric
+// string is accepted, and anything Python's int() rejects is an error.
+func intOrZero(value any) (int64, error) {
+	if !pyjson.Truthy(value) {
+		return 0, nil
+	}
+	converted, err := pyjson.PyInt(value)
+	if err != nil {
+		return 0, err
+	}
+	n, ok := pyjson.Int64(converted)
+	if !ok {
+		return 0, fmt.Errorf("integer %s does not fit int64", pyjson.Str(converted))
+	}
+	return n, nil
 }
 
 // ScoreRun scores all trials of a run, writes card.md and card.json, and returns the

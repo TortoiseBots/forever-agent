@@ -67,6 +67,7 @@ type repCase struct {
 	eventsText  []string
 	raw         []any
 	rawText     []string
+	verdicts    map[string]any
 }
 
 type runCase struct {
@@ -207,6 +208,9 @@ func writeCase(t *testing.T, root string, c runCase) {
 		}
 		if rep.raw != nil || rep.rawText != nil {
 			writeLines(t, filepath.Join(dir, "raw-ta.jsonl"), rep.raw, rep.rawText)
+		}
+		if rep.verdicts != nil {
+			writeJSONFile(t, filepath.Join(dir, "verdicts.json"), rep.verdicts)
 		}
 	}
 }

@@ -165,7 +165,7 @@ skips when `TRIALS_PYTHON_ROOT` is unset, so CI stays green without Python:
 TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
 ```
 
-Result with the reference: 37 cases (25 whole-run, 12 direct rule evaluations), all equal:
+Result with the reference: 38 cases (26 whole-run, 12 direct rule evaluations), all equal:
 `ok github.com/pjerra/forever-agent/internal/trials/tests/differential 1.8s`. The table covers
 B1-B6, plus empty/one-event runs, a latency tie at exactly half, an equal count boundary, negative
 times, duplicate raw rows, `seq` int vs string, unicode names, a three-rep majority, a trial with
