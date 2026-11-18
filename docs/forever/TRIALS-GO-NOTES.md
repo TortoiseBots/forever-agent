@@ -95,7 +95,7 @@ per-file prefix so the files of one package share one namespace.
 | `test_live2.py` | `tests/rough/live2_scoring_test.go` | 1 / 22 | 21 (live selection/summon/cleanup) |
 | `test_live3.py` | `tests/rough/live3_scoring_test.go` | 8 / 77 | 69 (live visibility/governor/pacing) |
 
-419 tests translated (the packages hold 423 Go test functions: a few extra Go cases and split subtests). The test files outside this table are pure live-runner tests and are not
+423 tests translated. The test files outside this table are pure live-runner tests and are not
 translated at all: `test_live.py` (81), `test_arena_lock.py` (7), `test_bench_pin.py` (11),
 `test_cleanup_wiring.py` (9), `test_orphans.py` (6), and the `trl/live/*` cases of the
 `test_live*` files above.
