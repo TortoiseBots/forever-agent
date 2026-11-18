@@ -128,7 +128,8 @@ unchanged):
 one copy with the Python tool and the other with `internal/trials`, and diffs `card.json` and
 `card.md` (and, when those match, every `rep*/verdicts.json` and `trial.json`). A folder without
 `RUN.json`, or with a `RUN.json` newer than 10 minutes, is skipped. Run folders are read only:
-every score writes into a temporary copy.
+every score writes into a temporary copy. A difference makes it exit 1 and print the first
+differing run with a short diff (checked with a stub Python scorer that writes a different card).
 
 Result on the recorded nightly runs (paths passed on the command line, never in the repo):
 
