@@ -536,6 +536,37 @@ func ruleCases(t *testing.T) []ruleCase {
 			errorGo:     "could not convert string to float",
 		},
 		{
+			// Python's `row.get("spell_id") in spell_ids` compares the ROW's value as a
+			// set member, never through int(): a recorded 5.5 or "5" does not match id 5,
+			// while 5.0 does (equal and the same hash). IntKey used to truncate or parse
+			// both into a match.
+			name: "r3_row_spell_id_membership",
+			rule: metricRule("M", "count", map[string]any{
+				"where": map[string]any{"spell_id": int64(5)},
+			}, "== 2"),
+			rows: []any{
+				func() map[string]any { row := castRow(1, 17); row["spell_id"] = 5.5; return row }(),
+				func() map[string]any { row := castRow(2, 17); row["spell_id"] = "5"; return row }(),
+				func() map[string]any { row := castRow(3, 17); row["spell_id"] = 5.0; return row }(),
+				castRow(4, 5),
+			},
+			samples: []any{}, marks: []any{}, ctx: emptyCtx,
+		},
+		{
+			// The where filter's int(1e999) is int(inf): OverflowError in Python, which
+			// the bench's `except (TypeError, ValueError)` does not catch, so the rule
+			// raises. Go used to skip the id silently and score a count.
+			name: "r3_infinite_spell_id_raises",
+			payloadText: `{"rule": {"id": "S", "check": {"metric": "count", "where": {"kind": "cast", "spell_id": 1e999}}, ` +
+				`"pass_if": ">= 1", "source": "differential", "desc": "S"}, ` +
+				`"rows": [{"t": 1.0, "kind": "cast", "spell_id": 17, "src_guid": "0x2", "dst_guid": "0x1", ` +
+				`"src": "Bot", "dst": "Player", "src_unit": "$bot", "dst_unit": "$player", ` +
+				`"src_role": "bot", "dst_role": "player"}], "samples": [], "marks": [], ` +
+				`"ctx": {"trial": {}, "guids": {}, "thresholds": {}}}`,
+			errorPython: "cannot convert float infinity to integer",
+			errorGo:     "cannot convert float infinity to integer",
+		},
+		{
 			name: "edge_first_no_match",
 			rule: map[string]any{"id": "F", "check": map[string]any{"metric": "first",
 				"where": map[string]any{"kind": "cast", "spell_id": int64(17)}},

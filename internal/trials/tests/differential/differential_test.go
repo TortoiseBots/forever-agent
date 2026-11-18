@@ -15,16 +15,18 @@
 //	run  — a whole run folder (RUN.json, trial snapshot, reps) scored by both CLIs; every
 //	       generated file is compared byte for byte, plus the result class
 //	rule — one rules.evaluate / rules.Evaluate call with hand-made rows, comparing verdict,
-//	       value (int vs float included), k, n and whether the call raises.
+//	       value (int vs float included), k, n, reason, no_match and whether the call raises;
+//	       the payload is written by pyjson (not encoding/json, which writes 5.0 as 5) and
+//	       Python must read back the same JSON types Go wrote.
 package differential
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -508,6 +510,9 @@ type ruleCase struct {
 	samples []any
 	marks   []any
 	ctx     map[string]any
+	// payloadText is the exact body sent to both sides instead of pyjson.Marshal of the
+	// fields above: the only way to carry a number the writers refuse (Infinity, 1e999).
+	payloadText string
 	// An error case names the stable part of each side's error.
 	errorPython string
 	errorGo     string
@@ -517,25 +522,93 @@ const ruleScript = `
 import json, sys
 sys.path.insert(0, ".")
 from trl import rules
+
+def types_(v):
+    if isinstance(v, dict):
+        return {k: types_(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [types_(x) for x in v]
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, int):
+        return "int"
+    if isinstance(v, float):
+        return "float"
+    if isinstance(v, str):
+        return "str"
+    if v is None:
+        return "null"
+    return type(v).__name__
+
 doc = json.load(sys.stdin)
 try:
     r = rules.evaluate(doc["rule"], doc["rows"], doc["samples"], doc["marks"], doc["ctx"])
-    print(json.dumps({"ok": True, "result": {
+    print(json.dumps({"ok": True, "types": types_(doc), "result": {
         "verdict": r.get("verdict"), "value": r.get("value"),
         "k": r.get("k"), "n": r.get("n"),
         "reason": r.get("reason"), "no_match": bool(r.get("no_match"))}}, allow_nan=False))
 except Exception as exc:
-    print(json.dumps({"ok": False, "error": type(exc).__name__, "msg": str(exc)}))
+    print(json.dumps({"ok": False, "types": types_(doc), "error": type(exc).__name__, "msg": str(exc)}))
 `
+
+// payloadTypes mirrors ruleScript's types_ on the Go value, so a payload that reaches Python
+// with a different JSON type than Go wrote (encoding/json would send 5 for float64(5.0), the
+// exact bug this table exists to catch) fails the case.
+func payloadTypes(v any) any {
+	switch val := v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case string:
+		return "str"
+	case int, int64, *big.Int:
+		return "int"
+	case float64:
+		return "float"
+	case []any:
+		out := make([]any, len(val))
+		for i := range val {
+			out[i] = payloadTypes(val[i])
+		}
+		return out
+	case []string:
+		out := make([]any, len(val))
+		for i := range val {
+			out[i] = payloadTypes(val[i])
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k := range val {
+			out[k] = payloadTypes(val[k])
+		}
+		return out
+	}
+	return "unsupported"
+}
 
 func runRuleCase(t *testing.T, root string, c ruleCase) {
 	t.Helper()
 	payload := map[string]any{"rule": c.rule, "rows": c.rows, "samples": c.samples,
 		"marks": c.marks, "ctx": c.ctx}
-	body, err := json.Marshal(payload)
+	var body []byte
+	if c.payloadText != "" {
+		// Only a raw body can carry a number the writers refuse (an infinity): json.dumps
+		// with allow_nan=False cannot write one, but json.load reads it.
+		body = []byte(c.payloadText)
+	} else {
+		var err error
+		body, err = pyjson.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc, err := pyjson.Unmarshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
+	docObj := pyjson.ObjectOrEmpty(doc)
 	cmd := exec.Command(pythonBin(), "-c", ruleScript)
 	cmd.Dir = root
 	cmd.Stdin = bytes.NewReader(body)
@@ -550,14 +623,27 @@ func runRuleCase(t *testing.T, root string, c ruleCase) {
 		t.Fatalf("python output %q: %v", out.String(), err)
 	}
 	py := pyjson.ObjectOrEmpty(pyDoc)
-	pyOK := pyjson.Truthy(py["ok"])
-	pyResult := pyjson.ObjectOrEmpty(py["result"])
-
-	doc, err := pyjson.Unmarshal(body)
+	// The expectation is the Go payload's own types, not the body decoded back: decoding
+	// the body would agree with Python even when the marshaller already dropped the float
+	// (encoding/json writes 5 for 5.0, which reads back as an int on both sides).
+	var wantTree any = payloadTypes(docObj)
+	if c.payloadText == "" {
+		wantTree = payloadTypes(payload)
+	}
+	wantTypes, err := pyjson.MarshalLine(wantTree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	docObj := pyjson.ObjectOrEmpty(doc)
+	pyTypes, err := pyjson.MarshalLine(py["types"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wantTypes, pyTypes) {
+		t.Fatalf("payload types: go wrote %s, python read %s", wantTypes, pyTypes)
+	}
+	pyOK := pyjson.Truthy(py["ok"])
+	pyResult := pyjson.ObjectOrEmpty(py["result"])
+
 	ctx := ctxFromDoc(pyjson.ObjectOrEmpty(docObj["ctx"]))
 	res := rules.Evaluate(
 		pyjson.ObjectOrEmpty(docObj["rule"]),
@@ -582,13 +668,24 @@ func runRuleCase(t *testing.T, root string, c ruleCase) {
 		return
 	}
 	// The bench omits k/n when it means 0 (walk_metric, unknown metric): compare the
-	// scorer's own defaults, not the absence of the key.
+	// scorer's own defaults, not the absence of the key. A missing reason is None in
+	// Python and "" in Go, so both bad halves are pinned here.
 	pyValue, _ := pyjson.MarshalLine(pyResult["value"])
 	goValue, _ := pyjson.MarshalLine(res.Value)
-	if got, want := fmt.Sprintf("%s/%s/%d/%d", pyjson.Str(pyResult["verdict"]), pyValue,
-		resultInt(pyResult, "k"), resultInt(pyResult, "n")),
-		fmt.Sprintf("%s/%s/%d/%d", res.Verdict, goValue, res.K, res.N); got != want {
-		t.Fatalf("verdict/value/k/n: python %s, go %s", got, want)
+	pyReason := ""
+	if raw := pyResult["reason"]; raw != nil {
+		text, ok := raw.(string)
+		if !ok {
+			t.Fatalf("python reason %v is not a string", raw)
+		}
+		pyReason = text
+	}
+	if got, want := fmt.Sprintf("%s/%s/%d/%d/%v/%q", pyjson.Str(pyResult["verdict"]), pyValue,
+		resultInt(pyResult, "k"), resultInt(pyResult, "n"),
+		pyjson.Truthy(pyResult["no_match"]), pyReason),
+		fmt.Sprintf("%s/%s/%d/%d/%v/%q", res.Verdict, goValue, res.K, res.N,
+			res.NoMatch, res.Reason); got != want {
+		t.Fatalf("verdict/value/k/n/no_match/reason: python %s, go %s", got, want)
 	}
 }
 
@@ -695,6 +792,17 @@ func validateCases(t *testing.T) []validateCase {
 				"gamma.json":  with("gamma", int64(1)),
 				"q'uote.json": with("quote", "unique-quote"),
 				"wrong.json":  with("not-wrong", "unique-wrong"),
+			},
+		},
+		{
+			// A file named exactly ".json": Python's splitext keeps a leading-dot name as
+			// the stem, so the mismatch names ".json"; filepath.Ext would make the stem ""
+			// and Go would print the wrong stem.
+			name:    "r3_dot_json_stem",
+			want:    []string{`trial id 'dotfile' != file stem '.json'`},
+			notWant: []string{`file stem ""`},
+			files: map[string]map[string]any{
+				".json": with("dotfile", "unique-dot"),
 			},
 		},
 		{

@@ -178,23 +178,28 @@ Result on the recorded nightly runs (paths passed on the command line, never in 
 `internal/trials/tests/differential` runs small hand-made inputs through BOTH scorers: whole run
 folders (compared file for file, plus class and trial-level verdict/k/n and the per-repeat
 `detail[*].value`), single `rules.evaluate` calls (verdict, value with int/float kept apart, k, n,
-and raise-vs-not), and `trials validate` invocations (stdout byte for byte and the exit code). It
-skips only when no reference is given at all; a reference path that is set but has no `trials.py`
-FAILS the test, so a typo cannot turn the table green:
+`reason`, `no_match` and raise-vs-not), and `trials validate` invocations (stdout byte for byte and
+the exit code). The rule payload is written by `pyjson`, not `encoding/json`, and the test compares
+the JSON types Python read against the Go payload's own types: a float count reaches Python as
+`5.0`, and an int stays an int. The table skips only when no reference is given at all; a
+reference path that is set but has no `trials.py` FAILS the test, so a typo cannot turn the table
+green:
 
 ```
 TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
 go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
 ```
 
-Result with the reference: 56 cases (40 whole-run, 14 direct rule evaluations, 2 validate
-runs), all pass with no skips (fix round 2). Besides B1-B6 it covers the round-2 items: the NaN
+Result with the reference: 59 cases (40 whole-run, 16 direct rule evaluations, 3 validate
+runs), all pass with no skips (fix round 3). Besides B1-B6 it covers the round-2 items: the NaN
 token in a snapshot, in a raw row and in a written verdict, and a +Inf value reaching a writer, `min_n` `"abc"` on the rep path
 (error) and the pooled path (guarded), `within_s` `"abc"`, `min_valid_s` `"abc"`, `int(inf)` in a
 pre-scored n and in `min_reps`, `min_reps` beyond int64, the four odd GUID strings
 (`0x-5`, `1_0`, `0x1_f`, `0x+5`), a spell id beyond int64 in a where filter, and validate's
 trial-id prefix, `%r` quoting, int 1 vs `"1"` rule ids and non-object rule (exit 1 after the
-earlier files printed).
+earlier files printed). Round 3 adds an infinite `where.spell_id` (OverflowError on both sides), a
+row `spell_id` compared as Python's set membership (5.0 matches 5, 5.5 and `"5"` do not), and a
+file named exactly `.json` (Python's `splitext` stem).
 
 An error case also names WHICH error: `errorPython` must appear in Python's stderr (or the rule
 script's exception message) and `errorGo` in the Go error, plus the expected stage, so "both

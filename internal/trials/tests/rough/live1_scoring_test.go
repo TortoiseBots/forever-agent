@@ -101,7 +101,10 @@ func TestSpellIdsTest_EveryRealShieldCastCarriesAnIDTheRuleMatches(t *testing.T)
 		t.Fatalf("want 3 casts, got %d", len(casts))
 	}
 	where := obj(t, obj(t, rule["check"])["where"])
-	ids := rules.SpellIDs(where)
+	ids, err := rules.SpellIDs(where)
+	if err != nil {
+		t.Fatalf("SpellIDs: %v", err)
+	}
 	ranks := []int64{17, 592, 600, 3747, 6065, 6066, 10898, 10899, 10900, 10901}
 	for _, rank := range ranks {
 		if !ids[pyjson.Str(rank)] {

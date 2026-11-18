@@ -8,6 +8,7 @@ package rules
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"sort"
@@ -88,6 +89,10 @@ type Ctx struct {
 	SamplesAll        []Row
 	Marks             []Row
 	WalkReport        map[string]any
+	// spellErr is an int() exception `_spell_ids` raised while matching (an infinite
+	// where.spell_id: OverflowError, which the bench does not catch). Python's raise aborts
+	// the rule, so Evaluate reports it instead of a verdict.
+	spellErr error
 }
 
 // Result is what one rule says about one repeat.
@@ -243,8 +248,9 @@ func uncaughtTypeValue(err error) bool {
 
 // SpellIDs is the set of spell ids a where/trigger filter names (by name or by id), keyed by
 // Python's int() decimal form so an id beyond int64 still compares (Python's ints are
-// arbitrary precision).
-func SpellIDs(where Row) map[string]bool {
+// arbitrary precision). An error is an int() exception the bench's `except (TypeError,
+// ValueError)` does not catch: an infinite spell_id is OverflowError, so the rule raises.
+func SpellIDs(where Row) (map[string]bool, error) {
 	out := map[string]bool{}
 	if where["spell"] != nil {
 		names := []any{where["spell"]}
@@ -263,23 +269,53 @@ func SpellIDs(where Row) map[string]bool {
 			ids = list
 		}
 		for _, one := range ids {
-			if key, ok := IntKey(one); ok {
-				out[key] = true
+			key, err := IntKey(one)
+			if err != nil {
+				if uncaughtTypeValue(err) {
+					return nil, err
+				}
+				continue
 			}
+			out[key] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
-// IntKey is Python's int(value) as a comparable decimal key, ok where int() raises. Two
-// values Python considers the same integer (5, 5.0, "5") share a key, and an integer beyond
-// int64 keeps its exact digits.
-func IntKey(v any) (string, bool) {
+// IntKey is Python's int(value) as a comparable decimal key, with the exception class where
+// int() raises: OverflowError for an infinity, ValueError for NaN or a bad literal, TypeError
+// for a type it refuses. Two values Python considers the same integer (5, 5.0, "5") share a
+// key, and an integer beyond int64 keeps its exact digits.
+func IntKey(v any) (string, error) {
 	n, err := pyjson.PyInt(v)
 	if err != nil {
-		return "", false
+		return "", err
 	}
-	return pyjson.Str(n), true
+	return pyjson.Str(n), nil
+}
+
+// spellIDKey is a row's spell_id as the key of Python's `row.get("spell_id") in spell_ids`
+// (a set of ints). Unlike IntKey it never calls int() on the row's value: 5.0 matches 5
+// (equal, same hash), but 5.5 and "5" do not, and NaN or an infinity is in no integer set.
+func spellIDKey(v any) (string, bool) {
+	switch n := v.(type) {
+	case int64:
+		return strconv.FormatInt(n, 10), true
+	case *big.Int:
+		return n.String(), true
+	case bool:
+		if n {
+			return "1", true
+		}
+		return "0", true
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return "", false
+		}
+		bi, _ := new(big.Float).SetFloat64(n).Int(nil)
+		return bi.String(), true
+	}
+	return "", false
 }
 
 // TimedSample is a sample with its re-based second.
@@ -650,11 +686,20 @@ func Matches(row Row, where Row, byGUID map[string][]TimedSample, ctx *Ctx, tria
 			return false
 		}
 	}
-	if ids := SpellIDs(where); len(ids) > 0 {
+	ids, err := SpellIDs(where)
+	if err != nil {
+		// Python's raise aborts the rule; Matches has no error return, so the exception
+		// waits on the ctx for Evaluate to report.
+		if ctx != nil {
+			ctx.spellErr = err
+		}
+		return false
+	}
+	if len(ids) > 0 {
 		if row["spell_id"] == nil {
 			return false
 		}
-		id, ok := IntKey(row["spell_id"])
+		id, ok := spellIDKey(row["spell_id"])
 		if !ok || !ids[id] {
 			return false
 		}
@@ -1463,6 +1508,17 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	}
 	local := *ctx
 	ctx = &local
+	ctx.spellErr = nil
+	res := evaluate(rule, rows, samples, marks, ctx)
+	if ctx.spellErr != nil {
+		// The match that raised produced no verdict: Python's exception wins even over an
+		// error a later conversion on this input would have raised.
+		res.Err = ctx.spellErr
+	}
+	return res
+}
+
+func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result {
 	trial := ctx.Trial
 	if trial == nil {
 		trial = map[string]any{}

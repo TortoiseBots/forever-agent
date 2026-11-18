@@ -472,6 +472,21 @@ func ValidateFiles(paths []string) ([]FileValidation, error) {
 	return out, nil
 }
 
+// pythonStem is os.path.splitext(name)[0]: leading dots of the last component are part of
+// the root, so ".json" keeps its whole name as the stem where filepath.Ext would say "".
+func pythonStem(name string) string {
+	dot := strings.LastIndexByte(name, '.')
+	if dot < 0 {
+		return name
+	}
+	for i := range dot {
+		if name[i] != '.' {
+			return name[:dot]
+		}
+	}
+	return name
+}
+
 func validateFile(path string, seen map[any]string) (FileValidation, error) {
 	result := FileValidation{Path: path}
 	trial, err := LoadTrial(path)
@@ -482,7 +497,7 @@ func validateFile(path string, seen map[any]string) (FileValidation, error) {
 		return result, nil
 	}
 	result.Errors = append(result.Errors, Validate(trial)...)
-	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	stem := pythonStem(filepath.Base(path))
 	if id, ok := trial["id"].(string); ok && id != stem {
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("%s: trial id %s != file stem %s", pyjson.Str(trial["id"]), pythonRepr(id), pythonRepr(stem)))
