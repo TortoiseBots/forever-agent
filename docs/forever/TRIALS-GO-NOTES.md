@@ -152,7 +152,7 @@ Result on the recorded nightly runs (paths passed on the command line, never in 
 | runs directory | summary line |
 |---|---|
 | `2026-11-15-t3-1115b-full` | compared 58 runs, equal 58, differ 0, skipped 0, from raw input 58 (pre-normalised 0) |
-| `2026-11-17-t3-1115b-test4` | compared 56 runs, equal 56, differ 0, skipped 2, from raw input 56 (pre-normalised 0) |
+| `2026-11-17-t3-1115b-test4` | compared 57 runs, equal 57, differ 0, skipped 1, from raw input 57 (pre-normalised 0) |
 
 ## Differential table
 
