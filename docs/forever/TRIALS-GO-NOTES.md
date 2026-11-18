@@ -69,12 +69,12 @@ per-file prefix so the files of one package share one namespace.
 | `test_edge_trials.py` | `tests/edge/edge_trials_test.go` | 38 / 38 | — |
 | `test_ooc_hurt.py` | `tests/edge/ooc_hurt_test.go` | 15 / 25 | 10 (live `run_ooc_hurt`) |
 | `test_drink_settle.py` | `tests/edge/drink_settle_test.go` | 0 / 9 | 9 (live `run_ooc` meal wait) |
-| `test_bench_fix_p1.py` | `tests/fixes/fix_p1_test.go` | 8 / 11 | 3 (live autogear) |
+| `test_bench_fix_p1.py` | `tests/fixes/fix_p1_test.go` | 7 / 11 | 4 (live autogear, build-table pin) |
 | `test_bench_fix_p2.py` | `tests/fixes/fix_p2_test.go` | 2 / 2 | — |
 | `test_bench_fix_p3.py` | `tests/fixes/fix_p3_test.go` | 4 / 4 | — |
 | `test_bench_fix_p3b.py` | `tests/fixes/fix_p3b_test.go` | 2 / 5 | 3 (live damage step/top-up) |
 | `test_bench_fix_p3c.py` | `tests/fixes/fix_p3c_test.go` | 1 / 1 | — |
-| `test_bench_fix_p3d.py` | `tests/fixes/fix_p3d_test.go` | 5 / 11 | 6 (live energy drain/guard) |
+| `test_bench_fix_p3d.py` | `tests/fixes/fix_p3d_test.go` | 6 / 11 | 5 (live energy drain/guard) |
 | `test_bench_fix_p3e.py` | `tests/fixesb/p3e_test.go` | 1 / 1 | — |
 | `test_bench_fix_p4.py` | `tests/fixesb/p4_test.go` | 3 / 6 | 3 (live engage-marked) |
 | `test_bench_fix_r2.py` | `tests/fixesb/r2_test.go` | 12 / 32 | 20 (live summon/visibility/prepull) |
@@ -91,9 +91,9 @@ per-file prefix so the files of one package share one namespace.
 | `test_gear_proficiency.py` | `tests/geartalents/gear_proficiency_test.go` | 1 / 28 | 27 (live gear run, server deadlines) |
 | `test_hire_talents.py` | `tests/geartalents/hire_talents_test.go` | 4 / 36 | 32 (live talent read-back) |
 | `test_rough.py` | `tests/rough/rough_test.go` | 4 / 36 | 32 (live ladder/run/leases) |
-| `test_live1.py` | `tests/rough/live1_scoring_test.go` | 4 / 27 | 23 (live collector/setup) |
+| `test_live1.py` | `tests/rough/live1_scoring_test.go` | 5 / 27 | 22 (live collector/setup) |
 | `test_live2.py` | `tests/rough/live2_scoring_test.go` | 1 / 22 | 21 (live selection/summon/cleanup) |
-| `test_live3.py` | `tests/rough/live3_scoring_test.go` | 9 / 77 | 68 (live visibility/governor/pacing) |
+| `test_live3.py` | `tests/rough/live3_scoring_test.go` | 8 / 77 | 69 (live visibility/governor/pacing) |
 
 419 tests translated (the packages hold 423 Go test functions: a few extra Go cases and split subtests). The test files outside this table are pure live-runner tests and are not
 translated at all: `test_live.py` (81), `test_arena_lock.py` (7), `test_bench_pin.py` (11),
