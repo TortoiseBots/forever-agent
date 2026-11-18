@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -24,7 +25,7 @@ func hexBytes(t *testing.T, s string) []byte {
 // in order so a reader can check the tags (field<<3 | wire type) without running anything.
 
 func TestHeaderRequestFixture(t *testing.T) {
-	h := Header{ServiceID: serviceIDRequest, MethodID: connectionConnectMethod, Token: 0, ServiceHash: connectionServiceHash}
+	h := header{ServiceID: serviceIDRequest, MethodID: connectionConnectMethod, Token: 0, ServiceHash: connectionServiceHash}
 	want := "080010011800" + "5D91694465" // 1:0, 2:1, 3:0, 11:fixed32 0x65446991 (little endian)
 	if got := hex.EncodeToString(h.marshal()); !strings.EqualFold(got, want) {
 		t.Fatalf("header = %s, want %s", got, want)
@@ -32,7 +33,7 @@ func TestHeaderRequestFixture(t *testing.T) {
 }
 
 func TestHeaderResponseFixture(t *testing.T) {
-	h := Header{ServiceID: serviceIDResponse, Token: 7, Size: 2, Status: 3, Ciid: "ab"}
+	h := header{ServiceID: serviceIDResponse, Token: 7, Size: 2, Status: 3, Ciid: "ab"}
 	want := "08FE01" + "1807" + "2802" + "3003" + "6A026162"
 	if got := hex.EncodeToString(h.marshal()); !strings.EqualFold(got, want) {
 		t.Fatalf("header = %s, want %s", got, want)
@@ -40,7 +41,7 @@ func TestHeaderResponseFixture(t *testing.T) {
 }
 
 func TestHeaderRoundTrip(t *testing.T) {
-	for _, h := range []Header{
+	for _, h := range []header{
 		{},
 		{ServiceID: serviceIDResponse, MethodID: 5, Token: 0xFFFFFFFF, Size: 0x100000, Status: 0x8000012C, ServiceHash: 0x3FC1274D, Ciid: "00112233-4455"},
 	} {
@@ -56,22 +57,22 @@ func TestHeaderRoundTrip(t *testing.T) {
 
 func TestConnectRequestFixture(t *testing.T) {
 	// 3: varint 1 (use_bindless_rpc)
-	if got := hex.EncodeToString(ConnectRequest{UseBindlessRPC: true}.marshal()); !strings.EqualFold(got, "1801") {
-		t.Fatalf("ConnectRequest = %s", got)
+	if got := hex.EncodeToString(connectRequest{UseBindlessRPC: true}.marshal()); !strings.EqualFold(got, "1801") {
+		t.Fatalf("connectRequest = %s", got)
 	}
-	if got := len(ConnectRequest{}.marshal()); got != 0 {
-		t.Fatalf("empty ConnectRequest is %d bytes", got)
+	if got := len(connectRequest{}.marshal()); got != 0 {
+		t.Fatalf("empty connectRequest is %d bytes", got)
 	}
 }
 
 func TestLogonRequestFixture(t *testing.T) {
-	req := LogonRequest{
+	req := logonRequest{
 		Program: "WoW", Platform: "Wn64", Locale: "enUS",
 		ApplicationVersion: build70938, CachedWebCredentials: []byte("TC-0123"),
 	}
 	want := "0A03576F57" + "1204576E3634" + "1A04656E5553" + "309AAA04" + "620754432D30313233"
 	if got := hex.EncodeToString(req.marshal()); !strings.EqualFold(got, want) {
-		t.Fatalf("LogonRequest = %s, want %s", got, want)
+		t.Fatalf("logonRequest = %s, want %s", got, want)
 	}
 }
 
@@ -79,13 +80,13 @@ func TestVariantFixture(t *testing.T) {
 	str := "Auth"
 	cases := []struct {
 		name string
-		v    Variant
+		v    variant
 		want string
 	}{
-		{"string", Variant{StringValue: &str}, "2A0441757468"},
-		{"blob", Variant{BlobValue: []byte{1, 2, 3}}, "3203010203"},
-		{"bool false", Variant{BoolValue: new(bool)}, "1000"},
-		{"uint", Variant{UintValue: func() *uint64 { v := uint64(0x46010046); return &v }()}, "48C68084B004"},
+		{"string", variant{StringValue: &str}, "2A0441757468"},
+		{"blob", variant{BlobValue: []byte{1, 2, 3}}, "3203010203"},
+		{"bool false", variant{BoolValue: new(bool)}, "1000"},
+		{"uint", variant{UintValue: func() *uint64 { v := uint64(0x46010046); return &v }()}, "48C68084B004"},
 	}
 	for _, c := range cases {
 		if got := hex.EncodeToString(c.v.marshal()); !strings.EqualFold(got, c.want) {
@@ -103,21 +104,21 @@ func TestVariantFixture(t *testing.T) {
 
 func TestClientRequestFixture(t *testing.T) {
 	addr := uint64(0x46010046)
-	req := ClientRequest{Attributes: []Attribute{{Name: "Param_RealmAddress", Value: Variant{UintValue: &addr}}}}
-	// 1: message (0A 1C) { 1: "Param_RealmAddress" (0A 12), 2: Variant { 9: varint } (12 06 48 ...) }
+	req := clientRequest{Attributes: []attribute{{Name: "Param_RealmAddress", Value: variant{UintValue: &addr}}}}
+	// 1: message (0A 1C) { 1: "Param_RealmAddress" (0A 12), 2: variant { 9: varint } (12 06 48 ...) }
 	want := "0A1C" + "0A12506172616D5F5265616C6D41646472657373" + "1206" + "48C68084B004"
 	if got := hex.EncodeToString(req.marshal()); !strings.EqualFold(got, want) {
-		t.Fatalf("ClientRequest = %s, want %s", got, want)
+		t.Fatalf("clientRequest = %s, want %s", got, want)
 	}
 }
 
 func TestGetAllValuesFixture(t *testing.T) {
-	req := GetAllValuesForAttributeRequest{AttributeKey: "Command_RealmListRequest_v1_b9"}
+	req := getAllValuesForAttributeRequest{AttributeKey: "Command_RealmListRequest_v1_b9"}
 	want := "0A1E436F6D6D616E645F5265616C6D4C697374526571756573745F76315F6239"
 	if got := hex.EncodeToString(req.marshal()); !strings.EqualFold(got, want) {
 		t.Fatalf("GetAllValues = %s, want %s", got, want)
 	}
-	resp, err := unmarshalGetAllValuesForAttributeResponse(hexBytes(t, "0A092A0737302D312D3730")) // 1: Variant{5:"70-1-70"}
+	resp, err := unmarshalGetAllValuesForAttributeResponse(hexBytes(t, "0A092A0737302D312D3730")) // 1: variant{5:"70-1-70"}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +171,8 @@ func TestLogonResultFixture(t *testing.T) {
 }
 
 func TestClientResponseFixture(t *testing.T) {
-	// 1: Attribute{1:"Param_RealmListTicket", 2:Variant{5:"Auth"}}
-	// 1: Attribute{1:"Param_JoinSecret", 2:Variant{6:010203}}
+	// 1: attribute{1:"Param_RealmListTicket", 2:variant{5:"Auth"}}
+	// 1: attribute{1:"Param_JoinSecret", 2:variant{6:010203}}
 	want := "0A1F0A15506172616D5F5265616C6D4C6973745469636B657412062A0441757468" +
 		"0A190A10506172616D5F4A6F696E53656372657412053203010203"
 	resp, err := unmarshalClientResponse(hexBytes(t, want))
@@ -209,7 +210,7 @@ func TestFrameRoundTrip(t *testing.T) {
 	session := &rpcSession{conn: client, timeout: 5 * time.Second, logf: func(string, ...any) {}}
 	srv := &rpcSession{conn: server, timeout: 5 * time.Second, logf: func(string, ...any) {}}
 
-	body := ConnectRequest{UseBindlessRPC: true}.marshal()
+	body := connectRequest{UseBindlessRPC: true}.marshal()
 	// 00 0D | header {1:0, 2:1, 3:0, 5:2, 11:hash} | body {3:1}
 	wantOnWire := "000D" + "08001001180028025D91694465" + "1801"
 
@@ -222,7 +223,7 @@ func TestFrameRoundTrip(t *testing.T) {
 		}
 		gotWire <- raw
 	}()
-	if err := session.writeFrame(Header{
+	if err := session.writeFrame(header{
 		ServiceID: serviceIDRequest, MethodID: connectionConnectMethod, Token: 0, Size: uint32(len(body)), ServiceHash: connectionServiceHash,
 	}, body); err != nil {
 		t.Fatal(err)
@@ -273,7 +274,7 @@ func TestFrameRejectsEmptyHeader(t *testing.T) {
 
 // dripServer drains one request and then writes a frame that is not the answer every interval. It returns when the
 // client closes the connection or the loop runs out.
-func dripServer(t *testing.T, conn net.Conn, interval time.Duration, headers func(int) Header) {
+func dripServer(t *testing.T, conn net.Conn, interval time.Duration, headers func(int) header) {
 	t.Helper()
 	srv := &rpcSession{conn: conn, timeout: time.Minute, logf: func(string, ...any) {}}
 	if _, _, err := srv.readFrame(); err != nil {
@@ -294,8 +295,8 @@ func TestCallSlowDripExpires(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go dripServer(t, server, 20*time.Millisecond, func(i int) Header {
-		return Header{ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash, MethodID: 99, Token: uint32(i)}
+	go dripServer(t, server, 20*time.Millisecond, func(i int) header {
+		return header{ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash, MethodID: 99, Token: uint32(i)}
 	})
 
 	session := &rpcSession{conn: client, timeout: 200 * time.Millisecond, logf: func(string, ...any) {}}
@@ -332,8 +333,104 @@ func TestCallCancelledContextUnblocksRead(t *testing.T) {
 	if err == nil {
 		t.Fatal("a cancelled call returned a response")
 	}
+	// the cancellation is reported as itself, not as the i/o timeout the past socket deadline produces
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("cancellation took %s; the read was not interrupted", elapsed)
+	}
+}
+
+// TestCallDeadlineSurfacesAsDeadlineExceeded: a context deadline that ends a call is reported as
+// context.DeadlineExceeded (errors.Is), not as a bare i/o timeout, even though the watcher unblocks the read by
+// setting the socket deadline in the past.
+func TestCallDeadlineSurfacesAsDeadlineExceeded(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		srv := &rpcSession{conn: server, timeout: time.Minute, logf: func(string, ...any) {}}
+		_, _, _ = srv.readFrame() // the request, then silence
+	}()
+
+	session := &rpcSession{conn: client, timeout: time.Minute, logf: func(string, ...any) {}}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	if _, err := session.call(ctx, gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestArmDeadlineWatcherStopsWithTheCall pins stop's authority: after stop returns, a late cancellation must not
+// set a past deadline on the connection. A write on the live deadline must still go through.
+func TestArmDeadlineWatcherStopsWithTheCall(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	go func() { _, _ = server.Read(make([]byte, 1)) }()
+
+	session := &rpcSession{conn: client, timeout: time.Minute, logf: func(string, ...any) {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := session.armDeadline(ctx, time.Now().Add(time.Minute))
+	stop()
+	cancel()
+	// give the watcher, were it still alive, time to run after stop returned
+	time.Sleep(50 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte("x"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the stopped watcher left a past deadline on the connection: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the write blocked; the connection is not usable after stop")
+	}
+}
+
+// TestCancellationLeavesTheSessionUsable: a call cancelled while it waits for its answer must not poison the
+// connection for the calls that follow it.
+func TestCancellationLeavesTheSessionUsable(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		srv := &rpcSession{conn: server, timeout: time.Minute, logf: func(string, ...any) {}}
+		for {
+			h, _, err := srv.readFrame()
+			if err != nil {
+				return
+			}
+			if h.Token == 0 {
+				// the first call is meant to wait for its context; only later tokens are answered
+				continue
+			}
+			if err := srv.writeFrame(header{ServiceID: serviceIDResponse, Token: h.Token}, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	session := &rpcSession{conn: client, timeout: time.Minute, logf: func(string, ...any) {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := session.call(ctx, gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	for i := range 50 {
+		if _, err := session.call(context.Background(), gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil); err != nil {
+			t.Fatalf("call %d after the cancelled one: %v", i, err)
+		}
 	}
 }
 
@@ -349,7 +446,7 @@ func TestCallCapsIgnoredFrames(t *testing.T) {
 			return
 		}
 		for range maxIgnoredFrames + 1 {
-			if err := srv.writeFrame(Header{ServiceID: serviceIDResponse, Token: 999}, nil); err != nil {
+			if err := srv.writeFrame(header{ServiceID: serviceIDResponse, Token: 999}, nil); err != nil {
 				return
 			}
 		}

@@ -112,7 +112,8 @@ func (c *restClient) close() {
 func (c *restClient) get(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
-		return nil, err
+		// the path can be the server's srp_url, so the request error (which quotes the URL) is sanitised
+		return nil, &serverTextError{prefix: "bnet: REST request: ", err: err}
 	}
 	return c.do(req)
 }
@@ -124,7 +125,7 @@ func (c *restClient) postJSON(ctx context.Context, path string, body any) ([]byt
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, &serverTextError{prefix: "bnet: REST request: ", err: err}
 	}
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	return c.do(req)
@@ -133,24 +134,27 @@ func (c *restClient) postJSON(ctx context.Context, path string, body any) ([]byt
 func (c *restClient) do(req *http.Request) ([]byte, error) {
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("bnet: REST %s %s: %w", req.Method, req.URL.Path, err)
+		// the transport's error can quote a name from the server's certificate; the chain is kept, the text bounded
+		return nil, &serverTextError{prefix: fmt.Sprintf("bnet: REST %s %s: ", req.Method, sanitizeServerText(req.URL.Path)), err: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("bnet: REST %s %s: %w", req.Method, req.URL.Path, err)
+		return nil, fmt.Errorf("bnet: REST %s %s: %w", req.Method, sanitizeServerText(req.URL.Path), err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// the login service answers a refusal with a JSON error message; the body is quoted only through
-		// describeRESTFailure, which bounds it, keeps printable ASCII and redacts long hex/base64 runs
-		return nil, fmt.Errorf("bnet: REST %s %s: %s", req.Method, req.URL.Path, describeRESTFailure(resp.Status, body))
+		// describeRESTFailure, which bounds it, keeps printable ASCII and redacts long hex/base64 runs. The path
+		// can be the server's srp_url, so it goes through the sanitiser too.
+		return nil, fmt.Errorf("bnet: REST %s %s: %s", req.Method, sanitizeServerText(req.URL.Path), describeRESTFailure(resp.Status, body))
 	}
 	return body, nil
 }
 
-// describeRESTFailure names a non-200 answer without passing its body through: the status, the server's error code
-// when the body is a LoginResult, and a bounded, sanitised message.
+// describeRESTFailure names a non-200 answer without passing its body through: the status line (whose reason phrase
+// is the server's), the server's error code when the body is a LoginResult, and a bounded, sanitised message.
 func describeRESTFailure(status string, body []byte) string {
+	status = sanitizeServerText(status)
 	var result loginResultJSON
 	if json.Unmarshal(body, &result) == nil && result.ErrorCode != "" {
 		message := sanitizeServerText(result.ErrorMessage)
@@ -161,6 +165,10 @@ func describeRESTFailure(status string, body []byte) string {
 	}
 	return status + ": " + sanitizeServerText(string(body))
 }
+
+// errLoginRefused marks the server's refusal of the credentials (wrong password, banned account, an authenticator
+// step). The message carries only the server's bounded, sanitised reason; callers test errors.Is, not a sentence.
+var errLoginRefused = errors.New("bnet: login refused")
 
 // serverRefusal describes a LoginResult the server refused with, quoting only bounded, sanitised server text.
 func serverRefusal(result *loginResultJSON) string {
@@ -183,13 +191,15 @@ func (c *restClient) form(ctx context.Context) (string, error) {
 	}
 	var form formInputs
 	if err := json.Unmarshal(body, &form); err != nil {
-		return "", fmt.Errorf("bnet: login form: %w", err)
+		return "", decodeError("login form", err)
 	}
 	if form.Type != "LOGIN_FORM" {
 		return "", fmt.Errorf("bnet: login form type %q", sanitizeServerText(form.Type))
 	}
+	// the path is server text: it goes into the log line and the next request, so only the fixed path of the form
+	// or a short printable path that still ends in srpPath is used
 	path := srpPath
-	if u, err := url.Parse(form.SRPURL); err == nil && strings.HasSuffix(u.Path, srpPath) {
+	if u, err := url.Parse(form.SRPURL); err == nil && printableASCII(u.Path) && len(u.Path) <= maxServerPath && strings.HasSuffix(u.Path, srpPath) {
 		path = u.Path
 	}
 	return path, nil
@@ -203,7 +213,7 @@ func (c *restClient) challenge(ctx context.Context, path, account string) (*srpC
 	}
 	var raw srpChallengeJSON
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("bnet: srp challenge: %w", err)
+		return nil, decodeError("srp challenge", err)
 	}
 	salt, err := hex.DecodeString(raw.Salt)
 	if err != nil {
@@ -237,19 +247,19 @@ func (c *restClient) proof(ctx context.Context, account string, s *srpClient) (*
 	}
 	var result loginResultJSON
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("bnet: login result: %w", err)
+		return nil, decodeError("login result", err)
 	}
 	if result.AuthenticationState != "DONE" {
-		return nil, fmt.Errorf("bnet: login refused in state %q: %s", sanitizeServerText(result.AuthenticationState), serverRefusal(&result))
+		return nil, fmt.Errorf("%w in state %q: %s", errLoginRefused, sanitizeServerText(result.AuthenticationState), serverRefusal(&result))
 	}
 	if result.ErrorCode != "" {
-		return nil, fmt.Errorf("bnet: login refused: %s", serverRefusal(&result))
+		return nil, fmt.Errorf("%w: %s", errLoginRefused, serverRefusal(&result))
 	}
 	if result.LoginTicket == "" {
 		if result.NextURL != "" {
-			return nil, fmt.Errorf("bnet: login needs a second step at %s (an authenticator code?), which this client does not do", sanitizeServerText(result.NextURL))
+			return nil, fmt.Errorf("%w: the server needs a second step at %s (an authenticator code?), which this client does not do", errLoginRefused, sanitizeServerText(result.NextURL))
 		}
-		return nil, errors.New("bnet: login refused: no ticket, no error code (wrong password)")
+		return nil, fmt.Errorf("%w: no ticket, no error code (wrong password)", errLoginRefused)
 	}
 	return &result, nil
 }

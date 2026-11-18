@@ -24,6 +24,21 @@ const (
 // (src/server/shared/JSON/ProtobufJSON.cpp:110-121).
 type jsonBytes []byte
 
+// decodeError names a JSON decode failure without the decoder's own message: encoding/json quotes the input in its
+// syntax errors ("invalid character ...") and can put the number literal it choked on into a type error, so the text
+// is rebuilt from values this client controls and the byte offset.
+func decodeError(what string, err error) error {
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		return fmt.Errorf("bnet: %s: the server's JSON is malformed at byte %d", what, syntax.Offset)
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return fmt.Errorf("bnet: %s: the server's JSON does not match this client's type %s at byte %d", what, typeErr.Type, typeErr.Offset)
+	}
+	return fmt.Errorf("bnet: %s: the server's JSON does not match this client's types", what)
+}
+
 func (b jsonBytes) MarshalJSON() ([]byte, error) {
 	out := make([]uint32, len(b))
 	for i, v := range b {
@@ -35,7 +50,7 @@ func (b jsonBytes) MarshalJSON() ([]byte, error) {
 func (b *jsonBytes) UnmarshalJSON(data []byte) error {
 	var in []uint32
 	if err := json.Unmarshal(data, &in); err != nil {
-		return err
+		return decodeError("byte array", err)
 	}
 	out := make([]byte, len(in))
 	for i, v := range in {
@@ -180,7 +195,7 @@ func decodeCompressed(blob []byte, wantPrefix string, v any) error {
 		return fmt.Errorf("bnet: blob prefix %q, want %q", sanitizeServerText(prefix), wantPrefix)
 	}
 	if err := json.Unmarshal(body, v); err != nil {
-		return fmt.Errorf("bnet: %s: %w", wantPrefix, err)
+		return decodeError(wantPrefix, err)
 	}
 	return nil
 }

@@ -15,12 +15,16 @@
     starts with a `0x00` byte;
   * `-bit-length-multiple-of-8`: an evidence value whose bit length is a multiple of 8, which is the case in which
     `GetBrokenEvidenceVector` adds one extra leading zero byte;
+  * `-m1-leading-zero`: `M1` whose first byte is `0x00`, so its number-as-hex text is 62 characters long (the client
+    sends M1 as a number, like every other evidence value);
   * `-m2-leading-zero`: `M2` whose first byte is `0x00`, so the server's `BN_bn2hex` text is 62 characters long.
-* the last two baselines of the search run: 304 attempts for v2 in 2.96 s and 575 attempts for v1 in 0.22 s (one
-  deterministic client private and one fresh random server `b` per attempt); no edge case was missing.
-* every hex value except `salt` and `verifier` is written with the server's own `AsHexStr`, i.e. leading zero bytes
-  dropped — the form in which the server sends `M2` on the wire. `salt` is the raw 32-byte `ByteArrayToHexStr` and
-  `verifier` the stored little-endian byte row.
+* the last search run: 319 attempts for v2 in 3.32 s and 1468 attempts for v1 in 0.55 s (one deterministic client
+  private and one fresh random server `b` per attempt); no edge case was missing.
+* every hex value except `salt` and `verifier` is written with the server's own `AsHexStr` (`BN_bn2hex`): leading
+  zero bytes are dropped, but both nibbles of the first remaining byte are kept (`0x02...` prints as `02...`, not
+  `2...`) — the form in which the server sends `M2` on the wire. `salt` is the raw 32-byte `ByteArrayToHexStr` and
+  `verifier` the stored little-endian byte row. The Go tests therefore compare these values as numbers (`big.Int`),
+  and decode `M1`/`M2` with `decodeServerEvidence`, which pads a stripped leading zero byte back to the digest length.
 * what the vectors pin down: the modulus and generator, the salt byte order, the version's password derivation
   (`x`), the verifier, the padded-hash inputs (`k`, `u`), the "broken" evidence encoding of `A`, `B`, `S` and `M1`,
   the evidence hashing (including the leading-zero cases), and the two proofs.

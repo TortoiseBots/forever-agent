@@ -189,3 +189,106 @@ messages, extracting the `.proto` files from the embedded descriptors and runnin
    fake is pinned to one vector (challenge salt/B/version, and the vector's A/M1/M2), the client private is fixed to
    the vector's, and the whole `Login` must reproduce that vector — including both `m2-leading-zero` vectors, which
    is the end-to-end regression for the stripped `M2`.
+
+## Fix round 2 (closing round)
+
+1. **The v1 password test proves the folding now.** `TestSRPV1PasswordIsUpperLatin` used to call
+   `upperOnlyLatin("vector-password")` itself, so deleting the folding in `srpPasswordKey` left it green. It now feeds
+   the raw lowercase and mixed-case passwords to `newSRPClient` (the entry point `Login` uses) with the v1 vector's
+   salt, B and private, and requires the vector's `M1` (the vector's `x` was derived from the uppercased password).
+   Proof: with `password = upperOnlyLatin(password)` removed from `srpPasswordKey`, the test fails with
+   `raw password "vector-password" gives M1 B481B021...66C76F09, want the vector's 428C336C...4AD1B7E6` (plus the
+   `VECTOR-password` and `VeCtOr-PaSsWoRd` cases); restored, it passes. `TestSRPVectors` now compares `A`, `S` and
+   `M1` as numbers, because the vectors store `BN_bn2hex` text (leading zero bytes dropped, first nibble kept).
+2. **Server text is sanitised on every source/sink pair.** The sanitiser is `sanitizeServerText` (printable ASCII,
+   `maxServerText` = 120 bytes, 32+ character hex/base64 runs replaced by `<redacted>`); JSON decode errors are
+   rebuilt by `decodeError` (message offset and the Go type only, never the input); transport errors whose text can
+   quote a certificate name go through `serverTextError`, which sanitises the message and keeps `Unwrap`. A server
+   path is only used when it is printable ASCII and at most `maxServerPath` = 512 bytes. `Result.RealmName` and
+   `Result.ServerIP` stay raw for the world socket; they are printed through the sanitiser (`Result` formatting, the
+   step log, and the new `Result.Summary` the command prints on stdout). The audit table (42 rows):
+
+| # | server-origin field | sink | treatment | pinned by |
+|---|---|---|---|---|
+| 1 | form `type` | error (`login form type %q`) | sanitise | hostile `form_type` |
+| 2 | form `srp_url` (path) | step log (`SRP form at`) | printable+512, then sanitise | hostile `srp_url` |
+| 3 | form `srp_url` (path) | REST request/status/transport errors | sanitise path / `serverTextError` | hostile `srp_url` |
+| 4 | form `inputs[]`, `platform_id`, `program_id`, `version` | none (decoded, never printed) | not read further | - |
+| 5 | challenge `hash_function` | error `%q` | sanitise + bound | hostile `hash_function`, `TestSRPChallengeTextIsSanitised` |
+| 6 | challenge `hash_function` | step log | sanitise | code path after the check |
+| 7 | challenge `generator` | error `%q` | sanitise + bound | `TestSRPChallengeTextIsSanitised` |
+| 8 | challenge `modulus` | log length, errors | numeric only | - |
+| 9 | challenge `username` | never printed (SRP input) | not a sink | - |
+| 10 | challenge `salt` | error (byte count) | numeric only | hostile SRP cases |
+| 11 | challenge `public_B` | error (byte count/range) | numeric only | hostile SRP cases |
+| 12 | result `authentication_state` | error `%q` | sanitise | hostile `authentication_state` |
+| 13 | result `error_code` | error | sanitise | hostile `error_code` |
+| 14 | result `error_message` | error | sanitise | hostile `error_message` |
+| 15 | result `next_url` | error | sanitise | hostile `next_url` |
+| 16 | result `login_ticket` | step log (length), `Result` formatting | length / redaction | `TestSecretsAreRedacted` |
+| 17 | result `server_evidence_M2` | error (one byte `%q`, byte count) | escaped byte / numeric | `TestSRPVerifyStrippedM2` |
+| 18 | HTTP reason phrase `resp.Status` | error | sanitise | `TestRESTStatusPhraseIsSanitised` |
+| 19 | non-200 response body | error | sanitise, 1 MiB read cap | `TestLoginHidesEchoedRequest`, status test |
+| 20 | REST JSON decode error text | error | `decodeError`: offset + Go type | hostile `login_result_json`, 1 MB payloads |
+| 21 | x509/TLS message (certificate names) | REST transport error | `serverTextError` (bounded, chain kept) | code path |
+| 22 | REST path in a transport error | error prefix | sanitise | hostile `srp_url` |
+| 23 | ConnectResponse `ciid` | step log | sanitise | hostile `ciid` |
+| 24 | ConnectResponse ids/time/bindless | step log | numeric | - |
+| 25 | LogonResult `error_code` | error | numeric | - |
+| 26 | LogonResult account ids | step log, errors | numeric | - |
+| 27 | LogonResult `battle_tag` | never printed; type formats | redaction | `TestSecretsAreRedacted` |
+| 28 | LogonResult `geoip_country` | never printed; type formats | redaction | `TestSecretsAreRedacted` |
+| 29 | LogonResult `session_key` | step log (length), type formats | length / redaction | `TestSecretsAreRedacted` |
+| 30 | attribute names (`Param_*`, `Command_*`) | compared with constants; errors name the constant | not echoed | rpc tests |
+| 31 | attribute values: realm list ticket, character count | presence + length | length | `TestLoginAgainstFakeServer` |
+| 32 | attribute values: sub-region | step log, `Result` | sanitise | hostile `sub_region` |
+| 33 | attribute value: realm list blob prefix | error `%q` | sanitise | code path |
+| 34 | realm list JSON decode text | error | `decodeError` | hostile `login_result_json` (same wrapper) |
+| 35 | realm entry `name` | step log, errors, `Result`, `Summary`, live test log | sanitise | hostile `realm_name` |
+| 36 | realm entry id/address/build/population/flags | step log, errors | numeric | - |
+| 37 | join ticket JSON decode text | error | `decodeError` | code path (same wrapper) |
+| 38 | world server `ip` | step log, `Result`, `Summary`, live test log | sanitise | hostile `world_ip` |
+| 39 | world server `port` | step log, `Result` | numeric | - |
+| 40 | join secret | length only | length | `TestSecretsAreRedacted` |
+| 41 | RPC frame/protobuf decode text | error | numeric field/wire/offset | rpc tests |
+| 42 | unknown push service/method | rpc log | numeric | code path |
+
+   `TestServerTextIsSanitisedInEverySink` poisons each REST/RPC string field with control bytes, an ANSI escape, a
+   1 MB string and a 64-character token-like run, then formats the step lines exactly as the command prints them and
+   checks every line: printable ASCII, at most 400 bytes, and no payload. `TestRESTStatusPhraseIsSanitised` covers
+   the reason phrase (a Go test server always writes the standard one).
+3. **Secret-holding types redact.** `header`, `processID`, `entityID`, `connectRequest`, `connectResponse`,
+   `logonRequest`, `logonResult`, `variant`, `attribute`, `clientRequest`, `clientResponse`,
+   `getAllValuesForAttributeRequest/Response` are unexported (nothing outside the package used them), and
+   `logonRequest`, `variant`, `attribute`, `clientRequest`, `clientResponse`, `loginForm`, `loginFormValue`,
+   `loginResultJSON`, `joinAnswer`, `clientInformation`, `realmListTicketClientInformation` and `rpcSession` implement
+   `String`/`GoString`/`Format`. `rpcSession` is the container case: it keeps the logon result in an unexported
+   field, where `fmt` does not call that type's methods, so the session redacts it itself. `TestSecretsAreRedacted`
+   formats every type alone, behind a pointer, as an exported field, as a slice element and through an error wrapped
+   with `%w`, with `%v %+v %#v %s %q %x` and `Println`, checking the raw value, its hex in both cases, its base64 and
+   its decimal byte list (the form a `jsonBytes` secret would print).
+4. **The hostile-challenge test names the check.** `newSRPClient` wraps one sentinel per check
+   (`errChallengeIterations`, `errChallengeVersion`, `errChallengeHash`, `errChallengeInteger`, `errChallengeModulus`,
+   `errChallengeGroup`, `errChallengeGenerator`, `errChallengeSalt`, `errChallengeNoPublicB`,
+   `errChallengePublicB`, `errChallengePublicBLong`); `TestSRPRejectsHostileChallenges` asserts `errors.Is` against
+   the expected sentinel per case, so a case cannot pass because another check fired. The login refusal is
+   `errLoginRefused`, and `TestLoginWrongPassword` asserts `errors.Is(err, errLoginRefused)` instead of a substring.
+5. **stop owns the deadline watcher.** `armDeadline`'s stop function closes a channel and waits for the watcher, and
+   the watcher re-checks the stop channel inside the `ctx.Done()` branch, so once stop returns the goroutine cannot
+   set a past deadline on the connection (the earlier version could, after the call had returned). `call` and
+   `waitLogon` report a context that ended during the call as `context.Canceled` / `context.DeadlineExceeded`
+   (`errors.Is`), not as the bare i/o timeout the past socket deadline produces. Pinned by
+   `TestArmDeadlineWatcherStopsWithTheCall`, `TestCallCancelledContextUnblocksRead`,
+   `TestCallDeadlineSurfacesAsDeadlineExceeded` and `TestCancellationLeavesTheSessionUsable`.
+6. **The `bnet_test.go` test bug.** At `bnet_test.go:19` `TestLoginAgainstFakeServer` captured the log callback as
+   `steps = append(steps, format)`: only the format string, never its arguments. The later "no step line leaks a
+   secret" assertion therefore inspected strings like `"sub-region: %s"` and could never see a secret that was passed
+   as an argument, so it proved nothing. (The same test also printed `result.JoinTicket` verbatim in its failure
+   message.) The callback is now formatted with `fmt.Sprintf(format, args...)`, the test asserts that the captured
+   lines carry their arguments (`sub-region: 70-1-70`), and the join ticket is parsed as JSON and reported by size
+   only. Reverting the capture to the bare format string makes the test fail.
+7. **An M1 with a leading zero byte is pinned.** `tools/forevervec/srp_vectors.cpp` now searches for
+   `clientEvidenceM1` with `M1[0] == 0` as well; the search found it for both variants (search run: 319 attempts for
+   v2 in 3.32 s, 1468 for v1 in 0.55 s). `testdata/srp-vectors.json` has 14 vectors, including
+   `bnet-srp6-v2-sha256-m1-leading-zero` and `bnet-srp6-v1-sha256-m1-leading-zero`; `TestSRPVectorEdgeCases` requires
+   the edge for both versions and the vector test compares M1 as a number in the server's `BN_bn2hex` form.

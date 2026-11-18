@@ -33,6 +33,22 @@ var groupGenerator = big.NewInt(2)
 // (256 or 512 hex digits), so anything far larger is not this server's group and does not get to allocate a big.Int.
 const maxChallengeHex = 4096
 
+// The checks a hostile or broken challenge can fail. Each is a sentinel so a test can name the check that fired
+// instead of matching a message: two checks may share a message, and the message is for a person, not a caller.
+var (
+	errChallengeIterations  = errors.New("srp: the challenge iterations do not belong to that SRP version")
+	errChallengeVersion     = errors.New("srp: unknown SRP version")
+	errChallengeHash        = errors.New("srp: the challenge's hash function is not SHA-256")
+	errChallengeInteger     = errors.New("srp: the challenge carries an implausible integer")
+	errChallengeModulus     = errors.New("srp: the challenge has no usable modulus")
+	errChallengeGroup       = errors.New("srp: the challenge modulus is not the one of that SRP version")
+	errChallengeGenerator   = errors.New("srp: the challenge generator is not the group's 2")
+	errChallengeSalt        = errors.New("srp: the challenge salt is not 32 bytes")
+	errChallengeNoPublicB   = errors.New("srp: the challenge has no public B")
+	errChallengePublicB     = errors.New("srp: the server's public B is not in [1, N)")
+	errChallengePublicBLong = errors.New("srp: the server's public B is longer than the group")
+)
+
 // srpChallenge is the subset of SrpLoginChallenge this client needs.
 type srpChallenge struct {
 	Version      uint32
@@ -65,34 +81,34 @@ type srpClient struct {
 
 func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient, error) {
 	if c.HashFunction != "SHA-256" {
-		return nil, fmt.Errorf("srp: hash function %q is not SHA-256", c.HashFunction)
+		return nil, fmt.Errorf("%w: %q", errChallengeHash, sanitizeServerText(c.HashFunction))
 	}
 	var modulusHex string
 	switch c.Version {
 	case 1:
 		if c.Iterations != 1 {
-			return nil, fmt.Errorf("srp: version 1 with %d iterations", c.Iterations)
+			return nil, fmt.Errorf("%w: version 1 with %d iterations", errChallengeIterations, c.Iterations)
 		}
 		modulusHex = modulusV1
 	case 2:
 		if c.Iterations != 15000 {
-			return nil, fmt.Errorf("srp: version 2 with %d iterations", c.Iterations)
+			return nil, fmt.Errorf("%w: version 2 with %d iterations", errChallengeIterations, c.Iterations)
 		}
 		modulusHex = modulusV2
 	default:
-		return nil, fmt.Errorf("srp: unknown version %d", c.Version)
+		return nil, fmt.Errorf("%w: %d", errChallengeVersion, c.Version)
 	}
 
 	if len(c.Modulus) > maxChallengeHex || len(c.Generator) > maxChallengeHex {
-		return nil, errors.New("srp: the challenge carries an implausible integer")
+		return nil, errChallengeInteger
 	}
 	n, ok := new(big.Int).SetString(c.Modulus, 16)
 	if !ok || n.Sign() <= 0 {
-		return nil, errors.New("srp: the challenge has no usable modulus")
+		return nil, errChallengeModulus
 	}
 	// both sides must agree on the group, otherwise the proofs cannot match
 	if known, _ := new(big.Int).SetString(modulusHex, 16); known.Cmp(n) != 0 {
-		return nil, errors.New("srp: the challenge modulus is not the one of that SRP version")
+		return nil, errChallengeGroup
 	}
 	// the generator is the server's, but only as a check: both Battle.net groups fix g = 2
 	// (src/common/Cryptography/Authentication/SRP6.cpp:30,33). Any other value changes k and every proof input,
@@ -101,26 +117,26 @@ func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient
 	if c.Generator != "" {
 		generated, ok := new(big.Int).SetString(c.Generator, 16)
 		if !ok || generated.Cmp(groupGenerator) != 0 {
-			return nil, fmt.Errorf("srp: the challenge generator %q is not the group's 2", sanitizeServerText(c.Generator))
+			return nil, fmt.Errorf("%w: %q", errChallengeGenerator, sanitizeServerText(c.Generator))
 		}
 	}
 	if len(c.Salt) != 32 {
-		return nil, fmt.Errorf("srp: salt is %d bytes, want 32", len(c.Salt))
+		return nil, fmt.Errorf("%w: %d bytes", errChallengeSalt, len(c.Salt))
 	}
 	if len(c.PublicB) == 0 {
-		return nil, errors.New("srp: the challenge has no public B")
+		return nil, errChallengeNoPublicB
 	}
 	size := len(n.Bytes())
 	// reject an over-long encoding before SetBytes: the hashed form of B is padded to the modulus size, and
 	// FillBytes panics on a value that does not fit.
 	if len(c.PublicB) > size {
-		return nil, fmt.Errorf("srp: the server's public B is %d bytes, the group is %d", len(c.PublicB), size)
+		return nil, fmt.Errorf("%w: %d bytes, the group is %d", errChallengePublicBLong, len(c.PublicB), size)
 	}
 	b := new(big.Int).SetBytes(c.PublicB)
 	// the server's own verifier works mod N and refuses A % N == 0 (SRP6.cpp:163-180); B outside [1, N) is not a
 	// group element, and using it would also break the padding assumption above.
 	if b.Sign() <= 0 || b.Cmp(n) >= 0 {
-		return nil, errors.New("srp: the server's public B is not in [1, N)")
+		return nil, errChallengePublicB
 	}
 
 	a := private
@@ -193,7 +209,7 @@ func srpPasswordKey(version, iterations uint32, srpUsername, password string, sa
 		x.Mod(x, new(big.Int).Sub(n, big.NewInt(1)))
 		return x, nil
 	}
-	return nil, fmt.Errorf("srp: unknown version %d", version)
+	return nil, fmt.Errorf("%w: %d", errChallengeVersion, version)
 }
 
 // verify checks the server evidence M2 of the login answer. The server sends it with BN_bn2hex

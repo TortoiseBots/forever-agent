@@ -67,6 +67,7 @@ func TestLiveLogin(t *testing.T) {
 		t.Fatalf("join answer incomplete: ticket %d, secret %d, session key %d",
 			len(result.JoinTicket), len(result.JoinSecret), len(result.SessionKey))
 	}
-	t.Logf("realm %q id %d address 0x%08X, world %s:%d", result.RealmName, result.RealmID, result.RealmAddress,
-		result.ServerIP, result.ServerPort)
+	// the realm name and the world address are the server's text; print them through the sanitiser like the command does
+	t.Logf("realm %q id %d address 0x%08X, world %s:%d", sanitizeServerText(result.RealmName), result.RealmID,
+		result.RealmAddress, sanitizeServerText(result.ServerIP), result.ServerPort)
 }

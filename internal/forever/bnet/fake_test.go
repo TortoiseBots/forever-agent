@@ -246,7 +246,7 @@ func (f *fakeSRP) verify(publicAHex, m1Hex string) (string, error) {
 	return strings.ToUpper(m2.Text(16)), nil
 }
 
-// fakeLogonRequest is the subset of authentication.v1.LogonRequest the fake checks.
+// fakeLogonRequest is the subset of authentication.v1.logonRequest the fake checks.
 type fakeLogonRequest struct {
 	program, platform, locale string
 	build                     uint64
@@ -308,13 +308,14 @@ func TestFakeEvidenceMatchesVectors(t *testing.T) {
 		if !ok || !okB || !okS {
 			t.Fatalf("%s: bad vector hex", v.Name)
 		}
+		// numbers, not text: the vector's text is BN_bn2hex form (leading zero bytes dropped, first nibble kept)
 		m1 := new(big.Int).SetBytes(fakeEvidenceM1(a, b, s))
-		if got := strings.ToUpper(m1.Text(16)); got != strings.ToUpper(v.ClientEvidenceM1) {
-			t.Errorf("%s: fake M1 = %s, want %s", v.Name, got, v.ClientEvidenceM1)
+		if m1.Cmp(hexNumber(t, v.ClientEvidenceM1)) != 0 {
+			t.Errorf("%s: fake M1 = %s, want %s", v.Name, strings.ToUpper(m1.Text(16)), v.ClientEvidenceM1)
 		}
 		m2 := new(big.Int).SetBytes(fakeEvidenceM2(a, m1, s))
-		if got := strings.ToUpper(m2.Text(16)); got != strings.ToUpper(v.ServerEvidenceM2) {
-			t.Errorf("%s: fake M2 = %s, want %s", v.Name, got, v.ServerEvidenceM2)
+		if m2.Cmp(hexNumber(t, v.ServerEvidenceM2)) != 0 {
+			t.Errorf("%s: fake M2 = %s, want %s", v.Name, strings.ToUpper(m2.Text(16)), v.ServerEvidenceM2)
 		}
 	}
 }
@@ -334,6 +335,18 @@ type fakeLogin struct {
 	realmBuild      uint32
 	restFailBody    string // when set, the SRP request answers 500 with this body
 	rpcDrip         bool   // when set, the RPC port never answers the connect request
+
+	// hostile overrides one server field with poisoned text, for the sanitiser test: the values of the map are what
+	// the server sends in that field (see fakeField and the keys the handlers read)
+	hostile map[string]string
+}
+
+// fakeField is the value the fake sends for a string field, or the test's poisoned text for it.
+func (f *fakeLogin) fakeField(key, value string) string {
+	if hostile, ok := f.hostile[key]; ok {
+		return hostile
+	}
+	return value
 }
 
 // fakeLoginForm is the subset of the client's LoginForm the fake reads, parsed by the fake's own type so a wrong
@@ -398,13 +411,13 @@ func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type": "LOGIN_FORM",
+			"type": f.fakeField("form_type", "LOGIN_FORM"),
 			"inputs": []map[string]any{
 				{"input_id": "account_name", "type": "text", "label": "E-mail", "max_length": 320},
 				{"input_id": "password", "type": "password", "label": "Password", "max_length": 128},
 				{"input_id": "log_in_submit", "type": "submit", "label": "Log In"},
 			},
-			"srp_url": "https://" + fakeServerName + "/bnetserver/login/srp/",
+			"srp_url": f.fakeField("srp_url", "https://"+fakeServerName+srpPath),
 		})
 	})
 	mux.HandleFunc(srpPath, func(w http.ResponseWriter, r *http.Request) {
@@ -424,7 +437,13 @@ func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "session-1", Path: "/bnetserver", Secure: true, HttpOnly: true})
-		_ = json.NewEncoder(w).Encode(f.srp.challengeJSON())
+		challenge := f.srp.challengeJSON()
+		for _, key := range []string{"modulus", "generator", "hash_function", "username", "salt", "public_B"} {
+			if hostile, ok := f.hostile[key]; ok {
+				challenge[key] = hostile
+			}
+		}
+		_ = json.NewEncoder(w).Encode(challenge)
 	})
 	f.rest = httptest.NewUnstartedServer(mux)
 	f.rest.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
@@ -439,9 +458,30 @@ func (f *fakeLogin) handleProof(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no session cookie", http.StatusUnauthorized)
 		return
 	}
+	if raw, ok := f.hostile["login_result_json"]; ok {
+		// an answer that is not JSON at all: the client's decode error must not echo it
+		_, _ = w.Write([]byte(raw))
+		return
+	}
 	var form fakeLoginForm
 	if err := json.NewDecoder(r.Body).Decode(&form); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	if f.hostile["error_code"] != "" || f.hostile["error_message"] != "" || f.hostile["next_url"] != "" ||
+		f.hostile["authentication_state"] != "" {
+		answer := map[string]any{"authentication_state": f.fakeField("authentication_state", "DONE")}
+		if hostile, ok := f.hostile["error_code"]; ok {
+			answer["error_code"] = hostile
+		}
+		if hostile, ok := f.hostile["error_message"]; ok {
+			answer["error_code"] = f.fakeField("error_code", "ERROR_TEST")
+			answer["error_message"] = hostile
+		}
+		if hostile, ok := f.hostile["next_url"]; ok {
+			answer["next_url"] = hostile
+		}
+		_ = json.NewEncoder(w).Encode(answer)
 		return
 	}
 	values := form.values()
@@ -508,7 +548,7 @@ type fakeConn struct {
 	net.Conn
 }
 
-func (c fakeConn) writeFrame(h Header, body []byte) error {
+func (c fakeConn) writeFrame(h header, body []byte) error {
 	header := h.marshal()
 	frame := make([]byte, 2+len(header)+len(body))
 	binary.BigEndian.PutUint16(frame, uint16(len(header)))
@@ -524,22 +564,22 @@ func (c fakeConn) writeFrame(h Header, body []byte) error {
 	return nil
 }
 
-func (c fakeConn) readFrame() (Header, []byte, error) {
+func (c fakeConn) readFrame() (header, []byte, error) {
 	var lenBuf [2]byte
 	if _, err := readFull(c.Conn, lenBuf[:]); err != nil {
-		return Header{}, nil, err
+		return header{}, nil, err
 	}
 	headerBuf := make([]byte, binary.BigEndian.Uint16(lenBuf[:]))
 	if _, err := readFull(c.Conn, headerBuf); err != nil {
-		return Header{}, nil, err
+		return header{}, nil, err
 	}
 	h, err := unmarshalHeader(headerBuf)
 	if err != nil {
-		return Header{}, nil, err
+		return header{}, nil, err
 	}
 	body := make([]byte, h.Size)
 	if _, err := readFull(c.Conn, body); err != nil {
-		return Header{}, nil, err
+		return header{}, nil, err
 	}
 	return h, body, nil
 }
@@ -556,8 +596,8 @@ func readFull(c net.Conn, buf []byte) (int, error) {
 	return n, nil
 }
 
-func (f *fakeLogin) respond(c fakeConn, request Header, body []byte) error {
-	return c.writeFrame(Header{ServiceID: serviceIDResponse, Token: request.Token, Size: uint32(len(body))}, body)
+func (f *fakeLogin) respond(c fakeConn, request header, body []byte) error {
+	return c.writeFrame(header{ServiceID: serviceIDResponse, Token: request.Token, Size: uint32(len(body))}, body)
 }
 
 func (f *fakeLogin) serveRPC(raw net.Conn) {
@@ -569,7 +609,7 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			return
 		}
 		for i := 0; ; i++ {
-			if err := c.writeFrame(Header{
+			if err := c.writeFrame(header{
 				ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash,
 				MethodID: 99, Token: uint32(i),
 			}, nil); err != nil {
@@ -594,10 +634,10 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 		wantToken++
 		switch {
 		case h.ServiceHash == connectionServiceHash && h.MethodID == connectionConnectMethod:
-			resp := putBytes(nil, 1, ProcessID{Label: 1, Epoch: 2}.marshal())
+			resp := putBytes(nil, 1, processID{Label: 1, Epoch: 2}.marshal())
 			resp = append(resp, putVarint(nil, 6, 1234567890)...)
 			resp = append(resp, putVarint(nil, 7, 1)...)
-			resp = append(resp, putString(nil, 9, "fake-ciid")...)
+			resp = append(resp, putString(nil, 9, f.fakeField("ciid", "fake-ciid"))...)
 			if err := f.respond(c, h, resp); err != nil {
 				return
 			}
@@ -622,10 +662,10 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			}
 			key := bytes.Repeat([]byte{0x5A}, 64)
 			result := putVarint(nil, 1, 0)
-			result = append(result, putBytes(nil, 2, EntityID{High: 0x0100000000000000, Low: 4242}.marshal())...)
-			result = append(result, putBytes(nil, 3, EntityID{High: 0x0200000200576F57, Low: fakeGameAccountID}.marshal())...)
+			result = append(result, putBytes(nil, 2, entityID{High: 0x0100000000000000, Low: 4242}.marshal())...)
+			result = append(result, putBytes(nil, 3, entityID{High: 0x0200000200576F57, Low: fakeGameAccountID}.marshal())...)
 			result = append(result, putBytes(nil, 9, key)...)
-			if err := c.writeFrame(Header{
+			if err := c.writeFrame(header{
 				ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash,
 				MethodID: authenticationLogonComplete, Size: uint32(len(result)),
 			}, result); err != nil {
@@ -636,8 +676,8 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			if !bytes.Contains(body, []byte("Command_RealmListRequest_v1_b9")) {
 				f.fail("GetAllValues asks for % X", body)
 			}
-			sub := "70-1-70"
-			resp := putBytes(nil, 1, Variant{StringValue: &sub}.marshal())
+			sub := f.fakeField("sub_region", "70-1-70")
+			resp := putBytes(nil, 1, variant{StringValue: &sub}.marshal())
 			if err := f.respond(c, h, resp); err != nil {
 				return
 			}
@@ -654,8 +694,8 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 	}
 }
 
-func (f *fakeLogin) handleClientRequest(c fakeConn, h Header, body []byte) error {
-	resp, err := unmarshalClientResponse(body) // a request has the same repeated Attribute field 1
+func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte) error {
+	resp, err := unmarshalClientResponse(body) // a request has the same repeated attribute field 1
 	if err != nil {
 		f.fail("client request: %v", err)
 		return f.respond(c, h, nil)
@@ -698,7 +738,7 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h Header, body []byte) error
 			"update": map[string]any{
 				"wowRealmAddress": address,
 				"cfgRealmsID":     70,
-				"name":            "TestRealm",
+				"name":            f.fakeField("realm_name", "TestRealm"),
 				"populationState": f.realmPopulation,
 				"cfgContentSetID": 137,
 				"superDistrictID": 2,
@@ -729,7 +769,7 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h Header, body []byte) error
 		}
 		addresses := map[string]any{"families": []any{map[string]any{
 			"family":    1,
-			"addresses": []any{map[string]any{"ip": "127.0.0.1", "port": 8085}},
+			"addresses": []any{map[string]any{"ip": f.fakeField("world_ip", "127.0.0.1"), "port": 8085}},
 		}}}
 		secret := bytes.Repeat([]byte{0x33}, 32)
 		bodyOut := putBytes(nil, 1, attrBlob("Param_RealmJoinTicket", ticketJSON).marshal())

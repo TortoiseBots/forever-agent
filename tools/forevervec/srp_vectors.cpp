@@ -22,8 +22,9 @@
 //
 // Besides one baseline vector per variant it SEARCHES for the encoding edges of GetBrokenEvidenceVector and
 // BN_bn2hex (SRP6.cpp:182-186, BigNumber.cpp:210-216): A, B or S with a leading zero byte, a value whose bit length
-// is a multiple of 8 (so the broken encoding gets one extra leading zero), and an M2 whose first byte is zero (which
-// the server sends with a dropped leading byte). The search loops over deterministic client private values and
+// is a multiple of 8 (so the broken encoding gets one extra leading zero), an M1 whose first byte is zero (the client
+// sends it as a number too, so the text loses the byte), and an M2 whose first byte is zero (which the server sends
+// with a dropped leading byte). The search loops over deterministic client private values and
 // fresh server b values, and each match still goes through the server's own VerifyClientEvidence/CalculateServerEvidence
 // before it is printed. Progress and the number of attempts go to stderr; the JSON goes to stdout.
 //
@@ -259,6 +260,7 @@ void SearchEdges(std::string const& prefix, uint32 version, uint32 iterations, s
         { "b-leading-zero", "B with a leading zero byte in the modulus-size encoding" },
         { "s-leading-zero", "S with a leading zero byte in the modulus-size encoding" },
         { "bit-length-multiple-of-8", "an evidence value whose bit length is a multiple of 8" },
+        { "m1-leading-zero", "M1 with a leading zero byte (dropped by BN_bn2hex)" },
         { "m2-leading-zero", "M2 with a leading zero byte (dropped by BN_bn2hex)" },
     };
     static constexpr std::size_t MaxAttempts = 200000;
@@ -287,7 +289,8 @@ void SearchEdges(std::string const& prefix, uint32 version, uint32 iterations, s
                 case 1: match = HasLeadingZeroByte(impl.B, ModulusSize); break;
                 case 2: match = HasLeadingZeroByte(c.S, ModulusSize); break;
                 case 3: match = BitLengthMultipleOf8(c.A) || BitLengthMultipleOf8(impl.B) || BitLengthMultipleOf8(c.S); break;
-                case 4: match = c.M2.GetNumBytes() > 0 && c.M2.GetNumBytes() < 32; break;
+                case 4: match = c.M1.GetNumBytes() > 0 && c.M1.GetNumBytes() < 32; break;
+                case 5: match = c.M2.GetNumBytes() > 0 && c.M2.GetNumBytes() < 32; break;
                 default: break;
             }
             if (match)

@@ -139,7 +139,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts.logf("login form: LOGIN_FORM, SRP form at %s", path)
+	opts.logf("login form: LOGIN_FORM, SRP form at %s", sanitizeServerText(path))
 
 	challenge, err := rest.challenge(ctx, path, opts.Account)
 	if err != nil {
@@ -150,7 +150,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.logf("srp challenge: version %d, %s, %d iterations, modulus %d bytes, salt 32 bytes",
-		challenge.Version, challenge.HashFunction, challenge.Iterations, len(challenge.Modulus)/2)
+		challenge.Version, sanitizeServerText(challenge.HashFunction), challenge.Iterations, len(challenge.Modulus)/2)
 
 	login, err := rest.proof(ctx, opts.Account, srp)
 	if err != nil {
@@ -178,7 +178,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	opts.logf("rpc connect: server id %d/%d, server time %d, ciid %q, bindless %t",
 		connect.ServerID.Label, connect.ServerID.Epoch, connect.ServerTime, sanitizeServerText(connect.Ciid), connect.UseBindlessRPC)
 
-	logon, err := rpc.logonRequest(ctx, login.LoginTicket, opts.ClientBuild)
+	logon, err := rpc.sendLogon(ctx, login.LoginTicket, opts.ClientBuild)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	}
 	var ticket realmJoinTicket
 	if err := json.Unmarshal(join.ticket, &ticket); err != nil {
-		return nil, fmt.Errorf("bnet: realm join ticket: %w", err)
+		return nil, decodeError("realm join ticket", err)
 	}
 	if ticket.GameAccount == "" {
 		return nil, errors.New("bnet: realm join ticket has no game account")
@@ -270,8 +270,16 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	result.ServerIP = world.IP
 	result.ServerPort = world.Port
 	opts.logf("realm join: join ticket %d bytes, world server %s:%d, join secret %d bytes",
-		len(join.ticket), world.IP, world.Port, len(join.secret))
+		len(join.ticket), sanitizeServerText(world.IP), world.Port, len(join.secret))
 	return result, nil
+}
+
+// Summary is the one-line description a command prints on stdout. RealmName and ServerIP are kept raw in Result
+// (the world socket needs the address as the server sent it); here every server-supplied field goes through the
+// sanitiser, so a realm name with control bytes or an ANSI escape cannot rewrite the terminal.
+func (r *Result) Summary() string {
+	return fmt.Sprintf("realm: %s (id %d, address 0x%08X, world %s:%d)",
+		sanitizeServerText(r.RealmName), r.RealmID, r.RealmAddress, sanitizeServerText(r.ServerIP), r.ServerPort)
 }
 
 // realmListTicket sends Command_RealmListTicketRequest_v1 with Param_Identity and Param_ClientInfo and returns the
@@ -301,7 +309,7 @@ func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, 
 		return nil, err
 	}
 
-	req := ClientRequest{Attributes: []Attribute{
+	req := clientRequest{Attributes: []attribute{
 		attrString("Command_RealmListTicketRequest_v1_b9", "AuthRealmListTicket"),
 		attrBlob("Param_Identity", append([]byte("JSONRealmListTicketIdentity:"), identity...)),
 		attrBlob("Param_ClientInfo", append([]byte("JSONRealmListTicketClientInformation:"), info...)),
@@ -327,7 +335,7 @@ func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, 
 // subRegions asks Command_RealmListRequest_v1 for the sub-regions the account may use
 // (src/server/bnetserver/Services/GameUtilitiesService.cpp:132-151).
 func (s *rpcSession) subRegions(ctx context.Context) ([]string, error) {
-	req := GetAllValuesForAttributeRequest{AttributeKey: "Command_RealmListRequest_v1_b9"}
+	req := getAllValuesForAttributeRequest{AttributeKey: "Command_RealmListRequest_v1_b9"}
 	body, err := s.call(ctx, gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, req.marshal())
 	if err != nil {
 		return nil, fmt.Errorf("bnet: sub-regions: %w", err)
@@ -348,7 +356,7 @@ func (s *rpcSession) subRegions(ctx context.Context) ([]string, error) {
 // realmList asks Command_RealmListRequest_v1 for the realms of a sub-region and picks the realm to join
 // (src/server/bnetserver/Services/GameUtilitiesService.cpp:304-334).
 func (s *rpcSession) realmList(ctx context.Context, subRegion string) (*realmEntry, error) {
-	req := ClientRequest{Attributes: []Attribute{
+	req := clientRequest{Attributes: []attribute{
 		attrString("Command_RealmListRequest_v1_b9", subRegion),
 	}}
 	body, err := s.call(ctx, gameUtilitiesServiceHash, gameUtilitiesProcessRequest, req.marshal())
@@ -386,7 +394,7 @@ func (s *rpcSession) realmList(ctx context.Context, subRegion string) (*realmEnt
 		}
 	}
 	if first == nil {
-		return nil, fmt.Errorf("bnet: no realm in sub-region %s", subRegion)
+		return nil, fmt.Errorf("bnet: no realm in sub-region %s", sanitizeServerText(subRegion))
 	}
 	return first, nil
 }
@@ -400,7 +408,7 @@ type joinAnswer struct {
 // joinRealm sends Command_RealmJoinRequest_v1 and returns the three blobs of the answer
 // (src/server/bnetserver/Services/GameUtilitiesService.cpp:336-356, RealmList.cpp:446-506).
 func (s *rpcSession) joinRealm(ctx context.Context, realmAddress uint32) (*joinAnswer, error) {
-	req := ClientRequest{Attributes: []Attribute{
+	req := clientRequest{Attributes: []attribute{
 		attrString("Command_RealmJoinRequest_v1_b9", "AuthRealmJoinTicket"),
 		attrUint("Param_RealmAddress", uint64(realmAddress)),
 	}}
@@ -428,19 +436,19 @@ func (s *rpcSession) joinRealm(ctx context.Context, realmAddress uint32) (*joinA
 
 // ------------------------------------------------------------------------------------------------ attribute helpers
 
-func attrString(name, value string) Attribute {
-	return Attribute{Name: name, Value: Variant{StringValue: &value}}
+func attrString(name, value string) attribute {
+	return attribute{Name: name, Value: variant{StringValue: &value}}
 }
 
-func attrBlob(name string, value []byte) Attribute {
-	return Attribute{Name: name, Value: Variant{BlobValue: value}}
+func attrBlob(name string, value []byte) attribute {
+	return attribute{Name: name, Value: variant{BlobValue: value}}
 }
 
-func attrUint(name string, value uint64) Attribute {
-	return Attribute{Name: name, Value: Variant{UintValue: &value}}
+func attrUint(name string, value uint64) attribute {
+	return attribute{Name: name, Value: variant{UintValue: &value}}
 }
 
-func (r ClientResponse) blob(name string) ([]byte, bool) {
+func (r clientResponse) blob(name string) ([]byte, bool) {
 	for _, a := range r.Attributes {
 		if a.Name == name && a.Value.BlobValue != nil {
 			return a.Value.BlobValue, true

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"os"
 	"strings"
@@ -46,6 +47,29 @@ func loadVectors(t testing.TB) []srpVector {
 	return vectors
 }
 
+// hexNumber reads a server-printed hex value as a number. The server prints these values with BN_bn2hex, which drops
+// leading zero bytes but keeps both nibbles of the first remaining byte, while (*big.Int).Text(16) also drops a
+// leading zero nibble; comparing the numbers avoids that formatting difference.
+func hexNumber(t testing.TB, text string) *big.Int {
+	t.Helper()
+	v, ok := new(big.Int).SetString(text, 16)
+	if !ok {
+		t.Fatalf("bad hex %q in the vector", text)
+	}
+	return v
+}
+
+// evidenceMatches compares the client's M1 with a vector's text. A vector stores the value the way the server sends
+// it (BN_bn2hex drops leading zero bytes), so the text is decoded and padded to the digest length, not hex-decoded.
+func evidenceMatches(t testing.TB, s *srpClient, wantHex string) bool {
+	t.Helper()
+	want, err := decodeServerEvidence(wantHex, len(s.M1))
+	if err != nil {
+		t.Fatalf("vector M1 %q: %v", wantHex, err)
+	}
+	return bytes.Equal(s.M1, want)
+}
+
 func mustHex(t testing.TB, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
@@ -78,14 +102,14 @@ func TestSRPVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := s.publicAHex(); got != strings.ToUpper(v.ClientPublicA) {
-				t.Errorf("A = %s, want %s", got, v.ClientPublicA)
+			if s.A.Cmp(hexNumber(t, v.ClientPublicA)) != 0 {
+				t.Errorf("A = %s, want %s", s.publicAHex(), v.ClientPublicA)
 			}
-			if got := strings.ToUpper(hex.EncodeToString(s.S.Bytes())); got != strings.ToUpper(v.SessionS) {
-				t.Errorf("S = %s, want %s", got, v.SessionS)
+			if s.S.Cmp(hexNumber(t, v.SessionS)) != 0 {
+				t.Errorf("S = %s, want %s", strings.ToUpper(hex.EncodeToString(s.S.Bytes())), v.SessionS)
 			}
-			if got := s.evidenceM1Hex(); got != strings.ToUpper(v.ClientEvidenceM1) {
-				t.Errorf("M1 = %s, want %s", got, v.ClientEvidenceM1)
+			if !evidenceMatches(t, s, v.ClientEvidenceM1) {
+				t.Errorf("M1 = %s, want %s", s.evidenceM1Hex(), v.ClientEvidenceM1)
 			}
 			// the server sends M2 as the number's hex (BigNumber::AsHexStr), which drops leading zero bytes, so
 			// the vector keeps exactly that text and verify() must accept it
@@ -126,27 +150,50 @@ func TestSRPWrongPassword(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.evidenceM1Hex() == strings.ToUpper(v.ClientEvidenceM1) {
+		if new(big.Int).SetBytes(s.M1).Cmp(hexNumber(t, v.ClientEvidenceM1)) == 0 {
 			t.Error("a wrong password produced the vector's M1")
 		}
 	}
 }
 
-// TestSRPV1PasswordIsUpperLatin pins the v1 password rule: the server uppercases the password for version 1 logins
-// (LoginRESTService.cpp:346-349), so "vector-password" and "VECTOR-PASSWORD" must give the same x.
+// TestSRPV1PasswordIsUpperLatin pins the v1 password rule at the entry point Login uses. The server uppercases the
+// password for version 1 logins (LoginRESTService.cpp:346-349), so the raw password as typed must reproduce the v1
+// vector, whose x was derived from the uppercased password. The test feeds the raw lowercase and mixed-case strings
+// to newSRPClient (it does not uppercase them itself): remove the folding in srpPasswordKey and the M1 no longer
+// matches the vector.
 func TestSRPV1PasswordIsUpperLatin(t *testing.T) {
-	n, _ := new(big.Int).SetString(modulusV1, 16)
-	salt := bytes.Repeat([]byte{7}, 32)
-	lower, err := srpPasswordKey(1, 1, "USER", upperOnlyLatin("vector-password"), salt, n)
-	if err != nil {
-		t.Fatal(err)
+	vectors := loadVectors(t)
+	var v *srpVector
+	for i := range vectors {
+		if vectors[i].Version == 1 {
+			v = &vectors[i]
+			break
+		}
 	}
-	upper, err := srpPasswordKey(1, 1, "USER", "VECTOR-PASSWORD", salt, n)
-	if err != nil {
-		t.Fatal(err)
+	if v == nil {
+		t.Fatal("no v1 vector")
 	}
-	if lower.Cmp(upper) != 0 {
-		t.Error("v1 password case is not folded")
+	if v.Password == "vector-password" {
+		t.Fatalf("the v1 vector stores %q, which the test cannot distinguish from an unfolded password", v.Password)
+	}
+	challenge := srpChallenge{
+		Version: v.Version, Iterations: v.Iterations, Modulus: v.Modulus, Generator: v.Generator,
+		Username: v.SRPUsername, Salt: mustHex(t, v.Salt), PublicB: mustHex(t, v.ServerPublicB),
+		HashFunction: "SHA-256",
+	}
+	private, ok := new(big.Int).SetString(v.ClientPrivate, 16)
+	if !ok {
+		t.Fatal("bad client private")
+	}
+	for _, password := range []string{"vector-password", "VECTOR-password", "VeCtOr-PaSsWoRd"} {
+		s, err := newSRPClient(challenge, password, private)
+		if err != nil {
+			t.Fatalf("raw password %q: %v", password, err)
+		}
+		if !evidenceMatches(t, s, v.ClientEvidenceM1) {
+			t.Errorf("raw password %q gives M1 %s, want the vector's %s (the v1 path did not fold the case)",
+				password, s.evidenceM1Hex(), v.ClientEvidenceM1)
+		}
 	}
 }
 
@@ -161,8 +208,8 @@ func TestSRPRejectsWrongGroup(t *testing.T) {
 		Version: v.Version, Iterations: v.Iterations, Modulus: other, Generator: v.Generator,
 		Username: v.SRPUsername, Salt: mustHex(t, v.Salt), PublicB: mustHex(t, v.ServerPublicB), HashFunction: "SHA-256",
 	}, v.Password, nil)
-	if err == nil {
-		t.Fatal("a modulus of the other version was accepted")
+	if !errors.Is(err, errChallengeGroup) {
+		t.Fatalf("err = %v, want %v", err, errChallengeGroup)
 	}
 }
 
@@ -225,7 +272,7 @@ func TestSRPVerifyStrippedM2(t *testing.T) {
 
 // TestSRPVectorEdgeCases checks that the vector file really covers the evidence edges the search was asked for.
 func TestSRPVectorEdgeCases(t *testing.T) {
-	edges := []string{"a-leading-zero", "b-leading-zero", "s-leading-zero", "bit-length-multiple-of-8", "m2-leading-zero"}
+	edges := []string{"a-leading-zero", "b-leading-zero", "s-leading-zero", "bit-length-multiple-of-8", "m1-leading-zero", "m2-leading-zero"}
 	found := map[uint32]map[string]bool{1: {}, 2: {}}
 	for _, v := range loadVectors(t) {
 		for _, edge := range edges {
@@ -254,6 +301,10 @@ func TestSRPVectorEdgeCases(t *testing.T) {
 			case "bit-length-multiple-of-8":
 				if a.BitLen()%8 != 0 && b.BitLen()%8 != 0 && sv.BitLen()%8 != 0 {
 					t.Errorf("%s: no evidence value has a bit length that is a multiple of 8", v.Name)
+				}
+			case "m1-leading-zero":
+				if len(v.ClientEvidenceM1) >= 2*len(s.M1) {
+					t.Errorf("%s: M1 has no leading zero byte (%d hex chars)", v.Name, len(v.ClientEvidenceM1))
 				}
 			case "m2-leading-zero":
 				if len(v.ServerEvidenceM2) >= 2*len(s.M2) {
@@ -288,30 +339,36 @@ func TestSRPRejectsHostileChallenges(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*srpChallenge)
+		want   error
 	}{
-		{"generator 3", func(c *srpChallenge) { c.Generator = "03" }},
-		{"generator wider than N", func(c *srpChallenge) { c.Generator = "0" + strings.Repeat("FF", size) }},
-		{"generator over-long text", func(c *srpChallenge) { c.Generator = strings.Repeat("0", maxChallengeHex+1) }},
-		{"generator not hex", func(c *srpChallenge) { c.Generator = "two" }},
-		{"empty B", func(c *srpChallenge) { c.PublicB = nil }},
-		{"B zero", func(c *srpChallenge) { c.PublicB = make([]byte, size) }},
-		{"B zero without padding", func(c *srpChallenge) { c.PublicB = []byte{0} }},
-		{"B equals N", func(c *srpChallenge) { c.PublicB = n.Bytes() }},
-		{"B above N", func(c *srpChallenge) { c.PublicB = new(big.Int).Add(n, big.NewInt(1)).Bytes() }},
-		{"B all ones", func(c *srpChallenge) { c.PublicB = bytes.Repeat([]byte{0xFF}, size) }},
-		{"B one byte too long", func(c *srpChallenge) { c.PublicB = append([]byte{0}, n.Bytes()...) }},
-		{"B over-long text", func(c *srpChallenge) { c.PublicB = bytes.Repeat([]byte{0xFF}, 4096) }},
-		{"salt 31 bytes", func(c *srpChallenge) { c.Salt = make([]byte, 31) }},
-		{"salt 33 bytes", func(c *srpChallenge) { c.Salt = make([]byte, 33) }},
-		{"modulus over-long text", func(c *srpChallenge) { c.Modulus = strings.Repeat("0", maxChallengeHex+1) }},
-		{"modulus not hex", func(c *srpChallenge) { c.Modulus = "nope" }},
+		{"hash function SHA-1", func(c *srpChallenge) { c.HashFunction = "SHA-1" }, errChallengeHash},
+		{"version 3", func(c *srpChallenge) { c.Version = 3 }, errChallengeVersion},
+		{"v2 with v1 iterations", func(c *srpChallenge) { c.Iterations = 1 }, errChallengeIterations},
+		{"generator 3", func(c *srpChallenge) { c.Generator = "03" }, errChallengeGenerator},
+		{"generator wider than N", func(c *srpChallenge) { c.Generator = "0" + strings.Repeat("FF", size) }, errChallengeGenerator},
+		{"generator over-long text", func(c *srpChallenge) { c.Generator = strings.Repeat("0", maxChallengeHex+1) }, errChallengeInteger},
+		{"generator not hex", func(c *srpChallenge) { c.Generator = "two" }, errChallengeGenerator},
+		{"empty B", func(c *srpChallenge) { c.PublicB = nil }, errChallengeNoPublicB},
+		{"B zero", func(c *srpChallenge) { c.PublicB = make([]byte, size) }, errChallengePublicB},
+		{"B zero without padding", func(c *srpChallenge) { c.PublicB = []byte{0} }, errChallengePublicB},
+		{"B equals N", func(c *srpChallenge) { c.PublicB = n.Bytes() }, errChallengePublicB},
+		{"B above N", func(c *srpChallenge) { c.PublicB = new(big.Int).Add(n, big.NewInt(1)).Bytes() }, errChallengePublicB},
+		{"B all ones", func(c *srpChallenge) { c.PublicB = bytes.Repeat([]byte{0xFF}, size) }, errChallengePublicB},
+		{"B one byte too long", func(c *srpChallenge) { c.PublicB = append([]byte{0}, n.Bytes()...) }, errChallengePublicBLong},
+		{"B over-long text", func(c *srpChallenge) { c.PublicB = bytes.Repeat([]byte{0xFF}, 4096) }, errChallengePublicBLong},
+		{"salt 31 bytes", func(c *srpChallenge) { c.Salt = make([]byte, 31) }, errChallengeSalt},
+		{"salt 33 bytes", func(c *srpChallenge) { c.Salt = make([]byte, 33) }, errChallengeSalt},
+		{"modulus over-long text", func(c *srpChallenge) { c.Modulus = strings.Repeat("0", maxChallengeHex+1) }, errChallengeInteger},
+		{"modulus not hex", func(c *srpChallenge) { c.Modulus = "nope" }, errChallengeModulus},
+		{"modulus of the other version", func(c *srpChallenge) { c.Modulus = modulusV1 }, errChallengeGroup},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			challenge := good
 			c.mutate(&challenge)
-			if _, err := newSRPClient(challenge, v.Password, nil); err == nil {
-				t.Errorf("%s was accepted", c.name)
+			// the sentinel names the check that must fire: a case cannot pass because some other check refused it
+			if _, err := newSRPClient(challenge, v.Password, nil); !errors.Is(err, c.want) {
+				t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
 			}
 		})
 	}

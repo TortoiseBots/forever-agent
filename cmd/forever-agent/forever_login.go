@@ -80,7 +80,6 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		}
 		return exitAuth
 	}
-	fmt.Fprintf(stdout, "realm: %s (id %d, address 0x%08X, world %s:%d)\n",
-		result.RealmName, result.RealmID, result.RealmAddress, result.ServerIP, result.ServerPort)
+	fmt.Fprintln(stdout, result.Summary())
 	return exitOK
 }

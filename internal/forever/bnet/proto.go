@@ -18,8 +18,8 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// Header is bgs.protocol.Header (rpc_types.pb.h:707-892; the server's own layout in Session.cpp SendRequest).
-type Header struct {
+// header is bgs.protocol.Header (rpc_types.pb.h:707-892; the server's own layout in Session.cpp SendRequest).
+type header struct {
 	ServiceID   uint32 // 1, required
 	MethodID    uint32 // 2, optional
 	Token       uint32 // 3, required
@@ -29,7 +29,7 @@ type Header struct {
 	Ciid        string // 13, optional
 }
 
-func (h Header) marshal() []byte {
+func (h header) marshal() []byte {
 	var b []byte
 	b = putVarint(b, 1, uint64(h.ServiceID))
 	if h.MethodID != 0 {
@@ -51,8 +51,8 @@ func (h Header) marshal() []byte {
 	return b
 }
 
-func unmarshalHeader(b []byte) (Header, error) {
-	var h Header
+func unmarshalHeader(b []byte) (header, error) {
+	var h header
 	var haveServiceID, haveToken bool
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
@@ -97,30 +97,30 @@ func unmarshalHeader(b []byte) (Header, error) {
 		return nil
 	})
 	if err != nil {
-		return Header{}, err
+		return header{}, err
 	}
 	// bgs.protocol.Header declares service_id and token required; a frame without them cannot be routed
 	if !haveServiceID || !haveToken {
-		return Header{}, errors.New("bnet: rpc header without a service id or a token")
+		return header{}, errors.New("bnet: rpc header without a service id or a token")
 	}
 	return h, nil
 }
 
-// ProcessID is bgs.protocol.ProcessId (rpc_types.pb.h: required label = 1, required epoch = 2).
-type ProcessID struct {
+// processID is bgs.protocol.ProcessId (rpc_types.pb.h: required label = 1, required epoch = 2).
+type processID struct {
 	Label uint32
 	Epoch uint32
 }
 
-func (p ProcessID) marshal() []byte {
+func (p processID) marshal() []byte {
 	var b []byte
 	b = putVarint(b, 1, uint64(p.Label))
 	b = putVarint(b, 2, uint64(p.Epoch))
 	return b
 }
 
-func unmarshalProcessID(b []byte) (ProcessID, error) {
-	var p ProcessID
+func unmarshalProcessID(b []byte) (processID, error) {
+	var p processID
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
@@ -139,13 +139,13 @@ func unmarshalProcessID(b []byte) (ProcessID, error) {
 	return p, err
 }
 
-// EntityID is bgs.protocol.EntityId (entity_types.pb.h: optional fixed64 high = 1, optional fixed64 low = 2).
-type EntityID struct {
+// entityID is bgs.protocol.EntityId (entity_types.pb.h: optional fixed64 high = 1, optional fixed64 low = 2).
+type entityID struct {
 	High uint64
 	Low  uint64
 }
 
-func (e EntityID) marshal() []byte {
+func (e entityID) marshal() []byte {
 	var b []byte
 	if e.High != 0 {
 		b = putFixed64(b, 1, e.High)
@@ -156,8 +156,8 @@ func (e EntityID) marshal() []byte {
 	return b
 }
 
-func unmarshalEntityID(b []byte) (EntityID, error) {
-	var e EntityID
+func unmarshalEntityID(b []byte) (entityID, error) {
+	var e entityID
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
@@ -176,14 +176,14 @@ func unmarshalEntityID(b []byte) (EntityID, error) {
 	return e, err
 }
 
-// ConnectRequest is connection.v1.ConnectRequest (connection_service.pb.h: client_id = 1, bind_request = 2,
+// connectRequest is connection.v1.ConnectRequest (connection_service.pb.h: client_id = 1, bind_request = 2,
 // use_bindless_rpc = 3 [default true]).
-type ConnectRequest struct {
-	ClientID       *ProcessID
+type connectRequest struct {
+	ClientID       *processID
 	UseBindlessRPC bool
 }
 
-func (m ConnectRequest) marshal() []byte {
+func (m connectRequest) marshal() []byte {
 	var b []byte
 	if m.ClientID != nil {
 		b = putBytes(b, 1, m.ClientID.marshal())
@@ -194,19 +194,19 @@ func (m ConnectRequest) marshal() []byte {
 	return b
 }
 
-// ConnectResponse is connection.v1.ConnectResponse (server_id = 1, client_id = 2, bind_result = 3,
+// connectResponse is connection.v1.ConnectResponse (server_id = 1, client_id = 2, bind_result = 3,
 // bind_response = 4, content_handle_array = 5, server_time = 6, use_bindless_rpc = 7, binary_content_handle_array = 8,
 // ciid = 9, connected_region = 10).
-type ConnectResponse struct {
-	ServerID       ProcessID
-	ClientID       ProcessID
+type connectResponse struct {
+	ServerID       processID
+	ClientID       processID
 	ServerTime     uint64
 	UseBindlessRPC bool
 	Ciid           string
 }
 
-func unmarshalConnectResponse(b []byte) (ConnectResponse, error) {
-	var m ConnectResponse
+func unmarshalConnectResponse(b []byte) (connectResponse, error) {
+	var m connectResponse
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
@@ -248,9 +248,9 @@ func unmarshalConnectResponse(b []byte) (ConnectResponse, error) {
 	return m, err
 }
 
-// LogonRequest is authentication.v1.LogonRequest (authentication_service.pb.h: program = 1, platform = 2,
+// logonRequest is authentication.v1.LogonRequest (authentication_service.pb.h: program = 1, platform = 2,
 // locale = 3, application_version = 6, cached_web_credentials = 12, device_id = 15).
-type LogonRequest struct {
+type logonRequest struct {
 	Program              string
 	Platform             string
 	Locale               string
@@ -259,7 +259,7 @@ type LogonRequest struct {
 	DeviceID             string
 }
 
-func (m LogonRequest) marshal() []byte {
+func (m logonRequest) marshal() []byte {
 	var b []byte
 	if m.Program != "" {
 		b = putString(b, 1, m.Program)
@@ -282,20 +282,20 @@ func (m LogonRequest) marshal() []byte {
 	return b
 }
 
-// LogonResult is authentication.v1.LogonResult, the body of the OnLogonComplete push
+// logonResult is authentication.v1.LogonResult, the body of the OnLogonComplete push
 // (authentication_service.pb.h: error_code = 1, account_id = 2, game_account_id = 3, battle_tag = 7,
 // geoip_country = 8, session_key = 9).
-type LogonResult struct {
+type logonResult struct {
 	ErrorCode      uint32
-	AccountID      EntityID
-	GameAccountIDs []EntityID
+	AccountID      entityID
+	GameAccountIDs []entityID
 	BattleTag      string
 	GeoIPCountry   string
 	SessionKey     []byte
 }
 
-func unmarshalLogonResult(b []byte) (LogonResult, error) {
-	var m LogonResult
+func unmarshalLogonResult(b []byte) (logonResult, error) {
+	var m logonResult
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
@@ -342,9 +342,9 @@ func unmarshalLogonResult(b []byte) (LogonResult, error) {
 	return m, err
 }
 
-// Variant is bgs.protocol.Variant (attribute_types.pb.h: bool_value = 2, int_value = 3, float_value = 4,
+// variant is bgs.protocol.Variant (attribute_types.pb.h: bool_value = 2, int_value = 3, float_value = 4,
 // string_value = 5, blob_value = 6, uint_value = 9). Field 1 is not used by the server's generated code.
-type Variant struct {
+type variant struct {
 	BoolValue   *bool
 	IntValue    *int64
 	FloatValue  *float64
@@ -353,7 +353,7 @@ type Variant struct {
 	UintValue   *uint64
 }
 
-func (v Variant) marshal() []byte {
+func (v variant) marshal() []byte {
 	var b []byte
 	switch {
 	case v.BoolValue != nil:
@@ -376,8 +376,8 @@ func (v Variant) marshal() []byte {
 	return b
 }
 
-func unmarshalVariant(b []byte) (Variant, error) {
-	var v Variant
+func unmarshalVariant(b []byte) (variant, error) {
+	var v variant
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 2:
@@ -421,21 +421,21 @@ func unmarshalVariant(b []byte) (Variant, error) {
 	return v, err
 }
 
-// Attribute is bgs.protocol.Attribute (attribute_types.pb.h: required name = 1, required value = 2).
-type Attribute struct {
+// attribute is bgs.protocol.Attribute (attribute_types.pb.h: required name = 1, required value = 2).
+type attribute struct {
 	Name  string
-	Value Variant
+	Value variant
 }
 
-func (a Attribute) marshal() []byte {
+func (a attribute) marshal() []byte {
 	var b []byte
 	b = putString(b, 1, a.Name)
 	b = putBytes(b, 2, a.Value.marshal())
 	return b
 }
 
-func unmarshalAttribute(b []byte) (Attribute, error) {
-	var a Attribute
+func unmarshalAttribute(b []byte) (attribute, error) {
+	var a attribute
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
@@ -458,13 +458,13 @@ func unmarshalAttribute(b []byte) (Attribute, error) {
 	return a, err
 }
 
-// ClientRequest is game_utilities.v1.ClientRequest (game_utilities_service.pb.h: attribute = 1, account_id = 3,
+// clientRequest is game_utilities.v1.ClientRequest (game_utilities_service.pb.h: attribute = 1, account_id = 3,
 // game_account_id = 4, program = 5, client_info = 6).
-type ClientRequest struct {
-	Attributes []Attribute
+type clientRequest struct {
+	Attributes []attribute
 }
 
-func (m ClientRequest) marshal() []byte {
+func (m clientRequest) marshal() []byte {
 	var b []byte
 	for _, a := range m.Attributes {
 		b = putBytes(b, 1, a.marshal())
@@ -472,13 +472,13 @@ func (m ClientRequest) marshal() []byte {
 	return b
 }
 
-// ClientResponse is game_utilities.v1.ClientResponse (attribute = 1).
-type ClientResponse struct {
-	Attributes []Attribute
+// clientResponse is game_utilities.v1.ClientResponse (attribute = 1).
+type clientResponse struct {
+	Attributes []attribute
 }
 
-func unmarshalClientResponse(b []byte) (ClientResponse, error) {
-	var m ClientResponse
+func unmarshalClientResponse(b []byte) (clientResponse, error) {
+	var m clientResponse
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		if n == 1 {
 			if err := checkType(n, t, protowire.BytesType); err != nil {
@@ -495,12 +495,12 @@ func unmarshalClientResponse(b []byte) (ClientResponse, error) {
 	return m, err
 }
 
-// GetAllValuesForAttributeRequest is game_utilities.v1.GetAllValuesForAttributeRequest (attribute_key = 1).
-type GetAllValuesForAttributeRequest struct {
+// getAllValuesForAttributeRequest is game_utilities.v1.GetAllValuesForAttributeRequest (attribute_key = 1).
+type getAllValuesForAttributeRequest struct {
 	AttributeKey string
 }
 
-func (m GetAllValuesForAttributeRequest) marshal() []byte {
+func (m getAllValuesForAttributeRequest) marshal() []byte {
 	var b []byte
 	if m.AttributeKey != "" {
 		b = putString(b, 1, m.AttributeKey)
@@ -508,13 +508,13 @@ func (m GetAllValuesForAttributeRequest) marshal() []byte {
 	return b
 }
 
-// GetAllValuesForAttributeResponse is game_utilities.v1.GetAllValuesForAttributeResponse (attribute_value = 1).
-type GetAllValuesForAttributeResponse struct {
-	Values []Variant
+// getAllValuesForAttributeResponse is game_utilities.v1.GetAllValuesForAttributeResponse (attribute_value = 1).
+type getAllValuesForAttributeResponse struct {
+	Values []variant
 }
 
-func unmarshalGetAllValuesForAttributeResponse(b []byte) (GetAllValuesForAttributeResponse, error) {
-	var m GetAllValuesForAttributeResponse
+func unmarshalGetAllValuesForAttributeResponse(b []byte) (getAllValuesForAttributeResponse, error) {
+	var m getAllValuesForAttributeResponse
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		if n == 1 {
 			if err := checkType(n, t, protowire.BytesType); err != nil {

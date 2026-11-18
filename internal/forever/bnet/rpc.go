@@ -98,7 +98,7 @@ type rpcSession struct {
 	ciid    string
 
 	// what the pushes of this round fill in
-	logon *LogonResult
+	logon *logonResult
 
 	logf func(string, ...any)
 }
@@ -120,7 +120,8 @@ func dialRPC(ctx context.Context, addr, serverName string, roots *x509.CertPool,
 	defer cancel()
 	if err := conn.HandshakeContext(hsCtx); err != nil {
 		raw.Close()
-		return nil, fmt.Errorf("bnet: rpc TLS handshake with %s as %q: %w", addr, serverName, err)
+		// the handshake error can quote the certificate's names, which are the server's text; the chain is kept
+		return nil, &serverTextError{prefix: fmt.Sprintf("bnet: rpc TLS handshake with %s as %q: ", addr, serverName), err: err}
 	}
 	return &rpcSession{conn: conn, timeout: timeout, logf: func(string, ...any) {}}, nil
 }
@@ -146,22 +147,51 @@ func (s *rpcSession) callDeadline(ctx context.Context) time.Time {
 // armDeadline pins the connection deadline for one call and returns a stop function. Cancelling ctx unblocks a
 // pending read or write by setting a deadline in the past; without this, SetDeadline alone would not interrupt a
 // blocked Read and a context without a deadline would lose to traffic.
+//
+// stop is authoritative: it waits for the watcher, and the watcher re-checks stop before it writes. A cancellation
+// that lands at the same instant as the end of a call therefore cannot leave a past deadline on the connection
+// after the call returned and break the next call on the same session.
 func (s *rpcSession) armDeadline(ctx context.Context, deadline time.Time) func() {
 	_ = s.conn.SetDeadline(deadline)
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		select {
 		case <-ctx.Done():
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			_ = s.conn.SetDeadline(time.Unix(1, 0))
 		case <-stop:
 		}
 	}()
-	return func() { close(stop) }
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
-// writeFrame sends one framed message: uint16 BE header length, the Header, then body
+// callContextError names a failed call. A context that ended during the call, or whose deadline passed while the
+// read was returning, is reported as context.Canceled / context.DeadlineExceeded (errors.Is), not as the bare i/o
+// timeout the watcher's past deadline produces; a per-call timeout with a live context stays an i/o timeout.
+func callContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("bnet: rpc call: %w", ctxErr)
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		// the socket deadline and the context deadline can fire in the same instant; the timer closes Done now
+		<-ctx.Done()
+		return fmt.Errorf("bnet: rpc call: %w", ctx.Err())
+	}
+	return err
+}
+
+// writeFrame sends one framed message: uint16 BE header length, the header, then body
 // (src/server/bnetserver/Server/Session.cpp:341-427). The deadline is the call's; armDeadline set it.
-func (s *rpcSession) writeFrame(h Header, body []byte) error {
+func (s *rpcSession) writeFrame(h header, body []byte) error {
 	header := h.marshal()
 	if len(header) > 0xFFFF {
 		return errors.New("bnet: rpc header does not fit the length prefix")
@@ -177,31 +207,31 @@ func (s *rpcSession) writeFrame(h Header, body []byte) error {
 }
 
 // readFrame reads one framed message.
-func (s *rpcSession) readFrame() (Header, []byte, error) {
+func (s *rpcSession) readFrame() (header, []byte, error) {
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(s.conn, lenBuf[:]); err != nil {
-		return Header{}, nil, fmt.Errorf("bnet: rpc read: %w", err)
+		return header{}, nil, fmt.Errorf("bnet: rpc read: %w", err)
 	}
 	headerLen := binary.BigEndian.Uint16(lenBuf[:])
 	if headerLen == 0 {
-		return Header{}, nil, errors.New("bnet: rpc frame with an empty header")
+		return header{}, nil, errors.New("bnet: rpc frame with an empty header")
 	}
 	headerBuf := make([]byte, headerLen)
 	if _, err := io.ReadFull(s.conn, headerBuf); err != nil {
-		return Header{}, nil, fmt.Errorf("bnet: rpc header: %w", err)
+		return header{}, nil, fmt.Errorf("bnet: rpc header: %w", err)
 	}
 	h, err := unmarshalHeader(headerBuf)
 	if err != nil {
-		return Header{}, nil, err
+		return header{}, nil, err
 	}
 	if h.Size > maxRPCBody {
-		return Header{}, nil, fmt.Errorf("bnet: rpc frame claims %d body bytes", h.Size)
+		return header{}, nil, fmt.Errorf("bnet: rpc frame claims %d body bytes", h.Size)
 	}
 	var body []byte
 	if h.Size > 0 {
 		body = make([]byte, h.Size)
 		if _, err := io.ReadFull(s.conn, body); err != nil {
-			return Header{}, nil, fmt.Errorf("bnet: rpc body: %w", err)
+			return header{}, nil, fmt.Errorf("bnet: rpc body: %w", err)
 		}
 	}
 	return h, body, nil
@@ -218,15 +248,15 @@ func (s *rpcSession) call(ctx context.Context, serviceHash, methodID uint32, req
 
 	token := s.token
 	s.token++
-	h := Header{ServiceID: serviceIDRequest, MethodID: methodID, Token: token, Size: uint32(len(req)), ServiceHash: serviceHash}
+	h := header{ServiceID: serviceIDRequest, MethodID: methodID, Token: token, Size: uint32(len(req)), ServiceHash: serviceHash}
 	if err := s.writeFrame(h, req); err != nil {
-		return nil, err
+		return nil, callContextError(ctx, err)
 	}
 	ignored := 0
 	for {
 		got, body, err := s.readFrame()
 		if err != nil {
-			return nil, err
+			return nil, callContextError(ctx, err)
 		}
 		switch got.ServiceID {
 		case serviceIDResponse:
@@ -256,7 +286,7 @@ func (s *rpcSession) call(ctx context.Context, serviceHash, methodID uint32, req
 }
 
 // handleRequest deals with a server-to-client message (a push in this round's vocabulary).
-func (s *rpcSession) handleRequest(h Header, body []byte) error {
+func (s *rpcSession) handleRequest(h header, body []byte) error {
 	switch {
 	case h.ServiceHash == authenticationListenerHash && h.MethodID == authenticationLogonComplete:
 		result, err := unmarshalLogonResult(body)
@@ -278,14 +308,14 @@ func (s *rpcSession) handleRequest(h Header, body []byte) error {
 
 // waitLogon reads until the OnLogonComplete push arrived. It has its own one absolute deadline, so a server that
 // keeps sending other pushes cannot hold it open.
-func (s *rpcSession) waitLogon(ctx context.Context) (*LogonResult, error) {
+func (s *rpcSession) waitLogon(ctx context.Context) (*logonResult, error) {
 	stop := s.armDeadline(ctx, s.callDeadline(ctx))
 	defer stop()
 	ignored := 0
 	for s.logon == nil {
 		h, body, err := s.readFrame()
 		if err != nil {
-			return nil, err
+			return nil, callContextError(ctx, err)
 		}
 		if h.ServiceID != serviceIDRequest {
 			ignored++
@@ -306,22 +336,22 @@ func (s *rpcSession) waitLogon(ctx context.Context) (*LogonResult, error) {
 }
 
 // connect runs ConnectionService::Connect and returns the response (ciid, server time, bindless flag).
-func (s *rpcSession) connect(ctx context.Context) (ConnectResponse, error) {
-	body, err := s.call(ctx, connectionServiceHash, connectionConnectMethod, ConnectRequest{UseBindlessRPC: true}.marshal())
+func (s *rpcSession) connect(ctx context.Context) (connectResponse, error) {
+	body, err := s.call(ctx, connectionServiceHash, connectionConnectMethod, connectRequest{UseBindlessRPC: true}.marshal())
 	if err != nil {
-		return ConnectResponse{}, fmt.Errorf("bnet: Connect: %w", err)
+		return connectResponse{}, fmt.Errorf("bnet: Connect: %w", err)
 	}
 	resp, err := unmarshalConnectResponse(body)
 	if err != nil {
-		return ConnectResponse{}, fmt.Errorf("bnet: ConnectResponse: %w", err)
+		return connectResponse{}, fmt.Errorf("bnet: connectResponse: %w", err)
 	}
 	s.ciid = resp.Ciid
 	return resp, nil
 }
 
 // logon sends the login ticket and waits for OnLogonComplete.
-func (s *rpcSession) logonRequest(ctx context.Context, ticket string, clientBuild uint32) (*LogonResult, error) {
-	req := LogonRequest{
+func (s *rpcSession) sendLogon(ctx context.Context, ticket string, clientBuild uint32) (*logonResult, error) {
+	req := logonRequest{
 		Program:              "WoW",
 		Platform:             "Wn64",
 		Locale:               "enUS",
