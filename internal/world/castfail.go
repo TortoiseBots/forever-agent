@@ -4,10 +4,16 @@ import "strconv"
 
 // CastFailure is why the server refused or broke a cast, in the neutral words the
 // event log and the cast_state result have always used ("out_of_range", "not_ready",
-// ...). A refusal's value is its 1.12 SpellCastResult code, so the numbers in the
-// payloads (spell_fail's reason, cast_state's last_failure.reason) keep the value
-// they had; only the protocol layer turns a decoded code into a reason
-// (game.CastFailureReason) and back to its 1.12 text (game.CastFailName).
+// ...).
+//
+// The values are the agent's OWN stable numbering of cast-failure reasons. That
+// numbering is a contract: it is what the RPC and event payloads have always carried
+// as "reason" (spell_fail, cast_state.last_failure.reason), so it must not change.
+// It began as the 1.12 SpellCastResult numbering, which is why the 1.12 protocol
+// layer's mapping (game.CastFailureReason) is the identity and game.CastFailName can
+// still give a reason its 1.12 text. Any other protocol layer must map ITS wire codes
+// onto these values; a reason that has no value here yet gets a new one appended
+// after the last - never renumbered, never reused.
 type CastFailure uint8
 
 // The refusals the spell state acts on (SpellDefines.h:284-433).

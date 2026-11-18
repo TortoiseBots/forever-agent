@@ -381,7 +381,15 @@ into per-area interfaces (as `brain.Game` already does) is optional; one struct 
 Every step keeps `*session.Session` as the only implementation, so the 1.12 tests keep proving
 behaviour. Steps 1-4 use Go type aliases (`type X = Y`), which change no behaviour.
 
-Status: steps 1-4 done on `refactor/world-types` (VM suite green after each).
+Status: steps 1-6 done. Steps 1-4 on `refactor/world-types`, steps 5-6 on `refactor/world-client`
+(VM suite green after each).
+
+Step 6 found:
+- `world.Client` has 102 methods.
+- No cmd adapter could switch to it yet: each needs one of `Log`, `SpellState`/`CastState`,
+  `PathTo`/`WalkPath`, `Logout`, whose result types (events, spellstate, navmesh path types)
+  still live outside `internal/world`.
+- Moving those types is the next step, before step 7.
 
 1. **Neutral package with GUID alias.** Add `internal/world` with `type GUID = packet.GUID`.
    Rewrite upstream imports of `packet.GUID`/`ParseGUID`: 539 uses in 95 non-test files, plus

@@ -166,6 +166,7 @@ const (
 func CastFailName(code uint8) string { return CastFailureReason(code).String() }
 
 // CastFailureReason maps a 1.12 SpellCastResult code to the neutral reason the upper
-// layers see. A reason's value is its code, so the numbers in spell_fail and
-// cast_state.last_failure stay the same.
+// layers see. The conversion is the identity on purpose: the agent's numbering
+// started as this protocol's; see world.CastFailure, which also says why the numbers
+// must stay put and how another protocol layer maps its codes onto them.
 func CastFailureReason(code uint8) world.CastFailure { return world.CastFailure(code) }
