@@ -131,7 +131,7 @@ type fakeServer struct {
 	closeSocket     string
 	closeWhen       string
 	resetLink       bool
-	deliberateClose bool
+	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
 	walk            bool
 	walkFrom        [3]float32
 	walkTo          [3]float32
@@ -461,7 +461,7 @@ func (f *fakeServer) serveRealm() {
 				return
 			case <-time.After(time.Second):
 			}
-			if f.deliberateClose {
+			if f.deliberate() {
 				return
 			}
 			f.failf("realm: %v", err)
@@ -534,6 +534,13 @@ func (f *fakeServer) banners(conn net.Conn, which string) bool {
 	return true
 }
 
+// deliberate reports whether a socket close was the test's own drop, so its read error is not a failure.
+func (f *fakeServer) deliberate() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deliberateClose
+}
+
 // dropLink closes the socket the test asked for, as a FIN or (resetLink) a RST.
 func (f *fakeServer) dropLink(realm, inst *fakeConn) {
 	c := inst
@@ -545,7 +552,9 @@ func (f *fakeServer) dropLink(realm, inst *fakeConn) {
 			_ = tcp.SetLinger(0)
 		}
 	}
+	f.mu.Lock()
 	f.deliberateClose = true
+	f.mu.Unlock()
 	_ = c.nc.Close()
 }
 
@@ -679,7 +688,7 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 				return
 			default:
 			}
-			if f.deliberateClose {
+			if f.deliberate() {
 				return
 			}
 			f.failf("instance: %v", err)

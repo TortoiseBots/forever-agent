@@ -223,7 +223,8 @@ type session struct {
 
 	// The link's liveness: each socket's reader closes its own channel on an error (a closed or reset socket), so
 	// every wait ends at once instead of waiting out its own deadline. deadSide/deadErr name the first socket to
-	// go and its error; lastPacketName/lastPacketAt are the last server packet the session handled.
+	// go and its error. deadMu guards every field from deadChs down to lastPacketAt: the session goroutine is the
+	// only writer of lastPacketName/lastPacketAt, but a socket reader reads them when it marks the link dead.
 	deadMu     sync.Mutex
 	deadChs    [2]chan struct{}
 	deadClosed [2]bool
@@ -418,6 +419,23 @@ func (s *session) setLinkDead(side int, err error) {
 	}
 }
 
+// notePacket records the last server packet the session handled and when. It takes deadMu because a socket reader
+// reads these two fields in setLinkDead; the session goroutine is the only writer.
+func (s *session) notePacket(name string) {
+	s.deadMu.Lock()
+	s.lastPacketName = name
+	s.lastPacketAt = time.Now()
+	s.deadMu.Unlock()
+}
+
+// lastPacket is the last server packet the session handled and when, or a zero time when it has handled none. It
+// takes deadMu for the same reason as notePacket.
+func (s *session) lastPacket() (string, time.Time) {
+	s.deadMu.Lock()
+	defer s.deadMu.Unlock()
+	return s.lastPacketName, s.lastPacketAt
+}
+
 // deadDetail is what the run says about one socket's death.
 func (s *session) deadDetail(side int) string {
 	if s.deadStale {
@@ -444,13 +462,14 @@ func (s *session) deadErrorExcept(ignore int) error {
 		}
 	}
 	stale := s.deadStale
+	name := s.lastPacketName
 	s.deadMu.Unlock()
 	if !found {
 		return nil
 	}
 	if stale {
 		return fmt.Errorf("%w (the %s socket: no server packet for %s; the last was %s)",
-			ErrLinkLost, linkSideName(side), linkSilenceLimit, s.lastPacketName)
+			ErrLinkLost, linkSideName(side), linkSilenceLimit, name)
 	}
 	s.deadMu.Lock()
 	detail := s.deadDetail(side)
@@ -1052,11 +1071,10 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	}
 	p := ev.p
 	if p.Name != "" {
-		s.lastPacketName = p.Name
+		s.notePacket(p.Name)
 	} else {
-		s.lastPacketName = fmt.Sprintf("wire 0x%06X", p.Wire)
+		s.notePacket(fmt.Sprintf("wire 0x%06X", p.Wire))
 	}
-	s.lastPacketAt = time.Now()
 	s.countPacket(p)
 	switch p.Core {
 	case wire.SMSGTimeSyncRequest:
@@ -1585,8 +1603,8 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 			return event{}, errWaitTimeout
 		}
 		silent := false
-		if !s.lastPacketAt.IsZero() {
-			silence := time.Since(s.lastPacketAt)
+		if _, at := s.lastPacket(); !at.IsZero() {
+			silence := time.Since(at)
 			if silence >= linkSilenceLimit {
 				s.markStale()
 				return event{}, s.deadErrorExcept(ignore)

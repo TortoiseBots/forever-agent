@@ -75,7 +75,9 @@ func TestLinkDeathEndsEveryWait(t *testing.T) {
 func TestLinkSilenceIsDeath(t *testing.T) {
 	f, s := deadSession(t, 6)
 	f.now = f.now.Add(linkSilenceLimit + time.Second)
+	s.deadMu.Lock()
 	s.lastPacketAt = time.Now().Add(-(linkSilenceLimit + time.Second))
+	s.deadMu.Unlock()
 	if err := s.WaitUntil(context.Background(), time.Now().Add(time.Hour)); !errors.Is(err, ErrLinkLost) {
 		t.Fatalf("WaitUntil returned %v", err)
 	}
