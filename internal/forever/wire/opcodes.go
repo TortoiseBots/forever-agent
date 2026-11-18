@@ -64,6 +64,41 @@ const (
 	SMSGCharacterLoginFailed uint32 = 0x4501B0
 	SMSGLogoutComplete       uint32 = 0x450130
 
+	// Chat and party (round 5): the client packets (Opcodes.h:194-236, 541, 738-740, 869, 914) and the
+	// server packets it answers (Opcodes.h:1340-1353, 1436, 1463, 1610-1614, 2068-2075, 2161, 2414).
+	CMSGChatMessageSay          uint32 = 0x2C0023
+	CMSGChatMessageYell         uint32 = 0x2C0025
+	CMSGChatMessageParty        uint32 = 0x2C0026
+	CMSGChatMessageWhisper      uint32 = 0x2C0008
+	CMSGChatMessageEmote        uint32 = 0x2C0024
+	CMSGPartyInvite             uint32 = 0x430030
+	CMSGPartyInviteResponse     uint32 = 0x430032
+	CMSGPartyUninvite           uint32 = 0x430073
+	CMSGLeaveGroup              uint32 = 0x430075
+	CMSGRequestPartyMemberStats uint32 = 0x43007F
+
+	SMSGChat                    uint32 = 0x4A0001
+	SMSGChatPlayerAmbiguous     uint32 = 0x4A0004
+	SMSGChatRestricted          uint32 = 0x4A0007
+	SMSGChatPlayerNotFound      uint32 = 0x4A000D
+	SMSGChatServerMessage       uint32 = 0x4A001C
+	SMSGPrintNotification       uint32 = 0x45006E
+	SMSGMotd                    uint32 = 0x4A0003
+	SMSGEmote                   uint32 = 0x450273
+	SMSGTextEmote               uint32 = 0x450126
+	SMSGPartyInvite             uint32 = 0x450061
+	SMSGPartyUpdate             uint32 = 0x450097
+	SMSGPartyMemberFullState    uint32 = 0x450203
+	SMSGPartyMemberPartialState uint32 = 0x450202
+	SMSGGroupDecline            uint32 = 0x45023B
+	SMSGGroupUninvite           uint32 = 0x45023D
+	SMSGGroupDestroyed          uint32 = 0x45023E
+	SMSGGroupNewLeader          uint32 = 0x4500D6
+	SMSGPartyCommandResult      uint32 = 0x450240
+	SMSGReadyCheckStarted       uint32 = 0x450099
+	SMSGReadyCheckResponse      uint32 = 0x45009A
+	SMSGReadyCheckCompleted     uint32 = 0x45009B
+
 	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
 	SMSGUpdateObject             uint32 = 0x5C0000
 	SMSGOnMonsterMove            uint32 = 0x5E0002
@@ -142,11 +177,22 @@ var clientNames = map[uint32]string{
 	CMSGMoveTeleportAck:        "CMSG_MOVE_TELEPORT_ACK",
 	CMSGQueryPlayerNames:       "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:          "CMSG_QUERY_CREATURE",
-	CMSGSetSelection:           "CMSG_SET_SELECTION",
-	CMSGAttackSwing:            "CMSG_ATTACK_SWING",
-	CMSGAttackStop:             "CMSG_ATTACK_STOP",
-	CMSGCastSpell:              "CMSG_CAST_SPELL",
-	CMSGCancelCast:             "CMSG_CANCEL_CAST",
+
+	CMSGChatMessageSay:          "CMSG_CHAT_MESSAGE_SAY",
+	CMSGChatMessageYell:         "CMSG_CHAT_MESSAGE_YELL",
+	CMSGChatMessageParty:        "CMSG_CHAT_MESSAGE_PARTY",
+	CMSGChatMessageWhisper:      "CMSG_CHAT_MESSAGE_WHISPER",
+	CMSGChatMessageEmote:        "CMSG_CHAT_MESSAGE_EMOTE",
+	CMSGPartyInvite:             "CMSG_PARTY_INVITE",
+	CMSGPartyInviteResponse:     "CMSG_PARTY_INVITE_RESPONSE",
+	CMSGPartyUninvite:           "CMSG_PARTY_UNINVITE",
+	CMSGLeaveGroup:              "CMSG_LEAVE_GROUP",
+	CMSGRequestPartyMemberStats: "CMSG_REQUEST_PARTY_MEMBER_STATS",
+	CMSGSetSelection:            "CMSG_SET_SELECTION",
+	CMSGAttackSwing:             "CMSG_ATTACK_SWING",
+	CMSGAttackStop:              "CMSG_ATTACK_STOP",
+	CMSGCastSpell:               "CMSG_CAST_SPELL",
+	CMSGCancelCast:              "CMSG_CANCEL_CAST",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

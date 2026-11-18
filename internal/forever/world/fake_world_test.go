@@ -123,6 +123,26 @@ type fakeServer struct {
 	// loop fails and Enter has to send the abort logout; abortDone is closed when the fake has seen it.
 	failAfterLogin bool
 	abortDone      chan struct{}
+	// Round 5: chat and party scenarios.
+	chat        bool
+	partyInvite bool
+	partyAccept bool
+	// The rest of the party flows: a decline instead of an accept, an uninvite after the join, and a roster the
+	// model must refuse (partyInvalid names the case).
+	partyDecline  bool
+	partyUninvite bool
+	partyInvalid  string
+	// partyNoAccept sends an invite whose CanAccept is false: the client must refuse to answer it.
+	partyNoAccept bool
+	// What the fake saw, under mu.
+	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
+	chatPartyText                                          string
+	partyInvitedName, partySaid                            string
+	partyAccepted                                          bool
+	partyDeclined                                          bool
+	partyUninvited                                         bool
+	partyStatsAsked                                        int
+	partyLeft                                              bool
 	// walk makes the fake run round 3's walk scenario instead of the plain stay: it sends the character's own create
 	// block and expects CMSG_MOVE_SET_FACING / START_FORWARD / HEARTBEAT* / STOP with advancing positions.
 	// closeSocket/closeWhen drop one socket on purpose (the client must notice at once): "instance" or "realm",
@@ -178,10 +198,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 		f.buildKey[i] = byte(0xA0 + i)
 	}
 	f.enumResult = fixture(t, "enum_characters_result")
-	// the packed guid at the start of the first regionwide entry: uint16 mask, then popcount bytes
+	// the packed guid at the start of the first regionwide entry: uint16 mask, then popcount data bytes. Keep the
+	// whole packed form, so the fake can name the client's own GUID as the server does.
 	mask := binary.LittleEndian.Uint16(f.enumResult[34:36])
 	count := bits.OnesCount16(mask)
-	f.clientGUID = append([]byte{}, f.enumResult[36:36+count]...)
+	f.clientGUID = append([]byte{}, f.enumResult[34:36+count]...)
 	return f
 }
 
@@ -488,8 +509,8 @@ func (f *fakeServer) serveRealm() {
 				f.failf("realm: CMSG_PLAYER_LOGIN is %d bytes for a %d-byte guid", len(payload), count)
 				continue
 			}
-			if !bytes.Equal(payload[2:2+count], f.clientGUID) {
-				f.failf("realm: CMSG_PLAYER_LOGIN guid % X, the list sent % X", payload[2:2+count], f.clientGUID)
+			if !bytes.Equal(payload[:2+count], f.clientGUID) {
+				f.failf("realm: CMSG_PLAYER_LOGIN guid % X, the list sent % X", payload[:2+count], f.clientGUID)
 				continue
 			}
 			if binary.LittleEndian.Uint32(payload[2+count:2+count+4]) != 0x44424000 { // 777.0
@@ -642,9 +663,7 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	c.writeFrame(fakeSMSGLoginVerifyWorld, fixture(f.t, "login_verify_world"))
 	c.writeFrame(fakeSMSGTimeSyncRequest, []byte{7, 0, 0, 0})
-	mover := make([]byte, 2+len(f.clientGUID))
-	binary.LittleEndian.PutUint16(mover, binary.LittleEndian.Uint16(f.enumResult[34:36]))
-	copy(mover[2:], f.clientGUID)
+	mover := append([]byte(nil), f.clientGUID...)
 	c.writeFrame(fakeSMSGMoveSetActive, mover)
 	if f.closeSocket != "" && f.closeWhen == "login" {
 		f.dropLink(realm, c)
@@ -676,6 +695,14 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 
 	if f.walk {
 		f.serveWalk(c, realm)
+		return
+	}
+	if f.chat {
+		f.serveChat(c, realm)
+		return
+	}
+	if f.partyInvite || f.partyAccept || f.partyDecline || f.partyUninvite || f.partyInvalid != "" || f.partyNoAccept {
+		f.serveParty(c, realm)
 		return
 	}
 
@@ -1043,8 +1070,7 @@ func fakeF32(v float32) []byte {
 // client's movement, checking that every packet's position advances toward walkTo and that the stop lands on it.
 func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 	f.mu.Lock()
-	guid := appendU16(nil, binary.LittleEndian.Uint16(f.enumResult[34:36]))
-	guid = append(guid, f.clientGUID...)
+	guid := append([]byte(nil), f.clientGUID...)
 	f.mu.Unlock()
 	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlock(guid, f.walkFrom[0], f.walkFrom[1], f.walkFrom[2], 40))
 

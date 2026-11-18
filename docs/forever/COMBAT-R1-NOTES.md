@@ -614,9 +614,13 @@ remains the fallback.
 
 ### Fixtures from real packets
 
-`forever fight-check --capture-dir DIR` writes every received combat packet's payload to `DIR/packets.jsonl` (a
-scratch directory outside the repository). `--provoke` produces the refusals a normal fight does not: a self cast
-twice (the second inside the global cooldown) and a swing from outside melee reach.
+`forever fight-check --capture-dir DIR` writes the payload of every packet the combat (and chat and party) handlers
+see to a new run directory under DIR: one `<NNNN>_<OPCODE>.bin` file per packet plus one `manifest.tsv`
+(`name`, opcode, length) — the merge round unified the combat and chat/party captures into this one facility, with
+new run directories, exclusive files, no symlink followed, and at most 8192 packet files and 32 MiB per run
+(`internal/forever/world/capture_run.go`). DIR is a scratch directory outside the repository. `--provoke` produces
+the refusals a normal fight does not: a self cast twice (the second inside the global cooldown) and a swing from
+outside melee reach.
 
 From the 2026-11-18 live run (`--provoke`, 20.4 yd from the target) these fixtures are now real, rewritten the same
 way as round 3's (GUIDs synthetic, no clock values in them): `attack_swing_error` (reason 0, not in range),
@@ -838,9 +842,9 @@ The `test` job of `5dd298aa` (`go test -race -count=1 -timeout 20m ./...`) faile
 
 | pair | where | verdict |
 |---|---|---|
-| write `lastPacketName`, read in `setLinkDead` | `session.go:1055` (handle, session goroutine) vs `session.go:416` (reader goroutine) | production |
-| write `lastPacketAt`, read in `setLinkDead` | `session.go:1059` vs `session.go:417` | production |
-| write/read `deliberateClose` | `fake_world_test.go:548` (the dropping goroutine) vs `:464` and `:682` (both socket readers) | test harness |
+| write `lastPacketName`, read in `setLinkDead` | `handle` (session goroutine) vs the reader goroutine | production |
+| write `lastPacketAt`, read in `setLinkDead` | same pair | production |
+| write/read `deliberateClose` | `dropLink` (the dropping goroutine) vs both socket readers | test harness |
 
 **Cause.** The dead-link state has one mutex (`deadMu`), and `setLinkDead` (called by each socket reader when its
 read fails) correctly read the last packet under it to fill the report. The session goroutine wrote those two
@@ -848,46 +852,13 @@ fields in `handle` without the mutex, because when they were added they were onl
 also read `lastPacketName` after unlocking, and `nextExcept` read `lastPacketAt` unlocked, so the silence rule had
 the same bug on the session side.
 
-**Fix.** `deadMu` now guards both fields with a stated invariant (comment on the field block, `session.go:224-227`):
-the session goroutine is the only writer, and every access goes through the lock. `handle` writes through
-`notePacket` (`session.go:424`), `nextExcept` reads through `lastPacket` (`session.go:433`, used at `:1606`), and
-`deadErrorExcept` takes the name inside the same critical section as `deadStale` (`session.go:465`). The
-harness's `deliberateClose` moved under the fake server's own `mu`: `dropLink` sets it at `fake_world_test.go:556`
-and both readers call `deliberate()` (`:538`).
+**Fix.** `deadMu` now guards both fields with a stated invariant (the comment on the field block in
+`internal/forever/world/session.go`): the session goroutine is the only writer, and every access goes through the
+lock. `handle` writes through `notePacket`, `nextExcept` reads through `lastPacket`, and `deadErrorExcept` takes the
+name inside the same critical section as `deadStale`. The harness's `deliberateClose` moved under the fake server's
+own `mu`: `dropLink` sets it and both readers call `deliberate()`.
 
-**Shared state between the socket readers and the session goroutine** (`internal/forever/world`, `worldconn`;
-`objects` and `combat` have no goroutine of their own):
+**Shared state between the socket readers and the session goroutine.** The table moved to
+[`SESSION-STATE.md`](SESSION-STATE.md), which both rounds' notes point at: it lists every field a reader touches,
+its protection, and the fields the chat and party round added. The gates are in the same document.
 
-| state | written by | read by | protection |
-|---|---|---|---|
-| `session.deadChs[2]` | `setLinkDead` closes one | `nextExcept` selects on both | closed under `deadMu`; created in `Enter` before `startPump` |
-| `session.deadClosed`, `deadErrs` | `setLinkDead` | `setLinkDead`, `deadErrorExcept`, `deadDetail` | `deadMu` |
-| `session.deadAny`, `deadSide`, `deadErr` | `setLinkDead` | `setLinkDead` (`deadSide`/`deadErr` are not read elsewhere) | `deadMu` |
-| `session.deadStale` | `markStale` | `deadDetail`, `deadErrorExcept` | `deadMu` |
-| `session.logoutAnswered` | `logout` (session goroutine) | `setLinkDead` | `deadMu` |
-| `session.lastPacketName`, `lastPacketAt` | `notePacket` (session goroutine, only writer) | `setLinkDead` (reader), `lastPacket`, `deadErrorExcept` | `deadMu` |
-| `report.LinkLost`, `LinkLostSide`, `LinkLostDetail`, `LastPacket`, `LastPacketAgo` | whichever goroutine calls `setLinkDead` | `abortLogin` (after a `deadMu` acquire), `cmd/forever-agent` after `Enter` | written under `deadMu`; the readers are waited for in `shutdown` |
-| `session.events` | both readers send | session goroutine receives | buffered channel (happens-before) |
-| `session.pumpCtx`, `pumpCancel`, `pumpDone` | `Enter` | readers read the context and close their done; the session stops the context and waits | context and channels; no field is written after `startPump` |
-| `worldconn.conn.recvSeq`, `crypt`, `inflater` | the socket's receiving reader (the handshake that sets them runs on the session goroutine before `startPump`) | same | single owner |
-| `worldconn.conn.handshakeNames` | the handshake only, frozen by `handshakeDone` before `startPump` | `HandshakeNames` (session goroutine) | written before any reader exists |
-| `worldconn.conn.sendSeq` and the seal counter | every sender | every sender | `sendMu` (counter and write as one operation) |
-| `worldconn.conn.encrypted` | the handshake, before the pump starts | both directions | written once, read-only after |
-| `worldconn.conn.nc` | both directions, `Close`, the deadline watchers | all of them | `net.Conn` is safe for concurrent use |
-| `worldconn.conn.closeOnce`, `closeErr` | `Close` callers | `Close` callers | `sync.Once` |
-| `objects.World`, `objects.Mover`, `fightLog`, the rest of `Report` | session goroutine only | session goroutine; `cmd` after `Enter` returns | single owner (`World`'s own `RWMutex` covers its read accessors) |
-| `fakeServer.deliberateClose` (harness) | `dropLink` | both socket readers | `fakeServer.mu` via `deliberate()` |
-
-### Gates
-
-The pre-merge gate of this repository includes the race run. On this branch, before a merge:
-
-| gate | command |
-|---|---|
-| the whole suite under the race detector (the CI `test` job) | `go test -race -count=1 -timeout 20m ./...` |
-| the forever packages, ten times, under the race detector | `go test -race -count=10 ./internal/forever/...` |
-| format, vet, no-cgo build | `make fmt-check vet nocgo` |
-| static analysis | `staticcheck ./...` (2026.2.2) |
-
-A single `-race` run is not enough for this code: the failing test starts its goroutines 12 times, and `-count=5`
-on the focused link tests reproduced all three pairs on the laptop.

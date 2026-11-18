@@ -37,7 +37,7 @@ func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	entry := fs.Int64("entry", 0, "creature template entry to fight (0: the nearest living level 1-3 creature within 40 yd)")
 	fightFor := fs.Duration("fight-for", 60*time.Second, "how long to fight before giving up")
 	allowInstanceRedirect := fs.Bool("allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
-	captureDir := fs.String("capture-dir", "", "debug: write every received combat packet's payload to DIR/packets.jsonl (a scratch folder OUTSIDE the repository)")
+	captureDir := fs.String("capture-dir", "", "debug: write every packet the combat, chat and party handlers see into a new run directory under this path (a scratch folder OUTSIDE the repository)")
 	provoke := fs.Bool("provoke", false, "debug: before the fight, provoke the refusals a fight log otherwise has no real packet for (out-of-range swing, cast at no rage)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -199,6 +199,6 @@ func printFightCheckSummary(w io.Writer, report *world.Report) {
 		fmt.Fprintf(w, "fight-check: the character knows %d spell(s)\n", len(report.KnownSpells))
 	}
 	if report.Captured > 0 {
-		fmt.Fprintf(w, "fight-check: %d combat packet(s) written to the debug capture\n", report.Captured)
+		fmt.Fprintf(w, "fight-check: %d packet(s) written to the debug capture\n", report.Captured)
 	}
 }

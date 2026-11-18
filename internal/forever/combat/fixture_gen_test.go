@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/pjerra/forever-agent/internal/forever/capturedir"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -793,49 +794,30 @@ func buildSpellGoMiss() []byte {
 	return b.done()
 }
 
-// liveCaptureLine is one line of the fight-check debug capture (--capture-dir writes packets.jsonl).
-type liveCaptureLine struct {
-	Opcode  uint32 `json:"opcode"`
-	Payload string `json:"payload"`
-}
-
 // TestWriteLiveFixtures replaces the hand-built fixtures a live fight can now produce with payloads from the
 // fight-check debug capture (forever fight-check --provoke --capture-dir DIR). It edits the committed file in place,
 // leaving the fixtures no player action produced (the heal log, the death release, the cooldown forms and the
-// reflected miss) as they were. Run it with FOREVER_LIVE_CAPTURE=<dir>/packets.jsonl and FOREVER_WRITE_FIXTURES=1.
+// reflected miss) as they were. Run it with FOREVER_LIVE_CAPTURE=<parent or run directory> and
+// FOREVER_WRITE_FIXTURES=1: the capture is read through the one reader (internal/forever/capturedir), as round 5's
+// chat and party fixtures are.
 func TestWriteLiveFixtures(t *testing.T) {
 	path := os.Getenv("FOREVER_LIVE_CAPTURE")
 	if path == "" || os.Getenv("FOREVER_WRITE_FIXTURES") == "" {
 		t.Skip("set FOREVER_LIVE_CAPTURE and FOREVER_WRITE_FIXTURES=1 to fold a live capture into the fixtures")
 	}
-	data, err := os.ReadFile(path)
+	recs, err := capturedir.ReadDir(path)
 	if err != nil {
 		t.Fatalf("the live capture: %v", err)
-	}
-	var lines []liveCaptureLine
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var l liveCaptureLine
-		if err := json.Unmarshal(line, &l); err != nil {
-			t.Fatalf("a capture line: %v", err)
-		}
-		lines = append(lines, l)
 	}
 	// find returns the first captured packet of core whose parse satisfies ok.
 	find := func(core uint32, ok func([]byte) bool) []byte {
 		t.Helper()
-		for _, l := range lines {
-			if l.Opcode != core {
+		for _, r := range recs {
+			if r.Opcode != core {
 				continue
 			}
-			payload, err := hex.DecodeString(l.Payload)
-			if err != nil {
-				t.Fatalf("a %s payload: %v", wire.ServerName(core), err)
-			}
-			if ok == nil || ok(payload) {
-				return payload
+			if ok == nil || ok(r.Payload) {
+				return r.Payload
 			}
 		}
 		t.Fatalf("the live capture has no %s matching", wire.ServerName(core))

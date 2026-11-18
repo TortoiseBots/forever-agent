@@ -230,6 +230,66 @@ func TestEnterNoticesADeadSocket(t *testing.T) {
 	}
 }
 
+// TestChatAndPartyChecksNoticeADeadSocket: the waits chat-check and party-check own (the chat listen, the wait for an
+// invite) end at once with ErrLinkLost when the instance socket drops, instead of waiting out their own deadlines.
+// The fake server drops it 150 ms after the login burst, while the client is already in the command's wait.
+func TestChatAndPartyChecksNoticeADeadSocket(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(f *fakeServer, opts *Options)
+	}{
+		{"chat listen", func(f *fakeServer, opts *Options) {
+			f.chat = true
+			opts.ChatCheck = true
+			opts.Listen = 30 * time.Second
+		}},
+		{"party invite wait", func(f *fakeServer, opts *Options) {
+			// The fake runs the party flow but sends no invite, so the client waits for one the whole 30 s without
+			// the drop.
+			f.partyInvite = true
+			opts.PartyCheck = true
+			opts.PartyAcceptFrom = "Inviter"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.closeSocket, f.closeWhen = "instance", "stay"
+			defer f.close()
+			f.wg.Add(1)
+			go f.serveRealm()
+			var steps []string
+			opts := Options{
+				Address:         f.realmListener.Addr().String(),
+				RealmID:         70,
+				RealmAddress:    0x46010046,
+				RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+				ClientSecret:    f.keyData[:32],
+				JoinSecret:      f.keyData[32:],
+				ClientBuild:     70707,
+				RealmBuild:      70707,
+				Character:       "XXXXXX",
+				Settle:          100 * time.Millisecond, // the drop (150 ms) lands inside the command's own wait
+				Deadline:        15 * time.Second,
+				BuildAuthKey:    f.buildKey[:],
+				Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+			}
+			tc.setup(f, &opts)
+			started := time.Now()
+			report, err := Enter(t.Context(), opts)
+			if !errors.Is(err, ErrLinkLost) {
+				t.Fatalf("Enter returned %v after %s\nsteps:\n%s", err, time.Since(started), strings.Join(steps, "\n"))
+			}
+			if took := time.Since(started); took > 5*time.Second {
+				t.Fatalf("the dead link took %s to end the wait", took)
+			}
+			if report == nil || !report.LinkLost || report.LinkLostSide != "instance" {
+				t.Fatalf("the report does not name the instance socket: %+v", report)
+			}
+		})
+	}
+}
+
 // TestFightCheckStopsAtOnceOnADeadCharacter: a character that is already dead when the command settles is not sent a
 // ping, a name query or anything else, and the run returns ErrSelfDead (the command's dead exit code).
 func TestFightCheckStopsAtOnceOnADeadCharacter(t *testing.T) {

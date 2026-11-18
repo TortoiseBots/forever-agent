@@ -7,12 +7,15 @@ import (
 	"io"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -44,16 +47,34 @@ type Options struct {
 	FightCheck bool
 	Entry      int32
 	FightFor   time.Duration
-	// CaptureDir is a debug option (forever fight-check --capture-dir): every received combat packet's payload is
-	// appended to <dir>/packets.jsonl. The directory holds the run's identifiers, so it belongs OUTSIDE the
-	// repository; the fixture generator rewrites them before a payload becomes a fixture.
+	// CaptureDir is a debug option (--capture-dir; keep it outside the repository): every packet the combat, chat
+	// and party handlers see is written to a new run directory under it (see capture_run.go for the layout, the
+	// exclusive files and the bounds). The directory holds the run's identifiers, so the fixture generators rewrite
+	// them before a payload becomes a fixture.
 	CaptureDir string
 	// Provoke is a debug option (--provoke): before the fight, provoke the refusals a fight log otherwise has no
 	// real packet for — a swing from out of range and a self cast at no rage — so their traffic can be captured.
 	Provoke bool
 	// AllowInstanceRedirect lets SMSG_CONNECT_TO name a host other than the realm socket's; refused by default.
 	AllowInstanceRedirect bool
-	Logf                  func(format string, args ...any)
+	// Round 5: chat-check and party-check. The two modes are exclusive.
+	ChatCheck        bool
+	Say              string
+	Whisper          string // NAME:TEXT
+	EmoteText        string
+	Listen           time.Duration
+	PartyCheck       bool
+	PartyInvite      string
+	PartyAcceptFrom  string
+	PartyDeclineFrom string
+	PartyUninvite    string
+	// WaitJoin makes the inviting side wait this long for the group to form before the stats/say/stay steps; without
+	// it an invite-only run ends after the invite answer.
+	WaitJoin  time.Duration
+	PartyStay time.Duration
+	// Watch prints the world model's position of one player once a second.
+	Watch string
+	Logf  func(format string, args ...any)
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -92,7 +113,7 @@ type Report struct {
 	Fight       FightReport
 	KnownSpells []int32
 	ParseErrors int
-	// Captured is the number of combat packets written to the debug capture (0 when --capture-dir was not given).
+	// Captured is the number of packets written to the debug capture (0 when --capture-dir was not given).
 	Captured int
 
 	// Round 3: what the client understood of the world and where it walked.
@@ -109,6 +130,10 @@ type Report struct {
 	WalkTo        [4]float32
 	BackAt        [4]float32
 	WalkClientPos [4]float32
+
+	// Round 5: the chat log's summary and the party model at the end of the run.
+	Chat  ChatSummary
+	Party PartySnapshot
 }
 
 // ObjectSummary counts the world model by object type, plus the update statistics.
@@ -253,6 +278,13 @@ type session struct {
 	selfSeen bool
 	mover    *objects.Mover
 
+	// Round 5: the bounded chat log and the party model.
+	chat  *chat.Log
+	party *party.State
+
+	// Round 5 debug capture (Options.CaptureDir): one run directory per link, opened on the first packet.
+	captureRun *captureRun
+	captureErr error
 	// Round 4: the fight log, the known spells of the character, the cast-id counter, and one log line per opcode a
 	// parser refused.
 	fight            *fightLog
@@ -262,8 +294,6 @@ type session struct {
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
-	// capture is the --capture-dir writer (nil otherwise).
-	capture *captureWriter
 }
 
 const (
@@ -290,21 +320,10 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
 	s.deadChs[sideRealm] = make(chan struct{})
 	s.deadChs[sideInstance] = make(chan struct{})
-	if opts.CaptureDir != "" {
-		c, err := openCapture(opts.CaptureDir)
-		if err != nil {
-			return report, err
-		}
-		s.capture = c
-		defer func() {
-			if cerr := c.Close(); cerr != nil {
-				opts.logf("world: the debug capture stopped: %v", cerr)
-			}
-		}()
-		opts.logf("world: writing every received combat packet to the debug capture (--capture-dir)")
-	}
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.world = objects.NewWorld(0)
+	s.chat = chat.NewLog(0)
+	s.party = party.NewState()
 	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
 	defer s.pumpCancel()
 
@@ -490,6 +509,9 @@ func (s *session) markStale() {
 // already passed, because Close has then unblocked every read anyway).
 func (s *session) shutdown(ctx context.Context) {
 	s.pumpCancel()
+	if s.captureRun != nil {
+		_ = s.captureRun.close()
+	}
 	if s.instance != nil {
 		_ = s.instance.Close()
 	}
@@ -557,12 +579,12 @@ func (s *session) enter(ctx context.Context) error {
 	s.opts.logf("world character list: %d character(s), max level %d, %d trailing bytes",
 		len(s.report.Characters), list.MaxLevel, list.TrailingBytes)
 	for _, c := range s.report.Characters {
-		s.opts.logf("  character %s: level %d, class %d, race %d, map %d, at %.1f %.1f %.1f", safeText(c.DisplayName()),
+		s.opts.logf("  character %s: level %d, class %d, race %d, map %d, at %.1f %.1f %.1f", chat.SanitiseName(c.DisplayName()),
 			c.Level, c.Class, c.Race, c.MapID, c.X, c.Y, c.Z)
 	}
 	character, ok := findCharacter(s.report.Characters, s.opts.Character)
 	if !ok {
-		return fmt.Errorf("world: the account has no character named %q", safeText(s.opts.Character))
+		return fmt.Errorf("world: the account has no character named %q", chat.SanitiseName(s.opts.Character))
 	}
 	s.report.Character = character
 
@@ -570,7 +592,7 @@ func (s *session) enter(ctx context.Context) error {
 	if err := s.sendOn(sideRealm, wire.CMSGPlayerLogin, BuildPlayerLogin(character.GUID)); err != nil {
 		return err
 	}
-	s.opts.logf("world login: CMSG_PLAYER_LOGIN sent for %s (%s)", safeText(character.DisplayName()), character.GUID)
+	s.opts.logf("world login: CMSG_PLAYER_LOGIN sent for %s (%s)", chat.SanitiseName(character.DisplayName()), character.GUID)
 	p, err = s.waitFor("SMSG_CONNECT_TO", 30*time.Second, func(p worldconn.Packet) bool {
 		return p.Core == wire.SMSGConnectTo
 	})
@@ -625,6 +647,22 @@ func (s *session) enter(ctx context.Context) error {
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
 
 	// ---- stay: answer time syncs, the active-mover exchange and pings
+	if s.opts.ChatCheck {
+		err := s.chatCheck(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.PartyCheck {
+		err := s.partyCheck(ctx)
+		s.summariseParty()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if s.opts.WalkCheck {
 		if err := s.walkCheck(ctx); err != nil {
 			return err
@@ -652,15 +690,22 @@ func (s *session) Send(core uint32, payload []byte) error {
 // Now is the client clock the movement time field carries.
 func (s *session) Now() time.Time { return time.Now() }
 
-// WaitUntil answers server packets until the given time, so a walk keeps the session healthy (time syncs, pings and
-// object updates all arrive while it walks).
-func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
+// drain is the one timed wait the session has: it answers server packets until end, applying each. A wait that
+// runs out of time is not an error; a dead or silent link ends it with ErrLinkLost through next. check, when it is
+// not nil, runs before every wait and after every handled packet, and its error ends the drain (the fight's death
+// check).
+func (s *session) drain(ctx context.Context, what string, end time.Time, check func() error) error {
 	for {
-		remaining := time.Until(until)
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+		remaining := time.Until(end)
 		if remaining <= 0 {
 			return nil
 		}
-		ev, err := s.next("the walk", remaining)
+		ev, err := s.next(what, remaining)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				return nil
@@ -671,57 +716,32 @@ func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
 			return err
 		}
 	}
+}
+
+// WaitUntil answers server packets until until, so a walk keeps the session healthy (time syncs, pings and object
+// updates all arrive while it walks).
+func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
+	return s.drain(ctx, "the walk", until, nil)
 }
 
 // settle answers the server for d and applies what it sends, and ends at once when the character dies: a corpse
 // gets no ping, no name query and no fight. A dead link ends it the same way (through next).
 func (s *session) settle(ctx context.Context, d time.Duration) error {
-	end := time.Now().Add(d)
-	for {
-		if s.selfDead() {
-			s.opts.logf("fight-check: the character died while the client settled in the world")
-			return ErrSelfDead
-		}
-		remaining := time.Until(end)
-		if remaining <= 0 {
-			return nil
-		}
-		ev, err := s.next("the settle", remaining)
-		if err != nil {
-			if errors.Is(err, errWaitTimeout) {
-				return nil
-			}
-			return err
-		}
-		if err := s.handle(ctx, ev); err != nil {
-			return err
-		}
-		if s.selfDead() {
-			s.opts.logf("fight-check: the character died while the client settled in the world")
-			return ErrSelfDead
-		}
-	}
+	return s.drain(ctx, "the settle", time.Now().Add(d), s.checkSelfAlive)
 }
 
-// collect answers the server for d and applies what it sends.
-func (s *session) collect(ctx context.Context, d time.Duration) error {
-	end := time.Now().Add(d)
-	for {
-		remaining := time.Until(end)
-		if remaining <= 0 {
-			return nil
-		}
-		ev, err := s.next("the settle", remaining)
-		if err != nil {
-			if errors.Is(err, errWaitTimeout) {
-				return nil
-			}
-			return err
-		}
-		if err := s.handle(ctx, ev); err != nil {
-			return err
-		}
+// checkSelfAlive is the settle's death check: the fight command's dead exit code, before anything else is sent.
+func (s *session) checkSelfAlive() error {
+	if !s.selfDead() {
+		return nil
 	}
+	s.opts.logf("fight-check: the character died while the client settled in the world")
+	return ErrSelfDead
+}
+
+// collect answers the server for d and applies what it sends (the chat and party steps, the walk's pause).
+func (s *session) collect(ctx context.Context, d time.Duration) error {
+	return s.drain(ctx, "the settle", time.Now().Add(d), nil)
 }
 
 const (
@@ -1102,6 +1122,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			return err
 		}
 		s.report.ActiveMoverGUID = guid
+		// The server names this character's own GUID here, before any party packet: the party model can now tell
+		// whether a roster actually lists the client.
+		s.party.SetSelf(guid)
 		if !s.activeMoverDone {
 			if err := s.sendOn(ev.side, wire.CMSGMoveInitActiveMoverDone, BuildMoveInitActiveMoverComplete(clientTimeMs())); err != nil {
 				return err
@@ -1213,6 +1236,15 @@ func (s *session) handle(ctx context.Context, ev event) error {
 				s.world.SetEntryName(int32(c.Entry), c.Name)
 			}
 		}
+	case wire.SMSGChat, wire.SMSGPrintNotification, wire.SMSGMotd, wire.SMSGChatServerMessage,
+		wire.SMSGChatPlayerNotFound, wire.SMSGChatPlayerAmbiguous, wire.SMSGChatRestricted,
+		wire.SMSGEmote, wire.SMSGTextEmote:
+		return s.handleChat(p)
+	case wire.SMSGPartyInvite, wire.SMSGPartyUpdate, wire.SMSGPartyMemberFullState,
+		wire.SMSGPartyMemberPartialState, wire.SMSGGroupDecline, wire.SMSGGroupUninvite,
+		wire.SMSGGroupDestroyed, wire.SMSGGroupNewLeader, wire.SMSGPartyCommandResult,
+		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
+		return s.handleParty(p)
 	default:
 		s.handleCombat(p)
 	}
@@ -1224,10 +1256,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 // because the rest of the fight is still valid and the next packet is framed by its own header.
 func (s *session) handleCombat(p worldconn.Packet) {
 	now := s.transport().Now()
-	if s.capture != nil {
-		s.capture.write(p.Core, p.Payload)
-		s.report.Captured++
-	}
+	s.capturePacket(p)
 	switch p.Core {
 	case wire.SMSGAttackStart:
 		v, err := combat.ParseAttackStart(p.Payload)
@@ -1651,44 +1680,9 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 // findCharacter matches the requested name against the character name and against name + surname, ignoring case.
 func findCharacter(list []Character, want string) (Character, bool) {
 	for _, c := range list {
-		if equalFoldASCII(c.Name, want) || equalFoldASCII(c.DisplayName(), want) || equalFoldASCII(c.Name+" "+c.Surname, want) {
+		if strings.EqualFold(c.Name, want) || strings.EqualFold(c.DisplayName(), want) || strings.EqualFold(c.Name+" "+c.Surname, want) {
 			return c, true
 		}
 	}
 	return Character{}, false
-}
-
-func equalFoldASCII(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range len(a) {
-		ca, cb := a[i], b[i]
-		if 'a' <= ca && ca <= 'z' {
-			ca -= 'a' - 'A'
-		}
-		if 'a' <= cb && cb <= 'z' {
-			cb -= 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
-}
-
-// safeText bounds a character name before it goes to the log: printable ASCII only, at most 64 bytes.
-func safeText(s string) string {
-	if len(s) > 64 {
-		s = s[:64]
-	}
-	out := make([]byte, 0, len(s))
-	for i := range len(s) {
-		c := s[i]
-		if c < 0x20 || c > 0x7E {
-			c = '?'
-		}
-		out = append(out, c)
-	}
-	return string(out)
 }

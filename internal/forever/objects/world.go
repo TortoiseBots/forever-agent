@@ -6,6 +6,7 @@ package objects
 import (
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -636,6 +637,27 @@ func (w *World) SetName(guid wire.GUID, name string) {
 	if o, ok := w.objects[guid]; ok {
 		o.Name = name
 	}
+}
+
+// NameOf returns the cached player name for a GUID, or "".
+func (w *World) NameOf(guid wire.GUID) string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.players[guid]
+}
+
+// PlayerByName returns the GUID of a player whose cached name matches, case-insensitively: the server normalises
+// names before every lookup (ObjectMgr.cpp:157-185, PlayerNameMapHolder::Find, ObjectAccessor.cpp:89-97), so a
+// name typed in any case names the same player.
+func (w *World) PlayerByName(name string) (wire.GUID, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	for guid, have := range w.players {
+		if strings.EqualFold(have, name) {
+			return guid, true
+		}
+	}
+	return wire.EmptyGUID, false
 }
 
 // SetEntryName caches a creature's name by entry.

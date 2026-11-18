@@ -14,6 +14,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
 | Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
+| Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
 
@@ -43,6 +44,38 @@ entry, name, level, health and distance. It then walks `--dx` and `--dy` yards f
 logs out. The walk is straight-line only: no pathfinding, and Z is interpolated between the start and the target, so
 use it on flat ground. Creature and player names come from `CMSG_QUERY_CREATURE` and `CMSG_QUERY_PLAYER_NAMES`, cached
 per entry and GUID, at most four batches of each per run with a 3 s deadline per answer.
+
+`forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote
+`--emote TEXT`, then prints every chat line it receives for `--listen` seconds (default 10 s) and logs out. The
+message checks the server makes (non-empty, at most 511 bytes, valid UTF-8, no control characters or newlines, no
+`|` hyperlink escape, and a leading `/`, `.` or `!` is a command, not a line) run before anything is sent and fail
+with a named error. Every packet goes out in the character's race language (Common for a human, Orcish for an orc,
+and so on): the server refuses a language the character has not learned. `--watch NAME` prints that player's position
+from the world model once a second for `--listen` instead of the chat log (the name lookup is the server's
+`CMSG_QUERY_PLAYER_NAMES`), and `--capture-dir DIR` writes every packet the combat, chat and party handlers see
+into a NEW run directory under DIR (`<UTC start>-<4 random bytes>`, exclusive files, at most 8192 packets and 32 MiB
+per run): keep it outside the repository, the payloads are raw server bytes. Text from the server is sanitised: no control
+bytes survive, output is valid UTF-8 and never longer than the display bound, and a `|H…|h` hyperlink prints its
+visible label.
+
+`forever-agent forever party-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+either invites `--invite NAME`, or waits for an invite from `--accept-from NAME` and accepts it or from
+`--decline-from NAME` and declines it; `--wait-join DURATION` (with `--invite`) waits that long for the invitee to
+join before the member states and the party line; `--uninvite NAME` (with `--invite`) waits for the group to form,
+says the party line and uninvites that member (this core disbands a two-member group instead of sending
+`SMSG_GROUP_UNINVITE`, so with two members the group simply ends). The party model as it changes (members, leader, loot method) is printed, the
+members' full state is asked for, a line is said in party chat, and the character leaves and logs out (`--stay` is
+how long it stays in the group). The command fails with a named error when the outcome is not the one asked for: an
+invite the server refused, no invite, an invite that says it cannot be accepted, or no party update after the
+accept. A roster over five members is validated by the same rules, then parsed and bounded and reported as
+`raid: not handled in this round`; a roster that is not a normal party type, has an empty party GUID, lists an empty
+or duplicate GUID, does not list this character exactly once at its own MyIndex, or names a leader it does not list
+is printed as `invalid roster: <reason>`, ends the party in the model, and nothing is sent for it (no party line, no
+member stats, no uninvite, no leave). A roster that does not belong to the transition that produced it (the accepted
+invite's leader, or the name of an invite the server confirmed) is printed as `unexpected roster: <reason>` and is
+not acted on either.
+`--capture-dir DIR` works as it does for chat-check.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

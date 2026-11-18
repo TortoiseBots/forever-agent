@@ -1,0 +1,124 @@
+{
+  "note": "Payloads only (the 4-byte opcode stripped), cut from the private PKT 3.1 capture and rewritten: every packed GUID is synthetic with the same mask and type, the two virtual-realm addresses are 4242, and sender name, target name, addon prefix, channel and text are runs of the same length. No original identifier is committed.",
+  "packets": [
+    {
+      "name": "chat_system",
+      "opcode": "0x4A0001",
+      "payload": "0000000000000000000000000092100000921000000000000000000000000000000000000000000000004c0054545454545454545454545454545454545454",
+      "synthetic_guids": null,
+      "rewritten": [
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_party",
+      "opcode": "0x4A0001",
+      "payload": "020000000003e040434f520900000180427703e040434f5209921000009210000000000000000000000000000000000000000000000050005454545454545454545454545454545454545454",
+      "synthetic_guids": [
+        "03e040434f5209",
+        "01804277"
+      ],
+      "rewritten": [
+        "2 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_party_leader",
+      "opcode": "0x4A0001",
+      "payload": "310700000003e040434f520900000380424577000092100000921000000000000000000000000000000000000000000000002400545454545454545454",
+      "synthetic_guids": [
+        "03e040434f5209",
+        "0380424577"
+      ],
+      "rewritten": [
+        "2 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_whisper_addon",
+      "opcode": "0x4A0001",
+      "payload": "07b700000003e040434f520900000180427703e040434f52099210000092100000000000000000000000000000000000000000006000700050505054545454545454545454545454545454545454545454545454545454",
+      "synthetic_guids": [
+        "03e040434f5209",
+        "01804277"
+      ],
+      "rewritten": [
+        "2 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_whisper",
+      "opcode": "0x4A0001",
+      "payload": "070000000003e040434f520900000180427703e040434f520992100000921000000000000000000000000000000000000000c018000020004e4e4e4e4e4e4e4e4e4e4e4e5454545454545454",
+      "synthetic_guids": [
+        "03e040434f5209",
+        "01804277"
+      ],
+      "rewritten": [
+        "2 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_channel",
+      "opcode": "0x4A0001",
+      "payload": "110000000001e0404f520901e0415053720180427701e0404f520992100000921000000000000000000000000000000000000000000005c0bc404343434343434343434343434343434343434343434343545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545401eb4444474d535669",
+      "synthetic_guids": [
+        "01e0404f5209",
+        "01e041505372",
+        "01804277",
+        "01eb4444474d535669"
+      ],
+      "rewritten": [
+        "4 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "chat_achievement",
+      "opcode": "0x4A0001",
+      "payload": "2e0000000003e040434f52090000038042457703e040434f520992100000921000001bfb000000000000000000000000000000000000008400545454545454545454545454545454545454545454545454545454545454545454",
+      "synthetic_guids": [
+        "03e040434f5209",
+        "0380424577"
+      ],
+      "rewritten": [
+        "2 packed GUID(s) replaced",
+        "2 virtual-realm address(es) set to 4242",
+        "a string replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "print_notification",
+      "opcode": "0x45006E",
+      "payload": "00d054545454545454545454545454",
+      "synthetic_guids": null,
+      "rewritten": [
+        "text replaced by a run of the same length"
+      ]
+    },
+    {
+      "name": "emote",
+      "opcode": "0x450273",
+      "payload": "03e040434f5209710000000000000000000000",
+      "synthetic_guids": [
+        "03e040434f5209"
+      ],
+      "rewritten": [
+        "1 packed GUID(s) replaced"
+      ]
+    }
+  ]
+}
