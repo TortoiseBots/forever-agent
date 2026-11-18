@@ -165,7 +165,7 @@ skips when `TRIALS_PYTHON_ROOT` is unset, so CI stays green without Python:
 TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
 ```
 
-Result with the reference: 35 cases (23 whole-run, 12 direct rule evaluations), all equal:
+Result with the reference: 37 cases (25 whole-run, 12 direct rule evaluations), all equal:
 `ok github.com/pjerra/forever-agent/internal/trials/tests/differential 1.8s`. The table covers
 B1-B6, plus empty/one-event runs, a latency tie at exactly half, an equal count boundary, negative
 times, duplicate raw rows, `seq` int vs string, unicode names, a three-rep majority, a trial with
@@ -186,7 +186,7 @@ The first review's findings and what now pins each one:
 | B2 float count / null mean | `walk_metric` uses Python `int()`/`float()` and raises where Python raises (`Result.Err`) | `parityfix` B2, differential `b2_walk_*` |
 | B3 huge GUIDs | `events.NormGUID` uses `big.Int` and Python's `%016x` sign width | `parityfix` B3, differential `b3_guid_*` |
 | B4 pyjson precision/EOF | out-of-int64 integers are `*big.Int`; conversion errors propagate; trailing data is an error; `1e999` is `inf` | `pyjson` unit tests, differential `b4_*` |
-| B5 non-object JSONL | a non-object line is an error naming file:line, never dropped | `parityfix` B5, differential `b5_*` |
+| B5 non-object JSONL | a non-object line is an error naming file:line, never dropped; a raw trace overrides a bad recorded events line exactly where Python's normalise condition ignores non-dict rows | `parityfix` B5, differential `b5_*` |
 | B6 list seq | unhashable `seq` is an error naming file:line | `parityfix` B6, differential `b6_seq_list_unhashable` |
 | B7 weak tests | interruptible through `rules.Evaluate`; rep order through the real scorer calls; `trials validate` (id/stem, duplicate rule id); kit entries < 20000 | `r3_test.go`, `score/order_test.go`, `trials_cmd_test.go`, `fix_p1_test.go` |
 | rule `min_n` 0 masking `check.min_n` | `minNOf` treats 0 as falsy at both levels | `parityfix`, differential `edge_rule_min_n_zero_masks_check` |
