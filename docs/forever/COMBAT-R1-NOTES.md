@@ -869,7 +869,8 @@ and both readers call `deliberate()` (`:538`).
 | `report.LinkLost`, `LinkLostSide`, `LinkLostDetail`, `LastPacket`, `LastPacketAgo` | whichever goroutine calls `setLinkDead` | `abortLogin` (after a `deadMu` acquire), `cmd/forever-agent` after `Enter` | written under `deadMu`; the readers are waited for in `shutdown` |
 | `session.events` | both readers send | session goroutine receives | buffered channel (happens-before) |
 | `session.pumpCtx`, `pumpCancel`, `pumpDone` | `Enter` | readers read the context and close their done; the session stops the context and waits | context and channels; no field is written after `startPump` |
-| `worldconn.conn.recvSeq`, `crypt`, `inflater`, `handshakeNames` | the socket's receiving reader after the handshake (the handshake runs on the session goroutine before `startPump`) | same | single owner |
+| `worldconn.conn.recvSeq`, `crypt`, `inflater` | the socket's receiving reader (the handshake that sets them runs on the session goroutine before `startPump`) | same | single owner |
+| `worldconn.conn.handshakeNames` | the handshake only, frozen by `handshakeDone` before `startPump` | `HandshakeNames` (session goroutine) | written before any reader exists |
 | `worldconn.conn.sendSeq` and the seal counter | every sender | every sender | `sendMu` (counter and write as one operation) |
 | `worldconn.conn.encrypted` | the handshake, before the pump starts | both directions | written once, read-only after |
 | `worldconn.conn.nc` | both directions, `Close`, the deadline watchers | all of them | `net.Conn` is safe for concurrent use |
