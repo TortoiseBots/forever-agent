@@ -33,9 +33,9 @@ rpc connect: server id 1/1794972337, server time 1794975225932, ciid "000000016A
 logon: build 70707, account id 2, 1 game account(s), session key 64 bytes
 realm list ticket: 20 bytes
 sub-region: 70-1-70
-realm list: realm 70 "Trinity", address 0x46010046, build 70707, population 1, flags 0x00
+realm list: realm 70 "<realm>", address 0x46010046, build 70707, population 1, flags 0x00
 realm join: join ticket 76 bytes, world server 127.0.0.1:8085, join secret 32 bytes
-realm: Trinity (id 70, address 0x46010046, world 127.0.0.1:8085)
+realm: <realm> (id 70, address 0x46010046, world 127.0.0.1:8085)
 ```
 
 ## Where `PROTOCOL-LOGIN.md` was wrong or silent
