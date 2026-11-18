@@ -1,11 +1,16 @@
 package scenario
 
 import (
+	"errors"
 	"fmt"
+	"math"
+	"math/big"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/pjerra/forever-agent/internal/trials/gear"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
@@ -451,38 +456,124 @@ type FileValidation struct {
 }
 
 // ValidateFiles validates trial files the way the Python `trials.py validate` does: each file
-// through Validate, plus id-versus-file-stem and duplicate rule ids across the whole set.
-func ValidateFiles(paths []string) []FileValidation {
-	seenRuleIDs := map[string]string{}
+// through Validate, plus id-versus-file-stem and duplicate rule ids across the whole set. The
+// error is an input Python's cmd_validate raises on before printing that file's line (a rule
+// that is not an object, an unhashable rule id); the results before it were already printed.
+func ValidateFiles(paths []string) ([]FileValidation, error) {
+	seen := map[any]string{}
 	out := make([]FileValidation, 0, len(paths))
 	for _, path := range paths {
-		result := FileValidation{Path: path}
-		trial, err := LoadTrial(path)
+		result, err := validateFile(path, seen)
 		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("cannot load: %v", err))
-			out = append(out, result)
-			continue
-		}
-		result.Errors = append(result.Errors, Validate(trial)...)
-		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		if id, ok := trial["id"].(string); ok && id != stem {
-			result.Errors = append(result.Errors, fmt.Sprintf("trial id %q != file stem %q", id, stem))
-		}
-		rules, _ := pyjson.List(trial["rules"])
-		for _, ruleVal := range rules {
-			rule, ok := pyjson.Object(ruleVal)
-			if !ok {
-				continue
-			}
-			rid := pyjson.Str(rule["id"])
-			if owner, dup := seenRuleIDs[rid]; dup {
-				result.Errors = append(result.Errors,
-					fmt.Sprintf("duplicate rule id %s (also in %s)", rid, owner))
-			} else {
-				seenRuleIDs[rid] = pyjson.Str(trial["id"])
-			}
+			return out, err
 		}
 		out = append(out, result)
 	}
-	return out
+	return out, nil
+}
+
+func validateFile(path string, seen map[any]string) (FileValidation, error) {
+	result := FileValidation{Path: path}
+	trial, err := LoadTrial(path)
+	if err != nil {
+		// Python prints the exception's str(); for an OS error that is
+		// "[Errno N] message: 'path'".
+		result.Errors = append(result.Errors, fmt.Sprintf("cannot load: %s", pythonErrorText(err)))
+		return result, nil
+	}
+	result.Errors = append(result.Errors, Validate(trial)...)
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if id, ok := trial["id"].(string); ok && id != stem {
+		result.Errors = append(result.Errors,
+			fmt.Sprintf("%s: trial id %s != file stem %s", pyjson.Str(trial["id"]), pythonRepr(id), pythonRepr(stem)))
+	}
+	rules, _ := pyjson.List(trial["rules"])
+	for _, ruleVal := range rules {
+		rule, ok := pyjson.Object(ruleVal)
+		if !ok {
+			return FileValidation{}, fmt.Errorf("%s: rule is not an object", pyjson.Str(trial["id"]))
+		}
+		rid := rule["id"]
+		key, err := ruleIDKey(rid)
+		if err != nil {
+			return FileValidation{}, fmt.Errorf("%s: unhashable rule id %s", pyjson.Str(trial["id"]), pythonRepr(rid))
+		}
+		if owner, dup := seen[key]; dup {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("%s: duplicate rule id %s (also in %s)", pyjson.Str(trial["id"]), pyjson.Str(rid), owner))
+		} else {
+			seen[key] = pyjson.Str(trial["id"])
+		}
+	}
+	return result, nil
+}
+
+// ValidateOutput renders the Python `trials validate` stdout and exit status for paths.
+// The error is an input cmd_validate raises on; its results up to that file were printed.
+func ValidateOutput(paths []string) (string, int, error) {
+	results, err := ValidateFiles(paths)
+	var b strings.Builder
+	failed := 0
+	for _, result := range results {
+		if len(result.Errors) == 0 {
+			fmt.Fprintf(&b, "%s: ok\n", result.Path)
+			continue
+		}
+		failed++
+		for _, problem := range result.Errors {
+			fmt.Fprintf(&b, "%s: %s\n", result.Path, problem)
+		}
+	}
+	if failed > 0 || err != nil {
+		return b.String(), 1, err
+	}
+	return b.String(), 0, nil
+}
+
+// ruleIDKey is the dict key Python's `seen_rule_ids[rid]` uses: strings keep their text,
+// ints/floats/bools compare by numeric value (True == 1), None is its own key, and a list or
+// object is unhashable and raises TypeError.
+func ruleIDKey(v any) (any, error) {
+	switch val := v.(type) {
+	case nil, string:
+		return val, nil
+	case bool:
+		if val {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	case int64:
+		return val, nil
+	case float64:
+		if !math.IsInf(val, 0) && !math.IsNaN(val) && val == math.Trunc(val) {
+			if n, _ := new(big.Float).SetFloat64(val).Int(nil); n.IsInt64() {
+				return n.Int64(), nil
+			}
+		}
+		return val, nil
+	case *big.Int:
+		// Tagged: a big rule id 12 is not the string "12" in Python's dict.
+		return bigRuleID(val.String()), nil
+	}
+	return nil, errors.New("unhashable")
+}
+
+// bigRuleID is a rule id beyond int64: distinct from a string of the same digits.
+type bigRuleID string
+
+// pythonErrorText is the Python `str(exc)` for the load errors LoadTrial returns: an OS error
+// keeps Python's "[Errno N] message: 'path'" form.
+func pythonErrorText(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		var errno syscall.Errno
+		if errors.As(pathErr.Err, &errno) {
+			msg := errno.Error()
+			if msg != "" {
+				msg = strings.ToUpper(msg[:1]) + msg[1:]
+			}
+			return fmt.Sprintf("[Errno %d] %s: %s", int(errno), msg, pythonRepr(pathErr.Path))
+		}
+	}
+	return err.Error()
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/spells"
@@ -1317,13 +1318,54 @@ func LoadSelected(spec string) (Trial, error) {
 	return LoadTrial(spec)
 }
 
+// pythonReprString is Python's repr() of a string: single quotes unless the text holds a
+// single quote and no double quote, with backslash escapes for quotes and control characters.
+func pythonReprString(s string) string {
+	quote := byte('\'')
+	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
+		quote = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case rune(quote):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			switch {
+			case r < 0x20 || r == 0x7f:
+				fmt.Fprintf(&b, `\x%02x`, r)
+			case r <= 0xff && !unicode.IsPrint(r):
+				fmt.Fprintf(&b, `\x%02x`, r)
+			case r <= 0xffff && !unicode.IsPrint(r):
+				fmt.Fprintf(&b, `\u%04x`, r)
+			case !unicode.IsPrint(r):
+				fmt.Fprintf(&b, `\U%08x`, r)
+			default:
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
+}
+
 // pythonRepr renders a JSON value the way Python's %r does for the scalars validation prints.
 func pythonRepr(v any) string {
 	switch val := v.(type) {
 	case nil:
 		return "None"
 	case string:
-		return "'" + val + "'"
+		return pythonReprString(val)
 	case bool:
 		if val {
 			return "True"
