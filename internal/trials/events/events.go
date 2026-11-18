@@ -9,10 +9,10 @@ package events
 import (
 	"bufio"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -77,24 +77,37 @@ func epochSecs(dt time.Time) float64 {
 }
 
 // NormGUID normalises a guid to Python's "0x%016x" form (lower case); unparseable text passes
-// through lower-cased.
+// through lower-cased. Integers are arbitrary precision, as in Python: a decimal guid at or
+// above 2^63 still becomes its hex form.
 func NormGUID(value any) string {
 	if !pyjson.Truthy(value) {
 		return ""
 	}
 	text := strings.ToLower(strings.TrimSpace(pyjson.Str(value)))
-	if !strings.HasPrefix(text, "0x") {
-		n, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return text
-		}
-		return fmt.Sprintf("0x%016x", n)
+	base := 10
+	digits := text
+	if strings.HasPrefix(text, "0x") {
+		base = 16
+		digits = text[2:]
 	}
-	n, err := strconv.ParseInt(text, 0, 64)
-	if err != nil {
+	n, ok := new(big.Int).SetString(digits, base)
+	if !ok {
 		return text
 	}
-	return fmt.Sprintf("0x%016x", n)
+	sign := ""
+	if n.Sign() < 0 {
+		sign = "-"
+	}
+	hex := new(big.Int).Abs(n).Text(16)
+	// Python's "%016x" width includes the sign: a negative -1 is 0x-000000000000001.
+	width := 16
+	if sign == "-" {
+		width = 15
+	}
+	if len(hex) < width {
+		hex = strings.Repeat("0", width-len(hex)) + hex
+	}
+	return "0x" + sign + hex
 }
 
 // SideGUID is a row's guid for one side: a flat <side>_guid/<side>Guid or the nested object.
@@ -129,18 +142,29 @@ func SideName(row Row, side string) string {
 	return ""
 }
 
-// ReadJSONL reads a JSON-lines file; a missing file gives no rows and a malformed line is
-// skipped, like the bench. Non-object lines are skipped too: every reader wants objects.
-func ReadJSONL(path string) []Row {
+// ReadJSONL reads a JSON-lines file the way the bench's `_read_jsonl` does: a missing file
+// gives no rows and a line that is not JSON is skipped. A line that parses to something other
+// than an object is an error, naming the file and line: the Python keeps such a row and then
+// fails on `row.get(...)`, so it must never be silently dropped.
+func ReadJSONL(path string) ([]Row, error) {
+	rows, _, err := ReadJSONLNumbered(path)
+	return rows, err
+}
+
+// ReadJSONLNumbered is ReadJSONL with each row's 1-based line number.
+func ReadJSONLNumbered(path string) ([]Row, []int, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, nil, nil
 	}
 	defer f.Close()
 	var rows []Row
+	var lines []int
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -149,11 +173,33 @@ func ReadJSONL(path string) []Row {
 		if err != nil {
 			continue
 		}
-		if row, ok := pyjson.Object(doc); ok {
-			rows = append(rows, row)
+		row, ok := pyjson.Object(doc)
+		if !ok {
+			return nil, nil, fmt.Errorf("%s:%d: expected a JSON object, got %s", path, lineNo, jsonKind(doc))
 		}
+		rows = append(rows, row)
+		lines = append(lines, lineNo)
 	}
-	return rows
+	return rows, lines, nil
+}
+
+// jsonKind names what a non-object JSON line parsed to, for the error above.
+func jsonKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "a boolean"
+	case string:
+		return "a string"
+	case int64, *big.Int:
+		return "a number"
+	case float64:
+		return "a number"
+	case []any:
+		return "a list"
+	}
+	return "a non-object value"
 }
 
 // Span is an excluded span: re-based seconds [A, B] with the reason it was excluded.
@@ -315,10 +361,10 @@ func AttackVictims(raws, marks, samples []Row) map[string][]AttackVictim {
 		var seq int64
 		hasSeq := false
 		if raw["seq"] != nil {
-			if n, ok := pyjson.Int64(raw["seq"]); ok {
-				seq, hasSeq = n, true
-			} else if f, ok := pyjson.Float(raw["seq"]); ok {
-				seq, hasSeq = int64(f), true
+			if n, err := pyjson.PyInt(raw["seq"]); err == nil {
+				if i, ok := pyjson.Int64(n); ok {
+					seq, hasSeq = i, true
+				}
 			}
 		}
 		t := RawTime(raw, baseWall, mono, hasMono)
@@ -343,9 +389,19 @@ func AttackVictims(raws, marks, samples []Row) map[string][]AttackVictim {
 // score/rules read ONLY this output (plus the untouched samples), never the runner's raw
 // marks.
 func Normalise(repDir string, trial map[string]any) ([]Row, error) {
-	raw := ReadJSONL(filepath.Join(repDir, "raw-ta.jsonl"))
-	samples := ReadJSONL(filepath.Join(repDir, "samples.jsonl"))
-	marks := ReadJSONL(filepath.Join(repDir, "marks.jsonl"))
+	rawPath := filepath.Join(repDir, "raw-ta.jsonl")
+	raw, rawLines, err := ReadJSONLNumbered(rawPath)
+	if err != nil {
+		return nil, err
+	}
+	samples, err := ReadJSONL(filepath.Join(repDir, "samples.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	marks, err := ReadJSONL(filepath.Join(repDir, "marks.jsonl"))
+	if err != nil {
+		return nil, err
+	}
 	setup := map[string]any{}
 	if doc, err := pyjson.UnmarshalFile(filepath.Join(repDir, "setup.json")); err == nil {
 		setup = pyjson.ObjectOrEmpty(doc)
@@ -507,16 +563,20 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 	seen := map[string]bool{}
 	var out []Row
 	dropped := map[string]int64{}
-	for _, row := range raw {
+	for i, row := range raw {
 		seqVal := row["seq"]
+		switch seqVal.(type) {
+		case []any, map[string]any:
+			// Python builds the key tuple (seq, content) and a list/dict seq is unhashable.
+			return nil, fmt.Errorf("%s:%d: unhashable seq %s", rawPath, rawLines[i], jsonKind(seqVal))
+		}
 		content, err := pyjson.MarshalLine(row)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s:%d: %w", rawPath, rawLines[i], err)
 		}
-		key := "null\x00" + string(content)
-		if seqVal != nil {
-			key = "seq:" + pyjson.Str(seqVal) + "\x00" + string(content)
-		}
+		// The content already holds the seq, so equal content means the same (seq, content)
+		// tuple Python would dedupe on.
+		key := string(content)
 		if seen[key] {
 			continue
 		}
@@ -535,23 +595,22 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 		dstGUID := SideGUID(row, "target")
 		var seq any
 		if row["seq"] != nil {
-			if n, ok := pyjson.Int64(row["seq"]); ok {
+			if n, err := pyjson.PyInt(row["seq"]); err == nil {
 				seq = n
-			} else if f, ok := pyjson.Float(row["seq"]); ok {
-				seq = int64(f)
 			}
 		}
 		var spellID any
 		if row["spell_id"] != nil {
-			if n, ok := pyjson.Int64(row["spell_id"]); ok {
+			if n, err := pyjson.PyInt(row["spell_id"]); err == nil {
 				spellID = n
-			} else if f, ok := pyjson.Float(row["spell_id"]); ok {
-				spellID = int64(f)
 			}
 		}
 		var spellName any
-		if id, ok := spellID.(int64); ok {
+		if id, ok := pyjson.Int64(spellID); ok {
 			spellName = spells.NameFor(id)
+		} else if bigID, ok := spellID.(*big.Int); ok {
+			// Python's name_for(str(id)) for an id outside the table is str(id).
+			spellName = bigID.String()
 		}
 		out = append(out, Row{
 			"t":          pyjson.Round(t, 2),

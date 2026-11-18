@@ -2,8 +2,10 @@ package scenario
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/pjerra/forever-agent/internal/trials/gear"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
@@ -438,4 +440,49 @@ func objectOrFalsyEmpty(val any, allowed map[string]bool, label, tid string, err
 		return map[string]any{}, false
 	}
 	return obj, true
+}
+
+// FileValidation is one trial file's validate result: the load error, the schema errors and
+// the two checks the Python `trials validate` adds on top of Validate (id == file stem, no
+// duplicate rule id across files).
+type FileValidation struct {
+	Path   string
+	Errors []string
+}
+
+// ValidateFiles validates trial files the way the Python `trials.py validate` does: each file
+// through Validate, plus id-versus-file-stem and duplicate rule ids across the whole set.
+func ValidateFiles(paths []string) []FileValidation {
+	seenRuleIDs := map[string]string{}
+	out := make([]FileValidation, 0, len(paths))
+	for _, path := range paths {
+		result := FileValidation{Path: path}
+		trial, err := LoadTrial(path)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("cannot load: %v", err))
+			out = append(out, result)
+			continue
+		}
+		result.Errors = append(result.Errors, Validate(trial)...)
+		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		if id, ok := trial["id"].(string); ok && id != stem {
+			result.Errors = append(result.Errors, fmt.Sprintf("trial id %q != file stem %q", id, stem))
+		}
+		rules, _ := pyjson.List(trial["rules"])
+		for _, ruleVal := range rules {
+			rule, ok := pyjson.Object(ruleVal)
+			if !ok {
+				continue
+			}
+			rid := pyjson.Str(rule["id"])
+			if owner, dup := seenRuleIDs[rid]; dup {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("duplicate rule id %s (also in %s)", rid, owner))
+			} else {
+				seenRuleIDs[rid] = pyjson.Str(trial["id"])
+			}
+		}
+		out = append(out, result)
+	}
+	return out
 }

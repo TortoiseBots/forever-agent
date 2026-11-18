@@ -3,6 +3,7 @@ package pyjson
 import (
 	"bytes"
 	"math"
+	"math/big"
 	"testing"
 )
 
@@ -181,5 +182,89 @@ func TestUnmarshalKeepsIntAndFloat(t *testing.T) {
 	}
 	if _, ok := m["o"].(map[string]any)["x"].([]any)[0].(int64); !ok {
 		t.Error("array integer lost its int type")
+	}
+}
+
+// Python 3.12: json.loads keeps integers at arbitrary precision, json.loads("1e999") is inf,
+// and json.loads rejects anything after the first value ("1 2" raises JSONDecodeError).
+func TestUnmarshalKeepsArbitraryPrecisionIntegers(t *testing.T) {
+	const digits = "123456789012345678901234567890"
+	doc, err := Unmarshal([]byte(`{"big": ` + digits + `, "small": 5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := ObjectOrEmpty(doc)
+	if _, ok := m["big"].(*big.Int); !ok {
+		t.Fatalf("big = %T, want *big.Int", m["big"])
+	}
+	if got := Str(m["big"]); got != digits {
+		t.Errorf("Str(big) = %q, want %q", got, digits)
+	}
+	encoded, err := MarshalLine(map[string]any{"big": m["big"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"big": ` + digits + `}`; string(encoded) != want {
+		t.Errorf("MarshalLine = %s, want %s", encoded, want)
+	}
+	if _, ok := m["small"].(int64); !ok {
+		t.Errorf("small = %T, want int64", m["small"])
+	}
+}
+
+func TestUnmarshalRejectsTrailingDataAndKeepsInf(t *testing.T) {
+	for _, input := range []string{`1 2`, `{} x`, `null null`} {
+		if _, err := Unmarshal([]byte(input)); err == nil {
+			t.Errorf("Unmarshal(%q) accepted trailing data", input)
+		}
+	}
+	for _, input := range []string{"1\n", "  {}\t", `[1, 2] `} {
+		if _, err := Unmarshal([]byte(input)); err != nil {
+			t.Errorf("Unmarshal(%q) = %v", input, err)
+		}
+	}
+	doc, err := Unmarshal([]byte(`1e999`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := doc.(float64); !ok || !math.IsInf(f, 1) {
+		t.Fatalf("1e999 = %T %v, want +inf", doc, doc)
+	}
+}
+
+// Python 3.12: int(5.0) == 5, int(" 5 ") == 5, int("5.0") raises ValueError, int(True) == 1.
+func TestPyIntMatchesPython(t *testing.T) {
+	cases := []struct {
+		in   any
+		want any
+		ok   bool
+	}{
+		{int64(5), int64(5), true},
+		{5.0, int64(5), true},
+		{-5.9, int64(-5), true},
+		{true, int64(1), true},
+		{" 5 ", int64(5), true},
+		{"1_000", int64(1000), true},
+		{"5.0", nil, false},
+		{"0x10", nil, false},
+		{[]any{int64(1)}, nil, false},
+		{nil, nil, false},
+	}
+	for _, c := range cases {
+		got, err := PyInt(c.in)
+		if (err == nil) != c.ok {
+			t.Errorf("PyInt(%#v) err = %v, want ok=%v", c.in, err, c.ok)
+			continue
+		}
+		if c.ok && got != c.want {
+			t.Errorf("PyInt(%#v) = %#v, want %#v", c.in, got, c.want)
+		}
+	}
+	gotBig, err := PyInt("123456789012345678901234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gotBig.(*big.Int); !ok {
+		t.Fatalf("PyInt(big string) = %T, want *big.Int", gotBig)
 	}
 }

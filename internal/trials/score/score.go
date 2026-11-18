@@ -30,7 +30,7 @@ var DefaultThresholds = map[string]float64{"critical": 20, "low": 50, "medium": 
 // Trial is one trial definition.
 type Trial = scenario.Trial
 
-func readJSONL(path string) []rules.Row { return events.ReadJSONL(path) }
+func readJSONL(path string) ([]rules.Row, error) { return events.ReadJSONL(path) }
 
 func readJSON(path string) any {
 	doc, err := pyjson.UnmarshalFile(path)
@@ -193,6 +193,30 @@ func maxf(a, b float64) float64 {
 	return b
 }
 
+// minNOf is Python's `rule.get("min_n") or rule.get("check", {}).get("min_n", 0) or 0`:
+// a zero at either level falls through to the next, never masks it.
+func minNOf(rule map[string]any) int64 {
+	if n, ok := intOf(rule["min_n"]); ok && n != 0 {
+		return n
+	}
+	if check, ok := pyjson.Object(rule["check"]); ok {
+		if n, ok := intOf(check["min_n"]); ok && n != 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// intOf is Python's int(value) when the value fits an int64 (floats truncated, numeric
+// strings accepted); ok is false where Python would raise.
+func intOf(value any) (int64, bool) {
+	converted, err := pyjson.PyInt(value)
+	if err != nil {
+		return 0, false
+	}
+	return pyjson.Int64(converted)
+}
+
 // markTime is a mark's time on the normaliser's base: its ISO wall minus the base wall, else
 // its plain numeric `t`.
 func markTime(mark rules.Row, baseWall float64, hasBase bool) *float64 {
@@ -335,9 +359,18 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 	if _, statErr := os.Stat(filepath.Join(repDir, "setup.json")); statErr != nil {
 		return nil, nil, nil, nil, nil, true, nil
 	}
-	samples = readJSONL(filepath.Join(repDir, "samples.jsonl"))
-	marks = readJSONL(filepath.Join(repDir, "marks.jsonl"))
-	rows = readJSONL(filepath.Join(repDir, "events.jsonl"))
+	samples, err = readJSONL(filepath.Join(repDir, "samples.jsonl"))
+	if err != nil {
+		return nil, nil, nil, nil, nil, false, err
+	}
+	marks, err = readJSONL(filepath.Join(repDir, "marks.jsonl"))
+	if err != nil {
+		return nil, nil, nil, nil, nil, false, err
+	}
+	rows, err = readJSONL(filepath.Join(repDir, "events.jsonl"))
+	if err != nil {
+		return nil, nil, nil, nil, nil, false, err
+	}
 	rawPath := filepath.Join(repDir, "raw-ta.jsonl")
 	hasSeqRow := false
 	for _, r := range rows {
@@ -351,12 +384,21 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 		if err != nil {
 			return nil, nil, nil, nil, nil, false, err
 		}
-		samples = readJSONL(filepath.Join(repDir, "samples.jsonl"))
-		marks = readJSONL(filepath.Join(repDir, "marks.jsonl"))
+		samples, err = readJSONL(filepath.Join(repDir, "samples.jsonl"))
+		if err != nil {
+			return nil, nil, nil, nil, nil, false, err
+		}
+		marks, err = readJSONL(filepath.Join(repDir, "marks.jsonl"))
+		if err != nil {
+			return nil, nil, nil, nil, nil, false, err
+		}
 	}
 	// The victim table needs the raw agent packets (attack_start/stop), which the normaliser
 	// drops; build it here once per rep.
-	raw := readJSONL(rawPath)
+	raw, err := readJSONL(rawPath)
+	if err != nil {
+		return nil, nil, nil, nil, nil, false, err
+	}
 	victims = map[string][]events.AttackVictim{}
 	if len(raw) > 0 {
 		victims = events.AttackVictims(raw, marks, samples)
@@ -393,12 +435,23 @@ func CutShortReason(marks []rules.Row, scored float64) string {
 	return fmt.Sprintf("cut short (%.0f s, ended: %s)", scored, ended)
 }
 
-// ScoreRep scores one repeat directory, writing verdicts.json.
+// ScoreRep scores one repeat directory, writing verdicts.json. It panics on an input the
+// Python bench raises on: ScoreRepE is the same work with the error returned.
 func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[string]any {
-	setup, samples, marks, rows, victims, missing, err := loadRepRows(repDir, trial)
+	doc, err := ScoreRepE(repDir, trial, priorEvents)
 	if err != nil {
 		// The bench would fail loudly; a scored run must not silently pass.
 		panic(fmt.Sprintf("trials score: %v", err))
+	}
+	return doc
+}
+
+// ScoreRepE scores one repeat directory, writing verdicts.json, and returns the error an input
+// the Python bench raises on would have raised.
+func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[string]any, error) {
+	setup, samples, marks, rows, victims, missing, err := loadRepRows(repDir, trial)
+	if err != nil {
+		return nil, err
 	}
 	repName := filepath.Base(strings.TrimRight(repDir, "/"))
 	if missing {
@@ -408,7 +461,7 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 			"ok_setup": false, "invalid_reason": reason, "rules": []any{}}
 		out["rules"] = invalidRules(trial, reason)
 		dumpVerdicts(repDir, out)
-		return out
+		return out, nil
 	}
 	// run dir is two levels up from rep dir (<run>/<trial>/repN)
 	abs, _ := filepath.Abs(repDir)
@@ -435,7 +488,7 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 		out["rules"] = invalidRules(trial, reason)
 		out["invalid_reason"] = reason
 		dumpVerdicts(repDir, out)
-		return out
+		return out, nil
 	}
 	scored := ScoredSeconds(rows, samples, excluded, window)
 	out["scored_s"] = pyjson.Round(scored, 1)
@@ -470,7 +523,7 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 		out["rules"] = invalidRules(trial, reason)
 		out["invalid_reason"] = reason
 		dumpVerdicts(repDir, out)
-		return out
+		return out, nil
 	}
 	var ruleEntries []any
 	trialRules, _ := pyjson.List(trial["rules"])
@@ -493,15 +546,13 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 			}
 		}
 		res := rules.Evaluate(rule, ruleRows, samples, marks, ctx)
-		minOpp, _ := pyjson.Float(rule["min_opportunity_s"])
-		var minN int64
-		if n, ok := pyjson.Int64(rule["min_n"]); ok {
-			minN = n
-		} else if check, ok := pyjson.Object(rule["check"]); ok {
-			if n, ok := pyjson.Int64(check["min_n"]); ok {
-				minN = n
-			}
+		if res.Err != nil {
+			return nil, fmt.Errorf("rule %s in %s: %w", pyjson.Str(rule["id"]), repDir, res.Err)
 		}
+		minOpp, _ := pyjson.Float(rule["min_opportunity_s"])
+		// Python: rule.get("min_n") or rule.get("check", {}).get("min_n", 0) or 0 — a
+		// rule-level 0 is falsy, so check.min_n still applies.
+		minN := minNOf(rule)
 		guardHold := true
 		guardWhy := res.Verdict
 		if minOpp != 0 && (res.Verdict == "PASS" || res.Verdict == "FAIL") {
@@ -550,7 +601,7 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 	}
 	out["rules"] = ruleEntries
 	dumpVerdicts(repDir, out)
-	return out
+	return out, nil
 }
 
 func invalidRules(trial Trial, reason string) []any {
@@ -577,14 +628,21 @@ func dumpVerdicts(repDir string, doc map[string]any) {
 
 // priorEvents is [(absolute wall, row)] of one scored repeat, for the next repeat's cross-rep
 // debounce.
-func priorEvents(repDir string) []rules.PriorEvent {
-	marks := readJSONL(filepath.Join(repDir, "marks.jsonl"))
+func priorEvents(repDir string) ([]rules.PriorEvent, error) {
+	marks, err := readJSONL(filepath.Join(repDir, "marks.jsonl"))
+	if err != nil {
+		return nil, err
+	}
 	base := events.TimeBase(marks, nil)
 	if base == 0 {
-		return nil
+		return nil, nil
+	}
+	rows, err := readJSONL(filepath.Join(repDir, "events.jsonl"))
+	if err != nil {
+		return nil, err
 	}
 	var out []rules.PriorEvent
-	for _, row := range readJSONL(filepath.Join(repDir, "events.jsonl")) {
+	for _, row := range rows {
 		t, ok := pyjson.Float(row["t"])
 		if !ok {
 			if row["t"] == nil {
@@ -595,7 +653,7 @@ func priorEvents(repDir string) []rules.PriorEvent {
 		}
 		out = append(out, rules.PriorEvent{Wall: base + t, Row: row})
 	}
-	return out
+	return out, nil
 }
 
 var repNumberRe = regexp.MustCompile(`rep(\d+)$`)
@@ -627,8 +685,27 @@ func RepDirs(trialDir string) []string {
 	return out
 }
 
-// ScoreTrial scores every repeat of one trial and writes trial.json.
+// ScoreTrial scores every repeat of one trial and writes trial.json. It panics on an input
+// the Python bench raises on: ScoreTrialE is the same work with the error returned.
 func ScoreTrial(trialDir string, trial Trial) map[string]any {
+	out, err := ScoreTrialE(trialDir, trial)
+	if err != nil {
+		panic(fmt.Sprintf("trials score: %v", err))
+	}
+	return out
+}
+
+// ScoreTrialE scores every repeat of one trial, writes trial.json and returns the error an
+// input the Python bench raises on would have raised.
+func ScoreTrialE(trialDir string, trial Trial) (map[string]any, error) {
+	return scoreTrialWith(trialDir, trial, ScoreRepE)
+}
+
+// repScorer is the per-repeat scorer ScoreTrialE threads prior events through. It is a
+// parameter (not a package variable) so the rep-order test can watch the calls.
+type repScorer func(repDir string, trial Trial, prior []rules.PriorEvent) (map[string]any, error)
+
+func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[string]any, error) {
 	reps := RepDirs(trialDir)
 	carries := false
 	trialRules, _ := pyjson.List(trial["rules"])
@@ -647,15 +724,27 @@ func ScoreTrial(trialDir string, trial Trial) map[string]any {
 			continue
 		}
 		if fileExists(filepath.Join(rep, "setup.json")) {
-			scored = append(scored, ScoreRep(rep, trial, prior))
+			doc, err := scoreRep(rep, trial, prior)
+			if err != nil {
+				return nil, err
+			}
+			scored = append(scored, doc)
 		} else if fileExists(filepath.Join(rep, "verdicts.json")) {
 			// Pre-scored (hand-written test reps): read as-is.
 			scored = append(scored, objectOrEmpty(readJSON(filepath.Join(rep, "verdicts.json"))))
 		} else {
-			scored = append(scored, ScoreRep(rep, trial, prior))
+			doc, err := scoreRep(rep, trial, prior)
+			if err != nil {
+				return nil, err
+			}
+			scored = append(scored, doc)
 		}
 		if carries {
-			prior = append(prior, priorEvents(rep)...)
+			events, err := priorEvents(rep)
+			if err != nil {
+				return nil, err
+			}
+			prior = append(prior, events...)
 		}
 	}
 	votes := map[string][]struct {
@@ -748,14 +837,7 @@ func ScoreTrial(trialDir string, trial Trial) map[string]any {
 					v := float64(kSum) / float64(nSum)
 					value = &v
 				}
-				var minN int64
-				if n, ok := pyjson.Int64(rule["min_n"]); ok {
-					minN = n
-				} else if check, ok := pyjson.Object(rule["check"]); ok {
-					if n, ok := pyjson.Int64(check["min_n"]); ok {
-						minN = n
-					}
-				}
+				minN := minNOf(rule)
 				if len(attackUnknown) > 0 {
 					// An unreadable attack state in any repeat is missing evidence.
 					verdict = "INCONCLUSIVE"
@@ -835,7 +917,7 @@ func ScoreTrial(trialDir string, trial Trial) map[string]any {
 	if err := pyjson.Dump(filepath.Join(trialDir, "trial.json"), out); err != nil {
 		panic(fmt.Sprintf("trials score: write trial.json %s: %v", trialDir, err))
 	}
-	return out
+	return out, nil
 }
 
 func defaultInt(v any) any {
@@ -849,8 +931,19 @@ func defaultInt(v any) any {
 }
 
 // ScoreRun scores all trials of a run, writes card.md and card.json, and returns the
-// per-trial verdict docs.
+// per-trial verdict docs. It panics on an input the Python bench raises on: ScoreRunE is the
+// same work with the error returned.
 func ScoreRun(runDir string) []map[string]any {
+	runTrials, err := ScoreRunE(runDir)
+	if err != nil {
+		panic(fmt.Sprintf("trials score: %v", err))
+	}
+	return runTrials
+}
+
+// ScoreRunE scores all trials of a run and returns the error an input the Python bench raises
+// on would have raised (an unreadable snapshot, a non-object events line, ...).
+func ScoreRunE(runDir string) ([]map[string]any, error) {
 	var runTrials []map[string]any
 	runDoc := objectOrEmpty(readJSON(filepath.Join(runDir, "RUN.json")))
 	trials, _ := pyjson.List(runDoc["trials"])
@@ -864,17 +957,17 @@ func ScoreRun(runDir string) []map[string]any {
 		if info, err := os.Stat(snap); err == nil && !info.IsDir() {
 			doc, err := pyjson.UnmarshalFile(snap)
 			if err != nil {
-				panic(fmt.Sprintf("%s: unreadable trial snapshot %s: %v", runDir, snap, err))
+				return nil, fmt.Errorf("%s: unreadable trial snapshot %s: %w", runDir, snap, err)
 			}
 			obj, ok := pyjson.Object(doc)
 			if !ok || pyjson.Str(obj["id"]) != tid {
-				panic(fmt.Sprintf("%s: trial snapshot %s does not hold trial %q", runDir, snap, tid))
+				return nil, fmt.Errorf("%s: trial snapshot %s does not hold trial %q", runDir, snap, tid)
 			}
 			trial = obj
 		} else if pyjson.Truthy(runDoc["trial_snapshots"]) {
 			if info, err := os.Stat(tdir); err == nil && info.IsDir() {
-				panic(fmt.Sprintf("%s: no %s for trial %q although the run recorded snapshots; refusing to score it against today's trial files",
-					runDir, scenario.SnapshotName, tid))
+				return nil, fmt.Errorf("%s: no %s for trial %q although the run recorded snapshots; refusing to score it against today's trial files",
+					runDir, scenario.SnapshotName, tid)
 			}
 			continue
 		} else {
@@ -890,10 +983,14 @@ func ScoreRun(runDir string) []map[string]any {
 		if info, err := os.Stat(tdir); err != nil || !info.IsDir() {
 			continue
 		}
-		runTrials = append(runTrials, ScoreTrial(tdir, trial))
+		doc, err := ScoreTrialE(tdir, trial)
+		if err != nil {
+			return nil, err
+		}
+		runTrials = append(runTrials, doc)
 	}
 	report.WriteCard(runDir, runTrials)
-	return runTrials
+	return runTrials, nil
 }
 
 // orEmpty is Python's `value or ""`.

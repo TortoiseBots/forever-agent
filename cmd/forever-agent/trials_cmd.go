@@ -9,6 +9,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/report"
+	"github.com/pjerra/forever-agent/internal/trials/scenario"
 	"github.com/pjerra/forever-agent/internal/trials/score"
 )
 
@@ -16,6 +17,7 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 	"  score <run dir>                    score a finished run: verdicts.json, trial.json, card.md, card.json\n" +
 	"  report <run dir>                   re-render card.md/card.json from the run's trial.json and print the card\n" +
 	"  compare <run dir> --baseline <dir> before/after table with Fisher's exact p (reads both card.json)\n" +
+	"  validate [files...]                validate trial files (default: the embedded set)\n" +
 	"  run: not ported yet\n" +
 	"  cleanup: not ported yet"
 
@@ -33,6 +35,8 @@ func trialsCmd(args []string, stdout, stderr io.Writer) int {
 		return trialsReport(args[1:], stdout, stderr)
 	case "compare":
 		return trialsCompare(args[1:], stdout, stderr)
+	case "validate":
+		return trialsValidate(args[1:], stdout, stderr)
 	case "run", "cleanup":
 		fmt.Fprintf(stderr, "trials %s: not ported yet\n", args[0])
 		return exitUsage
@@ -64,7 +68,12 @@ func trialsScore(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "trials score: %v\n", err)
 		return exitUsage
 	}
-	runTrials := score.ScoreRun(runDir)
+	runTrials, err := score.ScoreRunE(runDir)
+	if err != nil {
+		// The Python bench lets the exception escape: exit 1, no verdict.
+		fmt.Fprintf(stderr, "trials score: %v\n", err)
+		return 1
+	}
 	nFail, nInvalid := 0, 0
 	for _, trial := range runTrials {
 		verdicts, _ := pyjson.List(trial["verdicts"])
@@ -87,6 +96,36 @@ func trialsScore(args []string, stdout, stderr io.Writer) int {
 	}
 	if nInvalid > 0 {
 		return 3
+	}
+	return exitOK
+}
+
+// trialsValidate is the Python `trials.py validate`: schema errors per file plus the id ==
+// file stem and duplicate rule id checks across the whole set.
+func trialsValidate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("trials validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(stderr, trialsUsage)
+		return exitUsage
+	}
+	files := fs.Args()
+	if len(files) == 0 {
+		files = scenario.TrialFiles()
+	}
+	failed := 0
+	for _, result := range scenario.ValidateFiles(files) {
+		if len(result.Errors) == 0 {
+			fmt.Fprintf(stdout, "%s: ok\n", result.Path)
+			continue
+		}
+		failed++
+		for _, problem := range result.Errors {
+			fmt.Fprintf(stdout, "%s: %s\n", result.Path, problem)
+		}
+	}
+	if failed > 0 {
+		return 1
 	}
 	return exitOK
 }

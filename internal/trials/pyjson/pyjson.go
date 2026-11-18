@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"os"
@@ -29,7 +30,9 @@ import (
 )
 
 // Unmarshal decodes JSON like Python's json.loads: object -> map[string]any,
-// array -> []any, integer -> int64, other number -> float64.
+// array -> []any, integer -> int64 (a *big.Int outside that range), other number -> float64.
+// Like json.loads it rejects anything after the first value, and a number it cannot represent
+// is an error rather than a silent 0.
 func Unmarshal(data []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -37,7 +40,10 @@ func Unmarshal(data []byte) (any, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, err
 	}
-	return convert(raw), nil
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("pyjson: trailing data after the first JSON value")
+	}
+	return convert(raw)
 }
 
 // UnmarshalFile reads and decodes a JSON file.
@@ -49,38 +55,54 @@ func UnmarshalFile(path string) (any, error) {
 	return Unmarshal(data)
 }
 
-func convert(v any) any {
+func convert(v any) (any, error) {
 	switch val := v.(type) {
 	case json.Number:
 		text := string(val)
 		if strings.ContainsAny(text, ".eE") {
 			f, err := strconv.ParseFloat(text, 64)
 			if err != nil {
-				return 0.0
+				// Python's json returns inf for 1e999; a syntax error cannot occur here.
+				if errors.Is(err, strconv.ErrRange) {
+					return f, nil
+				}
+				return nil, fmt.Errorf("pyjson: number %q: %w", text, err)
 			}
-			return f
+			return f, nil
 		}
 		i, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			f, ferr := strconv.ParseFloat(text, 64)
-			if ferr != nil {
-				return 0.0
-			}
-			return f
+		if err == nil {
+			return i, nil
 		}
-		return i
+		if errors.Is(err, strconv.ErrRange) {
+			// Python keeps arbitrary precision: out-of-range integers become *big.Int.
+			bi, ok := new(big.Int).SetString(text, 10)
+			if !ok {
+				return nil, fmt.Errorf("pyjson: integer %q", text)
+			}
+			return bi, nil
+		}
+		return nil, fmt.Errorf("pyjson: integer %q: %w", text, err)
 	case map[string]any:
 		for k, item := range val {
-			val[k] = convert(item)
+			converted, err := convert(item)
+			if err != nil {
+				return nil, err
+			}
+			val[k] = converted
 		}
-		return val
+		return val, nil
 	case []any:
 		for i, item := range val {
-			val[i] = convert(item)
+			converted, err := convert(item)
+			if err != nil {
+				return nil, err
+			}
+			val[i] = converted
 		}
-		return val
+		return val, nil
 	}
-	return v
+	return v, nil
 }
 
 // Get is doc[key] for an object, nil for anything else (Python's dict .get on a non-dict
@@ -133,13 +155,18 @@ func IsBool(v any) bool {
 }
 
 // IsInt reports whether v is a JSON integer (not a boolean, though Python's bool is an int
-// subclass, which callers that follow isinstance() must handle themselves).
+// subclass, which callers that follow isinstance() must handle themselves). An integer
+// outside int64 is a *big.Int, as Python's int is arbitrary precision.
 func IsInt(v any) bool {
-	_, ok := v.(int64)
-	return ok
+	switch v.(type) {
+	case int64, *big.Int:
+		return true
+	}
+	return false
 }
 
-// Int64 returns v as an integer when it is one (bools are not integers here).
+// Int64 returns v as a machine integer when it fits (bools are not integers here). A
+// *big.Int is not converted: callers that need the exact value use IsInt/Str.
 func Int64(v any) (int64, bool) {
 	i, ok := v.(int64)
 	return i, ok
@@ -149,7 +176,7 @@ func Int64(v any) (int64, bool) {
 // is true for bool, and the bench's `_num` relies on that.
 func IsNum(v any) bool {
 	switch v.(type) {
-	case int64, float64, bool:
+	case int64, float64, bool, *big.Int:
 		return true
 	}
 	return false
@@ -162,6 +189,12 @@ func Num(v any) (float64, bool) {
 		return n, true
 	case int64:
 		return float64(n), true
+	case *big.Int:
+		f, _ := new(big.Float).SetInt(n).Float64()
+		if math.IsInf(f, 0) {
+			return 0.0, false
+		}
+		return f, true
 	case bool:
 		if n {
 			return 1.0, true
@@ -179,6 +212,57 @@ func NumOrZero(v any) float64 {
 	return 0.0
 }
 
+// PyInt is Python's int(v): an int (int64, or *big.Int outside that range), a bool, a float
+// (truncated toward zero) or a decimal string. It fails where Python raises TypeError or
+// ValueError (NaN/inf, "5.0", a list, ...), so callers can catch exactly what the bench does.
+func PyInt(v any) (any, error) {
+	switch n := v.(type) {
+	case int64, *big.Int:
+		return n, nil
+	case bool:
+		if n {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return nil, fmt.Errorf("pyjson: cannot convert %v to int", n)
+		}
+		const limit = 1 << 62
+		if n >= -limit && n <= limit {
+			return int64(n), nil
+		}
+		bi, _ := new(big.Float).SetFloat64(n).Int(nil)
+		return bi, nil
+	case string:
+		text := strings.TrimSpace(n)
+		if text == "" {
+			return nil, errors.New("pyjson: invalid literal for int()")
+		}
+		if strings.Contains(text, "_") {
+			// Python allows single underscores between digits only.
+			body := text
+			if body[0] == '+' || body[0] == '-' {
+				body = body[1:]
+			}
+			if body == "" || strings.HasPrefix(body, "_") || strings.HasSuffix(body, "_") ||
+				strings.Contains(body, "__") {
+				return nil, fmt.Errorf("pyjson: invalid literal for int(): %q", n)
+			}
+			text = strings.ReplaceAll(text, "_", "")
+		}
+		bi, ok := new(big.Int).SetString(text, 10)
+		if !ok {
+			return nil, fmt.Errorf("pyjson: invalid literal for int(): %q", n)
+		}
+		if bi.IsInt64() {
+			return bi.Int64(), nil
+		}
+		return bi, nil
+	}
+	return nil, fmt.Errorf("pyjson: cannot convert %T to int", v)
+}
+
 // Float converts a value to float when the bench's float(value) would accept it (a number,
 // a bool, or a numeric string); ok is false on a TypeError/ValueError.
 func Float(v any) (float64, bool) {
@@ -187,6 +271,12 @@ func Float(v any) (float64, bool) {
 		return n, true
 	case int64:
 		return float64(n), true
+	case *big.Int:
+		f, _ := new(big.Float).SetInt(n).Float64()
+		if math.IsInf(f, 0) {
+			return 0.0, false
+		}
+		return f, true
 	case bool:
 		if n {
 			return 1.0, true
@@ -216,6 +306,8 @@ func Str(v any) string {
 		return "False"
 	case int64:
 		return strconv.FormatInt(s, 10)
+	case *big.Int:
+		return s.String()
 	case float64:
 		return FormatFloat(s)
 	}
@@ -233,6 +325,8 @@ func Truthy(v any) bool {
 		return val != ""
 	case int64:
 		return val != 0
+	case *big.Int:
+		return val.Sign() != 0
 	case float64:
 		return val != 0
 	case []any:
@@ -458,6 +552,8 @@ func writeValue(b *bytes.Buffer, v any, indent, cur string, pretty bool) error {
 		writeString(b, val)
 	case int64:
 		b.WriteString(strconv.FormatInt(val, 10))
+	case *big.Int:
+		b.WriteString(val.String())
 	case int:
 		b.WriteString(strconv.Itoa(val))
 	case float64:
