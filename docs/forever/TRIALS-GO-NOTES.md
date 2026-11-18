@@ -288,6 +288,6 @@ checks (not numeric conversions) and `Num`'s `isinstance`-guarded case above.
 | C1 float int canonicalisation | `PyInt(5e18)` is the int64 5000000000000000000 | `pyjson` `TestPyIntMatchesPython`, differential `c1_walk_n_5e18` |
 | C2 writers never panic | `verdicts.json`, `trial.json`, `card.md`, `card.json` return errors; `ScoreRepE`/`ScoreTrialE`/`ScoreRunE` propagate | differential `c2_*`, `b1_nan_value_in_prescore_errors` |
 | C3 big spell id filter | `SpellIDs` keys by Python `int()` digits; `IntKey` compares | differential `c3_spell_id_beyond_int64` |
-| C4 harness stale snapshot | stamps are taken before the delete and compare size+mtime; an unparseable RUN.json is an errored run | fabricated corrupt-RUN.json run reports `errored 1` and exits 1 |
+| C4 harness stale snapshot | stamps are taken before the delete and compare size+mtime; an unparseable RUN.json is an errored run | `tools/trialsparity` `TestExpectedOutputsUsesPreDeleteStamp`; a fabricated corrupt-RUN.json run reports `errored 1` and exits 1 |
 | C5 test reference/values | a set-but-wrong reference fails; `verdictFields` reads `detail[*].value` | `go test ... -args -python-root /bad` fails; differential run cases compare values |
 | C harness gate in CI | `.github/workflows/test.yml` job `differential` checks out the pinned reference and fails on `--- SKIP` | workflow YAML |
