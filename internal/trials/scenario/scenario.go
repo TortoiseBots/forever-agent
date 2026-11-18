@@ -152,6 +152,15 @@ var overrideFrozen = map[string][]string{
 var ruleOverrideFields = stringSet("pass_if", "min_n", "min_opportunity_s", "min_reps")
 var ruleTextFields = stringSet("desc", "source", "why_expect", "check")
 
+// IsTriggerKind reports whether kind is one of the closed trigger kinds.
+func IsTriggerKind(kind string) bool { return triggerKinds[kind] }
+
+// IsTriggerField reports whether key is one of the closed trigger fields.
+func IsTriggerField(key string) bool { return triggerFields[key] }
+
+// ExtraBotChecks lists the setup checks an `extra_bots` trial must carry.
+func ExtraBotChecks() []string { return append([]string{}, extraBotChecks...) }
+
 func stringSet(items ...string) map[string]bool {
 	out := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -232,7 +241,7 @@ func checkDict(doc any, allowed map[string]bool, label, trialID, rid string, err
 	valid := true
 	for _, key := range sortedKeys(obj) {
 		if !allowed[key] {
-			errAdd(errs, fmt.Sprintf("%s/%s: unknown %s field %q", trialID, rid, label, key))
+			errAdd(errs, fmt.Sprintf("%s/%s: unknown %s field %s", trialID, rid, label, pythonRepr(key)))
 			valid = false
 		}
 	}
@@ -287,7 +296,7 @@ func checkFilter(doc any, label, trialID, rid string, errs *[]string, needKind b
 		}
 		for _, key := range sortedKeys(obj) {
 			if !allowed[key] {
-				errAdd(errs, fmt.Sprintf("%s: unknown %s key %q", where, label, key))
+				errAdd(errs, fmt.Sprintf("%s: unknown %s key %s", where, label, pythonRepr(key)))
 			}
 		}
 	}
@@ -612,7 +621,7 @@ func checkRule(ruleVal any, trialID string, errs *[]string) {
 			for _, x := range list {
 				name := pyjson.Str(x)
 				if !containsAny(respSpells, name) {
-					errAdd(errs, fmt.Sprintf("%s/%s: debounce_responder_spells %q is not one of the answered spells", trialID, rid, name))
+					errAdd(errs, fmt.Sprintf("%s/%s: debounce_responder_spells %s is not one of the answered spells", trialID, rid, pythonRepr(name)))
 				}
 			}
 		}
@@ -719,7 +728,7 @@ func checkExtraBots(extraVal any, tid string, errs *[]string) {
 		}
 		for _, key := range sortedKeys(bot) {
 			if !extraBotFields[key] {
-				errAdd(errs, fmt.Sprintf("%s: unknown %s field %q", tid, label, key))
+				errAdd(errs, fmt.Sprintf("%s: unknown %s field %s", tid, label, pythonRepr(key)))
 			}
 		}
 		for _, key := range []string{"class", "spec", "role", "level"} {
@@ -772,7 +781,7 @@ func checkExtraBots(extraVal any, tid string, errs *[]string) {
 				}
 				for _, key := range sortedKeys(item) {
 					if !extraItemFields[key] {
-						errAdd(errs, fmt.Sprintf("%s: unknown %s item field %q", tid, label, key))
+						errAdd(errs, fmt.Sprintf("%s: unknown %s item field %s", tid, label, pythonRepr(key)))
 					}
 				}
 				count := any(int64(1))
@@ -915,8 +924,8 @@ func ApplyOverride(base Trial, override any) (Trial, []string) {
 	sort.Strings(allowedKeys)
 	for _, key := range sortedKeys(over) {
 		if !overrideFields[key] {
-			errs = append(errs, fmt.Sprintf("%s: variant override may not touch %q (allowed: %s)",
-				tid, key, strings.Join(allowedKeys, ", ")))
+			errs = append(errs, fmt.Sprintf("%s: variant override may not touch %s (allowed: %s)",
+				tid, pythonRepr(key), strings.Join(allowedKeys, ", ")))
 		}
 	}
 	for _, key := range []string{"player", "bot"} {
@@ -967,7 +976,7 @@ func ApplyOverride(base Trial, override any) (Trial, []string) {
 			for _, rid := range rids {
 				tweak := tweaks[rid]
 				if !have[rid] {
-					errs = append(errs, fmt.Sprintf("%s: variant override names unknown rule %q", tid, rid))
+					errs = append(errs, fmt.Sprintf("%s: variant override names unknown rule %s", tid, pythonRepr(rid)))
 					continue
 				}
 				tweakObj, ok := pyjson.Object(tweak)
@@ -978,7 +987,7 @@ func ApplyOverride(base Trial, override any) (Trial, []string) {
 				for _, fld := range sortedKeys(tweakObj) {
 					if ruleTextFields[fld] {
 						if wantSpec == nil || wantSpec == baseSpec {
-							errs = append(errs, fmt.Sprintf("%s/%s: variant may rewrite rule field %q only with bot.spec", tid, rid, fld))
+							errs = append(errs, fmt.Sprintf("%s/%s: variant may rewrite rule field %s only with bot.spec", tid, rid, pythonRepr(fld)))
 						}
 						continue
 					}
@@ -988,8 +997,8 @@ func ApplyOverride(base Trial, override any) (Trial, []string) {
 							allowed = append(allowed, k)
 						}
 						sort.Strings(allowed)
-						errs = append(errs, fmt.Sprintf("%s/%s: variant may not change rule field %q (only %s)",
-							tid, rid, fld, strings.Join(allowed, ", ")))
+						errs = append(errs, fmt.Sprintf("%s/%s: variant may not change rule field %s (only %s)",
+							tid, rid, pythonRepr(fld), strings.Join(allowed, ", ")))
 					}
 				}
 				if v, present := tweakObj["pass_if"]; present {
@@ -1138,7 +1147,7 @@ func MergeVariant(trial Trial, varVal any) (Trial, []string) {
 	var errs []string
 	for _, key := range sortedKeys(obj) {
 		if !variantFields[key] {
-			errs = append(errs, fmt.Sprintf("%s: unknown field %q", label, key))
+			errs = append(errs, fmt.Sprintf("%s: unknown field %s", label, pythonRepr(key)))
 		}
 	}
 	nameStr, okName := nameVal.(string)
@@ -1237,7 +1246,7 @@ func CheckVariants(trial Trial, tid string) []string {
 		key := pythonRepr(name)
 		if s, ok := name.(string); ok {
 			if seen[s] {
-				errs = append(errs, fmt.Sprintf("%s: duplicate variant name %q", tid, s))
+				errs = append(errs, fmt.Sprintf("%s: duplicate variant name %s", tid, pythonRepr(s)))
 			}
 			seen[s] = true
 		}
@@ -1303,7 +1312,7 @@ func LoadSelected(spec string) (Trial, error) {
 				return variant.Trial, nil
 			}
 		}
-		return nil, fmt.Errorf("%s: no valid variant %q", path, name)
+		return nil, fmt.Errorf("%s: no valid variant %s", path, pythonRepr(name))
 	}
 	return LoadTrial(spec)
 }

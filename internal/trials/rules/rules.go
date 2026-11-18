@@ -202,7 +202,8 @@ func lowerOf(v any) string {
 	return strings.ToLower(pyjson.Str(v))
 }
 
-func spellIDs(where Row) map[int64]bool {
+// SpellIDs is the set of spell ids a where/trigger filter names (by name or by id).
+func SpellIDs(where Row) map[int64]bool {
 	out := map[int64]bool{}
 	if where["spell"] != nil {
 		names := []any{where["spell"]}
@@ -599,7 +600,7 @@ func Matches(row Row, where Row, byGUID map[string][]TimedSample, ctx *Ctx, tria
 			return false
 		}
 	}
-	if ids := spellIDs(where); len(ids) > 0 {
+	if ids := SpellIDs(where); len(ids) > 0 {
 		if row["spell_id"] == nil {
 			return false
 		}

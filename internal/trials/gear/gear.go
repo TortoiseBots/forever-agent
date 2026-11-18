@@ -16,6 +16,9 @@ import (
 // MaxLevelGap: a kit built for level 40 serves a level 40-49 trial when there is no kit of its own.
 const MaxLevelGap = 9
 
+// Kits is the whole gear table: class -> role -> level -> items.
+type Kits = map[string]map[string]map[string][]Kit
+
 type Kit struct {
 	Armor         float64
 	Entry         int64
@@ -28,7 +31,7 @@ type Kit struct {
 
 var (
 	once sync.Once
-	kits map[string]map[string]map[string][]Kit // class -> role -> level -> items
+	kits Kits
 )
 
 func load() {
@@ -96,6 +99,12 @@ func parseItems(items []any) []Kit {
 	return out
 }
 
+// LoadKits returns the embedded gear kits (class -> role -> level -> items).
+func LoadKits() Kits {
+	load()
+	return kits
+}
+
 // RoleOf is "tank" for a forced tank role, else "dps".
 func RoleOf(player map[string]any) string {
 	if role, ok := player["forced_role"].(string); ok && role == "tank" {
@@ -106,8 +115,12 @@ func RoleOf(player map[string]any) string {
 
 // PickKit returns the kit of the player's class and role for its level, or the reason there is
 // none: the highest kit level not above the player's level, at most MaxLevelGap below it.
-func PickKit(player map[string]any) (items []Kit, kitLevel int64, why string) {
+func PickKit(player map[string]any, kitSets ...Kits) (items []Kit, kitLevel int64, why string) {
 	load()
+	table := kits
+	if len(kitSets) > 0 {
+		table = kitSets[0]
+	}
 	klass := ""
 	if v, ok := player["class"]; ok && v != nil {
 		klass = strings.ToLower(pyjson.Str(v))
@@ -121,7 +134,7 @@ func PickKit(player map[string]any) (items []Kit, kitLevel int64, why string) {
 	if !ok {
 		return nil, 0, "player.level missing: no gear kit"
 	}
-	byLevel := kits[klass][role]
+	byLevel := table[klass][role]
 	var levels []int64
 	for key := range byLevel {
 		if n, err := strconv.ParseInt(key, 10, 64); err == nil && n <= level64 {

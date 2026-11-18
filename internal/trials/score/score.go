@@ -129,7 +129,9 @@ func mergeSpans(excluded [][2]float64) [][2]float64 {
 
 // scoredSeconds is the fight_start..fight_end window minus the merged excluded spans; it
 // drives the cut-short check and the rate denominator.
-func scoredSeconds(rows, samples []rules.Row, excluded [][2]float64, window *[2]float64) float64 {
+// ScoredSeconds is the fight_start..fight_end window minus the merged excluded spans (or the
+// rows/samples span without a window).
+func ScoredSeconds(rows, samples []rules.Row, excluded [][2]float64, window *[2]float64) float64 {
 	if window != nil {
 		lo, hi := window[0], window[1]
 		cut := 0.0
@@ -223,9 +225,6 @@ func fightWindow(marks, samples []rules.Row) (float64, float64, bool, bool) {
 		case "fight_end":
 			fe = mark
 		}
-	}
-	if fe != nil && pyjson.Str(fe["kind"]) != "fight_end" {
-		fe = nil
 	}
 	var base float64
 	hasBase := false
@@ -438,7 +437,7 @@ func ScoreRep(repDir string, trial Trial, priorEvents []rules.PriorEvent) map[st
 		dumpVerdicts(repDir, out)
 		return out
 	}
-	scored := scoredSeconds(rows, samples, excluded, window)
+	scored := ScoredSeconds(rows, samples, excluded, window)
 	out["scored_s"] = pyjson.Round(scored, 1)
 	// Python's round(sum(...), 1): an empty sum is the int 0, a non-empty one a float.
 	roundSum := func(total float64) any {

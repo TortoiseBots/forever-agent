@@ -190,7 +190,12 @@ func MergeSpans(spans []Span) []Span {
 			ordered = append(ordered, s)
 		}
 	}
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].A < ordered[j].A })
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].A != ordered[j].A {
+			return ordered[i].A < ordered[j].A
+		}
+		return ordered[i].B < ordered[j].B
+	})
 	var out []Span
 	for _, s := range ordered {
 		if n := len(out); n > 0 && s.A <= out[n-1].B {

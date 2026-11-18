@@ -63,7 +63,8 @@ var pooledMetrics = map[string]bool{"ratio": true, "latency": true, "uptime": tr
 
 // aggValue is the card value: k/n metrics show the pooled k/n, the others the mean of the
 // repeat values. vals are the per-repeat values.
-func aggValue(details []any, metric any) (any, []any) {
+// AggValue is the card value of one rule row: the pooled k/n for a k/n metric, else the mean.
+func AggValue(details []any, metric any) (any, []any) {
 	metricStr, _ := metric.(string)
 	var valid []map[string]any
 	var vals []any
@@ -128,7 +129,8 @@ func intField(v any) int64 {
 
 // repeatsText is the repeats that RAN, not the --repeats flag (0 means "each trial's own
 // count"), counted from the rep* directories the run wrote.
-func repeatsText(run map[string]any, runDir string, runTrials []map[string]any) string {
+// RepeatsText is the repeats that RAN, counted from the rep* directories the run wrote.
+func RepeatsText(run map[string]any, runDir string, runTrials []map[string]any) string {
 	args := obj(run["args"])
 	type count struct {
 		Tid string
@@ -261,7 +263,7 @@ func WriteCard(runDir string, runTrials []map[string]any) []any {
 	}
 	lines := []string{
 		fmt.Sprintf("# %s — %s — %s — %s", naming.ReportTitle, label, server, tb), "",
-		fmt.Sprintf("Run: started %s, slots %s, repeats %s.", started, slots, repeatsText(run, runDir, runTrials)),
+		fmt.Sprintf("Run: started %s, slots %s, repeats %s.", started, slots, RepeatsText(run, runDir, runTrials)),
 		"",
 	}
 	lines = append(lines, "## Data quality")
@@ -380,7 +382,7 @@ func WriteCard(runDir string, runTrials []map[string]any) []any {
 			}
 			sur := surprise(row["expected"], row["verdict"])
 			details, _ := pyjson.List(row["detail"])
-			agg, vals := aggValue(details, row["metric"])
+			agg, vals := AggValue(details, row["metric"])
 			nm := 0
 			for _, detVal := range details {
 				if det, ok := pyjson.Object(detVal); ok && pyjson.Truthy(det["no_match"]) {

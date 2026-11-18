@@ -36,7 +36,7 @@ func Validate(trialVal any) []string {
 	}
 	for _, key := range sortedKeys(trial) {
 		if !topFields[key] {
-			errAdd(&errs, fmt.Sprintf("%s: unknown top-level field %q", tid, key))
+			errAdd(&errs, fmt.Sprintf("%s: unknown top-level field %s", tid, pythonRepr(key)))
 		}
 	}
 	group := pyjson.Str(trial["group"])
@@ -269,7 +269,7 @@ func Validate(trialVal any) []string {
 			if victim == "extra1" || victim == "extra2" || victim == "extra3" {
 				n, _ := strconv.Atoi(string(victim[len(victim)-1]))
 				if n > nExtras {
-					errAdd(&errs, fmt.Sprintf("%s: victim %q has no extra_bots bot behind it", tid, victim))
+					errAdd(&errs, fmt.Sprintf("%s: victim %s has no extra_bots bot behind it", tid, pythonRepr(victim)))
 				}
 			} else if victim != "player" && victim != "bot" {
 				errAdd(&errs, fmt.Sprintf("%s: bad victim %s", tid, pythonRepr(sit["victim"])))
@@ -287,7 +287,7 @@ func Validate(trialVal any) []string {
 	if list, ok := pyjson.List(trial["setup_checks"]); ok {
 		for _, cid := range list {
 			if !setupChecks[pyjson.Str(cid)] {
-				errAdd(&errs, fmt.Sprintf("%s: unknown setup check %q", tid, pyjson.Str(cid)))
+				errAdd(&errs, fmt.Sprintf("%s: unknown setup check %s", tid, pythonRepr(cid)))
 			}
 		}
 	}
@@ -300,7 +300,7 @@ func Validate(trialVal any) []string {
 		}
 		for _, cid := range requiredSetupChecks {
 			if !haveChecks[cid] {
-				errAdd(&errs, fmt.Sprintf("%s: setup_checks must list the required check %q", tid, cid))
+				errAdd(&errs, fmt.Sprintf("%s: setup_checks must list the required check %s", tid, pythonRepr(cid)))
 			}
 		}
 	}
@@ -317,7 +317,7 @@ func Validate(trialVal any) []string {
 		}
 		for _, cid := range extraBotChecks {
 			if !have[cid] {
-				errAdd(&errs, fmt.Sprintf("%s: extra_bots needs setup check %q", tid, cid))
+				errAdd(&errs, fmt.Sprintf("%s: extra_bots needs setup check %s", tid, pythonRepr(cid)))
 			}
 		}
 	} else {
@@ -329,7 +329,7 @@ func Validate(trialVal any) []string {
 		}
 		for _, cid := range append(append([]string{}, extraBotChecks...), extraOnlyChecks...) {
 			if have[cid] {
-				errAdd(&errs, fmt.Sprintf("%s: setup check %q needs extra_bots", tid, cid))
+				errAdd(&errs, fmt.Sprintf("%s: setup check %s needs extra_bots", tid, pythonRepr(cid)))
 			}
 		}
 	}
@@ -354,7 +354,7 @@ func Validate(trialVal any) []string {
 			}
 		}
 		if !ok {
-			errAdd(&errs, fmt.Sprintf("%s: alias %q has no extra_bots bot behind it", tid, alias))
+			errAdd(&errs, fmt.Sprintf("%s: alias %s has no extra_bots bot behind it", tid, pythonRepr(alias)))
 		}
 	}
 	for _, numkey := range []string{"duration_s", "repeats", "min_valid_s"} {

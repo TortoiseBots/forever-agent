@@ -83,7 +83,7 @@ func MatchSelector(sel string, entries [][2]string) ([]string, error) {
 	}
 	if len(exact) > 0 {
 		if len(exact) > 1 {
-			return nil, fmt.Errorf("selector %q matches %d trials; ids must be unique", sel, len(exact))
+			return nil, fmt.Errorf("selector %s matches %d trials; ids must be unique", pythonRepr(sel), len(exact))
 		}
 		return exact, nil
 	}
@@ -123,7 +123,7 @@ func ResolveSelectors(selectors []string, entries [][2]string, prefix string) ([
 	if len(bad) > 0 {
 		quoted := make([]string, 0, len(bad))
 		for _, b := range bad {
-			quoted = append(quoted, fmt.Sprintf("%q", b))
+			quoted = append(quoted, pythonRepr(b))
 		}
 		plural := "s"
 		if len(bad) == 1 {
