@@ -10,6 +10,7 @@ package score
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -193,28 +194,46 @@ func maxf(a, b float64) float64 {
 	return b
 }
 
-// minNOf is Python's `rule.get("min_n") or rule.get("check", {}).get("min_n", 0) or 0`:
-// a zero at either level falls through to the next, never masks it.
-func minNOf(rule map[string]any) int64 {
-	if n, ok := intOf(rule["min_n"]); ok && n != 0 {
-		return n
+// minNValue is Python's `rule.get("min_n") or rule.get("check", {}).get("min_n", 0) or 0`
+// before its int(): the raw value, so a caller converts exactly where Python does.
+func minNValue(rule map[string]any) any {
+	if pyjson.Truthy(rule["min_n"]) {
+		return rule["min_n"]
 	}
-	if check, ok := pyjson.Object(rule["check"]); ok {
-		if n, ok := intOf(check["min_n"]); ok && n != 0 {
-			return n
-		}
+	if check, ok := pyjson.Object(rule["check"]); ok && pyjson.Truthy(check["min_n"]) {
+		return check["min_n"]
 	}
-	return 0
+	return int64(0)
 }
 
-// intOf is Python's int(value) when the value fits an int64 (floats truncated, numeric
-// strings accepted); ok is false where Python would raise.
-func intOf(value any) (int64, bool) {
-	converted, err := pyjson.PyInt(value)
-	if err != nil {
-		return 0, false
+// intLessThan is Python's `n < converted` for an int() result that may be a *big.Int.
+func intLessThan(n int64, converted any) bool {
+	switch v := converted.(type) {
+	case int64:
+		return n < v
+	case *big.Int:
+		return big.NewInt(n).Cmp(v) < 0
 	}
-	return pyjson.Int64(converted)
+	return false
+}
+
+// intGreaterThan is Python's `converted > n` for an int() result that may be a *big.Int.
+func intGreaterThan(converted any, n int64) bool {
+	switch v := converted.(type) {
+	case int64:
+		return v > n
+	case *big.Int:
+		return v.Cmp(big.NewInt(n)) > 0
+	}
+	return false
+}
+
+// floatOrZero is Python's float(value or 0) where the conversion is unguarded.
+func floatOrZero(v any) (float64, error) {
+	if !pyjson.Truthy(v) {
+		return 0, nil
+	}
+	return pyjson.PyFloat(v)
 }
 
 // markTime is a mark's time on the normaliser's base: its ISO wall minus the base wall, else
@@ -403,7 +422,10 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 	}
 	victims = map[string][]events.AttackVictim{}
 	if len(raw) > 0 {
-		victims = events.AttackVictims(raw, marks, samples)
+		victims, err = events.AttackVictims(raw, marks, samples)
+		if err != nil {
+			return nil, nil, nil, nil, nil, false, err
+		}
 	}
 	return setup, samples, marks, rows, victims, false, nil
 }
@@ -462,7 +484,9 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 		out := map[string]any{"trial": trial["id"], "rep": repName,
 			"ok_setup": false, "invalid_reason": reason, "rules": []any{}}
 		out["rules"] = invalidRules(trial, reason)
-		dumpVerdicts(repDir, out)
+		if err := dumpVerdicts(repDir, out); err != nil {
+			return nil, err
+		}
 		return out, nil
 	}
 	// run dir is two levels up from rep dir (<run>/<trial>/repN)
@@ -489,7 +513,9 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 		}
 		out["rules"] = invalidRules(trial, reason)
 		out["invalid_reason"] = reason
-		dumpVerdicts(repDir, out)
+		if err := dumpVerdicts(repDir, out); err != nil {
+			return nil, err
+		}
 		return out, nil
 	}
 	scored := ScoredSeconds(rows, samples, excluded, window)
@@ -519,12 +545,18 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 	if window != nil {
 		winSamples = rules.WindowSamples(samples, window)
 	}
-	minValid, _ := pyjson.Float(trial["min_valid_s"])
+	// Python: min_valid = float(trial.get("min_valid_s") or 0), unguarded.
+	minValid, err := floatOrZero(trial["min_valid_s"])
+	if err != nil {
+		return nil, fmt.Errorf("min_valid_s: %w", err)
+	}
 	if scored < minValid {
 		reason := CutShortReason(marks, scored)
 		out["rules"] = invalidRules(trial, reason)
 		out["invalid_reason"] = reason
-		dumpVerdicts(repDir, out)
+		if err := dumpVerdicts(repDir, out); err != nil {
+			return nil, err
+		}
 		return out, nil
 	}
 	var ruleEntries []any
@@ -551,27 +583,40 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 		if res.Err != nil {
 			return nil, fmt.Errorf("rule %s in %s: %w", pyjson.Str(rule["id"]), repDir, res.Err)
 		}
-		minOpp, _ := pyjson.Float(rule["min_opportunity_s"])
+		// Python: min_opp = rule.get("min_opportunity_s") or 0, converted by
+		// float(min_opp) at the comparison, which is unguarded.
+		minOpp := rule["min_opportunity_s"]
 		// Python: rule.get("min_n") or rule.get("check", {}).get("min_n", 0) or 0 — a
 		// rule-level 0 is falsy, so check.min_n still applies.
-		minN := minNOf(rule)
+		minN := minNValue(rule)
 		guardHold := true
 		guardWhy := res.Verdict
-		if minOpp != 0 && (res.Verdict == "PASS" || res.Verdict == "FAIL") {
+		if pyjson.Truthy(minOpp) && (res.Verdict == "PASS" || res.Verdict == "FAIL") {
+			minOppF, err := floatOrZero(minOpp)
+			if err != nil {
+				return nil, fmt.Errorf("rule %s in %s: min_opportunity_s: %w", pyjson.Str(rule["id"]), repDir, err)
+			}
 			// the rule's own not_within_s_after_mark windows carry no chance either
 			opp := rules.OpportunitySeconds(trial, rules.AfterMarkSamples(winSamples, rule, marks), excluded, ctx)
-			if opp < minOpp {
+			if opp < minOppF {
 				guardHold = false
-				guardWhy = fmt.Sprintf("opportunity %.0f s < %.0f s", opp, minOpp)
+				guardWhy = fmt.Sprintf("opportunity %.0f s < %.0f s", opp, minOppF)
 			}
 		}
 		nHave := res.N
 		// A pooled rule's trigger minimum is applied to the pooled total in ScoreTrial, not
-		// per repeat.
-		if minN != 0 && !(pyjson.IsBool(rule["pool"]) && pyjson.Truthy(rule["pool"])) &&
-			(res.Verdict == "PASS" || res.Verdict == "FAIL") && nHave < minN {
-			guardHold = false
-			guardWhy = fmt.Sprintf("n %d < min_n %d", nHave, minN)
+		// per repeat. Python calls int(min_n) here with no guard, so a value it cannot
+		// convert is an error on this path.
+		if pyjson.Truthy(minN) && !(pyjson.IsBool(rule["pool"]) && pyjson.Truthy(rule["pool"])) &&
+			(res.Verdict == "PASS" || res.Verdict == "FAIL") {
+			converted, err := pyjson.PyInt(minN)
+			if err != nil {
+				return nil, fmt.Errorf("rule %s in %s: min_n: %w", pyjson.Str(rule["id"]), repDir, err)
+			}
+			if intLessThan(nHave, converted) {
+				guardHold = false
+				guardWhy = fmt.Sprintf("n %d < min_n %s", nHave, pyjson.Str(converted))
+			}
 		}
 		evidence := res.Evidence
 		if evidence == nil {
@@ -602,7 +647,9 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 		ruleEntries = append(ruleEntries, entry)
 	}
 	out["rules"] = ruleEntries
-	dumpVerdicts(repDir, out)
+	if err := dumpVerdicts(repDir, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -622,10 +669,13 @@ func invalidRules(trial Trial, reason string) []any {
 	return out
 }
 
-func dumpVerdicts(repDir string, doc map[string]any) {
+// dumpVerdicts writes verdicts.json; a value Python's allow_nan=False would refuse is an
+// error, the same class as the bench's ValueError.
+func dumpVerdicts(repDir string, doc map[string]any) error {
 	if err := pyjson.Dump(filepath.Join(repDir, "verdicts.json"), doc); err != nil {
-		panic(fmt.Sprintf("trials score: write verdicts %s: %v", repDir, err))
+		return fmt.Errorf("write %s: %w", filepath.Join(repDir, "verdicts.json"), err)
 	}
+	return nil
 }
 
 // priorEvents is [(absolute wall, row)] of one scored repeat, for the next repeat's cross-rep
@@ -844,7 +894,17 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 					v := float64(kSum) / float64(nSum)
 					value = &v
 				}
-				minN := minNOf(rule)
+				// Python: min_n = (... or 0); try int(min_n) except
+				// (TypeError, ValueError) -> 0. int(inf) escapes as OverflowError; an
+				// integer beyond int64 is still a Python int and compares.
+				var minN any = int64(0)
+				if converted, err := pyjson.PyInt(minNValue(rule)); err != nil {
+					if !pyjson.CaughtByTypeValue(err) {
+						return nil, fmt.Errorf("rule %s: min_n: %w", rid, err)
+					}
+				} else {
+					minN = converted
+				}
 				if len(attackUnknown) > 0 {
 					// An unreadable attack state in any repeat is missing evidence.
 					verdict = "INCONCLUSIVE"
@@ -856,19 +916,32 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 				} else if value == nil {
 					verdict = "INCONCLUSIVE"
 					reason = "pooled n 0"
-				} else if minN != 0 && nSum < minN {
+				} else if pyjson.Truthy(minN) && intLessThan(nSum, minN) {
 					verdict = "INCONCLUSIVE"
-					reason = fmt.Sprintf("pooled n %d < min_n %d", nSum, minN)
+					reason = fmt.Sprintf("pooled n %d < min_n %s", nSum, pyjson.Str(minN))
 				} else if rules.Pass(rule["pass_if"], *value) {
 					verdict = "PASS"
 				} else {
 					verdict = "FAIL"
 				}
 			}
-			minReps, _ := intOrZero(rule["min_reps"])
-			if minReps > 1 && int64(len(valid)) < minReps {
+			// Python: min_reps = rule.get("min_reps") or 0; try int() except
+			// (TypeError, ValueError) -> 0. int(inf) escapes as OverflowError; an
+			// integer beyond int64 is still a plain Python int and compares.
+			minRepsVal := rule["min_reps"]
+			if !pyjson.Truthy(minRepsVal) {
+				minRepsVal = int64(0)
+			}
+			minReps, err := pyjson.PyInt(minRepsVal)
+			if err != nil {
+				if !pyjson.CaughtByTypeValue(err) {
+					return nil, fmt.Errorf("rule %s: min_reps: %w", rid, err)
+				}
+				minReps = int64(0)
+			}
+			if intGreaterThan(minReps, 1) && intLessThan(int64(len(valid)), minReps) {
 				verdict = "INCONCLUSIVE"
-				reason = fmt.Sprintf("valid reps %d < min_reps %d", len(valid), minReps)
+				reason = fmt.Sprintf("valid reps %d < min_reps %s", len(valid), pyjson.Str(minReps))
 			}
 		}
 		detail := []any{}
@@ -922,7 +995,7 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 		out["verdicts"] = []any{}
 	}
 	if err := pyjson.Dump(filepath.Join(trialDir, "trial.json"), out); err != nil {
-		panic(fmt.Sprintf("trials score: write trial.json %s: %v", trialDir, err))
+		return nil, fmt.Errorf("write %s: %w", filepath.Join(trialDir, "trial.json"), err)
 	}
 	return out, nil
 }
@@ -1012,7 +1085,9 @@ func ScoreRunE(runDir string) ([]map[string]any, error) {
 		}
 		runTrials = append(runTrials, doc)
 	}
-	report.WriteCard(runDir, runTrials)
+	if _, err := report.WriteCard(runDir, runTrials); err != nil {
+		return nil, err
+	}
 	return runTrials, nil
 }
 

@@ -47,7 +47,9 @@ func rghCard(t *testing.T, steps map[string][]int64) string {
 		}
 		runTrials = append(runTrials, map[string]any{"trial": tid, "verdicts": []any{}})
 	}
-	report.WriteCard(tmp, runTrials)
+	if _, err := report.WriteCard(tmp, runTrials); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(filepath.Join(tmp, "card.md"))
 	if err != nil {
 		t.Fatal(err)

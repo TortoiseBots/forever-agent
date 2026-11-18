@@ -339,7 +339,10 @@ func TestPacketVictimTest_EventsCarrySeqAndVictimTableRoundsLikeEvents(t *testin
 	raws := readJSONL(t, filepath.Join(tmp, "raw-ta.jsonl"))
 	marks := readJSONL(t, filepath.Join(tmp, "marks.jsonl"))
 	samples := readJSONL(t, filepath.Join(tmp, "samples.jsonl"))
-	table := events.AttackVictims(raws, marks, samples)
+	table, err := events.AttackVictims(raws, marks, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := table[vpMob]
 	if len(got) != 1 {
 		t.Fatalf("victim table = %v; want one entry", got)

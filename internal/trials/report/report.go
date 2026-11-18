@@ -232,8 +232,9 @@ func ladderLine(trialID string, steps [][2]any) string {
 	return fmt.Sprintf("- %s: ran easier than written after rescue-cap reps: %s", trialID, strings.Join(parts, "; "))
 }
 
-// WriteCard writes card.md and card.json for a run and returns the card rows.
-func WriteCard(runDir string, runTrials []map[string]any) []any {
+// WriteCard writes card.md and card.json for a run and returns the card rows. A value the
+// bench's allow_nan=False would refuse is returned as an error, never written.
+func WriteCard(runDir string, runTrials []map[string]any) ([]any, error) {
 	run := obj(readJSON(filepath.Join(runDir, "RUN.json")))
 	label := pyjson.Str(run["label"])
 	if !pyjson.Truthy(run["label"]) {
@@ -460,7 +461,7 @@ func WriteCard(runDir string, runTrials []map[string]any) []any {
 	}
 	text := strings.TrimRight(strings.Join(lines, "\n"), " \t\n\r\f\v") + "\n"
 	if err := os.WriteFile(filepath.Join(runDir, "card.md"), []byte(text), 0o644); err != nil {
-		panic(fmt.Sprintf("trials report: card.md: %v", err))
+		return nil, fmt.Errorf("write card.md: %w", err)
 	}
 	doc := map[string]any{
 		"title": fmt.Sprintf("%s — %s — %s — %s", naming.ReportTitle, label, server, tb),
@@ -471,9 +472,9 @@ func WriteCard(runDir string, runTrials []map[string]any) []any {
 		doc["rows"] = []any{}
 	}
 	if err := pyjson.Dump(filepath.Join(runDir, "card.json"), doc); err != nil {
-		panic(fmt.Sprintf("trials report: card.json: %v", err))
+		return nil, fmt.Errorf("write card.json: %w", err)
 	}
-	return cardRows
+	return cardRows, nil
 }
 
 func fileExists(path string) bool {

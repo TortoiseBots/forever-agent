@@ -889,7 +889,9 @@ func TestR3M4_EndToEndMinNReasonReachesPRBlock(t *testing.T) {
 			"low": int64(50), "medium": int64(70)}, true, []any{rule})
 		run := filepath.Dir(filepath.Dir(rep))
 		res := score.ScoreTrial(filepath.Dir(rep), trial)
-		report.WriteCard(run, []map[string]any{res})
+		if _, err := report.WriteCard(run, []map[string]any{res}); err != nil {
+			t.Fatal(err)
+		}
 		runs = append(runs, run)
 	}
 	text := report.PRBlock(runs[0], runs[1], "7")
@@ -919,7 +921,10 @@ func tcCard(t *testing.T, metric string, details []any, verdict string) (string,
 	trial := map[string]any{"trial": "t", "verdicts": []any{map[string]any{
 		"id": "R", "verdict": verdict, "k": kSum, "n": nSum, "metric": metric, "expected": "?",
 		"pass_if": ">= 0.3", "source": "s", "desc": "x", "detail": details}}}
-	rows := report.WriteCard(run, []map[string]any{trial})
+	rows, err := report.WriteCard(run, []map[string]any{trial})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return run, rows
 }
 
@@ -975,7 +980,9 @@ func TestR3Low_AssumedTextFollowsScoreConfigLogic(t *testing.T) {
 	rep, trial := tcThrRep(t, 270, cfg, true, nil)
 	run := filepath.Dir(filepath.Dir(rep))
 	res := score.ScoreTrial(filepath.Dir(rep), trial)
-	report.WriteCard(run, []map[string]any{res})
+	if _, err := report.WriteCard(run, []map[string]any{res}); err != nil {
+		t.Fatal(err)
+	}
 	data, _ := os.ReadFile(filepath.Join(run, "card.md"))
 	if !strings.Contains(string(data), "thresholds=live") {
 		t.Fatalf("want thresholds=live:\n%s", data)
@@ -983,7 +990,9 @@ func TestR3Low_AssumedTextFollowsScoreConfigLogic(t *testing.T) {
 	rep, trial = tcThrRep(t, 270, nil, false, nil)
 	run = filepath.Dir(filepath.Dir(rep))
 	res = score.ScoreTrial(filepath.Dir(rep), trial)
-	report.WriteCard(run, []map[string]any{res})
+	if _, err := report.WriteCard(run, []map[string]any{res}); err != nil {
+		t.Fatal(err)
+	}
 	data, _ = os.ReadFile(filepath.Join(run, "card.md"))
 	if !strings.Contains(string(data), "thresholds=assumed 20/50/70") {
 		t.Fatalf("want assumed thresholds:\n%s", data)
@@ -991,7 +1000,9 @@ func TestR3Low_AssumedTextFollowsScoreConfigLogic(t *testing.T) {
 	rep, trial = tcThrRep(t, 270, nil, true, nil)
 	run = filepath.Dir(filepath.Dir(rep))
 	res = score.ScoreTrial(filepath.Dir(rep), trial)
-	report.WriteCard(run, []map[string]any{res})
+	if _, err := report.WriteCard(run, []map[string]any{res}); err != nil {
+		t.Fatal(err)
+	}
 	data, _ = os.ReadFile(filepath.Join(run, "card.md"))
 	if !strings.Contains(string(data), "thresholds=unknown") || strings.Contains(string(data), "assumed 20/50/70") {
 		t.Fatalf("want thresholds=unknown:\n%s", data)
@@ -1222,7 +1233,9 @@ func TestR3Window_PRBlockReasonPrefersRealReasonToAssumedGuard(t *testing.T) {
 		rep, trial := tcThrRep(t, 900, nil, false, []any{lat})
 		run := filepath.Dir(filepath.Dir(rep))
 		res := score.ScoreTrial(filepath.Dir(rep), trial)
-		report.WriteCard(run, []map[string]any{res})
+		if _, err := report.WriteCard(run, []map[string]any{res}); err != nil {
+			t.Fatal(err)
+		}
 		runs = append(runs, run)
 	}
 	text := report.PRBlock(runs[0], runs[1], "")

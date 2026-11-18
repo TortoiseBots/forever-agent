@@ -112,22 +112,19 @@ func trialsValidate(args []string, stdout, stderr io.Writer) int {
 	files := fs.Args()
 	if len(files) == 0 {
 		files = scenario.TrialFiles()
-	}
-	failed := 0
-	for _, result := range scenario.ValidateFiles(files) {
-		if len(result.Errors) == 0 {
-			fmt.Fprintf(stdout, "%s: ok\n", result.Path)
-			continue
-		}
-		failed++
-		for _, problem := range result.Errors {
-			fmt.Fprintf(stdout, "%s: %s\n", result.Path, problem)
+		if len(files) == 0 {
+			// Python's cmd_validate falls back to the _fixtures set.
+			files = scenario.FixtureFiles()
 		}
 	}
-	if failed > 0 {
+	text, code, err := scenario.ValidateOutput(files)
+	fmt.Fprint(stdout, text)
+	if err != nil {
+		// cmd_validate lets the exception escape: exit 1, the files before it printed.
+		fmt.Fprintf(stderr, "trials validate: %v\n", err)
 		return 1
 	}
-	return exitOK
+	return code
 }
 
 // trialsReport re-renders the card of an already scored run from its trial.json files and
@@ -164,7 +161,10 @@ func trialsReport(args []string, stdout, stderr io.Writer) int {
 		}
 		runTrials = append(runTrials, pyjson.ObjectOrEmpty(doc))
 	}
-	report.WriteCard(runDir, runTrials)
+	if _, err := report.WriteCard(runDir, runTrials); err != nil {
+		fmt.Fprintf(stderr, "trials report: %v\n", err)
+		return 1
+	}
 	card, err := report.CardMD(runDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "trials report: %v\n", err)

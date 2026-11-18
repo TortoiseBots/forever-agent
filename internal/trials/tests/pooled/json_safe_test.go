@@ -246,7 +246,9 @@ func TestNoMatchWritesStrictJsonTest_CardIsStrictAndSaysNoMatch(t *testing.T) {
 	jsfRep(t, tmp, pyjson.Str(trial["id"]))
 	trialDir := filepath.Join(tmp, pyjson.Str(trial["id"]))
 	runTrials := score.ScoreTrial(trialDir, trial)
-	report.WriteCard(tmp, []map[string]any{runTrials})
+	if _, err := report.WriteCard(tmp, []map[string]any{runTrials}); err != nil {
+		t.Fatal(err)
+	}
 
 	raw, err := os.ReadFile(filepath.Join(tmp, "card.json"))
 	if err != nil {

@@ -2,6 +2,7 @@ package pyjson
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"math/big"
 	"testing"
@@ -241,6 +242,7 @@ func TestPyIntMatchesPython(t *testing.T) {
 	}{
 		{int64(5), int64(5), true},
 		{5.0, int64(5), true},
+		{5e18, int64(5000000000000000000), true},
 		{-5.9, int64(-5), true},
 		{true, int64(1), true},
 		{" 5 ", int64(5), true},
@@ -266,5 +268,51 @@ func TestPyIntMatchesPython(t *testing.T) {
 	}
 	if _, ok := gotBig.(*big.Int); !ok {
 		t.Fatalf("PyInt(big string) = %T, want *big.Int", gotBig)
+	}
+	if _, err := PyInt(math.Inf(1)); !isPyType(err, "OverflowError") {
+		t.Errorf("PyInt(+Inf) = %v, want OverflowError", err)
+	}
+	if _, err := PyInt(math.NaN()); !isPyType(err, "ValueError") {
+		t.Errorf("PyInt(NaN) = %v, want ValueError", err)
+	}
+	if _, err := PyInt([]any{}); !isPyType(err, "TypeError") {
+		t.Errorf("PyInt(list) = %v, want TypeError", err)
+	}
+}
+
+func isPyType(err error, want string) bool {
+	var conv *ConversionError
+	return errors.As(err, &conv) && conv.PyType == want
+}
+
+// Python 3.12: json.loads accepts NaN, Infinity and -Infinity wherever a value can start;
+// json.dumps(..., allow_nan=False) then refuses to write one back.
+func TestUnmarshalNonFiniteTokens(t *testing.T) {
+	doc, err := Unmarshal([]byte(`{"a": NaN, "b": [Infinity, -Infinity], "s": "NaN"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := ObjectOrEmpty(doc)
+	if f, ok := m["a"].(float64); !ok || !math.IsNaN(f) {
+		t.Errorf("a = %T %v, want NaN", m["a"], m["a"])
+	}
+	list := m["b"].([]any)
+	if f, ok := list[0].(float64); !ok || !math.IsInf(f, 1) {
+		t.Errorf("b[0] = %T %v, want +Inf", list[0], list[0])
+	}
+	if f, ok := list[1].(float64); !ok || !math.IsInf(f, -1) {
+		t.Errorf("b[1] = %T %v, want -Inf", list[1], list[1])
+	}
+	if m["s"] != "NaN" {
+		t.Errorf("string NaN changed to %#v", m["s"])
+	}
+	for _, input := range []string{`[NaNx]`, `[nan]`, `[+Infinity]`, `[Infin]`, `[Infinityx]`,
+		`{NaN: 1}`, `{"a": 1, NaN: 2}`} {
+		if _, err := Unmarshal([]byte(input)); err == nil {
+			t.Errorf("Unmarshal(%q) accepted a non-token", input)
+		}
+	}
+	if _, err := Marshal(m); err == nil {
+		t.Error("Marshal wrote a NaN; allow_nan=False must refuse it")
 	}
 }

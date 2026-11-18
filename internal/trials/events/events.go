@@ -76,6 +76,65 @@ func epochSecs(dt time.Time) float64 {
 	return float64(dt.Unix()) + float64(dt.Nanosecond())/1e9
 }
 
+// pythonIntBase is Python's int(text, base) for a base-10 or base-16 literal: an optional
+// sign, an optional 0x prefix (base 16 only), and underscores between digits or directly
+// after the prefix.
+func pythonIntBase(text string, base int) (*big.Int, bool) {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return nil, false
+	}
+	sign := 1
+	if t[0] == '+' || t[0] == '-' {
+		if t[0] == '-' {
+			sign = -1
+		}
+		t = t[1:]
+	}
+	prefixed := false
+	if base == 16 && len(t) >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X') {
+		t = t[2:]
+		prefixed = true
+	}
+	digit := func(c byte) bool {
+		switch {
+		case c >= '0' && c <= '9':
+			return int(c-'0') < base
+		case c >= 'a' && c <= 'f':
+			return base == 16
+		}
+		return false
+	}
+	var digits strings.Builder
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if c == '_' {
+			if i == 0 && prefixed {
+				continue
+			}
+			if i == 0 || i == len(t)-1 || !digit(t[i-1]) || !digit(t[i+1]) {
+				return nil, false
+			}
+			continue
+		}
+		if !digit(c) {
+			return nil, false
+		}
+		digits.WriteByte(c)
+	}
+	if digits.Len() == 0 {
+		return nil, false
+	}
+	n, ok := new(big.Int).SetString(digits.String(), base)
+	if !ok {
+		return nil, false
+	}
+	if sign < 0 {
+		n.Neg(n)
+	}
+	return n, true
+}
+
 // NormGUID normalises a guid to Python's "0x%016x" form (lower case); unparseable text passes
 // through lower-cased. Integers are arbitrary precision, as in Python: a decimal guid at or
 // above 2^63 still becomes its hex form.
@@ -85,12 +144,13 @@ func NormGUID(value any) string {
 	}
 	text := strings.ToLower(strings.TrimSpace(pyjson.Str(value)))
 	base := 10
-	digits := text
 	if strings.HasPrefix(text, "0x") {
 		base = 16
-		digits = text[2:]
 	}
-	n, ok := new(big.Int).SetString(digits, base)
+	// Python: int(text) for a decimal guid, int(text, 16) for a 0x one. It accepts a sign
+	// before the 0x prefix ("-0x5"), not after ("0x-5"), and underscores between digits or
+	// right after the prefix ("0x_5"). A parse failure returns the normalised text.
+	n, ok := pythonIntBase(text, base)
 	if !ok {
 		return text
 	}
@@ -351,7 +411,9 @@ type AttackVictim struct {
 
 // AttackVictims builds per-attacker [(seq, t, victim)] from attack_start (a victim) and
 // attack_stop (no victim), times re-based like events, one entry per packet in file order.
-func AttackVictims(raws, marks, samples []Row) map[string][]AttackVictim {
+// Python guards int(seq) with except (TypeError, ValueError); int(inf)'s OverflowError
+// escapes it and is returned here.
+func AttackVictims(raws, marks, samples []Row) (map[string][]AttackVictim, error) {
 	baseWall := TimeBase(marks, samples)
 	mono, hasMono := MonoOffset(samples)
 	byGUID := map[string][]AttackVictim{}
@@ -367,7 +429,11 @@ func AttackVictims(raws, marks, samples []Row) map[string][]AttackVictim {
 		var seq int64
 		hasSeq := false
 		if raw["seq"] != nil {
-			if n, err := pyjson.PyInt(raw["seq"]); err == nil {
+			n, err := pyjson.PyInt(raw["seq"])
+			if err != nil && !pyjson.CaughtByTypeValue(err) {
+				return nil, fmt.Errorf("attack seq: %w", err)
+			}
+			if err == nil {
 				if i, ok := pyjson.Int64(n); ok {
 					seq, hasSeq = i, true
 				}
@@ -385,7 +451,7 @@ func AttackVictims(raws, marks, samples []Row) map[string][]AttackVictim {
 	for _, rows := range byGUID {
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].T < rows[j].T })
 	}
-	return byGUID
+	return byGUID, nil
 }
 
 // Normalise writes events.jsonl in repDir and returns the rows list.
@@ -601,13 +667,23 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 		dstGUID := SideGUID(row, "target")
 		var seq any
 		if row["seq"] != nil {
-			if n, err := pyjson.PyInt(row["seq"]); err == nil {
+			n, err := pyjson.PyInt(row["seq"])
+			if err != nil {
+				if !pyjson.CaughtByTypeValue(err) {
+					return nil, fmt.Errorf("%s:%d: seq: %w", rawPath, rawLines[i], err)
+				}
+			} else {
 				seq = n
 			}
 		}
 		var spellID any
 		if row["spell_id"] != nil {
-			if n, err := pyjson.PyInt(row["spell_id"]); err == nil {
+			n, err := pyjson.PyInt(row["spell_id"])
+			if err != nil {
+				if !pyjson.CaughtByTypeValue(err) {
+					return nil, fmt.Errorf("%s:%d: spell_id: %w", rawPath, rawLines[i], err)
+				}
+			} else {
 				spellID = n
 			}
 		}

@@ -264,3 +264,55 @@ func TestMissingGuidSampleIsKeyedEmpty(t *testing.T) {
 		t.Fatalf("missing guid sample: %s k=%d, want PASS 1", res.Verdict, res.K)
 	}
 }
+
+// B4 known difference, pinned: a walk n beyond int64. Python's int is arbitrary precision,
+// so trl/rules.py computes value = k / n and returns PASS with n = the exact big integer.
+// Go's rules.Result.N is int64, so it cannot hold the value and reports "walk n == 0"
+// (INCONCLUSIVE). Fixing this needs a big-integer N through the matcher and the report.
+func TestB4WalkNAboveInt64IsPinned(t *testing.T) {
+	bigN, err := pyjson.Unmarshal([]byte("123456789012345678901234567890"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := map[string]any{"id": "W", "check": map[string]any{
+		"metric": "walk_metric", "name": "walk_to_target"}, "pass_if": "<= 0.5",
+		"source": "parity", "desc": "W"}
+	ctx := &rules.Ctx{WalkReport: map[string]any{
+		"walk_to_target": map[string]any{"k": int64(1), "n": bigN},
+	}}
+	res := rules.Evaluate(rule, nil, nil, nil, ctx)
+	if res.Err != nil {
+		t.Fatalf("walk n big: %v", res.Err)
+	}
+	if res.Verdict != "INCONCLUSIVE" || len(res.Evidence) == 0 || res.Evidence[0] != "walk n == 0" {
+		t.Fatalf("walk n big: %s %v, want the pinned INCONCLUSIVE walk n == 0", res.Verdict, res.Evidence)
+	}
+}
+
+// B4 known difference, pinned: pooled k/n beyond int64. Python sums them as big integers and
+// scores the pooled rule; Go's pooled sums are int64, so the pre-scored row is an error
+// ("does not fit int64") instead of a verdict.
+func TestB4PooledKNAboveInt64IsPinned(t *testing.T) {
+	bigK, err := pyjson.Unmarshal([]byte("123456789012345678901234567890"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bigN, err := pyjson.Unmarshal([]byte("123456789012345678901234567891"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := testRule("count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 0.5")
+	rule["pool"] = true
+	trial := testTrial(rule)
+	trialDir := filepath.Join(t.TempDir(), "t1")
+	rep := filepath.Join(trialDir, "rep1")
+	writeJSON(t, filepath.Join(rep, "verdicts.json"), map[string]any{
+		"rep": "rep1", "rules": []any{map[string]any{
+			"id": "R", "verdict": "PASS", "value": 0.5, "k": bigK, "n": bigN,
+		}},
+	})
+	if _, err := score.ScoreTrialE(trialDir, trial); err == nil ||
+		!strings.Contains(err.Error(), "does not fit int64") {
+		t.Fatalf("pooled big k/n: %v, want the pinned int64 conversion error", err)
+	}
+}

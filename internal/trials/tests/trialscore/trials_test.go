@@ -1130,7 +1130,10 @@ func TestScoredWindow_SurpriseColumn(t *testing.T) {
 		"k": int64(1), "n": int64(1), "metric": "count",
 		"expected": "FAIL", "pass_if": ">= 1",
 		"source": "s", "desc": "x", "detail": []any{}}}}
-	rows := report.WriteCard(run, []map[string]any{trial})
+	rows, err := report.WriteCard(run, []map[string]any{trial})
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertEqual(t, "expected FAIL, got PASS", obj(t, rows[0])["surprise"])
 }
 
@@ -1198,7 +1201,9 @@ func TestCardQuality_CutShortReasonAndDropped(t *testing.T) {
 		"excluded_spans": []any{map[string]any{"from": int64(1), "to": int64(4), "why": "floor"}}})
 	writeJSONL(t, filepath.Join(repdir, "events.jsonl"), nil)
 	writeJSON(t, filepath.Join(run, "RUN.json"), map[string]any{"label": "x", "tb_version": "v"})
-	report.WriteCard(run, []map[string]any{{"trial": "t", "verdicts": []any{}}})
+	if _, err := report.WriteCard(run, []map[string]any{{"trial": "t", "verdicts": []any{}}}); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(filepath.Join(run, "card.md"))
 	if err != nil {
 		t.Fatal(err)

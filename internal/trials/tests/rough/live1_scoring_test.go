@@ -104,13 +104,13 @@ func TestSpellIdsTest_EveryRealShieldCastCarriesAnIDTheRuleMatches(t *testing.T)
 	ids := rules.SpellIDs(where)
 	ranks := []int64{17, 592, 600, 3747, 6065, 6066, 10898, 10899, 10900, 10901}
 	for _, rank := range ranks {
-		if !ids[rank] {
+		if !ids[pyjson.Str(rank)] {
 			t.Fatalf("the rule does not match shield rank %d", rank)
 		}
 	}
 	for _, c := range casts {
-		id, ok := pyjson.Int64(c["spell_id"])
-		if !ok || !ids[id] {
+		id, err := pyjson.PyInt(c["spell_id"])
+		if err != nil || !ids[pyjson.Str(id)] {
 			t.Fatalf("cast %v is not matched by the rule", c)
 		}
 	}
@@ -151,7 +151,9 @@ func TestCardRepeatsTest_RepeatsThatRanAreCounted(t *testing.T) {
 		t.Fatalf("repeats text: got %q, want \"2\"", got)
 	}
 	writeJSON(t, filepath.Join(tmp, "RUN.json"), run)
-	report.WriteCard(tmp, []map[string]any{{"trial": tid, "verdicts": []any{}}})
+	if _, err := report.WriteCard(tmp, []map[string]any{{"trial": tid, "verdicts": []any{}}}); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(filepath.Join(tmp, "card.md"))
 	if err != nil {
 		t.Fatal(err)

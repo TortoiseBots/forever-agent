@@ -32,9 +32,11 @@ import (
 // Unmarshal decodes JSON like Python's json.loads: object -> map[string]any,
 // array -> []any, integer -> int64 (a *big.Int outside that range), other number -> float64.
 // Like json.loads it rejects anything after the first value, and a number it cannot represent
-// is an error rather than a silent 0.
+// is an error rather than a silent 0. Python's json also accepts the non-standard value tokens
+// NaN, Infinity and -Infinity; they decode to float64 NaN/+Inf/-Inf.
 func Unmarshal(data []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
+	text, substituted := substituteNonFinite(data)
+	dec := json.NewDecoder(bytes.NewReader(text))
 	dec.UseNumber()
 	var raw any
 	if err := dec.Decode(&raw); err != nil {
@@ -43,7 +45,153 @@ func Unmarshal(data []byte) (any, error) {
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("pyjson: trailing data after the first JSON value")
 	}
-	return convert(raw)
+	doc, err := convert(raw)
+	if err != nil {
+		return nil, err
+	}
+	if substituted {
+		doc = restoreNonFinite(doc)
+	}
+	return doc, nil
+}
+
+// The decoder substitutes a JSON string for each of Python's non-standard value tokens, then
+// restores the float after decoding. The markers start with NUL, which can only reach a
+// decoded string through an escape such as "\u0000pyjson-nan"; a real string that spells a
+// whole marker is the one input this cannot tell from a token.
+const (
+	nanMarker    = "\x00pyjson-nan"
+	posInfMarker = "\x00pyjson-inf"
+	negInfMarker = "\x00pyjson-neg-inf"
+)
+
+// substituteNonFinite replaces every NaN, Infinity and -Infinity token outside a JSON string
+// with a marker string. Python's json accepts those tokens only where a value can start, so
+// the token must be bounded like one; anything else (a prefix of a longer word) is left for
+// encoding/json to reject.
+func substituteNonFinite(data []byte) ([]byte, bool) {
+	var out bytes.Buffer
+	out.Grow(len(data))
+	changed := false
+	inString := false
+	// Python's json accepts these tokens only as VALUES, never as object keys ({"NaN": 1}
+	// is a string key, {NaN: 1} is invalid). expectKey tracks that distinction.
+	var stack []bool // true = object container
+	expectKey := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if inString {
+			out.WriteByte(c)
+			if c == '\\' {
+				if i+1 < len(data) {
+					i++
+					out.WriteByte(data[i])
+				}
+			} else if c == '"' {
+				inString = false
+				if len(stack) > 0 && stack[len(stack)-1] && expectKey {
+					expectKey = false
+				}
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, true)
+			expectKey = true
+		case '[':
+			stack = append(stack, false)
+			expectKey = false
+		case ',':
+			if len(stack) > 0 {
+				expectKey = stack[len(stack)-1]
+			}
+		case ':':
+			expectKey = false
+		case '}', ']':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			expectKey = false
+		}
+		if !expectKey {
+			if token, marker, ok := nonFiniteAt(data, i); ok &&
+				valueBoundaryBefore(data, i) && valueBoundaryAfter(data, i+len(token)) {
+				out.WriteString(`"\u0000` + marker + `"`)
+				i += len(token) - 1
+				changed = true
+				continue
+			}
+		}
+		out.WriteByte(c)
+	}
+	return out.Bytes(), changed
+}
+
+// nonFiniteAt reports the token at i and the marker suffix that stands for it.
+func nonFiniteAt(data []byte, i int) (token, marker string, ok bool) {
+	rest := data[i:]
+	for _, candidate := range []struct{ token, marker string }{
+		{"-Infinity", "pyjson-neg-inf"},
+		{"Infinity", "pyjson-inf"},
+		{"NaN", "pyjson-nan"},
+	} {
+		if bytes.HasPrefix(rest, []byte(candidate.token)) {
+			return candidate.token, candidate.marker, true
+		}
+	}
+	return "", "", false
+}
+
+func valueBoundaryBefore(data []byte, i int) bool {
+	if i == 0 {
+		return true
+	}
+	switch data[i-1] {
+	case ' ', '\t', '\r', '\n', '[', '{', ',', ':':
+		return true
+	}
+	return false
+}
+
+func valueBoundaryAfter(data []byte, i int) bool {
+	if i == len(data) {
+		return true
+	}
+	switch data[i] {
+	case ' ', '\t', '\r', '\n', ']', '}', ',', ':':
+		return true
+	}
+	return false
+}
+
+// restoreNonFinite turns the decoder's marker strings back into the floats the tokens mean.
+func restoreNonFinite(v any) any {
+	switch val := v.(type) {
+	case string:
+		switch val {
+		case nanMarker:
+			return math.NaN()
+		case posInfMarker:
+			return math.Inf(1)
+		case negInfMarker:
+			return math.Inf(-1)
+		}
+		return val
+	case map[string]any:
+		for k, item := range val {
+			val[k] = restoreNonFinite(item)
+		}
+		return val
+	case []any:
+		for i, item := range val {
+			val[i] = restoreNonFinite(item)
+		}
+		return val
+	}
+	return v
 }
 
 // UnmarshalFile reads and decodes a JSON file.
@@ -212,9 +360,34 @@ func NumOrZero(v any) float64 {
 	return 0.0
 }
 
+// ConversionError is a failed conversion with the Python exception class it corresponds to
+// (TypeError, ValueError or OverflowError), so a caller can reproduce which `except` clauses
+// of the bench catch it.
+type ConversionError struct {
+	PyType string
+	Msg    string
+}
+
+func (e *ConversionError) Error() string { return e.Msg }
+
+// CaughtByTypeValue reports whether Python's `except (TypeError, ValueError)` would catch err.
+// OverflowError is deliberately not caught there (int(inf) escapes the bench's guards).
+func CaughtByTypeValue(err error) bool {
+	var conv *ConversionError
+	if !errors.As(err, &conv) {
+		return false
+	}
+	return conv.PyType == "TypeError" || conv.PyType == "ValueError"
+}
+
+func convError(pyType, format string, args ...any) error {
+	return &ConversionError{PyType: pyType, Msg: fmt.Sprintf(format, args...)}
+}
+
 // PyInt is Python's int(v): an int (int64, or *big.Int outside that range), a bool, a float
-// (truncated toward zero) or a decimal string. It fails where Python raises TypeError or
-// ValueError (NaN/inf, "5.0", a list, ...), so callers can catch exactly what the bench does.
+// (truncated toward zero) or a decimal string. It fails with the Python exception class where
+// int() raises: ValueError for NaN or a bad literal, OverflowError for an infinity, TypeError
+// for a type int() refuses.
 func PyInt(v any) (any, error) {
 	switch n := v.(type) {
 	case int64, *big.Int:
@@ -225,19 +398,23 @@ func PyInt(v any) (any, error) {
 		}
 		return int64(0), nil
 	case float64:
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return nil, fmt.Errorf("pyjson: cannot convert %v to int", n)
+		if math.IsNaN(n) {
+			return nil, convError("ValueError", "pyjson: cannot convert float NaN to integer")
 		}
-		const limit = 1 << 62
-		if n >= -limit && n <= limit {
-			return int64(n), nil
+		if math.IsInf(n, 0) {
+			return nil, convError("OverflowError", "pyjson: cannot convert float infinity to integer")
 		}
 		bi, _ := new(big.Float).SetFloat64(n).Int(nil)
+		if bi.IsInt64() {
+			// Python's int is the same number whether the value came in as a float that
+			// fits: 5e18 is 5000000000000000000, not a big integer.
+			return bi.Int64(), nil
+		}
 		return bi, nil
 	case string:
 		text := strings.TrimSpace(n)
 		if text == "" {
-			return nil, errors.New("pyjson: invalid literal for int()")
+			return nil, convError("ValueError", "pyjson: invalid literal for int(): %q", n)
 		}
 		if strings.Contains(text, "_") {
 			// Python allows single underscores between digits only.
@@ -247,20 +424,56 @@ func PyInt(v any) (any, error) {
 			}
 			if body == "" || strings.HasPrefix(body, "_") || strings.HasSuffix(body, "_") ||
 				strings.Contains(body, "__") {
-				return nil, fmt.Errorf("pyjson: invalid literal for int(): %q", n)
+				return nil, convError("ValueError", "pyjson: invalid literal for int(): %q", n)
 			}
 			text = strings.ReplaceAll(text, "_", "")
 		}
 		bi, ok := new(big.Int).SetString(text, 10)
 		if !ok {
-			return nil, fmt.Errorf("pyjson: invalid literal for int(): %q", n)
+			return nil, convError("ValueError", "pyjson: invalid literal for int(): %q", n)
 		}
 		if bi.IsInt64() {
 			return bi.Int64(), nil
 		}
 		return bi, nil
 	}
-	return nil, fmt.Errorf("pyjson: cannot convert %T to int", v)
+	return nil, convError("TypeError", "pyjson: cannot convert %T to int", v)
+}
+
+// PyFloat is Python's float(v) with the exception class: a number, a bool or a numeric
+// string; ValueError for a bad literal, OverflowError for an integer outside float64's
+// range, TypeError for a type float() refuses. A numeric string like "1e999" is +inf, as
+// Python's float() returns the infinity, not an error.
+func PyFloat(v any) (float64, error) {
+	switch n := v.(type) {
+	case float64:
+		return n, nil
+	case int64:
+		return float64(n), nil
+	case *big.Int:
+		f, _ := new(big.Float).SetInt(n).Float64()
+		if math.IsInf(f, 0) {
+			return 0, convError("OverflowError", "pyjson: int too large to convert to float")
+		}
+		return f, nil
+	case bool:
+		if n {
+			return 1.0, nil
+		}
+		return 0.0, nil
+	case string:
+		text := strings.TrimSpace(n)
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				// Python: float("1e999") == inf. ParseFloat reports range with a usable f.
+				return f, nil
+			}
+			return 0, convError("ValueError", "pyjson: could not convert string to float: %q", n)
+		}
+		return f, nil
+	}
+	return 0, convError("TypeError", "pyjson: cannot convert %T to float", v)
 }
 
 // Float converts a value to float when the bench's float(value) would accept it (a number,

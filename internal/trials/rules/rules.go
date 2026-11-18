@@ -207,9 +207,45 @@ func lowerOf(v any) string {
 	return strings.ToLower(pyjson.Str(v))
 }
 
-// SpellIDs is the set of spell ids a where/trigger filter names (by name or by id).
-func SpellIDs(where Row) map[int64]bool {
-	out := map[int64]bool{}
+// floatOrZero is Python's float(value or 0.0) where the bench leaves the conversion
+// unguarded: every conversion error propagates.
+func floatOrZero(v any) (float64, error) {
+	if !pyjson.Truthy(v) {
+		return 0, nil
+	}
+	f, err := pyjson.PyFloat(v)
+	if err != nil {
+		return 0, err
+	}
+	return f, nil
+}
+
+// guardedFloatOrZero is Python's `float(value or 0.0)` inside try/except
+// (TypeError, ValueError): only the classes the bench does not catch propagate.
+func guardedFloatOrZero(v any) (float64, error) {
+	if !pyjson.Truthy(v) {
+		return 0, nil
+	}
+	f, err := pyjson.PyFloat(v)
+	if err != nil {
+		if pyjson.CaughtByTypeValue(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return f, nil
+}
+
+// uncaughtTypeValue reports an error Python's except (TypeError, ValueError) would not catch.
+func uncaughtTypeValue(err error) bool {
+	return err != nil && !pyjson.CaughtByTypeValue(err)
+}
+
+// SpellIDs is the set of spell ids a where/trigger filter names (by name or by id), keyed by
+// Python's int() decimal form so an id beyond int64 still compares (Python's ints are
+// arbitrary precision).
+func SpellIDs(where Row) map[string]bool {
+	out := map[string]bool{}
 	if where["spell"] != nil {
 		names := []any{where["spell"]}
 		if list, ok := pyjson.List(where["spell"]); ok {
@@ -217,7 +253,7 @@ func SpellIDs(where Row) map[int64]bool {
 		}
 		for _, name := range names {
 			for id := range spells.IDsFor(pyjson.Str(name)) {
-				out[id] = true
+				out[pyjson.Str(id)] = true
 			}
 		}
 	}
@@ -227,14 +263,23 @@ func SpellIDs(where Row) map[int64]bool {
 			ids = list
 		}
 		for _, one := range ids {
-			if n, ok := pyjson.Int64(one); ok {
-				out[n] = true
-			} else if f, ok := pyjson.Float(one); ok {
-				out[int64(f)] = true
+			if key, ok := IntKey(one); ok {
+				out[key] = true
 			}
 		}
 	}
 	return out
+}
+
+// IntKey is Python's int(value) as a comparable decimal key, ok where int() raises. Two
+// values Python considers the same integer (5, 5.0, "5") share a key, and an integer beyond
+// int64 keeps its exact digits.
+func IntKey(v any) (string, bool) {
+	n, err := pyjson.PyInt(v)
+	if err != nil {
+		return "", false
+	}
+	return pyjson.Str(n), true
 }
 
 // TimedSample is a sample with its re-based second.
@@ -609,11 +654,8 @@ func Matches(row Row, where Row, byGUID map[string][]TimedSample, ctx *Ctx, tria
 		if row["spell_id"] == nil {
 			return false
 		}
-		id, ok := pyjson.Int64(row["spell_id"])
-		if !ok {
-			return false
-		}
-		if !ids[id] {
+		id, ok := IntKey(row["spell_id"])
+		if !ok || !ids[id] {
 			return false
 		}
 	}
@@ -1507,9 +1549,14 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 		var n int64
 		obj, isObj := pyjson.Object(found)
 		if isObj {
-			// Python: int(found.get("n", 0)), a float like 5.0 accepted; a bad value is 0.
+			// Python: int(found.get("n", 0)) inside try/except (TypeError, ValueError):
+			// a bad value is 0, but int(inf)'s OverflowError escapes the guard.
 			if raw, ok := obj["n"]; ok {
-				if v, err := pyjson.PyInt(raw); err == nil {
+				v, err := pyjson.PyInt(raw)
+				if uncaughtTypeValue(err) {
+					return Result{Err: fmt.Errorf("walk n: %w", err)}
+				}
+				if err == nil {
 					if i, fits := pyjson.Int64(v); fits {
 						n = i
 					}
@@ -1702,8 +1749,16 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 		} else if where["trigger_debounce_s"] != nil {
 			debounce = Num(where["trigger_debounce_s"], ctx, nil)
 		}
-		within, _ := pyjson.Float(check["within_s"])
-		respCD, _ := pyjson.Float(check["debounce_responder_s"])
+		// Python: within = float(check.get("within_s") or 0.0) is unguarded; resp_cd is
+		// inside try/except (TypeError, ValueError).
+		within, err := floatOrZero(check["within_s"])
+		if err != nil {
+			return Result{Err: fmt.Errorf("within_s: %w", err)}
+		}
+		respCD, err := guardedFloatOrZero(check["debounce_responder_s"])
+		if err != nil {
+			return Result{Err: fmt.Errorf("debounce_responder_s: %w", err)}
+		}
 		cdWhere := Row{}
 		for k, v := range respWhere {
 			if k != "dst" {
@@ -1975,9 +2030,12 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 				if pyjson.Str(r["kind"]) != "excluded" || pyjson.Str(r["why"]) != "prior rep responder cooldown" {
 					continue
 				}
-				a, okA := pyjson.Float(r["from"])
-				b, okB := pyjson.Float(r["to"])
-				if okA && okB && b > a {
+				a, errA := pyjson.PyFloat(r["from"])
+				b, errB := pyjson.PyFloat(r["to"])
+				if uncaughtTypeValue(errA) || uncaughtTypeValue(errB) {
+					return Result{Err: fmt.Errorf("excluded span from/to: %v / %v", errA, errB)}
+				}
+				if errA == nil && errB == nil && b > a {
 					cool = append(cool, [2]float64{a, b})
 				}
 			}
@@ -1989,7 +2047,10 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			}
 		}
 		if len(cool) > 0 && pyjson.Truthy(check["debounce_responder_across_reps"]) {
-			cooldown, _ := pyjson.Float(check["debounce_responder_s"])
+			cooldown, err := guardedFloatOrZero(check["debounce_responder_s"])
+			if err != nil {
+				return Result{Err: fmt.Errorf("debounce_responder_s: %w", err)}
+			}
 			if cooldown > 0 {
 				var outside []Row
 				for _, r := range scored(matches) {
