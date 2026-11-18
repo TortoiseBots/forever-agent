@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sort"
+	"sync"
+	"syscall"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -34,6 +39,18 @@ type Options struct {
 	Dx, Dy    float32
 	WalkPause time.Duration
 	Settle    time.Duration
+	// FightCheck runs round 4's fight (forever fight-check): settle, choose a target (Entry when set), attack it for
+	// FightFor, cast the known spells the plan picks, report, log out.
+	FightCheck bool
+	Entry      int32
+	FightFor   time.Duration
+	// CaptureDir is a debug option (forever fight-check --capture-dir): every received combat packet's payload is
+	// appended to <dir>/packets.jsonl. The directory holds the run's identifiers, so it belongs OUTSIDE the
+	// repository; the fixture generator rewrites them before a payload becomes a fixture.
+	CaptureDir string
+	// Provoke is a debug option (--provoke): before the fight, provoke the refusals a fight log otherwise has no
+	// real packet for — a swing from out of range and a self cast at no rage — so their traffic can be captured.
+	Provoke bool
 	// AllowInstanceRedirect lets SMSG_CONNECT_TO name a host other than the realm socket's; refused by default.
 	AllowInstanceRedirect bool
 	Logf                  func(format string, args ...any)
@@ -63,6 +80,20 @@ type Report struct {
 	Latency         time.Duration
 	Logout          LogoutResponse
 	LogoutComplete  bool
+	// LinkLost is set when a socket closed (or the peer went silent) during the run: its side and the error are
+	// what the command prints with the last server packet it had seen.
+	LinkLost       bool
+	LinkLostSide   string
+	LinkLostDetail string
+	LastPacket     string
+	LastPacketAgo  time.Duration
+
+	// Round 4: the fight, the spells the character knows, and the combat packets this client could not parse.
+	Fight       FightReport
+	KnownSpells []int32
+	ParseErrors int
+	// Captured is the number of combat packets written to the debug capture (0 when --capture-dir was not given).
+	Captured int
 
 	// Round 3: what the client understood of the world and where it walked.
 	Objects       ObjectSummary
@@ -105,6 +136,41 @@ type UnitRow struct {
 	Health    int64
 	MaxHealth int64
 	Distance  float32
+}
+
+// FightReport is what the fight-check observed: the target, the fight log, the damage both ways, the auras, and the
+// fighter's own state at the end. It carries no identifiers: units are named by role in the log.
+type FightReport struct {
+	Target       wire.GUID
+	TargetEntry  int32
+	TargetName   string
+	TargetLevel  int32
+	TargetHealth int64
+	TargetMax    int64
+	Engaged      bool
+	Killed       bool
+	// Evaded is a fight the server ended with the target still alive (an evade, a leash or a hostile stop): the
+	// command reports it as its own outcome and exits non-zero.
+	Evaded      bool
+	Swings      int
+	Misses      int
+	Casts       int
+	Auras       int
+	DamageDealt int32
+	DamageTaken int32
+	XPGain      int32
+	// StaleCasts counts the cast packets dropped because they answered a Cast that had given up (a late START, GO or
+	// failure of the quarantined generation): they never complete a later Cast of the same spell.
+	StaleCasts    int
+	LastSwingErr  string
+	Events        []FightEvent
+	CastRows      []FightRow
+	AuraRows      []AuraRow
+	SelfHealth    int64
+	SelfMax       int64
+	SelfPower     int32
+	SelfMaxPower  int32
+	SelfPowerType uint8
 }
 
 // Count is one line of the packet count.
@@ -155,6 +221,23 @@ type session struct {
 	pumpCancel context.CancelFunc
 	pumpDone   []chan struct{}
 
+	// The link's liveness: each socket's reader closes its own channel on an error (a closed or reset socket), so
+	// every wait ends at once instead of waiting out its own deadline. deadSide/deadErr name the first socket to
+	// go and its error; lastPacketName/lastPacketAt are the last server packet the session handled.
+	deadMu     sync.Mutex
+	deadChs    [2]chan struct{}
+	deadClosed [2]bool
+	deadErrs   [2]error
+	deadAny    bool
+	// logoutAnswered is set once the server accepted the logout: the close that follows is the session ending, not
+	// a lost link.
+	logoutAnswered bool
+	deadSide       int
+	deadErr        error
+	deadStale      bool
+	lastPacketName string
+	lastPacketAt   time.Time
+
 	activeMoverDone bool
 	pingSerial      uint32
 	pingSentAt      time.Time
@@ -168,6 +251,18 @@ type session struct {
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
+
+	// Round 4: the fight log, the known spells of the character, the cast-id counter, and one log line per opcode a
+	// parser refused.
+	fight            *fightLog
+	known            []int32
+	castSerial       uint32
+	parseErrorLogged map[string]bool
+	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
+	// The tests set a fake so a fight runs on a fake clock.
+	fightSender objects.Sender
+	// capture is the --capture-dir writer (nil otherwise).
+	capture *captureWriter
 }
 
 const (
@@ -191,7 +286,23 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	defer cancel()
 
 	report := &Report{Counts: make(map[string]int)}
-	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now()}
+	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
+	s.deadChs[sideRealm] = make(chan struct{})
+	s.deadChs[sideInstance] = make(chan struct{})
+	if opts.CaptureDir != "" {
+		c, err := openCapture(opts.CaptureDir)
+		if err != nil {
+			return report, err
+		}
+		s.capture = c
+		defer func() {
+			if cerr := c.Close(); cerr != nil {
+				opts.logf("world: the debug capture stopped: %v", cerr)
+			}
+		}()
+		opts.logf("world: writing every received combat packet to the debug capture (--capture-dir)")
+	}
+	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.world = objects.NewWorld(0)
 	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
 	defer s.pumpCancel()
@@ -228,14 +339,131 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	return report, runErr
 }
 
-// startPump runs one socket reader and records how to wait for it.
+// startPump runs one socket reader and records how to wait for it. A reader that returns an error (a closed or reset
+// socket) marks the link dead before it posts the error, so every wait in the session ends at once.
 func (s *session) startPump(side int, next func(context.Context) (worldconn.Packet, error)) {
 	done := make(chan struct{})
 	s.pumpDone = append(s.pumpDone, done)
 	go func() {
 		defer close(done)
-		pump(s.pumpCtx, side, next, s.events)
+		for {
+			p, err := next(s.pumpCtx)
+			if err != nil {
+				// A read that failed because this run's own context ended is not a lost link.
+				if s.pumpCtx.Err() == nil {
+					s.setLinkDead(side, err)
+				}
+			}
+			select {
+			case s.events <- event{side: side, p: p, err: err}:
+			case <-s.pumpCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
+}
+
+// ErrLinkLost is a socket that closed (or reset) during the run, or a peer that stopped sending altogether. Every
+// wait in the session (Attack, Cast, MoveTo, WaitUntil, the rest and stay loops, the logout) ends with it.
+var ErrLinkLost = errors.New("world: the connection is lost")
+
+// linkSilenceLimit is how long the link may go without a server packet before it counts as dead even though the
+// socket is still open: the server sends a time sync at least every 10 s (the live 2026-11-18 run saw 8 in 75 s) and
+// a pong for every ping, so 30 s of silence is a hung or half-open peer, not a quiet fight.
+const linkSilenceLimit = 30 * time.Second
+
+// linkSideName is the socket's name in the run's messages.
+func linkSideName(side int) string {
+	switch side {
+	case sideRealm:
+		return "realm"
+	case sideInstance:
+		return "instance"
+	}
+	return fmt.Sprintf("connection %d", side)
+}
+
+// setLinkDead records one socket's reader error (or a silent peer) and closes that socket's channel; a socket that
+// was already marked stays marked.
+func (s *session) setLinkDead(side int, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return // this run's own deadline, not the peer
+	}
+	s.deadMu.Lock()
+	defer s.deadMu.Unlock()
+	if s.logoutAnswered {
+		return // the server ended the session the client asked it to end
+	}
+	if side >= 0 && side < len(s.deadChs) && s.deadChs[side] != nil && !s.deadClosed[side] {
+		s.deadClosed[side] = true
+		s.deadErrs[side] = err
+		close(s.deadChs[side])
+	}
+	if s.deadAny {
+		return
+	}
+	s.deadAny = true
+	s.deadSide = side
+	s.deadErr = err
+	now := time.Now()
+	s.report.LinkLost = true
+	s.report.LinkLostSide = linkSideName(side)
+	s.report.LinkLostDetail = s.deadDetail(side)
+	if !s.lastPacketAt.IsZero() {
+		s.report.LastPacket = s.lastPacketName
+		s.report.LastPacketAgo = now.Sub(s.lastPacketAt).Round(time.Millisecond)
+	}
+}
+
+// deadDetail is what the run says about one socket's death.
+func (s *session) deadDetail(side int) string {
+	if s.deadStale {
+		return fmt.Sprintf("no server packet for %s", linkSilenceLimit)
+	}
+	if side >= 0 && side < len(s.deadErrs) && s.deadErrs[side] != nil {
+		return s.deadErrs[side].Error()
+	}
+	return "closed"
+}
+
+// linkDead is the link's state as an error: nil while either socket is alive.
+func (s *session) linkDead() error { return s.deadErrorExcept(-1) }
+
+// deadErrorExcept is linkDead with one socket's death ignored (the logout tolerates its instance socket closing
+// before the completion arrives on the realm socket).
+func (s *session) deadErrorExcept(ignore int) error {
+	s.deadMu.Lock()
+	side, found := -1, false
+	for i := range s.deadClosed {
+		if s.deadClosed[i] && i != ignore {
+			side, found = i, true
+			break
+		}
+	}
+	stale := s.deadStale
+	s.deadMu.Unlock()
+	if !found {
+		return nil
+	}
+	if stale {
+		return fmt.Errorf("%w (the %s socket: no server packet for %s; the last was %s)",
+			ErrLinkLost, linkSideName(side), linkSilenceLimit, s.lastPacketName)
+	}
+	s.deadMu.Lock()
+	detail := s.deadDetail(side)
+	s.deadMu.Unlock()
+	return fmt.Errorf("%w (the %s socket: %s)", ErrLinkLost, linkSideName(side), detail)
+}
+
+// markStale ends the link because the peer stopped sending; the gameplay socket is the one a fight notices.
+func (s *session) markStale() {
+	s.deadMu.Lock()
+	s.deadStale = true
+	s.deadMu.Unlock()
+	s.setLinkDead(sideInstance, nil)
 }
 
 // shutdown stops the readers, closes both sockets in a fixed order whatever happened before, and waits for the
@@ -266,42 +494,33 @@ func (s *session) shutdown(ctx context.Context) {
 
 // abortLogin is the logout a failed run owes the server: a character whose socket just disappears stays online
 // until the server's own timeout. Best effort, bounded by two seconds, and only after the character was logged in
-// (the instance socket exists from CMSG_PLAYER_LOGIN on).
+// (the instance socket exists from CMSG_PLAYER_LOGIN on). A dead link cannot be told the character is leaving, so
+// the run says exactly that instead of writing into a closed socket.
 func (s *session) abortLogin() {
+	if err := s.linkDead(); err != nil {
+		s.opts.logf("world abort: logout not possible: connection lost (%s)", s.report.LinkLostDetail)
+		return
+	}
 	if s.instance == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := s.instance.Send(ctx, wire.CMSGLogoutRequest, BuildLogoutRequest()); err != nil {
-		s.opts.logf("world abort: CMSG_LOGOUT_REQUEST: %v", err)
+	if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGLogoutRequest, BuildLogoutRequest()); err != nil {
+		s.opts.logf("world abort: logout not possible: connection lost (%v)", err)
 	} else {
 		s.opts.logf("world abort: CMSG_LOGOUT_REQUEST sent after the failure")
 	}
-	if err := s.instance.Send(ctx, wire.CMSGLogDisconnect, BuildLogDisconnect()); err != nil {
+	if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGLogDisconnect, BuildLogDisconnect()); err != nil {
 		s.opts.logf("world abort: CMSG_LOG_DISCONNECT: %v", err)
 	} else {
 		s.opts.logf("world abort: CMSG_LOG_DISCONNECT sent")
 	}
 }
 
-func pump(ctx context.Context, side int, next func(context.Context) (worldconn.Packet, error), out chan<- event) {
-	for {
-		p, err := next(ctx)
-		select {
-		case out <- event{side: side, p: p, err: err}:
-		case <-ctx.Done():
-			return
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
 func (s *session) enter(ctx context.Context) error {
 	// ---- character list
-	if err := s.realm.Send(ctx, wire.CMSGEnumCharacters, nil); err != nil {
+	if err := s.sendOn(sideRealm, wire.CMSGEnumCharacters, nil); err != nil {
 		return err
 	}
 	s.opts.logf("world character list: CMSG_ENUM_CHARACTERS sent")
@@ -329,7 +548,7 @@ func (s *session) enter(ctx context.Context) error {
 	s.report.Character = character
 
 	// ---- CMSG_PLAYER_LOGIN and the instance connection
-	if err := s.realm.Send(ctx, wire.CMSGPlayerLogin, BuildPlayerLogin(character.GUID)); err != nil {
+	if err := s.sendOn(sideRealm, wire.CMSGPlayerLogin, BuildPlayerLogin(character.GUID)); err != nil {
 		return err
 	}
 	s.opts.logf("world login: CMSG_PLAYER_LOGIN sent for %s (%s)", safeText(character.DisplayName()), character.GUID)
@@ -361,7 +580,7 @@ func (s *session) enter(ctx context.Context) error {
 		return err
 	}
 	now := clientTimeMs()
-	if err := s.instance.Send(ctx, wire.CMSGQueuedMessagesEnd, BuildQueuedMessagesEnd(now)); err != nil {
+	if err := s.sendOn(sideInstance, wire.CMSGQueuedMessagesEnd, BuildQueuedMessagesEnd(now)); err != nil {
 		return err
 	}
 	s.opts.logf("world login: SMSG_RESUME_COMMS answered with CMSG_QUEUED_MESSAGES_END (%d ms)", now)
@@ -381,7 +600,7 @@ func (s *session) enter(ctx context.Context) error {
 	s.opts.logf("world: in world on map %d at %.2f %.2f %.2f (orientation %.2f), reason %d",
 		verify.MapID, verify.X, verify.Y, verify.Z, verify.O, verify.Reason)
 	// the real client sends the loading screen notification on the realm socket, with the map it just entered
-	if err := s.realm.Send(ctx, wire.CMSGLoadingScreenNotify, BuildLoadingScreenNotify(verify.MapID)); err != nil {
+	if err := s.sendOn(sideRealm, wire.CMSGLoadingScreenNotify, BuildLoadingScreenNotify(verify.MapID)); err != nil {
 		return err
 	}
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
@@ -393,15 +612,22 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.FightCheck {
+		if err := s.fightCheck(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if err := s.stay(ctx); err != nil {
 		return err
 	}
 	return s.logout(ctx)
 }
 
-// Send writes one client packet on the instance socket (the socket the real client sends gameplay on).
+// Send writes one client packet on the instance socket (the socket the real client sends gameplay on). A dead link
+// refuses the send at once instead of writing into a half-open socket.
 func (s *session) Send(core uint32, payload []byte) error {
-	return s.instance.Send(s.ctx, core, payload)
+	return s.sendOn(sideInstance, core, payload)
 }
 
 // Now is the client clock the movement time field carries.
@@ -424,6 +650,36 @@ func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
 		}
 		if err := s.handle(ctx, ev); err != nil {
 			return err
+		}
+	}
+}
+
+// settle answers the server for d and applies what it sends, and ends at once when the character dies: a corpse
+// gets no ping, no name query and no fight. A dead link ends it the same way (through next).
+func (s *session) settle(ctx context.Context, d time.Duration) error {
+	end := time.Now().Add(d)
+	for {
+		if s.selfDead() {
+			s.opts.logf("fight-check: the character died while the client settled in the world")
+			return ErrSelfDead
+		}
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			return nil
+		}
+		ev, err := s.next("the settle", remaining)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				return nil
+			}
+			return err
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return err
+		}
+		if s.selfDead() {
+			s.opts.logf("fight-check: the character died while the client settled in the world")
+			return ErrSelfDead
 		}
 	}
 }
@@ -681,7 +937,7 @@ func (s *session) stay(ctx context.Context) error {
 // logout sends CMSG_LOGOUT_REQUEST and waits for the response and the completion. The server waits 20 s before it
 // completes a logout that is not instant, and it closes the instance socket after the completion.
 func (s *session) logout(ctx context.Context) error {
-	if err := s.instance.Send(ctx, wire.CMSGLogoutRequest, BuildLogoutRequest()); err != nil {
+	if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGLogoutRequest, BuildLogoutRequest()); err != nil {
 		return err
 	}
 	s.opts.logf("world logout: CMSG_LOGOUT_REQUEST sent")
@@ -704,7 +960,15 @@ func (s *session) logout(ctx context.Context) error {
 		if wait <= 0 {
 			return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within 30 s")
 		}
-		ev, err := s.next("the logout", wait)
+		// Until the response arrives, either socket's death is fatal; after it, the instance socket's death is
+		// expected (the server closes it right after the response) and the completion still travels on the realm.
+		var ev event
+		var err error
+		if responded {
+			ev, err = s.nextExcept("the logout", wait, sideInstance)
+		} else {
+			ev, err = s.next("the logout", wait)
+		}
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within 30 s")
@@ -712,13 +976,14 @@ func (s *session) logout(ctx context.Context) error {
 			return err
 		}
 		if ev.err != nil {
-			// The server sends the completion on the realm socket and closes the instance socket right after, so an
-			// instance read error is expected once the response arrived; the completion is still on its way.
-			if ev.side == sideInstance && !s.report.LogoutComplete && s.report.Logout.Result == 0 {
+			if responded && ev.side == sideInstance {
 				continue
 			}
 			if s.report.LogoutComplete {
 				continue
+			}
+			if lost := s.deadErrorExcept(-1); lost != nil {
+				return lost
 			}
 			return fmt.Errorf("world: the connection %d closed during the logout: %w", ev.side, ev.err)
 		}
@@ -730,6 +995,9 @@ func (s *session) logout(ctx context.Context) error {
 			if s.report.Logout.Result != 0 {
 				return fmt.Errorf("world: the server refused the logout: result %d", s.report.Logout.Result)
 			}
+			s.deadMu.Lock()
+			s.logoutAnswered = true
+			s.deadMu.Unlock()
 		}
 		if s.report.LogoutComplete && completeAt.IsZero() {
 			completeAt = time.Now()
@@ -742,7 +1010,7 @@ func (s *session) logout(ctx context.Context) error {
 
 func (s *session) sendPing() {
 	target := s.instance
-	if target == nil {
+	if target == nil || s.linkDead() != nil {
 		return
 	}
 	s.pingSerial++
@@ -776,9 +1044,19 @@ func (s *session) countPacket(p worldconn.Packet) {
 // handle counts and answers one server packet. Unknown packets are counted and skipped, never an error.
 func (s *session) handle(ctx context.Context, ev event) error {
 	if ev.err != nil {
+		// The reader already marked the link dead; the event is only here so a wait that owns this reader sees it.
+		if err := s.linkDead(); err != nil {
+			return err
+		}
 		return fmt.Errorf("world: connection %d: %w", ev.side, ev.err)
 	}
 	p := ev.p
+	if p.Name != "" {
+		s.lastPacketName = p.Name
+	} else {
+		s.lastPacketName = fmt.Sprintf("wire 0x%06X", p.Wire)
+	}
+	s.lastPacketAt = time.Now()
 	s.countPacket(p)
 	switch p.Core {
 	case wire.SMSGTimeSyncRequest:
@@ -834,35 +1112,35 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			return fmt.Errorf("world: SMSG_UPDATE_OBJECT: %w", err)
 		}
 		s.applyUpdate(u)
-		s.world.Apply(u, time.Now())
+		s.world.Apply(u, s.transport().Now())
 	case wire.SMSGOnMonsterMove:
 		m, err := objects.ParseMonsterMove(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_ON_MONSTER_MOVE: %w", err)
 		}
 		s.report.MonsterMoves++
-		s.world.ApplyMonsterMove(m, time.Now())
+		s.world.ApplyMonsterMove(m, s.transport().Now())
 	case wire.SMSGMoveUpdate:
 		m, err := objects.ParseMoveUpdate(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_MOVE_UPDATE: %w", err)
 		}
 		s.report.MoveRelays++
-		s.world.ApplyMoveUpdate(m.Info, nil, time.Now())
+		s.world.ApplyMoveUpdate(m.Info, nil, s.transport().Now())
 	case wire.SMSGMoveUpdateTeleport:
 		m, err := objects.ParseMoveUpdateTeleport(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_MOVE_UPDATE_TELEPORT: %w", err)
 		}
 		s.report.MoveRelays++
-		s.world.ApplyMoveUpdate(m.Info, m.Speeds, time.Now())
+		s.world.ApplyMoveUpdate(m.Info, m.Speeds, s.transport().Now())
 	case wire.SMSGMoveTeleport:
 		t, err := objects.ParseMoveTeleport(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_MOVE_TELEPORT: %w", err)
 		}
 		s.report.Teleports++
-		s.world.ApplyTeleport(t, time.Now())
+		s.world.ApplyTeleport(t, s.transport().Now())
 		if t.MoverGUID == s.self {
 			if t.Transport != nil || t.HasVehicle {
 				// An ack would tell the server the client is standing on the transport's seat, which this round
@@ -917,8 +1195,250 @@ func (s *session) handle(ctx context.Context, ev event) error {
 				s.world.SetEntryName(int32(c.Entry), c.Name)
 			}
 		}
+	default:
+		s.handleCombat(p)
 	}
 	return nil
+}
+
+// handleCombat answers the combat, spell, aura, cooldown, power and experience packets. A packet this round's
+// parser cannot consume exactly is counted (Report.ParseErrors) and merges nothing: it never fails the session,
+// because the rest of the fight is still valid and the next packet is framed by its own header.
+func (s *session) handleCombat(p worldconn.Packet) {
+	now := s.transport().Now()
+	if s.capture != nil {
+		s.capture.write(p.Core, p.Payload)
+		s.report.Captured++
+	}
+	switch p.Core {
+	case wire.SMSGAttackStart:
+		v, err := combat.ParseAttackStart(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyAttackStart(v, now)
+		if v.Attacker == s.self || v.Victim == s.self {
+			s.fight.add("swing", fmt.Sprintf("%s attacked %s", s.fight.name(v.Attacker), s.fight.name(v.Victim)), 0)
+		}
+	case wire.SMSGAttackStop:
+		v, err := combat.ParseAttackStop(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyAttackStop(v, now)
+		if v.Attacker == s.self {
+			s.fight.attackStops++
+		}
+		if v.Attacker == s.self || v.Victim == s.self {
+			s.fight.add("swing", fmt.Sprintf("%s stopped attacking %s", s.fight.name(v.Attacker), s.fight.name(v.Victim)), 0)
+		}
+	case wire.SMSGCancelCombat:
+		s.world.ApplyCancelCombat(s.self, now)
+	case wire.SMSGAttackSwingError:
+		v, err := combat.ParseSwingError(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.fight.lastSwingErr = v.Reason
+		s.fight.swingErrSeq++
+		s.fight.add("swing", "swing error: "+v.Reason.String(), 0)
+	case wire.SMSGAttackerStateUpdate:
+		v, err := combat.ParseAttackerStateUpdate(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyAttackRound(v, now)
+		if v.Attacker == s.self || v.Victim == s.self {
+			s.fight.swing(v)
+		}
+	case wire.SMSGAttackSwingLandedLog:
+		// The full log copy of a swing the basic packet already carried: parsed for the layout, not counted twice.
+		if _, err := combat.ParseAttackSwingLanded(p.Payload); err != nil {
+			s.noteParseError(p, err)
+		}
+	case wire.SMSGSpellStart:
+		v, err := combat.ParseSpellStart(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplySpellCast(&v, false, now)
+		if s.fight.staleCast(v.SpellID, v.CastID, now) {
+			return
+		}
+		s.fight.castStart(&v, now)
+	case wire.SMSGSpellGo:
+		v, err := combat.ParseSpellGo(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplySpellCast(&v, true, now)
+		if s.fight.staleCast(v.SpellID, v.CastID, now) {
+			return
+		}
+		s.fight.castGo(&v)
+	case wire.SMSGCastFailed, wire.SMSGSpellFailure, wire.SMSGSpellFailedOther:
+		var v combat.SpellFailure
+		var err error
+		switch p.Core {
+		case wire.SMSGCastFailed:
+			v, err = combat.ParseCastFailed(p.Payload)
+		case wire.SMSGSpellFailure:
+			v, err = combat.ParseSpellFailure(p.Payload)
+		default:
+			v, err = combat.ParseSpellFailedOther(p.Payload)
+		}
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplySpellFailure(v, now)
+		if v.Caster == s.self || v.Caster.IsZero() {
+			// CAST_FAILED is the pre-cast answer and carries the client's cast id; the failure forms carry the
+			// server's (see fightLog.castFail). A failure of a generation that gave up is dropped first.
+			if s.fight.staleCast(v.SpellID, v.CastID, now) {
+				return
+			}
+			s.fight.castFail(v.SpellID, v.CastID, v.Reason, p.Core == wire.SMSGCastFailed)
+		}
+	case wire.SMSGSpellNonMeleeDamage:
+		v, err := combat.ParseSpellNonMeleeDamage(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		switch {
+		case v.Me == s.self:
+			s.fight.damageTaken += v.Damage
+			s.fight.add("spell", fmt.Sprintf("spell %d hit you for %d", v.SpellID, v.Damage), v.Damage)
+		case v.Caster == s.self:
+			s.fight.damageDealt += v.Damage
+			s.fight.add("spell", fmt.Sprintf("spell %d hit %s for %d", v.SpellID, s.fight.name(v.Me), v.Damage), v.Damage)
+		}
+	case wire.SMSGSpellHealLog:
+		v, err := combat.ParseSpellHeal(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		if v.Target == s.self || v.Caster == s.self {
+			s.fight.add("spell", fmt.Sprintf("spell %d healed %s for %d", v.SpellID, s.fight.name(v.Target), v.OriginalHeal), v.OriginalHeal)
+		}
+	case wire.SMSGSpellPeriodicAuraLog:
+		v, err := combat.ParseSpellPeriodicAuraLog(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		if v.Target == s.self || v.Caster == s.self {
+			for _, e := range v.Effects {
+				s.fight.add("spell", fmt.Sprintf("spell %d ticked on %s for %d", v.SpellID, s.fight.name(v.Target), e.Amount), e.Amount)
+			}
+		}
+	case wire.SMSGSpellEnergizeLog:
+		v, err := combat.ParseSpellEnergize(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		if v.Target == s.self {
+			s.fight.add("spell", fmt.Sprintf("spell %d gave %d %s", v.SpellID, v.Amount, combat.PowerName(v.Type)), 0)
+		}
+	case wire.SMSGSpellDelayed:
+		if _, err := combat.ParseSpellDelayed(p.Payload); err != nil {
+			s.noteParseError(p, err)
+		}
+	case wire.SMSGAuraUpdate:
+		v, err := combat.ParseAuraUpdate(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyAuraUpdate(&v, now)
+		for _, info := range v.Auras {
+			s.fight.aura(v.Unit, info)
+		}
+	case wire.SMSGSpellCooldown:
+		v, err := combat.ParseSpellCooldown(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyCooldowns(v, now)
+	case wire.SMSGCooldownEvent:
+		v, err := combat.ParseCooldownEvent(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ClearCooldown(s.self, v.SpellID, now)
+	case wire.SMSGClearCooldown:
+		v, err := combat.ParseClearCooldown(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ClearCooldown(s.self, int32(v.SpellID), now)
+	case wire.SMSGClearCooldowns:
+		v, err := combat.ParseClearCooldowns(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ClearCooldowns(s.self, v.Spells, now)
+	case wire.SMSGPowerUpdate:
+		v, err := combat.ParsePowerUpdate(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyPowerUpdate(&v, now)
+	case wire.SMSGLogXPGain:
+		v, err := combat.ParseXPGain(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.fight.xp += v.Amount
+		s.fight.add("xp", fmt.Sprintf("%s: %d experience", combat.XPGainReasonName(v.Reason), v.Amount), 0)
+	case wire.SMSGDeathReleaseLoc:
+		v, err := combat.ParseDeathRelease(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.fight.add("death", fmt.Sprintf("the corpse is released on map %d", v.MapID), 0)
+	case wire.SMSGSendKnownSpells:
+		v, err := combat.ParseKnownSpells(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.known = append(s.known[:0], v.Known...)
+		s.report.KnownSpells = append([]int32(nil), s.known...)
+	}
+}
+
+// noteParseError counts a combat packet this round could not consume exactly and logs the first of each opcode.
+func (s *session) noteParseError(p worldconn.Packet, err error) {
+	s.report.ParseErrors++
+	s.fight.parseErrors++
+	if s.parseErrorLogged == nil {
+		s.parseErrorLogged = make(map[string]bool)
+	}
+	name := p.Name
+	if name == "" {
+		name = fmt.Sprintf("wire 0x%06X", p.Wire)
+	}
+	if !s.parseErrorLogged[name] {
+		s.parseErrorLogged[name] = true
+		s.opts.logf("world: %s was not decoded (%v); it merges nothing", name, err)
+	}
 }
 
 // applyUpdate records what the client learned about itself from an update: the create block of ThisIsYou carries the
@@ -932,10 +1452,13 @@ func (s *session) applyUpdate(u *objects.Update) {
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID
+			if s.fight != nil {
+				s.fight.self = b.GUID
+			}
 			if s.mover == nil {
 				s.mover = &objects.Mover{
 					GUID:       b.GUID,
-					Sender:     s,
+					Sender:     s.transport(),
 					ClientTime: func(time.Time) uint32 { return clientTimeMs() },
 					Logf:       s.opts.logf,
 					X:          b.Movement.X,
@@ -947,8 +1470,11 @@ func (s *session) applyUpdate(u *objects.Update) {
 				}
 				s.world.SetActiveMover(b.GUID)
 			}
-			s.opts.logf("world: own create block: position %.2f %.2f %.2f, run speed %.2f yd/s, walk %.2f yd/s",
-				b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.Run, b.Movement.Walk)
+			power, maxPower := b.Info.PowerValue()
+			s.opts.logf("world: own create block: position %.2f %.2f %.2f, health %d/%d, %s %s, run speed %.2f yd/s, walk %.2f yd/s",
+				b.Movement.X, b.Movement.Y, b.Movement.Z, b.Info.Health, b.Info.MaxHealth,
+				combat.PowerName(int8(b.Info.DisplayPower)), combat.PowerText(int8(b.Info.DisplayPower), power, maxPower),
+				b.Movement.Run, b.Movement.Walk)
 		} else if s.mover != nil {
 			s.mover.SetPosition(b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.O)
 			s.opts.logf("world: own create again: position reset to %.2f %.2f %.2f",
@@ -959,13 +1485,39 @@ func (s *session) applyUpdate(u *objects.Update) {
 }
 
 func (s *session) sendOn(side int, core uint32, payload []byte) error {
+	return s.sendOnCtx(s.ctx, side, core, payload)
+}
+
+// sendOnCtx is sendOn with the caller's deadline (the abort logout keeps its own two seconds).
+func (s *session) sendOnCtx(ctx context.Context, side int, core uint32, payload []byte) error {
+	if err := s.linkDead(); err != nil {
+		return err
+	}
+	var err error
 	switch side {
 	case sideRealm:
-		return s.realm.Send(s.ctx, core, payload)
+		err = s.realm.Send(ctx, core, payload)
 	case sideInstance:
-		return s.instance.Send(s.ctx, core, payload)
+		err = s.instance.Send(ctx, core, payload)
+	default:
+		return fmt.Errorf("world: no connection %d", side)
 	}
-	return fmt.Errorf("world: no connection %d", side)
+	if err != nil && isLinkIOError(err) {
+		// A write that fails on the socket is the same loss as a read that fails: name it, so the run reports
+		// "connection lost" instead of a bare "broken pipe".
+		s.setLinkDead(side, err)
+		return s.deadErrorExcept(-1)
+	}
+	return err
+}
+
+// isLinkIOError reports whether an error came from the socket itself (a closed, reset or broken connection) rather
+// than from the packet layer (an opcode without a wire number, a payload over the limit).
+func isLinkIOError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
 var errWaitTimeout = errors.New("world: wait timed out")
@@ -984,6 +1536,9 @@ func (s *session) waitFor(what string, timeout time.Duration, match func(worldco
 			return worldconn.Packet{}, err
 		}
 		if ev.err != nil {
+			if lost := s.deadErrorExcept(-1); lost != nil {
+				return worldconn.Packet{}, lost
+			}
 			return worldconn.Packet{}, fmt.Errorf("world: the connection closed while waiting for %s: %w", what, ev.err)
 		}
 		if err := s.handle(s.ctx, ev); err != nil {
@@ -996,15 +1551,82 @@ func (s *session) waitFor(what string, timeout time.Duration, match func(worldco
 }
 
 func (s *session) next(what string, timeout time.Duration) (event, error) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case ev := <-s.events:
-		return ev, nil
-	case <-timer.C:
-		return event{}, errWaitTimeout
-	case <-s.ctx.Done():
-		return event{}, fmt.Errorf("world: waiting for %s: %w", what, s.ctx.Err())
+	return s.nextExcept(what, timeout, -1)
+}
+
+// nextExcept is next with one socket's death ignored: the logout tolerates the instance socket closing once the
+// request is answered, because the completion travels on the realm socket.
+func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (event, error) {
+	end := time.Now().Add(timeout)
+	for {
+		// A packet the readers already delivered is handled before the link's death: it arrived first, and the
+		// logout's response may sit in the queue when the server closes that socket.
+		select {
+		case ev := <-s.events:
+			if ev.err != nil && ev.side == ignore {
+				continue
+			}
+			return ev, nil
+		default:
+		}
+		if err := s.deadErrorExcept(ignore); err != nil {
+			// One packet may still be in the queue from before the reader died.
+			select {
+			case ev := <-s.events:
+				if ev.err == nil && ev.side != ignore {
+					return ev, nil
+				}
+			default:
+			}
+			return event{}, err
+		}
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			return event{}, errWaitTimeout
+		}
+		silent := false
+		if !s.lastPacketAt.IsZero() {
+			silence := time.Since(s.lastPacketAt)
+			if silence >= linkSilenceLimit {
+				s.markStale()
+				return event{}, s.deadErrorExcept(ignore)
+			}
+			if silence+remaining > linkSilenceLimit {
+				remaining = linkSilenceLimit - silence
+				silent = true
+			}
+		}
+		realmCh, instanceCh := s.deadChs[sideRealm], s.deadChs[sideInstance]
+		if ignore == sideRealm {
+			realmCh = nil
+		}
+		if ignore == sideInstance {
+			instanceCh = nil
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case ev := <-s.events:
+			timer.Stop()
+			if ev.err != nil && ev.side == ignore {
+				continue
+			}
+			return ev, nil
+		case <-timer.C:
+			if silent {
+				s.markStale()
+				return event{}, s.deadErrorExcept(ignore)
+			}
+			return event{}, errWaitTimeout
+		case <-realmCh:
+			timer.Stop()
+			continue // the dead check at the top reports it
+		case <-instanceCh:
+			timer.Stop()
+			continue
+		case <-s.ctx.Done():
+			timer.Stop()
+			return event{}, fmt.Errorf("world: waiting for %s: %w", what, s.ctx.Err())
+		}
 	}
 }
 

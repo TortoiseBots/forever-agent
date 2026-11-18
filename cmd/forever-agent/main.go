@@ -28,6 +28,9 @@ const (
 	// exitLogoutIncomplete: a logout ended without one: the server never answered, or the
 	// socket died before the server accepted it. The character may stay in world for a while.
 	exitLogoutIncomplete = 10
+	// exitDead: fight-check's character died during the run. Nothing was sent for the corpse but
+	// the logout, so the fight never happened and the caller must not read the run as a kill.
+	exitDead = 11
 )
 
 func main() {

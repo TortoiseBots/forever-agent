@@ -62,7 +62,14 @@ func WritePackedGUID(b *Buffer, g GUID) {
 // ReadPackedGUID reads the packed form (ObjectGuid.cpp:1113-1134). The server reads popcount(mask) bytes even
 // when the high bit (the GUID type byte) is clear, and then returns the empty GUID; this does the same, so the
 // reader position after either form matches the server.
-func ReadPackedGUID(b *Buffer) GUID { return b.reportGUID(readPackedGUID(b)) }
+func ReadPackedGUID(b *Buffer) GUID {
+	start := b.rpos
+	g := b.reportGUID(readPackedGUID(b))
+	if b.guidAtHook != nil {
+		b.guidAtHook(g, start)
+	}
+	return g
+}
 
 func readPackedGUID(b *Buffer) GUID {
 	mask := b.ReadU16()

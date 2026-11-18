@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,4 +290,39 @@ func absDuration(d time.Duration) time.Duration {
 		return -d
 	}
 	return d
+}
+
+// TestChaseBoundsItsReplans: a goal that keeps moving (a target that runs at the mover's own speed) must end the
+// chase with a named error after maxChaseReplans re-lines instead of following it forever past the caller's deadline.
+func TestChaseBoundsItsReplans(t *testing.T) {
+	f := &fakeSender{now: time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)}
+	m := &Mover{GUID: wire.GUID{Low: 1}, Sender: f, X: 0, Y: 0, Z: 0, RunSpeed: 7,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(f.now).Milliseconds()) }}
+	// The goal stands 20 yards east and runs east 2 yards per tick: the mover never arrives.
+	far := float32(20)
+	f.onWait = func(now time.Time) {
+		far += 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := m.ChaseTo(ctx, ChaseGoal{
+		Dest:    func(time.Time) (float32, float32, float32) { return far, 0, 0 },
+		Arrived: func(time.Time) bool { return false },
+	})
+	if err == nil || !strings.Contains(err.Error(), "re-planned") {
+		t.Fatalf("the chase returned %v", err)
+	}
+	// One start and one stop, and a bounded number of packets: no start/stop pair per re-plan.
+	starts, stops := 0, 0
+	for _, p := range f.sent {
+		switch p.core {
+		case wire.CMSGMoveStartForward:
+			starts++
+		case wire.CMSGMoveStop:
+			stops++
+		}
+	}
+	if starts != 1 || stops != 1 {
+		t.Fatalf("%d start(s), %d stop(s)", starts, stops)
+	}
 }

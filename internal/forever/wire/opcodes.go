@@ -42,6 +42,13 @@ const (
 	CMSGQueryPlayerNames       uint32 = 0x440010
 	CMSGQueryCreature          uint32 = 0x3D0141
 
+	// The combat the client sends (Opcodes.h:66-67, 168-179, 954).
+	CMSGSetSelection uint32 = 0x3E00CA
+	CMSGAttackSwing  uint32 = 0x3D011C
+	CMSGAttackStop   uint32 = 0x3D011D
+	CMSGCastSpell    uint32 = 0x3D0174
+	CMSGCancelCast   uint32 = 0x3D0177
+
 	SMSGAuthChallenge        uint32 = 0x4C0000
 	SMSGEnterEncryptedMode   uint32 = 0x4C0004
 	SMSGCompressedPacket     uint32 = 0x4C000E
@@ -69,6 +76,36 @@ const (
 	SMSGTransferPending          uint32 = 0x450071
 	SMSGQueryPlayerNamesResponse uint32 = 0x640027
 	SMSGCreatureQueryResponse    uint32 = 0x490006
+
+	// Combat, spells, auras, cooldowns and experience (Opcodes.h:1177-1178, 1296, 1363-1364, 1403, 1475, 1864,
+	// 2156, 2365-2367, 2379).
+	SMSGAttackStart          uint32 = 0x4B0017
+	SMSGAttackStop           uint32 = 0x4B0018
+	SMSGCancelCombat         uint32 = 0x4B0025
+	SMSGAttackSwingError     uint32 = 0x4B0026
+	SMSGAttackSwingLandedLog uint32 = 0x4B0027
+	SMSGAttackerStateUpdate  uint32 = 0x4B002C
+	SMSGSpellStart           uint32 = 0x67002D
+	SMSGSpellGo              uint32 = 0x67002C
+	SMSGCastFailed           uint32 = 0x67004A
+	SMSGSpellFailure         uint32 = 0x670046
+	SMSGSpellFailedOther     uint32 = 0x670048
+	SMSGSpellNonMeleeDamage  uint32 = 0x670020
+	SMSGSpellHealLog         uint32 = 0x67000A
+	SMSGSpellPeriodicAuraLog uint32 = 0x670008
+	SMSGSpellEnergizeLog     uint32 = 0x670009
+	SMSGAuraUpdate           uint32 = 0x670011
+	SMSGSpellCooldown        uint32 = 0x670005
+	SMSGCooldownEvent        uint32 = 0x450165
+	SMSGClearCooldown        uint32 = 0x450166
+	SMSGClearCooldowns       uint32 = 0x670015
+	SMSGPowerUpdate          uint32 = 0x45017E
+	SMSGSpellDelayed         uint32 = 0x670032
+	SMSGLogXPGain            uint32 = 0x450190
+	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	SMSGSendKnownSpells      uint32 = 0x670019
+	SMSGLevelUpInfo          uint32 = 0x450194
+	SMSGSpellExecuteLog      uint32 = 0x670033
 )
 
 // clientNames names the client opcodes this client sends, for error messages.
@@ -105,6 +142,11 @@ var clientNames = map[uint32]string{
 	CMSGMoveTeleportAck:        "CMSG_MOVE_TELEPORT_ACK",
 	CMSGQueryPlayerNames:       "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:          "CMSG_QUERY_CREATURE",
+	CMSGSetSelection:           "CMSG_SET_SELECTION",
+	CMSGAttackSwing:            "CMSG_ATTACK_SWING",
+	CMSGAttackStop:             "CMSG_ATTACK_STOP",
+	CMSGCastSpell:              "CMSG_CAST_SPELL",
+	CMSGCancelCast:             "CMSG_CANCEL_CAST",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

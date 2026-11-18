@@ -69,7 +69,7 @@ const (
 	fakeSMSGMoveSetActive        = 0x600003
 	fakeSMSGLogoutResponse       = 0x470130
 	fakeSMSGLogoutComplete       = 0x470131
-	fakeSMSGCharacterLoginFailed = 0x4701B1
+	fakeSMSGCharacterLoginFailed = 0x4701B0 // SMSG_CHARACTER_LOGIN_FAILED: the old 0x4701B1 translated back to another opcode, so the fake never delivered the failure
 	fakeSMSGUpdateObject         = 0x5E0000
 	fakeSMSGMoveTeleport         = 0x600034
 
@@ -125,10 +125,17 @@ type fakeServer struct {
 	abortDone      chan struct{}
 	// walk makes the fake run round 3's walk scenario instead of the plain stay: it sends the character's own create
 	// block and expects CMSG_MOVE_SET_FACING / START_FORWARD / HEARTBEAT* / STOP with advancing positions.
-	walk      bool
-	walkFrom  [3]float32
-	walkTo    [3]float32
-	walkMoved int
+	// closeSocket/closeWhen drop one socket on purpose (the client must notice at once): "instance" or "realm",
+	// "login" (right after the login burst), "stay" (150 ms later, while the client waits) or "logout" (when the
+	// logout request arrives). deliberateClose keeps the read errors of a deliberate drop out of the failure channel.
+	closeSocket     string
+	closeWhen       string
+	resetLink       bool
+	deliberateClose bool
+	walk            bool
+	walkFrom        [3]float32
+	walkTo          [3]float32
+	walkMoved       int
 	// teleportDuringWalk sends SMSG_MOVE_TELEPORT in the middle of the first leg and then expects the ack and a
 	// movement packet at the destination.
 	teleportDuringWalk bool
@@ -454,6 +461,9 @@ func (f *fakeServer) serveRealm() {
 				return
 			case <-time.After(time.Second):
 			}
+			if f.deliberateClose {
+				return
+			}
 			f.failf("realm: %v", err)
 			return
 		}
@@ -522,6 +532,21 @@ func (f *fakeServer) banners(conn net.Conn, which string) bool {
 		return false
 	}
 	return true
+}
+
+// dropLink closes the socket the test asked for, as a FIN or (resetLink) a RST.
+func (f *fakeServer) dropLink(realm, inst *fakeConn) {
+	c := inst
+	if f.closeSocket == "realm" {
+		c = realm
+	}
+	if f.resetLink {
+		if tcp, ok := c.nc.(*net.TCPConn); ok {
+			_ = tcp.SetLinger(0)
+		}
+	}
+	f.deliberateClose = true
+	_ = c.nc.Close()
 }
 
 // serveInstance runs the instance socket; the realm conn is used for SMSG_LOGOUT_COMPLETE, which the real server
@@ -612,6 +637,16 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	binary.LittleEndian.PutUint16(mover, binary.LittleEndian.Uint16(f.enumResult[34:36]))
 	copy(mover[2:], f.clientGUID)
 	c.writeFrame(fakeSMSGMoveSetActive, mover)
+	if f.closeSocket != "" && f.closeWhen == "login" {
+		f.dropLink(realm, c)
+		return
+	}
+	if f.closeSocket != "" && f.closeWhen == "stay" {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			f.dropLink(realm, c)
+		}()
+	}
 	if f.failAfterLogin {
 		// the player is in the world (the mover went out), then the server refuses the character: the client's stay
 		// loop fails and Enter must tell the server the player is leaving before the sockets drop
@@ -644,6 +679,9 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 				return
 			default:
 			}
+			if f.deliberateClose {
+				return
+			}
 			f.failf("instance: %v", err)
 			return
 		}
@@ -666,6 +704,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGLogoutRequest:
+			if f.closeSocket != "" && f.closeWhen == "logout" {
+				f.dropLink(realm, c)
+				return
+			}
 			if !sawTimeSync || !sawMover {
 				f.failf("instance: logout before the time sync (%v) and active mover (%v) answers", sawTimeSync, sawMover)
 			}
@@ -816,6 +858,7 @@ func TestEnterSendsTheAbortLogoutWhenItFailsInWorld(t *testing.T) {
 	f.wg.Add(1)
 	go f.serveRealm()
 
+	var steps []string
 	opts := Options{
 		Address:         f.realmListener.Addr().String(),
 		RealmID:         70,
@@ -829,6 +872,7 @@ func TestEnterSendsTheAbortLogoutWhenItFailsInWorld(t *testing.T) {
 		Stay:            time.Second,
 		Deadline:        10 * time.Second,
 		BuildAuthKey:    f.buildKey[:],
+		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
 	}
 	report, err := Enter(t.Context(), opts)
 	if err == nil {
@@ -840,7 +884,8 @@ func TestEnterSendsTheAbortLogoutWhenItFailsInWorld(t *testing.T) {
 	}
 	for _, wire := range []uint32{fakeCMSGLogoutRequest, fakeCMSGLogDisconnect} {
 		if !containsWire(f.instWire, wire) {
-			t.Fatalf("the failed run did not send wire 0x%06X before closing; sent: % X", wire, f.instWire)
+			t.Fatalf("the failed run did not send wire 0x%06X before closing; sent: % X\nerr: %v\ncounts: %v\nsteps:\n%s",
+				wire, f.instWire, err, report.Counts, joinLines(steps))
 		}
 	}
 }

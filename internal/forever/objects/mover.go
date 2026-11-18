@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -19,6 +20,22 @@ import (
 // is the client's standard 500 ms tick and every packet below carries an absolute position, which is what the
 // server reads (HandleMovementOpcode stores movementInfo.pos). A test pins it.
 const HeartbeatInterval = 500 * time.Millisecond
+
+// A chase sends one movement packet per HeartbeatInterval and may add one re-aim (CMSG_MOVE_SET_FACING) in the same
+// tick when the target has moved: at most maxMovementPacketsPerSecond, two per 500 ms tick. There is no start/stop
+// pair per target sample any more; the one leg runs from the start to the stop.
+const maxMovementPacketsPerSecond = 4
+
+// chaseRetarget and chaseTurn are when a chase re-lines itself instead of continuing the current leg: the walk
+// destination has moved chaseRetarget yards, or the direction to it has turned chaseTurn radians.
+const (
+	chaseRetarget = 0.3
+	chaseTurn     = 0.2
+)
+
+// maxChaseReplans bounds how many times one chase may re-line itself (60 heartbeats = 30 s): a target that runs at
+// the mover's own speed must end the chase with an error, not keep it alive past the caller's own deadline.
+const maxChaseReplans = 60
 
 // StopDistance is the distance at which a walk stops: the brief's 0.5 yards.
 const StopDistance = 0.5
@@ -57,6 +74,11 @@ type Mover struct {
 	// cannot continue along the old line after the server moved the character.
 	walking    bool
 	teleported bool
+
+	// sendTimes is the ring of the last movement packets' times, so the chase can hold its optional re-aim when the
+	// link has already carried maxMovementPacketsPerSecond in the last second.
+	sendTimes [maxMovementPacketsPerSecond]time.Time
+	sendIdx   int
 }
 
 // ErrTeleported reports that a teleport moved the character in the middle of a leg. The mover is at the server's
@@ -108,7 +130,26 @@ func (m *Mover) send(core uint32, flags uint64) error {
 // sendAt sends one movement opcode with the position the mover holds and the timestamp of at. A stop uses it to
 // carry the computed arrival time even when the wake-up was a little late.
 func (m *Mover) sendAt(core uint32, flags uint64, at time.Time) error {
+	m.recordMovement(at)
 	return m.Sender.Send(core, BuildMovementPacket(m.info(flags, at)))
+}
+
+// recordMovement keeps the time of every movement packet for the one-second rate cap.
+func (m *Mover) recordMovement(at time.Time) {
+	m.sendTimes[m.sendIdx%len(m.sendTimes)] = at
+	m.sendIdx++
+}
+
+// movementsInLastSecond counts the movement packets of the second ending at now: the chase skips its optional
+// re-aim when the cap is reached, so no tick can exceed maxMovementPacketsPerSecond however fast it is driven.
+func (m *Mover) movementsInLastSecond(now time.Time) int {
+	n := 0
+	for _, t := range m.sendTimes {
+		if !t.IsZero() && now.Sub(t) < time.Second {
+			n++
+		}
+	}
+	return n
 }
 
 // SetTeleport applies a teleport the server accepted: the new position, facing and the sequence the ack carries.
@@ -222,6 +263,115 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 	}
 }
 
+// ChaseGoal is what a chase follows: Dest returns the point to walk at now, Arrived reports whether the chase is
+// over (the distance that matters, not the walk point). Both are asked once per heartbeat, so a wandering target is
+// followed continuously instead of by one start/stop pair per position sample.
+type ChaseGoal struct {
+	Dest    func(now time.Time) (x, y, z float32)
+	Arrived func(now time.Time) bool
+}
+
+// ChaseTo walks after a moving point: one CMSG_MOVE_START_FORWARD at the beginning, one heartbeat every
+// HeartbeatInterval with the interpolated position, a re-aim (CMSG_MOVE_SET_FACING plus a heartbeat on the new line)
+// only when Dest has moved chaseRetarget yards or the direction has turned chaseTurn, and one CMSG_MOVE_STOP at the
+// end. The packet rate is at most maxMovementPacketsPerSecond, and the leg is never restarted per target sample.
+func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
+	if m.RunSpeed <= 0 {
+		return fmt.Errorf("objects: no run speed for the mover")
+	}
+	if goal.Dest == nil || goal.Arrived == nil {
+		return fmt.Errorf("objects: a chase needs a destination and an arrival test")
+	}
+	now := m.Sender.Now()
+	if goal.Arrived(now) {
+		return ctx.Err()
+	}
+	tx, ty, tz := goal.Dest(now)
+	sx, sy, sz := m.X, m.Y, m.Z
+	dist := Distance(sx, sy, sz, tx, ty, tz)
+	if dist <= StopDistance {
+		return ctx.Err()
+	}
+	base := m.base()
+	if err := m.Face(OrientationTo(sx, sy, tx, ty)); err != nil {
+		return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
+	}
+	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
+		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
+	}
+	m.walking = true
+	defer func() { m.walking = false }()
+	m.logf("chase: start forward from %.2f %.2f %.2f after %.2f %.2f %.2f (%.2f yd, run %.1f yd/s)",
+		sx, sy, sz, tx, ty, tz, dist, m.RunSpeed)
+
+	start := now
+	deadline := start.Add(walkTimeout(dist, m.RunSpeed))
+	lastSend := start
+	heartbeats := 0
+	replans := 0
+	for {
+		if err := m.Sender.WaitUntil(ctx, lastSend.Add(HeartbeatInterval)); err != nil {
+			m.advance(sx, sy, sz, tx, ty, tz, dist, start, m.Sender.Now())
+			_ = m.send(wire.CMSGMoveStop, base)
+			return err
+		}
+		if m.teleported {
+			m.teleported = false
+			_ = m.send(wire.CMSGMoveStop, base)
+			return ErrTeleported
+		}
+		now = m.Sender.Now()
+		m.advance(sx, sy, sz, tx, ty, tz, dist, start, now)
+		// The chase ends where the caller says, not where one walk point was: a target that walks inside reach
+		// during the leg ends it here.
+		if goal.Arrived(now) {
+			if err := m.sendAt(wire.CMSGMoveStop, base, now); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
+			}
+			m.logf("chase: stop at %.2f %.2f %.2f (%d heartbeats)", m.X, m.Y, m.Z, heartbeats)
+			return ctx.Err()
+		}
+		if !now.Before(deadline) {
+			_ = m.send(wire.CMSGMoveStop, base)
+			return fmt.Errorf("objects: the chase from %.2f %.2f %.2f did not finish in %s",
+				sx, sy, sz, walkTimeout(dist, m.RunSpeed))
+		}
+		nx, ny, nz := goal.Dest(now)
+		// Re-line only on a real change: a destination that is a function of the mover's own position would differ
+		// a little every tick and turn every heartbeat into a turn. And only while the one-second cap has room for
+		// the extra packet: the heartbeat below always goes.
+		moved := Distance(nx, ny, nz, tx, ty, tz) > chaseRetarget
+		dir := OrientationTo(m.X, m.Y, nx, ny)
+		if (moved || orientationDiff(dir, m.O) > chaseTurn) && m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
+			replans++
+			if replans > maxChaseReplans {
+				_ = m.send(wire.CMSGMoveStop, base)
+				return fmt.Errorf("objects: the chase re-planned %d times without arriving", maxChaseReplans)
+			}
+			if err := m.Face(dir); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
+			}
+			tx, ty, tz = nx, ny, nz
+			sx, sy, sz = m.X, m.Y, m.Z
+			dist = Distance(sx, sy, sz, tx, ty, tz)
+			if dist <= StopDistance {
+				// Standing on the walk point: the leg has no length to interpolate (a zero-length leg would divide
+				// by zero); the next heartbeat asks the goal again and either arrives or gets a new point.
+				dist = StopDistance
+			}
+			start = now
+			// Each straight leg gets its own timeout: a target that keeps moving is followed leg by leg, not
+			// abandoned at the first leg's deadline.
+			deadline = now.Add(walkTimeout(dist, m.RunSpeed))
+		}
+		if err := m.sendAt(wire.CMSGMoveHeartbeat, base|FlagForward, now); err != nil {
+			return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+		}
+		heartbeats++
+		lastSend = now
+	}
+}
+
 // walkTimeout is how long a leg may take: the distance at the run speed, with room for latency and the stop.
 func walkTimeout(dist, runSpeed float32) time.Duration {
 	if runSpeed <= 0 {
@@ -237,4 +387,13 @@ func walkTimeout(dist, runSpeed float32) time.Duration {
 // Stop sends CMSG_MOVE_STOP (used when a walk is abandoned).
 func (m *Mover) Stop() error {
 	return m.send(wire.CMSGMoveStop, m.base())
+}
+
+// orientationDiff is the absolute difference of two orientations in radians, folded into (-π, π].
+func orientationDiff(a, b float32) float32 {
+	d := normalizeOrientation(a - b)
+	if d > math.Pi {
+		d = 2*math.Pi - d
+	}
+	return d
 }

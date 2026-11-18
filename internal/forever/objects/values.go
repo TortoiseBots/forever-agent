@@ -191,12 +191,87 @@ func (i *Info) guid(b *wire.Buffer) wire.GUID {
 	return g
 }
 
-// PowerValue returns the unit's current and maximum power for the bar its display power selects.
+// Power types (SharedDefines.h:292-300).
+const (
+	powerMana   uint8 = 0
+	powerRage   uint8 = 1
+	powerEnergy uint8 = 3
+	powerCombo  uint8 = 4
+)
+
+// powerTypesByClass is the power TYPES a player class's Power/MaxPower array holds, in slot order. The server
+// numbers the slots by the ascending PowerType rows of ChrClassesXPowerTypes for the class
+// (DB2Stores.cpp:1171-1184 walks a set sorted by (ClassID, PowerType), :3580-3585 is the comparator), and both
+// Unit::SetPower and Unit::SetMaxPower index the array with GetPowerIndexByClass(power, GetClass())
+// (StatSystem.cpp:10497-10561, :345-347). Transcribed from the Classic store the audit realm serves
+// (WOWSTATIC_1_60_1_70399, ChrClassesXPowerTypes.db2: rows 1/rage+4/combo for the warrior, 0/mana+4/combo for the
+// mage, ...) on 2026-11-18; TestPowerSlotTable pins the transcription against the create blocks the server sends
+// (a warrior's MaxPower[0] is 1000 tenths of rage and [1] the 5 combo points; a mage's [0] is 333 mana and [1] the
+// same 5). A class missing here has no known slot order, and no power TYPE is ever written into a slot for it.
+var powerTypesByClass = [12][]uint8{
+	1:  {powerRage, powerCombo},                         // warrior
+	2:  {powerMana},                                     // paladin
+	3:  {powerMana},                                     // hunter
+	4:  {powerEnergy, powerCombo},                       // rogue
+	5:  {powerMana},                                     // priest
+	7:  {powerMana},                                     // shaman
+	8:  {powerMana, powerCombo},                         // mage
+	9:  {powerMana},                                     // warlock
+	11: {powerMana, powerRage, powerEnergy, powerCombo}, // druid
+}
+
+// PowerSlot returns where one power TYPE lives in the unit's Power array, and whether it can be placed. Players use
+// their class's ChrClassesXPowerTypes order; creatures use Creature::GetPowerIndex's positional slots
+// (StatSystem.cpp:1207-1231): the display power at 0, alternate power at 1, combo points at 2, the alternate quest,
+// encounter and mount powers at 3-5. Anything the class or the creature layout does not name is not placed, so a
+// power TYPE is never mistaken for a slot.
+func (i *Info) PowerSlot(powerType uint8) (int, bool) {
+	switch i.Type {
+	case TypePlayer, TypeActivePlayer:
+		if int(i.Class) < len(powerTypesByClass) {
+			for slot, t := range powerTypesByClass[i.Class] {
+				if t == powerType {
+					return slot, true
+				}
+			}
+		}
+		return 0, false
+	case TypeUnit:
+		switch powerType {
+		case i.DisplayPower:
+			return 0, true
+		case 1: // POWER_ALTERNATE_POWER
+			return 1, true
+		case powerCombo:
+			return 2, true
+		case 3: // POWER_ALTERNATE_QUEST
+			return 3, true
+		case 8: // POWER_ALTERNATE_ENCOUNTER
+			return 4, true
+		case 9: // POWER_ALTERNATE_MOUNT
+			return 5, true
+		}
+	}
+	return 0, false
+}
+
+// PowerOf returns the unit's current power of one TYPE, resolved through the class's slot order.
+func (i *Info) PowerOf(powerType uint8) int32 {
+	if slot, ok := i.PowerSlot(powerType); ok {
+		return i.Power[slot]
+	}
+	return 0
+}
+
+// PowerValue returns the unit's current and maximum power for the bar its display power selects. DisplayPower is a
+// power TYPE (Unit::SetPowerType stores the Powers value, Unit.cpp:6006), so the bar is Power at that type's slot,
+// never Power[type].
 func (i *Info) PowerValue() (int32, int32) {
-	if int(i.DisplayPower) >= len(i.Power) {
+	slot, ok := i.PowerSlot(i.DisplayPower)
+	if !ok {
 		return 0, 0
 	}
-	return i.Power[i.DisplayPower], i.MaxPower[i.DisplayPower]
+	return i.Power[slot], i.MaxPower[slot]
 }
 
 // readObjectCreate is ObjectData::WriteCreate (UpdateFields.cpp:50-55).

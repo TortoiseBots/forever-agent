@@ -32,6 +32,9 @@ type Buffer struct {
 	// guidHook, when set, receives every GUID a read decodes, including the ones a parser drops. It exists for the
 	// fixture audits (a real identifier must not reach a committed fixture); no production path sets it.
 	guidHook func(GUID)
+	// guidAtHook receives the same GUIDs with the payload offset of their packed form, which is what a fixture
+	// generator needs to rewrite exactly those bytes and nothing that merely looks like them.
+	guidAtHook func(GUID, int)
 }
 
 // NewWriter returns an empty Buffer.
@@ -45,6 +48,17 @@ func NewReader(data []byte) *Buffer {
 // SetGUIDHook makes every GUID this reader decodes pass through hook before it is returned or dropped. It is an
 // audit hook: call it before the first read, and leave it nil outside a test.
 func (b *Buffer) SetGUIDHook(hook func(GUID)) { b.guidHook = hook }
+
+// GUIDHook returns the audit hook a bounded sub-buffer has to inherit so a parse that frames a nested buffer still
+// reports every GUID it decodes (the attack round's size-prefixed buffer).
+func (b *Buffer) GUIDHook() func(GUID) { return b.guidHook }
+
+// SetGUIDAtHook makes every GUID this reader decodes pass through hook together with the offset of its packed form
+// from the start of the reader's payload. An audit seam like SetGUIDHook; nil outside a test.
+func (b *Buffer) SetGUIDAtHook(hook func(GUID, int)) { b.guidAtHook = hook }
+
+// GUIDAtHook returns the offset hook, for bounded sub-buffers that must inherit it.
+func (b *Buffer) GUIDAtHook() func(GUID, int) { return b.guidAtHook }
 
 // Err reports the first read error, if any.
 func (b *Buffer) Err() error { return b.err }

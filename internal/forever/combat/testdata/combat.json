@@ -1,0 +1,375 @@
+{
+  "note": "Synthetic fixtures for the combat round. The captured packets were cut from the private capture and every packed GUID, position and clock value rewritten with the same lengths and bit layout (the generator is fixture_gen_test.go). Packets whose source says \"live capture\" came from the fight-check debug capture (--provoke) and were rewritten the same way; the rest whose source says hand-built come from the server's writer because no player action produced the case. The payloads carry no opcode; the opcodes are the core's numbers, before the Classic wire translation.",
+  "packets": [
+    {
+      "name": "attack_start",
+      "opcode": "SMSG_ATTACK_START",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e332396a71353c20",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353c20"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "attack_stop",
+      "opcode": "SMSG_ATTACK_STOP",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e321285960242b2003e03239353c0880",
+      "synthetic_guids": [
+        "03e321285960242b20",
+        "03e03239353c08"
+      ],
+      "rewritten": [
+        "a stop whose NowDead bit is set (the victim died)",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "attacker_state_update",
+      "opcode": "SMSG_ATTACKER_STATE_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "00680000000200800003e02128242b0803e332396a71353c200a0000000a000000ffffffff0101000000000020410a0000000100000000000000002b00000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000803f00",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353c20"
+      ],
+      "rewritten": [
+        "a landed hit with a rage gain; the round's ContentTuning keeps its captured values (flags 3 = no level/item scaling, ids 0)",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "attacker_state_update_dodge",
+      "opcode": "SMSG_ATTACKER_STATE_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "00680000000200800003e02128242b0803e332396a71353c20000000000b000000ffffffff010100000000000000000000000200000000000000002300000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000803f00",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353c20"
+      ],
+      "rewritten": [
+        "victim state dodge (2)",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "aura_update",
+      "opcode": "SMSG_AURA_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "004003e02128242b0802008001e7326a7178353cbcb3050000ef9e0300000000000e000100000001000000000000000000000000000000000000b0200003e0434a464d0800a60e0000a60e0000000040",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "01e7326a7178353cbc",
+        "03e0434a464d08"
+      ],
+      "rewritten": [
+        "one aura with a duration and a caster; duration and remaining rewritten to 960000 ms",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "aura_update_multi",
+      "opcode": "SMSG_AURA_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "80c003e02128242b0800008001e7326a7178353cbc7550000000000000000000000300010000000100000000000000000000000000000000000000000001008001e743232a31464dbc7650000000000000000000000300010000000100000000000000000000000000000000000000000002008001e754343b42575ebcb3050000ef9e0300000000000e000100000001000000000000000000000000000000000000b0200003e0656c686f0800a60e0000a60e0000000040",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "01e7326a7178353cbc",
+        "01e743232a31464dbc",
+        "01e754343b42575ebc",
+        "03e0656c686f08"
+      ],
+      "rewritten": [
+        "three auras on one unit, the last with a duration; durations and remainings rewritten to 960000 ms",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "aura_removed",
+      "opcode": "SMSG_AURA_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "004003e321285960242b20000000",
+      "synthetic_guids": [
+        "03e321285960242b20"
+      ],
+      "rewritten": [
+        "the removal form: a slot and no aura data",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_start",
+      "opcode": "SMSG_SPELL_START",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e02128242b0803e332396a71353cbc000085000000859c030000000000020800000000000000000000dc0500000200000003e3434a232a464d20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000032010000",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353cbc",
+        "03e3434a232a464d20"
+      ],
+      "rewritten": [
+        "a cast with a cast time and a remaining-power list",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_go",
+      "opcode": "SMSG_SPELL_GO",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e02128242b0801e3326a71353cbc0000440300009b9d03000000000001010000000200000000000000a60e000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000100000000000003e02128242b080000",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "01e3326a71353cbc"
+      ],
+      "rewritten": [
+        "the GO's CastTime is the server uptime (getMSTime, Spell.cpp:4985) and was rewritten to 960000",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_failure",
+      "opcode": "SMSG_SPELL_FAILURE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e332396a71353cbc85000000859c0300000000000d000000",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353cbc"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_failed_other",
+      "opcode": "SMSG_SPELL_FAILED_OTHER",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e332396a71353cbc85000000859c0300000000000d0000",
+      "synthetic_guids": [
+        "03e02128242b08",
+        "03e332396a71353cbc"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_non_melee_damage_log",
+      "opcode": "SMSG_SPELL_NON_MELEE_DAMAGE_LOG",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e321285960242b2003e03239353c0803e3434a232a464dbc85000000859c0300000000001200000012000000ffffffff040000000000000000000000000000000000000000000000000000000000",
+      "synthetic_guids": [
+        "03e321285960242b20",
+        "03e03239353c08",
+        "03e3434a232a464dbc"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_periodic_aura_log",
+      "opcode": "SMSG_SPELL_PERIODIC_AURA_LOG",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e321285960242b2003e03239353c08040300000100000003000000050000000500000000000000010000000000000000000000000000000000",
+      "synthetic_guids": [
+        "03e321285960242b20",
+        "03e03239353c08"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_energize_log",
+      "opcode": "SMSG_SPELL_ENERGIZE_LOG",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0803e02128242b0864000000015a0000000000000000",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_delayed",
+      "opcode": "SMSG_SPELL_DELAYED",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b0800a60e00",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "the delay (a run's latency) rewritten to 960000 ms",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "power_update",
+      "opcode": "SMSG_POWER_UPDATE",
+      "source": "capture: 3-combat.pkt",
+      "payload": "03e02128242b08010000000165010000",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "attack_swing_error",
+      "opcode": "SMSG_ATTACK_SWING_ERROR",
+      "source": "live capture: forever fight-check --provoke, 2026-11-18",
+      "payload": "00",
+      "synthetic_guids": null,
+      "rewritten": [
+        "the server's own not-in-range answer, from a swing sent at 20.4 yd",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "attack_swing_landed_log",
+      "opcode": "SMSG_ATTACK_SWING_LANDED_LOG",
+      "source": "hand-built from the server's writer",
+      "payload": "00000000803c000000000000000a000000000000000000000000000000000000000040012300000000000000660000000200800003e0221118010803e044331801200700000007000000ffffffff01010000000000e040070000000100000000000000000300000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000803f00",
+      "synthetic_guids": [
+        "03e02211180108",
+        "03e04433180120"
+      ],
+      "rewritten": [
+        "Unit.cpp:5963-5968: uint32 0, then the full log packet of the same swing (log-data bit true)"
+      ]
+    },
+    {
+      "name": "cast_failed",
+      "opcode": "SMSG_CAST_FAILED",
+      "source": "live capture: forever fight-check --provoke, 2026-11-18",
+      "payload": "03e321285960242bbc4e000000e39c0300000000006c000000ffffffffffffffff0000",
+      "synthetic_guids": [
+        "03e321285960242bbc"
+      ],
+      "rewritten": [
+        "a real Heroic Strike refusal: Spell::prepare answered SPELL_FAILED_NO_POWER with the server's cast id and no start before it",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    },
+    {
+      "name": "spell_heal_log",
+      "opcode": "SMSG_SPELL_HEAL_LOG",
+      "source": "hand-built from the server's writer",
+      "payload": "03e0443318012003e02211180108921000003c0000001900000000000000000000000000000000",
+      "synthetic_guids": [
+        "03e04433180120",
+        "03e02211180108"
+      ],
+      "rewritten": [
+        "CombatLogPackets.cpp:180-222"
+      ]
+    },
+    {
+      "name": "spell_cooldown",
+      "opcode": "SMSG_SPELL_COOLDOWN",
+      "source": "hand-built from the server's writer",
+      "payload": "03e02211180108000100000092100000701700000000803f",
+      "synthetic_guids": [
+        "03e02211180108"
+      ],
+      "rewritten": [
+        "SpellPackets.cpp:671-689"
+      ]
+    },
+    {
+      "name": "cooldown_event",
+      "opcode": "SMSG_COOLDOWN_EVENT",
+      "source": "hand-built from the server's writer",
+      "payload": "9210000000",
+      "synthetic_guids": null,
+      "rewritten": [
+        "SpellPackets.cpp:620-627"
+      ]
+    },
+    {
+      "name": "clear_cooldown",
+      "opcode": "SMSG_CLEAR_COOLDOWN",
+      "source": "hand-built from the server's writer",
+      "payload": "9210000000",
+      "synthetic_guids": null,
+      "rewritten": [
+        "SpellPackets.cpp:641-649"
+      ]
+    },
+    {
+      "name": "clear_cooldowns",
+      "opcode": "SMSG_CLEAR_COOLDOWNS",
+      "source": "hand-built from the server's writer",
+      "payload": "02000000921000009310000000",
+      "synthetic_guids": null,
+      "rewritten": [
+        "SpellPackets.cpp:629-639: the count and the append(T*,count) list, four bytes each"
+      ]
+    },
+    {
+      "name": "log_xp_gain",
+      "opcode": "SMSG_LOG_XP_GAIN",
+      "source": "hand-built from the server's writer",
+      "payload": "03e044331801202d000000002d00000000000000",
+      "synthetic_guids": [
+        "03e04433180120"
+      ],
+      "rewritten": [
+        "CharacterPackets.cpp:881-890, reason 0 = kill"
+      ]
+    },
+    {
+      "name": "death_release_loc",
+      "opcode": "SMSG_DEATH_RELEASE_LOC",
+      "source": "hand-built from the server's writer",
+      "payload": "0000000000007a440000fa4400004842",
+      "synthetic_guids": null,
+      "rewritten": [
+        "MiscPackets.cpp:284-289"
+      ]
+    },
+    {
+      "name": "send_known_spells",
+      "opcode": "SMSG_SEND_KNOWN_SPELLS",
+      "source": "hand-built from the server's writer",
+      "payload": "800300000001000000cb190000111a000064000000cb190000",
+      "synthetic_guids": null,
+      "rewritten": [
+        "SpellPackets.cpp:490-510"
+      ]
+    },
+    {
+      "name": "spell_go_miss",
+      "opcode": "SMSG_SPELL_GO",
+      "source": "hand-built from the server's writer",
+      "payload": "03e0221118010803e02211180108018711822404bc0000921000000000000000000000000004000000000000000000000000000200000003e044331801200000000000000000000000000000000000000000000000000000000000000000000000000000000002000000020000000003e0443318012003e04433180120050b0300",
+      "synthetic_guids": [
+        "03e02211180108",
+        "018711822404bc",
+        "03e04433180120"
+      ],
+      "rewritten": [
+        "SpellPackets.cpp:415-464 with a miss list: a reflect entry carries its extra status byte"
+      ]
+    },
+    {
+      "name": "cast_failed_not_ready",
+      "opcode": "SMSG_CAST_FAILED",
+      "source": "live capture: forever fight-check --provoke, 2026-11-18",
+      "payload": "03e72128596067242bbc99090000c6a20300000000005b00000000000000ffffffff0000",
+      "synthetic_guids": [
+        "03e72128596067242bbc"
+      ],
+      "rewritten": [
+        "the refusal of a second Battle Shout inside the global cooldown: SPELL_FAILED_NOT_READY",
+        "every packed GUID the parse decoded was rewritten in place (the list is original -\u003e synthetic)"
+      ]
+    }
+  ]
+}

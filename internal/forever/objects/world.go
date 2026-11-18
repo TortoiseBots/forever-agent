@@ -41,6 +41,17 @@ type Object struct {
 	Partial bool
 	// Name is filled by the name lookups; EntryName belongs to Info.Entry (shared by all objects of that entry).
 	Name string
+
+	// Combat state (round 4): who this unit attacks and who attacks it (SMSG_ATTACK_START/STOP), the in-combat
+	// flag, death (health zero in the values or an attack stop that says so), the auras by slot and the cast in
+	// progress. Auras and Cast are written under the model's lock and read through Combat, which copies them.
+	Attacking  wire.GUID
+	AttackedBy wire.GUID
+	InCombat   bool
+	Dead       bool
+	Auras      map[uint16]*Aura
+	Cast       *CastState
+	Cooldowns  map[int32]time.Time
 }
 
 // Position returns the object's position, following the spline when it is moving and now is inside it (linear
@@ -225,6 +236,7 @@ func (w *World) Apply(u *Update, received time.Time) {
 		if !b.Values {
 			// The block header names the type even when its values cannot be decoded.
 			o.Type = b.ObjectType
+			o.Info.Type = b.ObjectType
 		}
 		if b.Unparsed != ReasonNone {
 			// Nothing decoded: the block is skipped by its size, the object is marked partial and the reason is
@@ -245,6 +257,11 @@ func (w *World) Apply(u *Update, received time.Time) {
 		// order and decoding stops at the first region it cannot decode, so every bit that is set names a field
 		// that ended before the first skipped region: the block's tail may be skipped, its decoded head is proven.
 		mergeInfo(&o.Info, b.Info)
+		applyDeathLocked(o)
+		if b.Info.f.Flags && o.Info.HasUnit {
+			// UNIT_FLAG_IN_COMBAT in the unit's flags is the server's own combat state for that unit.
+			o.InCombat = InCombatFromFlags(o.Info.Flags)
+		}
 		if mv := b.Movement; mv != nil {
 			if mv.MovementUpdate {
 				o.X, o.Y, o.Z, o.O = mv.X, mv.Y, mv.Z, mv.O
