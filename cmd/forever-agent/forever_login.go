@@ -50,6 +50,10 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever login-check: --rest, --rpc, --ca and --account are required")
 		return exitUsage
 	}
+	if *clientBuild == 0 || *clientBuild > 0xFFFFFFFF {
+		fmt.Fprintln(stderr, "forever login-check: --build must be a client build number")
+		return exitUsage
+	}
 	password := os.Getenv("FOREVER_PASSWORD")
 	if password == "" {
 		fmt.Fprintln(stderr, "forever login-check: FOREVER_PASSWORD is not set")

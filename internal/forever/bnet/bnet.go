@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// realmFlagVersionMismatch is RealmFlags::VersionMismatch: the realm is listed, but not for this client's build
+// (src/server/shared/Realm/Realm.h:33-42).
+const realmFlagVersionMismatch = 0x01
+
 // build70938 is the client build of the Forever client; the server accepts the login for it
 // (src/server/shared/Realm/ClientBuildInfo.cpp).
 const build70938 = 70938
@@ -204,6 +208,14 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	}
 	opts.logf("realm list: realm %d %q, address 0x%08X, build %d, population %d, flags 0x%02X",
 		realm.CfgRealmsID, realm.Name, realm.WowRealmAddress, realm.Version.Build, realm.PopulationState, realm.Flags)
+	if realm.PopulationState == 0 {
+		// RealmPopulationState::Offline (Realm.h:61-71): listed, but JoinRealm refuses it
+		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is offline; its world server has not written the realmlist row", realm.Name)}
+	}
+	if realm.Flags&realmFlagVersionMismatch != 0 {
+		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q does not accept client build %d (the realm is build %d)",
+			realm.Name, opts.ClientBuild, realm.Version.Build)}
+	}
 	result.RealmName = realm.Name
 	result.RealmID = realm.CfgRealmsID
 	result.RealmAddress = realm.WowRealmAddress
