@@ -79,6 +79,26 @@ func runCases(t *testing.T) []runCase {
 			reps:  []repCase{{eventsText: []string{"null"}}},
 		},
 		{
+			// With a raw trace the Python normalises over a null events line (its condition
+			// ignores non-dict rows), so the bad recorded events file is never read.
+			name:  "b5_events_null_with_raw_normalises",
+			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{
+				eventsText: []string{"null"},
+				raw:        []any{rawCast(1, "2026-01-01T00:00:05", 17, false)},
+			}},
+		},
+		{
+			// But a seq row before the null line keeps the Python from normalising, and the
+			// null row then raises: both sides must fail.
+			name:  "b5_events_seq_then_null_with_raw_fails",
+			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
+			reps: []repCase{{
+				eventsText: []string{`{"t": 1, "kind": "cast", "seq": 1}`, "null"},
+				raw:        []any{rawCast(1, "2026-01-01T00:00:05", 17, false)},
+			}},
+		},
+		{
 			name:  "b5_marks_number_line",
 			trial: newTrial(metricRule("B5", "count", map[string]any{"where": map[string]any{"kind": "cast"}}, ">= 1")),
 			reps:  []repCase{{marksText: []string{"123"}}},

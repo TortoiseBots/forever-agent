@@ -367,10 +367,7 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 	if err != nil {
 		return nil, nil, nil, nil, nil, false, err
 	}
-	rows, err = readJSONL(filepath.Join(repDir, "events.jsonl"))
-	if err != nil {
-		return nil, nil, nil, nil, nil, false, err
-	}
+	rows, eventsErr := readJSONL(filepath.Join(repDir, "events.jsonl"))
 	rawPath := filepath.Join(repDir, "raw-ta.jsonl")
 	hasSeqRow := false
 	for _, r := range rows {
@@ -379,6 +376,9 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 			break
 		}
 	}
+	// Python's condition ignores a non-object line: `(not rows or no seq row) and raw exists`.
+	// When it normalises, the bad events.jsonl is overwritten and the line never matters; when
+	// it does not, the Python keeps the line and fails on `.get` later.
 	if (len(rows) == 0 || !hasSeqRow) && fileExists(rawPath) {
 		rows, err = events.Normalise(repDir, trial)
 		if err != nil {
@@ -392,6 +392,8 @@ func loadRepRows(repDir string, trial Trial) (setup map[string]any, samples, mar
 		if err != nil {
 			return nil, nil, nil, nil, nil, false, err
 		}
+	} else if eventsErr != nil {
+		return nil, nil, nil, nil, nil, false, eventsErr
 	}
 	// The victim table needs the raw agent packets (attack_start/stop), which the normaliser
 	// drops; build it here once per rep.

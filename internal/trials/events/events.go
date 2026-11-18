@@ -151,7 +151,9 @@ func ReadJSONL(path string) ([]Row, error) {
 	return rows, err
 }
 
-// ReadJSONLNumbered is ReadJSONL with each row's 1-based line number.
+// ReadJSONLNumbered is ReadJSONL with each row's 1-based line number. It keeps reading after
+// a non-object line so the caller sees every object row the Python would see, and returns the
+// first such error.
 func ReadJSONLNumbered(path string) ([]Row, []int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -160,6 +162,7 @@ func ReadJSONLNumbered(path string) ([]Row, []int, error) {
 	defer f.Close()
 	var rows []Row
 	var lines []int
+	var firstErr error
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	lineNo := 0
@@ -175,12 +178,15 @@ func ReadJSONLNumbered(path string) ([]Row, []int, error) {
 		}
 		row, ok := pyjson.Object(doc)
 		if !ok {
-			return nil, nil, fmt.Errorf("%s:%d: expected a JSON object, got %s", path, lineNo, jsonKind(doc))
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s:%d: expected a JSON object, got %s", path, lineNo, jsonKind(doc))
+			}
+			continue
 		}
 		rows = append(rows, row)
 		lines = append(lines, lineNo)
 	}
-	return rows, lines, nil
+	return rows, lines, firstErr
 }
 
 // jsonKind names what a non-object JSON line parsed to, for the error above.
