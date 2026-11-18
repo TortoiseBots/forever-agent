@@ -29,6 +29,10 @@ const (
 
 var groupGenerator = big.NewInt(2)
 
+// maxChallengeHex bounds a hex integer from the challenge before it is parsed. Both moduli are 128 or 256 bytes
+// (256 or 512 hex digits), so anything far larger is not this server's group and does not get to allocate a big.Int.
+const maxChallengeHex = 4096
+
 // srpChallenge is the subset of SrpLoginChallenge this client needs.
 type srpChallenge struct {
 	Version      uint32
@@ -79,6 +83,9 @@ func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient
 		return nil, fmt.Errorf("srp: unknown version %d", c.Version)
 	}
 
+	if len(c.Modulus) > maxChallengeHex || len(c.Generator) > maxChallengeHex {
+		return nil, errors.New("srp: the challenge carries an implausible integer")
+	}
 	n, ok := new(big.Int).SetString(c.Modulus, 16)
 	if !ok || n.Sign() <= 0 {
 		return nil, errors.New("srp: the challenge has no usable modulus")
@@ -87,10 +94,14 @@ func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient
 	if known, _ := new(big.Int).SetString(modulusHex, 16); known.Cmp(n) != 0 {
 		return nil, errors.New("srp: the challenge modulus is not the one of that SRP version")
 	}
+	// the generator is the server's, but only as a check: both Battle.net groups fix g = 2
+	// (src/common/Cryptography/Authentication/SRP6.cpp:30,33). Any other value changes k and every proof input,
+	// and a value wider than N would make the padding below panic, so it is refused instead of used.
 	g := new(big.Int).Set(groupGenerator)
 	if c.Generator != "" {
-		if generated, ok := new(big.Int).SetString(c.Generator, 16); ok && generated.Sign() > 0 {
-			g = generated
+		generated, ok := new(big.Int).SetString(c.Generator, 16)
+		if !ok || generated.Cmp(groupGenerator) != 0 {
+			return nil, fmt.Errorf("srp: the challenge generator %q is not the group's 2", sanitizeServerText(c.Generator))
 		}
 	}
 	if len(c.Salt) != 32 {
@@ -99,21 +110,35 @@ func newSRPClient(c srpChallenge, password string, private *big.Int) (*srpClient
 	if len(c.PublicB) == 0 {
 		return nil, errors.New("srp: the challenge has no public B")
 	}
+	size := len(n.Bytes())
+	// reject an over-long encoding before SetBytes: the hashed form of B is padded to the modulus size, and
+	// FillBytes panics on a value that does not fit.
+	if len(c.PublicB) > size {
+		return nil, fmt.Errorf("srp: the server's public B is %d bytes, the group is %d", len(c.PublicB), size)
+	}
+	b := new(big.Int).SetBytes(c.PublicB)
+	// the server's own verifier works mod N and refuses A % N == 0 (SRP6.cpp:163-180); B outside [1, N) is not a
+	// group element, and using it would also break the padding assumption above.
+	if b.Sign() <= 0 || b.Cmp(n) >= 0 {
+		return nil, errors.New("srp: the server's public B is not in [1, N)")
+	}
+
+	a := private
+	if a == nil {
+		var err error
+		a, err = randomScalar(n)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	s := &srpClient{
 		n:    n,
 		g:    g,
-		size: len(n.Bytes()),
+		size: size,
 		salt: c.Salt,
-		b:    new(big.Int).SetBytes(c.PublicB),
-		a:    private,
-	}
-	if s.b.Sign() == 0 || new(big.Int).Mod(s.b, n).Sign() == 0 {
-		return nil, errors.New("srp: the server's public B is zero")
-	}
-
-	if s.a == nil {
-		s.a = randomScalar(n)
+		b:    b,
+		a:    a,
 	}
 
 	x, err := srpPasswordKey(c.Version, c.Iterations, c.Username, password, c.Salt, n)
@@ -171,11 +196,15 @@ func srpPasswordKey(version, iterations uint32, srpUsername, password string, sa
 	return nil, fmt.Errorf("srp: unknown version %d", version)
 }
 
-// verify checks the server evidence M2 of the login answer.
+// verify checks the server evidence M2 of the login answer. The server sends it with BN_bn2hex
+// (src/server/bnetserver/REST/LoginRESTService.cpp:364, BigNumber::AsHexStr in
+// src/common/Cryptography/BigNumber.cpp:210-216), which prints no leading zero bytes; a digest whose first byte is
+// zero therefore arrives as 31 bytes of hex. The decoded value is left-padded back to the digest length before the
+// comparison, and a value wider than the digest is refused.
 func (s *srpClient) verify(serverM2Hex string) error {
-	got, err := hex.DecodeString(strings.TrimSpace(serverM2Hex))
+	got, err := decodeServerEvidence(serverM2Hex, len(s.M2))
 	if err != nil {
-		return fmt.Errorf("srp: server evidence is not hex: %w", err)
+		return err
 	}
 	if subtle.ConstantTimeCompare(got, s.M2) != 1 {
 		return errors.New("srp: the server evidence M2 does not match")
@@ -183,9 +212,60 @@ func (s *srpClient) verify(serverM2Hex string) error {
 	return nil
 }
 
-func (s *srpClient) publicAHex() string          { return strings.ToUpper(s.A.Text(16)) }
-func (s *srpClient) evidenceM1Hex() string       { return strings.ToUpper(hex.EncodeToString(s.M1)) }
-func (s *srpClient) serverEvidenceM2Hex() string { return strings.ToUpper(hex.EncodeToString(s.M2)) }
+// decodeServerEvidence turns a number-as-hex into its size-byte big-endian form. BN_bn2hex drops leading zeros and
+// prints a zero-valued number as "0", so a short or odd-length string is a value, not a malformed digest; anything
+// needing more than size bytes is not this digest.
+func decodeServerEvidence(text string, size int) ([]byte, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, errors.New("srp: the server evidence M2 is empty")
+	}
+	if size <= 0 {
+		return nil, errors.New("srp: no digest length to decode the server evidence into")
+	}
+	out := make([]byte, size)
+	pos := size
+	for end := len(text); end > 0; {
+		start := end - 2
+		if start < 0 {
+			start = end - 1
+		}
+		hi, ok := hexNibble(text[start])
+		if !ok {
+			return nil, fmt.Errorf("srp: the server evidence M2 is not hex (byte %q)", text[start])
+		}
+		value := hi
+		if end-start == 2 {
+			lo, ok := hexNibble(text[start+1])
+			if !ok {
+				return nil, fmt.Errorf("srp: the server evidence M2 is not hex (byte %q)", text[start+1])
+			}
+			value = hi<<4 | lo
+		}
+		if pos == 0 {
+			return nil, fmt.Errorf("srp: the server evidence M2 is longer than %d bytes", size)
+		}
+		pos--
+		out[pos] = value
+		end = start
+	}
+	return out, nil
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+func (s *srpClient) publicAHex() string    { return strings.ToUpper(s.A.Text(16)) }
+func (s *srpClient) evidenceM1Hex() string { return strings.ToUpper(hex.EncodeToString(s.M1)) }
 
 // pad left-pads a value to the modulus length, the form every hashed pair in SRP uses.
 func (s *srpClient) pad(v *big.Int) []byte {
@@ -229,16 +309,16 @@ func reverse(b []byte) {
 }
 
 // randomScalar picks the client private a in [1, N-1), 256 bits of randomness like a real client.
-func randomScalar(n *big.Int) *big.Int {
+func randomScalar(n *big.Int) (*big.Int, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand never fails on a supported platform; a broken RNG must not produce a weak key
-		panic(fmt.Sprintf("bnet: no randomness: %v", err))
+		// a broken RNG must not produce a weak key, so the caller gets an error instead of a panic
+		return nil, fmt.Errorf("bnet: no randomness: %w", err)
 	}
 	a := new(big.Int).SetBytes(buf)
 	a.Mod(a, n)
 	if a.Sign() == 0 {
 		a.SetInt64(1)
 	}
-	return a
+	return a, nil
 }

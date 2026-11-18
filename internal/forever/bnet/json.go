@@ -177,7 +177,7 @@ func decodeCompressed(blob []byte, wantPrefix string, v any) error {
 		return err
 	}
 	if prefix != wantPrefix {
-		return fmt.Errorf("bnet: blob prefix %q, want %q", prefix, wantPrefix)
+		return fmt.Errorf("bnet: blob prefix %q, want %q", sanitizeServerText(prefix), wantPrefix)
 	}
 	if err := json.Unmarshal(body, v); err != nil {
 		return fmt.Errorf("bnet: %s: %w", wantPrefix, err)

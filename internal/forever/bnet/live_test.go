@@ -58,7 +58,10 @@ func TestLiveLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.RealmName == "" || result.RealmID == 0 || result.RealmAddress == 0 {
-		t.Fatalf("join answer without a realm: %+v", result)
+		t.Fatalf("join answer without a realm: name=%d chars id=%d address=0x%08X, tickets=%d/%d bytes, secrets=%d/%d/%d bytes",
+			len(result.RealmName), result.RealmID, result.RealmAddress,
+			len(result.LoginTicket), len(result.JoinTicket),
+			len(result.SessionKey), len(result.ClientSecret), len(result.JoinSecret))
 	}
 	if len(result.JoinTicket) == 0 || len(result.JoinSecret) != 32 || len(result.SessionKey) != 64 {
 		t.Fatalf("join answer incomplete: ticket %d, secret %d, session key %d",

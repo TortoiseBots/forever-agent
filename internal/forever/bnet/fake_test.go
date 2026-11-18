@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -27,6 +28,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const fakeServerName = "login.test"
@@ -99,25 +102,55 @@ func compressJSON(t *testing.T, prefix string, v any) []byte {
 	return append(out, buf.Bytes()...)
 }
 
-// brokenEvidence is the server's evidence encoding: big-endian, (bits+8)>>3 bytes (SRP6.cpp:182-186).
-func brokenEvidence(v *big.Int) []byte {
+// The fake server's arithmetic is its own: it must not call the client's digest/pad/broken helpers, or a bug the
+// two share would stay invisible to the end-to-end test. These four functions are the whole server-side primitive
+// set; TestFakeEvidenceMatchesVectors pins them against the C++-produced vectors.
+
+func fakeSHA256(parts ...[]byte) []byte {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write(p)
+	}
+	return h.Sum(nil)
+}
+
+// fakeBroken is the server's evidence input: big-endian, (bits+8)>>3 bytes (SRP6.cpp:182-186).
+func fakeBroken(v *big.Int) []byte {
 	out := make([]byte, (v.BitLen()+8)>>3)
 	v.FillBytes(out)
 	return out
 }
 
-func padTo(v *big.Int, size int) []byte {
+func fakePad(v *big.Int, size int) []byte {
 	out := make([]byte, size)
 	v.FillBytes(out)
 	return out
 }
 
-// fakeSRP is the server half of SRP6: the verifier of a vector account and a fixed b.
+func fakeEvidenceM1(a, b, s *big.Int) []byte {
+	return fakeSHA256(fakeBroken(a), fakeBroken(b), fakeBroken(s))
+}
+
+func fakeEvidenceM2(a *big.Int, m1 *big.Int, s *big.Int) []byte {
+	return fakeSHA256(fakeBroken(a), fakeBroken(m1), fakeBroken(s))
+}
+
+func fakeReverse(b []byte) {
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+}
+
+// fakeSRP is the server half of SRP6: the verifier of a vector account and a fixed b. When vector is set, verify
+// compares the client's evidence with that C++-produced vector instead of recomputing it.
 type fakeSRP struct {
 	n, g, k, v, b, B *big.Int
 	salt             []byte
 	username         string
 	password         string
+	version          uint32
+	iterations       uint32
+	vector           *srpVector
 }
 
 func newFakeSRP(t *testing.T) *fakeSRP {
@@ -141,16 +174,18 @@ func newFakeSRP(t *testing.T) *fakeSRP {
 		t.Fatal("no v2 vector")
 	}
 	f := &fakeSRP{
-		n:        new(big.Int).SetBytes(mustHex(t, chosen.Modulus)),
-		g:        new(big.Int).SetInt64(2),
-		salt:     mustHex(t, chosen.Salt),
-		username: chosen.SRPUsername,
-		password: chosen.Password,
+		n:          new(big.Int).SetBytes(mustHex(t, chosen.Modulus)),
+		g:          new(big.Int).SetInt64(2),
+		salt:       mustHex(t, chosen.Salt),
+		username:   chosen.SRPUsername,
+		password:   chosen.Password,
+		version:    2,
+		iterations: 15000,
 	}
 	size := len(f.n.Bytes())
-	f.k = new(big.Int).SetBytes(digest(padTo(f.n, size), padTo(f.g, size)))
+	f.k = new(big.Int).SetBytes(fakeSHA256(fakePad(f.n, size), fakePad(f.g, size)))
 	verifier := mustHex(t, chosen.Verifier) // little-endian on disk
-	reverse(verifier)
+	fakeReverse(verifier)
 	f.v = new(big.Int).SetBytes(verifier)
 	f.b = new(big.Int).SetBytes([]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88})
 	f.B = new(big.Int).Add(new(big.Int).Exp(f.g, f.b, f.n), new(big.Int).Mul(f.k, f.v))
@@ -158,41 +193,130 @@ func newFakeSRP(t *testing.T) *fakeSRP {
 	return f
 }
 
-func (f *fakeSRP) challenge() srpChallengeJSON {
-	return srpChallengeJSON{
-		Version: 2, Iterations: 15000,
-		Modulus:      strings.ToUpper(f.n.Text(16)),
-		Generator:    "02",
-		HashFunction: "SHA-256",
-		Username:     f.username,
-		Salt:         hex.EncodeToString(f.salt),
-		PublicB:      strings.ToUpper(f.B.Text(16)),
+// challengeJSON is the SrpLoginChallenge answer written out by the fake itself (not through the client's struct).
+func (f *fakeSRP) challengeJSON() map[string]any {
+	return map[string]any{
+		"version":       f.version,
+		"iterations":    f.iterations,
+		"modulus":       strings.ToUpper(f.n.Text(16)),
+		"generator":     "02",
+		"hash_function": "SHA-256",
+		"username":      f.username,
+		"salt":          hex.EncodeToString(f.salt),
+		"public_B":      strings.ToUpper(f.B.Text(16)),
 	}
 }
 
-// verify checks the client evidence and returns the server evidence M2.
+// verify checks the client evidence and returns the server evidence M2 as the text BN_bn2hex produces (no leading
+// zero bytes), which is what the real server sends.
 func (f *fakeSRP) verify(publicAHex, m1Hex string) (string, error) {
 	a, ok := new(big.Int).SetString(publicAHex, 16)
-	if !ok || a.Sign() == 0 {
+	if !ok || a.Sign() == 0 || a.Cmp(f.n) >= 0 {
 		return "", fmt.Errorf("bad A")
 	}
 	clientM1, ok := new(big.Int).SetString(m1Hex, 16)
 	if !ok {
 		return "", fmt.Errorf("bad M1")
 	}
+	if f.vector != nil {
+		// the pinned case: the client must reproduce the C++ vector bit for bit, and the answer is the vector's
+		// own M2 text (BN_bn2hex form), not a recomputation
+		wantA, _ := new(big.Int).SetString(f.vector.ClientPublicA, 16)
+		wantM1, _ := new(big.Int).SetString(f.vector.ClientEvidenceM1, 16)
+		if a.Cmp(wantA) != 0 {
+			return "", fmt.Errorf("A is not the vector's")
+		}
+		if clientM1.Cmp(wantM1) != 0 {
+			return "", fmt.Errorf("client evidence is not the vector's")
+		}
+		return f.vector.ServerEvidenceM2, nil
+	}
 	size := len(f.n.Bytes())
-	u := new(big.Int).SetBytes(digest(padTo(a, size), padTo(f.B, size)))
+	u := new(big.Int).SetBytes(fakeSHA256(fakePad(a, size), fakePad(f.B, size)))
 	s := new(big.Int).Exp(f.v, u, f.n)
 	s.Mul(s, a)
 	s.Mod(s, f.n)
 	s.Exp(s, f.b, f.n)
 
-	m1 := new(big.Int).SetBytes(digest(brokenEvidence(a), brokenEvidence(f.B), brokenEvidence(s)))
-	if m1.Cmp(clientM1) != 0 {
+	ourM1 := new(big.Int).SetBytes(fakeEvidenceM1(a, f.B, s))
+	if ourM1.Cmp(clientM1) != 0 {
 		return "", fmt.Errorf("client evidence does not match")
 	}
-	m2 := new(big.Int).SetBytes(digest(brokenEvidence(a), brokenEvidence(clientM1), brokenEvidence(s)))
+	m2 := new(big.Int).SetBytes(fakeEvidenceM2(a, ourM1, s))
 	return strings.ToUpper(m2.Text(16)), nil
+}
+
+// fakeLogonRequest is the subset of authentication.v1.LogonRequest the fake checks.
+type fakeLogonRequest struct {
+	program, platform, locale string
+	build                     uint64
+	ticket                    []byte
+}
+
+// parseFakeLogonRequest walks the request field by field (program 1, platform 2, locale 3, application_version 6,
+// cached_web_credentials 12). It uses the wire format directly, so it does not inherit a bug in the client's
+// encoder or struct tags.
+func parseFakeLogonRequest(b []byte) (fakeLogonRequest, error) {
+	var out fakeLogonRequest
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return out, protowire.ParseError(n)
+		}
+		b = b[n:]
+		switch typ {
+		case protowire.VarintType:
+			v, m := protowire.ConsumeVarint(b)
+			if m < 0 {
+				return out, protowire.ParseError(m)
+			}
+			b = b[m:]
+			if num == 6 {
+				out.build = v
+			}
+		case protowire.BytesType:
+			v, m := protowire.ConsumeBytes(b)
+			if m < 0 {
+				return out, protowire.ParseError(m)
+			}
+			b = b[m:]
+			switch num {
+			case 1:
+				out.program = string(v)
+			case 2:
+				out.platform = string(v)
+			case 3:
+				out.locale = string(v)
+			case 12:
+				out.ticket = v
+			}
+		default:
+			return out, fmt.Errorf("unexpected wire type %d for field %d", typ, num)
+		}
+	}
+	return out, nil
+}
+
+// TestFakeEvidenceMatchesVectors checks the fake's own evidence code against the values the server's C++ produced:
+// the same A, B and S must give the vector's M1, and the same M1 must give the vector's M2 in the server's stripped
+// text form. This is what makes the end-to-end test trustworthy even though the fake and the client share no code.
+func TestFakeEvidenceMatchesVectors(t *testing.T) {
+	for _, v := range loadVectors(t) {
+		a, ok := new(big.Int).SetString(v.ClientPublicA, 16)
+		b, okB := new(big.Int).SetString(v.ServerPublicB, 16)
+		s, okS := new(big.Int).SetString(v.SessionS, 16)
+		if !ok || !okB || !okS {
+			t.Fatalf("%s: bad vector hex", v.Name)
+		}
+		m1 := new(big.Int).SetBytes(fakeEvidenceM1(a, b, s))
+		if got := strings.ToUpper(m1.Text(16)); got != strings.ToUpper(v.ClientEvidenceM1) {
+			t.Errorf("%s: fake M1 = %s, want %s", v.Name, got, v.ClientEvidenceM1)
+		}
+		m2 := new(big.Int).SetBytes(fakeEvidenceM2(a, m1, s))
+		if got := strings.ToUpper(m2.Text(16)); got != strings.ToUpper(v.ServerEvidenceM2) {
+			t.Errorf("%s: fake M2 = %s, want %s", v.Name, got, v.ServerEvidenceM2)
+		}
+	}
 }
 
 // fakeLogin runs the two listeners and answers Login for the vector account.
@@ -208,11 +332,52 @@ type fakeLogin struct {
 	realmPopulation uint32
 	realmFlags      uint32
 	realmBuild      uint32
+	restFailBody    string // when set, the SRP request answers 500 with this body
+	rpcDrip         bool   // when set, the RPC port never answers the connect request
+}
+
+// fakeLoginForm is the subset of the client's LoginForm the fake reads, parsed by the fake's own type so a wrong
+// field name in the client's struct does not pass unnoticed.
+type fakeLoginForm struct {
+	Inputs []struct {
+		InputID string `json:"input_id"`
+		Value   string `json:"value"`
+	} `json:"inputs"`
+}
+
+func (f *fakeLoginForm) values() map[string]string {
+	out := map[string]string{}
+	for _, in := range f.Inputs {
+		out[in.InputID] = in.Value
+	}
+	return out
 }
 
 const fakeGameAccountID = 7
 
 func newFakeLogin(t *testing.T) *fakeLogin {
+	t.Helper()
+	return newFakeLoginWith(t, newFakeSRP(t))
+}
+
+// newFakeLoginForVector is the fake server pinned to one C++-produced vector: the challenge carries its salt, B and
+// version, and the proof is accepted only if the client reproduces the vector's A and M1.
+func newFakeLoginForVector(t *testing.T, v srpVector) *fakeLogin {
+	t.Helper()
+	return newFakeLoginWith(t, &fakeSRP{
+		n:          new(big.Int).SetBytes(mustHex(t, v.Modulus)),
+		g:          new(big.Int).SetInt64(2),
+		salt:       mustHex(t, v.Salt),
+		username:   v.SRPUsername,
+		password:   v.Password,
+		version:    v.Version,
+		iterations: v.Iterations,
+		B:          new(big.Int).SetBytes(mustHex(t, v.ServerPublicB)),
+		vector:     &v,
+	})
+}
+
+func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 	t.Helper()
 	caPEM, cert := fakeCert(t)
 	caFile := filepath.Join(t.TempDir(), "root_ca.pem")
@@ -220,7 +385,7 @@ func newFakeLogin(t *testing.T) *fakeLogin {
 		t.Fatal(err)
 	}
 	f := &fakeLogin{
-		t: t, srp: newFakeSRP(t), caFile: caFile,
+		t: t, srp: srp, caFile: caFile,
 		ticket:          "TC-" + strings.Repeat("AB", 20),
 		errs:            make(chan error, 16),
 		realmPopulation: 1, realmBuild: build70938,
@@ -243,23 +408,23 @@ func newFakeLogin(t *testing.T) *fakeLogin {
 		})
 	})
 	mux.HandleFunc(srpPath, func(w http.ResponseWriter, r *http.Request) {
-		var form loginForm
+		if f.restFailBody != "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(f.restFailBody))
+			return
+		}
+		var form fakeLoginForm
 		if err := json.NewDecoder(r.Body).Decode(&form); err != nil {
 			http.Error(w, "bad body", http.StatusBadRequest)
 			return
 		}
-		found := false
-		for _, in := range form.Inputs {
-			if in.InputID == "account_name" && strings.EqualFold(in.Value, "VECTOR@LOCAL") {
-				found = true
-			}
-		}
+		found := strings.EqualFold(form.values()["account_name"], "VECTOR@LOCAL")
 		if !found {
-			_ = json.NewEncoder(w).Encode(loginResultJSON{AuthenticationState: "DONE"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"authentication_state": "DONE"})
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "session-1", Path: "/bnetserver", Secure: true, HttpOnly: true})
-		_ = json.NewEncoder(w).Encode(f.srp.challenge())
+		_ = json.NewEncoder(w).Encode(f.srp.challengeJSON())
 	})
 	f.rest = httptest.NewUnstartedServer(mux)
 	f.rest.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
@@ -274,24 +439,21 @@ func (f *fakeLogin) handleProof(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no session cookie", http.StatusUnauthorized)
 		return
 	}
-	var form loginForm
+	var form fakeLoginForm
 	if err := json.NewDecoder(r.Body).Decode(&form); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	values := map[string]string{}
-	for _, in := range form.Inputs {
-		values[in.InputID] = in.Value
-	}
+	values := form.values()
 	m2, err := f.srp.verify(values["public_A"], values["client_evidence_M1"])
 	if err != nil {
-		_ = json.NewEncoder(w).Encode(loginResultJSON{AuthenticationState: "DONE"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"authentication_state": "DONE"})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(loginResultJSON{
-		AuthenticationState: "DONE",
-		LoginTicket:         f.ticket,
-		ServerEvidenceM2:    m2,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"authentication_state": "DONE",
+		"login_ticket":         f.ticket,
+		"server_evidence_M2":   m2,
 	})
 }
 
@@ -402,11 +564,34 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 	defer raw.Close()
 	c := fakeConn{Conn: raw}
 	_ = raw.SetDeadline(time.Now().Add(30 * time.Second))
+	if f.rpcDrip {
+		if _, _, err := c.readFrame(); err != nil {
+			return
+		}
+		for i := 0; ; i++ {
+			if err := c.writeFrame(Header{
+				ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash,
+				MethodID: 99, Token: uint32(i),
+			}, nil); err != nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	wantToken := uint32(0)
 	for {
 		h, body, err := c.readFrame()
 		if err != nil {
 			return
 		}
+		if h.ServiceID != serviceIDRequest {
+			f.fail("rpc request with service id 0x%X", h.ServiceID)
+			return
+		}
+		if h.Token != wantToken {
+			f.fail("rpc request token %d, want %d", h.Token, wantToken)
+		}
+		wantToken++
 		switch {
 		case h.ServiceHash == connectionServiceHash && h.MethodID == connectionConnectMethod:
 			resp := putBytes(nil, 1, ProcessID{Label: 1, Epoch: 2}.marshal())
@@ -418,11 +603,19 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			}
 
 		case h.ServiceHash == authenticationServiceHash && h.MethodID == authenticationLogonMethod:
-			if !bytes.Contains(body, []byte(f.ticket)) {
-				f.fail("logon request does not carry the login ticket")
+			logon, err := parseFakeLogonRequest(body)
+			if err != nil {
+				f.fail("logon request: %v", err)
+				return
 			}
-			if !bytes.Contains(body, []byte("WoW")) || !bytes.Contains(body, []byte("Wn64")) || !bytes.Contains(body, []byte("enUS")) {
-				f.fail("logon request lacks program/platform/locale")
+			if logon.program != "WoW" || logon.platform != "Wn64" || logon.locale != "enUS" {
+				f.fail("logon program/platform/locale = %q/%q/%q", logon.program, logon.platform, logon.locale)
+			}
+			if logon.build != build70938 {
+				f.fail("logon application_version = %d, want %d", logon.build, build70938)
+			}
+			if !bytes.Equal(logon.ticket, []byte(f.ticket)) {
+				f.fail("logon cached_web_credentials = %q, want the login ticket", logon.ticket)
 			}
 			if err := f.respond(c, h, nil); err != nil { // NoData
 				return

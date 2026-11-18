@@ -222,7 +222,7 @@ func TestFrameRoundTrip(t *testing.T) {
 		}
 		gotWire <- raw
 	}()
-	if err := session.writeFrame(context.Background(), Header{
+	if err := session.writeFrame(Header{
 		ServiceID: serviceIDRequest, MethodID: connectionConnectMethod, Token: 0, Size: uint32(len(body)), ServiceHash: connectionServiceHash,
 	}, body); err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestFrameRoundTrip(t *testing.T) {
 	go func() {
 		_, _ = client.Write(hexBytes(t, wantOnWire))
 	}()
-	h, gotBody, err := srv.readFrame(context.Background())
+	h, gotBody, err := srv.readFrame()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestFrameRejectsOversizedBody(t *testing.T) {
 	frame := "0009" + "08FE01" + "1801" + "28818040"
 	go func() { _, _ = server.Write(hexBytes(t, frame)) }()
 	session := &rpcSession{conn: client, timeout: 5 * time.Second, logf: func(string, ...any) {}}
-	if _, _, err := session.readFrame(context.Background()); err == nil {
+	if _, _, err := session.readFrame(); err == nil {
 		t.Fatal("a body over the server's own 1 MiB cap was accepted")
 	}
 }
@@ -266,7 +266,136 @@ func TestFrameRejectsEmptyHeader(t *testing.T) {
 	defer server.Close()
 	go func() { _, _ = server.Write([]byte{0, 0}) }()
 	session := &rpcSession{conn: client, timeout: 5 * time.Second, logf: func(string, ...any) {}}
-	if _, _, err := session.readFrame(context.Background()); err == nil {
+	if _, _, err := session.readFrame(); err == nil {
 		t.Fatal("an empty header was accepted")
+	}
+}
+
+// dripServer drains one request and then writes a frame that is not the answer every interval. It returns when the
+// client closes the connection or the loop runs out.
+func dripServer(t *testing.T, conn net.Conn, interval time.Duration, headers func(int) Header) {
+	t.Helper()
+	srv := &rpcSession{conn: conn, timeout: time.Minute, logf: func(string, ...any) {}}
+	if _, _, err := srv.readFrame(); err != nil {
+		return
+	}
+	for i := range 1000 {
+		if err := srv.writeFrame(headers(i), nil); err != nil {
+			return
+		}
+		time.Sleep(interval)
+	}
+}
+
+// TestCallSlowDripExpires pins the one absolute deadline per call: a server that keeps a frame coming before every
+// read must not be able to renew it. The per-call timeout is 200 ms; the call has to fail near that, not run on.
+func TestCallSlowDripExpires(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go dripServer(t, server, 20*time.Millisecond, func(i int) Header {
+		return Header{ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash, MethodID: 99, Token: uint32(i)}
+	})
+
+	session := &rpcSession{conn: client, timeout: 200 * time.Millisecond, logf: func(string, ...any) {}}
+	start := time.Now()
+	_, err := session.call(context.Background(), gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil)
+	if err == nil {
+		t.Fatal("a server that never answers produced a response")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the call took %s; the deadline moved with the traffic", elapsed)
+	}
+}
+
+// TestCallCancelledContextUnblocksRead makes sure cancelling the context interrupts a read that has a long socket
+// deadline. The server reads the request and then stays silent.
+func TestCallCancelledContextUnblocksRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		srv := &rpcSession{conn: server, timeout: time.Minute, logf: func(string, ...any) {}}
+		_, _, _ = srv.readFrame()
+	}()
+
+	session := &rpcSession{conn: client, timeout: time.Minute, logf: func(string, ...any) {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := session.call(ctx, gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil)
+	if err == nil {
+		t.Fatal("a cancelled call returned a response")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancellation took %s; the read was not interrupted", elapsed)
+	}
+}
+
+// TestCallCapsIgnoredFrames makes a server that answers other tokens forever end in an error, not in a loop.
+func TestCallCapsIgnoredFrames(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		srv := &rpcSession{conn: server, timeout: time.Minute, logf: func(string, ...any) {}}
+		if _, _, err := srv.readFrame(); err != nil {
+			return
+		}
+		for range maxIgnoredFrames + 1 {
+			if err := srv.writeFrame(Header{ServiceID: serviceIDResponse, Token: 999}, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	session := &rpcSession{conn: client, timeout: 5 * time.Second, logf: func(string, ...any) {}}
+	_, err := session.call(context.Background(), gameUtilitiesServiceHash, gameUtilitiesGetAllValuesMethod, nil)
+	if err == nil || !strings.Contains(err.Error(), "not the answer") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestHeaderRequiresServiceIDAndToken: bgs.protocol.Header declares both required, and a frame without them cannot
+// be routed or matched to a call.
+func TestHeaderRequiresServiceIDAndToken(t *testing.T) {
+	if _, err := unmarshalHeader(hexBytes(t, "08FE01")); err == nil {
+		t.Fatal("a header without a token was accepted")
+	}
+	if _, err := unmarshalHeader(hexBytes(t, "1807")); err == nil {
+		t.Fatal("a header without a service id was accepted")
+	}
+	if _, err := unmarshalHeader(hexBytes(t, "08001800")); err != nil {
+		t.Fatalf("a minimal header (service id 0, token 0) was rejected: %v", err)
+	}
+}
+
+// TestUnmarshalChecksWireTypes: a field read as an integer must actually be a varint, and a nested message must be
+// length-delimited; otherwise the decoder would read 0 and pretend the message was fine.
+func TestUnmarshalChecksWireTypes(t *testing.T) {
+	if _, err := unmarshalHeader(hexBytes(t, "0A0100"+"1800")); err == nil { // 1 as bytes
+		t.Fatal("a bytes field 1 in a header was accepted")
+	}
+	if _, err := unmarshalHeader(hexBytes(t, "0800"+"1800"+"5801")); err == nil { // 11 as varint
+		t.Fatal("a varint service hash was accepted")
+	}
+	if _, err := unmarshalEntityID(hexBytes(t, "0A0100")); err == nil { // 1 as bytes
+		t.Fatal("a bytes field 1 in an EntityId was accepted")
+	}
+	if _, err := unmarshalLogonResult(hexBytes(t, "0A0100")); err == nil { // 1 as bytes
+		t.Fatal("a bytes error_code was accepted")
+	}
+	if _, err := unmarshalAttribute(hexBytes(t, "0A001001")); err == nil { // 2 as varint
+		t.Fatal("a varint attribute value was accepted")
+	}
+	// and a nested message that is not a message is an error, not a zero value
+	if _, err := unmarshalConnectResponse(append(putBytes(nil, 1, []byte{0x0A, 0x01, 0xFF}), putVarint(nil, 6, 1)...)); err == nil {
+		t.Fatal("a nested ProcessId with a bytes label was accepted")
 	}
 }

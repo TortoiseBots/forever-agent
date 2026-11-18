@@ -148,3 +148,44 @@ messages, extracting the `.proto` files from the embedded descriptors and runnin
 7. **`ciid` in request headers.** Responses always carry the `ciid` the server assigned in `ConnectResponse`; this
    client does not echo it in later request headers, and the server does not read it. A capture would settle what the
    real client sends.
+
+## Fix round (same round 1, after the two reviews)
+
+1. **`server_evidence_M2` loses its leading zero bytes.** The server prints it with `BN_bn2hex`
+   (`LoginRESTService.cpp:364`, `BigNumber::AsHexStr` in `BigNumber.cpp:210-216`), so one digest in 256 arrives as 62
+   hex characters. `srpClient.verify` now decodes the value with `decodeServerEvidence`, left-pads it to the digest
+   length (a zero value prints as `"0"`, an odd length) and rejects anything wider than the digest. The other
+   number-as-hex values were checked for the same stripping: `modulus`, `generator` and `public_B` are parsed as
+   numbers, so the stripped zeros do not change them; `salt` is `ByteArrayToHexStr` of the fixed 32-byte array and
+   always 64 characters. `PROTOCOL-LOGIN.md` §2.3 now states this.
+2. **Hostile challenges cannot reach a panic.** The generator must now be the group's `2` (`SRP6.cpp:30,33`); `B`
+   must be 1..N-1 and its encoding no longer than the modulus, checked before `SetBytes`; `salt` stays exactly 32
+   bytes; hex fields are length-bounded before parsing. `FillBytes` in `pad`/`broken` is only reached with values
+   below N, and `randomScalar` returns an error instead of panicking. The new `FuzzNewSRPClient` and
+   `TestSRPRejectsHostileChallenges` cover the paths.
+3. **Edge vectors.** `tools/forevervec/srp_vectors.cpp` now searches, per variant, for `A`, `B` or `S` with a
+   leading zero byte, an evidence value whose bit length is a multiple of 8, and an `M2` with a leading zero byte
+   (304 attempts / 2.96 s for v2, 575 / 0.22 s for v1), and still lets the server's own
+   `VerifyClientEvidence`/`CalculateServerEvidence` accept each one. The Go vector test consumes `M2` in the
+   server's stripped text form.
+4. **No secret in `%v`.** `Result`, `Options`, `LogonResult` and `srpClient` implement `String`, `GoString` and
+   `Format` and print lengths only (`redact.go`); `live_test.go` prints counts instead of `%+v`. `TestSecretsAreRedacted`
+   formats all of them with `%v`, `%+v`, `%#v`, `%s`, `%q` and `%x`.
+5. **Server text in errors is bounded.** `sanitizeServerText` keeps printable ASCII, caps at 120 bytes and replaces
+   a 32+ character hex/base64 run with `<redacted>`; REST failures carry the status and the server's error code;
+   `LoginResult`'s `error_message` and `next_url` go through it too.
+6. **One deadline per RPC call.** `rpcSession.call` and `waitLogon` pin one absolute deadline (the earlier of the
+   context deadline and the per-call timeout), a context watcher sets a past socket deadline to unblock a read, and
+   at most 64 ignored frames are allowed per call. `Options.Deadline` bounds the whole login (2 minutes by default);
+   `TestCallSlowDripExpires`, `TestCallCancelledContextUnblocksRead`, `TestCallCapsIgnoredFrames` and
+   `TestLoginOverallDeadline` cover it.
+7. **Wire-type checks.** Every field is checked against the type its message declares before it is read; a nested
+   message that fails to parse is an error instead of a zero value; a `Header` without `service_id` or `token` is an
+   error; a game account id above `uint32` is an error in the realm list ticket request.
+8. **The fake server is independent.** Its SRP arithmetic (`fakeSHA256`, `fakeBroken`, `fakePad`,
+   `fakeEvidenceM1/M2`) no longer calls the client's helpers, `TestFakeEvidenceMatchesVectors` pins it against the
+   C++-produced `M1`/`M2`, it writes its own JSON, parses the logon request field by field with `protowire`, and
+   checks the service id and the token sequence of every request. `TestLoginAgainstVectorEvidence` goes further: the
+   fake is pinned to one vector (challenge salt/B/version, and the vector's A/M1/M2), the client private is fixed to
+   the vector's, and the whole `Login` must reproduce that vector — including both `m2-leading-zero` vectors, which
+   is the end-to-end regression for the stripped `M2`.

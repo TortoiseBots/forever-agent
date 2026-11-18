@@ -141,19 +141,38 @@ func (c *restClient) do(req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("bnet: REST %s %s: %w", req.Method, req.URL.Path, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// the login service answers a refusal with a JSON error message, never with a secret
-		return nil, fmt.Errorf("bnet: REST %s %s: %s: %s", req.Method, req.URL.Path, resp.Status, snippet(body))
+		// the login service answers a refusal with a JSON error message; the body is quoted only through
+		// describeRESTFailure, which bounds it, keeps printable ASCII and redacts long hex/base64 runs
+		return nil, fmt.Errorf("bnet: REST %s %s: %s", req.Method, req.URL.Path, describeRESTFailure(resp.Status, body))
 	}
 	return body, nil
 }
 
-func snippet(body []byte) string {
-	const max = 240
-	text := strings.TrimSpace(string(body))
-	if len(text) > max {
-		return text[:max] + "..."
+// describeRESTFailure names a non-200 answer without passing its body through: the status, the server's error code
+// when the body is a LoginResult, and a bounded, sanitised message.
+func describeRESTFailure(status string, body []byte) string {
+	var result loginResultJSON
+	if json.Unmarshal(body, &result) == nil && result.ErrorCode != "" {
+		message := sanitizeServerText(result.ErrorMessage)
+		if message == "" {
+			return status + ": " + sanitizeServerText(result.ErrorCode)
+		}
+		return status + ": " + sanitizeServerText(result.ErrorCode) + ": " + message
 	}
-	return text
+	return status + ": " + sanitizeServerText(string(body))
+}
+
+// serverRefusal describes a LoginResult the server refused with, quoting only bounded, sanitised server text.
+func serverRefusal(result *loginResultJSON) string {
+	switch {
+	case result.ErrorCode != "" && result.ErrorMessage != "":
+		return sanitizeServerText(result.ErrorCode) + ": " + sanitizeServerText(result.ErrorMessage)
+	case result.ErrorCode != "":
+		return sanitizeServerText(result.ErrorCode)
+	case result.ErrorMessage != "":
+		return sanitizeServerText(result.ErrorMessage)
+	}
+	return "the server gave neither a ticket nor an error code"
 }
 
 // form requests the login form and returns the SRP path it advertises.
@@ -167,7 +186,7 @@ func (c *restClient) form(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("bnet: login form: %w", err)
 	}
 	if form.Type != "LOGIN_FORM" {
-		return "", fmt.Errorf("bnet: login form type %q", form.Type)
+		return "", fmt.Errorf("bnet: login form type %q", sanitizeServerText(form.Type))
 	}
 	path := srpPath
 	if u, err := url.Parse(form.SRPURL); err == nil && strings.HasSuffix(u.Path, srpPath) {
@@ -221,14 +240,14 @@ func (c *restClient) proof(ctx context.Context, account string, s *srpClient) (*
 		return nil, fmt.Errorf("bnet: login result: %w", err)
 	}
 	if result.AuthenticationState != "DONE" {
-		return nil, fmt.Errorf("bnet: login refused in state %q (error %q: %s)", result.AuthenticationState, result.ErrorCode, result.ErrorMessage)
+		return nil, fmt.Errorf("bnet: login refused in state %q: %s", sanitizeServerText(result.AuthenticationState), serverRefusal(&result))
 	}
 	if result.ErrorCode != "" {
-		return nil, fmt.Errorf("bnet: login refused: %s: %s", result.ErrorCode, result.ErrorMessage)
+		return nil, fmt.Errorf("bnet: login refused: %s", serverRefusal(&result))
 	}
 	if result.LoginTicket == "" {
 		if result.NextURL != "" {
-			return nil, fmt.Errorf("bnet: login needs a second step at %s (an authenticator code?), which this client does not do", result.NextURL)
+			return nil, fmt.Errorf("bnet: login needs a second step at %s (an authenticator code?), which this client does not do", sanitizeServerText(result.NextURL))
 		}
 		return nil, errors.New("bnet: login refused: no ticket, no error code (wrong password)")
 	}

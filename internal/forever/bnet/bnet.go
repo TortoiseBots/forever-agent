@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"time"
 )
@@ -19,20 +21,29 @@ const realmFlagVersionMismatch = 0x01
 // (src/server/shared/Realm/ClientBuildInfo.cpp).
 const build70938 = 70938
 
+// defaultLoginDeadline bounds one Login call from the first request to the join answer. The per-call Timeout only
+// bounds one request, so a server that keeps a call alive with traffic would otherwise hold the login forever.
+const defaultLoginDeadline = 2 * time.Minute
+
 // DefaultServerName is the name inside the login server's certificate (LoginREST.ExternalAddress of the server setup).
 const DefaultServerName = "trinity.actual.battle.net"
 
 // Options configures a login run. Password is never logged, never written anywhere and never sent as a flag value.
 type Options struct {
-	RESTAddr    string // host:port of the login REST port
-	RPCAddr     string // host:port of the Battle.net RPC port
-	CAFile      string // PEM file of the root CA that signed the login server's certificate
-	ServerName  string // name to verify in the certificate (default DefaultServerName)
-	Account     string // account e-mail or name as typed into the login form
-	Password    string // password; case is significant for SRP v2 accounts
-	ClientBuild uint32 // client build to claim (0 = build70938); a realm only lets in the builds it accepts
-	Timeout     time.Duration
+	RESTAddr    string                           // host:port of the login REST port
+	RPCAddr     string                           // host:port of the Battle.net RPC port
+	CAFile      string                           // PEM file of the root CA that signed the login server's certificate
+	ServerName  string                           // name to verify in the certificate (default DefaultServerName)
+	Account     string                           // account e-mail or name as typed into the login form
+	Password    string                           // password; case is significant for SRP v2 accounts
+	ClientBuild uint32                           // client build to claim (0 = build70938); a realm only lets in the builds it accepts
+	Timeout     time.Duration                    // one RPC call or one HTTP request (0 = 30 s)
+	Deadline    time.Duration                    // the whole login, from the form to the join answer (0 = 2 min)
 	Logf        func(format string, args ...any) // one line per completed step; may be nil
+
+	// srpPrivate pins the client private to a test vector's value. It is unexported so no caller can weaken the
+	// randomness; only the package's own tests set it.
+	srpPrivate *big.Int
 }
 
 // Result is everything the login service handed out. The secrets are kept for the world-socket round; this client
@@ -90,6 +101,12 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = 30 * time.Second
 	}
+	if opts.Deadline <= 0 {
+		opts.Deadline = defaultLoginDeadline
+	}
+	// one absolute deadline for the whole login; the caller's context may be earlier and wins
+	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
+	defer cancel()
 	if opts.ClientBuild == 0 {
 		opts.ClientBuild = build70938
 	}
@@ -128,7 +145,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	srp, err := newSRPClient(*challenge, opts.Password, nil)
+	srp, err := newSRPClient(*challenge, opts.Password, opts.srpPrivate)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +160,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.logf("srp proof: client evidence M1 %d bytes accepted, server evidence M2 %d bytes verified",
-		len(srp.M1), len(login.ServerEvidenceM2)/2)
+		len(srp.M1), len(srp.M2))
 	opts.logf("login ticket: %d bytes", len(login.LoginTicket))
 
 	// ---- RPC: connect, logon
@@ -159,7 +176,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.logf("rpc connect: server id %d/%d, server time %d, ciid %q, bindless %t",
-		connect.ServerID.Label, connect.ServerID.Epoch, connect.ServerTime, connect.Ciid, connect.UseBindlessRPC)
+		connect.ServerID.Label, connect.ServerID.Epoch, connect.ServerTime, sanitizeServerText(connect.Ciid), connect.UseBindlessRPC)
 
 	logon, err := rpc.logonRequest(ctx, login.LoginTicket, opts.ClientBuild)
 	if err != nil {
@@ -169,6 +186,10 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("bnet: logon succeeded but the account has no game account")
 	}
 	gameAccount := logon.GameAccountIDs[0]
+	if gameAccount.Low > math.MaxUint32 {
+		// the realm list ticket identity carries a uint32 game account id
+		return nil, fmt.Errorf("bnet: game account id %d does not fit the realm list request", gameAccount.Low)
+	}
 	opts.logf("logon: build %d, account id %d, %d game account(s), session key %d bytes",
 		opts.ClientBuild, logon.AccountID.Low, len(logon.GameAccountIDs), len(logon.SessionKey))
 
@@ -200,21 +221,21 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("bnet: the server named no sub-region")
 	}
 	result.SubRegion = subRegions[0]
-	opts.logf("sub-region: %s", result.SubRegion)
+	opts.logf("sub-region: %s", sanitizeServerText(result.SubRegion))
 
 	realm, err := rpc.realmList(ctx, result.SubRegion)
 	if err != nil {
 		return nil, &RealmError{Err: err}
 	}
 	opts.logf("realm list: realm %d %q, address 0x%08X, build %d, population %d, flags 0x%02X",
-		realm.CfgRealmsID, realm.Name, realm.WowRealmAddress, realm.Version.Build, realm.PopulationState, realm.Flags)
+		realm.CfgRealmsID, sanitizeServerText(realm.Name), realm.WowRealmAddress, realm.Version.Build, realm.PopulationState, realm.Flags)
 	if realm.PopulationState == 0 {
 		// RealmPopulationState::Offline (Realm.h:61-71): listed, but JoinRealm refuses it
-		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is offline; its world server has not written the realmlist row", realm.Name)}
+		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is offline; its world server has not written the realmlist row", sanitizeServerText(realm.Name))}
 	}
 	if realm.Flags&realmFlagVersionMismatch != 0 {
 		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q does not accept client build %d (the realm is build %d)",
-			realm.Name, opts.ClientBuild, realm.Version.Build)}
+			sanitizeServerText(realm.Name), opts.ClientBuild, realm.Version.Build)}
 	}
 	result.RealmName = realm.Name
 	result.RealmID = realm.CfgRealmsID

@@ -129,19 +129,39 @@ func (s *rpcSession) Close() error { return s.conn.Close() }
 
 func (s *rpcSession) log(format string, args ...any) { s.logf(format, args...) }
 
-// setDeadline applies the caller's context deadline, or the session timeout when it has none.
-func (s *rpcSession) setDeadline(ctx context.Context) {
+// maxIgnoredFrames caps how many frames one call may skip while it waits for its answer. A push that arrives before
+// the answer is legitimate; a stream of them is a server that never means to answer.
+const maxIgnoredFrames = 64
+
+// callDeadline is the one absolute deadline of an RPC call: the earlier of the context's deadline and the per-call
+// timeout. Traffic does not move it.
+func (s *rpcSession) callDeadline(ctx context.Context) time.Time {
 	deadline := time.Now().Add(s.timeout)
-	if d, ok := ctx.Deadline(); ok {
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
+	return deadline
+}
+
+// armDeadline pins the connection deadline for one call and returns a stop function. Cancelling ctx unblocks a
+// pending read or write by setting a deadline in the past; without this, SetDeadline alone would not interrupt a
+// blocked Read and a context without a deadline would lose to traffic.
+func (s *rpcSession) armDeadline(ctx context.Context, deadline time.Time) func() {
 	_ = s.conn.SetDeadline(deadline)
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.conn.SetDeadline(time.Unix(1, 0))
+		case <-stop:
+		}
+	}()
+	return func() { close(stop) }
 }
 
 // writeFrame sends one framed message: uint16 BE header length, the Header, then body
-// (src/server/bnetserver/Server/Session.cpp:341-427).
-func (s *rpcSession) writeFrame(ctx context.Context, h Header, body []byte) error {
-	s.setDeadline(ctx)
+// (src/server/bnetserver/Server/Session.cpp:341-427). The deadline is the call's; armDeadline set it.
+func (s *rpcSession) writeFrame(h Header, body []byte) error {
 	header := h.marshal()
 	if len(header) > 0xFFFF {
 		return errors.New("bnet: rpc header does not fit the length prefix")
@@ -157,8 +177,7 @@ func (s *rpcSession) writeFrame(ctx context.Context, h Header, body []byte) erro
 }
 
 // readFrame reads one framed message.
-func (s *rpcSession) readFrame(ctx context.Context) (Header, []byte, error) {
-	s.setDeadline(ctx)
+func (s *rpcSession) readFrame() (Header, []byte, error) {
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(s.conn, lenBuf[:]); err != nil {
 		return Header{}, nil, fmt.Errorf("bnet: rpc read: %w", err)
@@ -188,29 +207,45 @@ func (s *rpcSession) readFrame(ctx context.Context) (Header, []byte, error) {
 	return h, body, nil
 }
 
-// call sends one request and returns the body of its response, handling pushes that arrive in between.
+// call sends one request and returns the body of its response, handling pushes that arrive in between. The call has
+// one deadline (callDeadline) and may skip at most maxIgnoredFrames frames that are not its answer.
 func (s *rpcSession) call(ctx context.Context, serviceHash, methodID uint32, req []byte) ([]byte, error) {
+	stop := s.armDeadline(ctx, s.callDeadline(ctx))
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("bnet: rpc call: %w", err)
+	}
+
 	token := s.token
 	s.token++
 	h := Header{ServiceID: serviceIDRequest, MethodID: methodID, Token: token, Size: uint32(len(req)), ServiceHash: serviceHash}
-	if err := s.writeFrame(ctx, h, req); err != nil {
+	if err := s.writeFrame(h, req); err != nil {
 		return nil, err
 	}
+	ignored := 0
 	for {
-		got, body, err := s.readFrame(ctx)
+		got, body, err := s.readFrame()
 		if err != nil {
 			return nil, err
 		}
 		switch got.ServiceID {
 		case serviceIDResponse:
 			if got.Token != token {
-				continue // a response to something we are not waiting for
+				ignored++
+				if ignored > maxIgnoredFrames {
+					return nil, fmt.Errorf("bnet: rpc call: the server sent %d frames that are not the answer to token %d", ignored, token)
+				}
+				continue
 			}
 			if got.Status != 0 {
 				return nil, &rpcError{ServiceHash: serviceHash, MethodID: methodID, Status: got.Status}
 			}
 			return body, nil
 		case serviceIDRequest:
+			ignored++
+			if ignored > maxIgnoredFrames {
+				return nil, fmt.Errorf("bnet: rpc call: the server sent %d pushes without answering token %d", ignored, token)
+			}
 			if err := s.handleRequest(got, body); err != nil {
 				return nil, err
 			}
@@ -241,15 +276,27 @@ func (s *rpcSession) handleRequest(h Header, body []byte) error {
 	return nil
 }
 
-// waitLogon reads until the OnLogonComplete push arrived.
+// waitLogon reads until the OnLogonComplete push arrived. It has its own one absolute deadline, so a server that
+// keeps sending other pushes cannot hold it open.
 func (s *rpcSession) waitLogon(ctx context.Context) (*LogonResult, error) {
+	stop := s.armDeadline(ctx, s.callDeadline(ctx))
+	defer stop()
+	ignored := 0
 	for s.logon == nil {
-		h, body, err := s.readFrame(ctx)
+		h, body, err := s.readFrame()
 		if err != nil {
 			return nil, err
 		}
 		if h.ServiceID != serviceIDRequest {
+			ignored++
+			if ignored > maxIgnoredFrames {
+				return nil, fmt.Errorf("bnet: OnLogonComplete: %d frames without the push", ignored)
+			}
 			continue
+		}
+		ignored++
+		if ignored > maxIgnoredFrames {
+			return nil, fmt.Errorf("bnet: OnLogonComplete: %d pushes without the logon result", ignored)
 		}
 		if err := s.handleRequest(h, body); err != nil {
 			return nil, err

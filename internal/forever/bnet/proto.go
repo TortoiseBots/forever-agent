@@ -11,6 +11,7 @@ package bnet
 // proto2 semantics: required fields are always emitted, even with value 0; optional fields only when set.
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -52,26 +53,57 @@ func (h Header) marshal() []byte {
 
 func unmarshalHeader(b []byte) (Header, error) {
 	var h Header
+	var haveServiceID, haveToken bool
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			h.ServiceID = uint32(uintOf(val))
+			haveServiceID = true
 		case 2:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			h.MethodID = uint32(uintOf(val))
 		case 3:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			h.Token = uint32(uintOf(val))
+			haveToken = true
 		case 5:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			h.Size = uint32(uintOf(val))
 		case 6:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			h.Status = uint32(uintOf(val))
 		case 11:
+			if err := checkType(n, t, protowire.Fixed32Type); err != nil {
+				return err
+			}
 			h.ServiceHash = fixed32Of(val)
 		case 13:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			h.Ciid = string(bytesOf(val))
 		}
 		return nil
 	})
-	return h, err
+	if err != nil {
+		return Header{}, err
+	}
+	// bgs.protocol.Header declares service_id and token required; a frame without them cannot be routed
+	if !haveServiceID || !haveToken {
+		return Header{}, errors.New("bnet: rpc header without a service id or a token")
+	}
+	return h, nil
 }
 
 // ProcessID is bgs.protocol.ProcessId (rpc_types.pb.h: required label = 1, required epoch = 2).
@@ -92,8 +124,14 @@ func unmarshalProcessID(b []byte) (ProcessID, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			p.Label = uint32(uintOf(val))
 		case 2:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			p.Epoch = uint32(uintOf(val))
 		}
 		return nil
@@ -123,8 +161,14 @@ func unmarshalEntityID(b []byte) (EntityID, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
+			if err := checkType(n, t, protowire.Fixed64Type); err != nil {
+				return err
+			}
 			e.High = fixed64Of(val)
 		case 2:
+			if err := checkType(n, t, protowire.Fixed64Type); err != nil {
+				return err
+			}
 			e.Low = fixed64Of(val)
 		}
 		return nil
@@ -166,18 +210,37 @@ func unmarshalConnectResponse(b []byte) (ConnectResponse, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
-			if id, err := unmarshalProcessID(bytesOf(val)); err == nil {
-				m.ServerID = id
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			id, err := unmarshalProcessID(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.ServerID = id
 		case 2:
-			if id, err := unmarshalProcessID(bytesOf(val)); err == nil {
-				m.ClientID = id
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			id, err := unmarshalProcessID(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.ClientID = id
 		case 6:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			m.ServerTime = uintOf(val)
 		case 7:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			m.UseBindlessRPC = uintOf(val) != 0
 		case 9:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			m.Ciid = string(bytesOf(val))
 		}
 		return nil
@@ -236,20 +299,42 @@ func unmarshalLogonResult(b []byte) (LogonResult, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			m.ErrorCode = uint32(uintOf(val))
 		case 2:
-			if id, err := unmarshalEntityID(bytesOf(val)); err == nil {
-				m.AccountID = id
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			id, err := unmarshalEntityID(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.AccountID = id
 		case 3:
-			if id, err := unmarshalEntityID(bytesOf(val)); err == nil {
-				m.GameAccountIDs = append(m.GameAccountIDs, id)
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			id, err := unmarshalEntityID(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.GameAccountIDs = append(m.GameAccountIDs, id)
 		case 7:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			m.BattleTag = string(bytesOf(val))
 		case 8:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			m.GeoIPCountry = string(bytesOf(val))
 		case 9:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			m.SessionKey = append([]byte(nil), bytesOf(val)...)
 		}
 		return nil
@@ -296,20 +381,38 @@ func unmarshalVariant(b []byte) (Variant, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 2:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			on := uintOf(val) != 0
 			v.BoolValue = &on
 		case 3:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			i := int64(uintOf(val))
 			v.IntValue = &i
 		case 4:
+			if err := checkType(n, t, protowire.Fixed64Type); err != nil {
+				return err
+			}
 			f := mathFloat(fixed64Of(val))
 			v.FloatValue = &f
 		case 5:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			s := string(bytesOf(val))
 			v.StringValue = &s
 		case 6:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			v.BlobValue = append([]byte(nil), bytesOf(val)...)
 		case 9:
+			if err := checkType(n, t, protowire.VarintType); err != nil {
+				return err
+			}
 			u := uintOf(val)
 			v.UintValue = &u
 		}
@@ -336,11 +439,19 @@ func unmarshalAttribute(b []byte) (Attribute, error) {
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		switch n {
 		case 1:
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
+			}
 			a.Name = string(bytesOf(val))
 		case 2:
-			if v, err := unmarshalVariant(bytesOf(val)); err == nil {
-				a.Value = v
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			v, err := unmarshalVariant(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			a.Value = v
 		}
 		return nil
 	})
@@ -370,9 +481,14 @@ func unmarshalClientResponse(b []byte) (ClientResponse, error) {
 	var m ClientResponse
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		if n == 1 {
-			if a, err := unmarshalAttribute(bytesOf(val)); err == nil {
-				m.Attributes = append(m.Attributes, a)
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			a, err := unmarshalAttribute(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.Attributes = append(m.Attributes, a)
 		}
 		return nil
 	})
@@ -401,9 +517,14 @@ func unmarshalGetAllValuesForAttributeResponse(b []byte) (GetAllValuesForAttribu
 	var m GetAllValuesForAttributeResponse
 	err := eachField(b, func(n protowire.Number, t protowire.Type, val []byte) error {
 		if n == 1 {
-			if v, err := unmarshalVariant(bytesOf(val)); err == nil {
-				m.Values = append(m.Values, v)
+			if err := checkType(n, t, protowire.BytesType); err != nil {
+				return err
 			}
+			v, err := unmarshalVariant(bytesOf(val))
+			if err != nil {
+				return err
+			}
+			m.Values = append(m.Values, v)
 		}
 		return nil
 	})
@@ -434,6 +555,15 @@ func putBytes(b []byte, n protowire.Number, v []byte) []byte {
 
 func putString(b []byte, n protowire.Number, v string) []byte {
 	return putBytes(b, n, []byte(v))
+}
+
+// checkType refuses a field whose wire type is not the one its message declares: reading it anyway would turn a
+// length-delimited field into a varint and silently yield 0 or garbage.
+func checkType(n protowire.Number, got, want protowire.Type) error {
+	if got != want {
+		return fmt.Errorf("bnet: protobuf field %d has wire type %d, want %d", n, got, want)
+	}
+	return nil
 }
 
 // eachField walks a message and calls fn with every field's raw value bytes (length-delimited content for BytesType,
