@@ -197,6 +197,9 @@ The first review's findings and what now pins each one:
 
 - Python's `round()` and 3.12's compensated `sum()` are reproduced exactly; `%g`/`%f` go through
   Go's `strconv`, which rounds the same way C's printf does.
+- Python's `json.loads` also accepts the non-standard `NaN`/`Infinity` tokens; `pyjson` rejects
+  them (Go's decoder). No recorded or trial file carries them, and `allow_nan=False` would refuse
+  to write one anyway.
 - An integer outside int64 decodes to `*big.Int`, which the scorer keeps where Python keeps it
   (serialisation, `seq`, `spell_id`, GUIDs). A conversion to `float64` beyond its range returns
   "not a number" instead of Python's `OverflowError`; no recorded run reaches it.
