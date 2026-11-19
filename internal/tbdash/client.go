@@ -85,42 +85,27 @@ func (e envPassword) Password() ([]byte, error) {
 
 // Options are the client's non-credential settings.
 type Options struct {
-	// AllowInsecureHTTP permits a plain-http URL whose host is not loopback. It is off by
-	// default: the login sends a GM password and the session cookie in clear text, so the only
-	// safe plain-http target is this machine.
+	// AllowInsecureHTTP permits a plain-http URL whose host the client cannot prove is this
+	// machine. It is off by default: the login sends a GM password and the session cookie in
+	// clear text, so the only safe plain-http target is this machine.
 	AllowInsecureHTTP bool
 }
 
-// lookupIP resolves a dashboard host for the loopback check. A test replaces it to pin a
-// resolution without DNS.
+// lookupIP is a test seam only: New never resolves a dashboard host. A name cannot prove where
+// the password goes, so a plain-http target must be a loopback IP literal or the exact name
+// localhost. The test replaces this to show that even a name the resolver maps to loopback is
+// refused without --dash-insecure-http.
 var lookupIP = net.DefaultResolver.LookupIPAddr
 
-// loopbackHost reports whether host is this machine: "localhost", a loopback IP literal, or a
-// name whose every resolved address is loopback. A name that cannot be resolved is refused:
-// the check must be able to prove loopback before a password is sent in clear text.
-func loopbackHost(host string) (bool, error) {
-	h := strings.ToLower(strings.TrimSuffix(host, "."))
-	if h == "localhost" {
-		return true, nil
+// loopbackLiteral reports whether host names this machine without a lookup: a loopback IP
+// literal (127.0.0.0/8 or ::1), or the exact name localhost, which the client itself dials as
+// 127.0.0.1. Every other name is refused on plain http until the operator allows it.
+func loopbackLiteral(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
 	}
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback(), nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	addrs, err := lookupIP(ctx, h)
-	if err != nil {
-		return false, fmt.Errorf("cannot resolve the host to prove it is loopback: %w", err)
-	}
-	if len(addrs) == 0 {
-		return false, errors.New("the host resolved to no address")
-	}
-	for _, a := range addrs {
-		if !a.IP.IsLoopback() {
-			return false, nil
-		}
-	}
-	return true, nil
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Client talks to one dashboard daemon as one user. Base is the daemon's root URL, User the
@@ -136,7 +121,7 @@ type Client struct {
 
 // New validates base (http or https, with a host) and builds a client that reads its password
 // from passFile. It does not read the file; Login does. A plain-http base is accepted only when
-// its host is loopback.
+// its host is a loopback IP literal or localhost, which is dialled as 127.0.0.1.
 func New(base, user, passFile string) (*Client, error) {
 	return NewWithSecret(base, user, PasswordFile(passFile))
 }
@@ -165,13 +150,18 @@ func NewWithOptions(base, user string, src PasswordSource, opts Options) (*Clien
 	if u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("dashboard URL %q: a base URL has no query or fragment", base)
 	}
-	if u.Scheme == "http" && !opts.AllowInsecureHTTP {
-		loop, err := loopbackHost(u.Hostname())
-		if err != nil {
-			return nil, fmt.Errorf("dashboard URL %q: %w", base, err)
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		if !opts.AllowInsecureHTTP && !loopbackLiteral(host) {
+			return nil, fmt.Errorf("dashboard URL %q: plain http is allowed only to a loopback IP literal or localhost: any other host sends the GM password and the session cookie in clear text; use https, or allow plain HTTP explicitly", base)
 		}
-		if !loop {
-			return nil, fmt.Errorf("dashboard URL %q: plain http to a non-loopback host sends the GM password and the session cookie in clear text; use https, or allow plain HTTP explicitly", base)
+		if strings.EqualFold(host, "localhost") {
+			// Dial the literal: a resolver must not decide where the password goes.
+			if port := u.Port(); port != "" {
+				u.Host = net.JoinHostPort("127.0.0.1", port)
+			} else {
+				u.Host = "127.0.0.1"
+			}
 		}
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/")

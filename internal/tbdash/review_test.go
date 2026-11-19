@@ -2,7 +2,6 @@ package tbdash
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,8 +13,8 @@ import (
 )
 
 // TestPlainHTTPToNonLoopbackIsRefused is review point 1: the login carries a GM password, so a
-// plain-http URL is only allowed when its host is loopback. The addresses are TEST-NET literals:
-// no DNS and no real host is involved.
+// plain-http URL is only allowed to a loopback IP literal or localhost. The addresses are
+// TEST-NET literals: no DNS and no real host is involved.
 func TestPlainHTTPToNonLoopbackIsRefused(t *testing.T) {
 	for _, base := range []string{"http://192.0.2.10:8790", "http://198.51.100.7:8790"} {
 		_, err := New(base, "DashUser", "/nonexistent")
@@ -43,37 +42,45 @@ func TestHTTPSNonLoopbackIsAllowed(t *testing.T) {
 	}
 }
 
-// A name is judged by every address it resolves to. The resolver is replaced, so no DNS is used.
-func TestPlainHTTPNameIsJudgedByItsResolvedAddress(t *testing.T) {
+// TestPlainHTTPNameIsRefusedWhateverDNSsays is review point 1: the loopback check and the dial
+// must not be two different answers. A plain-http host name is refused even when the resolver
+// maps it to loopback, and New must not consult the resolver at all.
+func TestPlainHTTPNameIsRefusedWhateverDNSsays(t *testing.T) {
 	old := lookupIP
 	defer func() { lookupIP = old }()
 
-	lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
-		if host != "dash.internal" {
-			t.Fatalf("resolved %q, want the URL's host", host)
+	var asked atomic.Bool
+	lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
+		asked.Store(true)
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	}
+	_, err := New("http://dash.internal:8790", "DashUser", "/nonexistent")
+	if err == nil {
+		t.Fatal("a plain-http host name was accepted because DNS said loopback")
+	}
+	if !strings.Contains(err.Error(), "clear text") && !strings.Contains(err.Error(), "https") {
+		t.Fatalf("error %q does not explain the boundary", err)
+	}
+	if asked.Load() {
+		t.Fatal("New resolved the host; no lookup may decide where the password goes")
+	}
+}
+
+// TestLocalhostIsDialledAsALiteral pins the other half: the only accepted name is dialled as
+// 127.0.0.1 by the client, with the port kept.
+func TestLocalhostIsDialledAsALiteral(t *testing.T) {
+	for base, want := range map[string]string{
+		"http://localhost:8790": "127.0.0.1:8790",
+		"http://LOCALHOST:80":   "127.0.0.1:80",
+		"http://localhost":      "127.0.0.1",
+	} {
+		c, err := New(base, "DashUser", "/nonexistent")
+		if err != nil {
+			t.Fatalf("New(%q): %v", base, err)
 		}
-		return []net.IPAddr{{IP: net.ParseIP("127.0.0.2")}}, nil
-	}
-	if _, err := New("http://dash.internal:8790", "DashUser", "/nonexistent"); err != nil {
-		t.Errorf("a name resolving to loopback was refused: %v", err)
-	}
-
-	lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
-		return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}}, nil
-	}
-	if _, err := New("http://dash.internal:8790", "DashUser", "/nonexistent"); err == nil {
-		t.Error("a name resolving to a public address was accepted")
-	} else if !strings.Contains(err.Error(), "clear text") {
-		t.Errorf("error %q does not explain the boundary", err)
-	}
-
-	lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
-		return nil, errors.New("no such host")
-	}
-	if _, err := New("http://dash.internal:8790", "DashUser", "/nonexistent"); err == nil {
-		t.Error("an unresolvable name was accepted")
-	} else if !strings.Contains(err.Error(), "cannot resolve") {
-		t.Errorf("error %q does not name the resolution", err)
+		if c.Base.Host != want {
+			t.Errorf("New(%q) dials %q, want %q", base, c.Base.Host, want)
+		}
 	}
 }
 

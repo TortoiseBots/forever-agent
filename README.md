@@ -248,9 +248,10 @@ no bot of its group in combat for `--lone-combat-after` (default 5 s), and a bot
 (default 60 yd) from the centre of its group. Each condition is reported once and fires again only after it cleared.
 The password comes from the private `--pass-file` or `FOREVER_DASH_PASSWORD`, never a flag; `--timeout` (default
 15 s) bounds every request, and a 401 costs one re-login.
-The dashboard's URL must be **https**, or **http on this machine** (127.0.0.0/8, ::1, or localhost, including a name
-that resolves only there): the login sends a GM password and the session cookie. The dashboard serves plain http
-today, so a remote plain-http URL needs the explicit `--dash-insecure-http`, which prints a one-line warning and
+The dashboard's URL must be **https**, or **http to a loopback IP literal** (127.0.0.0/8 or ::1) or the exact
+name `localhost`, which the client dials as 127.0.0.1 itself: the login sends a GM password and the session cookie,
+and a hostname must not be able to move that traffic somewhere else between the check and the login. Every other
+plain-http name needs the explicit `--dash-insecure-http`, which prints a one-line warning and
 makes the command, the decision pull and raid-walk accept it. A roster record that omits or zeroes a field the watch
 rules read (hp, max_hp, map, instance, x, y, z, state) is skipped and reported on stderr, never read as a death, a
 stuck flag or a distance; one answer is capped at 8 MiB. Names and the dashboard's strings are sanitised before

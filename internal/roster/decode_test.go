@@ -167,3 +167,15 @@ func TestRejectedRecordsAreSkippedNotFatal(t *testing.T) {
 		t.Fatalf("kept %q, want Ash", r.Bots[0].Name)
 	}
 }
+
+// A rejection carries the guid when the record has one, so a watch can identify the bot across
+// a reorder instead of keying on the array position.
+func TestRejectionCarriesTheGUID(t *testing.T) {
+	r := decodeOne(t, botRecord(map[string]any{"name": "Cinder", "guid": 2, "hp": nil}))
+	if len(r.Rejected) != 1 {
+		t.Fatalf("rejections = %+v, want one", r.Rejected)
+	}
+	if r.Rejected[0].Name != "Cinder" || r.Rejected[0].GUID != "2" {
+		t.Fatalf("rejection = %+v, want name Cinder and guid 2", r.Rejected[0])
+	}
+}

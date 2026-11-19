@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/roster"
 )
 
 // The tests use made-up accounts, names and passwords only.
@@ -199,5 +201,90 @@ func TestDashBotsInsecureHTTPFlagWarnsAndAllows(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "clear text; use https") {
 		t.Fatalf("the flag was still refused: %q", stderr.String())
+	}
+}
+
+// TestSkippedRecordWarningIsKeyedByBot is review point 2: the watch prints a standing rejection
+// once, but its identity is the bot, not the index in the array. A different bot at the same
+// index is a new rejection, and a reorder must not hide one at a reused index.
+func TestSkippedRecordWarningIsKeyedByBot(t *testing.T) {
+	const reason = "hp is missing"
+	first := []roster.Rejection{
+		{Index: 0, Name: "Ember", Reason: reason},
+		{Index: 1, Name: "Cinder", Reason: reason},
+	}
+	base := dashRejectionSignature(first)
+	if base == "" {
+		t.Fatal("a rejection sample has no signature")
+	}
+
+	// A pure reorder is the same set of bots: no line is repeated.
+	reordered := []roster.Rejection{
+		{Index: 0, Name: "Cinder", Reason: reason},
+		{Index: 1, Name: "Ember", Reason: reason},
+	}
+	if got := dashRejectionSignature(reordered); got != base {
+		t.Fatalf("a pure reorder changed the signature: %q vs %q", got, base)
+	}
+
+	// The same bot at another index is still the same rejection.
+	moved := []roster.Rejection{
+		{Index: 7, Name: "Ember", Reason: reason},
+		{Index: 0, Name: "Cinder", Reason: reason},
+	}
+	if got := dashRejectionSignature(moved); got != base {
+		t.Fatalf("moving a bot changed the signature: %q vs %q", got, base)
+	}
+
+	// Another bot at the same index with the same reason is a new rejection.
+	other := []roster.Rejection{
+		{Index: 0, Name: "Ash", Reason: reason},
+		{Index: 1, Name: "Cinder", Reason: reason},
+	}
+	if dashRejectionSignature(other) == base {
+		t.Fatal("a different bot at the same index with the same reason was hidden")
+	}
+
+	// A reorder that brings a new bot to a reused index must not look like the old sample.
+	// The old index-keyed signature of both samples was 0:hp is missing;1:hp is missing;.
+	reorderedNew := []roster.Rejection{
+		{Index: 0, Name: "Cinder", Reason: reason},
+		{Index: 1, Name: "Ash", Reason: reason},
+	}
+	if dashRejectionSignature(reorderedNew) == base {
+		t.Fatal("a reorder hid a new rejection at a reused index")
+	}
+
+	// A record with neither name nor guid falls back to the index, and to nothing else.
+	if got := dashRejectionSignature([]roster.Rejection{{Index: 4, Reason: reason}}); !strings.Contains(got, "index 4") {
+		t.Fatalf("nameless rejection signature %q does not fall back to the index", got)
+	}
+}
+
+// Two bots of the same name are told apart by their guid, and a record that carries only a guid
+// is still keyed by it rather than by the index.
+func TestSkippedRecordGUIDBreaksNameTies(t *testing.T) {
+	const reason = "hp is missing"
+	one := []roster.Rejection{{Index: 0, Name: "Ember", GUID: "1", Reason: reason}}
+	two := []roster.Rejection{{Index: 0, Name: "Ember", GUID: "2", Reason: reason}}
+	if dashRejectionSignature(one) == dashRejectionSignature(two) {
+		t.Fatal("two bots with the same name and reason but different guids share a signature")
+	}
+	guidOnly := []roster.Rejection{{Index: 9, GUID: "7", Reason: reason}}
+	if got := dashRejectionSignature(guidOnly); !strings.Contains(got, "guid 7") || strings.Contains(got, "index 9") {
+		t.Fatalf("a guid-only rejection signature %q is not keyed by the guid", got)
+	}
+}
+
+// The printed line names the bot and its guid, so an operator can match a warning to a record
+// even after the array moved.
+func TestSkippedRecordLineNamesTheBotAndGUID(t *testing.T) {
+	var b strings.Builder
+	printDashRejections(&b, []roster.Rejection{{Index: 3, Name: "Ember", GUID: "17", Reason: "hp is missing"}})
+	out := b.String()
+	for _, want := range []string{"bot record 3", "Ember", "guid 17", "hp is missing"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("line %q does not name %q", out, want)
+		}
 	}
 }

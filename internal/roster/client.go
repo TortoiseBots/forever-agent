@@ -122,12 +122,15 @@ type Heartbeat struct {
 	States map[string]float64 `json:"states"`
 }
 
-// Rejection is one bot record the decoder left out: its index in the answer, the name when the
-// record's name could be read, and why. A rejected record never reaches the watch rules, so a
-// missing field cannot turn into a death, a stuck flag or a distance.
+// Rejection is one bot record the decoder left out: its index in the answer, the name and guid
+// when the record carried readable ones, and why. The name and guid are the record's identity
+// for a watch, which must not key a standing warning on an array position. A rejected record
+// never reaches the watch rules, so a missing field cannot turn into a death, a stuck flag or a
+// distance.
 type Rejection struct {
 	Index  int
 	Name   string
+	GUID   Text
 	Reason string
 }
 
@@ -203,7 +206,7 @@ func DecodeRoster(raw []byte) (*Roster, error) {
 	for i, record := range records {
 		b, err := decodeBot(record)
 		if err != nil {
-			r.Rejected = append(r.Rejected, Rejection{Index: i, Name: recordName(record), Reason: err.Error()})
+			r.Rejected = append(r.Rejected, Rejection{Index: i, Name: recordName(record), GUID: recordGUID(record), Reason: err.Error()})
 			continue
 		}
 		r.Bots = append(r.Bots, b)
@@ -225,6 +228,23 @@ func recordName(raw json.RawMessage) string {
 		return ""
 	}
 	return name
+}
+
+// recordGUID pulls a guid out of a record that may otherwise be unusable, for the rejection
+// line and its identity; it is empty when the guid is missing, null, or neither a string nor a
+// number.
+func recordGUID(raw json.RawMessage) Text {
+	var probe struct {
+		GUID json.RawMessage `json:"guid"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || len(probe.GUID) == 0 {
+		return ""
+	}
+	var guid Text
+	if json.Unmarshal(probe.GUID, &guid) != nil {
+		return ""
+	}
+	return guid
 }
 
 func decodeBot(raw json.RawMessage) (Bot, error) {

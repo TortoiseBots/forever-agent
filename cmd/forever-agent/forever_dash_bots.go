@@ -256,28 +256,52 @@ func dashInstance(s roster.Text) string {
 	return " instance " + safeName(string(s))
 }
 
+// dashRejectionKey identifies a rejected record by the bot, not by its array position: between
+// samples the dashboard may reorder the list or put another bot at the same index. The name and
+// the GUID are sanitised so a control character cannot forge a key; the index is the last
+// resort for a record that carries neither.
+func dashRejectionKey(rej roster.Rejection) string {
+	name := safeName(rej.Name)
+	guid := safeName(string(rej.GUID))
+	switch {
+	case name != "" && guid != "":
+		return "name " + name + "\x00guid " + guid
+	case name != "":
+		return "name " + name
+	case guid != "":
+		return "guid " + guid
+	default:
+		return fmt.Sprintf("index %d", rej.Index)
+	}
+}
+
 // dashRejectionSignature identifies one sample's rejected records, so a watch prints a
-// standing rejection once instead of every interval.
+// standing rejection once instead of every interval. The keys are sorted: a reorder alone is the
+// same set, while a new rejection anywhere in the list changes the signature.
 func dashRejectionSignature(rejected []roster.Rejection) string {
 	if len(rejected) == 0 {
 		return ""
 	}
-	var b strings.Builder
+	keys := make([]string, 0, len(rejected))
 	for _, rej := range rejected {
-		fmt.Fprintf(&b, "%d:%s;", rej.Index, rej.Reason)
+		keys = append(keys, dashRejectionKey(rej)+"\x00"+cleanDashReason(rej.Reason))
 	}
-	return b.String()
+	sort.Strings(keys)
+	return strings.Join(keys, "\x01")
 }
 
 // printDashRejections reports the records DecodeRoster left out. A rejected record is never a
 // death, a stuck flag or a distance: it is not in the roster the rules see.
 func printDashRejections(w io.Writer, rejected []roster.Rejection) {
 	for _, rej := range rejected {
-		name := ""
+		ident := ""
 		if rej.Name != "" {
-			name = " " + safeName(rej.Name)
+			ident = " " + safeName(rej.Name)
 		}
-		fmt.Fprintf(w, "forever dash-bots: bot record %d%s skipped: %s\n", rej.Index, name, cleanDashReason(rej.Reason))
+		if rej.GUID != "" {
+			ident += " guid " + safeName(string(rej.GUID))
+		}
+		fmt.Fprintf(w, "forever dash-bots: bot record %d%s skipped: %s\n", rej.Index, ident, cleanDashReason(rej.Reason))
 	}
 }
 
