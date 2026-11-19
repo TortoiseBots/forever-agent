@@ -971,7 +971,7 @@ func EqualForever(want, got []ForeverReport) error {
 			return fmt.Errorf("plan %s: %d unit rows, read back %d", w.Rows.Plan.Plan, len(w.Units), len(g.Units))
 		}
 		for j := range w.Units {
-			if w.Units[j] != g.Units[j] {
+			if !equalForeverUnit(w.Units[j], g.Units[j]) {
 				return fmt.Errorf("plan %s unit row %d: %+v, read back %+v", w.Rows.Plan.Plan, j, w.Units[j], g.Units[j])
 			}
 		}
@@ -985,6 +985,14 @@ func EqualForever(want, got []ForeverReport) error {
 		}
 	}
 	return nil
+}
+
+// equalForeverUnit compares a built unit row with its read-back row. The position columns are written with three
+// decimals, so a coordinate may differ from the plan's own float by less than half a thousandth of a yard (Kresh's
+// -3.64081 reads back -3.641); every other column is exact.
+func equalForeverUnit(a, b UnitRow) bool {
+	return a.Plan == b.Plan && a.Leg == b.Leg && a.Seq == b.Seq && a.Idx == b.Idx && a.Entry == b.Entry &&
+		a.Role == b.Role && a.Comment == b.Comment && near3(a.X, b.X) && near3(a.Y, b.Y) && near3(a.Z, b.Z)
 }
 
 // equalForeverRows compares a built plan with its read-back rows. The float columns are written with three decimals, so a

@@ -287,8 +287,9 @@ func TestWailingCavernsPlanMatchesTheExport(t *testing.T) {
 		t.Errorf("legs[%d] (serpentis) via[1] %v: want the plain direct landing after the exact foot", serp, via[1].Point)
 	}
 	// The four Fanglords open the Disciple's second menu (instance_wailing_caverns.cpp): Cobrahn, Pythas and Serpentis are bosses of the
-	// plan; Skum and Verdan follow the script; Vangros (west wing) and Zandara (east spur) are Turtle's, added 2026-10-26.
-	want := []uint32{3653, 3669, 3670, 61968, 3674, 61965, 3673, 5775}
+	// plan; Skum and Verdan follow the script. Vangros (west wing) and Zandara (east spur) exist only on the server the plan was
+	// written from and are dropped here (added 2026-10-26, dropped for the second server).
+	want := []uint32{3653, 3669, 3670, 3674, 3673, 5775}
 	if len(bosses) != len(want) {
 		t.Fatalf("bosses %v, want %v", bosses, want)
 	}
@@ -495,8 +496,8 @@ func TestWailingCavernsBossesAreEncounters(t *testing.T) {
 // the dungeon from every leg and a remote run with a non-GM commander refuse every leg up to it); nor does the extra plan.
 func TestWailingCavernsBasePlanNeedsNoGM(t *testing.T) {
 	p := loadPlan(t, wailingPlan)
-	if len(p.Legs) != 15 || p.Legs[len(p.Legs)-1].Name != "verdan" {
-		t.Fatalf("%d legs, want the 15 legs of the walk to Verdan", len(p.Legs))
+	if len(p.Legs) != 13 || p.Legs[len(p.Legs)-1].Name != "verdan" {
+		t.Fatalf("%d legs, want the 13 legs of the walk to Verdan (zandara and vangros dropped)", len(p.Legs))
 	}
 	for from := 0; from <= len(p.Legs); from++ {
 		if p.HasGMCross(from) {
@@ -602,9 +603,9 @@ func TestNaralexFollowStretches(t *testing.T) {
 const escortWalkMax = 90.0
 
 // The route is one complete navmesh walk from the entrance to Verdan: every plain waypoint is reached by a complete path from the one before,
-// the hop is the only break, and the whole walk to every member position is about 8189 yd (8223 before the Serpentis pack became the
-// boss's first on 2026-10-29, 8195 before the kresh leg of 2026-10-28, 6240 before the vangros and zandara legs of 2026-10-26; a change
-// of route moves this number: update it with the plan's notes).
+// the hop is the only break, and the whole walk to every member position is about 6213 yd (8189 before the zandara and vangros legs were
+// dropped for the second server, 8223 before the Serpentis pack became the boss's first on 2026-10-29, 8195 before the kresh leg of
+// 2026-10-28, 6240 before the vangros and zandara legs of 2026-10-26; a change of route moves this number: update it with the plan's notes).
 func TestWailingCavernsOnNavmesh(t *testing.T) {
 	dir := mapMmaps(43)
 	if dir == "" {
@@ -664,8 +665,8 @@ func TestWailingCavernsOnNavmesh(t *testing.T) {
 			stop = l.To
 		}
 		t.Logf("%s: %.0f yd of path, %d direct hops", p.Name, total, hops)
-		if p.Name == "wailing_caverns" && (total < 8160 || total > 8290 || hops != 1) {
-			t.Errorf("%s: %.0f yd and %d hops, expected about 8189 yd and one hop", p.Name, total, hops)
+		if p.Name == "wailing_caverns" && (total < 6160 || total > 6290 || hops != 1) {
+			t.Errorf("%s: %.0f yd and %d hops, expected about 6213 yd and one hop", p.Name, total, hops)
 		}
 		// The Naralex event, walked from the end of the verdan leg: the walk to the ramp lip, the hop down to the foot (the ramp
 		// cannot be walked back, live 2026-10-18; the hop worked 3 of 3 on 2026-10-22), the long walk to the Disciple's stand,

@@ -686,6 +686,10 @@ type ObjectRef struct {
 	// `cmd state` for it before a loot_object step and skips one that is opened already or gone (a resumed run goes on at the first unopened
 	// grave), and opens it by GUID, so that a neighbour of the same entry is never opened in its place. 0: not given.
 	Spawn uint32 `json:"spawn,omitempty"`
+	// AltEntries names the entry another server uses for the object at the same position: server name to entry (the Deadmines Heavy Doors
+	// at -290.3 -537.0 and -168.5 -579.9 are 17153 on one server and 16400/16399 on the other). Readers that know no server use Entry; a
+	// reader that names a server in AltEntries uses that entry instead. Empty: the entry is the same everywhere.
+	AltEntries map[string]uint32 `json:"alt_entries,omitempty"`
 }
 
 // UseObject uses a game object (right-click). Stand is where to stand to do it; without it the driver walks next
@@ -1093,10 +1097,11 @@ type rawUseItem struct {
 }
 
 type rawRef struct {
-	Entry uint32    `json:"entry"`
-	Near  *rawPoint `json:"near"`
-	Range *float32  `json:"range"`
-	Spawn uint32    `json:"spawn"`
+	Entry      uint32            `json:"entry"`
+	Near       *rawPoint         `json:"near"`
+	Range      *float32          `json:"range"`
+	Spawn      uint32            `json:"spawn"`
+	AltEntries map[string]uint32 `json:"alt_entries"`
 }
 
 type rawUse struct {
@@ -1907,6 +1912,21 @@ func (c *checker) hold(path string, r *rawHold, valueAllowed, unitsAllowed bool)
 
 func (c *checker) ref(path string, r *rawRef) ObjectRef {
 	o := ObjectRef{Entry: r.Entry, Spawn: r.Spawn}
+	for server, entry := range r.AltEntries {
+		switch {
+		case server == "":
+			c.fail(path+".alt_entries", "a server name is required (the server the alternate entry belongs to)")
+		case entry == 0:
+			c.fail(path+".alt_entries."+server, "0 is not an object entry")
+		case entry == r.Entry:
+			c.fail(path+".alt_entries."+server, "%d is already the entry: an alternate entry must differ", entry)
+		default:
+			if o.AltEntries == nil {
+				o.AltEntries = map[string]uint32{}
+			}
+			o.AltEntries[server] = entry
+		}
+	}
 	if r.Spawn != 0 && r.Entry == 0 {
 		c.fail(path+".spawn", "needs the entry as well (the spawn guid is of an object of that entry)")
 	}

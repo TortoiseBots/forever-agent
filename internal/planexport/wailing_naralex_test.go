@@ -7,9 +7,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
-// TestWailingCavernsExportNeedsNoGMFlagAndNoCut: the mapped route (15 legs to Verdan) has no gm_cross and no step the run leader cannot
-// do, so the export needs neither --gm-cross-direct nor a cut. Without a navmesh it is 153 steps (169 rows with the plan row and the
-// 15 legs); with --mmaps and --approach-hops, as the applied mirror 20261018201557 was written, 226 steps (239 rows: checked by hand
+// TestWailingCavernsExportNeedsNoGMFlagAndNoCut: the mapped route (13 legs to Verdan: zandara and vangros dropped for the
+// second server) has no gm_cross and no step the run leader cannot
+// do, so the export needs neither --gm-cross-direct nor a cut. Without a navmesh it is 126 steps (140 rows with the plan row and the
+// 13 legs); with --mmaps and --approach-hops, as the applied mirror 20261018201557 was written, 226 steps (239 rows: checked by hand
 // against the mirror, see the commit). The Naralex event lives in dungeons/wailing_caverns-extra.json.
 func TestWailingCavernsExportNeedsNoGMFlagAndNoCut(t *testing.T) {
 	p, err := dungeon.Load("../../dungeons/wailing_caverns.json")
@@ -28,11 +29,11 @@ func TestWailingCavernsExportNeedsNoGMFlagAndNoCut(t *testing.T) {
 			t.Errorf("a gm_cross warning: %s", w)
 		}
 	}
-	if n := len(res.Rows.Legs); n != 15 || res.Rows.Legs[n-1].Name != "verdan" {
-		t.Fatalf("%d legs, want 15 with verdan last", n)
+	if n := len(res.Rows.Legs); n != 13 || res.Rows.Legs[n-1].Name != "verdan" {
+		t.Fatalf("%d legs, want 13 with verdan last (zandara and vangros dropped)", n)
 	}
-	if len(res.Rows.Steps) != 153 || res.Rows.Count() != 169 {
-		t.Fatalf("%d steps and %d rows, want 153 and 169 (no navmesh: the mapped route only)", len(res.Rows.Steps), res.Rows.Count())
+	if len(res.Rows.Steps) != 126 || res.Rows.Count() != 140 {
+		t.Fatalf("%d steps and %d rows, want 126 and 140 (no navmesh: the mapped route only)", len(res.Rows.Steps), res.Rows.Count())
 	}
 }
 

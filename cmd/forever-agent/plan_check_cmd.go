@@ -39,7 +39,7 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 	approachHops := fs.Bool("approach-hops", false, "build the plan's rows for the lints with the approach hops (plan-export --approach-hops)")
 	strict := fs.Bool("strict", false, "make a lint finding fail the check (by default the lints are warnings)")
 	asJSON := fs.Bool("json", false, "print the results as JSON")
-	forever := fs.Bool("forever", false, "read --mmaps as the v16 tiles and --spawns as a TSV spawn list (guid entry x y z movetype) for a server module that runs dungeon plans")
+	forever := fs.Bool("forever", false, "read --mmaps as the v16 tiles and --spawns as a TSV spawn list (guid entry x y z movetype [kind: creature, or object for a game object]) for a server module that runs dungeon plans")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -149,7 +149,7 @@ type planLintReport struct {
 // lintOrder is the order the lints are counted and printed in.
 var lintOrder = []string{planlint.LintWater, planlint.LintOffFloor, planlint.LintEdge, planlint.LintLedge,
 	planlint.LintShortHop, planlint.LintAggro, planlint.LintBossAggro, planlint.LintPatrol, planlint.LintReach, planlint.LintHop,
-	planlint.LintArrival, planlint.LintClimb, planlint.LintJoiners}
+	planlint.LintArrival, planlint.LintClimb, planlint.LintJoiners, planlint.LintObjects}
 
 // lintErrors counts the findings the lints call errors: they fail plan-check without --strict.
 func lintErrors(fs []planlint.Finding) int {
@@ -179,16 +179,25 @@ func lintCountsText(c map[string]int) string {
 // failure: the note says why the lints did not run.
 func planLints(p *dungeon.Plan, planner *navmesh.Planner, dir, spawnDir string, floorAware, approachHops, forever bool) ([]planlint.Finding, string, error) {
 	planner.SetAvoid(p.Map, dungeon.NavBoxes(p.Avoid))
-	rows, err := planexport.Build(p, planexport.Options{Source: "plan-check", Cut: cutWith(planner, floorAware), ApproachHops: approachHops})
+	res, err := planexport.Build(p, planexport.Options{Source: "plan-check", Cut: cutWith(planner, floorAware), ApproachHops: approachHops})
 	if err != nil {
 		return nil, fmt.Sprintf("lints skipped: the exporter refused the plan: %v", err), nil
 	}
-	return lintRows(rows.Rows, planner, dir, spawnDir, p, forever)
+	return lintResult(res, planner, dir, spawnDir, p, forever)
 }
 
+// lintResult lints already built rows (an export's steps). p is the plan behind them (nil for a migration: the row's own
+// pull rules stand in); origins names each row's plan element, for the object lint's entry lookup.
+func lintResult(res planexport.Result, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan, forever bool) ([]planlint.Finding, string, error) {
+	return lintRows(res.Rows, res.Origins, planner, dir, spawnDir, p, forever)
+}
+
+// foreverServer is the alt_entries key of the second server: plan-check --forever reads its spawns and selects its object entries.
+const foreverServer = "forever"
+
 // lintRows lints already built rows (an export's steps). p is the plan behind them (nil for a migration: the row's own
-// pull rules stand in).
-func lintRows(rows planexport.Rows, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan, forever bool) ([]planlint.Finding, string, error) {
+// pull rules stand in); origins names each row's plan element, for the object lint's entry lookup (nil for a migration).
+func lintRows(rows planexport.Rows, origins []planexport.RowOrigin, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan, forever bool) ([]planlint.Finding, string, error) {
 	var world *worldspawn.World
 	var note string
 	if forever {
@@ -204,16 +213,31 @@ func lintRows(rows planexport.Rows, planner *navmesh.Planner, dir, spawnDir stri
 	if err != nil {
 		return nil, note, err
 	}
+	if forever && p != nil && world != nil {
+		// An empty object list fails at CheckObjects: a creature-only spawn
+		// file must not approve a plan with doors and levers unchecked. When
+		// the plan has no object-backed step the check adds no finding and
+		// the note says the object lint skipped for lack of game objects.
+		n := len(fs)
+		fs = append(fs, planlint.CheckObjects(rows, origins, p, world, foreverServer)...)
+		if len(world.Objects) == 0 {
+			if len(fs) == n {
+				note += "; object lint skipped: the spawn list holds no game objects"
+			} else {
+				note += "; the spawn list holds no game objects"
+			}
+		}
+	}
 	return fs, note, nil
 }
 
-// worldForLintsForever loads a server's TSV spawn list (guid entry x y z movetype) for the aggro and patrol lints.
+// worldForLintsForever loads a server's TSV spawn list (guid entry x y z movetype [kind]) for the aggro, patrol and object lints.
 func worldForLintsForever(spawnFile string, mapID uint32) (*worldspawn.World, string) {
 	if spawnFile == "" {
-		return nil, "aggro and patrol lints skipped: pass --spawns FILE (a TSV: guid entry x y z movetype)"
+		return nil, "aggro, patrol and object lints skipped: pass --spawns FILE (a TSV: guid entry x y z movetype [kind])"
 	}
 	if st, err := os.Stat(spawnFile); err == nil && st.IsDir() {
-		return nil, fmt.Sprintf("aggro and patrol lints skipped: --forever reads --spawns as a TSV file, and %s is a folder", spawnFile)
+		return nil, fmt.Sprintf("aggro, patrol and object lints skipped: --forever reads --spawns as a TSV file, and %s is a folder", spawnFile)
 	}
 	w, notes, err := worldspawn.LoadForeverSpawns(spawnFile, mapID)
 	if err != nil {
@@ -301,7 +325,7 @@ func planLintCmd(sqlFile, planName, spawns, dir string, planner *navmesh.Planner
 			return exitUsage
 		}
 	}
-	fs, note, err := lintRows(r, planner, dir, spawns, nil, forever)
+	fs, note, err := lintRows(r, nil, planner, dir, spawns, nil, forever)
 	if err != nil {
 		fmt.Fprintf(stderr, "plan-check: %v\n", err)
 		return exitUsage

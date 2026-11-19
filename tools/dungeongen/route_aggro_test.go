@@ -310,8 +310,8 @@ func TestRouteIntoLaterPacksDefaultsDetectionTo20(t *testing.T) {
 // each approach on its pack's level; the comment then says so).
 var routeAggroKnownFailing = map[string]int{
 	"ragefire_chasm":       164,                                                                       // ci-lint fix round (was 152): the new approach rows add walked segments past later packs.
-	"wailing_caverns":      180,                                                                       // the river pulls stage from bank stands (was 178): the stand rows renumber the walked segments past later packs.
-	"deadmines":            748,                                                                       // ported lab_tunnel and laboratory legs (TB f4344311): the mine route walks past the lab packs and the lab rows add segments. Boss rows own their boss (was 661). The repo reach (AggroRadius at 18-22 plus spread and wander) outruns the old 20 yd flat line.
+	"wailing_caverns":      128,                                                                       // second-server trim (was 180): the dropped zandara and vangros legs walk no segments past later packs.
+	"deadmines":            603,                                                                       // second-server trim (was 748, then 644): the dropped lab legs walk no segments past later packs, and rhahk_zor lost its lab-return via (a direct mine walk: 41 fewer).
 	"uldaman":              246,                                                                       // ci-lint fix round (was 247): the new approach rows add walked segments past later packs.
 	"zulfarrak":            54,                                                                        // zulfarrak re-pinned for the waypoint lint fixes (was 56): the moved points pass two fewer later packs, rows renumbered.
 	"karazhan_crypt":       439,                                                                       // waypoint pass (was 447): the moved Hivaxxis and lower-crypt stands walk past fewer later packs.
