@@ -60,15 +60,6 @@ func (f *fakeServer) sendFBDungeonRoster(c *fakeConn, seq uint32) {
 	f.sendPBC(c, seq, pbc.TypeRosterResp, pbc.BuildBody(append([]string{strconv.Itoa(len(recs))}, recs...)))
 }
 
-func fbdBotBy(name string) fbdBot {
-	for _, b := range fbdBots {
-		if b.name == name {
-			return b
-		}
-	}
-	return fbdBots[0]
-}
-
 // sendFBPartyLine sends one party line from a bot, as the module's tank does while it waits.
 func (f *fakeServer) sendFBPartyLine(c *fakeConn, text string) {
 	b := fbdBots[0]
