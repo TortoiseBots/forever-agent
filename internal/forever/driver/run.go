@@ -62,15 +62,24 @@ type Limits struct {
 	StragglerBack time.Duration
 	OutsideWait   time.Duration
 	// Lost bounds the search for a mob that left the threat list without being seen dead.
-	Lost        time.Duration
-	Blind       time.Duration
-	StuckAfter  time.Duration
-	PullGap     time.Duration
-	PullPerMin  int
-	MaxRetries  int
+	Lost       time.Duration
+	Blind      time.Duration
+	StuckAfter time.Duration
+	PullGap    time.Duration
+	PullPerMin int
+	MaxRetries int
+	// MaxWipes is the wipe budget: 0 allows no wipe at all, a negative value is no budget. The watch ends once the
+	// module's record is past it; the leading run ends on that wipe itself. MaxPractice is the practice rescue's cap.
 	MaxWipes    int
 	MaxPractice int
 	MaxMinutes  int
+	// WatchPoll is the watch loop's interval between the module's status and event reads; Watchdog bounds the time
+	// without a new event (then the watcher pauses the run and reports); WatchRescue is how long a run may stay
+	// paused on a wipe before the practice rescue; WatchStop bounds the wait for the stopped state after a stop.
+	WatchPoll   time.Duration
+	Watchdog    time.Duration
+	WatchRescue time.Duration
+	WatchStop   time.Duration
 }
 
 // DefaultLimits is the driver's table of defaults.
@@ -103,6 +112,10 @@ func DefaultLimits() Limits {
 		MaxWipes:      3,
 		MaxPractice:   8,
 		MaxMinutes:    120,
+		WatchPoll:     2 * time.Second,
+		Watchdog:      10 * time.Minute,
+		WatchRescue:   300 * time.Second,
+		WatchStop:     600 * time.Second,
 	}
 }
 
@@ -131,14 +144,25 @@ type Config struct {
 	Force func() bool
 	// Limits overrides the defaults; the zero value takes DefaultLimits.
 	Limits Limits
+	// Leader is the bot the module's run is led by (dungeon-watch). Its party is read from the module's roster;
+	// Party may stay empty. Empty in dungeon-run.
+	Leader string
+	// Watch runs the watch machine (dungeon-watch) instead of the driver's own run: PREPARE and ENTER as
+	// dungeon-run does, then the module's run, and from then on no order of ours.
+	Watch bool
+	// Watchdog overrides Limits.Watchdog; Poll overrides Limits.WatchPoll.
+	Watchdog time.Duration
+	Poll     time.Duration
+	// Logf prints the watch's progress lines; nil prints nothing.
+	Logf func(format string, args ...any)
 }
 
-// Tank is the first party name.
+// Tank is the first party name: in a watch it is the leader the module runs, before the roster is read.
 func (c Config) Tank() string {
 	if len(c.Party) > 0 {
 		return c.Party[0]
 	}
-	return ""
+	return c.Leader
 }
 
 // Healer is the second party name.
@@ -170,6 +194,9 @@ type Result struct {
 	SummaryFile string
 	// FightUnresolved is set when the stop left a fight running: nothing was sent at the stop.
 	FightUnresolved bool
+	// StopUnconfirmed is set when a watch's cleanup phase ended with the module's record still not stopped: the
+	// module may not have received the stop. It is a distinct outcome from a watch whose run reached stopped.
+	StopUnconfirmed bool
 }
 
 // Run is one run of the machine.
@@ -245,6 +272,8 @@ type Run struct {
 	crowded   bool
 	// ended is set when the run reached its end: the instance reset is allowed only from then on.
 	ended bool
+	// watch is the watched run's record, kept even without a recorder so the command's report carries it.
+	watch *RunWatch
 }
 
 // fight is one fight's bookkeeping.
@@ -279,6 +308,23 @@ func New(cfg Config, route *Route, cmd Commander, w World, walk Walker, clock Cl
 	}
 	if cfg.Limits.Prepare == 0 {
 		cfg.Limits = DefaultLimits()
+	}
+	if cfg.Watch {
+		if cfg.Poll <= 0 {
+			cfg.Poll = cfg.Limits.WatchPoll
+		}
+		if cfg.Poll > 30*time.Second {
+			cfg.Poll = 30 * time.Second
+		}
+		if cfg.Poll < time.Second {
+			cfg.Poll = time.Second
+		}
+		if cfg.Watchdog <= 0 {
+			cfg.Watchdog = cfg.Limits.Watchdog
+		}
+		if cfg.Watchdog < time.Minute {
+			cfg.Watchdog = time.Minute
+		}
 	}
 	if clock == nil {
 		clock = WallClock{}

@@ -17,6 +17,8 @@ const (
 	SummarySchema  = "forever-run"
 	SummaryVersion = 1
 	TraceSource    = "forever_dungeon_run"
+	// TraceSourceWatch is the watch's source word: the same summary schema, filled from the module's own counters.
+	TraceSourceWatch = "forever_dungeon_watch"
 )
 
 // PullRecord is one pull's numbers.
@@ -56,6 +58,105 @@ type RunSummary struct {
 	LastLeg    string          `json:"last_leg"`
 	Instance   uint32          `json:"instance"`
 	Pulls      []PullRecord    `json:"pulls"`
+	// Watch is set for a watched run: the module's own progress and counters, plus what the watcher did (the
+	// practice rescues and the pauses it saw). A dungeon-run leaves it nil.
+	Watch *RunWatch `json:"watch,omitempty"`
+}
+
+// RunWatch is a watched run's record: the module's progress at the end (or at the last read), its counters, the
+// bosses it read through the instance report, and the watcher's own actions.
+type RunWatch struct {
+	State    string  `json:"state"`
+	Step     int     `json:"step"`
+	Steps    int     `json:"steps"`
+	Leg      int     `json:"leg"`
+	LegName  string  `json:"leg_name"`
+	Kind     string  `json:"kind,omitempty"`
+	Phase    string  `json:"phase"`
+	Pull     int     `json:"pull"`
+	Pulls    int     `json:"pulls"`
+	Deaths   int     `json:"deaths"`
+	Wipes    int     `json:"wipes"`
+	Pauses   int     `json:"pauses"`
+	ElapsedS float64 `json:"elapsed_s"`
+	Why      string  `json:"why,omitempty"`
+	// Bosses maps a boss entry to alive or dead, as the module's instance report gave it.
+	Bosses map[string]string `json:"bosses,omitempty"`
+	// Rescues is how many practice rescues the watcher sent, Events how many run events it read, and PauseLog the
+	// pauses it saw with their reasons and times.
+	Rescues  int         `json:"rescues"`
+	Events   int         `json:"events"`
+	PauseLog []PauseNote `json:"pause_log,omitempty"`
+	// StopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
+	// have reached it, so the run's end is not confirmed by the module.
+	StopUnconfirmed bool `json:"stop_unconfirmed,omitempty"`
+	// Legs, StepLog, DeathLog and RescueLog are the per-leg evidence the report card is built from: the module's own
+	// event times, grouped by leg and step. A watch writes them as it reads; a saved record lets the card be built
+	// offline. They are empty for a record written before this round.
+	Legs      []LegRecord   `json:"legs,omitempty"`
+	StepLog   []StepRecord  `json:"step_log,omitempty"`
+	DeathLog  []DeathRecord `json:"death_log,omitempty"`
+	RescueLog []RescueNote  `json:"rescue_log,omitempty"`
+}
+
+// PauseNote is one pause event: its time into the watched run, where it happened, the module's reason and whether a
+// resume followed it.
+type PauseNote struct {
+	AtS     float64 `json:"at_s"`
+	Leg     int     `json:"leg,omitempty"`
+	Step    int     `json:"step,omitempty"`
+	Why     string  `json:"why"`
+	Cleared bool    `json:"cleared"`
+}
+
+// LegRecord is one leg of the module's run: its event span, its pulls, and its deaths, wipes and pauses. Seconds runs to the next leg's first event, or to the run's last elapsed second for the last leg.
+type LegRecord struct {
+	Leg     int    `json:"leg"`
+	Name    string `json:"name,omitempty"`
+	FirstS  int    `json:"first_s"`
+	LastS   int    `json:"last_s"`
+	Seconds int    `json:"seconds"`
+	Pulls   int    `json:"pulls"`
+	Steps   int    `json:"steps"`
+	Deaths  int    `json:"deaths"`
+	Wipes   int    `json:"wipes"`
+	Pauses  int    `json:"pauses"`
+	// PlanS is the plan's recorded time for the leg in seconds, 0 when the plan records none.
+	PlanS int `json:"plan_s,omitempty"`
+}
+
+// StepRecord is one step that had a pull or a death: its pull events (a second one at the same step is a re-pull)
+// and its deaths.
+type StepRecord struct {
+	Leg        int        `json:"leg"`
+	Step       int        `json:"step"`
+	Pulls      int        `json:"pulls"`
+	PullEvents []PullNote `json:"pull_events,omitempty"`
+	Deaths     int        `json:"deaths"`
+}
+
+// PullNote is one pull event at a step: its place in the module's event ring and its time into the run.
+type PullNote struct {
+	Seq int `json:"seq"`
+	AtS int `json:"at_s"`
+}
+
+// DeathRecord is one death event: when, where, and the party slot the module named (a role word, never a
+// character name). Unit is the module's own unit id when it sent one.
+type DeathRecord struct {
+	AtS  int    `json:"at_s"`
+	Leg  int    `json:"leg"`
+	Step int    `json:"step"`
+	Unit uint32 `json:"unit,omitempty"`
+	Who  string `json:"who,omitempty"`
+}
+
+// RescueNote is one practice rescue the watcher sent: when, where, and the pause it answered.
+type RescueNote struct {
+	AtS  int    `json:"at_s"`
+	Leg  int    `json:"leg"`
+	Step int    `json:"step"`
+	Why  string `json:"why,omitempty"`
 }
 
 // Recorder writes the run's trace and summary. A nil Recorder writes nothing, so a run without an output folder still
@@ -70,8 +171,19 @@ type Recorder struct {
 	pull    *PullRecord
 }
 
-// NewRecorder opens the run's trace in dir. runID names the files; plan and instance go into the header and summary.
+// NewRecorder opens a dungeon-run's trace in dir. runID names the files; plan and instance go into the header and
+// summary.
 func NewRecorder(dir, runID, plan string, planMap, instance uint32, start time.Time, party []trace.Member) (*Recorder, error) {
+	return newRecorder(dir, runID, plan, planMap, instance, start, party, "commander", TraceSource)
+}
+
+// NewWatchRecorder opens a watched run's trace: the same files and schema, with the watch's own mode and source.
+func NewWatchRecorder(dir, runID, plan string, planMap, instance uint32, start time.Time, party []trace.Member) (*Recorder, error) {
+	return newRecorder(dir, runID, plan, planMap, instance, start, party, "watch", TraceSourceWatch)
+}
+
+func newRecorder(dir, runID, plan string, planMap, instance uint32, start time.Time, party []trace.Member,
+	mode, source string) (*Recorder, error) {
 	if dir == "" {
 		return nil, nil
 	}
@@ -93,14 +205,14 @@ func NewRecorder(dir, runID, plan string, planMap, instance uint32, start time.T
 			Version: SummaryVersion,
 			RunID:   runID,
 			Plan:    plan,
-			Mode:    "commander",
+			Mode:    mode,
 			Bosses:  map[string]bool{},
 			Pulls:   []PullRecord{},
 		},
 	}
 	w.Header(trace.Header{
-		Source:    TraceSource,
-		Mode:      "commander",
+		Source:    source,
+		Mode:      mode,
 		Plan:      plan,
 		Start:     start,
 		Map:       planMap,
@@ -286,6 +398,31 @@ func (r *Recorder) Finish(t time.Time, reason, lastLeg string) {
 		})
 		_ = r.trace.Close()
 	}
+}
+
+// SetWatch stores a watched run's counters and rewrites the summary. It is called while the watch is on and once at
+// its end, so a watch that loses its link still leaves the last record it read.
+func (r *Recorder) SetWatch(w RunWatch, t time.Time) {
+	if r == nil {
+		return
+	}
+	cp := w
+	if w.Bosses != nil {
+		cp.Bosses = make(map[string]string, len(w.Bosses))
+		for k, v := range w.Bosses {
+			cp.Bosses[k] = v
+		}
+	}
+	cp.PauseLog = append([]PauseNote(nil), w.PauseLog...)
+	cp.Legs = append([]LegRecord(nil), w.Legs...)
+	cp.StepLog = append([]StepRecord(nil), w.StepLog...)
+	for i := range cp.StepLog {
+		cp.StepLog[i].PullEvents = append([]PullNote(nil), w.StepLog[i].PullEvents...)
+	}
+	cp.DeathLog = append([]DeathRecord(nil), w.DeathLog...)
+	cp.RescueLog = append([]RescueNote(nil), w.RescueLog...)
+	r.sum.Watch = &cp
+	r.Summary(t)
 }
 
 // SummaryPath is where the run's JSON is written.

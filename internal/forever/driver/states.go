@@ -41,7 +41,15 @@ func (r *Run) prepare(ctx context.Context) string {
 		r.stop("prepare:party")
 		return ""
 	}
-	if why := rosterWhy(r.cfg, party); why != "" {
+	var why string
+	if r.cfg.Watch {
+		// A watch is not one of our parties: the leader is the bot the module runs, and the roster is where the
+		// five names come from. PREPARE then checks it exactly as a run does (levels, roles, online, commanded).
+		why = r.adoptRoster(party)
+	} else {
+		why = rosterWhy(r.cfg, party)
+	}
+	if why != "" {
 		r.stop("prepare:" + why)
 		return ""
 	}
@@ -120,6 +128,51 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 	if roles["tank"] < 1 || roles["healer"] < 1 || roles["dps"] < 3 {
 		return "roles"
 	}
+	return ""
+}
+
+// adoptRoster fills a watch's party from the module's roster: the leader first (so every role lookup has the tank
+// where the driver's own run keeps it), then the one healer, then the three damage dealers. It refuses what a run's
+// PREPARE refuses — five members, the named leader leading, everyone online and above the entry level, the roles —
+// and two things only a watch needs: every member a host bot, and every other member already commanded, because the
+// module's start refuses a party it would have to bind itself.
+func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
+	if len(p.Members) != 5 {
+		return "roster"
+	}
+	if r.cfg.Leader == "" || !strings.EqualFold(p.Leader, r.cfg.Leader) {
+		return "leader"
+	}
+	var heals, dps []string
+	for _, m := range p.Members {
+		if !m.Online {
+			return "offline"
+		}
+		if m.HasLevel && m.Level < 10 {
+			return "level"
+		}
+		if !m.Bot {
+			return "not-bot"
+		}
+		if !m.Commanded {
+			return "not-commanded"
+		}
+		if strings.EqualFold(m.Name, r.cfg.Leader) {
+			continue
+		}
+		switch {
+		case m.HasRole && m.Role == "healer":
+			heals = append(heals, m.Name)
+		case m.HasRole && m.Role == "dps":
+			dps = append(dps, m.Name)
+		default:
+			return "roles"
+		}
+	}
+	if len(heals) != 1 || len(dps) != 3 {
+		return "roles"
+	}
+	r.cfg.Party = append([]string{r.cfg.Leader, heals[0]}, dps...)
 	return ""
 }
 
@@ -1310,7 +1363,9 @@ func (r *Run) wipe(ctx context.Context) string {
 		r.wipeGroups[gid]++
 	}
 	r.event("wipe", map[string]any{"leg": r.lastLegName(), "group": gid, "wipe": r.wipes})
-	if r.wipes >= r.lim.MaxWipes {
+	// MaxWipes is the wipe budget: 0 allows no wipe at all (the first one ends the run), a negative value is no
+	// budget. The watch reads it the same way.
+	if r.lim.MaxWipes >= 0 && r.wipes >= r.lim.MaxWipes {
 		r.stop("wipe-budget")
 		return ""
 	}

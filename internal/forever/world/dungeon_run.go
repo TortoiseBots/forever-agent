@@ -68,3 +68,58 @@ func (s *session) dungeonRun(ctx context.Context, cfg *driver.Config) (*driver.R
 		res.Summary.Practice, res.Clear)
 	return &res, nil
 }
+
+// dungeonWatch is the session side of `forever dungeon-watch`: PREPARE and ENTER as a run does, then the module's
+// own run and no order of ours. It shares the four adapters and the recorder with dungeonRun; only the machine
+// differs, and the watch writes the same summary with the module's counters.
+func (s *session) dungeonWatch(ctx context.Context, cfg *driver.Config) (*driver.Result, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	c := *cfg
+	c.Dry = false
+	c.Watch = true
+	if c.Plan == "" {
+		return nil, errors.New("world: dungeon-watch: no plan file")
+	}
+	if c.Leader == "" {
+		return nil, errors.New("world: dungeon-watch: no leader")
+	}
+	route, err := driver.LoadRoute(c.Plan)
+	if err != nil {
+		return nil, fmt.Errorf("world: dungeon-watch: the plan is refused: %w", err)
+	}
+	s.initChat()
+	settle := s.opts.Settle
+	if settle <= 0 {
+		settle = dungeonSettle
+	}
+	if err := s.collect(ctx, settle); err != nil {
+		return nil, err
+	}
+	if err := s.confirmGM(ctx); err != nil {
+		return nil, err
+	}
+	cmd := newDungeonCommander(s, c.Tank())
+	run := driver.New(c, route, cmd, dungeonWorld{s: s}, dungeonWalker{s: s}, dungeonClock{s: s})
+	if c.Out != "" {
+		if c.RunID == "" {
+			c.RunID = trace.NewRunID(time.Now())
+		}
+		rec, err := driver.NewWatchRecorder(c.Out, c.RunID, route.Name, route.Map, 1, s.Now(), run.PartyMembers())
+		if err != nil {
+			return nil, fmt.Errorf("world: dungeon-watch: %w", err)
+		}
+		run.SetRecorder(rec)
+	}
+	s.opts.logf("dungeon-watch: plan %s, map %d, %d leg(s), leader %s", route.Name, route.Map, len(route.Legs),
+		c.Leader)
+	res := run.Watch(ctx)
+	events := 0
+	if res.Summary.Watch != nil {
+		events = res.Summary.Watch.Events
+	}
+	s.opts.logf("dungeon-watch: stop %s, %d event(s) read, %d rescue(s), clear=%v", res.Stop, events,
+		res.Summary.Practice, res.Clear)
+	return &res, nil
+}

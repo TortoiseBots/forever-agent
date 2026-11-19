@@ -60,6 +60,11 @@ type Commander interface {
 	Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderReport, error)
 	Party(ctx context.Context) (tbcmd.PartyReport, error)
 	Act(ctx context.Context, a Action) (ActionReport, error)
+	// RunStatus reads the module's own run record (the watcher never leads: this is its progress), and RunEvents
+	// the event ring above a sequence. Both are reads; a run command is an Action, so every send still leaves
+	// through the one send function and its gate.
+	RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error)
+	RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error)
 }
 
 // World is the commander's own client: where it stands, what it sees and the one client packet the entry phase needs.
