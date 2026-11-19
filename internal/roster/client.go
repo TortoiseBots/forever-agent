@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/tbdash"
@@ -79,9 +80,11 @@ func clip(b []byte) string {
 	return string(b)
 }
 
-// Bot is one logged-in bot, as GET /api/v1/bots lists it. Role, Strategy and XP are not filled
-// yet; Role and Strategy decode to "" and XP is not modelled, so either may arrive later
-// without a client change. Unknown fields are ignored for the same reason.
+// Bot is one logged-in bot, as GET /api/v1/bots lists it. The fields the watch rules read
+// (hp, max_hp, map, instance, x, y, z, state, and name, guid and kind for identity) must be
+// present in the record; DecodeRoster rejects a record without them. Level, power, max_power,
+// o, class, zone, target, group, role and strategy are optional. Role and Strategy are not
+// filled yet; XP is not modelled. Unknown fields are ignored, so a later field costs nothing.
 type Bot struct {
 	Name      string  `json:"name"`
 	GUID      Text    `json:"guid"`
@@ -119,32 +122,72 @@ type Heartbeat struct {
 	States map[string]float64 `json:"states"`
 }
 
+// Rejection is one bot record the decoder left out: its index in the answer, the name when the
+// record's name could be read, and why. A rejected record never reaches the watch rules, so a
+// missing field cannot turn into a death, a stuck flag or a distance.
+type Rejection struct {
+	Index  int
+	Name   string
+	Reason string
+}
+
 // Roster is one sample: every logged-in bot and, when the dashboard sends one, its heartbeat.
+// Rejected holds the records that were refused and left out of Bots.
 type Roster struct {
-	Bots      []Bot      `json:"bots"`
-	Heartbeat *Heartbeat `json:"heartbeat"`
+	Bots      []Bot       `json:"bots"`
+	Heartbeat *Heartbeat  `json:"heartbeat"`
+	Rejected  []Rejection `json:"-"`
+}
+
+// botWire is the presence-tracked form of one bot record. The fields the watch rules read are
+// pointers, so a missing key (or a null) is distinguishable from a zero; the truly optional
+// fields keep their plain value.
+type botWire struct {
+	Name      string   `json:"name"`
+	GUID      Text     `json:"guid"`
+	Class     Text     `json:"class"`
+	Level     *int     `json:"level"`
+	HP        *int     `json:"hp"`
+	MaxHP     *int     `json:"max_hp"`
+	Power     *int     `json:"power"`
+	MaxPower  *int     `json:"max_power"`
+	PowerType Text     `json:"power_type"`
+	Map       *int     `json:"map"`
+	Zone      Text     `json:"zone"`
+	Instance  *Text    `json:"instance"`
+	X         *float64 `json:"x"`
+	Y         *float64 `json:"y"`
+	Z         *float64 `json:"z"`
+	O         *float64 `json:"o"`
+	Target    Text     `json:"target"`
+	Group     Text     `json:"group"`
+	Kind      Text     `json:"kind"`
+	State     Text     `json:"state"`
+	Role      Text     `json:"role"`
+	Strategy  Text     `json:"strategy"`
 }
 
 // DecodeRoster reads the answer of GET /api/v1/bots. The dashboard may send the roster as a
-// bare array or as an object with a bots list and a heartbeat; both are accepted. A bot without
-// a name or guid, or with a kind or state outside the contract, is refused: a silent zero would
-// make the watch miss a death.
+// bare array or as an object with a bots list and a heartbeat; both are accepted. A record is
+// judged on its own: one that is malformed, or that omits or zeroes a field the watch rules
+// read, is left out of Bots and described in Rejected, and the other records are kept. The
+// answer as a whole is an error only when it cannot be a roster at all.
 func DecodeRoster(raw []byte) (*Roster, error) {
 	body := bytes.TrimSpace(raw)
 	if len(body) == 0 {
 		return nil, errors.New("empty answer")
 	}
+	var records []json.RawMessage
+	var heartbeat *Heartbeat
 	switch body[0] {
 	case '[':
-		var bots []Bot
-		if err := json.Unmarshal(body, &bots); err != nil {
+		if err := json.Unmarshal(body, &records); err != nil {
 			return nil, fmt.Errorf("bots: %w", err)
 		}
-		return newRoster(bots, nil)
 	case '{':
 		var ans struct {
-			Bots      []Bot      `json:"bots"`
-			Heartbeat *Heartbeat `json:"heartbeat"`
+			Bots      []json.RawMessage `json:"bots"`
+			Heartbeat *Heartbeat        `json:"heartbeat"`
 		}
 		if err := json.Unmarshal(body, &ans); err != nil {
 			return nil, fmt.Errorf("bots: %w", err)
@@ -152,33 +195,139 @@ func DecodeRoster(raw []byte) (*Roster, error) {
 		if ans.Bots == nil {
 			return nil, errors.New("the answer has no bots list")
 		}
-		return newRoster(ans.Bots, ans.Heartbeat)
+		records, heartbeat = ans.Bots, ans.Heartbeat
 	default:
 		return nil, errors.New("the answer is neither a bots array nor an object")
 	}
+	r := &Roster{Bots: make([]Bot, 0, len(records)), Heartbeat: heartbeat}
+	for i, record := range records {
+		b, err := decodeBot(record)
+		if err != nil {
+			r.Rejected = append(r.Rejected, Rejection{Index: i, Name: recordName(record), Reason: err.Error()})
+			continue
+		}
+		r.Bots = append(r.Bots, b)
+	}
+	return r, nil
 }
 
-func newRoster(bots []Bot, heartbeat *Heartbeat) (*Roster, error) {
-	for i := range bots {
-		b := &bots[i]
-		if b.Name == "" {
-			return nil, fmt.Errorf("bot %d has no name", i)
-		}
-		if b.GUID == "" {
-			return nil, fmt.Errorf("bot %q has no guid", b.Name)
-		}
-		switch string(b.Kind) {
-		case KindPool, KindHired:
-		default:
-			return nil, fmt.Errorf("bot %q has kind %q, want %s or %s", b.Name, string(b.Kind), KindPool, KindHired)
-		}
-		switch string(b.State) {
-		case StateIdle, StateMoving, StateCombat, StateDead:
-		default:
-			return nil, fmt.Errorf("bot %q has state %q, want one of %s, %s, %s, %s", b.Name, string(b.State), StateIdle, StateMoving, StateCombat, StateDead)
+// recordName pulls a name out of a record that may otherwise be unusable, for the rejection
+// line; it is empty when the name is missing or not a string.
+func recordName(raw json.RawMessage) string {
+	var probe struct {
+		Name json.RawMessage `json:"name"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || len(probe.Name) == 0 {
+		return ""
+	}
+	var name string
+	if json.Unmarshal(probe.Name, &name) != nil {
+		return ""
+	}
+	return name
+}
+
+func decodeBot(raw json.RawMessage) (Bot, error) {
+	var w botWire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return Bot{}, fmt.Errorf("record: %w", err)
+	}
+	return w.bot()
+}
+
+// bot turns one wire record into a Bot, enforcing the fields the rules depend on: a missing
+// value is an error, never a zero; hp and max_hp must agree; a live bot must have a maximum;
+// the position must be finite.
+func (w botWire) bot() (Bot, error) {
+	if w.Name == "" {
+		return Bot{}, errors.New("name is missing")
+	}
+	if w.GUID == "" {
+		return Bot{}, errors.New("guid is missing")
+	}
+	if w.Kind == "" {
+		return Bot{}, errors.New("kind is missing")
+	}
+	switch string(w.Kind) {
+	case KindPool, KindHired:
+	default:
+		return Bot{}, fmt.Errorf("kind %q is not %s or %s", string(w.Kind), KindPool, KindHired)
+	}
+	if w.State == "" {
+		return Bot{}, errors.New("state is missing")
+	}
+	switch string(w.State) {
+	case StateIdle, StateMoving, StateCombat, StateDead:
+	default:
+		return Bot{}, fmt.Errorf("state %q is not one of %s, %s, %s, %s", string(w.State), StateIdle, StateMoving, StateCombat, StateDead)
+	}
+	if w.HP == nil {
+		return Bot{}, errors.New("hp is missing")
+	}
+	if w.MaxHP == nil {
+		return Bot{}, errors.New("max_hp is missing")
+	}
+	if w.Map == nil {
+		return Bot{}, errors.New("map is missing")
+	}
+	if w.Instance == nil {
+		return Bot{}, errors.New("instance is missing")
+	}
+	if w.X == nil {
+		return Bot{}, errors.New("x is missing")
+	}
+	if w.Y == nil {
+		return Bot{}, errors.New("y is missing")
+	}
+	if w.Z == nil {
+		return Bot{}, errors.New("z is missing")
+	}
+	if *w.HP < 0 {
+		return Bot{}, errors.New("hp is negative")
+	}
+	if *w.MaxHP < 0 {
+		return Bot{}, errors.New("max_hp is negative")
+	}
+	if *w.HP > *w.MaxHP {
+		return Bot{}, fmt.Errorf("hp %d is over max_hp %d", *w.HP, *w.MaxHP)
+	}
+	if *w.MaxHP == 0 && w.State != StateDead {
+		return Bot{}, errors.New("max_hp is 0 for a live bot")
+	}
+	if *w.Map < 0 {
+		return Bot{}, errors.New("map is negative")
+	}
+	for _, f := range []struct {
+		name string
+		v    float64
+	}{{"x", *w.X}, {"y", *w.Y}, {"z", *w.Z}} {
+		if math.IsNaN(f.v) || math.IsInf(f.v, 0) {
+			return Bot{}, fmt.Errorf("%s is not a finite number", f.name)
 		}
 	}
-	return &Roster{Bots: bots, Heartbeat: heartbeat}, nil
+
+	b := Bot{
+		Name: w.Name, GUID: w.GUID, Class: w.Class,
+		HP: *w.HP, MaxHP: *w.MaxHP,
+		PowerType: w.PowerType, Map: *w.Map,
+		Zone: w.Zone, Instance: *w.Instance,
+		X: *w.X, Y: *w.Y, Z: *w.Z,
+		Target: w.Target, Group: w.Group, Kind: w.Kind, State: w.State,
+		Role: w.Role, Strategy: w.Strategy,
+	}
+	if w.Level != nil {
+		b.Level = *w.Level
+	}
+	if w.Power != nil {
+		b.Power = *w.Power
+	}
+	if w.MaxPower != nil {
+		b.MaxPower = *w.MaxPower
+	}
+	if w.O != nil {
+		b.O = *w.O
+	}
+	return b, nil
 }
 
 // Client reads the roster dashboard through a tbdash session.
@@ -186,17 +335,26 @@ type Client struct {
 	dash *tbdash.Client
 }
 
-// New validates the dashboard URL and builds a client. A timeout of zero or less takes
-// DefaultTimeout; every request, the login included, is bounded by it.
-func New(base, user string, src tbdash.PasswordSource, timeout time.Duration) (*Client, error) {
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+// Options are the roster client's settings.
+type Options struct {
+	// Timeout bounds one request, the login included; zero or less takes DefaultTimeout.
+	Timeout time.Duration
+	// AllowInsecureHTTP permits a plain-http dashboard that is not on this machine. Off by
+	// default; the caller that sets it must warn its operator (the command does).
+	AllowInsecureHTTP bool
+}
+
+// New validates the dashboard URL and builds a client. A plain-http URL outside loopback is
+// refused unless Options.AllowInsecureHTTP is set.
+func New(base, user string, src tbdash.PasswordSource, opts Options) (*Client, error) {
+	if opts.Timeout <= 0 {
+		opts.Timeout = DefaultTimeout
 	}
-	dash, err := tbdash.NewWithSecret(base, user, src)
+	dash, err := tbdash.NewWithOptions(base, user, src, tbdash.Options{AllowInsecureHTTP: opts.AllowInsecureHTTP})
 	if err != nil {
 		return nil, err
 	}
-	dash.SetTimeout(timeout)
+	dash.SetTimeout(opts.Timeout)
 	return &Client{dash: dash}, nil
 }
 

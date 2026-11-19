@@ -32,7 +32,7 @@ func testSource(t *testing.T) tbdash.PasswordSource {
 
 func newTestClient(t *testing.T, base string, timeout time.Duration) *Client {
 	t.Helper()
-	c, err := New(base, testUser, testSource(t), timeout)
+	c, err := New(base, testUser, testSource(t), Options{Timeout: timeout})
 	if err != nil {
 		t.Fatalf("New(%q): %v", base, err)
 	}
@@ -152,7 +152,7 @@ func TestRosterAcceptsBareArrayAndAbsentHeartbeat(t *testing.T) {
 			fmt.Fprint(w, `{"success":true}`)
 			return
 		}
-		fmt.Fprint(w, `[{"name":"Ash","guid":1,"kind":"pool","state":"dead"}]`)
+		fmt.Fprint(w, `[{"name":"Ash","guid":1,"kind":"pool","state":"dead","hp":0,"max_hp":0,"map":0,"instance":"","x":0,"y":0,"z":0}]`)
 	}))
 	defer srv.Close()
 
@@ -208,7 +208,8 @@ func TestRosterReloginsOnceOn401(t *testing.T) {
 }
 
 func TestDecodeRosterRefusesContractBreaks(t *testing.T) {
-	cases := []struct {
+	// A record-level break leaves the answer usable: the record is rejected, not the roster.
+	records := []struct {
 		name string
 		body string
 		want string
@@ -221,12 +222,37 @@ func TestDecodeRosterRefusesContractBreaks(t *testing.T) {
 		{"no kind", `{"bots":[{"name":"A","guid":1,"state":"idle"}]}`, "kind"},
 		{"unknown kind", `{"bots":[{"name":"A","guid":1,"kind":"pet","state":"idle"}]}`, "kind"},
 		{"unknown state", `{"bots":[{"name":"A","guid":1,"kind":"pool","state":"resting"}]}`, "state"},
+		{"not an object", `{"bots":[5]}`, "record"},
+		{"null record", `{"bots":[null]}`, "name"},
+	}
+	for _, tc := range records {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := DecodeRoster([]byte(tc.body))
+			if err != nil {
+				t.Fatalf("a bad record failed the whole answer: %v", err)
+			}
+			if len(r.Bots) != 0 || len(r.Rejected) != 1 {
+				t.Fatalf("bots %+v, rejections %+v", r.Bots, r.Rejected)
+			}
+			if !strings.Contains(r.Rejected[0].Reason, tc.want) {
+				t.Fatalf("reason %q does not name %q", r.Rejected[0].Reason, tc.want)
+			}
+		})
+	}
+
+	// An answer that cannot be a roster at all is still an error.
+	structural := []struct {
+		name string
+		body string
+		want string
+	}{
 		{"no bots list", `{"heartbeat":{"bots":0,"humans":0}}`, "bots list"},
 		{"null bots list", `{"bots":null}`, "bots list"},
 		{"empty answer", ``, "empty"},
 		{"not JSON", `hello`, "neither"},
+		{"top-level scalar", `7`, "neither"},
 	}
-	for _, tc := range cases {
+	for _, tc := range structural {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := DecodeRoster([]byte(tc.body))
 			if err == nil {
@@ -308,7 +334,7 @@ func TestPasswordFileWithLooseModeIsRefused(t *testing.T) {
 	if err := os.WriteFile(path, []byte(testPassword+"\n"), 0o644); err != nil {
 		t.Fatalf("writing the password file: %v", err)
 	}
-	c, err := New(srv.URL, testUser, tbdash.PasswordFile(path), time.Second)
+	c, err := New(srv.URL, testUser, tbdash.PasswordFile(path), Options{Timeout: time.Second})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
