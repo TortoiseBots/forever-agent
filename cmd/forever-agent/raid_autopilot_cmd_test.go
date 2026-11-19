@@ -317,9 +317,11 @@ func waitForN(t *testing.T, d time.Duration, what string, cond func() bool) {
 }
 
 // tickUntil advances the supervisor until cond holds (the launch, exit and next-args phases are separate ticks).
+// The bound is generous (30 s): a passing wait returns on its own tick, and only a truly stuck supervisor hits it,
+// however slow the machine is.
 func tickUntil(t *testing.T, s *autoSupervisor, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
@@ -976,7 +978,7 @@ func TestAutoStopFileStopsOnlyItsRaid(t *testing.T) {
 		t.Fatalf("no STOP-a event:\n%s", f.events())
 	}
 	before := len(f.args())
-	waitForN(t, time.Second, "a's teardown", func() bool { return len(f.teardowns()) >= 1 })
+	waitForN(t, 30*time.Second, "a's teardown", func() bool { return len(f.teardowns()) >= 1 })
 	tickUntil(t, s, "b to keep running", func() bool {
 		done, _ := runState(s.states[1])
 		return !done
@@ -1151,7 +1153,7 @@ func TestAutoTargetsFileIsReread(t *testing.T) {
 		t.Fatalf("the targets re-read escalated an id:\n%s", f.events())
 	}
 	before := len(f.args())
-	waitForN(t, time.Second, "a's teardown", func() bool { return len(f.teardowns()) >= 1 })
+	waitForN(t, 30*time.Second, "a's teardown", func() bool { return len(f.teardowns()) >= 1 })
 	for range 20 {
 		s.tick(context.Background())
 		time.Sleep(2 * time.Millisecond)

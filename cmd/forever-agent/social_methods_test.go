@@ -12,9 +12,14 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
+// packetWait is how long a packet wait lasts: long enough that only a missing
+// packet fails the test (30 s), however slow the machine is. A passing wait
+// returns on the packet itself; the bound only matters when the run never sent it.
+const packetWait = 30 * time.Second
+
 func (r *agentRig) expectBody(op uint16, want []byte) {
 	r.t.Helper()
-	p, err := r.srv.Expect(op, 2*time.Second)
+	p, err := r.srv.Expect(op, packetWait)
 	if err != nil {
 		r.t.Fatal(err)
 	}

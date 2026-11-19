@@ -71,15 +71,9 @@ func TestDungeonRunObserveEndToEnd(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|2|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|2|0")
-	var done map[string]any
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		done = resultOf(t, r.call("dungeon_status", `{}`))
-		if done["state"] == "done" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	done := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "done"
+	})["result"].(map[string]any)
 	if done["state"] != "done" {
 		t.Fatalf("%v", done)
 	}
@@ -121,15 +115,9 @@ func TestDungeonRunObserveRefusesAServerWithoutTheRunLeader(t *testing.T) {
 	r.expectBody(opcode.CMSGMessagechat, say(".bot run list"))
 	// an older module answers nothing at all (or an "unknown command" line)
 	r.system("There is no such command.")
-	var st map[string]any
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "failed" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "failed"
+	})["result"].(map[string]any)
 	if st["state"] != "failed" {
 		t.Fatalf("%v", st)
 	}
