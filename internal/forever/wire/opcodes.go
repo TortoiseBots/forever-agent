@@ -175,6 +175,36 @@ const (
 	SMSGSpellExecuteLog      uint32 = 0x670033
 )
 
+// Loot and game objects (Opcodes.h:357-358, 579-583, 1499-1500, 1805, 1865-1874, 2395):
+// CMSG_LOOT_UNIT and its four requests, CMSG_GAME_OBJ_USE with the report the real client follows it with, and the
+// window, money, roll and object-state answers.
+const (
+	CMSGLootUnit            uint32 = 0x3D00CB
+	CMSGLootMoney           uint32 = 0x3D00CC
+	CMSGLootItem            uint32 = 0x3D00CD
+	CMSGLootRelease         uint32 = 0x3D00D1
+	CMSGLootRoll            uint32 = 0x3D00D2
+	CMSGGameObjUse          uint32 = 0x3E0089
+	CMSGGameObjReportUse    uint32 = 0x3E008A
+
+	SMSGLootResponse        uint32 = 0x4500BE
+	SMSGLootRemoved         uint32 = 0x4500BF
+	SMSGCoinRemoved         uint32 = 0x4500C0
+	SMSGLootReleaseAll      uint32 = 0x4500C3
+	SMSGLootRelease         uint32 = 0x4500C4
+	SMSGLootMoneyNotify     uint32 = 0x4500C5
+	SMSGStartLootRoll       uint32 = 0x4500C6
+	SMSGLootRoll            uint32 = 0x4500C7
+	SMSGLootRollsComplete   uint32 = 0x4500C9
+	SMSGLootAllPassed       uint32 = 0x4500CA
+	SMSGLootRollWon         uint32 = 0x4500CB
+	SMSGItemPushResult      uint32 = 0x4500CC
+	SMSGLootList            uint32 = 0x4501EB
+
+	SMSGGameObjectCustomAnim uint32 = 0x450068
+	SMSGGameObjectDespawn    uint32 = 0x450069
+)
+
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
 const (
 	CMSGAreaTrigger          uint32 = 0x3D0089
@@ -252,6 +282,14 @@ var clientNames = map[uint32]string{
 	CMSGCreateCharacter:                "CMSG_CREATE_CHARACTER",
 	CMSGCheckCharacterNameAvailability: "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY",
 	CMSGCharDelete:                     "CMSG_CHAR_DELETE",
+
+	CMSGLootUnit:         "CMSG_LOOT_UNIT",
+	CMSGLootMoney:        "CMSG_LOOT_MONEY",
+	CMSGLootItem:         "CMSG_LOOT_ITEM",
+	CMSGLootRelease:      "CMSG_LOOT_RELEASE",
+	CMSGLootRoll:         "CMSG_LOOT_ROLL",
+	CMSGGameObjUse:       "CMSG_GAME_OBJ_USE",
+	CMSGGameObjReportUse: "CMSG_GAME_OBJ_REPORT_USE",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.
