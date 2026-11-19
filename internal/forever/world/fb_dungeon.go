@@ -31,6 +31,11 @@ const (
 	fbDungeonFormWaitDefault  = 3 * time.Minute
 	fbDungeonEnterWaitDefault = 3 * time.Minute
 	fbDungeonLeaveWaitDefault = 30 * time.Second
+	// fbDungeonCleanupBudget is the cleanup's own bound, reserved apart from the run's deadline: the closing steps
+	// run on a context of their own, so an expired operational context (or a caller's cancel) does not skip them.
+	// Lead off, leave (bounded by fbDungeonLeaveWait) and four dismissals (fbDismissWait each) fit well inside it,
+	// with room for the commands' round-trips.
+	fbDungeonCleanupBudget = 2 * time.Minute
 	// fbDungeonFillSize is the party the run fills to before queueing.
 	fbDungeonFillSize = 5
 	// fbDungeonReportEvery is how often the watch prints a health snapshot (deaths and events print at once).
@@ -105,6 +110,11 @@ type FBDungeonReport struct {
 	Dismissed  []string
 	DismissErr string
 
+	// Cleanup is each closing step's result, in order, whatever the run's exit was. CleanupErr names the steps
+	// whose answer could not be read (a lost link, an expired context), so a run never hides a half-undone group.
+	Cleanup    []string
+	CleanupErr string
+
 	PBC        string
 	PBCReason  string
 	Frames     int
@@ -151,16 +161,42 @@ func (s *session) fbDungeonLeaveWait() time.Duration {
 	return fbDungeonLeaveWaitDefault
 }
 
+func (s *session) fbDungeonCleanupWait() time.Duration {
+	if s.opts.FBDungeonCleanupWait > 0 {
+		return s.opts.FBDungeonCleanupWait
+	}
+	return fbDungeonCleanupBudget
+}
+
+// fbDungeonRunContext bounds the run's own steps and keeps the cleanup's budget out of them: with a public deadline
+// the steps end the cleanup budget before it, so the closing steps still have a live context (and live sockets) to
+// work on even when the run's own window runs out. Without a deadline, or with less than the budget left, the steps
+// get the run's context unchanged.
+func fbDungeonRunContext(ctx context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	op := deadline.Add(-reserve)
+	if !time.Now().Before(op) {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, op)
+}
+
 // fbDungeon drives `forever fb-dungeon`.
 func (s *session) fbDungeon(ctx context.Context) error {
 	rep := &s.report.FBDungeon
 	s.initChat()
 	s.fbQuiet = true
+	// The run's steps get their own window; the cleanup's budget stays outside it (see fbDungeonRunContext).
+	op, stopOps := fbDungeonRunContext(ctx, s.fbDungeonCleanupWait())
+	defer stopOps()
 	settle := s.opts.Settle
 	if settle <= 0 {
 		settle = 4 * time.Second
 	}
-	if err := s.collect(ctx, settle); err != nil {
+	if err := s.collect(op, settle); err != nil {
 		return err
 	}
 	if err := s.RegisterAddonPrefixes(pbc.Prefix); err != nil {
@@ -172,7 +208,7 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	c := fbcmd.NewClient(link)
 	c.Base = s.commandOptions(command.Options{})
 
-	about, err := c.Probe(ctx)
+	about, err := c.Probe(op)
 	if err != nil {
 		s.report.FBDungeon.PBCReason = "the module is absent"
 		s.summariseFBDungeon()
@@ -181,7 +217,7 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	rep.About = about
 	s.opts.logf("fb-dungeon: module: %s", about)
 
-	if line, err := c.Language(ctx, "en"); err != nil {
+	if line, err := c.Language(op, "en"); err != nil {
 		rep.Language = chat.Sanitise(err.Error(), 300)
 		s.opts.logf("fb-dungeon: language: %v", err)
 	} else {
@@ -199,7 +235,7 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	}
 
 	// 1. Fill the party to five with `.bot lfg`.
-	lr, lerr := c.Lfg(ctx, s.opts.FBDungeonRole)
+	lr, lerr := c.Lfg(op, s.opts.FBDungeonRole)
 	if lerr != nil {
 		rep.LfgErr = chat.Sanitise(lerr.Error(), 400)
 		s.opts.logf("fb-dungeon: lfg: %v", lerr)
@@ -207,10 +243,21 @@ func (s *session) fbDungeon(ctx context.Context) error {
 		rep.LfgLine = lr.Line
 		s.opts.logf("fb-dungeon: lfg: %s", lr.Line)
 	}
-	if lerr == nil || errors.Is(lerr, fbcmd.ErrNoAck) {
-		if err := s.fbFillWatch(ctx, rep, s.fbDungeonFormWait()); err != nil {
-			s.summariseFBDungeon()
-			return err
+	if lerr == nil || errors.Is(lerr, fbcmd.ErrNoAck) || fbCleanupFatal(lerr) {
+		// The group may exist from here on (a fatal answer means the command's effect is unknown, not that nothing
+		// happened). Every exit — a refused command, a lost link, an expired run window — runs the cleanup, on a
+		// context of its own: the run's own window must not be able to skip the closing steps. A cleanup that
+		// cannot get its answers says so (CleanupErr) instead of hiding a left-behind group.
+		defer func() {
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.fbDungeonCleanupWait())
+			defer cancel()
+			s.fbDungeonCleanupRun(cctx, c, rep)
+		}()
+		if lerr == nil || errors.Is(lerr, fbcmd.ErrNoAck) {
+			if err := s.fbFillWatch(op, rep, s.fbDungeonFormWait()); err != nil {
+				s.summariseFBDungeon()
+				return err
+			}
 		}
 	}
 	if rep.PartySize < fbDungeonFillSize {
@@ -221,15 +268,15 @@ func (s *session) fbDungeon(ctx context.Context) error {
 			rep.LfgErr = why
 		}
 		s.opts.logf("fb-dungeon: the party did not fill: %d member(s) after %s", rep.PartySize, s.fbDungeonFormWait())
-		return s.fbDungeonCleanup(ctx, c, rep)
+		return nil
 	}
 
 	// 2. Queue the dungeon.
-	qr, qerr := c.QueueDungeon(ctx, name, s.opts.FBDungeonRole)
+	qr, qerr := c.QueueDungeon(op, name, s.opts.FBDungeonRole)
 	if qerr != nil {
 		rep.QueueErr = chat.Sanitise(qerr.Error(), 400)
 		s.opts.logf("fb-dungeon: queue %s: %v", chat.Sanitise(name, 64), qerr)
-		return s.fbDungeonFinish(ctx, c, rep)
+		return nil
 	}
 	rep.QueueLine, rep.Dungeon = qr.Line, qr.Name
 	s.opts.logf("fb-dungeon: queue: %s", qr.Line)
@@ -237,17 +284,16 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	// 3. Wait for both signals. The party tap runs from here: the identity it accepts is unknown until the module
 	// names its tank at step 4, so nothing said in this phase is kept as a tank line.
 	tank := &fbTank{why: "the module has not named its lead tank yet"}
-	if err := s.fbDungeonEnter(ctx, c, rep, tank); err != nil {
-		s.summariseFBDungeon()
+	if err := s.fbDungeonEnter(op, c, rep, tank); err != nil {
 		return err
 	}
 	if !rep.Inside {
 		s.opts.logf("fb-dungeon: not inside: %s", rep.EnterErr)
-		return s.fbDungeonFinish(ctx, c, rep)
+		return nil
 	}
 
 	// 4. Hand the lead to the tank.
-	lead, lerr := c.Lead(ctx, "on")
+	lead, lerr := c.Lead(op, "on")
 	if lerr != nil {
 		rep.LeadOnErr = chat.Sanitise(lerr.Error(), 400)
 		s.opts.logf("fb-dungeon: lead on: %v", lerr)
@@ -262,7 +308,7 @@ func (s *session) fbDungeon(ctx context.Context) error {
 		} else {
 			rep.FollowNote = "the module expects the player to follow the tank; this client stays at the entrance and the tank holds when the player falls behind"
 			s.opts.logf("fb-dungeon: %s", rep.FollowNote)
-			if err := s.fbDungeonResolveTank(ctx, c, rep, tank, lead.Tank); err != nil {
+			if err := s.fbDungeonResolveTank(op, c, rep, tank, lead.Tank); err != nil {
 				return err
 			}
 		}
@@ -272,22 +318,11 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	}
 
 	// 5. Watch.
-	if err := s.fbDungeonWatch(ctx, c, rep, tank); err != nil {
-		s.summariseFBDungeon()
+	if err := s.fbDungeonWatch(op, c, rep, tank); err != nil {
 		return err
 	}
-
-	// 6. Lead off, leave, dismiss.
-	if rep.LeadOnErr == "" && rep.LeadOnLine != "" {
-		if lr, err := c.Lead(ctx, "off"); err != nil {
-			rep.LeadOffErr = chat.Sanitise(err.Error(), 300)
-			s.opts.logf("fb-dungeon: lead off: %v", err)
-		} else {
-			rep.LeadOffLine = lr.Line
-			s.opts.logf("fb-dungeon: lead off: %s", lr.Line)
-		}
-	}
-	return s.fbDungeonFinish(ctx, c, rep)
+	// 6. The closing steps run from the deferred cleanup, whatever this function returns.
+	return nil
 }
 
 // fbFillWatch waits for the party model to list fbDungeonFillSize members, printing each join. It is the `done`
@@ -491,12 +526,14 @@ func (s *session) fbDungeonWatch(ctx context.Context, c *fbcmd.Client, rep *FBDu
 				}
 			}
 		}
-		for _, ev := range c.Events() {
+		for _, raw := range c.Events() {
+			// The module's strings are sanitised and bounded here, once, where the report keeps them: the log line
+			// and the closing block then print the stored copy, and no other print path can carry a control byte.
+			ev := fbBoundEvent(raw)
 			if len(rep.Events) < maxFBEvents {
 				rep.Events = append(rep.Events, ev)
 			}
-			s.opts.logf("fb-dungeon: event: %s %s: %s (bot %d)",
-				chat.Sanitise(ev.Severity, 16), chat.Sanitise(ev.Name, 32), chat.Sanitise(ev.Detail, 200), ev.BotID)
+			s.opts.logf("fb-dungeon: event: %s %s: %s (bot %d)", ev.Severity, ev.Name, ev.Detail, ev.BotID)
 		}
 		rep.WatchSamples++
 		for _, r := range rows {
@@ -620,7 +657,17 @@ func (s *session) noticeFBStatus(rep *FBDungeonReport, reason string) {
 	rep.PBCReason = reason
 }
 
-// fbDungeonHealthLine prints one watch snapshot and keeps it in the report.
+// fbBoundEvent sanitises and bounds the module's event strings where the report keeps them, so every print path (the
+// watch's log line and the closing block) shows the same safe, bounded text.
+func fbBoundEvent(ev pbc.Event) pbc.Event {
+	ev.Severity = chat.Sanitise(ev.Severity, 16)
+	ev.Name = chat.Sanitise(ev.Name, 32)
+	ev.Detail = chat.Sanitise(ev.Detail, 200)
+	return ev
+}
+
+// fbDungeonHealthLine prints one watch snapshot and keeps it in the report. The roster's strings are sanitised and
+// bounded at the store, so the log line and the closing block print the same safe copy.
 func (s *session) fbDungeonHealthLine(rep *FBDungeonReport, rows []pbc.RosterEntry, at time.Duration) {
 	rep.Watch = at
 	var parts []string
@@ -629,11 +676,13 @@ func (s *session) fbDungeonHealthLine(rep *FBDungeonReport, rows []pbc.RosterEnt
 		if !r.Grouped || !r.Online {
 			continue
 		}
-		rep.Health = append(rep.Health, FBDungeonHealth{
-			Name: r.Name, HP: r.HPPercent, Mana: r.ManaPercent, Zone: r.Zone, LastRule: r.LastRule, Distance: r.Distance,
-		})
+		h := FBDungeonHealth{
+			Name: chat.SanitiseName(r.Name), HP: r.HPPercent, Mana: r.ManaPercent,
+			Zone: chat.Sanitise(r.Zone, 32), LastRule: chat.Sanitise(r.LastRule, 48), Distance: r.Distance,
+		}
+		rep.Health = append(rep.Health, h)
 		parts = append(parts, fmt.Sprintf("%s %d%%h %d%%m %s%s",
-			chat.SanitiseName(r.Name), r.HPPercent, r.ManaPercent, chat.Sanitise(r.Zone, 32), fbRuleSuffix(r.LastRule)))
+			h.Name, h.HP, h.Mana, h.Zone, fbRuleSuffix(h.LastRule)))
 	}
 	phase := "unknown"
 	if rep.Status.Phase != "" {
@@ -649,39 +698,112 @@ func (s *session) fbDungeonHealthLine(rep *FBDungeonReport, rows []pbc.RosterEnt
 		rep.Status.Members, rep.Status.Size, strings.Join(parts, ", "))
 }
 
+// fbRuleSuffix shows a health sample's last rule; the rule was sanitised and bounded where it was stored.
 func fbRuleSuffix(rule string) string {
 	if rule == "" {
 		return ""
 	}
-	return " [" + chat.Sanitise(rule, 48) + "]"
+	return " [" + rule + "]"
 }
 
-// fbDungeonFinish leaves (or cancels), dismisses and reports.
-func (s *session) fbDungeonFinish(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport) error {
-	phase := rep.Status.Phase
-	insideMap := s.report.MapID
-	if s.opts.FBDungeonLeave && (rep.Inside || s.report.MapID != rep.StartMap) {
-		if line, err := c.LeaveDungeon(ctx); err != nil {
-			if errors.Is(err, ErrLinkLost) {
-				return err
+// fbCleanupFatal reports whether an error means nothing else the cleanup sends can be answered: the link is dead, or
+// a context ended. A refusal from the module is not fatal: the next step is still worth trying.
+func fbCleanupFatal(err error) bool {
+	return errors.Is(err, ErrLinkLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// fbDungeonCleanupRun undoes what the run started, from whatever exit reached it: the lead goes back to the player,
+// the instance is left (or the queue cancelled), and every companion is dismissed. Each step's result is recorded in
+// the report; a step whose command was sent but whose answer never came (a lost link, an expired context) is named
+// in CleanupErr, so the closing block says what could not be cleaned instead of staying silent.
+func (s *session) fbDungeonCleanupRun(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport) {
+	var unconfirmed []string
+	var fatal error
+	failed := func(name string, err error) {
+		rep.Cleanup = append(rep.Cleanup, name+": "+chat.Sanitise(err.Error(), 300))
+		if fbCleanupFatal(err) {
+			unconfirmed = append(unconfirmed, name)
+			if fatal == nil {
+				fatal = err
 			}
-			rep.LeaveErr = chat.Sanitise(err.Error(), 300)
-			s.opts.logf("fb-dungeon: leave: %v", err)
-		} else {
-			rep.LeaveLine = line
-			s.opts.logf("fb-dungeon: leave: %s", line)
-			s.fbWaitMapAway(ctx, rep, insideMap)
-		}
-	} else if phase == "forming" || phase == "entering" {
-		if line, err := c.CancelDungeon(ctx); err != nil {
-			rep.CancelErr = chat.Sanitise(err.Error(), 300)
-			s.opts.logf("fb-dungeon: cancel: %v", err)
-		} else {
-			rep.CancelLine = line
-			s.opts.logf("fb-dungeon: cancel: %s", line)
 		}
 	}
-	return s.fbDungeonCleanup(ctx, c, rep)
+	kept := func(name, line string) { rep.Cleanup = append(rep.Cleanup, name+": "+line) }
+
+	// 1. Give the lead back, when the module took it.
+	if rep.LeadOnErr == "" && rep.LeadOnLine != "" {
+		if lr, err := c.Lead(ctx, "off"); err != nil {
+			rep.LeadOffErr = chat.Sanitise(err.Error(), 300)
+			s.opts.logf("fb-dungeon: cleanup: lead off: %v", err)
+			failed("lead off", err)
+		} else {
+			rep.LeadOffLine = lr.Line
+			s.opts.logf("fb-dungeon: cleanup: lead off: %s", lr.Line)
+			kept("lead off", lr.Line)
+		}
+	}
+
+	// 2. Leave the instance, or cancel a queue that never opened. A queue whose phase was never read still holds a
+	// group on the finder, so a queue line without a phase cancels too.
+	from := s.report.MapID
+	switch {
+	case s.opts.FBDungeonLeave && (rep.Inside || s.report.MapID != rep.StartMap):
+		if line, err := c.LeaveDungeon(ctx); err != nil {
+			rep.LeaveErr = chat.Sanitise(err.Error(), 300)
+			s.opts.logf("fb-dungeon: cleanup: leave: %v", err)
+			failed("leave", err)
+		} else {
+			rep.LeaveLine = line
+			s.opts.logf("fb-dungeon: cleanup: leave: %s", line)
+			kept("leave", line)
+			s.fbWaitMapAway(ctx, rep, from)
+		}
+	case rep.Status.Phase == "forming" || rep.Status.Phase == "entering" ||
+		(rep.Status.Phase == "" && rep.QueueLine != ""):
+		if line, err := c.CancelDungeon(ctx); err != nil {
+			rep.CancelErr = chat.Sanitise(err.Error(), 300)
+			s.opts.logf("fb-dungeon: cleanup: cancel: %v", err)
+			failed("cancel", err)
+		} else {
+			rep.CancelLine = line
+			s.opts.logf("fb-dungeon: cleanup: cancel: %s", line)
+			kept("cancel", line)
+		}
+	}
+
+	// 3. Dismiss every companion and wait for the party to drop them.
+	names := append([]string(nil), rep.Party...)
+	if len(names) == 0 {
+		names = s.fbPartyNames()
+	}
+	if res, err := c.Dismiss(ctx, "all"); err != nil {
+		rep.DismissErr = chat.Sanitise(err.Error(), 300)
+		s.opts.logf("fb-dungeon: cleanup: dismiss all: %v", err)
+		failed("dismiss", err)
+	} else {
+		rep.Dismissed = append(rep.Dismissed, res.Line)
+		s.opts.logf("fb-dungeon: cleanup: dismiss all: %s", res.Line)
+		kept("dismiss", res.Line)
+		for _, name := range names {
+			if s.selfNameEqual(name) {
+				continue
+			}
+			if err := s.fbWaitAbsent(ctx, name, fbDismissWait); err != nil {
+				rep.DismissErr = chat.Sanitise(err.Error(), 300)
+				s.opts.logf("fb-dungeon: cleanup: dismiss %s: %v", chat.SanitiseName(name), err)
+				failed("dismiss "+chat.SanitiseName(name), err)
+			}
+		}
+	}
+	if s.party.RosterValid {
+		s.opts.logf("fb-dungeon: party now holds %d member(s)", len(s.party.Members))
+	}
+
+	if len(unconfirmed) > 0 {
+		rep.CleanupErr = fmt.Sprintf("could not confirm %s: %s", strings.Join(unconfirmed, ", "), chat.Sanitise(fatal.Error(), 300))
+		s.opts.logf("fb-dungeon: cleanup incomplete: %s", rep.CleanupErr)
+	}
+	s.summariseFBDungeon()
 }
 
 // fbWaitMapAway waits, bounded, for the client's own map change out of the instance. The leave answer already moved
@@ -710,41 +832,6 @@ func (s *session) fbWaitMapAway(ctx context.Context, rep *FBDungeonReport, from 
 	}
 	rep.LeaveMapErr = fmt.Sprintf("no map change out of map %d within %s", from, s.fbDungeonLeaveWait())
 	s.opts.logf("fb-dungeon: %s", rep.LeaveMapErr)
-}
-
-// fbDungeonCleanup dismisses every companion and waits for the party to drop them.
-func (s *session) fbDungeonCleanup(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport) error {
-	names := append([]string(nil), rep.Party...)
-	if len(names) == 0 {
-		names = s.fbPartyNames()
-	}
-	res, err := c.Dismiss(ctx, "all")
-	if err != nil {
-		if errors.Is(err, ErrLinkLost) {
-			return err
-		}
-		rep.DismissErr = chat.Sanitise(err.Error(), 300)
-		s.opts.logf("fb-dungeon: dismiss all: %v", err)
-		return nil
-	}
-	rep.Dismissed = append(rep.Dismissed, res.Line)
-	s.opts.logf("fb-dungeon: dismiss all: %s", res.Line)
-	for _, name := range names {
-		if s.selfNameEqual(name) {
-			continue
-		}
-		if err := s.fbWaitAbsent(ctx, name, fbDismissWait); err != nil {
-			if errors.Is(err, ErrLinkLost) {
-				return err
-			}
-			rep.DismissErr = chat.Sanitise(err.Error(), 300)
-			s.opts.logf("fb-dungeon: dismiss: %v", err)
-		}
-	}
-	if s.party.RosterValid {
-		s.opts.logf("fb-dungeon: party now holds %d member(s)", len(s.party.Members))
-	}
-	return nil
 }
 
 // selfNameEqual reports whether name is this character's own name (the party list includes it).
@@ -852,6 +939,9 @@ func FBDungeonSummary(a FBDungeonReport) []string {
 		out = append(out, "fb-dungeon: "+a.Dismissed[0])
 	} else if a.DismissErr != "" {
 		out = append(out, "fb-dungeon: dismiss: "+a.DismissErr)
+	}
+	if a.CleanupErr != "" {
+		out = append(out, "fb-dungeon: cleanup incomplete: "+a.CleanupErr)
 	}
 	switch a.PBC {
 	case "ok":

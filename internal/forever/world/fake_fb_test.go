@@ -227,7 +227,7 @@ func (f *fakeServer) serveFB(c, realm *fakeConn) {
 				return
 			default:
 			}
-			if f.deliberate() {
+			if f.deliberate() || f.leftOnRead(err) {
 				return
 			}
 			f.failf("fb: %v", err)

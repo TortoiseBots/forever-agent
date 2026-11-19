@@ -305,6 +305,12 @@ func (f *fakeServer) leftOnWrite(err error) bool {
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF)
 }
 
+// leftOnRead is leftOnWrite for a read: a clientMayLeave scenario whose client closed its sockets on its own (its
+// run's deadline ended it) ends the fake's reader at that close, not with a protocol failure.
+func (f *fakeServer) leftOnRead(err error) bool {
+	return f.clientMayLeave && (errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE))
+}
+
 // wait waits for both handlers and returns the first protocol error they reported.
 func (f *fakeServer) wait(t *testing.T) {
 	t.Helper()
@@ -588,7 +594,7 @@ func (f *fakeServer) serveRealmConn(conn net.Conn) {
 				return
 			case <-time.After(time.Second):
 			}
-			if f.deliberate() {
+			if f.deliberate() || f.leftOnRead(err) {
 				return
 			}
 			f.failf("realm: %v", err)

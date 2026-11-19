@@ -5,6 +5,7 @@ package world
 // that never comes, an `inside` that the client's map never confirms, and a link that dies in each wait.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -71,7 +72,12 @@ func (f *fakeServer) fbdSendParty(c *fakeConn) {
 func (f *fakeServer) sendFBDungeonRoster(c *fakeConn, seq uint32) {
 	recs := make([]string, 0, len(fbdBots))
 	for i, b := range fbdBots {
-		recs = append(recs, fbRosterRecord(int(b.id), b.name, 13, "WARRIOR", []string{"TANK", "HEALER", "DPS", "DPS"}[i],
+		name := b.name
+		if f.fbDungeonCase == "hostileEvent" && i == 1 {
+			// A health name with a newline and a control byte: the closing block prints the stored, sanitised copy.
+			name = "Moss\n\x01"
+		}
+		recs = append(recs, fbRosterRecord(int(b.id), name, 13, "WARRIOR", []string{"TANK", "HEALER", "DPS", "DPS"}[i],
 			"Ragefire Chasm", true, b.hp, 40, 5, true, false, true, 71))
 	}
 	f.sendPBC(c, seq, pbc.TypeRosterResp, pbc.BuildBody(append([]string{strconv.Itoa(len(recs))}, recs...)))
@@ -212,6 +218,11 @@ func (f *fakeServer) answerFBDungeonCommand(c, realm *fakeConn, text string) {
 			f.dropLink(realm, c)
 			return
 		}
+		if f.fbDungeonCase == "leaveNoMap" {
+			// The way out is answered but the client's own map change never comes: a cleanup step whose answer
+			// the run cannot read leaves the scene here.
+			return
+		}
 		f.fbdMapChange(c, realm, 0, fbdHomePos)
 	case strings.HasPrefix(text, ".bot dungeon "):
 		if f.fbDungeonCase == "queueRefused" {
@@ -258,6 +269,10 @@ func (f *fakeServer) answerFBLfgStatus(c *fakeConn, seq uint32) {
 		f.sendPBC(c, seq, pbc.TypeLfgResp, pbc.BuildBody([]string{"idle", "", "0", "90", "1", "0", "0"}))
 		return
 	}
+	if scenario == "lfgSilent" {
+		// The finder never answers: the request waits out the run's own context.
+		return
+	}
 	send := func(phase string) {
 		canLeave := "0"
 		if phase == "inside" {
@@ -299,7 +314,13 @@ func (f *fakeServer) answerFBLfgStatus(c *fakeConn, seq uint32) {
 	case polls == 4:
 		// The line travels before the answer that confirms the entry, so the tap sees it with no identity known.
 		f.sendFBPartyLine(c, "waiting for you")
-		f.sendFBEvent(c, "info", "login", "bot is ready")
+		if scenario == "hostileEvent" {
+			// The module's strings are not trusted: control bytes and newlines must be sanitised where they are
+			// kept, so neither the log nor the closing block can carry them to a terminal.
+			f.sendFBEvent(c, "info\n\x1b[2J", "evil\rname", "detail\x00\twith\nnewline")
+		} else {
+			f.sendFBEvent(c, "info", "login", "bot is ready")
+		}
 		send("inside")
 	case polls == 6:
 		send("inside")
@@ -508,6 +529,188 @@ func TestFBDungeonPartyTapIdentity(t *testing.T) {
 	if len(rep.PartyLines) != 1 || rep.PartyLines[0] != "Bramble: waiting for mana" {
 		t.Fatalf("the tank's own line was not kept: %v", rep.PartyLines)
 	}
+}
+
+// fbDeadlineOptions is a run whose own deadline ends it mid-scene, paced for a test. The three-second cleanup
+// budget is also the reserve the entry, watch and leads keep out of the public deadline (fbDungeonRunContext), so
+// the closing steps run on a live context after the run's own window has ended.
+func fbDeadlineOptions(f *fakeServer, deadline time.Duration) Options {
+	opts := fbDungeonOptions(f)
+	opts.Deadline = deadline
+	opts.FBDungeonCleanupWait = 3 * time.Second
+	opts.FBDungeonEnterWait = 30 * time.Second
+	opts.FBDungeonWatch = 30 * time.Second
+	return opts
+}
+
+// cleanupSays reports whether every named command left the client.
+func cleanupSays(t *testing.T, f *fakeServer, want ...string) {
+	t.Helper()
+	f.mu.Lock()
+	says := strings.Join(f.fbSays, "\n")
+	f.mu.Unlock()
+	for _, w := range want {
+		if !strings.Contains(says, w+"\n") && !strings.HasSuffix(says, w) {
+			t.Fatalf("%q did not go out after the run's window ended:\n%s", w, says)
+		}
+	}
+}
+
+// The run's own window ending during the entry must not skip the cleanup: the queue is cancelled and the companions
+// are dismissed on the reserved context, and every step's answer is kept.
+func TestFBDungeonDeadlineDuringEntry(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "noEnter"
+	report, err := runFBDungeonTests(t, f, fbDeadlineOptions(f, 8*time.Second))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v, want the run's own window to have ended", err)
+	}
+	d := report.FBDungeon
+	if d.Inside {
+		t.Fatal("the entry reported inside without a map change")
+	}
+	if d.CleanupErr != "" {
+		t.Fatalf("the cleanup could not get its answers on the reserved context: %q (%v)", d.CleanupErr, d.Cleanup)
+	}
+	if !strings.Contains(strings.Join(d.Cleanup, "|"), "cancel:") || len(d.Dismissed) == 0 {
+		t.Fatalf("the cleanup did not cancel the queue and dismiss after the window: %v", d.Cleanup)
+	}
+	if d.CancelErr != "" || d.DismissErr != "" {
+		t.Fatalf("cancel %q dismiss %q", d.CancelErr, d.DismissErr)
+	}
+	cleanupSays(t, f, ".bot dungeon cancel", ".bot dismiss all")
+}
+
+// The run's own window ending during the watch must not skip the cleanup either: the lead goes back, the instance
+// is left and the companions are dismissed, each with its own answer.
+func TestFBDungeonDeadlineDuringWatch(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "leaveNoMap"
+	report, err := runFBDungeonTests(t, f, fbDeadlineOptions(f, 10*time.Second))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v, want the run's own window to have ended", err)
+	}
+	d := report.FBDungeon
+	if !d.Inside || d.LeadOnLine == "" || d.WatchSamples == 0 {
+		t.Fatalf("the run did not reach the watch: inside %v lead %q samples %d (%q)", d.Inside, d.LeadOnLine, d.WatchSamples, d.EnterErr)
+	}
+	if d.CleanupErr != "" {
+		t.Fatalf("the cleanup could not get its answers on the reserved context: %q (%v)", d.CleanupErr, d.Cleanup)
+	}
+	if d.LeadOffLine == "" || d.LeaveLine == "" || len(d.Dismissed) == 0 {
+		t.Fatalf("the cleanup skipped a step after the window: lead off %q leave %q dismissed %v (%v)",
+			d.LeadOffLine, d.LeaveLine, d.Dismissed, d.Cleanup)
+	}
+	cleanupSays(t, f, ".bot lead off", ".bot dungeon leave", ".bot dismiss all")
+}
+
+// A protocol request that consumes the run's window (the finder never answers) must end in the same cleanup.
+func TestFBDungeonDeadlineInProtocolRequest(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "lfgSilent"
+	report, err := runFBDungeonTests(t, f, fbDeadlineOptions(f, 8*time.Second))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v, want the unanswered LFG request to end with the window", err)
+	}
+	d := report.FBDungeon
+	if d.QueueLine == "" || d.Inside {
+		t.Fatalf("the run's scene: queue %q inside %v", d.QueueLine, d.Inside)
+	}
+	if d.CleanupErr != "" {
+		t.Fatalf("the cleanup could not get its answers on the reserved context: %q (%v)", d.CleanupErr, d.Cleanup)
+	}
+	if !strings.Contains(strings.Join(d.Cleanup, "|"), "cancel:") || len(d.Dismissed) == 0 {
+		t.Fatalf("the cleanup did not cancel the queue and dismiss after the request: %v", d.Cleanup)
+	}
+	cleanupSays(t, f, ".bot dungeon cancel", ".bot dismiss all")
+}
+
+// A link that dies while the group exists must still attempt every closing step and say what could not be cleaned.
+func TestFBDungeonLinkDeathCleanup(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "linkDeathWatch"
+	opts := fbDungeonOptions(f)
+	opts.Logf = nil
+	report, err := runFBDungeonTests(t, f, opts)
+	if !errors.Is(err, ErrLinkLost) {
+		t.Fatalf("err %v, want ErrLinkLost", err)
+	}
+	d := report.FBDungeon
+	if !strings.Contains(d.CleanupErr, "lead off") || !strings.Contains(d.CleanupErr, "leave") ||
+		!strings.Contains(d.CleanupErr, "dismiss") {
+		t.Fatalf("the report does not say what could not be cleaned: %q (%v)", d.CleanupErr, d.Cleanup)
+	}
+	if !strings.Contains(strings.Join(FBDungeonSummary(d), "\n"), "cleanup incomplete") {
+		t.Fatalf("the closing block hides the incomplete cleanup:\n%s", strings.Join(FBDungeonSummary(d), "\n"))
+	}
+}
+
+// The module's strings reach the report through one sanitised, bounded store: a health name and an event carrying
+// newlines and control bytes cannot put them in the closing block (or the log line that prints the stored copy).
+func TestFBDungeonSummarySanitised(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "hostileEvent"
+	report, err := runFBDungeonTests(t, f, fbDungeonOptions(f))
+	if err != nil {
+		t.Fatalf("Enter: %v", err)
+	}
+	d := report.FBDungeon
+	if len(d.Events) != 1 {
+		t.Fatalf("events %+v", d.Events)
+	}
+	ev := d.Events[0]
+	for _, field := range []struct {
+		name string
+		text string
+		max  int
+	}{
+		{"severity", ev.Severity, 16},
+		{"name", ev.Name, 32},
+		{"detail", ev.Detail, 200},
+	} {
+		if len(field.text) > field.max {
+			t.Fatalf("%s is %d bytes, past its %d bound: %q", field.name, len(field.text), field.max, field.text)
+		}
+		if badControl(field.text) {
+			t.Fatalf("%s kept a control byte: %q", field.name, field.text)
+		}
+	}
+	if !strings.Contains(ev.Name, "evil") || !strings.Contains(ev.Detail, "detail") {
+		t.Fatalf("the event's text was lost, not sanitised: %+v", ev)
+	}
+	foundHealth := false
+	for _, h := range d.Health {
+		if strings.HasPrefix(h.Name, "Moss") {
+			foundHealth = true
+			if badControl(h.Name) || badControl(h.Zone) || badControl(h.LastRule) {
+				t.Fatalf("a health sample kept a control byte: %+v", h)
+			}
+		}
+	}
+	if !foundHealth {
+		t.Fatalf("the hostile health name is not in the report: %+v", d.Health)
+	}
+
+	lines := FBDungeonSummary(d)
+	for _, line := range lines {
+		if badControl(line) || strings.ContainsAny(line, "\n\r") {
+			t.Fatalf("a closing line carries a control byte: %q", line)
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "fb-dungeon: event ") || !strings.Contains(joined, "fb-dungeon: last health:") {
+		t.Fatalf("the closing block lost the event or health lines:\n%s", joined)
+	}
+}
+
+// badControl reports whether s holds a byte a terminal must not receive raw.
+func badControl(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFBDungeonNeedsBothSignals(t *testing.T) {

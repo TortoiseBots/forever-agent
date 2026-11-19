@@ -141,18 +141,20 @@ type Options struct {
 	// Round A2: forever fb-dungeon. FBDungeon drives the module's dungeon finder: fill the group with `.bot lfg`,
 	// queue FBDungeonName (a dungeon word or "any") with FBDungeonRole as the player's own role, wait for the
 	// module's `inside` and the client's own map change, hand the lead to the tank, watch FBDungeonWatch, then lead
-	// off, leave when FBDungeonLeave is set and dismiss. The four pacing fields are for tests; 0 keeps the run's
-	// own defaults (2 s poll, 3 min form, 3 min entry, 30 s leave).
-	FBDungeon          bool
-	FBDungeonName      string
-	FBDungeonRole      string
-	FBDungeonWatch     time.Duration
-	FBDungeonLeave     bool
-	FBDungeonPoll      time.Duration
-	FBDungeonFormWait  time.Duration
-	FBDungeonEnterWait time.Duration
-	FBDungeonLeaveWait time.Duration
-	Logf               func(format string, args ...any)
+	// off, leave when FBDungeonLeave is set and dismiss. Those closing steps run from a deferred cleanup on their
+	// own context (2 min, apart from Deadline). The pacing fields are for tests; 0 keeps the run's own defaults
+	// (2 s poll, 3 min form, 3 min entry, 30 s leave, 2 min cleanup).
+	FBDungeon            bool
+	FBDungeonName        string
+	FBDungeonRole        string
+	FBDungeonWatch       time.Duration
+	FBDungeonLeave       bool
+	FBDungeonPoll        time.Duration
+	FBDungeonFormWait    time.Duration
+	FBDungeonEnterWait   time.Duration
+	FBDungeonLeaveWait   time.Duration
+	FBDungeonCleanupWait time.Duration
+	Logf                 func(format string, args ...any)
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -944,6 +946,11 @@ func (s *session) Now() time.Time { return time.Now() }
 // check).
 func (s *session) drain(ctx context.Context, what string, end time.Time, check func() error) error {
 	for {
+		// The wait's own context bounds it: an operation that outlived the window it was given ends there, even
+		// when the session's context (next's own wakeup) has not ended.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("world: waiting for %s: %w", what, err)
+		}
 		if check != nil {
 			if err := check(); err != nil {
 				return err
