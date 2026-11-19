@@ -57,7 +57,13 @@ func TestSpellsAndCastStateMethods(t *testing.T) {
 	r.srv.Send(opcode.SMSGSpellGo, gametest.SpellGo(rigSelf, 2136, nil, nil, nil, 0x77))
 	out = r.eventually("spells", `{"spell_id":2136}`, func(m map[string]any) bool {
 		l, ok := m["result"].([]any)
-		return ok && len(l) == 1 && l[0].(map[string]any)["ready"] == false
+		if !ok || len(l) != 1 {
+			return false
+		}
+		row := l[0].(map[string]any)
+		// The GCD from SMSG_SPELL_START also reads not-ready: only the cooldown proves SMSG_SPELL_GO
+		// was handled (CastWent started it), so wait for that, not for merely not-ready.
+		return row["ready"] == false && row["why"] == "cooldown"
 	})
 	if fb := out["result"].([]any)[0].(map[string]any); fb["why"] != "cooldown" || fb["remaining_ms"].(float64) < 7000 {
 		t.Fatalf("fire blast %v", fb)
