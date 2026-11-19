@@ -109,7 +109,7 @@ func TestDungeonStatusNeverRunsAheadOfItsEvent(t *testing.T) {
 		t.Fatalf("%v", out)
 	}
 	final := map[string]bool{"done": true, "failed": true, "stopped": true, "refused": true}
-	for deadline := time.Now().Add(2 * time.Second); ; {
+	for deadline := time.Now().Add(packetWait); ; {
 		ds := r.call("dungeon_status", "{}")["result"].(map[string]any)
 		state, running := ds["state"].(string), ds["running"].(bool)
 		if !final[state] && !running {

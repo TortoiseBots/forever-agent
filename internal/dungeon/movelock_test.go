@@ -77,7 +77,7 @@ func TestBrainIsFreeToMoveDuringAFightBetweenDriverWalks(t *testing.T) {
 			<-ctx.Done()
 			return WalkResult{Result: "partial", Reason: "cancelled"}, ctx.Err()
 		}
-		g.pos = to
+		g.moveTo(to)
 		return WalkResult{Result: "arrived"}, nil
 	}
 	heldInFight := -1

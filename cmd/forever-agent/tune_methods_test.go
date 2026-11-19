@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pjerra/forever-agent/internal/opcode"
 	"github.com/pjerra/forever-agent/internal/rpc"
@@ -156,11 +155,11 @@ func TestTuneSetAndFileInARemoteRun(t *testing.T) {
 	r.expectBody(opcode.CMSGMessagechat, say(".bot behavior Tanky loot on"))
 	r.system("TBM:ACTION_ACK|behavior loot|bot:Tanky|1|on")
 	// Both changes are taken at the leg's start, where the run stands on its wait; then the run is stopped.
-	var changes []any
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && len(changes) < 2; time.Sleep(20 * time.Millisecond) {
-		rem := resultOf(t, r.call("dungeon_status", `{}`))["report"].(map[string]any)["remote"].(map[string]any)
-		changes, _ = rem["tune_changes"].([]any)
-	}
+	_ = r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		rem := m["result"].(map[string]any)["report"].(map[string]any)["remote"].(map[string]any)
+		ch, _ := rem["tune_changes"].([]any)
+		return len(ch) >= 2
+	})
 	r.system(viewFrame(2, false)...) // out of combat, so that the end of the run does not wait for a fight
 	stopped := make(chan map[string]any, 1)
 	go func() { stopped <- r.call("dungeon_stop", `{}`) }()

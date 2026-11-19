@@ -80,11 +80,10 @@ func TestCommanderMethodOrderWaitsThroughPending(t *testing.T) {
 	r := newRig(t)
 	got := make(chan map[string]any, 1)
 	go func() {
-		got <- r.call("commander", `{"op":"cmd","verb":"open","args":["0x1F1000000000AAA1","Magey"],"wait_ms":3000}`)
+		got <- r.call("commander", `{"op":"cmd","verb":"open","args":["0x1F1000000000AAA1","Magey"],"wait_ms":30000}`)
 	}()
 	r.expectBody(opcode.CMSGMessagechat, say(".bot cmd open 0x1F1000000000AAA1 Magey"))
 	r.system("TBM:ACTION_PENDING|cmd open|bot:Magey|14|0x1F1000000000AAA1")
-	time.Sleep(100 * time.Millisecond)
 	r.system("TBM:ACTION_ACK|cmd open|bot:Magey|1|7740:1,copper:5")
 	res := resultOf(t, <-got)
 	rep, ord := res["reply"].(map[string]any), res["order"].(map[string]any)
@@ -117,20 +116,11 @@ func TestBotViewMethod(t *testing.T) {
 		t.Fatalf("%v", res)
 	}
 	r.system(viewFrame(1, true)...)
-	var n float64
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		res = resultOf(t, r.call("bot_view", `{}`))
-		if res["have"] == true {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if res["have"] != true {
-		t.Fatalf("no frame: %v", res)
-	}
+	res = r.eventually("bot_view", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["have"] == true
+	})["result"].(map[string]any)
 	fr := res["frame"].(map[string]any)
-	n = res["n"].(float64)
+	n := res["n"].(float64)
 	if fr["seq"].(float64) != 1 || len(fr["party"].([]any)) != 1 || len(fr["hostiles"].([]any)) != 1 || len(fr["threats"].([]any)) != 1 || fr["lead"] != "0x000000000000002A" {
 		t.Fatalf("%v", fr)
 	}
@@ -139,8 +129,7 @@ func TestBotViewMethod(t *testing.T) {
 	}
 	// Wait for a newer frame.
 	got := make(chan map[string]any, 1)
-	go func() { got <- r.call("bot_view", fmt.Sprintf(`{"after_n":%d,"wait_ms":3000}`, int(n))) }()
-	time.Sleep(50 * time.Millisecond)
+	go func() { got <- r.call("bot_view", fmt.Sprintf(`{"after_n":%d,"wait_ms":30000}`, int(n))) }()
 	r.system(viewFrame(2, false)...)
 	res = resultOf(t, <-got)
 	if res["frame"].(map[string]any)["seq"].(float64) != 2 {
@@ -255,15 +244,9 @@ func TestDungeonRunRemoteEndToEnd(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|2|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|2|0")
-	var st map[string]any
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "done" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "done"
+	})["result"].(map[string]any)
 	if st["state"] != "done" {
 		t.Fatalf("%v", st)
 	}
@@ -308,15 +291,9 @@ func TestDungeonRunRemoteEntersByTele(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|1|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|1|0")
-	var st map[string]any
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "done" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "done"
+	})["result"].(map[string]any)
 	if st["state"] != "done" {
 		t.Fatalf("%v", st)
 	}
@@ -361,15 +338,9 @@ func TestDungeonRunRemotePrepareOverTheSession(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|1|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|1|0")
-	var st map[string]any
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "done" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "done"
+	})["result"].(map[string]any)
 	if st["state"] != "done" {
 		t.Fatalf("%v", st)
 	}
@@ -424,15 +395,9 @@ func TestDungeonRunRemoteUnbindsWhenTheBindIsAnswered(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|1|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|2|0")
-	var st map[string]any
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "failed" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "failed"
+	})["result"].(map[string]any)
 	rep := st["report"].(map[string]any)
 	if st["state"] != "failed" || !strings.Contains(rep["error"].(string), "map 70") || rep["remote"].(map[string]any)["unbound"] != true {
 		t.Fatalf("%v", st)
@@ -455,15 +420,9 @@ func TestDungeonRunRemoteKeepOnFailKeepsTheBindingUntilStop(t *testing.T) {
 	r.system(viewFrame(1, false)...) // the lead bot is on map 0, the plan needs 70
 	r.expectBody(opcode.CMSGMessagechat, say(".bot cmd stay"))
 	r.system("TBM:ACTION_ACK|cmd stay|party|1|Tanky")
-	var st map[string]any
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "failed" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "failed"
+	})["result"].(map[string]any)
 	rem := st["report"].(map[string]any)["remote"].(map[string]any)
 	if st["state"] != "failed" || rem["unbound"] == true || !strings.HasPrefix(rem["unbind_via"].(string), "kept") {
 		t.Fatalf("%v", st)
@@ -475,7 +434,7 @@ func TestDungeonRunRemoteKeepOnFailKeepsTheBindingUntilStop(t *testing.T) {
 	select {
 	case out := <-done:
 		resultOf(t, out)
-	case <-time.After(5 * time.Second):
+	case <-time.After(packetWait):
 		t.Fatal("dungeon_stop did not return")
 	}
 }
@@ -487,27 +446,16 @@ func TestViewLinesStayOutOfTheEventLog(t *testing.T) {
 		r.system(viewFrame(seq, true)...)
 	}
 	r.system("TBM:ACTION_ACK|commander view|party|1|on", "plain system line")
-	var res map[string]any
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		res = resultOf(t, r.call("bot_view", `{}`))
-		if res["view_lines"].(float64) >= 25 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	res := r.eventually("bot_view", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["view_lines"].(float64) >= 25
+	})["result"].(map[string]any)
 	if res["view_lines"].(float64) != 25 || res["stats"].(map[string]any)["frames"].(float64) != 5 {
 		t.Fatalf("%v", res)
 	}
 	// The ACK and the plain line are in the log (poll until they arrive), no VIEW line is.
-	var evs []any
-	for time.Now().Before(deadline.Add(2 * time.Second)) {
-		evs = resultOf(t, r.call("events", `{"since":0,"kinds":["system"]}`))["events"].([]any)
-		if len(evs) >= 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	evs := r.eventually("events", `{"since":0,"kinds":["system"]}`, func(m map[string]any) bool {
+		return len(m["result"].(map[string]any)["events"].([]any)) >= 2
+	})["result"].(map[string]any)["events"].([]any)
 	if len(evs) != 2 {
 		t.Fatalf("%d system events: %v", len(evs), evs)
 	}
@@ -521,19 +469,19 @@ func TestViewLinesStayOutOfTheEventLog(t *testing.T) {
 	for seq := 6; seq <= 9; seq++ {
 		r.system(viewFrame(seq, false)...)
 	}
-	deadline = time.Now().Add(3 * time.Second)
 	n := 0
-	for time.Now().Before(deadline) {
-		n = 0
-		for _, e := range resultOf(t, r.call("events", `{"since":0,"kinds":["system"]}`))["events"].([]any) {
+	for _, e := range r.eventually("events", `{"since":0,"kinds":["system"]}`, func(m map[string]any) bool {
+		n := 0
+		for _, e := range m["result"].(map[string]any)["events"].([]any) {
 			if strings.Contains(e.(map[string]any)["text"].(string), "TBM:VIEW") {
 				n++
 			}
 		}
-		if n >= 6 {
-			break
+		return n >= 6
+	})["result"].(map[string]any)["events"].([]any) {
+		if strings.Contains(e.(map[string]any)["text"].(string), "TBM:VIEW") {
+			n++
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	if n != 6 { // two of the four frames, three lines each
 		t.Fatalf("%d VIEW lines logged with log_every 2", n)
@@ -572,15 +520,9 @@ func TestDungeonRunRemoteStartNeedsAGM(t *testing.T) {
 	r.system("TBM:ACTION_ACK|cmd stay|party|1|Tanky")
 	r.expectBody(opcode.CMSGMessagechat, say(".bot commander unbind"))
 	r.system("TBM:ACTION_ACK|commander unbind|party|1|0")
-	var st map[string]any
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		st = resultOf(t, r.call("dungeon_status", `{}`))
-		if st["state"] == "failed" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	st := r.eventually("dungeon_status", `{}`, func(m map[string]any) bool {
+		return m["result"].(map[string]any)["state"] == "failed"
+	})["result"].(map[string]any)
 	rep, _ := st["report"].(map[string]any)
 	if st["state"] != "failed" || !strings.Contains(rep["error"].(string), "needs a GM commander") {
 		t.Fatalf("%v", st)

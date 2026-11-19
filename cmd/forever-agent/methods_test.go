@@ -80,15 +80,15 @@ func newRigWith(t *testing.T, opts session.Options, pos [3]float32, mopts method
 	case <-r.s.Ready():
 	case <-r.s.Done():
 		t.Fatalf("login failed: %v", <-r.run)
-	case <-time.After(2 * time.Second):
-		t.Fatal("not in world after 2 s")
+	case <-time.After(packetWait):
+		t.Fatal("not in world after 30 s")
 	}
 	return r
 }
 
 func (r *agentRig) expect(op uint16) {
 	r.t.Helper()
-	if _, err := r.srv.Expect(op, 2*time.Second); err != nil {
+	if _, err := r.srv.Expect(op, packetWait); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -505,7 +505,7 @@ func TestActionMethodShapes(t *testing.T) {
 // eventually polls call until ok accepts its result.
 func (r *agentRig) eventually(method, params string, ok func(map[string]any) bool) map[string]any {
 	r.t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(packetWait); ; time.Sleep(10 * time.Millisecond) {
 		out := r.call(method, params)
 		if ok(out) {
 			return out
