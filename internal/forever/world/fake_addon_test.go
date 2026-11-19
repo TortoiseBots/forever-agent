@@ -494,6 +494,7 @@ func TestAddonCheckChannelRefused(t *testing.T) {
 	f := newFakeServer(t)
 	f.addon = true
 	f.addonCase = "echo"
+	f.clientMayLeave = true // the client refuses the channel word after login and leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -519,6 +520,7 @@ func TestAddonCheckLimits(t *testing.T) {
 		f := newFakeServer(t)
 		f.addon = true
 		f.addonCase = "none"
+		f.clientMayLeave = true // the client refuses the prefix after login and leaves
 		defer f.close()
 		f.wg.Add(1)
 		go f.serveRealm()
@@ -541,6 +543,7 @@ func TestAddonCheckLimits(t *testing.T) {
 		f := newFakeServer(t)
 		f.addon = true
 		f.addonCase = "none"
+		f.clientMayLeave = true // the client refuses the text after login and leaves
 		defer f.close()
 		f.wg.Add(1)
 		go f.serveRealm()

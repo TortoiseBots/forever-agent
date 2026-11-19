@@ -393,6 +393,7 @@ func TestDeathCheckReleasesToAGraveyardOnAnotherMap(t *testing.T) {
 	sc := newMapScenario()
 	f.death = true
 	f.deathMapSc = sc
+	f.clientMayLeave = true // the run ends on the corpse's map refusal and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()

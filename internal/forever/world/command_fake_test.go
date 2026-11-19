@@ -271,6 +271,12 @@ func runCommandScenario(t *testing.T, mode commandMode, mutate func(*Options)) (
 	t.Helper()
 	f := newFakeServer(t)
 	f.command = mode
+	// These scenarios exist to watch the client refuse or give up and leave before the session's normal end: the
+	// client closes on purpose, so the fake's own writes into that socket end there.
+	switch mode {
+	case commandDeadline, commandEcho, commandBoundaryLarge:
+		f.clientMayLeave = true
+	}
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -463,6 +469,7 @@ func TestCommandTypedStateAgainstFakeServer(t *testing.T) {
 func TestCommandGuardSendsNothingElseWithoutPermission(t *testing.T) {
 	f := newFakeServer(t)
 	f.command = commandNotGM
+	f.clientMayLeave = true // the guard refuses and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -488,6 +495,7 @@ func TestCommandGuardNotificationBeforeEcho(t *testing.T) {
 	var steps []string
 	f := newFakeServer(t)
 	f.command = commandGuardNotifyThenEcho
+	f.clientMayLeave = true // the guard refuses and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -513,6 +521,7 @@ func TestCommandGuardUnrelatedSystemLine(t *testing.T) {
 	var steps []string
 	f := newFakeServer(t)
 	f.command = commandGuardNoAck
+	f.clientMayLeave = true // the guard refuses and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -539,6 +548,7 @@ func TestCommandGuardEchoAfterProbe(t *testing.T) {
 	var steps []string
 	f := newFakeServer(t)
 	f.command = commandGuardEchoAfterAck
+	f.clientMayLeave = true // the guard refuses and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
