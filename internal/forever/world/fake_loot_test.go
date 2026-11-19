@@ -7,8 +7,10 @@ package world
 // the vote and the release, so a wrong GUID or slot fails here rather than in a live run.
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +68,16 @@ type fakeLootTarget struct {
 	goType int8
 	state  int8
 	dead   bool
+}
+
+// fakeExtraObject is another game object of the same entry the scenario puts in the world: object-use must not pick
+// between it and the target unless --at names one of them.
+type fakeExtraObject struct {
+	guid          wire.GUID
+	packed        []byte
+	entry         int32
+	goType, state int8
+	x, y, z       float32
 }
 
 // fakeItemDef is one LootItemData the fake sends.
@@ -384,6 +396,10 @@ func fakeCreatureNotFound(payload []byte) []byte {
 func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 	self := parseFakePacked(f.t, f.clientGUID)
 	target := parseFakePacked(f.t, f.lootTarget.packed)
+	want := target
+	if f.lootWant != (wire.GUID{}) {
+		want = f.lootWant
+	}
 	mapID := f.mapID
 	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlock(f.clientGUID, mapID, 0, 0, 0, 40))
 	if f.lootTarget.window {
@@ -396,6 +412,10 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 		}
 		c.writeFrame(fakeSMSGUpdateObject, fakeUnitCreateBlock(f.lootTarget.packed, mapID, 2, 0, 0, 40,
 			f.lootTarget.entry, health, maxHealth, 5, 0))
+	}
+	for _, extra := range f.lootExtras {
+		c.writeFrame(fakeSMSGUpdateObject, fakeGameObjectCreate(extra.packed, mapID, extra.x, extra.y, extra.z,
+			extra.entry, extra.state, extra.goType))
 	}
 
 	windowOpen := false
@@ -410,7 +430,7 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				return
 			default:
 			}
-			if f.deliberate() {
+			if f.deliberate() || f.leftOnRead(err) {
 				return
 			}
 			f.failf("loot: %v", err)
@@ -436,8 +456,8 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				f.failf("loot: the open packet: %v (%d bytes left)", b.Err(), b.Remaining())
 				return
 			}
-			if got != target {
-				f.failf("loot: opened %v, want %v", got, target)
+			if got != want {
+				f.failf("loot: opened %v, want %v", got, want)
 				return
 			}
 			switch f.lootCase {
@@ -459,24 +479,32 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 			windowLoot = f.lootLootGUID
 			if f.lootCase == "use-refused" {
 				// SendLootError: the same packet with Acquired false and the reason (Player.cpp:10048-10057).
-				c.writeFrame(fakeSMSGLootResponse, fakeLootRefusal(target))
+				c.writeFrame(fakeSMSGLootResponse, fakeLootRefusal(want))
 				windowOpen = false
 				continue
 			}
 			if f.lootTarget.window && f.lootCase == "object-door" {
 				// A door's use is the state change: no window. Values update first, then nothing else.
-				c.writeFrame(fakeSMSGUpdateObject, fakeGameObjectState(target, mapID, 0))
+				c.writeFrame(fakeSMSGUpdateObject, fakeGameObjectState(want, mapID, 0))
 				windowOpen = false
 				continue
 			}
-			c.writeFrame(fakeSMSGLootResponse, fakeLootWindow(target, windowLoot, loot.MethodGroupLoot,
+			c.writeFrame(fakeSMSGLootResponse, fakeLootWindow(want, windowLoot, loot.MethodGroupLoot,
 				f.lootCoins, items))
+			rollMs := f.lootRollMs
+			if rollMs == 0 {
+				rollMs = 300
+			}
 			for _, roll := range rolls {
-				c.writeFrame(fakeSMSGStartLootRoll, fakeStartRoll(windowLoot, int32(mapID), roll, f.lootValid, 300))
+				c.writeFrame(fakeSMSGStartLootRoll, fakeStartRoll(windowLoot, int32(mapID), roll, f.lootValid, rollMs))
 				if f.lootCase == "roll-none" || f.lootCase == "roll-blocked" {
 					// Nobody votes (or the client may not): the server's timer ends the roll at once here.
 					c.writeFrame(fakeSMSGLootAllPassed, fakeAllPassed(windowLoot, roll))
 				}
+			}
+			if f.lootCase == "loot-bad" {
+				// A truncated loot packet: the parse error must end the run, and the window must still be released.
+				c.writeFrame(fakeSMSGLootRemoved, []byte{0x00})
 			}
 		case fakeCMSGGameObjReport:
 			f.mu.Lock()
@@ -521,7 +549,7 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				return
 			}
 			for _, id := range batch {
-				c.writeFrame(fakeSMSGLootRemoved, fakeRemoved(target, windowLoot, id))
+				c.writeFrame(fakeSMSGLootRemoved, fakeRemoved(want, windowLoot, id))
 			}
 		case fakeCMSGLootRoll:
 			b := wire.NewReader(payload)
@@ -555,6 +583,9 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 			case "link-roll":
 				f.dropLink(realm, c)
 				return
+			case "roll-long":
+				// The roll never ends: the client must give up on its own deadline and still release the window.
+				continue
 			}
 			if vote == loot.RollPass {
 				c.writeFrame(fakeSMSGLootAllPassed, fakeAllPassed(windowLoot, def))
@@ -568,8 +599,8 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				f.failf("loot: CMSG_LOOT_RELEASE: %v (%d bytes left)", b.Err(), b.Remaining())
 				return
 			}
-			if got != target {
-				f.failf("loot: release names %v, want the owner %v", got, target)
+			if got != want {
+				f.failf("loot: release names %v, want the owner %v", got, want)
 				return
 			}
 			f.mu.Lock()
@@ -624,10 +655,10 @@ func newLootScenario(t *testing.T, lootCase string, target fakeLootTarget, items
 	return f, parseFakePacked(t, target.packed), f.lootLootGUID
 }
 
-// runLootScenario enters the world with the scenario's options and returns the report.
-func runLootScenario(t *testing.T, f *fakeServer, opts Options) (*Report, []string) {
+// enterLootScenario runs the scenario's client with the scenario's options and returns the report and the run's own
+// error, without judging either: the tests that expect the run to fail keep the error.
+func enterLootScenario(t *testing.T, f *fakeServer, opts Options) (*Report, []string, error) {
 	t.Helper()
-	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()
 	var steps []string
@@ -651,6 +682,14 @@ func runLootScenario(t *testing.T, f *fakeServer, opts Options) (*Report, []stri
 		steps = append(steps, fmt.Sprintf(format, args...))
 	}
 	report, err := Enter(t.Context(), opts)
+	return report, steps, err
+}
+
+// runLootScenario enters the world with the scenario's options and returns the report.
+func runLootScenario(t *testing.T, f *fakeServer, opts Options) (*Report, []string) {
+	t.Helper()
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, opts)
 	if err != nil {
 		t.Fatalf("the loot run failed: %v\nsteps:\n%s", err, joinLines(steps))
 	}
@@ -800,6 +839,9 @@ func TestObjectUseDoor(t *testing.T) {
 	if !r.Found || r.Entry != fakeLootDoorEntry {
 		t.Fatalf("the object-use report: %+v\nsteps:\n%s", r, joinLines(steps))
 	}
+	if r.Ambiguous || len(r.Candidates) != 0 {
+		t.Fatalf("one object in range was treated as ambiguous: %+v", r)
+	}
 	if !r.StateKnown || r.StateBefore != 1 || r.StateAfter != 0 || !r.StateChanged {
 		t.Fatalf("the states: %+v", r)
 	}
@@ -916,5 +958,136 @@ func TestLootKillFirst(t *testing.T) {
 	}
 	if !containsWire(f.instWire, fakeCMSGAttackSwing) {
 		t.Fatalf("no attack was sent: % X", f.instWire)
+	}
+}
+
+// TestLootDeadlineReleasesTheWindow: the run's own deadline ends it while it waits for a roll that never ends. The
+// window the server gave it must still be given back, on the cleanup path, instead of staying open on the server
+// until the loot's own timeout.
+func TestLootDeadlineReleasesTheWindow(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x312, High: 8 << 58}, entry: fakeLootCorpseEntry, dead: true}
+	target.packed = fakePacked(target.guid)
+	items := []fakeItemDef{{listID: 0, itemID: 11754, count: 1, uiType: loot.SlotRollOngoing}}
+	f, _, _ := newLootScenario(t, "roll-long", target, items, items)
+	f.lootRollMs = 60000
+	f.clientMayLeave = true // the run's deadline ends it; the client closes its sockets right after the cleanup
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, Options{
+		LootCheck: true,
+		Roll:      "need",
+		Deadline:  5 * time.Second,
+	})
+	f.wait(t)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the run ended with %v, want the deadline\nsteps:\n%s", err, joinLines(steps))
+	}
+	if report == nil || !report.Loot.Opened {
+		t.Fatalf("no window was opened before the deadline: %+v", report)
+	}
+	f.mu.Lock()
+	released := f.lootReleased
+	f.mu.Unlock()
+	if !released {
+		t.Fatalf("the window was not released when the deadline ended the run\nsteps:\n%s", joinLines(steps))
+	}
+	if !report.Loot.ReleaseAttempted {
+		t.Fatalf("the report does not say the cleanup release was attempted: %+v", report.Loot)
+	}
+}
+
+// TestLootParseErrorReleasesTheWindow: a loot packet this client cannot read ends the run with the parse error; the
+// window is still released, and the parse error stays the run's error.
+func TestLootParseErrorReleasesTheWindow(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x313, High: 8 << 58}, entry: fakeLootCorpseEntry, dead: true}
+	target.packed = fakePacked(target.guid)
+	items := []fakeItemDef{{listID: 0, itemID: 4583, count: 1, uiType: loot.SlotAllowLoot}}
+	f, _, _ := newLootScenario(t, "loot-bad", target, items, nil)
+	f.clientMayLeave = true
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, Options{LootCheck: true})
+	f.wait(t)
+	if err == nil || !strings.Contains(err.Error(), "SMSG_LOOT_REMOVED") {
+		t.Fatalf("the run ended with %v, want the SMSG_LOOT_REMOVED parse error\nsteps:\n%s", err, joinLines(steps))
+	}
+	if report == nil || !report.Loot.Opened {
+		t.Fatalf("no window was opened: %+v", report)
+	}
+	f.mu.Lock()
+	released := f.lootReleased
+	f.mu.Unlock()
+	if !released {
+		t.Fatalf("the window was not released after the parse error\nsteps:\n%s", joinLines(steps))
+	}
+	if !report.Loot.ReleaseAttempted {
+		t.Fatalf("the report does not say the cleanup release was attempted: %+v", report.Loot)
+	}
+}
+
+// TestObjectUseRefusesAmbiguousTargets: two game objects of the entry stand in range. Using the nearest would be a
+// guess, so the command refuses and names each one by where it stands and how far it is — and sends no use.
+func TestObjectUseRefusesAmbiguousTargets(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x314, High: 8 << 58}, entry: fakeLootDoorEntry,
+		window: true, goType: 0, state: 1}
+	target.packed = fakePacked(target.guid)
+	extra := fakeExtraObject{guid: wire.GUID{Low: 0x315, High: 8 << 58}, entry: fakeLootDoorEntry,
+		goType: 0, state: 1, x: 10, y: 0, z: 0}
+	extra.packed = fakePacked(extra.guid)
+	f, _, _ := newLootScenario(t, "object-ambiguous", target, nil, nil)
+	f.lootExtras = []fakeExtraObject{extra}
+	report, steps := runLootScenario(t, f, Options{ObjectUse: true, Entry: fakeLootDoorEntry})
+
+	r := report.ObjectUse
+	if r.Found || !r.Ambiguous {
+		t.Fatalf("the object-use report: %+v\nsteps:\n%s", r, joinLines(steps))
+	}
+	if len(r.Candidates) != 2 {
+		t.Fatalf("the candidates: %+v", r.Candidates)
+	}
+	if r.Candidates[0].Distance != 2 || r.Candidates[1].Distance != 10 {
+		t.Fatalf("the candidates' distances: %+v", r.Candidates)
+	}
+	if r.Candidates[1].X != 10 || r.Candidates[1].Y != 0 || r.Candidates[1].Z != 0 {
+		t.Fatalf("the second candidate's position: %+v", r.Candidates[1])
+	}
+	f.mu.Lock()
+	used := f.lootUsed
+	f.mu.Unlock()
+	if used {
+		t.Fatalf("the client used one of the ambiguous objects\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestObjectUseAtPicksTheObject: --at names the object, and the use must go to that one and not to the nearer.
+func TestObjectUseAtPicksTheObject(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x316, High: 8 << 58}, entry: fakeLootDoorEntry,
+		window: true, goType: 0, state: 1}
+	target.packed = fakePacked(target.guid)
+	// Both stand inside the interaction range, so the run walks nowhere; the nearer one is not the one --at names.
+	extra := fakeExtraObject{guid: wire.GUID{Low: 0x317, High: 8 << 58}, entry: fakeLootDoorEntry,
+		goType: 0, state: 1, x: 3.5, y: 0, z: 0}
+	extra.packed = fakePacked(extra.guid)
+	f, _, _ := newLootScenario(t, "object-door", target, nil, nil)
+	f.lootExtras = []fakeExtraObject{extra}
+	// The object at the --at point is the one to use; the fake fails the run if the use names anything else.
+	f.lootWant = extra.guid
+	report, steps := runLootScenario(t, f, Options{
+		ObjectUse: true,
+		Entry:     fakeLootDoorEntry,
+		AtSet:     true,
+		AtX:       3.5, AtY: 0, AtZ: 0,
+	})
+
+	r := report.ObjectUse
+	if !r.Found || r.Ambiguous || r.Distance != 3.5 {
+		t.Fatalf("the object-use report: %+v\nsteps:\n%s", r, joinLines(steps))
+	}
+	if !r.StateKnown || r.StateBefore != 1 || r.StateAfter != 0 || !r.StateChanged {
+		t.Fatalf("the states: %+v", r)
+	}
+	f.mu.Lock()
+	used := f.lootUsed
+	f.mu.Unlock()
+	if !used {
+		t.Fatalf("the object at the --at point was not used\nsteps:\n%s", joinLines(steps))
 	}
 }

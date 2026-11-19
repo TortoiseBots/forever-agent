@@ -187,8 +187,10 @@ to kill first), walk into interaction range, open, read, vote (only if asked and
 taken), release. It prints one line per step and a final summary. Exit codes: 0 done, the login codes, the
 disconnected and dead codes, the world code for anything else.
 
-`forever object-use --entry N`: settle, find the nearest object of that entry, walk to it, print state and flags,
-use, print state and flags after the update, release a window it opened without taking anything.
+`forever object-use --entry N [--at x,y,z] [--at-range Y]`: settle, look for the objects of that entry in range,
+walk to the chosen one, print state and flags, use, print state and flags after the update, release a window it
+opened without taking anything. More than one object of the entry in range is a refusal, not a guess: the command
+lists them by position and distance and sends no use. `--at` names one; the tolerance is 2 yd by default.
 
 ## What is approximated, and what is not done
 
@@ -237,3 +239,17 @@ logger, with the source's entry, the map, the method, the gold and the items, th
    is already open.
 5. **A quest object.** A usable quest object that opens a page or a gossip menu answers with no window; the command
    must report that and not hang, and the object's state must be unchanged.
+
+## Fix round 2 (review findings)
+
+* **The window is released on every early exit.** `lootTarget` hands its caller a cleanup that runs on a context of
+  its own (`lootCleanupWait`, 10 s): an expired run window, a parse error in a loot packet, or a failed send after
+  the window was accepted still writes one `CMSG_LOOT_RELEASE`, and the failure of that cleanup is reported
+  (`ReleaseAttempted`, `ReleaseErr`) instead of replacing the run's own error. The normal path (the take's own
+  release) marks the window released, so the cleanup never writes a second one. Tests: the run's deadline during a
+  roll that never ends, a truncated `SMSG_LOOT_REMOVED`, and a send that fails on a fake transport — each asserts
+  the release was attempted.
+* **object-use refuses an ambiguous entry.** Two objects of the entry in range are listed with their position and
+  distance (no identifiers) and no use is sent; `--at x,y,z` picks the one nearest that point within `--at-range`
+  (2 yd default). Tests: two in range refused, `--at` picks the intended one (the fake fails the run if the use
+  names the other), and one in range still works.

@@ -14,6 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/loot"
@@ -106,13 +109,15 @@ func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 }
 
 func foreverObjectUseCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --entry N [--range YARDS] [--stay DURATION]"
+	const usage = "usage: forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --entry N [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION]"
 	fs := flag.NewFlagSet("forever object-use", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
 	stay := fs.Duration("stay", 8*time.Second, "how long to settle in the world before using the object")
 	entry := fs.Int64("entry", 0, "game-object entry to use (required)")
+	at := fs.String("at", "", "x,y,z of the object to use, when several objects of --entry are in range")
+	atRange := fs.Float64("at-range", 2, "how close an object must be to --at, in yards")
 	reach := fs.Float64("range", 40, "how far to look for the object, in yards")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -137,6 +142,15 @@ func foreverObjectUseCmd(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintln(stderr, "forever object-use: --range must be between 1 and 200 yards")
 		return exitUsage
 	}
+	atX, atY, atZ, atErr := parseAtPoint(*at)
+	if atErr != nil {
+		fmt.Fprintf(stderr, "forever object-use: %v\n", atErr)
+		return exitUsage
+	}
+	if *atRange < 0.5 || *atRange > 100 {
+		fmt.Fprintln(stderr, "forever object-use: --at-range must be between 0.5 and 100 yards")
+		return exitUsage
+	}
 	if err := common.passwordCheck("forever object-use"); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
@@ -144,6 +158,11 @@ func foreverObjectUseCmd(ctx context.Context, args []string, stdout, stderr io.W
 	report, err := common.enter(ctx, "forever object-use", stdout, world.Options{
 		ObjectUse: true,
 		Entry:     int32(*entry),
+		AtSet:     *at != "",
+		AtX:       atX,
+		AtY:       atY,
+		AtZ:       atZ,
+		AtRange:   float32(*atRange),
 		LootRange: float32(*reach),
 		Settle:    *stay,
 		Deadline:  *stay + 2*time.Minute,
@@ -167,6 +186,26 @@ func foreverObjectUseCmd(ctx context.Context, args []string, stdout, stderr io.W
 		return exitWorld
 	}
 	return exitOK
+}
+
+// parseAtPoint parses --at x,y,z; an empty value is no point at all.
+func parseAtPoint(point string) (x, y, z float32, err error) {
+	if point == "" {
+		return 0, 0, 0, nil
+	}
+	parts := strings.Split(point, ",")
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("--at wants x,y,z, not %q", point)
+	}
+	var v [3]float64
+	for i, p := range parts {
+		f, perr := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if perr != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, 0, 0, fmt.Errorf("--at: %q is not a number", strings.TrimSpace(p))
+		}
+		v[i] = f
+	}
+	return float32(v[0]), float32(v[1]), float32(v[2]), nil
 }
 
 // printLootCheckSummary prints the window, what was taken and how the rolls ended.
@@ -236,13 +275,24 @@ func printLootCheckSummary(w io.Writer, report *world.Report) {
 		fmt.Fprintf(w, "loot-check: item slots removed by the server: %v\n", r.Removed)
 	}
 	fmt.Fprintf(w, "loot-check: window released: %v\n", r.Released)
+	if r.ReleaseErr != "" {
+		fmt.Fprintf(w, "loot-check: the cleanup release failed: %s\n", r.ReleaseErr)
+	}
 }
 
 // printObjectUseSummary prints the object's state and flags before and after the use.
 func printObjectUseSummary(w io.Writer, report *world.Report) {
 	r := report.ObjectUse
 	if !r.Found {
-		fmt.Fprintln(w, "object-use: no object of that entry was in range")
+		if !r.Ambiguous {
+			fmt.Fprintln(w, "object-use: no object of that entry was in range")
+			return
+		}
+		fmt.Fprintf(w, "object-use: %d objects of entry %d are in range; one must be chosen with --at:\n",
+			len(r.Candidates), r.Entry)
+		for _, c := range r.Candidates {
+			fmt.Fprintf(w, "object-use:   at %.2f, %.2f, %.2f (%.1f yd)\n", c.X, c.Y, c.Z, c.Distance)
+		}
 		return
 	}
 	fmt.Fprintf(w, "object-use: entry %d", r.Entry)
@@ -258,6 +308,9 @@ func printObjectUseSummary(w io.Writer, report *world.Report) {
 	}
 	if r.LootOpened {
 		fmt.Fprintf(w, "object-use: the use opened a loot window (%d item(s)); released: %v\n", r.LootItems, r.Released)
+	}
+	if report.Loot.ReleaseErr != "" {
+		fmt.Fprintf(w, "object-use: the cleanup release failed: %s\n", report.Loot.ReleaseErr)
 	}
 }
 

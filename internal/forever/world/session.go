@@ -167,6 +167,13 @@ type Options struct {
 	LootMoney bool
 	TakeItems int
 	LootRange float32
+	// At is --at x,y,z: the point object-use must pick its object at when several objects of the entry are in
+	// range; AtRange is how close an object must stand to that point in yards (0: objectAtRange).
+	AtSet   bool
+	AtX     float32
+	AtY     float32
+	AtZ     float32
+	AtRange float32
 	// Round D2: forever dungeon-run. DungeonRun plays one dungeon plan for the party the commander leads; Enter
 	// hands the session to the driver until the run stops or the deadline ends it, then logs out. The driver's
 	// ports are bound to this session (dungeon_session.go). A nil value runs none of it.
@@ -557,6 +564,17 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	return report, runErr
 }
 
+// ownDeadlineTimeout reports a socket timeout that is this run's own deadline rather than the peer's: the read was
+// armed with the context's deadline (worldconn's operationDeadline), and the socket's timer can beat the context's.
+func (s *session) ownDeadlineTimeout(err error) bool {
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		return false
+	}
+	deadline, ok := s.pumpCtx.Deadline()
+	return ok && !time.Now().Before(deadline)
+}
+
 // startPump runs one socket reader and records how to wait for it. A reader that returns an error (a closed or reset
 // socket) marks the link dead before it posts the error, so every wait in the session ends at once.
 func (s *session) startPump(side int, next func(context.Context) (worldconn.Packet, error)) {
@@ -574,8 +592,10 @@ func (s *session) startPump(side int, next func(context.Context) (worldconn.Pack
 			}
 			ev := event{side: side, p: p, err: err}
 			if err != nil {
-				// A read that failed because this run's own context ended is not a lost link.
-				if s.pumpCtx.Err() == nil {
+				// A read that failed because this run's own context ended is not a lost link. The socket's read
+				// deadline is armed from that context's deadline and can fire a moment before its timer, so the
+				// deadline itself is checked as well.
+				if s.pumpCtx.Err() == nil && !s.ownDeadlineTimeout(err) {
 					s.setLinkDead(side, err)
 				}
 			}
@@ -1515,6 +1535,11 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		// The reader already marked the link dead; the event is only here so a wait that owns this reader sees it.
 		if err := s.linkDead(); err != nil {
 			return err
+		}
+		// A reader that ended with this run's own context ended says so: the run's deadline is the reason, not the
+		// socket's timeout (which may have fired a moment earlier).
+		if err := s.ctx.Err(); err != nil {
+			return fmt.Errorf("world: connection %d: %w", ev.side, err)
 		}
 		return fmt.Errorf("world: connection %d: %w", ev.side, ev.err)
 	}

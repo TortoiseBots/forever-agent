@@ -37,6 +37,11 @@ type LootReport struct {
 	MoneyMod   uint64
 	Removed    []uint8
 	Released   bool
+	// ReleaseAttempted and ReleaseErr are the cleanup release a run that ends before its own release still owes
+	// the server: it is attempted on its own short context, and its failure is recorded here instead of replacing
+	// the run's own error.
+	ReleaseAttempted bool
+	ReleaseErr       string
 
 	Rolls []LootRollRow
 	Votes int
@@ -77,6 +82,13 @@ type LootRollRow struct {
 	Ended      bool
 }
 
+// ObjectUseCandidate is one in-range game object of the wanted entry: where it stands and how far it is. The list
+// names no identifier, only the position and the distance.
+type ObjectUseCandidate struct {
+	X, Y, Z  float32
+	Distance float32
+}
+
 // ObjectUseReport is what object-use observed: the object, its state and flags before and after the use, and
 // whether the use opened a loot window.
 type ObjectUseReport struct {
@@ -93,6 +105,10 @@ type ObjectUseReport struct {
 	LootOpened   bool
 	LootItems    int
 	Released     bool
+	// Ambiguous is set when more than one object of the entry was in range and none was chosen: Candidates lists
+	// them, so the caller can pick one with --at.
+	Ambiguous  bool
+	Candidates []ObjectUseCandidate
 }
 
 // lootCandidates lists what a loot run may target, nearest first: dead units, chests, and (only with an entry) the
@@ -147,6 +163,28 @@ func (s *session) lootCandidates(x, y, z, reach float32, entry int32) []lootCand
 
 // goTypeChest is GAMEOBJECT_TYPE_CHEST (SharedDefines.h GameObjectTypes).
 const goTypeChest int8 = 3
+
+// objectAtRange is how close a game object must stand to --at to be the one, in yards: the flag's default.
+const objectAtRange float32 = 2
+
+// objectsOfEntry lists the game objects of one entry within reach of (x, y, z), nearest first, with their
+// distances. The world's list is already nearest first, so the first object past reach ends the walk.
+func (s *session) objectsOfEntry(x, y, z, reach float32, entry int32) ([]*objects.Object, []float32) {
+	var matches []*objects.Object
+	var dists []float32
+	for _, o := range s.world.GameObjects(x, y, z) {
+		if o.Info.Entry != entry {
+			continue
+		}
+		d := objects.Distance(x, y, z, o.X, o.Y, o.Z)
+		if d > reach {
+			break
+		}
+		matches = append(matches, o)
+		dists = append(dists, d)
+	}
+	return matches, dists
+}
 
 func sortCandidates(c []lootCandidate) {
 	for i := 1; i < len(c); i++ {
@@ -210,7 +248,9 @@ func (s *session) lootCheck(ctx context.Context) error {
 		}
 	}
 
-	if _, err := s.lootTarget(ctx, target.obj); err != nil {
+	release, err := s.lootTarget(ctx, target.obj)
+	defer release()
+	if err != nil {
 		if errors.Is(err, ErrLootRefused) || errors.Is(err, ErrNoLootWindow) {
 			s.opts.logf("loot-check: %v", err)
 			return nil
@@ -311,25 +351,58 @@ func (s *session) objectUse(ctx context.Context) error {
 	if reach <= 0 {
 		reach = 40
 	}
-	var target *objects.Object
-	var dist float32
-	for _, o := range s.world.GameObjects(s.MoverX(), s.MoverY(), s.MoverZ()) {
-		if o.Info.Entry != s.opts.Entry {
-			continue
-		}
-		dist = objects.Distance(s.MoverX(), s.MoverY(), s.MoverZ(), o.X, o.Y, o.Z)
-		if dist > reach {
-			break
-		}
-		target = o
-		break
-	}
+	x, y, z := s.MoverX(), s.MoverY(), s.MoverZ()
+	matches, dists := s.objectsOfEntry(x, y, z, reach, s.opts.Entry)
 	rep := &s.report.ObjectUse
 	rep.Entry = s.opts.Entry
-	if target == nil {
+	if len(matches) == 0 {
 		s.opts.logf("object-use: no game object with entry %d within %.0f yd", s.opts.Entry, reach)
 		return nil
 	}
+	idx := 0
+	switch {
+	case s.opts.AtSet:
+		// --at names the one: the nearest in-range object of the entry to that point, inside the tolerance.
+		tol := s.opts.AtRange
+		if tol <= 0 {
+			tol = objectAtRange
+		}
+		idx = -1
+		var near float32
+		for i, o := range matches {
+			d := objects.Distance(s.opts.AtX, s.opts.AtY, s.opts.AtZ, o.X, o.Y, o.Z)
+			if d > tol {
+				continue
+			}
+			if idx < 0 || d < near {
+				idx, near = i, d
+			}
+		}
+		if idx < 0 {
+			return fmt.Errorf("world: no game object with entry %d within %.1f yd of --at (%.2f, %.2f, %.2f)",
+				s.opts.Entry, tol, s.opts.AtX, s.opts.AtY, s.opts.AtZ)
+		}
+		if len(matches) > 1 {
+			s.opts.logf("object-use: %d game objects with entry %d within %.0f yd; --at (%.2f, %.2f, %.2f) picks the one at %.2f, %.2f, %.2f",
+				len(matches), s.opts.Entry, reach, s.opts.AtX, s.opts.AtY, s.opts.AtZ,
+				matches[idx].X, matches[idx].Y, matches[idx].Z)
+		}
+	case len(matches) > 1:
+		// Several objects of the entry stand in range: the nearest is a guess, and a use sent to the wrong one
+		// opens someone else's door (or loots someone else's chest). Refuse, and name each by where it stands.
+		rep.Ambiguous = true
+		for i, o := range matches {
+			rep.Candidates = append(rep.Candidates, ObjectUseCandidate{X: o.X, Y: o.Y, Z: o.Z, Distance: dists[i]})
+		}
+		s.opts.logf("object-use: %d game objects with entry %d within %.0f yd; refusing to guess which one",
+			len(matches), s.opts.Entry, reach)
+		for _, c := range rep.Candidates {
+			s.opts.logf("object-use:   at %.2f, %.2f, %.2f (%.1f yd)", c.X, c.Y, c.Z, c.Distance)
+		}
+		s.opts.logf("object-use: give --at x,y,z to choose one")
+		return nil
+	}
+	target, dist := matches[idx], dists[idx]
 	rep.Found = true
 	rep.Name = s.world.Name(target)
 	rep.Distance = dist
@@ -337,7 +410,8 @@ func (s *session) objectUse(ctx context.Context) error {
 		goStateName(target.Info.GOState))
 
 	// lootTarget sends the use, waits for the window or the state change and records both in the loot report.
-	_, err := s.lootTarget(ctx, target)
+	release, err := s.lootTarget(ctx, target)
+	defer release()
 	lr := &s.report.Loot
 	if err != nil {
 		if errors.Is(err, ErrLootRefused) || errors.Is(err, ErrNoLootWindow) {

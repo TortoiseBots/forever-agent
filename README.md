@@ -172,14 +172,20 @@ threshold, the copper, one row per item (slot, id, count, slot type, whether it 
 (it sends `CMSG_LOOT_ROLL` only when `--roll` names a vote and the roll's own vote mask allows it, so need is never
 sent unasked). It then takes the money (`CMSG_LOOT_MONEY` unless `--money=false`), takes the items the window allows
 (up to `--take`, 0 meaning all), releases with `CMSG_LOOT_RELEASE` and prints what the server removed and whether
-the release was confirmed. A refused window is a named error (`there is no loot`, `you are too far away`, ...); a
-creature with nothing to loot is answered with silence by this core, which the command reports as "no loot window".
+the release was confirmed. A run that ends after a window was accepted but before its own release (its deadline, a
+parse error, a failed send) still gives the window back: one release is sent on a cleanup context of its own (10 s),
+and a failure of that cleanup is printed separately from the run's own error. A refused window is a named error
+(`there is no loot`, `you are too far away`, ...); a creature with nothing to loot is answered with silence by this
+core, which the command reports as "no loot window".
 
-`forever-agent forever object-use --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME --entry N [--range YARDS] [--stay DURATION]`
-settles, walks to the nearest game object of that entry (within `--range`, default 40 yd), records its state and
+`forever-agent forever object-use --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME --entry N [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION]`
+settles, looks for the game objects of that entry within `--range` (default 40 yd), records the object's state and
 flags, sends `CMSG_GAME_OBJ_USE` (and the report-use packet a real client follows with) and prints the state and
 flags after the object's own values update — a door or lever reads ready (closed) before and active (open) after; a
-chest also opens a loot window, which is read and released without taking anything.
+chest also opens a loot window, which is read and released without taking anything. When more than one object of the
+entry is in range the command refuses to guess: it lists them (position and distance only, no identifiers) and sends
+no use, so a script does not walk up to somebody else's door. `--at x,y,z` chooses the in-range object nearest that
+point within `--at-range` (default 2 yd); a miss is a named error. One object in range keeps working without `--at`.
 
 `forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)

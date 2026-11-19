@@ -45,6 +45,10 @@ const (
 	lootAnswerWait    = 4 * time.Second
 	lootReleaseWait   = 3 * time.Second
 	lootRollSlack     = 3 * time.Second
+	// lootCleanupWait is the budget of the release a failed run still owes the server: a window it was granted
+	// stays open on the server until the loot's own timeout otherwise. The cleanup runs on a context of its own,
+	// because the run's deadline is often the very reason the run ended.
+	lootCleanupWait = 10 * time.Second
 	// lootReach is how close the character stands to open a window: inside the client's and the server's 5-yard
 	// interaction range (ObjectDefines.h:24, GameObject::IsAtInteractDistance, GameObject.cpp:4405-4437).
 	lootReach = 4.0
@@ -82,6 +86,9 @@ type lootWatch struct {
 	coinRemoved int
 	money       *loot.MoneyNotify
 	releases    int
+	// releaseSent is set when this session wrote CMSG_LOOT_RELEASE for the open window: the cleanup release must
+	// not send a second one.
+	releaseSent bool
 	// rolls is keyed by loot GUID and slot; order keeps them in arrival order for the report.
 	rolls map[rollKey]*rollWatch
 	order []rollKey
@@ -98,6 +105,7 @@ func (l *lootWatch) reset() {
 	l.removed = 0
 	l.coinRemoved = 0
 	l.money = nil
+	l.releaseSent = false
 	l.rolls = make(map[rollKey]*rollWatch)
 	l.order = nil
 }
@@ -275,8 +283,11 @@ func stateChangedFrom(before objects.Info, seen bool, now objects.Info) bool {
 }
 
 // lootTarget walks to target, opens its window and reads it. For a game object it sends the use and waits for the
-// window or the state change; for a unit it sends CMSG_LOOT_UNIT. It does not take anything.
-func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool, error) {
+// window or the state change; for a unit it sends CMSG_LOOT_UNIT. It does not take anything. The returned release
+// must be deferred by the caller: it gives back a window the run accepted but did not release itself (see
+// releaseLeftover), and is a no-op until a window is accepted here and after the run's own release.
+func (s *session) lootTarget(ctx context.Context, target *objects.Object) (release func(), err error) {
+	release = func() {}
 	link := s.transport()
 	r := &s.report.Loot
 	r.Kind = "unit"
@@ -309,18 +320,18 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 
 	if r.Kind == "game object" {
 		if err := link.Send(wire.CMSGGameObjUse, loot.BuildGameObjUse(target.GUID)); err != nil {
-			return false, fmt.Errorf("world: CMSG_GAME_OBJ_USE: %w", err)
+			return release, fmt.Errorf("world: CMSG_GAME_OBJ_USE: %w", err)
 		}
 		// The real client follows the use with the report-use packet in the same tick; the core only runs the
 		// object's OnReportUse and the use criteria (SpellHandler.cpp:218-229), so its answer is not waited for.
 		_ = link.Send(wire.CMSGGameObjReportUse, loot.BuildGameObjReportUse(target.GUID))
 	} else {
 		if err := link.Send(wire.CMSGLootUnit, loot.BuildLootUnit(target.GUID)); err != nil {
-			return false, fmt.Errorf("world: CMSG_LOOT_UNIT: %w", err)
+			return release, fmt.Errorf("world: CMSG_LOOT_UNIT: %w", err)
 		}
 	}
 	if _, err := s.lootWait(ctx, "the loot window", lootWindowWait, found); err != nil {
-		return false, err
+		return release, err
 	}
 	// The object's own state is reported whatever the window did, so a refused use still says whether the object
 	// moved.
@@ -331,23 +342,26 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 	r.StateChanged = stateChangedFrom(before, seen, after)
 	if s.loot.refusal != nil {
 		if s.loot.refusal.Owner != target.GUID {
-			return false, fmt.Errorf("world: the refusal names another object (%v)", s.loot.refusal.Owner)
+			return release, fmt.Errorf("world: the refusal names another object (%v)", s.loot.refusal.Owner)
 		}
 		r.Failure = s.loot.refusal.Failure
-		return false, &LootRefusal{Reason: s.loot.refusal.Failure}
+		return release, &LootRefusal{Reason: s.loot.refusal.Failure}
 	}
 	if s.loot.window != nil && s.loot.window.Owner != target.GUID {
-		return false, fmt.Errorf("world: the window belongs to another object (%v)", s.loot.window.Owner)
+		return release, fmt.Errorf("world: the window belongs to another object (%v)", s.loot.window.Owner)
 	}
 	if s.loot.window == nil {
 		if r.StateChanged {
-			return true, nil // a door or lever: the state change is the whole answer
+			return release, nil // a door or lever: the state change is the whole answer
 		}
-		return false, ErrNoLootWindow
+		return release, ErrNoLootWindow
 	}
 	r.Opened = true
 	s.fillLootWindow(s.loot.window)
-	return true, nil
+	// The window is the server's now: from here to the run's own release, whoever ends the run early owes it back.
+	w := s.loot.window
+	release = func() { s.releaseLeftover(w) }
+	return release, nil
 }
 
 // fillLootWindow copies the window into the report: the method, the threshold, the coins and one row per item.
@@ -501,6 +515,7 @@ func (s *session) releaseLoot(ctx context.Context, w *loot.Response) error {
 	if err := link.Send(wire.CMSGLootRelease, loot.BuildLootRelease(w.Owner)); err != nil {
 		return fmt.Errorf("world: CMSG_LOOT_RELEASE: %w", err)
 	}
+	s.loot.releaseSent = true
 	closed := func() bool {
 		return s.loot.releases > 0 && s.report.Loot.Released
 	}
@@ -511,6 +526,36 @@ func (s *session) releaseLoot(ctx context.Context, w *loot.Response) error {
 		return fmt.Errorf("world: the server did not confirm the loot release")
 	}
 	return nil
+}
+
+// releaseLeftover is the release a run owes the server when it ends after a window was accepted and before its own
+// release: an expired run window, a parse error, a failed send. It writes on a context of its own (lootCleanupWait,
+// never the run's), so a run whose deadline ended it can still give the window back, and its own failure is recorded
+// on the report (ReleaseAttempted, ReleaseErr) instead of replacing the run's error.
+func (s *session) releaseLeftover(w *loot.Response) {
+	r := &s.report.Loot
+	if w == nil || r.Released || s.loot.releaseSent {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), lootCleanupWait)
+	defer cancel()
+	r.ReleaseAttempted = true
+	if err := s.sendOnCtx(cctx, sideInstance, wire.CMSGLootRelease, loot.BuildLootRelease(w.Owner)); err != nil {
+		r.ReleaseErr = fmt.Sprintf("CMSG_LOOT_RELEASE: %v", err)
+		s.opts.logf("loot: the window's cleanup release failed: %v", err)
+		return
+	}
+	s.loot.releaseSent = true
+	s.opts.logf("loot: the window's cleanup release sent")
+	if _, err := s.lootWait(cctx, "the release answer", lootReleaseWait, func() bool { return r.Released }); err != nil {
+		r.ReleaseErr = fmt.Sprintf("no answer to CMSG_LOOT_RELEASE: %v", err)
+		s.opts.logf("loot: %s", r.ReleaseErr)
+		return
+	}
+	if !r.Released {
+		r.ReleaseErr = "the server did not confirm the cleanup release"
+		s.opts.logf("loot: %s", r.ReleaseErr)
+	}
 }
 
 // fillRollResults writes one row per ended roll: who won, with which number, or that everybody passed.

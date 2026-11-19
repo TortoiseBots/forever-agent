@@ -176,6 +176,9 @@ type fakeServer struct {
 	loot           bool
 	lootCase       string
 	lootTarget     fakeLootTarget
+	lootExtras     []fakeExtraObject
+	lootWant       wire.GUID
+	lootRollMs     uint32
 	lootItems      []fakeItemDef
 	lootRolls      []fakeItemDef
 	lootCoins      uint32

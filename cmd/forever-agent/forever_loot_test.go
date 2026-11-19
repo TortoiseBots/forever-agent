@@ -27,6 +27,20 @@ func TestLootCheckUsage(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--entry is required") {
 		t.Fatalf("the refusal does not say the entry is required: %q", stderr.String())
 	}
+	stderr.Reset()
+	if code := foreverCmd(context.Background(), append(append([]string{"object-use"}, base...), "--entry", "17153", "--at", "1,2"), &stdout, &stderr); code != exitUsage {
+		t.Fatalf("a bad --at returned %d, want the usage code", code)
+	}
+	if !strings.Contains(stderr.String(), "--at wants x,y,z") {
+		t.Fatalf("the refusal does not name the point: %q", stderr.String())
+	}
+	stderr.Reset()
+	if code := foreverCmd(context.Background(), append(append([]string{"object-use"}, base...), "--entry", "17153", "--at", "1,2,3", "--at-range", "0"), &stdout, &stderr); code != exitUsage {
+		t.Fatalf("a bad --at-range returned %d, want the usage code", code)
+	}
+	if !strings.Contains(stderr.String(), "--at-range must be between") {
+		t.Fatalf("the refusal does not name the tolerance: %q", stderr.String())
+	}
 }
 
 // TestPrintLootCheckSummary: the window, the roll outcome, the money and the release are all named.
@@ -82,5 +96,18 @@ func TestPrintObjectUseSummary(t *testing.T) {
 	printObjectUseSummary(&out, &world.Report{ObjectUse: world.ObjectUseReport{Found: false}})
 	if !strings.Contains(out.String(), "no object of that entry") {
 		t.Fatalf("the empty report: %q", out.String())
+	}
+	out.Reset()
+	printObjectUseSummary(&out, &world.Report{ObjectUse: world.ObjectUseReport{
+		Entry: 17153, Ambiguous: true,
+		Candidates: []world.ObjectUseCandidate{
+			{X: 2, Y: 0, Z: 0, Distance: 2},
+			{X: 10, Y: -1, Z: 0.5, Distance: 10},
+		},
+	}})
+	for _, want := range []string{"2 objects of entry 17153", "at 2.00, 0.00, 0.00 (2.0 yd)", "at 10.00, -1.00, 0.50 (10.0 yd)", "--at"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("the ambiguous summary does not carry %q:\n%s", want, out.String())
+		}
 	}
 }

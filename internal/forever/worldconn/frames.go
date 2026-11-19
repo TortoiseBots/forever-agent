@@ -68,6 +68,21 @@ func operationDeadline(ctx context.Context) time.Time {
 	return time.Now().Add(defaultIOTimeout)
 }
 
+// ioDeadlineMargin is added to a socket deadline armed from a context that can end. The context's own watcher
+// interrupts the operation at its deadline, and the margin keeps the socket's timer from firing first: a bare
+// timeout a few microseconds before the context's timer would report the caller's own deadline as a dead peer.
+const ioDeadlineMargin = 5 * time.Second
+
+// socketDeadline is the deadline one socket read or write gets: the operation's, with the margin that lets the
+// context's own end (not the socket's timer) end a context that can end.
+func socketDeadline(ctx context.Context) time.Time {
+	d := operationDeadline(ctx)
+	if ctx.Done() != nil {
+		d = d.Add(ioDeadlineMargin)
+	}
+	return d
+}
+
 // armRead arms the socket for one read, bounded by the operation's deadline, and unblocks a read already in
 // progress when the context ends. The returned function stops the watcher and clears the deadline; the next
 // operation arms the socket again. Nothing here is absolute from the connection's start.
@@ -76,7 +91,7 @@ func (c *conn) armRead(ctx context.Context) (stop func()) {
 		_ = c.nc.SetReadDeadline(time.Unix(1, 0))
 		return func() {}
 	}
-	_ = c.nc.SetReadDeadline(operationDeadline(ctx))
+	_ = c.nc.SetReadDeadline(socketDeadline(ctx))
 	return watchContext(ctx, func() { _ = c.nc.SetReadDeadline(time.Unix(1, 0)) }, func() { _ = c.nc.SetReadDeadline(time.Time{}) })
 }
 
@@ -85,7 +100,7 @@ func (c *conn) armWrite(ctx context.Context) (stop func()) {
 		_ = c.nc.SetWriteDeadline(time.Unix(1, 0))
 		return func() {}
 	}
-	_ = c.nc.SetWriteDeadline(operationDeadline(ctx))
+	_ = c.nc.SetWriteDeadline(socketDeadline(ctx))
 	return watchContext(ctx, func() { _ = c.nc.SetWriteDeadline(time.Unix(1, 0)) }, func() { _ = c.nc.SetWriteDeadline(time.Time{}) })
 }
 
