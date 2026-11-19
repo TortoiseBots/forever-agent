@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/config"
@@ -918,7 +917,10 @@ func startSlotAgent(m teardownSlotManifest) (int, error) {
 	}
 	cmd := exec.Command(m.Binary, "login", "--config", m.Settings, "--pid-file", m.PIDFile, m.Character)
 	cmd.Stdout, cmd.Stderr = out, out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := setProcessGroup(cmd); err != nil {
+		out.Close()
+		return 0, err
+	}
 	if err := cmd.Start(); err != nil {
 		out.Close()
 		return 0, err

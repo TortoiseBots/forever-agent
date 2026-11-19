@@ -632,7 +632,7 @@ func (s *charScreen) waitFor(ctx context.Context, core uint32, what string, wait
 			return nil, fmt.Errorf("world: waiting for %s: the server ended the session: SMSG_CHARACTER_LOGIN_FAILED (%s)",
 				what, loginFailureReason(p.Payload))
 		case wire.SMSGLogoutComplete:
-			// a kick or a logout the server completed (WorldSession::LogoutPlayer, WorldSession.cpp:767): the realm
+			// a kick or a logout the server completed (WorldSession::LogoutPlayer, WorldSession.cpp:766): the realm
 			// socket has nothing left to answer.
 			return nil, fmt.Errorf("world: waiting for %s: the server ended the session: SMSG_LOGOUT_COMPLETE", what)
 		}

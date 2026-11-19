@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -648,5 +649,27 @@ func TestHeldMapPacketsAreBounded(t *testing.T) {
 	}
 	if got := s.world.Counts().Objects; got != 0 {
 		t.Fatalf("%d held packet(s) reached the model", got)
+	}
+}
+
+// TestNewWorldDropsAHeldRoster: a roster read before this character's own GUID was known is the old map's. The new
+// world must drop it; the server sends the party update again after the new world (MAPCHANGE-R1-NOTES.md), and a
+// SetSelf that adopted the old snapshot would let the new map act on a stale group.
+func TestNewWorldDropsAHeldRoster(t *testing.T) {
+	s, _ := newTransferSession()
+	s.party = party.NewState()
+	us := wire.GUID{Low: 2}
+	other := wire.GUID{Low: 3}
+	held := party.Update{Type: party.GroupTypeNormal, PartyGUID: wire.GUID{Low: 1}, LeaderGUID: other,
+		Members: []party.Member{{GUID: other, Name: "Other"}, {GUID: us, Name: "Us"}}, MyIndex: 1}
+	if s.party.ApplyUpdate(held) || s.party.HeldRosters != 1 {
+		t.Fatal("the roster was not held before the map change")
+	}
+	mustFeed(t, s, sideInstance, wire.SMSGSuspendToken, tokenPayload(5, 2))
+	mustFeed(t, s, sideRealm, wire.SMSGNewWorld, newWorldPayload(1, 1000, 2000, 50, 0, objects.NewWorldReasonSeamless, 7))
+	s.party.SetSelf(us)
+	if s.party.InParty || s.party.RosterValid || len(s.party.Members) != 0 {
+		t.Fatalf("the pre-map roster was applied after the new world: in party %v valid %v members %d",
+			s.party.InParty, s.party.RosterValid, len(s.party.Members))
 	}
 }

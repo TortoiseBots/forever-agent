@@ -147,6 +147,10 @@ type Info struct {
 
 	// audit collects every GUID this block read, including the ones the decoded fields do not keep. The fixture
 	// generator rewrites them all (wire.Buffer.SetGUIDHook is the same seam one layer down).
+	// vendor (VendorData, the FVendor_C fragment on a creature with a vendor template; UpdateFields.cpp:9254-9277)
+	HasVendor   bool
+	VendorFlags int32
+
 	audit []wire.GUID
 }
 
@@ -164,6 +168,7 @@ type Fields struct {
 	MountDisplayID, NativeDisplayID                         bool
 	GOState, GOType, GODisplayID, GOFlags, GOFaction        bool
 	Owner, CorpseDisplayID, Caster, SpellID                 bool
+	Vendor                                                  bool
 }
 
 // all marks every field present, which is what a create block means.
@@ -181,6 +186,7 @@ func (f *Fields) all() {
 		MountDisplayID: true, NativeDisplayID: true,
 		GOState: true, GOType: true, GODisplayID: true, GOFlags: true, GOFaction: true,
 		Owner: true, CorpseDisplayID: true, Caster: true, SpellID: true,
+		Vendor: true,
 	}
 }
 

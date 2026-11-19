@@ -333,12 +333,46 @@ type fakeLogin struct {
 	realmPopulation uint32
 	realmFlags      uint32
 	realmBuild      uint32
-	restFailBody    string // when set, the SRP request answers 500 with this body
-	rpcDrip         bool   // when set, the RPC port never answers the connect request
+	// realms, when set, replaces the fake's single realm in the realm list: several realm rows, each with its own
+	// address, population and build. The join accepts any of their addresses. A nil slice means one online realm on
+	// f.realmBuild, named "TestRealm".
+	realms []fakeRealm
+	// logonBuilds receives the application_version of every logon this fake sees, in order; a test that cares
+	// reads them (the automatic-build login logs on twice: once with its probe build, once with the realm's).
+	logonBuilds  chan uint32
+	restFailBody string // when set, the SRP request answers 500 with this body
+	rpcDrip      bool   // when set, the RPC port never answers the connect request
 
 	// hostile overrides one server field with poisoned text, for the sanitiser test: the values of the map are what
 	// the server sends in that field (see fakeField and the keys the handlers read)
 	hostile map[string]string
+}
+
+// fakeRealm is one realm row the fake's realm list carries.
+type fakeRealm struct {
+	address    uint32 // wowRealmAddress; the join accepts it
+	name       string // empty means TestRealm
+	population uint32 // 0 is the offline state the client must avoid
+	build      uint32 // the realm's own build
+}
+
+// realmRows is the realm list the fake serves: the several realms when the test set them, else one online realm on
+// realmBuild.
+func (f *fakeLogin) realmRows() []fakeRealm {
+	if len(f.realms) != 0 {
+		return f.realms
+	}
+	return []fakeRealm{{address: 0x46010046, name: "TestRealm", population: f.realmPopulation, build: f.realmBuild}}
+}
+
+// joinable reports whether address names one of the realms the list carries.
+func (f *fakeLogin) joinable(address uint64) bool {
+	for _, r := range f.realmRows() {
+		if uint64(r.address) == address {
+			return true
+		}
+	}
+	return false
 }
 
 // fakeField is the value the fake sends for a string field, or the test's poisoned text for it.
@@ -401,6 +435,7 @@ func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 		t: t, srp: srp, caFile: caFile,
 		ticket:          "TC-" + strings.Repeat("AB", 20),
 		errs:            make(chan error, 16),
+		logonBuilds:     make(chan uint32, 4),
 		realmPopulation: 1, realmBuild: build70938,
 	}
 
@@ -516,6 +551,14 @@ func (f *fakeLogin) options() Options {
 	}
 }
 
+// recordLogonBuild hands the claimed build to a waiting test without ever blocking the handler.
+func (f *fakeLogin) recordLogonBuild(build uint32) {
+	select {
+	case f.logonBuilds <- build:
+	default:
+	}
+}
+
 // fail records a handler-level problem; the test checks the channel at the end.
 func (f *fakeLogin) fail(format string, args ...any) {
 	select {
@@ -619,6 +662,9 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 		}
 	}
 	wantToken := uint32(0)
+	// logonBuild is this connection's application_version: the server's realm list and join both read it
+	// (GameUtilitiesService.cpp:312,344 pass session->GetBuild()), never the realm list ticket's client info.
+	var logonBuild uint32
 	for {
 		h, body, err := c.readFrame()
 		if err != nil {
@@ -651,9 +697,11 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			if logon.program != "WoW" || logon.platform != "Wn64" || logon.locale != "enUS" {
 				f.fail("logon program/platform/locale = %q/%q/%q", logon.program, logon.platform, logon.locale)
 			}
-			if logon.build != build70938 {
-				f.fail("logon application_version = %d, want %d", logon.build, build70938)
+			if logon.build == 0 {
+				f.fail("logon application_version = 0")
 			}
+			logonBuild = uint32(logon.build)
+			f.recordLogonBuild(uint32(logon.build))
 			if !bytes.Equal(logon.ticket, []byte(f.ticket)) {
 				f.fail("logon cached_web_credentials = %q, want the login ticket", logon.ticket)
 			}
@@ -683,7 +731,7 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			}
 
 		case h.ServiceHash == gameUtilitiesServiceHash && h.MethodID == gameUtilitiesProcessRequest:
-			if err := f.handleClientRequest(c, h, body); err != nil {
+			if err := f.handleClientRequest(c, h, body, logonBuild); err != nil {
 				return
 			}
 
@@ -694,7 +742,7 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 	}
 }
 
-func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte) error {
+func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logonBuild uint32) error {
 	resp, err := unmarshalClientResponse(body) // a request has the same repeated attribute field 1
 	if err != nil {
 		f.fail("client request: %v", err)
@@ -731,22 +779,40 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte) error
 		return f.respond(c, h, putBytes(nil, 1, attrBlob("Param_RealmListTicket", ticket).marshal()))
 
 	case strings.HasPrefix(command, "Command_RealmListRequest_v1"):
-		address := uint32(0x46010046)
-		list := map[string]any{"updates": []any{map[string]any{
-			"wowRealmAddress": address,
-			"deleting":        false,
-			"update": map[string]any{
-				"wowRealmAddress": address,
-				"cfgRealmsID":     70,
-				"name":            f.fakeField("realm_name", "TestRealm"),
-				"populationState": f.realmPopulation,
-				"cfgContentSetID": 137,
-				"superDistrictID": 2,
-				"flags":           f.realmFlags,
-				"version":         map[string]any{"versionBuild": f.realmBuild},
-			},
-		}}}
-		counts := map[string]any{"counts": []any{map[string]any{"wowRealmAddress": address, "count": 0}}}
+		// FillRealmEntry (RealmList.cpp:280-315): every realm shows its own build and the VersionMismatch flag
+		// when it does not accept the client's, and the client's own build when it does.
+		var updates, countsArr []any
+		for i, r := range f.realmRows() {
+			shownBuild, flags := r.build, f.realmFlags
+			if logonBuild != 0 {
+				if logonBuild == r.build {
+					shownBuild = logonBuild
+				} else {
+					flags |= realmFlagVersionMismatch
+				}
+			}
+			name := r.name
+			if name == "" {
+				name = "TestRealm"
+			}
+			updates = append(updates, map[string]any{
+				"wowRealmAddress": r.address,
+				"deleting":        false,
+				"update": map[string]any{
+					"wowRealmAddress": r.address,
+					"cfgRealmsID":     70 + i,
+					"name":            f.fakeField("realm_name", name),
+					"populationState": r.population,
+					"cfgContentSetID": 137,
+					"superDistrictID": 2,
+					"flags":           flags,
+					"version":         map[string]any{"versionBuild": shownBuild},
+				},
+			})
+			countsArr = append(countsArr, map[string]any{"wowRealmAddress": r.address, "count": 0})
+		}
+		list := map[string]any{"updates": updates}
+		counts := map[string]any{"counts": countsArr}
 		bodyOut := putBytes(nil, 1, attrBlob("Param_RealmList", compressJSON(f.t, "JSONRealmListUpdates:", list)).marshal())
 		bodyOut = append(bodyOut, putBytes(nil, 1, attrBlob("Param_CharacterCountList", compressJSON(f.t, "JSONRealmCharacterCountList:", counts)).marshal())...)
 		return f.respond(c, h, bodyOut)
@@ -758,8 +824,8 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte) error
 				address = *a.Value.UintValue
 			}
 		}
-		if address != 0x46010046 {
-			f.fail("realm address %#x", address)
+		if !f.joinable(address) {
+			f.fail("realm address %#x is not one the list carried", address)
 		}
 		ticket := map[string]any{"gameAccount": "agent#0000", "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
 		ticketJSON, err := json.Marshal(ticket)

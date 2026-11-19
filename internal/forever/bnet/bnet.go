@@ -10,16 +10,20 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // realmFlagVersionMismatch is RealmFlags::VersionMismatch: the realm is listed, but not for this client's build
 // (src/server/shared/Realm/Realm.h:33-42).
 const realmFlagVersionMismatch = 0x01
 
-// build70938 is the client build of the Forever client; the server accepts the login for it
-// (src/server/shared/Realm/ClientBuildInfo.cpp).
-const build70938 = 70938
+// build70938 is the build the automatic-build login probes with: the newest build of the client's tables
+// (wire.Build70938), which the server's ClientBuildInfo knows (src/server/shared/Realm/ClientBuildInfo.cpp).
+const build70938 = wire.Build70938
 
 // defaultLoginDeadline bounds one Login call from the first request to the join answer. The per-call Timeout only
 // bounds one request, so a server that keeps a call alive with traffic would otherwise hold the login forever.
@@ -36,7 +40,7 @@ type Options struct {
 	ServerName  string                           // name to verify in the certificate (default DefaultServerName)
 	Account     string                           // account e-mail or name as typed into the login form
 	Password    string                           // password; case is significant for SRP v2 accounts
-	ClientBuild uint32                           // client build to claim (0 = build70938); a realm only lets in the builds it accepts
+	ClientBuild uint32                           // client build to claim; 0 = the build the realm advertises (see Login)
 	Timeout     time.Duration                    // one RPC call or one HTTP request (0 = 30 s)
 	Deadline    time.Duration                    // the whole login, from the form to the join answer (0 = 2 min)
 	Logf        func(format string, args ...any) // one line per completed step; may be nil
@@ -63,6 +67,9 @@ type Result struct {
 	SubRegion    string // "region-site-realm"
 	ServerIP     string // world server address from Param_ServerAddresses
 	ServerPort   uint32
+
+	ClientBuild uint32 // the build this login claimed (WorldSocket::_clientBuild)
+	RealmBuild  uint32 // the build the realm list advertised for that claim (FillRealmEntry: the claim itself when the realm accepts it)
 }
 
 // RealmError marks a failure after the account was logged in (realm list, realm join), so a caller can tell "the
@@ -71,6 +78,35 @@ type RealmError struct{ Err error }
 
 func (e *RealmError) Error() string { return e.Err.Error() }
 func (e *RealmError) Unwrap() error { return e.Err }
+
+// RealmMismatch is the realm list's VersionMismatch flag: the realm does not accept the build the login claimed
+// (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path reads
+// it to log in again claiming RealmBuild; an explicit build returns it as the login's error.
+type RealmMismatch struct {
+	Realm      string // the realm's name as the server sent it; sanitise before printing
+	Claimed    uint32 // the build the login claimed
+	RealmBuild uint32 // the build the realm list showed instead
+}
+
+func (e *RealmMismatch) Error() string {
+	return fmt.Sprintf("bnet: realm %q does not accept client build %d (the realm is build %d)",
+		sanitizeServerText(e.Realm), e.Claimed, e.RealmBuild)
+}
+
+// clientBuildSupported and supportedBuildList read the wire package's list of builds this client has tables for.
+func clientBuildSupported(b uint32) bool { return wire.ClientBuildSupported(b) }
+
+func supportedBuildList() string {
+	builds := wire.SupportedClientBuilds()
+	parts := make([]string, len(builds))
+	for i, b := range builds {
+		parts[i] = strconv.FormatUint(uint64(b), 10)
+	}
+	if len(parts) < 2 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+}
 
 func (o *Options) logf(format string, args ...any) {
 	if o.Logf != nil {
@@ -94,6 +130,13 @@ func LoadRoots(path string) (*x509.CertPool, error) {
 
 // Login runs the whole login: REST SRP login and ticket, RPC connect and logon, realm list ticket, sub-regions,
 // realm list, realm join. It stops at the join answer; the world socket is a later round.
+//
+// With ClientBuild 0 it claims the build the realm advertises: a first login claims build70938 (the build the
+// client's tables are written at), and if the realm list then reports a version mismatch, the login runs again
+// claiming the advertised build, provided SupportedClientBuilds names it. The realm list and the realm join both
+// read the build of the logon, not of the realm list ticket (RealmList.cpp: FillRealmEntry's flags, and JoinRealm's
+// RealmAcceptsBuild on session->GetBuild()), so the second login is the whole sequence, not a re-request. A
+// non-zero ClientBuild always wins and is claimed as given.
 func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.ServerName == "" {
 		opts.ServerName = DefaultServerName
@@ -107,9 +150,30 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	// one absolute deadline for the whole login; the caller's context may be earlier and wins
 	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
 	defer cancel()
-	if opts.ClientBuild == 0 {
-		opts.ClientBuild = build70938
+	if opts.ClientBuild != 0 {
+		return loginOnce(ctx, opts)
 	}
+	probe := opts
+	probe.ClientBuild = build70938
+	result, err := loginOnce(ctx, probe)
+	if err == nil {
+		return result, nil
+	}
+	var mismatch *RealmMismatch
+	if !errors.As(err, &mismatch) {
+		return nil, err
+	}
+	if !clientBuildSupported(mismatch.RealmBuild) {
+		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is build %d, which this client has no opcode table for (supported builds: %s); pass --build N to claim a build anyway",
+			mismatch.Realm, mismatch.RealmBuild, supportedBuildList())}
+	}
+	opts.logf("client build: the realm advertises build %d; logging in again claiming it", mismatch.RealmBuild)
+	opts.ClientBuild = mismatch.RealmBuild
+	return loginOnce(ctx, opts)
+}
+
+// loginOnce is one complete login with the build it claims.
+func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 	if opts.RESTAddr == "" {
 		return nil, errors.New("bnet: no REST address")
 	}
@@ -237,12 +301,14 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is offline; its world server has not written the realmlist row", sanitizeServerText(realm.Name))}
 	}
 	if realm.Flags&realmFlagVersionMismatch != 0 {
-		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q does not accept client build %d (the realm is build %d)",
-			sanitizeServerText(realm.Name), opts.ClientBuild, realm.Version.Build)}
+		return nil, &RealmError{Err: &RealmMismatch{Realm: realm.Name, Claimed: opts.ClientBuild, RealmBuild: realm.Version.Build}}
 	}
 	result.RealmName = realm.Name
 	result.RealmID = realm.CfgRealmsID
 	result.RealmAddress = realm.WowRealmAddress
+	result.ClientBuild = opts.ClientBuild
+	result.RealmBuild = realm.Version.Build
+	opts.logf("client build: claimed %d, the realm list shows %d", opts.ClientBuild, realm.Version.Build)
 
 	// ---- RPC: realm join
 	join, err := rpc.joinRealm(ctx, realm.WowRealmAddress)

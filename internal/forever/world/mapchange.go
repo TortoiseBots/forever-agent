@@ -420,6 +420,11 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.report.Position = pos
 	s.report.WalkClientPos = pos
 	s.world.ResetForMap(uint32(nw.MapID))
+	// A roster held before this character's own GUID was known is the old map's: the new map's party update follows
+	// the new world, so keeping it would apply a stale snapshot after the clear.
+	if s.party != nil && s.party.DropHeld() {
+		s.opts.logf("world: map change: a party roster held before this character's own GUID was known is dropped; the server sends the new map's roster")
+	}
 	if s.mover != nil {
 		s.mover.EndMapChange(nw.X, nw.Y, nw.Z, nw.O)
 	}

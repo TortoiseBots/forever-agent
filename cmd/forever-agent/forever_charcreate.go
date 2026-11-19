@@ -6,12 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"os"
 	"strconv"
 	"strings"
 
-	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
@@ -24,87 +21,24 @@ import (
 // character may or may not exist (or be gone). Distinct from a refusal or a lost link: the caller lists again.
 const exitCharUncertain = 32
 
-// charScreenFlags is the connection half both commands share.
-type charScreenFlags struct {
-	restAddr              *string
-	rpcAddr               *string
-	caFile                *string
-	serverName            *string
-	clientBuild           *uint
-	account               *string
-	allowInstanceRedirect *bool
-}
-
-func newCharScreenFlags(fs *flag.FlagSet) charScreenFlags {
-	return charScreenFlags{
-		restAddr:              fs.String("rest", "", "login REST host:port"),
-		rpcAddr:               fs.String("rpc", "", "Battle.net RPC host:port"),
-		caFile:                fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate"),
-		serverName:            fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate"),
-		clientBuild:           fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts"),
-		account:               fs.String("account", "", "account e-mail or name"),
-		allowInstanceRedirect: fs.Bool("allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)"),
-	}
-}
-
-// check validates the shared flags and returns the usage error line to print, or "".
-func (f charScreenFlags) check(command string) string {
-	if *f.restAddr == "" || *f.rpcAddr == "" || *f.caFile == "" || *f.account == "" {
-		return "forever " + command + ": --rest, --rpc, --ca and --account are required"
-	}
-	if *f.clientBuild == 0 || *f.clientBuild > 0xFFFFFFFF {
-		return "forever " + command + ": --build must be a client build number"
-	}
-	return ""
-}
-
-// passwordCheck is the last flag check, like world-check: the connection and the character are checked first, then the
-// password the process must have been given.
-func (f charScreenFlags) passwordCheck(command string) string {
-	if os.Getenv("FOREVER_PASSWORD") == "" {
-		return "forever " + command + ": FOREVER_PASSWORD is not set"
-	}
-	return ""
+// charScreenFlags registers the connection half both character-screen commands share: the foreverCommon connection
+// flags (--build 0 means the realm's advertised build) plus the instance redirect the world socket takes.
+func charScreenFlags(fs *flag.FlagSet, c *foreverCommon) {
+	c.connectionFlags(fs)
+	fs.BoolVar(&c.allowRedirect, "allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
 }
 
 // connect logs in at the Battle.net login server and returns the character-screen connection options, or the exit
 // code of the failure.
-func (f charScreenFlags) connect(ctx context.Context, stdout, stderr io.Writer) (world.Options, int) {
-	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    *f.restAddr,
-		RPCAddr:     *f.rpcAddr,
-		CAFile:      *f.caFile,
-		ServerName:  *f.serverName,
-		Account:     *f.account,
-		Password:    os.Getenv("FOREVER_PASSWORD"),
-		ClientBuild: uint32(*f.clientBuild),
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	})
+func (c *foreverCommon) connect(ctx context.Context, stdout, stderr io.Writer) (world.Options, int) {
+	result, err := c.login(ctx, "forever char screen", stdout)
 	if err != nil {
-		fmt.Fprintln(stderr, "forever char screen:", err)
-		var realmErr *bnet.RealmError
-		if errors.As(err, &realmErr) {
-			return world.Options{}, exitRealm
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return world.Options{}, code
 		}
 		return world.Options{}, exitAuth
 	}
-	fmt.Fprintf(stdout, "login: %s, world %s:%d\n", result.Summary(), result.ServerIP, result.ServerPort)
-	return world.Options{
-		Address:               net.JoinHostPort(result.ServerIP, strconv.FormatUint(uint64(result.ServerPort), 10)),
-		RealmID:               result.RealmID,
-		RealmAddress:          result.RealmAddress,
-		RealmJoinTicket:       result.JoinTicket,
-		ClientSecret:          result.ClientSecret,
-		JoinSecret:            result.JoinSecret,
-		ClientBuild:           uint32(*f.clientBuild),
-		RealmBuild:            uint32(*f.clientBuild), // the realm admits only its own build (Realm.AlsoAcceptBuilds is empty)
-		AllowInstanceRedirect: *f.allowInstanceRedirect,
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	}, exitOK
+	return c.withLogin(result, stdout, world.Options{}), exitOK
 }
 
 func printCharacterList(w io.Writer, characters []world.Character) {
@@ -142,7 +76,8 @@ func (c *charChoiceList) Set(v string) error {
 func foreverCharCreateCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever char-create", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	conn := newCharScreenFlags(fs)
+	var common foreverCommon
+	charScreenFlags(fs, &common)
 	name := fs.String("name", "", "character name to create")
 	surname := fs.String("surname", "", "character surname (Classic 1.60)")
 	race := fs.Uint("race", 0, "race id (ChrRaces.dbc)")
@@ -154,8 +89,8 @@ func foreverCharCreateCmd(ctx context.Context, args []string, stdout, stderr io.
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if msg := conn.check("char-create"); msg != "" {
-		fmt.Fprintln(stderr, msg)
+	if err := common.checkConnection("forever char-create"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	if fs.NArg() != 0 || *name == "" || *race == 0 || *race > 0xFF || *class == 0 || *class > 0xFF || *sex > 1 {
@@ -170,12 +105,12 @@ func foreverCharCreateCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever char-create: give --choice OPTION:CHOICE (repeatable) or --no-appearance; a create with no appearance choices is a test character's, not a real client's")
 		return exitUsage
 	}
-	if msg := conn.passwordCheck("char-create"); msg != "" {
-		fmt.Fprintln(stderr, msg)
+	if err := common.passwordCheck("forever char-create"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	opts, code := conn.connect(ctx, stdout, stderr)
+	opts, code := common.connect(ctx, stdout, stderr)
 	if code != exitOK {
 		return code
 	}
@@ -254,7 +189,8 @@ func parseCharacterGUID(s string) (wire.GUID, error) {
 func foreverCharDeleteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever char-delete", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	conn := newCharScreenFlags(fs)
+	var common foreverCommon
+	charScreenFlags(fs, &common)
 	name := fs.String("name", "", "character name to delete; a full name carries the surname after the first blank")
 	surname := fs.String("surname", "", "character surname, when it is not part of --name")
 	guidText := fs.String("guid", "", "exact character GUID (0xHIGH LOW), instead of --name")
@@ -262,8 +198,8 @@ func foreverCharDeleteCmd(ctx context.Context, args []string, stdout, stderr io.
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if msg := conn.check("char-delete"); msg != "" {
-		fmt.Fprintln(stderr, msg)
+	if err := common.checkConnection("forever char-delete"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	if fs.NArg() != 0 || (*name == "") == (*guidText == "") {
@@ -282,12 +218,12 @@ func foreverCharDeleteCmd(ctx context.Context, args []string, stdout, stderr io.
 			return exitUsage
 		}
 	}
-	if msg := conn.passwordCheck("char-delete"); msg != "" {
-		fmt.Fprintln(stderr, msg)
+	if err := common.passwordCheck("forever char-delete"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	opts, code := conn.connect(ctx, stdout, stderr)
+	opts, code := common.connect(ctx, stdout, stderr)
 	if code != exitOK {
 		return code
 	}

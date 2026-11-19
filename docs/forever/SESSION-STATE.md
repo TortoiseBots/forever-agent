@@ -19,7 +19,7 @@ guard their own accessors, and the only caller is the session goroutine.
 | `session.deadClosed`, `deadErrs` | `setLinkDead` | `setLinkDead`, `deadErrorExcept`, `deadDetail` | `deadMu` |
 | `session.deadAny`, `deadSide`, `deadErr` | `setLinkDead` | `setLinkDead` (`deadSide`/`deadErr` are not read elsewhere) | `deadMu` |
 | `session.deadStale` | `markStale` (session goroutine) | `deadDetail`, `deadErrorExcept` | `deadMu` |
-| `session.logoutAnswered` | `logout` (session goroutine) | `setLinkDead` (reader) | `deadMu` |
+| `session.logoutSent`, `session.logoutComplete` | `logout`/`handle` (session goroutine) | `setLinkDead` (reader) | `deadMu` |
 | `session.lastPacketName`, `lastPacketAt` | `notePacket` (session goroutine, only writer) | `setLinkDead` (reader), `lastPacket`, `deadErrorExcept` | `deadMu` |
 | `report.LinkLost`, `LinkLostSide`, `LinkLostDetail`, `LastPacket`, `LastPacketAgo` | whichever goroutine calls `setLinkDead` | `abortLogin` (after a `deadMu` acquire), `cmd/forever-agent` after `Enter` | written under `deadMu`; the readers are waited for in `shutdown` |
 | `session.events` | both readers send | session goroutine receives | buffered channel (happens-before) |

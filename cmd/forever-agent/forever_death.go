@@ -13,12 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"strconv"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
@@ -26,13 +23,8 @@ func foreverDeathCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	const usage = "usage: forever-agent forever death-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--death-wait DURATION] [--accept-resurrect [--accept-resurrect-from NAME] [--resurrect-wait DURATION]] [--spirit-healer] [--navmesh DIR [--parent MAP=PARENT[,..]]] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever death-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	restAddr := fs.String("rest", "", "login REST host:port")
-	rpcAddr := fs.String("rpc", "", "Battle.net RPC host:port")
-	caFile := fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate")
-	serverName := fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	clientBuild := fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts")
-	account := fs.String("account", "", "account e-mail or name")
-	character := fs.String("character", "", "character to enter the world with")
+	var common foreverCommon
+	common.flags(fs)
 	stay := fs.Duration("stay", 3*time.Second, "how long to settle in the world before waiting for the death")
 	deathWait := fs.Duration("death-wait", 5*time.Minute, "how long to wait for the character to die (the command does not kill it)")
 	acceptResurrect := fs.Bool("accept-resurrect", false, "wait for a resurrection offer and accept it instead of the corpse run")
@@ -41,7 +33,6 @@ func foreverDeathCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	spiritHealer := fs.Bool("spirit-healer", false, "use the spirit healer at the graveyard instead of the corpse run")
 	navmeshDir := fs.String("navmesh", "", "Forever mmaps folder: run the corpse run (and the walk to the healer) on a navmesh route instead of a straight line")
 	parentArgs := fs.String("parent", "", "instance rule for the navmesh route: MAP=PARENT pairs, comma separated (with --navmesh; the pairs are validated)")
-	allowInstanceRedirect := fs.Bool("allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
 	captureDir := fs.String("capture-dir", "", "debug: write every packet the death, combat, chat and party handlers see into a new run directory under this path (a scratch folder OUTSIDE the repository)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -50,12 +41,8 @@ func foreverDeathCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" || *character == "" {
-		fmt.Fprintln(stderr, "forever death-check: --rest, --rpc, --ca, --account and --character are required")
-		return exitUsage
-	}
-	if *clientBuild == 0 || *clientBuild > 0xFFFFFFFF {
-		fmt.Fprintln(stderr, "forever death-check: --build must be a client build number")
+	if err := common.check("forever death-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	if *stay < 0 || *stay > 10*time.Minute {
@@ -89,60 +76,23 @@ func foreverDeathCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever death-check: --parent:", err)
 		return exitUsage
 	}
-	password := os.Getenv("FOREVER_PASSWORD")
-	if password == "" {
-		fmt.Fprintln(stderr, "forever death-check: FOREVER_PASSWORD is not set")
+	if err := common.passwordCheck("forever death-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    *restAddr,
-		RPCAddr:     *rpcAddr,
-		CAFile:      *caFile,
-		ServerName:  *serverName,
-		Account:     *account,
-		Password:    password,
-		ClientBuild: uint32(*clientBuild),
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	})
-	if err != nil {
-		fmt.Fprintln(stderr, "forever death-check:", err)
-		var realmErr *bnet.RealmError
-		if errors.As(err, &realmErr) {
-			return exitRealm
-		}
-		return exitAuth
-	}
-	fmt.Fprintf(stdout, "login: %s, world %s:%d\n", result.Summary(), result.ServerIP, result.ServerPort)
-
-	address := net.JoinHostPort(result.ServerIP, strconv.FormatUint(uint64(result.ServerPort), 10))
-	report, err := world.Enter(ctx, world.Options{
-		Address:               address,
-		RealmID:               result.RealmID,
-		RealmAddress:          result.RealmAddress,
-		RealmJoinTicket:       result.JoinTicket,
-		ClientSecret:          result.ClientSecret,
-		JoinSecret:            result.JoinSecret,
-		ClientBuild:           uint32(*clientBuild),
-		RealmBuild:            uint32(*clientBuild), // the realm admits only its own build (Realm.AlsoAcceptBuilds is empty)
-		Character:             *character,
-		DeathCheck:            true,
-		AcceptResurrect:       *acceptResurrect,
-		AcceptResurrectFrom:   *acceptResurrectFrom,
-		UseSpiritHealer:       *spiritHealer,
-		DeathWait:             *deathWait,
-		ResurrectWait:         *resurrectWait,
-		NavmeshDir:            *navmeshDir,
-		Parents:               parents,
-		CaptureDir:            *captureDir,
-		Settle:                *stay,
-		Deadline:              *deathWait + *resurrectWait + 5*time.Minute,
-		AllowInstanceRedirect: *allowInstanceRedirect,
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
+	report, err := common.enter(ctx, "forever death-check", stdout, world.Options{
+		DeathCheck:          true,
+		AcceptResurrect:     *acceptResurrect,
+		AcceptResurrectFrom: *acceptResurrectFrom,
+		UseSpiritHealer:     *spiritHealer,
+		DeathWait:           *deathWait,
+		ResurrectWait:       *resurrectWait,
+		NavmeshDir:          *navmeshDir,
+		Parents:             parents,
+		CaptureDir:          *captureDir,
+		Settle:              *stay,
+		Deadline:            *deathWait + *resurrectWait + 5*time.Minute,
 	})
 	if report != nil {
 		printLinkLost(stdout, report)
@@ -150,7 +100,10 @@ func foreverDeathCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever death-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever death-check: %v\n", err)
 		if errors.Is(err, world.ErrLinkLost) {
 			return exitDisconnected
 		}

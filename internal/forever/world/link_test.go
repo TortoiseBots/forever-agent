@@ -175,12 +175,18 @@ func TestDeathDuringSettleEndsAtOnce(t *testing.T) {
 	}
 }
 
-// TestEnterNoticesADeadSocket: the fake server drops each socket at each stage of a run (right after the login burst,
+// TestEnterNoticesADeadSocket: the fake server drops a socket at each stage of a run (right after the login burst,
 // while the client waits, and when the logout request arrives), as a FIN and as a RST. Enter must end with
 // ErrLinkLost at once, name the socket, and print the logout as impossible instead of writing to the corpse.
+//
+// The instance socket is not dropped at the logout here: its close with the logout is the session ending, not a lost
+// link (TestLogoutInstanceCloseIsNotLinkLoss pins that), so only the realm socket's death is the loss at that stage.
 func TestEnterNoticesADeadSocket(t *testing.T) {
 	for _, sock := range []string{"instance", "realm"} {
 		for _, when := range []string{"login", "stay", "logout"} {
+			if sock == "instance" && when == "logout" {
+				continue
+			}
 			for _, reset := range []bool{false, true} {
 				name := sock + "/" + when
 				if reset {
@@ -351,5 +357,198 @@ func TestWalkPathEndsAtOnceOnALostLink(t *testing.T) {
 	}
 	if got := len(f.sent) - sent; got != 3 { // facing, start-forward, the one heartbeat before the second wait
 		t.Fatalf("%d packets before the loss, want 3", got)
+	}
+}
+
+// TestLogoutInstanceCloseIsNotLinkLoss: the server closes the instance socket as part of the logout, and the response
+// queued on it may be dropped with the close (WorldSession.cpp:766,789). The run must wait for the completion on the
+// realm socket and end cleanly: no error, no link-loss report.
+func TestLogoutInstanceCloseIsNotLinkLoss(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	f.logoutNoResponse = true
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	report, err := Enter(t.Context(), Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		Stay:            100 * time.Millisecond,
+		Deadline:        20 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("Enter: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if !report.LogoutComplete {
+		t.Fatalf("the logout did not complete\nsteps:\n%s", joinLines(steps))
+	}
+	if report.LinkLost {
+		t.Fatalf("the instance close with the logout was reported as a lost link (%s: %s)",
+			report.LinkLostSide, report.LinkLostDetail)
+	}
+	if !strings.Contains(joinLines(steps), "no SMSG_LOGOUT_RESPONSE") {
+		t.Fatalf("the run did not say the response was absent\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestLogoutSilentRealmIsALoss: the instance socket closes with the logout and the realm then sends nothing. The
+// wait must end at the silence bound with ErrLinkLost naming the realm, not hand the caller a zero event (which the
+// run would log as wire 0x000000 and which resets the silence clock).
+func TestLogoutSilentRealmIsALoss(t *testing.T) {
+	f, s := deadSession(t, 6)
+	s.deadMu.Lock()
+	s.lastPacketAt = time.Now().Add(-(linkSilenceLimit + time.Second))
+	s.deadMu.Unlock()
+	done := make(chan error, 1)
+	sent := len(f.sent)
+	go func() { done <- s.logout(context.Background()) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.deadMu.Lock()
+		requested := s.logoutSent
+		s.deadMu.Unlock()
+		if requested {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the logout request was not sent")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// What the instance socket's reader does when the server closes it with the logout.
+	s.setLinkDead(sideInstance, io.EOF)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrLinkLost) {
+			t.Fatalf("logout returned %v, want ErrLinkLost", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the logout did not end on the realm's silence")
+	}
+	if !s.report.LinkLost || s.report.LinkLostSide != "realm" {
+		t.Fatalf("the report does not name the silent realm: %+v", s.report)
+	}
+	if s.report.LastPacket == "wire 0x000000" {
+		t.Fatal("the logout handled a zero packet as traffic")
+	}
+	if len(f.sent) != sent+1 { // the logout request, nothing after it
+		t.Fatalf("the logout sent %d packet(s), want only the request", len(f.sent)-sent)
+	}
+}
+
+// TestLogoutRefusedByTheServer: a non-zero SMSG_LOGOUT_RESPONSE result means the server would not end the session
+// (in combat, dueling, falling). The run must end with that refusal named, not wait for a completion the server will
+// not send, and not report the still-open session as a lost link.
+func TestLogoutRefusedByTheServer(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	f.logoutRefuse = 1
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	report, err := Enter(t.Context(), Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		Stay:            100 * time.Millisecond,
+		Deadline:        20 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+	})
+	if err == nil || !strings.Contains(err.Error(), "the server refused the logout: result 1") {
+		t.Fatalf("Enter returned %v, want the refusal named\nsteps:\n%s", err, joinLines(steps))
+	}
+	if errors.Is(err, ErrLinkLost) {
+		t.Fatalf("the refusal was reported as a lost link: %v", err)
+	}
+	if report == nil || report.LogoutComplete || report.Logout.Result != 1 || report.LinkLost {
+		t.Fatalf("the report after the refusal: %+v", report)
+	}
+	f.wait(t)
+}
+
+// TestLogoutRealmLossBeforeCompletionIsAnError: with no completion the session is not ending, and a realm socket
+// that closes during the logout is the loss it looks like.
+func TestLogoutRealmLossBeforeCompletionIsAnError(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	f.closeSocket, f.closeWhen = "realm", "logout"
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	report, err := Enter(t.Context(), Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		Stay:            100 * time.Millisecond,
+		Deadline:        20 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+	})
+	if !errors.Is(err, ErrLinkLost) {
+		t.Fatalf("Enter returned %v, want ErrLinkLost\nsteps:\n%s", err, joinLines(steps))
+	}
+	if report == nil || report.LogoutComplete {
+		t.Fatalf("the report claims a completion: %+v", report)
+	}
+}
+
+// TestLogoutRealmLossAfterTheResponseIsStillALoss: the server answered the logout request, then the realm socket
+// closed before SMSG_LOGOUT_COMPLETE. Only the completion ends the session: the answer alone must not turn the lost
+// realm socket into a clean end.
+func TestLogoutRealmLossAfterTheResponseIsStillALoss(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	f.closeSocket, f.closeWhen = "realm", "logout"
+	f.logoutRealmLoss = true
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	report, err := Enter(t.Context(), Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		Stay:            100 * time.Millisecond,
+		Deadline:        20 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+	})
+	if !errors.Is(err, ErrLinkLost) {
+		t.Fatalf("Enter returned %v, want ErrLinkLost\nsteps:\n%s", err, joinLines(steps))
+	}
+	if report == nil || report.LogoutComplete || !report.LinkLost || report.LinkLostSide != "realm" {
+		t.Fatalf("the report: complete %v, link lost %v on %q", report.LogoutComplete, report.LinkLost, report.LinkLostSide)
 	}
 }

@@ -19,8 +19,14 @@ import (
 const (
 	// targetSearchRange is the brief's 40 yards.
 	targetSearchRange = 40
-	// targetMaxLevel is the top of the band the brief asks for: level 1 to 3.
-	targetMaxLevel = 3
+	// targetBandBelow and targetBandAbove size the default level band relative to the character's own level: three
+	// levels below to two above, clamped to levelFloor-levelCeil. A level-1 character therefore looks for levels
+	// 1-3, the round-4 brief's window; a level-52 one for 49-54.
+	targetBandBelow = 3
+	targetBandAbove = 2
+	// levelFloor and levelCeil are the client's level range (1.60.1).
+	levelFloor = 1
+	levelCeil  = 60
 	// creatureTypeCritter is the creature type a critter has (SharedDefines CREATURE_TYPE_CRITTER = 8); the client
 	// does not attack one by accident.
 	creatureTypeCritter = 8
@@ -147,18 +153,23 @@ func (s *session) fightCheck(ctx context.Context) error {
 		x, y, z = s.MoverX(), s.MoverY(), s.MoverZ()
 	}
 
+	// The level band the geometric filter accepts: explicit flags first, else the character's own level (stated on
+	// fightLevelWindow). It is printed because a run that finds nothing must say which levels it looked for.
+	levelMin, levelMax := fightLevelWindow(s.opts.LevelMin, s.opts.LevelMax, s.selfLevel())
+	s.opts.logf("fight-check: target band level %d-%d within %d yd (the walk looks to %d yd)", levelMin, levelMax, targetSearchRange, targetWalkRange)
+
 	// A debug step before the fight (--provoke): the refusals whose real packets a normal fight does not produce.
 	if s.opts.Provoke && s.mover != nil {
-		s.provokeRefusals(ctx, attackableCandidates(s.world.Units(x, y, z), x, y, z, s.self, s.opts.Entry, targetWalkRange))
+		s.provokeRefusals(ctx, attackableCandidates(s.world.Units(x, y, z), x, y, z, s.self, s.opts.Entry, targetWalkRange, levelMin, levelMax))
 	}
 
 	// The candidates: every living unit the geometric filter accepts, nearest first, out to the fallback range.
 	// The server has the last word: attacking a friendly unit is answered with an immediate SMSG_ATTACK_STOP, and
 	// then the next candidate is tried. That is how the client learns what the faction table would have said.
-	candidates := attackableCandidates(s.world.Units(x, y, z), x, y, z, s.self, s.opts.Entry, targetWalkRange)
+	candidates := attackableCandidates(s.world.Units(x, y, z), x, y, z, s.self, s.opts.Entry, targetWalkRange, levelMin, levelMax)
 	if len(candidates) == 0 {
-		s.opts.logf("fight-check: no living creature of level 1-%d within %d yd (the walk looked to %d yd)",
-			targetMaxLevel, targetSearchRange, targetWalkRange)
+		s.opts.logf("fight-check: no living creature of level %d-%d within %d yd (the walk looked to %d yd)",
+			levelMin, levelMax, targetSearchRange, targetWalkRange)
 		if s.opts.Entry != 0 {
 			s.opts.logf("fight-check: --entry %d did not match a creature in range", s.opts.Entry)
 		}
@@ -459,9 +470,45 @@ func (s *session) selfDead() bool {
 // maxTargetAttempts bounds how many refused candidates the command walks through.
 const maxTargetAttempts = 5
 
+// fightLevelWindow is the level band a fight target must be in. An explicit bound (--level-min/--level-max) wins;
+// the other end, and both when neither is given, come from the character's own level: three levels below it to two
+// above, clamped to 1-60 (a level-30 character looks for 27-32, a level-1 one for 1-3). A single explicit bound
+// past the automatic one on the other side (--level-min 40 on a level-1 character) widens the automatic end to it
+// instead of leaving an empty band the run would only report as "nothing found"; two contradictory explicit bounds
+// are refused before this is called.
+func fightLevelWindow(min, max, selfLevel int32) (int32, int32) {
+	autoMin, autoMax := min == 0, max == 0
+	if selfLevel < levelFloor {
+		selfLevel = levelFloor
+	}
+	if selfLevel > levelCeil {
+		selfLevel = levelCeil
+	}
+	if autoMin {
+		min = selfLevel - targetBandBelow
+		if min < levelFloor {
+			min = levelFloor
+		}
+	}
+	if autoMax {
+		max = selfLevel + targetBandAbove
+		if max > levelCeil {
+			max = levelCeil
+		}
+	}
+	if min > max {
+		if autoMin {
+			min = max
+		} else {
+			max = min
+		}
+	}
+	return min, max
+}
+
 // attackableCandidates is every unit the geometric filter accepts, nearest first (the filter is stated on
 // chooseTarget).
-func attackableCandidates(units []*objects.Object, x, y, z float32, self wire.GUID, entry int32, radius float32) []*objects.Object {
+func attackableCandidates(units []*objects.Object, x, y, z float32, self wire.GUID, entry int32, radius float32, levelMin, levelMax int32) []*objects.Object {
 	var out []*objects.Object
 	for _, u := range units {
 		if u.GUID == self || u.Dead || (u.Info.Health <= 0 && u.Info.MaxHealth > 0) {
@@ -485,7 +532,7 @@ func attackableCandidates(units []*objects.Object, x, y, z float32, self wire.GU
 		if unattackable(u) {
 			continue
 		}
-		if u.Info.Level < 1 || u.Info.Level > targetMaxLevel {
+		if u.Info.Level < levelMin || u.Info.Level > levelMax {
 			continue
 		}
 		out = append(out, u)
@@ -539,6 +586,14 @@ func (s *session) castBetweenSwings(plan *spellPlan, target wire.GUID) FightHook
 
 // powerOfType reads one power bar of the fighter from the model, by power TYPE: the model resolves the type to the
 // slot the server's class layout uses (objects.Info.PowerOf), so rage on a warrior is Power[0] and not Power[1].
+// selfLevel is the character's own level from its create block. 0 when the model does not hold it.
+func (s *session) selfLevel() int32 {
+	if o, ok := s.world.Object(s.self); ok {
+		return o.Info.Level
+	}
+	return 0
+}
+
 func (s *session) powerOfType(powerType int) int32 {
 	o, ok := s.world.Object(s.self)
 	if !ok || powerType < 0 || powerType > 255 {

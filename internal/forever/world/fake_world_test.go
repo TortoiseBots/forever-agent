@@ -166,8 +166,18 @@ type fakeServer struct {
 	// closeSocket/closeWhen drop one socket on purpose (the client must notice at once): "instance" or "realm",
 	// "login" (right after the login burst), "stay" (150 ms later, while the client waits) or "logout" (when the
 	// logout request arrives). deliberateClose keeps the read errors of a deliberate drop out of the failure channel.
-	closeSocket     string
-	closeWhen       string
+	closeSocket string
+	closeWhen   string
+	// logoutNoResponse makes the fake close the instance socket with SMSG_LOGOUT_COMPLETE and never send
+	// SMSG_LOGOUT_RESPONSE: the real server queues the response on the instance socket and closes that socket right
+	// after the completion (WorldSession.cpp:766,789), so a queued write can be dropped.
+	logoutNoResponse bool
+	// logoutRealmLoss drops the realm socket after SMSG_LOGOUT_RESPONSE and before the completion: the server
+	// answered the request, but the session is not over, so the client must report the loss.
+	logoutRealmLoss bool
+	// logoutRefuse makes the fake answer CMSG_LOGOUT_REQUEST with that non-zero LogoutResult and no completion:
+	// HandleLogoutRequestOpcode's reason (in combat, dueling, falling) ends the handler without a LogoutPlayer.
+	logoutRefuse    uint32
 	resetLink       bool
 	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
 	// clientMayLeave declares a scenario whose point is the client refusing on its own and leaving before the
@@ -176,6 +186,9 @@ type fakeServer struct {
 	// protocol failure. Set before the handlers start; every other scenario still fails on a write error.
 	clientMayLeave bool
 	walk           bool
+	// walkFacingRestored is set when a walk that finished both legs sent the facing packet that turns the
+	// character back to the orientation its create block gave (one more SET_FACING at the spawn, state 0).
+	walkFacingRestored bool
 	// death runs the round 6 scenario: the character's death, the release, the graveyard teleport, the corpse
 	// query, the run and the reclaim, on real sockets. deathMapSc makes the release's graveyard another map: the
 	// scenario then follows the transfer before the death-release location.
@@ -191,6 +204,9 @@ type fakeServer struct {
 	walkFrom   [3]float32
 	walkTo     [3]float32
 	walkMoved  int
+	// walkLegs counts finished legs (a STOP at the target): the walk-check walks out and back, so a facing packet
+	// after two legs is the turn back to the create block's orientation.
+	walkLegs int
 	// teleportDuringWalk sends SMSG_MOVE_TELEPORT in the middle of the first leg and then expects the ack and a
 	// movement packet at the destination.
 	teleportDuringWalk bool
@@ -798,12 +814,14 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		return
 	}
 
-	sawTimeSync, sawMover := false, false
+	sawTimeSync, sawMover, refused := false, false, false
 	for {
 		wire, payload, err := c.readFrame()
 		if err != nil {
 			select {
 			case <-f.logoutDone:
+				return
+			case <-f.abortDone:
 				return
 			default:
 			}
@@ -816,6 +834,7 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		f.mu.Lock()
 		f.instWire = append(f.instWire, wire)
 		f.mu.Unlock()
+
 		switch wire {
 		case fakeCMSGTimeSyncResponse:
 			if len(payload) != 8 || binary.LittleEndian.Uint32(payload) != 7 || binary.LittleEndian.Uint32(payload[4:]) == 0 {
@@ -839,13 +858,41 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 			if !sawTimeSync || !sawMover {
 				f.failf("instance: logout before the time sync (%v) and active mover (%v) answers", sawTimeSync, sawMover)
 			}
-			c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
-			time.Sleep(20 * time.Millisecond) // the completion travels on the other socket
+			if f.logoutRefuse != 0 {
+				// HandleLogoutRequestOpcode answers a refusal with its reason and sends no completion; the session
+				// stays open. The failing run's abort logout arrives here next, and its disconnect ends the scene.
+				c.writeFrame(fakeSMSGLogoutResponse, []byte{byte(f.logoutRefuse), 0, 0, 0, 0})
+				if refused {
+					select {
+					case <-f.abortDone:
+					default:
+						close(f.abortDone)
+					}
+				}
+				refused = true
+				continue
+			}
+			if !f.logoutNoResponse {
+				c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
+				time.Sleep(20 * time.Millisecond) // the completion travels on the other socket
+			}
+			if f.logoutRealmLoss {
+				f.dropLink(realm, c)
+				return
+			}
 			realm.writeFrame(fakeSMSGLogoutComplete, []byte{0})
 			f.logoutOnce.Do(func() { close(f.logoutDone) })
+			if f.logoutNoResponse {
+				c.nc.Close() // the server closes the instance socket with the completion
+				return
+			}
 			time.Sleep(20 * time.Millisecond)
 			c.nc.Close()
 			return
+		case fakeCMSGLogDisconnect:
+			// A failing run's abort sends this after its logout request; the session is being torn down, and the
+			// read error that follows is its end.
+			continue
 		default:
 			f.failf("instance: unexpected client wire 0x%06X", wire)
 		}
@@ -1217,6 +1264,14 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 				f.failf("walk: SET_FACING at %.2f %.2f, want the spawn", mi[0], mi[1])
 				return
 			}
+			if f.walkLegs >= 2 {
+				// Both legs are done: this is the facing packet that turns the character back to the orientation
+				// its create block gave, so the run leaves it as it found it. No leg follows.
+				f.mu.Lock()
+				f.walkFacingRestored = true
+				f.mu.Unlock()
+				continue
+			}
 			state = 1
 		case fakeCMSGMoveStartForward:
 			if state != 1 {
@@ -1340,6 +1395,7 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 			// The leg is over: the next SET_FACING starts the way back, from the target.
 			f.walkFrom, f.walkTo = f.walkTo, f.walkFrom
 			f.walkMoved++
+			f.walkLegs++
 			state = 0
 		case fakeCMSGLogoutRequest:
 			if state != 0 && state != 6 {
@@ -1439,6 +1495,14 @@ func TestWalkCheckAgainstFakeServer(t *testing.T) {
 	}
 	if !samePoint(report.WalkTo, [4]float32{1030, 2000, 50, report.WalkTo[3]}) {
 		t.Fatalf("the walk target is %v", report.WalkTo)
+	}
+	// The way back ends facing the way it came; the walk turns back to the create block's orientation before the
+	// logout, so the character is left as it was found (the server saves that facing).
+	if !f.walkFacingRestored {
+		t.Fatalf("the walk did not turn back to its original orientation\nsteps:\n%s", joinLines(steps))
+	}
+	if report.BackAt[3] != report.WalkFrom[3] {
+		t.Fatalf("the walk left the character facing %.2f, the create block gave %.2f", report.BackAt[3], report.WalkFrom[3])
 	}
 	if !containsWire(f.instWire, fakeCMSGMoveSetFacing) || !containsWire(f.instWire, fakeCMSGMoveStartForward) ||
 		!containsWire(f.instWire, fakeCMSGMoveHeartbeat) || !containsWire(f.instWire, fakeCMSGMoveStop) {

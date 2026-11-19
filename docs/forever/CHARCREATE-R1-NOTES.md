@@ -173,7 +173,7 @@ send is a `*SendLinkLostError` with its own `Outcome` ("sent, then the link was 
 have been created/deleted: list again"), which still wraps `ErrLinkLost`; the commands print that line and exit 32
 too. The wait also ends at once on the two packets that mean the session is over:
 `SMSG_CHARACTER_LOGIN_FAILED` (`AbortLogin`, `CharacterHandler.cpp:1400-1409`) and `SMSG_LOGOUT_COMPLETE`
-(`WorldSession::LogoutPlayer`, `WorldSession.cpp:767`), named in the error
+(`WorldSession::LogoutPlayer`, `WorldSession.cpp:766`), named in the error
 (`TestCharacterScreenEndsOnSessionPackets`).
 
 ## Tests in CI (fake world server)

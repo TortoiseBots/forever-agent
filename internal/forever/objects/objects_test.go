@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -881,4 +882,107 @@ func FuzzMonsterMove(f *testing.F) {
 			t.Fatal("a nil move without an error")
 		}
 	})
+}
+
+// TestVendorFragment pins the VM vendor fragment (wire id 18, VendorData) in both forms: a creature the server marks
+// as a vendor carries it after the CGObject fragment, and before it was walked the whole block counted as partial.
+func TestVendorFragment(t *testing.T) {
+	// Create: flags 0, then the fragment list; a fragment this round does not walk stops the walk there.
+	create := func(ids ...byte) []byte {
+		body := []byte{0x00} // field flags
+		body = append(body, ids...)
+		body = append(body, 0xFF)
+		return body
+	}
+	vendorFlags := []byte{0x02, 0x00, 0x00, 0x00}
+	b := wire.NewReader(append(create(18), vendorFlags...))
+	info, stop, err := parseValuesCreate(b, TypeUnit, false)
+	if err != nil || !stop.complete() {
+		t.Fatalf("vendor create: stop %+v err %v", stop, err)
+	}
+	if !info.HasVendor || info.VendorFlags != 2 || !info.f.Vendor {
+		t.Fatalf("vendor create: %+v", info)
+	}
+	// An unfamiliar updateable fragment is named, and the block is still safe: the walk stops at it.
+	b = wire.NewReader(append(create(21), 0, 0, 0, 0))
+	_, stop, err = parseValuesCreate(b, TypeUnit, false)
+	if err != nil || stop.complete() || stop.fragment != 21 {
+		t.Fatalf("unwalked fragment: stop %+v err %v", stop, err)
+	}
+
+	// Values update: flags, ids changed, the full id list, the content mask, then the fragment's own mask.
+	update := []byte{
+		0x00,     // field flags
+		0x01,     // ids changed
+		0x00,     // EntityFragmentSerializationType::Full
+		18, 0xFF, // the id list
+		0x01, // content mask: the vendor block changed
+		0xC0, // the vendor block's own 2-bit mask (bits are read from the high end): present and changed
+	}
+	b = wire.NewReader(append(update, vendorFlags...))
+	info, stop, err = parseValuesUpdate(b)
+	if err != nil || !stop.complete() || !info.HasVendor || info.VendorFlags != 2 {
+		t.Fatalf("vendor update: stop %+v info %+v err %v", stop, info, err)
+	}
+	// The structure present without a field change carries no value and is still a complete walk.
+	b = wire.NewReader([]byte{0x00, 0x01, 0x00, 18, 0xFF, 0x01, 0x40})
+	info, stop, err = parseValuesUpdate(b)
+	if err != nil || !stop.complete() || info.HasVendor {
+		t.Fatalf("vendor update without a value: stop %+v info %+v err %v", stop, info, err)
+	}
+}
+
+// TestVendorTruncated: a values body that ends inside the vendor fragment is a parse failure of the block, reported
+// partial with a short read, not a complete block whose vendor flags read as zero.
+func TestVendorTruncated(t *testing.T) {
+	guid := wire.GUID{Low: 0x31, High: 0x0F00000000000000}
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{"create", buildUpdate(buildCreateBlock(guid, TypeUnit, buildMovementBlock(false, nil),
+			[]byte{0x00, 18, 0xFF, 0x02, 0x00}))}, // the vendor's int32 Flags is cut to two bytes
+		{"update", buildUpdate(buildValuesBlock(guid,
+			[]byte{0x00, 0x01, 0x00, 18, 0xFF, 0x01, 0xC0, 0x02}))}, // present and changed, one byte of Flags
+		{"create without the fragment body", buildUpdate(buildCreateBlock(guid, TypeUnit, buildMovementBlock(false, nil),
+			[]byte{0x00, 18, 0xFF}))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := ParseUpdateObject(tc.payload)
+			if err != nil {
+				t.Fatalf("the packet is well framed: %v", err)
+			}
+			if len(u.Blocks) != 1 {
+				t.Fatalf("%d blocks", len(u.Blocks))
+			}
+			b := u.Blocks[0]
+			if b.ValuesComplete || b.Unparsed != ReasonShortRead || !strings.Contains(b.UnparsedDetail, "vendor") {
+				t.Fatalf("truncated vendor fragment reported complete %v, reason %v (%q)",
+					b.ValuesComplete, b.Unparsed, b.UnparsedDetail)
+			}
+		})
+	}
+}
+
+// TestPartialKindNamesTheStop: the partial summary names the object type, the block form and where the walk stopped. A
+// values block carries no type byte, so the model's type for its GUID stands in.
+func TestPartialKindNamesTheStop(t *testing.T) {
+	player := &Object{Type: TypePlayer}
+	if got, want := partialKind(&WorldFragment{Values: true, UndecodedTail: true}, player),
+		"player values update: the type's own data after the walked blocks, not decoded this round"; got != want {
+		t.Fatalf("values tail: %q, want %q", got, want)
+	}
+	if got, want := partialKind(&WorldFragment{ObjectType: TypeUnit, UndecodedTail: true}, &Object{Type: TypeUnit}),
+		"unit create: the type's own data after the walked blocks, not decoded this round"; got != want {
+		t.Fatalf("create tail: %q, want %q", got, want)
+	}
+	if got, want := partialKind(&WorldFragment{ObjectType: TypeUnit, UndecodedFragment: 21}, &Object{Type: TypeUnit}),
+		"unit create: the HousingDecor fragment, not decoded this round"; got != want {
+		t.Fatalf("named fragment: %q, want %q", got, want)
+	}
+	if got, want := partialKind(&WorldFragment{Values: true, Unparsed: ReasonSizeMismatch}, player),
+		"player values update: an undecodable block (size mismatch)"; got != want {
+		t.Fatalf("skipped block: %q, want %q", got, want)
+	}
 }

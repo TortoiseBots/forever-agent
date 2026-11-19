@@ -93,6 +93,11 @@ type State struct {
 	// against a lying server (a server that lies can send a roster that matches).
 	pending *pendingRoster
 
+	// held is the roster that arrived before this character's own GUID was known: a character that logs in already
+	// grouped gets SMSG_PARTY_UPDATE before its own create block (or the active-mover notice that names its GUID).
+	// One roster is held (a newer one replaces it) and applied when SetSelf learns the GUID; it is not invalid.
+	held *Update
+
 	events []Event
 	next   int
 
@@ -105,6 +110,7 @@ type State struct {
 	Declines       int
 	Kicks          int
 	Destroys       int
+	HeldRosters    int // rosters that arrived before this character's own GUID was known (applied by SetSelf)
 	LeaderChanges  int
 	Invites        int
 }
@@ -148,12 +154,31 @@ func (s *State) Events() []Event {
 	return out
 }
 
-// SetSelf records the character's own GUID, from the ThisIsYou create block. A roster is only valid once this is
-// known.
+// SetSelf records the character's own GUID, from the ThisIsYou create block (or the active-mover notice). A roster
+// is only valid once this is known, so a roster that arrived earlier was held (applyUpdate) and is applied here.
 func (s *State) SetSelf(guid wire.GUID) {
-	if !guid.IsZero() {
-		s.SelfGUID = guid
+	if guid.IsZero() {
+		return
 	}
+	s.SelfGUID = guid
+	held := s.held
+	if held == nil {
+		return
+	}
+	s.held = nil
+	s.apply(*held)
+}
+
+// DropHeld discards a roster held before this character's own GUID was known and reports whether one was held. A map
+// change calls it: a roster read before SMSG_NEW_WORLD belongs to the map the character left, and the server sends
+// the party update again for the new map (docs/forever/MAPCHANGE-R1-NOTES.md), so applying the old snapshot would
+// make the new map's model act on a stale group.
+func (s *State) DropHeld() bool {
+	if s.held == nil {
+		return false
+	}
+	s.held = nil
+	return true
 }
 
 // validateRoster checks a roster before it can become actionable. It returns "" for a valid roster, else the reason.
@@ -255,10 +280,23 @@ func (s *State) rejectRoster(reason string) {
 // its own. A raid-sized roster is validated by the same rules before Raid and InParty are set.
 func (s *State) ApplyUpdate(u Update) bool {
 	s.Updates++
+	return s.apply(u)
+}
+
+// apply is ApplyUpdate's body once the update is counted.
+func (s *State) apply(u Update) bool {
 	s.Listed = len(u.Members)
 	if u.Flags&FlagDestroyed != 0 {
 		s.Destroys++
 		s.markDestroyed("group destroyed update")
+		return false
+	}
+	if s.SelfGUID.IsZero() {
+		// Logging in already grouped: the roster comes before anything names this character's GUID. Hold it (one,
+		// replaced by a newer one) instead of calling it invalid; SetSelf applies it.
+		held := u
+		s.held = &held
+		s.HeldRosters++
 		return false
 	}
 	if reason := s.validateRoster(u); reason != "" {
@@ -420,6 +458,7 @@ func (s *State) ApplyKicked(reason uint8) {
 	s.LastInvalid = ""
 	s.LastUnexpected = ""
 	s.pending = nil
+	s.held = nil
 	s.Stale = nil
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil
@@ -440,6 +479,9 @@ func (s *State) markDestroyed(why string) {
 	s.LastInvalid = ""
 	s.LastUnexpected = ""
 	s.pending = nil
+	// The group the held roster named no longer exists; applying it when this character's GUID arrives would put
+	// the model in a party the server has destroyed.
+	s.held = nil
 	s.Stale = nil
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil

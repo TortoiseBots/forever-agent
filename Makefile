@@ -6,7 +6,7 @@ CORE ?= $(HOME)/tortoise-wow
 DBC ?= $(HOME)/tortoise-docker-penqle/data/dbc
 export GOTOOLCHAIN := local
 
-.PHONY: test fuzz fmt fmt-check vet nocgo build opcodes spellnames tbm-contract addon-host
+.PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract addon-host
 
 # The package timeout is 20m: cmd/forever-agent runs about 700 tests under -race and takes 8-10 minutes, so Go's 10m
 # default leaves no room on a loaded machine.
@@ -38,6 +38,16 @@ fuzz:
 # A build without cgo still works, without path_to and walk_path (navmesh.ErrNoEngine).
 nocgo:
 	CGO_ENABLED=0 $(GO) build ./...
+
+# Compile the whole tree for the Windows and macOS targets the README names (no binaries are kept), then vet the
+# packages whose tests carry process and socket code for windows/amd64: a build does not compile test files, so a
+# test that uses a Unix-only syscall would only fail on a Windows machine. The Unix-only pieces of the raid commands
+# sit behind build tags; a missing tag breaks this, not the Linux build. CGO is off for both targets: the navmesh
+# engine is cgo, and it is not built there.
+cross:
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build ./...
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build ./...
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) vet ./cmd/... ./internal/forever/...
 
 build:
 	$(GO) build -o bin/forever-agent ./cmd/forever-agent

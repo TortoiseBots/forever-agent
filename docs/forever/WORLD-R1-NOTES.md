@@ -198,7 +198,8 @@ All of these were checked in the code at commit 6517af05 and, where possible, on
    `HandleContinuePlayerLogin` sends `ResumeComms(CONNECTION_TYPE_INSTANCE)` (`CharacterHandler.cpp:1374-1392`), which
    is the socket the login burst follows on.
 5. **`SMSG_LOGOUT_RESPONSE` comes on the instance socket, `SMSG_LOGOUT_COMPLETE` on the realm socket.** The logout
-   request is handled by the session (either socket), `LogoutPlayer` sends the completion (`WorldSession.cpp:766`), and
+   request is handled by the session (either socket), `LogoutPlayer` sends the completion and then closes the
+   instance socket (`WorldSession.cpp:766,789`), and
    the opcode table pins the sockets: `SMSG_LOGOUT_RESPONSE` is `CONNECTION_TYPE_INSTANCE` and
    `SMSG_LOGOUT_COMPLETE` is `CONNECTION_TYPE_REALM` (`Opcodes.cpp:1938-1939`; the capture shows con0 for the
    completion while the response was con1). A client that watches one socket misses one of the two; ours reads both.

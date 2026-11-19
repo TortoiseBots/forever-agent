@@ -119,6 +119,12 @@ type WorldFragment struct {
 	// the first block of each (type, reason) key only.
 	Unparsed       ParseReason
 	UnparsedDetail string
+	// UndecodedFragment is the updateable fragment at which the walk stopped without decoding it, in the wire
+	// numbering (FragmentName): 0 when it stopped nowhere else. UndecodedTail is set instead when every fragment the
+	// block listed was walked and bytes remained: a player's, an item's or a container's fields after the CGObject
+	// fragment, which this round does not decode.
+	UndecodedFragment uint8
+	UndecodedTail     bool
 	// ValuesStart and ValuesLen locate the block's values body in the packet; UndecodedFrom is the packet offset
 	// where decoding stopped (0 when the whole body was walked). The fixture generator zeroes what this round does
 	// not decode, so a real identifier cannot hide in a committed fixture.
@@ -301,7 +307,7 @@ func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, 
 		}
 		bodyStart := base + b.Offset()
 		body := reader(b.ReadBytes(size), hook)
-		info, complete, err := parseValuesUpdate(body)
+		info, stop, err := parseValuesUpdate(body)
 		if err != nil {
 			// The body is size-framed: a structure this round cannot decode is skipped whole, never fatal.
 			return WorldFragment{
@@ -311,8 +317,9 @@ func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, 
 			}, nil
 		}
 		return WorldFragment{
-			Values: true, GUID: guid, Info: info, ValuesComplete: complete,
-			ValuesStart: bodyStart, ValuesLen: size, UndecodedFrom: undecoded(bodyStart, size, body, complete),
+			Values: true, GUID: guid, Info: info, ValuesComplete: stop.complete(),
+			UndecodedFragment: stop.fragment, UndecodedTail: stop.tail,
+			ValuesStart: bodyStart, ValuesLen: size, UndecodedFrom: undecoded(bodyStart, size, body, stop.complete()),
 		}, nil
 	case UpdateCreateObject, UpdateCreateObject2:
 		objType := b.ReadU8()
@@ -326,7 +333,7 @@ func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, 
 		}
 		bodyStart := base + b.Offset()
 		body := reader(b.ReadBytes(size), hook)
-		info, complete, err := parseValuesCreate(body, objType, mv.ThisIsYou)
+		info, stop, err := parseValuesCreate(body, objType, mv.ThisIsYou)
 		if err != nil {
 			return WorldFragment{
 				NewObject: updateType == UpdateCreateObject2, GUID: guid, ObjectType: objType,
@@ -337,15 +344,17 @@ func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, 
 		}
 		info.Type = objType
 		return WorldFragment{
-			NewObject:      updateType == UpdateCreateObject2,
-			GUID:           guid,
-			ObjectType:     objType,
-			Movement:       mv,
-			Info:           info,
-			ValuesComplete: complete,
-			ValuesStart:    bodyStart,
-			ValuesLen:      size,
-			UndecodedFrom:  undecoded(bodyStart, size, body, complete),
+			NewObject:         updateType == UpdateCreateObject2,
+			GUID:              guid,
+			ObjectType:        objType,
+			Movement:          mv,
+			Info:              info,
+			ValuesComplete:    stop.complete(),
+			UndecodedFragment: stop.fragment,
+			UndecodedTail:     stop.tail,
+			ValuesStart:       bodyStart,
+			ValuesLen:         size,
+			UndecodedFrom:     undecoded(bodyStart, size, body, stop.complete()),
 		}, nil
 	}
 	return WorldFragment{}, fmt.Errorf("unknown update type %d", updateType)
@@ -365,6 +374,10 @@ func fragmentIDs(b *wire.Buffer, max int) ([]uint8, error) {
 	var ids []uint8
 	for range max {
 		id := b.ReadU8()
+		if err := b.Err(); err != nil {
+			// A body that ends inside the list must not read as an endless list of zero ids.
+			return nil, fmt.Errorf("fragment id list: %w", err)
+		}
 		if id == 0xFF {
 			return ids, nil
 		}
@@ -380,6 +393,42 @@ const (
 	fragVendor          uint8 = 18
 	fragPlayerOwnership uint8 = 14
 )
+
+// FragmentName returns the core's name for an updateable fragment, given its wire id (the enum's value + 1 for
+// every non-tag fragment, WowCSEntityDefinitions.h EntityFragment; Object.cpp:196-203).
+func FragmentName(id uint8) string {
+	switch id {
+	case fragCGObject:
+		return "CGObject"
+	case 18:
+		return "Vendor"
+	case 20:
+		return "MeshObjectData"
+	case 21:
+		return "HousingDecor"
+	case 22:
+		return "HousingRoom"
+	case 23:
+		return "HousingRoomComponentMesh"
+	case 24:
+		return "HousingPlayerHouse"
+	case 28:
+		return "JamHousingCornerstone"
+	case 31:
+		return "NeighborhoodMirrorData"
+	case 32:
+		return "MirroredPositionData"
+	case 33:
+		return "PlayerHouseInfoComponent"
+	case 34:
+		return "HousingStorage"
+	case 35:
+		return "HousingFixture"
+	case 38:
+		return "PlayerInitiativeComponent"
+	}
+	return fmt.Sprintf("fragment %d", id)
+}
 
 func isUpdateableFragment(id uint8) bool {
 	switch id {
@@ -397,9 +446,23 @@ func isIndirectFragment(id uint8) bool {
 	return false
 }
 
+// walkStop says where a values-block walk stopped when it did not cover the whole body. The zero value is a walk
+// that reached the block's declared end.
+type walkStop struct {
+	// fragment is an updateable fragment whose contents this round does not walk (0 when none): the walk stops there
+	// and the block is skipped by its declared size, so the next block stays in sync.
+	fragment uint8
+	// tail is set when every fragment the block listed was walked and bytes remained: the object type's own data
+	// after the CGObject fragment (player, item, container), not decoded this round.
+	tail bool
+}
+
+// complete reports a walk that covered the block's declared end.
+func (s walkStop) complete() bool { return s.fragment == 0 && !s.tail }
+
 // parseValuesCreate walks a create block's values: the field-flags byte, the fragment list, then every updateable
 // fragment in id order, each indirect one preceded by its "exists" byte (BaseEntity.cpp:122-128).
-func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, bool, error) {
+func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, walkStop, error) {
 	var info Info
 	flags := b.ReadU8()
 	owner := flags&0x01 != 0
@@ -407,15 +470,18 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 	empath := flags&0x08 != 0
 	ids, err := fragmentIDs(b, 16)
 	if err != nil {
-		return info, false, err
+		return info, walkStop{}, err
 	}
-	complete := true
 	for _, id := range ids {
 		if !isUpdateableFragment(id) {
 			continue
 		}
 		if isIndirectFragment(id) {
-			if b.ReadU8() == 0 {
+			exists := b.ReadU8()
+			if err := b.Err(); err != nil {
+				return info, walkStop{}, fmt.Errorf("fragment %d existence byte: %w", id, err)
+			}
+			if exists == 0 {
 				// not active; the server still wrote the byte
 				continue
 			}
@@ -423,14 +489,20 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 		switch id {
 		case fragCGObject:
 			if err := readObjectFragmentCreate(b, &info, objectType, owner, unitAll, empath, thisIsYou); err != nil {
-				return info, false, err
+				return info, walkStop{}, err
+			}
+		case fragVendor:
+			if err := readVendorCreate(b, &info); err != nil {
+				return info, walkStop{}, err
 			}
 		default:
-			complete = false
-			return info, complete, nil // the block is skipped by its declared size
+			return info, walkStop{fragment: id}, nil // the block is skipped by its declared size
 		}
 	}
-	return info, complete && b.Remaining() == 0, nil
+	if err := b.Err(); err != nil {
+		return info, walkStop{}, fmt.Errorf("values body: %w", err)
+	}
+	return info, walkStop{tail: b.Remaining() != 0}, nil
 }
 
 // readObjectFragmentCreate is the CGObject fragment of a create: Object::BuildValuesCreate is virtual, so the
@@ -464,7 +536,7 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 // parseValuesUpdate walks a values update: field flags, the id list (only when the fragment set changed), the
 // content mask, then each changed updateable fragment (BaseEntity.cpp:164-194,
 // Object::BuildEntityFragmentsForValuesUpdateForPlayerWithMask, Object.cpp:114-130).
-func parseValuesUpdate(b *wire.Buffer) (Info, bool, error) {
+func parseValuesUpdate(b *wire.Buffer) (Info, walkStop, error) {
 	var info Info
 	flags := b.ReadU8()
 	owner := flags&0x01 != 0
@@ -475,7 +547,7 @@ func parseValuesUpdate(b *wire.Buffer) (Info, bool, error) {
 		var err error
 		ids, err = fragmentIDs(b, 16)
 		if err != nil {
-			return info, false, err
+			return info, walkStop{}, err
 		}
 	}
 	mask := b.ReadU8()
@@ -495,10 +567,9 @@ func parseValuesUpdate(b *wire.Buffer) (Info, bool, error) {
 		}
 	}
 	if maskBits > 8 {
-		return info, false, parseFail(ReasonMaskTooLarge, "values update needs %d content-mask bits", maskBits)
+		return info, walkStop{}, parseFail(ReasonMaskTooLarge, "values update needs %d content-mask bits", maskBits)
 	}
 	bit := 0
-	complete := true
 	for _, id := range ids {
 		if !isUpdateableFragment(id) {
 			continue
@@ -517,15 +588,57 @@ func parseValuesUpdate(b *wire.Buffer) (Info, bool, error) {
 		if existsBit >= 0 && mask&(1<<uint(existsBit)) == 0 {
 			continue
 		}
-		if id != fragCGObject {
-			complete = false
-			return info, complete, nil
-		}
-		if err := readObjectFragmentUpdate(b, &info, owner); err != nil {
-			return info, false, err
+		switch id {
+		case fragCGObject:
+			if err := readObjectFragmentUpdate(b, &info, owner); err != nil {
+				return info, walkStop{}, err
+			}
+		case fragVendor:
+			if err := readVendorUpdate(b, &info); err != nil {
+				return info, walkStop{}, err
+			}
+		default:
+			return info, walkStop{fragment: id}, nil // the block is skipped by its declared size
 		}
 	}
-	return info, complete && b.Remaining() == 0, nil
+	if err := b.Err(); err != nil {
+		return info, walkStop{}, fmt.Errorf("values body: %w", err)
+	}
+	return info, walkStop{tail: b.Remaining() != 0}, nil
+}
+
+// readVendorCreate is VendorData::WriteCreate (UpdateFields.cpp:9254-9257): one int32 Flags. A body that ends
+// inside the fragment is a parse failure, not a vendor with zero flags: the block must not be reported complete.
+func readVendorCreate(b *wire.Buffer, info *Info) error {
+	flags := b.ReadI32()
+	if err := b.Err(); err != nil {
+		return fmt.Errorf("vendor create fragment: %w", err)
+	}
+	info.HasVendor = true
+	info.VendorFlags = flags
+	info.f.Vendor = true
+	return nil
+}
+
+// readVendorUpdate is VendorData::WriteUpdate (UpdateFields.cpp:9264-9277): two mask bits, flushed, then the int32
+// Flags when both are set (bit 0 is the structure's presence, bit 1 the field's change). Truncation is an error in
+// both reads, like the create form.
+func readVendorUpdate(b *wire.Buffer, info *Info) error {
+	mask := b.ReadBits(2)
+	b.FlushBits()
+	if err := b.Err(); err != nil {
+		return fmt.Errorf("vendor update fragment mask: %w", err)
+	}
+	if mask&0x1 != 0 && mask&0x2 != 0 {
+		flags := b.ReadI32()
+		if err := b.Err(); err != nil {
+			return fmt.Errorf("vendor update fragment: %w", err)
+		}
+		info.HasVendor = true
+		info.VendorFlags = flags
+		info.f.Vendor = true
+	}
+	return nil
 }
 
 // readObjectFragmentUpdate is the CGObject fragment of a values update: uint32 object-type mask, then the changed

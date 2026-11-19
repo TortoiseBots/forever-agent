@@ -2,13 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"os"
-
-	"github.com/pjerra/forever-agent/internal/forever/bnet"
 )
 
 // foreverCmd is the entry point of the Forever (Classic 1.60.1) commands: login-check stops at the realm join
@@ -72,12 +68,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever login-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	restAddr := fs.String("rest", "", "login REST host:port")
-	rpcAddr := fs.String("rpc", "", "Battle.net RPC host:port")
-	caFile := fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate")
-	serverName := fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	clientBuild := fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts")
-	account := fs.String("account", "", "account e-mail or name")
+	var common foreverCommon
+	common.connectionFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -86,37 +78,19 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
 		return exitUsage
 	}
-	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" {
-		fmt.Fprintln(stderr, "forever login-check: --rest, --rpc, --ca and --account are required")
+	if err := common.checkConnection("forever login-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if *clientBuild == 0 || *clientBuild > 0xFFFFFFFF {
-		fmt.Fprintln(stderr, "forever login-check: --build must be a client build number")
-		return exitUsage
-	}
-	password := os.Getenv("FOREVER_PASSWORD")
-	if password == "" {
-		fmt.Fprintln(stderr, "forever login-check: FOREVER_PASSWORD is not set")
+	if err := common.passwordCheck("forever login-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    *restAddr,
-		RPCAddr:     *rpcAddr,
-		CAFile:      *caFile,
-		ServerName:  *serverName,
-		Account:     *account,
-		Password:    password,
-		ClientBuild: uint32(*clientBuild),
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	})
+	result, err := common.login(ctx, "forever login-check", stdout)
 	if err != nil {
-		fmt.Fprintln(stderr, "forever login-check:", err)
-		var realmErr *bnet.RealmError
-		if errors.As(err, &realmErr) {
-			return exitRealm
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
 		}
 		return exitAuth
 	}

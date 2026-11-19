@@ -7,17 +7,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
@@ -25,13 +21,8 @@ func foreverWalkCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 	const usage = "usage: forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS] [--pause DURATION] [--navmesh DIR --to-x X --to-y Y --to-z Z [--parent MAP=PARENT[,..]]]"
 	fs := flag.NewFlagSet("forever walk-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	restAddr := fs.String("rest", "", "login REST host:port")
-	rpcAddr := fs.String("rpc", "", "Battle.net RPC host:port")
-	caFile := fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate")
-	serverName := fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	clientBuild := fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts")
-	account := fs.String("account", "", "account e-mail or name")
-	character := fs.String("character", "", "character to enter the world with")
+	var common foreverCommon
+	common.flags(fs)
 	stay := fs.Duration("stay", 8*time.Second, "how long to settle in the world before the summary and the walk")
 	dx := fs.Float64("dx", 8, "yards to walk along X from the spawn")
 	dy := fs.Float64("dy", 0, "yards to walk along Y from the spawn")
@@ -41,7 +32,6 @@ func foreverWalkCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 	toY := fs.Float64("to-y", 0, "navmesh target Y (absolute WoW coordinate, with --navmesh)")
 	toZ := fs.Float64("to-z", 0, "navmesh target Z (absolute WoW coordinate, with --navmesh)")
 	parentArgs := fs.String("parent", "", "instance rule for the navmesh walk: MAP=PARENT pairs, comma separated (with --navmesh; the pairs are validated)")
-	allowInstanceRedirect := fs.Bool("allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -49,12 +39,8 @@ func foreverWalkCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" || *character == "" {
-		fmt.Fprintln(stderr, "forever walk-check: --rest, --rpc, --ca, --account and --character are required")
-		return exitUsage
-	}
-	if *clientBuild == 0 || *clientBuild > 0xFFFFFFFF {
-		fmt.Fprintln(stderr, "forever walk-check: --build must be a client build number")
+	if err := common.check("forever walk-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	if *stay < 0 || *stay > 10*time.Minute {
@@ -90,66 +76,32 @@ func foreverWalkCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintln(stderr, "forever walk-check: --parent:", err)
 		return exitUsage
 	}
-	password := os.Getenv("FOREVER_PASSWORD")
-	if password == "" {
-		fmt.Fprintln(stderr, "forever walk-check: FOREVER_PASSWORD is not set")
+	if err := common.passwordCheck("forever walk-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    *restAddr,
-		RPCAddr:     *rpcAddr,
-		CAFile:      *caFile,
-		ServerName:  *serverName,
-		Account:     *account,
-		Password:    password,
-		ClientBuild: uint32(*clientBuild),
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	})
-	if err != nil {
-		fmt.Fprintln(stderr, "forever walk-check:", err)
-		var realmErr *bnet.RealmError
-		if errors.As(err, &realmErr) {
-			return exitRealm
-		}
-		return exitAuth
-	}
-	fmt.Fprintf(stdout, "login: %s, world %s:%d\n", result.Summary(), result.ServerIP, result.ServerPort)
-
-	address := net.JoinHostPort(result.ServerIP, strconv.FormatUint(uint64(result.ServerPort), 10))
-	report, err := world.Enter(ctx, world.Options{
-		Address:               address,
-		RealmID:               result.RealmID,
-		RealmAddress:          result.RealmAddress,
-		RealmJoinTicket:       result.JoinTicket,
-		ClientSecret:          result.ClientSecret,
-		JoinSecret:            result.JoinSecret,
-		ClientBuild:           uint32(*clientBuild),
-		RealmBuild:            uint32(*clientBuild), // the realm admits only its own build (Realm.AlsoAcceptBuilds is empty)
-		Character:             *character,
-		WalkCheck:             true,
-		Dx:                    float32(*dx),
-		Dy:                    float32(*dy),
-		Settle:                *stay,
-		WalkPause:             *pause,
-		NavmeshDir:            *navmeshDir,
-		Parents:               parents,
-		ToX:                   float32(*toX),
-		ToY:                   float32(*toY),
-		ToZ:                   float32(*toZ),
-		AllowInstanceRedirect: *allowInstanceRedirect,
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
+	report, err := common.enter(ctx, "forever walk-check", stdout, world.Options{
+		WalkCheck:  true,
+		Dx:         float32(*dx),
+		Dy:         float32(*dy),
+		Settle:     *stay,
+		WalkPause:  *pause,
+		NavmeshDir: *navmeshDir,
+		Parents:    parents,
+		ToX:        float32(*toX),
+		ToY:        float32(*toY),
+		ToZ:        float32(*toZ),
 	})
 	if report != nil {
 		printWalkCheckSummary(stdout, report)
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever walk-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever walk-check: %v\n", err)
 		return exitWorld
 	}
 	return exitOK
@@ -167,6 +119,14 @@ func printWalkCheckSummary(w io.Writer, report *world.Report) {
 	}
 	fmt.Fprintf(w, "walk-check: %d partial object(s), %d unparsed block(s) (skipped by size)\n",
 		summary.Partial, unparsed)
+	if len(summary.PartialKinds) > 0 {
+		var parts []string
+		for kind, n := range summary.PartialKinds {
+			parts = append(parts, fmt.Sprintf("%s %d", kind, n))
+		}
+		sortStrings(parts)
+		fmt.Fprintf(w, "walk-check: partial kinds: %s\n", strings.Join(parts, "; "))
+	}
 	if len(summary.ByType) > 0 {
 		var parts []string
 		for name, n := range summary.ByType {

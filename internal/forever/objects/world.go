@@ -85,20 +85,23 @@ const monsterMoveSlackMs = 500
 
 // World is the GUID-keyed model. One goroutine writes (the socket reader); any number read.
 type World struct {
-	mu         sync.RWMutex
-	mapID      uint32
-	objects    map[wire.GUID]*Object
-	entries    map[int32]string
-	players    map[wire.GUID]string
-	created    int
-	updated    int
-	destroyed  int
-	outOfRange int
-	orphans    int
+	mu          sync.RWMutex
+	mapID       uint32
+	objects     map[wire.GUID]*Object
+	entries     map[int32]string
+	players     map[wire.GUID]string
+	created     int
+	updated     int
+	destroyed   int
+	outOfRange  int
+	orphans     int
+	partial     int
+	unknownMove int
+	// partialKinds counts the partial blocks by a bounded key (object type, block form, where the walk stopped): a
+	// run that reports partial objects says which kinds they are, not only how many.
+	partialKinds map[string]int
 	// resurrections counts the units this model saw come back from the ghost state.
 	resurrections int
-	partial       int
-	unknownMove   int
 	unparsed      map[string]int
 	// unparsedDetail keeps the parser's own text for the first block of each unparsed key, so the walk summary
 	// can name the failure without letting the server grow the summary: one string per key, never per block.
@@ -137,6 +140,7 @@ func NewWorld(mapID uint32) *World {
 		objects:        make(map[wire.GUID]*Object),
 		entries:        make(map[int32]string),
 		players:        make(map[wire.GUID]string),
+		partialKinds:   make(map[string]int),
 		unparsed:       make(map[string]int),
 		unparsedDetail: make(map[string]string),
 	}
@@ -173,6 +177,8 @@ type Counts struct {
 	Orphans int
 	// Partial counts objects with at least one block that was not decoded to its declared end.
 	Partial int
+	// PartialKinds counts those blocks by type, form and stop point (the key is a bounded closed set).
+	PartialKinds map[string]int
 	// UnknownMoves counts movement packets for a GUID the model does not hold: they never create an object.
 	UnknownMoves int
 	// Resurrections counts units this model saw come back from the ghost state (aura 8326 gone, health above 0).
@@ -197,12 +203,16 @@ func (w *World) Counts() Counts {
 		OutOfRange:     w.outOfRange,
 		Orphans:        w.orphans,
 		Partial:        w.partial,
+		PartialKinds:   make(map[string]int, len(w.partialKinds)),
 		UnknownMoves:   w.unknownMove,
 		Resurrections:  w.resurrections,
 		Unparsed:       make(map[string]int, len(w.unparsed)),
 		UnparsedDetail: make(map[string]string, len(w.unparsedDetail)),
 		Applied:        w.applied,
 		ByType:         make(map[uint8]int),
+	}
+	for kind, n := range w.partialKinds {
+		c.PartialKinds[kind] = n
 	}
 	for reason, n := range w.unparsed {
 		c.Unparsed[reason] = n
@@ -260,6 +270,9 @@ func (w *World) Apply(u *Update, received time.Time) {
 			// The block header names the type even when its values cannot be decoded.
 			o.Type = b.ObjectType
 			o.Info.Type = b.ObjectType
+		}
+		if !b.ValuesComplete || b.Unparsed != ReasonNone {
+			w.partialKinds[partialKind(b, o)]++
 		}
 		if b.Unparsed != ReasonNone {
 			// Nothing decoded: the block is skipped by its size, the object is marked partial and the reason is
@@ -348,6 +361,30 @@ const maxUnparsedKeys = unparsedKinds * int(parseReasonCount-1)
 // parseReasonCount-1 reasons), so the map cannot grow with the count of skipped blocks.
 func unparsedKey(b *WorldFragment) string {
 	return unparsedKind(b) + ": " + b.Unparsed.String()
+}
+
+// partialKind is the summary key of one partially decoded block: the object type the block names (a values update
+// carries none, so the model's type for the GUID stands in), whether it was a create or a values update, and where
+// the walk stopped. Every part is a closed set, so the map stays bounded.
+func partialKind(b *WorldFragment, o *Object) string {
+	typ := b.ObjectType
+	if b.Values {
+		typ = o.Type
+	}
+	form := "create"
+	if b.Values {
+		form = "values update"
+	}
+	var where string
+	switch {
+	case b.Unparsed != ReasonNone:
+		where = "an undecodable block (" + b.Unparsed.String() + ")"
+	case b.UndecodedFragment != 0:
+		where = "the " + FragmentName(b.UndecodedFragment) + " fragment, not decoded this round"
+	default:
+		where = "the type's own data after the walked blocks, not decoded this round"
+	}
+	return TypeName(typ) + " " + form + ": " + where
 }
 
 // markPartialLocked records that a block naming o was not decoded to its declared end.
@@ -444,6 +481,12 @@ func mergeInfo(dst *Info, src Info) {
 	}
 	if f.Scale {
 		dst.Scale = src.Scale
+	}
+	if src.HasVendor {
+		dst.HasVendor = true
+	}
+	if f.Vendor {
+		dst.VendorFlags = src.VendorFlags
 	}
 	if src.HasUnit {
 		dst.HasUnit = true

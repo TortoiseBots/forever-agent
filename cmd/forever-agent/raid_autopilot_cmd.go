@@ -52,6 +52,10 @@ const raidAutopilotUsage = `usage: forever-agent raid-autopilot [--foreground] [
 // autoChildEnv marks the re-exec'd detached process.
 const autoChildEnv = "TURTLE_RAID_AUTOPILOT_CHILD"
 
+// errProcGroupUnsupported is what the non-Unix build's process-group and lock helpers return: those commands need
+// Unix process groups and flock, and the `forever` subcommands do not use them.
+var errProcGroupUnsupported = errors.New("not supported on Windows: the raid walk commands need Unix process groups and flock (the forever commands work)")
+
 // exitAutoEscalated is the supervisor's exit when at least one id was escalated for a person: its goals were not met.
 const exitAutoEscalated = 31
 
@@ -746,8 +750,11 @@ func autoLock(dir string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock: %v", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockWalkDir(f); err != nil {
 		f.Close()
+		if errors.Is(err, errProcGroupUnsupported) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("another autopilot runs in %s (it holds %s)", dir, path)
 	}
 	return f, nil
@@ -791,7 +798,10 @@ func autoDetach(o autoOptions, stdout, stderr io.Writer) int {
 	cmd := exec.Command(exe, args...)
 	cmd.Env = append(os.Environ(), autoChildEnv+"=1")
 	cmd.Stdout, cmd.Stderr = f, f
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := detachSupervisor(cmd); err != nil {
+		fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
+		return exitUsage
+	}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
 		return exitUsage
@@ -1963,7 +1973,11 @@ func (s *autoSupervisor) launch(st *autoState) {
 	}
 	cmd := exec.Command(s.o.binary, args...)
 	cmd.Stdout, cmd.Stderr = f, f
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := setProcessGroup(cmd); err != nil {
+		f.Close()
+		s.failLaunch(st, err)
+		return
+	}
 	if err := cmd.Start(); err != nil {
 		f.Close()
 		s.failLaunch(st, err)
@@ -2297,8 +2311,7 @@ func processAlive(pid int) bool {
 		return false
 	}
 	for _, p := range []int{pid, -pid} {
-		err := syscall.Kill(p, 0)
-		if err == nil || err == syscall.EPERM {
+		if pidAlive(p) {
 			return true
 		}
 	}
@@ -2317,10 +2330,10 @@ func (s *autoSupervisor) stopRun(st *autoState, r *autoRun) {
 	r.stopped = true
 	pid := r.pidN
 	st.mu.Unlock()
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = signalProcessGroup(pid, syscall.SIGTERM)
 	if !s.waitPidGone(st, r, pid, autoKillGrace) {
 		s.event(st.id, "kill", fmt.Sprintf("pid %d did not stop in %s; SIGKILL", pid, autoKillGrace))
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = signalProcessGroup(pid, syscall.SIGKILL)
 		s.waitPidGone(st, r, pid, autoKillWait)
 	}
 }
