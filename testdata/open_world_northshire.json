@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "name": "northshire_open_world_test",
+  "status": "draft (test layout, not a mapped route)",
+  "map": 0,
+  "entrance": {
+    "x": -8913,
+    "y": -136,
+    "z": 82
+  },
+  "level_band": [
+    1,
+    5
+  ],
+  "notes": [
+    "A three-pack open-world test layout, not a route: the driver's --enter none mode is exercised against it. The points are the public starting-area coordinates this repository already uses in its login fixture and its navmesh test (-8913 -136 82 and the two points 18 and 78 yd north of it); the packs are public low-level creatures of that area. No capture, no live walk: replace it with a mapped route before using it for anything but the open-world smoke test.",
+    "Every pack is a single point; use radius 12 so a wandering member stays inside its group and does not claim a neighbour's.",
+    "The leg's end is the entrance: the smoke test starts on the first pack and must not walk a line through a later pack before its turn."
+  ],
+  "legs": [
+    {
+      "name": "northshire_road",
+      "to": {
+        "x": -8913,
+        "y": -136,
+        "z": 82
+      },
+      "pull_groups": [
+        {
+          "entries": [
+            6,
+            6
+          ],
+          "positions": [
+            {
+              "x": -8913,
+              "y": -136,
+              "z": 82
+            }
+          ],
+          "radius": 12
+        },
+        {
+          "entries": [
+            6,
+            257
+          ],
+          "positions": [
+            {
+              "x": -8913,
+              "y": -118,
+              "z": 82.54
+            }
+          ],
+          "radius": 12
+        },
+        {
+          "entries": [
+            257,
+            257
+          ],
+          "positions": [
+            {
+              "x": -8913,
+              "y": -58,
+              "z": 82.54
+            }
+          ],
+          "radius": 12
+        }
+      ]
+    }
+  ]
+}

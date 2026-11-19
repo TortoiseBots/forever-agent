@@ -2,10 +2,8 @@ package driver
 
 import (
 	"context"
-	"strings"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -135,8 +133,9 @@ type Fake struct {
 	engaged  map[string]bool
 	guidOf   map[string]wire.GUID
 
-	// ordered is every order and setup/core line, in the driver's own view of time.
+	// ordered is every order and action, in the driver's own view of time; acted is the actions themselves.
 	ordered []Order
+	acted   []Action
 
 	// Injection for the scenarios.
 	StateFails   int
@@ -148,10 +147,12 @@ type Fake struct {
 	linkAfter    time.Duration
 	hasLinkAfter bool
 
-	OnOrder func(f *Fake, who, verb, arg string)
-	OnSetup func(f *Fake, line string) bool
-	OnCore  func(f *Fake, line string) bool
-	OnState func(f *Fake, n int) error
+	OnOrder  func(f *Fake, who, verb, arg string)
+	OnAction func(f *Fake, a Action) bool
+	OnState  func(f *Fake, n int) error
+
+	// RefuseActions answers that action with the module's error line of this code.
+	RefuseActions map[ActionKind]string
 
 	stateCalls int
 	orderSnap  *tbcmd.StateReport
@@ -449,101 +450,101 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 	return rep, nil
 }
 
-// Setup answers a setup line. The default handles the entry, teleport, revive and instance lines the driver sends.
-func (f *Fake) Setup(ctx context.Context, line string) (*command.Reply, error) {
+// Act answers one typed setup action from the scripted world. The default applies the action's effect; OnAction
+// answers it first when a scenario needs its own script, and RefuseActions answers it with the module's error line.
+func (f *Fake) Act(ctx context.Context, a Action) (ActionReport, error) {
+	if f.CallDelay > 0 {
+		f.Clock.Advance(f.CallDelay)
+	}
 	if err := f.linkErr(); err != nil {
-		return nil, err
+		return ActionReport{}, err
 	}
-	f.ordered = append(f.ordered, Order{At: f.Clock.Now().Sub(f.Start), Who: "party", Verb: "setup", Arg: line})
-	if f.OnSetup != nil && f.OnSetup(f, line) {
-		return &command.Reply{}, nil
+	f.ordered = append(f.ordered, Order{At: f.Clock.Now().Sub(f.Start), Who: a.who(), Verb: "action", Arg: a.String()})
+	f.acted = append(f.acted, a)
+	if code := f.RefuseActions[a.Kind]; code != "" {
+		return ActionReport{}, &tbcmd.CommandError{Code: code, Cmd: a.String()}
 	}
-	f.defaultSetup(line)
-	return &command.Reply{}, nil
+	if f.OnAction != nil && f.OnAction(f, a) {
+		return ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}, nil
+	}
+	f.defaultAction(a)
+	return ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}, nil
 }
 
-// Core answers a tokenless line.
-func (f *Fake) Core(ctx context.Context, line string) (*command.Reply, error) {
-	if err := f.linkErr(); err != nil {
-		return nil, err
+// actionVerb is the word the module answers an action with.
+func actionVerb(k ActionKind) string {
+	switch k {
+	case ActionEnter:
+		return "enter"
+	case ActionTeleCommander, ActionTeleParty, ActionTeleTo:
+		return "tele"
+	case ActionRevive:
+		return "revive"
+	case ActionInstanceLeave, ActionInstanceReset:
+		return "instance"
+	case ActionInstanceInfo:
+		return "instance"
 	}
-	f.ordered = append(f.ordered, Order{At: f.Clock.Now().Sub(f.Start), Who: "commander", Verb: "core", Arg: line})
-	if f.OnCore != nil && f.OnCore(f, line) {
-		return &command.Reply{}, nil
-	}
-	switch {
-	case strings.HasPrefix(line, ".tele "):
-		if f.route.Portal != nil {
-			f.selfPos = f.route.Portal.Pos
-			f.selfMap = f.route.Portal.Map
-		}
-	case strings.HasPrefix(line, ".appear "):
-		if t := f.bots[strings.TrimSpace(strings.TrimPrefix(line, ".appear "))]; t != nil {
-			f.selfPos = t.pos
-			f.selfMap = t.mapID
-			f.selfInst = t.inst
-		}
-	}
-	return &command.Reply{}, nil
+	return "gm"
 }
 
-// defaultSetup is the fake's answer to the module's setup lines.
-func (f *Fake) defaultSetup(line string) {
-	fields := strings.Fields(line)
-	switch {
-	case strings.HasPrefix(line, ".tb enter party"):
+// defaultAction is the scripted world's effect of one action.
+func (f *Fake) defaultAction(a Action) {
+	switch a.Kind {
+	case ActionEnter:
 		for _, name := range f.cfg.Party {
 			b := f.bots[name]
 			b.mapID, b.inst, b.pos = f.route.Map, 1, f.route.Entrance
 		}
-	case strings.HasPrefix(line, ".tb tele party "):
-		if len(fields) >= 7 {
-			m := parseUint(fields[3])
-			p := Vec3{parseFloat(fields[4]), parseFloat(fields[5]), parseFloat(fields[6])}
-			for _, name := range f.cfg.Party {
-				b := f.bots[name]
-				b.mapID, b.pos = uint32(m), p
+	case ActionTeleCommander:
+		if a.Who == f.cfg.Commander {
+			f.selfMap, f.selfPos = a.Map, a.Pos
+		} else if b := f.bots[a.Who]; b != nil {
+			b.mapID, b.pos = a.Map, a.Pos
+		}
+	case ActionTeleParty:
+		for _, name := range f.cfg.Party {
+			b := f.bots[name]
+			b.mapID, b.pos = a.Map, a.Pos
+		}
+	case ActionTeleTo:
+		if a.Who == f.cfg.Commander {
+			if t := f.bots[a.Other]; t != nil {
+				f.selfMap, f.selfInst, f.selfPos = t.mapID, t.inst, t.pos
+			}
+		} else if b := f.bots[a.Who]; b != nil {
+			if t := f.bots[a.Other]; t != nil {
+				b.mapID, b.inst, b.pos = t.mapID, t.inst, t.pos
 			}
 		}
-	case strings.HasPrefix(line, ".tb tele "):
-		// .tb tele <who> to <other>   |   .tb tele <who> <map> x y z
-		if len(fields) >= 5 && fields[3] == "to" {
-			who, other := fields[2], fields[4]
-			if who == f.cfg.Commander {
-				if t := f.bots[other]; t != nil {
-					f.selfMap, f.selfInst, f.selfPos = t.mapID, t.inst, t.pos
-				}
-			} else if b := f.bots[who]; b != nil {
-				if t := f.bots[other]; t != nil {
-					b.mapID, b.inst, b.pos = t.mapID, t.inst, t.pos
-				}
-			}
-		} else if len(fields) >= 7 {
-			who := fields[2]
-			m := uint32(parseUint(fields[3]))
-			p := Vec3{parseFloat(fields[4]), parseFloat(fields[5]), parseFloat(fields[6])}
-			if b := f.bots[who]; b != nil {
-				b.mapID, b.pos = m, p
-			}
+	case ActionTeleOutside:
+		if f.route.Portal != nil {
+			f.selfPos, f.selfMap = f.route.Portal.Pos, f.route.Portal.Map
 		}
-	case strings.HasPrefix(line, ".tb revive "):
-		who := strings.TrimSpace(strings.TrimPrefix(line, ".tb revive "))
-		if who == "party" {
+	case ActionAppear:
+		if t := f.bots[a.Who]; t != nil {
+			f.selfPos, f.selfMap, f.selfInst = t.pos, t.mapID, t.inst
+		}
+	case ActionRevive:
+		if a.Who == "party" {
 			for _, b := range f.bots {
 				b.dead, b.life, b.hp = false, "alive", b.hpMax
 			}
 			return
 		}
-		if b := f.bots[who]; b != nil {
+		if b := f.bots[a.Who]; b != nil {
 			b.dead, b.life, b.hp = false, "alive", b.hpMax
 		}
-	case strings.HasPrefix(line, ".tb instance ") && strings.HasSuffix(line, " leave"):
+	case ActionInstanceLeave:
 		for _, b := range f.bots {
 			b.mapID = f.route.Portal.MapID()
 			b.pos = f.route.Portal.PosOr(f.route.Entrance)
 		}
 		f.selfMap = f.route.Portal.MapID()
 		f.selfPos = f.route.Portal.PosOr(f.route.Entrance)
+	case ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible:
+		// The scripted world has nothing to change for these: the reset needs a party already outside, the report is
+		// an empty list, and the GM modes change the commander's own flags.
 	}
 }
 
@@ -880,39 +881,3 @@ func (f *Fake) UnitGUID(entry uint32) string {
 
 // botState is the scripted bot.
 func (f *Fake) botState(name string) *fakeBot { return f.bots[name] }
-
-func parseUint(s string) uint64 {
-	var n uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return n
-		}
-		n = n*10 + uint64(c-'0')
-	}
-	return n
-}
-
-func parseFloat(s string) float32 {
-	var sign float32 = 1
-	if strings.HasPrefix(s, "-") {
-		sign, s = -1, s[1:]
-	}
-	var n, scale float32
-	dot := false
-	for _, c := range s {
-		if c == '.' {
-			dot = true
-			continue
-		}
-		if c < '0' || c > '9' {
-			continue
-		}
-		if dot {
-			scale = scale*10 + 1
-			n = n + float32(c-'0')/scale
-		} else {
-			n = n*10 + float32(c-'0')
-		}
-	}
-	return sign * n
-}

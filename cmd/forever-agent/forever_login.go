@@ -25,7 +25,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever char-create [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --name NAME [--surname S] --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)")
 		fmt.Fprintln(stderr, "       forever-agent forever char-delete [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL (--name NAME [--surname S] | --guid GUID) --yes NAME")
 		fmt.Fprintln(stderr, "       forever-agent forever path-check --navmesh DIR --map N --from X,Y,Z --to X,Y,Z [--parent N] [--server-filter]")
-		fmt.Fprintln(stderr, "       forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS --character NAME [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--out DIR] --dry")
+		fmt.Fprintln(stderr, "       forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS --character NAME [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--reset] [--out DIR] [--navmesh DIR] [--dry]")
 		return exitUsage
 	}
 	switch args[0] {

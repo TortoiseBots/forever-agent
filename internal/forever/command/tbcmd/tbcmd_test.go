@@ -508,6 +508,129 @@ func TestRoleMasterPartyThreat(t *testing.T) {
 	}
 }
 
+// TestThreatPositionAndFlee: the module's two newer threat keys are read when present and absent without error.
+func TestThreatPositionAndFlee(t *testing.T) {
+	r := oneReply("threat-begin #T",
+		"threat mob=0000000000000000000000000000BEEF entry=426 name=Runner hppct=15 victim=Tbtank target=Tbdps1 "+
+			"size=1 top=Tbtank:412 pos=-49.5,3.25,0.5 flee=yes #T",
+		"threat mob=0000000000000000000000000000CAFE entry=427 name=Older hppct=100 victim=Tbtank target=Tbtank "+
+			"size=1 top=Tbtank:10 #T",
+		"threat-end count=2 records=2 bots=5 target=party:Tbtank #T")
+	threat, err := NewClient(r).Threat(context.Background(), "party Tbtank")
+	if err != nil {
+		t.Fatalf("Threat: %v", err)
+	}
+	if len(threat.Mobs) != 2 {
+		t.Fatalf("%d mob(s)", len(threat.Mobs))
+	}
+	first := threat.Mobs[0]
+	if !first.HasPos || first.X != -49.5 || first.Y != 3.25 || first.Z != 0.5 {
+		t.Fatalf("pos: %+v", first)
+	}
+	if !first.HasFlee || !first.Flee {
+		t.Fatalf("flee: %+v", first)
+	}
+	// The older line carries neither key: "not known" is not a zero position and not flee=no.
+	second := threat.Mobs[1]
+	if second.HasPos || second.HasFlee || second.Flee {
+		t.Fatalf("a threat line without pos/flee read as %+v", second)
+	}
+	// A malformed position is refused, never read as the origin.
+	bad := oneReply("threat-begin #T",
+		"threat mob=0000000000000000000000000000BEEF entry=426 name=Runner hppct=15 victim=Tbtank target=Tbdps1 "+
+			"size=1 top=Tbtank:412 pos=1,2 flee=yes #T",
+		"threat-end count=1 records=1 bots=5 target=party:Tbtank #T")
+	if _, err := NewClient(bad).Threat(context.Background(), "party Tbtank"); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("bad pos: err %v, want ErrBadValue", err)
+	}
+	// A flee word that is not yes/no is refused too.
+	badFlee := oneReply("threat-begin #T",
+		"threat mob=0000000000000000000000000000BEEF entry=426 name=Runner hppct=15 victim=Tbtank target=Tbdps1 "+
+			"size=1 top=Tbtank:412 flee=maybe #T",
+		"threat-end count=1 records=1 bots=5 target=party:Tbtank #T")
+	if _, err := NewClient(badFlee).Threat(context.Background(), "party Tbtank"); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("bad flee: err %v, want ErrBadValue", err)
+	}
+}
+
+// TestInstanceInfo: the boss state arrives as boss lists on the records, or on the end line, and nothing else is
+// accepted as a report.
+func TestInstanceInfo(t *testing.T) {
+	r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line != ".tb instance Tbtank info" && line != ".tb instance Tbother info" {
+			t.Fatalf("line %q", line)
+		}
+		if line == ".tb instance Tbother info" {
+			return reply(o, "instance-begin #T",
+				"instance boss=644:dead;645:alive #T",
+				"instance-end count=1 records=1 #T"), nil
+		}
+		return reply(o, "instance-begin #T",
+			"instance boss=11517:dead;11518:alive #T",
+			"instance boss=11519:dead #T",
+			"instance-end count=2 records=2 instance=7 locked=no #T"), nil
+	}}
+	c := NewClient(r)
+	rep, err := c.InstanceInfo(context.Background(), "Tbtank")
+	if err != nil {
+		t.Fatalf("InstanceInfo: %v", err)
+	}
+	if rep.Count != 2 || rep.Records != 2 || len(rep.Bosses) != 3 {
+		t.Fatalf("%+v", rep)
+	}
+	want := []InstanceBoss{
+		{Entry: 11517, Alive: false, State: "dead"},
+		{Entry: 11518, Alive: true, State: "alive"},
+		{Entry: 11519, Alive: false, State: "dead"},
+	}
+	for i, b := range rep.Bosses {
+		if b != want[i] {
+			t.Fatalf("boss %d: %+v, want %+v", i, b, want[i])
+		}
+	}
+	if rep.End["instance"] != "7" || rep.Target != "Tbtank" {
+		t.Fatalf("end %v target %q", rep.End, rep.Target)
+	}
+	// A bad state word is refused.
+	bad := oneReply("instance-begin #T", "instance boss=644:gone #T", "instance-end count=1 records=1 #T")
+	if _, err := NewClient(bad).InstanceInfo(context.Background(), "Tbtank"); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("bad state: err %v, want ErrBadValue", err)
+	}
+	// Two lines for the same boss are refused, not merged.
+	dup := oneReply("instance-begin #T", "instance boss=644:dead #T", "instance boss=644:alive #T",
+		"instance-end count=2 records=2 #T")
+	if _, err := NewClient(dup).InstanceInfo(context.Background(), "Tbtank"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("duplicate boss: err %v, want ErrBadReport", err)
+	}
+	// A reply of another command is not a report.
+	wrong := oneReply("party-begin #T", "party member=Tbtank leader=yes online=yes #T", "party-end count=1 #T")
+	if _, err := NewClient(wrong).InstanceInfo(context.Background(), "Tbtank"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("wrong report: err %v, want ErrBadReport", err)
+	}
+}
+
+// TestStateSliceFourKeys: the life/block/relhold keys and the end line's alive/dead/wipe/whole words are kept in
+// Extra and End for the driver, with no typed field of their own.
+func TestStateSliceFourKeys(t *testing.T) {
+	line := strings.Replace(stateLineT("Tbtank", "no", ""), "engine=yes",
+		"engine=yes life=alive relhold=no inleader=yes block=", 1)
+	dead := strings.Replace(stateLineT("Tbdps1", "no", ""), "engine=yes",
+		"engine=yes life=dead relhold=no inleader=yes block=level", 1)
+	dead = strings.Replace(dead, "resting=no", "resting=yes", 1)
+	end := "state-end count=2 records=2 resting=1 target=party:Tbtank ready=no why=dead alive=1 dead=1 wipe=no whole=no #T"
+	rep, err := NewClient(oneReply("state-begin #T", line, dead, end)).StateReport(context.Background(), "party Tbtank")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	if rep.Bots[0].Extra["life"] != "alive" || rep.Bots[1].Extra["life"] != "dead" ||
+		rep.Bots[1].Extra["block"] != "level" || rep.Bots[0].Extra["inleader"] != "yes" {
+		t.Fatalf("bots %+v", rep.Bots)
+	}
+	if rep.End["alive"] != "1" || rep.End["dead"] != "1" || rep.End["wipe"] != "no" || rep.End["whole"] != "no" {
+		t.Fatalf("end %v", rep.End)
+	}
+}
+
 func TestFormParty(t *testing.T) {
 	r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
 		if line != ".tb party Tbtank Tbdpsa Tbdpsb" || o.Token == "" {
