@@ -98,12 +98,16 @@ const (
 	TypeSystem        uint8 = 0x00
 	TypeSay           uint8 = 0x01
 	TypeParty         uint8 = 0x02
+	TypeRaid          uint8 = 0x03
+	TypeGuild         uint8 = 0x04
+	TypeOfficer       uint8 = 0x05
 	TypeWhisper       uint8 = 0x07
 	TypeWhisperInform uint8 = 0x09
 	TypeEmote         uint8 = 0x0A
 	TypeChannel       uint8 = 0x11
 	TypeAchievement   uint8 = 0x2E // CHAT_MSG_ACHIEVEMENT
 	TypePartyLeader   uint8 = 0x31
+	TypeInstanceChat  uint8 = 0x3E // CHAT_MSG_INSTANCE_CHAT
 )
 
 // typeNames is the ChatMsg table, indexed by the wire byte (Chat::Write writes uint8(SlashCmd)).
@@ -688,7 +692,9 @@ const (
 //
 // The rules, in order:
 //   - a valid UTF-8 rune below 0x20, 0x7F, or in the C1 range 0x80..0x9F becomes ' ' (there is no newline in the
-//     output);
+//     output); the tab is written as the two bytes `\t`, so a field separator stays visible as an escape;
+//   - the line and paragraph separators (U+2028, U+2029) and the bidi controls (U+061C, U+200E, U+200F,
+//     U+202A..U+202E, U+2066..U+2069) become ' ': printing one can reorder or split the line a terminal draws;
 //   - invalid UTF-8 bytes become '?';
 //   - a WoW hyperlink escape `|H<what>|h` and the closing `|h` are removed, so the visible label between them
 //     survives: `|Hitem:1|h[Sword]|h` prints `[Sword]`;
@@ -739,7 +745,9 @@ func Sanitise(s string, max int) string {
 		switch {
 		case r == utf8.RuneError && size == 1:
 			put([]byte{'?'})
-		case r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F):
+		case r == '\t':
+			put([]byte{'\\', 't'})
+		case r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) || isBidiOrSeparator(r):
 			put([]byte{' '})
 		default:
 			put([]byte(s[i-size : i]))
@@ -749,6 +757,16 @@ func Sanitise(s string, max int) string {
 		return string(out) + ellipsis
 	}
 	return string(out)
+}
+
+// isBidiOrSeparator reports the Unicode separators that break a line and the bidi controls that can reorder what a
+// terminal draws. They are display hazards only: the bytes are kept everywhere a protocol needs them.
+func isBidiOrSeparator(r rune) bool {
+	switch r {
+	case '\u061c', '\u200e', '\u200f', '\u2028', '\u2029', '\u2066', '\u2067', '\u2068', '\u2069':
+		return true
+	}
+	return r >= 0x202a && r <= 0x202e
 }
 
 // SanitiseName is Sanitise with the name bound, for a sender or target name.

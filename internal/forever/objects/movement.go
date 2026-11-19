@@ -10,6 +10,7 @@ package objects
 
 import (
 	"math"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -239,6 +240,33 @@ func WriteMovementInfo(b *wire.Buffer, mi MovementInfo) {
 		}
 	}
 }
+
+// BuildMovementAck is the payload of CMSG_MOVE_WATER_WALK_ACK (and the land-walk ack, which the same opcode
+// answers): one MovementInfo and the ack index the server's flag packet carried (MovementAck::Write, the reader at
+// MovementPackets.cpp:910-916). The server only validates the movement block (HandleMovementAckMessage,
+// MovementHandler.cpp:777-784), and the real client sends it (see movement_ack_test.go's captured fixture).
+func BuildMovementAck(mi MovementInfo, ackIndex uint32) []byte {
+	b := wire.NewWriter()
+	WriteMovementInfo(b, mi)
+	b.WriteU32(ackIndex)
+	return b.Bytes()
+}
+
+// BuildSpeedAck is the payload of CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK and CMSG_MOVE_FORCE_SWIM_SPEED_CHANGE_ACK:
+// the MovementAck and the speed the server announced (MovementSpeedAck::Read, MovementPackets.cpp:922-926, which is
+// the writer's order too). The ack index is the sequence index of the server's SMSG_MOVE_SET_* packet.
+func BuildSpeedAck(mi MovementInfo, ackIndex uint32, speed float32) []byte {
+	b := wire.NewWriter()
+	WriteMovementInfo(b, mi)
+	b.WriteU32(ackIndex)
+	b.WriteFloat32(speed)
+	return b.Bytes()
+}
+
+// AckInfo is the movement block of one ack the client sends for a server-driven movement change: the position and
+// flags the mover holds now, timestamped at at. The server validates this block, so it is the same state the
+// movement packets carry.
+func (m *Mover) AckInfo(at time.Time) MovementInfo { return m.info(m.Flags, at) }
 
 // BuildMovementPacket is the payload of one CMSG_MOVE_* the client sends (MovementPackets.cpp:267-270): one
 // MovementInfo and nothing else. The captured client's plain movement packets are 57 bytes and the server's reader

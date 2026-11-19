@@ -127,9 +127,20 @@ type fakeServer struct {
 	failAfterLogin bool
 	abortDone      chan struct{}
 	// Round 5: chat and party scenarios.
-	chat        bool
-	partyInvite bool
-	partyAccept bool
+	chat bool
+	// Round A0: the add-on transport scenario (serveAddon in fake_addon_test.go). addonCase picks what the fake
+	// sends after the client registers: "delivery", "flood", "echo", "linkdeath" or "none".
+	addon     bool
+	addonCase string
+	// What the fake saw of the add-on transport, under mu.
+	addonUnregisterAll   bool
+	addonRegistered      []string
+	addonFiltered        int
+	addonSeen            []seenAddon
+	addonChannelDropped  int
+	addonPartyInviteName string
+	partyInvite          bool
+	partyAccept          bool
 	// The rest of the party flows: a decline instead of an accept, an uninvite after the join, and a roster the
 	// model must refuse (partyInvalid names the case).
 	partyDecline  bool
@@ -159,6 +170,11 @@ type fakeServer struct {
 	resetLink       bool
 	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
 	walk            bool
+	// death runs the round 6 scenario: the character's death, the release, the graveyard teleport, the corpse
+	// query, the run and the reclaim, on real sockets. deathMapSc makes the release's graveyard another map: the
+	// scenario then follows the transfer before the death-release location.
+	death      bool
+	deathMapSc *mapScenario
 	// mapSc, when set, runs the map change scenario of mapchange_fake_test.go instead of the plain stay.
 	mapSc *mapScenario
 	// mapID is the map the create block names (and so the map walk-check's navmesh route plans on).
@@ -173,13 +189,16 @@ type fakeServer struct {
 	// movement packet at the destination.
 	teleportDuringWalk bool
 	teleportTransport  bool
-	teleportAt         [3]float32
-	teleportSeq        uint32
-	teleportAcked      bool
-	posAfterAck        [3]float32
-	mu                 sync.Mutex
-	realmWire          []uint32
-	instWire           []uint32
+	// teleportEmptyTransport sends the graveyard teleport's shape: the transport bit set with an empty GUID
+	// (RepopAtGraveyard passes ObjectGuid::Empty into the Optional, Player.cpp:5254-5259).
+	teleportEmptyTransport bool
+	teleportAt             [3]float32
+	teleportSeq            uint32
+	teleportAcked          bool
+	posAfterAck            [3]float32
+	mu                     sync.Mutex
+	realmWire              []uint32
+	instWire               []uint32
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -739,6 +758,14 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		f.serveWalk(c, realm)
 		return
 	}
+	if f.addon {
+		f.serveAddon(c, realm)
+		return
+	}
+	if f.death {
+		f.serveDeath(c, realm)
+		return
+	}
 	if f.chat {
 		f.serveChat(c, realm)
 		return
@@ -998,6 +1025,12 @@ func TestShutdownWaitsForThePumps(t *testing.T) {
 // values are ObjectData alone), ThisIsYou and MovementUpdate, the movement info with the given position and run
 // speed. The layout follows UpdateData.cpp:61-79, BaseEntity.cpp:96-129 and :252-398.
 func fakeCreateBlock(guid []byte, mapID uint16, x, y, z, run float32) []byte {
+	return fakeCreateBlockType(guid, mapID, x, y, z, run, 0)
+}
+
+// fakeCreateBlockType is fakeCreateBlock with an explicit object type byte (0 is TYPEID_OBJECT, 6 is a player: the
+// death flow's character must be a player for its ghost state to be a player's).
+func fakeCreateBlockType(guid []byte, mapID uint16, x, y, z, run float32, objectType byte) []byte {
 	values := make([]byte, 0, 16)
 	values = append(values, 0x01)          // field flags: owner
 	values = append(values, 3, 0xFF)       // fragment ids: CGObject, end
@@ -1009,7 +1042,7 @@ func fakeCreateBlock(guid []byte, mapID uint16, x, y, z, run float32) []byte {
 	block := make([]byte, 0, 96)
 	block = append(block, 1) // UPDATETYPE_CREATE_OBJECT
 	block = append(block, guid...)
-	block = append(block, 0) // TYPEID_OBJECT
+	block = append(block, objectType)
 
 	// The 21 create-object flags, MSB first: HasEntityPosition, NoBirthAnim, EnablePortals, PlayHoverAnim,
 	// ThisIsYou, MovementUpdate, ...
@@ -1189,11 +1222,18 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 				tp = append(tp, fakeF32(f.teleportAt[2])...)
 				// MoveTeleport::Write: Pos is Position::XYZ, then a separate Facing float (MovementPackets.cpp:813-816).
 				tp = append(tp, fakeF32(0.5)...) // facing, the orientation the mover adopts
-				if f.teleportTransport {
-					// transport bit set, vehicle and preload clear, then an empty transport GUID
-					tp = append(tp, 0xA0)
+				switch {
+				case f.teleportTransport:
+					// transport bit set, vehicle and preload clear, then a real (non-empty) transport GUID: an
+					// empty one is the graveyard's shape and is no transport at all.
+					// The GUID is packed by hand: mask 0x8001 (low byte and type byte), low byte 0x34, type 6
+					// (HighGuid::Transport) in byte 15: 01 80 34 18.
+					tp = append(tp, 0x80, 0x01, 0x80, 0x34, 0x18)
+				case f.teleportEmptyTransport:
+					// the graveyard's shape: the transport bit set, its GUID empty
+					tp = append(tp, 0x80)
 					tp = append(tp, 0, 0)
-				} else {
+				default:
 					tp = append(tp, 0) // three zero bits, flushed
 				}
 				c.writeFrame(fakeSMSGMoveTeleport, tp)
@@ -1695,5 +1735,62 @@ func TestWalkCheckNavmeshFallsBackToTheInstanceParentTile(t *testing.T) {
 	}
 	if report.NavPathKind != "complete" {
 		t.Fatalf("instance route: %s %s", report.NavPathKind, joinLines(steps))
+	}
+}
+
+// TestTeleportWithAnEmptyTransportIsAcked: the server's graveyard teleport sets the transport bit with an *empty*
+// GUID (RepopAtGraveyard passes ObjectGuid::Empty into the Optional, Player.cpp:5254-5259), and a real client
+// treats that as ground. The first release of this round refused it as a transport teleport and the corpse run
+// never started; this pins the fixed shape.
+func TestTeleportWithAnEmptyTransportIsAcked(t *testing.T) {
+	f := newFakeServer(t)
+	f.walk = true
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1030, 2000, 50}
+	f.teleportDuringWalk = true
+	f.teleportEmptyTransport = true
+	f.teleportAt = [3]float32{980, 1990, 50}
+	f.teleportSeq = 78
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	_, err := Enter(t.Context(), Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		Dx:              30,
+		Dy:              0,
+		Settle:          300 * time.Millisecond,
+		WalkPause:       100 * time.Millisecond,
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	})
+	if err == nil || !errors.Is(err, objects.ErrTeleported) {
+		t.Fatalf("the walk was expected to end on the teleport, got %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	if strings.Contains(joinLines(steps), "teleport onto a transport") {
+		t.Fatalf("an empty transport GUID was treated as a transport:\n%s", joinLines(steps))
+	}
+	f.wait(t)
+	f.mu.Lock()
+	acked, pos := f.teleportAcked, f.posAfterAck
+	f.mu.Unlock()
+	if !acked {
+		t.Fatalf("the client never acknowledged the empty-transport teleport; wire log % X", f.instWire)
+	}
+	if !samePoint([4]float32{pos[0], pos[1], pos[2], 0}, [4]float32{980, 1990, 50, 0}) {
+		t.Fatalf("the first movement packet after the ack is at %.2f %.2f %.2f, want 980 1990 50", pos[0], pos[1], pos[2])
 	}
 }

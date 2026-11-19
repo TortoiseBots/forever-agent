@@ -487,7 +487,19 @@ func describesMapContent(core uint32) bool {
 		wire.SMSGMoveTeleport, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
 		wire.SMSGAttackerStateUpdate, wire.SMSGSpellStart, wire.SMSGSpellGo, wire.SMSGCastFailed,
 		wire.SMSGSpellFailure, wire.SMSGSpellFailedOther, wire.SMSGSpellNonMeleeDamage, wire.SMSGAuraUpdate,
-		wire.SMSGPowerUpdate:
+		wire.SMSGPowerUpdate,
+		// The self movement-state packets: the four the death flow handles and answers (run and swim speed,
+		// water and land walk). A copy written for the old map would move the mover, satisfy the release's ghost
+		// speed wait, and make the client answer (CMSG_MOVE_FORCE_*_SPEED_CHANGE_ACK, MovementHandler.cpp:662-733;
+		// CMSG_MOVE_WATER_WALK_ACK, MovementHandler.cpp:777-784) with the new side's movement info. The new map
+		// restates what it needs: the player's own create at the add carries the movement flags, water walking
+		// among them (Map.cpp:1882-1907, BaseEntity.cpp:296; the far teleport keeps that status bit,
+		// Player.cpp:1357-1358 and MovementInfo.h:114-115), the aura-derived states go as
+		// SMSG_MOVE_SET_COMPOUND_STATE (Player.cpp:26654-26695) and the ghost aura is re-sent to the client
+		// (Player.cpp:26699). A speed rate is not re-sent, but neither is it reset by the teleport, so the mover
+		// keeps the last rate it applied; only a change announced after the suspend would be missed, and that is
+		// exactly the old map's copy the gate exists to refuse.
+		wire.SMSGMoveSetRunSpeed, wire.SMSGMoveSetSwimSpeed, wire.SMSGMoveSetWaterWalk, wire.SMSGMoveSetLandWalk:
 		return true
 	}
 	return false

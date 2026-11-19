@@ -16,6 +16,8 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
 | Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
+| Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
+| Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -126,6 +128,32 @@ invite's leader, or the name of an invite the server confirmed) is printed as `u
 not acted on either.
 `--capture-dir DIR` works as it does for chat-check.
 
+`forever-agent forever death-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+settles for `--stay` seconds (default 3 s) and then waits up to `--death-wait` (default 5 min) for the character to
+die: the command never kills it, a server-console command or a mob does. Once dead it prints every step with its time
+and does what a player does: `CMSG_REPOP_REQUEST`, the ghost aura and the graveyard teleport (a graveyard on another
+map is the map-change round's transfer: the client follows it and arrives as a ghost there with its death state
+intact; a dungeon's entrance graveyard revives the character at the teleport, which the server does), the corpse
+location query, a run back to the corpse (straight line, or a navmesh route with `--navmesh DIR` and the instance rule
+`--parent MAP=PARENT[,..]`) at the ghost's own run speed, the announced reclaim delay (a reclaim before it is
+ignored by the server, so the client waits it out), `CMSG_RECLAIM_CORPSE`, and the resurrection. A corpse on another
+map is reported as exactly that ("walk to its entrance"), because this client cannot walk between maps; a corpse the
+server places on a transport is reported as on a transport and is neither run to nor reclaimed, because the answer's
+coordinates are the transport's offsets. The ghost's
+movement changes are acknowledged the way a real client does (`CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK`,
+`..._SWIM_...`, `CMSG_MOVE_WATER_WALK_ACK`), because the server counts them; a resurrection that lands during the
+corpse run stops the walk and ends the flow as a success with no reclaim.
+`--accept-resurrect` waits up to `--resurrect-wait` (default 60 s) for a `SMSG_RESURRECT_REQUEST` and accepts it
+(with no offer it falls back to the release and the corpse run); `--accept-resurrect-from NAME` makes that stricter:
+only an offer from that unit is answered (the default accepts any GUID, because the server decides who may offer).
+An accepted offer follows the server's teleport to the offerer, including a map change. `--spirit-healer` uses the
+spirit healer at the graveyard instead (the minimal gossip interaction the capture shows: talk, the SpiritHealer
+option, select, activate, close), and follows the server's teleport to the corpse's graveyard afterwards if it is on
+another map. A server that revives the character directly is detected from `SMSG_DEATH_RELEASE_LOC`'s map id -1 and
+reported as `revived by the server`. The summary prints the final phase, the corpse, the announced reclaim delay, how
+the character came back, and how many other units the model saw resurrect. `--capture-dir DIR` works as it does for
+chat-check.
+
 `forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)
 goes out as a say line that starts with `.`, and the system lines the server answers with are printed as `cmd-r:`
@@ -145,6 +173,24 @@ subcommand, an ambiguous command, a typed argument the server refused, or the sa
 lines and prints one row per bot (role, class, level, health, power, state, movement, target entry, last order and
 the rest gate); `--quiet` and `--timeout` override the collector's defaults. The typed order/role/master/party/threat
 calls and `WaitRested` live in `internal/forever/command/tbcmd`.
+
+`forever-agent forever addon-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
+--prefix PREFIX` is the add-on message transport (`internal/forever/addonmsg`): it replaces this client's registered
+prefix list (the unregister-all packet, then the full-list registration), optionally sends one `--send TEXT` on
+`--channel` (`party` — the default —, `raid`, `instance`, `guild`, `officer` or `whisper:NAME`), then prints every
+add-on message that arrives for the registered prefix during `--listen` (default 10 s) and logs out. Sending on a
+chat channel is not supported yet: the core looks a channel up by the GUID in the packet, and this client joins no
+channel, so it has none; `channel:NAME` is refused with that message. The server's limits are checked before
+anything is sent: a prefix is 1..16 bytes of valid UTF-8, a text at most 255 bytes (it is not required to be UTF-8:
+the core reads it as bytes), one registration packet holds at most 64 prefixes, and a whisper target is a character
+name. An incoming add-on message is a `SMSG_CHAT` with language `LANG_ADDON`/`LANG_ADDON_LOGGED` and a non-empty
+prefix; only prefixes this client registered reach the caller, the queue is 256 messages (oldest dropped, counted),
+and arrival order per (prefix, sender) is kept. The delivered text is the server's exact bytes; every printed line
+is a bounded display form instead (valid UTF-8 only, no control, line-separator or bidi characters, a tab shown as
+`\t`), at most a fixed number of receive lines are printed and the totals follow at the end.
+`--invite NAME` or `--accept-from NAME` form the two-client party with party-check's invite/accept flow and keep it
+for the whole run (the add-on party proof), leaving it before the logout. Every packet is also written to
+`--capture-dir` when given, as for chat-check.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

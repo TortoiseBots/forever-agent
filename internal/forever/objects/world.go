@@ -50,9 +50,14 @@ type Object struct {
 	AttackedBy wire.GUID
 	InCombat   bool
 	Dead       bool
-	Auras      map[uint16]*Aura
-	Cast       *CastState
-	Cooldowns  map[int32]time.Time
+	// Ghost is true while the unit has the SPELL_AURA_GHOST aura (8326) and is a player: a released spirit still
+	// has 1 health, so Dead stays true while Ghost is (objects/death.go).
+	Ghost bool
+	// ResurrectedAt is the last time a ghost came back (its aura went and its health was above 0).
+	ResurrectedAt time.Time
+	Auras         map[uint16]*Aura
+	Cast          *CastState
+	Cooldowns     map[int32]time.Time
 }
 
 // Position returns the object's position, following the spline when it is moving and now is inside it (linear
@@ -80,19 +85,21 @@ const monsterMoveSlackMs = 500
 
 // World is the GUID-keyed model. One goroutine writes (the socket reader); any number read.
 type World struct {
-	mu          sync.RWMutex
-	mapID       uint32
-	objects     map[wire.GUID]*Object
-	entries     map[int32]string
-	players     map[wire.GUID]string
-	created     int
-	updated     int
-	destroyed   int
-	outOfRange  int
-	orphans     int
-	partial     int
-	unknownMove int
-	unparsed    map[string]int
+	mu         sync.RWMutex
+	mapID      uint32
+	objects    map[wire.GUID]*Object
+	entries    map[int32]string
+	players    map[wire.GUID]string
+	created    int
+	updated    int
+	destroyed  int
+	outOfRange int
+	orphans    int
+	// resurrections counts the units this model saw come back from the ghost state.
+	resurrections int
+	partial       int
+	unknownMove   int
+	unparsed      map[string]int
 	// unparsedDetail keeps the parser's own text for the first block of each unparsed key, so the walk summary
 	// can name the failure without letting the server grow the summary: one string per key, never per block.
 	unparsedDetail map[string]string
@@ -168,6 +175,8 @@ type Counts struct {
 	Partial int
 	// UnknownMoves counts movement packets for a GUID the model does not hold: they never create an object.
 	UnknownMoves int
+	// Resurrections counts units this model saw come back from the ghost state (aura 8326 gone, health above 0).
+	Resurrections int
 	// Unparsed counts skipped values blocks by object type and reason code. Both halves are closed sets, so the
 	// map cannot grow past maxUnparsedKeys however many blocks a server skips.
 	Unparsed map[string]int
@@ -189,6 +198,7 @@ func (w *World) Counts() Counts {
 		Orphans:        w.orphans,
 		Partial:        w.partial,
 		UnknownMoves:   w.unknownMove,
+		Resurrections:  w.resurrections,
 		Unparsed:       make(map[string]int, len(w.unparsed)),
 		UnparsedDetail: make(map[string]string, len(w.unparsedDetail)),
 		Applied:        w.applied,
