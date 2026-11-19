@@ -138,7 +138,21 @@ type Options struct {
 	FBAdd     []string
 	FBOrders  []string
 	FBDismiss string
-	Logf      func(format string, args ...any)
+	// Round A2: forever fb-dungeon. FBDungeon drives the module's dungeon finder: fill the group with `.bot lfg`,
+	// queue FBDungeonName (a dungeon word or "any") with FBDungeonRole as the player's own role, wait for the
+	// module's `inside` and the client's own map change, hand the lead to the tank, watch FBDungeonWatch, then lead
+	// off, leave when FBDungeonLeave is set and dismiss. The four pacing fields are for tests; 0 keeps the run's
+	// own defaults (2 s poll, 3 min form, 3 min entry, 30 s leave).
+	FBDungeon          bool
+	FBDungeonName      string
+	FBDungeonRole      string
+	FBDungeonWatch     time.Duration
+	FBDungeonLeave     bool
+	FBDungeonPoll      time.Duration
+	FBDungeonFormWait  time.Duration
+	FBDungeonEnterWait time.Duration
+	FBDungeonLeaveWait time.Duration
+	Logf               func(format string, args ...any)
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -210,6 +224,8 @@ type Report struct {
 	Addon AddonSummary
 	// Round A1: the bot module run: the probe, the adds, the roster and its source, details, orders, dismiss.
 	FB FBReport
+	// Round A2: the dungeon run: the fill, the queue, the both-signal entry, the lead, the watch, the way out.
+	FBDungeon FBDungeonReport
 
 	// Round 6: the death flow's state and steps.
 	Death DeathReport
@@ -427,6 +443,10 @@ type session struct {
 	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
 	// was sent (a late acknowledgement must not be taken for the next order's).
 	fbHeardWhispers []chat.Line
+	// Round A2: the module's unsolicited EVENT_PUSH frames seen during the finder's requests, kept for the dungeon
+	// watch. The buffer is bounded; fbEventsDropped counts what the bound pushed out.
+	fbEvents        []pbc.Event
+	fbEventsDropped int
 
 	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
 	mapChg  mapChange
@@ -839,6 +859,14 @@ func (s *session) enter(ctx context.Context) error {
 	}
 	if s.opts.FBCheck {
 		err := s.fbCheck(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.FBDungeon {
+		err := s.fbDungeon(ctx)
 		s.summariseChat()
 		if err != nil {
 			return err

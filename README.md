@@ -20,6 +20,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
+| WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -218,6 +219,23 @@ matching that order's own confirmation phrase is taken as its answer; a refusal 
 `stay`. Real players in the client's party receive a party-word order as ordinary chat; the module can also answer
 in system chat after a `sys` request, which this client never sends. `--dismiss NAME|all` (default `all`) logs the
 bots out and waits for the party to drop them.
+
+`forever-agent forever fb-dungeon --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
+[--dungeon NAME] [--role tank|healer|dps] [--watch SECONDS] [--leave=false]` runs a dungeon with the module's bots.
+It probes and fixes the language as fb-check does, says `.bot lfg [ROLE]` and waits until the **party model** lists
+five members (the module's own one-line answer is parsed and printed), queues `--dungeon` (a short word like the
+default `rfc`, a name, or `any`) with `.bot dungeon NAME [ROLE]`, and then polls the module's finder through the
+`LFG_REQ`/`LFG_RESP` protocol pair every 2 s. `LFG_RESP` is `phase(|name|seconds waited|form wait|members|party
+size|can leave)` with phase `idle|forming|entering|leaving|inside`; the run counts the entry as **inside** only when
+the module says `inside` **and** the client's own map change put the character on the instance map (tied to the
+dungeon's map id for the default dungeon table; a map change that never comes is bounded, and neither signal alone is
+taken as proof). It then says `.bot lead on` and prints the module's lead answer: the module expects the player to
+follow the leading tank, so the tank holds when the player falls behind — this client does not walk, so it stays at
+the entrance and reports the tank's own party lines (`waiting for mana`, `waiting for you`). During `--watch`
+(default 600 s) it reports the finder's phase, every bot's hp/mana from the protocol's roster, deaths (a grouped bot
+at 0 % hp), the module's `EVENT_PUSH` events and party chat. It ends with `.bot lead off`, `.bot dungeon leave`
+(unless `--leave=false`), waits for the client's map change out (bounded), and dismisses every bot. An answer whose
+shape this client does not read fails softly, naming the unreadable answer; no state is invented from it.
 `forever-agent forever dungeon-run --plan PLAN.json --party TANK,HEALER,DPS,DPS,DPS --character NAME --dry`
 runs one dungeon's machine with no network: the five-bot party is checked, brought to the portal and into the
 instance, walked along the plan's legs, its packs pulled one at a time and rested between, and the bosses killed; the

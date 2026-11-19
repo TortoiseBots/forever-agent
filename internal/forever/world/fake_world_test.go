@@ -160,6 +160,16 @@ type fakeServer struct {
 	fbWhispers []string
 	fbPBC      []string
 	fbRegs     []string
+	// Round A2: the dungeon run (serveFBDungeon in fake_fb_dungeon_test.go). fbDungeon selects it, fbDungeonCase
+	// the entry/watch/link case; fbRealm is the realm socket the helper needs for the map change, fbdQueued/fbdPolls
+	// follow the finder's state, and fbMapCounter numbers the client's new worlds.
+	fbDungeon     bool
+	fbDungeonCase string
+	fbRealm       *fakeConn
+	fbdQueued     bool
+	fbdPolls      int
+	fbMapCounter  uint32
+	fbdEvents     int
 	// What the fake saw, under mu.
 	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
 	chatPartyText                                          string
@@ -204,6 +214,9 @@ type fakeServer struct {
 	deathMapSc *mapScenario
 	// mapSc, when set, runs the map change scenario of mapchange_fake_test.go instead of the plain stay.
 	mapSc *mapScenario
+	// fbdMapSc is the dungeon run's map scenario: the run keeps its own socket loop, so this one is only the
+	// realm-side world-port bookkeeping and the state the entry/leave helper fills.
+	fbdMapSc *mapScenario
 	// mapID is the map the create block names (and so the map walk-check's navmesh route plans on).
 	mapID uint16
 	// charScreen, when set, takes the realm socket over after SMSG_AUTH_RESPONSE: the character-screen scenario

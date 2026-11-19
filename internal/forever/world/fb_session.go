@@ -323,6 +323,7 @@ func (l fbLink) Request(ctx context.Context, req fbcmd.Request) (fbcmd.Answer, e
 							Text: chat.Sanitise(ev.Name+": "+ev.Detail, 200),
 						}
 					}
+					s.noteFBEvent(ev)
 				}
 				continue
 			}
@@ -857,5 +858,56 @@ func FBCheckSummary(a FBReport) []string {
 	if a.Forged > 0 {
 		out = append(out, fmt.Sprintf("fb-check: %d protocol frame(s) ignored (not this character's whisper)", a.Forged))
 	}
+	return out
+}
+
+// Round A2: the module's pushes for the dungeon watch.
+
+const maxFBEvents = 128
+
+// noteFBEvent keeps one unsolicited EVENT_PUSH for the watch. Past the bound the oldest is dropped and counted, so a
+// peer that floods pushes cannot grow the run's memory.
+func (s *session) noteFBEvent(ev pbc.Event) {
+	if len(s.fbEvents) >= maxFBEvents {
+		copy(s.fbEvents, s.fbEvents[1:])
+		s.fbEvents = s.fbEvents[:maxFBEvents-1]
+		s.fbEventsDropped++
+	}
+	s.fbEvents = append(s.fbEvents, ev)
+}
+
+// Events drains the module's unsolicited pushes seen since the last call: the ones a request's wait already read,
+// and any that arrived between requests and are still in the add-on inbox. It is the optional half of fbcmd's
+// transport, used by the dungeon watch; a frame it cannot read is dropped, never invented into an event.
+func (l fbLink) Events() []pbc.Event {
+	s := l.s
+	if s.addon != nil && s.pbcAsm != nil {
+		for {
+			m, ok := s.addon.Next()
+			if !ok {
+				break
+			}
+			if m.Prefix != pbc.Prefix {
+				continue
+			}
+			part, err := pbc.ParsePart(m.Text)
+			if err != nil {
+				continue
+			}
+			part.Sender = m.Sender
+			res, done, err := s.pbcAsm.Add(part, s.Now())
+			if err != nil || !done {
+				continue
+			}
+			if res.Seq < pbc.FirstServerSeq || res.Type != pbc.TypeEventPush {
+				continue
+			}
+			if ev, err := pbc.ParseEvent(pbc.SplitFields(res.Body)); err == nil {
+				s.noteFBEvent(ev)
+			}
+		}
+	}
+	out := s.fbEvents
+	s.fbEvents = nil
 	return out
 }
