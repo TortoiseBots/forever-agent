@@ -106,6 +106,41 @@ and the module's own 240-byte parts pass 255 once the envelope is added. The rec
 
 ## What was proven live
 
-See the round's report. The live run was made against a box that installs the public package, with world bots off;
-its account and character are test-only and are not named in this repository. The run's transcript is identifier-
-free: the module's own reply text, the bot character names the module created, and the protocol steps.
+A box that installs the public package (world bots off, containers stopped beforehand and stopped again
+afterwards), a fresh test account and a level-1 character made through the agent's character screen. `fb-check` ran
+from the laptop to the box; the realm's advertised build was picked by the agent's normal rule. The transcript
+below is identifier-free: the box's address, the account and character names and the bot's generated name are
+replaced.
+
+```
+fb-check: registered the add-on prefix PBC
+system: WoW Forever Bots by ... (GPL-2.0). .bot add <class> [tank|healer|dps], .bot call, .bot dismiss; all orders: BOT_COMMANDS.md
+fb-check: module: <the line above>
+system: Bot replies: English (your choice). .bot language auto|en|ru changes it.
+fb-check: add warrior/dps: <bot> is on the way.
+system: <bot> joined you: level 1.
+party: 2 member(s), leader <char>
+fb-check: <bot> is in the party (2 member(s))
+fb-check: pbc: roster of 1 bot(s)
+fb-check: roster: <bot> (id 2), level 1 HUMAN WARRIOR, DPS, online, 75hp 0mana, -, idle:always_buff, grouped=1 headless=1 saved=0
+fb-check: detail <bot> (id 2): level 1 HUMAN WARRIOR, role DPS, hp 60/80, mana 0/0, map 0 at -8951.3 -134.9 83.5, zone 12 area 9 indoors=0, spec 72, xp 0/400, last rule idle:always_buff
+fb-check: whisper <bot> "follow": following at 5 yards
+fb-check: whisper <bot> "stay": staying here
+fb-check: dismiss all: Dismissed 1 companion(s).
+whisper: <bot>: See you later!
+party: group destroyed
+fb-check: pbc: ok
+fb-check: 2 whisper order(s), 0 refused, 0 unanswered
+fb-check: 4 protocol frame(s) received
+world logout: SMSG_LOGOUT_RESPONSE (result 0) and SMSG_LOGOUT_COMPLETE
+```
+
+The four protocol frames are the PONG, the roster (one part for one bot) and the two parts of the detail answer. The
+roster's `headless=1` is the module's own mark for a bot session it drives; `grouped=1` proves the server grouped
+the bot before the protocol answered. The roster's 75 % health and the detail's 60/80 are snapshots taken at
+different moments, not a contradiction.
+
+Two display notes. The module's usage text contains `|h` and `|r`; the display sanitiser treats them as the client's
+formatting tokens (a link closer and a colour reset), so `[tank|healer|dps]` prints as `[tankealer|dps]` and
+`auto|en|ru` as `auto|enu`. A real client renders them the same way; the raw line is what the probe matches. The
+message trace itself is unaffected.
