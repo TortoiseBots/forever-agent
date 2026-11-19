@@ -171,6 +171,11 @@ func (l fbLink) Run(ctx context.Context, line string, opts command.Options) (*co
 	if !l.s.fbProbed && strings.TrimSpace(line) != fbProbeLine {
 		return nil, fmt.Errorf("%w: %q was not sent", fbcmd.ErrNotProbed, chat.Sanitise(line, 64))
 	}
+	if l.s.opts.FBDungeon {
+		// The dungeon run prints each command it says: the module's own reply is the only evidence of what it
+		// understood, and a command a build does not know answers with the core's usage block.
+		l.s.opts.logf("fb-dungeon: command: %s", chat.Sanitise(line, 80))
+	}
 	if err := l.s.initFB(); err != nil {
 		return nil, err
 	}

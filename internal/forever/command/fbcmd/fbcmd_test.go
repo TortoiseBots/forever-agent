@@ -624,3 +624,12 @@ func TestLookupDungeon(t *testing.T) {
 		t.Fatal("an unknown word resolved")
 	}
 }
+
+func TestLeadOnABuildWithoutTheCommand(t *testing.T) {
+	f := &fakeTransport{replies: map[string]*command.Reply{".bot lead on": reply(
+		"### USAGE: .bot ...", "Possible subcommands:", "|- bot about", "|- bot add")}}
+	_, err := NewClient(f).Lead(t.Context(), "on")
+	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "does not know .bot lead") {
+		t.Fatalf("err %v", err)
+	}
+}

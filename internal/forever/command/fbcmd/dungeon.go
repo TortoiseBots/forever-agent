@@ -222,6 +222,14 @@ func (c *Client) Lead(ctx context.Context, word string) (LeadResult, error) {
 
 func parseLeadReply(word string, lines []string) (LeadResult, error) {
 	for _, raw := range lines {
+		// A build whose command table predates `.bot lead` answers with the core's usage block instead of a
+		// sentence: name that shape rather than printing "refused" over a list of subcommands.
+		if strings.Contains(raw, "Possible subcommands:") || strings.HasPrefix(strings.TrimSpace(raw), "### USAGE: .bot") {
+			return LeadResult{}, &RefusalError{
+				Err:  ErrRefused,
+				Text: "the module's build does not know .bot lead (it answered the core's .bot usage list)",
+			}
+		}
 		if text, bad := refusedLine(raw, leadRefusals); bad {
 			return LeadResult{}, &RefusalError{Err: ErrRefused, Text: text}
 		}

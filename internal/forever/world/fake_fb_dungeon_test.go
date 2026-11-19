@@ -63,8 +63,9 @@ func (f *fakeServer) sendFBDungeonRoster(c *fakeConn, seq uint32) {
 // sendFBPartyLine sends one party line from a bot, as the module's tank does while it waits.
 func (f *fakeServer) sendFBPartyLine(c *fakeConn, text string) {
 	b := fbdBots[0]
+	// The sender name is empty, as the core's party lines often are: the client must resolve it from the roster.
 	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeParty, chat.LanguageUniversal, b.guid, wire.EmptyGUID,
-		b.name, b.name, "", "", text))
+		"", "", "", "", text))
 }
 
 // sendFBEvent sends one unsolicited EVENT_PUSH from the module.
@@ -359,8 +360,8 @@ func TestFBDungeonHappyPath(t *testing.T) {
 	if d.WatchSamples == 0 || len(d.Deaths) != 1 || d.Deaths[0] != "Clover" {
 		t.Fatalf("watch samples %d deaths %v", d.WatchSamples, d.Deaths)
 	}
-	if len(d.PartyLines) < 2 || !strings.Contains(strings.Join(d.PartyLines, "|"), "waiting for you") ||
-		!strings.Contains(strings.Join(d.PartyLines, "|"), "waiting for mana") {
+	if len(d.PartyLines) < 2 || !strings.Contains(strings.Join(d.PartyLines, "|"), "Bramble: waiting for you") ||
+		!strings.Contains(strings.Join(d.PartyLines, "|"), "Bramble: waiting for mana") {
 		t.Fatalf("party lines %v", d.PartyLines)
 	}
 	if len(d.Events) == 0 || d.Events[0].Name != "login" {

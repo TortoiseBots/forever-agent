@@ -238,10 +238,14 @@ func (s *session) fbDungeon(ctx context.Context) error {
 		if lead.Outside {
 			rep.LeadOnErr = "the module answered that the tank leads once inside: it and the client's map disagree"
 			s.opts.logf("fb-dungeon: %s", rep.LeadOnErr)
+		} else {
+			rep.FollowNote = "the module expects the player to follow the tank; this client stays at the entrance and the tank holds when the player falls behind"
+			s.opts.logf("fb-dungeon: %s", rep.FollowNote)
 		}
 	}
-	rep.FollowNote = "the module expects the player to follow the tank; this client stays at the entrance and the tank holds when the player falls behind"
-	s.opts.logf("fb-dungeon: %s", rep.FollowNote)
+	if rep.LeadOnErr != "" {
+		s.opts.logf("fb-dungeon: watching without the tank lead (the module refused it)")
+	}
 
 	// 5. Watch.
 	if err := s.fbDungeonWatch(ctx, c, rep); err != nil {
@@ -506,7 +510,9 @@ func (s *session) fbDungeonPartyTap(rep *FBDungeonReport) func(chat.Line) {
 		if line.Type != chat.TypeParty {
 			return
 		}
-		text := fmt.Sprintf("%s: %s", chat.SanitiseName(line.SenderName), chat.Sanitise(line.Text, 200))
+		// A party line's sender name is often not on the wire; the helper resolves it from the party roster, the
+		// world model or this character's own GUID, as the chat log's own lines do.
+		text := fmt.Sprintf("%s: %s", s.chatName(line.SenderName, line.SenderGUID), chat.Sanitise(line.Text, 200))
 		if len(rep.PartyLines) < fbDungeonPartyLines {
 			rep.PartyLines = append(rep.PartyLines, text)
 		}
