@@ -21,7 +21,7 @@ var (
 	// ErrLootRefused is a window the server refused (SMSG_LOOT_RESPONSE with Acquired false).
 	ErrLootRefused = errors.New("world: the server refused the loot window")
 	// ErrNoLootWindow is an open the server never answered: a creature with nothing to loot is answered with
-	// silence by HandleLootOpcode (LootHandler.cpp:206-232), so this is its normal refusal.
+	// silence by HandleLootOpcode (LootHandler.cpp:213-259), so this is its normal refusal.
 	ErrNoLootWindow = errors.New("world: the server sent no loot window")
 )
 
@@ -37,7 +37,7 @@ func (e *LootRefusal) Error() string {
 func (e *LootRefusal) Unwrap() error { return ErrLootRefused }
 
 // Wait budgets. The window and its roll starts follow the open in the same server tick (Player::SendLoot sends the
-// response, then Loot::OnLootOpened starts the rolls, Loot.cpp:10019-10046 and :858-903); the answers to a take or a
+// response, then Loot::OnLootOpened starts the rolls, Loot.cpp:10019-10046 and :857-905); the answers to a take or a
 // release are immediate; the roll's own result arrives when it ends, which the start's RollTime bounds.
 const (
 	lootWindowWait    = 4 * time.Second
@@ -301,7 +301,7 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 	s.loot.reset()
 
 	// The window is answered for the owner the server itself names (the creature or the game object), never for
-	// whatever GUID the client guessed at (DoLootRelease/Loot::Owner, LootHandler.cpp:262-266).
+	// whatever GUID the client guessed at (DoLootRelease/Loot::Owner, LootHandler.cpp:269-275).
 	found := func() bool {
 		return s.loot.window != nil || s.loot.refusal != nil ||
 			stateChangedFrom(before, seen, s.gameObjectNow(target.GUID))

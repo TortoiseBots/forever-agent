@@ -72,7 +72,7 @@ func SlotName(s uint8) string {
 	return fmt.Sprintf("slot %d", s)
 }
 
-// The votes a client may send in CMSG_LOOT_ROLL (RollType, Loot.h:53-61) and the bits of a roll start's ValidRolls
+// The votes a client may send in CMSG_LOOT_ROLL (RollType, Loot.h:54-61) and the bits of a roll start's ValidRolls
 // mask (RollMask, Loot.h:74-85). A vote whose bit is clear would be refused by the server, so the client checks it.
 const (
 	RollPass         uint8 = 0

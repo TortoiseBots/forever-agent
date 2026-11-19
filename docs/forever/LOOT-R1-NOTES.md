@@ -81,8 +81,8 @@ the `uint8` loot method and the `int32` dungeon encounter.
 
 The valid-vote mask is `RollMask` (`Loot.h:74-85`): pass 0x01, need 0x02, greed 0x04, disenchant 0x08, transmogrify
 0x10. `LootRoll::TryToStart` clears need for an item that can only be rolled greed and always clears disenchant
-unless the group's best enchanter has the skill (`Loot.cpp:500-511`); `SendStartRoll` also clears need for a
-need-before-greed roll the player cannot use the item in (`:296-310`). A vote outside the mask would be refused by
+unless the group's best enchanter has the skill (`Loot.cpp:501-506`); `SendStartRoll` also clears need for a
+need-before-greed roll the player cannot use the item in (`:298-300`). A vote outside the mask would be refused by
 the server, so the client checks the mask itself and stays silent instead (the command logs why). **The client never
 elects need**: `--roll` names one vote for the run, and with no `--roll` no vote is sent at all.
 
@@ -99,7 +99,7 @@ The answers:
 * `SMSG_LOOT_ROLLS_COMPLETE` (`LootPackets.cpp:247-254`): loot, list id, encounter. This core never sends it (no
   caller in `src/server/game`), but the parser accepts it as a roll's end.
 
-`LootRoll::Finish` (`Loot.cpp:684-735`) sends the winner (or all-passed) at the end, and `UpdateRoll` (`:568-578`)
+`LootRoll::Finish` (`Loot.cpp:684-737`) sends the winner (or all-passed) at the end, and `UpdateRoll` (`:568-578`)
 ends a roll when every player voted or its time ran out, so the command waits for the start's own time plus three
 seconds and reports a roll that never ended as exactly that.
 
@@ -107,10 +107,10 @@ seconds and reports a roll that never ended as exactly that.
 
 * `CMSG_LOOT_UNIT`: one packed GUID, the creature (`LootPackets.cpp:48-51`). The handler refuses a target that is
   not a creature or is out of the 30-yard AE-loot distance, and answers a corpse with nothing to loot with
-  **silence** (`LootHandler.cpp:206-232`).
+  **silence** (`LootHandler.cpp:213-259`).
 * `CMSG_LOOT_ITEM` (`LootPackets.cpp:79-90`): a `uint32` count, then per request the **loot** GUID and the list id,
   then one `IsSoftInteract` bit. The core looks the GUID up in the player's open loot view, which is keyed by the
-  loot object's GUID (`LootHandler.cpp:73-96`).
+  loot object's GUID (`LootHandler.cpp:77-104`).
 * `CMSG_LOOT_MONEY`: one bit (`LootPackets.cpp:113-116`).
 * `CMSG_LOOT_RELEASE`: the **owner** GUID (`LootPackets.cpp:136-139`), because `GetLootByWorldObjectGUID` compares
   each open loot's owner (`Player.cpp:9927-9934`).
@@ -127,7 +127,7 @@ Doors and buttons (`GAMEOBJECT_TYPE_DOOR`, `BUTTON`) go through `UseDoorOrButton
 `SwitchDoorOrButton` sets `GO_FLAG_IN_USE` and flips the state — ready (1, closed) to active (0, open) and back
 (`:2677-2688`); `SetLootState` does not touch the state field for a door. `SetGoState` writes
 `GameObjectData::State` (`:4112-4122`), which travels to nearby players as a values update; the client's own state
-report comes from the object model the objects round already decodes (classic bit 17, `UpdateFields.cpp:7601-7612`).
+report comes from the object model the objects round already decodes (classic bit 17, `UpdateFields.cpp:7581-7585`).
 
 A chest (`GAMEOBJECT_TYPE_CHEST`) builds or reuses its loot, sets `GO_ACTIVATED` and sends the window
 (`GameObject.cpp:2740-2872`); its state stays ready while it is open, so the window, not the state, is the answer.
@@ -214,7 +214,7 @@ use, print state and flags after the update, release a window it opened without 
 ## Live steps (not run in this round)
 
 The server's own log lines are the oracle: `Loot::LogTable` prints one `[loot_table]` line when a window is first
-opened and `Loot::LogGiven` one `[loot_given]` line per item (`Loot.cpp:830-868`), both on the `playerbot.v2`
+opened and `Loot::LogGiven` one `[loot_given]` line per item (`Loot.cpp:843-868`), both on the `playerbot.v2`
 logger, with the source's entry, the map, the method, the gold and the items, then the receiver and the item.
 
 1. **A corpse.** With the character in a starting zone, find a low-level hostile creature's entry (the object model
