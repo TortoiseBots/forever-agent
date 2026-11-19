@@ -77,6 +77,7 @@ type CombatState struct {
 	AttackedBy wire.GUID
 	InCombat   bool
 	Dead       bool
+	Ghost      bool
 	Health     int64
 	MaxHealth  int64
 	Power      int32
@@ -148,6 +149,10 @@ func (w *World) ApplyAuraUpdate(u *combat.AuraUpdate, now time.Time) {
 			a.ExpiresAt = now.Add(a.Remaining)
 		}
 		auras[info.Slot] = a
+	}
+	// The ghost aura is the unit-level death signal round 6 keys on (Player.cpp:4688, :4767).
+	if applyGhostLocked(o, now) {
+		w.resurrections++
 	}
 }
 
@@ -344,6 +349,7 @@ func (w *World) Combat(guid wire.GUID) (CombatState, bool) {
 		AttackedBy: o.AttackedBy,
 		InCombat:   o.InCombat,
 		Dead:       o.Dead,
+		Ghost:      o.Ghost,
 		Health:     o.Info.Health,
 		MaxHealth:  o.Info.MaxHealth,
 		Power:      power,
@@ -401,6 +407,11 @@ func applyDeathLocked(o *Object) {
 		return
 	}
 	if o.Info.Health <= 0 && o.Info.MaxHealth > 0 {
+		o.Dead = true
+		return
+	}
+	if o.Ghost {
+		// A released spirit has 1 health (Player.cpp:4714-4715): the aura, not health, says it is still dead.
 		o.Dead = true
 		return
 	}

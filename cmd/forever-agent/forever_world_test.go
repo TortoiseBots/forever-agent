@@ -36,3 +36,14 @@ func TestWorldCheckNeedsPassword(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 }
+
+// TestDeathCheckAcceptResurrectFromNeedsAcceptResurrect: the stricter offer rule is a form of --accept-resurrect,
+// so naming a unit without it is a usage error before the network.
+func TestDeathCheckAcceptResurrectFromNeedsAcceptResurrect(t *testing.T) {
+	t.Setenv("FOREVER_PASSWORD", "x")
+	base := []string{"forever", "death-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem",
+		"--account", "a", "--character", "C"}
+	if code, _, _ := runCLI(append(base, "--accept-resurrect-from", "Someone")...); code != exitUsage {
+		t.Fatalf("code %d, want %d", code, exitUsage)
+	}
+}

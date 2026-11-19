@@ -561,3 +561,41 @@ func TestMoverWalkPathCancelledMidWalk(t *testing.T) {
 		t.Fatalf("the stop is at %.2f %.2f, not on the first leg", m.X, m.Y)
 	}
 }
+
+// TestCancelledWalkStopsImmediately: a walk whose context is cancelled while it waits sends its stop at once and no
+// movement packet after it. That is how a corpse run ends when the character comes back alive during it.
+func TestCancelledWalkStopsImmediately(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var guid wire.GUID
+	guid.Low = 0x2211
+	guid.High = 0x0A44330000000000
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		GUID:       guid,
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000,
+		Y:          2000,
+		Z:          50,
+		RunSpeed:   7,
+		Flags:      FlagTouchingGround,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sender.onWait = func(time.Time) { cancel() }
+	if err := m.MoveTo(ctx, 1000, 2100, 50); !errors.Is(err, context.Canceled) {
+		t.Fatalf("MoveTo = %v, want context.Canceled", err)
+	}
+	if len(sender.sent) == 0 {
+		t.Fatal("the walk sent nothing")
+	}
+	last := sender.sent[len(sender.sent)-1]
+	if last.core != wire.CMSGMoveStop {
+		t.Fatalf("the last packet is %s, not the stop", wire.ClientName(last.core))
+	}
+	for _, p := range sender.sent {
+		if p.core == wire.CMSGMoveHeartbeat {
+			t.Fatal("a heartbeat was sent after the cancellation")
+		}
+	}
+}

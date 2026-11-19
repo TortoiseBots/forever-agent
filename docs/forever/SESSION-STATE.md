@@ -30,6 +30,7 @@ guard their own accessors, and the only caller is the session goroutine.
 | `session.cmdFeed` | `cmdLink.Pump` sets it before its loop and clears it after (session goroutine) | `handleChat` / `addNotice` (`feedCommand`) on the same goroutine | single owner: set, called and cleared on the session goroutine while one command runs; `command.Session` serialises the runs |
 | `session.fight`, `known`, `castSerial`, `parseErrorLogged` | handlers and the fight (session goroutine) | same | single owner |
 | `session.fightSender` | the tests, before `Enter` enters the world | `transport` (session goroutine) | set before the run starts |
+| `session.death` (`deathWatch`) | `handleDeath` and the death flow (session goroutine) | the same | single owner; `observeSelf` runs on that goroutine |
 | `report.Captured`, `report.Chat`, `report.Party`, the rest of `Report` | session goroutine | session goroutine; `cmd` after `Enter` returns | single owner |
 | `worldconn.conn.recvSeq`, `crypt`, `inflater` | the socket's receiving reader (the handshake that sets them runs on the session goroutine before `startPump`) | same | single owner |
 | `worldconn.conn.handshakeNames` | the handshake only, frozen by `handshakeDone` before `startPump` | `HandshakeNames` (session goroutine) | written before any reader exists |

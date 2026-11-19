@@ -47,6 +47,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverAddonCheckCmd(ctx, args[1:], stdout, stderr)
 	case "fight-check":
 		return foreverFightCheckCmd(ctx, args[1:], stdout, stderr)
+	case "death-check":
+		return foreverDeathCheckCmd(ctx, args[1:], stdout, stderr)
 	case "map-check":
 		return foreverMapCheckCmd(ctx, args[1:], stdout, stderr)
 	case "char-create":

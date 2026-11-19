@@ -39,8 +39,23 @@ const (
 	CMSGMoveHeartbeat          uint32 = 0x41002E
 	CMSGMoveSetFacingHeartbeat uint32 = 0x41007F
 	CMSGMoveTeleportAck        uint32 = 0x410016
-	CMSGQueryPlayerNames       uint32 = 0x440010
-	CMSGQueryCreature          uint32 = 0x3D0141
+	// The acknowledgements a real client sends for a movement change the server pushed (MovementHandler.cpp:662-733
+	// and :777-784): the speed changes the release gives the ghost, and its water walk.
+	CMSGMoveForceRunSpeedChangeAck  uint32 = 0x410029
+	CMSGMoveForceSwimSpeedChangeAck uint32 = 0x41002B
+	CMSGMoveWaterWalkAck            uint32 = 0x41003B
+	// The death flow's client packets (Opcodes.h:252, 413, 777-778, 837, 846, 891, 981).
+	CMSGRepopRequest         uint32 = 0x3E00C8
+	CMSGReclaimCorpse        uint32 = 0x3E0076
+	CMSGResurrectResponse    uint32 = 0x4300AF
+	CMSGQueryCorpseLocation  uint32 = 0x43008C
+	CMSGQueryCorpseTransport uint32 = 0x43008D
+	CMSGTalkToGossip         uint32 = 0x3E0027
+	CMSGGossipSelectOption   uint32 = 0x3E0029
+	CMSGSpiritHealerActivate uint32 = 0x3E0045
+	CMSGCloseInteraction     uint32 = 0x3E0028
+	CMSGQueryPlayerNames     uint32 = 0x440010
+	CMSGQueryCreature        uint32 = 0x3D0141
 
 	// The combat the client sends (Opcodes.h:66-67, 168-179, 954).
 	CMSGSetSelection uint32 = 0x3E00CA
@@ -142,6 +157,19 @@ const (
 	SMSGSpellDelayed         uint32 = 0x670032
 	SMSGLogXPGain            uint32 = 0x450190
 	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	// The rest of the death flow (Opcodes.h:27, 228, 1948-1976, 377, 430, 1318): the graveyard, the corpse, a
+	// resurrection offer, the spirit healer's menu and the movement state a ghost is given.
+	SMSGResurrectRequest     uint32 = 0x450012
+	SMSGCorpseLocation       uint32 = 0x4500F7
+	SMSGCorpseTransportQuery uint32 = 0x4501BE
+	SMSGCorpseReclaimDelay   uint32 = 0x4501F4
+	SMSGPreRessurect         uint32 = 0x450211
+	SMSGStandStateUpdate     uint32 = 0x4501C8
+	SMSGGossipMessage        uint32 = 0x650018
+	SMSGMoveSetRunSpeed      uint32 = 0x5E0020
+	SMSGMoveSetSwimSpeed     uint32 = 0x5E0022
+	SMSGMoveSetWaterWalk     uint32 = 0x5E002B
+	SMSGMoveSetLandWalk      uint32 = 0x5E002E
 	SMSGSendKnownSpells      uint32 = 0x670019
 	SMSGLevelUpInfo          uint32 = 0x450194
 	SMSGSpellExecuteLog      uint32 = 0x670033
@@ -175,28 +203,31 @@ var clientNames = map[uint32]string{
 	CMSGTimeSyncResponse:        "CMSG_TIME_SYNC_RESPONSE",
 	CMSGLogoutRequest:           "CMSG_LOGOUT_REQUEST",
 
-	CMSGMoveStartForward:       "CMSG_MOVE_START_FORWARD",
-	CMSGMoveStartBackward:      "CMSG_MOVE_START_BACKWARD",
-	CMSGMoveStop:               "CMSG_MOVE_STOP",
-	CMSGMoveStartStrafeLeft:    "CMSG_MOVE_START_STRAFE_LEFT",
-	CMSGMoveStopStrafe:         "CMSG_MOVE_STOP_STRAFE",
-	CMSGMoveJump:               "CMSG_MOVE_JUMP",
-	CMSGMoveStartTurnLeft:      "CMSG_MOVE_START_TURN_LEFT",
-	CMSGMoveStopTurn:           "CMSG_MOVE_STOP_TURN",
-	CMSGMoveSetRunMode:         "CMSG_MOVE_SET_RUN_MODE",
-	CMSGMoveSetWalkMode:        "CMSG_MOVE_SET_WALK_MODE",
-	CMSGMoveFallLand:           "CMSG_MOVE_FALL_LAND",
-	CMSGMoveStartSwim:          "CMSG_MOVE_START_SWIM",
-	CMSGMoveStopSwim:           "CMSG_MOVE_STOP_SWIM",
-	CMSGMoveSetFacing:          "CMSG_MOVE_SET_FACING",
-	CMSGMoveHeartbeat:          "CMSG_MOVE_HEARTBEAT",
-	CMSGMoveSetFacingHeartbeat: "CMSG_MOVE_SET_FACING_HEARTBEAT",
-	CMSGMoveTeleportAck:        "CMSG_MOVE_TELEPORT_ACK",
-	CMSGQueryPlayerNames:       "CMSG_QUERY_PLAYER_NAMES",
-	CMSGQueryCreature:          "CMSG_QUERY_CREATURE",
-	CMSGSuspendTokenResponse:   "CMSG_SUSPEND_TOKEN_RESPONSE",
-	CMSGWorldPortResponse:      "CMSG_WORLD_PORT_RESPONSE",
-	CMSGAreaTrigger:            "CMSG_AREA_TRIGGER",
+	CMSGMoveStartForward:            "CMSG_MOVE_START_FORWARD",
+	CMSGMoveStartBackward:           "CMSG_MOVE_START_BACKWARD",
+	CMSGMoveStop:                    "CMSG_MOVE_STOP",
+	CMSGMoveStartStrafeLeft:         "CMSG_MOVE_START_STRAFE_LEFT",
+	CMSGMoveStopStrafe:              "CMSG_MOVE_STOP_STRAFE",
+	CMSGMoveJump:                    "CMSG_MOVE_JUMP",
+	CMSGMoveStartTurnLeft:           "CMSG_MOVE_START_TURN_LEFT",
+	CMSGMoveStopTurn:                "CMSG_MOVE_STOP_TURN",
+	CMSGMoveSetRunMode:              "CMSG_MOVE_SET_RUN_MODE",
+	CMSGMoveSetWalkMode:             "CMSG_MOVE_SET_WALK_MODE",
+	CMSGMoveFallLand:                "CMSG_MOVE_FALL_LAND",
+	CMSGMoveStartSwim:               "CMSG_MOVE_START_SWIM",
+	CMSGMoveStopSwim:                "CMSG_MOVE_STOP_SWIM",
+	CMSGMoveSetFacing:               "CMSG_MOVE_SET_FACING",
+	CMSGMoveHeartbeat:               "CMSG_MOVE_HEARTBEAT",
+	CMSGMoveSetFacingHeartbeat:      "CMSG_MOVE_SET_FACING_HEARTBEAT",
+	CMSGMoveTeleportAck:             "CMSG_MOVE_TELEPORT_ACK",
+	CMSGMoveForceRunSpeedChangeAck:  "CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK",
+	CMSGMoveForceSwimSpeedChangeAck: "CMSG_MOVE_FORCE_SWIM_SPEED_CHANGE_ACK",
+	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
+	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
+	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
+	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
+	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",
+	CMSGAreaTrigger:                 "CMSG_AREA_TRIGGER",
 
 	CMSGChatMessageSay:                 "CMSG_CHAT_MESSAGE_SAY",
 	CMSGChatMessageYell:                "CMSG_CHAT_MESSAGE_YELL",

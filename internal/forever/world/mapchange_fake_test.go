@@ -322,7 +322,12 @@ func (f *fakeServer) sendTransferAborted(realm *fakeConn, sc *mapScenario) {
 // serveRealmMapCase answers one client packet of a map change on the realm socket; it reports whether it consumed
 // the opcode.
 func (f *fakeServer) serveRealmMapCase(c *fakeConn, wireNo uint32, payload []byte) bool {
-	if f.mapSc == nil {
+	sc := f.mapSc
+	if sc == nil {
+		// The death flow's far release answers the same two realm-side packets; its scenario is the same shape.
+		sc = f.deathMapSc
+	}
+	if sc == nil {
 		return false
 	}
 	switch wireNo {
@@ -331,20 +336,20 @@ func (f *fakeServer) serveRealmMapCase(c *fakeConn, wireNo uint32, payload []byt
 			f.failf("map change: CMSG_LOADING_SCREEN_NOTIFY = % X", payload)
 			return true
 		}
-		f.mapSc.mu.Lock()
-		f.mapSc.loadingScreen = int32(binary.LittleEndian.Uint32(payload))
-		f.mapSc.mu.Unlock()
+		sc.mu.Lock()
+		sc.loadingScreen = int32(binary.LittleEndian.Uint32(payload))
+		sc.mu.Unlock()
 	case fakeCMSGWorldPortResponse:
 		if len(payload) != 0 {
 			f.failf("map change: CMSG_WORLD_PORT_RESPONSE carries % X, want nothing", payload)
 			return true
 		}
-		f.mapSc.mu.Lock()
-		seen := f.mapSc.worldPortSeen
-		f.mapSc.worldPortSeen = true
-		f.mapSc.mu.Unlock()
+		sc.mu.Lock()
+		seen := sc.worldPortSeen
+		sc.worldPortSeen = true
+		sc.mu.Unlock()
 		if !seen {
-			close(f.mapSc.worldPortCh)
+			close(sc.worldPortCh)
 		}
 	default:
 		return false

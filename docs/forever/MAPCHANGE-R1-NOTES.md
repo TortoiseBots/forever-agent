@@ -396,3 +396,44 @@ answered "No online players".
   pending. None was observed live yet: it needs two maps that share a cosmetic parent (`Player.cpp:1437-1444`).
 * The server may send the new world's creates before or after the instance info, in either socket; the client applies
   them in arrival order and does not wait for any particular one.
+
+## Fix round 4 (2026-11-19): the self movement-state packets are map content
+
+The gate's list (`describesMapContent`) held objects, movement relays, combat and auras but not the four self
+movement-state packets the death flow handles and answers: `SMSG_MOVE_SET_RUN_SPEED`,
+`SMSG_MOVE_SET_SWIM_SPEED`, `SMSG_MOVE_SET_WATER_WALK` and `SMSG_MOVE_SET_LAND_WALK`. A copy the server wrote for
+the old map could therefore be read between the suspend answer and the resume, mutate the mover (its run speed, or
+the water-walking status bit), satisfy the release's ghost-speed wait, and make the client answer with the new side's
+movement info — `CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK` / `..._SWIM_...` (`HandleForceSpeedChangeAck`,
+`MovementHandler.cpp:662-733`) or `CMSG_MOVE_WATER_WALK_ACK` (`MovementHandler.cpp:777-784`). `EndMapChange` keeps
+the status bits, so a stale water-walk would also survive into the new map.
+
+They are now gated like the rest: read before the resume they are dropped at it; read after it they are applied in
+instance-stream order after the clear, exactly as every other held packet. The other movement-state packets in the
+dispatch table are not in the set: `SMSG_MOVE_ROOT`/`UNROOT` is handled without an acknowledgement
+(`OBJECTS-R1-NOTES.md`), and `SMSG_MOVE_SET_ACTIVE_MOVER` only names the mover and is answered with
+`CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE`; neither carries a position or a speed for the old map.
+
+What the server restates for the new map, so dropping the old copy loses nothing that is still true:
+
+* Water walking and the other status flags: the player's own create block is sent at every add to map
+  (`Map::SendInitSelf`, `Map.cpp:1882-1907`), and its movement block writes the unit's movement flags
+  (`BaseEntity.cpp:296`). The far teleport keeps exactly the status mask, which includes water walking
+  (`Player.cpp:1357-1358`, `MOVEMENTFLAG_MASK_HAS_PLAYER_STATUS_OPCODE`, `MovementInfo.h:114-115`).
+* Aura-derived states: `SendInitialPacketsAfterAddToMap` sends them as `SMSG_MOVE_SET_COMPOUND_STATE`, water walking
+  among them (`Player.cpp:26654-26695`), and re-sends every visible aura to the character
+  (`SendAurasForTarget(this)`, `Player.cpp:26699`; the writer at `:27078-27094`). The ghost's aura 8326, with its run
+  and swim speed effects, is therefore re-applied on the new map.
+* Speeds: no `SMSG_MOVE_SET_RUN_SPEED`/`_SWIM_SPEED` is re-sent at a worldport — `Unit::SetSpeedRate` writes only on
+  a rate change (`Unit.cpp:9326-9332`), and neither initial-packets function sends one. The teleport does not reset
+  the rate either (only the movement flags are masked, `Player.cpp:1357-1358`), and `EndMapChange` keeps the rate the
+  mover last applied, so a rate that was already in effect stays in effect. Only a change the old map announced
+  after the suspend is lost, and that is the copy the boundary exists to refuse.
+
+### Tests
+
+`TestMovementStatePacketsAreGatedMapContent` (package `world`, fabricated events) injects each of the four between
+the suspend answer and the resume and checks, for each: it is held, the mover's run speed and flags do not change,
+the release's ghost setup is not completed, and no acknowledgement is sent; after the new world and the resume one
+stale packet is counted and none of that changed either. On the round-3 code the same test fails at the first
+assertion (nothing is held).

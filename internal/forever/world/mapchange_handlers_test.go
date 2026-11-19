@@ -558,6 +558,72 @@ func TestPendingDoesNotOverwriteAnUnreportedRow(t *testing.T) {
 	}
 }
 
+// TestMovementStatePacketsAreGatedMapContent: the self movement-state packets the death flow handles and answers —
+// run speed, swim speed, water walk, land walk — belong to the map the client stands on. A copy read between the
+// suspend answer and the resume is the old map's: it is held, then dropped at the resume, so it moves no mover,
+// completes no ghost setup, and produces no acknowledgement. (The new map restates what it needs; see
+// describesMapContent.)
+func TestMovementStatePacketsAreGatedMapContent(t *testing.T) {
+	cases := []struct {
+		name  string
+		core  uint32
+		ack   uint32
+		build func(wire.GUID) []byte
+	}{
+		{"run speed", wire.SMSGMoveSetRunSpeed, wire.CMSGMoveForceRunSpeedChangeAck,
+			func(g wire.GUID) []byte { return buildMoveSpeed(g, 1, 8.75) }},
+		{"swim speed", wire.SMSGMoveSetSwimSpeed, wire.CMSGMoveForceSwimSpeedChangeAck,
+			func(g wire.GUID) []byte { return buildMoveSpeed(g, 2, 5.9) }},
+		{"water walk", wire.SMSGMoveSetWaterWalk, wire.CMSGMoveWaterWalkAck,
+			func(g wire.GUID) []byte { return buildMoveSetFlag(g, 3) }},
+		{"land walk", wire.SMSGMoveSetLandWalk, wire.CMSGMoveWaterWalkAck,
+			func(g wire.GUID) []byte { return buildMoveSetFlag(g, 4) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, rec := newTransferSession()
+			mustFeed(t, s, sideRealm, wire.SMSGTransferPending, pendingPayload(389, 1010, 2020, 55))
+			mustFeed(t, s, sideInstance, wire.SMSGSuspendToken, tokenPayload(9, 1))
+			if !s.mapChg.holdMapContent {
+				t.Fatal("the suspend token did not close the gate")
+			}
+			runSpeed, flags := s.mover.RunSpeed, s.mover.Flags
+			if err := feed(t, s, sideInstance, c.core, c.build(s.self)); err != nil {
+				t.Fatalf("%s: %v", wire.ServerName(c.core), err)
+			}
+			if got := len(s.mapChg.held); got != 1 {
+				t.Fatalf("%d packet(s) held, want the stale movement-state packet", got)
+			}
+			if s.mover.RunSpeed != runSpeed || s.mover.Flags != flags {
+				t.Fatalf("a held packet moved the mover: speed %.2f flags %#x", s.mover.RunSpeed, s.mover.Flags)
+			}
+			if s.deathState().ghostSpeed {
+				t.Fatal("a held packet completed the ghost setup")
+			}
+			if got := rec.count(c.ack); got != 0 {
+				t.Fatalf("%d acknowledgement(s) before the resume, want none", got)
+			}
+			mustFeed(t, s, sideRealm, wire.SMSGNewWorld, newWorldPayload(389, 1010, 2020, 55, 0.5, objects.NewWorldReasonNormal, 1))
+			mustFeed(t, s, sideInstance, wire.SMSGResumeToken, tokenPayload(9, 1))
+			if got := s.report.StaleMapPackets; got != 1 {
+				t.Fatalf("%d stale packet(s) dropped, want 1", got)
+			}
+			if s.mover.RunSpeed != runSpeed {
+				t.Fatalf("the dropped packet changed the run speed to %.2f", s.mover.RunSpeed)
+			}
+			if s.mover.Flags&objects.FlagWaterwalking != 0 {
+				t.Fatalf("the dropped packet left water walking behind: %#x", s.mover.Flags)
+			}
+			if s.deathState().ghostSpeed {
+				t.Fatal("the dropped packet completed the ghost setup")
+			}
+			if got := rec.count(c.ack); got != 0 {
+				t.Fatalf("%d acknowledgement(s) after the resume, want none", got)
+			}
+		})
+	}
+}
+
 // TestHeldMapPacketsAreBounded: a peer that floods map content on the instance connection while the gate is closed
 // grows neither the held queue nor the log. The first maxHeldMapPackets are kept for the marker; the rest are
 // dropped where they arrive and counted, and the line naming the count is written at most once a second.
