@@ -547,11 +547,15 @@ func fbDeadlineOptions(f *fakeServer, deadline time.Duration) Options {
 func cleanupSays(t *testing.T, f *fakeServer, want ...string) {
 	t.Helper()
 	f.mu.Lock()
-	says := strings.Join(f.fbSays, "\n")
+	said := strings.Split(strings.Join(f.fbSays, "\n"), "\n")
 	f.mu.Unlock()
+	saw := make(map[string]bool, len(said))
+	for _, line := range said {
+		saw[line] = true
+	}
 	for _, w := range want {
-		if !strings.Contains(says, w+"\n") && !strings.HasSuffix(says, w) {
-			t.Fatalf("%q did not go out after the run's window ended:\n%s", w, says)
+		if !saw[w] {
+			t.Fatalf("%q did not go out after the run's window ended:\n%s", w, strings.Join(said, "\n"))
 		}
 	}
 }
@@ -629,9 +633,7 @@ func TestFBDungeonDeadlineInProtocolRequest(t *testing.T) {
 func TestFBDungeonLinkDeathCleanup(t *testing.T) {
 	f := fbdNewServer(t)
 	f.fbDungeonCase = "linkDeathWatch"
-	opts := fbDungeonOptions(f)
-	opts.Logf = nil
-	report, err := runFBDungeonTests(t, f, opts)
+	report, err := runFBDungeonTests(t, f, fbDungeonOptions(f))
 	if !errors.Is(err, ErrLinkLost) {
 		t.Fatalf("err %v, want ErrLinkLost", err)
 	}
