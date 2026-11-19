@@ -106,6 +106,8 @@ func (s *session) handleChat(p worldconn.Packet) error {
 		if err != nil {
 			return fmt.Errorf("world: SMSG_CHAT: %w", err)
 		}
+		// A running command sees the raw line through its own bound; the log keeps the display-sized copy.
+		s.feedCommand(line)
 		chat.SanitiseLine(&line)
 		s.chat.Add(line)
 		s.opts.logf("chat: %s", s.chatLineText(line))
@@ -171,6 +173,7 @@ func (s *session) handleChat(p worldconn.Packet) error {
 // addNotice records and prints one system line.
 func (s *session) addNotice(text string) {
 	s.report.Chat.Notices++
+	s.feedCommand(chat.Line{Type: chat.TypeSystem, Text: text})
 	s.chat.Add(chat.Line{Type: chat.TypeSystem, Text: text})
 	s.opts.logf("chat: system: %s", text)
 }

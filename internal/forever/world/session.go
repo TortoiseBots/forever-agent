@@ -84,7 +84,15 @@ type Options struct {
 	PartyStay time.Duration
 	// Watch prints the world model's position of one player once a second.
 	Watch string
-	Logf  func(format string, args ...any)
+	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
+	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
+	// collector's defaults for every command of the run.
+	CommandCheck   bool
+	CommandLines   []string
+	CommandTBState string
+	CommandQuiet   time.Duration
+	CommandTimeout time.Duration
+	Logf           func(format string, args ...any)
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -151,6 +159,11 @@ type Report struct {
 	// Round 5: the chat log's summary and the party model at the end of the run.
 	Chat  ChatSummary
 	Party PartySnapshot
+
+	// Round A6: the command channel's runs, whether the GM guard confirmed, and the typed state table.
+	Commands    []CommandRun
+	GMConfirmed bool
+	TBState     *TBStateTable
 }
 
 // ObjectSummary counts the world model by object type, plus the update statistics.
@@ -298,6 +311,14 @@ type session struct {
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
 	party *party.State
+	// Round A6: the command run's feed, set by cmdLink.Pump on the session goroutine while a command runs. The
+	// same goroutine calls it from handleChat/addNotice, so no lock is needed.
+	cmdFeed func(chat.Line)
+	// Round A6: the GM guard. It starts unconfirmed in every session; confirmGM proves the permission with the
+	// non-mutating probe. gmStop is set by the first self say of a command text (a late echo included): the
+	// account's commands are being said aloud, so no further line may be sent.
+	gmConfirmed bool
+	gmStop      error
 
 	// Round 5 debug capture (Options.CaptureDir): one run directory per link, opened on the first packet.
 	captureRun *captureRun
@@ -675,6 +696,14 @@ func (s *session) enter(ctx context.Context) error {
 	if s.opts.PartyCheck {
 		err := s.partyCheck(ctx)
 		s.summariseParty()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.CommandCheck {
+		err := s.commandCheck(ctx)
+		s.summariseChat()
 		if err != nil {
 			return err
 		}

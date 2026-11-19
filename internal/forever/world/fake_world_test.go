@@ -137,6 +137,9 @@ type fakeServer struct {
 	partyInvalid  string
 	// partyNoAccept sends an invite whose CanAccept is false: the client must refuse to answer it.
 	partyNoAccept bool
+	// Round A6: the command scenario (serveCommand in command_fake_test.go), and the say lines it saw.
+	command   commandMode
+	instChats []string
 	// What the fake saw, under mu.
 	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
 	chatPartyText                                          string
@@ -704,6 +707,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.chat {
 		f.serveChat(c, realm)
+		return
+	}
+	if f.command != commandNone {
+		f.serveCommand(c, realm)
 		return
 	}
 	if f.partyInvite || f.partyAccept || f.partyDecline || f.partyUninvite || f.partyInvalid != "" || f.partyNoAccept {

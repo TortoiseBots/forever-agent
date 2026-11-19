@@ -1,9 +1,9 @@
 # Session state shared between goroutines
 
 This is the one table of what `internal/forever/world`'s session shares with another goroutine, and what it does
-not. It covers the login and world rounds, the combat round (round 4) and the chat and party round (round 5); the
-round notes (`COMBAT-R1-NOTES.md`, `CHAT-R1-NOTES.md`) point here instead of keeping a copy, because the copy went
-stale the moment a round added a field.
+not. It covers the login and world rounds, the combat round (round 4), the chat and party round (round 5) and the
+command channel (round A6); the round notes (`COMBAT-R1-NOTES.md`, `CHAT-R1-NOTES.md`, `COMMAND-R1-NOTES.md`)
+point here instead of keeping a copy, because the copy went stale the moment a round added a field.
 
 The rule: **the session goroutine owns the session.** `Enter` runs the handshake, the socket readers start after it,
 and every handler (`handle`, `handleChat`, `handleParty`, `handleCombat`, the fight, the chat and party commands, the
@@ -27,6 +27,7 @@ guard their own accessors, and the only caller is the session goroutine.
 | `session.chat` (`chat.Log`) | `handleChat` / `addNotice` / `summariseChat` (session goroutine; `initChat` creates it on that goroutine) | `chatLineText`, `summariseChat`, the report copy | single owner; the log's own mutex covers its accessors |
 | `session.party` (`party.State`) | `handleParty`, `handle` (`SetSelf`), the party-check steps (session goroutine; `initChat` creates it on that goroutine) | `printParty`, `chatName`, the party-check steps, `summariseParty` | single owner; the model's own mutex covers its accessors |
 | `session.captureRun`, `session.captureErr` | `capturePacket` (session goroutine) | `capturePacket`, `shutdown` (`close`) | single owner: `shutdown` runs on the session's goroutine after the command returns, before the sockets close |
+| `session.cmdFeed` | `cmdLink.Pump` sets it before its loop and clears it after (session goroutine) | `handleChat` / `addNotice` (`feedCommand`) on the same goroutine | single owner: set, called and cleared on the session goroutine while one command runs; `command.Session` serialises the runs |
 | `session.fight`, `known`, `castSerial`, `parseErrorLogged` | handlers and the fight (session goroutine) | same | single owner |
 | `session.fightSender` | the tests, before `Enter` enters the world | `transport` (session goroutine) | set before the run starts |
 | `report.Captured`, `report.Chat`, `report.Party`, the rest of `Report` | session goroutine | session goroutine; `cmd` after `Enter` returns | single owner |
