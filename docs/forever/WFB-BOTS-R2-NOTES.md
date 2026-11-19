@@ -113,4 +113,60 @@ in each wait (fill, entry, watch, way out).
 
 ## Live proof
 
-(to be filled by the live run)
+One run of about 10 minutes against the module's server (world bots off, containers started by hand and stopped again
+afterwards), from a throwaway account and an Orc warrior levelled to 13 with the core's console command
+(`character level <char> 13`; the DB then read `name, level 13, race 2, class 1`). The character was created with
+`forever char-create --no-appearance --race 2 --class 1`. The transcript is identifier-free: the account, the
+character and the four bots' names are replaced.
+
+```
+forever fb-dungeon ... --dungeon rfc --role tank --watch 600
+fb-dungeon: module: WoW Forever Bots by ...
+fb-dungeon: language: Bot replies: English (your choice). ...
+fb-dungeon: lfg: 4 bot(s) are joining (1 healer, 3 damage missing).
+party: 2 member(s), leader <char>            (then 3, 4, 5 as the bots joined)
+party:  <bot1> joined you: level 13.  (priest; then <bot2> mage, <bot3> rogue, <bot4> hunter)
+fb-dungeon: party: 5 member(s): <char>, <bot1>, <bot2>, <bot3>, <bot4>
+fb-dungeon: queue: Dungeon finder: Ragefire Chasm (levels 13-18). Your group is complete: in you go.
+world: map change: SMSG_TRANSFER_PENDING for map 389 (from map 1)
+world: map change: SMSG_NEW_WORLD map 389 at ...; the world model is cleared, ...
+fb-dungeon: finder: inside (Ragefire Chasm), 5/0 member(s), waited 0s
+fb-dungeon: inside confirmed: the module says inside (Ragefire Chasm) and the client's map change put it on map 389
+fb-dungeon: command: .bot lead on
+fb-dungeon: lead on: fbcmd: the bot module refused: Possible subcommands:
+fb-dungeon: watching without the tank lead (the module refused it)
+fb-dungeon: party: <bot1>: need to drink
+fb-dungeon: watch: t+31s finder inside (Ragefire Chasm) 5/0;
+      <bot2> 96%h 80%m [idle:classic_conjure], <bot3> 91%h 0%m [ingroup:formation_slot],
+      <bot4> 89%h 100%m [ingroup:formation_slot], <bot1> 100%h 72%m [idle:classic_raid_buffs]
+fb-dungeon: watch: t+1m2s ... all four at 100% hp (mana recovered) ...
+... (every 31 s, the health unchanged) ...
+fb-dungeon: watch: t+10m0s finder inside (Ragefire Chasm) 5/0; <bot2> 100%h 100%m, <bot3> 100%h 0%m,
+      <bot4> 100%h 100%m, <bot1> 100%h 100%m
+fb-dungeon: watched 10m0s: 273 sample(s), 0 death(s), 0 event(s), 1 party line(s)
+fb-dungeon: leave: Dungeon finder: out you go. Your bots follow.
+world: map change: SMSG_TRANSFER_PENDING for map 1 (from map 389)
+fb-dungeon: the client's map change left the instance: map 1
+fb-dungeon: dismiss all: Dismissed 4 companion(s).
+party: group destroyed
+world logout: SMSG_LOGOUT_RESPONSE (result 0) and SMSG_LOGOUT_COMPLETE
+fb-dungeon: pbc: ok
+```
+
+A second, short run with `--role dps --watch 0` filled with a tank bot (`4 bot(s) are joining (1 tank, 1 healer, 2
+damage missing).`), queued, entered and left; `.bot lead on` got the same usage block.
+
+**Finding: the installed package's binary is older than its own source for the lead switch.** The client sent
+`.bot lead on` exactly (the run logs each command). The running worldserver answers with the core's
+`### USAGE: .bot ...` / `Possible subcommands:` block, and that list has no `lead` (it does have `lfg` and
+`dungeon`). The package's `version.json` names commit `8e679df0`, whose source at
+`src/modules/PlayerbotV2/Commands/cs_playerbot_v2.cpp:711` registers
+`{ "lead", HandleBotLead, ... }`, and its `GroupOrderText.cpp` lists the party words `lead on|pause|off`; the
+binary also lacks those strings but has `pulls the boss` and `Dungeon finder:`. The two package folders on the box
+(v0.1.38 and v0.1.99) carry the **same** worldserver binary (same md5), so this is a release/source mismatch in the
+package, not the client. What the bots did without the lead switch: the module suspended its dungeon autopilot for
+every bot ("a human leads" in its log) and they stood at the entrance with the player; no fight started, no death,
+no event push. The client's side of the lead is covered by the fake tests (on, in a dungeon, pause, off, go, and
+every refusal), but the live tank lead could not be proven against this package. The run still proves the fill, the
+queue, the both-signal entry (module `inside` + the client's map change to 389), the protocol watch (health from the
+roster, 273 samples), the way out (map 389 to 1), the dismiss and the logout.
