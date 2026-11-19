@@ -55,8 +55,6 @@ type dungeonScene struct {
 	sawMove        bool
 }
 
-func (sc *dungeonScene) logf(format string, args ...any) {}
-
 // body splits the trailing "#token" from a command line.
 func dungeonBody(text string) (body, token string) { return splitCommandToken(text) }
 
