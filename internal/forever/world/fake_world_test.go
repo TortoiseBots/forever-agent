@@ -162,10 +162,13 @@ type fakeServer struct {
 	// mapSc, when set, runs the map change scenario of mapchange_fake_test.go instead of the plain stay.
 	mapSc *mapScenario
 	// mapID is the map the create block names (and so the map walk-check's navmesh route plans on).
-	mapID     uint16
-	walkFrom  [3]float32
-	walkTo    [3]float32
-	walkMoved int
+	mapID uint16
+	// charScreen, when set, takes the realm socket over after SMSG_AUTH_RESPONSE: the character-screen scenario
+	// (list, create, delete, name check) instead of the login.
+	charScreen *fakeCharScreen
+	walkFrom   [3]float32
+	walkTo     [3]float32
+	walkMoved  int
 	// teleportDuringWalk sends SMSG_MOVE_TELEPORT in the middle of the first leg and then expects the ack and a
 	// movement packet at the destination.
 	teleportDuringWalk bool
@@ -405,11 +408,24 @@ func (f *fakeServer) deriveKeys(keyData, serverChallenge, localChallenge []byte)
 
 func (f *fakeServer) serveRealm() {
 	defer f.wg.Done()
-	conn, err := f.realmListener.Accept()
-	if err != nil {
-		f.failf("realm accept: %v", err)
-		return
+	for {
+		conn, err := f.realmListener.Accept()
+		if err != nil {
+			f.failf("realm accept: %v", err)
+			return
+		}
+		f.serveRealmConn(conn)
+		// The character-screen scenario may log in more than once (a create and a delete of the same run are
+		// separate sessions); the world flow is a single run and ends with its connection.
+		if f.charScreen == nil || !f.charScreen.moreSessions() {
+			return
+		}
 	}
+}
+
+// serveRealmConn runs one realm connection: the first half of serveRealm, which the character-screen hook splits so
+// the fake can accept the next session.
+func (f *fakeServer) serveRealmConn(conn net.Conn) {
 	c, err := f.newConn(conn)
 	if err != nil {
 		f.failf("realm: %v", err)
@@ -481,6 +497,11 @@ func (f *fakeServer) serveRealm() {
 
 	// SMSG_AUTH_RESPONSE and the character list are larger than 0x400 bytes and arrive compressed
 	c.writeCompressed(fakeSMSGAuthResponse, fixture(f.t, "auth_response"))
+
+	if f.charScreen != nil {
+		f.charScreen.serve(c)
+		return
+	}
 
 	for {
 		wire, payload, err := c.readFrame()

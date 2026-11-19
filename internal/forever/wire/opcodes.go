@@ -209,6 +209,10 @@ var clientNames = map[uint32]string{
 	CMSGAttackStop:              "CMSG_ATTACK_STOP",
 	CMSGCastSpell:               "CMSG_CAST_SPELL",
 	CMSGCancelCast:              "CMSG_CANCEL_CAST",
+
+	CMSGCreateCharacter:                "CMSG_CREATE_CHARACTER",
+	CMSGCheckCharacterNameAvailability: "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY",
+	CMSGCharDelete:                     "CMSG_CHAR_DELETE",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.
