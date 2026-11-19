@@ -152,6 +152,14 @@ type fakeServer struct {
 	// Round A6: the command scenario (serveCommand in command_fake_test.go), and the say lines it saw.
 	command   commandMode
 	instChats []string
+	// Round A1: the bot module scenario (serveFB in fake_fb_test.go). fbCase chooses the refusal, drift or link
+	// case; the slices are what the fake saw, under mu.
+	fb         bool
+	fbCase     string
+	fbSays     []string
+	fbWhispers []string
+	fbPBC      []string
+	fbRegs     []string
 	// What the fake saw, under mu.
 	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
 	chatPartyText                                          string
@@ -791,6 +799,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.walk {
 		f.serveWalk(c, realm)
+		return
+	}
+	if f.fb {
+		f.serveFB(c, realm)
 		return
 	}
 	if f.addon {

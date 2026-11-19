@@ -15,6 +15,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/pbc"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -153,6 +154,12 @@ func (s *session) offerAddon(line chat.Line) {
 	}
 	if !s.addon.Offer(m) {
 		s.logAddon("addon: %s from %s ignored (prefix %s is not registered)", addonChannelName(m), from, prefix)
+		return
+	}
+	if s.fbQuiet && m.Prefix == pbc.Prefix {
+		// The bot module's protocol frames are data, not chat: a run counts them and prints its own one-line
+		// totals instead of the frame text of every part.
+		s.fbFrames++
 		return
 	}
 	s.logAddon("addon: %s %s from %s: %s", addonChannelName(m), prefix, from, chat.Sanitise(m.Text, chat.MaxDisplayText))

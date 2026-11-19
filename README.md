@@ -19,6 +19,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
+| WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -196,6 +197,18 @@ is a bounded display form instead (valid UTF-8 only, no control, line-separator 
 `--invite NAME` or `--accept-from NAME` form the two-client party with party-check's invite/accept flow and keep it
 for the whole run (the add-on party proof), leaving it before the logout. Every packet is also written to
 `--capture-dir` when given, as for chat-check.
+`forever-agent forever fb-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+drives the bots of a server running the WoW Forever Bots module. It probes with `.bot about` (that command needs no
+game-master permission, and a say echo proves the module is absent), fixes the reply language, adds the bots named by
+`--add CLASS[:ROLE]` (default `warrior:dps`) with the module's chat command and waits for the server to group them,
+then reads the roster and one bot's detail through the module's add-on protocol: the `PBC` prefix on the party
+channel, a 6-field envelope, 200-byte client parts, 64 parts and 4 KiB per body, answers matched by sequence number.
+Nothing on the wire carries a version, so the shapes are versioned: a roster record with fewer than 19 values, a
+count that disagrees, a detail answer for another id, an answer of the wrong type or no answer in 6 s turns the
+protocol off for the session and the run says `pbc: unavailable (<reason>)`, printing the roster from `.bot list`
+instead. `--order WORD` is whispered to every added bot (the bot's own answer is the acknowledgement; a refusal is
+reported as one) and `--order party:WORD` is said in party chat (confirmed by rereading the bot's last rule), default
+`follow` then `stay`. `--dismiss NAME|all` (default `all`) logs the bots out and waits for the party to drop them.
 `forever-agent forever dungeon-run --plan PLAN.json --party TANK,HEALER,DPS,DPS,DPS --character NAME --dry`
 runs one dungeon's machine with no network: the five-bot party is checked, brought to the portal and into the
 instance, walked along the plan's legs, its packs pulled one at a time and rested between, and the bosses killed; the
