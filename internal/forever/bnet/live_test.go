@@ -14,8 +14,8 @@ import (
 //	FOREVER_LIVE_REST=127.0.0.1:8081 FOREVER_LIVE_RPC=127.0.0.1:1119 FOREVER_LIVE_CA=/path/root_ca.pem \
 //	FOREVER_LIVE_ACCOUNT=... FOREVER_PASSWORD=... go test ./internal/forever/bnet -run TestLiveLogin -v
 //
-// FOREVER_LIVE_BUILD pins the client build to claim; without it the login claims the newest build it knows that the realm accepts
-// (Options.ClientBuild 0, the default the commands use). A realm only lets in the builds it accepts.
+// FOREVER_LIVE_BUILD pins the client build to claim; without it the login claims the newest build it knows that the
+// realm accepts (Options.ClientBuild 0, the default the commands use). A realm only lets in the builds it accepts.
 //
 // The server must present a certificate for DefaultServerName (or FOREVER_LIVE_SERVER_NAME) signed by the CA, and
 // the account must be a Battle.net account without an authenticator.

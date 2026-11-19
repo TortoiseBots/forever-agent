@@ -65,7 +65,7 @@ type Result struct {
 	ServerPort   uint32
 
 	ClientBuild uint32 // the build this login claimed (WorldSocket::_clientBuild)
-	RealmBuild  uint32 // the build the realm list advertised for that claim (FillRealmEntry: the claim itself when the realm accepts it)
+	RealmBuild  uint32 // the build the realm list showed for that claim (FillRealmEntry: the claim itself when the realm accepts it)
 }
 
 // RealmError marks a failure after the account was logged in (realm list, realm join), so a caller can tell "the

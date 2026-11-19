@@ -42,12 +42,15 @@ type Options struct {
 	Character    string        // character name (the surname may be omitted)
 	Stay         time.Duration // how long to stay in the world after the login burst
 	Deadline     time.Duration // whole run; default 2 minutes + Stay + Settle
-	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle, walk Dx/Dy yards from the
-	// spawn, wait WalkPause, walk back, report, log out. Stay is then the settle time instead of a plain stay.
+	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle (the command's --stay), walk
+	// Dx/Dy yards from the spawn, wait WalkPause, walk back, report, log out. There is no plain stay after it; the
+	// settle is a stay-like phase and counts in the default Deadline like Stay.
 	WalkCheck bool
 	Dx, Dy    float32
 	WalkPause time.Duration
-	Settle    time.Duration
+	// Settle is the look at the world before a check command does its work (walk-check's --stay); 0 means the
+	// command's own default.
+	Settle time.Duration
 	// NavmeshDir (forever walk-check --navmesh) makes the walk a navmesh route to the absolute target
 	// ToX/ToY/ToZ on the current map, instead of the Dx/Dy offset walk and back. Empty keeps the old walk.
 	NavmeshDir string

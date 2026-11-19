@@ -23,7 +23,10 @@ had no other build in its automatic list.
 
 So the build field is only a hint: for an accepted claim it echoes the claim, and it cannot say whether the world
 server has build info and keys for that build. A realm on 70959 that also accepts 70938 lists 70938 for a 70938
-claim, and the world server then has no 70959-style build row for it.
+claim, and the world server then has no 70959-style build row for it. That is the shape the retest had: the client
+kept the echoed 70938 and the run only worked with `--build 70959`. The world socket's error code was not part of the
+retest output, so the refusal itself is inferred from `WorldSocket.cpp:739-772`, where a build without build info or
+a build auth key is refused with `ERROR_BAD_VERSION`.
 
 **Fix** (`internal/forever/wire/opcodes.go`, `internal/forever/bnet/bnet.go`):
 
