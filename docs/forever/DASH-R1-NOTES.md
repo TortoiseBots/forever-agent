@@ -40,7 +40,7 @@ client sets it, the raid tools do not).
 {"bots":[ ... ], "heartbeat":{"bots":4,"humans":2,"states":{"idle":0.5,"moving":0.25,"combat":0.25,"dead":0}}}
 ```
 
-Every field named in the round's API is modelled. `role` and `strategy` decode to `""` when absent or null; `XP` is
+Every field the round's API fills is modelled. `role` and `strategy` decode to `""` when absent or null; `XP` is
 not modelled at all. Unknown fields are ignored at every level, so a later field costs nothing. The decoder is
 strict about types and about two closed sets:
 
@@ -84,7 +84,7 @@ condition clears, so a watch does not repeat a line every interval.
 
 | Rule | Event | Fires when | Default | Re-arm |
 |---|---|---|---|---|
-| Death | `death` | a bot's state becomes `dead`; the baseline sample never counts (a bot already dead is in the printed roster) | — | the bot's state is not `dead` again |
+| Death | `death` | a bot's state becomes `dead`; the baseline sample never counts (a bot already dead is in the printed roster) | — | a sample shows the bot not `dead` |
 | Stuck | `stuck` | state is `moving` and the position stays within 0.5 yd of the previous sample for at least the threshold | 20 s | the position moves more than 0.5 yd or the state stops being `moving` |
 | Lone fight | `lone-combat` | state is `combat` and its `group` has at least two bots in the roster but this is the only one in combat, for at least the grace | 5 s | another bot of the group is in combat, or this bot is not |
 | Far from group | `far-from-group` | the distance to the centre of its group mates (same map and same instance) is over the threshold | 60 yd | the distance falls to 80% of the threshold |
