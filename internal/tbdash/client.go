@@ -1,9 +1,10 @@
-// Package tbdash is forever-agent's client for the TortoiseBots dashboard daemon's JSON API.
-// It logs in with a password read from a private file and keeps the daemon's session cookie in
-// a jar; the raid tools use it to save the commander snapshots and combat fights of a walk.
+// Package tbdash is forever-agent's HTTP session with a dashboard daemon: the login, the cookie
+// jar and the one re-login a 401 costs. The raid tools use it to save the commander snapshots and
+// combat fights of a walk; internal/roster builds the roster watch on the same session.
 //
-// The password is only ever read from the file path given to New. It never appears in an error
-// text, and the buffers holding it are zeroed once the login request has been sent.
+// The password comes from a PasswordSource: a private file or an environment variable, never a
+// flag. It never appears in an error text, and the buffers holding it are zeroed once the login
+// request has been sent.
 package tbdash
 
 import (
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -41,19 +43,61 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d for %s %s", e.Code, e.Method, e.Path)
 }
 
-// Client talks to one dashboard daemon as one user. Base is the daemon's root URL, User the
-// login name and passFile the path of the file holding the password.
-type Client struct {
-	Base     *url.URL
-	User     string
-	passFile string
-	hc       *http.Client
-	loginMu  sync.Mutex // one login at a time when several reads meet a 401 together
+// PasswordSource is where Login takes the password. A flag never carries the value: the two
+// sources are a private file and an environment variable. The returned bytes are zeroed by Login.
+type PasswordSource interface {
+	Password() ([]byte, error)
 }
 
-// New validates base (http or https, with a host) and builds a client whose cookie jar keeps the
-// session the daemon hands out at login. It does not read passFile; Login does.
+// PasswordFile reads the password from a file only its owner can access. privfile refuses a
+// symlink and a loose mode; the one trailing newline is dropped.
+func PasswordFile(path string) PasswordSource { return filePassword(path) }
+
+type filePassword string
+
+func (f filePassword) Password() ([]byte, error) {
+	raw, err := privfile.Read(string(f), maxPasswordBytes)
+	if err != nil {
+		return nil, fmt.Errorf("password file: %w", err)
+	}
+	return trimOneNewline(raw), nil
+}
+
+// PasswordEnv reads the password from the named environment variable. The variable's name is
+// not a secret; its value reaches no error text.
+func PasswordEnv(name string) PasswordSource { return envPassword(name) }
+
+type envPassword string
+
+func (e envPassword) Password() ([]byte, error) {
+	v, ok := os.LookupEnv(string(e))
+	if !ok || v == "" {
+		return nil, fmt.Errorf("password environment variable %s is not set", string(e))
+	}
+	return []byte(v), nil
+}
+
+// Client talks to one dashboard daemon as one user. Base is the daemon's root URL, User the
+// login name and src the source of the password.
+type Client struct {
+	Base    *url.URL
+	User    string
+	src     PasswordSource
+	hc      *http.Client
+	loginMu sync.Mutex // one login at a time when several reads meet a 401 together
+}
+
+// New validates base (http or https, with a host) and builds a client that reads its password
+// from passFile. It does not read the file; Login does.
 func New(base, user, passFile string) (*Client, error) {
+	return NewWithSecret(base, user, PasswordFile(passFile))
+}
+
+// NewWithSecret is New with an explicit password source.
+func NewWithSecret(base, user string, src PasswordSource) (*Client, error) {
+	if src == nil {
+		return nil, errors.New("dashboard password source is missing")
+	}
 	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil {
 		return nil, fmt.Errorf("dashboard URL %q: %w", base, err)
@@ -79,21 +123,24 @@ func New(base, user, passFile string) (*Client, error) {
 		// login page with a 302. Both must come back here so GetJSON can renew the session once.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	return &Client{Base: u, User: user, passFile: passFile, hc: hc}, nil
+	return &Client{Base: u, User: user, src: src, hc: hc}, nil
 }
 
-// Login reads the password file, POSTs the credentials and keeps the session cookie. The file
-// must be one only its owner can access (privfile.Read refuses a symlink and a loose mode) and
-// its one trailing newline is dropped. The password never reaches an error text.
+// SetTimeout bounds every request, the login included; zero leaves only the context's own bound.
+func (c *Client) SetTimeout(d time.Duration) { c.hc.Timeout = d }
+
+// Login reads the password from the client's source, POSTs the credentials and keeps the
+// session cookie. A password file must be one only its owner can access (privfile.Read refuses
+// a symlink and a loose mode) and its one trailing newline is dropped. The password never
+// reaches an error text.
 func (c *Client) Login(ctx context.Context) error {
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
 
-	raw, err := privfile.Read(c.passFile, maxPasswordBytes)
+	raw, err := c.src.Password()
 	if err != nil {
-		return fmt.Errorf("dashboard password file: %w", err)
+		return fmt.Errorf("dashboard password: %w", err)
 	}
-	raw = trimOneNewline(raw)
 	defer zero(raw)
 	password := string(raw)
 
