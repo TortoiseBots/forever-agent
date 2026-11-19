@@ -152,6 +152,8 @@ type fakeServer struct {
 	// Round A6: the command scenario (serveCommand in command_fake_test.go), and the say lines it saw.
 	command   commandMode
 	instChats []string
+	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
+	dungeon *dungeonScene
 	// What the fake saw, under mu.
 	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
 	chatPartyText                                          string
@@ -803,6 +805,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.chat {
 		f.serveChat(c, realm)
+		return
+	}
+	if f.dungeon != nil {
+		f.serveDungeon(c, realm)
 		return
 	}
 	if f.command != commandNone {

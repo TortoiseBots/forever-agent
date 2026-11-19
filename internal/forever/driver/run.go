@@ -108,6 +108,9 @@ func DefaultLimits() Limits {
 
 // Config is one run.
 type Config struct {
+	// Plan is the plan file the session adapter loads in the live mode; --dry loads the same file in the command
+	// and hands the built route to the fake instead.
+	Plan string
 	// Party is five names: tank, healer, dps, dps, dps.
 	Party     []string
 	Commander string

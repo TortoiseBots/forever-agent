@@ -227,11 +227,14 @@ func (r *Run) retreatToward(ctx context.Context, bot Vec3) float64 {
 	}
 	for _, seg := range SplitRoute(route.Points, SegmentYd) {
 		if err := r.walk.Walk(ctx, seg); err != nil {
-			if errors.Is(err, ErrMapChange) {
+			switch {
+			case errors.Is(err, ErrMapChange):
 				r.refreshSelf()
-			} else if ctx.Err() != nil {
+			case errors.Is(err, ErrLinkLost):
+				r.linkLost()
+			case ctx.Err() != nil:
 				r.interrupted(ctx)
-			} else {
+			default:
 				r.stop("walk")
 			}
 			r.stopWalk()

@@ -357,6 +357,11 @@ func (r *Run) walkTo(ctx context.Context, to Vec3, target int, checkHazard bool)
 					changed = true
 					break
 				}
+				if errors.Is(err, ErrLinkLost) {
+					r.linkLost()
+					r.stopWalk()
+					return walkStop
+				}
 				if ctx.Err() != nil {
 					r.interrupted(ctx)
 				} else {
