@@ -1887,7 +1887,7 @@ func newFixture(t *testing.T) *fixture {
 			m, err := readWalkManifest(dir)
 			return agent, m, err
 		},
-		openDash: func(url, user, passFile string) (walkDash, error) { return f.dash, nil },
+		openDash: func(url, user, passFile string, insecure bool) (walkDash, error) { return f.dash, nil },
 	}
 	return f
 }

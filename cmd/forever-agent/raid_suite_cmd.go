@@ -27,7 +27,7 @@ import (
 const exitRaidSuiteRegression = 24
 
 const raidSuiteUsage = `usage: forever-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server m910q] [--slot N]
-    [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH]
+    [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH] [--dash-insecure-http]
     [--mmaps DIR] [--slots FILE] [--binary PATH] [--compare-only] [--dry-run] [--json]`
 
 // raidSuiteFormat is the suite file's format and version.
@@ -55,24 +55,25 @@ var raidSuiteEnv = defaultWalkEnv
 
 // raidSuiteOptions are the command's flags.
 type raidSuiteOptions struct {
-	suite        string
-	dir          string
-	history      string
-	server       string
-	slot         string // "" leases any free slot
-	only         []string
-	speed        float64
-	gap          time.Duration
-	out          string
-	dashURL      string
-	dashUser     string
-	dashPassFile string
-	mmaps        string
-	slotsPath    string
-	binary       string
-	compareOnly  bool
-	dryRun       bool
-	jsonOut      bool
+	suite            string
+	dir              string
+	history          string
+	server           string
+	slot             string // "" leases any free slot
+	only             []string
+	speed            float64
+	gap              time.Duration
+	out              string
+	dashURL          string
+	dashUser         string
+	dashPassFile     string
+	dashInsecureHTTP bool // forwarded to raid-walk as --dash-insecure-http
+	mmaps            string
+	slotsPath        string
+	binary           string
+	compareOnly      bool
+	dryRun           bool
+	jsonOut          bool
 }
 
 // raidSuiteFile is the tb-raid-suite v1 file: its raids in walk order.
@@ -259,6 +260,7 @@ func parseRaidSuiteArgs(args []string, stderr io.Writer) (raidSuiteOptions, int)
 	fs.StringVar(&o.dashURL, "dash-url", "", "the dashboard URL (or TBDASH_URL)")
 	fs.StringVar(&o.dashUser, "dash-user", "", "the dashboard login (or TBDASH_USER; default TADASH)")
 	fs.StringVar(&o.dashPassFile, "dash-pass-file", "", "the dashboard password file (or TBDASH_PASS_FILE)")
+	fs.BoolVar(&o.dashInsecureHTTP, "dash-insecure-http", false, "forward --dash-insecure-http to each raid-walk: allow a plain-http dashboard that is not loopback")
 	fs.StringVar(&o.mmaps, "mmaps", "", "the navmesh dir for slot setup")
 	fs.StringVar(&o.slotsPath, "slots", "", "the slots file (default ~/.config/forever-agent/slots.json)")
 	fs.StringVar(&o.binary, "binary", "", "the agent binary slot setup copies (default: this executable)")
@@ -518,6 +520,9 @@ func (s *raidSuite) walkArgs(e raidSuiteEntry, prep raidSuitePrep, out string) [
 		if kv[1] != "" {
 			args = append(args, kv[0], kv[1])
 		}
+	}
+	if s.o.dashInsecureHTTP {
+		args = append(args, "--dash-insecure-http")
 	}
 	return append(args, e.Plan)
 }

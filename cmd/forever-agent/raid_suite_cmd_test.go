@@ -296,3 +296,22 @@ func TestRaidSuiteDryRun(t *testing.T) {
 		t.Fatalf("dry run stdout:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestRaidSuiteForwardsTheInsecureDashboardFlag(t *testing.T) {
+	s := &raidSuite{o: raidSuiteOptions{server: "m910q"}}
+	has := func(args []string) bool {
+		for _, a := range args {
+			if a == "--dash-insecure-http" {
+				return true
+			}
+		}
+		return false
+	}
+	if has(s.walkArgs(raidSuiteEntry{Plan: "p"}, raidSuitePrep{}, "/tmp/out")) {
+		t.Fatal("the flag was forwarded although it was not set")
+	}
+	s.o.dashInsecureHTTP = true
+	if !has(s.walkArgs(raidSuiteEntry{Plan: "p"}, raidSuitePrep{}, "/tmp/out")) {
+		t.Fatal("the flag was not forwarded to raid-walk")
+	}
+}

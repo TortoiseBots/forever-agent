@@ -21,6 +21,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
+| Roster dashboard (rounds DASH-1/2) | **Client and watch; no live run yet** (`forever-agent forever dash-bots`: the typed login, the logged-in bots and the heartbeat, and a watch that reports a death, a stuck bot, a lone fight and a bot far from its group; plain http only on loopback unless the explicit flag allows it; the dungeon watch can take the same client and rules; see [docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md) and [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
@@ -256,6 +257,27 @@ and no session). `--enter none` runs the party where it stands, the open-world m
 points this repository already uses. Exit codes: 0 clear, 2 usage or a refused plan, 7 link lost, 5 any other stop.
 The live mode has not been run against a server yet; what the first attempt must check is the last section of the
 round's notes.
+`forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]]`
+reads the roster dashboard of a server: the typed login, every logged-in bot (class, level, health, power, map, zone,
+instance, position, target, group, kind and state) and the heartbeat. Without `--watch` it prints that roster once.
+With `--watch` the first read is the baseline and every later read prints only the changes: a bot that died, a bot
+whose state says moving but whose position has not changed for `--stuck-after` (default 20 s), a bot in combat with
+no bot of its group in combat for `--lone-combat-after` (default 5 s), and a bot more than `--group-distance`
+(default 60 yd) from the centre of its group. Each condition is reported once and fires again only after it cleared.
+The password comes from the private `--pass-file` or `FOREVER_DASH_PASSWORD`, never a flag; `--timeout` (default
+15 s) bounds every request, and a 401 costs one re-login.
+The dashboard's URL must be **https**, or **http to a loopback IP literal** (127.0.0.0/8 or ::1) or the exact
+name `localhost`, which the client dials as 127.0.0.1 itself: the login sends a GM password and the session cookie,
+and a hostname must not be able to move that traffic somewhere else between the check and the login. Every other
+plain-http name needs the explicit `--dash-insecure-http`, which prints a one-line warning and
+makes the command, the decision pull and raid-walk accept it. A roster record that omits or zeroes a field the watch
+rules read (hp, max_hp, map, instance, x, y, z, state) is skipped and reported on stderr, never read as a death, a
+stuck flag or a distance; one answer is capped at 8 MiB. Names and the dashboard's strings are sanitised before
+they are printed. Exit codes: 0 printed or watched, 1 a login or read failure (five failed reads in a row end a
+watch), 2 usage. The rules, the API shape the client accepts and the live steps are in
+[docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md), and the round-2 fixes (the http boundary, the
+required fields, the one login for concurrent 401s and the size cap) in
+[docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md).
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.
