@@ -127,9 +127,20 @@ type fakeServer struct {
 	failAfterLogin bool
 	abortDone      chan struct{}
 	// Round 5: chat and party scenarios.
-	chat        bool
-	partyInvite bool
-	partyAccept bool
+	chat bool
+	// Round A0: the add-on transport scenario (serveAddon in fake_addon_test.go). addonCase picks what the fake
+	// sends after the client registers: "delivery", "flood", "echo", "linkdeath" or "none".
+	addon     bool
+	addonCase string
+	// What the fake saw of the add-on transport, under mu.
+	addonUnregisterAll   bool
+	addonRegistered      []string
+	addonFiltered        int
+	addonSeen            []seenAddon
+	addonChannelDropped  int
+	addonPartyInviteName string
+	partyInvite          bool
+	partyAccept          bool
 	// The rest of the party flows: a decline instead of an accept, an uninvite after the join, and a roster the
 	// model must refuse (partyInvalid names the case).
 	partyDecline  bool
@@ -737,6 +748,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.walk {
 		f.serveWalk(c, realm)
+		return
+	}
+	if f.addon {
+		f.serveAddon(c, realm)
 		return
 	}
 	if f.chat {

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
@@ -88,6 +89,19 @@ type Options struct {
 	PartyStay time.Duration
 	// Watch prints the world model's position of one player once a second.
 	Watch string
+	// Round A0: forever addon-check. AddonCheck enters with the add-on transport: it registers AddonPrefix, sends
+	// AddonSend once on AddonChannel (a chat-kind word: party, raid, instance, guild, officer, whisper:NAME; empty
+	// means no send; channel:NAME is refused as not supported yet), then listens AddonListen. Listen also bounds
+	// the plain listen.
+	AddonCheck   bool
+	AddonPrefix  string
+	AddonSend    string
+	AddonChannel string
+	AddonListen  time.Duration
+	// AddonInvite/AddonAcceptFrom form the two-client party for the add-on proof before the send: the same invite
+	// and accept flow party-check uses, but the group is kept until the add-on listen ends and then left.
+	AddonInvite     string
+	AddonAcceptFrom string
 	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
 	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
 	// collector's defaults for every command of the run.
@@ -163,6 +177,9 @@ type Report struct {
 	// Round 5: the chat log's summary and the party model at the end of the run.
 	Chat  ChatSummary
 	Party PartySnapshot
+
+	// Round A0: the add-on transport's registered list and what it delivered.
+	Addon AddonSummary
 
 	// Round A6: the command channel's runs, whether the GM guard confirmed, and the typed state table.
 	Commands    []CommandRun
@@ -331,6 +348,15 @@ type session struct {
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
 	party *party.State
+	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two
+	// counters are the receive feed's log budget: lines printed, and messages whose line was withheld.
+	addon           *addonmsg.Inbox
+	addonLogged     int
+	addonSuppressed int
+	// addonState is what this session knows of the prefix list the server holds. It starts known (a fresh session
+	// and the server both hold nothing); a registration send that fails after the unregister-all packet makes it
+	// unknown until a later full unregister+register succeeds.
+	addonState addonRegistrationState
 	// Round A6: the command run's feed, set by cmdLink.Pump on the session goroutine while a command runs. The
 	// same goroutine calls it from handleChat/addNotice, so no lock is needed.
 	cmdFeed func(chat.Line)
@@ -716,6 +742,14 @@ func (s *session) enter(ctx context.Context) error {
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
 
 	// ---- stay: answer time syncs, the active-mover exchange and pings
+	if s.opts.AddonCheck {
+		err := s.addonCheck(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if s.opts.ChatCheck {
 		err := s.chatCheck(ctx)
 		s.summariseChat()

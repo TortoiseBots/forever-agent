@@ -475,7 +475,12 @@ func TestSanitiseHostileStrings(t *testing.T) {
 	}{
 		{"control bytes", "\x00\x01\x1b[31mred\x07 tail", "   [31mred  tail"},
 		{"ansi", "\x1b[2J\x1b[1;31mhostile", " [2J [1;31mhostile"},
-		{"newline", "a\nb\rc\td", "a b c d"},
+		{"newline", "a\nb\rc\td", "a b c\\td"},
+		{"tab is an escape", "a\tb", "a\\tb"},
+		{"line and paragraph separators", "a\u2028b\u2029c", "a b c"},
+		{"bidi controls", "a\u202eb\u2066c\u061cd", "a b c d"},
+		{"nel and c1", "a\u0085b\u009bc", "a b c"},
+		{"lone c1 byte is invalid utf-8", "a\x9bb", "a?b"},
 		{"del and c1", "a\x7fb\xc2\x80c", "a b c"},
 		{"valid utf-8", "h\u00e9llo \u4e16\u754c", "h\u00e9llo \u4e16\u754c"},
 		{"invalid utf-8", "abc\xffdef", "abc?def"},

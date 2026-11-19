@@ -16,6 +16,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
 | Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
+| Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -145,6 +146,24 @@ subcommand, an ambiguous command, a typed argument the server refused, or the sa
 lines and prints one row per bot (role, class, level, health, power, state, movement, target entry, last order and
 the rest gate); `--quiet` and `--timeout` override the collector's defaults. The typed order/role/master/party/threat
 calls and `WaitRested` live in `internal/forever/command/tbcmd`.
+
+`forever-agent forever addon-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
+--prefix PREFIX` is the add-on message transport (`internal/forever/addonmsg`): it replaces this client's registered
+prefix list (the unregister-all packet, then the full-list registration), optionally sends one `--send TEXT` on
+`--channel` (`party` — the default —, `raid`, `instance`, `guild`, `officer` or `whisper:NAME`), then prints every
+add-on message that arrives for the registered prefix during `--listen` (default 10 s) and logs out. Sending on a
+chat channel is not supported yet: the core looks a channel up by the GUID in the packet, and this client joins no
+channel, so it has none; `channel:NAME` is refused with that message. The server's limits are checked before
+anything is sent: a prefix is 1..16 bytes of valid UTF-8, a text at most 255 bytes (it is not required to be UTF-8:
+the core reads it as bytes), one registration packet holds at most 64 prefixes, and a whisper target is a character
+name. An incoming add-on message is a `SMSG_CHAT` with language `LANG_ADDON`/`LANG_ADDON_LOGGED` and a non-empty
+prefix; only prefixes this client registered reach the caller, the queue is 256 messages (oldest dropped, counted),
+and arrival order per (prefix, sender) is kept. The delivered text is the server's exact bytes; every printed line
+is a bounded display form instead (valid UTF-8 only, no control, line-separator or bidi characters, a tab shown as
+`\t`), at most a fixed number of receive lines are printed and the totals follow at the end.
+`--invite NAME` or `--accept-from NAME` form the two-client party with party-check's invite/accept flow and keep it
+for the whole run (the add-on party proof), leaving it before the logout. Every packet is also written to
+`--capture-dir` when given, as for chat-check.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.
