@@ -3,7 +3,6 @@ package driver
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -135,19 +134,19 @@ func TestScenarioEnterBotStuck(t *testing.T) {
 	run, f := newScenario(t, oneGroupPlan(), cfg)
 	blocked := "Dps3"
 	// The party enters without the blocked bot; it stays outside and reports why.
-	f.OnSetup = func(f *Fake, line string) bool {
-		if line == ".tb enter party" {
-			for _, name := range cfg.Party {
-				b := f.bots[name]
-				if name == blocked {
-					b.block = "level"
-					continue
-				}
-				b.mapID, b.inst, b.pos = f.route.Map, 1, f.route.Entrance
-			}
-			return true
+	f.OnAction = func(f *Fake, a Action) bool {
+		if a.Kind != ActionEnter {
+			return false
 		}
-		return false
+		for _, name := range cfg.Party {
+			b := f.bots[name]
+			if name == blocked {
+				b.block = "level"
+				continue
+			}
+			b.mapID, b.inst, b.pos = f.route.Map, 1, f.route.Entrance
+		}
+		return true
 	}
 	res := play(t, run)
 	if res.Stop != "enter:level" {
@@ -263,7 +262,7 @@ func TestScenarioDeathAndResurrection(t *testing.T) {
 	if res.Stop != "clear" {
 		t.Fatalf("stop %q, want clear", res.Stop)
 	}
-	if n := countArg(res.Orders, "setup", ".tb revive"); n != 0 {
+	if n := countArg(res.Orders, "action", "revive"); n != 0 {
 		t.Fatalf("%d revive orders, want 0", n)
 	}
 	if n := countVerb(res.Orders, "stay"); n != 1 {
@@ -299,12 +298,12 @@ func TestScenarioDeathNoResurrection(t *testing.T) {
 	if res.Stop != "clear" {
 		t.Fatalf("stop %q, want clear", res.Stop)
 	}
-	if n := countArg(res.Orders, "setup", ".tb revive Dps2"); n != 1 {
+	if n := countArg(res.Orders, "action", "revive Dps2"); n != 1 {
 		t.Fatalf("%d revives of the dead bot, want 1", n)
 	}
 	var reviveAt time.Duration
 	for _, o := range res.Orders {
-		if o.Verb == "setup" && contains(o.Arg, ".tb revive") {
+		if o.Verb == "action" && contains(o.Arg, "revive ") {
 			reviveAt = o.At
 		}
 	}
@@ -344,7 +343,7 @@ func TestScenarioWipeRepeat(t *testing.T) {
 	if n := countVerb(res.Orders, "pull"); n != 2 {
 		t.Fatalf("%d pulls, want 2", n)
 	}
-	if n := countArg(res.Orders, "setup", ".tb revive"); n != 0 {
+	if n := countArg(res.Orders, "action", "revive"); n != 0 {
 		t.Fatalf("%d practice revives before the stop", n)
 	}
 	var sawWipe, sawRest bool
@@ -539,15 +538,15 @@ func TestDryRunLongPlan(t *testing.T) {
 func TestTravelFollow(t *testing.T) {
 	cfg := scenarioConfig("tele")
 	run, f := newScenario(t, oneGroupPlan(), cfg)
-	f.OnSetup = func(f *Fake, line string) bool {
-		if strings.HasPrefix(line, ".tb tele party ") {
-			for _, name := range cfg.Party {
-				b := f.botState(name)
-				b.pos, b.mapID = Vec3{0, 0, 0}, 1
-			}
-			return true
+	f.OnAction = func(f *Fake, a Action) bool {
+		if a.Kind != ActionTeleParty {
+			return false
 		}
-		return false
+		for _, name := range cfg.Party {
+			b := f.botState(name)
+			b.pos, b.mapID = Vec3{0, 0, 0}, 1
+		}
+		return true
 	}
 	res := play(t, run)
 	if res.Stop != "travel" {
