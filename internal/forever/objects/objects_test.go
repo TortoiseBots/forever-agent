@@ -235,6 +235,10 @@ func auditFixture(opcode string, payload []byte) ([]wire.GUID, []NameIdentifier,
 		_, err = parseMoveTeleport(payload, hook)
 	case "SMSG_MOVE_UPDATE":
 		_, err = parseMoveUpdate(payload, hook)
+	case "CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK", "CMSG_MOVE_FORCE_SWIM_SPEED_CHANGE_ACK":
+		_, _, _, err = parseSpeedAck(payload, hook)
+	case "CMSG_MOVE_WATER_WALK_ACK":
+		_, _, err = parseMovementAck(payload, hook)
 	default:
 		_, err = parseMovementPacket(payload, hook)
 	}

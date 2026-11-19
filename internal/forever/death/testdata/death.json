@@ -1,0 +1,173 @@
+{
+  "note": "Payloads for the death round, each one packet (payload without the 4-byte opcode). Captured packets come from a local capture of a real session, rewritten: every packed GUID the parser decodes is synthetic (same mask and type byte), the gossip menu and option ids are the synthetic 4242, the graveyard position is (1000, 2000, 50), and the clock values are the game's own (the reclaim delay is the server's 30000 ms). The hand-built packets have no capture case and are labelled in their source; their fields follow the server's writer cited in the name's comment.",
+  "packets": [
+    {
+      "name": "death_release_loc",
+      "opcode": "SMSG_DEATH_RELEASE_LOC",
+      "direction": "server",
+      "source": "captured",
+      "payload": "0000000000007a440000fa4400004842",
+      "rewritten": [
+        "graveyard position"
+      ]
+    },
+    {
+      "name": "death_release_loc_revived",
+      "opcode": "SMSG_DEATH_RELEASE_LOC",
+      "direction": "server",
+      "source": "captured",
+      "payload": "ffffffff000000000000000000000000"
+    },
+    {
+      "name": "corpse_reclaim_delay",
+      "opcode": "SMSG_CORPSE_RECLAIM_DELAY",
+      "direction": "server",
+      "source": "captured",
+      "payload": "30750000"
+    },
+    {
+      "name": "pre_ressurect",
+      "opcode": "SMSG_PRE_RESSURECT",
+      "direction": "server",
+      "source": "captured",
+      "payload": "03e0545b575e08",
+      "synthetic_guids": [
+        "0x085E5700000000000000000000005B54"
+      ],
+      "rewritten": [
+        "player GUID"
+      ]
+    },
+    {
+      "name": "stand_state_update",
+      "opcode": "SMSG_STAND_STATE_UPDATE",
+      "direction": "server",
+      "source": "captured",
+      "payload": "0000000000"
+    },
+    {
+      "name": "gossip_message",
+      "opcode": "SMSG_GOSSIP_MESSAGE",
+      "direction": "server",
+      "source": "captured",
+      "payload": "03e7545b343b42575e209210000000000000000000000100000000000000921000000400000000000000000000000000000000000000000000000000000000012000001052657475726e206d6520746f206c6966652e40f1090000",
+      "synthetic_guids": [
+        "0x205E570000423B340000000000005B54"
+      ],
+      "rewritten": [
+        "gossip unit GUID",
+        "menu id and option id (synthetic 4242)"
+      ]
+    },
+    {
+      "name": "repop_request",
+      "opcode": "CMSG_REPOP_REQUEST",
+      "direction": "client",
+      "source": "captured",
+      "payload": "00"
+    },
+    {
+      "name": "talk_to_gossip",
+      "opcode": "CMSG_TALK_TO_GOSSIP",
+      "direction": "client",
+      "source": "captured",
+      "payload": "03e7545b343b42575e20",
+      "synthetic_guids": [
+        "0x205E570000423B340000000000005B54"
+      ],
+      "rewritten": [
+        "gossip unit GUID"
+      ]
+    },
+    {
+      "name": "gossip_select_option",
+      "opcode": "CMSG_GOSSIP_SELECT_OPTION",
+      "direction": "client",
+      "source": "captured",
+      "payload": "03e7545b343b42575e20921000009210000000",
+      "synthetic_guids": [
+        "0x205E570000423B340000000000005B54"
+      ],
+      "rewritten": [
+        "gossip unit GUID",
+        "menu id and option id (synthetic 4242)"
+      ]
+    },
+    {
+      "name": "spirit_healer_activate",
+      "opcode": "CMSG_SPIRIT_HEALER_ACTIVATE",
+      "direction": "client",
+      "source": "captured",
+      "payload": "03e7545b343b42575e20",
+      "synthetic_guids": [
+        "0x205E570000423B340000000000005B54"
+      ],
+      "rewritten": [
+        "healer GUID"
+      ]
+    },
+    {
+      "name": "close_interaction",
+      "opcode": "CMSG_CLOSE_INTERACTION",
+      "direction": "client",
+      "source": "captured",
+      "payload": "03e7545b343b42575e20",
+      "synthetic_guids": [
+        "0x205E570000423B340000000000005B54"
+      ],
+      "rewritten": [
+        "gossip unit GUID"
+      ]
+    },
+    {
+      "name": "resurrect_request",
+      "opcode": "SMSG_RESURRECT_REQUEST",
+      "direction": "server",
+      "source": "hand-built (Spell.cpp:5554-5588): a player's offer; no capture has one",
+      "payload": "018040080000000000000000d80700000000",
+      "synthetic_guids": [
+        "0x08000000000000000000000000000040"
+      ]
+    },
+    {
+      "name": "resurrect_request_healer",
+      "opcode": "SMSG_RESURRECT_REQUEST",
+      "direction": "server",
+      "source": "hand-built (Spell.cpp:5554-5588, Player.cpp:15316 forum): a spirit healer's offer",
+      "payload": "0180800c000000000000000063430000003848",
+      "synthetic_guids": [
+        "0x0C000000000000000000000000000080"
+      ]
+    },
+    {
+      "name": "corpse_location",
+      "opcode": "SMSG_CORPSE_LOCATION",
+      "direction": "server",
+      "source": "hand-built (QueryPackets.cpp:393-405); no capture has a corpse query",
+      "payload": "80018040080000000000000000000000007a440000fa4400004842",
+      "synthetic_guids": [
+        "0x08000000000000000000000000000040"
+      ]
+    },
+    {
+      "name": "corpse_location_invalid",
+      "opcode": "SMSG_CORPSE_LOCATION",
+      "direction": "server",
+      "source": "hand-built (QueryPackets.cpp:393-405): the no-corpse answer",
+      "payload": "000180400800000000000000000000000000000000000000000000",
+      "synthetic_guids": [
+        "0x08000000000000000000000000000040"
+      ]
+    },
+    {
+      "name": "corpse_transport_answer",
+      "opcode": "SMSG_CORPSE_TRANSPORT_QUERY",
+      "direction": "server",
+      "source": "hand-built (QueryPackets.cpp:407-420): the empty answer",
+      "payload": "0180400800000000000000000000000000000000",
+      "synthetic_guids": [
+        "0x08000000000000000000000000000040"
+      ]
+    }
+  ]
+}

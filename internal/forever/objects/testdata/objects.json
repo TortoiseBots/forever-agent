@@ -299,6 +299,39 @@
       "rewritten": [
         "position moved to 1000 2000 50, orientation 0.5, movement time 960000, GUID synthetic"
       ]
+    },
+    {
+      "name": "force_run_speed_ack",
+      "opcode": "CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK",
+      "payload": "03e02128242b08000400800000000000a60e0000007a440000fa44000048420000003f000000000000000000000000000000000000803f00000200000000000c41",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "position moved to 1000 2000 50, orientation 0.5, movement time 960000, GUID synthetic"
+      ]
+    },
+    {
+      "name": "force_swim_speed_ack",
+      "opcode": "CMSG_MOVE_FORCE_SWIM_SPEED_CHANGE_ACK",
+      "payload": "03e02128242b08000400800000000000a60e0000007a440000fa44000048420000003f000000000000000000000000000000000000803f0000030000008de3bc40",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "position moved to 1000 2000 50, orientation 0.5, movement time 960000, GUID synthetic"
+      ]
+    },
+    {
+      "name": "water_walk_ack",
+      "opcode": "CMSG_MOVE_WATER_WALK_ACK",
+      "payload": "03e02128242b08000400840000000000a60e0000007a440000fa44000048420000003f000000000000000000000000000000000000803f000004000000",
+      "synthetic_guids": [
+        "03e02128242b08"
+      ],
+      "rewritten": [
+        "position moved to 1000 2000 50, orientation 0.5, movement time 960000, GUID synthetic"
+      ]
     }
   ]
 }

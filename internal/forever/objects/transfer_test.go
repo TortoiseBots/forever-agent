@@ -444,6 +444,51 @@ func TestMoverRefusesMovementBetweenMaps(t *testing.T) {
 	}
 }
 
+// TestGhostMapChangeKeepsTheGhostsMovement: the death round's ghost state (the released spirit's run speed and
+// water walking, which its acks carry) and the map-change reset compose. A ghost that changes maps keeps its
+// 8.75 yd/s and its water-walking status bit, loses the old map's moving and falling bits, and the next leg starts
+// from the new world's position at the ghost speed.
+func TestGhostMapChangeKeepsTheGhostsMovement(t *testing.T) {
+	start := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	var guid wire.GUID
+	guid.Low = 0x77
+	guid.High = 0x0A44330000000000
+	m := &Mover{
+		GUID: guid, Sender: sender, ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X: 1000, Y: 2000, Z: 50, RunSpeed: 8.75,
+		Flags: FlagTouchingGround | FlagWaterwalking | FlagForward | FlagFalling,
+	}
+	m.BeginMapChange()
+	m.EndMapChange(2000, 3000, 60, 0.5)
+	if m.RunSpeed != 8.75 {
+		t.Fatalf("the ghost's run speed became %.2f after the map change", m.RunSpeed)
+	}
+	if m.Flags&FlagWaterwalking == 0 {
+		t.Fatalf("the map change dropped the ghost's water walking: %#x", m.Flags)
+	}
+	if m.Flags&FlagTouchingGround == 0 {
+		t.Fatalf("the mover does not report the ground after the map change: %#x", m.Flags)
+	}
+	if m.Flags&(FlagForward|FlagFalling) != 0 {
+		t.Fatalf("the map change kept the old map's moving flags: %#x", m.Flags)
+	}
+	// 8.75 yd at the ghost's 8.75 yd/s is exactly one second: two heartbeats and the stop at 1.00 s.
+	if err := m.MoveTo(context.Background(), 2008.75, 3000, 60); err != nil {
+		t.Fatalf("the ghost's walk after the map change: %v", err)
+	}
+	last := sender.sent[len(sender.sent)-1]
+	if last.core != wire.CMSGMoveStop {
+		t.Fatalf("the last packet is %s, want the stop", wire.ClientName(last.core))
+	}
+	if elapsed := last.at.Sub(start); elapsed != time.Second {
+		t.Fatalf("the 8.75-yard leg ended after %s, want the ghost's 1.00 s", elapsed)
+	}
+	if mi := moveOf(t, last); mi.Flags&FlagWaterwalking == 0 {
+		t.Fatalf("the stop's movement block lost the water-walking flag: %#x", mi.Flags)
+	}
+}
+
 // TestMoverCompletesATransferInsideOneWait: SMSG_TRANSFER_PENDING, SMSG_SUSPEND_TOKEN and SMSG_NEW_WORLD all arrive
 // inside one wait, so the session's wait returns ErrMapChange with the mover already on the new map. None of the three
 // legs may then advance the old line, send its stop from old-map coordinates, or leave the mover on the old map.

@@ -293,6 +293,14 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
 		}
+		if ctx.Err() != nil {
+			// Cancelled while the wait answered server packets: stop at once, before another heartbeat, so no
+			// movement packet follows the stop. Between maps the stop is refused as well (sendAt), so a cancelled
+			// leg that met a transfer sends nothing on the old map.
+			m.advance(sx, sy, sz, tx, ty, tz, dist, start, m.Sender.Now())
+			_ = m.send(wire.CMSGMoveStop, base)
+			return ctx.Err()
+		}
 		if m.betweenMaps {
 			// The map change ended the leg while this wake-up waited: nothing of the old line goes out.
 			return ErrMapChange
@@ -474,6 +482,13 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
+		}
+		if ctx.Err() != nil {
+			// Cancelled while the wait answered server packets: stop at once, before another heartbeat. Between
+			// maps the stop is refused too (sendAt), so no old-map packet goes out.
+			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
+			_ = m.send(wire.CMSGMoveStop, base)
+			return ctx.Err()
 		}
 		if m.betweenMaps {
 			return ErrMapChange

@@ -58,6 +58,20 @@ type Options struct {
 	FightCheck bool
 	Entry      int32
 	FightFor   time.Duration
+	// Round 6: death-check. It settles, waits for the character to die (a console command or a mob does that; the
+	// client never kills itself), then releases, finds the corpse, runs back and reclaims it, or waits for a
+	// resurrection offer and accepts it (AcceptResurrect), or uses the spirit healer (UseSpiritHealer).
+	DeathCheck      bool
+	AcceptResurrect bool
+	// AcceptResurrectFrom is --accept-resurrect-from NAME: with AcceptResurrect it answers only an offer whose
+	// offerer the model knows by that name. Empty accepts an offer from any GUID, which is the default: the server
+	// already decides who may offer a resurrection (MiscHandler.cpp:520-521).
+	AcceptResurrectFrom string
+	UseSpiritHealer     bool
+	// DeathWait bounds how long death-check waits for the character to die; ResurrectWait how long --accept-resurrect
+	// waits for an offer before it falls back to the release and the corpse run.
+	DeathWait     time.Duration
+	ResurrectWait time.Duration
 	// CaptureDir is a debug option (--capture-dir; keep it outside the repository): every packet the combat, chat
 	// and party handlers see is written to a new run directory under it (see capture_run.go for the layout, the
 	// exclusive files and the bounds). The directory holds the run's identifiers, so the fixture generators rewrite
@@ -181,6 +195,8 @@ type Report struct {
 	// Round A0: the add-on transport's registered list and what it delivered.
 	Addon AddonSummary
 
+	// Round 6: the death flow's state and steps.
+	Death DeathReport
 	// Round A6: the command channel's runs, whether the GM guard confirmed, and the typed state table.
 	Commands    []CommandRun
 	GMConfirmed bool
@@ -213,6 +229,8 @@ type ObjectSummary struct {
 	Partial  int
 	Unparsed map[string]int
 	ByType   map[string]int
+	// Resurrections counts units the model saw come back from the ghost state.
+	Resurrections int
 }
 
 // UnitRow is one line of the nearest-units table.
@@ -339,6 +357,9 @@ type session struct {
 	// wire numbers must not grow the report per packet: past maxUnknownReportKeys everything collapses into one key.
 	unknownKeys int
 
+	// Round 6: the death flow's own state (phase, corpse, reclaim deadline, pending offer).
+	death *deathWatch
+
 	// Round 3: the world model, the character's own GUID once the create block names it, and the mover.
 	world    *objects.World
 	self     wire.GUID
@@ -409,6 +430,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.deadChs[sideRealm] = make(chan struct{})
 	s.deadChs[sideInstance] = make(chan struct{})
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
+	s.death = &deathWatch{started: time.Now()}
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
@@ -786,6 +808,14 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.DeathCheck {
+		err := s.deathCheck(ctx)
+		s.report.Death = s.deathReport()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if s.opts.MapCheck {
 		if err := s.mapCheck(ctx); err != nil {
 			return err
@@ -1042,16 +1072,17 @@ func reasonSuffix(reason string) string {
 func (s *session) objectSummary() ObjectSummary {
 	c := s.world.Counts()
 	summary := ObjectSummary{
-		Map:        s.world.MapID(),
-		Objects:    c.Objects,
-		Created:    c.Created,
-		Updated:    c.Updated,
-		Destroyed:  c.Destroyed,
-		OutOfRange: c.OutOfRange,
-		Updates:    c.Applied,
-		Partial:    c.Partial,
-		Unparsed:   make(map[string]int, len(c.Unparsed)),
-		ByType:     make(map[string]int),
+		Map:           s.world.MapID(),
+		Objects:       c.Objects,
+		Created:       c.Created,
+		Updated:       c.Updated,
+		Destroyed:     c.Destroyed,
+		OutOfRange:    c.OutOfRange,
+		Updates:       c.Applied,
+		Partial:       c.Partial,
+		Resurrections: c.Resurrections,
+		Unparsed:      make(map[string]int, len(c.Unparsed)),
+		ByType:        make(map[string]int),
 	}
 	for reason, n := range c.Unparsed {
 		summary.Unparsed[reason] = n
@@ -1350,6 +1381,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		s.applyUpdate(u)
 		s.world.Apply(u, s.transport().Now())
+		s.observeSelfIfTracking()
 	case wire.SMSGOnMonsterMove:
 		m, err := objects.ParseMonsterMove(p.Payload)
 		if err != nil {
@@ -1379,7 +1411,10 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.report.Teleports++
 		s.world.ApplyTeleport(t, s.transport().Now())
 		if t.MoverGUID == s.self {
-			if t.Transport != nil || t.HasVehicle {
+			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
+			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is
+			// empty. An empty transport is no transport (the capture's release teleport is exactly this shape).
+			if (t.Transport != nil && !t.Transport.IsZero()) || t.HasVehicle {
 				// An ack would tell the server the client is standing on the transport's seat, which this round
 				// cannot model: report it and end the walk instead of sending an ack the client cannot honour.
 				s.opts.logf("world: teleport onto a transport: not handled (transport %v, vehicle %v)", t.Transport != nil, t.HasVehicle)
@@ -1438,6 +1473,11 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGGroupDestroyed, wire.SMSGGroupNewLeader, wire.SMSGPartyCommandResult,
 		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		return s.handleParty(p)
+	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
+		wire.SMSGResurrectRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
+		wire.SMSGStandStateUpdate, wire.SMSGGossipMessage, wire.SMSGMoveSetRunSpeed,
+		wire.SMSGMoveSetSwimSpeed, wire.SMSGMoveSetWaterWalk, wire.SMSGMoveSetLandWalk:
+		return s.handleDeath(p)
 	// Round A7's handlers live in mapchange.go; this is their one registration line.
 	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
@@ -1604,6 +1644,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplyAuraUpdate(&v, now)
+		s.observeSelfIfTracking()
 		for _, info := range v.Auras {
 			s.fight.aura(v.Unit, info)
 		}
@@ -1650,13 +1691,6 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.fight.xp += v.Amount
 		s.fight.add("xp", fmt.Sprintf("%s: %d experience", combat.XPGainReasonName(v.Reason), v.Amount), 0)
-	case wire.SMSGDeathReleaseLoc:
-		v, err := combat.ParseDeathRelease(p.Payload)
-		if err != nil {
-			s.noteParseError(p, err)
-			return
-		}
-		s.fight.add("death", fmt.Sprintf("the corpse is released on map %d", v.MapID), 0)
 	case wire.SMSGSendKnownSpells:
 		v, err := combat.ParseKnownSpells(p.Payload)
 		if err != nil {
@@ -1688,6 +1722,15 @@ func (s *session) noteParseError(p worldconn.Packet, err error) {
 // applyUpdate records what the client learned about itself from an update: the create block of ThisIsYou carries the
 // character's GUID, position and run speed. A later ThisIsYou create (a map change or a fresh burst) puts the
 // character somewhere else, so the mover's belief follows it instead of keeping the first create's position.
+// observeSelfIfTracking lets the death watch follow a model change without creating its state in sessions that do
+// not use the death flow. A corpse run's walk is then cancelled the moment the model shows the character alive,
+// rather than at its next heartbeat wait.
+func (s *session) observeSelfIfTracking() {
+	if s.death != nil {
+		s.observeSelf(s.transport().Now())
+	}
+}
+
 func (s *session) applyUpdate(u *objects.Update) {
 	for _, b := range u.Blocks {
 		if b.Movement == nil || !b.Movement.ThisIsYou {
