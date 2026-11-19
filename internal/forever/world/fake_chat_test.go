@@ -847,6 +847,7 @@ func TestPartyCheckRejectsAnInvalidRoster(t *testing.T) {
 			f := newFakeServer(t)
 			f.partyAccept = true
 			f.partyInvalid = caseName
+			f.clientMayLeave = true // the client refuses the roster and leaves
 			defer f.close()
 			f.wg.Add(1)
 			go f.serveRealm()
@@ -994,6 +995,7 @@ func TestPartyCheckUninviteAgainstFakeServer(t *testing.T) {
 func TestPartyCheckRefusesAnInviteThatCannotBeAccepted(t *testing.T) {
 	f := newFakeServer(t)
 	f.partyNoAccept = true
+	f.clientMayLeave = true // the client refuses the invite and leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()

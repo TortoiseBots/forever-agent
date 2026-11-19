@@ -524,6 +524,7 @@ func TestMapChangeDuringAWalkEndsIt(t *testing.T) {
 	sc.toPos = [3]float32{3000, 4000, 60}
 	sc.walk = true
 	f.mapSc = sc
+	f.clientMayLeave = true // the walk ends on ErrMapChange and the client leaves
 	defer f.close()
 	f.wg.Add(1)
 	go f.serveRealm()

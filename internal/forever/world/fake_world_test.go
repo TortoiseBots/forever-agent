@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -169,7 +170,12 @@ type fakeServer struct {
 	closeWhen       string
 	resetLink       bool
 	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
-	walk            bool
+	// clientMayLeave declares a scenario whose point is the client refusing on its own and leaving before the
+	// session's normal end (a prefix the client validates, an invite it must not answer, a roster it rejects): the
+	// client closes on purpose, so EPIPE/ECONNRESET/EOF on one of the fake's writes is that scenario's end, not a
+	// protocol failure. Set before the handlers start; every other scenario still fails on a write error.
+	clientMayLeave bool
+	walk           bool
 	// death runs the round 6 scenario: the character's death, the release, the graveyard teleport, the corpse
 	// query, the run and the reclaim, on real sockets. deathMapSc makes the release's graveyard another map: the
 	// scenario then follows the transfer before the death-release location.
@@ -252,6 +258,16 @@ func (f *fakeServer) failf(format string, args ...any) {
 	}
 }
 
+// leftOnWrite reports whether a failed write is the client's own early departure. Only a scenario that declared
+// clientMayLeave may end that way: the client refused and closed its end, so the socket answers EPIPE, ECONNRESET
+// or EOF. Every other scenario still reports the write error as a failure.
+func (f *fakeServer) leftOnWrite(err error) bool {
+	if !f.clientMayLeave {
+		return false
+	}
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF)
+}
+
 // wait waits for both handlers and returns the first protocol error they reported.
 func (f *fakeServer) wait(t *testing.T) {
 	t.Helper()
@@ -329,6 +345,9 @@ func (c *fakeConn) writeFrame(wire uint32, payload []byte) {
 	copy(frame[4:16], tag[:])
 	copy(frame[16:], body)
 	if _, err := c.nc.Write(frame); err != nil {
+		if c.f.leftOnWrite(err) {
+			return
+		}
 		c.f.failf("fake server write: %v", err)
 	}
 }
@@ -1479,6 +1498,7 @@ func TestTeleportDuringWalkStartsTheNextPacketAtTheDestination(t *testing.T) {
 	f.walkFrom = [3]float32{1000, 2000, 50}
 	f.walkTo = [3]float32{1030, 2000, 50}
 	f.teleportDuringWalk = true
+	f.clientMayLeave = true // the walk ends on the teleport's own error and the client leaves
 	f.teleportAt = [3]float32{1005, 2003, 50}
 	f.teleportSeq = 77
 	defer f.close()
@@ -1539,6 +1559,7 @@ func TestTeleportOntoATransportIsNotAcknowledged(t *testing.T) {
 	f.walkTo = [3]float32{1030, 2000, 50}
 	f.teleportDuringWalk = true
 	f.teleportTransport = true
+	f.clientMayLeave = true // the client refuses the transport teleport and leaves
 	f.teleportAt = [3]float32{1005, 2003, 50}
 	f.teleportSeq = 78
 	defer f.close()
@@ -1678,10 +1699,11 @@ func TestWalkCheckNavmeshFallsBackToTheInstanceParentTile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run := func(t *testing.T, parents map[uint32]uint32) (*Report, []string, error) {
+	run := func(t *testing.T, parents map[uint32]uint32, mayLeave bool) (*Report, []string, error) {
 		t.Helper()
 		f := newFakeServer(t)
 		f.walk = true
+		f.clientMayLeave = mayLeave
 		f.mapID = 389
 		f.walkFrom = [3]float32{1000, 2000, 50}
 		f.walkTo = [3]float32{1020, 2010, 50}
@@ -1717,10 +1739,11 @@ func TestWalkCheckNavmeshFallsBackToTheInstanceParentTile(t *testing.T) {
 	}
 
 	// Without the parent rule the instance has no tile files: the walk is refused, and the run still logs out.
-	if _, steps, err := run(t, nil); err == nil || !strings.Contains(err.Error(), "no forever-v16 tile files for map 389") {
+	// Without the parent rule the client refuses the walk (no tile) and leaves before the normal end.
+	if _, steps, err := run(t, nil, true); err == nil || !strings.Contains(err.Error(), "no forever-v16 tile files for map 389") {
 		t.Fatalf("without the parent rule: %v\nsteps:\n%s", err, joinLines(steps))
 	}
-	report, steps, err := run(t, map[uint32]uint32{389: 0})
+	report, steps, err := run(t, map[uint32]uint32{389: 0}, false)
 	if err != nil {
 		t.Fatalf("with --parent 389=0: %v\nsteps:\n%s", err, joinLines(steps))
 	}
@@ -1745,6 +1768,7 @@ func TestWalkCheckNavmeshFallsBackToTheInstanceParentTile(t *testing.T) {
 func TestTeleportWithAnEmptyTransportIsAcked(t *testing.T) {
 	f := newFakeServer(t)
 	f.walk = true
+	f.clientMayLeave = true // the walk ends on the teleport's own error and the client leaves
 	f.walkFrom = [3]float32{1000, 2000, 50}
 	f.walkTo = [3]float32{1030, 2000, 50}
 	f.teleportDuringWalk = true
