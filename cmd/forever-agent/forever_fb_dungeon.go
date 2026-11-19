@@ -63,8 +63,11 @@ func foreverFBDungeonCmd(ctx context.Context, args []string, stdout, stderr io.W
 	}
 
 	report, err := common.enter(ctx, "forever fb-dungeon", stdout, world.Options{
-		Stay:           *stay,
-		Settle:         *settle,
+		Stay:   *stay,
+		Settle: *settle,
+		// The run's Deadline must cover the bounded form and entry waits, the watch and the way out; Enter's
+		// default (2 minutes) is a plain stay's.
+		Deadline:       12*time.Minute + time.Duration(*watch)*time.Second + *stay,
 		FBDungeon:      true,
 		FBDungeonName:  *dungeon,
 		FBDungeonRole:  *role,
