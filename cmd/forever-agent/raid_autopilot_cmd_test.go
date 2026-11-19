@@ -3505,16 +3505,31 @@ func TestAutoInstanceCapRefusalsEscalate(t *testing.T) {
 		f.attempt(fmt.Sprintf("a-%d", i), 26, 0, capEnd)
 	}
 	f.attempt("a-6", 2, 0, "bad --sql")
+	// Gate every attempt: the supervisor can launch attempt i only after the driver released it, and the driver
+	// releases it only after attempt i-1's finish is observed. The pairing is then exact whatever the tick timing
+	// is (no release, no launch, no overrun: a level poll that misses a whole launch-finish cycle under load
+	// observes the wrong attempt, so the 4th refusal's escalation is blamed on the 3rd). Attempts 5-6 are never
+	// released: the loop ends after attempt 4's escalation.
+	for i := 1; i <= 6; i++ {
+		f.gateAttempt(fmt.Sprintf("a-%d", i))
+	}
+	f.t.Cleanup(func() {
+		for i := 1; i <= 6; i++ {
+			_ = os.WriteFile(filepath.Join(f.specDir, fmt.Sprintf("a-%d.go", i)), []byte("1"), 0o600)
+		}
+	})
 	s := f.supervisor()
 	for i := 1; i <= 3; i++ {
+		f.releaseAttempt(fmt.Sprintf("a-%d", i))
 		tickUntil(t, s, fmt.Sprintf("launch %d", i), func() bool { return len(f.args()) >= i })
-		finishAttempt(t, s)
+		finishAttemptN(t, s, i)
 		if _, esc := runState(s.states[0]); esc {
 			t.Fatalf("escalated at cap refusal %d of 4:\n%s", i, f.events())
 		}
 	}
+	f.releaseAttempt("a-4")
 	tickUntil(t, s, "launch 4", func() bool { return len(f.args()) >= 4 })
-	finishAttempt(t, s)
+	finishAttemptN(t, s, 4)
 	if _, esc := runState(s.states[0]); !esc {
 		t.Fatalf("four cap refusals in a row did not escalate:\n%s", f.events())
 	}
