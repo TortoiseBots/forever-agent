@@ -62,6 +62,7 @@ type mapScenario struct {
 	stale         int  // movement packets while open: they carry the old map's coordinates
 	suspendAcked  bool
 	worldPortSeen bool
+	worldPorts    int   // every world-port response, so a second map change can wait for its own
 	areaTrigger   int32 // the id the client sent, -1 when none
 	loadingScreen int32 // the map the client said it is loading, -1 when none
 	worldPortCh   chan struct{}
@@ -309,6 +310,13 @@ func (sc *mapScenario) suspendAckedNow() bool {
 	return sc.suspendAcked
 }
 
+// worldPortCount is how many world-port responses the realm reader saw, for a helper that waits on its own one.
+func (sc *mapScenario) worldPortCount() int {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return sc.worldPorts
+}
+
 // sendTransferAborted sends SMSG_TRANSFER_ABORTED as the server's writer lays it out (MovementPackets.cpp:779-787).
 func (f *fakeServer) sendTransferAborted(realm *fakeConn, sc *mapScenario) {
 	b := appendU32(nil, sc.abortMap)
@@ -326,6 +334,9 @@ func (f *fakeServer) serveRealmMapCase(c *fakeConn, wireNo uint32, payload []byt
 	if sc == nil {
 		// The death flow's far release answers the same two realm-side packets; its scenario is the same shape.
 		sc = f.deathMapSc
+	}
+	if sc == nil {
+		sc = f.fbdMapSc
 	}
 	if sc == nil {
 		return false
@@ -347,6 +358,7 @@ func (f *fakeServer) serveRealmMapCase(c *fakeConn, wireNo uint32, payload []byt
 		sc.mu.Lock()
 		seen := sc.worldPortSeen
 		sc.worldPortSeen = true
+		sc.worldPorts++
 		sc.mu.Unlock()
 		if !seen {
 			close(sc.worldPortCh)
