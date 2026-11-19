@@ -21,7 +21,7 @@ import (
 // exitPlanCheck: plan-check found a point the navmesh cannot take (a failing plan is not a usage error).
 const exitPlanCheck = 11
 
-const planCheckUsage = "usage: forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--floor-aware] [--approach-hops] [--strict] [--json] <plan>... | forever-agent plan-check --mmaps DIR --sql FILE [--plan NAME] [--spawns DIR] [--strict] [--json]"
+const planCheckUsage = "usage: forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--floor-aware] [--approach-hops] [--forever [--spawns FILE]] [--strict] [--json] <plan>... | forever-agent plan-check --mmaps DIR --sql FILE [--plan NAME] [--spawns DIR] [--forever [--spawns FILE]] [--strict] [--json]"
 
 // planCheckCmd walks the named plans on the navmesh (README, "Plan check") and prints each failing point. It reads the plan files and
 // the mmaps folder and nothing else.
@@ -39,6 +39,7 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 	approachHops := fs.Bool("approach-hops", false, "build the plan's rows for the lints with the approach hops (plan-export --approach-hops)")
 	strict := fs.Bool("strict", false, "make a lint finding fail the check (by default the lints are warnings)")
 	asJSON := fs.Bool("json", false, "print the results as JSON")
+	forever := fs.Bool("forever", false, "read --mmaps as the v16 tiles and --spawns as a TSV spawn list (guid entry x y z movetype) for a server module that runs dungeon plans")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -59,10 +60,15 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, planCheckUsage)
 		return exitUsage
 	}
-	planner := navmesh.NewPlanner(*mmaps)
+	var planner *navmesh.Planner
+	if *forever {
+		planner = navmesh.NewForeverPlanner(*mmaps, nil)
+	} else {
+		planner = navmesh.NewPlanner(*mmaps)
+	}
 	defer planner.Close()
 	if *sqlFile != "" {
-		return planLintCmd(*sqlFile, *planFlag, *spawns, *dir, planner, *strict, *asJSON, stdout, stderr)
+		return planLintCmd(*sqlFile, *planFlag, *spawns, *dir, planner, *strict, *asJSON, *forever, stdout, stderr)
 	}
 	var results []planCheckReport
 	failed := false
@@ -85,7 +91,7 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "plan-check: %s: %v\n", n, err)
 			return exitUsage
 		}
-		lints, note, err := planLints(p, planner, *dir, *spawns, *floorAware, *approachHops)
+		lints, note, err := planLints(p, planner, *dir, *spawns, *floorAware, *approachHops, *forever)
 		if err != nil {
 			fmt.Fprintf(stderr, "plan-check: %s: %v\n", n, err)
 			return exitUsage
@@ -171,19 +177,25 @@ func lintCountsText(c map[string]int) string {
 
 // planLints builds the plan's rows as plan-export writes them and lints them. A plan the exporter refuses is not a check
 // failure: the note says why the lints did not run.
-func planLints(p *dungeon.Plan, planner *navmesh.Planner, dir, spawnDir string, floorAware, approachHops bool) ([]planlint.Finding, string, error) {
+func planLints(p *dungeon.Plan, planner *navmesh.Planner, dir, spawnDir string, floorAware, approachHops, forever bool) ([]planlint.Finding, string, error) {
 	planner.SetAvoid(p.Map, dungeon.NavBoxes(p.Avoid))
 	rows, err := planexport.Build(p, planexport.Options{Source: "plan-check", Cut: cutWith(planner, floorAware), ApproachHops: approachHops})
 	if err != nil {
 		return nil, fmt.Sprintf("lints skipped: the exporter refused the plan: %v", err), nil
 	}
-	return lintRows(rows.Rows, planner, dir, spawnDir, p)
+	return lintRows(rows.Rows, planner, dir, spawnDir, p, forever)
 }
 
 // lintRows lints already built rows (an export's steps). p is the plan behind them (nil for a migration: the row's own
 // pull rules stand in).
-func lintRows(rows planexport.Rows, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan) ([]planlint.Finding, string, error) {
-	world, note := worldForLints(dir, spawnDir, rows.Plan.Map)
+func lintRows(rows planexport.Rows, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan, forever bool) ([]planlint.Finding, string, error) {
+	var world *worldspawn.World
+	var note string
+	if forever {
+		world, note = worldForLintsForever(spawnDir, rows.Plan.Map)
+	} else {
+		world, note = worldForLints(dir, spawnDir, rows.Plan.Map)
+	}
 	opt := planlint.Options{Map: rows.Plan.Map, Level: 60, World: world}
 	if p != nil {
 		opt.Raid, opt.KillFirst, opt.PullCeiling = p.IsRaid(), p.KillFirst, p.PullCeiling
@@ -193,6 +205,21 @@ func lintRows(rows planexport.Rows, planner *navmesh.Planner, dir, spawnDir stri
 		return nil, note, err
 	}
 	return fs, note, nil
+}
+
+// worldForLintsForever loads a server's TSV spawn list (guid entry x y z movetype) for the aggro and patrol lints.
+func worldForLintsForever(spawnFile string, mapID uint32) (*worldspawn.World, string) {
+	if spawnFile == "" {
+		return nil, "aggro and patrol lints skipped: pass --spawns FILE (a TSV: guid entry x y z movetype)"
+	}
+	if st, err := os.Stat(spawnFile); err == nil && st.IsDir() {
+		return nil, fmt.Sprintf("aggro and patrol lints skipped: --forever reads --spawns as a TSV file, and %s is a folder", spawnFile)
+	}
+	w, notes, err := worldspawn.LoadForeverSpawns(spawnFile, mapID)
+	if err != nil {
+		return nil, fmt.Sprintf("aggro and patrol lints skipped: %v", err)
+	}
+	return w, strings.Join(notes, "; ")
 }
 
 // worldForLints loads the map's world export for the aggro and patrol lints; nil (with the reason) when it is not there.
@@ -229,7 +256,7 @@ func printLints(w io.Writer, name string, fs []planlint.Finding, note string, st
 }
 
 // planLintCmd lints the rows of one migration (plan-check --sql), the exported rows as the server runs them.
-func planLintCmd(sqlFile, planName, spawns, dir string, planner *navmesh.Planner, strict, asJSON bool, stdout, stderr io.Writer) int {
+func planLintCmd(sqlFile, planName, spawns, dir string, planner *navmesh.Planner, strict, asJSON, forever bool, stdout, stderr io.Writer) int {
 	b, err := os.ReadFile(sqlFile)
 	if err != nil {
 		fmt.Fprintf(stderr, "plan-check: %v\n", err)
@@ -274,7 +301,7 @@ func planLintCmd(sqlFile, planName, spawns, dir string, planner *navmesh.Planner
 			return exitUsage
 		}
 	}
-	fs, note, err := lintRows(r, planner, dir, spawns, nil)
+	fs, note, err := lintRows(r, planner, dir, spawns, nil, forever)
 	if err != nil {
 		fmt.Fprintf(stderr, "plan-check: %v\n", err)
 		return exitUsage

@@ -19,7 +19,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
-const planExportUsage = "usage: forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot] [--carrier-chests] [--gm-cross-direct] [--approach-hops] [--floor-aware] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)"
+const planExportUsage = "usage: forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot] [--carrier-chests] [--gm-cross-direct] [--approach-hops] [--floor-aware] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)\n" +
+	"       forever-agent plan-export --forever [--report] [--dir dungeons] [--mmaps DIR] [--floor-aware] [--approach-hops] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--rev SHA] [--force] --out DIR|FILE (<plan>... | --all-live)\n" +
+	"       forever-agent plan-export --forever --report [--dir dungeons] [<plan>...]"
 
 // migrationName is what a TortoiseBots world migration is called (data/sql/world/).
 var migrationName = regexp.MustCompile(`^\d{14}_world\.sql$`)
@@ -46,8 +48,35 @@ func planExportCmd(args []string, stdout, stderr io.Writer) int {
 	withOptional := fs.String("with-optional", "", "optional leg names (comma list) written into the rows anyway (Zul'Farrak's gahzrilla), each with a warning: the item the leg needs is the operator's to give to the lead bot before .bot run start (a GM .additem); a name that is no optional leg is refused")
 	withLegs := fs.String("with-legs", "", "skip_export leg names (comma list) written into the rows anyway (Zul'Farrak's farraki_arena, zeljeb), each with a warning; a name that is no skip_export leg is refused")
 	force := fs.Bool("force", false, "let --out replace an existing file (never edit a migration that is applied)")
+	forever := fs.Bool("forever", false, "write the rows a server module that runs dungeon plans reads: the plan tables, one ai_dungeon_step_unit row per pack member, boss, boss.first add and patrol unit, and the boss rows; a plan field the format cannot carry is refused by name")
+	report := fs.Bool("report", false, "with --forever: print one record per plan file (exported, or refused and why) and write nothing")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
+	}
+	if *forever || *report {
+		var skip, optional, extra []string
+		for _, n := range strings.Split(*skipLegs, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				skip = append(skip, n)
+			}
+		}
+		for _, n := range strings.Split(*withOptional, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				optional = append(optional, n)
+			}
+		}
+		for _, n := range strings.Split(*withLegs, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				extra = append(extra, n)
+			}
+		}
+		return planExportForever(planExportForeverArgs{
+			dir: *dir, out: *out, mmaps: *mmaps, rev: *rev, stamp: *stamp,
+			allLive: *allLive, allowDraft: *allowDraft, force: *force, report: *report,
+			floorAware: *floorAware, approachHops: *approach,
+			skipLegs: skip, withOptional: optional, withLegs: extra, names: fs.Args(),
+			stdout: stdout, stderr: stderr,
+		})
 	}
 	fail := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "plan-export: "+format+"\n", a...)
