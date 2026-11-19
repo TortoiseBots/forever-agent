@@ -2,7 +2,6 @@ package driver
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -882,39 +881,3 @@ func (f *Fake) UnitGUID(entry uint32) string {
 
 // botState is the scripted bot.
 func (f *Fake) botState(name string) *fakeBot { return f.bots[name] }
-
-func parseUint(s string) uint64 {
-	var n uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return n
-		}
-		n = n*10 + uint64(c-'0')
-	}
-	return n
-}
-
-func parseFloat(s string) float32 {
-	var sign float32 = 1
-	if strings.HasPrefix(s, "-") {
-		sign, s = -1, s[1:]
-	}
-	var n, scale float32
-	dot := false
-	for _, c := range s {
-		if c == '.' {
-			dot = true
-			continue
-		}
-		if c < '0' || c > '9' {
-			continue
-		}
-		if dot {
-			scale = scale*10 + 1
-			n = n + float32(c-'0')/scale
-		} else {
-			n = n*10 + float32(c-'0')
-		}
-	}
-	return sign * n
-}
