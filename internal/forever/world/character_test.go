@@ -67,7 +67,7 @@ func TestParseEnumCharactersResultCapture(t *testing.T) {
 	if c.Name != "XXXXXX" || c.Surname != "XXXX" {
 		t.Fatalf("name %q surname %q (the fixture replaces the real name)", c.Name, c.Surname)
 	}
-	// the recorder's character (a different one than the audit account's) is a level 1 human mage
+	// the recorder's character (not the one used for the live checks) is a level 1 human mage
 	if c.Level != 1 || c.Class != 8 || c.Race != 1 || c.Sex != 1 {
 		t.Fatalf("level %d class %d race %d sex %d, want 1/8/1/1", c.Level, c.Class, c.Race, c.Sex)
 	}
@@ -149,6 +149,23 @@ func onlySynthetic(guids []wire.GUID) error {
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("carries GUIDs %v, which are not synthetic", bad)
+	}
+	return nil
+}
+
+// syntheticFixtureNames are the only character names a fixture may carry: the replaced name and surname of the
+// create request and the character list. An unreplaced name fails the audit like an unreplaced GUID.
+var syntheticFixtureNames = map[string]bool{"XXXXXX": true, "XXXX": true}
+
+func onlySyntheticNames(names []string) error {
+	var bad []string
+	for _, n := range names {
+		if !syntheticFixtureNames[n] {
+			bad = append(bad, n)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("carry the names %q, which are not synthetic", bad)
 	}
 	return nil
 }
@@ -254,9 +271,10 @@ func mailRestrictionsPayloadRaw(prefix uint32, data []byte, after byte) []byte {
 	return b.Bytes()
 }
 
-// Every GUID a fixture packet contains must be the synthetic one. The walk sees the GUIDs the parser drops too
-// (the guild GUID after each character, the warband-member GUIDs), so a re-captured fixture with a real character,
-// guild or warband identifier fails here instead of publishing a stable identifier.
+// Every GUID a fixture packet contains must be the synthetic one, and every character name must be the synthetic
+// one. The walk sees the GUIDs the parser drops too (the guild GUID after each character, the warband-member GUIDs),
+// so a re-captured fixture with a real character, guild or warband identifier fails here instead of publishing a
+// stable identifier; the names fail here instead of publishing a real character's name.
 func TestFixturesCarryOnlySyntheticGUIDs(t *testing.T) {
 	// one regionwide character and its guild GUID; the capture's warband list is empty
 	guids := fixtureGUIDs(t, fixture(t, "enum_characters_result"))
@@ -272,6 +290,26 @@ func TestFixturesCarryOnlySyntheticGUIDs(t *testing.T) {
 		if err := onlySynthetic([]wire.GUID{g}); err != nil {
 			t.Fatalf("%s %v", name, err)
 		}
+	}
+	// the create exchange: the answer's GUID is the synthetic one, and both of its names are the synthetic ones
+	created := wire.ReadPackedGUID(wire.NewReader(fixture(t, "create_char")))
+	if err := onlySynthetic([]wire.GUID{created}); err != nil {
+		t.Fatalf("SMSG_CREATE_CHAR %v", err)
+	}
+	request, err := serverReadCreateCharacter(fixture(t, "create_character"))
+	if err != nil {
+		t.Fatalf("CMSG_CREATE_CHARACTER fixture: %v", err)
+	}
+	list, err := ParseEnumCharactersResult(fixture(t, "enum_characters_result"))
+	if err != nil {
+		t.Fatalf("SMSG_ENUM_CHARACTERS_RESULT fixture: %v", err)
+	}
+	names := []string{request.Name, request.Surname}
+	for _, c := range list.All() {
+		names = append(names, c.Name, c.Surname)
+	}
+	if err := onlySyntheticNames(names); err != nil {
+		t.Fatalf("the character-screen fixtures %v", err)
 	}
 }
 

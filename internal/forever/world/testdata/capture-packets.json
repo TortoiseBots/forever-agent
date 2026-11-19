@@ -1,5 +1,5 @@
 {
- "note": "Packet payloads from the server's own PacketLog (PKT 3.1, repack 0.1.37.4, 2026-11-17), taken from a private capture. Payload only: the 4-byte opcode is not part of these hex strings. Fields rewritten with synthetic values, keeping every length and the bit layout: the account name in the CMSG_AUTH_SESSION join ticket (4 bytes), the character name and surname in SMSG_ENUM_CHARACTERS_RESULT (6+4 bytes), the realm name in SMSG_AUTH_RESPONSE (14 bytes), the character GUID wherever it appears (packed: mask 0xE003 and bytes 11 22 33 44 0A, so Low=0x2211, High=0x0A44330000000000), the create and last-active times in SMSG_ENUM_CHARACTERS_RESULT (1700000000 = 0x6553F100), the login XYZO position (1.25, 2.5, 3.75, 0) in SMSG_ENUM_CHARACTERS_RESULT and SMSG_LOGIN_VERIFY_WORLD, and the SMSG_CONNECT_TO Key (0x1122334455667788). Nothing else was changed. Opcodes are the core's numbers (the log records them before the Classic wire translation).",
+ "note": "Packet payloads from the server's own PacketLog of a real session (PKT 3.1). Payload only: the 4-byte opcode is not part of these hex strings. Fields rewritten with synthetic values, keeping every length and the bit layout: the account name in the CMSG_AUTH_SESSION join ticket (4 bytes), the character name and surname in SMSG_ENUM_CHARACTERS_RESULT (6+4 bytes), the realm name in SMSG_AUTH_RESPONSE (14 bytes), the character GUID wherever it appears (packed: mask 0xE003 and bytes 11 22 33 44 0A, so Low=0x2211, High=0x0A44330000000000), the create and last-active times in SMSG_ENUM_CHARACTERS_RESULT (1700000000 = 0x6553F100), the login XYZO position (1.25, 2.5, 3.75, 0) in SMSG_ENUM_CHARACTERS_RESULT and SMSG_LOGIN_VERIFY_WORLD, and the SMSG_CONNECT_TO Key (0x1122334455667788). Nothing else was changed. Opcodes are the core's numbers (the log records them before the Classic wire translation). The create exchange of a real client is here too: create_character is CMSG_CREATE_CHARACTER (the character name and surname replaced by 'XXXXXX' 'XXXX'; the ten customization choices are DB2 ids, not identifiers) and create_char is its SMSG_CREATE_CHAR (CHAR_CREATE_SUCCESS and the packed GUID). No capture in the set deletes a character or checks a name, so those two payloads are hand-built in the tests from the server's reader and writer.",
  "packets": {
   "auth_challenge": "80D472A5A65E6D3A9091BEC1BBD82ED2741A0C5B08CB8C26C8D080AD3BB2243631904845038D39755CC18ED3346106AE37D6AA610FE305B2EE57B489905B610201",
   "auth_session": "0000000000000000460000000100000046000000CF771955BB3A5ADE5855E5CA22488A797EA4A743278F1D8FCA2D7B06993DAE81C2C9263D4B382F25D5CA3026A124147E5D23D2B40D639C61004E0000007B2267616D654163636F756E74223A223030302330222C22706C6174666F726D223A353732383632322C2274797065223A353733303133352C22636C69656E7441726368223A373837383139367D",
@@ -17,6 +17,8 @@
   "time_sync_response": "0000000053302006",
   "move_init_active_mover_complete": "53302006",
   "logout_request": "00",
-  "queued_messages_end": "FC2F2006"
+  "queued_messages_end": "FC2F2006",
+  "create_character": "1801000108010A000000FFFFFFFF00000000585858585858585858580E000000570000000F00000072000000100000009700000011000000A4000000D00100003C100000F501000090120000040200004D1300000E020000C3130000CA0300004E3D0000562200004DDD0000",
+  "create_char": "1800000003E0112233440A"
  }
 }

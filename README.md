@@ -17,6 +17,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
+| Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
 
@@ -36,6 +37,29 @@ name, and no key or ticket, only lengths. `--build` has to be the build the real
 `auth.realmlist.gamebuild`), because a realm admits only that build unless `Realm.AlsoAcceptBuilds` lists more. By
 default the instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
+
+`forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
+logs in like world-check and stops at the character screen: it lists the account's characters, sends
+`CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as
+given (only the two numbers are checked; a pair the server rejects is its `CHAR_CREATE_ERROR`), and `--no-appearance`
+is the documented test-character form, because no real client has been seen creating a character with no
+customization choices (the server accepts one, at create and at login). It prints the result code name
+(`CHAR_CREATE_SUCCESS`, or the refusal's name) and both lists, and exits non-zero on a refusal. A successful create
+whose follow-up list fails still exits zero and says so: `done; the list could not be refreshed`.
+`forever-agent forever char-delete ... (--name NAME [--surname S] | --guid GUID) --yes NAME`
+resolves the name on the same character-screen list (every match, so an ambiguous first name is refused with its
+candidates) and sends nothing until `--yes` repeats the resolved character's full name exactly; without it the command
+prints `would delete NAME (level L, GUID); pass --yes NAME` and exits with the usage code. With it, it sends
+`CMSG_CHAR_DELETE` with the resolved GUID and lists again; the client's own confirmation prompt is not on the wire.
+`--build` must be the realm's build, like world-check.
+Both commands refuse to send when the run's remaining time is less than the request's bound plus a 10 s margin
+(for a delete, the server's 30 s pending-delete bound, so 40 s must be left after the list; for a create, its 30 s
+answer bound): nothing is sent, and the error names the least `Deadline` that would have worked. If the request was
+sent and its answer did not come before the run ended, the command prints exactly `create sent, no answer: the
+character may or may not have been created: list again` or `delete sent, no answer: the character may or may not be
+deleted: list again` and exits 32: list again, never retry blind. A link that dies after the send is the same kind of
+answer with its own words (`create sent, then the link was lost: ...` or `delete sent, then the link was lost: ...`)
+and the same exit 32.
 
 `forever-agent forever walk-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 runs the same login and stays in the world for `--stay` seconds (default 8 s), then prints what the client understood
