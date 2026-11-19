@@ -1,5 +1,6 @@
-// Package bnet is a client for the Forever (Classic 1.60.1, build 70938) login service: the HTTPS login/REST port
-// (SRP form login, login ticket) and the Battle.net RPC port (TLS, protobuf frames) up to the realm join answer.
+// Package bnet is a client for the Forever (Classic 1.60.1, builds 70707 through 70959) login service: the HTTPS
+// login/REST port (SRP form login, login ticket) and the Battle.net RPC port (TLS, protobuf frames) up to the realm
+// join answer.
 //
 // Wire behaviour and every message layout are taken from the ForeverCore sources (commit 6517af05); the file:line
 // references live in docs/forever/PROTOCOL-LOGIN.md.

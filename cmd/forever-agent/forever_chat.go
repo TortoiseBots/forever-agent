@@ -34,13 +34,14 @@ type foreverCommon struct {
 }
 
 // connectionFlags registers the flags every command that talks to the login server takes. --build is 0 (not given)
-// by default: bnet.Login then claims the build the realm advertises, and an explicit build is claimed as given.
+// by default: bnet.Login then claims the newest build this client knows that the realm accepts, and an explicit
+// build is claimed as given.
 func (c *foreverCommon) connectionFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.restAddr, "rest", "", "login REST host:port")
 	fs.StringVar(&c.rpcAddr, "rpc", "", "Battle.net RPC host:port")
 	fs.StringVar(&c.caFile, "ca", "", "PEM file of the root CA that signed the login server's certificate")
 	fs.StringVar(&c.serverName, "server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	fs.UintVar(&c.clientBuild, "build", 0, "client build to claim (default: the build the realm advertises; a realm only lets in the builds it accepts)")
+	fs.UintVar(&c.clientBuild, "build", 0, "client build to claim (default: the newest build this client knows that the realm accepts)")
 	fs.StringVar(&c.account, "account", "", "account e-mail or name")
 }
 
@@ -103,8 +104,8 @@ func loginExit(err error, stderr io.Writer) (int, bool) {
 }
 
 // login reads the password, logs in, prints the one-line summary and returns the result. This is the only call to
-// bnet.Login in the command layer: --build 0 claims the realm's advertised build (bnet's retry), an explicit build
-// is claimed exactly as given.
+// bnet.Login in the command layer: --build 0 claims the newest build this client knows that the realm accepts
+// (bnet's probe and retries), an explicit build is claimed exactly as given.
 func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer) (*bnet.Result, error) {
 	password := os.Getenv("FOREVER_PASSWORD")
 	if password == "" {

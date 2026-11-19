@@ -21,10 +21,6 @@ import (
 // (src/server/shared/Realm/Realm.h:33-42).
 const realmFlagVersionMismatch = 0x01
 
-// build70938 is the build the automatic-build login probes with: the newest build of the client's tables
-// (wire.Build70938), which the server's ClientBuildInfo knows (src/server/shared/Realm/ClientBuildInfo.cpp).
-const build70938 = wire.Build70938
-
 // defaultLoginDeadline bounds one Login call from the first request to the join answer. The per-call Timeout only
 // bounds one request, so a server that keeps a call alive with traffic would otherwise hold the login forever.
 const defaultLoginDeadline = 2 * time.Minute
@@ -40,7 +36,7 @@ type Options struct {
 	ServerName  string                           // name to verify in the certificate (default DefaultServerName)
 	Account     string                           // account e-mail or name as typed into the login form
 	Password    string                           // password; case is significant for SRP v2 accounts
-	ClientBuild uint32                           // client build to claim; 0 = the build the realm advertises (see Login)
+	ClientBuild uint32                           // client build to claim; 0 = the newest build this client knows that the realm accepts (see Login)
 	Timeout     time.Duration                    // one RPC call or one HTTP request (0 = 30 s)
 	Deadline    time.Duration                    // the whole login, from the form to the join answer (0 = 2 min)
 	Logf        func(format string, args ...any) // one line per completed step; may be nil
@@ -80,8 +76,8 @@ func (e *RealmError) Error() string { return e.Err.Error() }
 func (e *RealmError) Unwrap() error { return e.Err }
 
 // RealmMismatch is the realm list's VersionMismatch flag: the realm does not accept the build the login claimed
-// (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path reads
-// it to log in again claiming RealmBuild; an explicit build returns it as the login's error.
+// (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path uses
+// RealmBuild as the hint for the next claim; an explicit build returns it as the login's error.
 type RealmMismatch struct {
 	Realm      string // the realm's name as the server sent it; sanitise before printing
 	Claimed    uint32 // the build the login claimed
@@ -93,9 +89,7 @@ func (e *RealmMismatch) Error() string {
 		sanitizeServerText(e.Realm), e.Claimed, e.RealmBuild)
 }
 
-// clientBuildSupported and supportedBuildList read the wire package's list of builds this client has tables for.
-func clientBuildSupported(b uint32) bool { return wire.ClientBuildSupported(b) }
-
+// supportedBuildList is the builds this client knows, in the message's order.
 func supportedBuildList() string {
 	builds := wire.SupportedClientBuilds()
 	parts := make([]string, len(builds))
@@ -131,12 +125,15 @@ func LoadRoots(path string) (*x509.CertPool, error) {
 // Login runs the whole login: REST SRP login and ticket, RPC connect and logon, realm list ticket, sub-regions,
 // realm list, realm join. It stops at the join answer; the world socket is a later round.
 //
-// With ClientBuild 0 it claims the build the realm advertises: a first login claims build70938 (the build the
-// client's tables are written at), and if the realm list then reports a version mismatch, the login runs again
-// claiming the advertised build, provided SupportedClientBuilds names it. The realm list and the realm join both
-// read the build of the logon, not of the realm list ticket (RealmList.cpp: FillRealmEntry's flags, and JoinRealm's
-// RealmAcceptsBuild on session->GetBuild()), so the second login is the whole sequence, not a re-request. A
-// non-zero ClientBuild always wins and is claimed as given.
+// With ClientBuild 0 it claims the newest build this client knows that the realm accepts (the builds of
+// wire.SupportedClientBuilds, newest first). The realm list's build field is only a hint: for a build the realm
+// accepts it echoes the claim itself (RealmList.cpp: FillRealmEntry shows clientBuild when RealmAcceptsBuild is
+// true), so it says nothing about the realm's own build, and a realm may accept several builds (Realm.AlsoAcceptBuilds)
+// while the world server only has build info for one of them. A claim that a realm does not accept comes back as a
+// VersionMismatch with the realm's own build; that build is then tried next when it is one this client knows, and the
+// remaining known builds are tried newest first otherwise. The realm list and the realm join both read the build of
+// the logon, not of the realm list ticket (GameUtilitiesService.cpp:312 and :344 pass session->GetBuild()), so every
+// attempt is the whole sequence again. A non-zero ClientBuild always wins and is claimed as given.
 func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.ServerName == "" {
 		opts.ServerName = DefaultServerName
@@ -153,23 +150,51 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.ClientBuild != 0 {
 		return loginOnce(ctx, opts)
 	}
-	probe := opts
-	probe.ClientBuild = build70938
-	result, err := loginOnce(ctx, probe)
-	if err == nil {
-		return result, nil
+	supported := wire.SupportedClientBuilds()
+	// newest first: prefer the newest build this client knows, then older ones
+	remaining := make([]uint32, 0, len(supported))
+	for i := len(supported) - 1; i >= 0; i-- {
+		remaining = append(remaining, supported[i])
 	}
-	var mismatch *RealmMismatch
-	if !errors.As(err, &mismatch) {
-		return nil, err
+	var hint uint32 // the realm's own build, from the last mismatch
+	var realmName string
+	for len(remaining) > 0 {
+		build := remaining[0]
+		if hint != 0 {
+			if i := indexOfBuild(remaining, hint); i >= 0 {
+				build, remaining = hint, append(remaining[:i], remaining[i+1:]...)
+			} else {
+				remaining = remaining[1:]
+			}
+		} else {
+			remaining = remaining[1:]
+		}
+		probe := opts
+		probe.ClientBuild = build
+		result, err := loginOnce(ctx, probe)
+		if err == nil {
+			return result, nil
+		}
+		var mismatch *RealmMismatch
+		if !errors.As(err, &mismatch) {
+			return nil, err
+		}
+		hint, realmName = mismatch.RealmBuild, mismatch.Realm
+		opts.logf("client build: the realm does not accept build %d (the realm is build %d)", build, hint)
 	}
-	if !clientBuildSupported(mismatch.RealmBuild) {
-		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is build %d, which this client has no opcode table for (supported builds: %s); pass --build N to claim a build anyway",
-			mismatch.Realm, mismatch.RealmBuild, supportedBuildList())}
+	return nil, &RealmError{Err: fmt.Errorf(
+		"bnet: realm %q accepts none of the client builds this client knows (%s); the realm is build %d; pass --build N to claim a build anyway",
+		sanitizeServerText(realmName), supportedBuildList(), hint)}
+}
+
+// indexOfBuild is the position of b in builds, or -1.
+func indexOfBuild(builds []uint32, b uint32) int {
+	for i, c := range builds {
+		if c == b {
+			return i
+		}
 	}
-	opts.logf("client build: the realm advertises build %d; logging in again claiming it", mismatch.RealmBuild)
-	opts.ClientBuild = mismatch.RealmBuild
-	return loginOnce(ctx, opts)
+	return -1
 }
 
 // loginOnce is one complete login with the build it claims.

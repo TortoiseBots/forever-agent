@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 func hexBytes(t *testing.T, s string) []byte {
@@ -68,7 +70,7 @@ func TestConnectRequestFixture(t *testing.T) {
 func TestLogonRequestFixture(t *testing.T) {
 	req := logonRequest{
 		Program: "WoW", Platform: "Wn64", Locale: "enUS",
-		ApplicationVersion: build70938, CachedWebCredentials: []byte("TC-0123"),
+		ApplicationVersion: wire.Build70938, CachedWebCredentials: []byte("TC-0123"),
 	}
 	want := "0A03576F57" + "1204576E3634" + "1A04656E5553" + "309AAA04" + "620754432D30313233"
 	if got := hex.EncodeToString(req.marshal()); !strings.EqualFold(got, want) {

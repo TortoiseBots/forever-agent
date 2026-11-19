@@ -22,7 +22,8 @@ import (
 const exitCharUncertain = 32
 
 // charScreenFlags registers the connection half both character-screen commands share: the foreverCommon connection
-// flags (--build 0 means the realm's advertised build) plus the instance redirect the world socket takes.
+// flags (--build 0 means the newest build this client knows that the realm accepts) plus the instance redirect the
+// world socket takes.
 func charScreenFlags(fs *flag.FlagSet, c *foreverCommon) {
 	c.connectionFlags(fs)
 	fs.BoolVar(&c.allowRedirect, "allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")

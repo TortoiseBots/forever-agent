@@ -10,8 +10,8 @@ import (
 )
 
 // TestWithLoginCarriesTheRealmsBuilds: the world socket takes both builds from the login result, never from the flag.
-// With --build absent (0) the login claims 70938 first and the realm list answers 70707; the world options must carry
-// both numbers, or the world socket would claim a build the realm refused.
+// With --build absent (0) the login claims its newest known build and a realm on 70707 answers 70707; the world
+// options must carry both numbers, or the world socket would claim a build the realm refused.
 func TestWithLoginCarriesTheRealmsBuilds(t *testing.T) {
 	c := foreverCommon{clientBuild: 0, character: "C", allowRedirect: true}
 	var out bytes.Buffer
