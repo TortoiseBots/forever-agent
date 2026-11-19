@@ -202,13 +202,22 @@ drives the bots of a server running the WoW Forever Bots module. It probes with 
 game-master permission, and a say echo proves the module is absent), fixes the reply language, adds the bots named by
 `--add CLASS[:ROLE]` (default `warrior:dps`) with the module's chat command and waits for the server to group them,
 then reads the roster and one bot's detail through the module's add-on protocol: the `PBC` prefix on the party
-channel, a 6-field envelope, 200-byte client parts, 64 parts and 4 KiB per body, answers matched by sequence number.
+channel, a 6-field envelope, 200-byte client parts, 64 parts and 15,360 bytes per body (the module's own bound: its
+64-part reassembly cap times its 240-byte parts), answers matched by a random-start sequence number. Only the
+module's own answers are read: a frame under `PBC` must arrive as a **whisper** add-on message sent by this
+character's own GUID, because that is how the module sends one; anything else is dropped and counted, never parsed.
 Nothing on the wire carries a version, so the shapes are versioned: a roster record with fewer than 19 values, a
-count that disagrees, a detail answer for another id, an answer of the wrong type or no answer in 6 s turns the
-protocol off for the session and the run says `pbc: unavailable (<reason>)`, printing the roster from `.bot list`
-instead. `--order WORD` is whispered to every added bot (the bot's own answer is the acknowledgement; a refusal is
-reported as one) and `--order party:WORD` is said in party chat (confirmed by rereading the bot's last rule), default
-`follow` then `stay`. `--dismiss NAME|all` (default `all`) logs the bots out and waits for the party to drop them.
+count that disagrees, a detail answer for another id, a malformed or oversized frame or an answer of the wrong type
+fails **that request** with a named error and the protocol stays on; no answer in 6 s turns the protocol off for
+the session and the run says `pbc: unavailable (<reason>)`, printing the roster from `.bot list` instead. Every
+`.bot` command needs this session's successful `.bot about` probe first, whichever path sends it; on a server
+without the module that probe is said once as ordinary chat and nothing else is sent. `--order WORD` is whispered
+to every added bot and only a whisper from that bot, in the party (or on the protocol's authenticated roster) and
+matching that order's own confirmation phrase is taken as its answer; a refusal is reported as one.
+`--order party:WORD` is said in party chat (confirmed by rereading the bot's last rule), default `follow` then
+`stay`. Real players in the client's party receive a party-word order as ordinary chat; the module can also answer
+in system chat after a `sys` request, which this client never sends. `--dismiss NAME|all` (default `all`) logs the
+bots out and waits for the party to drop them.
 `forever-agent forever dungeon-run --plan PLAN.json --party TANK,HEALER,DPS,DPS,DPS --character NAME --dry`
 runs one dungeon's machine with no network: the five-bot party is checked, brought to the portal and into the
 instance, walked along the plan's legs, its packs pulled one at a time and rested between, and the bosses killed; the
