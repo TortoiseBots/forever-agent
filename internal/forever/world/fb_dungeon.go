@@ -22,6 +22,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/fbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // The run's defaults; Options may shorten them for tests.
@@ -76,6 +77,11 @@ type FBDungeonReport struct {
 	LeadOnErr   string
 	LeadTank    string
 	LeadOutside bool
+	// LeadTankGUID is the lead answer's tank resolved to a GUID: it is in the client's party and the
+	// authenticated bot roster lists its name. A zero GUID means the identity is unknown.
+	LeadTankGUID wire.GUID
+	// LeadTankWhy says why no tank identity is known, when one is needed and missing.
+	LeadTankWhy string
 	FollowNote  string
 
 	Watch        time.Duration
@@ -104,6 +110,17 @@ type FBDungeonReport struct {
 	Frames     int
 	Forged     int
 	PBCDropped int
+}
+
+// fbTank is the one party talker the run accepts as the lead tank. The module's lead answer names it, the client's
+// party gives that name a GUID, and the authenticated bot roster confirms the same name is a bot of this account: a
+// line is the tank's only when its sender GUID is this GUID. A zero GUID is the state before the identity is known;
+// lines arriving then are kept nowhere, because this client cannot tell the tank from any other party member.
+type fbTank struct {
+	guid  wire.GUID
+	name  string
+	why   string // why no identity is known, for the report
+	noted bool
 }
 
 func (s *session) fbDungeonPoll() time.Duration {
@@ -217,8 +234,10 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	rep.QueueLine, rep.Dungeon = qr.Line, qr.Name
 	s.opts.logf("fb-dungeon: queue: %s", qr.Line)
 
-	// 3. Wait for both signals.
-	if err := s.fbDungeonEnter(ctx, c, rep); err != nil {
+	// 3. Wait for both signals. The party tap runs from here: the identity it accepts is unknown until the module
+	// names its tank at step 4, so nothing said in this phase is kept as a tank line.
+	tank := &fbTank{why: "the module has not named its lead tank yet"}
+	if err := s.fbDungeonEnter(ctx, c, rep, tank); err != nil {
 		s.summariseFBDungeon()
 		return err
 	}
@@ -232,15 +251,20 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	if lerr != nil {
 		rep.LeadOnErr = chat.Sanitise(lerr.Error(), 400)
 		s.opts.logf("fb-dungeon: lead on: %v", lerr)
+		s.fbTankRefused(rep, tank, "the module refused the lead-on command")
 	} else {
 		rep.LeadOnLine, rep.LeadTank, rep.LeadOutside = lead.Line, lead.Tank, lead.Outside
 		s.opts.logf("fb-dungeon: lead on: %s", lead.Line)
 		if lead.Outside {
 			rep.LeadOnErr = "the module answered that the tank leads once inside: it and the client's map disagree"
 			s.opts.logf("fb-dungeon: %s", rep.LeadOnErr)
+			s.fbTankRefused(rep, tank, "the module did not take the lead yet")
 		} else {
 			rep.FollowNote = "the module expects the player to follow the tank; this client stays at the entrance and the tank holds when the player falls behind"
 			s.opts.logf("fb-dungeon: %s", rep.FollowNote)
+			if err := s.fbDungeonResolveTank(ctx, c, rep, tank, lead.Tank); err != nil {
+				return err
+			}
 		}
 	}
 	if rep.LeadOnErr != "" {
@@ -248,7 +272,7 @@ func (s *session) fbDungeon(ctx context.Context) error {
 	}
 
 	// 5. Watch.
-	if err := s.fbDungeonWatch(ctx, c, rep); err != nil {
+	if err := s.fbDungeonWatch(ctx, c, rep, tank); err != nil {
 		s.summariseFBDungeon()
 		return err
 	}
@@ -313,10 +337,10 @@ func (s *session) fbPartyNames() []string {
 
 // fbDungeonEnter polls the finder until BOTH the module says `inside` AND the client's own map change confirmed the
 // instance, or the bound runs out. A protocol failure fails soft: the caller is told what could not be read.
-func (s *session) fbDungeonEnter(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport) error {
+func (s *session) fbDungeonEnter(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport, tank *fbTank) error {
 	deadline := s.Now().Add(s.fbDungeonEnterWait())
 	prevFeed := s.cmdFeed
-	s.cmdFeed = s.fbDungeonPartyTap(rep)
+	s.cmdFeed = s.fbDungeonPartyTap(rep, tank)
 	defer func() { s.cmdFeed = prevFeed }()
 	lastPhase := ""
 	badAnswers := 0
@@ -399,13 +423,13 @@ func (s *session) fbMapConfirms(startMap int32, want uint32) (bool, string) {
 
 // fbDungeonWatch watches for the configured time, reporting finder state, the bots' health, deaths, the tank's party
 // lines and the module's event pushes. A protocol failure stops the protocol reads (soft) but not the party log.
-func (s *session) fbDungeonWatch(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport) error {
+func (s *session) fbDungeonWatch(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport, tank *fbTank) error {
 	watch := s.opts.FBDungeonWatch
 	if watch <= 0 {
 		return nil
 	}
 	prevFeed := s.cmdFeed
-	s.cmdFeed = s.fbDungeonPartyTap(rep)
+	s.cmdFeed = s.fbDungeonPartyTap(rep, tank)
 	defer func() { s.cmdFeed = prevFeed }()
 
 	start := s.Now()
@@ -503,21 +527,91 @@ func (s *session) fbDungeonWatch(ctx context.Context, c *fbcmd.Client, rep *FBDu
 	return nil
 }
 
-// fbDungeonPartyTap records the tank's party lines: the module's lead says "waiting for mana" and "waiting for
-// you" in party chat, and those are the run's own report of why the tank is not moving.
-func (s *session) fbDungeonPartyTap(rep *FBDungeonReport) func(chat.Line) {
+// fbDungeonPartyTap records the lead tank's party lines: the module's lead says "waiting for mana" and "waiting for
+// you" in party chat, and those are the run's own report of why the tank is not moving. Only a line whose sender
+// GUID is the resolved tank's is kept: another party member's talk (a second bot, a real player) is not the tank's,
+// and a line that arrives before the identity is known is kept nowhere and named in the report instead.
+func (s *session) fbDungeonPartyTap(rep *FBDungeonReport, tank *fbTank) func(chat.Line) {
 	return func(line chat.Line) {
 		if line.Type != chat.TypeParty {
 			return
 		}
-		// A party line's sender name is often not on the wire; the helper resolves it from the party roster, the
-		// world model or this character's own GUID, as the chat log's own lines do.
-		text := fmt.Sprintf("%s: %s", s.chatName(line.SenderName, line.SenderGUID), chat.Sanitise(line.Text, 200))
+		if tank.guid.IsZero() || line.SenderGUID != tank.guid {
+			if tank.guid.IsZero() {
+				s.fbTankUnidentified(rep, tank)
+			}
+			return
+		}
+		text := fmt.Sprintf("%s: %s", tank.name, chat.Sanitise(line.Text, 200))
 		if len(rep.PartyLines) < fbDungeonPartyLines {
 			rep.PartyLines = append(rep.PartyLines, text)
 		}
 		s.opts.logf("fb-dungeon: party: %s", text)
 	}
+}
+
+// fbDungeonResolveTank turns the module's lead answer into the one speaker the run accepts as the tank. The name
+// must be a party member's (that gives the GUID) AND a name the authenticated bot roster lists: the roster is this
+// account's bots, answered by the module only to this character's own add-on frames, so a real player's name is not
+// a tank identity even when the party holds it.
+func (s *session) fbDungeonResolveTank(ctx context.Context, c *fbcmd.Client, rep *FBDungeonReport, tank *fbTank, name string) error {
+	if name == "" {
+		s.fbTankRefused(rep, tank, "the module's lead answer named no tank")
+		return nil
+	}
+	guid, inParty := s.fbPartyMember(name)
+	if !inParty {
+		s.fbTankRefused(rep, tank, fmt.Sprintf("%q is not in the client's party", chat.SanitiseName(name)))
+		return nil
+	}
+	if guid.IsZero() {
+		s.fbTankRefused(rep, tank, fmt.Sprintf("the party lists no GUID for %q", chat.SanitiseName(name)))
+		return nil
+	}
+	rows, err := c.Roster(ctx)
+	if err != nil {
+		if errors.Is(err, ErrLinkLost) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		s.fbTankRefused(rep, tank, "the bot roster could not be read: "+chat.Sanitise(err.Error(), 200))
+		return nil
+	}
+	for _, r := range rows {
+		if strings.EqualFold(strings.TrimSpace(r.Name), name) {
+			tank.guid, tank.name, tank.why, tank.noted = guid, chat.SanitiseName(r.Name), "", false
+			rep.LeadTankGUID = guid
+			s.opts.logf("fb-dungeon: lead tank: %s (%s), in the party and the bot roster", tank.name, guid)
+			return nil
+		}
+	}
+	s.fbTankRefused(rep, tank, fmt.Sprintf("%q is not in the bot roster", chat.SanitiseName(name)))
+	return nil
+}
+
+// fbTankUnidentified records, once, that a party line could not be taken as the tank's because no identity is known.
+func (s *session) fbTankUnidentified(rep *FBDungeonReport, tank *fbTank) {
+	if rep.LeadTankWhy != "" {
+		return
+	}
+	why := tank.why
+	if why == "" {
+		why = "the module has not named its lead tank yet"
+	}
+	rep.LeadTankWhy = "lead tank not identified when a party line arrived: " + why
+	if !tank.noted {
+		tank.noted = true
+		s.opts.logf("fb-dungeon: %s; the party lines are not taken as the tank's", rep.LeadTankWhy)
+	}
+}
+
+// fbTankRefused records that the lead answer's tank has no accepted identity, replacing an earlier reason: the
+// resolution is the last word on it.
+func (s *session) fbTankRefused(rep *FBDungeonReport, tank *fbTank, why string) {
+	tank.guid, tank.name = wire.GUID{}, ""
+	tank.why, tank.noted = why, true
+	rep.LeadTankGUID = wire.GUID{}
+	rep.LeadTankWhy = "lead tank not identified: " + why
+	s.opts.logf("fb-dungeon: %s; the party lines are not taken as the tank's", rep.LeadTankWhy)
 }
 
 // noticeFBStatus keeps the protocol's soft failure in the report.
@@ -710,6 +804,9 @@ func FBDungeonSummary(a FBDungeonReport) []string {
 		out = append(out, "fb-dungeon: lead on: "+a.LeadOnLine)
 	} else if a.LeadOnErr != "" {
 		out = append(out, "fb-dungeon: lead on: "+a.LeadOnErr)
+	}
+	if a.LeadTankWhy != "" {
+		out = append(out, "fb-dungeon: "+a.LeadTankWhy)
 	}
 	if a.FollowNote != "" {
 		out = append(out, "fb-dungeon: "+a.FollowNote)

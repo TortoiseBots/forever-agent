@@ -37,14 +37,31 @@ var fbdBots = []fbdBot{
 var fbdRfcPos = [3]float32{3.1, -14.2, -17.8}
 var fbdHomePos = [3]float32{-8912.5, 554.25, 93.75}
 
-// fbdSendParty sends the five-member roster after `.bot lfg`: this character and the four bots.
+// fbdRand is a real player in the group: in the client's party, never in the account's bot roster. A lead answer
+// naming it, or a party line from it, must not become the run's tank.
+var fbdRand = struct {
+	name string
+	guid wire.GUID
+}{"Rand", wire.GUID{Low: 0x7001, High: 0x0800000000000000}}
+
+// fbdSendParty sends the five-member roster after `.bot lfg`: this character and four others. The partyLines and
+// leadNotBot scenes trade the down bot for the real player fbdRand, so a line or a lead answer naming a non-bot has
+// a party member to point at; the party stays at five, which is all the model handles.
 func (f *fakeServer) fbdSendParty(c *fakeConn) {
 	self := mustGUID(f.clientGUID)
 	members := []wire.GUID{self}
 	names := []string{"Testchar"}
-	for _, b := range fbdBots {
+	bots := fbdBots
+	if f.fbDungeonCase == "partyLines" || f.fbDungeonCase == "leadNotBot" {
+		bots = fbdBots[:3]
+	}
+	for _, b := range bots {
 		members = append(members, b.guid)
 		names = append(names, b.name)
+	}
+	if f.fbDungeonCase == "partyLines" || f.fbDungeonCase == "leadNotBot" {
+		members = append(members, fbdRand.guid)
+		names = append(names, fbdRand.name)
 	}
 	c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(wire.GUID{Low: 0xBEEF, High: 0x1B00000000000000},
 		self, self, members, names, false))
@@ -65,6 +82,12 @@ func (f *fakeServer) sendFBPartyLine(c *fakeConn, text string) {
 	b := fbdBots[0]
 	// The sender name is empty, as the core's party lines often are: the client must resolve it from the roster.
 	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeParty, chat.LanguageUniversal, b.guid, wire.EmptyGUID,
+		"", "", "", "", text))
+}
+
+// sendFBPartyLineFrom sends one party line from a chosen member: another bot, or the real player fbdRand.
+func (f *fakeServer) sendFBPartyLineFrom(c *fakeConn, guid wire.GUID, text string) {
+	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeParty, chat.LanguageUniversal, guid, wire.EmptyGUID,
 		"", "", "", "", text))
 }
 
@@ -204,6 +227,10 @@ func (f *fakeServer) answerFBDungeonCommand(c, realm *fakeConn, text string) {
 			f.sysChat(c, "None of your bots in the group is a tank: add one (.bot add warrior tank), then say 'lead on'.")
 			return
 		}
+		if f.fbDungeonCase == "leadNotBot" {
+			f.sysChat(c, "Rand leads the dungeon now: it pulls pack by pack and waits for mana and for you. Say 'lead pause' to hold, 'lead off' to lead yourself.")
+			return
+		}
 		f.sysChat(c, "Bramble leads the dungeon now: it pulls pack by pack and waits for mana and for you. Say 'lead pause' to hold, 'lead off' to lead yourself.")
 	case text == ".bot lead off":
 		f.sysChat(c, "You lead again: your bots follow you.")
@@ -270,12 +297,18 @@ func (f *fakeServer) answerFBLfgStatus(c *fakeConn, seq uint32) {
 		f.fbdMapChange(c, f.fbRealm, 389, fbdRfcPos)
 		send("entering")
 	case polls == 4:
-		send("inside")
+		// The line travels before the answer that confirms the entry, so the tap sees it with no identity known.
 		f.sendFBPartyLine(c, "waiting for you")
 		f.sendFBEvent(c, "info", "login", "bot is ready")
+		send("inside")
 	case polls == 6:
 		send("inside")
 		f.sendFBPartyLine(c, "waiting for mana")
+		if scenario == "partyLines" {
+			// A second bot of the account, then a real player: neither is the lead tank.
+			f.sendFBPartyLineFrom(c, fbdBots[1].guid, "healing you")
+			f.sendFBPartyLineFrom(c, fbdRand.guid, "hi team")
+		}
 	default:
 		send("inside")
 		if scenario == "linkDeathWatch" && polls == 5 {
@@ -357,12 +390,19 @@ func TestFBDungeonHappyPath(t *testing.T) {
 	if d.LeadOnLine == "" || d.LeadTank != "Bramble" || d.LeadOutside {
 		t.Fatalf("lead %+v", d)
 	}
+	if d.LeadTankGUID != fbdBots[0].guid {
+		t.Fatalf("the lead tank was not resolved to Bramble's GUID: %s", d.LeadTankGUID)
+	}
 	if d.WatchSamples == 0 || len(d.Deaths) != 1 || d.Deaths[0] != "Clover" {
 		t.Fatalf("watch samples %d deaths %v", d.WatchSamples, d.Deaths)
 	}
-	if len(d.PartyLines) < 2 || !strings.Contains(strings.Join(d.PartyLines, "|"), "Bramble: waiting for you") ||
-		!strings.Contains(strings.Join(d.PartyLines, "|"), "Bramble: waiting for mana") {
+	// The first line arrives during the entry, before the module names its tank: it is kept nowhere, and the
+	// report says why. The watch's line is the tank's own and is kept.
+	if len(d.PartyLines) != 1 || d.PartyLines[0] != "Bramble: waiting for mana" {
 		t.Fatalf("party lines %v", d.PartyLines)
+	}
+	if !strings.Contains(d.LeadTankWhy, "lead tank not identified") {
+		t.Fatalf("the line sent before the identity was known is not named: %q (%v)", d.LeadTankWhy, d.PartyLines)
 	}
 	if len(d.Events) == 0 || d.Events[0].Name != "login" {
 		t.Fatalf("events %+v", d.Events)
@@ -393,6 +433,80 @@ func TestFBDungeonHappyPath(t *testing.T) {
 	}
 	if lfg < 3 {
 		t.Fatalf("only %d LFG_REQ(s): %v", lfg, pbcs)
+	}
+}
+
+func TestFBDungeonTankIdentity(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "partyLines"
+	report, err := runFBDungeonTests(t, f, fbDungeonOptions(f))
+	if err != nil {
+		t.Fatalf("Enter: %v", err)
+	}
+	d := report.FBDungeon
+	if d.PartySize != fbDungeonFillSize {
+		t.Fatalf("party %d (%v)", d.PartySize, d.Party)
+	}
+	if d.LeadTankGUID != fbdBots[0].guid {
+		t.Fatalf("the lead tank was not resolved to Bramble's GUID: %s", d.LeadTankGUID)
+	}
+	// The watch hears three party lines: the tank's, a second bot's and the real player's. Only the tank's is kept.
+	if len(d.PartyLines) != 1 || d.PartyLines[0] != "Bramble: waiting for mana" {
+		t.Fatalf("party lines %v", d.PartyLines)
+	}
+	if !strings.Contains(d.LeadTankWhy, "lead tank not identified") {
+		t.Fatalf("the line that arrived before the identity is not named: %q", d.LeadTankWhy)
+	}
+}
+
+func TestFBDungeonTankNotABot(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "leadNotBot"
+	report, err := runFBDungeonTests(t, f, fbDungeonOptions(f))
+	if err != nil {
+		t.Fatalf("Enter: %v", err)
+	}
+	d := report.FBDungeon
+	if !d.Inside {
+		t.Fatalf("not inside: %q", d.EnterErr)
+	}
+	if !strings.Contains(d.LeadTank, "Rand") {
+		t.Fatalf("the lead answer did not name the real player: %+v", d)
+	}
+	if d.LeadTankGUID != (wire.GUID{}) || !strings.Contains(d.LeadTankWhy, "not in the bot roster") {
+		t.Fatalf("a party member outside the bot roster was taken as the tank: %s %q", d.LeadTankGUID, d.LeadTankWhy)
+	}
+	if len(d.PartyLines) != 0 {
+		t.Fatalf("lines were kept without a tank identity: %v", d.PartyLines)
+	}
+}
+
+// The tap takes a party line only from the resolved tank's GUID: before the identity, from a second bot, from a real
+// player, and from another GUID wearing the tank's name it keeps nothing.
+func TestFBDungeonPartyTapIdentity(t *testing.T) {
+	rep := &FBDungeonReport{}
+	tank := &fbTank{why: "the module has not named its lead tank yet"}
+	s := &session{report: &Report{}}
+	tap := s.fbDungeonPartyTap(rep, tank)
+	bramble := fbdBots[0].guid
+
+	tap(chat.Line{Type: chat.TypeParty, SenderGUID: bramble, Text: "waiting for you"})
+	if len(rep.PartyLines) != 0 || !strings.Contains(rep.LeadTankWhy, "lead tank not identified") {
+		t.Fatalf("a line before the identity: %v %q", rep.PartyLines, rep.LeadTankWhy)
+	}
+
+	tank.guid, tank.name, tank.why = bramble, "Bramble", ""
+	tap(chat.Line{Type: chat.TypeParty, SenderGUID: fbdBots[1].guid, Text: "healing you"})
+	tap(chat.Line{Type: chat.TypeParty, SenderGUID: fbdRand.guid, Text: "hi team"})
+	tap(chat.Line{Type: chat.TypeParty, SenderGUID: fbdRand.guid, SenderName: "Bramble", Text: "waiting for you"})
+	tap(chat.Line{Type: chat.TypeWhisper, SenderGUID: bramble, Text: "waiting for mana"})
+	if len(rep.PartyLines) != 0 {
+		t.Fatalf("lines other than the tank's were kept: %v", rep.PartyLines)
+	}
+
+	tap(chat.Line{Type: chat.TypeParty, SenderGUID: bramble, Text: "waiting for mana"})
+	if len(rep.PartyLines) != 1 || rep.PartyLines[0] != "Bramble: waiting for mana" {
+		t.Fatalf("the tank's own line was not kept: %v", rep.PartyLines)
 	}
 }
 
