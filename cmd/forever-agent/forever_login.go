@@ -22,6 +22,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--invite NAME | --accept-from NAME] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--fight-for DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever path-check --navmesh DIR --map N --from X,Y,Z --to X,Y,Z [--parent N] [--server-filter]")
 		return exitUsage
 	}
 	switch args[0] {
@@ -37,6 +38,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverPartyCheckCmd(ctx, args[1:], stdout, stderr)
 	case "fight-check":
 		return foreverFightCheckCmd(ctx, args[1:], stdout, stderr)
+	case "path-check":
+		return foreverPathCheckCmd(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "forever-agent forever: unknown command %q\n", args[0])
 		return exitUsage

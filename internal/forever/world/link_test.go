@@ -308,3 +308,48 @@ func TestFightCheckStopsAtOnceOnADeadCharacter(t *testing.T) {
 		t.Fatalf("a dead character still sent %d packet(s): %v", len(f.sent), f.sentCores())
 	}
 }
+
+// linkKillingSender is the session's sender with a socket death injected at one of the walk's waits: the walk must
+// notice through the session's own dead channel and end at that instant, not at its next packet or its deadline.
+type linkKillingSender struct {
+	objects.Sender
+	s    *session
+	at   int
+	seen int
+}
+
+func (k *linkKillingSender) WaitUntil(ctx context.Context, until time.Time) error {
+	k.seen++
+	if k.seen == k.at {
+		k.s.setLinkDead(sideInstance, io.EOF)
+	}
+	return k.Sender.WaitUntil(ctx, until)
+}
+
+// TestWalkPathEndsAtOnceOnALostLink: a socket that dies mid-walk ends the walk with ErrLinkLost on the very next
+// wait, names the socket, and sends nothing more successfully.
+func TestWalkPathEndsAtOnceOnALostLink(t *testing.T) {
+	f, s := deadSession(t, 6)
+	s.mover.Sender = &linkKillingSender{Sender: s.mover.Sender, s: s, at: 2}
+	sent := len(f.sent)
+	x, y, z, _ := s.mover.Position()
+	err := s.mover.WalkPath(context.Background(), [][3]float32{
+		{x + 30, y, z}, {x + 30, y + 30, z},
+	})
+	if !errors.Is(err, ErrLinkLost) {
+		t.Fatalf("a walk whose link died returned %v, want ErrLinkLost", err)
+	}
+	if !s.report.LinkLost || s.report.LinkLostSide != "instance" {
+		t.Fatalf("the report does not name the lost socket: %+v", s.report)
+	}
+	// Nothing after the loss reached the wire, and the mover's attempt to stop is refused: the session checks the
+	// dead link before writing.
+	for _, p := range f.sent[sent:] {
+		if p.core == wire.CMSGMoveStop {
+			t.Fatalf("a stop reached the dead link (packets %d..%d)", sent, len(f.sent))
+		}
+	}
+	if got := len(f.sent) - sent; got != 3 { // facing, start-forward, the one heartbeat before the second wait
+		t.Fatalf("%d packets before the loss, want 3", got)
+	}
+}

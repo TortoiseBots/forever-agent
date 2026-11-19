@@ -15,6 +15,8 @@ import (
 	"math"
 	"math/bits"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
 
 // A fake world server for the end-to-end test. It is written against the packet layouts and the hand-computed wire
@@ -153,9 +156,11 @@ type fakeServer struct {
 	resetLink       bool
 	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
 	walk            bool
-	walkFrom        [3]float32
-	walkTo          [3]float32
-	walkMoved       int
+	// mapID is the map the create block names (and so the map walk-check's navmesh route plans on).
+	mapID     uint16
+	walkFrom  [3]float32
+	walkTo    [3]float32
+	walkMoved int
 	// teleportDuringWalk sends SMSG_MOVE_TELEPORT in the middle of the first leg and then expects the ack and a
 	// movement packet at the destination.
 	teleportDuringWalk bool
@@ -951,7 +956,7 @@ func TestShutdownWaitsForThePumps(t *testing.T) {
 // fakeCreateBlock builds one SMSG_UPDATE_OBJECT carrying this character's own create block: object type 0 (so the
 // values are ObjectData alone), ThisIsYou and MovementUpdate, the movement info with the given position and run
 // speed. The layout follows UpdateData.cpp:61-79, BaseEntity.cpp:96-129 and :252-398.
-func fakeCreateBlock(guid []byte, x, y, z, run float32) []byte {
+func fakeCreateBlock(guid []byte, mapID uint16, x, y, z, run float32) []byte {
 	values := make([]byte, 0, 16)
 	values = append(values, 0x01)          // field flags: owner
 	values = append(values, 3, 0xFF)       // fragment ids: CGObject, end
@@ -1023,7 +1028,7 @@ func fakeCreateBlock(guid []byte, x, y, z, run float32) []byte {
 	block = append(block, values...)
 
 	out := make([]byte, 0, len(block)+16)
-	out = appendU16(out, 0) // map
+	out = appendU16(out, mapID)
 	out = appendU32(out, 1) // block count
 	b4 := fakeBits{}
 	b4.bit(true)  // the constant unk bit
@@ -1072,7 +1077,7 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 	f.mu.Lock()
 	guid := append([]byte(nil), f.clientGUID...)
 	f.mu.Unlock()
-	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlock(guid, f.walkFrom[0], f.walkFrom[1], f.walkFrom[2], 40))
+	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlock(guid, f.mapID, f.walkFrom[0], f.walkFrom[1], f.walkFrom[2], 40))
 
 	state := 0 // 0 = expecting facing, 1 = forward, 2 = heartbeats, 3 = stopped
 	last := f.walkFrom
@@ -1097,6 +1102,15 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 		case fakeCMSGMoveInitActiveMover:
 			// the client's answer to SMSG_MOVE_SET_ACTIVE_MOVER, which the login burst already delivered
 		case fakeCMSGMoveSetFacing:
+			if state == 2 {
+				// A navmesh walk turns at a corner without ending the leg: the facing packet carries the
+				// corner's position and the walk continues. It is not a new leg.
+				if _, err := parseFakeMovementInfo(payload); err != nil {
+					f.failf("walk: corner SET_FACING: %v", err)
+					return
+				}
+				continue
+			}
 			if state != 0 {
 				f.failf("walk: SET_FACING at state %d", state)
 				return
@@ -1348,7 +1362,7 @@ func TestSecondSelfCreateResetsTheMover(t *testing.T) {
 	packed := []byte{0x03, 0x80, 0x11, 0x22, 0x33} // mask bits 0,1 and 15, then the three payload bytes
 	parse := func(x, y, z, run float32) *objects.Update {
 		t.Helper()
-		u, err := objects.ParseUpdateObject(fakeCreateBlock(packed, x, y, z, run))
+		u, err := objects.ParseUpdateObject(fakeCreateBlock(packed, 0, x, y, z, run))
 		if err != nil {
 			t.Fatalf("the create at %.0f %.0f %.0f: %v", x, y, z, err)
 		}
@@ -1477,5 +1491,164 @@ func TestTeleportOntoATransportIsNotAcknowledged(t *testing.T) {
 	}
 	if containsWire(f.instWire, fakeCMSGMoveTeleportAck) {
 		t.Fatalf("the client acknowledged a teleport it cannot honour; wire log % X", f.instWire)
+	}
+}
+
+// TestWalkCheckNavmeshAgainstFakeServer is walk-check with --navmesh end to end: the route crosses three
+// corners, the server sees one start and one stop (the turns are facing packets inside the leg), and every
+// heartbeat moves toward the target at no more than the run speed.
+func TestWalkCheckNavmeshAgainstFakeServer(t *testing.T) {
+	// An L-shaped Forever mesh round the fake spawn: east along y 2000..2004 to x 1012, north to
+	// y 2012 at x 1008..1012, then east to x 1020.
+	polys := []navfixture.Poly{
+		navfixture.Square(1000, 2000, 1004, 2004, 50),
+		navfixture.Square(1004, 2000, 1008, 2004, 50),
+		navfixture.Square(1008, 2000, 1012, 2004, 50),
+		navfixture.Square(1008, 2004, 1012, 2008, 50),
+		navfixture.Square(1008, 2008, 1012, 2012, 50),
+		navfixture.Square(1012, 2008, 1016, 2012, 50),
+		navfixture.Square(1016, 2008, 1020, 2012, 50),
+	}
+	dir := navfixture.WriteForeverDirAt(t, 0, polys, nil, 1000, 2000)
+
+	f := newFakeServer(t)
+	f.walk = true
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1020, 2010, 50}
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		NavmeshDir:      dir,
+		ToX:             1020,
+		ToY:             2010,
+		ToZ:             50,
+		Settle:          300 * time.Millisecond,
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	}
+	report, err := Enter(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("the navmesh walk failed: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if report == nil || !report.NavPath || !report.Walked {
+		t.Fatalf("the report does not say the navmesh walk happened: %+v", report)
+	}
+	if report.NavPathKind != "complete" || report.NavPathCorners < 3 {
+		t.Fatalf("navmesh route: %s, %d corners", report.NavPathKind, report.NavPathCorners)
+	}
+	// The route's last point is the goal snapped to the mesh, so it can miss the asked corner by a detail
+	// vertex; it must be inside the stop distance.
+	if d := fakeDistance([3]float32{report.BackAt[0], report.BackAt[1], report.BackAt[2]}, [3]float32{1020, 2010, 50}); d > 0.5 {
+		t.Fatalf("the walk ended %.2f yd from the target at %.2f %.2f %.2f", d, report.BackAt[0], report.BackAt[1], report.BackAt[2])
+	}
+	// One leg in the fake server's bookkeeping: one start, one stop, and corner facings inside it.
+	starts, stops := 0, 0
+	for _, w := range f.instWire {
+		switch w {
+		case fakeCMSGMoveStartForward:
+			starts++
+		case fakeCMSGMoveStop:
+			stops++
+		}
+	}
+	if starts != 1 || stops != 1 {
+		t.Fatalf("%d starts and %d stops for one navmesh leg (% X)", starts, stops, f.instWire)
+	}
+}
+
+// TestWalkCheckNavmeshFallsBackToTheInstanceParentTile is item 4 end to end: the character is in an instance
+// (map 389) whose folder has only its own .mmap and the parent map's tile. Without the parent rule the walk's
+// planner finds no tile for the instance; with --parent 389=0 (Options.Parents) it loads map 0's tile into the
+// instance's mesh and the walk completes. The map comes from the create block, the tile from the parent's file.
+func TestWalkCheckNavmeshFallsBackToTheInstanceParentTile(t *testing.T) {
+	polys := []navfixture.Poly{
+		navfixture.Square(1000, 2000, 1004, 2004, 50),
+		navfixture.Square(1004, 2000, 1008, 2004, 50),
+		navfixture.Square(1008, 2000, 1012, 2004, 50),
+		navfixture.Square(1008, 2004, 1012, 2008, 50),
+		navfixture.Square(1008, 2008, 1012, 2012, 50),
+		navfixture.Square(1012, 2008, 1016, 2012, 50),
+		navfixture.Square(1016, 2008, 1020, 2012, 50),
+	}
+	// The parent map's tile alone; the instance has its 0389.mmap header and no tile of its own.
+	dir := navfixture.WriteForeverDirAt(t, 0, polys, nil, 1000, 2000)
+	if err := os.WriteFile(filepath.Join(dir, "0389.mmap"), navfixture.MmapParamsForever(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(t *testing.T, parents map[uint32]uint32) (*Report, []string, error) {
+		t.Helper()
+		f := newFakeServer(t)
+		f.walk = true
+		f.mapID = 389
+		f.walkFrom = [3]float32{1000, 2000, 50}
+		f.walkTo = [3]float32{1020, 2010, 50}
+		defer f.close()
+		f.wg.Add(1)
+		go f.serveRealm()
+		var steps []string
+		report, err := Enter(t.Context(), Options{
+			Address:         f.realmListener.Addr().String(),
+			RealmID:         70,
+			RealmAddress:    0x46010046,
+			RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+			ClientSecret:    f.keyData[:32],
+			JoinSecret:      f.keyData[32:],
+			ClientBuild:     70707,
+			RealmBuild:      70707,
+			Character:       "XXXXXX",
+			WalkCheck:       true,
+			NavmeshDir:      dir,
+			Parents:         parents,
+			ToX:             1020,
+			ToY:             2010,
+			ToZ:             50,
+			Settle:          300 * time.Millisecond,
+			Deadline:        30 * time.Second,
+			BuildAuthKey:    f.buildKey[:],
+			Logf: func(format string, args ...any) {
+				steps = append(steps, fmt.Sprintf(format, args...))
+			},
+		})
+		f.wait(t)
+		return report, steps, err
+	}
+
+	// Without the parent rule the instance has no tile files: the walk is refused, and the run still logs out.
+	if _, steps, err := run(t, nil); err == nil || !strings.Contains(err.Error(), "no forever-v16 tile files for map 389") {
+		t.Fatalf("without the parent rule: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	report, steps, err := run(t, map[uint32]uint32{389: 0})
+	if err != nil {
+		t.Fatalf("with --parent 389=0: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	if report == nil || !report.NavPath || !report.Walked {
+		t.Fatalf("the report does not say the instance walk happened: navpath=%v kind=%q walked=%v\nsteps:\n%s",
+			report.NavPath, report.NavPathKind, report.Walked, joinLines(steps))
+	}
+	// The route planned on the instance map (389) and the only tile it could load was map 0's: the path comes
+	// from the parent fallback. (The report's MapID is the map of the summary taken before the create block.)
+	if !strings.Contains(joinLines(steps), "navmesh route on map 389: complete") {
+		t.Fatalf("the route did not plan on map 389:\n%s", joinLines(steps))
+	}
+	if report.NavPathKind != "complete" {
+		t.Fatalf("instance route: %s %s", report.NavPathKind, joinLines(steps))
 	}
 }

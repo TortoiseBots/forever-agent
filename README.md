@@ -41,9 +41,23 @@ of the world around the character: the object count by type, the update statisti
 entry, name, level, health and distance. It then walks `--dx` and `--dy` yards from the spawn point (default 8 and 0,
 `CMSG_MOVE_SET_FACING`, `CMSG_MOVE_START_FORWARD`, `CMSG_MOVE_HEARTBEAT` every 500 ms, `CMSG_MOVE_STOP` inside
 0.5 yards), stands `--pause` seconds (default 3 s), walks back, prints where the client believes the character is and
-logs out. The walk is straight-line only: no pathfinding, and Z is interpolated between the start and the target, so
-use it on flat ground. Creature and player names come from `CMSG_QUERY_CREATURE` and `CMSG_QUERY_PLAYER_NAMES`, cached
-per entry and GUID, at most four batches of each per run with a 3 s deadline per answer.
+logs out. Without `--navmesh` the walk is straight-line only: no pathfinding, and Z is interpolated between the start
+and the target, so use it on flat ground. With `--navmesh DIR --to-x X --to-y Y --to-z Z` the command plans a route on
+a Forever mmaps folder (`internal/navmesh`, the v16 format) to that absolute target on the current map, prints the
+route kind, corners, length and nav flags, and walks the polyline as one continuous movement: one start forward, a
+facing packet where the route really turns (the 4-yard floor samples between corners shape Z and get no packet of
+their own), heartbeats every 500 ms, one stop. `--parent MAP=PARENT[,..]` applies the server's instance rule (for
+example `--parent 389=1`), so a walk inside an instance uses the parent terrain map's tile files. Z comes from the mesh along the route, not from a
+straight line between two points. Creature and player names come from `CMSG_QUERY_CREATURE` and
+`CMSG_QUERY_PLAYER_NAMES`, cached per entry and GUID, at most four batches of each per run with a 3 s deadline per
+answer.
+
+`forever-agent forever path-check --navmesh DIR --map N --from X,Y,Z --to X,Y,Z` is offline (no login): it prints the
+same route's kind, every point with Z, the length and the nav flags the corridor crosses. `--server-filter` uses the
+server's own player filter (ground, steep, water, lava and road, nothing excluded) instead of the safe walk filter
+(ground, steep, water and road; lava and slime excluded), and `--parent MAP=PARENT[,..]` applies the instance map's
+parent-tile rule (`--parent 389=1`); a bare number is refused, because the pair names which map it is for. The real-data checks live in `internal/navmesh` and run when
+`FOREVER_MMAPS_DIR` names a Forever mmaps folder; see [docs/forever/NAVMESH-R1-NOTES.md](docs/forever/NAVMESH-R1-NOTES.md).
 
 `forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote

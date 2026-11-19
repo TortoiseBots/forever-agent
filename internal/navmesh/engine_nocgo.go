@@ -8,17 +8,20 @@ const engineName = "none"
 // ErrNoEngine.
 type engine struct{}
 
-func newEngine([]byte) (*engine, error)         { return nil, ErrNoEngine }
-func (*engine) close()                          {}
-func (*engine) addTile([]byte) (uint64, error)  { return 0, ErrNoEngine }
-func (*engine) removeTile(uint64) error         { return ErrNoEngine }
-func (*engine) nearest(Vec3, Vec3) (Vec3, bool) { return Vec3{}, false }
+func newEngine([]byte) (*engine, error)                         { return nil, ErrNoEngine }
+func (*engine) close()                                          {}
+func (*engine) addTile([]byte, uint32) (uint64, error)          { return 0, ErrNoEngine }
+func (*engine) removeTile(uint64) error                         { return ErrNoEngine }
+func (*engine) nearest(Vec3, Vec3, uint16, uint16) (Vec3, bool) { return Vec3{}, false }
 func (*engine) floors(float32, float32, float32, float32) ([]Floor, error) {
 	return nil, ErrNoEngine
 }
 func (*engine) polys([4]float32) ([]Polygon, error) { return nil, ErrNoEngine }
 func (*engine) findPath(Vec3, Vec3, uint16, uint16) (int, []Vec3, Vec3) {
 	return -3, nil, Vec3{}
+}
+func (*engine) route(Vec3, Vec3, uint16, uint16) (int, []Vec3, Vec3, Vec3, uint16, float32, float32, int) {
+	return 2, nil, Vec3{}, Vec3{}, 0, 0, 0, -3
 }
 func (*engine) raycast(Vec3, Vec3, uint16, uint16) (float32, int) { return 0, -3 }
 func (*engine) markBox(Box, uint16, float32) int                  { return 0 }

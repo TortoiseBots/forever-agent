@@ -205,7 +205,7 @@ func TestWantTilesPicksTheBoxRoundThePointsOnBigMaps(t *testing.T) {
 			names = append(names, tileFile(0, float32(32-r)*navfixture.Tile-1, float32(32-c)*navfixture.Tile-1))
 		}
 	}
-	got := wantTiles(names, 0, Vec3{-8913, 554, 94}, Vec3{-8900, 560, 94}, 1, MaxTiles)
+	got := wantTiles(MaNGOS, names, 0, Vec3{-8913, 554, 94}, Vec3{-8900, 560, 94}, 1, MaxTiles)
 	if len(got) != 9 || got[0] != tileFile(0, -8913, 554) {
 		t.Fatalf("%d tiles %v", len(got), got)
 	}
@@ -214,14 +214,14 @@ func TestWantTilesPicksTheBoxRoundThePointsOnBigMaps(t *testing.T) {
 		return Vec3{float32(32-r)*navfixture.Tile - 1, float32(32-c)*navfixture.Tile - 1, 0}
 	}
 	from, to := at(41, 21), at(58, 38)
-	got = wantTiles(names, 0, from, to, 3, 30)
+	got = wantTiles(MaNGOS, names, 0, from, to, 3, 30)
 	mid := at(49, 29)
 	if len(got) != 30 || got[0] != tileFile(0, from[0], from[1]) || !contains(got, tileFile(0, to[0], to[1])) ||
 		!contains(got, tileFile(0, mid[0], mid[1])) || contains(got, tileFile(0, at(41, 38)[0], at(41, 38)[1])) {
 		t.Fatalf("%d tiles %v", len(got), got)
 	}
 	small := []string{"0703131.mmtile", "0703231.mmtile", "0703232.mmtile"}
-	if got := wantTiles(small, 70, Vec3{}, Vec3{}, 1, MaxTiles); len(got) != 3 {
+	if got := wantTiles(MaNGOS, small, 70, Vec3{}, Vec3{}, 1, MaxTiles); len(got) != 3 {
 		t.Fatalf("a small map loads whole: %v", got)
 	}
 }
@@ -430,11 +430,11 @@ func TestPolygonsListsTheTilesUnderABox(t *testing.T) {
 func TestBoxTilesCutsToTheLimitNearestTheCentre(t *testing.T) {
 	names := []string{"0013131.mmtile", "0013132.mmtile", "0013231.mmtile", "0013232.mmtile", "0013333.mmtile"}
 	// x and y from -500 to 10 fall on tiles 31..32 in both axes.
-	got, trunc := boxTiles(names, 1, -500, -500, 10, 10, 2)
+	got, trunc := boxTiles(MaNGOS, names, 1, -500, -500, 10, 10, 2)
 	if !trunc || len(got) != 2 {
 		t.Fatalf("%v %v", got, trunc)
 	}
-	all, trunc := boxTiles(names, 1, -500, -500, 10, 10, 10)
+	all, trunc := boxTiles(MaNGOS, names, 1, -500, -500, 10, 10, 10)
 	if trunc || len(all) != 4 {
 		t.Fatalf("%v %v", all, trunc)
 	}

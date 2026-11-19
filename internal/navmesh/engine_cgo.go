@@ -49,13 +49,17 @@ func (e *engine) close() {
 	}
 }
 
-// addTile loads a whole .mmtile file and returns its tile ref.
-func (e *engine) addTile(data []byte) (uint64, error) {
+// addTile loads a whole .mmtile file and returns its tile ref; mmapVersion is the generator version
+// the caller's format requires.
+func (e *engine) addTile(data []byte, mmapVersion uint32) (uint64, error) {
 	if len(data) == 0 {
 		return 0, tileError(-1)
 	}
 	var ref C.ulonglong
-	if rc := C.nd_add_tile(e.h, (*C.uchar)(unsafe.Pointer(&data[0])), C.int(len(data)), &ref); rc != 0 {
+	if rc := C.nd_add_tile(e.h, (*C.uchar)(unsafe.Pointer(&data[0])), C.int(len(data)), C.uint(mmapVersion), &ref); rc != 0 {
+		if rc == -2 {
+			return 0, fmt.Errorf("tile header is not generator version %d with Detour version %d", mmapVersion, detourBuild/100)
+		}
 		return 0, tileError(int(rc))
 	}
 	return uint64(ref), nil
@@ -69,9 +73,9 @@ func (e *engine) removeTile(ref uint64) error {
 }
 
 // nearest is the closest walkable point to p within the half extents ext (x, y, height).
-func (e *engine) nearest(p, ext Vec3) (Vec3, bool) {
+func (e *engine) nearest(p, ext Vec3, include, exclude uint16) (Vec3, bool) {
 	var out Vec3
-	rc := C.nd_nearest(e.h, cvec(&p), cvec(&ext), C.ushort(IncludeFlags), C.ushort(ExcludeFlags), cvec(&out))
+	rc := C.nd_nearest(e.h, cvec(&p), cvec(&ext), C.ushort(include), C.ushort(exclude), cvec(&out))
 	return out, rc == 0
 }
 
@@ -135,6 +139,21 @@ func (e *engine) findPath(from, to Vec3, include, exclude uint16) (int, []Vec3, 
 	rc := C.nd_find_path(e.h, cvec(&from), cvec(&to), C.ushort(include), C.ushort(exclude),
 		cvec(&out[0]), C.int(maxPoints), &n, cvec(&goal))
 	return int(rc), out[:int(n)], goal
+}
+
+// route is nd_route: the server's poly lookup, a corner path, and its complete/partial/none verdict.
+// kind 0 complete, 1 partial, 2 none; rc -1 start off the mesh, -2 goal off the mesh, 0 otherwise.
+func (e *engine) route(from, to Vec3, include, exclude uint16) (kind int, pts []Vec3, start, end Vec3,
+	flags uint16, sdist, edist float32, rc int) {
+	const maxRoutePoints = 512 // PathGenerator.h MAX_POINT_PATH_LENGTH for a bot player
+	out := make([]Vec3, maxRoutePoints)
+	var n C.int
+	var k C.uint
+	var fl C.ushort
+	var sd, ed C.float
+	r := C.nd_route(e.h, cvec(&from), cvec(&to), C.ushort(include), C.ushort(exclude),
+		cvec(&out[0]), C.int(maxRoutePoints), &n, cvec(&start), cvec(&end), &k, &fl, &sd, &ed)
+	return int(k), out[:int(n)], start, end, uint16(fl), float32(sd), float32(ed), int(r)
 }
 
 // serverMaxPoints is the most smooth points the server's findSmoothPath returns

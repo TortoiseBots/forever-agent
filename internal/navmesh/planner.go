@@ -1,15 +1,22 @@
 // Package navmesh plans walking paths on the server's own navmesh: the mmaps the core's
-// PathFinder uses (MaNGOS mmap version 6 tiles holding Detour version 7 data with 64-bit
-// poly refs), run through the core's own Detour sources, vendored in detour/ (zlib).
+// PathFinder uses, run through the core's own Detour sources, vendored in detour/ (zlib).
 //
-// Tiles are read on demand from a local folder holding copies of the server's data/mmaps
-// files: NNN.mmap (the map's dtNavMeshParams) and NNNyyxx.mmtile.
+// Two mmap generations are read, chosen by the caller and never guessed from the folder: the
+// 1.12 ancestor's MaNGOS v6 files (NewPlanner) and ForeverCore's v16 files (NewForeverPlanner).
+// A v6 map is NNN.mmap (a raw dtNavMeshParams) with NNNYYXX.mmtile tiles; a v16 map is
+// MMMM.mmap (a 40-byte header) with MMMM_XX_YY.mmtile tiles. The tile payload is Detour
+// version 7 with 64-bit poly refs in both; the polygon flag bits differ (see Format.Terrain).
+//
+// Tiles are read on demand from a local folder holding copies of the server's data/mmaps files.
 package navmesh
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -30,9 +37,10 @@ const (
 	NavSteep  = 0x10 // slopes above the player's climb angle
 )
 
-// IncludeFlags and ExcludeFlags are the polygon filter of a player on foot: ground and water
-// as the server's PathFinder::createFilter gives a player, and never lava, slime or slopes
-// too steep to climb.
+// IncludeFlags and ExcludeFlags are the 1.12 ancestor's (MaNGOS) polygon filter for a player on foot: ground and
+// water walkable, lava, slime and slopes above the climb angle excluded. They are kept for callers that work on
+// MaNGOS data only (the 1.12 plan tooling); the planner itself uses Format.WalkFilter, whose Forever pair differs
+// (see there). A Forever planner must not pass these to a query: 0x02 is steep and 0x10 is road in that format.
 const (
 	IncludeFlags = NavGround | NavWater
 	ExcludeFlags = NavMagma | NavSlime | NavSteep
@@ -76,20 +84,26 @@ type Path struct {
 
 // Planner plans paths on the tiles under one folder. It is safe for concurrent use.
 type Planner struct {
-	dir  string
-	mu   sync.Mutex
-	maps map[uint32]*mapMesh
-	max  int // MaxTiles; tests lower it
+	dir    string
+	format Format
+	// parents maps an instance map to the terrain map whose tiles the server falls back to when the
+	// instance has none (MMapManager.cpp:353-357). Empty for a planner with no instance rule.
+	parents map[uint32]uint32
+	mu      sync.Mutex
+	maps    map[uint32]*mapMesh
+	max     int // MaxTiles; tests lower it
 	// avoid holds each map's avoid boxes (SetAvoid), applied to every tile as it loads.
 	avoid map[uint32][]Box
 }
 
 type mapMesh struct {
-	eng     *engine
-	tiles   map[string]*loaded
-	missing map[string]bool // tile files Floors found missing; Plan forgets them
-	tick    uint64
-	avoid   []Box // the map's avoid boxes, marked NavMagma on each tile load
+	id       uint32
+	eng      *engine
+	tiles    map[string]*loaded
+	missing  map[string]bool // tile files Floors found missing; Plan forgets them
+	unusable map[string]bool // parent-map tiles Detour would not take into this map's mesh; kept
+	tick     uint64
+	avoid    []Box // the map's avoid boxes, marked NavMagma on each tile load
 }
 
 // AvoidShare is the share of a polygon's (x, y) area that must lie inside an avoid box (the polygon clipped by the box, heights
@@ -152,15 +166,35 @@ type loaded struct {
 	used uint64 // mapMesh.tick when a plan last wanted it
 }
 
+// NewPlanner reads the 1.12 ancestor's MaNGOS v6 files, the format this package has always read.
 func NewPlanner(dir string) *Planner {
-	return &Planner{dir: dir, maps: map[uint32]*mapMesh{}, max: MaxTiles}
+	return NewPlannerFormat(dir, MaNGOS, nil)
 }
+
+// NewForeverPlanner reads ForeverCore's v16 files. parents is the server's parent-map rule
+// (MapEntry.ParentMapID; MMapManager.cpp:353-357): when an instance map has no tile file for a grid,
+// the parent map's tile with that grid is loaded into the instance's mesh instead.
+func NewForeverPlanner(dir string, parents map[uint32]uint32) *Planner {
+	return NewPlannerFormat(dir, Forever, parents)
+}
+
+// NewPlannerFormat reads the given mmap generation. The format is never guessed from the folder: a
+// v6 folder named as v16 fails on its map header, and the other way round.
+func NewPlannerFormat(dir string, f Format, parents map[uint32]uint32) *Planner {
+	if parents != nil {
+		parents = maps.Clone(parents)
+	}
+	return &Planner{dir: dir, format: f, parents: parents, maps: map[uint32]*mapMesh{}, max: MaxTiles}
+}
+
+// Format is the mmap generation this planner reads.
+func (p *Planner) Format() Format { return p.format }
 
 // Scratch returns a planner on the same folder with a tile cache of its own. Work that must not unload this planner's
 // tiles (a map image's background, read with Polygons, while a dungeon run plans on this one) draws with a scratch
 // planner and closes it when done. It keeps out of the same avoid boxes (SetAvoid).
 func (p *Planner) Scratch() *Planner {
-	s := NewPlanner(p.dir)
+	s := NewPlannerFormat(p.dir, p.format, p.parents)
 	p.mu.Lock()
 	for id, bs := range p.avoid {
 		if s.avoid == nil {
@@ -202,14 +236,16 @@ func (p *Planner) Tiles(mapID uint32) []string {
 // will not fix (no folder, no map, a broken tile, no engine); an unreachable goal is a
 // Path with Status NoPath or Partial and a Reason.
 func (p *Planner) Plan(mapID uint32, from, to Vec3) (Path, error) {
-	return p.planQuery(mapID, from, to, IncludeFlags, ExcludeFlags)
+	f := p.format.WalkFilter()
+	return p.planQuery(mapID, from, to, f.Include, f.Exclude)
 }
 
 // PlanNoWater is Plan over plain ground only: a water polygon is not walkable, so the path goes round a lake instead of
 // through it (route-regen plans every hop this way; the run leader walks the ground). A ground polygon the tiles also flag
 // NavWater is still walkable, as on the plain mesh.
 func (p *Planner) PlanNoWater(mapID uint32, from, to Vec3) (Path, error) {
-	return p.planQuery(mapID, from, to, NavGround, ExcludeFlags)
+	f := p.format.GroundFilter()
+	return p.planQuery(mapID, from, to, f.Include, f.Exclude)
 }
 
 // planQuery plans with the given polygon filter (include, exclude).
@@ -229,7 +265,7 @@ func (p *Planner) planQuery(mapID uint32, from, to Vec3, include, exclude uint16
 	}
 	var path Path
 	for _, margin := range []int{1, 3} {
-		want := wantTiles(names, mapID, from, to, margin, p.max)
+		want := wantTiles(p.format, names, mapID, from, to, margin, p.max)
 		data, err := p.fetch(m, want)
 		if err != nil {
 			return Path{}, err
@@ -295,7 +331,7 @@ func (p *Planner) Floors(mapID uint32, x, y, lo, hi float32) ([]Floor, error) {
 // ensureTile makes the one tile under (x, y) loaded (or counted as used), reading its file with the lock let go. It reports
 // false for a point whose tile file is missing (remembered until the next Plan). The caller holds p.mu, which is held on return.
 func (p *Planner) ensureTile(mapID uint32, m *mapMesh, x, y float32) (bool, error) {
-	name := tileFile(mapID, x, y)
+	name := p.format.TileName(mapID, x, y)
 	if m.missing[name] {
 		return false, nil
 	}
@@ -303,7 +339,7 @@ func (p *Planner) ensureTile(mapID uint32, m *mapMesh, x, y float32) (bool, erro
 	if m.tiles[name] == nil {
 		// Read the tile with the lock let go, as fetch does for Plan.
 		p.mu.Unlock()
-		b, err := os.ReadFile(filepath.Join(p.dir, name))
+		b, err := readTileFile(filepath.Join(p.dir, name), name, p.format.MmapVersion())
 		p.mu.Lock()
 		if p.maps[mapID] != m {
 			return false, errClosed
@@ -316,7 +352,7 @@ func (p *Planner) ensureTile(mapID uint32, m *mapMesh, x, y float32) (bool, erro
 			m.missing[name] = true
 			return false, nil
 		case err != nil:
-			return false, fmt.Errorf("navmesh: %w", err)
+			return false, err
 		}
 		data = map[string][]byte{name: b}
 	}
@@ -344,13 +380,15 @@ type Ray struct {
 // tile's width crosses at most two; a longer one over an unloaded tile reads as blocked there), and gives Known false for an end whose
 // tile file is missing.
 func (p *Planner) Raycast(mapID uint32, from, to Vec3) (Ray, error) {
-	return p.raycastQuery(mapID, from, to, IncludeFlags, ExcludeFlags)
+	f := p.format.WalkFilter()
+	return p.raycastQuery(mapID, from, to, f.Include, f.Exclude)
 }
 
 // RaycastNoWater is Raycast over plain ground only: a ray that would cross water reads as blocked where it meets the water
 // polygon, so a string-pulled corner never cuts across a lake.
 func (p *Planner) RaycastNoWater(mapID uint32, from, to Vec3) (Ray, error) {
-	return p.raycastQuery(mapID, from, to, NavGround, ExcludeFlags)
+	f := p.format.GroundFilter()
+	return p.raycastQuery(mapID, from, to, f.Include, f.Exclude)
 }
 
 // raycastQuery casts a walkability ray with the given polygon filter (include, exclude).
@@ -399,7 +437,8 @@ func (p *Planner) Nearest(mapID uint32, pt Vec3) (Vec3, bool, error) {
 	if ok, err := p.ensureTile(mapID, m, pt[0], pt[1]); err != nil || !ok {
 		return Vec3{}, false, err
 	}
-	out, ok := m.eng.nearest(pt, Vec3{4, 4, 6})
+	f := p.format.WalkFilter()
+	out, ok := m.eng.nearest(pt, Vec3{4, 4, 6}, f.Include, f.Exclude)
 	return out, ok, nil
 }
 
@@ -436,7 +475,7 @@ func (p *Planner) Polygons(mapID uint32, x0, y0, x1, y1 float32) (polys []Polygo
 	if err != nil {
 		return nil, false, err
 	}
-	want, truncated := boxTiles(names, mapID, x0, y0, x1, y1, p.max)
+	want, truncated := boxTiles(p.format, names, mapID, x0, y0, x1, y1, p.max)
 	if len(want) == 0 {
 		return nil, false, nil
 	}
@@ -458,26 +497,38 @@ func (p *Planner) Polygons(mapID uint32, x0, y0, x1, y1 float32) (polys []Polygo
 }
 
 // boxTiles is the map's tile files that overlap the box, nearest the box's centre first and cut to limit.
-func boxTiles(names []string, mapID uint32, x0, y0, x1, y1 float32, limit int) (out []string, truncated bool) {
+func boxTiles(f Format, names []string, mapID uint32, x0, y0, x1, y1 float32, limit int) (out []string, truncated bool) {
 	rLo, cLo := tileRC(x1, y1) // x and y fall as the grid row and column rise
 	rHi, cHi := tileRC(x0, y0)
 	cr, cc := tileRC((x0+x1)/2, (y0+y1)/2)
 	type cand struct {
 		name string
 		d    int
+		own  bool
 	}
 	var cs []cand
-	for _, n := range names {
-		var m, r, c int
-		if _, err := fmt.Sscanf(n, "%03d%02d%02d.mmtile", &m, &r, &c); err != nil || uint32(m) != mapID {
-			continue
+	seen := map[[2]int]bool{}
+	// The map's own tiles first: an instance tile wins over the parent's for the same grid.
+	for pass := 0; pass < 2; pass++ {
+		for _, n := range names {
+			m, r, c, ok := f.TileParse(n)
+			if !ok || (pass == 0) != (m == mapID) {
+				continue
+			}
+			if r < rLo || r > rHi || c < cLo || c > cHi || seen[[2]int{r, c}] {
+				continue
+			}
+			seen[[2]int{r, c}] = true
+			cs = append(cs, cand{n, (r-cr)*(r-cr) + (c-cc)*(c-cc), m == mapID})
 		}
-		if r < rLo || r > rHi || c < cLo || c > cHi {
-			continue
-		}
-		cs = append(cs, cand{n, (r-cr)*(r-cr) + (c-cc)*(c-cc)})
 	}
 	slices.SortStableFunc(cs, func(a, b cand) int {
+		if a.own != b.own {
+			if a.own {
+				return -1
+			}
+			return 1
+		}
 		if a.d != b.d {
 			return a.d - b.d
 		}
@@ -500,24 +551,130 @@ func (e *DataMissingError) Unwrap() error { return e.Err }
 // Unavailable marks the error for callers that cannot import this package (the brain asks by interface).
 func (e *DataMissingError) Unavailable() bool { return true }
 
+// TileHeaderLen is the server's 20-byte MmapTileHeader: magic, Detour version, generator version, payload
+// size, usesLiquids and three padding bytes (MMapDefines.h:39-46).
+const TileHeaderLen = 20
+
+// detourTileVersion is DT_NAVMESH_VERSION the tile header must carry (DetourNavMesh.h:85).
+const detourTileVersion = 7
+
+// readMmapFile reads a map params file: the size is checked before anything is read, and a file larger than
+// MaxMmapFileSize is refused, so a file that a corrupted header claims to be huge never becomes an allocation. A
+// Forever file's 40-byte header is read first and its off-mesh count checked against the file's size before the
+// rest is read (the server reads the header and then that many OffMeshData rows, MMapManager.cpp:292-310).
+func readMmapFile(path, name string, f Format) ([]byte, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() > MaxMmapFileSize {
+		return nil, fmt.Errorf("navmesh: %s: %d bytes is above the %d-byte .mmap limit: %w", name, st.Size(), MaxMmapFileSize, ErrFileTooLarge)
+	}
+	if st.Size() < 28 {
+		return nil, fmt.Errorf("navmesh: %s: %d bytes, want at least a 28-byte dtNavMeshParams: %w", name, st.Size(), ErrTruncatedMmap)
+	}
+	if f == Forever && st.Size() >= mmapHeaderLen {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		var hdr [mmapHeaderLen]byte
+		_, rerr := io.ReadFull(file, hdr[:])
+		file.Close()
+		if rerr != nil {
+			return nil, fmt.Errorf("navmesh: %s: reading the header: %w", name, rerr)
+		}
+		if binary.LittleEndian.Uint32(hdr[0:4]) == mmapMagic {
+			count := binary.LittleEndian.Uint32(hdr[36:40])
+			if need := uint64(mmapHeaderLen) + uint64(count)*foreverOffMeshSize; need > uint64(st.Size()) {
+				return nil, fmt.Errorf("navmesh: %s: %d bytes, the header claims %d off-mesh connections (%d bytes): %w",
+					name, st.Size(), count, need, ErrTruncatedMmap)
+			}
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != st.Size() {
+		return nil, fmt.Errorf("navmesh: %s: %d bytes read, the file has %d (changed while it was read)", name, len(data), st.Size())
+	}
+	return data, nil
+}
+
+// readTileFile reads one .mmtile with every size checked first: the file's size against MaxTileFileSize, the
+// 20-byte header's magic, Detour version and generator version, and the payload size it claims against the
+// bytes the file holds. Only then is the file read (one allocation of its stat size, no larger). The engine
+// still parses the header again; this is the check that keeps a corrupt or sparse multi-GB file from becoming
+// a read or an allocation.
+func readTileFile(path, name string, mmapVersion uint32) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := st.Size()
+	if size < TileHeaderLen {
+		return nil, fmt.Errorf("navmesh: %s: %d bytes, want at least the %d-byte tile header: %w", name, size, TileHeaderLen, ErrTruncatedMmap)
+	}
+	if size > MaxTileFileSize {
+		return nil, fmt.Errorf("navmesh: %s: %d bytes is above the %d-byte tile limit: %w", name, size, MaxTileFileSize, ErrFileTooLarge)
+	}
+	var hdr [TileHeaderLen]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return nil, fmt.Errorf("navmesh: %s: reading the header: %w", name, err)
+	}
+	if got := binary.LittleEndian.Uint32(hdr[0:4]); got != mmapMagic {
+		return nil, fmt.Errorf("navmesh: %s: magic 0x%08x, want 0x%08x (not an mmtile): %w", name, got, mmapMagic, ErrTruncatedMmap)
+	}
+	if got := binary.LittleEndian.Uint32(hdr[4:8]); got != detourTileVersion {
+		return nil, fmt.Errorf("navmesh: %s: Detour tile version %d, want %d (the payload must be Detour 7 with 64-bit refs): %w",
+			name, got, detourTileVersion, ErrMmapVersion)
+	}
+	if got := binary.LittleEndian.Uint32(hdr[8:12]); got != mmapVersion {
+		return nil, fmt.Errorf("navmesh: %s: mmap generator version %d (want generator version %d): %w", name, got, mmapVersion, ErrMmapVersion)
+	}
+	claim := int64(binary.LittleEndian.Uint32(hdr[12:16]))
+	if want := size - TileHeaderLen; claim != want {
+		return nil, fmt.Errorf("navmesh: %s: the header claims %d payload bytes, the file holds %d: %w", name, claim, want, ErrTruncatedMmap)
+	}
+	if claim < 100 { // sizeof(dtMeshHeader)
+		return nil, fmt.Errorf("navmesh: %s: %d payload bytes, want at least the 100-byte dtMeshHeader: %w", name, claim, ErrTruncatedMmap)
+	}
+	data := make([]byte, size)
+	copy(data, hdr[:])
+	if _, err := io.ReadFull(f, data[TileHeaderLen:]); err != nil {
+		return nil, fmt.Errorf("navmesh: %s: reading the tile: %w", name, err)
+	}
+	return data, nil
+}
+
 func (p *Planner) mesh(mapID uint32) (*mapMesh, error) {
 	if m := p.maps[mapID]; m != nil {
 		return m, nil
 	}
-	name := fmt.Sprintf("%03d.mmap", mapID)
-	params, err := os.ReadFile(filepath.Join(p.dir, name))
+	name := p.format.MmapName(mapID)
+	data, err := readMmapFile(filepath.Join(p.dir, name), name, p.format)
 	if err != nil {
-		err = fmt.Errorf("navmesh: map %d: %w (copy the server's data/mmaps/%s and %03d*.mmtile into mmaps_dir)", mapID, err, name, mapID)
+		err = fmt.Errorf("navmesh: map %d (%s): %w (copy the server's data/mmaps/%s and its tile files into mmaps_dir)", mapID, p.format, err, name)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, &DataMissingError{Err: err}
 		}
+		return nil, err
+	}
+	params, err := p.format.ParseMmap(name, data)
+	if err != nil {
 		return nil, err
 	}
 	eng, err := newEngine(params)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	m := &mapMesh{eng: eng, tiles: map[string]*loaded{}, avoid: slices.Clone(p.avoid[mapID])}
+	m := &mapMesh{id: mapID, eng: eng, tiles: map[string]*loaded{}, unusable: map[string]bool{}, avoid: slices.Clone(p.avoid[mapID])}
 	p.maps[mapID] = m
 	return m, nil
 }
@@ -528,16 +685,20 @@ func (p *Planner) list(mapID uint32) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("navmesh: %w", err)
 	}
-	prefix := fmt.Sprintf("%03d", mapID)
+	// An instance map may have only some of its tiles (or none): the server takes the parent map's
+	// tile for a grid the instance lacks (MMapManager.cpp:353-357). List both; a child tile wins over
+	// the parent's for the same grid in wantTiles.
+	parent, hasParent := p.parents[mapID]
+	has := func(m uint32) bool { return m == mapID || (hasParent && parent == m) }
 	var out []string
 	for _, e := range ents {
 		n := e.Name()
-		if len(n) == len("0000000.mmtile") && strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".mmtile") {
+		if m, _, _, ok := p.format.TileParse(n); ok && has(m) {
 			out = append(out, n)
 		}
 	}
 	if len(out) == 0 {
-		return nil, &DataMissingError{Err: fmt.Errorf("navmesh: no %s*.mmtile files in %s", prefix, p.dir)}
+		return nil, &DataMissingError{Err: fmt.Errorf("navmesh: no %s tile files for map %d in %s", p.format, mapID, p.dir)}
 	}
 	return out, nil
 }
@@ -552,16 +713,15 @@ func (p *Planner) fetch(m *mapMesh, want []string) (map[string][]byte, error) {
 	p.mu.Lock()
 	var cold []string
 	for _, n := range want {
-		if m.tiles[n] == nil {
+		if m.tiles[n] == nil && !m.unusable[n] {
 			cold = append(cold, n)
 		}
 	}
 	p.mu.Unlock()
 	data := make(map[string][]byte, len(cold))
 	for _, n := range cold {
-		b, err := os.ReadFile(filepath.Join(p.dir, n))
+		b, err := readTileFile(filepath.Join(p.dir, n), n, p.format.MmapVersion())
 		if err != nil {
-			err = fmt.Errorf("navmesh: %w", err)
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil, &DataMissingError{Err: err}
 			}
@@ -581,7 +741,7 @@ func (p *Planner) load(m *mapMesh, want []string, data map[string][]byte) error 
 	for _, n := range want {
 		if t := m.tiles[n]; t != nil {
 			t.used = m.tick
-		} else {
+		} else if !m.unusable[n] {
 			missing++
 		}
 	}
@@ -601,24 +761,32 @@ func (p *Planner) load(m *mapMesh, want []string, data map[string][]byte) error 
 		delete(m.tiles, old)
 	}
 	for _, n := range want {
-		if m.tiles[n] != nil {
+		if m.tiles[n] != nil || m.unusable[n] {
 			continue
 		}
 		b, ok := data[n]
 		if !ok {
 			var err error
-			if b, err = os.ReadFile(filepath.Join(p.dir, n)); err != nil {
-				return fmt.Errorf("navmesh: %w", err)
+			if b, err = readTileFile(filepath.Join(p.dir, n), n, p.format.MmapVersion()); err != nil {
+				return err
 			}
 		}
-		ref, err := m.eng.addTile(b)
+		ref, err := m.eng.addTile(b, p.format.MmapVersion())
 		if err != nil {
+			// A parent map's tile is a fallback: the instance's own mesh params may not have room for
+			// it (MMapManager.cpp:349-357 tries the file and logs a failed addTile without failing the
+			// load). Remember it; the instance's own tiles are still errors.
+			if id, _, _, ok := p.format.TileParse(n); ok && id != m.id {
+				m.unusable[n] = true
+				continue
+			}
 			return fmt.Errorf("navmesh: %s: %w", n, err)
 		}
 		m.tiles[n] = &loaded{ref: ref, used: m.tick}
 		// Mark the avoid boxes on the new tile (a box over tiles loaded before marks them again: the flag is only added).
+		avoidFlag := p.format.Terrain().Magma
 		for _, b := range m.avoid {
-			m.eng.markBox(b, NavMagma, AvoidShare)
+			m.eng.markBox(b, avoidFlag, AvoidShare)
 		}
 	}
 	return nil
@@ -643,7 +811,7 @@ func plan(eng *engine, from, to Vec3, include, exclude uint16) Path {
 	}
 	for i := 1; i < len(pts); i++ {
 		path.Length += dist3D(pts[i-1], pts[i])
-		path.Ground = append(path.Ground, ground(eng, pts[i-1], pts[i]))
+		path.Ground = append(path.Ground, ground(eng, pts[i-1], pts[i], Filter{include, exclude}))
 	}
 	end := pts[len(pts)-1]
 	switch rc {
@@ -660,7 +828,7 @@ func plan(eng *engine, from, to Vec3, include, exclude uint16) Path {
 // ground samples the mesh surface every GroundStep yards between two corners. Each sample
 // looks for the floor near the last one's height, so a hill is followed up and over and a
 // bridge does not drop to the floor under it; a miss keeps the straight line's height.
-func ground(eng *engine, a, b Vec3) []Vec3 {
+func ground(eng *engine, a, b Vec3, f Filter) []Vec3 {
 	n := int(dist2D(a, b) / GroundStep)
 	if n < 1 {
 		return nil
@@ -668,15 +836,15 @@ func ground(eng *engine, a, b Vec3) []Vec3 {
 	out := make([]Vec3, 0, n)
 	prev := a[2]
 	for k := 1; k <= n; k++ {
-		f := float32(k) * GroundStep / dist2D(a, b)
-		if f >= 1 {
+		t := float32(k) * GroundStep / dist2D(a, b)
+		if t >= 1 {
 			break
 		}
-		q := Vec3{a[0] + (b[0]-a[0])*f, a[1] + (b[1]-a[1])*f, prev + (b[2]-a[2])/float32(n+1)}
-		if c, ok := eng.nearest(q, Vec3{0.25, 0.25, 6}); ok && dist2D(c, q) < 0.05 {
+		q := Vec3{a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, prev + (b[2]-a[2])/float32(n+1)}
+		if c, ok := eng.nearest(q, Vec3{0.25, 0.25, 6}, f.Include, f.Exclude); ok && dist2D(c, q) < 0.05 {
 			q[2] = c[2]
 		} else {
-			q[2] = a[2] + (b[2]-a[2])*f
+			q[2] = a[2] + (b[2]-a[2])*t
 		}
 		prev = q[2]
 		out = append(out, q)
@@ -687,26 +855,43 @@ func ground(eng *engine, a, b Vec3) []Vec3 {
 // wantTiles is the tiles to load for a path from one point to another: a small map whole,
 // else the box of tiles round the two, margin tiles wider on each side, cut to the limit
 // tiles nearest the straight line between them.
-func wantTiles(names []string, mapID uint32, from, to Vec3, margin, limit int) []string {
+func wantTiles(f Format, names []string, mapID uint32, from, to Vec3, margin, limit int) []string {
 	type cand struct {
 		name string
 		d    float64
+		own  bool
 	}
 	r0, c0 := tileRC(from[0], from[1])
 	r1, c1 := tileRC(to[0], to[1])
 	var cs []cand
-	for _, n := range names {
-		var m, r, c int
-		if _, err := fmt.Sscanf(n, "%03d%02d%02d.mmtile", &m, &r, &c); err != nil || uint32(m) != mapID {
-			continue
+	seen := map[[2]int]bool{}
+	// The map's own tiles first: an instance tile wins over the parent's for the same grid.
+	for pass := 0; pass < 2; pass++ {
+		for _, n := range names {
+			m, r, c, ok := f.TileParse(n)
+			if !ok || (pass == 0) != (m == mapID) {
+				continue
+			}
+			if len(names) > smallMap && (r < min(r0, r1)-margin || r > max(r0, r1)+margin || c < min(c0, c1)-margin ||
+				c > max(c0, c1)+margin) {
+				continue
+			}
+			if seen[[2]int{r, c}] {
+				continue
+			}
+			seen[[2]int{r, c}] = true
+			cs = append(cs, cand{n, segDist(float64(r), float64(c), float64(r0), float64(c0), float64(r1), float64(c1)), m == mapID})
 		}
-		if len(names) > smallMap && (r < min(r0, r1)-margin || r > max(r0, r1)+margin || c < min(c0, c1)-margin ||
-			c > max(c0, c1)+margin) {
-			continue
-		}
-		cs = append(cs, cand{n, segDist(float64(r), float64(c), float64(r0), float64(c0), float64(r1), float64(c1))})
 	}
 	slices.SortStableFunc(cs, func(a, b cand) int {
+		// The map's own tiles first: a parent-map fallback must not take a Detour tile slot from an
+		// instance tile (Ragefire's params hold exactly its four).
+		if a.own != b.own {
+			if a.own {
+				return -1
+			}
+			return 1
+		}
 		if a.d != b.d {
 			if a.d < b.d {
 				return -1
@@ -745,12 +930,18 @@ func tileFile(mapID uint32, x, y float32) string {
 	return fmt.Sprintf("%03d%02d%02d.mmtile", mapID, r, c)
 }
 
-var tileErrors = map[int]string{-1: "not an mmtile (bad header)", -2: "not mmap version 6 / Detour version 7",
-	-3: "truncated (the header claims more data than the file holds)", -4: "Detour refused the tile"}
-
 func tileError(rc int) error {
-	if msg, ok := tileErrors[rc]; ok {
-		return errors.New(msg)
+	switch rc {
+	case -1:
+		return errors.New("not an mmtile (bad header)")
+	case -2:
+		return errors.New("mmap generator version or Detour version mismatch (want the planner's format and Detour 7)")
+	case -3:
+		return errors.New("truncated (the header claims more data than the file holds)")
+	case -4:
+		return errors.New("detour refused the tile")
+	case -5:
+		return errors.New("invalid tile data (a polygon, link, detail or bounding-volume index is out of range)")
 	}
 	return fmt.Errorf("unknown tile error %d", rc)
 }

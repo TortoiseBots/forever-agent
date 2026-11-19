@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // Options is what the Battle.net login left plus the character to enter with.
@@ -42,6 +43,15 @@ type Options struct {
 	Dx, Dy    float32
 	WalkPause time.Duration
 	Settle    time.Duration
+	// NavmeshDir (forever walk-check --navmesh) makes the walk a navmesh route to the absolute target
+	// ToX/ToY/ToZ on the current map, instead of the Dx/Dy offset walk and back. Empty keeps the old walk.
+	NavmeshDir string
+	// Parents is the server's instance rule for the navmesh walk (walk-check --parent MAP=PARENT): an instance
+	// map's missing tile comes from that one parent map's tile file (MMapManager.cpp:349-357).
+	Parents map[uint32]uint32
+	ToX     float32
+	ToY     float32
+	ToZ     float32
 	// FightCheck runs round 4's fight (forever fight-check): settle, choose a target (Entry when set), attack it for
 	// FightFor, cast the known spells the plan picks, report, log out.
 	FightCheck bool
@@ -130,6 +140,13 @@ type Report struct {
 	WalkTo        [4]float32
 	BackAt        [4]float32
 	WalkClientPos [4]float32
+	// The navmesh option's route (forever walk-check --navmesh DIR --to-x/y/z): the route kind, its
+	// corner count and length, and the terrain flags of the corridor.
+	NavPath        bool
+	NavPathKind    string
+	NavPathCorners int
+	NavPathLength  float32
+	NavPathFlags   string
 
 	// Round 5: the chat log's summary and the party model at the end of the run.
 	Chat  ChatSummary
@@ -825,6 +842,10 @@ func (s *session) walkCheck(ctx context.Context) error {
 	s.queryNames(ctx)
 	s.summarise(x, y, z)
 
+	if s.opts.NavmeshDir != "" {
+		return s.walkCheckPath(ctx, x, y, z)
+	}
+
 	// The walk: from the position the server put the character at (the create block's, not the login's).
 	from := [4]float32{x, y, z, o}
 	s.report.WalkFrom = from
@@ -850,6 +871,55 @@ func (s *session) walkCheck(ctx context.Context) error {
 	s.report.Walked = true
 	s.opts.logf("walk-check: back at the spawn, the client believes it is at %.2f %.2f %.2f (orientation %.2f)", bx, by, bz, bo)
 	return nil
+}
+
+// walkCheckPath is walk-check with --navmesh: plan an absolute target on the current map and walk the
+// route's points as one continuous movement. Without the option the command never reaches this.
+func (s *session) walkCheckPath(ctx context.Context, x, y, z float32) error {
+	if s.mover == nil {
+		s.report.Walked = false
+		s.opts.logf("walk-check: no create block of this character arrived, so the walk is skipped")
+		return nil
+	}
+	mapID := uint32(s.world.MapID())
+	planner := navmesh.NewForeverPlanner(s.opts.NavmeshDir, s.opts.Parents)
+	defer planner.Close()
+	route, err := planner.PathTo(mapID, navmesh.Vec3{x, y, z}, navmesh.Vec3{s.opts.ToX, s.opts.ToY, s.opts.ToZ})
+	if err != nil {
+		return fmt.Errorf("walk-check: navmesh: %w", err)
+	}
+	s.report.NavPath = true
+	s.report.NavPathKind = string(route.Kind)
+	s.report.NavPathCorners = route.Corners
+	s.report.NavPathLength = route.Length
+	s.report.NavPathFlags = strings.Join(route.FlagNames, "|")
+	s.report.WalkFrom = [4]float32{x, y, z, s.mover.O}
+	s.report.WalkTo = [4]float32{s.opts.ToX, s.opts.ToY, s.opts.ToZ, s.mover.O}
+	s.opts.logf("walk-check: navmesh route on map %d: %s, %d corner(s), %.1f yd, flags %s%s",
+		mapID, route.Kind, route.Corners, route.Length, strings.Join(route.FlagNames, "|"), reasonSuffix(route.Reason))
+	if route.Kind == navmesh.RouteNone {
+		return fmt.Errorf("walk-check: no navmesh route to %.2f %.2f %.2f: %s", s.opts.ToX, s.opts.ToY, s.opts.ToZ, route.Reason)
+	}
+	points := make([][3]float32, len(route.Points))
+	for i, p := range route.Points {
+		points[i] = [3]float32{p[0], p[1], p[2]}
+	}
+	if err := s.mover.WalkPath(ctx, points); err != nil {
+		return err
+	}
+	bx, by, bz, bo := s.mover.Position()
+	s.report.BackAt = [4]float32{bx, by, bz, bo}
+	s.report.WalkClientPos = s.report.BackAt
+	s.report.Walked = true
+	s.opts.logf("walk-check: navmesh walk ended at %.2f %.2f %.2f (orientation %.2f)", bx, by, bz, bo)
+	return nil
+}
+
+func reasonSuffix(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return " (" + reason + ")"
 }
 
 // summarise fills the report's object summary and nearest-units table, and prints both.

@@ -263,6 +263,210 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 	}
 }
 
+// WalkPath walks a polyline as one continuous movement: one CMSG_MOVE_START_FORWARD at the start, a
+// CMSG_MOVE_SET_FACING where the direction really turns, heartbeats every HeartbeatInterval, and one
+// CMSG_MOVE_STOP at the end. It is the same cadence as ChaseTo: at most maxMovementPacketsPerSecond movement
+// packets in any second, and a teleport ends the walk where the server put the character (ErrTeleported).
+//
+// The points are normally navmesh.PathTo's route: straight-path corners with floor samples every 4 yd between
+// them. The samples shape the Z of the positions the heartbeats carry; they are not corners, so they get no packet
+// of their own. Every position is on one monotonic timeline from the start at RunSpeed, never a clock restarted at
+// the previous corner: a packet the cap makes late does not push the rest of the route back, so the walk cannot
+// run out of its deadline on a long densified route.
+func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
+	if m.RunSpeed <= 0 {
+		return fmt.Errorf("objects: no run speed for the mover")
+	}
+	// Drop points the character already stands on, so a zero-length leg can never divide by zero.
+	points := make([][3]float32, 0, len(corners))
+	for _, c := range corners {
+		if len(points) == 0 && Distance(m.X, m.Y, m.Z, c[0], c[1], c[2]) <= StopDistance {
+			continue
+		}
+		if n := len(points); n > 0 && Distance(points[n-1][0], points[n-1][1], points[n-1][2], c[0], c[1], c[2]) <= StopDistance {
+			continue
+		}
+		points = append(points, c)
+	}
+	if len(points) == 0 {
+		return nil
+	}
+	// The polyline starts where the character stands; points[0] is the first corner.
+	path := append([][3]float32{{m.X, m.Y, m.Z}}, points...)
+	cum := make([]float32, len(path))
+	for i := 1; i < len(path); i++ {
+		cum[i] = cum[i-1] + Distance(path[i-1][0], path[i-1][1], path[i-1][2], path[i][0], path[i][1], path[i][2])
+	}
+	total := cum[len(cum)-1]
+	if total <= 0 {
+		return nil
+	}
+	// The points where the direction of travel turns: only those get a set-facing. A Z sample on a straight leg
+	// does not turn, so a densified route does not become one facing packet per 4 yd.
+	var turns []int
+	for i := 1; i < len(path)-1; i++ {
+		prevDir := OrientationTo(path[i-1][0], path[i-1][1], path[i][0], path[i][1])
+		nextDir := OrientationTo(path[i][0], path[i][1], path[i+1][0], path[i+1][1])
+		if orientationDiff(prevDir, nextDir) > chaseTurn {
+			turns = append(turns, i)
+		}
+	}
+
+	base := m.base()
+	// The start's two packets are movement packets too: if the previous second is already full, wait for the slots
+	// they need, so even a walk that begins right after another burst keeps the four-a-second cap.
+	for m.movementsInLastSecond(m.Sender.Now()) > maxMovementPacketsPerSecond-2 {
+		slot := m.sendTimes[m.sendIdx%len(m.sendTimes)].Add(time.Second + time.Millisecond)
+		if err := m.Sender.WaitUntil(ctx, slot); err != nil {
+			return err
+		}
+		if m.teleported {
+			m.teleported = false
+			_ = m.send(wire.CMSGMoveStop, base)
+			return ErrTeleported
+		}
+	}
+	dir := OrientationTo(m.X, m.Y, points[0][0], points[0][1])
+	if err := m.Face(dir); err != nil {
+		return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
+	}
+	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
+		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
+	}
+	m.walking = true
+	defer func() { m.walking = false }()
+	m.logf("path: start forward at %.2f %.2f %.2f, %d point(s), %.2f yd, run %.1f yd/s",
+		m.X, m.Y, m.Z, len(points), total, m.RunSpeed)
+
+	start := m.Sender.Now()
+	arrival := start.Add(time.Duration(float64(total) / float64(m.RunSpeed) * float64(time.Second)))
+	deadline := start.Add(walkPathTimeout(total, m.RunSpeed))
+	timeOf := func(d float32) time.Time {
+		return start.Add(time.Duration(float64(d) / float64(m.RunSpeed) * float64(time.Second)))
+	}
+	// place puts the mover where the route is at the given walked distance; Z follows the densified samples
+	// between corners instead of the straight chord.
+	place := func(walked float32) {
+		if walked <= 0 {
+			m.X, m.Y, m.Z = path[0][0], path[0][1], path[0][2]
+			return
+		}
+		if walked >= total {
+			m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]
+			return
+		}
+		for i := 1; i < len(path); i++ {
+			if walked > cum[i] {
+				continue
+			}
+			seg := cum[i] - cum[i-1]
+			t := float32(0)
+			if seg > 0 {
+				t = (walked - cum[i-1]) / seg
+			}
+			m.X = lerp(path[i-1][0], path[i][0], t)
+			m.Y = lerp(path[i-1][1], path[i][1], t)
+			m.Z = lerp(path[i-1][2], path[i][2], t)
+			return
+		}
+		m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]
+	}
+	place(0)
+
+	lastSend := start
+	turn := 0
+	for {
+		next := lastSend.Add(HeartbeatInterval)
+		if arrival.Before(next) {
+			next = arrival
+		}
+		if turn < len(turns) {
+			if at := timeOf(cum[turns[turn]]); at.Before(next) {
+				next = at
+			}
+		}
+		// At the one-second packet cap, wait for the oldest packet to fall out of the window (the slot the next
+		// send takes) instead of spinning on an already-due heartbeat.
+		if m.movementsInLastSecond(m.Sender.Now()) >= maxMovementPacketsPerSecond {
+			if slot := m.sendTimes[m.sendIdx%len(m.sendTimes)].Add(time.Second + time.Millisecond); slot.After(next) {
+				next = slot
+			}
+		}
+		if err := m.Sender.WaitUntil(ctx, next); err != nil {
+			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
+			_ = m.send(wire.CMSGMoveStop, base)
+			return err
+		}
+		if m.teleported {
+			m.teleported = false
+			_ = m.send(wire.CMSGMoveStop, base)
+			return ErrTeleported
+		}
+		now := m.Sender.Now()
+		place(float32(now.Sub(start).Seconds()) * m.RunSpeed)
+		if !now.Before(arrival) {
+			place(total)
+			// The stop is a movement packet too: if the second is full, wait for its slot, so the walk never
+			// sends five movement packets in one second.
+			if m.movementsInLastSecond(now) >= maxMovementPacketsPerSecond {
+				slot := m.sendTimes[m.sendIdx%len(m.sendTimes)].Add(time.Second + time.Millisecond)
+				if err := m.Sender.WaitUntil(ctx, slot); err != nil {
+					_ = m.send(wire.CMSGMoveStop, base)
+					return err
+				}
+				if m.teleported {
+					m.teleported = false
+					_ = m.send(wire.CMSGMoveStop, base)
+					return ErrTeleported
+				}
+				now = m.Sender.Now()
+			}
+			if err := m.sendAt(wire.CMSGMoveStop, base, arrival); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
+			}
+			m.logf("path: stop at %.2f %.2f %.2f (%.2f yd in %s)", m.X, m.Y, m.Z, total,
+				now.Sub(start).Round(time.Millisecond))
+			return ctx.Err()
+		}
+		if !now.Before(deadline) {
+			_ = m.send(wire.CMSGMoveStop, base)
+			return fmt.Errorf("objects: the %d-point walk did not finish in %s", len(points), walkPathTimeout(total, m.RunSpeed))
+		}
+		// Face every turning corner the walk has reached (a facing packet carries the position as well); the
+		// packet cap limits how many go out in one window. A corner the cap held back is faced at the next window.
+		for turn < len(turns) && !now.Before(timeOf(cum[turns[turn]])) &&
+			m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
+			i := turns[turn]
+			nextDir := OrientationTo(path[i][0], path[i][1], path[i+1][0], path[i+1][1])
+			if err := m.Face(nextDir); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
+			}
+			lastSend = now
+			turn++
+		}
+		if !now.Before(lastSend.Add(HeartbeatInterval)) && m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
+			if err := m.sendAt(wire.CMSGMoveHeartbeat, base|FlagForward, now); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+			}
+			lastSend = now
+		}
+	}
+}
+
+// walkPathTimeout bounds one polyline walk. Its own timeline ends at length/runSpeed; the room on top is for
+// latency, the final stop and one full packet-cap window (the stop may be the packet the cap holds back), capped
+// so a caller's stuck check still fires. A dungeon's 1500-yd route at 7 yd/s stays under the cap.
+func walkPathTimeout(dist, runSpeed float32) time.Duration {
+	if runSpeed <= 0 {
+		return 30 * time.Minute
+	}
+	d := time.Duration(float64(dist)/float64(runSpeed)*float64(time.Second)) + 10*time.Second + time.Second
+	if d > 30*time.Minute {
+		d = 30 * time.Minute
+	}
+	return d
+}
+
 // ChaseGoal is what a chase follows: Dest returns the point to walk at now, Arrived reports whether the chase is
 // over (the distance that matters, not the walk point). Both are asked once per heartbeat, so a wandering target is
 // followed continuously instead of by one start/stop pair per position sample.

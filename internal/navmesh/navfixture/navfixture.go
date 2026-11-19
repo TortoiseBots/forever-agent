@@ -19,12 +19,13 @@ import (
 const Tile = 533.3333333
 
 const (
-	dtMagic    = 'D'<<24 | 'N'<<16 | 'A'<<8 | 'V'
-	dtVersion  = 7
-	mmapMagic  = 0x4D4D4150
-	mmapVer    = 6
-	linkSize   = 16 // dtLink with 64-bit poly refs
-	maxPolyVts = 6
+	dtMagic        = 'D'<<24 | 'N'<<16 | 'A'<<8 | 'V'
+	dtVersion      = 7
+	mmapMagic      = 0x4D4D4150
+	mmapVer        = 6
+	foreverMmapVer = 16
+	linkSize       = 16 // dtLink with 64-bit poly refs
+	maxPolyVts     = 6
 )
 
 // Poly is one convex polygon, vertices in WoW (x, y, z).
@@ -39,12 +40,34 @@ func MmapParams() []byte {
 	return b.Bytes()
 }
 
+// MmapParamsForever is a map's MMMM.mmap file: the 40-byte Forever header (magic, generator version 16,
+// the same 28-byte dtNavMeshParams, and an empty off-mesh table; MMapDefines.h:29-37).
+func MmapParamsForever() []byte {
+	var b bytes.Buffer
+	put(&b, []uint32{mmapMagic, foreverMmapVer})
+	b.Write(MmapParams())
+	put(&b, uint32(0))
+	return b.Bytes()
+}
+
 // BuildTile is a whole .mmtile file holding polys at tile (tx, ty), every polygon with the
 // given flags (nil: all NAV_GROUND). Shared edges become neighbour links.
 func BuildTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
+	return buildTile(polys, flags, tx, ty, mmapVer, 0)
+}
+
+// BuildForeverTile is BuildTile in ForeverCore's mmaps_generator format: generator version 16 in the
+// tile header and the Forever area id for each polygon's flags (ground 11, steep 10, water 9,
+// magma/slime 8, road 7; MMapDefines.h:58-70). The Detour payload is the same version 7 tile.
+func BuildForeverTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
+	return buildTile(polys, flags, tx, ty, foreverMmapVer, 1)
+}
+
+func buildTile(polys []Poly, flags []uint16, tx, ty int32, mmapVersion uint32, usesLiquids uint32) []byte {
 	if flags == nil {
 		flags = make([]uint16, len(polys))
 		for i := range flags {
+			// Forever's NAV_GROUND is bit 0 too; the area follows the flag for the area-cost table.
 			flags[i] = 1
 		}
 	}
@@ -132,7 +155,7 @@ func BuildTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
 		put(&h, nn)
 		put(&h, flags[pi])
 		h.WriteByte(byte(len(ids)))
-		h.WriteByte(1) // area 1, polygon type ground
+		h.WriteByte(areaFor(flags[pi], mmapVersion)) // polygon type ground
 	}
 	h.Write(make([]byte, linkSize*links))
 	base := uint32(0)
@@ -155,9 +178,30 @@ func BuildTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
 		}
 	}
 	var out bytes.Buffer
-	put(&out, []uint32{mmapMagic, dtVersion, mmapVer, uint32(h.Len()), 0})
+	put(&out, []uint32{mmapMagic, dtVersion, mmapVersion, uint32(h.Len()), usesLiquids})
 	out.Write(h.Bytes())
 	return out.Bytes()
+}
+
+// areaFor is the polygon area stored in the tile. The 1.12 fixture always wrote 1; Forever's generator
+// derives the flag from the area as 1 << (NAV_AREA_MAX_VALUE - area), so the fixture writes the area the
+// flag belongs to (TileBuilder.cpp:626-635).
+func areaFor(flags uint16, mmapVersion uint32) byte {
+	if mmapVersion != foreverMmapVer {
+		return 1
+	}
+	switch {
+	case flags&0x10 != 0:
+		return 7 // NAV_AREA_ROAD
+	case flags&0x08 != 0:
+		return 8 // NAV_AREA_MAGMA_SLIME
+	case flags&0x04 != 0:
+		return 9 // NAV_AREA_WATER
+	case flags&0x02 != 0:
+		return 10 // NAV_AREA_GROUND_STEEP
+	default:
+		return 11 // NAV_AREA_GROUND
+	}
 }
 
 // Square is the axis-aligned cell x0..x1, y0..y1 at height z, counter-clockwise.
@@ -229,6 +273,58 @@ func WriteDirFlags(t testing.TB, mapID uint32, polys []Poly, flags []uint16) str
 	write(mmapName(mapID), MmapParams())
 	write(tileName(mapID, 12, 12), BuildTile(polys, flags, 0, 0))
 	return dir
+}
+
+// ForeverTile is one tile file of a Forever fixture: polys in WoW (x, y, z) and the Detour tile index
+// (TX from world y, TY from world x, both relative to the header's origin). AtX/AtY name the file; zero
+// values take the tile's centre.
+type ForeverTile struct {
+	TX, TY   int32
+	Polys    []Poly
+	Flags    []uint16
+	AtX, AtY float32
+}
+
+// WriteForeverDir writes MMMM.mmap and one Forever tile, named for the map and the tile holding (12, 12).
+func WriteForeverDir(t testing.TB, mapID uint32, polys []Poly, flags []uint16) string {
+	t.Helper()
+	return WriteForeverDirAt(t, mapID, polys, flags, 12, 12)
+}
+
+// WriteForeverDirAt is WriteForeverDir with the tile named for (x, y) instead of (12, 12): the tile's
+// Detour index follows the params' origin (MmapParamsForever: 0/-500/0, 533.33-yd tiles).
+func WriteForeverDirAt(t testing.TB, mapID uint32, polys []Poly, flags []uint16, x, y float32) string {
+	t.Helper()
+	return WriteForeverTiles(t, mapID, []ForeverTile{{TX: int32(y / Tile), TY: int32(x / Tile), Polys: polys, Flags: flags, AtX: x, AtY: y}})
+}
+
+// WriteForeverTiles writes a Forever map and the given tiles into a new temporary directory.
+func WriteForeverTiles(t testing.TB, mapID uint32, tiles []ForeverTile) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name string, data []byte) {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(foreverMmapName(mapID), MmapParamsForever())
+	for _, tile := range tiles {
+		x, y := tile.AtX, tile.AtY
+		if x == 0 && y == 0 {
+			x, y = (float32(tile.TY)+0.5)*Tile, (float32(tile.TX)+0.5)*Tile
+		}
+		write(foreverTileName(mapID, x, y), BuildForeverTile(tile.Polys, tile.Flags, tile.TX, tile.TY))
+	}
+	return dir
+}
+
+func foreverMmapName(mapID uint32) string { return pad(mapID, 4) + ".mmap" }
+
+// foreverTileName follows ForeverCore: (map, gy, gx) with gx from y and gy from x, zero-padded to four
+// digits for the map and two for each coordinate (MMapManager.cpp:33).
+func foreverTileName(mapID uint32, x, y float32) string {
+	gx, gy := int(32-y/Tile), int(32-x/Tile)
+	return pad(mapID, 4) + "_" + pad(uint32(gy), 2) + "_" + pad(uint32(gx), 2) + ".mmtile"
 }
 
 func mmapName(mapID uint32) string { return pad(mapID, 3) + ".mmap" }

@@ -6,6 +6,7 @@
 // Unlike the server, both run between the floor points findNearestPoly found, not the asked
 // start and end (see nd_find_path). Ported from wow-play-harness native/navdetour.cpp, without its
 // wall margin: a headless client has no collision to catch on corners.
+#include <cfloat>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -20,9 +21,13 @@ namespace {
 const uint32_t MMAP_MAGIC = 0x4d4d4150;  // 'MMAP'
 const uint32_t MMAP_VERSION = 6;         // core MoveMapSharedDefines.h
 const int MAX_POLYS = 2048;              // the server keeps 256 (PathFinder.h MAX_PATH_LENGTH)
-const int MAX_NODES = 65535;             // the server's query has 2048 (MoveMap.cpp)
+const int MAX_NODES = 65535;             // the 1.12 planner's offline node pool (Planner.Plan); unchanged
 // The server's own query: one dtNavMeshQuery per map init'ed with SERVER_NODES nodes (the core's MoveMap.cpp:333).
 const int SERVER_NODES = 2048;          // MoveMap.cpp:333
+// Forever's route query: MMapManager.cpp:39 NAV_MESH_QUERY_MAX_NODES (raised 1024 -> 8192 there so long bot routes do
+// not run out of nodes and come back incomplete). The Forever corner route (nd_route, so PathTo and walk-check) uses
+// this pool so its complete/partial verdict is the server's, not the 65,535-node one's.
+const int ROUTE_NODES = 8192;           // MMapManager.cpp:39
 const int SERVER_MAX_POLYS = 256;       // PathFinder.h MAX_PATH_LENGTH
 const int SERVER_MAX_POINTS = 256;      // PathFinder.h MAX_POINT_PATH_LENGTH
 const float SMOOTH_PATH_SLOP = 0.4f;    // PathFinder.cpp getSteerTarget
@@ -39,6 +44,7 @@ struct MmapTileHeader {
 struct Nav {
     dtNavMesh* mesh = nullptr;
     dtNavMeshQuery* query = nullptr;
+    dtNavMeshQuery* route = nullptr;
     dtNavMeshQuery* server = nullptr;
 };
 inline void toDt(const float* w, float* d) { d[0] = w[1]; d[1] = w[2]; d[2] = w[0]; }
@@ -81,6 +87,112 @@ uint64_t tileDataSize(const unsigned char* data) {
            a4(sizeof(dtBVNode) * (uint64_t)h.bvNodeCount) +
            a4(sizeof(dtOffMeshConnection) * (uint64_t)h.offMeshConCount);
 }
+
+// validateTile checks every index Detour will follow once the tile is in the mesh, and refuses the tile otherwise.
+// The server added the same kind of check for the links it walks after a tile is loaded (MMapManager.cpp:469-528,
+// ValidateTileLinkIntegrity: every link index below maxLinkCount or DT_NULL_LINK, with a chain-length cap); here the
+// indices are the ones a file can get wrong, because a file is read once and never rebuilt:
+//   * each polygon's vertCount and vertex indices (getPortalPoints, getPolyHeight, queryPolygonsInTile index
+//     tile->verts[poly->verts[k]] with no range check);
+//   * each edge's neighbour: 0, a local poly index + 1 below polyCount, or an external link whose direction is in
+//     0..7 (connectExtLinks indexes dtOppositeTile with it, DetourNavMesh.cpp:415);
+//   * the detail mesh of every ground polygon: ranges inside detailVertCount/detailTriCount, and each triangle index
+//     below poly.vertCount + detail.vertCount (getPolyHeight, DetourNavMesh.cpp:682-731);
+//   * the bounding volume tree: a leaf below polyCount and an escape that lands inside bvNodeCount
+//     (queryPolygonsInTile, DetourNavMeshQuery.cpp:712-800);
+//   * each off-mesh connection's poly: an off-mesh polygon in offMeshBase..offMeshBase+offMeshConCount
+//     (baseOffMeshLinks and getOffMeshConnectionByRef, DetourNavMesh.cpp:561-616, :1500-1518).
+// The ranges themselves fit the file: tileDataSize was checked against the file's bytes before this runs.
+bool validateTile(const unsigned char* data, uint32_t size) {
+    auto a4 = [](uint64_t x) { return (x + 3) & ~(uint64_t)3; };
+    dtMeshHeader h;
+    std::memcpy(&h, data, sizeof(h));
+    // maxLinkCount 0 is not "no links": addTile writes links[maxLinkCount-1] (DetourNavMesh.cpp:1002), so it would
+    // write before the array.
+    if (h.polyCount < 0 || h.vertCount < 0 || h.maxLinkCount < 1 || h.detailMeshCount < 0 ||
+        h.detailVertCount < 0 || h.detailTriCount < 0 || h.bvNodeCount < 0 || h.offMeshConCount < 0 ||
+        h.offMeshBase < 0)
+        return false;
+    // detailMeshes[ip] is indexed by every ground polygon's index (getPolyHeight), so a ground polygon needs one.
+    if (h.detailMeshCount > h.polyCount || h.offMeshBase > h.polyCount || h.offMeshConCount > h.polyCount)
+        return false;
+    if (tileDataSize(data) > size)
+        return false;
+
+    uint64_t off = a4(sizeof(dtMeshHeader)) + a4(sizeof(float) * 3 * (uint64_t)h.vertCount);
+    const dtPoly* polys = (const dtPoly*)(data + off);
+    off += a4(sizeof(dtPoly) * (uint64_t)h.polyCount);
+    off += a4(sizeof(dtLink) * (uint64_t)h.maxLinkCount);  // the file's links are ignored: addTile rebuilds them
+    const dtPolyDetail* detail = (const dtPolyDetail*)(data + off);
+    off += a4(sizeof(dtPolyDetail) * (uint64_t)h.detailMeshCount);
+    off += a4(sizeof(float) * 3 * (uint64_t)h.detailVertCount);
+    const unsigned char* detailTris = data + off;
+    off += a4(sizeof(unsigned char) * 4 * (uint64_t)h.detailTriCount);
+    const dtBVNode* bv = (const dtBVNode*)(data + off);
+    off += a4(sizeof(dtBVNode) * (uint64_t)h.bvNodeCount);
+    const dtOffMeshConnection* offMesh = (const dtOffMeshConnection*)(data + off);
+
+    for (int i = 0; i < h.polyCount; ++i) {
+        const dtPoly& p = polys[i];
+        const int nv = p.vertCount;
+        if (p.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) {
+            if (nv != 2)
+                return false;
+            // getOffMeshConnectionByRef computes ip - offMeshBase and indexes the connection array.
+            if (i < h.offMeshBase || i - h.offMeshBase >= h.offMeshConCount)
+                return false;
+        } else {
+            if (nv < 3 || nv > DT_VERTS_PER_POLYGON)
+                return false;
+            if (i >= h.detailMeshCount)
+                return false;
+        }
+        for (int k = 0; k < nv; ++k) {
+            if (p.verts[k] >= h.vertCount)
+                return false;
+            const unsigned short nei = p.neis[k];
+            if (nei == 0)
+                continue;
+            if (nei & DT_EXT_LINK) {
+                if ((nei & 0xff) > 7)
+                    return false;
+            } else if ((int)(nei - 1) >= h.polyCount) {
+                return false;
+            }
+        }
+        if (p.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
+            continue;
+        const dtPolyDetail& d = detail[i];
+        if ((uint64_t)d.vertBase + d.vertCount > (uint64_t)h.detailVertCount ||
+            (uint64_t)d.triBase + d.triCount > (uint64_t)h.detailTriCount)
+            return false;
+        for (int j = 0; j < d.triCount; ++j) {
+            const unsigned char* t = &detailTris[((uint64_t)d.triBase + j) * 4];
+            for (int k = 0; k < 3; ++k)
+                if (t[k] >= nv + d.vertCount)  // the polygon's own verts, then the detail verts
+                    return false;
+        }
+    }
+
+    for (int i = 0; i < h.offMeshConCount; ++i) {
+        const dtOffMeshConnection& con = offMesh[i];
+        if (con.poly >= h.polyCount || polys[con.poly].getType() != DT_POLYTYPE_OFFMESH_CONNECTION)
+            return false;
+    }
+
+    for (int i = 0; i < h.bvNodeCount; ++i) {
+        const int idx = bv[i].i;
+        if (idx >= 0) {
+            if (idx >= h.polyCount)
+                return false;
+        } else {
+            const int escape = -idx;
+            if (escape < 1 || (int64_t)i + escape > h.bvNodeCount)
+                return false;
+        }
+    }
+    return true;
+}
 }  // namespace
 
 extern "C" int nd_version(void) { return 100 * DT_NAVMESH_VERSION + (int)sizeof(dtPolyRef); }
@@ -93,11 +205,14 @@ extern "C" void* nd_create(const unsigned char* params, int size) {
     Nav* n = new Nav;
     n->mesh = dtAllocNavMesh();
     n->query = dtAllocNavMeshQuery();
+    n->route = dtAllocNavMeshQuery();
     n->server = dtAllocNavMeshQuery();
-    if (!n->mesh || !n->query || !n->server || dtStatusFailed(n->mesh->init(&p)) ||
+    if (!n->mesh || !n->query || !n->route || !n->server || dtStatusFailed(n->mesh->init(&p)) ||
         dtStatusFailed(n->query->init(n->mesh, MAX_NODES)) ||
+        dtStatusFailed(n->route->init(n->mesh, ROUTE_NODES)) ||
         dtStatusFailed(n->server->init(n->mesh, SERVER_NODES))) {
         dtFreeNavMeshQuery(n->server);
+        dtFreeNavMeshQuery(n->route);
         dtFreeNavMeshQuery(n->query);
         dtFreeNavMesh(n->mesh);
         delete n;
@@ -111,12 +226,14 @@ extern "C" void nd_destroy(void* h) {
     if (!n)
         return;
     dtFreeNavMeshQuery(n->server);
+    dtFreeNavMeshQuery(n->route);
     dtFreeNavMeshQuery(n->query);
     dtFreeNavMesh(n->mesh);
     delete n;
 }
 
-extern "C" int nd_add_tile(void* h, const unsigned char* file, int size, unsigned long long* tile) {
+extern "C" int nd_add_tile(void* h, const unsigned char* file, int size, unsigned mmapVersion,
+                          unsigned long long* tile) {
     Nav* n = (Nav*)h;
     if (!n || size < (int)sizeof(MmapTileHeader))
         return -1;
@@ -124,12 +241,14 @@ extern "C" int nd_add_tile(void* h, const unsigned char* file, int size, unsigne
     std::memcpy(&hd, file, sizeof(hd));
     if (hd.mmapMagic != MMAP_MAGIC)
         return -1;
-    if (hd.mmapVersion != MMAP_VERSION || hd.dtVersion != (uint32_t)DT_NAVMESH_VERSION)
+    if (hd.mmapVersion != mmapVersion || hd.dtVersion != (uint32_t)DT_NAVMESH_VERSION)
         return -2;
     if (hd.size > (uint32_t)size - sizeof(hd))
         return -3;
     if (hd.size < sizeof(dtMeshHeader) || tileDataSize(file + sizeof(hd)) > hd.size)
         return -3;
+    if (!validateTile(file + sizeof(hd), hd.size))
+        return -5;
     unsigned char* data = (unsigned char*)dtAlloc(hd.size, DT_ALLOC_PERM);
     if (!data)
         return -4;
@@ -377,6 +496,139 @@ extern "C" int nd_find_path(void* h, const float* start, const float* end, unsig
     *count = npts;
     return result;
 }
+
+// ---- The Forever client's corner route: PathGenerator::GetPolyByLocation's search boxes, the bot
+// player's 512-poly budget, the far-from-poly rule, then Detour's straight path. ----
+
+const int ROUTE_MAX_POLYS = 512;   // PathGenerator.h MAX_PATH_LENGTH (a bot player)
+const int ROUTE_MAX_POINTS = 512;  // PathGenerator.h MAX_POINT_PATH_LENGTH
+const float FAR_FROM_POLY = 7.0f;  // PathGenerator.cpp:419-420
+
+// PathGenerator::PreferPolyAtHeight (PathGenerator.cpp:350-370): of the polygons the point stands
+// over, take the one whose surface is nearest in height. A unit on a ledge two yards above a lava
+// floor must not be put on the lava.
+static dtPolyRef preferPolyAtHeight(Nav* n, const float* point, const float* extents, dtPolyRef nearestRef,
+                                    float* nearestPoint, const dtQueryFilter& f) {
+    bool overPoly = false;
+    float onPoly[3];
+    if (dtStatusFailed(n->route->closestPointOnPoly(nearestRef, point, onPoly, &overPoly)) || !overPoly)
+        return nearestRef;
+    float bestHeight = fabsf(point[1] - onPoly[1]);
+    dtPolyRef polys[128];
+    int polyCount = 0;
+    if (dtStatusFailed(n->route->queryPolygons(point, extents, &f, polys, &polyCount, 128)))
+        return nearestRef;
+    dtPolyRef bestRef = nearestRef;
+    for (int i = 0; i < polyCount; ++i) {
+        if (polys[i] == nearestRef)
+            continue;
+        float candidate[3];
+        bool candidateOver = false;
+        if (dtStatusFailed(n->route->closestPointOnPoly(polys[i], point, candidate, &candidateOver)) ||
+            !candidateOver)
+            continue;
+        float height = fabsf(point[1] - candidate[1]);
+        if (height < bestHeight) {
+            bestHeight = height;
+            bestRef = polys[i];
+            dtVcopy(nearestPoint, candidate);
+        }
+    }
+    return bestRef;
+}
+
+// PathGenerator::GetPolyByLocation (PathGenerator.cpp:329-359) without the old-path lookup this
+// client has none of: a 3 x 5 x 3 yd box, then 3 x 50 x 3 yd. FLT_MAX when neither finds a polygon.
+static dtPolyRef polyByLocation(Nav* n, const float* point, const dtQueryFilter& f, float* closest, float* dist) {
+    const float ext[3] = {3.0f, 5.0f, 3.0f};
+    dtPolyRef ref = 0;
+    if (dtStatusSucceed(n->route->findNearestPoly(point, ext, &f, &ref, closest)) && ref) {
+        ref = preferPolyAtHeight(n, point, ext, ref, closest, f);
+        *dist = dtVdist(closest, point);
+        return ref;
+    }
+    const float wide[3] = {3.0f, 50.0f, 3.0f};
+    if (dtStatusSucceed(n->route->findNearestPoly(point, wide, &f, &ref, closest)) && ref) {
+        ref = preferPolyAtHeight(n, point, wide, ref, closest, f);
+        *dist = dtVdist(closest, point);
+        return ref;
+    }
+    *dist = FLT_MAX;
+    return 0;
+}
+
+extern "C" int nd_route(void* h, const float* start, const float* end, unsigned short include,
+                        unsigned short exclude, float* out, int max_points, int* count,
+                        float* snapped_start, float* snapped_end, unsigned* kind, unsigned short* flags,
+                        float* sdist, float* edist) {
+    Nav* n = (Nav*)h;
+    if (!n || !n->route)
+        return -1;
+    if (max_points > ROUTE_MAX_POINTS)
+        max_points = ROUTE_MAX_POINTS;
+    *count = 0;
+    *kind = 2;  // none
+    *flags = 0;
+    *sdist = *edist = FLT_MAX;
+    dtQueryFilter f = makeFilter(include, exclude);
+    float s[3], e[3], sc[3], ec[3];
+    toDt(start, s);
+    toDt(end, e);
+    dtPolyRef sref = polyByLocation(n, s, f, sc, sdist);
+    dtPolyRef eref = polyByLocation(n, e, f, ec, edist);
+    if (!sref) {
+        toWow(sc, snapped_start);
+        toWow(ec, snapped_end);
+        return -1;
+    }
+    if (!eref) {
+        toWow(sc, snapped_start);
+        toWow(ec, snapped_end);
+        return -2;
+    }
+    toWow(sc, snapped_start);
+    bool farStart = *sdist > FAR_FROM_POLY;
+    bool farEnd = *edist > FAR_FROM_POLY;
+    if (farEnd) {
+        // PathGenerator.cpp:455-462: the route ends on the goal polygon, not the asked point, and the
+        // answer is incomplete.
+        float clamped[3];
+        if (dtStatusSucceed(n->route->closestPointOnPoly(eref, e, clamped, nullptr)))
+            dtVcopy(ec, clamped);
+        *edist = dtVdist(ec, e);
+    }
+    toWow(ec, snapped_end);
+
+    dtPolyRef polys[ROUTE_MAX_POLYS];
+    int np = 0;
+    dtStatus st = n->route->findPath(sref, eref, sc, ec, &f, polys, &np, ROUTE_MAX_POLYS);
+    if (dtStatusFailed(st) || np == 0)
+        return 0;  // the server's NOPATH: the polygons resolved, the corridor did not
+
+    *kind = (polys[np - 1] == eref && !dtStatusDetail(st, DT_PARTIAL_RESULT) && !farStart && !farEnd) ? 0 : 1;
+    for (int i = 0; i < np; ++i) {
+        unsigned short pf = 0;
+        if (dtStatusSucceed(n->mesh->getPolyFlags(polys[i], &pf)))
+            *flags |= pf;
+    }
+    int npts = 0;
+    if (dtStatusFailed(n->route->findStraightPath(sc, ec, polys, np, out, nullptr, nullptr, &npts, max_points)) ||
+        npts < 1) {
+        *kind = 2;
+        return 0;
+    }
+    // PathGenerator::BuildPointPath marks the answer incomplete when the point budget is hit
+    // (PathGenerator.cpp:791-805).
+    if (npts >= max_points)
+        *kind = 1;
+    for (int i = 0; i < npts; ++i) {
+        float d[3];
+        dtVcopy(d, &out[i * 3]);
+        toWow(d, &out[i * 3]);
+    }
+    *count = npts;
+    return 0;
+}
 // ---- The server's own path query: PathInfo::BuildPolyPath + findSmoothPath (core
 // PathFinder.cpp:597-916), copied from specs/plancheck-vs-server-path/repro.cpp, which
 // is itself line-for-line from the core. ----
@@ -593,7 +845,11 @@ extern "C" int nd_server_path(void* h, const float* start, const float* end, flo
     *type = PT_NOPATH;
     *start_dist = 0;
     *end_dist = 0;
-    dtQueryFilter f = makeFilter(0x09, 0);
+    // The 1.12 core's PathFinder filter: NAV_GROUND 0x01 | NAV_WATER 0x08, nothing excluded (MoveMapSharedDefines.h
+    // NavTerrain, PathFinder.cpp:547-566). This query replays the 1.12 server only (Planner.ServerPath); the Forever
+    // route takes its filter from the caller (nd_route), because 0x08 is magma/slime in Forever's bits.
+    const unsigned short MANGOS_INCLUDE = 0x01 | 0x08;
+    dtQueryFilter f = makeFilter(MANGOS_INCLUDE, 0);
     float s[3], e[3], sc[3], ec[3], sdist = 0, edist = 0;
     toDt(start, s);
     toDt(end, e);

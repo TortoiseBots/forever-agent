@@ -30,18 +30,31 @@ type FloorReader interface {
 	Floors(mapID uint32, x, y, lo, hi float32) ([]Floor, error)
 }
 
+// WaterFlagger is what LiquidAt asks of a reader that knows its polygon-flag table. *Planner is one: a Forever mesh
+// gives water 0x04 (NavWater 0x08 is magma there), so a reader that hard-coded 0x08 would call a lava bed water.
+type WaterFlagger interface {
+	WaterFlag() uint16
+}
+
+// WaterFlag is the polygon-flag bit this format gives water (Format.Terrain().Water).
+func (p *Planner) WaterFlag() uint16 { return p.format.Terrain().Water }
+
 // LiquidAt says whether the mesh puts p in or under a liquid. The mmap generator flags the liquid's bed as NavWater where the
 // liquid is at least a body deep, and plain ground over the shallows, so the point's own floor is the first answer; a point
-// whose own floor is ground but that stands under a nearby NavWater floor is in the water too (the lake bed a walk dips
+// whose own floor is ground but that stands under a nearby water floor is in the water too (the lake bed a walk dips
 // into, the canal under its rim). Both answers are the tiles' own area flags: nothing is guessed from heights.
 func LiquidAt(nav FloorReader, mapID uint32, p Vec3) (Liquid, error) {
+	water := uint16(NavWater) // the 1.12 bit, for a reader that cannot say
+	if w, ok := nav.(WaterFlagger); ok {
+		water = w.WaterFlag()
+	}
 	fl, err := nav.Floors(mapID, p[0], p[1], p[2]-LiquidOwnYd, p[2]+LiquidOwnYd)
 	if err != nil {
 		return Liquid{}, err
 	}
 	own, ownD := Liquid{}, float32(math.MaxFloat32)
 	for _, f := range fl {
-		if f.Flags&NavWater == 0 {
+		if f.Flags&water == 0 {
 			continue
 		}
 		if d := float32(math.Abs(float64(f.Z - p[2]))); d <= LiquidOwnYd && d < ownD {
@@ -60,7 +73,7 @@ func LiquidAt(nav FloorReader, mapID uint32, p Vec3) (Liquid, error) {
 			return Liquid{}, err
 		}
 		for _, f := range fl {
-			if f.Flags&NavWater == 0 {
+			if f.Flags&water == 0 {
 				continue
 			}
 			if !best.Wet || f.Z < best.Z {

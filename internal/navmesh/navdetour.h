@@ -14,9 +14,10 @@ int nd_version(void);
 void* nd_create(const unsigned char* params, int size);
 void nd_destroy(void* h);
 
-// A whole .mmtile file. 0 added (*tile = its ref); -1 bad header, -2 mmap/Detour version,
-// -3 truncated, -4 Detour refused the tile.
-int nd_add_tile(void* h, const unsigned char* file, int size, unsigned long long* tile);
+// A whole .mmtile file. mmapVersion is the generator version the file must carry (6 for the 1.12
+// format, 16 for ForeverCore; the tile header layout is the same 20 bytes). 0 added (*tile = its ref);
+// -1 bad header, -2 mmap/Detour version mismatch, -3 truncated, -4 Detour refused the tile.
+int nd_add_tile(void* h, const unsigned char* file, int size, unsigned mmapVersion, unsigned long long* tile);
 
 // Unloads a tile nd_add_tile added. 0 done, -1 Detour refused.
 int nd_remove_tile(void* h, unsigned long long tile);
@@ -61,6 +62,19 @@ int nd_raycast(void* h, const float* start, const float* end, unsigned short inc
 // = the floor point found for end (set from 0 up).
 int nd_find_path(void* h, const float* start, const float* end, unsigned short include, unsigned short exclude,
                  float* out, int max_points, int* count, float* goal);
+
+// nd_route plans the Forever client's walk route the way PathGenerator::BuildPolyPath does for a bot
+// player: GetPolyByLocation's 3 x 5 x 3 yd search box, then 3 x 50 x 3 (PathGenerator.cpp:341-355), a
+// 512-poly/512-point budget (PathGenerator.cpp:128-137), a goal over 7 yd from the mesh clamped to its
+// polygon and the route marked partial, and Detour's straight path as the corners (not the server's
+// smooth path). *kind: 0 complete (normal), 1 partial (incomplete), 2 none (nopath). *snappedStart and
+// *snappedEnd are the points on the mesh the route runs between; *flags is the OR of every corridor
+// polygon's flags; *sdist/*edist are the asked points' 3-D distance to their polygons (FLT_MAX when
+// there is none). Return 0 on a written answer, -1 when the start is off the mesh, -2 the end, -3 a
+// Detour failure.
+int nd_route(void* h, const float* start, const float* end, unsigned short include, unsigned short exclude,
+             float* out, int max_points, int* count, float* snapped_start, float* snapped_end,
+             unsigned* kind, unsigned short* flags, float* sdist, float* edist);
 
 #ifdef __cplusplus
 }

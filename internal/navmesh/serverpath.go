@@ -31,6 +31,9 @@ type ServerPath struct {
 // broken tile, no engine); an unreachable goal is a ServerPath with type
 // PathNoPath, not an error.
 func (p *Planner) ServerPath(mapID uint32, from, to Vec3) (ServerPath, error) {
+	if p.format != MaNGOS {
+		return ServerPath{}, errors.New("navmesh: ServerPath replays the 1.12 core's own query; use PathTo/PathToFilter for a Forever mmap set")
+	}
 	if p.dir == "" {
 		return ServerPath{}, errors.New(`navmesh: no tiles folder; set "mmaps_dir" in the settings file`)
 	}
@@ -50,7 +53,7 @@ func (p *Planner) ServerPath(mapID uint32, from, to Vec3) (ServerPath, error) {
 		return ServerPath{}, errClosed
 	}
 	m.missing = nil
-	want := wantTiles(names, mapID, from, to, 3, p.max)
+	want := wantTiles(p.format, names, mapID, from, to, 3, p.max)
 	p.mu.Unlock()
 	data, err := p.fetch(m, want)
 	if err != nil {

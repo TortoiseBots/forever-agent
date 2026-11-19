@@ -19,6 +19,9 @@ type fakeSender struct {
 	now    time.Time
 	sent   []sentPacket
 	onWait func(now time.Time)
+	// lag is how late WaitUntil wakes: the real session answers packets on the way, so its wait returns after the
+	// requested time. The tests that do not set it wake exactly on time.
+	lag time.Duration
 }
 
 type sentPacket struct {
@@ -37,7 +40,7 @@ func (f *fakeSender) WaitUntil(ctx context.Context, until time.Time) error {
 		return err
 	}
 	if until.After(f.now) {
-		f.now = until
+		f.now = until.Add(f.lag)
 	}
 	if f.onWait != nil {
 		f.onWait(f.now)
@@ -324,5 +327,231 @@ func TestChaseBoundsItsReplans(t *testing.T) {
 	}
 	if starts != 1 || stops != 1 {
 		t.Fatalf("%d start(s), %d stop(s)", starts, stops)
+	}
+}
+
+// TestMoverWalkPathGoesCornerToCorner is the walker's packet sequence for a three-corner path: one start
+// forward, a facing (or heartbeat) at each corner, one stop at the end, and no heartbeat step faster
+// than run speed x elapsed time.
+func TestMoverWalkPathGoesCornerToCorner(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var guid wire.GUID
+	guid.Low = 0x2211
+	guid.High = 0x0A44330000000000
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		GUID:       guid,
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000,
+		Y:          2000,
+		Z:          50,
+		RunSpeed:   7,
+		Flags:      FlagTouchingGround,
+	}
+	corners := [][3]float32{
+		{1010, 2000, 50},
+		{1010, 2010, 55},
+		{1020, 2010, 55},
+	}
+	if err := m.WalkPath(context.Background(), corners); err != nil {
+		t.Fatal(err)
+	}
+	var starts, stops, faces, beats int
+	for _, p := range sender.sent {
+		switch p.core {
+		case wire.CMSGMoveStartForward:
+			starts++
+		case wire.CMSGMoveStop:
+			stops++
+		case wire.CMSGMoveSetFacing:
+			faces++
+		case wire.CMSGMoveHeartbeat:
+			beats++
+		}
+	}
+	if starts != 1 || stops != 1 {
+		t.Fatalf("start/stop packets: %d/%d (sequence %v)", starts, stops, sender.sent)
+	}
+	// One facing at the start (to the first leg) and one at each of the two turning corners.
+	if faces != 3 {
+		t.Fatalf("%d facing packets for the start and two turning corners, want 3", faces)
+	}
+	if sender.sent[len(sender.sent)-1].core != wire.CMSGMoveStop {
+		t.Fatalf("the last packet is %s", wire.ClientName(sender.sent[len(sender.sent)-1].core))
+	}
+
+	// Every movement packet's position is on the plan's timeline: at most speed x elapsed since the
+	// previous packet. The start-forward packet is at the start position.
+	prevMove, prevAt := moveOf(t, sender.sent[1]), sender.sent[1].at
+	for i := 2; i < len(sender.sent); i++ {
+		mi := moveOf(t, sender.sent[i])
+		dt := sender.sent[i].at.Sub(prevAt).Seconds()
+		step := Distance(mi.X, mi.Y, mi.Z, prevMove.X, prevMove.Y, prevMove.Z)
+		if float64(step) > 7*dt+0.01 {
+			t.Fatalf("packet %d (%s) moved %.3f yd in %.3f s, faster than 7 yd/s", i, wire.ClientName(sender.sent[i].core), step, dt)
+		}
+		prevMove, prevAt = mi, sender.sent[i].at
+	}
+	stop := moveOf(t, sender.sent[len(sender.sent)-1])
+	if !near(stop.X, 1020) || !near(stop.Y, 2010) || !near(stop.Z, 55) {
+		t.Fatalf("the stop is at %.2f %.2f %.2f, want the last corner", stop.X, stop.Y, stop.Z)
+	}
+	// The facing packets stand on the corners, so the server sees the turn where it happens.
+	var facingPos [][3]float32
+	for _, p := range sender.sent {
+		if p.core == wire.CMSGMoveSetFacing {
+			mi := moveOf(t, p)
+			facingPos = append(facingPos, [3]float32{mi.X, mi.Y, mi.Z})
+		}
+	}
+	if len(facingPos) != 3 ||
+		Distance(facingPos[0][0], facingPos[0][1], facingPos[0][2], 1000, 2000, 50) > StopDistance+0.01 ||
+		Distance(facingPos[1][0], facingPos[1][1], facingPos[1][2], 1010, 2000, 50) > StopDistance+0.01 ||
+		Distance(facingPos[2][0], facingPos[2][1], facingPos[2][2], 1010, 2010, 55) > StopDistance+0.01 {
+		t.Fatalf("facing packets at %v", facingPos)
+	}
+}
+
+// TestMoverWalkPathHoldsThePacketCapForALongDensifiedRoute: 300 turning corners every 4 yd (the GroundStep of a
+// densified route) at 7 yd/s, with each wait waking 40 ms late the way the real session's does, used to accumulate
+// lateness at every corner: 300 x 40 ms is over the 10 s margin, so the old corner-restarted clock ended "did not
+// finish" mid-route. The walk must finish (the timeline is arrival-based), never send more than four movement
+// packets in any second (the stop included), and end on the last corner.
+func TestMoverWalkPathHoldsThePacketCapForALongDensifiedRoute(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start, lag: 40 * time.Millisecond}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	corners := make([][3]float32, 300)
+	for i := range corners {
+		corners[i] = [3]float32{1004 + float32(i)*4, 2000 + float32(i%2)*4, 50}
+	}
+	if err := m.WalkPath(context.Background(), corners); err != nil {
+		t.Fatalf("a %d-corner walk: %v", len(corners), err)
+	}
+	if last := corners[len(corners)-1]; !near(m.X, last[0]) || !near(m.Y, last[1]) {
+		t.Fatalf("the walk ended at %.2f %.2f, want %.2f %.2f", m.X, m.Y, last[0], last[1])
+	}
+	// Every movement packet of every one-second window: at most maxMovementPacketsPerSecond.
+	moves := 0
+	for _, p := range sender.sent {
+		switch p.core {
+		case wire.CMSGMoveSetFacing, wire.CMSGMoveStartForward, wire.CMSGMoveHeartbeat, wire.CMSGMoveStop:
+			moves++
+		}
+	}
+	for i, p := range sender.sent {
+		if !isMovement(p.core) {
+			continue
+		}
+		n := 0
+		for _, q := range sender.sent[i:] {
+			if q.at.Sub(p.at) >= time.Second {
+				break
+			}
+			if isMovement(q.core) {
+				n++
+			}
+		}
+		if n > maxMovementPacketsPerSecond {
+			t.Fatalf("%d movement packets in the second from %s (packet %d of %d)", n, p.at.Format(time.TimeOnly), i, moves)
+		}
+	}
+}
+
+// isMovement reports the opcodes the mover's packet cap counts.
+func isMovement(core uint32) bool {
+	switch core {
+	case wire.CMSGMoveSetFacing, wire.CMSGMoveStartForward, wire.CMSGMoveHeartbeat, wire.CMSGMoveStop:
+		return true
+	}
+	return false
+}
+
+// TestMoverWalkPathEndsOnATeleport: a teleport the session accepted while the walk runs ends it with ErrTeleported,
+// and the stop is at the server's destination, never at a point on the abandoned line.
+func TestMoverWalkPathEndsOnATeleport(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	waits := 0
+	sender.onWait = func(time.Time) {
+		if waits++; waits == 2 {
+			m.SetTeleport(2000, 3000, 60, 1.5, 7)
+		}
+	}
+	err := m.WalkPath(context.Background(), [][3]float32{{1000, 2030, 50}, {1000, 2060, 50}})
+	if !errors.Is(err, ErrTeleported) {
+		t.Fatalf("a teleport mid-walk returned %v, want ErrTeleported", err)
+	}
+	last := sender.sent[len(sender.sent)-1]
+	if last.core != wire.CMSGMoveStop {
+		t.Fatalf("the last packet is %s, want a stop", wire.ClientName(last.core))
+	}
+	if mi := moveOf(t, last); !near(mi.X, 2000) || !near(mi.Y, 3000) || !near(mi.Z, 60) {
+		t.Fatalf("the stop is at %.2f %.2f %.2f, not the teleport destination 2000 3000 60", mi.X, mi.Y, mi.Z)
+	}
+	for _, p := range sender.sent {
+		if !isMovement(p.core) {
+			continue
+		}
+		mi := moveOf(t, p)
+		if p.at.After(start.Add(time.Second)) && near(mi.X, 1000) && mi.Y > 2000 && mi.Y < 2060 {
+			t.Fatalf("a packet after the teleport still stands on the old line: %s at %.2f %.2f", wire.ClientName(p.core), mi.X, mi.Y)
+		}
+	}
+}
+
+// TestMoverWalkPathCancelledMidWalk: a cancelled context ends the walk with the context's error and exactly one stop,
+// at the interpolated position (never snapped to the next corner).
+func TestMoverWalkPathCancelledMidWalk(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	waits := 0
+	sender.onWait = func(time.Time) {
+		if waits++; waits == 3 {
+			cancel()
+		}
+	}
+	err := m.WalkPath(ctx, [][3]float32{{1000, 2030, 50}, {1000, 2060, 50}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled walk returned %v", err)
+	}
+	stops := 0
+	var stop MovementInfo
+	for _, p := range sender.sent {
+		if p.core == wire.CMSGMoveStop {
+			stops++
+			stop = moveOf(t, p)
+		}
+	}
+	if stops != 1 {
+		t.Fatalf("%d stops for a cancelled walk", stops)
+	}
+	// The stop stands where the mover stands, part way down the first leg and short of the corner: the walk was
+	// interrupted, not snapped.
+	if d := Distance(stop.X, stop.Y, stop.Z, m.X, m.Y, m.Z); d > 0.01 {
+		t.Fatalf("the stop is %.3f yd from the mover's position", d)
+	}
+	if d := Distance(m.X, m.Y, m.Z, 1000, 2000, 50); d <= 0.5 || d >= 30 {
+		t.Fatalf("the walk stopped %.2f yd along the leg, want between the start and the first corner", d)
+	}
+	if m.X != 1000 || m.Y <= 2000 || m.Y >= 2030 {
+		t.Fatalf("the stop is at %.2f %.2f, not on the first leg", m.X, m.Y)
 	}
 }

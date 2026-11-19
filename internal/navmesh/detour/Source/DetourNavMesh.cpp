@@ -670,6 +670,28 @@ namespace
 			}
 		}
 
+		// A polygon whose detail mesh has no qualifying edge (no triangles, or none with a boundary flag in the boundary-only pass) leaves
+		// pmin/pmax unset. Clamp to the polygon's own edges instead of reading through null: the asked point may be yards off the mesh,
+		// and a route end there is off the walkable surface.
+		if (!pmin || !pmax)
+		{
+			const int nv = poly->vertCount;
+			float best = FLT_MAX;
+			for (int j = 0; j < nv; ++j)
+			{
+				const float* v = &tile->verts[poly->verts[j]*3];
+				const float* w = &tile->verts[poly->verts[(j+1) % nv]*3];
+				float t;
+				const float d = dtDistancePtSegSqr2D(pos, v, w, t);
+				if (d < best)
+				{
+					best = d;
+					dtVlerp(closest, v, w, t);
+				}
+			}
+			return;
+		}
+
 		dtVlerp(closest, pmin, pmax, tmin);
 	}
 }
@@ -720,6 +742,7 @@ bool dtNavMesh::getPolyHeight(const dtMeshTile* tile, const dtPoly* poly, const 
 	// closest. This should almost never happen so the extra iteration here is
 	// ok.
 	float closest[3];
+	dtVcopy(closest, pos);  // what the null guard in closestPointOnDetailEdges keeps for a poly with no triangles
 	closestPointOnDetailEdges<false>(tile, poly, pos, closest);
 	*height = closest[1];
 	return true;
