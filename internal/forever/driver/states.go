@@ -3,7 +3,6 @@ package driver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -16,14 +15,16 @@ import (
 
 // prepare checks the GM lines and the party roster, then waits for the party to be rested and alive.
 func (r *Run) prepare(ctx context.Context) string {
-	if !r.core(ctx, ".gm on") {
-		if r.stopReason == "" {
+	// The GM lines are typed actions like every other setup line; they change a mode and move nobody, so the gate is
+	// the send function's stop and link check alone.
+	if _, why := r.act(ctx, Action{Kind: ActionGMOn}); why != "" {
+		if r.stopReason == "" && !r.lost {
 			r.stop("prepare:gm")
 		}
 		return ""
 	}
-	if !r.core(ctx, ".gm visible on") {
-		if r.stopReason == "" {
+	if _, why := r.act(ctx, Action{Kind: ActionGMVisible}); why != "" {
+		if r.stopReason == "" && !r.lost {
 			r.stop("prepare:gm-visible")
 		}
 		return ""
@@ -123,28 +124,39 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 }
 
 // travel takes the commander and the party to the portal on the outer map and has the party follow.
+//
+// The two teleports are moving actions: each waits for its own gate (a fresh complete report, nobody in combat or
+// dead) and is retried on every poll while the gate is shut. The party's follow then goes through the movement gate;
+// it needs a report taken after the teleport lines, which the poll supplies.
 func (r *Run) travel(ctx context.Context) string {
 	p := r.route.Portal
 	if p == nil {
 		return StateEnter
 	}
-	if r.route.OutsideTele != "" {
-		r.core(ctx, ".tele "+r.route.OutsideTele)
-	} else {
-		r.setup(ctx, fmt.Sprintf(".tb tele %s %d %s", r.cfg.Commander, p.Map, fmtVec(p.Pos)))
-	}
-	if r.stopReason != "" {
-		return ""
-	}
-	r.setup(ctx, fmt.Sprintf(".tb tele party %d %s", p.Map, fmtVec(p.Pos)))
-	if r.stopReason != "" {
-		return ""
-	}
-	// The party's follow goes through the movement gate: it needs a report taken after the teleport lines. The poll
-	// below retries it each time the gate is still shut.
-	followSent := false
+	cmdTele := r.route.OutsideTele
+	cmdDone, partyDone, followSent := false, false, false
 	deadline := r.now().Add(r.lim.Travel)
 	for {
+		if !cmdDone {
+			a := Action{Kind: ActionTeleOutside, Dest: cmdTele}
+			if cmdTele == "" {
+				a = Action{Kind: ActionTeleCommander, Who: r.cfg.Commander, Map: p.Map, Pos: p.Pos}
+			}
+			done, retry := r.actStep(ctx, a, "travel")
+			if done {
+				cmdDone = true
+			} else if !retry {
+				return ""
+			}
+		}
+		if cmdDone && !partyDone {
+			done, retry := r.actStep(ctx, Action{Kind: ActionTeleParty, Map: p.Map, Pos: p.Pos}, "travel")
+			if done {
+				partyDone = true
+			} else if !retry {
+				return ""
+			}
+		}
 		if !r.refresh(ctx) {
 			if r.stopReason != "" {
 				return ""
@@ -152,7 +164,7 @@ func (r *Run) travel(ctx context.Context) string {
 		} else if r.allAtPortal(p) {
 			r.progress()
 			return StateEnter
-		} else if !followSent {
+		} else if cmdDone && partyDone && !followSent {
 			_, why := r.send(ctx, "party", "follow", r.cfg.Commander, nil)
 			followSent = why == "" || r.lost
 			if r.stopReason != "" || r.lost {
@@ -192,7 +204,7 @@ func (r *Run) enter(ctx context.Context) string {
 		return StateLegWalk
 	}
 	tank := r.cfg.Tank()
-	teleSent := false
+	enterSent, teleSent := false, false
 	if r.cfg.Enter == "portal" {
 		if r.route.Portal != nil && r.mapID != r.route.Map {
 			r.refreshSelf()
@@ -207,20 +219,26 @@ func (r *Run) enter(ctx context.Context) string {
 			}
 			r.progress()
 		}
-	} else {
-		r.setup(ctx, ".tb enter party")
-		if r.stopReason != "" {
-			return ""
-		}
 	}
 	deadline := r.now().Add(r.lim.Enter)
 	block := ""
 	for {
+		if r.cfg.Enter != "portal" && !enterSent {
+			// The entry is a moving action: a fresh report, nobody in combat or dead.
+			done, retry := r.actStep(ctx, Action{Kind: ActionEnter, Who: "party"}, "enter")
+			if done {
+				enterSent = true
+			} else if !retry {
+				return ""
+			}
+		}
 		if !r.refresh(ctx) {
 			if r.stopReason != "" {
 				return ""
 			}
 		} else {
+			// The commander's own map and position come from the world model, not from the party's report.
+			r.refreshSelf()
 			for _, b := range r.rep.Bots {
 				if block == "" && blocked(b) != "" {
 					block = blocked(b)
@@ -230,16 +248,29 @@ func (r *Run) enter(ctx context.Context) string {
 				r.progress()
 				return StateLegWalk
 			}
-			if r.cfg.Enter != "portal" && !teleSent {
+			if r.cfg.Enter != "portal" && enterSent && !teleSent {
 				if tb := r.bot(tank); tb != nil && tb.Map == r.route.Map {
-					teleSent = true
-					if !r.setup(ctx, fmt.Sprintf(".tb tele %s to %s", r.cfg.Commander, tank)) {
-						if r.stopReason == "" {
-							r.core(ctx, ".appear "+tank)
-						}
-					}
-					if r.stopReason != "" {
+					// The commander comes in at the tank's side; the module's teleport is the first choice and the
+					// core's appear the fallback. Both are moving actions and pass their own gate.
+					_, why := r.act(ctx, Action{Kind: ActionTeleTo, Who: r.cfg.Commander, Other: tank})
+					switch {
+					case why == "":
+						teleSent = true
+					case actionHold(why):
+						// The gate is shut: try again on the next poll.
+					case why == "link" || why == "stop":
 						return ""
+					default:
+						_, why2 := r.act(ctx, Action{Kind: ActionAppear, Who: tank})
+						switch {
+						case why2 == "":
+							teleSent = true
+						case why2 == "link" || why2 == "stop":
+							return ""
+						case !actionHold(why2):
+							r.stop("enter:appear")
+							return ""
+						}
 					}
 				}
 			}
@@ -1203,9 +1234,14 @@ func (r *Run) settleParty(ctx context.Context, limit, interval time.Duration, re
 }
 
 // deadWait waits for the party's dead bots to be raised by the priest, then practices a revive.
+//
+// Each revive is a typed action under the run's practice budget, one bot at a time: the action's gate takes its own
+// fresh report, so a bot the priest raised between two polls is not revived again, and no revive goes out on the
+// report that still showed it dead.
 func (r *Run) deadWait(ctx context.Context) string {
 	deadline := r.now().Add(r.lim.DeadWait)
 	practiced := false
+	revived := map[string]bool{}
 	for {
 		if !r.refresh(ctx) {
 			if r.stopReason != "" {
@@ -1213,9 +1249,26 @@ func (r *Run) deadWait(ctx context.Context) string {
 			}
 		} else {
 			r.recordFrame(r.view())
-			if len(r.deadBots()) == 0 {
+			dead := r.deadBots()
+			if len(dead) == 0 {
 				r.progress()
 				return StateRest
+			}
+			if practiced {
+				for _, name := range dead {
+					if revived[name] {
+						continue
+					}
+					// One revive per poll; a shut gate leaves the name for the next poll.
+					done, retry := r.actStep(ctx, Action{Kind: ActionRevive, Who: name, Practice: true}, "dead-wait")
+					if done {
+						revived[name] = true
+					}
+					if !done && !retry {
+						return ""
+					}
+					break
+				}
 			}
 		}
 		if !practiced && !r.now().Before(deadline) {
@@ -1224,20 +1277,6 @@ func (r *Run) deadWait(ctx context.Context) string {
 				return ""
 			}
 			practiced = true
-			for _, name := range r.deadBots() {
-				r.practice++
-				if r.practice > r.lim.MaxPractice {
-					r.stop("practice-budget")
-					return ""
-				}
-				r.event("practice_revive", map[string]any{"bot": r.roleName(name), "leg": r.lastLegName()})
-				if r.rec != nil {
-					r.rec.UpdatePull(func(p *PullRecord) { p.PracticeRevives++ })
-				}
-				if !r.setup(ctx, ".tb revive "+name) {
-					return ""
-				}
-			}
 			deadline = r.now().Add(30 * time.Second)
 			continue
 		}
@@ -1253,6 +1292,10 @@ func (r *Run) deadWait(ctx context.Context) string {
 
 // wipe walks the commander back to the leg's start, waits for the mobs to reset, and only as a last resort revives
 // the party and brings it back.
+//
+// The recovery is a typed action sequence: one party revive, then each bot teleported to the commander. Each of them
+// is gated in the same step as its send, so the report the next action stands on is always complete and newer than
+// the line before it — nothing moves on the report that showed the wipe.
 func (r *Run) wipe(ctx context.Context) string {
 	leg := r.leg()
 	if leg == nil {
@@ -1313,17 +1356,31 @@ func (r *Run) wipe(ctx context.Context) string {
 		r.stop("wipe")
 		return ""
 	}
-	if !r.setup(ctx, ".tb revive party") {
-		return ""
-	}
-	for _, name := range r.cfg.Party {
-		r.practice++
-		r.event("practice_revive", map[string]any{"bot": r.roleName(name), "leg": r.lastLegName()})
-		if r.practice > r.lim.MaxPractice {
-			r.stop("practice-budget")
+	deadline = r.now().Add(r.lim.Wipe)
+	revived := false
+	next := 0
+	for next < len(r.cfg.Party) {
+		a := Action{Kind: ActionRevive, Who: "party", Recovery: true}
+		if revived {
+			a = Action{Kind: ActionTeleTo, Who: r.cfg.Party[next], Other: r.cfg.Commander, Recovery: true, Practice: true}
+		}
+		done, retry := r.actStep(ctx, a, "wipe")
+		if done {
+			if revived {
+				next++
+			} else {
+				revived = true
+			}
+			continue
+		}
+		if !retry {
 			return ""
 		}
-		if !r.setup(ctx, fmt.Sprintf(".tb tele %s to %s", name, r.cfg.Commander)) {
+		if !r.now().Before(deadline) {
+			r.stop("wipe:recover")
+			return ""
+		}
+		if !r.sleep(ctx, 2*time.Second) {
 			return ""
 		}
 	}
@@ -1462,6 +1519,8 @@ func (r *Run) done(ctx context.Context) string {
 	if !settled {
 		return next
 	}
+	// The run has reached its end: from here the instance reset is allowed, and only from here.
+	r.ended = true
 	if r.cfg.Reset {
 		return StateLeave
 	}
@@ -1478,27 +1537,42 @@ func (r *Run) markClear() {
 }
 
 // leave leaves the instance, brings the commander out and resets the instance.
+//
+// The leave and the commander's teleport are moving actions. The reset is the one action with its own rule: the run
+// must have reached its end and a fresh report must show the whole party outside, because the module refuses a reset
+// from inside. Until then the driver does not ask.
 func (r *Run) leave(ctx context.Context) string {
 	tank := r.cfg.Tank()
-	r.setup(ctx, ".tb instance "+tank+" leave")
-	if r.stopReason != "" || r.lost {
-		return ""
-	}
-	if r.route.OutsideTele != "" {
-		r.core(ctx, ".tele "+r.route.OutsideTele)
-	}
-	r.setup(ctx, ".tb instance "+tank+" reset")
 	deadline := r.now().Add(r.lim.Leave)
+	left, out := false, r.route.OutsideTele == ""
 	for {
-		if !r.refresh(ctx) {
-			if r.stopReason != "" {
+		if !left {
+			done, retry := r.actStep(ctx, Action{Kind: ActionInstanceLeave, Who: tank}, "leave")
+			if done {
+				left = true
+			} else if !retry {
 				return ""
 			}
-		} else if r.allOutside() {
-			r.progress()
-			r.markClear()
-			r.stop("clear")
-			return ""
+		}
+		if left && !out {
+			done, retry := r.actStep(ctx, Action{Kind: ActionTeleOutside, Dest: r.route.OutsideTele}, "leave")
+			if done {
+				out = true
+			} else if !retry {
+				return ""
+			}
+		}
+		if left && out {
+			done, retry := r.actStep(ctx, Action{Kind: ActionInstanceReset, Who: tank}, "leave")
+			if done {
+				r.progress()
+				r.markClear()
+				r.stop("clear")
+				return ""
+			}
+			if !retry {
+				return ""
+			}
 		}
 		if !r.now().Before(deadline) {
 			r.stop("leave")

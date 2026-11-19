@@ -22,14 +22,49 @@ loop already keeps and every send goes through the session's own command transpo
 
 | Port | Adapter | What it reads or sends |
 |---|---|---|
-| `Commander` | `dungeonCommander` | one `command.Session` over `cmdLink` (the A6 transport), one `tbcmd.Client`. `State` = `.tb state party <tank>`, `Threat` = `.tb threat party <tank>`, `Party` = `.tb party <tank>`, `Order` = the typed order. `Setup` sends a token-matched setup line and returns the collected reply; the typed calls for tele/enter/instance/revive come in a later round. `Core` sends a tokenless line (GM mode, goodbye teleports, appear). |
+| `Commander` | `dungeonCommander` | one `command.Session` over `cmdLink` (the A6 transport), one `tbcmd.Client`. `State` = `.tb state party <tank>`, `Threat` = `.tb threat party <tank>`, `Party` = `.tb party <tank>`, `Order` = the typed order, `Act` = one typed setup action (below). There is no method that takes a command line: `(*dungeonCommander).Run` is the one function in the package that reaches the command session, and the module's typed client is built over it, so every line — report, order or action — is built from typed arguments by `tbcmd`. |
 | `World` | `dungeonWorld` | `Self` = the mover's position, `objects.World.MapID`, the map change's epoch and its between-maps window. `Units` = the object model's units, positions at the spline clock, health, the values target, the combat model's dead/ghost state and cast; a unit is friendly when it is another player or has NPC flags. `PlayerGUID` = the model's name cache. `EnterAreaTrigger` = the session's own portal packet. |
 | `Walker` | `dungeonWalker` | `Path` = the session's navmesh planner on the walking filter (built on first use, dropped on a map change). `Walk`/`Stop` = the session's mover, the one implementation that keeps the movement packets anticheat-clean. A transfer (`objects.ErrMapChange`) or a teleport mid-leg is the driver's `ErrMapChange`; a dead link is `ErrLinkLost`. |
 | `Clock` | `dungeonClock` | `Now` is the session's client clock; `Sleep` answers server packets for the interval (`session.collect`), so a poll interval never starves the loop. A dead link ends the wait at once and is left to the next port call (the wait itself sends nothing). |
 
+### The setup actions
+
+Everything the run does outside the orders is an `Action` from the driver's closed vocabulary. `Run.act` is the one
+way into it (as `Run.send` is the orders'): it classifies the kind and applies the class's gate in the same step as
+the send, and only a parsed success reaches the run. After the gate, both vocabularies end in the same `Run.sendLine`,
+the one function every non-read-only line leaves through: it records the order in the run's log, sends through the
+port, counts the send for the freshness gates and ends the run on a lost link. Moving actions need a complete state report taken immediately
+before the send and not older than the last line sent (the driver is sequential, so that is the report after it), no
+stop pending, and — unless the action is the wipe's own recovery — nobody in combat and nobody dead. Revives are the
+practice path only and are counted as PRACTICE; the instance reset is asked only once the run has reached its end and
+a fresh report shows the whole party outside, because the module refuses it from inside.
+
+| Action | Class | Gate | Line | Reply (typed) |
+|---|---|---|---|---|
+| `ActionGMOn` | state, in place | stop/link only | `.gm on` (core, tokenless) | the core's answer; a refusal is the collector's named error |
+| `ActionGMVisible` | state, in place | stop/link only | `.gm visible on` (core) | as above |
+| `ActionTeleOutside` | moving | fresh report + no stop + nobody dead, nobody in combat | `.tele <outside_tele>` (core) | silent; a refusal is the named error, the world confirms the move |
+| `ActionTeleCommander` | moving | as above | `.tb tele <who> <map> <x> <y> <z>` | `tele-end count=0 #token` |
+| `ActionTeleParty` | moving | as above | `.tb tele party <map> <x> <y> <z>` | `tele-end count=0 #token` |
+| `ActionTeleTo` | moving | as above; the wipe recovery is exempt from the combat/dead rule, never from the report rule | `.tb tele <who> to <other>` | `tele-end count=0 #token` |
+| `ActionAppear` | moving | as above (the fallback when the module refuses the teleport to the tank) | `.appear <name>` (core) | silent; the world confirms the move |
+| `ActionEnter` | moving | as above, and only while the party is not yet in one instance | `.tb enter party` | `enter-end count=0 #token` |
+| `ActionRevive` | state, in place | practice switch on, budget left, fresh report, a dead target (party: no target check) | `.tb revive <who>` | `revive-end count=0 #token` |
+| `ActionInstanceLeave` | moving | as above | `.tb instance <leader> leave` | `instance-end count=0 #token` |
+| `ActionInstanceReset` | state, in place | the run has ended + a fresh report of the whole party outside | `.tb instance <leader> reset` | `instance-end count=0 #token` |
+| `ActionInstanceInfo` | read-only | none | `.tb instance <leader> info` | the typed boss report (the run does not read it yet; the supervisor will) |
+
+No setup action starts a fight; the orders own that and their own permit. Party and role setup are not actions:
+PREPARE reads the roster (the port's `Party`, read-only) and refuses a wrong party or role instead of changing it, so
+the driver never forms or re-roles a party. A module refusal is the `tbcmd` `*CommandError` (its `code`); the run
+records the action failed and stops with the state's reason (`enter:error`, `travel:error`, …), and the action log's
+`action_error` event carries the code. The GM lines and the two core teleports carry no token — the core does not
+echo one — so their parse is the collector's refusal grammar; the move itself is confirmed by the world model
+(position, map), not by a reply.
+
 Port errors are translated at this boundary. The driver's `ErrLinkLost` means "nothing may be sent again"; a module
-refusal, an incomplete report or a bad reply is returned as it came and the driver reads it as *unknown* (it holds and
-polls again).
+refusal, an incomplete report or a bad reply is returned as it came. A read or an order reads it as *unknown* (it
+holds and polls again); an action's refusal is the state's own stop (above).
 
 The GM guard is the A6 one: the run sends the non-mutating probe first and sends no other command until it was
 acknowledged. The driver's own PREPARE then sends the GM mode lines.
@@ -76,6 +111,14 @@ dead, friendly), `PlayerGUID` and `EnterAreaTrigger`; `Path` without a navmesh f
 mover and the `ErrLinkLost`/`ErrMapChange` translations; the clock answering a server time-sync request during
 `Sleep` (the proof that the wait is the session's packet loop), and returning at once on a dead link.
 
+Action and gate tests: `tbcmd/action_test.go` (every setup command's line, its end marker, its refusal and the
+argument checks), `driver/actions_test.go` (every kind classified; `Act` called only inside `act`; each moving
+action's gate passing and shut by a stop, a stale report, a fight and a dead member; the revive's practice switch and
+budget; the reset's end/outside rule; unknown kinds and destinations refused before the send; the wipe-recovery
+report sequence) and `world/dungeon_action_test.go` + `world/dungeon_send_test.go` (the wire scenarios in the table
+above, and the source test that the adapter's only call of the command session is its send and that no `.tb` line is
+built in the package).
+
 Fake-server tests (`dungeon_fake_test.go`, `dungeon_walk_cgo_test.go`): a scene that answers `.gm`, the GM mode
 lines, the party roster, the state report, the threat report and the orders over real sockets, with the character's
 own create block and one creature in the pack.
@@ -85,7 +128,12 @@ own create block and one creature in the pack.
 | clean run | PREPARE → POSITION → PULL → FIGHT → REST → clear; one pull; the trace and summary are written; **every `.tb order` line on the wire is exactly one of the run's recorded orders** (the one send function is the only source) |
 | late state report | the first state reply arrives past the command deadline; the run does not act on it and the next complete report carries it on to a clear run |
 | refused order | the module refuses the pull every time; one retry, then stop `pull-refused:*` |
-| link death per port | drop on `.gm on` (core), `.tb party`, `.tb state`, `.tb threat`, `.tb order`, `.tb enter` (setup) and on the first movement packet (walker): each run ends with exit 7 and stop `link-lost`, and no line follows |
+| link death per port | drop on `.gm on` (a core action), `.tb party`, `.tb state`, `.tb threat`, `.tb order`, `.tb enter` (the entry action) and on the first movement packet (walker): each run ends with exit 7 and stop `link-lost`, and no line follows |
+| actions on the wire | a portal plan: `.tb tele Lead …`, `.tb tele party …`, `.tb enter party` and `.tb tele Lead to Tank`, in the driver's order, on the way to a clear; the appear is the fallback after a refused teleport to the tank |
+| wipe recovery | the pull's party stays down and the mob stays on the threat list: `.tb revive party`, then one `.tb tele <bot> to Lead` per bot, each with a state report between it and the line before it — never on the wipe's report |
+| instance reset | `--reset`: the leave line, a report of the party outside, then the reset; a leave that keeps the party inside stops the run without a reset line |
+| refused entry | the module refuses `.tb enter party`: the run stops `enter:error`, nothing follows the refusal |
+| shut moving gate | a dead member and a fight shut the travel teleports: no `.tb tele` line on the wire and the state ends on its timeout |
 
 The walker case needs the Detour engine, so it carries `//go:build cgo`; the adapter's translation is also pinned
 without sockets.

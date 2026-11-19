@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,8 +25,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// dungeonParty is the five names the fake answers for, tank first.
-var dungeonParty = []string{"Tank", "Priest", "Dps1", "Dps2", "Dps3"}
+// dungeonParty is the five names the fake answers for, tank first. They are letters only: the module's typed layer
+// applies the server's character-name rule, and a name with a digit is not one the server has.
+var dungeonParty = []string{"Tank", "Priest", "Dpsone", "Dpstwo", "Dpsthree"}
 
 // dungeonScene scripts one dungeon run. The zero value answers a ready party with one live pack.
 type dungeonScene struct {
@@ -42,8 +44,30 @@ type dungeonScene struct {
 	lateFirstState bool
 	// refuseOrders answers every pull/attack order with the module's error line.
 	refuseOrders bool
+	// refuseEnter answers `.tb enter party` with the module's error line of this code.
+	refuseEnter string
+	// refuseTeleTo answers `.tb tele <who> to <other>` with the module's error line: the commander's teleport to the
+	// tank fails and the core's appear is the driver's fallback.
+	refuseTeleTo bool
+	// splitInstances makes `.tb enter party` leave the party in two instances, so the commander has to teleport to
+	// the tank before the run is in.
+	splitInstances bool
+	// holdThreat keeps one mob on the threat list; with killPartyOnPull it is what holds a wipe in the wait instead
+	// of looking like a world that reset itself.
+	holdThreat bool
+	// killPartyOnPull kills the whole party when a pull order arrives.
+	killPartyOnPull bool
+	// keepInsideAfterLeave answers `.tb instance ... leave` without moving the party out.
+	keepInsideAfterLeave bool
+	// pollDead kills that bot on state poll killPoll (1-based), and pollCombat puts every bot in combat from that
+	// poll for three polls: the reports then carry the state a gate must refuse, and the stop path still sees the
+	// fight end.
+	pollDead   string
+	pollCombat bool
+	killPoll   int
 
 	mu             sync.Mutex
+	bots           map[string]*sceneBot
 	commands       []string
 	orderLines     []string
 	pulls          int
@@ -53,6 +77,26 @@ type dungeonScene struct {
 	destroyed      bool
 	dropped        bool
 	sawMove        bool
+}
+
+// sceneBot is one party member's scripted place and life.
+type sceneBot struct {
+	x, y, z     float32
+	mapID, inst uint32
+	dead        bool
+}
+
+// botFor is one party member's record; a scene that never moved it stands on the login position of map 0.
+func (sc *dungeonScene) botFor(name string) *sceneBot {
+	if sc.bots == nil {
+		sc.bots = map[string]*sceneBot{}
+	}
+	b, ok := sc.bots[name]
+	if !ok {
+		b = &sceneBot{x: sc.x, y: sc.y, z: sc.z}
+		sc.bots[name] = b
+	}
+	return b
 }
 
 // body splits the trailing "#token" from a command line.
@@ -73,20 +117,25 @@ func (sc *dungeonScene) refuse(c *fakeConn, token, code, cmd string) {
 
 // stateLine is one bot's state record. inCombat switches st/incombat together.
 func (sc *dungeonScene) stateLine(name, role, class, power string, inCombat bool, token string) string {
+	b := sc.botFor(name)
 	st, combat := "non-combat", "no"
-	if inCombat {
+	if inCombat && !b.dead {
 		st, combat = "combat", "yes"
+	}
+	hp, life := 612, "alive"
+	if b.dead {
+		st, hp, life = "dead", 0, "dead"
 	}
 	pw, pwmax := "0", "100"
 	if power == "mana" {
 		pw, pwmax = "100", "200"
 	}
-	return fmt.Sprintf("state bot=%s role=%s rolesrc=auto class=%s level=18 hp=612 hpmax=612 hppct=100 "+
+	return fmt.Sprintf("state bot=%s role=%s rolesrc=auto class=%s level=18 hp=%d hpmax=612 hppct=100 "+
 		"power=%s pw=%s pwmax=%s st=%s incombat=%s tgt= victim= hold=no mv=follow stuck= engine=yes "+
-		"pos=%.1f,%.1f,%.1f map=0 inst=0 dl=self dm=3.4 ord= lastorder= co= nc= "+
+		"pos=%.1f,%.1f,%.1f map=%d inst=%d dl=self dm=3.4 ord= lastorder= co= nc= "+
 		"cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= "+
-		"life=alive relhold=no inleader=yes block= #%s",
-		name, role, class, power, pw, pwmax, st, combat, sc.x, sc.y, sc.z, token)
+		"life=%s relhold=no inleader=yes block= #%s",
+		name, role, class, hp, power, pw, pwmax, st, combat, b.x, b.y, b.z, b.mapID, b.inst, life, token)
 }
 
 // stateReply answers `.tb state party <tank>`.
@@ -97,7 +146,11 @@ func (sc *dungeonScene) stateReply(c *fakeConn, token string) {
 		sc.pollsAfterPull++
 	}
 	poll := sc.pollsAfterPull
-	combat := sc.pulled && poll == 1
+	if sc.killPoll == sc.stateCalls && sc.pollDead != "" {
+		sc.botFor(sc.pollDead).dead = true
+	}
+	combat := (sc.pulled && poll == 1) ||
+		(sc.pollCombat && sc.stateCalls >= sc.killPoll && sc.stateCalls < sc.killPoll+3)
 	destroy := sc.pulled && poll == 4 && !sc.destroyed
 	if destroy {
 		sc.destroyed = true
@@ -107,14 +160,22 @@ func (sc *dungeonScene) stateReply(c *fakeConn, token string) {
 		// The fight is over; the mob leaves the model now, so the pack can be judged clear.
 		c.writeFrame(fakeSMSGUpdateObject, fakeDestroyObject(0, sc.mobGUID()))
 	}
+	alive, dead := 0, 0
+	for _, name := range dungeonParty {
+		if sc.botFor(name).dead {
+			dead++
+		} else {
+			alive++
+		}
+	}
 	lines := []string{"state-begin #" + token}
 	lines = append(lines, sc.stateLine("Tank", "tank", "warrior", "rage", combat, token))
 	lines = append(lines, sc.stateLine("Priest", "healer", "priest", "mana", combat, token))
 	for _, name := range dungeonParty[2:] {
 		lines = append(lines, sc.stateLine(name, "dps", "warrior", "rage", combat, token))
 	}
-	lines = append(lines, "state-end count=5 records=5 resting=0 target=party:Tank ready=yes "+
-		"alive=5 dead=0 wipe=no whole=no #"+token)
+	lines = append(lines, fmt.Sprintf("state-end count=5 records=5 resting=0 target=party:Tank ready=yes "+
+		"alive=%d dead=%d wipe=no whole=no #%s", alive, dead, token))
 	sc.reply(c, token, lines...)
 }
 
@@ -122,7 +183,7 @@ func (sc *dungeonScene) stateReply(c *fakeConn, token string) {
 func (sc *dungeonScene) partyReply(c *fakeConn, token string) {
 	roles := []struct{ name, role, class string }{
 		{"Tank", "tank", "warrior"}, {"Priest", "healer", "priest"},
-		{"Dps1", "dps", "rogue"}, {"Dps2", "dps", "warrior"}, {"Dps3", "dps", "warrior"},
+		{"Dpsone", "dps", "rogue"}, {"Dpstwo", "dps", "warrior"}, {"Dpsthree", "dps", "warrior"},
 	}
 	lines := []string{"party-begin #" + token}
 	for i, r := range roles {
@@ -137,8 +198,18 @@ func (sc *dungeonScene) partyReply(c *fakeConn, token string) {
 	sc.reply(c, token, lines...)
 }
 
-// threatReply answers `.tb threat party <tank>`: the pack is not on the threat list after the pull.
+// threatReply answers `.tb threat party <tank>`: the pack is not on the threat list after the pull, unless the scene
+// holds one mob on it.
 func (sc *dungeonScene) threatReply(c *fakeConn, token string) {
+	if sc.holdThreat {
+		// The pulled unit, so the pull's own wait sees it on the list (the driver matches by GUID).
+		sc.reply(c, token,
+			"threat-begin #"+token,
+			fmt.Sprintf("threat mob=%016X%016X entry=6 name=Mob hppct=100 victim=Tank target=Tank size=1 "+
+				"top=Tank:1 #%s", sc.mobGUID().High, sc.mobGUID().Low, token),
+			"threat-end count=1 records=1 bots=5 target=party:Tank #"+token)
+		return
+	}
 	sc.reply(c, token, "threat-begin #"+token, "threat-end count=0 records=0 bots=5 target=party:Tank #"+token)
 }
 
@@ -153,6 +224,107 @@ func (sc *dungeonScene) orderReply(c *fakeConn, token, body string) {
 		"order-begin #"+token,
 		fmt.Sprintf("order bot=%s verb=%s seq=%d status=queued #%s", who, verb, 1, token),
 		fmt.Sprintf("order-end count=1 records=1 verb=%s target=%s queued=1 refused=0 #%s", verb, who, token))
+}
+
+// enterParty is the world's effect of `.tb enter party`: the party is in the instance, unless the scene splits it
+// across two instances so the commander has to come in at the tank's side.
+func (sc *dungeonScene) enterParty() {
+	for i, name := range dungeonParty {
+		b := sc.botFor(name)
+		b.x, b.y, b.z = sc.x, sc.y, sc.z
+		b.dead = false
+		if sc.splitInstances {
+			b.inst = uint32(1 - i%2)
+			continue
+		}
+		b.inst = 1
+	}
+}
+
+// revive is the world's effect of `.tb revive`: the named bot, or the whole party, is up.
+func (sc *dungeonScene) revive(who string) {
+	names := dungeonParty
+	if who != "party" {
+		names = []string{who}
+	}
+	for _, name := range names {
+		if b := sc.botFor(name); b != nil && name != "" {
+			b.dead = false
+		}
+	}
+}
+
+// teleport is the world's effect of `.tb tele`: the party, one bot to a position, or one character to another. The
+// commander's own move is the session's model, not the scene's; the commander's arrival at the tank's side is what
+// puts the party in one instance here.
+func (sc *dungeonScene) teleport(body string) {
+	f := strings.Fields(body) // .tb tele <who> ...
+	if len(f) < 4 {
+		return
+	}
+	switch {
+	case f[2] == "party" && len(f) >= 7:
+		x, y, z := sceneFloat(f[4]), sceneFloat(f[5]), sceneFloat(f[6])
+		m := sceneUint(f[3])
+		for _, name := range dungeonParty {
+			b := sc.botFor(name)
+			b.x, b.y, b.z, b.mapID = x, y, z, m
+		}
+	case len(f) >= 5 && f[3] == "to":
+		who, other := f[2], f[4]
+		if who == "Lead" {
+			t := sc.botFor(other)
+			for _, name := range dungeonParty {
+				b := sc.botFor(name)
+				b.mapID, b.inst = t.mapID, t.inst
+			}
+			return
+		}
+		if b := sc.botFor(who); b != nil {
+			t := sc.botFor(other)
+			b.x, b.y, b.z, b.mapID, b.inst = t.x, t.y, t.z, t.mapID, t.inst
+		}
+	case len(f) >= 7:
+		x, y, z := sceneFloat(f[4]), sceneFloat(f[5]), sceneFloat(f[6])
+		if b := sc.botFor(f[2]); b != nil {
+			b.x, b.y, b.z, b.mapID = x, y, z, sceneUint(f[3])
+		}
+	}
+}
+
+// appear is the world's effect of the core's `.appear <name>`: the commander stands at the bot's side, so the party
+// is in one instance.
+func (sc *dungeonScene) appear(name string) {
+	t := sc.botFor(name)
+	for _, n := range dungeonParty {
+		b := sc.botFor(n)
+		b.mapID, b.inst = t.mapID, t.inst
+	}
+}
+
+// instanceAction is the world's effect of `.tb instance ... leave|reset`.
+func (sc *dungeonScene) instanceAction(body string) {
+	if !strings.HasSuffix(body, " leave") || sc.keepInsideAfterLeave {
+		return
+	}
+	for _, name := range dungeonParty {
+		b := sc.botFor(name)
+		b.mapID, b.inst = 1, 0
+		b.x, b.y, b.z = sc.x, sc.y, sc.z
+	}
+}
+
+// sceneUint reads a map id of a command line.
+func sceneUint(s string) uint32 {
+	v, _ := strconv.ParseUint(s, 10, 32)
+	return uint32(v)
+}
+
+// sceneFloat reads a coordinate of a command line; a word that is not a number is zero here, as the scene's own
+// positions always are numbers.
+func sceneFloat(s string) float32 {
+	v, _ := strconv.ParseFloat(s, 32)
+	return float32(v)
 }
 
 // mobGUID is the pack's creature GUID: one unit, identified the way the driver names it in an order.
@@ -286,17 +458,50 @@ func (sc *dungeonScene) answerDungeon(f *fakeServer, c, realm *fakeConn, text st
 			sc.mu.Lock()
 			sc.pulled = true
 			sc.mu.Unlock()
+			if sc.killPartyOnPull {
+				for _, name := range dungeonParty {
+					sc.botFor(name).dead = true
+				}
+			}
 		}
 		sc.orderReply(c, token, body)
 		return true
 	case strings.HasPrefix(body, ".tb enter "):
+		if sc.refuseEnter != "" {
+			sc.refuse(c, token, sc.refuseEnter, "enter")
+			return true
+		}
+		sc.enterParty()
 		sc.reply(c, token, "enter-end count=0 #"+token)
 		return true
 	case strings.HasPrefix(body, ".tb instance "):
+		if strings.HasSuffix(body, " info") {
+			sc.reply(c, token, "instance-begin #"+token,
+				"instance boss=11517:dead #"+token,
+				"instance-end count=1 records=1 #"+token)
+			return true
+		}
+		sc.instanceAction(body)
 		sc.reply(c, token, "instance-end count=0 records=0 #"+token)
 		return true
+	case strings.HasPrefix(body, ".tb revive "):
+		sc.revive(strings.TrimSpace(strings.TrimPrefix(body, ".tb revive ")))
+		sc.reply(c, token, "revive-end count=0 #"+token)
+		return true
 	case strings.HasPrefix(body, ".tb tele "):
+		if sc.refuseTeleTo && strings.Contains(body, " to ") {
+			sc.refuse(c, token, "no-target", "tele")
+			return true
+		}
+		sc.teleport(body)
 		sc.reply(c, token, "tele-end count=0 #"+token)
+		return true
+	case strings.HasPrefix(body, ".appear "):
+		// The core's appear answers nothing; its effect is the commander at the named bot's side.
+		sc.appear(strings.TrimSpace(strings.TrimPrefix(body, ".appear ")))
+		return true
+	case strings.HasPrefix(body, ".tele "):
+		// The core's GM teleport answers nothing; the scene has no map transfer to model for it.
 		return true
 	}
 	f.failf("dungeon: no answer for %q", text)

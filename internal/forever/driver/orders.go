@@ -76,7 +76,37 @@ func (r *Run) send(ctx context.Context, who, verb, arg string, p *pullPermit) (t
 			return tbcmd.OrderReport{}, why
 		}
 	}
-	rep, err := r.cmd.Order(ctx, who, verb, arg)
+	out, why := r.sendLine(ctx, who, verb, arg, func() (sent, error) {
+		rep, err := r.cmd.Order(ctx, who, verb, arg)
+		return sent{order: rep}, err
+	})
+	if why != "" {
+		return out.order, why
+	}
+	if class == orderFight {
+		r.pullTimes = append(r.pullTimes, r.now())
+	}
+	return out.order, ""
+}
+
+// sent is one typed line's answer from the port: an order's report or a setup action's, with the port's error when
+// the line was refused or failed.
+type sent struct {
+	order  tbcmd.OrderReport
+	action ActionReport
+	err    error
+}
+
+// sendLine is the one function every non-read-only line leaves the run through, the orders and the setup actions
+// alike: it records the order in the run's log, sends through the port, counts the send for the freshness gates and
+// ends the run on a lost link. The caller's own gate has already run and its class needed nothing else; a refusal
+// comes back as the port's error, and the line is recorded failed.
+func (r *Run) sendLine(ctx context.Context, who, verb, arg string, call func() (sent, error)) (sent, string) {
+	if r.lost {
+		return sent{}, "link"
+	}
+	out, err := call()
+	out.err = err
 	o := Order{At: r.sinceStart(), Who: who, Verb: verb, Arg: arg}
 	if err != nil {
 		o.Failed = true
@@ -85,15 +115,12 @@ func (r *Run) send(ctx context.Context, who, verb, arg string, p *pullPermit) (t
 	r.noteSend(err)
 	if errors.Is(err, ErrLinkLost) {
 		r.linkLost()
-		return rep, "link"
+		return out, "link"
 	}
 	if err != nil {
-		return rep, "error"
+		return out, "error"
 	}
-	if class == orderFight {
-		r.pullTimes = append(r.pullTimes, r.now())
-	}
-	return rep, ""
+	return out, ""
 }
 
 // moveAllowed is the gate before a movement order that can cross hostile ground. The order may go out only when:

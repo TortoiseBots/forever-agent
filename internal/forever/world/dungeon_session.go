@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
@@ -46,15 +47,15 @@ type dungeonCommander struct {
 }
 
 func newDungeonCommander(s *session, tank string) *dungeonCommander {
-	q := command.NewSession(&cmdLink{s: s})
-	client := tbcmd.NewClient(q)
-	client.Base = command.Options{
+	c := &dungeonCommander{s: s, q: command.NewSession(&cmdLink{s: s}), tank: tank}
+	c.client = tbcmd.NewClient(c)
+	c.client.Base = command.Options{
 		SelfName: s.report.Character.Name,
 		SelfGUID: s.selfOrMover(),
 		Quiet:    s.opts.CommandQuiet,
 		Deadline: s.opts.CommandTimeout,
 	}
-	return &dungeonCommander{s: s, q: q, client: client, tank: tank}
+	return c
 }
 
 func (c *dungeonCommander) State(ctx context.Context) (tbcmd.StateReport, error) {
@@ -77,34 +78,109 @@ func (c *dungeonCommander) Party(ctx context.Context) (tbcmd.PartyReport, error)
 	return rep, dungeonPortErr(err)
 }
 
-// Setup sends one token-matched line of the module's setup commands (a teleport, an instance entry, a revive). The
-// typed calls for those verbs come in a later round; the reply is collected and returned unchanged, and the driver
-// only needs to know whether the line went out.
-func (c *dungeonCommander) Setup(ctx context.Context, line string) (*command.Reply, error) {
-	tok, err := command.NewToken()
-	if err != nil {
-		return nil, err
-	}
-	rep, err := c.q.Run(ctx, line, command.Options{
-		Token:    tok,
-		SelfName: c.client.Base.SelfName,
-		SelfGUID: c.client.Base.SelfGUID,
-		Quiet:    c.client.Base.Quiet,
-		Deadline: c.client.Base.Deadline,
-	})
-	return rep, dungeonPortErr(err)
+// Run is the one function in this package that reaches the command channel. The module's typed client is built over
+// this transport and builds every line from typed arguments (the reports, the orders, the setup actions); nothing
+// else here names the command session, so no call site can send a command line of its own.
+func (c *dungeonCommander) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
+	return c.q.Run(ctx, line, o)
 }
 
-// Core sends one tokenless core line (a GM mode line, a teleport, an appear). Its reply ends at the quiet window,
-// as every tokenless command's does.
-func (c *dungeonCommander) Core(ctx context.Context, line string) (*command.Reply, error) {
-	rep, err := c.q.Run(ctx, line, command.Options{
-		SelfName: c.client.Base.SelfName,
-		SelfGUID: c.client.Base.SelfGUID,
-		Quiet:    c.client.Base.Quiet,
-		Deadline: c.client.Base.Deadline,
-	})
-	return rep, dungeonPortErr(err)
+// Act performs one typed setup action. The module's own commands go through the typed client (so the line, the
+// token and the end marker are the client's), and the commander's GM lines are the only tokenless sends: the core
+// answers them with no token to match, so their confirmation is the collector's refusal grammar.
+func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.ActionReport, error) {
+	switch a.Kind {
+	case driver.ActionEnter:
+		return actionReport(c.client.EnterParty(ctx))
+	case driver.ActionTeleCommander:
+		return actionReport(c.client.Tele(ctx, a.Who, a.Map, float64(a.Pos[0]), float64(a.Pos[1]), float64(a.Pos[2])))
+	case driver.ActionTeleParty:
+		return actionReport(c.client.TeleParty(ctx, a.Map, float64(a.Pos[0]), float64(a.Pos[1]), float64(a.Pos[2])))
+	case driver.ActionTeleTo:
+		return actionReport(c.client.TeleTo(ctx, a.Who, a.Other))
+	case driver.ActionRevive:
+		return actionReport(c.client.Revive(ctx, a.Who))
+	case driver.ActionInstanceLeave:
+		return actionReport(c.client.InstanceLeave(ctx, a.Who))
+	case driver.ActionInstanceReset:
+		return actionReport(c.client.InstanceReset(ctx, a.Who))
+	case driver.ActionInstanceInfo:
+		rep, err := c.client.InstanceInfo(ctx, a.Who)
+		if err != nil {
+			return driver.ActionReport{}, dungeonPortErr(err)
+		}
+		return driver.ActionReport{Verb: "instance", Confirmed: true, Info: &rep}, nil
+	case driver.ActionGMOn:
+		return c.gmOn(ctx, false)
+	case driver.ActionGMVisible:
+		return c.gmOn(ctx, true)
+	case driver.ActionTeleOutside:
+		return c.teleOutside(ctx, a.Dest)
+	case driver.ActionAppear:
+		name, err := chat.NormaliseName(a.Who)
+		if err != nil {
+			return driver.ActionReport{}, fmt.Errorf("world: appear: %w", err)
+		}
+		return c.appear(ctx, name)
+	}
+	return driver.ActionReport{}, fmt.Errorf("world: action %d is not in the setup vocabulary", a.Kind)
+}
+
+// actionReport adapts one typed module answer: a refusal (the module's error line, a bad report, a lost link) is
+// returned as it came, so the driver never reads a refused or unparsed action as a success.
+func actionReport(rep tbcmd.ActionReport, err error) (driver.ActionReport, error) {
+	if err != nil {
+		return driver.ActionReport{}, dungeonPortErr(err)
+	}
+	return driver.ActionReport{Verb: rep.Verb, Count: rep.Count, Confirmed: true}, nil
+}
+
+// coreReply adapts one tokenless core send. The core's GM commands carry no token, so there is nothing to match:
+// the collector's own refusal grammar is the parse, and a line the server answers with silence (the GM teleport and
+// the appear) is a sent line whose effect the world model shows. Anything else is returned unchanged.
+func coreReply(verb string, count int, err error) (driver.ActionReport, error) {
+	switch {
+	case err == nil:
+		return driver.ActionReport{Verb: verb, Confirmed: true, Count: count}, nil
+	case errors.Is(err, command.ErrNoReply):
+		return driver.ActionReport{Verb: verb}, nil
+	}
+	return driver.ActionReport{}, dungeonPortErr(err)
+}
+
+// gmOn sends the commander's GM mode line. The two forms are built here from the flag, so nothing outside this file
+// can hand a core command line to the channel.
+func (c *dungeonCommander) gmOn(ctx context.Context, visible bool) (driver.ActionReport, error) {
+	line := ".gm on"
+	if visible {
+		line = ".gm visible on"
+	}
+	rep, err := c.Run(ctx, line, c.client.Base)
+	n := 0
+	if rep != nil {
+		n = len(rep.Raw)
+	}
+	return coreReply("gm", n, err)
+}
+
+// teleOutside sends the commander's GM teleport to the plan's named outside place.
+func (c *dungeonCommander) teleOutside(ctx context.Context, dest string) (driver.ActionReport, error) {
+	rep, err := c.Run(ctx, ".tele "+dest, c.client.Base)
+	n := 0
+	if rep != nil {
+		n = len(rep.Raw)
+	}
+	return coreReply("tele", n, err)
+}
+
+// appear sends the core's appear: the commander stands at the named bot's side.
+func (c *dungeonCommander) appear(ctx context.Context, name string) (driver.ActionReport, error) {
+	rep, err := c.Run(ctx, ".appear "+name, c.client.Base)
+	n := 0
+	if rep != nil {
+		n = len(rep.Raw)
+	}
+	return coreReply("appear", n, err)
 }
 
 // dungeonWorld is the commander's own client: the mover's position, the map change's epoch, the object model's
