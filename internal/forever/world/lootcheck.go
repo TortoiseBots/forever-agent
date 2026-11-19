@@ -339,8 +339,12 @@ func (s *session) objectUse(ctx context.Context) error {
 	// lootTarget sends the use, waits for the window or the state change and records both in the loot report.
 	_, err := s.lootTarget(ctx, target)
 	lr := &s.report.Loot
-	if err != nil && !errors.Is(err, ErrNoLootWindow) {
-		return err
+	if err != nil {
+		if errors.Is(err, ErrLootRefused) || errors.Is(err, ErrNoLootWindow) {
+			s.opts.logf("object-use: %v", err)
+		} else {
+			return err
+		}
 	}
 	rep.StateBefore, rep.StateAfter = lr.StateBefore, lr.StateAfter
 	rep.FlagsBefore, rep.FlagsAfter = lr.FlagsBefore, lr.FlagsAfter

@@ -292,7 +292,7 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 	if s.mover != nil && r.Distance > lootReach {
 		px, py, pz := approachPoint(s.MoverX(), s.MoverY(), s.MoverZ(), tx, ty, tz, lootReach*0.8, 1)
 		if err := s.mover.MoveTo(ctx, px, py, pz); err != nil && !errors.Is(err, context.Canceled) {
-			s.opts.logf("loot-check: the walk to the %s stopped: %v", r.Kind, err)
+			s.opts.logf("world: the walk to the %s stopped: %v", r.Kind, err)
 		}
 	}
 
@@ -322,6 +322,13 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 	if _, err := s.lootWait(ctx, "the loot window", lootWindowWait, found); err != nil {
 		return false, err
 	}
+	// The object's own state is reported whatever the window did, so a refused use still says whether the object
+	// moved.
+	after := s.gameObjectNow(target.GUID)
+	r.StateBefore, r.FlagsBefore = before.GOState, before.GOFlags
+	r.StateAfter, r.FlagsAfter = after.GOState, after.GOFlags
+	r.StateKnown = seen && after.HasGameObject
+	r.StateChanged = stateChangedFrom(before, seen, after)
 	if s.loot.refusal != nil {
 		if s.loot.refusal.Owner != target.GUID {
 			return false, fmt.Errorf("world: the refusal names another object (%v)", s.loot.refusal.Owner)
@@ -332,11 +339,6 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (bool,
 	if s.loot.window != nil && s.loot.window.Owner != target.GUID {
 		return false, fmt.Errorf("world: the window belongs to another object (%v)", s.loot.window.Owner)
 	}
-	after := s.gameObjectNow(target.GUID)
-	r.StateBefore, r.FlagsBefore = before.GOState, before.GOFlags
-	r.StateAfter, r.FlagsAfter = after.GOState, after.GOFlags
-	r.StateKnown = seen && after.HasGameObject
-	r.StateChanged = stateChangedFrom(before, seen, after)
 	if s.loot.window == nil {
 		if r.StateChanged {
 			return true, nil // a door or lever: the state change is the whole answer

@@ -126,6 +126,24 @@ func fakeLootWindow(owner, lootGUID wire.GUID, method uint8, coins uint32, items
 	return b.Bytes()
 }
 
+func fakeLootRefusal(owner wire.GUID) []byte {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, owner)
+	wire.WritePackedGUID(b, wire.GUID{})
+	b.WriteU8(loot.ErrorTooFar)
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU8(2)
+	b.WriteU32(0)
+	b.WriteU32(0)     // items
+	b.WriteU32(0)     // currencies
+	b.WriteBit(false) // Acquired
+	b.WriteBit(false) // AELooting
+	b.WriteBit(false) // SuppressError
+	b.FlushBits()
+	return b.Bytes()
+}
+
 func fakeStartRoll(lootGUID wire.GUID, mapID int32, it fakeItemDef, valid uint8, ms uint32) []byte {
 	if it.uiType == 0 {
 		it.uiType = loot.SlotRollOngoing
@@ -439,6 +457,12 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 			f.mu.Unlock()
 			windowOpen = true
 			windowLoot = f.lootLootGUID
+			if f.lootCase == "use-refused" {
+				// SendLootError: the same packet with Acquired false and the reason (Player.cpp:10048-10057).
+				c.writeFrame(fakeSMSGLootResponse, fakeLootRefusal(target))
+				windowOpen = false
+				continue
+			}
 			if f.lootTarget.window && f.lootCase == "object-door" {
 				// A door's use is the state change: no window. Values update first, then nothing else.
 				c.writeFrame(fakeSMSGUpdateObject, fakeGameObjectState(target, mapID, 0))
@@ -858,6 +882,19 @@ func TestLootLinkDeath(t *testing.T) {
 				t.Fatalf("the run took %s to notice the loss", elapsed.Round(time.Millisecond))
 			}
 		})
+	}
+}
+
+func TestObjectUseRefusedWindowStillReportsState(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x309, High: 8 << 58}, entry: fakeLootChestEntry,
+		window: true, goType: goTypeChest, state: 1}
+	target.packed = fakePacked(target.guid)
+	f, _, _ := newLootScenario(t, "use-refused", target, nil, nil)
+	report, steps := runLootScenario(t, f, Options{ObjectUse: true, Entry: fakeLootChestEntry})
+
+	r := report.ObjectUse
+	if !r.Found || r.LootOpened || !r.StateKnown || r.StateBefore != 1 || r.StateAfter != 1 {
+		t.Fatalf("the refused use: %+v\nsteps:\n%s", r, joinLines(steps))
 	}
 }
 
