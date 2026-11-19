@@ -10,7 +10,7 @@ The client no longer sends a password to a remote plain-http dashboard. `tbdash.
 `New`, `NewWithSecret` and `roster.New`) refuses `http://` unless the host is this machine:
 
 * `localhost` (any case, a trailing dot allowed);
-* a loopback IP literal: anything in 127.0.0.0/8, or `::1`;
+* a loopback IP literal: `::1`, or an IPv4 address in the loopback block (127.0.0.1 is the usual one);
 * any other name whose **every** resolved address is loopback. The lookup has a 2 s bound; a name that cannot be
   resolved is refused, because loopback cannot be proven. `https://` is always accepted.
 
@@ -30,11 +30,11 @@ It is printed when the flag is set and the effective URL is `http://`, including
 need the flag, but the flag still says what it does). A name that resolves to a public address, a TEST-NET literal
 and an unresolvable name are all refused without the flag.
 
-Tests (`internal/tbdash/review_test.go`): two non-loopback literals refused; 127.0.0.1, 127.9.8.7, ::1 and localhost
-allowed; https allowed; a replaced resolver proves the resolved-address rule both ways (loopback name allowed,
-public name refused, unresolvable name refused); the explicit option allowed and still refusing a bad scheme. Command
-tests: `dash-bots` refuses a remote plain-http URL without the flag, and with the flag prints the warning and reaches
-the login (exit 1 on an unreachable address).
+Tests (`internal/tbdash/review_test.go`): two non-loopback literals refused; 127.0.0.1, a second address in the same
+loopback block, ::1 and localhost allowed; https allowed; a replaced resolver proves the resolved-address rule both
+ways (loopback name allowed, public name refused, unresolvable name refused); the explicit option allowed and still
+refusing a bad scheme. Command tests: `dash-bots` refuses a remote plain-http URL without the flag, and with the flag
+prints the warning and reaches the login (exit 1 on an unreachable address).
 
 ## 2 (HIGH) Missing numeric fields became zeros
 
