@@ -551,6 +551,9 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 	// it sent is counted). The wait is bounded by attackStopWait and a failure is recorded, never returned over the
 	// exit's own reason.
 	defer func() {
+		if s.betweenMaps() {
+			return // the server is moving the character; an attack stop off the old map means nothing
+		}
 		if !attacking || s.fight.attackStops > stopsBefore {
 			return // the server already ended the attack (its stop is counted)
 		}
@@ -573,6 +576,10 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 		now := link.Now()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if s.betweenMaps() {
+			// The character is between maps: no swing, cast or movement belongs to the map it just left.
+			return ErrMapChange
 		}
 		if now.After(deadline) {
 			return fmt.Errorf("world: %s of fighting and the target is not dead", s.opts.FightFor)

@@ -1,0 +1,89 @@
+{
+  "note": "Synthetic fixtures cut from a local capture of a real session. The server packets are the transfer family of a map change; the client packets are the real client's own answers, which the builders must reproduce byte for byte. Positions are rewritten to 1000 2000 50 (orientation 0.5) and the instance lock's id and time to fixed values; the generator is transfer_gen_test.go. Payloads carry no opcode.",
+  "packets": [
+    {
+      "name": "transfer_pending_dungeon",
+      "opcode": "SMSG_TRANSFER_PENDING",
+      "direction": "server",
+      "payload": "8501000000007a440000fa440000484200",
+      "rewritten": [
+        "destination position replaced by the synthetic point; the map (389) stays"
+      ]
+    },
+    {
+      "name": "suspend_token",
+      "opcode": "SMSG_SUSPEND_TOKEN",
+      "direction": "server",
+      "payload": "0000000040"
+    },
+    {
+      "name": "update_last_instance",
+      "opcode": "SMSG_UPDATE_LAST_INSTANCE",
+      "direction": "server",
+      "payload": "85010000"
+    },
+    {
+      "name": "new_world_dungeon",
+      "opcode": "SMSG_NEW_WORLD",
+      "direction": "server",
+      "payload": "8501000000007a440000fa44000048420000003fffffffffffffffff10000000000000000000000000000000010000000000000000000000",
+      "rewritten": [
+        "position replaced by 1000 2000 50, orientation 0.5; the map, the reason and the counter stay"
+      ]
+    },
+    {
+      "name": "resume_token",
+      "opcode": "SMSG_RESUME_TOKEN",
+      "direction": "server",
+      "payload": "0000000040"
+    },
+    {
+      "name": "world_server_info_difficulty_0",
+      "opcode": "SMSG_WORLD_SERVER_INFO",
+      "direction": "server",
+      "payload": "000000000000000000000400000000"
+    },
+    {
+      "name": "world_server_info_difficulty_1",
+      "opcode": "SMSG_WORLD_SERVER_INFO",
+      "direction": "server",
+      "payload": "010000000000000000000405000000"
+    },
+    {
+      "name": "instance_info_empty",
+      "opcode": "SMSG_INSTANCE_INFO",
+      "direction": "server",
+      "payload": "00000000"
+    },
+    {
+      "name": "suspend_token_response",
+      "opcode": "CMSG_SUSPEND_TOKEN_RESPONSE",
+      "direction": "client",
+      "payload": "00000000"
+    },
+    {
+      "name": "world_port_response",
+      "opcode": "CMSG_WORLD_PORT_RESPONSE",
+      "direction": "client",
+      "payload": ""
+    },
+    {
+      "name": "loading_screen_notify_dungeon",
+      "opcode": "CMSG_LOADING_SCREEN_NOTIFY",
+      "direction": "client",
+      "payload": "8501000080"
+    },
+    {
+      "name": "area_trigger_entered",
+      "opcode": "CMSG_AREA_TRIGGER",
+      "direction": "client",
+      "payload": "b2080000c0"
+    },
+    {
+      "name": "area_trigger_left",
+      "opcode": "CMSG_AREA_TRIGGER",
+      "direction": "client",
+      "payload": "b608000040"
+    }
+  ]
+}

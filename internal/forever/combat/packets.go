@@ -16,7 +16,7 @@ const (
 // 29-41, the entry (here the spell id) in 6-28, the subtype in 0-5, and the counter in the low half. The server
 // ignores the client's value (it creates its own cast id, Spell.cpp:562) and only echoes it in a pre-cast failure,
 // but a real client sends one of this shape.
-func CastGUID(mapID uint16, spellID int32, counter uint32) wire.GUID {
+func CastGUID(mapID uint32, spellID int32, counter uint32) wire.GUID {
 	const castType = 47  // HighGuid::Cast (ObjectGuid.h:157)
 	const castSource = 2 // SPELL_CAST_SOURCE_PLAYER (Spell.h:170-180)
 	high := uint64(castType)<<58 |

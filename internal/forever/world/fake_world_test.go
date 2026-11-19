@@ -159,6 +159,8 @@ type fakeServer struct {
 	resetLink       bool
 	deliberateClose bool // under mu: the dropping goroutine sets it, both socket readers check it
 	walk            bool
+	// mapSc, when set, runs the map change scenario of mapchange_fake_test.go instead of the plain stay.
+	mapSc *mapScenario
 	// mapID is the map the create block names (and so the map walk-check's navmesh route plans on).
 	mapID     uint16
 	walkFrom  [3]float32
@@ -529,6 +531,9 @@ func (f *fakeServer) serveRealm() {
 			f.wg.Add(1)
 			go f.serveInstance(c)
 		case fakeCMSGLoadingScreenNotify:
+			if f.serveRealmMapCase(c, wire, payload) {
+				continue
+			}
 			if len(payload) != 5 || binary.LittleEndian.Uint32(payload) != 0 {
 				f.failf("realm: CMSG_LOADING_SCREEN_NOTIFY = % X, want map 0 and one zero bit byte", payload)
 				continue
@@ -540,6 +545,10 @@ func (f *fakeServer) serveRealm() {
 			}
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		default:
+			// The map change's realm-side client packets (loading screen, world port response) when that scene runs.
+			if f.serveRealmMapCase(c, wire, payload) {
+				continue
+			}
 			f.failf("realm: unexpected client wire 0x%06X", wire)
 		}
 	}
@@ -701,6 +710,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		}
 	}
 
+	if f.mapSc != nil {
+		f.serveMapChange(c, realm)
+		return
+	}
 	if f.walk {
 		f.serveWalk(c, realm)
 		return
@@ -1432,9 +1445,13 @@ func TestTeleportDuringWalkStartsTheNextPacketAtTheDestination(t *testing.T) {
 			steps = append(steps, fmt.Sprintf(format, args...))
 		},
 	}
-	_, err := Enter(t.Context(), opts)
+	report, err := Enter(t.Context(), opts)
 	if err == nil || !errors.Is(err, objects.ErrTeleported) {
 		t.Fatalf("the walk was expected to end on the teleport, got %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	// A teleport on the same map is not a map change: no transfer, no between-maps window, no ErrMapChange.
+	if report != nil && report.MapChanges != 0 {
+		t.Fatalf("a same-map teleport counted %d map change(s)", report.MapChanges)
 	}
 	f.wait(t)
 	f.mu.Lock()

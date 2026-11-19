@@ -143,6 +143,19 @@ const (
 	SMSGSpellExecuteLog      uint32 = 0x670033
 )
 
+// The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
+const (
+	CMSGAreaTrigger          uint32 = 0x3D0089
+	CMSGSuspendTokenResponse uint32 = 0x440008
+	CMSGWorldPortResponse    uint32 = 0x430025
+	SMSGTransferAborted      uint32 = 0x4501AE
+	SMSGSuspendToken         uint32 = 0x450041
+	SMSGResumeToken          uint32 = 0x450042
+	SMSGUpdateLastInstance   uint32 = 0x450134
+	SMSGWorldServerInfo      uint32 = 0x450046
+	SMSGInstanceInfo         uint32 = 0x4500DD
+)
+
 // clientNames names the client opcodes this client sends, for error messages.
 var clientNames = map[uint32]string{
 	CMSGAuthSession:             "CMSG_AUTH_SESSION",
@@ -177,6 +190,9 @@ var clientNames = map[uint32]string{
 	CMSGMoveTeleportAck:        "CMSG_MOVE_TELEPORT_ACK",
 	CMSGQueryPlayerNames:       "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:          "CMSG_QUERY_CREATURE",
+	CMSGSuspendTokenResponse:   "CMSG_SUSPEND_TOKEN_RESPONSE",
+	CMSGWorldPortResponse:      "CMSG_WORLD_PORT_RESPONSE",
+	CMSGAreaTrigger:            "CMSG_AREA_TRIGGER",
 
 	CMSGChatMessageSay:          "CMSG_CHAT_MESSAGE_SAY",
 	CMSGChatMessageYell:         "CMSG_CHAT_MESSAGE_YELL",

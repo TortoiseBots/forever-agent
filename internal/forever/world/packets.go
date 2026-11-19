@@ -55,9 +55,15 @@ func ParseLoginVerifyWorld(payload []byte) (VerifyWorld, error) {
 // (CharacterPackets.cpp LoadingScreenNotify::Read). The real client sends it on the realm socket with the map of
 // SMSG_LOGIN_VERIFY_WORLD and Showing=false once the screen is gone.
 func BuildLoadingScreenNotify(mapID int32) []byte {
+	return BuildLoadingScreenNotifyShowing(mapID, false)
+}
+
+// BuildLoadingScreenNotifyShowing is the same packet with the Showing bit set by the caller. A map change's client
+// sends it with Showing=true right after SMSG_TRANSFER_PENDING (the captured packet ends 0x80); the login's is false.
+func BuildLoadingScreenNotifyShowing(mapID int32, showing bool) []byte {
 	b := wire.NewWriter()
 	b.WriteI32(mapID)
-	b.WriteBit(false)
+	b.WriteBit(showing)
 	b.FlushBits()
 	return b.Bytes()
 }

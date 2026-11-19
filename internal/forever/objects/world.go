@@ -81,7 +81,7 @@ const monsterMoveSlackMs = 500
 // World is the GUID-keyed model. One goroutine writes (the socket reader); any number read.
 type World struct {
 	mu          sync.RWMutex
-	mapID       uint16
+	mapID       uint32
 	objects     map[wire.GUID]*Object
 	entries     map[int32]string
 	players     map[wire.GUID]string
@@ -124,7 +124,7 @@ const (
 const TypeOfUnknown uint8 = 0xFF
 
 // NewWorld returns an empty model for a map.
-func NewWorld(mapID uint16) *World {
+func NewWorld(mapID uint32) *World {
 	return &World{
 		mapID:          mapID,
 		objects:        make(map[wire.GUID]*Object),
@@ -136,10 +136,22 @@ func NewWorld(mapID uint16) *World {
 }
 
 // MapID is the map this model belongs to.
-func (w *World) MapID() uint16 {
+func (w *World) MapID() uint32 {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.mapID
+}
+
+// ResetForMap empties the model for a new map (SMSG_NEW_WORLD). Every object of the old map goes, with its eviction
+// queue; the name caches stay (a name is not map state), the run's counters are cumulative and stay, and the active
+// mover's GUID stays until the new burst's create block names it again.
+func (w *World) ResetForMap(mapID uint32) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.objects = make(map[wire.GUID]*Object)
+	w.order = w.order[:0]
+	w.head = 0
+	w.mapID = mapID
 }
 
 // Counts is a snapshot of how many blocks the model applied.
@@ -207,7 +219,7 @@ func (w *World) Apply(u *Update, received time.Time) {
 	defer w.mu.Unlock()
 	w.applied++
 	if u.MapID != 0 {
-		w.mapID = u.MapID
+		w.mapID = uint32(u.MapID)
 	}
 	for _, g := range u.Destroy {
 		if _, ok := w.objects[g]; ok {
