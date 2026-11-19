@@ -372,7 +372,7 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if len(m.Prefix) > MaxPrefix || len(m.Text) > MaxText {
+		if len(m.Prefix) > MaxPrefix || len(m.Text) > MaxReceiveText {
 			t.Fatalf("a parsed message is over the server's limits: %d/%d", len(m.Prefix), len(m.Text))
 		}
 		for i := range len(m.Text) {

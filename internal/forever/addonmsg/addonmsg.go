@@ -31,9 +31,14 @@ const (
 // (ChatPackets.h:282), a 5-bit length field each (ChatPackets.cpp:306-313). The 8-bit text length field is the
 // 255-byte cap itself.
 const (
-	MaxPrefix   = 16
-	MaxText     = 255
-	MaxPrefixes = 64
+	MaxPrefix = 16
+	// MaxText is the server's check on a text this client sends (ChatHandler.cpp:615).
+	MaxText = 255
+	// MaxReceiveText is the largest text a delivered SMSG_CHAT can carry: its 12-bit length field. The 255-byte
+	// check above is the server's inbound one; a server frame is bounded by the chat field instead, and a chunked
+	// protocol's part can pass 255 bytes once its envelope is added.
+	MaxReceiveText = 4095
+	MaxPrefixes    = 64
 	// MaxQueue is the inbox capacity. It bounds what a flooding peer can make this client hold.
 	MaxQueue = 256
 )
@@ -255,8 +260,8 @@ func FromLine(line chat.Line) (Message, error) {
 	if len(line.Prefix) > MaxPrefix {
 		return Message{}, fmt.Errorf("%w (%d bytes)", ErrPrefixTooLong, len(line.Prefix))
 	}
-	if len(line.Text) > MaxText {
-		return Message{}, fmt.Errorf("%w (%d bytes)", ErrTextTooLong, len(line.Text))
+	if len(line.Text) > MaxReceiveText {
+		return Message{}, fmt.Errorf("%w: a delivered text is %d bytes, the chat field holds %d", ErrTextTooLong, len(line.Text), MaxReceiveText)
 	}
 	return Message{
 		Prefix:      line.Prefix,

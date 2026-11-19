@@ -102,11 +102,16 @@ func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bo
 	}
 }
 
-// feedCommand hands one chat line to a running command, bounded by the command collector's own line limit and
-// sanitised so nothing it returns can carry a control byte. The chat log gets its own copy afterwards. It also
-// watches every self say line: a command text said aloud (now, between runs, or long after the probe) means the
-// account's commands fall through as chat, so the guard is reset and every later send is refused.
+// feedCommand hands one chat line to a running command, bounded by the command collector's own line limit. The
+// text is NOT sanitised here: the collector matches the server's exact words (the module's markers, refusals,
+// tokens and order acknowledgements) and makes its own display copy; the chat log gets a separately sanitised
+// copy afterwards. It also watches every self say line: a command text said aloud (now, between runs, or long
+// after the probe) means the account's commands fall through as chat, so the guard is reset and every later send
+// is refused.
 func (s *session) feedCommand(line chat.Line) {
+	if line.Type == chat.TypeWhisper {
+		s.fbRememberWhisper(line)
+	}
 	if line.Type == chat.TypeSay && s.isSelf(line) && command.IsCommandText(line.Text) {
 		s.gmConfirmed = false
 		if s.report != nil {
@@ -119,8 +124,7 @@ func (s *session) feedCommand(line chat.Line) {
 	if s.cmdFeed == nil {
 		return
 	}
-	line.Text = chat.Sanitise(line.Text, command.MaxLineBytes)
-	line.SenderName = chat.SanitiseName(line.SenderName)
+	line.Text = rawBound(line.Text, command.MaxLineBytes)
 	s.cmdFeed(line)
 }
 
