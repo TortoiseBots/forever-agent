@@ -169,7 +169,8 @@ func usage(w io.Writer) {
   forever-agent dashboard-replay <recording-dir|file.jsonl> [--to host:port] [--speed N] [--max-gap D] [--loop] [--dry-run] [--i-know] | convert <api-dump-dir> [--out <dir>]
   forever-agent minimap-extract --client DIR --out DIR [--maps 70,209|all-instances] [--mmaps DIR] [--list]
   forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot] [--carrier-chests] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)
-  forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--json] <plan>...
+  forever-agent plan-export --forever [--report] [--dir dungeons] [--mmaps DIR] [--stamp YYYYMMDDHHMMSS] [--force] --out DIR|FILE (<plan>... | --all-live)
+  forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--forever [--spawns FILE]] [--json] <plan>...
   forever-agent path-check --mmaps DIR --map N x y z x y z [--json]
   forever-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2]
   forever-agent plan-probe [--dir dungeons] [--sql FILE [--plan NAME]] --mmaps DIR [--json] [--out DIR] [--from-step N] [<plan>|<path.json>]
