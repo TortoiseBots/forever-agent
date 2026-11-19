@@ -62,6 +62,8 @@ const (
 	TypeRosterResp = "ROSTER_RESP"
 	TypeDetailReq  = "BOT_DETAIL_REQ"
 	TypeDetailResp = "BOT_DETAIL_RESP"
+	TypeLfgReq     = "LFG_REQ"
+	TypeLfgResp    = "LFG_RESP"
 	TypeEventPush  = "EVENT_PUSH"
 )
 
@@ -395,6 +397,84 @@ func RosterRequest() []string { return []string{"15"} }
 
 // DetailRequest asks for one bot's state by its numeric id.
 func DetailRequest(id uint32) []string { return []string{strconv.FormatUint(uint64(id), 10)} }
+
+// LfgRequest asks where the caller stands with the module's dungeon finder. The request carries no fields; the
+// module reads the caller's group and finder state itself.
+func LfgRequest() []string { return nil }
+
+// ---- lfg ----
+
+// LfgStatus is LFG_RESP: the finder's phase, the dungeon, the waits and the group. The phase is one of the module's
+// own words (DungeonFinderState in its header): idle, forming, entering, leaving or inside. Inside is the server's
+// map being a dungeon; the client's own map change is a second signal the caller checks separately.
+type LfgStatus struct {
+	Phase       string
+	Name        string
+	WaitedSec   uint32
+	FormWaitSec uint32
+	Members     uint32
+	Size        uint32
+	CanLeave    bool
+	Raw         []string
+}
+
+// LfgPhases are the phase words the module defines. A phase outside them is a shape this client was not written for.
+var LfgPhases = []string{"idle", "forming", "entering", "leaving", "inside"}
+
+// LfgFieldCount is how many fields LFG_RESP held when this client was written. The module appends fields at the end,
+// so more are kept raw; fewer are ErrProtoMismatch.
+const LfgFieldCount = 7
+
+// ParseLfg reads an LFG_RESP's fields: phase, dungeon name, seconds waited, form wait seconds, group members, party
+// size, can leave (0/1). A count or a flag that is not a number, a phase this client does not know, or a negative
+// number is the drift signal (ErrProtoMismatch), never a guessed state.
+func ParseLfg(fields []string) (LfgStatus, error) {
+	if len(fields) < LfgFieldCount {
+		return LfgStatus{}, fmt.Errorf("%w: an LFG answer has %d field(s), this client reads %d", ErrProtoMismatch, len(fields), LfgFieldCount)
+	}
+	phase := strings.ToLower(strings.TrimSpace(fields[0]))
+	known := false
+	for _, p := range LfgPhases {
+		if phase == p {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return LfgStatus{}, fmt.Errorf("%w: the finder phase is %q", ErrProtoMismatch, fields[0])
+	}
+	num := func(i int, what string) (uint32, error) {
+		n, err := parseInt(fields[i])
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("%w: the %s field %q", ErrProtoMismatch, what, fields[i])
+		}
+		return uint32(n), nil
+	}
+	waited, err := num(2, "seconds waited")
+	if err != nil {
+		return LfgStatus{}, err
+	}
+	form, err := num(3, "form wait")
+	if err != nil {
+		return LfgStatus{}, err
+	}
+	members, err := num(4, "group members")
+	if err != nil {
+		return LfgStatus{}, err
+	}
+	size, err := num(5, "party size")
+	if err != nil {
+		return LfgStatus{}, err
+	}
+	if fields[6] != "0" && fields[6] != "1" {
+		return LfgStatus{}, fmt.Errorf("%w: can-leave is %q, not 0 or 1", ErrProtoMismatch, fields[6])
+	}
+	return LfgStatus{
+		Phase: phase, Name: fields[1], WaitedSec: waited, FormWaitSec: form,
+		Members: members, Size: size, CanLeave: fields[6] == "1",
+		Raw: append([]string(nil), fields[LfgFieldCount:]...),
+	}, nil
+}
 
 // ---- roster ----
 
