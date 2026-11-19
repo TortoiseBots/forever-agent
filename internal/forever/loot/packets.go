@@ -88,6 +88,22 @@ const (
 	FlagTransmogrify uint8 = 0x10
 )
 
+// VoteFromWord maps a command word ("need", "greed", "pass") to a vote. An empty word is no vote at all (ok is
+// false); any other word is an error. A caller that never asks for need therefore never sends it.
+func VoteFromWord(word string) (vote uint8, ok bool, err error) {
+	switch word {
+	case "":
+		return 0, false, nil
+	case "need":
+		return RollNeed, true, nil
+	case "greed":
+		return RollGreed, true, nil
+	case "pass":
+		return RollPass, true, nil
+	}
+	return 0, false, fmt.Errorf("loot: unknown roll vote %q (need, greed or pass)", word)
+}
+
 // RollName names a vote, or returns "roll N".
 func RollName(r uint8) string {
 	switch r {

@@ -18,6 +18,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
+| Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
@@ -161,6 +162,24 @@ another map. A server that revives the character directly is detected from `SMSG
 reported as `revived by the server`. The summary prints the final phase, the corpse, the announced reclaim delay, how
 the character came back, and how many other units the model saw resurrect. `--capture-dir DIR` works as it does for
 chat-check.
+
+`forever-agent forever loot-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--range YARDS] [--stay DURATION] [--fight-for DURATION]`
+settles for `--stay` seconds, finds the nearest lootable target within `--range` (default 30 yd): a dead creature of
+`--entry`, or a chest when no entry is given. A living creature of `--entry` is killed first (the fight round's own
+flow), then looted. The window is opened with `CMSG_LOOT_UNIT` for a creature and with `CMSG_GAME_OBJ_USE` for a
+game object, followed by `CMSG_GAME_OBJ_REPORT_USE` as a real client does; the command prints the method, the
+threshold, the copper, one row per item (slot, id, count, slot type, whether it needs a roll) and every group roll
+(it sends `CMSG_LOOT_ROLL` only when `--roll` names a vote and the roll's own vote mask allows it, so need is never
+sent unasked). It then takes the money (`CMSG_LOOT_MONEY` unless `--money=false`), takes the items the window allows
+(up to `--take`, 0 meaning all), releases with `CMSG_LOOT_RELEASE` and prints what the server removed and whether
+the release was confirmed. A refused window is a named error (`there is no loot`, `you are too far away`, ...); a
+creature with nothing to loot is answered with silence by this core, which the command reports as "no loot window".
+
+`forever-agent forever object-use --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME --entry N [--range YARDS] [--stay DURATION]`
+settles, walks to the nearest game object of that entry (within `--range`, default 40 yd), records its state and
+flags, sends `CMSG_GAME_OBJ_USE` (and the report-use packet a real client follows with) and prints the state and
+flags after the object's own values update — a door or lever reads ready (closed) before and active (open) after; a
+chest also opens a loot window, which is read and released without taking anything.
 
 `forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)

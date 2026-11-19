@@ -156,6 +156,17 @@ type Options struct {
 	FBDungeonLeaveWait   time.Duration
 	FBDungeonCleanupWait time.Duration
 	Logf                 func(format string, args ...any)
+	// Round LOOT-1: forever loot-check and object-use. Entry (the fight's field) is the creature or game-object
+	// entry both commands filter on. Roll is the vote loot-check sends on a group roll ("", "need", "greed" or
+	// "pass"; empty sends none, so need is only ever sent when asked). LootMoney takes the window's copper,
+	// TakeItems bounds how many items are taken (0 all), and LootRange is the search radius in yards (0: the
+	// command's own default).
+	LootCheck bool
+	ObjectUse bool
+	Roll      string
+	LootMoney bool
+	TakeItems int
+	LootRange float32
 	// Round D2: forever dungeon-run. DungeonRun plays one dungeon plan for the party the commander leads; Enter
 	// hands the session to the driver until the run stops or the deadline ends it, then logs out. The driver's
 	// ports are bound to this session (dungeon_session.go). A nil value runs none of it.
@@ -240,6 +251,9 @@ type Report struct {
 	Commands    []CommandRun
 	GMConfirmed bool
 	TBState     *TBStateTable
+	// Round LOOT-1: the loot window loot-check opened and what the rolls did, and the object-use observation.
+	Loot      LootReport
+	ObjectUse ObjectUseReport
 	// Round D2: the dungeon run's result (states, orders, summary, stop reason and exit), nil when the session
 	// ran something else.
 	Dungeon *driver.Result
@@ -474,6 +488,8 @@ type session struct {
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
+	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
+	loot *lootWatch
 }
 
 const (
@@ -502,6 +518,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.deadChs[sideInstance] = make(chan struct{})
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.death = &deathWatch{started: time.Now()}
+	s.loot = newLootWatch()
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
@@ -902,6 +919,20 @@ func (s *session) enter(ctx context.Context) error {
 	if s.opts.CommandCheck {
 		err := s.commandCheck(ctx)
 		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.LootCheck {
+		err := s.lootCheck(ctx)
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.ObjectUse {
+		err := s.objectUse(ctx)
 		if err != nil {
 			return err
 		}
@@ -1660,6 +1691,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
 		return s.handleTransfer(ctx, p)
 	default:
+		if isLootPacket(p.Core) {
+			return s.handleLoot(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil

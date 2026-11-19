@@ -823,6 +823,43 @@ func (w *World) UnknownUnits(x, y, z float32, limit int) (players []wire.GUID, e
 	return players, entries
 }
 
+// GameObjects returns a snapshot of the game objects around, nearest first to (x,y,z).
+func (w *World) GameObjects(x, y, z float32) []*Object {
+	return w.nearest(x, y, z, func(o *Object) bool { return o.Info.HasGameObject || o.Type == TypeGameObject })
+}
+
+// LootableUnits returns a snapshot of the dead units (corpses that can be looted) around, nearest first. A corpse is
+// a unit whose health is zero or that the model saw die; the server's own answer to CMSG_LOOT_UNIT decides whether
+// it may be looted.
+func (w *World) LootableUnits(x, y, z float32) []*Object {
+	return w.nearest(x, y, z, func(o *Object) bool {
+		return o.Info.HasUnit && (o.Dead || (o.Info.Health <= 0 && o.Info.MaxHealth > 0))
+	})
+}
+
+// nearest snapshots the objects keep accepts, ordered like Units: by distance from (x,y,z), then GUID.
+func (w *World) nearest(x, y, z float32, keep func(*Object) bool) []*Object {
+	w.mu.RLock()
+	out := make([]*Object, 0, 16)
+	for _, o := range w.objects {
+		if !keep(o) {
+			continue
+		}
+		cp := *o
+		out = append(out, &cp)
+	}
+	w.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		di := distance2(out[i].X, out[i].Y, out[i].Z, x, y, z)
+		dj := distance2(out[j].X, out[j].Y, out[j].Z, x, y, z)
+		if di != dj {
+			return di < dj
+		}
+		return out[i].GUID.Low < out[j].GUID.Low
+	})
+	return out
+}
+
 // guidTypePlayer is ObjectGuid's high type for a player (ObjectGuid.h:45-120, HighGuid::Player = 2).
 const guidTypePlayer = 2
 

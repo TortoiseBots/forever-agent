@@ -179,27 +179,27 @@ const (
 // CMSG_LOOT_UNIT and its four requests, CMSG_GAME_OBJ_USE with the report the real client follows it with, and the
 // window, money, roll and object-state answers.
 const (
-	CMSGLootUnit            uint32 = 0x3D00CB
-	CMSGLootMoney           uint32 = 0x3D00CC
-	CMSGLootItem            uint32 = 0x3D00CD
-	CMSGLootRelease         uint32 = 0x3D00D1
-	CMSGLootRoll            uint32 = 0x3D00D2
-	CMSGGameObjUse          uint32 = 0x3E0089
-	CMSGGameObjReportUse    uint32 = 0x3E008A
+	CMSGLootUnit         uint32 = 0x3D00CB
+	CMSGLootMoney        uint32 = 0x3D00CC
+	CMSGLootItem         uint32 = 0x3D00CD
+	CMSGLootRelease      uint32 = 0x3D00D1
+	CMSGLootRoll         uint32 = 0x3D00D2
+	CMSGGameObjUse       uint32 = 0x3E0089
+	CMSGGameObjReportUse uint32 = 0x3E008A
 
-	SMSGLootResponse        uint32 = 0x4500BE
-	SMSGLootRemoved         uint32 = 0x4500BF
-	SMSGCoinRemoved         uint32 = 0x4500C0
-	SMSGLootReleaseAll      uint32 = 0x4500C3
-	SMSGLootRelease         uint32 = 0x4500C4
-	SMSGLootMoneyNotify     uint32 = 0x4500C5
-	SMSGStartLootRoll       uint32 = 0x4500C6
-	SMSGLootRoll            uint32 = 0x4500C7
-	SMSGLootRollsComplete   uint32 = 0x4500C9
-	SMSGLootAllPassed       uint32 = 0x4500CA
-	SMSGLootRollWon         uint32 = 0x4500CB
-	SMSGItemPushResult      uint32 = 0x4500CC
-	SMSGLootList            uint32 = 0x4501EB
+	SMSGLootResponse      uint32 = 0x4500BE
+	SMSGLootRemoved       uint32 = 0x4500BF
+	SMSGCoinRemoved       uint32 = 0x4500C0
+	SMSGLootReleaseAll    uint32 = 0x4500C3
+	SMSGLootRelease       uint32 = 0x4500C4
+	SMSGLootMoneyNotify   uint32 = 0x4500C5
+	SMSGStartLootRoll     uint32 = 0x4500C6
+	SMSGLootRoll          uint32 = 0x4500C7
+	SMSGLootRollsComplete uint32 = 0x4500C9
+	SMSGLootAllPassed     uint32 = 0x4500CA
+	SMSGLootRollWon       uint32 = 0x4500CB
+	SMSGItemPushResult    uint32 = 0x4500CC
+	SMSGLootList          uint32 = 0x4501EB
 
 	SMSGGameObjectCustomAnim uint32 = 0x450068
 	SMSGGameObjectDespawn    uint32 = 0x450069
