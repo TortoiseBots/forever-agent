@@ -93,10 +93,12 @@ type StuckState struct {
 	Seconds int    // away
 }
 
-// Distance is dl/dm: a number of yards, self or othermap; Kind is empty when the distance is not known.
+// Distance is dl/dm: a number of yards, self or othermap; Has is false when the key was absent.
 type Distance struct {
+	// Has says whether the line carried the key: a missing distance is not known, which is not zero yards.
+	Has   bool
 	Yards float64
-	Kind  string // "" when the distance is not known
+	Kind  string // self, othermap, or "" for a number
 }
 
 // OrderState is the `ord` field: <seq>:<queued|ok|fail:<code>>, or the empty value for no order.
@@ -515,7 +517,7 @@ func parseDistance(rec record, key string) (Distance, error) {
 	case "":
 		return Distance{}, nil
 	case "self", "othermap":
-		return Distance{Kind: v}, nil
+		return Distance{Has: true, Kind: v}, nil
 	}
 	f, err := rec.floatValue(key, v)
 	if err != nil {
@@ -524,7 +526,7 @@ func parseDistance(rec record, key string) (Distance, error) {
 	if f < 0 {
 		return Distance{}, fmt.Errorf("%w: %s=%q is negative", ErrBadValue, key, v)
 	}
-	return Distance{Yards: f}, nil
+	return Distance{Has: true, Yards: f}, nil
 }
 
 // parseOrderState reads `<seq>:<queued|ok|fail:<code>>`, or the empty value for no order. The parts are split on

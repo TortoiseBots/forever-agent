@@ -121,6 +121,7 @@ func TestStateEveryKey(t *testing.T) {
 		{"Instance", b.Instance, uint32(0)},
 		{"DistLeader.Kind", b.DistLeader.Kind, "self"},
 		{"DistMaster.Yards", b.DistMaster.Yards, 3.4},
+		{"DistMaster.Has", b.DistMaster.Has, true},
 		{"Order.Seq", b.Order.Seq, 41},
 		{"Order.Status", b.Order.Status, "ok"},
 		{"LastOrder", b.LastOrder, "pull"},
@@ -171,7 +172,7 @@ func TestStateRestReasons(t *testing.T) {
 	if b.Order.Status != "fail" || b.Order.Code != "expired" {
 		t.Errorf("order %+v", b.Order)
 	}
-	if b.DistLeader.Kind != "othermap" || b.DistMaster.Kind != "" {
+	if b.DistLeader.Kind != "othermap" || !b.DistLeader.Has || b.DistMaster.Kind != "" || b.DistMaster.Has {
 		t.Errorf("distances %+v %+v", b.DistLeader, b.DistMaster)
 	}
 	if rep.Ready || strings.Join(rep.Why, ",") != "dead,hp,eating" {
