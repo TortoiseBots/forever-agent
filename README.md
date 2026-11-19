@@ -15,6 +15,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
 | Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
+| Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
 
@@ -90,6 +91,26 @@ member stats, no uninvite, no leave). A roster that does not belong to the trans
 invite's leader, or the name of an invite the server confirmed) is printed as `unexpected roster: <reason>` and is
 not acted on either.
 `--capture-dir DIR` works as it does for chat-check.
+
+`forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)
+goes out as a say line that starts with `.`, and the system lines the server answers with are printed as `cmd-r:`
+lines. The account must hold the command permission, so the run first sends one harmless probe (`.gm` with no
+argument: the server's non-mutating gm form) and refuses to send anything else unless the probe's specific
+acknowledgement arrives (the `gm on`/`gm off` entry of the command's own help block, which the server lists only to
+an account holding the permission) and the probe is not said back as the character's own say chat anywhere in the
+run. A notification, a MOTD, an announcement or "no such command" is not an acknowledgement; a say echo at any
+point, even after other lines, resets the guard and stops the run before another line is sent. The probe changes
+nothing, so no GM mode is ever switched on or off. A reply is matched to its command by a fresh token
+(`#...`) on every line a `.tb` command prints, so interleaved system lines are ignored and stay in the chat log; a
+core command has no token, so its reply ends at a quiet window (1.5 s) or a line cap, and its run is serialised with
+every other command. An untagged refusal is taken for a tokened run only before its first tokened line and only
+after the quiet window of an earlier tokenless run has passed. The core's refusals are named: `Command '…' does not exist`, `Incorrect syntax.`, an unknown
+subcommand, an ambiguous command, a typed argument the server refused, or the say echo of a missing permission.
+`--tb-state TARGET` reads the typed state table of a target (`party`, `party <leader>` or a bot's name) after the
+lines and prints one row per bot (role, class, level, health, power, state, movement, target entry, last order and
+the rest gate); `--quiet` and `--timeout` override the collector's defaults. The typed order/role/master/party/threat
+calls and `WaitRested` live in `internal/forever/command/tbcmd`.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.
