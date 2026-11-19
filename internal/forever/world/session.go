@@ -139,7 +139,23 @@ type Options struct {
 	FBAdd     []string
 	FBOrders  []string
 	FBDismiss string
-	Logf      func(format string, args ...any)
+	// Round A2: forever fb-dungeon. FBDungeon drives the module's dungeon finder: fill the group with `.bot lfg`,
+	// queue FBDungeonName (a dungeon word or "any") with FBDungeonRole as the player's own role, wait for the
+	// module's `inside` and the client's own map change, hand the lead to the tank, watch FBDungeonWatch, then lead
+	// off, leave when FBDungeonLeave is set and dismiss. Those closing steps run from a deferred cleanup on their
+	// own context (2 min, apart from Deadline). The pacing fields are for tests; 0 keeps the run's own defaults
+	// (2 s poll, 3 min form, 3 min entry, 30 s leave, 2 min cleanup).
+	FBDungeon            bool
+	FBDungeonName        string
+	FBDungeonRole        string
+	FBDungeonWatch       time.Duration
+	FBDungeonLeave       bool
+	FBDungeonPoll        time.Duration
+	FBDungeonFormWait    time.Duration
+	FBDungeonEnterWait   time.Duration
+	FBDungeonLeaveWait   time.Duration
+	FBDungeonCleanupWait time.Duration
+	Logf                 func(format string, args ...any)
 	// Round D2: forever dungeon-run. DungeonRun plays one dungeon plan for the party the commander leads; Enter
 	// hands the session to the driver until the run stops or the deadline ends it, then logs out. The driver's
 	// ports are bound to this session (dungeon_session.go). A nil value runs none of it.
@@ -215,6 +231,8 @@ type Report struct {
 	Addon AddonSummary
 	// Round A1: the bot module run: the probe, the adds, the roster and its source, details, orders, dismiss.
 	FB FBReport
+	// Round A2: the dungeon run: the fill, the queue, the both-signal entry, the lead, the watch, the way out.
+	FBDungeon FBDungeonReport
 
 	// Round 6: the death flow's state and steps.
 	Death DeathReport
@@ -435,6 +453,10 @@ type session struct {
 	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
 	// was sent (a late acknowledgement must not be taken for the next order's).
 	fbHeardWhispers []chat.Line
+	// Round A2: the module's unsolicited EVENT_PUSH frames seen during the finder's requests, kept for the dungeon
+	// watch. The buffer is bounded; fbEventsDropped counts what the bound pushed out.
+	fbEvents        []pbc.Event
+	fbEventsDropped int
 
 	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
 	mapChg  mapChange
@@ -853,6 +875,14 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.FBDungeon {
+		err := s.fbDungeon(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if s.opts.ChatCheck {
 		err := s.chatCheck(ctx)
 		s.summariseChat()
@@ -932,6 +962,11 @@ func (s *session) Now() time.Time { return time.Now() }
 // check).
 func (s *session) drain(ctx context.Context, what string, end time.Time, check func() error) error {
 	for {
+		// The wait's own context bounds it: an operation that outlived the window it was given ends there, even
+		// when the session's context (next's own wakeup) has not ended.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("world: waiting for %s: %w", what, err)
+		}
 		if check != nil {
 			if err := check(); err != nil {
 				return err

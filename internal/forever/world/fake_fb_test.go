@@ -107,7 +107,13 @@ func (f *fakeServer) answerPBC(c *fakeConn, res pbc.Result) {
 	switch res.Type {
 	case pbc.TypePing:
 		f.sendPBC(c, res.Seq, pbc.TypePong, pbc.BuildBody([]string{"0"}))
+	case pbc.TypeLfgReq:
+		f.answerFBLfgStatus(c, res.Seq)
 	case pbc.TypeRosterReq:
+		if f.fbDungeon {
+			f.sendFBDungeonRoster(c, res.Seq)
+			return
+		}
 		if f.fbCase == "oversizedAnswer" {
 			// A body past the module's own 64-part bound: the client must refuse that answer, not the session.
 			f.sendPBC(c, res.Seq, pbc.TypeRosterResp, strings.Repeat("x", pbc.MaxFrame+1))
@@ -131,8 +137,13 @@ func (f *fakeServer) answerPBC(c *fakeConn, res pbc.Result) {
 	}
 }
 
-// answerFBCommand replies to one chat-command line.
-func (f *fakeServer) answerFBCommand(c *fakeConn, text string) {
+// answerFBCommand replies to one chat-command line. The realm socket is passed for the dungeon run, whose entry,
+// leave and link-death scenes need it.
+func (f *fakeServer) answerFBCommand(c, realm *fakeConn, text string) {
+	if f.fbDungeon {
+		f.answerFBDungeonCommand(c, realm, text)
+		return
+	}
 	switch {
 	case text == ".bot about":
 		f.sysChat(c, fbAbout)
@@ -204,6 +215,9 @@ func (f *fakeServer) answerFBWhisper(c *fakeConn, target, text string) {
 
 // serveFB runs the bot module scenario until the client logs out.
 func (f *fakeServer) serveFB(c, realm *fakeConn) {
+	f.mu.Lock()
+	f.fbRealm = realm
+	f.mu.Unlock()
 	asm := pbc.NewAssembler()
 	for {
 		wireNum, payload, err := c.readFrame()
@@ -213,7 +227,7 @@ func (f *fakeServer) serveFB(c, realm *fakeConn) {
 				return
 			default:
 			}
-			if f.deliberate() {
+			if f.deliberate() || f.leftOnRead(err) {
 				return
 			}
 			f.failf("fb: %v", err)
@@ -238,7 +252,7 @@ func (f *fakeServer) serveFB(c, realm *fakeConn) {
 			f.mu.Lock()
 			f.fbSays = append(f.fbSays, text)
 			f.mu.Unlock()
-			f.answerFBCommand(c, text)
+			f.answerFBCommand(c, realm, text)
 		case fakeCMSGChatParty:
 			_, _, text, err := parseClientChatMessage(payload)
 			if err != nil {

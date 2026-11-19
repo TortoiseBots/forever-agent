@@ -453,3 +453,183 @@ func TestDetailNotFound(t *testing.T) {
 		t.Fatalf("known, not live: %+v, %v", st, err)
 	}
 }
+
+func TestLfg(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		role string
+		want LfgResult
+	}{
+		{"joining", "4 bot(s) are joining (1 tank, 2 damage missing).", "tank", LfgResult{Joining: 4, Missing: "1 tank, 2 damage"}},
+		{"full", "Your group is already full: 5 players.", "", LfgResult{AlreadyFull: 5}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want := ".bot lfg"
+			if c.role != "" {
+				want += " " + c.role
+			}
+			f := &fakeTransport{replies: map[string]*command.Reply{want: reply(c.line)}}
+			got, err := NewClient(f).Lfg(t.Context(), c.role)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Joining != c.want.Joining || got.Missing != c.want.Missing || got.AlreadyFull != c.want.AlreadyFull {
+				t.Fatalf("lfg %+v, want %+v", got, c.want)
+			}
+			if len(f.runs) != 1 || f.runs[0] != want {
+				t.Fatalf("runs %q", f.runs)
+			}
+		})
+	}
+	f := &fakeTransport{replies: map[string]*command.Reply{".bot lfg": reply("Only the group leader can fill the group.")}}
+	if _, err := NewClient(f).Lfg(t.Context(), ""); !errors.Is(err, ErrRefused) {
+		t.Fatalf("refusal: %v", err)
+	}
+	f = &fakeTransport{replies: map[string]*command.Reply{".bot lfg": reply("something else entirely")}}
+	if _, err := NewClient(f).Lfg(t.Context(), ""); !errors.Is(err, ErrNoAck) {
+		t.Fatalf("unknown answer: %v", err)
+	}
+	if _, err := NewClient(&fakeTransport{}).Lfg(t.Context(), "wizard"); err == nil {
+		t.Fatal("a bad role was accepted")
+	}
+}
+
+func TestQueueDungeon(t *testing.T) {
+	const line = "Dungeon finder: Ragefire Chasm (levels 13-18). 4 bot(s) are joining (1 tank, 2 damage missing). You go in when the group is complete."
+	f := &fakeTransport{replies: map[string]*command.Reply{".bot dungeon rfc tank": reply(line)}}
+	res, err := NewClient(f).QueueDungeon(t.Context(), "rfc", "tank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Name != "Ragefire Chasm" || res.Levels != [2]int{13, 18} || res.InPlace {
+		t.Fatalf("queue %+v", res)
+	}
+	f = &fakeTransport{replies: map[string]*command.Reply{".bot dungeon rfc": reply("Dungeon finder: Ragefire Chasm (levels 13-18). Your group is complete: in you go.")}}
+	res, err = NewClient(f).QueueDungeon(t.Context(), "rfc", "")
+	if err != nil || !res.InPlace {
+		t.Fatalf("complete queue %+v err=%v", res, err)
+	}
+	for _, refusal := range []string{
+		`Dungeon finder: no dungeon called "rfcx". Dungeons for level 13:`,
+		"Dungeon finder: not now, you are in combat.",
+		"Dungeon finder: you are already in an instance. .bot dungeon leave takes you out.",
+		"You are already queued for Ragefire Chasm. .bot dungeon cancel stops it.",
+	} {
+		f = &fakeTransport{replies: map[string]*command.Reply{".bot dungeon rfc": reply(refusal)}}
+		if _, err := NewClient(f).QueueDungeon(t.Context(), "rfc", ""); !errors.Is(err, ErrRefused) {
+			t.Fatalf("%q: %v", refusal, err)
+		}
+	}
+	if _, err := NewClient(&fakeTransport{}).QueueDungeon(t.Context(), "rfc\n.bot add warrior", ""); err == nil {
+		t.Fatal("a newline in the dungeon word was accepted")
+	}
+}
+
+func TestDungeonCancelAndLeave(t *testing.T) {
+	f := &fakeTransport{replies: map[string]*command.Reply{
+		".bot dungeon cancel": reply("Dungeon finder: Ragefire Chasm cancelled. The bots that joined stay in your group (.bot dismiss sends them off)."),
+		".bot dungeon leave":  reply("Dungeon finder: out you go. Your bots follow."),
+	}}
+	c := NewClient(f)
+	if line, err := c.CancelDungeon(t.Context()); err != nil || !strings.Contains(line, "cancelled") {
+		t.Fatalf("cancel %q, %v", line, err)
+	}
+	if line, err := c.LeaveDungeon(t.Context()); err != nil || !strings.Contains(line, "out you go") {
+		t.Fatalf("leave %q, %v", line, err)
+	}
+	f = &fakeTransport{replies: map[string]*command.Reply{
+		".bot dungeon cancel": reply("You are not queued for a dungeon."),
+		".bot dungeon leave":  reply("Dungeon finder: not while you are in combat."),
+	}}
+	c = NewClient(f)
+	if _, err := c.CancelDungeon(t.Context()); !errors.Is(err, ErrRefused) {
+		t.Fatalf("cancel refusal: %v", err)
+	}
+	if _, err := c.LeaveDungeon(t.Context()); !errors.Is(err, ErrRefused) {
+		t.Fatalf("leave refusal: %v", err)
+	}
+}
+
+func TestLead(t *testing.T) {
+	cases := []struct {
+		wire  string
+		word  string
+		state string
+		tank  string
+	}{
+		{"Bramble leads the dungeon now: it pulls pack by pack and waits for mana and for you. Say 'lead pause' to hold, 'lead off' to lead yourself.", "on", "on", "Bramble"},
+		{"Bramble leads once you are inside a dungeon or a raid. Say 'lead off' to lead yourself.", "on", "on", "Bramble"},
+		{"Bramble holds here and pulls nothing until you say 'go'.", "pause", "pause", "Bramble"},
+		{"You lead again: your bots follow you.", "off", "off", ""},
+		{"Bramble leads on.", "on", "on", "Bramble"},
+		{"Bramble pulls the boss.", "on", "on", "Bramble"},
+	}
+	for _, c := range cases {
+		f := &fakeTransport{replies: map[string]*command.Reply{".bot lead " + c.word: reply(c.wire)}}
+		res, err := NewClient(f).Lead(t.Context(), c.word)
+		if err != nil {
+			t.Fatalf("%q: %v", c.wire, err)
+		}
+		if res.State != c.state || res.Tank != c.tank {
+			t.Fatalf("%q: %+v", c.wire, res)
+		}
+	}
+	for _, refusal := range []string{
+		"You have no group yet: add a bot first.",
+		"No bot of yours in the group.",
+		"None of your bots in the group is a tank: add one (.bot add warrior tank), then say 'lead on'.",
+		"Your tank does not lead now: say 'lead on' first.",
+	} {
+		f := &fakeTransport{replies: map[string]*command.Reply{".bot lead off": reply(refusal)}}
+		if _, err := NewClient(f).Lead(t.Context(), "off"); !errors.Is(err, ErrRefused) {
+			t.Fatalf("%q: %v", refusal, err)
+		}
+	}
+	if _, err := NewClient(&fakeTransport{}).Lead(t.Context(), "sideways"); err == nil {
+		t.Fatal("a bad lead word was accepted")
+	}
+}
+
+func TestLfgStatus(t *testing.T) {
+	f := &fakeTransport{answers: map[string]Answer{
+		pbc.TypeLfgReq: {Type: pbc.TypeLfgResp, Fields: []string{"forming", "Ragefire Chasm", "2", "90", "5", "5", "0"}},
+	}}
+	st, err := NewClient(f).LfgStatus(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Phase != "forming" || st.Name != "Ragefire Chasm" || st.Members != 5 || st.Size != 5 || st.CanLeave {
+		t.Fatalf("status %+v", st)
+	}
+	if len(f.requests) != 1 || f.requests[0].Type != pbc.TypeLfgReq || len(f.requests[0].Fields) != 0 ||
+		f.requests[0].Answer != pbc.TypeLfgResp {
+		t.Fatalf("request %+v", f.requests)
+	}
+}
+
+func TestLookupDungeon(t *testing.T) {
+	for word, want := range map[string]uint32{"rfc": 389, "Ragefire Chasm": 389, "ragefire": 389, "wc": 43, "Zul'Farrak": 209} {
+		d, ok := LookupDungeon(word)
+		if !ok || d.MapID != want {
+			t.Fatalf("%q -> %+v, %v", word, d, ok)
+		}
+	}
+	// Two dungeons hold "scarlet": the word alone names neither.
+	if _, ok := LookupDungeon("scarlet"); ok {
+		t.Fatal("an ambiguous word resolved to one dungeon")
+	}
+	if _, ok := LookupDungeon("nowhere"); ok {
+		t.Fatal("an unknown word resolved")
+	}
+}
+
+func TestLeadOnABuildWithoutTheCommand(t *testing.T) {
+	f := &fakeTransport{replies: map[string]*command.Reply{".bot lead on": reply(
+		"### USAGE: .bot ...", "Possible subcommands:", "|- bot about", "|- bot add")}}
+	_, err := NewClient(f).Lead(t.Context(), "on")
+	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "does not know .bot lead") {
+		t.Fatalf("err %v", err)
+	}
+}

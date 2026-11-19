@@ -562,3 +562,32 @@ func TestAssemblerMaxFrameIsTheModulesBound(t *testing.T) {
 	}
 	t.Fatal("a body one byte over MaxFrame was accepted")
 }
+
+func TestParseLfg(t *testing.T) {
+	st, err := ParseLfg([]string{"inside", "Ragefire Chasm", "4", "90", "5", "5", "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Phase != "inside" || st.Name != "Ragefire Chasm" || st.WaitedSec != 4 || st.FormWaitSec != 90 ||
+		st.Members != 5 || st.Size != 5 || !st.CanLeave || len(st.Raw) != 0 {
+		t.Fatalf("status %+v", st)
+	}
+	// A phase the module may add later, a fifth appended field, and an idle answer with no dungeon name.
+	st, err = ParseLfg([]string{"FORMING", "", "0", "90", "1", "5", "0", "future"})
+	if err != nil || st.Phase != "forming" || st.CanLeave || len(st.Raw) != 1 || st.Raw[0] != "future" {
+		t.Fatalf("idle/extras: %+v err=%v", st, err)
+	}
+	// Drift: a short answer, a phase this client does not know, numbers that cannot be read or are negative, a
+	// can-leave that is not 0/1.
+	for _, fields := range [][]string{
+		{"inside", "Ragefire Chasm", "1", "90", "5", "5"},
+		{"entering soon", "Ragefire Chasm", "1", "90", "5", "5", "0"},
+		{"inside", "Ragefire Chasm", "x", "90", "5", "5", "0"},
+		{"inside", "Ragefire Chasm", "-1", "90", "5", "5", "0"},
+		{"inside", "Ragefire Chasm", "1", "90", "5", "5", "2"},
+	} {
+		if _, err := ParseLfg(fields); !errors.Is(err, ErrProtoMismatch) {
+			t.Fatalf("%q accepted: %v", fields, err)
+		}
+	}
+}
