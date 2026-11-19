@@ -13,18 +13,19 @@ import (
 	"github.com/pjerra/forever-agent/internal/tbdash"
 )
 
-const decisionsPullUsage = `usage: forever-agent decisions pull --dash-url URL --dash-user U --dash-pass-file FILE --commander C [--since T] [--until T] --out DIR [--max-mib N]`
+const decisionsPullUsage = `usage: forever-agent decisions pull --dash-url URL --dash-user U --dash-pass-file FILE [--dash-insecure-http] --commander C [--since T] [--until T] --out DIR [--max-mib N]`
 
 // decisionsPullOptions are the pull's flags.
 type decisionsPullOptions struct {
-	dashURL  string
-	dashUser string
-	passFile string
-	command  string
-	since    string
-	until    string
-	out      string
-	maxMiB   int
+	dashURL          string
+	dashUser         string
+	passFile         string
+	dashInsecureHTTP bool
+	command          string
+	since            string
+	until            string
+	out              string
+	maxMiB           int
 }
 
 // decisionsCmd is the `forever-agent decisions` entry.
@@ -41,7 +42,10 @@ func decisionsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !ok {
 		return exitUsage
 	}
-	c, err := openDecisionsClient(o.dashURL, o.dashUser, o.passFile)
+	if o.dashInsecureHTTP {
+		warnInsecureDash(stderr, "decisions", o.dashURL)
+	}
+	c, err := openDecisionsClient(o.dashURL, o.dashUser, o.passFile, o.dashInsecureHTTP)
 	if err != nil {
 		fmt.Fprintf(stderr, "decisions: %v\n", err)
 		return exitRaidWalkFailed
@@ -77,6 +81,7 @@ func parseDecisionsPullArgs(args []string, stderr io.Writer) (decisionsPullOptio
 	fs.StringVar(&o.dashURL, "dash-url", "", "the dashboard URL")
 	fs.StringVar(&o.dashUser, "dash-user", "TADASH", "the dashboard login")
 	fs.StringVar(&o.passFile, "dash-pass-file", "", "the dashboard password file")
+	fs.BoolVar(&o.dashInsecureHTTP, "dash-insecure-http", false, "allow a plain-http dashboard that is not loopback: the GM password and the session cookie then travel in clear text")
 	fs.StringVar(&o.command, "commander", "", "the commander to pull")
 	fs.StringVar(&o.since, "since", "", "RFC3339 start of the window")
 	fs.StringVar(&o.until, "until", "", "RFC3339 end of the window")
@@ -116,8 +121,8 @@ func parseDecisionsPullArgs(args []string, stderr io.Writer) (decisionsPullOptio
 }
 
 // openDecisionsClient builds the dashboard client; a var so tests hand in a fake.
-var openDecisionsClient = func(base, user, passFile string) (decisionsPuller, error) {
-	return tbdash.New(base, user, passFile)
+var openDecisionsClient = func(base, user, passFile string, insecure bool) (decisionsPuller, error) {
+	return tbdash.NewWithOptions(base, user, tbdash.PasswordFile(passFile), tbdash.Options{AllowInsecureHTTP: insecure})
 }
 
 // sanitizeDecisionsErr drops nothing sensitive: the dashboard client never carries the password
