@@ -770,13 +770,61 @@ func TestRosterValidation(t *testing.T) {
 			}
 		})
 	}
-	t.Run("self unknown", func(t *testing.T) {
+	t.Run("self unknown holds the roster", func(t *testing.T) {
+		// A character that logs in already grouped gets SMSG_PARTY_UPDATE before anything names its own GUID: the
+		// roster is held (not invalid, not actionable) and applied by SetSelf. One is held; a newer one replaces it.
 		s := NewState()
-		if s.ApplyUpdate(Update{Type: GroupTypeNormal, PartyGUID: testPartyGUID, LeaderGUID: other, Members: []Member{{GUID: other}}}) {
-			t.Fatal("a roster without a known self was accepted")
+		first := Update{Type: GroupTypeNormal, PartyGUID: testPartyGUID, LeaderGUID: other,
+			Members: []Member{{GUID: other, Name: "Other"}, {GUID: us, Name: "Us"}}, MyIndex: 0}
+		if s.ApplyUpdate(first) {
+			t.Fatal("a roster became actionable before this character's own GUID was known")
 		}
-		if !strings.Contains(s.LastInvalid, "not known yet") {
-			t.Fatalf("reason %q", s.LastInvalid)
+		if s.InvalidRosters != 0 || s.LastInvalid != "" || s.InParty || s.RosterValid || s.HeldRosters != 1 {
+			t.Fatalf("the held roster was judged: invalid %d reason %q in party %v valid %v held %d",
+				s.InvalidRosters, s.LastInvalid, s.InParty, s.RosterValid, s.HeldRosters)
+		}
+		third := Member{GUID: wire.GUID{Low: 0x12, High: 0x0800000000000000}, Name: "Third"}
+		second := Update{Type: GroupTypeNormal, PartyGUID: testPartyGUID, LeaderGUID: us,
+			Members: []Member{{GUID: us, Name: "Us"}, {GUID: third.GUID, Name: third.Name}}, MyIndex: 0}
+		if s.ApplyUpdate(second) {
+			t.Fatal("the second roster became actionable before the GUID was known")
+		}
+		if s.HeldRosters != 2 {
+			t.Fatalf("held %d rosters, want 2", s.HeldRosters)
+		}
+		s.SetSelf(us)
+		if !s.InParty || !s.RosterValid || len(s.Members) != 2 || s.LeaderGUID != us {
+			t.Fatalf("the held roster was not applied: in party %v valid %v members %d leader %v",
+				s.InParty, s.RosterValid, len(s.Members), s.LeaderGUID)
+		}
+		if _, ok := s.Members[third.GUID]; !ok {
+			t.Fatal("the applied roster is the first one; the newer held roster replaces it")
+		}
+		if s.InvalidRosters != 0 {
+			t.Fatalf("counted %d invalid rosters for a legal order", s.InvalidRosters)
+		}
+	})
+	t.Run("a map change drops the held roster", func(t *testing.T) {
+		// The held roster is the old map's; a new world must not apply it when the GUID arrives with the new map.
+		s := NewState()
+		first := Update{Type: GroupTypeNormal, PartyGUID: testPartyGUID, LeaderGUID: other,
+			Members: []Member{{GUID: other, Name: "Other"}, {GUID: us, Name: "Us"}}, MyIndex: 1}
+		if s.ApplyUpdate(first) || s.held == nil {
+			t.Fatal("the roster was not held")
+		}
+		if !s.DropHeld() || s.held != nil {
+			t.Fatal("DropHeld did not drop the held roster")
+		}
+		if s.DropHeld() {
+			t.Fatal("DropHeld reported a roster after dropping the only one")
+		}
+		s.SetSelf(us)
+		if s.InParty || s.RosterValid || len(s.Members) != 0 {
+			t.Fatalf("the dropped roster was applied: in party %v valid %v members %d", s.InParty, s.RosterValid, len(s.Members))
+		}
+		// Once the GUID is known, the next roster (the server's post-map one) is validated and applied directly.
+		if !s.ApplyUpdate(first) || !s.InParty || !s.RosterValid || len(s.Members) != 2 {
+			t.Fatalf("the post-map roster was not applied: in party %v valid %v members %d", s.InParty, s.RosterValid, len(s.Members))
 		}
 	})
 	t.Run("the duplicate fixture", func(t *testing.T) {
@@ -805,6 +853,34 @@ func TestRosterValidation(t *testing.T) {
 			t.Fatalf("reason %q valid %v", s.LastInvalid, s.RosterValid)
 		}
 	})
+}
+
+// TestRosterDestroyedThenSetSelf: a character logs in already grouped, so the roster is held because its own GUID
+// is not known yet; the group is destroyed before anything names that GUID. SetSelf must not apply the stale
+// roster: the model stays out of the party the server ended.
+func TestRosterDestroyedThenSetSelf(t *testing.T) {
+	us := wire.GUID{Low: 0x10, High: 0x0800000000000000}
+	other := wire.GUID{Low: 0x11, High: 0x0800000000000000}
+	s := NewState()
+	held := Update{Type: GroupTypeNormal, PartyGUID: testPartyGUID, LeaderGUID: other,
+		Members: []Member{{GUID: other, Name: "Other"}, {GUID: us, Name: "Us"}}, MyIndex: 0}
+	if s.ApplyUpdate(held) {
+		t.Fatal("a roster became actionable before this character's own GUID was known")
+	}
+	if s.held == nil || s.HeldRosters != 1 {
+		t.Fatalf("the roster was not held: held %v count %d", s.held != nil, s.HeldRosters)
+	}
+	if s.ApplyUpdate(Update{Type: GroupTypeNormal, Flags: FlagDestroyed}) {
+		t.Fatal("a destroyed update was modelled as a party")
+	}
+	if s.held != nil {
+		t.Fatal("the destroyed update left the held roster in place")
+	}
+	s.SetSelf(us)
+	if s.InParty || s.RosterValid || len(s.Members) != 0 || s.LeaderGUID != wire.EmptyGUID {
+		t.Fatalf("SetSelf applied the roster of a destroyed group: in party %v valid %v members %d leader %v",
+			s.InParty, s.RosterValid, len(s.Members), s.LeaderGUID)
+	}
 }
 
 // TestRaidRosterValidation: a 6-to-40-member roster goes through the same validation before Raid and InParty are

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sort"
 	"strings"
@@ -58,6 +59,10 @@ type Options struct {
 	FightCheck bool
 	Entry      int32
 	FightFor   time.Duration
+	// LevelMin and LevelMax are the level band fight-check accepts a target in (--level-min/--level-max). 0 means
+	// the band relative to the character's own level (fightLevelWindow): three levels below to two above, clamped
+	// to the client's 1-60.
+	LevelMin, LevelMax int32
 	// Round 6: death-check. It settles, waits for the character to die (a console command or a mob does that; the
 	// client never kills itself), then releases, finds the corpse, runs back and reclaims it, or waits for a
 	// resurrection offer and accepts it (AcceptResurrect), or uses the spirit healer (UseSpiritHealer).
@@ -224,11 +229,13 @@ type ObjectSummary struct {
 	Destroyed  int
 	OutOfRange int
 	Updates    int
-	// Partial counts objects with a block that was not decoded to its declared end; Unparsed counts the blocks
-	// that were skipped whole, by object type and reason.
-	Partial  int
-	Unparsed map[string]int
-	ByType   map[string]int
+	// Partial counts objects with a block that was not decoded to its declared end; PartialKinds says which object
+	// types and block forms those were and where their walk stopped; Unparsed counts the blocks that were skipped
+	// whole, by object type and reason.
+	Partial      int
+	PartialKinds map[string]int
+	Unparsed     map[string]int
+	ByType       map[string]int
 	// Resurrections counts units the model saw come back from the ghost state.
 	Resurrections int
 }
@@ -340,9 +347,13 @@ type session struct {
 	deadClosed [2]bool
 	deadErrs   [2]error
 	deadAny    bool
-	// logoutAnswered is set once the server accepted the logout: the close that follows is the session ending, not
-	// a lost link.
-	logoutAnswered bool
+	// logoutSent is set just before CMSG_LOGOUT_REQUEST is written, and the instance socket's close is the session
+	// ending from then on: WorldSession::LogoutPlayer sends SMSG_LOGOUT_COMPLETE on the realm socket and closes the
+	// instance one right after (WorldSession.cpp:766,789). logoutComplete is set when the completion was handled:
+	// from then on any socket that closes is the server tearing the session down, not a lost link. Before the
+	// completion the realm socket closing is still a loss, whatever the response said.
+	logoutSent     bool
+	logoutComplete bool
 	deadSide       int
 	deadErr        error
 	deadStale      bool
@@ -531,8 +542,8 @@ func (s *session) setLinkDead(side int, err error) {
 	}
 	s.deadMu.Lock()
 	defer s.deadMu.Unlock()
-	if s.logoutAnswered {
-		return // the server ended the session the client asked it to end
+	if s.logoutComplete || (s.logoutSent && side == sideInstance) {
+		return // the session the client asked to end is ending
 	}
 	if side >= 0 && side < len(s.deadChs) && s.deadChs[side] != nil && !s.deadClosed[side] {
 		s.deadClosed[side] = true
@@ -613,12 +624,36 @@ func (s *session) deadErrorExcept(ignore int) error {
 	return fmt.Errorf("%w (the %s socket: %s)", ErrLinkLost, linkSideName(side), detail)
 }
 
-// markStale ends the link because the peer stopped sending; the gameplay socket is the one a fight notices.
-func (s *session) markStale() {
+// silentSide is the socket a silence is noticed on: the one this wait is not ignoring. A wait that ignores no
+// socket notices silence on the gameplay socket, as it always has; the logout ignores the instance socket, which
+// the server closes with the completion, so its silence is the realm's.
+func silentSide(ignore int) int {
+	if ignore == sideInstance {
+		return sideRealm
+	}
+	return sideInstance
+}
+
+// silenceLost is the lost-link error for a peer that stopped sending. The silence was just recorded on a socket
+// this wait is not ignoring, so deadErrorExcept normally has it; when that socket's death is itself suppressed (a
+// close that raced a completion the logout already has), the error is built here instead of returning a zero event
+// that the caller would handle as traffic.
+func (s *session) silenceLost(ignore int) error {
+	if err := s.deadErrorExcept(ignore); err != nil {
+		return err
+	}
+	name, _ := s.lastPacket()
+	return fmt.Errorf("%w (the %s socket: no server packet for %s; the last was %s)",
+		ErrLinkLost, linkSideName(silentSide(ignore)), linkSilenceLimit, name)
+}
+
+// markStale ends the link because the peer stopped sending; side is the socket the caller was waiting on that still
+// matters. The gameplay socket is the one a fight notices.
+func (s *session) markStale(side int) {
 	s.deadMu.Lock()
 	s.deadStale = true
 	s.deadMu.Unlock()
-	s.setLinkDead(sideInstance, nil)
+	s.setLinkDead(side, nil)
 }
 
 // shutdown stops the readers, closes both sockets in a fixed order whatever happened before, and waits for the
@@ -1008,11 +1043,20 @@ func (s *session) walkCheck(ctx context.Context) error {
 	if err := s.mover.MoveTo(ctx, from[0], from[1], from[2]); err != nil {
 		return err
 	}
+	// The way back ends facing the way it came (the last leg's direction), and the server saves that facing with
+	// the character. Turn back to the orientation the create block gave, so the walk leaves the character as it
+	// found it: one CMSG_MOVE_SET_FACING at the spawn.
+	if err := s.mover.Face(o); err != nil {
+		return fmt.Errorf("walk-check: CMSG_MOVE_SET_FACING: %w", err)
+	}
 	bx, by, bz, bo := s.mover.Position()
 	s.report.BackAt = [4]float32{bx, by, bz, bo}
 	s.report.WalkClientPos = s.report.BackAt
 	s.report.Walked = true
-	s.opts.logf("walk-check: back at the spawn, the client believes it is at %.2f %.2f %.2f (orientation %.2f)", bx, by, bz, bo)
+	// The way back faces the opposite of the way out (the walk's own two legs are the same line).
+	turn := math.Mod(float64(o)+math.Pi, 2*math.Pi)
+	s.opts.logf("walk-check: back at the spawn, the client believes it is at %.2f %.2f %.2f; orientation restored to %.2f (the way back faced %.2f)",
+		bx, by, bz, bo, float32(turn))
 	return nil
 }
 
@@ -1080,9 +1124,13 @@ func (s *session) objectSummary() ObjectSummary {
 		OutOfRange:    c.OutOfRange,
 		Updates:       c.Applied,
 		Partial:       c.Partial,
-		Resurrections: c.Resurrections,
+		PartialKinds:  make(map[string]int, len(c.PartialKinds)),
 		Unparsed:      make(map[string]int, len(c.Unparsed)),
 		ByType:        make(map[string]int),
+		Resurrections: c.Resurrections,
+	}
+	for kind, n := range c.PartialKinds {
+		summary.PartialKinds[kind] = n
 	}
 	for reason, n := range c.Unparsed {
 		summary.Unparsed[reason] = n
@@ -1110,6 +1158,19 @@ func (s *session) summarise(x, y, z float32) {
 	s.opts.logf("world: %d created, %d updated, %d destroyed, %d out of range", summary.Created, summary.Updated, summary.Destroyed, summary.OutOfRange)
 	if c.Partial > 0 {
 		s.opts.logf("world: %d object(s) partial: a block naming them was not decoded to its declared end", c.Partial)
+		kinds := make([]string, 0, len(c.PartialKinds))
+		for kind := range c.PartialKinds {
+			kinds = append(kinds, kind)
+		}
+		sort.Slice(kinds, func(i, j int) bool {
+			if c.PartialKinds[kinds[i]] != c.PartialKinds[kinds[j]] {
+				return c.PartialKinds[kinds[i]] > c.PartialKinds[kinds[j]]
+			}
+			return kinds[i] < kinds[j]
+		})
+		for _, kind := range kinds {
+			s.opts.logf("  partial: %-58s %d", kind, c.PartialKinds[kind])
+		}
 	}
 	if len(c.Unparsed) > 0 {
 		total := 0
@@ -1197,58 +1258,66 @@ func (s *session) stay(ctx context.Context) error {
 	return nil
 }
 
-// logout sends CMSG_LOGOUT_REQUEST and waits for the response and the completion. The server waits 20 s before it
-// completes a logout that is not instant, and it closes the instance socket after the completion.
+// logoutWait bounds the wait for SMSG_LOGOUT_COMPLETE. The server completes a logout that is not instant after 20 s
+// (WorldSession::ShouldLogOut), so 30 s leaves a margin without holding a run open on a server that died.
+const logoutWait = 30 * time.Second
+
+// logout sends CMSG_LOGOUT_REQUEST and waits for the completion on the realm socket.
+//
+// The instance socket's close is part of the logout: WorldSession::LogoutPlayer sends SMSG_LOGOUT_COMPLETE on the
+// realm socket and then closes the instance socket (WorldSession.cpp:766,789), and the response itself is queued on
+// the instance socket first (MiscHandler.cpp:264-267), so it may never arrive: a socket closed with a write still
+// queued drops it. Either way the session is ending, not lost, and the completion is the fact the run waits for. A
+// realm socket that closes before the completion, or a silent server, is still a real loss.
 func (s *session) logout(ctx context.Context) error {
+	// The state is set before the request is written: an instant logout can close the instance socket as soon as
+	// the request is read, before the send returns, and that close is the session ending, not a lost link.
+	s.deadMu.Lock()
+	s.logoutSent = true
+	s.deadMu.Unlock()
 	if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGLogoutRequest, BuildLogoutRequest()); err != nil {
 		return err
 	}
 	s.opts.logf("world logout: CMSG_LOGOUT_REQUEST sent")
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(logoutWait)
 	responded := false
 	var completeAt time.Time
 	for {
-		wait := time.Until(deadline)
 		if s.report.LogoutComplete {
-			// the response and the completion come on different sockets, so give the response 500 ms to arrive
-			// after the completion instead of blocking for the whole deadline
+			// The completion is in; give the response (the other socket) 500 ms to arrive, since it was queued
+			// first. It may never come, which is not an error.
 			grace := 500*time.Millisecond - time.Since(completeAt)
 			if responded || grace <= 0 {
 				break
 			}
-			if grace < wait {
-				wait = grace
+			ev, err := s.nextExcept("the response to the logout", grace, sideInstance)
+			if err != nil || ev.err != nil {
+				break
 			}
+			if err := s.handle(ctx, ev); err != nil {
+				return err
+			}
+			if ev.p.Core == wire.SMSGLogoutResponse {
+				responded = true
+				if s.report.Logout.Result != 0 {
+					return fmt.Errorf("world: the server refused the logout: result %d", s.report.Logout.Result)
+				}
+			}
+			continue
 		}
+		wait := time.Until(deadline)
 		if wait <= 0 {
-			return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within 30 s")
+			return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within %s", logoutWait)
 		}
-		// Until the response arrives, either socket's death is fatal; after it, the instance socket's death is
-		// expected (the server closes it right after the response) and the completion still travels on the realm.
-		var ev event
-		var err error
-		if responded {
-			ev, err = s.nextExcept("the logout", wait, sideInstance)
-		} else {
-			ev, err = s.next("the logout", wait)
-		}
+		ev, err := s.nextExcept("the logout", wait, sideInstance)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
-				return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within 30 s")
+				return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within %s", logoutWait)
 			}
-			return err
+			return err // the realm socket died (or went silent) before the completion
 		}
 		if ev.err != nil {
-			if responded && ev.side == sideInstance {
-				continue
-			}
-			if s.report.LogoutComplete {
-				continue
-			}
-			if lost := s.deadErrorExcept(-1); lost != nil {
-				return lost
-			}
-			return fmt.Errorf("world: the connection %d closed during the logout: %w", ev.side, ev.err)
+			continue // the instance socket closing is the logout proceeding
 		}
 		if err := s.handle(ctx, ev); err != nil {
 			return err
@@ -1258,17 +1327,33 @@ func (s *session) logout(ctx context.Context) error {
 			if s.report.Logout.Result != 0 {
 				return fmt.Errorf("world: the server refused the logout: result %d", s.report.Logout.Result)
 			}
-			s.deadMu.Lock()
-			s.logoutAnswered = true
-			s.deadMu.Unlock()
 		}
-		if s.report.LogoutComplete && completeAt.IsZero() {
+		if s.report.LogoutComplete {
 			completeAt = time.Now()
 		}
 	}
-	s.opts.logf("world logout: SMSG_LOGOUT_RESPONSE (result %d, instant %v) and SMSG_LOGOUT_COMPLETE",
-		s.report.Logout.Result, s.report.Logout.Instant)
+	if responded {
+		s.opts.logf("world logout: SMSG_LOGOUT_RESPONSE (result %d, instant %v) and SMSG_LOGOUT_COMPLETE",
+			s.report.Logout.Result, s.report.Logout.Instant)
+		s.clearTeardownLoss()
+		return nil
+	}
+	s.opts.logf("world logout: SMSG_LOGOUT_COMPLETE (no SMSG_LOGOUT_RESPONSE: the server closes the instance socket with the completion)")
+	s.clearTeardownLoss()
 	return nil
+}
+
+// clearTeardownLoss forgets a socket death that raced the logout's completion. The reader can see the server close a
+// socket before this goroutine handles the completion already queued, and a logout that completed is not a lost link;
+// a socket death that mattered ended the loop above with ErrLinkLost and never reaches here.
+func (s *session) clearTeardownLoss() {
+	s.deadMu.Lock()
+	defer s.deadMu.Unlock()
+	s.report.LinkLost = false
+	s.report.LinkLostSide = ""
+	s.report.LinkLostDetail = ""
+	s.deadAny = false
+	s.deadSide, s.deadErr = -1, nil
 }
 
 func (s *session) sendPing() {
@@ -1374,6 +1459,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.report.Logout = r
 	case wire.SMSGLogoutComplete:
 		s.report.LogoutComplete = true
+		s.deadMu.Lock()
+		s.logoutComplete = true
+		s.deadMu.Unlock()
 	case wire.SMSGUpdateObject:
 		u, err := objects.ParseUpdateObject(p.Payload)
 		if err != nil {
@@ -1899,8 +1987,8 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 		if _, at := s.lastPacket(); !at.IsZero() {
 			silence := time.Since(at)
 			if silence >= linkSilenceLimit {
-				s.markStale()
-				return event{}, s.deadErrorExcept(ignore)
+				s.markStale(silentSide(ignore))
+				return event{}, s.silenceLost(ignore)
 			}
 			if silence+remaining > linkSilenceLimit {
 				remaining = linkSilenceLimit - silence
@@ -1924,8 +2012,8 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 			return ev, nil
 		case <-timer.C:
 			if silent {
-				s.markStale()
-				return event{}, s.deadErrorExcept(ignore)
+				s.markStale(silentSide(ignore))
+				return event{}, s.silenceLost(ignore)
 			}
 			// The timer may have been shortened by the map change's own deadline: that ended the run, and it must
 			// not look like this wait's own timeout to a caller that treats one as the end of a stay.

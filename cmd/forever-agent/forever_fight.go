@@ -12,31 +12,23 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"os"
-	"strconv"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
 func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--fight-for DURATION] [--capture-dir DIR] [--provoke]"
+	const usage = "usage: forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--level-min N] [--level-max N] [--fight-for DURATION] [--capture-dir DIR] [--provoke]"
 	fs := flag.NewFlagSet("forever fight-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	restAddr := fs.String("rest", "", "login REST host:port")
-	rpcAddr := fs.String("rpc", "", "Battle.net RPC host:port")
-	caFile := fs.String("ca", "", "PEM file of the root CA that signed the login server's certificate")
-	serverName := fs.String("server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	clientBuild := fs.Uint("build", 70938, "client build to claim; a realm only lets in the builds it accepts")
-	account := fs.String("account", "", "account e-mail or name")
-	character := fs.String("character", "", "character to enter the world with")
+	var common foreverCommon
+	common.flags(fs)
 	stay := fs.Duration("stay", 8*time.Second, "how long to settle in the world before choosing the target")
-	entry := fs.Int64("entry", 0, "creature template entry to fight (0: the nearest living level 1-3 creature within 40 yd)")
+	entry := fs.Int64("entry", 0, "creature template entry to fight (0: the nearest living creature of the level band within 40 yd)")
+	levelMin := fs.Int64("level-min", 0, "lowest target level (0: three below the character's own level)")
+	levelMax := fs.Int64("level-max", 0, "highest target level (0: two above the character's own level)")
 	fightFor := fs.Duration("fight-for", 60*time.Second, "how long to fight before giving up")
-	allowInstanceRedirect := fs.Bool("allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
 	captureDir := fs.String("capture-dir", "", "debug: write every packet the combat, chat and party handlers see into a new run directory under this path (a scratch folder OUTSIDE the repository)")
 	provoke := fs.Bool("provoke", false, "debug: before the fight, provoke the refusals a fight log otherwise has no real packet for (out-of-range swing, cast at no rage)")
 	if err := fs.Parse(args); err != nil {
@@ -46,12 +38,8 @@ func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	if *restAddr == "" || *rpcAddr == "" || *caFile == "" || *account == "" || *character == "" {
-		fmt.Fprintln(stderr, "forever fight-check: --rest, --rpc, --ca, --account and --character are required")
-		return exitUsage
-	}
-	if *clientBuild == 0 || *clientBuild > 0xFFFFFFFF {
-		fmt.Fprintln(stderr, "forever fight-check: --build must be a client build number")
+	if err := common.check("forever fight-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	if *stay < 0 || *stay > 10*time.Minute {
@@ -66,56 +54,34 @@ func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever fight-check: --entry must be a creature template entry")
 		return exitUsage
 	}
-	password := os.Getenv("FOREVER_PASSWORD")
-	if password == "" {
-		fmt.Fprintln(stderr, "forever fight-check: FOREVER_PASSWORD is not set")
+	for _, l := range []struct {
+		name string
+		v    int64
+	}{{"--level-min", *levelMin}, {"--level-max", *levelMax}} {
+		if l.v < 0 || l.v > 60 {
+			fmt.Fprintf(stderr, "forever fight-check: %s must be between 0 (the character's own level) and 60\n", l.name)
+			return exitUsage
+		}
+	}
+	if *levelMin != 0 && *levelMax != 0 && *levelMin > *levelMax {
+		fmt.Fprintln(stderr, "forever fight-check: --level-min is above --level-max")
+		return exitUsage
+	}
+	if err := common.passwordCheck("forever fight-check"); err != nil {
+		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 
-	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    *restAddr,
-		RPCAddr:     *rpcAddr,
-		CAFile:      *caFile,
-		ServerName:  *serverName,
-		Account:     *account,
-		Password:    password,
-		ClientBuild: uint32(*clientBuild),
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
-	})
-	if err != nil {
-		fmt.Fprintln(stderr, "forever fight-check:", err)
-		var realmErr *bnet.RealmError
-		if errors.As(err, &realmErr) {
-			return exitRealm
-		}
-		return exitAuth
-	}
-	fmt.Fprintf(stdout, "login: %s, world %s:%d\n", result.Summary(), result.ServerIP, result.ServerPort)
-
-	address := net.JoinHostPort(result.ServerIP, strconv.FormatUint(uint64(result.ServerPort), 10))
-	report, err := world.Enter(ctx, world.Options{
-		Address:               address,
-		RealmID:               result.RealmID,
-		RealmAddress:          result.RealmAddress,
-		RealmJoinTicket:       result.JoinTicket,
-		ClientSecret:          result.ClientSecret,
-		JoinSecret:            result.JoinSecret,
-		ClientBuild:           uint32(*clientBuild),
-		RealmBuild:            uint32(*clientBuild), // the realm admits only its own build (Realm.AlsoAcceptBuilds is empty)
-		Character:             *character,
-		FightCheck:            true,
-		Entry:                 int32(*entry),
-		FightFor:              *fightFor,
-		CaptureDir:            *captureDir,
-		Provoke:               *provoke,
-		Settle:                *stay,
-		Deadline:              *fightFor + 4*time.Minute,
-		AllowInstanceRedirect: *allowInstanceRedirect,
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(stdout, format+"\n", args...)
-		},
+	report, err := common.enter(ctx, "forever fight-check", stdout, world.Options{
+		FightCheck: true,
+		Entry:      int32(*entry),
+		LevelMin:   int32(*levelMin),
+		LevelMax:   int32(*levelMax),
+		FightFor:   *fightFor,
+		CaptureDir: *captureDir,
+		Provoke:    *provoke,
+		Settle:     *stay,
+		Deadline:   *fightFor + 4*time.Minute,
 	})
 	if report != nil {
 		printLinkLost(stdout, report)
@@ -123,7 +89,10 @@ func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever fight-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever fight-check: %v\n", err)
 		if errors.Is(err, world.ErrLinkLost) {
 			// The connection is gone: its own code, and no reconnect (the brief forbids papering over a disconnect).
 			return exitDisconnected

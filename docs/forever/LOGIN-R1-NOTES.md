@@ -76,11 +76,11 @@ checksum inputs, salt byte order, client opcode rule, server opcode step 1, sess
    broke this client's `M2`; the vectors in `testdata` pin it.
 9. **A realm only admits the client builds it accepts, and the login does not tell you the realm's build up front.**
    `JoinRealm` checks `RealmAcceptsBuild(realm, session->GetBuild())`
-   (`src/server/shared/Realm/RealmList.cpp:255-279,446-456`). The realm's build is `realmlist.gamebuild` (70707 on
-   the live server), and the build comes from `LogonRequest.application_version`. Claiming 70938 while the realm is
-   on 70707 lists the realm with `flags: 1` (version mismatch) and the join answers
-   `ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM` (`0x800000E1`). `--build` (and `Options.ClientBuild`) exist for this;
-   the default stays 70938, the build the protocol document targets.
+   (`src/server/shared/Realm/RealmList.cpp:255-279,446-456`). The realm's build is the one its realm list row
+   carries, and the build claimed comes from `LogonRequest.application_version`. Claiming 70938 against a realm that
+   accepts 70707 lists the realm with `flags: 1` (version mismatch) and the join answers
+   `ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM` (`0x800000E1`). `--build` (and `Options.ClientBuild`) pin a claim;
+   without one the login claims the build the realm list advertises (round OTHER-BUILD-R1-NOTES.md item 2).
 10. **An offline realm is still listed.** With `realmlist.flag = 2` the realm appears with `populationState: 0`
     (Offline) and the join is refused the same way; once the world server writes the row, the same login succeeds
     (observed: flag 2/served at first, then flag 0 and the join went through). A client should treat

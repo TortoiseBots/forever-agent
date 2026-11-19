@@ -14,7 +14,7 @@ func TestWorldCheckUsage(t *testing.T) {
 		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem", "--account", "a"},   // no character
 		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem", "--character", "C"}, // no account
 		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--account", "a", "--character", "C"}, // no CA
-		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem", "--account", "a", "--character", "C", "--build", "0"},
+		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem", "--account", "a", "--character", "C", "--build", "0x1FFFFFFFF"},
 		{"forever", "world-check", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem", "--account", "a", "--character", "C", "--stay", "11m"},
 		{"forever", "world-check", "extra"},
 	}

@@ -1410,21 +1410,57 @@ func TestChooseTargetSkipsCrittersAndNpcs(t *testing.T) {
 		unit(wire.GUID{Low: 5, High: 0x2001180000000000}, 299, 2, 0, 1, 1010),  // the wolf
 		unit(wire.GUID{Low: 6, High: 0x2001180000000000}, 299, 2, 0, 1, 1100),  // beyond 40 yd
 	}
-	got := attackableCandidates(units, 1000, 2000, 50, self, 0, targetSearchRange)
+	got := attackableCandidates(units, 1000, 2000, 50, self, 0, targetSearchRange, 1, 3)
 	if len(got) != 1 || got[0].GUID.Low != 5 {
 		t.Fatalf("candidates %v, want the wolf", got)
 	}
-	got = attackableCandidates(units, 1000, 2000, 50, self, 721, targetSearchRange)
+	got = attackableCandidates(units, 1000, 2000, 50, self, 721, targetSearchRange, 1, 3)
 	if len(got) != 1 || got[0].GUID.Low != 2 {
 		t.Fatalf("--entry 721 chose %v", got)
 	}
-	if got := attackableCandidates(units, 1000, 2000, 50, self, 999, targetSearchRange); len(got) != 0 {
+	if got := attackableCandidates(units, 1000, 2000, 50, self, 999, targetSearchRange, 1, 3); len(got) != 0 {
 		t.Fatalf("--entry 999 matched %v", got)
 	}
 	// A dead unit is not a target.
 	units[4].Dead = true
-	if got := attackableCandidates(units, 1000, 2000, 50, self, 0, targetSearchRange); len(got) != 0 {
+	if got := attackableCandidates(units, 1000, 2000, 50, self, 0, targetSearchRange, 1, 3); len(got) != 0 {
 		t.Fatalf("a dead wolf was a candidate: %v", got)
+	}
+	// The band is a parameter: the level-12 unit is in it, the level-2 wolf below it.
+	units[4].Dead = false
+	if got := attackableCandidates(units, 1000, 2000, 50, self, 0, targetSearchRange, 10, 20); len(got) != 1 || got[0].Info.Level != 12 {
+		t.Fatalf("band 10-20 chose %v, want the level-12 unit", got)
+	}
+}
+
+// TestFightLevelWindow states the default band: the character's own level -3 to +2, clamped to the client's 1-60, so
+// a level-1 character keeps the round-4 brief's 1-3; an explicit bound wins over that end of the band. A single
+// explicit bound past the automatic other end widens the automatic end, so the band is never empty: an empty band
+// made the run search for nothing and only say so after the fact.
+func TestFightLevelWindow(t *testing.T) {
+	cases := []struct {
+		name             string
+		min, max, self   int32
+		wantMin, wantMax int32
+	}{
+		{"level 30", 0, 0, 30, 27, 32},
+		{"level 1", 0, 0, 1, 1, 3},
+		{"level 3", 0, 0, 3, 1, 5},
+		{"level 60", 0, 0, 60, 57, 60},
+		{"level unknown", 0, 0, 0, 1, 3},
+		{"explicit both", 10, 20, 30, 10, 20},
+		{"explicit low", 10, 0, 30, 10, 32},
+		{"explicit high", 0, 28, 30, 27, 28},
+		{"min above the automatic max", 40, 0, 1, 40, 40},
+		{"max below the automatic min", 0, 1, 30, 1, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotMin, gotMax := fightLevelWindow(c.min, c.max, c.self)
+			if gotMin != c.wantMin || gotMax != c.wantMax {
+				t.Fatalf("band %d-%d, want %d-%d", gotMin, gotMax, c.wantMin, c.wantMax)
+			}
+		})
 	}
 }
 

@@ -40,6 +40,12 @@ jobs:
       - name: gofmt, go vet, no-cgo build, go test -race
         run: make GOROOT_LOCAL="$(go env GOROOT)" fmt-check vet test
 
+      # Compile for the two other targets the README names and vet the Windows test files (make cross; about 40 s
+      # with an empty build cache, seconds warm). The Unix-only pieces of the raid commands and their tests sit
+      # behind build tags, so a misplaced one breaks these builds before the Linux one.
+      - name: cross-compile and vet (windows/amd64, darwin/arm64)
+        run: make GOROOT_LOCAL="$(go env GOROOT)" cross
+
       # The Go scorers against the Python reference on the hand-made differential table. The
       # reference is a public repository checked out at the pinned commit; no secret is
       # involved. A missing reference makes the tests SKIP, so this greps its own verbose

@@ -28,17 +28,18 @@ to "the server treats the player as fully in the world"; movement, objects and g
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
 name, id and address. It prints no ticket, key, proof or password, only their lengths; the connect step prints the
 ciid, the server id and the server time as counts (`ciid 33 chars`), never their values, so the output is safe to
-paste into a report. `--build` picks the client build to claim (default 70938); a realm only admits the builds it
-accepts. Each RPC step and the login as a whole are deadline-bounded (30 s per request, 2 min overall), so a silent
-or slow-drip server cannot hold the command open.
+paste into a report. `--build` pins the client build to claim; without it the command claims the build the realm
+advertises in its realm list (builds the client has tables for: 70707 and 70938, and any other advertised build is
+refused by name). A realm only admits the builds it accepts. Each RPC step and the login as a whole are
+deadline-bounded (30 s per request, 2 min overall), so a silent or slow-drip server cannot hold the command open.
 
 `forever-agent forever world-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 does the same login and then enters the world with that character: world auth, character list, `CMSG_PLAYER_LOGIN`,
 the instance socket, the login burst (loading screen, time syncs, the active-mover exchange), `--stay` seconds of
 keep-alives (default 20 s), then a clean logout. It prints one line per step, a count of server packets by opcode
-name, and no key or ticket, only lengths. `--build` has to be the build the realm accepts (its
-`auth.realmlist.gamebuild`), because a realm admits only that build unless `Realm.AlsoAcceptBuilds` lists more. By
-default the instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
+name, and no key or ticket, only lengths. Without `--build` the command claims the build the realm advertises; a
+pinned `--build` has to be one the realm accepts (a realm can accept more than one client build). By default the
+instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
 
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
@@ -54,7 +55,8 @@ resolves the name on the same character-screen list (every match, so an ambiguou
 candidates) and sends nothing until `--yes` repeats the resolved character's full name exactly; without it the command
 prints `would delete NAME (level L, GUID); pass --yes NAME` and exits with the usage code. With it, it sends
 `CMSG_CHAR_DELETE` with the resolved GUID and lists again; the client's own confirmation prompt is not on the wire.
-`--build` must be the realm's build, like world-check.
+`--build` follows world-check's rule: without it the login claims the build the realm advertises; a pinned build is
+claimed as given.
 Both commands refuse to send when the run's remaining time is less than the request's bound plus a 10 s margin
 (for a delete, the server's 30 s pending-delete bound, so 40 s must be left after the list; for a create, its 30 s
 answer bound): nothing is sent, and the error names the least `Deadline` that would have worked. If the request was
@@ -126,7 +128,9 @@ or duplicate GUID, does not list this character exactly once at its own MyIndex,
 is printed as `invalid roster: <reason>`, ends the party in the model, and nothing is sent for it (no party line, no
 member stats, no uninvite, no leave). A roster that does not belong to the transition that produced it (the accepted
 invite's leader, or the name of an invite the server confirmed) is printed as `unexpected roster: <reason>` and is
-not acted on either.
+not acted on either. A roster that arrives before the client knows its own GUID (a character that logs in already
+grouped) is held, not judged, and applied when the GUID arrives; a map change drops a held roster, because it belongs
+to the map the character left and the server sends the party update again for the new one.
 `--capture-dir DIR` works as it does for chat-check.
 
 `forever-agent forever death-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // TestLoginAgainstFakeServer runs the whole sequence against the fake REST + RPC server: SRP proof, ticket, connect,
@@ -27,6 +29,7 @@ func TestLoginAgainstFakeServer(t *testing.T) {
 	opts := f.options()
 	opts.Logf = func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) }
 
+	opts.ClientBuild = build70938 // the explicit claim is the one the logon makes
 	result, err := Login(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +39,7 @@ func TestLoginAgainstFakeServer(t *testing.T) {
 		t.Fatal("fake server:", err)
 	default:
 	}
+	wantLogonBuilds(t, f, build70938)
 
 	if result.RealmName != "TestRealm" || result.RealmID != 70 || result.RealmAddress != 0x46010046 {
 		t.Errorf("realm = %q id %d addr %#x", result.RealmName, result.RealmID, result.RealmAddress)
@@ -109,20 +113,119 @@ func TestLoginOfflineRealm(t *testing.T) {
 	}
 }
 
-// TestLoginBuildMismatch reports the realm's build when it is not the one the client claims.
+// TestLoginBuildMismatch reports the realm's build when an explicitly claimed one is not accepted: a pinned build
+// is never silently replaced.
 func TestLoginBuildMismatch(t *testing.T) {
 	f := newFakeLogin(t)
 	defer f.close()
 	f.realmBuild = 70707
-	f.realmFlags = realmFlagVersionMismatch
 
-	_, err := Login(context.Background(), f.options())
+	opts := f.options()
+	opts.ClientBuild = build70938
+	_, err := Login(context.Background(), opts)
 	if err == nil {
 		t.Fatal("a realm for another build was joined")
 	}
 	var realmErr *RealmError
 	if !errors.As(err, &realmErr) || !strings.Contains(err.Error(), "does not accept client build 70938") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestLoginAdvertisedBuild: with no build pinned, the login claims the build the realm list advertises. The first
+// attempt (the client's own build 70938) is refused by a realm on 70707, so the whole login runs again claiming
+// 70707: the realm list and the join read the logon's build, not the realm list ticket's (RealmList.cpp:311,
+// GameUtilitiesService.cpp:312,344).
+func TestLoginAdvertisedBuild(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realmBuild = wire.Build70707
+
+	result, err := Login(context.Background(), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ClientBuild != wire.Build70707 || result.RealmBuild != wire.Build70707 {
+		t.Fatalf("claimed %d, realm list showed %d, want %d for both", result.ClientBuild, result.RealmBuild, wire.Build70707)
+	}
+	wantLogonBuilds(t, f, build70938, wire.Build70707)
+}
+
+// TestLoginFirstOnlineRealmOfSeveral: a realm list may carry several realms on different builds. The login joins the
+// first realm that is online, whatever that realm's build is; an offline realm is only the fallback when every realm
+// is offline. The chosen realm's build is what the automatic claim follows.
+func TestLoginFirstOnlineRealmOfSeveral(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realms = []fakeRealm{
+		{address: 0x46010046, name: "First", population: 1, build: wire.Build70707},
+		{address: 0x46010047, name: "Second", population: 1, build: wire.Build70938},
+	}
+	result, err := Login(context.Background(), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RealmAddress != 0x46010046 || result.RealmName != "First" {
+		t.Fatalf("joined %q (0x%08X), want the first online realm First (0x46010046)", result.RealmName, result.RealmAddress)
+	}
+	if result.ClientBuild != wire.Build70707 || result.RealmBuild != wire.Build70707 {
+		t.Fatalf("claimed %d for realm build %d, want %d", result.ClientBuild, result.RealmBuild, wire.Build70707)
+	}
+	wantLogonBuilds(t, f, build70938, wire.Build70707)
+
+	// An offline first realm is skipped: the second, online one is joined and its build claimed in one logon.
+	g := newFakeLogin(t)
+	defer g.close()
+	g.realms = []fakeRealm{
+		{address: 0x46010046, name: "Offline", population: 0, build: wire.Build70707},
+		{address: 0x46010047, name: "Second", population: 1, build: wire.Build70938},
+	}
+	result, err = Login(context.Background(), g.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RealmAddress != 0x46010047 || result.RealmName != "Second" || result.ClientBuild != wire.Build70938 {
+		t.Fatalf("joined %q (0x%08X) claiming %d, want the online Second (0x46010047) claiming %d",
+			result.RealmName, result.RealmAddress, result.ClientBuild, wire.Build70938)
+	}
+	wantLogonBuilds(t, g, build70938)
+}
+
+// TestLoginAdvertisedBuildUnsupported refuses a realm whose build this client has no table for, naming the builds
+// it does have, instead of claiming a build it cannot parse.
+func TestLoginAdvertisedBuildUnsupported(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realmBuild = 71000
+
+	_, err := Login(context.Background(), f.options())
+	if err == nil {
+		t.Fatal("a realm at an unsupported build was joined")
+	}
+	if !strings.Contains(err.Error(), "no opcode table for") || !strings.Contains(err.Error(), "70707 and 70938") {
+		t.Fatalf("err = %v", err)
+	}
+	wantLogonBuilds(t, f, build70938)
+}
+
+// wantLogonBuilds reads the logon builds the fake recorded and checks they are exactly wants: a login makes no more
+// attempts than the test expects.
+func wantLogonBuilds(t *testing.T, f *fakeLogin, wants ...uint32) {
+	t.Helper()
+	for _, want := range wants {
+		select {
+		case got := <-f.logonBuilds:
+			if got != want {
+				t.Fatalf("a logon claimed %d, want %d", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d logon(s) were expected, one with build %d", len(wants), want)
+		}
+	}
+	select {
+	case got := <-f.logonBuilds:
+		t.Fatalf("an extra logon claimed %d; %d were expected", got, len(wants))
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

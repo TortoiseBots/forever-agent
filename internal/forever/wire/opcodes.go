@@ -622,3 +622,27 @@ func sortUint32(v []uint32) {
 		}
 	}
 }
+
+// The client builds this package's opcode translation and the agent's packet parsers were written for.
+// 70707 is the base numbering: the tables above are the 70707 numbers, and the 70755 and 70790 insert/remove lists
+// apply only to newer claims. 70938 is the >= 70790 class (docs/forever/LOGIN-R1-NOTES.md, PROTOCOL-LOGIN.md). Both
+// were run against a realm live. A build in the same class shares the opcode numbering (70888 is in 70938's class,
+// PROTOCOL-LOGIN-VERIFY.md:50), but no run has checked such a build's packet layouts, so it is not claimed here.
+const (
+	Build70707 = 70707
+	Build70938 = 70938
+)
+
+// SupportedClientBuilds returns the builds a login may claim on its own (Options.ClientBuild 0). A realm that
+// advertises another build is refused by name instead of guessed at.
+func SupportedClientBuilds() []uint32 { return []uint32{Build70707, Build70938} }
+
+// ClientBuildSupported says whether b is one of SupportedClientBuilds.
+func ClientBuildSupported(b uint32) bool {
+	for _, s := range SupportedClientBuilds() {
+		if s == b {
+			return true
+		}
+	}
+	return false
+}

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -32,32 +33,82 @@ type foreverCommon struct {
 	allowRedirect bool
 }
 
-func (c *foreverCommon) flags(fs *flag.FlagSet) {
+// connectionFlags registers the flags every command that talks to the login server takes. --build is 0 (not given)
+// by default: bnet.Login then claims the build the realm advertises, and an explicit build is claimed as given.
+func (c *foreverCommon) connectionFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.restAddr, "rest", "", "login REST host:port")
 	fs.StringVar(&c.rpcAddr, "rpc", "", "Battle.net RPC host:port")
 	fs.StringVar(&c.caFile, "ca", "", "PEM file of the root CA that signed the login server's certificate")
 	fs.StringVar(&c.serverName, "server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
-	fs.UintVar(&c.clientBuild, "build", 70938, "client build to claim; a realm only lets in the builds it accepts")
+	fs.UintVar(&c.clientBuild, "build", 0, "client build to claim (default: the build the realm advertises; a realm only lets in the builds it accepts)")
 	fs.StringVar(&c.account, "account", "", "account e-mail or name")
+}
+
+// flags registers the connection flags plus the ones an entering command takes. Every Forever command that logs in
+// uses this (or connectionFlags when it stops at the character screen), so the build rule cannot drift per command.
+func (c *foreverCommon) flags(fs *flag.FlagSet) {
+	c.connectionFlags(fs)
 	fs.StringVar(&c.character, "character", "", "character to enter the world with")
 	fs.BoolVar(&c.allowRedirect, "allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
 }
 
-func (c *foreverCommon) check(cmd string) error {
-	if c.restAddr == "" || c.rpcAddr == "" || c.caFile == "" || c.account == "" || c.character == "" {
-		return fmt.Errorf("%s: --rest, --rpc, --ca, --account and --character are required", cmd)
+// checkConnection validates the flags of a command that only reaches the login server.
+func (c *foreverCommon) checkConnection(cmd string) error {
+	if c.restAddr == "" || c.rpcAddr == "" || c.caFile == "" || c.account == "" {
+		return fmt.Errorf("%s: --rest, --rpc, --ca and --account are required", cmd)
 	}
-	if c.clientBuild == 0 || c.clientBuild > 0xFFFFFFFF {
+	if c.clientBuild > 0xFFFFFFFF {
 		return fmt.Errorf("%s: --build must be a client build number", cmd)
 	}
 	return nil
 }
 
-// enter logs in and enters the world with opts; the login values fill the world options.
-func (c *foreverCommon) enter(ctx context.Context, cmd string, stdout io.Writer, opts world.Options) (*world.Report, error) {
+func (c *foreverCommon) check(cmd string) error {
+	if err := c.checkConnection(cmd); err != nil {
+		return err
+	}
+	if c.character == "" {
+		return fmt.Errorf("%s: --character is required", cmd)
+	}
+	return nil
+}
+
+// passwordCheck is the last check before the login: the password is only ever read from the environment.
+func (c *foreverCommon) passwordCheck(cmd string) error {
+	if os.Getenv("FOREVER_PASSWORD") == "" {
+		return fmt.Errorf("%s: FOREVER_PASSWORD is not set", cmd)
+	}
+	return nil
+}
+
+// loginError marks a failure before the world session: the command prints the login or auth exit code, not a world
+// one. It unwraps to the bnet error, so bnet.RealmError is still found.
+type loginError struct{ err error }
+
+func (e *loginError) Error() string { return e.err.Error() }
+func (e *loginError) Unwrap() error { return e.err }
+
+// login fails the run with the login exit codes when the command never reached the world, and false otherwise.
+func loginExit(err error, stderr io.Writer) (int, bool) {
+	var le *loginError
+	if !errors.As(err, &le) {
+		return exitOK, false
+	}
+	fmt.Fprintln(stderr, err)
+	var realmErr *bnet.RealmError
+	if errors.As(err, &realmErr) {
+		return exitRealm, true
+	}
+	return exitAuth, true
+}
+
+// login reads the password, logs in, prints the one-line summary and returns the result. This is the only call to
+// bnet.Login in the command layer: --build 0 claims the realm's advertised build (bnet's retry), an explicit build
+// is claimed exactly as given.
+func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer) (*bnet.Result, error) {
 	password := os.Getenv("FOREVER_PASSWORD")
 	if password == "" {
-		return nil, fmt.Errorf("%s: FOREVER_PASSWORD is not set", cmd)
+		return nil, &loginError{fmt.Errorf("%s: FOREVER_PASSWORD is not set", cmd)}
 	}
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)
@@ -73,22 +124,38 @@ func (c *foreverCommon) enter(ctx context.Context, cmd string, stdout io.Writer,
 		Logf:        logf,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", cmd, err)
+		return nil, &loginError{fmt.Errorf("%s: %w", cmd, err)}
 	}
 	fmt.Fprintf(stdout, "login: %s, world %s:%d\n", result.Summary(), result.ServerIP, result.ServerPort)
+	return result, nil
+}
 
+// withLogin adds the login result to a command's world options: the instance address, the tickets, both builds (the
+// claimed client build and the build the realm list showed) and the log sink. The command's own fields stay.
+func (c *foreverCommon) withLogin(result *bnet.Result, stdout io.Writer, opts world.Options) world.Options {
 	opts.Address = net.JoinHostPort(result.ServerIP, strconv.FormatUint(uint64(result.ServerPort), 10))
 	opts.RealmID = result.RealmID
 	opts.RealmAddress = result.RealmAddress
 	opts.RealmJoinTicket = result.JoinTicket
 	opts.ClientSecret = result.ClientSecret
 	opts.JoinSecret = result.JoinSecret
-	opts.ClientBuild = uint32(c.clientBuild)
-	opts.RealmBuild = uint32(c.clientBuild) // the realm admits only its own build
+	opts.ClientBuild = result.ClientBuild
+	opts.RealmBuild = result.RealmBuild
 	opts.Character = c.character
 	opts.AllowInstanceRedirect = c.allowRedirect
-	opts.Logf = logf
-	return world.Enter(ctx, opts)
+	opts.Logf = func(format string, args ...any) {
+		fmt.Fprintf(stdout, format+"\n", args...)
+	}
+	return opts
+}
+
+// enter logs in and enters the world with opts; the login values fill the world options.
+func (c *foreverCommon) enter(ctx context.Context, cmd string, stdout io.Writer, opts world.Options) (*world.Report, error) {
+	result, err := c.login(ctx, cmd, stdout)
+	if err != nil {
+		return nil, err
+	}
+	return world.Enter(ctx, c.withLogin(result, stdout, opts))
 }
 
 func foreverChatCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -119,6 +186,10 @@ func foreverChatCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintln(stderr, "forever chat-check: --stay is at most 1m and --listen at most 2m")
 		return exitUsage
 	}
+	if err := common.passwordCheck("forever chat-check"); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	report, err := common.enter(ctx, "forever chat-check", stdout, world.Options{
 		Stay:       *stay,
 		ChatCheck:  true,
@@ -135,7 +206,10 @@ func foreverChatCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever chat-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever chat-check: %v\n", err)
 		return exitWorld
 	}
 	fmt.Fprintf(stdout, "chat-check: %d chat line(s), %d notice(s), %d player-not-found answer(s), %d restricted, %d emote animation(s), %d text emote(s)\n",
@@ -210,6 +284,10 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever party-check: --uninvite needs --invite: only the leader who invited can uninvite")
 		return exitUsage
 	}
+	if err := common.passwordCheck("forever party-check"); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	report, err := common.enter(ctx, "forever party-check", stdout, world.Options{
 		Stay:             *stay,
 		PartyCheck:       true,
@@ -227,7 +305,10 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever party-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever party-check: %v\n", err)
 		return exitWorld
 	}
 	return exitOK

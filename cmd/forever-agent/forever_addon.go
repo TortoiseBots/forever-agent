@@ -84,6 +84,10 @@ func foreverAddonCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 			return exitUsage
 		}
 	}
+	if err := common.passwordCheck("forever addon-check"); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	report, err := common.enter(ctx, "forever addon-check", stdout, world.Options{
 		Stay:            *stay,
 		Settle:          *stay,
@@ -101,7 +105,10 @@ func foreverAddonCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever addon-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever addon-check: %v\n", err)
 		return exitWorld
 	}
 	return exitOK

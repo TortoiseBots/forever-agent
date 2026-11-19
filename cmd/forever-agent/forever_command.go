@@ -51,6 +51,10 @@ func foreverCommandCheckCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever cmd-check: --stay is at most 1m, --quiet at most 30s and --timeout at most 2m")
 		return exitUsage
 	}
+	if err := common.passwordCheck("forever cmd-check"); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	report, err := common.enter(ctx, "forever cmd-check", stdout, world.Options{
 		Stay:           *stay,
 		Settle:         *stay,
@@ -69,7 +73,10 @@ func foreverCommandCheckCmd(ctx context.Context, args []string, stdout, stderr i
 		printPacketCounts(stdout, report)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "forever cmd-check:", err)
+		if code, isLogin := loginExit(err, stderr); isLogin {
+			return code
+		}
+		fmt.Fprintf(stderr, "forever cmd-check: %v\n", err)
 		return exitWorld
 	}
 	return 0
