@@ -19,7 +19,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
-| Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
+| Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
@@ -205,8 +205,16 @@ output is the order list and the state sequence, and `--out DIR` also writes the
 narrow a run. Every plan field the driver does not run is refused before anything is sent, with the field's path, and
 the command exits 2; the loader test records, per file under `dungeons/`, whether it loads or which fields refuse it,
 and no shipped plan loads today. The dry walker is a straight line and the fights are scripted: it proves the
-machine's order list and a plan's shape, not the game. The live mode needs the session adapter and comes with the
-next round.
+machine's order list and a plan's shape, not the game.
+
+Without `--dry` the same command runs live: the connection flags are world-check's (`--rest`, `--rpc`, `--ca`,
+`--server-name`, `--build`, `--account`), `--navmesh DIR` gives the walker its route, and the command waits for the GM
+probe before it sends anything. The plan and the leg selection are checked before the login (a refused plan is exit 2
+and no session). `--enter none` runs the party where it stands, the open-world mode;
+`testdata/open_world_northshire.json` is a three-pack map-0 test layout for it, built from the public starting-area
+points this repository already uses. Exit codes: 0 clear, 2 usage or a refused plan, 7 link lost, 5 any other stop.
+The live mode has not been run against a server yet; what the first attempt must check is the last section of the
+round's notes.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.
