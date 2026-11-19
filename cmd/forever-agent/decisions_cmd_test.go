@@ -72,7 +72,7 @@ func TestDecisionsPullCommand(t *testing.T) {
 		files: map[string]string{"index.json": `{"id":"x"}`},
 	}
 	old := openDecisionsClient
-	openDecisionsClient = func(base, user, passFile string) (decisionsPuller, error) { return fake, nil }
+	openDecisionsClient = func(base, user, passFile string, insecure bool) (decisionsPuller, error) { return fake, nil }
 	defer func() { openDecisionsClient = old }()
 	out := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -113,7 +113,7 @@ func TestDecisionsPullValidatesIDClientSide(t *testing.T) {
 func runDecisionsPull(t *testing.T, fake *fakeDecisionsDash, out string, extra ...string) (int, string, string) {
 	t.Helper()
 	old := openDecisionsClient
-	openDecisionsClient = func(base, user, passFile string) (decisionsPuller, error) { return fake, nil }
+	openDecisionsClient = func(base, user, passFile string, insecure bool) (decisionsPuller, error) { return fake, nil }
 	defer func() { openDecisionsClient = old }()
 	var stdout, stderr bytes.Buffer
 	args := append([]string{"pull", "--dash-url", "http://dash.test", "--dash-user", "U", "--dash-pass-file", "/tmp/pass", "--commander", "Commander", "--out", out}, extra...)
@@ -143,7 +143,7 @@ func TestDecisionsPullExitCodes(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	old := openDecisionsClient
-	openDecisionsClient = func(base, user, passFile string) (decisionsPuller, error) { return newFake(), nil }
+	openDecisionsClient = func(base, user, passFile string, insecure bool) (decisionsPuller, error) { return newFake(), nil }
 	var stdout, stderr bytes.Buffer
 	code := decisionsCmd(cancelled, []string{"pull", "--dash-url", "http://dash.test", "--dash-user", "U", "--dash-pass-file", "/tmp/pass", "--commander", "Commander", "--out", t.TempDir()}, &stdout, &stderr)
 	openDecisionsClient = old

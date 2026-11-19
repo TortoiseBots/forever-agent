@@ -29,8 +29,9 @@ const exitDashBotsFailed = 1
 // dashWatchGiveUp is how many consecutive failed reads end a watch.
 const dashWatchGiveUp = 5
 
-const dashBotsUsage = "usage: forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--watch [--interval 2s]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]\n" +
-	"  the password is read from --pass-file (mode 0600) or " + dashBotsPasswordEnv + ", never a flag"
+const dashBotsUsage = "usage: forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]\n" +
+	"  the password is read from --pass-file (mode 0600) or " + dashBotsPasswordEnv + ", never a flag\n" +
+	"  a plain-http dashboard is allowed only on this machine unless --dash-insecure-http is given"
 
 func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever dash-bots", flag.ContinueOnError)
@@ -39,6 +40,7 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	dashURL := fs.String("url", "", "the dashboard's root URL")
 	user := fs.String("user", "", "the GM game account the dashboard logs in as")
 	passFile := fs.String("pass-file", "", "the password file (mode 0600); without it the password comes from "+dashBotsPasswordEnv)
+	insecureHTTP := fs.Bool("dash-insecure-http", false, "allow a plain-http dashboard that is not loopback: the GM password and the session cookie then travel in clear text")
 	watch := fs.Bool("watch", false, "poll and report changes instead of printing the roster once")
 	interval := fs.Duration("interval", 2*time.Second, "with --watch: how often the roster is read")
 	stuckAfter := fs.Duration("stuck-after", roster.DefaultStuckAfter, "with --watch: how long a moving bot's position may stay put before it is reported stuck")
@@ -90,10 +92,16 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		return exitUsage
 	}
 
-	c, err := roster.New(*dashURL, *user, src, *timeout)
+	c, err := roster.New(*dashURL, *user, src, roster.Options{
+		Timeout:           *timeout,
+		AllowInsecureHTTP: *insecureHTTP,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "forever dash-bots: %v\n", err)
 		return exitUsage
+	}
+	if *insecureHTTP {
+		warnInsecureDash(stderr, "forever dash-bots", *dashURL)
 	}
 	if err := c.Login(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -112,6 +120,7 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 			fmt.Fprintf(stderr, "forever dash-bots: %v\n", err)
 			return exitDashBotsFailed
 		}
+		printDashRejections(stderr, r.Rejected)
 		printDashRoster(stdout, r)
 		return exitOK
 	}
@@ -124,6 +133,7 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	tracker := roster.NewTracker(cfg)
 	primed := false
 	failed := 0
+	lastRejected := ""
 	for {
 		at := time.Now()
 		r, err := c.Roster(ctx)
@@ -139,6 +149,10 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 			}
 		default:
 			failed = 0
+			if sig := dashRejectionSignature(r.Rejected); sig != lastRejected {
+				lastRejected = sig
+				printDashRejections(stderr, r.Rejected)
+			}
 			events := tracker.Observe(at, r)
 			if !primed {
 				// The first sample is the baseline: its states and positions are in the roster
@@ -240,4 +254,48 @@ func dashInstance(s roster.Text) string {
 		return ""
 	}
 	return " instance " + safeName(string(s))
+}
+
+// dashRejectionSignature identifies one sample's rejected records, so a watch prints a
+// standing rejection once instead of every interval.
+func dashRejectionSignature(rejected []roster.Rejection) string {
+	if len(rejected) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, rej := range rejected {
+		fmt.Fprintf(&b, "%d:%s;", rej.Index, rej.Reason)
+	}
+	return b.String()
+}
+
+// printDashRejections reports the records DecodeRoster left out. A rejected record is never a
+// death, a stuck flag or a distance: it is not in the roster the rules see.
+func printDashRejections(w io.Writer, rejected []roster.Rejection) {
+	for _, rej := range rejected {
+		name := ""
+		if rej.Name != "" {
+			name = " " + safeName(rej.Name)
+		}
+		fmt.Fprintf(w, "forever dash-bots: bot record %d%s skipped: %s\n", rej.Index, name, cleanDashReason(rej.Reason))
+	}
+}
+
+// cleanDashReason makes a decoder reason safe for a terminal without cutting it to uselessness.
+func cleanDashReason(s string) string {
+	const max = 200
+	truncated := len(s) > max
+	if truncated {
+		s = s[:max]
+	}
+	out := []byte(s)
+	for i := range out {
+		if out[i] < 0x20 || out[i] > 0x7e {
+			out[i] = '?'
+		}
+	}
+	if truncated {
+		out = append(out, '.', '.', '.')
+	}
+	return string(out)
 }

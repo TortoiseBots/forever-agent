@@ -98,7 +98,7 @@ func TestDashBotsWatchReportsADeath(t *testing.T) {
 		if atomic.AddInt32(&reads, 1) > 1 {
 			state = "dead"
 		}
-		fmt.Fprintf(w, `{"bots":[{"name":"Ember","guid":1,"class":"Druid","level":60,"kind":"pool","state":%q}]}`, state)
+		fmt.Fprintf(w, `{"bots":[{"name":"Ember","guid":1,"class":"Druid","level":60,"hp":900,"max_hp":1000,"map":0,"instance":"","x":0,"y":0,"z":0,"kind":"pool","state":%q}]}`, state)
 	}))
 	defer srv.Close()
 
@@ -140,4 +140,64 @@ func TestDashBotsRefusesALoosePasswordFile(t *testing.T) {
 func decodeJSONBody(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func TestDashBotsReportsSkippedRecords(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/login" {
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+			return
+		}
+		fmt.Fprint(w, `{"bots":[
+			{"name":"Ember","guid":1,"class":"Druid","level":60,"hp":900,"max_hp":1000,"map":0,"instance":"","x":1,"y":2,"z":3,"group":"g1","kind":"pool","state":"idle"},
+			{"name":"Cinder","guid":2,"kind":"pool","state":"idle"}]}`)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", srv.URL, "--user", "DashUser"}
+	if code := foreverDashBotsCmd(context.Background(), args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Ember") {
+		t.Fatalf("stdout %q does not show the good record", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Cinder") {
+		t.Fatalf("stdout %q shows a rejected record as a bot", stdout.String())
+	}
+	for _, want := range []string{"bot record 1", "Cinder", "skipped", "hp is missing"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr %q does not name %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestDashBotsRefusesPlainHTTPWithoutTheFlag(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", "http://192.0.2.10:8790", "--user", "DashUser"}
+	if code := foreverDashBotsCmd(context.Background(), args, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "clear text") {
+		t.Fatalf("stderr %q does not explain the plain-http boundary", stderr.String())
+	}
+}
+
+func TestDashBotsInsecureHTTPFlagWarnsAndAllows(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", "http://192.0.2.10:1", "--user", "DashUser", "--dash-insecure-http", "--timeout", "1s"}
+	code := foreverDashBotsCmd(context.Background(), args, &stdout, &stderr)
+	if code != exitDashBotsFailed {
+		t.Fatalf("exit %d, want %d (the login cannot reach the address)", code, exitDashBotsFailed)
+	}
+	if !strings.Contains(stderr.String(), "warning: plain HTTP dashboard") {
+		t.Fatalf("stderr %q does not carry the warning", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "clear text; use https") {
+		t.Fatalf("the flag was still refused: %q", stderr.String())
+	}
 }

@@ -1,5 +1,10 @@
 # Roster dashboard client and watch, round DASH-1 notes
 
+> Round 2 ([DASH-R2-NOTES.md](DASH-R2-NOTES.md)) changed part of what this file records: a remote plain-http URL
+> is refused unless `--dash-insecure-http` is given, the fields the watch rules read are required (a record missing
+> one is skipped and reported, not accepted as zeros), concurrent 401s log in once, and one answer is capped at
+> 8 MiB. The rest of this file is round 1's record.
+
 Scope: a typed client for the server's roster dashboard (login, the logged-in bots, the heartbeat) and
 `forever-agent forever dash-bots`, which prints the roster once or watches it and reports four changes: a bot that
 died, a bot whose state says moving but whose position does not change, a bot in combat with no group mate in it, and
