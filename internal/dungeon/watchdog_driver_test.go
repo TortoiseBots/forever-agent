@@ -422,7 +422,7 @@ func TestDriverWatchdogCountsAWalkInAPullStepAfterTheRecovery(t *testing.T) {
 	tries := 0
 	g.walkHook = func(ctx context.Context, g *fakeGame, to Point) (WalkResult, error) {
 		if dist3(to, Point{}) < 1 {
-			g.pos = to
+			g.moveTo(to)
 			return WalkResult{Result: "arrived"}, nil
 		}
 		if tries++; tries == 1 {
@@ -430,7 +430,7 @@ func TestDriverWatchdogCountsAWalkInAPullStepAfterTheRecovery(t *testing.T) {
 			return WalkResult{Result: "failed", Reason: "stuck"}, nil
 		}
 		g.now = g.now.Add(200 * time.Second)
-		g.pos = to
+		g.moveTo(to)
 		return WalkResult{Result: "arrived"}, nil
 	}
 	d := NewDriver(mustPlan(t, plan), g, Config{}, g.clock())

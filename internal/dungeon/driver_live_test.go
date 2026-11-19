@@ -346,7 +346,7 @@ func TestWalkIsStoppedByAggroFoughtAndResumed(t *testing.T) {
 			<-ctx.Done()
 			return WalkResult{Result: "partial", Reason: "cancelled"}, ctx.Err()
 		}
-		g.pos = to
+		g.moveTo(to)
 		return WalkResult{Result: "arrived"}, nil
 	}
 	g.onChat = func(g *fakeGame, text string) { // the party kills the pack when told to attack

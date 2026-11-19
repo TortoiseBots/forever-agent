@@ -255,7 +255,7 @@ func TestLeaderDyingOnAWalkDoesNotUseUpATry(t *testing.T) {
 			g.kill()
 			return WalkResult{Result: "partial", Reason: "died", DistLeft: 5}, nil
 		}
-		g.pos = to
+		g.moveTo(to)
 		return WalkResult{Result: "arrived"}, nil
 	}
 	d := NewDriver(p, g, Config{WalkAttempts: 1}, g.clock())
