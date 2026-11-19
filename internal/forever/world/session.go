@@ -17,6 +17,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
@@ -155,6 +156,10 @@ type Options struct {
 	FBDungeonLeaveWait   time.Duration
 	FBDungeonCleanupWait time.Duration
 	Logf                 func(format string, args ...any)
+	// Round D2: forever dungeon-run. DungeonRun plays one dungeon plan for the party the commander leads; Enter
+	// hands the session to the driver until the run stops or the deadline ends it, then logs out. The driver's
+	// ports are bound to this session (dungeon_session.go). A nil value runs none of it.
+	DungeonRun *driver.Config
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -235,6 +240,9 @@ type Report struct {
 	Commands    []CommandRun
 	GMConfirmed bool
 	TBState     *TBStateTable
+	// Round D2: the dungeon run's result (states, orders, summary, stop reason and exit), nil when the session
+	// ran something else.
+	Dungeon *driver.Result
 	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
 	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
 	// one row per resolved change (map-check fills Objects for each).
@@ -921,6 +929,14 @@ func (s *session) enter(ctx context.Context) error {
 	}
 	if s.opts.MapCheck {
 		if err := s.mapCheck(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.DungeonRun != nil {
+		res, err := s.dungeonRun(ctx, s.opts.DungeonRun)
+		s.report.Dungeon = res
+		if err != nil {
 			return err
 		}
 		return s.logout(ctx)

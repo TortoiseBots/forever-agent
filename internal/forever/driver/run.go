@@ -108,6 +108,9 @@ func DefaultLimits() Limits {
 
 // Config is one run.
 type Config struct {
+	// Plan is the plan file the session adapter loads in the live mode; --dry loads the same file in the command
+	// and hands the built route to the fake instead.
+	Plan string
 	// Party is five names: tank, healer, dps, dps, dps.
 	Party     []string
 	Commander string
@@ -240,6 +243,8 @@ type Run struct {
 	restStart time.Time
 	pullOpen  bool
 	crowded   bool
+	// ended is set when the run reached its end: the instance reset is allowed only from then on.
+	ended bool
 }
 
 // fight is one fight's bookkeeping.
@@ -429,40 +434,6 @@ func (r *Run) refreshSelf() {
 func (r *Run) view() []Unit {
 	r.refreshSelf()
 	return r.world.Units()
-}
-
-// core sends one tokenless core line.
-func (r *Run) core(ctx context.Context, line string) bool {
-	if r.lost {
-		return false
-	}
-	_, err := r.cmd.Core(ctx, line)
-	r.orders = append(r.orders, Order{At: r.sinceStart(), Who: "commander", Verb: "core", Arg: line})
-	r.noteSend(err)
-	if err != nil {
-		if errors.Is(err, ErrLinkLost) {
-			r.linkLost()
-		}
-		return false
-	}
-	return true
-}
-
-// setup sends one token-matched line of the module's setup commands.
-func (r *Run) setup(ctx context.Context, line string) bool {
-	if r.lost {
-		return false
-	}
-	_, err := r.cmd.Setup(ctx, line)
-	r.orders = append(r.orders, Order{At: r.sinceStart(), Who: "party", Verb: "setup", Arg: line})
-	r.noteSend(err)
-	if err != nil {
-		if errors.Is(err, ErrLinkLost) {
-			r.linkLost()
-		}
-		return false
-	}
-	return true
 }
 
 // noteSend records that an order or line went out; a report used for a pull must be newer than it.

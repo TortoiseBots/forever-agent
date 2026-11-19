@@ -2,7 +2,7 @@
 // strictly sequential: the session goroutine owns the packet loop, so every port call either sends a line or runs the
 // loop, and the driver cuts its walks into short segments with a poll between them.
 //
-// The three ports below are the only ways out of the package. A later round binds them to the world session and the
+// The four ports below are the only ways out of the package. A later round binds them to the world session and the
 // command channel; this round binds them to a scripted fake so the whole state machine can be run without a server.
 package driver
 
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -52,16 +51,15 @@ func (u Unit) Alive() bool { return !u.Dead }
 
 // Commander is the server module with bot commands, seen through the command channel's typed model. State is the
 // party's state report, Threat the threat lists of the bots' mobs, Order one order for one target or for the whole
-// party, Party the roster of the party the commander leads. Setup sends a token-matched line of the module's setup
-// commands (teleports, instance entry, revive) and Core a tokenless core command; both return the collected reply
-// for the driver's log.
+// party, Party the roster of the party the commander leads, and Act one typed setup action (the entry, a teleport, a
+// revive, the instance's leave/reset/info, the commander's GM lines). There is no method that takes a command line:
+// the vocabulary above is closed, and every action is classified and gated by the run's own send function.
 type Commander interface {
 	State(ctx context.Context) (tbcmd.StateReport, error)
 	Threat(ctx context.Context) (tbcmd.ThreatReport, error)
 	Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderReport, error)
 	Party(ctx context.Context) (tbcmd.PartyReport, error)
-	Setup(ctx context.Context, line string) (*command.Reply, error)
-	Core(ctx context.Context, line string) (*command.Reply, error)
+	Act(ctx context.Context, a Action) (ActionReport, error)
 }
 
 // World is the commander's own client: where it stands, what it sees and the one client packet the entry phase needs.

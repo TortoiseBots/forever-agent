@@ -118,15 +118,86 @@ func TestForeverDungeonRefusesUnsupportedPlan(t *testing.T) {
 	}
 }
 
-func TestForeverDungeonNeedsDry(t *testing.T) {
+func TestForeverDungeonLiveNeedsLogin(t *testing.T) {
+	// The live mode needs the world-check connection flags; without them the command stops before any plan run.
 	code, _, stderr := runDungeonCmd(t,
-		"--plan", "../../dungeons/ragefire_chasm.json",
+		"--plan", cmdPlan(t),
 		"--party", "Tank,Priest,Dps1,Dps2,Dps3", "--character", "Lead")
-	if code != 2 || !strings.Contains(stderr, "--dry") {
-		t.Fatalf("exit %d, stderr %q; want a usage stop that names --dry", code, stderr)
+	if code != 2 || !strings.Contains(stderr, "--rest") {
+		t.Fatalf("exit %d, stderr %q; want a usage stop that names --rest", code, stderr)
 	}
 }
 
+func TestForeverDungeonLiveArgumentChecks(t *testing.T) {
+	base := []string{"--plan", cmdPlan(t), "--party", "Tank,Priest,Dps1,Dps2,Dps3", "--character", "Lead",
+		"--rest", "127.0.0.1:1", "--rpc", "127.0.0.1:2", "--ca", "ca.pem", "--account", "acct"}
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"no character", []string{"--plan", cmdPlan(t), "--party", "Tank,Priest,Dps1,Dps2,Dps3",
+			"--rest", "127.0.0.1:1", "--rpc", "127.0.0.1:2", "--ca", "ca.pem", "--account", "acct"}, "--character"},
+		{"bad enter", append(append([]string{}, base...), "--enter", "summon"), "--enter"},
+		{"bad budget", append(append([]string{}, base...), "--max-minutes", "0"), "--max-minutes"},
+		{"four names", []string{"--plan", cmdPlan(t), "--party", "Tank,Priest,Dps1,Dps2", "--character", "Lead"},
+			"--party needs five"},
+		{"refused plan", []string{"--plan", refusablePlan(t), "--party", "Tank,Priest,Dps1,Dps2,Dps3",
+			"--character", "Lead"}, "steps"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := runDungeonCmd(t, tc.args...)
+			if code != 2 {
+				t.Fatalf("exit %d, stderr %q; want 2", code, stderr)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Fatalf("stderr %q does not name %q", stderr, tc.want)
+			}
+		})
+	}
+}
+
+// refusablePlan is a plan with a step this build refuses.
+func refusablePlan(t *testing.T) string {
+	t.Helper()
+	js := `{"version":1,"name":"refused","map":389,"entrance":{"x":0,"y":0,"z":0},
+	 "legs":[{"name":"one","to":{"x":0,"y":10,"z":0},"steps":[{"hostiles_gone":{"radius":10}}]}]}`
+	path := filepath.Join(t.TempDir(), "refused.json")
+	if err := os.WriteFile(path, []byte(js), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestForeverDungeonOpenWorldDry: the open-world test plan in testdata/ runs through the dry machine with the party
+// already placed (--enter none), the mode the three-pack smoke test uses.
+func TestForeverDungeonOpenWorldDry(t *testing.T) {
+	out := t.TempDir()
+	code, stdout, stderr := runDungeonCmd(t,
+		"--dry", "--plan", "../../testdata/open_world_northshire.json",
+		"--party", "Tank,Priest,Dps1,Dps2,Dps3", "--character", "Lead",
+		"--enter", "none", "--out", out)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "run: stop clear") {
+		t.Fatalf("output has no clear run:\n%s", stdout)
+	}
+	if n := strings.Count(stdout, " pull "); n != 3 {
+		t.Fatalf("%d pull order(s), want 3:\n%s", n, stdout)
+	}
+	summaries, err := filepath.Glob(filepath.Join(out, "*.forever-run.json"))
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries %v, %v", summaries, err)
+	}
+	b, err := os.ReadFile(summaries[0])
+	if err != nil || !strings.Contains(string(b), `"plan": "northshire_open_world_test"`) {
+		t.Fatalf("summary %v: %s", err, b)
+	}
+}
+
+// TestSplitParty parses the five names.
 func TestSplitParty(t *testing.T) {
 	if _, err := splitParty("A,B,C,D"); err == nil {
 		t.Fatal("four names were accepted")

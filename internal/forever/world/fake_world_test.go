@@ -170,6 +170,8 @@ type fakeServer struct {
 	fbdPolls      int
 	fbMapCounter  uint32
 	fbdEvents     int
+	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
+	dungeon *dungeonScene
 	// What the fake saw, under mu.
 	chatSay, chatWhisperTarget, chatWhisperText, chatEmote string
 	chatPartyText                                          string
@@ -834,6 +836,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.chat {
 		f.serveChat(c, realm)
+		return
+	}
+	if f.dungeon != nil {
+		f.serveDungeon(c, realm)
 		return
 	}
 	if f.command != commandNone {

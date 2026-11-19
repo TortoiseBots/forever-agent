@@ -123,6 +123,28 @@ func SplitLabel(s string) (kind, value string) {
 	return "", s
 }
 
+// coordinate reads a three-number value (pos=x,y,z): the parts are split on ',' before any is decoded, because a
+// value's decimal point and sign are percent-encoded while the separator is the literal grammar's.
+func coordinate(rec record, key, raw string) (x, y, z float64, err error) {
+	parts := strings.Split(raw, ",")
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("%w: %s=%q is not x,y,z", ErrBadValue, key, raw)
+	}
+	out := [3]float64{}
+	for i, part := range parts {
+		s, err := decodePart(part)
+		if err != nil {
+			return 0, 0, 0, rec.bad(key, err)
+		}
+		f, err := rec.floatValue(key, s)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		out[i] = f
+	}
+	return out[0], out[1], out[2], nil
+}
+
 // ---- targets and arguments ----
 
 // targetWords checks the address of a command: a bot's name, "party", or "party <leader>". Names are the server's
@@ -779,11 +801,18 @@ type ThreatLine struct {
 	Size   int
 	Top    []ThreatEntry
 	HasTop bool
-	Extra  map[string]string
+	// X, Y, Z are the mob's position when the line carries one (pos=x,y,z); HasPos is false for a module that
+	// does not send it. A position is what lets a caller place the mob without the commander's own view.
+	X, Y, Z float64
+	HasPos  bool
+	// Flee says the mob is fleeing (flee=yes); HasFlee is false when the key is absent, which is not "flee=no".
+	Flee    bool
+	HasFlee bool
+	Extra   map[string]string
 }
 
 var threatRecordKeys = map[string]bool{"mob": true, "entry": true, "name": true, "hppct": true,
-	"victim": true, "target": true, "size": true, "top": true}
+	"victim": true, "target": true, "size": true, "top": true, "pos": true, "flee": true}
 
 // ThreatReport is a whole threat answer.
 type ThreatReport struct {
@@ -869,6 +898,16 @@ func parseThreat(rep *command.Reply) (ThreatReport, error) {
 		}
 		if m.Size < len(m.Top) {
 			return out, fmt.Errorf("%w: threat mob=%s size=%d with %d top entries", ErrBadReport, m.Mob, m.Size, len(m.Top))
+		}
+		if raw, hasPos := rec.rawValue("pos"); hasPos {
+			x, y, z, err := coordinate(rec, "pos", raw)
+			if err != nil {
+				return out, err
+			}
+			m.X, m.Y, m.Z, m.HasPos = x, y, z, true
+		}
+		if m.Flee, m.HasFlee, err = rec.optionalBool("flee"); err != nil {
+			return out, err
 		}
 		if m.Extra, err = rec.extra(threatRecordKeys); err != nil {
 			return out, err
