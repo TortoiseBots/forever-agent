@@ -19,6 +19,9 @@ type fakeSender struct {
 	now    time.Time
 	sent   []sentPacket
 	onWait func(now time.Time)
+	// waitErr, when set, is asked after every wait: a non-nil error is what the wait returns (the session's wait
+	// returns ErrMapChange when a map change opened or resolved inside it).
+	waitErr func(now time.Time) error
 	// lag is how late WaitUntil wakes: the real session answers packets on the way, so its wait returns after the
 	// requested time. The tests that do not set it wake exactly on time.
 	lag time.Duration
@@ -44,6 +47,9 @@ func (f *fakeSender) WaitUntil(ctx context.Context, until time.Time) error {
 	}
 	if f.onWait != nil {
 		f.onWait(f.now)
+	}
+	if f.waitErr != nil {
+		return f.waitErr(f.now)
 	}
 	return nil
 }

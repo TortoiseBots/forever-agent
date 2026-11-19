@@ -14,6 +14,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
 | Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
+| Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -52,6 +53,15 @@ example `--parent 389=1`), so a walk inside an instance uses the parent terrain 
 straight line between two points. Creature and player names come from `CMSG_QUERY_CREATURE` and
 `CMSG_QUERY_PLAYER_NAMES`, cached per entry and GUID, at most four batches of each per run with a 3 s deadline per
 answer.
+
+`forever-agent forever map-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+enters the world, settles `--settle` seconds (default 3 s), prints the map, the difficulty and the position, sends
+one `CMSG_AREA_TRIGGER` when `--area-trigger ID` is given, then stays `--stay` seconds (default 60 s) and follows
+every map change the server makes: each one prints the from and to map, the reason, the difficulty, the client's own
+position and the objects the new map has five seconds later. A transfer the server aborts is printed with the
+reason's name, the argument and the map, and the character stays where it was. The command is how a far teleport, a
+teleport to another continent and an instance entry are checked live; the layouts and the sequences are in
+[docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md).
 
 `forever-agent forever path-check --navmesh DIR --map N --from X,Y,Z --to X,Y,Z` is offline (no login): it prints the
 same route's kind, every point with Z, the length and the nav flags the corridor crosses. `--server-filter` uses the

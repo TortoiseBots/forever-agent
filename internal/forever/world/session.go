@@ -32,7 +32,7 @@ type Options struct {
 	ClientBuild     uint32
 	RealmBuild      uint32
 	// BuildAuthKey is auth.build_auth_key for the ticket's variant when the caller has it; empty makes the world
-	// socket send the zero digest the live server accepts under Network.SkipBuildAuthKeyCheck.
+	// socket send the zero digest a server accepts when it does not check the build key.
 	BuildAuthKey []byte
 	Character    string        // character name (the surname may be omitted)
 	Stay         time.Duration // how long to stay in the world after the login burst
@@ -78,6 +78,10 @@ type Options struct {
 	PartyAcceptFrom  string
 	PartyDeclineFrom string
 	PartyUninvite    string
+	// MapCheck runs round A7's map check (forever map-check): settle, print the map, send one area trigger when
+	// AreaTrigger is set, then stay in the world and follow every map change the server makes.
+	MapCheck    bool
+	AreaTrigger int32
 	// WaitJoin makes the inviting side wait this long for the group to form before the stats/say/stay steps; without
 	// it an invite-only run ends after the invite answer.
 	WaitJoin  time.Duration
@@ -164,11 +168,23 @@ type Report struct {
 	Commands    []CommandRun
 	GMConfirmed bool
 	TBState     *TBStateTable
+	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
+	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
+	// one row per resolved change (map-check fills Objects for each).
+	Difficulty       int16
+	AreaTriggers     int
+	AbortedTransfers int
+	MapTransitions   []MapChangeRow
+	// StaleMapPackets counts map-content packets read on the instance connection between the suspend answer and the
+	// resume token and dropped instead of applied (they are not the new map's), and UnsolicitedTransfers the transfer
+	// packets the server's own sequences cannot produce (both ignored, counted, rate-limited in the log).
+	StaleMapPackets      int
+	UnsolicitedTransfers int
 }
 
 // ObjectSummary counts the world model by object type, plus the update statistics.
 type ObjectSummary struct {
-	Map        uint16
+	Map        uint32
 	Objects    int
 	Created    int
 	Updated    int
@@ -275,6 +291,10 @@ type session struct {
 	pumpCtx    context.Context
 	pumpCancel context.CancelFunc
 	pumpDone   []chan struct{}
+	// readHook, when not nil, runs in a socket reader after it has a packet and before it hands the packet to the
+	// session. Tests set it to hold one reader at a chosen packet and force a cross-socket interleaving; the
+	// session never sets it. It cannot change the instance stream's order, which is what the map boundary uses.
+	readHook func(side int, p worldconn.Packet)
 
 	// The link's liveness: each socket's reader closes its own channel on an error (a closed or reset socket), so
 	// every wait ends at once instead of waiting out its own deadline. deadSide/deadErr name the first socket to
@@ -319,6 +339,10 @@ type session struct {
 	// account's commands are being said aloud, so no further line may be sent.
 	gmConfirmed bool
 	gmStop      error
+
+	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
+	mapChg  mapChange
+	planner *navmesh.Planner
 
 	// Round 5 debug capture (Options.CaptureDir): one run directory per link, opened on the first packet.
 	captureRun *captureRun
@@ -406,6 +430,13 @@ func (s *session) startPump(side int, next func(context.Context) (worldconn.Pack
 		defer close(done)
 		for {
 			p, err := next(s.pumpCtx)
+			if err == nil && s.readHook != nil {
+				// A test may hold this reader here, between the read and the hand-off. The classification of
+				// the packet (old map, no map, new map) does not depend on it: it is this connection's own
+				// stream position (mapchange.go's gate), not a cross-reader clock.
+				s.readHook(side, p)
+			}
+			ev := event{side: side, p: p, err: err}
 			if err != nil {
 				// A read that failed because this run's own context ended is not a lost link.
 				if s.pumpCtx.Err() == nil {
@@ -413,7 +444,7 @@ func (s *session) startPump(side int, next func(context.Context) (worldconn.Pack
 				}
 			}
 			select {
-			case s.events <- event{side: side, p: p, err: err}:
+			case s.events <- ev:
 			case <-s.pumpCtx.Done():
 				return
 			}
@@ -429,8 +460,8 @@ func (s *session) startPump(side int, next func(context.Context) (worldconn.Pack
 var ErrLinkLost = errors.New("world: the connection is lost")
 
 // linkSilenceLimit is how long the link may go without a server packet before it counts as dead even though the
-// socket is still open: the server sends a time sync at least every 10 s (the live 2026-11-18 run saw 8 in 75 s) and
-// a pong for every ping, so 30 s of silence is a hung or half-open peer, not a quiet fight.
+// socket is still open: the server sends a time sync every ten seconds and a pong for every ping, so half a minute
+// of silence is a hung or half-open peer, not a quiet fight.
 const linkSilenceLimit = 30 * time.Second
 
 // linkSideName is the socket's name in the run's messages.
@@ -721,6 +752,12 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.MapCheck {
+		if err := s.mapCheck(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if err := s.stay(ctx); err != nil {
 		return err
 	}
@@ -765,9 +802,22 @@ func (s *session) drain(ctx context.Context, what string, end time.Time, check f
 }
 
 // WaitUntil answers server packets until until, so a walk keeps the session healthy (time syncs, pings and object
-// updates all arrive while it walks).
+// updates all arrive while it walks). A map change that opens or resolves inside the wait ends it with ErrMapChange:
+// the leg's line belongs to the old map, whatever the transition did in the meantime.
 func (s *session) WaitUntil(ctx context.Context, until time.Time) error {
-	return s.drain(ctx, "the walk", until, nil)
+	epoch := s.mapEpoch()
+	if err := s.drain(ctx, "the walk", until, nil); err != nil {
+		return err
+	}
+	if s.mapEpoch() != epoch {
+		return ErrMapChange
+	}
+	// A window that outlived mapChangeLimit ends the run here too: the walk is the one caller that would otherwise
+	// keep waiting on a map the client may no longer be on.
+	if err := s.mapChangeTimedOut(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // settle answers the server for d and applies what it sends, and ends at once when the character dies: a corpse
@@ -911,8 +961,11 @@ func (s *session) walkCheckPath(ctx context.Context, x, y, z float32) error {
 		return nil
 	}
 	mapID := uint32(s.world.MapID())
-	planner := navmesh.NewForeverPlanner(s.opts.NavmeshDir, s.opts.Parents)
-	defer planner.Close()
+	planner, err := s.navPlanner()
+	if err != nil {
+		return fmt.Errorf("walk-check: navmesh: %w", err)
+	}
+	defer s.dropPlanner()
 	route, err := planner.PathTo(mapID, navmesh.Vec3{x, y, z}, navmesh.Vec3{s.opts.ToX, s.opts.ToY, s.opts.ToZ})
 	if err != nil {
 		return fmt.Errorf("walk-check: navmesh: %w", err)
@@ -951,8 +1004,8 @@ func reasonSuffix(reason string) string {
 	return " (" + reason + ")"
 }
 
-// summarise fills the report's object summary and nearest-units table, and prints both.
-func (s *session) summarise(x, y, z float32) {
+// objectSummary is the world model's counts in the report's shape.
+func (s *session) objectSummary() ObjectSummary {
 	c := s.world.Counts()
 	summary := ObjectSummary{
 		Map:        s.world.MapID(),
@@ -972,6 +1025,13 @@ func (s *session) summarise(x, y, z float32) {
 	for t, n := range c.ByType {
 		summary.ByType[objects.TypeName(t)] = n
 	}
+	return summary
+}
+
+// summarise fills the report's object summary and nearest-units table, and prints both.
+func (s *session) summarise(x, y, z float32) {
+	c := s.world.Counts()
+	summary := s.objectSummary()
 	s.report.Objects = summary
 	var typeNames []string
 	for name := range summary.ByType {
@@ -1189,6 +1249,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		return fmt.Errorf("world: connection %d: %w", ev.side, ev.err)
 	}
 	p := ev.p
+	if ev.side == sideInstance && s.holdMapPacket(ev) {
+		return nil
+	}
 	if p.Name != "" {
 		s.notePacket(p.Name)
 	} else {
@@ -1312,9 +1375,6 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			// MovementHandler.cpp:777-784) and rounds 1-2 left SMSG_MOVE_ROOT unanswered with a healthy session.
 			s.opts.logf("world: %s for the active mover (no ack sent, see OBJECTS-R1-NOTES.md)", wire.ServerName(p.Core))
 		}
-	case wire.SMSGNewWorld, wire.SMSGTransferPending:
-		s.report.MapChanges++
-		s.opts.logf("world: %s seen (map change: not handled in this round)", wire.ServerName(p.Core))
 	case wire.SMSGQueryPlayerNamesResponse:
 		names, err := objects.ParsePlayerNamesResponse(p.Payload)
 		if err != nil {
@@ -1344,6 +1404,10 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGGroupDestroyed, wire.SMSGGroupNewLeader, wire.SMSGPartyCommandResult,
 		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		return s.handleParty(p)
+	// Round A7's handlers live in mapchange.go; this is their one registration line.
+	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,
+		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
+		return s.handleTransfer(ctx, p)
 	default:
 		s.handleCombat(p)
 	}
@@ -1639,11 +1703,22 @@ func (s *session) sendOnCtx(ctx context.Context, side int, core uint32, payload 
 	if err := s.linkDead(); err != nil {
 		return err
 	}
+	// A session without sockets (the handler tests' fake transport) writes through it on either side, so the
+	// transfer handlers are exercisable without a link.
+	if s.realm == nil && s.instance == nil && s.fightSender != nil {
+		return s.fightSender.Send(core, payload)
+	}
 	var err error
 	switch side {
 	case sideRealm:
+		if s.realm == nil {
+			return fmt.Errorf("world: no connection %d", side)
+		}
 		err = s.realm.Send(ctx, core, payload)
 	case sideInstance:
+		if s.instance == nil {
+			return fmt.Errorf("world: no connection %d", side)
+		}
 		err = s.instance.Send(ctx, core, payload)
 	default:
 		return fmt.Errorf("world: no connection %d", side)
@@ -1726,8 +1801,21 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 			}
 			return event{}, err
 		}
+		if err := s.mapChangeTimedOut(); err != nil {
+			return event{}, err
+		}
 		remaining := time.Until(end)
+		if s.mapChg.between {
+			if left := mapChangeLimit - s.Now().Sub(s.mapChg.since); left < remaining {
+				// Wake at the map change's own deadline, so a lost new world ends the run promptly instead of
+				// waiting out this call's longer one.
+				remaining = left
+			}
+		}
 		if remaining <= 0 {
+			if err := s.mapChangeTimedOut(); err != nil {
+				return event{}, err
+			}
 			return event{}, errWaitTimeout
 		}
 		silent := false
@@ -1761,6 +1849,11 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 			if silent {
 				s.markStale()
 				return event{}, s.deadErrorExcept(ignore)
+			}
+			// The timer may have been shortened by the map change's own deadline: that ended the run, and it must
+			// not look like this wait's own timeout to a caller that treats one as the end of a stay.
+			if err := s.mapChangeTimedOut(); err != nil {
+				return event{}, err
 			}
 			return event{}, errWaitTimeout
 		case <-realmCh:

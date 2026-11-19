@@ -71,9 +71,11 @@ type Mover struct {
 	// Sequence is the teleport sequence a SMSG_MOVE_TELEPORT carried (the ack index the server waits for).
 	Sequence uint32
 	// walking is true while MoveTo drives a leg; teleported is set by SetTeleport during one, because a leg
-	// cannot continue along the old line after the server moved the character.
-	walking    bool
-	teleported bool
+	// cannot continue along the old line after the server moved the character. betweenMaps is the map change's
+	// window: every packet is refused until EndMapChange.
+	walking     bool
+	teleported  bool
+	betweenMaps bool
 
 	// sendTimes is the ring of the last movement packets' times, so the chase can hold its optional re-aim when the
 	// link has already carried maxMovementPacketsPerSecond in the last second.
@@ -84,6 +86,46 @@ type Mover struct {
 // ErrTeleported reports that a teleport moved the character in the middle of a leg. The mover is at the server's
 // destination; the walk stops there instead of continuing to the original target.
 var ErrTeleported = errors.New("objects: teleported during the walk")
+
+// ErrMapChange reports that the character is between maps: SMSG_TRANSFER_PENDING took it out of the old map and
+// SMSG_NEW_WORLD has not put it on the new one (or the server aborted the transfer, which ends the window at once).
+// Every walk, chase, facing and stop is refused while the window is open, so no movement packet carries the old
+// map's coordinates; the caller ends its walk or fight with this error.
+var ErrMapChange = errors.New("objects: the character is between maps")
+
+// BeginMapChange closes the movement window (SMSG_TRANSFER_PENDING). A leg in progress is abandoned: its straight
+// line belongs to the old map, and the wait that drives it returns ErrMapChange.
+func (m *Mover) BeginMapChange() {
+	m.betweenMaps = true
+}
+
+// groundFlags are the flags a standing character reports after a map change: the status bits the server keeps
+// (MOVEMENTFLAG_MASK_HAS_PLAYER_STATUS_OPCODE, MovementInfo.h:114-115) plus the ground contact bit. The server resets
+// the player's movement flags to that mask at a far teleport (Player.cpp:1358-1361: SetUnitMovementFlags(flags &
+// MOVEMENTFLAG_MASK_HAS_PLAYER_STATUS_OPCODE), ResetJump), so the first packet after the new world must not carry a
+// moving, falling, flying or transport state the old map left behind.
+const groundStatusFlags = FlagDisableGravity | FlagRoot | FlagCanFly | FlagWaterwalking | FlagFallingSlow |
+	FlagHover | FlagDisableCollision
+
+// EndMapChange reopens movement at the position SMSG_NEW_WORLD names and resets the movement state the old map left.
+func (m *Mover) EndMapChange(x, y, z, o float32) {
+	m.X, m.Y, m.Z, m.O = x, y, z, normalizeOrientation(o)
+	m.betweenMaps = false
+	m.walking = false
+	m.teleported = false
+	// The server clears the player's flags to the status mask and its fall/jump state at the far teleport, and the
+	// transport passenger is removed (Player.cpp:1358-1372). A mover keeps no fall block or transport block of its
+	// own (info() writes none), so the ground baseline plus the status bits is the whole reset.
+	m.Flags = m.Flags&groundStatusFlags | FlagTouchingGround
+	m.Sequence = 0
+	for i := range m.sendTimes {
+		m.sendTimes[i] = time.Time{}
+	}
+	m.sendIdx = 0
+}
+
+// BetweenMaps reports whether the movement window is closed.
+func (m *Mover) BetweenMaps() bool { return m.betweenMaps }
 
 func (m *Mover) logf(format string, args ...any) {
 	if m.Logf != nil {
@@ -130,6 +172,11 @@ func (m *Mover) send(core uint32, flags uint64) error {
 // sendAt sends one movement opcode with the position the mover holds and the timestamp of at. A stop uses it to
 // carry the computed arrival time even when the wake-up was a little late.
 func (m *Mover) sendAt(core uint32, flags uint64, at time.Time) error {
+	if m.betweenMaps {
+		// The old map's coordinates must not go out while the character is between maps (ErrMapChange): the
+		// refusal lives here, so a stop or a re-aim on an abandoned leg cannot slip through.
+		return ErrMapChange
+	}
 	m.recordMovement(at)
 	return m.Sender.Send(core, BuildMovementPacket(m.info(flags, at)))
 }
@@ -164,6 +211,9 @@ func (m *Mover) SetTeleport(x, y, z, o float32, sequence uint32) {
 
 // Face turns in place to o (CMSG_MOVE_SET_FACING) and updates the client's belief.
 func (m *Mover) Face(o float32) error {
+	if m.betweenMaps {
+		return ErrMapChange
+	}
 	m.O = normalizeOrientation(o)
 	return m.send(wire.CMSGMoveSetFacing, m.base())
 }
@@ -191,6 +241,9 @@ func (m *Mover) advance(sx, sy, sz, tx, ty, tz float32, dist float32, start, now
 // the target, so it belongs on flat ground. On the hard deadline the walk stops where the interpolation is and
 // returns an error; it never snaps to the target.
 func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
+	if m.betweenMaps {
+		return ErrMapChange
+	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
 	}
@@ -225,10 +278,24 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			next = arrival
 		}
 		if err := m.Sender.WaitUntil(ctx, next); err != nil {
+			if errors.Is(err, ErrMapChange) || m.betweenMaps {
+				// A map change ended the leg: the old map's line means nothing any more and no packet may carry a
+				// point on it (sendAt refuses one anyway). The new world sets the position.
+				//
+				// The transfer may have COMPLETED inside this one wait (pending, suspend and new world all handled
+				// before WaitUntil returned): then betweenMaps is already false and the mover is at the new map's
+				// position. advancing the old line here would place it back on the old map and the stop would carry
+				// old-map coordinates onto the new map, so the wait's own error decides first.
+				return ErrMapChange
+			}
 			// Interrupted: leave the client where the interpolation is, send the stop there, never snap.
 			m.advance(sx, sy, sz, tx, ty, tz, dist, start, m.Sender.Now())
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
+		}
+		if m.betweenMaps {
+			// The map change ended the leg while this wake-up waited: nothing of the old line goes out.
+			return ErrMapChange
 		}
 		if m.teleported {
 			m.teleported = false
@@ -274,6 +341,9 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 // the previous corner: a packet the cap makes late does not push the rest of the route back, so the walk cannot
 // run out of its deadline on a long densified route.
 func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
+	if m.betweenMaps {
+		return ErrMapChange
+	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
 	}
@@ -319,6 +389,9 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 		slot := m.sendTimes[m.sendIdx%len(m.sendTimes)].Add(time.Second + time.Millisecond)
 		if err := m.Sender.WaitUntil(ctx, slot); err != nil {
 			return err
+		}
+		if m.betweenMaps {
+			return ErrMapChange
 		}
 		if m.teleported {
 			m.teleported = false
@@ -393,9 +466,17 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			}
 		}
 		if err := m.Sender.WaitUntil(ctx, next); err != nil {
+			if errors.Is(err, ErrMapChange) || m.betweenMaps {
+				// The transfer may have completed inside this wait: the mover already stands on the new map, so
+				// placing the old route and sending its stop would put old-map coordinates on the new map.
+				return ErrMapChange
+			}
 			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
+		}
+		if m.betweenMaps {
+			return ErrMapChange
 		}
 		if m.teleported {
 			m.teleported = false
@@ -411,6 +492,9 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			if m.movementsInLastSecond(now) >= maxMovementPacketsPerSecond {
 				slot := m.sendTimes[m.sendIdx%len(m.sendTimes)].Add(time.Second + time.Millisecond)
 				if err := m.Sender.WaitUntil(ctx, slot); err != nil {
+					if errors.Is(err, ErrMapChange) || m.betweenMaps {
+						return ErrMapChange
+					}
 					_ = m.send(wire.CMSGMoveStop, base)
 					return err
 				}
@@ -480,6 +564,9 @@ type ChaseGoal struct {
 // only when Dest has moved chaseRetarget yards or the direction has turned chaseTurn, and one CMSG_MOVE_STOP at the
 // end. The packet rate is at most maxMovementPacketsPerSecond, and the leg is never restarted per target sample.
 func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
+	if m.betweenMaps {
+		return ErrMapChange
+	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
 	}
@@ -515,9 +602,17 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 	replans := 0
 	for {
 		if err := m.Sender.WaitUntil(ctx, lastSend.Add(HeartbeatInterval)); err != nil {
+			if errors.Is(err, ErrMapChange) || m.betweenMaps {
+				// The transfer may have completed inside this wait: the mover is on the new map at the new world's
+				// position, so neither the old line nor its stop may go out.
+				return ErrMapChange
+			}
 			m.advance(sx, sy, sz, tx, ty, tz, dist, start, m.Sender.Now())
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
+		}
+		if m.betweenMaps {
+			return ErrMapChange
 		}
 		if m.teleported {
 			m.teleported = false
@@ -590,6 +685,9 @@ func walkTimeout(dist, runSpeed float32) time.Duration {
 
 // Stop sends CMSG_MOVE_STOP (used when a walk is abandoned).
 func (m *Mover) Stop() error {
+	if m.betweenMaps {
+		return ErrMapChange
+	}
 	return m.send(wire.CMSGMoveStop, m.base())
 }
 
