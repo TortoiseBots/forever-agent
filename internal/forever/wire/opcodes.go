@@ -66,16 +66,20 @@ const (
 
 	// Chat and party (round 5): the client packets (Opcodes.h:194-236, 541, 738-740, 869, 914) and the
 	// server packets it answers (Opcodes.h:1340-1353, 1436, 1463, 1610-1614, 2068-2075, 2161, 2414).
-	CMSGChatMessageSay          uint32 = 0x2C0023
-	CMSGChatMessageYell         uint32 = 0x2C0025
-	CMSGChatMessageParty        uint32 = 0x2C0026
-	CMSGChatMessageWhisper      uint32 = 0x2C0008
-	CMSGChatMessageEmote        uint32 = 0x2C0024
-	CMSGPartyInvite             uint32 = 0x430030
-	CMSGPartyInviteResponse     uint32 = 0x430032
-	CMSGPartyUninvite           uint32 = 0x430073
-	CMSGLeaveGroup              uint32 = 0x430075
-	CMSGRequestPartyMemberStats uint32 = 0x43007F
+	CMSGChatMessageSay                 uint32 = 0x2C0023
+	CMSGChatMessageYell                uint32 = 0x2C0025
+	CMSGChatMessageParty               uint32 = 0x2C0026
+	CMSGChatMessageWhisper             uint32 = 0x2C0008
+	CMSGChatMessageEmote               uint32 = 0x2C0024
+	CMSGChatAddonMessage               uint32 = 0x2C002A
+	CMSGChatAddonMessageTargeted       uint32 = 0x2C002B
+	CMSGChatRegisterAddonPrefixes      uint32 = 0x2C0005
+	CMSGChatUnregisterAllAddonPrefixes uint32 = 0x2C0006
+	CMSGPartyInvite                    uint32 = 0x430030
+	CMSGPartyInviteResponse            uint32 = 0x430032
+	CMSGPartyUninvite                  uint32 = 0x430073
+	CMSGLeaveGroup                     uint32 = 0x430075
+	CMSGRequestPartyMemberStats        uint32 = 0x43007F
 
 	SMSGChat                    uint32 = 0x4A0001
 	SMSGChatPlayerAmbiguous     uint32 = 0x4A0004
@@ -194,21 +198,25 @@ var clientNames = map[uint32]string{
 	CMSGWorldPortResponse:      "CMSG_WORLD_PORT_RESPONSE",
 	CMSGAreaTrigger:            "CMSG_AREA_TRIGGER",
 
-	CMSGChatMessageSay:          "CMSG_CHAT_MESSAGE_SAY",
-	CMSGChatMessageYell:         "CMSG_CHAT_MESSAGE_YELL",
-	CMSGChatMessageParty:        "CMSG_CHAT_MESSAGE_PARTY",
-	CMSGChatMessageWhisper:      "CMSG_CHAT_MESSAGE_WHISPER",
-	CMSGChatMessageEmote:        "CMSG_CHAT_MESSAGE_EMOTE",
-	CMSGPartyInvite:             "CMSG_PARTY_INVITE",
-	CMSGPartyInviteResponse:     "CMSG_PARTY_INVITE_RESPONSE",
-	CMSGPartyUninvite:           "CMSG_PARTY_UNINVITE",
-	CMSGLeaveGroup:              "CMSG_LEAVE_GROUP",
-	CMSGRequestPartyMemberStats: "CMSG_REQUEST_PARTY_MEMBER_STATS",
-	CMSGSetSelection:            "CMSG_SET_SELECTION",
-	CMSGAttackSwing:             "CMSG_ATTACK_SWING",
-	CMSGAttackStop:              "CMSG_ATTACK_STOP",
-	CMSGCastSpell:               "CMSG_CAST_SPELL",
-	CMSGCancelCast:              "CMSG_CANCEL_CAST",
+	CMSGChatMessageSay:                 "CMSG_CHAT_MESSAGE_SAY",
+	CMSGChatMessageYell:                "CMSG_CHAT_MESSAGE_YELL",
+	CMSGChatMessageParty:               "CMSG_CHAT_MESSAGE_PARTY",
+	CMSGChatMessageWhisper:             "CMSG_CHAT_MESSAGE_WHISPER",
+	CMSGChatMessageEmote:               "CMSG_CHAT_MESSAGE_EMOTE",
+	CMSGChatAddonMessage:               "CMSG_CHAT_ADDON_MESSAGE",
+	CMSGChatAddonMessageTargeted:       "CMSG_CHAT_ADDON_MESSAGE_TARGETED",
+	CMSGChatRegisterAddonPrefixes:      "CMSG_CHAT_REGISTER_ADDON_PREFIXES",
+	CMSGChatUnregisterAllAddonPrefixes: "CMSG_CHAT_UNREGISTER_ALL_ADDON_PREFIXES",
+	CMSGPartyInvite:                    "CMSG_PARTY_INVITE",
+	CMSGPartyInviteResponse:            "CMSG_PARTY_INVITE_RESPONSE",
+	CMSGPartyUninvite:                  "CMSG_PARTY_UNINVITE",
+	CMSGLeaveGroup:                     "CMSG_LEAVE_GROUP",
+	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",
+	CMSGSetSelection:                   "CMSG_SET_SELECTION",
+	CMSGAttackSwing:                    "CMSG_ATTACK_SWING",
+	CMSGAttackStop:                     "CMSG_ATTACK_STOP",
+	CMSGCastSpell:                      "CMSG_CAST_SPELL",
+	CMSGCancelCast:                     "CMSG_CANCEL_CAST",
 
 	CMSGCreateCharacter:                "CMSG_CREATE_CHARACTER",
 	CMSGCheckCharacterNameAvailability: "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY",

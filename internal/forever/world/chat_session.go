@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -105,6 +106,13 @@ func (s *session) handleChat(p worldconn.Packet) error {
 		line, err := chat.Parse(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_CHAT: %w", err)
+		}
+		// An add-on message goes to the transport's own inbox and never to the command feed or the chat log: the
+		// command channel owns ordinary chat lines, an add-on text that starts with a command word is not one, and
+		// the add-on text is exact bytes rather than a display string. The chat log has no entry for it.
+		if addonmsg.IsAddon(line) {
+			s.offerAddon(line)
+			return nil
 		}
 		// A running command sees the raw line through its own bound; the log keeps the display-sized copy.
 		s.feedCommand(line)
@@ -217,7 +225,7 @@ func (s *session) chatLineText(line chat.Line) string {
 // character, the player name the world model cached, or the GUID's kind. It never prints the GUID.
 func (s *session) chatName(packed string, guid wire.GUID) string {
 	if packed != "" {
-		return packed
+		return chat.SanitiseName(packed)
 	}
 	if guid.IsZero() {
 		return ""
