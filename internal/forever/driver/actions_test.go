@@ -37,6 +37,7 @@ func TestActionVocabularyIsClassified(t *testing.T) {
 	all := []ActionKind{
 		ActionEnter, ActionTeleCommander, ActionTeleParty, ActionTeleTo, ActionTeleOutside, ActionAppear,
 		ActionRevive, ActionInstanceLeave, ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible,
+		ActionRunStart, ActionRunStop, ActionRunPause, ActionRunResume,
 	}
 	if len(actionClasses) != len(all) {
 		t.Fatalf("%d classes for %d kinds", len(actionClasses), len(all))

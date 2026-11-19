@@ -360,6 +360,33 @@ func TestScenarioWipeRepeat(t *testing.T) {
 	}
 }
 
+// TestScenarioWipeNoBudget: a negative wipe budget is no budget. The party recovers from the first wipe and the run
+// goes on; it stops on the repeat rule at the second wipe on that group, never on the budget.
+func TestScenarioWipeNoBudget(t *testing.T) {
+	cfg := scenarioConfig("none")
+	cfg.Limits = scenarioLimits(func(l *Limits) { l.MaxWipes = -1 })
+	run, f := newScenarioLim(t, oneGroupPlan(), cfg)
+	wipes := 0
+	f.OnOrder = func(f *Fake, who, verb, arg string) {
+		if verb != "pull" {
+			return
+		}
+		wipes++
+		f.Skirmish(arg, 6*time.Second)
+		if wipes <= 2 {
+			f.Wipe(4 * time.Second)
+			f.Recover(30 * time.Second)
+		}
+	}
+	res := play(t, run)
+	if res.Stop != "wipe-repeat" {
+		t.Fatalf("stop %q, want wipe-repeat (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Wipes != 2 {
+		t.Fatalf("%d wipes in the summary, want 2", res.Summary.Wipes)
+	}
+}
+
 // TestScenarioRunner: a fleeing mob at 20 % health runs from the tank; the driver orders one attack on it, and a
 // second pack that joins the fight is added, dies, and is clear afterwards.
 func TestScenarioRunner(t *testing.T) {
