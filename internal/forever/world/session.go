@@ -41,7 +41,7 @@ type Options struct {
 	BuildAuthKey []byte
 	Character    string        // character name (the surname may be omitted)
 	Stay         time.Duration // how long to stay in the world after the login burst
-	Deadline     time.Duration // whole run; default 2 minutes + Stay
+	Deadline     time.Duration // whole run; default 2 minutes + Stay + Settle
 	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle, walk Dx/Dy yards from the
 	// spawn, wait WalkPause, walk back, report, log out. Stay is then the settle time instead of a plain stay.
 	WalkCheck bool
@@ -484,6 +484,19 @@ const (
 	otherUnknownKey = "other unknown wire opcodes"
 )
 
+// defaultRunOverhead is the room a run with no stated Deadline gets around its stays: the login, the character
+// list, the walk and the logout. It is a variable, not a constant, so a test can shrink it and still run the real
+// path in milliseconds; a run never writes it.
+var defaultRunOverhead = 2 * time.Minute
+
+// defaultRunDeadline is the whole-run bound when the caller sets none: the overhead plus every stay the run was
+// asked for. walk-check's --stay is Settle rather than Stay, so a settle must be counted too; counting only Stay let
+// a 290 s settle be cut off at the two-minute overhead, and the socket read armed for that same absolute time ended
+// the run with "reading a frame header: i/o timeout" while the server was still sending time syncs.
+func defaultRunDeadline(opts Options) time.Duration {
+	return defaultRunOverhead + opts.Stay + opts.Settle
+}
+
 // Enter runs the world half: authenticate, list characters, log the named character in, answer the login burst
 // and keep-alives for Stay, then log out. It returns what was observed even when it fails part-way.
 func Enter(ctx context.Context, opts Options) (*Report, error) {
@@ -491,7 +504,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 		return nil, errors.New("world: no character name")
 	}
 	if opts.Deadline <= 0 {
-		opts.Deadline = 2*time.Minute + opts.Stay
+		opts.Deadline = defaultRunDeadline(opts)
 	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
 	defer cancel()
