@@ -123,7 +123,7 @@ party: 2 member(s), leader <char>
 fb-check: <bot> is in the party (2 member(s))
 fb-check: pbc: roster of 1 bot(s)
 fb-check: roster: <bot> (id 2), level 1 HUMAN WARRIOR, DPS, online, 75hp 0mana, -, idle:always_buff, grouped=1 headless=1 saved=0
-fb-check: detail <bot> (id 2): level 1 HUMAN WARRIOR, role DPS, hp 60/80, mana 0/0, map 0 at -8951.3 -134.9 83.5, zone 12 area 9 indoors=0, spec 72, xp 0/400, last rule idle:always_buff
+fb-check: detail <bot> (id 2): level 1 HUMAN WARRIOR, role DPS, hp 60/80, mana 0/0, map 0 at <position>, zone 12 area 9 indoors=0, spec 72, xp 0/400, last rule idle:always_buff
 fb-check: whisper <bot> "follow": following at 5 yards
 fb-check: whisper <bot> "stay": staying here
 fb-check: dismiss all: Dismissed 1 companion(s).
