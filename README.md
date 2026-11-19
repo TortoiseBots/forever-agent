@@ -19,6 +19,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
+| Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
@@ -191,6 +192,17 @@ is a bounded display form instead (valid UTF-8 only, no control, line-separator 
 `--invite NAME` or `--accept-from NAME` form the two-client party with party-check's invite/accept flow and keep it
 for the whole run (the add-on party proof), leaving it before the logout. Every packet is also written to
 `--capture-dir` when given, as for chat-check.
+`forever-agent forever dungeon-run --plan PLAN.json --party TANK,HEALER,DPS,DPS,DPS --character NAME --dry`
+runs one dungeon's machine with no network: the five-bot party is checked, brought to the portal and into the
+instance, walked along the plan's legs, its packs pulled one at a time and rested between, and the bosses killed; the
+output is the order list and the state sequence, and `--out DIR` also writes the run's bt-trace and its
+`<run_id>.forever-run.json` summary (named by the plan's dungeon id, never by a path or a character name).
+`--from-leg`, `--legs a,b`, `--enter tele|portal|none`, `--reset`, `--max-minutes`, `--max-wipes` and `--practice`
+narrow a run. Every plan field the driver does not run is refused before anything is sent, with the field's path, and
+the command exits 2; the loader test records, per file under `dungeons/`, whether it loads or which fields refuse it,
+and no shipped plan loads today. The dry walker is a straight line and the fights are scripted: it proves the
+machine's order list and a plan's shape, not the game. The live mode needs the session adapter and comes with the
+next round.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.
