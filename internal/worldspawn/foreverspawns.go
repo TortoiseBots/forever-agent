@@ -1,8 +1,9 @@
 package worldspawn
 
-// A Forever server's spawn list for plan-check is a TSV with one row per creature spawn: guid, entry, x, y, z, movement type.
-// It carries no creature template, group, link or waypoint data: the aggro and patrol lints then see each spawn alone, which
-// the notes say.
+// A Forever server's spawn list for plan-check is a TSV with one row per spawn: guid, entry, x, y, z, movement type, and an
+// optional kind column (creature by default, object for a game object: a door, lever or chest). Creature rows carry no
+// template, group, link or waypoint data: the aggro and patrol lints then see each spawn alone, which the notes say.
+// Object rows load into World.Objects for the object-presence lint.
 
 import (
 	"bufio"
@@ -15,8 +16,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
-// LoadForeverSpawns reads the TSV a `plan <name> spawns` command prints (guid entry x y z movetype), one map's spawns.
-// Level 60 and detection 20 yd are the lints' defaults for a file that carries neither.
+// LoadForeverSpawns reads the TSV a `plan <name> spawns` command prints (guid entry x y z movetype [kind]), one map's spawns.
+// kind is creature (the default, also when the column is absent) or object; anything else is refused. Level 60 and
+// detection 20 yd are the lints' defaults for a file that carries neither.
 func LoadForeverSpawns(path string, mapID uint32) (*World, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -24,6 +26,7 @@ func LoadForeverSpawns(path string, mapID uint32) (*World, []string, error) {
 	}
 	defer f.Close()
 	var spawns []Spawn
+	var objects []Object
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	line := 0
@@ -45,6 +48,13 @@ func LoadForeverSpawns(path string, mapID uint32) (*World, []string, error) {
 		if strings.EqualFold(f6[0], "guid") {
 			continue // a header line
 		}
+		kind := "creature"
+		if len(f6) > 6 {
+			kind = strings.ToLower(strings.TrimSpace(f6[6]))
+		}
+		if kind != "creature" && kind != "object" {
+			return nil, nil, fmt.Errorf("%s:%d: kind %q: creature or object", path, line, strings.TrimSpace(f6[6]))
+		}
 		guid, err := strconv.ParseUint(f6[0], 10, 64)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s:%d: guid: %w", path, line, err)
@@ -65,6 +75,10 @@ func LoadForeverSpawns(path string, mapID uint32) (*World, []string, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s:%d: movement type: %w", path, line, err)
 		}
+		if kind == "object" {
+			objects = append(objects, Object{GUID: uint64(guid), Entry: uint32(entry), Pos: p})
+			continue
+		}
 		spawns = append(spawns, Spawn{
 			GUID: uint64(guid), Entry: uint32(entry), Pos: p,
 			LevelMax: 60, Faction: 1, DetectionYd: 20, MovementType: movement, SpeedWalk: 1,
@@ -73,10 +87,11 @@ func LoadForeverSpawns(path string, mapID uint32) (*World, []string, error) {
 	if err := sc.Err(); err != nil {
 		return nil, nil, err
 	}
-	if len(spawns) == 0 {
+	if len(spawns) == 0 && len(objects) == 0 {
 		return nil, nil, fmt.Errorf("%s: no spawn rows", path)
 	}
 	sort.Slice(spawns, func(i, j int) bool { return spawns[i].GUID < spawns[j].GUID })
-	notes := []string{fmt.Sprintf("the spawn list carries no groups, links or waypoints: the aggro and patrol lints see each of the %d spawns alone", len(spawns))}
-	return &World{Map: mapID, Spawns: spawns}, notes, nil
+	sort.Slice(objects, func(i, j int) bool { return objects[i].GUID < objects[j].GUID })
+	notes := []string{fmt.Sprintf("the spawn list carries no groups, links or waypoints: the aggro and patrol lints see each of the %d spawns alone; %d game objects", len(spawns), len(objects))}
+	return &World{Map: mapID, Spawns: spawns, Objects: objects}, notes, nil
 }

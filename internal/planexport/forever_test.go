@@ -334,6 +334,46 @@ func TestForeverRoundTrip(t *testing.T) {
 	}
 }
 
+// A unit position that needs more than the three decimals the columns carry (Kresh's X -3.64081, written -3.641) still
+// reads back: the check allows the column's precision, like the step rows. A real mismatch (a moved unit, a wrong
+func TestForeverUnitRoundTripPrecision(t *testing.T) {
+	mk := func(x float32, entry uint32) ForeverReport {
+		return ForeverReport{
+			Rows:  Rows{Plan: PlanRow{Plan: "t", Map: 43}, Legs: []LegRow{{Plan: "t", Leg: 0, Name: "kresh"}}},
+			Units: []UnitRow{{Plan: "t", Leg: 3, Seq: 1, Idx: 0, Entry: entry, X: x, Y: 229.268, Z: -106.189, Role: UnitBoss}},
+		}
+	}
+	want := []ForeverReport{mk(-3.64081, 3653)}
+	sql := WriteForeverSQL(want)
+	if !strings.Contains(sql, "-3.641") {
+		t.Fatalf("the column does not hold -3.641:\n%s", sql)
+	}
+	back, err := ParseForever(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EqualForever(want, back); err != nil {
+		t.Fatalf("a value that round-trips within the column's precision fails: %v", err)
+	}
+	moved := []ForeverReport{mk(-3.65, 3653)}
+	movedBack, err := ParseForever(WriteForeverSQL(moved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedBack[0].Units[0].X = -3.64
+	if err := EqualForever(moved, movedBack); err == nil {
+		t.Fatal("a unit moved by a hundredth of a yard reads back equal")
+	}
+	wrongEntry := []ForeverReport{mk(-3.64081, 3654)}
+	wrongBack, err := ParseForever(WriteForeverSQL([]ForeverReport{mk(-3.64081, 3653)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EqualForever(wrongEntry, wrongBack); err == nil {
+		t.Fatal("a unit with the wrong entry reads back equal")
+	}
+}
+
 // No row carries a spawn id: a pack is its entries and the members' positions.
 func TestForeverNoSpawnIDs(t *testing.T) {
 	sql := strings.ToLower(WriteForeverSQL([]ForeverReport{buildRFC(t)}))

@@ -61,7 +61,7 @@ func dmLegSteps(p *Plan, name string) (l Leg) {
 
 func TestDeadminesPlanLoads(t *testing.T) {
 	p := loadPlan(t, deadminesPlan)
-	if p.Map != 36 || p.Name != "deadmines" || p.Status != DraftStatus || len(p.Legs) != 18 {
+	if p.Map != 36 || p.Name != "deadmines" || p.Status != DraftStatus || len(p.Legs) != 15 {
 		t.Fatalf("%s %q %d, %d legs", p.Name, p.Status, p.Map, len(p.Legs))
 	}
 	var names []string
@@ -77,12 +77,13 @@ func TestDeadminesPlanLoads(t *testing.T) {
 			}
 		}
 	}
-	if fmt.Sprint(names) != "[mine_a lab_tunnel laboratory rhahk_zor factory sneed west_area hall harvester gilnid cannon_a cannon dock mr_smite deck_a deck_b captain_greenskin edwin_vancleef]" {
+	if fmt.Sprint(names) != "[mine_a rhahk_zor factory sneed west_area hall gilnid cannon_a cannon dock mr_smite deck_a deck_b captain_greenskin edwin_vancleef]" {
 		t.Fatalf("%v", names)
 	}
-	// Jared Voss (Turtle's boss in the laboratory side wing), Rhahk'Zor, Sneed's Shredder, the Masterpiece Harvester (Turtle's Foe Reaper, a side branch the navmesh reaches before the foundry), Gilnid,
-	// Mr. Smite, Captain Greenskin, Edwin VanCleef.
-	if fmt.Sprint(bosses) != "[61961 644 642 61963 1763 646 647 639]" {
+	// Rhahk'Zor, Sneed's Shredder, Gilnid, Mr. Smite, Captain Greenskin, Edwin VanCleef. The laboratory boss Jared Voss (61961),
+	// the Masterpiece Harvester (61963) and the Manufactured Golem members (61962) exist only on the server the plan was
+	// written from and are dropped from the plan (lab_tunnel, laboratory and harvester are gone with them).
+	if fmt.Sprint(bosses) != "[644 642 1763 646 647 639]" {
 		t.Fatalf("%v", bosses)
 	}
 	// Entry: area trigger 78 on map 0, game_tele 174 `deadmines` inside and 288 `TheDeadmines` outside.
@@ -475,6 +476,8 @@ var deadminesExemptions = map[string]deadminesExemption{
 	"2583061": {Reason: "Defias Overseer on the z 57.8 catwalk, static at -68.4 -556.3: the look of harvester:7 (the pack at -63.8 -559.3, 4.7 yd from it) is 18.3 yd away in 3-D and no floor point within the 21 yd view of that pack is 20 yd from it and from the other two (0 of 108 points, probed 2026-10-16); the Harvester himself stands 15.3 yd from it in 3-D; no mesh link to the floor; live aggro test pending"},
 	"79129":   {Reason: "Defias Miner in the mine's west pocket at -104.4 -426.7: 17.9 yd from the laboratory tunnel mouth in 3-D behind a wall (no navmesh link), 2.7-2.9 yd outside its level-17 15 yd aggro radius from the lab_tunnel route: not pulled (TB's f4344311 plan carries the same exemption)"},
 	"79131":   {Reason: "Defias Miner in the mine's west pocket at -100.3 -430.7: 17.9 yd from the laboratory tunnel mouth in 3-D behind a wall (no navmesh link), 2.7-2.9 yd outside its level-17 15 yd aggro radius from the lab_tunnel route: not pulled (TB's f4344311 plan carries the same exemption)"},
+	"2582923": {Reason: "Manufactured Golem 61962 at the hall's east end (-184.0 -528.7): old-server-only, no pull group on the second server (its hall pull group and patrol are dropped with the harvester wing)"},
+	"2583031": {Reason: "Manufactured Golem 61962 in the hall (-188.0 -532.9): old-server-only, no pull group on the second server (its hall pull group and patrol are dropped with the harvester wing)"},
 }
 
 // A plan that says mapped or live-checked has had its route corrected by a mapping walk (README "Dungeon plans"): while an exemption is unsettled,
@@ -506,8 +509,10 @@ func TestDeadminesStatusNeedsSettledExemptions(t *testing.T) {
 // period_estimate; the catwalk Overseer 2583051 was out of range of every sampling spot and keeps its calculated 22 s as an estimate.
 func TestDeadminesPatrolPeriodsAreMeasured(t *testing.T) {
 	p := loadPlan(t, deadminesPlan)
+	// The Manufactured Golem patrols (2582923, hall and harvester) and the Taskmaster patrols (2583073, harvester) walked the
+	// dropped harvester wing and are gone with it.
 	measured := map[string]float32{"79144": 107.5, "79138": 33, "2583011": 58, "79188": 81, "79189": 37.5, "79147": 66.5, "79152": 49.5, "79374": 86.5,
-		"79171": 112.5, "79170": 70, "79207": 47.5, "79229": 57.5, "79246": 69.5, "79233": 29, "79284": 130.5, "2582923": 62, "2583073": 16.5, "79213": 85,
+		"79171": 112.5, "79170": 70, "79207": 47.5, "79229": 57.5, "79246": 69.5, "79233": 29, "79284": 130.5, "79213": 85,
 		"79214": 65, "79260": 52.5, "79289": 25, "79290": 25, "79302": 68, "79313": 71.5, "79310": 58, "79322": 80}
 	spawn := regexp.MustCompile(`creature_movement of spawn (\d+) `)
 	seen := map[string]bool{}

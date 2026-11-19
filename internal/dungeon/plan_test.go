@@ -416,3 +416,37 @@ func TestParsePlanTeam(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// An object ref may name another server's entry at the same position
+// (Deadmines 17153 is 16400/16399 on the second server): the alternate entry
+// is carried, round-trips through Marshal, and must differ from the base
+// entry. Unknown fields are still refused.
+func TestParseAltEntries(t *testing.T) {
+	const src = `{"version":1,"name":"t","map":36,"entrance":{"x":0,"y":0,"z":0},"legs":[
+ {"name":"sneed","to":{"x":1,"y":0,"z":0},"after_boss":[{"wait_for":{"gameobject":{"entry":17153,"near":{"x":-290.3,"y":-537.0,"z":49.4},"state":"active","alt_entries":{"forever":16400}},"timeout_s":60}}]}]}`
+	p, err := Parse("t.json", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.Legs[0].AfterBoss[0].WaitFor.GameObject.AltEntries
+	if len(got) != 1 || got["forever"] != 16400 {
+		t.Fatalf("%v", got)
+	}
+	out, err := Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := Parse("t.json", out)
+	if err != nil || q.Legs[0].AfterBoss[0].WaitFor.GameObject.AltEntries["forever"] != 16400 {
+		t.Fatalf("%v %v", q, err)
+	}
+	for _, bad := range []struct{ name, src, want string }{
+		{"same entry", `"alt_entries":{"forever":17153}`, "is already the entry"},
+		{"zero entry", `"alt_entries":{"forever":0}`, "0 is not an object entry"},
+	} {
+		b := strings.Replace(src, `"alt_entries":{"forever":16400}`, bad.src, 1)
+		if _, err := Parse("t.json", []byte(b)); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%s: err %v, want %q", bad.name, err, bad.want)
+		}
+	}
+}

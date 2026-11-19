@@ -91,10 +91,18 @@ type Link struct {
 	Flag          uint32
 }
 
+// Object is one game-object spawn of a server's spawn list (doors, levers, chests): entry and position only.
+type Object struct {
+	GUID  uint64
+	Entry uint32
+	Pos   dungeon.Point
+}
+
 // World is one map's spawns, links and waypoint loops.
 type World struct {
 	Map     uint32
 	Spawns  []Spawn
+	Objects []Object
 	Links   []Link
 	Patrols []Patrol // the DB's waypoint loops; see Patrol for why this is not patrols.Patrol
 }
