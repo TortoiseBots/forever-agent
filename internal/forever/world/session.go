@@ -16,8 +16,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
+	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/pbc"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -129,7 +131,14 @@ type Options struct {
 	CommandTBState string
 	CommandQuiet   time.Duration
 	CommandTimeout time.Duration
-	Logf           func(format string, args ...any)
+	// Round A1: forever fb-check. FBCheck drives one WoW Forever Bots module: the module probe, FBAdd bots
+	// ("class" or "class:role"), FBOrders (an order word per bot by whisper, "party:WORD" for a party word),
+	// roster and detail through the add-on protocol, and FBDismiss (a name or "all", default "all").
+	FBCheck   bool
+	FBAdd     []string
+	FBOrders  []string
+	FBDismiss string
+	Logf      func(format string, args ...any)
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -199,6 +208,8 @@ type Report struct {
 
 	// Round A0: the add-on transport's registered list and what it delivered.
 	Addon AddonSummary
+	// Round A1: the bot module run: the probe, the adds, the roster and its source, details, orders, dismiss.
+	FB FBReport
 
 	// Round 6: the death flow's state and steps.
 	Death DeathReport
@@ -397,6 +408,25 @@ type session struct {
 	// account's commands are being said aloud, so no further line may be sent.
 	gmConfirmed bool
 	gmStop      error
+	// Round A1: the bot module's protocol. pbcAsm reassembles a body per sequence number, pbcSeq hands out request
+	// numbers, and pbcOff is the reason the protocol was turned off for this session (the caller falls back).
+	// fbQueue serialises the module's chat commands on this session, and fbQuiet keeps the protocol's frames out
+	// of the receive log (they are data, not chat).
+	pbcAsm   *pbc.Assembler
+	pbcSeq   uint32
+	pbcOff   string
+	fbQueue  *command.Session
+	fbQuiet  bool
+	fbFrames int
+	// pbcForged counts protocol frames dropped by the authentication rule (a channel other than whisper, or a
+	// sender that is not this character): they never reach the assembler and never turn the protocol off.
+	pbcForged int
+	// fbProbed is set only after this session's `.bot about` probe found the module; every other `.bot` command
+	// is refused until then, whichever path sends it.
+	fbProbed bool
+	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
+	// was sent (a late acknowledgement must not be taken for the next order's).
+	fbHeardWhispers []chat.Line
 
 	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
 	mapChg  mapChange
@@ -801,6 +831,14 @@ func (s *session) enter(ctx context.Context) error {
 	// ---- stay: answer time syncs, the active-mover exchange and pings
 	if s.opts.AddonCheck {
 		err := s.addonCheck(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.FBCheck {
+		err := s.fbCheck(ctx)
 		s.summariseChat()
 		if err != nil {
 			return err
