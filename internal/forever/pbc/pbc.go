@@ -16,9 +16,12 @@ package pbc
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // The protocol's fixed values and the server's bounds.
@@ -30,10 +33,17 @@ const (
 	// MaxChunk is how many payload bytes one client part carries. The envelope adds about thirty bytes; the
 	// transport refuses a text over 255 bytes.
 	MaxChunk = 200
-	// MaxParts is the server's cap on a client's part count.
+	// MaxParts is the server's cap on a client's part count. The same figure bounds this client's own reassembly
+	// (the module's receive side, AddonControl.h:32 kMaxReassemblyChunks).
 	MaxParts = 64
-	// MaxFrame is the largest body this client accepts once reassembled.
-	MaxFrame = 4096
+	// MaxFrame is the largest body this client accepts once reassembled. The module writes parts of 240 bytes
+	// (AddonControl.h:29 kMaxChunkBytes) and caps a client's part count at 64 (AddonControl.h:32), so the largest
+	// body its own bound admits is 64 x 240 = 15,360 bytes; a roster of about 45 bots (the largest an account can
+	// hold) needs far less. The old 4,096-byte bound cut a large roster off mid-answer.
+	MaxFrame = MaxParts * 240
+	// MaxPending is how many different bodies (sender, sequence) may be incomplete at once. The TTL alone would
+	// let a peer park an unbounded number of them for six seconds.
+	MaxPending = 64
 	// DefaultTTL bounds how long an incomplete body is kept. The server drops its own buffers after five seconds;
 	// the client keeps a little longer so a slow but complete answer still lands.
 	DefaultTTL = 6 * time.Second
@@ -70,6 +80,10 @@ var (
 	ErrPartIndex = errors.New("pbc: the part index is outside 1..count")
 	// ErrFrameTooBig is a body past MaxFrame.
 	ErrFrameTooBig = fmt.Errorf("pbc: a body is larger than %d bytes", MaxFrame)
+	// ErrTooManyBodies is more incomplete bodies at once than MaxPending.
+	ErrTooManyBodies = fmt.Errorf("pbc: more than %d bodies under construction", MaxPending)
+	// ErrBotUnknown is the module's id-only answer to a detail request: it does not know that bot.
+	ErrBotUnknown = errors.New("pbc: the module does not know that bot")
 	// ErrType is a message type with characters outside the protocol's grammar.
 	ErrType = errors.New("pbc: the message type is not capitals, digits and underscores")
 	// ErrProtoMismatch is an answer whose shape this client was not written for: a record with fewer values, a
@@ -80,8 +94,10 @@ var (
 	ErrNoFields = errors.New("pbc: the answer has no fields")
 )
 
-// Part is one parsed frame.
+// Part is one parsed frame. Sender is not on the wire: the transport sets it from the delivering add-on message,
+// so assemblies of two senders can never mix even on the same sequence number.
 type Part struct {
+	Sender  wire.GUID
 	Seq     uint32
 	Index   int
 	Total   int
@@ -258,9 +274,16 @@ func BuildRequest(seq uint32, mtype string, fields []string) ([]string, error) {
 
 // Result is one reassembled body.
 type Result struct {
-	Seq  uint32
-	Type string
-	Body string
+	Sender wire.GUID
+	Seq    uint32
+	Type   string
+	Body   string
+}
+
+// assemblyKey identifies one body under construction: one sender's one sequence number.
+type assemblyKey struct {
+	sender wire.GUID
+	seq    uint32
 }
 
 // assembly is one body under construction.
@@ -275,18 +298,22 @@ type assembly struct {
 	at      time.Time
 }
 
-// Assembler reassembles parts per sequence number. It is not safe for concurrent use; the session feeds it from
-// one goroutine. Bounds: the server's part cap, MaxFrame bytes in all, and a TTL per body.
+// Assembler reassembles parts per (sender, sequence number). It is not safe for concurrent use; the session feeds
+// it from one goroutine. Bounds: the server's part cap, MaxFrame bytes in all, MaxPending bodies at once, and a TTL
+// per body.
 type Assembler struct {
-	buffers map[uint32]*assembly
+	buffers map[assemblyKey]*assembly
 	ttl     time.Duration
 }
 
 // NewAssembler returns an empty assembler with DefaultTTL.
-func NewAssembler() *Assembler { return &Assembler{buffers: map[uint32]*assembly{}, ttl: DefaultTTL} }
+func NewAssembler() *Assembler {
+	return &Assembler{buffers: map[assemblyKey]*assembly{}, ttl: DefaultTTL}
+}
 
 // Add takes one part. done is true when a body is complete; the caller then reads it. A duplicate index is
-// ignored, a conflicting count restarts the body, and a body past MaxFrame is dropped with ErrFrameTooBig.
+// ignored, a conflicting count restarts the body, a body past MaxFrame is dropped with ErrFrameTooBig, and a new
+// body while MaxPending are held is refused with ErrTooManyBodies.
 func (a *Assembler) Add(p Part, now time.Time) (res Result, done bool, err error) {
 	if a.ttl <= 0 {
 		a.ttl = DefaultTTL
@@ -302,18 +329,22 @@ func (a *Assembler) Add(p Part, now time.Time) (res Result, done bool, err error
 		if len(p.Payload) > MaxFrame {
 			return Result{}, false, ErrFrameTooBig
 		}
-		return Result{Seq: p.Seq, Type: p.Type, Body: p.Payload}, true, nil
+		return Result{Sender: p.Sender, Seq: p.Seq, Type: p.Type, Body: p.Payload}, true, nil
 	}
-	buf := a.buffers[p.Seq]
+	key := assemblyKey{sender: p.Sender, seq: p.Seq}
+	buf := a.buffers[key]
 	if buf == nil || buf.total != p.Total || buf.mtype != p.Type {
+		if buf == nil && len(a.buffers) >= MaxPending {
+			return Result{}, false, ErrTooManyBodies
+		}
 		buf = &assembly{total: p.Total, parts: make([]string, p.Total+1), got: make([]bool, p.Total+1), mtype: p.Type, at: now}
-		a.buffers[p.Seq] = buf
+		a.buffers[key] = buf
 	}
 	if buf.got[p.Index] {
 		return Result{}, false, nil
 	}
 	if buf.bodyLen+len(p.Payload) > MaxFrame {
-		delete(a.buffers, p.Seq)
+		delete(a.buffers, key)
 		return Result{}, false, ErrFrameTooBig
 	}
 	buf.parts[p.Index] = p.Payload
@@ -330,8 +361,8 @@ func (a *Assembler) Add(p Part, now time.Time) (res Result, done bool, err error
 	for i := 1; i <= buf.total; i++ {
 		b.WriteString(buf.parts[i])
 	}
-	delete(a.buffers, p.Seq)
-	return Result{Seq: p.Seq, Type: buf.mtype, Body: b.String()}, true, nil
+	delete(a.buffers, key)
+	return Result{Sender: p.Sender, Seq: p.Seq, Type: buf.mtype, Body: b.String()}, true, nil
 }
 
 // Expire drops bodies whose last part is older than the TTL and returns how many it dropped.
@@ -401,7 +432,7 @@ func ParseRoster(fields []string) ([]RosterEntry, error) {
 	if err != nil || count < 0 {
 		return nil, fmt.Errorf("%w: the count field", ErrProtoMismatch)
 	}
-	if count > len(fields)-1 {
+	if count != len(fields)-1 {
 		return nil, fmt.Errorf("%w: the count says %d, the answer holds %d record(s)", ErrProtoMismatch, count, len(fields)-1)
 	}
 	out := make([]RosterEntry, 0, count)
@@ -435,6 +466,9 @@ func parseRosterRecord(rec string) (RosterEntry, error) {
 	level, err := num(2, "level")
 	if err != nil {
 		return RosterEntry{}, err
+	}
+	if level < 0 {
+		return RosterEntry{}, fmt.Errorf("%w: the record's level is %d", ErrProtoMismatch, level)
 	}
 	hp, err := num(8, "hp percent")
 	if err != nil {
@@ -491,9 +525,14 @@ func parseRosterRecord(rec string) (RosterEntry, error) {
 // ---- detail ----
 
 // BotDetail is BOT_DETAIL_RESP: the id, then key=value fields. Keys this client does not know are kept in Extra,
-// so a module that appends one does not break the read.
+// so a module that appends one does not break the read. Known is false for the module's id-only answer (it does
+// not know the bot); Live is true only when the snapshot block came, so a zero hp or map is not mistaken for a
+// missing one (the module writes hp first inside that block, AddonControl.cpp:610-654).
 type BotDetail struct {
 	ID          uint32
+	Known       bool
+	Live        bool
+	Present     map[string]bool
 	Name        string
 	Level       int
 	Class       string
@@ -518,7 +557,8 @@ type BotDetail struct {
 }
 
 // ParseDetail reads a BOT_DETAIL_RESP's fields. want is the id the request named; the answer's first field must
-// be that id. A response with only the id is a valid negative answer (the module does not know the bot).
+// be that id. A response with only the id is the module's "I do not know this bot" and returns ErrBotUnknown with
+// Known false; an answer with only the character fields (name, level, class, race) is known but not live.
 func ParseDetail(fields []string, want uint32) (BotDetail, error) {
 	if len(fields) == 0 {
 		return BotDetail{}, ErrNoFields
@@ -530,7 +570,11 @@ func ParseDetail(fields []string, want uint32) (BotDetail, error) {
 	if uint32(id) != want {
 		return BotDetail{}, fmt.Errorf("%w: the answer is for id %d, the request named %d", ErrProtoMismatch, id, want)
 	}
-	d := BotDetail{ID: uint32(id), Extra: map[string]string{}}
+	d := BotDetail{ID: uint32(id), Present: map[string]bool{}, Extra: map[string]string{}}
+	if len(fields) == 1 {
+		return d, ErrBotUnknown
+	}
+	d.Known = true
 	var bad error
 	into := func(dst *int, v string) {
 		if bad != nil {
@@ -566,6 +610,7 @@ func ParseDetail(fields []string, want uint32) (BotDetail, error) {
 			d.Extra["?"+f] = f
 			continue
 		}
+		d.Present[k] = true
 		switch k {
 		case "name":
 			d.Name = v
@@ -623,6 +668,7 @@ func ParseDetail(fields []string, want uint32) (BotDetail, error) {
 	if bad != nil {
 		return BotDetail{}, fmt.Errorf("%w: a known key's value is %v", ErrProtoMismatch, bad)
 	}
+	d.Live = d.Present["hp"]
 	return d, nil
 }
 
@@ -670,4 +716,13 @@ func parseInt(s string) (int, error) {
 
 func parseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
-func parseFloat(s string) (float64, error) { return strconv.ParseFloat(s, 64) }
+func parseFloat(s string) (float64, error) {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("not a finite number")
+	}
+	return f, nil
+}

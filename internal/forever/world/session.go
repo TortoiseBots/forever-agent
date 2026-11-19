@@ -418,6 +418,15 @@ type session struct {
 	fbQueue  *command.Session
 	fbQuiet  bool
 	fbFrames int
+	// pbcForged counts protocol frames dropped by the authentication rule (a channel other than whisper, or a
+	// sender that is not this character): they never reach the assembler and never turn the protocol off.
+	pbcForged int
+	// fbProbed is set only after this session's `.bot about` probe found the module; every other `.bot` command
+	// is refused until then, whichever path sends it.
+	fbProbed bool
+	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
+	// was sent (a late acknowledgement must not be taken for the next order's).
+	fbHeardWhispers []chat.Line
 
 	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
 	mapChg  mapChange

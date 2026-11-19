@@ -62,6 +62,8 @@ func (c Controller) State(ctx context.Context, ref botctl.Ref) (botctl.State, er
 	}
 	d, err := c.Client.Detail(ctx, id)
 	if err != nil {
+		// The id-only answer is the module's not-found: Client.Detail returns fbcmd.ErrBotNotFound for it, and
+		// State passes that typed result through instead of inventing a zero-value state.
 		return botctl.State{}, err
 	}
 	return stateFromDetail(d), nil
@@ -159,8 +161,10 @@ func stateFromDetail(d pbc.BotDetail) botctl.State {
 		X:        d.X,
 		Y:        d.Y,
 		Z:        d.Z,
-		Online:   true,
-		Raw:      raw,
+		// Online only when the snapshot keys came: a known bot the module has no live state for is not online,
+		// and its zero hp/map/role must not be read as live values.
+		Online: d.Live,
+		Raw:    raw,
 	}
 }
 

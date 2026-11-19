@@ -13,6 +13,9 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/command/fbcmd"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -54,22 +57,30 @@ func fbDetailFields(id int) []string {
 // parts. The parts go out with the last first and an unrelated system line between them, so the client's
 // reassembly has to sort them by index rather than trust arrival order.
 func (f *fakeServer) sendPBC(c *fakeConn, seq uint32, mtype, body string) {
+	f.sendPBCFrom(c, mustGUID(f.clientGUID), chat.TypeWhisper, seq, mtype, body)
+}
+
+// sendPBCFrom writes one protocol answer from a chosen sender and chat kind, so a test can forge frames the module
+// never sends: another player's whisper, or the PBC prefix on a party message.
+func (f *fakeServer) sendPBCFrom(c *fakeConn, sender wire.GUID, typ uint8, seq uint32, mtype, body string) {
 	const chunk = 240
 	total := (len(body) + chunk - 1) / chunk
 	if total == 0 {
 		total = 1
 	}
-	self := mustGUID(f.clientGUID)
 	for i := total; i >= 1; i-- {
 		start := (i - 1) * chunk
 		end := min(i*chunk, len(body))
 		frame := pbc.FormatPart(seq, i, total, mtype, body[start:end])
-		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, addonmsg.LanguageAddon, self, self, "", "", pbc.Prefix, "", frame))
+		c.writeFrame(fakeSMSGChat, buildServerChat(typ, addonmsg.LanguageAddon, sender, sender, "", "", pbc.Prefix, "", frame))
 		if i == total && total > 1 {
 			f.sysChat(c, "an unrelated line between the parts")
 		}
 	}
 }
+
+// forgedGUID is another player's GUID: a protocol frame from it is not the module's answer.
+var forgedGUID = wire.GUID{Low: 0x7777, High: 0x0800000000000000}
 
 // answerPBC answers one reassembled request.
 func (f *fakeServer) answerPBC(c *fakeConn, res pbc.Result) {
@@ -77,10 +88,31 @@ func (f *fakeServer) answerPBC(c *fakeConn, res pbc.Result) {
 	f.mu.Lock()
 	f.fbPBC = append(f.fbPBC, res.Type)
 	f.mu.Unlock()
+	if f.fbCase == "malformed" {
+		// An authenticated (this character's own whisper) frame that is not a frame at all: it fails the request
+		// it interrupts, not the session.
+		bad := fmt.Sprintf("1|%08x|1|1|PONG", res.Seq)
+		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, addonmsg.LanguageAddon,
+			mustGUID(f.clientGUID), mustGUID(f.clientGUID), "", "", pbc.Prefix, "", bad))
+	}
+	if f.fbCase == "forged" {
+		// A single-part forged answer from another player, the same prefix on the party channel from this
+		// character, and a forged first part of a two-part body: each carries the request's own sequence number.
+		f.sendPBCFrom(c, forgedGUID, chat.TypeWhisper, res.Seq, res.Type, pbc.BuildBody([]string{"forged"}))
+		f.sendPBCFrom(c, mustGUID(f.clientGUID), chat.TypeParty, res.Seq, res.Type, pbc.BuildBody([]string{"forged"}))
+		part := pbc.FormatPart(res.Seq, 1, 2, res.Type, "FORGED")
+		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, addonmsg.LanguageAddon,
+			forgedGUID, forgedGUID, "", "", pbc.Prefix, "", part))
+	}
 	switch res.Type {
 	case pbc.TypePing:
 		f.sendPBC(c, res.Seq, pbc.TypePong, pbc.BuildBody([]string{"0"}))
 	case pbc.TypeRosterReq:
+		if f.fbCase == "oversizedAnswer" {
+			// A body past the module's own 64-part bound: the client must refuse that answer, not the session.
+			f.sendPBC(c, res.Seq, pbc.TypeRosterResp, strings.Repeat("x", pbc.MaxFrame+1))
+			return
+		}
 		rec1 := fbRosterRecord(fbBotID, fbBotName, 12, "WARRIOR", "TANK", "Elwynn", true, 91, 40, 7, true, false, true, 71)
 		offline := fbRosterRecord(43, "Moss", 5, "PRIEST", "HEALER", "Teldrassil", false, 0, 0, -1, false, true, false, 0)
 		if f.fbCase == "drift" {
@@ -139,6 +171,17 @@ func (f *fakeServer) answerFBWhisper(c *fakeConn, target, text string) {
 	if !strings.EqualFold(target, fbBotName) {
 		f.failf("fb: an order whisper went to %q, want the added bot", target)
 		return
+	}
+	if f.fbCase == "lateAck" {
+		// The bot's earlier acknowledgement arrives after the next order was sent: the client must not take it
+		// for the stay it is waiting for.
+		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, chat.LanguageUniversal, fbBotGUID, wire.EmptyGUID,
+			fbBotName, fbBotName, "", "", fbBotName+": following at 8 yards"))
+	}
+	if f.fbCase == "spoofAck" {
+		// Another character wears the bot's name: the party lists the bot's GUID, so this is not its answer.
+		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, chat.LanguageUniversal, forgedGUID, wire.EmptyGUID,
+			fbBotName, fbBotName, "", "", fbBotName+": staying here"))
 	}
 	if f.fbCase == "orderRefusal" {
 		c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeWhisper, chat.LanguageUniversal, fbBotGUID, wire.EmptyGUID,
@@ -484,5 +527,164 @@ func TestFBCheckLinkDeath(t *testing.T) {
 	}
 	if report == nil {
 		t.Fatal("no report")
+	}
+}
+
+func TestFBCheckForgedProtocolFrames(t *testing.T) {
+	// Every request gets three forged frames with its own sequence number before the real answer: another player's
+	// single-part answer, the PBC prefix on the party channel, and another player's first part of a two-part body.
+	// All three are ignored, the real answer completes the request, and the protocol stays on.
+	f := newFakeServer(t)
+	f.fbCase = "forged"
+	opts := fbOptions(f)
+	var steps []string
+	opts.Logf = func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) }
+	report, err := runFBTests(t, f, opts)
+	if err != nil {
+		t.Fatalf("Enter: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	fb := report.FB
+	if fb.PBC != "ok" || fb.RosterSource != "pbc" {
+		t.Fatalf("pbc %q from %q (%s)\nsteps:\n%s", fb.PBC, fb.RosterSource, fb.PBCReason, joinLines(steps))
+	}
+	if len(fb.Roster) != 2 || fb.Roster[0].Name != fbBotName {
+		t.Fatalf("the real roster did not complete: %+v", fb.Roster)
+	}
+	if len(fb.Details) != 1 || fb.Details[0].HPMax != 400 {
+		t.Fatalf("the real detail did not complete: %+v (err %q)", fb.Details, fb.DetailErr)
+	}
+	if len(fb.Orders) != 2 || fb.Orders[0].Text != "following at 8 yards" {
+		t.Fatalf("orders %+v", fb.Orders)
+	}
+	if fb.Forged == 0 {
+		t.Fatalf("no forged frame was counted; steps:\n%s", joinLines(steps))
+	}
+	f.mu.Lock()
+	pbcs := append([]string(nil), f.fbPBC...)
+	f.mu.Unlock()
+	if len(pbcs) < 3 || pbcs[0] != pbc.TypePing || pbcs[1] != pbc.TypeRosterReq {
+		t.Fatalf("protocol requests %q", pbcs)
+	}
+}
+
+func TestPBCSequenceUnpredictableAndInRange(t *testing.T) {
+	seen := map[uint32]bool{}
+	for range 64 {
+		seq := randomPBCSeq()
+		if seq == 0 || seq > pbc.LastRequestSeq || seq >= pbc.FirstServerSeq {
+			t.Fatalf("random start %d is outside 1..0x%x", seq, pbc.LastRequestSeq)
+		}
+		seen[seq] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("64 random starts produced %d value(s): the start is predictable", len(seen))
+	}
+	// The wrap stays in the request range and never uses 0 or a push number.
+	s := &session{pbcSeq: pbc.LastRequestSeq}
+	if got := s.nextPBCSeq(); got != 1 {
+		t.Fatalf("wrap = %d, want 1", got)
+	}
+}
+
+func TestFBCheckLateAndSpoofedAcks(t *testing.T) {
+	// The bot's earlier "following" whisper and a whisper from another GUID wearing the bot's name both arrive
+	// while "stay" is awaited. Neither answers it; the bot's own "staying here" does.
+	for _, tc := range []struct{ name, cased string }{
+		{"late ack", "lateAck"},
+		{"spoofed ack", "spoofAck"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.fbCase = tc.cased
+			opts := fbOptions(f)
+			report, err := runFBTests(t, f, opts)
+			if err != nil {
+				t.Fatalf("Enter: %v", err)
+			}
+			if len(report.FB.Orders) != 2 {
+				t.Fatalf("orders %+v", report.FB.Orders)
+			}
+			if got := report.FB.Orders[1]; got.Word != "stay" || got.Text != "staying here" || got.Err != "" {
+				t.Fatalf("the stay ack was attributed to another whisper: %+v", got)
+			}
+		})
+	}
+}
+
+func TestFBOrderTargetMembership(t *testing.T) {
+	s := &session{party: party.NewState(), report: &Report{}}
+	if s.fbOrderTarget("Bramble") {
+		t.Fatal("an empty party accepted an order target")
+	}
+	s.party.RosterValid = true
+	s.party.Members = map[wire.GUID]*party.Member{fbBotGUID: {GUID: fbBotGUID, Name: fbBotName}}
+	if !s.fbOrderTarget("bramble") {
+		t.Fatal("a party member was refused")
+	}
+	if s.fbOrderTarget("Stranger") {
+		t.Fatal("a character outside the party was accepted")
+	}
+	// The protocol's roster is the other authentic source: it has no GUIDs, only names.
+	s.report.FB.RosterSource = "pbc"
+	s.report.FB.Roster = []pbc.RosterEntry{{Name: "Moss"}}
+	if !s.fbOrderTarget("moss") {
+		t.Fatal("a bot on the authenticated roster was refused")
+	}
+}
+
+func TestFBProbeRequired(t *testing.T) {
+	s := &session{}
+	s.initAddon()
+	l := fbLink{s: s}
+	if _, err := l.Run(t.Context(), ".bot add warrior dps", command.Options{}); !errors.Is(err, fbcmd.ErrNotProbed) {
+		t.Fatalf("a command before the probe: %v", err)
+	}
+	// The probe line itself is allowed through the gate (it then fails on the missing prefix, not on the gate).
+	if _, err := l.Run(t.Context(), fbProbeLine, command.Options{}); errors.Is(err, fbcmd.ErrNotProbed) {
+		t.Fatalf("the probe itself was refused by the probe gate: %v", err)
+	}
+}
+
+func TestFBBadAnswersKeepTheProtocolOn(t *testing.T) {
+	for _, tc := range []struct{ name, cased, want string }{
+		{"malformed", "malformed", "malformed"},
+		{"oversized", "oversizedAnswer", "unusable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.fbCase = tc.cased
+			opts := fbOptions(f)
+			report, err := runFBTests(t, f, opts)
+			if err != nil {
+				t.Fatalf("Enter: %v", err)
+			}
+			fb := report.FB
+			if fb.PBC != "ok" {
+				t.Fatalf("pbc %q (%s): one bad answer turned the protocol off", fb.PBC, fb.PBCReason)
+			}
+			if fb.RosterSource != "list" {
+				t.Fatalf("roster from %q, want the chat fallback", fb.RosterSource)
+			}
+			if !strings.Contains(fb.PBCReason, tc.want) && !strings.Contains(strings.ToLower(fb.PBCReason), tc.want) {
+				t.Fatalf("the reason %q does not name the bad answer", fb.PBCReason)
+			}
+		})
+	}
+}
+
+func TestFeedCommandSeesRawText(t *testing.T) {
+	s := &session{}
+	var got []chat.Line
+	s.cmdFeed = func(l chat.Line) { got = append(got, l) }
+	raw := "|cffff0000Bot add failed|r: the raid is full\x01"
+	s.feedCommand(chat.Line{Type: chat.TypeSystem, Text: raw})
+	if len(got) != 1 || got[0].Text != raw {
+		t.Fatalf("the collector saw %q, want the raw line %q", got[0].Text, raw)
+	}
+	// A whisper is kept raw too, for the pre-order drain and the acknowledgement match.
+	w := "Bramble: staying here"
+	s.feedCommand(chat.Line{Type: chat.TypeWhisper, Text: w, SenderName: "Bramble"})
+	if len(s.fbHeardWhispers) != 1 || s.fbHeardWhispers[0].Text != w {
+		t.Fatalf("the whisper queue holds %+v", s.fbHeardWhispers)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 func rosterRecord(vals ...string) string { return strings.Join(vals, ",") }
@@ -336,6 +338,16 @@ func TestParseRosterDrift(t *testing.T) {
 	if _, err := ParseRoster([]string{"1", strings.Join(bad, ",")}); !errors.Is(err, ErrProtoMismatch) {
 		t.Fatalf("a non-numeric level: %v", err)
 	}
+	// A count that understates the records is drift too: the answer is not the shape asked for.
+	if _, err := ParseRoster([]string{"1", goodRosterRecord("1", "A"), goodRosterRecord("2", "B")}); !errors.Is(err, ErrProtoMismatch) {
+		t.Fatalf("a count with an extra record: %v", err)
+	}
+	// A negative level would wrap into a huge uint32; it is drift, not a level.
+	neg := strings.Split(goodRosterRecord("1", "A"), ",")
+	neg[2] = "-1"
+	if _, err := ParseRoster([]string{"1", strings.Join(neg, ",")}); !errors.Is(err, ErrProtoMismatch) {
+		t.Fatalf("a negative level wrapped: %v", err)
+	}
 }
 
 func TestParseDetail(t *testing.T) {
@@ -349,7 +361,8 @@ func TestParseDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.ID != 42 || d.Name != "Raveni" || d.Level != 12 || d.HP != 300 || d.HPMax != 400 || d.Mana != 100 ||
+	if d.ID != 42 || !d.Known || !d.Live || !d.Present["hp"] || !d.Present["pos_x"] || !d.Present["future_key"] ||
+		d.HP != 300 || d.HPMax != 400 || d.Mana != 100 ||
 		d.ManaMax != 200 || d.Map != 0 || d.X != -8912.5 || d.Y != 554.25 || d.Z != 93.75 || d.ZoneID != 12 ||
 		d.AreaID != 87 || !d.Indoors || d.Role != "TANK" || d.SpecID != 71 || d.XP != 900 ||
 		d.XPForLevel != 4500 || d.LastRule != "combat" || d.IntentDepth != 3 {
@@ -357,6 +370,22 @@ func TestParseDetail(t *testing.T) {
 	}
 	if d.Extra["future_key"] != "future value" {
 		t.Fatalf("unknown key %v", d.Extra)
+	}
+	// An answer with the character fields but no snapshot is known and not live; presence, not the zero value,
+	// is what says the snapshot came.
+	d, err = ParseDetail([]string{"42", "name=Raveni", "level=12", "class=WARRIOR", "race=HUMAN"}, 42)
+	if err != nil || !d.Known || d.Live || d.Present["hp"] || d.HP != 0 {
+		t.Fatalf("no snapshot: %+v err=%v", d, err)
+	}
+	// A snapshot with zero values is live: presence is the signal.
+	d, err = ParseDetail([]string{"42", "hp=0", "hp_max=0", "map=0", "role=UNKNOWN"}, 42)
+	if err != nil || !d.Live || !d.Present["hp"] {
+		t.Fatalf("zero snapshot: %+v err=%v", d, err)
+	}
+	// A renamed key is drift the client keeps raw rather than guesses at.
+	d, err = ParseDetail([]string{"42", "hp_cur=5", "name=Raveni"}, 42)
+	if err != nil || d.Live || d.Extra["hp_cur"] != "5" {
+		t.Fatalf("renamed key: %+v err=%v", d, err)
 	}
 	// A key this client does not know is kept, never dropped.
 	raw := []string{"41", "notakeyvalue"}
@@ -367,12 +396,23 @@ func TestParseDetail(t *testing.T) {
 	if len(d.Extra) != 1 {
 		t.Fatalf("an unkeyed field was dropped: %v", d.Extra)
 	}
-	// The id-only answer is the module's "I do not know this bot".
-	if d, err = ParseDetail([]string{"7"}, 7); err != nil || d.ID != 7 || d.Name != "" {
+	// The id-only answer is the module's "I do not know this bot": a typed not-found, not a zero-value detail.
+	if d, err = ParseDetail([]string{"7"}, 7); !errors.Is(err, ErrBotUnknown) || d.ID != 7 || d.Known || d.Name != "" {
 		t.Fatalf("id-only: %+v err=%v", d, err)
 	}
 	if _, err := ParseDetail([]string{"8"}, 7); !errors.Is(err, ErrProtoMismatch) {
 		t.Fatalf("the wrong id: %v", err)
+	}
+	// A known numeric key whose value cannot be read, and a non-finite position, are drift: fall back, do not guess.
+	for _, f := range [][]string{
+		{"42", "hp=lots"},
+		{"42", "indoors=2"},
+		{"42", "pos_x=NaN"},
+		{"42", "pos_y=+Inf"},
+	} {
+		if _, err := ParseDetail(f, 42); !errors.Is(err, ErrProtoMismatch) {
+			t.Fatalf("%q accepted: %v", f, err)
+		}
 	}
 	if _, err := ParseDetail([]string{"x"}, 7); !errors.Is(err, ErrProtoMismatch) {
 		t.Fatalf("a bad id: %v", err)
@@ -437,4 +477,88 @@ func FuzzRoster(f *testing.F) {
 			// Every row parsed: the parser's own bounds are the check, and the loop must not panic on any input.
 		}
 	})
+}
+
+func TestAssemblerKeyedBySender(t *testing.T) {
+	// The same sequence number from two senders must never mix: the bodies are separate and each completes.
+	a := wire.GUID{Low: 1, High: 0x0800000000000000}
+	b := wire.GUID{Low: 2, High: 0x0800000000000000}
+	asm := NewAssembler()
+	now := time.Unix(6000, 0)
+	if _, done, err := asm.Add(Part{Sender: a, Seq: 5, Index: 1, Total: 2, Type: TypeRosterResp, Payload: "aa"}, now); err != nil || done {
+		t.Fatalf("a first: done=%v err=%v", done, err)
+	}
+	if _, done, err := asm.Add(Part{Sender: b, Seq: 5, Index: 1, Total: 2, Type: TypeRosterResp, Payload: "bb"}, now); err != nil || done {
+		t.Fatalf("b first: done=%v err=%v", done, err)
+	}
+	if asm.Pending() != 2 {
+		t.Fatalf("%d bodies, want 2", asm.Pending())
+	}
+	res, done, err := asm.Add(Part{Sender: a, Seq: 5, Index: 2, Total: 2, Type: TypeRosterResp, Payload: "AA"}, now)
+	if err != nil || !done || res.Body != "aaAA" || res.Sender != a {
+		t.Fatalf("a done=%v res=%+v err=%v", done, res, err)
+	}
+	res, done, err = asm.Add(Part{Sender: b, Seq: 5, Index: 2, Total: 2, Type: TypeRosterResp, Payload: "BB"}, now)
+	if err != nil || !done || res.Body != "bbBB" || res.Sender != b {
+		t.Fatalf("b done=%v res=%+v err=%v", done, res, err)
+	}
+}
+
+func TestAssemblerPendingCap(t *testing.T) {
+	asm := NewAssembler()
+	now := time.Unix(7000, 0)
+	for i := 0; i < MaxPending; i++ {
+		p := Part{Seq: uint32(i + 1), Index: 1, Total: 2, Type: TypeRosterResp, Payload: "x"}
+		if _, done, err := asm.Add(p, now); err != nil || done {
+			t.Fatalf("body %d: done=%v err=%v", i, done, err)
+		}
+	}
+	if _, _, err := asm.Add(Part{Seq: 999, Index: 1, Total: 2, Type: TypeRosterResp, Payload: "x"}, now); !errors.Is(err, ErrTooManyBodies) {
+		t.Fatalf("a body past the pending cap: %v", err)
+	}
+	// The TTL frees the room: after it, a new body is accepted.
+	if n := asm.Expire(now.Add(DefaultTTL)); n != MaxPending {
+		t.Fatalf("expired %d, want %d", n, MaxPending)
+	}
+	if _, done, err := asm.Add(Part{Seq: 999, Index: 1, Total: 2, Type: TypeRosterResp, Payload: "x"}, now.Add(DefaultTTL)); err != nil || done {
+		t.Fatalf("after the TTL: done=%v err=%v", done, err)
+	}
+}
+
+func TestAssemblerMaxFrameIsTheModulesBound(t *testing.T) {
+	// 64 parts of 240 bytes are exactly MaxFrame and must reassemble; one more byte is refused.
+	if MaxFrame != MaxParts*240 {
+		t.Fatalf("MaxFrame %d, want %d (the module's part cap times its chunk)", MaxFrame, MaxParts*240)
+	}
+	asm := NewAssembler()
+	now := time.Unix(8000, 0)
+	chunk := strings.Repeat("z", 240)
+	var last Result
+	for i := 1; i <= MaxParts; i++ {
+		res, done, err := asm.Add(Part{Seq: 1, Index: i, Total: MaxParts, Type: TypeRosterResp, Payload: chunk}, now)
+		if err != nil {
+			t.Fatalf("part %d: %v", i, err)
+		}
+		if done != (i == MaxParts) {
+			t.Fatalf("part %d: done=%v", i, done)
+		}
+		last = res
+	}
+	if len(last.Body) != MaxFrame {
+		t.Fatalf("body %d bytes, want %d", len(last.Body), MaxFrame)
+	}
+	asm = NewAssembler()
+	for i := 1; i <= MaxParts; i++ {
+		payload := chunk
+		if i == MaxParts {
+			payload = chunk + "z"
+		}
+		if _, _, err := asm.Add(Part{Seq: 2, Index: i, Total: MaxParts, Type: TypeRosterResp, Payload: payload}, now); err != nil {
+			if i == MaxParts && errors.Is(err, ErrFrameTooBig) {
+				return
+			}
+			t.Fatalf("oversized part %d: %v", i, err)
+		}
+	}
+	t.Fatal("a body one byte over MaxFrame was accepted")
 }

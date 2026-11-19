@@ -284,7 +284,8 @@ func (s *Session) Run(ctx context.Context, line string, opts Options) (*Reply, e
 type Reply struct {
 	Line        string // the full line as sent, token included
 	Token       string
-	Raw         []string    // the visible text of each collected line, in order
+	Raw         []string    // the visible, sanitised text of each collected line, in order (display only)
+	RawText     []string    // the same lines' exact server text, bounded at MaxLineBytes (matching only)
 	Lines       []ReplyLine // the same lines, split into kind and key=value fields
 	End         string      // the kind that ended the reply, or "quiet"/"maxlines"/"deadline"
 	RawEnd      string      // the end line's visible text ("" when there was none)
@@ -506,7 +507,10 @@ type collector struct {
 
 	lines []ReplyLine
 	raw   []string
-	bytes int
+	// rawText is each collected line's exact server text, bounded at MaxLineBytes: matching runs on it, while
+	// raw (and ReplyLine) hold the display form the sanitiser makes.
+	rawText []string
+	bytes   int
 
 	echo        bool
 	complete    bool
@@ -543,22 +547,29 @@ func (c *collector) Feed(line chat.Line) {
 			c.complete = true
 			c.end = "echo"
 			c.refusal = ErrNoPermission
-			c.refusalText = Visible(line.Text)
+			c.refusalText = chat.Sanitise(Visible(line.Text), MaxLineBytes)
 			return
 		}
 	}
 	if line.Type != chat.TypeSystem {
 		return
 	}
-	vis := Visible(line.Text)
-	if txt, r := classifyRefusal(vis); r != nil {
+	raw := line.Text
+	if len(raw) > MaxLineBytes {
+		c.tooBig = true
+		return
+	}
+	// Matching (the refusal table, the token, the module's markers) runs on the server's exact text; only what is
+	// kept for display goes through Visible and the sanitiser.
+	vis := Visible(raw)
+	if txt, r := classifyRefusal(raw); r != nil {
 		// A tokened run takes an untagged refusal only before any tokened line of its own, and only when the
 		// session has established that no earlier command's tail can still be arriving. Everything else is
 		// unrelated traffic (another command's answer, a stale tail, an announcement) and is not ours.
 		if c.token && (!c.o.allowRefusal || c.got) {
 			return
 		}
-		c.append(ParseReplyLine(vis))
+		c.append(ParseReplyLine(chat.Sanitise(vis, MaxLineBytes)), raw)
 		c.got = true
 		c.last = now
 		if c.refusal == nil {
@@ -576,33 +587,35 @@ func (c *collector) Feed(line chat.Line) {
 		return
 	}
 	if c.token {
-		tok, ok := trailingToken(vis)
+		tok, ok := trailingToken(raw)
 		if !ok || tok != c.o.Token {
 			return // somebody else's line: not this command's reply
 		}
 	}
-	ln := ParseReplyLine(vis)
-	c.append(ln)
+	ln := ParseReplyLine(chat.Sanitise(vis, MaxLineBytes))
+	c.append(ln, raw)
 	c.got = true
 	c.last = now
 	if c.token && IsEndKind(ln.Kind) && (c.o.EndKind == "" || ln.Kind == "error" || ln.Kind == c.o.EndKind) {
 		c.complete = true
 		c.end = ln.Kind
-		c.rawEnd = vis
+		c.rawEnd = chat.Sanitise(vis, MaxLineBytes)
 	}
 }
 
-func (c *collector) append(ln ReplyLine) {
+func (c *collector) append(ln ReplyLine, raw string) {
 	if len(c.raw) >= c.o.MaxLines || len(c.raw) >= MaxCollectedLines {
 		c.tooMany = true
 		return
 	}
-	if c.bytes+len(ln.Raw) > MaxCollectedBytes || len(ln.Raw) > MaxLineBytes {
+	if n := max(len(ln.Raw), len(raw)); c.bytes+n > MaxCollectedBytes || n > MaxLineBytes {
 		c.tooBig = true
 		return
+	} else {
+		c.bytes += n + 1
 	}
-	c.bytes += len(ln.Raw) + 1
 	c.raw = append(c.raw, ln.Raw)
+	c.rawText = append(c.rawText, raw)
 	c.lines = append(c.lines, ln)
 }
 
@@ -637,6 +650,7 @@ func (c *collector) Reply() *Reply {
 		Line:        c.line,
 		Token:       c.o.Token,
 		Raw:         append([]string(nil), c.raw...),
+		RawText:     append([]string(nil), c.rawText...),
 		Lines:       append([]ReplyLine(nil), c.lines...),
 		End:         c.end,
 		RawEnd:      c.rawEnd,

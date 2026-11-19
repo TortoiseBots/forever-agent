@@ -188,3 +188,66 @@ func validateName(name string) (string, error) {
 	}
 	return n, nil
 }
+
+// orderConfirmations are the module's own acknowledgement phrases per order, from ConfirmWhisperOrder
+// (BotCommandParser.cpp:2841-2883). The words are the module's; the client sends the caller's, so the table is
+// matched on the word this client sent.
+var orderConfirmations = map[string]string{
+	"follow":     "following at ",
+	"stay":       "staying here",
+	"halt":       "staying here",
+	"come":       "coming to you",
+	"summon":     "coming to you",
+	"flee":       "fleeing to you",
+	"retreat":    "fleeing to you",
+	"runaway":    "fleeing to you",
+	"stop":       "stopped",
+	"disengage":  "stopped",
+	"unfollow":   "stopped following",
+	"nofollow":   "stopped following",
+	"fallback":   "falling back",
+	"fall back":  "falling back",
+	"back":       "falling back",
+	"rally here": "rally point set",
+	"rally":      "rally point set",
+	"pull back":  "not a tank, ignoring pull back",
+	"pullback":   "not a tank, ignoring pull back",
+}
+
+// ackMatchesOrder reports whether one whisper body is this order's acknowledgement. A refusal the module words for
+// an order counts (it is an answer to that order); a confirmation must be the phrase the module uses for that
+// order, so a late "following at ..." cannot answer "stay" and unrelated chatter is ignored. The module also
+// answers "<order> ok" for every accepted order it has no specific line for (the last branch of
+// ConfirmWhisperOrder), and echoes formation/spacing/range words as themselves.
+func ackMatchesOrder(word, body string) bool {
+	b := strings.ToLower(strings.TrimSpace(body))
+	w := normalizeOrderWord(word)
+	if w == "" {
+		return false
+	}
+	if _, refused := refusedAck(b); refused {
+		return true
+	}
+	if phrase, ok := orderConfirmations[w]; ok {
+		if strings.HasPrefix(b, phrase) {
+			return true
+		}
+	}
+	switch {
+	case w == "attack" || w == "kill" || w == "engage" || w == "assist":
+		if strings.HasPrefix(b, "attacking ") || strings.HasPrefix(b, "not attacking yet") {
+			return true
+		}
+	case strings.HasPrefix(w, "formation ") || strings.HasPrefix(w, "spacing ") || strings.HasPrefix(w, "range "):
+		return b == w
+	case w == "tight" || w == "close" || w == "spread out" || w == "spaced out":
+		return b == w
+	}
+	return b == w+" ok"
+}
+
+// normalizeOrderWord lower-cases an order word and collapses its spaces, as the module's Normalize does for the
+// words the client sends.
+func normalizeOrderWord(word string) string {
+	return strings.Join(strings.Fields(strings.ToLower(word)), " ")
+}

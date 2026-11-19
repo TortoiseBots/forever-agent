@@ -145,6 +145,16 @@ func (s *session) offerAddon(line chat.Line) {
 	}
 	prefix := chat.Sanitise(m.Prefix, addonmsg.MaxPrefix)
 	from := s.chatName(m.SenderName, m.Sender)
+	if m.Prefix == pbc.Prefix && !s.fbFrameAllowed(m) {
+		// The module answers with a self-addressed WHISPER add-on message (AddonControl.cpp:202-221: sender and
+		// receiver are the same player, prefix PBC). A frame from another character, or on any other channel, is
+		// not that answer: drop it before the assembler, count it, and leave the protocol on.
+		s.addon.Total++
+		s.pbcForged++
+		s.logAddon("addon: %s %s from %s ignored (not this character's protocol whisper, counted)",
+			addonChannelName(m), prefix, from)
+		return
+	}
 	if s.addonState == addonRegistrationUnknown {
 		s.addon.Total++
 		s.addon.Unregistered++

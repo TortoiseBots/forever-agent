@@ -12,6 +12,8 @@ package world
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -34,9 +36,90 @@ const (
 	fbDismissWait = 10 * time.Second
 	// fbWhisperPoll is one pump step while a whisper or a protocol answer is awaited.
 	fbWhisperPoll = 100 * time.Millisecond
-	// fbMaxFrames bounds the protocol's part bookkeeping for one request.
-	fbMaxFrames = 256
+	// fbMaxFrames bounds the protocol's part bookkeeping for one request. It is checked while bodies are added,
+	// not only when the wait runs out.
+	fbMaxFrames = 64
+	// fbMaxWhispers bounds the whispers kept for the pre-order drain.
+	fbMaxWhispers = 16
+	// fbProbeLine is the module's non-mutating probe. It is the only `.bot` line allowed before the probe succeeds.
+	fbProbeLine = ".bot about"
 )
+
+// fbBadAnswer names one unusable answer without turning the protocol off: one malformed, oversized or wrong-type
+// answer proves that request, not the route.
+func fbBadAnswer(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", fbcmd.ErrBadAnswer, fmt.Sprintf(format, args...))
+}
+
+// fbFrameAllowed is the protocol's authentication rule. The module answers with a self-addressed whisper add-on
+// message under the PBC prefix (AddonControl.cpp:202-221 SendAddonRaw: CHAT_MSG_WHISPER, sender and receiver the
+// same player). Only such a line, from this character's own GUID, is accepted; everything else is dropped before
+// the assembler and counted (pbcForged).
+func (s *session) fbFrameAllowed(m addonmsg.Message) bool {
+	if m.Channel != addonmsg.Whisper {
+		return false
+	}
+	self := s.selfOrMover()
+	return !self.IsZero() && m.Sender == self
+}
+
+// fbPartyMember finds a party member by name and returns its GUID. inParty is false when the party does not list
+// the name (or has no valid roster).
+func (s *session) fbPartyMember(name string) (guid wire.GUID, inParty bool) {
+	if s.party == nil || !s.party.RosterValid {
+		return wire.GUID{}, false
+	}
+	for _, m := range s.party.Members {
+		if m.Name != "" && strings.EqualFold(m.Name, name) {
+			return m.GUID, true
+		}
+	}
+	return wire.GUID{}, false
+}
+
+// fbOrderTarget reports whether an order may be whispered to name: it is in the client's party, or the protocol's
+// authenticated roster lists it.
+func (s *session) fbOrderTarget(name string) bool {
+	if _, ok := s.fbPartyMember(name); ok {
+		return true
+	}
+	if s.report != nil && s.report.FB.RosterSource == "pbc" {
+		for _, r := range s.report.FB.Roster {
+			if strings.EqualFold(r.Name, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fbRememberWhisper keeps the last few whisper lines, so an order can drain the ones that arrived before it.
+func (s *session) fbRememberWhisper(line chat.Line) {
+	if len(s.fbHeardWhispers) == fbMaxWhispers {
+		copy(s.fbHeardWhispers, s.fbHeardWhispers[1:])
+		s.fbHeardWhispers = s.fbHeardWhispers[:fbMaxWhispers-1]
+	}
+	s.fbHeardWhispers = append(s.fbHeardWhispers, line)
+}
+
+// fbDropWhispers forgets the whispers name already sent: a late acknowledgement must not answer the next order.
+func (s *session) fbDropWhispers(name string) {
+	kept := s.fbHeardWhispers[:0]
+	for _, line := range s.fbHeardWhispers {
+		if !strings.EqualFold(strings.TrimSpace(line.SenderName), name) {
+			kept = append(kept, line)
+		}
+	}
+	s.fbHeardWhispers = kept
+}
+
+// rawBound cuts server text to the command collector's line bound without touching a shorter line.
+func rawBound(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
 
 // FBAdded is one add step.
 type FBAdded struct {
@@ -74,24 +157,34 @@ type FBReport struct {
 	PBC          string // "ok" or "unavailable"
 	PBCReason    string
 	Frames       int
+	Forged       int // protocol frames dropped by the authentication rule
 }
 
 // fbLink is fbcmd's Transport over the session.
 type fbLink struct{ s *session }
 
-// Run sends one chat-command line through the session's command channel. The module's commands need no permission
-// probe: the run proves the module is there with `.bot about` instead (see fbCheck).
+// Run sends one chat-command line through the session's command channel. The module's commands need no GM
+// permission, but every `.bot` line still needs this session's successful `.bot about` probe first: that is the
+// one line allowed before it. A server without the module says the probe once as ordinary chat, and every later
+// command is refused with fbcmd.ErrNotProbed instead of being sent.
 func (l fbLink) Run(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
+	if !l.s.fbProbed && strings.TrimSpace(line) != fbProbeLine {
+		return nil, fmt.Errorf("%w: %q was not sent", fbcmd.ErrNotProbed, chat.Sanitise(line, 64))
+	}
 	if err := l.s.initFB(); err != nil {
 		return nil, err
 	}
 	return l.s.fbQueue.Run(ctx, line, l.s.commandOptions(opts))
 }
 
-// Whisper says one line to a character and returns the whisper that character answers with within window. A bot
-// answers an accepted order with "<its name>: <text>"; the server fills a whisper's sender name, so the answer is
-// matched by name.
-func (l fbLink) Whisper(ctx context.Context, target, text string, window time.Duration) (string, error) {
+// MarkProbed records the probe's success for the rest of the session.
+func (l fbLink) MarkProbed() { l.s.fbProbed = true }
+
+// Whisper says one line to a character and returns the first whisper from that character that accept matches. A
+// bot answers an accepted order with "<its name>: <text>"; the server fills a whisper's sender name, so the answer
+// is matched by name, and its sender GUID must be the party member's when the party names one. Whispers the bot
+// sent before this order are drained first, so a late acknowledgement cannot answer the next order.
+func (l fbLink) Whisper(ctx context.Context, target, text string, window time.Duration, accept func(string) bool) (string, error) {
 	name, err := chat.NormaliseName(target)
 	if err != nil {
 		return "", fmt.Errorf("world: whisper target: %w", err)
@@ -99,6 +192,11 @@ func (l fbLink) Whisper(ctx context.Context, target, text string, window time.Du
 	if err := chat.ValidateText(text); err != nil {
 		return "", err
 	}
+	if !l.s.fbOrderTarget(name) {
+		return "", fmt.Errorf("%w: %s", fbcmd.ErrNotInParty, chat.SanitiseName(name))
+	}
+	memberGUID, inParty := l.s.fbPartyMember(name)
+	l.s.fbDropWhispers(name)
 	lang, err := l.s.chatLanguage()
 	if err != nil {
 		return "", err
@@ -115,6 +213,12 @@ func (l fbLink) Whisper(ctx context.Context, target, text string, window time.Du
 		if !strings.EqualFold(strings.TrimSpace(line.SenderName), name) {
 			return
 		}
+		if inParty && !memberGUID.IsZero() && line.SenderGUID != memberGUID {
+			return // a whisper wearing the bot's name but sent by another character
+		}
+		if accept != nil && !accept(line.Text) {
+			return // unrelated chatter, or an earlier order's late acknowledgement
+		}
 		got = line.Text
 	}
 	l.s.cmdFeed = feed
@@ -122,7 +226,7 @@ func (l fbLink) Whisper(ctx context.Context, target, text string, window time.Du
 	for got == "" {
 		remaining := deadline.Sub(l.s.Now())
 		if remaining <= 0 {
-			return "", fmt.Errorf("fbcmd: %s answered no whisper within %s", chat.SanitiseName(name), window)
+			return "", fmt.Errorf("fbcmd: %s answered no matching whisper within %s", chat.SanitiseName(name), window)
 		}
 		if remaining > fbWhisperPoll {
 			remaining = fbWhisperPoll
@@ -190,11 +294,19 @@ func (l fbLink) Request(ctx context.Context, req fbcmd.Request) (fbcmd.Answer, e
 			}
 			part, err := pbc.ParsePart(m.Text)
 			if err != nil {
-				return fbcmd.Answer{}, s.pbcUnavailable(fmt.Sprintf("a malformed frame (%v)", err))
+				// The frame passed authentication (offerAddon), so it is this character's own whisper: a
+				// malformed one fails this request, not the session.
+				return fbcmd.Answer{}, fbBadAnswer("a malformed frame (%v)", err)
 			}
+			part.Sender = m.Sender
 			res, done, err := s.pbcAsm.Add(part, s.Now())
 			if err != nil {
-				return fbcmd.Answer{}, s.pbcUnavailable(fmt.Sprintf("a frame this client will not hold (%v)", err))
+				return fbcmd.Answer{}, fbBadAnswer("a frame this client will not hold (%v)", err)
+			}
+			if s.pbcAsm.Pending() > fbMaxFrames {
+				// A live bound, checked as bodies are added: waiting for the deadline would already have held
+				// them for the whole window.
+				return fbcmd.Answer{}, fbBadAnswer("more than %d bodies under construction", fbMaxFrames)
 			}
 			if !done {
 				continue
@@ -203,7 +315,7 @@ func (l fbLink) Request(ctx context.Context, req fbcmd.Request) (fbcmd.Answer, e
 				if res.Type == pbc.TypeEventPush {
 					ev, err := pbc.ParseEvent(pbc.SplitFields(res.Body))
 					if err != nil {
-						return fbcmd.Answer{}, s.pbcUnavailable(fmt.Sprintf("an event this client cannot read (%v)", err))
+						return fbcmd.Answer{}, fbBadAnswer("an event this client cannot read (%v)", err)
 					}
 					if ev.Severity == "error" && req.BotID != 0 && ev.BotID == req.BotID {
 						return fbcmd.Answer{}, &fbcmd.RefusalError{
@@ -218,17 +330,17 @@ func (l fbLink) Request(ctx context.Context, req fbcmd.Request) (fbcmd.Answer, e
 				continue // an answer to an earlier request that timed out
 			}
 			if res.Type != req.Answer {
-				return fbcmd.Answer{}, s.pbcUnavailable(fmt.Sprintf("an answer of type %s where %s was expected",
-					chat.Sanitise(res.Type, 32), chat.Sanitise(req.Answer, 32)))
+				return fbcmd.Answer{}, fbBadAnswer("an answer of type %s where %s was expected",
+					chat.Sanitise(res.Type, 32), chat.Sanitise(req.Answer, 32))
 			}
 			return fbcmd.Answer{Type: res.Type, Fields: pbc.SplitFields(res.Body)}, nil
 		}
 		s.pbcAsm.Expire(s.Now())
+		if s.pbcAsm.Pending() > fbMaxFrames {
+			return fbcmd.Answer{}, fbBadAnswer("more than %d bodies under construction", fbMaxFrames)
+		}
 		remaining := deadline.Sub(s.Now())
 		if remaining <= 0 {
-			if s.pbcAsm.Pending() > fbMaxFrames {
-				return fbcmd.Answer{}, s.pbcUnavailable("too many bodies under construction")
-			}
 			return fbcmd.Answer{}, s.pbcUnavailable(fmt.Sprintf("no answer within %s", wait))
 		}
 		if remaining > fbWhisperPoll {
@@ -253,6 +365,9 @@ func (s *session) initFB() error {
 	if s.pbcAsm == nil {
 		s.pbcAsm = pbc.NewAssembler()
 	}
+	if s.pbcSeq == 0 {
+		s.pbcSeq = randomPBCSeq()
+	}
 	if s.fbQueue == nil {
 		s.fbQueue = command.NewSession(&cmdLink{s: s, probe: true})
 	}
@@ -260,6 +375,16 @@ func (s *session) initFB() error {
 		return fmt.Errorf("%w: the prefix is not registered", fbcmd.ErrPBCOff)
 	}
 	return nil
+}
+
+// randomPBCSeq picks the first request sequence number. A predictable start lets a peer guess a request's number
+// and answer it before the module does; the range stays the module's: 1..LastRequestSeq, below FirstServerSeq.
+func randomPBCSeq() uint32 {
+	var b [4]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return 1
+	}
+	return binary.BigEndian.Uint32(b[:])%pbc.LastRequestSeq + 1
 }
 
 // nextPBCSeq hands out request sequence numbers in 1..LastRequestSeq, wrapping without 0.
@@ -429,8 +554,10 @@ func (s *session) fbCheck(ctx context.Context) error {
 	return nil
 }
 
-// fbRoster reads the roster. The protocol answers only inside a group and only for an owner; any failure turns it
-// off (soft) and the chat list answers instead, with fewer fields and no ids.
+// fbRoster reads the roster. The protocol answers only inside a group and only for an owner; a failure that
+// proves the route unusable (no answer) turns it off (soft) and the chat list answers instead, with fewer fields
+// and no ids. One malformed or oversized answer is not that proof: it fails its request, the protocol stays on,
+// and the list still answers.
 func (s *session) fbRoster(ctx context.Context, c *fbcmd.Client) error {
 	report := &s.report.FB
 	if s.party.RosterValid {
@@ -438,14 +565,26 @@ func (s *session) fbRoster(ctx context.Context, c *fbcmd.Client) error {
 			if errors.Is(err, ErrLinkLost) {
 				return err
 			}
-			s.pbcUnavailable(err.Error())
-			s.opts.logf("fb-check: pbc: %v", err)
+			if errors.Is(err, fbcmd.ErrBadAnswer) {
+				report.PBC = "ok"
+				report.PBCReason = chat.Sanitise(err.Error(), 200)
+				s.opts.logf("fb-check: pbc: %v (the protocol stays on)", err)
+			} else {
+				s.pbcUnavailable(err.Error())
+				s.opts.logf("fb-check: pbc: %v", err)
+			}
 		} else if rows, err := c.Roster(ctx); err != nil {
 			if errors.Is(err, ErrLinkLost) {
 				return err
 			}
-			s.pbcUnavailable(err.Error())
-			s.opts.logf("fb-check: pbc: roster: %v", err)
+			if errors.Is(err, fbcmd.ErrBadAnswer) {
+				report.PBC = "ok"
+				report.PBCReason = chat.Sanitise(err.Error(), 200)
+				s.opts.logf("fb-check: pbc: roster: %v (the protocol stays on)", err)
+			} else {
+				s.pbcUnavailable(err.Error())
+				s.opts.logf("fb-check: pbc: roster: %v", err)
+			}
 		} else {
 			report.Roster = rows
 			report.RosterSource = "pbc"
@@ -458,8 +597,10 @@ func (s *session) fbRoster(ctx context.Context, c *fbcmd.Client) error {
 		s.pbcUnavailable("not grouped")
 		s.opts.logf("fb-check: pbc: not grouped, so the protocol cannot answer")
 	}
-	report.PBC = "unavailable"
-	report.PBCReason = s.pbcOff
+	if report.PBC != "ok" {
+		report.PBC = "unavailable"
+		report.PBCReason = s.pbcOff
+	}
 	rows, err := c.List(ctx)
 	if err != nil {
 		if errors.Is(err, ErrLinkLost) {
@@ -474,7 +615,11 @@ func (s *session) fbRoster(ctx context.Context, c *fbcmd.Client) error {
 		})
 	}
 	report.RosterSource = "list"
-	s.opts.logf("fb-check: list: %d bot(s) (fallback: pbc unavailable: %s)", len(rows), s.pbcOff)
+	if s.pbcOff != "" {
+		s.opts.logf("fb-check: list: %d bot(s) (fallback: pbc unavailable: %s)", len(rows), s.pbcOff)
+	} else {
+		s.opts.logf("fb-check: list: %d bot(s) (fallback: %s)", len(rows), report.PBCReason)
+	}
 	s.fbPrintRoster()
 	return nil
 }
@@ -525,8 +670,12 @@ func (s *session) fbDetails(ctx context.Context, c *fbcmd.Client, added []string
 	for _, id := range ids {
 		d, err := c.Detail(ctx, id)
 		if err != nil {
-			s.pbcUnavailable(err.Error())
 			report.DetailErr = chat.Sanitise(err.Error(), 300)
+			if errors.Is(err, fbcmd.ErrBotNotFound) || errors.Is(err, fbcmd.ErrBadAnswer) {
+				s.opts.logf("fb-check: detail %d: %v", id, err)
+				continue
+			}
+			s.pbcUnavailable(err.Error())
 			s.opts.logf("fb-check: detail %d: %v", id, err)
 			return
 		}
@@ -570,6 +719,11 @@ func (s *session) fbLastRule(ctx context.Context, c *fbcmd.Client, added []strin
 	}
 	d, err := c.Detail(ctx, id)
 	if err != nil {
+		if errors.Is(err, fbcmd.ErrBotNotFound) || errors.Is(err, fbcmd.ErrBadAnswer) {
+			s.opts.logf("fb-check: party order confirmation: %v", err)
+			return
+		}
+		s.pbcUnavailable(err.Error())
 		s.opts.logf("fb-check: party order confirmation: %v", err)
 		return
 	}
@@ -582,10 +736,11 @@ func (s *session) summariseFB() {
 	if s.pbcOff != "" {
 		s.report.FB.PBC = "unavailable"
 		s.report.FB.PBCReason = s.pbcOff
-	} else if s.report.FB.RosterSource == "pbc" {
+	} else if s.report.FB.RosterSource == "pbc" || s.report.FB.PBC == "ok" {
 		s.report.FB.PBC = "ok"
 	}
 	s.report.FB.Frames = s.fbFrames
+	s.report.FB.Forged = s.pbcForged
 	if s.pbcOff != "" {
 		s.opts.logf("fb-check: pbc: unavailable (%s)", s.pbcOff)
 	}
@@ -593,13 +748,13 @@ func (s *session) summariseFB() {
 
 // fbWaitMember handles packets until the party roster lists name.
 func (s *session) fbWaitMember(ctx context.Context, name string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	deadline := s.Now().Add(timeout)
 	for {
 		if s.memberListed(name) {
 			s.printParty()
 			return nil
 		}
-		remaining := time.Until(deadline)
+		remaining := deadline.Sub(s.Now())
 		if remaining <= 0 {
 			return fmt.Errorf("world: %s did not join the party within %s", chat.SanitiseName(name), timeout)
 		}
@@ -611,12 +766,12 @@ func (s *session) fbWaitMember(ctx context.Context, name string, timeout time.Du
 
 // fbWaitAbsent handles packets until the party no longer lists name.
 func (s *session) fbWaitAbsent(ctx context.Context, name string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	deadline := s.Now().Add(timeout)
 	for {
 		if !s.party.InParty || !s.memberListed(name) {
 			return nil
 		}
-		remaining := time.Until(deadline)
+		remaining := deadline.Sub(s.Now())
 		if remaining <= 0 {
 			return fmt.Errorf("world: %s is still in the party %s after the dismiss", chat.SanitiseName(name), timeout)
 		}
@@ -698,6 +853,9 @@ func FBCheckSummary(a FBReport) []string {
 	}
 	if a.Frames > 0 {
 		out = append(out, fmt.Sprintf("fb-check: %d protocol frame(s) received", a.Frames))
+	}
+	if a.Forged > 0 {
+		out = append(out, fmt.Sprintf("fb-check: %d protocol frame(s) ignored (not this character's whisper)", a.Forged))
 	}
 	return out
 }

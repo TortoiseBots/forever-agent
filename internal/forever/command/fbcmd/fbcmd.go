@@ -40,7 +40,26 @@ var (
 	// ErrPBCOff is the add-on protocol after a failure this session: a request got no answer, an answer of an
 	// unknown type, or one whose shape does not match. The caller falls back to the chat commands and says so.
 	ErrPBCOff = errors.New("fbcmd: the add-on protocol is unavailable")
+	// ErrBadAnswer is one malformed, oversized or wrong-type answer. It fails only that request; the session keeps
+	// the protocol on, because one bad frame is not proof the route is unusable.
+	ErrBadAnswer = errors.New("fbcmd: the answer to that request is unusable")
+	// ErrNotProbed is a `.bot` command before this session's probe succeeded.
+	ErrNotProbed = errors.New("fbcmd: no successful .bot about probe in this session")
+	// ErrNotInParty is a whisper order to a character that is neither in the client's party nor on the
+	// protocol's authenticated roster.
+	ErrNotInParty = errors.New("fbcmd: the order target is not in the client's party")
+	// ErrBotNotFound is the module's id-only detail answer: it does not know that bot.
+	ErrBotNotFound = errors.New("fbcmd: the module does not know that bot")
 )
+
+// NotFoundError is Client.Detail's typed "the module does not know that bot".
+type NotFoundError struct{ ID uint32 }
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("%s (id %d)", ErrBotNotFound, e.ID)
+}
+
+func (e *NotFoundError) Unwrap() error { return ErrBotNotFound }
 
 // RefusalError carries the server's refusal text, already in display form.
 type RefusalError struct {
@@ -74,10 +93,15 @@ type Answer struct {
 
 // Transport is what the session offers the client.
 type Transport interface {
-	// Run sends one chat-command line and collects its answer, exactly as the command channel does.
+	// Run sends one chat-command line and collects its answer, exactly as the command channel does. It refuses
+	// every `.bot` line but the probe until MarkProbed has been called.
 	Run(ctx context.Context, line string, opts command.Options) (*command.Reply, error)
-	// Whisper says one line to a character and returns the whisper it answered with within window.
-	Whisper(ctx context.Context, target, text string, window time.Duration) (string, error)
+	// MarkProbed records that this session's probe found the module. Only Probe calls it, and only after the
+	// probe's marker was read.
+	MarkProbed()
+	// Whisper says one line to a character and returns the first whisper from that character within window that
+	// accept matches. The text is the server's exact words; nil accept takes any whisper from the target.
+	Whisper(ctx context.Context, target, text string, window time.Duration, accept func(string) bool) (string, error)
 	// PartySay says one line in party chat.
 	PartySay(ctx context.Context, text string) error
 	// Request sends one add-on protocol request and returns its answer.
@@ -119,18 +143,34 @@ func (c *Client) run(ctx context.Context, line string) (*command.Reply, error) {
 	return rep, nil
 }
 
-// Probe asks the module for its name and proves it is there. The line is returned in display form.
+// Probe asks the module for its name and proves it is there. The line is returned in display form. It is the one
+// `.bot` line this session may send before the probe succeeds; on a server without the module the line is said
+// once as ordinary chat and the say echo (or the unknown command) is the negative, so every later `.bot` command
+// is refused with ErrNotProbed.
 func (c *Client) Probe(ctx context.Context) (string, error) {
 	rep, err := c.run(ctx, ".bot about")
 	if err != nil {
 		return "", err
 	}
-	for _, raw := range rep.Raw {
+	for _, raw := range replyRaw(rep) {
 		if strings.Contains(raw, aboutMarker) {
+			c.tr.MarkProbed()
 			return chat.Sanitise(raw, 300), nil
 		}
 	}
 	return "", fmt.Errorf("%w: the probe was answered, but not with %q", ErrModuleAbsent, aboutMarker)
+}
+
+// replyRaw is the lines the client matches on: the exact server text when the collector kept it, else the display
+// copy (a test transport's reply).
+func replyRaw(rep *command.Reply) []string {
+	if rep == nil {
+		return nil
+	}
+	if len(rep.RawText) > 0 {
+		return rep.RawText
+	}
+	return rep.Raw
 }
 
 // Language asks the module to answer in word (en, ru or auto).
@@ -144,10 +184,11 @@ func (c *Client) Language(ctx context.Context, word string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(rep.Raw) == 0 {
+	lines := replyRaw(rep)
+	if len(lines) == 0 {
 		return "", ErrNoAck
 	}
-	return chat.Sanitise(rep.Raw[len(rep.Raw)-1], 300), nil
+	return chat.Sanitise(lines[len(lines)-1], 300), nil
 }
 
 // AddResult is what a successful add answered.
@@ -172,19 +213,20 @@ func (c *Client) Add(ctx context.Context, class, role string) (AddResult, error)
 	if err != nil {
 		return AddResult{}, err
 	}
-	for _, raw := range rep.Raw {
+	lines := replyRaw(rep)
+	for _, raw := range lines {
 		if text, bad := refusedLine(raw, addRefusals); bad {
 			return AddResult{}, &RefusalError{Err: ErrRefused, Text: text}
 		}
 	}
-	for _, raw := range rep.Raw {
+	for _, raw := range lines {
 		if name, ok := onTheWay(raw); ok {
 			return AddResult{Name: name, Line: chat.Sanitise(raw, 300)}, nil
 		}
 	}
 	text := ""
-	if len(rep.Raw) > 0 {
-		text = chat.Sanitise(rep.Raw[0], 300)
+	if len(lines) > 0 {
+		text = chat.Sanitise(lines[0], 300)
 	}
 	return AddResult{}, &RefusalError{Err: ErrNoAck, Text: text}
 }
@@ -195,19 +237,20 @@ func (c *Client) List(ctx context.Context) ([]BotRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]BotRow, 0, len(rep.Raw))
+	lines := replyRaw(rep)
+	rows := make([]BotRow, 0, len(lines))
 	none := false
-	for i, raw := range rep.Raw {
+	for i, raw := range lines {
 		if strings.Contains(raw, "No companions yet") {
 			none = true
 			continue
 		}
-		if row, ok := listRow(rep.Raw, i); ok {
+		if row, ok := listRow(lines, i); ok {
 			rows = append(rows, row)
 		}
 	}
 	if len(rows) == 0 && !none {
-		return nil, fmt.Errorf("%w: .bot list answered %d line(s), none of them a bot", ErrNoAck, len(rep.Raw))
+		return nil, fmt.Errorf("%w: .bot list answered %d line(s), none of them a bot", ErrNoAck, len(lines))
 	}
 	return rows, nil
 }
@@ -243,7 +286,11 @@ func (c *Client) Detail(ctx context.Context, id uint32) (pbc.BotDetail, error) {
 	if err != nil {
 		return pbc.BotDetail{}, err
 	}
-	return pbc.ParseDetail(ans.Fields, id)
+	d, err := pbc.ParseDetail(ans.Fields, id)
+	if errors.Is(err, pbc.ErrBotUnknown) {
+		return pbc.BotDetail{}, &NotFoundError{ID: id}
+	}
+	return d, err
 }
 
 // Ack is one bot's answer to a whisper order.
@@ -264,17 +311,21 @@ func (c *Client) Order(ctx context.Context, bot, word string) (Ack, error) {
 	if err := ValidateWord(word); err != nil {
 		return Ack{}, err
 	}
-	text, err := c.tr.Whisper(ctx, name, word, c.OrderWait)
+	// The transport returns the first whisper from the bot that matches this order's confirmation, so a late
+	// "follow" acknowledgement is not taken for "stay" and unrelated chatter is ignored.
+	text, err := c.tr.Whisper(ctx, name, word, c.OrderWait, func(raw string) bool {
+		return ackMatchesOrder(word, acknowledgement(name, raw))
+	})
 	if err != nil {
 		return Ack{}, err
 	}
 	if strings.TrimSpace(text) == "" {
 		return Ack{}, fmt.Errorf("%w: %s answered nothing within %s", ErrNoAck, chat.SanitiseName(name), c.OrderWait)
 	}
-	body := acknowledgement(name, chat.Sanitise(text, 300))
-	ack := Ack{Bot: name, Word: word, Text: body}
+	body := acknowledgement(name, text)
+	ack := Ack{Bot: name, Word: word, Text: chat.Sanitise(body, 300)}
 	if t, bad := refusedAck(body); bad {
-		ack.Text, ack.Refused = t, true
+		ack.Text, ack.Refused = chat.Sanitise(t, 300), true
 	}
 	return ack, nil
 }
@@ -310,19 +361,20 @@ func (c *Client) Dismiss(ctx context.Context, who string) (DismissResult, error)
 	if err != nil {
 		return DismissResult{}, err
 	}
-	for _, raw := range rep.Raw {
+	lines := replyRaw(rep)
+	for _, raw := range lines {
 		if text, bad := refusedLine(raw, dismissRefusals); bad {
 			return DismissResult{}, &RefusalError{Err: ErrRefused, Text: text}
 		}
 	}
-	for _, raw := range rep.Raw {
+	for _, raw := range lines {
 		if n, ok := dismissedCount(raw); ok {
 			return DismissResult{Count: n, Line: chat.Sanitise(raw, 300)}, nil
 		}
 	}
 	text := ""
-	if len(rep.Raw) > 0 {
-		text = chat.Sanitise(rep.Raw[0], 300)
+	if len(lines) > 0 {
+		text = chat.Sanitise(lines[0], 300)
 	}
 	return DismissResult{}, &RefusalError{Err: ErrNoAck, Text: text}
 }

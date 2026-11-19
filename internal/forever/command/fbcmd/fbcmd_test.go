@@ -3,6 +3,7 @@ package fbcmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ type fakeTransport struct {
 	replies  map[string]*command.Reply
 	runErrs  map[string]error
 	whispers []string
+	probed   bool
 	acks     map[string]string
 	ackErr   error
 	party    []string
@@ -38,12 +40,18 @@ func (f *fakeTransport) Run(_ context.Context, line string, _ command.Options) (
 	return &command.Reply{Line: line}, nil
 }
 
-func (f *fakeTransport) Whisper(_ context.Context, target, text string, _ time.Duration) (string, error) {
+func (f *fakeTransport) MarkProbed() { f.probed = true }
+
+func (f *fakeTransport) Whisper(_ context.Context, target, text string, _ time.Duration, accept func(string) bool) (string, error) {
 	f.whispers = append(f.whispers, target+" "+text)
 	if f.ackErr != nil {
 		return "", f.ackErr
 	}
-	return f.acks[target], nil
+	ack := f.acks[target]
+	if accept != nil && !accept(ack) {
+		return "", nil
+	}
+	return ack, nil
 }
 
 func (f *fakeTransport) PartySay(_ context.Context, text string) error {
@@ -377,3 +385,71 @@ func TestController(t *testing.T) {
 }
 
 func ref2(id uint32, name string) botctl.Ref { return botctl.Ref{ID: id, Name: name} }
+
+func TestProbeMatchesRawText(t *testing.T) {
+	// The probe marker sits past the display bound: the old display copy cut it off, the raw line has it.
+	raw := strings.Repeat("x", 295) + " Forever Bots"
+	f := &fakeTransport{replies: map[string]*command.Reply{".bot about": {
+		Raw: []string{chat.Sanitise(raw, 300)}, RawText: []string{raw}, Complete: true,
+	}}}
+	got, err := NewClient(f).Probe(t.Context())
+	if err != nil || got == "" {
+		t.Fatalf("probe = %q, %v", got, err)
+	}
+	if !f.probed {
+		t.Fatal("a successful probe did not mark the session")
+	}
+}
+
+func TestAckMatchesOrder(t *testing.T) {
+	cases := []struct {
+		word, body string
+		want       bool
+	}{
+		{"follow", "following at 8 yards", true},
+		{"follow", "follow ok", true},
+		{"stay", "staying here", true},
+		// The module's phrases per order: a late follow acknowledgement is not a stay.
+		{"stay", "following at 8 yards", false},
+		{"follow", "staying here", false},
+		{"stay", "stay ok", true},
+		{"come", "coming to you", true},
+		{"come", "can't be summoned right now", true},
+		{"attack", "attacking a mob", true},
+		{"attack", "not attacking yet (raid pull gate: the main tank opens)", true},
+		{"unfollow", "stopped following", true},
+		{"formation line", "formation line", true},
+		{"follow", "how's it going?", false},
+		{"follow", "", false},
+	}
+	for _, c := range cases {
+		if got := ackMatchesOrder(c.word, c.body); got != c.want {
+			t.Fatalf("ackMatchesOrder(%q, %q) = %v, want %v", c.word, c.body, got, c.want)
+		}
+	}
+	// An order whose only answer is the earlier order's phrase ends as ErrNoAck, not with the wrong text.
+	f := &fakeTransport{acks: map[string]string{"Raveni": "Raveni: following at 8 yards"}}
+	if _, err := NewClient(f).Order(t.Context(), "Raveni", "stay"); !errors.Is(err, ErrNoAck) {
+		t.Fatalf("a late follow acknowledgement answered stay: %v", err)
+	}
+}
+
+func TestDetailNotFound(t *testing.T) {
+	f := &fakeTransport{answers: map[string]Answer{
+		pbc.TypeDetailReq: {Type: pbc.TypeDetailResp, Fields: []string{"42"}},
+	}}
+	c := NewClient(f)
+	if _, err := c.Detail(t.Context(), 42); !errors.Is(err, ErrBotNotFound) {
+		t.Fatalf("id-only detail: %v", err)
+	}
+	ctl := Controller{Client: c}
+	if _, err := ctl.State(t.Context(), ref2(42, "")); !errors.Is(err, ErrBotNotFound) {
+		t.Fatalf("Controller.State: %v", err)
+	}
+	// A known bot without a snapshot is not online.
+	f.answers[pbc.TypeDetailReq] = Answer{Type: pbc.TypeDetailResp, Fields: []string{"42", "name=Raveni", "level=12", "class=WARRIOR", "race=HUMAN"}}
+	st, err := ctl.State(t.Context(), ref2(42, ""))
+	if err != nil || st.Online || st.HP != 0 || st.MapID != 0 {
+		t.Fatalf("known, not live: %+v, %v", st, err)
+	}
+}
