@@ -147,6 +147,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return raidSuiteCmd(ctx, args[1:], stdout, stderr)
 	case "forever":
 		return foreverCmd(ctx, args[1:], stdout, stderr)
+	case "bughunt":
+		return bughuntCmd(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "forever-agent", version)
 		return exitOK
@@ -198,5 +200,6 @@ func usage(w io.Writer) {
   forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--plan NAME]...
   forever-agent route-edits list [--edit-dir DIR] [--json] [<plan>] | export [--edit-dir DIR] [--config-dir DIR] --to DIR <plan> [vN|latest] | promote [--edit-dir DIR] --worktree PATH <plan> vN
   forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL
+  forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...
   forever-agent version`)
 }

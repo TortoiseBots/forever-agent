@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/trace"
 )
@@ -79,7 +80,7 @@ func LoadWatch(path, ds string) (*Run, error) {
 	if sum := readForeverSummary(filepath.Join(dir, simple+".forever-run.json")); sum != nil {
 		r.bossesFrom(sum)
 	}
-	r.Combat = readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))
+	r.Combat = stampCombatRows(readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl")), r.T0)
 	r.deathsFromFrames()
 	r.finalise()
 	return r, nil
@@ -264,8 +265,9 @@ func (r *Run) deathsFromFrames() {
 	}
 }
 
-// readCombatLog reads a watch's `<run_id>.combatlog.jsonl`; a missing file is no rows, and a line that is not a valid
-// row is skipped like a cut-short line.
+// readCombatLog reads a combat log: a watch's `<run_id>.combatlog.jsonl`, or a trials repeat's `raw-ta.jsonl`, which
+// carries the same row. A missing file is no rows, and a line that is not a valid row is skipped like a cut-short
+// line.
 func readCombatLog(path string) []CombatRow {
 	f, err := os.Open(path)
 	if err != nil {
@@ -287,4 +289,36 @@ func readCombatLog(path string) []CombatRow {
 		out = append(out, row)
 	}
 	return out
+}
+
+// stampCombatRows puts every row on the run's clock and canonicalises both sides' guids, so a row joins a frame
+// directly. A row whose time cannot be read, or a run that does not know its start, leaves TKnown false: the row
+// stays in the log but no rule places it in time.
+func stampCombatRows(rows []CombatRow, t0 float64) []CombatRow {
+	for i := range rows {
+		row := &rows[i]
+		row.Source.GUID = CanonGUID(row.Source.GUID)
+		row.Target.GUID = CanonGUID(row.Target.GUID)
+		if t0 <= 0 || row.Time == "" {
+			continue
+		}
+		if sec, ok := parseCombatTime(row.Time); ok {
+			row.T = sec - t0
+			row.TKnown = true
+		}
+	}
+	return rows
+}
+
+// combatTimeLayout is the session's row time: the wall clock with milliseconds and its offset.
+const combatTimeLayout = "2006-01-02T15:04:05.000-07:00"
+
+// parseCombatTime reads a combat row's `time` as epoch seconds.
+func parseCombatTime(s string) (float64, bool) {
+	for _, layout := range []string{combatTimeLayout, time.RFC3339Nano, "2006-01-02T15:04:05-07:00"} {
+		if dt, err := time.Parse(layout, s); err == nil {
+			return float64(dt.Unix()) + float64(dt.Nanosecond())/1e9, true
+		}
+	}
+	return 0, false
 }
