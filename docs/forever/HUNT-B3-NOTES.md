@@ -55,12 +55,12 @@ runs with hits, skipped runs, per-dataset hits and a `skip_reasons` map.
 **Where the log provably covers (fix round).** A rule reads the log's silence (no cast, no heal, no swing) only over a
 window the log provably holds (`cover.go`): timed rows on both sides of the window and no stretch inside it where rows
 are known to be missing, which is a row with no readable time (the stretch between its timed neighbours), a jump in the
-rows' own `seq`, a first `seq` above 1, or a `truncated` marker row (from its time on). A run whose rows have no known
+rows' own `seq` (a jump, a reset or any decrease), a first `seq` above 1, or a `truncated` marker row (from its time on). A run whose rows have no known
 time at all (no start) is skipped as `combat log has no timed rows`. Any other uncovered window is silent and counted
 as `rule N: combat log does not cover the window` in `skip_reasons`, and the run counts once in the rule's `skipped`.
 Rules 4 and 8 report only a span the log covers; rule 11 also needs the log to reach 2.5 s past the episode, where
 the landing of its last start would show. Rules 1, 2 and 11 check the log across the whole episode span, not only
-beside each frame (frames can be 16 s apart). A unit leaving the commander's view, or a frame gap, ends rule 15's
+beside each frame (frames can be 16 s apart). A unit leaving (any episode length) the commander's view, or a frame gap, ends rule 15's
 episode as unknown (`rule 15: aura's member left the commander's view`), never as a removal or a miss.
 
 The combat log is a required input: a line that is not a valid row is an error naming the file and the line, for a

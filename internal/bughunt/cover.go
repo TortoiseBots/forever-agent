@@ -53,8 +53,8 @@ func (r *Run) cover() *logCover {
 			continue
 		}
 		if row.Seq > 0 {
-			if (lastSeq > 0 && row.Seq > lastSeq+1) || (lastSeq == 0 && row.Seq > 1) {
-				pending = true // rows are missing before this one
+			if (lastSeq > 0 && row.Seq != lastSeq+1) || (lastSeq == 0 && row.Seq > 1) {
+				pending = true // rows are missing before this one, or the sequence reset or went back
 			}
 			lastSeq = row.Seq
 		}

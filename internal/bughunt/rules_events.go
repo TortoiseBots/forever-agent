@@ -733,11 +733,11 @@ func Rule15(r *Run) []Hit {
 		if typ == "" || typ == "never" {
 			continue
 		}
-		if iv.T1-iv.T0 <= R15_MIN_S {
-			continue
-		}
 		if iv.Lost {
 			r.noteUnknown(15, whyOutOfView)
+			continue
+		}
+		if iv.T1-iv.T0 <= R15_MIN_S {
 			continue
 		}
 		able, nearest, ok := r.dispellers(iv.Bot, iv.T0, iv.T1, typ)
