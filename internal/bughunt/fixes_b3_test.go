@@ -417,3 +417,51 @@ func TestFinding11EpisodeSpanIsCheckedNotOnlyTheFrames(t *testing.T) {
 		t.Fatalf("rule 11, output in the hole: %+v", hits)
 	}
 }
+
+// TestHuntB3R3ShortEpisodeCutByViewIsUnknown: a short debuff episode that ends because the member left view is
+// unknown (counted), whatever its length.
+func TestHuntB3R3ShortEpisodeCutByViewIsUnknown(t *testing.T) {
+	var frames []*Frame
+	for tt := 0.0; tt <= 14; tt += 2 {
+		tank := testUnit(gTank)
+		tank.Combat = true
+		units := []*Unit{tank}
+		if tt <= 2 {
+			priest := testUnit(gHeal)
+			priest.Auras = []uint32{17172}
+			units = append(units, priest)
+		}
+		frames = append(frames, frameAt(tt, units...))
+	}
+	r := eventRun("watch", map[string]string{gHeal: "healer", gTank: "tank"}, frames, nil,
+		map[int]string{17172: "Hex"}, map[int]string{17172: "magic"})
+	withClass(r, gHeal, "priest")
+	withClass(r, gTank, "warrior")
+	hits, counts := Hunt([]*Run{r}, []Rule{EventRules()[5]})
+	if len(hits) != 0 {
+		t.Fatalf("hits: %+v", hits)
+	}
+	if counts.SkipReasons["rule 15: "+whyOutOfView] != 1 || counts.Complete(15) {
+		t.Fatalf("short cut episode must be counted unknown: %+v", counts)
+	}
+}
+
+// TestHuntB3R3SequenceResetBreaksCoverage: a seq that goes back (a reconnect) is a coverage break, not continuity.
+func TestHuntB3R3SequenceResetBreaksCoverage(t *testing.T) {
+	frames, _ := idleDps(nil)
+	rows := []CombatRow{
+		{Seq: 100, Kind: "melee", T: -2, TKnown: true, Source: CombatActor{GUID: gid(0xB09)}},
+		{Seq: 1, Kind: "melee", T: 18, TKnown: true, Source: CombatActor{GUID: gid(0xB09)}},
+	}
+	hits, counts := Hunt([]*Run{idleRun(frames, rows)}, []Rule{EventRules()[0]})
+	if len(hits) != 0 {
+		t.Fatalf("hits: %+v", hits)
+	}
+	found := false
+	for k := range counts.SkipReasons {
+		found = found || (strings.HasPrefix(k, "rule 1:") && strings.Contains(k, "does not cover the window"))
+	}
+	if !found || counts.Complete(1) {
+		t.Fatalf("reset must be counted uncovered: %+v", counts)
+	}
+}
