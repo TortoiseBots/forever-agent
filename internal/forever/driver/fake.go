@@ -217,10 +217,13 @@ type Fake struct {
 	EmptyStateOn func(f *Fake) bool
 }
 
-// FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
+// FakeDeath is one scripted death: at After, a member of the party dies. Unit is the fight's unit id the module's
+// event carries (the pull's unit, the same for every death of a pull), and Who names the dead member; empty Who
+// takes the party member whose GUID low word is Unit, as a module names the member its fight facts read.
 type FakeDeath struct {
 	After time.Duration
 	Unit  uint32
+	Who   string
 }
 
 // FakeRunScript is the scripted module run: a step every ProgressEvery, pulls in between, an optional wipe (a pause
@@ -736,7 +739,7 @@ func (f *Fake) startRun(a Action) error {
 		}
 		for _, d := range sc.Deaths {
 			d := d
-			f.Clock.After(d.After, func() { f.runDeath(d.Unit) })
+			f.Clock.After(d.After, func() { f.runDeath(d) })
 		}
 		if sc.StopAt > 0 {
 			f.Clock.After(sc.StopAt, f.runStopSelf)
@@ -835,14 +838,19 @@ func (f *Fake) runTick() {
 	}
 }
 
-// runDeath is one scripted member death.
-func (f *Fake) runDeath(unit uint32) {
+// runDeath is one scripted member death: the event names the dead member in why=, as the module's own death events
+// do, and carries the fight's unit id.
+func (f *Fake) runDeath(d FakeDeath) {
 	r := f.run
 	if r == nil || r.state != "running" {
 		return
 	}
+	who := d.Who
+	if who == "" {
+		who = f.botAt(wire.GUID{Low: uint64(d.Unit)})
+	}
 	r.deaths++
-	f.runEvent("death", r.step, r.leg, unit, "")
+	f.runEvent("death", r.step, r.leg, d.Unit, who)
 }
 
 // runStopSelf stops the scripted run itself, with the script's reason.
@@ -874,7 +882,7 @@ func (f *Fake) runWipe() {
 	f.wipeFlag = true
 	for i := range f.cfg.Party {
 		if g, ok := f.guidOf[f.cfg.Party[i]]; ok && g.Low <= math.MaxUint32 {
-			f.runEvent("death", r.step, r.leg, uint32(g.Low), "")
+			f.runEvent("death", r.step, r.leg, uint32(g.Low), f.cfg.Party[i])
 		}
 	}
 	f.runEvent("wipe", r.step, r.leg, 0, "")

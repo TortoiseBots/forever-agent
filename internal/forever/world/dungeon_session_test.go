@@ -241,3 +241,20 @@ func TestDungeonClockIsTheSessionWait(t *testing.T) {
 		t.Fatalf("Sleep waited %s after the link died", elapsed)
 	}
 }
+
+// TestDungeonWatchLoadsTheWholePlan: a watch runs the module's plan whole, so its route must be loaded with the
+// watch's loader: the in-fight run fields (kill_first, cc_priority, a boss's tactics) are the module's inputs and
+// are not a refusal. The session stops at the settle a cancelled context gives, which is past the load.
+func TestDungeonWatchLoadsTheWholePlan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &session{opts: Options{Logf: func(string, ...any) {}}}
+	_, err := s.dungeonWatch(ctx, &driver.Config{Plan: "../../../dungeons/ragefire_chasm.json", Leader: "Tank"})
+	var refused *driver.PlanRefusal
+	if errors.As(err, &refused) {
+		t.Fatalf("the watch refused the module's own plan: %v", err)
+	}
+	if err == nil {
+		t.Fatal("a cancelled watch settled with no error")
+	}
+}

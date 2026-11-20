@@ -113,7 +113,7 @@ func TestWatchWipeRescue(t *testing.T) {
 	f.ScriptRun(FakeRunScript{Steps: 30, Pulls: 10, ProgressEvery: 5 * time.Second, WipeAt: 20 * time.Second, DoneAt: 400 * time.Second})
 	res := run.Watch(context.Background())
 	if res.Stop != "done" || !res.Clear {
-		t.Fatalf("stop %q clear %v", res.Stop, res.Clear)
+		t.Fatalf("stop %q clear %v\n%s", res.Stop, res.Clear, strings.Join(*logs, "\n"))
 	}
 	var revive *Action
 	for i := range f.acted {
@@ -268,6 +268,12 @@ func TestWatchLinkDeathEveryWait(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := watchConfig()
 			cfg.Watchdog = 60 * time.Second
+			if tc.drop == "revive" || tc.drop == "runresume" {
+				// These two reach the practice rescue: the wiped run's pause must outlast the watchdog and the
+				// pause budget until the rescue's own revive (or resume) is the call that drops.
+				cfg.Watchdog = time.Hour
+				cfg.Limits.WatchPause = time.Hour
+			}
 			if tc.budget > 0 {
 				cfg.Limits.MaxMinutes = tc.budget
 			}
@@ -491,6 +497,181 @@ func TestWatchRecordEvidence(t *testing.T) {
 	}
 }
 
+// TestWatchDeathNamesTheMemberFromWhy: the module's death event names the dead member in why= and carries the
+// fight's unit id. The card's death log must name the member's party slot from why=, never the pull unit: the unit
+// is the same for every death of one pull, so reading the member from it grouped a whole wipe under one "unknown".
+func TestWatchDeathNamesTheMemberFromWhy(t *testing.T) {
+	run, f, _ := newWatch(t, watchConfig())
+	f.ScriptRun(FakeRunScript{
+		Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second,
+		Deaths: []FakeDeath{{After: 7 * time.Second, Unit: 0xBEEF, Who: "Watchheal"}},
+	})
+	res := run.Watch(context.Background())
+	w := res.Summary.Watch
+	if w == nil || len(w.DeathLog) != 1 {
+		t.Fatalf("death log %+v", w)
+	}
+	if d := w.DeathLog[0]; d.Who != "healer" || d.Unit != 0xBEEF {
+		t.Fatalf("death %+v, want the healer from why= and the pull's unit", d)
+	}
+}
+
+// TestWatchDeathNamesAreCheckedAgainstTheParty: a death event's why= is matched to a current party member as a
+// name (case and surrounding blanks ignored). A name that is not a member, or an empty one, is kept as it arrived
+// with no role: the death is unattributed rather than folded into a member's count.
+func TestWatchDeathNamesAreCheckedAgainstTheParty(t *testing.T) {
+	cases := []struct {
+		name string
+		why  string
+		who  string
+		unit uint32
+	}{
+		{"a member in another case", " WATCHHEAL ", "healer", 0xBEEF},
+		{"a name that is no member", "Stranger", "", 0xBEEF},
+		{"no name at all", "", "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run, f, logs := newWatch(t, watchConfig())
+			f.ScriptRun(FakeRunScript{
+				Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second,
+				Deaths: []FakeDeath{{After: 7 * time.Second, Unit: tc.unit, Who: tc.why}},
+			})
+			res := run.Watch(context.Background())
+			w := res.Summary.Watch
+			if w == nil || len(w.DeathLog) != 1 {
+				t.Fatalf("death log %+v", w)
+			}
+			d := w.DeathLog[0]
+			if d.Who != tc.who || d.Why != tc.why || d.Unit != tc.unit {
+				t.Fatalf("death %+v, want who=%q why=%q unit=%d", d, tc.who, tc.why, tc.unit)
+			}
+			said := strings.Contains(strings.Join(*logs, "\n"), "no current party member")
+			if (tc.who == "") != said {
+				t.Fatalf("the log's unattributed line is %v, want %v:\n%s", said, tc.who == "", strings.Join(*logs, "\n"))
+			}
+		})
+	}
+}
+
+// TestWatchPauseBudget: a run the module paused and never resumes is reported and ends the watch as paused-stuck
+// once its pause stands Limits.WatchPause. The watch sends no resume of its own.
+func TestWatchPauseBudget(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Limits.WatchPause = 30 * time.Second
+	run, f, logs := newWatch(t, cfg)
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 10, ProgressEvery: 10 * time.Second})
+	f.Clock.After(5*time.Second, func() { f.RunPauseSelf("3 dead: regroup (cmd revive party)") })
+	res := run.Watch(context.Background())
+	if res.Stop != StopPausedStuck {
+		t.Fatalf("stop %q, want %q", res.Stop, StopPausedStuck)
+	}
+	if n := countActions(f, "run resume"); n != 0 {
+		t.Fatalf("%d resume(s) sent; the watch resumes nothing on its own", n)
+	}
+	found := false
+	for _, line := range *logs {
+		if strings.Contains(line, "pause not cleared") && strings.Contains(line, "3 dead: regroup") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the pause was not reported; log:\n%s", strings.Join(*logs, "\n"))
+	}
+	w := res.Summary.Watch
+	if w == nil || w.ElapsedS == 0 {
+		t.Fatalf("watch record %+v", w)
+	}
+	if len(w.PauseLog) != 1 || w.PauseLog[0].Cleared || !strings.Contains(w.PauseLog[0].Why, "3 dead: regroup") {
+		t.Fatalf("pause log %+v, want the uncleared pause with its reason", w.PauseLog)
+	}
+}
+
+// TestWatchWatchdogCoversAPause: the watchdog's no-event rule applies to a paused run too. With a watchdog shorter
+// than the pause budget, the pause ends the watch as paused-stuck, reported by the watchdog, and the watcher sends
+// no second pause (there is already one).
+func TestWatchWatchdogCoversAPause(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Watchdog = time.Minute
+	cfg.Limits.Watchdog = time.Minute
+	cfg.Limits.WatchPause = time.Hour
+	run, f, logs := newWatch(t, cfg)
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 10, ProgressEvery: 10 * time.Second})
+	f.Clock.After(5*time.Second, func() { f.RunPauseSelf("waiting for a player") })
+	res := run.Watch(context.Background())
+	if res.Stop != StopPausedStuck {
+		t.Fatalf("stop %q, want %q", res.Stop, StopPausedStuck)
+	}
+	if n := countActions(f, "run pause"); n != 0 {
+		t.Fatalf("%d pause(s) sent to an already paused run", n)
+	}
+	found := false
+	for _, line := range *logs {
+		if strings.Contains(line, "watchdog: paused") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the watchdog did not report the pause; log:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchWatchdogWaitsForTheWipeRescue: the watchdog's idle clock starts before a wipe's pause, so with a
+// watchdog shorter than the rescue it used to end the run as paused-stuck at its own budget. A paused-on-wipe run
+// is the rescue's until the rescue's threshold: the watchdog must not end it there.
+func TestWatchWatchdogWaitsForTheWipeRescue(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Watchdog = time.Minute
+	cfg.Limits.Watchdog = time.Minute
+	cfg.Limits.WatchPause = time.Hour
+	run, f, logs := newWatch(t, cfg)
+	f.ScriptRun(FakeRunScript{Steps: 30, Pulls: 10, ProgressEvery: 5 * time.Second, WipeAt: 20 * time.Second, DoneAt: 400 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done (the wipe's rescue cleared the pause)\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if at := actionAt(f, "revive party"); at < 300*time.Second {
+		t.Fatalf("the rescue came at %.0fs, before the wipe's 300s pause", at.Seconds())
+	}
+	if n := countActions(f, "revive"); n != 1 {
+		t.Fatalf("%d revives, want the wipe's one rescue", n)
+	}
+	if strings.Contains(strings.Join(*logs, "\n"), "watchdog: paused") {
+		t.Fatalf("the watchdog reported a wipe's pause before its rescue; log:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchdogWaitsForARevivedRunsResume: after a revive the resume may be gated for a while (a report not in, a
+// member down again). The watchdog must stand aside for the rescue's own window (2×WatchRescue after the revive),
+// as the pause budget already does; past it, it reports the pause as before.
+func TestWatchdogWaitsForARevivedRunsResume(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Watchdog = time.Minute
+	cfg.Limits.WatchRescue = 5 * time.Minute
+	run, _, _ := newWatch(t, cfg)
+	now := run.now()
+	w := func(pausedFor, revivedFor time.Duration, revived bool) *watchRun {
+		wr := &watchRun{
+			state: "paused", onWipe: true, revived: revived,
+			pausedSince: now.Add(-pausedFor), lastEvent: now.Add(-time.Hour),
+			pauseSeen: map[int]bool{}, legs: map[int]*LegRecord{},
+		}
+		if revived {
+			wr.reviveAt = now.Add(-revivedFor)
+		}
+		return wr
+	}
+	if run.watchdog(context.Background(), w(time.Minute, 0, false)) {
+		t.Fatal("the watchdog ended a wipe's pause before its rescue threshold")
+	}
+	if run.watchdog(context.Background(), w(6*time.Minute, time.Minute, true)) {
+		t.Fatal("the watchdog ended a rescue's gated resume inside its window")
+	}
+	if !run.watchdog(context.Background(), w(6*time.Minute, 11*time.Minute, true)) {
+		t.Fatal("the watchdog did not report a pause whose rescue window is over")
+	}
+}
+
 // TestWatchWatchdogRecordsItsPause pins that the watcher's own watchdog pause reaches the record, although the
 // watch ends before the module's event ring is read again.
 func TestWatchWatchdogRecordsItsPause(t *testing.T) {
@@ -652,8 +833,8 @@ func TestWatchLaterPauseIsNotTheWipePause(t *testing.T) {
 	f.Clock.After(20*time.Second, f.RunWipeAlone)
 	f.Clock.After(21*time.Second, func() { f.RunPauseSelf("outside-order") })
 	res := run.Watch(context.Background())
-	if res.Stop != "budget" {
-		t.Fatalf("stop %q, want budget (the run stays paused past MaxMinutes)", res.Stop)
+	if res.Stop != StopPausedStuck {
+		t.Fatalf("stop %q, want %q (the pause nothing lifts is reported past the pause budget)", res.Stop, StopPausedStuck)
 	}
 	if n := countActions(f, "revive"); n != 0 {
 		t.Fatalf("%d practice revives for a pause that is not the wipe's", n)
