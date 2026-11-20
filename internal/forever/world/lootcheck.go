@@ -52,6 +52,11 @@ type LootReport struct {
 	FlagsAfter   uint32
 	StateKnown   bool
 	StateChanged bool
+
+	// Ambiguous is set when more than one game object of the target's entry stood in range and --at named none:
+	// Candidates lists them, nothing was opened, and the run ends with ErrAmbiguousObject.
+	Ambiguous  bool
+	Candidates []ObjectUseCandidate
 }
 
 // LootItemRow is one item of the open window.
@@ -167,6 +172,54 @@ const goTypeChest int8 = 3
 // objectAtRange is how close a game object must stand to --at to be the one, in yards: the flag's default.
 const objectAtRange float32 = 2
 
+// ErrAmbiguousObject is a run that refuses to guess between several game objects of one entry: no use is sent, the
+// candidates are reported by position and distance only, and the caller picks one with --at.
+var ErrAmbiguousObject = errors.New("world: several game objects of the entry stand in range")
+
+// objectCandidates names the objects of an ambiguity by where they stand and how far they are, with no identifier.
+func objectCandidates(matches []*objects.Object, dists []float32) []ObjectUseCandidate {
+	out := make([]ObjectUseCandidate, 0, len(matches))
+	for i, o := range matches {
+		out = append(out, ObjectUseCandidate{X: o.X, Y: o.Y, Z: o.Z, Distance: dists[i]})
+	}
+	return out
+}
+
+// chooseObject picks the one object among matches: --at names the nearest to that point within the tolerance, one
+// match is the one, and several matches without --at are ErrAmbiguousObject, because a use sent to the wrong object
+// opens someone else's door or loots someone else's chest.
+func (s *session) chooseObject(matches []*objects.Object, dists []float32, entry int32) (int, error) {
+	if len(matches) == 1 {
+		return 0, nil
+	}
+	if len(matches) == 0 {
+		return -1, fmt.Errorf("world: the game object of entry %d is gone", entry)
+	}
+	if !s.opts.AtSet {
+		return -1, ErrAmbiguousObject
+	}
+	tol := s.opts.AtRange
+	if tol <= 0 {
+		tol = objectAtRange
+	}
+	idx := -1
+	var near float32
+	for i, o := range matches {
+		d := objects.Distance(s.opts.AtX, s.opts.AtY, s.opts.AtZ, o.X, o.Y, o.Z)
+		if d > tol {
+			continue
+		}
+		if idx < 0 || d < near {
+			idx, near = i, d
+		}
+	}
+	if idx < 0 {
+		return -1, fmt.Errorf("world: no game object with entry %d within %.1f yd of --at (%.2f, %.2f, %.2f)",
+			entry, tol, s.opts.AtX, s.opts.AtY, s.opts.AtZ)
+	}
+	return idx, nil
+}
+
 // objectsOfEntry lists the game objects of one entry within reach of (x, y, z), nearest first, with their
 // distances. The world's list is already nearest first, so the first object past reach ends the walk.
 func (s *session) objectsOfEntry(x, y, z, reach float32, entry int32) ([]*objects.Object, []float32) {
@@ -224,7 +277,8 @@ func (s *session) lootCheck(ctx context.Context) error {
 	if reach <= 0 {
 		reach = 30
 	}
-	candidates := s.lootCandidates(s.MoverX(), s.MoverY(), s.MoverZ(), reach, s.opts.Entry)
+	x, y, z := s.MoverX(), s.MoverY(), s.MoverZ()
+	candidates := s.lootCandidates(x, y, z, reach, s.opts.Entry)
 	if len(candidates) == 0 {
 		s.opts.logf("loot-check: nothing to loot within %.0f yd%s", reach, entryNote(s.opts.Entry))
 		return nil
@@ -234,6 +288,34 @@ func (s *session) lootCheck(ctx context.Context) error {
 		target.obj.Info.Entry, target.dist, target.kind)
 	if name := s.world.Name(target.obj); name != "" {
 		s.opts.logf("loot-check: it is %s", name)
+	}
+
+	// A game object is only opened when the choice is unambiguous: several objects of its entry in range are a
+	// guess at whose chest this is, the same refusal object-use makes, unless --at names one.
+	if target.obj.Info.HasGameObject || target.obj.Type == objects.TypeGameObject {
+		matches, dists := s.objectsOfEntry(x, y, z, reach, target.obj.Info.Entry)
+		idx, cerr := s.chooseObject(matches, dists, target.obj.Info.Entry)
+		if cerr != nil {
+			if !errors.Is(cerr, ErrAmbiguousObject) {
+				return cerr
+			}
+			r := &s.report.Loot
+			r.Ambiguous = true
+			r.Candidates = objectCandidates(matches, dists)
+			s.opts.logf("loot-check: %d game objects with entry %d within %.0f yd; refusing to guess which one",
+				len(matches), target.obj.Info.Entry, reach)
+			for _, c := range r.Candidates {
+				s.opts.logf("loot-check:   at %.2f, %.2f, %.2f (%.1f yd)", c.X, c.Y, c.Z, c.Distance)
+			}
+			s.opts.logf("loot-check: give --at x,y,z to choose one")
+			return ErrAmbiguousObject
+		}
+		if len(matches) > 1 {
+			s.opts.logf("loot-check: %d game objects with entry %d within %.0f yd; --at (%.2f, %.2f, %.2f) picks the one at %.2f, %.2f, %.2f",
+				len(matches), target.obj.Info.Entry, reach, s.opts.AtX, s.opts.AtY, s.opts.AtZ,
+				matches[idx].X, matches[idx].Y, matches[idx].Z)
+		}
+		target = lootCandidate{obj: matches[idx], dist: dists[idx], kind: target.kind}
 	}
 
 	if target.kind == "kill" {
@@ -359,48 +441,28 @@ func (s *session) objectUse(ctx context.Context) error {
 		s.opts.logf("object-use: no game object with entry %d within %.0f yd", s.opts.Entry, reach)
 		return nil
 	}
-	idx := 0
-	switch {
-	case s.opts.AtSet:
-		// --at names the one: the nearest in-range object of the entry to that point, inside the tolerance.
-		tol := s.opts.AtRange
-		if tol <= 0 {
-			tol = objectAtRange
+	idx, err := s.chooseObject(matches, dists, s.opts.Entry)
+	if err != nil {
+		if !errors.Is(err, ErrAmbiguousObject) {
+			return err
 		}
-		idx = -1
-		var near float32
-		for i, o := range matches {
-			d := objects.Distance(s.opts.AtX, s.opts.AtY, s.opts.AtZ, o.X, o.Y, o.Z)
-			if d > tol {
-				continue
-			}
-			if idx < 0 || d < near {
-				idx, near = i, d
-			}
-		}
-		if idx < 0 {
-			return fmt.Errorf("world: no game object with entry %d within %.1f yd of --at (%.2f, %.2f, %.2f)",
-				s.opts.Entry, tol, s.opts.AtX, s.opts.AtY, s.opts.AtZ)
-		}
-		if len(matches) > 1 {
-			s.opts.logf("object-use: %d game objects with entry %d within %.0f yd; --at (%.2f, %.2f, %.2f) picks the one at %.2f, %.2f, %.2f",
-				len(matches), s.opts.Entry, reach, s.opts.AtX, s.opts.AtY, s.opts.AtZ,
-				matches[idx].X, matches[idx].Y, matches[idx].Z)
-		}
-	case len(matches) > 1:
 		// Several objects of the entry stand in range: the nearest is a guess, and a use sent to the wrong one
-		// opens someone else's door (or loots someone else's chest). Refuse, and name each by where it stands.
+		// opens someone else's door (or loots someone else's chest). Refuse, name each by where it stands, and end
+		// non-zero, so a script can tell a refusal from a use.
 		rep.Ambiguous = true
-		for i, o := range matches {
-			rep.Candidates = append(rep.Candidates, ObjectUseCandidate{X: o.X, Y: o.Y, Z: o.Z, Distance: dists[i]})
-		}
+		rep.Candidates = objectCandidates(matches, dists)
 		s.opts.logf("object-use: %d game objects with entry %d within %.0f yd; refusing to guess which one",
 			len(matches), s.opts.Entry, reach)
 		for _, c := range rep.Candidates {
 			s.opts.logf("object-use:   at %.2f, %.2f, %.2f (%.1f yd)", c.X, c.Y, c.Z, c.Distance)
 		}
 		s.opts.logf("object-use: give --at x,y,z to choose one")
-		return nil
+		return ErrAmbiguousObject
+	}
+	if len(matches) > 1 {
+		s.opts.logf("object-use: %d game objects with entry %d within %.0f yd; --at (%.2f, %.2f, %.2f) picks the one at %.2f, %.2f, %.2f",
+			len(matches), s.opts.Entry, reach, s.opts.AtX, s.opts.AtY, s.opts.AtZ,
+			matches[idx].X, matches[idx].Y, matches[idx].Z)
 	}
 	target, dist := matches[idx], dists[idx]
 	rep.Found = true

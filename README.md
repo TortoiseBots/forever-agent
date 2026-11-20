@@ -166,10 +166,12 @@ reported as `revived by the server`. The summary prints the final phase, the cor
 the character came back, and how many other units the model saw resurrect. `--capture-dir DIR` works as it does for
 chat-check.
 
-`forever-agent forever loot-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--range YARDS] [--stay DURATION] [--fight-for DURATION]`
+`forever-agent forever loot-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION] [--fight-for DURATION]`
 settles for `--stay` seconds, finds the nearest lootable target within `--range` (default 30 yd): a dead creature of
-`--entry`, or a chest when no entry is given. A living creature of `--entry` is killed first (the fight round's own
-flow), then looted. The window is opened with `CMSG_LOOT_UNIT` for a creature and with `CMSG_GAME_OBJ_USE` for a
+`--entry`, or a chest when no entry is given. A chest is only opened when the choice is unambiguous: more than one
+game object of its entry in range and no `--at` is a refusal (exit 12, nothing opened, each one listed by position
+and distance), and `--at x,y,z` picks the one nearest that point within `--at-range` (default 2 yd). A living
+creature of `--entry` is killed first (the fight round's own flow), then looted. The window is opened with `CMSG_LOOT_UNIT` for a creature and with `CMSG_GAME_OBJ_USE` for a
 game object, followed by `CMSG_GAME_OBJ_REPORT_USE` as a real client does; the command prints the method, the
 threshold, the copper, one row per item (slot, id, count, slot type, whether it needs a roll) and every group roll
 (it sends `CMSG_LOOT_ROLL` only when `--roll` names a vote and the roll's own vote mask allows it, so need is never
@@ -179,16 +181,18 @@ the release was confirmed. A run that ends after a window was accepted but befor
 parse error, a failed send) still gives the window back: one release is sent on a cleanup context of its own (10 s),
 and a failure of that cleanup is printed separately from the run's own error. A refused window is a named error
 (`there is no loot`, `you are too far away`, ...); a creature with nothing to loot is answered with silence by this
-core, which the command reports as "no loot window".
+core, which the command reports as "no loot window". A roll's result is waited for as long as the start allows plus
+3 s, capped at 90 s: the start's own time is the server's choice, and the core's own roll timeout is one minute.
 
 `forever-agent forever object-use --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME --entry N [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION]`
 settles, looks for the game objects of that entry within `--range` (default 40 yd), records the object's state and
 flags, sends `CMSG_GAME_OBJ_USE` (and the report-use packet a real client follows with) and prints the state and
 flags after the object's own values update — a door or lever reads ready (closed) before and active (open) after; a
 chest also opens a loot window, which is read and released without taking anything. When more than one object of the
-entry is in range the command refuses to guess: it lists them (position and distance only, no identifiers) and sends
-no use, so a script does not walk up to somebody else's door. `--at x,y,z` chooses the in-range object nearest that
-point within `--at-range` (default 2 yd); a miss is a named error. One object in range keeps working without `--at`.
+entry is in range the command refuses to guess: it lists them (position and distance only, no identifiers), sends
+no use and exits 12, so a script does not walk up to somebody else's door. `--at x,y,z` chooses the in-range object
+nearest that point within `--at-range` (default 2 yd); a miss is a named error. One object in range keeps working
+without `--at`.
 
 `forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)

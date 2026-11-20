@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -106,6 +108,48 @@ func TestPrintObjectUseSummary(t *testing.T) {
 		},
 	}})
 	for _, want := range []string{"2 objects of entry 17153", "at 2.00, 0.00, 0.00 (2.0 yd)", "at 10.00, -1.00, 0.50 (10.0 yd)", "--at"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("the ambiguous summary does not carry %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestLootCommandExit: an ambiguous refusal gets its own code, so a script can tell it from a use and retry with
+// --at; the link and death codes keep their meaning, and anything else stays the world code.
+func TestLootCommandExit(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"ambiguous", fmt.Errorf("loot-check: %w", world.ErrAmbiguousObject), exitAmbiguous},
+		{"link", world.ErrLinkLost, exitDisconnected},
+		{"dead", world.ErrSelfDead, exitDead},
+		{"other", errors.New("world: something else"), exitWorld},
+	}
+	for _, c := range cases {
+		if got := lootCommandExit(c.err); got != c.want {
+			t.Errorf("%s: exit %d, want %d", c.name, got, c.want)
+		}
+	}
+	if exitAmbiguous == exitOK || exitAmbiguous == exitWorld {
+		t.Fatalf("the ambiguity's exit %d is not distinct from 0 and the world code", exitAmbiguous)
+	}
+}
+
+// TestPrintLootCheckSummaryAmbiguous: the refusal names every candidate by position and distance, and says how to
+// choose one.
+func TestPrintLootCheckSummaryAmbiguous(t *testing.T) {
+	var out bytes.Buffer
+	printLootCheckSummary(&out, &world.Report{Loot: world.LootReport{
+		Entry: 2842, Ambiguous: true,
+		Candidates: []world.ObjectUseCandidate{
+			{X: 2, Y: 0, Z: 0, Distance: 2},
+			{X: 10, Y: -1, Z: 0.5, Distance: 10},
+		},
+	}})
+	for _, want := range []string{"2 game objects of entry 2842", "at 2.00, 0.00, 0.00 (2.0 yd)",
+		"at 10.00, -1.00, 0.50 (10.0 yd)", "--at"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("the ambiguous summary does not carry %q:\n%s", want, out.String())
 		}

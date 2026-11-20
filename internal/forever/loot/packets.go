@@ -6,7 +6,7 @@
 //   - GUIDs are 128-bit and packed as the core writes them: a uint16 mask, then one byte per set mask bit
 //     (ObjectGuid.cpp:1087-1134). wire.ReadPackedGUID owns that form.
 //   - LootItemData is bit-packed: Type is 2 bits, UIType 3 and CanTradeToTapList 1, then a flush before the byte
-//     fields (LootPackets.cpp:25-37). The same block appears in the window, the roll start, the roll broadcast and
+//     fields (LootPackets.cpp:23-35). The same block appears in the window, the roll start, the roll broadcast and
 //     the roll result, so one parser serves all four.
 package loot
 
@@ -209,7 +209,7 @@ type Modifier struct {
 	Value int32
 }
 
-// ItemInstance is the item inside a loot entry (ItemPacketsCommon.h:64-75, written at ItemPacketsCommon.cpp:173-186):
+// ItemInstance is the item inside a loot entry (ItemPacketsCommon.h:64-75, written at ItemPacketsCommon.cpp:173-184):
 // the item id, a 7-bit modifier count (BitsSize<7>, ItemPacketsCommon.cpp:151-160), then the modifiers, then a bit
 // for the item-bonus block and, when set, its context and uint32 bonus ids (ItemPacketsCommon.cpp:109-117).
 type ItemInstance struct {
@@ -220,7 +220,7 @@ type ItemInstance struct {
 	BonusListIDs []uint32
 }
 
-// Item is one LootItemData block (LootPackets.h:42-52, LootPackets.cpp:25-37).
+// Item is one LootItemData block (LootPackets.h:42-52, LootPackets.cpp:23-35).
 type Item struct {
 	// Type is the two-bit ::LootItemType (Item, Currency or TrackingQuest).
 	Type uint8
@@ -234,7 +234,7 @@ type Item struct {
 	Instance     ItemInstance
 }
 
-// Currency is one LootCurrency block (LootPackets.h:54-60, LootPackets.cpp:39-48): its currency id, quantity, list
+// Currency is one LootCurrency block (LootPackets.h:54-60, LootPackets.cpp:37-46): its currency id, quantity, list
 // id and three-bit UIType.
 type Currency struct {
 	CurrencyID uint32
@@ -260,7 +260,7 @@ type Response struct {
 	SuppressErr bool
 }
 
-// Removed is SMSG_LOOT_REMOVED (LootPackets.h:96-105, LootPackets.cpp:105-111): the owner, the loot GUID and the
+// Removed is SMSG_LOOT_REMOVED (LootPackets.h:96-105, LootPackets.cpp:104-111): the owner, the loot GUID and the
 // list id of the item that left the window.
 type Removed struct {
 	Owner      wire.GUID
@@ -268,14 +268,14 @@ type Removed struct {
 	LootListID uint8
 }
 
-// Release is SMSG_LOOT_RELEASE (LootPackets.h:145-153, LootPackets.cpp:152-158): the loot GUID and the player whose
+// Release is SMSG_LOOT_RELEASE (LootPackets.h:145-153, LootPackets.cpp:147-153): the loot GUID and the player whose
 // window closed.
 type Release struct {
 	Loot  wire.GUID
 	Owner wire.GUID
 }
 
-// MoneyNotify is SMSG_LOOT_MONEY_NOTIFY (LootPackets.h:118-126, LootPackets.cpp:118-126): what the looter gained and
+// MoneyNotify is SMSG_LOOT_MONEY_NOTIFY (LootPackets.h:118-126, LootPackets.cpp:123-131): what the looter gained and
 // the aura modifier on it.
 type MoneyNotify struct {
 	Money      uint64
@@ -283,7 +283,7 @@ type MoneyNotify struct {
 	SoleLooter bool
 }
 
-// List is SMSG_LOOT_LIST (LootPackets.h:171-180, LootPackets.cpp:160-178): the owner and loot GUIDs and the two
+// List is SMSG_LOOT_LIST (LootPackets.h:171-180, LootPackets.cpp:155-172): the owner and loot GUIDs and the two
 // optional role GUIDs (the master looter and the round-robin winner).
 type List struct {
 	Owner         wire.GUID
@@ -294,7 +294,7 @@ type List struct {
 	HasRoundRobin bool
 }
 
-// StartRoll is SMSG_START_LOOT_ROLL (LootPackets.h:217-232, LootPackets.cpp:185-200): the loot and item, the map,
+// StartRoll is SMSG_START_LOOT_ROLL (LootPackets.h:217-232, LootPackets.cpp:179-191): the loot and item, the map,
 // the roll's time limit, which votes it allows, the five ineligibility reasons, the loot method and the encounter.
 type StartRoll struct {
 	Loot        wire.GUID
@@ -307,7 +307,7 @@ type StartRoll struct {
 	EncounterID int32
 }
 
-// Roll is SMSG_LOOT_ROLL, the broadcast of one vote or its value (LootPackets.h:234-247, LootPackets.cpp:202-219).
+// Roll is SMSG_LOOT_ROLL, the broadcast of one vote or its value (LootPackets.h:234-247, LootPackets.cpp:193-206).
 type Roll struct {
 	Loot        wire.GUID
 	Player      wire.GUID
@@ -319,7 +319,7 @@ type Roll struct {
 	OffSpec     bool
 }
 
-// RollWon is SMSG_LOOT_ROLL_WON (LootPackets.h:249-260, LootPackets.cpp:221-236).
+// RollWon is SMSG_LOOT_ROLL_WON (LootPackets.h:249-260, LootPackets.cpp:208-220).
 type RollWon struct {
 	Loot        wire.GUID
 	Item        Item
@@ -330,21 +330,21 @@ type RollWon struct {
 	MainSpec    bool
 }
 
-// AllPassed is SMSG_LOOT_ALL_PASSED (LootPackets.h:262-271, LootPackets.cpp:238-245).
+// AllPassed is SMSG_LOOT_ALL_PASSED (LootPackets.h:262-271, LootPackets.cpp:222-229).
 type AllPassed struct {
 	Loot        wire.GUID
 	Item        Item
 	EncounterID int32
 }
 
-// RollsComplete is SMSG_LOOT_ROLLS_COMPLETE (LootPackets.h:273-281, LootPackets.cpp:247-254).
+// RollsComplete is SMSG_LOOT_ROLLS_COMPLETE (LootPackets.h:273-281, LootPackets.cpp:231-238).
 type RollsComplete struct {
 	Loot        wire.GUID
 	LootListID  uint8
 	EncounterID int32
 }
 
-// readItem reads one LootItemData block (LootPackets.cpp:25-37).
+// readItem reads one LootItemData block (LootPackets.cpp:23-35).
 func readItem(b *wire.Buffer) Item {
 	var it Item
 	it.Type = uint8(b.ReadBits(2))
@@ -358,7 +358,7 @@ func readItem(b *wire.Buffer) Item {
 	return it
 }
 
-// readItemInstance reads WorldPackets::Item::ItemInstance (ItemPacketsCommon.cpp:173-186).
+// readItemInstance reads WorldPackets::Item::ItemInstance (ItemPacketsCommon.cpp:173-184).
 func readItemInstance(b *wire.Buffer) ItemInstance {
 	var in ItemInstance
 	in.ItemID = b.ReadI32()
@@ -379,7 +379,7 @@ func readItemInstance(b *wire.Buffer) ItemInstance {
 		in.BonusContext = b.ReadU8()
 		count := int(b.ReadU32())
 		if count > 32 {
-			// ItemBonuses' reader refuses more than 32 (ItemPacketsCommon.cpp:124-126); the window cannot be
+			// ItemBonuses' reader refuses more than 32 (ItemPacketsCommon.cpp:124-125); the window cannot be
 			// meaningful past that, and the buffer must not be walked by an attacker-chosen size.
 			b.Skip(b.Remaining())
 			return in
@@ -435,7 +435,7 @@ func ParseResponse(payload []byte) (*Response, error) {
 	return r, nil
 }
 
-// ParseRemoved parses SMSG_LOOT_REMOVED (LootPackets.cpp:105-111) exactly.
+// ParseRemoved parses SMSG_LOOT_REMOVED (LootPackets.cpp:104-111) exactly.
 func ParseRemoved(payload []byte) (Removed, error) {
 	b := wire.NewReader(payload)
 	var r Removed
@@ -451,7 +451,7 @@ func ParseRemoved(payload []byte) (Removed, error) {
 	return r, nil
 }
 
-// ParseRelease parses SMSG_LOOT_RELEASE (LootPackets.cpp:152-158) exactly.
+// ParseRelease parses SMSG_LOOT_RELEASE (LootPackets.cpp:147-153) exactly.
 func ParseRelease(payload []byte) (Release, error) {
 	b := wire.NewReader(payload)
 	var r Release
@@ -466,7 +466,7 @@ func ParseRelease(payload []byte) (Release, error) {
 	return r, nil
 }
 
-// ParseMoneyNotify parses SMSG_LOOT_MONEY_NOTIFY (LootPackets.cpp:118-126) exactly.
+// ParseMoneyNotify parses SMSG_LOOT_MONEY_NOTIFY (LootPackets.cpp:123-131) exactly.
 func ParseMoneyNotify(payload []byte) (MoneyNotify, error) {
 	b := wire.NewReader(payload)
 	var r MoneyNotify
@@ -483,7 +483,7 @@ func ParseMoneyNotify(payload []byte) (MoneyNotify, error) {
 	return r, nil
 }
 
-// ParseCoinRemoved parses SMSG_COIN_REMOVED (LootPackets.cpp:128-133): one loot GUID.
+// ParseCoinRemoved parses SMSG_COIN_REMOVED (LootPackets.cpp:133-138): one loot GUID.
 func ParseCoinRemoved(payload []byte) (wire.GUID, error) {
 	b := wire.NewReader(payload)
 	g := wire.ReadPackedGUID(b)
@@ -496,7 +496,7 @@ func ParseCoinRemoved(payload []byte) (wire.GUID, error) {
 	return g, nil
 }
 
-// ParseList parses SMSG_LOOT_LIST (LootPackets.cpp:160-178) exactly.
+// ParseList parses SMSG_LOOT_LIST (LootPackets.cpp:155-172) exactly.
 func ParseList(payload []byte) (List, error) {
 	b := wire.NewReader(payload)
 	var r List
@@ -520,7 +520,7 @@ func ParseList(payload []byte) (List, error) {
 	return r, nil
 }
 
-// ParseStartRoll parses SMSG_START_LOOT_ROLL (LootPackets.cpp:185-200) exactly.
+// ParseStartRoll parses SMSG_START_LOOT_ROLL (LootPackets.cpp:179-191) exactly.
 func ParseStartRoll(payload []byte) (StartRoll, error) {
 	b := wire.NewReader(payload)
 	var r StartRoll
@@ -543,7 +543,7 @@ func ParseStartRoll(payload []byte) (StartRoll, error) {
 	return r, nil
 }
 
-// ParseRoll parses SMSG_LOOT_ROLL (LootPackets.cpp:202-219) exactly.
+// ParseRoll parses SMSG_LOOT_ROLL (LootPackets.cpp:193-206) exactly.
 func ParseRoll(payload []byte) (Roll, error) {
 	b := wire.NewReader(payload)
 	var r Roll
@@ -565,7 +565,7 @@ func ParseRoll(payload []byte) (Roll, error) {
 	return r, nil
 }
 
-// ParseRollWon parses SMSG_LOOT_ROLL_WON (LootPackets.cpp:221-236) exactly.
+// ParseRollWon parses SMSG_LOOT_ROLL_WON (LootPackets.cpp:208-220) exactly.
 func ParseRollWon(payload []byte) (RollWon, error) {
 	b := wire.NewReader(payload)
 	var r RollWon
@@ -586,7 +586,7 @@ func ParseRollWon(payload []byte) (RollWon, error) {
 	return r, nil
 }
 
-// ParseAllPassed parses SMSG_LOOT_ALL_PASSED (LootPackets.cpp:238-245) exactly.
+// ParseAllPassed parses SMSG_LOOT_ALL_PASSED (LootPackets.cpp:222-229) exactly.
 func ParseAllPassed(payload []byte) (AllPassed, error) {
 	b := wire.NewReader(payload)
 	var r AllPassed
@@ -602,7 +602,7 @@ func ParseAllPassed(payload []byte) (AllPassed, error) {
 	return r, nil
 }
 
-// ParseRollsComplete parses SMSG_LOOT_ROLLS_COMPLETE (LootPackets.cpp:247-254) exactly.
+// ParseRollsComplete parses SMSG_LOOT_ROLLS_COMPLETE (LootPackets.cpp:231-238) exactly.
 func ParseRollsComplete(payload []byte) (RollsComplete, error) {
 	b := wire.NewReader(payload)
 	var r RollsComplete
@@ -648,7 +648,7 @@ func BuildLootItem(requests []Request) []byte {
 	return b.Bytes()
 }
 
-// BuildLootMoney is CMSG_LOOT_MONEY: one bit, IsSoftInteract (LootPackets.cpp:113-116).
+// BuildLootMoney is CMSG_LOOT_MONEY: one bit, IsSoftInteract (LootPackets.cpp:118-121).
 func BuildLootMoney() []byte {
 	b := wire.NewWriter()
 	b.WriteBit(false)
@@ -656,14 +656,14 @@ func BuildLootMoney() []byte {
 	return b.Bytes()
 }
 
-// BuildLootRelease is CMSG_LOOT_RELEASE: the unit the window belongs to (LootPackets.cpp:136-139).
+// BuildLootRelease is CMSG_LOOT_RELEASE: the unit the window belongs to (LootPackets.cpp:113-116).
 func BuildLootRelease(unit wire.GUID) []byte {
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, unit)
 	return b.Bytes()
 }
 
-// BuildLootRoll is CMSG_LOOT_ROLL: the loot GUID, the list id and the vote (LootPackets.cpp:141-150).
+// BuildLootRoll is CMSG_LOOT_ROLL: the loot GUID, the list id and the vote (LootPackets.cpp:140-145).
 func BuildLootRoll(loot wire.GUID, lootListID, vote uint8) []byte {
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, loot)

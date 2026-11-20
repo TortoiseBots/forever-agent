@@ -45,6 +45,11 @@ const (
 	lootAnswerWait    = 4 * time.Second
 	lootReleaseWait   = 3 * time.Second
 	lootRollSlack     = 3 * time.Second
+	// lootRollWaitMax caps the wait for a roll's result. The start's RollTimeMs is the server's choice (a uint32,
+	// up to ~49 days) and nothing but the run's own deadline bounds it otherwise, so one absurd start would swallow
+	// the whole run. The core's own roll timeout is one minute (LOOT_ROLL_TIMEOUT, Loot.h:34), so 90 s is the
+	// longest a real roll can take; a server that asks for more is not waited out.
+	lootRollWaitMax = 90 * time.Second
 	// lootCleanupWait is the budget of the release a failed run still owes the server: a window it was granted
 	// stays open on the server until the loot's own timeout otherwise. The cleanup runs on a context of its own,
 	// because the run's deadline is often the very reason the run ended.
@@ -284,10 +289,12 @@ func stateChangedFrom(before objects.Info, seen bool, now objects.Info) bool {
 
 // lootTarget walks to target, opens its window and reads it. For a game object it sends the use and waits for the
 // window or the state change; for a unit it sends CMSG_LOOT_UNIT. It does not take anything. The returned release
-// must be deferred by the caller: it gives back a window the run accepted but did not release itself (see
-// releaseLeftover), and is a no-op until a window is accepted here and after the run's own release.
+// must be deferred by the caller: it gives back whatever window the session holds when the run ends before its own
+// release (see releaseLeftover), so it is a no-op only when no window is open or the run's own release closed it. It
+// reads s.loot.window at call time, not here: a window may arrive for another owner than the target, after the
+// window wait, or during a later wait, and every one of those exits still owes the server a release.
 func (s *session) lootTarget(ctx context.Context, target *objects.Object) (release func(), err error) {
-	release = func() {}
+	release = func() { s.releaseLeftover(s.loot.window) }
 	link := s.transport()
 	r := &s.report.Loot
 	r.Kind = "unit"
@@ -358,9 +365,6 @@ func (s *session) lootTarget(ctx context.Context, target *objects.Object) (relea
 	}
 	r.Opened = true
 	s.fillLootWindow(s.loot.window)
-	// The window is the server's now: from here to the run's own release, whoever ends the run early owes it back.
-	w := s.loot.window
-	release = func() { s.releaseLeftover(w) }
 	return release, nil
 }
 
@@ -437,18 +441,8 @@ func (s *session) voteRolls(ctx context.Context, w *loot.Response, hasVote bool,
 			roll.start.Item.Instance.ItemID, roll.start.Item.LootListID)
 	}
 	// Each roll ends with its own result at the latest when its time limit does (LootRoll::UpdateRoll,
-	// Loot.cpp:568-578). Wait for all of them with that bound plus a slack.
-	var limit time.Duration
-	for _, roll := range starts {
-		d := time.Duration(roll.start.RollTimeMs) * time.Millisecond
-		if d > limit {
-			limit = d
-		}
-	}
-	if limit <= 0 {
-		limit = lootRollStartWait
-	}
-	limit += lootRollSlack
+	// Loot.cpp:568-578).
+	limit := rollResultWait(starts)
 	_, err = s.lootWait(ctx, "the roll results", limit, func() bool {
 		for _, roll := range starts {
 			if !roll.finished() {
@@ -462,6 +456,25 @@ func (s *session) voteRolls(ctx context.Context, w *loot.Response, hasVote bool,
 	}
 	s.fillRollResults(w)
 	return nil
+}
+
+// rollResultWait is how long the results of these rolls get: the longest start's own limit plus the slack, capped at
+// lootRollWaitMax, or the start wait when the server named no limit at all.
+func rollResultWait(starts []*rollWatch) time.Duration {
+	var limit time.Duration
+	for _, roll := range starts {
+		if d := time.Duration(roll.start.RollTimeMs) * time.Millisecond; d > limit {
+			limit = d
+		}
+	}
+	if limit <= 0 {
+		limit = lootRollStartWait
+	}
+	limit += lootRollSlack
+	if limit > lootRollWaitMax {
+		limit = lootRollWaitMax
+	}
+	return limit
 }
 
 // takeLoot takes the money and up to take items (0 means every item the window allows) and releases the window.

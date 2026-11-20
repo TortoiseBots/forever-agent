@@ -45,7 +45,7 @@ it); every loot packet below uses it. A client that writes the old 8-bit mask de
 | acquired, AE looting, suppress error | 3 bits | flush after |
 
 `LootItemData` is shared by the window, the roll start, the roll broadcast and the roll result
-(`LootPackets.cpp:25-37`):
+(`LootPackets.cpp:23-35`):
 
 | field | type |
 |---|---|
@@ -57,24 +57,24 @@ it); every loot packet below uses it. A client that writes the old 8-bit mask de
 | list id | `uint8` — the slot every take and every vote names |
 | item | `ItemInstance` |
 
-`ItemInstance` (`ItemPacketsCommon.cpp:173-186`) is the item id, a 7-bit modifier count with a flush, the modifiers
+`ItemInstance` (`ItemPacketsCommon.cpp:173-184`) is the item id, a 7-bit modifier count with a flush, the modifiers
 (`uint8` type and `int32` value each), a bit for the item-bonus block with a flush and, when set, its context byte
 and `uint32` bonus ids (`ItemPacketsCommon.cpp:109-117`). The window of this core never sets a modifier or a bonus
 block, but the parser walks both because a later round's DB or a chest's item can.
 
 The other window packets:
 
-* `SMSG_LOOT_REMOVED` (`LootPackets.cpp:105-111`): owner, loot, `uint8` list id.
-* `SMSG_LOOT_RELEASE` (`LootPackets.cpp:152-158`): loot, player.
+* `SMSG_LOOT_REMOVED` (`LootPackets.cpp:104-111`): owner, loot, `uint8` list id.
+* `SMSG_LOOT_RELEASE` (`LootPackets.cpp:147-153`): loot, player.
 * `SMSG_LOOT_RELEASE_ALL`: no payload (`LootPackets.h:159-164`); the server closes every window at once.
-* `SMSG_COIN_REMOVED` (`LootPackets.cpp:128-133`): the loot GUID; sent to every player looting when the money goes.
-* `SMSG_LOOT_MONEY_NOTIFY` (`LootPackets.cpp:118-126`): `uint64` money, `uint64` modifier, one `SoleLooter` bit.
-* `SMSG_LOOT_LIST` (`LootPackets.cpp:160-178`): owner, loot, two presence bits, then the master looter and the
+* `SMSG_COIN_REMOVED` (`LootPackets.cpp:133-138`): the loot GUID; sent to every player looting when the money goes.
+* `SMSG_LOOT_MONEY_NOTIFY` (`LootPackets.cpp:123-131`): `uint64` money, `uint64` modifier, one `SoleLooter` bit.
+* `SMSG_LOOT_LIST` (`LootPackets.cpp:155-172`): owner, loot, two presence bits, then the master looter and the
   round-robin winner when their bits are set.
 
 ## The group roll packets
 
-`SMSG_START_LOOT_ROLL` (`LootPackets.cpp:185-200`): the loot GUID, `int32` map id, an item block (its UI type is
+`SMSG_START_LOOT_ROLL` (`LootPackets.cpp:179-191`): the loot GUID, `int32` map id, an item block (its UI type is
 `ROLL_ONGOING`), `uint32` roll time in ms (`LOOT_ROLL_TIMEOUT` is one minute, `Loot.h:34`; the logs show 60000), the
 `uint8` valid-vote mask, the five `uint32` ineligibility reasons (`LootRollIneligibilityReason`, `Loot.h:165-174`),
 the `uint8` loot method and the `int32` dungeon encounter.
@@ -86,22 +86,24 @@ need-before-greed roll the player cannot use the item in (`:298-300`). A vote ou
 the server, so the client checks the mask itself and stays silent instead (the command logs why). **The client never
 elects need**: `--roll` names one vote for the run, and with no `--roll` no vote is sent at all.
 
-The vote is `CMSG_LOOT_ROLL` (`LootPackets.cpp:141-150`): loot GUID, `uint8` list id, `uint8` vote (pass 0, need 1,
+The vote is `CMSG_LOOT_ROLL` (`LootPackets.cpp:140-145`): loot GUID, `uint8` list id, `uint8` vote (pass 0, need 1,
 greed 2, disenchant 3; `RollType`, `Loot.h:53-61`).
 
 The answers:
 
-* `SMSG_LOOT_ROLL` (`LootPackets.cpp:202-219`): loot, player, item, `int32` number, `uint8` vote, `int32` encounter,
+* `SMSG_LOOT_ROLL` (`LootPackets.cpp:193-206`): loot, player, item, `int32` number, `uint8` vote, `int32` encounter,
   two bits (autopassed, off-spec). The number is -1 for a pass or a greed vote at selection time and the real roll
   only in the winner packet, which is why the report keeps the start, the broadcasts and the result apart.
-* `SMSG_LOOT_ROLL_WON` (`LootPackets.cpp:221-236`): loot, item, winner, number, vote, encounter, `MainSpec` bit.
-* `SMSG_LOOT_ALL_PASSED` (`LootPackets.cpp:238-245`): loot, item, encounter.
-* `SMSG_LOOT_ROLLS_COMPLETE` (`LootPackets.cpp:247-254`): loot, list id, encounter. This core never sends it (no
+* `SMSG_LOOT_ROLL_WON` (`LootPackets.cpp:208-220`): loot, item, winner, number, vote, encounter, `MainSpec` bit.
+* `SMSG_LOOT_ALL_PASSED` (`LootPackets.cpp:222-229`): loot, item, encounter.
+* `SMSG_LOOT_ROLLS_COMPLETE` (`LootPackets.cpp:231-238`): loot, list id, encounter. This core never sends it (no
   caller in `src/server/game`), but the parser accepts it as a roll's end.
 
-`LootRoll::Finish` (`Loot.cpp:684-737`) sends the winner (or all-passed) at the end, and `UpdateRoll` (`:568-578`)
+`LootRoll::Finish` (`Loot.cpp:684-737`) sends the winner (or all-passed) at the end, and `UpdateRoll` (`:568-581`)
 ends a roll when every player voted or its time ran out, so the command waits for the start's own time plus three
-seconds and reports a roll that never ended as exactly that.
+seconds — capped at 90 s (`lootRollWaitMax`), because the start's RollTime is the server's choice and a uint32; the
+core's own timeout is one minute, so 90 s is longer than any real roll and a start asking for more is not waited out
+— and reports a roll that never ended as exactly that.
 
 ## The client packets
 
@@ -111,8 +113,8 @@ seconds and reports a roll that never ended as exactly that.
 * `CMSG_LOOT_ITEM` (`LootPackets.cpp:79-90`): a `uint32` count, then per request the **loot** GUID and the list id,
   then one `IsSoftInteract` bit. The core looks the GUID up in the player's open loot view, which is keyed by the
   loot object's GUID (`LootHandler.cpp:77-104`).
-* `CMSG_LOOT_MONEY`: one bit (`LootPackets.cpp:113-116`).
-* `CMSG_LOOT_RELEASE`: the **owner** GUID (`LootPackets.cpp:136-139`), because `GetLootByWorldObjectGUID` compares
+* `CMSG_LOOT_MONEY`: one bit (`LootPackets.cpp:118-121`).
+* `CMSG_LOOT_RELEASE`: the **owner** GUID (`LootPackets.cpp:113-116`), because `GetLootByWorldObjectGUID` compares
   each open loot's owner (`Player.cpp:9927-9934`).
 * `CMSG_GAME_OBJ_USE` and `CMSG_GAME_OBJ_REPORT_USE`: one packed GUID each (`GameObjectPackets.cpp:21-29`).
 
@@ -184,13 +186,17 @@ forever-agent forever loot-check --rest H --rpc H --ca F --account A --character
 Settle, pick the nearest target (dead creature of the entry, a chest when no entry, a living creature of the entry
 to kill first), walk into interaction range, open, read, vote (only if asked and allowed), take the money, take up to
 `--take` items the window allows (`allow loot` and `owner` slots; a roll-ongoing, locked or master slot is not
-taken), release. It prints one line per step and a final summary. Exit codes: 0 done, the login codes, the
-disconnected and dead codes, the world code for anything else.
+taken), release. A game-object target is only opened when the choice is unambiguous: two or more objects of its
+entry in range and no `--at` is a refusal (nothing is opened, both are listed by position and distance), and
+`--at x,y,z` picks the one nearest that point within `--at-range` (2 yd default). It prints one line per step and a
+final summary. Exit codes: 0 done, 2 usage, 6 link lost, 11 dead, 12 an ambiguous object (nothing was sent; retry
+with `--at`), 5 the world code for anything else.
 
 `forever object-use --entry N [--at x,y,z] [--at-range Y]`: settle, look for the objects of that entry in range,
 walk to the chosen one, print state and flags, use, print state and flags after the update, release a window it
 opened without taking anything. More than one object of the entry in range is a refusal, not a guess: the command
-lists them by position and distance and sends no use. `--at` names one; the tolerance is 2 yd by default.
+lists them by position and distance, sends no use and exits 12, so a script can tell a refusal from a use. `--at`
+names one; the tolerance is 2 yd by default.
 
 ## What is approximated, and what is not done
 
@@ -253,3 +259,25 @@ logger, with the source's entry, the map, the method, the gold and the items, th
   distance (no identifiers) and no use is sent; `--at x,y,z` picks the one nearest that point within `--at-range`
   (2 yd default). Tests: two in range refused, `--at` picks the intended one (the fake fails the run if the use
   names the other), and one in range still works.
+
+## Fix round 3 (review findings)
+
+* **Every window open at exit is released.** `lootTarget` registers its cleanup at function entry and the cleanup
+  reads `s.loot.window` when it runs, not when the window was accepted: a window whose owner differs from the target,
+  one that arrives after the window wait gave up, and one that lands during a later wait are all given back. Before
+  this the release was a no-op until the very end of `lootTarget`, so those three exits left an accepted window open
+  on the server. Tests: a window for another owner (fake world: the open is answered with a window for a different
+  object, the run refuses it and the release still names that object) and a window that lands after the wait (the
+  cleanup sends the release anyway).
+* **The roll-result wait is capped.** The start's `RollTimeMs` is the server's choice and nothing but the run's
+  deadline bounded it before, so one absurd start could swallow the run. `rollResultWait` adds the 3 s slack, then
+  caps at `lootRollWaitMax` (90 s): the core's own roll timeout is one minute (`LOOT_ROLL_TIMEOUT`, `Loot.h:34`), so
+  no real roll needs longer. Test: `rollResultWait` over zero, one minute, 49 days and the largest uint32.
+* **An ambiguous refusal is its own exit.** object-use's refusal returned `nil` (exit 0), so a script could not tell
+  "refused" from "used". It now returns `ErrAmbiguousObject` and the command exits 12; loot-check makes the same
+  refusal for a chest (and takes `--at`/`--at-range`), reporting the candidates in `LootReport.Ambiguous` and
+  `.Candidates`. Tests: both commands' ambiguous scenarios assert the error and that no use was sent, `--at` picks
+  the named chest, and `lootCommandExit` maps the error to 12.
+* **Packet citations** in `internal/forever/loot/packets.go` were re-checked against the core and fixed (e.g.
+  `StartLootRoll::Write` is `LootPackets.cpp:179-191`, not `:185-200`; `CMSG_LOOT_MONEY` is `LootMoney::Read`,
+  `:118-121`).

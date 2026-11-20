@@ -193,6 +193,9 @@ type fakeServer struct {
 	lootReleased   bool
 	lootVotes      []uint8
 	lootItemsTaken []uint8
+	// lootOtherOwner is the owner a "window-other-owner" case names in the window: an object the client never
+	// opened, whose window it must still give back.
+	lootOtherOwner wire.GUID
 	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
 	dungeon *dungeonScene
 	// What the fake saw, under mu.

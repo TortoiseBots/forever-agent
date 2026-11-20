@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/loot"
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -64,5 +65,44 @@ func TestLootCleanupReleaseSendFailure(t *testing.T) {
 	s.releaseLeftover(w)
 	if len(tr.sent) != 1 {
 		t.Fatalf("the cleanup released an already released window: %v", tr.sent)
+	}
+}
+
+// TestLootLeftoverReleaseReadsTheWindowLate: the release lootTarget hands its caller reads s.loot.window at call
+// time, not when the window was accepted, so a window that lands after the wait (a late answer, or one that arrives
+// during a later wait) is given back too. A release that captured the window early is a no-op here and leaves the
+// window open on the server until the loot's own timeout.
+func TestLootLeftoverReleaseReadsTheWindowLate(t *testing.T) {
+	tr := &releaseFailer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the window wait ends at once, before any window could be read
+	s := &session{
+		ctx:         ctx,
+		report:      &Report{Counts: make(map[string]int)},
+		loot:        newLootWatch(),
+		opts:        Options{Logf: func(string, ...any) {}},
+		world:       objects.NewWorld(0),
+		fightSender: tr,
+		mover:       &objects.Mover{X: 0, Y: 0, Z: 0},
+	}
+	target := &objects.Object{GUID: wire.GUID{Low: 0x401, High: 8 << 58}, Type: objects.TypeUnit}
+
+	release, err := s.lootTarget(ctx, target)
+	if err == nil {
+		t.Fatal("the run opened a window on a socket that carried none")
+	}
+	if len(tr.sent) != 1 || tr.sent[0] != wire.CMSGLootUnit {
+		t.Fatalf("before the window the client sent %v, want one CMSG_LOOT_UNIT", tr.sent)
+	}
+
+	// The window arrives once the wait has given up on it.
+	want := wire.GUID{Low: 0x402, High: 8 << 58}
+	s.loot.window = &loot.Response{Owner: want, Loot: wire.GUID{Low: 0x900, High: 15 << 58}}
+	release()
+	if len(tr.sent) != 2 || tr.sent[1] != wire.CMSGLootRelease {
+		t.Fatalf("the late window was not released: the client sent %v", tr.sent)
+	}
+	if !s.report.Loot.ReleaseAttempted {
+		t.Fatal("the report does not say the cleanup release was attempted")
 	}
 }

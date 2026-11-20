@@ -24,7 +24,7 @@ import (
 )
 
 func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--range YARDS] [--stay DURATION] [--fight-for DURATION]"
+	const usage = "usage: forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION] [--fight-for DURATION]"
 	fs := flag.NewFlagSet("forever loot-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -35,6 +35,8 @@ func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 	take := fs.Int("take", 0, "how many items to take from the window (0: every item the window allows)")
 	money := fs.Bool("money", true, "take the window's money")
 	reach := fs.Float64("range", 30, "how far to look for a target, in yards")
+	at := fs.String("at", "", "x,y,z of the chest to loot, when several game objects of --entry are in range")
+	atRange := fs.Float64("at-range", 2, "how close a game object must be to --at, in yards")
 	fightFor := fs.Duration("fight-for", 60*time.Second, "how long a target that is still alive is fought before giving up")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -67,6 +69,15 @@ func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintln(stderr, "forever loot-check: --range must be between 1 and 200 yards")
 		return exitUsage
 	}
+	atX, atY, atZ, atErr := parseAtPoint(*at)
+	if atErr != nil {
+		fmt.Fprintf(stderr, "forever loot-check: %v\n", atErr)
+		return exitUsage
+	}
+	if *atRange < 0.5 || *atRange > 100 {
+		fmt.Fprintln(stderr, "forever loot-check: --at-range must be between 0.5 and 100 yards")
+		return exitUsage
+	}
 	if *fightFor <= 0 || *fightFor > 5*time.Minute {
 		fmt.Fprintln(stderr, "forever loot-check: --fight-for must be between 0 and 5m")
 		return exitUsage
@@ -83,6 +94,11 @@ func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 		LootMoney: *money,
 		TakeItems: *take,
 		LootRange: float32(*reach),
+		AtSet:     *at != "",
+		AtX:       atX,
+		AtY:       atY,
+		AtZ:       atZ,
+		AtRange:   float32(*atRange),
 		FightFor:  *fightFor,
 		Settle:    *stay,
 		Deadline:  *stay + *fightFor + 3*time.Minute,
@@ -97,13 +113,7 @@ func foreverLootCheckCmd(ctx context.Context, args []string, stdout, stderr io.W
 			return code
 		}
 		fmt.Fprintf(stderr, "forever loot-check: %v\n", err)
-		if errors.Is(err, world.ErrLinkLost) {
-			return exitDisconnected
-		}
-		if errors.Is(err, world.ErrSelfDead) {
-			return exitDead
-		}
-		return exitWorld
+		return lootCommandExit(err)
 	}
 	return exitOK
 }
@@ -177,15 +187,24 @@ func foreverObjectUseCmd(ctx context.Context, args []string, stdout, stderr io.W
 			return code
 		}
 		fmt.Fprintf(stderr, "forever object-use: %v\n", err)
-		if errors.Is(err, world.ErrLinkLost) {
-			return exitDisconnected
-		}
-		if errors.Is(err, world.ErrSelfDead) {
-			return exitDead
-		}
-		return exitWorld
+		return lootCommandExit(err)
 	}
 	return exitOK
+}
+
+// lootCommandExit maps a loot command's error to its exit code: the link and death codes, the ambiguity's own code
+// (a script must tell a refusal from a use: nothing was sent, and --at picks one), and the world code for anything
+// else.
+func lootCommandExit(err error) int {
+	switch {
+	case errors.Is(err, world.ErrLinkLost):
+		return exitDisconnected
+	case errors.Is(err, world.ErrSelfDead):
+		return exitDead
+	case errors.Is(err, world.ErrAmbiguousObject):
+		return exitAmbiguous
+	}
+	return exitWorld
 }
 
 // parseAtPoint parses --at x,y,z; an empty value is no point at all.
@@ -211,6 +230,14 @@ func parseAtPoint(point string) (x, y, z float32, err error) {
 // printLootCheckSummary prints the window, what was taken and how the rolls ended.
 func printLootCheckSummary(w io.Writer, report *world.Report) {
 	r := report.Loot
+	if r.Ambiguous {
+		fmt.Fprintf(w, "loot-check: %d game objects of entry %d are in range; one must be chosen with --at:\n",
+			len(r.Candidates), r.Entry)
+		for _, c := range r.Candidates {
+			fmt.Fprintf(w, "loot-check:   at %.2f, %.2f, %.2f (%.1f yd)\n", c.X, c.Y, c.Z, c.Distance)
+		}
+		return
+	}
 	if r.Kind == "" {
 		fmt.Fprintf(w, "loot-check: no window was opened (the model held %d objects)\n", report.Objects.Objects)
 		return

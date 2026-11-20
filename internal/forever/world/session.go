@@ -167,8 +167,9 @@ type Options struct {
 	LootMoney bool
 	TakeItems int
 	LootRange float32
-	// At is --at x,y,z: the point object-use must pick its object at when several objects of the entry are in
-	// range; AtRange is how close an object must stand to that point in yards (0: objectAtRange).
+	// At is --at x,y,z: the point a game-object target must be picked at when several objects of the entry are in
+	// range (object-use, and loot-check's chest); AtRange is how close an object must stand to that point in yards
+	// (0: objectAtRange).
 	AtSet   bool
 	AtX     float32
 	AtY     float32

@@ -420,6 +420,7 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 
 	windowOpen := false
 	windowLoot := wire.GUID{}
+	windowOwner := wire.GUID{}
 	items := f.lootItems
 	rolls := f.lootRolls
 	for {
@@ -477,6 +478,7 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 			f.mu.Unlock()
 			windowOpen = true
 			windowLoot = f.lootLootGUID
+			windowOwner = want
 			if f.lootCase == "use-refused" {
 				// SendLootError: the same packet with Acquired false and the reason (Player.cpp:10048-10057).
 				c.writeFrame(fakeSMSGLootResponse, fakeLootRefusal(want))
@@ -489,7 +491,12 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				windowOpen = false
 				continue
 			}
-			c.writeFrame(fakeSMSGLootResponse, fakeLootWindow(want, windowLoot, loot.MethodGroupLoot,
+			if f.lootCase == "window-other-owner" {
+				// The server opened a window for someone else's object (a chest the target shares nothing with):
+				// the client must not read it as the target's, and must still give it back.
+				windowOwner = f.lootOtherOwner
+			}
+			c.writeFrame(fakeSMSGLootResponse, fakeLootWindow(windowOwner, windowLoot, loot.MethodGroupLoot,
 				f.lootCoins, items))
 			rollMs := f.lootRollMs
 			if rollMs == 0 {
@@ -599,8 +606,13 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				f.failf("loot: CMSG_LOOT_RELEASE: %v (%d bytes left)", b.Err(), b.Remaining())
 				return
 			}
-			if got != want {
-				f.failf("loot: release names %v, want the owner %v", got, want)
+			// A release names the window's own owner: the target, or the object the server named in the window.
+			releaseOwner := want
+			if windowOpen {
+				releaseOwner = windowOwner
+			}
+			if got != releaseOwner {
+				f.failf("loot: release names %v, want the owner %v", got, releaseOwner)
 				return
 			}
 			f.mu.Lock()
@@ -1034,7 +1046,14 @@ func TestObjectUseRefusesAmbiguousTargets(t *testing.T) {
 	extra.packed = fakePacked(extra.guid)
 	f, _, _ := newLootScenario(t, "object-ambiguous", target, nil, nil)
 	f.lootExtras = []fakeExtraObject{extra}
-	report, steps := runLootScenario(t, f, Options{ObjectUse: true, Entry: fakeLootDoorEntry})
+	f.clientMayLeave = true // the refusal ends the run before its logout
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, Options{ObjectUse: true, Entry: fakeLootDoorEntry})
+	f.wait(t)
+	if !errors.Is(err, ErrAmbiguousObject) {
+		t.Fatalf("the run ended with %v, want the ambiguous refusal (a script must tell it from a use)\nsteps:\n%s",
+			err, joinLines(steps))
+	}
 
 	r := report.ObjectUse
 	if r.Found || !r.Ambiguous {
@@ -1089,5 +1108,99 @@ func TestObjectUseAtPicksTheObject(t *testing.T) {
 	f.mu.Unlock()
 	if !used {
 		t.Fatalf("the object at the --at point was not used\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestLootWindowForAnotherOwnerIsReleased: the server answers the open with a window for an object the client never
+// opened. The run must not read it as the target's — and must still give it back, because a window left open on the
+// server waits for the loot's own timeout.
+func TestLootWindowForAnotherOwnerIsReleased(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x318, High: 8 << 58}, entry: fakeLootCorpseEntry, dead: true}
+	target.packed = fakePacked(target.guid)
+	items := []fakeItemDef{{listID: 0, itemID: 4583, count: 1, uiType: loot.SlotAllowLoot}}
+	f, _, _ := newLootScenario(t, "window-other-owner", target, items, nil)
+	f.lootOtherOwner = wire.GUID{Low: 0x319, High: 8 << 58}
+	f.clientMayLeave = true // the refusal ends the run before its logout
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, Options{LootCheck: true})
+	f.wait(t)
+	if err == nil || !strings.Contains(err.Error(), "belongs to another object") {
+		t.Fatalf("the run ended with %v, want the window's owner mismatch\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.mu.Lock()
+	released := f.lootReleased
+	f.mu.Unlock()
+	if !released {
+		t.Fatalf("the window for another owner was not released\nsteps:\n%s", joinLines(steps))
+	}
+	if !report.Loot.ReleaseAttempted {
+		t.Fatalf("the report does not say the cleanup release was attempted: %+v", report.Loot)
+	}
+}
+
+// TestLootCheckRefusesAmbiguousChests: two chests of the entry stand in range and --at names none. Looting the
+// nearest would be a guess at whose chest it is, so the run refuses (ErrAmbiguousObject, nothing opened) and lists
+// both by position and distance only.
+func TestLootCheckRefusesAmbiguousChests(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x31A, High: 8 << 58}, entry: fakeLootChestEntry,
+		window: true, goType: goTypeChest, state: 1}
+	target.packed = fakePacked(target.guid)
+	extra := fakeExtraObject{guid: wire.GUID{Low: 0x31B, High: 8 << 58}, entry: fakeLootChestEntry,
+		goType: goTypeChest, state: 1, x: 10, y: 0, z: 0}
+	extra.packed = fakePacked(extra.guid)
+	f, _, _ := newLootScenario(t, "chest-ambiguous", target, nil, nil)
+	f.lootExtras = []fakeExtraObject{extra}
+	f.clientMayLeave = true // the refusal ends the run before its logout
+	defer f.close()
+	report, steps, err := enterLootScenario(t, f, Options{LootCheck: true})
+	f.wait(t)
+	if !errors.Is(err, ErrAmbiguousObject) {
+		t.Fatalf("the run ended with %v, want the ambiguous refusal\nsteps:\n%s", err, joinLines(steps))
+	}
+	r := report.Loot
+	if !r.Ambiguous || r.Opened || len(r.Candidates) != 2 {
+		t.Fatalf("the loot report: %+v\nsteps:\n%s", r, joinLines(steps))
+	}
+	if r.Candidates[0].X != 2 || r.Candidates[1].X != 10 || r.Candidates[1].Distance != 10 {
+		t.Fatalf("the candidates: %+v", r.Candidates)
+	}
+	f.mu.Lock()
+	used := f.lootUsed
+	f.mu.Unlock()
+	if used {
+		t.Fatalf("the client used one of the ambiguous chests\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestLootCheckAtPicksTheChest: --at names the chest to loot, and the open must go to that one and not to the nearer.
+func TestLootCheckAtPicksTheChest(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x31C, High: 8 << 58}, entry: fakeLootChestEntry,
+		window: true, goType: goTypeChest, state: 1}
+	target.packed = fakePacked(target.guid)
+	// Both chests stand inside the interaction range, so the run walks nowhere; the nearer one is not the one --at
+	// names.
+	extra := fakeExtraObject{guid: wire.GUID{Low: 0x31D, High: 8 << 58}, entry: fakeLootChestEntry,
+		goType: goTypeChest, state: 1, x: 3.5, y: 0, z: 0}
+	extra.packed = fakePacked(extra.guid)
+	items := []fakeItemDef{{listID: 0, itemID: 117, count: 1, uiType: loot.SlotAllowLoot}}
+	f, _, _ := newLootScenario(t, "chest", target, items, nil)
+	f.lootExtras = []fakeExtraObject{extra}
+	// The chest at the --at point is the one to open; the fake fails the run if the use names anything else.
+	f.lootWant = extra.guid
+	report, steps := runLootScenario(t, f, Options{
+		LootCheck: true,
+		AtSet:     true,
+		AtX:       3.5, AtY: 0, AtZ: 0,
+	})
+
+	r := report.Loot
+	if !r.Opened || r.Ambiguous || r.Distance != 3.5 || !r.Released {
+		t.Fatalf("the loot report: %+v\nsteps:\n%s", r, joinLines(steps))
+	}
+	f.mu.Lock()
+	used := f.lootUsed
+	f.mu.Unlock()
+	if !used {
+		t.Fatalf("the chest at the --at point was not opened\nsteps:\n%s", joinLines(steps))
 	}
 }
