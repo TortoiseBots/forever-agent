@@ -281,3 +281,13 @@ logger, with the source's entry, the map, the method, the gold and the items, th
 * **Packet citations** in `internal/forever/loot/packets.go` were re-checked against the core and fixed (e.g.
   `StartLootRoll::Write` is `LootPackets.cpp:179-191`, not `:185-200`; `CMSG_LOOT_MONEY` is `LootMoney::Read`,
   `:118-121`).
+
+## Fix round 4 (review findings)
+
+* **An unconfirmed release is retried, not counted as done.** `releaseLoot` used to mark the window released as soon
+  as the write returned, so a run whose context expired between that write and `SMSG_LOOT_RELEASE` skipped the
+  cleanup release built for exactly that exit. The cleanup now stops only on the server's confirmation of this
+  window; an unconfirmed normal release is written again on the cleanup context. The `releaseSent` flag went away:
+  the report's `Released` (set only by a matching `SMSG_LOOT_RELEASE`) is the confirmation the cleanup needs. Test:
+  `TestLootReleaseRetriedAfterUnconfirmedSend` ends the run context on the release write and asserts a second
+  `CMSG_LOOT_RELEASE` from the cleanup, with the confirmation recorded and no `ReleaseErr`.

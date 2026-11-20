@@ -13,6 +13,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/loot"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
 // releaseFailer is an objects.Sender whose writes fail: it records every packet it was asked to send, so a send
@@ -104,5 +105,67 @@ func TestLootLeftoverReleaseReadsTheWindowLate(t *testing.T) {
 	}
 	if !s.report.Loot.ReleaseAttempted {
 		t.Fatal("the report does not say the cleanup release was attempted")
+	}
+}
+
+// releaseCanceller writes like a live link but ends the run's context the moment CMSG_LOOT_RELEASE is written: the
+// run's deadline can fall between the write and the server's SMSG_LOOT_RELEASE.
+type releaseCanceller struct {
+	cancel context.CancelFunc
+	sent   []uint32
+}
+
+func (c *releaseCanceller) Send(core uint32, _ []byte) error {
+	c.sent = append(c.sent, core)
+	if core == wire.CMSGLootRelease {
+		c.cancel()
+	}
+	return nil
+}
+
+func (c *releaseCanceller) WaitUntil(context.Context, time.Time) error { return nil }
+
+func (c *releaseCanceller) Now() time.Time { return time.Now() }
+
+// TestLootReleaseRetriedAfterUnconfirmedSend: a release that was written but never confirmed leaves the cleanup
+// owing the window. The run context ends right after the write, releaseLoot returns the cancellation, and the
+// deferred releaseLeftover must write CMSG_LOOT_RELEASE again on its own context: the server's copy of the first
+// write is not evidence that it processed the release.
+func TestLootReleaseRetriedAfterUnconfirmedSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	tr := &releaseCanceller{cancel: cancel}
+	w := &loot.Response{Owner: wire.GUID{Low: 0x501, High: 8 << 58}, Loot: wire.GUID{Low: 0x901, High: 15 << 58}}
+	s := &session{
+		ctx:         ctx,
+		events:      make(chan event, 1),
+		report:      &Report{Counts: make(map[string]int)},
+		loot:        newLootWatch(),
+		opts:        Options{Logf: func(string, ...any) {}},
+		fightSender: tr,
+	}
+	s.loot.window = w
+
+	if err := s.releaseLoot(ctx, w); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the run context ended after the release write, releaseLoot returned %v", err)
+	}
+	if len(tr.sent) != 1 || tr.sent[0] != wire.CMSGLootRelease {
+		t.Fatalf("the normal release wrote %v, want one CMSG_LOOT_RELEASE", tr.sent)
+	}
+	if s.report.Loot.Released {
+		t.Fatal("the release was confirmed by a write")
+	}
+
+	// The server's answer to the retried release.
+	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGLootRelease, Payload: fakeRelease(w.Loot, w.Owner)}}
+
+	s.releaseLeftover(w)
+	if len(tr.sent) != 2 || tr.sent[1] != wire.CMSGLootRelease {
+		t.Fatalf("the unconfirmed release was not retried: the client wrote %v", tr.sent)
+	}
+	if !s.report.Loot.Released {
+		t.Fatal("the retried release was not confirmed")
+	}
+	if s.report.Loot.ReleaseErr != "" {
+		t.Fatalf("a confirmed cleanup release left an error: %q", s.report.Loot.ReleaseErr)
 	}
 }

@@ -91,9 +91,6 @@ type lootWatch struct {
 	coinRemoved int
 	money       *loot.MoneyNotify
 	releases    int
-	// releaseSent is set when this session wrote CMSG_LOOT_RELEASE for the open window: the cleanup release must
-	// not send a second one.
-	releaseSent bool
 	// rolls is keyed by loot GUID and slot; order keeps them in arrival order for the report.
 	rolls map[rollKey]*rollWatch
 	order []rollKey
@@ -110,7 +107,6 @@ func (l *lootWatch) reset() {
 	l.removed = 0
 	l.coinRemoved = 0
 	l.money = nil
-	l.releaseSent = false
 	l.rolls = make(map[rollKey]*rollWatch)
 	l.order = nil
 }
@@ -528,7 +524,6 @@ func (s *session) releaseLoot(ctx context.Context, w *loot.Response) error {
 	if err := link.Send(wire.CMSGLootRelease, loot.BuildLootRelease(w.Owner)); err != nil {
 		return fmt.Errorf("world: CMSG_LOOT_RELEASE: %w", err)
 	}
-	s.loot.releaseSent = true
 	closed := func() bool {
 		return s.loot.releases > 0 && s.report.Loot.Released
 	}
@@ -544,10 +539,12 @@ func (s *session) releaseLoot(ctx context.Context, w *loot.Response) error {
 // releaseLeftover is the release a run owes the server when it ends after a window was accepted and before its own
 // release: an expired run window, a parse error, a failed send. It writes on a context of its own (lootCleanupWait,
 // never the run's), so a run whose deadline ended it can still give the window back, and its own failure is recorded
-// on the report (ReleaseAttempted, ReleaseErr) instead of replacing the run's error.
+// on the report (ReleaseAttempted, ReleaseErr) instead of replacing the run's error. Only the server's confirmation
+// of the release (SMSG_LOOT_RELEASE for this window) suppresses the write: a completed local send proves nothing
+// about the server, so an unconfirmed normal release is written again here.
 func (s *session) releaseLeftover(w *loot.Response) {
 	r := &s.report.Loot
-	if w == nil || r.Released || s.loot.releaseSent {
+	if w == nil || r.Released {
 		return
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), lootCleanupWait)
@@ -558,7 +555,6 @@ func (s *session) releaseLeftover(w *loot.Response) {
 		s.opts.logf("loot: the window's cleanup release failed: %v", err)
 		return
 	}
-	s.loot.releaseSent = true
 	s.opts.logf("loot: the window's cleanup release sent")
 	if _, err := s.lootWait(cctx, "the release answer", lootReleaseWait, func() bool { return r.Released }); err != nil {
 		r.ReleaseErr = fmt.Sprintf("no answer to CMSG_LOOT_RELEASE: %v", err)
