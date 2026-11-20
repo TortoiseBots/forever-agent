@@ -124,6 +124,10 @@ token file, nothing but 127.0.0.1). A call the server refuses answers its typed 
 is `forever rpc: cannot reach` with exit 15. Ctrl-C or an expired `--timeout` aborts the HTTP request (the connection
 is closed) and the command waits for the call to stop before exiting 1 with `cancelled:` or `timed out after ...`; no
 result is printed, so a caller must not retry an irreversible method as if the first call had been refused.
+`internal/forever/serveclient` is the typed Go client of the same socket for commands that orchestrate a live slot
+(see [docs/forever/REST-L1-NOTES.md](docs/forever/REST-L1-NOTES.md)): `Open(dir)`/`New(addr, tokenFile)` with typed
+`Status`, `Units`, `Unit`, `Party`, `GM`, `Bot`, `EventLog`, `Act`, `Commander`, `Logout` and `Teardown`, guids as
+text with `Key()` delegating to the run-map key, `-32005` retried for 60 s and `-32002` ending the call at once.
 
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
