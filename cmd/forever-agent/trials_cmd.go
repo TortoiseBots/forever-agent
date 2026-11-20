@@ -18,8 +18,8 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 	"  report <run dir>                   re-render card.md/card.json from the run's trial.json and print the card\n" +
 	"  compare <run dir> --baseline <dir> before/after table with Fisher's exact p (reads both card.json)\n" +
 	"  validate [files...]                validate trial files (default: the embedded set)\n" +
-	"  run: not ported yet\n" +
-	"  cleanup: not ported yet"
+	"  run --slots F --server S [--slot ID|--any] [--repeats N] --out DIR [--dry SCRIPT] TRIAL...\n" +
+	"  cleanup <run dir>                  replay the ledger: kill summons, clear auras, free bots"
 
 // trialsCmd dispatches the scoring half of the Python trials bench, ported into
 // internal/trials. It reads a run folder as the Python tool writes it and never runs a trial.
@@ -37,9 +37,10 @@ func trialsCmd(args []string, stdout, stderr io.Writer) int {
 		return trialsCompare(args[1:], stdout, stderr)
 	case "validate":
 		return trialsValidate(args[1:], stdout, stderr)
-	case "run", "cleanup":
-		fmt.Fprintf(stderr, "trials %s: not ported yet\n", args[0])
-		return exitUsage
+	case "run":
+		return trialsRunCmd(args[1:], stdout, stderr)
+	case "cleanup":
+		return trialsCleanupCmd(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprintln(stdout, trialsUsage)
 		return exitOK

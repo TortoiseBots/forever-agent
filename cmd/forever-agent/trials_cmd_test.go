@@ -109,7 +109,6 @@ func TestTrialsCmdUsageAndUnportedCommands(t *testing.T) {
 	}{
 		{nil, "forever-agent trials"},
 		{[]string{"bogus"}, "forever-agent trials"},
-		{[]string{"run"}, "not ported yet"},
 	} {
 		var out, errOut bytes.Buffer
 		if code := run(context.Background(), append([]string{"trials"}, tc.args...), &out, &errOut); code != exitUsage {
@@ -119,10 +118,16 @@ func TestTrialsCmdUsageAndUnportedCommands(t *testing.T) {
 			t.Fatalf("trials %v: stderr %q", tc.args, errOut.String())
 		}
 	}
-	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"trials", "cleanup"}, &out, &errOut); code != exitUsage ||
-		!strings.Contains(errOut.String(), "not ported yet") {
-		t.Fatalf("cleanup: exit %d, stderr %q", code, errOut.String())
+	// `run` without flags and `cleanup` without a dir are usage, not "not
+	// ported yet": both commands are ported (dry-run only for `run`).
+	for _, args := range [][]string{{"run"}, {"cleanup"}} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), append([]string{"trials"}, args...), &out, &errOut); code != exitUsage {
+			t.Fatalf("trials %v: exit %d, want %d", args, code, exitUsage)
+		}
+		if !strings.Contains(errOut.String(), "forever-agent trials") {
+			t.Fatalf("trials %v: stderr %q", args, errOut.String())
+		}
 	}
 }
 
