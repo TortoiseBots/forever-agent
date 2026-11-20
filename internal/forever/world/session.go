@@ -164,8 +164,9 @@ type Options struct {
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
 	// Serve makes this a long-running session: after the login burst the session serves the RPC socket on
-	// Serve.Listener and stays in the world until the caller's context ends or the link drops. Stay and the
-	// one-shot modes are ignored; Deadline, when above 0, still bounds the whole run.
+	// Serve.Listener and stays in the world until the caller's context ends. A dropped link is logged in again
+	// within ServeConfig's budget (a fresh session, rebuilt state), and only a spent budget ends the daemon. Stay
+	// and the one-shot modes are ignored; Deadline, when above 0, still bounds the whole run.
 	Serve *ServeConfig
 }
 
@@ -495,6 +496,22 @@ const (
 	otherUnknownKey = "other unknown wire opcodes"
 )
 
+// newSession builds one world session: its link state, its bounded models and the context its reads and sends use.
+// A serving daemon builds one for the first login and a fresh one for every re-entry, so no socket, model or channel
+// of a dropped link survives into the next one.
+func newSession(opts Options, report *Report, ctx context.Context) *session {
+	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
+	s.deadChs[sideRealm] = make(chan struct{})
+	s.deadChs[sideInstance] = make(chan struct{})
+	s.fight = &fightLog{started: time.Now(), now: s.Now}
+	s.death = &deathWatch{started: time.Now()}
+	s.world = objects.NewWorld(0)
+	s.chat = chat.NewLog(0)
+	s.party = party.NewState()
+	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
+	return s
+}
+
 // Enter runs the world half: authenticate, list characters, log the named character in, answer the login burst
 // and keep-alives for Stay, then log out. It returns what was observed even when it fails part-way.
 func Enter(ctx context.Context, opts Options) (*Report, error) {
@@ -511,46 +528,18 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	}
 	// A serving session outlives the caller's cancellation long enough to log out: the RPC loop notices the
 	// caller's context and sends the logout itself, so the session's own waits are not cut off underneath it.
-	sessionCtx, pumpCtx := ctx, ctx
+	sessionCtx := ctx
 	if opts.Serve != nil {
 		sessionCtx = context.WithoutCancel(ctx)
-		pumpCtx = sessionCtx
 	}
 
 	report := &Report{Counts: make(map[string]int)}
-	s := &session{opts: opts, ctx: sessionCtx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
-	s.deadChs[sideRealm] = make(chan struct{})
-	s.deadChs[sideInstance] = make(chan struct{})
-	s.fight = &fightLog{started: time.Now(), now: s.Now}
-	s.death = &deathWatch{started: time.Now()}
-	s.world = objects.NewWorld(0)
-	s.chat = chat.NewLog(0)
-	s.party = party.NewState()
-	s.pumpCtx, s.pumpCancel = context.WithCancel(pumpCtx)
+	s := newSession(opts, report, sessionCtx)
 	defer s.pumpCancel()
 
-	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
-		Address:               opts.Address,
-		RealmID:               opts.RealmID,
-		RealmAddress:          opts.RealmAddress,
-		RealmJoinTicket:       opts.RealmJoinTicket,
-		ClientSecret:          opts.ClientSecret,
-		JoinSecret:            opts.JoinSecret,
-		ClientBuild:           opts.ClientBuild,
-		RealmBuild:            opts.RealmBuild,
-		BuildAuthKey:          opts.BuildAuthKey,
-		AllowInstanceRedirect: opts.AllowInstanceRedirect,
-		Deadline:              opts.Deadline,
-		Logf:                  opts.Logf,
-	})
-	if err != nil {
+	if err := s.authenticate(ctx, opts.Deadline); err != nil {
 		return report, err
 	}
-	s.realm = realm
-	for _, name := range realm.HandshakeNames() {
-		s.report.Counts[name]++
-	}
-	s.startPump(sideRealm, realm.Next)
 
 	runErr := s.enter(ctx)
 	if runErr != nil && s.opts.Serve == nil {
@@ -559,7 +548,68 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 		s.abortLogin()
 	}
 	s.shutdown(ctx)
+	// A serving session that re-entered after a drop ended with a later session: its packet counts are the run's.
+	if s.serveRT != nil {
+		if cur := s.serveRT.st.session.Load(); cur != nil && cur != s {
+			for name, n := range cur.report.Counts {
+				report.Counts[name] += n
+			}
+		}
+	}
 	return report, runErr
+}
+
+// authenticate opens and authenticates the world socket for this session and starts its reader. deadline bounds
+// the handshake (worldconn's own deadline when zero).
+func (s *session) authenticate(ctx context.Context, deadline time.Duration) error {
+	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
+		Address:               s.opts.Address,
+		RealmID:               s.opts.RealmID,
+		RealmAddress:          s.opts.RealmAddress,
+		RealmJoinTicket:       s.opts.RealmJoinTicket,
+		ClientSecret:          s.opts.ClientSecret,
+		JoinSecret:            s.opts.JoinSecret,
+		ClientBuild:           s.opts.ClientBuild,
+		RealmBuild:            s.opts.RealmBuild,
+		BuildAuthKey:          s.opts.BuildAuthKey,
+		AllowInstanceRedirect: s.opts.AllowInstanceRedirect,
+		Deadline:              deadline,
+		Logf:                  s.opts.Logf,
+	})
+	if err != nil {
+		return err
+	}
+	s.realm = realm
+	for _, name := range realm.HandshakeNames() {
+		s.report.Counts[name]++
+	}
+	s.startPump(sideRealm, realm.Next)
+	return nil
+}
+
+// teardown ends a session's links completely: its readers are cancelled, both sockets are closed and their readers
+// have returned (bounded by two seconds; closing the sockets unblocks a read anyway). Nothing of the session is used
+// afterwards. A serving daemon calls it on the old session before logging in again, so the new login never shares a
+// socket, a pump or a model with the dropped one.
+func (s *session) teardown() {
+	s.pumpCancel()
+	if s.captureRun != nil {
+		_ = s.captureRun.close()
+	}
+	if s.instance != nil {
+		_ = s.instance.Close()
+	}
+	if s.realm != nil {
+		_ = s.realm.Close()
+	}
+	deadline := time.After(2 * time.Second)
+	for _, done := range s.pumpDone {
+		select {
+		case <-done:
+		case <-deadline:
+			return
+		}
+	}
 }
 
 // startPump runs one socket reader and records how to wait for it. A reader that returns an error (a closed or reset
@@ -793,7 +843,11 @@ func (s *session) abortLogin() {
 	}
 }
 
-func (s *session) enter(ctx context.Context) error {
+// loginWorld is the login half of a run: authenticate the world socket, list the account's characters, log the named
+// one in on a fresh instance socket, and answer the burst up to the loading-screen notification. It leaves the
+// session in the world and says nothing about what the run does next: enter does, and a serving daemon's re-entry
+// uses this half alone.
+func (s *session) loginWorld(ctx context.Context) error {
 	// ---- character list
 	if err := s.sendOn(sideRealm, wire.CMSGEnumCharacters, nil); err != nil {
 		return err
@@ -879,7 +933,15 @@ func (s *session) enter(ctx context.Context) error {
 		return err
 	}
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
+	return nil
+}
 
+// enter logs in and then runs what the session was asked to do: the serving loop, one of the one-shot checks with its
+// logout, or the plain stay.
+func (s *session) enter(ctx context.Context) error {
+	if err := s.loginWorld(ctx); err != nil {
+		return err
+	}
 	if s.opts.Serve != nil {
 		return s.serve(ctx, s.opts.Serve)
 	}

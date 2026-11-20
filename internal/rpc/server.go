@@ -35,6 +35,9 @@ const (
 	CodeDisconnected   = -32002
 	CodeGame           = -32003
 	CodeTimeout        = -32004
+	// CodeReconnecting is a session whose world link dropped and is being logged in again: the call did nothing
+	// and nothing is queued for after the re-entry.
+	CodeReconnecting = -32005
 )
 
 // Error is a JSON-RPC error; methods return it to choose the code.

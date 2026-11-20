@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,9 +41,77 @@ type ServeConfig struct {
 	// Parents is the server's instance-map rule for the navmesh planner (an instance map's missing tile comes
 	// from that one parent map's tile file).
 	Parents map[uint32]uint32
-	// DisconnectGrace is how long the RPC stays up after the world socket drops, answering status and refusing
-	// actions, before the process ends. Zero takes the daemon's own 30 s.
+	// DisconnectGrace is how long the RPC stays up once the reconnect budget is spent (the daemon is offline),
+	// answering status and refusing actions, before the process ends. Zero takes the daemon's own 30 s.
 	DisconnectGrace time.Duration
+	// ReconnectAttempts bounds how many times a dropped world link is logged in again before the daemon goes
+	// offline. Zero takes serveReconnectAttempts; a negative value turns the retries off.
+	ReconnectAttempts int
+	// The reconnect timings are zero for the constants above; the tests shorten them.
+	reconnectBackoff      time.Duration
+	reconnectMaxBackoff   time.Duration
+	reconnectLoginTimeout time.Duration
+}
+
+// The reconnect budget of a serving session. A world-socket drop is not fatal: the daemon logs in again with the
+// same account and character, and the RPC answers reads in between. The limits are:
+//
+//   - at most serveReconnectAttempts logins (zero turns the retries off through ServeConfig.ReconnectAttempts);
+//   - the wait before attempt n is serveReconnectBackoff doubled n-1 times, capped at serveReconnectMaxBackoff
+//     (2 s, 4 s, 8 s, 16 s, 32 s, 60 s, 60 s, 60 s: about four minutes for the default eight attempts);
+//   - one attempt is bounded by serveReconnectLoginTimeout from the world socket to in world.
+//
+// The attempts are one budget across drops: a link that drops again before it has stayed up for
+// serveReconnectResetWindow keeps spending the same budget, so a flapping socket ends offline instead of re-logging
+// in forever. A session that stayed in the world for that window gets a fresh budget at its next drop.
+//
+// Past the budget the daemon is offline: status says so with the last attempt's error, actions answer -32002, and
+// the process exits with that error after DisconnectGrace.
+const (
+	serveReconnectAttempts     = 8
+	serveReconnectBackoff      = 2 * time.Second
+	serveReconnectMaxBackoff   = 60 * time.Second
+	serveReconnectLoginTimeout = time.Minute
+	// serveReconnectResetWindow is how long a session must stay in the world before its next drop starts a fresh
+	// reconnect budget.
+	serveReconnectResetWindow = time.Minute
+)
+
+// serveReconnectWait is the wait before reconnect attempt n (from 1): backoff doubled n-1 times, capped at max.
+func serveReconnectWait(n int, backoff, max time.Duration) time.Duration {
+	d := backoff
+	for i := 1; i < n && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	return d
+}
+
+// serveLifecycle is what the daemon is doing with the world link. It is the status method's state field.
+type serveLifecycle int32
+
+const (
+	// serveOnline: the session is in the world and calls are run on it.
+	serveOnline serveLifecycle = iota
+	// serveReconnecting: the world socket dropped and the daemon is logging in again. Reads answer from the last
+	// session; every action gets rpc.CodeReconnecting, and no action is queued for after the re-entry.
+	serveReconnecting
+	// serveOffline: the reconnect budget is spent. status carries the reason, actions answer -32002, and the
+	// process ends after DisconnectGrace.
+	serveOffline
+)
+
+// String is the lifecycle word status reports.
+func (l serveLifecycle) String() string {
+	switch l {
+	case serveReconnecting:
+		return "reconnecting"
+	case serveOffline:
+		return "offline"
+	}
+	return "online"
 }
 
 // ErrAttackStopped is the fight's own end when stop_attack asked it to stop.
@@ -61,16 +130,41 @@ type serveRuntime struct {
 	stopFight atomic.Bool
 }
 
-// serveState is the RPC side of the loop.
+// serveState is the RPC side of the loop. It outlives every world session: a re-entry replaces the session, its
+// epoch and everything bound to it, while the RPC listener, the method table and the call queue stay.
 type serveState struct {
-	s     *session
+	// opts is the login the daemon makes again; it is immutable after serve starts.
+	opts  Options
+	grace time.Duration
 	calls chan *serveCall
 	done  chan struct{}
-	dead  bool
-	// deadErr is the link error shown by status and returned to every action while dead.
-	deadErr error
-	q       *command.Session
-	nav     *navmesh.Planner
+	// The reconnect budget's timings (ServeConfig's overrides, or the constants).
+	backoff, maxBackoff, loginTimeout time.Duration
+
+	// session is the current world session; nil only before the first install.
+	session atomic.Pointer[session]
+	// rt is the current session's runtime, published for stop_attack (the one handler that must reach a running
+	// fight without queueing behind it).
+	rt atomic.Pointer[serveRuntime]
+	// epoch is bumped by every install. A call carries the epoch it was posted under, so one queued before a drop
+	// is refused rather than replayed on the session that replaced it.
+	epoch atomic.Uint64
+
+	state   atomic.Int32
+	attempt atomic.Int32
+	limit   atomic.Int32
+	// used is the reconnect budget spent since the last stable session (loop goroutine only); onlineSince is when
+	// the current session reached the world.
+	used        int
+	onlineSince time.Time
+
+	// mu guards what the loop publishes for the handlers: the lifecycle reason and the error behind it.
+	mu     sync.Mutex
+	reason string
+
+	// q and nav belong to the loop goroutine: q is rebuilt when a session is installed, nav outlives the sessions.
+	q   *command.Session
+	nav *navmesh.Planner
 	// stopped is set by logout: the loop ends after that call returns, and the RPC keeps its grace to flush the
 	// reply.
 	stopped bool
@@ -80,7 +174,8 @@ type serveCall struct {
 	ctx      context.Context
 	fn       func(*session) (any, error)
 	out      chan serveResult
-	readOnly bool // answers while the link is dead (status, chat_log)
+	readOnly bool   // answers while the link is down (status, chat_log)
+	epoch    uint64 // the session it was posted for
 }
 
 type serveResult struct {
@@ -88,8 +183,9 @@ type serveResult struct {
 	err error
 }
 
-// serve runs the RPC loop until the caller's context ends, the link drops (plus the grace window), or logout is
-// called. It logs out before returning on a clean shutdown.
+// serve runs the RPC loop until the caller's context ends, logout is called, or a dropped world link could not be
+// restored within the reconnect budget (then the daemon is offline for the grace window). It logs out before
+// returning on a clean shutdown.
 func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	if cfg.Listener == nil {
 		return errors.New("world: serve needs a bound RPC listener")
@@ -98,17 +194,40 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	if grace <= 0 {
 		grace = 30 * time.Second
 	}
-	st := &serveState{
-		s:     s,
-		calls: make(chan *serveCall, 64),
-		done:  make(chan struct{}),
-		q:     command.NewSession(&cmdLink{s: s}),
+	limit := cfg.ReconnectAttempts
+	if limit == 0 {
+		limit = serveReconnectAttempts
 	}
-	s.serveRT = &serveRuntime{st: st}
+	st := &serveState{
+		opts:         s.opts,
+		grace:        grace,
+		calls:        make(chan *serveCall, 64),
+		done:         make(chan struct{}),
+		backoff:      cfg.reconnectBackoff,
+		maxBackoff:   cfg.reconnectMaxBackoff,
+		loginTimeout: cfg.reconnectLoginTimeout,
+	}
+	if st.backoff <= 0 {
+		st.backoff = serveReconnectBackoff
+	}
+	if st.maxBackoff < st.backoff {
+		st.maxBackoff = max(serveReconnectMaxBackoff, st.backoff)
+	}
+	if st.loginTimeout <= 0 {
+		st.loginTimeout = serveReconnectLoginTimeout
+	}
+	st.limit.Store(int32(limit))
 	if cfg.NavmeshDir != "" {
 		st.nav = navmesh.NewPlannerFormat(cfg.NavmeshDir, navmesh.Forever, cfg.Parents)
 		defer st.nav.Close()
 	}
+	st.install(s, 1)
+	st.setState(serveOnline, "")
+	defer func() {
+		if cur := st.session.Load(); cur != nil {
+			cur.teardown()
+		}
+	}()
 
 	srv := rpc.NewServer()
 	if cfg.Token == "" {
@@ -126,9 +245,19 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		<-served
 		close(st.done)
 	}()
-	s.opts.logf("rpc: listening on http://%s/rpc", cfg.Listener.Addr())
+	s.opts.logf("rpc: listening on http://%s/rpc (state %s)", cfg.Listener.Addr(), serveOnline)
 
+	cur := s
 	for {
+		// The dead link is checked before the queue, so a stream of calls cannot keep the loop from reconnecting.
+		if err := cur.linkDead(); err != nil {
+			next, rerr := st.reconnect(ctx, err)
+			if rerr != nil {
+				return st.serveGrace(ctx, rerr)
+			}
+			cur = next
+			continue
+		}
 		// A queued call goes first: while calls exist the loop is theirs, and the idle wait below only runs when
 		// the queue is empty.
 		select {
@@ -141,20 +270,155 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		default:
 		}
 		if ctx.Err() != nil {
-			return s.serveLogout(st)
+			return cur.serveLogout(st)
 		}
-		if err := s.collect(ctx, 50*time.Millisecond); err != nil {
+		if err := cur.collect(ctx, 50*time.Millisecond); err != nil {
 			if isServeLinkLost(err) {
-				s.opts.logf("rpc: the world link dropped: %v", err.Error())
-				st.dead, st.deadErr = true, err
-				return st.serveGrace(ctx, grace)
+				continue // the top of the loop sees the dead link and reconnects
 			}
 			if ctx.Err() != nil {
-				return s.serveLogout(st)
+				return cur.serveLogout(st)
 			}
 			return err
 		}
 	}
+}
+
+// install makes s the loop's session and rebuilds everything bound to one: its runtime (the selected target and the
+// fight flags), the command channel's link and the epoch. The old session is not touched again; the loop tore it
+// down before the login.
+func (st *serveState) install(s *session, epoch uint64) {
+	s.serveRT = &serveRuntime{st: st}
+	st.rt.Store(s.serveRT)
+	st.q = command.NewSession(&cmdLink{s: s})
+	st.epoch.Store(epoch)
+	st.onlineSince = time.Now()
+	st.session.Store(s)
+}
+
+// reconnect logs the world in again after the link dropped. The old session is torn down first (readers stopped,
+// both sockets closed) and nothing of it is used for the new login. Between attempts the loop keeps the RPC
+// answering: reads run on the last session, every action gets the typed reconnecting error, and nothing is queued
+// for after the re-entry. It returns the new session, or the reason the budget is spent.
+func (st *serveState) reconnect(ctx context.Context, cause error) (*session, error) {
+	old := st.session.Load()
+	st.opts.logf("rpc: the world link dropped: %v; state %s", cause, serveReconnecting)
+	old.teardown()
+	limit := int(st.limit.Load())
+	if !st.onlineSince.IsZero() && time.Since(st.onlineSince) >= serveReconnectResetWindow {
+		// The session that just dropped was stable: this is a new outage with a fresh budget.
+		st.used = 0
+	}
+	last := cause
+	if limit <= 0 {
+		return nil, fmt.Errorf("%w: reconnects are off: %v", ErrLinkLost, cause)
+	}
+	for st.used < limit {
+		st.used++ // an attempt is spent whether it succeeds or fails
+		attempt := st.used
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("%w: the daemon stopped while reconnecting (%v)", ErrLinkLost, last)
+		}
+		st.attempt.Store(int32(attempt))
+		wait := serveReconnectWait(attempt, st.backoff, st.maxBackoff)
+		st.setState(serveReconnecting,
+			fmt.Sprintf("attempt %d of %d in %s: %v", attempt, limit, wait.Round(time.Millisecond), last))
+		st.opts.logf("rpc: state %s (attempt %d of %d): %v; retrying in %s",
+			serveReconnecting, attempt, limit, last, wait.Round(time.Millisecond))
+		if !st.pause(ctx, wait) {
+			return nil, fmt.Errorf("%w: the daemon stopped while reconnecting (%v)", ErrLinkLost, last)
+		}
+		res := st.attemptLogin(ctx)
+		if res.ctxErr != nil {
+			if res.s != nil {
+				res.s.teardown() // the attempt reached the world as the daemon stopped: close it
+			}
+			return nil, fmt.Errorf("%w: the daemon stopped while reconnecting (%v)", ErrLinkLost, last)
+		}
+		if res.err == nil {
+			st.attempt.Store(0)
+			st.install(res.s, st.epoch.Load()+1)
+			st.setState(serveOnline, "")
+			pos := res.s.report.Position
+			st.opts.logf("rpc: state %s again (attempt %d of %d, map %d at %.1f %.1f %.1f)",
+				serveOnline, attempt, limit, res.s.report.MapID, pos[0], pos[1], pos[2])
+			return res.s, nil
+		}
+		last = res.err
+		st.opts.logf("rpc: reconnect attempt %d of %d failed: %v", attempt, limit, last)
+	}
+	st.attempt.Store(0)
+	return nil, fmt.Errorf("%w: reconnect gave up after %d attempt(s): %v", ErrLinkLost, limit, last)
+}
+
+// pause waits d, answering read-only calls and refusing actions; it reports false when ctx ended.
+func (st *serveState) pause(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case c := <-st.calls:
+			st.run(c)
+		case <-timer.C:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// serveLogin is one login attempt's result.
+type serveLogin struct {
+	s      *session
+	err    error
+	ctxErr error
+}
+
+// attemptLogin runs one re-entry on its own goroutine, so the loop keeps answering read-only calls while it logs in.
+func (st *serveState) attemptLogin(ctx context.Context) serveLogin {
+	done := make(chan serveLogin, 1)
+	st.opts.logf("rpc: logging in again (login bounded by %s)", st.loginTimeout)
+	parent := ctx
+	timeout := st.loginTimeout
+	go func() {
+		s, err := loginAgain(parent, st.opts, timeout)
+		done <- serveLogin{s: s, err: err}
+	}()
+	for {
+		select {
+		case r := <-done:
+			return r
+		case c := <-st.calls:
+			st.run(c)
+		case <-ctx.Done():
+			// The attempt's own context ends with this one; wait for it so its sockets are closed before the
+			// caller returns.
+			r := <-done
+			r.ctxErr = ctx.Err()
+			return r
+		}
+	}
+}
+
+// loginAgain builds a fresh session and takes it through the login half: a new world socket, a new instance socket,
+// a new model. Only the login waits are bounded by the attempt's timeout; the pump context outlives it, so the
+// session is usable once it is in the world.
+func loginAgain(ctx context.Context, opts Options, timeout time.Duration) (*session, error) {
+	actx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	base := context.WithoutCancel(ctx)
+	s := newSession(opts, &Report{Counts: make(map[string]int)}, base)
+	s.ctx = actx
+	if err := s.authenticate(actx, timeout); err != nil {
+		s.teardown()
+		return nil, err
+	}
+	if err := s.loginWorld(actx); err != nil {
+		s.teardown()
+		return nil, err
+	}
+	s.ctx = base
+	return s, nil
 }
 
 // serveLogout ends a serving session the way a real client does. It runs on its own bound context: the caller's
@@ -169,21 +433,71 @@ func (s *session) serveLogout(st *serveState) error {
 	return nil
 }
 
-// serveGrace keeps the RPC answering while the world socket is gone, so status shows the disconnect and its
-// reason; actions answer -32002. It ends after d, or when the caller's context ends.
-func (st *serveState) serveGrace(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
+// serveGrace keeps the RPC answering while the daemon is offline, so status shows the state and the reason;
+// actions answer -32002. It ends after st.grace, or when the caller's context ends.
+func (st *serveState) serveGrace(ctx context.Context, cause error) error {
+	st.setState(serveOffline, cause.Error())
+	st.opts.logf("rpc: state %s: %v", serveOffline, cause)
+	timer := time.NewTimer(st.grace)
 	defer timer.Stop()
 	for {
 		select {
 		case c := <-st.calls:
 			st.run(c)
 		case <-timer.C:
-			return st.deadErr
+			return cause
 		case <-ctx.Done():
-			return st.deadErr
+			return cause
 		}
 	}
+}
+
+// setState publishes the lifecycle and why it changed. The loop is the only writer; readers take the same mutex, so
+// a state and its reason are always the pair the loop wrote together.
+func (st *serveState) setState(l serveLifecycle, reason string) {
+	st.mu.Lock()
+	st.reason = reason
+	st.state.Store(int32(l))
+	st.mu.Unlock()
+}
+
+// lifecycle is the current state word.
+func (st *serveState) lifecycle() serveLifecycle { return serveLifecycle(st.state.Load()) }
+
+// statusText is status's state, reason and the reconnect progress; all empty/zero while online.
+func (st *serveState) statusText() (state, reason string, attempt, limit int) {
+	st.mu.Lock()
+	l, reason := serveLifecycle(st.state.Load()), st.reason
+	st.mu.Unlock()
+	if l == serveOnline {
+		return l.String(), "", 0, 0
+	}
+	return l.String(), reason, int(st.attempt.Load()), int(st.limit.Load())
+}
+
+// downError is what an action answers while the link is not online.
+func (st *serveState) downError() error {
+	st.mu.Lock()
+	l, reason := serveLifecycle(st.state.Load()), st.reason
+	st.mu.Unlock()
+	switch l {
+	case serveReconnecting:
+		return &rpc.Error{Code: rpc.CodeReconnecting, Message: "world: reconnecting: " + reason}
+	case serveOffline:
+		return &rpc.Error{Code: rpc.CodeDisconnected, Message: "world: offline: " + reason}
+	default:
+		// Only a call queued under an older session reaches this: the daemon is online again but that action
+		// belonged to the session the drop replaced, and it is refused rather than replayed.
+		return &rpc.Error{Code: rpc.CodeReconnecting, Message: "world: the link dropped and was logged in again while the call waited; it was not run"}
+	}
+}
+
+// actionError is nil while an action can run on the current session.
+func (st *serveState) actionError() error {
+	if st.lifecycle() == serveOnline {
+		return nil
+	}
+	return st.downError()
 }
 
 // run executes one call on the session goroutine.
@@ -192,21 +506,30 @@ func (st *serveState) run(c *serveCall) {
 		c.out <- serveResult{err: err}
 		return
 	}
-	if st.dead && !c.readOnly {
-		c.out <- serveResult{err: &rpc.Error{Code: rpc.CodeDisconnected, Message: st.deadErr.Error()}}
-		return
+	if !c.readOnly {
+		if err := st.actionError(); err != nil {
+			c.out <- serveResult{err: err}
+			return
+		}
+		// A call posted before a drop belongs to the session that is gone: it is refused, never run on its
+		// replacement.
+		if c.epoch != st.epoch.Load() {
+			c.out <- serveResult{err: st.downError()}
+			return
+		}
 	}
-	v, err := c.fn(st.s)
-	if err != nil && isServeLinkLost(err) && !st.dead {
-		st.dead, st.deadErr = true, err
-	}
+	v, err := c.fn(st.session.Load())
 	c.out <- serveResult{v: v, err: err}
 }
 
 // call posts fn to the session goroutine and waits for its result. A caller that goes away leaves its call in the
-// queue; the loop drops it without running it.
+// queue; the loop drops it without running it. While the link is down the action is refused at once instead of
+// being queued for later.
 func (st *serveState) call(ctx context.Context, fn func(*session) (any, error)) (any, error) {
-	c := &serveCall{ctx: ctx, fn: fn, out: make(chan serveResult, 1)}
+	if err := st.actionError(); err != nil {
+		return nil, err
+	}
+	c := &serveCall{ctx: ctx, fn: fn, out: make(chan serveResult, 1), epoch: st.epoch.Load()}
 	select {
 	case st.calls <- c:
 	case <-st.done:
@@ -318,7 +641,6 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 
 // ServeStatus is the status method's result: where the character is, what it is doing, and the session's errors.
 type ServeStatus struct {
-	State         string  `json:"state"`
 	Character     string  `json:"character,omitempty"`
 	GUID          GUID    `json:"guid"`
 	Level         int32   `json:"level,omitempty"`
@@ -338,12 +660,22 @@ type ServeStatus struct {
 	Ghost         bool    `json:"ghost"`
 	ServerPackets int     `json:"server_packets"`
 	ParseErrors   int     `json:"parse_errors"`
-	Error         string  `json:"error,omitempty"`
+	// State is the link's lifecycle: "online", "reconnecting" (see ReconnectAttempt/ReconnectLimit) or "offline".
+	State string `json:"state"`
+	// Error is why the link is not online: the drop's reason while reconnecting, the last attempt's failure (or
+	// the spent budget) while offline. Empty online.
+	Error            string `json:"error,omitempty"`
+	ReconnectAttempt int    `json:"reconnect_attempt,omitempty"`
+	ReconnectLimit   int    `json:"reconnect_limit,omitempty"`
 }
 
-// serveStatus builds the status from the loop-owned session and model.
-func (s *session) serveStatus(errText string) ServeStatus {
-	out := ServeStatus{State: "in_world", Character: s.report.Character.Name, Level: int32(s.report.Character.Level)}
+// serveStatus builds the status from the loop-owned session, the model and the link's lifecycle.
+func (s *session) serveStatus(st *serveState) ServeStatus {
+	state, reason, attempt, limit := st.statusText()
+	out := ServeStatus{
+		State: state, Error: reason, ReconnectAttempt: attempt, ReconnectLimit: limit,
+		Character: s.report.Character.Name, Level: int32(s.report.Character.Level),
+	}
 	if s.world != nil {
 		out.Map = s.world.MapID()
 	}
@@ -381,10 +713,6 @@ func (s *session) serveStatus(errText string) ServeStatus {
 		out.ServerPackets += n
 	}
 	out.ParseErrors = s.report.ParseErrors
-	out.Error = errText
-	if errText != "" {
-		out.State = "disconnected"
-	}
 	return out
 }
 

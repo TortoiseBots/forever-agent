@@ -246,7 +246,7 @@ func (st *serveState) callDead(ctx context.Context, fn func(*session) (any, erro
 // registerServeMethods wires the method table.
 func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("status", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeStatus, error) {
-		return s.serveStatus(st.deadError()), nil
+		return s.serveStatus(st), nil
 	}))
 	srv.Register("units", serveReadTyped(st, func(s *session, _ context.Context, p serveUnitsParams) ([]ServeUnit, error) {
 		return s.serveUnits(p)
@@ -286,8 +286,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("invite", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {
 		return serveEmpty{}, s.serveInvite(ctx, p.Name)
 	}))
-	srv.Register("accept_invite", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (serveEmpty, error) {
-		return serveEmpty{}, s.serveAcceptInvite(context.Background())
+	srv.Register("accept_invite", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.serveAcceptInvite(ctx)
 	}))
 	srv.Register("leave_group", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.serveLeaveGroup(ctx)
@@ -296,8 +296,11 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		return s.serveAttack(ctx, p)
 	}))
 	srv.Register("stop_attack", rpc.Typed(func(ctx context.Context, _ serveEmpty) (serveEmpty, error) {
-		if st.s.serveRT.fighting.Load() {
-			st.s.serveRT.stopFight.Store(true)
+		if err := st.actionError(); err != nil {
+			return serveEmpty{}, err
+		}
+		if rt := st.rt.Load(); rt != nil && rt.fighting.Load() {
+			rt.stopFight.Store(true)
 			return serveEmpty{}, nil
 		}
 		_, err := st.call(ctx, func(s *session) (any, error) {
@@ -407,14 +410,6 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 			return nil, notPorted(name)
 		})
 	}
-}
-
-// deadError is the status error text while the link is gone.
-func (st *serveState) deadError() string {
-	if !st.dead || st.deadErr == nil {
-		return ""
-	}
-	return st.deadErr.Error()
 }
 
 func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {

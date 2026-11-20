@@ -1,8 +1,10 @@
 package main
 
 // forever serve: the long-running session. It logs in like world-check, enters the named character, and then serves
-// the local JSON-RPC socket (the same protocol and error codes the old daemon serves) until Ctrl-C, logout or a
-// world-socket drop. The password comes from --password-file or FOREVER_PASSWORD and is never printed.
+// the local JSON-RPC socket (the same protocol and error codes the old daemon serves) until Ctrl-C or logout. A
+// dropped world socket is logged in again within a bounded budget; only when that budget is spent does the daemon go
+// offline and end (see internal/forever/world/serve.go for the limits). The password comes from --password-file or
+// FOREVER_PASSWORD and is never printed.
 
 import (
 	"context"
@@ -109,7 +111,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	navmesh := fs.String("navmesh", "", "mmaps folder that enables path_to and walk_path")
 	parents := mapPairs{}
 	fs.Var(parents, "parent", "MAP=PARENT: an instance map whose missing tile comes from that parent (repeatable)")
-	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up after the world socket drops")
+	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}

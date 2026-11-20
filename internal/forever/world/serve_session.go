@@ -266,19 +266,95 @@ func (s *session) serveInvite(ctx context.Context, name string) error {
 	return s.waitPartyCommand(ctx, "the invite answer", 10*time.Second, before, 0, norm)
 }
 
-// serveAcceptInvite answers the pending invite.
+// serveAcceptInvite answers the pending invite and waits under the caller's context for the server's answer: a
+// roster that names the inviter (the model's transition check also refuses a roster whose leader is not the
+// inviter), or a refusal (a failed party command result). Success is returned only once membership is confirmed; a
+// server that answers nothing is a timeout error.
 func (s *session) serveAcceptInvite(ctx context.Context) error {
 	if s.party.Invite == nil {
 		return errors.New("no pending group invite")
 	}
-	if !s.party.Invite.CanAccept {
+	inv := *s.party.Invite
+	if !inv.CanAccept {
 		return errors.New("the pending group invite cannot be accepted")
 	}
+	resultsBefore := s.party.CommandResults
+	badBefore := s.party.InvalidRosters + s.party.UnexpectedRosters
 	if err := s.Send(wire.CMSGPartyInviteResponse, party.BuildInviteResponse(true)); err != nil {
 		return err
 	}
 	s.party.AcceptInvite()
-	return nil
+	return s.waitAccepted(ctx, serveAcceptInviteWait, badBefore, resultsBefore, inv)
+}
+
+// serveAcceptInviteWait bounds the wait for the answer to an accepted invite. A variable so the tests shorten it.
+var serveAcceptInviteWait = 10 * time.Second
+
+// acceptInvitePoll bounds one packet wait, so the caller's context ends the wait promptly.
+const acceptInvitePoll = 200 * time.Millisecond
+
+// waitAccepted waits for the roster that confirms an accepted invite, or for the server's refusal.
+func (s *session) waitAccepted(ctx context.Context, timeout time.Duration, badBefore, resultsBefore int, inv party.Invite) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("accept_invite: %w", err)
+		}
+		if s.party.InParty && s.party.RosterValid && s.rosterHasInviter(inv) {
+			return nil
+		}
+		if bad := s.party.InvalidRosters + s.party.UnexpectedRosters; bad > badBefore {
+			reason := s.party.LastUnexpected
+			if reason == "" {
+				reason = s.party.LastInvalid
+			}
+			return fmt.Errorf("accept_invite: the server's roster does not confirm the group: %s", reason)
+		}
+		if s.party.CommandResults > resultsBefore {
+			events := s.party.Events()
+			if n := len(events); n > 0 {
+				e := events[n-1]
+				if e.Kind == party.EventCommandResult && e.Result != 0 {
+					reason := party.ResultName(e.Result)
+					if reason == "" {
+						reason = fmt.Sprintf("result %d", e.Result)
+					}
+					return fmt.Errorf("accept_invite: the server refused it: %s", reason)
+				}
+			}
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("accept_invite: no confirmation within %s", timeout)
+		}
+		if remaining > acceptInvitePoll {
+			remaining = acceptInvitePoll
+		}
+		ev, err := s.next("the accept's answer", remaining)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				continue
+			}
+			return fmt.Errorf("accept_invite: %w", err)
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return fmt.Errorf("accept_invite: %w", err)
+		}
+	}
+}
+
+// rosterHasInviter reports whether the valid roster holds the inviter: by GUID when the invite carried one, else by
+// name.
+func (s *session) rosterHasInviter(inv party.Invite) bool {
+	for _, m := range s.party.SnapshotOf() {
+		if !inv.InviterGUID.IsZero() && m.GUID == inv.InviterGUID {
+			return true
+		}
+		if inv.InviterName != "" && strings.EqualFold(m.Name, inv.InviterName) {
+			return true
+		}
+	}
+	return false
 }
 
 // serveLeaveGroup leaves a party the model holds a valid roster for.

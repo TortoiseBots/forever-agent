@@ -188,6 +188,16 @@ type fakeServer struct {
 	// logout request arrives). deliberateClose keeps the read errors of a deliberate drop out of the failure channel.
 	closeSocket string
 	closeWhen   string
+	// realmLoop keeps the fake accepting realm sessions until close: a reconnect scenario logs in again on a new
+	// socket, and each accepted session runs serveRealmConn from the start.
+	realmLoop bool
+	// loginFails makes that many further realm connections close as soon as they are accepted, so the client's
+	// login attempt fails the way a server refusing the socket does. Under mu.
+	loginFails int
+	// curRealm/curInst are the sockets of the running session, so a test can drop one at a chosen moment (dropNow).
+	// closing marks a close() by the test: an accept failing then is the scenario's end, not a failure.
+	curRealm, curInst *fakeConn
+	closing           bool
 	// logoutNoResponse makes the fake close the instance socket with SMSG_LOGOUT_COMPLETE and never send
 	// SMSG_LOGOUT_RESPONSE: the real server queues the response on the instance socket and closes that socket right
 	// after the completion (WorldSession.cpp:766,789), so a queued write can be dropped.
@@ -227,6 +237,22 @@ type fakeServer struct {
 	serveGMSent     bool
 	serveBotSent    bool
 	serveInviteSent bool
+	// serveSessions counts the instance sessions the serving scenario ran (a reconnect makes a second one).
+	serveSessions int
+	// serveInvite sends this character a group invite from "Inviter" after the create blocks, so accept_invite has
+	// something to answer. serveAccept picks the answer to CMSG_PARTY_INVITE_RESPONSE: "roster" (a roster led by
+	// the inviter), "refuse" (PARTY_OP_INVITE with group-full) or "silent" (nothing, so the client times out).
+	serveInvite   bool
+	serveAccept   string
+	serveAccepted bool
+	// serveNoKill keeps the creature alive after a swing, so an attack call stays running until a test drops the
+	// link or asks it to stop.
+	serveNoKill bool
+	// serveReconnects is ServeConfig.ReconnectAttempts for the daemon these helpers start (0 keeps the default);
+	// serveBackoff/serveLoginTimeout shorten its reconnect timings.
+	serveReconnects   int
+	serveBackoff      time.Duration
+	serveLoginTimeout time.Duration
 	// fbdMapSc is the dungeon run's map scenario: the run keeps its own socket loop, so this one is only the
 	// realm-side world-port bookkeeping and the state the entry/leave helper fills.
 	fbdMapSc *mapScenario
@@ -295,8 +321,43 @@ func newFakeServer(t *testing.T) *fakeServer {
 }
 
 func (f *fakeServer) close() {
+	f.mu.Lock()
+	f.closing = true
+	f.mu.Unlock()
 	f.realmListener.Close()
 	f.instanceListener.Close()
+}
+
+// isClosing reports whether the test closed the fake; a reconnect scenario's accept then ends normally.
+func (f *fakeServer) isClosing() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closing
+}
+
+// dropNow closes the running instance (or realm) socket the way the server would, so a serving test drops the link
+// at the moment it chooses. It reports false when that socket is not running.
+func (f *fakeServer) dropNow(which string) bool {
+	f.mu.Lock()
+	c := f.curInst
+	if which == "realm" {
+		c = f.curRealm
+	}
+	f.deliberateClose = true
+	f.mu.Unlock()
+	if c == nil {
+		return false
+	}
+	_ = c.nc.Close()
+	return true
+}
+
+// failLogins makes the next n realm connections close right after they are accepted: the client's login attempt
+// fails, and the retry budget sees a failed attempt.
+func (f *fakeServer) failLogins(n int) {
+	f.mu.Lock()
+	f.loginFails += n
+	f.mu.Unlock()
 }
 
 func (f *fakeServer) failf(format string, args ...any) {
@@ -505,14 +566,20 @@ func (f *fakeServer) serveRealm() {
 	for {
 		conn, err := f.realmListener.Accept()
 		if err != nil {
+			if f.isClosing() {
+				return // the test closed the fake: a reconnect scenario ends here
+			}
 			f.failf("realm accept: %v", err)
 			return
 		}
 		f.serveRealmConn(conn)
 		// The character-screen scenario may log in more than once (a create and a delete of the same run are
-		// separate sessions); the world flow is a single run and ends with its connection.
+		// separate sessions); the world flow is a single run and ends with its connection unless the scenario
+		// declares that the client reconnects.
 		if f.charScreen == nil || !f.charScreen.moreSessions() {
-			return
+			if !f.realmLoop {
+				return
+			}
 		}
 	}
 }
@@ -520,11 +587,25 @@ func (f *fakeServer) serveRealm() {
 // serveRealmConn runs one realm connection: the first half of serveRealm, which the character-screen hook splits so
 // the fake can accept the next session.
 func (f *fakeServer) serveRealmConn(conn net.Conn) {
+	f.mu.Lock()
+	fail := f.loginFails > 0
+	if fail {
+		f.loginFails--
+	}
+	f.mu.Unlock()
+	if fail {
+		// The server dropped the socket before the handshake: the client's attempt failed, its retry may succeed.
+		_ = conn.Close()
+		return
+	}
 	c, err := f.newConn(conn)
 	if err != nil {
 		f.failf("realm: %v", err)
 		return
 	}
+	f.mu.Lock()
+	f.curRealm = c
+	f.mu.Unlock()
 	if !f.banners(conn, "realm") {
 		return
 	}
@@ -717,6 +798,9 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	defer f.wg.Done()
 	conn, err := f.instanceListener.Accept()
 	if err != nil {
+		if f.isClosing() {
+			return
+		}
 		f.failf("instance accept: %v", err)
 		return
 	}
@@ -725,6 +809,16 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		f.failf("instance: %v", err)
 		return
 	}
+	f.mu.Lock()
+	f.curInst = c
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		if f.curInst == c {
+			f.curInst = nil
+		}
+		f.mu.Unlock()
+	}()
 	if !f.banners(conn, "instance") {
 		return
 	}

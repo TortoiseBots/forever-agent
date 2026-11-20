@@ -19,9 +19,11 @@ printed, and the session uses the same login, the same two sockets, the same mov
   client (`rpc DIR METHOD [params]`) opens it unchanged. Without `--dir`, the token file is
   `rpc-<port>.token` in the working directory (or `--token-file`).
 * Error codes are the old ones: `-32602` invalid params, `-32601` unknown method, `-32001` not in world, `-32002`
-  disconnected, `-32003` game refusal (including "not ported"), `-32004` timeout. Every method the old daemon served
-  is registered; one that this server does not implement answers `-32003` with
-  `"<method>: not ported on this server"`, never an empty result.
+  disconnected (also every action while offline), `-32003` game refusal (including "not ported"), `-32004` timeout,
+  and this server's `-32005` reconnecting: the world socket dropped and the daemon is logging in again, so the call
+  did nothing and nothing is queued for after the re-entry. Every method the old daemon served is registered; one that
+  this server does not implement answers `-32003` with `"<method>: not ported on this server"`, never an empty
+  result.
 * Params decode into a struct with unknown fields rejected, as before. GUIDs are `"0x"` hex strings; 128-bit values
   use 32 digits, and a shorter string is read as the low half.
 
@@ -36,7 +38,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 
 | Method | Status | What it does |
 |---|---|---|
-| `status` | DONE | The session's state, character, guid, map, mover position, target, health/power, dead/ghost and packet counts. Answers while the link is dead, with `state: "disconnected"` and the reason. |
+| `status` | DONE | The session's state, character, guid, map, mover position, target, health/power, dead/ghost and packet counts. `state` is the link's lifecycle (`online`, `reconnecting`, `offline`); when it is not online, `error` is the reason and `reconnect_attempt`/`reconnect_limit` show the budget. Answers in every state, from the last session. |
 | `units` | DONE | The model's units, nearest first: `within`/`near`, `entry`, `name`, `limit`. The `hostile` filter is refused by name (the model has faction templates, not factions). |
 | `unit` | DONE | One unit by `guid` or `name`, with distance, health, power, level, target, combat, dead/ghost and cast. |
 | `party` | DONE | The party model's roster, leader, health/power and pending invite. Raid groups are not modelled. |
@@ -53,7 +55,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. |
 | `gm_revive` | DONE | `.revive <name>` through the same channel; the name is validated first. |
 | `invite` | DONE | `CMSG_PARTY_INVITE` and the server's command result for that name. |
-| `accept_invite` | DONE | Answers the pending invite the model holds. |
+| `accept_invite` | DONE | Answers the pending invite the model holds and waits under the caller's context for the server's answer: a roster naming the inviter confirms membership; a failed party command result or a roster the model refuses is a `-32003` error, and a silent server is a timeout error. |
 | `leave_group` | DONE | Leaves a party the model holds a valid roster for. |
 | `gm_kill`, `gm_evade`, `gm_set_hp`, `gm_respawn`, `gm_aura` | NOT-PORTED | The old helpers select a unit and send a unit-targeted GM line; that select-then-line pair is not in `internal/forever`. |
 | `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark`, `roll` | NOT-PORTED | The party model has no senders or records for these. |
@@ -115,13 +117,54 @@ The session goroutine owns the socket and the model. HTTP calls post one functio
 whose caller went away is dropped before it runs. An idle 50 ms wait answers the server's time syncs and pings
 between calls.
 
-An unplanned world-socket drop ends the idle wait with `ErrLinkLost`. The RPC stays up for `--disconnect-grace`
-(default 30 s, the old daemon's own window), answering `status` with `state: "disconnected"` and the reason, and
-refusing every action with `-32002`. The daemon then exits with a world error. There is no automatic reconnect (the
-one-shot commands do not reconnect either).
+An unplanned world-socket drop ends the idle wait with `ErrLinkLost`, and the daemon tries to log the character in
+again instead of ending. The old session is torn down completely first (both readers cancelled, both sockets closed
+and their readers joined) and a fresh session is logged in: a new world socket, a new instance socket and a new
+world/chat/party/death model, so nothing of the dropped link survives. The link's lifecycle is explicit in `status`:
+
+* `online` — the session is in the world.
+* `reconnecting` — the drop was seen and the daemon is logging in again. Reads answer from the last session;
+  actions answer `-32005` and are never queued for after the re-entry. A call posted before the drop is refused by
+  its session epoch even if it is still in the queue, so an old action can never run on the replacement session.
+* `offline` — the reconnect budget is spent. `status` carries the reason and actions answer `-32002` for
+  `--disconnect-grace` (default 30 s), then the process exits with a world error.
+
+The budget is stated in `serve.go`: at most 8 attempts (or `ServeConfig.ReconnectAttempts`; negative turns retries
+off), the wait before attempt n is 2 s doubled n-1 times capped at 60 s (2, 4, 8, 16, 32, 60, 60, 60 s, about four
+minutes), and one attempt is bounded by 60 s from the world socket to in world. The attempts are one budget across
+drops: a link that drops again before it has stayed up for a minute keeps spending the same budget, so a flapping
+socket ends offline rather than re-logging in forever; a session that stayed up for a minute starts a fresh budget at
+its next drop. The login reuses the realm join ticket the daemon started with (there is no second Battle.net login in
+a serving session), and a ticket the server refuses is just a failed attempt.
+
+Read-only methods (`status`, `units`, `chat_log`, `death_status`) still answer while the link is down, from the last
+session's frozen model. `chat_log` may end with the link error instead of waiting, because its `wait_ms` drains the
+socket. `logout` is an action like any other while reconnecting (`-32005`); a signal still stops the daemon, which
+exits with the reconnect error instead of logging out a session that is not in the world.
 
 A clean shutdown (Ctrl-C, or the `logout` method) sends the real logout and waits for `SMSG_LOGOUT_COMPLETE` on its
 own bound context. If the server refuses the logout, the daemon exits with the world error.
+
+## Round 2: reconnects and confirmations
+
+Two review findings were fixed here.
+
+1. **A transient world-socket failure ended the daemon for good.** It now reconnects within the stated budget (see
+   "The loop and the link"), tears the old session down first, reports `online`/`reconnecting`/`offline` in
+   `status`, answers actions with `-32005` while reconnecting and never replays them, and rebuilds every
+   session-owned model after re-entry.
+2. **`accept_invite` returned success before the server confirmed it.** It now waits under the RPC request's context
+   for a roster that names the inviter, a failed party command result, or a timeout, and returns an error unless
+   membership is confirmed.
+
+The same "success before the server confirms" check over the DONE methods:
+
+| Class | Methods |
+|---|---|
+| Waits for the authoritative answer (already did; unchanged) | `invite` (party command result), `leave_group` (the leave result / roster), `cast` (the cast's outcome), `attack` (the fight's outcome: dead, stopped or map change), `accept_resurrect`, `release_spirit`, `corpse_query`, `reclaim_corpse` (the death waits), `logout` (the completion), `gm`, `gm_revive`, `bot` (the command's collected reply; `complete` says whether it ended as the command requires) |
+| Client-authoritative in 1.12: the server sends no answer to wait for | `target` (`CMSG_SET_SELECTION`), `face` (`CMSG_MOVE_SET_FACING`), `walk_to`/`walk_path` (the mover's own heartbeats; the server does not acknowledge a walk), `stop_attack` (`CMSG_ATTACK_STOP`), `cancel_cast` (`CMSG_CANCEL_CAST`), `area_trigger` (`CMSG_AREA_TRIGGER`; an effect, if any, arrives as world packets), `chat` and `addon_send` (no acknowledgment; a mute or a language refusal is silent) |
+| Read-only | `status`, `units`, `unit`, `party`, `chat_log`, `cast_state`, `path_to`, `death_status` |
+| Fixed | `accept_invite` |
 
 ## Slot and teardown
 
@@ -149,12 +192,28 @@ own bound context. If the server refuses the logout, the daemon exits with the w
   refused.
 * `TestServePartyAndAddon`: `party`, `invite` (the fake sees the packet), `accept_invite` and `leave_group` without a
   group refused, `addon_send`.
+* `TestServeAcceptInvite`: three subtests against the fake's invite: the roster naming the inviter confirms the
+  accept, a failed party command result (group-full) is the typed refusal, and a silent server is the timeout; the
+  fake sees CMSG_PARTY_INVITE_RESPONSE in every case.
 * `TestServeNotPortedAndUnknown`: `trade`, `teardown` and `map_snapshot` answer `-32003` with the ported-on-this-
   server text; an unknown name answers `-32601`; the five death methods answer their own refusals for a living
   character.
 * `TestServeNavmeshPath`: a `navfixture` mesh in a temporary folder; `path_to` is complete and `walk_path` walks it.
-* `TestServeLinkDropGrace`: the fake drops the instance socket; `status` turns disconnected with a reason, an action
-  answers `-32002`, and the daemon exits with a world error after the grace window.
+* `TestServeOfflineGrace`: with the retries turned off, the fake drops the instance socket; `status` turns offline
+  with a reason, an action answers `-32002`, and the daemon exits with a world error after the grace window.
+* `TestServeReconnectIdle`: a drop while idle; `status` reports `reconnecting` with its attempt and limit, an action
+  answers `-32005`, the daemon logs in again on a second session (the model is rebuilt from its burst) and the refused
+  action is not sent later.
+* `TestServeReconnectWhileMoving`: a `walk_to` that is running when the socket drops ends with `-32002`, the daemon
+  re-enters, and the walk is not resumed (the new session stands at its own create block).
+* `TestServeReconnectDuringCombat`: an `attack` that is running (the fake keeps the creature alive) ends with
+  `-32002`, then the daemon re-enters with no target selected.
+* `TestServeReconnectDuringLogin`: the first re-entry's world socket is refused before the handshake; the attempt
+  fails, the next one reaches the world, and the log names the failed attempt.
+* `TestServeReconnectExhausted`: every attempt fails; `status` turns offline with `reconnect gave up after 2
+  attempt(s)`, an action answers `-32002`, and the daemon exits with that error.
+* `TestServeReconnectRepeatedDrops`: every login is dropped after it is in the world; the one budget is spent and the
+  daemon goes offline rather than re-logging in forever.
 * `TestServeCleanShutdown`: cancelling the parent context logs out and returns cleanly.
 
 `cmd/forever-agent/forever_serve_test.go` pins the password file and that the `--dir` manifest opens through the
@@ -177,8 +236,10 @@ rpc <dir> chat '{"type":"say","text":"serve rpc"}'
 ```
 
 A successful run shows `rpc: listening on ...`, three results, and `serve: logged out` after Ctrl-C. If the server
-drops a socket instead, `rpc status` shows `state: disconnected` for the grace window and the process exits with a
-world error.
+drops the socket instead, the log prints `rpc: state reconnecting (attempt n of 8)`; `rpc status` shows `state:
+reconnecting` (with `reconnect_attempt`/`reconnect_limit`, and `-32005` for actions) until the login lands and it is
+`online` again. If the budget is spent, `state: offline` names the reason for the grace window and the process exits
+with a world error.
 
 ## Open questions
 
