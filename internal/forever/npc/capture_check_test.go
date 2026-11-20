@@ -48,7 +48,7 @@ func readPKT(t *testing.T, path string) []pktPacket {
 	return out
 }
 
-// TestCaptureNPCPackets parses every gossip and interaction packet of the capture(s).
+// TestCaptureNPCPackets parses every gossip, interaction and trainer packet of the capture(s).
 func TestCaptureNPCPackets(t *testing.T) {
 	var files []string
 	if path := os.Getenv("FOREVER_CAPTURE_PKT"); path != "" {
@@ -69,6 +69,9 @@ func TestCaptureNPCPackets(t *testing.T) {
 		wire.ServerName(wire.SMSGGossipComplete):           wire.SMSGGossipComplete,
 		wire.ServerName(wire.SMSGGossipOptionNPCInteract):  wire.SMSGGossipOptionNPCInteract,
 		wire.ServerName(wire.SMSGNPCInteractionOpenResult): wire.SMSGNPCInteractionOpenResult,
+		wire.ServerName(wire.SMSGTrainerList):              wire.SMSGTrainerList,
+		wire.ServerName(wire.SMSGTrainerBuyFailed):         wire.SMSGTrainerBuyFailed,
+		wire.ServerName(wire.SMSGLearnedSpells):            wire.SMSGLearnedSpells,
 	}
 	for _, path := range files {
 		counts := map[string]int{}
@@ -90,6 +93,12 @@ func TestCaptureNPCPackets(t *testing.T) {
 				_, err = ParseGossipOptionInteraction(p.Payload)
 			case wire.SMSGNPCInteractionOpenResult:
 				_, err = ParseInteractionOpenResult(p.Payload)
+			case wire.SMSGTrainerList:
+				_, err = ParseTrainerList(p.Payload)
+			case wire.SMSGTrainerBuyFailed:
+				_, err = ParseTrainerBuyFailed(p.Payload)
+			case wire.SMSGLearnedSpells:
+				_, err = ParseLearnedSpells(p.Payload)
 			}
 			if err != nil {
 				t.Fatalf("%s: %s (%d bytes): %v", filepath.Base(path), wire.ServerName(p.Core), len(p.Payload), err)

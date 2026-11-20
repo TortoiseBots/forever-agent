@@ -10,9 +10,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
-// handleNPC answers the act round's NPC packets: the gossip menu (stored for the runner's wait), its completion,
-// the option's NPC interaction and the interaction-open result. A packet this round's parser cannot consume exactly
-// is counted (Report.ParseErrors) and merges nothing.
+// handleNPC answers the NPC packets: the gossip menu (stored for the runner's wait), its completion, the
+// option's NPC interaction, the interaction-open result, and the trainer round's list, learn and failed buy. A
+// packet this round's parser cannot consume exactly is counted (Report.ParseErrors) and merges nothing.
 func (s *session) handleNPC(p worldconn.Packet) error {
 	s.capturePacket(p)
 	switch p.Core {
@@ -50,6 +50,31 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+	case wire.SMSGTrainerList:
+		v, err := npc.ParseTrainerList(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.actTrainer = &v
+	case wire.SMSGLearnedSpells:
+		v, err := npc.ParseLearnedSpells(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.actLearned = &v
+		for _, sp := range v.Spells {
+			s.known = append(s.known, sp.SpellID)
+		}
+		s.report.KnownSpells = append([]int32(nil), s.known...)
+	case wire.SMSGTrainerBuyFailed:
+		v, err := npc.ParseTrainerBuyFailed(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.actTrainerFailed = &v
 	}
 	return nil
 }

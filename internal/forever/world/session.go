@@ -533,6 +533,11 @@ type session struct {
 	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
 	actMenu  *npc.GossipMessage
 	actQuest *npc.QuestGiverQuestList
+	// Trainer round (forever-world-r4): the last trainer list, learn and failed buy, set by the same dispatch for
+	// the runner's wait.
+	actTrainer       *npc.TrainerList
+	actLearned       *npc.LearnedSpells
+	actTrainerFailed *npc.TrainerBuyFailed
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -1897,7 +1902,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	// The act round's NPC answers (forever-world-r0, npc.go): the menu lands on the runner's wait here, and the same
 	// handler hands it to the spirit healer's flow.
 	case wire.SMSGGossipMessage, wire.SMSGGossipComplete, wire.SMSGGossipOptionNPCInteract,
-		wire.SMSGNPCInteractionOpenResult, wire.SMSGQuestGiverQuestList:
+		wire.SMSGNPCInteractionOpenResult, wire.SMSGQuestGiverQuestList,
+		wire.SMSGTrainerList, wire.SMSGLearnedSpells, wire.SMSGTrainerBuyFailed:
 		return s.handleNPC(p)
 	// Round A7's handlers live in mapchange.go; this is their one registration line.
 	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,

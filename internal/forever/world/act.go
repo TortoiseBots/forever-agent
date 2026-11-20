@@ -18,13 +18,15 @@ import (
 )
 
 const (
-	actVerbWait  = "wait"
-	actVerbGM    = "gm"
-	actVerbGoto  = "goto"
-	actVerbNPC   = "npc"
-	actVerbOpen  = "open"
-	actVerbSelec = "select"
-	actVerbClose = "close"
+	actVerbWait    = "wait"
+	actVerbGM      = "gm"
+	actVerbGoto    = "goto"
+	actVerbNPC     = "npc"
+	actVerbOpen    = "open"
+	actVerbSelec   = "select"
+	actVerbClose   = "close"
+	actVerbTrainer = "trainer"
+	actVerbLearn   = "learn"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -36,6 +38,12 @@ const (
 	// actMenuWait bounds one menu answer: the server answers a talk at once, so a silent server is a refusal, not
 	// a longer wait.
 	actMenuWait = 5 * time.Second
+	// actTrainerWait bounds one trainer list answer: the server answers the select at once (Player.cpp:15315-15323
+	// sends the list from the gossip select), so a silent server is a refusal, not a longer wait.
+	actTrainerWait = 5 * time.Second
+	// actLearnWait bounds one learn answer: the buy is answered by SMSG_LEARNED_SPELLS within a round trip, or by
+	// SMSG_TRAINER_BUY_FAILED on a refusal (Trainer.cpp:163-196).
+	actLearnWait = 3 * time.Second
 	// actSubmenuWait bounds the wait for a submenu after a select: most options open nothing, so it is short.
 	actSubmenuWait = time.Second
 )
@@ -54,7 +62,7 @@ type ActStep struct {
 func ParseActStep(line string) (ActStep, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return ActStep{}, fmt.Errorf("world: an act step needs a verb (wait, gm, goto, npc, open, select, close)")
+		return ActStep{}, fmt.Errorf("world: an act step needs a verb (wait, gm, goto, npc, open, select, close, trainer, learn)")
 	}
 	verb, rest, _ := strings.Cut(line, " ")
 	rest = strings.TrimLeft(rest, " \t")
@@ -89,9 +97,10 @@ func ParseActStep(line string) (ActStep, error) {
 		step.Args[k] = v
 	}
 	switch verb {
-	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose:
+	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose,
+		actVerbTrainer, actVerbLearn:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, trainer, learn)", verb)
 	}
 	return step, nil
 }
@@ -131,16 +140,18 @@ func (s ActStep) requireKeys(keys ...string) error {
 	return nil
 }
 
-// actState is the runner's own state: the current NPC and its last menu.
+// actState is the runner's own state: the current NPC, its last menu, and its last trainer list.
 type actState struct {
-	npc      *objects.Object
-	menu     npc.GossipMessage
-	hasMenu  bool
-	menuNPC  bool // the menu came from TALK_TO_GOSSIP (false: a QUEST_GIVER_HELLO answers a quest list)
-	quests   *npc.QuestGiverQuestList
-	npcEntry int32
-	hasNPC   bool
-	steps    int
+	npc        *objects.Object
+	menu       npc.GossipMessage
+	hasMenu    bool
+	menuNPC    bool // the menu came from TALK_TO_GOSSIP (false: a QUEST_GIVER_HELLO answers a quest list)
+	quests     *npc.QuestGiverQuestList
+	trainer    *npc.TrainerList
+	hasTrainer bool
+	npcEntry   int32
+	hasNPC     bool
+	steps      int
 }
 
 // actStep runs one step of the act script and prints its line.
@@ -161,6 +172,10 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actSelect(ctx, a, step)
 	case actVerbClose:
 		return s.actClose(ctx, a, step)
+	case actVerbTrainer:
+		return s.runActTrainer(ctx, a, step)
+	case actVerbLearn:
+		return s.runActLearn(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}
