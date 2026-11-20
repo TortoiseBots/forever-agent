@@ -421,6 +421,12 @@ func (r *Run) actionFightGate(ctx context.Context, a Action) string {
 	if !r.repAt.After(r.lastOrderAt) {
 		return "stale"
 	}
+	// A watch's run starts on the plan's map, in the instance the party entered. ready() compares the party with its
+	// own map (the observer may be elsewhere), so without this a party that zoned out together between the placement
+	// check and a retried start would pass as ready and the module would be asked to start a run off the plan's map.
+	if r.cfg.Watch && !r.partyInInstance() {
+		return "party-map"
+	}
 	if ok, why := r.ready(); !ok {
 		return why
 	}

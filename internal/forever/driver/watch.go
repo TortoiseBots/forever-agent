@@ -108,10 +108,14 @@ func (r *Run) Watch(ctx context.Context) Result {
 		r.stop("enter")
 	}
 	// The same-map check is the party's own: every member on the plan's map in one instance. The observer may stand
-	// anywhere; with --enter none this is the one check that the party was placed as the watch expects.
-	if r.stopReason == "" && !r.partyInInstance() {
-		r.logf("watch: the party is not on the plan's map %d in one instance", r.route.Map)
-		r.stop("enter:party-map")
+	// anywhere; with --enter none this is the one check that the party was placed as the watch expects. The observer's
+	// own teleport polls the state after ENTER verified the party, so a failed or stale read there is re-read, not a
+	// placement.
+	if r.stopReason == "" && !r.partyPlaced(ctx) {
+		if r.stopReason == "" {
+			r.logf("watch: the party is not on the plan's map %d in one instance", r.route.Map)
+			r.stop("enter:party-map")
+		}
 	}
 	if r.stopReason == "" {
 		r.states = append(r.states, "WATCH")
@@ -135,6 +139,29 @@ func (r *Run) configBroken() bool {
 		return true
 	}
 	return false
+}
+
+// partyPlaced is the placement check before a watch starts the module's run: every member on the plan's map in one
+// instance, from a whole report. A read that failed or went stale (the observer's own teleport polls the state after
+// the party's entry) is polled again, a few times; only a whole fresh report that says the party is elsewhere is a
+// refusal without another read.
+func (r *Run) partyPlaced(ctx context.Context) bool {
+	const attempts = 3
+	for range attempts {
+		if r.partyInInstance() {
+			return true
+		}
+		if r.reportComplete() && r.repFresh() {
+			return false
+		}
+		if r.stopReason != "" || r.lost || !r.sleep(ctx, r.cfg.Poll) {
+			return false
+		}
+		if !r.refresh(ctx) && (r.stopReason != "" || r.lost) {
+			return false
+		}
+	}
+	return r.partyInInstance()
 }
 
 // startRecord is the one run record a start answer must carry: exactly one, for the leader and the plan the command

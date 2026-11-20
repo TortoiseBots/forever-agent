@@ -111,6 +111,8 @@ type fakeBot struct {
 	dmKind    string
 	dmYards   float64
 	dmMissing bool
+	dlKind    string
+	dlYards   float64
 	move      string
 	orderFail bool
 }
@@ -203,6 +205,9 @@ type Fake struct {
 	// NoRunRecord makes a run action answer with no run record (count 0), as a start reply that lost its record:
 	// the watch must refuse it, never log a started run.
 	NoRunRecord bool
+	// EmptyStateOn, when set, is asked before a state read; true answers it with no report at all and a timeout: the
+	// transient loss a gate's own poll can hit after the party's entry was already verified.
+	EmptyStateOn func(f *Fake) bool
 }
 
 // FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
@@ -363,6 +368,11 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 		f.Clock.Advance(7 * time.Second)
 		return snap, nil
 	}
+	if f.EmptyStateOn != nil && f.EmptyStateOn(f) {
+		// A read that returned nothing at all: not a zero-bot report, no report.
+		f.Clock.Advance(max(f.StateDelay, f.CallDelay))
+		return tbcmd.StateReport{}, context.DeadlineExceeded
+	}
 	if d := max(f.StateDelay, f.CallDelay); d > 0 {
 		f.Clock.Advance(d)
 	}
@@ -393,6 +403,14 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	return f.report(5), nil
 }
 
+// orSelf is the leader distance kind the fake reports: self unless the test scripted another kind.
+func orSelf(kind string) string {
+	if kind == "" {
+		return "self"
+	}
+	return kind
+}
+
 // report builds a state answer with the first n bots.
 func (f *Fake) report(n int) tbcmd.StateReport {
 	rep := tbcmd.StateReport{Target: "party:" + f.cfg.Tank(), End: map[string]string{}}
@@ -409,7 +427,7 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine, NoEngine: !b.engine,
 			X: float64(b.pos[0]), Y: float64(b.pos[1]), Z: float64(b.pos[2]),
 			Map: b.mapID, Instance: b.inst,
-			DistLeader: tbcmd.Distance{Has: true, Kind: "self"},
+			DistLeader: tbcmd.Distance{Has: true, Kind: orSelf(b.dlKind), Yards: b.dlYards},
 			DistMaster: tbcmd.Distance{Has: !f.missingNow && !b.dmMissing, Kind: b.dmKind, Yards: b.dmYards},
 			LastOrder:  "", Eating: false, Drinking: false, Resting: b.resting,
 			Extra: map[string]string{},

@@ -192,8 +192,10 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if tank == "" || heal == "" || len(dps) != 3 {
 		return "roles"
 	}
-	// The tank is the party's leader, or the bot the module's run names as its leader: either is the same party.
-	if !strings.EqualFold(p.Leader, tank) && !strings.EqualFold(r.cfg.Leader, tank) {
+	// The module's run starts on the bot the watch names, and that bot must be the party's tank: the command's own
+	// start check refuses a leader that does not lead its party, so a --leader that is a healer or a dps would only
+	// be refused later by the module.
+	if !strings.EqualFold(r.cfg.Leader, tank) {
 		return "leader"
 	}
 	r.cfg.Party = append([]string{tank, heal}, dps...)
@@ -388,10 +390,11 @@ func (r *Run) enteredNow() bool {
 	return r.partyInInstance()
 }
 
-// partyInInstance says whether every party member stands on the plan's map in one instance, from a report fresh
-// enough to act on. Instance 0 is the open world, never the instance a plan names: five bots on map 0 are not in.
+// partyInInstance says whether every party member stands on the plan's map in one instance, from a whole report fresh
+// enough to act on: a report whose read failed, whose counts disagree or whose five lines are not the party is not
+// evidence of anything. Instance 0 is the open world, never the instance a plan names: five bots on map 0 are not in.
 func (r *Run) partyInInstance() bool {
-	if r.rep == nil || !r.repFresh() || len(r.rep.Bots) != 5 {
+	if !r.reportComplete() || !r.repFresh() {
 		return false
 	}
 	inst := r.rep.Bots[0].Instance

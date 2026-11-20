@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/tactics"
 )
 
 func minimalPlan() *dungeon.Plan {
@@ -68,6 +69,15 @@ func TestRouteRefusals(t *testing.T) {
 		{"boss companions_loot", func(p *dungeon.Plan) { p.Legs[0].Boss.CompanionsLoot = boolPtr(true) }, "companions_loot"},
 		{"pull_ceiling", func(p *dungeon.Plan) { p.PullCeiling = 6 }, "pull_ceiling"},
 		{"watchdog", func(p *dungeon.Plan) { p.Watchdog = &dungeon.WatchdogConfig{} }, "watchdog"},
+		// The in-fight run fields are refused by a run this client leads: it does not run them, and only the
+		// watched module's own run does.
+		{"kill_first", func(p *dungeon.Plan) { p.KillFirst = []uint32{4} }, "kill_first"},
+		{"cc_priority", func(p *dungeon.Plan) { p.CCPriority = []uint32{4} }, "cc_priority"},
+		{"cc_always", func(p *dungeon.Plan) { p.CCAlways = []uint32{4} }, "cc_always"},
+		{"no_cc", func(p *dungeon.Plan) { p.NoCC = []uint32{400} }, "no_cc"},
+		{"summoned_kill_first", func(p *dungeon.Plan) { p.SummonedKillFirst = []uint32{1} }, "summoned_kill_first"},
+		{"tank_min_hp", func(p *dungeon.Plan) { p.TankMinHP = 40 }, "tank_min_hp"},
+		{"tactics", func(p *dungeon.Plan) { p.Legs[0].Boss.Tactics = &tactics.Tactics{} }, "tactics"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -107,6 +117,25 @@ func TestRouteAcceptsTheRound(t *testing.T) {
 	}
 }
 
+// TestWatchRouteAcceptsTheFightFields: the watched module's own run executes the fight, so the watch's route takes
+// every in-fight run field unchanged; the run's own route refuses the same plan fields.
+func TestWatchRouteAcceptsTheFightFields(t *testing.T) {
+	p := minimalPlan()
+	p.KillFirst = []uint32{100}
+	p.CCPriority = []uint32{100}
+	p.CCAlways = []uint32{100}
+	p.NoCC = []uint32{400}
+	p.SummonedKillFirst = []uint32{100}
+	p.TankMinHP = 40
+	p.Legs[0].Boss.Tactics = &tactics.Tactics{KillFirst: []uint32{200}}
+	if _, err := NewWatchRoute(p); err != nil {
+		t.Fatalf("the watch's route refused the in-fight run fields: %v", err)
+	}
+	if _, err := NewRoute(p); err == nil {
+		t.Fatal("the run's route took a plan with in-fight run fields")
+	}
+}
+
 // TestPlanFiles runs the loader over every plan file of the repository's dungeons folder and records, per file,
 // whether it loads or which fields refuse it. Every refusal must be a PlanRefusal with field names (no silent ignore);
 // Ragefire Chasm's blockers are pinned exactly, so a field that stops being consulted shows up here.
@@ -118,7 +147,7 @@ func TestPlanFiles(t *testing.T) {
 	table := map[string][]string{}
 	for _, f := range files {
 		base := filepath.Base(f)
-		route, err := LoadRoute(f)
+		route, err := LoadWatchRoute(f)
 		switch {
 		case err == nil:
 			if len(route.Legs) == 0 {
@@ -136,12 +165,26 @@ func TestPlanFiles(t *testing.T) {
 		}
 	}
 	// Ragefire Chasm carries the plan format's in-fight run fields (kill_first, cc_priority, cc_always,
-	// tank_min_hp and two bosses' tactics). They are the module's own run inputs, so the route loads unchanged.
+	// tank_min_hp and two bosses' tactics). They are the watched module's own run inputs, so the watch's loader
+	// takes the plan unchanged.
 	if got := table["ragefire_chasm.json"]; len(got) != 0 {
-		t.Fatalf("ragefire_chasm.json refuses %v, want it to load", got)
+		t.Fatalf("ragefire_chasm.json refuses %v, want it to load for a watch", got)
 	}
-	if route, err := LoadRoute("../../../dungeons/ragefire_chasm.json"); err != nil || len(route.Legs) != 9 {
-		t.Fatalf("ragefire route: %v legs=%d", err, len(route.Legs))
+	if route, err := LoadWatchRoute("../../../dungeons/ragefire_chasm.json"); err != nil || len(route.Legs) != 9 {
+		t.Fatalf("ragefire watch route: %v legs=%d", err, len(route.Legs))
+	}
+	// A run this client leads still refuses the same plan: this driver does not implement its fight rules, and
+	// loading it would run the dungeon without them.
+	_, err = LoadRoute("../../../dungeons/ragefire_chasm.json")
+	var ref *PlanRefusal
+	if !errors.As(err, &ref) {
+		t.Fatalf("the run's loader took a plan with in-fight run fields: %v", err)
+	}
+	fields := refusalPaths(err)
+	for _, want := range []string{"kill_first", "cc_priority", "cc_always"} {
+		if !slices.Contains(fields, want) {
+			t.Fatalf("the run's refusal does not name %s: %v", want, fields)
+		}
 	}
 }
 

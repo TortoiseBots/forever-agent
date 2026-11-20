@@ -159,9 +159,33 @@ func TestActionPartyTargets(t *testing.T) {
 		"tele target=party::Watchcmd #T",
 		"tele target=party:Watchcmd:extra #T",
 		"tele target= #T",
+		"tele target=party #T", // the command's keyword, never a character named Party
 	} {
 		if _, err := NewClient(oneReply(bad, "tele-end count=1 #T")).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3); !errors.Is(err, ErrBadValue) {
 			t.Fatalf("%q: err %v, want ErrBadValue", bad, err)
 		}
+	}
+}
+
+// TestActionContinuationLines: a target record may be split over <verb>+ continuation lines like any record. A
+// continuation joins the base line before it (and a target may sit in the continuation); a continuation before any
+// base line, or one repeating a key, is malformed rather than a second target.
+func TestActionContinuationLines(t *testing.T) {
+	call := func(raws ...string) (ActionReport, error) {
+		return NewClient(oneReply(raws...)).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+	}
+	// The merge: the base line and its continuation are one target record.
+	rep, err := call("tele #T", "tele+ target=party:Watchtank #T", "tele-end count=2 #T")
+	if err != nil {
+		t.Fatalf("a split target record: %v", err)
+	}
+	if len(rep.Targets) != 1 || !rep.Targets[0].Party || rep.Targets[0].Name != "Watchtank" {
+		t.Fatalf("split target: %+v", rep)
+	}
+	if _, err := call("tele+ target=party:Watchtank #T", "tele-end count=1 #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("an orphan continuation: err %v, want ErrBadReport", err)
+	}
+	if _, err := call("tele target=party:Watchtank #T", "tele+ target=party:Watchcmd #T", "tele-end count=2 #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a continuation repeating target=: err %v, want ErrBadReport", err)
 	}
 }

@@ -64,7 +64,9 @@ func actionTarget(rec record) (ActionTarget, error) {
 	}
 	t := ActionTarget{Raw: strings.Join(parts, ":")}
 	switch {
-	case len(parts) == 1 && parts[0] != "":
+	case len(parts) == 1 && parts[0] != "" && !strings.EqualFold(parts[0], "party"):
+		// "party" is the command's keyword, never a character's name here (setupName refuses it too): a bare
+		// target=party names no target, so it is malformed rather than a character called Party.
 		t.Name = parts[0]
 	case len(parts) == 2 && parts[0] == "party" && parts[1] != "":
 		t.Party, t.Name = true, parts[1]
@@ -132,14 +134,36 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 	if out.Count != between {
 		return out, fmt.Errorf("%w: %s count=%d, %d line(s) before it", ErrBadReport, endKind, out.Count, between)
 	}
+	// A target record may be split over continuation lines (<verb>+) like any other record: a continuation joins the
+	// base line before it, repeats no key, and a continuation before any base line is malformed. Without the merge a
+	// tele+ line would read as a second target record (and an orphan one as a target of its own).
+	var recs []record
 	for i := range between {
 		rec, err := decodeLine(rep.Lines[i])
 		if err != nil {
 			return out, err
 		}
-		if rec.kind != verb && rec.kind != verb+"+" {
+		cont := strings.HasSuffix(rec.kind, "+")
+		if strings.TrimSuffix(rec.kind, "+") != verb {
 			return out, fmt.Errorf("%w: a %q line inside a %s reply", ErrBadReport, rec.kind, verb)
 		}
+		if !cont {
+			recs = append(recs, rec)
+			continue
+		}
+		if len(recs) == 0 {
+			return out, fmt.Errorf("%w: a %s+ line before any %s line", ErrBadReport, verb, verb)
+		}
+		prev := &recs[len(recs)-1]
+		for _, k := range rec.keys {
+			if prev.has(k) {
+				return out, fmt.Errorf("%w: %s+ repeats %s", ErrBadReport, verb, k)
+			}
+			prev.values[k] = rec.values[k]
+			prev.keys = append(prev.keys, k)
+		}
+	}
+	for _, rec := range recs {
 		t, err := actionTarget(rec)
 		if err != nil {
 			return out, err

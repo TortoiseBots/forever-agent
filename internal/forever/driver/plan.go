@@ -132,29 +132,41 @@ type Boss struct {
 	Approach []Vec3
 }
 
-// LoadRoute reads a dungeon plan file and builds the driver's view of it.
-func LoadRoute(path string) (*Route, error) {
+// LoadRoute reads a dungeon plan file and builds the driver's view of it for a run this client leads: the plan's
+// in-fight run fields are refused, because this driver does not run them.
+func LoadRoute(path string) (*Route, error) { return loadRoute(path, false) }
+
+// LoadWatchRoute reads a dungeon plan file for dungeon-watch: the module's own run executes the fight, so the plan's
+// in-fight run fields are accepted unchanged (the loader has validated them).
+func LoadWatchRoute(path string) (*Route, error) { return loadRoute(path, true) }
+
+func loadRoute(path string, watch bool) (*Route, error) {
 	p, err := dungeon.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return NewRoute(p)
+	return newRoute(p, watch)
 }
 
-// NewRoute builds the driver's view of a loaded plan. Every field the driver cannot run is a PlanRefusal; the returned
-// route is nil when there is one (a partial route would look runnable). A field is either read by the driver or, when
-// the plan sets it to a non-default value, refused by name: a plan whose holds, steps or skips were silently left out
-// would run a different dungeon than the one its author wrote. The plan's in-fight run fields (kill_first, cc_priority,
-// cc_always, no_cc, summoned_kill_first, tank_min_hp and a boss's tactics) are not refused: they are part of the
-// documented plan format and belong to whoever runs the fight, which for a watched run is the module's own bot. The
-// loader has already validated them (ranges, the kill_first/cc_priority rule, the summoned subset), so a plan that
-// loads is one whose run fields the module can read, and this driver neither rewrites nor acts on them. Four more
-// groups are not run inputs and so are not refused: the plan's name, status and notes (descriptions), its level band
-// and hire composition (party preparation happens before this driver), and entrance_tele, skip_export, a via's
-// check_skip and a patrol's period_s/source/period_estimate (they belong to the remote entry mode, to plan-check or to
-// plan-export; the driver enters through Portal or EnterAreaTrigger and gates a patrol by its live units, not by its
-// period).
-func NewRoute(p *dungeon.Plan) (*Route, error) {
+// NewRoute builds the driver's view of a loaded plan for a run this client leads. Every field the driver cannot run is
+// a PlanRefusal; the returned route is nil when there is one (a partial route would look runnable). A field is either
+// read by the driver or, when the plan sets it to a non-default value, refused by name: a plan whose crowd control,
+// kill order, holds or skips were silently left out would run a different dungeon than the one its author wrote. This
+// includes the plan's in-fight run fields (kill_first, cc_priority, cc_always, no_cc, summoned_kill_first,
+// tank_min_hp and a boss's tactics): they belong to whoever runs the fight, and this driver does not. NewWatchRoute is
+// the one exception, for a run the server module's own bot executes. Five more groups are not run inputs and so are
+// not refused: the plan's name, status and notes (descriptions), its level band and hire composition (party
+// preparation happens before this driver), and entrance_tele, skip_export, a via's check_skip and a patrol's
+// period_s/source/period_estimate (they belong to the remote entry mode, to plan-check or to plan-export; the driver
+// enters through Portal or EnterAreaTrigger and gates a patrol by its live units, not by its period).
+func NewRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, false) }
+
+// NewWatchRoute is NewRoute for dungeon-watch: the run is the server module's own bot's, so the plan's in-fight run
+// fields are part of its inputs and are accepted unchanged. The loader has validated them (ranges, the
+// kill_first/cc_priority rule, the summoned subset); this client neither rewrites nor acts on them.
+func NewWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, true) }
+
+func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 	var refusals []error
 	refuse := func(where, field, why string) {
 		refusals = append(refusals, &PlanRefusal{Where: where, Field: field, Why: why})
@@ -164,6 +176,28 @@ func NewRoute(p *dungeon.Plan) (*Route, error) {
 	}
 	if p.Kind == dungeon.KindRaid {
 		refuse("kind", "kind", "this round runs a five-bot dungeon party, not a raid")
+	}
+	// The in-fight run fields are the watched module's own inputs; a run this client leads does not run them, so it
+	// refuses them rather than silently dropping them.
+	if !watch {
+		if len(p.KillFirst) > 0 {
+			refuse("kill_first", "kill_first", "a kill order inside a fight is not run by this round")
+		}
+		if len(p.CCPriority) > 0 {
+			refuse("cc_priority", "cc_priority", "crowd control is not run by this round")
+		}
+		if len(p.CCAlways) > 0 {
+			refuse("cc_always", "cc_always", "crowd control is not run by this round")
+		}
+		if len(p.NoCC) > 0 {
+			refuse("no_cc", "no_cc", "crowd control is not run by this round")
+		}
+		if len(p.SummonedKillFirst) > 0 {
+			refuse("summoned_kill_first", "summoned_kill_first", "a kill order inside a fight is not run by this round")
+		}
+		if p.TankMinHP != 0 {
+			refuse("tank_min_hp", "tank_min_hp", "the tank health preflight is not run by this round")
+		}
 	}
 	if p.PullCeiling != 0 {
 		refuse("pull_ceiling", "pull_ceiling", "the pull-size ceiling is a plan-check rule, not a run rule")
@@ -299,6 +333,9 @@ func NewRoute(p *dungeon.Plan) (*Route, error) {
 			}
 			if pl.Boss.LootItem != nil {
 				refuse(bw, "loot_item", "looting the boss is not run by this round")
+			}
+			if !watch && pl.Boss.Tactics != nil {
+				refuse(bw, "tactics", "the party's fight tactics are not run by this round")
 			}
 			if pl.Boss.WaitS != 0 {
 				refuse(bw, "wait_s", "a boss wait for a patrolling boss is not run by this round")

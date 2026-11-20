@@ -136,3 +136,33 @@ The review of the fixes found three refusals too loose. Each is fixed with a tes
   watch with `start:bad-report` instead of logging it started. The typed start answer checks the same
   (`internal/forever/command/tbcmd/run.go:137`). Tests: `TestWatchStartNeedsOneRunRecord`, `TestStartRecord`, and
   the `zero start records`/`other plan`/`not running` rows of `TestRunTargetMismatchAndRefusals`.
+
+## Review round 3
+
+The last review found five more. Each is fixed with a test that fails on the old code; none was rejected.
+
+* **A watched PREPARE measured the party by its master.** `ready()` (`internal/forever/driver/run.go:626`) checked
+  every bot's `dm=` (distance to its master) even in a watch, where the master is the module's own bot commander,
+  outside the party and possibly outside its instance: `dm=othermap` or a far `dm=` timed PREPARE out. A watch now
+  measures the party by `dl=` (the party leader, its tank); a run keeps `dm=` (its commander is in its party). Tests:
+  `TestWatchReadyUsesTheLeaderDistance` (an `othermap` master passes; a member 30 yd from the tank is `prepare:range`).
+* **The placement trusted a report that failed, and the observer's own poll could undo a verified entry.**
+  `partyInInstance` (`states.go:394`) now requires a whole report (`reportComplete`: no read error, counts agree,
+  five lines, every party member); `partyPlaced` (`watch.go:148`) polls again a few times before the watch refuses a
+  placement, because `observerIn`'s teleport polls the state after ENTER verified the party; and the watch's fight
+  gate (`actions.go:427`) refuses `party-map` when the party is no longer in the plan's instance, so a retried start
+  cannot go out on a party that zoned out together. Tests: `TestPartyInInstanceNeedsAWholeReport`,
+  `TestWatchObserverPollFailureKeepsTheEntry`, `TestWatchStartRechecksThePlacement`.
+* **The run's plan loader had started accepting fight rules it does not run.** `NewRoute` refuses the in-fight run
+  fields again (`plan.go:182`, `plan.go:337`) and only the watch opts in: `LoadWatchRoute`/`NewWatchRoute`
+  (`plan.go:141`, `plan.go:167`), used by `dungeon-watch` (`cmd/forever-agent/forever_watch.go:76`). `dungeon-run`
+  keeps `LoadRoute` and refuses such a plan as before. Tests: the in-fight rows of `TestRouteRefusals`,
+  `TestWatchRouteAcceptsTheFightFields`, and the watch-loads/run-refuses pair in `TestPlanFiles`.
+* **Setup answers read continuation lines as extra targets, and bare `target=party` as a character.** `parseAction`
+  (`internal/forever/command/tbcmd/action.go:137`) merges `<verb>+` lines into the record before them (an orphan or a
+  repeated key is `ErrBadReport`), and `actionTarget` (`action.go:67`) refuses `target=party`, the command's keyword.
+  Tests: `TestActionContinuationLines`, the `target=party` row of `TestActionPartyTargets`.
+* **A watched PREPARE accepted a `--leader` that could not lead the run.** `adoptRoster`
+  (`internal/forever/driver/states.go:198`) now requires the watch's leader to be the party's tank: the module's
+  start refuses a leader that does not lead its party, so the client caught it at PREPARE instead of sending a start
+  the module refuses. Test: `TestWatchLeaderMustBeTheTank`.

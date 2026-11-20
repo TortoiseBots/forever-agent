@@ -233,6 +233,122 @@ func TestStartRecord(t *testing.T) {
 	}
 }
 
+// TestWatchReadyUsesTheLeaderDistance: a watched party's master is the module's own commander, outside the party and
+// possibly outside its instance, so its dm= can be othermap while the party stands together around its tank. PREPARE
+// measures a watched party by dl= (the party leader); a member 30 yards from that leader is still not ready.
+func TestWatchReadyUsesTheLeaderDistance(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	for _, b := range f.bots {
+		b.dmKind = "othermap"
+	}
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	if res := run.Watch(context.Background()); res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 1 {
+		t.Fatalf("%d run starts", n)
+	}
+
+	run, f, _ = newWatch(t, watchConfig())
+	f.bots["Watchdps1"].dlKind, f.bots["Watchdps1"].dlYards = "away", 30
+	if res := run.Watch(context.Background()); res.Stop != "prepare:range" {
+		t.Fatalf("a member 30 yd from the tank: stop %q, want prepare:range", res.Stop)
+	}
+}
+
+// TestPartyInInstanceNeedsAWholeReport: a state read that failed is not evidence of the placement, even when its
+// answer still carries five bot lines; a report whose counts disagree is not whole either.
+func TestPartyInInstanceNeedsAWholeReport(t *testing.T) {
+	run, f, _ := newWatch(t, watchConfig())
+	for _, b := range f.bots {
+		b.mapID, b.inst = run.route.Map, 1
+	}
+	r := f.report(5)
+	run.rep, run.repAt, run.repErr = &r, run.now(), errors.New("state: the answer was cut")
+	if run.partyInInstance() {
+		t.Fatal("a failed read read as the party in the instance")
+	}
+	run.repErr = nil
+	if !run.partyInInstance() {
+		t.Fatal("a whole report read as the party out")
+	}
+	r.Records--
+	run.rep = &r
+	if run.partyInInstance() {
+		t.Fatal("a report whose counts disagree read as the party in the instance")
+	}
+}
+
+// TestWatchObserverPollFailureKeepsTheEntry: the party is in; the observer's own teleport polls the state and the two
+// reads fail with no report at all. That failure is not a placement: the watch reads again and starts, instead of
+// ending enter:party-map on a party its own entry verified.
+func TestWatchObserverPollFailureKeepsTheEntry(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Enter = "tele"
+	run, f, logs := newWatch(t, cfg)
+	seenIn, failed := false, 0
+	f.EmptyStateOn = func(f *Fake) bool {
+		if f.bots[cfg.Tank()].mapID != run.route.Map {
+			return false
+		}
+		if seenIn && failed < 2 {
+			failed++
+			return true
+		}
+		seenIn = true
+		return false
+	}
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	if res := run.Watch(context.Background()); res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 1 {
+		t.Fatalf("%d run starts", n)
+	}
+}
+
+// TestWatchStartRechecksThePlacement: the start's gate fails once and the start is retried; while it waits the party
+// zones out together. The party's own map is what ready() compares in a watch, so without its own placement check the
+// gate would pass and ask the module to start a run off the plan's map.
+func TestWatchStartRechecksThePlacement(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	run.cfg.Poll = 2 * time.Second
+	reads := 0
+	f.EmptyStateOn = func(f *Fake) bool {
+		if f.bots[run.cfg.Tank()].mapID != run.route.Map {
+			return false
+		}
+		reads++
+		return reads == 2 // prepare's read, then the start gate's
+	}
+	f.Clock.After(time.Second, func() {
+		for _, b := range f.bots {
+			b.mapID, b.inst = 1, 0
+		}
+	})
+	res := run.Watch(context.Background())
+	if res.Stop != "start:party-map" {
+		t.Fatalf("stop %q, want start:party-map; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run starts on a party that zoned out during the retry", n)
+	}
+}
+
+// TestWatchLeaderMustBeTheTank: the start names the watch's leader, and the module refuses a run leader that does not
+// lead its party. A --leader that is a healer is refused at PREPARE, before anything is sent.
+func TestWatchLeaderMustBeTheTank(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	run.cfg.Leader = "Watchheal"
+	res := run.Watch(context.Background())
+	if res.Stop != "prepare:leader" {
+		t.Fatalf("stop %q, want prepare:leader; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run starts with a leader that does not lead the party", n)
+	}
+}
+
 // TestReadyNoEngineReason: the gate's own reason word for an engine-off member is noengine, and it is distinct from
 // a report that could not be read.
 func TestReadyNoEngineReason(t *testing.T) {

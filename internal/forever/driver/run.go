@@ -579,9 +579,9 @@ func (r *Run) repFresh() bool {
 }
 
 // ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on the run's
-// map (a watch: on the party's own map, the observer aside) and in one instance, its master's distance known and
-// short, and its last order not failed. A bot with the engine off is not ready with the reason noengine:<name>. It
-// returns the first failing reason.
+// map (a watch: on the party's own map, the observer aside) and in one instance, its leader's (a run: its master's)
+// distance known and short, and its last order not failed. A bot with the engine off is not ready with the reason
+// noengine:<name>. It returns the first failing reason.
 func (r *Run) ready() (bool, string) {
 	if !r.reportComplete() {
 		return false, "report"
@@ -619,20 +619,28 @@ func (r *Run) ready() (bool, string) {
 		} else if b.Instance != inst {
 			return false, "inst:" + b.Name
 		}
-		switch b.DistMaster.Kind {
+		// The distance that says how gathered the party is: a run's is the master's (the commander is in its party);
+		// a watch's is the party leader's (the tank), because a watched party's master is the module's own bot
+		// commander, outside the party and possibly outside its instance, and its distance says nothing about the
+		// party standing together.
+		dist := b.DistMaster
+		if r.cfg.Watch {
+			dist = b.DistLeader
+		}
+		switch dist.Kind {
 		case "othermap":
 			return false, "othermap:" + b.Name
 		case "self":
 		default:
 			// A missing distance is not known, and not known is never ready: it is not zero yards.
-			if !b.DistMaster.Has {
+			if !dist.Has {
 				return false, "dist:" + b.Name
 			}
 			limit := float64(MasterFollowYd)
 			if b.Name == r.cfg.Healer() || b.Role == "healer" {
 				limit = PriestFollowYd
 			}
-			if b.DistMaster.Yards > limit {
+			if dist.Yards > limit {
 				return false, "range:" + b.Name
 			}
 		}
