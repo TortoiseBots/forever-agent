@@ -299,9 +299,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		if err := st.actionError(); err != nil {
 			return serveEmpty{}, err
 		}
-		if rt := st.rt.Load(); rt != nil && rt.fighting.Load() {
-			rt.stopFight.Store(true)
-			return serveEmpty{}, nil
+		if handled, err := st.stopFightFast(); handled {
+			return serveEmpty{}, err
 		}
 		_, err := st.call(ctx, func(s *session) (any, error) {
 			return serveEmpty{}, s.Send(wire.CMSGAttackStop, nil)

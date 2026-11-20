@@ -123,6 +123,7 @@ var ErrNavmeshNotConfigured = errors.New("world: no navmesh: serve was started w
 // serveRuntime is the loop-owned state of a serving session.
 type serveRuntime struct {
 	st     *serveState
+	epoch  uint64    // the install that built it; a fast path refuses a runtime whose epoch is gone
 	target wire.GUID // the selected unit, for attack and status
 	// stopFight is the only field an HTTP handler writes: stop_attack must reach a fight that is running on the
 	// session goroutine. fighting tells that handler whether there is a fight to stop.
@@ -288,7 +289,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 // fight flags), the command channel's link and the epoch. The old session is not touched again; the loop tore it
 // down before the login.
 func (st *serveState) install(s *session, epoch uint64) {
-	s.serveRT = &serveRuntime{st: st}
+	s.serveRT = &serveRuntime{st: st, epoch: epoch}
 	st.rt.Store(s.serveRT)
 	st.q = command.NewSession(&cmdLink{s: s})
 	st.epoch.Store(epoch)
@@ -302,6 +303,13 @@ func (st *serveState) install(s *session, epoch uint64) {
 // for after the re-entry. It returns the new session, or the reason the budget is spent.
 func (st *serveState) reconnect(ctx context.Context, cause error) (*session, error) {
 	old := st.session.Load()
+	// The lifecycle is published, and the epoch bumped, before the teardown starts: the teardown waits up to two
+	// seconds for the readers, and for all of that window the dropped session must not look online. Actions answer
+	// the typed reconnecting error instead of being queued for a session that cannot run them, a call posted under
+	// the old epoch is refused rather than run on the session that is going away, and a fast path that loads the
+	// runtime (stop_attack) sees a stale epoch and refuses instead of reporting a success the dead link cannot act on.
+	st.setState(serveReconnecting, fmt.Sprintf("the link dropped: %v", cause))
+	st.epoch.Store(st.epoch.Load() + 1)
 	st.opts.logf("rpc: the world link dropped: %v; state %s", cause, serveReconnecting)
 	old.teardown()
 	limit := int(st.limit.Load())
@@ -498,6 +506,23 @@ func (st *serveState) actionError() error {
 		return nil
 	}
 	return st.downError()
+}
+
+// stopFightFast stops a fight that is running on the session goroutine without queueing behind it; it reports false
+// when there is no fight to stop and the caller must take the queued path. It is the one action that reaches the
+// runtime directly, so it re-reads the lifecycle and the runtime's epoch after loading it: a drop publishes the
+// reconnecting state and bumps the epoch before it tears the old session down, and a call that lands in that window
+// gets the typed error instead of a success the dead session can never act on.
+func (st *serveState) stopFightFast() (bool, error) {
+	rt := st.rt.Load()
+	if rt == nil || !rt.fighting.Load() {
+		return false, nil
+	}
+	if st.actionError() != nil || rt.epoch != st.epoch.Load() {
+		return true, st.downError()
+	}
+	rt.stopFight.Store(true)
+	return true, nil
 }
 
 // run executes one call on the session goroutine.

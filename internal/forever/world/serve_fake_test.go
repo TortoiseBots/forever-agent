@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1137,5 +1138,107 @@ func TestServeAcceptInvite(t *testing.T) {
 			a.stop(t)
 			f.wait(t)
 		})
+	}
+}
+
+// TestServeReconnectPublishesBeforeTeardown: a dropped link is published as reconnecting, and its epoch bumped, before
+// the old session's teardown starts. The teardown waits up to two seconds for the readers; for all of that window the
+// dead session must not look online, an action must be refused at once instead of being queued for it, and
+// stop_attack's fast path must not take the dead session's stop flag and answer success.
+func TestServeReconnectPublishesBeforeTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := &serveState{
+		calls:        make(chan *serveCall, 64),
+		done:         make(chan struct{}),
+		backoff:      10 * time.Millisecond,
+		maxBackoff:   10 * time.Millisecond,
+		loginTimeout: 50 * time.Millisecond,
+	}
+	st.limit.Store(1)
+	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, ctx)
+	hold := make(chan struct{}) // closed only at the end: teardown spends its two-second bound meanwhile
+	s.pumpDone = []chan struct{}{hold}
+	st.install(s, 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.reconnect(ctx, errors.New("the socket reset"))
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for st.lifecycle() != serveReconnecting {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drop is not published while the teardown runs (state %s)", st.lifecycle())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, reason, _, _ := st.statusText(); !strings.Contains(reason, "socket reset") {
+		t.Fatalf("reconnecting reason %q", reason)
+	}
+	if epoch := st.epoch.Load(); epoch == rt.epoch {
+		t.Fatalf("the epoch still matches the dying runtime (%d)", epoch)
+	}
+	// An action answers the typed reconnecting error at once; it is not queued for the session that is going away.
+	actx, acancel := context.WithTimeout(ctx, time.Second)
+	defer acancel()
+	start := time.Now()
+	if _, err := st.call(actx, func(*session) (any, error) { return nil, nil }); err == nil {
+		t.Fatal("an action during the teardown returned nil")
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("the action was queued for %s instead of refused", took)
+	}
+	// stop_attack's fast path loads the runtime directly: it must refuse the runtime of the epoch that is gone.
+	if handled, err := st.stopFightFast(); !handled || err == nil {
+		t.Fatalf("stop_attack during the teardown: handled=%v err=%v", handled, err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("stop_attack set the dead session's stop flag and answered success")
+	}
+	cancel()
+	close(hold) // the readers return: the teardown ends and the cancelled context ends the re-entry
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the re-entry did not end")
+	}
+}
+
+// TestServeSelectKeepsTargetWhenTheSendFails: the selected target is committed only after the server was sent the
+// selection. A send that fails leaves the previous target in place, so status and a later attack do not act on a
+// selection the server never received.
+func TestServeSelectKeepsTargetWhenTheSendFails(t *testing.T) {
+	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background())
+	prev := wire.GUID{Low: 0x11, High: 0x22}
+	s.serveRT = &serveRuntime{target: prev}
+	// No sockets and no fake transport: Send fails at once with "no connection 1".
+	if err := s.serveSelect(&objects.Object{GUID: wire.GUID{Low: 0x33}}); err == nil {
+		t.Fatal("serveSelect with no connection returned nil")
+	}
+	if s.serveRT.target != prev {
+		t.Fatalf("the target moved to %v after a failed send, want the previous %v", s.serveRT.target, prev)
+	}
+}
+
+// TestServeStopAttackRefusesAStaleRuntime: stop_attack's fast path skips the queue, so it validates the runtime's
+// epoch after loading it. A drop that published the reconnecting state and bumped the epoch, whose teardown is still
+// running, leaves the old runtime loaded: the call must answer the typed error, not set a flag the dead session can
+// never act on.
+func TestServeStopAttackRefusesAStaleRuntime(t *testing.T) {
+	st := &serveState{}
+	st.install(newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background()), 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+	st.epoch.Store(st.epoch.Load() + 1)
+	if handled, err := st.stopFightFast(); !handled || err == nil {
+		t.Fatalf("stop_attack on a stale runtime: handled=%v err=%v", handled, err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("stop_attack set the stale runtime's stop flag")
 	}
 }

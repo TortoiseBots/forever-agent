@@ -121,10 +121,15 @@ func (s *session) serveUnitByName(guid GUID, name string) (*objects.Object, erro
 	return nil, fmt.Errorf("no unit named %q nearby", chat.SanitiseName(name))
 }
 
-// serveSelect sets the session's selected target and sends CMSG_SET_SELECTION.
+// serveSelect sets the session's selected target and sends CMSG_SET_SELECTION. The target is committed only after
+// the send succeeds: a write that fails (the link dropped under the call) must not leave the daemon acting on a
+// selection the server never received.
 func (s *session) serveSelect(o *objects.Object) error {
+	if err := s.Send(wire.CMSGSetSelection, combat.BuildSetSelection(o.GUID)); err != nil {
+		return err
+	}
 	s.serveRT.target = o.GUID
-	return s.Send(wire.CMSGSetSelection, combat.BuildSetSelection(o.GUID))
+	return nil
 }
 
 // serveFace turns the character toward a unit.
