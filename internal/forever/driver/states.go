@@ -321,7 +321,7 @@ func (r *Run) enter(ctx context.Context) string {
 	for {
 		if r.cfg.Enter != "portal" && !enterSent {
 			// The entry is a moving action: a fresh report, nobody in combat or dead.
-			done, retry := r.actStep(ctx, Action{Kind: ActionEnter, Who: "party"}, "enter")
+			done, retry := r.actStep(ctx, Action{Kind: ActionEnter, Who: "party", Map: r.route.Map}, "enter")
 			if done {
 				enterSent = true
 			} else if !retry {

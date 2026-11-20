@@ -142,13 +142,16 @@ type PullNote struct {
 }
 
 // DeathRecord is one death event: when, where, and the party slot the module named (a role word, never a
-// character name). Unit is the module's own unit id when it sent one.
+// character name). Unit is the module's own unit id when it sent one. Why is the event's why= as it arrived: the
+// dead member's name when it named one of the party, and the name that matched nobody when it did not, in which
+// case Who is empty and the death is unattributed.
 type DeathRecord struct {
 	AtS  int    `json:"at_s"`
 	Leg  int    `json:"leg"`
 	Step int    `json:"step"`
 	Unit uint32 `json:"unit,omitempty"`
 	Who  string `json:"who,omitempty"`
+	Why  string `json:"why,omitempty"`
 }
 
 // RescueNote is one practice rescue the watcher sent: when, where, and the pause it answered.

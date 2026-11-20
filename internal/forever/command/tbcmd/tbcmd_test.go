@@ -213,7 +213,7 @@ func TestStateEndDisagrees(t *testing.T) {
 	if _, err := NewClient(r).State(context.Background(), "party"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("resting: err %v, want ErrBadReport", err)
 	}
-	// ready must agree with resting=0, and a ready report has no why list.
+	// ready=yes with a resting member is inconsistent (ready implies rested), and a ready report has no why list.
 	r = oneReply("state-begin #T", stateLineT("A", "yes", "hp"), stateEndT(1, 1, "yes", ""))
 	if _, err := NewClient(r).State(context.Background(), "party"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("ready/resting: err %v, want ErrBadReport", err)
@@ -221,6 +221,27 @@ func TestStateEndDisagrees(t *testing.T) {
 	r = oneReply("state-begin #T", stateLineT("A", "no", ""), stateEndT(1, 0, "yes", "hp"))
 	if _, err := NewClient(r).State(context.Background(), "party"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("ready with why: err %v, want ErrBadReport", err)
+	}
+}
+
+// TestStateNotReadyWithReasons: the module's ready flag is its own: a party that is alive and up but not ready
+// says ready=no with resting=0 and a why= list of reasons, one `reason:bot` item each. That is a whole report, not
+// the inconsistency of ready=yes with a resting member, and the reasons are surfaced as the end line wrote them.
+func TestStateNotReadyWithReasons(t *testing.T) {
+	r := oneReply("state-begin #T", fullState,
+		"state-end count=1 records=1 bots=1 resting=0 ready=no marks=0 why=far:Mdpsa;blocked:Mdpsb "+
+			"target=party:Tbtank alive=1 dead=0 ghost=0 wipe=no whole=no #T")
+	rep, err := NewClient(r).StateReport(context.Background(), "party Tbtank")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	if rep.Ready || rep.Resting != 0 || len(rep.Why) != 2 || rep.Why[0] != "far:Mdpsa" || rep.Why[1] != "blocked:Mdpsb" {
+		t.Fatalf("ready %v, resting %d, why %v", rep.Ready, rep.Resting, rep.Why)
+	}
+	// A not-ready report still has to say why.
+	r = oneReply("state-begin #T", fullState, stateEndT(1, 0, "no", ""))
+	if _, err := NewClient(r).StateReport(context.Background(), "party Tbtank"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("ready=no without why: err %v, want ErrBadReport", err)
 	}
 }
 

@@ -5,7 +5,8 @@
 //
 // The card's rules are its thresholds, all flags with defaults (DefaultThresholds): a step re-pulled more than
 // Repulls times, one member with at least MemberDeaths deaths and two above the next, and a leg over SlowFactor times
-// the plan's recorded time (only when the record carries one).
+// the plan's recorded time (only when the record carries one). A death the module's event did not name as a party
+// member is flagged apart and counted for no member.
 package reportcard
 
 import (
@@ -14,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/forever/driver"
@@ -87,13 +87,15 @@ type Leg struct {
 	Pauses  int    `json:"pauses"`
 }
 
-// Death is one death event the module sent.
+// Death is one death event the module sent. Who is the member's party slot; Why is the event's why= as it arrived,
+// which for a death no member matches is the only name it carries.
 type Death struct {
 	AtS  int    `json:"at_s"`
 	Leg  int    `json:"leg"`
 	Step int    `json:"step"`
 	Unit uint32 `json:"unit,omitempty"`
 	Who  string `json:"who,omitempty"`
+	Why  string `json:"why,omitempty"`
 }
 
 // Pause is one pause event with the module's reason and whether a resume cleared it.
@@ -139,7 +141,7 @@ func Build(sum driver.RunSummary, th Thresholds) Card {
 	c.Deaths, c.Wipes, c.Pauses, c.Rescues = w.Deaths, w.Wipes, w.Pauses, w.Rescues
 	c.DeathLog = make([]Death, 0, len(w.DeathLog))
 	for _, d := range w.DeathLog {
-		c.DeathLog = append(c.DeathLog, Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who})
+		c.DeathLog = append(c.DeathLog, Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why})
 	}
 	c.PauseLog = make([]Pause, 0, len(w.PauseLog))
 	for _, p := range w.PauseLog {
@@ -203,10 +205,30 @@ func failedReason(r string) bool {
 	return false
 }
 
-// verdict is the one-line verdict: CLEARED, STOPPED AT <leg/step> (<reason>) or FAILED (<reason>).
+// verdict is the one-line verdict: CLEARED, PAUSED-STUCK AT <leg/step> (<pause reason>), STOPPED AT
+// <leg/step> (<reason>) or FAILED (<reason>). A paused run the watch gave up on is not a run that stopped where it
+// stood: its pause is what ended it, so it gets its own word.
 func verdict(c Card) (string, string) {
 	if c.Clear {
 		return "CLEARED", "CLEARED"
+	}
+	if c.StopReason == driver.StopPausedStuck {
+		// The record ends with the stop the watcher sent, whose reason is this stop reason; the pause that was not
+		// cleared is in the pause log, and its reason is what a reader needs.
+		why := c.Why
+		if why == "" || why == c.StopReason {
+			for i := len(c.PauseLog) - 1; i >= 0; i-- {
+				if p := c.PauseLog[i]; !p.Cleared && p.Why != "" {
+					why = p.Why
+					break
+				}
+			}
+		}
+		text := "PAUSED-STUCK AT " + position(c.Leg, c.LegName, c.Step)
+		if why != "" && why != c.StopReason {
+			text += " (" + why + ")"
+		}
+		return "PAUSED-STUCK", text
 	}
 	reason := c.StopReason
 	if reason == "" {
@@ -267,9 +289,16 @@ func buildFlags(w *driver.RunWatch, legs []Leg, th Thresholds, stopReason string
 		who       string
 	}
 	packs := map[packKey][]Death{}
+	var unattributed []Death
 	for _, d := range w.DeathLog {
-		k := packKey{d.Leg, d.Step, deathWho(d)}
-		packs[k] = append(packs[k], Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who})
+		if d.Who == "" {
+			// A death whose event named no current party member says nothing about a member: it is reported on its
+			// own and counted nowhere, and the fight's unit id (the same for every death of one pull) never groups it.
+			unattributed = append(unattributed, Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why})
+			continue
+		}
+		k := packKey{d.Leg, d.Step, d.Who}
+		packs[k] = append(packs[k], Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why})
 	}
 	for k, ds := range packs {
 		if len(ds) < 2 {
@@ -288,8 +317,10 @@ func buildFlags(w *driver.RunWatch, legs []Leg, th Thresholds, stopReason string
 	// A member who died far more than the others.
 	byWho := map[string][]Death{}
 	for _, d := range w.DeathLog {
-		who := deathWho(d)
-		byWho[who] = append(byWho[who], Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who})
+		if d.Who == "" {
+			continue
+		}
+		byWho[d.Who] = append(byWho[d.Who], Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why})
 	}
 	for who, ds := range byWho {
 		next := 0
@@ -306,6 +337,18 @@ func buildFlags(w *driver.RunWatch, legs []Leg, th Thresholds, stopReason string
 			Text: fmt.Sprintf("%s died %d times (next most %d)", who, len(ds), next),
 		}
 		for _, d := range ds {
+			f.Evidence = append(f.Evidence, deathLine(d))
+		}
+		flags = append(flags, f)
+	}
+
+	// Deaths no party member matches: bad telemetry, reported as such so it is not read as a member's deaths.
+	if len(unattributed) > 0 {
+		f := Flag{
+			ID: "unattributed-deaths", Key: "count",
+			Text: fmt.Sprintf("%d death(s) name no current party member", len(unattributed)),
+		}
+		for _, d := range unattributed {
 			f.Evidence = append(f.Evidence, deathLine(d))
 		}
 		flags = append(flags, f)
@@ -379,24 +422,29 @@ func whySuffix(why string) string {
 	return " (" + why + ")"
 }
 
-// deathWho is the member's word; a unit the record could not map keeps its number.
+// deathWho is the member's word. A death the event did not name as a party member is unattributed: it keeps the name
+// it carried, never the fight's unit (every death of one pull shares it).
 func deathWho(d driver.DeathRecord) string {
 	if d.Who != "" {
 		return d.Who
 	}
-	if d.Unit != 0 {
-		return "unit " + strconv.FormatUint(uint64(d.Unit), 10)
+	if d.Why != "" {
+		return "unattributed (" + d.Why + ")"
 	}
-	return "unknown"
+	return "unattributed"
 }
 
 // deathLine is one death's evidence.
 func deathLine(d Death) string {
 	who := d.Who
 	if who == "" {
-		who = "unknown"
+		who = "unattributed"
 	}
-	return fmt.Sprintf("death t=%ds leg=%d step=%d who=%s unit=%d", d.AtS, d.Leg, d.Step, who, d.Unit)
+	line := fmt.Sprintf("death t=%ds leg=%d step=%d who=%s", d.AtS, d.Leg, d.Step, who)
+	if d.Who == "" && d.Why != "" {
+		line += " why=" + d.Why
+	}
+	return line + fmt.Sprintf(" unit=%d", d.Unit)
 }
 
 // stopFlagFromRecord is the run's own stop reason.

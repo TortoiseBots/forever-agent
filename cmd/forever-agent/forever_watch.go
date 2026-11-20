@@ -19,7 +19,7 @@ import (
 )
 
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--poll SEC] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--navmesh DIR] [--dry]"
 	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -31,6 +31,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	maxWipes := fs.Int("max-wipes", 3, "the run's wipe budget: the (n+1)th wipe ends it; 0 allows no wipe, -1 is no budget")
 	practice := fs.Bool("practice", true, "use the practice rescue when a run stays paused on a wipe")
 	watchdog := fs.Int("watchdog-minutes", 10, "pause and end the watch when no new run event arrives for this many minutes")
+	pause := fs.Int("pause-minutes", 5, "end the watch as paused-stuck when the module's pause stands this many minutes")
 	poll := fs.Int("poll", 2, "the status and event poll interval in seconds (1-30)")
 	th := reportcard.DefaultThresholds()
 	fs.IntVar(&th.Repulls, "repulls", th.Repulls, "report card: flag a step re-pulled more than this many times")
@@ -65,6 +66,10 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --watchdog-minutes is 1-120")
 		return exitUsage
 	}
+	if *pause < 1 || *pause > 120 {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --pause-minutes is 1-120")
+		return exitUsage
+	}
 	if *poll < 1 || *poll > 30 {
 		fmt.Fprintln(stderr, "forever dungeon-watch: --poll is 1-30 seconds")
 		return exitUsage
@@ -96,6 +101,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	}
 	cfg.Limits.MaxMinutes = *maxMinutes
 	cfg.Limits.MaxWipes = *maxWipes
+	cfg.Limits.WatchPause = time.Duration(*pause) * time.Minute
 
 	if *dry {
 		return dungeonWatchDry(ctx, cfg, route, th, stdout, stderr)
