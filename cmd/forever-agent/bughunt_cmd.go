@@ -93,7 +93,7 @@ func bughuntCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "bughunt: %v\n", err)
 			return exitUsage
 		}
-		run.Names, run.Dispel = names, dispel
+		run.SpellNames, run.Dispel = names, dispel
 		runs = append(runs, run)
 	}
 	hits, counts := bughunt.Hunt(runs, rules)

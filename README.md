@@ -18,6 +18,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
+| Act runner and NPC talk (forever-world-r0) | **Works against the fake world; a live run is the next step** (`forever-agent forever act`: one scriptable step per world action — wait, gm (through the command channel and its GM guard), goto (navmesh or straight line), npc (find by entry, walk within reach), open (talk or quest hello by NpcFlags, prints the menu), select, close — with one `step N verb ok|fail reason` line each; see [docs/forever/ACT-R0-NOTES.md](docs/forever/ACT-R0-NOTES.md)) |
 | Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
@@ -30,7 +31,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
-| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Live core, offline (round A2): leases, GM allowlist, recorder, `trials run --dry`; see [docs/forever/TRIALS-A2-NOTES.md](docs/forever/TRIALS-A2-NOTES.md)** |
+| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Setup toolkit and provisioning (round A3): the `.tb` test-kit client, hire-pool and player provisioning, the 22-row setup round; `trials run` provisions live without `--dry`; see [docs/forever/TRIALS-A3-NOTES.md](docs/forever/TRIALS-A3-NOTES.md)** |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
@@ -60,21 +61,54 @@ instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is 
 
 `forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
 [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
-[--parent MAP=PARENT] [--disconnect-grace DURATION]` keeps that character in the world and serves the local
-JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer token, loopback only, the same
-error codes. The password comes from `--password-file` or `FOREVER_PASSWORD` and is never printed. The listener is
-bound before the login; `--listen` defaults to `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and
-`rpc-<port>.token`, so `rpc DIR status` works unchanged; without it the token file is `rpc-<port>.token` in the
-working directory. `status`, `units`, `unit`, `party`, `chat_log`, `chat`, `gm`, `gm_revive`, `bot`, `invite`,
-`accept_invite`, `leave_group`, `target`, `attack`, `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`,
-`walk_to`, `path_to`, `walk_path`, `area_trigger`, the five death methods, `addon_send` and `logout` are ported;
-`--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error.
+[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units]` keeps that character in the world
+and serves the local JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer
+token, loopback only, the same error codes. The password comes from `--password-file` or
+`FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
+`127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
+works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
+`units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`gm_aura`, `trial_units`, `bot`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
+`stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
+`area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
+path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
+carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`), and `status`
+carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `limit` up to 1,000,
+`wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
+answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
+replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
+own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
+ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
+concurrent long-polls all return at their own cap.
+
+`gm_kill`, `gm_set_hp` and `gm_aura` are a test bench's hands and are off unless serve was started with
+`--allow-gm-units`. Even then they act only on a guid the runner registered through `trial_units`
+(`{"guids": [...]}`, which replaces the list and answers `{guids}`), and a player target must be this
+session's own character: another player is refused even when registered. Every refusal is the typed
+`-32006` error and sends nothing. The allowlist outlives a reconnect. A permitted hand selects the unit,
+waits for the server's selection echo and sends the one line (`.die`, `.modify hp N`, `.aura N`/`.unaura
+N`). The raw `gm` method and `gm_revive` are held to the same boundary: a line the core runs as one of the
+unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`, `.revive`) is
+refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
+`.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
+and chat are unaffected.
 Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
 with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
 state (`online`, `reconnecting`, `offline`); while `reconnecting` every action answers `-32005` and nothing is queued
 for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
 (default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
+
+`forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]` is the CLI client of
+that socket: one method call with a JSON object or array (or `-` for stdin, or nothing), printing the pretty JSON
+result (compact with `--raw`) or the typed `error: <code> <message>` with exit 16. `list` first calls the selected
+daemon's `status`, then prints every method the socket answers, with the ones this server does not port marked
+`(not ported)`; a stopped daemon fails `list` like any other call, so the table is never printed for a socket nobody
+answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
+token file, nothing but 127.0.0.1). A call the server refuses answers its typed error; a daemon that is not running
+is `forever rpc: cannot reach` with exit 15. Ctrl-C or an expired `--timeout` aborts the HTTP request (the connection
+is closed) and the command waits for the call to stop before exiting 1 with `cancelled:` or `timed out after ...`; no
+result is printed, so a caller must not retry an irreversible method as if the first call had been refused.
 
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
@@ -381,8 +415,18 @@ counts are all required, every record's `status=` must be one of the verb's own 
 addressed. An end-only acknowledgement, or a report missing any of those parts (or carrying a status or count the
 verb never writes), is a report that proves nothing and is refused — never a success — and an entry
 answered `no-trigger` (a party outside the entrance's trigger box) is retried once as `enter party map <plan map>`
-instead of failing. The observer teleports on its own, and the same-map check
-compares the party's map with the plan's, not the observer's. A plan that carries the format's in-fight run fields
+instead of failing. The watch brings the party's own commander — the bot its roster names, never this character — to
+the tank's side before PREPARE, and again after an entry lands the party: the module marks a bot whose master stands
+on another map or instance `stuck=blocked:bot in an instance` (the tank's `dm=othermap`), and PREPARE and the start's
+readiness rule both refuse that block. The move is the module's own `tele <commander> to <tank>` and nothing else:
+the watching character is an observer and is never teleported in the commander's place, so a roster that names no
+commander ends the watch (`commander:unnamed`) instead of falling back to a move of this character. The watch waits up
+to 30 s for the module's report to show the commander with the tank,
+logging where it stood and, if the module refuses the line, that the watch goes on without it. The same-map check
+compares the party's map with the plan's, not the commander's, and the start's gate waits out the party's own
+teleport: while a member is not on the plan's map — a member on the old map with its engine off is a teleport in
+flight, not an engine-off refusal — it holds for up to the entry budget (90 s) and then reports its existing error
+(`start:party-map`). A plan that carries the format's in-fight run fields
 (`kill_first`, `cc_priority`, `cc_always`, `tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the
 module's run. Every `--poll` seconds
 (default 2, at most 30) it reads the module's run record and its event ring, prints the progress (state, step,
@@ -430,7 +474,9 @@ runner and the bug hunter read one file. The watch's summary counts both (`frame
 same reasons as before. A combat-log page is all or nothing: a write that fails leaves the page in the cursor and the
 next tick retries it, so no failure can skip rows the summary would call complete (`combat_error` names the last one).
 `--combat-max-mb` bounds the file (default 64): a page that would cross it is not written and the summary says
-`combat_truncated` with `combat_bytes`, the size the file stopped at.
+`combat_truncated` with `combat_bytes`, the size the file stopped at. The trace's events carry the watch's own
+anchors: `run_start` at the run-start action's reply time (the module's clock zero, which a map reader uses to place
+the module's `at_s` on the trace's clock) and one `wipe` at the module's own second for every wipe it reports.
 
 `forever-agent forever run-report RECORD [--json] [--out DIR]`
 builds the card of a saved `<run_id>.forever-run.json` offline and prints it; `--json` prints the machine-readable

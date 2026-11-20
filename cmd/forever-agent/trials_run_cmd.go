@@ -17,9 +17,9 @@ import (
 // trialsRunCmd implements `trials run`: lease a slot, talk to its serve,
 // run every TRIAL --repeats times into --out, score the run.
 //
-// Only --dry (the scripted setup/situation) is ported in this round: a live
-// run needs the A3 setup toolkit and the A4 situations. A real trial without
-// --dry is refused with usage, never half-run.
+// --dry runs the scripted setup/situation; without it the run uses the
+// live A3 setup (player + bot provisioning with read-backs) and no
+// situation yet (A4 ports tank_damage).
 func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("trials run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -40,11 +40,7 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, trialsUsage)
 		return exitUsage
 	}
-	if *dry == "" {
-		fmt.Fprintln(stderr, "trials run: only --dry is ported in this round (live setup and situations arrive in A3/A4)")
-		return exitUsage
-	}
-	if *dry != "script" && *dry != "scripted" && !fileExists(*dry) {
+	if *dry != "" && *dry != "script" && *dry != "scripted" && !fileExists(*dry) {
 		fmt.Fprintf(stderr, "trials run: unknown --dry script %q\n", *dry)
 		return exitUsage
 	}
@@ -63,7 +59,7 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	store.HolderPID = os.Getpid()
 	slot := *slotID
 	anyFree := *anyFlag || slot == ""
-	return trialsRunCommand(ctx, sf, store, *server, slot, anyFree, *holder, *out, *repeats, trials, stdout, stderr)
+	return trialsRunCommand(ctx, sf, store, *server, slot, anyFree, *holder, *out, *repeats, trials, stdout, stderr, *dry)
 }
 
 // trialsRunClient builds the serve client for the run path; tests replace
@@ -92,7 +88,7 @@ var storeReleaseHook = func() {}
 // trialsRunCommand runs the leased half of `trials run` over an already
 // loaded slots file and store, so tests drive the renewal, abort, and
 // release paths without a live serve.
-func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Store, server, slot string, anyFree bool, holder, out string, repeats int, trials []string, stdout, stderr io.Writer) int {
+func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Store, server, slot string, anyFree bool, holder, out string, repeats int, trials []string, stdout, stderr io.Writer, dry string) int {
 	hold, err := live.AcquireSlot(sf, store, server, slot, anyFree, holder, func(dir string) error {
 		_, oerr := trialsRunClient(dir)
 		return oerr
@@ -137,7 +133,7 @@ func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Stor
 	runner := &live.Runner{
 		Out: live.AbsPath(out), Server: server, Label: filepath.Base(live.AbsPath(out)),
 		Client: live.NewClient(rpcClient), Ledger: live.NewLedger(filepath.Join(live.AbsPath(out), "ledger.jsonl")),
-		Hold: hold, Setup: &live.DrySetup{}, Situation: &live.DrySituation{},
+		Hold: hold, Setup: liveSetupFor(dry), Situation: liveSituationFor(dry),
 		Log: func(line string) { fmt.Fprintln(stderr, line) },
 		Now: time.Now,
 		Abort: func() string {
@@ -181,6 +177,25 @@ func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Stor
 		fmt.Fprintf(stdout, "trial %s: done\n", id)
 	}
 	return finish(exitOK)
+}
+
+// liveSetupFor selects the setup: the scripted DrySetup under --dry, the
+// live A3 setup otherwise (player + bot provisioning with read-backs).
+func liveSetupFor(dry string) live.Setup {
+	if dry == "" {
+		return &live.LiveSetup{}
+	}
+	return &live.DrySetup{}
+}
+
+// liveSituationFor selects the situation: the scripted DrySituation under
+// --dry, nil otherwise (A4 ports the tank_damage situation; a nil situation
+// skips the phase and the repeat scores its setup rows).
+func liveSituationFor(dry string) live.Situation {
+	if dry == "" {
+		return nil
+	}
+	return &live.DrySituation{}
 }
 
 // slotRPC adapts *slotClient to the live.RPC interface (Call with the

@@ -36,7 +36,7 @@ func TestFinding1BaselineGoneOnlyWhenTheRuleRan(t *testing.T) {
 	// The run has no combat log: rules 1 and 4 are skipped; rule 15 ran (it needs only frames and the dispel file).
 	r := testRun("watch", map[string]string{gHeal: "healer", gTank: "tank"}, frameAt(0, testUnit(gHeal), testUnit(gTank)))
 	withClass(r, gHeal, "priest")
-	r.Names, r.Dispel = map[int]string{1: "x"}, map[int]string{17172: "magic"}
+	r.SpellNames, r.Dispel = map[int]string{1: "x"}, map[int]string{17172: "magic"}
 	hits, counts := Hunt([]*Run{r}, EventRules())
 	mk := func(rule int, key ...string) Ticket {
 		return Ticket{ID: TicketID(rule, key), Rule: rule, Key: key, Count: 2, Runs: 1, Cost: 9, Evidence: []string{"x"}, Status: "known"}

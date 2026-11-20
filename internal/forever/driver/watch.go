@@ -17,6 +17,11 @@ package driver
 //     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times. The rescue runs before the pause
 //     budget, so the wipe pause it can clear is not reported as stuck.
 //
+// The party is bound to a commander of the module's own — a bot its roster names, never this character — and the
+// module blocks a bot whose master stands on another map (`stuck=blocked:bot in an instance`). The watch brings that
+// commander to the tank's side before PREPARE and again after an entry lands the party, and waits (bounded) for the
+// module's own report to show it there.
+//
 // Every send goes through act and its gate, like every other setup action. The stop path sends `.tb run stop`, waits
 // (bounded) for the module's state to reach stopped, and writes the run's summary: the dungeon-run format, extended
 // with the module's own counters. A lost link ends the watch at once and nothing is sent after it.
@@ -36,6 +41,9 @@ import (
 type watchRun struct {
 	record tbcmd.RunState
 	have   bool
+	// startedAt is the run-start action's reply time: the module's run zero, and the anchor the trace's run_start
+	// event carries so a map reader can put the module's at_s on the trace's clock.
+	startedAt time.Time
 
 	lastSeq   int
 	lastEvent time.Time
@@ -111,10 +119,23 @@ func (r *Run) Watch(ctx context.Context) Result {
 		r.stop("config")
 		return r.watchResult(w)
 	}
+	// The commander comes to the party before PREPARE. The module names it in its roster (never this client's own
+	// character), and with the party already placed (--enter none) on a map the commander is not on, the module
+	// reports the bots `stuck=blocked:bot in an instance` and PREPARE would end on stuck:<tank>. The roster is read
+	// here for that one move; PREPARE reads it again for its own rules and retries the move with the GM lines on.
+	// With an entry the party lands without the commander; ENTER brings it in again after the party lands. A roster
+	// that names no commander ends the watch here (commander:unnamed): the watching character is never moved in its
+	// place, and no PREPARE line goes out for a watch that cannot place the party's own. A failed roster read is not
+	// the end: PREPARE reads again and names its own failure.
 	r.legs = nil
 	st := StatePrepare
-	r.states = append(r.states, st)
-	st = r.prepare(ctx)
+	if r.readCommander(ctx) {
+		r.commanderToTank(ctx, commanderMoveBudget)
+	}
+	if r.stopReason == "" && !r.lost {
+		r.states = append(r.states, st)
+		st = r.prepare(ctx)
+	}
 	w.roles = r.watchRoles()
 	if r.stopReason == "" && st == StateTravel {
 		r.states = append(r.states, StateTravel)
@@ -215,7 +236,13 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 				r.stop("start:bad-report")
 				return
 			}
-			w.lastEvent = r.now()
+			// The reply time is the module's run zero on the trace's clock: the map adapter aligns every at_s with
+			// it. The event is written even when the run ends at once, so an old-style duration guess is never used.
+			w.startedAt = r.now()
+			w.lastEvent = w.startedAt
+			if r.rec != nil {
+				r.rec.Event(w.startedAt, "run_start", map[string]any{"plan": r.route.Name})
+			}
 			r.applyRun(w, st)
 			if st.HasLeg {
 				// The module's run starts in its first leg: that leg's time starts at the run's zero.
@@ -587,6 +614,15 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 		w.wipePending = true
 		w.wipeSeq = ev.Seq
 		w.wipeAt = r.now()
+		if r.rec != nil {
+			// The module's own wipe event, at the module's own second: the map draws it where it happened instead
+			// of inferring one from the deaths. A record without it (from before this event) still infers.
+			at := r.now()
+			if !w.startedAt.IsZero() {
+				at = w.startedAt.Add(time.Duration(ev.T) * time.Second)
+			}
+			r.rec.Event(at, "wipe", map[string]any{"at_s": ev.T})
+		}
 	case "pause":
 		// The rescue's pause is the wipe's own pause and nothing else: the event right after the wipe (no other
 		// event between them, by sequence) whose reason names the wipe or the dead party it left. A pause later in

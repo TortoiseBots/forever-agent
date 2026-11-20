@@ -40,7 +40,7 @@ func skipHealNeedsNames(r *Run) string {
 	if reason := skipNoCombatLog(r); reason != "" {
 		return reason
 	}
-	if len(r.Names) == 0 {
+	if len(r.SpellNames) == 0 {
 		return "no spell names"
 	}
 	return ""
@@ -51,7 +51,7 @@ func skipAoENeedsNames(r *Run) string {
 	if reason := skipNoCombatLog(r); reason != "" {
 		return reason
 	}
-	if len(r.Names) == 0 {
+	if len(r.SpellNames) == 0 {
 		return "no spell names"
 	}
 	return ""

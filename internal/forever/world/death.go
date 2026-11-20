@@ -21,6 +21,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/death"
+	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -272,7 +273,7 @@ type deathWatch struct {
 	offerAnswered string
 
 	// The last gossip menu (the spirit healer's) and the healer's spell.
-	gossip    death.GossipMessage
+	gossip    npc.GossipMessage
 	hasGossip bool
 
 	steps []DeathStep
@@ -674,7 +675,7 @@ func (s *session) handleDeath(p worldconn.Packet) error {
 		}
 		s.fight.add("death", fmt.Sprintf("stand state %d", v.State), 0)
 	case wire.SMSGGossipMessage:
-		m, err := death.ParseGossipMessage(p.Payload)
+		m, err := npc.ParseGossipMessage(p.Payload)
 		if err != nil {
 			s.noteParseError(p, err)
 			return nil
@@ -1165,7 +1166,7 @@ func (s *session) SpiritHealer(ctx context.Context) error {
 		return fmt.Errorf("death-check: CMSG_SET_SELECTION: %w", err)
 	}
 	d.hasGossip = false
-	if err := s.transport().Send(wire.CMSGTalkToGossip, death.BuildTalkToGossip(healer.GUID)); err != nil {
+	if err := s.transport().Send(wire.CMSGTalkToGossip, npc.BuildTalkToGossip(healer.GUID)); err != nil {
 		return fmt.Errorf("death-check: CMSG_TALK_TO_GOSSIP: %w", err)
 	}
 	s.deathStep(now, "asked the spirit healer for its menu")
@@ -1180,7 +1181,7 @@ func (s *session) SpiritHealer(ctx context.Context) error {
 		return fmt.Errorf("%w: the menu has no spirit healer option", ErrSpiritHealerRefused)
 	}
 	menu := d.gossip.MenuID
-	if err := s.transport().Send(wire.CMSGGossipSelectOption, death.BuildGossipSelectOption(healer.GUID, menu, option.ID, "")); err != nil {
+	if err := s.transport().Send(wire.CMSGGossipSelectOption, npc.BuildGossipSelectOption(healer.GUID, menu, option.ID, "")); err != nil {
 		return fmt.Errorf("death-check: CMSG_GOSSIP_SELECT_OPTION: %w", err)
 	}
 	s.deathStep(now, "chose %q (menu %d, option 0x%X)", option.Text, menu, option.ID)
@@ -1188,11 +1189,11 @@ func (s *session) SpiritHealer(ctx context.Context) error {
 	// capture shows the client waiting for that cast animation, but the server needs nothing between the two, so
 	// the client sends the activation at once and does not model the animation.
 	d.expectRevive = "spirit healer"
-	if err := s.transport().Send(wire.CMSGSpiritHealerActivate, death.BuildSpiritHealerActivate(healer.GUID)); err != nil {
+	if err := s.transport().Send(wire.CMSGSpiritHealerActivate, npc.BuildSpiritHealerActivate(healer.GUID)); err != nil {
 		d.expectRevive = ""
 		return fmt.Errorf("death-check: CMSG_SPIRIT_HEALER_ACTIVATE: %w", err)
 	}
-	if err := s.transport().Send(wire.CMSGCloseInteraction, death.BuildCloseInteraction(healer.GUID)); err != nil {
+	if err := s.transport().Send(wire.CMSGCloseInteraction, npc.BuildCloseInteraction(healer.GUID)); err != nil {
 		d.expectRevive = ""
 		return fmt.Errorf("death-check: CMSG_CLOSE_INTERACTION: %w", err)
 	}
@@ -1220,7 +1221,7 @@ func (s *session) spiritHealer(now time.Time) *objects.Object {
 	var best *objects.Object
 	bestDist := float32(0)
 	for _, u := range s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ()) {
-		if u.GUID == s.self || u.Info.NpcFlags&death.NPCFlagSpiritHealer == 0 {
+		if u.GUID == s.self || u.Info.NpcFlags&npc.NPCFlagSpiritHealer == 0 {
 			continue
 		}
 		x, y, z := u.Position(now)

@@ -15,7 +15,7 @@ func crow(kind string, t float64, src, dst string, spell int) CombatRow {
 func eventRun(kind string, roles map[string]string, frames []*Frame, combat []CombatRow, names, dispel map[int]string) *Run {
 	r := testRun(kind, roles, frames...)
 	r.Combat = combat
-	r.Names, r.Dispel = names, dispel
+	r.SpellNames, r.Dispel = names, dispel
 	return r
 }
 
@@ -406,7 +406,7 @@ func TestUnknownSpellNeverMatches(t *testing.T) {
 		ticks = append(ticks, crow("periodic", float64(i), gid(0xB01), gDps, unknown))
 	}
 	r.Combat = append(casts, ticks...)
-	r.Names = map[int]string{}
+	r.SpellNames = map[int]string{}
 	if hits := Rule8(r); len(hits) != 0 {
 		t.Fatalf("rule 8 matched an unnamed id: %+v", hits)
 	}

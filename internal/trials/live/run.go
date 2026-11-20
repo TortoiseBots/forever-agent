@@ -69,6 +69,7 @@ type Runner struct {
 	trials   map[string]map[string]any
 	trialIDs []string
 	repeats  map[string]int
+	skipped  map[string]string
 }
 
 // findTrial resolves a TRIAL arg: an embedded path, an embedded id, or a
@@ -194,6 +195,13 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	}
 	for i := 1; i <= repeats; i++ {
 		if err := r.runRepeat(ctx, trial, id, i); err != nil {
+			// SKIPPED stops the trial after rep 1: every repeat
+			// would skip identically (the capability is per
+			// server, not per rep), so running on wastes leases.
+			if needs, ok := IsSkipped(err); ok {
+				r.logf("%s: SKIPPED needs=%s", id, needs)
+				return map[string]any{"trial": id, "verdict": "SKIPPED", "needs": needs}, nil
+			}
 			return nil, err
 		}
 	}
@@ -233,6 +241,27 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	if r.Setup != nil {
 		doc, err := r.Setup.Run(ctx, rep)
 		if err != nil {
+			// A missing server capability (TB-1 not live) SKIPs the
+			// whole trial: every repeat ends SKIPPED with
+			// needs=<check> in RUN.json, never a FAIL. The doc
+			// carries the needs and the run stops before collect.
+			if needs, ok := IsSkipped(err); ok {
+				setupDoc = map[string]any{"ok": false, "checks": []any{},
+					"invalid_reason": "SKIPPED needs=" + needs + ": " + err.Error(),
+					"bot_name":       nil, "extra_names": []any{},
+					"guids": map[string]any{"player": nil, "bot": nil, "pet": nil, "mobs": []any{}, "marked": nil}}
+				setupDoc["skipped"] = map[string]any{"needs": needs}
+				if werr := r.writeSetup(repDir, setupDoc); werr != nil {
+					return werr
+				}
+				r.noteRep(id, index, false, "skipped")
+				marks.Add(map[string]any{"kind": "teardown", "rows": []any{}})
+				r.noteSkipped(trial, id, trialRepeats(trial), needs)
+				if werr := r.writeRUN(); werr != nil {
+					return werr
+				}
+				return &skippedTrial{needs: needs, why: err.Error()}
+			}
 			return err
 		}
 		if doc != nil {
@@ -331,6 +360,16 @@ func (r *Runner) slotID() string {
 	return ""
 }
 
+// noteSkipped records a SKIPPED trial: RUN.json names it with its needs so
+// a card reader never mistakes it for a FAIL.
+func (r *Runner) noteSkipped(trial map[string]any, id string, n int, needs string) {
+	r.noteTrial(trial, id, n)
+	if r.skipped == nil {
+		r.skipped = map[string]string{}
+	}
+	r.skipped[id] = needs
+}
+
 func (r *Runner) noteRep(trial string, rep int, valid bool, ended string) {
 	r.repLog = append(r.repLog, map[string]any{"trial": trial, "rep": rep,
 		"slot": r.slotID(), "valid": valid, "ended": ended})
@@ -386,6 +425,13 @@ func (r *Runner) writeRUN() error {
 		"reps": repLogAny(r.repLog), "started": started,
 		"ended":           now.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 		"trial_snapshots": true,
+	}
+	if len(r.skipped) > 0 {
+		sk := map[string]any{}
+		for id, needs := range r.skipped {
+			sk[id] = "needs=" + needs
+		}
+		doc["skipped"] = sk
 	}
 	return dumpDoc(joinPath(r.Out, "RUN.json"), doc)
 }

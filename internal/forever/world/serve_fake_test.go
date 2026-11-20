@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
+	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
 // serveDaemon answers the packets the serving methods can send. It is deliberately tolerant: this test is about the
@@ -47,6 +49,29 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	target := targetUpdate.Blocks[0].GUID
 	c.writeFrame(fakeSMSGUpdateObject, targetPayload)
 	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-SYSTEM"))
+	f.mu.Lock()
+	eventsBurst, eventsOne, auraBurst := f.serveEventsBurst, f.serveEventsOne, f.serveAuraBurst
+	f.mu.Unlock()
+	if auraBurst {
+		c.writeFrame(table.TranslateServerCore(wire.SMSGAuraUpdate), buildAuraUpdateFrom(target, guid, 0, 845, 3, 10000, 5000))
+	}
+	if eventsBurst {
+		castID := wire.GUID{Low: 0x5001, High: 0x0800000000000000}
+		spellTarget := combat.SpellTarget{Unit: guid}
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellStart), buildSpellStart(target, target, castID, 5019, 1500, spellTarget))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellGo), buildSpellGo(target, target, castID, 5019, 0, spellTarget))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellFailure), buildSpellFailure(target, castID, 5021, 26))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGAttackerStateUpdate), buildAttackerStateUpdate(target, guid, 12))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellNonMeleeDamage), buildNonMeleeDamage(guid, target, castID, 5025, 34))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellPeriodicAuraLog), buildPeriodicLog(guid, target, 770, 3, 9))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSpellHealLog), buildHealLog(target, guid, 2061, 40))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGAuraUpdate), buildAuraUpdateFrom(guid, target, 0, 845, 3, 10000, 5000))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGAuraUpdate), buildAuraRemove(guid, 0))
+		c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))
+	}
+	if eventsOne {
+		c.writeFrame(table.TranslateServerCore(wire.SMSGAttackerStateUpdate), buildAttackerStateUpdate(target, guid, 7))
+	}
 	if f.serveInvite {
 		// A pending invite for accept_invite: the inviter leads the roster the accept's answer brings.
 		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite("Inviter", inviter, true))
@@ -75,6 +100,15 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		case wire.CMSGPing:
 			c.writeFrame(table.TranslateServerCore(wire.SMSGPong), payload[:4])
 		case wire.CMSGSetSelection:
+			sel := wire.ReadPackedGUID(wire.NewReader(payload))
+			f.mu.Lock()
+			f.serveSelections = append(f.serveSelections, sel)
+			f.serveOrder = append(f.serveOrder, "select")
+			echo := f.serveSelectionEcho
+			f.mu.Unlock()
+			if echo {
+				c.writeFrame(fakeSMSGUpdateObject, buildTargetValues(guid, sel))
+			}
 		case wire.CMSGMoveSetFacing, wire.CMSGMoveStartForward, wire.CMSGMoveHeartbeat, wire.CMSGMoveStop:
 		case wire.CMSGAttackSwing:
 			f.mu.Lock()
@@ -108,6 +142,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			}
 			f.mu.Lock()
 			f.chatSay = said
+			if strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!") {
+				f.serveGMLines = append(f.serveGMLines, said)
+				f.serveOrder = append(f.serveOrder, "say")
+			}
 			f.mu.Unlock()
 			if said == ".gm" {
 				f.mu.Lock()
@@ -224,6 +262,13 @@ func startServeDaemon(t *testing.T, f *fakeServer, steps *stepLog) *serveAgent {
 // startServeDaemonWith is startServeDaemon with a navmesh folder for path_to/walk_path.
 func startServeDaemonWith(t *testing.T, f *fakeServer, steps *stepLog, navmeshDir string) *serveAgent {
 	t.Helper()
+	return startServeDaemonTuned(t, f, steps, func(cfg *ServeConfig) { cfg.NavmeshDir = navmeshDir })
+}
+
+// startServeDaemonTuned is startServeDaemon with the config's test-bench switches set by tune (the GM hands' flag,
+// the navmesh folder).
+func startServeDaemonTuned(t *testing.T, f *fakeServer, steps *stepLog, tune func(*ServeConfig)) *serveAgent {
+	t.Helper()
 	f.wg.Add(1)
 	go f.serveRealm()
 
@@ -232,6 +277,15 @@ func startServeDaemonWith(t *testing.T, f *fakeServer, steps *stepLog, navmeshDi
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	cfg := &ServeConfig{
+		Listener: ln, Token: "serve-test-token", DisconnectGrace: 400 * time.Millisecond,
+		ReconnectAttempts: f.serveReconnects,
+		reconnectBackoff:  f.serveBackoff, reconnectMaxBackoff: f.serveBackoff,
+		reconnectLoginTimeout: f.serveLoginTimeout,
+	}
+	if tune != nil {
+		tune(cfg)
+	}
 	opts := Options{
 		Address:         f.realmListener.Addr().String(),
 		RealmID:         70,
@@ -247,11 +301,7 @@ func startServeDaemonWith(t *testing.T, f *fakeServer, steps *stepLog, navmeshDi
 		Logf: func(format string, args ...any) {
 			steps.add(format, args...)
 		},
-		Serve: &ServeConfig{
-			Listener: ln, Token: "serve-test-token", DisconnectGrace: 400 * time.Millisecond,
-			NavmeshDir: navmeshDir, ReconnectAttempts: f.serveReconnects,
-			reconnectBackoff: f.serveBackoff, reconnectMaxBackoff: f.serveBackoff, reconnectLoginTimeout: f.serveLoginTimeout,
-		},
+		Serve: cfg,
 	}
 	a := &serveAgent{addr: ln.Addr().String(), token: "serve-test-token", result: make(chan serveResult, 1), cancel: cancel}
 	go func() {
@@ -554,11 +604,9 @@ func TestServeGMAndBot(t *testing.T) {
 	if !sawGM {
 		t.Fatal("the fake never saw the GM probe")
 	}
-	var revive ServeCommand
-	json.Unmarshal(a.mustCall(t, "gm_revive", map[string]any{"name": "Testchar"}), &revive)
-	if revive.Sent == "" {
-		t.Fatalf("gm_revive sent nothing: %+v", revive)
-	}
+	// A revive is one of the unit hands now: without the test-bench flag it is refused before any line (the
+	// permitted path is TestServeRawGMRevive).
+	a.mustFail(t, "gm_revive", map[string]any{"name": "Testchar"}, rpc.CodeForbidden, "--allow-gm-units")
 	var bot ServeCommand
 	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".tb state"}), &bot)
 	joined := ""
@@ -615,6 +663,16 @@ func TestServeNotPortedAndUnknown(t *testing.T) {
 	a.mustFail(t, "teardown", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
+
+	// The combat log and the GM unit hands are ported: their refusals name the argument, never the port.
+	var page trialsEventPage
+	json.Unmarshal(a.mustCall(t, "events", map[string]any{}), &page)
+	if len(page.Events) != 0 || page.Next != 0 {
+		t.Fatalf("events on a fresh session: %+v", page)
+	}
+	a.mustFail(t, "gm_kill", map[string]any{}, -32003, "guid or a name")
+	a.mustFail(t, "gm_set_hp", map[string]any{}, -32003, "needs hp")
+	a.mustFail(t, "gm_aura", map[string]any{}, -32003, "positive spell")
 
 	// The five death methods are ported; the character is alive, so each answers its own refusal.
 	var death ServeDeath

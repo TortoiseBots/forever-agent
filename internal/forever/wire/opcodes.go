@@ -52,6 +52,7 @@ const (
 	CMSGQueryCorpseTransport uint32 = 0x43008D
 	CMSGTalkToGossip         uint32 = 0x3E0027
 	CMSGGossipSelectOption   uint32 = 0x3E0029
+	CMSGQuestGiverHello      uint32 = 0x3E002B
 	CMSGSpiritHealerActivate uint32 = 0x3E0045
 	CMSGCloseInteraction     uint32 = 0x3E0028
 	CMSGQueryPlayerNames     uint32 = 0x440010
@@ -166,13 +167,20 @@ const (
 	SMSGPreRessurect         uint32 = 0x450211
 	SMSGStandStateUpdate     uint32 = 0x4501C8
 	SMSGGossipMessage        uint32 = 0x650018
-	SMSGMoveSetRunSpeed      uint32 = 0x5E0020
-	SMSGMoveSetSwimSpeed     uint32 = 0x5E0022
-	SMSGMoveSetWaterWalk     uint32 = 0x5E002B
-	SMSGMoveSetLandWalk      uint32 = 0x5E002E
-	SMSGSendKnownSpells      uint32 = 0x670019
-	SMSGLevelUpInfo          uint32 = 0x450194
-	SMSGSpellExecuteLog      uint32 = 0x670033
+	// The act round's NPC answers (Opcodes.h:1602, 1604, 2058): the menu's completion, the option's NPC
+	// interaction, and the interaction-open result.
+	SMSGGossipComplete           uint32 = 0x650017
+	SMSGGossipOptionNPCInteract  uint32 = 0x650028
+	SMSGNPCInteractionOpenResult uint32 = 0x45031A
+	// A quest-only NPC's answer to the quest hello (Opcodes.h:2200): its quest list.
+	SMSGQuestGiverQuestList uint32 = 0x65001A
+	SMSGMoveSetRunSpeed     uint32 = 0x5E0020
+	SMSGMoveSetSwimSpeed    uint32 = 0x5E0022
+	SMSGMoveSetWaterWalk    uint32 = 0x5E002B
+	SMSGMoveSetLandWalk     uint32 = 0x5E002E
+	SMSGSendKnownSpells     uint32 = 0x670019
+	SMSGLevelUpInfo         uint32 = 0x450194
+	SMSGSpellExecuteLog     uint32 = 0x670033
 )
 
 // Loot and game objects (Opcodes.h:357-358, 579-583, 1499-1500, 1805, 1865-1874, 2395):
@@ -274,6 +282,11 @@ var clientNames = map[uint32]string{
 	CMSGLeaveGroup:                     "CMSG_LEAVE_GROUP",
 	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",
 	CMSGSetSelection:                   "CMSG_SET_SELECTION",
+	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",
+	CMSGGossipSelectOption:             "CMSG_GOSSIP_SELECT_OPTION",
+	CMSGQuestGiverHello:                "CMSG_QUEST_GIVER_HELLO",
+	CMSGSpiritHealerActivate:           "CMSG_SPIRIT_HEALER_ACTIVATE",
+	CMSGCloseInteraction:               "CMSG_CLOSE_INTERACTION",
 	CMSGAttackSwing:                    "CMSG_ATTACK_SWING",
 	CMSGAttackStop:                     "CMSG_ATTACK_STOP",
 	CMSGCastSpell:                      "CMSG_CAST_SPELL",

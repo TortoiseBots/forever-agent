@@ -132,7 +132,7 @@ func TestParityWithPythonChecker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Names = map[int]string{21562: "Power Word: Fortitude", 12345: "Rain of Fire"}
+	r.SpellNames = map[int]string{21562: "Power Word: Fortitude", 12345: "Rain of Fire"}
 	r.Dispel = map[int]string{17172: "magic"}
 	if hits := Rule15(r); len(hits) != 0 {
 		t.Fatalf("rule 15 judged a repeat whose extras have no class: %+v", hits)

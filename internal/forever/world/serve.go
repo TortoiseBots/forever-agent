@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -47,6 +48,10 @@ type ServeConfig struct {
 	// ReconnectAttempts bounds how many times a dropped world link is logged in again before the daemon goes
 	// offline. Zero takes serveReconnectAttempts; a negative value turns the retries off.
 	ReconnectAttempts int
+	// AllowGMUnits enables the GM hands that act on one unit (gm_kill, gm_set_hp, gm_aura) and the trial_units
+	// method that registers the guids they may act on. Off by default: a serving daemon that was not started as
+	// a test bench refuses every one of them with rpc.CodeForbidden.
+	AllowGMUnits bool
 	// The reconnect timings are zero for the constants above; the tests shorten them.
 	reconnectBackoff      time.Duration
 	reconnectMaxBackoff   time.Duration
@@ -169,6 +174,12 @@ type serveState struct {
 	// q and nav belong to the loop goroutine: q is rebuilt when a session is installed, nav outlives the sessions.
 	q   *command.Session
 	nav *navmesh.Planner
+	// allowGMUnits is ServeConfig.AllowGMUnits; gmUnits is the trial allowlist the runner replaces through
+	// trial_units (the guids the GM hands may act on). Both belong to the loop goroutine: trial_units is a call
+	// and the hands are calls, so no lock is needed. The allowlist outlives a reconnect as it is the runner's
+	// registration for the current trial, not the session's.
+	allowGMUnits bool
+	gmUnits      map[wire.GUID]struct{}
 	// stopped is set by logout: the loop ends after that call returns, and the RPC keeps its grace to flush the
 	// reply.
 	stopped bool
@@ -210,6 +221,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		backoff:      cfg.reconnectBackoff,
 		maxBackoff:   cfg.reconnectMaxBackoff,
 		loginTimeout: cfg.reconnectLoginTimeout,
+		allowGMUnits: cfg.AllowGMUnits,
 	}
 	if st.backoff <= 0 {
 		st.backoff = serveReconnectBackoff
@@ -338,7 +350,7 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 		if !st.pause(ctx, wait) {
 			return nil, fmt.Errorf("%w: the daemon stopped while reconnecting (%v)", ErrLinkLost, last)
 		}
-		res := st.attemptLogin(ctx)
+		res := st.attemptLogin(ctx, old.CombatLog())
 		if res.ctxErr != nil {
 			if res.s != nil {
 				res.s.teardown() // the attempt reached the world as the daemon stopped: close it
@@ -385,13 +397,14 @@ type serveLogin struct {
 }
 
 // attemptLogin runs one re-entry on its own goroutine, so the loop keeps answering read-only calls while it logs in.
-func (st *serveState) attemptLogin(ctx context.Context) serveLogin {
+// combat is the dropped session's ring, handed to the new session before its login dispatch runs.
+func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog) serveLogin {
 	done := make(chan serveLogin, 1)
 	st.opts.logf("rpc: logging in again (login bounded by %s)", st.loginTimeout)
 	parent := ctx
 	timeout := st.loginTimeout
 	go func() {
-		s, err := loginAgain(parent, st.opts, timeout)
+		s, err := loginAgain(parent, st.opts, timeout, combat)
 		done <- serveLogin{s: s, err: err}
 	}()
 	for {
@@ -412,8 +425,10 @@ func (st *serveState) attemptLogin(ctx context.Context) serveLogin {
 
 // loginAgain builds a fresh session and takes it through the login half: a new world socket, a new instance socket,
 // a new model. Only the login waits are bounded by the attempt's timeout; the pump context outlives it, so the
-// session is usable once it is in the world.
-func loginAgain(ctx context.Context, opts Options, timeout time.Duration) (*session, error) {
+// session is usable once it is in the world. combat is the dropped session's ring, installed before the first login
+// packet is dispatched: the re-entry's burst can carry a combat or aura row, and a ring swapped in after it would
+// discard exactly those rows. It is nil only when there is no ring to keep.
+func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat *CombatLog) (*session, error) {
 	// A re-entry authenticates its own world socket: the one the first login's build probe handed over was that
 	// session's, and it went down with it. The build stays, so the new login claims the same one.
 	opts.WorldConn = nil
@@ -421,6 +436,9 @@ func loginAgain(ctx context.Context, opts Options, timeout time.Duration) (*sess
 	defer cancel()
 	base := context.WithoutCancel(ctx)
 	s := newSession(opts, &Report{Counts: make(map[string]int)}, base)
+	if combat != nil {
+		s.combat = combat
+	}
 	s.ctx = actx
 	if err := s.authenticate(actx, timeout); err != nil {
 		s.teardown()
@@ -717,6 +735,8 @@ type ServeStatus struct {
 	Ghost         bool    `json:"ghost"`
 	ServerPackets int     `json:"server_packets"`
 	ParseErrors   int     `json:"parse_errors"`
+	// MonoMS is the process's steady clock at this answer, the axis a combat row's mono_ms is on.
+	MonoMS int64 `json:"mono_ms"`
 	// State is the link's lifecycle: "online", "reconnecting" (see ReconnectAttempt/ReconnectLimit) or "offline".
 	State string `json:"state"`
 	// Error is why the link is not online: the drop's reason while reconnecting, the last attempt's failure (or
@@ -732,6 +752,7 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 	out := ServeStatus{
 		State: state, Error: reason, ReconnectAttempt: attempt, ReconnectLimit: limit,
 		Character: s.report.Character.Name, Level: int32(s.report.Character.Level),
+		MonoMS: events.MonoMS(),
 	}
 	if s.world != nil {
 		out.Map = s.world.MapID()
@@ -773,6 +794,15 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 	return out
 }
 
+// ServeAura is one aura a unit holds: the spell, the caster's guid when the record named one, the stack count and
+// how long it is still up. RemainingMS is 0 for an aura with no duration.
+type ServeAura struct {
+	SpellID     int32 `json:"spell_id"`
+	Caster      GUID  `json:"caster"`
+	Stacks      int32 `json:"stacks"`
+	RemainingMS int64 `json:"remaining_ms"`
+}
+
 // ServeUnit is one row of the units/unit/target methods: the model's snapshot plus the distance from the mover.
 type ServeUnit struct {
 	GUID       GUID    `json:"guid"`
@@ -799,6 +829,8 @@ type ServeUnit struct {
 	Moving     bool    `json:"moving"`
 	Casting    bool    `json:"casting,omitempty"`
 	SpellID    int32   `json:"spell_id,omitempty"`
+	// Auras is every aura the model holds for the unit that is still up, in slot order.
+	Auras []ServeAura `json:"auras"`
 }
 
 func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
@@ -820,6 +852,17 @@ func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
 	}
 	if cs, ok := s.world.Combat(o.GUID); ok && cs.Cast != nil {
 		u.Casting, u.SpellID = true, cs.Cast.SpellID
+	}
+	auras := s.world.AurasOf(o.GUID, now)
+	u.Auras = make([]ServeAura, 0, len(auras))
+	for _, a := range auras {
+		au := ServeAura{SpellID: a.SpellID, Caster: GUID(a.Caster), Stacks: int32(a.Applications)}
+		if a.HasDuration {
+			if left := a.ExpiresAt.Sub(now); left > 0 {
+				au.RemainingMS = left.Milliseconds()
+			}
+		}
+		u.Auras = append(u.Auras, au)
 	}
 	return u
 }

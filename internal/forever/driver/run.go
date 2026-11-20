@@ -287,6 +287,9 @@ type Run struct {
 	ended bool
 	// watch is the watched run's record, kept even without a recorder so the command's report carries it.
 	watch *RunWatch
+	// commander is the module's own party commander, from its roster: the bot the party is bound to and the one a
+	// watched run has to bring to the tank's side. It is never the character this client runs.
+	commander string
 }
 
 // fight is one fight's bookkeeping.

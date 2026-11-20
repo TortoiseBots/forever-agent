@@ -21,7 +21,8 @@ printed, and the session uses the same login, the same two sockets, the same mov
 * Error codes are the old ones: `-32602` invalid params, `-32601` unknown method, `-32001` not in world, `-32002`
   disconnected (also every action while offline), `-32003` game refusal (including "not ported"), `-32004` timeout,
   and this server's `-32005` reconnecting: the world socket dropped and the daemon is logging in again, so the call
-  did nothing and nothing is queued for after the re-entry. Every method the old daemon served is registered; one that
+  did nothing and nothing is queued for after the re-entry, and `-32006` forbidden: the method is off or its target is
+  outside the caller's boundary (the GM unit hands). Every method the old daemon served is registered; one that
   this server does not implement answers `-32003` with `"<method>: not ported on this server"`, never an empty
   result.
 * Params decode into a struct with unknown fields rejected, as before. GUIDs are `"0x"` hex strings; 128-bit values
@@ -29,7 +30,7 @@ printed, and the session uses the same login, the same two sockets, the same mov
 
 ## Method table
 
-122 methods of the old daemon plus one addition (`bot`, below): 30 DONE, 93 NOT-PORTED.
+122 methods of the old daemon plus one addition (`bot`, below): 34 DONE, 89 NOT-PORTED.
 
 DONE means the ForeverCore code exists in `internal/forever` and the method runs it; NOT-PORTED means there is no
 ForeverCore implementation behind the old semantics, so the method answers the typed error.
@@ -38,13 +39,13 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 
 | Method | Status | What it does |
 |---|---|---|
-| `status` | DONE | The session's state, character, guid, map, mover position, target, health/power, dead/ghost and packet counts. `state` is the link's lifecycle (`online`, `reconnecting`, `offline`); when it is not online, `error` is the reason and `reconnect_attempt`/`reconnect_limit` show the budget. Answers in every state, from the last session. |
+| `status` | DONE | The session's state, character, guid, map, mover position, target, health/power, dead/ghost and packet counts, and `mono_ms` (the steady clock the combat rows are on). `state` is the link's lifecycle (`online`, `reconnecting`, `offline`); when it is not online, `error` is the reason and `reconnect_attempt`/`reconnect_limit` show the budget. Answers in every state, from the last session. |
 | `units` | DONE | The model's units, nearest first: `within`/`near`, `entry`, `name`, `limit`. The `hostile` filter is refused by name (the model has faction templates, not factions). |
-| `unit` | DONE | One unit by `guid` or `name`, with distance, health, power, level, target, combat, dead/ghost and cast. |
+| `unit` | DONE | One unit by `guid` or `name`, with distance, health, power, level, target, combat, dead/ghost, cast and `auras` (`spell_id`, `caster`, `stacks`, `remaining_ms`). |
 | `party` | DONE | The party model's roster, leader, health/power and pending invite. Raid groups are not modelled. |
 | `chat_log` | DONE | The chat log as the old page (`since`, `limit`, `wait_ms`): seq, chat type name, source, channel, text. It is the chat model, not the 78-kind event log. |
 | `logout` | DONE | The full logout (request, response and completion), then the daemon stops. |
-| `events` | NOT-PORTED | There is no ForeverCore event log with the old kinds; the chat log is `chat_log`. |
+| `events` | DONE | The session's own combat log (`since`, `limit` up to 1,000, `wait_ms` up to 2,000) as the trials runner's raw rows, answered as `{events, next, oldest, dropped}`. The ring outlives a reconnect. See round A1's notes; the wait runs off the session goroutine, on the ring's own new-row signal. |
 | `map_snapshot` | NOT-PORTED | The old drawing is built from the 1.12 world model and navmesh. |
 
 ### Chat, GM and group
@@ -52,12 +53,14 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | Method | Status | What it does |
 |---|---|---|
 | `chat` | DONE | `say`, `yell`, `party`, `emote`, `whisper` (with `to`). A channel, guild or raid line is refused by name. |
-| `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. |
-| `gm_revive` | DONE | `.revive <name>` through the same channel; the name is validated first. |
+| `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. A line the core runs as one of the unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`, `.revive`) goes through the GM hands' boundary below first: same `--allow-gm-units` flag, same `trial_units` allowlist, same "never another player" rule, typed `-32006` and nothing sent on refusal. `.revive <name>` is gated for the player the line names. |
+| `gm_revive` | DONE | `.revive <name>` through the same channel and the same unit-line boundary; the name is validated first, and only this session's own character can be revived (any other player is refused). |
 | `invite` | DONE | `CMSG_PARTY_INVITE` and the server's command result for that name. |
 | `accept_invite` | DONE | Answers the pending invite the model holds and waits under the caller's context for the server's answer: a roster naming the inviter confirms membership; a failed party command result or a roster the model refuses is a `-32003` error, and a silent server is a timeout error. |
 | `leave_group` | DONE | Leaves a party the model holds a valid roster for. |
-| `gm_kill`, `gm_evade`, `gm_set_hp`, `gm_respawn`, `gm_aura` | NOT-PORTED | The old helpers select a unit and send a unit-targeted GM line; that select-then-line pair is not in `internal/forever`. |
+| `gm_kill`, `gm_set_hp`, `gm_aura` | DONE | Select one unit by guid, wait up to 1 s for the server's selection echo in the character's target field, then send the one line: `.die` (a player is refused), `.modify hp <hp>`, `.aura <spell>`/`.unaura <spell>`. Fail-closed: refused with `-32006` unless serve runs with `--allow-gm-units`, the guid is on the allowlist `trial_units` registered, and a player target is this session's own character. |
+| `trial_units` | DONE | `{guids: [...]}` replaces the GM hands' allowlist for the current trial and answers `{guids}`; it outlives a reconnect. Refused with `-32006` without `--allow-gm-units`; a zero guid is `-32602`. |
+| `gm_evade`, `gm_respawn` | NOT-PORTED | The old helpers select a unit and send a unit-targeted GM line; these two lines are not ported. |
 | `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark`, `roll` | NOT-PORTED | The party model has no senders or records for these. |
 | `join_channel`, `leave_channel` | NOT-PORTED | There is no channel join in the chat round. |
 
@@ -161,10 +164,29 @@ The same "success before the server confirms" check over the DONE methods:
 
 | Class | Methods |
 |---|---|
-| Waits for the authoritative answer (already did; unchanged) | `invite` (party command result), `leave_group` (the leave result / roster), `cast` (the cast's outcome), `attack` (the fight's outcome: dead, stopped or map change), `accept_resurrect`, `release_spirit`, `corpse_query`, `reclaim_corpse` (the death waits), `logout` (the completion), `gm`, `gm_revive`, `bot` (the command's collected reply; `complete` says whether it ended as the command requires) |
+| Waits for the authoritative answer (already did; unchanged) | `invite` (party command result), `leave_group` (the leave result / roster), `cast` (the cast's outcome), `attack` (the fight's outcome: dead, stopped or map change), `accept_resurrect`, `release_spirit`, `corpse_query`, `reclaim_corpse` (the death waits), `logout` (the completion), `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`, `gm_aura`, `bot` (the command's collected reply; `complete` says whether it ended as the command requires; the three unit hands also wait for the server's selection echo first) |
 | Client-authoritative in 1.12: the server sends no answer to wait for | `target` (`CMSG_SET_SELECTION`), `face` (`CMSG_MOVE_SET_FACING`), `walk_to`/`walk_path` (the mover's own heartbeats; the server does not acknowledge a walk), `stop_attack` (`CMSG_ATTACK_STOP`), `cancel_cast` (`CMSG_CANCEL_CAST`), `area_trigger` (`CMSG_AREA_TRIGGER`; an effect, if any, arrives as world packets), `chat` and `addon_send` (no acknowledgment; a mute or a language refusal is silent) |
-| Read-only | `status`, `units`, `unit`, `party`, `chat_log`, `cast_state`, `path_to`, `death_status` |
+| Read-only | `status`, `units`, `unit`, `party`, `chat_log`, `events`, `cast_state`, `path_to`, `death_status` |
 | Fixed | `accept_invite` |
+
+## Round 3: the raw GM boundary and the login burst's rows
+
+Two review findings were fixed here.
+
+1. **The raw `gm` method bypassed the GM unit hands.** It forwarded caller text to the command channel with no
+   check, so `target` plus a raw `.die`, `.modify hp`, `.aura` or `.unaura` did what `gm_kill`, `gm_set_hp` and
+   `gm_aura` refuse. The raw path now classifies the line against the core's own command table
+   (`Chat.cpp:874-887`, `cs_modify.cpp`) — case-insensitive, the core's own prefix matching, one command per
+   line — and sends a line that acts on a unit's life, health, power, auras or damage through `serveGMUnit`:
+   the flag, the trial allowlist and the player rule, with a typed `-32006` and no line (not even the guard's
+   probe) on refusal. Both selections a line could act on are checked (the last one this session sent and the
+   server's last echo), because the core applies the two on different threads. `gm_revive` carries `.revive
+   <name>` and goes through the same boundary, so reviving another player is refused there too. Ordinary GM
+   lines (`.tb ...`, `.gps`, `.server info`, and plain chat) keep working with no flag.
+2. **A reconnect could discard rows the login burst produced.** The retained ring was installed after
+   `loginWorld` returned, so a combat or aura row the login dispatch wrote in the meantime went into the fresh
+   session's own ring and was thrown away. The dropped session's ring is now given to the replacement session
+   before its first login packet is dispatched (`loginAgain`), so the seq continues with no hole.
 
 ## Slot and teardown
 
@@ -188,8 +210,8 @@ The same "success before the server confirms" check over the DONE methods:
 * `TestServeCombatAndCommand`: `target`, `cast` (the fake's `SMSGCastFailed` is a typed game error), `cast_state`,
   `cancel_cast` with nothing to cancel, `attack` (the fake sees the swing; the fake's health-zero update ends the
   fight with `reason: dead`), `stop_attack`.
-* `TestServeGMAndBot`: the GM probe, `gm`, `gm_revive`, `.tb` through `bot` and its answer, and a non-command line
-  refused.
+* `TestServeGMAndBot`: the GM probe, `gm`, a `gm_revive` refused without the flag, `.tb` through `bot` and its
+  answer, and a non-command line refused.
 * `TestServePartyAndAddon`: `party`, `invite` (the fake sees the packet), `accept_invite` and `leave_group` without a
   group refused, `addon_send`.
 * `TestServeAcceptInvite`: three subtests against the fake's invite: the roster naming the inviter confirms the
@@ -214,6 +236,16 @@ The same "success before the server confirms" check over the DONE methods:
   attempt(s)`, an action answers `-32002`, and the daemon exits with that error.
 * `TestServeReconnectRepeatedDrops`: every login is dropped after it is in the world; the one budget is spent and the
   daemon goes offline rather than re-logging in forever.
+* `TestServeEventsKeepTheLoginBurst`: the fake writes a melee row before `SMSG_LOGIN_VERIFY_WORLD`; the row is in
+  `events` after the re-entry, at the next seq, beside the row written after the login.
+* `TestServeRawGMRefusesUnitCommands`: with the flag on and nothing registered, `.die`, `.kill`, `.damage`,
+  `.modify hp`, `.aura`, `.unaura` and their case/space/abbreviation variants answer `-32006` and the fake sees no
+  line; registering the creature lets the same raw lines run.
+* `TestServeRawGMPassesOrdinaryCommands`: without the flag `.tb status` and `.gps` still run, and a raw `.die` is
+  refused and not sent.
+* `TestServeRawGMRevive`: `.revive` through the raw method and `gm_revive` refuses another player even when
+  registered; the session's own character passes with the flag and its guid registered. The raw and the typed
+  form are refused before any line (and before the guard's probe) when they name anyone else.
 * `TestServeCleanShutdown`: cancelling the parent context logs out and returns cleanly.
 
 `cmd/forever-agent/forever_serve_test.go` pins the password file and that the `--dir` manifest opens through the

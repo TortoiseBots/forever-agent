@@ -58,6 +58,9 @@ type CombatLog struct {
 	rows  []CombatRow
 	first int
 	seq   int
+	// changed is closed and replaced by every Append, so a reader that waits outside the ring's lock (serve's
+	// `events`) wakes on the next row instead of polling.
+	changed chan struct{}
 }
 
 // Append adds one row and assigns its seq: the ring's own counter, which only grows, so a reconnecting client never
@@ -69,10 +72,14 @@ func (l *CombatLog) Append(row CombatRow) {
 	row.Seq = l.seq
 	if len(l.rows) < CombatRingSize {
 		l.rows = append(l.rows, row)
-		return
+	} else {
+		l.rows[l.first] = row
+		l.first = (l.first + 1) % CombatRingSize
 	}
-	l.rows[l.first] = row
-	l.first = (l.first + 1) % CombatRingSize
+	if l.changed != nil {
+		close(l.changed)
+	}
+	l.changed = make(chan struct{})
 }
 
 // Since answers the rows above seq, oldest first, at most limit (CombatPageMax when limit is 0 or above it). next is
@@ -82,7 +89,26 @@ func (l *CombatLog) Append(row CombatRow) {
 func (l *CombatLog) Since(seq, limit int) (rows []CombatRow, next, oldest, dropped int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if limit <= 0 || limit > CombatPageMax {
+	return l.sinceLocked(seq, limit)
+}
+
+// SinceChanged is Since with the channel the next Append closes, read in the same lock: a row appended between the
+// page and the wait is therefore either in the page or ends the wait, never missed. A waiter passes the channel back
+// and waits on it outside the lock.
+func (l *CombatLog) SinceChanged(seq, limit int) (rows []CombatRow, next, oldest, dropped int, changed <-chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rows, next, oldest, dropped = l.sinceLocked(seq, limit)
+	if l.changed == nil {
+		l.changed = make(chan struct{})
+	}
+	return rows, next, oldest, dropped, l.changed
+}
+
+// sinceLocked is Since's body; the caller holds l.mu.
+func (l *CombatLog) sinceLocked(seq, limit int) (rows []CombatRow, next, oldest, dropped int) {
+	limit = min(limit, CombatPageMax)
+	if limit <= 0 {
 		limit = CombatPageMax
 	}
 	n := len(l.rows)
@@ -137,9 +163,14 @@ func newCombatRow(kind string, now time.Time, spellID, amount int32) CombatRow {
 	}
 }
 
-// CombatLog is the session's combat log, the ring its dispatch feeds. It is a value in the session, so it outlives
-// a reconnect: a row's seq only grows.
-func (s *session) CombatLog() *CombatLog { return &s.combat }
+// CombatLog is the session's combat log, the ring its dispatch feeds. A serving daemon hands the ring of the
+// session a drop replaced to the new one, so a row's seq only grows.
+func (s *session) CombatLog() *CombatLog {
+	if s.combat == nil {
+		s.combat = &CombatLog{}
+	}
+	return s.combat
+}
 
 // combatRow appends one row with both sides named as this client knows them, and the module's own failure reason on
 // a spell_fail.
@@ -148,7 +179,7 @@ func (s *session) combatRow(kind string, now time.Time, spellID, amount int32, s
 	row.Source = s.combatActor(src)
 	row.Target = s.combatActor(dst)
 	row.Reason = reason
-	s.combat.Append(row)
+	s.CombatLog().Append(row)
 }
 
 // combatActor is one side of a row: the guid's text and the best name the model has (a player's name, else the

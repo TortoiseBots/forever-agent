@@ -64,6 +64,11 @@ func rpcCmd(args []string, stdout, stderr io.Writer) int {
 	var result json.RawMessage
 	err = c.Call(context.Background(), o.method, params, &result, o.timeout)
 	if err != nil {
+		var aborted *slotCallAbortedError
+		if errors.As(err, &aborted) {
+			fmt.Fprintf(stderr, "rpc: %s\n", rpcScrub(err.Error(), c.token))
+			return exitSlotRefused
+		}
 		var rpcErr *slotRPCError
 		if errors.As(err, &rpcErr) {
 			fmt.Fprintf(stderr, "error: %d %s\n", rpcErr.Code, rpcErr.Message)
@@ -133,11 +138,13 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-// rpcCall posts one JSON-RPC 2.0 request to 127.0.0.1:port and returns the
-// result (nil for notifications/empty), or the error the agent answered.
-// Anything that is not a valid 2.0 envelope for our id comes back as an
-// *rpcBadReplyError, so the caller can tell a bad reply from a dead agent.
-func rpcPostCall(port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
+// rpcPostCall posts one JSON-RPC 2.0 request to 127.0.0.1:port and returns
+// the result (nil for notifications/empty), or the error the agent answered.
+// The request carries ctx, so a cancelled caller aborts the HTTP request and
+// closes the connection instead of leaving it running. Anything that is not a
+// valid 2.0 envelope for our id comes back as an *rpcBadReplyError, so the
+// caller can tell a bad reply from a dead agent.
+func rpcPostCall(ctx context.Context, port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
 	reqBody := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -150,7 +157,7 @@ func rpcPostCall(port int, token, method string, params json.RawMessage, timeout
 	if err != nil {
 		return nil, nil, err
 	}
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d/rpc", port), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://127.0.0.1:%d/rpc", port), bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}

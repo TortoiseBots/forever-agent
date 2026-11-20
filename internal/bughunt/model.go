@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // Frame is one sample of the world: the party keyed by the run's own identity, and the hostiles it saw. GC is the
@@ -138,6 +140,9 @@ type Run struct {
 	Combat  []CombatRow
 	Roles   map[string]string
 	Classes map[string]string
+	// Names is the party record's name per guid: the character's for a dungeon run, the party slot's word for a
+	// watch (whose records carry no character names).
+	Names map[string]string
 	// Subjects are the members the rules apply to; nil means every unit in a frame.
 	Subjects map[string]bool
 	// CastTimes is every cast, cast start, damage and heal event per source, sorted: rule 1's "no cast/swing" window.
@@ -149,11 +154,12 @@ type Run struct {
 	// them, so the rules join a row to a frame whatever the run keys its members by.
 	ByGUID map[string]string
 	GUIDOf map[string]string
-	// Names are the spell names a live-checked data file gives (id -> name), and Dispel the dispel types the same
+	// SpellNames are the spell names a live-checked data file gives (id -> name), and Dispel the dispel types the same
 	// source gives (id -> magic, curse, disease, poison, or never). A row's id without a name is `spell <id>` and
-	// never matches a name rule; an id without a dispel type is not a known debuff.
-	Names  map[int]string
-	Dispel map[int]string
+	// never matches a name rule; an id without a dispel type is not a known debuff. (Names is the party record's
+	// name per guid, above; the spell map is SpellNames so the two never share a field.)
+	SpellNames map[int]string
+	Dispel     map[int]string
 
 	// combatBySrc indexes Combat by a row's canonical source guid, built on first use.
 	combatBySrc   map[string][]int
@@ -165,6 +171,10 @@ type Run struct {
 	coverFor   int
 	coverBuilt bool
 	unknown    map[int]map[string]int
+
+	// TraceEvents are the trace's own event records (run_start, wipe, pull_start, ...), for adapters that place a
+	// record's events on the trace's clock instead of a summary's module clock.
+	TraceEvents []trace.Event
 }
 
 // Role is the member's role, "?" when the run does not know it.
@@ -187,7 +197,7 @@ func (r *Run) Class(n string) string {
 // An unnamed id never matches a name rule (a buff, an AoE or a heal): the name is what the rule reads, and a name
 // this run does not have is unknown, not a guess.
 func (r *Run) SpellName(id int) string {
-	if v, ok := r.Names[id]; ok && v != "" {
+	if v, ok := r.SpellNames[id]; ok && v != "" {
 		return v
 	}
 	return fmt.Sprintf("spell %d", id)
