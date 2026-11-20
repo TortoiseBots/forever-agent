@@ -14,6 +14,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/mapview"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // The fixture's run id and the guids it uses: five bots, two plan bosses, a trash pack, two twins and a runner.
@@ -39,9 +40,22 @@ const (
 	fixtureSeconds    = 25
 )
 
+// fixtureSpec changes what a fixture record carries; the zero value is the standard record: the trace's run_start
+// event, the summary's one death, and a driver duration that outlasts the module's run (a cleanup tail the clock
+// offset must not count).
+type fixtureSpec struct {
+	noRunStart bool  // an old trace, from before the watch wrote the anchor
+	wipes      []int // trace milliseconds of the watch's wipe events
+	durationS  float64
+	elapsedS   float64
+	deathLog   string // the summary's death_log JSON
+}
+
 // fixture writes one watch folder: the trace and its summary, plus the plan and the combat log from testdata.
 // The bots' names live in the party records only, as a watch records them.
-func fixture(t *testing.T) string {
+func fixture(t *testing.T) string { return fixtureWith(t, fixtureSpec{}) }
+
+func fixtureWith(t *testing.T, sp fixtureSpec) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"fixture_depths.json", "combatlog.jsonl"} {
@@ -53,14 +67,15 @@ func fixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	writeTrace(t, filepath.Join(dir, fixtureRun+".jsonl"))
-	writeSummary(t, filepath.Join(dir, fixtureRun+".forever-run.json"))
+	writeTrace(t, filepath.Join(dir, fixtureRun+".jsonl"), sp)
+	writeSummary(t, filepath.Join(dir, fixtureRun+".forever-run.json"), sp)
 	return dir
 }
 
 // writeTrace writes the fixture's trace: one frame a second from the fifth second, each with the party and the
-// hostiles the scenario needs.
-func writeTrace(t *testing.T, path string) {
+// hostiles the scenario needs. Boss One first stands at z=0 and dies on z=20, so its kill floor differs from its
+// first-seen one.
+func writeTrace(t *testing.T, path string, sp fixtureSpec) {
 	t.Helper()
 	var b strings.Builder
 	line := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
@@ -97,6 +112,12 @@ func writeTrace(t *testing.T, path string) {
 	for _, m := range mobs {
 		line(`%s,"g":"%s","entry":%d,"name":"%s","boss":%v}`, env("mobs", 5000), m.g, m.entry, m.name, m.boss)
 	}
+	if !sp.noRunStart {
+		line(`%s,"ev":"run_start","plan":"fixture_depths"}`, env("event", fixtureStartDelay*1000))
+	}
+	for _, ms := range sp.wipes {
+		line(`%s,"ev":"wipe","at_s":%d}`, env("event", ms), ms/1000)
+	}
 	bot := func(g string, x, y int) string {
 		return fmt.Sprintf(`{"g":"%s","al":true,"cb":false,"st":"n","hp":100,"mhp":100,"x":%d,"y":%d,"z":0}`, g, x, y)
 	}
@@ -110,8 +131,15 @@ func writeTrace(t *testing.T, path string) {
 		if t5 < 14 { // the first boss fights until it dies
 			fighting = `,"cb":true`
 		}
+		// From the tenth second the first boss stands on the upper floor and stays there to die: its kill
+		// marker must be the death's floor, not the one it was first seen on.
+		bx, bz := 20, 0
+		if t5 >= 10 {
+			bx, bz = 24, 20
+		}
 		list := []string{
-			mob(guidBossA, map[bool]int{true: 100, false: 0}[t5 < 14], 20, 0, fighting),
+			fmt.Sprintf(`{"g":"%s","hp":%d,"x":%d,"y":0,"z":%d%s}`,
+				guidBossA, map[bool]int{true: 100, false: 0}[t5 < 14], bx, bz, fighting),
 			mob(guidBossB, 100, 40, 0, ""),
 			mob(guidTrash, map[bool]int{true: 100, false: 0}[t5 < 9], 12, 3, ""),
 			mob(guidTwinA, 100, 30, 1, ""),
@@ -128,16 +156,30 @@ func writeTrace(t *testing.T, path string) {
 }
 
 // writeSummary writes the fixture's run summary: three legs, one pull, one death, one pause and one rescue, all
-// on the module's clock, which starts fixtureStartDelay seconds into the trace.
-func writeSummary(t *testing.T, path string) {
+// on the module's clock, which starts fixtureStartDelay seconds into the trace. The driver's duration outlasts the
+// module's run by a cleanup tail; only the trace's run_start event says where the module's clock begins.
+func writeSummary(t *testing.T, path string, sp fixtureSpec) {
 	t.Helper()
-	const s = `{
-  "schema": "forever-run", "version": 1, "run_id": "` + fixtureRun + `", "plan": "fixture_depths",
+	duration, elapsed := 30.0, 20.0
+	if sp.durationS != 0 {
+		duration = sp.durationS
+	}
+	if sp.elapsedS != 0 {
+		elapsed = sp.elapsedS
+	}
+	deathLog := sp.deathLog
+	if deathLog == "" {
+		deathLog = `[
+      {"at_s": 8, "leg": 1, "step": 1, "who": "healer", "why": "Healera"}
+    ]`
+	}
+	s := fmt.Sprintf(`{
+  "schema": "forever-run", "version": 1, "run_id": "%s", "plan": "fixture_depths",
   "mode": "watch", "clear": true, "bosses": {"900": true, "901": false}, "wipes": 0, "deaths": 1, "practice": 1,
-  "duration_s": 25, "stop_reason": "done", "last_leg": "leg_three", "instance": 1, "pulls": [],
+  "duration_s": %g, "stop_reason": "done", "last_leg": "leg_three", "instance": 1, "pulls": [],
   "watch": {
     "state": "done", "step": 3, "steps": 3, "leg": 2, "leg_name": "leg_three", "phase": "done",
-    "pull": 1, "pulls": 1, "deaths": 1, "wipes": 0, "pauses": 1, "elapsed_s": 20, "rescues": 1, "events": 9,
+    "pull": 1, "pulls": 1, "deaths": 1, "wipes": 0, "pauses": 1, "elapsed_s": %g, "rescues": 1, "events": 9,
     "bosses": {"900": "dead", "901": "alive"},
     "legs": [
       {"leg": 0, "name": "leg_one", "first_s": 0, "last_s": 6, "seconds": 6, "pulls": 1, "steps": 1},
@@ -147,9 +189,7 @@ func writeSummary(t *testing.T, path string) {
     "step_log": [
       {"leg": 0, "step": 1, "pulls": 1, "pull_events": [{"seq": 2, "at_s": 4}], "deaths": 0}
     ],
-    "death_log": [
-      {"at_s": 8, "leg": 1, "step": 1, "who": "healer", "why": "Healera"}
-    ],
+    "death_log": %s,
     "pause_log": [
       {"at_s": 2, "leg": 0, "step": 1, "why": "wipe", "cleared": true}
     ],
@@ -158,7 +198,7 @@ func writeSummary(t *testing.T, path string) {
     ]
   }
 }
-`
+`, fixtureRun, duration, elapsed, deathLog)
 	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +278,10 @@ func TestLoadCreatures(t *testing.T) {
 			if c.Fate != mapview.FateKilled || c.FateT != 14 {
 				t.Fatalf("boss one %s at %.0f, want killed at 14", c.Fate, c.FateT)
 			}
+			// The creature itself stays where it was first seen; only its kill marker moves to the death place.
+			if c.X != 20 || c.Z != 0 {
+				t.Fatalf("boss one at (%.0f,%.0f), want its first sight (20,0)", c.X, c.Z)
+			}
 		case 100:
 			if c.Fate != mapview.FateKilled || c.FateT != 9 {
 				t.Fatalf("trash %s at %.0f, want killed at 9", c.Fate, c.FateT)
@@ -275,8 +319,10 @@ func TestLoadMarkers(t *testing.T) {
 	if m := marker(t, &run, mapview.MarkRescue); m.T != 3+fixtureStartDelay {
 		t.Fatalf("rescue at %.0f s, want %d", m.T, 3+fixtureStartDelay)
 	}
-	if m := marker(t, &run, mapview.MarkBossKill); m.T != 14 || !strings.HasPrefix(m.Label, "Boss One") {
-		t.Fatalf("boss kill %q at %.0f, want Boss One at 14", m.Label, m.T)
+	if m := marker(t, &run, mapview.MarkBossKill); m.T != 14 || !strings.HasPrefix(m.Label, "Boss One") ||
+		m.X != 24 || m.Z != 20 {
+		t.Fatalf("boss kill %q at %.0f (%.0f,%.0f), want Boss One at 14 where it died (24,20)",
+			m.Label, m.T, m.X, m.Z)
 	}
 	death := marker(t, &run, mapview.MarkDeath)
 	if death.T != 8+fixtureStartDelay || death.Label != "healer" {
@@ -330,25 +376,55 @@ func TestHTMLHoldsNoNameWithoutNames(t *testing.T) {
 	}
 }
 
-func TestWipeStart(t *testing.T) {
-	deaths := func(at ...int) []driver.DeathRecord {
-		var out []driver.DeathRecord
-		for _, t := range at {
-			out = append(out, driver.DeathRecord{AtS: t})
+func TestWipeStarts(t *testing.T) {
+	party := func(at ...int) []driver.DeathRecord {
+		who := []string{"tank", "healer", "dps1", "dps2", "dps3"}
+		out := make([]driver.DeathRecord, len(at))
+		for i, s := range at {
+			out[i] = driver.DeathRecord{AtS: s, Who: who[i%len(who)]}
 		}
 		return out
 	}
-	if at, ok := wipeStart(deaths(40, 41, 42, 43, 44), 5); !ok || at != 40 {
-		t.Fatalf("five deaths in five seconds: %v %v, want a wipe at 40", at, ok)
+	if got := wipeStarts(party(40, 41, 42, 43, 44), 5); len(got) != 1 || got[0] != 40 {
+		t.Fatalf("five members in five seconds: %v, want a wipe at 40", got)
 	}
-	if _, ok := wipeStart(deaths(10, 11, 12, 13), 5); ok {
-		t.Fatal("four deaths are no wipe")
+	if got := wipeStarts(party(10, 11, 12, 13), 5); got != nil {
+		t.Fatalf("four members are no wipe: %v", got)
 	}
-	if _, ok := wipeStart(deaths(10, 12, 15, 18, 25), 5); ok {
-		t.Fatal("five deaths over fifteen seconds are no wipe")
+	if got := wipeStarts(party(10, 12, 16, 20, 26), 5); got != nil {
+		t.Fatalf("five members over sixteen seconds are no wipe: %v", got)
 	}
-	if at, ok := wipeStart(deaths(10, 12), 2); !ok || at != 10 {
-		t.Fatalf("a two-member party wiped: %v %v", at, ok)
+	if got := wipeStarts(party(10, 12), 2); len(got) != 1 || got[0] != 10 {
+		t.Fatalf("a two-member party wiped: %v", got)
+	}
+	// One member dying five times is five deaths, not five members.
+	dup := []driver.DeathRecord{}
+	for s := 40; s < 45; s++ {
+		dup = append(dup, driver.DeathRecord{AtS: s, Who: "tank"})
+	}
+	if got := wipeStarts(dup, 5); got != nil {
+		t.Fatalf("repeated deaths of one member fabricated a wipe: %v", got)
+	}
+	// A death the module could not attribute counts for no member.
+	unattr := []driver.DeathRecord{}
+	for s := 40; s < 45; s++ {
+		unattr = append(unattr, driver.DeathRecord{AtS: s})
+	}
+	if got := wipeStarts(unattr, 5); got != nil {
+		t.Fatalf("unattributed deaths fabricated a wipe: %v", got)
+	}
+	// A member's duplicate deaths inside a burst count once and the burst still needs every slot.
+	mixed := []driver.DeathRecord{
+		{AtS: 40, Who: "tank"}, {AtS: 40, Who: "tank"}, {AtS: 41, Who: "tank"},
+		{AtS: 42, Who: "healer"}, {AtS: 43, Who: "dps1"}, {AtS: 44, Who: "dps2"}, {AtS: 45, Who: "dps3"},
+	}
+	if got := wipeStarts(mixed, 5); len(got) != 1 || got[0] != 40 {
+		t.Fatalf("one burst with duplicates: %v, want a wipe at 40", got)
+	}
+	// Two wipes separated by more than the window are two markers.
+	two := append(party(1, 2, 3, 4, 5), party(17, 18, 19, 20, 21)...)
+	if got := wipeStarts(two, 5); len(got) != 2 || got[0] != 1 || got[1] != 17 {
+		t.Fatalf("two wipes: %v, want 1 and 17", got)
 	}
 }
 
@@ -382,21 +458,155 @@ func TestSVGDrawsPauseAndRescue(t *testing.T) {
 	}
 }
 
-func TestClockOffsetNeedsASummary(t *testing.T) {
-	if got := clockOffset(nil); got != 0 {
-		t.Fatalf("offset %v without a summary", got)
+func TestRunStartOffset(t *testing.T) {
+	if off, found := runStartOffset(nil); off != 0 || found {
+		t.Fatalf("offset %v found %v without events", off, found)
 	}
-	if got := clockOffset(&driver.RunSummary{DurationS: 100}); got != 0 {
-		t.Fatalf("offset %v without a watch block", got)
+	evs := []trace.Event{
+		{Ev: "pull_start", Envelope: trace.Envelope{T: 900}},
+		{Ev: "run_start", Envelope: trace.Envelope{T: 7500}},
+		{Ev: "wipe", Envelope: trace.Envelope{T: 9000}},
 	}
-	if got := clockOffset(&driver.RunSummary{DurationS: 100, Watch: &driver.RunWatch{ElapsedS: 120}}); got != 0 {
-		t.Fatalf("offset %v, want 0 when the module outlasts the trace", got)
+	if off, found := runStartOffset(evs); !found || off != 7.5 {
+		t.Fatalf("offset %v found %v, want 7.5 from the run_start event", off, found)
 	}
-	if got := clockNote(0, nil); got != "clock aligned at trace start" {
-		t.Fatalf("note %q", got)
+	if get := clockNote(7.5, true); !strings.Contains(get, "started 8 s into the trace") &&
+		!strings.Contains(get, "started 7 s into the trace") {
+		t.Fatalf("note %q does not name the start", get)
 	}
-	if got := clockOffset(&driver.RunSummary{DurationS: 100, Watch: &driver.RunWatch{ElapsedS: 95.5}}); got != 4.5 {
-		t.Fatalf("offset %v, want 4.5", got)
+	if get := clockNote(0, false); !strings.Contains(get, "aligned at trace start") ||
+		!strings.Contains(get, "run_start") {
+		t.Fatalf("note %q does not say the anchor is missing", get)
+	}
+	if get := clockNote(0, true); get != "clock aligned at trace start" {
+		t.Fatalf("note %q", get)
+	}
+}
+
+// TestLoadClockFollowsTheRunStartEvent: the driver's duration outlasts the module's run by ten seconds of cleanup
+// (30 s against the module's 20 s), a tail the old duration difference could not tell from the run's start delay.
+// The trace's run_start event says five.
+func TestLoadClockFollowsTheRunStartEvent(t *testing.T) {
+	run, _, err := Load(fixture(t), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := marker(t, &run, mapview.MarkPull); m.T != 4+fixtureStartDelay {
+		t.Fatalf("pull at %.0f s, want %d: the cleanup tail was counted as a start delay", m.T, 4+fixtureStartDelay)
+	}
+	if !strings.Contains(strings.Join(run.Notes, "\n"), "started 5 s into the trace") {
+		t.Fatalf("notes do not name the start delay: %v", run.Notes)
+	}
+}
+
+// TestLoadClockWithoutTheAnchor: an old trace has no run_start event. The module's times are then aligned at the
+// trace's zero and the note says so, rather than subtracting a duration that spans the whole watch.
+func TestLoadClockWithoutTheAnchor(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{noRunStart: true}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := marker(t, &run, mapview.MarkPull); m.T != 4 {
+		t.Fatalf("pull at %.0f s, want 4: an unanchored record was moved by the duration guess", m.T)
+	}
+	if !strings.Contains(strings.Join(run.Notes, "\n"), "no run_start event") {
+		t.Fatalf("notes do not say the anchor is missing: %v", run.Notes)
+	}
+}
+
+// wipeTimes are the wipe markers' times, in the order the markers were sorted.
+func wipeTimes(run *mapview.Run) []float64 {
+	var out []float64
+	for _, m := range run.Markers {
+		if m.Kind == mapview.MarkWipe {
+			out = append(out, m.T)
+		}
+	}
+	return out
+}
+
+// partyDeaths is a death log of five distinct members at the given module seconds.
+func partyDeaths(at ...int) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for i, s := range at {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"at_s":%d,"who":%q}`, s, []string{"tank", "healer", "dps1", "dps2", "dps3"}[i%5])
+	}
+	b.WriteString("]")
+	return b.String()
+}
+
+// TestLoadWipeEvents: the watch writes one trace event per wipe the module reports; each is a marker on the trace's
+// own clock, unshifted, and a run with two wipes has two.
+func TestLoadWipeEvents(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{wipes: []int{10000, 20000}}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 2 || got[0] != 10 || got[1] != 20 {
+		t.Fatalf("wipes %v, want 10 and 20 on the trace's clock", got)
+	}
+}
+
+// TestLoadWipeEventBeatsTheDeaths: the trace's wipe event is the record; the death log is not used again to infer
+// a second wipe at a shifted time.
+func TestLoadWipeEventBeatsTheDeaths(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{wipes: []int{12000}, deathLog: partyDeaths(1, 2, 3, 4, 5)}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 1 || got[0] != 12 {
+		t.Fatalf("wipes %v, want the trace's one at 12 and no inferred one at 6", got)
+	}
+}
+
+// TestLoadWipeInferredFromDeaths: an old record has no wipe event; five distinct members down within the window
+// are one wipe, moved onto the trace's clock by the run_start anchor.
+func TestLoadWipeInferredFromDeaths(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{deathLog: partyDeaths(1, 2, 3, 4, 5)}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 1 || got[0] != 1+fixtureStartDelay {
+		t.Fatalf("wipes %v, want one at %d", got, 1+fixtureStartDelay)
+	}
+}
+
+// TestLoadWipeNeedsDistinctMembers: repeated deaths of one member and unattributed deaths never make a wipe.
+func TestLoadWipeNeedsDistinctMembers(t *testing.T) {
+	dup := `[{"at_s":1,"who":"tank"},{"at_s":2,"who":"tank"},{"at_s":3,"who":"tank"},` +
+		`{"at_s":4,"who":"tank"},{"at_s":5,"who":"tank"}]`
+	run, _, err := Load(fixtureWith(t, fixtureSpec{deathLog: dup}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 0 {
+		t.Fatalf("wipes %v from one member's five deaths, want none", got)
+	}
+	unattr := `[{"at_s":1},{"at_s":2},{"at_s":3},{"at_s":4},{"at_s":5}]`
+	run, _, err = Load(fixtureWith(t, fixtureSpec{deathLog: unattr}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 0 {
+		t.Fatalf("wipes %v from unattributed deaths, want none", got)
+	}
+}
+
+// TestLoadWipeInferredTwice: two separated bursts in an old record are two wipes.
+func TestLoadWipeInferredTwice(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{
+		deathLog: partyDeaths(1, 2, 3, 4, 5, 17, 18, 19, 20, 21),
+	}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []float64{1 + fixtureStartDelay, 17 + fixtureStartDelay}
+	if got := wipeTimes(&run); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("wipes %v, want %v", got, want)
 	}
 }
 

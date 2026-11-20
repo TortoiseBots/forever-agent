@@ -19,6 +19,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/mapview"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // Options tunes the adapter. The zero value reads the plan the summary names and labels the routes by slot.
@@ -48,7 +49,7 @@ func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
 	if plan != nil {
 		mapID, title = plan.Map, plan.Name
 	}
-	clock := clockOffset(sum)
+	clock, clockFound := runStartOffset(rec.TraceEvents)
 	p := newParty(rec, o.Names)
 	// The trace's zero is the run's zero: an empty frame anchors it, so every time the adapter adds (a module
 	// at_s moved by the clock offset) is already on the frames' clock.
@@ -71,8 +72,8 @@ func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
 		// The trace does not know when it started: its times are still the run's, but the wall clock is not.
 		run.Start = time.Time{}
 	}
-	appendMarkers(&run, p, sum, clock)
-	run.Notes = append(run.Notes, clockNote(clock, sum))
+	appendMarkers(&run, p, rec, sum, clock)
+	run.Notes = append(run.Notes, clockNote(clock, clockFound))
 	if planNote != "" {
 		run.Notes = append(run.Notes, planNote)
 	}
@@ -138,20 +139,27 @@ func planCandidates(name, dir string) []string {
 	}
 }
 
-// clockOffset is how far into the trace the module's run started: the module's at_s counts from its own start,
-// not from the trace's zero, and a watch enters the dungeon before it starts the run.
-func clockOffset(s *driver.RunSummary) float64 {
-	if s == nil || s.Watch == nil {
-		return 0
+// runStartOffset is how far into the trace the module's run started: the watch writes a run_start event at the
+// run-start action's reply time, and the module's at_s counts from that moment. The event is the only anchor: the
+// driver's own duration spans the whole watch, so subtracting the module's elapsed time would also count the time
+// after the module stopped (its cleanup and the summary write) and shift every event late.
+//
+// A record written before the event existed has no anchor; its module times are then taken to start at the trace's
+// zero and the note says so, rather than guessing from durations that are not commensurate.
+func runStartOffset(evs []trace.Event) (float64, bool) {
+	for _, ev := range evs {
+		if ev.Ev == "run_start" && ev.T >= 0 {
+			return float64(ev.T) / 1000, true
+		}
 	}
-	if d := s.DurationS - s.Watch.ElapsedS; d > 0 {
-		return d
-	}
-	return 0
+	return 0, false
 }
 
 // clockNote says how the module's times were placed on the trace's clock.
-func clockNote(offset float64, s *driver.RunSummary) string {
+func clockNote(offset float64, found bool) string {
+	if !found {
+		return "clock aligned at trace start: the record carries no run_start event"
+	}
 	if offset <= 0 {
 		return "clock aligned at trace start"
 	}

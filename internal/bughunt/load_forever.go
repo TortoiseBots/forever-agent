@@ -51,6 +51,7 @@ func LoadWatch(path, ds string) (*Run, error) {
 		Subjects:    map[string]bool{},
 		BossEntries: map[uint32]string{},
 		CastTimes:   map[string][]float64{},
+		TraceEvents: tf.Events,
 	}
 	if r.Name == "" {
 		name := filepath.Base(tracePath)
