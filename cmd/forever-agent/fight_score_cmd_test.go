@@ -32,7 +32,7 @@ func scoreLine(t *testing.T, out string, parts ...string) string {
 // TestFightScoreWalk2Parity reproduces the fight debugger's pinned walk-2 numbers (TortoiseBots commander-fight-debugger.md §2):
 // 5-4 main tank Ragemeister cast Sunder Armor 8 times in 39 s (2.0 per 10 s, ok), off-tanks Brun 2x and Irelanthe 3x taunted
 // (ok); 5-3 Sunder is 7 in 52 s (1.3 per 10 s, warn) and Irelanthe never taunted (warn). The files are copies of
-// ~/TortoiseBots-audit/tests/raid-ony-walk2/combat-fight-5-4.json and -5-3.json.
+// the walk-2 fight files (combat-fight-5-4.json and -5-3.json).
 func TestFightScoreWalk2Parity(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"fight-score", "--mt", "Ragemeister", "--ot", "Brun,Irelanthe", "testdata/fights/combat-fight-5-4.json"}, &out, &errOut)

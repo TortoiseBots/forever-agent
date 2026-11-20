@@ -1,4 +1,4 @@
-// Walk-37 fixes (TortoiseBots-audit tests/raid-zg-walk37): the Jeklik plateau's empty bat row and the five
+// Walk-37 fixes (the walk-37 notes): the Jeklik plateau's empty bat row and the five
 // patrol rows the exporter cut through the pack fields (Venoxis groups 10/18/19, Thekal group 3, Arlokk group
 // 21). Its row model (zgW37Rows) is shared with zg_w38_test.go. The rows are built with the live export flags
 // (plan-export --approach-hops --floor-aware), so the approach-path rows the run leader actually walks

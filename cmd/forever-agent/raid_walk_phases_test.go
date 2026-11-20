@@ -706,7 +706,7 @@ func TestRaidWalkEntranceFallbackWaitsForTheLanding(t *testing.T) {
 }
 
 // TestRaidWalkReviveAppearsAtAHireFirst (walk 23, second finding): the revive's `.go xyz` from the portal put the
-// commander into a NEW instance copy (m910q: hires in 101, commander in 104; test2: 106 vs 107), so the quiet check
+// commander into a NEW instance copy (test1: hires in 101, commander in 104; testB: 106 vs 107), so the quiet check
 // looked at an empty copy and a summon would drag the hires into a fresh, respawned one. The revive must first
 // `.appear <hire>` (the core binds a GM to the target's copy) so its `.go xyz` stays on the map and in the hires' copy.
 func TestRaidWalkReviveAppearsAtAHireFirst(t *testing.T) {

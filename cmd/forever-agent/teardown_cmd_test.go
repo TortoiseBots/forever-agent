@@ -60,16 +60,16 @@ func teardownCLIFixture(t *testing.T, rpcSteps []teardownCLIStep, rpcFail bool) 
 	os.MkdirAll(cfgDir, 0o700)
 	src := filepath.Join(cfgDir, "settings-src.json")
 	os.WriteFile(src, []byte(`{"realmd":"127.0.0.1:3724","rpc":"127.0.0.1:0","accounts":{"TESTACC":"pw-not-real"}}`), 0o600)
-	table := fmt.Sprintf(`{"version":1,"servers":[{"name":"m910q","realmd":"100.78.24.50:3724","slots":[
+	table := fmt.Sprintf(`{"version":1,"servers":[{"name":"test1","realmd":"100.78.24.50:3724","slots":[
 		{"id":"1","account":"TESTACC","character":"Gbmage","port":%d,"settings_from":"%s"}]}]}`, port, src)
 	slotsPath = filepath.Join(cfgDir, "slots.json")
 	os.WriteFile(slotsPath, []byte(table), 0o600)
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
 		t.Fatalf("acquire: %d %q", code, errOut)
 	}
 	bin := filepath.Join(t.TempDir(), "forever-agent")
 	os.WriteFile(bin, []byte("x"), 0o755)
-	if code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath); code != exitOK {
+	if code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath); code != exitOK {
 		t.Fatalf("setup: %d %q", code, errOut)
 	}
 	tokenFile = filepath.Join(dir, fmt.Sprintf("rpc-%d.token", port))
@@ -96,7 +96,7 @@ func teardownCLILeaseHeld(t *testing.T, slotsPath string) bool {
 		t.Fatal(err)
 	}
 	store := slots.NewStore(cfg, slotsPath)
-	states, err := store.List("m910q")
+	states, err := store.List("test1")
 	if err != nil {
 		t.Fatal(err)
 	}

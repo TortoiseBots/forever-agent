@@ -7,7 +7,7 @@
 # SET SESSION TRANSACTION READ ONLY and every statement below is a SELECT. No credential is read, printed or stored here:
 # the password is expanded inside the container from the container's own environment (MARIADB_ROOT_PASSWORD).
 #
-# Environment:  DUNGEONGEN_HOST      ssh host that runs docker (default m910q; "local" runs docker here)
+# Environment:  DUNGEONGEN_HOST      ssh host that runs docker (default test1; "local" runs docker here)
 #               DUNGEONGEN_CONTAINER database container (default tortoise-db)
 #               DUNGEONGEN_DB        world database (default tw_world)
 set -euo pipefail

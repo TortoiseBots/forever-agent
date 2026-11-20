@@ -457,7 +457,7 @@ func TestFilesHandlerServesOnlyTheTestsFolder(t *testing.T) {
 func TestAllowedHostNamesPassTheGuard(t *testing.T) {
 	root := t.TempDir()
 	p := NewPoller(Options{TestsDir: root, ConfigDir: t.TempDir(), Agents: "auto"})
-	allow, err := AllowedHosts("100.86.248.75", "m910q.tail1234.ts.net, [fd7a:115c:a1e0::53]")
+	allow, err := AllowedHosts("100.86.248.75", "test1.tail1234.ts.net, [fd7a:115c:a1e0::53]")
 	must(t, err)
 	srv := httptest.NewServer(Handler(p, root, allow))
 	defer srv.Close()
@@ -472,12 +472,12 @@ func TestAllowedHostNamesPassTheGuard(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	for _, h := range []string{"127.0.0.1:8790", "localhost:8790", "100.86.248.75", "100.86.248.75:8790", "m910q.tail1234.ts.net:8790", "M910Q.Tail1234.TS.NET.", "[fd7a:115c:a1e0::53]:8790"} {
+	for _, h := range []string{"127.0.0.1:8790", "localhost:8790", "100.86.248.75", "100.86.248.75:8790", "test1.tail1234.ts.net:8790", "TEST1.Tail1234.TS.NET.", "[fd7a:115c:a1e0::53]:8790"} {
 		if code := status(srv, "GET", h); code != http.StatusOK {
 			t.Errorf("Host %q: %d, want 200", h, code)
 		}
 	}
-	for _, h := range []string{"100.86.248.76", "100.86.248.75.evil.example.com", "evil.example.com", "m910q.tail1234.ts.net.evil.example.com", "m910q.tail1234", "fd7a:115c:a1e0::54", "0.0.0.0"} {
+	for _, h := range []string{"100.86.248.76", "100.86.248.75.evil.example.com", "evil.example.com", "test1.tail1234.ts.net.evil.example.com", "test1.tail1234", "fd7a:115c:a1e0::54", "0.0.0.0"} {
 		if code := status(srv, "GET", h); code != http.StatusForbidden {
 			t.Errorf("Host %q: %d, want 403", h, code)
 		}
@@ -491,16 +491,16 @@ func TestAllowedHostNamesPassTheGuard(t *testing.T) {
 }
 
 func TestAllowedHostsList(t *testing.T) {
-	got, err := AllowedHosts("100.86.248.75", "m910q.tail1234.ts.net, [fd7a:115c:a1e0::53],")
-	if err != nil || !reflect.DeepEqual(got, []string{"m910q.tail1234.ts.net", "fd7a:115c:a1e0::53", "100.86.248.75"}) {
+	got, err := AllowedHosts("100.86.248.75", "test1.tail1234.ts.net, [fd7a:115c:a1e0::53],")
+	if err != nil || !reflect.DeepEqual(got, []string{"test1.tail1234.ts.net", "fd7a:115c:a1e0::53", "100.86.248.75"}) {
 		t.Fatalf("list: %q %v", got, err)
 	}
-	for listen, want := range map[string]int{"127.0.0.1": 0, "localhost": 0, "0.0.0.0": 0, "::": 0, "m910q": 0, "100.86.248.75": 1} {
+	for listen, want := range map[string]int{"127.0.0.1": 0, "localhost": 0, "0.0.0.0": 0, "::": 0, "test1": 0, "100.86.248.75": 1} {
 		if got, err := AllowedHosts(listen, ""); err != nil || len(got) != want {
 			t.Errorf("listen %q: %q %v, want %d names", listen, got, err, want)
 		}
 	}
-	for _, bad := range []string{"*.tail1234.ts.net", "m910q:8790", "http://m910q", "m910q/x", "m910q.tail1234.ts.net evil", "0.0.0.0", "::", "[::]", "-m910q", "m910q..ts.net", "m_910q", "[fd7a::1", "[]"} {
+	for _, bad := range []string{"*.tail1234.ts.net", "test1:8790", "http://test1", "test1/x", "test1.tail1234.ts.net evil", "0.0.0.0", "::", "[::]", "-test1", "test1..ts.net", "m_910q", "[fd7a::1", "[]"} {
 		if _, err := AllowedHosts("127.0.0.1", bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -822,13 +822,13 @@ func TestPlanCacheFallsBackToThePlansOfTheBuild(t *testing.T) {
 func TestFramingIsLimitedToLoopbackAndNamedOrigins(t *testing.T) {
 	root := t.TempDir()
 	p := NewPoller(Options{TestsDir: root, ConfigDir: t.TempDir()})
-	srv := httptest.NewServer(Handler(p, root, nil, "http://m910q:8095"))
+	srv := httptest.NewServer(Handler(p, root, nil, "http://test1:8095"))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/")
 	must(t, err)
 	resp.Body.Close()
 	csp := resp.Header.Get("Content-Security-Policy")
-	for _, want := range []string{"frame-ancestors 'self' http://127.0.0.1:* http://localhost:* http://[::1]:* http://m910q:8095", "default-src 'self'"} {
+	for _, want := range []string{"frame-ancestors 'self' http://127.0.0.1:* http://localhost:* http://[::1]:* http://test1:8095", "default-src 'self'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
 		}
@@ -836,12 +836,12 @@ func TestFramingIsLimitedToLoopbackAndNamedOrigins(t *testing.T) {
 	if strings.Contains(csp, "frame-ancestors *") {
 		t.Errorf("anyone may frame: %q", csp)
 	}
-	for _, ok := range []string{"http://m910q:8095", "https://dash.example.org", "http://192.168.1.5:8095", "http://[::1]:8095/"} {
+	for _, ok := range []string{"http://test1:8095", "https://dash.example.org", "http://192.168.1.5:8095", "http://[::1]:8095/"} {
 		if err := CheckEmbedOrigin(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "*", "m910q:8095", "ftp://x", "http://", "http://a b", "http://x;script-src *", "http://x/path", "http://u:p@x", "http://x?q=1", "http://x,http://y", "'none'"} {
+	for _, bad := range []string{"", "*", "test1:8095", "ftp://x", "http://", "http://a b", "http://x;script-src *", "http://x/path", "http://u:p@x", "http://x?q=1", "http://x,http://y", "'none'"} {
 		if err := CheckEmbedOrigin(bad); err == nil {
 			t.Errorf("%q must be refused: it goes into the CSP", bad)
 		}

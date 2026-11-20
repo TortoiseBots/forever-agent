@@ -56,7 +56,7 @@
 #   NO_FETCH=1        do not `git fetch` before reading origin/main
 #   COMPOSITION      with --hire: the party as a comma list of class[:role] (default warrior:tank,priest:healer,hunter,rogue,warlock)
 #   OUT               a folder for the agent's log and capture (default /tmp/run-uldaman-<time>)
-#   VMTEST            the vmtest.sh that builds on the VM (default ~/TortoiseBots-audit/tools/vmtest.sh); VMTEST_HOST is its host
+#   VMTEST            the vmtest.sh that builds on the VM (default ~/tools/vmtest.sh); VMTEST_HOST is its host
 #
 # The setup this replaces (about 30 calls, ~11 min) is the `prepare` block of dungeon_run: `.bot add` for the bots that are offline, a fresh
 # instance (teleport out, leave the old group, `.instance unbind all` per bot by name and for the agent), `.gm visible off`; then the
@@ -72,8 +72,8 @@ TANK=${TANK:-$LEAD}
 HEALER=${HEALER:-Lcpriest}
 MAX_MIN=${MAX_MIN:-90}
 POLL_S=${POLL_S:-30}
-VMTEST=${VMTEST:-$HOME/TortoiseBots-audit/tools/vmtest.sh}
-VM=${VMTEST_HOST:-yulon-ubuntu2}
+VMTEST=${VMTEST:-$HOME/tools/vmtest.sh}
+VM=${VMTEST_HOST:-testvm}
 MODE=${MODE:-commander} BRAIN= ROTATION= ROLE=
 FRESH=true FROM_LEG=0 PULL_GROUP= HAVE_ITEMS= START_HERE=0 PULLTEST= FORCE_START=0 RELOGIN=0 LOGOUT=0 PRINT=0 HIRE=0 REHIRE=0 LEVEL=
 COMPOSITION=${COMPOSITION:-} KEEP_LOOT=0

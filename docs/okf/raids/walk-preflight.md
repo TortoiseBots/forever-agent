@@ -36,7 +36,7 @@ turtle-agent walk-preflight [--server NAME]... [--binary PATH] [--json] <walk-di
 
 | Flag | Default | What it does | Example |
 |---|---|---|---|
-| `--server NAME` | every server | Keep only the commands of these servers (repeatable, or a comma list). A named server with no command is a failure, so a typo does not silently pass. | `--server m910q` |
+| `--server NAME` | every server | Keep only the commands of these servers (repeatable, or a comma list). A named server with no command is a failure, so a typo does not silently pass. | `--server <server>` |
 | `--binary PATH` | this executable | The turtle-agent to check for a command that names none: every `targets.txt` line, and a `cmd-*.txt` line whose binary is the bare name `turtle-agent`. A command that names its own path keeps it. Without the flag the preflight checks its own executable, exactly the binary `raid-autopilot` launches without its own `--binary`. | `--binary ~/ta-1111a-bin/turtle-agent` |
 | `--json` | off | Print the report as one JSON object (`dir`, `results[]` with `check`, `status`, `subject`, `detail`, `fix`). | `--json` |
 | `<walk-dir>` | required | The walk directory: the commands are resolved and read from here, and relative paths are resolved against it. | `~/walks/zg38` |
@@ -89,9 +89,9 @@ the name in the owner's ssh config, while realmd may carry a NAT address only th
 ## Output
 
 ```
-OK   1 binary         /home/perzi/ta-zg17-bin/turtle-agent: turtle-agent 0.1.0 (commit 35c7dc2f92bd)
-FAIL 4 instance cap   m910q (/home/perzi/ta-zg17-bin/turtle-agent): this binary would use 5, but instance-cap-per-account.json says 30 for m910q -- fix: use a binary that reads instance-cap-per-account.json (or pass --instance-cap-per-account)
-FAIL 5 lease          cmd-a.txt m910q/2: held by zg38-jx6 since 00:34:02Z, expires 06:04:02Z (agent pid 3607035 running) -- fix: wait for the holder or run teardown on its dir
+OK   1 binary         ~/ta-zg17-bin/turtle-agent: turtle-agent 0.1.0 (commit 35c7dc2f92bd)
+FAIL 4 instance cap   <server> (~/ta-zg17-bin/turtle-agent): this binary would use 5, but instance-cap-per-account.json says 30 for <server> -- fix: use a binary that reads instance-cap-per-account.json (or pass --instance-cap-per-account)
+FAIL 5 lease          cmd-a.txt <server>/2: held by zg38-jx6 since 00:34:02Z, expires 06:04:02Z (agent pid 3607035 running) -- fix: wait for the holder or run teardown on its dir
 WARN 7 plan           zul_gurub: the plan was edited 2026-11-05 00:11, after the export 2026-11-01 03:00 -- fix: export the plan again (turtle-agent plan-export) and redeploy it
 ```
 

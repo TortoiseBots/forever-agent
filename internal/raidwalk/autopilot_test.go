@@ -10,9 +10,9 @@ var autoNow = time.Date(2026, 11, 4, 21, 0, 0, 0, time.UTC)
 
 // walk37Targets is a targets file in the shape the autopilot documents.
 const walk37Targets = `# ZG walk 37: the raids as the worker drove them by hand
-a tortoise-test2 1 zg37-a full -- zul_gurub --dir /plans --hires /roster-best.json --sql /zg.sql
-b tortoise-test2 2 zg37-b boss:14515 -- zul_gurub --dir /plans --hires /roster.json --sql /zg.sql --from step 405
-c tortoise-test2 5 zg37-c boss:14507 -- zul_gurub --dir /plans --hires /roster-guide.json --sql /zg.sql
+a test2 1 zg37-a full -- zul_gurub --dir /plans --hires /roster-best.json --sql /zg.sql
+b test2 2 zg37-b boss:14515 -- zul_gurub --dir /plans --hires /roster.json --sql /zg.sql --from step 405
+c test2 5 zg37-c boss:14507 -- zul_gurub --dir /plans --hires /roster-guide.json --sql /zg.sql
 `
 
 func TestParseAutoTargets(t *testing.T) {

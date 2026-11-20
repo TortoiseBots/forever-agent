@@ -19,10 +19,10 @@ func leaseTestSlots(t *testing.T) string {
 	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	table := `{"version":1,"servers":[{"name":"m910q","realmd":"100.78.24.50:3724","slots":[
+	table := `{"version":1,"servers":[{"name":"test1","realmd":"100.78.24.50:3724","slots":[
 		{"id":"1","account":"TAGENT1","character":"Gbmage","port":18771,"settings_from":"SRC"},
 		{"id":"2","account":"HARNESSC","character":"Glacienne","port":18769,"settings_from":"SRC"},
-		{"id":"3","reserved":"owner rule: never slot 3 on m910q"},
+		{"id":"3","reserved":"owner rule: never slot 3 on test1"},
 		{"id":"4","account":"TAGENT2","character":"Tacmdaron","port":18774,"settings_from":"SRC"}]}]}`
 	table = strings.ReplaceAll(table, "SRC", src)
 	path := filepath.Join(dir, "slots.json")
@@ -34,11 +34,11 @@ func leaseTestSlots(t *testing.T) string {
 
 func TestLeaseAcquirePrintsTheExactLine(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	code, out, errOut := runCLI("lease", "acquire", "m910q", "--slot", "4", "--holder", "w-brd", "--slots", slotsPath)
+	code, out, errOut := runCLI("lease", "acquire", "test1", "--slot", "4", "--holder", "w-brd", "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
-	if !strings.HasPrefix(out, "leased m910q/4 to w-brd until ") {
+	if !strings.HasPrefix(out, "leased test1/4 to w-brd until ") {
 		t.Fatalf("stdout %q", out)
 	}
 	if !strings.Contains(out, ": account TAGENT2, character Tacmdaron, port 18774, lease ") {
@@ -55,50 +55,50 @@ func TestLeaseAcquirePrintsTheExactLine(t *testing.T) {
 
 func TestLeaseAcquireNeedsSlotOrAny(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--holder", "w-a", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease acquire: pass --slot ID or --any") {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--holder", "w-a", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease acquire: pass --slot ID or --any") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
-	if code, _, _ := runCLI("lease", "acquire", "m910q", "--slot", "1", "--any", "--holder", "w-a", "--slots", slotsPath); code != exitUsage {
+	if code, _, _ := runCLI("lease", "acquire", "test1", "--slot", "1", "--any", "--holder", "w-a", "--slots", slotsPath); code != exitUsage {
 		t.Fatalf("code %d, want usage", code)
 	}
 }
 
 func TestLeaseRefusalExits15(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	if code, _, _ := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
+	if code, _, _ := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
 		t.Fatalf("acquire a: %d", code)
 	}
-	code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-b", "--slots", slotsPath)
+	code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-b", "--slots", slotsPath)
 	if code != exitSlotRefused || !strings.HasPrefix(strings.TrimSpace(errOut), "lease: ") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "3", "--holder", "w-b", "--slots", slotsPath); code != exitSlotRefused {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "3", "--holder", "w-b", "--slots", slotsPath); code != exitSlotRefused {
 		t.Fatalf("reserved: code %d stderr %q", code, errOut)
 	}
 }
 
 func TestLeaseRenewReleaseRoundTrip(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
 		t.Fatalf("acquire: %d %q", code, errOut)
 	}
-	id := leaseFileID(t, slotsPath, "m910q", "1")
-	code, out, errOut := runCLI("lease", "renew", "m910q", "1", "--holder", "w-a", "--lease-id", id, "--slots", slotsPath)
-	if code != exitOK || !strings.HasPrefix(out, "renewed m910q/1 for w-a until ") {
+	id := leaseFileID(t, slotsPath, "test1", "1")
+	code, out, errOut := runCLI("lease", "renew", "test1", "1", "--holder", "w-a", "--lease-id", id, "--slots", slotsPath)
+	if code != exitOK || !strings.HasPrefix(out, "renewed test1/1 for w-a until ") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errOut)
 	}
-	if code, _, errOut := runCLI("lease", "renew", "m910q", "1", "--holder", "w-a", "--slots", slotsPath); code != exitUsage {
+	if code, _, errOut := runCLI("lease", "renew", "test1", "1", "--holder", "w-a", "--slots", slotsPath); code != exitUsage {
 		t.Fatalf("renew without id: code %d stderr %q", code, errOut)
 	}
-	code, out, errOut = runCLI("lease", "release", "m910q", "1", "--holder", "w-a", "--lease-id", "bogus-id", "--slots", slotsPath)
+	code, out, errOut = runCLI("lease", "release", "test1", "1", "--holder", "w-a", "--lease-id", "bogus-id", "--slots", slotsPath)
 	if code != exitSlotRefused {
 		t.Fatalf("release with wrong id: code %d stdout %q stderr %q", code, out, errOut)
 	}
-	code, out, errOut = runCLI("lease", "release", "m910q", "1", "--holder", "w-a", "--lease-id", id, "--slots", slotsPath)
-	if code != exitOK || strings.TrimSpace(out) != "released m910q/1 (was w-a)" {
+	code, out, errOut = runCLI("lease", "release", "test1", "1", "--holder", "w-a", "--lease-id", id, "--slots", slotsPath)
+	if code != exitOK || strings.TrimSpace(out) != "released test1/1 (was w-a)" {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errOut)
 	}
-	if code, _, _ := runCLI("lease", "release", "m910q", "1", "--holder", "w-a", "--force", "--slots", slotsPath); code != exitSlotRefused {
+	if code, _, _ := runCLI("lease", "release", "test1", "1", "--holder", "w-a", "--force", "--slots", slotsPath); code != exitSlotRefused {
 		t.Fatalf("release of a free slot with --force and no id: code %d, want %d", code, exitSlotRefused)
 	}
 }
@@ -122,20 +122,20 @@ func leaseFileID(t *testing.T, slotsPath, server, slot string) string {
 
 func TestLeaseTTLAndHolderRefused(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-a", "--ttl", "0", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease: --ttl 0: 1 to 720 minutes") {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-a", "--ttl", "0", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease: --ttl 0: 1 to 720 minutes") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "bad holder!", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease: --holder must be 1-64 letters, digits, . _ -") {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "bad holder!", "--slots", slotsPath); code != exitUsage || !strings.Contains(errOut, "lease: --holder must be 1-64 letters, digits, . _ -") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 }
 
 func TestLeaseListFormatOmitsAccounts(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", "w-a", "--slots", slotsPath); code != exitOK {
 		t.Fatalf("acquire: %d %q", code, errOut)
 	}
-	code, out, errOut := runCLI("lease", "list", "m910q", "--slots", slotsPath)
+	code, out, errOut := runCLI("lease", "list", "test1", "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -151,13 +151,13 @@ func TestLeaseListFormatOmitsAccounts(t *testing.T) {
 	if !strings.Contains(lines[0], "held by w-a") {
 		t.Fatalf("line 1: %q", lines[0])
 	}
-	if !strings.Contains(lines[2], "reserved: owner rule: never slot 3 on m910q") {
+	if !strings.Contains(lines[2], "reserved: owner rule: never slot 3 on test1") {
 		t.Fatalf("line 3: %q", lines[2])
 	}
 	if !strings.HasSuffix(strings.TrimSpace(lines[3]), "free") {
 		t.Fatalf("line 4: %q", lines[3])
 	}
-	code, out, _ = runCLI("lease", "list", "m910q", "--json", "--slots", slotsPath)
+	code, out, _ = runCLI("lease", "list", "test1", "--json", "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("json list: %d", code)
 	}

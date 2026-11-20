@@ -254,7 +254,7 @@ func newPlaceFixture(t *testing.T) (*fixture, *placeToolkit) {
 	return f, p
 }
 
-// Walk 39 Jeklik: the toolkit answered `q floor` 0.0 at steps 44/46/48 (m910q and test2), which placeFloor read as a
+// Walk 39 Jeklik: the toolkit answered `q floor` 0.0 at steps 44/46/48 (test1 and test2), which placeFloor read as a
 // real floor ("the start step's floor is 0.0, not 130.7") and the placement failed every time. 0.0 is the toolkit's
 // "unknown" (TT.floorNear answers 0 when the height lookup finds nothing): it retries once, then takes the plan's z
 // of the recorded walk row, with a note, instead of failing.
@@ -793,7 +793,7 @@ func TestPlaceNotAtTheStartRetriesInTheSameInstance(t *testing.T) {
 
 // Walk 37: each retried placement that fails burns nothing while the walk's own budget lasts; after placeTryLimit tries
 // in the same instance the walk exits exitRaidWalkPlaceFailed, which walk-super stops on (a fresh instance per
-// exit-18 restart locked m910q for an hour).
+// exit-18 restart locked test1 for an hour).
 func TestPlaceGivesUpAfterTheTryLimit(t *testing.T) {
 	f, p := newPlaceFixture(t)
 	f.opts.noPlaceRetreat = false
@@ -2206,7 +2206,7 @@ func TestPlaceQuietRereadsMovingPatrolsTwiceThenFails(t *testing.T) {
 }
 
 // F1 (D1): a roamer the cut join read missed and that stands beyond the landing reach is ignored, with a note
-// (walk 24 m910q-marli: three roamers at 65.6 / 67.4 / 77.2 yd, none of them near the raid's landing).
+// (walk 24 test1-marli: three roamers at 65.6 / 67.4 / 77.2 yd, none of them near the raid's landing).
 func TestPlaceQuietIgnoresMissingRoamerBeyondReach(t *testing.T) {
 	f, p := newPlaceFixture(t)
 	rows, plan := placePlanRows(t)
@@ -2706,7 +2706,7 @@ func TestPlaceQuietTwoExtraRounds(t *testing.T) {
 	}
 }
 
-// F4 (D6): a third owned unit inside the landing reach blocks once the two rounds are spent (walk 24 m910q-ven).
+// F4 (D6): a third owned unit inside the landing reach blocks once the two rounds are spent (walk 24 test1-ven).
 func TestPlaceQuietThirdOwnedUnitInReachBlocks(t *testing.T) {
 	f, p := newPlaceFixture(t)
 	rows, plan := placePlanRows(t)

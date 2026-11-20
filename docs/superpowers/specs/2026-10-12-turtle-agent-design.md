@@ -4,7 +4,7 @@ Date: 2026-10-12. Status: draft for owner review.
 Owner decisions (2026-10-12): purpose = bot testing; route = our own small Go client (not a fork); MVP = login + chat/GM,
 party + combat log, move + attack; interface = local JSON-RPC + thin Python wrapper in wowharness; repo =
 github.com/pjerra/turtle-agent (private). Built even though another Turtle port of agent-wow exists (owner's call).
-Background: spike report `~/TortoiseBots-audit/spike-agent-wow.md` (agent-wow `5ef4916` vs core `~/tortoise-wow` `5d79486`).
+Background: spike report `spike-agent-wow.md` (agent-wow `5ef4916` vs core `~/tortoise-wow` `5d79486`).
 
 ## Goal
 
@@ -13,7 +13,7 @@ changes), so test agents can play next to the TortoiseBots bots and see what the
 Windows laptop, no ReloadUI flushes and no screenshots. It replaces the real-client harness for most bot tests; the real
 client stays for visual checks.
 
-**Done means:** the harness MVP runs end to end headless on m910q: log in Harnessb, `.gm off`/`.gm visible on`, hire or
+**Done means:** the harness MVP runs end to end headless on a test server: log in Harnessb, `.gm off`/`.gm visible on`, hire or
 invite 2 bots, target and attack a mob, and return the parsed combat log plus what each bot did — the same report the
 real-client harness produces today.
 
@@ -72,14 +72,14 @@ Server packets → `worldconn` (decrypt, frame) → `session` loop → handlers 
 ## Testing
 
 - **Unit tests** on recorded packets: SRP vectors, XOR cipher round trip, framing, char enum, update-object blocks, every
-  combat event kind. Packet recordings are taken from m910q during step 1 (a capture mode writes raw decrypted packets
+  combat event kind. Packet recordings are taken from a test server during step 1 (a capture mode writes raw decrypted packets
   to a file) and checked in as fixtures (no credentials in them).
-- **Live tests per milestone** against m910q (the owner's test server): each milestone has a scripted check (below).
+- **Live tests per milestone** against a test server (the owner's test server): each milestone has a scripted check (below).
 - **End-to-end:** the harness MVP scenario, compared with a real-client run of the same scenario.
 
 ## Milestones (estimates are guesses from the spike)
 
-1. Login → in world → clean logout on m910q, with a packet capture of a session (2–3 days).
+1. Login → in world → clean logout on a test server, with a packet capture of a session (2–3 days).
 2. Chat, whispers, GM and `.bot` commands in and out (½–1 day).
 3. Party: invite bots, accept, member stats (½ day).
 4. Object store: units around the player with HP, target, combat state (2–3 days).
@@ -94,7 +94,7 @@ Server packets → `worldconn` (decrypt, frame) → `session` loop → handlers 
   `SMSG_ADDON_INFO`.
 - **Anticheat/Warden:** `Warden.WinEnabled = 0` in the template; ignoring Warden is safe only while the timeout kick
   stays disabled. Movement anticheat could flag synthetic movement; v1 uses GM teleport for long moves.
-- **PIN:** not a problem on m910q (`ForcePinAccountRank = 10`, checked 2026-10-12).
+- **PIN:** not a problem on a test server (`ForcePinAccountRank = 10`, checked 2026-10-12).
 - **SRP edge case** (~1/256) handled by one retry.
 - **Toolchain:** Go is not installed on the WSL machine yet; agent-wow targets Go 1.27.1.
 

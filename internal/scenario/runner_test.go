@@ -418,7 +418,7 @@ func TestRunnerRPCErrorAborts(t *testing.T) {
 // about the server.
 func TestRunnerDBErrorIsAnErrorNotAFail(t *testing.T) {
 	f := parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
-		"db":{"host":"m910q","container":"tortoise-db"},
+		"db":{"host":"test1","container":"tortoise-db"},
 		"steps":[{"do":"check_db","table":"tw_world.lft_user_groups","rows":0}]}`)
 	a := &fakeCaller{}
 	clk := newFakeClock()
@@ -434,7 +434,7 @@ func TestRunnerDBErrorIsAnErrorNotAFail(t *testing.T) {
 func TestRunnerDBWithinPolls(t *testing.T) {
 	mk := func() *File {
 		return parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
-			"db":{"host":"m910q","container":"tortoise-db"},
+			"db":{"host":"test1","container":"tortoise-db"},
 			"steps":[{"do":"check_db","table":"tw_world.lft_user_groups","rows":0,"within_s":15}]}`)
 	}
 	a := &fakeCaller{}
