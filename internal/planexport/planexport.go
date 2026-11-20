@@ -45,6 +45,11 @@ const (
 	KindUseOn = "use_on"
 )
 
+// ServerForever is the alt_entries key of the server the Forever export targets: a plan's ObjectRef.AltEntries["forever"] is
+// the entry that server uses for the object at the same position (the Deadmines Heavy Doors: 17153 in the base plan, 16400 and
+// 16399 there). plan-export --forever writes the rows with it; every other reader keeps the base entry.
+const ServerForever = "forever"
+
 // Flags of ai_dungeon_step.flags.
 const (
 	FlagAmbush   = 1
@@ -273,6 +278,10 @@ type Options struct {
 	// returns the via points that keep the run leader's own navmesh path (the server's, which does not know the boxes) out of them,
 	// none when that path is already clear. An error means a hop that cannot be made safe: the export fails.
 	Route func(mapID uint32, from, to dungeon.Point) ([]dungeon.Point, error)
+	// Server, when set, names the server whose object entries the rows carry: an object row's entry is the ref's AltEntries value
+	// for that server when it has one, the plan's own entry otherwise. Empty: every row carries the plan's entry, as the run
+	// leader's export must (its server is the one the plan was written from). BuildForever sets ServerForever.
+	Server string
 }
 
 // ErrCompanionsLoot is the refusal of a plan with a leg whose companions_loot is false (see Options.DropCompanionsLoot).
@@ -718,9 +727,9 @@ func (b *builder) hold(h *dungeon.Hold, entries []uint32, comment string) error 
 		if state < 0 {
 			return fmt.Errorf("hold object: state %q is none of %v", h.State, dungeon.ObjectStates)
 		}
-		entry = h.Object.Entry
+		entry = b.objectEntry(*h.Object)
 		param, flags = uint32(state), FlagDoneObject
-		done = fmt.Sprintf("object %d is %s", h.Object.Entry, h.State)
+		done = fmt.Sprintf("object %d is %s", entry, h.State)
 	} else if h.Value != nil {
 		// A script value (Zul'Farrak's pyramid phase), not an encounter state: flag 8 alone, so the run leader reads no FAIL or reset
 		// into it and its loader takes a param above 4 (DungeonPlanPolicy.h NormalizePlanStep).
@@ -805,6 +814,17 @@ func refPoint(r dungeon.ObjectRef) (x, y, z float32) {
 	return 0, 0, 0
 }
 
+// objectEntry is the entry an object row carries for a ref: the entry the export's server uses for the object at that position
+// (ObjectRef.AltEntries, Options.Server) when it names one, the plan's own entry otherwise.
+func (b *builder) objectEntry(r dungeon.ObjectRef) uint32 {
+	if b.opt.Server != "" {
+		if alt := r.AltEntries[b.opt.Server]; alt != 0 {
+			return alt
+		}
+	}
+	return r.Entry
+}
+
 func itemEntry(i *dungeon.ItemRef) uint32 {
 	if i == nil {
 		return 0
@@ -828,7 +848,7 @@ func (b *builder) carrierChest(si int, lo *dungeon.LootObject) {
 		b.move(*lo.Stand, false, "stand")
 	}
 	x, y, z := refPoint(lo.ObjectRef)
-	b.add(StepRow{Kind: KindLoot, Entry: lo.Entry, X: x, Y: y, Z: z, Item: itemEntry(lo.ExpectItem), Flags: FlagGoneIsDone,
+	b.add(StepRow{Kind: KindLoot, Entry: b.objectEntry(lo.ObjectRef), X: x, Y: y, Z: z, Item: itemEntry(lo.ExpectItem), Flags: FlagGoneIsDone,
 		Comment: clip(itemComment("loot", lo.ExpectItem), MaxComment)})
 	if left := b.plan.Legs[b.leg_].LeftoverEntries; len(left) > 0 {
 		b.add(StepRow{Kind: KindPull, X: x, Y: y, Z: z, Radius: carrierSweepRadiusYd, Entries: uniq(left),
@@ -843,6 +863,7 @@ func (b *builder) step(list string, si int, st dungeon.Step) error {
 	switch {
 	case st.UseObject != nil:
 		u := st.UseObject
+		entry := b.objectEntry(u.ObjectRef)
 		if u.ViaItem {
 			// The item used ON the object: the run leader's use_on row (TortoiseBots 2026-10-21), the object named by its point.
 			if u.RequiresItem == nil || u.Near == nil {
@@ -851,8 +872,8 @@ func (b *builder) step(list string, si int, st dungeon.Step) error {
 			if u.Stand != nil {
 				b.move(*u.Stand, false, "stand")
 			}
-			b.add(StepRow{Kind: KindUseOn, Entry: u.Entry, X: u.Near.X, Y: u.Near.Y, Z: u.Near.Z, Item: u.RequiresItem.Entry,
-				Comment: clip("use "+u.RequiresItem.String()+" on object "+strconv.Itoa(int(u.Entry)), MaxComment)})
+			b.add(StepRow{Kind: KindUseOn, Entry: entry, X: u.Near.X, Y: u.Near.Y, Z: u.Near.Z, Item: u.RequiresItem.Entry,
+				Comment: clip("use "+u.RequiresItem.String()+" on object "+strconv.Itoa(int(entry)), MaxComment)})
 			return nil
 		}
 		if u.Stand != nil {
@@ -860,20 +881,20 @@ func (b *builder) step(list string, si int, st dungeon.Step) error {
 		}
 		x, y, z := refPoint(u.ObjectRef)
 		if p := u.Proof; p != nil {
-			entry, flags, what := p.GameObject, uint32(0), "object"
+			proof, flags, what := p.GameObject, uint32(0), "object"
 			if p.Creature != 0 {
-				entry, flags, what = p.Creature, uint32(FlagProofCreature), "creature"
+				proof, flags, what = p.Creature, uint32(FlagProofCreature), "creature"
 			}
-			b.add(StepRow{Kind: KindOpenProof, Entry: u.Entry, X: x, Y: y, Z: z, Item: itemEntry(u.RequiresItem), Radius: p.Radius,
-				Flags: flags, Entries: []uint32{entry},
-				Comment: clip(fmt.Sprintf("%s; done when %s %d is up within %g yd", itemComment("open", u.RequiresItem), what, entry, p.Radius), MaxComment)})
+			b.add(StepRow{Kind: KindOpenProof, Entry: entry, X: x, Y: y, Z: z, Item: itemEntry(u.RequiresItem), Radius: p.Radius,
+				Flags: flags, Entries: []uint32{proof},
+				Comment: clip(fmt.Sprintf("%s; done when %s %d is up within %g yd", itemComment("open", u.RequiresItem), what, proof, p.Radius), MaxComment)})
 		} else {
-			b.add(StepRow{Kind: KindOpen, Entry: u.Entry, X: x, Y: y, Z: z, Item: itemEntry(u.RequiresItem), Comment: itemComment("open", u.RequiresItem)})
+			b.add(StepRow{Kind: KindOpen, Entry: entry, X: x, Y: y, Z: z, Item: itemEntry(u.RequiresItem), Comment: itemComment("open", u.RequiresItem)})
 		}
 	case st.LootObject != nil:
 		l := st.LootObject
 		x, y, z := refPoint(l.ObjectRef)
-		b.add(StepRow{Kind: KindLoot, Entry: l.Entry, X: x, Y: y, Z: z, Item: itemEntry(l.ExpectItem), Comment: itemComment("loot", l.ExpectItem)})
+		b.add(StepRow{Kind: KindLoot, Entry: b.objectEntry(l.ObjectRef), X: x, Y: y, Z: z, Item: itemEntry(l.ExpectItem), Comment: itemComment("loot", l.ExpectItem)})
 	case st.UseItem != nil:
 		u := st.UseItem
 		b.add(StepRow{Kind: KindUseItem, Entry: u.Entry, Item: itemEntry(u.ExpectItem), Param: itemEntry(u.RequiresItem), Comment: clip("use "+nameOr(u.Name, fmt.Sprintf("item %d", u.Entry))+madeNote(u.ExpectItem), MaxComment)})
@@ -940,7 +961,8 @@ func (b *builder) wait(w *dungeon.WaitFor) error {
 			return fmt.Errorf("wait_for.gameobject: state %q is none of %v", g.State, dungeon.ObjectStates)
 		}
 		x, y, z := refPoint(g.ObjectRef)
-		base := "wait for object " + strconv.Itoa(int(g.Entry)) + " " + g.State
+		entry := b.objectEntry(g.ObjectRef)
+		base := "wait for object " + strconv.Itoa(int(entry)) + " " + g.State
 		flags := uint32(0)
 		if g.GoneOK {
 			// A script opens the object and removes it some steps later (Shadowfang Keep's Courtyard Door): the module's gone-is-done
@@ -953,7 +975,7 @@ func (b *builder) wait(w *dungeon.WaitFor) error {
 			timeout = dungeon.HoldDoorWaitS
 			base += fmt.Sprintf(" (at most %d s: the hold before it ends with the event done)", timeout)
 		}
-		b.add(StepRow{Kind: KindWaitObject, Entry: g.Entry, X: x, Y: y, Z: z, Param: uint32(param), Flags: flags, TimeoutS: timeout, Comment: clip(waitComment(base, w), MaxComment)})
+		b.add(StepRow{Kind: KindWaitObject, Entry: entry, X: x, Y: y, Z: z, Param: uint32(param), Flags: flags, TimeoutS: timeout, Comment: clip(waitComment(base, w), MaxComment)})
 	case w.HostilesGone != nil:
 		h := w.HostilesGone
 		// A wait with no centre is about the party's own spot: the last point the leg put it at.

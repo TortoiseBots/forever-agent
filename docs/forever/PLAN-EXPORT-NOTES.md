@@ -110,13 +110,24 @@ over 60 yd gain move rows, so the step count is higher.
 | `legs[].boss.tactics` | dropped: no tactic rows; the module's own boss handling applies |
 | `legs[].needs_walk`, `pull_groups[].needs_walk`, `boss.needs_walk` | dropped: the point is written as given |
 | `legs[].notes`, `legs[].rest`, `pull_groups[].equiv`, `no_cc`, `summoned_kill_first`, `pull_ceiling`, `watchdog` | dropped with a note |
-| steps, holds, loot, items, gossip, area triggers, phase entries, GM crosses, leftovers | refused by field name (see below) |
-| `legs[].steps[].use_object.alt_entries` (and `loot_object`, `wait_for.gameobject`) | carried by `plan-check --forever`: the object lint reads the checked server's entry; the rows carry no objects, so the export ignores it |
+| `legs[].steps[].use_object` | carried: an `open` row, an `open_proof` row when the use carries a `proof`, a `use_on` row when it is `via_item` |
+| `legs[].steps[].loot_object` | carried: a `loot` row (entry, near point, `expect_item`) |
+| `legs[].steps[].wait_for.gameobject` | carried: a `wait_object` row (entry, near point, the state's `param`, `gone_ok` as flag 256, the timeout) |
+| `legs[].steps[].wait_for.hostiles_gone` | carried: a `wait_clear` row (centre, radius, timeout) |
+| `legs[].steps[].use_object.alt_entries` (and `loot_object`, `wait_for.gameobject`) | the row names the entry this server uses (the `forever` value) where the plan carries one; every other reader keeps the plan's own entry |
+| steps, holds, items, gossip, area triggers, phase entries, GM crosses, leftovers | refused by field name (see below) |
 
-Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_object`, `wait_for`, `loot_object`, `use_item`,
-`ritual`, `gossip`, `area_trigger`, the same under `after_boss`, `legs[].pull_groups[].hold`, `legs[].boss.hold`,
-`legs[].boss.phase_entries`, `legs[].boss.loot_item`, `legs[].boss.summon_open_step`, `legs[].leftover_entries` and
-`legs[].via[].gm_cross`. A refused plan writes no file; every refused field is named on stderr (or in the report).
+Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_item`, `ritual`, `gossip`, `area_trigger`, a
+`wait_for` that is a hold or a unit wait (the module's plan table has no `hold` or unit-wait row), the same under
+`after_boss`, `legs[].pull_groups[].hold`, `legs[].boss.hold`, `legs[].boss.phase_entries`, `legs[].boss.loot_item`,
+`legs[].boss.summon_open_step`, `legs[].leftover_entries` and `legs[].via[].gm_cross`. A refused plan writes no file;
+every refused field is named on stderr (or in the report).
+
+The object rows are the module's own step rows (`kind`, `entry`, the point, `item`, `param`, `timeout_s`, `entries`):
+Deadmines exports its 6 `wait_object`, 3 `open`, 2 `wait_clear` and 1 `loot` row, the two doors its own server opens
+by 17153 written as 16400 (Mast Room Door) and 16399 (Foundry Door). Wailing Caverns has no object step and its
+export is byte-identical to the one before the object rows landed
+(`internal/planexport/testdata/forever/wailing_caverns.sql`).
 
 ## Tests
 
@@ -124,8 +135,11 @@ Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_object`, `wait
   from the plan, each refusal, string escaping (quote, backslash, newline, non-ASCII), fixed three-decimal numbers
   with no exponent and no negative zero, a large export followed by a smaller one of the same plan (the second
   removes the first's plan rows and no boss row), two plans on one map applied in both orders (both plans' boss rows
-  survive), an empty boss name leaving an existing display name alone, and a round trip through the package's SQL
-  reader that understands the upsert.
+  survive), an empty boss name leaving an existing display name alone, a round trip through the package's SQL
+  reader that understands the upsert, every object-backed step kind carried as its row, Deadmines' object rows on
+  the Forever server's entries (16400/16399, the alt entries belong to this export alone), Wailing Caverns'
+  unchanged golden export, and a coordinate on the columns' halfway point (-93.3125 reads back) with a moved row
+  still failing.
 - `cmd/forever-agent/plan_export_forever_test.go`: the command's export, its report, its refusal, the file name, and
   the `--force` rule.
 - `internal/worldspawn/foreverspawns_test.go` and `foreverspawns_objects_test.go`: the spawn-list TSV `plan-check --forever --spawns` reads (six columns by default; a seventh `kind` column marks game-object rows: `creature`, or `object` for a door, lever or chest).
