@@ -247,13 +247,39 @@ func TestPumpDedupeAndDropped(t *testing.T) {
 	}
 }
 
-// TestRunDryScoresCard runs one dry repeat end to end and scores it.
+// TestRunDryScoresCard runs one dry trial and scores the whole card: the
+// run dir gets RUN.json + card files with no FAIL and no INVALID.
 func TestRunDryScoresCard(t *testing.T) {
+	fake := newFakeServe(t)
+	fake.status = map[string]any{"state": "in_world", "guid": "0x0000000000000001",
+		"health": 1189, "max_health": 1189, "power": 72, "max_power": 1000,
+		"mono_ms": 1000, "x": -11926, "y": -1283, "z": 85}
+	out := t.TempDir()
+	runner := &Runner{Out: out, Server: "s1", Label: "dry",
+		Client: NewClient(fake.rpc()), Ledger: NewLedger(filepath.Join(out, "ledger.jsonl")),
+		Setup: &DrySetup{}, Situation: &DrySituation{FightSecs: 1}}
 	trial := map[string]any{"id": "priest-holy-heal-latency", "min_valid_s": 0,
 		"rules": []any{map[string]any{"id": "R", "desc": "d", "source": "s",
 			"expect_today": "?", "pass_if": ">= 0",
 			"check": map[string]any{"metric": "count", "where": map[string]any{"kind": "cast"}}}}}
-	_ = trial
+	if err := writeTrialFile(out, trial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTrial(context.Background(), trialFilePath(out, "priest-holy-heal-latency"), 2); err != nil {
+		t.Fatalf("RunTrial: %v", err)
+	}
+	docs, err := ScoreCard(out)
+	if err != nil {
+		t.Fatalf("ScoreCard: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("card trials = %d, want 1", len(docs))
+	}
+	for _, name := range []string{"RUN.json", "card.md", "card.json"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
 }
 
 // TestRepeatLostOnDisconnect checks the collector marks the session lost.
