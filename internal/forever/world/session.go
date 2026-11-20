@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
@@ -76,7 +77,10 @@ type Options struct {
 	// Round 6: death-check. It settles, waits for the character to die (a console command or a mob does that; the
 	// client never kills itself), then releases, finds the corpse, runs back and reclaims it, or waits for a
 	// resurrection offer and accepts it (AcceptResurrect), or uses the spirit healer (UseSpiritHealer).
-	DeathCheck      bool
+	DeathCheck bool
+	// Act is the `forever act` step script (forever-world-r0). Nil runs none of it; a non-nil script runs instead
+	// of the stay, then the command logs out like every other one-shot mode.
+	Act             []ActStep
 	AcceptResurrect bool
 	// AcceptResurrectFrom is --accept-resurrect-from NAME: with AcceptResurrect it answers only an offer whose
 	// offerer the model knows by that name. Empty accepts an offer from any GUID, which is the default: the server
@@ -526,6 +530,9 @@ type session struct {
 	serveRT *serveRuntime
 	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
 	loot *lootWatch
+	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
+	actMenu  *npc.GossipMessage
+	actQuest *npc.QuestGiverQuestList
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -1103,6 +1110,12 @@ func (s *session) enter(ctx context.Context) error {
 	}
 	if s.opts.WalkCheck {
 		if err := s.walkCheck(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.Act != nil {
+		if err := s.act(ctx, s.opts.Act); err != nil {
 			return err
 		}
 		return s.logout(ctx)
@@ -1878,9 +1891,14 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		return s.handleParty(p)
 	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
 		wire.SMSGResurrectRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
-		wire.SMSGStandStateUpdate, wire.SMSGGossipMessage, wire.SMSGMoveSetRunSpeed,
+		wire.SMSGStandStateUpdate, wire.SMSGMoveSetRunSpeed,
 		wire.SMSGMoveSetSwimSpeed, wire.SMSGMoveSetWaterWalk, wire.SMSGMoveSetLandWalk:
 		return s.handleDeath(p)
+	// The act round's NPC answers (forever-world-r0, npc.go): the menu lands on the runner's wait here, and the same
+	// handler hands it to the spirit healer's flow.
+	case wire.SMSGGossipMessage, wire.SMSGGossipComplete, wire.SMSGGossipOptionNPCInteract,
+		wire.SMSGNPCInteractionOpenResult, wire.SMSGQuestGiverQuestList:
+		return s.handleNPC(p)
 	// Round A7's handlers live in mapchange.go; this is their one registration line.
 	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
