@@ -295,8 +295,15 @@ func WriteForeverDir(t testing.TB, mapID uint32, polys []Poly, flags []uint16) s
 // Detour index follows the params' origin (MmapParamsForever: 0/-500/0, 533.33-yd tiles).
 func WriteForeverDirAt(t testing.TB, mapID uint32, polys []Poly, flags []uint16, x, y float32) string {
 	t.Helper()
-	return WriteForeverTiles(t, mapID, []ForeverTile{{TX: int32(y / Tile), TY: int32(x / Tile), Polys: polys, Flags: flags, AtX: x, AtY: y}})
+	return WriteForeverTiles(t, mapID, []ForeverTile{{TX: tileCoord(y), TY: tileCoord(x), Polys: polys, Flags: flags, AtX: x, AtY: y}})
 }
+
+// tileCoord is the Detour tile index of a world coordinate: the header's
+// origin is (0, -500, 0) in Detour (y, z, x), i.e. (x, y) = (0, 0) in WoW, and
+// calcTileLoc floors (DetourNavMesh.cpp). Truncation toward zero misfiles
+// every negative coordinate one tile off, and the engine then never finds
+// the polygon (route, nearest and floors all miss).
+func tileCoord(v float32) int32 { return int32(math.Floor(float64(v / Tile))) }
 
 // WriteForeverTiles writes a Forever map and the given tiles into a new temporary directory.
 func WriteForeverTiles(t testing.TB, mapID uint32, tiles []ForeverTile) string {
