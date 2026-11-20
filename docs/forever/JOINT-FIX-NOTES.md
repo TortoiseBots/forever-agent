@@ -69,7 +69,7 @@ The character the agent runs is only an outside GM observer: it is never in the 
 party keeps the module's own bot commander, and its tank leads.
 
 * `internal/forever/driver/states.go:149` — `adoptRoster` builds the party from the roster with the tank first and
-  accepts the party when a tank leads it or when the tank is the bot the run names; it refuses the observer named as
+  accepts the party when the bot the run names is its tank or its leader; it refuses the observer named as
   the commander (`observer-commander`).
 * `internal/forever/driver/states.go:384` — the entry check compares the party's map with the plan's (one instance),
   never with the observer's; PREPARE's map rule (`run.go:588`) compares the party with itself, so an observer

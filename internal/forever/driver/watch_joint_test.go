@@ -349,6 +349,27 @@ func TestWatchLeaderMustBeTheTank(t *testing.T) {
 	}
 }
 
+// TestWatchLeaderMayBeThePartyLeader: --leader may name the member that holds the party's leader flag even when it
+// is not the tank. PREPARE accepts the roster and the run starts on that member, not on the tank.
+func TestWatchLeaderMayBeThePartyLeader(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Leader = "Watchheal"
+	cfg.Party = []string{"Tank", "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
+	run, f, logs := newWatch(t, cfg)
+	f.RosterLeader = "Watchheal"
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start Watchheal"); n != 1 {
+		t.Fatalf("%d starts on the party's leader, want 1; logs:\n%s", n, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start Tank"); n != 0 {
+		t.Fatalf("%d starts on the tank, want 0", n)
+	}
+}
+
 // TestReadyNoEngineReason: the gate's own reason word for an engine-off member is noengine, and it is distinct from
 // a report that could not be read.
 func TestReadyNoEngineReason(t *testing.T) {

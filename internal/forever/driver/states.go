@@ -142,10 +142,10 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 // adoptRoster fills a watch's party from the module's roster: the tank first (so every role lookup has the tank
 // where the driver's own run keeps it), then the one healer, then the three damage dealers. The party's commander is
 // the module's own bot, outside the party; this character is only an observer and is refused if the roster names it
-// as the commander. It refuses what a run's PREPARE refuses — five members, the tank leading or the module's run
-// naming the tank, everyone online and above the entry level, the roles — and two things only a watch needs: every
-// member a host bot, and every member already commanded, because the module's start refuses a party it would have to
-// bind itself.
+// as the commander. It refuses what a run's PREPARE refuses — five members, the module's run leader being neither
+// the party's tank nor its leader, everyone online and above the entry level, the roles — and two things only a
+// watch needs: every member a host bot, and every member already commanded, because the module's start refuses a
+// party it would have to bind itself.
 func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if len(p.Members) != 5 {
 		return "roster"
@@ -192,10 +192,10 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if tank == "" || heal == "" || len(dps) != 3 {
 		return "roles"
 	}
-	// The module's run starts on the bot the watch names, and that bot must be the party's tank: the command's own
-	// start check refuses a leader that does not lead its party, so a --leader that is a healer or a dps would only
-	// be refused later by the module.
-	if !strings.EqualFold(r.cfg.Leader, tank) {
+	// The module's run starts on the bot the watch names, and the start refuses a leader that does not lead its
+	// party: the name must be the party's tank or the member that holds the party's leader flag (a healer or a dps
+	// may hold it). Any other name would only be refused later by the module, after the entry and its teleports.
+	if !strings.EqualFold(r.cfg.Leader, tank) && !strings.EqualFold(r.cfg.Leader, p.Leader) {
 		return "leader"
 	}
 	r.cfg.Party = append([]string{tank, heal}, dps...)

@@ -38,9 +38,9 @@ newest event are refused. `status all` and `stop`'s `pending=`/`stayed=` follow 
    and the tank leads. This character is only an outside GM observer: it is never a member and never the commander,
    and a roster that names it as the commander is refused at PREPARE (`observer-commander`). For a watch the roster
    is where the five names come from (the tank first, then the one healer, then three damage dealers); it refuses a
-   party that is not five host bots above the entry level, the tank leading or named as the module's run leader, and
-   every member already commanded. That last check is the module's own `not-commanded` condition, caught before the
-   entry instead of at the start. A party command is resolved by the module itself: `.tb enter party` and
+   party that is not five host bots above the entry level, a run leader that is neither the party's tank nor its
+   leader, and every member already commanded. That last check is the module's own `not-commanded` condition, caught
+   before the entry instead of at the start. A party command is resolved by the module itself: `.tb enter party` and
    `.tb tele party` answer with a `target=` line naming what they resolved (`party:commander:<name>` for the bot
    commander's party, `party:<tank>` for the tank's), and the typed layer reads that line as the success it is
    instead of refusing an answer with a record in it. The observer teleports on its own after the party is in; a
@@ -116,7 +116,7 @@ bad percent, repeated key, event kinds, out-of-sequence events, `last` below the
 | summary file | the JSON's mode and watch block, one file |
 | source tests | the two sending call sites, the run actions' classes, `watch.go` without the order send |
 | observer outside | the party in the instance and the observer outside: PREPARE passes (the party's map against the plan's), the start goes out, the end is logged |
-| bot commander | a roster led by its tank with the module's bot as commander is adopted; a party led by anyone but the tank or the run's leader is `prepare:leader`; the observer as commander is `prepare:observer-commander` |
+| bot commander | a roster led by its tank with the module's bot as commander is adopted; a party whose run leader is neither its tank nor its leader is `prepare:leader`; the observer as commander is `prepare:observer-commander` |
 | engine off | a member with `engine=no` is `prepare:noengine` with a logged not-ready line, never `blind` |
 | blind reason | a state read that keeps failing ends `blind` and the log names the read error and the end reason |
 | config refusal | the refusal before anything is sent is logged with its reason |

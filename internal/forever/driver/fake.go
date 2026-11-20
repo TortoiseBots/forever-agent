@@ -684,7 +684,16 @@ func (f *Fake) startRun(a Action) error {
 	if f.run != nil && (f.run.state == "running" || f.run.state == "paused") {
 		return &tbcmd.CommandError{Code: "already-running", Cmd: "run"}
 	}
-	if len(f.cfg.Party) == 0 || !strings.EqualFold(a.Who, f.cfg.Party[0]) {
+	if len(f.cfg.Party) == 0 {
+		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
+	}
+	// The module's run starts on the bot that leads the party; the watch also accepts the tank, whose party keeps
+	// the tank first. A start on any other bot is the module's not-leader.
+	leader := f.cfg.Party[0]
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	if !strings.EqualFold(a.Who, f.cfg.Party[0]) && !strings.EqualFold(a.Who, leader) {
 		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
 	}
 	if a.Plan != f.route.Name {
