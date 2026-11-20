@@ -17,7 +17,7 @@ forever-agent plan-export --forever --report --dir dungeons
 # navmesh cuts from the server's v16 tiles (no --mmaps: the plan's own points are written)
 forever-agent plan-export --forever --mmaps /path/to/mmaps --out forever/sql/world/ ragefire_chasm
 
-# plan-check against the same tiles and a spawn list (guid entry x y z movetype)
+# plan-check against the same tiles and a spawn list (guid entry x y z movetype [kind])
 forever-agent plan-check --forever --mmaps /path/to/mmaps --spawns rfc-spawns.tsv ragefire_chasm
 ```
 
@@ -111,6 +111,7 @@ over 60 yd gain move rows, so the step count is higher.
 | `legs[].needs_walk`, `pull_groups[].needs_walk`, `boss.needs_walk` | dropped: the point is written as given |
 | `legs[].notes`, `legs[].rest`, `pull_groups[].equiv`, `no_cc`, `summoned_kill_first`, `pull_ceiling`, `watchdog` | dropped with a note |
 | steps, holds, loot, items, gossip, area triggers, phase entries, GM crosses, leftovers | refused by field name (see below) |
+| `legs[].steps[].use_object.alt_entries` (and `loot_object`, `wait_for.gameobject`) | carried by `plan-check --forever`: the object lint reads the checked server's entry; the rows carry no objects, so the export ignores it |
 
 Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_object`, `wait_for`, `loot_object`, `use_item`,
 `ritual`, `gossip`, `area_trigger`, the same under `after_boss`, `legs[].pull_groups[].hold`, `legs[].boss.hold`,
@@ -127,7 +128,10 @@ Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_object`, `wait
   reader that understands the upsert.
 - `cmd/forever-agent/plan_export_forever_test.go`: the command's export, its report, its refusal, the file name, and
   the `--force` rule.
-- `internal/worldspawn/foreverspawns_test.go`: the spawn-list TSV `plan-check --forever --spawns` reads.
+- `internal/worldspawn/foreverspawns_test.go` and `foreverspawns_objects_test.go`: the spawn-list TSV `plan-check --forever --spawns` reads (six columns by default; a seventh `kind` column marks game-object rows: `creature`, or `object` for a door, lever or chest).
+- `internal/planlint/objects_test.go`: the `objects` lint. Every `open`, `use_on`, `open_proof`, `loot` and `wait_object` row must name an object spawn of its entry (the plan's `alt_entries` value for the checked server) within the step's search radius: a miss is an error, like a missing creature. No objects in the list fails the rows instead of skipping: a creature-only spawn file must not approve a plan with doors unchecked. A nil world (no list at all) still skips.
+- `cmd/forever-agent/plan_check_forever_test.go`: the wiring on the real plans. Deadmines passes on the facts' eight object spawns (16400 at Sneed's door, 16399 at Gilnid's) and fails naming those entries when their rows are missing; Wailing Caverns (no object step) passes. Deadmines against a creature-only spawn file fails every object-backed step at the objects-lint level (the CheckObjects call lintRows makes); Wailing Caverns passes the same file.
+- `internal/dungeon/plan_test.go` (`TestParseAltEntries`): an object ref's `alt_entries` (server name to entry) is carried, round-trips, and must differ from the base entry.
 - The run-leader export's own golden tests are unchanged and byte-identical. `plan-check` without `--forever` takes
   the same code path as before (the v16 planner and the TSV list are behind the flag); its outputs are unchanged.
 

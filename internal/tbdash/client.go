@@ -1,9 +1,10 @@
-// Package tbdash is forever-agent's client for the TortoiseBots dashboard daemon's JSON API.
-// It logs in with a password read from a private file and keeps the daemon's session cookie in
-// a jar; the raid tools use it to save the commander snapshots and combat fights of a walk.
+// Package tbdash is forever-agent's HTTP session with a dashboard daemon: the login, the cookie
+// jar and the one re-login a 401 costs. The raid tools use it to save the commander snapshots and
+// combat fights of a walk; internal/roster builds the roster watch on the same session.
 //
-// The password is only ever read from the file path given to New. It never appears in an error
-// text, and the buffers holding it are zeroed once the login request has been sent.
+// The password comes from a PasswordSource: a private file or an environment variable, never a
+// flag. It never appears in an error text, and the buffers holding it are zeroed once the login
+// request has been sent.
 package tbdash
 
 import (
@@ -13,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/privfile"
@@ -27,6 +31,10 @@ import (
 const (
 	loginPath        = "/api/v1/auth/login"
 	maxPasswordBytes = 4096
+
+	// maxResponseBytes bounds one dashboard JSON answer. The roster of a full server is far
+	// smaller; the cap keeps a broken or hostile dashboard from exhausting the agent's memory.
+	maxResponseBytes = 8 << 20
 )
 
 // HTTPError is a non-200 answer from the daemon other than the 401/302 that renews the session.
@@ -41,19 +49,94 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d for %s %s", e.Code, e.Method, e.Path)
 }
 
-// Client talks to one dashboard daemon as one user. Base is the daemon's root URL, User the
-// login name and passFile the path of the file holding the password.
-type Client struct {
-	Base     *url.URL
-	User     string
-	passFile string
-	hc       *http.Client
-	loginMu  sync.Mutex // one login at a time when several reads meet a 401 together
+// PasswordSource is where Login takes the password. A flag never carries the value: the two
+// sources are a private file and an environment variable. The returned bytes are zeroed by Login.
+type PasswordSource interface {
+	Password() ([]byte, error)
 }
 
-// New validates base (http or https, with a host) and builds a client whose cookie jar keeps the
-// session the daemon hands out at login. It does not read passFile; Login does.
+// PasswordFile reads the password from a file only its owner can access. privfile refuses a
+// symlink and a loose mode; the one trailing newline is dropped.
+func PasswordFile(path string) PasswordSource { return filePassword(path) }
+
+type filePassword string
+
+func (f filePassword) Password() ([]byte, error) {
+	raw, err := privfile.Read(string(f), maxPasswordBytes)
+	if err != nil {
+		return nil, fmt.Errorf("password file: %w", err)
+	}
+	return trimOneNewline(raw), nil
+}
+
+// PasswordEnv reads the password from the named environment variable. The variable's name is
+// not a secret; its value reaches no error text.
+func PasswordEnv(name string) PasswordSource { return envPassword(name) }
+
+type envPassword string
+
+func (e envPassword) Password() ([]byte, error) {
+	v, ok := os.LookupEnv(string(e))
+	if !ok || v == "" {
+		return nil, fmt.Errorf("password environment variable %s is not set", string(e))
+	}
+	return []byte(v), nil
+}
+
+// Options are the client's non-credential settings.
+type Options struct {
+	// AllowInsecureHTTP permits a plain-http URL whose host the client cannot prove is this
+	// machine. It is off by default: the login sends a GM password and the session cookie in
+	// clear text, so the only safe plain-http target is this machine.
+	AllowInsecureHTTP bool
+}
+
+// lookupIP is a test seam only: New never resolves a dashboard host. A name cannot prove where
+// the password goes, so a plain-http target must be a loopback IP literal or the exact name
+// localhost. The test replaces this to show that even a name the resolver maps to loopback is
+// refused without --dash-insecure-http.
+var lookupIP = net.DefaultResolver.LookupIPAddr
+
+// loopbackLiteral reports whether host names this machine without a lookup: a loopback IP
+// literal (127.0.0.0/8 or ::1), or the exact name localhost, which the client itself dials as
+// 127.0.0.1. Every other name is refused on plain http until the operator allows it.
+func loopbackLiteral(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// Client talks to one dashboard daemon as one user. Base is the daemon's root URL, User the
+// login name and src the source of the password.
+type Client struct {
+	Base    *url.URL
+	User    string
+	src     PasswordSource
+	hc      *http.Client
+	loginMu sync.Mutex    // one login at a time when several reads meet a 401 together
+	gen     atomic.Uint64 // the session generation, bumped by every successful login
+}
+
+// New validates base (http or https, with a host) and builds a client that reads its password
+// from passFile. It does not read the file; Login does. A plain-http base is accepted only when
+// its host is a loopback IP literal or localhost, which is dialled as 127.0.0.1.
 func New(base, user, passFile string) (*Client, error) {
+	return NewWithSecret(base, user, PasswordFile(passFile))
+}
+
+// NewWithSecret is New with an explicit password source.
+func NewWithSecret(base, user string, src PasswordSource) (*Client, error) {
+	return NewWithOptions(base, user, src, Options{})
+}
+
+// NewWithOptions is NewWithSecret with the plain-http boundary made explicit. The caller that
+// sets AllowInsecureHTTP is expected to warn its operator.
+func NewWithOptions(base, user string, src PasswordSource, opts Options) (*Client, error) {
+	if src == nil {
+		return nil, errors.New("dashboard password source is missing")
+	}
 	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil {
 		return nil, fmt.Errorf("dashboard URL %q: %w", base, err)
@@ -67,6 +150,20 @@ func New(base, user, passFile string) (*Client, error) {
 	if u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("dashboard URL %q: a base URL has no query or fragment", base)
 	}
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		if !opts.AllowInsecureHTTP && !loopbackLiteral(host) {
+			return nil, fmt.Errorf("dashboard URL %q: plain http is allowed only to a loopback IP literal or localhost: any other host sends the GM password and the session cookie in clear text; use https, or allow plain HTTP explicitly", base)
+		}
+		if strings.EqualFold(host, "localhost") {
+			// Dial the literal: a resolver must not decide where the password goes.
+			if port := u.Port(); port != "" {
+				u.Host = net.JoinHostPort("127.0.0.1", port)
+			} else {
+				u.Host = "127.0.0.1"
+			}
+		}
+	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	u.RawPath = strings.TrimSuffix(u.RawPath, "/")
 	jar, err := cookiejar.New(nil)
@@ -79,21 +176,48 @@ func New(base, user, passFile string) (*Client, error) {
 		// login page with a 302. Both must come back here so GetJSON can renew the session once.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	return &Client{Base: u, User: user, passFile: passFile, hc: hc}, nil
+	return &Client{Base: u, User: user, src: src, hc: hc}, nil
 }
 
-// Login reads the password file, POSTs the credentials and keeps the session cookie. The file
-// must be one only its owner can access (privfile.Read refuses a symlink and a loose mode) and
-// its one trailing newline is dropped. The password never reaches an error text.
+// SetTimeout bounds every request, the login included; zero leaves only the context's own bound.
+func (c *Client) SetTimeout(d time.Duration) { c.hc.Timeout = d }
+
+// Login reads the password from the client's source, POSTs the credentials and keeps the
+// session cookie. A password file must be one only its owner can access (privfile.Read refuses
+// a symlink and a loose mode) and its one trailing newline is dropped. The password never
+// reaches an error text.
 func (c *Client) Login(ctx context.Context) error {
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
-
-	raw, err := privfile.Read(c.passFile, maxPasswordBytes)
-	if err != nil {
-		return fmt.Errorf("dashboard password file: %w", err)
+	if err := c.loginLocked(ctx); err != nil {
+		return err
 	}
-	raw = trimOneNewline(raw)
+	c.gen.Add(1)
+	return nil
+}
+
+// refreshSession renews the session after a request that was sent at generation seen failed
+// with 401/302. Several readers meet the same stale cookie together; the first one logs in and
+// the rest see the new generation under the lock and skip their own login.
+func (c *Client) refreshSession(ctx context.Context, seen uint64) error {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+	if c.gen.Load() != seen {
+		return nil
+	}
+	if err := c.loginLocked(ctx); err != nil {
+		return err
+	}
+	c.gen.Add(1)
+	return nil
+}
+
+// loginLocked is the login request; the caller holds loginMu.
+func (c *Client) loginLocked(ctx context.Context) error {
+	raw, err := c.src.Password()
+	if err != nil {
+		return fmt.Errorf("dashboard password: %w", err)
+	}
 	defer zero(raw)
 	password := string(raw)
 
@@ -125,18 +249,19 @@ func (c *Client) Login(ctx context.Context) error {
 }
 
 // GetJSON GETs path (an escaped path under Base) with query and returns the daemon's JSON body.
-// A 401 or a 302 renews the session once with Login and retries; any other non-200, and a retry
-// that still fails, is an *HTTPError.
+// A 401 or a 302 renews the session once and retries; any other non-200, and a retry that still
+// fails, is an *HTTPError. Concurrent readers that met the same stale session log in once.
 func (c *Client) GetJSON(ctx context.Context, path string, query url.Values) (json.RawMessage, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+	gen := c.gen.Load()
 	body, code, err := c.get(ctx, path, query)
 	if err != nil {
 		return nil, err
 	}
 	if code == http.StatusUnauthorized || code == http.StatusFound {
-		if err := c.Login(ctx); err != nil {
+		if err := c.refreshSession(ctx, gen); err != nil {
 			return nil, err
 		}
 		if body, code, err = c.get(ctx, path, query); err != nil {
@@ -237,13 +362,14 @@ func (c *Client) DecisionFile(ctx context.Context, id, file string, dst io.Write
 		return 0, fmt.Errorf("dashboard decision file: bad file name %q", file)
 	}
 	path := "/api/v1/decisions/" + url.PathEscape(id) + "/" + url.PathEscape(file)
+	gen := c.gen.Load()
 	body, code, length, ctype, err := c.getRaw(ctx, path)
 	if err != nil {
 		return 0, err
 	}
 	if code == http.StatusUnauthorized || code == http.StatusFound {
 		body.Close()
-		if err := c.Login(ctx); err != nil {
+		if err := c.refreshSession(ctx, gen); err != nil {
 			return 0, err
 		}
 		body, code, length, ctype, err = c.getRaw(ctx, path)
@@ -313,9 +439,15 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte
 		return nil, 0, fmt.Errorf("dashboard GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	if resp.ContentLength > maxResponseBytes {
+		return nil, 0, fmt.Errorf("dashboard GET %s: the answer is %d bytes, over the %d-byte limit", path, resp.ContentLength, maxResponseBytes)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, 0, fmt.Errorf("dashboard GET %s: reading the response: %w", path, err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, 0, fmt.Errorf("dashboard GET %s: the answer is over the %d-byte limit", path, maxResponseBytes)
 	}
 	return body, resp.StatusCode, nil
 }

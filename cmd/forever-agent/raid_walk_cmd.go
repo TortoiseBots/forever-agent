@@ -73,7 +73,7 @@ const walkPIDFile = "walk.pid"
 const raidWalkUsage = `usage: forever-agent raid-walk <plan> [--server m910q] [--slot N] [--holder NAME] [--dir DIR] [--sql FILE]
     [--until boss|boss-done|none|step N|leg L] [--from leg L|step N] [--place] [--gm-clear LEG:GROUP[,GROUP]] [--gm-clear-boss LEG] [--no-place-unfreeze] [--no-place-revive] [--gm-instance-data LEG:"A B[;A B]"] [--prepull-aura role=ROLE:ID,ID|PRESET|FILE.json] [--prepull-aura-tolerance N] [--prepull-aura-when start|boss] [--prepull-aura-topup] [--speed X] [--hires FILE] [--tier N|--tier-override N]
     [--enter auto|near|tele] [--hold-minutes M] [--max-run-minutes 90] [--paused-wait 10m] [--auto-resume K]
-    [--reset-wait 5m] [--wipe-resume K] [--wipe-end fast] [--wipe-rest 10m] [--revive-at-raid=false] [--hire-settle 20s] [--instance-cap-per-account N] [--instance-cap-wait 20m] [--instance-cap-fail] [--instance-cap-reset] [--instance-cap-unsafe] [--patrols FILE] [--out DIR] [--dash-url URL] [--dash-user TADASH] [--dash-pass-file PATH]
+    [--reset-wait 5m] [--wipe-resume K] [--wipe-end fast] [--wipe-rest 10m] [--revive-at-raid=false] [--hire-settle 20s] [--instance-cap-per-account N] [--instance-cap-wait 20m] [--instance-cap-fail] [--instance-cap-reset] [--instance-cap-unsafe] [--patrols FILE] [--out DIR] [--dash-url URL] [--dash-user TADASH] [--dash-pass-file PATH] [--dash-insecure-http]
     [--practice ENTRY] [--practice-cycles N] [--practice-max 20m] [--practice-rest 30s] [--practice-boss-floor N] [--practice-sustain=on|off] [--practice-window 120s]
     [--decisions on|off] [--decisions-max-mib N]
     [--mmaps DIR] [--slots FILE] [--binary PATH] [--inject SPEC] [--reuse-instance] [--dry-run]
@@ -156,6 +156,7 @@ type raidWalkOptions struct {
 	dashURL          string
 	dashUser         string
 	dashPassFile     string
+	dashInsecureHTTP bool // --dash-insecure-http: allow a plain-http dashboard outside loopback (it warns)
 	decisions        bool // --decisions: pull decision captures after teardown (on by default)
 	decisionsMaxMiB  int  // --decisions-max-mib: budget for the decisions pull in MiB
 	mmaps            string
@@ -328,6 +329,7 @@ func parseRaidWalkArgs(args []string, stderr io.Writer) (raidWalkOptions, int) {
 	fs.StringVar(&o.dashURL, "dash-url", "", "the dashboard URL (or TBDASH_URL)")
 	fs.StringVar(&o.dashUser, "dash-user", "", "the dashboard login (or TBDASH_USER; default TADASH)")
 	fs.StringVar(&o.dashPassFile, "dash-pass-file", "", "the dashboard password file (or TBDASH_PASS_FILE)")
+	fs.BoolVar(&o.dashInsecureHTTP, "dash-insecure-http", false, "allow a plain-http dashboard that is not loopback: the GM password and the session cookie then travel in clear text")
 	o.decisions = true
 	fs.Var(onOffFlag{v: &o.decisions, name: "--decisions"}, "decisions", "pull decision captures after teardown (on or off)")
 	fs.IntVar(&o.decisionsMaxMiB, "decisions-max-mib", 1024, "the decisions pull budget in MiB")
@@ -774,7 +776,7 @@ type walkEnv struct {
 // walkDeps are the two clients the phases use; tests hand in fakes.
 type walkDeps struct {
 	openAgent func(dir string) (walkAgent, teardownSlotManifest, error)
-	openDash  func(url, user, passFile string) (walkDash, error)
+	openDash  func(url, user, passFile string, insecure bool) (walkDash, error)
 }
 
 // defaultWalkEnv binds the environment to the slot config.
@@ -842,8 +844,8 @@ func defaultWalkEnv(o *raidWalkOptions) (walkEnv, walkDeps, error) {
 			}
 			return c, c.Manifest(), nil
 		},
-		openDash: func(url, user, passFile string) (walkDash, error) {
-			return tbdash.New(url, user, passFile)
+		openDash: func(url, user, passFile string, insecure bool) (walkDash, error) {
+			return tbdash.NewWithOptions(url, user, tbdash.PasswordFile(passFile), tbdash.Options{AllowInsecureHTTP: insecure})
 		},
 	}
 	return env, deps, nil
@@ -888,8 +890,8 @@ func (d *walkDeps) fillDefaults() {
 		}
 	}
 	if d.openDash == nil {
-		d.openDash = func(url, user, passFile string) (walkDash, error) {
-			return tbdash.New(url, user, passFile)
+		d.openDash = func(url, user, passFile string, insecure bool) (walkDash, error) {
+			return tbdash.NewWithOptions(url, user, tbdash.PasswordFile(passFile), tbdash.Options{AllowInsecureHTTP: insecure})
 		}
 	}
 }
@@ -1820,7 +1822,10 @@ func (w *walk) openDashboard(ctx context.Context) {
 		w.dashNote = "off (no --dash-url/--dash-pass-file)"
 		return
 	}
-	c, err := w.deps.openDash(url, user, pass)
+	if w.opts.dashInsecureHTTP {
+		warnInsecureDash(w.stderr, "raid-walk", url)
+	}
+	c, err := w.deps.openDash(url, user, pass, w.opts.dashInsecureHTTP)
 	if err != nil {
 		w.dashNote = "off (" + err.Error() + ")"
 		return

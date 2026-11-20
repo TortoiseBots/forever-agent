@@ -78,6 +78,12 @@ func NewClient(r Runner) *Client { return &Client{run: r} }
 // call sends one `.tb` line with a fresh token and requires endKind. The module's error line is returned as a
 // *CommandError (the Reply is still returned for the caller's diagnostics).
 func (c *Client) call(ctx context.Context, line, endKind string) (*command.Reply, error) {
+	return c.callMax(ctx, line, endKind, 0)
+}
+
+// callMax is call with the collector's line cap raised (the event ring is 200 lines): max of 0 keeps the floor of 16
+// the typed layer has always used.
+func (c *Client) callMax(ctx context.Context, line, endKind string, maxLines int) (*command.Reply, error) {
 	tok := c.Token
 	if tok == nil {
 		tok = command.NewToken
@@ -89,6 +95,9 @@ func (c *Client) call(ctx context.Context, line, endKind string) (*command.Reply
 	o := c.Base
 	o.Token = t
 	o.EndKind = endKind
+	if maxLines > o.MaxLines {
+		o.MaxLines = maxLines
+	}
 	if o.MaxLines < 16 {
 		o.MaxLines = 16
 	}

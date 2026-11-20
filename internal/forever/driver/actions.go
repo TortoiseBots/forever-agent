@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
@@ -56,6 +57,15 @@ const (
 	// ActionGMOn and ActionGMVisible switch the commander's GM mode on.
 	ActionGMOn
 	ActionGMVisible
+	// ActionRunStart starts the module's own run of the plan for the leader's party. It is fight-starting: from
+	// then on the module pulls, so it needs the fight gate.
+	ActionRunStart
+	// ActionRunStop and ActionRunPause are the stop path's own run commands: passive, and allowed while a stop is
+	// pending (they are how a watcher ends a run it does not lead).
+	ActionRunStop
+	ActionRunPause
+	// ActionRunResume restarts a paused run; like the start it is fight-starting.
+	ActionRunResume
 )
 
 // Action is one typed setup action. The fields a kind does not use are ignored; the port checks them like any other
@@ -77,6 +87,10 @@ type Action struct {
 	Recovery bool
 	// Practice marks one practice revive of the run's budget: the budget gates it and it is counted as PRACTICE.
 	Practice bool
+	// Plan is ActionRunStart's plan name: the loaded plan's own name.
+	Plan string
+	// Reason is ActionRunStop's and ActionRunPause's reason, in words the module records with the run.
+	Reason string
 }
 
 // actionClass says what one action would do to the party and so which gate it needs at the send.
@@ -89,6 +103,11 @@ const (
 	actionMove
 	// actionState changes the party's state in place (a revive, a GM mode, an instance reset).
 	actionState
+	// actionFight starts a fight: the module's run, which pulls from now on, and its resume. Needs the fight gate.
+	actionFight
+	// actionPassive changes nothing on the map and may go out while a stop is pending: the stop path's own run
+	// commands, which is how a watcher ends a run it does not lead.
+	actionPassive
 )
 
 // actionClasses is the classification of every action the vocabulary holds. No setup action starts a fight; the
@@ -106,6 +125,10 @@ var actionClasses = map[ActionKind]actionClass{
 	ActionGMOn:          actionState,
 	ActionGMVisible:     actionState,
 	ActionInstanceInfo:  actionRead,
+	ActionRunStart:      actionFight,
+	ActionRunStop:       actionPassive,
+	ActionRunPause:      actionPassive,
+	ActionRunResume:     actionFight,
 }
 
 // classifyAction returns an action's class; ok false is a kind the driver refuses to send.
@@ -125,6 +148,10 @@ type ActionReport struct {
 	Confirmed bool
 	// Info is ActionInstanceInfo's answer.
 	Info *tbcmd.InstanceInfoReport
+	// Run is the run record ActionRunStart, ActionRunStop, ActionRunPause and ActionRunResume answer with.
+	Run *tbcmd.RunState
+	// Code is the module's refusal code when the action was refused ("refused" for a bad reply or a timeout).
+	Code string
 }
 
 // String is the action in the words of the run's order log: one stable, short form per kind.
@@ -154,6 +181,20 @@ func (a Action) String() string {
 		return "gm on"
 	case ActionGMVisible:
 		return "gm visible on"
+	case ActionRunStart:
+		return "run start " + a.Who + " " + a.Plan
+	case ActionRunStop:
+		if a.Reason != "" {
+			return "run stop " + a.Who + " " + a.Reason
+		}
+		return "run stop " + a.Who
+	case ActionRunPause:
+		if a.Reason != "" {
+			return "run pause " + a.Who + " " + a.Reason
+		}
+		return "run pause " + a.Who
+	case ActionRunResume:
+		return "run resume " + a.Who
 	}
 	return "action"
 }
@@ -170,6 +211,15 @@ func (a Action) who() string {
 		return "commander"
 	}
 	return a.Who
+}
+
+// isRunAction reports whether the action is one of the module's run commands.
+func (a Action) isRunAction() bool {
+	switch a.Kind {
+	case ActionRunStart, ActionRunStop, ActionRunPause, ActionRunResume:
+		return true
+	}
+	return false
 }
 
 // validDest reports whether a plan's teleport destination is one place name the core's tele command takes: one word
@@ -203,10 +253,16 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 		r.event("action_refused", map[string]any{"action": a.String(), "why": "dest"})
 		return ActionReport{}, "dest"
 	}
+	if a.Kind == ActionRunStart && a.Plan == "" {
+		r.event("action_refused", map[string]any{"action": a.String(), "why": "plan"})
+		return ActionReport{}, "plan"
+	}
 	if r.lost {
 		return ActionReport{}, "link"
 	}
-	if r.stopReason != "" {
+	// A pending stop refuses every action except the stop path's own run commands: sending a pause or a stop after
+	// the run ended is the watcher's ordinary end, and nothing else may be sent once the run is stopping.
+	if r.stopReason != "" && class != actionPassive && class != actionRead {
 		return ActionReport{}, "stop"
 	}
 	var why string
@@ -215,6 +271,8 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 		why = r.actionMoveGate(ctx, a)
 	case actionState:
 		why = r.actionStateGate(ctx, a)
+	case actionFight:
+		why = r.actionFightGate(ctx, a)
 	}
 	if why != "" {
 		r.event("action_refused", map[string]any{"action": a.String(), "why": why})
@@ -227,7 +285,8 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 	if why == "error" {
 		// The module's refusal is a named error (its own code); the action is recorded failed and the run reads it
 		// as not performed.
-		r.event("action_error", map[string]any{"action": a.String(), "code": actionCode(out.err)})
+		out.action.Code = actionCode(out.err)
+		r.event("action_error", map[string]any{"action": a.String(), "code": out.action.Code})
 		return out.action, why
 	}
 	if why != "" {
@@ -338,6 +397,35 @@ func (r *Run) actionStateGate(ctx context.Context, a Action) string {
 			return "inside"
 		}
 		return ""
+	}
+	return ""
+}
+
+// actionFightGate is the gate of the actions that make a bot start fighting: the module's run start and its resume.
+// The party is about to pull, so the action needs a complete state report taken now and newer than the last order,
+// everyone ready (alive, not resting, engine on, in range, on our map and instance) and budget left (the run's time
+// and wipe budgets). It returns the reason it is shut, "" when the action may go.
+func (r *Run) actionFightGate(ctx context.Context, a Action) string {
+	if !r.refresh(ctx) {
+		if r.stopReason != "" || r.lost {
+			return "stop"
+		}
+		return "report"
+	}
+	if !r.reportComplete() {
+		return "report"
+	}
+	if !r.repAt.After(r.lastOrderAt) {
+		return "stale"
+	}
+	if ok, why := r.ready(); !ok {
+		return why
+	}
+	if r.lim.MaxMinutes > 0 && r.sinceStart() >= time.Duration(r.lim.MaxMinutes)*time.Minute {
+		return "budget"
+	}
+	if r.lim.MaxWipes >= 0 && r.wipes > r.lim.MaxWipes {
+		return "wipes"
 	}
 	return ""
 }
