@@ -47,9 +47,11 @@ func LoadWatch(path, ds string) (*Run, error) {
 		T0:          float64(tf.Header.StartUnix),
 		Roles:       map[string]string{},
 		Classes:     map[string]string{},
+		Names:       map[string]string{},
 		Subjects:    map[string]bool{},
 		BossEntries: map[uint32]string{},
 		CastTimes:   map[string][]float64{},
+		TraceEvents: tf.Events,
 	}
 	if r.Name == "" {
 		name := filepath.Base(tracePath)
@@ -67,6 +69,9 @@ func LoadWatch(path, ds string) (*Run, error) {
 		}
 		if m.Class != "" {
 			r.Classes[g] = m.Class
+		}
+		if m.Name != "" {
+			r.Names[g] = m.Name
 		}
 		r.Subjects[g] = true
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 func watchConfig() Config {
@@ -373,6 +374,54 @@ func TestWatchSummaryFile(t *testing.T) {
 	}
 	if files, _ := filepath.Glob(filepath.Join(dir, "*.forever-run.json")); len(files) != 1 {
 		t.Fatalf("summary files %v", files)
+	}
+}
+
+// TestWatchTraceRunStartAndWipe: the watch writes the run-start reply time and each wipe of the module's run into
+// the trace, so a map reader can align the module's at_s without guessing from durations and draw every wipe.
+func TestWatchTraceRunStartAndWipe(t *testing.T) {
+	dir := t.TempDir()
+	route := testRoute(t, oneGroupPlan())
+	cfg := watchConfig()
+	cfg.Out = dir
+	f := NewFake(route, cfg)
+	cfg.Party = f.PartyNames()
+	run := New(cfg, route, f, f, f, f.Clock)
+	rec, err := NewWatchRecorder(dir, "r-watch", route.Name, route.Map, 1, f.Start, run.PartyMembers())
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	run.SetRecorder(rec)
+	f.ScriptRun(FakeRunScript{Steps: 30, Pulls: 10, ProgressEvery: 5 * time.Second,
+		WipeAt: 20 * time.Second, DoneAt: 400 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	tf, err := trace.Read(filepath.Join(dir, "r-watch.jsonl"))
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var starts, wipes []int64
+	for _, ev := range tf.Events {
+		switch ev.Ev {
+		case "run_start":
+			starts = append(starts, ev.T)
+		case "wipe":
+			wipes = append(wipes, ev.T)
+		}
+	}
+	if len(starts) != 1 {
+		t.Fatalf("%d run_start events, want 1", len(starts))
+	}
+	if want := actionAt(f, "run start").Milliseconds(); starts[0] != want {
+		t.Fatalf("run_start at %d ms, want the start action's reply time %d", starts[0], want)
+	}
+	if len(wipes) != 1 {
+		t.Fatalf("%d wipe events, want the module's one", len(wipes))
+	}
+	if want := starts[0] + 20000; wipes[0] != want {
+		t.Fatalf("wipe at %d ms, want the module's 20 s on the trace's clock (%d)", wipes[0], want)
 	}
 }
 

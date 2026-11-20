@@ -41,6 +41,9 @@ import (
 type watchRun struct {
 	record tbcmd.RunState
 	have   bool
+	// startedAt is the run-start action's reply time: the module's run zero, and the anchor the trace's run_start
+	// event carries so a map reader can put the module's at_s on the trace's clock.
+	startedAt time.Time
 
 	lastSeq   int
 	lastEvent time.Time
@@ -233,7 +236,13 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 				r.stop("start:bad-report")
 				return
 			}
-			w.lastEvent = r.now()
+			// The reply time is the module's run zero on the trace's clock: the map adapter aligns every at_s with
+			// it. The event is written even when the run ends at once, so an old-style duration guess is never used.
+			w.startedAt = r.now()
+			w.lastEvent = w.startedAt
+			if r.rec != nil {
+				r.rec.Event(w.startedAt, "run_start", map[string]any{"plan": r.route.Name})
+			}
 			r.applyRun(w, st)
 			if st.HasLeg {
 				// The module's run starts in its first leg: that leg's time starts at the run's zero.
@@ -605,6 +614,15 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 		w.wipePending = true
 		w.wipeSeq = ev.Seq
 		w.wipeAt = r.now()
+		if r.rec != nil {
+			// The module's own wipe event, at the module's own second: the map draws it where it happened instead
+			// of inferring one from the deaths. A record without it (from before this event) still infers.
+			at := r.now()
+			if !w.startedAt.IsZero() {
+				at = w.startedAt.Add(time.Duration(ev.T) * time.Second)
+			}
+			r.rec.Event(at, "wipe", map[string]any{"at_s": ev.T})
+		}
 	case "pause":
 		// The rescue's pause is the wipe's own pause and nothing else: the event right after the wipe (no other
 		// event between them, by sequence) whose reason names the wipe or the dead party it left. A pause later in
