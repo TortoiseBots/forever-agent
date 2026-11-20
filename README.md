@@ -1,8 +1,8 @@
 # forever-agent
 
-A headless World of Warcraft client for **WoW Forever (Classic 1.60.1)** servers built on
-[ForeverCore](https://github.com/Karrz1/TrinityCore). One process logs one character in, with no game window, and
-exposes it over a local JSON-RPC API, so server-side behaviour can be tested from scripts.
+A headless **WoW Forever** client for [ForeverCore](https://github.com/Karrz1/TrinityCore) servers. One process logs
+one character in, with no game window, and exposes it over a local JSON-RPC API, so server-side behaviour can be
+tested from scripts.
 
 **Status: early port; the character can log in and out, but there is no gameplay yet.** This repository starts as a
 copy of [turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers).
@@ -13,7 +13,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 |---|---|
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
-| Packets and object fields for build 70938 | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
+| Packets and object fields | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
 | Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
@@ -36,8 +36,7 @@ login server (password from `FOREVER_PASSWORD`) and stops at the realm join tick
 name, id and address. It prints no ticket, key, proof or password, only their lengths; the connect step prints the
 ciid, the server id and the server time as counts (`ciid 33 chars`), never their values, so the output is safe to
 paste into a report. `--build` pins the client build to claim; without it the command claims the newest build this
-client knows that the realm accepts (70707, 70938 and 70959; a newer build is tried first and the realm list's build
-is only a hint). A realm only admits the builds it accepts, and a realm that accepts none of these is refused by
+client knows that the realm accepts (a newer build is tried first and the realm list's build is only a hint). A realm only admits the builds it accepts, and a realm that accepts none of these is refused by
 name. Each RPC step and the login as a whole are deadline-bounded (30 s per request, 2 min overall), so a silent or
 slow-drip server cannot hold the command open.
 
