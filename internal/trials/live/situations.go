@@ -453,15 +453,16 @@ func (t *tankRun) quiet(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
+	// The tester itself, its own pet and the hired bots of this trial are
+	// the party: none of them makes the arena busy.
 	party := map[string]bool{}
-	if t.r.Guids.Bot != "" {
-		party[normGUIDOf(t.r.Guids.Bot)] = true
-	}
-	for _, e := range t.r.Guids.Extras {
-		party[normGUIDOf(e)] = true
+	for _, g := range append([]string{t.r.Guids.Player, t.r.Guids.Bot, t.r.Guids.Pet}, t.r.Guids.Extras...) {
+		if g != "" {
+			party[normGUIDOf(g)] = true
+		}
 	}
 	for _, u := range units {
-		if u.Dead || party[normGUIDOf(u.GUID)] {
+		if u.Dead || u.Type == "active player" || party[normGUIDOf(u.GUID)] {
 			continue
 		}
 		return false

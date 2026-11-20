@@ -266,15 +266,28 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	if r.dry() {
 		return
 	}
-	tb := tbcmd.NewClient(NewTBRunner(rep.Client))
+	tbr := r.tbRunner
+	if tbr == nil {
+		tbr = NewTBRunner(rep.Client)
+	}
+	tb := tbcmd.NewClient(tbr)
 	names := []string{}
 	if rep.BotName != "" {
 		names = append(names, rep.BotName)
 	}
 	names = append(names, rep.ExtraNames...)
+	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, RecoveryPath: rep.RecoveryPath}
 	for _, name := range names {
 		if name == "" {
 			continue
+		}
+		// What the trial gave goes back out of the bags while the hire is
+		// still online; a clear that cannot be proved is ledgered and the
+		// recovery mark stays for the next run to clean first.
+		clearEv, cleared := prov.ClearGiven(ctx, name)
+		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
+		if !cleared {
+			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
 		}
 		if _, err := tb.Stay(ctx, name); err != nil {
 			r.logf("%s: .tb order %s stay: %v", trialID, name, err)

@@ -76,6 +76,10 @@ type LiveSetup struct {
 	// Timeout bounds one check; 0 means 20 s.
 	Timeout time.Duration
 
+	// RecoveryPath is the recovery mark file of the items the trial gives;
+	// empty means RecoveryPathFor(player) under the state dir.
+	RecoveryPath string
+
 	// TBRunner overrides the `.tb` transport (tests inject the scripted
 	// fake); nil means the serve-backed runner over Client.
 	TBRunner *TBRunner
@@ -88,8 +92,13 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 	trial := r.Trial
 	wanted := wantedChecks(trial)
 	tb := tbcmd.NewClient(s.runnerOr(r))
+	recovery := s.RecoveryPath
+	if recovery == "" {
+		recovery = RecoveryPathFor(s.playerOr(r))
+	}
+	r.RecoveryPath = recovery
 	prov := &Provisioner{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
-		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout}
+		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout, RecoveryPath: recovery}
 	ps := &PlayerSetup{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
 		Player: s.playerOr(r), Timeout: s.Timeout}
 

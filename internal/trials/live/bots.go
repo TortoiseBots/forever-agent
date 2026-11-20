@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -50,6 +51,12 @@ type Provisioner struct {
 
 	// Timeout bounds one provisioning step; 0 means 20 s.
 	Timeout time.Duration
+
+	// RecoveryPath is the recovery mark file of the items this trial gives
+	// (see items.go); empty keeps the marks in memory only.
+	RecoveryPath string
+	markOnce     sync.Once
+	recovery     *recoveryMarks
 }
 
 // BotSpec is trial["bot"] (or one extra_bots entry): what to provision.
@@ -515,13 +522,14 @@ func (p *Provisioner) engineOn(ctx context.Context, name string) (bool, string) 
 }
 
 // ensureLevel sets the hire's level via free text and reads it back from
-// the units model.
+// the hire's own unit record (by guid). A level that cannot be read back is
+// UNVERIFIED and fails the row; it is never read as 0 and never ok.
 func (p *Provisioner) ensureLevel(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Level <= 0 {
 		return nil
 	}
-	have := p.unitLevelOf(ctx, name)
-	if have == spec.Level {
+	have, known := p.unitLevelOf(ctx, name)
+	if known && have == spec.Level {
 		return rowOf("bot_level", true, have, fmt.Sprintf("%s level %d (target %d)", name, have, spec.Level))
 	}
 	tctx, cancel := p.ctxOf(ctx)
@@ -529,29 +537,49 @@ func (p *Provisioner) ensureLevel(ctx context.Context, spec BotSpec, name string
 	cancel()
 	if err != nil {
 		p.Ledger.Add(map[string]any{"kind": "level", "bot": name, "reply": firstLines(lines)})
-		return rowOf("bot_level", false, have, ".tb level "+name+": "+tbErrText(err, lines))
+		return rowOf("bot_level", false, levelValue(have, known), ".tb level "+name+": "+tbErrText(err, lines))
 	}
 	p.Ledger.Add(map[string]any{"kind": "level", "bot": name, "reply": firstLines(lines)})
-	have = p.unitLevelOf(ctx, name)
+	have, known = p.unitLevelOf(ctx, name)
+	if !known {
+		return rowOf("bot_level", false, "unknown", fmt.Sprintf("UNVERIFIED: %s level (target %d): no level readable from the bot's own unit record", name, spec.Level))
+	}
 	return rowOf("bot_level", have == spec.Level, have, fmt.Sprintf("%s level %d (target %d)", name, have, spec.Level))
 }
 
-// unitLevelOf reads the hire's level from the units model (0 when absent).
-func (p *Provisioner) unitLevelOf(ctx context.Context, name string) int {
+// levelValue is a row value for a level that may be unknown.
+func levelValue(level int, known bool) any {
+	if !known {
+		return "unknown"
+	}
+	return level
+}
+
+// unitLevelOf reads the hire's level from the hire's own unit record: the
+// row whose guid is the hire's (guid from the party roster). Player rows can
+// carry an empty name on this client, so a nameless row is never matched by
+// name and never yields a level of its own. ok is false when the level cannot
+// be read (no guid, no such row, no level on it): the caller reports
+// UNVERIFIED, never 0.
+func (p *Provisioner) unitLevelOf(ctx context.Context, name string) (int, bool) {
+	guid := p.partyGUIDOf(ctx, name)
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	units, err := p.Client.Units(tctx, 60)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	for _, u := range units {
-		if strings.EqualFold(u.Name, name) {
-			if lvl, ok := numOf(u.Raw["level"]); ok {
-				return int(lvl)
-			}
+		byGUID := guid != "" && normGUIDOf(u.GUID) == guid
+		byName := u.Name != "" && strings.EqualFold(u.Name, name)
+		if !byGUID && !byName {
+			continue
+		}
+		if lvl, ok := numOf(u.Raw["level"]); ok && lvl > 0 {
+			return int(lvl), true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // ensureTrain runs `.tb train <bot>`; the talent kit's Learn proves it.
@@ -655,6 +683,12 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 	if spec.Gear == "" && len(spec.Items) == 0 {
 		return nil
 	}
+	// A killed run leaves what it gave in the bags: take that back first so
+	// the new items fit. A clear that fails is not fatal here; a full bag
+	// then ends the give as SKIPPED needs=bot_bag_space.
+	if ev, ok := p.ClearGiven(ctx, name); !ok {
+		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": ev})
+	}
 	if spec.Gear != "" {
 		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
 		if len(kit) == 0 {
@@ -668,12 +702,10 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		if id == 0 {
 			return rowOf("bot_items", false, nil, "no item id for "+item.Name)
 		}
-		tctx, cancel := p.ctxOf(ctx)
-		lines, err := p.TB.FreeTextAddItem(tctx, name, id, uint32(item.Count))
-		cancel()
-		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "reply": firstLines(lines)})
+		lines, err := p.giveItem(ctx, name, id, uint32(item.Count))
+		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": id, "count": item.Count, "reply": firstLines(lines)})
 		if err != nil {
-			return rowOf("bot_items", false, nil, ".tb additem "+name+" "+item.Name+": "+tbErrText(err, lines))
+			return p.giveFailedRow(ctx, name, item.Name, nil, err, lines)
 		}
 	}
 	row := p.scanItems(ctx, name, itemIDs(spec.Items))
@@ -681,6 +713,17 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return row
 	}
 	return rowOf("bot_items", true, len(spec.Items), ".tb itemscan proves every consumable exists")
+}
+
+// giveFailedRow is the bot_items row for a refused give. A full bag gets one
+// more clearing pass first (what the marks say was given), then the row says
+// SKIPPED needs=bot_bag_space with the clearing evidence.
+func (p *Provisioner) giveFailedRow(ctx context.Context, bot, item string, ids any, err error, lines []string) map[string]any {
+	ev, ok := "", true
+	if isBagsFull(err, lines) {
+		ev, ok = p.ClearGiven(ctx, bot)
+	}
+	return itemsGiveRow(bot, item, ids, err, lines, ev, ok)
 }
 
 // wearKit grants, scans and wears one bot kit: every piece must scan as
@@ -692,12 +735,10 @@ func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, ki
 		ids = append(ids, item.Entry)
 	}
 	for _, item := range kit {
-		tctx, cancel := p.ctxOf(ctx)
-		lines, err := p.TB.FreeTextAddItem(tctx, name, item.Entry, 1)
-		cancel()
-		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": item.Entry, "reply": firstLines(lines)})
+		lines, err := p.giveItem(ctx, name, item.Entry, 1)
+		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": item.Entry, "count": 1, "reply": firstLines(lines)})
 		if err != nil {
-			return rowOf("bot_items", false, ids, ".tb additem "+name+" "+item.Name+": "+tbErrText(err, lines))
+			return p.giveFailedRow(ctx, name, item.Name, ids, err, lines)
 		}
 	}
 	tctx, cancel := p.ctxOf(ctx)

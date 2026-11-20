@@ -26,6 +26,11 @@ type setupFake struct {
 	pos     int
 	seqBase int
 	runner  *TBRunner
+
+	// tbFn, when set, answers a `.tb` line first (nil falls through to the
+	// prefix script); removed collects the removal lines a test saw.
+	tbFn    func(line string) []string
+	removed []string
 }
 
 type chatLinePage struct {
@@ -60,6 +65,15 @@ func (s *setupFake) bot(ctx context.Context, line string, waitMS int) (BotResult
 	token := ""
 	if i := strings.LastIndex(line, " #"); i >= 0 {
 		token, line = line[i+2:], line[:i]
+	}
+	if s.tbFn != nil {
+		if lines := s.tbFn(line); lines != nil {
+			stamped := make([]string, 0, len(lines))
+			for _, l := range lines {
+				stamped = append(stamped, strings.ReplaceAll(l, " #T", " #"+token))
+			}
+			return BotResult{Sent: line, Lines: stamped, Complete: true}, nil
+		}
 	}
 	prefixes := make([]string, 0, len(s.tb))
 	for prefix := range s.tb {

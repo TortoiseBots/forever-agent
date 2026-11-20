@@ -439,6 +439,33 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 	return raws, nil
 }
 
+// FreeTextRemoveItem takes count of an item back out of the bot's bags with
+// the negative-count form `.tb additem <bot> <item id> -<count>`, the way the
+// core's own .additem removes. The caller proves it with `ItemScan` (the
+// carried count reads back lower); a refusal is the server's text.
+func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32, count uint32) ([]string, error) {
+	setup, err := setupName("additem", bot)
+	if err != nil {
+		return nil, err
+	}
+	if item == 0 || count == 0 {
+		return nil, fmt.Errorf("tbcmd: remove item needs an item id and a count")
+	}
+	line := ".tb additem " + setup + " " + strconv.FormatUint(uint64(item), 10) + " -" + strconv.FormatUint(uint64(count), 10)
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
+	if err != nil {
+		return raws, err
+	}
+	joined := strings.Join(raws, "\n")
+	if rep != nil && rep.Refusal != nil {
+		return raws, &TestkitRefused{Cmd: "additem", Text: firstNonEmpty(raws, rep.RefusalText)}
+	}
+	if looksLikeRefusal(joined) {
+		return raws, &TestkitRefused{Cmd: "additem", Text: joined}
+	}
+	return raws, nil
+}
+
 // firstNonEmpty prefers the raw lines the server sent; the collector's
 // refusal text is the fallback when the run ended another way.
 func firstNonEmpty(raws []string, fallback string) string {

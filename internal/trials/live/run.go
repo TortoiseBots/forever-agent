@@ -47,6 +47,10 @@ type Repeat struct {
 	BotName    string
 	ExtraNames []string
 
+	// RecoveryPath is the recovery mark file of the items the setup gave;
+	// the teardown clears them (see items.go). Empty: in-memory marks only.
+	RecoveryPath string
+
 	// ExtraChecks are the situation's own read-backs (mobs_ready); the
 	// repeat appends them to setup.json's checks when the situation ends.
 	ExtraChecks []map[string]any
@@ -64,6 +68,10 @@ type Runner struct {
 
 	Setup     Setup
 	Situation Situation
+
+	// tbRunner overrides the `.tb` transport of the teardown (tests); nil
+	// means the serve-backed runner over the repeat's client.
+	tbRunner *TBRunner
 
 	Log func(line string)
 	Now func() time.Time

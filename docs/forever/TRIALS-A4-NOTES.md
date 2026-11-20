@@ -130,6 +130,26 @@ nothing in either card claims a PASS or a FAIL.
 - Unit rows carry no `name` for creatures (the model has no creature-query
   names), so report lines name an entry, never a creature name.
 
+## Fix round after the live rerun (2026-11-20/21)
+
+The rerun (bot config file fixed on the server) got past `bot_engine` and hit
+five agent-side defects. Each has a test that failed first.
+
+| # | defect | fix | test |
+|---|---|---|---|
+| 1 | `.tb state` prints `role=none` for a roleless bot; the strict parser refused it | `role=none` is accepted and read as the empty role; other words still fail | `TestStateRoleNoneIsAccepted` |
+| 2 | player unit rows have name `""`; the level read gave 0 | the level comes from the bot's own unit row by the party roster guid; a nameless row is never matched by name; an unreadable level is `UNVERIFIED` (value `unknown`), never 0 and never ok | `TestBotLevelReadByGuidFromNamelessRow`, `TestBotLevelUnreadableIsUnverified` |
+| 3 | the arena quiet check counted the tester | the player, its pet and the trial's hires (and the `active player` row) are the party | `TestArenaQuietIgnoresTesterPetAndHires` |
+| 4 | "bags full" after a killed run | `items.go`: every give writes a recovery mark (`<state dir>/items-recovery-<player>.json`) before it is sent; the trial teardown clears what was given while the hire is online; the next setup clears any mark first; the clear is `.tb additem <bot> <id> -<n>` proved by an `itemscan` read-back (`inv` down), an unproved clear stays marked; a give still refused with "bags full" is `SKIPPED needs=bot_bag_space` with the clearing evidence | `TestClearGiven*`, `TestGiveWritesMarkAndNextRunClearsIt`, `TestBagsFullIsSkippedWithReason`, `TestTrialTeardownClearsGivenItems` |
+| 5 | `cast refused (context deadline exceeded) and .learn refused` | cause: the stance step (and the talents loop) shared ONE 20 s deadline; the unaura selection wait, 3 casts and their aura polls used it up, so the `.learn` and the later casts started with an expired context. Every wait now has its own deadline; a real deadline of one wait is an `*OpTimeout` and the row says "timed out", not "refused" | `TestStanceWaitsAreNotOneSharedBudget`, `TestStanceRealTimeoutIsTyped` |
+
+Open assumptions (not provable without the server): the module's removal
+form is the negative count on `.tb additem`; the live reply for "bags full"
+was not captured in the rerun notes, the fixture uses the module's refusal
+word. If the module refuses the negative count, the teardown row reports it
+and the mark stays (never a silent ok). The cause of defect 5 is read from the
+code and the quoted line, not from a live timing trace.
+
 ## Out of scope (A5)
 
 The other situation kinds (`CasterMob OOCBuffs OOCHurt Debuff CCTarget

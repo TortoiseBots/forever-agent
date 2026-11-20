@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,8 +39,42 @@ type PlayerSetup struct {
 	// target, the visibility anchor).
 	Player string
 
-	// Timeout bounds one step; 0 means 20 s.
+	// Timeout bounds one wait inside a step (one cast, one GM line, one
+	// read), not the whole step; 0 means 20 s.
 	Timeout time.Duration
+
+	// Poll is the pause between aura reads; 0 means 500 ms.
+	Poll time.Duration
+}
+
+func (p *PlayerSetup) poll() time.Duration {
+	if p.Poll > 0 {
+		return p.Poll
+	}
+	return 500 * time.Millisecond
+}
+
+// OpTimeout is a real timeout of one setup wait (a cast, a GM line): the
+// deadline of its own wait expired, not a refusal by the server and not a
+// budget another wait used up. Rows name it "timed out".
+type OpTimeout struct {
+	Op    string
+	After time.Duration
+	Err   error
+}
+
+func (e *OpTimeout) Error() string {
+	return fmt.Sprintf("%s timed out after %s", e.Op, e.After)
+}
+func (e *OpTimeout) Unwrap() error { return e.Err }
+
+// timedOut wraps a context deadline error of op's own wait as an *OpTimeout;
+// any other error (a refusal, a transport error) is returned unchanged.
+func (p *PlayerSetup) timedOut(op string, err error) error {
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return &OpTimeout{Op: op, After: p.timeoutOf(), Err: err}
+	}
+	return err
 }
 
 func (p *PlayerSetup) timeoutOf() time.Duration {
@@ -164,15 +199,21 @@ func (p *PlayerSetup) ensureTalents(ctx context.Context, trial map[string]any) (
 		}
 		return rowOf("player_talents", false, []any{}, "talents missing: no spell ids"), nil
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
 	for _, id := range ids {
 		// The guard learns on the sender's own character (self target):
-		// `.learn <id>` after the selection dance serve does per call.
-		if err := p.Guard.Send(tctx, "learn", TargetSelf, p.playerGUIDOf(tctx), fmt.Sprint(id)); err != nil {
-			return rowOf("player_talents", false, missingIDs(ids, nil), ".learn refused: "+err.Error()), nil
+		// `.learn <id>` after the selection dance serve does per call, each
+		// line within its own deadline.
+		if err := p.guardSend(ctx, "learn", p.playerGUIDOf(ctx), fmt.Sprint(id)); err != nil {
+			what := "refused"
+			var to *OpTimeout
+			if errors.As(err, &to) {
+				what = "timed out"
+			}
+			return rowOf("player_talents", false, missingIDs(ids, nil), ".learn "+what+": "+err.Error()), nil
 		}
 	}
+	tctx, cancel := p.ctxOf(ctx)
+	defer cancel()
 	rep, err := p.TB.Learn(tctx, "", ids...)
 	p.Ledger.Add(map[string]any{"kind": "player_talents", "reply": learnSummary(rep, err)})
 	if err != nil {
@@ -213,42 +254,60 @@ func (p *PlayerSetup) ensureStance(ctx context.Context, trial map[string]any) (m
 	if player["stance"] == nil || stance <= 0 {
 		return rowOf("player_stance", true, nil, "no stance/form for this trial"), nil
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	self := p.playerGUIDOf(tctx)
+	// Every wait below has its own deadline: a slow selection echo or a few
+	// slow aura reads must never use up the budget of the cast or the
+	// .learn after it (the live rerun's "cast refused (context deadline
+	// exceeded) and .learn refused" was one shared 20 s step budget).
+	self := p.playerGUIDOf(ctx)
 	// Drop every aura first: the stance lands on a clean character.
-	_ = p.Guard.Send(tctx, "unaura", TargetSelf, self, "all")
+	_ = p.guardSend(ctx, "unaura", self, "all")
 	held := func() bool {
 		for i := 0; i < 4; i++ {
-			if p.auraHeld(tctx, self, stance) {
+			if p.auraHeld(ctx, self, stance) {
 				return true
 			}
-			time.Sleep(500 * time.Millisecond)
+			sleepCtx(ctx, p.poll())
 		}
 		return false
 	}
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := p.Client.Cast(tctx, uint32(stance), self); err != nil && !IsNoReply(err) {
-			lastErr = err
+	cast := func() {
+		cctx, cancel := p.ctxOf(ctx)
+		defer cancel()
+		if err := p.Client.Cast(cctx, uint32(stance), self); err != nil && !IsNoReply(err) {
+			lastErr = p.timedOut("cast", err)
 		}
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		cast()
 		if held() {
 			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil
 		}
 	}
 	// The spell may be unknown: learn what the trial needs, cast again.
-	if err := p.Guard.Send(tctx, "learn", TargetSelf, self, itoa(stance)); err != nil {
-		return rowOf("player_stance", false, stance, "cast refused ("+errText(lastErr)+") and .learn refused: "+err.Error()), nil
+	if err := p.guardSend(ctx, "learn", self, itoa(stance)); err != nil {
+		what := "refused"
+		var to *OpTimeout
+		if errors.As(err, &to) {
+			what = "timed out"
+		}
+		return rowOf("player_stance", false, stance, "cast failed ("+errText(lastErr)+") and .learn "+what+": "+err.Error()), nil
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := p.Client.Cast(tctx, uint32(stance), self); err != nil && !IsNoReply(err) {
-			lastErr = err
-		}
+		cast()
 		if held() {
 			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held after .learn", stance)), nil
 		}
 	}
 	return rowOf("player_stance", false, stance, fmt.Sprintf("stance %d not held after 5 casts (%s)", stance, errText(lastErr))), nil
+}
+
+// guardSend sends one GM line on the player's own character within its own
+// deadline; a deadline of that wait is an *OpTimeout.
+func (p *PlayerSetup) guardSend(ctx context.Context, kind, self string, args ...string) error {
+	sctx, cancel := p.ctxOf(ctx)
+	defer cancel()
+	return p.timedOut(".gm "+kind, p.Guard.Send(sctx, kind, TargetSelf, self, args...))
 }
 
 // errText is an error's text, or "no error".
