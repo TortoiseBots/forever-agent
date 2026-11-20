@@ -13,9 +13,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
-// TestWatchObserverOutsideTheInstance: the party stands in the instance and the observer is still outside. PREPARE
-// compares the party's map with the plan's, not with the observer's, so the watch starts; the old check ended it
-// with prepare:map.
+// TestWatchObserverOutsideTheInstance: the party stands in the instance and this client's character is still on the
+// outer map. PREPARE compares the party's map with the plan's, not with the character's, so the watch starts; the old
+// check ended it with prepare:map.
 func TestWatchObserverOutsideTheInstance(t *testing.T) {
 	cfg := watchConfig()
 	cfg.Enter = "none"
@@ -241,6 +241,8 @@ func TestWatchReadyUsesTheLeaderDistance(t *testing.T) {
 	for _, b := range f.bots {
 		b.dmKind = "othermap"
 	}
+	// The module never lets the commander in: dm=othermap stands, and PREPARE must still measure the party by dl=.
+	f.RefuseActions = map[ActionKind]string{ActionTeleTo: "refused"}
 	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
 	if res := run.Watch(context.Background()); res.Stop != "done" {
 		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
@@ -319,7 +321,7 @@ func TestWatchStartRechecksThePlacement(t *testing.T) {
 			return false
 		}
 		reads++
-		return reads == 2 // prepare's read, then the start gate's
+		return reads == 3 // the commander's placement read, PREPARE's, then the start gate's
 	}
 	f.Clock.After(time.Second, func() {
 		for _, b := range f.bots {
@@ -432,5 +434,267 @@ func TestReadyNoEngineReason(t *testing.T) {
 	run.rep = &r
 	if ok, why := run.ready(); ok || why != "noengine:Watchdps1" {
 		t.Fatalf("engine off: ok=%v why=%q", ok, why)
+	}
+}
+
+// The third joint fixes: the commander brought to the party (before PREPARE, and after a tele entry lands it), and a
+// start gate that waits out the party's own teleport instead of reading a member in flight as an engine-off refusal.
+
+// actionIndex is the first position of the action whose text starts with prefix, -1 when it was never sent.
+func actionIndex(f *Fake, prefix string) int {
+	for i, a := range f.Acted() {
+		if strings.HasPrefix(a.String(), prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestWatchCommanderComesToTheTankBeforePrepare: --enter none with the party placed and the module's own commander
+// (the roster's, a bot outside the party) still on the outer map. The module reports the tank
+// `stuck=blocked:bot in an instance` with `dm=othermap`, and PREPARE would end on stuck:<tank>. The watch teleports
+// the commander to the tank's side before PREPARE, says where it stood and that it arrived, and the block is gone.
+func TestWatchCommanderComesToTheTankBeforePrepare(t *testing.T) {
+	cfg := watchConfig()
+	run, f, logs := newWatch(t, cfg)
+	// The live record: the tank stands in the instance, its master on the outer map, and the module blocks the bot
+	// for it; the module's teleport lands the commander at the tank's side and the block goes with it.
+	f.bots["Tank"].dmKind = "othermap"
+	f.bots["Tank"].stuck = "bot in an instance"
+	f.OnAction = func(f *Fake, a Action) bool {
+		if a.Kind != ActionTeleTo || a.Who != f.BotCommander {
+			return false
+		}
+		for _, b := range f.bots {
+			if b.dmKind == "othermap" {
+				b.dmKind, b.dmYards = "away", 3
+			}
+			if b.stuck == "bot in an instance" {
+				b.stuck = ""
+			}
+		}
+		return true
+	}
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "tele Botcmd to Tank"); n != 1 {
+		t.Fatalf("%d commander teleports, want 1; logs:\n%s", n, strings.Join(*logs, "\n"))
+	}
+	tele, gm := actionIndex(f, "tele Botcmd to Tank"), actionIndex(f, "gm on")
+	if tele < 0 || gm < 0 || tele > gm {
+		t.Fatalf("the commander's teleport (action %d) does not precede PREPARE's GM line (action %d)", tele, gm)
+	}
+	joined := strings.Join(*logs, "\n")
+	if !strings.Contains(joined, "the commander is on another map or instance than the tank; the watch moves it to the tank") {
+		t.Fatalf("no line saying where the commander stood:\n%s", joined)
+	}
+	if !strings.Contains(joined, "watch: the commander is at the tank's side") {
+		t.Fatalf("no line saying the commander arrived:\n%s", joined)
+	}
+}
+
+// TestWatchCommanderFollowsATeleEntry: --enter tele lifts the party into the instance and leaves the module's
+// commander on the outer map. The module blocks the tank while its master stands outside, and moves the commander in
+// its own time. The watch moves the commander to the tank after the party lands and waits for the module's own report
+// to see it with the party, so the start's readiness rule never reads the block as stuck and ends start:stuck.
+func TestWatchCommanderFollowsATeleEntry(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Enter = "tele"
+	run, f, logs := newWatch(t, cfg)
+	// The module's teleport of the commander is accepted and lands a beat later; the block on the tank and its dm=
+	// are derived from the commander's own place, as the module writes them.
+	inside := false
+	f.OnAction = func(f *Fake, a Action) bool {
+		if a.Kind != ActionTeleTo || a.Who != f.BotCommander {
+			return false
+		}
+		f.Clock.After(3*time.Second, func() { inside = true })
+		return true
+	}
+	f.OnState = func(f *Fake, _ int) error {
+		tank := f.bots[cfg.Tank()]
+		if tank == nil || tank.mapID != f.route.Map {
+			return nil
+		}
+		// The party is in: the tank's master is away until the commander's teleport lands.
+		if inside {
+			tank.dmKind, tank.dmYards = "away", 3
+			tank.stuck = ""
+		} else {
+			tank.dmKind = "othermap"
+			tank.stuck = "bot in an instance"
+		}
+		return nil
+	}
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "tele Botcmd to Tank"); n != 1 {
+		t.Fatalf("%d commander teleports, want 1; logs:\n%s", n, strings.Join(*logs, "\n"))
+	}
+	enter, tele := actionIndex(f, "enter party"), actionIndex(f, "tele Botcmd to Tank")
+	if enter < 0 || tele < 0 || tele < enter {
+		t.Fatalf("the commander's teleport (action %d) does not follow the party's entry (action %d)", tele, enter)
+	}
+	if n := countActions(f, "run start"); n != 1 {
+		t.Fatalf("%d run starts, want 1; logs:\n%s", n, strings.Join(*logs, "\n"))
+	}
+	joined := strings.Join(*logs, "\n")
+	if !strings.Contains(joined, "the commander is on another map or instance than the tank; the watch moves it to the tank") {
+		t.Fatalf("no line saying where the commander stood:\n%s", joined)
+	}
+	if !strings.Contains(joined, "watch: the commander is at the tank's side") {
+		t.Fatalf("no line saying the commander arrived:\n%s", joined)
+	}
+}
+
+// TestWatchStartWaitsForThePartysTeleport: the start gate's own read lands mid-teleport — a member is still on the
+// outer map with its engine off, the live line `engine=no ... map=1` — and the party lands a beat later. The gate
+// waits for every member on the plan's map instead of ending start:party-map on a member in flight.
+func TestWatchStartWaitsForThePartysTeleport(t *testing.T) {
+	cfg := watchConfig() // --enter none: the party was placed, one member still in the placement's teleport
+	run, f, logs := newWatch(t, cfg)
+	reads := 0
+	f.OnState = func(f *Fake, _ int) error {
+		if f.bots[cfg.Tank()].mapID != f.route.Map {
+			return nil
+		}
+		reads++
+		// Reads 1 and 2 are the commander's placement and PREPARE; the third is the start's gate.
+		if reads == 3 {
+			f.bots["Watchheal"].mapID, f.bots["Watchheal"].engine = 1, false
+			f.Clock.After(time.Second, func() {
+				f.bots["Watchheal"].mapID, f.bots["Watchheal"].engine = f.route.Map, true
+			})
+		}
+		return nil
+	}
+	f.ScriptRun(FakeRunScript{Steps: 8, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 1 {
+		t.Fatalf("%d run starts, want 1; logs:\n%s", n, strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchStartTeleportThatNeverLands: the member never lands. The gate's wait is bounded, and at the bound the
+// existing error (start:party-map) is the one reported, with no run started on a party that is not all on the plan's
+// map.
+func TestWatchStartTeleportThatNeverLands(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Limits.Enter = 10 * time.Second
+	run, f, logs := newWatch(t, cfg)
+	reads := 0
+	f.OnState = func(f *Fake, _ int) error {
+		if f.bots[cfg.Tank()].mapID != f.route.Map {
+			return nil
+		}
+		reads++
+		if reads >= 3 {
+			f.bots["Watchheal"].mapID, f.bots["Watchheal"].engine = 1, false
+		}
+		return nil
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "start:party-map" {
+		t.Fatalf("stop %q, want start:party-map; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run starts on a party that never landed", n)
+	}
+}
+
+// TestCommanderAway: the module's own dm= is the evidence that the party's commander stands elsewhere: another map or
+// instance, or a distance past a master's follow distance; the boundary itself is still with the tank.
+func TestCommanderAway(t *testing.T) {
+	cases := []struct {
+		name string
+		dist tbcmd.Distance
+		want string
+	}{
+		{"with the tank", tbcmd.Distance{Has: true, Kind: "away", Yards: 3}, ""},
+		{"other map or instance", tbcmd.Distance{Has: true, Kind: "othermap", Yards: 0}, "on another map or instance than the tank"},
+		{"at the follow distance", tbcmd.Distance{Has: true, Kind: "away", Yards: MasterFollowYd}, ""},
+		{"past it", tbcmd.Distance{Has: true, Kind: "away", Yards: MasterFollowYd + 1}, "21 yd from the tank"},
+		{"no distance", tbcmd.Distance{}, ""},
+		{"the bot is its own master", tbcmd.Distance{Has: true, Kind: "self"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commanderAway(&tbcmd.BotState{DistMaster: tc.dist}); got != tc.want {
+				t.Fatalf("commanderAway = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWatchCommanderMoveRefusedKeepsTheExistingError: the module refuses the commander's own teleport, and the core's
+// appear would have been accepted. The placement never falls back to it — appear moves this client's character, not
+// the party's commander — so no appear is sent, the observer stands where it stood, the refusal is logged once, and
+// the block the commander's absence causes still ends PREPARE on its own error rather than waiting out the watch.
+func TestWatchCommanderMoveRefusedKeepsTheExistingError(t *testing.T) {
+	cfg := watchConfig()
+	run, f, logs := newWatch(t, cfg)
+	// The observer stands on the outer map: an appear would read as a move at once, and it must never be sent.
+	f.selfMap = 1
+	f.selfPos = Vec3{10, 10, 10}
+	f.bots["Tank"].dmKind = "othermap"
+	f.bots["Tank"].stuck = "bot in an instance"
+	f.RefuseActions = map[ActionKind]string{ActionTeleTo: "refused"}
+	pos, mapID, _, _ := f.Self()
+	res := run.Watch(context.Background())
+	if res.Stop != "prepare:stuck" {
+		t.Fatalf("stop %q, want prepare:stuck; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	joined := strings.Join(*logs, "\n")
+	if n := countActions(f, "appear"); n != 0 {
+		t.Fatalf("%d appear actions on a refused commander teleport; the observer is never moved in its place:\n%s", n, joined)
+	}
+	if got, gotMap, _, _ := f.Self(); got != pos || gotMap != mapID {
+		t.Fatalf("the observer moved from %v map %d to %v map %d", pos, mapID, got, gotMap)
+	}
+	if !strings.Contains(joined, "watch: the commander could not be moved (refused); the watch goes on without it") {
+		t.Fatalf("no line saying the commander could not be moved:\n%s", joined)
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run starts on a blocked party", n)
+	}
+}
+
+// TestWatchCommanderUnnamedFailsTheWatch: the module's roster names no commander. The placement has nothing to move
+// and never moves this client's character in its place, so the watch ends on its own clear reason before PREPARE's GM
+// lines, with nothing sent and the observer where it stood.
+func TestWatchCommanderUnnamedFailsTheWatch(t *testing.T) {
+	cfg := watchConfig()
+	run, f, logs := newWatch(t, cfg)
+	f.OnParty = func(rep tbcmd.PartyReport) tbcmd.PartyReport {
+		rep.Commander = ""
+		return rep
+	}
+	pos, mapID, _, _ := f.Self()
+	res := run.Watch(context.Background())
+	if res.Stop != "commander:unnamed" {
+		t.Fatalf("stop %q, want commander:unnamed; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	joined := strings.Join(*logs, "\n")
+	if !strings.Contains(joined, "watch: the roster names no commander; the watch does not move its own character in its place") {
+		t.Fatalf("no line saying the roster named no commander:\n%s", joined)
+	}
+	// Nothing is sent in the commander's place, and nothing of PREPARE's either: the end's own instance read is the
+	// only line.
+	for _, a := range f.Acted() {
+		if a.Kind != ActionInstanceInfo {
+			t.Fatalf("action %q sent on an unnamed commander; logs:\n%s", a.String(), joined)
+		}
+	}
+	if got, gotMap, _, _ := f.Self(); got != pos || gotMap != mapID {
+		t.Fatalf("the observer moved from %v map %d to %v map %d", pos, mapID, got, gotMap)
 	}
 }
