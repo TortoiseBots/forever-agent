@@ -215,7 +215,7 @@ func TestTrialsRunStartsRenewal(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		var stdout, stderr bytes.Buffer
-		done <- trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 1, []string{trialPath}, &stdout, &stderr)
+		done <- trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 1, []string{trialPath}, &stdout, &stderr, "script")
 	}()
 	// Wait for the command to take the lease, then watch the expiry.
 	var leaseID string
@@ -276,7 +276,7 @@ func TestTrialsRunRenewalFailureAborts(t *testing.T) {
 	codeCh := make(chan int, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
-		codeCh <- trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 2, []string{trialPath}, &stdout, &stderr)
+		codeCh <- trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 2, []string{trialPath}, &stdout, &stderr, "script")
 	}()
 	// Wait for the first repeat to finish, then break the lease before the
 	// second repeat's pre-check: force-release and re-acquire as another
@@ -362,7 +362,7 @@ func TestTrialsRunReleaseFailureFails(t *testing.T) {
 	}
 	t.Cleanup(func() { storeReleaseHook = oldRelease })
 	var stdout, stderr bytes.Buffer
-	code := trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 1, []string{trialPath}, &stdout, &stderr)
+	code := trialsRunCommand(context.Background(), sf, store, "s1", "1", false, "trials", out, 1, []string{trialPath}, &stdout, &stderr, "script")
 	select {
 	case <-steal:
 	default:
