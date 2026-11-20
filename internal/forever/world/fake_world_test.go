@@ -300,7 +300,30 @@ type fakeServer struct {
 	charScreen *fakeCharScreen
 	walkFrom   [3]float32
 	walkTo     [3]float32
-	walkMoved  int
+	// routeWalk runs the route-walk scenario (fake_route_walk_test.go): the character's create block, the movement
+	// packets stored as the server's position, the GM guard and the `.gps` answers, scripted to confirm, freeze,
+	// shift or drop the position. routeWalkFreezeAfter freezes the stored position after that many movement
+	// packets (0: never); routeWalkPos is the stored position, routeWalkSeen the movement packets it took.
+	routeWalk            bool
+	routeWalkMode        string // "confirm" (default), "stuck" (freeze after routeWalkFreezeAfter), "deviate", "fall"
+	routeWalkStart       [3]float32
+	routeWalkPos         [3]float32
+	routeWalkFreezeAfter int
+	routeWalkSeen        int
+	routeWalkSelects     int
+	// The `.gps` freshness cases: routeWalkGPSReads counts the requests, routeWalkStaleMoved makes one read a delayed
+	// answer (the first read whose stored position is more than that many yards from the previous answer is answered
+	// with that previous answer, and its own answer follows on the next read), routeWalkFlip shifts the answer 4 yd
+	// east on odd requests and 6 yd on even ones (two reads that disagree), routeWalkSilentAt answers that request
+	// with the map line only, and routeWalkLastGPS/routeWalkLastGPSSet remember the last answer.
+	routeWalkGPSReads   int
+	routeWalkStaleMoved float64
+	routeWalkStaleUsed  bool
+	routeWalkFlip       bool
+	routeWalkSilentAt   int
+	routeWalkLastGPS    [3]float32
+	routeWalkLastGPSSet bool
+	walkMoved           int
 	// walkLegs counts finished legs (a STOP at the target): the walk-check walks out and back, so a facing packet
 	// after two legs is the turn back to the create block's orientation.
 	walkLegs int
@@ -1039,6 +1062,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.walk {
 		f.serveWalk(c, realm)
+		return
+	}
+	if f.routeWalk {
+		f.serveRouteWalk(c, realm)
 		return
 	}
 	if f.fb {

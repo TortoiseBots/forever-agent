@@ -189,6 +189,9 @@ type Options struct {
 	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
+	// RouteWalk runs `forever route-walk`: enter the plan's instance, walk every selected leg on the navmesh, and
+	// confirm every planned point with the server's own `.gps` position. A nil value runs none of it.
+	RouteWalk *RouteWalkOptions
 	// Serve makes this a long-running session: after the login burst the session serves the RPC socket on
 	// Serve.Listener and stays in the world until the caller's context ends. A dropped link is logged in again
 	// within ServeConfig's budget (a fresh session, rebuilt state), and only a spent budget ends the daemon. Stay
@@ -282,6 +285,8 @@ type Report struct {
 	Dungeon *driver.Result
 	// Round S7: the watch's result, nil when the session ran something else.
 	Watch *driver.Result
+	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
+	RouteWalk *RouteWalkReport
 	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
 	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
 	// one row per resolved change (map-check fills Objects for each).
@@ -452,6 +457,10 @@ type session struct {
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
+	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
+	// reports the selected unit, so the character selects itself once per map and only again when either changes.
+	routeSelectGUID wire.GUID
+	routeSelectMap  uint32
 
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
@@ -1062,6 +1071,12 @@ func (s *session) enter(ctx context.Context) error {
 		err := s.commandCheck(ctx)
 		s.summariseChat()
 		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.RouteWalk != nil {
+		if err := s.routeWalk(ctx); err != nil {
 			return err
 		}
 		return s.logout(ctx)
