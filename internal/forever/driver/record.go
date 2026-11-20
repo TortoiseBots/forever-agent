@@ -2,6 +2,9 @@ package driver
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,6 +22,18 @@ const (
 	TraceSource    = "forever_dungeon_run"
 	// TraceSourceWatch is the watch's source word: the same summary schema, filled from the module's own counters.
 	TraceSourceWatch = "forever_dungeon_watch"
+	// DefaultCombatMaxBytes is the combat log's size bound: some 370,000 rows of the trials row shape, far more than
+	// a dungeon run's fights write. A page that would cross it is not written, so the file never holds a partial page
+	// and the summary says the log is truncated.
+	DefaultCombatMaxBytes = 64 << 20
+)
+
+var (
+	// errCombatFull: the log reached its size bound. Combat wrote nothing and the watch stops draining it.
+	errCombatFull = errors.New("the combat log reached its size bound")
+	// errCombatEmpty: a page carried an empty row. Nothing is written, because a page is placed whole or not at all
+	// and the caller's cursor may only advance through a page the file took.
+	errCombatEmpty = errors.New("the combat log page carried an empty row")
 )
 
 // PullRecord is one pull's numbers.
@@ -84,9 +99,20 @@ type RunWatch struct {
 	Bosses map[string]string `json:"bosses,omitempty"`
 	// Rescues is how many practice rescues the watcher sent, Events how many run events it read, and PauseLog the
 	// pauses it saw with their reasons and times.
-	Rescues  int         `json:"rescues"`
-	Events   int         `json:"events"`
-	PauseLog []PauseNote `json:"pause_log,omitempty"`
+	Rescues int `json:"rescues"`
+	Events  int `json:"events"`
+	// Frames is how many trace frames the watch wrote, CombatRows how many combat-log rows reached the run's
+	// combat-log file and CombatDropped how many rows the session's ring had dropped before the watch read them, in
+	// total over the run's holes.
+	// CombatBytes is what the file holds, CombatTruncated says the size bound stopped it, and CombatError the last
+	// write error (a page that could not be written stays in the cursor and is retried, never skipped).
+	Frames          int         `json:"frames,omitempty"`
+	CombatRows      int         `json:"combat_rows,omitempty"`
+	CombatDropped   int         `json:"combat_dropped,omitempty"`
+	CombatBytes     int64       `json:"combat_bytes,omitempty"`
+	CombatTruncated bool        `json:"combat_truncated,omitempty"`
+	CombatError     string      `json:"combat_error,omitempty"`
+	PauseLog        []PauseNote `json:"pause_log,omitempty"`
 	// StopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it, so the run's end is not confirmed by the module.
 	StopUnconfirmed bool `json:"stop_unconfirmed,omitempty"`
@@ -166,12 +192,21 @@ type RescueNote struct {
 // plays. It is used from the driver's one goroutine only.
 type Recorder struct {
 	runID   string
+	dir     string
 	trace   *trace.Writer
 	traceAt string
 	sumAt   string
-	start   time.Time
-	sum     RunSummary
-	pull    *PullRecord
+	// combatAt is the run's combat-log file and combat the open handle: written by a watch that drains the
+	// session's log, opened on the first row so a run without one leaves no empty file. combatSize is the bytes the
+	// file holds, combatMax its bound and combatTrunc that the bound stopped a page.
+	combatAt    string
+	combat      *os.File
+	combatSize  int64
+	combatMax   int64
+	combatTrunc bool
+	start       time.Time
+	sum         RunSummary
+	pull        *PullRecord
 }
 
 // NewRecorder opens a dungeon-run's trace in dir. runID names the files; plan and instance go into the header and
@@ -198,11 +233,14 @@ func newRecorder(dir, runID, plan string, planMap, instance uint32, start time.T
 		return nil, err
 	}
 	r := &Recorder{
-		runID:   runID,
-		trace:   w,
-		traceAt: w.Path(),
-		sumAt:   filepath.Join(dir, runID+".forever-run.json"),
-		start:   start,
+		runID:     runID,
+		dir:       dir,
+		trace:     w,
+		traceAt:   w.Path(),
+		sumAt:     filepath.Join(dir, runID+".forever-run.json"),
+		combatAt:  filepath.Join(dir, runID+".combatlog.jsonl"),
+		combatMax: DefaultCombatMaxBytes,
+		start:     start,
 		sum: RunSummary{
 			Schema:  SummarySchema,
 			Version: SummaryVersion,
@@ -243,29 +281,10 @@ func (r *Recorder) Frame(t time.Time, rep *tbcmd.StateReport, units []Unit, botG
 	if r == nil || r.trace == nil {
 		return
 	}
-	f := trace.Frame{Via: "session"}
+	f := trace.Frame{Via: "session", Envelope: trace.Envelope{T: r.ms(t)}}
 	if rep != nil {
 		for _, b := range rep.Bots {
-			fb := trace.Bot{
-				G:      botGUID[b.Name],
-				Alive:  !isDead(b),
-				Combat: b.InCombat,
-				State:  stateCode(b),
-				HP:     uint32(max(b.HP, 0)),
-				MaxHP:  uint32(max(b.HPMax, 0)),
-				Power:  uint32(max(b.Power, 0)),
-				MaxPow: uint32(max(b.PowerMax, 0)),
-				PType:  powerType(b.PowerType),
-				X:      float32(b.X),
-				Y:      float32(b.Y),
-				Z:      float32(b.Z),
-				Moving: b.Move == "follow",
-				Target: b.TargetGUID,
-			}
-			if fb.G == "" {
-				fb.G = b.Name
-			}
-			f.Bots = append(f.Bots, fb)
+			f.Bots = append(f.Bots, botFrame(b, botGUID[b.Name], "", nil))
 		}
 	}
 	for _, u := range units {
@@ -289,6 +308,106 @@ func (r *Recorder) Frame(t time.Time, rep *tbcmd.StateReport, units []Unit, botG
 		})
 	}
 	r.trace.Frame(f)
+}
+
+// FrameBot is one party member of a frame taken from the module's own state report: its line, the guid this
+// client's model gives its name (the name itself stays out of the trace), the party slot's role and the auras the
+// model holds for it.
+type FrameBot struct {
+	State tbcmd.BotState
+	GUID  string
+	Role  string
+	Auras []uint32
+}
+
+// WatchFrame writes one frame of a watched run from the module's own reports: the party from `.tb state` and the
+// mobs from `.tb threat`. Both are reads; a frame never carries an order. The party's first frame also writes the
+// party records (guid, name, role, class) the rest of the run joins on: a watch's roster comes from the module, so
+// the header could not carry it.
+func (r *Recorder) WatchFrame(t time.Time, bots []FrameBot, thr *tbcmd.ThreatReport, guidOf func(string) string) {
+	if r == nil || r.trace == nil {
+		return
+	}
+	ms := r.ms(t)
+	f := trace.Frame{Via: "session", Envelope: trace.Envelope{T: ms}}
+	for _, b := range bots {
+		fb := botFrame(b.State, b.GUID, b.Role, b.Auras)
+		f.Bots = append(f.Bots, fb)
+		if fb.G != "" {
+			r.trace.Party(ms, trace.Member{G: fb.G, Name: b.Role, Role: b.Role, Class: b.State.Class})
+		}
+	}
+	if thr != nil {
+		for _, m := range thr.Mobs {
+			mob := trace.Mob{
+				G:      traceGUID(m.Mob),
+				Entry:  uint32(max(m.Entry, 0)),
+				Name:   m.Name,
+				HPPct:  m.HPPct,
+				Combat: m.Victim != "" || m.Target != "",
+				Victim: guidOf(m.Victim),
+				Flee:   m.Flee,
+			}
+			if m.HasPos {
+				mob.X, mob.Y, mob.Z = float32(m.X), float32(m.Y), float32(m.Z)
+			} else {
+				mob.NP = true
+			}
+			// The registry record, the first time this mob is in a frame: the entry and the module's name, which the
+			// frame itself does not carry.
+			r.trace.Mob(ms, trace.MobInfo{G: mob.G, Entry: mob.Entry, Name: m.Name})
+			for _, e := range m.Top {
+				mob.Top = append(mob.Top, trace.TopEntry{G: guidOf(e.Name), Threat: e.Threat})
+			}
+			f.Mobs = append(f.Mobs, mob)
+		}
+	}
+	r.trace.Frame(f)
+}
+
+// botFrame is one party member's frame entry from the module's state line: the engine state, health, power,
+// position and target, and the module's own report of role, move order, stuck state, meal, rest, life and distance.
+// G is the guid text its caller resolved, or empty when the model does not know the member yet: a frame never
+// carries a character name, and an unresolved member is a row without an identity (its role still names its slot)
+// rather than one that changes identity once the guid arrives.
+func botFrame(b tbcmd.BotState, guid, role string, auras []uint32) trace.Bot {
+	fb := trace.Bot{
+		G:      guid,
+		Alive:  !isDead(b),
+		Combat: b.InCombat,
+		State:  stateCode(b),
+		HP:     uint32(max(b.HP, 0)),
+		MaxHP:  uint32(max(b.HPMax, 0)),
+		Power:  uint32(max(b.Power, 0)),
+		MaxPow: uint32(max(b.PowerMax, 0)),
+		PType:  powerType(b.PowerType),
+		X:      float32(b.X),
+		Y:      float32(b.Y),
+		Z:      float32(b.Z),
+		Moving: b.Move == "follow",
+		Target: traceGUID(b.TargetGUID),
+		Role:   role,
+		Move:   b.Move,
+		Stuck:  b.Stuck.Raw,
+		Eat:    b.Eating,
+		Drink:  b.Drinking,
+		Rest:   b.Resting,
+		Life:   b.Extra["life"],
+		Auras:  auras,
+	}
+	if d := b.DistLeader; d.Has {
+		switch d.Kind {
+		case "othermap":
+			// A member on another map has no distance to the leader, so the frame has no dl key.
+		case "self":
+			var yd float32
+			fb.DL = &yd
+		default:
+			yd := float32(d.Yards)
+			fb.DL = &yd
+		}
+	}
+	return fb
 }
 
 // stateCode is the frame's one-letter engine state: c combat, n non-combat, d dead, r resting.
@@ -401,6 +520,115 @@ func (r *Recorder) Finish(t time.Time, reason, lastLeg string) {
 		})
 		_ = r.trace.Close()
 	}
+	r.CloseCombat()
+}
+
+// Combat appends the combat log's rows to the run's <run_id>.combatlog.jsonl, one JSON row per line, as the session
+// answered them (the trials runner's raw row shape). It returns how many rows were written and an error when they
+// were not. A page is all or nothing: a failed or short write is cut back to the file's last complete row, so the
+// caller can retry the same page without advancing its cursor past rows that are not on disk. A page that would
+// cross SetCombatMaxBytes' bound is not written and answers errCombatFull. The file is opened on the first row; a
+// run whose log never answered leaves no file.
+func (r *Recorder) Combat(rows []json.RawMessage) (int, error) {
+	if r == nil || r.combatAt == "" || len(rows) == 0 {
+		return 0, nil
+	}
+	if r.combatTrunc {
+		return 0, errCombatFull
+	}
+	buf := make([]byte, 0, 128*len(rows))
+	for _, row := range rows {
+		if len(row) == 0 {
+			return 0, errCombatEmpty
+		}
+		buf = append(buf, row...)
+		buf = append(buf, '\n')
+	}
+	if r.combat == nil {
+		f, err := os.OpenFile(r.combatAt, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return 0, err
+		}
+		st, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return 0, err
+		}
+		r.combat, r.combatSize = f, st.Size()
+	}
+	if r.combatMax > 0 && r.combatSize+int64(len(buf)) > r.combatMax {
+		r.combatTrunc = true
+		if r.combatSize == 0 {
+			// Nothing was ever written: leave no file behind, as a run whose log never answered leaves none.
+			_ = r.combat.Close()
+			_ = os.Remove(r.combatAt)
+			r.combat = nil
+		}
+		return 0, errCombatFull
+	}
+	n, err := r.combat.Write(buf)
+	if err == nil && n != len(buf) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		// Cut the partial rows back off: the file ends at the last complete row, and the caller retries the page.
+		if terr := r.combat.Truncate(r.combatSize); terr != nil {
+			return 0, fmt.Errorf("%w (and the truncate back to %d bytes failed: %v)", err, r.combatSize, terr)
+		}
+		return 0, err
+	}
+	r.combatSize += int64(n)
+	return len(rows), nil
+}
+
+// SetCombatMaxBytes bounds the combat-log file. A page that would cross the bound is not written (all or nothing, so
+// the watch's cursor never advances past rows that are not on disk) and the run's summary carries
+// combat_truncated. A value of zero or less keeps the default.
+func (r *Recorder) SetCombatMaxBytes(n int64) {
+	if r == nil || n <= 0 {
+		return
+	}
+	r.combatMax = n
+}
+
+// CombatMaxBytes is the combat-log file's bound.
+func (r *Recorder) CombatMaxBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.combatMax
+}
+
+// CombatBytes is how many bytes of combat rows the file holds.
+func (r *Recorder) CombatBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.combatSize
+}
+
+// CombatTruncated says the size bound stopped the log: the file ends where it stood and no later page is written.
+func (r *Recorder) CombatTruncated() bool {
+	return r != nil && r.combatTrunc
+}
+
+// combatErrText is a write error without the file's path: the summary is the record others read, and a path is the
+// operator's.
+func combatErrText(err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Op + ": " + pe.Err.Error()
+	}
+	return err.Error()
+}
+
+// CloseCombat closes the combat-log file once the watch has drained its last page.
+func (r *Recorder) CloseCombat() {
+	if r == nil || r.combat == nil {
+		return
+	}
+	_ = r.combat.Close()
+	r.combat = nil
 }
 
 // SetWatch stores a watched run's counters and rewrites the summary. It is called while the watch is on and once at

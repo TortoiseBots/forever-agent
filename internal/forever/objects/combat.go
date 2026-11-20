@@ -107,28 +107,64 @@ func (o *Object) auraLocked() map[uint16]*Aura {
 	return o.Auras
 }
 
+// AuraChangeKind is what one slot of an aura update did to the model.
+type AuraChangeKind uint8
+
+const (
+	// AuraRefreshed is a known slot whose data came again (a re-application, a new expiry). The combat log writes no
+	// row for it: the aura was already on.
+	AuraRefreshed AuraChangeKind = iota
+	// AuraAdded is a slot the unit did not have.
+	AuraAdded
+	// AuraRemoved is a slot the update cleared.
+	AuraRemoved
+)
+
+// AuraChange is one slot an aura update changed: which unit, which slot, the aura's spell, its caster when the
+// record carried one, and what happened. ApplyAuraUpdate reports them in the packet's order (and a full update's
+// clearances first), so a caller can write one row per change.
+type AuraChange struct {
+	Unit    wire.GUID
+	Slot    uint16
+	SpellID int32
+	Caster  wire.GUID
+	Kind    AuraChangeKind
+}
+
 // ApplyAuraUpdate applies SMSG_AURA_UPDATE: a slot with data is an aura gained or refreshed, a slot without data is
-// an aura lost (SpellAuras.cpp:232-240).
-func (w *World) ApplyAuraUpdate(u *combat.AuraUpdate, now time.Time) {
+// an aura lost (SpellAuras.cpp:232-240). It returns the slot changes; a unit the model does not hold changes
+// nothing.
+func (w *World) ApplyAuraUpdate(u *combat.AuraUpdate, now time.Time) []AuraChange {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	o := w.unitLocked(u.Unit)
 	if o == nil {
-		return
+		return nil
 	}
 	w.touchLocked(o, now)
+	var changes []AuraChange
+	// A full aura update names every aura the unit has: the client drops what is not in the list
+	// (AuraUpdate::UpdateAll, SpellPackets.cpp:154-164). The listed slots are applied first (a listed slot the unit
+	// already has is a refresh, not a removal and a re-add), and the slots left out are removed afterwards.
+	var named map[uint16]bool
 	if u.UpdateAll {
-		// A full aura update names every aura the unit has: the client drops what is not in the list
-		// (AuraUpdate::UpdateAll, SpellPackets.cpp:154-164).
-		o.Auras = nil
+		named = make(map[uint16]bool, len(u.Auras))
 	}
 	for _, info := range u.Auras {
+		if named != nil {
+			named[info.Slot] = true
+		}
 		auras := o.auraLocked()
 		if info.Data == nil {
+			old, had := auras[info.Slot]
 			delete(auras, info.Slot)
+			if had {
+				changes = append(changes, AuraChange{Unit: u.Unit, Slot: info.Slot, SpellID: old.SpellID, Caster: old.Caster, Kind: AuraRemoved})
+			}
 			continue
 		}
-		if _, exists := auras[info.Slot]; !exists && len(auras) >= maxAurasPerUnit {
+		_, exists := auras[info.Slot]
+		if !exists && len(auras) >= maxAurasPerUnit {
 			continue // the cap: a new slot is dropped, an existing one still updates
 		}
 		a := &Aura{
@@ -149,11 +185,26 @@ func (w *World) ApplyAuraUpdate(u *combat.AuraUpdate, now time.Time) {
 			a.ExpiresAt = now.Add(a.Remaining)
 		}
 		auras[info.Slot] = a
+		kind := AuraRefreshed
+		if !exists {
+			kind = AuraAdded
+		}
+		changes = append(changes, AuraChange{Unit: u.Unit, Slot: info.Slot, SpellID: a.SpellID, Caster: a.Caster, Kind: kind})
+	}
+	if named != nil {
+		for slot, a := range o.Auras {
+			if named[slot] {
+				continue
+			}
+			changes = append(changes, AuraChange{Unit: u.Unit, Slot: slot, SpellID: a.SpellID, Caster: a.Caster, Kind: AuraRemoved})
+			delete(o.Auras, slot)
+		}
 	}
 	// The ghost aura is the unit-level death signal round 6 keys on (Player.cpp:4688, :4767).
 	if applyGhostLocked(o, now) {
 		w.resurrections++
 	}
+	return changes
 }
 
 // ApplyPowerUpdate applies SMSG_POWER_UPDATE to the unit's power bar. The packet names a power TYPE
@@ -399,25 +450,40 @@ func (w *World) DeadAt(guid wire.GUID) bool {
 	return ok && cs.Dead
 }
 
+// Deaths drains the guids the merges since the last call took to dead, in the order they died. The caller owns the
+// slice; the model starts a new one. A unit that dies, is revived and dies again appears twice.
+func (w *World) Deaths() []wire.GUID {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.deadSince) == 0 {
+		return nil
+	}
+	out := w.deadSince
+	w.deadSince = nil
+	return out
+}
+
 // applyDeathLocked derives the dead flag from the values a merge just stored: a unit whose health is zero is dead
 // (Unit::setDeathState sets health 0, Unit.cpp:9584-9587), and a unit whose health came back is alive again (a
-// creature respawn, Creature.cpp:2411-2415).
-func applyDeathLocked(o *Object) {
+// creature respawn, Creature.cpp:2411-2415). It reports whether this merge is what made the unit dead.
+func applyDeathLocked(o *Object) bool {
 	if !o.Info.HasUnit {
-		return
+		return false
 	}
 	if o.Info.Health <= 0 && o.Info.MaxHealth > 0 {
+		was := o.Dead
 		o.Dead = true
-		return
+		return !was
 	}
 	if o.Ghost {
 		// A released spirit has 1 health (Player.cpp:4714-4715): the aura, not health, says it is still dead.
 		o.Dead = true
-		return
+		return false
 	}
 	if o.Info.Health > 0 {
 		o.Dead = false
 	}
+	return false
 }
 
 // InCombatFromFlags reports whether a unit's decoded unit flags carry UNIT_FLAG_IN_COMBAT (UnitDefines.h:186).

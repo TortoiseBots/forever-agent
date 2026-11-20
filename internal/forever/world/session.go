@@ -526,6 +526,11 @@ type session struct {
 	serveRT *serveRuntime
 	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
 	loot *lootWatch
+
+	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
+	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
+	// one log with one seq axis.
+	combat CombatLog
 }
 
 const (
@@ -1775,7 +1780,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			return fmt.Errorf("world: SMSG_UPDATE_OBJECT: %w", err)
 		}
 		s.applyUpdate(u)
-		s.world.Apply(u, s.transport().Now())
+		now := s.transport().Now()
+		s.world.Apply(u, now)
+		s.combatDeaths(now)
 		s.observeSelfIfTracking()
 	case wire.SMSGOnMonsterMove:
 		m, err := objects.ParseMonsterMove(p.Payload)
@@ -1934,6 +1941,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplyAttackRound(v, now)
+		s.combatRow("melee", now, int32(v.MeleeSpellID), v.Damage, v.Attacker, v.Victim, "")
 		if v.Attacker == s.self || v.Victim == s.self {
 			s.fight.swing(v)
 		}
@@ -1949,6 +1957,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplySpellCast(&v, false, now)
+		s.combatCast("spell_start", now, &v)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}
@@ -1960,6 +1969,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplySpellCast(&v, true, now)
+		s.combatCast("spell_go", now, &v)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}
@@ -1980,6 +1990,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplySpellFailure(v, now)
+		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureName(v.Reason))
 		if v.Caster == s.self || v.Caster.IsZero() {
 			// CAST_FAILED is the pre-cast answer and carries the client's cast id; the failure forms carry the
 			// server's (see fightLog.castFail). A failure of a generation that gave up is dropped first.
@@ -1994,6 +2005,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
+		s.combatRow("spell_damage", now, v.SpellID, v.Damage, v.Caster, v.Me, "")
 		switch {
 		case v.Me == s.self:
 			s.fight.damageTaken += v.Damage
@@ -2008,6 +2020,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
+		s.combatRow("heal", now, v.SpellID, v.OriginalHeal, v.Caster, v.Target, "")
 		if v.Target == s.self || v.Caster == s.self {
 			s.fight.add("spell", fmt.Sprintf("spell %d healed %s for %d", v.SpellID, s.fight.name(v.Target), v.OriginalHeal), v.OriginalHeal)
 		}
@@ -2016,6 +2029,13 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		if err != nil {
 			s.noteParseError(p, err)
 			return
+		}
+		for _, e := range v.Effects {
+			kind := "periodic"
+			if e.PeriodicTickIsHeal() {
+				kind = "heal"
+			}
+			s.combatRow(kind, now, v.SpellID, e.Amount, v.Caster, v.Target, "")
 		}
 		if v.Target == s.self || v.Caster == s.self {
 			for _, e := range v.Effects {
@@ -2041,7 +2061,14 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		s.world.ApplyAuraUpdate(&v, now)
+		for _, ch := range s.world.ApplyAuraUpdate(&v, now) {
+			switch ch.Kind {
+			case objects.AuraAdded:
+				s.combatRow("aura_applied", now, ch.SpellID, 0, ch.Caster, ch.Unit, "")
+			case objects.AuraRemoved:
+				s.combatRow("aura_removed", now, ch.SpellID, 0, ch.Caster, ch.Unit, "")
+			}
+		}
 		s.observeSelfIfTracking()
 		for _, info := range v.Auras {
 			s.fight.aura(v.Unit, info)
