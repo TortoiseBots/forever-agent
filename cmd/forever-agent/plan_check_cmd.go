@@ -193,7 +193,7 @@ func lintResult(res planexport.Result, planner *navmesh.Planner, dir, spawnDir s
 }
 
 // foreverServer is the alt_entries key of the second server: plan-check --forever reads its spawns and selects its object entries.
-const foreverServer = "forever"
+const foreverServer = planexport.ServerForever
 
 // lintRows lints already built rows (an export's steps). p is the plan behind them (nil for a migration: the row's own
 // pull rules stand in); origins names each row's plan element, for the object lint's entry lookup (nil for a migration).

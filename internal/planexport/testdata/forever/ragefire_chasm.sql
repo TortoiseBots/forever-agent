@@ -1,6 +1,8 @@
 -- Dungeon plan rows for a server module that runs dungeon plans, exported by forever-agent (plan-export --forever).
 -- The plan file is the single source: edit it there and export again; no row here is set by hand.
 -- A pack is named by creature entry and position; the rows carry no spawn id.
+-- An object row (open, open_proof, use_on, loot, wait_object, wait_clear) names the entry this server uses for the object:
+-- the plan's alt_entries value for it where the plan carries one, the plan's own entry otherwise.
 -- Idempotent: one transaction per plan deletes the plan's own rows from the four plan tables child first, then
 -- inserts the plan's rows parent first and upserts its boss rows by map and entry. The boss table is shared by
 -- every plan on the map, so the export never deletes from it; a boss row's name is only set from a value the plan

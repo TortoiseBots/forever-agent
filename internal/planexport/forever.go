@@ -68,6 +68,8 @@ type ForeverReport struct {
 const ForeverHeader = `-- Dungeon plan rows for a server module that runs dungeon plans, exported by forever-agent (plan-export --forever).
 -- The plan file is the single source: edit it there and export again; no row here is set by hand.
 -- A pack is named by creature entry and position; the rows carry no spawn id.
+-- An object row (open, open_proof, use_on, loot, wait_object, wait_clear) names the entry this server uses for the object:
+-- the plan's alt_entries value for it where the plan carries one, the plan's own entry otherwise.
 -- Idempotent: one transaction per plan deletes the plan's own rows from the four plan tables child first, then
 -- inserts the plan's rows parent first and upserts its boss rows by map and entry. The boss table is shared by
 -- every plan on the map, so the export never deletes from it; a boss row's name is only set from a value the plan
@@ -79,6 +81,9 @@ const ForeverHeader = `-- Dungeon plan rows for a server module that runs dungeo
 // BuildForever maps a plan to the Forever rows and reports every plan field as carried, dropped with a note, or refused.
 // A plan with a refused field is not exported: the error names every refused field.
 func BuildForever(p *dungeon.Plan, opt Options) (ForeverReport, error) {
+	// The rows name the objects this server uses: an object ref's alt_entries value for it where the plan carries one (the Deadmines
+	// Heavy Doors are 16400 and 16399 here, 17153 in the plan), the plan's own entry everywhere else.
+	opt.Server = ServerForever
 	var rep ForeverReport
 	c := newClassifier(&rep)
 	classifyPlan(c, p, opt)
@@ -285,10 +290,10 @@ func classifyPlan(c *classifier, p *dungeon.Plan, opt Options) {
 			c.carried(at + ".leave (leg comment, not read by the module)")
 		}
 		if len(l.LeftoverEntries) > 0 {
-			c.refused(at+".leftover_entries", where, "no loot or sweep rows in this format")
+			c.refused(at+".leftover_entries", where, "no sweep row: a chest's leftovers would be a pull row the plan cannot mark as theirs, so the module does not clear them")
 		}
 		if l.CompanionsLoot != nil {
-			c.dropped(at+".companions_loot", where, "no loot rows in this format; the module's own looting applies")
+			c.dropped(at+".companions_loot", where, "no column: the module's own looting applies to the leg's loot rows, and a companions_loot false leg's loot steps are left out")
 		}
 		if l.NeedsWalk {
 			c.dropped(at+".needs_walk", where, "the point is exported as given")
@@ -370,7 +375,7 @@ func classifyPlan(c *classifier, p *dungeon.Plan, opt Options) {
 				c.dropped(bf+".tactics", bw, "no tactic rows in this format; the module's own boss handling applies")
 			}
 			if b.CompanionsLoot != nil {
-				c.dropped(bf+".companions_loot", bw, "no loot rows in this format")
+				c.dropped(bf+".companions_loot", bw, "no column: the module's own looting applies")
 			}
 			if b.NeedsWalk {
 				c.dropped(bf+".needs_walk", bw, "the position is exported as given")
@@ -379,10 +384,10 @@ func classifyPlan(c *classifier, p *dungeon.Plan, opt Options) {
 				c.refused(bf+".phase_entries", bw, "no column for an encounter's other entries")
 			}
 			if b.LootItem != nil {
-				c.refused(bf+".loot_item", bw, "no loot rows in this format")
+				c.refused(bf+".loot_item", bw, "no boss-loot row: a loot row names a game object, and the party's own looting takes the boss's drops")
 			}
 			if b.SummonOpenStep != 0 {
-				c.refused(bf+".summon_open_step", bw, "no use_object steps in this format")
+				c.refused(bf+".summon_open_step", bw, "no column: the open step is a row of the leg, and the plan's step number is not in any row")
 			}
 			if b.Hold != nil {
 				c.refused(bf+".hold", bw, "no hold rows in this format")
@@ -435,15 +440,21 @@ func avoidInsideText(p *dungeon.Plan, b dungeon.AvoidBox) string {
 	return "holds " + strings.Join(at, ", ")
 }
 
-// classifyStep refuses every step kind the Forever rows do not carry.
+// classifyStep names what the Forever rows do with one plan step: an object-backed step becomes the module's object row (a
+// use_object an open, an open_proof or a use_on row; a loot_object a loot row; a wait_for on a game object a wait_object row; a
+// hostiles-gone wait a wait_clear row), and every other kind the module's plan table has no row for is refused.
 func classifyStep(c *classifier, field, where string, st dungeon.Step) {
 	switch {
 	case st.UseObject != nil:
-		c.refused(field+".use_object", where, "no object rows in this format")
-	case st.WaitFor != nil:
-		c.refused(field+".wait_for", where, "no wait rows in this format")
+		c.carried(field + ".use_object")
+	case st.WaitFor != nil && (st.WaitFor.GameObject != nil || st.WaitFor.HostilesGone != nil):
+		c.carried(field + ".wait_for")
 	case st.LootObject != nil:
-		c.refused(field+".loot_object", where, "no loot rows in this format")
+		c.carried(field + ".loot_object")
+	case st.WaitFor != nil:
+		// A wait_for with a hold is a hold row, and a unit wait has no row at all: the module's plan table carries neither yet, so
+		// the run would go on without the wait.
+		c.refused(field+".wait_for", where, "only a wait_for on a game object or for no hostiles is a wait row (wait_object, wait_clear); a hold or unit wait has no row in this format")
 	case st.UseItem != nil:
 		c.refused(field+".use_item", where, "no item rows in this format")
 	case st.Ritual != nil:
@@ -1027,8 +1038,14 @@ func equalForeverRows(want, got Rows) error {
 	return nil
 }
 
+// near3Tolerance is the most two values of one three-decimal column may differ and still agree: half a thousandth (the column's
+// own rounding) plus 0.00001 yd of slack for the float32 the column is read back into. A plan value exactly on the halfway point
+// needs the slack: Deadmines' dock pull at -93.3125 (entry 657) is written -93.312, and float32(-93.312) sits 0.00050354 yd from
+// it. A row that moved still fails: a column past the tie's two neighbours is 0.0015 yd or more from the value.
+const near3Tolerance = 0.00051
+
 // near3 says two values agree to the three decimals the Forever rows carry.
 func near3(a, b float32) bool {
 	d := float64(a) - float64(b)
-	return d <= 0.0005 && d >= -0.0005
+	return d <= near3Tolerance && d >= -near3Tolerance
 }
