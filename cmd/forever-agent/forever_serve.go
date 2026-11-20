@@ -98,7 +98,7 @@ func serveManifest(dir, tokenFile, character string, port int) error {
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -112,6 +112,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	parents := mapPairs{}
 	fs.Var(parents, "parent", "MAP=PARENT: an instance map whose missing tile comes from that parent (repeatable)")
 	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
+	allowGMUnits := fs.Bool("allow-gm-units", false, "test bench: allow gm_kill, gm_set_hp and gm_aura on the guids trial_units registered")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -219,6 +220,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			NavmeshDir:      *navmesh,
 			Parents:         parents,
 			DisconnectGrace: *grace,
+			AllowGMUnits:    *allowGMUnits,
 		},
 	})
 	fmt.Fprintf(stdout, "rpc: listening on http://%s/rpc\n", ln.Addr())

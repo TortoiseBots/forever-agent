@@ -812,11 +812,30 @@ func (s *session) CancelCast(spellID int32, castID wire.GUID) error {
 }
 
 // MoverX and the rest are the mover's belief, which is where the client is; the model's copy of the fighter lags
-// behind it during a walk.
-func (s *session) MoverX() float32 { return s.mover.X }
-func (s *session) MoverY() float32 { return s.mover.Y }
-func (s *session) MoverZ() float32 { return s.mover.Z }
-func (s *session) MoverO() float32 { return s.mover.O }
+// behind it during a walk. Before the character's create block arrives there is no mover yet: the belief is then the
+// login's own position (report.Position), so a model read that lands in that window answers instead of crashing.
+func (s *session) MoverX() float32 { return s.moverPos(0) }
+func (s *session) MoverY() float32 { return s.moverPos(1) }
+func (s *session) MoverZ() float32 { return s.moverPos(2) }
+func (s *session) MoverO() float32 { return s.moverPos(3) }
+
+func (s *session) moverPos(i int) float32 {
+	if s.mover == nil {
+		if s.report == nil {
+			return 0
+		}
+		return s.report.Position[i]
+	}
+	switch i {
+	case 0:
+		return s.mover.X
+	case 1:
+		return s.mover.Y
+	case 2:
+		return s.mover.Z
+	}
+	return s.mover.O
+}
 
 // normalizeAngle folds an angle into (-pi, pi].
 func normalizeAngle(a float32) float32 {

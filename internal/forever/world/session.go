@@ -529,8 +529,8 @@ type session struct {
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
-	// one log with one seq axis.
-	combat CombatLog
+	// one log with one seq axis. A serving daemon hands the dropped session's ring to the one that replaces it.
+	combat *CombatLog
 }
 
 const (
@@ -567,6 +567,7 @@ func newSession(opts Options, report *Report, ctx context.Context) *session {
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
+	s.combat = &CombatLog{}
 	// The readers run on their own context, detached from the caller's: an interrupt or an expired run window ends
 	// the run's waits (they use s.ctx), but the stop and cleanup paths that detach from that context still need the
 	// packet loop to read their answers. shutdown ends the readers, and it closes the sockets whatever the run left
