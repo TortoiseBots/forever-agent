@@ -225,9 +225,12 @@ func TestForeverRefusals(t *testing.T) {
 		{"gossip step", func(p *dungeon.Plan) {
 			p.Legs[0].Steps = []dungeon.Step{{Gossip: &dungeon.Gossip{NPC: 1}}}
 		}, "legs[0].steps[0].gossip"},
-		{"use_object step", func(p *dungeon.Plan) {
-			p.Legs[0].Steps = []dungeon.Step{{UseObject: &dungeon.UseObject{}}}
-		}, "legs[0].steps[0].use_object"},
+		{"use_item step", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{UseItem: &dungeon.UseItem{Entry: 9}}}
+		}, "legs[0].steps[0].use_item"},
+		{"unit wait", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{WaitFor: &dungeon.WaitFor{Unit: &dungeon.UnitWait{Entries: []uint32{9}, State: dungeon.UnitSeen}, TimeoutS: 30}}}
+		}, "legs[0].steps[0].wait_for"},
 		{"pull hold", func(p *dungeon.Plan) {
 			p.Legs[0].PullGroups = []dungeon.PullGroup{{Entries: []uint32{2}, Positions: []dungeon.Point{{X: 2}}, Hold: &dungeon.Hold{Data: 1}}}
 		}, "legs[0].pull_groups[0].hold"},
@@ -685,5 +688,165 @@ func TestForeverParserReadsTheBossUpsert(t *testing.T) {
 	}
 	if back[0].Bosses[0] != (BossRow{Map: 389, Entry: 11, Name: "Boss One"}) || back[0].Bosses[1].Entry != 12 {
 		t.Fatalf("boss rows read back %+v", back[0].Bosses)
+	}
+}
+
+// Deadmines' object steps are the module's own rows: the six door waits (wait_object), three opens, the two fights the
+// loot and the cannon raise (wait_clear) and the gunpowder chest (loot) — the set slice 9 of the server module runs.
+func TestForeverDeadminesObjectRows(t *testing.T) {
+	p, err := dungeon.Load("../../dungeons/deadmines.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := BuildForever(p, Options{Source: "forever-agent TESTREV dungeons/deadmines.json"})
+	if err != nil {
+		t.Fatalf("the plan does not export: %v (refused %v)", err, rep.Refused)
+	}
+	count := map[string]int{}
+	for _, s := range rep.Rows.Steps {
+		count[s.Kind]++
+	}
+	for kind, want := range map[string]int{KindWaitObject: 6, KindOpen: 3, KindWaitClear: 2, KindLoot: 1} {
+		if count[kind] != want {
+			t.Errorf("%d %s rows, want %d (%v)", count[kind], kind, want, count)
+		}
+	}
+	// The two doors the plan's own server opens by 17153 are 16400 (Mast Room Door) and 16399 (Foundry Door) here; the two
+	// clicked Heavy Doors are 17153 on both servers and keep it.
+	waits := map[[2]float32]uint32{}
+	for _, s := range rep.Rows.Steps {
+		if s.Kind == KindWaitObject {
+			waits[[2]float32{s.X, s.Y}] = s.Entry
+		}
+	}
+	for _, c := range []struct {
+		x, y  float32
+		entry uint32
+	}{
+		{-290.294, -536.96, 16400},  // Sneed's death
+		{-168.514, -579.861, 16399}, // Gilnid's death
+		{-262.714, -482.361, 17153}, // the clicked Heavy Door
+	} {
+		if got := waits[[2]float32{c.x, c.y}]; got != c.entry {
+			t.Errorf("the wait at %.3f %.3f is on %d, want %d", c.x, c.y, got, c.entry)
+		}
+	}
+	// The run leader's export names its own server's objects: the alt_entries belong to the Forever export alone.
+	res, err := Build(p, Options{Source: "forever-agent TESTREV dungeons/deadmines.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range res.Rows.Steps {
+		if s.Kind != KindWaitObject {
+			continue
+		}
+		if s.Entry == 16400 || s.Entry == 16399 {
+			t.Fatalf("the run leader's rows carry %d (the Forever server's entry): every other reader keeps the plan's own entry", s.Entry)
+		}
+	}
+	// The rows round-trip through the migration, the dock pull's -93.3125 unit row included.
+	back, err := ParseForever(WriteForeverSQL([]ForeverReport{rep}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EqualForever([]ForeverReport{rep}, back); err != nil {
+		t.Fatalf("the export does not read back: %v", err)
+	}
+}
+
+// Wailing Caverns has no object step, and its export is the bytes the format wrote before the object rows landed: the
+// golden file is that export.
+func TestForeverWailingCavernsUnchanged(t *testing.T) {
+	p, err := dungeon.Load("../../dungeons/wailing_caverns.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := BuildForever(p, Options{Source: "forever-agent TESTREV dungeons/wailing_caverns.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range rep.Rows.Steps {
+		switch s.Kind {
+		case KindOpen, KindOpenProof, KindUseOn, KindLoot, KindWaitObject, KindWaitClear:
+			t.Fatalf("wailing_caverns gains a %s row: %+v", s.Kind, s)
+		}
+	}
+	got := WriteForeverSQL([]ForeverReport{rep})
+	want, err := os.ReadFile("testdata/forever/wailing_caverns.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		_, a := firstLineDiff(string(want), got)
+		t.Fatalf("the export differs from the golden file at line %d:\n  golden: %q\n  export: %q", a.line, a.want, a.got)
+	}
+}
+
+// Every object-backed step kind is carried as its row, by name: a use_object is an open, an open_proof or a use_on, a
+// loot_object a loot, a wait_for on a game object a wait_object and a hostiles-gone wait a wait_clear.
+func TestForeverObjectRowsAreCarried(t *testing.T) {
+	p := parsePlan(t, `{"version":1,"name":"objs","status":"live-checked","map":36,"entrance":{"x":0,"y":0,"z":0},
+ "legs":[{"name":"d","to":{"x":20,"y":0,"z":0},"steps":[
+  {"use_object":{"entry":900,"near":{"x":10,"y":0,"z":0}}},
+  {"use_object":{"entry":148830,"near":{"x":12,"y":0,"z":0},"proof":{"gameobject":148883,"radius":10}}},
+  {"use_object":{"entry":901,"near":{"x":14,"y":0,"z":0},"stand":{"x":13,"y":0,"z":0},"requires_item":{"entry":9240,"name":"Mallet"},"via_item":true}},
+  {"loot_object":{"entry":902,"near":{"x":16,"y":0,"z":0}}},
+  {"wait_for":{"gameobject":{"entry":903,"near":{"x":18,"y":0,"z":0},"state":"active"},"timeout_s":60}},
+  {"wait_for":{"hostiles_gone":{"radius":10},"timeout_s":30}}]}]}`)
+	rep, err := BuildForever(p, Options{Source: "test"})
+	if err != nil {
+		t.Fatalf("refused %v: %v", rep.Refused, err)
+	}
+	want := "move open open_proof move use_on loot wait_object wait_clear"
+	if got := strings.Join(kinds(rep.Rows, 0), " "); got != want {
+		t.Fatalf("rows %q, want %q", got, want)
+	}
+	// The fields are named as carried, not refused, and the rows keep the plan's entries (no alt_entries here).
+	for _, f := range rep.Carried {
+		for _, r := range rep.Refused {
+			if r.Field == f {
+				t.Fatalf("%s is carried and refused", f)
+			}
+		}
+	}
+	if back, err := ParseForever(WriteForeverSQL([]ForeverReport{rep})); err != nil {
+		t.Fatal(err)
+	} else if err := EqualForever([]ForeverReport{rep}, back); err != nil {
+		t.Fatalf("the object rows do not read back: %v", err)
+	}
+}
+
+// A coordinate exactly on the halfway point of the three-decimal columns reads back: Deadmines' dock pull at -93.3125
+// (entry 657) is written -93.312, and float32(-93.312) sits 0.00050354 yd from it. A unit moved by two thousandths is
+// still a mismatch.
+func TestForeverRoundTripHalfThousandth(t *testing.T) {
+	mk := func(x float32) []ForeverReport {
+		return []ForeverReport{{
+			Rows:  Rows{Plan: PlanRow{Plan: "t", Map: 36}, Legs: []LegRow{{Plan: "t", Leg: 0, Name: "dock"}}},
+			Units: []UnitRow{{Plan: "t", Leg: 0, Seq: 0, Idx: 0, Entry: 657, X: x, Y: -785.65, Z: 27.2112, Role: UnitPack}},
+		}}
+	}
+	want := mk(-93.3125)
+	sql := WriteForeverSQL(want)
+	if !strings.Contains(sql, "-93.312, -785.650, 27.211,") {
+		t.Fatalf("the halfway point is not written -93.312:\n%s", sql)
+	}
+	back, err := ParseForever(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EqualForever(want, back); err != nil {
+		t.Fatalf("a coordinate on the columns' halfway point does not read back: %v", err)
+	}
+	moved := []ForeverReport{{
+		Rows:  Rows{Plan: PlanRow{Plan: "t", Map: 36}, Legs: []LegRow{{Plan: "t", Leg: 0, Name: "dock"}}},
+		Units: []UnitRow{{Plan: "t", Leg: 0, Seq: 0, Idx: 0, Entry: 657, X: -93.3145, Y: -785.65, Z: 27.2112, Role: UnitPack}},
+	}}
+	movedBack, err := ParseForever(WriteForeverSQL(moved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EqualForever(want, movedBack); err == nil {
+		t.Fatal("a unit moved by two thousandths reads back equal")
 	}
 }

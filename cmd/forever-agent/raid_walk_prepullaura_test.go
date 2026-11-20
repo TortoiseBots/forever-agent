@@ -612,7 +612,7 @@ func newPrepullWalkHires(t *testing.T, a *prepullAgent, hs []prepullHire, flags 
 	}
 	r := prepullRoster(t, hs)
 	w := &walk{
-		opts:      raidWalkOptions{prepullAura: stringList(flags), server: "m910q"},
+		opts:      raidWalkOptions{prepullAura: stringList(flags), server: "test1"},
 		env:       walkEnv{now: func() time.Time { return a.clock }, sleep: func(_ context.Context, d time.Duration) error { a.advance(d); return nil }},
 		agent:     a,
 		outDir:    t.TempDir(),

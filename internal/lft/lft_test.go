@@ -116,7 +116,7 @@ func TestParseQueueLines(t *testing.T) {
 	}
 }
 
-// TestParseListingLines uses lines copied from ~/TortoiseBots-audit/tests/lftapi/after.txt
+// TestParseListingLines uses lines copied from the lftapi sample capture (after.txt)
 // (a live capture against feat/lft-listing-api @ 6c5c7a2). Listing JSON is read from
 // LFTUserGroups.cpp BuildListingJson (901-911) and BuildSignupJson (916-924); a description
 // may hold ';' because it is JSON-escaped, not field-escaped, so only the leading fields are

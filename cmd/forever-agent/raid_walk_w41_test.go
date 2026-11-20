@@ -1,4 +1,4 @@
-// Walk 41 (TortoiseBots-audit research/zg-bosses/JEKLIK-W41.md §2/§3 fix 3): a boss that engages while the run is
+// Walk 41 (research/zg-bosses/JEKLIK-W41.md §2/§3 fix 3): a boss that engages while the run is
 // paused on its own boss row resumes the run instead of stopping it, and a dashboard boss fight that ended "kill"
 // credits the goal boss even though the run had stopped.
 package main

@@ -76,7 +76,9 @@ newest event are refused. `status all` and `stop`'s `pending=`/`stayed=` follow 
    the one action allowed while a stop is pending — and waits for the state to reach `stopped`, polling as it waits:
    bounded by `Limits.WatchStop` (600 s) when the watch ended on its own, and by `InterruptedStopBudget` (60 s, one
    stop attempt and its confirmation polls) when the caller's interrupt or deadline ended it. The summary is written
-   either way; a pending stop that outlives the wait is reported.
+   either way; a pending stop that outlives the wait is reported. The final instance read that feeds the summary's
+   boss list is made after the wait on its own `FinishCallTimeout` bound, detached from the cleanup budget the wait
+   may have spent, so the summary still records the state the run ended with.
 
 Every send goes through `Run.act` and its class's gate; every line leaves through `Run.sendLine`, the one function
 that calls the module. A source test over the package finds exactly two sending call sites (`Act` in `actions.go`,

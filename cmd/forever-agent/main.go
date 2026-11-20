@@ -31,6 +31,10 @@ const (
 	// exitDead: fight-check's character died during the run. Nothing was sent for the corpse but
 	// the logout, so the fight never happened and the caller must not read the run as a kill.
 	exitDead = 11
+	// exitAmbiguous: loot-check and object-use found several game objects of one entry in range and
+	// none was named with --at. No use was sent; the candidates are listed, so a script can tell a
+	// refusal from a use and retry with --at.
+	exitAmbiguous = 12
 )
 
 func main() {

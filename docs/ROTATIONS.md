@@ -87,7 +87,7 @@ credit the guide and the forum and Discord posts that guide file lists. The rows
   recipe row or a recipe row no KB row, the `order` names an id the recipe does not define (or a doubled one), an entry id is
   in no `order`, or there are more than 40 entries. It writes the rotation JSON (in the Go struct's key order) and
   `internal/kbspells/oracle/<class>.json`, byte-identical on every run.
-- Commands: `make kb-rotations` (`KB` defaults to `~/TortoiseBots-audit/turtle-kb`), `python3 -I
+- Commands: `make kb-rotations` (`KB` defaults to `~/turtle-kb`), `python3 -I
   tools/kbrotgen/kbrotgen.py --kb <dir> --only kb_protection_warrior` for one recipe, and `--check`, which regenerates in memory
   and exits 1 with the files that differ.
 - The Go tests hold the committed files to the recipes: `TestKBRotationsMatchRecipes` (entries and order equal the recipe,

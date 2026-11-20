@@ -940,14 +940,16 @@ func (r *Run) finish(ctx context.Context) {
 	if fightWasOn {
 		r.event("stop", map[string]any{"reason": r.stopReason, "waiting_for_fight": true})
 		for {
-			if !r.pollDetached(fctx) {
-				timedOut = fctx.Err() != nil && !r.lost
-				break
-			}
-			if r.lost || !r.busy() {
+			// One failed report (a bad reply, a call that timed out) proves nothing about the fight: only a lost
+			// link ends the wait there; every other failure is retried until a bound runs out or a report comes.
+			ok := r.pollDetached(fctx)
+			if r.lost {
 				break
 			}
 			if r.cfg.Force != nil && r.cfg.Force() {
+				break
+			}
+			if ok && !r.busy() {
 				break
 			}
 			// Either bound running out is a timeout: the fight is unresolved, no stay follows.

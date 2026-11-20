@@ -22,7 +22,7 @@ func capWalk(t *testing.T, opts raidWalkOptions, ages ...time.Duration) (*walk, 
 	if len(ages) > 0 {
 		_, err := raidwalk.UpdateCapLedger(path, func(l *raidwalk.CapLedger) {
 			for _, a := range ages {
-				l.Record("m910q", raidwalk.CapEntry{At: now.Add(-a)}, now)
+				l.Record("test1", raidwalk.CapEntry{At: now.Add(-a)}, now)
 			}
 		})
 		if err != nil {
@@ -31,7 +31,7 @@ func capWalk(t *testing.T, opts raidWalkOptions, ages ...time.Duration) (*walk, 
 	}
 	var slept []time.Duration
 	var stderr bytes.Buffer
-	opts.server = "m910q"
+	opts.server = "test1"
 	w := &walk{opts: opts, stderr: &stderr, plan: &dungeon.Plan{Name: "zg"}}
 	w.env = walkEnv{
 		now: func() time.Time { return now },
@@ -73,7 +73,7 @@ func TestInstanceCapWaitsForTheOldestToAgeOut(t *testing.T) {
 	if err := w.phaseInstanceCap(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "instance cap: 4 fresh instances in the last hour on m910q; the core's cap is 5 per account and hour") {
+	if !strings.Contains(stderr.String(), "instance cap: 4 fresh instances in the last hour on test1; the core's cap is 5 per account and hour") {
 		t.Fatalf("warning missing: %q", stderr.String())
 	}
 	if len(*slept) != 1 || (*slept)[0] != 5*time.Minute+capWaitMargin {
@@ -85,7 +85,7 @@ func TestInstanceCapWaitsForTheOldestToAgeOut(t *testing.T) {
 	}
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
 	// 3 entries left in the hour, plus the place this walk now holds.
-	if n := l.Count("m910q", *now); n != 4 || !w.capReserved {
+	if n := l.Count("test1", *now); n != 4 || !w.capReserved {
 		t.Fatalf("after the wait the count is %d (reserved %v), want 3 entries + 1 reservation", n, w.capReserved)
 	}
 }
@@ -108,11 +108,11 @@ func TestInstanceCapWaitIsCappedExitsWithoutAReservation(t *testing.T) {
 	if w.capReserved || !strings.Contains(reason, "no fresh instance is started without a reservation") || len(w.notes) == 0 {
 		t.Fatalf("reserved %v, reason %q, notes %v", w.capReserved, reason, w.notes)
 	}
-	if !strings.Contains(stderr.String(), "still 4 on m910q") {
+	if !strings.Contains(stderr.String(), "still 4 on test1") {
 		t.Fatalf("no wait-exhausted line: %q", stderr.String())
 	}
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
-	if n := l.Count("m910q", *now); n != 4 { // the 4 entries only: no place was taken
+	if n := l.Count("test1", *now); n != 4 { // the 4 entries only: no place was taken
 		t.Fatalf("count %d, want 4 (no reservation)", n)
 	}
 }
@@ -144,7 +144,7 @@ func TestInstanceCapUnsafeGoesOnWithoutAReservation(t *testing.T) {
 	// Past the cap the walk's entry is still recorded once it enters, so later walks count it.
 	w.recordFreshInstance()
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
-	if n := l.Count("m910q", *now); n != 5 {
+	if n := l.Count("test1", *now); n != 5 {
 		t.Fatalf("count %d, want the 4 entries and the walk's own", n)
 	}
 }
@@ -160,7 +160,7 @@ func TestInstanceCapTimedOutWalkersNoneProceedsWithoutAReservation(t *testing.T)
 	for _, h := range []string{"w1", "w2", "w3"} {
 		var se bytes.Buffer
 		clock := start
-		w := &walk{opts: raidWalkOptions{capWait: 2 * time.Minute, holder: h, server: "m910q"}, stderr: &se, plan: w0.plan}
+		w := &walk{opts: raidWalkOptions{capWait: 2 * time.Minute, holder: h, server: "test1"}, stderr: &se, plan: w0.plan}
 		w.env = walkEnv{
 			now:       func() time.Time { return clock },
 			sleep:     func(_ context.Context, d time.Duration) error { clock = clock.Add(d); return nil },
@@ -187,7 +187,7 @@ func TestInstanceCapTimedOutWalkersNoneProceedsWithoutAReservation(t *testing.T)
 		}
 	}
 	l, _ := raidwalk.LoadCapLedger(ledger)
-	if s := l.Servers["m910q"]; s == nil || len(s.Reservations) != 0 || len(s.Entries) != 4 {
+	if s := l.Servers["test1"]; s == nil || len(s.Reservations) != 0 || len(s.Entries) != 4 {
 		t.Fatalf("ledger after the timeouts: %+v, want 4 entries and no reservation", s)
 	}
 }
@@ -220,7 +220,7 @@ func TestInstanceCapRestartResetsTheLedger(t *testing.T) {
 		t.Fatalf("slept %v", *slept)
 	}
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
-	if n := l.Count("m910q", *now); n != 1 { // only this walk's own reservation
+	if n := l.Count("test1", *now); n != 1 { // only this walk's own reservation
 		t.Fatalf("count after the restart = %d, want 1 (the walk's own reservation)", n)
 	}
 }
@@ -238,7 +238,7 @@ func TestInstanceCapRecordsTheEntryAndOffWithoutALedger(t *testing.T) {
 	w.recordFreshInstance()
 	w.recordFreshInstance()
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
-	if n := l.Count("m910q", *now); n != 2 {
+	if n := l.Count("test1", *now); n != 2 {
 		t.Fatalf("recorded %d, want 2", n)
 	}
 	w.env.capLedger = ""
@@ -272,7 +272,7 @@ func TestInstanceCapThreeConcurrentWalksAtThreeAdmitOnlyOne(t *testing.T) {
 	walks := []*walk{w1}
 	for _, h := range []string{"w2", "w3"} {
 		var se bytes.Buffer
-		w := &walk{opts: raidWalkOptions{capFail: true, holder: h, server: "m910q"}, stderr: &se, plan: w1.plan}
+		w := &walk{opts: raidWalkOptions{capFail: true, holder: h, server: "test1"}, stderr: &se, plan: w1.plan}
 		w.env = walkEnv{now: func() time.Time { return *now }, capLedger: w1.env.capLedger}
 		walks = append(walks, w)
 	}
@@ -307,14 +307,14 @@ func TestInstanceCapReservationConfirmedOrReleased(t *testing.T) {
 		t.Fatal(err)
 	}
 	l, _ := raidwalk.LoadCapLedger(w.env.capLedger)
-	if !w.capReserved || l.Count("m910q", *now) != 2 {
-		t.Fatalf("reserved %v, count %d, want a held place (2)", w.capReserved, l.Count("m910q", *now))
+	if !w.capReserved || l.Count("test1", *now) != 2 {
+		t.Fatalf("reserved %v, count %d, want a held place (2)", w.capReserved, l.Count("test1", *now))
 	}
 	// A failure before the raid entered gives the place back.
 	w.releaseCapReservation()
 	l, _ = raidwalk.LoadCapLedger(w.env.capLedger)
-	if w.capReserved || l.Count("m910q", *now) != 1 {
-		t.Fatalf("after release: reserved %v, count %d, want 1", w.capReserved, l.Count("m910q", *now))
+	if w.capReserved || l.Count("test1", *now) != 1 {
+		t.Fatalf("after release: reserved %v, count %d, want 1", w.capReserved, l.Count("test1", *now))
 	}
 	// A walk that entered turns it into an entry, and a later release does nothing.
 	if err := w.phaseInstanceCap(context.Background()); err != nil {
@@ -323,8 +323,8 @@ func TestInstanceCapReservationConfirmedOrReleased(t *testing.T) {
 	w.recordFreshInstance()
 	w.releaseCapReservation()
 	l, _ = raidwalk.LoadCapLedger(w.env.capLedger)
-	if n := l.Count("m910q", *now); n != 2 || len(l.Servers["m910q"].Reservations) != 0 || len(l.Servers["m910q"].Entries) != 2 {
-		t.Fatalf("after confirm: count %d, %+v", n, l.Servers["m910q"])
+	if n := l.Count("test1", *now); n != 2 || len(l.Servers["test1"].Reservations) != 0 || len(l.Servers["test1"].Entries) != 2 {
+		t.Fatalf("after confirm: count %d, %+v", n, l.Servers["test1"])
 	}
 }
 
@@ -403,14 +403,14 @@ func TestWalkInstanceCapFromFlagAndFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "slots.json")
 	body := `{"version":1,"servers":[
-		{"name":"m910q","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
-		{"name":"tortoise-test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8772,"settings_from":"/s.json"}]}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "instance-cap-per-account.json"), []byte(`{"m910q":30}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "instance-cap-per-account.json"), []byte(`{"test1":30}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -418,9 +418,9 @@ func TestWalkInstanceCapFromFlagAndFile(t *testing.T) {
 		o    raidWalkOptions
 		want int
 	}{
-		{"the server's file entry", raidWalkOptions{slotsPath: path, server: "m910q"}, 30},
-		{"an unset server is the stock 5", raidWalkOptions{slotsPath: path, server: "tortoise-test2"}, raidwalk.InstanceCapPerAccount},
-		{"the flag wins", raidWalkOptions{slotsPath: path, server: "m910q", capPerAccount: 5, capGiven: true}, 5},
+		{"the server's file entry", raidWalkOptions{slotsPath: path, server: "test1"}, 30},
+		{"an unset server is the stock 5", raidWalkOptions{slotsPath: path, server: "test2"}, raidwalk.InstanceCapPerAccount},
+		{"the flag wins", raidWalkOptions{slotsPath: path, server: "test1", capPerAccount: 5, capGiven: true}, 5},
 	}
 	for _, c := range cases {
 		o := c.o
@@ -435,7 +435,7 @@ func TestWalkInstanceCapFromFlagAndFile(t *testing.T) {
 }
 
 // The live finding on 6f4018b: with the per-server caps in the DEFAULT slots dir (~/.config/forever-agent/
-// instance-cap-per-account.json = {"m910q": 30, "tortoise-test2": 30}) a walk still printed "the core's cap is 5"
+// instance-cap-per-account.json = {"test1": 30, "test2": 30}) a walk still printed "the core's cap is 5"
 // and waited on "the oldest of 4". The resolution must read the file beside the default slots file, not only beside
 // an explicit --slots.
 func TestWalkInstanceCapUsesTheDefaultSlotsDir(t *testing.T) {
@@ -446,18 +446,18 @@ func TestWalkInstanceCapUsesTheDefaultSlotsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	slotsBody := `{"version":1,"servers":[
-		{"name":"m910q","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
-		{"name":"tortoise-test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8772,"settings_from":"/s.json"}]}]}`
 	if err := os.WriteFile(filepath.Join(dir, "slots.json"), []byte(slotsBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "instance-cap-per-account.json"), []byte(`{"m910q":30,"tortoise-test2":30}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "instance-cap-per-account.json"), []byte(`{"test1":30,"test2":30}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// No --slots and no --instance-cap-per-account: the walk resolves both defaults.
-	o := raidWalkOptions{server: "m910q", capPerAccount: raidwalk.InstanceCapPerAccount}
+	o := raidWalkOptions{server: "test1", capPerAccount: raidwalk.InstanceCapPerAccount}
 	env, _, err := defaultWalkEnv(&o)
 	if err != nil {
 		t.Fatal(err)
@@ -473,7 +473,7 @@ func TestWalkInstanceCapUsesTheDefaultSlotsDir(t *testing.T) {
 	if want := filepath.Join(dir, raidwalk.InstanceCapFile); env.capLedger != want {
 		t.Fatalf("capLedger = %q, want %q", env.capLedger, want)
 	}
-	if err := os.WriteFile(env.capLedger, []byte(`{"servers":{"m910q":{"entries":[
+	if err := os.WriteFile(env.capLedger, []byte(`{"servers":{"test1":{"entries":[
 		{"at":"2026-11-03T11:50:00Z"},{"at":"2026-11-03T11:55:00Z"},{"at":"2026-11-03T11:58:00Z"},{"at":"2026-11-03T11:59:00Z"}]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestWalkInstanceCapUsesTheDefaultSlotsDir(t *testing.T) {
 		var c int
 		var d time.Duration
 		_, err := raidwalk.UpdateCapLedger(env.capLedger, func(l *raidwalk.CapLedger) {
-			a, c, d = l.TryReserve("m910q", "zg-a#1", w.instanceCap(), now)
+			a, c, d = l.TryReserve("test1", "zg-a#1", w.instanceCap(), now)
 		})
 		if err != nil {
 			t.Fatal(err)

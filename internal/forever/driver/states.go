@@ -1499,9 +1499,12 @@ func (r *Run) wipe(ctx context.Context) string {
 	revived := false
 	next := 0
 	for next < len(r.cfg.Party) {
-		a := Action{Kind: ActionRevive, Who: "party", Recovery: true}
+		// The revive raises the whole party, so it spends one practice per member; the teleports that gather the
+		// party afterwards are part of that same rescue and spend nothing. A budget that cannot pay for the whole
+		// revive refuses it before anything is sent (actStep stops the run on "budget").
+		a := Action{Kind: ActionRevive, Who: "party", Recovery: true, Practice: true, PracticeCost: len(r.cfg.Party)}
 		if revived {
-			a = Action{Kind: ActionTeleTo, Who: r.cfg.Party[next], Other: r.cfg.Commander, Recovery: true, Practice: true}
+			a = Action{Kind: ActionTeleTo, Who: r.cfg.Party[next], Other: r.cfg.Commander, Recovery: true}
 		}
 		done, retry := r.actStep(ctx, a, "wipe")
 		if done {

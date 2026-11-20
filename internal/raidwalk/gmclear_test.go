@@ -306,7 +306,7 @@ func TestGMClearLiveMembers(t *testing.T) {
 }
 
 func assistedMeta() SummaryMeta {
-	return SummaryMeta{Plan: "aq20", Map: 509, Server: "m910q", GMClearUsed: true, GMClearLegs: []string{"Second"},
+	return SummaryMeta{Plan: "aq20", Map: 509, Server: "test1", GMClearUsed: true, GMClearLegs: []string{"Second"},
 		GMClear: []GMClearEntry{
 			{Leg: "Second", Group: "1", Entry: 100, GUID: unitGUID(100, 1).String(), Killed: true, Tries: 1},
 			{Leg: "Second", Group: "boss", Entry: 300, GUID: unitGUID(300, 3).String(), Killed: false, Tries: 2, Reason: GMClearAlive},

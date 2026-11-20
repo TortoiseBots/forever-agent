@@ -27,16 +27,16 @@ func TestInstanceCapHiredAccountsGate(t *testing.T) {
 	path := t.TempDir() + "/" + raidwalk.InstanceCapFile
 	_, err := raidwalk.UpdateCapLedger(path, func(l *raidwalk.CapLedger) {
 		for i := 0; i < 5; i++ {
-			l.Record("m910q", raidwalk.CapEntry{At: now.Add(-time.Duration(50-10*i) * time.Minute), Accounts: []string{"a1"}}, now)
+			l.Record("test1", raidwalk.CapEntry{At: now.Add(-time.Duration(50-10*i) * time.Minute), Accounts: []string{"a1"}}, now)
 		}
-		l.Record("m910q", raidwalk.CapEntry{At: now.Add(-time.Minute), Accounts: []string{"a2"}}, now)
+		l.Record("test1", raidwalk.CapEntry{At: now.Add(-time.Minute), Accounts: []string{"a2"}}, now)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var slept []time.Duration
 	var stderr strings.Builder
-	w := &walk{opts: raidWalkOptions{server: "m910q", capWait: 30 * time.Minute}, stderr: &stderr, hireAccounts: []string{"a1", "a2"}}
+	w := &walk{opts: raidWalkOptions{server: "test1", capWait: 30 * time.Minute}, stderr: &stderr, hireAccounts: []string{"a1", "a2"}}
 	w.env = walkEnv{
 		now:       func() time.Time { return now },
 		sleep:     func(_ context.Context, d time.Duration) error { slept = append(slept, d); now = now.Add(d); return nil },
@@ -64,11 +64,11 @@ func TestRecordFreshInstanceNamesTheHiredAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := l.Servers["m910q"].Entries
+	live := l.Servers["test1"].Entries
 	if len(live) != 1 || strings.Join(live[0].Accounts, ",") != "17,23" {
 		t.Fatalf("entries %+v, want one naming 17 and 23", live)
 	}
-	if n, known := l.PeakFor("m910q", []string{"17"}, *now); !known || n != 1 {
+	if n, known := l.PeakFor("test1", []string{"17"}, *now); !known || n != 1 {
 		t.Fatalf("peak for 17 = %d known %v, want 1 true", n, known)
 	}
 }
@@ -86,7 +86,7 @@ func TestReusePlacementRecordsOnlyTheNewAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := l.Servers["m910q"].Entries[0]; e.Instance != 101 {
+	if e := l.Servers["test1"].Entries[0]; e.Instance != 101 {
 		t.Fatalf("fresh entry instance = %v, want 101 (stamped after the placement)", e.Instance)
 	}
 	// The next reuse placement re-hires 23 and a new account 29: only 29 is a new (account, instance) pair.
@@ -96,10 +96,10 @@ func TestReusePlacementRecordsOnlyTheNewAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, known := l.PeakFor("m910q", []string{"23"}, *now); !known || n != 1 {
+	if n, known := l.PeakFor("test1", []string{"23"}, *now); !known || n != 1 {
 		t.Fatalf("account 23 counted %d known %v, want 1 true (already in instance 101)", n, known)
 	}
-	if n, known := l.PeakFor("m910q", []string{"29"}, *now); !known || n != 1 {
+	if n, known := l.PeakFor("test1", []string{"29"}, *now); !known || n != 1 {
 		t.Fatalf("account 29 counted %d known %v, want 1 true (new in instance 101)", n, known)
 	}
 	if !strings.Contains(w.notes[len(w.notes)-1], "1 newly hired account(s) counted for the reused instance 101") {

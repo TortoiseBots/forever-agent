@@ -38,7 +38,7 @@ func TestLoadRefusesALooseMode(t *testing.T) {
 
 // 1. A "password" key is refused, and the refusal never carries the value.
 func TestLoadRefusesAPasswordField(t *testing.T) {
-	path := writeSlots(t, `{"version":1,"servers":[{"name":"m910q","realmd":"10.0.0.1:3724","slots":[
+	path := writeSlots(t, `{"version":1,"servers":[{"name":"test1","realmd":"10.0.0.1:3724","slots":[
 		{"id":"1","account":"TAGENT1","character":"Gbmage","port":8771,"settings_from":"/s.json","password":"pw-not-real"}]}]}`)
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), `unknown field "password"`) {
@@ -52,7 +52,7 @@ func TestLoadRefusesAPasswordField(t *testing.T) {
 // 2. One laptop, one port: duplicates across servers are refused.
 func TestLoadRefusesDuplicatePortsAcrossServers(t *testing.T) {
 	path := writeSlots(t, `{"version":1,"servers":[
-		{"name":"m910q","realmd":"10.0.0.1:3724","slots":[{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
+		{"name":"test1","realmd":"10.0.0.1:3724","slots":[{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
 		{"name":"test2","realmd":"10.0.0.2:3724","slots":[{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]}]}`)
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "ports are per laptop") {

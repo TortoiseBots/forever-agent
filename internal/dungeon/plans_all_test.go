@@ -58,7 +58,7 @@ func TestPlanKindStatusAndParty(t *testing.T) {
 var offlineMapped = map[string]bool{"blackfathom_deeps": true, "deadmines": true, "molten_core": true, "blackwing_lair": true, "wailing_caverns-extra": true, "temple_of_ahnqiraj": true, "ruins_of_ahnqiraj": true, "lower_karazhan_halls": true, "emerald_sanctum": true, "naxxramas": true}
 
 // Every plan with a level band carries its tank_min_hp, from the tank's max health in the 2026-10 test runs
-// (~/TortoiseBots-audit/specs/ta-266-tank-floors.md: 0.9 x the weakest clean run of the plan, scaled to the hire level; Ragefire
+// (specs/ta-266-tank-floors.md: 0.9 x the weakest clean run of the plan, scaled to the hire level; Ragefire
 // Chasm keeps the issue's own 800). A raid carries none (its tank's gear tier is the raid roster's), and neither does a plan
 // without a band.
 func TestDungeonPlansCarryTheTankFloor(t *testing.T) {
@@ -269,7 +269,7 @@ func TestPlansOnNavmeshWhereTheMachineHasIt(t *testing.T) {
 		t.Logf("%s (%s): %d of %d points on the map %d navmesh in %s (%d more marked needs_walk)", p.Name, p.Status, on, total, p.Map, dir, walk)
 	}
 	if len(missing) > 0 {
-		t.Logf("no navmesh files for maps %s (copy <map>.mmap and <map>*.mmtile from m910q's ~/tortoise-wow-server/data/mmaps to ~/tb-ci/mmaps-turtle<map>)", strings.Join(missing, ", "))
+		t.Logf("no navmesh files for maps %s (copy <map>.mmap and <map>*.mmtile from test1's ~/tortoise-wow-server/data/mmaps to ~/tb-ci/mmaps-turtle<map>)", strings.Join(missing, ", "))
 	}
 	if !checkedAny {
 		t.Skip("no draft plan's map has navmesh files here")
@@ -277,7 +277,7 @@ func TestPlansOnNavmeshWhereTheMachineHasIt(t *testing.T) {
 }
 
 // navmeshKnownOff are the exact TB-shipped walk points the CI's mmaps copy has no floor under (the server navmesh the
-// live export was checked against and the m910q mmaps differ there by about a yard). The TB guard pins these coordinates,
+// live export was checked against and the test1 mmaps differ there by about a yard). The TB guard pins these coordinates,
 // so they cannot be snapped or flagged without making a valid pull "needs a mapping walk".
 var navmeshKnownOff = map[string]map[string]bool{
 	"crescent_grove": {"pull_groups[49].approach[1]": true},

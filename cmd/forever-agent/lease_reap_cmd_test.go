@@ -73,12 +73,12 @@ func TestLeaseReapDryRunThenRemoves(t *testing.T) {
 	slotsPath := leaseTestSlots(t)
 	now := time.Now().UTC()
 	deadPath := writeLeaseFile(t, slotsPath, slots.Lease{
-		Server: "m910q", Slot: "1", Holder: "w-dead", LeaseID: "dead-id",
+		Server: "test1", Slot: "1", Holder: "w-dead", LeaseID: "dead-id",
 		Acquired: now, Expires: now.Add(time.Hour), Renewed: now,
 		HolderPID: deadProcessPID(t), HolderHost: hostName(t), HolderNS: selfPIDNamespace(t),
 	})
 	livePath := writeLeaseFile(t, slotsPath, slots.Lease{
-		Server: "m910q", Slot: "2", Holder: "w-live", LeaseID: "live-id",
+		Server: "test1", Slot: "2", Holder: "w-live", LeaseID: "live-id",
 		Acquired: now, Expires: now.Add(time.Hour), Renewed: now,
 		HolderPID: os.Getpid(), HolderHost: hostName(t), HolderNS: selfPIDNamespace(t),
 	})
@@ -87,10 +87,10 @@ func TestLeaseReapDryRunThenRemoves(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("dry run: code %d stderr %q", code, errOut)
 	}
-	if !strings.Contains(out, "would reap m910q/1 held by w-dead") {
+	if !strings.Contains(out, "would reap test1/1 held by w-dead") {
 		t.Fatalf("dry run stdout %q", out)
 	}
-	if strings.Contains(out, "m910q/2") {
+	if strings.Contains(out, "test1/2") {
 		t.Fatalf("dry run named the live holder: %q", out)
 	}
 	for _, p := range []string{deadPath, livePath} {
@@ -103,7 +103,7 @@ func TestLeaseReapDryRunThenRemoves(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("reap: code %d stderr %q", code, errOut)
 	}
-	if !strings.Contains(out, "reaped m910q/1 held by w-dead") {
+	if !strings.Contains(out, "reaped test1/1 held by w-dead") {
 		t.Fatalf("reap stdout %q", out)
 	}
 	if _, err := os.Stat(deadPath); !os.IsNotExist(err) {
@@ -119,7 +119,7 @@ func TestLeaseReapDryRunThenRemoves(t *testing.T) {
 func TestRaidWalkLeaseTakesTheShortTTL(t *testing.T) {
 	var ttl time.Duration
 	sb := &syncBuffer{}
-	w := &walk{opts: raidWalkOptions{server: "m910q", holder: "w-a"}, stderr: sb,
+	w := &walk{opts: raidWalkOptions{server: "test1", holder: "w-a"}, stderr: sb,
 		env: walkEnv{
 			now: time.Now,
 			acquire: func(server, slot string, any bool, holder string, got time.Duration) (slots.Acquired, error) {
@@ -152,7 +152,7 @@ func TestRaidWalkLeaseHeartbeatRetriesAndNeverDrops(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
 	sb := &syncBuffer{}
-	w := &walk{opts: raidWalkOptions{server: "m910q", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
+	w := &walk{opts: raidWalkOptions{server: "test1", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
 		env: walkEnv{now: time.Now, renew: func(server, slot, holder, leaseID string, got time.Duration) (slots.Lease, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -162,7 +162,7 @@ func TestRaidWalkLeaseHeartbeatRetriesAndNeverDrops(t *testing.T) {
 			}
 			return slots.Lease{}, nil
 		}}}
-	w.lease = slots.Lease{Server: "m910q", Slot: "1", Holder: "w-a", LeaseID: "lid"}
+	w.lease = slots.Lease{Server: "test1", Slot: "1", Holder: "w-a", LeaseID: "lid"}
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	done := make(chan struct{})
@@ -189,11 +189,11 @@ func TestRaidWalkLeaseRefusalStopsTheWalk(t *testing.T) {
 	defer func() { walkLeaseRenew, walkLeaseRenewRetry = oldRenew, oldRetry }()
 
 	sb := &syncBuffer{}
-	w := &walk{opts: raidWalkOptions{server: "m910q", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
+	w := &walk{opts: raidWalkOptions{server: "test1", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
 		env: walkEnv{now: time.Now, renew: func(server, slot, holder, leaseID string, got time.Duration) (slots.Lease, error) {
 			return slots.Lease{}, &slots.Refusal{Msg: "leased to someone else"}
 		}}}
-	w.lease = slots.Lease{Server: "m910q", Slot: "1", Holder: "w-a", LeaseID: "lid"}
+	w.lease = slots.Lease{Server: "test1", Slot: "1", Holder: "w-a", LeaseID: "lid"}
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	done := make(chan struct{})
@@ -243,12 +243,12 @@ func TestRaidWalkLeaseHeartbeatSharesWalkState(t *testing.T) {
 
 	var renews atomic.Int64
 	sb := &syncBuffer{}
-	w := &walk{opts: raidWalkOptions{server: "m910q", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
+	w := &walk{opts: raidWalkOptions{server: "test1", slot: "1", holder: "w-a"}, stdout: io.Discard, stderr: sb,
 		env: walkEnv{now: time.Now, renew: func(server, slot, holder, leaseID string, got time.Duration) (slots.Lease, error) {
 			renews.Add(1)
 			return slots.Lease{}, errors.New("flock: timeout")
 		}}}
-	w.lease = slots.Lease{Server: "m910q", Slot: "1", Holder: "w-a", LeaseID: "lid"}
+	w.lease = slots.Lease{Server: "test1", Slot: "1", Holder: "w-a", LeaseID: "lid"}
 	logPath := filepath.Join(t.TempDir(), "run.log")
 	logF, err := os.Create(logPath)
 	if err != nil {

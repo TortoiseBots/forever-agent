@@ -45,7 +45,7 @@ func fakeBinary(t *testing.T, dir, name string, capSupport, schemaUnknown bool) 
 	if capSupport {
 		help = goodHelp
 	}
-	lease := `echo "m910q 1 Gbmage 8771 free"`
+	lease := `echo "test1 1 Gbmage 8771 free"`
 	if schemaUnknown {
 		lease = `echo 'json: unknown field "cap_per_account"' >&2; exit 2`
 	}
@@ -75,13 +75,13 @@ func newFixture(t *testing.T) *fixture {
 	walk := t.TempDir()
 	cfg := t.TempDir()
 	f := &fixture{walk: walk, slots: filepath.Join(cfg, "slots.json"), keys: filepath.Join(cfg, "keys.json")}
-	slotsJSON := `{"version":1,"servers":[{"name":"m910q","realmd":"127.0.0.1:3724","slots":[
+	slotsJSON := `{"version":1,"servers":[{"name":"test1","realmd":"127.0.0.1:3724","slots":[
 		{"id":"1","account":"TAGENT1","character":"Gbmage","port":8771,"settings_from":"/x/1.json"},
 		{"id":"2","account":"TAGENT2","character":"Tacmdaron","port":8772,"settings_from":"/x/2.json"},
 		{"id":"3","reserved":"owner rule"},
 		{"id":"4","account":"TAGENT4","character":"Tacmdbilo","port":8774,"settings_from":"/x/4.json"}]}]}`
 	writeFile(t, f.slots, 0o600, slotsJSON)
-	writeFile(t, filepath.Join(cfg, "instance-cap-per-account.json"), 0o600, `{"m910q": 30}`)
+	writeFile(t, filepath.Join(cfg, "instance-cap-per-account.json"), 0o600, `{"test1": 30}`)
 	f.bin = fakeBinary(t, t.TempDir(), "forever-agent", true, false)
 	writeFile(t, filepath.Join(walk, "dungeons", "zul_gurub.json"), 0o644, planJSON)
 	return f
@@ -116,7 +116,7 @@ func (f *fixture) cmd(t *testing.T, name, line string) {
 }
 
 func (f *fixture) cmdLine(extra string) string {
-	return f.bin + " raid-walk zul_gurub --server m910q --dir " + filepath.Join(f.walk, "dungeons") + " " + extra
+	return f.bin + " raid-walk zul_gurub --server test1 --dir " + filepath.Join(f.walk, "dungeons") + " " + extra
 }
 
 func (f *fixture) run(t *testing.T, deps Deps) *Report {
@@ -183,7 +183,7 @@ func TestCheckBinaries(t *testing.T) {
 	}
 	// A second binary is a warning.
 	other := fakeBinary(t, t.TempDir(), "forever-agent", true, false)
-	f.cmd(t, "cmd-b.txt", other+" raid-walk zul_gurub --server m910q --slot 2 --dir "+filepath.Join(f.walk, "dungeons")+" --until none")
+	f.cmd(t, "cmd-b.txt", other+" raid-walk zul_gurub --server test1 --slot 2 --dir "+filepath.Join(f.walk, "dungeons")+" --until none")
 	rep = f.run(t, Deps{})
 	warn := findSubject(rep, CheckBinary, "the walk")
 	if warn == nil || warn.Status != Warn || !strings.Contains(warn.Detail, other) {
@@ -191,7 +191,7 @@ func TestCheckBinaries(t *testing.T) {
 	}
 	// A missing binary is a failure.
 	f2 := newFixture(t)
-	f2.cmd(t, "cmd-a.txt", "/nonexistent/forever-agent raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f2.walk, "dungeons"))
+	f2.cmd(t, "cmd-a.txt", "/nonexistent/forever-agent raid-walk zul_gurub --server test1 --slot 1 --dir "+filepath.Join(f2.walk, "dungeons"))
 	rep = f2.run(t, Deps{})
 	if !hasStatus(rep, CheckBinary, Fail) {
 		t.Fatalf("missing binary: %+v", find(rep, CheckBinary))
@@ -201,7 +201,7 @@ func TestCheckBinaries(t *testing.T) {
 func TestCheckSchema(t *testing.T) {
 	f := newFixture(t)
 	bad := fakeBinary(t, t.TempDir(), "forever-agent", false, true)
-	f.cmd(t, "cmd-a.txt", bad+" raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
+	f.cmd(t, "cmd-a.txt", bad+" raid-walk zul_gurub --server test1 --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
 	rep := f.run(t, Deps{})
 	res := findSubject(rep, CheckSchema, bad)
 	if res == nil || res.Status != Fail || !strings.Contains(res.Detail, "unknown field") {
@@ -230,9 +230,9 @@ func TestCheckSlotsPath(t *testing.T) {
 func TestCheckInstanceCaps(t *testing.T) {
 	f := newFixture(t)
 	old := fakeBinary(t, t.TempDir(), "forever-agent", false, false)
-	f.cmd(t, "cmd-a.txt", old+" raid-walk zul_gurub --server m910q --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
+	f.cmd(t, "cmd-a.txt", old+" raid-walk zul_gurub --server test1 --slot 1 --dir "+filepath.Join(f.walk, "dungeons"))
 	rep := f.run(t, Deps{})
-	res := findSubject(rep, CheckCap, "m910q")
+	res := findSubject(rep, CheckCap, "test1")
 	if res == nil || res.Status != Fail || !strings.Contains(res.Detail, "would use 5") {
 		t.Fatalf("old binary and cap 30: %+v", find(rep, CheckCap))
 	}
@@ -240,13 +240,13 @@ func TestCheckInstanceCaps(t *testing.T) {
 	f2 := newFixture(t)
 	f2.cmd(t, "cmd-a.txt", f2.cmdLine("--slot 1"))
 	rep = f2.run(t, Deps{})
-	res = findSubject(rep, CheckCap, "m910q")
+	res = findSubject(rep, CheckCap, "test1")
 	if res == nil || res.Status != OK || !strings.Contains(res.Detail, "effective cap 30") {
 		t.Fatalf("new binary and cap 30: %+v", find(rep, CheckCap))
 	}
 
 	f3 := newFixture(t)
-	f3.cmd(t, "cmd-a.txt", old+" raid-walk zul_gurub --server m910q --slot 1 --instance-cap-per-account 30 --dir "+filepath.Join(f3.walk, "dungeons"))
+	f3.cmd(t, "cmd-a.txt", old+" raid-walk zul_gurub --server test1 --slot 1 --instance-cap-per-account 30 --dir "+filepath.Join(f3.walk, "dungeons"))
 	rep = f3.run(t, Deps{})
 	if !hasStatus(rep, CheckCap, Fail) {
 		t.Fatalf("a flag the binary lacks is not a failure: %+v", find(rep, CheckCap))
@@ -274,17 +274,17 @@ func TestCheckLeases(t *testing.T) {
 	f := newFixture(t)
 	f.cmd(t, "cmd-a.txt", f.cmdLine("--slot 1 --until none"))
 	rep := f.run(t, Deps{})
-	if res := findSubject(rep, CheckLease, "m910q/1"); res == nil || res.Status != OK {
+	if res := findSubject(rep, CheckLease, "test1/1"); res == nil || res.Status != OK {
 		t.Fatalf("free slot: %+v", find(rep, CheckLease))
 	}
 
 	// Held by another holder.
-	leases := filepath.Join(filepath.Dir(f.slots), "leases", "m910q")
-	writeFile(t, filepath.Join(leases, "2.json"), 0o600, `{"server":"m910q","slot":"2","holder":"other","lease_id":"x",
+	leases := filepath.Join(filepath.Dir(f.slots), "leases", "test1")
+	writeFile(t, filepath.Join(leases, "2.json"), 0o600, `{"server":"test1","slot":"2","holder":"other","lease_id":"x",
 		"acquired":"2026-01-01T00:00:00Z","expires":"2999-01-01T00:00:00Z"}`)
 	f.cmd(t, "cmd-b.txt", f.cmdLine("--slot 2 --until none"))
 	rep = f.run(t, Deps{})
-	res := findSubject(rep, CheckLease, "m910q/2")
+	res := findSubject(rep, CheckLease, "test1/2")
 	if res == nil || res.Status != Fail || !strings.Contains(res.Detail, "held by other") {
 		t.Fatalf("held by another: %+v", find(rep, CheckLease))
 	}
@@ -293,7 +293,7 @@ func TestCheckLeases(t *testing.T) {
 	f.cmd(t, "cmd-c.txt", f.cmdLine("--slot 1 --holder a --until none"))
 	f.cmd(t, "cmd-d.txt", f.cmdLine("--slot 1 --holder b --until none"))
 	rep = f.run(t, Deps{})
-	if res := findSubject(rep, CheckLease, "m910q/1"); res == nil || res.Status != Fail || !strings.Contains(res.Detail, "two commands share") {
+	if res := findSubject(rep, CheckLease, "test1/1"); res == nil || res.Status != Fail || !strings.Contains(res.Detail, "two commands share") {
 		t.Fatalf("shared slot: %+v", find(rep, CheckLease))
 	}
 }
@@ -303,16 +303,16 @@ func TestCheckLeaseHeldByThisWalk(t *testing.T) {
 	out := filepath.Join(f.walk, "run")
 	f.cmd(t, "cmd-a.txt", f.cmdLine("--slot 1 --holder mine --out "+out+" --until none"))
 	slotDir := filepath.Join(out, "slot")
-	writeFile(t, filepath.Join(filepath.Dir(f.slots), "leases", "m910q", "1.json"), 0o600, `{"server":"m910q","slot":"1","holder":"mine","lease_id":"x",
+	writeFile(t, filepath.Join(filepath.Dir(f.slots), "leases", "test1", "1.json"), 0o600, `{"server":"test1","slot":"1","holder":"mine","lease_id":"x",
 		"acquired":"2026-01-01T00:00:00Z","expires":"2999-01-01T00:00:00Z","dir":`+strconvQuote(slotDir)+`}`)
 	rep := f.run(t, Deps{Probe: fakeProbe{slotDir: 4242}})
-	res := findSubject(rep, CheckLease, "m910q/1")
+	res := findSubject(rep, CheckLease, "test1/1")
 	if res == nil || res.Status != OK || !strings.Contains(res.Detail, "this walk") {
 		t.Fatalf("this walk's lease: %+v", find(rep, CheckLease))
 	}
 	// Same lease, no live agent: the walk would be blocked.
 	rep = f.run(t, Deps{Probe: fakeProbe{}})
-	res = findSubject(rep, CheckLease, "m910q/1")
+	res = findSubject(rep, CheckLease, "test1/1")
 	if res == nil || res.Status != Fail {
 		t.Fatalf("this walk's lease without an agent: %+v", find(rep, CheckLease))
 	}
@@ -321,10 +321,10 @@ func TestCheckLeaseHeldByThisWalk(t *testing.T) {
 func TestCheckLeaseStale(t *testing.T) {
 	f := newFixture(t)
 	f.cmd(t, "cmd-a.txt", f.cmdLine("--slot 1 --until none"))
-	writeFile(t, filepath.Join(filepath.Dir(f.slots), "leases", "m910q", "1.json"), 0o600, `{"server":"m910q","slot":"1","holder":"old","lease_id":"x",
+	writeFile(t, filepath.Join(filepath.Dir(f.slots), "leases", "test1", "1.json"), 0o600, `{"server":"test1","slot":"1","holder":"old","lease_id":"x",
 		"acquired":"2026-01-01T00:00:00Z","expires":"2026-01-01T01:00:00Z"}`)
 	rep := f.run(t, Deps{})
-	res := findSubject(rep, CheckLease, "m910q/1")
+	res := findSubject(rep, CheckLease, "test1/1")
 	if res == nil || res.Status != Warn || !strings.Contains(res.Detail, "stale") {
 		t.Fatalf("stale lease: %+v", find(rep, CheckLease))
 	}
@@ -334,7 +334,7 @@ func TestCheckLeaseSlot3(t *testing.T) {
 	f := newFixture(t)
 	f.cmd(t, "cmd-a.txt", f.cmdLine("--slot 3 --until none"))
 	rep := f.run(t, Deps{})
-	res := findSubject(rep, CheckLease, "m910q/3")
+	res := findSubject(rep, CheckLease, "test1/3")
 	if res == nil || res.Status != Fail || !strings.Contains(res.Detail, "slot 3") {
 		t.Fatalf("slot 3: %+v", find(rep, CheckLease))
 	}
@@ -422,9 +422,9 @@ func TestCheckServerKeys(t *testing.T) {
 	f := newFixture(t)
 	f.cmd(t, "cmd-a.txt", f.cmdLine("--slot 1 --until none"))
 	writeFile(t, f.keys, 0o600, `{"keys":{"AiPlayerbot.X":"1","AiPlayerbot.DbPass":"s3cret"}}`)
-	conf := fakeConf{keys: map[string]map[string]string{"m910q": {"AiPlayerbot.X": "0", "AiPlayerbot.DbPass": "s3cret"}}}
+	conf := fakeConf{keys: map[string]map[string]string{"test1": {"AiPlayerbot.X": "0", "AiPlayerbot.DbPass": "s3cret"}}}
 	rep := f.run(t, Deps{Conf: conf})
-	res := findSubject(rep, CheckKeys, "m910q")
+	res := findSubject(rep, CheckKeys, "test1")
 	if res == nil || res.Status != Fail || !strings.Contains(res.Detail, "AiPlayerbot.X") {
 		t.Fatalf("key mismatch: %+v", find(rep, CheckKeys))
 	}
@@ -432,9 +432,9 @@ func TestCheckServerKeys(t *testing.T) {
 	if strings.Contains(string(data), "s3cret") {
 		t.Fatal("a secret value was printed")
 	}
-	conf = fakeConf{keys: map[string]map[string]string{"m910q": {"AiPlayerbot.X": "1", "AiPlayerbot.DbPass": "s3cret"}}}
+	conf = fakeConf{keys: map[string]map[string]string{"test1": {"AiPlayerbot.X": "1", "AiPlayerbot.DbPass": "s3cret"}}}
 	rep = f.run(t, Deps{Conf: conf})
-	if res := findSubject(rep, CheckKeys, "m910q"); res == nil || res.Status != OK {
+	if res := findSubject(rep, CheckKeys, "test1"); res == nil || res.Status != OK {
 		t.Fatalf("keys match: %+v", find(rep, CheckKeys))
 	}
 	os.Remove(f.keys)
@@ -444,8 +444,8 @@ func TestCheckServerKeys(t *testing.T) {
 	}
 	// The server cannot be read: a failure, not a silent OK.
 	writeFile(t, f.keys, 0o600, `{"keys":{"AiPlayerbot.X":"1"}}`)
-	rep = f.run(t, Deps{Conf: fakeConf{errs: map[string]error{"m910q": os.ErrPermission}}})
-	if res := findSubject(rep, CheckKeys, "m910q"); res == nil || res.Status != Fail || !strings.Contains(res.Detail, "cannot read") {
+	rep = f.run(t, Deps{Conf: fakeConf{errs: map[string]error{"test1": os.ErrPermission}}})
+	if res := findSubject(rep, CheckKeys, "test1"); res == nil || res.Status != Fail || !strings.Contains(res.Detail, "cannot read") {
 		t.Fatalf("server unreadable: %+v", find(rep, CheckKeys))
 	}
 }
@@ -489,7 +489,7 @@ func TestCheckRosters(t *testing.T) {
 }
 
 func TestTargetsPairForm(t *testing.T) {
-	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2,4 --holder 4=h4 "+
+	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server test1 --slot 2,4 --holder 4=h4 "+
 		`--from 2="leg hakkar" --out /tmp/o --until none`, "cmd-x.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -511,8 +511,8 @@ func TestTargetsPairForm(t *testing.T) {
 func TestTargetsFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, `# id server slot holder goal -- args
-zg1 m910q 1 zg1-a boss:14515 -- zul_gurub --sql /x.sql --until none
-zg1 m910q 2 zg1-b full -- zul_gurub --sql /x.sql --until none
+zg1 test1 1 zg1-a boss:14515 -- zul_gurub --sql /x.sql --until none
+zg1 test1 2 zg1-b full -- zul_gurub --sql /x.sql --until none
 `)
 	ts, errs := readTargets(dir, "forever-agent")
 	if len(errs) != 0 {
@@ -521,7 +521,7 @@ zg1 m910q 2 zg1-b full -- zul_gurub --sql /x.sql --until none
 	if len(ts) != 2 {
 		t.Fatalf("%d targets, want 2", len(ts))
 	}
-	if ts[0].server != "m910q" || ts[0].slot != "1" || ts[0].holder != "zg1-a" || ts[0].goalBoss != 14515 {
+	if ts[0].server != "test1" || ts[0].slot != "1" || ts[0].holder != "zg1-a" || ts[0].goalBoss != 14515 {
 		t.Fatalf("first target: %+v", ts[0])
 	}
 	if ts[1].goalBoss != 0 || ts[1].slot != "2" {
@@ -534,8 +534,8 @@ zg1 m910q 2 zg1-b full -- zul_gurub --sql /x.sql --until none
 // roster's fight scope: a practice run fights that boss, so a thin roster is warned about it like a boss goal.
 func TestTargetsFilePracticeGoal(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, `zg9 m910q 1 zg9-a practice:14834:10 -- zul_gurub --sql /x.sql
-zg8 m910q 2 zg8-b practice:14834 -- zul_gurub --sql /x.sql
+	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, `zg9 test1 1 zg9-a practice:14834:10 -- zul_gurub --sql /x.sql
+zg8 test1 2 zg8-b practice:14834 -- zul_gurub --sql /x.sql
 `)
 	ts, errs := readTargets(dir, "forever-agent")
 	if len(ts) != 1 {
@@ -553,7 +553,7 @@ zg8 m910q 2 zg8-b practice:14834 -- zul_gurub --sql /x.sql
 	roster(t, hire, `{"role":"mt","hire":"1 warrior:tank"},{"role":"rest","hire":"5h 12d"}`)
 	writeFile(t, filepath.Join(f.walk, "x.sql"), 0o644, "")
 	writeFile(t, filepath.Join(f.walk, "targets.txt"), 0o644,
-		"p m910q 2 p-h practice:14834:10 -- zul_gurub --sql "+filepath.Join(f.walk, "x.sql")+" --hires "+hire+"\n")
+		"p test1 2 p-h practice:14834:10 -- zul_gurub --sql "+filepath.Join(f.walk, "x.sql")+" --hires "+hire+"\n")
 	rep := f.run(t, Deps{})
 	if res := findSubject(rep, CheckRoster, hire); res == nil || res.Status != Warn || !strings.Contains(res.Detail, "Hakkar") {
 		t.Fatalf("2 tanks for a Hakkar practice: %+v", find(rep, CheckRoster))
@@ -566,7 +566,7 @@ zg8 m910q 2 zg8-b practice:14834 -- zul_gurub --sql /x.sql
 func TestTargetsFileMultiWordValues(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644,
-		"hk13mh-1 m910q 13 zg74-hk13mh-1 boss:14834 -- zul_gurub --dir /plans --sql /x.sql "+
+		"hk13mh-1 test1 13 zg74-hk13mh-1 boss:14834 -- zul_gurub --dir /plans --sql /x.sql "+
 			"--place --from leg hakkar --gm-clear-spawns /spawns --gm-instance-data hakkar:1 3;2 3;3 3;4 3\n")
 	ts, errs := readTargets(dir, "forever-agent")
 	if len(errs) != 0 || len(ts) != 1 {
@@ -576,7 +576,7 @@ func TestTargetsFileMultiWordValues(t *testing.T) {
 		t.Fatalf("targets.txt line: %+v", t0)
 	}
 	// The cmd-*.txt form has the same two shapes, unquoted.
-	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2 --from leg hakkar "+
+	cmd, err := parseCommand("/bin/forever-agent raid-walk zul_gurub --server test1 --slot 2 --from leg hakkar "+
 		"--gm-instance-data hakkar:1 3;2 3", "cmd-a.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -591,8 +591,8 @@ func TestTargetsFileMultiWordValues(t *testing.T) {
 // that did not exist (round 2). A command's own path is a literal invocation and stays.
 func TestTargetsBinaryResolution(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, "zg1 m910q 1 zg1-a full -- zul_gurub --sql /x.sql\n")
-	writeFile(t, filepath.Join(dir, "cmd-a.txt"), 0o644, "/opt/ta/bin/forever-agent raid-walk zul_gurub --server m910q --slot 2 --sql /x.sql\n")
+	writeFile(t, filepath.Join(dir, "targets.txt"), 0o644, "zg1 test1 1 zg1-a full -- zul_gurub --sql /x.sql\n")
+	writeFile(t, filepath.Join(dir, "cmd-a.txt"), 0o644, "/opt/ta/bin/forever-agent raid-walk zul_gurub --server test1 --slot 2 --sql /x.sql\n")
 	ts, errs := readTargets(dir, "/opt/ta/default/forever-agent")
 	if len(errs) != 0 || len(ts) != 2 {
 		t.Fatalf("%d targets, %+v", len(ts), errs)
@@ -608,7 +608,7 @@ func TestTargetsBinaryResolution(t *testing.T) {
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.walk, "x.sql"), 0o644, "")
 	writeFile(t, filepath.Join(f.walk, "targets.txt"), 0o644,
-		"p m910q 2 p-h full -- zul_gurub --sql "+filepath.Join(f.walk, "x.sql")+"\n")
+		"p test1 2 p-h full -- zul_gurub --sql "+filepath.Join(f.walk, "x.sql")+"\n")
 	rep := f.run(t, Deps{})
 	if res := findSubject(rep, CheckBinary, f.bin); res == nil || res.Status != OK {
 		t.Fatalf("the --binary binary was not checked: %+v", find(rep, CheckBinary))
@@ -634,8 +634,8 @@ func TestExitCodes(t *testing.T) {
 }
 
 func TestParseServerConf(t *testing.T) {
-	out := "__FILE__ /home/pk/etc/aiplayerbot.conf\nAiPlayerbot.X = 1\n#AiPlayerbot.X = 0\n" +
-		"__FILE__ /home/pk/etc/modules/tortoise_bots.conf\n__MISSING__\n"
+	out := "__FILE__ /etc/aiplayerbot.conf\nAiPlayerbot.X = 1\n#AiPlayerbot.X = 0\n" +
+		"__FILE__ /etc/modules/tortoise_bots.conf\n__MISSING__\n"
 	keys, files := parseServerConf(out)
 	if files != 1 {
 		t.Fatalf("files = %d, want 1", files)

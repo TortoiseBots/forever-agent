@@ -2,7 +2,7 @@
 """Generates the knowledge-base rotations (internal/brain/rotations/kb_*.json) and the spells oracle
 (internal/kbspells/oracle/<class>.json) from hand-written recipes and the Turtle knowledge base's YAML.
 
-  python3 -I tools/kbrotgen/kbrotgen.py --kb ~/TortoiseBots-audit/turtle-kb [--only NAME] [--check]
+  python3 -I tools/kbrotgen/kbrotgen.py --kb ~/turtle-kb [--only NAME] [--check]
 
 A recipe (tools/kbrotgen/recipes/<name>.json) maps every element of the KB file's rotation_single, rotation_aoe and
 cooldowns to zero or more rotation entries or to an explicit unexpressed reason; it is the human judgment and the only

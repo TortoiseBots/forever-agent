@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -360,17 +361,15 @@ func TestWalkPathEndsAtOnceOnALostLink(t *testing.T) {
 	}
 }
 
-// TestLogoutInstanceCloseIsNotLinkLoss: the server closes the instance socket as part of the logout, and the response
-// queued on it may be dropped with the close (WorldSession.cpp:766,789). The run must wait for the completion on the
-// realm socket and end cleanly: no error, no link-loss report.
-func TestLogoutInstanceCloseIsNotLinkLoss(t *testing.T) {
-	f := newFakeServer(t)
-	defer f.close()
-	f.logoutNoResponse = true
+// enterLogout runs one logout against the fake with the steps the test names, and returns what Enter saw. The fake
+// plays the steps in exactly that order (playLogout), so a test pins one order of the two sockets' events and
+// asserts the outcome for it, rather than sending both and hoping the client's readers saw them in some order.
+func enterLogout(t *testing.T, f *fakeServer, steps ...string) (*Report, []string, error) {
+	t.Helper()
+	f.playLogout(steps...)
 	f.wg.Add(1)
 	go f.serveRealm()
-
-	var steps []string
+	var lines []string
 	report, err := Enter(t.Context(), Options{
 		Address:         f.realmListener.Addr().String(),
 		RealmID:         70,
@@ -384,12 +383,25 @@ func TestLogoutInstanceCloseIsNotLinkLoss(t *testing.T) {
 		Stay:            100 * time.Millisecond,
 		Deadline:        20 * time.Second,
 		BuildAuthKey:    f.buildKey[:],
-		Logf:            func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) },
+		Logf:            func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) },
 	})
+	return report, lines, err
+}
+
+// TestLogoutInstanceCloseIsNotLinkLoss: the completion is written on the realm socket and flushed before the server
+// closes the instance socket, and the response queued on the instance socket (WorldSession.cpp:766,789) may never
+// arrive. The completion is the logout: the run must end cleanly, with no error and no link-loss report.
+func TestLogoutInstanceCloseIsNotLinkLoss(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	report, steps, err := enterLogout(t, f, "completion", "close-instance", "end")
 	if err != nil {
 		t.Fatalf("Enter: %v\nsteps:\n%s", err, joinLines(steps))
 	}
 	f.wait(t)
+	if want := []string{"completion", "close-instance", "end"}; !slices.Equal(f.logoutSteps(), want) {
+		t.Fatalf("the fake performed %q, want %q", f.logoutSteps(), want)
+	}
 	if !report.LogoutComplete {
 		t.Fatalf("the logout did not complete\nsteps:\n%s", joinLines(steps))
 	}
@@ -399,6 +411,63 @@ func TestLogoutInstanceCloseIsNotLinkLoss(t *testing.T) {
 	}
 	if !strings.Contains(joinLines(steps), "no SMSG_LOGOUT_RESPONSE") {
 		t.Fatalf("the run did not say the response was absent\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestLogoutInstanceCloseBeforeCompletionIsNotLinkLoss: the instance socket is closed first, with nothing for the
+// logout on the wire, and the completion is written on the realm socket only after that close returned. This is the
+// live order when the queued response is dropped by the close: the two sockets are independent, so the client reads
+// the instance EOF before anything for the logout. That EOF is not the session's end on its own; only
+// SMSG_LOGOUT_COMPLETE proves the logout, so the client must keep waiting for it instead of reporting a lost link.
+func TestLogoutInstanceCloseBeforeCompletionIsNotLinkLoss(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	start := time.Now()
+	report, steps, err := enterLogout(t, f, "close-instance", "completion", "end")
+	if err != nil {
+		t.Fatalf("Enter: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if want := []string{"close-instance", "completion", "end"}; !slices.Equal(f.logoutSteps(), want) {
+		t.Fatalf("the fake performed %q, want %q", f.logoutSteps(), want)
+	}
+	if !report.LogoutComplete {
+		t.Fatalf("the logout did not complete\nsteps:\n%s", joinLines(steps))
+	}
+	if report.LinkLost {
+		t.Fatalf("the instance close before the completion was reported as a lost link (%s: %s)",
+			report.LinkLostSide, report.LinkLostDetail)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("the logout waited %s with the completion already on the realm socket", elapsed)
+	}
+	if !strings.Contains(joinLines(steps), "no SMSG_LOGOUT_RESPONSE") {
+		t.Fatalf("the run did not say the response was absent\nsteps:\n%s", joinLines(steps))
+	}
+}
+
+// TestLogoutInstanceCloseWithoutCompletionIsALinkLoss: the instance socket closes and no completion follows; the realm
+// socket then closes too, which is a session the server did not end. The run must report the lost link, and must never
+// count a logout as clean that no SMSG_LOGOUT_COMPLETE proved.
+func TestLogoutInstanceCloseWithoutCompletionIsALinkLoss(t *testing.T) {
+	f := newFakeServer(t)
+	defer f.close()
+	report, steps, err := enterLogout(t, f, "close-instance", "close-realm", "end")
+	if !errors.Is(err, ErrLinkLost) {
+		t.Fatalf("Enter returned %v, want ErrLinkLost\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if want := []string{"close-instance", "close-realm", "end"}; !slices.Equal(f.logoutSteps(), want) {
+		t.Fatalf("the fake performed %q, want %q", f.logoutSteps(), want)
+	}
+	if report.LogoutComplete {
+		t.Fatalf("the run counts a logout as complete with no SMSG_LOGOUT_COMPLETE\nsteps:\n%s", joinLines(steps))
+	}
+	if !report.LinkLost || report.LinkLostSide != "realm" {
+		t.Fatalf("the report: link lost %v on %q (%s), want the realm", report.LinkLost, report.LinkLostSide, report.LinkLostDetail)
+	}
+	if strings.Contains(joinLines(steps), "world logout: SMSG_LOGOUT_COMPLETE") {
+		t.Fatalf("the run logged a completed logout\nsteps:\n%s", joinLines(steps))
 	}
 }
 

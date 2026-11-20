@@ -79,7 +79,7 @@ func rpcCLITestDir(t *testing.T, port int, token string) string {
 	t.Helper()
 	dir := t.TempDir()
 	m := teardownSlotManifest{
-		Server:    "m910q",
+		Server:    "test1",
 		Slot:      "1",
 		Holder:    "w-a",
 		LeaseID:   "lease-1",

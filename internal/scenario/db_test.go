@@ -72,7 +72,7 @@ func TestSSHArgvAndStdin(t *testing.T) {
 	var gotName string
 	var gotArgs []string
 	var gotStdin []byte
-	db := SSHDB{Host: "m910q", Container: "tortoise-db", Exec: func(ctx context.Context, name string, args []string, stdin []byte) (stdout, stderr []byte, err error) {
+	db := SSHDB{Host: "test1", Container: "tortoise-db", Exec: func(ctx context.Context, name string, args []string, stdin []byte) (stdout, stderr []byte, err error) {
 		gotName, gotArgs, gotStdin = name, args, stdin
 		return []byte("3\n"), nil, nil
 	}}
@@ -83,7 +83,7 @@ func TestSSHArgvAndStdin(t *testing.T) {
 	if gotName != "ssh" {
 		t.Fatalf("name %q", gotName)
 	}
-	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "m910q"}
+	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "test1"}
 	if len(gotArgs) != len(want)+1 {
 		t.Fatalf("argv %q", gotArgs)
 	}
@@ -134,7 +134,7 @@ func TestSSHDefaultExecRunsSsh(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	db := SSHDB{Host: "m910q", Container: "tortoise-db"}
+	db := SSHDB{Host: "test1", Container: "tortoise-db"}
 	n, err := db.Count(context.Background(), DBQuery{Table: "tw_world.lft_user_groups", Op: "=="})
 	if err != nil || n != 7 {
 		t.Fatalf("%d %v", n, err)
@@ -143,7 +143,7 @@ func TestSSHDefaultExecRunsSsh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(argv), " -o BatchMode=yes -o ConnectTimeout=10 m910q docker exec -i tortoise-db sh -c '") {
+	if !strings.Contains(string(argv), " -o BatchMode=yes -o ConnectTimeout=10 test1 docker exec -i tortoise-db sh -c '") {
 		t.Fatalf("argv %q", argv)
 	}
 	stdin, err := os.ReadFile(stdinPath)
@@ -159,7 +159,7 @@ func TestSSHDefaultExecRunsSsh(t *testing.T) {
 // else errors without echoing content; only an ERROR line from stderr shows.
 func TestDBOutputIsOnlyANumber(t *testing.T) {
 	mk := func(out, errOut string, code int) SSHDB {
-		return SSHDB{Host: "m910q", Container: "tortoise-db", Exec: func(ctx context.Context, name string, args []string, stdin []byte) ([]byte, []byte, error) {
+		return SSHDB{Host: "test1", Container: "tortoise-db", Exec: func(ctx context.Context, name string, args []string, stdin []byte) ([]byte, []byte, error) {
 			if code != 0 {
 				return []byte(out), []byte(errOut), &exitError{code: code}
 			}

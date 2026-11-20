@@ -190,6 +190,9 @@ type Fake struct {
 	// StopDelay makes a stop wait this long for the fight to end: the run stays running (and the reply pending) until
 	// then, so a watcher's wait for the stopped state is exercised.
 	StopDelay time.Duration
+	// StatusBlock makes every status read wait this long for an answer it never sends, until the call's own context
+	// ends: a connected but silent server, which spends the caller's budget instead of returning at once.
+	StatusBlock time.Duration
 	// InstanceBosses is what the instance report answers with.
 	InstanceBosses []tbcmd.InstanceBoss
 	// Uncommanded names a party member the roster reports as not commanded (a watch's PREPARE refusal).
@@ -961,6 +964,15 @@ func (f *Fake) runState() tbcmd.RunState {
 func (f *Fake) RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error) {
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.RunReport{}, err
+	}
+	if f.StatusBlock > 0 {
+		t := time.NewTimer(f.StatusBlock)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return tbcmd.RunReport{}, ctx.Err()
+		case <-t.C:
+		}
 	}
 	if f.CallDelay > 0 {
 		f.Clock.Advance(f.CallDelay)
