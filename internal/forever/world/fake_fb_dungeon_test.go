@@ -263,8 +263,11 @@ func (f *fakeServer) answerFBLfgStatus(c *fakeConn, seq uint32) {
 	if queued {
 		f.fbdPolls++
 	}
-	polls, scenario := f.fbdPolls, f.fbDungeonCase
+	polls, scenario, hook := f.fbdPolls, f.fbDungeonCase, f.onFBLfg
 	f.mu.Unlock()
+	if hook != nil {
+		hook(polls)
+	}
 	if !queued {
 		f.sendPBC(c, seq, pbc.TypeLfgResp, pbc.BuildBody([]string{"idle", "", "0", "90", "1", "0", "0"}))
 		return
@@ -603,6 +606,51 @@ func TestFBDungeonDeadlineDuringWatch(t *testing.T) {
 	}
 	if d.LeadOffLine == "" || d.LeaveLine == "" || len(d.Dismissed) == 0 {
 		t.Fatalf("the cleanup skipped a step after the window: lead off %q leave %q dismissed %v (%v)",
+			d.LeadOffLine, d.LeaveLine, d.Dismissed, d.Cleanup)
+	}
+	cleanupSays(t, f, ".bot lead off", ".bot dungeon leave", ".bot dismiss all")
+}
+
+// TestFBDungeonInterruptStillCleansUp: the operator's interrupt ends the run's watch, and the deferred cleanup still
+// reaches the module over the live socket — the lead goes back, the instance is left and the companions are
+// dismissed — because the closing steps run on their own context, not the cancelled one.
+func TestFBDungeonInterruptStillCleansUp(t *testing.T) {
+	f := fbdNewServer(t)
+	f.fbDungeonCase = "leaveNoMap"
+	opts := fbDungeonOptions(f)
+	opts.FBDungeonWatch = 30 * time.Second // the interrupt ends the watch, not its own timer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The entry answers four finder polls and the lead is handed over; the watch's first finder request is the
+	// fifth. The caller's context ends there, with the run inside and the lead taken.
+	f.onFBLfg = func(polls int) {
+		if polls == 5 {
+			cancel()
+		}
+	}
+	f.fb = true
+	f.fbDungeon = true
+	f.fbdMapSc.fromMap = 0
+	f.fbdMapSc.toMap = 389
+	f.fbdMapSc.toPos = fbdRfcPos
+	f.fbdMapSc.fromPos = fbdHomePos
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+	report, err := Enter(ctx, opts)
+	f.wait(t)
+	if err != nil && !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "connection is lost") {
+		t.Fatalf("Enter: %v", err)
+	}
+	d := report.FBDungeon
+	if !d.Inside || d.LeadOnLine == "" {
+		t.Fatalf("the run did not reach the watch: inside %v lead on %q (%q)", d.Inside, d.LeadOnLine, d.EnterErr)
+	}
+	if d.CleanupErr != "" {
+		t.Fatalf("the cleanup could not get its answers after the interrupt: %q (%v)", d.CleanupErr, d.Cleanup)
+	}
+	if d.LeadOffLine == "" || d.LeaveLine == "" || len(d.Dismissed) == 0 {
+		t.Fatalf("the cleanup skipped a step after the interrupt: lead off %q leave %q dismissed %v (%v)",
 			d.LeadOffLine, d.LeaveLine, d.Dismissed, d.Cleanup)
 	}
 	cleanupSays(t, f, ".bot lead off", ".bot dungeon leave", ".bot dismiss all")

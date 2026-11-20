@@ -85,7 +85,9 @@ func (e *RefusalError) Unwrap() error { return e.Err }
 // reports the reply complete; it returns the context's error when that ends, and the caller's link error when the
 // connection dies.
 type Transport interface {
-	SendCommand(line string) error
+	// SendCommand sends one line on ctx: the caller's context bounds the send, and a stop or cleanup path whose own
+	// context was detached from the session's keeps the send possible after an interrupt.
+	SendCommand(ctx context.Context, line string) error
 	Pump(ctx context.Context, feed func(chat.Line), done func() bool) error
 }
 
@@ -184,7 +186,7 @@ func Run(ctx context.Context, conn Transport, line string, opts Options) (*Reply
 	}
 	c := newCollector(full, opts)
 	start := opts.Now()
-	if err := conn.SendCommand(full); err != nil {
+	if err := conn.SendCommand(ctx, full); err != nil {
 		return nil, err
 	}
 	pumpErr := conn.Pump(ctx, c.Feed, func() bool { return c.Complete(opts.Now()) })

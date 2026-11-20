@@ -69,14 +69,14 @@ type cmdLink struct {
 	probe bool
 }
 
-func (l *cmdLink) SendCommand(text string) error {
+func (l *cmdLink) SendCommand(ctx context.Context, text string) error {
 	if l.s.gmStop != nil {
 		return l.s.gmStop
 	}
 	if !l.probe && command.IsCommandText(text) && !l.s.gmConfirmed {
 		return errCommandNotConfirmed
 	}
-	return l.s.SendCommand(text)
+	return l.s.SendCommandCtx(ctx, text)
 }
 
 func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bool) error {
@@ -89,7 +89,9 @@ func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bo
 		if done() {
 			return nil
 		}
-		ev, err := l.s.next("the command reply", cmdPoll)
+		// The pump reads on the run's own context, not the session's: a stop or cleanup run handed a detached
+		// context still has to see its reply after the caller's interrupt ended the session's context.
+		ev, err := l.s.nextCtx(ctx, "the command reply", cmdPoll)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				continue

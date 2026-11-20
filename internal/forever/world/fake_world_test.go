@@ -171,8 +171,11 @@ type fakeServer struct {
 	fbRealm       *fakeConn
 	fbdQueued     bool
 	fbdPolls      int
-	fbMapCounter  uint32
-	fbdEvents     int
+	// onFBLfg, when set, is called with the finder poll number for each LFG_REQ the dungeon scene answers: the
+	// interrupt test cancels the caller's context from it.
+	onFBLfg      func(polls int)
+	fbMapCounter uint32
+	fbdEvents    int
 	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
 	dungeon *dungeonScene
 	// What the fake saw, under mu.
