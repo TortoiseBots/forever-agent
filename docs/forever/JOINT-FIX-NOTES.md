@@ -85,11 +85,22 @@ party keeps the module's own bot commander, and its tank leads.
 `docs/forever/WATCH-R1-NOTES.md` (the watch's steps, the budgets' blind rule, the tests, the live steps) and the
 `README.md` paragraph on `forever dungeon-watch` (the observer, the entry answers, the plans that load).
 
-## Gates on the final commit
+## Gates
 
-Each in the foreground on this commit with a clean worktree: `make fmt-check`, `make cross`,
-`vm-test ta ~/wt-fa-joint` (`RESULT: PASS`, dirty=0), `staticcheck ./...` and the race run
-(`go test -race -count=1 -timeout 20m ./...`). The lines are in the final report of the round.
+On the code-and-docs commit `7f4a4c66`'s tree with a clean worktree (the notes commit `85a60918` changes no code),
+each in the foreground and waited for:
+
+```
+make fmt-check            -> clean (no file listed)
+make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
+vm-test ta ~/wt-fa-joint  -> RESULT: PASS  kind=ta wt=wt-fa-joint sha=85a60918 dirty=0 files=2160
+                             rc=0  vm_duration=579s  laptop_wall=680s
+staticcheck ./...         -> rc=0 (no finding)
+go test -race -count=1 -timeout 20m ./... -> every package ok, no FAIL
+```
+
+This notes commit changes no code; it was gated again with the same commands, and the final report carries those
+lines.
 
 ## Commits
 
@@ -97,4 +108,5 @@ Each in the foreground on this commit with a clean worktree: `make fmt-check`, `
 fec11857 Forever: read the state records the live module writes
 3c4b76c0 Forever: accept the plan format's in-fight run fields
 7f4a4c66 Forever: watch the party the module commands
+85a60918 Forever: joint watch fix notes
 ```
