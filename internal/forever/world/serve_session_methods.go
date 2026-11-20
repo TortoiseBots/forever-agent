@@ -433,6 +433,7 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 		limit = 100
 	}
 	now := s.Now()
+	pattern := strings.ToLower(p.Name)
 	out := make([]ServeUnit, 0, limit)
 	for _, o := range s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ()) {
 		u := s.serveUnit(o, now)
@@ -442,7 +443,7 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 		if p.Entry != 0 && u.Entry != p.Entry {
 			continue
 		}
-		if p.Name != "" && !strings.Contains(strings.ToLower(u.Name), strings.ToLower(p.Name)) {
+		if pattern != "" && !strings.Contains(strings.ToLower(u.Name), pattern) {
 			continue
 		}
 		out = append(out, u)
@@ -451,7 +452,11 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 		if out[i].Distance != out[j].Distance {
 			return out[i].Distance < out[j].Distance
 		}
-		return out[i].GUID.MarshalString() < out[j].GUID.MarshalString()
+		a, b := wire.GUID(out[i].GUID), wire.GUID(out[j].GUID)
+		if a.Low != b.Low {
+			return a.Low < b.Low
+		}
+		return a.High < b.High
 	})
 	if len(out) > limit {
 		out = out[:limit]

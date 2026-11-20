@@ -263,9 +263,6 @@ type GUID wire.GUID
 // String is the GUID's hex form (wire.GUID.String).
 func (g GUID) String() string { return wire.GUID(g).String() }
 
-// MarshalString is String, for sorts and error texts.
-func (g GUID) MarshalString() string { return g.String() }
-
 // MarshalJSON writes the GUID as its hex string.
 func (g GUID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire.GUID(g).String())
