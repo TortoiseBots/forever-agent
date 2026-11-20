@@ -275,7 +275,16 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 		*g = GUID{}
 		return nil
 	}
-	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+	if len(s) == 0 || s[0] != '"' {
+		// The old daemon's GUID was a uint64; accept the number as the low half.
+		var n uint64
+		if err := json.Unmarshal(b, &n); err != nil {
+			return fmt.Errorf("guid: want a hex string or a number")
+		}
+		*g = GUID(wire.GUID{Low: n})
+		return nil
+	}
+	if len(s) < 2 || s[len(s)-1] != '"' {
 		return fmt.Errorf("guid: want a hex string")
 	}
 	s = s[1 : len(s)-1]

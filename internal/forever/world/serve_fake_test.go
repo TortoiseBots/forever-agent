@@ -596,6 +596,37 @@ func TestServeNavmeshPath(t *testing.T) {
 	f.wait(t)
 }
 
+func TestServeGUIDJSON(t *testing.T) {
+	cases := []struct {
+		in   string
+		low  uint64
+		high uint64
+	}{
+		{`"0x1234"`, 0x1234, 0},
+		{`"0x00000000000000000000000000001234"`, 0x1234, 0},
+		{`"0x00000000000000010000000000000002"`, 2, 1},
+		{`4660`, 4660, 0},
+		{`null`, 0, 0},
+	}
+	for _, c := range cases {
+		var g GUID
+		if err := json.Unmarshal([]byte(c.in), &g); err != nil {
+			t.Fatalf("%s: %v", c.in, err)
+		}
+		got := wire.GUID(g)
+		if got.Low != c.low || got.High != c.high {
+			t.Fatalf("%s: %+v, want %d/%d", c.in, got, c.low, c.high)
+		}
+	}
+	var g GUID
+	if err := json.Unmarshal([]byte(`"0x1"`), &g); err != nil || wire.GUID(g).Low != 1 {
+		t.Fatalf("short hex: %+v, %v", g, err)
+	}
+	if err := json.Unmarshal([]byte(`"0x000000000000000000000000000000001"`), &g); err == nil {
+		t.Fatal("a hex string longer than 128 bits was accepted")
+	}
+}
+
 func TestServeLinkDropGrace(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
