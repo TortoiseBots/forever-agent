@@ -157,6 +157,13 @@ type Config struct {
 	// Watchdog overrides Limits.Watchdog; Poll overrides Limits.WatchPoll.
 	Watchdog time.Duration
 	Poll     time.Duration
+	// FrameEvery is the watch's frame interval: every that long it reads `.tb state` and `.tb threat` and writes one
+	// trace frame plus the new combat-log rows. Zero writes no frames; the command's minimum is two seconds, which
+	// is also the module's own cost boundary for the two reads.
+	FrameEvery time.Duration
+	// CombatMaxBytes bounds the watch's <run_id>.combatlog.jsonl; zero takes DefaultCombatMaxBytes. A page that
+	// would cross it is not written and the summary carries combat_truncated.
+	CombatMaxBytes int64
 	// Logf prints the watch's progress lines; nil prints nothing.
 	Logf func(format string, args ...any)
 }
@@ -212,6 +219,8 @@ type Run struct {
 	walk  Walker
 	clock Clock
 	rec   *Recorder
+	// combat is the session's own combat log; the watch drains it into the record (nil writes none).
+	combat CombatLog
 
 	start  time.Time
 	states []string
@@ -343,8 +352,18 @@ func New(cfg Config, route *Route, cmd Commander, w World, walk Walker, clock Cl
 	}
 }
 
-// SetRecorder attaches the run's output.
-func (r *Run) SetRecorder(rec *Recorder) { r.rec = rec }
+// SetRecorder attaches the run's output. It also applies the config's combat-log bound, so every caller (the
+// command's dry watch and the world's live one) gets the same limit.
+func (r *Run) SetRecorder(rec *Recorder) {
+	r.rec = rec
+	if rec != nil {
+		rec.SetCombatMaxBytes(r.cfg.CombatMaxBytes)
+	}
+}
+
+// SetCombatLog binds the session's combat log. The watch drains it every frame tick into the run's
+// <run_id>.combatlog.jsonl; a watch without one writes no combat file.
+func (r *Run) SetCombatLog(c CombatLog) { r.combat = c }
 
 // Play runs the machine to STOP.
 func (r *Run) Play(ctx context.Context) Result {
@@ -812,7 +831,7 @@ func (r *Run) botGUIDs() map[string]string {
 	out := make(map[string]string, len(r.cfg.Party))
 	for _, name := range r.cfg.Party {
 		if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
-			out[name] = guidText(g)
+			out[name] = g.String()
 		} else {
 			out[name] = r.roleName(name)
 		}
@@ -852,7 +871,7 @@ func (r *Run) partyMembers() []trace.Member {
 	for i, name := range r.cfg.Party {
 		m := trace.Member{G: r.roleName(name), Name: r.roleName(name), Role: traceRole(i)}
 		if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
-			m.G = guidText(g)
+			m.G = g.String()
 		}
 		out = append(out, m)
 	}

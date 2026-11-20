@@ -12,6 +12,7 @@ package world
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -276,8 +277,43 @@ func (w dungeonWorld) PlayerGUID(name string) (wire.GUID, bool) {
 	return w.s.world.PlayerByName(name)
 }
 
+// Auras is the model's auras of one unit that are still up: the spell ids the trace's frames record for a bot.
+func (w dungeonWorld) Auras(guid wire.GUID) []uint32 {
+	auras := w.s.world.AurasOf(guid, w.s.Now())
+	if len(auras) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(auras))
+	for _, a := range auras {
+		out = append(out, uint32(max(a.SpellID, 0)))
+	}
+	return out
+}
+
 func (w dungeonWorld) EnterAreaTrigger(id int32) error {
 	return dungeonPortErr(w.s.EnterAreaTrigger(id))
+}
+
+// dungeonCombat adapts the session's combat log to the driver's port: the session's rows are encoded as JSON here,
+// once, so the run's combat-log file carries exactly the rows serve's `events` answers.
+type dungeonCombat struct {
+	s *session
+}
+
+func (c dungeonCombat) CombatRows(seq, limit int) ([]json.RawMessage, int, int, int) {
+	rows, next, oldest, dropped := c.s.CombatLog().Since(seq, limit)
+	if len(rows) == 0 {
+		return nil, next, oldest, dropped
+	}
+	out := make([]json.RawMessage, 0, len(rows))
+	for i := range rows {
+		b, err := json.Marshal(rows[i])
+		if err != nil {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, next, oldest, dropped
 }
 
 // dungeonWalker plans on the session's navmesh planner (the walking filter) and walks through the session's mover,

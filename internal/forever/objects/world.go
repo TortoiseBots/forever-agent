@@ -102,7 +102,10 @@ type World struct {
 	partialKinds map[string]int
 	// resurrections counts the units this model saw come back from the ghost state.
 	resurrections int
-	unparsed      map[string]int
+	// deadSince holds the guids a merge just took to dead, in merge order, until a caller drains them: the combat
+	// log writes one death row per guid. It is appended to only on a death, never on a plain update.
+	deadSince []wire.GUID
+	unparsed  map[string]int
 	// unparsedDetail keeps the parser's own text for the first block of each unparsed key, so the walk summary
 	// can name the failure without letting the server grow the summary: one string per key, never per block.
 	unparsedDetail map[string]string
@@ -293,7 +296,9 @@ func (w *World) Apply(u *Update, received time.Time) {
 		// order and decoding stops at the first region it cannot decode, so every bit that is set names a field
 		// that ended before the first skipped region: the block's tail may be skipped, its decoded head is proven.
 		mergeInfo(&o.Info, b.Info)
-		applyDeathLocked(o)
+		if applyDeathLocked(o) {
+			w.deadSince = append(w.deadSince, o.GUID)
+		}
 		if b.Info.f.Flags && o.Info.HasUnit {
 			// UNIT_FLAG_IN_COMBAT in the unit's flags is the server's own combat state for that unit.
 			o.InCombat = InCombatFromFlags(o.Info.Flags)

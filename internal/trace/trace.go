@@ -185,6 +185,18 @@ type Bot struct {
 	Why    string  `json:"why,omitempty"` // why a failed check did not run (feed): no-item, oom, range, los, cd, moving, casting, no-target
 	NoPos  bool    `json:"np,omitempty"`  // the position is not known (x, y, z are 0)
 	Lead   bool    `json:"lead,omitempty"`
+	// The module's own bot report, when the frame comes from `.tb state` (a watch): the role the party placed it
+	// in, its movement order, why it cannot act, whether it is eating, drinking or resting, its life state, its
+	// distance to the party leader, and the auras this client's own model holds for it.
+	Role  string   `json:"role,omitempty"`  // tank, heal, dps (the party slot's role)
+	Move  string   `json:"mvm,omitempty"`   // follow, stay; empty when the bot does not move
+	Stuck string   `json:"stuck,omitempty"` // blocked:<reason>, away:<seconds left>, noengine
+	Eat   bool     `json:"eat,omitempty"`
+	Drink bool     `json:"drink,omitempty"`
+	Rest  bool     `json:"rest,omitempty"`
+	Life  string   `json:"life,omitempty"` // alive, dead, awaiting-res, ghost, running-back
+	DL    *float32 `json:"dl,omitempty"`   // yards to the party leader; absent when unknown (self, another map)
+	Auras []uint32 `json:"auras,omitempty"`
 }
 
 // Threat is one entry of a mob's threat list: a guid and its share of the top entry's threat. It is written as [guid, pct].
@@ -226,9 +238,40 @@ type Mob struct {
 	Evade  bool     `json:"ev,omitempty"`
 	CC     bool     `json:"cc,omitempty"`
 	Threat []Threat `json:"thr,omitempty"` // the top of the threat list, highest first (with the threat capability)
-	Entry  uint32   `json:"-"`
-	Name   string   `json:"-"`
-	Level  int      `json:"-"`
+	// The module's own threat line, when the frame comes from `.tb threat` (a watch): the mob's threat victim, the
+	// top of its sorted list (guid and absolute threat, highest first) and whether it is fleeing.
+	Victim string     `json:"vic,omitempty"`
+	Top    []TopEntry `json:"top,omitempty"`
+	Flee   bool       `json:"fl,omitempty"`
+	NP     bool       `json:"np,omitempty"` // the position is not known (x, y, z are 0)
+	Entry  uint32     `json:"-"`
+	Name   string     `json:"-"`
+	Level  int        `json:"-"`
+}
+
+// TopEntry is one entry of a mob's threat list as the module reports it: a guid (the module's word when the unit is
+// not one of this client's party) and its absolute threat. It is written as [guid, threat].
+type TopEntry struct {
+	G      string
+	Threat int
+}
+
+// MarshalJSON writes [guid, threat].
+func (t TopEntry) MarshalJSON() ([]byte, error) { return json.Marshal([]any{t.G, t.Threat}) }
+
+// UnmarshalJSON reads [guid, threat].
+func (t *TopEntry) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil || len(raw) != 2 {
+		return fmt.Errorf("top entry: want [guid, threat]")
+	}
+	if err := json.Unmarshal(raw[0], &t.G); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw[1], &t.Threat); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Frame is a sample of the world. Via is "session" (the agent's own object store and party list) or "feed" (a TBM:VIEW frame).

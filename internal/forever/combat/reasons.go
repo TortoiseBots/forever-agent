@@ -266,3 +266,10 @@ func (c SpellCast) CastFlagHasPowerLeft() bool { return c.CastFlags&0x00000800 !
 
 // CastFlagHasTrajectory reports CAST_FLAG_HAS_TRAJECTORY.
 func (c SpellCast) CastFlagHasTrajectory() bool { return c.CastFlags&0x00000002 != 0 }
+
+// PeriodicTickIsHeal reports a periodic effect that restores health: SPELL_AURA_PERIODIC_HEAL or the health
+// observation aura (SpellAuraDefines.h:54-227, the two types of the core's periodic log that are heals). Every
+// other periodic effect the core logs is damage, power or leech.
+func (e PeriodicAuraEffect) PeriodicTickIsHeal() bool {
+	return e.Effect == 8 || e.Effect == 20
+}

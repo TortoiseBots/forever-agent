@@ -288,3 +288,79 @@ func TestSkippedRecordLineNamesTheBotAndGUID(t *testing.T) {
 		}
 	}
 }
+
+// TestDashRecordLines: `--record` writes one JSON line per good watch read, each with the read's time and the
+// roster as decoded.
+func TestDashRecordLines(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	var reads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/login" {
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+			return
+		}
+		atomic.AddInt32(&reads, 1)
+		fmt.Fprint(w, `{"bots":[{"name":"Ember","guid":1,"class":"Druid","level":60,"hp":900,"max_hp":1000,`+
+			`"map":0,"instance":"","x":1.5,"y":2.5,"z":3.5,"kind":"pool","state":"idle"}],`+
+			`"heartbeat":{"bots":1,"humans":0,"states":{"idle":1}}}`)
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "reads.jsonl")
+	// Long enough for several reads on a loaded machine, short enough for a test.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", srv.URL, "--user", "DashUser", "--watch", "--interval", "200ms",
+		"--timeout", "2s", "--record", path}
+	if code := foreverDashBotsCmd(ctx, args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("%d record line(s), want at least 2: %q", len(lines), raw)
+	}
+	if n := int(atomic.LoadInt32(&reads)); n < len(lines) {
+		t.Fatalf("%d reads but %d lines", n, len(lines))
+	}
+	for i, line := range lines {
+		var rec struct {
+			At   string       `json:"at"`
+			Bots []roster.Bot `json:"bots"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line %d %q: %v", i+1, line, err)
+		}
+		if rec.At == "" {
+			t.Fatalf("line %d carries no time: %q", i+1, line)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, rec.At); err != nil {
+			t.Fatalf("line %d time %q: %v", i+1, rec.At, err)
+		}
+		if len(rec.Bots) != 1 || rec.Bots[0].Name != "Ember" {
+			t.Fatalf("line %d roster %+v", i+1, rec.Bots)
+		}
+	}
+	// A good read is what is recorded: the watch's changes are printed, not appended.
+	if !strings.Contains(stdout.String(), "roster: 1 bot(s)") {
+		t.Fatalf("stdout %q does not carry the priming roster", stdout.String())
+	}
+}
+
+// TestDashRecordNeedsWatch: --record is the watch's history, so it needs --watch.
+func TestDashRecordNeedsWatch(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", "http://127.0.0.1:1", "--user", "DashUser", "--record", "reads.jsonl"}
+	if code := foreverDashBotsCmd(context.Background(), args, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "--watch") {
+		t.Fatalf("stderr %q does not say what --record needs", stderr.String())
+	}
+}

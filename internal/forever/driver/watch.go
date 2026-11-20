@@ -54,12 +54,28 @@ type watchRun struct {
 	revived     bool
 	reviveAt    time.Time
 	rescues     int
-	pauseLog    []PauseNote
-	pauseSeen   map[int]bool
-	bosses      map[uint32]string
-	bossAt      time.Time
-	lastLine    string
-	lastNote    string
+	// frames, combatRows and combatLost are the watch's own record of the sample tick: how many frames it wrote, how
+	// many combat rows reached the file, and how many the session's ring had already dropped. combatLostThrough is
+	// the highest seq whose loss is already in combatLost: a cursor the writer retries reports the same hole again,
+	// so only the part past this watermark is new. frameBlind and frameThreatBlind make one line of a failing frame
+	// read instead of one per tick; combatBlind, combatErr and combatTruncated do the same for a failing or bounded
+	// combat-log write.
+	frames            int
+	combatSeq         int
+	combatRows        int
+	combatLost        int
+	combatLostThrough int
+	combatBlind       bool
+	combatErr         string
+	combatTruncated   bool
+	frameBlind        bool
+	frameThreatBlind  bool
+	pauseLog          []PauseNote
+	pauseSeen         map[int]bool
+	bosses            map[uint32]string
+	bossAt            time.Time
+	lastLine          string
+	lastNote          string
 	// stopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it (or it could not stop yet), so the result is not a clean end.
 	stopUnconfirmed bool
@@ -238,7 +254,27 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 
 // watchLoop is the watch itself: status, events, the budgets, the practice rescue and the end.
 func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
+	var nextFrame time.Time
 	for r.stopReason == "" {
+		if r.cfg.FrameEvery > 0 {
+			now := r.now()
+			if nextFrame.IsZero() || !now.Before(nextFrame) {
+				r.watchFrame(ctx, w)
+				if r.stopReason != "" || r.lost {
+					return
+				}
+				if nextFrame.IsZero() {
+					nextFrame = now
+				}
+				nextFrame = nextFrame.Add(r.cfg.FrameEvery)
+				if !nextFrame.After(now) {
+					// A poll or a frame that took longer than the interval: the next one is one interval away, so the
+					// frames stay spaced instead of a burst catching up.
+					nextFrame = now.Add(r.cfg.FrameEvery)
+				}
+			}
+		}
+		r.drainCombat(w)
 		if r.lim.MaxMinutes > 0 && r.sinceStart() >= time.Duration(r.lim.MaxMinutes)*time.Minute {
 			r.stop("budget")
 			return
@@ -290,6 +326,157 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 			return
 		}
 		if !r.sleep(ctx, r.cfg.Poll) {
+			return
+		}
+	}
+}
+
+// combatPageMax is the most combat-log rows one drain asks for (the session's own page bound).
+const combatPageMax = 1000
+
+// watchFrame is the watch's sample tick: `.tb state party <leader>` and `.tb threat party <leader>` (both reads,
+// never orders) written as one trace frame. A frame the module answers with a failed read is one line and no frame;
+// the next tick retries, and a later good read says it came back. A frame read never ends the watch: the module's
+// run is still watched by the status and event polls.
+func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
+	rep, err := r.cmd.State(ctx)
+	if errors.Is(err, ErrLinkLost) {
+		r.linkLost()
+		return
+	}
+	if err != nil {
+		if !w.frameBlind {
+			w.frameBlind = true
+			r.logf("watch: frame: the state read failed (%v); the next tick retries", err)
+		}
+		return
+	}
+	if w.frameBlind {
+		w.frameBlind = false
+		r.logf("watch: frame: the state read answers again")
+	}
+	thr, terr := r.cmd.Threat(ctx)
+	if errors.Is(terr, ErrLinkLost) {
+		r.linkLost()
+		return
+	}
+	var trep *tbcmd.ThreatReport
+	if terr != nil {
+		if !w.frameThreatBlind {
+			w.frameThreatBlind = true
+			r.logf("watch: frame: the threat read failed (%v); the frame carries the party only", terr)
+		}
+	} else {
+		if w.frameThreatBlind {
+			w.frameThreatBlind = false
+			r.logf("watch: frame: the threat read answers again")
+		}
+		trep = &thr
+	}
+	r.rec.WatchFrame(r.now(), r.frameBots(rep), trep, r.frameGUID)
+	w.frames++
+}
+
+// frameBots is the frame's party: the module's lines in the order it sent them, each with the guid this client's
+// model gives its name, the party slot's role and the auras the model holds for it.
+func (r *Run) frameBots(rep tbcmd.StateReport) []FrameBot {
+	out := make([]FrameBot, 0, len(rep.Bots))
+	for i := range rep.Bots {
+		b := rep.Bots[i]
+		fb := FrameBot{State: b}
+		if slot := r.partySlot(b.Name); slot >= 0 {
+			fb.Role = traceRole(slot)
+		}
+		if g, ok := r.world.PlayerGUID(b.Name); ok && !g.IsZero() {
+			fb.GUID = g.String()
+			fb.Auras = r.world.Auras(g)
+		}
+		out = append(out, fb)
+	}
+	return out
+}
+
+// partySlot is a bot's party position, -1 for a name outside the party.
+func (r *Run) partySlot(name string) int {
+	for i, n := range r.cfg.Party {
+		if strings.EqualFold(n, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when this client's model
+// holds the name, else nothing (a frame never carries a character name).
+func (r *Run) frameGUID(name string) string {
+	if name == "" {
+		return ""
+	}
+	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
+		return g.String()
+	}
+	return ""
+}
+
+// drainCombat writes the session's new combat-log rows into the run's <run_id>.combatlog.jsonl: pages of at most
+// combatPageMax until the log is caught up. A hole the ring reports is one line per growth of the loss, with the
+// oldest seq the log still holds, never a silent hole, and every hole adds to the total: a later hole counts whatever
+// its size, and a cursor the writer retries does not count the same hole twice. The cursor advances only past a page
+// the file has: a failed write is one line, the page stays where it is and the next tick retries it, so a full disk or
+// a revoked permission never turns into rows the run's record does not know it lost. A page the file's size bound
+// refuses ends the drain for good and the summary carries combat_truncated.
+func (r *Run) drainCombat(w *watchRun) {
+	if r.combat == nil || r.rec == nil {
+		return
+	}
+	for {
+		if r.rec.CombatTruncated() {
+			if !w.combatTruncated {
+				w.combatTruncated = true
+				r.logf("watch: the combat log reached its %d MiB bound at %d row(s); no later row is written",
+					r.rec.CombatMaxBytes()>>20, w.combatRows)
+			}
+			return
+		}
+		rows, next, oldest, dropped := r.combat.CombatRows(w.combatSeq, combatPageMax)
+		// dropped is the hole above the cursor the ring reports now: rows w.combatSeq+1 through oldest-1 are gone.
+		// A retried cursor reports the same hole again, so only the seqs past the watermark are a new loss, and a
+		// later hole counts whatever its size.
+		if lost := w.combatSeq + dropped; lost > w.combatLostThrough {
+			gain := lost - max(w.combatLostThrough, w.combatSeq)
+			w.combatLost += gain
+			w.combatLostThrough = lost
+			r.logf("watch: the combat log dropped %d row(s) above seq %d (oldest held %d)",
+				gain, w.combatSeq, oldest)
+		}
+		if len(rows) > 0 {
+			written, err := r.rec.Combat(rows)
+			if err != nil {
+				if errors.Is(err, errCombatFull) {
+					w.combatTruncated = true
+					r.logf("watch: the combat log reached its %d MiB bound at %d row(s); no later row is written",
+						r.rec.CombatMaxBytes()>>20, w.combatRows)
+					return
+				}
+				w.combatErr = combatErrText(err)
+				if !w.combatBlind {
+					w.combatBlind = true
+					r.logf("watch: combat log: the write failed (%v); the page stays and the next tick retries it", err)
+				}
+				return
+			}
+			if w.combatBlind {
+				w.combatBlind = false
+				w.combatErr = ""
+				r.logf("watch: combat log: the writes answer again")
+			}
+			w.combatRows += written
+		}
+		if next <= w.combatSeq {
+			return
+		}
+		w.combatSeq = next
+		if len(rows) < combatPageMax {
 			return
 		}
 	}
@@ -951,6 +1138,9 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 
 // watchSummary writes the watched run's counters into the recorder's summary.
 func (r *Run) watchSummary(w *watchRun) {
+	// The last rows of the fight: the stop and the final reads take time, and rows written between the last loop
+	// tick and now belong to the run. The session's log is local, so this works after a lost link too.
+	r.drainCombat(w)
 	st := w.record
 	bosses := make(map[string]string, len(w.bosses))
 	for entry, state := range w.bosses {
@@ -966,6 +1156,8 @@ func (r *Run) watchSummary(w *watchRun) {
 		State: w.state, Step: st.Step, Steps: st.Steps, Leg: st.Leg, LegName: st.LegName, Kind: st.Kind,
 		Phase: st.Phase, Pull: st.Pull, Pulls: st.Pulls, Deaths: st.Deaths, Wipes: st.Wipes, Pauses: st.Pauses,
 		ElapsedS: float64(st.Elapsed), Why: st.Why, Bosses: bosses, Rescues: w.rescues, Events: w.events,
+		Frames: w.frames, CombatRows: w.combatRows, CombatDropped: w.combatLost,
+		CombatBytes: r.rec.CombatBytes(), CombatTruncated: w.combatTruncated, CombatError: w.combatErr,
 		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), DeathLog: w.deaths,
 		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed,
 	}
