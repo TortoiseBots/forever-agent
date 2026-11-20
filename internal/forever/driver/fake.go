@@ -111,6 +111,8 @@ type fakeBot struct {
 	dmKind    string
 	dmYards   float64
 	dmMissing bool
+	dlKind    string
+	dlYards   float64
 	move      string
 	orderFail bool
 }
@@ -149,9 +151,13 @@ type Fake struct {
 	linkAfter    time.Duration
 	hasLinkAfter bool
 
+	// OnOrder, when set, is asked before an order's reply; OnAction, for the setup actions.
 	OnOrder  func(f *Fake, who, verb, arg string)
 	OnAction func(f *Fake, a Action) bool
-	OnState  func(f *Fake, n int) error
+	// OnParty, when set, may rewrite the roster answer: a report whose summary and member leader flags disagree, or
+	// one with no leader flag, that PREPARE must refuse.
+	OnParty func(tbcmd.PartyReport) tbcmd.PartyReport
+	OnState func(f *Fake, n int) error
 
 	// RefuseActions answers that action with the module's error line of this code.
 	RefuseActions map[ActionKind]string
@@ -196,6 +202,19 @@ type Fake struct {
 	DropOn string
 	// FailEvents answers every event read with this error (a read that fails while the status read answers).
 	FailEvents error
+	// FailState answers every state read with this error (a read that blinds a watch's PREPARE).
+	FailState error
+	// BotCommander is the commander a watched roster names: the module's own bot, outside the party. Empty in a run,
+	// where the roster's commander is this character, and defaulted to a name outside the party in a watch.
+	BotCommander string
+	// RosterLeader overrides the roster's leader, for a party whose leader is not the bot the run names.
+	RosterLeader string
+	// NoRunRecord makes a run action answer with no run record (count 0), as a start reply that lost its record:
+	// the watch must refuse it, never log a started run.
+	NoRunRecord bool
+	// EmptyStateOn, when set, is asked before a state read; true answers it with no report at all and a timeout: the
+	// transient loss a gate's own poll can hit after the party's entry was already verified.
+	EmptyStateOn func(f *Fake) bool
 }
 
 // FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
@@ -275,6 +294,10 @@ func NewFakeWith(route *Route, cfg Config, patrols bool) *Fake {
 		cfg.Party = []string{cfg.Leader, "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
 		f.cfg.Party = cfg.Party
 	}
+	if cfg.Watch && f.BotCommander == "" {
+		// The module's own bot commander, outside the party: never the observer.
+		f.BotCommander = "Botcmd"
+	}
 	for i, name := range cfg.Party {
 		b := &fakeBot{
 			name: name, level: 18, hp: 900, hpMax: 900, engine: true, move: "follow",
@@ -352,11 +375,19 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 		f.Clock.Advance(7 * time.Second)
 		return snap, nil
 	}
+	if f.EmptyStateOn != nil && f.EmptyStateOn(f) {
+		// A read that returned nothing at all: not a zero-bot report, no report.
+		f.Clock.Advance(max(f.StateDelay, f.CallDelay))
+		return tbcmd.StateReport{}, context.DeadlineExceeded
+	}
 	if d := max(f.StateDelay, f.CallDelay); d > 0 {
 		f.Clock.Advance(d)
 	}
 	if err := f.linkErr(); err != nil {
 		return tbcmd.StateReport{}, err
+	}
+	if f.FailState != nil {
+		return tbcmd.StateReport{}, f.FailState
 	}
 	f.missingNow = f.DistMissingAt == f.stateCalls
 	defer func() { f.missingNow = false }()
@@ -379,6 +410,14 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	return f.report(5), nil
 }
 
+// orSelf is the leader distance kind the fake reports: self unless the test scripted another kind.
+func orSelf(kind string) string {
+	if kind == "" {
+		return "self"
+	}
+	return kind
+}
+
 // report builds a state answer with the first n bots.
 func (f *Fake) report(n int) tbcmd.StateReport {
 	rep := tbcmd.StateReport{Target: "party:" + f.cfg.Tank(), End: map[string]string{}}
@@ -392,10 +431,10 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 			Name: b.name, Role: b.role, RoleSource: "forced", Class: b.class, Level: b.level,
 			HP: b.hp, HPMax: b.hpMax, HPPct: b.hp * 100 / max(b.hpMax, 1),
 			PowerType: "rage", Power: 50, PowerMax: 100,
-			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine,
+			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine, NoEngine: !b.engine,
 			X: float64(b.pos[0]), Y: float64(b.pos[1]), Z: float64(b.pos[2]),
 			Map: b.mapID, Instance: b.inst,
-			DistLeader: tbcmd.Distance{Has: true, Kind: "self"},
+			DistLeader: tbcmd.Distance{Has: true, Kind: orSelf(b.dlKind), Yards: b.dlYards},
 			DistMaster: tbcmd.Distance{Has: !f.missingNow && !b.dmMissing, Kind: b.dmKind, Yards: b.dmYards},
 			LastOrder:  "", Eating: false, Drinking: false, Resting: b.resting,
 			Extra: map[string]string{},
@@ -523,15 +562,27 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 	if err := f.linkErr(); err != nil {
 		return tbcmd.PartyReport{}, err
 	}
-	rep := tbcmd.PartyReport{Leader: f.cfg.Tank(), Commander: f.cfg.Commander, Count: len(f.bots), Bots: len(f.bots)}
-	for i, name := range f.cfg.Party {
+	// A watch's party is commanded by the module's own bot, outside the party; a run's by this character.
+	commander := f.cfg.Commander
+	if f.cfg.Watch && f.BotCommander != "" {
+		commander = f.BotCommander
+	}
+	leader := f.cfg.Tank()
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	rep := tbcmd.PartyReport{Leader: leader, Commander: commander, Count: len(f.bots), Bots: len(f.bots)}
+	for _, name := range f.cfg.Party {
 		b := f.bots[name]
 		rep.Members = append(rep.Members, tbcmd.PartyMember{
-			Name: b.name, Leader: i == 0, Online: true, Bot: true, HasBot: true,
+			Name: b.name, Leader: strings.EqualFold(name, leader), Online: true, Bot: true, HasBot: true,
 			Class: b.class, HasClass: true, Level: b.level, HasLevel: true,
 			Role: b.role, HasRole: true, Engine: b.engine, HasEngine: true,
-			Master: f.cfg.Commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
+			Master: commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
 		})
+	}
+	if f.OnParty != nil {
+		rep = f.OnParty(rep)
 	}
 	return rep, nil
 }
@@ -628,6 +679,9 @@ func (f *Fake) runAction(a Action) (ActionReport, error) {
 		}
 	}
 	rep := ActionReport{Verb: "run", Confirmed: true, Count: 1}
+	if f.NoRunRecord {
+		return ActionReport{Verb: "run", Confirmed: true}, nil
+	}
 	if f.run != nil {
 		st := f.runState()
 		rep.Run = &st
@@ -640,7 +694,16 @@ func (f *Fake) startRun(a Action) error {
 	if f.run != nil && (f.run.state == "running" || f.run.state == "paused") {
 		return &tbcmd.CommandError{Code: "already-running", Cmd: "run"}
 	}
-	if len(f.cfg.Party) == 0 || !strings.EqualFold(a.Who, f.cfg.Party[0]) {
+	if len(f.cfg.Party) == 0 {
+		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
+	}
+	// The module's run starts on the bot that leads the party; the watch also accepts the tank, whose party keeps
+	// the tank first. A start on any other bot is the module's not-leader.
+	leader := f.cfg.Party[0]
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	if !strings.EqualFold(a.Who, f.cfg.Party[0]) && !strings.EqualFold(a.Who, leader) {
 		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
 	}
 	if a.Plan != f.route.Name {
