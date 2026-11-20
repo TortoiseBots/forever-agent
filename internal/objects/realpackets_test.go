@@ -8,7 +8,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/packet"
 )
 
-// Packets from the live run of #61 (m910q, TortoiseBots build 17), tests/ta61/agent.cap, in
+// Packets from the live run of #61 (test1, TortoiseBots build 17), tests/ta61/agent.cap, in
 // the order the server sent them when the agent ate Food (spell 1129 in aura slot 1): the
 // duration (#4099), an item create that is no part of the aura (#4101), then the compressed
 // update that puts the spell in the slot (#4102). #N is the record index in agent.cap. The

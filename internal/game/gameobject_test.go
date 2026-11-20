@@ -53,7 +53,7 @@ func TestGameObjectAnim(t *testing.T) {
 	}
 }
 
-// Uldaman, 2026-10-13 (m910q, build 17): the server answered 140 game object queries, and the
+// Uldaman, 2026-10-13 (test1, build 17): the server answered 140 game object queries, and the
 // agent's six uses of game objects went out as the 8-byte guid.
 func TestGameObjectPacketsFromCapture(t *testing.T) {
 	recs := fixture(t, "m7-gameobjects.twcap")

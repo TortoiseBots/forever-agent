@@ -12,7 +12,7 @@
     }
   },
   "db": {
-    "host": "m910q",
+    "host": "test1",
     "container": "tortoise-db"
   },
   "addon_prefix": "TW_LFG",

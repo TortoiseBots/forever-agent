@@ -16,9 +16,9 @@ Status: `draft` (not mapped, not live-checked), `mapped` (the route corrected fr
 this table is read from it.
 
 **mmaps.** The navmesh tests (path_to, the waypoint and pack checks) run only where the machine has the map's `<map>.mmap` and `<map>*.mmtile` files
-(`$TURTLE_AGENT_MMAPS`, `~/tb-ci/mmaps-turtle<map>` or `~/tortoise-wow-server/data/mmaps`). The test VM (yulon-ubuntu2) holds all 40 instance maps and map 1 (Kalimdor, the outer map of the
-portals of Zul'Farrak and most Kalimdor dungeons), one folder each; the source is m910q's `~/tortoise-wow-server/data/mmaps` (about 0.5 GB of tiles, 2.5 GB with the continents).
-To add a map: `rsync -a m910q:tortoise-wow-server/data/mmaps/<map>.mmap m910q:tortoise-wow-server/data/mmaps/<map>*.mmtile ~/tb-ci/mmaps-turtle<map>/`.
+(`$TURTLE_AGENT_MMAPS`, `~/tb-ci/mmaps-turtle<map>` or `~/tortoise-wow-server/data/mmaps`). The test VM holds all 40 instance maps and map 1 (Kalimdor, the outer map of the
+portals of Zul'Farrak and most Kalimdor dungeons), one folder each; the source is the server data folder (about 0.5 GB of tiles, 2.5 GB with the continents).
+To add a map: copy the server's `<map>.mmap` and `<map>*.mmtile` files into `~/tb-ci/mmaps-turtle<map>/`.
 The outer maps 0 (Eastern Kingdoms) and 1 are needed only for the portal point checks.
 
 **Points on the navmesh.** A spawn may stand where the mesh has no floor (over lava or water, on a ledge, in the air). `tools/dungeongen/snaps.json` moves such a point of a draft to the nearest

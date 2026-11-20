@@ -1,4 +1,4 @@
-// place.go: the pure decisions of `raid-walk --place` (spec ~/TortoiseBots-audit/research/raid-walk-place/SPEC.md): the
+// place.go: the pure decisions of `raid-walk --place` (spec research/raid-walk-place/SPEC.md): the
 // staged start step, the until stop, the corridor clear of the legs the raid skips, and the toolkit's skip entries.
 // No network, no session: the command computes all of it in validate() and the place phase only runs it.
 package raidwalk

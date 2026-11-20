@@ -1,4 +1,4 @@
-// Walk-36 fixes (TortoiseBots-audit tests/raid-zg-walk36): the two water strands (item 3) and the boss's
+// Walk-36 fixes (the walk-36 notes): the two water strands (item 3) and the boss's
 // authored stand (item 5; the hall's own stand rules are in zg_w38_test.go now, the walk-38 review pulled the
 // hall's east side with the boss row). Run step N is the deployed 753-row export
 // (20261105101000_world.sql, plan 2db51e2); leg 6 is 10 rows further in the current export (run 543 = dev 553).

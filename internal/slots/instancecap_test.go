@@ -13,14 +13,14 @@ func TestLoadInstanceCaps(t *testing.T) {
 	if caps, err := LoadInstanceCaps(path); err != nil || caps != nil {
 		t.Fatalf("missing file: caps %v err %v, want nil nil", caps, err)
 	}
-	if err := os.WriteFile(path, []byte(`{"m910q":30,"tortoise-test2":30}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"test1":30,"test2":30}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	caps, err := LoadInstanceCaps(path)
-	if err != nil || caps["m910q"] != 30 || caps["tortoise-test2"] != 30 {
+	if err != nil || caps["test1"] != 30 || caps["test2"] != 30 {
 		t.Fatalf("caps %v err %v", caps, err)
 	}
-	if err := os.WriteFile(path, []byte(`{"m910q":0}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"test1":0}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadInstanceCaps(path); err == nil || !strings.Contains(err.Error(), "1 or more") {
@@ -29,17 +29,17 @@ func TestLoadInstanceCaps(t *testing.T) {
 }
 
 func TestEffectiveInstanceCap(t *testing.T) {
-	caps := map[string]int{"m910q": 30}
+	caps := map[string]int{"test1": 30}
 	cases := []struct {
 		name     string
 		explicit int
 		server   string
 		want     int
 	}{
-		{"the flag wins", 12, "m910q", 12},
-		{"the file", 0, "m910q", 30},
+		{"the flag wins", 12, "test1", 12},
+		{"the file", 0, "test1", 30},
 		{"the stock", 0, "other", StockInstanceCap},
-		{"no file", 0, "m910q", StockInstanceCap},
+		{"no file", 0, "test1", StockInstanceCap},
 	}
 	for _, c := range cases {
 		m := caps

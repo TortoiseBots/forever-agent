@@ -34,7 +34,7 @@
 - Captures hold world packets only: no realmd traffic, never the bodies of `CMSG_AUTH_SESSION` or Warden packets, and no registered secret; every fixture passes `turtle-agent scrub-check` before it is committed.
 - Throttles: realmd allows 15 accounts per IP per 300 s, `MinRealmListDelay = 1`, `WrongPass.MaxCount = 10`; tests reuse one account, request the realm list once per connection and retry a rejected proof at most once.
 - Toolchain: Go 1.27.1 in `~/.local/go`, `GOTOOLCHAIN=local`, no third-party Go modules; `make test` runs gofmt check, vet and `go test -race` with no CI.
-- Live target is m910q at 192.0.2.10; the realmd port is `RealmServerPort` from m910q's `realmd.conf` (template default 3724, realmd.conf.dist.in:27).
+- Live target is a test server at 192.0.2.10; the realmd port is `RealmServerPort` from the test server's `realmd.conf` (template default 3724, realmd.conf.dist.in:27).
 - Every commit message ends with the two lines `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and `Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw`.
 
 ## Review Focus
@@ -97,7 +97,7 @@ All Go paths are relative to `~/turtle-agent`; Python paths are in `~/wow-play-h
 | `internal/objects/store.go` | Object store, change detection, `Units` snapshot with filters |
 | `internal/rpc/server.go` | Loopback JSON-RPC 2.0 HTTP server with a method registry (ported from agent-wow) |
 | `internal/*/..._test.go` | Unit tests next to each package |
-| `testdata/captures/m1-login.twcap` … `m6-fight.twcap` | Scrubbed captures recorded on m910q, one per milestone |
+| `testdata/captures/m1-login.twcap` … `m6-fight.twcap` | Scrubbed captures recorded on a test server, one per milestone |
 | `wowharness/headless.py` | `HeadlessClient`: chat, gm, bot, state, tail_combat_log, tail_chat, fight_report over JSON-RPC |
 | `wowharness/mcp_headless.py` | MCP server with the harness tool names backed by `HeadlessClient` |
 | `tools/headless_mvp.py` | The harness MVP scenario run headless |
@@ -5043,7 +5043,7 @@ EOF
 
 ---
 
-## Task 11: Milestone 1 live check on m910q and the login fixture
+## Task 11: Milestone 1 live check on a test server and the login fixture
 
 **Files:**
 - Create: `testdata/captures/m1-login.twcap` (recorded), `internal/session/capture_test.go`
@@ -5057,7 +5057,7 @@ How the capture is taken: `turtle-agent login --capture FILE` installs `capture.
 
 - [ ] **Step 1: Owner prerequisite: the settings file**
 
-The owner creates `~/.config/turtle-agent/settings.json` (keys described in Task 3) with `realmd` set to `192.0.2.10:` plus `RealmServerPort` from m910q's `realmd.conf`, the test account and its password under `accounts`, the two bot names under `bots`, a known spell id under `test_spell` and a `spot` near hostile mobs. Never print the file. Check its shape without showing secrets:
+The owner creates `~/.config/turtle-agent/settings.json` (keys described in Task 3) with `realmd` set to `192.0.2.10:` plus `RealmServerPort` from the test server's `realmd.conf`, the test account and its password under `accounts`, the two bot names under `bots`, a known spell id under `test_spell` and a `spot` near hostile mobs. Never print the file. Check its shape without showing secrets:
 
 Run: `stat -c %a ~/.config/turtle-agent/settings.json && python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sorted(d), sorted(d["accounts"]))' ~/.config/turtle-agent/settings.json`
 Expected: `600`, then the key list (containing `accounts`, `realmd`, and for later milestones `bots`, `spot`, `test_spell`) and the account names only.
@@ -5076,9 +5076,9 @@ SPELL=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["test
 - [ ] **Step 2: Log in, stay 20 s, log out, with a capture**
 
 Run: `cd ~/turtle-agent && make build && mkdir -p captures && ./bin/turtle-agent login --capture captures/m1-login.twcap --stay 20s $ACCOUNT Harnessb; echo "exit=$?"`
-Expected on stderr, in order: `realmd: authenticated as <ACCOUNT upper-cased>, 1 realm(s)` (or the realm count m910q has), `world: authenticated on <realm name> (<host:port>)`, `in world: Harnessb guid=0x… map=… x=… y=… z=…`, `logout: complete`, `capture: N records, R redacted, written to captures/m1-login.twcap` with R ≥ 1 (the auth session), and `exit=0`. Running the same command again right away also reaches `in world` (the first session really logged out).
+Expected on stderr, in order: `realmd: authenticated as <ACCOUNT upper-cased>, 1 realm(s)` (or the realm count the test server has), `world: authenticated on <realm name> (<host:port>)`, `in world: Harnessb guid=0x… map=… x=… y=… z=…`, `logout: complete`, `capture: N records, R redacted, written to captures/m1-login.twcap` with R ≥ 1 (the auth session), and `exit=0`. Running the same command again right away also reaches `in world` (the first session really logged out).
 
-If it fails: `exit=3` with `code 0x04` twice means the password or realmd address is wrong; `ErrPINRequired` text means the account's rank is at or above `ForcePinAccountRank` on m910q; `exit=4` means the realm is offline for build 7272; `exit=5` with `world auth: session key mismatch` means K is hashed in the wrong form (Review Focus 1); `exit=6` means the server closed the socket (check the anticheat log on m910q for an addon-info kick).
+If it fails: `exit=3` with `code 0x04` twice means the password or realmd address is wrong; `ErrPINRequired` text means the account's rank is at or above `ForcePinAccountRank` on the test server; `exit=4` means the realm is offline for build 7272; `exit=5` with `world auth: session key mismatch` means K is hashed in the wrong form (Review Focus 1); `exit=6` means the server closed the socket (check the anticheat log on the test server for an addon-info kick).
 
 - [ ] **Step 3: Inspect and scrub the capture**
 
@@ -5103,7 +5103,7 @@ import (
 	"github.com/pjerra/turtle-agent/internal/packet"
 )
 
-// fixture loads a capture recorded on m910q by a milestone's live step.
+// fixture loads a capture recorded on a test server by a milestone's live step.
 func fixture(t *testing.T, name string) []capture.Record {
 	t.Helper()
 	recs, err := capture.ReadFile(filepath.Join("..", "..", "testdata", "captures", name))
@@ -5163,7 +5163,7 @@ Expected: PASS. If `TestM1CharEnumFromCapture` fails with `N unread bytes`, the 
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m1-login.twcap internal/session/capture_test.go
 git commit -F - <<'EOF'
-Milestone 1 on m910q: login, in world, clean logout; scrubbed login capture
+Milestone 1 on a test server: login, in world, clean logout; scrubbed login capture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -6771,7 +6771,7 @@ Expected: PASS, including `TestM2ChatFromCapture`.
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m2-chat.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
-Milestone 2 on m910q: chat, GM and .bot commands over RPC; chat fixture
+Milestone 2 on a test server: chat, GM and .bot commands over RPC; chat fixture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -7720,7 +7720,7 @@ Expected: PASS, including `TestM3PartyFromCapture`.
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m3-party.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
-Milestone 3 on m910q: two bots invited, stats and leave; party fixture
+Milestone 3 on a test server: two bots invited, stats and leave; party fixture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -9369,7 +9369,7 @@ Expected: PASS. A failure here is handled exactly as in Task 19 Step 6: fix the 
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m4-world.twcap internal/objects/capture_test.go
 git commit -F - <<'EOF'
-Milestone 4 on m910q: units with names, health and party flags; world fixture
+Milestone 4 on a test server: units with names, health and party flags; world fixture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -10474,7 +10474,7 @@ Expected: PASS, including `TestM5ActionsFromCapture`.
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m5-attack.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
-Milestone 5 on m910q: teleport, target, walk, attack and cast; attack fixture
+Milestone 5 on a test server: teleport, target, walk, attack and cast; attack fixture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -12259,7 +12259,7 @@ EOF
 
 ---
 
-## Task 30: Milestone 6 live end-to-end run on m910q and the fight fixture
+## Task 30: Milestone 6 live end-to-end run on a test server and the fight fixture
 
 **Files:**
 - Create: `~/turtle-agent/testdata/captures/m6-fight.twcap` (recorded); add `TestCombatFromCaptures` to `~/turtle-agent/internal/game/capture_test.go`
@@ -12268,7 +12268,7 @@ EOF
 **Interfaces:**
 - Consumes: everything above; the shell variables (Task 11) and `rpc` helper (Task 15); `MOB` is a hostile creature name seen at the settings `spot` in Task 25.
 
-This is the spec's "done means": Harnessb logged in headless on m910q, `.gm off` / `.gm visible on`, two bots invited, a mob targeted and attacked, and the parsed combat log plus what each bot did, in the real-client harness's report format.
+This is the spec's "done means": Harnessb logged in headless on a test server, `.gm off` / `.gm visible on`, two bots invited, a mob targeted and attacked, and the parsed combat log plus what each bot did, in the real-client harness's report format.
 
 - [ ] **Step 1: Start the agent with a capture**
 
@@ -12345,7 +12345,7 @@ Expected: PASS, including `TestCombatFromCaptures`. A failure names the opcode a
 cd ~/turtle-agent && git status --short
 git add testdata/captures/m6-fight.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
-Milestone 6 on m910q: headless MVP fight report; fight fixture
+Milestone 6 on a test server: headless MVP fight report; fight fixture
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
@@ -12358,7 +12358,7 @@ EOF
 
 | Spec section | Tasks |
 | :--- | :--- |
-| Goal, "Done means" | 30 (headless MVP on m910q, report compared with the real-client run) |
+| Goal, "Done means" | 30 (headless MVP on a test server, report compared with the real-client run) |
 | Non-goals | Respected throughout: no rendering, pathfinding, Warden emulation, character creation or module system; one process per character (Task 10 `login`) |
 | Architecture: `auth` | 4 (SRP6, unpadded forms, short-M1 redraw), 5 (build 7272, 75-byte proof, 26-byte reply, vanilla realm list, one retry) |
 | Architecture: `worldconn` | 6 (u16 BE + u16/u32 headers, XOR cipher, 4-byte seed, build 5875, zlib addon block, 1.12 auth response lengths) |

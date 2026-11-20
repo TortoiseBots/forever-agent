@@ -44,7 +44,7 @@ Serves the live page. Read-only unless `--edit` or `--control` is given. Exits 2
 | `--listen` | `127.0.0.1:8790` | address the page is served on; a non-loopback address prints a warning |
 | `--allow-host` | none | host names or IPs accepted in the `Host` header besides loopback, comma separated |
 | `--agents` | `auto` | `auto`, a comma list of RPC ports/addresses (loopback only), or `auto,8770` |
-| `--tests-dir` | `~/TortoiseBots-audit/tests` | the only folder `/files/...` serves |
+| `--tests-dir` | `~/forever-agent/tests` | the only folder `/files/...` serves |
 | `--traces-dir` | `~/turtle-agent/traces` | where agents write run traces; read, never served |
 | `--plans-dir` | `~/turtle-agent/dungeons` | plan files for the map, comma separated |
 | `--minimap-dir` | `~/turtle-agent-minimaps` | map images from `minimap-extract` |

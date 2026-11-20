@@ -75,18 +75,18 @@ func TestRPCFlagOrderSameOptions(t *testing.T) {
 }
 
 func TestLeaseAcquireFlagOrderSameOptions(t *testing.T) {
-	full := leaseAcquireOptions{server: "m910q", slotID: "4", holder: "w-a", ttlMin: 5, slotsPath: "somefile"}
+	full := leaseAcquireOptions{server: "test1", slotID: "4", holder: "w-a", ttlMin: 5, slotsPath: "somefile"}
 	for _, r := range []struct {
 		name string
 		args []string
 		want leaseAcquireOptions
 		code int
 	}{
-		{"server first", []string{"m910q", "--slot", "4", "--holder", "w-a", "--ttl", "5", "--slots", "somefile"}, full, exitOK},
-		{"server last", []string{"--slot", "4", "--holder", "w-a", "--ttl", "5", "--slots", "somefile", "m910q"}, full, exitOK},
-		{"server between", []string{"--slot", "4", "m910q", "--holder", "w-a", "--ttl", "5", "--slots", "somefile"}, full, exitOK},
-		{"equals form", []string{"--slot=4", "--holder=w-a", "--ttl=5", "--slots=somefile", "m910q"}, full, exitOK},
-		{"any first", []string{"--any", "--holder", "w-a", "m910q"}, leaseAcquireOptions{server: "m910q", any: true, holder: "w-a", ttlMin: 180}, exitOK},
+		{"server first", []string{"test1", "--slot", "4", "--holder", "w-a", "--ttl", "5", "--slots", "somefile"}, full, exitOK},
+		{"server last", []string{"--slot", "4", "--holder", "w-a", "--ttl", "5", "--slots", "somefile", "test1"}, full, exitOK},
+		{"server between", []string{"--slot", "4", "test1", "--holder", "w-a", "--ttl", "5", "--slots", "somefile"}, full, exitOK},
+		{"equals form", []string{"--slot=4", "--holder=w-a", "--ttl=5", "--slots=somefile", "test1"}, full, exitOK},
+		{"any first", []string{"--any", "--holder", "w-a", "test1"}, leaseAcquireOptions{server: "test1", any: true, holder: "w-a", ttlMin: 180}, exitOK},
 		{"no server", []string{"--slot", "4", "--holder", "w-a"}, leaseAcquireOptions{}, exitUsage},
 	} {
 		got, code := parseLeaseAcquireArgs(r.args, io.Discard)
@@ -95,18 +95,18 @@ func TestLeaseAcquireFlagOrderSameOptions(t *testing.T) {
 }
 
 func TestLeaseRenewFlagOrderSameOptions(t *testing.T) {
-	full := leaseRenewOptions{server: "m910q", slotID: "1", holder: "w-a", leaseID: "lid-9", ttlMin: 7, slotsPath: "somefile"}
+	full := leaseRenewOptions{server: "test1", slotID: "1", holder: "w-a", leaseID: "lid-9", ttlMin: 7, slotsPath: "somefile"}
 	for _, r := range []struct {
 		name string
 		args []string
 		want leaseRenewOptions
 		code int
 	}{
-		{"positionals first", []string{"m910q", "1", "--holder", "w-a", "--lease-id", "lid-9", "--ttl", "7", "--slots", "somefile"}, full, exitOK},
-		{"positionals last", []string{"--holder", "w-a", "--lease-id", "lid-9", "--ttl", "7", "--slots", "somefile", "m910q", "1"}, full, exitOK},
-		{"positionals split", []string{"m910q", "--holder", "w-a", "--lease-id", "lid-9", "1", "--ttl", "7", "--slots", "somefile"}, full, exitOK},
-		{"equals form", []string{"--holder=w-a", "--lease-id=lid-9", "--ttl=7", "--slots=somefile", "m910q", "1"}, full, exitOK},
-		{"one positional", []string{"m910q", "--holder", "w-a", "--lease-id", "lid-9"}, leaseRenewOptions{}, exitUsage},
+		{"positionals first", []string{"test1", "1", "--holder", "w-a", "--lease-id", "lid-9", "--ttl", "7", "--slots", "somefile"}, full, exitOK},
+		{"positionals last", []string{"--holder", "w-a", "--lease-id", "lid-9", "--ttl", "7", "--slots", "somefile", "test1", "1"}, full, exitOK},
+		{"positionals split", []string{"test1", "--holder", "w-a", "--lease-id", "lid-9", "1", "--ttl", "7", "--slots", "somefile"}, full, exitOK},
+		{"equals form", []string{"--holder=w-a", "--lease-id=lid-9", "--ttl=7", "--slots=somefile", "test1", "1"}, full, exitOK},
+		{"one positional", []string{"test1", "--holder", "w-a", "--lease-id", "lid-9"}, leaseRenewOptions{}, exitUsage},
 	} {
 		got, code := parseLeaseRenewArgs(r.args, io.Discard)
 		checkParse(t, r.name, got, r.want, code, r.code)
@@ -114,20 +114,20 @@ func TestLeaseRenewFlagOrderSameOptions(t *testing.T) {
 }
 
 func TestLeaseReleaseFlagOrderSameOptions(t *testing.T) {
-	plain := leaseReleaseOptions{server: "m910q", slotID: "1", holder: "w-a", leaseID: "lid-9", slotsPath: "somefile"}
-	forced := leaseReleaseOptions{server: "m910q", slotID: "1", holder: "w-a", force: true, slotsPath: "somefile"}
+	plain := leaseReleaseOptions{server: "test1", slotID: "1", holder: "w-a", leaseID: "lid-9", slotsPath: "somefile"}
+	forced := leaseReleaseOptions{server: "test1", slotID: "1", holder: "w-a", force: true, slotsPath: "somefile"}
 	for _, r := range []struct {
 		name string
 		args []string
 		want leaseReleaseOptions
 		code int
 	}{
-		{"positionals first", []string{"m910q", "1", "--holder", "w-a", "--lease-id", "lid-9", "--slots", "somefile"}, plain, exitOK},
-		{"positionals last", []string{"--holder", "w-a", "--lease-id", "lid-9", "--slots", "somefile", "m910q", "1"}, plain, exitOK},
-		{"positionals split", []string{"m910q", "--holder", "w-a", "1", "--lease-id", "lid-9", "--slots", "somefile"}, plain, exitOK},
-		{"equals form", []string{"--holder=w-a", "--lease-id=lid-9", "--slots=somefile", "m910q", "1"}, plain, exitOK},
-		{"force before positionals", []string{"--force", "--holder", "w-a", "--slots", "somefile", "m910q", "1"}, forced, exitOK},
-		{"force equals before positionals", []string{"--force=true", "--holder=w-a", "--slots=somefile", "m910q", "1"}, forced, exitOK},
+		{"positionals first", []string{"test1", "1", "--holder", "w-a", "--lease-id", "lid-9", "--slots", "somefile"}, plain, exitOK},
+		{"positionals last", []string{"--holder", "w-a", "--lease-id", "lid-9", "--slots", "somefile", "test1", "1"}, plain, exitOK},
+		{"positionals split", []string{"test1", "--holder", "w-a", "1", "--lease-id", "lid-9", "--slots", "somefile"}, plain, exitOK},
+		{"equals form", []string{"--holder=w-a", "--lease-id=lid-9", "--slots=somefile", "test1", "1"}, plain, exitOK},
+		{"force before positionals", []string{"--force", "--holder", "w-a", "--slots", "somefile", "test1", "1"}, forced, exitOK},
+		{"force equals before positionals", []string{"--force=true", "--holder=w-a", "--slots=somefile", "test1", "1"}, forced, exitOK},
 	} {
 		got, code := parseLeaseReleaseArgs(r.args, io.Discard)
 		checkParse(t, r.name, got, r.want, code, r.code)
@@ -135,16 +135,16 @@ func TestLeaseReleaseFlagOrderSameOptions(t *testing.T) {
 }
 
 func TestLeaseListFlagOrderSameOptions(t *testing.T) {
-	full := leaseListOptions{server: "m910q", asJSON: true, slotsPath: "somefile"}
+	full := leaseListOptions{server: "test1", asJSON: true, slotsPath: "somefile"}
 	for _, r := range []struct {
 		name string
 		args []string
 		want leaseListOptions
 		code int
 	}{
-		{"server first", []string{"m910q", "--json", "--slots", "somefile"}, full, exitOK},
-		{"server last", []string{"--json", "--slots", "somefile", "m910q"}, full, exitOK},
-		{"equals form", []string{"--json=true", "--slots=somefile", "m910q"}, full, exitOK},
+		{"server first", []string{"test1", "--json", "--slots", "somefile"}, full, exitOK},
+		{"server last", []string{"--json", "--slots", "somefile", "test1"}, full, exitOK},
+		{"equals form", []string{"--json=true", "--slots=somefile", "test1"}, full, exitOK},
 		{"no server", []string{"--json", "--slots", "somefile"}, leaseListOptions{asJSON: true, slotsPath: "somefile"}, exitOK},
 		{"bare", []string{}, leaseListOptions{}, exitOK},
 		{"two servers", []string{"a", "b"}, leaseListOptions{}, exitUsage},
@@ -155,18 +155,18 @@ func TestLeaseListFlagOrderSameOptions(t *testing.T) {
 }
 
 func TestSlotSetupFlagOrderSameOptions(t *testing.T) {
-	full := slotSetupOptions{server: "m910q", slot: "1", holder: "w-a", dir: "D", binary: "B", dungeonsDir: "G", mmapsDir: "M", dungeonsFrom: "P", character: "C", slotsPath: "F"}
+	full := slotSetupOptions{server: "test1", slot: "1", holder: "w-a", dir: "D", binary: "B", dungeonsDir: "G", mmapsDir: "M", dungeonsFrom: "P", character: "C", slotsPath: "F"}
 	for _, r := range []struct {
 		name string
 		args []string
 		want slotSetupOptions
 		code int
 	}{
-		{"positionals first", []string{"m910q", "1", "--holder", "w-a", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F"}, full, exitOK},
-		{"positionals last", []string{"--holder", "w-a", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F", "m910q", "1"}, full, exitOK},
-		{"positionals split", []string{"m910q", "--holder", "w-a", "1", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F"}, full, exitOK},
-		{"equals form", []string{"--holder=w-a", "--dir=D", "--binary=B", "--dungeons-dir=G", "--mmaps-dir=M", "--dungeons-from=P", "--character=C", "--slots=F", "m910q", "1"}, full, exitOK},
-		{"no holder", []string{"m910q", "1", "--dir", "D"}, slotSetupOptions{}, exitUsage},
+		{"positionals first", []string{"test1", "1", "--holder", "w-a", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F"}, full, exitOK},
+		{"positionals last", []string{"--holder", "w-a", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F", "test1", "1"}, full, exitOK},
+		{"positionals split", []string{"test1", "--holder", "w-a", "1", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F"}, full, exitOK},
+		{"equals form", []string{"--holder=w-a", "--dir=D", "--binary=B", "--dungeons-dir=G", "--mmaps-dir=M", "--dungeons-from=P", "--character=C", "--slots=F", "test1", "1"}, full, exitOK},
+		{"no holder", []string{"test1", "1", "--dir", "D"}, slotSetupOptions{}, exitUsage},
 	} {
 		got, code := parseSlotSetupArgs(r.args, io.Discard)
 		checkParse(t, r.name, got, r.want, code, r.code)

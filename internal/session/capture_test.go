@@ -9,14 +9,14 @@ import (
 	"github.com/pjerra/forever-agent/internal/testfixture"
 )
 
-// fixture loads a capture recorded on m910q by a milestone's live step (ruling P11:
+// fixture loads a capture recorded on test1 by a milestone's live step (ruling P11:
 // the shared testfixture.Load does the work).
 func fixture(t *testing.T, name string) []capture.Record {
 	t.Helper()
 	return testfixture.Load(t, name)
 }
 
-// liveCharacter is the test account's character on m910q, a clone of the GM character Harnessb.
+// liveCharacter is the test account's character on test1, a clone of the GM character Harnessb.
 const liveCharacter = "Tagentone"
 
 // Pins the SMSG_CHAR_ENUM layout: the source gives a 150-byte tail after the name

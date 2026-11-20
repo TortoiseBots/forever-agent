@@ -245,7 +245,7 @@ func TestTrackerEndsAndIncidents(t *testing.T) {
 		}
 
 		sum := BuildSummary(tr, SummaryMeta{
-			Plan: plan, Map: 249, Server: "m910q", Slot: 2, Character: "Commander",
+			Plan: plan, Map: 249, Server: "test1", Slot: 2, Character: "Commander",
 			Until: "boss", Speed: 1, Started: t0, Ended: t0.Add(65 * time.Second), ExitCode: 0,
 			Dashboard: "off",
 		})

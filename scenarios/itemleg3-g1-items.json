@@ -7,7 +7,7 @@
     }
   },
   "db": {
-    "host": "m910q",
+    "host": "test1",
     "container": "tortoise-db"
   },
   "vars": {

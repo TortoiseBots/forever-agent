@@ -634,7 +634,7 @@ func TestPingScheduledFromSendTime(t *testing.T) {
 	h.logout()
 }
 
-// Live on m910q (Task 11): the first character list of a session schedules an automatic
+// Live on test1 (Task 11): the first character list of a session schedules an automatic
 // character backup and locks the character until the backup worker runs, up to ~5 s later
 // (WorldSession::HandleCharEnum calls World::SchedulePlayerDump; World::AutoPDumpWorker
 // unlocks). A CMSG_PLAYER_LOGIN sent straight after the list gets SMSG_CHARACTER_LOGIN_FAILED
