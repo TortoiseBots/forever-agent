@@ -466,6 +466,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 	var info Info
 	flags := b.ReadU8()
 	owner := flags&0x01 != 0
+	partyMember := flags&0x02 != 0
 	unitAll := flags&0x04 != 0
 	empath := flags&0x08 != 0
 	ids, err := fragmentIDs(b, 16)
@@ -488,7 +489,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 		}
 		switch id {
 		case fragCGObject:
-			if err := readObjectFragmentCreate(b, &info, objectType, owner, unitAll, empath, thisIsYou); err != nil {
+			if err := readObjectFragmentCreate(b, &info, objectType, owner, unitAll, empath, partyMember, thisIsYou); err != nil {
 				return info, walkStop{}, err
 			}
 		case fragVendor:
@@ -508,7 +509,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 // readObjectFragmentCreate is the CGObject fragment of a create: Object::BuildValuesCreate is virtual, so the
 // object type decides which WriteCreate methods follow (Creature.cpp:4124-4128, Player.cpp:3955-3962,
 // GameObject.cpp:4283-4287, Corpse.cpp:240-244, DynamicObject.cpp:252-256, Item.cpp:1867-1871).
-func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owner, unitAll, empath, thisIsYou bool) error {
+func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owner, unitAll, empath, partyMember, thisIsYou bool) error {
 	info.readObjectCreate(b)
 	switch objectType {
 	case TypeUnit, TypePlayer, TypeActivePlayer:
@@ -518,7 +519,14 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 		if objectType == TypeUnit {
 			return nil
 		}
-		// PlayerData (and the self-only ActivePlayerData) follow; this round does not decode them.
+		// PlayerData follows for any player (Player::BuildValuesCreate, Player.cpp:3955-3962); the receiver's own
+		// block is TYPEID_ACTIVE_PLAYER and then carries ActivePlayerData too.
+		if err := info.readPlayerCreate(b, partyMember); err != nil {
+			return err
+		}
+		if objectType == TypeActivePlayer && thisIsYou {
+			return info.readActivePlayerPrefix(b)
+		}
 		return nil
 	case TypeGameObject:
 		return info.readGameObjectCreate(b)
@@ -526,8 +534,16 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 		return info.readCorpseCreate(b)
 	case TypeDynamicObject:
 		return info.readDynamicObjectCreate(b)
-	case TypeItem, TypeContainer, TypeAzeriteEmpItem, TypeAzeriteItem:
-		// ItemData/ContainerData follow and are skipped by the block's declared size.
+	case TypeItem:
+		return info.readItemCreate(b, owner)
+	case TypeContainer:
+		// Bag::BuildValuesCreate (Bag.cpp:185-190): ItemData, then ContainerData.
+		if err := info.readItemCreate(b, owner); err != nil {
+			return err
+		}
+		return info.readContainerCreate(b)
+	case TypeAzeriteEmpItem, TypeAzeriteItem:
+		// More than ItemData follows and this round decodes neither; the block is skipped by its declared size.
 		return nil
 	}
 	return nil
@@ -648,6 +664,16 @@ func readObjectFragmentUpdate(b *wire.Buffer, info *Info, owner bool) error {
 	if typeMask&(1<<TypeObject) != 0 {
 		info.readObjectUpdate(b)
 	}
+	if typeMask&(1<<TypeItem) != 0 {
+		if err := info.readItemUpdate(b); err != nil {
+			return err
+		}
+	}
+	if typeMask&(1<<TypeContainer) != 0 {
+		if err := info.readContainerUpdate(b); err != nil {
+			return err
+		}
+	}
 	if typeMask&(1<<TypeUnit) != 0 {
 		if err := info.readUnitUpdate(b); err != nil {
 			return err
@@ -658,8 +684,8 @@ func readObjectFragmentUpdate(b *wire.Buffer, info *Info, owner bool) error {
 			return err
 		}
 	}
-	// Player (6), ActivePlayer (7), Item (1) and the rest are the tail of the block: they are left to the declared
-	// size. Only the receiver's own player data and items are ever sent this way in this round's traffic.
+	// Player (6) and ActivePlayer (7) updates are the tail of the block: ActivePlayerData's update writer is the
+	// 1,300-line Classic bit remap decision 1 keeps out of this round, so they are left to the declared size.
 	return b.Err()
 }
 

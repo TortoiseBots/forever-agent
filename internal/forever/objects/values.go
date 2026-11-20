@@ -141,6 +141,14 @@ type Info struct {
 	Caster           wire.GUID
 	SpellID          int32
 
+	// item (UF::ItemData) and, for a bag, its container (UF::ContainerData); nil when the object is not one.
+	Item      *ItemData
+	Container *ContainerData
+	// player (PlayerData::WriteCreate, UpdateFields.cpp:2674-2800) and, for the receiver's own block, the
+	// ActivePlayerData prefix (:5398-5411); nil when the object is not a player. The rest of ActivePlayerData is
+	// not decoded (decision 1): the walk stops after AccountBankCoinage and the block's own size frames the rest.
+	Player *Player
+
 	// f records which decoded fields the block actually carried, so a values update merges only what it changed
 	// (BaseEntity::BuildValuesUpdateBlockForPlayer sends just the mask's fields).
 	f Fields
@@ -156,20 +164,95 @@ type Info struct {
 
 // Fields is the presence set of the decoded fields.
 type Fields struct {
-	Entry, DynamicFlags, Scale                              bool
-	DisplayID, NpcFlags, NpcFlags2                          bool
-	Charm, Summon, CharmedBy, SummonedBy, CreatedBy, Target bool
-	Race, Class, Gender, CreatureType, DisplayPower         bool
-	Health, MaxHealth, Power, MaxPower, Level               bool
-	FactionTemplate, Flags, Flags2, Flags3, Flags4          bool
-	BoundingRadius, CombatReach, DisplayScale               bool
-	StandState, VisFlags, AnimTier                          bool
-	Guild, ComboTarget, CurrentAreaID                       bool
-	MountDisplayID, NativeDisplayID                         bool
-	GOState, GOType, GODisplayID, GOFlags, GOFaction        bool
-	Owner, CorpseDisplayID, Caster, SpellID                 bool
-	Vendor                                                  bool
+	Entry, DynamicFlags, Scale                                    bool
+	DisplayID, NpcFlags, NpcFlags2                                bool
+	Charm, Summon, CharmedBy, SummonedBy, CreatedBy, Target       bool
+	Race, Class, Gender, CreatureType, DisplayPower               bool
+	Health, MaxHealth, Power, MaxPower, Level                     bool
+	FactionTemplate, Flags, Flags2, Flags3, Flags4                bool
+	BoundingRadius, CombatReach, DisplayScale                     bool
+	StandState, VisFlags, AnimTier                                bool
+	Guild, ComboTarget, CurrentAreaID                             bool
+	MountDisplayID, NativeDisplayID                               bool
+	GOState, GOType, GODisplayID, GOFlags, GOFaction              bool
+	Owner, CorpseDisplayID, Caster, SpellID                       bool
+	Vendor                                                        bool
+	ItemOwner, ContainedIn, StackCount, Durability, MaxDurability bool
+	NumSlots, Slots                                               bool
+	VisibleItems, QuestLog, InvSlots, Coinage                     bool
 }
+
+// ItemData is the item half of a create or values block (UF::ItemData). It and ContainerData are held by pointer:
+// only an item carries them, a deal of objects are not items, and a bag's ninety-eight slots are too large to sit
+// in every unit's Info.
+type ItemData struct {
+	Owner         wire.GUID
+	ContainedIn   wire.GUID
+	StackCount    uint32
+	Durability    uint32
+	MaxDurability uint32
+}
+
+// ContainerData is a bag's slots (UF::ContainerData::WriteCreate, UpdateFields.cpp:519-526). Slots[i] is the GUID
+// in bag slot i (an empty GUID for an empty slot); NumSlots is the bag's size.
+type ContainerData struct {
+	NumSlots uint32
+	Slots    [98]wire.GUID
+
+	// delta marks a values update: only the slots in changed are in the update, the others are zero because the
+	// update did not carry them, and the model merges slot by slot. A create (or a caller-built value) carries
+	// every slot and replaces the array.
+	delta   bool
+	changed [98]bool
+}
+
+// container returns the object's container data, allocating it on the first decoded container field.
+func (i *Info) container() *ContainerData {
+	if i.Container == nil {
+		i.Container = &ContainerData{}
+	}
+	return i.Container
+}
+
+// Player is the player half of a create block: the quest log, the visible items and the ActivePlayerData prefix
+// this round decodes (see Info.Player).
+type Player struct {
+	QuestLog     []QuestLogEntry
+	VisibleItems [19]int32
+	InvSlots     [145]wire.GUID
+	Coinage      uint64
+}
+
+// item returns the object's item data, allocating it on the first decoded item field.
+func (i *Info) item() *ItemData {
+	if i.Item == nil {
+		i.Item = &ItemData{}
+	}
+	return i.Item
+}
+
+// player returns the object's player data, allocating it on the first decoded player field.
+func (i *Info) player() *Player {
+	if i.Player == nil {
+		i.Player = &Player{}
+	}
+	return i.Player
+}
+
+// QuestLogEntry is one slot of PlayerData's 175-entry QuestLog array
+// (UF::QuestLog::WriteCreate, UpdateFields.cpp:2294-2304): int32 QuestID, uint16 StateFlags, int16
+// ZeroObjectiveProgress[24], int64 EndTime, uint32 ObjectiveFlags, uint32 EnabledObjectivesMask, 70 bytes. The
+// round keeps the three fields the inventory and quest-log readers need; slot i of the wire array is the slot a
+// later CMSG_QUEST_LOG_REMOVE_QUEST names.
+type QuestLogEntry struct {
+	QuestID    int32
+	StateFlags uint16
+	Progress   [24]int16
+}
+
+// Complete marks every decoded field present, which is what a create block carries (a values update carries only
+// the fields its mask names). A caller that builds an Info outside the parser sets it before the model merges it.
+func (i *Info) Complete() { i.f.all() }
 
 // all marks every field present, which is what a create block means.
 func (f *Fields) all() {
@@ -186,7 +269,10 @@ func (f *Fields) all() {
 		MountDisplayID: true, NativeDisplayID: true,
 		GOState: true, GOType: true, GODisplayID: true, GOFlags: true, GOFaction: true,
 		Owner: true, CorpseDisplayID: true, Caster: true, SpellID: true,
-		Vendor: true,
+		Vendor:    true,
+		ItemOwner: true, ContainedIn: true, StackCount: true, Durability: true, MaxDurability: true,
+		NumSlots: true, Slots: true,
+		VisibleItems: true, QuestLog: true, InvSlots: true, Coinage: true,
 	}
 }
 
@@ -989,8 +1075,12 @@ func (i *Info) readVisibleItemUpdate(b *wire.Buffer) {
 
 // readDynamicMask reads WriteDynamicFieldUpdateMask (UpdateFieldImpl.h:28-48) and returns the number of changed
 // entries, which is all this round needs of the array.
-func readDynamicMask(b *wire.Buffer) int {
-	size := int(b.ReadBits(32))
+func readDynamicMask(b *wire.Buffer) int { return readDynamicMaskBits(b, 32) }
+
+// readDynamicMaskBits is WriteDynamicFieldUpdateMask (UpdateFieldImpl.h:28-50) with the size's own bit width:
+// 32 for a dynamic array, 7 for ItemModList's modifications. It returns the number of changed entries.
+func readDynamicMaskBits(b *wire.Buffer, bits int) int {
+	size := int(b.ReadBits(bits))
 	if size < 0 || size > maxDynamicSize {
 		b.Skip(1 << 20) // poison the reader: a size beyond the bound cannot be walked
 		return 0
@@ -1223,5 +1313,549 @@ func (i *Info) readDynamicObjectCreate(b *wire.Buffer) error {
 	b.Skip(8) // SpellVisual
 	i.SpellID = b.ReadI32()
 	b.Skip(8) // Radius, CastTime
+	return b.Err()
+}
+
+// questLogSlots is the size of PlayerData's QuestLog array (UpdateFields.h:666: UpdateFieldArray<UF::QuestLog, 175>).
+const questLogSlots = 175
+
+// readPlayerCreate is PlayerData::WriteCreate (UpdateFields.cpp:2674-2800) in declaration order, with each nested
+// writer the core calls. partyMember is the block's PartyMember flag (UpdateFieldFlag, UpdateField.h:36-43): the
+// server sets it only for the receiver's own player (Player.cpp:3941-3952), and it is what puts the 175-entry
+// QuestLog, the quest-id map and the quest session log on the wire. A malformed count is a parse failure, never a
+// guessed skip: every count below bounds a loop that must stay in sync with the writer.
+func (i *Info) readPlayerCreate(b *wire.Buffer, partyMember bool) error {
+	pl := i.player()
+	i.guid(b)  // DuelArbiter
+	i.guid(b)  // WowAccount
+	i.guid(b)  // BnetAccount
+	b.Skip(8)  // GuildClubMemberID
+	i.guid(b)  // LootTargetGUID
+	b.Skip(4)  // PlayerFlags
+	b.Skip(4)  // PlayerFlagsEx
+	b.Skip(4)  // GuildRankID
+	b.Skip(4)  // GuildDeleteDate
+	b.Skip(4)  // GuildLevel
+	b.Skip(17) // the Classic 1.60.1.70009 super-district struct (4 x uint32 and an int8, :2687-2691)
+	customizations := int(b.ReadU32())
+	randomCustomizations := int(b.ReadU32())
+	if customizations > maxDynamicSize || randomCustomizations > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d/%d customizations", customizations, randomCustomizations)
+	}
+	b.Skip(2) // PartyType[2]
+	b.Skip(1) // NativeSex
+	b.Skip(1) // Inebriation
+	b.Skip(1) // PvpTitle
+	b.Skip(1) // ArenaFaction
+	b.Skip(4) // DuelTeam
+	b.Skip(4) // GuildTimeStamp
+	var questSessionEntries int
+	if partyMember {
+		// QuestLog[175] (QuestLog::WriteCreate, :2294-2304): 70 bytes each.
+		questLog := make([]QuestLogEntry, questLogSlots)
+		for n := range questLog {
+			questLog[n].QuestID = b.ReadI32()
+			questLog[n].StateFlags = b.ReadU16()
+			for k := range questLog[n].Progress {
+				questLog[n].Progress[k] = b.ReadI16()
+			}
+			b.Skip(8) // EndTime
+			b.Skip(4) // ObjectiveFlags
+			b.Skip(4) // EnabledObjectivesMask
+		}
+		pl.QuestLog = questLog
+		i.f.QuestLog = true
+		// QuestLogQuestIdToIndex (WriteMapFieldCreate, UpdateFieldImpl.h:73-87): uint32 count, then int32/int32.
+		questIDs := int(b.ReadU32())
+		if questIDs > maxDynamicSize {
+			return parseFail(ReasonCountOverLimit, "objects: player create names %d quest ids", questIDs)
+		}
+		b.Skip(8 * questIDs)
+		questSessionEntries = int(b.ReadU32())
+		if questSessionEntries > maxDynamicSize {
+			return parseFail(ReasonCountOverLimit, "objects: player create names %d quest sessions", questSessionEntries)
+		}
+	}
+	// VisibleItems[19] (VisibleItem::WriteCreate, :860-873): 27 bytes each, the item id first.
+	for n := range pl.VisibleItems {
+		pl.VisibleItems[n] = b.ReadI32()
+		b.Skip(23)
+	}
+	i.f.VisibleItems = true
+	b.Skip(4)     // PlayerTitle
+	b.Skip(4)     // FakeInebriation
+	b.Skip(4)     // VirtualPlayerRealm
+	b.Skip(4)     // CurrentSpecID
+	b.Skip(4)     // CurrentCombatTraitConfigSubTreeID
+	b.Skip(4)     // TaxiMountAnimKitID
+	b.Skip(6 * 4) // AvgItemLevel[6]
+	b.Skip(1)     // CurrentBattlePetBreedQuality
+	b.Skip(4)     // HonorLevel
+	b.Skip(8)     // LogoutTime
+	arenaCooldowns := int(b.ReadU32())
+	if arenaCooldowns > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d arena cooldowns", arenaCooldowns)
+	}
+	b.Skip(32 * 8) // ForcedReactions[32] (ZonePlayerForcedReaction::WriteCreate, :2429-2435): FactionID, Reaction
+	b.Skip(4)      // OfferedAdvJournalQuestID
+	b.Skip(4)      // OfferedScriptQuestID
+	b.Skip(4)      // CurrentBattlePetSpeciesID
+	petNames := int(b.ReadU32())
+	if petNames > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d pet names", petNames)
+	}
+	// CTROptions::WriteCreate (:2503-2512).
+	conditionalFlags := int(b.ReadU32())
+	if conditionalFlags > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d conditional flags", conditionalFlags)
+	}
+	b.Skip(1) // FactionGroup
+	b.Skip(4) // ChromieTimeExpansionMask
+	b.Skip(4 * conditionalFlags)
+	b.Skip(4) // CovenantID
+	b.Skip(4) // SoulbindID
+	// DungeonScore is a DungeonScoreSummary (MythicPlusPacketsCommon.cpp:38-48): two floats, a count, then per run
+	// 17 bytes (int32, float, int32, int32, uint8) and one flushed bit.
+	b.Skip(8)
+	runs := int(b.ReadU32())
+	if runs > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d dungeon score runs", runs)
+	}
+	for range runs {
+		b.Skip(17)
+		b.ReadBit() // FinishedSuccess
+		b.FlushBits()
+	}
+	// LeaverInfo::WriteCreate (:2521-2536).
+	i.guid(b)   // BnetAccountGUID
+	b.Skip(4)   // LeaveScore
+	b.Skip(4)   // SeasonID
+	b.Skip(4)   // TotalLeaves
+	b.Skip(4)   // TotalSuccesses
+	b.Skip(4)   // ConsecutiveSuccesses
+	b.Skip(8)   // LastPenaltyTime
+	b.Skip(8)   // LeaverExpirationTime
+	b.Skip(4)   // Flags
+	b.ReadBit() // IsLeaver
+	b.FlushBits()
+	i.guid(b) // SpectateTarget
+	b.Skip(4) // WorldLootObjectInventorySwapSlot
+	for range 16 {
+		// VisibleEquipableSpells[16] is an ItemInstance (ItemPacketsCommon.cpp:173-184).
+		if err := readItemInstanceCreate(b); err != nil {
+			return err
+		}
+	}
+	visualItemReplacements := int(b.ReadU32())
+	if visualItemReplacements > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: player create names %d visual item replacements", visualItemReplacements)
+	}
+	for range 19 { // PlunderstormItemDisplayID[19]
+		b.Skip(4)
+	}
+	b.Skip(5 * 4) // PersonalTabard (CustomTabardInfo::WriteCreate, :2601-2609)
+	// NPCAsPlayerInfo::WriteCreate (:2654-2662).
+	b.Skip(12) // Field_0, CharacterLoadoutID, CreatureID
+	b.Skip(12) // LocWorldSpace (TaggedPosition<XYZ>: three floats)
+	b.Skip(4)  // FacingWorldSpace
+	i.guid(b)  // TransportGUID
+	b.Skip(17) // the second copy of the Classic super-district struct (:2721-2723)
+	for range customizations {
+		b.Skip(8) // ChrCustomizationChoice::WriteCreate (:2282-2287): two uint32
+	}
+	for range randomCustomizations {
+		b.Skip(8)
+	}
+	if partyMember {
+		for range questSessionEntries {
+			// QuestSession::WriteCreate (:3873-3877): Owner, then QuestCompleted (BitVector::WriteCreate, :3360-3368).
+			i.guid(b)
+			completed := int(b.ReadU32())
+			if completed > maxDynamicSize {
+				return parseFail(ReasonCountOverLimit, "objects: player create names %d quest completions", completed)
+			}
+			b.Skip(8 * completed)
+		}
+	}
+	for range arenaCooldowns {
+		b.Skip(25) // ArenaCooldown::WriteCreate (:2364-2372)
+	}
+	for range petNames {
+		b.Skip(4)                     // CreatureID
+		nameLen := int(b.ReadBits(8)) // PetCreatureName's name length is eight bits
+		b.FlushBits()
+		b.Skip(nameLen)
+	}
+	b.Skip(4 * visualItemReplacements)
+	// The name block (:2790-2800): the name in 6 bits and the surname in 9, then the two optional flags and the
+	// declined names.
+	nameLen := int(b.ReadBits(6))
+	surnameLen := int(b.ReadBits(9))
+	if partyMember {
+		b.ReadBit() // HasQuestSession
+	}
+	b.ReadBit() // HasLevelLink
+	declined := b.ReadBit()
+	b.FlushBits()
+	b.Skip(nameLen)
+	b.Skip(surnameLen)
+	if declined {
+		// DeclinedNames::WriteCreate (:2550-2567): five 10-bit lengths, then the five strings.
+		var lens [5]int
+		for n := range lens {
+			lens[n] = int(b.ReadBits(10))
+		}
+		b.FlushBits()
+		for _, n := range lens {
+			b.Skip(n)
+		}
+	}
+	return b.Err()
+}
+
+// readItemInstanceCreate is ItemInstance's packet serializer (ItemPacketsCommon.cpp:173-184): int32 ItemID, the
+// bit-packed modification list, the ItemBonus presence bit, then the ItemBonuses block when it is set.
+func readItemInstanceCreate(b *wire.Buffer) error {
+	b.Skip(4)                  // ItemID
+	mods := int(b.ReadBits(7)) // the modification count is seven bits
+	b.FlushBits()
+	b.Skip(5 * mods) // ItemMod: uint8 Type, int32 Value
+	hasBonus := b.ReadBit()
+	b.FlushBits()
+	if !hasBonus {
+		return b.Err()
+	}
+	b.Skip(1) // ItemBonuses::Context
+	bonusIDs := int(b.ReadU32())
+	if bonusIDs > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: item instance names %d bonus ids", bonusIDs)
+	}
+	b.Skip(4 * bonusIDs)
+	return b.Err()
+}
+
+// readActivePlayerPrefix is the head of ActivePlayerData::WriteCreate (UpdateFields.cpp:5398-5411): the 145
+// InvSlots (108 real slots and 37 empty ones the Classic client still reads), FarsightObject,
+// SummonedBattlePetGUID, the KnownTitles count, Coinage and AccountBankCoinage. The rest of ActivePlayerData is
+// not decoded (decision 1: a snapshot at login, kept current by events); the block's declared size frames it.
+func (i *Info) readActivePlayerPrefix(b *wire.Buffer) error {
+	pl := i.player()
+	for n := range pl.InvSlots {
+		pl.InvSlots[n] = i.guid(b)
+	}
+	i.f.InvSlots = true
+	i.guid(b) // FarsightObject
+	i.guid(b) // SummonedBattlePetGUID
+	b.Skip(4) // KnownTitles.size() (the titles themselves follow much later in the create)
+	pl.Coinage = b.ReadU64()
+	i.f.Coinage = true
+	b.Skip(8) // AccountBankCoinage: the prefix this round decodes ends here
+	return b.Err()
+}
+
+// readItemCreate is ItemData::WriteCreate (UpdateFields.cpp:268-331) in declaration order. owner is the block's
+// Owner flag: the server sets it only for the item's own owner (Item.cpp:1858-1863), and it gates the stack count,
+// the spell charges, the durability, the artifact fields, the zone flags and the debug item level.
+func (i *Info) readItemCreate(b *wire.Buffer, owner bool) error {
+	it := i.item()
+	it.Owner = i.guid(b)
+	i.f.ItemOwner = true
+	it.ContainedIn = i.guid(b)
+	i.f.ContainedIn = true
+	i.guid(b) // Creator
+	i.guid(b) // GiftCreator
+	if owner {
+		it.StackCount = b.ReadU32()
+		i.f.StackCount = true
+		b.Skip(4)     // Expiration
+		b.Skip(5 * 4) // SpellCharges[5]
+	}
+	b.Skip(4) // DynamicFlags
+	for range 13 {
+		// ItemEnchantment::WriteCreate (:92-98): int32 ID, uint32 Duration, int16 Charges, uint16 Inactive.
+		b.Skip(12)
+	}
+	b.Skip(12) // the Classic 1.60.1.70009 14th enchantment slot: int32, uint32, int16, uint16 (:289-291)
+	if owner {
+		it.Durability = b.ReadU32()
+		it.MaxDurability = b.ReadU32()
+		i.f.Durability = true
+		i.f.MaxDurability = true
+	}
+	b.Skip(4) // CreatePlayedTime
+	b.Skip(1) // Context
+	b.Skip(8) // CreateTime
+	if owner {
+		b.Skip(8) // ArtifactXP
+		b.Skip(1) // ItemAppearanceModID
+	}
+	if err := readItemModListCreate(b); err != nil {
+		return err
+	}
+	artifacts := int(b.ReadU32())
+	gems := int(b.ReadU32())
+	if artifacts > maxDynamicSize || gems > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: item create names %d/%d artifact powers and gems", artifacts, gems)
+	}
+	if owner {
+		b.Skip(4) // ZoneFlags
+	}
+	if err := readItemBonusKey(b); err != nil {
+		return err
+	}
+	if owner {
+		b.Skip(2) // DEBUGItemLevel
+	}
+	b.Skip(4 * artifacts) // ArtifactPower::WriteCreate (:195-200): int16, uint8, uint8
+	b.Skip(37 * gems)     // SocketedGem::WriteCreate (:209-216): int32, uint16[16], uint8
+	return b.Err()
+}
+
+// readItemModListCreate is UF::ItemModList::WriteCreate (UpdateFields.cpp:151-159): the count in 7 bits, a flush,
+// then five bytes per ItemMod.
+func readItemModListCreate(b *wire.Buffer) error {
+	n := int(b.ReadBits(7)) // the count is seven bits, so it cannot run past 127
+	b.FlushBits()
+	b.Skip(5 * n) // uint8 Type, int32 Value
+	return b.Err()
+}
+
+// readItemBonusKey is WorldPackets::Item::ItemBonusKey's serializer (ItemPacketsCommon.cpp:199-212): int32 ItemID,
+// the bonus-list count, the modification count, then the bonus ids and the modifications. The ids go through
+// ByteBuffer::append(T const*, cnt), which writes cnt elements of the element's size (ByteBuffer.h:602-606), and an
+// ItemMod is five bytes.
+func readItemBonusKey(b *wire.Buffer) error {
+	b.Skip(4) // ItemID
+	bounds := int(b.ReadU32())
+	mods := int(b.ReadU32())
+	if bounds > maxDynamicSize || mods > maxDynamicSize {
+		return parseFail(ReasonCountOverLimit, "objects: item bonus key names %d/%d entries", bounds, mods)
+	}
+	b.Skip(4 * bounds)
+	b.Skip(5 * mods) // ItemMod::WriteCreate (:139-144): uint8 Type, int32 Value
+	return b.Err()
+}
+
+// readContainerCreate is ContainerData::WriteCreate (UpdateFields.cpp:519-526): Slots[98], then NumSlots.
+func (i *Info) readContainerCreate(b *wire.Buffer) error {
+	ct := i.container()
+	for n := range ct.Slots {
+		ct.Slots[n] = i.guid(b)
+	}
+	i.f.Slots = true
+	ct.NumSlots = b.ReadU32()
+	i.f.NumSlots = true
+	return b.Err()
+}
+
+// readItemUpdate is ItemData::WriteUpdate (UpdateFields.cpp:350-491): a two-block mask header, the nested dynamic
+// masks, then the changed fields in declaration order. Only the fields the inventory keeps are stored; every other
+// one is still walked so the block stays in sync. A bit without its group bit writes nothing (MarkChanged sets both,
+// UpdateField.h:640-646), so the group gates below are the writer's own.
+func (i *Info) readItemUpdate(b *wire.Buffer) error {
+	blockMask := b.ReadBits(2)
+	var blocks [2]uint32
+	for n := range blocks {
+		if blockMask&(1<<uint(n)) != 0 {
+			blocks[n] = b.ReadBits(32)
+		}
+	}
+	has := func(bit int) bool { return blocks[bit/32]&(1<<uint(bit%32)) != 0 }
+	it := i.item()
+	var artifacts, gems int
+	if has(0) {
+		if has(1) {
+			artifacts = readDynamicMaskBits(b, 32)
+		}
+		if has(2) {
+			gems = readDynamicMaskBits(b, 32)
+		}
+	}
+	b.FlushBits()
+	if has(0) {
+		if has(1) {
+			b.Skip(4 * artifacts) // ArtifactPower::WriteUpdate is its WriteCreate
+		}
+		if has(2) {
+			for range gems {
+				if err := readSocketedGemUpdate(b); err != nil {
+					return err
+				}
+			}
+		}
+		if has(3) {
+			it.Owner = i.guid(b)
+			i.f.ItemOwner = true
+		}
+		if has(4) {
+			it.ContainedIn = i.guid(b)
+			i.f.ContainedIn = true
+		}
+		if has(5) {
+			i.guid(b) // Creator
+		}
+		if has(6) {
+			i.guid(b) // GiftCreator
+		}
+		if has(7) {
+			it.StackCount = b.ReadU32()
+			i.f.StackCount = true
+		}
+		if has(8) {
+			b.Skip(4) // Expiration
+		}
+		if has(9) {
+			b.Skip(4) // DynamicFlags
+		}
+		if has(10) {
+			it.Durability = b.ReadU32()
+			i.f.Durability = true
+		}
+		if has(11) {
+			it.MaxDurability = b.ReadU32()
+			i.f.MaxDurability = true
+		}
+		if has(12) {
+			b.Skip(4) // CreatePlayedTime
+		}
+		if has(13) {
+			b.Skip(1) // Context
+		}
+		if has(14) {
+			b.Skip(8) // CreateTime
+		}
+		if has(15) {
+			b.Skip(8) // ArtifactXP
+		}
+		if has(16) {
+			b.Skip(1) // ItemAppearanceModID
+		}
+		if has(17) {
+			if err := readItemModListUpdate(b); err != nil {
+				return err
+			}
+		}
+		if has(18) {
+			b.Skip(4) // ZoneFlags
+		}
+		if has(19) {
+			if err := readItemBonusKey(b); err != nil {
+				return err
+			}
+		}
+		if has(20) {
+			b.Skip(2) // DEBUGItemLevel
+		}
+	}
+	if has(21) {
+		for n := range 5 {
+			if has(22 + n) {
+				b.Skip(4) // SpellCharges[n]
+			}
+		}
+	}
+	if has(27) {
+		for n := range 13 {
+			if has(28 + n) {
+				if err := readItemEnchantmentUpdate(b); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return b.Err()
+}
+
+// readItemEnchantmentUpdate is ItemEnchantment::WriteUpdate (UpdateFields.cpp:100-128): a five-bit mask, a flush,
+// then the changed fields.
+func readItemEnchantmentUpdate(b *wire.Buffer) error {
+	mask := b.ReadBits(5)
+	b.FlushBits()
+	has := func(bit int) bool { return mask&(1<<uint(bit)) != 0 }
+	if has(0) {
+		if has(1) {
+			b.Skip(4) // ID
+		}
+		if has(2) {
+			b.Skip(4) // Duration
+		}
+		if has(3) {
+			b.Skip(2) // Charges
+		}
+		if has(4) {
+			b.Skip(2) // Inactive
+		}
+	}
+	return b.Err()
+}
+
+// readSocketedGemUpdate is SocketedGem::WriteUpdate (UpdateFields.cpp:219-251).
+func readSocketedGemUpdate(b *wire.Buffer) error {
+	blockMask := b.ReadBits(1)
+	var block uint32
+	if blockMask&1 != 0 {
+		block = b.ReadBits(32)
+	}
+	has := func(bit int) bool { return block&(1<<uint(bit)) != 0 }
+	b.FlushBits()
+	if has(0) {
+		if has(1) {
+			b.Skip(4) // ItemID
+		}
+		if has(2) {
+			b.Skip(1) // Context
+		}
+	}
+	if has(3) {
+		for n := range 16 {
+			if has(4 + n) {
+				b.Skip(2) // BonusListIDs[n]
+			}
+		}
+	}
+	return b.Err()
+}
+
+// readItemModListUpdate is UF::ItemModList::WriteUpdate (UpdateFields.cpp:161-187): one mask bit, the nested list
+// mask in seven-bit counts when it is set, a flush, then the changed five-byte entries.
+func readItemModListUpdate(b *wire.Buffer) error {
+	block := b.ReadBits(1)
+	n := 0
+	if block&1 != 0 {
+		n = readDynamicMaskBits(b, 7)
+	}
+	b.FlushBits()
+	b.Skip(5 * n)
+	return b.Err()
+}
+
+// readContainerUpdate is ContainerData::WriteUpdate (UpdateFields.cpp:533-558): a four-block mask header, then
+// NumSlots and the changed slots.
+func (i *Info) readContainerUpdate(b *wire.Buffer) error {
+	blockMask := b.ReadBits(4)
+	var blocks [4]uint32
+	for n := range blocks {
+		if blockMask&(1<<uint(n)) != 0 {
+			blocks[n] = b.ReadBits(32)
+		}
+	}
+	has := func(bit int) bool { return blocks[bit/32]&(1<<uint(bit%32)) != 0 }
+	ct := i.container()
+	ct.delta = true
+	b.FlushBits()
+	if has(0) && has(1) {
+		ct.NumSlots = b.ReadU32()
+		i.f.NumSlots = true
+	}
+	if has(2) {
+		for n := range ct.Slots {
+			if !has(3 + n) {
+				continue
+			}
+			ct.Slots[n] = i.guid(b)
+			ct.changed[n] = true
+			i.f.Slots = true
+		}
+	}
 	return b.Err()
 }

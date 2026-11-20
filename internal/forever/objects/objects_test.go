@@ -798,10 +798,12 @@ func TestWorldModelMergesEveryDecodedField(t *testing.T) {
 // 256. A parser that allocated per field would break this.
 func TestFixtureAllocationBound(t *testing.T) {
 	fx := loadFixtures(t)
-	// Measured on this parser (2026-11-18): 14, 15, 37 and 3 allocations per parse. The bounds leave room for a
-	// runtime change but catch a parser that allocates per field or per block.
+	// Measured on this parser: 14, 16, 76 and 3 allocations per parse. create_owner is the login burst (nine
+	// blocks: eight item creates and the receiver's own player create), and since R1 decodes the item creates, the
+	// quest log and the ActivePlayerData prefix it allocates the item and player data it now holds. The bounds leave
+	// room for a runtime change but catch a parser that allocates per field or per block.
 	for name, limit := range map[string]float64{
-		"create_creature": 24, "create_player": 24, "create_owner": 56, "values_health": 8,
+		"create_creature": 24, "create_player": 24, "create_owner": 92, "values_health": 8,
 	} {
 		payload := fixturePayload(t, fx[name])
 		allocs := testing.AllocsPerRun(20, func() {

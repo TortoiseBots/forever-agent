@@ -37,7 +37,13 @@ func buildUnitCreate(spec unitCreateSpec) []byte {
 	v.WriteU8(fragCGObject)
 	v.WriteU8(0xFF)
 	v.WriteU8(1) // CGObject is indirect: its exists byte
+	writeUnitCreateBody(v, spec)
+	return v.Bytes()
+}
 
+// writeUnitCreateBody writes ObjectData::WriteCreate and UnitData::WriteCreate into v, without the values header:
+// the player fixture below shares the unit half with the creature one.
+func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 	// ObjectData::WriteCreate (:50-55).
 	v.WriteI32(1234)
 	v.WriteU32(0)
@@ -247,7 +253,6 @@ func buildUnitCreate(spec unitCreateSpec) []byte {
 	v.WriteBit(false) // Field_314
 	v.WriteBit(false) // hasAssist
 	v.FlushBits()
-	return v.Bytes()
 }
 
 func writeZeroGUID(b *wire.Buffer) { wire.WritePackedGUID(b, wire.GUID{}) }
