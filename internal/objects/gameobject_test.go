@@ -140,7 +140,7 @@ func TestGOUsableAndNames(t *testing.T) {
 	}
 }
 
-// Uldaman, 2026-10-13 (m910q, build 17): the agent teleported to the entrance, listed what the
+// Uldaman, 2026-10-13 (test1, build 17): the agent teleported to the entrance, listed what the
 // server showed, walked to the Keystone door and used it. Every game object create block of the
 // run parses into a game object, the door's use shows up as the flags and state change the
 // session reports, and nothing in the list is mistaken for a unit.

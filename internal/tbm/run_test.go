@@ -69,7 +69,7 @@ func TestParseRunLineLeftPacks(t *testing.T) {
 // TestParseRunLineLabel is the trailing speed/until label (dungeon-run-leader.md): taken off the note, after `left`,
 // read into its parts; a field that only looks like one stays note text.
 func TestParseRunLineLabel(t *testing.T) {
-	// ZG walk 4's start line (tortoise-test2, 2026-10-30)
+	// ZG walk 4's start line (test2, 2026-10-30)
 	st, ok := ParseRunLine("TBM:RUN|zul_gurub|running|1/1104|high_priestess_jeklik|move|begin|started|until boss (step 41)")
 	if !ok || st.Note != "started" || st.Label != "until boss (step 41)" || st.Until != "until boss" || st.UntilStep != 41 || st.Speed != 0 {
 		t.Fatalf("%+v %v", st, ok)

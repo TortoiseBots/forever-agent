@@ -1,4 +1,4 @@
-// raid_walk_inject.go: the command side of `raid-walk --inject` (spec ~/TortoiseBots-audit/specs/raid-walk-addons.md
+// raid_walk_inject.go: the command side of `raid-walk --inject` (spec specs/raid-walk-addons.md
 // 1.6, task I2). The injector's decisions are pure (internal/raidwalk/inject.go, I1); this file feeds it the watch's
 // observations and executes what it asks, through the fault allow-lists (inject_allow.go).
 //

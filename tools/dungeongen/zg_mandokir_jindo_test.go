@@ -2,7 +2,7 @@ package main
 
 // The Mandokir and Jin'do legs after walk 28 (issue #394): the ring sweep of the Mandokir terrace and the Jin'do corridor's
 // first fifteen pulls. Walk 28 wiped at step 431 (20 dead) and step 531 (21 dead) because the approach walks ran through
-// the pack field: the plan's WALK 29 note has the frames' numbers and TortoiseBots-audit research/zg-w28/MANDOKIR-JINDO.md
+// the pack field: the plan's WALK 29 note has the frames' numbers and research/zg-w28/MANDOKIR-JINDO.md
 // the analysis. These tests pin the pull order, the stands (19.5-28 yd from their own pack, >= 20 yd from every pack
 // pulled later) and the exported rows' navmesh walks (a committed polyline fixture, recomputed where the server's mmaps
 // are on the machine).
