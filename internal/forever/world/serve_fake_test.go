@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -158,7 +159,21 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			if bytes.HasPrefix([]byte(said), []byte(".tb ")) {
 				f.mu.Lock()
 				f.serveBotSent = true
+				script := f.serveCommander
 				f.mu.Unlock()
+				if script != nil {
+					// The typed client's answers carry the run's own token (the line's trailing "#..." word); the
+					// script matches the line itself and writes "#T" where the token goes.
+					token, bare := "", said
+					if i := strings.LastIndex(said, " #"); i >= 0 {
+						token, bare = said[i+1:], said[:i]
+					}
+					for _, ln := range script(bare) {
+						ln = strings.ReplaceAll(ln, "#T", token)
+						c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", ln))
+					}
+					continue
+				}
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
 				continue
 			}
@@ -1363,4 +1378,375 @@ func TestServeStopAttackHoldsTheLifecycleLock(t *testing.T) {
 	if rt.stopFight.Load() {
 		t.Fatal("the fast path wrote the stop flag of a session already reconnecting")
 	}
+}
+
+// ---- the commander method (round C3) ----
+
+// commanderCardLines is the fake module's answer to `.tb commander status`: one card for the session's character,
+// with one member record per bot and no logged orders; the totals are the records it emits.
+func commanderCardLines(lead string, members ...string) []string {
+	n := len(members)
+	raws := []string{
+		"commander-begin #T",
+		"binding cmd=Xxxxxx cguid=15 online=yes lead=" + lead + " group=" + itoaServe(n) + " bound=" + itoaServe(n) +
+			" bots=" + itoaServe(n) + " system=no inparty=no raid=no playerled=no boundat=1795138681 orders=0 " +
+			"map=389 pos=0.80,-8.23,-15.53 #T",
+	}
+	for i, m := range members {
+		leadFlag := "no"
+		if i == 0 {
+			leadFlag = "yes"
+		}
+		raws = append(raws, "member cmd=Xxxxxx bot="+m+" guid=10 class=warrior role=tank level=18 hp=498 maxhp=498 "+
+			"power=54 maxpower=100 ptype=rage alive=yes lead="+leadFlag+" map=389 zone=2437 "+
+			"pos=-18.24,-46.69,-21.85 #T")
+	}
+	n = len(raws) - 1
+	return append(raws, "commander-end count="+itoaServe(n)+" records="+itoaServe(n)+" bindings=1 #T")
+}
+
+// commanderStateLines is the fake module's `.tb state party`: one awake bot and a ready party.
+func commanderStateLines(bot string) []string {
+	return []string{
+		"state-begin #T",
+		"state bot=" + bot + " role=tank rolesrc=forced class=warrior level=18 hp=498 hpmax=498 hppct=100 " +
+			"power=rage pw=54 pwmax=100 st=non-combat incombat=no tgt= victim= hold=no mv=follow stuck= engine=yes " +
+			"pos=1.0,2.0,3.0 map=389 inst=0 dl= dm= ord= lastorder=stay co= nc= cast_queued=0 " +
+			"cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= #T",
+		"state-end count=1 records=1 resting=0 target=party:Tanka ready=yes #T",
+	}
+}
+
+// commanderOrderLines is the fake module's `.tb order party <verb>`: one queued bot.
+func commanderOrderLines(verb, bot string, seq int) []string {
+	return []string{
+		"order-begin #T",
+		"order bot=" + bot + " verb=" + verb + " seq=" + itoaServe(seq) + " status=queued #T",
+		"order-end count=1 records=1 verb=" + verb + " target=party:commander:Xxxxxx bots=1 queued=1 refused=0 #T",
+	}
+}
+
+func itoaServe(n int) string { return strconv.Itoa(n) }
+
+// serveTBLines is what the fake saw of the session's `.tb` lines.
+func (f *fakeServer) serveTBLines() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, ln := range f.serveGMLines {
+		if strings.HasPrefix(ln, ".tb ") {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+func TestServeCommanderStatus(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka", "Healera")
+		case line == ".tb state party":
+			return commanderStateLines("Tanka")
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "status"}), &out)
+	if out.Self != "Xxxxxx" {
+		t.Fatalf("status self %q", out.Self)
+	}
+	if len(out.Cards) != 1 || out.Cards[0].Lead != "Tanka" || out.Cards[0].Bots != 2 {
+		t.Fatalf("status cards %+v\n%s", out.Cards, steps.joined())
+	}
+	if got := len(out.Cards[0].Members); got != 2 {
+		t.Fatalf("status members %d, want 2 (%+v)", got, out.Cards[0].Members)
+	}
+	if !out.Cards[0].Members[0].Lead || !out.Cards[0].Members[1].Alive {
+		t.Fatalf("member flags %+v", out.Cards[0].Members)
+	}
+	if lines := f.serveTBLines(); len(lines) != 2 || !strings.HasPrefix(lines[0], ".tb commander status Xxxxxx ") ||
+		!strings.HasPrefix(lines[1], ".tb state party ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderCmdStay(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb order party stay":
+			return commanderOrderLines("stay", "Tanka", 1)
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "stay"}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb order party stay" {
+		t.Fatalf("sent %q\n%s", out.Sent, steps.joined())
+	}
+	if len(out.Bots) != 1 || out.Bots[0].Bot != "Tanka" || out.Bots[0].Status != "queued" || out.Bots[0].Seq != 1 {
+		t.Fatalf("bots %+v", out.Bots)
+	}
+	if out.Card == nil || out.Card.Lead != "Tanka" {
+		t.Fatalf("the guard's card %+v", out.Card)
+	}
+	if lines := f.serveTBLines(); len(lines) != 3 || !strings.HasPrefix(lines[1], ".tb order party stay ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderViewRefused(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "commander", map[string]any{"op": "view"}, -32003, "commander view: not ported on this server")
+	a.mustFail(t, "commander", map[string]any{"op": "frobnicate"}, -32602, "bind, unbind, status, cmd, run or view")
+	a.mustFail(t, "commander", map[string]any{"op": "cmd"}, -32602, "verb is required")
+	a.mustFail(t, "commander", map[string]any{"op": "bind"}, -32602, "lead_bot is required")
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("a refused call sent %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderNotPortedList(t *testing.T) {
+	ported, notPorted := ServeRPCMethods()
+	found := false
+	for _, name := range ported {
+		if name == "commander" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("commander is not in the ported method list")
+	}
+	for _, name := range notPorted {
+		if name == "commander" {
+			t.Fatal("commander is still in the not-ported list")
+		}
+	}
+}
+
+func TestServeCommanderDuringReconnect(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 200*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	waitServeUnits(t, a)
+
+	// The first attempt is made to fail, so the reconnecting window lasts long enough to answer a call in.
+	f.failLogins(1)
+	dropServingSocket(t, f)
+	waitServeState(t, a, "reconnecting", steps)
+	a.mustFail(t, "commander", map[string]any{"op": "status"}, -32005, "reconnecting")
+	waitServeState(t, a, "online", steps)
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("a call during the re-entry reached the command channel: %q", lines)
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// commanderRunningCardLines is commanderCardLines with the card's run record running: the order guard's refusal.
+func commanderRunningCardLines(lead string, members ...string) []string {
+	raws := commanderCardLines(lead, members...)
+	run := "run lead=" + lead + " plan=ragefire_chasm state=running step=1 steps=80 leg=0 legname=tunnel " +
+		"kind=pull phase=pull note=fighting pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 " +
+		"cmd=Xxxxxx #T"
+	raws = append(raws[:len(raws)-1], run, raws[len(raws)-1])
+	n := len(raws) - 2
+	raws[len(raws)-1] = "commander-end count=" + itoaServe(n) + " records=" + itoaServe(n) + " bindings=1 #T"
+	return raws
+}
+
+func TestServeCommanderModuleError(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if strings.HasPrefix(line, ".tb commander status") {
+			return []string{"error code=bad-card cmd=commander msg=the%20card%20is%20corrupt #T"}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	// The module's own error line reaches the caller with its code first.
+	a.mustFail(t, "commander", map[string]any{"op": "status"}, -32003, "bad-card (commander): the card is corrupt")
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderRunGuard(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderRunningCardLines("Tanka", "Tanka")
+		case line == ".tb order party stay":
+			return commanderOrderLines("stay", "Tanka", 1)
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "stay"}, -32003, "run-active: Tanka's run of ragefire_chasm is running")
+	if !strings.HasPrefix(rerr.Message, "run-active: ") {
+		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
+	}
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb order ") {
+			t.Fatalf("an order went out into a running run: %q", ln)
+		}
+	}
+	// The same call with pause_run sends the order: the module pauses the run itself.
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "stay", "pause_run": true}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb order party stay" {
+		t.Fatalf("sent %q\n%s", out.Sent, steps.joined())
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderNotAvailable(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb cmd loot":
+			// The module has no P6: its answer to the probe is the word that says so.
+			return []string{"error code=unknown-verb cmd=cmd #T"}
+		case line == ".tb cmd":
+			// P3 is installed, as the module's own PR left it; this build still has no typed `.tb cmd` order path.
+			return []string{"error code=missing-verb cmd=cmd #T"}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003, "not-available: loot: needs module package P6")
+	if !strings.HasPrefix(rerr.Message, "not-available: ") {
+		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
+	}
+	// The probe went out once and the order did not.
+	lines := f.serveTBLines()
+	probes := 0
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, ".tb cmd loot #") {
+			probes++
+		}
+		if strings.HasPrefix(ln, ".tb cmd loot ") && !strings.HasPrefix(ln, ".tb cmd loot #") {
+			t.Fatalf("the refused order went out: %q", ln)
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("the fake saw %q, want one probe", lines)
+	}
+	// P3 answers its probe, so the verb is available to the module but not to this build: the refusal says which.
+	a.mustFail(t, "commander", map[string]any{
+		"op": "cmd", "verb": "move", "args": []string{"1", "2", "3"},
+	}, -32003, "not-available: move: the module answers .tb cmd; this build has no typed cmd path")
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb cmd move ") {
+			t.Fatalf("the refused order went out: %q", ln)
+		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderRunStatusAndEvents(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch line {
+		case ".tb run status all":
+			return []string{
+				"run-begin #T",
+				"run lead=Tanka plan=ragefire_chasm state=running step=1 steps=80 leg=0 legname=tunnel kind=pull " +
+					"phase=pull note=fighting pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 #T",
+				"run-end count=1 records=1 verb=status #T",
+			}
+		case ".tb run events Tanka since=4":
+			return []string{
+				"run-begin #T",
+				"event seq=4 t=40 kind=pull step=1 leg=0 unit=12345 why= #T",
+				"run-end count=1 records=1 verb=events lead=Tanka last=4 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	// A run status with no lead reads every run the module holds.
+	var status ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "run", "verb": "status"}), &status)
+	if len(status.Runs) != 1 || status.Runs[0].Lead != "Tanka" || status.Runs[0].State != "running" ||
+		status.Runs[0].Steps != 80 || status.Runs[0].Leg == nil {
+		t.Fatalf("run status %+v\n%s", status.Runs, steps.joined())
+	}
+	var events ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "run", "verb": "events", "lead_bot": "Tanka", "args": []string{"4"},
+	}), &events)
+	if len(events.Events) != 1 || events.Events[0].Seq != 4 || events.Events[0].Kind != "pull" ||
+		events.Events[0].Unit == nil || *events.Events[0].Unit != 12345 {
+		t.Fatalf("run events %+v\n%s", events.Events, steps.joined())
+	}
+	lines := f.serveTBLines()
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], ".tb run status all ") || !strings.HasPrefix(lines[1], ".tb run events Tanka since=4 ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
 }

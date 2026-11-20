@@ -304,6 +304,9 @@ type fakeServer struct {
 	serveSelections []wire.GUID
 	serveGMLines    []string
 	serveOrder      []string
+	// serveCommander, when set, answers a `.tb` line with grammar-v2 lines in which "#T" is the line's token: the
+	// commander method's test script. Nil keeps the one untagged SERVE-BOT-ANSWER line.
+	serveCommander func(line string) []string
 	// serveReconnects is ServeConfig.ReconnectAttempts for the daemon these helpers start (0 keeps the default);
 	// serveBackoff/serveLoginTimeout shorten its reconnect timings.
 	serveReconnects   int

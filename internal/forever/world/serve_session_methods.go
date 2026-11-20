@@ -348,6 +348,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		}
 		return commandResult(p.Line, rep), nil
 	}))
+	srv.Register("commander", serveCallTyped(st, func(s *session, ctx context.Context, p serveCommanderParams) (ServeCommander, error) {
+		return s.serveCommander(ctx, st, p)
+	}))
 	srv.Register("party", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServePartyInfo, error) {
 		return s.servePartyInfo(), nil
 	}))
@@ -1106,7 +1109,7 @@ var notPortedMethods = []string{
 	"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
 	"assistant", "bot_view",
 	"brain_start", "brain_status", "brain_stop",
-	"buy", "commander", "convert_raid",
+	"buy", "convert_raid",
 	"disband", "dismount",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"equip", "equipment",
