@@ -19,9 +19,12 @@ package tbcmd
 // its counts must never pass as a confirmed command. The target label sits on the end line: a party command
 // addressed with "party" resolves to the party's commander or its leader, and the label is what says so, so each
 // call also checks that the label names what it addressed. A per-bot line names the character the module handled in
-// `bot=`. A line whose `status=` is refused or failed, and an end line that counts one (`refused=`/`failed=`), is
-// the module's refusal returned as a *CommandError. The module's single-line error (`error code=... cmd=...`) is
-// returned the same way, so a caller acts only on a nil error.
+// `bot=`. Each record's `status=` is one of the verb's own two outcomes (started/refused, revived/refused,
+// ok/failed), and the end line's outcome counts are those statuses' tally: any other status, or a count that
+// disagrees with the records, is ErrBadReport, never a confirmed command. A line whose `status=` is the verb's
+// failure status, and an end line that counts one (`refused=`/`failed=`), is the module's refusal returned as a
+// *CommandError. The module's single-line error (`error code=... cmd=...`) is returned the same way, so a caller
+// acts only on a nil error.
 
 import (
 	"context"
@@ -184,8 +187,8 @@ func checkTargetParty(rep ActionReport, verb string) error {
 
 // parseAction reads a setup command's whole report. endKind is the command's end marker; verb names the command in
 // errors and the per-bot lines' kind. A reply that is not complete, carries another command's lines, or whose
-// counts, end fields or target label do not match the report the module writes is ErrBadReport; a per-bot refusal
-// is the module's *CommandError.
+// record statuses, counts, end fields or target label do not match the report the module writes is ErrBadReport; a
+// per-bot refusal is the module's *CommandError.
 func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error) {
 	out := ActionReport{Verb: verb, Kind: endKind}
 	if rep == nil {
@@ -255,9 +258,15 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 		id := ""
 		if len(prev.keys) > 0 {
 			id = prev.keys[0]
-			if len(rec.keys) == 0 || rec.keys[0] != id || rec.values[id] != prev.values[id] {
-				return out, fmt.Errorf("%w: %s+ for %q follows %q", ErrBadReport, verb, rec.values[rec.keys[0]], prev.values[id])
-			}
+		}
+		switch {
+		case id == "":
+			// A base line with no keys names nothing (the record check below refuses it), so its continuation has
+			// no identity to repeat; its keys are new.
+		case len(rec.keys) == 0:
+			return out, fmt.Errorf("%w: a %s+ line carries no keys", ErrBadReport, verb)
+		case rec.keys[0] != id || rec.values[id] != prev.values[id]:
+			return out, fmt.Errorf("%w: %s+ for %q follows %q", ErrBadReport, verb, rec.values[rec.keys[0]], prev.values[id])
 		}
 		for i, k := range rec.keys {
 			if i == 0 && id != "" {
@@ -291,7 +300,8 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 		}
 	}
 	// Every record line names what the module handled and says what it did with it. A line without its status=
-	// proves nothing about that character, so it is not a record of a setup answer.
+	// proves nothing about that character, and a status the verb does not write (a version-skewed or corrupted
+	// reply) proves nothing either: only the verb's own success and failure statuses are records of its answer.
 	for _, rec := range recs {
 		switch {
 		case rec.has("bot"):
@@ -313,6 +323,12 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 		}
 		if !has || st == "" {
 			return out, fmt.Errorf("%w: the %s line carries no status=", ErrBadReport, rec.kind)
+		}
+		switch st {
+		case shape.success, shape.fails:
+		default:
+			return out, fmt.Errorf("%w: the %s line says status=%q, a %s record is %s or %s",
+				ErrBadReport, rec.kind, st, verb, shape.success, shape.fails)
 		}
 	}
 	if shape.bots {
@@ -344,6 +360,24 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 	if success+fails != len(recs) {
 		return out, fmt.Errorf("%w: %s %s=%d %s=%d, %d record line(s)", ErrBadReport, endKind,
 			shape.success, success, shape.fails, fails, len(recs))
+	}
+	// The end line's two outcome counts are the records' own tally, status by status: an end that counts a start
+	// while its record refuses (or the reverse) was not written from these lines.
+	gotSuccess, gotFails := 0, 0
+	for _, rec := range recs {
+		st, _, err := rec.text("status")
+		if err != nil {
+			return out, err
+		}
+		if st == shape.success {
+			gotSuccess++
+			continue
+		}
+		gotFails++
+	}
+	if gotSuccess != success || gotFails != fails {
+		return out, fmt.Errorf("%w: %s %s=%d %s=%d, the records say %d %s and %d %s", ErrBadReport, endKind,
+			shape.success, success, shape.fails, fails, gotSuccess, shape.success, gotFails, shape.fails)
 	}
 	if shape.target {
 		t, err := actionTarget(end)

@@ -485,3 +485,94 @@ func TestActionContinuationLines(t *testing.T) {
 		t.Fatalf("a continuation of another bot: err %v, want ErrBadReport", err)
 	}
 }
+
+// TestActionUnknownStatusIsBadReport: a record's status= is one of its verb's own two outcomes (started/refused,
+// revived/refused, ok/failed), and the end line's counts are the tally of the record statuses. An unknown status,
+// another verb's status, or a tally that disagrees with the records is ErrBadReport, never a confirmed success.
+func TestActionUnknownStatusIsBadReport(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(c *Client) (ActionReport, error)
+		raws []string
+	}{
+		{
+			name: "tele with a status the verb never writes",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+			},
+			raws: []string{
+				"tele-begin #T",
+				"tele bot=Tbdpsone status=ok map=0 pos=1.0,2.0,3.0 tag=SETUP #T",
+				"tele-end count=1 records=1 target=Tbdpsone bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "revive with another verb's status",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Revive(context.Background(), "Tbdpstwo")
+			},
+			raws: []string{
+				"revive-begin #T",
+				"revive bot=Tbdpstwo tag=PRACTICE status=started practice=yes #T",
+				"revive-end count=1 records=1 tag=PRACTICE target=Tbdpstwo bots=1 revived=1 refused=0 #T",
+			},
+		},
+		{
+			name: "reset with another verb's status",
+			call: func(c *Client) (ActionReport, error) {
+				return c.InstanceReset(context.Background(), "Tbtank")
+			},
+			raws: []string{
+				"instance-begin #T",
+				"reset map=389 inst=7 status=started #T",
+				"instance-end count=1 records=1 verb=reset leader=Atank instances=1 ok=1 failed=0 #T",
+			},
+		},
+		{
+			name: "tele whose record refuses but whose end counts a start",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+			},
+			raws: []string{
+				"tele-begin #T",
+				"tele bot=Tbdpsone status=refused code=teleporting #T",
+				"tele-end count=1 records=1 target=Tbdpsone bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "tele whose record starts but whose end counts a refusal",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+			},
+			raws: []string{
+				"tele-begin #T",
+				"tele bot=Tbdpsone status=started #T",
+				"tele-end count=1 records=1 target=Tbdpsone bots=1 started=0 refused=1 #T",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.call(NewClient(oneReply(tc.raws...))); !errors.Is(err, ErrBadReport) {
+				t.Fatalf("err %v, want ErrBadReport", err)
+			}
+		})
+	}
+}
+
+// TestActionFieldlessContinuation: a continuation line with no keys after a valid record is a bad report, not a
+// panic (the parser used to index the empty key list while naming the error).
+func TestActionFieldlessContinuation(t *testing.T) {
+	call := func(raws ...string) (ActionReport, error) {
+		return NewClient(oneReply(raws...)).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+	}
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T", "tele+ #T",
+		"tele-end count=2 records=1 target=Tbdpsone bots=1 started=1 refused=0 #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a fieldless continuation: err %v, want ErrBadReport", err)
+	}
+	// Two fieldless lines must not panic either: the reply names no character, so it is malformed.
+	if _, err := call("tele-begin #T", "tele #T", "tele+ #T",
+		"tele-end count=2 records=1 target=Tbdpsone bots=1 started=1 refused=0 #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("two fieldless record lines: err %v, want ErrBadReport", err)
+	}
+}

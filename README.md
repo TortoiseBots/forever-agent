@@ -330,8 +330,10 @@ is the party's leader or the bot the run names — then the portal or the telepo
 module's run with one typed command, and from then on sends no order — an order would pause the run. A setup
 answer is read whole or not at all: the `<verb>-begin` marker, a `status=` line per addressed character, and an end
 line with `records=`, the party it resolved (`target=party:commander:<name>`, `target=party:<tank>`) and its own
-counts are all required, and the target must name what the command addressed. An end-only acknowledgement, or a
-report missing any of those parts, is a report that proves nothing and is refused — never a success — and an entry
+counts are all required, every record's `status=` must be one of the verb's own outcomes (`started`/`refused`,
+`revived`/`refused`, `ok`/`failed`) with the end's counts as their tally, and the target must name what the command
+addressed. An end-only acknowledgement, or a report missing any of those parts (or carrying a status or count the
+verb never writes), is a report that proves nothing and is refused — never a success — and an entry
 answered `no-trigger` (a party outside the entrance's trigger box) is retried once as `enter party map <plan map>`
 instead of failing. The observer teleports on its own, and the same-map check
 compares the party's map with the plan's, not the observer's. A plan that carries the format's in-fight run fields

@@ -38,3 +38,9 @@ is "the server module" throughout.
   `why=` that names no member (a typo, an NPC, a stale roster, an empty value) is kept as it arrived with no role,
   the card flags it apart (`unattributed-deaths`) and no member's count or pack flag folds it in; the fight's unit id
   is evidence only. Tests: `TestWatchDeathNamesAreCheckedAgainstTheParty`, `TestCardDeathsNotAMember`.
+- **fix (r2)** — a record's `status=` must be one of its verb's own outcomes (`started`/`refused`,
+  `revived`/`refused`, `ok`/`failed`), and the end line's two counts are the tally of the record statuses
+  (`tbcmd/action.go`): an unknown status, another verb's status or a count that disagrees with the records is
+  `ErrBadReport`, never a confirmed success. Test: `TestActionUnknownStatusIsBadReport`.
+- **fix (r2)** — a continuation line with no keys after a valid record is `ErrBadReport`, not a panic: the parser
+  indexed the empty key list while naming the error (`tbcmd/action.go`). Test: `TestActionFieldlessContinuation`.
