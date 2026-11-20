@@ -16,8 +16,30 @@ const (
 	// DEATH_COST_S is what a death near a hit adds to its cost, so a hit that killed counts worse.
 	DEATH_COST_S = 60.0
 
+	// Rule 1: idle in combat longer than R1_IDLE_S, after the group has been in combat R1_GROUP_COMBAT_MIN_S.
+	R1_IDLE_S             = 10.0
+	R1_GROUP_COMBAT_MIN_S = 3.0
+	// R1_CAST_PAD_S is the window either side of a frame in which a cast or a swing by the member says it is not
+	// idle: the Python checker's `ts[i] <= f['t'] + 1.0` around a 1 s lookback.
+	R1_CAST_PAD_S = 1.0
+	// R1_HURT_PCT is the health below which a healer's party has work: a healer with nobody hurt is not idle.
+	R1_HURT_PCT = 95.0
+
+	// Rule 2: a healer not healing an ally under R2_LOW_HP_PCT for longer than R2_MIN_S, its mana over
+	// R2_MANA_MIN_PCT and the ally within R2_RANGE_YD.
+	R2_LOW_HP_PCT   = 40.0
+	R2_MIN_S        = 4.0
+	R2_MANA_MIN_PCT = 10.0
+	R2_RANGE_YD     = 40.0
+	// R2_HEAL_PAD_S is how near a heal row (or a heal-spell cast) has to be to a frame to say the healer worked.
+	R2_HEAL_PAD_S = 1.5
+
 	// Rule 3: an add (a non-boss hostile) attacking a non-tank for longer than this.
 	R3_MIN_S = 5.0
+
+	// Rule 4: standing in a damaging AoE longer than R4_MIN_S; ticks further apart than R4_TICK_GAP_S end it.
+	R4_MIN_S      = 3.0
+	R4_TICK_GAP_S = 3.5
 
 	// Rule 5: a bot still on follow, this far from the party leader, for this long, is stuck.
 	R5_STUCK_YD = 40.0
@@ -34,6 +56,14 @@ const (
 	R6_NEAR_COMBAT_YD     = 60.0 // and an in-combat hostile must be this near the eater
 	R6_LOW_MANA_PCT       = 30.0 // eating at or below this mana % is a need, above it a waste
 
+	// Rule 8: the same buff cast more than R8_MAX_CASTS times in R8_WINDOW_S on one target. R8_NEAR_START_S and
+	// R8_NEAR_AURA_S are the Python's genuineness windows: a spell_start just before the completion, or an
+	// aura_applied just after it, says the cast was real and not a periodic row.
+	R8_MAX_CASTS    = 3
+	R8_WINDOW_S     = 60.0
+	R8_NEAR_START_S = 0.5
+	R8_NEAR_AURA_S  = 0.2
+
 	// Rule 9 (the z-drop heuristic): the height dropped before a death, and the window it is read over. The window
 	// and the frame count are walk_z_drop's defaults, which the old trace rule used too.
 	R9_FALL_DROP_YD  = 12.0
@@ -46,6 +76,14 @@ const (
 	R10_FULL_PCT    = 99.0
 	R10_MIN_S       = 30.0
 	R10_DAMAGED_PCT = 80.0
+
+	// Rule 11: casts started with nothing landing for longer than R11_MIN_S while mana rose. R11_CAST_LAND_S is
+	// how long after a start a spell_go of the same spell may still count as that cast landing; R11_OUTPUT_PAD_S
+	// is the window either side of a frame in which a damage, heal or swing row breaks a silent stretch.
+	R11_MIN_S        = 10.0
+	R11_CAST_LAND_S  = 2.5
+	R11_OUTPUT_PAD_S = 1.5
+	R11_MIN_STARTS   = 2
 
 	// Rule 13: a healer below R13_MANA_PCT out of combat for longer than R13_MIN_S, no drink within
 	// R13_DRINK_PAD_S either side, group not moving (median displacement under R13_GROUP_STILL_YD over
@@ -61,15 +99,27 @@ const (
 	R14_MIN_S      = 20.0
 	R14_DIST_YD    = 40.0
 	R14_MIN_OTHERS = 3
+
+	// Rule 15: a removable debuff up longer than R15_MIN_S with an able dispeller alive, within R15_RANGE_YD and
+	// not casting. R15_GRACE_S is how long the debuff had to be removed before the dispellers are judged.
+	R15_MIN_S    = 8.0
+	R15_RANGE_YD = 30.0
+	R15_GRACE_S  = 8.0
 )
 
 // ruleNames are the Python checker's RULE_NAMES rows for the rules this package has.
 var ruleNames = map[int]string{
+	1:  "idle in combat >10 s",
+	2:  "healer not healing <40% ally >4 s",
 	3:  "tank without aggro: add on non-tank >5 s",
+	4:  "standing in damaging AoE >3 s",
 	5:  "stuck >30 s while group moves",
 	6:  "eat/drink while group in combat",
+	8:  "buff flip-flop (>3 casts / 60 s / target)",
 	9:  "fall/drown death",
 	10: "power waste at 100% in combat >30 s",
+	11: "cast started but nothing lands while mana rises >10 s (cast-cancel signal)",
 	13: "healer under 30% mana out of combat >20 s, no drink 15 s, group not moving",
 	14: "member >40 yd from the group centroid >20 s in combat",
+	15: "missed decurse: removable debuff >8 s with an able dispeller alive, in range, not casting",
 }

@@ -120,6 +120,11 @@ type CombatRow struct {
 	SpellID int         `json:"spell_id"`
 	Amount  int         `json:"amount"`
 	Reason  string      `json:"reason,omitempty"`
+
+	// T is the row on the run's clock (seconds from t=0), computed from Time and the run's start, and TKnown
+	// says whether it could be: a row with no readable time is unknown at every rule, never at t=0.
+	T      float64 `json:"-"`
+	TKnown bool    `json:"-"`
 }
 
 // Run is one loaded input: a watch recording, a trials repeat or a roster-only run.
@@ -144,6 +149,29 @@ type Run struct {
 	CastTimes map[string][]float64
 	// BossEntries are the entries a watch's instance report listed, which rule 3 does not count as adds.
 	BossEntries map[uint32]string
+	// ByGUID maps a canonical guid to the run's own identity for that unit (a watch keys members by guid, a trials
+	// repeat by character name), and GUIDOf is the reverse. A combat row's guid becomes the run's identity through
+	// them, so the rules join a row to a frame whatever the run keys its members by.
+	ByGUID map[string]string
+	GUIDOf map[string]string
+	// SpellNames are the spell names a live-checked data file gives (id -> name), and Dispel the dispel types the same
+	// source gives (id -> magic, curse, disease, poison, or never). A row's id without a name is `spell <id>` and
+	// never matches a name rule; an id without a dispel type is not a known debuff. (Names is the party record's
+	// name per guid, above; the spell map is SpellNames so the two never share a field.)
+	SpellNames map[int]string
+	Dispel     map[int]string
+
+	// combatBySrc indexes Combat by a row's canonical source guid, built on first use.
+	combatBySrc   map[string][]int
+	combatIndexed bool
+
+	// coverage is what the combat log provably covers (cover.go), built once per log; unknown counts, per rule,
+	// the windows a rule left unjudged because the log did not cover them (Hunt reads and resets it).
+	coverage   *logCover
+	coverFor   int
+	coverBuilt bool
+	unknown    map[int]map[string]int
+
 	// TraceEvents are the trace's own event records (run_start, wipe, pull_start, ...), for adapters that place a
 	// record's events on the trace's clock instead of a summary's module clock.
 	TraceEvents []trace.Event
@@ -163,6 +191,67 @@ func (r *Run) Class(n string) string {
 		return v
 	}
 	return "?"
+}
+
+// SpellName is the spell's name from the live-checked names file, or `spell <id>` when the file does not name it.
+// An unnamed id never matches a name rule (a buff, an AoE or a heal): the name is what the rule reads, and a name
+// this run does not have is unknown, not a guess.
+func (r *Run) SpellName(id int) string {
+	if v, ok := r.SpellNames[id]; ok && v != "" {
+		return v
+	}
+	return fmt.Sprintf("spell %d", id)
+}
+
+// DispelType is the dispel type the dispel file gives for a spell id, empty when it lists none. It is unknown, not
+// undispellable: rule 15 only judges ids the file lists.
+func (r *Run) DispelType(id int) string {
+	return r.Dispel[id]
+}
+
+// combatIndex builds the source index over Combat, in the rows' own order. A rule looks up the rows of one member
+// instead of scanning the log per frame.
+func (r *Run) combatIndex() {
+	if r.combatIndexed {
+		return
+	}
+	r.combatIndexed = true
+	r.combatBySrc = map[string][]int{}
+	for i := range r.Combat {
+		row := &r.Combat[i]
+		if g := CanonGUID(row.Source.GUID); g != "" {
+			r.combatBySrc[g] = append(r.combatBySrc[g], i)
+		}
+	}
+}
+
+// Member is a combat row's guid as the run's own identity: the party member it belongs to, else the guid text.
+func (r *Run) Member(guid string) string {
+	g := CanonGUID(guid)
+	if g == "" {
+		return ""
+	}
+	if n, ok := r.ByGUID[g]; ok {
+		return n
+	}
+	return g
+}
+
+// guidOf is a member's guid text: its own when the run keys members by guid.
+func (r *Run) guidOf(n string) string {
+	if g := r.GUIDOf[n]; g != "" {
+		return g
+	}
+	return n
+}
+
+// rowsFromMember are the indexes of the rows a member is the source of, whatever the run keys it by.
+func (r *Run) rowsFromMember(n string) []int { return r.rowsFrom(r.guidOf(n)) }
+
+// rowsFrom are the indexes of the rows a member is the source of.
+func (r *Run) rowsFrom(guid string) []int {
+	r.combatIndex()
+	return r.combatBySrc[CanonGUID(guid)]
 }
 
 // IsSubject says whether the rules apply to n: every unit when the run has no subject set.
@@ -200,6 +289,20 @@ func (r *Run) Clock(t float64) string {
 // finalise derives what every loader's rules need: the movement flag where the source did not carry one, and each
 // frame's group-combat start (a gap of MAX_GAP_S or a frame out of combat ends it).
 func (r *Run) finalise() {
+	if r.ByGUID == nil {
+		r.ByGUID = map[string]string{}
+	}
+	if r.GUIDOf == nil {
+		r.GUIDOf = map[string]string{}
+	}
+	for _, f := range r.Frames {
+		for _, n := range f.Order {
+			if g := CanonGUID(f.Units[n].G); g != "" {
+				r.ByGUID[g] = n
+				r.GUIDOf[n] = g
+			}
+		}
+	}
 	type prev struct{ t, x, y float64 }
 	last := map[string]prev{}
 	for _, f := range r.Frames {
@@ -248,6 +351,11 @@ func (f *Frame) addUnit(n string, u *Unit) {
 
 // dist2 is the horizontal distance between two points, as the Python checker's.
 func dist2(ax, ay, bx, by float64) float64 { return math.Hypot(ax-bx, ay-by) }
+
+// dist3 is the 3-D distance between two units, as the Python checker's.
+func dist3(a, b *Unit) float64 {
+	return math.Sqrt((a.X-b.X)*(a.X-b.X) + (a.Y-b.Y)*(a.Y-b.Y) + (a.Z-b.Z)*(a.Z-b.Z))
+}
 
 // pctOf is a unit's power in percent of its maximum.
 func pctOf(u *Unit) float64 { return 100 * u.Power / math.Max(u.MaxPower, 1) }
