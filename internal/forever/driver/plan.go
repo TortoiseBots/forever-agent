@@ -143,12 +143,17 @@ func LoadRoute(path string) (*Route, error) {
 
 // NewRoute builds the driver's view of a loaded plan. Every field the driver cannot run is a PlanRefusal; the returned
 // route is nil when there is one (a partial route would look runnable). A field is either read by the driver or, when
-// the plan sets it to a non-default value, refused by name: a plan whose crowd control, kill order, holds or skips were
-// silently left out would run a different dungeon than the one its author wrote. Three groups are not run inputs and
-// so are not refused: the plan's name, status and notes (descriptions), its level band and hire composition (party
-// preparation happens before this driver), and entrance_tele, skip_export, a via's check_skip and a patrol's
-// period_s/source/period_estimate (they belong to the remote entry mode, to plan-check or to plan-export; the driver
-// enters through Portal or EnterAreaTrigger and gates a patrol by its live units, not by its period).
+// the plan sets it to a non-default value, refused by name: a plan whose holds, steps or skips were silently left out
+// would run a different dungeon than the one its author wrote. The plan's in-fight run fields (kill_first, cc_priority,
+// cc_always, no_cc, summoned_kill_first, tank_min_hp and a boss's tactics) are not refused: they are part of the
+// documented plan format and belong to whoever runs the fight, which for a watched run is the module's own bot. The
+// loader has already validated them (ranges, the kill_first/cc_priority rule, the summoned subset), so a plan that
+// loads is one whose run fields the module can read, and this driver neither rewrites nor acts on them. Four more
+// groups are not run inputs and so are not refused: the plan's name, status and notes (descriptions), its level band
+// and hire composition (party preparation happens before this driver), and entrance_tele, skip_export, a via's
+// check_skip and a patrol's period_s/source/period_estimate (they belong to the remote entry mode, to plan-check or to
+// plan-export; the driver enters through Portal or EnterAreaTrigger and gates a patrol by its live units, not by its
+// period).
 func NewRoute(p *dungeon.Plan) (*Route, error) {
 	var refusals []error
 	refuse := func(where, field, why string) {
@@ -160,26 +165,8 @@ func NewRoute(p *dungeon.Plan) (*Route, error) {
 	if p.Kind == dungeon.KindRaid {
 		refuse("kind", "kind", "this round runs a five-bot dungeon party, not a raid")
 	}
-	if len(p.KillFirst) > 0 {
-		refuse("kill_first", "kill_first", "a kill order inside a fight is not run by this round")
-	}
-	if len(p.CCPriority) > 0 {
-		refuse("cc_priority", "cc_priority", "crowd control is not run by this round")
-	}
-	if len(p.CCAlways) > 0 {
-		refuse("cc_always", "cc_always", "crowd control is not run by this round")
-	}
-	if len(p.NoCC) > 0 {
-		refuse("no_cc", "no_cc", "crowd control is not run by this round")
-	}
-	if len(p.SummonedKillFirst) > 0 {
-		refuse("summoned_kill_first", "summoned_kill_first", "a kill order inside a fight is not run by this round")
-	}
 	if p.PullCeiling != 0 {
 		refuse("pull_ceiling", "pull_ceiling", "the pull-size ceiling is a plan-check rule, not a run rule")
-	}
-	if p.TankMinHP != 0 {
-		refuse("tank_min_hp", "tank_min_hp", "the tank health preflight is not run by this round")
 	}
 	if p.Watchdog != nil {
 		refuse("watchdog", "watchdog", "the plan's stall levels are not used by this round")
@@ -312,9 +299,6 @@ func NewRoute(p *dungeon.Plan) (*Route, error) {
 			}
 			if pl.Boss.LootItem != nil {
 				refuse(bw, "loot_item", "looting the boss is not run by this round")
-			}
-			if pl.Boss.Tactics != nil {
-				refuse(bw, "tactics", "the party's fight tactics are not run by this round")
 			}
 			if pl.Boss.WaitS != 0 {
 				refuse(bw, "wait_s", "a boss wait for a patrolling boss is not run by this round")

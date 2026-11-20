@@ -10,7 +10,6 @@ import (
 	"slices"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
-	"github.com/pjerra/forever-agent/internal/tactics"
 )
 
 func minimalPlan() *dungeon.Plan {
@@ -60,7 +59,6 @@ func TestRouteRefusals(t *testing.T) {
 		{"group team", func(p *dungeon.Plan) { p.Legs[0].PullGroups[0].Team = dungeon.TeamAlliance }, "team"},
 		{"equiv", func(p *dungeon.Plan) { p.Legs[0].PullGroups[0].Equiv = "a" }, "equiv"},
 		{"loot", func(p *dungeon.Plan) { p.Legs[0].Boss.LootItem = &dungeon.ItemRef{Entry: 9} }, "loot_item"},
-		{"tactics", func(p *dungeon.Plan) { p.Legs[0].Boss.Tactics = &tactics.Tactics{} }, "tactics"},
 		{"wait_s", func(p *dungeon.Plan) { p.Legs[0].Boss.WaitS = 300 }, "wait_s"},
 		{"phase_entries", func(p *dungeon.Plan) { p.Legs[0].Boss.PhaseEntries = []uint32{7} }, "phase_entries"},
 		{"boss stand_pull", func(p *dungeon.Plan) { p.Legs[0].Boss.StandPull = true }, "stand_pull"},
@@ -68,16 +66,7 @@ func TestRouteRefusals(t *testing.T) {
 		{"skip_unreachable", func(p *dungeon.Plan) { p.Legs[0].Boss.SkipUnreachable = "swims" }, "skip_unreachable"},
 		{"boss team", func(p *dungeon.Plan) { p.Legs[0].Boss.Team = dungeon.TeamHorde }, "team"},
 		{"boss companions_loot", func(p *dungeon.Plan) { p.Legs[0].Boss.CompanionsLoot = boolPtr(true) }, "companions_loot"},
-		{"kill_first", func(p *dungeon.Plan) { p.KillFirst = []uint32{1} }, "kill_first"},
-		{"cc_priority", func(p *dungeon.Plan) { p.CCPriority = []uint32{1} }, "cc_priority"},
-		{"cc_always", func(p *dungeon.Plan) { p.CCAlways = []uint32{1} }, "cc_always"},
-		{"no_cc", func(p *dungeon.Plan) { p.NoCC = []uint32{1} }, "no_cc"},
-		{"summoned_kill_first", func(p *dungeon.Plan) {
-			p.KillFirst = []uint32{1}
-			p.SummonedKillFirst = []uint32{1}
-		}, "summoned_kill_first"},
 		{"pull_ceiling", func(p *dungeon.Plan) { p.PullCeiling = 6 }, "pull_ceiling"},
-		{"tank_min_hp", func(p *dungeon.Plan) { p.TankMinHP = 800 }, "tank_min_hp"},
 		{"watchdog", func(p *dungeon.Plan) { p.Watchdog = &dungeon.WatchdogConfig{} }, "watchdog"},
 	}
 	for _, c := range cases {
@@ -146,13 +135,13 @@ func TestPlanFiles(t *testing.T) {
 			t.Logf("%-32s refused: %s", base, strings.Join(fields, " "))
 		}
 	}
-	want := []string{
-		"kill_first", "cc_priority", "cc_always", "tank_min_hp",
-		"legs[6].boss.tactics", "legs[7].boss.tactics",
+	// Ragefire Chasm carries the plan format's in-fight run fields (kill_first, cc_priority, cc_always,
+	// tank_min_hp and two bosses' tactics). They are the module's own run inputs, so the route loads unchanged.
+	if got := table["ragefire_chasm.json"]; len(got) != 0 {
+		t.Fatalf("ragefire_chasm.json refuses %v, want it to load", got)
 	}
-	got := table["ragefire_chasm.json"]
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("ragefire_chasm.json refuses %v\nwant %v", got, want)
+	if route, err := LoadRoute("../../../dungeons/ragefire_chasm.json"); err != nil || len(route.Legs) != 9 {
+		t.Fatalf("ragefire route: %v legs=%d", err, len(route.Legs))
 	}
 }
 
@@ -249,5 +238,24 @@ func TestPlanRefusalText(t *testing.T) {
 	_, err := NewRoute(p)
 	if err == nil || !strings.Contains(err.Error(), "legs[0]") || !strings.Contains(err.Error(), "steps") {
 		t.Fatalf("error %v does not name legs[0].steps", err)
+	}
+}
+
+// TestPlanRunFieldsAreValidated: the run fields the route now accepts are still the plan loader's to validate, so
+// accepting the documented format never accepts a plan the format forbids.
+func TestPlanRunFieldsAreValidated(t *testing.T) {
+	const head = `{"version":1,"name":"p","map":389,"entrance":{"x":0,"y":0,"z":0}`
+	const leg = `"legs":[{"to":{"x":0,"y":10,"z":0}}]`
+	cases := []struct{ field, body string }{
+		{"tank_min_hp", `"tank_min_hp":50,` + leg},
+		{"kill_first", `"kill_first":[5],"cc_priority":[5],` + leg},
+		{"summoned_kill_first", `"kill_first":[5],"summoned_kill_first":[6],` + leg},
+		{"never_target", `"legs":[{"to":{"x":0,"y":10,"z":0},"boss":{"entry":1,"position":{"x":0,"y":0,"z":0},` +
+			`"tactics":{"kill_first":[5],"never_target":[5]}}}]`},
+	}
+	for _, c := range cases {
+		if _, err := dungeon.Parse("p.json", []byte(head+","+c.body+"}")); err == nil || !strings.Contains(err.Error(), c.field) {
+			t.Fatalf("%s: err %v, want a %s refusal", c.field, err, c.field)
+		}
 	}
 }
