@@ -48,7 +48,7 @@ func planExportCmd(args []string, stdout, stderr io.Writer) int {
 	withOptional := fs.String("with-optional", "", "optional leg names (comma list) written into the rows anyway (Zul'Farrak's gahzrilla), each with a warning: the item the leg needs is the operator's to give to the lead bot before .bot run start (a GM .additem); a name that is no optional leg is refused")
 	withLegs := fs.String("with-legs", "", "skip_export leg names (comma list) written into the rows anyway (Zul'Farrak's farraki_arena, zeljeb), each with a warning; a name that is no skip_export leg is refused")
 	force := fs.Bool("force", false, "let --out replace an existing file (never edit a migration that is applied)")
-	forever := fs.Bool("forever", false, "write the rows a server module that runs dungeon plans reads: the plan tables, one ai_dungeon_step_unit row per pack member, boss, boss.first add and patrol unit, and the boss rows; a plan field the format cannot carry is refused by name")
+	forever := fs.Bool("forever", false, "write the rows a server module that runs dungeon plans reads: the plan tables, one ai_dungeon_step_unit row per pack member, boss, boss.first add and patrol unit, the boss rows, and the plan's object steps (open, open_proof, use_on, loot, wait_object, wait_clear rows) with this server's object entries (the plan's alt_entries, keyed forever); a plan field the format cannot carry is refused by name")
 	report := fs.Bool("report", false, "with --forever: print one record per plan file (exported, or refused and why) and write nothing")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage

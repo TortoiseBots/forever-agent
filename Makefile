@@ -58,7 +58,7 @@ opcodes:
 # The delivered Zul'Gurub migration must be an export of THIS head, not of an older plan or cutter: export the
 # shipped plan with the live flags and diff it against the delivered file. Run it at the delivered commit: the
 # plan row's source column names the exporting commit.
-ZG_SQL ?= $(HOME)/TortoiseBots-audit/tests/zg-w38/20261105190000_world.sql
+ZG_SQL ?= $(HOME)/forever-agent-tests/zg-w38/20261105190000_world.sql
 MMAPS ?= $(HOME)/forever-agent-mmaps
 zg-export:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
@@ -83,7 +83,7 @@ addon-host:
 
 # Regenerate the knowledge-base rotations and the spells oracle from tools/kbrotgen/recipes and the KB. Needs PyYAML and
 # the KB checkout; not part of `make test` (the committed files and recipes are checked by TestKBRotationsMatchRecipes).
-KB ?= $(HOME)/TortoiseBots-audit/turtle-kb
+KB ?= $(HOME)/turtle-kb
 .PHONY: kb-rotations
 kb-rotations:
 	python3 -I tools/kbrotgen/kbrotgen.py --kb $(KB)

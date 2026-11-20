@@ -47,7 +47,7 @@ Every flag and its default:
 | `--listen` | `127.0.0.1:8790` | address the page is served on; a non-loopback address prints a warning |
 | `--allow-host` | none | host names or IPs the page accepts in its `Host` header besides loopback, comma separated; anything else gets 403 |
 | `--agents` | `auto` | `auto`, a comma list of RPC ports/addresses, or `auto,8770` to add one |
-| `--tests-dir` | `~/TortoiseBots-audit/tests` | the only folder `/files/...` serves; a missing folder means no files are linked |
+| `--tests-dir` | `~/forever-agent/tests` | the only folder `/files/...` serves; a missing folder means no files are linked |
 | `--traces-dir` | `~/turtle-agent/traces` | where agents write run traces; read for orders and the binary SHA, never served |
 | `--plans-dir` | `~/turtle-agent/dungeons` | plan files for the map, comma separated; reloaded when a file changes |
 | `--minimap-dir` | `~/turtle-agent-minimaps` | map images from `minimap-extract`; the run map draws over the image of its map id |

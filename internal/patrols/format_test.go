@@ -20,7 +20,7 @@ func sampleFile() *File {
 			Entries: []uint32{12129}, Name: "Onyxian Warder",
 			Path:    []dungeon.Point{{X: 49.8, Y: -114.6, Z: -24.3}, {X: 60, Y: -114.6, Z: -24.3}, {X: 60, Y: -100, Z: -24.3}},
 			WaitsMS: []int{0, 2000, 0}, PeriodS: 33.4, PeriodEstimate: false, CyclesSeen: 3,
-			PhaseEpochMS: 1793223608123, Complete: true, Samples: 900, Source: "record m910q 2026-10-29",
+			PhaseEpochMS: 1793223608123, Complete: true, Samples: 900, Source: "record test1 2026-10-29",
 		}},
 		Static:    []Static{{GUID: "0xF130000000000002", Entry: 12129, X: 1, Y: 2, Z: 3}},
 		Wanderers: []Wanderer{{GUID: "0xF130000000000003", Entry: 12129, Center: dungeon.Point{X: 1, Y: 2, Z: 3}, Radius: 4.2}},

@@ -11,7 +11,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/testfixture"
 )
 
-// The login of a level-1 GM warrior on the m910q test server (testdata/captures/m1-login.twcap,
+// The login of a level-1 GM warrior on the test1 test server (testdata/captures/m1-login.twcap,
 // record SMSG_INITIAL_SPELLS, 213 bytes): 52 spells, no cooldowns. It holds Heroic Strike (78)
 // and Battle Stance (2457), and spell ids above 45000 that only Turtle has.
 func TestInitialSpellsFromCapture(t *testing.T) {

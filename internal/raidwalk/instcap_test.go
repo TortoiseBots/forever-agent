@@ -19,12 +19,12 @@ func capLedgerWith(server string, ages ...time.Duration) *CapLedger {
 }
 
 func TestCapCountsPerServerInTheLastHour(t *testing.T) {
-	l := capLedgerWith("m910q", 5*time.Minute, 20*time.Minute, 59*time.Minute)
-	l.Record("tortoise-test2", CapEntry{At: capT0}, capT0)
-	if n := l.Count("m910q", capT0); n != 3 {
-		t.Fatalf("m910q count = %d, want 3", n)
+	l := capLedgerWith("test1", 5*time.Minute, 20*time.Minute, 59*time.Minute)
+	l.Record("test2", CapEntry{At: capT0}, capT0)
+	if n := l.Count("test1", capT0); n != 3 {
+		t.Fatalf("test1 count = %d, want 3", n)
 	}
-	if n := l.Count("tortoise-test2", capT0); n != 1 {
+	if n := l.Count("test2", capT0); n != 1 {
 		t.Fatalf("test2 count = %d, want 1", n)
 	}
 	if n := l.Count("nowhere", capT0); n != 0 {
@@ -33,74 +33,74 @@ func TestCapCountsPerServerInTheLastHour(t *testing.T) {
 }
 
 func TestCapWindowAges(t *testing.T) {
-	l := capLedgerWith("m910q", 59*time.Minute, 30*time.Minute, 10*time.Minute, 1*time.Minute)
-	if n := l.Count("m910q", capT0); n != 4 {
+	l := capLedgerWith("test1", 59*time.Minute, 30*time.Minute, 10*time.Minute, 1*time.Minute)
+	if n := l.Count("test1", capT0); n != 4 {
 		t.Fatalf("count = %d, want 4", n)
 	}
 	// The oldest entry (59 min old) leaves the window in 1 minute.
-	if w := l.WaitFor("m910q", InstanceCapPerAccount, capT0); w != time.Minute {
+	if w := l.WaitFor("test1", InstanceCapPerAccount, capT0); w != time.Minute {
 		t.Fatalf("wait = %s, want 1m", w)
 	}
-	if n := l.Count("m910q", capT0.Add(61*time.Second)); n != 3 {
+	if n := l.Count("test1", capT0.Add(61*time.Second)); n != 3 {
 		t.Fatalf("count after the oldest aged out = %d, want 3", n)
 	}
-	if w := l.WaitFor("m910q", InstanceCapPerAccount, capT0.Add(61*time.Second)); w != 0 {
+	if w := l.WaitFor("test1", InstanceCapPerAccount, capT0.Add(61*time.Second)); w != 0 {
 		t.Fatalf("wait below the threshold = %s, want 0", w)
 	}
 	// At exactly 60 minutes the entry is out.
-	if n := l.Count("m910q", capT0.Add(time.Minute)); n != 3 {
+	if n := l.Count("test1", capT0.Add(time.Minute)); n != 3 {
 		t.Fatalf("count at the 60 min mark = %d, want 3", n)
 	}
 }
 
 func TestCapWaitAtFiveWaitsForTheSecondOldest(t *testing.T) {
-	l := capLedgerWith("m910q", 50*time.Minute, 40*time.Minute, 30*time.Minute, 20*time.Minute, 10*time.Minute)
+	l := capLedgerWith("test1", 50*time.Minute, 40*time.Minute, 30*time.Minute, 20*time.Minute, 10*time.Minute)
 	// Dropping to 3 needs the second entry out, at +20 min, not the oldest at +10.
-	if w := l.WaitFor("m910q", InstanceCapPerAccount, capT0); w != 20*time.Minute {
+	if w := l.WaitFor("test1", InstanceCapPerAccount, capT0); w != 20*time.Minute {
 		t.Fatalf("wait = %s, want 20m", w)
 	}
 }
 
 func TestCapRecordPrunesOldEntries(t *testing.T) {
-	l := capLedgerWith("m910q", 90*time.Minute, 5*time.Minute)
-	l.Record("m910q", CapEntry{At: capT0}, capT0)
-	if got := len(l.Servers["m910q"].Entries); got != 2 {
+	l := capLedgerWith("test1", 90*time.Minute, 5*time.Minute)
+	l.Record("test1", CapEntry{At: capT0}, capT0)
+	if got := len(l.Servers["test1"].Entries); got != 2 {
 		t.Fatalf("entries kept = %d, want 2", got)
 	}
 }
 
 func TestCapServerRestartResets(t *testing.T) {
-	l := capLedgerWith("m910q", 50*time.Minute, 40*time.Minute, 5*time.Minute, 2*time.Minute)
+	l := capLedgerWith("test1", 50*time.Minute, 40*time.Minute, 5*time.Minute, 2*time.Minute)
 	start := capT0.Add(-10 * time.Minute) // the worldserver started 10 minutes ago
-	if !l.NoteServerStart("m910q", start) {
+	if !l.NoteServerStart("test1", start) {
 		t.Fatal("NoteServerStart did not report the restart")
 	}
-	if n := l.Count("m910q", capT0); n != 2 {
+	if n := l.Count("test1", capT0); n != 2 {
 		t.Fatalf("count after the restart = %d, want 2 (only the entries since the start)", n)
 	}
 	// The same start time again changes nothing.
-	if l.NoteServerStart("m910q", start) {
+	if l.NoteServerStart("test1", start) {
 		t.Fatal("same start time reported as a restart")
 	}
 	// A later start (another restart) drops everything before it.
-	if !l.NoteServerStart("m910q", capT0) {
+	if !l.NoteServerStart("test1", capT0) {
 		t.Fatal("a later start was not a restart")
 	}
-	if n := l.Count("m910q", capT0); n != 0 {
+	if n := l.Count("test1", capT0); n != 0 {
 		t.Fatalf("count after the second restart = %d, want 0", n)
 	}
 	// A zero start (no read) leaves the ledger alone.
-	l.Record("m910q", CapEntry{At: capT0}, capT0)
-	if l.NoteServerStart("m910q", time.Time{}) || l.Count("m910q", capT0) != 1 {
+	l.Record("test1", CapEntry{At: capT0}, capT0)
+	if l.NoteServerStart("test1", time.Time{}) || l.Count("test1", capT0) != 1 {
 		t.Fatal("a zero start time changed the ledger")
 	}
 }
 
 func TestCapReset(t *testing.T) {
-	l := capLedgerWith("m910q", time.Minute, 2*time.Minute)
-	l.Record("tortoise-test2", CapEntry{At: capT0}, capT0)
-	l.Reset("m910q")
-	if l.Count("m910q", capT0) != 0 || l.Count("tortoise-test2", capT0) != 1 {
+	l := capLedgerWith("test1", time.Minute, 2*time.Minute)
+	l.Record("test2", CapEntry{At: capT0}, capT0)
+	l.Reset("test1")
+	if l.Count("test1", capT0) != 0 || l.Count("test2", capT0) != 1 {
 		t.Fatal("Reset must clear that server only")
 	}
 }
@@ -142,10 +142,10 @@ func TestCapFileRoundTrip(t *testing.T) {
 }
 
 func TestCapReservationCountsAndOnlyOneOfThreeIsAdmittedAtThree(t *testing.T) {
-	l := capLedgerWith("m910q", 30*time.Minute, 20*time.Minute, 10*time.Minute)
-	ok1, n1, _ := l.TryReserve("m910q", "a#1", InstanceCapPerAccount, capT0)
-	ok2, n2, w2 := l.TryReserve("m910q", "b#2", InstanceCapPerAccount, capT0)
-	ok3, n3, _ := l.TryReserve("m910q", "c#3", InstanceCapPerAccount, capT0)
+	l := capLedgerWith("test1", 30*time.Minute, 20*time.Minute, 10*time.Minute)
+	ok1, n1, _ := l.TryReserve("test1", "a#1", InstanceCapPerAccount, capT0)
+	ok2, n2, w2 := l.TryReserve("test1", "b#2", InstanceCapPerAccount, capT0)
+	ok3, n3, _ := l.TryReserve("test1", "c#3", InstanceCapPerAccount, capT0)
 	if !ok1 || n1 != 3 {
 		t.Fatalf("first: admitted %v at %d", ok1, n1)
 	}
@@ -157,7 +157,7 @@ func TestCapReservationCountsAndOnlyOneOfThreeIsAdmittedAtThree(t *testing.T) {
 		t.Fatalf("wait = %s, want %s", w2, InstanceCapReserveFor)
 	}
 	// The same owner asking again does not count against itself.
-	if ok, _, _ := l.TryReserve("m910q", "a#1", InstanceCapPerAccount, capT0); !ok {
+	if ok, _, _ := l.TryReserve("test1", "a#1", InstanceCapPerAccount, capT0); !ok {
 		t.Fatal("an owner's own reservation blocked it")
 	}
 }
@@ -362,13 +362,13 @@ func TestCapThirtyLetsSixRaidsAnHour(t *testing.T) {
 	l := &CapLedger{}
 	for i := 0; i < 6; i++ {
 		owner := "w" + string(rune('0'+i))
-		admitted, n, wait := l.TryReserve("m910q", owner, 30, capT0)
+		admitted, n, wait := l.TryReserve("test1", owner, 30, capT0)
 		if !admitted {
 			t.Fatalf("raid %d refused at count %d (wait %s), want admitted below the cap of 30", i+1, n, wait)
 		}
-		l.Confirm("m910q", owner, CapEntry{At: capT0, Accounts: []string{"a1", "a2"}}, capT0)
+		l.Confirm("test1", owner, CapEntry{At: capT0, Accounts: []string{"a1", "a2"}}, capT0)
 	}
-	if n, known := l.Busiest("m910q", capT0); !known || n != 6 {
+	if n, known := l.Busiest("test1", capT0); !known || n != 6 {
 		t.Fatalf("busiest account = %d known %v, want 6 true", n, known)
 	}
 }
@@ -379,12 +379,12 @@ func TestCapFiveKeepsTheFifthOut(t *testing.T) {
 	l := &CapLedger{}
 	for i := 0; i < 4; i++ {
 		owner := "w" + string(rune('0'+i))
-		if admitted, n, _ := l.TryReserve("m910q", owner, 5, capT0); !admitted {
+		if admitted, n, _ := l.TryReserve("test1", owner, 5, capT0); !admitted {
 			t.Fatalf("raid %d refused at count %d, want admitted below 4", i+1, n)
 		}
-		l.Confirm("m910q", owner, CapEntry{At: capT0, Accounts: []string{"a1", "a2"}}, capT0)
+		l.Confirm("test1", owner, CapEntry{At: capT0, Accounts: []string{"a1", "a2"}}, capT0)
 	}
-	admitted, n, wait := l.TryReserve("m910q", "w4", 5, capT0)
+	admitted, n, wait := l.TryReserve("test1", "w4", 5, capT0)
 	if admitted || n != 4 || wait != time.Hour {
 		t.Fatalf("fifth: admitted %v count %d wait %s, want false 4 1h", admitted, n, wait)
 	}

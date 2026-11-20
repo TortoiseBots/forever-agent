@@ -87,6 +87,9 @@ type Action struct {
 	Recovery bool
 	// Practice marks one practice revive of the run's budget: the budget gates it and it is counted as PRACTICE.
 	Practice bool
+	// PracticeCost is how many bots the practice action raises, and so how much of the budget it spends: 0 means one.
+	// The wipe's party revive sets it to the party's size, because one line raises every member.
+	PracticeCost int
 	// Plan is ActionRunStart's plan name: the loaded plan's own name.
 	Plan string
 	// Reason is ActionRunStop's and ActionRunPause's reason, in words the module records with the run.
@@ -150,6 +153,9 @@ type ActionReport struct {
 	Info *tbcmd.InstanceInfoReport
 	// Run is the run record ActionRunStart, ActionRunStop, ActionRunPause and ActionRunResume answer with.
 	Run *tbcmd.RunState
+	// Targets are the `target=` labels a setup answer named: the party (its leader or the commander it was bound
+	// to) a party command resolved to, or the one character. Empty for an answer that only acknowledges.
+	Targets []tbcmd.ActionTarget
 	// Code is the module's refusal code when the action was refused ("refused" for a bad reply or a timeout).
 	Code string
 }
@@ -293,13 +299,22 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 		return out.action, why
 	}
 	if a.Practice {
-		r.practice++
+		r.practice += r.practiceCost(a)
 		r.event("practice_revive", map[string]any{"bot": r.roleName(a.Who), "leg": r.lastLegName()})
 		if r.rec != nil {
 			r.rec.UpdatePull(func(p *PullRecord) { p.PracticeRevives++ })
 		}
 	}
 	return out.action, ""
+}
+
+// practiceCost is what one practice action spends of the budget: the bots it raises. A revive of one bot (or an
+// action that names no cost) is one; the wipe's party revive names the whole party.
+func (r *Run) practiceCost(a Action) int {
+	if a.PracticeCost > 0 {
+		return a.PracticeCost
+	}
+	return 1
 }
 
 // actionCode is the module's refusal code, or "refused" for another error (a bad reply, a timeout).
@@ -354,7 +369,9 @@ func (r *Run) actionStateGate(ctx context.Context, a Action) string {
 		if !r.practiceOn() {
 			return "practice"
 		}
-		if a.Practice && r.practice >= r.lim.MaxPractice {
+		// The budget is checked for the whole action: a party revive that cannot pay for every member is not sent,
+		// so the raise never half-happens.
+		if a.Practice && r.practice+r.practiceCost(a) > r.lim.MaxPractice {
 			return "budget"
 		}
 		if !r.refresh(ctx) {
@@ -417,6 +434,12 @@ func (r *Run) actionFightGate(ctx context.Context, a Action) string {
 	}
 	if !r.repAt.After(r.lastOrderAt) {
 		return "stale"
+	}
+	// A watch's run starts on the plan's map, in the instance the party entered. ready() compares the party with its
+	// own map (the observer may be elsewhere), so without this a party that zoned out together between the placement
+	// check and a retried start would pass as ready and the module would be asked to start a run off the plan's map.
+	if r.cfg.Watch && !r.partyInInstance() {
+		return "party-map"
 	}
 	if ok, why := r.ready(); !ok {
 		return why

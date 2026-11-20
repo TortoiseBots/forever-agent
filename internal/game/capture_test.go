@@ -12,7 +12,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/worldconn"
 )
 
-// fixture loads a capture recorded on m910q by a milestone's live step (ruling P11:
+// fixture loads a capture recorded on test1 by a milestone's live step (ruling P11:
 // the shared testfixture.Load does the work).
 func fixture(t *testing.T, name string) []capture.Record {
 	t.Helper()

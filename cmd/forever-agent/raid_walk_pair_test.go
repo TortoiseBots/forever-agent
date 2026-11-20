@@ -841,7 +841,7 @@ func TestRaidWalkPairTeardownReportReleasesLease(t *testing.T) {
 				mu.Lock()
 				teardowns++
 				mu.Unlock()
-				fmt.Fprintln(stdout, `{"server":"m910q","slot":"2","steps":[{"step":"lease","status":"ok","detail":"released"}],"failed":0}`)
+				fmt.Fprintln(stdout, `{"server":"test1","slot":"2","steps":[{"step":"lease","status":"ok","detail":"released"}],"failed":0}`)
 				return exitOK
 			},
 		}, walkDeps{}, nil

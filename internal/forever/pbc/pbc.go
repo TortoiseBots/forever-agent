@@ -769,7 +769,12 @@ func ParseEvent(fields []string) (Event, error) {
 	if len(fields) < 4 {
 		return Event{}, fmt.Errorf("%w: an event has %d field(s)", ErrProtoMismatch, len(fields))
 	}
-	id, _ := parseInt(fields[1])
+	// The bot id is a number, or 0 for an event that names no bot: anything else is a frame this client cannot read,
+	// exactly as an unparseable field in the roster and the detail is. A negative id would wrap into a large uint32.
+	id, err := parseInt(fields[1])
+	if err != nil || id < 0 {
+		return Event{}, fmt.Errorf("%w: an event's bot id is %q", ErrProtoMismatch, fields[1])
+	}
 	return Event{
 		Severity: fields[0],
 		BotID:    uint32(id),

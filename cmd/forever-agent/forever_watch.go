@@ -73,7 +73,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --repulls is 0-100, --member-deaths 1-20 and --slow-factor 1-20")
 		return exitUsage
 	}
-	route, err := driver.LoadRoute(*plan)
+	route, err := driver.LoadWatchRoute(*plan)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever dungeon-watch: the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused

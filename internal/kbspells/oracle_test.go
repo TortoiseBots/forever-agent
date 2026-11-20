@@ -12,7 +12,7 @@ import (
 )
 
 // fixtureFS is the hand-written warrior and hunter fixture (internal/kbspells/testdata/oracle, derived by hand from
-// ~/TortoiseBots-audit/turtle-kb/classes/yaml and credited to the Turtle WoW knowledge base (stevemcqueenz),
+// the Turtle KB's classes/yaml, credited to the Turtle WoW knowledge base (stevemcqueenz),
 // https://stevemcqueenz.github.io/turtle-knowledge-base-/#/, plus each YAML's own sources) joined with the committed common data.
 func fixtureFS(t *testing.T) fstest.MapFS {
 	t.Helper()

@@ -2381,7 +2381,7 @@ func TestRaidWalkReadsTbPatrolsFile(t *testing.T) {
  "patrols":[{"id":"52050","guids":["0xF130002F61000ABC"],"spawn_guids":[52050],"entries":[12129],"name":"Onyxian Warder",
    "path":[{"x":49.8,"y":-114.6,"z":-24.3},{"x":30,"y":-114.6,"z":-24.3}],"waits_ms":[0,2000],"period_s":33.4,
    "period_estimate":false,"cycles_seen":3,"phase_epoch_ms":1793223608123,"complete":true,"samples":900,
-   "source":"record m910q 2026-10-29"}],
+   "source":"record test1 2026-10-29"}],
  "static":[],"wanderers":[],"stopped":""}`
 	path := filepath.Join(t.TempDir(), "patrols-249.json")
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
@@ -4810,7 +4810,7 @@ func TestRaidWalkWipeRestCountsWallTime(t *testing.T) {
 
 // selfRegroupArm arms a status line whose delivery kills every hire in that same poll, so the
 // poll that reads the status line also reads the all-dead frames — exactly as the live server
-// reports a run that is regrouping by itself after a wipe (walk 17b m910q s4, test2 s2: the
+// reports a run that is regrouping by itself after a wipe (walk 17b test1 s4, testB s2: the
 // status line and the deaths arrive together). queue also puts the line in the events stream.
 func selfRegroupArm(f *fixture, raw string, queue bool) {
 	f.agent.mu.Lock()
@@ -4866,7 +4866,7 @@ func mcWipeFights() []walkFightRow {
 	return []walkFightRow{{ID: "4-5", Key: "Commander\x001793219890\x004-5", Dur: 1200, Outcome: "kill", BossName: "Lucifron", Leg: "lucifron", Step: 3, Deaths: 1}}
 }
 
-// TestRaidWalkWipeSelfRegroupRecoversWithDashboard (walk 17b m910q s4 replay): the run is still
+// TestRaidWalkWipeSelfRegroupRecoversWithDashboard (walk 17b test1 s4 replay): the run is still
 // running when the wipe lands and regroups by itself ("regrouping by itself (1 of 2 at this
 // step)"). The walk revives the raid and lets the run go on: no out-of-combat rest, no `run
 // resume`, one --wipe-resume spent, and the watch loop runs again. Before the fix the walk sits
@@ -5239,7 +5239,7 @@ func TestRaidWalkWipeSelfRegroupBudget(t *testing.T) {
 	}
 }
 
-// TestRaidWalkWipeSelfRegroupBossEngagedNotes (walk 17b m910q s2 replay): the frames still hold an
+// TestRaidWalkWipeSelfRegroupBossEngagedNotes (walk 17b test1 s2 replay): the frames still hold an
 // engaged plan boss (a party target, hp below full) when the self-regroup wipe lands, so the walk
 // ends the wipe the old way — and says why.
 func TestRaidWalkWipeSelfRegroupBossEngagedNotes(t *testing.T) {
@@ -9487,8 +9487,8 @@ func TestRaidWalkBossDoneDryRun(t *testing.T) {
 
 // Walks 12/13: the single-slot form takes the plan before its flags, as the README documents.
 func TestRaidWalkPlanFirstSingleSlot(t *testing.T) {
-	flagsFirst := []string{"--server", "m910q", "--slot", "6", "--dry-run", "--until", "step 41", "zul_gurub"}
-	planFirst := []string{"zul_gurub", "--server", "m910q", "--slot", "6", "--dry-run", "--until", "step 41"}
+	flagsFirst := []string{"--server", "test1", "--slot", "6", "--dry-run", "--until", "step 41", "zul_gurub"}
+	planFirst := []string{"zul_gurub", "--server", "test1", "--slot", "6", "--dry-run", "--until", "step 41"}
 	var discard bytes.Buffer
 	want, code := parseRaidWalkArgs(flagsFirst, &discard)
 	if code != exitOK {
@@ -9506,7 +9506,7 @@ func TestRaidWalkPlanFirstSingleSlot(t *testing.T) {
 
 func TestRaidWalkPlanFirstWithSql(t *testing.T) {
 	var stderr bytes.Buffer
-	o, code := parseRaidWalkArgs([]string{"zul_gurub", "--server", "m910q", "--slot", "6", "--sql", "walk.sql"}, &stderr)
+	o, code := parseRaidWalkArgs([]string{"zul_gurub", "--server", "test1", "--slot", "6", "--sql", "walk.sql"}, &stderr)
 	if code != exitOK {
 		t.Fatalf("plan-first with --sql: exit %d, want %d (stderr %q)", code, exitOK, stderr.String())
 	}

@@ -43,8 +43,9 @@ func (r *Run) prepare(ctx context.Context) string {
 	}
 	var why string
 	if r.cfg.Watch {
-		// A watch is not one of our parties: the leader is the bot the module runs, and the roster is where the
-		// five names come from. PREPARE then checks it exactly as a run does (levels, roles, online, commanded).
+		// A watch is not one of our parties: the tank is the bot the module's run names, the commander is one of
+		// the module's own bots outside it, and the roster is where the five names come from. PREPARE then checks it
+		// exactly as a run does (levels, roles, online, commanded).
 		why = r.adoptRoster(party)
 	} else {
 		why = rosterWhy(r.cfg, party)
@@ -54,7 +55,7 @@ func (r *Run) prepare(ctx context.Context) string {
 		return ""
 	}
 	deadline := r.now().Add(r.lim.Prepare)
-	last := "rest"
+	last, logged := "rest", ""
 	for {
 		if !r.refresh(ctx) {
 			if r.stopReason != "" {
@@ -65,8 +66,15 @@ func (r *Run) prepare(ctx context.Context) string {
 			return r.afterPrepare()
 		} else {
 			last = reasonCode(why)
+			// One line per changed reason: a party that is not ready says why (a member with the engine off is
+			// noengine:<member>, never a silent wait and never "blind").
+			if why != logged {
+				logged = why
+				r.logf("prepare: not ready: %s", why)
+			}
 		}
 		if !r.now().Before(deadline) {
+			r.logf("prepare: not ready after %.0fs: %s", r.lim.Prepare.Seconds(), last)
 			r.stop("prepare:" + last)
 			return ""
 		}
@@ -131,19 +139,27 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 	return ""
 }
 
-// adoptRoster fills a watch's party from the module's roster: the leader first (so every role lookup has the tank
-// where the driver's own run keeps it), then the one healer, then the three damage dealers. It refuses what a run's
-// PREPARE refuses — five members, the named leader leading, everyone online and above the entry level, the roles —
-// and two things only a watch needs: every member a host bot, and every other member already commanded, because the
-// module's start refuses a party it would have to bind itself.
+// adoptRoster fills a watch's party from the module's roster: the tank first (so every role lookup has the tank
+// where the driver's own run keeps it), then the one healer, then the three damage dealers. The party's commander is
+// the module's own bot, outside the party; this character is only an observer and is refused if the roster names it
+// as the commander. It refuses what a run's PREPARE refuses — five members, exactly one member leader flag naming
+// the leader the summary names, the module's run leader being neither the party's tank nor its leader, everyone
+// online and above the entry level, the roles — and two things only a watch needs: every member a host bot, and
+// every member already commanded, because the module's start refuses a party it would have to bind itself.
 func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if len(p.Members) != 5 {
 		return "roster"
 	}
-	if r.cfg.Leader == "" || !strings.EqualFold(p.Leader, r.cfg.Leader) {
+	if r.cfg.Leader == "" {
 		return "leader"
 	}
-	var heals, dps []string
+	if r.cfg.Commander != "" && strings.EqualFold(p.Commander, r.cfg.Commander) {
+		// The observer never commands the party: a roster that names it is the wrong setup, caught before the entry.
+		return "observer-commander"
+	}
+	var tank, heal, flagged string
+	var flags int
+	var dps []string
 	for _, m := range p.Members {
 		if !m.Online {
 			return "offline"
@@ -157,22 +173,42 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 		if !m.Commanded {
 			return "not-commanded"
 		}
-		if strings.EqualFold(m.Name, r.cfg.Leader) {
-			continue
+		if m.Leader {
+			flagged, flags = m.Name, flags+1
 		}
 		switch {
+		case m.HasRole && m.Role == "tank":
+			if tank != "" {
+				return "roles"
+			}
+			tank = m.Name
 		case m.HasRole && m.Role == "healer":
-			heals = append(heals, m.Name)
+			if heal != "" {
+				return "roles"
+			}
+			heal = m.Name
 		case m.HasRole && m.Role == "dps":
 			dps = append(dps, m.Name)
 		default:
 			return "roles"
 		}
 	}
-	if len(heals) != 1 || len(dps) != 3 {
+	if tank == "" || heal == "" || len(dps) != 3 {
 		return "roles"
 	}
-	r.cfg.Party = append([]string{r.cfg.Leader, heals[0]}, dps...)
+	// The summary and the member lines must agree on who leads: exactly one member carries the flag, and it is the
+	// member the summary names. A malformed or skewed report that disagrees would let a --leader the party does not
+	// follow through, and the entry would run before the module's start refused it.
+	if flags != 1 || !strings.EqualFold(flagged, p.Leader) {
+		return "leader"
+	}
+	// The module's run starts on the bot the watch names, and the start refuses a leader that does not lead its
+	// party: the name must be the party's tank or the member that holds the party's leader flag (a healer or a dps
+	// may hold it). Any other name would only be refused later by the module, after the entry and its teleports.
+	if !strings.EqualFold(r.cfg.Leader, tank) && !strings.EqualFold(r.cfg.Leader, p.Leader) {
+		return "leader"
+	}
+	r.cfg.Party = append([]string{tank, heal}, dps...)
 	return ""
 }
 
@@ -218,10 +254,17 @@ func (r *Run) travel(ctx context.Context) string {
 			r.progress()
 			return StateEnter
 		} else if cmdDone && partyDone && !followSent {
-			_, why := r.send(ctx, "party", "follow", r.cfg.Commander, nil)
-			followSent = why == "" || r.lost
-			if r.stopReason != "" || r.lost {
-				return ""
+			if r.cfg.Watch {
+				// The party's master is the module's own bot commander, never this character: a follow order
+				// naming the observer would order a party it does not command. The party's teleport above already
+				// moved it to the portal.
+				followSent = true
+			} else {
+				_, why := r.send(ctx, "party", "follow", r.cfg.Commander, nil)
+				followSent = why == "" || r.lost
+				if r.stopReason != "" || r.lost {
+					return ""
+				}
 			}
 		}
 		if !r.now().Before(deadline) {
@@ -299,9 +342,15 @@ func (r *Run) enter(ctx context.Context) string {
 			}
 			if r.enteredNow() {
 				r.progress()
+				if r.cfg.Watch {
+					// The party is in; the observer is a GM who comes in on its own terms. A shut gate or a refusal
+					// leaves it outside and the watch goes on: it reads the module, not the map.
+					r.observerIn(ctx, tank)
+					return StateLegWalk
+				}
 				return StateLegWalk
 			}
-			if r.cfg.Enter != "portal" && enterSent && !teleSent {
+			if !r.cfg.Watch && r.cfg.Enter != "portal" && enterSent && !teleSent {
 				if tb := r.bot(tank); tb != nil && tb.Map == r.route.Map {
 					// The commander comes in at the tank's side; the module's teleport is the first choice and the
 					// core's appear the fallback. Both are moving actions and pass their own gate.
@@ -341,21 +390,56 @@ func (r *Run) enter(ctx context.Context) string {
 	}
 }
 
-// enteredNow says whether the commander and every bot are on the instance map in one instance.
+// enteredNow says whether the party is in: in a run, the commander and every bot on the instance map in one instance;
+// in a watch, the party alone, because the observer may still be outside. The party's map is compared with the
+// plan's, never with the observer's.
 func (r *Run) enteredNow() bool {
-	if r.mapID != r.route.Map || r.between {
+	if !r.cfg.Watch && (r.mapID != r.route.Map || r.between) {
 		return false
 	}
-	if len(r.rep.Bots) != 5 {
+	return r.partyInInstance()
+}
+
+// partyInInstance says whether every party member stands on the plan's map in one instance, from a whole report fresh
+// enough to act on: a report whose read failed, whose counts disagree or whose five lines are not the party is not
+// evidence of anything. Instance 0 is the open world, never the instance a plan names: five bots on map 0 are not in.
+func (r *Run) partyInInstance() bool {
+	if !r.reportComplete() || !r.repFresh() {
 		return false
 	}
 	inst := r.rep.Bots[0].Instance
+	if inst == 0 {
+		return false
+	}
 	for _, b := range r.rep.Bots {
 		if b.Map != r.route.Map || b.Instance != inst {
 			return false
 		}
 	}
 	return true
+}
+
+// observerIn brings the outside observer to the tank's side once a watched party is in. The watch never waits for
+// it: the observer is a GM and reads the module from wherever it stands, so a shut gate or a refusal is logged and
+// the watch goes on; only a lost link or a pending stop is not. The module's teleport is the first choice, the
+// core's appear the fallback.
+func (r *Run) observerIn(ctx context.Context, tank string) {
+	_, why := r.act(ctx, Action{Kind: ActionTeleTo, Who: r.cfg.Commander, Other: tank})
+	switch why {
+	case "":
+		r.logf("watch: the observer is at the tank's side")
+		return
+	case "link", "stop":
+		return
+	}
+	_, why = r.act(ctx, Action{Kind: ActionAppear, Who: tank})
+	switch why {
+	case "":
+		r.logf("watch: the observer appeared at the tank's side")
+	case "link", "stop":
+	default:
+		r.logf("watch: the observer stays outside (%s); the watch goes on", why)
+	}
 }
 
 // walkResult is how one walk ended.
@@ -1415,9 +1499,12 @@ func (r *Run) wipe(ctx context.Context) string {
 	revived := false
 	next := 0
 	for next < len(r.cfg.Party) {
-		a := Action{Kind: ActionRevive, Who: "party", Recovery: true}
+		// The revive raises the whole party, so it spends one practice per member; the teleports that gather the
+		// party afterwards are part of that same rescue and spend nothing. A budget that cannot pay for the whole
+		// revive refuses it before anything is sent (actStep stops the run on "budget").
+		a := Action{Kind: ActionRevive, Who: "party", Recovery: true, Practice: true, PracticeCost: len(r.cfg.Party)}
 		if revived {
-			a = Action{Kind: ActionTeleTo, Who: r.cfg.Party[next], Other: r.cfg.Commander, Recovery: true, Practice: true}
+			a = Action{Kind: ActionTeleTo, Who: r.cfg.Party[next], Other: r.cfg.Commander, Recovery: true}
 		}
 		done, retry := r.actStep(ctx, a, "wipe")
 		if done {

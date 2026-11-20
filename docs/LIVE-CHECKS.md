@@ -43,7 +43,7 @@ spell on an enemy-faction player) and compare the text.
 
 ## Falling after `.go xyz` and after a knockback (final review M13, #23)
 
-Since #23 the agent falls and lands on the navmesh floor ([Moving](okf/agent/movement-guide.md)). Run on m910q build 17,
+Since #23 the agent falls and lands on the navmesh floor ([Moving](okf/agent/movement-guide.md)). Run on a test server (build 17),
 2026-10-12 (PR #31):
 
 - `.go xyz` 20 yd above flat ground (GM account): fell 1439 ms, landed at the mesh floor 26.82; the server's `.gps`
@@ -54,7 +54,7 @@ Since #23 the agent falls and lands on the navmesh floor ([Moving](okf/agent/mov
 
 Still open:
 
-1. The m910q anticheat has no `anticheat.conf` (`[Anticheat] Could not find configuration file`), so every
+1. The test-server anticheat has no `anticheat.conf` (`[Anticheat] Could not find configuration file`), so every
    detector's thresholds are 0 (`AnticheatConfig::IsEnabled` false) and `Movement.SpeedHack.Enable` is off: no
    CHEAT_TYPE can fire there. The steps were replayed offline against `GetMaxAllowedDist` instead. Repeat with the
    template (`src/game/Anticheat/anticheat.conf.readonly`) installed.
@@ -63,7 +63,7 @@ Still open:
 
 ## Game objects over RPC (#73 step 1)
 
-Run on m910q build 17, 2026-10-13 (GM account, `.gm visible on`, own character only; teleports by `teleport`), Uldaman, map 70:
+Run on a test server (build 17), 2026-10-13 (GM account, `.gm visible on`, own character only; teleports by `teleport`), Uldaman, map 70:
 
 - `gameobjects` at the entrance listed 55 objects within 200 yd, named from the query responses (Dwarven Campfire, Baelog's Chest, Keystone,
   Large Mithril Bound Chest ...). Doors carry flags 32, the Ancient Vault 33 (in use, `usable` false), the Large Mithril Bound Chest 2 (`locked`).
@@ -80,8 +80,8 @@ Still open: a lever or button (type 1), a goober or altar (type 10) and a `text`
 
 ## Dungeon plan: Uldaman (#73 step 2)
 
-`dungeons/uldaman.json` was written from the world database (m910q, 2026-10-13, SELECTs only) and checked offline: every waypoint
-(39 of them, entrance to Ironaya) is a `complete` navmesh route from the one before it (`TestUldamanOnNavmesh`, map 70 tiles from m910q).
+`dungeons/uldaman.json` was written from the world database (a test server, 2026-10-13, SELECTs only) and checked offline: every waypoint
+(39 of them, entrance to Ironaya) is a `complete` navmesh route from the one before it (`TestUldamanOnNavmesh`, map 70 tiles from a test server).
 Nothing in it has been walked by an agent yet. Still open, for the driver (step 3):
 
 - The navmesh has no doors: `path_to` goes through the Keystone and Seal of Khaz'Mul while they are closed. Walk the Keystone leg live
@@ -92,7 +92,7 @@ Nothing in it has been walked by an agent yet. Still open, for the driver (step 
 
 ## Dungeon driver on Uldaman (issue #73, step 3)
 
-First live run 2026-10-13 on m910q (build 19f, GM leader at level 45 with a tank, a healer, a mage and a hunter, `mmaps_dir` with map 070).
+First live run 2026-10-13 on a test server (build 19f, GM leader at level 45 with a tank, a healer, a mage and a hunter, `mmaps_dir` with map 070).
 It reached Ironaya once (554 s, 0 deaths, only with a trimmed plan) and failed five other times; the findings and what was changed:
 
 | Finding | Change |
@@ -188,7 +188,7 @@ These have not been seen on a live server, because the captures hold none: `SMSG
    (expected), and that the second `use_item` is refused with a `spell_fail` `reason_name` `not_ready`.
 
 Also: `SMSG_INITIAL_SPELLS` carries spell ids as u16, so a Turtle spell with an id above 65535 would be cut by the core;
-the m910q GM warrior's list held ids up to 56047. Look for a spell in the spellbook that `spells` lacks.
+the test server's GM warrior's list held ids up to 56047. Look for a spell in the spellbook that `spells` lacks.
 
 Also from the review of the agent state (items not settled without a live run):
 
@@ -579,7 +579,7 @@ Opening spell at it (`SpellEffects.cpp:1915-1988`), which sends the loot window 
 
 ## Bot brain: fixes from the live class smoke test (issue #80, PR "Bot brain: fixes from the live class smoke test")
 
-Built and tested against the scripted fake game; the symptoms come from the 2026-10-13 live run of all presets at level 40 (Tanaris, `~/TortoiseBots-audit/tests/live-classes/REPORT.md`).
+Built and tested against the scripted fake game; the symptoms come from the 2026-10-13 live run of all presets at level 40 (Tanaris, the live-classes report of 2026-10-13).
 Run again with a level 40 character of each class that has its spells (`.learn all_trainer`, `.maxskill` on yourself) and read `brain_decision`:
 
 1. **Swing.** `brain_start {"strategies":["arms_warrior"]}`, stand with the back to a mob 1 to 10 yd away and `attack`. Expect `attack_error` `bad_facing` once,
@@ -617,7 +617,7 @@ The trace writer, the recorder and the eleven checks run only against the fake g
 ## Remote leader (issue #83)
 
 Needs the TortoiseBots 19h build (the remote commander of #898/#899, with the `B` truncated field of #901 when that is in) and
-`AiPlayerbot.RemoteCommander = 1`; build 19g, which the m910q server runs, answers `.bot commander` with an unknown command and sends no
+`AiPlayerbot.RemoteCommander = 1`; build 19g, which the test server runs, answers `.bot commander` with an unknown command and sends no
 `TBM:VIEW`. The code is tested against fixtures built from the documented grammar only; nothing below has run live.
 
 1. **Toggle off.** With the switch off, `commander {"op":"bind","lead_bot":"<Name>"}` answers `err` `disabled`; `dungeon_run ... "mode":"remote"` fails
@@ -709,7 +709,7 @@ is in the agent's group (or owned by it) and standing within 10 yd, and a Tortoi
 
 ## Tank first: the party follows the tank's threat (issues #83, #80)
 
-Built and tested against the fake game and the fake feed only; none of it has run live. The 2026-10-14 deploy-19h run (`~/TortoiseBots-audit/tests/deploy-19h/REPORT.md`) had the
+Built and tested against the fake game and the fake feed only; none of it has run live. The 2026-10-14 deploy-19h run (the deploy-19h report of 2026-10-14) had the
 lead-bot tank at 15-25 % of the top threat while the rogue led: compare `report.remote.tank_threat_share` with that. Needs the 19h+ build and `RemoteCommander = 1`.
 
 1. **Remote, target.** A five-bot party (protection warrior named `tank`, healer, rogue, hunter, warlock) in a dungeon with a pack of three or more: `dungeon_run ... "mode":"remote"`. Read `orders`
@@ -1090,7 +1090,7 @@ The `kb_*` rotations written from the Turtle WoW knowledge base (stevemcqueenz),
 the page:
 
 1. From `tools/observability`: `go run ./cmd/server -udp-port 9195 -http-port 8095 -accept-replay -dev-no-auth`, then
-   `turtle-agent dashboard-replay ~/TortoiseBots-audit/tests/raid-ony-walk2 --speed 10` (`--loop` leaves time to look).
+   `turtle-agent dashboard-replay <path-to>/raid-ony-walk2 --speed 10` (`--loop` leaves time to look).
    Observed 2026-10-28 on `origin/feat/fight-debugger` @ `3c909e75` without a database: `GET /api/v1/commanders` holds
    two cards, Glacienne with 39 bots and Gbmage with 5, and `GET /api/v1/combat/fights?commander=Glacienne` lists 5-5
    to 5-1 newest first (5-4 with 2 deaths, Irelanthe twice).
@@ -1161,7 +1161,7 @@ probe found (2026-10-29, `tests/raid-inject-probe-20261029-042517/probe.md`). Wh
 
 ## raid-walk --place: a raid that starts partway into its instance (P1 2026-11-01: refused in the quiet step, exit 18; re-run open)
 
-[Run a raid walk](okf/raids/run-a-raid-walk.md), [Start partway into an instance](okf/raids/place-mid-raid.md). Needs a test server (m910q, tortoise-test2 or tortoise-test3) whose image carries the Eluna test
+[Run a raid walk](okf/raids/run-a-raid-walk.md), [Start partway into an instance](okf/raids/place-mid-raid.md). Needs a test server (<server>) whose image carries the Eluna test
 toolkit (`.tt place`, `clearto`, `quiet`, `q inst|group|units|floor`) and TortoiseBots with `feat/run-until`. The first
 live run (Zul'Gurub leg 3, slot 2, 2026-11-01) reached the quiet step and stopped there: the toolkit's own quiet rule
 counted units a door-to-end run has alive at this step too, so the walk now judges the quiet itself (item 4; the

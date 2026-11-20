@@ -151,7 +151,7 @@ func actionReport(rep tbcmd.ActionReport, err error) (driver.ActionReport, error
 	if err != nil {
 		return driver.ActionReport{}, dungeonPortErr(err)
 	}
-	return driver.ActionReport{Verb: rep.Verb, Count: rep.Count, Confirmed: true}, nil
+	return driver.ActionReport{Verb: rep.Verb, Count: rep.Count, Confirmed: true, Targets: rep.Targets}, nil
 }
 
 // runAction adapts one typed run answer: the run record the module sent, or its refusal.

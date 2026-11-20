@@ -1,4 +1,4 @@
-// Walk-42 fix 1 (TortoiseBots-audit research/zg-bosses/HAKKAR-RESETS.md, spec hakkar-anchor-t1105e Part B): Hakkar's
+// Walk-42 fix 1 (research/zg-bosses/HAKKAR-RESETS.md, spec hakkar-anchor-t1105e Part B): Hakkar's
 // script evades him whenever he is below z 45.8 (boss_hakkar.cpp:140-145 of TortoiseBots), and the plan's boss approach
 // stood the whole raid 34-50 yd south-west of him, down the slope that crosses that line: 100 of walk 41's 130 Hakkar
 // ends and 15 of walk 42's 16 were his own reset. His fight stands on his platform now, 12.7 yd south of his spawn.

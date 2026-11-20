@@ -107,11 +107,21 @@ func (r *Run) Watch(ctx context.Context) Result {
 	if r.stopReason == "" && st != StateLegWalk {
 		r.stop("enter")
 	}
+	// The same-map check is the party's own: every member on the plan's map in one instance. The observer may stand
+	// anywhere; with --enter none this is the one check that the party was placed as the watch expects. The observer's
+	// own teleport polls the state after ENTER verified the party, so a failed or stale read there is re-read, not a
+	// placement.
+	if r.stopReason == "" && !r.partyPlaced(ctx) {
+		if r.stopReason == "" {
+			r.logf("watch: the party is not on the plan's map %d in one instance", r.route.Map)
+			r.stop("enter:party-map")
+		}
+	}
 	if r.stopReason == "" {
 		r.states = append(r.states, "WATCH")
 		r.watchStart(ctx, w)
 		if r.stopReason == "" {
-			r.watchBosses(ctx, w)
+			r.watchBosses(ctx, w, false)
 			r.watchLoop(ctx, w)
 		}
 	}
@@ -131,6 +141,44 @@ func (r *Run) configBroken() bool {
 	return false
 }
 
+// partyPlaced is the placement check before a watch starts the module's run: every member on the plan's map in one
+// instance, from a whole report. A read that failed or went stale (the observer's own teleport polls the state after
+// the party's entry) is polled again, a few times; only a whole fresh report that says the party is elsewhere is a
+// refusal without another read.
+func (r *Run) partyPlaced(ctx context.Context) bool {
+	const attempts = 3
+	for range attempts {
+		if r.partyInInstance() {
+			return true
+		}
+		if r.reportComplete() && r.repFresh() {
+			return false
+		}
+		if r.stopReason != "" || r.lost || !r.sleep(ctx, r.cfg.Poll) {
+			return false
+		}
+		if !r.refresh(ctx) && (r.stopReason != "" || r.lost) {
+			return false
+		}
+	}
+	return r.partyInInstance()
+}
+
+// startRecord is the one run record a start answer must carry: exactly one, for the leader and the plan the command
+// named, and running. Zero or several records, or a record naming another leader, plan or state, is a malformed
+// report (ErrBadReport) the watch must not read as a started run.
+func startRecord(rep ActionReport, leader, plan string) (tbcmd.RunState, error) {
+	if rep.Count != 1 || rep.Run == nil {
+		return tbcmd.RunState{}, fmt.Errorf("%w: run start carried %d run record(s), want 1", tbcmd.ErrBadReport, rep.Count)
+	}
+	st := *rep.Run
+	if !strings.EqualFold(st.Lead, leader) || st.Plan != plan || st.State != "running" {
+		return tbcmd.RunState{}, fmt.Errorf("%w: run start answered lead=%q plan=%q state=%q, the command was lead=%q plan=%q",
+			tbcmd.ErrBadReport, st.Lead, st.Plan, st.State, leader, plan)
+	}
+	return st, nil
+}
+
 // watchStart starts the module's run: `.tb run start <leader> <plan>`, a fight-starting action (the run pulls from
 // then on), retried while its gate is shut and ended with the module's own refusal code when it refuses.
 func (r *Run) watchStart(ctx context.Context, w *watchRun) {
@@ -139,17 +187,23 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 		rep, why := r.act(ctx, Action{Kind: ActionRunStart, Who: r.cfg.Leader, Plan: r.route.Name})
 		switch why {
 		case "":
+			st, err := startRecord(rep, r.cfg.Leader, r.route.Name)
+			if err != nil {
+				// A start answer without its one run record is not a started run: the watch must not go on as if
+				// the module had accepted the line.
+				r.logf("watch: the start answer is refused: %v", err)
+				r.stop("start:bad-report")
+				return
+			}
 			w.lastEvent = r.now()
-			if rep.Run != nil {
-				r.applyRun(w, *rep.Run)
-				if rep.Run.HasLeg {
-					// The module's run starts in its first leg: that leg's time starts at the run's zero.
-					w.legSeen[rep.Run.Leg] = true
-					w.leg(rep.Run.Leg).FirstS = 0
-				}
-				if rep.Run.HasEv {
-					w.lastSeq = rep.Run.Ev
-				}
+			r.applyRun(w, st)
+			if st.HasLeg {
+				// The module's run starts in its first leg: that leg's time starts at the run's zero.
+				w.legSeen[st.Leg] = true
+				w.leg(st.Leg).FirstS = 0
+			}
+			if st.HasEv {
+				w.lastSeq = st.Ev
 			}
 			r.progress()
 			r.logf("watch: started plan=%s state=%s step=%d/%d", w.record.Plan, w.record.State, w.record.Step, w.record.Steps)
@@ -235,8 +289,8 @@ func (r *Run) watchPollStatus(ctx context.Context, w *watchRun) bool {
 		r.linkLost()
 		return false
 	case err != nil:
-		r.watchFail(&w.statusBlind)
 		r.logf("watch: status: %v", err)
+		r.watchFail(&w.statusBlind, "status", err)
 		return r.stopReason == ""
 	}
 	r.watchOK(&w.statusBlind)
@@ -257,8 +311,8 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 		r.linkLost()
 		return false
 	case err != nil:
-		r.watchFail(&w.eventsBlind)
 		r.logf("watch: events: %v", err)
+		r.watchFail(&w.eventsBlind, "events", err)
 		return r.stopReason == ""
 	}
 	r.watchOK(&w.eventsBlind)
@@ -270,7 +324,7 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 	}
 	if w.events%20 == 0 && w.events > 0 {
 		// One instance read per twenty events (and one per minute, below): the boss state is a party report away.
-		r.watchBosses(ctx, w)
+		r.watchBosses(ctx, w, false)
 	}
 	return true
 }
@@ -592,9 +646,11 @@ func (r *Run) watchRescue(ctx context.Context, w *watchRun) bool {
 }
 
 // watchBosses reads the bosses from the instance report (at most once a minute unless forced) and prints a change.
-func (r *Run) watchBosses(ctx context.Context, w *watchRun) {
+// The end of the watch forces the read: the last state the module reports is what the summary records, and a run
+// that ends inside the cooldown would otherwise keep a boss's earlier state (or none at all).
+func (r *Run) watchBosses(ctx context.Context, w *watchRun, force bool) {
 	now := r.now()
-	if !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
+	if !force && !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
 		return
 	}
 	rep, why := r.act(ctx, Action{Kind: ActionInstanceInfo, Who: r.cfg.Leader})
@@ -646,21 +702,27 @@ func (r *Run) watchPrint(w *watchRun) {
 	r.logf("watch: %s", line)
 }
 
-// watchBlind is one read's blind rule state: consecutive failures and when the first of the run came.
+// watchBlind is one read's blind rule state: consecutive failures, when the first of the run came, and the last
+// error, so a blind end can always name what blinded it.
 type watchBlind struct {
 	failures int
 	since    time.Time
+	last     error
 }
 
 // watchFail and watchOK are the read failures' own blind rule, kept per read: three failures in a row and
 // Limits.Blind without a good read of the same kind end the watch. A status read that succeeds proves nothing about
-// the event ring, so each read carries its own counters.
-func (r *Run) watchFail(b *watchBlind) {
+// the event ring, so each read carries its own counters. The blind end logs its own reason line with the last read's
+// error: an end with no reason never happens.
+func (r *Run) watchFail(b *watchBlind, kind string, err error) {
 	b.failures++
+	b.last = err
 	if b.failures == 1 {
 		b.since = r.now()
 	}
 	if b.failures >= 3 && !b.since.IsZero() && r.now().Sub(b.since) >= r.lim.Blind {
+		r.logf("watch: blind: %d %s reads failed over %.0fs; the last was: %v", b.failures, kind,
+			r.now().Sub(b.since).Seconds(), b.last)
 		r.stop("blind")
 	}
 }
@@ -693,7 +755,9 @@ const InterruptedStopBudget = 60 * time.Second
 // would never reach the first bound — and every call is additionally bounded by FinishCallTimeout (10 s). The bound
 // is WatchStop (600 s by default) when the watch ended on its own, and InterruptedStopBudget (60 s) when the caller's
 // context ended it. When the run has not reached stopped by either bound the result says the stop was not confirmed
-// (Result.StopUnconfirmed); a lost link ends it at once as before.
+// (Result.StopUnconfirmed); a lost link ends it at once as before. The final instance read after the wait is bounded
+// by FinishCallTimeout on its own, detached context: the confirmation may have spent the whole budget, and the read
+// still has to reach the server for the summary to record the state the run ended with.
 func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	if r.lost {
 		r.watchSummary(w)
@@ -768,9 +832,12 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 			w.state, budget.Seconds())
 	}
 	if !r.lost {
-		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
-		r.watchBosses(cctx, w)
-		ccancel()
+		// The final read keeps its own bound: the confirmation loop above may have spent the whole cleanup budget, and
+		// a child of the expired fctx would fail before the request reached the server, leaving the summary with the
+		// previous boss state. Like the stop, it must run after the caller's context ended.
+		octx, ocancel := context.WithTimeout(context.WithoutCancel(ctx), FinishCallTimeout)
+		r.watchBosses(octx, w, true)
+		ocancel()
 	}
 	r.watchSummary(w)
 }
@@ -802,6 +869,9 @@ func (r *Run) watchSummary(w *watchRun) {
 	r.rec.sum.Bosses = dead
 	r.rec.sum.Wipes = st.Wipes
 	r.rec.sum.Deaths = st.Deaths
+	// The instance the party is in comes from the state report the run's gates took, as a leading run's does. Without
+	// it the written summary always says instance 0, because watchResult replaces res.Summary with the recorder's.
+	r.rec.sum.Instance = r.instance
 	r.rec.sum.Practice = w.rescues
 	r.rec.sum.Clear = w.state == "done"
 	r.rec.SetWatch(rw, r.now())
@@ -809,6 +879,13 @@ func (r *Run) watchSummary(w *watchRun) {
 
 // watchResult is the watch's result: the summary, the reason and the exit code.
 func (r *Run) watchResult(w *watchRun) Result {
+	// Every end of the watch says why in its own log, whatever ended it: the budgets, a module refusal, a lost
+	// link, a blind read (which names its last error), or the run reaching done or stopped.
+	reason := r.stopReason
+	if reason == "" {
+		reason = "end"
+	}
+	r.logf("watch: end reason=%s", reason)
 	res := r.result()
 	if w != nil && w.state == "done" {
 		res.Clear = true

@@ -1,4 +1,4 @@
-// raid_walk_place.go: phase 8b, the `--place` start (spec ~/TortoiseBots-audit/research/raid-walk-place/SPEC.md 5). The
+// raid_walk_place.go: phase 8b, the `--place` start (spec research/raid-walk-place/SPEC.md 5). The
 // commander drops his own bind to the plan's map, appears in the raid's copy, clears the corridor of the legs the raid
 // skips, quiets the area, moves the raid onto the start point and verifies it by the walk's own frames; the raid then
 // starts partway into the instance. Every GM line passes raidwalk.AllowedLine and every toolkit line raidwalk.AllowedTT.
@@ -56,7 +56,7 @@ const (
 	// placeTryLimit is how many placement attempts one walk makes in the SAME instance (the first, then the retreats
 	// and same-point retries) before it gives up with exitRaidWalkPlaceFailed. Walk 37: every failed placement exited
 	// 18, walk-super restarted the same cmd, and the restart with a dead bind entered a fresh instance (4 per hour
-	// per server): eight failures at step 582 locked m910q for an hour. The walk's own retries are the budget now.
+	// per server): eight failures at step 582 locked test1 for an hour. The walk's own retries are the budget now.
 	placeTryLimit = 4
 	// placeNearYd is how close the commander must stand to a circle's point to clear it without a move (spec 5 step 6).
 	placeNearYd = 140
@@ -469,7 +469,7 @@ const placeFloorInvalid = -100000
 // placeFloor checks the toolkit's floor under the start point (spec 5 step 5). A 0.0 floor, or one at the core's
 // INVALID_HEIGHT, is the toolkit's "height unknown", not a wrong floor: TT.floorNear asks the caller's
 // GetClosePoint/UpdateGroundPositionZ, and the core leaves z at 0 when the height lookup finds nothing (an unloaded
-// grid, no vmap, the wrong map), so the answer comes back 0.0 (walk 39: Jeklik's steps 44/46/48 on m910q and test2
+// grid, no vmap, the wrong map), so the answer comes back 0.0 (walk 39: Jeklik's steps 44/46/48 on test1 and test2
 // were refused as "the start step's floor is 0.0, not 130.7" every try, and the autopilot escalated the id after
 // three failed placements). An unknown floor is read once more after placeFloorGap; if it is still unknown the plan's
 // z is taken only when p is a recorded walk row's own point (PlaceWalkRow: the row came from a real walk through that
@@ -1107,7 +1107,7 @@ func (w *walk) placeQuietJudge(read *placeQuietRead, p dungeon.Point) placeQuiet
 			}
 			if w.placeBehindTrash(u) && s.dist <= placeQuietR {
 				// D5: trash of a skipped leg inside the quiet's own radius: the extra round may take it (walk 24
-				// test2-arlokk's Cub and Tiger, m910q-ven's bats).
+				// test2-arlokk's Cub and Tiger, test1-ven's bats).
 				w.note("place: the quiet's extra round takes %d %s (%.1f yd%s, trash of a skipped leg, %s)", u.Entry, u.Name, s.dist, roamWords(s.roam), u.placeWhere())
 				j.Clear = append(j.Clear, u)
 				continue
