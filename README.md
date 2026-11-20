@@ -328,9 +328,12 @@ commander stands outside it and the tank leads, while this character is only an 
 party's commander or a member. The client does what a run does up to the entry (PREPARE checks the roster — the tank
 is the party's leader or the bot the run names — then the portal or the teleport, with the same gates), starts the
 module's run with one typed command, and from then on sends no order — an order would pause the run. A setup
-answer that names the party it resolved on its end line (`target=party:commander:<name>`, `target=party:<tank>`) is
-read as the success it is, and an entry answered `no-trigger` (a party outside the entrance's trigger box) is retried
-once as `enter party map <plan map>` instead of failing. The observer teleports on its own, and the same-map check
+answer is read whole or not at all: the `<verb>-begin` marker, a `status=` line per addressed character, and an end
+line with `records=`, the party it resolved (`target=party:commander:<name>`, `target=party:<tank>`) and its own
+counts are all required, and the target must name what the command addressed. An end-only acknowledgement, or a
+report missing any of those parts, is a report that proves nothing and is refused — never a success — and an entry
+answered `no-trigger` (a party outside the entrance's trigger box) is retried once as `enter party map <plan map>`
+instead of failing. The observer teleports on its own, and the same-map check
 compares the party's map with the plan's, not the observer's. A plan that carries the format's in-fight run fields
 (`kill_first`, `cc_priority`, `cc_always`, `tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the
 module's run. Every `--poll` seconds
@@ -343,7 +346,12 @@ paused run too); a time budget (`--max-minutes`); a wipe budget (`--max-wipes N`
 ends the watch, `0` allows no wipe at all and `-1` is no budget); and the practice rescue, which, when a run
 has been paused on a wipe for 300 s, sends one practice `revive party` and one checked `resume`, at most eight times. The rescue fires only for the
 wipe's own pause: the pause event right after the wipe whose reason names the wipe or the dead party, never a later
-pause for another reason. A status read and an event read each keep their own blind rule: three failed reads of the
+pause for another reason. A pause the rescue still owns is nobody else's: the watchdog and the pause budget both
+stand aside until the rescue's 300 s threshold, and for 600 s more after a revive while its `resume` may be gated
+(a `--watchdog-minutes` shorter than the rescue can no longer end a run that is about to be cleared); a `resume`
+that lands restarts the watchdog's event clock. A death event is attributed only from its `why=`: a name that is no
+current party member is recorded as it arrived, never counted for a member and never grouped by the fight's unit
+id. A status read and an event read each keep their own blind rule: three failed reads of the
 same kind and 30 s without a good one end the watch with `blind`, whichever read it is, and every end logs its
 reason — a blind one names the last read error it saw. At the end it sends a stop
 (a run that ended by itself needs none), waits (bounded) for the module's state to reach stopped, and writes the
@@ -363,7 +371,8 @@ builds the card of a saved `<run_id>.forever-run.json` offline and prints it; `-
 card (stable field names, the thresholds it was built with, one entry per leg, the deaths and pauses, and the flags
 with their evidence), `--out DIR` writes the `.report-card.txt` and `.json` there, and `--repulls`, `--member-deaths`
 and `--slow-factor` change the three thresholds (defaults: more than 2 re-pulls at one step, one member with at least
-3 deaths and 2 more than the next, and a leg over 2× the plan's recorded time). `forever-agent forever run-report
+3 deaths and 2 more than the next, and a leg over 2× the plan's recorded time). A death whose event named no party
+member is flagged apart as `unattributed-deaths` with its evidence. `forever-agent forever run-report
 --compare A B` takes two cards or two records and prints what got better or worse per leg (seconds, pulls,
 re-pulls, deaths, wipes) and per flag. The plan's recorded leg time is read from the record when it carries one;
 today's plan format records none, so the slow-leg flag stays quiet until a record has it.

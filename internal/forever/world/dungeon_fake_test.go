@@ -580,8 +580,14 @@ func (sc *dungeonScene) instanceReply(c *fakeConn, token, body string) {
 		lines = append(lines, fmt.Sprintf("instance-end count=%d records=%d verb=leave map=0 inst=1 bots=%d started=%d refused=0 #%s",
 			len(dungeonParty), len(dungeonParty), len(dungeonParty), len(dungeonParty), token))
 	} else {
+		// `.tb instance <leader> reset`: the end line names the leader whose party was reset, as the module's does.
+		leader := ""
+		if f := strings.Fields(body); len(f) > 2 {
+			leader = f[2]
+		}
 		lines = append(lines, "reset map=0 inst=1 status=ok #"+token)
-		lines = append(lines, "instance-end count=1 records=1 verb=reset instances=1 ok=1 failed=0 #"+token)
+		lines = append(lines, fmt.Sprintf("instance-end count=1 records=1 verb=reset leader=%s instances=1 ok=1 failed=0 #%s",
+			leader, token))
 	}
 	sc.reply(c, token, lines...)
 }

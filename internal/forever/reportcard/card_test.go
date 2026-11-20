@@ -192,6 +192,47 @@ func TestCardDeathNamesTheMember(t *testing.T) {
 	}
 }
 
+// TestCardDeathsNotAMember: death events naming nobody in the party (a stranger, an NPC, a stale name) are bad
+// telemetry. They are reported apart and counted for no member: the fight's unit id, shared by every death of one
+// pull, must not group them into a pack or a member's repeated deaths.
+func TestCardDeathsNotAMember(t *testing.T) {
+	res := playWatch(t, driver.FakeRunScript{
+		Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 40 * time.Second,
+		Deaths: []driver.FakeDeath{
+			{After: 4 * time.Second, Unit: 11318, Who: "Stranger"},
+			{After: 5 * time.Second, Unit: 11318, Who: "Stranger"},
+			{After: 6 * time.Second, Unit: 0},
+		},
+	})
+	c := Build(res.Summary, DefaultThresholds())
+	if len(c.DeathLog) != 3 {
+		t.Fatalf("death log %+v", c.DeathLog)
+	}
+	for _, d := range c.DeathLog {
+		if d.Who != "" {
+			t.Fatalf("death %+v names a member; no event named one", d)
+		}
+	}
+	if hasFlag(c, "pack-deaths") || hasFlag(c, "member-deaths") {
+		t.Fatalf("flags %v: unattributed deaths were counted for a member\n%s", flagIDs(c), c.Text())
+	}
+	var unattributed Flag
+	for _, f := range c.Flags {
+		if f.ID == "unattributed-deaths" {
+			unattributed = f
+		}
+	}
+	if unattributed.ID == "" || len(unattributed.Evidence) != 3 {
+		t.Fatalf("unattributed flag %+v; flags %v", unattributed, flagIDs(c))
+	}
+	if !strings.Contains(unattributed.Text, "3 death(s)") || !strings.Contains(c.Text(), "unattributed (Stranger)") {
+		t.Fatalf("text:\n%s", c.Text())
+	}
+	if !strings.Contains(strings.Join(unattributed.Evidence, "\n"), "why=Stranger") {
+		t.Fatalf("evidence %v", unattributed.Evidence)
+	}
+}
+
 // TestCardPausedStuck: a watch that ended because the module's pause never cleared has its own verdict, with the
 // pause's reason and where the run stood, not a plain stop and not a failure of the run itself.
 func TestCardPausedStuck(t *testing.T) {

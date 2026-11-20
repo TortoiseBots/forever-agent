@@ -417,6 +417,13 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 				AtS: float64(ev.T), Leg: ev.Leg, Step: ev.Step, Why: ev.Why,
 			})
 		}
+	case "death":
+		// Every other event between a wipe and a pause breaks that pair, a death included.
+		w.wipePending = false
+		if _, ok := w.roles[partyNameKey(ev.Why)]; !ok {
+			r.logf("watch: death event names why=%q, which is no current party member: the death is reported unattributed",
+				ev.Why)
+		}
 	case "resume":
 		w.onWipe = false
 		w.wipePending = false
@@ -489,13 +496,15 @@ func (w *watchRun) noteEvent(ev tbcmd.RunEvent) {
 		}
 	case "death":
 		leg.Deaths++
-		d := DeathRecord{AtS: ev.T, Leg: ev.Leg, Step: ev.Step}
+		d := DeathRecord{AtS: ev.T, Leg: ev.Leg, Step: ev.Step, Why: ev.Why}
 		if ev.HasUnit {
 			d.Unit = ev.Unit
 		}
 		// The module names the dead member in the event's why=; unit= is the fight's unit, the same for every
-		// death of one pull, so it is never the member. The member's word is its party slot, not its name.
-		d.Who = w.roles[strings.ToLower(strings.TrimSpace(ev.Why))]
+		// death of one pull, so it is never the member. The member's word is its party slot, not its name. A name
+		// that is not a current party member (a typo, an NPC, a stale roster) is bad telemetry: the death keeps
+		// the name it carried and takes no role, so no member's count and no pack flag folds it in.
+		d.Who = w.roles[partyNameKey(ev.Why)]
 		w.deaths = append(w.deaths, d)
 		if ev.HasStep {
 			w.step(ev.Leg, ev.Step).Deaths++
@@ -540,16 +549,22 @@ func (w *watchRun) step(leg, step int) *StepRecord {
 }
 
 // watchRoles maps a character name to the party slot word a card uses, so a death event's why= (the dead member's
-// name) becomes a role and never a name on the card. It is keyed lower-case: module names are case-insensitive.
+// name) becomes a role and never a name on the card.
 func (r *Run) watchRoles() map[string]string {
 	out := make(map[string]string, len(r.cfg.Party))
 	for i, name := range r.cfg.Party {
 		if name == "" {
 			continue
 		}
-		out[strings.ToLower(name)] = partyRole(i)
+		out[partyNameKey(name)] = partyRole(i)
 	}
 	return out
+}
+
+// partyNameKey is how a character name is compared with the event's why=: module names are case-insensitive, and
+// the event value may carry the surrounding blanks of the record it was written from.
+func partyNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // partyRole is the party slot's word: the leader is the tank, the second the healer, the rest the damage dealers.
@@ -576,6 +591,24 @@ func (r *Run) watchPauseBudget() time.Duration {
 	return DefaultLimits().WatchPause
 }
 
+// rescueWindow says whether the practice rescue still owns a paused run's time: a pause on a wipe is the rescue's
+// until its threshold (Limits.WatchRescue), and after the revive its resume has watchRescue's own window (2×it) to
+// land. Both budgets stand aside while it does: a pause the rescue can still clear is not stuck, and a watchdog
+// shorter than the rescue would otherwise end a run that is about to be cleared, or cut off its gated resume.
+func (r *Run) rescueWindow(w *watchRun) bool {
+	rescue := r.lim.WatchRescue
+	if rescue <= 0 || w.state != "paused" {
+		return false
+	}
+	// The rescue in flight: the revive has been answered and the resume waits for a report newer than that send.
+	// watchRescue ends a rescue that never completes after this window.
+	if w.revived && !w.reviveAt.IsZero() && r.now().Sub(w.reviveAt) <= 2*rescue {
+		return true
+	}
+	// The rescue not yet sent: the wipe's pause gets its threshold before anything reads it as stuck.
+	return w.onWipe && !w.pausedSince.IsZero() && r.now().Sub(w.pausedSince) < rescue
+}
+
 // pauseStuck reports a run that has been paused past the pause budget, and says where it stands and why it is
 // paused. The module never resumes a pause by itself, so a pause nothing clears is a run that will sit there: the
 // watch ends with StopPausedStuck rather than waiting for the time budget.
@@ -587,10 +620,9 @@ func (r *Run) pauseStuck(w *watchRun) bool {
 	if age < budget {
 		return false
 	}
-	// A rescue in flight is not a stuck pause: the revive has been answered and the resume waits for a report newer
-	// than that send. watchRescue's own window (2×WatchRescue after the revive) ends a rescue that never completes;
-	// until then the pause budget stands aside, or it would end the watch between the two halves of the rescue.
-	if rescue := r.lim.WatchRescue; rescue > 0 && w.revived && !w.reviveAt.IsZero() && r.now().Sub(w.reviveAt) <= 2*rescue {
+	// A pause the rescue still owns is not stuck: neither the wait for its revive nor an in-flight resume may be
+	// cut short, or the watch would end between the two halves of a rescue that was about to work.
+	if r.rescueWindow(w) {
 		return false
 	}
 	r.logf("watch: pause not cleared for %.0fs (limit %.0fs) at leg %d/step %d: %s", age.Seconds(),
@@ -600,6 +632,8 @@ func (r *Run) pauseStuck(w *watchRun) bool {
 
 // watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports. A paused run it
 // reaches is reported, not paused again: there is nothing to send, and the caller ends the watch as paused-stuck.
+// A pause the practice rescue still owns is not reached at all: a wipe's pause is silent by design, and the
+// watchdog's idle clock runs on events the rescue itself must be allowed to answer.
 func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 	if w.lastEvent.IsZero() {
 		w.lastEvent = r.now()
@@ -610,6 +644,9 @@ func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 		return false
 	}
 	if w.state == "paused" {
+		if r.rescueWindow(w) {
+			return false
+		}
 		age := idle
 		if !w.pausedSince.IsZero() {
 			age = r.now().Sub(w.pausedSince)
@@ -697,6 +734,9 @@ func (r *Run) watchRescue(ctx context.Context, w *watchRun) bool {
 		w.revived = false
 		w.onWipe = false
 		w.pausedSince = time.Time{}
+		// The resume is the watcher's own action and its event is not in the ring this read: the run starts its
+		// event clock again here, or a watchdog shorter than the pause just cleared would fire on the stale idle.
+		w.lastEvent = r.now()
 		if rep.Run != nil {
 			r.applyRun(w, *rep.Run)
 		}

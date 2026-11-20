@@ -30,7 +30,7 @@ needs; all are optional, so a record from round S7 still loads (its per-leg sect
 |---|---|
 | `watch.legs[]` | `leg name first_s last_s seconds pulls steps deaths wipes pauses [plan_s]` — the leg's span in the module's own event seconds, closed at the next leg's first event (the last leg at the run's final elapsed second) |
 | `watch.step_log[]` | `leg step pulls pull_events[{seq at_s}] deaths` — one entry per step that had a pull or a death; a second pull at one step is a re-pull |
-| `watch.death_log[]` | `at_s leg step [unit] [who]` — `who` is the party slot (`tank`, `healer`, `dps1`, `dps2`, `dps3`), never a character name; `unit` is the module's own id when it sent one |
+| `watch.death_log[]` | `at_s leg step [unit] [who] [why]` — `who` is the party slot (`tank`, `healer`, `dps1`, `dps2`, `dps3`), never a character name; `why` is the event's own `why=` (the name it carried), kept when that name is no current party member, in which case `who` is absent and the death is unattributed; `unit` is the module's own id when it sent one, evidence only |
 | `watch.rescue_log[]` | `at_s leg step why` — each practice rescue the watcher sent, with the pause it answered |
 | `watch.pause_log[]` | now also `leg`, `step` and `cleared` (a resume followed it) |
 
@@ -41,8 +41,10 @@ start record names the first leg), so the leg table adds up to the run.
 
 The event ring holds 200 events; the watch reads only events after the start reply's `ev`, at `--poll` seconds. A
 run whose ring overflows between two polls loses the oldest events it had not read, and the card says only what the
-record has. `unit` is the module's id, matched to a party slot through `PlayerGUID`'s low word; an id the party does
-not name stays `unit <n>`.
+record has. The party slot comes from the event's `why=` (the dead member's name, matched case- and
+blank-insensitively to the current party); `unit` is the module's id and never names the member, because every death
+of one pull carries the same one. A `why=` naming no current member is bad telemetry: the death is unattributed and
+counted for nobody.
 
 ## The card
 
@@ -69,6 +71,7 @@ one block per flag with its evidence lines.
 | `repulls` | a step re-pulled more than `--repulls` times | one `pull seq= t= leg= step=` line per pull |
 | `pack-deaths` | one member died twice at the same step | one `death t= leg= step= who= unit=` line per death |
 | `member-deaths` | one member died far more than the others (rule above) | the member's death lines |
+| `unattributed-deaths` | a death event named no current party member | one `death t= leg= step= who= why= unit=` line per death |
 | `slow-leg` | the leg exceeded `--slow-factor` times its plan's time | the leg's `seconds` and `plan_s` |
 | `watchdog-pause` | a pause whose reason names the watchdog | the pause line with its reason |
 | `uncleared-pause` | a pause no resume followed | the pause line and the record's final state |

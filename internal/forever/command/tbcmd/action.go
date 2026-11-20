@@ -11,13 +11,17 @@ package tbcmd
 //
 //	tele-begin #token
 //	tele bot=<name> status=started ... #token        (one line per addressed character; map and pos on a teleport)
-//	tele-end count=<lines> records=<records> target=party:commander:<name> started=<n> refused=<n> #token
+//	tele-end count=<lines> records=<records> target=party:commander:<name> bots=<n> started=<n> refused=<n> #token
 //
-// The target label sits on the end line: a party command addressed with "party" resolves to the party's commander
-// or its leader, and the label is what says so. A per-bot line names the character the module handled in `bot=`.
-// A line whose `status=` is refused, and an end line that counts one (`refused=`/`failed=`), is the module's
-// refusal returned as a *CommandError. The module's single-line error (`error code=... cmd=...`) is returned the
-// same way, so a caller acts only on a nil error.
+// Every part is required: the begin marker, the record line of every addressed character with its status=, the end
+// line's records=, target= and its own counts. An end-only acknowledgement (an older module's `count=0`) is not
+// this report and is refused: a truncated or version-skewed answer that lost its begin marker, its record lines or
+// its counts must never pass as a confirmed command. The target label sits on the end line: a party command
+// addressed with "party" resolves to the party's commander or its leader, and the label is what says so, so each
+// call also checks that the label names what it addressed. A per-bot line names the character the module handled in
+// `bot=`. A line whose `status=` is refused or failed, and an end line that counts one (`refused=`/`failed=`), is
+// the module's refusal returned as a *CommandError. The module's single-line error (`error code=... cmd=...`) is
+// returned the same way, so a caller acts only on a nil error.
 
 import (
 	"context"
@@ -36,8 +40,7 @@ type ActionReport struct {
 	Verb string
 	// Kind is the reply's end kind: tele-end, enter-end, revive-end or instance-end.
 	Kind string
-	// Count is the end line's count: the record lines between the markers, continuation lines included (0 for an
-	// answer that only acknowledges).
+	// Count is the end line's count: the record lines between the markers, continuation lines included.
 	Count int
 	// Targets is the label the end line named: the party a command addressed, as the module resolved it
 	// (`party:<leader>`, `party:commander:<name>`) or the one character. A replied target is never the caller's
@@ -111,9 +114,78 @@ func setupPos(what string, mapID uint32, x, y, z float64) (string, error) {
 	return fmt.Sprintf("%d %.1f %.1f %.1f", mapID, x, y, z), nil
 }
 
+// setupShape is one setup verb's end line as the module's writer always writes it: the keys every answer carries,
+// whether the target= names what the command addressed, and how the counts pair with the record lines.
+type setupShape struct {
+	// keys are the end line's keys every answer of this verb carries (count= and records= are checked for every
+	// verb apart from the shape).
+	keys []string
+	// target says the end line names the target the module resolved: a setup answer without it proves nothing.
+	target bool
+	// bots says the end line's bots= counts the per-bot record lines.
+	bots bool
+	// success and fails are the end line's two outcome counts; their sum is the count they belong to.
+	success, fails string
+	// items, when set, is the count of handled items the record lines count one each (instances= for a reset):
+	// success+fails counts the same items.
+	items string
+}
+
+// setupShapeOf reads the shape of the answer to verb. The instance command's end line names the verb it performed
+// (`verb=leave`, `verb=reset`), and only those two are setup actions.
+func setupShapeOf(verb string, end record) (setupShape, error) {
+	switch verb {
+	case "tele":
+		return setupShape{keys: []string{"target", "bots", "started", "refused"}, target: true, bots: true, success: "started", fails: "refused"}, nil
+	case "enter":
+		return setupShape{keys: []string{"trigger", "map", "target", "bots", "started", "refused"}, target: true, bots: true, success: "started", fails: "refused"}, nil
+	case "revive":
+		return setupShape{keys: []string{"target", "bots", "revived", "refused"}, target: true, bots: true, success: "revived", fails: "refused"}, nil
+	case "instance":
+		v, err := end.requireText("verb")
+		if err != nil {
+			return setupShape{}, err
+		}
+		switch v {
+		case "leave":
+			return setupShape{keys: []string{"verb", "map", "inst", "bots", "started", "refused"}, bots: true, success: "started", fails: "refused"}, nil
+		case "reset":
+			return setupShape{keys: []string{"verb", "leader", "instances", "ok", "failed"}, success: "ok", fails: "failed", items: "instances"}, nil
+		}
+		return setupShape{}, fmt.Errorf("%w: %s names verb=%q, the setup verbs are leave and reset", ErrBadReport, end.kind, v)
+	}
+	return setupShape{}, fmt.Errorf("%w: %s is not a setup verb", ErrBadReport, verb)
+}
+
+// checkTargetName checks the answer's one target label names the character the call addressed: a report of another
+// character (or of the party) is not this call's answer, whatever its counts say.
+func checkTargetName(rep ActionReport, verb, name string) error {
+	if len(rep.Targets) != 1 {
+		return fmt.Errorf("%w: %s answered no target=", ErrBadReport, verb)
+	}
+	if t := rep.Targets[0]; t.Party || !strings.EqualFold(t.Name, name) {
+		return fmt.Errorf("%w: %s answered target=%q, the command addressed %q", ErrBadReport, verb, t.Raw, name)
+	}
+	return nil
+}
+
+// checkTargetParty checks the answer's one target label names the party the call addressed, whether the module
+// resolved it to the party's leader or to its commander.
+func checkTargetParty(rep ActionReport, verb string) error {
+	if len(rep.Targets) != 1 || !rep.Targets[0].Party || rep.Targets[0].Name == "" {
+		raw := ""
+		if len(rep.Targets) == 1 {
+			raw = rep.Targets[0].Raw
+		}
+		return fmt.Errorf("%w: %s answered target=%q, the command addressed the party", ErrBadReport, verb, raw)
+	}
+	return nil
+}
+
 // parseAction reads a setup command's whole report. endKind is the command's end marker; verb names the command in
 // errors and the per-bot lines' kind. A reply that is not complete, carries another command's lines, or whose
-// counts do not match its lines is ErrBadReport; a per-bot refusal is the module's *CommandError.
+// counts, end fields or target label do not match the report the module writes is ErrBadReport; a per-bot refusal
+// is the module's *CommandError.
 func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error) {
 	out := ActionReport{Verb: verb, Kind: endKind}
 	if rep == nil {
@@ -137,16 +209,21 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 	if out.Count, err = end.requireInt("count", 0, math.MaxInt32); err != nil {
 		return out, err
 	}
-	// The module opens a setup report with <verb>-begin, which is a marker and not a counted record line. The
-	// end-only acknowledgement of an older module (count=0) has no marker and is read the same way.
-	first := 0
-	if begin, err := decodeLine(rep.Lines[0]); err == nil && begin.kind == verb+"-begin" {
-		if len(begin.values) > 0 {
-			return out, fmt.Errorf("%w: %s carries a field", ErrBadReport, begin.kind)
-		}
-		first = 1
+	// Every setup report opens with <verb>-begin, a marker and not a counted record line. It is required: an
+	// end-only acknowledgement (an older module's count=0) proves no per-character success, so it is not this
+	// report, and a truncated reply that lost its marker must not pass as one either.
+	begin, err := decodeLine(rep.Lines[0])
+	if err != nil {
+		return out, err
 	}
-	between := len(rep.Lines) - 1 - first
+	if begin.kind != verb+"-begin" {
+		return out, fmt.Errorf("%w: the reply opens with %q, not %q", ErrBadReport, begin.kind, verb+"-begin")
+	}
+	if len(begin.values) > 0 {
+		return out, fmt.Errorf("%w: %s carries a field", ErrBadReport, begin.kind)
+	}
+	first := 1
+	between := len(rep.Lines) - 2
 	if between < 0 {
 		return out, fmt.Errorf("%w: the reply has no %s line", ErrBadReport, endKind)
 	}
@@ -193,15 +270,28 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 			prev.keys = append(prev.keys, k)
 		}
 	}
-	if _, ok := end.values["records"]; ok {
-		n, err := end.requireInt("records", 0, math.MaxInt32)
-		if err != nil {
-			return out, err
-		}
-		if n != len(recs) {
-			return out, fmt.Errorf("%w: %s records=%d, %d record line(s)", ErrBadReport, endKind, n, len(recs))
+	// records= is required and counts the record lines (continuations are not records): an answer without it, or
+	// one whose count differs from its lines, cannot say that every addressed character was reported.
+	records, err := end.requireInt("records", 0, math.MaxInt32)
+	if err != nil {
+		return out, err
+	}
+	if records != len(recs) {
+		return out, fmt.Errorf("%w: %s records=%d, %d record line(s)", ErrBadReport, endKind, records, len(recs))
+	}
+	// The end line's other keys are the verb's, not a superset: every answer carries all of them, and the counts
+	// must agree with the record lines and with each other.
+	shape, err := setupShapeOf(verb, end)
+	if err != nil {
+		return out, err
+	}
+	for _, k := range shape.keys {
+		if !end.has(k) {
+			return out, end.missing(k)
 		}
 	}
+	// Every record line names what the module handled and says what it did with it. A line without its status=
+	// proves nothing about that character, so it is not a record of a setup answer.
 	for _, rec := range recs {
 		switch {
 		case rec.has("bot"):
@@ -217,22 +307,61 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 		default:
 			return out, fmt.Errorf("%w: a %s line names no bot=", ErrBadReport, rec.kind)
 		}
-		if err := actionRefusal(rec, verb); err != nil {
+		st, has, err := rec.text("status")
+		if err != nil {
 			return out, err
 		}
+		if !has || st == "" {
+			return out, fmt.Errorf("%w: the %s line carries no status=", ErrBadReport, rec.kind)
+		}
 	}
-	if end.has("target") {
+	if shape.bots {
+		bots, err := end.requireInt("bots", 0, math.MaxInt32)
+		if err != nil {
+			return out, err
+		}
+		if bots != len(recs) {
+			return out, fmt.Errorf("%w: %s bots=%d, %d record line(s)", ErrBadReport, endKind, bots, len(recs))
+		}
+	}
+	if shape.items != "" {
+		items, err := end.requireInt(shape.items, 0, math.MaxInt32)
+		if err != nil {
+			return out, err
+		}
+		if items != len(recs) {
+			return out, fmt.Errorf("%w: %s %s=%d, %d record line(s)", ErrBadReport, endKind, shape.items, items, len(recs))
+		}
+	}
+	success, err := end.requireInt(shape.success, 0, math.MaxInt32)
+	if err != nil {
+		return out, err
+	}
+	fails, err := end.requireInt(shape.fails, 0, math.MaxInt32)
+	if err != nil {
+		return out, err
+	}
+	if success+fails != len(recs) {
+		return out, fmt.Errorf("%w: %s %s=%d %s=%d, %d record line(s)", ErrBadReport, endKind,
+			shape.success, success, shape.fails, fails, len(recs))
+	}
+	if shape.target {
 		t, err := actionTarget(end)
 		if err != nil {
 			return out, err
 		}
 		out.Targets = append([]ActionTarget{t}, out.Targets...)
 	}
+	// The module's refusals are typed errors, never a partial success: a refused or failed record, or an end line
+	// that counts one, ends the call with its own code.
+	for _, rec := range recs {
+		if err := actionRefusal(rec, verb); err != nil {
+			return out, err
+		}
+	}
 	if err := actionRefusal(end, verb); err != nil {
 		return out, err
 	}
-	// The end line counts what it refused; a count is a refusal even when the per-bot lines that say so are not
-	// in the reply (a module that lost them is not a success).
 	for _, key := range []string{"refused", "failed"} {
 		n, ok, err := end.optionalInt(key, 0, math.MaxInt32)
 		if err != nil {
@@ -299,7 +428,14 @@ func (c *Client) Tele(ctx context.Context, who string, mapID uint32, x, y, z flo
 	if err != nil {
 		return ActionReport{}, err
 	}
-	return parseAction(rep, "tele-end", "tele")
+	out, err := parseAction(rep, "tele-end", "tele")
+	if err != nil {
+		return ActionReport{}, err
+	}
+	if err := checkTargetName(out, "tele", name); err != nil {
+		return ActionReport{}, err
+	}
+	return out, nil
 }
 
 // TeleParty teleports the whole party to a map position: `.tb tele party <map> <x> <y> <z>`.
@@ -312,7 +448,14 @@ func (c *Client) TeleParty(ctx context.Context, mapID uint32, x, y, z float64) (
 	if err != nil {
 		return ActionReport{}, err
 	}
-	return parseAction(rep, "tele-end", "tele")
+	out, err := parseAction(rep, "tele-end", "tele")
+	if err != nil {
+		return ActionReport{}, err
+	}
+	if err := checkTargetParty(out, "tele"); err != nil {
+		return ActionReport{}, err
+	}
+	return out, nil
 }
 
 // TeleTo teleports one character to another character: `.tb tele <who> to <other>`.
@@ -329,7 +472,14 @@ func (c *Client) TeleTo(ctx context.Context, who, other string) (ActionReport, e
 	if err != nil {
 		return ActionReport{}, err
 	}
-	return parseAction(rep, "tele-end", "tele")
+	out, err := parseAction(rep, "tele-end", "tele")
+	if err != nil {
+		return ActionReport{}, err
+	}
+	if err := checkTargetName(out, "tele", name); err != nil {
+		return ActionReport{}, err
+	}
+	return out, nil
 }
 
 // EnterParty brings the party into the instance: `.tb enter party`. The bare form needs the party to stand inside
@@ -350,7 +500,14 @@ func (c *Client) EnterParty(ctx context.Context, mapID uint32) (ActionReport, er
 			return ActionReport{}, err
 		}
 	}
-	return parseAction(rep, "enter-end", "enter")
+	out, err := parseAction(rep, "enter-end", "enter")
+	if err != nil {
+		return ActionReport{}, err
+	}
+	if err := checkTargetParty(out, "enter"); err != nil {
+		return ActionReport{}, err
+	}
+	return out, nil
 }
 
 // Revive raises one character or the whole party: `.tb revive <who>`; who may be "party".
@@ -366,7 +523,20 @@ func (c *Client) Revive(ctx context.Context, who string) (ActionReport, error) {
 	if err != nil {
 		return ActionReport{}, err
 	}
-	return parseAction(rep, "revive-end", "revive")
+	out, err := parseAction(rep, "revive-end", "revive")
+	if err != nil {
+		return ActionReport{}, err
+	}
+	if name == "party" {
+		if err := checkTargetParty(out, "revive"); err != nil {
+			return ActionReport{}, err
+		}
+		return out, nil
+	}
+	if err := checkTargetName(out, "revive", name); err != nil {
+		return ActionReport{}, err
+	}
+	return out, nil
 }
 
 // InstanceLeave takes the leader's party out of its instance: `.tb instance <leader> leave`.
