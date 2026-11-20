@@ -411,7 +411,7 @@ func TestOrderCalls(t *testing.T) {
 		return reply(o,
 			"order-begin #T",
 			"order bot=Tbtank verb=pull seq=41 status=queued future_key=a%23b #T",
-			"order bot=Tbdps1 verb=pull status=refused error=no-pull-strategy msg=the%20bot%20has%20no%20pull%20combat%20strategy #T",
+			"order bot=Tbdps1 verb=pull status=refused code=no-pull-strategy msg=the%20bot%20has%20no%20pull%20combat%20strategy #T",
 			"order-end verb=pull target=party:Tbtank count=2 records=2 queued=1 refused=1 #T"), nil
 	}}
 	c := NewClient(r)
@@ -427,7 +427,7 @@ func TestOrderCalls(t *testing.T) {
 	}
 	if len(rep.Results) != 2 || !rep.Results[0].HasSeq || rep.Results[0].Seq != 41 ||
 		rep.Results[0].Extra["future_key"] != "a#b" ||
-		rep.Results[1].Error != "no-pull-strategy" || rep.Results[1].Msg != "the bot has no pull combat strategy" ||
+		rep.Results[1].Code != "no-pull-strategy" || rep.Results[1].Msg != "the bot has no pull combat strategy" ||
 		rep.Results[1].HasSeq {
 		t.Fatalf("%+v", rep.Results)
 	}
@@ -526,6 +526,51 @@ func TestRoleMasterPartyThreat(t *testing.T) {
 	if len(threat.Mobs) != 1 || len(threat.Mobs[0].Top) != 2 || threat.Mobs[0].Top[0].Threat != 412 ||
 		threat.Mobs[0].Name != "Some Creature" || !threat.Mobs[0].HasTop {
 		t.Fatalf("%+v", threat)
+	}
+}
+
+// TestRefusalsAndBoundMaster: the refusal shapes the module writes (`status=refused code=...`, a master answer
+// with `bound`) and the role word `none` parse as typed answers, not as bad reports.
+func TestRefusalsAndBoundMaster(t *testing.T) {
+	r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case strings.HasPrefix(line, ".tb role"):
+			return reply(o, "role-begin #T",
+				"role bot=Tbtank role=tank status=refused code=no-tank-kit cleared=yes msg=no%20tank%20kit #T",
+				"role-end role=tank target=Tbtank count=1 records=1 queued=0 #T"), nil
+		case strings.HasPrefix(line, ".tb master"):
+			return reply(o, "master-begin #T",
+				"master bot=Tbtank commander=Tbcmd commander_in_party=no status=bound #T",
+				"master bot=Tbdps1 status=refused code=bind-failed msg=the%20host%20refused #T",
+				"master-end target=party:Tbtank commander=Tbcmd count=2 records=2 bound=1 queued=0 refused=1 #T"), nil
+		}
+		t.Fatalf("unexpected line %q", line)
+		return nil, errors.New("unexpected")
+	}}
+	c := NewClient(r)
+	role, err := c.Role(context.Background(), "Tbtank", "tank")
+	if err != nil {
+		t.Fatalf("Role: %v", err)
+	}
+	if len(role.Results) != 1 || role.Results[0].Status != "refused" || role.Results[0].Code != "no-tank-kit" ||
+		!role.Results[0].HasCode || !role.Results[0].Cleared || !role.Results[0].HasCleared {
+		t.Fatalf("refused role: %+v", role.Results)
+	}
+	master, err := c.Master(context.Background(), "party Tbtank", "Tbcmd")
+	if err != nil {
+		t.Fatalf("Master: %v", err)
+	}
+	if len(master.Results) != 2 || master.Results[0].Status != "bound" || master.Results[0].Commander != "Tbcmd" ||
+		master.Results[1].Status != "refused" || master.Results[1].Code != "bind-failed" ||
+		master.Results[1].HasCommander {
+		t.Fatalf("master answer: %+v", master.Results)
+	}
+	// A role of none is a word on the record and the end line, not an empty one.
+	r2 := oneReply("role-begin #T",
+		"role bot=Tbtank role=none status=queued seq=45 #T",
+		"role-end role=none target=Tbtank count=1 records=1 queued=1 #T")
+	if rep, err := NewClient(r2).Role(context.Background(), "Tbtank", "none"); err != nil || rep.Role != "none" {
+		t.Fatalf("role none: %v %+v", err, rep)
 	}
 }
 
