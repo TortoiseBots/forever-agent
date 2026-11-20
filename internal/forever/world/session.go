@@ -553,8 +553,9 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.startPump(sideRealm, realm.Next)
 
 	runErr := s.enter(ctx)
-	if runErr != nil {
-		// the character may be online already; tell the server it is leaving before the sockets drop
+	if runErr != nil && s.opts.Serve == nil {
+		// the character may be online already; tell the server it is leaving before the sockets drop. A serving
+		// session logs out itself, and a serving session whose link died cannot be told anything.
 		s.abortLogin()
 	}
 	s.shutdown(ctx)
