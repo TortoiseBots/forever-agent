@@ -65,10 +65,13 @@ func (r *Run) cover() *logCover {
 		if pending {
 			flush(row.T)
 		}
-		if !havePrev {
+		if !havePrev || row.T < c.lo {
 			c.lo = row.T
 		}
-		c.hi, prev, havePrev = row.T, row.T, true
+		if !havePrev || row.T > c.hi {
+			c.hi = row.T
+		}
+		prev, havePrev = row.T, true
 	}
 	if pending {
 		flush(math.Inf(1))

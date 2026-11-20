@@ -59,12 +59,27 @@ func TestFinding1BaselineGoneOnlyWhenTheRuleRan(t *testing.T) {
 // TestFinding2LogRulesNeedACoveredWindow: a log whose times are unknown, whose tail is cut, whose sequence has a
 // hole or that stops before the window answers nothing; the whole log is the control that gives the hit.
 func TestFinding2LogRulesNeedACoveredWindow(t *testing.T) {
+	// fightRows is the log in file order: a mob row at -2, the tank's swings up to upTo, mid in the middle (after 6 s),
+	// and a mob row at 18 when the log runs on past the fight.
+	fightRows := func(upTo float64, mid ...CombatRow) []CombatRow {
+		rows := []CombatRow{crow("melee", -2, gid(0xB09), gid(0xB01), 0)}
+		for at := 0.0; at <= upTo; at += 2 {
+			rows = append(rows, crow("melee", at, gTank, gid(0xB01), 0))
+			if at == 6 {
+				rows = append(rows, mid...)
+			}
+		}
+		if upTo >= 16 {
+			rows = append(rows, crow("melee", 18, gid(0xB09), gid(0xB01), 0))
+		}
+		return rows
+	}
 	hitsOf := func(rows []CombatRow) ([]Hit, Counts) {
-		frames, tank := idleDps(nil)
-		return Hunt([]*Run{idleRun(frames, append(rows, tank...))}, []Rule{EventRules()[0]})
+		frames, _ := idleDps(nil)
+		return Hunt([]*Run{idleRun(frames, rows)}, []Rule{EventRules()[0]})
 	}
 	// Control: a timed log spanning the whole fight proves the silence.
-	if hits, _ := hitsOf(withSpan(nil, -2, 18)); len(hits) != 1 {
+	if hits, _ := hitsOf(fightRows(16)); len(hits) != 1 {
 		t.Fatalf("control: %+v", hits)
 	}
 	cases := []struct {
@@ -73,19 +88,15 @@ func TestFinding2LogRulesNeedACoveredWindow(t *testing.T) {
 		why  string
 	}{
 		{"no timed row (a run with no start)", []CombatRow{{Kind: "melee", Source: CombatActor{GUID: gTank}}}, "no timed rows"},
-		{"log ends before the window", nil, "does not cover the window"},
-		{"truncation marker in the fight", append(withSpan(nil, -2, 18), CombatRow{Kind: "truncated", T: 6, TKnown: true}), "does not cover the window"},
+		{"log ends before the window", fightRows(6), "does not cover the window"},
+		{"truncation marker in the fight", fightRows(16, CombatRow{Kind: "truncated", T: 6, TKnown: true}), "does not cover the window"},
 		{"sequence hole in the fight", []CombatRow{
 			{Seq: 1, Kind: "melee", T: -2, TKnown: true, Source: CombatActor{GUID: gid(0xB09)}},
 			{Seq: 40, Kind: "melee", T: 18, TKnown: true, Source: CombatActor{GUID: gid(0xB09)}}}, "does not cover the window"},
-		{"untimed row in the fight", append(withSpan(nil, -2, 18), CombatRow{Kind: "spell_go", Source: CombatActor{GUID: gDps}}), "does not cover the window"},
+		{"untimed row in the fight", fightRows(16, CombatRow{Kind: "spell_go", Source: CombatActor{GUID: gDps}}), "does not cover the window"},
 	}
 	for _, c := range cases {
-		rows := c.rows
-		if c.name == "log ends before the window" {
-			rows = []CombatRow{crow("melee", -2, gid(0xB09), gid(0xB01), 0), crow("melee", 6, gid(0xB09), gid(0xB01), 0)}
-		}
-		hits, counts := hitsOf(rows)
+		hits, counts := hitsOf(c.rows)
 		if len(hits) != 0 {
 			t.Fatalf("%s: the log proves nothing, yet %+v", c.name, hits)
 		}
