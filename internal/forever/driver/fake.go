@@ -557,13 +557,13 @@ func (f *Fake) Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderRep
 	rep := tbcmd.OrderReport{Verb: verb, Target: who}
 	if verb == "stay" && f.RefuseStay {
 		rep.Refused = 1
-		rep.Results = []tbcmd.OrderResult{{Bot: who, Verb: verb, Status: "refused", Error: "range", HasErr: true}}
+		rep.Results = []tbcmd.OrderResult{{Bot: who, Verb: verb, Status: "refused", Code: "range", HasCode: true}}
 		return rep, nil
 	}
 	if verb == "pull" && f.RefusePulls > 0 {
 		f.RefusePulls--
 		rep.Refused = 1
-		rep.Results = []tbcmd.OrderResult{{Bot: who, Verb: verb, Status: "refused", Error: "range", HasErr: true}}
+		rep.Results = []tbcmd.OrderResult{{Bot: who, Verb: verb, Status: "refused", Code: "range", HasCode: true}}
 		return rep, nil
 	}
 	if f.OnOrder != nil {
