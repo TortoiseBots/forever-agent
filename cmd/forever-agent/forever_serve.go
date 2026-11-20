@@ -125,6 +125,12 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "forever serve: --disconnect-grace must be 0 to 10m")
 		return exitUsage
 	}
+	if *navmesh != "" {
+		if info, err := os.Stat(*navmesh); err != nil || !info.IsDir() {
+			fmt.Fprintf(stderr, "forever serve: --navmesh %s is not a folder\n", *navmesh)
+			return exitUsage
+		}
+	}
 	password, err := servePassword(*passwordFile)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever serve: %v\n", err)
