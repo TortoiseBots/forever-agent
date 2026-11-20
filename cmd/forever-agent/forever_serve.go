@@ -204,7 +204,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		defer os.Remove(filepath.Join(*dir, "agent.pid"))
 	}
 
-	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password)
+	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
 	if err != nil {
 		if code, isLogin := loginExit(err, stderr); isLogin {
 			return code

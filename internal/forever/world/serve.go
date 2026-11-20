@@ -414,6 +414,9 @@ func (st *serveState) attemptLogin(ctx context.Context) serveLogin {
 // a new model. Only the login waits are bounded by the attempt's timeout; the pump context outlives it, so the
 // session is usable once it is in the world.
 func loginAgain(ctx context.Context, opts Options, timeout time.Duration) (*session, error) {
+	// A re-entry authenticates its own world socket: the one the first login's build probe handed over was that
+	// session's, and it went down with it. The build stays, so the new login claims the same one.
+	opts.WorldConn = nil
 	actx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	base := context.WithoutCancel(ctx)

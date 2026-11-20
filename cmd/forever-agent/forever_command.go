@@ -19,7 +19,7 @@ import (
 // stringList is a repeatable flag (defined with the raid-walk command).
 
 func foreverCommandCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever cmd-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--line TEXT]... [--tb-state TARGET] [--quiet DURATION] [--timeout DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever cmd-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--line TEXT]... [--tb-state TARGET] [--quiet DURATION] [--timeout DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever cmd-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

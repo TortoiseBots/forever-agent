@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 const fakeServerName = "login.test"
@@ -350,10 +352,25 @@ type fakeLogin struct {
 
 // fakeRealm is one realm row the fake's realm list carries.
 type fakeRealm struct {
-	address    uint32 // wowRealmAddress; the join accepts it
-	name       string // empty means TestRealm
-	population uint32 // 0 is the offline state the client must avoid
-	build      uint32 // the realm's own build
+	address    uint32   // wowRealmAddress; the join accepts it
+	name       string   // empty means TestRealm
+	population uint32   // 0 is the offline state the client must avoid
+	build      uint32   // the realm's own build
+	alsoAccept []uint32 // Realm.AlsoAcceptBuilds: extra client builds the realm lists for and lets in
+}
+
+// accepts reports whether the realm lets a client of build in: its own build or one of the extra ones
+// (RealmList.cpp: RealmAcceptsBuild).
+func (r fakeRealm) accepts(build uint32) bool {
+	if build == r.build {
+		return true
+	}
+	for _, b := range r.alsoAccept {
+		if b == build {
+			return true
+		}
+	}
+	return false
 }
 
 // realmRows is the realm list the fake serves: the several realms when the test set them, else one online realm on
@@ -436,7 +453,7 @@ func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 		ticket:          "TC-" + strings.Repeat("AB", 20),
 		errs:            make(chan error, 16),
 		logonBuilds:     make(chan uint32, 4),
-		realmPopulation: 1, realmBuild: build70938,
+		realmPopulation: 1, realmBuild: wire.Build70938,
 	}
 
 	mux := http.NewServeMux()
@@ -785,7 +802,9 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logon
 		for i, r := range f.realmRows() {
 			shownBuild, flags := r.build, f.realmFlags
 			if logonBuild != 0 {
-				if logonBuild == r.build {
+				if r.accepts(logonBuild) {
+					// RealmAcceptsBuild shows the client's own version, so an also-accepted build's
+					// list entry carries the claim and no mismatch flag (RealmList.cpp:294,311).
 					shownBuild = logonBuild
 				} else {
 					flags |= realmFlagVersionMismatch

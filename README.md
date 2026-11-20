@@ -35,17 +35,26 @@ to "the server treats the player as fully in the world"; movement, objects and g
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
 name, id and address. It prints no ticket, key, proof or password, only their lengths; the connect step prints the
 ciid, the server id and the server time as counts (`ciid 33 chars`), never their values, so the output is safe to
-paste into a report. `--build` pins the client build to claim; without it the command claims the build the realm
-advertises in its realm list (builds the client has tables for: 70707 and 70938, and any other advertised build is
-refused by name). A realm only admits the builds it accepts. Each RPC step and the login as a whole are
-deadline-bounded (30 s per request, 2 min overall), so a silent or slow-drip server cannot hold the command open.
+paste into a report. `--build` pins the client build to claim; without it the command claims the newest build this
+client knows that the realm accepts (70707, 70938 and 70959; a newer build is tried first and the realm list's build
+is only a hint). A realm only admits the builds it accepts, and a realm that accepts none of these is refused by
+name. Each RPC step and the login as a whole are deadline-bounded (30 s per request, 2 min overall), so a silent or
+slow-drip server cannot hold the command open.
 
 `forever-agent forever world-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 does the same login and then enters the world with that character: world auth, character list, `CMSG_PLAYER_LOGIN`,
 the instance socket, the login burst (loading screen, time syncs, the active-mover exchange), `--stay` seconds of
 keep-alives (default 20 s), then a clean logout. It prints one line per step, a count of server packets by opcode
-name, and no key or ticket, only lengths. Without `--build` the command claims the build the realm advertises; a
-pinned `--build` has to be one the realm accepts (a realm can accept more than one client build). By default the
+name, and no key or ticket, only lengths. Without `--build` the command claims the newest build it knows that the realm
+accepts and the world server authenticates: the realm list is not the world's build list, so a build the world server
+refuses with `ERROR_BAD_VERSION` is dropped and the next known build is tried, newest first. That code is retried on
+only under the setting this client's setup requires (`Network.SkipBuildAuthKeyCheck = 1` in
+[docs/forever/PROTOCOL-LOGIN.md](docs/forever/PROTOCOL-LOGIN.md)): the server also answers `ERROR_BAD_VERSION` for a
+join-ticket variant with no `build_auth_key` row while it checks the digest, and this client's zero digest can never
+pass that check. There the login stops at the refusal and names both causes instead of calling the build unsupported;
+`--world-checks-build-auth-key` states that the server checks the key (`Network.SkipBuildAuthKeyCheck = 0`). When no
+build works the error names each one and which side refused it. A pinned `--build` is claimed as given, and
+the world server's refusal is the command's error. By default the
 instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
 
@@ -80,7 +89,9 @@ resolves the name on the same character-screen list (every match, so an ambiguou
 candidates) and sends nothing until `--yes` repeats the resolved character's full name exactly; without it the command
 prints `would delete NAME (level L, GUID); pass --yes NAME` and exits with the usage code. With it, it sends
 `CMSG_CHAR_DELETE` with the resolved GUID and lists again; the client's own confirmation prompt is not on the wire.
-`--build` follows world-check's rule: without it the login claims the build the realm advertises; a pinned build is
+`--build` follows world-check's rule, `--world-checks-build-auth-key` included: without `--build` the login claims
+the newest build it knows that the realm accepts and the world server authenticates (a build the world refuses with
+`ERROR_BAD_VERSION` is skipped, newest first, when the server skips the build auth key check); a pinned build is
 claimed as given.
 Both commands refuse to send when the run's remaining time is less than the request's bound plus a 10 s margin
 (for a delete, the server's 30 s pending-delete bound, so 40 s must be left after the list; for a create, its 30 s

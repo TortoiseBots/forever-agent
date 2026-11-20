@@ -227,10 +227,6 @@ type fakeServer struct {
 	// closing marks a close() by the test: an accept failing then is the scenario's end, not a failure.
 	curRealm, curInst *fakeConn
 	closing           bool
-	// logoutNoResponse makes the fake close the instance socket with SMSG_LOGOUT_COMPLETE and never send
-	// SMSG_LOGOUT_RESPONSE: the real server queues the response on the instance socket and closes that socket right
-	// after the completion (WorldSession.cpp:766,789), so a queued write can be dropped.
-	logoutNoResponse bool
 	// logoutPlan, set by playLogout, hands the logout's two sockets to the test: the fake reads the request and then
 	// performs each step the test sends on logoutStep, one at a time, so the sockets' order is the test's and never
 	// a race between sleeps. logoutAt is closed when the fake is at the request; logoutSeen is what it performed,
@@ -254,6 +250,9 @@ type fakeServer struct {
 	// protocol failure. Set before the handlers start; every other scenario still fails on a write error.
 	clientMayLeave bool
 	walk           bool
+	// timeSyncEvery makes the walk scenario send a time sync this often until the logout request, the way the real
+	// server keeps a settled character alive. Zero sends none.
+	timeSyncEvery time.Duration
 	// walkFacingRestored is set when a walk that finished both legs sent the facing packet that turns the
 	// character back to the orientation its create block gave (one more SET_FACING at the spawn, state 0).
 	walkFacingRestored bool
@@ -1476,6 +1475,35 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 
 	state := 0 // 0 = expecting facing, 1 = forward, 2 = heartbeats, 3 = stopped
 	last := f.walkFrom
+	// The real server sends a time sync every ten seconds whether or not the client asks. A run that settles for
+	// minutes therefore receives traffic the whole time; this ticker sends that traffic compressed into the test's
+	// own scale.
+	var stopTimeSync chan struct{}
+	var timeSyncDone chan struct{}
+	if f.timeSyncEvery > 0 {
+		stopTimeSync, timeSyncDone = make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(timeSyncDone)
+			ticker := time.NewTicker(f.timeSyncEvery)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopTimeSync:
+					return
+				case <-ticker.C:
+					c.writeFrame(fakeSMSGTimeSyncRequest, []byte{7, 0, 0, 0})
+				}
+			}
+		}()
+	}
+	stopTicker := func() {
+		if stopTimeSync != nil {
+			close(stopTimeSync)
+			<-timeSyncDone
+			stopTimeSync = nil
+		}
+	}
+	defer stopTicker()
 	for {
 		wire, payload, err := c.readFrame()
 		if err != nil {
@@ -1656,6 +1684,9 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 			if state != 0 && state != 6 {
 				f.failf("walk: logout in the middle of a leg")
 			}
+			// No time sync may race the logout answer: it would be sent while the client already waits for
+			// SMSG_LOGOUT_COMPLETE.
+			stopTicker()
 			// The instance reader has seen both legs: each stop counted one move and reset the walk.
 			_ = f.walkMoved
 			c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
@@ -1772,6 +1803,58 @@ func TestWalkCheckAgainstFakeServer(t *testing.T) {
 	}
 	if stops != 2 {
 		t.Fatalf("%d stops, want one per leg (% X)", stops, f.instWire)
+	}
+}
+
+// TestWalkCheckSettleHoldsWithOnlyTimeSyncs: walk-check's --stay is its settle, and the server keeps a settled
+// character alive with time syncs. The run must hold for the whole settle even when every frame is a time sync,
+// rather than dying at the run's overhead with "reading a frame header: i/o timeout". The overhead is shrunk for the
+// test (defaultRunOverhead); the settle stands in for the five-minute stay, at the same ratio.
+func TestWalkCheckSettleHoldsWithOnlyTimeSyncs(t *testing.T) {
+	overhead := defaultRunOverhead
+	defaultRunOverhead = 2 * time.Second
+	t.Cleanup(func() { defaultRunOverhead = overhead })
+
+	f := newFakeServer(t)
+	f.walk = true
+	f.timeSyncEvery = 20 * time.Millisecond
+	f.walkFrom = [3]float32{1000, 2000, 50}
+	f.walkTo = [3]float32{1001, 2000, 50}
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	var steps []string
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		WalkCheck:       true,
+		Dx:              1,
+		Dy:              0,
+		Settle:          3 * time.Second,
+		WalkPause:       20 * time.Millisecond,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps = append(steps, fmt.Sprintf(format, args...))
+		},
+	}
+	report, err := Enter(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("the walk run failed: %v\nsteps:\n%s", err, joinLines(steps))
+	}
+	f.wait(t)
+	if report == nil || !report.Walked || !report.LogoutComplete {
+		t.Fatalf("walked %v, logout complete %v, want both\nsteps:\n%s", report != nil && report.Walked, report != nil && report.LogoutComplete, joinLines(steps))
+	}
+	if report.TimeSyncs == 0 {
+		t.Fatalf("the settle saw no time sync\nsteps:\n%s", joinLines(steps))
 	}
 }
 

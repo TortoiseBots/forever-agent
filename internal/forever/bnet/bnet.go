@@ -15,15 +15,12 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
 // realmFlagVersionMismatch is RealmFlags::VersionMismatch: the realm is listed, but not for this client's build
 // (src/server/shared/Realm/Realm.h:33-42).
 const realmFlagVersionMismatch = 0x01
-
-// build70938 is the build the automatic-build login probes with: the newest build of the client's tables
-// (wire.Build70938), which the server's ClientBuildInfo knows (src/server/shared/Realm/ClientBuildInfo.cpp).
-const build70938 = wire.Build70938
 
 // defaultLoginDeadline bounds one Login call from the first request to the join answer. The per-call Timeout only
 // bounds one request, so a server that keeps a call alive with traffic would otherwise hold the login forever.
@@ -40,10 +37,31 @@ type Options struct {
 	ServerName  string                           // name to verify in the certificate (default DefaultServerName)
 	Account     string                           // account e-mail or name as typed into the login form
 	Password    string                           // password; case is significant for SRP v2 accounts
-	ClientBuild uint32                           // client build to claim; 0 = the build the realm advertises (see Login)
+	ClientBuild uint32                           // client build to claim; 0 = the newest build this client knows that the realm accepts (see Login)
 	Timeout     time.Duration                    // one RPC call or one HTTP request (0 = 30 s)
 	Deadline    time.Duration                    // the whole login, from the form to the join answer (0 = 2 min)
 	Logf        func(format string, args ...any) // one line per completed step; may be nil
+
+	// WorldAccept, when set, authenticates the world socket for a login and says whether the claimed build works
+	// there. The realm list is not proof: a realm may accept several builds (Realm.AlsoAcceptBuilds) while the
+	// world server has a build_info row for one. Login calls WorldAccept after every login the realm accepted; with
+	// ClientBuild 0 a *worldconn.Refused whose BadVersion is set moves on to the next known build only when the
+	// refusal is attributable to the build claim — the socket sent a build auth key, or WorldSkipBuildAuthKeyCheck
+	// says the server does not check one. Any other error, and a 0x1C that cannot be attributed, ends the login and
+	// is returned (see WorldSkipBuildAuthKeyCheck). A non-nil *worldconn.Realm is handed to the caller in
+	// Result.WorldConn; a callback that returns an error must close the socket it opened.
+	WorldAccept func(ctx context.Context, result *Result) (*worldconn.Realm, error)
+
+	// WorldSkipBuildAuthKeyCheck states that the world server runs with Network.SkipBuildAuthKeyCheck = 1, the
+	// setting doc/ForeverSetup.md requires for this client. It is what makes a world ERROR_BAD_VERSION attributable
+	// to the build claim: with the check skipped, a ticket variant without a build_auth_key row is not refused
+	// (WorldSocket.cpp:756-772), so 0x1C can only be the missing build_info row (:739-746) and the automatic build
+	// selection may try the next known build. With the check on, 0x1C is also what a missing build_auth_key row
+	// produces (:760-768), and this client's 24 zero digest bytes can never authenticate there — a server that has
+	// the row compares the digest and answers ERROR_DENIED (:775-791), one that has no row refuses. A retry cannot
+	// succeed in that configuration, so Login does not guess: it returns the refusal and says both causes. Off by
+	// default; a caller that has not established the setting must not have its login retried on an assumption.
+	WorldSkipBuildAuthKeyCheck bool
 
 	// srpPrivate pins the client private to a test vector's value. It is unexported so no caller can weaken the
 	// randomness; only the package's own tests set it.
@@ -69,7 +87,11 @@ type Result struct {
 	ServerPort   uint32
 
 	ClientBuild uint32 // the build this login claimed (WorldSocket::_clientBuild)
-	RealmBuild  uint32 // the build the realm list advertised for that claim (FillRealmEntry: the claim itself when the realm accepts it)
+	RealmBuild  uint32 // the build the realm list showed for that claim (FillRealmEntry: the claim itself when the realm accepts it)
+
+	// WorldConn is the world socket Options.WorldAccept authenticated for this build; the caller owns it (world.Enter
+	// adopts it, or the caller closes it). Nil when no WorldAccept was given or it accepted without a socket.
+	WorldConn *worldconn.Realm
 }
 
 // RealmError marks a failure after the account was logged in (realm list, realm join), so a caller can tell "the
@@ -80,8 +102,8 @@ func (e *RealmError) Error() string { return e.Err.Error() }
 func (e *RealmError) Unwrap() error { return e.Err }
 
 // RealmMismatch is the realm list's VersionMismatch flag: the realm does not accept the build the login claimed
-// (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path reads
-// it to log in again claiming RealmBuild; an explicit build returns it as the login's error.
+// (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path uses
+// RealmBuild as the hint for the next claim; an explicit build returns it as the login's error.
 type RealmMismatch struct {
 	Realm      string // the realm's name as the server sent it; sanitise before printing
 	Claimed    uint32 // the build the login claimed
@@ -93,9 +115,7 @@ func (e *RealmMismatch) Error() string {
 		sanitizeServerText(e.Realm), e.Claimed, e.RealmBuild)
 }
 
-// clientBuildSupported and supportedBuildList read the wire package's list of builds this client has tables for.
-func clientBuildSupported(b uint32) bool { return wire.ClientBuildSupported(b) }
-
+// supportedBuildList is the builds this client knows, in the message's order.
 func supportedBuildList() string {
 	builds := wire.SupportedClientBuilds()
 	parts := make([]string, len(builds))
@@ -129,14 +149,22 @@ func LoadRoots(path string) (*x509.CertPool, error) {
 }
 
 // Login runs the whole login: REST SRP login and ticket, RPC connect and logon, realm list ticket, sub-regions,
-// realm list, realm join. It stops at the join answer; the world socket is a later round.
+// realm list, realm join. It stops at the join answer unless Options.WorldAccept is set, in which case that
+// callback also authenticates the world socket and the login only returns once the world server accepts the build.
 //
-// With ClientBuild 0 it claims the build the realm advertises: a first login claims build70938 (the build the
-// client's tables are written at), and if the realm list then reports a version mismatch, the login runs again
-// claiming the advertised build, provided SupportedClientBuilds names it. The realm list and the realm join both
-// read the build of the logon, not of the realm list ticket (RealmList.cpp: FillRealmEntry's flags, and JoinRealm's
-// RealmAcceptsBuild on session->GetBuild()), so the second login is the whole sequence, not a re-request. A
-// non-zero ClientBuild always wins and is claimed as given.
+// With ClientBuild 0 it claims the newest build this client knows that the realm accepts (the builds of
+// wire.SupportedClientBuilds, newest first). The realm list's build field is only a hint: for a build the realm
+// accepts it echoes the claim itself (RealmList.cpp: FillRealmEntry shows clientBuild when RealmAcceptsBuild is
+// true), so it says nothing about the realm's own build, and a realm may accept several builds (Realm.AlsoAcceptBuilds)
+// while the world server only has build info for one of them. A claim that a realm does not accept comes back as a
+// VersionMismatch with the realm's own build; that build is then tried next when it is one this client knows, and the
+// remaining known builds are tried newest first otherwise. A build the realm accepts but the world server refuses
+// with ERROR_BAD_VERSION is left to Options.WorldAccept, whose refusal this loop moves on from only while 0x1C is
+// attributable to the build claim rather than to a build auth key the server wanted (Options.WorldSkipBuildAuthKeyCheck);
+// unattributable, the refusal is returned with both causes named, because no retry can pass a key check this client
+// cannot satisfy. The realm list and the realm join both read the build of the logon, not of the realm list ticket
+// (GameUtilitiesService.cpp:312 and :344 pass session->GetBuild()), so every attempt is the whole sequence again. A
+// non-zero ClientBuild always wins and is claimed as given (one world authentication, no retry).
 func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.ServerName == "" {
 		opts.ServerName = DefaultServerName
@@ -151,25 +179,129 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
 	defer cancel()
 	if opts.ClientBuild != 0 {
-		return loginOnce(ctx, opts)
+		result, err := loginOnce(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		return acceptWorld(ctx, opts, result)
 	}
-	probe := opts
-	probe.ClientBuild = build70938
-	result, err := loginOnce(ctx, probe)
-	if err == nil {
+	supported := wire.SupportedClientBuilds()
+	// newest first: prefer the newest build this client knows, then older ones
+	remaining := make([]uint32, 0, len(supported))
+	for i := len(supported) - 1; i >= 0; i-- {
+		remaining = append(remaining, supported[i])
+	}
+	var hint uint32 // the realm's own build, from the last mismatch
+	var realmName string
+	var attempts []buildAttempt
+	worldRefusals := 0
+	for len(remaining) > 0 {
+		build := remaining[0]
+		if hint != 0 {
+			if i := indexOfBuild(remaining, hint); i >= 0 {
+				build, remaining = hint, append(remaining[:i], remaining[i+1:]...)
+			} else {
+				remaining = remaining[1:]
+			}
+		} else {
+			remaining = remaining[1:]
+		}
+		probe := opts
+		probe.ClientBuild = build
+		result, err := loginOnce(ctx, probe)
+		if err == nil {
+			realmName = result.RealmName
+			if opts.WorldAccept == nil {
+				return result, nil
+			}
+			result, err = acceptWorld(ctx, opts, result)
+			if err == nil {
+				return result, nil
+			}
+			var refused *worldconn.Refused
+			if !errors.As(err, &refused) || !refused.BadVersion() {
+				return nil, err
+			}
+			// ERROR_BAD_VERSION alone is not a verdict on the build: the code also answers a missing build_auth_key
+			// row when the server checks one (WorldSocket.cpp:760-768), and the claim has no way to pass that check.
+			if !refused.BuildAuthKeyUsed() && !opts.WorldSkipBuildAuthKeyCheck {
+				return nil, ambiguousWorldRefusal(build, refused)
+			}
+			worldRefusals++
+			attempts = append(attempts, buildAttempt{build, "the world server refused it"})
+			opts.logf("client build: the world server does not accept build %d (ERROR_BAD_VERSION); trying the next known build", build)
+			continue
+		}
+		var mismatch *RealmMismatch
+		if !errors.As(err, &mismatch) {
+			return nil, err
+		}
+		hint, realmName = mismatch.RealmBuild, mismatch.Realm
+		attempts = append(attempts, buildAttempt{build, "the realm does not accept it"})
+		opts.logf("client build: the realm does not accept build %d (the realm is build %d)", build, hint)
+	}
+	if worldRefusals > 0 {
+		// Every build the realm let in was refused by the world server with ERROR_BAD_VERSION, which the check
+		// above attributed to the build_info lookup, so the choice ended where it had to: name every build tried,
+		// with the side that refused it.
+		tried := make([]string, len(attempts))
+		for i, a := range attempts {
+			tried[i] = a.String()
+		}
+		msg := fmt.Sprintf("bnet: realm %q: no client build this client knows was accepted (%s)",
+			sanitizeServerText(realmName), strings.Join(tried, "; "))
+		if hint != 0 {
+			msg += fmt.Sprintf("; the realm is build %d", hint)
+		}
+		return nil, &RealmError{Err: errors.New(msg + "; pass --build N to claim a build anyway")}
+	}
+	return nil, &RealmError{Err: fmt.Errorf(
+		"bnet: realm %q accepts none of the client builds this client knows (%s); the realm is build %d; pass --build N to claim a build anyway",
+		sanitizeServerText(realmName), supportedBuildList(), hint)}
+}
+
+// acceptWorld runs Options.WorldAccept for a login the realm accepted and stores the socket it hands back.
+func acceptWorld(ctx context.Context, opts Options, result *Result) (*Result, error) {
+	if opts.WorldAccept == nil {
 		return result, nil
 	}
-	var mismatch *RealmMismatch
-	if !errors.As(err, &mismatch) {
+	conn, err := opts.WorldAccept(ctx, result)
+	if err != nil {
 		return nil, err
 	}
-	if !clientBuildSupported(mismatch.RealmBuild) {
-		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is build %d, which this client has no opcode table for (supported builds: %s); pass --build N to claim a build anyway",
-			mismatch.Realm, mismatch.RealmBuild, supportedBuildList())}
+	result.WorldConn = conn
+	return result, nil
+}
+
+// ambiguousWorldRefusal is the login's error for a world ERROR_BAD_VERSION that nothing attributes to the build
+// claim: the client sent no build auth key and has not established that the server skips the check. The refusal is
+// kept as the cause (it is still what the server answered), and the text names both checks it can come from, so
+// neither the build nor the realm is blamed for what may be a missing key row.
+func ambiguousWorldRefusal(build uint32, refused *worldconn.Refused) error {
+	return fmt.Errorf("bnet: %w; the code does not by itself name the check: the world server answers "+
+		"ERROR_BAD_VERSION both for an account build with no build_info row (WorldSocket.cpp:739-746) and for a "+
+		"join-ticket variant with no build_auth_key row while Network.SkipBuildAuthKeyCheck is off (:760-768), "+
+		"and this login sent a zero digest, so build %d is not thereby unsupported; the selection did not try "+
+		"another build, which could not pass that check either; pass --build N to claim a build anyway",
+		refused, build)
+}
+
+// buildAttempt is one claimed build and which side refused it, for the error of an exhausted selection.
+type buildAttempt struct {
+	build  uint32
+	reason string
+}
+
+func (a buildAttempt) String() string { return fmt.Sprintf("build %d: %s", a.build, a.reason) }
+
+// indexOfBuild is the position of b in builds, or -1.
+func indexOfBuild(builds []uint32, b uint32) int {
+	for i, c := range builds {
+		if c == b {
+			return i
+		}
 	}
-	opts.logf("client build: the realm advertises build %d; logging in again claiming it", mismatch.RealmBuild)
-	opts.ClientBuild = mismatch.RealmBuild
-	return loginOnce(ctx, opts)
+	return -1
 }
 
 // loginOnce is one complete login with the build it claims.

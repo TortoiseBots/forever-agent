@@ -39,15 +39,22 @@ type Options struct {
 	// BuildAuthKey is auth.build_auth_key for the ticket's variant when the caller has it; empty makes the world
 	// socket send the zero digest a server accepts when it does not check the build key.
 	BuildAuthKey []byte
-	Character    string        // character name (the surname may be omitted)
-	Stay         time.Duration // how long to stay in the world after the login burst
-	Deadline     time.Duration // whole run; default 2 minutes + Stay
-	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle, walk Dx/Dy yards from the
-	// spawn, wait WalkPause, walk back, report, log out. Stay is then the settle time instead of a plain stay.
+	// WorldConn is a realm socket the login's build probe already authenticated (bnet.Options.WorldAccept). Enter
+	// and the character screen adopt it instead of authenticating again, and close it with the session. The socket
+	// belongs to this Options once set: nothing else may close it. Nil means authenticate from the fields above.
+	WorldConn *worldconn.Realm
+	Character string        // character name (the surname may be omitted)
+	Stay      time.Duration // how long to stay in the world after the login burst
+	Deadline  time.Duration // whole run; default 2 minutes + Stay + Settle
+	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle (the command's --stay), walk
+	// Dx/Dy yards from the spawn, wait WalkPause, walk back, report, log out. There is no plain stay after it; the
+	// settle is a stay-like phase and counts in the default Deadline like Stay.
 	WalkCheck bool
 	Dx, Dy    float32
 	WalkPause time.Duration
-	Settle    time.Duration
+	// Settle is the look at the world before a check command does its work (walk-check's --stay); 0 means the
+	// command's own default.
+	Settle time.Duration
 	// NavmeshDir (forever walk-check --navmesh) makes the walk a navmesh route to the absolute target
 	// ToX/ToY/ToZ on the current map, instead of the Dx/Dy offset walk and back. Empty keeps the old walk.
 	NavmeshDir string
@@ -520,6 +527,19 @@ const (
 	otherUnknownKey = "other unknown wire opcodes"
 )
 
+// defaultRunOverhead is the room a run with no stated Deadline gets around its stays: the login, the character
+// list, the walk and the logout. It is a variable, not a constant, so a test can shrink it and still run the real
+// path in milliseconds; a run never writes it.
+var defaultRunOverhead = 2 * time.Minute
+
+// defaultRunDeadline is the whole-run bound when the caller sets none: the overhead plus every stay the run was
+// asked for. walk-check's --stay is Settle rather than Stay, so a settle must be counted too; counting only Stay let
+// a 290 s settle be cut off at the two-minute overhead, and the socket read armed for that same absolute time ended
+// the run with "reading a frame header: i/o timeout" while the server was still sending time syncs.
+func defaultRunDeadline(opts Options) time.Duration {
+	return defaultRunOverhead + opts.Stay + opts.Settle
+}
+
 // newSession builds one world session: its link state, its bounded models and the context its reads and sends use.
 // A serving daemon builds one for the first login and a fresh one for every re-entry, so no socket, model or channel
 // of a dropped link survives into the next one.
@@ -548,7 +568,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 		return nil, errors.New("world: no character name")
 	}
 	if opts.Serve == nil && opts.Deadline <= 0 {
-		opts.Deadline = 2*time.Minute + opts.Stay
+		opts.Deadline = defaultRunDeadline(opts)
 	}
 	if opts.Deadline > 0 {
 		var cancel context.CancelFunc
@@ -589,24 +609,33 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 }
 
 // authenticate opens and authenticates the world socket for this session and starts its reader. deadline bounds
-// the handshake (worldconn's own deadline when zero).
+// the handshake (worldconn's own deadline when zero). A login that already authenticated the world socket for the
+// build it selected (Options.WorldConn) is adopted instead of authenticated a second time.
 func (s *session) authenticate(ctx context.Context, deadline time.Duration) error {
-	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
-		Address:               s.opts.Address,
-		RealmID:               s.opts.RealmID,
-		RealmAddress:          s.opts.RealmAddress,
-		RealmJoinTicket:       s.opts.RealmJoinTicket,
-		ClientSecret:          s.opts.ClientSecret,
-		JoinSecret:            s.opts.JoinSecret,
-		ClientBuild:           s.opts.ClientBuild,
-		RealmBuild:            s.opts.RealmBuild,
-		BuildAuthKey:          s.opts.BuildAuthKey,
-		AllowInstanceRedirect: s.opts.AllowInstanceRedirect,
-		Deadline:              deadline,
-		Logf:                  s.opts.Logf,
-	})
-	if err != nil {
-		return err
+	realm := s.opts.WorldConn
+	if realm != nil {
+		// The login's build probe authenticated this socket for exactly the build the world server accepted, so
+		// entering must not authenticate a second time: that would be a second session for a build already proven.
+		s.opts.logf("world socket: adopting the connection the login authenticated (client build %d)", s.opts.ClientBuild)
+	} else {
+		var err error
+		realm, err = worldconn.Authenticate(ctx, worldconn.Config{
+			Address:               s.opts.Address,
+			RealmID:               s.opts.RealmID,
+			RealmAddress:          s.opts.RealmAddress,
+			RealmJoinTicket:       s.opts.RealmJoinTicket,
+			ClientSecret:          s.opts.ClientSecret,
+			JoinSecret:            s.opts.JoinSecret,
+			ClientBuild:           s.opts.ClientBuild,
+			RealmBuild:            s.opts.RealmBuild,
+			BuildAuthKey:          s.opts.BuildAuthKey,
+			AllowInstanceRedirect: s.opts.AllowInstanceRedirect,
+			Deadline:              deadline,
+			Logf:                  s.opts.Logf,
+		})
+		if err != nil {
+			return err
+		}
 	}
 	s.realm = realm
 	for _, name := range realm.HandshakeNames() {
