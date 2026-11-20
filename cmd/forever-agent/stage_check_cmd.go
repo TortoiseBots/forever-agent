@@ -16,7 +16,7 @@ import (
 // stage (11 and 12 are taken by plan-check and route-oracle: check main.go).
 const exitStageRefused = 13
 
-const stageCheckUsage = "usage: forever-agent stage-check [--dir dungeons] --mmaps DIR [--cleared-through LEG] [--server-steps N] [--json] <plan> <leg>"
+const stageCheckUsage = "usage: forever-agent stage-check [--dir dungeons] --mmaps DIR [--cleared-through LEG] [--server-steps N] [--json] <plan> <leg> | forever-agent stage-check --forever --mmaps DIR --sql FILE [--plan NAME] [--cleared-through LEG] [--json] <plan> <leg>"
 
 // stageCheckCmd checks where dungeon_stage would put the party for the leg,
 // offline: the leg's first row (else its first plan point), the checks of
@@ -25,15 +25,32 @@ func stageCheckCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("stage-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "dungeons", "the folder with the plan files")
-	mmaps := fs.String("mmaps", "", "folder with the server's mmaps (<map>.mmap and <map>*.mmtile); required")
+	mmaps := fs.String("mmaps", "", "folder with the server's mmaps: v6 (<map>.mmap and <map>*.mmtile) or, with --forever, v16 (MMMM.mmap and MMMM_XX_YY.mmtile); required")
+	forever := fs.Bool("forever", false, "stage on the Forever side's inputs: the run leader's exported migration (--sql, as plan-export --forever writes it) for the leg's first row, on v16 tiles (--mmaps)")
+	sqlFile := fs.String("sql", "", "with --forever: the run leader's exported migration the leg's first row is read from")
+	planFlag := fs.String("plan", "", "with --forever --sql: the plan in the file when it holds several (default: the <plan> argument)")
 	cleared := fs.String("cleared-through", "", "legs 0..this one count as cleared (their packs dead)")
 	serverSteps := fs.Int("server-steps", 0, "the step count .bot run list shows for the plan (picks the exporter option set)")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	if fs.NArg() != 2 || *mmaps == "" {
 		fmt.Fprintln(stderr, stageCheckUsage)
+		return exitUsage
+	}
+	if !*forever && (given["sql"] || given["plan"]) {
+		fmt.Fprintf(stderr, "stage-check: --sql and --plan need --forever (the old-server run stages from the plan file on the v6 tiles: a migration would be ignored)\n")
+		return exitUsage
+	}
+	if *forever && *sqlFile == "" {
+		fmt.Fprintf(stderr, "stage-check: --forever stages from the run leader's exported migration: pass --sql FILE (plan-export --forever output)\n")
+		return exitUsage
+	}
+	if *forever && given["server-steps"] {
+		fmt.Fprintf(stderr, "stage-check: --server-steps needs the old-server run (it picks the exporter option set; the migration fixes the exported rows)\n")
 		return exitUsage
 	}
 	name, legArg := fs.Arg(0), fs.Arg(1)
@@ -58,6 +75,9 @@ func stageCheckCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "stage-check: cleared-through: %v\n", err)
 			return exitUsage
 		}
+	}
+	if *forever {
+		return stageCheckForever(plan, leg, *mmaps, *sqlFile, *planFlag, name, clearedThrough, *asJSON, stdout, stderr)
 	}
 	planner := navmesh.NewPlanner(*mmaps)
 	defer planner.Close()
