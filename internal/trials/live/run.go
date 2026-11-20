@@ -147,6 +147,18 @@ func applyVariant(base map[string]any, variant string) (map[string]any, error) {
 	return nil, errf("unknown variant %q", variant)
 }
 
+// trialRepeats is the trial's own repeat count (--repeats 0 means this):
+// the `repeats` field, 1 when absent or bad.
+func trialRepeats(trial map[string]any) int {
+	if n, ok := pyjson.Int64(trial["repeats"]); ok && n >= 1 && n <= 100 {
+		return int(n)
+	}
+	if f, ok := pyjson.Num(trial["repeats"]); ok && f >= 1 && f <= 100 {
+		return int(f)
+	}
+	return 1
+}
+
 // RunTrial runs trialID repeats times into Out/<id>/, writing
 // trial.effective.json first, then per repeat setup → situation → collect →
 // teardown, RUN.json, and finally normalise + score. It returns the trial
@@ -161,7 +173,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 		return nil, errf("trial %q has no id", trialArg)
 	}
 	if repeats <= 0 {
-		repeats = 1
+		repeats = trialRepeats(trial)
 	}
 	trialDir := joinPath(r.Out, id)
 	if err := mkdirAll(trialDir); err != nil {
