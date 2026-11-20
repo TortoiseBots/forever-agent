@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -480,7 +481,7 @@ func (sc *dungeonScene) answerDungeon(f *fakeServer, c, realm *fakeConn, text st
 			return true
 		}
 		sc.enterParty()
-		sc.reply(c, token, "enter-end count=0 #"+token)
+		sc.enterReply(c, token)
 		return true
 	case strings.HasPrefix(body, ".tb instance "):
 		if strings.HasSuffix(body, " info") {
@@ -490,11 +491,12 @@ func (sc *dungeonScene) answerDungeon(f *fakeServer, c, realm *fakeConn, text st
 			return true
 		}
 		sc.instanceAction(body)
-		sc.reply(c, token, "instance-end count=0 records=0 #"+token)
+		sc.instanceReply(c, token, body)
 		return true
 	case strings.HasPrefix(body, ".tb revive "):
-		sc.revive(strings.TrimSpace(strings.TrimPrefix(body, ".tb revive ")))
-		sc.reply(c, token, "revive-end count=0 #"+token)
+		who := strings.TrimSpace(strings.TrimPrefix(body, ".tb revive "))
+		sc.revive(who)
+		sc.reviveReply(c, token, who)
 		return true
 	case strings.HasPrefix(body, ".tb tele "):
 		if sc.refuseTeleTo && strings.Contains(body, " to ") {
@@ -502,7 +504,7 @@ func (sc *dungeonScene) answerDungeon(f *fakeServer, c, realm *fakeConn, text st
 			return true
 		}
 		sc.teleport(body)
-		sc.reply(c, token, "tele-end count=0 #"+token)
+		sc.teleReply(c, token, body)
 		return true
 	case strings.HasPrefix(body, ".appear "):
 		// The core's appear answers nothing; its effect is the commander at the named bot's side.
@@ -514,6 +516,74 @@ func (sc *dungeonScene) answerDungeon(f *fakeServer, c, realm *fakeConn, text st
 	}
 	f.failf("dungeon: no answer for %q", text)
 	return false
+}
+
+// enterReply is the module's `.tb enter party` report: a begin marker, one line per addressed bot, and an end line
+// that counts them and names the party it resolved.
+func (sc *dungeonScene) enterReply(c *fakeConn, token string) {
+	lines := []string{"enter-begin #" + token}
+	for i, name := range dungeonParty {
+		leader := ""
+		if i > 0 {
+			leader = " leader=" + dungeonParty[0]
+		}
+		lines = append(lines, fmt.Sprintf("enter bot=%s trigger=0 map=0 status=started inbox=no direct=no%s #%s",
+			name, leader, token))
+	}
+	lines = append(lines, fmt.Sprintf("enter-end count=%d records=%d trigger=0 map=0 target=party:%s bots=%d started=%d refused=0 #%s",
+		len(dungeonParty), len(dungeonParty), dungeonParty[0], len(dungeonParty), len(dungeonParty), token))
+	sc.reply(c, token, lines...)
+}
+
+// teleReply is the module's `.tb tele` report: the party command addresses every member, the single forms one.
+func (sc *dungeonScene) teleReply(c *fakeConn, token, body string) {
+	f := strings.Fields(body)
+	names, target := []string{f[2]}, f[2]
+	if f[2] == "party" {
+		names, target = dungeonParty, "party:"+dungeonParty[0]
+	}
+	lines := []string{"tele-begin #" + token}
+	for _, name := range names {
+		if i := slices.Index(f, "to"); i > 0 && i+1 < len(f) {
+			lines = append(lines, fmt.Sprintf("tele bot=%s to=%s status=started #%s", name, f[i+1], token))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("tele bot=%s status=started map=0 pos=0.0,0.0,0.0 tag=SETUP #%s", name, token))
+	}
+	lines = append(lines, fmt.Sprintf("tele-end count=%d records=%d target=%s bots=%d started=%d refused=0 #%s",
+		len(names), len(names), target, len(names), len(names), token))
+	sc.reply(c, token, lines...)
+}
+
+// reviveReply is the module's `.tb revive` report, one line per addressed bot.
+func (sc *dungeonScene) reviveReply(c *fakeConn, token, who string) {
+	names, target := []string{who}, who
+	if who == "party" {
+		names, target = dungeonParty, "party:"+dungeonParty[0]
+	}
+	lines := []string{"revive-begin #" + token}
+	for _, name := range names {
+		lines = append(lines, fmt.Sprintf("revive bot=%s tag=PRACTICE status=revived practice=yes #%s", name, token))
+	}
+	lines = append(lines, fmt.Sprintf("revive-end count=%d records=%d tag=PRACTICE target=%s bots=%d revived=%d refused=0 #%s",
+		len(names), len(names), target, len(names), len(names), token))
+	sc.reply(c, token, lines...)
+}
+
+// instanceReply is the module's instance leave/reset report: the record lines name the verb they perform.
+func (sc *dungeonScene) instanceReply(c *fakeConn, token, body string) {
+	lines := []string{"instance-begin #" + token}
+	if strings.HasSuffix(body, " leave") {
+		for _, name := range dungeonParty {
+			lines = append(lines, fmt.Sprintf("leave bot=%s map=1 status=started #%s", name, token))
+		}
+		lines = append(lines, fmt.Sprintf("instance-end count=%d records=%d verb=leave map=0 inst=1 bots=%d started=%d refused=0 #%s",
+			len(dungeonParty), len(dungeonParty), len(dungeonParty), len(dungeonParty), token))
+	} else {
+		lines = append(lines, "reset map=0 inst=1 status=ok #"+token)
+		lines = append(lines, "instance-end count=1 records=1 verb=reset instances=1 ok=1 failed=0 #"+token)
+	}
+	sc.reply(c, token, lines...)
 }
 
 // dungeonPlan writes a one-leg, one-pack plan at the scene's position.

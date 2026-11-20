@@ -102,7 +102,7 @@ func (c *dungeonCommander) Run(ctx context.Context, line string, o command.Optio
 func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.ActionReport, error) {
 	switch a.Kind {
 	case driver.ActionEnter:
-		return actionReport(c.client.EnterParty(ctx))
+		return actionReport(c.client.EnterParty(ctx, a.Map))
 	case driver.ActionTeleCommander:
 		return actionReport(c.client.Tele(ctx, a.Who, a.Map, float64(a.Pos[0]), float64(a.Pos[1]), float64(a.Pos[2])))
 	case driver.ActionTeleParty:

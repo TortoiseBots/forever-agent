@@ -6,17 +6,22 @@ package tbcmd
 // layer can send a verb the module did not define or an argument the grammar does not allow.
 //
 // Each call is token-matched and typed like every other command: the run's token must end every line, the reply
-// must be the command's own end line, and its `count` must agree with the lines before it. The module acknowledges
-// a setup command with the end line alone (`tele-end count=0 #token`, `enter-end count=0 #token`,
-// `revive-end count=0 #token`, `instance-end count=0 records=0 #token`), or with one record per target before it
-// that names the target it resolved (`tele target=party:commander:<name> #token`, then `tele-end count=1 #token`):
-// a party command addressed with "party" resolves to the party's commander or its leader, and the label is what
-// says so. A data line of any other kind, or one without its `target=`, is refused rather than read as a silent
-// success. The module's error line (`error code=... cmd=...`) is returned as a *CommandError, so a caller acts only
-// on a nil error.
+// must be a whole report of the command, and its `count` and `records` must agree with the lines between the
+// markers. The module's setup reports are:
+//
+//	tele-begin #token
+//	tele bot=<name> status=started ... #token        (one line per addressed character; map and pos on a teleport)
+//	tele-end count=<lines> records=<records> target=party:commander:<name> started=<n> refused=<n> #token
+//
+// The target label sits on the end line: a party command addressed with "party" resolves to the party's commander
+// or its leader, and the label is what says so. A per-bot line names the character the module handled in `bot=`.
+// A line whose `status=` is refused, and an end line that counts one (`refused=`/`failed=`), is the module's
+// refusal returned as a *CommandError. The module's single-line error (`error code=... cmd=...`) is returned the
+// same way, so a caller acts only on a nil error.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -25,16 +30,18 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
-// ActionReport is one setup command's answer: the end line and any per-target record lines, parsed whole.
+// ActionReport is one setup command's answer: its begin and end markers, its per-bot record lines, parsed whole.
 type ActionReport struct {
 	// Verb is the command word this layer sent: tele, enter, revive or instance.
 	Verb string
 	// Kind is the reply's end kind: tele-end, enter-end, revive-end or instance-end.
 	Kind string
-	// Count is the end line's count: the per-target lines before it (0 for an answer that only acknowledges).
+	// Count is the end line's count: the record lines between the markers, continuation lines included (0 for an
+	// answer that only acknowledges).
 	Count int
-	// Targets are the `target=` labels the answer's per-target lines named, in order: the party a command
-	// addressed, as the module resolved it (`party:<leader>`, `party:commander:<name>`) or the one character.
+	// Targets is the label the end line named: the party a command addressed, as the module resolved it
+	// (`party:<leader>`, `party:commander:<name>`) or the one character. A replied target is never the caller's
+	// guess.
 	Targets []ActionTarget
 	// End holds the end line's other keys, decoded. Unknown keys are kept, never an error.
 	End map[string]string
@@ -42,7 +49,7 @@ type ActionReport struct {
 	Raw []string
 }
 
-// ActionTarget is one `target=` of a setup answer. A party command names the party's leader (or the commander it
+// ActionTarget is the `target=` of a setup answer. A party command names the party's leader (or the commander it
 // was bound to); a command for one character names that character.
 type ActionTarget struct {
 	// Raw is the decoded label, its parts joined with ':'.
@@ -55,8 +62,8 @@ type ActionTarget struct {
 	Name string
 }
 
-// actionTarget reads one per-target line's `target=` label. The parts are split on ':' before decoding, so an
-// encoded ':' inside a name stays in the name.
+// actionTarget reads the end line's `target=` label. The parts are split on ':' before decoding, so an encoded ':'
+// inside a name stays in the name.
 func actionTarget(rec record) (ActionTarget, error) {
 	parts, err := rec.parts("target")
 	if err != nil {
@@ -104,9 +111,9 @@ func setupPos(what string, mapID uint32, x, y, z float64) (string, error) {
 	return fmt.Sprintf("%d %.1f %.1f %.1f", mapID, x, y, z), nil
 }
 
-// parseAction reads a setup command's end-only reply. endKind is the command's marker; verb names the command in
-// errors. A reply that is not complete, carries another command's lines, or whose count does not match the
-// acknowledged lines is ErrBadReport.
+// parseAction reads a setup command's whole report. endKind is the command's end marker; verb names the command in
+// errors and the per-bot lines' kind. A reply that is not complete, carries another command's lines, or whose
+// counts do not match its lines is ErrBadReport; a per-bot refusal is the module's *CommandError.
 func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error) {
 	out := ActionReport{Verb: verb, Kind: endKind}
 	if rep == nil {
@@ -130,21 +137,32 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 	if out.Count, err = end.requireInt("count", 0, math.MaxInt32); err != nil {
 		return out, err
 	}
-	between := len(rep.Lines) - 1
-	if out.Count != between {
-		return out, fmt.Errorf("%w: %s count=%d, %d line(s) before it", ErrBadReport, endKind, out.Count, between)
+	// The module opens a setup report with <verb>-begin, which is a marker and not a counted record line. The
+	// end-only acknowledgement of an older module (count=0) has no marker and is read the same way.
+	first := 0
+	if begin, err := decodeLine(rep.Lines[0]); err == nil && begin.kind == verb+"-begin" {
+		if len(begin.values) > 0 {
+			return out, fmt.Errorf("%w: %s carries a field", ErrBadReport, begin.kind)
+		}
+		first = 1
 	}
-	// A target record may be split over continuation lines (<verb>+) like any other record: a continuation joins the
-	// base line before it, repeats no key, and a continuation before any base line is malformed. Without the merge a
-	// tele+ line would read as a second target record (and an orphan one as a target of its own).
+	between := len(rep.Lines) - 1 - first
+	if between < 0 {
+		return out, fmt.Errorf("%w: the reply has no %s line", ErrBadReport, endKind)
+	}
+	if out.Count != between {
+		return out, fmt.Errorf("%w: %s count=%d, %d line(s) between the markers", ErrBadReport, endKind, out.Count, between)
+	}
+	// A record may be split over continuation lines (<verb>+): a continuation repeats the record's identity key and
+	// joins the base line before it, repeats no other key, and a continuation before any base line is malformed.
 	var recs []record
-	for i := range between {
+	for i := first; i < first+between; i++ {
 		rec, err := decodeLine(rep.Lines[i])
 		if err != nil {
 			return out, err
 		}
 		cont := strings.HasSuffix(rec.kind, "+")
-		if strings.TrimSuffix(rec.kind, "+") != verb {
+		if k := strings.TrimSuffix(rec.kind, "+"); !actionRecordKind(verb, k) {
 			return out, fmt.Errorf("%w: a %q line inside a %s reply", ErrBadReport, rec.kind, verb)
 		}
 		if !cont {
@@ -155,7 +173,19 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 			return out, fmt.Errorf("%w: a %s+ line before any %s line", ErrBadReport, verb, verb)
 		}
 		prev := &recs[len(recs)-1]
-		for _, k := range rec.keys {
+		// A continuation repeats the record's identity key (the base line's first key: bot= for a per-bot line)
+		// as its own first key, with the same value; every other key is new to the record.
+		id := ""
+		if len(prev.keys) > 0 {
+			id = prev.keys[0]
+			if len(rec.keys) == 0 || rec.keys[0] != id || rec.values[id] != prev.values[id] {
+				return out, fmt.Errorf("%w: %s+ for %q follows %q", ErrBadReport, verb, rec.values[rec.keys[0]], prev.values[id])
+			}
+		}
+		for i, k := range rec.keys {
+			if i == 0 && id != "" {
+				continue // the identity, checked above
+			}
 			if prev.has(k) {
 				return out, fmt.Errorf("%w: %s+ repeats %s", ErrBadReport, verb, k)
 			}
@@ -163,12 +193,54 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 			prev.keys = append(prev.keys, k)
 		}
 	}
-	for _, rec := range recs {
-		t, err := actionTarget(rec)
+	if _, ok := end.values["records"]; ok {
+		n, err := end.requireInt("records", 0, math.MaxInt32)
 		if err != nil {
 			return out, err
 		}
-		out.Targets = append(out.Targets, t)
+		if n != len(recs) {
+			return out, fmt.Errorf("%w: %s records=%d, %d record line(s)", ErrBadReport, endKind, n, len(recs))
+		}
+	}
+	for _, rec := range recs {
+		switch {
+		case rec.has("bot"):
+			name, err := rec.requireText("bot")
+			if err != nil {
+				return out, err
+			}
+			if name == "" {
+				return out, fmt.Errorf("%w: %s has an empty bot=", ErrBadReport, rec.kind)
+			}
+		case verb == "instance" && rec.kind == "reset" && rec.has("map"):
+			// A reset record names the instance it handled, not a character.
+		default:
+			return out, fmt.Errorf("%w: a %s line names no bot=", ErrBadReport, rec.kind)
+		}
+		if err := actionRefusal(rec, verb); err != nil {
+			return out, err
+		}
+	}
+	if end.has("target") {
+		t, err := actionTarget(end)
+		if err != nil {
+			return out, err
+		}
+		out.Targets = append([]ActionTarget{t}, out.Targets...)
+	}
+	if err := actionRefusal(end, verb); err != nil {
+		return out, err
+	}
+	// The end line counts what it refused; a count is a refusal even when the per-bot lines that say so are not
+	// in the reply (a module that lost them is not a success).
+	for _, key := range []string{"refused", "failed"} {
+		n, ok, err := end.optionalInt(key, 0, math.MaxInt32)
+		if err != nil {
+			return out, err
+		}
+		if ok && n > 0 {
+			return out, &CommandError{Code: "refused", Cmd: verb}
+		}
 	}
 	out.Raw = append([]string(nil), rep.Raw...)
 	out.End = make(map[string]string, len(end.keys))
@@ -178,6 +250,39 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 		}
 	}
 	return out, nil
+}
+
+// actionRecordKind reports whether a record kind belongs inside a setup reply of verb. The instance command's own
+// records name the verb they perform (leave or reset), not the command word.
+func actionRecordKind(verb, kind string) bool {
+	if kind == verb {
+		return true
+	}
+	return verb == "instance" && (kind == "leave" || kind == "reset")
+}
+
+// actionRefusal turns one refused or failed record into the module's named error. A line's status= says what the
+// module did with that character (or instance); a refusal is not a partial success the caller may act on.
+func actionRefusal(rec record, verb string) error {
+	st, has, err := rec.text("status")
+	if err != nil || !has {
+		return err
+	}
+	if st != "refused" && st != "failed" {
+		return nil
+	}
+	code, _, err := rec.text("code")
+	if err != nil {
+		return err
+	}
+	msg, hasMsg, err := rec.text("msg")
+	if err != nil {
+		return err
+	}
+	if code == "" {
+		code = "refused"
+	}
+	return &CommandError{Code: code, Cmd: verb, Msg: msg, HasMsg: hasMsg}
 }
 
 // Tele teleports one character to a map position: `.tb tele <who> <map> <x> <y> <z>`.
@@ -227,11 +332,23 @@ func (c *Client) TeleTo(ctx context.Context, who, other string) (ActionReport, e
 	return parseAction(rep, "tele-end", "tele")
 }
 
-// EnterParty brings the party into the instance: `.tb enter party`.
-func (c *Client) EnterParty(ctx context.Context) (ActionReport, error) {
-	rep, err := c.call(ctx, ".tb enter party", "enter-end")
+// EnterParty brings the party into the instance: `.tb enter party`. The bare form needs the party to stand inside
+// an area trigger that leads somewhere else; a party outside the entrance's box (the teleport spot of a plan's
+// portal, say) gets `error code=no-trigger` from it. When the caller passes the plan's map, that answer is retried
+// once as `.tb enter party map <mapID>`, which names the map's own entrance trigger from anywhere on the outer map.
+// Any other refusal is the module's and is returned unchanged; mapID 0 keeps the bare form alone.
+func (c *Client) EnterParty(ctx context.Context, mapID uint32) (ActionReport, error) {
+	line := ".tb enter party"
+	rep, err := c.call(ctx, line, "enter-end")
 	if err != nil {
-		return ActionReport{}, err
+		var refused *CommandError
+		if mapID == 0 || !errors.As(err, &refused) || refused.Code != "no-trigger" {
+			return ActionReport{}, err
+		}
+		line = fmt.Sprintf(".tb enter party map %d", mapID)
+		if rep, err = c.call(ctx, line, "enter-end"); err != nil {
+			return ActionReport{}, err
+		}
 	}
 	return parseAction(rep, "enter-end", "enter")
 }

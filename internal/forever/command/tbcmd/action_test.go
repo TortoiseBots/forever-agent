@@ -8,43 +8,127 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
+// The reply lines in this file are the module's own shape: a begin marker, one record per character with its own
+// status, and an end line that counts the lines and names the resolved target (`target=party:commander:<name>`).
+
 // actionCase is one setup call: the line it must send, the end kind and the answer.
 type actionCase struct {
-	name string
-	call func(c *Client) (ActionReport, error)
-	line string
-	end  string
+	name  string
+	call  func(c *Client) (ActionReport, error)
+	line  string
+	end   string
+	lines []string
 }
 
 // TestActionsSendTypedLines: every setup command builds its one line from typed arguments, requires its own end
-// marker and reads only a reply that ended. A reply of another command, a count that disagrees with the lines and a
-// line the layer does not read are refused; the module's error line is the named refusal.
+// marker and reads its reply's begin marker, per-bot records, counts and target label.
 func TestActionsSendTypedLines(t *testing.T) {
 	cases := []actionCase{
-		{"tele", func(c *Client) (ActionReport, error) {
-			return c.Tele(context.Background(), "Tbdpsone", 44, -8913, -136.04, 82.5)
-		}, ".tb tele Tbdpsone 44 -8913.0 -136.0 82.5", "tele-end"},
-		{"tele party", func(c *Client) (ActionReport, error) {
-			return c.TeleParty(context.Background(), 0, 1.25, 2, -3)
-		}, ".tb tele party 0 1.2 2.0 -3.0", "tele-end"},
-		{"tele to", func(c *Client) (ActionReport, error) {
-			return c.TeleTo(context.Background(), "Lead", "Tbtank")
-		}, ".tb tele Lead to Tbtank", "tele-end"},
-		{"enter", func(c *Client) (ActionReport, error) {
-			return c.EnterParty(context.Background())
-		}, ".tb enter party", "enter-end"},
-		{"revive", func(c *Client) (ActionReport, error) {
-			return c.Revive(context.Background(), "Tbdpstwo")
-		}, ".tb revive Tbdpstwo", "revive-end"},
-		{"revive party", func(c *Client) (ActionReport, error) {
-			return c.Revive(context.Background(), "party")
-		}, ".tb revive party", "revive-end"},
-		{"instance leave", func(c *Client) (ActionReport, error) {
-			return c.InstanceLeave(context.Background(), "Tbtank")
-		}, ".tb instance Tbtank leave", "instance-end"},
-		{"instance reset", func(c *Client) (ActionReport, error) {
-			return c.InstanceReset(context.Background(), "Tbtank")
-		}, ".tb instance Tbtank reset", "instance-end"},
+		{
+			name: "tele",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 44, -8913, -136.04, 82.5)
+			},
+			line: ".tb tele Tbdpsone 44 -8913.0 -136.0 82.5",
+			end:  "tele-end",
+			lines: []string{
+				"tele-begin #T",
+				"tele bot=Tbdpsone status=started map=44 pos=-8913.0,-136.0,82.5 tag=SETUP #T",
+				"tele-end count=1 records=1 target=Tbdpsone bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "tele party",
+			call: func(c *Client) (ActionReport, error) {
+				return c.TeleParty(context.Background(), 0, 1.25, 2, -3)
+			},
+			line: ".tb tele party 0 1.2 2.0 -3.0",
+			end:  "tele-end",
+			lines: []string{
+				"tele-begin #T",
+				"tele bot=Atank status=started map=0 pos=1.2,2.0,-3.0 tag=SETUP #T",
+				"tele-end count=1 records=1 target=party:commander:Dcmd bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "tele to",
+			call: func(c *Client) (ActionReport, error) {
+				return c.TeleTo(context.Background(), "Lead", "Tbtank")
+			},
+			line: ".tb tele Lead to Tbtank",
+			end:  "tele-end",
+			lines: []string{
+				"tele-begin #T",
+				"tele bot=Lead status=started map=44 pos=10.0,20.0,30.0 tag=SETUP #T",
+				"tele-end count=1 records=1 target=Lead bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "enter",
+			call: func(c *Client) (ActionReport, error) {
+				return c.EnterParty(context.Background(), 0)
+			},
+			line: ".tb enter party",
+			end:  "enter-end",
+			lines: []string{
+				"enter-begin #T",
+				"enter bot=Atank trigger=0 map=0 status=started inbox=no direct=no #T",
+				"enter-end count=1 records=1 trigger=0 map=0 target=party:Atank bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "revive",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Revive(context.Background(), "Tbdpstwo")
+			},
+			line: ".tb revive Tbdpstwo",
+			end:  "revive-end",
+			lines: []string{
+				"revive-begin #T",
+				"revive bot=Tbdpstwo tag=PRACTICE status=revived practice=yes #T",
+				"revive-end count=1 records=1 tag=PRACTICE target=Tbdpstwo bots=1 revived=1 refused=0 #T",
+			},
+		},
+		{
+			name: "revive party",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Revive(context.Background(), "party")
+			},
+			line: ".tb revive party",
+			end:  "revive-end",
+			lines: []string{
+				"revive-begin #T",
+				"revive bot=Atank tag=PRACTICE status=revived practice=yes #T",
+				"revive bot=Bheal tag=PRACTICE status=revived practice=yes #T",
+				"revive-end count=2 records=2 tag=PRACTICE target=party:Atank bots=2 revived=2 refused=0 #T",
+			},
+		},
+		{
+			name: "instance leave",
+			call: func(c *Client) (ActionReport, error) {
+				return c.InstanceLeave(context.Background(), "Tbtank")
+			},
+			line: ".tb instance Tbtank leave",
+			end:  "instance-end",
+			lines: []string{
+				"instance-begin #T",
+				"leave bot=Atank map=1 status=started #T",
+				"instance-end count=1 records=1 verb=leave map=389 inst=7 bots=1 started=1 refused=0 #T",
+			},
+		},
+		{
+			name: "instance reset",
+			call: func(c *Client) (ActionReport, error) {
+				return c.InstanceReset(context.Background(), "Tbtank")
+			},
+			line: ".tb instance Tbtank reset",
+			end:  "instance-end",
+			lines: []string{
+				"instance-begin #T",
+				"reset map=389 inst=7 status=ok #T",
+				"instance-end count=1 records=1 verb=reset leader=Atank instances=1 ok=1 failed=0 #T",
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,48 +136,165 @@ func TestActionsSendTypedLines(t *testing.T) {
 				if line != tc.line {
 					t.Fatalf("line %q, want %q", line, tc.line)
 				}
-				return reply(o, tc.end+" count=0 #T"), nil
+				return reply(o, tc.lines...), nil
 			}}
 			rep, err := tc.call(NewClient(r))
 			if err != nil {
 				t.Fatalf("call: %v", err)
 			}
-			if rep.Kind != tc.end || rep.Count != 0 || rep.Verb == "" {
+			if rep.Kind != tc.end || rep.Count == 0 || rep.Verb == "" {
 				t.Fatalf("report %+v", rep)
 			}
 		})
 	}
 }
 
-// TestActionRepliesAreStrict: only the command's own end line, tokened, with a count that matches the acknowledged
-// lines, is a report; the module's error line is a named refusal.
+// TestEnterFallsBackToThePlanMap: `.tb enter party` from outside the entrance's box answers no-trigger; with the
+// plan's map the call is retried once as `enter party map <id>` and the report is the real module's. Any other
+// refusal is not retried.
+func TestEnterFallsBackToThePlanMap(t *testing.T) {
+	var seen []string
+	r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		seen = append(seen, line)
+		if len(seen) == 1 {
+			return reply(o, "error code=no-trigger cmd=enter msg=no%20area%20trigger%20leads%20into%20that%20map #T"), nil
+		}
+		return reply(o, "enter-begin #T",
+			"enter bot=Atank trigger=2230 map=389 status=started inbox=no direct=no #T",
+			"enter-end count=1 records=1 trigger=2230 map=389 target=party:commander:Dcmd bots=1 started=1 refused=0 #T"), nil
+	}}
+	rep, err := NewClient(r).EnterParty(context.Background(), 389)
+	if err != nil {
+		t.Fatalf("EnterParty: %v", err)
+	}
+	want := []string{".tb enter party", ".tb enter party map 389"}
+	if len(seen) != 2 || seen[0] != want[0] || seen[1] != want[1] {
+		t.Fatalf("lines %q, want %q", seen, want)
+	}
+	if len(rep.Targets) != 1 || rep.Targets[0].Commander != "Dcmd" {
+		t.Fatalf("report %+v", rep)
+	}
+
+	// Another refusal is the module's answer and stands: no map retry.
+	seen = nil
+	r = &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		seen = append(seen, line)
+		return reply(o, "error code=not-in-party cmd=enter #T"), nil
+	}}
+	_, err = NewClient(r).EnterParty(context.Background(), 389)
+	var ce *CommandError
+	if !errors.As(err, &ce) || ce.Code != "not-in-party" || len(seen) != 1 {
+		t.Fatalf("refusal %v after %q", err, seen)
+	}
+
+	// No map to fall back to: the bare form's no-trigger stays the answer.
+	seen = nil
+	r = &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		seen = append(seen, line)
+		return reply(o, "error code=no-trigger cmd=enter #T"), nil
+	}}
+	_, err = NewClient(r).EnterParty(context.Background(), 0)
+	if !errors.As(err, &ce) || ce.Code != "no-trigger" || len(seen) != 1 {
+		t.Fatalf("no-trigger without a map: %v after %q", err, seen)
+	}
+}
+
+// TestActionRefusalStaysAnError: the module's own error line and a per-bot refusal are both named refusals; a reply
+// whose end line counts a refusal without a line that says so is one too.
+func TestActionRefusalStaysAnError(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(c *Client) (ActionReport, error)
+		code string
+	}{
+		{
+			name: "error line",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+			},
+			code: "no-such-bot",
+		},
+		{
+			name: "per-bot refusal",
+			call: func(c *Client) (ActionReport, error) {
+				return c.Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+			},
+			code: "teleporting",
+		},
+		{
+			name: "end counts a refusal",
+			call: func(c *Client) (ActionReport, error) {
+				return c.EnterParty(context.Background(), 389)
+			},
+			code: "refused",
+		},
+		{
+			name: "reset failure",
+			call: func(c *Client) (ActionReport, error) {
+				return c.InstanceReset(context.Background(), "Atank")
+			},
+			code: "other",
+		},
+	}
+	lines := map[string][]string{
+		"error line": {"error code=no-such-bot cmd=tele #T"},
+		"per-bot refusal": {
+			"tele-begin #T",
+			"tele bot=Tbdpsone status=refused code=teleporting msg=the%20bot%20is%20being%20teleported #T",
+			"tele-end count=1 records=1 target=Tbdpsone bots=1 started=0 refused=1 #T",
+		},
+		"end counts a refusal": {
+			"enter-begin #T",
+			"enter-end count=0 records=0 trigger=0 map=389 target=party:Atank bots=1 started=0 refused=1 #T",
+		},
+		"reset failure": {
+			"instance-begin #T",
+			"reset map=389 inst=7 status=failed code=other msg=the%20group%20still%20names%20the%20instance #T",
+			"instance-end count=1 records=1 verb=reset leader=Atank instances=1 ok=0 failed=1 #T",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.call(NewClient(oneReply(lines[tc.name]...)))
+			var ce *CommandError
+			if !errors.As(err, &ce) || ce.Code != tc.code {
+				t.Fatalf("error %v, want code %q", err, tc.code)
+			}
+		})
+	}
+}
+
+// TestActionRepliesAreStrict: only the command's own begin and end markers, tokened, with counts that match the
+// lines between them, are a report.
 func TestActionRepliesAreStrict(t *testing.T) {
 	call := func(raws ...string) (ActionReport, error) {
 		return NewClient(oneReply(raws...)).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
 	}
-	if _, err := call("tele-end count=1 #T"); !errors.Is(err, ErrBadReport) {
+	if _, err := call("tele-begin #T", "tele-end count=1 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("count over the lines: err %v, want ErrBadReport", err)
 	}
-	if _, err := call("tele-end #T"); !errors.Is(err, ErrBadReport) {
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T", "tele-end #T"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("a count-less end: err %v, want ErrBadReport", err)
 	}
-	if _, err := call("enter-end count=0 #T"); !errors.Is(err, ErrBadReport) {
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T", "enter-end count=1 records=1 #T"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("another command's end: err %v, want ErrBadReport", err)
 	}
-	if _, err := call("order bot=Tbdpsone status=ok #T", "tele-end count=1 #T"); !errors.Is(err, ErrBadReport) {
+	if _, err := call("tele-begin #T", "order bot=Tbdpsone status=ok #T", "tele-end count=1 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("another kind's record line: err %v, want ErrBadReport", err)
 	}
-	if _, err := call("tele tgtentry=426 #T", "tele-end count=1 #T"); !errors.Is(err, ErrBadReport) {
-		t.Fatalf("a record line without target=: err %v, want ErrBadReport", err)
+	// The module always writes the character's name first; a record that names neither a character nor a target is
+	// not a setup record this layer can read.
+	if _, err := call("tele-begin #T", "tele status=started #T", "tele-end count=1 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a record line without bot=: err %v, want ErrBadReport", err)
 	}
-	// The error line is the module's refusal, with its code.
-	errRunner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
-		return reply(o, "error code=no-such-bot cmd=tele #T"), nil
-	}}
-	rep, err := NewClient(errRunner).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
-	var ce *CommandError
-	if !errors.As(err, &ce) || ce.Code != "no-such-bot" || rep.Verb != "" {
-		t.Fatalf("refusal: %v (report %+v)", err, rep)
+	if _, err := call("tele-begin #T", "tele target=Tbdpsone status=started #T", "tele-end count=1 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a per-bot line with target= and no bot=: err %v, want ErrBadReport", err)
+	}
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T", "tele-end count=1 records=2 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("records over the record lines: err %v, want ErrBadReport", err)
+	}
+	if _, err := call("tele-begin junk=1 #T", "tele bot=Tbdpsone status=started #T", "tele-end count=1 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a begin marker with a field: err %v, want ErrBadReport", err)
 	}
 }
 
@@ -122,30 +323,35 @@ func TestActionArgumentsAreChecked(t *testing.T) {
 	}
 }
 
-// TestActionPartyTargets: a setup answer may name the target it resolved before its end line, as the module does
-// for a party command (`.tb tele party` answers target=party:commander:<name>). The label is typed, not text: the
-// party form, its commander, or the character named. A label of another shape is refused.
+// TestActionPartyTargets: the end line names the target the module resolved, as the module writes it
+// (`target=party:commander:<name>`). The label is typed, not text: the party form, its commander, or the character
+// named. A label of another shape is refused.
 func TestActionPartyTargets(t *testing.T) {
 	cases := []struct {
-		line string
-		want ActionTarget
+		target string
+		want   ActionTarget
 	}{
-		{"tele target=party:commander:Watchcmd #T", ActionTarget{Raw: "party:commander:Watchcmd", Party: true, Commander: "Watchcmd", Name: "Watchcmd"}},
-		{"tele target=party:Watchtank #T", ActionTarget{Raw: "party:Watchtank", Party: true, Name: "Watchtank"}},
-		{"tele target=Watchtank #T", ActionTarget{Raw: "Watchtank", Name: "Watchtank"}},
-		{"tele target=party:commander:Watch%5Fcmd #T", ActionTarget{Raw: "party:commander:Watch_cmd", Party: true, Commander: "Watch_cmd", Name: "Watch_cmd"}},
+		{"target=party:commander:Watchcmd #T", ActionTarget{Raw: "party:commander:Watchcmd", Party: true, Commander: "Watchcmd", Name: "Watchcmd"}},
+		{"target=party:Watchtank #T", ActionTarget{Raw: "party:Watchtank", Party: true, Name: "Watchtank"}},
+		{"target=Watchtank #T", ActionTarget{Raw: "Watchtank", Name: "Watchtank"}},
+		{"target=party:commander:Watch%5Fcmd #T", ActionTarget{Raw: "party:commander:Watch_cmd", Party: true, Commander: "Watch_cmd", Name: "Watch_cmd"}},
 	}
 	for _, c := range cases {
-		rep, err := NewClient(oneReply(c.line, "tele-end count=1 #T")).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
+		rep, err := NewClient(oneReply("tele-begin #T",
+			"tele bot=Tbdpsone status=started #T",
+			"tele-end count=1 records=1 "+c.target)).
+			Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
 		if err != nil {
-			t.Fatalf("%q: %v", c.line, err)
+			t.Fatalf("%q: %v", c.target, err)
 		}
 		if rep.Count != 1 || len(rep.Targets) != 1 || rep.Targets[0] != c.want {
-			t.Fatalf("%q: report %+v", c.line, rep)
+			t.Fatalf("%q: report %+v", c.target, rep)
 		}
 	}
 	// A party command's answer carries the party's commander: the bot the module runs, which is not this character.
-	rep, err := NewClient(oneReply("tele target=party:commander:Watchcmd #T", "tele-end count=1 #T")).
+	rep, err := NewClient(oneReply("tele-begin #T",
+		"tele bot=Watchtank status=started #T",
+		"tele-end count=1 records=1 target=party:commander:Watchcmd #T")).
 		TeleParty(context.Background(), 389, 1, 2, 3)
 	if err != nil || len(rep.Targets) != 1 || !rep.Targets[0].Party || rep.Targets[0].Commander != "Watchcmd" {
 		t.Fatalf("party teleport: %v %+v", err, rep)
@@ -155,37 +361,46 @@ func TestActionPartyTargets(t *testing.T) {
 		t.Fatalf("acknowledgement: %v %+v", err, rep)
 	}
 	for _, bad := range []string{
-		"tele target=party:commander: #T",
-		"tele target=party::Watchcmd #T",
-		"tele target=party:Watchcmd:extra #T",
-		"tele target= #T",
-		"tele target=party #T", // the command's keyword, never a character named Party
+		"target=party:commander: #T",
+		"target=party::Watchcmd #T",
+		"target=party:Watchcmd:extra #T",
+		"target= #T",
+		"target=party #T", // the command's keyword, never a character named Party
 	} {
-		if _, err := NewClient(oneReply(bad, "tele-end count=1 #T")).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3); !errors.Is(err, ErrBadValue) {
+		if _, err := NewClient(oneReply("tele-begin #T",
+			"tele bot=Tbdpsone status=started #T",
+			"tele-end count=1 records=1 "+bad)).
+			Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3); !errors.Is(err, ErrBadValue) {
 			t.Fatalf("%q: err %v, want ErrBadValue", bad, err)
 		}
 	}
 }
 
-// TestActionContinuationLines: a target record may be split over <verb>+ continuation lines like any record. A
-// continuation joins the base line before it (and a target may sit in the continuation); a continuation before any
-// base line, or one repeating a key, is malformed rather than a second target.
+// TestActionContinuationLines: a per-bot record may be split over <verb>+ continuation lines like any record. A
+// continuation repeats the record's bot= as its first key; a continuation before any base line, or one repeating
+// another key, is malformed rather than a second record.
 func TestActionContinuationLines(t *testing.T) {
 	call := func(raws ...string) (ActionReport, error) {
 		return NewClient(oneReply(raws...)).Tele(context.Background(), "Tbdpsone", 0, 1, 2, 3)
 	}
-	// The merge: the base line and its continuation are one target record.
-	rep, err := call("tele #T", "tele+ target=party:Watchtank #T", "tele-end count=2 #T")
+	rep, err := call("tele-begin #T", "tele bot=Tbdpsone #T",
+		"tele+ bot=Tbdpsone status=started map=44 pos=-8913.0,-136.0,82.5 tag=SETUP #T",
+		"tele-end count=2 records=1 target=Tbdpsone #T")
 	if err != nil {
-		t.Fatalf("a split target record: %v", err)
+		t.Fatalf("a split record: %v", err)
 	}
-	if len(rep.Targets) != 1 || !rep.Targets[0].Party || rep.Targets[0].Name != "Watchtank" {
-		t.Fatalf("split target: %+v", rep)
+	if rep.Count != 2 || len(rep.Targets) != 1 || rep.Targets[0].Name != "Tbdpsone" {
+		t.Fatalf("split record: %+v", rep)
 	}
-	if _, err := call("tele+ target=party:Watchtank #T", "tele-end count=1 #T"); !errors.Is(err, ErrBadReport) {
+	if _, err := call("tele-begin #T", "tele+ bot=Tbdpsone status=started #T", "tele-end count=2 records=1 #T"); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("an orphan continuation: err %v, want ErrBadReport", err)
 	}
-	if _, err := call("tele target=party:Watchtank #T", "tele+ target=party:Watchcmd #T", "tele-end count=2 #T"); !errors.Is(err, ErrBadReport) {
-		t.Fatalf("a continuation repeating target=: err %v, want ErrBadReport", err)
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T",
+		"tele+ bot=Tbdpsone status=started #T", "tele-end count=2 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a continuation repeating status=: err %v, want ErrBadReport", err)
+	}
+	if _, err := call("tele-begin #T", "tele bot=Tbdpsone status=started #T",
+		"tele+ bot=Other status=revived #T", "tele-end count=2 records=1 target=Tbdpsone #T"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a continuation of another bot: err %v, want ErrBadReport", err)
 	}
 }

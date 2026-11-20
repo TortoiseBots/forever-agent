@@ -7,10 +7,15 @@ package driver
 // progress (leg, step, pulls, deaths, wipes, pauses with their reasons, the bosses the instance report gives), and
 // keeps the safety budgets:
 //
-//   - the watchdog: no new event for cfg.Watchdog -> pause the run with a reason, report, and end the watch;
+//   - the watchdog: no new event for cfg.Watchdog -> pause the run with a reason, report, and end the watch; a run
+//     that is already paused is not paused again, the watchdog reports it and the watch ends;
+//   - the pause budget: a run whose state is paused and whose pause has not cleared for Limits.WatchPause (5 min)
+//     is reported and the watch ends as paused-stuck (the module never resumes a pause by itself, and the watch
+//     sends no resume on its own);
 //   - the time budget (Limits.MaxMinutes) and the wipe budget (Limits.MaxWipes);
 //   - the practice rescue: a run paused on a wipe for Limits.WatchRescue (300 s) gets one `.tb revive party`
-//     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times.
+//     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times. The rescue runs before the pause
+//     budget, so the wipe pause it can clear is not reported as stuck.
 //
 // Every send goes through act and its gate, like every other setup action. The stop path sends `.tb run stop`, waits
 // (bounded) for the module's state to reach stopped, and writes the run's summary: the dungeon-run format, extended
@@ -20,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -72,7 +76,7 @@ type watchRun struct {
 	stepSeen  map[[2]int]bool
 	deaths    []DeathRecord
 	rescueLog []RescueNote
-	units     map[uint32]string
+	roles     map[string]string
 	elapsed   int
 }
 
@@ -95,7 +99,7 @@ func (r *Run) Watch(ctx context.Context) Result {
 	st := StatePrepare
 	r.states = append(r.states, st)
 	st = r.prepare(ctx)
-	w.units = r.watchUnits()
+	w.roles = r.watchRoles()
 	if r.stopReason == "" && st == StateTravel {
 		r.states = append(r.states, StateTravel)
 		st = r.travel(ctx)
@@ -264,15 +268,26 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 			r.stop("wipes")
 			return
 		}
-		if w.state == "running" && r.watchdog(ctx, w) {
-			r.stop("watchdog")
-			return
-		}
+		// The practice rescue is the wipe pause's one remedy and runs before the pause budget: a pause it can
+		// clear is not a stuck one.
 		if r.watchRescue(ctx, w) {
 			// The rescue ended the watch (a refusal, a lost link, a spent budget).
 			if r.stopReason != "" {
 				return
 			}
+		}
+		if w.state == "paused" && r.pauseStuck(w) {
+			r.stop(StopPausedStuck)
+			return
+		}
+		// The watchdog covers a paused run too: a pause sends no event, so its ring is as silent as a hung pull's.
+		if (w.state == "running" || w.state == "paused") && r.watchdog(ctx, w) {
+			if w.state == "paused" {
+				r.stop(StopPausedStuck)
+			} else {
+				r.stop("watchdog")
+			}
+			return
 		}
 		if !r.sleep(ctx, r.cfg.Poll) {
 			return
@@ -364,6 +379,11 @@ func (r *Run) applyRun(w *watchRun, st tbcmd.RunState) {
 			w.onWipe = false
 			w.wipePending = false
 		}
+	}
+	// A pause the status read shows starts the pause clock even without a state change: a resume event clears it,
+	// and the module's next paused record is the pause that matters then (a status read newer than the event).
+	if st.State == "paused" && w.pausedSince.IsZero() {
+		w.pausedSince = r.now()
 	}
 }
 
@@ -472,8 +492,10 @@ func (w *watchRun) noteEvent(ev tbcmd.RunEvent) {
 		d := DeathRecord{AtS: ev.T, Leg: ev.Leg, Step: ev.Step}
 		if ev.HasUnit {
 			d.Unit = ev.Unit
-			d.Who = w.units[ev.Unit]
 		}
+		// The module names the dead member in the event's why=; unit= is the fight's unit, the same for every
+		// death of one pull, so it is never the member. The member's word is its party slot, not its name.
+		d.Who = w.roles[strings.ToLower(strings.TrimSpace(ev.Why))]
 		w.deaths = append(w.deaths, d)
 		if ev.HasStep {
 			w.step(ev.Leg, ev.Step).Deaths++
@@ -517,15 +539,15 @@ func (w *watchRun) step(leg, step int) *StepRecord {
 	return s
 }
 
-// watchUnits maps a party member's GUID to the role word the card uses. A card names roles, never characters.
-func (r *Run) watchUnits() map[uint32]string {
-	out := map[uint32]string{}
+// watchRoles maps a character name to the party slot word a card uses, so a death event's why= (the dead member's
+// name) becomes a role and never a name on the card. It is keyed lower-case: module names are case-insensitive.
+func (r *Run) watchRoles() map[string]string {
+	out := make(map[string]string, len(r.cfg.Party))
 	for i, name := range r.cfg.Party {
-		g, ok := r.world.PlayerGUID(name)
-		if !ok || g.Low == 0 || g.Low > math.MaxUint32 {
+		if name == "" {
 			continue
 		}
-		out[uint32(g.Low)] = partyRole(i)
+		out[strings.ToLower(name)] = partyRole(i)
 	}
 	return out
 }
@@ -541,7 +563,43 @@ func partyRole(i int) string {
 	return fmt.Sprintf("dps%d", i-1)
 }
 
-// watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports.
+// StopPausedStuck is the watch's stop reason when the module's pause never cleared within Limits.WatchPause (or,
+// for a watchdog that covers the pause, within the watchdog's own budget): the run is not hung mid-pull, it is
+// waiting on a pause nothing will lift, and the watch reports it instead of waiting out the time budget.
+const StopPausedStuck = "paused-stuck"
+
+// watchPauseBudget is Limits.WatchPause with the default for a zero or negative value.
+func (r *Run) watchPauseBudget() time.Duration {
+	if r.lim.WatchPause > 0 {
+		return r.lim.WatchPause
+	}
+	return DefaultLimits().WatchPause
+}
+
+// pauseStuck reports a run that has been paused past the pause budget, and says where it stands and why it is
+// paused. The module never resumes a pause by itself, so a pause nothing clears is a run that will sit there: the
+// watch ends with StopPausedStuck rather than waiting for the time budget.
+func (r *Run) pauseStuck(w *watchRun) bool {
+	if w.pausedSince.IsZero() {
+		return false
+	}
+	age, budget := r.now().Sub(w.pausedSince), r.watchPauseBudget()
+	if age < budget {
+		return false
+	}
+	// A rescue in flight is not a stuck pause: the revive has been answered and the resume waits for a report newer
+	// than that send. watchRescue's own window (2×WatchRescue after the revive) ends a rescue that never completes;
+	// until then the pause budget stands aside, or it would end the watch between the two halves of the rescue.
+	if rescue := r.lim.WatchRescue; rescue > 0 && w.revived && !w.reviveAt.IsZero() && r.now().Sub(w.reviveAt) <= 2*rescue {
+		return false
+	}
+	r.logf("watch: pause not cleared for %.0fs (limit %.0fs) at leg %d/step %d: %s", age.Seconds(),
+		budget.Seconds(), w.record.Leg, w.record.Step, w.record.Why)
+	return true
+}
+
+// watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports. A paused run it
+// reaches is reported, not paused again: there is nothing to send, and the caller ends the watch as paused-stuck.
 func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 	if w.lastEvent.IsZero() {
 		w.lastEvent = r.now()
@@ -550,6 +608,15 @@ func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 	idle := r.now().Sub(w.lastEvent)
 	if idle < r.cfg.Watchdog {
 		return false
+	}
+	if w.state == "paused" {
+		age := idle
+		if !w.pausedSince.IsZero() {
+			age = r.now().Sub(w.pausedSince)
+		}
+		r.logf("watch: watchdog: paused for %.0fs with no new event (limit %.0fs) at leg %d/step %d: %s",
+			age.Seconds(), r.cfg.Watchdog.Seconds(), w.record.Leg, w.record.Step, w.record.Why)
+		return true
 	}
 	r.logf("watch: watchdog: no new event for %.0fs (limit %.0fs); pausing the run", idle.Seconds(), r.cfg.Watchdog.Seconds())
 	rep, why := r.act(ctx, Action{Kind: ActionRunPause, Who: r.cfg.Leader, Reason: "watchdog no new event"})

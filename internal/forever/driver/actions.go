@@ -77,7 +77,8 @@ type Action struct {
 	Who string
 	// Other is ActionTeleTo's destination character.
 	Other string
-	// Map and Pos are ActionTeleCommander's and ActionTeleParty's destination.
+	// Map and Pos are ActionTeleCommander's and ActionTeleParty's destination; for ActionEnter, Map is the plan's
+	// instance map the module is asked to enter by (0 keeps the module's trigger-the-party-stands-in form).
 	Map uint32
 	Pos Vec3
 	// Dest is ActionTeleOutside's named place, from the plan's outside_tele.

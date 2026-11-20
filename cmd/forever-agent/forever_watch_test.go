@@ -49,6 +49,8 @@ func TestForeverWatchArguments(t *testing.T) {
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--enter", "warp"},
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--poll", "31"},
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--watchdog-minutes", "0"},
+		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--pause-minutes", "0"},
+		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--pause-minutes", "121"},
 	}
 	for _, args := range cases {
 		if code, _, _ := runWatchCmd(t, args...); code != 2 {

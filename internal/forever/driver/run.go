@@ -74,10 +74,13 @@ type Limits struct {
 	MaxPractice int
 	MaxMinutes  int
 	// WatchPoll is the watch loop's interval between the module's status and event reads; Watchdog bounds the time
-	// without a new event (then the watcher pauses the run and reports); WatchRescue is how long a run may stay
-	// paused on a wipe before the practice rescue; WatchStop bounds the wait for the stopped state after a stop.
+	// without a new event (then the watcher pauses a running run and reports, and a paused one ends as
+	// paused-stuck); WatchPause is how long a pause may stand before the watch reports it as paused-stuck;
+	// WatchRescue is how long a run may stay paused on a wipe before the practice rescue; WatchStop bounds the wait
+	// for the stopped state after a stop.
 	WatchPoll   time.Duration
 	Watchdog    time.Duration
+	WatchPause  time.Duration
 	WatchRescue time.Duration
 	WatchStop   time.Duration
 }
@@ -114,6 +117,7 @@ func DefaultLimits() Limits {
 		MaxMinutes:    120,
 		WatchPoll:     2 * time.Second,
 		Watchdog:      10 * time.Minute,
+		WatchPause:    5 * time.Minute,
 		WatchRescue:   300 * time.Second,
 		WatchStop:     600 * time.Second,
 	}

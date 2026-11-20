@@ -24,7 +24,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
 | Roster dashboard (rounds DASH-1/2) | **Client and watch; no live run yet** (`forever-agent forever dash-bots`: the typed login, the logged-in bots and the heartbeat, and a watch that reports a death, a stuck bot, a lone fight and a bot far from its group; plain http only on loopback unless the explicit flag allows it; the dungeon watch can take the same client and rules; see [docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md) and [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
-| Dungeon watcher (round S7) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-watch`: PREPARE and ENTER as a run, then one typed `.tb run start`, after which the client never orders a bot — it polls the module's run status and event ring at a stated interval and prints progress, with a watchdog, a time budget, a wipe budget and the practice rescue, and a summary extended with the module's counters — see [docs/forever/WATCH-R1-NOTES.md](docs/forever/WATCH-R1-NOTES.md)) |
+| Dungeon watcher (round S7) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-watch`: PREPARE and ENTER as a run, then one typed `.tb run start`, after which the client never orders a bot — it polls the module's run status and event ring at a stated interval and prints progress, with a watchdog, a pause budget, a time budget, a wipe budget and the practice rescue, and a summary extended with the module's counters — see [docs/forever/WATCH-R1-NOTES.md](docs/forever/WATCH-R1-NOTES.md)) |
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
@@ -328,14 +328,18 @@ commander stands outside it and the tank leads, while this character is only an 
 party's commander or a member. The client does what a run does up to the entry (PREPARE checks the roster — the tank
 is the party's leader or the bot the run names — then the portal or the teleport, with the same gates), starts the
 module's run with one typed command, and from then on sends no order — an order would pause the run. A setup
-answer that names the party it resolved (`target=party:commander:<name>`, `target=party:<tank>`) is read as the
-success it is, the observer teleports on its own, and the same-map check compares the party's map with the plan's,
-not the observer's. A plan that carries the format's in-fight run fields (`kill_first`, `cc_priority`, `cc_always`,
-`tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the module's run. Every `--poll` seconds
+answer that names the party it resolved on its end line (`target=party:commander:<name>`, `target=party:<tank>`) is
+read as the success it is, and an entry answered `no-trigger` (a party outside the entrance's trigger box) is retried
+once as `enter party map <plan map>` instead of failing. The observer teleports on its own, and the same-map check
+compares the party's map with the plan's, not the observer's. A plan that carries the format's in-fight run fields
+(`kill_first`, `cc_priority`, `cc_always`, `tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the
+module's run. Every `--poll` seconds
 (default 2, at most 30) it reads the module's run record and its event ring, prints the progress (state, step,
-leg, pulls, deaths, wipes, each pause with its reason) and the bosses the instance report gives, and keeps four
+leg, pulls, deaths, wipes, each pause with its reason) and the bosses the instance report gives, and keeps five
 safety budgets: a watchdog (`--watchdog-minutes`, default 10) that pauses a run whose event ring stopped
-growing and ends the watch; a time budget (`--max-minutes`); a wipe budget (`--max-wipes N`: the (N+1)th wipe
+growing and ends the watch; a pause budget (`--pause-minutes`, default 5) that reports a pause the module never
+cleared and ends the watch as `PAUSED-STUCK` (the watch sends no resume on its own, and the watchdog covers a
+paused run too); a time budget (`--max-minutes`); a wipe budget (`--max-wipes N`: the (N+1)th wipe
 ends the watch, `0` allows no wipe at all and `-1` is no budget); and the practice rescue, which, when a run
 has been paused on a wipe for 300 s, sends one practice `revive party` and one checked `resume`, at most eight times. The rescue fires only for the
 wipe's own pause: the pause event right after the wipe whose reason names the wipe or the dead party, never a later

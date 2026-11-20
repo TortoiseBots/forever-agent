@@ -203,10 +203,30 @@ func failedReason(r string) bool {
 	return false
 }
 
-// verdict is the one-line verdict: CLEARED, STOPPED AT <leg/step> (<reason>) or FAILED (<reason>).
+// verdict is the one-line verdict: CLEARED, PAUSED-STUCK AT <leg/step> (<pause reason>), STOPPED AT
+// <leg/step> (<reason>) or FAILED (<reason>). A paused run the watch gave up on is not a run that stopped where it
+// stood: its pause is what ended it, so it gets its own word.
 func verdict(c Card) (string, string) {
 	if c.Clear {
 		return "CLEARED", "CLEARED"
+	}
+	if c.StopReason == driver.StopPausedStuck {
+		// The record ends with the stop the watcher sent, whose reason is this stop reason; the pause that was not
+		// cleared is in the pause log, and its reason is what a reader needs.
+		why := c.Why
+		if why == "" || why == c.StopReason {
+			for i := len(c.PauseLog) - 1; i >= 0; i-- {
+				if p := c.PauseLog[i]; !p.Cleared && p.Why != "" {
+					why = p.Why
+					break
+				}
+			}
+		}
+		text := "PAUSED-STUCK AT " + position(c.Leg, c.LegName, c.Step)
+		if why != "" && why != c.StopReason {
+			text += " (" + why + ")"
+		}
+		return "PAUSED-STUCK", text
 	}
 	reason := c.StopReason
 	if reason == "" {

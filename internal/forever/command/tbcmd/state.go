@@ -223,9 +223,11 @@ func (c *Client) StateReport(ctx context.Context, target string) (StateReport, e
 	if out.Resting != yes {
 		return out, fmt.Errorf("%w: state-end resting=%d, %d line(s) report resting=yes", ErrBadReport, out.Resting, yes)
 	}
-	// The draft makes resting=no the definition of ready; a report that says otherwise is inconsistent.
-	if out.Ready != (out.Resting == 0) {
-		return out, fmt.Errorf("%w: state-end ready=%v with resting=%d", ErrBadReport, out.Ready, out.Resting)
+	// Ready implies rested: a report that calls a party with a resting member ready is inconsistent. The other
+	// direction is not a rule: ready=no with resting=0 is a party that is alive and up but far from its master or
+	// blocked, and its why= names those reasons.
+	if out.Ready && out.Resting != 0 {
+		return out, fmt.Errorf("%w: state-end ready=yes with resting=%d", ErrBadReport, out.Resting)
 	}
 	return out, nil
 }

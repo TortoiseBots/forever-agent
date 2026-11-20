@@ -161,6 +161,26 @@ func TestScenarioEnterBotStuck(t *testing.T) {
 	wantStates(t, res.States, StatePrepare, StateTravel, StateEnter, StateStop)
 }
 
+// TestScenarioEnterNamesThePlanMap: the entry carries the plan's instance map, so the module resolves that map's
+// entrance trigger instead of looking for a trigger the party stands in (the party is teleported to the portal's
+// point, which may lie outside the trigger's box).
+func TestScenarioEnterNamesThePlanMap(t *testing.T) {
+	run, f := newScenario(t, oneGroupPlan(), scenarioConfig("tele"))
+	res := play(t, run)
+	if res.Stop != "clear" {
+		t.Fatalf("stop %q, states %v", res.Stop, res.States)
+	}
+	var enters []Action
+	for _, a := range f.Acted() {
+		if a.Kind == ActionEnter {
+			enters = append(enters, a)
+		}
+	}
+	if len(enters) != 1 || enters[0].Map != 389 {
+		t.Fatalf("entry action(s) %+v, want one with map 389", enters)
+	}
+}
+
 // TestScenarioStraggler: a bot 60 yd behind gets a come at 20 s, a follow at 50 s, and stops the run at 90 s.
 func TestScenarioStraggler(t *testing.T) {
 	run, f := newScenario(t, oneGroupPlan(), scenarioConfig("none"))

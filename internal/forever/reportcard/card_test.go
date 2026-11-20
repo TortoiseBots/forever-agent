@@ -160,6 +160,59 @@ func TestCardDeaths(t *testing.T) {
 	}
 }
 
+// TestCardDeathNamesTheMember: a death event names the dead member in why= and carries the fight's unit id, the
+// same for every death of one pull. The card names the member's slot from why=; the unit stays evidence, never the
+// member. Reading the unit instead put a whole wipe under one "unknown" and made the member-deaths rule useless.
+func TestCardDeathNamesTheMember(t *testing.T) {
+	res := playWatch(t, driver.FakeRunScript{
+		Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 40 * time.Second,
+		Deaths: []driver.FakeDeath{
+			{After: 4 * time.Second, Unit: 11318, Who: "Watchheal"},
+			{After: 5 * time.Second, Unit: 11318, Who: "Watchheal"},
+			{After: 10 * time.Second, Unit: 11318, Who: "Watchheal"},
+		},
+	})
+	c := Build(res.Summary, DefaultThresholds())
+	if len(c.DeathLog) != 3 {
+		t.Fatalf("death log %+v", c.DeathLog)
+	}
+	for _, d := range c.DeathLog {
+		if d.Who != "healer" || d.Unit != 11318 {
+			t.Fatalf("death %+v, want the healer from why= and unit 11318", d)
+		}
+	}
+	var member Flag
+	for _, f := range c.Flags {
+		if f.ID == "member-deaths" {
+			member = f
+		}
+	}
+	if member.ID == "" || !strings.Contains(member.Text, "healer died 3 times") {
+		t.Fatalf("member-deaths flag %+v; flags %v\n%s", member, flagIDs(c), c.Text())
+	}
+}
+
+// TestCardPausedStuck: a watch that ended because the module's pause never cleared has its own verdict, with the
+// pause's reason and where the run stood, not a plain stop and not a failure of the run itself.
+func TestCardPausedStuck(t *testing.T) {
+	sum := driver.RunSummary{
+		Schema: driver.SummarySchema, Version: driver.SummaryVersion, RunID: "r-paused", Plan: "cave",
+		Mode: "watch", DurationS: 900, StopReason: driver.StopPausedStuck,
+		Watch: &driver.RunWatch{
+			State: "stopped", Step: 14, Steps: 80, Leg: 2, LegName: "cave", ElapsedS: 900,
+			Deaths: 3, Wipes: 0, Pauses: 1, Why: driver.StopPausedStuck,
+			PauseLog: []driver.PauseNote{{AtS: 661, Leg: 2, Step: 14, Why: "3 dead: regroup (cmd revive party)"}},
+		},
+	}
+	c := Build(sum, DefaultThresholds())
+	if c.Verdict != "PAUSED-STUCK" {
+		t.Fatalf("verdict %q, want PAUSED-STUCK", c.Verdict)
+	}
+	if !strings.Contains(c.VerdictText, `PAUSED-STUCK AT leg 2 "cave"/step 14 (3 dead: regroup`) {
+		t.Fatalf("verdict text %q", c.VerdictText)
+	}
+}
+
 func TestCardWipeRescue(t *testing.T) {
 	res := playWatch(t, driver.FakeRunScript{
 		Steps: 30, Pulls: 10, ProgressEvery: 5 * time.Second,
