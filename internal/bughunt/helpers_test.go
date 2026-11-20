@@ -49,6 +49,15 @@ func testRun(kind string, roles map[string]string, frames ...*Frame) *Run {
 	return r
 }
 
+// allHarmful is a harmful set of the given spell ids, as a names file's harmful marks give.
+func allHarmful(ids ...int) map[int]bool {
+	m := map[int]bool{}
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
 // hitsFor is the hits of one rule against one member.
 func hitsFor(hits []Hit, rule int, bot string) []Hit {
 	var out []Hit
@@ -59,3 +68,6 @@ func hitsFor(hits []Hit, rule int, bot string) []Hit {
 	}
 	return out
 }
+
+// completeOf is the complete-rule test BuildTickets takes, from a hunt's counts.
+func completeOf(c Counts) func(int) bool { return c.Complete }

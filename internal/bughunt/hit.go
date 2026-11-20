@@ -19,6 +19,10 @@ type Hit struct {
 	Sparse bool     `json:"sparse"`
 	Cost   float64  `json:"cost"`
 	Note   string   `json:"note"`
+
+	// At is the hit's wall time when the run knows its start, 0 otherwise. It is the ticket file's first_seen and
+	// is not part of the hit's JSON, which keeps the Python checker's keys.
+	At float64 `json:"-"`
 }
 
 // hitOpts carries hit()'s keyword arguments.
@@ -57,6 +61,10 @@ func (r *Run) Hit(rule int, t, dur float64, bot, ev string, key []string, opts .
 	if o.cost != nil {
 		base = *o.cost
 	}
+	at := 0.0
+	if r.T0 > 0 {
+		at = r.T0 + t
+	}
 	return Hit{
 		Rule:   rule,
 		DS:     r.DS,
@@ -73,5 +81,6 @@ func (r *Run) Hit(rule int, t, dur float64, bot, ev string, key []string, opts .
 		Sparse: o.sparse,
 		Cost:   pyRound(base+float64(deaths)*DEATH_COST_S, 1),
 		Note:   o.note,
+		At:     at,
 	}
 }
