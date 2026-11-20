@@ -83,15 +83,9 @@ func looksLikeRefusal(text string) bool {
 	return false
 }
 
-// freeText sends one tokenless plain-text `.tb` line and returns the server's
-// visible answer lines (the collector's tokenless tail). A tokenless run has
-// no begin/end markers, so the quiet window ends the reply; the callers
-// prove the change with a typed read-back and never with this text alone.
-func (c *Client) freeText(ctx context.Context, line string) ([]string, *command.Reply, error) {
-	return c.freeTextNamed(ctx, line, "")
-}
-
-// freeTextNamed is freeText with the reply narrowed to the lines that name
+// freeTextNamed sends one tokenless plain-text `.tb` line and returns the
+// server's visible answer lines (the collector's tokenless tail), narrowed
+// to the lines that name
 // the command's subject: the tokenless channel also carries other lines
 // (a GM probe block, a concurrent typed reply), and a refusal matcher must
 // not read those as this command's answer. Lines that name nobody are

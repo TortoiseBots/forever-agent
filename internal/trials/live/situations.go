@@ -36,10 +36,6 @@ const (
 	arenaGiveUpS = 600.0
 )
 
-// threatCast maps a warrior/bear stance to the threat spell the pull uses to
-// hold the mob (Taunt, Sunder Armor, Growl).
-var threatCast = map[int]int{71: 355, 2457: 7386, 9634: 6795, 5487: 6795}
-
 // LiveSituation is the real situation phase: it dispatches on the trial's
 // `situation.kind`, takes the arena, summons, governs the victim's health
 // and stamps the fight's marks. Only tank_damage is ported this round; any
@@ -352,8 +348,6 @@ func levelWindow(level int, mobs map[string]any) (int, int) {
 	target := level + delta
 	return maxInt(1, target-1), minInt(60, target+1)
 }
-
-func (t *tankRun) levelWindow() (int, int) { return t.levelLo, t.levelHi }
 
 func minInt(a, b int) int {
 	if a < b {
@@ -1083,13 +1077,6 @@ func damageStep(hp, maxHP int, bandLow, bandTop float64, toPct *float64) int {
 	}
 	cap := float64(hp) - bandLow*float64(maxHP)/100
 	return maxInt(0, int(math.Min(float64(hp)-middle, cap)))
-}
-
-// rescueHP is the middle of the band, never below the floor.
-func (g *Governor) rescueHP(maxHP int) int {
-	middle := (g.Band[0] + g.Band[1]) / 2
-	target := math.Max(middle, float64(g.Floor))
-	return maxInt(1, minInt(maxHP, int(target*float64(maxHP)/100)))
 }
 
 func (g *Governor) now() time.Time {

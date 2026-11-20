@@ -115,13 +115,6 @@ func (s *sim) hook(method string, params map[string]any) {
 	}
 }
 
-// install points the fake serve at this world.
-func (s *sim) install(f *fakeServe) {
-	f.status = s.status()
-	f.units = s.unitRows()
-	f.hook = s.hook
-}
-
 // TestTankDamageSummonsAndBand is the A4 first test: three summons are
 // ledgered, the governor never lets the victim fall under the floor without
 // a rescue mark, and the rescue cap ends the repeat.

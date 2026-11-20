@@ -166,12 +166,13 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 		loginCtx, cancel := p.ctxOf(ctx)
 		lines, err := p.TB.FreeTextLogin(loginCtx, name, p.Player)
 		cancel()
-		if err != nil {
+		p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
+		if err != nil && !alreadyLoggedIn(lines) {
+			// "already logged in or loading" is a leftover session of this
+			// same hire: it is there, and the read-backs below decide.
 			rows = append(rows, rowOf("bot_present", false, nil, ".tb login "+name+": "+tbErrText(err, lines)))
-			p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
 			return out, rows, nil
 		}
-		p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
 		// The login is asynchronous: the hire appears in the party roster
 		// (or the units model) a moment later. The party row is the
 		// identity; a name in chat is not.
