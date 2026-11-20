@@ -20,7 +20,7 @@ import (
 )
 
 func foreverFBCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever fb-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--add CLASS[:ROLE] ...] [--order WORD|party:WORD ...] [--dismiss NAME|all] [--stay DURATION] [--settle DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever fb-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--add CLASS[:ROLE] ...] [--order WORD|party:WORD ...] [--dismiss NAME|all] [--stay DURATION] [--settle DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever fb-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

@@ -45,7 +45,8 @@ the realm lists but the world server refuses (`WorldSocket.cpp:739-763`, `ERROR_
 list carries no build_info information. `bnet.Options.WorldAccept` now lets `Login` authenticate the world socket
 inside the selection loop: a `*worldconn.Refused` with `BadVersion()` set (the typed SMSG_AUTH_RESPONSE refusal from
 either handshake stage) closes that attempt's socket and the loop claims the next known build, newest first, bounded
-by the known list. Any other world-auth error ends the login. When every build is refused, the error names each
+by the known list (review 2 below establishes when 0x1C may be read as a statement about the build). Any other
+world-auth error ends the login. When every build is refused, the error names each
 build tried and which side refused it
 (`no client build this client knows was accepted (build 70959: the world server refused it; ...), pass --build N ...`).
 A pinned `--build` is probed once and its refusal is the login's error.
@@ -70,6 +71,42 @@ only 70938) claims 70959, is refused, and ends on 70938 with that build's socket
 `TestLoginPinnedBuildWorldRefusal` pins 70959 and gets the world's refusal without a retry.
 `internal/forever/world/.../TestEnterAdoptsTheProbedWorldSocket` sets a dead world address and enters through the
 probed socket only.
+
+**Review 2: `ERROR_BAD_VERSION` was attributed to the build alone.** The loop above moved on from code 0x1C without
+establishing what it meant. The world server answers `ERROR_BAD_VERSION` for a second failure too: a join-ticket
+variant with no `build_auth_key` row while `Network.SkipBuildAuthKeyCheck` is off (`WorldSocket.cpp:760-768`). The
+command's `worldAccept` sends no build auth key, so its digest is 24 zero bytes; such a server never accepts that
+digest (a variant that has a row is compared and gets `ERROR_DENIED`, `:775-791`), so the retry could not have
+succeeded, and its final error reported the builds as refused for reasons that may not have been theirs.
+
+- `worldconn.Refused` carries `buildAuthKeyUsed` (`BuildAuthKeyUsed()`): whether `CMSG_AUTH_SESSION` put a digest
+  derived from a 16-byte build auth key on the wire. With a key the missing-key branch is not the cause — a variant
+  without a row does not take that branch, a wrong digest is `ERROR_DENIED` — so 0x1C is the `build_info` lookup
+  (`:739-746`) and the selection may try the next build.
+- `bnet.Options.WorldSkipBuildAuthKeyCheck` states that the server runs with `Network.SkipBuildAuthKeyCheck = 1`, the
+  setting `doc/ForeverSetup.md` requires: the missing-key branch does not refuse, so 0x1C is again the `build_info`
+  lookup. It is off by default; a caller that has not established the setting does not get a retry on a guess.
+- Without either, `Login` returns the refusal itself (still a `*worldconn.Refused` for `errors.As`) and says the code
+  may be a missing `build_info` row or a missing `build_auth_key` row with the check on, that the build is not thereby
+  unsupported, and that no other build was tried because none could pass that check either.
+- `--world-checks-build-auth-key` is the commands' statement of the opposite configuration
+  (`Network.SkipBuildAuthKeyCheck = 0`); the entering commands otherwise pass the setup doc's setting. `login-check`
+  has no world socket, so it takes no flag.
+- The zero-digest step line now says only that no build auth key was supplied, instead of naming the server's setting
+  as the reason (that was the observed live server, not something the client can see here).
+
+The other remedy the review offered — supply the build auth key before probing — was not taken: the CLI has no key
+input, a key is per build and variant while `--build 0` probes several builds, and a server that has no row for the
+variant refuses whatever the client sends. The established-setting condition is the review's alternative and needs no
+protocol change.
+
+**Review 2 tests** (`internal/forever/bnet/worldaccept_test.go`): the fake world now records each connection's 24
+digest bytes. `TestLoginWorldBadVersionAmbiguousIsNotRetried` serves a realm that accepts all three known builds and a
+world that refuses each with 0x1C, with no key and no setting: one logon, one world connection, 24 zero digest bytes,
+and an error naming both causes; on the old code it retried all three and reported `no client build this client knows
+was accepted ...`. `TestLoginWorldBadVersionWithKeyIsAttributed` hands the probe a 16-byte key: the 70959 refusal is
+attributed to `build_info`, 70938 is claimed, and both connections sent non-zero digests. The two retry tests set
+`WorldSkipBuildAuthKeyCheck`.
 
 ## 2. `walk-check --stay` died at the run deadline
 

@@ -44,12 +44,24 @@ type Options struct {
 
 	// WorldAccept, when set, authenticates the world socket for a login and says whether the claimed build works
 	// there. The realm list is not proof: a realm may accept several builds (Realm.AlsoAcceptBuilds) while the
-	// world server has a build_info row for one, so it refuses the rest with ERROR_BAD_VERSION
-	// (WorldSocket.cpp:739-763). Login calls WorldAccept after every login the realm accepted; with ClientBuild 0
-	// a *worldconn.Refused whose BadVersion is set means the next known build is tried, any other error ends the
-	// login. A non-nil *worldconn.Realm is handed to the caller in Result.WorldConn; a callback that returns an
-	// error must close the socket it opened.
+	// world server has a build_info row for one. Login calls WorldAccept after every login the realm accepted; with
+	// ClientBuild 0 a *worldconn.Refused whose BadVersion is set moves on to the next known build only when the
+	// refusal is attributable to the build claim — the socket sent a build auth key, or WorldSkipBuildAuthKeyCheck
+	// says the server does not check one. Any other error, and a 0x1C that cannot be attributed, ends the login and
+	// is returned (see WorldSkipBuildAuthKeyCheck). A non-nil *worldconn.Realm is handed to the caller in
+	// Result.WorldConn; a callback that returns an error must close the socket it opened.
 	WorldAccept func(ctx context.Context, result *Result) (*worldconn.Realm, error)
+
+	// WorldSkipBuildAuthKeyCheck states that the world server runs with Network.SkipBuildAuthKeyCheck = 1, the
+	// setting doc/ForeverSetup.md requires for this client. It is what makes a world ERROR_BAD_VERSION attributable
+	// to the build claim: with the check skipped, a ticket variant without a build_auth_key row is not refused
+	// (WorldSocket.cpp:756-772), so 0x1C can only be the missing build_info row (:739-746) and the automatic build
+	// selection may try the next known build. With the check on, 0x1C is also what a missing build_auth_key row
+	// produces (:760-768), and this client's 24 zero digest bytes can never authenticate there — a server that has
+	// the row compares the digest and answers ERROR_DENIED (:775-791), one that has no row refuses. A retry cannot
+	// succeed in that configuration, so Login does not guess: it returns the refusal and says both causes. Off by
+	// default; a caller that has not established the setting must not have its login retried on an assumption.
+	WorldSkipBuildAuthKeyCheck bool
 
 	// srpPrivate pins the client private to a test vector's value. It is unexported so no caller can weaken the
 	// randomness; only the package's own tests set it.
@@ -147,11 +159,12 @@ func LoadRoots(path string) (*x509.CertPool, error) {
 // while the world server only has build info for one of them. A claim that a realm does not accept comes back as a
 // VersionMismatch with the realm's own build; that build is then tried next when it is one this client knows, and the
 // remaining known builds are tried newest first otherwise. A build the realm accepts but the world server refuses
-// with ERROR_BAD_VERSION (WorldSocket.cpp:739-763) is left to Options.WorldAccept, which lets this loop move on to
-// the next build instead of ending at the realm list. The realm list and the realm join both read the build of the
-// logon, not of the realm list ticket (GameUtilitiesService.cpp:312 and :344 pass session->GetBuild()), so every
-// attempt is the whole sequence again. A non-zero ClientBuild always wins and is claimed as given (one world
-// authentication, no retry).
+// with ERROR_BAD_VERSION is left to Options.WorldAccept, whose refusal this loop moves on from only while 0x1C is
+// attributable to the build claim rather than to a build auth key the server wanted (Options.WorldSkipBuildAuthKeyCheck);
+// unattributable, the refusal is returned with both causes named, because no retry can pass a key check this client
+// cannot satisfy. The realm list and the realm join both read the build of the logon, not of the realm list ticket
+// (GameUtilitiesService.cpp:312 and :344 pass session->GetBuild()), so every attempt is the whole sequence again. A
+// non-zero ClientBuild always wins and is claimed as given (one world authentication, no retry).
 func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.ServerName == "" {
 		opts.ServerName = DefaultServerName
@@ -209,6 +222,11 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 			if !errors.As(err, &refused) || !refused.BadVersion() {
 				return nil, err
 			}
+			// ERROR_BAD_VERSION alone is not a verdict on the build: the code also answers a missing build_auth_key
+			// row when the server checks one (WorldSocket.cpp:760-768), and the claim has no way to pass that check.
+			if !refused.BuildAuthKeyUsed() && !opts.WorldSkipBuildAuthKeyCheck {
+				return nil, ambiguousWorldRefusal(build, refused)
+			}
 			worldRefusals++
 			attempts = append(attempts, buildAttempt{build, "the world server refused it"})
 			opts.logf("client build: the world server does not accept build %d (ERROR_BAD_VERSION); trying the next known build", build)
@@ -223,8 +241,9 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		opts.logf("client build: the realm does not accept build %d (the realm is build %d)", build, hint)
 	}
 	if worldRefusals > 0 {
-		// Every build the realm let in was refused by the world server's own build_info check, so the choice ended
-		// where it had to: name every build tried, with the side that refused it.
+		// Every build the realm let in was refused by the world server with ERROR_BAD_VERSION, which the check
+		// above attributed to the build_info lookup, so the choice ended where it had to: name every build tried,
+		// with the side that refused it.
 		tried := make([]string, len(attempts))
 		for i, a := range attempts {
 			tried[i] = a.String()
@@ -252,6 +271,19 @@ func acceptWorld(ctx context.Context, opts Options, result *Result) (*Result, er
 	}
 	result.WorldConn = conn
 	return result, nil
+}
+
+// ambiguousWorldRefusal is the login's error for a world ERROR_BAD_VERSION that nothing attributes to the build
+// claim: the client sent no build auth key and has not established that the server skips the check. The refusal is
+// kept as the cause (it is still what the server answered), and the text names both checks it can come from, so
+// neither the build nor the realm is blamed for what may be a missing key row.
+func ambiguousWorldRefusal(build uint32, refused *worldconn.Refused) error {
+	return fmt.Errorf("bnet: %w; the code does not by itself name the check: the world server answers "+
+		"ERROR_BAD_VERSION both for an account build with no build_info row (WorldSocket.cpp:739-746) and for a "+
+		"join-ticket variant with no build_auth_key row while Network.SkipBuildAuthKeyCheck is off (:760-768), "+
+		"and this login sent a zero digest, so build %d is not thereby unsupported; the selection did not try "+
+		"another build, which could not pass that check either; pass --build N to claim a build anyway",
+		refused, build)
 }
 
 // buildAttempt is one claimed build and which side refused it, for the error of an exhausted selection.

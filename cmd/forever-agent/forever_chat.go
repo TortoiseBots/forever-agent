@@ -32,6 +32,12 @@ type foreverCommon struct {
 	account       string
 	character     string
 	allowRedirect bool
+	// worldChecksBuildAuthKey says the world server verifies the session digest (Network.SkipBuildAuthKeyCheck = 0).
+	// The flag's default is the opposite, the setting doc/ForeverSetup.md requires for this client, and it is what
+	// lets the automatic build selection treat the world server's ERROR_BAD_VERSION as "no build_info row". On a
+	// server that checks the key, the client's zero digest cannot pass, so the selection must not retry and the
+	// login says both causes instead.
+	worldChecksBuildAuthKey bool
 }
 
 // connectionFlags registers the flags every command that talks to the login server takes. --build is 0 (not given)
@@ -53,6 +59,7 @@ func (c *foreverCommon) flags(fs *flag.FlagSet) {
 	c.connectionFlags(fs)
 	fs.StringVar(&c.character, "character", "", "character to enter the world with")
 	fs.BoolVar(&c.allowRedirect, "allow-instance-redirect", false, "accept a SMSG_CONNECT_TO that names a host other than the realm socket's (clustered servers)")
+	fs.BoolVar(&c.worldChecksBuildAuthKey, "world-checks-build-auth-key", false, "the world server verifies the build auth key (Network.SkipBuildAuthKeyCheck = 0); without it the server is taken to skip the check, as doc/ForeverSetup.md requires, and only then is the world's ERROR_BAD_VERSION attributed to the build")
 }
 
 // checkConnection validates the flags of a command that only reaches the login server.
@@ -109,7 +116,9 @@ func loginExit(err error, stderr io.Writer) (int, bool) {
 // bnet.Login in the command layer: --build 0 claims the newest build this client knows that the realm accepts
 // (bnet's probe and retries), an explicit build is claimed exactly as given. worldAccept is bnet's world-socket
 // step: a command that opens a world socket passes it so the selection only ends on a build the world server
-// authenticates, not one the realm list merely accepts; a login-only command passes nil.
+// authenticates, not one the realm list merely accepts; a login-only command passes nil. The world's
+// ERROR_BAD_VERSION is retried on only under the server setting this client's setup docs require
+// (--world-checks-build-auth-key says the server does not use it).
 func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer, worldAccept func(context.Context, *bnet.Result) (*worldconn.Realm, error)) (*bnet.Result, error) {
 	password := os.Getenv("FOREVER_PASSWORD")
 	if password == "" {
@@ -128,6 +137,9 @@ func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer,
 		ClientBuild: uint32(c.clientBuild),
 		Logf:        logf,
 		WorldAccept: worldAccept,
+		// the setup doc's worldserver.conf: Network.SkipBuildAuthKeyCheck = 1 unless the operator says otherwise.
+		// This is what makes the world's ERROR_BAD_VERSION a statement about build_info; see bnet.Options.
+		WorldSkipBuildAuthKeyCheck: !c.worldChecksBuildAuthKey,
 	})
 	if err != nil {
 		return nil, &loginError{fmt.Errorf("%s: %w", cmd, err)}
@@ -191,7 +203,7 @@ func (c *foreverCommon) enter(ctx context.Context, cmd string, stdout io.Writer,
 }
 
 func foreverChatCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen DURATION] [--watch NAME] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen DURATION] [--watch NAME] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever chat-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -276,7 +288,7 @@ func printChatSummary(w io.Writer, report *world.Report) {
 }
 
 func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever party-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

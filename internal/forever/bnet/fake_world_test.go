@@ -47,6 +47,7 @@ type fakeWorld struct {
 	mu       sync.Mutex
 	next     *fakeWorldAttempt
 	attempts []uint32
+	digests  [][]byte // the 24-byte auth digest of each connection, in order
 	errs     chan error
 	closed   bool
 }
@@ -93,6 +94,20 @@ func (w *fakeWorld) take() (*fakeWorldAttempt, error) {
 	}
 	w.attempts = append(w.attempts, a.build)
 	return a, nil
+}
+
+// recordDigest keeps the 24 bytes CMSG_AUTH_SESSION carried, so a test can see whether the client sent a digest
+// from a build auth key or 24 zero bytes.
+func (w *fakeWorld) recordDigest(digest []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.digests = append(w.digests, append([]byte(nil), digest...))
+}
+
+func (w *fakeWorld) authDigests() [][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([][]byte(nil), w.digests...)
 }
 
 func (w *fakeWorld) builds() []uint32 {
@@ -168,10 +183,11 @@ func (w *fakeWorld) handle(nc net.Conn) error {
 	if opcode, _ := table.WireForClient(wire.CMSGAuthSession); auth.opcode != opcode {
 		return fmt.Errorf("CMSG_AUTH_SESSION: wire 0x%06X, want 0x%06X", auth.opcode, opcode)
 	}
-	if len(auth.body) < 52 {
+	if len(auth.body) < 76 {
 		return fmt.Errorf("CMSG_AUTH_SESSION body is %d bytes", len(auth.body))
 	}
 	localChallenge := auth.body[20:52]
+	w.recordDigest(auth.body[52:76])
 
 	if w.refuse(att.build) {
 		refusal := make([]byte, 4)

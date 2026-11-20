@@ -17,7 +17,7 @@ import (
 )
 
 func foreverMapCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever map-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--settle DURATION] [--stay DURATION] [--area-trigger ID]"
+	const usage = "usage: forever-agent forever map-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--settle DURATION] [--stay DURATION] [--area-trigger ID]"
 	fs := flag.NewFlagSet("forever map-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

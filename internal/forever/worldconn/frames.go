@@ -42,6 +42,9 @@ type conn struct {
 	// so the caller's packet count includes them; handshakeDone stops the recording when the handshake ends.
 	handshakeNames []string
 	handshakeDone  bool
+	// buildAuthKeyUsed records that CMSG_AUTH_SESSION carried a digest made from a 16-byte build auth key; a
+	// refusal of this connection carries it (Refused.BuildAuthKeyUsed).
+	buildAuthKeyUsed bool
 }
 
 func (c *conn) log(format string, args ...any) {

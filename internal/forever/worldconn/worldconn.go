@@ -194,8 +194,9 @@ func (c *conn) exchangeBanners(ctx context.Context) ([]byte, error) {
 // sendAuthSession builds and sends CMSG_AUTH_SESSION and returns the 32-byte local challenge. The digest is
 // authDigest when the caller has the 16-byte build auth key; without it the 24 bytes are zero, which is what the
 // live server accepts because Network.SkipBuildAuthKeyCheck is set and auth.build_auth_key has no row for the
-// claim's variant, so the comparison is skipped altogether (WorldSocket.cpp:756-772). The UseIPv6 bit is false
-// and flushed to a whole byte, like the real client.
+// claim's variant, so the comparison is skipped altogether (WorldSocket.cpp:756-772). Which of the two went on
+// the wire is kept on the connection: it is what makes a later ERROR_BAD_VERSION attributable to the build_info
+// row (Refused.BuildAuthKeyUsed). The UseIPv6 bit is false and flushed to a whole byte, like the real client.
 func (c *conn) sendAuthSession(ctx context.Context, cfg Config, keyData [64]byte, serverChallenge []byte) ([]byte, error) {
 	localChallenge := make([]byte, 32)
 	if _, err := rand.Read(localChallenge); err != nil {
@@ -210,7 +211,8 @@ func (c *conn) sendAuthSession(ctx context.Context, cfg Config, keyData [64]byte
 	b.WriteU32(cfg.RealmID)
 	b.WriteBytes(localChallenge)
 	digest := make([]byte, 24)
-	if len(cfg.BuildAuthKey) == 16 {
+	c.buildAuthKeyUsed = len(cfg.BuildAuthKey) == 16
+	if c.buildAuthKeyUsed {
 		d := authDigest(keyData[:], cfg.BuildAuthKey, localChallenge, serverChallenge)
 		copy(digest, d[:])
 	}
@@ -226,7 +228,7 @@ func (c *conn) sendAuthSession(ctx context.Context, cfg Config, keyData [64]byte
 		c.log("world auth session: sent (realm %d, region %d, battlegroup %d, join ticket %d bytes, 24-byte digest from the 16-byte build auth key)",
 			cfg.RealmID, regionID, battlegroupID, len(cfg.RealmJoinTicket))
 	} else {
-		c.log("world auth session: sent (realm %d, region %d, battlegroup %d, join ticket %d bytes, 24 zero digest bytes: Network.SkipBuildAuthKeyCheck and no build_auth_key row)",
+		c.log("world auth session: sent (realm %d, region %d, battlegroup %d, join ticket %d bytes, 24 zero digest bytes: no build auth key supplied)",
 			cfg.RealmID, regionID, battlegroupID, len(cfg.RealmJoinTicket))
 	}
 	return localChallenge, nil
@@ -272,7 +274,7 @@ func (c *conn) waitEncryptedMode(ctx context.Context, encryptKey [32]byte) error
 			c.encrypted = true
 			return nil
 		case wire.SMSGAuthResponse:
-			return &Refused{Code: authResult(p.Payload), BeforeEncryption: true}
+			return &Refused{Code: authResult(p.Payload), BeforeEncryption: true, buildAuthKeyUsed: c.buildAuthKeyUsed}
 		default:
 			ignored++
 			c.log("world: ignoring %s before the encrypted mode", packetName(p))
@@ -300,25 +302,29 @@ func (c *conn) expectAuthResponse(ctx context.Context) error {
 			continue
 		}
 		if code := authResult(p.Payload); code != 0 {
-			return &Refused{Code: code}
+			return &Refused{Code: code, buildAuthKeyUsed: c.buildAuthKeyUsed}
 		}
 		return nil
 	}
 }
 
-// authResultBadVersion is ERROR_BAD_VERSION (src/server/proto/BattlenetRpcErrorCodes.h): the world server has no
-// build_info row for the build the account claimed, or no auth key for the join ticket's variant with
-// Network.SkipBuildAuthKeyCheck off (WorldSocket.cpp:739-763). The realm list can still accept that build, so a
-// build selection that ends at the realm list alone can pick a build the world server refuses.
+// authResultBadVersion is ERROR_BAD_VERSION (src/server/proto/BattlenetRpcErrorCodes.h). The world server answers it
+// for two different failures: no build_info row for the build the account claimed (WorldSocket.cpp:739-746) and no
+// build_auth_key row for the join ticket's variant while Network.SkipBuildAuthKeyCheck is off (:760-768). The code
+// alone therefore does not say whether the build is unsupported, and the realm list can accept either build. Refused
+// carries what tells the two apart.
 const authResultBadVersion = 0x1C
 
 // Refused is an SMSG_AUTH_RESPONSE with a non-zero result: the world server rejected this session
 // (WorldSocket::SendAuthResponseError, WorldSocket.cpp:1165). The handshake sends every refusal before
 // SMSG_ENTER_ENCRYPTED_MODE (the switch happens only after _authed, WorldSocket.cpp:960), so BeforeEncryption
-// tells a build the world server has no build_info row for from a transfer that failed after the switch.
+// tells a refusal during the build check from a transfer that failed after the switch.
 type Refused struct {
 	Code             uint32
 	BeforeEncryption bool
+	// buildAuthKeyUsed is whether CMSG_AUTH_SESSION carried the digest of a 16-byte build auth key. Only the
+	// socket itself knows: the caller builds the Config.
+	buildAuthKeyUsed bool
 }
 
 func (e *Refused) Error() string {
@@ -328,9 +334,17 @@ func (e *Refused) Error() string {
 	return fmt.Sprintf("world auth refused: result 0x%08X (%s)", e.Code, authResultName(e.Code))
 }
 
-// BadVersion reports ERROR_BAD_VERSION: this build cannot authenticate at this world server, and another build of
-// the same account may.
+// BadVersion reports that the result code is ERROR_BAD_VERSION (0x1C). The code is not by itself a statement about
+// the build claim: it is also what a missing build_auth_key row produces when the server checks the digest
+// (WorldSocket.cpp:760-768). BuildAuthKeyUsed and the caller's knowledge of Network.SkipBuildAuthKeyCheck decide
+// which of the two checks refused the session.
 func (e *Refused) BadVersion() bool { return e.Code == authResultBadVersion }
+
+// BuildAuthKeyUsed reports whether CMSG_AUTH_SESSION carried the 24-byte digest derived from a 16-byte build auth
+// key. The server compares that digest only when the build's variant has a build_auth_key row, and a mismatch is
+// ERROR_DENIED, not ERROR_BAD_VERSION (WorldSocket.cpp:775-791); a socket that sent a key and was answered 0x1C was
+// therefore refused by the build_info lookup, not by a missing key row.
+func (e *Refused) BuildAuthKeyUsed() bool { return e.buildAuthKeyUsed }
 
 func authResult(payload []byte) uint32 {
 	if len(payload) < 4 {
