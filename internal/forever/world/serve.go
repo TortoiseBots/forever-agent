@@ -63,11 +63,10 @@ type serveRuntime struct {
 
 // serveState is the RPC side of the loop.
 type serveState struct {
-	s      *session
-	calls  chan *serveCall
-	done   chan struct{}
-	closed bool
-	dead   bool
+	s     *session
+	calls chan *serveCall
+	done  chan struct{}
+	dead  bool
 	// deadErr is the link error shown by status and returned to every action while dead.
 	deadErr error
 	q       *command.Session

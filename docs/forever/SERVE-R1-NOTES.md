@@ -140,15 +140,19 @@ own bound context. If the server refuses the logout, the daemon exits with the w
 
 * `TestServeStatusChatAndLogout`: login, `status`, `units`, `unit`, `chat` (the server sees the text), `chat_log`
   (system line and the say echo), `logout` (the server sees the request and the completion reaches the report).
-* `TestServeWalkAndFace`: `face`, `walk_to` (the mover reaches the target), and `path_to` without `--navmesh` as the
-  typed error.
-* `TestServeCombatAndCommand`: `target`, `cast` (the fake's `SMSGCastFailed` is a typed game error), `attack` (the
-  fake sees the swing; the fake's health-zero update ends the fight with `reason: dead`), `stop_attack`.
-* `TestServeGMAndBot`: the GM probe, `gm` lines, `.tb` through `bot` and its answer, and a non-command line refused.
-* `TestServePartyAndAddon`: `party`, `invite` (the fake sees the packet), `accept_invite` without an invite refused,
-  `addon_send`.
+* `TestServeWalkAndFace`: `face`, `area_trigger`, `walk_to` (the mover reaches the target), and `path_to` without
+  `--navmesh` as the typed error.
+* `TestServeCombatAndCommand`: `target`, `cast` (the fake's `SMSGCastFailed` is a typed game error), `cast_state`,
+  `cancel_cast` with nothing to cancel, `attack` (the fake sees the swing; the fake's health-zero update ends the
+  fight with `reason: dead`), `stop_attack`.
+* `TestServeGMAndBot`: the GM probe, `gm`, `gm_revive`, `.tb` through `bot` and its answer, and a non-command line
+  refused.
+* `TestServePartyAndAddon`: `party`, `invite` (the fake sees the packet), `accept_invite` and `leave_group` without a
+  group refused, `addon_send`.
 * `TestServeNotPortedAndUnknown`: `trade`, `teardown` and `map_snapshot` answer `-32003` with the ported-on-this-
-  server text; an unknown name answers `-32601`.
+  server text; an unknown name answers `-32601`; the five death methods answer their own refusals for a living
+  character.
+* `TestServeNavmeshPath`: a `navfixture` mesh in a temporary folder; `path_to` is complete and `walk_path` walks it.
 * `TestServeLinkDropGrace`: the fake drops the instance socket; `status` turns disconnected with a reason, an action
   answers `-32002`, and the daemon exits with a world error after the grace window.
 * `TestServeCleanShutdown`: cancelling the parent context logs out and returns cleanly.

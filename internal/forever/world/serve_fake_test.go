@@ -11,12 +11,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
 
 // serveDaemon answers the packets the serving methods can send. It is deliberately tolerant: this test is about the
@@ -109,6 +111,12 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
 				continue
 			}
+			if strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!") {
+				// A GM line is not chat: the server runs it and answers with its own lines. An echo here would
+				// trip the client's own guard, which is the point of the guard.
+				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-GM-ANSWER"))
+				continue
+			}
 			c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSay, chat.LanguageCommon, guid, wire.EmptyGUID, "Testchar", "", "", "", said))
 		case wire.CMSGChatMessageYell, wire.CMSGChatMessageParty, wire.CMSGChatMessageEmote:
 		case wire.CMSGChatMessageWhisper:
@@ -149,6 +157,11 @@ type serveAgent struct {
 
 // startServeDaemon logs in to the fake and waits for the RPC socket to answer status.
 func startServeDaemon(t *testing.T, f *fakeServer, stepLog *[]string) *serveAgent {
+	return startServeDaemonWith(t, f, stepLog, "")
+}
+
+// startServeDaemonWith is startServeDaemon with a navmesh folder for path_to/walk_path.
+func startServeDaemonWith(t *testing.T, f *fakeServer, stepLog *[]string, navmeshDir string) *serveAgent {
 	t.Helper()
 	f.wg.Add(1)
 	go f.serveRealm()
@@ -173,7 +186,7 @@ func startServeDaemon(t *testing.T, f *fakeServer, stepLog *[]string) *serveAgen
 		Logf: func(format string, args ...any) {
 			*stepLog = append(*stepLog, fmt.Sprintf(format, args...))
 		},
-		Serve: &ServeConfig{Listener: ln, Token: "serve-test-token", DisconnectGrace: 400 * time.Millisecond},
+		Serve: &ServeConfig{Listener: ln, Token: "serve-test-token", DisconnectGrace: 400 * time.Millisecond, NavmeshDir: navmeshDir},
 	}
 	a := &serveAgent{addr: ln.Addr().String(), token: "serve-test-token", result: make(chan serveResult, 1), cancel: cancel}
 	go func() {
@@ -380,6 +393,20 @@ func TestServeWalkAndFace(t *testing.T) {
 		t.Fatalf("units stayed empty\n%s", joinLines(steps))
 	}
 	a.mustCall(t, "face", map[string]any{"guid": units[0].GUID})
+	a.mustCall(t, "area_trigger", map[string]any{"id": 2211})
+	sawArea := false
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !sawArea {
+		f.mu.Lock()
+		sawArea = f.serveArea
+		f.mu.Unlock()
+		if !sawArea {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if !sawArea {
+		t.Fatal("the fake never saw CMSG_AREA_TRIGGER")
+	}
 	a.mustCall(t, "walk_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0})
 	var st ServeStatus
 	json.Unmarshal(a.mustCall(t, "status", nil), &st)
@@ -422,6 +449,12 @@ func TestServeCombatAndCommand(t *testing.T) {
 	if !sawCast {
 		t.Fatal("the fake never saw CMSG_CAST_SPELL")
 	}
+	var cs ServeCastState
+	json.Unmarshal(a.mustCall(t, "cast_state", nil), &cs)
+	if cs.Casting {
+		t.Fatalf("cast_state says a cast is running after the refusal: %+v", cs)
+	}
+	a.mustFail(t, "cancel_cast", nil, -32003, "no cast in progress")
 	var atk ServeAttack
 	json.Unmarshal(a.mustCall(t, "attack", map[string]any{"for_ms": 5000}), &atk)
 	if atk.Reason != "dead" {
@@ -455,6 +488,11 @@ func TestServeGMAndBot(t *testing.T) {
 	f.mu.Unlock()
 	if !sawGM {
 		t.Fatal("the fake never saw the GM probe")
+	}
+	var revive ServeCommand
+	json.Unmarshal(a.mustCall(t, "gm_revive", map[string]any{"name": "Testchar"}), &revive)
+	if revive.Sent == "" {
+		t.Fatalf("gm_revive sent nothing: %+v", revive)
 	}
 	var bot ServeCommand
 	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".tb state"}), &bot)
@@ -495,6 +533,7 @@ func TestServePartyAndAddon(t *testing.T) {
 		t.Fatal("the fake never saw CMSG_PARTY_INVITE")
 	}
 	a.mustFail(t, "accept_invite", nil, -32003, "no pending group invite")
+	a.mustFail(t, "leave_group", nil, -32003, "not in a group")
 	a.mustCall(t, "addon_send", map[string]any{"channel": "party", "prefix": "SRV", "text": "hello"})
 	a.stop(t)
 	f.wait(t)
@@ -511,6 +550,48 @@ func TestServeNotPortedAndUnknown(t *testing.T) {
 	a.mustFail(t, "teardown", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
+
+	// The five death methods are ported; the character is alive, so each answers its own refusal.
+	var death ServeDeath
+	json.Unmarshal(a.mustCall(t, "death_status", nil), &death)
+	if death.Phase != "alive" {
+		t.Fatalf("death_status %+v", death)
+	}
+	a.mustFail(t, "release_spirit", nil, -32003, "not dead")
+	a.mustFail(t, "reclaim_corpse", nil, -32003, "spirit is not released")
+	a.mustFail(t, "accept_resurrect", nil, -32003, "not dead")
+	a.mustFail(t, "corpse_query", nil, -32003, "no answer within")
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeNavmeshPath(t *testing.T) {
+	polys := []navfixture.Poly{
+		navfixture.Square(1000, 2000, 1004, 2004, 50),
+		navfixture.Square(1004, 2000, 1008, 2004, 50),
+		navfixture.Square(1008, 2000, 1012, 2004, 50),
+		navfixture.Square(1008, 2004, 1012, 2008, 50),
+		navfixture.Square(1008, 2008, 1012, 2012, 50),
+		navfixture.Square(1012, 2008, 1016, 2012, 50),
+		navfixture.Square(1016, 2008, 1020, 2012, 50),
+	}
+	dir := navfixture.WriteForeverDirAt(t, 0, polys, nil, 1000, 2000)
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	var steps []string
+	a := startServeDaemonWith(t, f, &steps, dir)
+
+	var path ServePath
+	json.Unmarshal(a.mustCall(t, "path_to", map[string]any{"x": 1020.0, "y": 2010.0, "z": 50.0}), &path)
+	if path.Status != "complete" || len(path.Points) < 2 || path.Corners < 3 {
+		t.Fatalf("path_to %+v\n%s", path, joinLines(steps))
+	}
+	var walked ServePath
+	json.Unmarshal(a.mustCall(t, "walk_path", map[string]any{"x": 1020.0, "y": 2010.0, "z": 50.0}), &walked)
+	if walked.Status != "complete" {
+		t.Fatalf("walk_path %+v\n%s", walked, joinLines(steps))
+	}
 	a.stop(t)
 	f.wait(t)
 }

@@ -175,14 +175,13 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		return exitUsage
 	}
 	token := ""
-	removeToken := func() {}
 	if !*noAuth {
 		token, err = rpc.NewToken()
 		if err != nil {
 			fmt.Fprintln(stderr, "rpc:", err)
 			return exitUsage
 		}
-		removeToken, err = rpc.WriteTokenFile(*tokenFile, token)
+		removeToken, err := rpc.WriteTokenFile(*tokenFile, token)
 		if err != nil {
 			fmt.Fprintln(stderr, "rpc:", err)
 			return exitUsage
