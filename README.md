@@ -14,6 +14,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Login through bnetserver | **SRP login, login ticket and the realm join answer work** (`forever-agent forever login-check`, round 1: see [docs/forever/LOGIN-R1-NOTES.md](docs/forever/LOGIN-R1-NOTES.md)) |
 | World socket (encrypted, compressed) | **Works** (`forever-agent forever world-check`: banners, world auth, AES-GCM, character list, login on the instance socket, time sync, ping, logout; round 2: see [docs/forever/WORLD-R1-NOTES.md](docs/forever/WORLD-R1-NOTES.md)) |
 | Packets and object fields | login and character-select packets done; round 3 reads `SMSG_UPDATE_OBJECT` (creates, values, movement blocks, splines), the movement relays and both name lookups, and walks the character (`forever-agent forever walk-check`; see [docs/forever/OBJECTS-R1-NOTES.md](docs/forever/OBJECTS-R1-NOTES.md)) |
+| Self inventory (round R1) | **Works** (the character's own inventory, read from the login create block: equipment 0-18, the four bags and their contents, the backpack 35-62, money, the quest log and the 19 visible items; kept current by the item create and update blocks; read with `forever rpc DIR inv` from a `forever serve` daemon, see the `inv` method below) |
 | Map changes (round A7) | **Works** (`forever-agent forever map-check`: follows a far teleport, a teleport to another continent and entering or leaving an instance — suspend/new-world handshake, the world model cleared for the new map, the navmesh planner dropped; see [docs/forever/MAPCHANGE-R1-NOTES.md](docs/forever/MAPCHANGE-R1-NOTES.md)) |
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
@@ -66,7 +67,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
-`units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
 `area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
@@ -79,6 +80,21 @@ replaces a dropped one before its login burst is dispatched, so a seq never goes
 own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
 ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
 concurrent long-polls all return at their own cap.
+
+The character's own inventory is `inv`: `{known, coinage, items[], quest_log[], free_slot}`. Each item row is
+`{guid, container, slot, entry, count, durability?, max_durability?, placed}`, where `container` is 255 for the
+player's own slots (equipment 0-18, bag slots 30-33, backpack 35-62) or the bag slot the item is inside, and `slot`
+is the index in that container. `inv` is read from the character's own create block — PlayerData (the 175-entry
+quest log, the 19 visible items) and the ActivePlayerData prefix (the 145 InvSlots and Coinage) — and from every
+item's own create or values update, and it sends nothing (`known` is false until that create arrives). Money and
+equipment therefore come from the login snapshot: an item that arrives later (a purchase, a loot, a GM `.additem`)
+is listed with `placed: false` and slot 255/255 until the push result names its slot (a later round) or the next
+login places it. ActivePlayerData *updates* are not decoded (they are the 1,300-line Classic bit remap), which is
+why the snapshot is refreshed at login and not read from each update. The token is `inv`; the old daemon's
+`inventory` method keeps its "not ported" answer, because its result is a plain row array and a caller written for
+it must not be handed another shape. The act runner's `inv` step (round R0) prints the same rows, one line per item
+(`entry 118 count 5 slot 35`, or `slot unknown (arrived after the snapshot)`), then the first free backpack slot and
+the quest log's occupied slots.
 
 `gm_kill`, `gm_set_hp` and `gm_aura` are a test bench's hands and are off unless serve was started with
 `--allow-gm-units`. Even then they act only on a guid the runner registered through `trial_units`
