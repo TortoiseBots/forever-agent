@@ -4,7 +4,7 @@
 --     --rev 9097884 --stamp 20261029120000 --out <this file> onyxias_lair
 -- The plan, leg and step rows below are that export; this header, the ai_dungeon_boss block and the boss stand's
 -- comment ("boss stand outside her ~62 yd 3D wake radius and the raid's follow ring": plan v1 has no comment on an
--- approach point) are the prep's own (~/TortoiseBots-audit/RAID-PREP-ony.md).
+-- approach point) are the prep's own (the raid-prep notes).
 -- No --approach-hops: the 81 yd walk from the stand to her would be cut into move rows, the last of them 30.7 yd
 -- from her and inside her ~62 yd 3D wake (plan-check exempts the boss's own walk from the wake rule), so the run
 -- leader walks that hop in navmesh hops of its own on the boss step, stopping 30 yd short, and the party stands at

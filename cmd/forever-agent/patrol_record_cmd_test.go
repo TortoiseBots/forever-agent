@@ -41,7 +41,7 @@ type patrolRecordFake struct {
 func (f *patrolRecordFake) client(t *testing.T) *slotClient {
 	t.Helper()
 	c := &slotClient{
-		manifest: teardownSlotManifest{Server: "m910q", Slot: "1", Holder: "w-a", Character: "Gmtest"},
+		manifest: teardownSlotManifest{Server: "test1", Slot: "1", Holder: "w-a", Character: "Gmtest"},
 		token:    "patrol-record-test-token",
 	}
 	c.post = func(port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {

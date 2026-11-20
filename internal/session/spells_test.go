@@ -31,7 +31,7 @@ func spellRow(t *testing.T, h *harness, id uint32) SpellRow {
 	return rows[0]
 }
 
-// The login of the m910q GM warrior (testdata/captures/m1-login.twcap) gives the spellbook:
+// The login of the test1 GM warrior (testdata/captures/m1-login.twcap) gives the spellbook:
 // Heroic Strike is rank 1, costs 15 rage (150 in tenths) and is ready, and "affordable" follows the
 // rage the player holds.
 func TestSpellbookFromRealLoginPacket(t *testing.T) {

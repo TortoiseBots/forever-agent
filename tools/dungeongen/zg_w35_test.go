@@ -1,4 +1,4 @@
-// Walk-35 fixes (TortoiseBots-audit tests/raid-zg-walk35): the water bounds
+// Walk-35 fixes (the walk-35 notes): the water bounds
 // (item 1), the Jeklik/Arlokk patroller pulls (item 2) and the Mar'li-stand
 // bound (item 3).
 //
@@ -38,7 +38,7 @@ func zgW35Leg(t *testing.T, p *dungeon.Plan, name string) *dungeon.Leg {
 // any change that makes the walks wetter fails here. They need the map-309 mmaps
 // (zgPlannerOrNil) and skip without them.
 //
-// Spots (TortoiseBots-audit tests/raid-zg-walk35/WATER.txt): e3 step 204 (the
+// Spots (the walk-35 WATER notes): e3 step 204 (the
 // Mar'li walk-back via the Venoxis lake), a4 step 205 (same), f3 step 580 (the
 // Jin'do walk-back; the plateau lake has no rows, so S1, the wettest forward
 // segment of the Jin'do walk, stands in for it).

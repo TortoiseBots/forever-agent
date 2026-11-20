@@ -1,4 +1,4 @@
-// Walk-38 fixes (TortoiseBots-audit tests/raid-zg-walk38) and the review rounds that followed them: the
+// Walk-38 fixes (the walk-38 notes) and the review rounds that followed them: the
 // Jin'do hall (the review's H1/H2 and the round-2 A-1/A-6: the run leader's real family-assist model, RingYd
 // 10 and one hop; the hall's east side is its own four pull groups again, each over its original ceiling by a
 // pinned known limit, and walk 39 GM-clears them), the Hakkar outer leg's step-601 wall (M4, on the real

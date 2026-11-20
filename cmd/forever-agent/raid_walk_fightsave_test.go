@@ -121,7 +121,7 @@ func teardownFightsWalk(t *testing.T, now time.Time, slept *time.Duration) (*wal
 			return nil
 		},
 		teardown: func(args []string, stdout, stderr io.Writer) int {
-			fmt.Fprint(stdout, `{"server":"m910q","slot":"2","steps":[],"failed":0}`)
+			fmt.Fprint(stdout, `{"server":"test1","slot":"2","steps":[],"failed":0}`)
 			return 0
 		},
 	}

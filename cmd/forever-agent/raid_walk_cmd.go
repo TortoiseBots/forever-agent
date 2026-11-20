@@ -1,5 +1,5 @@
 // raid-walk: hire a raid, bind it to the TortoiseBots run leader and walk its plan until the plan's `until` point
-// (spec ~/TortoiseBots-audit/specs/forever-agent-raid-tools.md task A3). The pure decisions live in
+// (spec specs/forever-agent-raid-tools.md task A3). The pure decisions live in
 // internal/raidwalk (A2); this file holds the flags, the phase wiring and the output dir, raid_walk_phases.go the
 // phases.
 //

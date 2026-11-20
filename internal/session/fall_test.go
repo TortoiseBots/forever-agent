@@ -295,7 +295,7 @@ func TestFlightBumpsIntoACeiling(t *testing.T) {
 	}
 }
 
-// Live (m910q, 2026-10-12): a summon left the player 0.55 yd under the mesh of a 45° slope,
+// Live (test1, 2026-10-12): a summon left the player 0.55 yd under the mesh of a 45° slope,
 // and the arc took the slope for a ceiling and fell to a guess. The ground a flight starts
 // from may be up to startSlack above it; a trace that finds nothing leaves no bump behind.
 func TestFlightStartsUnderTheMeshOfASlope(t *testing.T) {

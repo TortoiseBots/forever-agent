@@ -1,4 +1,4 @@
-// Walk-41 fix 1 (TortoiseBots-audit research/zg-bosses/JEKLIK-W41.md §1 and §3): Jeklik's last boss approach stands
+// Walk-41 fix 1 (research/zg-bosses/JEKLIK-W41.md §1 and §3): Jeklik's last boss approach stands
 // on the plateau's floor inside the run leader's reach pull, so the walk-pull gate passes without a move and the run
 // is never paused on her boss row with no firing position.
 package main

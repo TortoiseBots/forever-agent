@@ -29,7 +29,7 @@ func reuseCapLedger(t *testing.T, now time.Time) string {
 	path := filepath.Join(t.TempDir(), raidwalk.InstanceCapFile)
 	if _, err := raidwalk.UpdateCapLedger(path, func(l *raidwalk.CapLedger) {
 		for i := range raidwalk.InstanceCapWarnAt {
-			l.Record("m910q", raidwalk.CapEntry{At: now.Add(-time.Duration(i+1) * time.Minute)}, now)
+			l.Record("test1", raidwalk.CapEntry{At: now.Add(-time.Duration(i+1) * time.Minute)}, now)
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestReuseInstanceKeepsTheInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := l.Count("m910q", now); n != raidwalk.InstanceCapWarnAt {
+	if n := l.Count("test1", now); n != raidwalk.InstanceCapWarnAt {
 		t.Fatalf("ledger count %d, want %d (a reuse records no fresh instance)", n, raidwalk.InstanceCapWarnAt)
 	}
 	// Every hire was teleported to the start point with the GM path.

@@ -349,7 +349,7 @@ func TestRecordedPatrolReplacesDBPatrol(t *testing.T) {
 		{
 			ID: "52050", GUIDs: []string{"0xF130002F61000CB2"}, SpawnGUIDs: []uint32{52050}, Entries: []uint32{12129},
 			Name: "Warder", Path: []dungeon.Point{{X: 1000, Y: 0}, {X: 1005, Y: 0}},
-			PeriodS: 33.4, PeriodEstimate: false, Source: "record m910q",
+			PeriodS: 33.4, PeriodEstimate: false, Source: "record test1",
 		},
 		{
 			ID: "777", Entries: []uint32{4242}, Name: "Other",

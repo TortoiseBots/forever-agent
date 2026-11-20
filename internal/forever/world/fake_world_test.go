@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
@@ -176,6 +177,28 @@ type fakeServer struct {
 	onFBLfg      func(polls int)
 	fbMapCounter uint32
 	fbdEvents    int
+	// Round LOOT-1: the loot and object-use scenario (serveLoot in fake_loot_test.go): the case word, the target,
+	// the window's items and rolls, and what the fake saw of the client's requests (all under mu).
+	loot           bool
+	lootCase       string
+	lootTarget     fakeLootTarget
+	lootExtras     []fakeExtraObject
+	lootWant       wire.GUID
+	lootRollMs     uint32
+	lootItems      []fakeItemDef
+	lootRolls      []fakeItemDef
+	lootCoins      uint32
+	lootValid      uint8
+	lootLootGUID   wire.GUID
+	lootUsed       bool
+	lootReported   bool
+	lootMoney      bool
+	lootReleased   bool
+	lootVotes      []uint8
+	lootItemsTaken []uint8
+	// lootOtherOwner is the owner a "window-other-owner" case names in the window: an object the client never
+	// opened, whose window it must still give back.
+	lootOtherOwner wire.GUID
 	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
 	dungeon *dungeonScene
 	// What the fake saw, under mu.
@@ -916,6 +939,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.chat {
 		f.serveChat(c, realm)
+		return
+	}
+	if f.loot {
+		f.serveLoot(c, realm)
 		return
 	}
 	if f.dungeon != nil {

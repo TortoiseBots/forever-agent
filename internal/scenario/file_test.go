@@ -99,7 +99,7 @@ func TestParseRejectsCheckDBWithoutDB(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	data = `{"scenario":"x","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
-		"db":{"host":"m910q","container":"tortoise-db"},
+		"db":{"host":"test1","container":"tortoise-db"},
 		"steps":[{"do":"check_db","table":"tw_logon.account","rows":0}]}`
 	_, err = Parse([]byte(data), nil)
 	if err == nil || !strings.Contains(err.Error(), "is not on the read-only allowlist (internal/scenario/db.go)") {
@@ -146,14 +146,14 @@ func TestParseRejectsBadDBValues(t *testing.T) {
 	}
 	for _, step := range steps {
 		data := `{"scenario":"x","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
-			"db":{"host":"m910q","container":"tortoise-db"},"steps":[` + step + `]}`
+			"db":{"host":"test1","container":"tortoise-db"},"steps":[` + step + `]}`
 		if _, err := Parse([]byte(data), nil); err == nil {
 			t.Fatalf("%s: accepted", step)
 		}
 	}
 	for _, db := range []string{
 		`{"host":"-oProxyCommand=x","container":"tortoise-db"}`,
-		`{"host":"m910q","container":"a b"}`,
+		`{"host":"test1","container":"a b"}`,
 	} {
 		data := `{"scenario":"x","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
 			"db":` + db + `,"steps":[{"do":"mark"}]}`

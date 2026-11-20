@@ -3129,7 +3129,7 @@ var errRunWentOn = errors.New("the run went on by itself")
 func (w *walk) handleWipe(ctx context.Context, step int) error {
 	// The run may already be regrouping by itself after the wipe (TB "regrouping by itself"):
 	// it stays running, rests, gathers and walks back on its own, so the recovery must not rest
-	// or resume it (walk 17b m910q s4, test2 s2). The note need not be the wipe's last status line:
+	// or resume it (walk 17b test1 s4, test2 s2). The note need not be the wipe's last status line:
 	// live TB sends "regrouping by itself" and then "regroup: waiting for X (dead), ... reviving" for
 	// the same step in one page, and it may even go on to its own "regrouped" or a line of the next
 	// step, which also moves the step the wipe fires on. So the decision reads the recorded running
@@ -5980,14 +5980,14 @@ func nearWipeStop(note string) bool {
 // selfRegroupNote says the run is regrouping by itself after a wipe (TB DungeonRunPolicy: "19 dead (...):
 // regrouping by itself (1 of 2 at this step)", also "... dead and the fight went past N s (...): regrouping by
 // itself ..."). The run stays running and rests, gathers and walks back on its own: a recovery must not rest or
-// resume it (walk 17b m910q s4, test2 s2).
+// resume it (walk 17b test1 s4, test2 s2).
 func selfRegroupNote(note string) bool {
 	return strings.Contains(strings.ToLower(note), "regrouping by itself")
 }
 
 // selfRegroupWindow is how close a "regrouping by itself" status line must be to the wipe it
 // explains. Live TB sends the note and then "regroup: waiting for X (dead), ... reviving" for the
-// same step in one poll (walk 18 r5: m910q s4, test2 s2), so the note is at most one poll old.
+// same step in one poll (walk 18 r5: test1 s4, test2 s2), so the note is at most one poll old.
 const selfRegroupWindow = 30 * time.Second
 
 // selfRegroupReviveWait is how long after TB's release (the regroup line the walk read) a self-regroup waits before its

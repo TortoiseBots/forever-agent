@@ -53,21 +53,21 @@ func setNow(st *Store, now time.Time) {
 }
 
 const twoSlotCfg = `{"version":1,"servers":[
-	{"name":"m910q","realmd":"10.0.0.1:3724","slots":[
+	{"name":"test1","realmd":"10.0.0.1:3724","slots":[
 		{"id":"1","account":"TAGENT1","character":"Gbmage","port":8771,"settings_from":"/s.json"},
 		{"id":"2","account":"HARNESSC","character":"Glacienne","port":8769,"settings_from":"/s.json"}]}]}`
 
 // 5. Two holders, one slot: the second is refused, --any finds the other.
 func TestAcquireTwoHoldersOneSlot(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
-	if _, err := st.Acquire("m910q", "1", false, "w-a", 3*time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	_, err := st.Acquire("m910q", "1", false, "w-b", 3*time.Hour)
+	_, err := st.Acquire("test1", "1", false, "w-b", 3*time.Hour)
 	if err == nil || !strings.Contains(err.Error(), "held by w-a") {
 		t.Fatalf("got %v, want a held-by-w-a refusal", err)
 	}
-	got, err := st.Acquire("m910q", "", true, "w-b", 3*time.Hour)
+	got, err := st.Acquire("test1", "", true, "w-b", 3*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,18 +122,18 @@ func TestStaleNeedsExpiryAndDeadAgent(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	fp := st.Probe.(*fakeProbe)
 	base := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
-	first, err := st.Acquire("m910q", "1", false, "w-a", time.Hour)
+	first, err := st.Acquire("test1", "1", false, "w-a", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetDir("m910q", "1", "w-a", first.Lease.LeaseID, "/tmp/ta-w-a"); err != nil {
+	if err := st.SetDir("test1", "1", "w-a", first.Lease.LeaseID, "/tmp/ta-w-a"); err != nil {
 		t.Fatal(err)
 	}
 	fp.mu.Lock()
 	fp.agents["/tmp/ta-w-a"] = 80353
 	fp.mu.Unlock()
 	setNow(st, base.Add(2*time.Hour))
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err == nil ||
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "held by w-a") {
 		t.Fatalf("expired+live: got %v, want a held refusal", err)
 	}
@@ -141,13 +141,13 @@ func TestStaleNeedsExpiryAndDeadAgent(t *testing.T) {
 	delete(fp.agents, "/tmp/ta-w-a")
 	fp.mu.Unlock()
 	setNow(st, base.Add(30*time.Minute))
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err == nil ||
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "held by w-a") {
 		t.Fatalf("unexpired+dead: got %v, want a held refusal", err)
 	}
 
 	setNow(st, base.Add(2*time.Hour))
-	got, err := st.Acquire("m910q", "1", false, "w-b", time.Hour)
+	got, err := st.Acquire("test1", "1", false, "w-b", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,31 +159,31 @@ func TestStaleNeedsExpiryAndDeadAgent(t *testing.T) {
 // 8. --any skips reserved slots and busy ports; the none-free message names every slot.
 func TestAnySkipsReservedAndBusyPorts(t *testing.T) {
 	st := testStore(t, `{"version":1,"servers":[
-		{"name":"m910q","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"},
 			{"id":"2","account":"B","character":"Glacienne","port":8769,"settings_from":"/s.json"},
-			{"id":"3","reserved":"owner rule: never slot 3 on m910q"}]}]}`)
+			{"id":"3","reserved":"owner rule: never slot 3 on test1"}]}]}`)
 	fp := st.Probe.(*fakeProbe)
 	fp.mu.Lock()
 	fp.listening[8771] = true
 	fp.mu.Unlock()
-	got, err := st.Acquire("m910q", "", true, "w-a", 3*time.Hour)
+	got, err := st.Acquire("test1", "", true, "w-a", 3*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Lease.Slot != "2" {
 		t.Fatalf("--any got slot %q, want 2", got.Lease.Slot)
 	}
-	if _, err := st.Acquire("m910q", "", true, "w-b", 3*time.Hour); err == nil {
+	if _, err := st.Acquire("test1", "", true, "w-b", 3*time.Hour); err == nil {
 		t.Fatal("w-b --any succeeded, want a no-free-slot refusal")
 	}
 	fp.mu.Lock()
 	fp.listening[8769] = true
 	fp.mu.Unlock()
-	if err := os.Remove(st.leasePath("m910q", "2")); err != nil {
+	if err := os.Remove(st.leasePath("test1", "2")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.Acquire("m910q", "", true, "w-c", 3*time.Hour)
+	_, err = st.Acquire("test1", "", true, "w-c", 3*time.Hour)
 	if err == nil {
 		t.Fatal("want a no-free-slot refusal")
 	}
@@ -199,36 +199,36 @@ func TestAnySkipsReservedAndBusyPorts(t *testing.T) {
 func TestReleaseRules(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	fp := st.Probe.(*fakeProbe)
-	first, err := st.Acquire("m910q", "1", false, "w-a", 3*time.Hour)
+	first, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Release("m910q", "1", "w-b", "bogus", false); err == nil ||
+	if _, err := st.Release("test1", "1", "w-b", "bogus", false); err == nil ||
 		!strings.Contains(err.Error(), "held by w-a, not w-b") {
 		t.Fatalf("got %v, want a held-by refusal", err)
 	}
-	if _, err := st.Release("m910q", "1", "w-a", "bogus-id", false); err == nil ||
+	if _, err := st.Release("test1", "1", "w-a", "bogus-id", false); err == nil ||
 		!strings.Contains(err.Error(), "lease id mismatch") {
 		t.Fatalf("got %v, want a lease-id refusal", err)
 	}
-	if err := st.SetDir("m910q", "1", "w-a", first.Lease.LeaseID, "/tmp/ta-w-a"); err != nil {
+	if err := st.SetDir("test1", "1", "w-a", first.Lease.LeaseID, "/tmp/ta-w-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetDir("m910q", "1", "w-a", "bogus-id", "/tmp/ta-w-a"); err == nil ||
+	if err := st.SetDir("test1", "1", "w-a", "bogus-id", "/tmp/ta-w-a"); err == nil ||
 		!strings.Contains(err.Error(), "lease id mismatch") {
 		t.Fatalf("got %v, want a lease-id refusal", err)
 	}
 	fp.mu.Lock()
 	fp.agents["/tmp/ta-w-a"] = 80353
 	fp.mu.Unlock()
-	if _, err := st.Release("m910q", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
+	if _, err := st.Release("test1", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
 		!strings.Contains(err.Error(), "run forever-agent teardown") {
 		t.Fatalf("got %v, want a teardown-first refusal", err)
 	}
-	if _, err := st.Release("m910q", "1", "w-b", "bogus-id", true); err != nil {
+	if _, err := st.Release("test1", "1", "w-b", "bogus-id", true); err != nil {
 		t.Fatal(err)
 	}
-	if l, _ := st.readLease("m910q", "1"); l != nil {
+	if l, _ := st.readLease("test1", "1"); l != nil {
 		t.Fatal("forced release left the file")
 	}
 }
@@ -238,7 +238,7 @@ func TestReleaseRules(t *testing.T) {
 // and the new lease stays.
 func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
-	first, err := st.Acquire("m910q", "1", false, "w-a", 3*time.Hour)
+	first, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 	if len(first.Lease.LeaseID) != 32 {
 		t.Fatalf("lease id %q is not 16 bytes hex", first.Lease.LeaseID)
 	}
-	second, err := st.Acquire("m910q", "1", false, "w-a", 3*time.Hour)
+	second, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,15 +258,15 @@ func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 	if second.Lease.LeaseID == first.Lease.LeaseID {
 		t.Fatal("re-acquire kept the old lease id")
 	}
-	if _, err := st.Renew("m910q", "1", "w-a", first.Lease.LeaseID, 3*time.Hour); err == nil ||
+	if _, err := st.Renew("test1", "1", "w-a", first.Lease.LeaseID, 3*time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "lease id mismatch") {
 		t.Fatalf("renew with the old id: got %v, want a lease-id refusal", err)
 	}
-	if _, err := st.Release("m910q", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
+	if _, err := st.Release("test1", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
 		!strings.Contains(err.Error(), "lease id mismatch") {
 		t.Fatalf("release with the old id: got %v, want a lease-id refusal", err)
 	}
-	cur, err := st.Get("m910q", "1")
+	cur, err := st.Get("test1", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 		t.Fatalf("new lease did not stay: %+v", cur)
 	}
 	// The current ID still releases.
-	if _, err := st.Release("m910q", "1", "w-a", second.Lease.LeaseID, false); err != nil {
+	if _, err := st.Release("test1", "1", "w-a", second.Lease.LeaseID, false); err != nil {
 		t.Fatalf("release with the current id: %v", err)
 	}
 }
@@ -283,12 +283,12 @@ func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 func TestSameHolderRenews(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	base := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
-	first, err := st.Acquire("m910q", "1", false, "w-a", time.Hour)
+	first, err := st.Acquire("test1", "1", false, "w-a", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	setNow(st, base.Add(30*time.Minute))
-	second, err := st.Acquire("m910q", "1", false, "w-a", 2*time.Hour)
+	second, err := st.Acquire("test1", "1", false, "w-a", 2*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSameHolderRenews(t *testing.T) {
 	if second.Lease.LeaseID == "" || second.Lease.LeaseID == first.Lease.LeaseID {
 		t.Fatal("re-acquire kept the old lease id")
 	}
-	entries, err := os.ReadDir(filepath.Join(st.Dir, "m910q"))
+	entries, err := os.ReadDir(filepath.Join(st.Dir, "test1"))
 	if err != nil {
 		t.Fatal(err)
 	}
