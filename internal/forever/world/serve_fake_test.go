@@ -1242,3 +1242,67 @@ func TestServeStopAttackRefusesAStaleRuntime(t *testing.T) {
 		t.Fatal("stop_attack set the stale runtime's stop flag")
 	}
 }
+
+// TestServeStopAttackHoldsTheLifecycleLock: the fast path validates the runtime and writes the stop flag as one step
+// under the lifecycle mutex the drop publishes under. The test holds the fast path between the two: the drop cannot
+// publish until the call finishes, so no call can report a stop whose flag belongs to a session already reconnecting.
+// Once the drop has published, the same fast path answers the typed error and leaves the stale runtime's flag alone.
+func TestServeStopAttackHoldsTheLifecycleLock(t *testing.T) {
+	st := &serveState{}
+	st.install(newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background()), 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+
+	validated := make(chan struct{})
+	resume := make(chan struct{})
+	serveStopFightHook = func() {
+		close(validated)
+		<-resume
+	}
+	defer func() { serveStopFightHook = nil }()
+
+	got := make(chan error, 1)
+	go func() {
+		handled, err := st.stopFightFast()
+		if !handled {
+			err = fmt.Errorf("stop_attack did not take the fast path")
+		}
+		got <- err
+	}()
+	<-validated
+	dropped := make(chan struct{})
+	go func() {
+		st.drop(errors.New("the socket reset"))
+		close(dropped)
+	}()
+	select {
+	case <-dropped:
+		t.Fatal("the drop published between the fast path's validation and its stop-flag write")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(resume)
+	if err := <-got; err != nil {
+		t.Fatalf("the fast path that linearised before the drop returned %v", err)
+	}
+	select {
+	case <-dropped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the drop did not publish after the fast path released the lock")
+	}
+	if !rt.stopFight.Load() {
+		t.Fatal("the fast path did not write the stop flag of the session that was still online")
+	}
+	// The drop has published: the same call now sees the stale runtime and must refuse without touching its flag.
+	rt.stopFight.Store(false)
+	handled, err := st.stopFightFast()
+	if !handled {
+		t.Fatal("stop_attack did not take the fast path after the drop")
+	}
+	if err == nil || !strings.Contains(err.Error(), "the link dropped: the socket reset") {
+		t.Fatalf("stop_attack after the drop returned %v", err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("the fast path wrote the stop flag of a session already reconnecting")
+	}
+}

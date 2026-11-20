@@ -159,7 +159,10 @@ type serveState struct {
 	used        int
 	onlineSince time.Time
 
-	// mu guards what the loop publishes for the handlers: the lifecycle reason and the error behind it.
+	// mu guards what the loop publishes for the handlers (the lifecycle, the reason and the epoch) and serialises
+	// the lifecycle transitions with stop_attack's fast path: a fast path that validates the runtime and writes the
+	// stop flag does so under mu, and a drop publishes reconnecting and invalidates the epoch under the same mu, so
+	// the two can never interleave.
 	mu     sync.Mutex
 	reason string
 
@@ -308,8 +311,7 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 	// the typed reconnecting error instead of being queued for a session that cannot run them, a call posted under
 	// the old epoch is refused rather than run on the session that is going away, and a fast path that loads the
 	// runtime (stop_attack) sees a stale epoch and refuses instead of reporting a success the dead link cannot act on.
-	st.setState(serveReconnecting, fmt.Sprintf("the link dropped: %v", cause))
-	st.epoch.Store(st.epoch.Load() + 1)
+	st.drop(cause)
 	st.opts.logf("rpc: the world link dropped: %v; state %s", cause, serveReconnecting)
 	old.teardown()
 	limit := int(st.limit.Load())
@@ -483,11 +485,27 @@ func (st *serveState) statusText() (state, reason string, attempt, limit int) {
 	return l.String(), reason, int(st.attempt.Load()), int(st.limit.Load())
 }
 
+// drop publishes a dropped link as one step, under the mutex stop_attack's fast path takes: reconnecting, its reason,
+// and an epoch that invalidates every runtime loaded before it. A stop_attack either finishes before this (its flag
+// belongs to a session that was still online at that instant) or sees the published state and refuses.
+func (st *serveState) drop(cause error) {
+	st.mu.Lock()
+	st.reason = fmt.Sprintf("the link dropped: %v", cause)
+	st.state.Store(int32(serveReconnecting))
+	st.epoch.Store(st.epoch.Load() + 1)
+	st.mu.Unlock()
+}
+
 // downError is what an action answers while the link is not online.
 func (st *serveState) downError() error {
 	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.downErrorLocked()
+}
+
+// downErrorLocked is downError for a caller that already holds mu.
+func (st *serveState) downErrorLocked() error {
 	l, reason := serveLifecycle(st.state.Load()), st.reason
-	st.mu.Unlock()
 	switch l {
 	case serveReconnecting:
 		return &rpc.Error{Code: rpc.CodeReconnecting, Message: "world: reconnecting: " + reason}
@@ -508,18 +526,29 @@ func (st *serveState) actionError() error {
 	return st.downError()
 }
 
+// serveStopFightHook, when not nil, runs in stop_attack's fast path after the runtime is validated and before its stop
+// flag is written, with the lifecycle mutex held. The tests use it to hold the fast path at that point and prove the
+// drop cannot publish in between.
+var serveStopFightHook func()
+
 // stopFightFast stops a fight that is running on the session goroutine without queueing behind it; it reports false
 // when there is no fight to stop and the caller must take the queued path. It is the one action that reaches the
-// runtime directly, so it re-reads the lifecycle and the runtime's epoch after loading it: a drop publishes the
-// reconnecting state and bumps the epoch before it tears the old session down, and a call that lands in that window
-// gets the typed error instead of a success the dead session can never act on.
+// runtime directly, so its validation and the flag write are one step under the lifecycle mutex: a drop publishes
+// reconnecting and invalidates the epoch under the same mutex. The call therefore either completes before the drop
+// (the flag belongs to the session that was still live at that instant) or finds the runtime stale and answers the
+// typed error. It never writes the flag of a session whose reconnection has already begun.
 func (st *serveState) stopFightFast() (bool, error) {
 	rt := st.rt.Load()
 	if rt == nil || !rt.fighting.Load() {
 		return false, nil
 	}
-	if st.actionError() != nil || rt.epoch != st.epoch.Load() {
-		return true, st.downError()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.state.Load() != int32(serveOnline) || rt.epoch != st.epoch.Load() {
+		return true, st.downErrorLocked()
+	}
+	if serveStopFightHook != nil {
+		serveStopFightHook()
 	}
 	rt.stopFight.Store(true)
 	return true, nil
