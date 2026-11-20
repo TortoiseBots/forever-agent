@@ -35,7 +35,7 @@ turtle-agent lease acquire <server> (--slot ID | --any) --holder NAME [--ttl MIN
 
 Pass `--slot <slot>` or `--any` (never the reserved slot). `acquire` refuses a port that already has a listener.
 
-Prints `leased <server>/<slot> to <holder> until <time>: account <account>, character <character>, port <port>, lease <id>`, plus `(already yours: expiry renewed)` when you re-acquire your own slot, or a `took over a stale lease ...` line first when the old lease was stale. Refusals exit 15: `lease: <server>/<slot> is reserved (...)`, `is held by <holder> since ... until ...`, or a busy port line naming the listener. Usage errors exit 2.
+Prints `leased <server>/<slot> to <holder> until <time>: account <account>, character <character>, port <port>, lease <id>`, plus a `took over a stale lease ...` line first when the old lease was stale. Re-acquiring your own live slot is refused atomically (`already leased by ... (already yours: renew, do not re-acquire)`: extend it with `lease renew` instead); the refusal exits 15 like the other refusals: `lease: <server>/<slot> is reserved (...)`, `is held by <holder> since ... until ...`, or a busy port line naming the listener. Usage errors exit 2.
 
 ## lease renew
 

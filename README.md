@@ -29,7 +29,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
-| Trials (behaviour test bench, in Go, as `forever-agent trials`) | not started |
+| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Live core, offline (round A2): leases, GM allowlist, recorder, `trials run --dry`; see [docs/forever/TRIALS-A2-NOTES.md](docs/forever/TRIALS-A2-NOTES.md)** |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
