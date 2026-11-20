@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"strings"
 	"time"
@@ -114,6 +115,8 @@ type fakeBot struct {
 	dlKind    string
 	dlYards   float64
 	move      string
+	eating    bool
+	drinking  bool
 	orderFail bool
 }
 
@@ -136,6 +139,12 @@ type Fake struct {
 	mobOrder []wire.GUID
 	engaged  map[string]bool
 	guidOf   map[string]wire.GUID
+	// auras is the scripted world's aura list per unit id (a frame's `auras` key).
+	auras map[wire.GUID][]uint32
+	// combat is the scripted session's combat log: rows the scenario appends and the watch drains.
+	combat [][]byte
+	// flee marks the mobs whose threat line says flee=yes (the key is on every line, as slice 4 sends it).
+	flee map[string]bool
 
 	// ordered is every order and action, in the driver's own view of time; acted is the actions themselves.
 	ordered []Order
@@ -217,10 +226,13 @@ type Fake struct {
 	EmptyStateOn func(f *Fake) bool
 }
 
-// FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
+// FakeDeath is one scripted death: at After, a member of the party dies. Unit is the fight's unit id the module's
+// event carries (the pull's unit, the same for every death of a pull), and Who names the dead member; empty Who
+// takes the party member whose GUID low word is Unit, as a module names the member its fight facts read.
 type FakeDeath struct {
 	After time.Duration
 	Unit  uint32
+	Who   string
 }
 
 // FakeRunScript is the scripted module run: a step every ProgressEvery, pulls in between, an optional wipe (a pause
@@ -235,6 +247,9 @@ type FakeRunScript struct {
 	Silent bool
 	// Deaths are the member deaths the run emits, at their own times.
 	Deaths []FakeDeath
+	// The pack the run fights when Mobs is set: one mob on the tank's threat list for the whole run, so a watcher's
+	// frames have a threat mob to record.
+	Mobs bool
 	// HoldAt makes the run stay on that step and re-pull it on every tick: the pack it cannot clear. StopAt stops
 	// the run itself, with StopWhy as the module's reason.
 	HoldAt  int
@@ -436,7 +451,7 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 			Map: b.mapID, Instance: b.inst,
 			DistLeader: tbcmd.Distance{Has: true, Kind: orSelf(b.dlKind), Yards: b.dlYards},
 			DistMaster: tbcmd.Distance{Has: !f.missingNow && !b.dmMissing, Kind: b.dmKind, Yards: b.dmYards},
-			LastOrder:  "", Eating: false, Drinking: false, Resting: b.resting,
+			LastOrder:  "", Eating: b.eating, Drinking: b.drinking, Resting: b.resting,
 			Extra: map[string]string{},
 		}
 		if b.dead {
@@ -497,10 +512,18 @@ func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
 			continue
 		}
 		pct := u.HP * 100 / max(u.MaxHP, 1)
-		rep.Mobs = append(rep.Mobs, tbcmd.ThreatLine{
+		victim := f.botAt(u.Target)
+		line := tbcmd.ThreatLine{
 			Mob: guidText(g), Entry: int(u.Entry), Name: "mob", HPPct: pct,
-			Victim: f.botAt(u.Target), Target: f.cfg.Tank(), Size: 1,
-		})
+			Victim: victim, Target: f.cfg.Tank(), Size: 1,
+			X: float64(u.Pos[0]), Y: float64(u.Pos[1]), Z: float64(u.Pos[2]), HasPos: true,
+			Flee: f.flee[guidText(g)], HasFlee: true,
+		}
+		if victim != "" {
+			line.Top = []tbcmd.ThreatEntry{{Name: victim, Threat: 100}}
+			line.HasTop = true
+		}
+		rep.Mobs = append(rep.Mobs, line)
 	}
 	rep.Count = len(rep.Mobs)
 	return rep, nil
@@ -722,6 +745,9 @@ func (f *Fake) startRun(a Action) error {
 	}
 	f.run = r
 	f.runEvent("start", 0, 0, 0, "")
+	if sc.Mobs {
+		f.spawnRunMob()
+	}
 	if !sc.Silent {
 		every := sc.ProgressEvery
 		if every <= 0 {
@@ -736,13 +762,25 @@ func (f *Fake) startRun(a Action) error {
 		}
 		for _, d := range sc.Deaths {
 			d := d
-			f.Clock.After(d.After, func() { f.runDeath(d.Unit) })
+			f.Clock.After(d.After, func() { f.runDeath(d) })
 		}
 		if sc.StopAt > 0 {
 			f.Clock.After(sc.StopAt, f.runStopSelf)
 		}
 	}
 	return nil
+}
+
+// spawnRunMob puts one mob ten yards from the party, on the tank's threat list, for a run with Mobs set.
+func (f *Fake) spawnRunMob() {
+	g := wire.GUID{Low: 0xF130000000000000 + uint64(len(f.mobOrder)) + 200}
+	near := Vec3{f.selfPos[0] - 10, f.selfPos[1], f.selfPos[2]}
+	f.mobs[g] = &Unit{GUID: g, Entry: 1234, Pos: near, HP: 800, MaxHP: 1000}
+	f.mobOrder = append(f.mobOrder, g)
+	f.engaged[guidText(g)] = true
+	if b := f.bots[f.cfg.Tank()]; b != nil {
+		f.mobs[g].Target = b.guid
+	}
 }
 
 // stopRun ends the scripted run, at once or after StopDelay (a stop pending on a fight).
@@ -835,14 +873,19 @@ func (f *Fake) runTick() {
 	}
 }
 
-// runDeath is one scripted member death.
-func (f *Fake) runDeath(unit uint32) {
+// runDeath is one scripted member death: the event names the dead member in why=, as the module's own death events
+// do, and carries the fight's unit id.
+func (f *Fake) runDeath(d FakeDeath) {
 	r := f.run
 	if r == nil || r.state != "running" {
 		return
 	}
+	who := d.Who
+	if who == "" {
+		who = f.botAt(wire.GUID{Low: uint64(d.Unit)})
+	}
 	r.deaths++
-	f.runEvent("death", r.step, r.leg, unit, "")
+	f.runEvent("death", r.step, r.leg, d.Unit, who)
 }
 
 // runStopSelf stops the scripted run itself, with the script's reason.
@@ -874,7 +917,7 @@ func (f *Fake) runWipe() {
 	f.wipeFlag = true
 	for i := range f.cfg.Party {
 		if g, ok := f.guidOf[f.cfg.Party[i]]; ok && g.Low <= math.MaxUint32 {
-			f.runEvent("death", r.step, r.leg, uint32(g.Low), "")
+			f.runEvent("death", r.step, r.leg, uint32(g.Low), f.cfg.Party[i])
 		}
 	}
 	f.runEvent("wipe", r.step, r.leg, 0, "")
@@ -1158,6 +1201,22 @@ func (f *Fake) Units() []Unit {
 func (f *Fake) PlayerGUID(name string) (wire.GUID, bool) {
 	g, ok := f.guidOf[name]
 	return g, ok
+}
+
+// Auras is the scripted world's aura list for a unit: a scenario sets it with SetAuras, and a bot without one has
+// none.
+func (f *Fake) Auras(guid wire.GUID) []uint32 { return f.auras[guid] }
+
+// SetAuras gives a party member the auras the frames must show.
+func (f *Fake) SetAuras(name string, ids ...uint32) {
+	if f.auras == nil {
+		f.auras = map[wire.GUID][]uint32{}
+	}
+	g, ok := f.guidOf[name]
+	if !ok {
+		return
+	}
+	f.auras[g] = append([]uint32(nil), ids...)
 }
 
 // EnterAreaTrigger moves the commander into the instance.
@@ -1463,3 +1522,28 @@ func (f *Fake) UnitGUID(entry uint32) string {
 
 // botState is the scripted bot.
 func (f *Fake) botState(name string) *fakeBot { return f.bots[name] }
+
+// AddCombat appends one raw row to the scripted session's combat log, exactly as the world session would have written
+// it (the trials runner's raw row shape).
+func (f *Fake) AddCombat(row string) { f.combat = append(f.combat, []byte(row)) }
+
+// CombatRows is the scripted session's combat log: the rows above seq, in order. The scripted log starts at row 1 and
+// never drops one.
+func (f *Fake) CombatRows(seq, limit int) ([]json.RawMessage, int, int, int) {
+	if len(f.combat) == 0 {
+		return nil, seq, 0, 0
+	}
+	if limit <= 0 || limit > combatPageMax {
+		limit = combatPageMax
+	}
+	start := max(seq, 0)
+	if start >= len(f.combat) {
+		return nil, seq, 1, 0
+	}
+	end := min(len(f.combat), start+limit)
+	rows := make([]json.RawMessage, 0, end-start)
+	for _, row := range f.combat[start:end] {
+		rows = append(rows, json.RawMessage(row))
+	}
+	return rows, end, 1, 0
+}

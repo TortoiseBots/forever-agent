@@ -574,6 +574,9 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 	}()
 	for {
 		now := link.Now()
+		if s.serveRT != nil && s.serveRT.stopFight.Swap(false) {
+			return ErrAttackStopped
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

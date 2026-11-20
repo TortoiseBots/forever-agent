@@ -7,10 +7,15 @@ package driver
 // progress (leg, step, pulls, deaths, wipes, pauses with their reasons, the bosses the instance report gives), and
 // keeps the safety budgets:
 //
-//   - the watchdog: no new event for cfg.Watchdog -> pause the run with a reason, report, and end the watch;
+//   - the watchdog: no new event for cfg.Watchdog -> pause the run with a reason, report, and end the watch; a run
+//     that is already paused is not paused again, the watchdog reports it and the watch ends;
+//   - the pause budget: a run whose state is paused and whose pause has not cleared for Limits.WatchPause (5 min)
+//     is reported and the watch ends as paused-stuck (the module never resumes a pause by itself, and the watch
+//     sends no resume on its own);
 //   - the time budget (Limits.MaxMinutes) and the wipe budget (Limits.MaxWipes);
 //   - the practice rescue: a run paused on a wipe for Limits.WatchRescue (300 s) gets one `.tb revive party`
-//     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times.
+//     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times. The rescue runs before the pause
+//     budget, so the wipe pause it can clear is not reported as stuck.
 //
 // Every send goes through act and its gate, like every other setup action. The stop path sends `.tb run stop`, waits
 // (bounded) for the module's state to reach stopped, and writes the run's summary: the dungeon-run format, extended
@@ -20,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -50,12 +54,28 @@ type watchRun struct {
 	revived     bool
 	reviveAt    time.Time
 	rescues     int
-	pauseLog    []PauseNote
-	pauseSeen   map[int]bool
-	bosses      map[uint32]string
-	bossAt      time.Time
-	lastLine    string
-	lastNote    string
+	// frames, combatRows and combatLost are the watch's own record of the sample tick: how many frames it wrote, how
+	// many combat rows reached the file, and how many the session's ring had already dropped. combatLostThrough is
+	// the highest seq whose loss is already in combatLost: a cursor the writer retries reports the same hole again,
+	// so only the part past this watermark is new. frameBlind and frameThreatBlind make one line of a failing frame
+	// read instead of one per tick; combatBlind, combatErr and combatTruncated do the same for a failing or bounded
+	// combat-log write.
+	frames            int
+	combatSeq         int
+	combatRows        int
+	combatLost        int
+	combatLostThrough int
+	combatBlind       bool
+	combatErr         string
+	combatTruncated   bool
+	frameBlind        bool
+	frameThreatBlind  bool
+	pauseLog          []PauseNote
+	pauseSeen         map[int]bool
+	bosses            map[uint32]string
+	bossAt            time.Time
+	lastLine          string
+	lastNote          string
 	// stopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it (or it could not stop yet), so the result is not a clean end.
 	stopUnconfirmed bool
@@ -72,7 +92,7 @@ type watchRun struct {
 	stepSeen  map[[2]int]bool
 	deaths    []DeathRecord
 	rescueLog []RescueNote
-	units     map[uint32]string
+	roles     map[string]string
 	elapsed   int
 }
 
@@ -95,7 +115,7 @@ func (r *Run) Watch(ctx context.Context) Result {
 	st := StatePrepare
 	r.states = append(r.states, st)
 	st = r.prepare(ctx)
-	w.units = r.watchUnits()
+	w.roles = r.watchRoles()
 	if r.stopReason == "" && st == StateTravel {
 		r.states = append(r.states, StateTravel)
 		st = r.travel(ctx)
@@ -234,7 +254,27 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 
 // watchLoop is the watch itself: status, events, the budgets, the practice rescue and the end.
 func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
+	var nextFrame time.Time
 	for r.stopReason == "" {
+		if r.cfg.FrameEvery > 0 {
+			now := r.now()
+			if nextFrame.IsZero() || !now.Before(nextFrame) {
+				r.watchFrame(ctx, w)
+				if r.stopReason != "" || r.lost {
+					return
+				}
+				if nextFrame.IsZero() {
+					nextFrame = now
+				}
+				nextFrame = nextFrame.Add(r.cfg.FrameEvery)
+				if !nextFrame.After(now) {
+					// A poll or a frame that took longer than the interval: the next one is one interval away, so the
+					// frames stay spaced instead of a burst catching up.
+					nextFrame = now.Add(r.cfg.FrameEvery)
+				}
+			}
+		}
+		r.drainCombat(w)
 		if r.lim.MaxMinutes > 0 && r.sinceStart() >= time.Duration(r.lim.MaxMinutes)*time.Minute {
 			r.stop("budget")
 			return
@@ -264,17 +304,179 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 			r.stop("wipes")
 			return
 		}
-		if w.state == "running" && r.watchdog(ctx, w) {
-			r.stop("watchdog")
-			return
-		}
+		// The practice rescue is the wipe pause's one remedy and runs before the pause budget: a pause it can
+		// clear is not a stuck one.
 		if r.watchRescue(ctx, w) {
 			// The rescue ended the watch (a refusal, a lost link, a spent budget).
 			if r.stopReason != "" {
 				return
 			}
 		}
+		if w.state == "paused" && r.pauseStuck(w) {
+			r.stop(StopPausedStuck)
+			return
+		}
+		// The watchdog covers a paused run too: a pause sends no event, so its ring is as silent as a hung pull's.
+		if (w.state == "running" || w.state == "paused") && r.watchdog(ctx, w) {
+			if w.state == "paused" {
+				r.stop(StopPausedStuck)
+			} else {
+				r.stop("watchdog")
+			}
+			return
+		}
 		if !r.sleep(ctx, r.cfg.Poll) {
+			return
+		}
+	}
+}
+
+// combatPageMax is the most combat-log rows one drain asks for (the session's own page bound).
+const combatPageMax = 1000
+
+// watchFrame is the watch's sample tick: `.tb state party <leader>` and `.tb threat party <leader>` (both reads,
+// never orders) written as one trace frame. A frame the module answers with a failed read is one line and no frame;
+// the next tick retries, and a later good read says it came back. A frame read never ends the watch: the module's
+// run is still watched by the status and event polls.
+func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
+	rep, err := r.cmd.State(ctx)
+	if errors.Is(err, ErrLinkLost) {
+		r.linkLost()
+		return
+	}
+	if err != nil {
+		if !w.frameBlind {
+			w.frameBlind = true
+			r.logf("watch: frame: the state read failed (%v); the next tick retries", err)
+		}
+		return
+	}
+	if w.frameBlind {
+		w.frameBlind = false
+		r.logf("watch: frame: the state read answers again")
+	}
+	thr, terr := r.cmd.Threat(ctx)
+	if errors.Is(terr, ErrLinkLost) {
+		r.linkLost()
+		return
+	}
+	var trep *tbcmd.ThreatReport
+	if terr != nil {
+		if !w.frameThreatBlind {
+			w.frameThreatBlind = true
+			r.logf("watch: frame: the threat read failed (%v); the frame carries the party only", terr)
+		}
+	} else {
+		if w.frameThreatBlind {
+			w.frameThreatBlind = false
+			r.logf("watch: frame: the threat read answers again")
+		}
+		trep = &thr
+	}
+	r.rec.WatchFrame(r.now(), r.frameBots(rep), trep, r.frameGUID)
+	w.frames++
+}
+
+// frameBots is the frame's party: the module's lines in the order it sent them, each with the guid this client's
+// model gives its name, the party slot's role and the auras the model holds for it.
+func (r *Run) frameBots(rep tbcmd.StateReport) []FrameBot {
+	out := make([]FrameBot, 0, len(rep.Bots))
+	for i := range rep.Bots {
+		b := rep.Bots[i]
+		fb := FrameBot{State: b}
+		if slot := r.partySlot(b.Name); slot >= 0 {
+			fb.Role = traceRole(slot)
+		}
+		if g, ok := r.world.PlayerGUID(b.Name); ok && !g.IsZero() {
+			fb.GUID = g.String()
+			fb.Auras = r.world.Auras(g)
+		}
+		out = append(out, fb)
+	}
+	return out
+}
+
+// partySlot is a bot's party position, -1 for a name outside the party.
+func (r *Run) partySlot(name string) int {
+	for i, n := range r.cfg.Party {
+		if strings.EqualFold(n, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when this client's model
+// holds the name, else nothing (a frame never carries a character name).
+func (r *Run) frameGUID(name string) string {
+	if name == "" {
+		return ""
+	}
+	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
+		return g.String()
+	}
+	return ""
+}
+
+// drainCombat writes the session's new combat-log rows into the run's <run_id>.combatlog.jsonl: pages of at most
+// combatPageMax until the log is caught up. A hole the ring reports is one line per growth of the loss, with the
+// oldest seq the log still holds, never a silent hole, and every hole adds to the total: a later hole counts whatever
+// its size, and a cursor the writer retries does not count the same hole twice. The cursor advances only past a page
+// the file has: a failed write is one line, the page stays where it is and the next tick retries it, so a full disk or
+// a revoked permission never turns into rows the run's record does not know it lost. A page the file's size bound
+// refuses ends the drain for good and the summary carries combat_truncated.
+func (r *Run) drainCombat(w *watchRun) {
+	if r.combat == nil || r.rec == nil {
+		return
+	}
+	for {
+		if r.rec.CombatTruncated() {
+			if !w.combatTruncated {
+				w.combatTruncated = true
+				r.logf("watch: the combat log reached its %d MiB bound at %d row(s); no later row is written",
+					r.rec.CombatMaxBytes()>>20, w.combatRows)
+			}
+			return
+		}
+		rows, next, oldest, dropped := r.combat.CombatRows(w.combatSeq, combatPageMax)
+		// dropped is the hole above the cursor the ring reports now: rows w.combatSeq+1 through oldest-1 are gone.
+		// A retried cursor reports the same hole again, so only the seqs past the watermark are a new loss, and a
+		// later hole counts whatever its size.
+		if lost := w.combatSeq + dropped; lost > w.combatLostThrough {
+			gain := lost - max(w.combatLostThrough, w.combatSeq)
+			w.combatLost += gain
+			w.combatLostThrough = lost
+			r.logf("watch: the combat log dropped %d row(s) above seq %d (oldest held %d)",
+				gain, w.combatSeq, oldest)
+		}
+		if len(rows) > 0 {
+			written, err := r.rec.Combat(rows)
+			if err != nil {
+				if errors.Is(err, errCombatFull) {
+					w.combatTruncated = true
+					r.logf("watch: the combat log reached its %d MiB bound at %d row(s); no later row is written",
+						r.rec.CombatMaxBytes()>>20, w.combatRows)
+					return
+				}
+				w.combatErr = combatErrText(err)
+				if !w.combatBlind {
+					w.combatBlind = true
+					r.logf("watch: combat log: the write failed (%v); the page stays and the next tick retries it", err)
+				}
+				return
+			}
+			if w.combatBlind {
+				w.combatBlind = false
+				w.combatErr = ""
+				r.logf("watch: combat log: the writes answer again")
+			}
+			w.combatRows += written
+		}
+		if next <= w.combatSeq {
+			return
+		}
+		w.combatSeq = next
+		if len(rows) < combatPageMax {
 			return
 		}
 	}
@@ -365,6 +567,11 @@ func (r *Run) applyRun(w *watchRun, st tbcmd.RunState) {
 			w.wipePending = false
 		}
 	}
+	// A pause the status read shows starts the pause clock even without a state change: a resume event clears it,
+	// and the module's next paused record is the pause that matters then (a status read newer than the event).
+	if st.State == "paused" && w.pausedSince.IsZero() {
+		w.pausedSince = r.now()
+	}
 }
 
 // watchEvent applies one run event: the pause log, the wipe/pause pairing the rescue needs, progress, and the
@@ -396,6 +603,13 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 			w.pauseLog = append(w.pauseLog, PauseNote{
 				AtS: float64(ev.T), Leg: ev.Leg, Step: ev.Step, Why: ev.Why,
 			})
+		}
+	case "death":
+		// Every other event between a wipe and a pause breaks that pair, a death included.
+		w.wipePending = false
+		if _, ok := w.roles[partyNameKey(ev.Why)]; !ok {
+			r.logf("watch: death event names why=%q, which is no current party member: the death is reported unattributed",
+				ev.Why)
 		}
 	case "resume":
 		w.onWipe = false
@@ -469,11 +683,15 @@ func (w *watchRun) noteEvent(ev tbcmd.RunEvent) {
 		}
 	case "death":
 		leg.Deaths++
-		d := DeathRecord{AtS: ev.T, Leg: ev.Leg, Step: ev.Step}
+		d := DeathRecord{AtS: ev.T, Leg: ev.Leg, Step: ev.Step, Why: ev.Why}
 		if ev.HasUnit {
 			d.Unit = ev.Unit
-			d.Who = w.units[ev.Unit]
 		}
+		// The module names the dead member in the event's why=; unit= is the fight's unit, the same for every
+		// death of one pull, so it is never the member. The member's word is its party slot, not its name. A name
+		// that is not a current party member (a typo, an NPC, a stale roster) is bad telemetry: the death keeps
+		// the name it carried and takes no role, so no member's count and no pack flag folds it in.
+		d.Who = w.roles[partyNameKey(ev.Why)]
 		w.deaths = append(w.deaths, d)
 		if ev.HasStep {
 			w.step(ev.Leg, ev.Step).Deaths++
@@ -517,17 +735,23 @@ func (w *watchRun) step(leg, step int) *StepRecord {
 	return s
 }
 
-// watchUnits maps a party member's GUID to the role word the card uses. A card names roles, never characters.
-func (r *Run) watchUnits() map[uint32]string {
-	out := map[uint32]string{}
+// watchRoles maps a character name to the party slot word a card uses, so a death event's why= (the dead member's
+// name) becomes a role and never a name on the card.
+func (r *Run) watchRoles() map[string]string {
+	out := make(map[string]string, len(r.cfg.Party))
 	for i, name := range r.cfg.Party {
-		g, ok := r.world.PlayerGUID(name)
-		if !ok || g.Low == 0 || g.Low > math.MaxUint32 {
+		if name == "" {
 			continue
 		}
-		out[uint32(g.Low)] = partyRole(i)
+		out[partyNameKey(name)] = partyRole(i)
 	}
 	return out
+}
+
+// partyNameKey is how a character name is compared with the event's why=: module names are case-insensitive, and
+// the event value may carry the surrounding blanks of the record it was written from.
+func partyNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // partyRole is the party slot's word: the leader is the tank, the second the healer, the rest the damage dealers.
@@ -541,7 +765,62 @@ func partyRole(i int) string {
 	return fmt.Sprintf("dps%d", i-1)
 }
 
-// watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports.
+// StopPausedStuck is the watch's stop reason when the module's pause never cleared within Limits.WatchPause (or,
+// for a watchdog that covers the pause, within the watchdog's own budget): the run is not hung mid-pull, it is
+// waiting on a pause nothing will lift, and the watch reports it instead of waiting out the time budget.
+const StopPausedStuck = "paused-stuck"
+
+// watchPauseBudget is Limits.WatchPause with the default for a zero or negative value.
+func (r *Run) watchPauseBudget() time.Duration {
+	if r.lim.WatchPause > 0 {
+		return r.lim.WatchPause
+	}
+	return DefaultLimits().WatchPause
+}
+
+// rescueWindow says whether the practice rescue still owns a paused run's time: a pause on a wipe is the rescue's
+// until its threshold (Limits.WatchRescue), and after the revive its resume has watchRescue's own window (2×it) to
+// land. Both budgets stand aside while it does: a pause the rescue can still clear is not stuck, and a watchdog
+// shorter than the rescue would otherwise end a run that is about to be cleared, or cut off its gated resume.
+func (r *Run) rescueWindow(w *watchRun) bool {
+	rescue := r.lim.WatchRescue
+	if rescue <= 0 || w.state != "paused" {
+		return false
+	}
+	// The rescue in flight: the revive has been answered and the resume waits for a report newer than that send.
+	// watchRescue ends a rescue that never completes after this window.
+	if w.revived && !w.reviveAt.IsZero() && r.now().Sub(w.reviveAt) <= 2*rescue {
+		return true
+	}
+	// The rescue not yet sent: the wipe's pause gets its threshold before anything reads it as stuck.
+	return w.onWipe && !w.pausedSince.IsZero() && r.now().Sub(w.pausedSince) < rescue
+}
+
+// pauseStuck reports a run that has been paused past the pause budget, and says where it stands and why it is
+// paused. The module never resumes a pause by itself, so a pause nothing clears is a run that will sit there: the
+// watch ends with StopPausedStuck rather than waiting for the time budget.
+func (r *Run) pauseStuck(w *watchRun) bool {
+	if w.pausedSince.IsZero() {
+		return false
+	}
+	age, budget := r.now().Sub(w.pausedSince), r.watchPauseBudget()
+	if age < budget {
+		return false
+	}
+	// A pause the rescue still owns is not stuck: neither the wait for its revive nor an in-flight resume may be
+	// cut short, or the watch would end between the two halves of a rescue that was about to work.
+	if r.rescueWindow(w) {
+		return false
+	}
+	r.logf("watch: pause not cleared for %.0fs (limit %.0fs) at leg %d/step %d: %s", age.Seconds(),
+		budget.Seconds(), w.record.Leg, w.record.Step, w.record.Why)
+	return true
+}
+
+// watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports. A paused run it
+// reaches is reported, not paused again: there is nothing to send, and the caller ends the watch as paused-stuck.
+// A pause the practice rescue still owns is not reached at all: a wipe's pause is silent by design, and the
+// watchdog's idle clock runs on events the rescue itself must be allowed to answer.
 func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 	if w.lastEvent.IsZero() {
 		w.lastEvent = r.now()
@@ -550,6 +829,18 @@ func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 	idle := r.now().Sub(w.lastEvent)
 	if idle < r.cfg.Watchdog {
 		return false
+	}
+	if w.state == "paused" {
+		if r.rescueWindow(w) {
+			return false
+		}
+		age := idle
+		if !w.pausedSince.IsZero() {
+			age = r.now().Sub(w.pausedSince)
+		}
+		r.logf("watch: watchdog: paused for %.0fs with no new event (limit %.0fs) at leg %d/step %d: %s",
+			age.Seconds(), r.cfg.Watchdog.Seconds(), w.record.Leg, w.record.Step, w.record.Why)
+		return true
 	}
 	r.logf("watch: watchdog: no new event for %.0fs (limit %.0fs); pausing the run", idle.Seconds(), r.cfg.Watchdog.Seconds())
 	rep, why := r.act(ctx, Action{Kind: ActionRunPause, Who: r.cfg.Leader, Reason: "watchdog no new event"})
@@ -630,6 +921,9 @@ func (r *Run) watchRescue(ctx context.Context, w *watchRun) bool {
 		w.revived = false
 		w.onWipe = false
 		w.pausedSince = time.Time{}
+		// The resume is the watcher's own action and its event is not in the ring this read: the run starts its
+		// event clock again here, or a watchdog shorter than the pause just cleared would fire on the stale idle.
+		w.lastEvent = r.now()
 		if rep.Run != nil {
 			r.applyRun(w, *rep.Run)
 		}
@@ -844,6 +1138,9 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 
 // watchSummary writes the watched run's counters into the recorder's summary.
 func (r *Run) watchSummary(w *watchRun) {
+	// The last rows of the fight: the stop and the final reads take time, and rows written between the last loop
+	// tick and now belong to the run. The session's log is local, so this works after a lost link too.
+	r.drainCombat(w)
 	st := w.record
 	bosses := make(map[string]string, len(w.bosses))
 	for entry, state := range w.bosses {
@@ -859,6 +1156,8 @@ func (r *Run) watchSummary(w *watchRun) {
 		State: w.state, Step: st.Step, Steps: st.Steps, Leg: st.Leg, LegName: st.LegName, Kind: st.Kind,
 		Phase: st.Phase, Pull: st.Pull, Pulls: st.Pulls, Deaths: st.Deaths, Wipes: st.Wipes, Pauses: st.Pauses,
 		ElapsedS: float64(st.Elapsed), Why: st.Why, Bosses: bosses, Rescues: w.rescues, Events: w.events,
+		Frames: w.frames, CombatRows: w.combatRows, CombatDropped: w.combatLost,
+		CombatBytes: r.rec.CombatBytes(), CombatTruncated: w.combatTruncated, CombatError: w.combatErr,
 		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), DeathLog: w.deaths,
 		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed,
 	}

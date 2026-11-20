@@ -116,6 +116,17 @@ func dist2(a, b Vec3) float64 {
 // guidText is a GUID as the module writes it on a threat line: 32 upper-case hex digits, high half first.
 func guidText(g wire.GUID) string { return fmt.Sprintf("%016X%016X", g.High, g.Low) }
 
+// traceGUID is a unit's guid as the run's trace names it: the module's text with the 0x prefix, upper case, the
+// same text a combat row's guid carries, so a frame, its party record and a combat row join on the text. Empty when
+// the text is no guid or the zero guid: a frame never names a unit it cannot identify.
+func traceGUID(s string) string {
+	g, ok := parseGUID(s)
+	if !ok || g.IsZero() {
+		return ""
+	}
+	return g.String()
+}
+
 // parseGUID reads a GUID written as 32 hex digits (with or without a 0x prefix); the module's own text first.
 func parseGUID(s string) (wire.GUID, bool) {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")

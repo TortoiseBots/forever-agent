@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -29,9 +30,10 @@ const exitDashBotsFailed = 1
 // dashWatchGiveUp is how many consecutive failed reads end a watch.
 const dashWatchGiveUp = 5
 
-const dashBotsUsage = "usage: forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]\n" +
+const dashBotsUsage = "usage: forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s] [--record FILE]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]\n" +
 	"  the password is read from --pass-file (mode 0600) or " + dashBotsPasswordEnv + ", never a flag\n" +
-	"  a plain-http dashboard is allowed only on this machine unless --dash-insecure-http is given"
+	"  a plain-http dashboard is allowed only on this machine unless --dash-insecure-http is given\n" +
+	"  --record writes one JSON line per good watch read (the read's time and the roster as decoded)"
 
 func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever dash-bots", flag.ContinueOnError)
@@ -46,6 +48,7 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	stuckAfter := fs.Duration("stuck-after", roster.DefaultStuckAfter, "with --watch: how long a moving bot's position may stay put before it is reported stuck")
 	loneCombatAfter := fs.Duration("lone-combat-after", roster.DefaultLoneCombatAfter, "with --watch: the grace a bot in combat gets for a group mate to join before it is reported fighting alone")
 	groupDistance := fs.Float64("group-distance", roster.DefaultGroupDistance, "with --watch: how many yards from its group's centre a bot may be before it is reported")
+	record := fs.String("record", "", "with --watch: append one JSON line per good read (time and roster) to this file")
 	timeout := fs.Duration("timeout", roster.DefaultTimeout, "the bound on one dashboard request, the login included")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -91,6 +94,10 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stderr, "forever dash-bots: --timeout must be between 1s and 2m")
 		return exitUsage
 	}
+	if *record != "" && !*watch {
+		fmt.Fprintln(stderr, "forever dash-bots: --record needs --watch (it records the watch's reads)")
+		return exitUsage
+	}
 
 	c, err := roster.New(*dashURL, *user, src, roster.Options{
 		Timeout:           *timeout,
@@ -134,6 +141,16 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	primed := false
 	failed := 0
 	lastRejected := ""
+	var rec *dashRecorder
+	if *record != "" {
+		rec, err = openDashRecord(*record)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever dash-bots: %v\n", err)
+			return exitUsage
+		}
+		defer rec.Close()
+		fmt.Fprintf(stderr, "forever dash-bots: recording the watch's reads to %s\n", *record)
+	}
 	for {
 		at := time.Now()
 		r, err := c.Roster(ctx)
@@ -149,6 +166,10 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 			}
 		default:
 			failed = 0
+			if err := rec.write(at, r); err != nil {
+				fmt.Fprintf(stderr, "forever dash-bots: the record stopped: %v\n", err)
+				rec = nil
+			}
 			if sig := dashRejectionSignature(r.Rejected); sig != lastRejected {
 				lastRejected = sig
 				printDashRejections(stderr, r.Rejected)
@@ -322,4 +343,55 @@ func cleanDashReason(s string) string {
 		out = append(out, '.', '.', '.')
 	}
 	return string(out)
+}
+
+// dashRecord is one line of `--record`: the read's wall time and the roster exactly as the dashboard decoded it. The
+// names are the dashboard's own (the record is data for the bug hunt, not the terminal, and JSON escapes what a
+// name could carry), and a rejected record is not in it: it was never part of the roster the rules saw.
+type dashRecord struct {
+	At string `json:"at"`
+	roster.Roster
+}
+
+// dashRecorder appends one JSON line per good watch read, and keeps the file open across reads. A watch that
+// outlives its file keeps watching: the first write error stops the recording and the caller prints one line.
+type dashRecorder struct {
+	f *os.File
+	n int
+}
+
+// openDashRecord opens the record for appending: an earlier watch's lines stay, and every line names its own time.
+func openDashRecord(path string) (*dashRecorder, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("--record: %w", err)
+	}
+	return &dashRecorder{f: f}, nil
+}
+
+// write appends one line for one good read. A nil recorder writes nothing (recording was never asked for, or it
+// stopped).
+func (d *dashRecorder) write(at time.Time, r *roster.Roster) error {
+	if d == nil {
+		return nil
+	}
+	b, err := json.Marshal(dashRecord{At: at.UTC().Format(time.RFC3339Nano), Roster: *r})
+	if err != nil {
+		return err
+	}
+	if _, err := d.f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	d.n++
+	return nil
+}
+
+// Close closes the record.
+func (d *dashRecorder) Close() error {
+	if d == nil || d.f == nil {
+		return nil
+	}
+	err := d.f.Close()
+	d.f = nil
+	return err
 }

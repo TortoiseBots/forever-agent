@@ -8,6 +8,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -75,6 +76,9 @@ type World interface {
 	Units() []Unit
 	PlayerGUID(name string) (wire.GUID, bool)
 	EnterAreaTrigger(id int32) error
+	// Auras is the spell ids of a unit's auras that are still up, in slot order: what the trace's frames record for
+	// a party member (the module's state report has no aura list).
+	Auras(guid wire.GUID) []uint32
 }
 
 // Walker is the navmesh route and the walk. Path plans on the walking filter (ground, steep, water and road; lava and
@@ -90,6 +94,15 @@ type Walker interface {
 type Clock interface {
 	Now() time.Time
 	Sleep(ctx context.Context, d time.Duration) error
+}
+
+// CombatLog is the session's own combat log (it lives in the world session, beside the packets that fill it). The
+// rows are already the trials runner's raw rows encoded as JSON, so the run's record writes them as they came: the
+// same file the Python runner's collector wrote, and the one bug-hunt's C input reads.
+type CombatLog interface {
+	// CombatRows answers the rows above seq, oldest first, at most limit. next is the seq to pass next time,
+	// oldest the lowest seq the log still holds, and dropped how many rows fell out of the log above seq.
+	CombatRows(seq, limit int) (rows []json.RawMessage, next, oldest int, dropped int)
 }
 
 // WallClock is the real clock: time.Now and a timer that respects the context.

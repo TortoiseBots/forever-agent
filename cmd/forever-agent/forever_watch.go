@@ -19,7 +19,7 @@ import (
 )
 
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--poll SEC] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--navmesh DIR] [--dry]"
 	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -31,7 +31,10 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	maxWipes := fs.Int("max-wipes", 3, "the run's wipe budget: the (n+1)th wipe ends it; 0 allows no wipe, -1 is no budget")
 	practice := fs.Bool("practice", true, "use the practice rescue when a run stays paused on a wipe")
 	watchdog := fs.Int("watchdog-minutes", 10, "pause and end the watch when no new run event arrives for this many minutes")
+	pause := fs.Int("pause-minutes", 5, "end the watch as paused-stuck when the module's pause stands this many minutes")
 	poll := fs.Int("poll", 2, "the status and event poll interval in seconds (1-30)")
+	frameEvery := fs.Int("frame-every", 2, "the frame interval in seconds: each tick reads `.tb state` and `.tb threat` and records one frame, 0 turns frames off (2-60)")
+	combatMaxMB := fs.Int("combat-max-mb", driver.DefaultCombatMaxBytes>>20, "the combat-log file's size bound in MiB: a page that would cross it is not written and the summary says the log is truncated (1-4096)")
 	th := reportcard.DefaultThresholds()
 	fs.IntVar(&th.Repulls, "repulls", th.Repulls, "report card: flag a step re-pulled more than this many times")
 	fs.IntVar(&th.MemberDeaths, "member-deaths", th.MemberDeaths, "report card: flag a member with at least this many deaths and two above the next")
@@ -65,8 +68,20 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --watchdog-minutes is 1-120")
 		return exitUsage
 	}
+	if *pause < 1 || *pause > 120 {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --pause-minutes is 1-120")
+		return exitUsage
+	}
 	if *poll < 1 || *poll > 30 {
 		fmt.Fprintln(stderr, "forever dungeon-watch: --poll is 1-30 seconds")
+		return exitUsage
+	}
+	if *frameEvery != 0 && (*frameEvery < 2 || *frameEvery > 60) {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --frame-every is 2-60 seconds, or 0 for no frames")
+		return exitUsage
+	}
+	if *combatMaxMB < 1 || *combatMaxMB > 4096 {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --combat-max-mb is 1-4096")
 		return exitUsage
 	}
 	if th.Repulls < 0 || th.Repulls > 100 || th.MemberDeaths < 1 || th.MemberDeaths > 20 || th.SlowFactor < 1 || th.SlowFactor > 20 {
@@ -79,16 +94,18 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		return driver.ExitPlanRefused
 	}
 	cfg := driver.Config{
-		Plan:      *plan,
-		Leader:    *leader,
-		Commander: common.character,
-		Enter:     *enter,
-		Out:       *out,
-		Dry:       *dry,
-		Practice:  practice,
-		Watch:     true,
-		Watchdog:  time.Duration(*watchdog) * time.Minute,
-		Poll:      time.Duration(*poll) * time.Second,
+		Plan:           *plan,
+		Leader:         *leader,
+		Commander:      common.character,
+		Enter:          *enter,
+		Out:            *out,
+		Dry:            *dry,
+		Practice:       practice,
+		Watch:          true,
+		Watchdog:       time.Duration(*watchdog) * time.Minute,
+		Poll:           time.Duration(*poll) * time.Second,
+		FrameEvery:     time.Duration(*frameEvery) * time.Second,
+		CombatMaxBytes: int64(*combatMaxMB) << 20,
 		Logf: func(format string, a ...any) {
 			fmt.Fprintf(stdout, format+"\n", a...)
 		},
@@ -96,6 +113,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	}
 	cfg.Limits.MaxMinutes = *maxMinutes
 	cfg.Limits.MaxWipes = *maxWipes
+	cfg.Limits.WatchPause = time.Duration(*pause) * time.Minute
 
 	if *dry {
 		return dungeonWatchDry(ctx, cfg, route, th, stdout, stderr)
@@ -146,9 +164,13 @@ func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route
 	f := driver.NewFake(route, cfg)
 	cfg.Party = f.PartyNames()
 	run := driver.New(cfg, route, f, f, f, f.Clock)
+	// The dry world's combat log is empty unless a scenario writes rows; the port is bound anyway so the dry run
+	// takes the same path as a live one.
+	run.SetCombatLog(f)
 	if cfg.Out != "" {
 		cfg.RunID = trace.NewRunID(time.Now())
-		rec, err := driver.NewWatchRecorder(cfg.Out, cfg.RunID, route.Name, route.Map, 1, f.Start, run.PartyMembers())
+		// The party records (with each member's class) come from the state report's first frame, as in a live watch.
+		rec, err := driver.NewWatchRecorder(cfg.Out, cfg.RunID, route.Name, route.Map, 1, f.Start, nil)
 		if err != nil {
 			fmt.Fprintf(stderr, "forever dungeon-watch: %v\n", err)
 			return exitUsage

@@ -85,7 +85,9 @@ func (s *session) dungeonWatch(ctx context.Context, cfg *driver.Config) (*driver
 	if c.Leader == "" {
 		return nil, errors.New("world: dungeon-watch: no leader")
 	}
-	route, err := driver.LoadRoute(c.Plan)
+	// The watch runs the module's plan whole: its in-fight run fields (kill_first, cc_priority, cc_always,
+	// tank_min_hp, a boss's tactics) are inputs of the module's own run, which this client does not lead.
+	route, err := driver.LoadWatchRoute(c.Plan)
 	if err != nil {
 		return nil, fmt.Errorf("world: dungeon-watch: the plan is refused: %w", err)
 	}
@@ -102,11 +104,14 @@ func (s *session) dungeonWatch(ctx context.Context, cfg *driver.Config) (*driver
 	}
 	cmd := newDungeonCommander(s, c.Tank())
 	run := driver.New(c, route, cmd, dungeonWorld{s: s}, dungeonWalker{s: s}, dungeonClock{s: s})
+	run.SetCombatLog(dungeonCombat{s: s})
 	if c.Out != "" {
 		if c.RunID == "" {
 			c.RunID = trace.NewRunID(time.Now())
 		}
-		rec, err := driver.NewWatchRecorder(c.Out, c.RunID, route.Name, route.Map, 1, s.Now(), run.PartyMembers())
+		// A watch's party comes from the module's roster, so the party records are written by the first frame
+		// (with each member's class); the header carries none.
+		rec, err := driver.NewWatchRecorder(c.Out, c.RunID, route.Name, route.Map, 1, s.Now(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("world: dungeon-watch: %w", err)
 		}

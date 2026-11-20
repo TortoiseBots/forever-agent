@@ -120,9 +120,14 @@ func loginExit(err error, stderr io.Writer) (int, bool) {
 // ERROR_BAD_VERSION is retried on only under the server setting this client's setup docs require
 // (--world-checks-build-auth-key says the server does not use it).
 func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer, worldAccept func(context.Context, *bnet.Result) (*worldconn.Realm, error)) (*bnet.Result, error) {
-	password := os.Getenv("FOREVER_PASSWORD")
+	return c.loginWithPassword(ctx, cmd, stdout, os.Getenv("FOREVER_PASSWORD"), worldAccept)
+}
+
+// loginWithPassword is login with the password already read: forever serve takes it from a file, every other
+// command from the environment.
+func (c *foreverCommon) loginWithPassword(ctx context.Context, cmd string, stdout io.Writer, password string, worldAccept func(context.Context, *bnet.Result) (*worldconn.Realm, error)) (*bnet.Result, error) {
 	if password == "" {
-		return nil, &loginError{fmt.Errorf("%s: FOREVER_PASSWORD is not set", cmd)}
+		return nil, &loginError{fmt.Errorf("%s: no password (FOREVER_PASSWORD is not set)", cmd)}
 	}
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)
