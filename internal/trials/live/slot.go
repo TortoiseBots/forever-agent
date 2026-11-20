@@ -21,6 +21,12 @@ type ServerExt struct {
 	CA           string `json:"ca"`
 	Build        string `json:"build"`
 	ServeDirRoot string `json:"serve_dir_root"`
+	// Player is the slot character the serve logged in (empty: read from
+	// serve status); BotPool the persistent hire pool by class (D5 names).
+	Player  string              `json:"player"`
+	BotPool map[string][]string `json:"bot_pool"`
+	// ArenaStateDir is where the arena locks live (empty: ArenaStateDir()).
+	ArenaStateDir string `json:"arena_state_dir"`
 }
 
 // SlotsFile is a slots file plus the runner's optional per-server `forever`

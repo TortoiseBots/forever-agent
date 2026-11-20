@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -510,6 +511,11 @@ func talentKit(class, spec string) []uint32 {
 		return nil
 	}
 	list, _ := cls[strings.ToLower(spec)].([]any)
+	// The Forever overlay's kit wins for the same class and spec: a marker
+	// the live server proved replaces the copied one.
+	if over, err := pyjson.Unmarshal(data.ReadOverlay("specs.json")); err == nil {
+		list = specOverlay(over, class, spec, list)
+	}
 	var out []uint32
 	for _, e := range list {
 		if f, ok := pyjson.Num(e); ok && f >= 1 {
@@ -518,6 +524,23 @@ func talentKit(class, spec string) []uint32 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// specOverlay returns the overlay's kit for class/spec, else base.
+func specOverlay(over any, class, spec string, base []any) []any {
+	oobj, ok := pyjson.Object(over)
+	if !ok {
+		return base
+	}
+	ocls, ok := pyjson.Object(oobj[strings.ToLower(class)])
+	if !ok {
+		return base
+	}
+	olist, ok := pyjson.List(ocls[strings.ToLower(spec)])
+	if !ok || len(olist) == 0 {
+		return base
+	}
+	return olist
 }
 
 // ensureBotGear covers the trial's `bot_items` row: the consumable luggage
@@ -534,8 +557,12 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return nil
 	}
 	if spec.Gear != "" {
-		return rowOf("bot_items", false, kitSummary(spec),
-			"SKIPPED needs=bot_items: no Forever item source for the "+spec.Gear+" bot kit (gear_kits.json covers warriors only); nothing scanned or equipped")
+		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
+		if len(kit) == 0 {
+			return rowOf("bot_items", false, kitSummary(spec),
+				"SKIPPED needs=bot_items: no "+spec.Gear+" kit for "+spec.Class+" level "+itoa(spec.Level)+" in the Forever overlay (nothing scanned or equipped)")
+		}
+		return p.wearKit(ctx, spec, name, kit)
 	}
 	for _, item := range spec.Items {
 		id := mustItemID(item.Name)
@@ -555,6 +582,116 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return row
 	}
 	return rowOf("bot_items", true, len(spec.Items), ".tb itemscan proves every consumable exists")
+}
+
+// wearKit grants, scans and wears one bot kit: every piece must scan as
+// existing and equippable and every equip must answer "equipped", else the
+// row is a failed read-back (the core's own refusal is the evidence).
+func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, kit []botKitItem) map[string]any {
+	ids := make([]uint32, 0, len(kit))
+	for _, item := range kit {
+		ids = append(ids, item.Entry)
+	}
+	for _, item := range kit {
+		tctx, cancel := p.ctxOf(ctx)
+		lines, err := p.TB.FreeTextAddItem(tctx, name, item.Entry, 1)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": item.Entry, "reply": firstLines(lines)})
+		if err != nil {
+			return rowOf("bot_items", false, ids, ".tb additem "+name+" "+item.Name+": "+tbErrText(err, lines))
+		}
+	}
+	tctx, cancel := p.ctxOf(ctx)
+	rep, err := p.TB.ItemScan(tctx, name, ids...)
+	cancel()
+	p.Ledger.Add(map[string]any{"kind": "itemscan", "bot": name, "reply": itemScanSummary(rep, err)})
+	if err != nil {
+		return rowOf("bot_items", false, ids, ".tb itemscan "+name+": "+err.Error())
+	}
+	byID := map[uint32]tbcmd.ItemScanResult{}
+	for _, r := range rep.Results {
+		byID[r.Item] = r
+	}
+	for _, item := range kit {
+		r, ok := byID[item.Entry]
+		if !ok || !r.Exists {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb itemscan %s: item %d (%s) not proven to exist", name, item.Entry, item.Name))
+		}
+		if r.HasCan && !r.CanEquip {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb itemscan %s: item %d (%s) cannot be equipped", name, item.Entry, item.Name))
+		}
+	}
+	equipped := 0
+	for _, item := range kit {
+		tctx, cancel := p.ctxOf(ctx)
+		eq, err := p.TB.Equip(tctx, name, item.Entry, true)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "equip", "bot": name, "item": item.Entry, "reply": eq.Result + " " + eq.Why})
+		if err != nil {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d: %s", name, item.Entry, tbErrText(err, nil)))
+		}
+		if !strings.EqualFold(eq.Result, "equipped") {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
+		}
+		equipped++
+	}
+	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
+}
+
+// botKitItem is one piece of a bot gear kit.
+type botKitItem struct {
+	Entry uint32
+	Name  string
+	Slot  string
+}
+
+// botGearKit reads the Forever bot kit overlay (class -> gear -> level ->
+// items) for the highest kit level at or below the bot's (at most 9 levels
+// below, like the player kits). An empty result means the overlay has no
+// kit and the row must stay SKIPPED, never guessed.
+func botGearKit(class, gear string, level int) []botKitItem {
+	return botGearKitFrom(data.ReadOverlay("gear_kits.json"), class, gear, level)
+}
+
+// botGearKitFrom is botGearKit over one overlay document (tests).
+func botGearKitFrom(overlay []byte, class, gear string, level int) []botKitItem {
+	doc, err := pyjson.Unmarshal(overlay)
+	if err != nil {
+		return nil
+	}
+	root, ok := pyjson.Object(doc)
+	if !ok {
+		return nil
+	}
+	byGear, _ := pyjson.Object(root[strings.ToLower(class)])
+	byLevel, _ := pyjson.Object(byGear[strings.ToLower(gear)])
+	best := -1
+	for key := range byLevel {
+		n, err := strconv.Atoi(key)
+		if err != nil || n > level || n < level-9 {
+			continue
+		}
+		if n > best {
+			best = n
+		}
+	}
+	if best < 0 {
+		return nil
+	}
+	list, _ := pyjson.List(byLevel[strconv.Itoa(best)])
+	out := []botKitItem{}
+	for _, e := range list {
+		item, _ := pyjson.Object(e)
+		entry, ok := pyjson.Int64(item["entry"])
+		if !ok || entry <= 0 {
+			continue
+		}
+		name, _ := item["name"].(string)
+		slot, _ := item["slot"].(string)
+		out = append(out, botKitItem{Entry: uint32(entry), Name: name, Slot: slot})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Entry < out[j].Entry })
+	return out
 }
 
 // itemIDs maps the spec's consumable names to ids (0 for an unknown name).
@@ -689,11 +826,14 @@ func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string)
 	if maxP <= 0 {
 		return rowOf("bot_mana", false, nil, name+" has no power pool")
 	}
-	want := int(math.Round(float64(maxP) * *spec.Mana / 100))
 	gctx, gcancel := p.ctxOf(ctx)
 	defer gcancel()
-	if err := p.Guard.Send(gctx, "modify_mana", TargetHire, guid, guid, itoa(want), itoa(int(maxP))); err != nil {
-		return rowOf("bot_mana", false, nil, ".modify mana refused: "+err.Error())
+	// The hire is another player: the serve's GM hands refuse it, so the
+	// module's own power command sets the bar (proved by the same read).
+	lines, err := p.TB.FreeTextPower(gctx, name, "mana", uint8(*spec.Mana))
+	p.Ledger.Add(map[string]any{"kind": "power", "bot": name, "pct": *spec.Mana, "reply": firstLines(lines)})
+	if err != nil {
+		return rowOf("bot_mana", false, nil, ".tb power "+name+" mana: "+tbErrText(err, lines))
 	}
 	have := p.unitPowerPct(ctx, name)
 	ok := math.Abs(have-*spec.Mana) <= 3

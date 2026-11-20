@@ -41,6 +41,15 @@ type Repeat struct {
 	Collect *Collector
 	Ledger  *Ledger
 	Guids   Guids
+
+	// BotName and ExtraNames are the hires the setup provisioned; the
+	// situation brings them into the arena and the teardown releases them.
+	BotName    string
+	ExtraNames []string
+
+	// ExtraChecks are the situation's own read-backs (mobs_ready); the
+	// repeat appends them to setup.json's checks when the situation ends.
+	ExtraChecks []map[string]any
 }
 
 // Runner owns one trials run: the out dir, the client, and the interfaces
@@ -70,6 +79,7 @@ type Runner struct {
 	trialIDs []string
 	repeats  map[string]int
 	skipped  map[string]string
+	lastRep  *Repeat
 }
 
 // findTrial resolves a TRIAL arg: an embedded path, an embedded id, or a
@@ -205,6 +215,9 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 			return nil, err
 		}
 	}
+	if rep := r.lastRep; rep != nil && rep.TrialID == id {
+		r.trialTeardown(ctx, rep, id)
+	}
 	doc, err := score.ScoreTrialE(trialDir, trial)
 	if err != nil {
 		return nil, err
@@ -231,11 +244,22 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	r.logf("%s rep%d: setup", id, index)
 	marks := NewMarks(joinPath(repDir, "marks.jsonl"))
 	marks.Start("")
-	guids := Guids{}
-	collect := NewCollector(r.Client, repDir, marks, guids, r.Ledger)
-	guard := NewGuard(r.Client, GuardOptions{Ledger: r.Ledger, Marks: marks, DryRun: r.dry(), Abort: r.Abort})
+	// The guard's "self" class is the session's own character: one status
+	// read, so a GM line for "self" can never name another player.
+	playerGUID := ""
+	if st, serr := r.Client.StatusOf(ctx); serr == nil {
+		playerGUID = normGUIDOf(st.GUID)
+	} else if IsDisconnected(serr) {
+		return errDisconnected(serr)
+	}
 	rep := &Repeat{Index: index, Dir: repDir, Trial: trial, TrialID: id,
-		Client: r.Client, Guard: guard, Marks: marks, Collect: collect, Ledger: r.Ledger}
+		Client: r.Client, Marks: marks, Ledger: r.Ledger}
+	collect := NewCollector(r.Client, repDir, marks, &rep.Guids, r.Ledger)
+	guard := NewGuard(r.Client, GuardOptions{Ledger: r.Ledger, Marks: marks,
+		PlayerGUID: playerGUID, DryRun: r.dry(), Abort: r.Abort,
+		Summons: func() []string { return r.Ledger.SummonGUIDs() }})
+	rep.Guard, rep.Collect = guard, collect
+	r.lastRep = rep
 
 	var setupDoc map[string]any = map[string]any{"ok": true, "checks": []any{}}
 	if r.Setup != nil {
@@ -269,7 +293,16 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		}
 	}
 	rep.Guids = GuidsOf(setupDoc)
-	collect.guids = rep.Guids
+	collect.SetGuids(&rep.Guids)
+	guard.SetHire(rep.Guids.Bot)
+	rep.BotName, _ = setupDoc["bot_name"].(string)
+	if list, ok := setupDoc["extra_names"].([]any); ok {
+		for _, e := range list {
+			if name, ok := e.(string); ok && name != "" {
+				rep.ExtraNames = append(rep.ExtraNames, name)
+			}
+		}
+	}
 	if err := r.writeSetup(repDir, setupDoc); err != nil {
 		return err
 	}
@@ -293,6 +326,14 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		if got != nil {
 			outcome = got
 		}
+		if len(rep.ExtraChecks) > 0 {
+			if list, ok := setupDoc["checks"].([]any); ok {
+				for _, c := range rep.ExtraChecks {
+					list = append(list, c)
+				}
+				setupDoc["checks"] = list
+			}
+		}
 	}
 	collect.Stop()
 	if lost := collect.Lost(); lost != "" {
@@ -305,14 +346,26 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		marks.Add(map[string]any{"kind": "teardown", "rows": []any{}})
 		return &Disconnected{err: fmt.Errorf("%s", lost)}
 	}
-	teardown := r.teardown(rep)
+	// The situation added the mobs it summoned: setup.json's guid table is
+	// the scorer's role map, so it is rewritten from the repeat's own table.
+	setupDoc["guids"] = guidsDoc(rep.Guids)
+	teardown := r.repeatTeardown(ctx, rep)
 	marks.Add(map[string]any{"kind": "teardown", "rows": teardown})
+	if fin, ok := r.Situation.(interface{ Finish() }); ok {
+		fin.Finish()
+	}
 	failed := failedChecks(setupDoc)
-	setupDoc["ok"] = len(failed) == 0 && outcomeInvalid(outcome) == ""
-	if reason := outcomeInvalid(outcome); reason != "" {
+	reason := outcomeInvalid(outcome)
+	setupDoc["ok"] = len(failed) == 0 && reason == ""
+	// No arena / no mobs / an unported option = no scored fight happened: the
+	// failed mobs_ready row (and anything the missing fight left unproved) is
+	// its consequence, so the reason says WHY there was no fight.
+	if noFightEnd(strOf(outcome["ended"])) && reason != "" {
 		setupDoc["invalid_reason"] = reason
 	} else if len(failed) > 0 {
 		setupDoc["invalid_reason"] = checkEvidence(failed[0])
+	} else if reason != "" {
+		setupDoc["invalid_reason"] = reason
 	}
 	setupDoc["outcome"] = outcome
 	if err := r.writeSetup(repDir, setupDoc); err != nil {
@@ -327,25 +380,6 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	r.noteRep(id, index, boolOf(setupDoc["ok"]), strOf(outcome["ended"]))
 	r.logf("%s rep%d: %s", id, index, strOf(outcome["ended"]))
 	return nil
-}
-
-// teardown kills the ledger's summons (gm_kill through the TB channel in
-// later rounds; here a gm die line for --dry ledger rows) and writes the
-// per-repeat teardown rows.
-func (r *Runner) teardown(rep *Repeat) []map[string]any {
-	rows := []map[string]any{}
-	for _, guid := range rep.Ledger.SummonGUIDs() {
-		if guid == "" {
-			continue
-		}
-		rows = append(rows, map[string]any{"id": "mobs_dead", "ok": true, "value": guid,
-			"evidence": "dry cleanup: summon " + guid})
-	}
-	if rep.Guids.Bot != "" {
-		rows = append(rows, map[string]any{"id": "hire_removed", "ok": true,
-			"value": rep.Guids.Bot, "evidence": "dry cleanup: bot released"})
-	}
-	return rows
 }
 
 func (r *Runner) writeSetup(repDir string, doc map[string]any) error {
@@ -397,7 +431,7 @@ func (r *Runner) logf(format string, args ...any) {
 	}
 }
 
-func (r *Runner) dry() bool { return r.Setup == nil || isDrySetup(r.Setup) }
+func (r *Runner) dry() bool { return r.Setup != nil && isDrySetup(r.Setup) }
 
 // writeRUN rewrites RUN.json with every trial finished so far, so the run
 // record names the whole card even when the next trial has not run yet.
@@ -434,6 +468,28 @@ func (r *Runner) writeRUN() error {
 		doc["skipped"] = sk
 	}
 	return dumpDoc(joinPath(r.Out, "RUN.json"), doc)
+}
+
+// guidsDoc renders a Guids table the way setup.json carries it.
+func guidsDoc(g Guids) map[string]any {
+	nilStr := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	extras := make([]any, 0, len(g.Extras))
+	for _, e := range g.Extras {
+		extras = append(extras, e)
+	}
+	mobs := make([]any, 0, len(g.Mobs))
+	for _, m := range g.Mobs {
+		mobs = append(mobs, m)
+	}
+	return map[string]any{
+		"player": nilStr(g.Player), "bot": nilStr(g.Bot), "pet": nilStr(g.Pet),
+		"extras": extras, "mobs": mobs, "marked": nilStr(g.Marked),
+	}
 }
 
 // repLogAny converts the rep log to []any: pyjson.Marshal rejects typed slices.

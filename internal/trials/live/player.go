@@ -211,7 +211,15 @@ func (p *PlayerSetup) ensureStance(ctx context.Context, trial map[string]any) (m
 		return rowOf("player_stance", false, stance, "unaura refused: "+err.Error()), nil
 	}
 	if err := p.Client.Cast(tctx, uint32(stance), self); err != nil {
-		return rowOf("player_stance", false, stance, "cast stance refused: "+err.Error()), nil
+		// A character that never trained the stance spell refuses the cast:
+		// the bench learns what the trial needs, then casts again. The aura
+		// read-back below is the proof either way.
+		if lerr := p.Guard.Send(tctx, "learn", TargetSelf, self, itoa(stance)); lerr != nil {
+			return rowOf("player_stance", false, stance, "cast stance refused ("+err.Error()+") and .learn refused: "+lerr.Error()), nil
+		}
+		if cerr := p.Client.Cast(tctx, uint32(stance), self); cerr != nil {
+			return rowOf("player_stance", false, stance, "cast stance refused after .learn: "+cerr.Error()), nil
+		}
 	}
 	if p.auraHeld(tctx, self, stance) {
 		return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil

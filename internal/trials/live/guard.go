@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // The closed template set of gm_guard.py for ForeverCore, rendered here
@@ -137,6 +140,14 @@ type Guard struct {
 	onGM       func(kind, text, target string)
 	dryRun     bool
 	aborted    func() string
+
+	// hire, extras and summons are the rest of the trial's unit scope: the
+	// guids the serve's GM-unit allowlist must hold before a hand acts.
+	hire     string
+	extras   []string
+	summons  func() []string
+	mu       sync.Mutex
+	lastUnit string
 }
 
 // GuardOptions carries the ledger, the marks file (for the gm rows), the
@@ -145,9 +156,14 @@ type GuardOptions struct {
 	Ledger     *Ledger
 	Marks      *Marks
 	PlayerGUID string
-	DryRun     bool
-	Abort      func() string
-	OnGM       func(kind, text, target string)
+	HireGUID   string
+	ExtraGUIDs []string
+	// Summons reports the guids this repeat summoned so far (the ledger's
+	// own rows); a hand on a summon must find it there first.
+	Summons func() []string
+	DryRun  bool
+	Abort   func() string
+	OnGM    func(kind, text, target string)
 }
 
 // AbortReason reports the runner's abort reason ("", while the run holds
@@ -161,9 +177,24 @@ func (g *Guard) AbortReason() string {
 
 // NewGuard returns the runner's GM guard over client.
 func NewGuard(client *Client, opts GuardOptions) *Guard {
-	return &Guard{client: client, ledger: opts.Ledger, marks: opts.Marks,
+	g := &Guard{client: client, ledger: opts.Ledger, marks: opts.Marks,
 		playerGUID: normGUIDOf(opts.PlayerGUID), dryRun: opts.DryRun,
-		aborted: opts.Abort, onGM: opts.OnGM}
+		aborted: opts.Abort, onGM: opts.OnGM, hire: normGUIDOf(opts.HireGUID),
+		summons: opts.Summons}
+	for _, e := range opts.ExtraGUIDs {
+		if v := normGUIDOf(e); v != "" {
+			g.extras = append(g.extras, v)
+		}
+	}
+	return g
+}
+
+// SetHire sets the hire guid once the setup knows it (the guard is built
+// before provisioning).
+func (g *Guard) SetHire(guid string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.hire = normGUIDOf(guid)
 }
 
 // normGUIDOf normalises one guid the way the runner compares them.
@@ -220,8 +251,103 @@ func render(kind string, args []string) (string, error) {
 	return out, nil
 }
 
+// selectionKinds are the raw lines the core reads off the selected unit, so
+// the guard selects the target first (the old daemon's rule: the core
+// applies a selection and a GM line on different threads).
+var selectionKinds = map[string]bool{
+	"damage": true, "modify_hp": true, "modify_mana": true, "modify_rage": true,
+	"modify_energy": true, "aura": true, "unaura": true, "die": true,
+	"levelup": true, "learn": true, "cooldown": true,
+}
+
+// unitLineKinds are the raw lines the serve's GM-unit boundary classifies:
+// they must find their target on the trial_units allowlist.
+var unitLineKinds = map[string]bool{
+	"damage": true, "modify_hp": true, "modify_mana": true, "modify_rage": true,
+	"modify_energy": true, "aura": true, "unaura": true, "die": true,
+}
+
+// scope is every guid this trial's GM hands may touch: the player, the hire,
+// the extras and this repeat's summons.
+func (g *Guard) scope() []string {
+	g.mu.Lock()
+	player, hire := g.playerGUID, g.hire
+	extras := append([]string(nil), g.extras...)
+	g.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	add := func(v string) {
+		v = normGUIDOf(v)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	add(player)
+	add(hire)
+	for _, e := range extras {
+		add(e)
+	}
+	if g.summons != nil {
+		for _, v := range g.summons() {
+			add(v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ensureUnits registers the current unit scope with the serve (trial_units)
+// when it changed since the last hand. A serve without --allow-gm-units
+// answers -32006, which the caller reports: the hand never goes out blind.
+func (g *Guard) ensureUnits(ctx context.Context) error {
+	guids := g.scope()
+	key := strings.Join(guids, ",")
+	g.mu.Lock()
+	same := key == g.lastUnit
+	g.mu.Unlock()
+	if same {
+		return nil
+	}
+	if _, err := g.client.TrialUnits(ctx, guids); err != nil {
+		return fmt.Errorf("trial_units: %w", err)
+	}
+	g.mu.Lock()
+	g.lastUnit = key
+	g.mu.Unlock()
+	return nil
+}
+
+// selectUnit selects guid and waits up to 4 s for the server's echo in the
+// character's target field.
+func (g *Guard) selectUnit(ctx context.Context, guid string) error {
+	want := normGUIDOf(guid)
+	if want == "" {
+		return &GmRefused{Text: "select: no guid"}
+	}
+	if err := g.client.Target(ctx, want); err != nil {
+		return fmt.Errorf("target %s: %w", want, err)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		st, err := g.client.StatusOf(ctx)
+		if err == nil && normGUIDOf(st.Target) == want {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("selection not confirmed for %s", want)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 // Send renders kind with args at target of class and sends it through the
-// single `gm` call site of this package.
+// single `gm` call site of this package. A line the core reads off the
+// selection selects its target first and proves the echo.
 func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target string, args ...string) error {
 	line, err := render(kind, args)
 	if err != nil {
@@ -233,6 +359,27 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 	if fn := g.aborted; fn != nil && fn() != "" {
 		return &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
 	}
+	if !g.dryRun {
+		if unitLineKinds[kind] {
+			if err := g.ensureUnits(ctx); err != nil {
+				return err
+			}
+		}
+		if selectionKinds[kind] {
+			if err := g.selectUnit(ctx, target); err != nil {
+				return err
+			}
+		}
+	}
+	g.record(kind, line, target)
+	if g.dryRun {
+		return nil
+	}
+	return g.client.GM(ctx, line) // the one gm call site in this package
+}
+
+// record writes the marks and ledger rows of one GM action.
+func (g *Guard) record(kind, line, target string) {
 	if g.marks != nil {
 		g.marks.Add(map[string]any{"kind": "gm", "line": line, "kind_detail": kind,
 			"target": targetOrNil(target)})
@@ -243,10 +390,88 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 	if fn := g.onGM; fn != nil {
 		fn(kind, line, target)
 	}
+}
+
+// where reports the class a guid belongs to in this trial's scope, or "".
+func (g *Guard) where(guid string) GuardTarget {
+	v := normGUIDOf(guid)
+	switch {
+	case v == "":
+		return ""
+	case v == g.playerGUID:
+		return TargetSelf
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if v == g.hire {
+		return TargetHire
+	}
+	for _, e := range g.extras {
+		if v == e {
+			return TargetHire
+		}
+	}
+	if g.summons != nil {
+		for _, s := range g.summons() {
+			if normGUIDOf(s) == v {
+				return TargetSummon
+			}
+		}
+	}
+	return ""
+}
+
+// hand is the shared body of the typed GM hands: the abort check, the unit
+// allowlist and the ledger row, then the one RPC.
+func (g *Guard) hand(ctx context.Context, kind, guid string, want GuardTarget, call func() error) error {
+	if fn := g.aborted; fn != nil && fn() != "" {
+		return &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
+	}
+	class := g.where(guid)
+	if class == "" || class != want {
+		return &GmRefused{Text: kind + " " + guid + " (outside this trial's scope)"}
+	}
 	if g.dryRun {
+		g.record(kind, kind+" "+guid, guid)
 		return nil
 	}
-	return g.client.GM(ctx, line) // the one gm call site in this package
+	if err := g.ensureUnits(ctx); err != nil {
+		return err
+	}
+	g.record(kind, kind+" "+guid, guid)
+	return call()
+}
+
+// Kill kills one ledgered summon through the serve's gm_kill hand. A guid
+// the repeat did not summon is refused before anything is sent.
+func (g *Guard) Kill(ctx context.Context, guid string) error {
+	return g.hand(ctx, "gm_kill", guid, TargetSummon, func() error {
+		return g.client.GMKill(ctx, normGUIDOf(guid))
+	})
+}
+
+// SetHP sets one in-scope unit's health through gm_set_hp (the core sets
+// current AND maximum health, so callers pass the unit's own maximum for a
+// refill).
+func (g *Guard) SetHP(ctx context.Context, guid string, hp int) error {
+	class := g.where(guid)
+	if class != TargetSelf && class != TargetHire {
+		return &GmRefused{Text: "gm_set_hp " + guid + " (outside this trial's scope)"}
+	}
+	return g.hand(ctx, "gm_set_hp", guid, class, func() error {
+		return g.client.GMSetHP(ctx, normGUIDOf(guid), hp)
+	})
+}
+
+// RemoveAura strips one aura from an in-scope unit through gm_aura.
+func (g *Guard) RemoveAura(ctx context.Context, guid string, spell int) error {
+	class := g.where(guid)
+	if class != TargetSelf && class != TargetHire {
+		return &GmRefused{Text: "gm_aura " + guid + " (outside this trial's scope)"}
+	}
+	return g.hand(ctx, "gm_aura", guid, class, func() error {
+		return g.client.GMAura(ctx, normGUIDOf(guid), spell, true)
+	})
 }
 
 // SendText classifies raw text against the closed set and sends it only on a

@@ -171,6 +171,10 @@ type Status struct {
 type Unit struct {
 	GUID      string           `json:"guid"`
 	Name      string           `json:"name"`
+	Type      string           `json:"type"`
+	Entry     int              `json:"entry"`
+	Level     int              `json:"level"`
+	Distance  float64          `json:"distance"`
 	Health    uint32           `json:"health"`
 	MaxHealth uint32           `json:"max_health"`
 	Power     uint32           `json:"power"`
@@ -218,40 +222,26 @@ func (c *Client) StatusOf(ctx context.Context) (Status, error) {
 
 // Units reads `units` within yards of the player.
 func (c *Client) Units(ctx context.Context, within float64) ([]Unit, error) {
+	return c.UnitsFilter(ctx, within, 0, "")
+}
+
+// UnitsFilter reads `units` with the serve's entry and name filters (0 and
+// "" leave them off).
+func (c *Client) UnitsFilter(ctx context.Context, within float64, entry int, name string) ([]Unit, error) {
+	params := map[string]any{"within": within}
+	if entry != 0 {
+		params["entry"] = entry
+	}
+	if name != "" {
+		params["name"] = name
+	}
 	var rows []map[string]any
-	if err := c.call(ctx, "units", map[string]any{"within": within}, &rows, 15*time.Second); err != nil {
+	if err := c.call(ctx, "units", params, &rows, 15*time.Second); err != nil {
 		return nil, err
 	}
 	out := make([]Unit, 0, len(rows))
 	for _, r := range rows {
-		u := Unit{Raw: r}
-		u.GUID = normGUID(r["guid"])
-		u.Name, _ = r["name"].(string)
-		u.Health = uintOf(r["health"])
-		u.MaxHealth = uintOf(r["max_health"])
-		u.Power = uintOf(r["power"])
-		u.MaxPower = uintOf(r["max_power"])
-		u.InCombat = boolOf(r["in_combat"])
-		u.Dead = boolOf(r["dead"])
-		u.Target = normGUID(r["target"])
-		if x, ok := numOf(r["x"]); ok {
-			u.X = float32(x)
-		}
-		if y, ok := numOf(r["y"]); ok {
-			u.Y = float32(y)
-		}
-		if z, ok := numOf(r["z"]); ok {
-			u.Z = float32(z)
-		}
-		u.Casting = r["casting"]
-		if list, ok := r["auras"].([]any); ok {
-			for _, a := range list {
-				if m, ok := a.(map[string]any); ok {
-					u.Auras = append(u.Auras, m)
-				}
-			}
-		}
-		out = append(out, u)
+		out = append(out, unitFrom(r))
 	}
 	return out, nil
 }
@@ -262,8 +252,20 @@ func (c *Client) Unit(ctx context.Context, guid string) (Unit, error) {
 	if err := c.call(ctx, "unit", map[string]any{"guid": guid}, &raw, 10*time.Second); err != nil {
 		return Unit{}, err
 	}
+	return unitFrom(raw), nil
+}
+
+// unitFrom parses one unit row (the shape `units` and `unit` share).
+func unitFrom(raw map[string]any) Unit {
 	u := Unit{Raw: raw}
 	u.GUID = normGUID(raw["guid"])
+	u.Name, _ = raw["name"].(string)
+	u.Type, _ = raw["type"].(string)
+	u.Entry = int(intOf(raw["entry"]))
+	u.Level = int(intOf(raw["level"]))
+	if d, ok := numOf(raw["distance"]); ok {
+		u.Distance = d
+	}
 	u.Health = uintOf(raw["health"])
 	u.MaxHealth = uintOf(raw["max_health"])
 	u.Power = uintOf(raw["power"])
@@ -271,12 +273,89 @@ func (c *Client) Unit(ctx context.Context, guid string) (Unit, error) {
 	u.InCombat = boolOf(raw["in_combat"])
 	u.Dead = boolOf(raw["dead"])
 	u.Target = normGUID(raw["target"])
-	return u, nil
+	if x, ok := numOf(raw["x"]); ok {
+		u.X = float32(x)
+	}
+	if y, ok := numOf(raw["y"]); ok {
+		u.Y = float32(y)
+	}
+	if z, ok := numOf(raw["z"]); ok {
+		u.Z = float32(z)
+	}
+	u.Casting = raw["casting"]
+	if list, ok := raw["auras"].([]any); ok {
+		for _, a := range list {
+			if m, ok := a.(map[string]any); ok {
+				u.Auras = append(u.Auras, m)
+			}
+		}
+	}
+	return u
 }
 
 // GM sends one raw `gm` line. Only the guard may call it.
 func (c *Client) GM(ctx context.Context, line string) error {
 	return c.call(ctx, "gm", map[string]string{"text": line}, nil, 10*time.Second)
+}
+
+// TrialUnits replaces the serve's GM-unit allowlist (the guids the GM hands
+// may act on) and returns it in force. A serve started without
+// --allow-gm-units refuses with -32006.
+func (c *Client) TrialUnits(ctx context.Context, guids []string) ([]string, error) {
+	params := map[string]any{"guids": guids}
+	var out struct {
+		GUIDs []string `json:"guids"`
+	}
+	if err := c.call(ctx, "trial_units", params, &out, 10*time.Second); err != nil {
+		return nil, err
+	}
+	return out.GUIDs, nil
+}
+
+// GMKill kills one unit with the serve's select-then-`.die` hand.
+func (c *Client) GMKill(ctx context.Context, guid string) error {
+	return c.call(ctx, "gm_kill", map[string]any{"guid": guid}, nil, 15*time.Second)
+}
+
+// GMSetHP sets one unit's health through the serve's select-then-`.modify hp`
+// hand. The core sets current AND maximum health to hp.
+func (c *Client) GMSetHP(ctx context.Context, guid string, hp int) error {
+	return c.call(ctx, "gm_set_hp", map[string]any{"guid": guid, "hp": hp}, nil, 15*time.Second)
+}
+
+// GMAura puts spell on (or removes it from) one unit through the serve's
+// select-then-`.aura`/`.unaura` hand.
+func (c *Client) GMAura(ctx context.Context, guid string, spell int, remove bool) error {
+	params := map[string]any{"guid": guid, "spell": spell}
+	if remove {
+		params["remove"] = true
+	}
+	return c.call(ctx, "gm_aura", params, nil, 15*time.Second)
+}
+
+// Target selects one unit and returns its row.
+func (c *Client) Target(ctx context.Context, guid string) error {
+	var out map[string]any
+	return c.call(ctx, "target", map[string]any{"guid": guid}, &out, 10*time.Second)
+}
+
+// Attack runs the serve's fight loop on guid for at most forMS and returns
+// its reason (dead, stopped, map change), "" when none was given.
+func (c *Client) Attack(ctx context.Context, guid string, forMS int) (string, error) {
+	params := map[string]any{"guid": guid}
+	if forMS > 0 {
+		params["for_ms"] = forMS
+	}
+	var out struct {
+		Reason string `json:"reason"`
+	}
+	err := c.call(ctx, "attack", params, &out, time.Duration(forMS)*time.Millisecond+30*time.Second)
+	return out.Reason, err
+}
+
+// StopAttack asks a running attack to stop.
+func (c *Client) StopAttack(ctx context.Context) error {
+	return c.call(ctx, "stop_attack", map[string]any{}, nil, 10*time.Second)
 }
 
 // Chat sends one `chat` line of type typ.
