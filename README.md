@@ -402,8 +402,18 @@ counts are all required, every record's `status=` must be one of the verb's own 
 addressed. An end-only acknowledgement, or a report missing any of those parts (or carrying a status or count the
 verb never writes), is a report that proves nothing and is refused — never a success — and an entry
 answered `no-trigger` (a party outside the entrance's trigger box) is retried once as `enter party map <plan map>`
-instead of failing. The observer teleports on its own, and the same-map check
-compares the party's map with the plan's, not the observer's. A plan that carries the format's in-fight run fields
+instead of failing. The watch brings the party's own commander — the bot its roster names, never this character — to
+the tank's side before PREPARE, and again after an entry lands the party: the module marks a bot whose master stands
+on another map or instance `stuck=blocked:bot in an instance` (the tank's `dm=othermap`), and PREPARE and the start's
+readiness rule both refuse that block. The move is the module's own `tele <commander> to <tank>` and nothing else:
+the watching character is an observer and is never teleported in the commander's place, so a roster that names no
+commander ends the watch (`commander:unnamed`) instead of falling back to a move of this character. The watch waits up
+to 30 s for the module's report to show the commander with the tank,
+logging where it stood and, if the module refuses the line, that the watch goes on without it. The same-map check
+compares the party's map with the plan's, not the commander's, and the start's gate waits out the party's own
+teleport: while a member is not on the plan's map — a member on the old map with its engine off is a teleport in
+flight, not an engine-off refusal — it holds for up to the entry budget (90 s) and then reports its existing error
+(`start:party-map`). A plan that carries the format's in-fight run fields
 (`kill_first`, `cc_priority`, `cc_always`, `tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the
 module's run. Every `--poll` seconds
 (default 2, at most 30) it reads the module's run record and its event ring, prints the progress (state, step,
