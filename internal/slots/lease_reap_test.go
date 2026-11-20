@@ -28,7 +28,7 @@ func TestRenewKeepsALiveHoldersShortLease(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	st.HolderPID = os.Getpid()
 	base := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
-	acq, err := st.Acquire("m910q", "1", false, "w-a", 15*time.Minute)
+	acq, err := st.Acquire("test1", "1", false, "w-a", 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestRenewKeepsALiveHoldersShortLease(t *testing.T) {
 	}
 	// 10 minutes in, before the 15-minute expiry, the holder renews.
 	setNow(st, base.Add(10*time.Minute))
-	ren, err := st.Renew("m910q", "1", "w-a", acq.Lease.LeaseID, 15*time.Minute)
+	ren, err := st.Renew("test1", "1", "w-a", acq.Lease.LeaseID, 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRenewKeepsALiveHoldersShortLease(t *testing.T) {
 	}
 	// Past the ORIGINAL expiry but inside the renewed one, the slot is still the live holder's.
 	setNow(st, base.Add(20*time.Minute))
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err == nil ||
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "held by w-a") {
 		t.Fatalf("a renewed live lease: got %v, want a held refusal", err)
 	}
@@ -68,7 +68,7 @@ func TestRenewKeepsALiveHoldersShortLease(t *testing.T) {
 func TestDeadHolderFreesTheSlotBeforeExpiry(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	st.HolderPID = finishedPID(t)
-	acq, err := st.Acquire("m910q", "1", false, "w-dead", time.Hour)
+	acq, err := st.Acquire("test1", "1", false, "w-dead", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,14 +78,14 @@ func TestDeadHolderFreesTheSlotBeforeExpiry(t *testing.T) {
 	if !st.IsStale(&acq.Lease) {
 		t.Fatal("a lease whose recorded holder is gone is not stale")
 	}
-	states, err := st.List("m910q")
+	states, err := st.List("test1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if states[0].State != "stale" {
 		t.Fatalf("slot 1 state = %q, want stale", states[0].State)
 	}
-	got, err := st.Acquire("m910q", "1", false, "w-b", time.Hour)
+	got, err := st.Acquire("test1", "1", false, "w-b", time.Hour)
 	if err != nil {
 		t.Fatalf("a dead holder did not free the slot: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDeadHolderFreesTheSlotBeforeExpiry(t *testing.T) {
 func TestReusedHolderPIDCountsAsDead(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	st.HolderPID = os.Getpid()
-	acq, err := st.Acquire("m910q", "1", false, "w-a", time.Hour)
+	acq, err := st.Acquire("test1", "1", false, "w-a", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestReusedHolderPIDCountsAsDead(t *testing.T) {
 	if !st.IsStale(&acq.Lease) {
 		t.Fatal("a reused pid (another start time) is not stale")
 	}
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err != nil {
 		t.Fatalf("a reused holder pid did not free the slot: %v", err)
 	}
 }
@@ -120,10 +120,10 @@ func TestReusedHolderPIDCountsAsDead(t *testing.T) {
 func TestOtherHostLeaseIsNotReapedByPID(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	st.HolderPID = finishedPID(t)
-	if _, err := st.Acquire("m910q", "1", false, "w-dead", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-dead", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	l, err := st.readLease("m910q", "1")
+	l, err := st.readLease("test1", "1")
 	if err != nil || l == nil {
 		t.Fatalf("read lease: %v", err)
 	}
@@ -131,11 +131,11 @@ func TestOtherHostLeaseIsNotReapedByPID(t *testing.T) {
 	if err := st.writeLease(l); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err == nil {
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err == nil {
 		t.Fatal("a lease of another host was taken over before its expiry")
 	}
 	setNow(st, st.Now().Add(2*time.Hour))
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err != nil {
 		t.Fatalf("an expired lease of another host was not taken over: %v", err)
 	}
 }
@@ -144,17 +144,17 @@ func TestOtherHostLeaseIsNotReapedByPID(t *testing.T) {
 func TestOldFormatLeaseStillWorks(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	now := st.Now()
-	old := Lease{Server: "m910q", Slot: "1", Holder: "w-old", LeaseID: "old-id",
+	old := Lease{Server: "test1", Slot: "1", Holder: "w-old", LeaseID: "old-id",
 		Acquired: now, Expires: now.Add(time.Hour)}
 	if err := st.writeLease(&old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err == nil ||
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "held by w-old") {
 		t.Fatalf("old-format lease before expiry: got %v, want a held refusal", err)
 	}
 	setNow(st, now.Add(2*time.Hour))
-	if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err != nil {
 		t.Fatalf("old-format lease after expiry: %v", err)
 	}
 	raw, err := json.Marshal(old)
@@ -172,14 +172,14 @@ func TestReapDeadLeases(t *testing.T) {
 	now := st.Now()
 	dead := finishedPID(t)
 	st.HolderPID = dead
-	if _, err := st.Acquire("m910q", "1", false, "w-dead", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-dead", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	st.HolderPID = os.Getpid()
-	if _, err := st.Acquire("m910q", "2", false, "w-live", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "2", false, "w-live", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	other := Lease{Server: "m910q", Slot: "9", Holder: "w-other", LeaseID: "other-id",
+	other := Lease{Server: "test1", Slot: "9", Holder: "w-other", LeaseID: "other-id",
 		Acquired: now, Expires: now.Add(time.Hour), HolderPID: dead, HolderHost: "another-host"}
 	if err := st.writeLease(&other); err != nil {
 		t.Fatal(err)
@@ -189,10 +189,10 @@ func TestReapDeadLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Server != "m910q" || got[0].Slot != "1" || got[0].Holder != "w-dead" {
-		t.Fatalf("dry run reported %+v, want only m910q/1 w-dead", got)
+	if len(got) != 1 || got[0].Server != "test1" || got[0].Slot != "1" || got[0].Holder != "w-dead" {
+		t.Fatalf("dry run reported %+v, want only test1/1 w-dead", got)
 	}
-	if _, err := os.Stat(st.leasePath("m910q", "1")); err != nil {
+	if _, err := os.Stat(st.leasePath("test1", "1")); err != nil {
 		t.Fatalf("the dry run removed the lease: %v", err)
 	}
 
@@ -201,17 +201,17 @@ func TestReapDeadLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Slot != "1" {
-		t.Fatalf("reap removed %+v, want only m910q/1", got)
+		t.Fatalf("reap removed %+v, want only test1/1", got)
 	}
-	if _, err := os.Stat(st.leasePath("m910q", "1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(st.leasePath("test1", "1")); !os.IsNotExist(err) {
 		t.Fatalf("the dead holder's lease file is still there: %v", err)
 	}
 	for _, slot := range []string{"2", "9"} {
-		if _, err := os.Stat(st.leasePath("m910q", slot)); err != nil {
+		if _, err := os.Stat(st.leasePath("test1", slot)); err != nil {
 			t.Fatalf("reap removed slot %s's lease: %v", slot, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(st.Dir, "m910q", "1.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.Dir, "test1", "1.json")); !os.IsNotExist(err) {
 		t.Fatalf("lease file still present: %v", err)
 	}
 }
@@ -224,10 +224,10 @@ func TestUnreadableHolderStatIsAlive(t *testing.T) {
 	old := readProcStat
 	readProcStat = func(pid int) ([]byte, error) { return nil, fs.ErrPermission }
 	defer func() { readProcStat = old }()
-	if _, err := st.Acquire("m910q", "1", false, "w-a", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-a", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	l, err := st.readLease("m910q", "1")
+	l, err := st.readLease("test1", "1")
 	if err != nil || l == nil {
 		t.Fatalf("read lease: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestUnreadableHolderStatWithESRCHIsDead(t *testing.T) {
 	old := readProcStat
 	readProcStat = func(pid int) ([]byte, error) { return nil, fs.ErrPermission }
 	defer func() { readProcStat = old }()
-	if _, err := st.Acquire("m910q", "1", false, "w-dead", time.Hour); err != nil {
+	if _, err := st.Acquire("test1", "1", false, "w-dead", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReapDeadLeases(st.Dir, false)
@@ -261,7 +261,7 @@ func TestUnreadableHolderStatWithESRCHIsDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Slot != "1" {
-		t.Fatalf("reap removed %+v, want m910q/1", got)
+		t.Fatalf("reap removed %+v, want test1/1", got)
 	}
 }
 
@@ -278,10 +278,10 @@ func TestLeaseNeedsTheSamePIDNamespaceToReap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := testStore(t, twoSlotCfg)
 			st.HolderPID = finishedPID(t)
-			if _, err := st.Acquire("m910q", "1", false, "w-dead", time.Hour); err != nil {
+			if _, err := st.Acquire("test1", "1", false, "w-dead", time.Hour); err != nil {
 				t.Fatal(err)
 			}
-			l, err := st.readLease("m910q", "1")
+			l, err := st.readLease("test1", "1")
 			if err != nil || l == nil {
 				t.Fatalf("read lease: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestLeaseNeedsTheSamePIDNamespaceToReap(t *testing.T) {
 				t.Fatalf("reap named %+v, want nothing", got)
 			}
 			setNow(st, st.Now().Add(2*time.Hour))
-			if _, err := st.Acquire("m910q", "1", false, "w-b", time.Hour); err != nil {
+			if _, err := st.Acquire("test1", "1", false, "w-b", time.Hour); err != nil {
 				t.Fatalf("the expired lease was not taken over: %v", err)
 			}
 		})

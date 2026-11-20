@@ -331,7 +331,7 @@ const marliPatrolReachYd = 26.5
 
 // TestZulGurubMarliStandsOutOfSpiderAggro: walk 25's Mar'li leg walked the raid onto the spawn of the patrolling
 // Skitterer 49202 (pack 0's leader) and, with the fight drifting west, onto pack 1 (leader 49201) as well: 20-21
-// elites at once, 6 of 7 wipes (TortoiseBots-audit research/zg-w25/MARLI-PULL.md sections 0-2). The leg's `to` and
+// elites at once, 6 of 7 wipes (research/zg-w25/MARLI-PULL.md sections 0-2). The leg's `to` and
 // the stands must be out of both packs' aggro: every creature of pack 0 (group_leader 49202) and pack 1
 // (group_leader 49201 plus the loose Venombrood 49246) stays at least marliStandYd away; the leg 2 packs' members
 // are the only ones listed, and a pack is aggro-together (creature_groups flags 14). Walk 25's other half
@@ -760,7 +760,7 @@ type arlokkRoutes struct {
 // TestZulGurubArlokkTerraceRouteClearOfLaterPacks: walk 25's Arlokk leg walked the raid onto the three-level terrace in the
 // plan's group order 11, 12, 13, ... and the move from group 11's approach to group 12's crossed the spawn ring of group 15's
 // four Shadow Hunters 11339 at z 71.4 (13.3 yd from 51354), which woke groups 12, 14, 15 and 16 at once: 3 of 4 attempts
-// wiped, the MT idle under 11 elites (TortoiseBots-audit tests/raid-zg-walk25/summary-autofix.md "Arlokk"). Review round 1
+// wiped, the MT idle under 11 elites (the walk-25 Arlokk autofix summary). Review round 1
 // (Opus HIGH) then found the upper-level-first order still crossed the lower pack's ring on the navmesh: the route from
 // 13's stand to 16's stand ran the bridge at y -1639 z 57.7-60.4, 8.5 yd from 51383 while the lower pack was still alive
 // (the straight segments are blind to the bridge the mesh takes).
@@ -1270,13 +1270,13 @@ func samplesAlong(a, b dungeon.Point, step float64) []dungeon.Point {
 // kSpreadSettledDistance), i.e. the run leader's own StandClearAt rule. Walk 27 is the field evidence that the old
 // 20 yd line was too weak: the firing stand the run leader read was 20.0 yd from 49202's patrol loop (22.6 from its
 // spawn), and the party's spread plus the Venombroods' 5 yd wander put a bot inside their detection 6 s into the
-// fight; pack 0 (all nine) woke and the raid wiped twice (TortoiseBots-audit tests/raid-zg-walk27,
+// fight; pack 0 (all nine) woke and the raid wiped twice (the walk-27 notes,
 // research/zg-w27/MARLI-PACK0.md).
 const marliLaterPackYd = 26
 
 // TestZulGurubMarliStep203RouteClearOfLaterPacks: walk 26b's step 203 pulled pack 0 from a stand 35.3 yd from the
 // nearest pack-1 spawn and 19.0 yd from 49202's patrol loop, and pack 1 still woke: 23 hostiles within 20 yd, 20 dead
-// in 35 s (TortoiseBots-audit tests/raid-zg-walk26b; research/zg-w26/MARLI-203.md). The frames show the chain is not
+// in 35 s (the walk-26b notes; research/zg-w26/MARLI-203.md). The frames show the chain is not
 // the camp's distance. Pack 0's leader 49202 is level 56 with detection 20-4 = 16 yd, but it is aggro-together with
 // pack 0 (creature_groups flags 14 = aggro/evade/respawn together, CreatureGroups.h): at 01:07:21Z it stood on its
 // loop at -12308.3 -1624.2, 62.4 yd from any bot, and fought anyway. Its run to the camp passed -12299.5 -1647.2,
@@ -1608,7 +1608,7 @@ func marliStandWorst(p dungeon.Point, pack []creature, movement map[uint64][]dun
 // into the fight: the run leader read the firing stand at -12266.2 -1667.3, 20.0 yd from 49202's patrol loop and 22.6
 // from its spawn, and the party's spread plus the Venombroods' 5 yd wander put a bot (or its pet) inside their 16-20 yd
 // detection. All nine of pack 0 took one victim in one read (aggro-together, creature_groups flags 14), and b2/b2-r1
-// lost 43/64 bots at step 203 (TortoiseBots-audit tests/raid-zg-walk27, research/zg-w27/MARLI-PACK0.md).
+// lost 43/64 bots at step 203 (the walk-27 notes, research/zg-w27/MARLI-PACK0.md).
 //
 // The plan cannot pin the firing stand (the run leader walks out to the first point of the tank's path inside 23.5 yd
 // of the pick), so it pins the approach the stand is read from. Group 0's approach is the reachable east slope

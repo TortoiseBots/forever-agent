@@ -36,14 +36,14 @@ func TestCLIFlagsBeforePositionalsEndToEnd(t *testing.T) {
 	})
 	t.Run("lease", func(t *testing.T) {
 		slotsPath := leaseTestSlots(t)
-		code, out, errOut := runCLI("lease", "acquire", "--slot", "4", "--holder", "w-e2e", "--slots", slotsPath, "m910q")
+		code, out, errOut := runCLI("lease", "acquire", "--slot", "4", "--holder", "w-e2e", "--slots", slotsPath, "test1")
 		if code != exitOK {
 			t.Fatalf("acquire server-last: %d %q", code, errOut)
 		}
-		if !strings.HasPrefix(out, "leased m910q/4 to w-e2e until ") {
+		if !strings.HasPrefix(out, "leased test1/4 to w-e2e until ") {
 			t.Fatalf("stdout %q", out)
 		}
-		code, out, errOut = runCLI("lease", "list", "--slots", slotsPath, "m910q")
+		code, out, errOut = runCLI("lease", "list", "--slots", slotsPath, "test1")
 		if code != exitOK || !strings.Contains(out, "held by w-e2e") {
 			t.Fatalf("list server-last: %d %q %q", code, out, errOut)
 		}
@@ -56,7 +56,7 @@ func TestCLIFlagsBeforePositionalsEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		dir := filepath.Join(t.TempDir(), "client")
-		code, _, errOut := runCLI("slot", "setup", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath, "m910q", "1")
+		code, _, errOut := runCLI("slot", "setup", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath, "test1", "1")
 		if code != exitOK {
 			t.Fatalf("setup positionals-last: %d %q", code, errOut)
 		}

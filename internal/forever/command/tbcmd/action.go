@@ -8,9 +8,12 @@ package tbcmd
 // Each call is token-matched and typed like every other command: the run's token must end every line, the reply
 // must be the command's own end line, and its `count` must agree with the lines before it. The module acknowledges
 // a setup command with the end line alone (`tele-end count=0 #token`, `enter-end count=0 #token`,
-// `revive-end count=0 #token`, `instance-end count=0 records=0 #token`); a line between the send and that end line
-// is a shape this layer does not know and is refused rather than read as a silent success. The module's error line
-// (`error code=... cmd=...`) is returned as a *CommandError, so a caller acts only on a nil error.
+// `revive-end count=0 #token`, `instance-end count=0 records=0 #token`), or with one record per target before it
+// that names the target it resolved (`tele target=party:commander:<name> #token`, then `tele-end count=1 #token`):
+// a party command addressed with "party" resolves to the party's commander or its leader, and the label is what
+// says so. A data line of any other kind, or one without its `target=`, is refused rather than read as a silent
+// success. The module's error line (`error code=... cmd=...`) is returned as a *CommandError, so a caller acts only
+// on a nil error.
 
 import (
 	"context"
@@ -22,18 +25,57 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
-// ActionReport is one setup command's answer: the end line, parsed whole.
+// ActionReport is one setup command's answer: the end line and any per-target record lines, parsed whole.
 type ActionReport struct {
 	// Verb is the command word this layer sent: tele, enter, revive or instance.
 	Verb string
 	// Kind is the reply's end kind: tele-end, enter-end, revive-end or instance-end.
 	Kind string
-	// Count is the end line's count. It is 0 today: the module writes no per-target lines for a setup command.
+	// Count is the end line's count: the per-target lines before it (0 for an answer that only acknowledges).
 	Count int
+	// Targets are the `target=` labels the answer's per-target lines named, in order: the party a command
+	// addressed, as the module resolved it (`party:<leader>`, `party:commander:<name>`) or the one character.
+	Targets []ActionTarget
 	// End holds the end line's other keys, decoded. Unknown keys are kept, never an error.
 	End map[string]string
 	// Raw is the reply's visible lines, in order.
 	Raw []string
+}
+
+// ActionTarget is one `target=` of a setup answer. A party command names the party's leader (or the commander it
+// was bound to); a command for one character names that character.
+type ActionTarget struct {
+	// Raw is the decoded label, its parts joined with ':'.
+	Raw string
+	// Party is the party form.
+	Party bool
+	// Commander is the party's commander when the label names it (`party:commander:<name>`), else empty.
+	Commander string
+	// Name is the character named: the party's leader, its commander, or the one target.
+	Name string
+}
+
+// actionTarget reads one per-target line's `target=` label. The parts are split on ':' before decoding, so an
+// encoded ':' inside a name stays in the name.
+func actionTarget(rec record) (ActionTarget, error) {
+	parts, err := rec.parts("target")
+	if err != nil {
+		return ActionTarget{}, err
+	}
+	t := ActionTarget{Raw: strings.Join(parts, ":")}
+	switch {
+	case len(parts) == 1 && parts[0] != "" && !strings.EqualFold(parts[0], "party"):
+		// "party" is the command's keyword, never a character's name here (setupName refuses it too): a bare
+		// target=party names no target, so it is malformed rather than a character called Party.
+		t.Name = parts[0]
+	case len(parts) == 2 && parts[0] == "party" && parts[1] != "":
+		t.Party, t.Name = true, parts[1]
+	case len(parts) == 3 && parts[0] == "party" && parts[1] == "commander" && parts[2] != "":
+		t.Party, t.Commander, t.Name = true, parts[2], parts[2]
+	default:
+		return t, fmt.Errorf("%w: target=%q is not a name, party:<leader> or party:commander:<name>", ErrBadValue, t.Raw)
+	}
+	return t, nil
 }
 
 // setupName reads a character name for a setup line. The module's "party" keyword is a separate command form, so a
@@ -92,8 +134,41 @@ func parseAction(rep *command.Reply, endKind, verb string) (ActionReport, error)
 	if out.Count != between {
 		return out, fmt.Errorf("%w: %s count=%d, %d line(s) before it", ErrBadReport, endKind, out.Count, between)
 	}
-	if between != 0 {
-		return out, fmt.Errorf("%w: %s carries %d line(s) this layer does not read", ErrBadReport, endKind, between)
+	// A target record may be split over continuation lines (<verb>+) like any other record: a continuation joins the
+	// base line before it, repeats no key, and a continuation before any base line is malformed. Without the merge a
+	// tele+ line would read as a second target record (and an orphan one as a target of its own).
+	var recs []record
+	for i := range between {
+		rec, err := decodeLine(rep.Lines[i])
+		if err != nil {
+			return out, err
+		}
+		cont := strings.HasSuffix(rec.kind, "+")
+		if strings.TrimSuffix(rec.kind, "+") != verb {
+			return out, fmt.Errorf("%w: a %q line inside a %s reply", ErrBadReport, rec.kind, verb)
+		}
+		if !cont {
+			recs = append(recs, rec)
+			continue
+		}
+		if len(recs) == 0 {
+			return out, fmt.Errorf("%w: a %s+ line before any %s line", ErrBadReport, verb, verb)
+		}
+		prev := &recs[len(recs)-1]
+		for _, k := range rec.keys {
+			if prev.has(k) {
+				return out, fmt.Errorf("%w: %s+ repeats %s", ErrBadReport, verb, k)
+			}
+			prev.values[k] = rec.values[k]
+			prev.keys = append(prev.keys, k)
+		}
+	}
+	for _, rec := range recs {
+		t, err := actionTarget(rec)
+		if err != nil {
+			return out, err
+		}
+		out.Targets = append(out.Targets, t)
 	}
 	out.Raw = append([]string(nil), rep.Raw...)
 	out.End = make(map[string]string, len(end.keys))

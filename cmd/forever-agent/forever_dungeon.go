@@ -31,7 +31,7 @@ func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.
 	enter := fs.String("enter", "tele", "how the party enters: tele (default), portal or none (already placed)")
 	reset := fs.Bool("reset", false, "leave and reset the instance after a clear")
 	maxMinutes := fs.Int("max-minutes", 120, "the run's budget in minutes")
-	maxWipes := fs.Int("max-wipes", 3, "the run's wipe budget")
+	maxWipes := fs.Int("max-wipes", 3, "the run's wipe budget: the (n+1)th wipe ends it; 0 allows no wipe, -1 is no budget")
 	practice := fs.Bool("practice", true, "use the last-resort revives when the party cannot recover by itself")
 	out := fs.String("out", "", "folder for the run's trace and summary; empty writes none")
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live walker (the dry walker is a straight line)")
@@ -59,8 +59,8 @@ func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintf(stderr, "forever dungeon-run: --enter %q is not tele, portal or none\n", *enter)
 		return exitUsage
 	}
-	if *maxMinutes < 1 || *maxMinutes > 24*60 || *maxWipes < 0 || *maxWipes > 20 {
-		fmt.Fprintln(stderr, "forever dungeon-run: --max-minutes is 1-1440 and --max-wipes 0-20")
+	if *maxMinutes < 1 || *maxMinutes > 24*60 || *maxWipes < -1 || *maxWipes > 20 {
+		fmt.Fprintln(stderr, "forever dungeon-run: --max-minutes is 1-1440 and --max-wipes -1 (no budget) to 20")
 		return exitUsage
 	}
 	// The plan and the leg selection are checked before the login: a plan this build refuses must not cost a

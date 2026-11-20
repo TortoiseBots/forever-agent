@@ -1,4 +1,4 @@
-// The Jin'do fixes (spec TortoiseBots-audit/specs/jindo-mechanics.md §6, plan worker step 1, and the
+// The Jin'do fixes (spec specs/jindo-mechanics.md §6, plan worker step 1, and the
 // walk-38 review rounds): the plan's kill_first leads with the Powerful Healing Ward 14987, then the Brain Wash Totem 15112, the hall's east side (the honour guard, the north camp's east four and the two lone
 // mistresses) is its own four gm-clearable pull groups again (round 2 undid the boss-row fold; each pull is
 // over its original ceiling by a pinned known limit, see the plan note's WALK 38 REVIEW R2), and every leg-6

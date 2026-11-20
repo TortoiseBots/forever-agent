@@ -84,10 +84,26 @@ func (r record) requireInt(key string, min, max int) (int, error) {
 	return r.intValue(key, v, min, max)
 }
 
-// optionalInt returns an optional number; present is false when the key is absent.
+// optionalInt returns an optional number; present is false when the key is absent. A number the module never writes
+// empty (the cursors seq=, ev=, leg=, step=, last=, and every other optional number) must be a number when it is
+// there: an empty value is ErrBadValue, never "not known". The keys the command reference marks "empty when none"
+// use optionalIntEmpty instead.
 func (r record) optionalInt(key string, min, max int) (n int, present bool, err error) {
 	v, ok := r.values[key]
 	if !ok {
+		return 0, false, nil
+	}
+	n, err = r.intValue(key, v, min, max)
+	return n, true, err
+}
+
+// optionalIntEmpty is optionalInt for the two state numbers the command reference marks "empty when none":
+// tgtentry= and tgthp= (the engine's target; the module writes them empty when it has none). The empty value is
+// "not known", exactly as an absent key is: it never becomes a zero the caller could act on. It is used nowhere
+// else; every other optional number is strict.
+func (r record) optionalIntEmpty(key string, min, max int) (n int, present bool, err error) {
+	v, ok := r.values[key]
+	if !ok || v == "" {
 		return 0, false, nil
 	}
 	n, err = r.intValue(key, v, min, max)

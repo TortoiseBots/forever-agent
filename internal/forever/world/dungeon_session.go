@@ -78,6 +78,17 @@ func (c *dungeonCommander) Party(ctx context.Context) (tbcmd.PartyReport, error)
 	return rep, dungeonPortErr(err)
 }
 
+// RunStatus and RunEvents are the module's own run records: a read of the run the module leads, never an order.
+func (c *dungeonCommander) RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error) {
+	rep, err := c.client.RunStatus(ctx, leader)
+	return rep, dungeonPortErr(err)
+}
+
+func (c *dungeonCommander) RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error) {
+	rep, err := c.client.RunEvents(ctx, leader, since, hasSince)
+	return rep, dungeonPortErr(err)
+}
+
 // Run is the one function in this package that reaches the command channel. The module's typed client is built over
 // this transport and builds every line from typed arguments (the reports, the orders, the setup actions); nothing
 // else here names the command session, so no call site can send a command line of its own.
@@ -114,6 +125,14 @@ func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.Act
 		return c.gmOn(ctx, false)
 	case driver.ActionGMVisible:
 		return c.gmOn(ctx, true)
+	case driver.ActionRunStart:
+		return runAction(c.client.RunStart(ctx, a.Who, a.Plan))
+	case driver.ActionRunStop:
+		return runAction(c.client.RunStop(ctx, a.Who, a.Reason))
+	case driver.ActionRunPause:
+		return runAction(c.client.RunPause(ctx, a.Who))
+	case driver.ActionRunResume:
+		return runAction(c.client.RunResume(ctx, a.Who))
 	case driver.ActionTeleOutside:
 		return c.teleOutside(ctx, a.Dest)
 	case driver.ActionAppear:
@@ -132,7 +151,20 @@ func actionReport(rep tbcmd.ActionReport, err error) (driver.ActionReport, error
 	if err != nil {
 		return driver.ActionReport{}, dungeonPortErr(err)
 	}
-	return driver.ActionReport{Verb: rep.Verb, Count: rep.Count, Confirmed: true}, nil
+	return driver.ActionReport{Verb: rep.Verb, Count: rep.Count, Confirmed: true, Targets: rep.Targets}, nil
+}
+
+// runAction adapts one typed run answer: the run record the module sent, or its refusal.
+func runAction(rep tbcmd.RunReport, err error) (driver.ActionReport, error) {
+	if err != nil {
+		return driver.ActionReport{}, dungeonPortErr(err)
+	}
+	out := driver.ActionReport{Verb: "run", Confirmed: true, Count: len(rep.Runs)}
+	if len(rep.Runs) == 1 {
+		st := rep.Runs[0]
+		out.Run = &st
+	}
+	return out, nil
 }
 
 // coreReply adapts one tokenless core send. The core's GM commands carry no token, so there is nothing to match:

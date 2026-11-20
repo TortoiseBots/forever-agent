@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
@@ -108,6 +109,9 @@ type fakeServer struct {
 	instanceListener net.Listener
 	errs             chan error
 	wg               sync.WaitGroup
+	// stop is closed by close: a step driver or a step server still waiting for the test ends there.
+	stop     chan struct{}
+	stopOnce sync.Once
 
 	keyData    [64]byte
 	buildKey   [16]byte
@@ -168,8 +172,33 @@ type fakeServer struct {
 	fbRealm       *fakeConn
 	fbdQueued     bool
 	fbdPolls      int
-	fbMapCounter  uint32
-	fbdEvents     int
+	// onFBLfg, when set, is called with the finder poll number for each LFG_REQ the dungeon scene answers: the
+	// interrupt test cancels the caller's context from it.
+	onFBLfg      func(polls int)
+	fbMapCounter uint32
+	fbdEvents    int
+	// Round LOOT-1: the loot and object-use scenario (serveLoot in fake_loot_test.go): the case word, the target,
+	// the window's items and rolls, and what the fake saw of the client's requests (all under mu).
+	loot           bool
+	lootCase       string
+	lootTarget     fakeLootTarget
+	lootExtras     []fakeExtraObject
+	lootWant       wire.GUID
+	lootRollMs     uint32
+	lootItems      []fakeItemDef
+	lootRolls      []fakeItemDef
+	lootCoins      uint32
+	lootValid      uint8
+	lootLootGUID   wire.GUID
+	lootUsed       bool
+	lootReported   bool
+	lootMoney      bool
+	lootReleased   bool
+	lootVotes      []uint8
+	lootItemsTaken []uint8
+	// lootOtherOwner is the owner a "window-other-owner" case names in the window: an object the client never
+	// opened, whose window it must still give back.
+	lootOtherOwner wire.GUID
 	// Round D2: the dungeon-run scenario (serveDungeon in dungeon_fake_test.go).
 	dungeon *dungeonScene
 	// What the fake saw, under mu.
@@ -188,10 +217,15 @@ type fakeServer struct {
 	// logout request arrives). deliberateClose keeps the read errors of a deliberate drop out of the failure channel.
 	closeSocket string
 	closeWhen   string
-	// logoutNoResponse makes the fake close the instance socket with SMSG_LOGOUT_COMPLETE and never send
-	// SMSG_LOGOUT_RESPONSE: the real server queues the response on the instance socket and closes that socket right
-	// after the completion (WorldSession.cpp:766,789), so a queued write can be dropped.
-	logoutNoResponse bool
+	// logoutPlan, set by playLogout, hands the logout's two sockets to the test: the fake reads the request and then
+	// performs each step the test sends on logoutStep, one at a time, so the sockets' order is the test's and never
+	// a race between sleeps. logoutAt is closed when the fake is at the request; logoutSeen is what it performed,
+	// under mu.
+	logoutPlan   []string
+	logoutAt     chan struct{}
+	logoutAtOnce sync.Once
+	logoutStep   chan string
+	logoutSeen   []string
 	// logoutRealmLoss drops the realm socket after SMSG_LOGOUT_RESPONSE and before the completion: the server
 	// answered the request, but the session is not over, so the client must report the loss.
 	logoutRealmLoss bool
@@ -267,6 +301,9 @@ func newFakeServer(t *testing.T) *fakeServer {
 		errs:             make(chan error, 32),
 		logoutDone:       make(chan struct{}),
 		abortDone:        make(chan struct{}),
+		stop:             make(chan struct{}),
+		logoutAt:         make(chan struct{}),
+		logoutStep:       make(chan string),
 	}
 	for i := range 32 {
 		f.keyData[i] = byte(i)
@@ -287,6 +324,7 @@ func newFakeServer(t *testing.T) *fakeServer {
 }
 
 func (f *fakeServer) close() {
+	f.stopOnce.Do(func() { close(f.stop) })
 	f.realmListener.Close()
 	f.instanceListener.Close()
 }
@@ -703,6 +741,71 @@ func (f *fakeServer) dropLink(realm, inst *fakeConn) {
 	_ = c.nc.Close()
 }
 
+// playLogout gives the logout's ordering to the test: the fake waits for CMSG_LOGOUT_REQUEST on logoutAt and then
+// performs each step the test sends, one at a time and in that order. A step is "response" (SMSG_LOGOUT_RESPONSE on
+// the instance socket), "completion" (SMSG_LOGOUT_COMPLETE on the realm socket; its write returns once the frame is
+// flushed, so a close sent after it cannot drop it), "close-instance", "close-realm" or "end". Both sockets are
+// separate connections, so nothing in the client can order them: only the fake can, and here the test does.
+func (f *fakeServer) playLogout(steps ...string) {
+	f.logoutPlan = steps
+	go func() {
+		select {
+		case <-f.logoutAt:
+		case <-f.stop:
+			return
+		}
+		for _, step := range steps {
+			select {
+			case f.logoutStep <- step:
+			case <-f.stop:
+				return
+			}
+		}
+	}()
+}
+
+// serveLogoutSteps runs a played logout: it announces the request and then does exactly what the test sends, so the
+// scenario's outcome is the one asserted for that order, not a race the test can pass either way.
+func (f *fakeServer) serveLogoutSteps(c, realm *fakeConn) {
+	f.logoutAtOnce.Do(func() { close(f.logoutAt) })
+	for {
+		var step string
+		select {
+		case step = <-f.logoutStep:
+		case <-f.stop:
+			return
+		}
+		f.mu.Lock()
+		f.logoutSeen = append(f.logoutSeen, step)
+		f.mu.Unlock()
+		switch step {
+		case "response":
+			c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
+		case "completion":
+			realm.writeFrame(fakeSMSGLogoutComplete, []byte{0})
+		case "close-instance":
+			c.nc.Close()
+		case "close-realm":
+			// The realm reader takes the close as the scene's end, as it does for every logout scenario.
+			f.logoutOnce.Do(func() { close(f.logoutDone) })
+			realm.nc.Close()
+		case "end":
+			f.logoutOnce.Do(func() { close(f.logoutDone) })
+			return
+		default:
+			f.failf("instance: unknown logout step %q", step)
+			return
+		}
+	}
+}
+
+// logoutSteps is what a played logout performed, in order.
+func (f *fakeServer) logoutSteps() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.logoutSeen...)
+}
+
 // serveInstance runs the instance socket; the realm conn is used for SMSG_LOGOUT_COMPLETE, which the real server
 // sends on the realm socket (SMSG_LOGOUT_COMPLETE's connection index) while it closes the instance socket.
 func (f *fakeServer) serveInstance(realm *fakeConn) {
@@ -841,6 +944,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		f.serveChat(c, realm)
 		return
 	}
+	if f.loot {
+		f.serveLoot(c, realm)
+		return
+	}
 	if f.dungeon != nil {
 		f.serveDungeon(c, realm)
 		return
@@ -912,20 +1019,18 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 				refused = true
 				continue
 			}
-			if !f.logoutNoResponse {
-				c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
-				time.Sleep(20 * time.Millisecond) // the completion travels on the other socket
+			if f.logoutPlan != nil {
+				f.serveLogoutSteps(c, realm)
+				return
 			}
+			c.writeFrame(fakeSMSGLogoutResponse, []byte{0, 0, 0, 0, 0})
+			time.Sleep(20 * time.Millisecond) // the completion travels on the other socket
 			if f.logoutRealmLoss {
 				f.dropLink(realm, c)
 				return
 			}
 			realm.writeFrame(fakeSMSGLogoutComplete, []byte{0})
 			f.logoutOnce.Do(func() { close(f.logoutDone) })
-			if f.logoutNoResponse {
-				c.nc.Close() // the server closes the instance socket with the completion
-				return
-			}
 			time.Sleep(20 * time.Millisecond)
 			c.nc.Close()
 			return

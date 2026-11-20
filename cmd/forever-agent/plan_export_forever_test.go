@@ -62,7 +62,7 @@ func TestPlanExportForeverReport(t *testing.T) {
 			t.Fatalf("the report lacks %q: %q", want, out)
 		}
 	}
-	if !strings.Contains(out, "plan=uldaman map=70 status=refused") || !strings.Contains(out, "refused legs[2].steps[0].use_object") {
+	if !strings.Contains(out, "plan=uldaman map=70 status=refused") || !strings.Contains(out, "refused legs[1].boss.loot_item") {
 		t.Fatalf("stdout %q", out)
 	}
 	// Report mode writes nothing, so --out is a usage error.

@@ -62,15 +62,24 @@ type Limits struct {
 	StragglerBack time.Duration
 	OutsideWait   time.Duration
 	// Lost bounds the search for a mob that left the threat list without being seen dead.
-	Lost        time.Duration
-	Blind       time.Duration
-	StuckAfter  time.Duration
-	PullGap     time.Duration
-	PullPerMin  int
-	MaxRetries  int
+	Lost       time.Duration
+	Blind      time.Duration
+	StuckAfter time.Duration
+	PullGap    time.Duration
+	PullPerMin int
+	MaxRetries int
+	// MaxWipes is the wipe budget: 0 allows no wipe at all, a negative value is no budget. The watch ends once the
+	// module's record is past it; the leading run ends on that wipe itself. MaxPractice is the practice rescue's cap.
 	MaxWipes    int
 	MaxPractice int
 	MaxMinutes  int
+	// WatchPoll is the watch loop's interval between the module's status and event reads; Watchdog bounds the time
+	// without a new event (then the watcher pauses the run and reports); WatchRescue is how long a run may stay
+	// paused on a wipe before the practice rescue; WatchStop bounds the wait for the stopped state after a stop.
+	WatchPoll   time.Duration
+	Watchdog    time.Duration
+	WatchRescue time.Duration
+	WatchStop   time.Duration
 }
 
 // DefaultLimits is the driver's table of defaults.
@@ -103,6 +112,10 @@ func DefaultLimits() Limits {
 		MaxWipes:      3,
 		MaxPractice:   8,
 		MaxMinutes:    120,
+		WatchPoll:     2 * time.Second,
+		Watchdog:      10 * time.Minute,
+		WatchRescue:   300 * time.Second,
+		WatchStop:     600 * time.Second,
 	}
 }
 
@@ -131,14 +144,25 @@ type Config struct {
 	Force func() bool
 	// Limits overrides the defaults; the zero value takes DefaultLimits.
 	Limits Limits
+	// Leader is the bot the module's run is led by (dungeon-watch). Its party is read from the module's roster;
+	// Party may stay empty. Empty in dungeon-run.
+	Leader string
+	// Watch runs the watch machine (dungeon-watch) instead of the driver's own run: PREPARE and ENTER as
+	// dungeon-run does, then the module's run, and from then on no order of ours.
+	Watch bool
+	// Watchdog overrides Limits.Watchdog; Poll overrides Limits.WatchPoll.
+	Watchdog time.Duration
+	Poll     time.Duration
+	// Logf prints the watch's progress lines; nil prints nothing.
+	Logf func(format string, args ...any)
 }
 
-// Tank is the first party name.
+// Tank is the first party name: in a watch it is the leader the module runs, before the roster is read.
 func (c Config) Tank() string {
 	if len(c.Party) > 0 {
 		return c.Party[0]
 	}
-	return ""
+	return c.Leader
 }
 
 // Healer is the second party name.
@@ -170,6 +194,9 @@ type Result struct {
 	SummaryFile string
 	// FightUnresolved is set when the stop left a fight running: nothing was sent at the stop.
 	FightUnresolved bool
+	// StopUnconfirmed is set when a watch's cleanup phase ended with the module's record still not stopped: the
+	// module may not have received the stop. It is a distinct outcome from a watch whose run reached stopped.
+	StopUnconfirmed bool
 }
 
 // Run is one run of the machine.
@@ -245,6 +272,8 @@ type Run struct {
 	crowded   bool
 	// ended is set when the run reached its end: the instance reset is allowed only from then on.
 	ended bool
+	// watch is the watched run's record, kept even without a recorder so the command's report carries it.
+	watch *RunWatch
 }
 
 // fight is one fight's bookkeeping.
@@ -279,6 +308,23 @@ func New(cfg Config, route *Route, cmd Commander, w World, walk Walker, clock Cl
 	}
 	if cfg.Limits.Prepare == 0 {
 		cfg.Limits = DefaultLimits()
+	}
+	if cfg.Watch {
+		if cfg.Poll <= 0 {
+			cfg.Poll = cfg.Limits.WatchPoll
+		}
+		if cfg.Poll > 30*time.Second {
+			cfg.Poll = 30 * time.Second
+		}
+		if cfg.Poll < time.Second {
+			cfg.Poll = time.Second
+		}
+		if cfg.Watchdog <= 0 {
+			cfg.Watchdog = cfg.Limits.Watchdog
+		}
+		if cfg.Watchdog < time.Minute {
+			cfg.Watchdog = time.Minute
+		}
 	}
 	if clock == nil {
 		clock = WallClock{}
@@ -475,8 +521,12 @@ func (r *Run) refresh(ctx context.Context) bool {
 		r.failures++
 		if r.failures == 1 {
 			r.blindSince = now
+			r.logf("state: the read failed (%v); the party is unknown until one answers", err)
 		}
 		if r.failures >= 3 && !r.blindSince.IsZero() && now.Sub(r.blindSince) >= r.lim.Blind {
+			// A blind end always names the read that blinded it.
+			r.logf("blind: the state read failed %d times over %.0fs; the last was: %v", r.failures,
+				now.Sub(r.blindSince).Seconds(), err)
 			r.stop("blind")
 		}
 		return false
@@ -520,29 +570,46 @@ func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 	return t, err == nil
 }
 
-// ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on our map and
-// instance, its master's distance known and short, and its last order not failed. It returns the first failing reason.
+// stateFreshFor is how old the last state read may be before a gate treats the party as unknown.
+const stateFreshFor = 6 * time.Second
+
+// repFresh says whether the last state read is fresh enough to act on: the one freshness rule the gates share.
+func (r *Run) repFresh() bool {
+	return !r.repAt.IsZero() && r.now().Sub(r.repAt) <= stateFreshFor
+}
+
+// ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on the run's
+// map (a watch: on the party's own map, the observer aside) and in one instance, its leader's (a run: its master's)
+// distance known and short, and its last order not failed. A bot with the engine off is not ready with the reason
+// noengine:<name>. It returns the first failing reason.
 func (r *Run) ready() (bool, string) {
 	if !r.reportComplete() {
 		return false, "report"
 	}
-	if r.now().Sub(r.repAt) > 6*time.Second {
+	if !r.repFresh() {
 		return false, "stale"
 	}
 	inst := uint32(0)
+	// The map every member must stand on: a run's is the commander's (the party is with it); a watch's is the
+	// party's own, because the observer may still be outside. Every member on one map is what either needs; the
+	// plan's map itself is checked at the entry and before a watched run starts.
+	want := r.mapID
+	if r.cfg.Watch {
+		want = r.rep.Bots[0].Map
+	}
 	for i, b := range r.rep.Bots {
 		switch {
 		case isDead(b):
 			return false, "dead:" + b.Name
 		case b.Resting:
 			return false, "resting:" + b.Name
-		case !b.Engine:
-			return false, "engine:" + b.Name
+		case b.NoEngine:
+			return false, "noengine:" + b.Name
 		case b.Stuck.Kind == "blocked":
 			return false, "stuck:" + b.Name
 		case blocked(b) != "":
 			return false, "block:" + blocked(b)
-		case b.Map != r.mapID:
+		case b.Map != want:
 			return false, "map:" + b.Name
 		case b.Order.Status == "fail":
 			return false, "order:" + b.Name
@@ -552,20 +619,28 @@ func (r *Run) ready() (bool, string) {
 		} else if b.Instance != inst {
 			return false, "inst:" + b.Name
 		}
-		switch b.DistMaster.Kind {
+		// The distance that says how gathered the party is: a run's is the master's (the commander is in its party);
+		// a watch's is the party leader's (the tank), because a watched party's master is the module's own bot
+		// commander, outside the party and possibly outside its instance, and its distance says nothing about the
+		// party standing together.
+		dist := b.DistMaster
+		if r.cfg.Watch {
+			dist = b.DistLeader
+		}
+		switch dist.Kind {
 		case "othermap":
 			return false, "othermap:" + b.Name
 		case "self":
 		default:
 			// A missing distance is not known, and not known is never ready: it is not zero yards.
-			if !b.DistMaster.Has {
+			if !dist.Has {
 				return false, "dist:" + b.Name
 			}
 			limit := float64(MasterFollowYd)
 			if b.Name == r.cfg.Healer() || b.Role == "healer" {
 				limit = PriestFollowYd
 			}
-			if b.DistMaster.Yards > limit {
+			if dist.Yards > limit {
 				return false, "range:" + b.Name
 			}
 		}
@@ -865,14 +940,16 @@ func (r *Run) finish(ctx context.Context) {
 	if fightWasOn {
 		r.event("stop", map[string]any{"reason": r.stopReason, "waiting_for_fight": true})
 		for {
-			if !r.pollDetached(fctx) {
-				timedOut = fctx.Err() != nil && !r.lost
-				break
-			}
-			if r.lost || !r.busy() {
+			// One failed report (a bad reply, a call that timed out) proves nothing about the fight: only a lost
+			// link ends the wait there; every other failure is retried until a bound runs out or a report comes.
+			ok := r.pollDetached(fctx)
+			if r.lost {
 				break
 			}
 			if r.cfg.Force != nil && r.cfg.Force() {
+				break
+			}
+			if ok && !r.busy() {
 				break
 			}
 			// Either bound running out is a timeout: the fight is unresolved, no stay follows.

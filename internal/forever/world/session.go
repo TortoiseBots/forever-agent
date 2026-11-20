@@ -163,10 +163,32 @@ type Options struct {
 	FBDungeonLeaveWait   time.Duration
 	FBDungeonCleanupWait time.Duration
 	Logf                 func(format string, args ...any)
+	// Round LOOT-1: forever loot-check and object-use. Entry (the fight's field) is the creature or game-object
+	// entry both commands filter on. Roll is the vote loot-check sends on a group roll ("", "need", "greed" or
+	// "pass"; empty sends none, so need is only ever sent when asked). LootMoney takes the window's copper,
+	// TakeItems bounds how many items are taken (0 all), and LootRange is the search radius in yards (0: the
+	// command's own default).
+	LootCheck bool
+	ObjectUse bool
+	Roll      string
+	LootMoney bool
+	TakeItems int
+	LootRange float32
+	// At is --at x,y,z: the point a game-object target must be picked at when several objects of the entry are in
+	// range (object-use, and loot-check's chest); AtRange is how close an object must stand to that point in yards
+	// (0: objectAtRange).
+	AtSet   bool
+	AtX     float32
+	AtY     float32
+	AtZ     float32
+	AtRange float32
 	// Round D2: forever dungeon-run. DungeonRun plays one dungeon plan for the party the commander leads; Enter
 	// hands the session to the driver until the run stops or the deadline ends it, then logs out. The driver's
 	// ports are bound to this session (dungeon_session.go). A nil value runs none of it.
 	DungeonRun *driver.Config
+	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
+	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
+	DungeonWatch *driver.Config
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -247,9 +269,14 @@ type Report struct {
 	Commands    []CommandRun
 	GMConfirmed bool
 	TBState     *TBStateTable
+	// Round LOOT-1: the loot window loot-check opened and what the rolls did, and the object-use observation.
+	Loot      LootReport
+	ObjectUse ObjectUseReport
 	// Round D2: the dungeon run's result (states, orders, summary, stop reason and exit), nil when the session
 	// ran something else.
 	Dungeon *driver.Result
+	// Round S7: the watch's result, nil when the session ran something else.
+	Watch *driver.Result
 	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
 	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
 	// one row per resolved change (map-check fills Objects for each).
@@ -481,6 +508,8 @@ type session struct {
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
+	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
+	loot *lootWatch
 }
 
 const (
@@ -522,10 +551,15 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.deadChs[sideInstance] = make(chan struct{})
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.death = &deathWatch{started: time.Now()}
+	s.loot = newLootWatch()
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
-	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
+	// The readers run on their own context, detached from the caller's: an interrupt or an expired run window ends
+	// the run's waits (they use s.ctx), but the stop and cleanup paths that detach from that context still need the
+	// packet loop to read their answers. shutdown ends the readers, and it closes the sockets whatever the run left
+	// behind.
+	s.pumpCtx, s.pumpCancel = context.WithCancel(context.WithoutCancel(ctx))
 	defer s.pumpCancel()
 
 	realm := opts.WorldConn
@@ -568,6 +602,17 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	return report, runErr
 }
 
+// ownDeadlineTimeout reports a socket timeout that is this run's own deadline rather than the peer's: the read was
+// armed with the context's deadline (worldconn's operationDeadline), and the socket's timer can beat the context's.
+func (s *session) ownDeadlineTimeout(err error) bool {
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		return false
+	}
+	deadline, ok := s.pumpCtx.Deadline()
+	return ok && !time.Now().Before(deadline)
+}
+
 // startPump runs one socket reader and records how to wait for it. A reader that returns an error (a closed or reset
 // socket) marks the link dead before it posts the error, so every wait in the session ends at once.
 func (s *session) startPump(side int, next func(context.Context) (worldconn.Packet, error)) {
@@ -585,8 +630,10 @@ func (s *session) startPump(side int, next func(context.Context) (worldconn.Pack
 			}
 			ev := event{side: side, p: p, err: err}
 			if err != nil {
-				// A read that failed because this run's own context ended is not a lost link.
-				if s.pumpCtx.Err() == nil {
+				// A read that failed because this run's own context ended is not a lost link. The socket's read
+				// deadline is armed from that context's deadline and can fire a moment before its timer, so the
+				// deadline itself is checked as well.
+				if s.pumpCtx.Err() == nil && !s.ownDeadlineTimeout(err) {
 					s.setLinkDead(side, err)
 				}
 			}
@@ -935,6 +982,20 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.LootCheck {
+		err := s.lootCheck(ctx)
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.ObjectUse {
+		err := s.objectUse(ctx)
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if s.opts.WalkCheck {
 		if err := s.walkCheck(ctx); err != nil {
 			return err
@@ -969,6 +1030,14 @@ func (s *session) enter(ctx context.Context) error {
 		}
 		return s.logout(ctx)
 	}
+	if s.opts.DungeonWatch != nil {
+		res, err := s.dungeonWatch(ctx, s.opts.DungeonWatch)
+		s.report.Watch = res
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
 	if err := s.stay(ctx); err != nil {
 		return err
 	}
@@ -977,8 +1046,13 @@ func (s *session) enter(ctx context.Context) error {
 
 // Send writes one client packet on the instance socket (the socket the real client sends gameplay on). A dead link
 // refuses the send at once instead of writing into a half-open socket.
-func (s *session) Send(core uint32, payload []byte) error {
-	return s.sendOn(sideInstance, core, payload)
+func (s *session) Send(core uint32, payload []byte) error { return s.SendCtx(s.ctx, core, payload) }
+
+// SendCtx is Send on the caller's context. The stop and cleanup paths detach from the session's own context (the
+// caller's interrupt or the run's deadline ended it) and hand their own bounded one here: the line must still reach
+// the server, which the session's context would refuse at once.
+func (s *session) SendCtx(ctx context.Context, core uint32, payload []byte) error {
+	return s.sendOnCtx(ctx, sideInstance, core, payload)
 }
 
 // Now is the client clock the movement time field carries.
@@ -1004,7 +1078,7 @@ func (s *session) drain(ctx context.Context, what string, end time.Time, check f
 		if remaining <= 0 {
 			return nil
 		}
-		ev, err := s.next(what, remaining)
+		ev, err := s.nextCtx(ctx, what, remaining)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				return nil
@@ -1379,6 +1453,11 @@ func (s *session) stay(ctx context.Context) error {
 // (WorldSession::ShouldLogOut), so 30 s leaves a margin without holding a run open on a server that died.
 const logoutWait = 30 * time.Second
 
+// logoutTeardownWait bounds the logout when the caller's context has already ended (the operator's interrupt, or the
+// run's own deadline). The character must still be told to leave — a socket that just disappears keeps it online
+// until the server's own timeout — but an interrupt must not hold the command for the whole logoutWait.
+const logoutTeardownWait = 10 * time.Second
+
 // logout sends CMSG_LOGOUT_REQUEST and waits for the completion on the realm socket.
 //
 // The instance socket's close is part of the logout: WorldSession::LogoutPlayer sends SMSG_LOGOUT_COMPLETE on the
@@ -1387,6 +1466,13 @@ const logoutWait = 30 * time.Second
 // queued drops it. Either way the session is ending, not lost, and the completion is the fact the run waits for. A
 // realm socket that closes before the completion, or a silent server, is still a real loss.
 func (s *session) logout(ctx context.Context) error {
+	// A caller context that already ended (an interrupt, the run's own deadline) is not the character's end: the
+	// logout is teardown, so it runs on a short bounded context of its own rather than failing on the first wait.
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), logoutTeardownWait)
+		defer cancel()
+	}
 	// The state is set before the request is written: an instant logout can close the instance socket as soon as
 	// the request is read, before the send returns, and that close is the session ending, not a lost link.
 	s.deadMu.Lock()
@@ -1407,7 +1493,7 @@ func (s *session) logout(ctx context.Context) error {
 			if responded || grace <= 0 {
 				break
 			}
-			ev, err := s.nextExcept("the response to the logout", grace, sideInstance)
+			ev, err := s.nextExceptCtx(ctx, "the response to the logout", grace, sideInstance)
 			if err != nil || ev.err != nil {
 				break
 			}
@@ -1426,7 +1512,7 @@ func (s *session) logout(ctx context.Context) error {
 		if wait <= 0 {
 			return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within %s", logoutWait)
 		}
-		ev, err := s.nextExcept("the logout", wait, sideInstance)
+		ev, err := s.nextExceptCtx(ctx, "the logout", wait, sideInstance)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				return fmt.Errorf("world: no SMSG_LOGOUT_COMPLETE within %s", logoutWait)
@@ -1513,6 +1599,11 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if err := s.linkDead(); err != nil {
 			return err
 		}
+		// A reader that ended with this run's own context ended says so: the run's deadline is the reason, not the
+		// socket's timeout (which may have fired a moment earlier).
+		if err := s.ctx.Err(); err != nil {
+			return fmt.Errorf("world: connection %d: %w", ev.side, err)
+		}
 		return fmt.Errorf("world: connection %d: %w", ev.side, ev.err)
 	}
 	p := ev.p
@@ -1532,7 +1623,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			return err
 		}
 		now := clientTimeMs()
-		if err := s.sendOn(ev.side, wire.CMSGTimeSyncResponse, BuildTimeSyncResponse(seq, now)); err != nil {
+		if err := s.sendOnCtx(ctx, ev.side, wire.CMSGTimeSyncResponse, BuildTimeSyncResponse(seq, now)); err != nil {
 			return err
 		}
 		s.report.TimeSyncs++
@@ -1555,7 +1646,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		// whether a roster actually lists the client.
 		s.party.SetSelf(guid)
 		if !s.activeMoverDone {
-			if err := s.sendOn(ev.side, wire.CMSGMoveInitActiveMoverDone, BuildMoveInitActiveMoverComplete(clientTimeMs())); err != nil {
+			if err := s.sendOnCtx(ctx, ev.side, wire.CMSGMoveInitActiveMoverDone, BuildMoveInitActiveMoverComplete(clientTimeMs())); err != nil {
 				return err
 			}
 			s.activeMoverDone = true
@@ -1634,7 +1725,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 				sequence = s.mover.Sequence
 				s.report.WalkClientPos = [4]float32{t.X, t.Y, t.Z, t.O}
 			}
-			if err := s.sendOn(sideInstance, wire.CMSGMoveTeleportAck, objects.BuildTeleportAck(t.MoverGUID, sequence, clientTimeMs())); err != nil {
+			if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGMoveTeleportAck, objects.BuildTeleportAck(t.MoverGUID, sequence, clientTimeMs())); err != nil {
 				return err
 			}
 			s.opts.logf("world: SMSG_MOVE_TELEPORT answered (map %d, client position %.2f %.2f %.2f)", s.world.MapID(), t.X, t.Y, t.Z)
@@ -1688,6 +1779,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
 		return s.handleTransfer(ctx, p)
 	default:
+		if isLootPacket(p.Core) {
+			return s.handleLoot(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -2054,12 +2148,19 @@ func (s *session) waitFor(what string, timeout time.Duration, match func(worldco
 }
 
 func (s *session) next(what string, timeout time.Duration) (event, error) {
-	return s.nextExcept(what, timeout, -1)
+	return s.nextExceptCtx(s.ctx, what, timeout, -1)
 }
 
-// nextExcept is next with one socket's death ignored: the logout tolerates the instance socket closing once the
-// request is answered, because the completion travels on the realm socket.
-func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (event, error) {
+// nextCtx is next on the caller's context instead of the session's. A stop or cleanup path handed a context detached
+// from the session's own (context.WithoutCancel) keeps reading the same packet queue after that context ended; the
+// caller's context is the wait's own end condition there.
+func (s *session) nextCtx(ctx context.Context, what string, timeout time.Duration) (event, error) {
+	return s.nextExceptCtx(ctx, what, timeout, -1)
+}
+
+// nextExceptCtx is nextCtx with one socket's death ignored: the logout tolerates the instance socket closing once
+// the request is answered, because the completion travels on the realm socket.
+func (s *session) nextExceptCtx(ctx context.Context, what string, timeout time.Duration, ignore int) (event, error) {
 	end := time.Now().Add(timeout)
 	for {
 		// A packet the readers already delivered is handled before the link's death: it arrived first, and the
@@ -2144,9 +2245,9 @@ func (s *session) nextExcept(what string, timeout time.Duration, ignore int) (ev
 		case <-instanceCh:
 			timer.Stop()
 			continue
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			timer.Stop()
-			return event{}, fmt.Errorf("world: waiting for %s: %w", what, s.ctx.Err())
+			return event{}, fmt.Errorf("world: waiting for %s: %w", what, ctx.Err())
 		}
 	}
 }

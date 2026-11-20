@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -109,6 +111,8 @@ type fakeBot struct {
 	dmKind    string
 	dmYards   float64
 	dmMissing bool
+	dlKind    string
+	dlYards   float64
 	move      string
 	orderFail bool
 }
@@ -147,9 +151,13 @@ type Fake struct {
 	linkAfter    time.Duration
 	hasLinkAfter bool
 
+	// OnOrder, when set, is asked before an order's reply; OnAction, for the setup actions.
 	OnOrder  func(f *Fake, who, verb, arg string)
 	OnAction func(f *Fake, a Action) bool
-	OnState  func(f *Fake, n int) error
+	// OnParty, when set, may rewrite the roster answer: a report whose summary and member leader flags disagree, or
+	// one with no leader flag, that PREPARE must refuse.
+	OnParty func(tbcmd.PartyReport) tbcmd.PartyReport
+	OnState func(f *Fake, n int) error
 
 	// RefuseActions answers that action with the module's error line of this code.
 	RefuseActions map[ActionKind]string
@@ -174,7 +182,86 @@ type Fake struct {
 	missingNow  bool
 	// WithPatrols spawns one unit per patrol entry at its path's first point.
 	WithPatrols bool
+
+	// The module's own run, which a watch watches. RunScript is its scripted progress; the fake starts it from
+	// ActionRunStart and feeds it through the virtual clock.
+	run       *fakeRun
+	RunScript FakeRunScript
+	// StopDelay makes a stop wait this long for the fight to end: the run stays running (and the reply pending) until
+	// then, so a watcher's wait for the stopped state is exercised.
+	StopDelay time.Duration
+	// StatusBlock makes every status read wait this long for an answer it never sends, until the call's own context
+	// ends: a connected but silent server, which spends the caller's budget instead of returning at once.
+	StatusBlock time.Duration
+	// InstanceBosses is what the instance report answers with.
+	InstanceBosses []tbcmd.InstanceBoss
+	// Uncommanded names a party member the roster reports as not commanded (a watch's PREPARE refusal).
+	Uncommanded string
+	// DropOn names one call that dies with the link ("runstart", "runstop", "runpause", "runresume", "revive",
+	// "instance", "status", "events"). It drops once; every port answers ErrLinkLost from then on.
+	DropOn string
+	// FailEvents answers every event read with this error (a read that fails while the status read answers).
+	FailEvents error
+	// FailState answers every state read with this error (a read that blinds a watch's PREPARE).
+	FailState error
+	// BotCommander is the commander a watched roster names: the module's own bot, outside the party. Empty in a run,
+	// where the roster's commander is this character, and defaulted to a name outside the party in a watch.
+	BotCommander string
+	// RosterLeader overrides the roster's leader, for a party whose leader is not the bot the run names.
+	RosterLeader string
+	// NoRunRecord makes a run action answer with no run record (count 0), as a start reply that lost its record:
+	// the watch must refuse it, never log a started run.
+	NoRunRecord bool
+	// EmptyStateOn, when set, is asked before a state read; true answers it with no report at all and a timeout: the
+	// transient loss a gate's own poll can hit after the party's entry was already verified.
+	EmptyStateOn func(f *Fake) bool
 }
+
+// FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
+type FakeDeath struct {
+	After time.Duration
+	Unit  uint32
+}
+
+// FakeRunScript is the scripted module run: a step every ProgressEvery, pulls in between, an optional wipe (a pause
+// on a wipe), member deaths, a step the run cannot clear, and an optional end.
+type FakeRunScript struct {
+	Steps         int
+	Pulls         int
+	ProgressEvery time.Duration
+	WipeAt        time.Duration
+	DoneAt        time.Duration
+	// Silent runs with no events at all after the start: the watchdog's case.
+	Silent bool
+	// Deaths are the member deaths the run emits, at their own times.
+	Deaths []FakeDeath
+	// HoldAt makes the run stay on that step and re-pull it on every tick: the pack it cannot clear. StopAt stops
+	// the run itself, with StopWhy as the module's reason.
+	HoldAt  int
+	StopAt  time.Duration
+	StopWhy string
+}
+
+// fakeRun is the module's run record and its event ring.
+type fakeRun struct {
+	lead             string
+	plan             string
+	state            string
+	step, steps      int
+	leg              int
+	legName, kind    string
+	phase, note, why string
+	pull, pulls      int
+	bosses           []tbcmd.RunBoss
+	deaths, wipes    int
+	pauses           int
+	started          time.Time
+	events           []tbcmd.RunEvent
+	seq              int
+}
+
+// RunScript sets the scripted run the fake plays from the next start.
+func (f *Fake) ScriptRun(sc FakeRunScript) { f.RunScript = sc }
 
 // NewFake builds the scripted world for a route and a config. The party starts where the entry mode says: inside at
 // the entrance for "none", on the outer map at the portal otherwise.
@@ -194,12 +281,22 @@ func NewFakeWith(route *Route, cfg Config, patrols bool) *Fake {
 		bots: map[string]*fakeBot{}, mobs: map[wire.GUID]*Unit{}, engaged: map[string]bool{},
 		guidOf: map[string]wire.GUID{}, selfInst: 1, WithPatrols: patrols,
 	}
+	f.RunScript = FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 4 * time.Second, DoneAt: 20 * time.Second}
 	f.selfMap = route.Map
 	if cfg.Enter != "" && cfg.Enter != "none" && route.Portal != nil {
 		f.selfMap = route.Portal.Map
 		f.selfPos = route.Portal.Pos
 	} else {
 		f.selfPos = route.Entrance
+	}
+	if cfg.Watch && len(cfg.Party) == 0 && cfg.Leader != "" {
+		// A watch names only the leader; the scripted module's party is the leader's own.
+		cfg.Party = []string{cfg.Leader, "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
+		f.cfg.Party = cfg.Party
+	}
+	if cfg.Watch && f.BotCommander == "" {
+		// The module's own bot commander, outside the party: never the observer.
+		f.BotCommander = "Botcmd"
 	}
 	for i, name := range cfg.Party {
 		b := &fakeBot{
@@ -265,6 +362,9 @@ func (f *Fake) spawnPlan() {
 
 // State answers the state report from the bots.
 func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.StateReport{}, err
+	}
 	f.stateCalls++
 	if f.StaleAt == f.stateCalls || f.StaleAlways {
 		// The report as it was before the last order, delivered after its freshness limit: the run must refuse it.
@@ -275,11 +375,19 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 		f.Clock.Advance(7 * time.Second)
 		return snap, nil
 	}
+	if f.EmptyStateOn != nil && f.EmptyStateOn(f) {
+		// A read that returned nothing at all: not a zero-bot report, no report.
+		f.Clock.Advance(max(f.StateDelay, f.CallDelay))
+		return tbcmd.StateReport{}, context.DeadlineExceeded
+	}
 	if d := max(f.StateDelay, f.CallDelay); d > 0 {
 		f.Clock.Advance(d)
 	}
 	if err := f.linkErr(); err != nil {
 		return tbcmd.StateReport{}, err
+	}
+	if f.FailState != nil {
+		return tbcmd.StateReport{}, f.FailState
 	}
 	f.missingNow = f.DistMissingAt == f.stateCalls
 	defer func() { f.missingNow = false }()
@@ -302,6 +410,14 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	return f.report(5), nil
 }
 
+// orSelf is the leader distance kind the fake reports: self unless the test scripted another kind.
+func orSelf(kind string) string {
+	if kind == "" {
+		return "self"
+	}
+	return kind
+}
+
 // report builds a state answer with the first n bots.
 func (f *Fake) report(n int) tbcmd.StateReport {
 	rep := tbcmd.StateReport{Target: "party:" + f.cfg.Tank(), End: map[string]string{}}
@@ -315,10 +431,10 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 			Name: b.name, Role: b.role, RoleSource: "forced", Class: b.class, Level: b.level,
 			HP: b.hp, HPMax: b.hpMax, HPPct: b.hp * 100 / max(b.hpMax, 1),
 			PowerType: "rage", Power: 50, PowerMax: 100,
-			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine,
+			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine, NoEngine: !b.engine,
 			X: float64(b.pos[0]), Y: float64(b.pos[1]), Z: float64(b.pos[2]),
 			Map: b.mapID, Instance: b.inst,
-			DistLeader: tbcmd.Distance{Has: true, Kind: "self"},
+			DistLeader: tbcmd.Distance{Has: true, Kind: orSelf(b.dlKind), Yards: b.dlYards},
 			DistMaster: tbcmd.Distance{Has: !f.missingNow && !b.dmMissing, Kind: b.dmKind, Yards: b.dmYards},
 			LastOrder:  "", Eating: false, Drinking: false, Resting: b.resting,
 			Extra: map[string]string{},
@@ -365,6 +481,9 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 
 // Threat answers the threat lists: every engaged, living mob is on a bot's list.
 func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.ThreatReport{}, err
+	}
 	if f.CallDelay > 0 {
 		f.Clock.Advance(f.CallDelay)
 	}
@@ -399,6 +518,9 @@ func (f *Fake) botAt(g wire.GUID) string {
 
 // Order answers one order and records it.
 func (f *Fake) Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.OrderReport{}, err
+	}
 	if f.CallDelay > 0 {
 		f.Clock.Advance(f.CallDelay)
 	}
@@ -434,18 +556,33 @@ func (f *Fake) Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderRep
 
 // Party answers the roster.
 func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.PartyReport{}, err
+	}
 	if err := f.linkErr(); err != nil {
 		return tbcmd.PartyReport{}, err
 	}
-	rep := tbcmd.PartyReport{Leader: f.cfg.Tank(), Commander: f.cfg.Commander, Count: len(f.bots), Bots: len(f.bots)}
-	for i, name := range f.cfg.Party {
+	// A watch's party is commanded by the module's own bot, outside the party; a run's by this character.
+	commander := f.cfg.Commander
+	if f.cfg.Watch && f.BotCommander != "" {
+		commander = f.BotCommander
+	}
+	leader := f.cfg.Tank()
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	rep := tbcmd.PartyReport{Leader: leader, Commander: commander, Count: len(f.bots), Bots: len(f.bots)}
+	for _, name := range f.cfg.Party {
 		b := f.bots[name]
 		rep.Members = append(rep.Members, tbcmd.PartyMember{
-			Name: b.name, Leader: i == 0, Online: true, Bot: true, HasBot: true,
+			Name: b.name, Leader: strings.EqualFold(name, leader), Online: true, Bot: true, HasBot: true,
 			Class: b.class, HasClass: true, Level: b.level, HasLevel: true,
 			Role: b.role, HasRole: true, Engine: b.engine, HasEngine: true,
-			Master: f.cfg.Commander, HasMaster: true, Commanded: true, HasCmd: true,
+			Master: commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
 		})
+	}
+	if f.OnParty != nil {
+		rep = f.OnParty(rep)
 	}
 	return rep, nil
 }
@@ -453,6 +590,9 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 // Act answers one typed setup action from the scripted world. The default applies the action's effect; OnAction
 // answers it first when a scenario needs its own script, and RefuseActions answers it with the module's error line.
 func (f *Fake) Act(ctx context.Context, a Action) (ActionReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return ActionReport{}, err
+	}
 	if f.CallDelay > 0 {
 		f.Clock.Advance(f.CallDelay)
 	}
@@ -461,14 +601,444 @@ func (f *Fake) Act(ctx context.Context, a Action) (ActionReport, error) {
 	}
 	f.ordered = append(f.ordered, Order{At: f.Clock.Now().Sub(f.Start), Who: a.who(), Verb: "action", Arg: a.String()})
 	f.acted = append(f.acted, a)
+	if err := f.dropped(actionDropName(a.Kind)); err != nil {
+		return ActionReport{}, err
+	}
 	if code := f.RefuseActions[a.Kind]; code != "" {
 		return ActionReport{}, &tbcmd.CommandError{Code: code, Cmd: a.String()}
 	}
 	if f.OnAction != nil && f.OnAction(f, a) {
 		return ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}, nil
 	}
+	if a.isRunAction() {
+		return f.runAction(a)
+	}
 	f.defaultAction(a)
-	return ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}, nil
+	out := ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}
+	if a.Kind == ActionInstanceInfo {
+		info := tbcmd.InstanceInfoReport{Bosses: append([]tbcmd.InstanceBoss(nil), f.InstanceBosses...)}
+		info.Count, info.Records = len(info.Bosses), len(info.Bosses)
+		out.Info = &info
+		if f.run != nil {
+			f.run.bosses = nil
+			for _, b := range info.Bosses {
+				f.run.bosses = append(f.run.bosses, tbcmd.RunBoss(b))
+			}
+		}
+	}
+	return out, nil
+}
+
+// actionDropName is the DropOn name of an action kind.
+func actionDropName(k ActionKind) string {
+	switch k {
+	case ActionRunStart:
+		return "runstart"
+	case ActionRunStop:
+		return "runstop"
+	case ActionRunPause:
+		return "runpause"
+	case ActionRunResume:
+		return "runresume"
+	case ActionRevive:
+		return "revive"
+	case ActionInstanceInfo:
+		return "instance"
+	}
+	return ""
+}
+
+// dropped kills the link once, on the named call.
+func (f *Fake) dropped(name string) error {
+	if name == "" || f.DropOn != name {
+		return nil
+	}
+	f.DropOn = ""
+	f.linkLost = true
+	return ErrLinkLost
+}
+
+// runAction answers the module's run commands over the scripted run.
+func (f *Fake) runAction(a Action) (ActionReport, error) {
+	switch a.Kind {
+	case ActionRunStart:
+		if err := f.startRun(a); err != nil {
+			return ActionReport{}, err
+		}
+	case ActionRunStop:
+		if err := f.stopRun(a); err != nil {
+			return ActionReport{}, err
+		}
+	case ActionRunPause:
+		if err := f.pauseRun(a); err != nil {
+			return ActionReport{}, err
+		}
+	case ActionRunResume:
+		if err := f.resumeRun(); err != nil {
+			return ActionReport{}, err
+		}
+	}
+	rep := ActionReport{Verb: "run", Confirmed: true, Count: 1}
+	if f.NoRunRecord {
+		return ActionReport{Verb: "run", Confirmed: true}, nil
+	}
+	if f.run != nil {
+		st := f.runState()
+		rep.Run = &st
+	}
+	return rep, nil
+}
+
+// startRun creates the scripted run and schedules its progress.
+func (f *Fake) startRun(a Action) error {
+	if f.run != nil && (f.run.state == "running" || f.run.state == "paused") {
+		return &tbcmd.CommandError{Code: "already-running", Cmd: "run"}
+	}
+	if len(f.cfg.Party) == 0 {
+		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
+	}
+	// The module's run starts on the bot that leads the party; the watch also accepts the tank, whose party keeps
+	// the tank first. A start on any other bot is the module's not-leader.
+	leader := f.cfg.Party[0]
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	if !strings.EqualFold(a.Who, f.cfg.Party[0]) && !strings.EqualFold(a.Who, leader) {
+		return &tbcmd.CommandError{Code: "not-leader", Cmd: "run"}
+	}
+	if a.Plan != f.route.Name {
+		return &tbcmd.CommandError{Code: "no-plan", Cmd: "run"}
+	}
+	sc := f.RunScript
+	if sc.Steps <= 0 {
+		sc.Steps = 12
+	}
+	r := &fakeRun{
+		lead: a.Who, plan: a.Plan, state: "running", steps: sc.Steps, pulls: sc.Pulls, phase: "begin",
+		note: "started", legName: "leg0", kind: "move", started: f.Clock.Now(),
+	}
+	if len(f.route.Legs) > 0 {
+		r.legName = f.route.Legs[0].Name
+	}
+	f.run = r
+	f.runEvent("start", 0, 0, 0, "")
+	if !sc.Silent {
+		every := sc.ProgressEvery
+		if every <= 0 {
+			every = 3 * time.Second
+		}
+		f.Clock.After(every, f.runTick)
+		if sc.WipeAt > 0 {
+			f.Clock.After(sc.WipeAt, f.runWipe)
+		}
+		if sc.DoneAt > 0 {
+			f.Clock.After(sc.DoneAt, f.runDone)
+		}
+		for _, d := range sc.Deaths {
+			d := d
+			f.Clock.After(d.After, func() { f.runDeath(d.Unit) })
+		}
+		if sc.StopAt > 0 {
+			f.Clock.After(sc.StopAt, f.runStopSelf)
+		}
+	}
+	return nil
+}
+
+// stopRun ends the scripted run, at once or after StopDelay (a stop pending on a fight).
+func (f *Fake) stopRun(a Action) error {
+	if f.run == nil || f.run.state == "stopped" || f.run.state == "done" {
+		return &tbcmd.CommandError{Code: "not-running", Cmd: "run"}
+	}
+	why := a.Reason
+	if why == "" {
+		why = "stopped by .tb run stop"
+	}
+	if f.StopDelay > 0 && f.run.state == "running" {
+		f.Clock.After(f.StopDelay, func() {
+			if f.run != nil && f.run.state != "done" {
+				f.run.state, f.run.why, f.run.note = "stopped", why, why
+				f.runEvent("stop", f.run.step, f.run.leg, 0, why)
+			}
+		})
+		return nil
+	}
+	f.run.state, f.run.why, f.run.note = "stopped", why, why
+	f.runEvent("stop", f.run.step, f.run.leg, 0, why)
+	return nil
+}
+
+// pauseRun pauses a running scripted run.
+func (f *Fake) pauseRun(a Action) error {
+	if f.run == nil || f.run.state != "running" {
+		return &tbcmd.CommandError{Code: "not-running", Cmd: "run"}
+	}
+	f.run.why = "paused: " + a.Reason
+	f.run.note = f.run.why
+	f.run.phase = "wait"
+	f.run.state = "paused"
+	f.run.pauses++
+	f.runEvent("pause", f.run.step, f.run.leg, 0, f.run.why)
+	return nil
+}
+
+// resumeRun restarts a paused scripted run.
+func (f *Fake) resumeRun() error {
+	if f.run == nil || f.run.state != "paused" {
+		return &tbcmd.CommandError{Code: "not-paused", Cmd: "run"}
+	}
+	f.run.state, f.run.why, f.run.note, f.run.phase = "running", "", "resumed", "walk"
+	f.runEvent("resume", f.run.step, f.run.leg, 0, "")
+	if f.RunScript.ProgressEvery > 0 && !f.RunScript.Silent {
+		f.Clock.After(f.RunScript.ProgressEvery, f.runTick)
+	}
+	return nil
+}
+
+// runTick advances the scripted run one step. A run held on HoldAt stays there and re-pulls it: the pack it cannot
+// clear.
+func (f *Fake) runTick() {
+	r := f.run
+	if r == nil || r.state != "running" {
+		return
+	}
+	sc := f.RunScript
+	if sc.HoldAt > 0 && r.step >= sc.HoldAt {
+		r.step = sc.HoldAt
+		r.kind, r.phase = "pull", "pull"
+		if r.pull < r.pulls {
+			r.pull++
+		}
+		f.runEvent("pull", r.step, r.leg, 0, "")
+	} else {
+		r.step++
+		if r.step > r.steps {
+			r.step = r.steps
+		}
+		if len(f.route.Legs) > 0 {
+			r.leg = r.step % len(f.route.Legs)
+			r.legName = f.route.Legs[r.leg].Name
+		}
+		if r.step%3 == 0 {
+			r.kind, r.phase = "pull", "pull"
+			if r.pull < r.pulls {
+				r.pull++
+			}
+			f.runEvent("pull", r.step, r.leg, 0, "")
+		} else {
+			r.kind, r.phase = "move", "walk"
+			f.runEvent("step", r.step, r.leg, 0, "")
+		}
+	}
+	if every := sc.ProgressEvery; every > 0 && r.state == "running" && (sc.HoldAt > 0 || r.step < r.steps) {
+		f.Clock.After(every, f.runTick)
+	}
+}
+
+// runDeath is one scripted member death.
+func (f *Fake) runDeath(unit uint32) {
+	r := f.run
+	if r == nil || r.state != "running" {
+		return
+	}
+	r.deaths++
+	f.runEvent("death", r.step, r.leg, unit, "")
+}
+
+// runStopSelf stops the scripted run itself, with the script's reason.
+func (f *Fake) runStopSelf() {
+	r := f.run
+	if r == nil || r.state == "stopped" || r.state == "done" {
+		return
+	}
+	why := f.RunScript.StopWhy
+	if why == "" {
+		why = "stopped by the module"
+	}
+	r.state, r.phase, r.note, r.why = "stopped", "hold", why, why
+	f.runEvent("stop", r.step, r.leg, 0, why)
+}
+
+// runWipe is the scripted wipe: the whole party down, the run paused on it.
+func (f *Fake) runWipe() {
+	r := f.run
+	if r == nil || r.state == "stopped" || r.state == "done" {
+		return
+	}
+	r.state, r.phase = "paused", "wait"
+	r.deaths = 5
+	r.wipes++
+	r.pauses++
+	r.why = "wipe: the party is down"
+	r.note = r.why
+	f.wipeFlag = true
+	for i := range f.cfg.Party {
+		if g, ok := f.guidOf[f.cfg.Party[i]]; ok && g.Low <= math.MaxUint32 {
+			f.runEvent("death", r.step, r.leg, uint32(g.Low), "")
+		}
+	}
+	f.runEvent("wipe", r.step, r.leg, 0, "")
+	f.runEvent("pause", r.step, r.leg, 0, r.why)
+}
+
+// RunWipeAlone is a wipe the module does not pause on: the party goes down, the module raises it at once (a revive
+// event) and the run goes on. It is the wipe whose pause is not the next thing that happens.
+func (f *Fake) RunWipeAlone() {
+	r := f.run
+	if r == nil || r.state == "stopped" || r.state == "done" {
+		return
+	}
+	r.deaths = 5
+	r.wipes++
+	f.wipeFlag = true
+	f.runEvent("wipe", r.step, r.leg, 0, "")
+	r.deaths = 0
+	f.runEvent("revive", r.step, r.leg, 0, "")
+}
+
+// RunPauseSelf pauses the module's run with the module's own reason: no player's action, so no watcher's pause either.
+func (f *Fake) RunPauseSelf(why string) {
+	r := f.run
+	if r == nil || r.state != "running" {
+		return
+	}
+	r.state, r.phase = "paused", "wait"
+	r.pauses++
+	r.why = why
+	r.note = why
+	f.runEvent("pause", r.step, r.leg, 0, why)
+}
+
+// runDone is the scripted end.
+func (f *Fake) runDone() {
+	r := f.run
+	if r == nil || r.state == "stopped" {
+		return
+	}
+	r.state, r.phase, r.note = "done", "hold", "done"
+	r.why = ""
+	f.runEvent("done", r.step, r.leg, 0, "")
+}
+
+// runEvent appends one event to the scripted run's ring.
+func (f *Fake) runEvent(kind string, step, leg int, unit uint32, why string) {
+	r := f.run
+	if r == nil {
+		return
+	}
+	r.seq++
+	ev := tbcmd.RunEvent{Seq: r.seq, T: int(f.Clock.Now().Sub(r.started).Seconds()), Kind: kind, Why: why}
+	if step > 0 || kind != "start" {
+		ev.Step, ev.HasStep = step, true
+	}
+	if leg > 0 || kind != "start" {
+		ev.Leg, ev.HasLeg = leg, true
+	}
+	if unit > 0 {
+		ev.Unit, ev.HasUnit = unit, true
+	}
+	r.events = append(r.events, ev)
+}
+
+// runState is the current run record.
+func (f *Fake) runState() tbcmd.RunState {
+	r := f.run
+	st := tbcmd.RunState{
+		Lead: r.lead, Plan: r.plan, State: r.state, Step: r.step, Steps: r.steps,
+		Leg: r.leg, HasLeg: true, LegName: r.legName, HasLegN: true, Kind: r.kind, HasKind: true,
+		Phase: r.phase, Note: r.note, Pull: r.pull, Pulls: r.pulls, Bosses: append([]tbcmd.RunBoss(nil), r.bosses...),
+		Deaths: r.deaths, Wipes: r.wipes, Pauses: r.pauses, Elapsed: int(f.Clock.Now().Sub(r.started).Seconds()),
+		Why: r.why, HasWhy: r.why != "", Ev: r.seq,
+	}
+	if r.state == "done" || r.state == "stopped" || r.step >= r.steps {
+		// Past the last step the record carries no step description.
+		st.HasLeg, st.HasLegN, st.HasKind = false, false, false
+	}
+	if r.seq > 0 {
+		st.HasEv = true
+	}
+	return st
+}
+
+// RunStatus reads the scripted module's run record.
+func (f *Fake) RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.RunReport{}, err
+	}
+	if f.StatusBlock > 0 {
+		t := time.NewTimer(f.StatusBlock)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return tbcmd.RunReport{}, ctx.Err()
+		case <-t.C:
+		}
+	}
+	if f.CallDelay > 0 {
+		f.Clock.Advance(f.CallDelay)
+	}
+	if err := f.linkErr(); err != nil {
+		return tbcmd.RunReport{}, err
+	}
+	if err := f.dropped("status"); err != nil {
+		return tbcmd.RunReport{}, err
+	}
+	if f.run == nil || !strings.EqualFold(f.run.lead, leader) {
+		return tbcmd.RunReport{}, &tbcmd.CommandError{Code: "no-run", Cmd: "run"}
+	}
+	rep := tbcmd.RunReport{Runs: []tbcmd.RunState{f.runState()}, Verb: "status", End: map[string]string{}}
+	if f.run.state == "running" && f.StopDelay > 0 {
+		rep.Pending, rep.HasPending = true, true
+	}
+	return rep, nil
+}
+
+// RunEvents reads the scripted module's event ring above a sequence.
+func (f *Fake) RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.RunEventsReport{}, err
+	}
+	if f.CallDelay > 0 {
+		f.Clock.Advance(f.CallDelay)
+	}
+	if err := f.linkErr(); err != nil {
+		return tbcmd.RunEventsReport{}, err
+	}
+	if err := f.dropped("events"); err != nil {
+		return tbcmd.RunEventsReport{}, err
+	}
+	if f.FailEvents != nil {
+		return tbcmd.RunEventsReport{}, f.FailEvents
+	}
+	if f.run == nil || !strings.EqualFold(f.run.lead, leader) {
+		return tbcmd.RunEventsReport{}, &tbcmd.CommandError{Code: "no-run", Cmd: "run"}
+	}
+	out := tbcmd.RunEventsReport{Lead: f.run.lead, Verb: "events", End: map[string]string{}}
+	for _, ev := range f.run.events {
+		if hasSince && ev.Seq <= since {
+			continue
+		}
+		out.Events = append(out.Events, ev)
+	}
+	if f.run.seq > 0 {
+		out.Last, out.HasLast = f.run.seq, true
+	}
+	return out, nil
+}
+
+// Acted is every setup action the fake answered, in order.
+func (f *Fake) Acted() []Action { return append([]Action(nil), f.acted...) }
+
+// PartyNames is the scripted party's names, tank first.
+func (f *Fake) PartyNames() []string { return append([]string(nil), f.cfg.Party...) }
+
+// RunRecord is the scripted module's run, nil before a start.
+func (f *Fake) RunRecord() *tbcmd.RunState {
+	if f.run == nil {
+		return nil
+	}
+	st := f.runState()
+	return &st
 }
 
 // actionVerb is the word the module answers an action with.
@@ -530,6 +1100,7 @@ func (f *Fake) defaultAction(a Action) {
 			for _, b := range f.bots {
 				b.dead, b.life, b.hp = false, "alive", b.hpMax
 			}
+			f.wipeFlag = false
 			return
 		}
 		if b := f.bots[a.Who]; b != nil {
@@ -648,6 +1219,17 @@ func (f *Fake) LoseLinkAt(d time.Duration) {
 	f.hasLinkAfter = true
 }
 
+// ctxErr is the context's own error, answered the way the real client's command queue answers a call made after its
+// context ended: the line never leaves, so a fake port that ignored the context would prove a stop reaches the
+// module although the live client would drop it.
+func ctxErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
+// linkErr is the link's own error, before any answer.
 func (f *Fake) linkErr() error {
 	if f.linkLost {
 		return ErrLinkLost

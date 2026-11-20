@@ -433,6 +433,16 @@ func TestParseEvent(t *testing.T) {
 	if _, err := ParseEvent([]string{"error", "42", "auth"}); !errors.Is(err, ErrProtoMismatch) {
 		t.Fatalf("a short event: %v", err)
 	}
+	// The bot id is a number: a word or a negative one is a frame this client cannot read, not bot 0 or a wrapped
+	// uint32 (which would never match the request's own id).
+	for _, id := range []string{"x", "-1", "1x", ""} {
+		if _, err := ParseEvent([]string{"error", id, "auth", "not your bot"}); !errors.Is(err, ErrProtoMismatch) {
+			t.Fatalf("bot id %q: %v", id, err)
+		}
+	}
+	if e, err := ParseEvent([]string{"info", "0", "login", "no bot"}); err != nil || e.BotID != 0 {
+		t.Fatalf("bot id 0 names no bot: %+v %v", e, err)
+	}
 }
 
 func FuzzParsePart(f *testing.F) {

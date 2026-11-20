@@ -2,9 +2,9 @@ package game_test
 
 import "github.com/pjerra/forever-agent/internal/opcode"
 
-// Packets from the live run of #61 (m910q, TortoiseBots build 17), recorded with
+// Packets from the live run of #61 (test1, TortoiseBots build 17), recorded with
 // `forever-agent login --capture` and read back with the capture reader. They come from
-// tests/ta61/agent.cap and agent2.cap under ~/TortoiseBots-audit; #N is the record index.
+// the ta61 captures (agent.cap and agent2.cap); #N is the record index.
 // The captures pass `forever-agent scrub-check` against the test settings, and none of these
 // packets carries a player or account name: the only text is NPC greetings, quest text
 // ($N stays a placeholder), trainer greetings and a guid of the test character (0x207).

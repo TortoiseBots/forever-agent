@@ -11,7 +11,7 @@ import (
 // chars is still rejected.
 func TestCheckDBQueryExpandsCharVar(t *testing.T) {
 	f, err := Parse([]byte(`{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
-		"db":{"host":"m910q","container":"tortoise-db"},
+		"db":{"host":"test1","container":"tortoise-db"},
 		"steps":[
 			{"do":"check_db","item":{"char":"${A.character}","entry":9240},"count":0},
 			{"do":"check_db","item":{"chars":["${A.character}"],"entry":9240},"count":0}

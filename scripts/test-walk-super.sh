@@ -658,9 +658,9 @@ case17() {
 case18() {
   local d="$T/c18" rc line golden want
   mkdir -p "$d"
-  printf '"%s" raid-walk zul_gurub --server tortoise-test2 --dir /home/perzi/wt-ta-integ-1102a/dungeons --hires /tmp/roster.json --auto-resume 1 --wipe-resume 3 --wipe-rest 5m --paused-wait 10m --sql /tmp/world.sql --slot 1 --holder zg28-a --from "leg high_priestess_arlokk" --place --until "boss-done" --max-run-minutes 240 --out %s\n' \
+  printf '"%s" raid-walk zul_gurub --server test2 --dir /tmp/wt-ta-integ-1102a/dungeons --hires /tmp/roster.json --auto-resume 1 --wipe-resume 3 --wipe-rest 5m --paused-wait 10m --sql /tmp/world.sql --slot 1 --holder zg28-a --from "leg high_priestess_arlokk" --place --until "boss-done" --max-run-minutes 240 --out %s\n' \
     "$T/fake-walk" "$d/a" >"$d/cmd.txt"
-  local -a expect=(raid-walk zul_gurub --server tortoise-test2 --dir /home/perzi/wt-ta-integ-1102a/dungeons --hires /tmp/roster.json --auto-resume 1 --wipe-resume 3 --wipe-rest 5m --paused-wait 10m --sql /tmp/world.sql --slot 1 --holder zg28-a --from "leg high_priestess_arlokk" --place --until boss-done --max-run-minutes 240 --out "$d/a")
+  local -a expect=(raid-walk zul_gurub --server test2 --dir /tmp/wt-ta-integ-1102a/dungeons --hires /tmp/roster.json --auto-resume 1 --wipe-resume 3 --wipe-rest 5m --paused-wait 10m --sql /tmp/world.sql --slot 1 --holder zg28-a --from "leg high_priestess_arlokk" --place --until boss-done --max-run-minutes 240 --out "$d/a")
   want="$(printf '%q ' "${expect[@]}")"
   golden="$(eval "set -- $(cat -- "$d/cmd.txt")"; shift; printf '%q ' "$@")"
   [[ "$golden" == "$want" ]] || { bad "case18 setup: literal argv disagrees with the old eval parse"; return; }

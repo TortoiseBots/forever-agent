@@ -18,11 +18,14 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Chat and party (round 5) | **Works** (`forever-agent forever chat-check` and `forever party-check`: say, yell, whisper, party and emote text out; `SMSG_CHAT` in, the notification/`MOTD` lines, and the invite/accept/update/member-state/leave flow with a bounded party model; see [docs/forever/CHAT-R1-NOTES.md](docs/forever/CHAT-R1-NOTES.md)) |
 | Add-on messages (round A0) | **Works** (`forever-agent forever addon-check`: prefix registration, one add-on message on party, raid, instance, guild, officer or whisper, the receive filter and bounded inbox; a channel message is received and classified but sending on a channel is not supported yet; see [docs/forever/ADDON-R1-NOTES.md](docs/forever/ADDON-R1-NOTES.md)) |
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
+| Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
 | Roster dashboard (rounds DASH-1/2) | **Client and watch; no live run yet** (`forever-agent forever dash-bots`: the typed login, the logged-in bots and the heartbeat, and a watch that reports a death, a stuck bot, a lone fight and a bot far from its group; plain http only on loopback unless the explicit flag allows it; the dungeon watch can take the same client and rules; see [docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md) and [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
+| Dungeon watcher (round S7) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-watch`: PREPARE and ENTER as a run, then one typed `.tb run start`, after which the client never orders a bot — it polls the module's run status and event ring at a stated interval and prints progress, with a watchdog, a time budget, a wipe budget and the practice rescue, and a summary extended with the module's counters — see [docs/forever/WATCH-R1-NOTES.md](docs/forever/WATCH-R1-NOTES.md)) |
+| Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
@@ -174,6 +177,34 @@ reported as `revived by the server`. The summary prints the final phase, the cor
 the character came back, and how many other units the model saw resurrect. `--capture-dir DIR` works as it does for
 chat-check.
 
+`forever-agent forever loot-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION] [--fight-for DURATION]`
+settles for `--stay` seconds, finds the nearest lootable target within `--range` (default 30 yd): a dead creature of
+`--entry`, or a chest when no entry is given. A chest is only opened when the choice is unambiguous: more than one
+game object of its entry in range and no `--at` is a refusal (exit 12, nothing opened, each one listed by position
+and distance), and `--at x,y,z` picks the one nearest that point within `--at-range` (default 2 yd). A living
+creature of `--entry` is killed first (the fight round's own flow), then looted. The window is opened with `CMSG_LOOT_UNIT` for a creature and with `CMSG_GAME_OBJ_USE` for a
+game object, followed by `CMSG_GAME_OBJ_REPORT_USE` as a real client does; the command prints the method, the
+threshold, the copper, one row per item (slot, id, count, slot type, whether it needs a roll) and every group roll
+(it sends `CMSG_LOOT_ROLL` only when `--roll` names a vote and the roll's own vote mask allows it, so need is never
+sent unasked). It then takes the money (`CMSG_LOOT_MONEY` unless `--money=false`), takes the items the window allows
+(up to `--take`, 0 meaning all), releases with `CMSG_LOOT_RELEASE` and prints what the server removed and whether
+the release was confirmed. A run that ends after a window was accepted but before its own release (its deadline, a
+parse error, a failed send) still gives the window back: one release is sent on a cleanup context of its own (10 s),
+and a failure of that cleanup is printed separately from the run's own error. A refused window is a named error
+(`there is no loot`, `you are too far away`, ...); a creature with nothing to loot is answered with silence by this
+core, which the command reports as "no loot window". A roll's result is waited for as long as the start allows plus
+3 s, capped at 90 s: the start's own time is the server's choice, and the core's own roll timeout is one minute.
+
+`forever-agent forever object-use --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME --entry N [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION]`
+settles, looks for the game objects of that entry within `--range` (default 40 yd), records the object's state and
+flags, sends `CMSG_GAME_OBJ_USE` (and the report-use packet a real client follows with) and prints the state and
+flags after the object's own values update — a door or lever reads ready (closed) before and active (open) after; a
+chest also opens a loot window, which is read and released without taking anything. When more than one object of the
+entry is in range the command refuses to guess: it lists them (position and distance only, no identifiers), sends
+no use and exits 12, so a script does not walk up to somebody else's door. `--at x,y,z` chooses the in-range object
+nearest that point within `--at-range` (default 2 yd); a miss is a named error. One object in range keeps working
+without `--at`.
+
 `forever-agent forever cmd-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 sends chat-command lines on purpose: each `--line TEXT` (repeatable, sent in order, e.g. `--line ".server info"`)
 goes out as a say line that starts with `.`, and the system lines the server answers with are printed as `cmd-r:`
@@ -255,7 +286,8 @@ instance, walked along the plan's legs, its packs pulled one at a time and reste
 output is the order list and the state sequence, and `--out DIR` also writes the run's bt-trace and its
 `<run_id>.forever-run.json` summary (named by the plan's dungeon id, never by a path or a character name).
 `--from-leg`, `--legs a,b`, `--enter tele|portal|none`, `--reset`, `--max-minutes`, `--max-wipes` and `--practice`
-narrow a run. Every plan field the driver does not run is refused before anything is sent, with the field's path, and
+narrow a run; `--max-wipes N` is the wipe budget (the Nth wipe ends the run, `0` allows no wipe at all, `-1` is no
+budget). Every plan field the driver does not run is refused before anything is sent, with the field's path, and
 the command exits 2; the loader test records, per file under `dungeons/`, whether it loads or which fields refuse it,
 and no shipped plan loads today. The dry walker is a straight line and the fights are scripted: it proves the
 machine's order list and a plan's shape, not the game.
@@ -289,6 +321,48 @@ watch), 2 usage. The rules, the API shape the client accepts and the live steps 
 [docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md), and the round-2 fixes (the http boundary, the
 required fields, the one login for concurrent 401s and the size cap) in
 [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md).
+
+`forever-agent forever dungeon-watch --leader NAME --plan PLAN.json --character NAME`
+watches a run a server module that runs dungeon plans leads by itself. The party is the module's own: its bot
+commander stands outside it and the tank leads, while this character is only an outside GM observer and never the
+party's commander or a member. The client does what a run does up to the entry (PREPARE checks the roster — the tank
+is the party's leader or the bot the run names — then the portal or the teleport, with the same gates), starts the
+module's run with one typed command, and from then on sends no order — an order would pause the run. A setup
+answer that names the party it resolved (`target=party:commander:<name>`, `target=party:<tank>`) is read as the
+success it is, the observer teleports on its own, and the same-map check compares the party's map with the plan's,
+not the observer's. A plan that carries the format's in-fight run fields (`kill_first`, `cc_priority`, `cc_always`,
+`tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the module's run. Every `--poll` seconds
+(default 2, at most 30) it reads the module's run record and its event ring, prints the progress (state, step,
+leg, pulls, deaths, wipes, each pause with its reason) and the bosses the instance report gives, and keeps four
+safety budgets: a watchdog (`--watchdog-minutes`, default 10) that pauses a run whose event ring stopped
+growing and ends the watch; a time budget (`--max-minutes`); a wipe budget (`--max-wipes N`: the (N+1)th wipe
+ends the watch, `0` allows no wipe at all and `-1` is no budget); and the practice rescue, which, when a run
+has been paused on a wipe for 300 s, sends one practice `revive party` and one checked `resume`, at most eight times. The rescue fires only for the
+wipe's own pause: the pause event right after the wipe whose reason names the wipe or the dead party, never a later
+pause for another reason. A status read and an event read each keep their own blind rule: three failed reads of the
+same kind and 30 s without a good one end the watch with `blind`, whichever read it is, and every end logs its
+reason — a blind one names the last read error it saw. At the end it sends a stop
+(a run that ended by itself needs none), waits (bounded) for the module's state to reach stopped, and writes the
+run's usual trace and `<run_id>.forever-run.json` summary with a `watch` block holding the module's own counters,
+the per-leg and per-step evidence, the deaths and the pauses. The stop and that wait run on a context detached from
+the caller's: an interrupt or the caller's deadline still lets the module receive the stop, and the phase is bounded
+by 600 s on the run's clock and 600 s of real time when the watch ended on its own, but by 60 s in total after an
+interrupt or the caller's deadline (each call by 10 s); when the run has not reached stopped by then the result and
+the summary say the stop was not confirmed (`stop_unconfirmed`). The same block is what the
+report card reads: after every run the watch writes `<run_id>.report-card.txt` and its JSON beside the summary and
+prints the verdict, so a weak spot is found without a person reading the log. A lost link ends the watch at once
+(exit 7); `--dry` runs the whole watch over the scripted module's run. The live mode has not been run against a
+server yet; the last section of the round's notes is the order of the first checks.
+
+`forever-agent forever run-report RECORD [--json] [--out DIR]`
+builds the card of a saved `<run_id>.forever-run.json` offline and prints it; `--json` prints the machine-readable
+card (stable field names, the thresholds it was built with, one entry per leg, the deaths and pauses, and the flags
+with their evidence), `--out DIR` writes the `.report-card.txt` and `.json` there, and `--repulls`, `--member-deaths`
+and `--slow-factor` change the three thresholds (defaults: more than 2 re-pulls at one step, one member with at least
+3 deaths and 2 more than the next, and a leg over 2× the plan's recorded time). `forever-agent forever run-report
+--compare A B` takes two cards or two records and prints what got better or worse per leg (seconds, pulls,
+re-pulls, deaths, wipes) and per flag. The plan's recorded leg time is read from the record when it carries one;
+today's plan format records none, so the slow-leg flag stays quiet until a record has it.
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

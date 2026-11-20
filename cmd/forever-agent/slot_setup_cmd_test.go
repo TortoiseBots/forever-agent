@@ -25,9 +25,9 @@ func slotSetupTestEnv(t *testing.T) (slotsPath, srcPath, home string) {
 	if err := os.WriteFile(srcPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	table := `{"version":1,"servers":[{"name":"m910q","realmd":"100.78.24.50:3724","slots":[
+	table := `{"version":1,"servers":[{"name":"test1","realmd":"100.78.24.50:3724","slots":[
 		{"id":"1","account":"TESTACC","character":"Gbmage","other_characters":["Gbrother"],"port":28771,"settings_from":"SRC"},
-		{"id":"3","reserved":"owner rule: never slot 3 on m910q"}]}]}`
+		{"id":"3","reserved":"owner rule: never slot 3 on test1"}]}]}`
 	table = strings.ReplaceAll(table, "SRC", srcPath)
 	slotsPath = filepath.Join(cfgDir, "slots.json")
 	if err := os.WriteFile(slotsPath, []byte(table), 0o600); err != nil {
@@ -38,7 +38,7 @@ func slotSetupTestEnv(t *testing.T) (slotsPath, srcPath, home string) {
 
 func slotSetupAcquire(t *testing.T, slotsPath, holder string) {
 	t.Helper()
-	if code, _, errOut := runCLI("lease", "acquire", "m910q", "--slot", "1", "--holder", holder, "--slots", slotsPath); code != exitOK {
+	if code, _, errOut := runCLI("lease", "acquire", "test1", "--slot", "1", "--holder", holder, "--slots", slotsPath); code != exitOK {
 		t.Fatalf("acquire: %d %q", code, errOut)
 	}
 }
@@ -51,7 +51,7 @@ func TestSlotSetupPrintsNoSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "client")
-	code, out, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	code, out, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -62,7 +62,7 @@ func TestSlotSetupPrintsNoSecret(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("want 5 lines, got %q", out)
 	}
-	if lines[0] != "slot m910q/1 ready in "+dir {
+	if lines[0] != "slot test1/1 ready in "+dir {
 		t.Fatalf("line 1: %q", lines[0])
 	}
 	if lines[1] != "account TESTACC, character Gbmage, port 28771" {
@@ -109,12 +109,12 @@ func TestSlotSetupNeedsTheLease(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "forever-agent")
 	os.WriteFile(bin, []byte("x"), 0o755)
 	dir := filepath.Join(t.TempDir(), "client")
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
-	if code != exitSlotRefused || !strings.Contains(errOut, "slot setup: m910q/1 is not leased by w-a") {
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	if code != exitSlotRefused || !strings.Contains(errOut, "slot setup: test1/1 is not leased by w-a") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 	slotSetupAcquire(t, slotsPath, "w-zf")
-	code, _, errOut = runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir+"-other", "--binary", bin, "--slots", slotsPath)
+	code, _, errOut = runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir+"-other", "--binary", bin, "--slots", slotsPath)
 	if code != exitSlotRefused {
 		t.Fatalf("other holder: code %d stderr %q", code, errOut)
 	}
@@ -128,7 +128,7 @@ func TestSlotSetupNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	sentinel := filepath.Join(dir, "keep.txt")
 	os.WriteFile(sentinel, []byte("keep"), 0o600)
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
 	if code != exitUsage || !strings.Contains(errOut, "exists and is not empty") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -144,7 +144,7 @@ func TestSlotSetupSetsStateDir(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "forever-agent")
 	os.WriteFile(bin, []byte("x"), 0o755)
 	dir := filepath.Join(t.TempDir(), "client")
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -174,19 +174,19 @@ func TestSlotSetupTakeoverBeforeWriteLeavesNothing(t *testing.T) {
 			panic(err)
 		}
 		st := slots.NewStore(cfg, slotsPath)
-		cur, err := st.Get("m910q", "1")
+		cur, err := st.Get("test1", "1")
 		if err != nil {
 			panic(err)
 		}
-		if _, err := st.Release("m910q", "1", cur.Holder, cur.LeaseID, true); err != nil {
+		if _, err := st.Release("test1", "1", cur.Holder, cur.LeaseID, true); err != nil {
 			panic(err)
 		}
-		if _, err := st.Acquire("m910q", "1", false, "w-zf", 3*time.Hour); err != nil {
+		if _, err := st.Acquire("test1", "1", false, "w-zf", 3*time.Hour); err != nil {
 			panic(err)
 		}
 	}
 	defer func() { slotSetupPreWriteHook = oldHook }()
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
 	if code != exitSlotRefused {
 		t.Fatalf("takeover: code %d stderr %q, want %d", code, errOut, exitSlotRefused)
 	}
@@ -207,7 +207,7 @@ func TestSlotSetupFailureMidwayCleansDir(t *testing.T) {
 	slotsPath, _, _ := slotSetupTestEnv(t)
 	slotSetupAcquire(t, slotsPath, "w-a")
 	dir := filepath.Join(t.TempDir(), "client")
-	code, _, _ := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir,
+	code, _, _ := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir,
 		"--binary", filepath.Join(t.TempDir(), "no-such-binary"), "--slots", slotsPath)
 	if code != exitUsage {
 		t.Fatalf("code %d, want %d", code, exitUsage)
@@ -246,19 +246,19 @@ func TestSlotSetupExternalDungeonsSurvivesFailure(t *testing.T) {
 			panic(err)
 		}
 		st := slots.NewStore(cfg, slotsPath)
-		cur, err := st.Get("m910q", "1")
+		cur, err := st.Get("test1", "1")
 		if err != nil {
 			panic(err)
 		}
-		if _, err := st.Release("m910q", "1", cur.Holder, cur.LeaseID, true); err != nil {
+		if _, err := st.Release("test1", "1", cur.Holder, cur.LeaseID, true); err != nil {
 			panic(err)
 		}
-		if _, err := st.Acquire("m910q", "1", false, "w-zf", 3*time.Hour); err != nil {
+		if _, err := st.Acquire("test1", "1", false, "w-zf", 3*time.Hour); err != nil {
 			panic(err)
 		}
 	}
 	defer func() { slotSetupPreWriteHook = oldHook }()
-	code, _, _ := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-dir", external, "--slots", slotsPath)
+	code, _, _ := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-dir", external, "--slots", slotsPath)
 	if code != exitSlotRefused {
 		t.Fatalf("code %d, want %d", code, exitSlotRefused)
 	}
@@ -285,7 +285,7 @@ func TestSlotSetupRefusesSymlinkDir(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", link, "--binary", bin, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", link, "--binary", bin, "--slots", slotsPath)
 	if code != exitUsage || !strings.Contains(errOut, "symlink") {
 		t.Fatalf("code %d stderr %q, want a symlink refusal", code, errOut)
 	}
@@ -323,7 +323,7 @@ func TestSlotSetupDirSwapBeforeWriteRefused(t *testing.T) {
 		}
 	}
 	defer func() { slotSetupPreWriteHook = oldHook }()
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--slots", slotsPath)
 	if code != exitUsage || !strings.Contains(errOut, "replaced") {
 		t.Fatalf("code %d stderr %q, want a replacement refusal", code, errOut)
 	}
@@ -349,7 +349,7 @@ func TestSlotSetupMmapsDirWritesKey(t *testing.T) {
 	}
 	mmaps := t.TempDir()
 	dir := filepath.Join(t.TempDir(), "client")
-	code, out, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--mmaps-dir", mmaps, "--slots", slotsPath)
+	code, out, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--mmaps-dir", mmaps, "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -380,7 +380,7 @@ func TestSlotSetupMmapsDirMissingRefused(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "client")
 	missing := filepath.Join(t.TempDir(), "no-such-mmaps")
-	code, _, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--mmaps-dir", missing, "--slots", slotsPath)
+	code, _, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--mmaps-dir", missing, "--slots", slotsPath)
 	if code != exitSlotRefused {
 		t.Fatalf("code %d stderr %q, want %d", code, errOut, exitSlotRefused)
 	}
@@ -411,7 +411,7 @@ func TestSlotSetupDungeonsFromCopiesPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "client")
-	code, out, errOut := runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-from", src, "--slots", slotsPath)
+	code, out, errOut := runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-from", src, "--slots", slotsPath)
 	if code == exitOK {
 		t.Fatalf("symlink followed: %q", out)
 	}
@@ -421,7 +421,7 @@ func TestSlotSetupDungeonsFromCopiesPlans(t *testing.T) {
 	if err := os.Remove(filepath.Join(src, "link.json")); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut = runCLI("slot", "setup", "m910q", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-from", src, "--slots", slotsPath)
+	code, out, errOut = runCLI("slot", "setup", "test1", "1", "--holder", "w-a", "--dir", dir, "--binary", bin, "--dungeons-from", src, "--slots", slotsPath)
 	if code != exitOK {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
