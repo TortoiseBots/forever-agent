@@ -169,10 +169,11 @@ func LiveLeaseHolders(dir, server string, now time.Time, probe Probe) ([]string,
 }
 
 type Acquired struct {
-	Lease    Lease
-	Slot     Slot
+	Lease Lease
+	Slot  Slot
+	// TookOver is the stale lease this acquire replaced (nil on a fresh
+	// lease). Renewals never replace: only Renew extends a live lease.
 	TookOver *Lease
-	Renewed  bool
 }
 
 type SlotState struct {
@@ -388,20 +389,14 @@ func (s *Store) acquireLocked(server, slot string, any bool, holder string, ttl 
 	if err != nil {
 		return Acquired{}, err
 	}
-	now := s.Now().UTC()
+	// An explicit same-holder acquire is refused atomically: the first run
+	// keeps its lease ID, so its renewals and release still match. Renewal
+	// of that lease is only through Renew (the walk heartbeat and trials
+	// KeepRenewed), never by acquiring again. Use Renew to extend.
 	if existing != nil && existing.Holder == holder {
-		id, err := newLeaseID()
-		if err != nil {
-			return Acquired{}, err
-		}
-		existing.LeaseID = id
-		existing.Expires = now.Add(ttl)
-		s.stampHolder(existing, now)
-		if err := s.writeLease(existing); err != nil {
-			return Acquired{}, err
-		}
-		return Acquired{Lease: *existing, Slot: *sl, Renewed: true}, nil
+		return Acquired{}, &Refusal{Msg: fmt.Sprintf("%s/%s is already leased by %s (already yours: renew, do not re-acquire)", server, slot, holder)}
 	}
+	now := s.Now().UTC()
 	if existing != nil && !s.isStale(existing) {
 		pid, alive := s.agentAlive(existing.Dir)
 		var tail string

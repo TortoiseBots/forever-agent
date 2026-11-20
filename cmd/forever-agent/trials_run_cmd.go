@@ -63,12 +63,42 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	store.HolderPID = os.Getpid()
 	slot := *slotID
 	anyFree := *anyFlag || slot == ""
-	hold, err := live.AcquireSlot(sf, store, *server, slot, anyFree, *holder, func(dir string) error {
-		_, oerr := openSlotClient(dir)
+	return trialsRunCommand(ctx, sf, store, *server, slot, anyFree, *holder, *out, *repeats, trials, stdout, stderr)
+}
+
+// trialsRunClient builds the serve client for the run path; tests replace
+// it with a fake RPC client (openSlotClient refuses anything but a serve
+// dir built by slot setup, and the run has no live serve in tests). The
+// first call validates the serve dir the way AcquireSlot does; the second
+// call builds the run client over the same dir.
+var trialsRunClient = func(dir string) (live.RPC, error) {
+	c, err := openSlotClient(dir)
+	if err != nil {
+		return nil, err
+	}
+	return slotRPC{c}, nil
+}
+
+// trialsRunScorer replaces the ScoreCard call in tests (it re-scores the out
+// dir from disk, so a fake trials run still exercises the command end to
+// end).
+var trialsRunScorer = func(out string) ([]map[string]any, error) { return live.ScoreCard(out) }
+
+// storeReleaseHook runs inside finish just before Release in tests: the
+// release-failure test uses it to steal the lease, so the command's own
+// Release fails with a lease-id mismatch.
+var storeReleaseHook = func() {}
+
+// trialsRunCommand runs the leased half of `trials run` over an already
+// loaded slots file and store, so tests drive the renewal, abort, and
+// release paths without a live serve.
+func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Store, server, slot string, anyFree bool, holder, out string, repeats int, trials []string, stdout, stderr io.Writer) int {
+	hold, err := live.AcquireSlot(sf, store, server, slot, anyFree, holder, func(dir string) error {
+		_, oerr := trialsRunClient(dir)
 		return oerr
 	})
 	if err != nil {
-		if sameHolder, why := live.SameHolderHeld(store, *server, slot, anyFree, *holder); sameHolder {
+		if sameHolder, why := live.SameHolderHeld(store, server, slot, anyFree, holder); sameHolder {
 			fmt.Fprintf(stderr, "trials run: slot %s held by this holder already: %s\n", slot, why)
 			return 15
 		}
@@ -80,27 +110,33 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "trials run: %v\n", err)
 		return 1
 	}
-	// Release runs first (registered last): done closes before the
-	// lease is freed, so no renewal writes h.Acq.Lease mid-release.
-	// A failed release is a run failure, surfaced at the end.
-	releaseFailed := false
-	defer func() {
-		if err := hold.Release(); err != nil {
-			fmt.Fprintf(stderr, "trials run: release: %v\n", err)
-			releaseFailed = true
-		}
-	}()
+	// The renewal goroutine starts before the run body and stops before the
+	// release: KeepRenewed refreshes the lease every RenewEvery so a run
+	// longer than the TTL keeps its slot, and a renewal failure aborts the
+	// run through Runner.Abort. finish closes done (stopping renewal) before
+	// releasing, so no renewal writes h.Acq.Lease mid-release, and a failed
+	// release is a run failure: finish reports it and returns 1. Every
+	// return below goes through finish, so no deferred Release runs after
+	// the explicit one.
 	done := make(chan struct{})
-	defer close(done)
-
-	c, err := openSlotClient(hold.Dir)
+	finish := func(code int) int {
+		close(done)
+		storeReleaseHook()
+		if rerr := hold.Release(); rerr != nil {
+			fmt.Fprintf(stderr, "trials run: release: %v\n", rerr)
+			return 1
+		}
+		return code
+	}
+	go hold.KeepRenewed(done)
+	rpcClient, err := trialsRunClient(hold.Dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "trials run: %v\n", err)
-		return 1
+		return finish(1)
 	}
 	runner := &live.Runner{
-		Out: live.AbsPath(*out), Server: *server, Label: filepath.Base(live.AbsPath(*out)),
-		Client: live.NewClient(slotRPC{c}), Ledger: live.NewLedger(filepath.Join(live.AbsPath(*out), "ledger.jsonl")),
+		Out: live.AbsPath(out), Server: server, Label: filepath.Base(live.AbsPath(out)),
+		Client: live.NewClient(rpcClient), Ledger: live.NewLedger(filepath.Join(live.AbsPath(out), "ledger.jsonl")),
 		Hold: hold, Setup: &live.DrySetup{}, Situation: &live.DrySituation{},
 		Log: func(line string) { fmt.Fprintln(stderr, line) },
 		Now: time.Now,
@@ -118,8 +154,8 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	runner.Ledger.Add(map[string]any{"kind": "lease", "server": hold.Server,
 		"slot": hold.Slot, "holder": hold.Acq.Lease.Holder, "lease_id": hold.Acq.Lease.LeaseID,
-		"dir": hold.Dir, "ledger": filepath.Join(live.AbsPath(*out), "ledger.jsonl")})
-	n := *repeats
+		"dir": hold.Dir, "ledger": filepath.Join(live.AbsPath(out), "ledger.jsonl")})
+	n := repeats
 	if n < 0 {
 		n = 0
 	}
@@ -130,24 +166,21 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			var d *live.Disconnected
 			if errors.As(terr, &d) {
 				fmt.Fprintf(stderr, "trials run: %v\n", terr)
-				return 5
+				return finish(5)
 			}
 			fmt.Fprintf(stderr, "trials run: %v\n", terr)
-			return 1
+			return finish(1)
 		}
 		ids = append(ids, trial)
 	}
-	if _, err := live.ScoreCard(live.AbsPath(*out)); err != nil {
+	if _, err := trialsRunScorer(live.AbsPath(out)); err != nil {
 		fmt.Fprintf(stderr, "trials run: %v\n", err)
-		return 1
+		return finish(1)
 	}
 	for _, id := range ids {
 		fmt.Fprintf(stdout, "trial %s: done\n", id)
 	}
-	if releaseFailed {
-		return 1
-	}
-	return exitOK
+	return finish(exitOK)
 }
 
 // slotRPC adapts *slotClient to the live.RPC interface (Call with the

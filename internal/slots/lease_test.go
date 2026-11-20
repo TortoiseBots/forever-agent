@@ -234,8 +234,11 @@ func TestReleaseRules(t *testing.T) {
 }
 
 // Item 3 (R2, Codex ABA): every acquisition gets an unguessable lease ID;
-// release with the old ID after a re-acquire by the same holder is refused
-// and the new lease stays.
+// release with a wrong ID is refused and the lease stays. Renewal is only
+// through Renew: a second explicit acquire by the same holder is refused
+// atomically and keeps the first lease ID (Codex trials-a2-r2: the old
+// renew-on-acquire path minted a new ID before refusing, breaking the first
+// run's renewals and release).
 func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	first, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour)
@@ -248,39 +251,35 @@ func TestReleaseWithOldIDAfterReacquire(t *testing.T) {
 	if len(first.Lease.LeaseID) != 32 {
 		t.Fatalf("lease id %q is not 16 bytes hex", first.Lease.LeaseID)
 	}
-	second, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !second.Renewed {
-		t.Fatal("same-holder re-acquire did not renew")
-	}
-	if second.Lease.LeaseID == first.Lease.LeaseID {
-		t.Fatal("re-acquire kept the old lease id")
-	}
-	if _, err := st.Renew("test1", "1", "w-a", first.Lease.LeaseID, 3*time.Hour); err == nil ||
-		!strings.Contains(err.Error(), "lease id mismatch") {
-		t.Fatalf("renew with the old id: got %v, want a lease-id refusal", err)
-	}
-	if _, err := st.Release("test1", "1", "w-a", first.Lease.LeaseID, false); err == nil ||
-		!strings.Contains(err.Error(), "lease id mismatch") {
-		t.Fatalf("release with the old id: got %v, want a lease-id refusal", err)
+	if _, err := st.Acquire("test1", "1", false, "w-a", 3*time.Hour); err == nil ||
+		!strings.Contains(err.Error(), "already leased") {
+		t.Fatalf("second same-holder acquire: got %v, want an already-leased refusal", err)
 	}
 	cur, err := st.Get("test1", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cur == nil || cur.LeaseID != second.Lease.LeaseID || cur.Holder != "w-a" {
-		t.Fatalf("new lease did not stay: %+v", cur)
+	if cur == nil || cur.LeaseID != first.Lease.LeaseID || cur.Holder != "w-a" {
+		t.Fatalf("same-holder acquire replaced the lease: %+v", cur)
+	}
+	if _, err := st.Renew("test1", "1", "w-a", "bogus-id", 3*time.Hour); err == nil ||
+		!strings.Contains(err.Error(), "lease id mismatch") {
+		t.Fatalf("renew with the wrong id: got %v, want a lease-id refusal", err)
+	}
+	if _, err := st.Release("test1", "1", "w-a", "bogus-id", false); err == nil ||
+		!strings.Contains(err.Error(), "lease id mismatch") {
+		t.Fatalf("release with the wrong id: got %v, want a lease-id refusal", err)
 	}
 	// The current ID still releases.
-	if _, err := st.Release("test1", "1", "w-a", second.Lease.LeaseID, false); err != nil {
+	if _, err := st.Release("test1", "1", "w-a", first.Lease.LeaseID, false); err != nil {
 		t.Fatalf("release with the current id: %v", err)
 	}
 }
 
-// 10. A second acquire by the same holder renews instead of duplicating.
-func TestSameHolderRenews(t *testing.T) {
+// An explicit same-holder re-acquire is refused atomically: the first
+// lease ID stays, so the first holder's Renew and Release still match.
+// (Failing-first for the trials-a2-r2 same-holder finding.)
+func TestSameHolderReacquireRefusedAtomically(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
 	base := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
 	first, err := st.Acquire("test1", "1", false, "w-a", time.Hour)
@@ -288,18 +287,20 @@ func TestSameHolderRenews(t *testing.T) {
 		t.Fatal(err)
 	}
 	setNow(st, base.Add(30*time.Minute))
-	second, err := st.Acquire("test1", "1", false, "w-a", 2*time.Hour)
+	if _, err := st.Acquire("test1", "1", false, "w-a", 2*time.Hour); err == nil ||
+		!strings.Contains(err.Error(), "already leased") {
+		t.Fatalf("second same-holder acquire: got %v, want an already-leased refusal", err)
+	}
+	cur, err := st.Get("test1", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.Renewed {
-		t.Fatal("second acquire did not renew")
+	if cur == nil || cur.LeaseID != first.Lease.LeaseID || cur.Holder != "w-a" {
+		t.Fatalf("refused re-acquire replaced the lease: %+v", cur)
 	}
-	if !second.Lease.Expires.After(first.Lease.Expires) {
-		t.Fatalf("expiry not extended: %v vs %v", second.Lease.Expires, first.Lease.Expires)
-	}
-	if second.Lease.LeaseID == "" || second.Lease.LeaseID == first.Lease.LeaseID {
-		t.Fatal("re-acquire kept the old lease id")
+	// The surviving lease still renews and releases by its original ID.
+	if _, err := st.Renew("test1", "1", "w-a", first.Lease.LeaseID, time.Hour); err != nil {
+		t.Fatalf("renew with the original id: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(st.Dir, "test1"))
 	if err != nil {

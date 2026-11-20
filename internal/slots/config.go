@@ -13,6 +13,10 @@ import (
 type Config struct {
 	Version int      `json:"version"`
 	Servers []Server `json:"servers"`
+	// Forever carries the runner's optional per-server blocks (at least
+	// serve_dir_root). Unknown top-level keys must not break slot loading,
+	// so the field stays decoded-and-ignored here and read by LoadSlotsFile.
+	Forever map[string]json.RawMessage `json:"forever,omitempty"`
 }
 
 type Server struct {

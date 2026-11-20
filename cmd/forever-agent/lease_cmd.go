@@ -113,13 +113,10 @@ func leaseAcquireCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "took over a stale lease of %s/%s from %s (expired %s, %s)\n",
 			old.Server, old.Slot, old.Holder, old.Expires.UTC().Format("15:04:05Z"), agent)
 	}
-	fmt.Fprintf(stdout, "leased %s/%s to %s until %s: account %s, character %s, port %d, lease %s",
+	fmt.Fprintf(stdout, "leased %s/%s to %s until %s: account %s, character %s, port %d, lease %s\n",
 		got.Lease.Server, got.Lease.Slot, got.Lease.Holder,
 		got.Lease.Expires.UTC().Format("15:04:05Z"),
 		got.Slot.Account, got.Slot.Character, got.Slot.Port, got.Lease.LeaseID)
-	if got.Renewed {
-		fmt.Fprint(stdout, " (already yours: expiry renewed)")
-	}
 	fmt.Fprintln(stdout)
 	return exitOK
 }

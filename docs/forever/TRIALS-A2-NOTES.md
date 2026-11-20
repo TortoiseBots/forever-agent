@@ -104,3 +104,13 @@ Python runner, with a failing test first where the finding was real.
 | G19 | `TestRunDryScoresCard` asserts no verdicts | FIX: asserts PASS on every rule verdict, and `TestCollectorRoundTrip` asserts PASS per rule (`live_test.go`). |
 | G20 | `TestRepeatLostOnDisconnect` `&&` | FIX: asserts `collect.Lost() != ""` directly (the `&&` wording was wrong: the old test already failed when neither fired; the hook var is gone). |
 | G21 | no `run`/`cleanup` execution tests | FIX: `TestCleanupReleasesLeases` and `TestTrialsCleanupNoSlotsFileFailsLoud` cover cleanup+release end to end (a live `run` needs a serve per slot, out of scope). |
+
+## Fix round A2-R2 (Codex re-check findings)
+
+| # | finding | fix (one line) |
+|---|---|---|
+| R1 | `KeepRenewed` is never started | FIX: the command starts `go hold.KeepRenewed(done)` before the run body and `finish` closes `done` before the explicit `Release`, so runs past the 30 min TTL keep the slot and a renewal failure aborts through `Runner.Abort` (`trials_run_cmd.go`; pinned by `TestTrialsRunStartsRenewal` + `TestTrialsRunRenewalFailureAborts`). |
+| R2 | explicit same-holder acquire replaces the live lease | FIX: `Store.acquireLocked` refuses an explicit same-holder acquire atomically with an already-leased refusal, so the first run's lease ID (and its renewals/release) survives (`lease.go`, `live/slot.go`, `trials_run_cmd.go`, `lease_cmd.go`; pinned by `TestSameHolderReacquireRefusedAtomically` + `TestExplicitSameHolderAcquireKeepsFirstLease`). The `Acquired.Renewed` flag and the `already yours` renew-on-acquire path are gone: only `Renew` extends a live lease. |
+| R3 | release failure cannot change the exit status | FIX: every return below the acquire goes through `finish`, which releases explicitly and returns 1 on a release failure (`trials_run_cmd.go`; pinned by `TestTrialsRunReleaseFailureFails`). |
+| R4 | race: `Release` reads `h.Acq.Lease` beside `RenewOnce` | FIX: both read the lease identity under the hold mutex; `Release` runs only after `done` closes (`slot.go`; caught by the `-race` run). |
+| R5 | slots file with a `forever` block fails to load | FIX: `slots.Config` decodes (and ignores) the top-level `forever` map, so `LoadSlotsFile` keeps reading `serve_dir_root` beside strict slot validation (`config.go`). |

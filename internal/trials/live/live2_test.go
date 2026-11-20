@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,6 +205,55 @@ func TestCleanupReleasesLeases(t *testing.T) {
 	skipped := ReleaseLedgerLeases("", ledger2)
 	if len(skipped) != 1 || RowOK(skipped[0]) {
 		t.Fatalf("no-slots release = %v, want one failed row", skipped)
+	}
+}
+
+// TestExplicitSameHolderAcquireKeepsFirstLease is the failing-first test
+// for the trials-a2-r2 same-holder finding: a second explicit acquire by
+// the same holder is refused atomically and keeps the first run's lease,
+// so the first run's renewals and release still match. Two racing explicit
+// acquires therefore leave exactly one live lease: the loser's ID never
+// validates.
+func TestExplicitSameHolderAcquireKeepsFirstLease(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "slots.json")
+	writeTestSlots(t, cfgPath)
+	cfg := loadTestSlots(t, cfgPath)
+	store := newTestStore(cfg, cfgPath)
+	sf := &SlotsFile{Servers: cfg.Servers, Forever: map[string]ServerExt{"s1": {ServeDirRoot: dir}}}
+	open := func(dir string) error { return nil }
+	first, err := AcquireSlot(sf, store, "s1", "1", false, "trials", open)
+	if err != nil {
+		t.Fatalf("first AcquireSlot: %v", err)
+	}
+	const racers = 8
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_, errs[n] = AcquireSlot(sf, store, "s1", "1", false, "trials", open)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "already leased") {
+			t.Fatalf("racer %d: got %v, want an already-leased refusal", i, err)
+		}
+	}
+	cur, err := store.Get("s1", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur == nil || cur.LeaseID != first.Acq.Lease.LeaseID || cur.Holder != "trials" {
+		t.Fatalf("racing re-acquire replaced the first lease: %+v", cur)
+	}
+	if err := first.RenewOnce(); err != nil {
+		t.Fatalf("first hold renew after refused re-acquires: %v", err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatalf("first hold release after refused re-acquires: %v", err)
 	}
 }
 

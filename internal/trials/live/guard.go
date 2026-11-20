@@ -150,6 +150,15 @@ type GuardOptions struct {
 	OnGM       func(kind, text, target string)
 }
 
+// AbortReason reports the runner's abort reason ("", while the run holds
+// its lease): the aborted callback the runner wires from Hold.RenewErr.
+func (g *Guard) AbortReason() string {
+	if g == nil || g.aborted == nil {
+		return ""
+	}
+	return g.aborted()
+}
+
 // NewGuard returns the runner's GM guard over client.
 func NewGuard(client *Client, opts GuardOptions) *Guard {
 	return &Guard{client: client, ledger: opts.Ledger, marks: opts.Marks,

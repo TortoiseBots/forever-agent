@@ -66,12 +66,13 @@ type Hold struct {
 	renewErr error
 }
 
-// leaseTTL is the lease lifetime at acquire; RenewEvery is the renewal
-// interval while a trial holds the slot.
-const (
-	leaseTTL   = 30 * time.Minute
-	RenewEvery = 60 * time.Second
-)
+// leaseTTL is the lease lifetime at acquire.
+const leaseTTL = 30 * time.Minute
+
+// RenewEvery is the renewal interval while a trial holds the slot. A var
+// (not a const) so command tests can shorten the clock, the way the walk
+// heartbeat's walkLeaseRenew does.
+var RenewEvery = 60 * time.Second
 
 // AcquireSlot leases server/slotID (or any free slot) for holder and opens
 // <serve_dir_root>/<slot> with openSlot. serve_dir_root comes from the
@@ -96,8 +97,10 @@ func AcquireSlot(sf *SlotsFile, store *slots.Store, server, slotID string, any b
 
 // SameHolderHeld reports whether slotID on server is already leased to
 // holder (a second `trials run` with the default holder name): the store
-// silently renews that lease instead of refusing, so the runner says so
-// and exits rather than running two trials on one slot.
+// refuses an explicit same-holder re-acquire atomically, so the runner says
+// so and exits rather than running two trials on one slot. The check is
+// advisory: the refusal below is authoritative and still keeps the first
+// run's lease ID when the lease changes between check and acquire.
 func SameHolderHeld(store *slots.Store, server, slotID string, any bool, holder string) (bool, string) {
 	if any || slotID == "" {
 		return false, ""
@@ -109,9 +112,14 @@ func SameHolderHeld(store *slots.Store, server, slotID string, any bool, holder 
 	return true, "held by " + holder + " since " + l.Acquired.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-// RenewOnce extends h's lease by the acquire TTL.
+// RenewOnce extends h's lease by the acquire TTL. The lease fields move
+// under the mutex: KeepRenewed and Release read them only there, so the
+// release after done closes cannot race an in-flight renewal.
 func (h *Hold) RenewOnce() error {
-	l, err := h.Store.Renew(h.Server, h.Slot, h.Acq.Lease.Holder, h.Acq.Lease.LeaseID, leaseTTL)
+	h.mu.Lock()
+	holder, leaseID := h.Acq.Lease.Holder, h.Acq.Lease.LeaseID
+	h.mu.Unlock()
+	l, err := h.Store.Renew(h.Server, h.Slot, holder, leaseID, leaseTTL)
 	if err != nil {
 		h.mu.Lock()
 		h.renewErr = err
@@ -126,9 +134,14 @@ func (h *Hold) RenewOnce() error {
 	return nil
 }
 
-// Release frees h's lease.
+// Release frees h's lease. It reads the lease identity under the mutex,
+// matching RenewOnce: call it only after done closes (the command's finish
+// does), so no renewal is still writing h.Acq.Lease.
 func (h *Hold) Release() error {
-	_, err := h.Store.Release(h.Server, h.Slot, h.Acq.Lease.Holder, h.Acq.Lease.LeaseID, false)
+	h.mu.Lock()
+	holder, leaseID := h.Acq.Lease.Holder, h.Acq.Lease.LeaseID
+	h.mu.Unlock()
+	_, err := h.Store.Release(h.Server, h.Slot, holder, leaseID, false)
 	return err
 }
 
