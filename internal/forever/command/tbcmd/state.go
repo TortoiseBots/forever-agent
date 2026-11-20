@@ -50,6 +50,10 @@ type BotState struct {
 
 	Stuck  StuckState
 	Engine bool
+	// NoEngine is the typed "engine off" state: `engine=no`, or `stuck=noengine` while the engine is being attached.
+	// Such a bot runs no engine tick, so it carries no strategy lists (co= and nc= are absent keys); the driver reads
+	// it as not ready with the reason noengine, never as an unreadable report.
+	NoEngine bool
 
 	X, Y, Z float64
 	Map     uint32
@@ -298,6 +302,7 @@ func parseStateRecord(rec record) (BotState, error) {
 	if b.Engine, err = rec.requireBool("engine"); err != nil {
 		return b, err
 	}
+	b.NoEngine = !b.Engine || b.Stuck.Kind == "noengine"
 	if b.X, b.Y, b.Z, err = parsePos(rec, "pos"); err != nil {
 		return b, err
 	}
@@ -330,11 +335,22 @@ func parseStateRecord(rec record) (BotState, error) {
 	if b.LastOrder, err = rec.requireText("lastorder"); err != nil {
 		return b, err
 	}
-	if b.CombatStrategies, err = rec.list("co"); err != nil {
-		return b, err
-	}
-	if b.NonCombatStrategies, err = rec.list("nc"); err != nil {
-		return b, err
+	// A bot with the engine off has no strategy lists and writes neither key; every other bot carries both, and a
+	// missing one there is a report this client must not act on.
+	if b.NoEngine {
+		if b.CombatStrategies, _, err = rec.optionalList("co"); err != nil {
+			return b, err
+		}
+		if b.NonCombatStrategies, _, err = rec.optionalList("nc"); err != nil {
+			return b, err
+		}
+	} else {
+		if b.CombatStrategies, err = rec.list("co"); err != nil {
+			return b, err
+		}
+		if b.NonCombatStrategies, err = rec.list("nc"); err != nil {
+			return b, err
+		}
 	}
 	if b.CastQueued, err = rec.requireInt("cast_queued", 0, math.MaxInt32); err != nil {
 		return b, err
@@ -443,8 +459,11 @@ func parsePos(rec record, key string) (x, y, z float64, err error) {
 	return out[0], out[1], out[2], nil
 }
 
+// optionalPos reads `corpse=`: absent, or the empty value the module writes when the bot has no corpse, is not
+// known (and not a position at the origin). The pair rule with corpsemap= then holds on presence, not on text.
 func optionalPos(rec record, key string) (x, y, z float64, present bool, err error) {
-	if !rec.has(key) {
+	v, ok := rec.rawValue(key)
+	if !ok || v == "" {
 		return 0, 0, 0, false, nil
 	}
 	x, y, z, err = parsePos(rec, key)

@@ -84,10 +84,12 @@ func (r record) requireInt(key string, min, max int) (int, error) {
 	return r.intValue(key, v, min, max)
 }
 
-// optionalInt returns an optional number; present is false when the key is absent.
+// optionalInt returns an optional number; present is false when the key is absent. An optional number the module
+// writes empty ("empty when none" in its command reference: tgtentry=, tgthp=, manapct=, corpsemap=, ...) is not
+// known, exactly as an absent key is: the empty value never becomes a zero the caller could act on.
 func (r record) optionalInt(key string, min, max int) (n int, present bool, err error) {
 	v, ok := r.values[key]
-	if !ok {
+	if !ok || v == "" {
 		return 0, false, nil
 	}
 	n, err = r.intValue(key, v, min, max)
