@@ -145,3 +145,17 @@ i/o timeout` while the server still sent time syncs. `world-check --stay 5m` hel
 
 - `make fmt-check`, `make cross`.
 - `vm-test ta` (unit tests under the race detector plus vet), `staticcheck`, the race run.
+
+## Reviews
+
+- **Codex (RR round), `[high]` `ERROR_BAD_VERSION` is not attributable solely to an unsupported build
+  (`internal/forever/bnet/bnet.go:208-214` then): FIX.** `Login` retried every known build on the code alone while the
+  command's `WorldAccept` sends no build auth key; the code is also what a missing `build_auth_key` row produces with
+  `Network.SkipBuildAuthKeyCheck` off. It now retries only when the refusal is attributable — the socket sent a key
+  (`Refused.BuildAuthKeyUsed`), or the caller states the setting (`Options.WorldSkipBuildAuthKeyCheck`), which the
+  commands pass as the setup doc's value unless `--world-checks-build-auth-key` names the opposite configuration
+  (`Network.SkipBuildAuthKeyCheck = 0`) — and otherwise returns the refusal naming both causes
+  (`bnet.go:227-229,280-286`). Rejected part: the key remedy, because a `--build 0` probe needs one key per build and
+  variant and a server with no key row refuses whatever the client sends.
+- **Gemini: no review arrived.** The review brief (`briefs-agy/review-bugs2.md`) asked for
+  `reviews/gemini-bugs2.md`; that file was never written, so there is no finding to verify or reject.
