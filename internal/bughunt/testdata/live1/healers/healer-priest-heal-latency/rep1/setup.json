@@ -1,0 +1,21 @@
+{
+ "bot_name": "Bheal",
+ "extra_names": [
+  "Atank",
+  "Dcmd"
+ ],
+ "checks": [
+  {
+   "id": "extra_bots_role",
+   "ok": true,
+   "value": null,
+   "evidence": "Bot Atank role set to tank"
+  },
+  {
+   "id": "bot_role",
+   "ok": true,
+   "value": null,
+   "evidence": "Bot Bheal role set to healer"
+  }
+ ]
+}
