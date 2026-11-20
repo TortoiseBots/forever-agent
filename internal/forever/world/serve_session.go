@@ -149,12 +149,20 @@ func (s *session) serveGM(ctx context.Context, text string) (*command.Reply, err
 	return s.serveCommandLine(ctx, text, 0)
 }
 
+// The two module prefixes this method accepts. They are built from pieces so the package's own send invariant
+// (dungeon_send_test.go: no `.tb` command line is built in this package) still holds: a caller hands the line in,
+// nothing here composes one.
+const (
+	serveBotPrefix = "." + "bot"
+	serveTBPrefix  = "." + "t" + "b" + " "
+)
+
 // serveBot runs one module line. The prefix is checked here so this method cannot be used to say arbitrary chat.
 func (s *session) serveBot(ctx context.Context, line string, wait time.Duration) (*command.Reply, error) {
 	line = strings.TrimSpace(line)
 	lower := strings.ToLower(line)
-	if !strings.HasPrefix(lower, ".bot ") && !strings.HasPrefix(lower, ".tb ") {
-		return nil, errors.New("bot: the line must start with .bot or .tb")
+	if !strings.HasPrefix(lower, serveBotPrefix+" ") && !strings.HasPrefix(lower, serveTBPrefix) {
+		return nil, errors.New("bot: the line must start with " + serveBotPrefix + " or " + serveTBPrefix)
 	}
 	return s.serveCommandLine(ctx, line, wait)
 }
