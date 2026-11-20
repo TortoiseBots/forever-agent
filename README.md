@@ -135,6 +135,32 @@ server's own player filter (ground, steep, water, lava and road, nothing exclude
 parent-tile rule (`--parent 389=1`); a bare number is refused, because the pair names which map it is for. The real-data checks live in `internal/navmesh` and run when
 `FOREVER_MMAPS_DIR` names a Forever mmaps folder; see [docs/forever/NAVMESH-R1-NOTES.md](docs/forever/NAVMESH-R1-NOTES.md).
 
+`forever-agent forever route-walk --plan FILE --navmesh DIR --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+walks a whole dungeon plan live and checks every planned point against a confirmed position. It enters the plan's
+instance (`--enter tele` teleports to the plan's `entrance_tele`; `--enter none` expects the character placed),
+optionally turns GM mode on (`--gm`, which also skips the instance's access rules), and then walks each selected leg
+(`--legs 1-3,tunnel`) as the plan defines it: every `via` waypoint in order, then the leg's `to`, planned from where
+the previous hop actually ended with the same Forever navmesh `path-check` uses, and walked with `walk-check`'s real
+movement (`CMSG_MOVE_START_FORWARD`, a heartbeat every 500 ms, `CMSG_MOVE_STOP`). The plan's avoid boxes are given to
+the planner. Every sample (default one stop per 3 s of running) records the planned point, the confirmed position,
+their distance, the Z difference and the time; a leg is `PASS`, `DEVIATED` (a waypoint or a mesh snap over
+`--max-deviation`, default 2 yd, from the plan's own point), `UNCONFIRMED` (the server did not confirm the stop: no
+echo of the request's marker, no complete `.gps` block, two reads that disagree, or an answer that cannot be tied to
+the stop), `STUCK` (the confirmed position moved under `--stuck-step` for `--stuck-after`, default 6 s at 0.5 yd),
+`FELL` (the confirmed Z is
+`--fall-drop`, default 2 yd, below the plan), `LIQUID` (a magma/slime navmesh floor within
+`--liquid-above`/`--liquid-below` of the path), `NOPATH` (no complete route, or a `gm_cross` hop), `INCOMPLETE` (the
+deadline or a cancel ended the leg or the run) or `FAIL`. `--leave tele` (the default) teleports the character back out to the plan's `outside_tele` after the last leg,
+before GM mode goes off: a level-1 character left standing among the packs aggroes the moment the GM flag clears,
+and the server then refuses the logout. The
+position is the server's own when the account can run the core's `.gps` (the default, `--confirm gps`: the command
+selects the character, marks each request with a self-whisper it waits to see echoed, sends `.gps` and reads the
+`X: Y: Z:` line, and confirms a stop only from two such reads that agree); `--confirm client` records the last movement
+packet instead, still treats a server correction (a teleport) as a deviation, and cannot see a silent stall. The
+command prints a per-leg table, writes `route-walk.json` beside it with `--out DIR` (or prints JSON with `--json`),
+and exits 12 when a leg did not pass. The thresholds are flags; the full contract and the live run are in
+[docs/forever/ROUTEWALK-NOTES.md](docs/forever/ROUTEWALK-NOTES.md).
+
 `forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote
 `--emote TEXT`, then prints every chat line it receives for `--listen` seconds (default 10 s) and logs out. The
