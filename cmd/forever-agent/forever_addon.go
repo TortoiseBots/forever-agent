@@ -19,7 +19,7 @@ import (
 )
 
 func foreverAddonCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever addon-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --prefix PREFIX [--send TEXT] [--channel party|raid|instance|guild|officer|whisper:NAME] [--invite NAME | --accept-from NAME] [--listen DURATION] [--stay DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever addon-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME --prefix PREFIX [--send TEXT] [--channel party|raid|instance|guild|officer|whisper:NAME] [--invite NAME | --accept-from NAME] [--listen DURATION] [--stay DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever addon-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

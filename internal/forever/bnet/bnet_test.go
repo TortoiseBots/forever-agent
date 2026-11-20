@@ -29,7 +29,7 @@ func TestLoginAgainstFakeServer(t *testing.T) {
 	opts := f.options()
 	opts.Logf = func(format string, args ...any) { steps = append(steps, fmt.Sprintf(format, args...)) }
 
-	opts.ClientBuild = build70938 // the explicit claim is the one the logon makes
+	opts.ClientBuild = wire.Build70938 // the explicit claim is the one the logon makes
 	result, err := Login(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestLoginAgainstFakeServer(t *testing.T) {
 		t.Fatal("fake server:", err)
 	default:
 	}
-	wantLogonBuilds(t, f, build70938)
+	wantLogonBuilds(t, f, wire.Build70938)
 
 	if result.RealmName != "TestRealm" || result.RealmID != 70 || result.RealmAddress != 0x46010046 {
 		t.Errorf("realm = %q id %d addr %#x", result.RealmName, result.RealmID, result.RealmAddress)
@@ -121,7 +121,7 @@ func TestLoginBuildMismatch(t *testing.T) {
 	f.realmBuild = 70707
 
 	opts := f.options()
-	opts.ClientBuild = build70938
+	opts.ClientBuild = wire.Build70938
 	_, err := Login(context.Background(), opts)
 	if err == nil {
 		t.Fatal("a realm for another build was joined")
@@ -132,10 +132,32 @@ func TestLoginBuildMismatch(t *testing.T) {
 	}
 }
 
-// TestLoginAdvertisedBuild: with no build pinned, the login claims the build the realm list advertises. The first
-// attempt (the client's own build 70938) is refused by a realm on 70707, so the whole login runs again claiming
-// 70707: the realm list and the join read the logon's build, not the realm list ticket's (RealmList.cpp:311,
-// GameUtilitiesService.cpp:312,344).
+// TestLoginPrefersNewestKnownBuild: a realm that lists for more than one build shows the client's own claim for
+// each build it accepts, so its build field is no hint at all. The login claims the newest build this client knows
+// (70959) and keeps it: the older also-accepted build (70938) is what a run that trusted a claim echo used, and
+// the world server then refused that build.
+func TestLoginPrefersNewestKnownBuild(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realms = []fakeRealm{{
+		address: 0x46010046, name: "TestRealm", population: 1,
+		build: wire.Build70959, alsoAccept: []uint32{wire.Build70938},
+	}}
+
+	result, err := Login(context.Background(), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ClientBuild != wire.Build70959 || result.RealmBuild != wire.Build70959 {
+		t.Fatalf("claimed %d, realm list showed %d, want the newest known build %d for both",
+			result.ClientBuild, result.RealmBuild, wire.Build70959)
+	}
+	wantLogonBuilds(t, f, wire.Build70959)
+}
+
+// TestLoginAdvertisedBuild: with no build pinned, the login claims the newest build it knows (70959). A realm on
+// 70707 refuses it and the realm list names its own build, which is tried next: the realm list and the join read the
+// logon's build, not the realm list ticket's (RealmList.cpp:311, GameUtilitiesService.cpp:312,344).
 func TestLoginAdvertisedBuild(t *testing.T) {
 	f := newFakeLogin(t)
 	defer f.close()
@@ -148,7 +170,7 @@ func TestLoginAdvertisedBuild(t *testing.T) {
 	if result.ClientBuild != wire.Build70707 || result.RealmBuild != wire.Build70707 {
 		t.Fatalf("claimed %d, realm list showed %d, want %d for both", result.ClientBuild, result.RealmBuild, wire.Build70707)
 	}
-	wantLogonBuilds(t, f, build70938, wire.Build70707)
+	wantLogonBuilds(t, f, wire.Build70959, wire.Build70707)
 }
 
 // TestLoginFirstOnlineRealmOfSeveral: a realm list may carry several realms on different builds. The login joins the
@@ -171,9 +193,9 @@ func TestLoginFirstOnlineRealmOfSeveral(t *testing.T) {
 	if result.ClientBuild != wire.Build70707 || result.RealmBuild != wire.Build70707 {
 		t.Fatalf("claimed %d for realm build %d, want %d", result.ClientBuild, result.RealmBuild, wire.Build70707)
 	}
-	wantLogonBuilds(t, f, build70938, wire.Build70707)
+	wantLogonBuilds(t, f, wire.Build70959, wire.Build70707)
 
-	// An offline first realm is skipped: the second, online one is joined and its build claimed in one logon.
+	// An offline first realm is skipped: the second, online one is joined and its build claimed in a second logon.
 	g := newFakeLogin(t)
 	defer g.close()
 	g.realms = []fakeRealm{
@@ -188,11 +210,11 @@ func TestLoginFirstOnlineRealmOfSeveral(t *testing.T) {
 		t.Fatalf("joined %q (0x%08X) claiming %d, want the online Second (0x46010047) claiming %d",
 			result.RealmName, result.RealmAddress, result.ClientBuild, wire.Build70938)
 	}
-	wantLogonBuilds(t, g, build70938)
+	wantLogonBuilds(t, g, wire.Build70959, wire.Build70938)
 }
 
 // TestLoginAdvertisedBuildUnsupported refuses a realm whose build this client has no table for, naming the builds
-// it does have, instead of claiming a build it cannot parse.
+// it does have and the realm's build, instead of claiming a build it cannot parse.
 func TestLoginAdvertisedBuildUnsupported(t *testing.T) {
 	f := newFakeLogin(t)
 	defer f.close()
@@ -202,10 +224,11 @@ func TestLoginAdvertisedBuildUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("a realm at an unsupported build was joined")
 	}
-	if !strings.Contains(err.Error(), "no opcode table for") || !strings.Contains(err.Error(), "70707 and 70938") {
+	if !strings.Contains(err.Error(), "accepts none of the client builds") ||
+		!strings.Contains(err.Error(), "70707, 70938 and 70959") || !strings.Contains(err.Error(), "the realm is build 71000") {
 		t.Fatalf("err = %v", err)
 	}
-	wantLogonBuilds(t, f, build70938)
+	wantLogonBuilds(t, f, wire.Build70959, wire.Build70938, wire.Build70707)
 }
 
 // wantLogonBuilds reads the logon builds the fake recorded and checks they are exactly wants: a login makes no more
@@ -404,7 +427,7 @@ func TestSecretsAreRedacted(t *testing.T) {
 	}
 	joinAnswerValue := joinAnswer{ticket: []byte(joinTicket), addresses: []byte("ADDRESSES-0123456789"), secret: []byte(joinSecret)}
 	clientInformationValue := clientInformation{
-		Platform: fourCCWn64, BuildVariant: "Win", Type: fourCCWoW, VersionDataBuild: build70938,
+		Platform: fourCCWn64, BuildVariant: "Win", Type: fourCCWoW, VersionDataBuild: wire.Build70938,
 		Secret: jsonBytes(clientSecret),
 	}
 	ticketInformationValue := realmListTicketClientInformation{Info: clientInformationValue}

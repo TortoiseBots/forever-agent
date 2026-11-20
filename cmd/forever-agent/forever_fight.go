@@ -19,7 +19,7 @@ import (
 )
 
 func foreverFightCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--level-min N] [--level-max N] [--fight-for DURATION] [--capture-dir DIR] [--provoke]"
+	const usage = "usage: forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--level-min N] [--level-max N] [--fight-for DURATION] [--capture-dir DIR] [--provoke]"
 	fs := flag.NewFlagSet("forever fight-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
