@@ -59,15 +59,37 @@ instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is 
 
 `forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
 [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
-[--parent MAP=PARENT] [--disconnect-grace DURATION]` keeps that character in the world and serves the local
-JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer token, loopback only, the same
-error codes. The password comes from `--password-file` or `FOREVER_PASSWORD` and is never printed. The listener is
-bound before the login; `--listen` defaults to `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and
-`rpc-<port>.token`, so `rpc DIR status` works unchanged; without it the token file is `rpc-<port>.token` in the
-working directory. `status`, `units`, `unit`, `party`, `chat_log`, `chat`, `gm`, `gm_revive`, `bot`, `invite`,
-`accept_invite`, `leave_group`, `target`, `attack`, `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`,
-`walk_to`, `path_to`, `walk_path`, `area_trigger`, the five death methods, `addon_send` and `logout` are ported;
-`--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error.
+[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units]` keeps that character in the world
+and serves the local JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer
+token, loopback only, the same error codes. The password comes from `--password-file` or
+`FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
+`127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
+works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
+`units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`gm_aura`, `trial_units`, `bot`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
+`stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
+`area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
+path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
+carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`), and `status`
+carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `limit` up to 1,000,
+`wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
+answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
+replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
+own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
+ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
+concurrent long-polls all return at their own cap.
+
+`gm_kill`, `gm_set_hp` and `gm_aura` are a test bench's hands and are off unless serve was started with
+`--allow-gm-units`. Even then they act only on a guid the runner registered through `trial_units`
+(`{"guids": [...]}`, which replaces the list and answers `{guids}`), and a player target must be this
+session's own character: another player is refused even when registered. Every refusal is the typed
+`-32006` error and sends nothing. The allowlist outlives a reconnect. A permitted hand selects the unit,
+waits for the server's selection echo and sends the one line (`.die`, `.modify hp N`, `.aura N`/`.unaura
+N`). The raw `gm` method and `gm_revive` are held to the same boundary: a line the core runs as one of the
+unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`, `.revive`) is
+refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
+`.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
+and chat are unaffected.
 Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
 with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link

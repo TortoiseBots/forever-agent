@@ -84,6 +84,9 @@ const (
 	fakeSMSGAccountItemCollection = 0x470361
 )
 
+// fakeSMSGAttackerStateUpdate is the wire number this build's server uses for a melee row.
+var fakeSMSGAttackerStateUpdate = mustServerWire(wire.SMSGAttackerStateUpdate)
+
 var (
 	fakeSessionKeySeed = []byte{
 		0xE8, 0x1E, 0x8B, 0x59, 0x27, 0x62, 0x1E, 0xAA, 0x86, 0x15, 0x18, 0xEA, 0xC0, 0xBF, 0x66, 0x8C,
@@ -285,6 +288,22 @@ type fakeServer struct {
 	// serveNoKill keeps the creature alive after a swing, so an attack call stays running until a test drops the
 	// link or asks it to stop.
 	serveNoKill bool
+	// Round A1: what a serving session scripts for the combat log, the unit auras and the GM hands.
+	// serveEventsBurst sends one packet of each combat-row kind after the create blocks, serveEventsOne sends a single
+	// melee row (each session, so a reconnect gets its own), and serveAuraBurst puts one aura on the creature.
+	serveEventsBurst bool
+	serveEventsOne   bool
+	serveAuraBurst   bool
+	// serveLoginEvents writes one melee row before SMSG_LOGIN_VERIFY_WORLD, inside the login burst itself: the row a
+	// reconnect's ring handoff must keep.
+	serveLoginEvents bool
+	// serveSelectionEcho answers CMSG_SET_SELECTION with the character's own target field set to that guid, the way
+	// the server echoes a selection.
+	serveSelectionEcho bool
+	// What the fake saw, under mu: every selection, every GM line, and the packet/line order ("select" or "say").
+	serveSelections []wire.GUID
+	serveGMLines    []string
+	serveOrder      []string
 	// serveReconnects is ServeConfig.ReconnectAttempts for the daemon these helpers start (0 keeps the default);
 	// serveBackoff/serveLoginTimeout shorten its reconnect timings.
 	serveReconnects   int
@@ -1019,6 +1038,15 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	if len(payload) != 4 || binary.LittleEndian.Uint32(payload) == 0 {
 		f.failf("instance: CMSG_QUEUED_MESSAGES_END carries %d bytes", len(payload))
 		return
+	}
+	// serveLoginEvents writes one melee row into the login burst itself, before SMSG_LOGIN_VERIFY_WORLD: the row the
+	// client's dispatch can produce while the session is still logging in, which a reconnect must not discard.
+	f.mu.Lock()
+	loginEvents := f.serveLoginEvents
+	f.mu.Unlock()
+	if loginEvents {
+		self := mustGUID(f.clientGUID)
+		c.writeFrame(fakeSMSGAttackerStateUpdate, buildAttackerStateUpdate(self, self, 3))
 	}
 	c.writeFrame(fakeSMSGLoginVerifyWorld, fixture(f.t, "login_verify_world"))
 	c.writeFrame(fakeSMSGTimeSyncRequest, []byte{7, 0, 0, 0})
