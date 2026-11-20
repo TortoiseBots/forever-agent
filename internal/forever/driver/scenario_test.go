@@ -387,6 +387,85 @@ func TestScenarioWipeNoBudget(t *testing.T) {
 	}
 }
 
+// wipeForPractice is one run that wipes once on its first pull and keeps the mobs on the party, so the wipe state
+// has to reach the practice recovery (a party that is left alone for ten quiet seconds is not a wipe to rescue).
+func wipeForPractice(t *testing.T, maxPractice int) *Run {
+	t.Helper()
+	cfg := scenarioConfig("none")
+	cfg.Limits = scenarioLimits(func(l *Limits) { l.Wipe = 5 * time.Second; l.MaxPractice = maxPractice })
+	run, f := newScenarioLim(t, oneGroupPlan(), cfg)
+	pulls := 0
+	f.OnOrder = func(f *Fake, who, verb, arg string) {
+		if verb != "pull" {
+			return
+		}
+		pulls++
+		if pulls == 1 {
+			f.Skirmish(arg, time.Hour)
+			f.Wipe(3 * time.Second)
+			return
+		}
+		f.Fight(arg, 4*time.Second)
+	}
+	return run
+}
+
+// TestWipePracticeBudget: the wipe's party revive spends one practice per member. A budget that cannot pay for the
+// whole revive stops the run before the revive and before any teleport; a budget that can pay sends it once and
+// records one per member.
+func TestWipePracticeBudget(t *testing.T) {
+	t.Run("short of the party's size", func(t *testing.T) {
+		res := play(t, wipeForPractice(t, 4))
+		if res.Stop != "practice-budget" {
+			t.Fatalf("stop %q, want practice-budget (states %v)", res.Stop, res.States)
+		}
+		if n := countArg(res.Orders, "action", "revive"); n != 0 {
+			t.Fatalf("%d revive(s) went out under a spent budget", n)
+		}
+		if n := countArg(res.Orders, "action", "tele "); n != 0 {
+			t.Fatalf("%d teleport(s) went out under a spent budget", n)
+		}
+		if res.Summary.Practice != 0 {
+			t.Fatalf("%d practice revives recorded, want 0", res.Summary.Practice)
+		}
+	})
+	t.Run("a budget of five pays for one rescue", func(t *testing.T) {
+		// Two wipes on different groups: the first rescue spends the whole budget (one per member), so the second
+		// one is refused. The recovery teleports are part of the first rescue and spend nothing.
+		cfg := scenarioConfig("none")
+		cfg.Limits = scenarioLimits(func(l *Limits) { l.Wipe = 5 * time.Second; l.MaxPractice = 5 })
+		run, f := newScenarioLim(t, threeGroupPlan(), cfg)
+		pulls := 0
+		f.OnOrder = func(f *Fake, who, verb, arg string) {
+			if verb != "pull" {
+				return
+			}
+			pulls++
+			switch pulls {
+			case 1, 3:
+				f.Skirmish(arg, time.Hour)
+				f.Wipe(3 * time.Second)
+			default:
+				f.Fight(arg, 4*time.Second)
+			}
+		}
+		res := play(t, run)
+		if res.Stop != "practice-budget" {
+			t.Fatalf("stop %q, want practice-budget after the one rescue the budget pays for (states %v)",
+				res.Stop, res.States)
+		}
+		if n := countArg(res.Orders, "action", "revive party"); n != 1 {
+			t.Fatalf("%d party revive(s), want 1", n)
+		}
+		if n := countArg(res.Orders, "action", "tele "); n != 5 {
+			t.Fatalf("%d recovery teleport(s), want the first rescue's one per member", n)
+		}
+		if res.Summary.Practice != 5 {
+			t.Fatalf("%d practice revives recorded, want one per member (5)", res.Summary.Practice)
+		}
+	})
+}
+
 // TestScenarioRunner: a fleeing mob at 20 % health runs from the tank; the driver orders one attack on it, and a
 // second pack that joins the fight is added, dies, and is clear afterwards.
 func TestScenarioRunner(t *testing.T) {

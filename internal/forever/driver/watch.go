@@ -111,7 +111,7 @@ func (r *Run) Watch(ctx context.Context) Result {
 		r.states = append(r.states, "WATCH")
 		r.watchStart(ctx, w)
 		if r.stopReason == "" {
-			r.watchBosses(ctx, w)
+			r.watchBosses(ctx, w, false)
 			r.watchLoop(ctx, w)
 		}
 	}
@@ -270,7 +270,7 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 	}
 	if w.events%20 == 0 && w.events > 0 {
 		// One instance read per twenty events (and one per minute, below): the boss state is a party report away.
-		r.watchBosses(ctx, w)
+		r.watchBosses(ctx, w, false)
 	}
 	return true
 }
@@ -592,9 +592,11 @@ func (r *Run) watchRescue(ctx context.Context, w *watchRun) bool {
 }
 
 // watchBosses reads the bosses from the instance report (at most once a minute unless forced) and prints a change.
-func (r *Run) watchBosses(ctx context.Context, w *watchRun) {
+// The end of the watch forces the read: the last state the module reports is what the summary records, and a run
+// that ends inside the cooldown would otherwise keep a boss's earlier state (or none at all).
+func (r *Run) watchBosses(ctx context.Context, w *watchRun, force bool) {
 	now := r.now()
-	if !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
+	if !force && !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
 		return
 	}
 	rep, why := r.act(ctx, Action{Kind: ActionInstanceInfo, Who: r.cfg.Leader})
@@ -769,7 +771,7 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	}
 	if !r.lost {
 		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
-		r.watchBosses(cctx, w)
+		r.watchBosses(cctx, w, true)
 		ccancel()
 	}
 	r.watchSummary(w)
@@ -802,6 +804,9 @@ func (r *Run) watchSummary(w *watchRun) {
 	r.rec.sum.Bosses = dead
 	r.rec.sum.Wipes = st.Wipes
 	r.rec.sum.Deaths = st.Deaths
+	// The instance the party is in comes from the state report the run's gates took, as a leading run's does. Without
+	// it the written summary always says instance 0, because watchResult replaces res.Summary with the recorder's.
+	r.rec.sum.Instance = r.instance
 	r.rec.sum.Practice = w.rescues
 	r.rec.sum.Clear = w.state == "done"
 	r.rec.SetWatch(rw, r.now())
