@@ -142,10 +142,10 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 // adoptRoster fills a watch's party from the module's roster: the tank first (so every role lookup has the tank
 // where the driver's own run keeps it), then the one healer, then the three damage dealers. The party's commander is
 // the module's own bot, outside the party; this character is only an observer and is refused if the roster names it
-// as the commander. It refuses what a run's PREPARE refuses — five members, the module's run leader being neither
-// the party's tank nor its leader, everyone online and above the entry level, the roles — and two things only a
-// watch needs: every member a host bot, and every member already commanded, because the module's start refuses a
-// party it would have to bind itself.
+// as the commander. It refuses what a run's PREPARE refuses — five members, exactly one member leader flag naming
+// the leader the summary names, the module's run leader being neither the party's tank nor its leader, everyone
+// online and above the entry level, the roles — and two things only a watch needs: every member a host bot, and
+// every member already commanded, because the module's start refuses a party it would have to bind itself.
 func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if len(p.Members) != 5 {
 		return "roster"
@@ -157,7 +157,8 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 		// The observer never commands the party: a roster that names it is the wrong setup, caught before the entry.
 		return "observer-commander"
 	}
-	var tank, heal string
+	var tank, heal, flagged string
+	var flags int
 	var dps []string
 	for _, m := range p.Members {
 		if !m.Online {
@@ -171,6 +172,9 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 		}
 		if !m.Commanded {
 			return "not-commanded"
+		}
+		if m.Leader {
+			flagged, flags = m.Name, flags+1
 		}
 		switch {
 		case m.HasRole && m.Role == "tank":
@@ -191,6 +195,12 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	}
 	if tank == "" || heal == "" || len(dps) != 3 {
 		return "roles"
+	}
+	// The summary and the member lines must agree on who leads: exactly one member carries the flag, and it is the
+	// member the summary names. A malformed or skewed report that disagrees would let a --leader the party does not
+	// follow through, and the entry would run before the module's start refused it.
+	if flags != 1 || !strings.EqualFold(flagged, p.Leader) {
+		return "leader"
 	}
 	// The module's run starts on the bot the watch names, and the start refuses a leader that does not lead its
 	// party: the name must be the party's tank or the member that holds the party's leader flag (a healer or a dps

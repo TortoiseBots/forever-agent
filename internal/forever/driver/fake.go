@@ -151,9 +151,13 @@ type Fake struct {
 	linkAfter    time.Duration
 	hasLinkAfter bool
 
+	// OnOrder, when set, is asked before an order's reply; OnAction, for the setup actions.
 	OnOrder  func(f *Fake, who, verb, arg string)
 	OnAction func(f *Fake, a Action) bool
-	OnState  func(f *Fake, n int) error
+	// OnParty, when set, may rewrite the roster answer: a report whose summary and member leader flags disagree, or
+	// one with no leader flag, that PREPARE must refuse.
+	OnParty func(tbcmd.PartyReport) tbcmd.PartyReport
+	OnState func(f *Fake, n int) error
 
 	// RefuseActions answers that action with the module's error line of this code.
 	RefuseActions map[ActionKind]string
@@ -573,6 +577,9 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 			Role: b.role, HasRole: true, Engine: b.engine, HasEngine: true,
 			Master: commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
 		})
+	}
+	if f.OnParty != nil {
+		rep = f.OnParty(rep)
 	}
 	return rep, nil
 }

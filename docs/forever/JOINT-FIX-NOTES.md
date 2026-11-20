@@ -166,3 +166,21 @@ The last review found five more. Each is fixed with a test that fails on the old
   (`internal/forever/driver/states.go:198`) now requires the watch's leader to be the party's tank: the module's
   start refuses a leader that does not lead its party, so the client caught it at PREPARE instead of sending a start
   the module refuses. Test: `TestWatchLeaderMustBeTheTank`.
+
+## Review round 4
+
+Two findings; both fixed, each with a test that fails on the old code.
+
+* **A `--leader` that holds the party flag was refused.** Round 3's guard required the run's leader to be the party's
+  tank; the module starts the run on the bot that leads the party, so a healer or dps that holds the flag is a
+  supported `--leader`. `adoptRoster` (`internal/forever/driver/states.go:205`) now refuses only a name that is
+  neither the party's tank nor its leader. Test: `TestWatchLeaderMayBeThePartyLeader` (`--leader` and the roster's
+  leader both name the healer; the run starts on it). The scripted module (`fake.go:690`) starts a run on the party's
+  leader as well as the tank, so the test reaches `done`.
+* **The roster's summary leader was not reconciled with the member flags.** A malformed, partial or version-skewed
+  report could name one leader in `party-end leader=` while another member line carried `leader=yes`, and a
+  `--leader` the party does not follow passed PREPARE: the entry and its teleports ran before `run start` was
+  refused. `adoptRoster` (`states.go:201`) now requires exactly one member flag, its name being the summary's
+  leader and one of the five adopted members. Test: `TestWatchLeaderFlagsMustMatchTheSummary` (a second flag, no
+  flag, and another member's flag) ends `prepare:leader` with no `enter party` and no `run start`; the fake's new
+  `OnParty` hook supplies the report.

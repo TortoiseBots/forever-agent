@@ -370,6 +370,49 @@ func TestWatchLeaderMayBeThePartyLeader(t *testing.T) {
 	}
 }
 
+// TestWatchLeaderFlagsMustMatchTheSummary: a roster whose summary leader and member leader flags disagree is not a
+// roster to trust. PREPARE refuses it — one flag only, and the flagged member is the one the summary names — before
+// an entry or a run start.
+func TestWatchLeaderFlagsMustMatchTheSummary(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*tbcmd.PartyReport)
+	}{
+		{"a second flag", func(p *tbcmd.PartyReport) { p.Members[0].Leader = true }},
+		{"no flag", func(p *tbcmd.PartyReport) {
+			for i := range p.Members {
+				p.Members[i].Leader = false
+			}
+		}},
+		{"another member's flag", func(p *tbcmd.PartyReport) {
+			p.Members[0].Leader, p.Members[1].Leader = true, false
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := watchConfig()
+			cfg.Leader = "Watchheal"
+			cfg.Party = []string{"Tank", "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
+			run, f, logs := newWatch(t, cfg)
+			f.RosterLeader = "Watchheal"
+			f.OnParty = func(p tbcmd.PartyReport) tbcmd.PartyReport {
+				tc.mutate(&p)
+				return p
+			}
+			res := run.Watch(context.Background())
+			if res.Stop != "prepare:leader" {
+				t.Fatalf("stop %q, want prepare:leader; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+			}
+			if n := countActions(f, "enter party"); n != 0 {
+				t.Fatalf("%d entries after a contradictory roster", n)
+			}
+			if n := countActions(f, "run start"); n != 0 {
+				t.Fatalf("%d run starts after a contradictory roster", n)
+			}
+		})
+	}
+}
+
 // TestReadyNoEngineReason: the gate's own reason word for an engine-off member is noengine, and it is distinct from
 // a report that could not be read.
 func TestReadyNoEngineReason(t *testing.T) {
