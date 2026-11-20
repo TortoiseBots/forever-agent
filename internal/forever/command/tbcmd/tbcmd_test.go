@@ -776,44 +776,58 @@ func TestEmptyValueAndLowerCaseHex(t *testing.T) {
 	}
 }
 
-// TestStateEmptyOptionalValues: the module writes an optional number it does not know as an empty value ("empty when
-// none" in its command reference), not as an absent key: tgtentry=, tgthp=, manapct= and corpsemap= are not numbers
-// and must read as "not known", never as a zero and never as a parse failure. The same holds for a corpse position
-// and the two distances.
-func TestStateEmptyOptionalValues(t *testing.T) {
-	line := strings.Replace(fullState,
-		"tgtentry=426 tgthp=100", "tgtentry= tgthp=", 1)
-	line = strings.Replace(line, "pwmax=100", "pwmax=100 manapct=", 1)
-	line = strings.Replace(line, "pos=1.25,2.5,3.75", "pos=1.25,2.5,3.75 corpse= corpsemap=", 1)
-	line = strings.Replace(line, "dl=self dm=3.4", "dl= dm=", 1)
+// TestStateEmptyTargetNumbers: the command reference marks tgtentry= and tgthp= "empty when none" (the engine has
+// no target). The empty value reads as "not known", never as a zero and never as a parse failure; a present number
+// still has to be a number in range.
+func TestStateEmptyTargetNumbers(t *testing.T) {
+	line := strings.Replace(fullState, "tgtentry=426 tgthp=100", "tgtentry= tgthp=", 1)
+	b := mustBot(t, line)
+	if b.HasTargetEntry || b.HasTargetHPPct || b.TargetEntry != 0 || b.TargetHPPct != 0 {
+		t.Fatalf("empty target numbers: has=%v/%v value=%d/%d",
+			b.HasTargetEntry, b.HasTargetHPPct, b.TargetEntry, b.TargetHPPct)
+	}
+	bad := strings.Replace(line, "tgthp=", "tgthp=101", 1)
+	if _, err := NewClient(oneReply("state-begin #T", bad, stateEndT(1, 0, "yes", ""))).
+		StateReport(context.Background(), "party"); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("out-of-range tgthp: err %v, want ErrBadValue", err)
+	}
+}
+
+// TestStateEmptyNumbersRefused: every other optional number is absent when unknown, never empty (the reference:
+// "an unknown number is an omitted key"). An empty manapct= or corpsemap= is a report the client must not act on,
+// not a zero.
+func TestStateEmptyNumbersRefused(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"manapct", strings.Replace(fullState, "pwmax=100", "pwmax=100 manapct=", 1)},
+		{"corpsemap", strings.Replace(fullState, "pos=1.25,2.5,3.75",
+			"pos=1.25,2.5,3.75 corpsemap=", 1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewClient(oneReply("state-begin #T", tc.line, stateEndT(1, 0, "yes", ""))).
+				StateReport(context.Background(), "party")
+			if !errors.Is(err, ErrBadValue) {
+				t.Fatalf("empty %s: err %v, want ErrBadValue", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestStateEmptyTextValues: the keys the reference writes empty when there is none are text, not numbers: an empty
+// dl=, dm=, ord=, lastorder= is "not known", and the record is whole.
+func TestStateEmptyTextValues(t *testing.T) {
+	line := strings.Replace(fullState, "dl=self dm=3.4", "dl= dm=", 1)
 	line = strings.Replace(line, "ord=41:ok", "ord=", 1)
 	line = strings.Replace(line, "lastorder=pull", "lastorder=", 1)
-	rep, err := NewClient(oneReply("state-begin #T", line, stateEndT(1, 0, "yes", ""))).
-		StateReport(context.Background(), "party Tbtank")
-	if err != nil {
-		t.Fatalf("StateReport: %v", err)
-	}
-	b := rep.Bots[0]
-	if b.HasTargetEntry || b.HasTargetHPPct || b.HasManaPct {
-		t.Fatalf("presence bits: entry=%v hp=%v mana=%v", b.HasTargetEntry, b.HasTargetHPPct, b.HasManaPct)
-	}
-	if b.TargetEntry != 0 || b.TargetHPPct != 0 || b.ManaPct != 0 {
-		t.Fatalf("empty optional numbers read as %d/%d/%d", b.TargetEntry, b.TargetHPPct, b.ManaPct)
-	}
-	if b.HasCorpse || b.HasCorpseMap {
-		t.Fatalf("empty corpse= corpsemap= read as present: %v %v", b.HasCorpse, b.HasCorpseMap)
-	}
+	b := mustBot(t, line)
 	if b.DistLeader.Has || b.DistMaster.Has {
 		t.Fatalf("empty distances read as present: %+v %+v", b.DistLeader, b.DistMaster)
 	}
 	if b.Order.Status != "" || b.LastOrder != "" {
 		t.Fatalf("empty order read as %+v lastorder %q", b.Order, b.LastOrder)
-	}
-	// A present number still has to be a number in range.
-	bad := strings.Replace(line, "tgthp=", "tgthp=101", 1)
-	if _, err := NewClient(oneReply("state-begin #T", bad, stateEndT(1, 0, "yes", ""))).
-		StateReport(context.Background(), "party"); !errors.Is(err, ErrBadValue) {
-		t.Fatalf("out-of-range tgthp: err %v, want ErrBadValue", err)
 	}
 }
 

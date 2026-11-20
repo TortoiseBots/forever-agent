@@ -570,6 +570,14 @@ func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 	return t, err == nil
 }
 
+// stateFreshFor is how old the last state read may be before a gate treats the party as unknown.
+const stateFreshFor = 6 * time.Second
+
+// repFresh says whether the last state read is fresh enough to act on: the one freshness rule the gates share.
+func (r *Run) repFresh() bool {
+	return !r.repAt.IsZero() && r.now().Sub(r.repAt) <= stateFreshFor
+}
+
 // ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on the run's
 // map (a watch: on the party's own map, the observer aside) and in one instance, its master's distance known and
 // short, and its last order not failed. A bot with the engine off is not ready with the reason noengine:<name>. It
@@ -578,7 +586,7 @@ func (r *Run) ready() (bool, string) {
 	if !r.reportComplete() {
 		return false, "report"
 	}
-	if r.now().Sub(r.repAt) > 6*time.Second {
+	if !r.repFresh() {
 		return false, "stale"
 	}
 	inst := uint32(0)

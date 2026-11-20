@@ -281,10 +281,12 @@ func parseStateRecord(rec record) (BotState, error) {
 	if b.TargetGUID, err = requiredGUID(rec, "tgt"); err != nil {
 		return b, err
 	}
-	if b.TargetEntry, b.HasTargetEntry, err = rec.optionalInt("tgtentry", 0, math.MaxInt32); err != nil {
+	// The command reference marks these two "empty when none": the module writes the engine's target entry and
+	// health percent empty when the bot has no target. Every other optional number is absent when unknown.
+	if b.TargetEntry, b.HasTargetEntry, err = rec.optionalIntEmpty("tgtentry", 0, math.MaxInt32); err != nil {
 		return b, err
 	}
-	if b.TargetHPPct, b.HasTargetHPPct, err = rec.optionalInt("tgthp", 0, 100); err != nil {
+	if b.TargetHPPct, b.HasTargetHPPct, err = rec.optionalIntEmpty("tgthp", 0, 100); err != nil {
 		return b, err
 	}
 	if b.VictimGUID, err = requiredGUID(rec, "victim"); err != nil {

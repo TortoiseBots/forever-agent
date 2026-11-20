@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
 // TestWatchObserverOutsideTheInstance: the party stands in the instance and the observer is still outside. PREPARE
@@ -144,6 +146,90 @@ func TestWatchConfigRefusalIsLogged(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(*logs, "\n"), "watch: end reason=config") {
 		t.Fatalf("no end reason:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchZeroInstanceRefused: the party stands on the plan's map with instance id 0. That is the open world, not
+// the instance the plan names, so the watch refuses the placement before it starts the module's run.
+func TestWatchZeroInstanceRefused(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	for _, b := range f.bots {
+		b.inst = 0
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "enter:party-map" {
+		t.Fatalf("stop %q, want enter:party-map; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run starts on a party in instance 0", n)
+	}
+}
+
+// TestPartyInInstanceNeedsAnInstance: five bots sharing a map are not in while their instance id is 0, and a report
+// older than the gate's freshness rule is not evidence of the entry either.
+func TestPartyInInstanceNeedsAnInstance(t *testing.T) {
+	run, f, _ := newWatch(t, watchConfig())
+	for _, b := range f.bots {
+		b.mapID, b.inst = run.route.Map, 0
+	}
+	r := f.report(5)
+	run.rep, run.repAt = &r, run.now()
+	if run.partyInInstance() {
+		t.Fatal("five bots on the plan's map with inst=0 read as in the instance")
+	}
+	for _, b := range f.bots {
+		b.inst = 1
+	}
+	r = f.report(5)
+	run.rep, run.repAt = &r, run.now()
+	if !run.partyInInstance() {
+		t.Fatal("five bots on the plan's map in one instance read as out")
+	}
+	// The same report, read before the entry: stale, so the party is unknown.
+	run.repAt = run.now().Add(-stateFreshFor - time.Second)
+	if run.partyInInstance() {
+		t.Fatal("a stale report read as the party in the instance")
+	}
+}
+
+// TestWatchStartNeedsOneRunRecord: a start answer with no run record is not a started run. The watch refuses it
+// instead of logging the module's run as started and polling a run that does not exist.
+func TestWatchStartNeedsOneRunRecord(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	f.NoRunRecord = true
+	res := run.Watch(context.Background())
+	if res.Stop != "start:bad-report" {
+		t.Fatalf("stop %q, want start:bad-report; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	joined := strings.Join(*logs, "\n")
+	if strings.Contains(joined, "watch: started") {
+		t.Fatalf("a zero-record start read as started:\n%s", joined)
+	}
+	if !strings.Contains(joined, "watch: end reason=start:bad-report") {
+		t.Fatalf("no end reason:\n%s", joined)
+	}
+}
+
+// TestStartRecord: the one record a start answer carries must name the leader and plan the command named, and be
+// running; zero or several records are a malformed report.
+func TestStartRecord(t *testing.T) {
+	st := tbcmd.RunState{Lead: "Tank", Plan: "ragefire_chasm", State: "running"}
+	if _, err := startRecord(ActionReport{Verb: "run", Confirmed: true, Count: 1, Run: &st}, "Tank", "ragefire_chasm"); err != nil {
+		t.Fatalf("the whole answer: %v", err)
+	}
+	tests := map[string]ActionReport{
+		"zero":       {Verb: "run", Confirmed: true},
+		"several":    {Verb: "run", Confirmed: true, Count: 2, Run: &st},
+		"other lead": {Verb: "run", Confirmed: true, Count: 1, Run: &tbcmd.RunState{Lead: "Moff", Plan: "ragefire_chasm", State: "running"}},
+		"other plan": {Verb: "run", Confirmed: true, Count: 1, Run: &tbcmd.RunState{Lead: "Tank", Plan: "other", State: "running"}},
+		"paused":     {Verb: "run", Confirmed: true, Count: 1, Run: &tbcmd.RunState{Lead: "Tank", Plan: "ragefire_chasm", State: "paused"}},
+	}
+	for name, rep := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := startRecord(rep, "Tank", "ragefire_chasm"); !errors.Is(err, tbcmd.ErrBadReport) {
+				t.Fatalf("err %v, want ErrBadReport", err)
+			}
+		})
 	}
 }
 

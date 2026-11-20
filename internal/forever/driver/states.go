@@ -388,12 +388,16 @@ func (r *Run) enteredNow() bool {
 	return r.partyInInstance()
 }
 
-// partyInInstance says whether every party member stands on the plan's map in one instance.
+// partyInInstance says whether every party member stands on the plan's map in one instance, from a report fresh
+// enough to act on. Instance 0 is the open world, never the instance a plan names: five bots on map 0 are not in.
 func (r *Run) partyInInstance() bool {
-	if len(r.rep.Bots) != 5 {
+	if r.rep == nil || !r.repFresh() || len(r.rep.Bots) != 5 {
 		return false
 	}
 	inst := r.rep.Bots[0].Instance
+	if inst == 0 {
+		return false
+	}
 	for _, b := range r.rep.Bots {
 		if b.Map != r.route.Map || b.Instance != inst {
 			return false

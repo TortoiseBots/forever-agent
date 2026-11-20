@@ -200,6 +200,9 @@ type Fake struct {
 	BotCommander string
 	// RosterLeader overrides the roster's leader, for a party whose leader is not the bot the run names.
 	RosterLeader string
+	// NoRunRecord makes a run action answer with no run record (count 0), as a start reply that lost its record:
+	// the watch must refuse it, never log a started run.
+	NoRunRecord bool
 }
 
 // FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
@@ -648,6 +651,9 @@ func (f *Fake) runAction(a Action) (ActionReport, error) {
 		}
 	}
 	rep := ActionReport{Verb: "run", Confirmed: true, Count: 1}
+	if f.NoRunRecord {
+		return ActionReport{Verb: "run", Confirmed: true}, nil
+	}
 	if f.run != nil {
 		st := f.runState()
 		rep.Run = &st

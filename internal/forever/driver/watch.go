@@ -137,6 +137,21 @@ func (r *Run) configBroken() bool {
 	return false
 }
 
+// startRecord is the one run record a start answer must carry: exactly one, for the leader and the plan the command
+// named, and running. Zero or several records, or a record naming another leader, plan or state, is a malformed
+// report (ErrBadReport) the watch must not read as a started run.
+func startRecord(rep ActionReport, leader, plan string) (tbcmd.RunState, error) {
+	if rep.Count != 1 || rep.Run == nil {
+		return tbcmd.RunState{}, fmt.Errorf("%w: run start carried %d run record(s), want 1", tbcmd.ErrBadReport, rep.Count)
+	}
+	st := *rep.Run
+	if !strings.EqualFold(st.Lead, leader) || st.Plan != plan || st.State != "running" {
+		return tbcmd.RunState{}, fmt.Errorf("%w: run start answered lead=%q plan=%q state=%q, the command was lead=%q plan=%q",
+			tbcmd.ErrBadReport, st.Lead, st.Plan, st.State, leader, plan)
+	}
+	return st, nil
+}
+
 // watchStart starts the module's run: `.tb run start <leader> <plan>`, a fight-starting action (the run pulls from
 // then on), retried while its gate is shut and ended with the module's own refusal code when it refuses.
 func (r *Run) watchStart(ctx context.Context, w *watchRun) {
@@ -145,17 +160,23 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 		rep, why := r.act(ctx, Action{Kind: ActionRunStart, Who: r.cfg.Leader, Plan: r.route.Name})
 		switch why {
 		case "":
+			st, err := startRecord(rep, r.cfg.Leader, r.route.Name)
+			if err != nil {
+				// A start answer without its one run record is not a started run: the watch must not go on as if
+				// the module had accepted the line.
+				r.logf("watch: the start answer is refused: %v", err)
+				r.stop("start:bad-report")
+				return
+			}
 			w.lastEvent = r.now()
-			if rep.Run != nil {
-				r.applyRun(w, *rep.Run)
-				if rep.Run.HasLeg {
-					// The module's run starts in its first leg: that leg's time starts at the run's zero.
-					w.legSeen[rep.Run.Leg] = true
-					w.leg(rep.Run.Leg).FirstS = 0
-				}
-				if rep.Run.HasEv {
-					w.lastSeq = rep.Run.Ev
-				}
+			r.applyRun(w, st)
+			if st.HasLeg {
+				// The module's run starts in its first leg: that leg's time starts at the run's zero.
+				w.legSeen[st.Leg] = true
+				w.leg(st.Leg).FirstS = 0
+			}
+			if st.HasEv {
+				w.lastSeq = st.Ev
 			}
 			r.progress()
 			r.logf("watch: started plan=%s state=%s step=%d/%d", w.record.Plan, w.record.State, w.record.Step, w.record.Steps)

@@ -6,16 +6,22 @@ environment is named here; the module is "the server module" throughout.
 
 ## 1. Empty optional values in the state record
 
-The module writes an optional number it does not know as an empty value (`tgtentry=`, `tgthp=`, and the other
-optional numbers), not as an absent key. `optionalInt` parsed the empty value as a number, so the whole record was
-refused.
+The command reference marks exactly two state numbers "empty when none": `tgtentry=` and `tgthp=` (the engine's
+target; the module writes them empty when it has none). Every other unknown number is an omitted key, so an empty
+cursor or counter (`seq=`, `ev=`, `leg=`, `step=`, `last=`, `manapct=`, `corpsemap=`) is a malformed report, never
+"not known".
 
-* `internal/forever/command/tbcmd/v2.go:90` — `optionalInt` reads the empty value as "not known" (present=false,
-  value 0 is never acted on).
-* `internal/forever/command/tbcmd/state.go:464` — `optionalPos` reads `corpse=` empty as absent, so the
+* `internal/forever/command/tbcmd/v2.go:87` — `optionalInt` stays strict: an empty value is `ErrBadValue`.
+* `internal/forever/command/tbcmd/v2.go:100` — `optionalIntEmpty` is the allow-empty variant, used only at the two
+  documented state keys: the empty value is "not known" (present=false, value 0 is never acted on).
+* `internal/forever/command/tbcmd/state.go:284` — `tgtentry` and `tgthp` use it; `manapct` and `corpsemap` stay
+  strict.
+* `internal/forever/command/tbcmd/state.go:466` — `optionalPos` reads `corpse=` empty as absent, so the
   `corpse=`/`corpsemap=` pair rule holds on presence.
-* Tests: `TestStateEmptyOptionalValues` (tbcmd) — `tgtentry=`, `tgthp=`, `manapct=`, `corpse=`, `corpsemap=`,
-  `dl=`, `dm=`, `ord=` empty; presence bits false; a present out-of-range `tgthp=101` still refused.
+* Tests: `TestStateEmptyTargetNumbers`, `TestStateEmptyNumbersRefused`, `TestStateEmptyTextValues`,
+  `TestEmptyCursorsRefused` (tbcmd) — the two target numbers read as absent, a present out-of-range `tgthp=101`
+  still refused, empty `manapct=`/`corpsemap=` refused, empty text keys (`dl=`, `dm=`, `ord=`, `lastorder=`) read
+  as absent, and empty `seq=`/`ev=`/`leg=`/`step=` refused.
 
 ## 2. A bot with the engine off
 
@@ -110,3 +116,23 @@ fec11857 Forever: read the state records the live module writes
 7f4a4c66 Forever: watch the party the module commands
 85a60918 Forever: joint watch fix notes
 ```
+
+## Review round 2
+
+The review of the fixes found three refusals too loose. Each is fixed with a test that fails on the old code.
+
+* **The empty-value allowance was too wide.** Item 1 above: `optionalInt` accepted every empty value as absent,
+  which also made an empty `seq=`, `ev=`, `leg=` or `step=` "not known". It is strict again
+  (`internal/forever/command/tbcmd/v2.go:91`); `optionalIntEmpty` (`v2.go:104`) is the allow-empty variant and is
+  used only at `tgtentry` and `tgthp` (`state.go:286`), the two state numbers the command reference marks "empty
+  when none". Tests: `TestEmptyCursorsRefused`, `TestStateEmptyNumbersRefused`, `TestStateEmptyTargetNumbers`.
+* **An instance id of 0 counted as an instance.** `partyInInstance`
+  (`internal/forever/driver/states.go:393`) now requires a fresh report (`run.go:577`), five members on the plan's
+  map, and an instance id that is not 0: map 0 is the open world, never the instance a plan names. Tests:
+  `TestWatchZeroInstanceRefused`, `TestPartyInInstanceNeedsAnInstance`.
+* **A start answer with no run record counted as a started run.** `watchStart`
+  (`internal/forever/driver/watch.go:143`) now needs exactly one run record whose leader and plan are the ones the
+  command named and whose state is running; zero or several records, or another leader, plan or state, stop the
+  watch with `start:bad-report` instead of logging it started. The typed start answer checks the same
+  (`internal/forever/command/tbcmd/run.go:137`). Tests: `TestWatchStartNeedsOneRunRecord`, `TestStartRecord`, and
+  the `zero start records`/`other plan`/`not running` rows of `TestRunTargetMismatchAndRefusals`.

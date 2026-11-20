@@ -121,11 +121,13 @@ bad percent, repeated key, event kinds, out-of-sequence events, `last` below the
 | blind reason | a state read that keeps failing ends `blind` and the log names the read error and the end reason |
 | config refusal | the refusal before anything is sent is logged with its reason |
 
-`tbcmd` (the typed layer): the empty optional numbers (`tgtentry=`, `tgthp=`, `manapct=`, `corpsemap=`) and an empty
-corpse read as "not known"; a bot with the engine off carries no `co=`/`nc=` and is a typed state, while the same
-record with `engine=yes` is refused; a setup answer's `target=party:commander:<name>` line is parsed as the success
-the module sent. `driver` (the plan reader): every plan of `dungeons/` loads with its in-fight run fields
-(`kill_first`, `cc_priority`, `cc_always`, `no_cc`, `summoned_kill_first`, `tank_min_hp`, a boss's `tactics`).
+`tbcmd` (the typed layer): the two state numbers the command reference marks "empty when none" (`tgtentry=`,
+`tgthp=`) and an empty corpse read as "not known", while every other optional number — an empty `seq=`, `ev=`,
+`leg=`, `step=`, `manapct=`, `corpsemap=` — is refused; a bot with the engine off carries no `co=`/`nc=` and is a
+typed state, while the same record with `engine=yes` is refused; a setup answer's `target=party:commander:<name>`
+line is parsed as the success the module sent. `driver` (the plan reader): every plan of `dungeons/` loads with its
+in-fight run fields (`kill_first`, `cc_priority`, `cc_always`, `no_cc`, `summoned_kill_first`, `tank_min_hp`, a
+boss's `tactics`).
 
 `cmd/forever-agent/forever_watch_test.go`: the dry watch (start, progress, events, done; exit 0), a refused plan
 (exit 2) and the argument checks before any network.
