@@ -106,9 +106,14 @@ func loginExit(err error, stderr io.Writer) (int, bool) {
 // bnet.Login in the command layer: --build 0 claims the realm's advertised build (bnet's retry), an explicit build
 // is claimed exactly as given.
 func (c *foreverCommon) login(ctx context.Context, cmd string, stdout io.Writer) (*bnet.Result, error) {
-	password := os.Getenv("FOREVER_PASSWORD")
+	return c.loginWithPassword(ctx, cmd, stdout, os.Getenv("FOREVER_PASSWORD"))
+}
+
+// loginWithPassword is login with the password already read: forever serve takes it from a file, every other
+// command from the environment.
+func (c *foreverCommon) loginWithPassword(ctx context.Context, cmd string, stdout io.Writer, password string) (*bnet.Result, error) {
 	if password == "" {
-		return nil, &loginError{fmt.Errorf("%s: FOREVER_PASSWORD is not set", cmd)}
+		return nil, &loginError{fmt.Errorf("%s: no password (FOREVER_PASSWORD is not set)", cmd)}
 	}
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)

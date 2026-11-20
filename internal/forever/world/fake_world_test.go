@@ -216,6 +216,17 @@ type fakeServer struct {
 	deathMapSc *mapScenario
 	// mapSc, when set, runs the map change scenario of mapchange_fake_test.go instead of the plain stay.
 	mapSc *mapScenario
+	// serveMode runs the RPC daemon's tolerant scenario (serve_fake_test.go): it answers every packet the serving
+	// methods can send and records what it saw.
+	serveMode       bool
+	serveSwing      bool
+	serveStop       bool
+	serveLogout     bool
+	serveArea       bool
+	serveCast       bool
+	serveGMSent     bool
+	serveBotSent    bool
+	serveInviteSent bool
 	// fbdMapSc is the dungeon run's map scenario: the run keeps its own socket loop, so this one is only the
 	// realm-side world-port bookkeeping and the state the entry/leave helper fills.
 	fbdMapSc *mapScenario
@@ -814,6 +825,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 		}
 	}
 
+	if f.serveMode {
+		f.serveDaemon(c, realm)
+		return
+	}
 	if f.mapSc != nil {
 		f.serveMapChange(c, realm)
 		return

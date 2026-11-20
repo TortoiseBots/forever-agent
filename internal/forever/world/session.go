@@ -163,6 +163,10 @@ type Options struct {
 	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
+	// Serve makes this a long-running session: after the login burst the session serves the RPC socket on
+	// Serve.Listener and stays in the world until the caller's context ends or the link drops. Stay and the
+	// one-shot modes are ignored; Deadline, when above 0, still bounds the whole run.
+	Serve *ServeConfig
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -479,6 +483,8 @@ type session struct {
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
+	// serve is the RPC loop's state when this session is serving (forever serve); nil for a one-shot run.
+	serveRT *serveRuntime
 }
 
 const (
@@ -495,14 +501,24 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	if opts.Character == "" {
 		return nil, errors.New("world: no character name")
 	}
-	if opts.Deadline <= 0 {
+	if opts.Serve == nil && opts.Deadline <= 0 {
 		opts.Deadline = 2*time.Minute + opts.Stay
 	}
-	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
-	defer cancel()
+	if opts.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Deadline)
+		defer cancel()
+	}
+	// A serving session outlives the caller's cancellation long enough to log out: the RPC loop notices the
+	// caller's context and sends the logout itself, so the session's own waits are not cut off underneath it.
+	sessionCtx, pumpCtx := ctx, ctx
+	if opts.Serve != nil {
+		sessionCtx = context.WithoutCancel(ctx)
+		pumpCtx = sessionCtx
+	}
 
 	report := &Report{Counts: make(map[string]int)}
-	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
+	s := &session{opts: opts, ctx: sessionCtx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
 	s.deadChs[sideRealm] = make(chan struct{})
 	s.deadChs[sideInstance] = make(chan struct{})
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
@@ -510,7 +526,7 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
-	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
+	s.pumpCtx, s.pumpCancel = context.WithCancel(pumpCtx)
 	defer s.pumpCancel()
 
 	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
@@ -862,6 +878,10 @@ func (s *session) enter(ctx context.Context) error {
 		return err
 	}
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
+
+	if s.opts.Serve != nil {
+		return s.serve(ctx, s.opts.Serve)
+	}
 
 	// ---- stay: answer time syncs, the active-mover exchange and pings
 	if s.opts.AddonCheck {
