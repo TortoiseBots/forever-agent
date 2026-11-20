@@ -179,6 +179,49 @@ func TestInterruptDuringFight(t *testing.T) {
 	}
 }
 
+// TestStopFightRetriesAFailedReport: one failed state report on the stop path is not the end of the fight wait. The
+// run keeps polling until the fight ends and sends the stay; only a lost link or a spent budget ends the wait.
+func TestStopFightRetriesAFailedReport(t *testing.T) {
+	cfg := scenarioConfig("none")
+	cfg.Limits = scenarioLimits(func(l *Limits) { l.MaxMinutes = 1; l.StopFight = 5 * time.Minute })
+	run, f := newScenarioLim(t, oneGroupPlan(), cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failNext := false
+	f.OnState = func(f *Fake, n int) error {
+		if failNext {
+			failNext = false
+			return context.DeadlineExceeded // one call timed out; the party is not unknown
+		}
+		return nil
+	}
+	f.OnOrder = func(f *Fake, who, verb, arg string) {
+		if verb == "pull" {
+			f.Skirmish(arg, 90*time.Second)
+		}
+	}
+	// The interrupt lands mid-fight; the stop path's first report is the one that fails.
+	f.Clock.After(20*time.Second, func() { failNext = true; cancel() })
+	res := run.Play(ctx)
+	if res.Stop != "interrupt" {
+		t.Fatalf("stop %q, want interrupt (states %v)", res.Stop, res.States)
+	}
+	if res.FightUnresolved {
+		t.Fatal("one failed report ended the fight wait")
+	}
+	pull, ok := pullOrder(res, 1)
+	if !ok {
+		t.Fatal("no pull")
+	}
+	stay, ok := stayOrder(res)
+	if !ok {
+		t.Fatalf("no stay after the fight ended (orders %+v)", res.Orders)
+	}
+	if fightEnd := pull.At + 90*time.Second; stay.At < fightEnd {
+		t.Fatalf("stay at %.1fs, before the fight ended at %.1fs", stay.At.Seconds(), fightEnd.Seconds())
+	}
+}
+
 // TestStopForce: the second interrupt ends the wait at once; a fight still on means no stay.
 func TestStopForce(t *testing.T) {
 	cfg := scenarioConfig("none")

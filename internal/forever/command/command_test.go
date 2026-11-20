@@ -25,7 +25,7 @@ type scriptTransport struct {
 	pumpErr error
 }
 
-func (t *scriptTransport) SendCommand(line string) error {
+func (t *scriptTransport) SendCommand(_ context.Context, line string) error {
 	if t.sendErr != nil {
 		return t.sendErr
 	}
@@ -289,7 +289,7 @@ type concurrentTransport struct {
 	peak   atomic.Int32
 }
 
-func (c *concurrentTransport) SendCommand(string) error { return nil }
+func (c *concurrentTransport) SendCommand(context.Context, string) error { return nil }
 
 func (c *concurrentTransport) Pump(ctx context.Context, feed func(chat.Line), done func() bool) error {
 	n := c.inside.Add(1)
