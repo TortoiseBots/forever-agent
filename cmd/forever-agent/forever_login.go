@@ -22,6 +22,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever fb-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--add CLASS[:ROLE]] [--order WORD|party:WORD] [--dismiss NAME|all] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever fb-dungeon [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--dungeon NAME] [--role tank|healer|dps] [--watch SECONDS] [--leave=false] [--settle DURATION] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--fight-for DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION] [--fight-for DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --entry N [--range YARDS] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever map-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--settle DURATION] [--stay DURATION] [--area-trigger ID]")
 		fmt.Fprintln(stderr, "       forever-agent forever char-create [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --name NAME [--surname S] --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)")
 		fmt.Fprintln(stderr, "       forever-agent forever char-delete [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL (--name NAME [--surname S] | --guid GUID) --yes NAME")
@@ -54,6 +56,10 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverFBDungeonCmd(ctx, args[1:], stdout, stderr)
 	case "fight-check":
 		return foreverFightCheckCmd(ctx, args[1:], stdout, stderr)
+	case "loot-check":
+		return foreverLootCheckCmd(ctx, args[1:], stdout, stderr)
+	case "object-use":
+		return foreverObjectUseCmd(ctx, args[1:], stdout, stderr)
 	case "death-check":
 		return foreverDeathCheckCmd(ctx, args[1:], stdout, stderr)
 	case "map-check":
