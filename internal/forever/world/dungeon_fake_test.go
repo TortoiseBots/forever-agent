@@ -11,6 +11,7 @@ package world
 // no further line is sent).
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,6 +66,10 @@ type dungeonScene struct {
 	pollDead   string
 	pollCombat bool
 	killPoll   int
+
+	// onState, when set, is called after a state report is answered, with that report's number of polls since the
+	// pull: the interrupt test cancels the caller's context from it.
+	onState func(poll int)
 
 	mu             sync.Mutex
 	bots           map[string]*sceneBot
@@ -177,6 +182,9 @@ func (sc *dungeonScene) stateReply(c *fakeConn, token string) {
 	lines = append(lines, fmt.Sprintf("state-end count=5 records=5 resting=0 target=party:Tank ready=yes "+
 		"alive=%d dead=%d wipe=no whole=no #%s", alive, dead, token))
 	sc.reply(c, token, lines...)
+	if sc.onState != nil {
+		sc.onState(poll)
+	}
 }
 
 // partyReply answers `.tb party <tank>`.
@@ -623,6 +631,57 @@ func TestDungeonRunAgainstFakeServer(t *testing.T) {
 		if line != recorded[i] && !strings.HasPrefix(line, recorded[i]+" ") {
 			t.Fatalf("wire order %q is not the run's %q", line, recorded[i])
 		}
+	}
+}
+
+// TestDungeonRunInterruptStillStops: the operator's interrupt cancels the run's context while the party is fighting.
+// The stop path still has to reach the server over the live socket — the state reports it waits on and the party's
+// stay — although the run's own context is gone: it detaches from it, and the session's packet loop and command
+// channel run on that detached context instead of the cancelled one.
+func TestDungeonRunInterruptStillStops(t *testing.T) {
+	sc := newTestScene(t)
+	cfg := dungeonConfig(t, sc, "none")
+	f := newFakeServer(t)
+	f.dungeon = sc
+	f.clientMayLeave = true
+	defer f.close()
+	f.wg.Add(1)
+	go f.serveRealm()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The second poll after the pull is the fight's first one: the run is in StateFight, mid-fight, when the caller's
+	// context ends.
+	sc.onState = func(poll int) {
+		if poll == 2 {
+			cancel()
+		}
+	}
+	report, err := Enter(ctx, dungeonOptions(f, &cfg, 2*time.Second))
+	f.wait(t)
+	if err != nil && !strings.Contains(err.Error(), "connection is lost") {
+		t.Fatalf("Enter: %v", err)
+	}
+	if report == nil || report.Dungeon == nil {
+		t.Fatalf("report %+v", report)
+	}
+	res := report.Dungeon
+	if res.Stop != "interrupt" {
+		t.Fatalf("stop %q, want interrupt (states %v)", res.Stop, res.States)
+	}
+	if res.FightUnresolved {
+		t.Fatal("the stop path gave up on the fight the moment the caller's context ended")
+	}
+	sc.mu.Lock()
+	cmds := append([]string(nil), sc.commands...)
+	sc.mu.Unlock()
+	found := false
+	for _, line := range cmds {
+		if line == ".tb order party stay" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the stop's stay never reached the server after the interrupt:\n%s", strings.Join(cmds, "\n"))
 	}
 }
 

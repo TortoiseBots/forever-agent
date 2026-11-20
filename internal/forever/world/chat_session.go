@@ -85,7 +85,11 @@ func (s *session) chatLanguage() (uint32, error) {
 // SendCommand sends text that is meant to be a server command (a leading . or !). It is the only path that allows
 // those prefixes: ValidateCommandText owns the rule, ValidateText refuses them for chat. Nothing in this round
 // calls it; it exists so a server command can never be confused with a chat line.
-func (s *session) SendCommand(text string) error {
+func (s *session) SendCommand(text string) error { return s.SendCommandCtx(s.ctx, text) }
+
+// SendCommandCtx is SendCommand on the caller's context: a stop or cleanup path whose own context was detached from
+// the session's hands its bounded context here, so the line still leaves after an interrupt.
+func (s *session) SendCommandCtx(ctx context.Context, text string) error {
 	if err := chat.ValidateCommandText(text); err != nil {
 		return err
 	}
@@ -93,7 +97,7 @@ func (s *session) SendCommand(text string) error {
 	if err != nil {
 		return err
 	}
-	return s.Send(wire.CMSGChatMessageSay, chat.BuildSay(lang, text))
+	return s.SendCtx(ctx, wire.CMSGChatMessageSay, chat.BuildSay(lang, text))
 }
 
 // handleChat decodes one chat or system packet. An unknown chat type is counted and skipped, never an error; a
