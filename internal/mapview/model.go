@@ -1,6 +1,7 @@
 // Package mapview draws a run as a top-down map (issue #79): the navmesh floor as the background, the route of
 // each party member, the hostile creatures with what became of them, and the events that matter (pulls, deaths,
-// wipes, doors, GM teleports), as an SVG per floor and as a single-file HTML replay with a time slider.
+// wipes, doors, GM teleports, the module's pauses and the practice rescues), as an SVG per floor and as a
+// single-file HTML replay with a time slider.
 //
 // Everything is drawn from data the agent already records: the frames a session or a capture replay yields (where
 // the party and the hostile units were), the event log, the dungeon_status report, botwatch samples, a dungeon
@@ -72,6 +73,8 @@ const (
 	MarkLeg      = "leg"      // a leg of the dungeon plan began
 	MarkGM       = "gm"       // another GM shortcut of the dungeon report (revive, buff)
 	MarkBossKill = "boss_kill"
+	MarkPause    = "pause"  // the module paused its run (a wipe, an outside order, a stuck leader)
+	MarkRescue   = "rescue" // the watcher sent a practice rescue
 )
 
 // Marker is one event placed on the map.

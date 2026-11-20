@@ -472,7 +472,9 @@ runner and the bug hunter read one file. The watch's summary counts both (`frame
 same reasons as before. A combat-log page is all or nothing: a write that fails leaves the page in the cursor and the
 next tick retries it, so no failure can skip rows the summary would call complete (`combat_error` names the last one).
 `--combat-max-mb` bounds the file (default 64): a page that would cross it is not written and the summary says
-`combat_truncated` with `combat_bytes`, the size the file stopped at.
+`combat_truncated` with `combat_bytes`, the size the file stopped at. The trace's events carry the watch's own
+anchors: `run_start` at the run-start action's reply time (the module's clock zero, which a map reader uses to place
+the module's `at_s` on the trace's clock) and one `wipe` at the module's own second for every wipe it reports.
 
 `forever-agent forever run-report RECORD [--json] [--out DIR]`
 builds the card of a saved `<run_id>.forever-run.json` offline and prints it; `--json` prints the machine-readable

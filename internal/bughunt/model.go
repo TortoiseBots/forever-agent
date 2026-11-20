@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // Frame is one sample of the world: the party keyed by the run's own identity, and the hostiles it saw. GC is the
@@ -133,12 +135,18 @@ type Run struct {
 	Combat  []CombatRow
 	Roles   map[string]string
 	Classes map[string]string
+	// Names is the party record's name per guid: the character's for a dungeon run, the party slot's word for a
+	// watch (whose records carry no character names).
+	Names map[string]string
 	// Subjects are the members the rules apply to; nil means every unit in a frame.
 	Subjects map[string]bool
 	// CastTimes is every cast, cast start, damage and heal event per source, sorted: rule 1's "no cast/swing" window.
 	CastTimes map[string][]float64
 	// BossEntries are the entries a watch's instance report listed, which rule 3 does not count as adds.
 	BossEntries map[uint32]string
+	// TraceEvents are the trace's own event records (run_start, wipe, pull_start, ...), for adapters that place a
+	// record's events on the trace's clock instead of a summary's module clock.
+	TraceEvents []trace.Event
 }
 
 // Role is the member's role, "?" when the run does not know it.

@@ -38,6 +38,8 @@ const (
 	colPlan     = "#4b3fa0"
 	colDoor     = "#8c5a1e"
 	colTeleport = "#c2185b"
+	colPause    = "#6b6b6b"
+	colRescue   = "#1b7f3b"
 )
 
 // fateColor is the colour of a creature's dot.
@@ -574,6 +576,14 @@ func (s *Scene) writeMarker(w *svgw, m Marker) {
 			f1(x), f1(y), colText, f1(x), f1(y-16), colPlan, f1(x+13), f1(y-9), colText, esc(m.Label), esc(title))
 	case MarkBossKill:
 		w.f(`<circle class="boss-kill" cx="%s" cy="%s" r="14" fill="none" stroke="%s" stroke-width="2"><title>%s</title></circle>`+"\n", f1(x), f1(y), colBoss, esc(title))
+	case MarkPause:
+		w.f(`<g class="pause"><circle cx="%s" cy="%s" r="9" fill="#ffffff" fill-opacity="0.85" stroke="%s" stroke-width="2"/>`+
+			`<path d="M%s %sv6M%s %sv6" stroke="%s" stroke-width="2.4"/><title>%s</title></g>`+"\n",
+			f1(x), f1(y), colPause, f1(x-3), f1(y-5), f1(x+3), f1(y-5), colPause, esc(title))
+	case MarkRescue:
+		w.f(`<g class="rescue"><circle cx="%s" cy="%s" r="9" fill="#ffffff" fill-opacity="0.85" stroke="%s" stroke-width="2"/>`+
+			`<path d="M%s %sh8M%s %sv8" stroke="%s" stroke-width="2.2"/><title>%s</title></g>`+"\n",
+			f1(x), f1(y), colRescue, f1(x-4), f1(y), f1(x), f1(y-4), colRescue, esc(title))
 	}
 }
 
