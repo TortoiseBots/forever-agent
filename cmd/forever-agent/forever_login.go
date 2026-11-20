@@ -96,7 +96,7 @@ func foreverLoginCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		return exitUsage
 	}
 
-	result, err := common.login(ctx, "forever login-check", stdout)
+	result, err := common.login(ctx, "forever login-check", stdout, nil)
 	if err != nil {
 		if code, isLogin := loginExit(err, stderr); isLogin {
 			return code

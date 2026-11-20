@@ -272,8 +272,7 @@ func (c *conn) waitEncryptedMode(ctx context.Context, encryptKey [32]byte) error
 			c.encrypted = true
 			return nil
 		case wire.SMSGAuthResponse:
-			code := authResult(p.Payload)
-			return fmt.Errorf("worldconn: the server refused the session before encryption: result 0x%08X (%s)", code, authResultName(code))
+			return &Refused{Code: authResult(p.Payload), BeforeEncryption: true}
 		default:
 			ignored++
 			c.log("world: ignoring %s before the encrypted mode", packetName(p))
@@ -300,13 +299,38 @@ func (c *conn) expectAuthResponse(ctx context.Context) error {
 			}
 			continue
 		}
-		code := authResult(p.Payload)
-		if code != 0 {
-			return fmt.Errorf("world auth refused: result 0x%08X (%s)", code, authResultName(code))
+		if code := authResult(p.Payload); code != 0 {
+			return &Refused{Code: code}
 		}
 		return nil
 	}
 }
+
+// authResultBadVersion is ERROR_BAD_VERSION (src/server/proto/BattlenetRpcErrorCodes.h): the world server has no
+// build_info row for the build the account claimed, or no auth key for the join ticket's variant with
+// Network.SkipBuildAuthKeyCheck off (WorldSocket.cpp:739-763). The realm list can still accept that build, so a
+// build selection that ends at the realm list alone can pick a build the world server refuses.
+const authResultBadVersion = 0x1C
+
+// Refused is an SMSG_AUTH_RESPONSE with a non-zero result: the world server rejected this session
+// (WorldSocket::SendAuthResponseError, WorldSocket.cpp:1165). The handshake sends every refusal before
+// SMSG_ENTER_ENCRYPTED_MODE (the switch happens only after _authed, WorldSocket.cpp:960), so BeforeEncryption
+// tells a build the world server has no build_info row for from a transfer that failed after the switch.
+type Refused struct {
+	Code             uint32
+	BeforeEncryption bool
+}
+
+func (e *Refused) Error() string {
+	if e.BeforeEncryption {
+		return fmt.Sprintf("worldconn: the server refused the session before encryption: result 0x%08X (%s)", e.Code, authResultName(e.Code))
+	}
+	return fmt.Sprintf("world auth refused: result 0x%08X (%s)", e.Code, authResultName(e.Code))
+}
+
+// BadVersion reports ERROR_BAD_VERSION: this build cannot authenticate at this world server, and another build of
+// the same account may.
+func (e *Refused) BadVersion() bool { return e.Code == authResultBadVersion }
 
 func authResult(payload []byte) uint32 {
 	if len(payload) < 4 {

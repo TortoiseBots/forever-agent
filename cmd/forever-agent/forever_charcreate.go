@@ -32,7 +32,7 @@ func charScreenFlags(fs *flag.FlagSet, c *foreverCommon) {
 // connect logs in at the Battle.net login server and returns the character-screen connection options, or the exit
 // code of the failure.
 func (c *foreverCommon) connect(ctx context.Context, stdout, stderr io.Writer) (world.Options, int) {
-	result, err := c.login(ctx, "forever char screen", stdout)
+	result, err := c.login(ctx, "forever char screen", stdout, c.worldAccept(stdout))
 	if err != nil {
 		if code, isLogin := loginExit(err, stderr); isLogin {
 			return world.Options{}, code

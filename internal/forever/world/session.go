@@ -39,9 +39,13 @@ type Options struct {
 	// BuildAuthKey is auth.build_auth_key for the ticket's variant when the caller has it; empty makes the world
 	// socket send the zero digest a server accepts when it does not check the build key.
 	BuildAuthKey []byte
-	Character    string        // character name (the surname may be omitted)
-	Stay         time.Duration // how long to stay in the world after the login burst
-	Deadline     time.Duration // whole run; default 2 minutes + Stay + Settle
+	// WorldConn is a realm socket the login's build probe already authenticated (bnet.Options.WorldAccept). Enter
+	// and the character screen adopt it instead of authenticating again, and close it with the session. The socket
+	// belongs to this Options once set: nothing else may close it. Nil means authenticate from the fields above.
+	WorldConn *worldconn.Realm
+	Character string        // character name (the surname may be omitted)
+	Stay      time.Duration // how long to stay in the world after the login burst
+	Deadline  time.Duration // whole run; default 2 minutes + Stay + Settle
 	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle (the command's --stay), walk
 	// Dx/Dy yards from the spawn, wait WalkPause, walk back, report, log out. There is no plain stay after it; the
 	// settle is a stay-like phase and counts in the default Deadline like Stay.
@@ -524,22 +528,30 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	s.pumpCtx, s.pumpCancel = context.WithCancel(ctx)
 	defer s.pumpCancel()
 
-	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
-		Address:               opts.Address,
-		RealmID:               opts.RealmID,
-		RealmAddress:          opts.RealmAddress,
-		RealmJoinTicket:       opts.RealmJoinTicket,
-		ClientSecret:          opts.ClientSecret,
-		JoinSecret:            opts.JoinSecret,
-		ClientBuild:           opts.ClientBuild,
-		RealmBuild:            opts.RealmBuild,
-		BuildAuthKey:          opts.BuildAuthKey,
-		AllowInstanceRedirect: opts.AllowInstanceRedirect,
-		Deadline:              opts.Deadline,
-		Logf:                  opts.Logf,
-	})
-	if err != nil {
-		return report, err
+	realm := opts.WorldConn
+	if realm != nil {
+		// The login's build probe authenticated this socket for exactly the build the world server accepted, so
+		// entering must not authenticate a second time: that would be a second session for a build already proven.
+		opts.logf("world socket: adopting the connection the login authenticated (client build %d)", opts.ClientBuild)
+	} else {
+		var err error
+		realm, err = worldconn.Authenticate(ctx, worldconn.Config{
+			Address:               opts.Address,
+			RealmID:               opts.RealmID,
+			RealmAddress:          opts.RealmAddress,
+			RealmJoinTicket:       opts.RealmJoinTicket,
+			ClientSecret:          opts.ClientSecret,
+			JoinSecret:            opts.JoinSecret,
+			ClientBuild:           opts.ClientBuild,
+			RealmBuild:            opts.RealmBuild,
+			BuildAuthKey:          opts.BuildAuthKey,
+			AllowInstanceRedirect: opts.AllowInstanceRedirect,
+			Deadline:              opts.Deadline,
+			Logf:                  opts.Logf,
+		})
+		if err != nil {
+			return report, err
+		}
 	}
 	s.realm = realm
 	for _, name := range realm.HandshakeNames() {

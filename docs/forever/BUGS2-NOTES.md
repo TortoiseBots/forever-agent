@@ -34,11 +34,26 @@ a build auth key is refused with `ERROR_BAD_VERSION`.
   `>= 70790`, the same opcode numbering) and a live run at 70959 passed.
 - With no `--build`, `Login` claims them newest first. A VersionMismatch names the realm's own build; when that
   build is one this client knows it is tried next, otherwise the remaining known builds are tried newest first.
-  The first accepted claim is used. `Result.ClientBuild`/`Result.RealmBuild` therefore carry 70959 against a realm
-  that accepts it, not the echo of an older claim.
+  The first claim the world server accepts is used. `Result.ClientBuild`/`Result.RealmBuild` therefore carry 70959
+  against a realm that accepts it, not the echo of an older claim.
 - If the realm accepts none of them, the error names both sides: the realm's build and the client's builds
   (`realm "..." accepts none of the client builds this client knows (70707, 70938 and 70959); the realm is build N`).
 - An explicit `--build` is still claimed exactly as given and never replaced.
+
+**Round 2 review: the realm list is not the world server's build list.** The fix above could still stop at a build
+the realm lists but the world server refuses (`WorldSocket.cpp:739-763`, `ERROR_BAD_VERSION`), because the realm
+list carries no build_info information. `bnet.Options.WorldAccept` now lets `Login` authenticate the world socket
+inside the selection loop: a `*worldconn.Refused` with `BadVersion()` set (the typed SMSG_AUTH_RESPONSE refusal from
+either handshake stage) closes that attempt's socket and the loop claims the next known build, newest first, bounded
+by the known list. Any other world-auth error ends the login. When every build is refused, the error names each
+build tried and which side refused it
+(`no client build this client knows was accepted (build 70959: the world server refused it; ...), pass --build N ...`).
+A pinned `--build` is probed once and its refusal is the login's error.
+
+The command layer's `worldAccept` (`cmd/forever-agent/forever_chat.go`) is passed by every command that opens a
+world socket (entry and character screen) and left nil by `login-check`, which stops at the realm list. The
+authenticated socket comes back in `bnet.Result.WorldConn` and `world.Options.WorldConn` makes `world.Enter` and the
+character screen adopt it, so the accepted build is authenticated once rather than probed and authenticated again.
 
 **Tests** (`internal/forever/bnet`): the fake realm list now models `Realm.AlsoAcceptBuilds` (`fakeRealm.alsoAccept`).
 `TestLoginPrefersNewestKnownBuild` serves a realm on 70959 that also accepts 70938: the login claims 70959 in one
@@ -46,6 +61,15 @@ logon. On the old code the probe claimed 70938, the fake accepted it and echoed 
 `TestLoginAdvertisedBuild`, `TestLoginFirstOnlineRealmOfSeveral` and `TestLoginAdvertisedBuildUnsupported` are
 updated to the new logon order (the realm's build from the mismatch is tried next: 70959 then 70707; three logons
 when the realm's build is unknown).
+
+The world-accept tests (`internal/forever/bnet/worldaccept_test.go`) use the fake login service and a fake world
+socket (`fake_world_test.go`) that refuses a build with an unencrypted SMSG_AUTH_RESPONSE `ERROR_BAD_VERSION` or
+finishes the encrypted handshake. `TestLoginWorldRefusesNewestBuild` (realm accepts 70959 and 70938, world knows
+only 70938) claims 70959, is refused, and ends on 70938 with that build's socket handed back.
+`TestLoginWorldRefusesEveryBuild` is refused for all three and the error names each one;
+`TestLoginPinnedBuildWorldRefusal` pins 70959 and gets the world's refusal without a retry.
+`internal/forever/world/.../TestEnterAdoptsTheProbedWorldSocket` sets a dead world address and enters through the
+probed socket only.
 
 ## 2. `walk-check --stay` died at the run deadline
 
