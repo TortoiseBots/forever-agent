@@ -26,6 +26,7 @@ type fakeServe struct {
 	status   map[string]any
 	units    []map[string]any
 	events   []map[string]any
+	dropped  map[string]any
 }
 
 type fakeCall struct {
@@ -106,8 +107,18 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		if p.Limit > 0 && len(out) > p.Limit {
 			out = out[:p.Limit]
 		}
+		dropped := false
+		oldest := p.Since
+		if f.dropped != nil {
+			dropped, _ = f.dropped["dropped"].(bool)
+			oldest = uint64(numOrZero(f.dropped["oldest"]))
+			if n := uint64(numOrZero(f.dropped["next"])); n > next {
+				next = n
+			}
+			f.dropped = nil
+		}
 		writeRPCResult(w, req.ID, map[string]any{"events": out, "next": next,
-			"oldest": p.Since, "dropped": false, "more": false})
+			"oldest": oldest, "dropped": dropped, "more": false})
 	case "gm", "chat", "tbm", "cast":
 		writeRPCResult(w, req.ID, map[string]any{})
 	default:

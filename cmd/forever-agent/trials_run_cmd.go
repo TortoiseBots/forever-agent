@@ -20,7 +20,7 @@ import (
 // Only --dry (the scripted setup/situation) is ported in this round: a live
 // run needs the A3 setup toolkit and the A4 situations. A real trial without
 // --dry is refused with usage, never half-run.
-func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
+func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("trials run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	slotsPath := fs.String("slots", slots.DefaultPath(), "slots file (filepath outside the repo; holds the per-server forever.serve_dir_root block)")
@@ -60,6 +60,7 @@ func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	store := slots.NewStore(cfg, cfgPath)
+	store.HolderPID = os.Getpid()
 	slot := *slotID
 	anyFree := *anyFlag || slot == ""
 	hold, err := live.AcquireSlot(sf, store, *server, slot, anyFree, *holder, func(dir string) error {
@@ -67,6 +68,10 @@ func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
 		return oerr
 	})
 	if err != nil {
+		if sameHolder, why := live.SameHolderHeld(store, *server, slot, anyFree, *holder); sameHolder {
+			fmt.Fprintf(stderr, "trials run: slot %s held by this holder already: %s\n", slot, why)
+			return 15
+		}
 		var ref *slots.Refusal
 		if errors.As(err, &ref) {
 			fmt.Fprintf(stderr, "trials run: %v\n", err)
@@ -75,10 +80,18 @@ func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "trials run: %v\n", err)
 		return 1
 	}
+	// Release runs first (registered last): done closes before the
+	// lease is freed, so no renewal writes h.Acq.Lease mid-release.
+	// A failed release is a run failure, surfaced at the end.
+	releaseFailed := false
+	defer func() {
+		if err := hold.Release(); err != nil {
+			fmt.Fprintf(stderr, "trials run: release: %v\n", err)
+			releaseFailed = true
+		}
+	}()
 	done := make(chan struct{})
 	defer close(done)
-	defer func() { _ = hold.Release() }()
-	go hold.KeepRenewed(done)
 
 	c, err := openSlotClient(hold.Dir)
 	if err != nil {
@@ -91,11 +104,21 @@ func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
 		Hold: hold, Setup: &live.DrySetup{}, Situation: &live.DrySituation{},
 		Log: func(line string) { fmt.Fprintln(stderr, line) },
 		Now: time.Now,
+		Abort: func() string {
+			if rerr := hold.RenewErr(); rerr != nil {
+				return "lease renewal failed: " + rerr.Error()
+			}
+			select {
+			case <-ctx.Done():
+				return "interrupted"
+			default:
+				return ""
+			}
+		},
 	}
 	runner.Ledger.Add(map[string]any{"kind": "lease", "server": hold.Server,
 		"slot": hold.Slot, "holder": hold.Acq.Lease.Holder, "lease_id": hold.Acq.Lease.LeaseID,
 		"dir": hold.Dir, "ledger": filepath.Join(live.AbsPath(*out), "ledger.jsonl")})
-	ctx := context.Background()
 	n := *repeats
 	if n < 0 {
 		n = 0
@@ -120,6 +143,9 @@ func trialsRunCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, id := range ids {
 		fmt.Fprintf(stdout, "trial %s: done\n", id)
+	}
+	if releaseFailed {
+		return 1
 	}
 	return exitOK
 }

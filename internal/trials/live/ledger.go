@@ -11,9 +11,10 @@ import (
 // line, appended as we go so a killed runner still leaves the cleanup
 // trail. `trials cleanup` replays it.
 type Ledger struct {
-	path string
-	mu   sync.Mutex
-	rows []map[string]any
+	path   string
+	mu     sync.Mutex
+	fileMu sync.Mutex
+	rows   []map[string]any
 }
 
 // NewLedger opens path, loading the rows already there; a missing file
@@ -62,24 +63,31 @@ func (l *Ledger) Add(row map[string]any) {
 	if _, ok := next["at"]; !ok {
 		next["at"] = nowISO()
 	}
+	line, err := json.Marshal(next)
+	if err != nil {
+		l.mu.Lock()
+		l.rows = append(l.rows, next)
+		l.mu.Unlock()
+		return
+	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.rows = append(l.rows, next)
-	if l.path == "" {
+	path := l.path
+	l.mu.Unlock()
+	if path == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
+	// Serialized like Marks.Add: the file order matches memory order.
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	line, err := json.Marshal(next)
-	if err != nil {
-		return
-	}
 	_, _ = f.Write(append(line, '\n'))
 }
 

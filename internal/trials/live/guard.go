@@ -87,15 +87,29 @@ func (e *GmRefused) Error() string {
 	return fmt.Sprintf("gm refused (outside the closed set): %q", e.Text)
 }
 
+// guardArgCounts is the closed template arity: Send rejects extra args, and
+// SendText's re-extracted groups must match it, so unfilled {n} slots and
+// trailing text can never reach the server.
+var guardArgCounts = map[string]int{
+	"levelup": 1, "learn": 1, "unaura": 1, "aura": 1, "damage": 1,
+	"modify_hp": 2, "modify_mana": 2, "modify_rage": 2, "modify_energy": 2,
+	"npc_add_temp": 1, "go_xyz": 4, "additem": 2, "cooldown": 0, "die": 0,
+	"gm_off": 0, "gm_visible_on": 0, "lookup_item": 1,
+}
+
 // ClassifyGuard names the template kind of raw text, or "" when no template
-// matches it whole.
+// matches it whole. The match is on the single line with no surrounding
+// whitespace or control characters: leading/trailing newlines never pass.
 func ClassifyGuard(text string) string {
+	if text == "" || strings.TrimSpace(text) != text || strings.ContainsAny(text, "\r\n\x00") {
+		return ""
+	}
 	for _, c := range guardClassifiers {
 		m := c.re.FindStringSubmatch(text)
 		if len(m) == 0 {
 			continue
 		}
-		if m[0] == strings.TrimSpace(text) {
+		if m[0] == text {
 			return c.kind
 		}
 	}
@@ -177,12 +191,22 @@ func render(kind string, args []string) (string, error) {
 	if !ok {
 		return "", &GmRefused{Text: kind}
 	}
+	want, ok := guardArgCounts[kind]
+	if !ok {
+		return "", &GmRefused{Text: kind}
+	}
+	if len(args) != want {
+		return "", &GmRefused{Text: kind + " (wrong arg count)"}
+	}
 	out := tmpl
 	for i, a := range args {
+		if a == "" || strings.ContainsAny(a, " \t\r\n\x00{}") {
+			return "", &GmRefused{Text: kind + " (bad arg)"}
+		}
 		out = strings.ReplaceAll(out, "{"+strconv.Itoa(i)+"}", a)
 	}
-	if strings.Contains(out, "{") {
-		return "", &GmRefused{Text: kind + " (missing args)"}
+	if strings.Contains(out, "{") || ClassifyGuard(out) != kind {
+		return "", &GmRefused{Text: kind + " (not in the closed set)"}
 	}
 	return out, nil
 }
@@ -219,7 +243,7 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 // SendText classifies raw text against the closed set and sends it only on a
 // whole-line match; anything else is refused and never sent.
 func (g *Guard) SendText(ctx context.Context, text string, class GuardTarget, target string) error {
-	kind := ClassifyGuard(strings.TrimSpace(text))
+	kind := ClassifyGuard(text)
 	if kind == "" {
 		return &GmRefused{Text: text}
 	}
@@ -228,17 +252,21 @@ func (g *Guard) SendText(ctx context.Context, text string, class GuardTarget, ta
 
 // classifyArgs re-extracts the template args from raw text.
 func classifyArgs(text, kind string) []string {
+	if ClassifyGuard(text) == "" {
+		return nil
+	}
 	for _, c := range guardClassifiers {
 		if c.kind != kind {
 			continue
 		}
-		if m := c.re.FindStringSubmatch(strings.TrimSpace(text)); len(m) > 1 && m[0] == strings.TrimSpace(text) {
+		if m := c.re.FindStringSubmatch(text); len(m) > 1 && m[0] == text {
 			return m[1:]
 		}
 	}
 	return nil
 }
 
+// targetOrNil stores a nil target for ledger rows without one.
 func targetOrNil(target string) any {
 	if normGUIDOf(target) == "" {
 		return nil

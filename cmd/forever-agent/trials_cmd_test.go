@@ -196,3 +196,20 @@ func TestTrialsCmdValidateMatchesPython(t *testing.T) {
 		t.Fatalf("validate stdout = %q, want duplicate rule id %s", out.String(), ruleID)
 	}
 }
+
+func TestTrialsCleanupNoSlotsFileFailsLoud(t *testing.T) {
+	// `trials cleanup` without --slots must report the lease rows as
+	// failures, never silently claim the leases are gone.
+	runDir := t.TempDir()
+	ledger := `{"kind":"lease","server":"s1","slot":"1","holder":"trials","lease_id":"abc"}`
+	if err := os.WriteFile(filepath.Join(runDir, "ledger.jsonl"), []byte(ledger+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"trials", "cleanup", runDir}, &out, &errOut); code == exitOK {
+		t.Fatalf("cleanup without slots file exited ok (stdout %q)", out.String())
+	}
+	if !strings.Contains(out.String(), "leftovers") {
+		t.Fatalf("cleanup stdout = %q, want leftover count", out.String())
+	}
+}

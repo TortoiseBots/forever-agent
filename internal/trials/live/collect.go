@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,10 +97,18 @@ func NewCollector(client *Client, repDir string, marks *Marks, guids Guids, ledg
 }
 
 // OnLost sets the hook the pump and sampler call once with the reason.
-func (c *Collector) OnLost(fn func(reason string)) { c.onLost = fn }
+func (c *Collector) OnLost(fn func(reason string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onLost = fn
+}
 
 // TickHook adds a sampler hook (situation governors observe through it).
-func (c *Collector) TickHook(fn func(sample map[string]any)) { c.tickHooks = append(c.tickHooks, fn) }
+func (c *Collector) TickHook(fn func(sample map[string]any)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tickHooks = append(c.tickHooks, fn)
+}
 
 // Lost is the disconnect reason, "" while the session lives.
 func (c *Collector) Lost() string {
@@ -130,9 +139,10 @@ func (c *Collector) markLost(reason string) {
 	}
 	c.lost = reason
 	hook := c.onLost
+	stop := c.stop
 	c.mu.Unlock()
-	if c.stop != nil {
-		c.stop()
+	if stop != nil {
+		stop()
 	}
 	if hook != nil {
 		hook(reason)
@@ -151,7 +161,9 @@ func (c *Collector) Start(ctx context.Context) {
 		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
 	c.stop = cancel
+	c.mu.Unlock()
 	c.wg.Add(2)
 	go func() { defer c.wg.Done(); c.pump(ctx) }()
 	go func() { defer c.wg.Done(); c.sample(ctx) }()
@@ -159,8 +171,11 @@ func (c *Collector) Start(ctx context.Context) {
 
 // Stop ends both loops, waiting at most 40 s.
 func (c *Collector) Stop() {
-	if c.stop != nil {
-		c.stop()
+	c.mu.Lock()
+	stop := c.stop
+	c.mu.Unlock()
+	if stop != nil {
+		stop()
 	}
 	done := make(chan struct{})
 	go func() { c.wg.Wait(); close(done) }()
@@ -239,8 +254,9 @@ func (c *Collector) sample(ctx context.Context) {
 		if err != nil {
 			if IsDisconnected(err) {
 				c.markLost(trimReason(err.Error()))
+				return
 			}
-			return
+			continue
 		}
 		if st.State != "in_world" {
 			c.markLost("disconnected: agent state " + orUnknown(st.State))
@@ -250,8 +266,9 @@ func (c *Collector) sample(ctx context.Context) {
 		if err != nil {
 			if IsDisconnected(err) {
 				c.markLost(trimReason(err.Error()))
+				return
 			}
-			return
+			continue
 		}
 		rows, sample := c.rows(st, units, ctx)
 		for _, row := range rows {
@@ -259,8 +276,9 @@ func (c *Collector) sample(ctx context.Context) {
 		}
 		c.mu.Lock()
 		c.samplesN += len(rows)
+		hooks := append([]func(map[string]any){}, c.tickHooks...)
 		c.mu.Unlock()
-		for _, hook := range c.tickHooks {
+		for _, hook := range hooks {
 			hook(sample)
 		}
 		_ = begin
@@ -473,7 +491,7 @@ func sortedSpellIDs(auras any) []any {
 	return out
 }
 
-func itoa(i int) string { return string(rune('0' + i)) }
+func itoa(i int) string { return strconv.Itoa(i) }
 
 func seqKey(seq any) any {
 	switch t := seq.(type) {

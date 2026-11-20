@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/slots"
@@ -59,6 +60,10 @@ type Hold struct {
 	Acq    slots.Acquired
 	Store  *slots.Store
 	Dir    string
+
+	mu       sync.Mutex
+	renewOK  bool
+	renewErr error
 }
 
 // leaseTTL is the lease lifetime at acquire; RenewEvery is the renewal
@@ -89,13 +94,35 @@ func AcquireSlot(sf *SlotsFile, store *slots.Store, server, slotID string, any b
 	return &Hold{Server: server, Slot: slot, Acq: acq, Store: store, Dir: dir}, nil
 }
 
+// SameHolderHeld reports whether slotID on server is already leased to
+// holder (a second `trials run` with the default holder name): the store
+// silently renews that lease instead of refusing, so the runner says so
+// and exits rather than running two trials on one slot.
+func SameHolderHeld(store *slots.Store, server, slotID string, any bool, holder string) (bool, string) {
+	if any || slotID == "" {
+		return false, ""
+	}
+	l, err := store.Get(server, slotID)
+	if err != nil || l == nil || l.Holder != holder {
+		return false, ""
+	}
+	return true, "held by " + holder + " since " + l.Acquired.UTC().Format("2006-01-02T15:04:05Z")
+}
+
 // RenewOnce extends h's lease by the acquire TTL.
 func (h *Hold) RenewOnce() error {
 	l, err := h.Store.Renew(h.Server, h.Slot, h.Acq.Lease.Holder, h.Acq.Lease.LeaseID, leaseTTL)
 	if err != nil {
+		h.mu.Lock()
+		h.renewErr = err
+		h.mu.Unlock()
 		return err
 	}
+	h.mu.Lock()
 	h.Acq.Lease = l
+	h.renewOK = true
+	h.renewErr = nil
+	h.mu.Unlock()
 	return nil
 }
 
@@ -105,8 +132,18 @@ func (h *Hold) Release() error {
 	return err
 }
 
+// RenewErr reports the first renewal failure, or nil while renewals hold.
+// The runner polls it and aborts the trial when the lease stops renewing.
+func (h *Hold) RenewErr() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.renewErr
+}
+
 // KeepRenewed renews h every RenewEvery until done closes; the first error
-// (or a done close) stops it. The caller defers Release separately.
+// (or a done close) stops it and is visible through RenewErr. The caller
+// defers Release separately, after done closes so the release cannot race
+// a renewal on h.Acq.Lease.
 func (h *Hold) KeepRenewed(done <-chan struct{}) {
 	t := time.NewTicker(RenewEvery)
 	defer t.Stop()

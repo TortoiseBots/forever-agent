@@ -103,7 +103,16 @@ func TestCollectorRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("score: %v", err)
 	}
-	_ = scored
+	rules, _ := pyjson.List(scored["rules"])
+	if len(rules) == 0 {
+		t.Fatal("round trip scored no rules")
+	}
+	for _, r := range rules {
+		row, _ := pyjson.Object(r)
+		if got := pyjson.Str(row["verdict"]); got != "PASS" {
+			t.Fatalf("round trip rule verdict = %q, want PASS (row %v)", got, row)
+		}
+	}
 }
 
 // TestGuardRefusesRaw checks the closed set: game-world commands are
@@ -168,11 +177,11 @@ func TestGuardOneCallSite(t *testing.T) {
 			if strings.HasPrefix(trimmed, "//") {
 				continue
 			}
-			// The typed wrappers (client.GM) funnel into Guard.Send; only
-			// Send may name the "gm" method.
-			if strings.Contains(line, `"gm"`) {
+			// Guard.Send is the one `gm` call site (cleanup.go reaches
+			// it through Guard.Send, never client.GM directly).
+			if strings.Contains(line, ".GM(") {
 				sites++
-				if !strings.Contains(f, "guard.go") && !strings.Contains(f, "cleanup.go") && !strings.Contains(f, "client.go") {
+				if !strings.Contains(f, "guard.go") {
 					t.Fatalf("gm call site in %s: %s", f, trimmed)
 				}
 			}
@@ -199,6 +208,47 @@ func TestLeaseHeldTwice(t *testing.T) {
 	}
 }
 
+// TestLeaseRenewAndRelease checks renew extends and release frees, through
+// the runner's own Hold (AcquireSlot/RenewOnce/RenewErr/Release): a renewal
+// failure surfaces on RenewErr and a release frees the slot.
+func TestHoldRenewErrSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "slots.json")
+	writeTestSlots(t, cfgPath)
+	cfg := loadTestSlots(t, cfgPath)
+	store := newTestStore(cfg, cfgPath)
+	sf := &SlotsFile{Servers: cfg.Servers, Forever: map[string]ServerExt{"s1": {ServeDirRoot: dir}}}
+	hold, err := AcquireSlot(sf, store, "s1", "", true, "holder-a", func(dir string) error { return nil })
+	if err != nil {
+		t.Fatalf("AcquireSlot: %v", err)
+	}
+	if err := hold.RenewOnce(); err != nil {
+		t.Fatalf("RenewOnce: %v", err)
+	}
+	if err := hold.RenewErr(); err != nil {
+		t.Fatalf("RenewErr after good renew: %v", err)
+	}
+	// A foreign takeover breaks the lease id: the next renewal fails and
+	// stays visible on RenewErr.
+	cur, _ := store.Get("s1", hold.Slot)
+	_ = cur
+	if _, err := store.Release("s1", hold.Slot, "holder-a", hold.Acq.Lease.LeaseID, true); err != nil {
+		t.Fatalf("force release: %v", err)
+	}
+	if _, err := store.Acquire("s1", hold.Slot, false, "holder-b", time.Minute); err != nil {
+		t.Fatalf("takeover: %v", err)
+	}
+	if err := hold.RenewOnce(); err == nil {
+		t.Fatal("RenewOnce after takeover succeeded")
+	}
+	if err := hold.RenewErr(); err == nil {
+		t.Fatal("RenewErr empty after renewal failure")
+	}
+	if err := hold.Release(); err == nil {
+		t.Fatal("Release after takeover succeeded (lease id mismatch must fail)")
+	}
+}
+
 // TestLeaseRenewAndRelease checks renew extends and release frees.
 func TestLeaseRenewAndRelease(t *testing.T) {
 	dir := t.TempDir()
@@ -221,13 +271,16 @@ func TestLeaseRenewAndRelease(t *testing.T) {
 	}
 }
 
-// TestPumpDedupeAndDropped checks seq dedupe and the events_dropped mark.
+// TestPumpDedupeAndDropped checks seq dedupe plus the pump's own
+// events_dropped mark (the fake serves a dropped page; the test no longer
+// injects the mark by hand, so removing the pump handling fails it).
 func TestPumpDedupeAndDropped(t *testing.T) {
 	fake := newFakeServe(t)
 	dup := map[string]any{"seq": 7, "kind": "heal", "time": "2026-11-08T03:20:06.590+01:00", "mono_ms": 3000,
 		"source": map[string]any{"name": "Bheal", "guid": "0x0000000000000003"},
 		"target": map[string]any{"name": "Atank", "guid": "0x0000000000000002"}}
 	fake.events = []map[string]any{dup, dup, dup}
+	fake.dropped = map[string]any{"dropped": true, "oldest": 1, "next": 8}
 	fake.status = map[string]any{"state": "in_world", "guid": "0x0000000000000001"}
 	repDir := t.TempDir()
 	marks := NewMarks(filepath.Join(repDir, "marks.jsonl"))
@@ -241,9 +294,8 @@ func TestPumpDedupeAndDropped(t *testing.T) {
 	if got := collect.RawRows(); got != 1 {
 		t.Fatalf("raw rows after triple dup = %d, want 1", got)
 	}
-	marks.Add(map[string]any{"kind": "events_dropped", "dropped": true, "oldest": 1, "next": 8})
-	if len(marks.Kinds("events_dropped")) != 1 {
-		t.Fatal("events_dropped mark missing")
+	if len(marks.Kinds("events_dropped")) == 0 {
+		t.Fatal("pump wrote no events_dropped mark for the dropped page")
 	}
 }
 
@@ -280,6 +332,18 @@ func TestRunDryScoresCard(t *testing.T) {
 			t.Fatalf("missing %s: %v", name, err)
 		}
 	}
+	// The card must score, not just exist: a dry pass is PASS, never FAIL
+	// or INVALID (a silently-failing scorer still fails this).
+	verdicts, _ := pyjson.List(docs[0]["verdicts"])
+	if len(verdicts) == 0 {
+		t.Fatal("card trial has no verdicts")
+	}
+	for _, v := range verdicts {
+		row, _ := pyjson.Object(v)
+		if got := pyjson.Str(row["verdict"]); got != "PASS" {
+			t.Fatalf("dry card verdict = %q, want PASS (row %v)", got, row)
+		}
+	}
 }
 
 // TestRepeatLostOnDisconnect checks the collector marks the session lost.
@@ -291,15 +355,14 @@ func TestRepeatLostOnDisconnect(t *testing.T) {
 	marks := NewMarks(filepath.Join(repDir, "marks.jsonl"))
 	marks.Start("")
 	collect := NewCollector(NewClient(fake.rpc()), repDir, marks, Guids{}, nil)
-	lost := ""
-	collect.OnLost(func(reason string) { lost = reason })
+	collect.OnLost(func(reason string) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	collect.Start(ctx)
 	time.Sleep(2500 * time.Millisecond)
 	cancel()
 	collect.Stop()
-	if lost == "" && collect.Lost() == "" {
-		t.Fatal("no lost mark after -32002 on units")
+	if collect.Lost() == "" {
+		t.Fatal("no lost mark after -32002 on units (collector.Lost empty)")
 	}
 }
 

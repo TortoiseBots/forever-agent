@@ -59,8 +59,16 @@ type Runner struct {
 	Log func(line string)
 	Now func() time.Time
 
-	started string
-	repLog  []map[string]any
+	// Abort reports why the run must stop (a lost lease renewal, an
+	// interrupt): runRepeat checks it before every repeat and the guard
+	// checks it before every GM line.
+	Abort func() string
+
+	started  string
+	repLog   []map[string]any
+	trials   map[string]map[string]any
+	trialIDs []string
+	repeats  map[string]int
 }
 
 // findTrial resolves a TRIAL arg: an embedded path, an embedded id, or a
@@ -120,25 +128,26 @@ func findTrial(arg string) (map[string]any, error) {
 	return nil, errf("unknown trial %q", arg)
 }
 
-// applyVariant merges a variant over its trial (scenario.VariantSep).
+// applyVariant merges a variant over its trial through
+// scenario.MergeVariant: variants keyed by "name" with an "override" object,
+// validated the way the scorer validates them.
 func applyVariant(base map[string]any, variant string) (map[string]any, error) {
-	out := map[string]any{}
-	for k, v := range base {
-		out[k] = v
-	}
-	var variants []any
-	if list, ok := out["variants"].([]any); ok {
-		variants = list
-	}
+	variants, _ := pyjson.List(base["variants"])
 	for _, v := range variants {
-		m, ok := v.(map[string]any)
-		if !ok || pyjson.Str(m["id"]) != variant {
+		obj, ok := pyjson.Object(v)
+		if !ok || pyjson.Str(obj["name"]) != variant {
 			continue
 		}
-		for k, val := range m {
-			if k != "id" {
-				out[k] = val
-			}
+		merged, errs := scenario.MergeVariant(base, obj)
+		if len(errs) > 0 {
+			return nil, errf("variant %q invalid: %s", variant, errs[0])
+		}
+		if merged == nil {
+			continue
+		}
+		out := map[string]any{}
+		for k, val := range merged {
+			out[k] = val
 		}
 		out["id"] = pyjson.Str(base["id"]) + scenario.VariantSep + variant
 		delete(out, "variants")
@@ -192,13 +201,21 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	if err != nil {
 		return nil, err
 	}
-	r.writeRUN(trial, id, repeats)
+	r.noteTrial(trial, id, repeats)
+	if err := r.writeRUN(); err != nil {
+		return nil, err
+	}
 	return doc, nil
 }
 
 // runRepeat runs one repeat: setup, marks start, collect, situation,
 // teardown, setup.json, normalise + score.
 func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string, index int) error {
+	if r.Abort != nil {
+		if why := r.Abort(); why != "" {
+			return &Disconnected{err: fmt.Errorf("%s", why)}
+		}
+	}
 	repDir := joinPath(joinPath(r.Out, id), "rep"+itoa(index))
 	if err := mkdirAll(repDir); err != nil {
 		return err
@@ -208,7 +225,7 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	marks.Start("")
 	guids := Guids{}
 	collect := NewCollector(r.Client, repDir, marks, guids, r.Ledger)
-	guard := NewGuard(r.Client, GuardOptions{Ledger: r.Ledger, Marks: marks, DryRun: r.dry()})
+	guard := NewGuard(r.Client, GuardOptions{Ledger: r.Ledger, Marks: marks, DryRun: r.dry(), Abort: r.Abort})
 	rep := &Repeat{Index: index, Dir: repDir, Trial: trial, TrialID: id,
 		Client: r.Client, Guard: guard, Marks: marks, Collect: collect, Ledger: r.Ledger}
 
@@ -224,7 +241,9 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	}
 	rep.Guids = GuidsOf(setupDoc)
 	collect.guids = rep.Guids
-	r.writeSetup(repDir, setupDoc)
+	if err := r.writeSetup(repDir, setupDoc); err != nil {
+		return err
+	}
 
 	marks.Add(map[string]any{"kind": "setup_ok", "guids": setupDoc["guids"]})
 	collect.Start(ctx)
@@ -235,7 +254,9 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 			collect.Stop()
 			if IsDisconnected(err) {
 				r.noteRep(id, index, false, "disconnected")
-				r.writeSetup(repDir, setupDoc)
+				if werr := r.writeSetup(repDir, setupDoc); werr != nil {
+					return werr
+				}
 				return err
 			}
 			return err
@@ -248,7 +269,9 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	if lost := collect.Lost(); lost != "" {
 		setupDoc["ok"] = false
 		setupDoc["invalid_reason"] = lost
-		r.writeSetup(repDir, setupDoc)
+		if err := r.writeSetup(repDir, setupDoc); err != nil {
+			return err
+		}
 		r.noteRep(id, index, false, "disconnected")
 		marks.Add(map[string]any{"kind": "teardown", "rows": []any{}})
 		return &Disconnected{err: fmt.Errorf("%s", lost)}
@@ -263,7 +286,9 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		setupDoc["invalid_reason"] = checkEvidence(failed[0])
 	}
 	setupDoc["outcome"] = outcome
-	r.writeSetup(repDir, setupDoc)
+	if err := r.writeSetup(repDir, setupDoc); err != nil {
+		return err
+	}
 	if _, err := events.Normalise(repDir, trial); err != nil {
 		return err
 	}
@@ -294,9 +319,9 @@ func (r *Runner) teardown(rep *Repeat) []map[string]any {
 	return rows
 }
 
-func (r *Runner) writeSetup(repDir string, doc map[string]any) {
+func (r *Runner) writeSetup(repDir string, doc map[string]any) error {
 	doc["slot"] = r.slotID()
-	_ = dumpDoc(joinPath(repDir, "setup.json"), doc)
+	return dumpDoc(joinPath(repDir, "setup.json"), doc)
 }
 
 func (r *Runner) slotID() string {
@@ -311,6 +336,22 @@ func (r *Runner) noteRep(trial string, rep int, valid bool, ended string) {
 		"slot": r.slotID(), "valid": valid, "ended": ended})
 }
 
+// noteTrial records one finished trial for the run card: RUN.json lists
+// every trial the run completed, not just the last one.
+func (r *Runner) noteTrial(trial map[string]any, id string, repeats int) {
+	if r.trials == nil {
+		r.trials = map[string]map[string]any{}
+	}
+	if r.repeats == nil {
+		r.repeats = map[string]int{}
+	}
+	if _, ok := r.trials[id]; !ok {
+		r.trialIDs = append(r.trialIDs, id)
+	}
+	r.trials[id] = trial
+	r.repeats[id] = repeats
+}
+
 func (r *Runner) logf(format string, args ...any) {
 	if r.Log != nil {
 		r.Log(fmt.Sprintf(format, args...))
@@ -319,8 +360,9 @@ func (r *Runner) logf(format string, args ...any) {
 
 func (r *Runner) dry() bool { return r.Setup == nil || isDrySetup(r.Setup) }
 
-// writeRUN writes RUN.json after the trial's repeats.
-func (r *Runner) writeRUN(trial map[string]any, id string, repeats int) {
+// writeRUN rewrites RUN.json with every trial finished so far, so the run
+// record names the whole card even when the next trial has not run yet.
+func (r *Runner) writeRUN() error {
 	now := time.Now()
 	if r.Now != nil {
 		now = r.Now()
@@ -328,15 +370,24 @@ func (r *Runner) writeRUN(trial map[string]any, id string, repeats int) {
 	started := r.started
 	if started == "" {
 		started = now.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+		r.started = started
+	}
+	trials := make([]any, 0, len(r.trialIDs))
+	for _, id := range r.trialIDs {
+		trials = append(trials, id)
+	}
+	repeats := map[string]any{}
+	for id, n := range r.repeats {
+		repeats[id] = n
 	}
 	doc := map[string]any{
 		"name": "forever-trials", "label": r.Label, "server": r.Server,
-		"trials": []any{id}, "repeats_run": map[string]any{id: repeats},
+		"trials": trials, "repeats_run": repeats,
 		"reps": repLogAny(r.repLog), "started": started,
 		"ended":           now.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 		"trial_snapshots": true,
 	}
-	_ = dumpDoc(joinPath(r.Out, "RUN.json"), doc)
+	return dumpDoc(joinPath(r.Out, "RUN.json"), doc)
 }
 
 // repLogAny converts the rep log to []any: pyjson.Marshal rejects typed slices.

@@ -1,6 +1,7 @@
 package live
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/trials/pyjson"
+	"github.com/pjerra/forever-agent/internal/trials/trialdefs"
 )
 
 // writeTestSlots writes a one-slot slots file with the permission bits
@@ -119,5 +122,151 @@ func TestCleanupIdempotent(t *testing.T) {
 	}
 	if len(again) != len(rows) {
 		t.Fatalf("second cleanup rows = %d, want %d", len(again), len(rows))
+	}
+}
+
+// TestMultiTrialRUNCard covers the multi-trial card regression: after two
+// RunTrial calls RUN.json lists both trials, so ScoreCard scores both.
+func TestMultiTrialRUNCard(t *testing.T) {
+	fake := newFakeServe(t)
+	fake.status = map[string]any{"state": "in_world", "guid": "0x0000000000000001",
+		"health": 1189, "max_health": 1189, "power": 72, "max_power": 1000,
+		"mono_ms": 1000, "x": -11926, "y": -1283, "z": 85}
+	out := t.TempDir()
+	runner := &Runner{Out: out, Server: "s1", Label: "dry",
+		Client: NewClient(fake.rpc()), Ledger: NewLedger(filepath.Join(out, "ledger.jsonl")),
+		Setup: &DrySetup{}, Situation: &DrySituation{FightSecs: 1}}
+	mkTrial := func(id string) map[string]any {
+		return map[string]any{"id": id, "min_valid_s": 0,
+			"rules": []any{map[string]any{"id": "R", "desc": "d", "source": "s",
+				"expect_today": "?", "pass_if": ">= 0",
+				"check": map[string]any{"metric": "count", "where": map[string]any{"kind": "cast"}}}}}
+	}
+	for _, id := range []string{"trial-one", "trial-two"} {
+		if err := writeTrialFile(out, mkTrial(id)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.RunTrial(ctxBackground(), trialFilePath(out, id), 1); err != nil {
+			t.Fatalf("RunTrial %s: %v", id, err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "RUN.json"))
+	if err != nil {
+		t.Fatalf("RUN.json: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	trials, _ := doc["trials"].([]any)
+	if len(trials) != 2 {
+		t.Fatalf("RUN.json trials = %v, want both trials", doc["trials"])
+	}
+	docs, err := ScoreCard(out)
+	if err != nil {
+		t.Fatalf("ScoreCard: %v", err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("card trials = %d, want 2", len(docs))
+	}
+}
+
+// TestCleanupReleasesLeases checks ReleaseLedgerLeases frees the ledgered
+// lease and reports a row for it (no silent expiry).
+func TestCleanupReleasesLeases(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "slots.json")
+	writeTestSlots(t, cfgPath)
+	cfg := loadTestSlots(t, cfgPath)
+	store := newTestStore(cfg, cfgPath)
+	acq, err := store.Acquire("s1", "", true, "holder-a", time.Minute)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	ledger := NewLedger("")
+	ledger.Add(map[string]any{"kind": "lease", "server": "s1", "slot": acq.Slot.ID,
+		"holder": "holder-a", "lease_id": acq.Lease.LeaseID, "dir": dir})
+	rows := ReleaseLedgerLeases(cfgPath, ledger)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !RowOK(rows[0]) {
+		t.Fatalf("lease release failed: %v", rows[0])
+	}
+	if cur, _ := store.Get("s1", acq.Slot.ID); cur != nil {
+		t.Fatal("lease still held after cleanup release")
+	}
+	// Without a slots file every lease row reports the skip, never a
+	// silent success.
+	ledger2 := NewLedger("")
+	ledger2.Add(map[string]any{"kind": "lease", "server": "s1", "slot": "1",
+		"holder": "holder-a", "lease_id": "x"})
+	skipped := ReleaseLedgerLeases("", ledger2)
+	if len(skipped) != 1 || RowOK(skipped[0]) {
+		t.Fatalf("no-slots release = %v, want one failed row", skipped)
+	}
+}
+
+// TestSameHolderHeld names the double-run conflict: a second `trials run`
+// with the same holder and slot gets the refusal hint instead of a silent
+// lease renewal.
+func TestSameHolderHeld(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "slots.json")
+	writeTestSlots(t, cfgPath)
+	cfg := loadTestSlots(t, cfgPath)
+	store := newTestStore(cfg, cfgPath)
+	if _, err := store.Acquire("s1", "1", false, "trials", time.Minute); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	ok, why := SameHolderHeld(store, "s1", "1", false, "trials")
+	if !ok || why == "" {
+		t.Fatal("same-holder lease not reported")
+	}
+	if ok, _ := SameHolderHeld(store, "s1", "1", false, "other"); ok {
+		t.Fatal("foreign holder reported as same-holder")
+	}
+	if ok, _ := SameHolderHeld(store, "s1", "", true, "trials"); ok {
+		t.Fatal("any-free reported as same-holder")
+	}
+}
+
+// TestVariantMergeReal checks `trial@variant` resolves through
+// scenario.MergeVariant (name + override), not a shallow id lookup.
+func TestVariantMergeReal(t *testing.T) {
+	var base map[string]any
+	for _, p := range trialdefs.Paths() {
+		raw, err := trialdefs.Read(p)
+		if err != nil {
+			continue
+		}
+		doc, derr := pyjson.Unmarshal(raw)
+		if derr != nil {
+			continue
+		}
+		obj, ok := pyjson.Object(doc)
+		if !ok {
+			continue
+		}
+		if vs, _ := pyjson.List(obj["variants"]); len(vs) > 0 {
+			base = obj
+			break
+		}
+	}
+	if base == nil {
+		t.Skip("no embedded trial carries variants")
+	}
+	variants, _ := pyjson.List(base["variants"])
+	first, _ := pyjson.Object(variants[0])
+	name := pyjson.Str(first["name"])
+	merged, err := applyVariant(base, name)
+	if err != nil {
+		t.Fatalf("applyVariant: %v", err)
+	}
+	if got := strOf(merged["id"]); got != strOf(base["id"])+"@"+name {
+		t.Fatalf("merged id = %q, want base@variant", got)
+	}
+	if _, bad := applyVariant(base, "nope"); bad == nil {
+		t.Fatal("unknown variant accepted")
 	}
 }

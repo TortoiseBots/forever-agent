@@ -17,10 +17,11 @@ import (
 // at construction plus the monotonic time since: it never steps, and the
 // sampler and the situation stamp with it.
 type Marks struct {
-	path string
-	mu   sync.Mutex
-	rows []map[string]any
-	base string
+	path   string
+	mu     sync.Mutex
+	fileMu sync.Mutex
+	rows   []map[string]any
+	base   string
 
 	anchorWall float64
 	anchorMono time.Time
@@ -113,16 +114,21 @@ func (m *Marks) Add(row map[string]any) map[string]any {
 		next["t"] = m.relLocked(wall)
 	}
 	m.rows = append(m.rows, next)
+	line, jerr := json.Marshal(next)
 	path := m.path
 	m.mu.Unlock()
+	if jerr != nil {
+		return next
+	}
+	// The file write is serialized: concurrent Add calls keep file
+	// order identical to memory order.
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
 	if path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
 			f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			if err == nil {
-				line, jerr := json.Marshal(next)
-				if jerr == nil {
-					_, _ = f.Write(append(line, '\n'))
-				}
+				_, _ = f.Write(append(line, '\n'))
 				_ = f.Close()
 			}
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 
 // trialsCmd dispatches the scoring half of the Python trials bench, ported into
 // internal/trials. It reads a run folder as the Python tool writes it and never runs a trial.
-func trialsCmd(args []string, stdout, stderr io.Writer) int {
+func trialsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, trialsUsage)
 		return exitUsage
@@ -38,7 +39,7 @@ func trialsCmd(args []string, stdout, stderr io.Writer) int {
 	case "validate":
 		return trialsValidate(args[1:], stdout, stderr)
 	case "run":
-		return trialsRunCmd(args[1:], stdout, stderr)
+		return trialsRunCmd(ctx, args[1:], stdout, stderr)
 	case "cleanup":
 		return trialsCleanupCmd(args[1:], stdout, stderr)
 	case "help", "-h", "--help":

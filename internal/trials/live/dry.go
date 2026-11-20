@@ -57,7 +57,7 @@ func (d *DrySetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 			"extras": []any{}, "mobs": []any{},
 		},
 		"checks": checks,
-		"config": map[string]any{"ok": true, "critical": 20, "low": 50, "medium": 70},
+		"config": map[string]any{"critical": nil, "low": nil, "medium": nil, "ok": false},
 	}, nil
 }
 
@@ -69,13 +69,13 @@ type DrySituation struct {
 	FightSecs float64
 }
 
-// Run marks the fight window and waits for samples.
+// Run marks the fight window and waits for samples. The fight_end row
+// carries "ended": "complete", the same key the scorer reads.
 func (d *DrySituation) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 	secs := d.FightSecs
 	if secs <= 0 {
 		secs = 3
 	}
-	r.Marks.Start("")
 	start := r.Marks.Add(map[string]any{"kind": "fight_start"})
 	deadline := time.Now().Add(time.Duration(secs * float64(time.Second)))
 	tick := time.NewTicker(200 * time.Millisecond)
@@ -91,7 +91,7 @@ func (d *DrySituation) Run(ctx context.Context, r *Repeat) (map[string]any, erro
 				"invalid_reason": r.Collect.Lost()}, nil
 		}
 	}
-	end := r.Marks.Add(map[string]any{"kind": "fight_end"})
+	end := r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "complete"})
 	_ = start
 	_ = end
 	return map[string]any{"ended": "complete",
