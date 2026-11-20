@@ -56,7 +56,7 @@ selection selects its target and waits for the server's echo.
 | mob entry 2734 | "Ridge Stalker Patriarch", level 40 (one level under the copied table's 40-41) | `.npc add temp 2734`, `units entry=2734` level 40 |
 | test account | the account's RBAC role needed level 3 (see below) | the GM probes |
 
-## The first live trial (2026-11-20, forever-test1)
+## The first live trial (2026-11-20, the test server)
 
 `priest-holy-heal-latency` ran twice, three repeats asked, against a live
 `forever serve` on the test server. Both runs end **SKIPPED
@@ -73,9 +73,9 @@ What the runs did prove, from the setup rows:
 | `player_level` | ok, level 40 read back |
 | `player_talents` | ok, `.learn` accepted 16462 and 12286, `.tb learn` read back `learned\|known` |
 | `player_stance` | ok, aura 71 held after the cast |
-| `player_visible` | ok, `.tb state Bpriest` reads a numeric `dm` after `.tb gm <player> off` and `.gm visible on` |
+| `player_visible` | ok, `.tb state <hire>` reads a numeric `dm` after `.tb gm <player> off` and `.gm visible on` |
 | `player_forced_role` | ok, `.tb role clear` reads back `role=none` |
-| `bot_present`, `bot_level`, `bot_role`, `bot_spec`, `bot_items` | ok (party roster guid, level 40, role healer, talent 14889 learned, the kit scanned and worn) |
+| `bot_present`, `bot_level`, `bot_role`, `bot_spec`, `bot_items` | ok (party roster guid, level 40, role healer, the talent learned, the kit scanned and worn) |
 | `config_read` | false (no threshold source; defaults 20/50/70), non-fatal as in the Python |
 
 The fight never started: the engine gap ends the setup before the arena.
@@ -110,7 +110,7 @@ nothing in either card claims a PASS or a FAIL.
   reconnect cannot reuse its join ticket. The bot pool must live on its own
   account (the slot config's pool names), which the live run used.
 
-## Environment findings (2026-11-20, forever-test1)
+## Environment findings (2026-11-20, the test server)
 
 - The console's `.commands` list is a reduced table (no `npc`, `go`,
   `modify`, `learn`, `levelup`, `damage`, `die`, `aura`). A *player* session
