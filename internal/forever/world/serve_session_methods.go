@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
@@ -190,6 +192,43 @@ type serveBotParams struct {
 	WaitMS int    `json:"wait_ms,omitempty"`
 }
 
+type serveEventsParams struct {
+	Since  int `json:"since"`
+	Limit  int `json:"limit,omitempty"`
+	WaitMS int `json:"wait_ms,omitempty"`
+}
+
+type serveGMSetHPParams struct {
+	GUID GUID   `json:"guid"`
+	HP   *int64 `json:"hp"`
+}
+
+type serveGMAuraParams struct {
+	GUID   GUID  `json:"guid"`
+	Spell  int32 `json:"spell"`
+	Remove bool  `json:"remove,omitempty"`
+}
+
+// serveTrialUnitsParams is trial_units' call: the guids the GM hands may act on for the current trial. It replaces
+// the previous list, so an empty list clears the allowlist (fail-closed).
+type serveTrialUnitsParams struct {
+	GUIDs []GUID `json:"guids"`
+}
+
+// ServeTrialUnits is trial_units' result: the allowlist in force after the call, in registration order.
+type ServeTrialUnits struct {
+	GUIDs []GUID `json:"guids"`
+}
+
+// ServeEventsPage is events' result: the combat rows above since, oldest first, and the ring's own bounds. Oldest
+// is the lowest seq the ring still holds; Dropped is how many rows fell out of it above since.
+type ServeEventsPage struct {
+	Events  []CombatRow `json:"events"`
+	Next    int         `json:"next"`
+	Oldest  int         `json:"oldest"`
+	Dropped int         `json:"dropped"`
+}
+
 // serveCallTyped posts one typed method to the session goroutine.
 func serveCallTyped[P, R any](st *serveState, fn func(*session, context.Context, P) (R, error)) rpc.Method {
 	return rpc.Typed(func(ctx context.Context, p P) (R, error) {
@@ -263,7 +302,20 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("chat_log", serveReadTyped(st, func(s *session, ctx context.Context, p serveChatLogParams) (ServeChatPage, error) {
 		return s.serveChatLog(ctx, p)
 	}))
+	srv.Register("events", rpc.Typed(func(ctx context.Context, p serveEventsParams) (ServeEventsPage, error) {
+		page, err := st.serveEvents(ctx, p)
+		if err != nil {
+			return ServeEventsPage{}, serveError(err)
+		}
+		return page, nil
+	}))
+	srv.Register("trial_units", serveCallTyped(st, func(_ *session, _ context.Context, p serveTrialUnitsParams) (ServeTrialUnits, error) {
+		return st.serveTrialUnits(p)
+	}))
 	srv.Register("gm", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMTextParams) (ServeCommand, error) {
+		if err := s.serveGMUnitLine("gm", p.Text); err != nil {
+			return ServeCommand{}, err
+		}
 		return s.serveGMResult(ctx, p.Text)
 	}))
 	srv.Register("gm_revive", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (ServeCommand, error) {
@@ -271,7 +323,20 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		if err != nil {
 			return ServeCommand{}, err
 		}
-		return s.serveGMResult(ctx, ".revive "+name)
+		line := ".revive " + name
+		if err := s.serveGMUnitLine("gm_revive", line); err != nil {
+			return ServeCommand{}, err
+		}
+		return s.serveGMResult(ctx, line)
+	}))
+	srv.Register("gm_kill", serveCallTyped(st, func(s *session, ctx context.Context, p serveUnitParams) (ServeCommand, error) {
+		return s.serveGMKill(ctx, p)
+	}))
+	srv.Register("gm_set_hp", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMSetHPParams) (ServeCommand, error) {
+		return s.serveGMSetHP(ctx, p)
+	}))
+	srv.Register("gm_aura", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMAuraParams) (ServeCommand, error) {
+		return s.serveGMAura(ctx, p)
 	}))
 	srv.Register("bot", serveCallTyped(st, func(s *session, ctx context.Context, p serveBotParams) (ServeCommand, error) {
 		rep, err := s.serveBot(ctx, p.Line, time.Duration(p.WaitMS)*time.Millisecond)
@@ -539,8 +604,435 @@ func (s *session) serveGMResult(ctx context.Context, text string) (ServeCommand,
 	return commandResult(strings.TrimSpace(text), rep), nil
 }
 
+// serveGMSelectWait bounds how long a GM hand waits for the server to echo the selection.
+const serveGMSelectWait = time.Second
+
+// serveSelectConfirmed selects a unit and waits until this client's own model shows it in the character's target
+// field. The core applies a selection on the map thread and a GM line on the world thread, so a line sent right
+// behind a select can act on the unit the server had before; the field is the server's own echo of the selection.
+func (s *session) serveSelectConfirmed(ctx context.Context, o *objects.Object, wait time.Duration) error {
+	if err := s.serveSelect(o); err != nil {
+		return err
+	}
+	deadline := s.Now().Add(wait)
+	self := s.selfOrMover()
+	for {
+		if cur, ok := s.world.Object(self); ok && cur.Info.Target == o.GUID {
+			return nil
+		}
+		if !s.Now().Before(deadline) {
+			return errors.New("selection not confirmed")
+		}
+		if err := s.collect(ctx, 20*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+// serveGMUnit is the GM hands' boundary, checked before a selection is sent or a line composed. A hand acts on one
+// unit only when the daemon was started as a test bench (--allow-gm-units), the unit is on the trial allowlist the
+// runner registered through trial_units, and, when it is a player, it is this session's own character. Every refusal
+// is a typed rpc.Error, and it is fail-closed: a daemon without the flag, an empty allowlist, or an allowlist the
+// runner has not (re)registered yet all refuse.
+func (s *session) serveGMUnit(o *objects.Object, method string) error {
+	if err := s.serveGMUnitGate(method); err != nil {
+		return err
+	}
+	rt := s.serveRT
+	if o.Type == objects.TypePlayer || o.Type == objects.TypeActivePlayer {
+		if o.GUID != s.selfOrMover() {
+			return serveGMRefused(method, fmt.Sprintf("%s is a player other than this session's character", o.GUID))
+		}
+	}
+	if _, ok := rt.st.gmUnits[o.GUID]; !ok {
+		return serveGMRefused(method, fmt.Sprintf("%s is not registered for the trial", o.GUID))
+	}
+	return nil
+}
+
+// serveGMUnitGate is the outer half of serveGMUnit: the daemon must be serving and must have been started as a test
+// bench. The raw gm path uses it for a line that names another player, where there is no unit object to resolve.
+func (s *session) serveGMUnitGate(method string) error {
+	rt := s.serveRT
+	if rt == nil || rt.st == nil {
+		return serveGMRefused(method, "the session is not serving")
+	}
+	if !rt.st.allowGMUnits {
+		return serveGMRefused(method, "serve was started without --allow-gm-units")
+	}
+	return nil
+}
+
+// serveGMRefused is one GM hand's typed refusal: the call changed nothing.
+func serveGMRefused(method, why string) error {
+	return &rpc.Error{Code: rpc.CodeForbidden, Message: method + ": " + why}
+}
+
+// serveGMHandClass is what one raw gm line's command acts on, classified before the line is sent.
+type serveGMHandClass uint8
+
+const (
+	serveGMHandNone     serveGMHandClass = iota // not a command that acts on a unit
+	serveGMHandSelected                         // the selected unit (the character itself when nothing is selected)
+	serveGMHandSelf                             // the ".aura self"/".unaura self" form
+	serveGMHandNamed                            // a player the line names (".revive <name>")
+)
+
+// serveGMHandCommand classifies one raw gm text. It is the core's own command table that decides which lines act on
+// a unit's life, health, power, auras or damage: `.die` (Chat.cpp:885), `.damage` (:939), `.aura`/`.unaura`
+// (:874-875), `.revive` (:887) and the `.modify` subcommands `hp`, `mana`, `rage` and `energy` (:360-365; the
+// ForeverCore table adds the generic `power` and `runicpower`, which this 1.12 client can still be pointed at).
+// `.kill` is not in the 1.12 table but is kept as the fatal alias the trials tooling uses. Matching is the core's
+// own:
+// case-insensitive, and a typed token matches a command name when the name starts with it (hasStringAbbr, so
+// `.mod`, `.dam` and `.revi` are the same commands). The text is one command, never a chain: only its first token
+// names the command and, for `.modify`, its second names the subcommand; everything after is an argument, which is
+// how the core parses it too. The text is classified the way serveGM normalises it: a missing `.`/`!` is implied.
+func serveGMHandCommand(text string) (serveGMHandClass, string) {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return serveGMHandNone, ""
+	}
+	if t[0] == '.' || t[0] == '!' {
+		t = t[1:]
+	}
+	// ParseCommands runs a command only when the mark is directly followed by its name: "..die" is chat, and so is
+	// ". die" (the delimiter directly after the mark).
+	if t == "" || t[0] == '.' || t[0] == '!' || t[0] == ' ' || t[0] == '\t' {
+		return serveGMHandNone, ""
+	}
+	fields := strings.Fields(t)
+	if len(fields) == 0 {
+		return serveGMHandNone, ""
+	}
+	cmd := strings.ToLower(fields[0])
+	switch {
+	case serveGMNameIs(cmd, "die", "kill", "damage"):
+		return serveGMHandSelected, ""
+	case serveGMNameIs(cmd, "aura", "unaura"):
+		if len(fields) > 1 && strings.HasPrefix("self", strings.ToLower(fields[1])) {
+			return serveGMHandSelf, ""
+		}
+		return serveGMHandSelected, ""
+	case serveGMNameIs(cmd, "modify"):
+		// `.modify` alone is the subcommand container, which has no invoker of its own: nothing runs.
+		if len(fields) < 2 {
+			return serveGMHandNone, ""
+		}
+		if serveGMNameIs(strings.ToLower(fields[1]), "hp", "mana", "rage", "energy", "power", "runicpower") {
+			return serveGMHandSelected, ""
+		}
+		return serveGMHandNone, ""
+	case serveGMNameIs(cmd, "revive"):
+		if len(fields) > 1 {
+			return serveGMHandNamed, fields[1]
+		}
+		return serveGMHandSelected, ""
+	}
+	return serveGMHandNone, ""
+}
+
+// serveGMNameIs reports whether typed would run one of names: the core matches a command when its full name starts
+// with the typed token (hasStringAbbr), so a token is never a match for a name shorter than itself.
+func serveGMNameIs(typed string, names ...string) bool {
+	for _, name := range names {
+		if strings.HasPrefix(name, typed) {
+			return true
+		}
+	}
+	return false
+}
+
+// serveGMUnitLine is the raw gm method's boundary: a line the core would run as one of the unit commands above is
+// checked against the same boundary as the typed hands (serveGMUnit) before it is sent, so the raw path cannot do
+// what gm_kill, gm_set_hp or gm_aura refuse. A refusal is the typed -32006 and sends nothing, the GM guard's probe
+// included. A line that is not a unit command passes untouched.
+//
+// The selected-target lines act on the unit the server has selected. Two selections can be in play for one line:
+// the one this session last sent and the one the server's own model last echoed, because the core applies a
+// selection on the map thread and a GM line on the world thread. Both are checked, so a selection still in flight
+// cannot open the gate for the unit it replaces; with neither set, the lines act on the character itself.
+func (s *session) serveGMUnitLine(method, text string) error {
+	class, name := serveGMHandCommand(text)
+	switch class {
+	case serveGMHandNone:
+		return nil
+	case serveGMHandNamed:
+		if err := s.serveGMUnitGate(method); err != nil {
+			return err
+		}
+		if s.serveGMSelfName(name) {
+			self, ok := s.world.Object(s.selfOrMover())
+			if !ok {
+				return serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
+			}
+			return s.serveGMUnit(self, method)
+		}
+		return serveGMRefused(method, fmt.Sprintf("the line names a player other than this session's character (%s)", chat.SanitiseName(name)))
+	case serveGMHandSelf:
+		self, ok := s.world.Object(s.selfOrMover())
+		if !ok {
+			return serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
+		}
+		return s.serveGMUnit(self, method)
+	}
+	units, err := s.serveGMSelectedUnits(method)
+	if err != nil {
+		return err
+	}
+	for _, o := range units {
+		if err := s.serveGMUnit(o, method); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// serveGMSelectedUnits resolves every unit a selected-target line can act on: the selection this session last sent
+// (serveRT.target) and the one the server last echoed in the character's target field, deduplicated; the character
+// itself when neither is set. A selection the model no longer holds is refused rather than assumed harmless.
+func (s *session) serveGMSelectedUnits(method string) ([]*objects.Object, error) {
+	selfGUID := s.selfOrMover()
+	self, haveSelf := s.world.Object(selfGUID)
+	seen := make(map[wire.GUID]struct{}, 2)
+	var guids []wire.GUID
+	add := func(g wire.GUID) {
+		if g.IsZero() {
+			return
+		}
+		if _, dup := seen[g]; dup {
+			return
+		}
+		seen[g] = struct{}{}
+		guids = append(guids, g)
+	}
+	if s.serveRT != nil {
+		add(s.serveRT.target)
+	}
+	if haveSelf {
+		add(self.Info.Target)
+	}
+	if len(guids) == 0 {
+		add(selfGUID)
+	}
+	out := make([]*objects.Object, 0, len(guids))
+	for _, g := range guids {
+		o, ok := s.world.Object(g)
+		if !ok {
+			return nil, serveGMRefused(method, fmt.Sprintf("%s is selected but not in view", g))
+		}
+		out = append(out, o)
+	}
+	if len(out) == 0 {
+		return nil, serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
+	}
+	return out, nil
+}
+
+// serveGMSelfName says whether the name a .revive line carries is this session's own character: only that player
+// passes the player rule, every other name (a bot of the trial included) is refused.
+func (s *session) serveGMSelfName(name string) bool {
+	name = strings.TrimSpace(strings.Trim(name, "\"'"))
+	if name == "" {
+		return false
+	}
+	if own := s.report.Character.Name; own != "" && strings.EqualFold(name, own) {
+		return true
+	}
+	if o, ok := s.world.Object(s.selfOrMover()); ok {
+		return strings.EqualFold(name, s.world.Name(o))
+	}
+	return false
+}
+
+// serveTrialUnits replaces the GM hands' allowlist with the guids the runner registered for the current trial. It is
+// refused without --allow-gm-units, so a daemon that is not a test bench cannot be given one.
+func (st *serveState) serveTrialUnits(p serveTrialUnitsParams) (ServeTrialUnits, error) {
+	if !st.allowGMUnits {
+		return ServeTrialUnits{}, serveGMRefused("trial_units", "serve was started without --allow-gm-units")
+	}
+	set := make(map[wire.GUID]struct{}, len(p.GUIDs))
+	out := ServeTrialUnits{GUIDs: make([]GUID, 0, len(p.GUIDs))}
+	for _, g := range p.GUIDs {
+		if wire.GUID(g).IsZero() {
+			return ServeTrialUnits{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "trial_units: a zero guid cannot be registered"}
+		}
+		if _, dup := set[wire.GUID(g)]; dup {
+			continue
+		}
+		set[wire.GUID(g)] = struct{}{}
+		out.GUIDs = append(out.GUIDs, g)
+	}
+	st.gmUnits = set
+	return out, nil
+}
+
+// serveGMKill kills one unit with the core's own `.die`, which acts on the selected unit. A player is refused: that
+// line kills a character (a bot of the pool included), and nothing in the trials kills a player this way.
+func (s *session) serveGMKill(ctx context.Context, p serveUnitParams) (ServeCommand, error) {
+	o, err := s.serveUnitByName(p.GUID, p.Name)
+	if err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_kill: %w", err)
+	}
+	if err := s.serveGMUnit(o, "gm_kill"); err != nil {
+		return ServeCommand{}, err
+	}
+	if o.Type == objects.TypePlayer || o.Type == objects.TypeActivePlayer {
+		return ServeCommand{}, fmt.Errorf("gm_kill: %s is a player; only a creature or a pet is killed", o.GUID)
+	}
+	if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_kill: %w", err)
+	}
+	return s.serveGMResult(ctx, ".die")
+}
+
+// serveGMSetHP sets one unit's health with `.modify hp <hp>`. The core's command sets the selected player's health
+// and its maximum to that one value (cs_modify.cpp:137-149); passing the unit's own maximum is therefore a refill
+// and the maximum does not change.
+func (s *session) serveGMSetHP(ctx context.Context, p serveGMSetHPParams) (ServeCommand, error) {
+	if p.HP == nil {
+		return ServeCommand{}, errors.New("gm_set_hp needs hp")
+	}
+	hp := *p.HP
+	if hp < 1 || hp > math.MaxInt32 {
+		return ServeCommand{}, fmt.Errorf("gm_set_hp: hp must be 1 to %d", math.MaxInt32)
+	}
+	o, err := s.serveUnitByName(p.GUID, "")
+	if err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_set_hp: %w", err)
+	}
+	if err := s.serveGMUnit(o, "gm_set_hp"); err != nil {
+		return ServeCommand{}, err
+	}
+	if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_set_hp: %w", err)
+	}
+	return s.serveGMResult(ctx, fmt.Sprintf(".modify hp %d", hp))
+}
+
+// serveGMAura puts one aura on a unit (`.aura <spell>`) or takes it off (`.unaura <spell>`), both of which act on the
+// selected unit.
+func (s *session) serveGMAura(ctx context.Context, p serveGMAuraParams) (ServeCommand, error) {
+	if p.Spell <= 0 {
+		return ServeCommand{}, errors.New("gm_aura needs a positive spell id")
+	}
+	o, err := s.serveUnitByName(p.GUID, "")
+	if err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_aura: %w", err)
+	}
+	if err := s.serveGMUnit(o, "gm_aura"); err != nil {
+		return ServeCommand{}, err
+	}
+	if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
+		return ServeCommand{}, fmt.Errorf("gm_aura: %w", err)
+	}
+	line := fmt.Sprintf(".aura %d", p.Spell)
+	if p.Remove {
+		line = fmt.Sprintf(".unaura %d", p.Spell)
+	}
+	return s.serveGMResult(ctx, line)
+}
+
 func commandResult(sent string, rep *command.Reply) ServeCommand {
 	return ServeCommand{Sent: sent, Lines: rep.Raw, Complete: rep.Complete, End: rep.End}
+}
+
+// serveEventsBounds validates events' arguments and returns the page bound and the wait: a negative limit and a
+// wait_ms outside 0..2,000 are refused, and a limit of 0 or above CombatPageMax is the page maximum.
+func serveEventsBounds(p serveEventsParams) (limit int, wait time.Duration, err error) {
+	if p.Limit < 0 {
+		return 0, 0, errors.New("events: limit must not be negative")
+	}
+	limit = p.Limit
+	if limit == 0 || limit > CombatPageMax {
+		limit = CombatPageMax
+	}
+	wait = time.Duration(p.WaitMS) * time.Millisecond
+	if wait < 0 || wait > 2*time.Second {
+		return 0, 0, errors.New("events: wait_ms must be 0 to 2000")
+	}
+	return limit, wait, nil
+}
+
+// serveEventsPage is one read of the ring on the session goroutine: the rows above since, oldest first, at most
+// limit, and the channel the ring's next Append closes. It is what the wait below snapshots; the wait itself never
+// runs here.
+func (s *session) serveEventsPage(since, limit int) (ServeEventsPage, <-chan struct{}) {
+	rows, next, oldest, dropped, changed := s.CombatLog().SinceChanged(since, limit)
+	if rows == nil {
+		rows = []CombatRow{}
+	}
+	return ServeEventsPage{Events: rows, Next: next, Oldest: oldest, Dropped: dropped}, changed
+}
+
+// serveEventsSnapshot is one page and its wake signal: page is what the caller gets, changed is the ring's channel
+// the next Append closes (internal, never marshalled).
+type serveEventsSnapshot struct {
+	page    ServeEventsPage
+	changed <-chan struct{}
+}
+
+// eventsSnapshot copies one page on the session goroutine and hands back the ring's wake signal read in the same
+// lock, so the caller can wait for the next row off the loop without missing one appended in between.
+func (st *serveState) eventsSnapshot(ctx context.Context, since, limit int) (serveEventsSnapshot, error) {
+	v, err := st.callDead(ctx, func(s *session) (any, error) {
+		page, changed := s.serveEventsPage(since, limit)
+		return serveEventsSnapshot{page: page, changed: changed}, nil
+	})
+	if err != nil {
+		return serveEventsSnapshot{}, err
+	}
+	snap, ok := v.(serveEventsSnapshot)
+	if !ok {
+		return serveEventsSnapshot{}, &rpc.Error{Code: rpc.CodeInternal, Message: "internal: method result type"}
+	}
+	return snap, nil
+}
+
+// serveEvents answers the session's combat log: the rows above since, oldest first, at most limit (1,000). A wait_ms
+// makes the read wait for a row instead of answering an empty page at once, the same long-poll chat_log uses.
+//
+// The wait is spent off the session goroutine: the session's call queue is shared by every method, so an empty
+// long-poll that slept in it would hold status, chats, GM hands and a logout for its whole wait, and concurrent
+// long-polls would run one after another. Here only the two short page copies run on the loop; between them the
+// call waits on the ring's own change signal, which new rows close.
+func (st *serveState) serveEvents(ctx context.Context, p serveEventsParams) (ServeEventsPage, error) {
+	limit, wait, err := serveEventsBounds(p)
+	if err != nil {
+		return ServeEventsPage{}, err
+	}
+	snap, err := st.eventsSnapshot(ctx, p.Since, limit)
+	if err != nil {
+		return ServeEventsPage{}, err
+	}
+	if len(snap.page.Events) > 0 || wait == 0 {
+		return snap.page, nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-snap.changed:
+		case <-timer.C:
+			// The wait is over: read once more, so a row appended as the timer fired is in this answer.
+			snap, err = st.eventsSnapshot(ctx, p.Since, limit)
+			if err != nil {
+				return ServeEventsPage{}, err
+			}
+			return snap.page, nil
+		case <-ctx.Done():
+			return ServeEventsPage{}, ctx.Err()
+		case <-st.done:
+			return ServeEventsPage{}, ErrLinkLost
+		}
+		snap, err = st.eventsSnapshot(ctx, p.Since, limit)
+		if err != nil {
+			return ServeEventsPage{}, err
+		}
+		if len(snap.page.Events) > 0 {
+			return snap.page, nil
+		}
+	}
 }
 
 func (s *session) serveChatLog(ctx context.Context, p serveChatLogParams) (ServeChatPage, error) {
@@ -614,10 +1106,10 @@ var notPortedMethods = []string{
 	"buy", "commander", "convert_raid",
 	"disband", "dismount",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"equip", "equipment", "events",
+	"equip", "equipment",
 	"follow_start", "follow_status", "follow_stop",
 	"gameobjects",
-	"gm_aura", "gm_evade", "gm_kill", "gm_respawn", "gm_set_hp",
+	"gm_evade", "gm_respawn",
 	"gossip_hello", "gossip_select",
 	"inventory", "join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",

@@ -439,6 +439,9 @@ func (r *Run) actionFightGate(ctx context.Context, a Action) string {
 	// A watch's run starts on the plan's map, in the instance the party entered. ready() compares the party with its
 	// own map (the observer may be elsewhere), so without this a party that zoned out together between the placement
 	// check and a retried start would pass as ready and the module would be asked to start a run off the plan's map.
+	// A party still in its own teleport is not that party yet: a member that is not on the plan's map (the live line
+	// `engine=no ... map=1` of a teleport in flight) holds the gate, so the engine and readiness checks only ever read
+	// a party that is all on the plan's map. The caller's own bound is the wait; past it the existing error stands.
 	if r.cfg.Watch && !r.partyInInstance() {
 		return "party-map"
 	}
@@ -455,11 +458,12 @@ func (r *Run) actionFightGate(ctx context.Context, a Action) string {
 }
 
 // actionHold reports whether a shut gate is worth another attempt: the report is not in yet, the party's own state
-// blocks the action for now. Everything else — a lost link, a pending stop, a module refusal, the practice switch,
-// the spent budget, an unknown kind or destination — is not, and the caller ends the run with its own reason.
+// blocks the action for now, or the party is still in its own teleport (a watch's start waits for every member on the
+// plan's map). Everything else — a lost link, a pending stop, a module refusal, the practice switch, the spent budget,
+// an unknown kind or destination — is not, and the caller ends the run with its own reason.
 func actionHold(why string) bool {
 	switch reasonCode(why) {
-	case "report", "stale", "combat", "dead", "alive", "inside":
+	case "report", "stale", "combat", "dead", "alive", "inside", "party-map":
 		return true
 	}
 	return false

@@ -26,6 +26,12 @@ func TestWorldCheckUsage(t *testing.T) {
 	if _, _, errOut := runCLI("forever"); !strings.Contains(errOut, "world-check") {
 		t.Errorf("the forever usage does not name world-check: %q", errOut)
 	}
+	if _, _, errOut := runCLI("forever"); !strings.Contains(errOut, "forever rpc") {
+		t.Errorf("the forever usage does not name rpc: %q", errOut)
+	}
+	if code, _, _ := runCLI("forever", "rpc"); code != exitUsage {
+		t.Errorf("forever rpc with no args: code %d, want %d", code, exitUsage)
+	}
 }
 
 // TestWorldCheckNeedsPassword: without FOREVER_PASSWORD the command stops at usage and never dials.

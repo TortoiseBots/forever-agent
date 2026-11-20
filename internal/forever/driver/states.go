@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -46,12 +47,20 @@ func (r *Run) prepare(ctx context.Context) string {
 		// A watch is not one of our parties: the tank is the bot the module's run names, the commander is one of
 		// the module's own bots outside it, and the roster is where the five names come from. PREPARE then checks it
 		// exactly as a run does (levels, roles, online, commanded).
+		r.commander = party.Commander
 		why = r.adoptRoster(party)
 	} else {
 		why = rosterWhy(r.cfg, party)
 	}
 	if why != "" {
 		r.stop("prepare:" + why)
+		return ""
+	}
+	// The commander comes to the tank's side before the party's readiness rule reads the block its absence causes
+	// (`stuck=blocked:bot in an instance`). The watch made one attempt before PREPARE, on the roster it reads for this
+	// move alone; this one runs with the GM lines sent and waits for the module to see the move.
+	r.commanderToTank(ctx, commanderMoveBudget)
+	if r.stopReason != "" || r.lost {
 		return ""
 	}
 	deadline := r.now().Add(r.lim.Prepare)
@@ -343,9 +352,14 @@ func (r *Run) enter(ctx context.Context) string {
 			if r.enteredNow() {
 				r.progress()
 				if r.cfg.Watch {
-					// The party is in; the observer is a GM who comes in on its own terms. A shut gate or a refusal
-					// leaves it outside and the watch goes on: it reads the module, not the map.
-					r.observerIn(ctx, tank)
+					// The party is in and the commander follows it to the tank's side before the start's readiness
+					// gate: the module blocks a bot whose master stands outside its instance, and the gate would end
+					// start:stuck on that block. A move the module does not confirm is logged and the watch goes on;
+					// the gate then reports the block it still sees.
+					r.commanderToTank(ctx, commanderMoveBudget)
+					if r.stopReason != "" || r.lost {
+						return ""
+					}
 					return StateLegWalk
 				}
 				return StateLegWalk
@@ -419,27 +433,168 @@ func (r *Run) partyInInstance() bool {
 	return true
 }
 
-// observerIn brings the outside observer to the tank's side once a watched party is in. The watch never waits for
-// it: the observer is a GM and reads the module from wherever it stands, so a shut gate or a refusal is logged and
-// the watch goes on; only a lost link or a pending stop is not. The module's teleport is the first choice, the
-// core's appear the fallback.
-func (r *Run) observerIn(ctx context.Context, tank string) {
-	_, why := r.act(ctx, Action{Kind: ActionTeleTo, Who: r.cfg.Commander, Other: tank})
-	switch why {
-	case "":
-		r.logf("watch: the observer is at the tank's side")
-		return
-	case "link", "stop":
-		return
+// commanderMoveBudget is how long the watch waits for the commander's move to the tank's side to show in the
+// module's own report: a module teleports a character in its own time, and a party the module has not yet seen the
+// commander with is one whose readiness rule refuses the run.
+const commanderMoveBudget = 30 * time.Second
+
+// commanderAway is how the module's own report says the party's commander stands away from the tank, from the tank's
+// `dm=` (the distance to its master, the commander the roster names): "" when it stands with it. The module marks a
+// bot whose master is on another map or instance `stuck=blocked:bot in an instance`, and PREPARE and the start's
+// readiness rule both refuse that block.
+func commanderAway(t *tbcmd.BotState) string {
+	if t == nil {
+		return ""
 	}
-	_, why = r.act(ctx, Action{Kind: ActionAppear, Who: tank})
-	switch why {
-	case "":
-		r.logf("watch: the observer appeared at the tank's side")
-	case "link", "stop":
-	default:
-		r.logf("watch: the observer stays outside (%s); the watch goes on", why)
+	switch t.DistMaster.Kind {
+	case "othermap":
+		return "on another map or instance than the tank"
+	case "self":
+		return ""
 	}
+	if t.DistMaster.Has && t.DistMaster.Yards > float64(MasterFollowYd) {
+		return fmt.Sprintf("%.0f yd from the tank", t.DistMaster.Yards)
+	}
+	return ""
+}
+
+// stuckBlocked is the bot's own blocked word from its `stuck` field, "" when the module does not block it.
+func stuckBlocked(b tbcmd.BotState) string {
+	if b.Stuck.Kind != "blocked" {
+		return ""
+	}
+	return nonEmpty(b.Stuck.Reason, "blocked")
+}
+
+// readCommander learns the party's commander from the module's roster. The roster is what names it — never this
+// client's own character — and the watch needs it before PREPARE runs, so a commander standing on another map can be
+// placed before PREPARE's readiness rule sees the block its absence causes. It reports whether a roster arrived; a
+// roster that names no commander is the placement's own failure (commander:unnamed), decided by commanderToTank. A
+// read that fails is not reported here: PREPARE reads the roster again with its own rules and names the failure, and
+// until a roster arrives there is no commander to move. A lost link ends the watch as every read does.
+func (r *Run) readCommander(ctx context.Context) bool {
+	if !r.cfg.Watch {
+		return false
+	}
+	if r.commander != "" {
+		return true
+	}
+	rep, err := r.cmd.Party(ctx)
+	if errors.Is(err, ErrLinkLost) {
+		r.linkLost()
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	r.commander = rep.Commander
+	return true
+}
+
+// commanderToTank brings the module's party commander to the tank's side when the party's own report says it is not
+// with it: on another map or instance than the tank's, or farther than a master's follow distance. The module blocks
+// a bot whose master stands elsewhere, so left there the commander's absence ends the watch on prepare:stuck or
+// start:stuck. The move is the module's own teleport (`.tb tele <commander> to <tank>`) and only that: the watching
+// character is an observer and is never teleported in the commander's place, so a watch whose roster names no
+// commander stops here (commander:unnamed) instead of moving anyone else. The watch waits, bounded by budget, for a
+// report read after the move to show the commander with the tank and its block gone, because the module teleports in
+// its own time. A shut gate is retried, a refusal is logged once, and a lost link or a pending stop ends it. It
+// returns whether the module's report shows the commander with the tank.
+func (r *Run) commanderToTank(ctx context.Context, budget time.Duration) bool {
+	tank := r.cfg.Tank()
+	if !r.cfg.Watch {
+		return true
+	}
+	if r.commander == "" {
+		// Nothing to place, and no one else may be moved: the placement is the roster's commander or the watch fails.
+		r.logf("watch: the roster names no commander; the watch does not move its own character in its place")
+		r.stop("commander:unnamed")
+		return false
+	}
+	deadline := r.now().Add(budget)
+	retry := max(2*r.cfg.Poll, 2*time.Second)
+	away, lastCode, lastSent := "", "", time.Time{}
+	moved := false
+	for r.stopReason == "" && !r.lost {
+		// The move's own rule: a report read now decides whether the commander is with the tank. After a move the
+		// next report is what confirms it (the gate itself refuses a send on a report older than the last line).
+		if moved || r.rep == nil || !r.reportComplete() || !r.repFresh() {
+			if !r.refresh(ctx) {
+				if r.stopReason != "" || r.lost || !r.sleep(ctx, r.cfg.Poll) {
+					return false
+				}
+				continue
+			}
+		}
+		b := r.bot(tank)
+		here := commanderAway(b)
+		switch {
+		case b == nil:
+			// The tank's line is not in the report yet: the party is being read, not placed.
+		case here != "":
+			if here != away {
+				r.logf("watch: the commander is %s; the watch moves it to the tank", here)
+				away = here
+			}
+		case moved && stuckBlocked(*b) != "":
+			// The commander is in; the module has not cleared the block its absence caused yet.
+		default:
+			if moved {
+				r.logf("watch: the commander is at the tank's side")
+			}
+			return true
+		}
+		// The move is asked for only while the report still puts the commander away: a commander already with the tank
+		// whose block has not cleared is a module that has not caught up, not a move to repeat.
+		if here != "" && (lastSent.IsZero() || r.now().Sub(lastSent) >= retry) {
+			lastSent = r.now()
+			switch why := r.moveCommander(ctx, tank); why {
+			case "":
+				moved = true
+			case "link", "stop":
+				return false
+			default:
+				if actionHold(why) {
+					// The gate is shut: the next poll may open it.
+					lastSent = time.Time{}
+				} else if why != lastCode {
+					r.logf("watch: the commander could not be moved (%s); the watch goes on without it", why)
+					lastCode = why
+				}
+			}
+		}
+		if !r.now().Before(deadline) {
+			// Say what the wait stood on, so a move that never lands and a block the module never clears read apart.
+			if b != nil {
+				if here := commanderAway(b); here != "" {
+					r.logf("watch: the commander is still %s after %.0fs; the watch goes on without it", here, budget.Seconds())
+				} else if blk := stuckBlocked(*b); blk != "" {
+					r.logf("watch: the commander is at the tank's side but the tank is still reported blocked (%s); the watch goes on", blk)
+				}
+			}
+			return false
+		}
+		if !r.sleep(ctx, r.cfg.Poll) {
+			return false
+		}
+	}
+	return false
+}
+
+// moveCommander asks for the commander's move to the tank's side with the module's own teleport
+// (`.tb tele <commander> to <tank>`), and with nothing else: the commander named by the module's roster is the only
+// character the placement moves, and the watching character is never moved in its place (the core's appear moves this
+// client's character, not the commander). It returns "" when the line was accepted, the gate's own reason while the
+// gate is shut, and the refusal (the module's code) otherwise.
+func (r *Run) moveCommander(ctx context.Context, tank string) string {
+	rep, why := r.act(ctx, Action{Kind: ActionTeleTo, Who: r.commander, Other: tank})
+	if why == "" || why == "link" || why == "stop" || actionHold(why) {
+		return why
+	}
+	if why == "error" {
+		return nonEmpty(rep.Code, "refused")
+	}
+	return why
 }
 
 // walkResult is how one walk ended.

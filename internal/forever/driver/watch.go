@@ -17,6 +17,11 @@ package driver
 //     (PRACTICE) and one `.tb run resume`, at most Limits.MaxPractice times. The rescue runs before the pause
 //     budget, so the wipe pause it can clear is not reported as stuck.
 //
+// The party is bound to a commander of the module's own — a bot its roster names, never this character — and the
+// module blocks a bot whose master stands on another map (`stuck=blocked:bot in an instance`). The watch brings that
+// commander to the tank's side before PREPARE and again after an entry lands the party, and waits (bounded) for the
+// module's own report to show it there.
+//
 // Every send goes through act and its gate, like every other setup action. The stop path sends `.tb run stop`, waits
 // (bounded) for the module's state to reach stopped, and writes the run's summary: the dungeon-run format, extended
 // with the module's own counters. A lost link ends the watch at once and nothing is sent after it.
@@ -114,10 +119,23 @@ func (r *Run) Watch(ctx context.Context) Result {
 		r.stop("config")
 		return r.watchResult(w)
 	}
+	// The commander comes to the party before PREPARE. The module names it in its roster (never this client's own
+	// character), and with the party already placed (--enter none) on a map the commander is not on, the module
+	// reports the bots `stuck=blocked:bot in an instance` and PREPARE would end on stuck:<tank>. The roster is read
+	// here for that one move; PREPARE reads it again for its own rules and retries the move with the GM lines on.
+	// With an entry the party lands without the commander; ENTER brings it in again after the party lands. A roster
+	// that names no commander ends the watch here (commander:unnamed): the watching character is never moved in its
+	// place, and no PREPARE line goes out for a watch that cannot place the party's own. A failed roster read is not
+	// the end: PREPARE reads again and names its own failure.
 	r.legs = nil
 	st := StatePrepare
-	r.states = append(r.states, st)
-	st = r.prepare(ctx)
+	if r.readCommander(ctx) {
+		r.commanderToTank(ctx, commanderMoveBudget)
+	}
+	if r.stopReason == "" && !r.lost {
+		r.states = append(r.states, st)
+		st = r.prepare(ctx)
+	}
 	w.roles = r.watchRoles()
 	if r.stopReason == "" && st == StateTravel {
 		r.states = append(r.states, StateTravel)
