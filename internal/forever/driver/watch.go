@@ -695,7 +695,9 @@ const InterruptedStopBudget = 60 * time.Second
 // would never reach the first bound — and every call is additionally bounded by FinishCallTimeout (10 s). The bound
 // is WatchStop (600 s by default) when the watch ended on its own, and InterruptedStopBudget (60 s) when the caller's
 // context ended it. When the run has not reached stopped by either bound the result says the stop was not confirmed
-// (Result.StopUnconfirmed); a lost link ends it at once as before.
+// (Result.StopUnconfirmed); a lost link ends it at once as before. The final instance read after the wait is bounded
+// by FinishCallTimeout on its own, detached context: the confirmation may have spent the whole budget, and the read
+// still has to reach the server for the summary to record the state the run ended with.
 func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	if r.lost {
 		r.watchSummary(w)
@@ -770,9 +772,12 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 			w.state, budget.Seconds())
 	}
 	if !r.lost {
-		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
-		r.watchBosses(cctx, w, true)
-		ccancel()
+		// The final read keeps its own bound: the confirmation loop above may have spent the whole cleanup budget, and
+		// a child of the expired fctx would fail before the request reached the server, leaving the summary with the
+		// previous boss state. Like the stop, it must run after the caller's context ended.
+		octx, ocancel := context.WithTimeout(context.WithoutCancel(ctx), FinishCallTimeout)
+		r.watchBosses(octx, w, true)
+		ocancel()
 	}
 	r.watchSummary(w)
 }

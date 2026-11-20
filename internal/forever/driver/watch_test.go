@@ -401,6 +401,56 @@ func TestWatchFinalBossRead(t *testing.T) {
 	}
 }
 
+// TestWatchFinalBossReadAfterStopBudget: the stop confirmation may spend the whole cleanup budget, and the loop then
+// exits on the expired cleanup context. The final instance read still has to reach the server: it runs on its own
+// bound, not as a child of the spent context, and the summary records the state the run ended with.
+func TestWatchFinalBossReadAfterStopBudget(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Limits.WatchStop = 200 * time.Millisecond
+	cfg.Limits.MaxMinutes = 1
+	run, f, _ := newWatch(t, cfg)
+	f.InstanceBosses = []tbcmd.InstanceBoss{{Entry: 11517, State: "alive"}}
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second})
+	f.StopDelay = time.Hour
+	// Once the stop is sent, the module stops answering status: the confirmation polls sit out the whole cleanup
+	// budget, so the loop leaves on the expired context.
+	f.OnAction = func(f *Fake, a Action) bool {
+		if a.Kind == ActionRunStop {
+			f.StatusBlock = time.Second
+		}
+		return false
+	}
+	// The boss dies after the start read and before the cleanup: only the final read can see it.
+	f.Clock.After(5*time.Second, func() {
+		f.InstanceBosses = []tbcmd.InstanceBoss{{Entry: 11517, State: "dead"}}
+	})
+	res := run.Watch(context.Background())
+	if res.Stop != "budget" {
+		t.Fatalf("stop %q, want budget", res.Stop)
+	}
+	if !res.StopUnconfirmed {
+		t.Fatal("the run never reached stopped but the result is not marked unconfirmed")
+	}
+	if n := countActions(f, "run stop"); n != 1 {
+		t.Fatalf("%d stops, want one sent before the confirmation spent the budget", n)
+	}
+	reads := 0
+	for _, o := range f.Orders() {
+		if o.Verb == "action" && strings.HasSuffix(o.Arg, " info") {
+			reads++
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("%d instance report read(s), want the start read and the final read after the spent budget", reads)
+	}
+	if res.Summary.Watch == nil {
+		t.Fatal("no watch summary")
+	}
+	if got := res.Summary.Watch.Bosses["11517"]; got != "dead" {
+		t.Fatalf("the summary records boss 11517 as %q, want the final read's dead", got)
+	}
+}
+
 // TestWatchNoOrderFunction pins the watch's own code: it never calls the order send, so an edit cannot start
 // ordering bots mid-run.
 func TestWatchNoOrderFunction(t *testing.T) {
