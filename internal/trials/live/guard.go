@@ -328,7 +328,7 @@ func (g *Guard) selectUnit(ctx context.Context, guid string) error {
 	if err := g.client.Target(ctx, want); err != nil {
 		return fmt.Errorf("target %s: %w", want, err)
 	}
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		st, err := g.client.StatusOf(ctx)
 		if err == nil && normGUIDOf(st.Target) == want {
@@ -375,7 +375,16 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 	if g.dryRun {
 		return nil
 	}
-	return g.client.GM(ctx, line) // the one gm call site in this package
+	err = g.client.GM(ctx, line) // the one gm call site in this package
+	if IsNoReply(err) {
+		// The line ran; this core prints nothing for it. The caller's
+		// read-back proves the effect.
+		if g.marks != nil {
+			g.marks.Add(map[string]any{"kind": "gm_silent", "kind_detail": kind, "target": targetOrNil(target)})
+		}
+		return nil
+	}
+	return err
 }
 
 // record writes the marks and ledger rows of one GM action.
@@ -439,7 +448,14 @@ func (g *Guard) hand(ctx context.Context, kind, guid string, want GuardTarget, c
 		return err
 	}
 	g.record(kind, kind+" "+guid, guid)
-	return call()
+	err := call()
+	if IsNoReply(err) {
+		if g.marks != nil {
+			g.marks.Add(map[string]any{"kind": "gm_silent", "kind_detail": kind, "target": guid})
+		}
+		return nil
+	}
+	return err
 }
 
 // Kill kills one ledgered summon through the serve's gm_kill hand. A guid

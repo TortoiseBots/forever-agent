@@ -433,7 +433,7 @@ func parseRole(rep *command.Reply) (RoleReport, error) {
 	}
 	end := r.End
 	out := RoleReport{Raw: append([]string(nil), rep.Raw...)}
-	if out.Role, err = requiredWordOrEmpty(end, "role", "tank", "healer", "dps"); err != nil {
+	if out.Role, err = requiredWordOrEmpty(end, "role", "tank", "healer", "dps", "none"); err != nil {
 		return out, err
 	}
 	if out.Target, err = labelText(end, "target"); err != nil {
@@ -450,7 +450,7 @@ func parseRole(rep *command.Reply) (RoleReport, error) {
 		if res.Bot, err = rec.requireText("bot"); err != nil {
 			return out, err
 		}
-		if res.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps"); err != nil {
+		if res.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps", "none"); err != nil {
 			return out, err
 		}
 		if res.Status, err = requiredWord(rec, "status", "queued", "stored"); err != nil {

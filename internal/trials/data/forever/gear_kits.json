@@ -1,1 +1,17 @@
-{}
+{
+  "priest": {
+    "blue": {
+      "40": [
+        {"entry": 7720, "name": "Whitemane's Chapeau", "slot": "head"},
+        {"entry": 19507, "name": "Inquisitor's Shawl", "slot": "shoulder"},
+        {"entry": 9434, "name": "Elemental Raiment", "slot": "chest"},
+        {"entry": 10771, "name": "Deathmage Sash", "slot": "waist"},
+        {"entry": 9407, "name": "Stoneweaver Leggings", "slot": "legs"},
+        {"entry": 13100, "name": "Furen's Boots", "slot": "feet"},
+        {"entry": 274380, "name": "Decaying Flesh Bands", "slot": "wrist"},
+        {"entry": 9390, "name": "Revelosh's Gloves", "slot": "hands"},
+        {"entry": 10776, "name": "Silky Spider Cape", "slot": "back"}
+      ]
+    }
+  }
+}

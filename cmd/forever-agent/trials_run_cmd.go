@@ -56,6 +56,9 @@ func trialsRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return exitUsage
 	}
 	store := slots.NewStore(cfg, cfgPath)
+	// A Forever slot's port is its serve's RPC port: the serve is started
+	// before the run, so a listening port is the slot being ready, not busy.
+	store.Probe = live.ServeProbe{Probe: store.Probe}
 	store.HolderPID = os.Getpid()
 	slot := *slotID
 	anyFree := *anyFlag || slot == ""

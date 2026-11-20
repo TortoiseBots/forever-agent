@@ -338,6 +338,7 @@ func TestVisibleFinalizesAfterHire(t *testing.T) {
 		"TortoiseBots: Bheal learned 10 spell(s).",
 		"TortoiseBots: Bheal now has 20 of item 17083.")
 
+	s.scriptParty("Acmd", "Bheal")
 	rep := &Repeat{Trial: trial, TrialID: "priest-holy-heal-latency",
 		Client: s.runner.client, Ledger: NewLedger(""),
 		Marks: NewMarks(t.TempDir() + "/marks.jsonl")}

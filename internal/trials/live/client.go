@@ -293,9 +293,19 @@ func unitFrom(raw map[string]any) Unit {
 	return u
 }
 
-// GM sends one raw `gm` line. Only the guard may call it.
+// GM sends one raw `gm` line. Only the guard may call it: a silent command
+// answers after the serve's quiet window, but a heavy one (a level jump)
+// can hold the session's serialised channel, so the call gets a minute.
 func (c *Client) GM(ctx context.Context, line string) error {
-	return c.call(ctx, "gm", map[string]string{"text": line}, nil, 10*time.Second)
+	return c.call(ctx, "gm", map[string]string{"text": line}, nil, 60*time.Second)
+}
+
+// IsNoReply reports the serve's "the server sent no reply" answer: the line
+// ran, but the core printed nothing (`.levelup`, `.npc add temp`, `.die` and
+// `.learn` on this core are all silent). The caller proves the effect with a
+// read-back; a proof failure is still a failure.
+func IsNoReply(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "sent no reply")
 }
 
 // TrialUnits replaces the serve's GM-unit allowlist (the guids the GM hands
@@ -333,10 +343,11 @@ func (c *Client) GMAura(ctx context.Context, guid string, spell int, remove bool
 	return c.call(ctx, "gm_aura", params, nil, 15*time.Second)
 }
 
-// Target selects one unit and returns its row.
+// Target selects one unit and returns its row. The call gets 30 s: a heavy
+// GM line already in the session's queue (a level jump) can hold it.
 func (c *Client) Target(ctx context.Context, guid string) error {
 	var out map[string]any
-	return c.call(ctx, "target", map[string]any{"guid": guid}, &out, 10*time.Second)
+	return c.call(ctx, "target", map[string]any{"guid": guid}, &out, 30*time.Second)
 }
 
 // Attack runs the serve's fight loop on guid for at most forMS and returns
@@ -356,6 +367,35 @@ func (c *Client) Attack(ctx context.Context, guid string, forMS int) (string, er
 // StopAttack asks a running attack to stop.
 func (c *Client) StopAttack(ctx context.Context) error {
 	return c.call(ctx, "stop_attack", map[string]any{}, nil, 10*time.Second)
+}
+
+// PartyMember is one row of the serve's party roster (which carries the
+// member guids, unlike the module's text answer).
+type PartyMember struct {
+	Name      string `json:"name"`
+	GUID      string `json:"guid"`
+	Online    bool   `json:"online"`
+	Dead      bool   `json:"dead"`
+	Leader    bool   `json:"leader"`
+	Health    uint32 `json:"health"`
+	MaxHealth uint32 `json:"max_health"`
+	Power     uint32 `json:"power"`
+	MaxPower  uint32 `json:"max_power"`
+	Level     uint32 `json:"level"`
+}
+
+// PartyInfo reads the serve's party roster.
+type PartyInfo struct {
+	InGroup bool          `json:"in_group"`
+	Leader  string        `json:"leader"`
+	Members []PartyMember `json:"members"`
+}
+
+// Party reads the serve's `party` roster.
+func (c *Client) Party(ctx context.Context) (PartyInfo, error) {
+	var out PartyInfo
+	err := c.call(ctx, "party", map[string]any{}, &out, 10*time.Second)
+	return out, err
 }
 
 // Chat sends one `chat` line of type typ.

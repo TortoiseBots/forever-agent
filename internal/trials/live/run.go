@@ -260,8 +260,19 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		Summons: func() []string { return r.Ledger.SummonGUIDs() }})
 	rep.Guard, rep.Collect = guard, collect
 	r.lastRep = rep
+	// The serve confirms the GM channel once per session, and that probe's
+	// help text can leak into the first command's reply: spend it here on a
+	// line the setup sends anyway, before any module command is read.
+	if !r.dry() && playerGUID != "" {
+		_ = guard.Send(ctx, "gm_visible_on", TargetSelf, playerGUID)
+		// The probe's help block is about 100 lines and trickles in after
+		// the call: give it the quiet window to drain, or the first module
+		// reply reads "### USAGE" as a refusal.
+		sleepCtx(ctx, 2*time.Second)
+	}
 
 	var setupDoc map[string]any = map[string]any{"ok": true, "checks": []any{}}
+	setupFailed := false
 	if r.Setup != nil {
 		doc, err := r.Setup.Run(ctx, rep)
 		if err != nil {
@@ -270,8 +281,12 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 			// needs=<check> in RUN.json, never a FAIL. The doc
 			// carries the needs and the run stops before collect.
 			if needs, ok := IsSkipped(err); ok {
+				why := err.Error()
+				if !strings.HasPrefix(why, "SKIPPED needs=") {
+					why = "SKIPPED needs=" + needs + ": " + why
+				}
 				setupDoc = map[string]any{"ok": false, "checks": []any{},
-					"invalid_reason": "SKIPPED needs=" + needs + ": " + err.Error(),
+					"invalid_reason": why,
 					"bot_name":       nil, "extra_names": []any{},
 					"guids": map[string]any{"player": nil, "bot": nil, "pet": nil, "mobs": []any{}, "marked": nil}}
 				setupDoc["skipped"] = map[string]any{"needs": needs}
@@ -291,6 +306,7 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		if doc != nil {
 			setupDoc = doc
 		}
+		setupFailed = !boolOf(setupDoc["ok"])
 	}
 	rep.Guids = GuidsOf(setupDoc)
 	collect.SetGuids(&rep.Guids)
@@ -307,6 +323,18 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		return err
 	}
 
+	if setupFailed {
+		// A failed setup check means the repeat cannot score: there is no
+		// fight to run (the Python returns before the situation).
+		marks.Add(map[string]any{"kind": "setup_failed", "reason": setupDoc["invalid_reason"]})
+		setupDoc["outcome"] = map[string]any{"ended": "setup_failed", "ok": false}
+		if err := r.writeSetup(repDir, setupDoc); err != nil {
+			return err
+		}
+		r.noteRep(id, index, false, "setup_failed")
+		r.logf("%s rep%d: setup failed: %s", id, index, strOf(setupDoc["invalid_reason"]))
+		return nil
+	}
 	marks.Add(map[string]any{"kind": "setup_ok", "guids": setupDoc["guids"]})
 	collect.Start(ctx)
 	outcome := map[string]any{"ended": "dry"}

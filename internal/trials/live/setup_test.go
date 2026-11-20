@@ -88,6 +88,19 @@ func (s *setupFake) scriptTB(prefix string, lines ...string) {
 	s.tb[prefix] = append(s.tb[prefix], lines...)
 }
 
+// scriptParty answers the serve's `party` roster with the named members.
+func (s *setupFake) scriptParty(names ...string) {
+	members := make([]any, 0, len(names))
+	for i, n := range names {
+		members = append(members, map[string]any{"name": n,
+			"guid": "0x000000000000000" + itoa(i+1), "online": true, "leader": i == 0})
+	}
+	s.fake.mu.Lock()
+	s.fake.script["party"] = append(s.fake.script["party"], map[string]any{
+		"in_group": true, "leader": "0x0000000000000001", "members": members})
+	s.fake.mu.Unlock()
+}
+
 func (s *setupFake) scriptLog(lines ...string) {
 	var cls []ChatLine
 	for i, l := range lines {
@@ -194,16 +207,40 @@ func TestSetupPriestHealLatencyRows(t *testing.T) {
 	_ = testkitToken
 	_ = json.Marshal
 
+	s.scriptParty("Acmd", "Bheal")
 	rep := &Repeat{Trial: trial, TrialID: "priest-holy-heal-latency",
 		Client: s.runner.client, Ledger: NewLedger(""),
 		Marks: NewMarks(t.TempDir() + "/marks.jsonl")}
 	rep.Guard = NewGuard(s.runner.client, GuardOptions{PlayerGUID: "0x0000000000000001"})
 	setup := &LiveSetup{Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, Timeout: 0, TBRunner: s.runner}
-	// The bot kit has no Forever item source: the trial SKIPs with
-	// needs=bot_items instead of reporting a success it never read back.
-	_, err := setup.Run(context.Background(), rep)
-	needs, ok := IsSkipped(err)
-	if !ok || needs != "bot_items" {
-		t.Fatalf("IsSkipped = %q %v (err %v), want needs=bot_items", needs, ok, err)
+	// The priest kit exists in the Forever overlay, but this fake never
+	// answers the kit's additem/scan/equip reads: the row is a failed
+	// read-back (the trial INVALID), never a pass and never a SKIP.
+	doc, err := setup.Run(context.Background(), rep)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if boolOf(doc["ok"]) {
+		t.Fatal("setup claimed ok without a kit read-back")
+	}
+	if needs, skipped := IsSkipped(err); skipped {
+		t.Fatalf("a missing read-back is not a SKIP: needs=%s", needs)
+	}
+	var row map[string]any
+	if list, ok := doc["checks"].([]any); ok {
+		for _, c := range list {
+			if m, ok := c.(map[string]any); ok && strOf(m["id"]) == "bot_items" {
+				row = m
+			}
+		}
+	}
+	if row == nil {
+		t.Fatalf("no bot_items row: %v", doc["checks"])
+	}
+	if boolOf(row["ok"]) {
+		t.Fatalf("bot_items passed without read-backs: %v", row)
+	}
+	if !strings.Contains(strOf(row["evidence"]), "itemscan") && !strings.Contains(strOf(row["evidence"]), "additem") {
+		t.Fatalf("bot_items evidence names neither additem nor itemscan: %q", strOf(row["evidence"]))
 	}
 }

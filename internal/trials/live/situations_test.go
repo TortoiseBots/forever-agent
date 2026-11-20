@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -322,6 +323,27 @@ func TestTeardownKillsLedger(t *testing.T) {
 	if err := rep.Guard.Kill(ctxBackground(), "0x00000000000000cc"); err == nil {
 		t.Fatal("kill of an unledgered guid was not refused")
 	}
+}
+
+// TestServeProbeIgnoresPort pins the Forever lease rule: a listening slot
+// port is the serve the runner wants, so --any must not skip it.
+func TestServeProbeIgnoresPort(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "slots.json")
+	writeTestSlots(t, cfgPath)
+	cfg := loadTestSlots(t, cfgPath)
+	store := newTestStore(cfg, cfgPath)
+	store.Probe = ServeProbe{Probe: store.Probe}
+	serveDir := filepath.Join(dir, "serve")
+	if err := os.MkdirAll(filepath.Join(serveDir, "1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sf := &SlotsFile{Servers: cfg.Servers, Forever: map[string]ServerExt{"s1": {ServeDirRoot: serveDir}}}
+	hold, err := AcquireSlot(sf, store, "s1", "", true, "holder-a", func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("acquire with a serving slot: %v", err)
+	}
+	_ = hold
 }
 
 // TestArenaLockExclusive checks one arena's lock excludes a second holder

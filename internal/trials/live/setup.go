@@ -40,7 +40,7 @@ type skippedTrial struct {
 	why   string
 }
 
-func (e *skippedTrial) Error() string { return "SKIPPED needs=" + e.needs + ": " + e.why }
+func (e *skippedTrial) Error() string { return e.why }
 
 // IsSkipped reports whether err is a *skippedTrial; needs is the check.
 func IsSkipped(err error) (string, bool) {

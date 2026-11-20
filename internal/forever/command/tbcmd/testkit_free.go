@@ -88,6 +88,15 @@ func looksLikeRefusal(text string) bool {
 // no begin/end markers, so the quiet window ends the reply; the callers
 // prove the change with a typed read-back and never with this text alone.
 func (c *Client) freeText(ctx context.Context, line string) ([]string, *command.Reply, error) {
+	return c.freeTextNamed(ctx, line, "")
+}
+
+// freeTextNamed is freeText with the reply narrowed to the lines that name
+// the command's subject: the tokenless channel also carries other lines
+// (a GM probe block, a concurrent typed reply), and a refusal matcher must
+// not read those as this command's answer. Lines that name nobody are
+// dropped; an empty answer is not a refusal (the caller's read-back decides).
+func (c *Client) freeTextNamed(ctx context.Context, line, name string) ([]string, *command.Reply, error) {
 	o := c.Base
 	o.Token = ""
 	o.EndKind = ""
@@ -98,7 +107,44 @@ func (c *Client) freeText(ctx context.Context, line string) ([]string, *command.
 	if rep == nil {
 		return nil, nil, fmt.Errorf("%w: .tb %s: no reply", ErrBadReport, line)
 	}
-	return append([]string(nil), rep.Raw...), rep, nil
+	lines := dropServerNoise(rep.Raw)
+	if name != "" {
+		lines = namedOnly(lines, name)
+	}
+	return lines, rep, nil
+}
+
+// namedOnly keeps the lines that name subject (case-insensitive).
+func namedOnly(lines []string, subject string) []string {
+	needle := strings.ToLower(subject)
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.Contains(strings.ToLower(l), needle) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// dropServerNoise removes lines the command channel sends beside the answer:
+// the GM probe's help block (the serve confirms the GM channel once per
+// session, and a late block can land in the next reply) and the login
+// welcome. They contain words a refusal matcher reads as a refusal, but the
+// command itself answered.
+func dropServerNoise(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "### USAGE:"),
+			strings.HasPrefix(t, "|- "),
+			strings.HasPrefix(t, "Possible subcommands:"),
+			strings.HasPrefix(t, "Welcome to a TrinityCore server."):
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // FreeTextCreate sends `.tb create <account> <name> <race id> <class id>
@@ -121,7 +167,7 @@ func (c *Client) FreeTextCreate(ctx context.Context, account, name string, raceI
 		}
 		line += " " + strconv.Itoa(int(*gender))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, name)
 	if err != nil {
 		return raws, err
 	}
@@ -151,7 +197,7 @@ func (c *Client) FreeTextLogin(ctx context.Context, name, master string) ([]stri
 		}
 		line += " " + m
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, name)
 	if err != nil {
 		return raws, err
 	}
@@ -171,7 +217,7 @@ func (c *Client) FreeTextLogout(ctx context.Context, name string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb logout "+setup)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb logout "+setup, name)
 	if err != nil {
 		return raws, err
 	}
@@ -197,7 +243,7 @@ func (c *Client) FreeTextGroup(ctx context.Context, bot, master string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb group "+b+" "+m)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb group "+b+" "+m, b)
 	if err != nil {
 		return raws, err
 	}
@@ -217,7 +263,7 @@ func (c *Client) FreeTextUngroup(ctx context.Context, bot string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb ungroup "+b)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb ungroup "+b, b)
 	if err != nil {
 		return raws, err
 	}
@@ -243,7 +289,7 @@ func (c *Client) FreeTextEngine(ctx context.Context, name string, on bool) ([]st
 	if on {
 		word = "on"
 	}
-	raws, rep, err := c.freeText(ctx, ".tb engine "+setup+" "+word)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb engine "+setup+" "+word, name)
 	if err != nil {
 		return raws, err
 	}
@@ -267,7 +313,7 @@ func (c *Client) FreeTextLevel(ctx context.Context, name string, level uint8) ([
 	if level < 1 || level > 60 {
 		return nil, fmt.Errorf("tbcmd: level must be 1 to 60 (got %d)", level)
 	}
-	raws, rep, err := c.freeText(ctx, ".tb level "+setup+" "+strconv.Itoa(int(level)))
+	raws, rep, err := c.freeTextNamed(ctx, ".tb level "+setup+" "+strconv.Itoa(int(level)), name)
 	if err != nil {
 		return raws, err
 	}
@@ -289,7 +335,7 @@ func (c *Client) FreeTextTrain(ctx context.Context, name string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb train "+setup)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb train "+setup, name)
 	if err != nil {
 		return raws, err
 	}
@@ -319,7 +365,7 @@ func (c *Client) FreeTextHurt(ctx context.Context, target string, pct uint8) ([]
 		}
 		line = ".tb hurt " + setup + " " + strconv.Itoa(int(pct))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, target)
 	if err != nil {
 		return raws, err
 	}
@@ -354,7 +400,7 @@ func (c *Client) FreeTextPower(ctx context.Context, target, kind string, pct uin
 		}
 		line = ".tb power " + setup + " " + kind + " " + strconv.Itoa(int(pct))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, target)
 	if err != nil {
 		return raws, err
 	}
@@ -385,7 +431,7 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 	if count != 1 {
 		line += " " + strconv.FormatUint(uint64(count), 10)
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
 	if err != nil {
 		return raws, err
 	}

@@ -94,33 +94,44 @@ func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (ma
 	want := trialLevel(trial)
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
-	st, err := p.Client.StatusOf(tctx)
-	if err != nil {
-		return nil, err
-	}
-	level := 0
-	if f, ok := pyjson.Num(st.Raw["level"]); ok {
-		level = int(f)
+	level := p.playerLevel(tctx)
+	if level == want {
+		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, want)), nil
 	}
 	lowered := ""
-	if level != want {
+	if level > want {
+		lowered = fmt.Sprintf("lowered from %d; ", level)
+	}
+	// The core's `.levelup <n>` moves the level BY n (the delta, not an
+	// absolute level), so the row re-reads before each step and waits for
+	// the server to land it: a retried row must not add the delta twice.
+	for attempt := 0; attempt < 3 && level != want; attempt++ {
 		delta := want - level
-		if err := p.Guard.Send(tctx, "levelup", TargetSelf, st.GUID, itoa(delta)); err != nil {
+		if err := p.Guard.Send(tctx, "levelup", TargetSelf, p.playerGUIDOf(tctx), itoa(delta)); err != nil {
 			return rowOf("player_level", false, level, ".levelup refused: "+err.Error()), nil
 		}
-		if delta < 0 {
-			lowered = fmt.Sprintf("lowered from %d; ", level)
-		}
-		// Read back: the level must have moved.
-		st2, err := p.Client.StatusOf(tctx)
-		if err != nil {
-			return nil, err
-		}
-		if f, ok := pyjson.Num(st2.Raw["level"]); ok {
-			level = int(f)
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(500 * time.Millisecond)
+			if got := p.playerLevel(tctx); got != level {
+				level = got
+				break
+			}
 		}
 	}
-	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d)", lowered, level, want)), nil
+	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d, .levelup delta)", lowered, level, want)), nil
+}
+
+// playerLevel reads the session character's level from `status`.
+func (p *PlayerSetup) playerLevel(ctx context.Context) int {
+	st, err := p.Client.StatusOf(ctx)
+	if err != nil {
+		return 0
+	}
+	if f, ok := pyjson.Num(st.Raw["level"]); ok {
+		return int(f)
+	}
+	return 0
 }
 
 // trialLevel reads trial["player"]["level"] (40 when absent or bad).
@@ -189,49 +200,63 @@ func (p *PlayerSetup) ensureTalents(ctx context.Context, trial map[string]any) (
 }
 
 // ensureStance casts the stance aura on the sender's own character (proved
-// held in the player's auras from `units`/`unit`).
+// held in the player's auras from `units`/`unit`). A stance can be refused
+// for a moment after a level jump (a spell in flight, a cooldown): the cast
+// is retried, then the stance spell is learned and cast again, and the aura
+// read-back decides.
 func (p *PlayerSetup) ensureStance(ctx context.Context, trial map[string]any) (map[string]any, error) {
 	player, _ := trial["player"].(map[string]any)
-	if player["stance"] == nil {
-		return rowOf("player_stance", true, nil, "no stance/form for this trial"), nil
-	}
 	stance := 0
 	if f, ok := pyjson.Num(player["stance"]); ok {
 		stance = int(f)
 	}
-	if stance <= 0 {
+	if player["stance"] == nil || stance <= 0 {
 		return rowOf("player_stance", true, nil, "no stance/form for this trial"), nil
 	}
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	self := p.playerGUIDOf(tctx)
-	// Un Aura everything first (the stance lands on a clean character),
-	// then cast the stance on self.
-	if err := p.Guard.Send(tctx, "unaura", TargetSelf, self, "all"); err != nil {
-		return rowOf("player_stance", false, stance, "unaura refused: "+err.Error()), nil
-	}
-	if err := p.Client.Cast(tctx, uint32(stance), self); err != nil {
-		// A character that never trained the stance spell refuses the cast:
-		// the bench learns what the trial needs, then casts again. The aura
-		// read-back below is the proof either way.
-		if lerr := p.Guard.Send(tctx, "learn", TargetSelf, self, itoa(stance)); lerr != nil {
-			return rowOf("player_stance", false, stance, "cast stance refused ("+err.Error()+") and .learn refused: "+lerr.Error()), nil
+	// Drop every aura first: the stance lands on a clean character.
+	_ = p.Guard.Send(tctx, "unaura", TargetSelf, self, "all")
+	held := func() bool {
+		for i := 0; i < 4; i++ {
+			if p.auraHeld(tctx, self, stance) {
+				return true
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		if cerr := p.Client.Cast(tctx, uint32(stance), self); cerr != nil {
-			return rowOf("player_stance", false, stance, "cast stance refused after .learn: "+cerr.Error()), nil
+		return false
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := p.Client.Cast(tctx, uint32(stance), self); err != nil && !IsNoReply(err) {
+			lastErr = err
+		}
+		if held() {
+			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil
 		}
 	}
-	if p.auraHeld(tctx, self, stance) {
-		return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil
+	// The spell may be unknown: learn what the trial needs, cast again.
+	if err := p.Guard.Send(tctx, "learn", TargetSelf, self, itoa(stance)); err != nil {
+		return rowOf("player_stance", false, stance, "cast refused ("+errText(lastErr)+") and .learn refused: "+err.Error()), nil
 	}
-	// Once more (the runner's retry pattern): a cast can race the aura tick.
-	if err := p.Client.Cast(tctx, uint32(stance), self); err != nil {
-		return rowOf("player_stance", false, stance, "cast stance refused (retry): "+err.Error()), nil
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := p.Client.Cast(tctx, uint32(stance), self); err != nil && !IsNoReply(err) {
+			lastErr = err
+		}
+		if held() {
+			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held after .learn", stance)), nil
+		}
 	}
-	if p.auraHeld(tctx, self, stance) {
-		return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held (retry)", stance)), nil
+	return rowOf("player_stance", false, stance, fmt.Sprintf("stance %d not held after 5 casts (%s)", stance, errText(lastErr))), nil
+}
+
+// errText is an error's text, or "no error".
+func errText(err error) string {
+	if err == nil {
+		return "no error"
 	}
-	return rowOf("player_stance", false, stance, fmt.Sprintf("stance not held: aura %d missing after 2 casts", stance)), nil
+	return err.Error()
 }
 
 // auraHeld reports whether guid's unit row holds aura id.

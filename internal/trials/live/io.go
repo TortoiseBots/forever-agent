@@ -1,6 +1,7 @@
 package live
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -24,7 +25,7 @@ func dumpDoc(path string, doc map[string]any) error {
 	}
 	data, err := pyjson.Marshal(doc)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*.json")
 	if err != nil {
