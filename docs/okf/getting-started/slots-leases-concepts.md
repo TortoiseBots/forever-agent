@@ -30,7 +30,7 @@ A lease records the server, slot, holder, lease id, acquire time, expiry, and th
 ## States
 
 - `free`: nobody holds it; acquire takes it.
-- `held`: held by its holder until expiry. Acquiring your own slot again renews it (`already yours: expiry renewed`).
+- `held`: held by its holder until expiry. Acquiring your own live slot again is refused atomically (`already leased by ...`); extend it with `lease renew` instead (only `renew` extends a live lease).
 - `reserved`: the slot names a reason and is never leased.
 - `stale`: expired AND no live agent in its dir — or its holder process on this host is gone (the walk's pid died or the pid was reused), whatever the expiry says. A walk records its pid, host, pid namespace and start time in the lease; a CLI lease records none, so only expiry frees it. A lease of another host or pid namespace, or one written before those fields existed, is freed only by its expiry. Acquiring takes a stale lease over and says whose it was, when it expired, and whether an agent is still running.
 
