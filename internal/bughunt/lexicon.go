@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,8 +31,8 @@ var buffRE = regexp.MustCompile(`(?i)^(greater )?blessing of|power word: fortitu
 	`mark of the wild|gift of the wild|thorns|battle shout|commanding shout|demon (skin|armor)|(frost|ice|mage|fire) armor|` +
 	`(fire|lightning|water|earth) shield|inner fire|divine spirit|shadow protection|trueshot aura|aspect of|` +
 	`(devotion|retribution|concentration|sanctity|fire resistance|frost resistance|shadow resistance) aura|righteous fury|` +
-	`seal of|windfury totem|stoneskin|grace of air|strength of earth|mana spring|spirit of the ancients|` +
-	`dampen magic|amplify magic|sense demons|presence of mind|slice and dice`)
+	`windfury totem|stoneskin|grace of air|strength of earth|mana spring|spirit of the ancients|` +
+	`dampen magic|amplify magic|sense demons|presence of mind`)
 
 // aoeRE is the Python's AOE_RE: a spell that leaves a damaging area effect.
 var aoeRE = regexp.MustCompile(`(?i)rain of fire|flamestrike|blizzard|fire nova|flame breath|hellfire|consecration|volley|` +
@@ -57,42 +58,82 @@ var dispelClasses = map[string][]string{
 // spells.json, or either with objects as values (`{"name": ...}`). An id whose text is not a number, or a value
 // that is not a name, is an error naming the file and the line.
 func LoadNames(path string) (map[int]string, error) {
+	names, _, err := LoadNamesHarmful(path)
+	return names, err
+}
+
+// LoadNamesHarmful is LoadNames and the set of ids the file marks as harmful auras (an object value with
+// `"harmful": true` or `"debuff": true`): the dispel file only counts what this set, or its own entry, calls a debuff.
+func LoadNamesHarmful(path string) (map[int]string, map[int]bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	obj, err := jsonObject(b, path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byID := obj
 	if raw, ok := obj["by_id"]; ok {
 		nested, err := rawObject(raw, path, b, "by_id")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		byID = nested
 	}
 	names := make(map[int]string, len(byID))
-	for key, raw := range byID {
+	harmful := map[int]bool{}
+	for _, key := range sortedKeys(byID) {
+		raw := byID[key]
 		id, err := spellID(key)
 		if err != nil {
-			return nil, fmt.Errorf("%s:%d: %v", path, lineOfKey(b, key), err)
+			return nil, nil, fmt.Errorf("%s:%d: %v", path, lineOfKey(b, key), err)
 		}
 		name, err := rawName(raw)
 		if err != nil {
-			return nil, fmt.Errorf("%s:%d: spell %d: %v", path, lineOfKey(b, key), id, err)
+			return nil, nil, fmt.Errorf("%s:%d: spell %d: %v", path, lineOfKey(b, key), id, err)
 		}
 		names[id] = name
+		if rawHarmful(raw) {
+			harmful[id] = true
+		}
 	}
-	return names, nil
+	return names, harmful, nil
+}
+
+// sortedKeys is an object's keys in a fixed order, so the first bad entry reported does not change between runs.
+func sortedKeys(obj map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// rawHarmful says an object value marks its aura harmful (`harmful` or `debuff` true).
+func rawHarmful(raw json.RawMessage) bool {
+	var row map[string]any
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return false
+	}
+	for _, k := range []string{"harmful", "debuff"} {
+		if v, ok := row[k].(bool); ok && v {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadDispel reads the live-checked dispel types: a JSON object of id -> type (`magic`, `curse`, `disease`,
 // `poison`, or `never` for a debuff a fight must keep), or the same with objects as values (`{"dispel": ...}` or
 // `{"type": ...}`), or the core's numeric spelling of the spell_template column (0 never, 1 magic, 2 curse,
 // 3 disease, 4 poison). An id without a usable type is an error naming the file and the line.
-func LoadDispel(path string) (map[int]string, error) {
+//
+// Only debuffs count: the core's dispel column lists buffs as well (Fortitude is dispel 1), so an entry is kept only
+// when harmful names its id (LoadNamesHarmful) or the entry says `"harmful": true` itself. A buff, or an aura nothing
+// calls harmful, is never dispellable: unknown stays unknown.
+func LoadDispel(path string, harmful map[int]bool) (map[int]string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -102,7 +143,8 @@ func LoadDispel(path string) (map[int]string, error) {
 		return nil, err
 	}
 	out := make(map[int]string, len(obj))
-	for key, raw := range obj {
+	for _, key := range sortedKeys(obj) {
+		raw := obj[key]
 		id, err := spellID(key)
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: %v", path, lineOfKey(b, key), err)
@@ -111,7 +153,9 @@ func LoadDispel(path string) (map[int]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: spell %d: %v", path, lineOfKey(b, key), id, err)
 		}
-		out[id] = typ
+		if harmful[id] || rawHarmful(raw) {
+			out[id] = typ
+		}
 	}
 	return out, nil
 }
@@ -251,11 +295,16 @@ func lineOfOffset(b []byte, off int64) int {
 	return 1 + bytes.Count(b[:off], []byte("\n"))
 }
 
-// lineOfKey is the 1-based line where an object key first appears; 1 when the text does not hold it.
+// lineOfKey is the 1-based line where an object key first appears as a key (the quoted text followed by a colon,
+// so a value equal to the key is not it); 1 when the text does not hold it.
 func lineOfKey(b []byte, key string) int {
-	i := bytes.Index(b, []byte(`"`+key+`"`))
-	if i < 0 {
+	re, err := regexp.Compile(regexp.QuoteMeta(`"`+key+`"`) + `\s*:`)
+	if err != nil {
 		return 1
 	}
-	return lineOfOffset(b, int64(i))
+	loc := re.FindIndex(b)
+	if loc == nil {
+		return 1
+	}
+	return lineOfOffset(b, int64(loc[0]))
 }

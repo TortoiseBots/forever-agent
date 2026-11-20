@@ -68,7 +68,7 @@ func TestBughuntCommandWritesTickets(t *testing.T) {
 	watchRecording(t, watch)
 	names := filepath.Join(root, "names.json")
 	dispel := filepath.Join(root, "dispel.json")
-	if err := os.WriteFile(names, []byte(`{"17172":"Hex"}`), 0o644); err != nil {
+	if err := os.WriteFile(names, []byte(`{"17172":{"name":"Hex","harmful":true}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(dispel, []byte(`{"17172":"magic"}`), 0o644); err != nil {
@@ -137,6 +137,32 @@ func TestBughuntCommandRefusesBadInput(t *testing.T) {
 		t.Fatalf("rule 7: exit %d", code)
 	}
 	if !strings.Contains(stderr.String(), "rule 7") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+}
+
+// TestBughuntCommandRefusesMalformedCombatLog: the combat log is a required input, so a bad line is a usage error
+// naming the file and the line, not a silently shorter log.
+func TestBughuntCommandRefusesMalformedCombatLog(t *testing.T) {
+	root := t.TempDir()
+	watch := filepath.Join(root, "watch1")
+	watchRecording(t, watch)
+	logs, err := filepath.Glob(filepath.Join(watch, "*.combatlog.jsonl"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("log: %v %v", logs, err)
+	}
+	b, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logs[0], append(b, []byte("{\"seq\":2,\"kind\":\"mel\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := bughuntCmd([]string{"--out", filepath.Join(root, "out"), root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(stderr.String(), ".combatlog.jsonl:2") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
 }

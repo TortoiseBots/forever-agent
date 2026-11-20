@@ -29,6 +29,9 @@ func skipNoCombatLog(r *Run) string {
 	if len(r.Combat) == 0 {
 		return "no combat log"
 	}
+	if !r.cover().ok {
+		return "combat log has no timed rows"
+	}
 	return ""
 }
 
@@ -98,6 +101,32 @@ func (r *Run) rowsNear(idxs []int, t, lo, hi float64, kinds map[string]bool, mat
 // castKinds are the rows that say a member cast or swung: a spell start or completion, or a melee swing.
 var castKinds = map[string]bool{"spell_start": true, "spell_go": true, "melee": true}
 
+// eating says the module reports the member eating, drinking or resting (or the engine's own state says resting):
+// a bot at its meal is rule 6's, never rule 1's or 2's.
+func eating(u *Unit) bool {
+	return u.Eat || u.Drink || u.Rest || u.State == "r"
+}
+
+// quietAcross says a member did nothing the kinds name anywhere across an episode, not only beside its frames
+// (frames can be up to MAX_GAP_S apart), and that the log provably covers the whole span. An episode over a stretch
+// the log does not cover is counted and dropped.
+func (r *Run) quietAcross(rule int, ep Episode, lo, hi float64, kinds map[string]bool, match func(*CombatRow) bool) bool {
+	if !r.covers(ep.T0-lo, ep.T1+hi) {
+		r.noteUnknown(rule, whyLogCover)
+		return false
+	}
+	for _, i := range r.rowsFromMember(ep.Bot) {
+		row := &r.Combat[i]
+		if !row.TKnown || row.T < ep.T0-lo || row.T > ep.T1+hi || !kinds[row.Kind] {
+			continue
+		}
+		if match == nil || match(row) {
+			return false
+		}
+	}
+	return true
+}
+
 // Rule1: idle in combat R1_IDLE_S or more: alive, the group in combat R1_GROUP_COMBAT_MIN_S, not moving and not
 // casting, no cast or swing in the log within R1_CAST_PAD_S of the frame, and (for a healer) somebody hurt. A
 // non-idle action word from the module breaks it too.
@@ -106,7 +135,7 @@ func Rule1(r *Run) []Hit {
 		if !u.Alive || !lifeOK(u) || !f.GC || !f.HasGCSince || f.T-f.GCSince < R1_GROUP_COMBAT_MIN_S {
 			return "", false
 		}
-		if u.Moving || u.Casting {
+		if u.Moving || u.Casting || eating(u) {
 			return "", false
 		}
 		if isHealer(r.Role(n)) {
@@ -138,7 +167,7 @@ func Rule1(r *Run) []Hit {
 				return "", false
 			}
 		}
-		if r.rowsNear(r.rowsFromMember(n), f.T, R1_CAST_PAD_S, R1_CAST_PAD_S, castKinds, nil) {
+		if found, known := r.logSays(1, r.rowsFromMember(n), f.T, R1_CAST_PAD_S, R1_CAST_PAD_S, castKinds, nil); found || !known {
 			return "", false
 		}
 		if act == "" {
@@ -148,6 +177,9 @@ func Rule1(r *Run) []Hit {
 	}
 	var hits []Hit
 	for _, ep := range r.Episodes(pred, R1_IDLE_S, true) {
+		if !r.quietAcross(1, ep, R1_CAST_PAD_S, R1_CAST_PAD_S, castKinds, nil) {
+			continue
+		}
 		act := commonestEvidence(ep)
 		mobs := 0
 		if len(ep.Steps) > 0 {
@@ -159,7 +191,7 @@ func Rule1(r *Run) []Hit {
 		}
 		ev := fmt.Sprintf("idle %.0f s in combat, act %s, %d frames, %d mobs in combat",
 			ep.T1-ep.T0, act, len(ep.Steps), mobs)
-		hits = append(hits, r.Hit(1, ep.T0, ep.T1-ep.T0, ep.Bot, ev, []string{"1", r.Role(ep.Bot), act}))
+		hits = append(hits, r.Hit(1, ep.T0, ep.T1-ep.T0, ep.Bot, ev, []string{"1", r.Role(ep.Bot)}))
 	}
 	return hits
 }
@@ -191,7 +223,7 @@ var healKinds = map[string]bool{"heal": true, "spell_start": true, "spell_go": t
 // R2_HEAL_PAD_S.
 func Rule2(r *Run) []Hit {
 	pred := func(f *Frame, n string, u *Unit) (string, bool) {
-		if !isHealer(r.Role(n)) || !u.Alive || !lifeOK(u) || !f.GC || u.PType != 0 {
+		if !isHealer(r.Role(n)) || !u.Alive || !lifeOK(u) || !f.GC || u.PType != 0 || eating(u) {
 			return "", false
 		}
 		if pctOf(u) <= R2_MANA_MIN_PCT {
@@ -204,9 +236,7 @@ func Rule2(r *Run) []Hit {
 		if u.Casting {
 			return "", false
 		}
-		if r.rowsNear(r.rowsFromMember(n), f.T, R2_HEAL_PAD_S, R2_HEAL_PAD_S, healKinds, func(row *CombatRow) bool {
-			return row.Kind == "heal" || healSpellRE.MatchString(r.SpellName(row.SpellID))
-		}) {
+		if found, known := r.logSays(2, r.rowsFromMember(n), f.T, R2_HEAL_PAD_S, R2_HEAL_PAD_S, healKinds, r.healRow); found || !known {
 			return "", false
 		}
 		act := u.Act
@@ -217,6 +247,9 @@ func Rule2(r *Run) []Hit {
 	}
 	var hits []Hit
 	for _, ep := range r.Episodes(pred, R2_MIN_S, true) {
+		if !r.quietAcross(2, ep, R2_HEAL_PAD_S, R2_HEAL_PAD_S, healKinds, r.healRow) {
+			continue
+		}
 		who := commonestWho(ep)
 		first, last := ep.Steps[0].Ev, ep.Steps[len(ep.Steps)-1].Ev
 		mana := 0.0
@@ -228,6 +261,11 @@ func Rule2(r *Run) []Hit {
 		hits = append(hits, r.Hit(2, ep.T0, ep.T1-ep.T0, ep.Bot, ev, []string{"2", r.Class(ep.Bot)}))
 	}
 	return hits
+}
+
+// healRow says a heal-kind row is a heal, or the start or completion of a heal spell.
+func (r *Run) healRow(row *CombatRow) bool {
+	return row.Kind == "heal" || healSpellRE.MatchString(r.SpellName(row.SpellID))
 }
 
 // lowestAlly is the alive ally under pct within rng yards of the unit, lowest health first.
@@ -326,7 +364,11 @@ func Rule4(r *Run) []Hit {
 						src = "?"
 					}
 					ev := fmt.Sprintf("%s from %s ticked %d times over %.1f s on %s", g.spell, src, count, prev-start, g.dst)
-					hits = append(hits, r.Hit(4, start, prev-start, g.dst, ev, []string{"4", g.spell}))
+					if r.covers(start, prev) {
+						hits = append(hits, r.Hit(4, start, prev-start, g.dst, ev, []string{"4", g.spell}))
+					} else {
+						r.noteUnknown(4, whyLogCover)
+					}
 				}
 				start, count = t, 0
 			}
@@ -428,9 +470,15 @@ func Rule8(r *Run) []Hit {
 				if life >= 0 && life < 10 {
 					kind = "short-aura"
 				}
-				ev := fmt.Sprintf("%s cast %d x in %.0f s on %s (median aura life %.1f s)", g.spell, j-i+1, ts[j]-ts[i], g.dst, life)
-				hits = append(hits, r.Hit(8, ts[i], ts[j]-ts[i], g.src, ev, []string{"8", g.spell, kind},
-					Note(fmt.Sprintf("aura_life=%.1f", life))))
+				ev := fmt.Sprintf("%s cast %d x in %.0f s on %s (median aura life %.1f s, %s)", g.spell, j-i+1, ts[j]-ts[i], g.dst, life, kind)
+				if r.covers(ts[i], ts[j]) {
+					// The key is the spell alone: the aura-life word is derived from measured data and can flip between
+					// nights, so it lives in the evidence and the note, never in the ticket's identity.
+					hits = append(hits, r.Hit(8, ts[i], ts[j]-ts[i], g.src, ev, []string{"8", g.spell},
+						Note(fmt.Sprintf("aura_life=%.1f", life))))
+				} else {
+					r.noteUnknown(8, whyLogCover)
+				}
 				reported = ts[j]
 			}
 		}
@@ -486,7 +534,7 @@ func Rule11(r *Run) []Hit {
 		default:
 			return "", false
 		}
-		if r.rowsNear(r.rowsFromMember(n), f.T, R11_OUTPUT_PAD_S, R11_OUTPUT_PAD_S, outputKinds, nil) {
+		if found, known := r.logSays(11, r.rowsFromMember(n), f.T, R11_OUTPUT_PAD_S, R11_OUTPUT_PAD_S, outputKinds, nil); found || !known {
 			return "", false
 		}
 		return "silent", true
@@ -497,6 +545,13 @@ func Rule11(r *Run) []Hit {
 		last := ep.Steps[len(ep.Steps)-1].Frame.Units[ep.Bot]
 		if last.Power <= first.Power {
 			continue // no regen: the mana did not rise, so the cancel signal is absent
+		}
+		if !r.quietAcross(11, ep, R11_OUTPUT_PAD_S, R11_OUTPUT_PAD_S, outputKinds, nil) {
+			continue
+		}
+		if !r.covers(ep.T0-1, ep.T1+1+R11_CAST_LAND_S) {
+			r.noteUnknown(11, whyLogCover) // a landing past the log's end cannot be told from a cancel
+			continue
 		}
 		starts, unlanded := 0, 0
 		reasons := map[string]int{}
@@ -568,6 +623,9 @@ type auraInterval struct {
 	SpellID uint32
 	T0, T1  float64
 	Still   bool // still up at the recording's end
+	// Lost says the aura's end was never seen: the member left the commander's view or the frames broke. Its life
+	// after the last sighting is unknown, never a removal.
+	Lost bool
 }
 
 // auraIntervals reads each member's auras from the frames: an aura is up from the first frame that lists it to the
@@ -580,31 +638,34 @@ func (r *Run) auraIntervals() []auraInterval {
 		lastT    float64
 		haveLast bool
 	)
-	closeOne := func(n string, id uint32, end float64, still bool) {
+	closeOne := func(n string, id uint32, end float64, still, lost bool) {
 		o := cur[n][id]
 		if o == nil {
 			return
 		}
 		delete(cur[n], id)
-		closed = append(closed, auraInterval{Bot: n, SpellID: id, T0: o.start, T1: end, Still: still})
+		closed = append(closed, auraInterval{Bot: n, SpellID: id, T0: o.start, T1: end, Still: still, Lost: lost})
 	}
-	closeAll := func(end func(o *open) float64, still bool) {
+	closeAll := func(end func(o *open) float64, still, lost bool) {
 		for n, ids := range cur {
 			for id, o := range ids {
-				closeOne(n, id, end(o), still)
+				closeOne(n, id, end(o), still, lost)
 			}
 		}
 	}
 	for _, f := range r.Frames {
 		if haveLast && f.T-lastT > MAX_GAP_S {
-			closeAll(func(o *open) float64 { return o.last }, false)
+			closeAll(func(o *open) float64 { return o.last }, false, true)
 		}
 		lastT, haveLast = f.T, true
 		for n, ids := range cur {
 			u, ok := f.Units[n]
 			for id := range ids {
-				if !ok || !hasAura(u, id) {
-					closeOne(n, id, f.T, false)
+				if !ok {
+					// Out of the commander's view is not a debuff ending: the episode is unknown from here.
+					closeOne(n, id, cur[n][id].last, false, true)
+				} else if !hasAura(u, id) {
+					closeOne(n, id, f.T, false, false)
 				}
 			}
 		}
@@ -626,7 +687,7 @@ func (r *Run) auraIntervals() []auraInterval {
 	if len(r.Frames) > 0 {
 		end = r.Frames[len(r.Frames)-1].T
 	}
-	closeAll(func(*open) float64 { return end }, true)
+	closeAll(func(*open) float64 { return end }, true, false)
 	sort.SliceStable(closed, func(i, j int) bool {
 		if closed[i].T0 != closed[j].T0 {
 			return closed[i].T0 < closed[j].T0
@@ -673,6 +734,10 @@ func Rule15(r *Run) []Hit {
 			continue
 		}
 		if iv.T1-iv.T0 <= R15_MIN_S {
+			continue
+		}
+		if iv.Lost {
+			r.noteUnknown(15, whyOutOfView)
 			continue
 		}
 		able, nearest, ok := r.dispellers(iv.Bot, iv.T0, iv.T1, typ)

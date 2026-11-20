@@ -65,7 +65,15 @@ func Hunt(runs []*Run, rules []Rule) ([]Hit, Counts) {
 					continue
 				}
 			}
+			run.unknown = nil
 			got := rule.Run(run)
+			if why := run.unknown[rule.Number]; len(why) > 0 {
+				// Windows the input did not cover were left unjudged: the run's check was only partly made.
+				rc.Skipped++
+				for reason, n := range why {
+					counts.SkipReasons[fmt.Sprintf("rule %d: %s", rule.Number, reason)] += n
+				}
+			}
 			if len(got) == 0 {
 				continue
 			}
@@ -77,6 +85,17 @@ func Hunt(runs []*Run, rules []Rule) ([]Hit, Counts) {
 		counts.Rules = append(counts.Rules, rc)
 	}
 	return hits, counts
+}
+
+// Complete says whether the rule was selected and judged every run in full: not skipped on any run and with no
+// window left unjudged. Only then does the absence of a finding mean anything.
+func (c Counts) Complete(rule int) bool {
+	for _, rc := range c.Rules {
+		if rc.Rule == rule {
+			return rc.Skipped == 0
+		}
+	}
+	return false
 }
 
 // TicketID is a ticket's id: BH-<rule>-<8 hex of sha1(rule|key)>. The key is the hit's own key, joined with `|`.
@@ -101,9 +120,11 @@ func ticketTitle(rule int, key []string) string {
 	return name + ": " + strings.Join(tail, " ")
 }
 
-// BuildTickets groups the hits into tickets and applies the baseline. Tickets are ordered by rule and id; the
-// baseline's tickets this run did not see come back as `gone` so the board can close them.
-func BuildTickets(hits []Hit, baseline []Ticket) []Ticket {
+// BuildTickets groups the hits into tickets and applies the baseline. Tickets are ordered by rule and id. A baseline
+// ticket this run did not see comes back as `gone` so the board can close it, but only when complete says its rule
+// ran with all its inputs on every run: a rule that was skipped, only partly judged or not selected says nothing
+// about its tickets, which keep their previous state. A `gone` ticket that returns is `reopened`.
+func BuildTickets(hits []Hit, baseline []Ticket, complete func(rule int) bool) []Ticket {
 	type group struct {
 		rule int
 		key  []string
@@ -162,6 +183,9 @@ func BuildTickets(hits []Hit, baseline []Ticket) []Ticket {
 		t.Labels = []string{"bughunt", fmt.Sprintf("rule-%d", g.rule), ticketRole(g.hits)}
 		if old, ok := base[id]; ok {
 			t.Status = "known"
+			if old.Status == "gone" {
+				t.Status = "reopened"
+			}
 			// A known ticket keeps the first night it was seen and every death it ever counted near.
 			if old.FirstSeen != "" && (t.FirstSeen == "" || old.FirstSeen < t.FirstSeen) {
 				t.FirstSeen = old.FirstSeen
@@ -178,9 +202,11 @@ func BuildTickets(hits []Hit, baseline []Ticket) []Ticket {
 		if _, ok := byID[id]; ok {
 			continue
 		}
-		old.Status = "gone"
-		old.Count, old.Runs, old.Cost = 0, 0, 0
-		old.Evidence = []string{}
+		if complete != nil && complete(old.Rule) {
+			old.Status = "gone"
+			old.Count, old.Runs, old.Cost = 0, 0, 0
+			old.Evidence = []string{}
+		}
 		out = append(out, old)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -281,7 +307,7 @@ func WriteTickets(dir string, tickets []Ticket) error {
 // TicketsMarkdown is tickets.md: worst summed cost first.
 func TicketsMarkdown(tickets []Ticket) string {
 	var b strings.Builder
-	newN, knownN, goneN := 0, 0, 0
+	newN, knownN, goneN, reopenedN := 0, 0, 0, 0
 	for _, t := range tickets {
 		switch t.Status {
 		case "new":
@@ -290,10 +316,12 @@ func TicketsMarkdown(tickets []Ticket) string {
 			knownN++
 		case "gone":
 			goneN++
+		case "reopened":
+			reopenedN++
 		}
 	}
-	fmt.Fprintf(&b, "# Bug hunt tickets\n\n%d tickets: %d new, %d known, %d gone. Worst summed cost first.\n\n",
-		len(tickets), newN, knownN, goneN)
+	fmt.Fprintf(&b, "# Bug hunt tickets\n\n%d tickets: %d new, %d known, %d reopened, %d gone. Worst summed cost first.\n\n",
+		len(tickets), newN, knownN, reopenedN, goneN)
 	b.WriteString("| id | status | rule | ticket | count | runs | cost | deaths | first seen | evidence |\n")
 	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	ranked := append([]Ticket(nil), tickets...)

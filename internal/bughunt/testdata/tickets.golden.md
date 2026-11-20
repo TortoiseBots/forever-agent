@@ -1,6 +1,6 @@
 # Bug hunt tickets
 
-2 tickets: 2 new, 0 known, 0 gone. Worst summed cost first.
+2 tickets: 2 new, 0 known, 0 reopened, 0 gone. Worst summed cost first.
 
 | id | status | rule | ticket | count | runs | cost | deaths | first seen | evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

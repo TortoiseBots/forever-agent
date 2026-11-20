@@ -63,7 +63,7 @@ func TestLoadDispel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dispel.json")
 	writeFile(t, path, "{\n \"17172\": \"magic\",\n \"24321\": \"never\",\n \"18543\": 1,\n \"12654\": {\"dispel\": \"magic\"}\n}")
-	dispel, err := LoadDispel(path)
+	dispel, err := LoadDispel(path, allHarmful(17172, 24321, 18543, 12654))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestLoadDispel(t *testing.T) {
 	}
 	bad := filepath.Join(dir, "bad.json")
 	writeFile(t, bad, "{\n \"1\": \"holy\"\n}")
-	if _, err := LoadDispel(bad); err == nil || !strings.Contains(err.Error(), "bad.json:2") {
+	if _, err := LoadDispel(bad, allHarmful(1)); err == nil || !strings.Contains(err.Error(), "bad.json:2") {
 		t.Fatalf("type: %v", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestLexiconWrongType(t *testing.T) {
 	if _, err := LoadNames(path); err == nil || !strings.Contains(err.Error(), "array.json:1") {
 		t.Fatalf("names: %v", err)
 	}
-	if _, err := LoadDispel(path); err == nil || !strings.Contains(err.Error(), "array.json:1") {
+	if _, err := LoadDispel(path, nil); err == nil || !strings.Contains(err.Error(), "array.json:1") {
 		t.Fatalf("dispel: %v", err)
 	}
 }

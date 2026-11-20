@@ -301,7 +301,11 @@ func LoadTrials(repDir, ds string) (*Run, error) {
 	// A repeat's raw rows are the same shape a watch's combat log carries (`raw-ta.jsonl`): the recorder's own
 	// rows, which the combat rules read when the repeat has them. The file is optional; a repeat without it has
 	// no combat-log input and those rules are skipped.
-	r.Combat = stampCombatRows(readCombatLog(filepath.Join(clean, "raw-ta.jsonl")), r.T0)
+	combatRows, err := readCombatLog(filepath.Join(clean, "raw-ta.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	r.Combat = stampCombatRows(combatRows, r.T0)
 	r.finalise()
 	return r, nil
 }

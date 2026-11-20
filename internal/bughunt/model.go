@@ -158,6 +158,13 @@ type Run struct {
 	// combatBySrc indexes Combat by a row's canonical source guid, built on first use.
 	combatBySrc   map[string][]int
 	combatIndexed bool
+
+	// coverage is what the combat log provably covers (cover.go), built once per log; unknown counts, per rule,
+	// the windows a rule left unjudged because the log did not cover them (Hunt reads and resets it).
+	coverage   *logCover
+	coverFor   int
+	coverBuilt bool
+	unknown    map[int]map[string]int
 }
 
 // Role is the member's role, "?" when the run does not know it.

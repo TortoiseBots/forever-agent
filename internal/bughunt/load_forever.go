@@ -80,7 +80,11 @@ func LoadWatch(path, ds string) (*Run, error) {
 	if sum := readForeverSummary(filepath.Join(dir, simple+".forever-run.json")); sum != nil {
 		r.bossesFrom(sum)
 	}
-	r.Combat = stampCombatRows(readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl")), r.T0)
+	rows, err := readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	r.Combat = stampCombatRows(rows, r.T0)
 	r.deathsFromFrames()
 	r.finalise()
 	return r, nil
@@ -266,29 +270,41 @@ func (r *Run) deathsFromFrames() {
 }
 
 // readCombatLog reads a combat log: a watch's `<run_id>.combatlog.jsonl`, or a trials repeat's `raw-ta.jsonl`, which
-// carries the same row. A missing file is no rows, and a line that is not a valid row is skipped like a cut-short
-// line.
-func readCombatLog(path string) []CombatRow {
+// carries the same row. A missing file is no rows (the rules that need the log are skipped and counted). The log is
+// a required input of the rules that read it, so a line that is not a valid row is an error naming the file and the
+// line, as the other loaders do: a dropped line would read as a member doing nothing.
+func readCombatLog(path string) ([]CombatRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	defer f.Close()
 	var out []CombatRow
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	n := 0
 	for sc.Scan() {
+		n++
 		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "{") {
+		if line == "" {
 			continue
 		}
 		var row CombatRow
+		if !strings.HasPrefix(line, "{") {
+			return nil, fmt.Errorf("%s:%d: not a combat row: %.40q", path, n, line)
+		}
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			continue
+			return nil, fmt.Errorf("%s:%d: not a combat row: %v", path, n, err)
 		}
 		out = append(out, row)
 	}
-	return out
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%s:%d: %v", path, n+1, err)
+	}
+	return out, nil
 }
 
 // stampCombatRows puts every row on the run's clock and canonicalises both sides' guids, so a row joins a frame

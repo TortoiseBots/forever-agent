@@ -29,8 +29,8 @@ func TestTicketIDStable(t *testing.T) {
 		want string
 	}{
 		{15, []string{"15", "magic", "Hex"}, "BH-15-57dabda0"},
-		{1, []string{"1", "heal", "-"}, "BH-1-c554a1b9"},
-		{8, []string{"8", "Power Word: Fortitude", "long-aura"}, "BH-8-f5cdd5e5"},
+		{1, []string{"1", "heal"}, "BH-1-52be5436"},
+		{8, []string{"8", "Power Word: Fortitude"}, "BH-8-a0b8a65e"},
 		{4, []string{"4", "Rain of Fire"}, "BH-4-a43e14bb"},
 	}
 	for _, c := range cases {
@@ -54,7 +54,7 @@ func TestBaselineNewKnownGone(t *testing.T) {
 			Count: 1, Runs: 1, FirstSeen: "2023-01-02T00:00:00Z", DeathsNear: 0,
 			Labels: []string{"bughunt", "rule-9", "?"}, Status: "new"},
 	}
-	tickets := BuildTickets(hits, baseline)
+	tickets := BuildTickets(hits, baseline, func(int) bool { return true })
 	byID := map[string]Ticket{}
 	for _, tk := range tickets {
 		byID[tk.ID] = tk
@@ -87,7 +87,7 @@ func TestBaselineNewKnownGone(t *testing.T) {
 
 // TestTicketsMarkdownGolden pins tickets.md: the summary line, the columns and worst summed cost first.
 func TestTicketsMarkdownGolden(t *testing.T) {
-	tickets := BuildTickets(ticketHits(t), nil)
+	tickets := BuildTickets(ticketHits(t), nil, nil)
 	got := TicketsMarkdown(tickets)
 	want, err := os.ReadFile(filepath.Join("testdata", "tickets.golden.md"))
 	if err != nil {
@@ -104,7 +104,7 @@ func TestTicketsMarkdownGolden(t *testing.T) {
 // TestWriteTickets names the two files beside each other.
 func TestWriteTickets(t *testing.T) {
 	dir := t.TempDir()
-	tickets := BuildTickets(ticketHits(t), nil)
+	tickets := BuildTickets(ticketHits(t), nil, nil)
 	if err := WriteTickets(dir, tickets); err != nil {
 		t.Fatal(err)
 	}

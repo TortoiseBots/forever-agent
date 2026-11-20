@@ -19,6 +19,14 @@ func eventRun(kind string, roles map[string]string, frames []*Frame, combat []Co
 	return r
 }
 
+// withSpan puts a mob's rows at a and b around the rows, so the log provably spans the window the rules look at
+// (the mob is no subject, so it adds no finding of its own).
+func withSpan(rows []CombatRow, a, b float64) []CombatRow {
+	out := []CombatRow{crow("melee", a, gid(0xB09), gid(0xB01), 0)}
+	out = append(out, rows...)
+	return append(out, crow("melee", b, gid(0xB09), gid(0xB01), 0))
+}
+
 // withClass sets one member's class.
 func withClass(r *Run, bot, class string) *Run {
 	r.Classes[bot] = class
@@ -139,6 +147,7 @@ func TestRule1IdleInCombat(t *testing.T) {
 	for at := 2.0; at <= 16; at += 2 {
 		combat = append(combat, crow("melee", at, gTank, gid(0xB01), 0))
 	}
+	combat = withSpan(combat, -2, 18)
 	r := eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, frames, combat, nil, nil)
 	withClass(r, gDps, "mage")
 	hits := Rule1(r)
@@ -148,7 +157,7 @@ func TestRule1IdleInCombat(t *testing.T) {
 	if hits[0].Bot != gDps || hits[0].T != 4 || hits[0].Dur != 12 {
 		t.Fatalf("hit %+v", hits[0])
 	}
-	if len(hits[0].Key) != 3 || hits[0].Key[0] != "1" || hits[0].Key[1] != "dps" || hits[0].Key[2] != "-" {
+	if len(hits[0].Key) != 2 || hits[0].Key[0] != "1" || hits[0].Key[1] != "dps" {
 		t.Fatalf("key %v", hits[0].Key)
 	}
 	// A cast of its own within a second of the middle frames breaks the idle stretch into two short ones.
@@ -182,6 +191,7 @@ func TestRule1HealerWithNobodyHurt(t *testing.T) {
 	for at := 0.0; at <= 16; at += 2 {
 		combat = append(combat, crow("melee", at, gTank, gid(0xB01), 0))
 	}
+	combat = withSpan(combat, -2, 18)
 	r := eventRun("watch", map[string]string{gTank: "tank", gHeal: "healer"}, frames, combat, nil, nil)
 	if hits := Rule1(r); len(hits) != 0 {
 		t.Fatalf("nobody hurt: %+v", hits)
@@ -208,7 +218,7 @@ func TestRule2HealerNotHealing(t *testing.T) {
 		}
 		return frames
 	}
-	combat := []CombatRow{crow("melee", 0, gTank, gid(0xB01), 0)}
+	combat := withSpan([]CombatRow{crow("melee", 0, gTank, gid(0xB01), 0)}, -2, 8)
 	r := eventRun("watch", map[string]string{gTank: "tank", gHeal: "healer"}, build(), combat,
 		map[int]string{2050: "Flash of Light"}, nil)
 	withClass(r, gHeal, "priest")
@@ -304,8 +314,11 @@ func TestRule8BuffFlipFlop(t *testing.T) {
 		t.Fatalf("hits %d: %+v", len(hits), hits)
 	}
 	h := hits[0]
-	if h.Bot != gHeal || h.Dur != 30 || len(h.Key) != 3 || h.Key[1] != "Power Word: Fortitude" || h.Key[2] != "long-aura" {
+	if h.Bot != gHeal || h.Dur != 30 || len(h.Key) != 2 || h.Key[1] != "Power Word: Fortitude" {
 		t.Fatalf("hit %+v", h)
+	}
+	if !strings.Contains(h.Ev, "long-aura") {
+		t.Fatalf("the aura-life word belongs in the evidence: %q", h.Ev)
 	}
 	if h.Note != "aura_life=29.9" {
 		t.Fatalf("note %q", h.Note)
@@ -344,7 +357,7 @@ func TestRule11CastCancel(t *testing.T) {
 	}
 	starts = append(starts, crow("spell_fail", 0.4, gDps, gid(0xB01), 116))
 	starts[len(starts)-1].Reason = "interrupted"
-	r := eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, buildFrames(rising), starts,
+	r := eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, buildFrames(rising), withSpan(starts, -2, 16),
 		map[int]string{116: "Frostbolt"}, nil)
 	withClass(r, gDps, "mage")
 	hits := Rule11(r)
@@ -360,18 +373,18 @@ func TestRule11CastCancel(t *testing.T) {
 	}
 	// A landing spell breaks the silence.
 	landed := append(append([]CombatRow(nil), starts...), crow("spell_damage", 6, gDps, gid(0xB01), 116))
-	if hits := Rule11(eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, buildFrames(rising), landed,
+	if hits := Rule11(eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, buildFrames(rising), withSpan(landed, -2, 16),
 		map[int]string{116: "Frostbolt"}, nil)); len(hits) != 0 {
 		t.Fatalf("output landed: %+v", hits)
 	}
 	// A flat mana bar is not the cancel signal.
 	if hits := Rule11(eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"},
-		buildFrames(func(float64) float64 { return 50 }), starts, map[int]string{116: "Frostbolt"}, nil)); len(hits) != 0 {
+		buildFrames(func(float64) float64 { return 50 }), withSpan(starts, -2, 16), map[int]string{116: "Frostbolt"}, nil)); len(hits) != 0 {
 		t.Fatalf("flat mana: %+v", hits)
 	}
 	// One started cast is not a pattern.
 	if hits := Rule11(eventRun("watch", map[string]string{gTank: "tank", gDps: "dps"}, buildFrames(rising),
-		starts[:2], map[int]string{116: "Frostbolt"}, nil)); len(hits) != 0 {
+		withSpan(starts[:2], -2, 16), map[int]string{116: "Frostbolt"}, nil)); len(hits) != 0 {
 		t.Fatalf("one start: %+v", hits)
 	}
 }

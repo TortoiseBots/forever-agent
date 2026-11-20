@@ -45,15 +45,16 @@ func bughuntCmd(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	names, dispel := map[int]string{}, map[int]string{}
+	harmful := map[int]bool{}
 	var err error
 	if o.names != "" {
-		if names, err = bughunt.LoadNames(o.names); err != nil {
+		if names, harmful, err = bughunt.LoadNamesHarmful(o.names); err != nil {
 			fmt.Fprintf(stderr, "bughunt: %v\n", err)
 			return exitUsage
 		}
 	}
 	if o.dispel != "" {
-		if dispel, err = bughunt.LoadDispel(o.dispel); err != nil {
+		if dispel, err = bughunt.LoadDispel(o.dispel, harmful); err != nil {
 			fmt.Fprintf(stderr, "bughunt: %v\n", err)
 			return exitUsage
 		}
@@ -96,7 +97,7 @@ func bughuntCmd(args []string, stdout, stderr io.Writer) int {
 		runs = append(runs, run)
 	}
 	hits, counts := bughunt.Hunt(runs, rules)
-	tickets := bughunt.BuildTickets(hits, baseline)
+	tickets := bughunt.BuildTickets(hits, baseline, counts.Complete)
 	if err := os.MkdirAll(o.out, 0o755); err != nil {
 		fmt.Fprintf(stderr, "bughunt: %v\n", err)
 		return exitUsage

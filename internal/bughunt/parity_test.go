@@ -160,6 +160,12 @@ func TestParityWithPythonChecker(t *testing.T) {
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
+	for i := range theirs {
+		// The Python's rule 8 key carries the aura-life word; ours leaves it out (derived text, not identity).
+		if theirs[i].Rule == 8 && len(theirs[i].Key) > 2 {
+			theirs[i].Key = theirs[i].Key[:2]
+		}
+	}
 	if got, want := strings.Join(ours, " "), strings.Join(keySet(theirs), " "); got != want {
 		t.Fatalf("keys differ:\n ours:   %s\n python: %s", got, want)
 	}

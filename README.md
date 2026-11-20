@@ -452,17 +452,20 @@ a repeat's raw rows are the same C shape on the repeat's clock. `--rules` picks 
 build has), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
 never guessed: a names file is a JSON object of id to name (or a spells.json's `by_id`, whose values may be
 `{"name": ...}`), and a dispel file is a JSON object of id to `magic`, `curse`, `disease`, `poison` or `never` (or
-the core's `spell_template.dispel` numbers 0-4). An id the names file does not name is `spell <id>` and never
+the core's `spell_template.dispel` numbers 0-4); only debuffs count, so an entry is kept when the names file marks its id
+`"harmful": true` or the entry does. An id the names file does not name is `spell <id>` and never
 matches a buff, AoE or heal name; an id the dispel file does not list is not a known debuff. A rule whose input a
-run does not carry is a skipped check with its reason in `counts.json`, never a hit from a guess: no combat log
+run does not carry is a skipped check (as is a stretch the combat log does not provably cover, and a malformed combat-log
+line is an error naming the file and line) with its reason in `counts.json`, never a hit from a guess: no combat log
 skips rules 1, 2, 4, 8 and 11; no names skips 2, 4 and 8; no dispel types or no known classes skip 15; no meal report
 skips 13. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
 selected rule's hits, runs with hits, skipped checks and the reasons), `tickets.json` and `tickets.md`. A ticket is
 one (rule, key): its id is `BH-<rule>-<8 hex of sha1(rule|key)>`, so the same finding keeps its id across nights;
 its row is `{id, title, rule, key, count, runs, first_seen, deaths_near, evidence (at most 5), labels [bughunt,
-rule-N, role], status new|known|gone, cost}`. `--baseline DIR` reads that directory's `tickets.json`: a ticket it
-holds is `known` (and keeps its first night), one it lacks is `new`, and a baseline ticket the new run no longer
-sees is `gone`. `tickets.md` ranks the tickets by summed cost, worst first. The rules are the Python bug hunt's
+rule-N, role], status new|known|reopened|gone, cost}`. `--baseline DIR` reads that directory's `tickets.json`: a ticket it
+holds is `known` (and keeps its first night; `reopened` when it was `gone`), one it lacks is `new`, and a baseline
+ticket the new run no longer sees is `gone` only when its rule ran with all its inputs (a skipped or unselected rule
+leaves its tickets as they were). `tickets.md` ranks the tickets by summed cost, worst first. The rules are the Python bug hunt's
 own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids), with the Forever inputs
 the plan's table gives. `BUGHUNT_PY_CHECKER=checker.py` runs the optional parity test against the Python checker on
 one repeat (rules 4 and 8 must agree on every key).
