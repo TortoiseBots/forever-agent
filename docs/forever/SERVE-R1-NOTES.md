@@ -64,7 +64,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | Method | Status | What it does |
 |---|---|---|
 | `target` | DONE | Selects a unit by guid or name (`CMSG_SET_SELECTION`) and returns its row. |
-| `attack` | DONE | The fight loop (select, face, approach, swing) for `guid`/`name` or the selected target, bounded by `for_ms` (default 60 s). Returns `reason: dead`, `stopped` or `map change`. |
+| `attack` | DONE | The fight loop (select, face, approach, swing) for `guid`/`name` or the selected target, bounded by `for_ms` (default 25 s). Returns `reason: dead`, `stopped` or `map change`. |
 | `stop_attack` | DONE | Asks a running `attack` to stop; the fight's own cleanup sends `CMSG_ATTACK_STOP`. |
 | `cast` | DONE | One spell at a target or at the selected target (empty: self), with the session's cast/answer loop. A server refusal is a `-32003` error naming the reason. |
 | `cancel_cast` | DONE | Cancels the cast the model holds (`CMSG_CANCEL_CAST`). |

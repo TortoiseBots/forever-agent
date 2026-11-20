@@ -505,7 +505,9 @@ func (s *session) serveAttack(ctx context.Context, p serveAttackParams) (ServeAt
 	}
 	d := time.Duration(p.ForMS) * time.Millisecond
 	if d <= 0 {
-		d = 60 * time.Second
+		// Under the rpc client's default 30 s call timeout: a default call gets its own answer rather than a
+		// cancellation that stops the fight.
+		d = 25 * time.Second
 	}
 	start := s.Now()
 	s.serveRT.fighting.Store(true)
