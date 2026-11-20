@@ -189,6 +189,14 @@ type Options struct {
 	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
+	// RouteWalk runs `forever route-walk`: enter the plan's instance, walk every selected leg on the navmesh, and
+	// confirm every planned point with the server's own `.gps` position. A nil value runs none of it.
+	RouteWalk *RouteWalkOptions
+	// Serve makes this a long-running session: after the login burst the session serves the RPC socket on
+	// Serve.Listener and stays in the world until the caller's context ends. A dropped link is logged in again
+	// within ServeConfig's budget (a fresh session, rebuilt state), and only a spent budget ends the daemon. Stay
+	// and the one-shot modes are ignored; Deadline, when above 0, still bounds the whole run.
+	Serve *ServeConfig
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -277,6 +285,8 @@ type Report struct {
 	Dungeon *driver.Result
 	// Round S7: the watch's result, nil when the session ran something else.
 	Watch *driver.Result
+	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
+	RouteWalk *RouteWalkReport
 	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
 	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
 	// one row per resolved change (map-check fills Objects for each).
@@ -447,6 +457,10 @@ type session struct {
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
+	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
+	// reports the selected unit, so the character selects itself once per map and only again when either changes.
+	routeSelectGUID wire.GUID
+	routeSelectMap  uint32
 
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
@@ -508,6 +522,8 @@ type session struct {
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
+	// serve is the RPC loop's state when this session is serving (forever serve); nil for a one-shot run.
+	serveRT *serveRuntime
 	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
 	loot *lootWatch
 }
@@ -533,19 +549,10 @@ func defaultRunDeadline(opts Options) time.Duration {
 	return defaultRunOverhead + opts.Stay + opts.Settle
 }
 
-// Enter runs the world half: authenticate, list characters, log the named character in, answer the login burst
-// and keep-alives for Stay, then log out. It returns what was observed even when it fails part-way.
-func Enter(ctx context.Context, opts Options) (*Report, error) {
-	if opts.Character == "" {
-		return nil, errors.New("world: no character name")
-	}
-	if opts.Deadline <= 0 {
-		opts.Deadline = defaultRunDeadline(opts)
-	}
-	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
-	defer cancel()
-
-	report := &Report{Counts: make(map[string]int)}
+// newSession builds one world session: its link state, its bounded models and the context its reads and sends use.
+// A serving daemon builds one for the first login and a fresh one for every re-entry, so no socket, model or channel
+// of a dropped link survives into the next one.
+func newSession(opts Options, report *Report, ctx context.Context) *session {
 	s := &session{opts: opts, ctx: ctx, events: make(chan event, 512), report: report, start: time.Now(), lastPacketAt: time.Now()}
 	s.deadChs[sideRealm] = make(chan struct{})
 	s.deadChs[sideInstance] = make(chan struct{})
@@ -560,31 +567,83 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 	// packet loop to read their answers. shutdown ends the readers, and it closes the sockets whatever the run left
 	// behind.
 	s.pumpCtx, s.pumpCancel = context.WithCancel(context.WithoutCancel(ctx))
+	return s
+}
+
+// Enter runs the world half: authenticate, list characters, log the named character in, answer the login burst
+// and keep-alives for Stay, then log out. It returns what was observed even when it fails part-way.
+func Enter(ctx context.Context, opts Options) (*Report, error) {
+	if opts.Character == "" {
+		return nil, errors.New("world: no character name")
+	}
+	if opts.Serve == nil && opts.Deadline <= 0 {
+		opts.Deadline = defaultRunDeadline(opts)
+	}
+	if opts.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Deadline)
+		defer cancel()
+	}
+	// A serving session outlives the caller's cancellation long enough to log out: the RPC loop notices the
+	// caller's context and sends the logout itself, so the session's own waits are not cut off underneath it.
+	sessionCtx := ctx
+	if opts.Serve != nil {
+		sessionCtx = context.WithoutCancel(ctx)
+	}
+
+	report := &Report{Counts: make(map[string]int)}
+	s := newSession(opts, report, sessionCtx)
 	defer s.pumpCancel()
 
-	realm := opts.WorldConn
+	if err := s.authenticate(ctx, opts.Deadline); err != nil {
+		return report, err
+	}
+
+	runErr := s.enter(ctx)
+	if runErr != nil && s.opts.Serve == nil {
+		// the character may be online already; tell the server it is leaving before the sockets drop. A serving
+		// session logs out itself, and a serving session whose link died cannot be told anything.
+		s.abortLogin()
+	}
+	s.shutdown(ctx)
+	// A serving session that re-entered after a drop ended with a later session: its packet counts are the run's.
+	if s.serveRT != nil {
+		if cur := s.serveRT.st.session.Load(); cur != nil && cur != s {
+			for name, n := range cur.report.Counts {
+				report.Counts[name] += n
+			}
+		}
+	}
+	return report, runErr
+}
+
+// authenticate opens and authenticates the world socket for this session and starts its reader. deadline bounds
+// the handshake (worldconn's own deadline when zero). A login that already authenticated the world socket for the
+// build it selected (Options.WorldConn) is adopted instead of authenticated a second time.
+func (s *session) authenticate(ctx context.Context, deadline time.Duration) error {
+	realm := s.opts.WorldConn
 	if realm != nil {
 		// The login's build probe authenticated this socket for exactly the build the world server accepted, so
 		// entering must not authenticate a second time: that would be a second session for a build already proven.
-		opts.logf("world socket: adopting the connection the login authenticated (client build %d)", opts.ClientBuild)
+		s.opts.logf("world socket: adopting the connection the login authenticated (client build %d)", s.opts.ClientBuild)
 	} else {
 		var err error
 		realm, err = worldconn.Authenticate(ctx, worldconn.Config{
-			Address:               opts.Address,
-			RealmID:               opts.RealmID,
-			RealmAddress:          opts.RealmAddress,
-			RealmJoinTicket:       opts.RealmJoinTicket,
-			ClientSecret:          opts.ClientSecret,
-			JoinSecret:            opts.JoinSecret,
-			ClientBuild:           opts.ClientBuild,
-			RealmBuild:            opts.RealmBuild,
-			BuildAuthKey:          opts.BuildAuthKey,
-			AllowInstanceRedirect: opts.AllowInstanceRedirect,
-			Deadline:              opts.Deadline,
-			Logf:                  opts.Logf,
+			Address:               s.opts.Address,
+			RealmID:               s.opts.RealmID,
+			RealmAddress:          s.opts.RealmAddress,
+			RealmJoinTicket:       s.opts.RealmJoinTicket,
+			ClientSecret:          s.opts.ClientSecret,
+			JoinSecret:            s.opts.JoinSecret,
+			ClientBuild:           s.opts.ClientBuild,
+			RealmBuild:            s.opts.RealmBuild,
+			BuildAuthKey:          s.opts.BuildAuthKey,
+			AllowInstanceRedirect: s.opts.AllowInstanceRedirect,
+			Deadline:              deadline,
+			Logf:                  s.opts.Logf,
 		})
 		if err != nil {
-			return report, err
+			return err
 		}
 	}
 	s.realm = realm
@@ -592,14 +651,32 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 		s.report.Counts[name]++
 	}
 	s.startPump(sideRealm, realm.Next)
+	return nil
+}
 
-	runErr := s.enter(ctx)
-	if runErr != nil {
-		// the character may be online already; tell the server it is leaving before the sockets drop
-		s.abortLogin()
+// teardown ends a session's links completely: its readers are cancelled, both sockets are closed and their readers
+// have returned (bounded by two seconds; closing the sockets unblocks a read anyway). Nothing of the session is used
+// afterwards. A serving daemon calls it on the old session before logging in again, so the new login never shares a
+// socket, a pump or a model with the dropped one.
+func (s *session) teardown() {
+	s.pumpCancel()
+	if s.captureRun != nil {
+		_ = s.captureRun.close()
 	}
-	s.shutdown(ctx)
-	return report, runErr
+	if s.instance != nil {
+		_ = s.instance.Close()
+	}
+	if s.realm != nil {
+		_ = s.realm.Close()
+	}
+	deadline := time.After(2 * time.Second)
+	for _, done := range s.pumpDone {
+		select {
+		case <-done:
+		case <-deadline:
+			return
+		}
+	}
 }
 
 // ownDeadlineTimeout reports a socket timeout that is this run's own deadline rather than the peer's: the read was
@@ -846,7 +923,11 @@ func (s *session) abortLogin() {
 	}
 }
 
-func (s *session) enter(ctx context.Context) error {
+// loginWorld is the login half of a run: authenticate the world socket, list the account's characters, log the named
+// one in on a fresh instance socket, and answer the burst up to the loading-screen notification. It leaves the
+// session in the world and says nothing about what the run does next: enter does, and a serving daemon's re-entry
+// uses this half alone.
+func (s *session) loginWorld(ctx context.Context) error {
 	// ---- character list
 	if err := s.sendOn(sideRealm, wire.CMSGEnumCharacters, nil); err != nil {
 		return err
@@ -932,6 +1013,18 @@ func (s *session) enter(ctx context.Context) error {
 		return err
 	}
 	s.opts.logf("world: CMSG_LOADING_SCREEN_NOTIFY sent (map %d, showing false)", verify.MapID)
+	return nil
+}
+
+// enter logs in and then runs what the session was asked to do: the serving loop, one of the one-shot checks with its
+// logout, or the plain stay.
+func (s *session) enter(ctx context.Context) error {
+	if err := s.loginWorld(ctx); err != nil {
+		return err
+	}
+	if s.opts.Serve != nil {
+		return s.serve(ctx, s.opts.Serve)
+	}
 
 	// ---- stay: answer time syncs, the active-mover exchange and pings
 	if s.opts.AddonCheck {
@@ -978,6 +1071,12 @@ func (s *session) enter(ctx context.Context) error {
 		err := s.commandCheck(ctx)
 		s.summariseChat()
 		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.RouteWalk != nil {
+		if err := s.routeWalk(ctx); err != nil {
 			return err
 		}
 		return s.logout(ctx)

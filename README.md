@@ -58,6 +58,24 @@ the world server's refusal is the command's error. By default the
 instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
 
+`forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
+[--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
+[--parent MAP=PARENT] [--disconnect-grace DURATION]` keeps that character in the world and serves the local
+JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer token, loopback only, the same
+error codes. The password comes from `--password-file` or `FOREVER_PASSWORD` and is never printed. The listener is
+bound before the login; `--listen` defaults to `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and
+`rpc-<port>.token`, so `rpc DIR status` works unchanged; without it the token file is `rpc-<port>.token` in the
+working directory. `status`, `units`, `unit`, `party`, `chat_log`, `chat`, `gm`, `gm_revive`, `bot`, `invite`,
+`accept_invite`, `leave_group`, `target`, `attack`, `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`,
+`walk_to`, `path_to`, `walk_path`, `area_trigger`, the five death methods, `addon_send` and `logout` are ported;
+`--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error.
+Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
+with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
+session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
+state (`online`, `reconnecting`, `offline`); while `reconnecting` every action answers `-32005` and nothing is queued
+for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
+(default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
+
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
 `CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as
@@ -116,6 +134,32 @@ server's own player filter (ground, steep, water, lava and road, nothing exclude
 (ground, steep, water and road; lava and slime excluded), and `--parent MAP=PARENT[,..]` applies the instance map's
 parent-tile rule (`--parent 389=1`); a bare number is refused, because the pair names which map it is for. The real-data checks live in `internal/navmesh` and run when
 `FOREVER_MMAPS_DIR` names a Forever mmaps folder; see [docs/forever/NAVMESH-R1-NOTES.md](docs/forever/NAVMESH-R1-NOTES.md).
+
+`forever-agent forever route-walk --plan FILE --navmesh DIR --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
+walks a whole dungeon plan live and checks every planned point against a confirmed position. It enters the plan's
+instance (`--enter tele` teleports to the plan's `entrance_tele`; `--enter none` expects the character placed),
+optionally turns GM mode on (`--gm`, which also skips the instance's access rules), and then walks each selected leg
+(`--legs 1-3,tunnel`) as the plan defines it: every `via` waypoint in order, then the leg's `to`, planned from where
+the previous hop actually ended with the same Forever navmesh `path-check` uses, and walked with `walk-check`'s real
+movement (`CMSG_MOVE_START_FORWARD`, a heartbeat every 500 ms, `CMSG_MOVE_STOP`). The plan's avoid boxes are given to
+the planner. Every sample (default one stop per 3 s of running) records the planned point, the confirmed position,
+their distance, the Z difference and the time; a leg is `PASS`, `DEVIATED` (a waypoint or a mesh snap over
+`--max-deviation`, default 2 yd, from the plan's own point), `UNCONFIRMED` (the server did not confirm the stop: no
+echo of the request's marker, no complete `.gps` block, two reads that disagree, or an answer that cannot be tied to
+the stop), `STUCK` (the confirmed position moved under `--stuck-step` for `--stuck-after`, default 6 s at 0.5 yd),
+`FELL` (the confirmed Z is
+`--fall-drop`, default 2 yd, below the plan), `LIQUID` (a magma/slime navmesh floor within
+`--liquid-above`/`--liquid-below` of the path), `NOPATH` (no complete route, or a `gm_cross` hop), `INCOMPLETE` (the
+deadline or a cancel ended the leg or the run) or `FAIL`. `--leave tele` (the default) teleports the character back out to the plan's `outside_tele` after the last leg,
+before GM mode goes off: a level-1 character left standing among the packs aggroes the moment the GM flag clears,
+and the server then refuses the logout. The
+position is the server's own when the account can run the core's `.gps` (the default, `--confirm gps`: the command
+selects the character, marks each request with a self-whisper it waits to see echoed, sends `.gps` and reads the
+`X: Y: Z:` line, and confirms a stop only from two such reads that agree); `--confirm client` records the last movement
+packet instead, still treats a server correction (a teleport) as a deviation, and cannot see a silent stall. The
+command prints a per-leg table, writes `route-walk.json` beside it with `--out DIR` (or prints JSON with `--json`),
+and exits 12 when a leg did not pass. The thresholds are flags; the full contract and the live run are in
+[docs/forever/ROUTEWALK-NOTES.md](docs/forever/ROUTEWALK-NOTES.md).
 
 `forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote
@@ -533,4 +577,4 @@ changes are discussed.
 
 GNU Affero General Public License v3.0 or later, see [LICENSE](LICENSE). Versions up to the commit that changed the licence were released under the MIT License (kept in [LICENSES/MIT-turtle-agent-before-agpl.txt](LICENSES/MIT-turtle-agent-before-agpl.txt)); copies you already received under MIT stay under MIT. Parts are ported from [agent-wow](https://github.com/agent-wow/agent-wow) (MIT; the files keep their own MIT headers), and
 `internal/navmesh/detour` is Detour from recastnavigation (zlib, `internal/navmesh/detour/License.txt`); see
-[NOTICE](NOTICE). Dungeon event data derived from [jrad7/mod-dungeon-clear](https://github.com/jrad7/mod-dungeon-clear) (AGPL-3.0-or-later) is marked with its source where it appears. World of Warcraft is a trademark of Blizzard Entertainment; this project is not affiliated with it.
+[NOTICE](NOTICE). Dungeon event data derived from [jrad7/mod-dungeon-clear](https://github.com/jrad7/mod-dungeon-clear) (AGPL-3.0-or-later) is marked with its source where it appears. This is an unofficial community project made for educational purposes. World of Warcraft is a trademark of Blizzard Entertainment; this project is not affiliated with it.

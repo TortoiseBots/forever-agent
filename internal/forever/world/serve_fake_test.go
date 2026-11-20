@@ -1,0 +1,1308 @@
+package world
+
+// The serving daemon against the fake world server over real sockets: login, the read models, chat, movement,
+// combat, the command channel, party, the typed not-ported answers, a dropped world socket and a clean shutdown.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
+)
+
+// serveDaemon answers the packets the serving methods can send. It is deliberately tolerant: this test is about the
+// daemon's dispatch and typed answers, while the opcode translation and the packet layouts are pinned by the
+// one-shot scenarios.
+func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
+	guid := mustGUID(f.clientGUID)
+	table := wire.NewOpcodeTable(70707, 70707)
+	inviter := wire.GUID{Low: 0x9001, High: 0x0800000000000000}
+	partyGUID := wire.GUID{Low: 0xBEEF, High: 0x1B00000000000000}
+	f.mu.Lock()
+	f.serveSessions++
+	f.mu.Unlock()
+
+	// This character's create block (the model's self) and one creature five yards east, from the committed
+	// creature fixture.
+	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlockType(f.clientGUID, 0, 1000, 2000, 50, 7, 6))
+	targetPayload := patchFloats(f.t, loadObjectFixture(f.t, "create_creature"), 1000, 1005)
+	targetUpdate, err := objects.ParseUpdateObject(targetPayload)
+	if err != nil || len(targetUpdate.Blocks) != 1 {
+		f.failf("serve: the creature fixture: %v", err)
+		return
+	}
+	target := targetUpdate.Blocks[0].GUID
+	c.writeFrame(fakeSMSGUpdateObject, targetPayload)
+	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-SYSTEM"))
+	if f.serveInvite {
+		// A pending invite for accept_invite: the inviter leads the roster the accept's answer brings.
+		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite("Inviter", inviter, true))
+	}
+
+	for {
+		code, payload, err := c.readFrame()
+		if err != nil {
+			select {
+			case <-f.logoutDone:
+				return
+			default:
+			}
+			if f.deliberate() {
+				return
+			}
+			f.failf("serve: %v", err)
+			return
+		}
+		f.mu.Lock()
+		f.instWire = append(f.instWire, code)
+		f.mu.Unlock()
+		core := table.TranslateClientWire(code)
+		switch core {
+		case wire.CMSGTimeSyncResponse, wire.CMSGMoveInitActiveMoverDone, wire.CMSGLoadingScreenNotify:
+		case wire.CMSGPing:
+			c.writeFrame(table.TranslateServerCore(wire.SMSGPong), payload[:4])
+		case wire.CMSGSetSelection:
+		case wire.CMSGMoveSetFacing, wire.CMSGMoveStartForward, wire.CMSGMoveHeartbeat, wire.CMSGMoveStop:
+		case wire.CMSGAttackSwing:
+			f.mu.Lock()
+			f.serveSwing = true
+			f.mu.Unlock()
+			c.writeFrame(table.TranslateServerCore(wire.SMSGAttackStart), buildAttackStart(guid, target))
+			if !f.serveNoKill {
+				c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))
+			}
+		case wire.CMSGAttackStop:
+			f.mu.Lock()
+			f.serveStop = true
+			f.mu.Unlock()
+		case wire.CMSGCastSpell:
+			r := wire.NewReader(payload)
+			castID := wire.ReadPackedGUID(r)
+			r.ReadU8()
+			r.ReadI32()
+			r.ReadI32()
+			r.ReadI32()
+			spell := r.ReadI32()
+			f.mu.Lock()
+			f.serveCast = true
+			f.mu.Unlock()
+			c.writeFrame(table.TranslateServerCore(wire.SMSGCastFailed), buildCastFailed(castID, spell, 1))
+		case wire.CMSGChatMessageSay:
+			_, _, said, err := parseClientChatMessage(payload)
+			if err != nil {
+				f.failf("serve: SAY: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.chatSay = said
+			f.mu.Unlock()
+			if said == ".gm" {
+				f.mu.Lock()
+				f.serveGMSent = true
+				f.mu.Unlock()
+				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "|- gm on"))
+				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "|- gm off"))
+				continue
+			}
+			if bytes.HasPrefix([]byte(said), []byte(".tb ")) {
+				f.mu.Lock()
+				f.serveBotSent = true
+				f.mu.Unlock()
+				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
+				continue
+			}
+			if strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!") {
+				// A GM line is not chat: the server runs it and answers with its own lines. An echo here would
+				// trip the client's own guard, which is the point of the guard.
+				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-GM-ANSWER"))
+				continue
+			}
+			c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSay, chat.LanguageCommon, guid, wire.EmptyGUID, "Testchar", "", "", "", said))
+		case wire.CMSGChatMessageYell, wire.CMSGChatMessageParty, wire.CMSGChatMessageEmote:
+		case wire.CMSGChatMessageWhisper:
+			if _, _, err := parseClientWhisper(payload); err != nil {
+				f.failf("serve: WHISPER: %v", err)
+				return
+			}
+		case wire.CMSGPartyInvite:
+			f.mu.Lock()
+			f.serveInviteSent = true
+			f.mu.Unlock()
+			c.writeFrame(fakeSMSGPartyResult, fakePartyResult(0, 0, "Invitee"))
+		case wire.CMSGPartyInviteResponse:
+			b := wire.NewReader(payload)
+			b.ReadBit() // index present
+			accept := b.ReadBit()
+			b.ReadBit() // roles
+			b.FlushBits()
+			b.ReadU8()
+			if b.Err() != nil {
+				f.failf("serve: CMSG_PARTY_INVITE_RESPONSE: %v", b.Err())
+				return
+			}
+			f.mu.Lock()
+			f.serveAccepted = accept
+			mode := f.serveAccept
+			f.mu.Unlock()
+			switch mode {
+			case "roster":
+				if !accept {
+					f.failf("serve: the client declined an invite it was told to accept")
+					return
+				}
+				c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(partyGUID, inviter, guid, []wire.GUID{inviter, guid}, []string{"Inviter", "Testchar"}, false))
+			case "refuse":
+				c.writeFrame(fakeSMSGPartyResult, fakePartyResult(0, 4, "Inviter")) // group-full
+			case "silent":
+				// Nothing: the client's answer wait times out.
+			}
+		case wire.CMSGLeaveGroup, wire.CMSGRequestPartyMemberStats:
+		case wire.CMSGAreaTrigger:
+			f.mu.Lock()
+			f.serveArea = true
+			f.mu.Unlock()
+		case wire.CMSGLogoutRequest:
+			f.mu.Lock()
+			f.serveLogout = true
+			f.mu.Unlock()
+			f.fakeLogout(c, realm)
+			return
+		default:
+			// A packet another method sends (a walk's teleport ack, the add-on transport): this scenario's subject
+			// is the daemon, not that layout.
+		}
+	}
+}
+
+// serveAgent is one running daemon.
+type serveAgent struct {
+	addr   string
+	token  string
+	result chan serveResult
+	cancel context.CancelFunc
+}
+
+// stepLog collects the daemon's log lines. A reconnect logs from the login goroutine while the loop logs from its
+// own, so the slice is behind a mutex.
+type stepLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *stepLog) add(format string, args ...any) {
+	l.mu.Lock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.mu.Unlock()
+}
+
+func (l *stepLog) joined() string { return joinLines(l.snapshot()) }
+
+func (l *stepLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
+}
+
+// startServeDaemon logs in to the fake and waits for the RPC socket to answer status.
+func startServeDaemon(t *testing.T, f *fakeServer, steps *stepLog) *serveAgent {
+	return startServeDaemonWith(t, f, steps, "")
+}
+
+// startServeDaemonWith is startServeDaemon with a navmesh folder for path_to/walk_path.
+func startServeDaemonWith(t *testing.T, f *fakeServer, steps *stepLog, navmeshDir string) *serveAgent {
+	t.Helper()
+	f.wg.Add(1)
+	go f.serveRealm()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := Options{
+		Address:         f.realmListener.Addr().String(),
+		RealmID:         70,
+		RealmAddress:    0x46010046,
+		RealmJoinTicket: []byte(`{"gameAccount":"000#0","platform":5728622,"type":5730135,"clientArch":7878196}`),
+		ClientSecret:    f.keyData[:32],
+		JoinSecret:      f.keyData[32:],
+		ClientBuild:     70707,
+		RealmBuild:      70707,
+		Character:       "XXXXXX",
+		Deadline:        30 * time.Second,
+		BuildAuthKey:    f.buildKey[:],
+		Logf: func(format string, args ...any) {
+			steps.add(format, args...)
+		},
+		Serve: &ServeConfig{
+			Listener: ln, Token: "serve-test-token", DisconnectGrace: 400 * time.Millisecond,
+			NavmeshDir: navmeshDir, ReconnectAttempts: f.serveReconnects,
+			reconnectBackoff: f.serveBackoff, reconnectMaxBackoff: f.serveBackoff, reconnectLoginTimeout: f.serveLoginTimeout,
+		},
+	}
+	a := &serveAgent{addr: ln.Addr().String(), token: "serve-test-token", result: make(chan serveResult, 1), cancel: cancel}
+	go func() {
+		report, err := Enter(ctx, opts)
+		a.result <- serveResult{v: report, err: err}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, _, err := a.tryCall("status", nil); err == nil {
+			return a
+		}
+		select {
+		case r := <-a.result:
+			t.Fatalf("the daemon ended before serving: %v\n%s", r.err, steps.joined())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	t.Fatalf("the RPC did not answer status\nsteps:\n%s", steps.joined())
+	return nil
+}
+
+// stop cancels the daemon and returns its result.
+func (a *serveAgent) stop(t *testing.T) serveResult {
+	t.Helper()
+	a.cancel()
+	select {
+	case r := <-a.result:
+		return r
+	case <-time.After(20 * time.Second):
+		t.Fatal("the daemon did not stop")
+		return serveResult{}
+	}
+}
+
+// tryCall posts one JSON-RPC request and returns the result, the server's error, or a transport failure.
+func (a *serveAgent) tryCall(method string, params any) (json.RawMessage, *rpcError, error) {
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method}
+	if params != nil {
+		body["params"] = params
+	}
+	raw, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", "http://"+a.addr+"/rpc", bytes.NewReader(raw))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  *rpcError       `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, nil, fmt.Errorf("bad reply %q: %w", payload, err)
+	}
+	return envelope.Result, envelope.Error, nil
+}
+
+// call is tryCall with a transport failure made fatal.
+func (a *serveAgent) call(t *testing.T, method string, params any) (json.RawMessage, *rpcError) {
+	t.Helper()
+	res, rerr, err := a.tryCall(method, params)
+	if err != nil {
+		t.Fatalf("%s: %v", method, err)
+	}
+	return res, rerr
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (a *serveAgent) mustCall(t *testing.T, method string, params any) json.RawMessage {
+	t.Helper()
+	res, rerr := a.call(t, method, params)
+	if rerr != nil {
+		t.Fatalf("%s: %d %s", method, rerr.Code, rerr.Message)
+	}
+	return res
+}
+
+func (a *serveAgent) mustFail(t *testing.T, method string, params any, code int, contains string) *rpcError {
+	t.Helper()
+	_, rerr := a.call(t, method, params)
+	if rerr == nil {
+		t.Fatalf("%s: no error", method)
+	}
+	if code != 0 && rerr.Code != code {
+		t.Fatalf("%s: code %d, want %d (%s)", method, rerr.Code, code, rerr.Message)
+	}
+	if contains != "" && !bytes.Contains([]byte(rerr.Message), []byte(contains)) {
+		t.Fatalf("%s: %q does not contain %q", method, rerr.Message, contains)
+	}
+	return rerr
+}
+
+func TestServeStatusChatAndLogout(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if st.State != "online" || st.Character == "" || st.GUID == (GUID{}) {
+		t.Fatalf("status %+v", st)
+	}
+
+	// The model learns the creature from the update the fake sent before the RPC answered.
+	deadline := time.Now().Add(5 * time.Second)
+	var units []ServeUnit
+	for time.Now().Before(deadline) {
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		if len(units) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(units) == 0 {
+		t.Fatalf("units stayed empty\n%s", steps.joined())
+	}
+	if units[0].Entry == 0 || units[0].Distance <= 0 {
+		t.Fatalf("unit row %+v", units[0])
+	}
+	var one ServeUnit
+	json.Unmarshal(a.mustCall(t, "unit", map[string]any{"guid": units[0].GUID}), &one)
+	if one.GUID != units[0].GUID || one.Entry != units[0].Entry {
+		t.Fatalf("unit by guid gave %+v, want %+v", one, units[0])
+	}
+
+	a.mustCall(t, "chat", map[string]any{"type": "say", "text": "serve says"})
+	var said string
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		said = f.chatSay
+		f.mu.Unlock()
+		if said == "serve says" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if said != "serve says" {
+		t.Fatalf("the server saw %q", said)
+	}
+	var page ServeChatPage
+	json.Unmarshal(a.mustCall(t, "chat_log", map[string]any{"since": 0, "wait_ms": 3000}), &page)
+	found := false
+	for _, e := range page.Events {
+		if e.Text == "SERVE-SYSTEM" || e.Text == "serve says" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("chat_log %+v", page)
+	}
+
+	var out serveLogoutResult
+	json.Unmarshal(a.mustCall(t, "logout", nil), &out)
+	if out.Outcome != "complete" {
+		t.Fatalf("logout outcome %q", out.Outcome)
+	}
+	r := a.stop(t)
+	if r.err != nil {
+		t.Fatalf("the daemon ended with %v\n%s", r.err, steps.joined())
+	}
+	rep := r.v.(*Report)
+	if !rep.LogoutComplete {
+		t.Fatalf("logout not complete: %+v", rep.Logout)
+	}
+	f.wait(t)
+	f.mu.Lock()
+	sawLogout := f.serveLogout
+	f.mu.Unlock()
+	if !sawLogout {
+		t.Fatal("the fake never saw CMSG_LOGOUT_REQUEST")
+	}
+}
+
+func TestServeWalkAndFace(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var units []ServeUnit
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		if len(units) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(units) == 0 {
+		t.Fatalf("units stayed empty\n%s", steps.joined())
+	}
+	a.mustCall(t, "face", map[string]any{"guid": units[0].GUID})
+	a.mustCall(t, "area_trigger", map[string]any{"id": 2211})
+	sawArea := false
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !sawArea {
+		f.mu.Lock()
+		sawArea = f.serveArea
+		f.mu.Unlock()
+		if !sawArea {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if !sawArea {
+		t.Fatal("the fake never saw CMSG_AREA_TRIGGER")
+	}
+	a.mustCall(t, "walk_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0})
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if st.X < 1009.5 {
+		t.Fatalf("status x %.2f after the walk\n%s", st.X, steps.joined())
+	}
+	a.mustFail(t, "path_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCombatAndCommand(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var units []ServeUnit
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		if len(units) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(units) == 0 {
+		t.Fatalf("units stayed empty\n%s", steps.joined())
+	}
+	var target ServeUnit
+	json.Unmarshal(a.mustCall(t, "target", map[string]any{"guid": units[0].GUID}), &target)
+	if target.GUID != units[0].GUID {
+		t.Fatalf("target %+v, want %+v", target, units[0])
+	}
+	a.mustFail(t, "cast", map[string]any{"spell_id": 133}, -32003, "refused the spell")
+	f.mu.Lock()
+	sawCast := f.serveCast
+	f.mu.Unlock()
+	if !sawCast {
+		t.Fatal("the fake never saw CMSG_CAST_SPELL")
+	}
+	var cs ServeCastState
+	json.Unmarshal(a.mustCall(t, "cast_state", nil), &cs)
+	if cs.Casting {
+		t.Fatalf("cast_state says a cast is running after the refusal: %+v", cs)
+	}
+	a.mustFail(t, "cancel_cast", nil, -32003, "no cast in progress")
+	var atk ServeAttack
+	json.Unmarshal(a.mustCall(t, "attack", map[string]any{"for_ms": 5000}), &atk)
+	if atk.Reason != "dead" {
+		t.Fatalf("attack %+v\n%s", atk, steps.joined())
+	}
+	f.mu.Lock()
+	sawSwing := f.serveSwing
+	f.mu.Unlock()
+	if !sawSwing {
+		t.Fatal("the fake never saw CMSG_ATTACK_SWING")
+	}
+	a.mustCall(t, "stop_attack", nil)
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeGMAndBot(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var gm ServeCommand
+	json.Unmarshal(a.mustCall(t, "gm", map[string]any{"text": ".gm"}), &gm)
+	if len(gm.Lines) == 0 {
+		t.Fatalf("gm answered no lines: %+v\n%s", gm, steps.joined())
+	}
+	f.mu.Lock()
+	sawGM := f.serveGMSent
+	f.mu.Unlock()
+	if !sawGM {
+		t.Fatal("the fake never saw the GM probe")
+	}
+	var revive ServeCommand
+	json.Unmarshal(a.mustCall(t, "gm_revive", map[string]any{"name": "Testchar"}), &revive)
+	if revive.Sent == "" {
+		t.Fatalf("gm_revive sent nothing: %+v", revive)
+	}
+	var bot ServeCommand
+	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".tb state"}), &bot)
+	joined := ""
+	for _, ln := range bot.Lines {
+		joined += ln
+	}
+	if !bytes.Contains([]byte(joined), []byte("SERVE-BOT-ANSWER")) {
+		t.Fatalf("bot answered %+v\n%s", bot, steps.joined())
+	}
+	a.mustFail(t, "bot", map[string]any{"line": "not a command"}, -32003, "")
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServePartyAndAddon(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var party ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &party)
+	if party.InGroup {
+		t.Fatalf("party %+v", party)
+	}
+	a.mustCall(t, "invite", map[string]any{"name": "Invitee"})
+	var after ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &after)
+	if after.InGroup {
+		t.Fatalf("the fake did not form the party, but the model says %+v", after)
+	}
+	f.mu.Lock()
+	sawInvite := f.serveInviteSent
+	f.mu.Unlock()
+	if !sawInvite {
+		t.Fatal("the fake never saw CMSG_PARTY_INVITE")
+	}
+	a.mustFail(t, "accept_invite", nil, -32003, "no pending group invite")
+	a.mustFail(t, "leave_group", nil, -32003, "not in a group")
+	a.mustCall(t, "addon_send", map[string]any{"channel": "party", "prefix": "SRV", "text": "hello"})
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeNotPortedAndUnknown(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	a.mustFail(t, "trade", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "teardown", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
+
+	// The five death methods are ported; the character is alive, so each answers its own refusal.
+	var death ServeDeath
+	json.Unmarshal(a.mustCall(t, "death_status", nil), &death)
+	if death.Phase != "alive" {
+		t.Fatalf("death_status %+v", death)
+	}
+	a.mustFail(t, "release_spirit", nil, -32003, "not dead")
+	a.mustFail(t, "reclaim_corpse", nil, -32003, "spirit is not released")
+	a.mustFail(t, "accept_resurrect", nil, -32003, "not dead")
+	a.mustFail(t, "corpse_query", nil, -32003, "no answer within")
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeNavmeshPath(t *testing.T) {
+	polys := []navfixture.Poly{
+		navfixture.Square(1000, 2000, 1004, 2004, 50),
+		navfixture.Square(1004, 2000, 1008, 2004, 50),
+		navfixture.Square(1008, 2000, 1012, 2004, 50),
+		navfixture.Square(1008, 2004, 1012, 2008, 50),
+		navfixture.Square(1008, 2008, 1012, 2012, 50),
+		navfixture.Square(1012, 2008, 1016, 2012, 50),
+		navfixture.Square(1016, 2008, 1020, 2012, 50),
+	}
+	dir := navfixture.WriteForeverDirAt(t, 0, polys, nil, 1000, 2000)
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemonWith(t, f, steps, dir)
+
+	var path ServePath
+	json.Unmarshal(a.mustCall(t, "path_to", map[string]any{"x": 1020.0, "y": 2010.0, "z": 50.0}), &path)
+	if path.Status != "complete" || len(path.Points) < 2 || path.Corners < 3 {
+		t.Fatalf("path_to %+v\n%s", path, steps.joined())
+	}
+	var walked ServePath
+	json.Unmarshal(a.mustCall(t, "walk_path", map[string]any{"x": 1020.0, "y": 2010.0, "z": 50.0}), &walked)
+	if walked.Status != "complete" {
+		t.Fatalf("walk_path %+v\n%s", walked, steps.joined())
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeGUIDJSON(t *testing.T) {
+	cases := []struct {
+		in   string
+		low  uint64
+		high uint64
+	}{
+		{`"0x1234"`, 0x1234, 0},
+		{`"0x00000000000000000000000000001234"`, 0x1234, 0},
+		{`"0x00000000000000010000000000000002"`, 2, 1},
+		{`4660`, 4660, 0},
+		{`null`, 0, 0},
+	}
+	for _, c := range cases {
+		var g GUID
+		if err := json.Unmarshal([]byte(c.in), &g); err != nil {
+			t.Fatalf("%s: %v", c.in, err)
+		}
+		got := wire.GUID(g)
+		if got.Low != c.low || got.High != c.high {
+			t.Fatalf("%s: %+v, want %d/%d", c.in, got, c.low, c.high)
+		}
+	}
+	var g GUID
+	if err := json.Unmarshal([]byte(`"0x1"`), &g); err != nil || wire.GUID(g).Low != 1 {
+		t.Fatalf("short hex: %+v, %v", g, err)
+	}
+	if err := json.Unmarshal([]byte(`"0x000000000000000000000000000000001"`), &g); err == nil {
+		t.Fatal("a hex string longer than 128 bits was accepted")
+	}
+}
+
+func TestServeOfflineGrace(t *testing.T) {
+	// Reconnects are off: the first drop is final, and the RPC stays up for the grace window with the reason.
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveReconnects = -1
+	f.closeSocket = "instance"
+	f.closeWhen = "stay"
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	st := waitServeState(t, a, "offline", steps)
+	if st.Error == "" {
+		t.Fatalf("status is offline without a reason: %+v", st)
+	}
+	a.mustFail(t, "chat", map[string]any{"type": "say", "text": "x"}, -32002, "offline")
+	r := a.stop(t)
+	if r.err == nil {
+		t.Fatal("the daemon ended cleanly after a dropped link")
+	}
+	f.wait(t)
+}
+
+func TestServeCleanShutdown(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	r := a.stop(t)
+	if r.err != nil {
+		t.Fatalf("clean shutdown: %v\n%s", r.err, steps.joined())
+	}
+	rep := r.v.(*Report)
+	if !rep.LogoutComplete {
+		t.Fatalf("clean shutdown did not log out: %+v", rep.Logout)
+	}
+	f.wait(t)
+}
+
+// waitServeState polls status until it reports want, and returns that answer.
+func waitServeState(t *testing.T, a *serveAgent, want string, steps *stepLog) ServeStatus {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	var last ServeStatus
+	for time.Now().Before(deadline) {
+		res, rerr, err := a.tryCall("status", nil)
+		if err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		if rerr == nil {
+			var cur ServeStatus
+			json.Unmarshal(res, &cur)
+			last = cur
+			if cur.State == want {
+				return cur
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("status stayed %q, want %q (%+v)\n%s", last.State, want, last, steps.joined())
+	return last
+}
+
+// awaitResult waits for the daemon's own end.
+func (a *serveAgent) awaitResult(t *testing.T) serveResult {
+	t.Helper()
+	select {
+	case r := <-a.result:
+		return r
+	case <-time.After(20 * time.Second):
+		t.Fatal("the daemon did not end")
+		return serveResult{}
+	}
+}
+
+// fastReconnect shortens the reconnect timings of the daemon this fake starts.
+func fastReconnect(t *testing.T, f *fakeServer, backoff time.Duration) {
+	t.Helper()
+	f.serveBackoff = backoff
+	f.serveLoginTimeout = 5 * time.Second
+}
+
+// waitServeUnits waits for the model to report at least one unit.
+func waitServeUnits(t *testing.T, a *serveAgent) []ServeUnit {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var units []ServeUnit
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		if len(units) > 0 {
+			return units
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("units stayed empty")
+	return nil
+}
+
+func (f *fakeServer) serveSessionCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.serveSessions
+}
+
+// dropServingSocket drops the instance socket of the running serving session and fails the test when there is none.
+func dropServingSocket(t *testing.T, f *fakeServer) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.dropNow("instance") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no instance socket to drop")
+}
+
+func TestServeReconnectIdle(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 200*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	before := waitServeState(t, a, "online", steps)
+	waitServeUnits(t, a)
+
+	// The first attempt is made to fail, so the reconnecting window is long enough to answer a call in.
+	f.failLogins(1)
+	dropServingSocket(t, f)
+	rec := waitServeState(t, a, "reconnecting", steps)
+	if rec.Error == "" || rec.ReconnectLimit != 3 {
+		t.Fatalf("reconnecting status %+v", rec)
+	}
+	// An action during the re-entry is refused with the typed error and is not queued for later.
+	a.mustFail(t, "chat", map[string]any{"type": "say", "text": "must not be sent"}, -32005, "reconnecting")
+	after := waitServeState(t, a, "online", steps)
+	if after.State != "online" || after.Error != "" || after.ReconnectAttempt != 0 {
+		t.Fatalf("status after the re-entry %+v", after)
+	}
+	if after.Character != before.Character || after.Map != before.Map {
+		t.Fatalf("status after the re-entry %+v, before %+v", after, before)
+	}
+	if n := f.serveSessionCount(); n < 2 {
+		t.Fatalf("the fake ran %d serving session(s), want at least 2\n%s", n, steps.joined())
+	}
+	// The model was rebuilt from the new session's burst, and nothing of the dropped session is replayed.
+	waitServeUnits(t, a)
+	f.mu.Lock()
+	said := f.chatSay
+	f.mu.Unlock()
+	if said == "must not be sent" {
+		t.Fatal("the refused action was replayed after the re-entry")
+	}
+	a.mustCall(t, "chat", map[string]any{"type": "say", "text": "after the re-entry"})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		said = f.chatSay
+		f.mu.Unlock()
+		if said == "after the re-entry" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if said != "after the re-entry" {
+		t.Fatalf("the re-entered session's chat did not reach the server (saw %q)", said)
+	}
+	if r := a.stop(t); r.err != nil {
+		t.Fatalf("clean shutdown after a re-entry: %v\n%s", r.err, steps.joined())
+	}
+	f.close()
+	f.wait(t)
+	found := false
+	for _, ln := range steps.snapshot() {
+		if strings.Contains(ln, "reconnect attempt 1 of 3 failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the failed first attempt is not in the log\n%s", steps.joined())
+	}
+}
+
+func TestServeReconnectWhileMoving(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 100*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	type walkResult struct {
+		rerr *rpcError
+		err  error
+	}
+	walk := make(chan walkResult, 1)
+	go func() {
+		_, rerr, err := a.tryCall("walk_to", map[string]any{"x": 1100.0, "y": 2000.0, "z": 50.0})
+		walk <- walkResult{rerr: rerr, err: err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	dropServingSocket(t, f)
+	select {
+	case r := <-walk:
+		if r.err != nil {
+			t.Fatalf("walk_to: %v", r.err)
+		}
+		if r.rerr == nil || r.rerr.Code != -32002 {
+			t.Fatalf("walk_to after the drop: %+v", r.rerr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the walk did not end with the drop\n%s", steps.joined())
+	}
+	waitServeState(t, a, "reconnecting", steps)
+	after := waitServeState(t, a, "online", steps)
+	// The walk is not resumed: the new session stands at its own create block's position.
+	if after.X > 1001 {
+		t.Fatalf("status x %.1f after the re-entry: the walk was resumed", after.X)
+	}
+	if r := a.stop(t); r.err != nil {
+		t.Fatalf("clean shutdown: %v\n%s", r.err, steps.joined())
+	}
+	f.close()
+	f.wait(t)
+}
+
+func TestServeReconnectDuringCombat(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	f.serveNoKill = true
+	fastReconnect(t, f, 100*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	units := waitServeUnits(t, a)
+	a.mustCall(t, "target", map[string]any{"guid": units[0].GUID})
+
+	attack := make(chan struct {
+		atk ServeAttack
+		err *rpcError
+	}, 1)
+	go func() {
+		res, rerr, err := a.tryCall("attack", map[string]any{"for_ms": 20000})
+		if err != nil {
+			attack <- struct {
+				atk ServeAttack
+				err *rpcError
+			}{err: &rpcError{Message: err.Error()}}
+			return
+		}
+		var atk ServeAttack
+		json.Unmarshal(res, &atk)
+		attack <- struct {
+			atk ServeAttack
+			err *rpcError
+		}{atk: atk, err: rerr}
+	}()
+	// Wait for the fight to be under way (a swing reached the fake), then drop the link under it.
+	deadline := time.Now().Add(10 * time.Second)
+	sawSwing := false
+	for time.Now().Before(deadline) && !sawSwing {
+		f.mu.Lock()
+		sawSwing = f.serveSwing
+		f.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawSwing {
+		t.Fatalf("the fight never started\n%s", steps.joined())
+	}
+	dropServingSocket(t, f)
+	select {
+	case r := <-attack:
+		if r.err == nil || r.err.Code != -32002 {
+			t.Fatalf("attack after the drop: %+v", r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the fight did not end with the drop\n%s", steps.joined())
+	}
+	waitServeState(t, a, "reconnecting", steps)
+	waitServeState(t, a, "online", steps)
+	// The selected target belonged to the dropped session; the new one starts with none.
+	a.mustFail(t, "attack", nil, -32003, "no target selected")
+	if r := a.stop(t); r.err != nil {
+		t.Fatalf("clean shutdown: %v\n%s", r.err, steps.joined())
+	}
+	f.close()
+	f.wait(t)
+}
+
+func TestServeReconnectDuringLogin(t *testing.T) {
+	// The first re-entry's world socket is refused before the handshake: the attempt fails, the next one succeeds.
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 100*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	f.failLogins(1)
+	dropServingSocket(t, f)
+	waitServeState(t, a, "reconnecting", steps)
+	waitServeState(t, a, "online", steps)
+	if n := f.serveSessionCount(); n != 2 {
+		t.Fatalf("the fake ran %d serving session(s), want 2 (the failed attempt never reached the world)\n%s", n, steps.joined())
+	}
+	if r := a.stop(t); r.err != nil {
+		t.Fatalf("clean shutdown: %v\n%s", r.err, steps.joined())
+	}
+	f.close()
+	f.wait(t)
+	failed := false
+	for _, ln := range steps.snapshot() {
+		if strings.Contains(ln, "reconnect attempt 1 of 3 failed") {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("the refused login is not reported\n%s", steps.joined())
+	}
+}
+
+func TestServeReconnectExhausted(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 2
+	fastReconnect(t, f, 50*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	f.failLogins(10)
+	dropServingSocket(t, f)
+	off := waitServeState(t, a, "offline", steps)
+	if off.ReconnectLimit != 2 || !strings.Contains(off.Error, "reconnect gave up after 2 attempt(s)") {
+		t.Fatalf("offline status %+v\n%s", off, steps.joined())
+	}
+	a.mustFail(t, "chat", map[string]any{"type": "say", "text": "x"}, -32002, "offline")
+	r := a.awaitResult(t)
+	if r.err == nil || !strings.Contains(r.err.Error(), "reconnect gave up") {
+		t.Fatalf("the daemon ended with %v\n%s", r.err, steps.joined())
+	}
+	f.close()
+	f.wait(t)
+}
+
+func TestServeReconnectRepeatedDrops(t *testing.T) {
+	// Every login is dropped 150 ms after it is in the world, until the two retries are spent.
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 2
+	f.closeSocket = "instance"
+	f.closeWhen = "stay"
+	fastReconnect(t, f, 50*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	off := waitServeState(t, a, "offline", steps)
+	if !strings.Contains(off.Error, "reconnect gave up after 2 attempt(s)") {
+		t.Fatalf("offline status %+v\n%s", off, steps.joined())
+	}
+	if n := f.serveSessionCount(); n < 2 {
+		t.Fatalf("the fake ran %d serving session(s), want at least 2\n%s", n, steps.joined())
+	}
+	r := a.awaitResult(t)
+	if r.err == nil {
+		t.Fatalf("the daemon ended cleanly after repeated drops\n%s", steps.joined())
+	}
+	f.close()
+	f.wait(t)
+}
+
+func TestServeAcceptInvite(t *testing.T) {
+	cases := []struct {
+		name     string
+		mode     string
+		wantCode int
+		wantText string
+		wait     time.Duration
+	}{
+		{name: "success", mode: "roster"},
+		{name: "refusal", mode: "refuse", wantCode: -32003, wantText: "refused it: group-full"},
+		{name: "timeout", mode: "silent", wantCode: -32003, wantText: "no confirmation", wait: 400 * time.Millisecond},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.serveMode = true
+			f.serveInvite = true
+			f.serveAccept = c.mode
+			defer f.close()
+			if c.wait > 0 {
+				old := serveAcceptInviteWait
+				serveAcceptInviteWait = c.wait
+				t.Cleanup(func() { serveAcceptInviteWait = old })
+			}
+			steps := &stepLog{}
+			a := startServeDaemon(t, f, steps)
+
+			// The invite the fake sent is in the model before the accept is called.
+			deadline := time.Now().Add(5 * time.Second)
+			var party ServePartyInfo
+			for time.Now().Before(deadline) {
+				json.Unmarshal(a.mustCall(t, "party", nil), &party)
+				if party.PendingInvite != "" {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if party.PendingInvite != "Inviter" {
+				t.Fatalf("party %+v\n%s", party, steps.joined())
+			}
+			if c.wantCode == 0 {
+				a.mustCall(t, "accept_invite", nil)
+				json.Unmarshal(a.mustCall(t, "party", nil), &party)
+				if !party.InGroup || len(party.Members) != 2 || party.Members[0].Name != "Inviter" && party.Members[1].Name != "Inviter" {
+					t.Fatalf("party after the accept %+v\n%s", party, steps.joined())
+				}
+			} else {
+				a.mustFail(t, "accept_invite", nil, c.wantCode, c.wantText)
+			}
+			f.mu.Lock()
+			accepted := f.serveAccepted
+			f.mu.Unlock()
+			if !accepted {
+				t.Fatal("the fake never saw the accept")
+			}
+			a.stop(t)
+			f.wait(t)
+		})
+	}
+}
+
+// TestServeReconnectPublishesBeforeTeardown: a dropped link is published as reconnecting, and its epoch bumped, before
+// the old session's teardown starts. The teardown waits up to two seconds for the readers; for all of that window the
+// dead session must not look online, an action must be refused at once instead of being queued for it, and
+// stop_attack's fast path must not take the dead session's stop flag and answer success.
+func TestServeReconnectPublishesBeforeTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := &serveState{
+		calls:        make(chan *serveCall, 64),
+		done:         make(chan struct{}),
+		backoff:      10 * time.Millisecond,
+		maxBackoff:   10 * time.Millisecond,
+		loginTimeout: 50 * time.Millisecond,
+	}
+	st.limit.Store(1)
+	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, ctx)
+	hold := make(chan struct{}) // closed only at the end: teardown spends its two-second bound meanwhile
+	s.pumpDone = []chan struct{}{hold}
+	st.install(s, 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.reconnect(ctx, errors.New("the socket reset"))
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for st.lifecycle() != serveReconnecting {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drop is not published while the teardown runs (state %s)", st.lifecycle())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, reason, _, _ := st.statusText(); !strings.Contains(reason, "socket reset") {
+		t.Fatalf("reconnecting reason %q", reason)
+	}
+	if epoch := st.epoch.Load(); epoch == rt.epoch {
+		t.Fatalf("the epoch still matches the dying runtime (%d)", epoch)
+	}
+	// An action answers the typed reconnecting error at once; it is not queued for the session that is going away.
+	actx, acancel := context.WithTimeout(ctx, time.Second)
+	defer acancel()
+	start := time.Now()
+	if _, err := st.call(actx, func(*session) (any, error) { return nil, nil }); err == nil {
+		t.Fatal("an action during the teardown returned nil")
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("the action was queued for %s instead of refused", took)
+	}
+	// stop_attack's fast path loads the runtime directly: it must refuse the runtime of the epoch that is gone.
+	if handled, err := st.stopFightFast(); !handled || err == nil {
+		t.Fatalf("stop_attack during the teardown: handled=%v err=%v", handled, err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("stop_attack set the dead session's stop flag and answered success")
+	}
+	cancel()
+	close(hold) // the readers return: the teardown ends and the cancelled context ends the re-entry
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the re-entry did not end")
+	}
+}
+
+// TestServeSelectKeepsTargetWhenTheSendFails: the selected target is committed only after the server was sent the
+// selection. A send that fails leaves the previous target in place, so status and a later attack do not act on a
+// selection the server never received.
+func TestServeSelectKeepsTargetWhenTheSendFails(t *testing.T) {
+	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background())
+	prev := wire.GUID{Low: 0x11, High: 0x22}
+	s.serveRT = &serveRuntime{target: prev}
+	// No sockets and no fake transport: Send fails at once with "no connection 1".
+	if err := s.serveSelect(&objects.Object{GUID: wire.GUID{Low: 0x33}}); err == nil {
+		t.Fatal("serveSelect with no connection returned nil")
+	}
+	if s.serveRT.target != prev {
+		t.Fatalf("the target moved to %v after a failed send, want the previous %v", s.serveRT.target, prev)
+	}
+}
+
+// TestServeStopAttackRefusesAStaleRuntime: stop_attack's fast path skips the queue, so it validates the runtime's
+// epoch after loading it. A drop that published the reconnecting state and bumped the epoch, whose teardown is still
+// running, leaves the old runtime loaded: the call must answer the typed error, not set a flag the dead session can
+// never act on.
+func TestServeStopAttackRefusesAStaleRuntime(t *testing.T) {
+	st := &serveState{}
+	st.install(newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background()), 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+	st.epoch.Store(st.epoch.Load() + 1)
+	if handled, err := st.stopFightFast(); !handled || err == nil {
+		t.Fatalf("stop_attack on a stale runtime: handled=%v err=%v", handled, err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("stop_attack set the stale runtime's stop flag")
+	}
+}
+
+// TestServeStopAttackHoldsTheLifecycleLock: the fast path validates the runtime and writes the stop flag as one step
+// under the lifecycle mutex the drop publishes under. The test holds the fast path between the two: the drop cannot
+// publish until the call finishes, so no call can report a stop whose flag belongs to a session already reconnecting.
+// Once the drop has published, the same fast path answers the typed error and leaves the stale runtime's flag alone.
+func TestServeStopAttackHoldsTheLifecycleLock(t *testing.T) {
+	st := &serveState{}
+	st.install(newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background()), 1)
+	st.setState(serveOnline, "")
+	rt := st.rt.Load()
+	rt.fighting.Store(true)
+
+	validated := make(chan struct{})
+	resume := make(chan struct{})
+	serveStopFightHook = func() {
+		close(validated)
+		<-resume
+	}
+	defer func() { serveStopFightHook = nil }()
+
+	got := make(chan error, 1)
+	go func() {
+		handled, err := st.stopFightFast()
+		if !handled {
+			err = fmt.Errorf("stop_attack did not take the fast path")
+		}
+		got <- err
+	}()
+	<-validated
+	dropped := make(chan struct{})
+	go func() {
+		st.drop(errors.New("the socket reset"))
+		close(dropped)
+	}()
+	select {
+	case <-dropped:
+		t.Fatal("the drop published between the fast path's validation and its stop-flag write")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(resume)
+	if err := <-got; err != nil {
+		t.Fatalf("the fast path that linearised before the drop returned %v", err)
+	}
+	select {
+	case <-dropped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the drop did not publish after the fast path released the lock")
+	}
+	if !rt.stopFight.Load() {
+		t.Fatal("the fast path did not write the stop flag of the session that was still online")
+	}
+	// The drop has published: the same call now sees the stale runtime and must refuse without touching its flag.
+	rt.stopFight.Store(false)
+	handled, err := st.stopFightFast()
+	if !handled {
+		t.Fatal("stop_attack did not take the fast path after the drop")
+	}
+	if err == nil || !strings.Contains(err.Error(), "the link dropped: the socket reset") {
+		t.Fatalf("stop_attack after the drop returned %v", err)
+	}
+	if rt.stopFight.Load() {
+		t.Fatal("the fast path wrote the stop flag of a session already reconnecting")
+	}
+}
