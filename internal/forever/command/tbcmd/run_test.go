@@ -190,6 +190,11 @@ func TestRunTargetMismatchAndRefusals(t *testing.T) {
 		{"repeated key", []string{"run-begin #T", strings.ReplaceAll(runStartRecord, "note=started", "note=a note=b"), end}},
 		{"two start records", []string{"run-begin #T", runStartRecord, runDoneRecord,
 			"run-end count=2 records=2 verb=start #T"}},
+		{"zero start records", []string{"run-begin #T", "run-end count=0 records=0 verb=start #T"}},
+		{"other plan", []string{"run-begin #T", strings.ReplaceAll(runStartRecord, "plan=ragefire_chasm", "plan=other"),
+			end}},
+		{"not running", []string{"run-begin #T", strings.ReplaceAll(runStartRecord, "state=running", "state=paused"),
+			end}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -271,5 +276,55 @@ func TestRunStatusEmptyAll(t *testing.T) {
 	}
 	if len(rep.Runs) != 0 {
 		t.Fatalf("%d run(s)", len(rep.Runs))
+	}
+}
+
+// TestEmptyCursorsRefused: the cursors are numbers the module writes whenever it writes the key; an empty seq=,
+// ev=, leg= or step= is a malformed report, never "not known". Only the state record's tgtentry= and tgthp= are
+// empty when none.
+func TestEmptyCursorsRefused(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Client) error
+		raws []string
+	}{
+		{"run ev", func(c *Client) error {
+			_, err := c.RunStatus(context.Background(), "all")
+			return err
+		}, []string{"run-begin #T", strings.Replace(runStartRecord, "ev=1", "ev=", 1),
+			"run-end count=1 records=1 verb=status #T"}},
+		{"run ev and leg", func(c *Client) error {
+			_, err := c.RunStatus(context.Background(), "all")
+			return err
+		}, []string{"run-begin #T", strings.Replace(strings.Replace(runStartRecord, "ev=1", "ev=", 1), "leg=0", "leg=", 1),
+			"run-end count=1 records=1 verb=status #T"}},
+		{"event seq", func(c *Client) error {
+			_, err := c.RunEvents(context.Background(), "Tankbot", 0, false)
+			return err
+		}, []string{"run-begin #T", "event seq= t=0 kind=start why= #T",
+			"run-end count=1 records=1 verb=events lead=Tankbot last=1 #T"}},
+		{"event step", func(c *Client) error {
+			_, err := c.RunEvents(context.Background(), "Tankbot", 0, false)
+			return err
+		}, []string{"run-begin #T", "event seq=1 t=0 kind=start step= why= #T",
+			"run-end count=1 records=1 verb=events lead=Tankbot last=1 #T"}},
+		{"event leg", func(c *Client) error {
+			_, err := c.RunEvents(context.Background(), "Tankbot", 0, false)
+			return err
+		}, []string{"run-begin #T", "event seq=1 t=0 kind=start leg= why= #T",
+			"run-end count=1 records=1 verb=events lead=Tankbot last=1 #T"}},
+		{"order seq", func(c *Client) error {
+			_, err := c.Pull(context.Background(), "party Tbtank", "mark:skull")
+			return err
+		}, []string{"order-begin #T", "order bot=Tbtank verb=pull seq= status=queued #T",
+			"order-end verb=pull target=party:Tbtank count=1 records=1 queued=1 refused=0 #T"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call(NewClient(oneReply(tc.raws...)))
+			if !errors.Is(err, ErrBadValue) {
+				t.Fatalf("err %v, want ErrBadValue", err)
+			}
+		})
 	}
 }

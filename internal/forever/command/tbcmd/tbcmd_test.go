@@ -775,3 +775,102 @@ func TestEmptyValueAndLowerCaseHex(t *testing.T) {
 		t.Fatalf("lower-case hex: err %v, want ErrBadReport", err)
 	}
 }
+
+// TestStateEmptyTargetNumbers: the command reference marks tgtentry= and tgthp= "empty when none" (the engine has
+// no target). The empty value reads as "not known", never as a zero and never as a parse failure; a present number
+// still has to be a number in range.
+func TestStateEmptyTargetNumbers(t *testing.T) {
+	line := strings.Replace(fullState, "tgtentry=426 tgthp=100", "tgtentry= tgthp=", 1)
+	b := mustBot(t, line)
+	if b.HasTargetEntry || b.HasTargetHPPct || b.TargetEntry != 0 || b.TargetHPPct != 0 {
+		t.Fatalf("empty target numbers: has=%v/%v value=%d/%d",
+			b.HasTargetEntry, b.HasTargetHPPct, b.TargetEntry, b.TargetHPPct)
+	}
+	bad := strings.Replace(line, "tgthp=", "tgthp=101", 1)
+	if _, err := NewClient(oneReply("state-begin #T", bad, stateEndT(1, 0, "yes", ""))).
+		StateReport(context.Background(), "party"); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("out-of-range tgthp: err %v, want ErrBadValue", err)
+	}
+}
+
+// TestStateEmptyNumbersRefused: every other optional number is absent when unknown, never empty (the reference:
+// "an unknown number is an omitted key"). An empty manapct= or corpsemap= is a report the client must not act on,
+// not a zero.
+func TestStateEmptyNumbersRefused(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"manapct", strings.Replace(fullState, "pwmax=100", "pwmax=100 manapct=", 1)},
+		{"corpsemap", strings.Replace(fullState, "pos=1.25,2.5,3.75",
+			"pos=1.25,2.5,3.75 corpsemap=", 1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewClient(oneReply("state-begin #T", tc.line, stateEndT(1, 0, "yes", ""))).
+				StateReport(context.Background(), "party")
+			if !errors.Is(err, ErrBadValue) {
+				t.Fatalf("empty %s: err %v, want ErrBadValue", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestStateEmptyTextValues: the keys the reference writes empty when there is none are text, not numbers: an empty
+// dl=, dm=, ord=, lastorder= is "not known", and the record is whole.
+func TestStateEmptyTextValues(t *testing.T) {
+	line := strings.Replace(fullState, "dl=self dm=3.4", "dl= dm=", 1)
+	line = strings.Replace(line, "ord=41:ok", "ord=", 1)
+	line = strings.Replace(line, "lastorder=pull", "lastorder=", 1)
+	b := mustBot(t, line)
+	if b.DistLeader.Has || b.DistMaster.Has {
+		t.Fatalf("empty distances read as present: %+v %+v", b.DistLeader, b.DistMaster)
+	}
+	if b.Order.Status != "" || b.LastOrder != "" {
+		t.Fatalf("empty order read as %+v lastorder %q", b.Order, b.LastOrder)
+	}
+}
+
+// TestStateEngineOff: a bot whose engine is off writes stuck=noengine and carries no strategy lists (co= and nc=
+// are absent). That is a typed state, not a parse failure: NoEngine is set, the lists are empty, and every other
+// required key is still required. The same record with engine=yes and no lists is malformed.
+func TestStateEngineOff(t *testing.T) {
+	line := "state bot=Tbret role=dps rolesrc=auto class=rogue level=17 hp=350 hpmax=420 hppct=83 " +
+		"power=energy pw=60 pwmax=100 st=non-combat incombat=no tgt=0000000000000000000000000000BEEF tgtentry=426 tgthp=100 victim= hold=no mv=stay " +
+		"stuck=noengine engine=no pos=1.0,2.0,3.0 map=0 inst=0 dl= dm= ord= lastorder= " +
+		"cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= #T"
+	rep, err := NewClient(oneReply("state-begin #T", line, stateEndT(1, 0, "yes", ""))).
+		StateReport(context.Background(), "Tbret")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	b := rep.Bots[0]
+	if !b.NoEngine || b.Engine || b.Stuck.Kind != "noengine" {
+		t.Fatalf("engine state: engine=%v noengine=%v stuck=%+v", b.Engine, b.NoEngine, b.Stuck)
+	}
+	if len(b.CombatStrategies) != 0 || len(b.NonCombatStrategies) != 0 {
+		t.Fatalf("strategy lists: %v %v", b.CombatStrategies, b.NonCombatStrategies)
+	}
+	// engine=no alone is the same typed state.
+	noEngine := strings.Replace(line, "stuck=noengine", "stuck=", 1)
+	if b := mustBot(t, noEngine); !b.NoEngine {
+		t.Fatalf("engine=no without stuck=noengine: %+v", b)
+	}
+	// The engine on is the other state: both lists are required there.
+	on := strings.Replace(line, "stuck=noengine engine=no", "stuck= engine=yes", 1)
+	if _, err := NewClient(oneReply("state-begin #T", on, stateEndT(1, 0, "yes", ""))).
+		StateReport(context.Background(), "Tbret"); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("engine on without co=/nc=: err %v, want ErrBadReport", err)
+	}
+}
+
+// mustBot parses one state line and returns its bot.
+func mustBot(t *testing.T, line string) BotState {
+	t.Helper()
+	rep, err := NewClient(oneReply("state-begin #T", line, stateEndT(1, 0, "yes", ""))).
+		StateReport(context.Background(), "party")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	return rep.Bots[0]
+}

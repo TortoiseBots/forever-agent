@@ -131,6 +131,15 @@ func (c *Client) RunStart(ctx context.Context, leader, plan string) (RunReport, 
 	if len(out.Runs) != 1 {
 		return out, fmt.Errorf("%w: run start carried %d run record(s), want 1", ErrBadReport, len(out.Runs))
 	}
+	// The one record is the run the command asked for: the same plan, and running. A zero-record, a several-record
+	// or a record naming another plan or state is a report the client must not act on.
+	st := out.Runs[0]
+	if st.Plan != p {
+		return out, fmt.Errorf("%w: run start for plan %q, the command named %q", ErrBadReport, st.Plan, p)
+	}
+	if st.State != "running" {
+		return out, fmt.Errorf("%w: run start state=%q, want running", ErrBadReport, st.State)
+	}
 	return out, nil
 }
 
