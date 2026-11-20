@@ -12,6 +12,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -276,8 +277,8 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 			ended = "no_fight"
 			break
 		}
-		if gov.Ended != "" {
-			ended = gov.Ended
+		if e := gov.EndedNow(); e != "" {
+			ended = e
 			break
 		}
 		if !deadline.IsZero() && !now.Before(deadline) {
@@ -840,6 +841,10 @@ type Governor struct {
 	Hurt   func(pct float64) error
 	Refill func() error
 
+	// mu serialises Tick (the sampler goroutine) with the situation loop's
+	// EndedNow read: the governor is the one object two goroutines share.
+	mu sync.Mutex
+
 	LastDamage   time.Time
 	Rescues      []time.Time
 	Ended        string
@@ -911,11 +916,21 @@ func (g *Governor) sampleKey() string {
 	return "player"
 }
 
+// EndedNow is the governor's end reason (empty while it runs), safe to read
+// from the situation's own goroutine.
+func (g *Governor) EndedNow() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.Ended
+}
+
 // Tick is one sampler tick's governor step (the python Governor.tick).
 func (g *Governor) Tick(sample map[string]any) {
 	if g == nil || sample == nil {
 		return
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.Stopped != nil && g.Stopped() {
 		return
 	}
