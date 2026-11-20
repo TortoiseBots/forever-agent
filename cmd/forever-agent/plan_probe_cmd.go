@@ -17,8 +17,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/planprobe"
 )
 
-const planProbeUsage = "usage: forever-agent plan-probe [--dir dungeons] [--sql FILE [--plan NAME]] --mmaps DIR [--json] [--out DIR] [--from-step N] [<plan>|<path.json>]"
-
+const planProbeUsage = "usage: forever-agent plan-probe [--dir dungeons] [--sql FILE [--plan NAME]] --mmaps DIR [--json] [--out DIR] [--from-step N] [<plan>|<path.json>] | forever-agent plan-probe --forever --sql FILE [--plan NAME] --mmaps DIR --spawns FILE [--json] [--out DIR] [--from-step N]"
 const (
 	// exitPlanProbeBad: at least one segment is bad (a plan the run leader should not walk as it stands).
 	exitPlanProbeBad = 20
@@ -42,14 +41,18 @@ var planProbeOpen = func(dir string) *planProbeNavmesh {
 }
 
 // planProbeCmd measures the run leader's rows of one plan on the navmesh and prints where its hops are bad or worth a look
-// (README, "Plan probe"). It reads plan files, a migration and the mmaps folder, and nothing else.
+// (README, "Plan probe"). It reads plan files, a migration and the mmaps folder, and nothing else. With --forever it
+// reads the Forever side's own inputs instead: the run leader's exported migration (--sql, as plan-export --forever
+// writes it) matched against the spawn list (--spawns) for unit positions, on the v16 tiles (--mmaps) for paths.
 func planProbeCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("plan-probe", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "dungeons", "the folder with the plan files")
-	sqlFile := fs.String("sql", "", "a deployed world migration (the exact rows the server runs; recommended)")
+	sqlFile := fs.String("sql", "", "a deployed world migration (the exact rows the server runs; recommended); with --forever: the run leader's exported migration, as plan-export --forever writes it")
 	planFlag := fs.String("plan", "", "with --sql: the plan to probe (needed when the file holds several)")
-	mmaps := fs.String("mmaps", "", "folder with the server's mmaps (<map>.mmap and <map>*.mmtile); required")
+	forever := fs.Bool("forever", false, "probe against the Forever side's inputs: a run leader's exported migration (--sql) matched against a spawn list (--spawns), on v16 tiles (--mmaps)")
+	spawns := fs.String("spawns", "", "with --forever: the spawn list TSV (guid entry x y z movetype [kind]) the probe matches the row and unit entries and positions against")
+	mmaps := fs.String("mmaps", "", "folder with the server's mmaps: v6 (<map>.mmap and <map>*.mmtile) or, with --forever, v16 (MMMM.mmap and MMMM_XX_YY.mmtile); required")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
 	out := fs.String("out", "", "folder for probe-<plan>.json and probe-<plan>.txt")
 	fromStep := fs.Int("from-step", 0, "only the segments that end at this run-leader step or later")
@@ -69,6 +72,15 @@ func planProbeCmd(args []string, stdout, stderr io.Writer) int {
 	if given["from-step"] && *fromStep < 1 {
 		return fail("--from-step takes a step number from 1")
 	}
+	if *forever && *sqlFile == "" {
+		return fail("--forever probes a run leader's exported migration: pass --sql FILE (plan-export --forever output)")
+	}
+	if *forever && *spawns == "" {
+		return fail("--forever needs --spawns FILE (the spawn list TSV the rows' entries and units are matched against)")
+	}
+	if !*forever && *spawns != "" {
+		return fail("--spawns needs --forever (the old-server inputs carry their own world)")
+	}
 	switch {
 	case *planFlag != "" && *sqlFile == "":
 		return fail("--plan picks a plan in the --sql file; name the plan as the argument otherwise")
@@ -79,6 +91,9 @@ func planProbeCmd(args []string, stdout, stderr io.Writer) int {
 		return fail("name one plan, or pass --sql FILE")
 	}
 
+	if *forever {
+		return planProbeForever(*mmaps, *sqlFile, *planFlag, *spawns, *dir, *fromStep, *asJSON, *out, stdout, stderr)
+	}
 	nv := planProbeOpen(*mmaps)
 	defer nv.close()
 	rows, source, notes, err := planProbeRows(*sqlFile, *planFlag, *dir, fs.Arg(0), nv.cut)
