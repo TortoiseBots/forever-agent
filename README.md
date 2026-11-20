@@ -58,6 +58,24 @@ the world server's refusal is the command's error. By default the
 instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
 `--allow-instance-redirect` permits a different host for clustered servers.
 
+`forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
+[--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
+[--parent MAP=PARENT] [--disconnect-grace DURATION]` keeps that character in the world and serves the local
+JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer token, loopback only, the same
+error codes. The password comes from `--password-file` or `FOREVER_PASSWORD` and is never printed. The listener is
+bound before the login; `--listen` defaults to `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and
+`rpc-<port>.token`, so `rpc DIR status` works unchanged; without it the token file is `rpc-<port>.token` in the
+working directory. `status`, `units`, `unit`, `party`, `chat_log`, `chat`, `gm`, `gm_revive`, `bot`, `invite`,
+`accept_invite`, `leave_group`, `target`, `attack`, `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`,
+`walk_to`, `path_to`, `walk_path`, `area_trigger`, the five death methods, `addon_send` and `logout` are ported;
+`--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error.
+Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
+with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
+session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
+state (`online`, `reconnecting`, `offline`); while `reconnecting` every action answers `-32005` and nothing is queued
+for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
+(default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
+
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
 `CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as
