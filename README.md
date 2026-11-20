@@ -97,6 +97,17 @@ state (`online`, `reconnecting`, `offline`); while `reconnecting` every action a
 for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
 (default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
 
+`forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]` is the CLI client of
+that socket: one method call with a JSON object or array (or `-` for stdin, or nothing), printing the pretty JSON
+result (compact with `--raw`) or the typed `error: <code> <message>` with exit 16. `list` first calls the selected
+daemon's `status`, then prints every method the socket answers, with the ones this server does not port marked
+`(not ported)`; a stopped daemon fails `list` like any other call, so the table is never printed for a socket nobody
+answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
+token file, nothing but 127.0.0.1). A call the server refuses answers its typed error; a daemon that is not running
+is `forever rpc: cannot reach` with exit 15. Ctrl-C or an expired `--timeout` aborts the HTTP request (the connection
+is closed) and the command waits for the call to stop before exiting 1 with `cancelled:` or `timed out after ...`; no
+result is printed, so a caller must not retry an irreversible method as if the first call had been refused.
+
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
 `CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as
