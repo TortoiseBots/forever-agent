@@ -55,6 +55,8 @@ const (
 	CMSGQuestGiverHello      uint32 = 0x3E002B
 	CMSGSpiritHealerActivate uint32 = 0x3E0045
 	CMSGCloseInteraction     uint32 = 0x3E0028
+	CMSGTrainerList          uint32 = 0x3E0043
+	CMSGTrainerBuySpell      uint32 = 0x3E0044
 	CMSGQueryPlayerNames     uint32 = 0x440010
 	CMSGQueryCreature        uint32 = 0x3D0141
 
@@ -174,13 +176,17 @@ const (
 	SMSGNPCInteractionOpenResult uint32 = 0x45031A
 	// A quest-only NPC's answer to the quest hello (Opcodes.h:2200): its quest list.
 	SMSGQuestGiverQuestList uint32 = 0x65001A
-	SMSGMoveSetRunSpeed     uint32 = 0x5E0020
-	SMSGMoveSetSwimSpeed    uint32 = 0x5E0022
-	SMSGMoveSetWaterWalk    uint32 = 0x5E002B
-	SMSGMoveSetLandWalk     uint32 = 0x5E002E
-	SMSGSendKnownSpells     uint32 = 0x670019
-	SMSGLevelUpInfo         uint32 = 0x450194
-	SMSGSpellExecuteLog     uint32 = 0x670033
+	// The trainer round's answers (Opcodes.h:1810, 2430-2431): the learn, the list and the failed buy.
+	SMSGLearnedSpells    uint32 = 0x670040
+	SMSGTrainerList      uint32 = 0x45018A
+	SMSGTrainerBuyFailed uint32 = 0x45018B
+	SMSGMoveSetRunSpeed  uint32 = 0x5E0020
+	SMSGMoveSetSwimSpeed uint32 = 0x5E0022
+	SMSGMoveSetWaterWalk uint32 = 0x5E002B
+	SMSGMoveSetLandWalk  uint32 = 0x5E002E
+	SMSGSendKnownSpells  uint32 = 0x670019
+	SMSGLevelUpInfo      uint32 = 0x450194
+	SMSGSpellExecuteLog  uint32 = 0x670033
 )
 
 // Loot and game objects (Opcodes.h:357-358, 579-583, 1499-1500, 1805, 1865-1874, 2395):
@@ -285,6 +291,8 @@ var clientNames = map[uint32]string{
 	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",
 	CMSGGossipSelectOption:             "CMSG_GOSSIP_SELECT_OPTION",
 	CMSGQuestGiverHello:                "CMSG_QUEST_GIVER_HELLO",
+	CMSGTrainerList:                    "CMSG_TRAINER_LIST",
+	CMSGTrainerBuySpell:                "CMSG_TRAINER_BUY_SPELL",
 	CMSGSpiritHealerActivate:           "CMSG_SPIRIT_HEALER_ACTIVATE",
 	CMSGCloseInteraction:               "CMSG_CLOSE_INTERACTION",
 	CMSGAttackSwing:                    "CMSG_ATTACK_SWING",
