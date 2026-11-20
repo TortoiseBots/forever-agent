@@ -42,6 +42,9 @@ type conn struct {
 	// so the caller's packet count includes them; handshakeDone stops the recording when the handshake ends.
 	handshakeNames []string
 	handshakeDone  bool
+	// buildAuthKeyUsed records that CMSG_AUTH_SESSION carried a digest made from a 16-byte build auth key; a
+	// refusal of this connection carries it (Refused.BuildAuthKeyUsed).
+	buildAuthKeyUsed bool
 }
 
 func (c *conn) log(format string, args ...any) {
@@ -54,17 +57,17 @@ func (c *conn) log(format string, args ...any) {
 // and the list is reported as part of the packet count, so a flooding server cannot grow it.
 const maxHandshakeNames = 64
 
-// defaultIOTimeout is the deadline of one read or write when the operation's context has none. It bounds a single
-// operation, not the connection's life: a keep-alive loop that passes a context with a long deadline (or none and
-// this default per operation) runs for hours, because each operation arms the socket for itself only.
+// defaultIOTimeout is the deadline of one read or write. It bounds a single operation, not the connection's life: a
+// keep-alive loop arms the socket again for every frame, so a run that keeps receiving traffic for hours runs for
+// hours. The operation's context is what ends the connection (watchContext interrupts the blocked call when it is
+// done); the socket deadline itself is never the context's absolute deadline, or each frame would inherit the
+// connection's end instead of extending the wait for the next one.
 const defaultIOTimeout = 60 * time.Second
 
-// operationDeadline is the deadline one read or write of this connection gets: the context's, or the stated
-// default from now. There is deliberately no connection-wide deadline.
-func operationDeadline(ctx context.Context) time.Time {
-	if d, ok := ctx.Deadline(); ok {
-		return d
-	}
+// operationDeadline is the deadline one read or write of this connection gets: the stated default from now, never
+// the context's absolute deadline, so every frame that arrives extends the wait for the next one. There is
+// deliberately no connection-wide deadline.
+func operationDeadline(context.Context) time.Time {
 	return time.Now().Add(defaultIOTimeout)
 }
 

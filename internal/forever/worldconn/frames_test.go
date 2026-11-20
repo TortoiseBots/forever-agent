@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,65 @@ func TestDeadlinesArePerOperation(t *testing.T) {
 	}
 	if p.Core != wire.SMSGAuthChallenge {
 		t.Fatalf("read %s, want SMSG_AUTH_CHALLENGE", packetName(p))
+	}
+}
+
+// recordingConn records every read deadline armed on the socket.
+type recordingConn struct {
+	net.Conn
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (c *recordingConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadlines = append(c.deadlines, t)
+	c.mu.Unlock()
+	return c.Conn.SetReadDeadline(t)
+}
+
+// TestReadDeadlineExtendsWithEveryFrame: each frame is read under a fresh, relative socket deadline, not under the
+// connection's context deadline. A run that keeps receiving frames (the server's time syncs) must therefore never
+// have a read fail because of an absolute time fixed when the run started. The context here stands in for the
+// run's own deadline and the frames for a stay of many minutes.
+func TestReadDeadlineExtendsWithEveryFrame(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	rc := &recordingConn{Conn: client}
+	c := testConn(rc)
+	defer c.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	const frames = 5
+	for i := range frames {
+		go func() { _, _ = server.Write(encodeFrame(0x4E0000, make([]byte, 65))) }()
+		if _, err := c.readFrame(ctx); err != nil {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+		time.Sleep(20 * time.Millisecond) // one frame per moment, as a stay's time syncs arrive
+	}
+
+	rc.mu.Lock()
+	recorded := append([]time.Time(nil), rc.deadlines...)
+	rc.mu.Unlock()
+	var armed []time.Time
+	for _, d := range recorded {
+		if !d.IsZero() { // the restore after each operation clears the deadline
+			armed = append(armed, d)
+		}
+	}
+	if len(armed) < frames {
+		t.Fatalf("%d read deadline(s) armed for %d frames", len(armed), frames)
+	}
+	for i, d := range armed {
+		if left := time.Until(d); left < defaultIOTimeout/2 {
+			t.Fatalf("read %d was armed %s ahead, want about the per-operation %s rather than the context's 300 ms",
+				i, left.Round(time.Millisecond), defaultIOTimeout)
+		}
+		if i > 0 && d.Before(armed[i-1]) {
+			t.Fatalf("read %d's deadline %s is before read %d's %s", i, d, i-1, armed[i-1])
+		}
 	}
 }
 

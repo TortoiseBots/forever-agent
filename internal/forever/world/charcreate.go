@@ -533,22 +533,28 @@ func openCharScreen(ctx context.Context, opts Options) (*charScreen, error) {
 	if opts.Deadline <= 0 {
 		opts.Deadline = defaultCharScreenDeadline
 	}
-	realm, err := worldconn.Authenticate(ctx, worldconn.Config{
-		Address:               opts.Address,
-		RealmID:               opts.RealmID,
-		RealmAddress:          opts.RealmAddress,
-		RealmJoinTicket:       opts.RealmJoinTicket,
-		ClientSecret:          opts.ClientSecret,
-		JoinSecret:            opts.JoinSecret,
-		ClientBuild:           opts.ClientBuild,
-		RealmBuild:            opts.RealmBuild,
-		BuildAuthKey:          opts.BuildAuthKey,
-		AllowInstanceRedirect: opts.AllowInstanceRedirect,
-		Deadline:              opts.Deadline,
-		Logf:                  opts.Logf,
-	})
-	if err != nil {
-		return nil, err
+	realm := opts.WorldConn
+	if realm == nil {
+		var err error
+		realm, err = worldconn.Authenticate(ctx, worldconn.Config{
+			Address:               opts.Address,
+			RealmID:               opts.RealmID,
+			RealmAddress:          opts.RealmAddress,
+			RealmJoinTicket:       opts.RealmJoinTicket,
+			ClientSecret:          opts.ClientSecret,
+			JoinSecret:            opts.JoinSecret,
+			ClientBuild:           opts.ClientBuild,
+			RealmBuild:            opts.RealmBuild,
+			BuildAuthKey:          opts.BuildAuthKey,
+			AllowInstanceRedirect: opts.AllowInstanceRedirect,
+			Deadline:              opts.Deadline,
+			Logf:                  opts.Logf,
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		opts.logf("char screen: adopting the connection the login authenticated (client build %d)", opts.ClientBuild)
 	}
 	return &charScreen{opts: opts, realm: realm}, nil
 }

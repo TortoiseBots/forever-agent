@@ -15,7 +15,7 @@ import (
 // --stay, then a clean logout. Every step is one line; the packet counts close the output. Secrets never leave
 // the login result: the output prints lengths, names and numbers only.
 func foreverWorldCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]"
+	const usage = "usage: forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION]"
 	fs := flag.NewFlagSet("forever world-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

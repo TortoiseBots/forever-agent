@@ -18,7 +18,7 @@ import (
 )
 
 func foreverFBDungeonCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever fb-dungeon [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--dungeon NAME] [--role tank|healer|dps] [--watch SECONDS] [--leave=false] [--settle DURATION] [--stay DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever fb-dungeon [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--dungeon NAME] [--role tank|healer|dps] [--watch SECONDS] [--leave=false] [--settle DURATION] [--stay DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever fb-dungeon", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

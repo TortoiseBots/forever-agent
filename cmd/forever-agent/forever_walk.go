@@ -18,7 +18,7 @@ import (
 )
 
 func foreverWalkCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS] [--pause DURATION] [--navmesh DIR --to-x X --to-y Y --to-z Z [--parent MAP=PARENT[,..]]]"
+	const usage = "usage: forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS] [--pause DURATION] [--navmesh DIR --to-x X --to-y Y --to-z Z [--parent MAP=PARENT[,..]]]"
 	fs := flag.NewFlagSet("forever walk-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon

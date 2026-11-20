@@ -55,8 +55,9 @@ func (r *Realm) checkInstanceTarget(ct ConnectTo) error {
 // switches encryption on. The digest is always checked by the server (unlike the realm's), so this is where a
 // wrong session key shows up.
 func (r *Realm) DialInstance(ctx context.Context, ct ConnectTo) (*Instance, error) {
-	// one operation, one deadline: the context's, or the stated default from now. The realm's handshake deadline
-	// is not reused, so a long-lived Realm can open an instance socket an hour later.
+	// one operation, one deadline: the stated default from now (the context's own end still cancels it, since a
+	// child context inherits its parent's). The realm's handshake deadline is not reused, so a long-lived Realm can
+	// open an instance socket an hour later.
 	opCtx, cancel := context.WithDeadline(ctx, operationDeadline(ctx))
 	defer cancel()
 	if err := r.checkInstanceTarget(ct); err != nil {
