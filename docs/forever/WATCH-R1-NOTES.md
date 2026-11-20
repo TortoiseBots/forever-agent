@@ -34,10 +34,19 @@ newest event are refused. `status all` and `stop`'s `pending=`/`stayed=` follow 
 `--watchdog-minutes` (default 10) and `--poll` (default 2 s, clamped 1-30 s).
 
 1. **PREPARE**, then **TRAVEL/ENTER**, exactly as a run: the GM lines, the roster, then the party's own entry and the
-   commander's teleport to the tank. For a watch the roster is where the five names come from (the leader first, then
-   the one healer, then three damage dealers); it refuses a party that is not five host bots above the entry level,
-   the named bot leading, every other member already commanded. That last check is the module's own `not-commanded`
-   condition, caught before the entry instead of at the start.
+   observer's own teleport. The party is the module's: its commander is one of the module's bots, outside the party,
+   and the tank leads. This character is only an outside GM observer: it is never a member and never the commander,
+   and a roster that names it as the commander is refused at PREPARE (`observer-commander`). For a watch the roster
+   is where the five names come from (the tank first, then the one healer, then three damage dealers); it refuses a
+   party that is not five host bots above the entry level, the tank leading or named as the module's run leader, and
+   every member already commanded. That last check is the module's own `not-commanded` condition, caught before the
+   entry instead of at the start. A party command is resolved by the module itself: `.tb enter party` and
+   `.tb tele party` answer with a `target=` line naming what they resolved (`party:commander:<name>` for the bot
+   commander's party, `party:<tank>` for the tank's), and the typed layer reads that line as the success it is
+   instead of refusing an answer with a record in it. The observer teleports on its own after the party is in; a
+   shut gate or a refusal leaves it outside and the watch goes on. The same-map check is the party's: every member on
+   the plan's map in one instance (the observer's map is never compared), and with `--enter none` that check is what
+   proves the party was placed as the watch expects (`enter:party-map`).
 2. **`.tb run start <leader> <plan>`** as one typed action. It is fight-starting: a complete state report taken now,
    everyone ready, budget left. A module refusal ends the watch with `start:<code>`.
 3. **The watch loop**, every `--poll` seconds: one `status` read and one `events since=<last>` read. No order ever
@@ -57,7 +66,11 @@ newest event are refused. `status all` and `stop`'s `pending=`/`stayed=` follow 
      watch with `practice-budget`; a module refusal ends it with `revive:<code>` or `resume:<code>`; `not-dead` means
      the module raised the party itself and only the resume is sent.
    * a lost link ends the watch at once (exit 7) and nothing is sent after it; three failed reads and 30 s without a
-     good one end it with `blind`.
+     good one end it with `blind`. Every end of the watch logs its reason (`watch: end reason=<reason>`), and a
+     blind end names the last read error that blinded it (`watch: blind: ... the last was: <error>`); a state read
+     that fails in PREPARE or a gate logs its first error and, at the blind bound, the error that ended the watch. A
+     member with the engine off is a whole, typed record (`engine=no` or `stuck=noengine`, and no `co=`/`nc=`), not
+     a read failure: the gate reports it as not ready with `noengine:<member>` and PREPARE logs that reason.
 5. **The end**: when the record says `done` or `stopped`, the watch ends there (a done run refuses `.tb run stop`
    with `not-running`, so no stop is asked). Otherwise it sends `.tb run stop <leader> <reason words>` — passive, and
    the one action allowed while a stop is pending — and waits for the state to reach `stopped`, polling as it waits:
@@ -102,6 +115,17 @@ bad percent, repeated key, event kinds, out-of-sequence events, `last` below the
 | teleport entry | the driver's own pre-run orders are allowed; after the start there is none |
 | summary file | the JSON's mode and watch block, one file |
 | source tests | the two sending call sites, the run actions' classes, `watch.go` without the order send |
+| observer outside | the party in the instance and the observer outside: PREPARE passes (the party's map against the plan's), the start goes out, the end is logged |
+| bot commander | a roster led by its tank with the module's bot as commander is adopted; a party led by anyone but the tank or the run's leader is `prepare:leader`; the observer as commander is `prepare:observer-commander` |
+| engine off | a member with `engine=no` is `prepare:noengine` with a logged not-ready line, never `blind` |
+| blind reason | a state read that keeps failing ends `blind` and the log names the read error and the end reason |
+| config refusal | the refusal before anything is sent is logged with its reason |
+
+`tbcmd` (the typed layer): the empty optional numbers (`tgtentry=`, `tgthp=`, `manapct=`, `corpsemap=`) and an empty
+corpse read as "not known"; a bot with the engine off carries no `co=`/`nc=` and is a typed state, while the same
+record with `engine=yes` is refused; a setup answer's `target=party:commander:<name>` line is parsed as the success
+the module sent. `driver` (the plan reader): every plan of `dungeons/` loads with its in-fight run fields
+(`kill_first`, `cc_priority`, `cc_always`, `no_cc`, `summoned_kill_first`, `tank_min_hp`, a boss's `tactics`).
 
 `cmd/forever-agent/forever_watch_test.go`: the dry watch (start, progress, events, done; exit 0), a refused plan
 (exit 2) and the argument checks before any network.
@@ -148,22 +172,30 @@ bd5409e2 Forever: bind the watch to a session, ship dungeon-watch
 No live run this round: the module build with `.tb run` is not on a shared server yet. In this order, each one a
 line of output and a decision before the next:
 
-1. **The module's own start.** Party placed and entered as a run does; `.tb run start <leader> <plan>`. Read the
-   `run` record: does `state=running` and does `step` advance within a minute? If the reply is `not-commanded`, bind
-   the party first (`.tb master party <leader> <commander>`), which the watch's PREPARE reports before the entry.
-2. **The first three events.** `events since=0` twice a minute apart: are there `step`/`pull` events at the pace the
+1. **The module's own start.** The party is the module's own: its tank leads and every member is already bound to
+   the module's bot commander (`.tb master party <tank> <bot commander>`), with the observer outside the party and
+   never its commander. Read `.tb party <tank>` first: the roster's `leader=` is the tank, its `commander=` is that
+   bot, and every member answers `commanded=yes`; the watch's PREPARE refuses anything else (`leader`,
+   `not-commanded`, `observer-commander`). Then `.tb run start <tank> <plan>` as the watch does, and read the `run`
+   record: does `state=running` and does `step` advance within a minute? If the reply is `not-commanded`, the
+   binding above is missing.
+2. **The entry answers.** `.tb tele party <map> <x> <y> <z>` and `.tb enter party`: the answer is the command's
+   `-end` line, with one `target=` record before it when the module resolved the party (`party:commander:<name>` or
+   `party:<tank>`). `forever cmd-check --tb-...` must show the answer parsed as a success, not `travel:error`; the
+   watch reads the same labels, so a party command that resolves to a party other than the roster's is a finding.
+3. **The first three events.** `events since=0` twice a minute apart: are there `step`/`pull` events at the pace the
    plan's legs imply? That is the watchdog's real budget: set `--watchdog-minutes` above the longest measured gap
    between pulls, not the default.
-3. **A pause's reason.** Force one (`.tb run pause`), read `status`: the `why=` text is what the watch prints. A
+4. **A pause's reason.** Force one (`.tb run pause`), read `status`: the `why=` text is what the watch prints. A
    player's pause never resumes by itself; `.tb run resume` is the checked one.
-4. **The wipe path.** `.tb kill party` while the run holds a pull. The module pauses on the wipe; confirm the wipe
+5. **The wipe path.** `.tb kill party` while the run holds a pull. The module pauses on the wipe; confirm the wipe
    event precedes the pause (the watch's rescue trigger) and that `.tb revive party` + `.tb run resume` is what the
    policy accepts, then let the 300 s timer do it once by hand.
-5. **The stop and the stay.** Out of combat, `.tb run stop <leader> <reason words>`: the state must reach `stopped`
+6. **The stop and the stay.** Out of combat, `.tb run stop <leader> <reason words>`: the state must reach `stopped`
    and the members must be released. In combat the reply is `pending=yes`; the watch keeps polling.
-6. **The instance report.** `.tb instance <leader> info` during the run: the bosses' `entry: alive|dead` is what the
+7. **The instance report.** `.tb instance <leader> info` during the run: the bosses' `entry: alive|dead` is what the
    watch prints; check that a boss seen dead stays dead in the summary.
-7. **The poll cost.** Two reads every 2 s is the round's stated interval; if the module's tick cost rises, raise
+8. **The poll cost.** Two reads every 2 s is the round's stated interval; if the module's tick cost rises, raise
    `--poll` before shortening any budget.
 
 The order of the first three: a start that does not tick makes every later step meaningless; the event pace sets the

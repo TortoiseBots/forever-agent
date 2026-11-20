@@ -107,6 +107,12 @@ func (r *Run) Watch(ctx context.Context) Result {
 	if r.stopReason == "" && st != StateLegWalk {
 		r.stop("enter")
 	}
+	// The same-map check is the party's own: every member on the plan's map in one instance. The observer may stand
+	// anywhere; with --enter none this is the one check that the party was placed as the watch expects.
+	if r.stopReason == "" && !r.partyInInstance() {
+		r.logf("watch: the party is not on the plan's map %d in one instance", r.route.Map)
+		r.stop("enter:party-map")
+	}
 	if r.stopReason == "" {
 		r.states = append(r.states, "WATCH")
 		r.watchStart(ctx, w)
@@ -235,8 +241,8 @@ func (r *Run) watchPollStatus(ctx context.Context, w *watchRun) bool {
 		r.linkLost()
 		return false
 	case err != nil:
-		r.watchFail(&w.statusBlind)
 		r.logf("watch: status: %v", err)
+		r.watchFail(&w.statusBlind, "status", err)
 		return r.stopReason == ""
 	}
 	r.watchOK(&w.statusBlind)
@@ -257,8 +263,8 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 		r.linkLost()
 		return false
 	case err != nil:
-		r.watchFail(&w.eventsBlind)
 		r.logf("watch: events: %v", err)
+		r.watchFail(&w.eventsBlind, "events", err)
 		return r.stopReason == ""
 	}
 	r.watchOK(&w.eventsBlind)
@@ -646,21 +652,27 @@ func (r *Run) watchPrint(w *watchRun) {
 	r.logf("watch: %s", line)
 }
 
-// watchBlind is one read's blind rule state: consecutive failures and when the first of the run came.
+// watchBlind is one read's blind rule state: consecutive failures, when the first of the run came, and the last
+// error, so a blind end can always name what blinded it.
 type watchBlind struct {
 	failures int
 	since    time.Time
+	last     error
 }
 
 // watchFail and watchOK are the read failures' own blind rule, kept per read: three failures in a row and
 // Limits.Blind without a good read of the same kind end the watch. A status read that succeeds proves nothing about
-// the event ring, so each read carries its own counters.
-func (r *Run) watchFail(b *watchBlind) {
+// the event ring, so each read carries its own counters. The blind end logs its own reason line with the last read's
+// error: an end with no reason never happens.
+func (r *Run) watchFail(b *watchBlind, kind string, err error) {
 	b.failures++
+	b.last = err
 	if b.failures == 1 {
 		b.since = r.now()
 	}
 	if b.failures >= 3 && !b.since.IsZero() && r.now().Sub(b.since) >= r.lim.Blind {
+		r.logf("watch: blind: %d %s reads failed over %.0fs; the last was: %v", b.failures, kind,
+			r.now().Sub(b.since).Seconds(), b.last)
 		r.stop("blind")
 	}
 }
@@ -809,6 +821,13 @@ func (r *Run) watchSummary(w *watchRun) {
 
 // watchResult is the watch's result: the summary, the reason and the exit code.
 func (r *Run) watchResult(w *watchRun) Result {
+	// Every end of the watch says why in its own log, whatever ended it: the budgets, a module refusal, a lost
+	// link, a blind read (which names its last error), or the run reaching done or stopped.
+	reason := r.stopReason
+	if reason == "" {
+		reason = "end"
+	}
+	r.logf("watch: end reason=%s", reason)
 	res := r.result()
 	if w != nil && w.state == "done" {
 		res.Clear = true

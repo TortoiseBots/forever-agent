@@ -283,18 +283,25 @@ required fields, the one login for concurrent 401s and the size cap) in
 [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md).
 
 `forever-agent forever dungeon-watch --leader NAME --plan PLAN.json --character NAME`
-watches a run a server module that runs dungeon plans leads by itself. The client does what a run does up to the
-entry (PREPARE, then the portal or the teleport, with the same gates), starts the module's run with one typed
-command, and from then on sends no order — an order would pause the run. Every `--poll` seconds (default 2, at most
-30) it reads the module's run record and its event ring, prints the progress (state, step, leg, pulls, deaths,
-wipes, each pause with its reason) and the bosses the instance report gives, and keeps four safety budgets: a
-watchdog (`--watchdog-minutes`, default 10) that pauses a run whose event ring stopped growing and ends the watch; a
-time budget (`--max-minutes`); a wipe budget (`--max-wipes N`: the (N+1)th wipe ends the watch, `0` allows no wipe
-at all and `-1` is no budget); and the practice rescue, which, when a run has been paused on a wipe for 300 s,
-sends one practice `revive party` and one checked `resume`, at most eight times. The rescue fires only for the
+watches a run a server module that runs dungeon plans leads by itself. The party is the module's own: its bot
+commander stands outside it and the tank leads, while this character is only an outside GM observer and never the
+party's commander or a member. The client does what a run does up to the entry (PREPARE checks the roster — the tank
+is the party's leader or the bot the run names — then the portal or the teleport, with the same gates), starts the
+module's run with one typed command, and from then on sends no order — an order would pause the run. A setup
+answer that names the party it resolved (`target=party:commander:<name>`, `target=party:<tank>`) is read as the
+success it is, the observer teleports on its own, and the same-map check compares the party's map with the plan's,
+not the observer's. A plan that carries the format's in-fight run fields (`kill_first`, `cc_priority`, `cc_always`,
+`tank_min_hp`, a boss's `tactics`) loads unchanged: those belong to the module's run. Every `--poll` seconds
+(default 2, at most 30) it reads the module's run record and its event ring, prints the progress (state, step,
+leg, pulls, deaths, wipes, each pause with its reason) and the bosses the instance report gives, and keeps four
+safety budgets: a watchdog (`--watchdog-minutes`, default 10) that pauses a run whose event ring stopped
+growing and ends the watch; a time budget (`--max-minutes`); a wipe budget (`--max-wipes N`: the (N+1)th wipe
+ends the watch, `0` allows no wipe at all and `-1` is no budget); and the practice rescue, which, when a run
+has been paused on a wipe for 300 s, sends one practice `revive party` and one checked `resume`, at most eight times. The rescue fires only for the
 wipe's own pause: the pause event right after the wipe whose reason names the wipe or the dead party, never a later
 pause for another reason. A status read and an event read each keep their own blind rule: three failed reads of the
-same kind and 30 s without a good one end the watch with `blind`, whichever read it is. At the end it sends a stop
+same kind and 30 s without a good one end the watch with `blind`, whichever read it is, and every end logs its
+reason — a blind one names the last read error it saw. At the end it sends a stop
 (a run that ended by itself needs none), waits (bounded) for the module's state to reach stopped, and writes the
 run's usual trace and `<run_id>.forever-run.json` summary with a `watch` block holding the module's own counters,
 the per-leg and per-step evidence, the deaths and the pauses. The stop and that wait run on a context detached from

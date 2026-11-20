@@ -521,8 +521,12 @@ func (r *Run) refresh(ctx context.Context) bool {
 		r.failures++
 		if r.failures == 1 {
 			r.blindSince = now
+			r.logf("state: the read failed (%v); the party is unknown until one answers", err)
 		}
 		if r.failures >= 3 && !r.blindSince.IsZero() && now.Sub(r.blindSince) >= r.lim.Blind {
+			// A blind end always names the read that blinded it.
+			r.logf("blind: the state read failed %d times over %.0fs; the last was: %v", r.failures,
+				now.Sub(r.blindSince).Seconds(), err)
 			r.stop("blind")
 		}
 		return false
@@ -566,8 +570,10 @@ func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 	return t, err == nil
 }
 
-// ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on our map and
-// instance, its master's distance known and short, and its last order not failed. It returns the first failing reason.
+// ready is Ready(P): fresh, five lines, every bot alive, not resting, engine on, not stuck, not blocked, on the run's
+// map (a watch: on the party's own map, the observer aside) and in one instance, its master's distance known and
+// short, and its last order not failed. A bot with the engine off is not ready with the reason noengine:<name>. It
+// returns the first failing reason.
 func (r *Run) ready() (bool, string) {
 	if !r.reportComplete() {
 		return false, "report"
@@ -576,19 +582,26 @@ func (r *Run) ready() (bool, string) {
 		return false, "stale"
 	}
 	inst := uint32(0)
+	// The map every member must stand on: a run's is the commander's (the party is with it); a watch's is the
+	// party's own, because the observer may still be outside. Every member on one map is what either needs; the
+	// plan's map itself is checked at the entry and before a watched run starts.
+	want := r.mapID
+	if r.cfg.Watch {
+		want = r.rep.Bots[0].Map
+	}
 	for i, b := range r.rep.Bots {
 		switch {
 		case isDead(b):
 			return false, "dead:" + b.Name
 		case b.Resting:
 			return false, "resting:" + b.Name
-		case !b.Engine:
-			return false, "engine:" + b.Name
+		case b.NoEngine:
+			return false, "noengine:" + b.Name
 		case b.Stuck.Kind == "blocked":
 			return false, "stuck:" + b.Name
 		case blocked(b) != "":
 			return false, "block:" + blocked(b)
-		case b.Map != r.mapID:
+		case b.Map != want:
 			return false, "map:" + b.Name
 		case b.Order.Status == "fail":
 			return false, "order:" + b.Name

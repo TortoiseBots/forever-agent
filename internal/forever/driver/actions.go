@@ -150,6 +150,9 @@ type ActionReport struct {
 	Info *tbcmd.InstanceInfoReport
 	// Run is the run record ActionRunStart, ActionRunStop, ActionRunPause and ActionRunResume answer with.
 	Run *tbcmd.RunState
+	// Targets are the `target=` labels a setup answer named: the party (its leader or the commander it was bound
+	// to) a party command resolved to, or the one character. Empty for an answer that only acknowledges.
+	Targets []tbcmd.ActionTarget
 	// Code is the module's refusal code when the action was refused ("refused" for a bad reply or a timeout).
 	Code string
 }

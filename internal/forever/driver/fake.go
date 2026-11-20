@@ -193,6 +193,13 @@ type Fake struct {
 	DropOn string
 	// FailEvents answers every event read with this error (a read that fails while the status read answers).
 	FailEvents error
+	// FailState answers every state read with this error (a read that blinds a watch's PREPARE).
+	FailState error
+	// BotCommander is the commander a watched roster names: the module's own bot, outside the party. Empty in a run,
+	// where the roster's commander is this character, and defaulted to a name outside the party in a watch.
+	BotCommander string
+	// RosterLeader overrides the roster's leader, for a party whose leader is not the bot the run names.
+	RosterLeader string
 }
 
 // FakeDeath is one scripted death: at After, the party member whose GUID low word is Unit dies.
@@ -271,6 +278,10 @@ func NewFakeWith(route *Route, cfg Config, patrols bool) *Fake {
 		// A watch names only the leader; the scripted module's party is the leader's own.
 		cfg.Party = []string{cfg.Leader, "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
 		f.cfg.Party = cfg.Party
+	}
+	if cfg.Watch && f.BotCommander == "" {
+		// The module's own bot commander, outside the party: never the observer.
+		f.BotCommander = "Botcmd"
 	}
 	for i, name := range cfg.Party {
 		b := &fakeBot{
@@ -355,6 +366,9 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	if err := f.linkErr(); err != nil {
 		return tbcmd.StateReport{}, err
 	}
+	if f.FailState != nil {
+		return tbcmd.StateReport{}, f.FailState
+	}
 	f.missingNow = f.DistMissingAt == f.stateCalls
 	defer func() { f.missingNow = false }()
 	if f.OnState != nil {
@@ -389,7 +403,7 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 			Name: b.name, Role: b.role, RoleSource: "forced", Class: b.class, Level: b.level,
 			HP: b.hp, HPMax: b.hpMax, HPPct: b.hp * 100 / max(b.hpMax, 1),
 			PowerType: "rage", Power: 50, PowerMax: 100,
-			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine,
+			State: "non-combat", InCombat: b.inCombat, Hold: false, Move: b.move, Engine: b.engine, NoEngine: !b.engine,
 			X: float64(b.pos[0]), Y: float64(b.pos[1]), Z: float64(b.pos[2]),
 			Map: b.mapID, Instance: b.inst,
 			DistLeader: tbcmd.Distance{Has: true, Kind: "self"},
@@ -520,14 +534,23 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 	if err := f.linkErr(); err != nil {
 		return tbcmd.PartyReport{}, err
 	}
-	rep := tbcmd.PartyReport{Leader: f.cfg.Tank(), Commander: f.cfg.Commander, Count: len(f.bots), Bots: len(f.bots)}
-	for i, name := range f.cfg.Party {
+	// A watch's party is commanded by the module's own bot, outside the party; a run's by this character.
+	commander := f.cfg.Commander
+	if f.cfg.Watch && f.BotCommander != "" {
+		commander = f.BotCommander
+	}
+	leader := f.cfg.Tank()
+	if f.RosterLeader != "" {
+		leader = f.RosterLeader
+	}
+	rep := tbcmd.PartyReport{Leader: leader, Commander: commander, Count: len(f.bots), Bots: len(f.bots)}
+	for _, name := range f.cfg.Party {
 		b := f.bots[name]
 		rep.Members = append(rep.Members, tbcmd.PartyMember{
-			Name: b.name, Leader: i == 0, Online: true, Bot: true, HasBot: true,
+			Name: b.name, Leader: strings.EqualFold(name, leader), Online: true, Bot: true, HasBot: true,
 			Class: b.class, HasClass: true, Level: b.level, HasLevel: true,
 			Role: b.role, HasRole: true, Engine: b.engine, HasEngine: true,
-			Master: f.cfg.Commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
+			Master: commander, HasMaster: true, Commanded: b.name != f.Uncommanded, HasCmd: true,
 		})
 	}
 	return rep, nil
