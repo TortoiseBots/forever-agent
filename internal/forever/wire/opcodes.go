@@ -158,6 +158,24 @@ const (
 	SMSGSpellDelayed         uint32 = 0x670032
 	SMSGLogXPGain            uint32 = 0x450190
 	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	// The core-gains round (Opcodes.h:922, 1262, 1466-1472, 1675, 2162, 2361-2384, 2415-2417): the advanced
+	// combat log flag, the pushed threat lists, the encounter packets and the combat-log kinds this round decodes.
+	CMSGSetAdvancedCombatLogging uint32 = 0x3D0193
+	SMSGThreatUpdate             uint32 = 0x450186
+	SMSGHighestThreatUpdate      uint32 = 0x450185
+	SMSGThreatRemove             uint32 = 0x450187
+	SMSGThreatClear              uint32 = 0x450188
+	SMSGEncounterStart           uint32 = 0x450228
+	SMSGEncounterEnd             uint32 = 0x450229
+	SMSGBossKill                 uint32 = 0x4B002B
+	SMSGSpellInterruptLog        uint32 = 0x67000D
+	SMSGSpellDispellLog          uint32 = 0x670007
+	SMSGSpellMissLog             uint32 = 0x670034
+	SMSGSpellInstakillLog        uint32 = 0x670021
+	SMSGEnvironmentalDamageLog   uint32 = 0x67000E
+	SMSGSpellAbsorbLog           uint32 = 0x67000C
+	SMSGProcResist               uint32 = 0x450205
+	SMSGSpellOrDamageImmune      uint32 = 0x67001D
 	// The rest of the death flow (Opcodes.h:27, 228, 1948-1976, 377, 430, 1318): the graveyard, the corpse, a
 	// resurrection offer, the spirit healer's menu and the movement state a ghost is given.
 	SMSGResurrectRequest     uint32 = 0x450012
@@ -276,6 +294,7 @@ var clientNames = map[uint32]string{
 	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
 	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
+	CMSGSetAdvancedCombatLogging:    "CMSG_SET_ADVANCED_COMBAT_LOGGING",
 	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
 	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",
 	CMSGAreaTrigger:                 "CMSG_AREA_TRIGGER",
