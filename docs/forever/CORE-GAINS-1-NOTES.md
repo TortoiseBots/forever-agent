@@ -67,7 +67,8 @@ instance state.
 The driver and the watch read it first:
 
 - `driver.World` gains `ThreatTable(now)` (the pushed lists shaped like the module's report, with the mob's entry,
-  name, health percent and position from the world model) and `Encounters`.
+  name, health percent, position and the resolved victim from the world model; the report lists the entries highest
+  threat first, since the wire order is a heap walk) and `Encounters`/`EncounterOpen` (C).
 - `Run.threat` merges the pushed lists into the last whole `.tb threat` report whenever they are fresh: a mob the push
   covers takes the pushed line (its exact threat and victim), a mob only the push lists is added, and every mob only
   the module lists stays. A pushed snapshot alone is never served as the whole answer, so a mob outside this client's
