@@ -145,13 +145,12 @@ func (s *session) spellNamesFor(ids []int32) map[uint32]string {
 	for id := range seen {
 		data, ok := records[id]
 		if !ok {
-			if data, found, ok := s.dbCache().Get(tables.TableSpellName, id); ok && found {
-				records[id] = data
-			} else {
+			cached, found, hit := s.dbCache().Get(tables.TableSpellName, id)
+			if !hit || !found {
 				continue
 			}
+			data = cached
 		}
-		data = records[id]
 		if name, err := tables.ParseSpellName(data, id); err == nil && name.Name != "" {
 			out[id] = name.Name
 		}

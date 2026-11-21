@@ -17,7 +17,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
-	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
@@ -497,34 +496,16 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 	// callers that pass the filter pay the fetch.
 	hostile := map[int32]bool{}
 	if p.Hostile != nil {
-		units := s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ())
-		var ask []uint32
-		seen := map[uint32]bool{}
-		for _, o := range units {
+		for _, o := range s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ()) {
 			id := o.Info.FactionTemplate
-			if id <= 0 || seen[uint32(id)] {
+			if _, done := hostile[id]; done {
 				continue
 			}
-			seen[uint32(id)] = true
-			if _, _, ok := s.dbCache().Get(tables.TableFactionTemplate, uint32(id)); !ok {
-				ask = append(ask, uint32(id))
-			}
-		}
-		if len(ask) > 0 {
-			if _, err := s.fetchRecords(tables.TableFactionTemplate, ask); err != nil {
-				return nil, err
-			}
-		}
-		own, err := s.ownFactionTemplate()
-		if err != nil {
-			return nil, err
-		}
-		for id := range seen {
-			tmpl, err := s.factionTemplate(id)
+			h, err := s.hostileToSelf(id)
 			if err != nil {
 				return nil, err
 			}
-			hostile[int32(id)] = tmpl.IsHostileTo(own)
+			hostile[id] = h
 		}
 	}
 	now := s.Now()
