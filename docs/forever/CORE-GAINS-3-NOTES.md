@@ -143,15 +143,25 @@ server check.
 
 `internal/forever/tables/tables_test.go`: query/reply round trips with
 hand-made fixtures, short/hostile replies never panic (every truncation,
-an oversize size, trailing bytes, status 7, short records), not-found
-statuses and empty records as typed results, the cache bound (eviction
-order, misses cached, use-refresh), the batch split, and faction
-hostility (Stormwind vs Orc/human/neutral, list vs mask order).
+an oversize size, status 7, short records), not-found statuses and empty
+records as typed results, the cache bound (eviction order, misses cached
+with a TTL, use-refresh, concurrent read/write under `-race`), the batch
+split, the hotfix optional-data tail (a tailed SpellName and FactionTemplate
+still parse, per HotfixHandler.cpp:52-58), and faction hostility (Stormwind
+vs Horde/Alliance-player templates with the real player bit, list vs mask
+order, `IsHostileToPlayers` only with the player bit in the enemy group).
 `internal/forever/world/dbquery_test.go`: the fetch against the
-handler-boundary fake (asks once, caches, batches of 64, misses cached,
-wrong-table and short replies refused). `internal/dashboard`:
-`TestServerSpellNamesOverride` (server wins, packed table behind it,
-clear restores today, unknown stays `"spell <id>"`).
+handler-boundary fake (asks once, caches, batches of 64, misses cached
+with expiry, wrong-table and short replies refused, duplicate ids asked
+once, one deadline per batch for silent and answered batches, timed-out
+ids negatively cached), the spell names on `serveEventsPage` (two named
+ids and one unnamed in one batch, real session path), and the `units`
+hostile filter (Horde mob kept, Alliance mob and self kept by the friendly
+filter, one batched template fetch). `internal/dashboard`:
+`TestServerSpellNamesOverride` (server wins, packed table behind it for an
+id the server did not name — the assert names `Rejuvenation`, so it can
+fail — clear restores today, unknown stays `"spell <id>"`) and the
+concurrent names test under `-race`.
 
 ## Gates
 
