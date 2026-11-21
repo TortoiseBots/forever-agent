@@ -26,6 +26,10 @@ const (
 	// knockEchoFor is how long the server's echo of a mover's ack is owed. The echo follows the ack within a round trip,
 	// so a self relay after this is a stray and records nothing.
 	knockEchoFor = 5 * time.Second
+	// knockConfirmFor is how long a self landing waits for the server to state the mover's position. The client flies a
+	// flat arc, so the landing stays a simulation until a teleport, a movement update or a create block for the mover
+	// gives the position; past this bound its row is written as the simulation.
+	knockConfirmFor = 5 * time.Second
 	// knockBeat is the airborne heartbeat cadence: the client's 500 ms movement tick, the same one Mover uses.
 	knockBeat = 500 * time.Millisecond
 	// knockGravity and knockTerminalVelocity are Movement::gravity (MovementTypedefs.h:81) and
@@ -62,6 +66,20 @@ type selfFlight struct {
 	landY      float32
 	landZ      float32
 	nextBeat   time.Time
+}
+
+// selfLanding is the mover's own landing before the server states where the mover is. The client flies a flat arc, so
+// the landing position is its simulation until a teleport, a movement update or a create block for the mover gives the
+// position. The landing row is written once: at the stated position, or at the simulation when the bound passes.
+type selfLanding struct {
+	at         time.Time // the landing's moment: the row's time
+	deadline   time.Time // past this, the simulation stands
+	simX       float32   // the flat arc's landing position
+	simY       float32
+	simZ       float32
+	takeoffZ   float32 // the takeoff's height, for the drop
+	hasTakeoff bool
+	airMS      int32
 }
 
 // newSelfFlight starts the arc at the mover's position. The horizontal direction is the core's unit vector
@@ -134,6 +152,8 @@ func knockFallDrop(t, v0 float64) float64 {
 // index (the ack index; MoveKnockBackAck::Read, MovementPackets.cpp:981-987), and starts the client-side arc. Only
 // the active mover gets this packet, so a packet for another GUID is recorded without an ack.
 func (s *session) selfKnockback(k objects.KnockBack, now time.Time) {
+	// A landing the server never stated is settled before the next takeoff row, so the rows stay in order.
+	s.finishSelfLanding(false, 0, 0, 0)
 	p := knockPending{at: now, horz: k.HorzSpeed, vert: k.VertSpeed, self: k.Mover == s.self}
 	if k.Mover == s.self && s.mover != nil {
 		p.x, p.y, p.z = s.mover.X, s.mover.Y, s.mover.Z
@@ -252,6 +272,10 @@ func (s *session) knockMove(mi objects.MovementInfo, now time.Time) {
 // The session's packet waits call it, so the flight runs wherever the client is waiting (a walk, a settle, serve's
 // idle loop).
 func (s *session) flightTick(now time.Time) error {
+	if s.landing != nil && now.After(s.landing.deadline) {
+		// The server stated no position within the bound: the client's flat arc stands as the simulation.
+		s.finishSelfLanding(false, 0, 0, 0)
+	}
 	f := s.flight
 	if f == nil {
 		return nil
@@ -297,14 +321,51 @@ func (s *session) flightTick(now time.Time) error {
 	if air < 0 {
 		air = 0
 	}
-	drop := p.z - f.landZ
-	landing := knockPending{at: now, x: f.landX, y: f.landY, z: f.landZ, hasPos: true, self: true}
-	s.knockRow("knockback_land", s.self, now, knockRowFields{
-		pos: landing, self: true, airMS: int32(air / time.Millisecond), drop: drop, hasDrop: p.hasPos && knockFinite(drop),
-	})
-	s.opts.logf("world: knockback landing (self) at %.1f %.1f %.1f after %s (drop %.1f yd)",
-		f.landX, f.landY, f.landZ, air.Round(time.Millisecond), drop)
+	s.landing = &selfLanding{
+		at: now, deadline: now.Add(knockConfirmFor),
+		simX: f.landX, simY: f.landY, simZ: f.landZ,
+		takeoffZ: p.z, hasTakeoff: p.hasPos, airMS: int32(air / time.Millisecond),
+	}
+	s.opts.logf("world: knockback landing (self) at %.1f %.1f %.1f after %s: awaiting the server's position",
+		f.landX, f.landY, f.landZ, air.Round(time.Millisecond))
 	return nil
+}
+
+// statedSelfPosition is the server stating where the mover is: a teleport, a movement update or a create block for it.
+// It settles a pending self landing at that position, unless the landing's bound has passed: then the simulation stands.
+func (s *session) statedSelfPosition(x, y, z float32, now time.Time) {
+	if s.landing == nil {
+		return
+	}
+	if now.After(s.landing.deadline) {
+		s.finishSelfLanding(false, 0, 0, 0)
+		return
+	}
+	s.finishSelfLanding(true, x, y, z)
+}
+
+// finishSelfLanding writes the pending self landing's row once: at the server's stated position when stated is set,
+// else as the client's flat-arc simulation (simulated=true). A landing still pending when a new flight starts or the
+// map changes is written as the simulation, because the server never stated it.
+func (s *session) finishSelfLanding(stated bool, x, y, z float32) {
+	l := s.landing
+	if l == nil {
+		return
+	}
+	s.landing = nil
+	if !stated {
+		x, y, z = l.simX, l.simY, l.simZ
+	}
+	drop := l.takeoffZ - z
+	s.knockRow("knockback_land", s.self, l.at, knockRowFields{
+		pos:  knockPending{at: l.at, x: x, y: y, z: z, hasPos: true, self: true},
+		self: true, airMS: l.airMS, drop: drop, hasDrop: l.hasTakeoff && knockFinite(drop), simulated: !stated,
+	})
+	how := "stated by the server"
+	if !stated {
+		how = "simulated (the server stated no position)"
+	}
+	s.opts.logf("world: knockback landing (self) at %.1f %.1f %.1f: %s", x, y, z, how)
 }
 
 // knockFinite reports a float a JSON row can carry.
@@ -344,6 +405,8 @@ func (s *session) cancelKnockback(guid wire.GUID) {
 // dropKnockbacks clears every pending takeoff, the mover's flight and the echo owed (a map change): the old map's
 // flights have no landing here, and its echoes are not owed on the new one.
 func (s *session) dropKnockbacks() {
+	// A map change settles a landing the server never stated: it is written as the simulation.
+	s.finishSelfLanding(false, 0, 0, 0)
 	s.knocks = nil
 	s.knockOrder = nil
 	s.echoOwed = false
@@ -397,21 +460,22 @@ func (s *session) dropKnock(guid wire.GUID) {
 
 // knockRowFields is what a knockback or landing row carries beyond the base shape.
 type knockRowFields struct {
-	pos     knockPending
-	dirX    float32
-	dirY    float32
-	horz    float32
-	vert    float32
-	self    bool
-	airMS   int32
-	drop    float32
-	hasDrop bool
+	pos       knockPending
+	dirX      float32
+	dirY      float32
+	horz      float32
+	vert      float32
+	self      bool
+	airMS     int32
+	drop      float32
+	hasDrop   bool
+	simulated bool
 }
 
 // knockRow appends one knockback row with the takeoff or landing position and the speeds the packet carried.
 func (s *session) knockRow(kind string, guid wire.GUID, now time.Time, f knockRowFields) {
 	extra := combatRowExtra{Self: f.self, HorzSpeed: f.horz, VertSpeed: f.vert, AirMS: f.airMS,
-		DirX: f.dirX, DirY: f.dirY, Drop: f.drop, HasDrop: f.hasDrop}
+		DirX: f.dirX, DirY: f.dirY, Drop: f.drop, HasDrop: f.hasDrop, Simulated: f.simulated}
 	if f.pos.hasPos {
 		extra.Pos = &CombatPoint{X: f.pos.x, Y: f.pos.y, Z: f.pos.z}
 	}

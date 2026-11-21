@@ -41,8 +41,8 @@ func foreverSoapCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 		return exitUsage
 	}
 	command := strings.TrimSpace(pos[0])
-	if soap.Denied(command) {
-		fmt.Fprintf(stderr, "forever soap: command %q changes the world for everyone (AGENTS.md): refused\n", command)
+	if err := soap.Allowed(command); err != nil {
+		fmt.Fprintf(stderr, "forever soap: %v\n", err)
 		return exitUsage
 	}
 	cfg := soap.Config{Host: *host, Port: *port, User: *user,

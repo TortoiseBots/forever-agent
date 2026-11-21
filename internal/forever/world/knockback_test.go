@@ -307,8 +307,16 @@ func TestSelfKnockBackFlightAndLanding(t *testing.T) {
 	if land.Z != 50 || land.X <= 1000 {
 		t.Fatalf("landing at %.2f %.2f %.2f is not the arc's end", land.X, land.Y, land.Z)
 	}
+	if rows := knockRows(s); len(rows) != 1 {
+		t.Fatalf("rows %+v at the landing, want the takeoff only until the server states the position", rows)
+	}
+	// The server never states the mover's position here: past the bound the landing is the client's simulation.
+	rec.now = t0.Add(1100*time.Millisecond + knockConfirmFor + time.Second)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
 	rows := knockRows(s)
-	if len(rows) != 2 || rows[1].Kind != "knockback_land" || !rows[1].Self {
+	if len(rows) != 2 || rows[1].Kind != "knockback_land" || !rows[1].Self || !rows[1].Simulated {
 		t.Fatalf("rows %+v", rows)
 	}
 	if rows[1].AirMS < 1050 || rows[1].AirMS > 1150 {
@@ -428,10 +436,19 @@ func TestSelfEchoAfterAShortLandingWritesNoRow(t *testing.T) {
 	}
 	echo := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling, Time: 5, X: 1000, Y: 2000, Z: 50}
 	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(echo))
-
+	// The echo is the ack's echo, not the server's statement of where the landing was: it writes no row, and the
+	// landing waits for the server.
+	if got := len(knockRows(s)); got != 1 {
+		t.Fatalf("%d row(s) after the echo, want the takeoff only", got)
+	}
+	// Past the bound the landing is written once, as the client's simulation.
+	rec.now = t0.Add(knockConfirmFor + time.Second)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
 	rows := knockRows(s)
-	if len(rows) != 2 || rows[0].Kind != "knockback" || rows[1].Kind != "knockback_land" {
-		t.Fatalf("rows %+v, want the takeoff and the landing only", rows)
+	if len(rows) != 2 || rows[0].Kind != "knockback" || rows[1].Kind != "knockback_land" || !rows[1].Simulated {
+		t.Fatalf("rows %+v, want the takeoff and one simulated landing", rows)
 	}
 	if got := rec.count(wire.CMSGMoveKnockBackAck); got != 1 {
 		t.Fatalf("%d ack(s), want 1", got)
@@ -465,8 +482,15 @@ func TestSelfEchoAfterALandedFlightWritesNoRow(t *testing.T) {
 	echo := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling | objects.FlagKnockback, Time: 9, X: 1000, Y: 2000, Z: 50}
 	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(echo))
 
-	if got := len(knockRows(s)); got != 2 {
-		t.Fatalf("%d row(s) after the echo, want the takeoff and the landing", got)
+	if got := len(knockRows(s)); got != 1 {
+		t.Fatalf("%d row(s) after the echo, want the takeoff only: the landing waits for the server", got)
+	}
+	rec.now = t0.Add(knockConfirmFor + 2*time.Second)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	if rows := knockRows(s); len(rows) != 2 || !rows[1].Simulated {
+		t.Fatalf("rows %+v after the bound, want one simulated landing", rows)
 	}
 	if got := rec.count(wire.CMSGMoveKnockBackAck); got != 1 {
 		t.Fatalf("%d ack(s), want 1", got)
@@ -507,10 +531,115 @@ func TestSelfEchoIsOwedOnlyForAnAckWeSent(t *testing.T) {
 		rec.now = t0.Add(knockEchoFor + time.Second)
 		late := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling, Time: 2, X: 1000, Y: 2000, Z: 50}
 		mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(late))
-		if got := len(knockRows(s)); got != 2 || len(s.knocks) != 0 {
-			t.Fatalf("%d row(s), %d pending for an echo past its bound", got, len(s.knocks))
+		// A late echo states no landing position: it writes nothing, and the bound settles the landing as the simulation.
+		if got := len(knockRows(s)); got != 1 || len(s.knocks) != 0 {
+			t.Fatalf("%d row(s), %d pending after a late echo, want the takeoff only", got, len(s.knocks))
+		}
+		if err := s.flightTick(rec.now); err != nil {
+			t.Fatal(err)
+		}
+		if rows := knockRows(s); len(rows) != 2 || !rows[1].Simulated {
+			t.Fatalf("rows %+v after the bound, want one simulated landing", rows)
 		}
 	})
+}
+
+// TestSelfLandingIsSimulatedUntilTheServerStatesIt: the client's flat arc is a simulation, not a fact. A short
+// downward knockback lands at once, but its landing row waits for the server to state the mover's position; when no
+// position comes within knockConfirmFor the row is written with simulated=true at the flat landing.
+func TestSelfLandingIsSimulatedUntilTheServerStatesIt(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(4300, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 7, 0, 1, 4, 4.9))
+	if err := s.flightTick(t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(knockRows(s)); got != 1 {
+		t.Fatalf("%d row(s) at the landing, want the takeoff only: the landing waits for the server", got)
+	}
+	rec.now = t0.Add(knockConfirmFor + time.Second)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[1].Kind != "knockback_land" || !rows[1].Self {
+		t.Fatalf("rows %+v", rows)
+	}
+	if !rows[1].Simulated || rows[1].Pos == nil || rows[1].Pos.X != 1000 || rows[1].Pos.Y != 2000 || rows[1].Pos.Z != 50 {
+		t.Fatalf("unconfirmed landing row %+v, want simulated at the flat landing", rows[1])
+	}
+	if len(s.knocks) != 0 {
+		t.Fatalf("%d takeoff(s) still pending", len(s.knocks))
+	}
+}
+
+// TestSelfLandingTakesTheServersPosition: the first position the server states for the mover after the fall (a
+// movement update here) is the landing: the row carries that position, not simulated, and the drop from the takeoff.
+func TestSelfLandingTakesTheServersPosition(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(4400, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 8, 1, 0, 12.5, -9.5))
+	rec.now = t0.Add(1100 * time.Millisecond)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(knockRows(s)); got != 1 {
+		t.Fatalf("%d row(s) at the landing, want the takeoff only", got)
+	}
+	rec.now = t0.Add(1200 * time.Millisecond)
+	stated := objects.MovementInfo{GUID: s.self, Flags: objects.FlagTouchingGround, Time: 11, X: 1009, Y: 2002, Z: 47}
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdate, knockUpdatePacket(stated))
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[1].Kind != "knockback_land" || !rows[1].Self {
+		t.Fatalf("rows %+v", rows)
+	}
+	land := rows[1]
+	if land.Simulated || land.Pos == nil || land.Pos.X != 1009 || land.Pos.Y != 2002 || land.Pos.Z != 47 {
+		t.Fatalf("landing row %+v, want the server's position, not simulated", land)
+	}
+	if land.Drop != 3 {
+		t.Fatalf("drop %.1f, want 3 (takeoff z 50, stated z 47)", land.Drop)
+	}
+	if land.AirMS < 1050 || land.AirMS > 1150 {
+		t.Fatalf("air time %d ms", land.AirMS)
+	}
+}
+
+// TestSelfLandingTakesATeleportAfterTheFall: a server teleport of the mover within the bound states its position too.
+func TestSelfLandingTakesATeleportAfterTheFall(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(4500, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 9, 1, 0, 12.5, -9.5))
+	rec.now = t0.Add(1100 * time.Millisecond)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	rec.now = t0.Add(1200 * time.Millisecond)
+	tp := wire.NewWriter()
+	wire.WritePackedGUID(tp, knockUnit)
+	tp.WriteU32(10) // the teleport's sequence
+	tp.WriteFloat32(1020)
+	tp.WriteFloat32(2010)
+	tp.WriteFloat32(48)
+	tp.WriteFloat32(0) // facing
+	tp.WriteBit(false) // transport
+	tp.WriteBit(false) // vehicle
+	tp.WriteBit(false) // preload world
+	tp.FlushBits()
+	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, tp.Bytes())
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[1].Simulated || rows[1].Pos == nil || rows[1].Pos.X != 1020 || rows[1].Pos.Z != 48 {
+		t.Fatalf("rows %+v, want the teleport's position, not simulated", rows)
+	}
 }
 
 // TestKnockBackPacketsAreGatedMapContent: both knockback packets are movement of the map the client stands on, so

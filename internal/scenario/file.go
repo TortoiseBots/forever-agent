@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 )
 
 var (
@@ -506,7 +508,7 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			return nil, fmt.Errorf("step %d (soap): missing text", n)
 		}
 		s.Text = text
-		if err := gmLoadCheck(n, text); err != nil {
+		if err := soapLoadCheck(n, text); err != nil {
 			return nil, err
 		}
 	case "addon_send":
@@ -943,6 +945,18 @@ func gmDenied(text string) bool {
 // prefix of want of at least min bytes.
 func gmTokenPrefix(tok, want string, min int) bool {
 	return len(tok) >= min && len(tok) <= len(want) && strings.HasPrefix(want, tok)
+}
+
+// soapLoadCheck refuses a soap step whose text is not on the setup allow-list (soap.Allowed) at parse time. A text with
+// a variable cannot be judged before the variables expand, so the run-time check decides it before anything is sent.
+func soapLoadCheck(n int, text string) error {
+	if strings.Contains(text, "${") {
+		return nil
+	}
+	if err := soap.Allowed(text); err != nil {
+		return fmt.Errorf("step %d (soap): %v", n, err)
+	}
+	return nil
 }
 
 func gmLoadCheck(n int, text string) error {

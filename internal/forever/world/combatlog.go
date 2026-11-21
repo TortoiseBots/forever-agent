@@ -84,6 +84,8 @@ type CombatRow struct {
 	DirY      float32      `json:"dir_y,omitempty"`
 	AirMS     int32        `json:"air_ms,omitempty"`
 	Drop      float32      `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact.
+	Simulated bool `json:"simulated,omitempty"`
 }
 
 // CombatPoint is a position a knockback row carries.
@@ -259,6 +261,7 @@ type combatRowExtra struct {
 	AirMS              int32
 	Drop               float32
 	HasDrop            bool
+	Simulated          bool
 }
 
 // combatRowExtras appends one row from the base shape plus its extras.
@@ -278,6 +281,7 @@ func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount in
 	row.DirX = extra.DirX
 	row.DirY = extra.DirY
 	row.AirMS = extra.AirMS
+	row.Simulated = extra.Simulated
 	if extra.HasDrop {
 		row.Drop = extra.Drop
 	}

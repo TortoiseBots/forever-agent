@@ -79,6 +79,28 @@ func TestForeverSoapRunsACommand(t *testing.T) {
 	}
 }
 
+// TestForeverSoapRefusesOffTheAllowListBeforeAnyRequest: a console command outside the setup allow-list is refused
+// before any request, and a prefix of an allowed command is not one.
+func TestForeverSoapRefusesOffTheAllowListBeforeAnyRequest(t *testing.T) {
+	dir := t.TempDir()
+	pw := filepath.Join(dir, "soap.pw")
+	if err := os.WriteFile(pw, []byte(cliSoapPassword), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &cliSoapFake{user: "console", password: cliSoapPassword, reply: "x"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	host, port := cliSoapAddr(t, srv)
+	for _, cmd := range []string{".repop", ".sa", ".announce hi"} {
+		var out, errOut bytes.Buffer
+		code := foreverCmd(context.Background(), []string{"soap", "--host", host, "--port", port, "--user", "console",
+			"--password-file", pw, cmd}, &out, &errOut)
+		if code != exitUsage || fake.gotCommand != "" {
+			t.Fatalf("%q: exit %d, command %q", cmd, code, fake.gotCommand)
+		}
+	}
+}
+
 func TestForeverSoapRefusesNonLoopbackAndDeniedCommands(t *testing.T) {
 	dir := t.TempDir()
 	pw := filepath.Join(dir, "soap.pw")

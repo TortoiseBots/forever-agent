@@ -184,17 +184,16 @@ func (c *Client) Address() string { return c.cfg.Address() }
 // Timeout is the request deadline.
 func (c *Client) Timeout() time.Duration { return c.cfg.Timeout() }
 
-// Run executes one console command and returns the text the command printed. The command is the core's console
-// line without a leading dot (the same text `.account`, `.saveall` and the rest take); commands that need a
-// selected unit stay on a GM client. A rule from AGENTS.md is enforced here too: a command that changes the world
-// for everyone is refused, because this helper exists for per-character and per-instance setup.
+// Run executes one console command and returns the text the command printed. Only a command on the setup allow-list
+// (Allowed) is sent: this helper exists for per-character and per-instance setup, and a command that needs a selected
+// unit stays on a GM client.
 func (c *Client) Run(ctx context.Context, command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", errors.New("soap: empty command")
 	}
-	if Denied(command) {
-		return "", fmt.Errorf("soap: command %q changes the world for everyone (AGENTS.md): refused", cut(command))
+	if err := Allowed(command); err != nil {
+		return "", fmt.Errorf("soap: %v", err)
 	}
 	body := executeCommandBody(command)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+c.cfg.Address()+"/", strings.NewReader(body))
@@ -323,43 +322,51 @@ func cut(s string) string {
 	return s
 }
 
-// Denied reports a console command that changes the world for everyone, which AGENTS.md keeps off every GM path:
-// the same list the scenario runner's gm step uses. The core resolves each token as a case-insensitive prefix
-// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` runs reload and `acc create` runs account create: a denied
-// word is matched the same way. Root words need two characters (a one-letter token is ambiguous enough that the
-// core rarely resolves it); subcommands match at any length.
-func Denied(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	t = strings.TrimPrefix(t, ".")
-	fields := strings.Fields(t)
-	if len(fields) == 0 {
-		return false
-	}
-	for _, want := range []string{"reload", "server", "account", "ban", "unban"} {
-		if tokenPrefix(fields[0], want, 2) {
-			return true
-		}
-	}
-	if len(fields) >= 2 {
-		if tokenPrefix(fields[0], "npc", 2) {
-			for _, want := range []string{"add", "delete", "move", "set"} {
-				if tokenPrefix(fields[1], want, 1) {
-					return true
-				}
-			}
-		}
-		if tokenPrefix(fields[0], "gobject", 3) {
-			for _, want := range []string{"add", "delete"} {
-				if tokenPrefix(fields[1], want, 1) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+// setupCommands is the console command set the setup paths use: a scenario's soap step, a trials slot's soap_setup and
+// `forever soap`. Each entry is the command's leading words. A command is sent only when its leading words equal an
+// entry (a leading dot is optional, and case does not matter, as the core reads it). There is no prefix resolution on
+// this side: `a`, `acc` and `rel` are refused, and so is a longer word that merely starts with an allowed one. Words
+// after the entry are the command's own arguments.
+var setupCommands = [][]string{
+	{"saveall"},
+	{"pinfo"},
+	{"instance", "setbossstate"},
 }
 
-// tokenPrefix reports whether tok is a prefix of want of at least min bytes, the core's command resolution.
-func tokenPrefix(tok, want string, min int) bool {
-	return len(tok) >= min && len(tok) <= len(want) && strings.HasPrefix(want, tok)
+// Allowed returns nil for a console command on the setup allow-list, else why the command is refused. The command must
+// be one console line: a line break or a NUL would let a second command ride behind an allowed one.
+func Allowed(text string) error {
+	if strings.ContainsAny(text, "\r\n\x00") {
+		return errors.New("a console command is one line: a line break or NUL is refused")
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return errors.New("empty command")
+	}
+	fields[0] = strings.TrimPrefix(fields[0], ".")
+	for _, entry := range setupCommands {
+		if len(fields) >= len(entry) && wordsEqual(fields[:len(entry)], entry) {
+			return nil
+		}
+	}
+	return fmt.Errorf("command %q is not on the setup allow-list (%s): refused", cut(text), setupList())
+}
+
+// wordsEqual reports whether got matches want word for word, case-insensitively.
+func wordsEqual(got, want []string) bool {
+	for i := range want {
+		if !strings.EqualFold(got[i], want[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// setupList names the allow-list for an error line: `.saveall, .pinfo, .instance setbossstate`.
+func setupList() string {
+	names := make([]string, 0, len(setupCommands))
+	for _, entry := range setupCommands {
+		names = append(names, "."+strings.Join(entry, " "))
+	}
+	return strings.Join(names, ", ")
 }

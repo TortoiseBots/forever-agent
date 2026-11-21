@@ -4,7 +4,8 @@ package bughunt
 // `knockback_land` row when the next position update grounds it (objects/knockback.go in the daemon). This rule
 // reads those pairs: a member of the group whose landing put it among a pack it was not among at the takeoff, or
 // dropped it a ledge's height below the takeoff, is a finding. A recording without the rows is UNKNOWN, never a
-// pass: the kinds did not exist before the knockback round.
+// pass: the kinds did not exist before the knockback round. A simulated landing (the server never stated its position)
+// is judged by nothing: its window is UNKNOWN.
 //
 // The mobs' places come from the nearest frame within R20_FRAME_PAD_S; a frame that does not show the landing's
 // mobs leaves the landing unjudged, never answered from a guess. The rule reads the takeoff row before its
@@ -83,6 +84,11 @@ func Rule20(r *Run) []Hit {
 			}
 			ti, ok := takeoffs[g]
 			delete(takeoffs, g)
+			if row.Simulated {
+				// The server never stated this landing's position: the client's flat arc is judged by nothing here.
+				r.noteUnknown(20, "simulated landing: the server never stated its position")
+				continue
+			}
 			if !ok {
 				r.noteUnknown(20, "no takeoff for a landing")
 				continue

@@ -45,6 +45,23 @@ func TestRule20LandedInAPack(t *testing.T) {
 	}
 }
 
+// TestRule20IgnoresSimulatedLandings: a landing the server never stated is the client's flat arc, not a position the
+// bug hunter can judge. It raises no ledge or pack finding, and its window is UNKNOWN, never a pass.
+func TestRule20IgnoresSimulatedLandings(t *testing.T) {
+	tank := testUnit(gTank)
+	tank.Combat = true
+	landing := knockRow("knockback_land", 12, gTank, 50, 50, 20)
+	landing.Simulated = true
+	r := testRun("watch", map[string]string{gTank: "tank"}, frameAt(5, tank), frameAt(12, tank))
+	r.Combat = []CombatRow{knockRow("knockback", 5, gTank, 0, 0, 40), landing}
+	if hits := Rule20(r); len(hits) != 0 {
+		t.Fatalf("a simulated landing raised %+v", hits)
+	}
+	if r.unknown[20]["simulated landing: the server never stated its position"] == 0 {
+		t.Fatalf("no UNKNOWN window for the simulated landing: %+v", r.unknown)
+	}
+}
+
 // TestRule20KnockedInsideTheSamePackIsNoFinding: a landing among the mobs that were already near the takeoff is a
 // knockback inside the fight, not into a new pack.
 func TestRule20KnockedInsideTheSamePackIsNoFinding(t *testing.T) {

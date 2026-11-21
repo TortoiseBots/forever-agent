@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 )
 
 // foreverEvent is one event_log row: the internal/events Event JSON keys,
@@ -383,8 +384,8 @@ func (rr *run) doSoap(ctx context.Context, s *Step, n int, inFinally bool) bool 
 	if err != nil {
 		return rr.checkErr(n, s, err)
 	}
-	if gmDenied(text) {
-		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "GM command %q changes the world for everyone (AGENTS.md): refused", text)
+	if err := soap.Allowed(text); err != nil {
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "%v", err)
 		if !inFinally {
 			rr.skipRest(n + 1)
 		}

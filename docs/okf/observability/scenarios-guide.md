@@ -29,7 +29,7 @@ Strict JSON, no comments. The top level holds `scenario` (lower-case name), top-
 | `section` | prints `=== STEP n: <title>` and moves the match window |
 | `mark` | moves the match window |
 | `gm` | a `.`-command (`text`) |
-| `soap` | one console-capable command on the server's SOAP endpoint (`text`), with no session; needs the `--soap-*` flags, expands variables, and obeys the world-change deny list |
+| `soap` | one console-capable command on the server's SOAP endpoint (`text`), with no session; needs the `--soap-*` flags, expands variables, and sends only the SOAP setup allow-list (`.saveall`, `.pinfo`, `.instance setbossstate`) |
 | `bot` | a `.bot` command without `.bot` (`command`) |
 | `addon_send` | an addon message (`text`, `channel`, `prefix`, `to`) |
 | `rpc` | any agent method (`method`, `params`, `save`, `record_result`, `ignore_error`) |

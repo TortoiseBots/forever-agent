@@ -144,6 +144,9 @@ type CombatRow struct {
 	DirY      float64      `json:"dir_y,omitempty"`
 	AirMS     int64        `json:"air_ms,omitempty"`
 	Drop      float64      `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact, and
+	// the bug hunter judges no such row.
+	Simulated bool `json:"simulated,omitempty"`
 
 	// T is the row on the run's clock (seconds from t=0), computed from Time and the run's start, and TKnown
 	// says whether it could be: a row with no readable time is unknown at every rule, never at t=0.

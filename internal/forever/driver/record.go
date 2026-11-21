@@ -672,6 +672,7 @@ func (r *Recorder) CombatEvents(rows []json.RawMessage) {
 			VertSpeed float32 `json:"vert_speed"`
 			AirMS     int64   `json:"air_ms"`
 			Drop      float32 `json:"drop"`
+			Simulated bool    `json:"simulated"`
 		}
 		if err := json.Unmarshal(raw, &row); err != nil {
 			continue
@@ -686,6 +687,9 @@ func (r *Recorder) CombatEvents(rows []json.RawMessage) {
 		d := map[string]any{"guid": row.Source.GUID, "self": row.Self}
 		if row.Pos != nil {
 			d["pos"] = map[string]any{"x": row.Pos.X, "y": row.Pos.Y, "z": row.Pos.Z}
+		}
+		if row.Simulated {
+			d["simulated"] = true
 		}
 		if row.Kind == "knockback" {
 			d["speed_xy"] = row.HorzSpeed

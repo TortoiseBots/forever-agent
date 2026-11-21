@@ -673,8 +673,8 @@ runs one console-capable command on a ForeverCore worldserver over its SOAP endp
 HTTP Basic only, and the password comes from a private file (0600) or an environment variable (default
 `FOREVER_SOAP_PASSWORD`), never a flag value, stdout, stderr or an error. A non-loopback host is refused: the core's SOAP transport is plain HTTP, so the
 administrator's credential never crosses the network. Redirects are not followed. The printed result is the command's own text.
-AGENTS.md's world-changing commands (`.reload`, `.server`, `.account`, `.ban`, `.npc add/delete/move/set`,
-`.gobject add/delete`) are refused. A scenario's `{"do":"soap","text":"..."}` step uses
+Only the setup allow-list is sent (`.saveall`, `.pinfo`, `.instance setbossstate`; anything else is refused, with no
+prefix matching): see the allow-list in [docs/forever/CORE-GAINS-4-NOTES.md](docs/forever/CORE-GAINS-4-NOTES.md). A scenario's `{"do":"soap","text":"..."}` step uses
 `scenario run --soap-host/--soap-port/--soap-user/--soap-password-file/--soap-password-env` (the same loopback rule), and a slots file's `forever` block may name `"soap": {...}` plus
 `"soap_setup": [".saveall"]`, which `trials run`'s live setup sends before provisioning and records as its
 `server_console` row. See [docs/forever/CORE-GAINS-4-NOTES.md](docs/forever/CORE-GAINS-4-NOTES.md).

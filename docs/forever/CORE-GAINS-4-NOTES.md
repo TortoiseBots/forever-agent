@@ -44,6 +44,13 @@ that records nothing. For another mover, the first
 position it carries; its speeds are unknown and left zero. A teleport cancels a pending takeoff, and a map change
 drops them all.
 
+The mover's own landing is written once the server states where the mover is. The client's flat arc gives a landing
+position, but the row takes the first position the server states for the mover after the fall within 5 s of the landing
+(a teleport, a movement update or a create block for it), with `simulated` false and the drop from the takeoff. Past 5 s,
+or when a new flight or a map change comes first, the row is written at the flat-arc position with `simulated` true. The
+core normally sends the mover no position after a fall-land, so a self landing is usually simulated. The echo of the ack
+is not a statement of the landing and never settles it.
+
 The landing is the next `SMSG_MOVE_UPDATE` for that unit: while the falling flag (`MOVEMENTFLAG_FALLING` or
 `..._FALLING_FAR`) is set the unit is airborne and the takeoff stays pending; the first update without it is the
 landing and writes one `knockback_land` row with the position, the air time and the drop. A takeoff older than 15 s
@@ -52,7 +59,8 @@ the same unit replaces the first and counts it missed.
 
 ### Where it shows
 
-`CombatRow` gains `pos`, `self`, `horz_speed`, `vert_speed`, `dir_x`, `dir_y`, `air_ms` and `drop` (`CombatPoint` is
+`CombatRow` gains `pos`, `self`, `horz_speed`, `vert_speed`, `dir_x`, `dir_y`, `air_ms`, `drop` and `simulated` (true for
+a self landing the server never stated; `CombatPoint` is
 the position). They reach the session's ring, the serve `events` page (and its mirror in `serveclient`), the
 event log (`pos`, `self`, `speed_xy`, `speed_z`, `air_ms`, `drop`) and the watch's
 `<run_id>.combatlog.jsonl`. The watch's drain also writes a `knockback` and a `knockback_land` trace event from the
@@ -102,14 +110,32 @@ transport is plain HTTP, so there is no opt-out: the credential never crosses th
   error has the secret redacted if a peer echoed it.
 * **Run** builds the gSOAP document, posts it to `http://host:port/` with
   `SOAPAction: "urn:TC#executeCommand"`, and parses `result` or the fault text. HTTP 401 and 403 are typed errors
-  naming the cause. The command deny list is the AGENTS.md one the scenario runner uses (`.reload`, `.server`,
-  `.account`, `.ban`, `.npc add/delete/move/set`, `.gobject add/delete`): this helper is for per-character and
-  per-instance setup, never a world change.
+  naming the cause. Only a command on the setup allow-list (below) is sent: any other command is refused before a
+  request, so this helper has no world-changing path.
 
 `forever-agent forever soap [--host H] [--port N] [--user NAME] [--password-file FILE | --password-env VAR]
 [--timeout DURATION] COMMAND` runs one command and prints its result. The password is never a
 flag value (so it is not in the process list) and nothing prints it; a refused or failed command exits 1 with one
 line, a bad flag or config exits 2.
+
+### The setup allow-list
+
+`soap.Allowed` (`internal/forever/soap/soap.go`) is the one check: `Run`, a scenario's `soap` step (at parse time and at
+run time), a trials slot's `soap_setup` and `forever soap` all use it. The console commands the setup paths use are:
+
+| command | what it does | where it is used |
+|---|---|---|
+| `.saveall` | saves every online character to the database | the bench's `soap_setup` and the scenario examples |
+| `.pinfo [name]` | the account's (or a named character's) info, read only | the live check that proves the endpoint |
+| `.instance setbossstate <id> <state> [player]` | sets an instance's boss state | the scenario and bench examples |
+
+A command is sent only when its leading words equal an entry exactly: a leading dot is optional, case does not matter
+(the core reads words the same way), and what follows the entry is that command's own arguments. There is no prefix
+resolution on this side, so `a`, `acc`, `rel`, `saveallx`, `pinfoo`, `instance getbossstate` and `instance setbossstatefoo`
+are refused, and the error names the list. The command must be one console line: a line break or a NUL is refused, so a
+second command cannot ride behind an allowed one. A scenario step whose text still holds a `${...}` variable is judged at
+run time, after the variables expand and before anything is sent. The scenario's `gm` steps keep their own AGENTS.md deny
+list: they go through a GM client, not this endpoint.
 
 ### The setup paths
 
@@ -132,23 +158,25 @@ line, a bad flag or config exits 2.
 * `objects/mover_test.go`: a knockback ends a running leg with no stop packet and refuses walk, path, chase, facing
   and stop until the landing.
 * `world/knockback_test.go`: one ack with the sequence index and the mover's airborne block (flight flags and jump
-  values), the client's own arc (heartbeat, fall-land, self landing row, air time), no ack for the echo or for a
+  values), the client's own arc (heartbeat, fall-land, the self landing row with its air time, simulated until the server states
+  the position: a movement update or a teleport within the bound takes it instead), no ack for the echo or for a
   packet naming another mover, an echo after a short or a real landing writes no row, a stray or late self relay records
   nothing, a relayed takeoff and a landing paired with the air time and drop, no second landing,
   a second takeoff counted as missed, the order list pruned after a landing, a non-finite drop refused, a teleport
   and a 15 s-old takeoff dropped as missed, and both knockback packets held as map content.
 * `driver/knockback_test.go`: the knockback rows' trace events, at the rows' own times and with their fields.
 * `bughunt/rules_knockback_test.go`: a landing in a new pack, the same pack (no finding), the ledge shape, no
-  takeoff / no position / no frame as UNKNOWN windows, and the skip without a timed landing. The registry test pins
+  takeoff / no position / no frame as UNKNOWN windows, a simulated landing (no finding, UNKNOWN), and the skip without a
+  timed landing. The registry test pins
   rule 20's name and group.
 * `soap/soap_test.go`: a fake core-shaped endpoint answers (Basic auth, SOAPAction, escaped command, exact text), a
   SOAP fault, 401 and 403 and a closed endpoint are errors with no password in them, the loopback rule (no
   non-loopback host at all), redaction before truncation, the private password file and the environment fallback,
-  and the deny list with the core's prefix matching.
-* `cmd/forever-agent/forever_soap_test.go`: the CLI end to end, the non-loopback refusal, the deny list, and the
+  and the setup allow-list (exact words, no prefix matching, one line only).
+* `cmd/forever-agent/forever_soap_test.go`: the CLI end to end, the non-loopback refusal, the allow-list refusal before any request, and the
   password absent from stdout and stderr.
 * `scenario/console_test.go`: a `soap` step with variable expansion and recorded result lines, an ERROR without a
-  backend, and a world-changing step refused at parse time, at run time through a variable, and in the core's
+  backend, and a soap step off the allow-list refused at parse time, at run time through a variable, and in the core's
   prefix spelling.
 * `trials/live/console_test.go`: the `server_console` row for success, failure and no backend, and the slots block's
   JSON shape. `cmd/forever-agent/trials_setup_test.go`: `soap_setup` commands travel without a `soap` block (so the
@@ -199,7 +227,9 @@ suite passed at `687448f3`.
   packet's direction and speeds under `Movement::gravity`, sends the airborne heartbeats and `CMSG_MOVE_FALL_LAND`,
   and lands back at the starting height because this session has no terrain floor. The ack carries the airborne
   block (falling and knockback bits, the order's jump values), not the standing one. Collisions (a slope, a bridge,
-  water) are a real client's; the observed landings of other movers still come from their position updates.
+  water) are a real client's; the observed landings of other movers still come from their position updates. A self
+  landing's row is `simulated` unless the server states the mover's position within 5 s, and the bug hunter judges no
+  simulated landing.
 * A relayed knockback has no direction or speeds: the core's update packet does not carry them.
 * Server-side bots get a parabolic spline from `Unit::KnockbackFrom` (Unit.cpp:13171-13175), not
   `SMSG_MOVE_KNOCK_BACK`; those knockbacks are visible as `SMSG_ON_MONSTER_MOVE` (already parsed) and are not ruled

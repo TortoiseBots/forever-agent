@@ -306,6 +306,9 @@ func (s *session) eventCombat(row CombatRow, now time.Time, src, dst wire.GUID) 
 		e.Data["self"] = row.Self
 		e.Data["speed_xy"] = row.HorzSpeed
 		e.Data["speed_z"] = row.VertSpeed
+		if row.Simulated {
+			e.Data["simulated"] = true
+		}
 		if row.Kind == "knockback_land" {
 			e.Data["air_ms"] = row.AirMS
 			e.Data["drop"] = row.Drop

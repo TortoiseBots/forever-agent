@@ -361,6 +361,8 @@ type CombatRow struct {
 	DirY               float32        `json:"dir_y,omitempty"`
 	AirMS              int32          `json:"air_ms,omitempty"`
 	Drop               float32        `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact.
+	Simulated bool `json:"simulated,omitempty"`
 }
 
 // CombatPoint is a knockback row's takeoff or landing position.

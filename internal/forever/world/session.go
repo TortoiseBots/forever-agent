@@ -509,6 +509,8 @@ type session struct {
 	// the mover) is owed until it arrives or echoOwedUntil passes, whether or not the takeoff has landed meanwhile.
 	echoOwed      bool
 	echoOwedUntil time.Time
+	// landing is the mover's own landing whose position the server has not stated yet (see selfLanding).
+	landing *selfLanding
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID
@@ -2045,6 +2047,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		now := s.transport().Now()
 		s.world.ApplyMoveUpdate(m.Info, nil, now)
 		s.knockMove(m.Info, now)
+		if m.Info.GUID == s.self && s.flight == nil {
+			s.statedSelfPosition(m.Info.X, m.Info.Y, m.Info.Z, now)
+		}
 	case wire.SMSGMoveUpdateKnockBack:
 		mi, err := objects.ParseMoveUpdateKnockBack(p.Payload)
 		if err != nil {
@@ -2067,6 +2072,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.report.MoveRelays++
 		s.world.ApplyMoveUpdate(m.Info, m.Speeds, s.transport().Now())
 		s.cancelKnockback(m.Info.GUID)
+		if m.Info.GUID == s.self {
+			s.statedSelfPosition(m.Info.X, m.Info.Y, m.Info.Z, s.transport().Now())
+		}
 	case wire.SMSGMoveTeleport:
 		t, err := objects.ParseMoveTeleport(p.Payload)
 		if err != nil {
@@ -2077,6 +2085,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.cancelKnockback(t.MoverGUID)
 		if t.MoverGUID == s.self {
 			s.selfTeleports++
+			s.statedSelfPosition(t.X, t.Y, t.Z, s.transport().Now())
 			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
 			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is
 			// empty. An empty transport is no transport (the capture's release teleport is exactly this shape).
@@ -2713,6 +2722,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 				b.Movement.X, b.Movement.Y, b.Movement.Z)
 		}
 		s.report.WalkClientPos = [4]float32{b.Movement.X, b.Movement.Y, b.Movement.Z, b.Movement.O}
+		s.statedSelfPosition(b.Movement.X, b.Movement.Y, b.Movement.Z, s.transport().Now())
 	}
 }
 

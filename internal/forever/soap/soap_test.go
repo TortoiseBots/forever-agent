@@ -262,23 +262,54 @@ func TestSoapDeniedWorldCommands(t *testing.T) {
 	}
 }
 
-// TestSoapDeniedMatchingTheCorePrefix: the core resolves a command token as a case-insensitive prefix
-// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` is reload and `acc create` is account create. The guard
-// must see those spellings, and a longer word that merely starts with a denied word must still pass.
-func TestSoapDeniedMatchingTheCorePrefix(t *testing.T) {
-	for _, cmd := range []string{
-		".rel all", ".REL all", ".ser shutdown 1", ".acc create x y", ".ba X", ".unb X",
-		".npc a 1", ".npc d 2", ".npc m 3", ".npc s 4", ".np add 1", ".gob d 2", "gobject a 3",
-	} {
-		if !Denied(cmd) {
-			t.Fatalf("%q is not denied", cmd)
-		}
+// TestSoapRefusesCommandsOffTheAllowList: the helper sends only the console commands the setup paths use (the list in
+// docs/forever/CORE-GAINS-4-NOTES.md). Nothing else reaches the server, whatever its spelling: no prefix resolution
+// (`a`, `acc`, `rel`), no longer word that merely starts with an allowed one, and no second console line after a
+// newline.
+func TestSoapRefusesCommandsOffTheAllowList(t *testing.T) {
+	t.Setenv("TEST_SOAP_PASSWORD", fakePassword)
+	fake := &fakeSoap{user: "console", password: fakePassword, reply: "ok"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	c, err := New(soapConfig(t, srv, "console"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, cmd := range []string{
-		".saveall", ".pinfo", ".repop", ".announce hi", ".npc info 1", ".gobject near 2", ".services",
+		"a", ".a", ".acc create x y", "acc create x y", ".rel all", ".reload all", ".ser shutdown 1",
+		".repop", ".announce hi", ".services", ".npc info 1", ".gobject near 2", ".saveallx", ".pinfoo",
+		".instance", ".instance getbossstate 0", ".instance setbossstatefoo 0 3",
+		".saveall\n.account create x y", ".saveall\r.ban X",
 	} {
-		if Denied(cmd) {
-			t.Fatalf("%q was denied", cmd)
+		if _, err := c.Run(context.Background(), cmd); err == nil {
+			t.Fatalf("%q was sent", cmd)
+		}
+		if fake.gotCommand != "" {
+			t.Fatalf("%q reached the server as %q", cmd, fake.gotCommand)
+		}
+	}
+}
+
+// TestSoapSendsTheSetupCommands: the commands the setup paths use reach the server with their arguments, with or
+// without the leading dot.
+func TestSoapSendsTheSetupCommands(t *testing.T) {
+	t.Setenv("TEST_SOAP_PASSWORD", fakePassword)
+	fake := &fakeSoap{user: "console", password: fakePassword, reply: "ok"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	c, err := New(soapConfig(t, srv, "console"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{
+		".saveall", "saveall", ".pinfo", ".pinfo Tankbot", ".instance setbossstate 0 3", ".instance setbossstate 3 0 Tankbot",
+	} {
+		fake.gotCommand = ""
+		if _, err := c.Run(context.Background(), cmd); err != nil {
+			t.Fatalf("%q: %v", cmd, err)
+		}
+		if fake.gotCommand != cmd {
+			t.Fatalf("%q reached the server as %q", cmd, fake.gotCommand)
 		}
 	}
 }

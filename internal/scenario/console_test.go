@@ -77,6 +77,17 @@ func TestSoapStepWithoutBackendIsAnError(t *testing.T) {
 	}
 }
 
+// TestSoapStepRefusesCommandsOffTheAllowList: the soap step sends only the setup allow-list. A command the setup paths
+// never use is refused at parse time, and so is one that is merely a prefix of an allowed command.
+func TestSoapStepRefusesCommandsOffTheAllowList(t *testing.T) {
+	for _, text := range []string{".repop", ".a", ".acc create x y", ".saveallx", ".instance getbossstate 0"} {
+		doc := `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"steps":[{"do":"soap","text":"` + text + `"}]}`
+		if _, err := Parse([]byte(doc), nil); err == nil {
+			t.Fatalf("%q parsed as a soap step", text)
+		}
+	}
+}
+
 // TestSoapStepRefusesWorldCommands: the same AGENTS.md list as a gm step is checked at parse time, and the
 // command never reaches the backend.
 func TestSoapStepRefusesWorldCommands(t *testing.T) {
@@ -120,7 +131,7 @@ func TestSoapStepRefusesAnExpandedWorldCommand(t *testing.T) {
 	}
 	found := false
 	for _, rec := range res.Records {
-		if rec.T == "check" && strings.Contains(rec.Raw, "changes the world for everyone") {
+		if rec.T == "check" && strings.Contains(rec.Raw, "not on the setup allow-list") {
 			found = true
 		}
 	}
