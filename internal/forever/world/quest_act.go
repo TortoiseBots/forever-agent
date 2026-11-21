@@ -246,7 +246,7 @@ func (s *session) actQuestAccept(ctx context.Context, a *actState, step ActStep)
 	}
 	switch {
 	case s.quest.invalid != nil:
-		return s.actFail(a, step, fmt.Errorf("accept %d: the giver refused it: %s", id, s.quest.invalid.Name()))
+		return s.actFail(a, step, fmt.Errorf("accept %d: the giver refused it: %s", id, acceptRefusal(s.quest.invalid)))
 	case s.questFailedIs(id):
 		return s.actFail(a, step, fmt.Errorf("accept %d: the giver refused it: %s", id, s.quest.failed.Name()))
 	case s.quest.logFull:
@@ -256,6 +256,18 @@ func (s *session) actQuestAccept(ctx context.Context, a *actState, step ActStep)
 	}
 	return s.actFail(a, step, fmt.Errorf("accept %d: not confirmed within %s (the server's quest log does not show the quest; it may have ignored the request: not offered by this giver, out of range, or not takeable)",
 		id, actAcceptWait))
+}
+
+// acceptRefusal words a refusal of an accept. The core's QUEST_ERR_NONE (reason 0) is what it sends for a class,
+// a character above the quest's top level, a reputation, a prerequisite quest or a condition the character does not
+// meet (Player::SatisfyQuest*): it names no cause, so the line says what to check instead of a bare "none". The
+// giver's own NpcFlags carry the same fact: the core drops the quest-giver bit for a player the giver has no quest
+// for, so a giver that reads without the bit offers this character nothing.
+func acceptRefusal(v *quest.InvalidQuest) string {
+	if v.Reason == 0 {
+		return "none (the server names no cause: check the character's class, level range, reputation and prerequisite quests against this quest, and that the giver's NpcFlags show the quest-giver bit for it)"
+	}
+	return v.Name()
 }
 
 // questFailedIs reports a SMSG_QUEST_GIVER_QUEST_FAILED that names this quest: a timed quest of the character's

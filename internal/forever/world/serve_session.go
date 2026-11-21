@@ -118,6 +118,8 @@ func (s *session) serveUnitByName(guid GUID, name string) (*objects.Object, erro
 			return o, nil
 		}
 	}
+	// A player met after the login has no name yet: ask for it, so the next call finds the unit.
+	s.serveAskNames()
 	return nil, fmt.Errorf("no unit named %q nearby", chat.SanitiseName(name))
 }
 

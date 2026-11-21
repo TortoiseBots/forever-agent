@@ -500,6 +500,8 @@ type session struct {
 	nameAsks map[wire.GUID]nameAsk
 	// nameAskLast is when the last name query of a dungeon port went out (dungeonNameAskGap).
 	nameAskLast time.Time
+	// realmPingAt is when a serving session next pings the realm socket (serveRealmPing).
+	realmPingAt time.Time
 	// nowFn replaces the client clock; the tests set a fake so the name backoff runs on a fake clock.
 	nowFn func() time.Time
 	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two

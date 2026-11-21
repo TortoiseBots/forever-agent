@@ -56,6 +56,12 @@ type ServeConfig struct {
 	// method that registers the guids they may act on. Off by default: a serving daemon that was not started as
 	// a test bench refuses every one of them with rpc.CodeForbidden.
 	AllowGMUnits bool
+	// Relogin makes a fresh Battle.net login for a reconnect and returns opts with the new connection fields (the
+	// address, the realm join ticket, both secrets and the builds, and the world socket its build probe
+	// authenticated, which the re-entry adopts). The join ticket of the first login is single use: the server clears
+	// the account's session key when the link drops, so a re-entry with the old ticket is answered "unknown
+	// account" on every attempt. Nil reuses the first login's fields (the tests' fake server does not care).
+	Relogin func(ctx context.Context, opts Options) (Options, error)
 	// The reconnect timings are zero for the constants above; the tests shorten them.
 	reconnectBackoff      time.Duration
 	reconnectMaxBackoff   time.Duration
@@ -144,10 +150,12 @@ type serveRuntime struct {
 // epoch and everything bound to it, while the RPC listener, the method table and the call queue stay.
 type serveState struct {
 	// opts is the login the daemon makes again; it is immutable after serve starts.
-	opts  Options
-	grace time.Duration
-	calls chan *serveCall
-	done  chan struct{}
+	opts Options
+	// relogin is ServeConfig.Relogin.
+	relogin func(ctx context.Context, opts Options) (Options, error)
+	grace   time.Duration
+	calls   chan *serveCall
+	done    chan struct{}
 	// The reconnect budget's timings (ServeConfig's overrides, or the constants).
 	backoff, maxBackoff, loginTimeout time.Duration
 
@@ -250,6 +258,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	}
 	st := &serveState{
 		opts:         s.opts,
+		relogin:      cfg.Relogin,
 		grace:        grace,
 		calls:        make(chan *serveCall, 64),
 		done:         make(chan struct{}),
@@ -325,6 +334,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		if ctx.Err() != nil {
 			return cur.serveLogout(st)
 		}
+		cur.serveIdleTick()
 		if err := cur.collect(ctx, 50*time.Millisecond); err != nil {
 			if isServeLinkLost(err) {
 				continue // the top of the loop sees the dead link and reconnects
@@ -449,7 +459,7 @@ func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog, evlog
 	parent := ctx
 	timeout := st.loginTimeout
 	go func() {
-		s, err := loginAgain(parent, st.opts, timeout, combat, evlog)
+		s, err := loginAgain(parent, st.opts, st.relogin, timeout, combat, evlog)
 		done <- serveLogin{s: s, err: err}
 	}()
 	for {
@@ -473,12 +483,20 @@ func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog, evlog
 // session is usable once it is in the world. combat and evlog are the dropped session's rings, installed before the
 // first login packet is dispatched: the re-entry's burst can carry a combat, aura or chat row, and a ring swapped in
 // after it would discard exactly those rows. Each is nil only when there is no ring to keep.
-func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat *CombatLog, evlog *EventLog) (*session, error) {
-	// A re-entry authenticates its own world socket: the one the first login's build probe handed over was that
-	// session's, and it went down with it. The build stays, so the new login claims the same one.
-	opts.WorldConn = nil
+func loginAgain(ctx context.Context, opts Options, relogin func(context.Context, Options) (Options, error), timeout time.Duration, combat *CombatLog, evlog *EventLog) (*session, error) {
 	actx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// A re-entry never reuses the first login's world socket: that one went down with its session. With a Relogin
+	// the Battle.net login runs again and hands over a fresh join ticket (and the socket its build probe
+	// authenticated, which authenticate adopts); without one the first login's fields authenticate a new socket.
+	opts.WorldConn = nil
+	if relogin != nil {
+		fresh, err := relogin(actx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("login again: %w", err)
+		}
+		opts = fresh
+	}
 	base := context.WithoutCancel(ctx)
 	s := newSession(opts, &Report{Counts: make(map[string]int)}, base)
 	if combat != nil {

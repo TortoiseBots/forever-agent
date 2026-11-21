@@ -301,6 +301,14 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			DisconnectGrace: *grace,
 			AllowGMUnits:    *allowGMUnits,
 			CaptureDir:      *captureDir,
+			// A reconnect logs in again: the first login's join ticket is spent when the link drops.
+			Relogin: func(ctx context.Context, o world.Options) (world.Options, error) {
+				fresh, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
+				if err != nil {
+					return o, err
+				}
+				return common.withLogin(fresh, stdout, o), nil
+			},
 		},
 	})
 	fmt.Fprintf(stdout, "rpc: listening on http://%s/rpc\n", ln.Addr())
