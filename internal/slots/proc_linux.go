@@ -54,7 +54,13 @@ func (LinuxProbe) AgentPID(dir string) (int, bool) {
 		}
 	}
 	if exe == want {
-		// A `slot setup` client runs the binary copied into the dir.
+		// A client runs the binary copied into the dir; its recorded start time must still match, so a pid
+		// reused by another run of that binary (or a record that is missing) is never taken for it.
+		start, serr := ProcStartTicks(pid)
+		recorded, ok := slotPIDStart(dir)
+		if serr != nil || !ok || recorded == 0 || recorded != start {
+			return pid, false
+		}
 		return pid, true
 	}
 	// A serve daemon runs from wherever the binary lives. Its command line must be this dir's `serve` and
