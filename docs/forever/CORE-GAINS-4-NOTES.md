@@ -146,7 +146,21 @@ line, a bad flag or config exits 2.
 
 ## Gates
 
-Filled after the clean-tree run: see the final section of this file.
+On a clean committed tree at `687448f3` (the only later change is this section):
+
+```
+make fmt-check            -> rc=0
+make cross                -> windows/amd64 and darwin/arm64 build, windows vet: rc=0
+staticcheck ./...         -> rc=0 (no finding)
+go vet ./...              -> rc=0
+the build VM's go test -count=1 -timeout 20m ./... && go vet ./...:
+RESULT: PASS  kind=ta sha=687448f3 dirty=0
+rc=0  vm_duration=768s
+```
+
+The first VM run at `8071e768` failed one test that pinned the old rule list
+(`cmd/forever-agent` `TestSelectedRulesAreInRuleOrder`, which did not know rule 20); the list was updated and the
+suite passed at `687448f3`.
 
 ## Live checks for the lead's queue
 
