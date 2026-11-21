@@ -16,6 +16,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/slots"
 )
 
@@ -36,59 +37,15 @@ type teardownCLIStep struct {
 	Detail string `json:"detail"`
 }
 
-type teardownSlotManifest struct {
-	Server    string `json:"server"`
-	Slot      string `json:"slot"`
-	Holder    string `json:"holder"`
-	LeaseID   string `json:"lease_id"`
-	Account   string `json:"account"`
-	Character string `json:"character"`
-	Port      int    `json:"port"`
-	Dir       string `json:"dir"`
-	Binary    string `json:"binary"`
-	Settings  string `json:"settings"`
-	PIDFile   string `json:"pid_file"`
-	TokenFile string `json:"token_file"`
-	SlotsPath string `json:"slots_path"`
-	Created   string `json:"created"`
-}
+// teardownSlotManifest is the shared slot.json shape (internal/slotdir).
+type teardownSlotManifest = slotdir.Manifest
 
 // teardownCheckManifest treats slot.json paths as assertions: manifest.Dir
 // must be the canonical teardown dir, and the settings/pid/binary/token
 // paths must be the ones derived inside it (never symlinks, never outside).
 // A tampered slot.json refuses the teardown before anything is deleted.
 func teardownCheckManifest(dir string, manifest *teardownSlotManifest) error {
-	canon, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return fmt.Errorf("teardown: %s: %v", dir, err)
-	}
-	if manifest.Dir != canon && manifest.Dir != dir {
-		return fmt.Errorf("teardown: slot.json dir %q is not this dir %q: teardown works on a dir made by slot setup", manifest.Dir, dir)
-	}
-	if manifest.Port < 1 || manifest.Port > 65535 {
-		return fmt.Errorf("teardown: slot.json has a bad port %d", manifest.Port)
-	}
-	want := map[string]string{
-		"settings":   filepath.Join(dir, "settings.json"),
-		"pid_file":   filepath.Join(dir, "agent.pid"),
-		"binary":     filepath.Join(dir, "forever-agent"),
-		"token_file": filepath.Join(dir, fmt.Sprintf("rpc-%d.token", manifest.Port)),
-	}
-	got := map[string]string{
-		"settings":   manifest.Settings,
-		"pid_file":   manifest.PIDFile,
-		"binary":     manifest.Binary,
-		"token_file": manifest.TokenFile,
-	}
-	for _, k := range []string{"settings", "pid_file", "binary", "token_file"} {
-		if got[k] != want[k] {
-			return fmt.Errorf("teardown: slot.json %s %q is outside %s: teardown works on a dir made by slot setup", k, got[k], dir)
-		}
-		if fi, err := os.Lstat(want[k]); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("teardown: %s is a symlink: teardown works on a dir made by slot setup", want[k])
-		}
-	}
-	return nil
+	return slotdir.Check("teardown", dir, manifest)
 }
 
 func teardownCmd(args []string, stdout, stderr io.Writer) int {
