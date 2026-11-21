@@ -238,8 +238,11 @@ func parseStateRecord(rec record) (BotState, error) {
 	if b.Name, err = rec.requireText("bot"); err != nil {
 		return b, err
 	}
-	if b.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps"); err != nil {
+	if b.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps", "none"); err != nil {
 		return b, err
+	}
+	if b.Role == "none" { // the module prints role=none for a bot with no role
+		b.Role = ""
 	}
 	if b.RoleSource, err = requiredWord(rec, "rolesrc", "forced", "auto"); err != nil {
 		return b, err

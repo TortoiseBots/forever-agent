@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -844,6 +845,28 @@ func writeValue(b *bytes.Buffer, v any, indent, cur string, pretty bool) error {
 		}
 		b.WriteByte('}')
 	default:
+		// One Python int type: a typed Go integer is an int; a typed slice
+		// is a list. Values Go-specific containers (structs, funcs,
+		// channels) stay refused.
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array:
+			items := make([]any, 0, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				items = append(items, rv.Index(i).Interface())
+			}
+			return writeValue(b, items, indent, cur, pretty)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return writeValue(b, rv.Int(), indent, cur, pretty)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if u := rv.Uint(); u <= math.MaxInt64 {
+				return writeValue(b, int64(u), indent, cur, pretty)
+			} else {
+				return writeValue(b, float64(u), indent, cur, pretty)
+			}
+		case reflect.Float32:
+			return writeValue(b, rv.Float(), indent, cur, pretty)
+		}
 		return fmt.Errorf("%w: %T", ErrNotJSON, v)
 	}
 	return nil
