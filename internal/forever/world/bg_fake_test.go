@@ -1,14 +1,17 @@
 package world
 
 // The battleground steps against the handler-boundary fake: a battlemaster answers the hello with its list, the
-// join answers the queued status, and the port and leave answer their own statuses.
+// join answers the queued status or the invite, and the port and leave answer the way BattleGroundHandler.cpp does
+// (a queue-leave port answers NONE, an explicit leave only does something inside a match).
 //
-// The failing case is TestBGEmptyListStopsTheRound: an empty list from a battlemaster stops the round with its
-// report instead of queueing — a runner that joins without probing sends a join the server never answers.
+// The failing cases are TestBGEmptyListStopsTheRound (a runner that joins without probing sends a join the server
+// never answers) and TestBGStatusParsersReadTheHeaderFirst (the parsers in this fake's payload builders must read
+// the core's own field order).
 
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/bg"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
@@ -24,7 +27,9 @@ var bgNPCGUID = wire.GUID{Low: 0xE0E0E0E0, High: uint64(objects.TypeUnit) << 58}
 // bgWorld is the item-world fake with one battlemaster in the world model and the queue answers.
 type bgWorld struct {
 	*itemWorld
-	// emptyList makes the hello answer an empty list (no support).
+	// listID is the support list the fake answers (0 is the supporting default, 2).
+	listID int32
+	// emptyList makes the hello answer a list with no supported list id (no support).
 	emptyList bool
 	// failReason, when not nil, is the reason the join answers as failed.
 	failReason *uint32
@@ -32,6 +37,15 @@ type bgWorld struct {
 	invite bool
 	// noAnswer, when set, makes the fake swallow one client opcode.
 	noAnswer map[uint32]bool
+	// queued, invited and active are the fake server's own queue state, so the port and the leave answer the way
+	// BattleGroundHandler.cpp does: a queue-leave port answers NONE, an explicit leave only does something inside a
+	// match.
+	queued, invited, active bool
+	// portTicket and portAccept are the last port packet's own fields, for the tests that pin them.
+	portTicket bg.Ticket
+	portAccept bool
+	// portSends counts the port packets whose accept bit was set.
+	portSends int
 }
 
 // newBGWorld plants one battlemaster creature at the character's own position (in reach) and answers the queue
@@ -99,28 +113,37 @@ func (v *bgWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			return
 		}
 		if v.invite {
+			v.invited = true
 			v.deliver(wire.SMSGBattlefieldStatusNeedConfirmation, v.needConfirmPayload())
 			return
 		}
+		v.queued = true
 		v.deliver(wire.SMSGBattlefieldStatusQueued, v.queuedPayload())
 	case wire.CMSGBattlefieldPort:
 		b := wire.NewReader(payload)
-		_, _ = readTestTicket(b)
-		r := wire.NewReader(payload)
-		_ = wire.ReadPackedGUID(r)
-		_ = r.ReadU32()
-		_ = r.ReadU32()
-		_ = r.ReadU64()
-		_ = r.ReadBit()
-		r.FlushBits()
-		accept := r.ReadBit()
-		if accept {
-			v.deliver(wire.SMSGBattlefieldStatusActive, v.activePayload())
-		} else {
+		v.portTicket = readTestTicket(b)
+		v.portAccept = b.ReadBit()
+		b.FlushBits()
+		if v.portAccept {
+			v.portSends++
+			if v.invited {
+				v.invited = false
+				v.active = true
+				v.deliver(wire.SMSGBattlefieldStatusActive, v.activePayload())
+			}
+			return
+		}
+		// The core leaves every queue the player really is in through this path; with none it drops the port.
+		if v.queued || v.invited {
+			v.queued, v.invited, v.active = false, false, false
 			v.deliver(wire.SMSGBattlefieldStatusNone, v.nonePayload())
 		}
 	case wire.CMSGBattlefieldLeave:
-		v.deliver(wire.SMSGBattlefieldStatusNone, v.nonePayload())
+		// LeaveBattleground returns at once with no battleground: a queued character gets no answer.
+		if v.active {
+			v.active = false
+			v.deliver(wire.SMSGBattlefieldStatusNone, v.nonePayload())
+		}
 	}
 }
 
@@ -150,7 +173,8 @@ func (v *bgWorld) headerPayload(b *wire.Buffer, queues []uint64) {
 	b.FlushBits()
 }
 
-// listPayload writes the fake's SMSG_BATTLEFIELD_LIST: a supporting list, or an empty one for the probe.
+// listPayload writes the fake's SMSG_BATTLEFIELD_LIST: a supporting list, or one with a zero list id for the probe
+// (the core sends no list at all for a battlemaster it does not support).
 func (v *bgWorld) listPayload() []byte {
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, bgNPCGUID)
@@ -164,7 +188,7 @@ func (v *bgWorld) listPayload() []byte {
 		b.FlushBits()
 		return b.Bytes()
 	}
-	b.WriteI32(2)
+	b.WriteI32(v.supportListID())
 	b.WriteU8(10)
 	b.WriteU8(60)
 	b.WriteU32(0)
@@ -174,11 +198,20 @@ func (v *bgWorld) listPayload() []byte {
 	return b.Bytes()
 }
 
-// queuedPayload writes one queued status around the test queue id.
+// supportListID is the list id the supporting answer names: the test's own, or the default 2.
+func (v *bgWorld) supportListID() int32 {
+	if v.listID != 0 {
+		return v.listID
+	}
+	return 2
+}
+
+// queuedPayload writes one queued status around the test queue id: the header first, then the average wait, the
+// wait, the spec and the three bits (BattlegroundPackets.cpp:226-238).
 func (v *bgWorld) queuedPayload() []byte {
 	b := wire.NewWriter()
-	b.WriteU32(30)
 	v.headerPayload(b, []uint64{0x1F10000000000002})
+	b.WriteU32(30)
 	b.WriteU32(12)
 	b.WriteI32(0)
 	b.WriteBit(false)
@@ -188,12 +221,13 @@ func (v *bgWorld) queuedPayload() []byte {
 	return b.Bytes()
 }
 
-// needConfirmPayload writes one need-confirmation status.
+// needConfirmPayload writes one need-confirmation status: the header first, then the map, the timeout and the role
+// (BattlegroundPackets.cpp:202-210).
 func (v *bgWorld) needConfirmPayload() []byte {
 	b := wire.NewWriter()
-	b.WriteU32(60)
-	b.WriteU32(489)
 	v.headerPayload(b, []uint64{0x1F10000000000002})
+	b.WriteU32(489)
+	b.WriteU32(90000)
 	b.WriteU8(0)
 	return b.Bytes()
 }
@@ -229,10 +263,17 @@ func (v *bgWorld) failedPayload(reason uint32) []byte {
 	return b.Bytes()
 }
 
-// readTestTicket reads the ticket the step sent, for the port-order test.
-func readTestTicket(b *wire.Buffer) (bg.Ticket, bool) {
-	_ = b
-	return bg.Ticket{}, true
+// readTestTicket reads the ticket a step sent (LFGPacketsCommon.cpp:23-33): the requester, the slot, the kind, the
+// time, the cross-faction bit flushed.
+func readTestTicket(b *wire.Buffer) bg.Ticket {
+	var t bg.Ticket
+	t.Requester = wire.ReadPackedGUID(b)
+	t.ID = b.ReadU32()
+	t.Type = bg.RideType(b.ReadU32())
+	t.Time = int64(b.ReadU64())
+	t.CrossFaction = b.ReadBit()
+	b.FlushBits()
+	return t
 }
 
 // clientSends counts the packets of one client opcode.
@@ -345,7 +386,8 @@ func TestBGQueueInviteReadsReady(t *testing.T) {
 	}
 }
 
-// TestBGAcceptPortsOnTheInvite: the port carries the accept bit, and the active status ends the step.
+// TestBGAcceptPortsOnTheInvite: the port carries the invite's own ticket (slot, kind, time) and the accept bit,
+// and the active status ends the step.
 func TestBGAcceptPortsOnTheInvite(t *testing.T) {
 	v := newBGWorld(t, npc.NPCFlagBattlemaster)
 	v.invite = true
@@ -358,6 +400,15 @@ func TestBGAcceptPortsOnTheInvite(t *testing.T) {
 	}
 	if n := v.clientSends(wire.CMSGBattlefieldPort); n != 1 {
 		t.Fatalf("%d port packet(s), want 1", n)
+	}
+	if v.portSends != 1 || !v.portAccept {
+		t.Fatalf("the port accept bit = %v (%d accepted sends), want true", v.portAccept, v.portSends)
+	}
+	if v.portTicket.ID != 3 || v.portTicket.Type != bg.RideBattlegrounds || v.portTicket.Time != 0x11223344 {
+		t.Fatalf("the port ticket = %+v, want slot 3, battlegrounds kind, time 0x11223344", v.portTicket)
+	}
+	if v.portTicket.Requester != itemSelf {
+		t.Fatalf("the port requester = %v, want the character's own GUID", v.portTicket.Requester)
 	}
 	if !hasText(a.lines, "inside the battleground on map 489") {
 		t.Fatalf("the accept line misses the map:\n%s", joinLines(a.lines))
@@ -390,13 +441,24 @@ func TestBGLeaveDeclinesTheInvite(t *testing.T) {
 	if n := v.clientSends(wire.CMSGBattlefieldPort); n != 1 {
 		t.Fatalf("%d port packet(s), want 1 (the decline)", n)
 	}
-	if !hasText(a.lines, "invite declined") {
-		t.Fatalf("the leave line misses the decline:\n%s", joinLines(a.lines))
+	if v.portAccept {
+		t.Fatal("the decline set the accept bit")
+	}
+	if v.portTicket.ID != 3 || v.portTicket.Type != bg.RideBattlegrounds {
+		t.Fatalf("the decline ticket = %+v, want slot 3 and the battlegrounds kind", v.portTicket)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldLeave); n != 0 {
+		t.Fatalf("%d explicit leave packet(s), want 0 (a queue is left through the port)", n)
+	}
+	if !hasText(a.lines, "out of the battleground queue") {
+		t.Fatalf("the leave line misses the report:\n%s", joinLines(a.lines))
 	}
 }
 
-// TestBGLeaveSendsTheLeave: queued with no invite, the step sends the explicit leave.
-func TestBGLeaveSendsTheLeave(t *testing.T) {
+// TestBGLeaveQueuedPortsOut is the core's queue-leave path: a queued character with no invite leaves through
+// CMSG_BATTLEFIELD_PORT with the queued status's own ticket and the accept bit clear. CMSG_BATTLEFIELD_LEAVE would
+// only call Player::LeaveBattleground, which returns with no battleground, so no NONE would ever come.
+func TestBGLeaveQueuedPortsOut(t *testing.T) {
 	v := newBGWorld(t, npc.NPCFlagBattlemaster)
 	a := v.state(t)
 	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err != nil {
@@ -405,10 +467,95 @@ func TestBGLeaveSendsTheLeave(t *testing.T) {
 	if err := v.s.actBGLeave(v.s.ctx, a, mustItemStep(t, "bg-leave")); err != nil {
 		t.Fatalf("bg-leave: %v", err)
 	}
-	if n := v.clientSends(wire.CMSGBattlefieldLeave); n != 1 {
-		t.Fatalf("%d leave packet(s), want 1", n)
+	if n := v.clientSends(wire.CMSGBattlefieldLeave); n != 0 {
+		t.Fatalf("%d explicit leave packet(s), want 0 (the port is the queue-leave path)", n)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldPort); n != 1 {
+		t.Fatalf("%d port packet(s), want 1", n)
+	}
+	if v.portAccept {
+		t.Fatal("the queue leave set the accept bit")
+	}
+	if v.portTicket.ID != 3 {
+		t.Fatalf("the queue-leave ticket slot = %d, want the queued status's 3", v.portTicket.ID)
 	}
 	if !hasText(a.lines, "out of the battleground queue") {
 		t.Fatalf("the leave line misses the report:\n%s", joinLines(a.lines))
+	}
+}
+
+// TestBGLeaveAfterAcceptNeedsMatchFlag: after the port the character is inside the match, and the queue-leave port
+// no longer applies. A plain bg-leave refuses before any packet; match=yes sends the explicit leave and the line
+// warns about the Deserter debuff.
+func TestBGLeaveAfterAcceptNeedsMatchFlag(t *testing.T) {
+	v := newBGWorld(t, npc.NPCFlagBattlemaster)
+	v.invite = true
+	a := v.state(t)
+	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err != nil {
+		t.Fatalf("bg-queue: %v", err)
+	}
+	if err := v.s.actBGAccept(v.s.ctx, a, mustItemStep(t, "bg-accept")); err != nil {
+		t.Fatalf("bg-accept: %v", err)
+	}
+	ports := v.clientSends(wire.CMSGBattlefieldPort)
+	err := v.s.actBGLeave(v.s.ctx, a, mustItemStep(t, "bg-leave"))
+	if err == nil {
+		t.Fatal("bg-leave left an active match without match=yes")
+	} else if !strings.Contains(err.Error(), "Deserter") {
+		t.Fatalf("bg-leave failed with %q, want the Deserter warning", err)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldPort); n != ports {
+		t.Fatalf("%d port packet(s) after the refusal, want the %d from the accept", n, ports)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldLeave); n != 0 {
+		t.Fatalf("%d leave packet(s) after the refusal, want 0", n)
+	}
+	if err := v.s.actBGLeave(v.s.ctx, a, mustItemStep(t, "bg-leave match=yes")); err != nil {
+		t.Fatalf("bg-leave match=yes: %v", err)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldLeave); n != 1 {
+		t.Fatalf("%d explicit leave packet(s), want 1", n)
+	}
+	if !hasText(a.lines, "Deserter") {
+		t.Fatalf("the match leave line misses the Deserter warning:\n%s", joinLines(a.lines))
+	}
+}
+
+// TestBGAcceptExpiredInviteRefuses: an invite past the server's own accept window is refused before any packet,
+// because the server already removed the queue entry and the port would go unanswered.
+func TestBGAcceptExpiredInviteRefuses(t *testing.T) {
+	v := newBGWorld(t, npc.NPCFlagBattlemaster)
+	v.invite = true
+	a := v.state(t)
+	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err != nil {
+		t.Fatalf("bg-queue: %v", err)
+	}
+	if v.s.bg.needConfirm == nil {
+		t.Fatal("the invite is not recorded")
+	}
+	v.s.bg.needConfirmAt = v.now.Add(-2 * time.Duration(v.s.bg.needConfirm.Timeout) * time.Millisecond)
+	if err := v.s.actBGAccept(v.s.ctx, a, mustItemStep(t, "bg-accept")); err == nil {
+		t.Fatal("bg-accept took an expired invite")
+	} else if !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("bg-accept failed with %q, want the expiry", err)
+	}
+	if n := v.clientSends(wire.CMSGBattlefieldPort); n != 0 {
+		t.Fatalf("%d port packet(s), want 0", n)
+	}
+}
+
+// TestBGQueueRejectsAnUnpackableListID: a list id the packed queue id cannot hold is refused before any join, never
+// truncated into some other queue.
+func TestBGQueueRejectsAnUnpackableListID(t *testing.T) {
+	v := newBGWorld(t, npc.NPCFlagBattlemaster)
+	v.listID = 0x10000
+	a := v.state(t)
+	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err == nil {
+		t.Fatal("bg-queue joined a list id over 0xffff")
+	} else if !strings.Contains(err.Error(), "cannot be a queue") {
+		t.Fatalf("bg-queue failed with %q, want the list-id refusal", err)
+	}
+	if n := v.clientSends(wire.CMSGBattlemasterJoin); n != 0 {
+		t.Fatalf("%d join packet(s), want 0", n)
 	}
 }

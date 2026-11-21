@@ -26,19 +26,41 @@ var mailNPCGUID = wire.GUID{Low: 0xD0D0D0D0, High: uint64(objects.TypeUnit) << 5
 // mailWorld is the item-world fake with one mailbox in the world model and the mail answers.
 type mailWorld struct {
 	*itemWorld
-	// mails are the rows the fake's list carries (nil: the two-mail failing fixture).
+	// mails are the rows the fake's list and take/delete state carry (the two-mail failing fixture by default).
 	mails []mail.Mail
 	// resultError, when not mail.ResponseOK, is the error the fake's take/delete answers carry.
 	resultError int32
 	// noAnswer, when set, makes the fake swallow one client opcode.
 	noAnswer map[uint32]bool
+	// noItem makes a successful take plant no item (the inventory never sees the gain).
+	noItem bool
+	// noCoinage makes a successful money take leave the coinage alone (the money never reads back).
+	noCoinage bool
+	// names are the names the fake answers a name query with.
+	names map[wire.GUID]string
+}
+
+// defaultMails is the fake's two-mail fixture: the first has two attachments and money, the second none.
+func defaultMails() []mail.Mail {
+	return []mail.Mail{
+		{MailID: 0x1111, Money: 500, Flags: 1, Subject: "first", Attachments: []mail.AttachedItem{
+			{AttachID: 0xA1, Count: 5, Item: testInstance(6948)},
+			{AttachID: 0xA2, Count: 1, Item: testInstance(6949)},
+		}},
+		{MailID: 0x2222, SenderType: mail.SenderCreature, AltSenderID: 0x4242, HasAltSender: true, Subject: "second"},
+	}
 }
 
 // newMailWorld plants one mailbox creature at the character's own position (in reach) and answers the mail packets
 // through v.answer.
 func newMailWorld(t *testing.T, flags uint32) *mailWorld {
 	t.Helper()
-	v := &mailWorld{itemWorld: newItemWorld(t), noAnswer: map[uint32]bool{}}
+	v := &mailWorld{
+		itemWorld: newItemWorld(t),
+		noAnswer:  map[uint32]bool{},
+		names:     map[wire.GUID]string{},
+		mails:     defaultMails(),
+	}
 	entry := fakeUnitEntry(t, v.itemWorld, mailNPCGUID, mailTestEntry, flags)
 	if entry != mailTestEntry {
 		t.Fatalf("mailbox entry = %d, want %d", entry, mailTestEntry)
@@ -125,8 +147,11 @@ func (v *mailWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		b := wire.NewReader(payload)
 		_ = wire.ReadPackedGUID(b)
 		id := b.ReadU64()
-		_ = b.ReadU64()
+		amount := b.ReadU64()
 		v.deliver(wire.SMSMMailCommandResult, v.resultPayload(id, mail.ResponseMoneyTaken, v.resultError, 0, 0))
+		if v.resultError == mail.ResponseOK {
+			v.takeMoney(id, amount)
+		}
 	case wire.CMSMMailDelete:
 		b := wire.NewReader(payload)
 		id := b.ReadU64()
@@ -136,21 +161,19 @@ func (v *mailWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		}
 	case wire.CMSMSendMail:
 		v.deliver(wire.SMSMMailCommandResult, v.resultPayload(0, mail.ResponseSend, v.resultError, 0, 0))
+	case wire.CMSGQueryPlayerNames:
+		// The server answers a name query with the character cache's name; the step reads it back from the
+		// world model (objects.World.SetName is what the session's own handler calls).
+		for g, name := range v.names {
+			v.s.world.SetName(g, name)
+		}
 	}
 }
 
-// listPayload writes the fake's SMSG_MAIL_LIST_RESULT: the two-mail failing fixture by default.
+// listPayload writes the fake's SMSG_MAIL_LIST_RESULT from its current mail state (the server's own list after a
+// take or a delete).
 func (v *mailWorld) listPayload() []byte {
 	mails := v.mails
-	if mails == nil {
-		mails = []mail.Mail{
-			{MailID: 0x1111, Money: 500, Flags: 1, Subject: "first", Attachments: []mail.AttachedItem{
-				{AttachID: 0xA1, Count: 5, Item: testInstance(6948)},
-				{AttachID: 0xA2, Count: 1, Item: testInstance(6949)},
-			}},
-			{MailID: 0x2222, SenderType: mail.SenderCreature, AltSenderID: 0x4242, HasAltSender: true, Subject: "second"},
-		}
-	}
 	b := wire.NewWriter()
 	b.WriteU32(uint32(len(mails)))
 	b.WriteI32(int32(len(mails)))
@@ -164,7 +187,7 @@ func (v *mailWorld) listPayload() []byte {
 func writeTestMail(b *wire.Buffer, m mail.Mail) {
 	b.WriteU64(m.MailID)
 	b.WriteU32(uint32(m.SenderType))
-	b.WriteU64(0)
+	b.WriteU64(m.COD)
 	b.WriteI32(0)
 	b.WriteU64(m.Money)
 	b.WriteI32(m.Flags)
@@ -216,20 +239,72 @@ func (v *mailWorld) resultPayload(id uint64, cmd int32, err int32, attach uint64
 	return b.Bytes()
 }
 
-// takeAttachment drops one attachment from the fake's list state (the server removes it on a take).
+// takeAttachment removes one attachment from the fake's list state and plants the item the take moved into the
+// bags, the way Player::MoveItemToInventory sends its create update. A COD on the mail is paid once to the sender
+// and zeroed (MailHandler.cpp:506-545).
 func (v *mailWorld) takeAttachment(id, attach uint64) {
-	for i, m := range v.mails {
+	for i := range v.mails {
+		m := &v.mails[i]
 		if m.MailID != id {
 			continue
 		}
 		kept := m.Attachments[:0]
+		var taken *mail.AttachedItem
 		for _, at := range m.Attachments {
-			if at.AttachID != attach {
-				kept = append(kept, at)
+			if at.AttachID == attach && taken == nil {
+				at := at
+				taken = &at
+				continue
 			}
+			kept = append(kept, at)
 		}
-		v.mails[i].Attachments = kept
+		m.Attachments = kept
+		if taken == nil {
+			return
+		}
+		if m.COD != 0 {
+			v.payCOD(m.COD)
+			m.COD = 0
+		}
+		if !v.noItem {
+			v.apply(fragmentItem(mailItemGUID(attach), taken.Item.ItemID, uint32(taken.Count)))
+		}
+		return
 	}
+}
+
+// mailItemGUID is the item GUID a taken attachment becomes in the fake's world model.
+func mailItemGUID(attach uint64) wire.GUID {
+	return wire.GUID{Low: 0x9000000000000000 | attach, High: uint64(objects.TypeItem) << 58}
+}
+
+// payCOD takes copper out of the character's wallet, the way the item take does.
+func (v *mailWorld) payCOD(cod uint64) {
+	if v.noCoinage {
+		return
+	}
+	coin := v.s.inventoryNow().Coinage
+	if cod >= coin {
+		coin = 0
+	} else {
+		coin -= cod
+	}
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+}
+
+// takeMoney adds the taken amount to the character's wallet and zeroes the mail's money (HandleMailTakeMoney).
+func (v *mailWorld) takeMoney(id, amount uint64) {
+	for i := range v.mails {
+		if v.mails[i].MailID == id {
+			v.mails[i].Money = 0
+			break
+		}
+	}
+	if v.noCoinage {
+		return
+	}
+	coin := v.s.inventoryNow().Coinage + amount
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
 }
 
 // dropMail drops one mail from the fake's list state (the server deletes it on a delete).
@@ -436,5 +511,318 @@ func TestMailTakeAttachesNamesTheListIDs(t *testing.T) {
 	}
 	if got := b.ReadU64(); got != 0xA1 {
 		t.Fatalf("the take names attach %#x, want 0xa1", got)
+	}
+}
+
+// mailBuddy is the allow-listed recipient the send tests use.
+var mailBuddy = wire.GUID{Low: 0x77, High: uint64(wire.TypePlayer) << 58}
+
+// sendAllowList is the caller's allow-list in the send tests.
+func sendAllowList() map[string]wire.GUID { return map[string]wire.GUID{"Buddy": mailBuddy} }
+
+// TestSendMailRefusesAStranger: a recipient that is not on the caller's allow-list is refused before any packet.
+func TestSendMailRefusesAStranger(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Stranger money=1"))
+	if err == nil {
+		t.Fatal("send-mail passed to a recipient outside the allow-list")
+	} else if !strings.Contains(err.Error(), "allow-list") {
+		t.Fatalf("send-mail failed with %q, want the allow-list refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 0 {
+		t.Fatalf("%d send packet(s), want 0", n)
+	}
+}
+
+// TestSendMailConfirmsTheGuid: the allow-listed name is sent only after the guid answers that exact name.
+func TestSendMailConfirmsTheGuid(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.names[mailBuddy] = "Buddy"
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	if err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100 subject=\"hi\" body=\"there\"")); err != nil {
+		t.Fatalf("send-mail: %v", err)
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 1 {
+		t.Fatalf("%d send packet(s), want 1", n)
+	}
+	if n := v.clientSends(wire.CMSGQueryPlayerNames); n != 1 {
+		t.Fatalf("%d name query packet(s), want 1", n)
+	}
+	b := wire.NewReader(v.sent[len(v.sent)-1].payload)
+	_ = wire.ReadPackedGUID(b)
+	_ = b.ReadI32()
+	if got := b.ReadU64(); got != 100 {
+		t.Fatalf("the send names %d copper, want 100", got)
+	}
+	if got := b.ReadU64(); got != 0 {
+		t.Fatalf("the send names a COD of %d, want 0", got)
+	}
+	if got := b.ReadBits(9); got != 5 {
+		t.Fatalf("the target length is %d, want 5", got)
+	}
+}
+
+// TestSendMailRefusesANameMismatch: the allow-listed guid answering another name refuses before the send, so a
+// renamed or reused character never receives the copper.
+func TestSendMailRefusesANameMismatch(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.names[mailBuddy] = "Someone"
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=1"))
+	if err == nil {
+		t.Fatal("send-mail passed although the guid answered another name")
+	} else if !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("send-mail failed with %q, want the name refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 0 {
+		t.Fatalf("%d send packet(s), want 0", n)
+	}
+}
+
+// TestSendMailRefusesOverTheCap: money above the caller's cap is refused before the name query and the packet.
+func TestSendMailRefusesOverTheCap(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 50
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100"))
+	if err == nil {
+		t.Fatal("send-mail passed over the cap")
+	} else if !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("send-mail failed with %q, want the cap refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 0 {
+		t.Fatalf("%d send packet(s), want 0", n)
+	}
+	if n := v.clientSends(wire.CMSGQueryPlayerNames); n != 0 {
+		t.Fatalf("%d name query packet(s), want 0", n)
+	}
+}
+
+// TestSendMailRefusesALongSubject: a field the packet's bit width cannot hold is refused, never masked into the
+// next field.
+func TestSendMailRefusesALongSubject(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.names[mailBuddy] = "Buddy"
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	step := mustItemStep(t, "send-mail to=Buddy subject=\""+strings.Repeat("s", 512)+"\"")
+	if err := v.s.actSendMail(v.s.ctx, a, step); err == nil {
+		t.Fatal("send-mail passed a subject past 511 bytes")
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 0 {
+		t.Fatalf("%d send packet(s), want 0", n)
+	}
+}
+
+// TestParseMailTo pins the allow-list's own text: NAME=GUID with 32 hex digits, a player guid, no duplicate.
+func TestParseMailTo(t *testing.T) {
+	got, err := ParseMailTo([]string{"Buddy=0x08000000000000000000000000000077"})
+	if err != nil {
+		t.Fatalf("parse mail-to: %v", err)
+	}
+	if g, ok := got["Buddy"]; !ok || g != mailBuddy {
+		t.Fatalf("allow-list = %v, want Buddy -> %v", got, mailBuddy)
+	}
+	bad := [][]string{
+		{"Buddy"},      // no guid
+		{"Buddy=0x77"}, // short guid
+		{"Bu-ddy=0x08000000000000000000000000000077"}, // not a name
+		{"Buddy=0x04000000000000000000000000000077"},  // not a player guid
+		{"Buddy=0x08000000000000000000000000000077", "buddy=0x08000000000000000000000000000078"},
+	}
+	for _, values := range bad {
+		if _, err := ParseMailTo(values); err == nil {
+			t.Fatalf("ParseMailTo(%q) passed", values)
+		}
+	}
+}
+
+// TestMailDeleteRefusesUntakenContents: the server deletes a mail with its items and money, so a mail that still
+// holds either is refused and no delete packet goes out.
+func TestMailDeleteRefusesUntakenContents(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actMailDelete(v.s.ctx, a, mustItemStep(t, "mail-delete id=4369"))
+	if err == nil {
+		t.Fatal("mail-delete passed on a mail with attachments and money")
+	} else if !strings.Contains(err.Error(), "take them first") {
+		t.Fatalf("mail-delete failed with %q, want the untaken-contents refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMMailDelete); n != 0 {
+		t.Fatalf("%d delete packet(s), want 0", n)
+	}
+}
+
+// TestMailDeleteRefusesCOD: even a COD-only mail is refused (the server keeps it, so deleting would fail anyway;
+// the step refuses locally).
+func TestMailDeleteRefusesCOD(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.mails = []mail.Mail{{MailID: 0x4444, COD: 7}}
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	if err := v.s.actMailDelete(v.s.ctx, a, mustItemStep(t, "mail-delete id=17476")); err == nil {
+		t.Fatal("mail-delete passed on a COD mail")
+	}
+	if n := v.clientSends(wire.CMSMMailDelete); n != 0 {
+		t.Fatalf("%d delete packet(s), want 0", n)
+	}
+}
+
+// TestMailDeleteAfterTheTakes: once the items and the money are taken the fresh list shows an empty mail, and the
+// delete goes out.
+func TestMailDeleteAfterTheTakes(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.mails = []mail.Mail{{MailID: 0x5555, Money: 500, Attachments: []mail.AttachedItem{
+		{AttachID: 0xB1, Count: 2, Item: testInstance(6948)},
+	}}}
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	if err := v.s.actMailTakeItem(v.s.ctx, a, mustItemStep(t, "mail-take id=21845")); err != nil {
+		t.Fatalf("mail-take: %v", err)
+	}
+	if err := v.s.actMailTakeMoney(v.s.ctx, a, mustItemStep(t, "mail-money id=21845")); err != nil {
+		t.Fatalf("mail-money: %v", err)
+	}
+	if err := v.s.actMailDelete(v.s.ctx, a, mustItemStep(t, "mail-delete id=21845")); err != nil {
+		t.Fatalf("mail-delete after the takes: %v", err)
+	}
+	if n := v.clientSends(wire.CMSMMailDelete); n != 1 {
+		t.Fatalf("%d delete packet(s), want 1", n)
+	}
+	if len(v.mails) != 0 {
+		t.Fatalf("the server still lists %d mail(s) after the delete", len(v.mails))
+	}
+}
+
+// TestMailTakeRefusesCODWithoutTheFlag: a COD mail costs the character real copper, so the take refuses it before
+// any packet unless the caller passed --pay-cod.
+func TestMailTakeRefusesCODWithoutTheFlag(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	coin := uint64(100)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+	v.mails = []mail.Mail{{MailID: 0x6666, COD: 10, Attachments: []mail.AttachedItem{
+		{AttachID: 0xC1, Count: 1, Item: testInstance(6948)},
+	}}}
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actMailTakeItem(v.s.ctx, a, mustItemStep(t, "mail-take id=26214"))
+	if err == nil {
+		t.Fatal("mail-take paid a COD without --pay-cod")
+	} else if !strings.Contains(err.Error(), "--pay-cod") {
+		t.Fatalf("mail-take failed with %q, want the COD refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMMailTakeItem); n != 0 {
+		t.Fatalf("%d take packet(s), want 0", n)
+	}
+	if got := v.s.inventoryNow().Coinage; got != 100 {
+		t.Fatalf("the coinage is %d after the refusal, want 100", got)
+	}
+}
+
+// TestMailTakePaysCODWithTheFlag: with --pay-cod the take pays the COD once and the money reads back as the
+// payment left it.
+func TestMailTakePaysCODWithTheFlag(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.PayCOD = true
+	coin := uint64(100)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+	v.mails = []mail.Mail{{MailID: 0x6666, COD: 10, Attachments: []mail.AttachedItem{
+		{AttachID: 0xC1, Count: 1, Item: testInstance(6948)},
+	}}}
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	if err := v.s.actMailTakeItem(v.s.ctx, a, mustItemStep(t, "mail-take id=26214")); err != nil {
+		t.Fatalf("mail-take: %v", err)
+	}
+	if got := v.s.inventoryNow().Coinage; got != 90 {
+		t.Fatalf("the coinage is %d after the COD, want 90", got)
+	}
+	if !hasText(a.lines, "10 copper COD paid") {
+		t.Fatalf("the take line misses the COD payment:\n%s", joinLines(a.lines))
+	}
+}
+
+// TestMailTakeUnconfirmedItemFails: MAIL_OK with no item the inventory can see is not a take.
+func TestMailTakeUnconfirmedItemFails(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.noItem = true
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actMailTakeItem(v.s.ctx, a, mustItemStep(t, "mail-take id=4369"))
+	if err == nil {
+		t.Fatal("mail-take passed with no item in the inventory")
+	} else if !strings.Contains(err.Error(), "unconfirmed") {
+		t.Fatalf("mail-take failed with %q, want the unconfirmed refusal", err)
+	}
+}
+
+// TestMailMoneyWithoutTheReadBackFails: MAIL_OK with an unchanged wallet is not a money take.
+func TestMailMoneyWithoutTheReadBackFails(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.noCoinage = true
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actMailTakeMoney(v.s.ctx, a, mustItemStep(t, "mail-money id=4369"))
+	if err == nil {
+		t.Fatal("mail-money passed with an unchanged wallet")
+	} else if !strings.Contains(err.Error(), "read back") {
+		t.Fatalf("mail-money failed with %q, want the read-back refusal", err)
+	}
+}
+
+// TestMailMoneyReadBack: the money take's own wallet update is what the step reports.
+func TestMailMoneyReadBack(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	if err := v.s.actMailTakeMoney(v.s.ctx, a, mustItemStep(t, "mail-money id=4369")); err != nil {
+		t.Fatalf("mail-money: %v", err)
+	}
+	if got := v.s.inventoryNow().Coinage; got != 500 {
+		t.Fatalf("the coinage is %d, want 500", got)
+	}
+	if !hasText(a.lines, "0 -> 500 copper") {
+		t.Fatalf("the money line misses the read-back:\n%s", joinLines(a.lines))
 	}
 }

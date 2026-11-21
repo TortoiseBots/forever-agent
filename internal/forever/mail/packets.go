@@ -1,22 +1,19 @@
-package mail
-
 // Package mail is the wire layer of the mail round (R7): the packets a player sends to a mailbox and the packets
 // that carry the mailbox's answers. Every layout is the server's own writer or reader (MailPackets.cpp, Opcodes.h at
 // d02645dd21), cited at each field group. Nothing here touches the world model: the parsers return values and the
 // callers decide what to merge.
 //
 // The client packets each follow the server's Read: GetList (a packed mailbox GUID), TakeItem (mailbox, mail id,
-// attach id), TakeMoney (mailbox, mail id, money), MarkAsRead (mailbox, mail id), Delete (mail id, delete reason)
-// and SendMail (the mailbox, stationery, money, COD, the target/subject/body sized strings and the attachments last,
-// MailPackets.cpp:196-214). SendMail comes last and covers text and money only.
+// attach id), TakeMoney (mailbox, mail id, money), Delete (mail id, delete reason) and SendMail (the mailbox,
+// stationery, money, COD, the target/subject/body sized strings and the attachments last, MailPackets.cpp:196-214).
+// SendMail comes last and covers text and money only.
+package mail
 
 import (
+	"fmt"
+
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
-
-// maxDeleteReason bounds CMSG_MAIL_DELETE's reason: the client always sends 0 for a player delete (the core's reader
-// takes an int32, the handler ignores it).
-const maxDeleteReason = 0
 
 // BuildGetList is CMSG_MAIL_GET_LIST (MailGetList::Read, MailPackets.cpp:166-169): the mailbox's packed GUID. The
 // mailbox is the world model's mailbox GUID (a game object or an NPC with the mailbox flag) the caller stands next
@@ -29,6 +26,7 @@ func BuildGetList(mailbox wire.GUID) []byte {
 }
 
 // BuildTakeItem is CMSG_MAIL_TAKE_ITEM (MailTakeItem::Read, MailPackets.cpp:246-251): the mailbox's packed GUID, the
+// mail id and the attach id the list named.
 func BuildTakeItem(mailbox wire.GUID, mailID uint64, attachID uint64) []byte {
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, mailbox)
@@ -48,22 +46,12 @@ func BuildTakeMoney(mailbox wire.GUID, mailID uint64, money uint64) []byte {
 	return b.Bytes()
 }
 
-// BuildMarkAsRead is CMSG_MAIL_MARK_AS_READ (MailMarkAsRead::Read, MailPackets.cpp:234-238): the mailbox's packed
-// GUID and the mail id. Reading a mail marks it anyway (HandleGetMailList leaves the flag to this packet: the
-// handler sets MAIL_CHECK_MASK_READ here), so the step sends it explicitly after it prints a body.
-func BuildMarkAsRead(mailbox wire.GUID, mailID uint64) []byte {
-	b := wire.NewWriter()
-	wire.WritePackedGUID(b, mailbox)
-	b.WriteU64(mailID)
-	return b.Bytes()
-}
-
 // BuildDelete is CMSG_MAIL_DELETE (MailDelete::Read, MailPackets.cpp:240-244): the mail id and the delete reason.
 // The reason is always 0 for a player delete.
 func BuildDelete(mailID uint64) []byte {
 	b := wire.NewWriter()
 	b.WriteU64(mailID)
-	b.WriteI32(maxDeleteReason)
+	b.WriteI32(0)
 	return b.Bytes()
 }
 
@@ -74,11 +62,33 @@ type Attachment struct {
 	Item     wire.GUID
 }
 
+// The send's sized fields: the core reads the three lengths from 9, 9 and 11 bits and the attachment count from 5
+// (MailPackets.cpp:196-214), so a longer value would be masked into the next field instead of being refused.
+const (
+	maxSendTarget      = 511  // 9 bits
+	maxSendSubject     = 511  // 9 bits
+	maxSendBody        = 2047 // 11 bits
+	maxSendAttachments = 31   // 5 bits
+)
+
 // BuildSendMail is CMSG_SEND_MAIL (SendMail::Read, MailPackets.cpp:196-214): the mailbox's packed GUID, the
 // stationery id, the money and the COD, then the three sized strings (target 9 bits, subject 9, body 11) and the
 // attachment count (5 bits) in one bit block, then the string bytes and the attachments. This round covers text and
-// money only: attachments is always empty here.
-func BuildSendMail(mailbox wire.GUID, stationery int32, money, cod int64, target, subject, body string, atts []Attachment) []byte {
+// money only: attachments is always empty here. A value that does not fit its bit width is an error, never a
+// silently masked length.
+func BuildSendMail(mailbox wire.GUID, stationery int32, money, cod int64, target, subject, body string, atts []Attachment) ([]byte, error) {
+	switch {
+	case money < 0 || cod < 0:
+		return nil, fmt.Errorf("mail: a send names money %d and cod %d; neither may be negative", money, cod)
+	case len(target) > maxSendTarget:
+		return nil, fmt.Errorf("mail: the target is %d bytes, over the %d the packet can hold", len(target), maxSendTarget)
+	case len(subject) > maxSendSubject:
+		return nil, fmt.Errorf("mail: the subject is %d bytes, over the %d the packet can hold", len(subject), maxSendSubject)
+	case len(body) > maxSendBody:
+		return nil, fmt.Errorf("mail: the body is %d bytes, over the %d the packet can hold", len(body), maxSendBody)
+	case len(atts) > maxSendAttachments:
+		return nil, fmt.Errorf("mail: %d attachments, over the %d the packet can hold", len(atts), maxSendAttachments)
+	}
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, mailbox)
 	b.WriteI32(stationery)
@@ -96,5 +106,5 @@ func BuildSendMail(mailbox wire.GUID, stationery int32, money, cod int64, target
 		b.WriteU8(a.Position)
 		wire.WritePackedGUID(b, a.Item)
 	}
-	return b.Bytes()
+	return b.Bytes(), nil
 }

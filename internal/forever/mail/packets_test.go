@@ -10,6 +10,7 @@ package mail
 // before them, cannot be read back.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -88,20 +89,6 @@ func TestBuildTakeMoney(t *testing.T) {
 	}
 }
 
-// TestBuildMarkAsRead pins the mark-read packet (MailMarkAsRead::Read, MailPackets.cpp:234-238).
-func TestBuildMarkAsRead(t *testing.T) {
-	const mailID = 0x1122334455667788
-	p := BuildMarkAsRead(mailboxGUID, mailID)
-	b := decodeMailbox(t, p, mailboxGUID)
-	decodeU64(t, b, mailID, "mail id")
-	if b.Err() != nil {
-		t.Fatalf("mark as read: %v", b.Err())
-	}
-	if n := b.Remaining(); n != 0 {
-		t.Fatalf("mark as read has %d trailing byte(s)", n)
-	}
-}
-
 // TestBuildDelete pins the delete packet (MailDelete::Read, MailPackets.cpp:240-244): the mail id and a zero
 // reason.
 func TestBuildDelete(t *testing.T) {
@@ -122,7 +109,10 @@ func TestBuildDelete(t *testing.T) {
 // bits) and its attachment count (5 bits) ride in one bit block before the string bytes (MailPackets.cpp:203-210);
 // a builder that writes the strings as bytes first cannot be read back, because the reader takes bits there.
 func TestSendMailStringBitsBeforeAttachments(t *testing.T) {
-	p := BuildSendMail(mailboxGUID, 41, 500, 0, "Testchar", "a subject", "a body", nil)
+	p, err := BuildSendMail(mailboxGUID, 41, 500, 0, "Testchar", "a subject", "a body", nil)
+	if err != nil {
+		t.Fatalf("build send: %v", err)
+	}
 	b := decodeMailbox(t, p, mailboxGUID)
 	decodeI32(t, b, 41, "stationery")
 	decodeU64(t, b, 500, "money")
@@ -159,7 +149,10 @@ func TestSendMailStringBitsBeforeAttachments(t *testing.T) {
 
 // TestSendMailAttachmentRidesLast: one attachment rides after the three strings (MailPackets.cpp:208-213).
 func TestSendMailAttachmentRidesLast(t *testing.T) {
-	p := BuildSendMail(mailboxGUID, 41, 0, 0, "Testchar", "s", "b", []Attachment{{Position: 3, Item: testItemGUID}})
+	p, err := BuildSendMail(mailboxGUID, 41, 0, 0, "Testchar", "s", "b", []Attachment{{Position: 3, Item: testItemGUID}})
+	if err != nil {
+		t.Fatalf("build send: %v", err)
+	}
 	b := decodeMailbox(t, p, mailboxGUID)
 	decodeI32(t, b, 41, "stationery")
 	decodeU64(t, b, 0, "money")
@@ -197,5 +190,32 @@ func TestSendMailAttachmentRidesLast(t *testing.T) {
 	}
 	if n := b.Remaining(); n != 0 {
 		t.Fatalf("send mail has %d trailing byte(s)", n)
+	}
+}
+
+// TestSendMailRefusesFieldsTheBitsCannotHold: a target or subject over 511 bytes, a body over 2047, more than 31
+// attachments or a negative money/COD is an error, never a silently masked length.
+func TestSendMailRefusesFieldsTheBitsCannotHold(t *testing.T) {
+	long := strings.Repeat("s", maxSendSubject+1)
+	cases := []struct {
+		name    string
+		money   int64
+		cod     int64
+		target  string
+		subject string
+		body    string
+		atts    []Attachment
+	}{
+		{"target", 0, 0, long, "", "", nil},
+		{"subject", 0, 0, "t", long, "", nil},
+		{"body", 0, 0, "t", "", strings.Repeat("b", maxSendBody+1), nil},
+		{"negative money", -1, 0, "t", "", "", nil},
+		{"negative cod", 0, -1, "t", "", "", nil},
+		{"attachments", 0, 0, "t", "", "", make([]Attachment, maxSendAttachments+1)},
+	}
+	for _, c := range cases {
+		if _, err := BuildSendMail(mailboxGUID, 41, c.money, c.cod, c.target, c.subject, c.body, c.atts); err == nil {
+			t.Fatalf("%s: BuildSendMail passed a value the packet cannot hold", c.name)
+		}
 	}
 }

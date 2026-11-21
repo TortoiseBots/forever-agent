@@ -45,8 +45,8 @@ func writeHeader(b *wire.Buffer, queues []uint64) {
 // count goes returns no queues and the status map that follows parses at the wrong offset.
 func TestStatusHeaderQueuesBeforeBits(t *testing.T) {
 	b := wire.NewWriter()
-	b.WriteU32(0x55) // AverageWaitTime
 	writeHeader(b, []uint64{0x1F10000000000002})
+	b.WriteU32(0x55) // AverageWaitTime
 	b.WriteU32(0x66) // WaitTime
 	b.WriteI32(0x77) // SpecSelected
 	b.WriteBit(true)
@@ -98,20 +98,20 @@ func TestParseListEmptyMeansNoSupport(t *testing.T) {
 	}
 }
 
-// TestParseNeedConfirmationPinsEveryField: the timeout, map, header and role in order
+// TestParseNeedConfirmationPinsEveryField: the header, the map, the timeout and the role in the core's order
 // (BattlegroundPackets.cpp:202-210).
 func TestParseNeedConfirmationPinsEveryField(t *testing.T) {
 	b := wire.NewWriter()
-	b.WriteU32(0x11)
-	b.WriteU32(0x22)
 	writeHeader(b, nil)
-	b.WriteU8(0x33)
+	b.WriteU32(0x11) // Mapid
+	b.WriteU32(0x22) // Timeout
+	b.WriteU8(0x33)  // Role
 	got, err := ParseNeedConfirmation(b.Bytes())
 	if err != nil {
 		t.Fatalf("parse need-confirmation: %v", err)
 	}
-	if got.Timeout != 0x11 || got.MapID != 0x22 || got.Role != 0x33 {
-		t.Fatalf("need-confirmation = %+v", got)
+	if got.MapID != 0x11 || got.Timeout != 0x22 || got.Role != 0x33 {
+		t.Fatalf("need-confirmation = %+v, want map 0x11 timeout 0x22 role 0x33", got)
 	}
 }
 

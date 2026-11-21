@@ -1,15 +1,14 @@
-package bg
-
 // Package bg is the wire layer of the battleground-queue round (R9): the packets a player sends to a battlemaster
 // and the packets that carry the queue's answers. Every layout is the server's own writer or reader
 // (BattlegroundPackets.cpp, LFGPacketsCommon.cpp, NPCPackets.cpp at d02645dd21), cited at each field group. Nothing
 // here touches the world model: the parsers return values and the callers decide what to merge.
 //
-// The client packets each follow the server's Read: BattlemasterHello is the NPC hello for a battlemaster
-// (NPCPackets.cpp:94-97), BattlemasterJoin is one packed queue id with roles and two blacklist maps
+// The client packets the round sends each follow the server's Read: BattlemasterHello is the NPC hello for a
+// battlemaster (NPCPackets.cpp:94-97), BattlemasterJoin is one packed queue id with roles and two blacklist maps
 // (BattlegroundPackets.cpp:159-168), BattlefieldPort is a ride ticket with an accept bit (BattlegroundPackets.cpp:
-// 250-254), BattlefieldLeave is empty, BattlefieldListRequest is one list id (BattlegroundPackets.cpp:256-259) and
-// RequestBattlefieldStatus is empty.
+// 250-254) and BattlefieldLeave is empty. The list and status requests are the round's probe and fallback in the
+// protocol but no step sends them, so no builder is kept for them.
+package bg
 
 import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -99,20 +98,7 @@ func BuildPort(t Ticket, accept bool) []byte {
 	return b.Bytes()
 }
 
-// BuildLeave is CMSG_BATTLEFIELD_LEAVE (BattlefieldLeave::Read, BattlegroundPackets.cpp:270-276): empty. Leaving
-// through the port with a ticket slot that names none of the player's queues removes the player from the queues he
-// really is in; an explicit leave covers the same ground and is the verb this round sends.
+// BuildLeave is CMSG_BATTLEFIELD_LEAVE (BattlefieldLeave::Read, BattlegroundPackets.cpp:270-276): empty. It only
+// calls Player::LeaveBattleground, which returns with no battleground, so a queue is left through BuildPort with the
+// accept bit clear; this packet is the in-match leave bg-leave sends only with its `match=yes` opt-in.
 func BuildLeave() []byte { return nil }
-
-// BuildList is CMSG_BATTLEFIELD_LIST (BattlefieldListRequest::Read, BattlegroundPackets.cpp:256-259): the list id.
-// The probe sends the list id the battlemaster's own list named; an empty answer means no support.
-func BuildList(listID int32) []byte {
-	b := wire.NewWriter()
-	b.WriteI32(listID)
-	return b.Bytes()
-}
-
-// BuildStatus is CMSG_REQUEST_BATTLEFIELD_STATUS (RequestBattlefieldStatus::Read, an empty packet): empty. The
-// handler answers one status packet per queue the player sits in (BattleGroundHandler.cpp
-// HandleRequestBattlefieldStatusOpcode).
-func BuildStatus() []byte { return nil }

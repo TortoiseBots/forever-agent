@@ -110,20 +110,9 @@ func TestBuildPortTicketBeforeAccept(t *testing.T) {
 	}
 }
 
-// TestBuildListAndStatus pin the one-int32 list request and the empty status request.
-func TestBuildListAndStatus(t *testing.T) {
-	p := BuildList(7)
-	b := wire.NewReader(p)
-	if got := b.ReadI32(); got != 7 {
-		t.Fatalf("list id = %d, want 7", got)
-	}
-	if n := b.Remaining(); n != 0 {
-		t.Fatalf("list has %d trailing byte(s)", n)
-	}
+// TestBuildLeaveIsEmpty pins the explicit leave: an empty packet, sent only for the in-match leave.
+func TestBuildLeaveIsEmpty(t *testing.T) {
 	if got := BuildLeave(); len(got) != 0 {
 		t.Fatalf("leave has %d byte(s), want 0", len(got))
-	}
-	if got := BuildStatus(); len(got) != 0 {
-		t.Fatalf("status has %d byte(s), want 0", len(got))
 	}
 }

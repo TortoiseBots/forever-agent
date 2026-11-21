@@ -18,7 +18,7 @@ import (
 )
 
 func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever act [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--steps FILE | --step 'verb k=v'...] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever act [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--steps FILE | --step 'verb k=v'...] [--capture-dir DIR] [--mail-to NAME=GUID] [--mail-money-cap N] [--pay-cod]"
 	fs := flag.NewFlagSet("forever act", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -28,6 +28,10 @@ func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 	var steps repeatStep
 	fs.Var(&steps, "step", "one act step, e.g. --step 'npc entry=1234' (repeatable; run in order)")
 	captureDir := fs.String("capture-dir", "", "write the packets this run's handlers see into a new run directory under this path (keep it outside the repository)")
+	var mailTo repeatStep
+	fs.Var(&mailTo, "mail-to", "allow-list one send-mail recipient as NAME=GUID (32 hex digits, high then low; repeatable; send-mail refuses anyone else)")
+	mailMoneyCap := fs.Int64("mail-money-cap", 10000, "the most copper one send-mail may carry; a send above it is refused")
+	payCOD := fs.Bool("pay-cod", false, "let mail-take pay a COD mail's copper to its sender")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -77,11 +81,23 @@ func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return exitUsage
 	}
 
+	allowed, err := world.ParseMailTo(mailTo)
+	if err != nil {
+		fmt.Fprintf(stderr, "forever act: %v\n", err)
+		return exitUsage
+	}
+	if *mailMoneyCap < 0 {
+		fmt.Fprintln(stderr, "forever act: --mail-money-cap must not be negative")
+		return exitUsage
+	}
 	report, err := common.enter(ctx, "forever act", stdout, world.Options{
-		Act:        script,
-		Settle:     *stay,
-		Deadline:   5 * time.Minute,
-		CaptureDir: *captureDir,
+		Act:          script,
+		Settle:       *stay,
+		Deadline:     5 * time.Minute,
+		CaptureDir:   *captureDir,
+		MailTo:       allowed,
+		MailMoneyCap: *mailMoneyCap,
+		PayCOD:       *payCOD,
 	})
 	if report != nil {
 		printLinkLost(stdout, report)

@@ -110,29 +110,27 @@ func ParseNone(payload []byte) (None, error) {
 	return out, nil
 }
 
-// NeedConfirmation is SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION (BattlegroundPackets.cpp:202-210): the timeout, the
-// map, the header and the role.
+// NeedConfirmation is SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION (BattlegroundPackets.cpp:202-210): the header, the
+// map, the timeout and the role.
 type NeedConfirmation struct {
-	Timeout uint32
-	MapID   uint32
 	Header  Header
+	MapID   uint32
+	Timeout uint32
 	Role    uint8
 }
 
 // ParseNeedConfirmation parses one SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION and requires it to be consumed exactly.
+// The core writes the header first, then the map, the timeout and the role (BattlegroundPackets.cpp:202-210).
 func ParseNeedConfirmation(payload []byte) (NeedConfirmation, error) {
 	b := wire.NewReader(payload)
 	var out NeedConfirmation
-	out.Timeout = b.ReadU32()
-	out.MapID = b.ReadU32()
-	if b.Err() != nil {
-		return out, fmt.Errorf("bg need-confirmation head: %w", errShort)
-	}
 	h, err := readHeader(b)
 	if err != nil {
 		return out, err
 	}
 	out.Header = h
+	out.MapID = b.ReadU32()
+	out.Timeout = b.ReadU32()
 	out.Role = b.ReadU8()
 	if b.Err() != nil {
 		return out, fmt.Errorf("bg need-confirmation role: %w", errShort)
@@ -180,31 +178,29 @@ func ParseActive(payload []byte) (Active, error) {
 	return out, nil
 }
 
-// Queued is SMSG_BATTLEFIELD_STATUS_QUEUED (BattlegroundPackets.cpp:226-238): the average wait, the header, the
+// Queued is SMSG_BATTLEFIELD_STATUS_QUEUED (BattlegroundPackets.cpp:226-238): the header, the average wait, the
 // wait, the spec and three bits flushed.
 type Queued struct {
-	AverageWait uint32
 	Header      Header
+	AverageWait uint32
+	WaitTime    uint32
+	Spec        int32
 	AsGroup     bool
 	Suspended   bool
 	Eligible    bool
-	WaitTime    uint32
-	Spec        int32
 }
 
-// ParseQueued parses one SMSG_BATTLEFIELD_STATUS_QUEUED and requires it to be consumed exactly.
+// ParseQueued parses one SMSG_BATTLEFIELD_STATUS_QUEUED and requires it to be consumed exactly. The core writes the
+// header first, then the average wait, the wait, the spec and the three bits (BattlegroundPackets.cpp:226-238).
 func ParseQueued(payload []byte) (Queued, error) {
 	b := wire.NewReader(payload)
 	var out Queued
-	out.AverageWait = b.ReadU32()
-	if b.Err() != nil {
-		return out, fmt.Errorf("bg queued head: %w", errShort)
-	}
 	h, err := readHeader(b)
 	if err != nil {
 		return out, err
 	}
 	out.Header = h
+	out.AverageWait = b.ReadU32()
 	out.WaitTime = b.ReadU32()
 	out.Spec = b.ReadI32()
 	out.AsGroup = b.ReadBit()
@@ -282,8 +278,9 @@ func FailName(v uint32) string {
 }
 
 // List is SMSG_BATTLEFIELD_LIST (BattlefieldList::Write, BattlegroundPackets.cpp:261-275): the master, the list
-// id, the level range, the (always empty) battlefields and two bits flushed. The probe fails the round when the
-// list is empty: no support (the round's own rule).
+// id, the level range, the (always empty) battlefields and two bits flushed. The core sends the list only for a
+// battlemaster whose type it supports (BattlegroundMgr.cpp SendBattlegroundList); the probe treats a non-positive
+// list id as no support (the round's own rule).
 type List struct {
 	Master       wire.GUID
 	ListID       int32

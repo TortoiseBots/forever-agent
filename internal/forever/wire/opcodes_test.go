@@ -84,6 +84,7 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x65000C, "SMSG_QUEST_UPDATE_ADD_CREDIT", 0x67000C, 0x67000C},
 		{0x65000D, "SMSG_QUEST_UPDATE_ADD_CREDIT_SIMPLE", 0x67000D, 0x67000D},
 		{0x650009, "SMSG_QUEST_UPDATE_COMPLETE", 0x670009, 0x670009},
+		{0x650007, "SMSG_QUEST_LOG_FULL", 0x670007, 0x670007},
 		{0x65001A, "SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE", 0x67001A, 0x67001A},
 		// R7 mail answers: plain group arithmetic (group+1, then +1 for the shift) below index 0x98, and +1 for
 		// index >= 0x98 in group 0x46 before the shift step (0x450200 -> 0x470201); a 70959 client gets the net
@@ -227,6 +228,7 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E0030, "CMSG_QUEST_GIVER_REQUEST_REWARD", 0x3F0032, 0x3F0032},
 		{0x3E002F, "CMSG_QUEST_GIVER_CHOOSE_REWARD", 0x3F0031, 0x3F0031},
 		{0x3E00EC, "CMSG_QUEST_GIVER_CLOSE_QUEST", 0x3F00EF, 0x3F00EF},
+		{0x3E00D0, "CMSG_QUEST_LOG_REMOVE_QUEST", 0x3F00D3, 0x3F00D3},
 		// R7 mail and R9 battleground rows: the .inc table lists each one, so the wire number is the table's
 		// (0x3E00D8 -> 0x3F00DB, 0x3D00E7 -> 0x3E00E9, 0x430026 -> 0x440026, 0x3D018F -> 0x3E0191, ...),
 		// unchanged at 70938 (no client insert in these groups).

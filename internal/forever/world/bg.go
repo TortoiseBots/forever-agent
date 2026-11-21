@@ -2,12 +2,15 @@ package world
 
 // The battleground queue of round R9: the server's list and status answers that change what the client knows at a
 // battlemaster. The probe starts from the battlemaster's own list: BattlemasterHello answers SMSG_BATTLEFIELD_LIST
-// (BattleGroundHandler.cpp HandleBattlemasterHelloOpcode), and an empty list stops the round with a report instead
-// of a queue. The queue then joins through the list's queue id, watches the statuses the server sends, accepts the
-// invite through the port and leaves through the leave. The world keeps the last answer of each kind since the last
-// step cleared them; the steps in bg_act.go read the evidence back.
+// (BattleGroundHandler.cpp HandleBattlemasterHelloOpcode), and a list with no supported battlemaster type stops the
+// round with a report instead of a queue. The queue then joins through the list's queue id, watches the statuses the
+// server sends, accepts the invite through the port and leaves through the port with the accept bit clear (the
+// core's queue-leave path; an in-match leave is only the explicit `match=yes` opt-in of bg-leave). The world keeps
+// the last answer of each kind since the last step cleared them; the steps in bg_act.go read the evidence back.
 
 import (
+	"time"
+
 	"github.com/pjerra/forever-agent/internal/forever/bg"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -19,8 +22,10 @@ import (
 type bgWatch struct {
 	// list is the last SMSG_BATTLEFIELD_LIST.
 	list *bg.List
-	// needConfirm is the last SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION.
-	needConfirm *bg.NeedConfirmation
+	// needConfirm is the last SMSG_BATTLEFIELD_STATUS_NEED_CONFIRMATION and needConfirmAt when it arrived: the
+	// invite's own Timeout counts from then, and bg-accept refuses one that expired.
+	needConfirm   *bg.NeedConfirmation
+	needConfirmAt time.Time
 	// active is the last SMSG_BATTLEFIELD_STATUS_ACTIVE.
 	active *bg.Active
 	// queued is the last SMSG_BATTLEFIELD_STATUS_QUEUED.
@@ -60,7 +65,10 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// The statuses are exclusive per queue: an invite replaces the queue's own queued status.
+		s.bg.queued = nil
 		s.bg.needConfirm = &st
+		s.bg.needConfirmAt = s.transport().Now()
 		s.opts.logf("world: the battleground invite is ready on map %d", st.MapID)
 	case wire.SMSGBattlefieldStatusActive:
 		st, err := bg.ParseActive(p.Payload)
@@ -68,6 +76,9 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		s.bg.queued = nil
+		s.bg.needConfirm = nil
+		s.bg.needConfirmAt = time.Time{}
 		s.bg.active = &st
 		s.opts.logf("world: inside the battleground on map %d", st.MapID)
 	case wire.SMSGBattlefieldStatusQueued:
@@ -76,6 +87,8 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		s.bg.needConfirm = nil
+		s.bg.needConfirmAt = time.Time{}
 		s.bg.queued = &st
 		s.opts.logf("world: queued for the battleground (wait %ds)", st.WaitTime)
 	case wire.SMSGBattlefieldStatusNone:
@@ -84,6 +97,11 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// The queue-leave path (and an in-match leave) answers none: the character is out of that queue.
+		s.bg.queued = nil
+		s.bg.needConfirm = nil
+		s.bg.needConfirmAt = time.Time{}
+		s.bg.active = nil
 		s.bg.none = &st
 		s.opts.logf("world: out of the battleground queue")
 	case wire.SMSGBattlefieldStatusFailed:
@@ -92,6 +110,10 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// A refusal ends the action it answers: no invite and no queued status stand after it.
+		s.bg.queued = nil
+		s.bg.needConfirm = nil
+		s.bg.needConfirmAt = time.Time{}
 		s.bg.failed = &st
 		s.opts.logf("world: the battleground queue refused: %s", bg.FailName(st.Reason))
 	}

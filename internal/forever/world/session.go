@@ -84,7 +84,16 @@ type Options struct {
 	DeathCheck bool
 	// Act is the `forever act` step script (forever-world-r0). Nil runs none of it; a non-nil script runs instead
 	// of the stay, then the command logs out like every other one-shot mode.
-	Act             []ActStep
+	Act []ActStep
+	// MailTo is the caller's allow-list of send-mail recipients, name → guid. send-mail refuses a recipient that
+	// is not on it and confirms the name against that guid with a name query before any money goes out; an empty
+	// list refuses every send.
+	MailTo map[string]wire.GUID
+	// MailMoneyCap is the most copper one send-mail may carry; a send above it is refused before any packet.
+	MailMoneyCap int64
+	// PayCOD lets mail-take pay a COD mail's copper to its sender (the core's own item-take path,
+	// MailHandler.cpp:506-544). Without it a COD mail is refused before any packet.
+	PayCOD          bool
 	AcceptResurrect bool
 	// AcceptResurrectFrom is --accept-resurrect-from NAME: with AcceptResurrect it answers only an offer whose
 	// offerer the model knows by that name. Empty accepts an offer from any GUID, which is the default: the server
