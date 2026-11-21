@@ -291,7 +291,7 @@ type oneResult struct {
 // runner's gm step, that must tell a clear success from a refusal the command session only logs. The error is what
 // runOne returns.
 func (s *session) runOneResult(ctx context.Context, q *command.Session, line string) (oneResult, error) {
-	rep, runErr := s.runCommandLine(ctx, q, line, command.Options{})
+	rep, runErr := s.runCommandLine(ctx, q, line, gmLineOptions(line, command.Options{}))
 	return oneResult{Rep: rep, RunErr: runErr}, s.finishOne(rep, runErr, line)
 }
 

@@ -151,7 +151,26 @@ func (s *session) serveGM(ctx context.Context, text string) (*command.Reply, err
 	if !strings.HasPrefix(text, ".") && !strings.HasPrefix(text, "!") {
 		text = "." + text
 	}
-	return s.serveCommandLine(ctx, text, 0)
+	class, goal := classifyGMLine(text)
+	if class == gmReplies {
+		return s.serveCommandLine(ctx, text, 0)
+	}
+	// A line the core answers with silence when it works: a quiet window is the success, and a teleport is proved by
+	// the character's position, never by a chat reply (gm_silent.go).
+	if !s.gmConfirmed {
+		if err := s.confirmGM(ctx); err != nil {
+			return nil, err
+		}
+	}
+	mark := s.teleportMark()
+	rep, err := s.serveCommandOptions(ctx, text, gmLineOptions(text, command.Options{}))
+	if err != nil || class != gmTeleport {
+		return rep, err
+	}
+	if err := s.confirmTeleport(ctx, text, mark, goal); err != nil {
+		return rep, err
+	}
+	return rep, nil
 }
 
 // The two module prefixes this method accepts. They are built from pieces so the package's own send invariant

@@ -296,12 +296,20 @@ func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
 	if err := s.confirmGM(ctx); err != nil {
 		return s.actFail(a, step, err)
 	}
+	class, goal := classifyGMLine(line)
+	mark := s.teleportMark()
 	res, err := s.runOneResult(ctx, q, line)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	if err := gmOutcome(res.Rep, res.RunErr); err != nil {
 		return s.actFail(a, step, fmt.Errorf("%q: %w", line, err))
+	}
+	// A teleport prints nothing when it works: the position is the proof, not a chat reply (gm_silent.go).
+	if class == gmTeleport {
+		if err := s.confirmTeleport(ctx, line, mark, goal); err != nil {
+			return s.actFail(a, step, err)
+		}
 	}
 	s.actOK(a, step, line)
 	return nil

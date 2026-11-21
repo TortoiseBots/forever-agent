@@ -178,6 +178,21 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
 				continue
 			}
+			if script := f.serveGMScript; script != nil && (strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!")) {
+				if silent, tele := script(said); silent {
+					if tele != nil {
+						tp := append([]byte{}, f.clientGUID...)
+						tp = appendU32(tp, 9)
+						tp = append(tp, fakeF32(tele[0])...)
+						tp = append(tp, fakeF32(tele[1])...)
+						tp = append(tp, fakeF32(tele[2])...)
+						tp = append(tp, fakeF32(0)...)
+						tp = append(tp, 0)
+						c.writeFrame(fakeSMSGMoveTeleport, tp)
+					}
+					continue
+				}
+			}
 			if strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!") {
 				// A GM line is not chat: the server runs it and answers with its own lines. An echo here would
 				// trip the client's own guard, which is the point of the guard.
