@@ -300,20 +300,39 @@ type CombatActor struct {
 
 // CombatRow is one row of the daemon's combat log (events): Time is the wall
 // clock text with milliseconds and its offset, MonoMS the process's steady
-// axis. Reason is set on a spell_fail only. SpellName is the server's own
-// name for SpellID when the daemon resolved it (empty otherwise; SpellID is
-// the fallback).
+// axis. Reason is set on a spell_fail, a miss, a resist, a melee row that did
+// not land normally and an environmental row; SpellName is the server's own name for SpellID when the daemon
+// resolved it (empty otherwise; SpellID is the fallback); the interrupt, absorb, dispel
+// and sample fields are the core-gains round's.
 type CombatRow struct {
-	Seq       int         `json:"seq"`
-	Kind      string      `json:"kind"`
-	Time      string      `json:"time"`
-	MonoMS    int64       `json:"mono_ms"`
-	Source    CombatActor `json:"source"`
-	Target    CombatActor `json:"target"`
-	SpellID   int32       `json:"spell_id"`
-	Amount    int32       `json:"amount"`
-	Reason    string      `json:"reason,omitempty"`
-	SpellName string      `json:"spell_name,omitempty"`
+	Seq                int            `json:"seq"`
+	Kind               string         `json:"kind"`
+	Time               string         `json:"time"`
+	MonoMS             int64          `json:"mono_ms"`
+	Source             CombatActor    `json:"source"`
+	Target             CombatActor    `json:"target"`
+	SpellID            int32          `json:"spell_id"`
+	Amount             int32          `json:"amount"`
+	Reason             string         `json:"reason,omitempty"`
+	InterruptedSpellID int32          `json:"interrupted_spell_id,omitempty"`
+	AbsorbedSpellID    int32          `json:"absorbed_spell_id,omitempty"`
+	Dispelled          []CombatDispel `json:"dispelled,omitempty"`
+	Sample             *CombatSample  `json:"sample,omitempty"`
+	SpellName          string         `json:"spell_name,omitempty"`
+}
+
+// CombatDispel is one aura a dispel row removed.
+type CombatDispel struct {
+	SpellID int32 `json:"spell_id"`
+	Harmful bool  `json:"harmful,omitempty"`
+}
+
+// CombatSample is the advanced combat log's unit block: the unit's health and
+// current power (and which bar the power is).
+type CombatSample struct {
+	Health    int64 `json:"health"`
+	Power     int32 `json:"power"`
+	PowerType int8  `json:"power_type"`
 }
 
 // EventsPage is one events answer: the rows above since, oldest first, and

@@ -35,8 +35,9 @@ type CombatActor struct {
 }
 
 // CombatRow is one row of the combat log. Kind is one of spell_start, spell_go, spell_fail, melee, spell_damage,
-// periodic, heal, aura_applied, aura_removed and death. Time is the wall clock with milliseconds and its offset;
-// MonoMS is the process's steady axis (events.MonoMS), the one a client cannot step.
+// periodic, heal, aura_applied, aura_removed, death, and the core-gains round's interrupt, dispel, absorb, miss,
+// resist, immune, instakill and environmental. Time is the wall clock with milliseconds and its offset; MonoMS is
+// the process's steady axis (events.MonoMS), the one a client cannot step.
 type CombatRow struct {
 	Seq     int         `json:"seq"`
 	Kind    string      `json:"kind"`
@@ -46,13 +47,42 @@ type CombatRow struct {
 	Target  CombatActor `json:"target"`
 	SpellID int32       `json:"spell_id"`
 	Amount  int32       `json:"amount"`
-	// Reason is set on a spell_fail only: the core's SpellCastResult in words (combat.SpellFailureName).
+	// Reason is set on a spell_fail (the core's SpellCastResult in words, combat.SpellFailureName), on a melee row
+	// that did not land normally (the victim state, combat.VictimStateName), on a miss or resist, and on an
+	// environmental row (the damage type, combat.EnvironmentalName).
 	Reason string `json:"reason,omitempty"`
 	// SpellName is the server's own name for SpellID (CORE-GAINS-3): the
 	// session fills it when it pages the log, from its SpellName record
 	// cache. It is empty when the server holds no name or the fetch failed;
 	// the row's spell_id is the fallback, as today.
 	SpellName string `json:"spell_name,omitempty"`
+	// InterruptedSpellID is an interrupt row's victim spell: the cast the source stopped. SpellID on that row is
+	// the interrupting spell (Kick), so a trial can match the response by spell and still name what was stopped.
+	InterruptedSpellID int32 `json:"interrupted_spell_id,omitempty"`
+	// AbsorbedSpellID is an absorb row's incoming spell (the shield's is SpellID): the damage the aura stopped.
+	AbsorbedSpellID int32 `json:"absorbed_spell_id,omitempty"`
+	// Dispelled is a dispel row's list of auras the spell removed.
+	Dispelled []CombatDispel `json:"dispelled,omitempty"`
+	// Sample is the advanced combat log's unit block (health and power) when the packet carried one. The unit it
+	// describes is the packet's own: the attacker on a melee row, the target on a heal, periodic, absorb or
+	// environmental one (the spell-damage packet's block is all zeros in this core and is left out). It is attached
+	// to that event's row, so a fight's health and mana curves need no polling.
+	Sample *CombatSample `json:"sample,omitempty"`
+}
+
+// CombatDispel is one aura a dispel row removed.
+type CombatDispel struct {
+	SpellID int32 `json:"spell_id"`
+	Harmful bool  `json:"harmful,omitempty"`
+}
+
+// CombatSample is SpellCastLogData as a row carries it (CombatLogPacketsCommon.cpp:150-172): the unit's health, and
+// its current power from the first SpellLogPowerData entry (the server puts the unit's own power bar first,
+// CombatLogPacketsCommon.cpp:35-45).
+type CombatSample struct {
+	Health    int64 `json:"health"`
+	Power     int32 `json:"power"`
+	PowerType int8  `json:"power_type"`
 }
 
 // CombatLog is the session's ring of combat rows: appended by the session's dispatch (the session goroutine), read
@@ -180,11 +210,51 @@ func (s *session) CombatLog() *CombatLog {
 // combatRow appends one row with both sides named as this client knows them, and the module's own failure reason on
 // a spell_fail.
 func (s *session) combatRow(kind string, now time.Time, spellID, amount int32, src, dst wire.GUID, reason string) {
+	s.combatRowLog(kind, now, spellID, amount, src, dst, reason, nil)
+}
+
+// combatRowLog is combatRow with the packet's advanced-log unit block, when it carried one: the row then also
+// carries the source unit's health and power.
+func (s *session) combatRowLog(kind string, now time.Time, spellID, amount int32, src, dst wire.GUID, reason string, log *combat.CastLogData) {
+	s.combatRowExtras(kind, now, spellID, amount, src, dst, reason, combatRowExtra{Log: log})
+}
+
+// combatRowExtra is what one row carries beyond the base shape: the advanced-log sample and the kind-specific
+// fields the core-gains round added.
+type combatRowExtra struct {
+	Log                *combat.CastLogData
+	InterruptedSpellID int32
+	AbsorbedSpellID    int32
+	Dispelled          []CombatDispel
+}
+
+// combatRowExtras appends one row from the base shape plus its extras.
+func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount int32, src, dst wire.GUID, reason string, extra combatRowExtra) {
 	row := newCombatRow(kind, now, spellID, amount)
 	row.Source = s.combatActor(src)
 	row.Target = s.combatActor(dst)
 	row.Reason = reason
+	row.InterruptedSpellID = extra.InterruptedSpellID
+	row.AbsorbedSpellID = extra.AbsorbedSpellID
+	row.Dispelled = extra.Dispelled
+	row.Sample = combatSample(extra.Log)
 	s.CombatLog().Append(row)
+}
+
+// combatSample turns SpellCastLogData into the row's sample, or nil when the packet carried none. A block whose
+// health is zero is not a sample: SMSG_SPELL_NON_MELEE_DAMAGE_LOG always carries the full form to an advanced client
+// but this core never initializes its LogData (Unit.cpp:5813-5848 has no Initialize), so its fields are zeros; a
+// live unit cannot cast at zero health, and a death row's own evidence is the damage amount.
+func combatSample(log *combat.CastLogData) *CombatSample {
+	if log == nil || log.Health <= 0 {
+		return nil
+	}
+	sample := &CombatSample{Health: log.Health}
+	if len(log.Power) > 0 {
+		sample.PowerType = log.Power[0].Type
+		sample.Power = log.Power[0].Amount
+	}
+	return sample
 }
 
 // combatActor is one side of a row: the guid's text and the best name the model has (a player's name, else the
