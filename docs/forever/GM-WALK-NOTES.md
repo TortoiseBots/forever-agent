@@ -128,7 +128,7 @@ On the last code commit with a clean worktree, each in the foreground and waited
 make fmt-check            -> clean (no file listed)
 make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
 staticcheck ./...         -> rc=0 (no finding)
-vm-test ta ~/wt-fa-gmwalk -> RESULT: PASS  kind=ta wt=wt-fa-gmwalk sha=84b91799 dirty=0 files=2354
+vm-test ta on a local worktree -> RESULT: PASS kind=ta sha=84b91799 dirty=0
                              rc=0  vm_duration=3257s  laptop_wall=3278s
 ```
 

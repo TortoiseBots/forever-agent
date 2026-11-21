@@ -221,7 +221,7 @@ The VM log's footer is `VM-TEST-END rc=0 seconds=2289`; the known world-socket f
 new work is a stored victim choice, a dedupe map outside the ring, an open-id set, a bounded dispel-time slice and
 one error return for a zero mob GUID.
 
-Fuzz, 60 s on the VM (`yulon-ubuntu2`, Go from `go.mod`, `FuzzGainsPackets` over every new parser):
+Fuzz, 60 s on the build VM (Go from `go.mod`, `FuzzGainsPackets` over every new parser):
 
 ```
 fuzz: elapsed: 1m0s, execs: 3373160 (42339/sec), new interesting: 131 (total: 146)

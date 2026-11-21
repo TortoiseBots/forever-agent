@@ -115,7 +115,7 @@ UNKNOWN until the server proves the numbers. The live check to run:
 
 Gates (a clean committed tree, sha c6aed74e): `make fmt-check` clean, `make cross` (windows/amd64, darwin/arm64 and the windows vet) clean, `staticcheck ./...` clean, and
 
-    RESULT: PASS  kind=ta wt=wt-fa-dummy sha=c6aed74e dirty=0 files=2395
+    RESULT: PASS kind=ta sha=c6aed74e dirty=0
 
 ## What the scripted tests prove (hand-made combat rows, never captures)
 
