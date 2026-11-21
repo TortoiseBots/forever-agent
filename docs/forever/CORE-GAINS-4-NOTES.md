@@ -37,8 +37,9 @@ consumed exactly; a short packet, a trailing byte or an empty mover is an error.
 
 `internal/forever/world/knockback.go` keeps the takeoffs whose landing has not arrived, keyed by GUID and bounded at
 64 (the oldest past the bound is dropped and counted). For the mover's own packet it records the takeoff at the
-client's position and writes one `knockback` row, then sends exactly one ack; the server's echo only refreshes the
-pending takeoff and writes no second row and no second ack. For another mover, the first
+client's position and writes one `knockback` row, then sends exactly one ack. The server's echo of that ack is owed for 5 s from the ack, whether or not the flight
+has landed: it refreshes a pending takeoff and writes no row and no second ack, and any other self relay is a stray
+that records nothing. For another mover, the first
 `SMSG_MOVE_UPDATE_KNOCK_BACK` is the takeoff (the only evidence an observer gets) and writes the row with the
 position it carries; its speeds are unknown and left zero. A teleport cancels a pending takeoff, and a map change
 drops them all.
@@ -132,7 +133,8 @@ line, a bad flag or config exits 2.
   and stop until the landing.
 * `world/knockback_test.go`: one ack with the sequence index and the mover's airborne block (flight flags and jump
   values), the client's own arc (heartbeat, fall-land, self landing row, air time), no ack for the echo or for a
-  packet naming another mover, a relayed takeoff and a landing paired with the air time and drop, no second landing,
+  packet naming another mover, an echo after a short or a real landing writes no row, a stray or late self relay records
+  nothing, a relayed takeoff and a landing paired with the air time and drop, no second landing,
   a second takeoff counted as missed, the order list pruned after a landing, a non-finite drop refused, a teleport
   and a 15 s-old takeoff dropped as missed, and both knockback packets held as map content.
 * `driver/knockback_test.go`: the knockback rows' trace events, at the rows' own times and with their fields.

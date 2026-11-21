@@ -409,6 +409,110 @@ func TestKnockBackLandingNonFiniteDrop(t *testing.T) {
 	}
 }
 
+// TestSelfEchoAfterAShortLandingWritesNoRow: a short downward knockback (a positive VertSpeed: the arc falls at once)
+// lands at the first flight tick, before the server's echo of its ack arrives. The echo is owed by the ack, not by the
+// takeoff, so it writes no second row, starts no takeoff and gets no second ack: one knockback row, one landing row,
+// KnockBacks == KnockBackAcks, nothing pending.
+func TestSelfEchoAfterAShortLandingWritesNoRow(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(4000, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 5, 0, 1, 4, 4.9))
+	if err := s.flightTick(t0); err != nil {
+		t.Fatal(err)
+	}
+	if s.flight != nil || len(s.knocks) != 0 {
+		t.Fatalf("after the landing: flight %v, pending %d", s.flight != nil, len(s.knocks))
+	}
+	echo := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling, Time: 5, X: 1000, Y: 2000, Z: 50}
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(echo))
+
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[0].Kind != "knockback" || rows[1].Kind != "knockback_land" {
+		t.Fatalf("rows %+v, want the takeoff and the landing only", rows)
+	}
+	if got := rec.count(wire.CMSGMoveKnockBackAck); got != 1 {
+		t.Fatalf("%d ack(s), want 1", got)
+	}
+	if len(s.knocks) != 0 || s.flight != nil {
+		t.Fatalf("the echo left a takeoff pending: %d", len(s.knocks))
+	}
+	if s.report.KnockBacks != 1 || s.report.KnockBackAcks != 1 || s.report.KnockBackLandings != 1 {
+		t.Fatalf("report %+v", s.report)
+	}
+}
+
+// TestSelfEchoAfterALandedFlightWritesNoRow: the same for a real flight. The arc lands at 1.1 s, and the echo of the
+// ack (the takeoff's position, as the ack carried it) arrives after the landing, inside the echo's bound: no row, no
+// takeoff, no second ack, and the mover stays grounded.
+func TestSelfEchoAfterALandedFlightWritesNoRow(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(4100, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 88, 1, 0, 12.5, -9.5))
+	rec.now = t0.Add(1100 * time.Millisecond)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	if s.mover.Airborne() || len(s.knocks) != 0 {
+		t.Fatalf("the flight did not land: airborne %v, pending %d", s.mover.Airborne(), len(s.knocks))
+	}
+	rec.now = t0.Add(1200 * time.Millisecond)
+	echo := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling | objects.FlagKnockback, Time: 9, X: 1000, Y: 2000, Z: 50}
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(echo))
+
+	if got := len(knockRows(s)); got != 2 {
+		t.Fatalf("%d row(s) after the echo, want the takeoff and the landing", got)
+	}
+	if got := rec.count(wire.CMSGMoveKnockBackAck); got != 1 {
+		t.Fatalf("%d ack(s), want 1", got)
+	}
+	if len(s.knocks) != 0 || s.mover.Airborne() {
+		t.Fatalf("the echo restarted the flight: pending %d, airborne %v", len(s.knocks), s.mover.Airborne())
+	}
+	if s.report.KnockBacks != 1 || s.report.KnockBackAcks != 1 || s.report.KnockBackLandings != 1 {
+		t.Fatalf("report %+v", s.report)
+	}
+}
+
+// TestSelfEchoIsOwedOnlyForAnAckWeSent: a self relay is an echo only while the ack that owes it is recent. A relay
+// with no ack behind it is a stray and records nothing, and so does an echo that arrives after its bound.
+func TestSelfEchoIsOwedOnlyForAnAckWeSent(t *testing.T) {
+	t.Run("no ack", func(t *testing.T) {
+		s, _ := newTransferSession()
+		s.self, s.mover.GUID = knockUnit, knockUnit
+		stray := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling, Time: 1, X: 10, Y: 20, Z: 30}
+		mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(stray))
+		if got := len(knockRows(s)); got != 0 || len(s.knocks) != 0 {
+			t.Fatalf("%d row(s), %d pending for a relay with no ack", got, len(s.knocks))
+		}
+		if s.report.KnockBacks != 0 || s.report.KnockBackRelays != 1 {
+			t.Fatalf("report %+v", s.report)
+		}
+	})
+
+	t.Run("past the bound", func(t *testing.T) {
+		s, rec := newTransferSession()
+		t0 := time.Unix(4200, 0)
+		rec.now = t0
+		s.self, s.mover.GUID = knockUnit, knockUnit
+		mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 6, 0, 1, 4, 4.9))
+		if err := s.flightTick(t0); err != nil {
+			t.Fatal(err)
+		}
+		rec.now = t0.Add(knockEchoFor + time.Second)
+		late := objects.MovementInfo{GUID: s.self, Flags: objects.FlagFalling, Time: 2, X: 1000, Y: 2000, Z: 50}
+		mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(late))
+		if got := len(knockRows(s)); got != 2 || len(s.knocks) != 0 {
+			t.Fatalf("%d row(s), %d pending for an echo past its bound", got, len(s.knocks))
+		}
+	})
+}
+
 // TestKnockBackPacketsAreGatedMapContent: both knockback packets are movement of the map the client stands on, so
 // the between-maps gate holds them, writes no row and answers no ack; the resume drops them as stale.
 func TestKnockBackPacketsAreGatedMapContent(t *testing.T) {

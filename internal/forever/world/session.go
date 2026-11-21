@@ -505,6 +505,10 @@ type session struct {
 	knockOrder []wire.GUID
 	// flight is the mover's own knockback arc, which the client simulates: the server sends none of its positions.
 	flight *selfFlight
+	// echoOwed is set by each CMSG_MOVE_KNOCK_BACK_ACK we send: the server's echo of it (SMSG_MOVE_UPDATE_KNOCK_BACK to
+	// the mover) is owed until it arrives or echoOwedUntil passes, whether or not the takeoff has landed meanwhile.
+	echoOwed      bool
+	echoOwedUntil time.Time
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID

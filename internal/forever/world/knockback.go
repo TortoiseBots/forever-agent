@@ -23,6 +23,9 @@ const (
 	// the next position update resolves it at its new frame. Longer than a long fall, short enough that a later
 	// fight is never read as the landing.
 	knockLandingFor = 15 * time.Second
+	// knockEchoFor is how long the server's echo of a mover's ack is owed. The echo follows the ack within a round trip,
+	// so a self relay after this is a stray and records nothing.
+	knockEchoFor = 5 * time.Second
 	// knockBeat is the airborne heartbeat cadence: the client's 500 ms movement tick, the same one Mover uses.
 	knockBeat = 500 * time.Millisecond
 	// knockGravity and knockTerminalVelocity are Movement::gravity (MovementTypedefs.h:81) and
@@ -161,29 +164,42 @@ func (s *session) selfKnockback(k objects.KnockBack, now time.Time) {
 		return
 	}
 	s.report.KnockBackAcks++
+	// The server echoes this ack to the mover: the echo is owed from here, whatever the flight does meanwhile.
+	s.echoOwed, s.echoOwedUntil = true, now.Add(knockEchoFor)
 	s.opts.logf("world: knockback (self): from %.1f %.1f %.1f, %.1f yd/s horizontal, %.1f yd/s vertical, seq %d, acked",
 		p.x, p.y, p.z, k.HorzSpeed, k.VertSpeed, k.Sequence)
 }
 
 // relayedKnockback handles SMSG_MOVE_UPDATE_KNOCK_BACK: one MovementInfo, no speeds and no sequence. The first one
-// for another mover is the knockback's takeoff (it is all another client ever sees of someone else's knockback).
-// The mover's own echo after its ack only refreshes the pending takeoff and writes no second row; a second relay
-// for another unit is a new takeoff, and its replaced predecessor counts as missed.
+// for another mover is the knockback's takeoff (it is all another client ever sees of someone else's knockback); a
+// second relay for another unit is a new takeoff, and its replaced predecessor counts as missed. The mover's own
+// relay is the echo of its ack when one is owed (takeEcho): it refreshes a takeoff still pending and writes no row,
+// whether or not the flight has landed meanwhile. Any other relay for the mover is a stray and records nothing.
 func (s *session) relayedKnockback(mi objects.MovementInfo, now time.Time) {
 	s.report.KnockBackRelays++
 	if mi.GUID == s.self {
-		if _, pending := s.knocks[mi.GUID]; pending {
-			// The mover's echo of its own ack: same takeoff, no new row (the self packet already wrote one), and no
-			// pairing here, because this position is the takeoff the ack carried.
+		if s.takeEcho(now) {
+			// The echo restates the ack's block, which is where the takeoff was: no pairing and no new row.
 			s.knockTakeoffPosition(mi, now)
 			return
 		}
+		s.opts.logf("world: stray knockback echo for the mover (no ack is owed): not recorded")
+		return
 	}
-	p := knockPending{at: now, x: mi.X, y: mi.Y, z: mi.Z, hasPos: true, self: mi.GUID == s.self}
+	p := knockPending{at: now, x: mi.X, y: mi.Y, z: mi.Z, hasPos: true}
 	s.report.KnockBacks++
-	s.knockRow("knockback", mi.GUID, now, knockRowFields{pos: p, self: p.self})
+	s.knockRow("knockback", mi.GUID, now, knockRowFields{pos: p})
 	s.setKnock(mi.GUID, p)
 	s.opts.logf("world: knockback (relayed): %s from %.1f %.1f %.1f", s.combatActor(mi.GUID).Name, mi.X, mi.Y, mi.Z)
+}
+
+// takeEcho reports whether a relay for the mover is the echo of an ack this client sent, and consumes that echo: one
+// echo per ack, owed until it arrives or knockEchoFor passes. It never looks at the takeoff table, so an echo that
+// arrives after the flight has landed is still the echo.
+func (s *session) takeEcho(now time.Time) bool {
+	owed := s.echoOwed && !now.After(s.echoOwedUntil)
+	s.echoOwed = false
+	return owed
 }
 
 // knockMove is the landing check for one position update of a mover (SMSG_MOVE_UPDATE). A unit still carrying the
@@ -325,11 +341,12 @@ func (s *session) cancelKnockback(guid wire.GUID) {
 	}
 }
 
-// dropKnockbacks clears every pending takeoff and the mover's flight (a map change): the old map's flights have no
-// landing here.
+// dropKnockbacks clears every pending takeoff, the mover's flight and the echo owed (a map change): the old map's
+// flights have no landing here, and its echoes are not owed on the new one.
 func (s *session) dropKnockbacks() {
 	s.knocks = nil
 	s.knockOrder = nil
+	s.echoOwed = false
 	if s.flight != nil {
 		s.flight = nil
 		if s.mover != nil {
