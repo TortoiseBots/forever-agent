@@ -344,8 +344,23 @@ func (s *session) combatCast(kind string, now time.Time, c *combat.SpellCast) {
 // combatDeaths writes one death row per unit the values merge just took to dead. The merge that carries health zero
 // does not name the blow that did it, so the row's source is empty and its target is the unit that died; the killing
 // blow is the damage row right before it.
+// bgOnDeaths records the watcher's own death: Died() answers for the
+// watcher itself, and a creature or another player dying in view is not it.
+func (s *session) bgOnDeaths(dead []wire.GUID) {
+	if !s.selfSeen {
+		return
+	}
+	for _, g := range dead {
+		if g == s.self {
+			s.bgDied()
+		}
+	}
+}
+
 func (s *session) combatDeaths(now time.Time) {
-	for _, g := range s.world.Deaths() {
+	dead := s.world.Deaths()
+	for _, g := range dead {
 		s.combatRow("death", now, 0, 0, wire.EmptyGUID, g, "")
 	}
+	s.bgOnDeaths(dead)
 }

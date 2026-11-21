@@ -35,6 +35,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever route-walk --plan FILE [--legs a-b|NAME,...] [--gm] --navmesh DIR [--parent MAP=PARENT[,..]] [--enter tele|none] [--leave tele|none] [--confirm gps|client] [--out DIR] [--json] --rest host:port --rpc host:port --ca FILE --account EMAIL --character NAME [--max-deviation YD] [--stuck-after DURATION] [--fall-drop YD] [--sample DURATION] [--timeout DURATION] [--settle DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS --character NAME [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--reset] [--out DIR] [--navmesh DIR] [--dry]")
 		fmt.Fprintln(stderr, "       forever-agent forever dungeon-watch --leader NAME --plan FILE --character NAME [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry]")
+		fmt.Fprintln(stderr, "       forever-agent forever bg-watch --map wsg|ab [--role observer|fc] [--character NAME] [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--max-minutes N] [--poll SEC] [--quiet-min N] [--idle-s N] [--escort-share X] [--touch-s N] [--out DIR] [--dry]")
 		fmt.Fprintln(stderr, "       forever-agent forever run-map DIR [--plan FILE] [--navmesh DIR [--parent MAP=PARENT[,..]]] [--out NAME.svg] [--html] [--names] [--floors auto|off|z1,z2] [--width PX] [--from-s N] [--to-s N] [--force]")
 		fmt.Fprintln(stderr, "       forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample DURATION] [--tolerance YD] [--follow-yd YD] [--out FILE] [--module-out FILE] [--dry FILE] [--settle DURATION] [--timeout DURATION] --rest host:port --rpc host:port --ca FILE --account EMAIL --character NAME")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report RECORD [--json] [--out DIR] [--repulls N] [--member-deaths N] [--slow-factor X]")
@@ -90,6 +91,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverDungeonRunCmd(ctx, args[1:], stdout, stderr)
 	case "dungeon-watch":
 		return foreverDungeonWatchCmd(ctx, args[1:], stdout, stderr)
+	case "bg-watch":
+		return foreverBGWatchCmd(ctx, args[1:], stdout, stderr)
 	case "run-map":
 		return foreverRunMapCmd(ctx, args[1:], stdout, stderr)
 	case "run-report":
