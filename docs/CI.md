@@ -11,12 +11,12 @@ Push-only: PR gating is unchanged (`test` and `navmesh` run on pushes to `ci/**`
 ## `test.yml` — the PR gate
 
 It runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
-branch), as parallel jobs that end in one job named `test` (12 jobs a run; the org runs at most 20 at once):
+branch), as parallel jobs that end in one job named `test` (12 jobs a run, at most 8 of them running at once; the org runs at most 20 jobs at once across its repos, see *The race shards*):
 
 | Job | What it runs |
 |---|---|
 | `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
-| `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
+| `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, at most 6 running at once, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
 | `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
 | `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
 
@@ -59,6 +59,13 @@ name**; every other package (about 120) is the `rest` group, split **by package*
 
 The shard count is 3 everywhere (`SHARDS` and the `shard` matrix in `test.yml`, and the `3` in the check step): one more
 shard per group is nine more jobs, so stay inside the 12 jobs a run that the org limit leaves room for.
+
+**Concurrency cap: six race shards at once.** The org runs at most 20 jobs at once across all its repos. Before the cap,
+one run started `lint` and all nine race shards together, so it held 10 of those slots, and other repos' runs queued
+behind it. `race-shards` stays one matrix of nine with `strategy.max-parallel: 6`: at most six race shards run at once,
+so one run takes at most 8 slots (six race shards, `lint` and `race-shards-check`). The price is wall time: the last
+three shards start only when earlier shards finish. `race-shards-check` still `needs` the whole matrix, so the check
+waits for every shard.
 
 **Known limit: the `!cgo` tests run in no job.** `cmd/forever-agent/forever_runmap_nocgo_test.go` and
 `internal/navmesh/raycast_nocgo_test.go` have `//go:build !cgo`. The race shards need cgo, `make nocgo` only builds and

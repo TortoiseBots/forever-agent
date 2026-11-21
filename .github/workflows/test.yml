@@ -120,7 +120,7 @@ jobs:
       - name: cgo build
         run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
 
-  # `go test -race` for the whole module, in 9 parallel jobs (3 groups x 3 shards):
+  # `go test -race` for the whole module, in 9 jobs (3 groups x 3 shards), at most 6 running at once (docs/CI.md):
   #   cmd, world  the two long packages, cmd/forever-agent (about 1500 top-level tests, 8-10 minutes under -race) and
   #               internal/forever/world (about 430, about 10 minutes), split by test name: tools/ci/shard-tests.sh
   #               sorts the names and deals them round robin;
@@ -133,6 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Six at a time, not nine: the org runs 20 jobs at once across its repos (the concurrency cap, docs/CI.md).
+      max-parallel: 6
       matrix:
         group: [cmd, world, rest]
         shard: [0, 1, 2]
