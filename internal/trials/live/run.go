@@ -246,7 +246,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	}
 	defer teardownTrial()
 	for i := 1; i <= repeats; i++ {
-		if err := r.runRepeat(ctx, trial, id, i); err != nil {
+		if err := r.runRepeat(ctx, trial, trialArg, id, i); err != nil {
 			// SKIPPED stops the trial after rep 1: every repeat
 			// would skip identically (the capability is per
 			// server, not per rep), so running on wastes leases.
@@ -260,7 +260,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	teardownTrial()
 	var doc map[string]any
 	if kindOf(trial) == "dummy" {
-		doc, err = scoreDummyTrial(trialDir, trial)
+		doc, err = scoreDummyTrial(trialDir, trialArg, trial)
 	} else {
 		doc, err = score.ScoreTrialE(trialDir, trial)
 	}
@@ -276,7 +276,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 
 // runRepeat runs one repeat: setup, marks start, collect, situation,
 // teardown, setup.json, normalise + score.
-func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string, index int) error {
+func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, trialArg, id string, index int) error {
 	if r.Abort != nil {
 		if why := r.Abort(); why != "" {
 			return &Disconnected{err: fmt.Errorf("%s", why)}
@@ -465,7 +465,7 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		return err
 	}
 	if kindOf(trial) == "dummy" {
-		if _, _, err := scoreDummyRep(repDir, trial); err != nil {
+		if _, _, err := scoreDummyRep(repDir, trial, trialArg); err != nil {
 			return err
 		}
 	} else if _, err := score.ScoreRepE(repDir, trial, nil); err != nil {

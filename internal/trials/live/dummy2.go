@@ -189,7 +189,7 @@ func (t *dummyRun) unitByName(ctx context.Context, name string) (Unit, error) {
 // entry that was not in view before. Exactly one fresh unit is the summon
 // wherever it stands in the 30-yard scan; two or more need a unit within 3
 // yards of the player (the add spawns at the caster).
-func (t *dummyRun) claim(ctx context.Context, wall string, entry int, timeout time.Duration, known, before map[string]bool) (string, []map[string]any) {
+func (t *dummyRun) claim(ctx context.Context, wall string, entry int, timeout time.Duration, known, before map[string]float64) (string, []map[string]any) {
 	_ = wall
 	deadline := t.sit.now().Add(timeout)
 	var seen []map[string]any
@@ -199,7 +199,13 @@ func (t *dummyRun) claim(ctx context.Context, wall string, entry int, timeout ti
 		if rows, err := t.r.Client.UnitsFilter(ctx, 30, entry, ""); err == nil {
 			for _, u := range rows {
 				g := normGUIDOf(u.GUID)
-				if g == "" || u.Dead || known[g] || before[g] {
+				if g == "" || u.Dead {
+					continue
+				}
+				if _, ok := known[g]; ok {
+					continue
+				}
+				if _, ok := before[g]; ok {
 					continue
 				}
 				fresh = append(fresh, u)
@@ -270,16 +276,22 @@ func (t *dummyRun) waitDummyFight(ctx context.Context, timeout time.Duration) bo
 }
 
 // dummyEngaged reports the fight started: the dummy is in combat, or the
-// bot already cast at it (the combat log's proof, read through the
-// collector's raw rows).
+// bot already acted on it (a cast, a swing or a damage row from the bot at
+// the dummy in the combat log). A passive dummy that never turns InCombat
+// is engaged by the bot's own first cast; the dummy's own casts prove
+// nothing.
 func (t *dummyRun) dummyEngaged(ctx context.Context) bool {
 	if u, err := t.r.Client.Unit(ctx, t.dummy); err == nil && !u.Dead && u.InCombat {
 		return true
 	}
-	if row := t.r.Collect.MobCasts([]string{t.dummy}); row != nil {
-		return true
+	bot := normGUIDOf(t.r.Guids.Bot)
+	if bot == "" && t.r.Guard != nil {
+		bot = normGUIDOf(t.r.Guard.PlayerGUID())
 	}
-	return false
+	if bot == "" || t.r.Collect == nil {
+		return false
+	}
+	return t.r.Collect.EngagedAt(bot, normGUIDOf(t.dummy)) != nil
 }
 
 // dummyAlive reports the target still stands: readable, not dead.

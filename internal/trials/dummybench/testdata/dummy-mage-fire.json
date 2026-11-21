@@ -35,7 +35,7 @@
     "rotation": [
       "Fireball",
       "Fireball",
-      "Fireblast"
+      "Fire Blast"
     ]
   },
   "setup_checks": [
@@ -61,7 +61,7 @@
       "desc": "Fireball mean damage per cast on the dummy meets the table floor",
       "source": "spell data (base points + SP coefficient), table testdata/dummy_mage_fire.json",
       "expect_today": "?",
-      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them, and the table (not pass_if) decides",
       "check": {
         "metric": "dummy",
         "spell": "Fireball",
@@ -75,7 +75,7 @@
       "desc": "Fireball mean reaction (able to act to cast start) on the dummy meets the table ceiling",
       "source": "issue #18 reaction metrics, table testdata/dummy_mage_fire.json",
       "expect_today": "?",
-      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them, and the table (not pass_if) decides",
       "check": {
         "metric": "dummy",
         "spell": "Fireball",
@@ -85,14 +85,14 @@
       "min_reps": 2
     },
     {
-      "id": "DUMMY-FIREBLAST-DMG",
-      "desc": "Fireblast mean damage per cast on the dummy meets the table floor",
+      "id": "DUMMY-FIRE-BLAST-DMG",
+      "desc": "Fire Blast mean damage per cast on the dummy meets the table floor",
       "source": "spell data (base points + SP coefficient), table testdata/dummy_mage_fire.json",
       "expect_today": "?",
-      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them, and the table (not pass_if) decides",
       "check": {
         "metric": "dummy",
-        "spell": "Fireblast",
+        "spell": "Fire Blast",
         "stat": "damage"
       },
       "pass_if": ">= 0",

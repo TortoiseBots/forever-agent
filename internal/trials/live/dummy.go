@@ -15,11 +15,9 @@ package live
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
-	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 )
 
 // dummyRun is one repeat's dummy state.
@@ -32,33 +30,11 @@ type dummyRun struct {
 	dummy      string
 	dummyEntry int
 	fightStart time.Time
-	blocked    bool
 	// strangerWhy is set when a real player came within reach: nothing is
 	// summoned or fought near them, and the repeat ends INVALID.
 	strangerWhy string
 
-	rotation []string
 	duration float64
-	sitOpts  map[string]any
-}
-
-// dummyRotation reads the trial's rotation: situation.rotation, a non-empty
-// list of spell names the bot casts in order, looping for the fixed time.
-func dummyRotation(trial map[string]any) ([]string, string) {
-	sit, _ := trial["situation"].(map[string]any)
-	list, ok := pyjson.List(sit["rotation"])
-	if !ok || len(list) == 0 {
-		return nil, "situation.rotation must be a non-empty list of spell names"
-	}
-	var out []string
-	for _, item := range list {
-		name, ok := item.(string)
-		if !ok || strings.TrimSpace(name) == "" {
-			return nil, "situation.rotation must be a non-empty list of spell names"
-		}
-		out = append(out, name)
-	}
-	return out, ""
 }
 
 // dummyEntry reads the trial's target: situation.dummy_entry, the entry id
@@ -72,20 +48,15 @@ func dummyEntry(trial map[string]any) (int, string) {
 	return int(f), ""
 }
 
-// run is the dummy driver: arena, one dummy, rotation for the fixed time,
-// fight marks. The bot fights the whole window; the collector's combat log
-// carries the casts, the damage and the reaction clock.
+// run is the dummy driver: arena, one dummy, the fixed-time fight, fight
+// marks. The bot's module rotation fights the whole window; the collector's
+// combat log carries the casts, the damage and the readiness rows.
 func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
-	t.sitOpts, _ = t.r.Trial["situation"].(map[string]any)
-	rotation, why := dummyRotation(t.r.Trial)
-	if why != "" {
-		return map[string]any{"ok": false, "ended": "unsupported", "invalid_reason": why}, nil
-	}
 	entry, why := dummyEntry(t.r.Trial)
 	if why != "" {
 		return map[string]any{"ok": false, "ended": "unsupported", "invalid_reason": why}, nil
 	}
-	t.rotation, t.dummyEntry = rotation, entry
+	t.dummyEntry = entry
 	player, _ := t.r.Trial["player"].(map[string]any)
 	level, _ := intOpt(player, "level")
 	if level <= 0 {
@@ -106,7 +77,7 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 	if name := t.r.BotName; name != "" {
 		t.bringHire(ctx, name)
 	}
-	guid := t.summonDummy(ctx, entry, level)
+	guid := t.summonDummy(ctx, entry)
 	if guid == "" {
 		if t.strangerWhy != "" {
 			return map[string]any{"ok": false, "ended": "real_player", "invalid_reason": t.strangerWhy}, nil
@@ -117,6 +88,11 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 	t.dummy = guid
 	t.r.ExtraChecks = append(t.r.ExtraChecks, t.dummyReadyRow(ctx))
 
+	// The scored window opens at the engage order, before the first cast:
+	// the attack order is the moment the bot can act (the dummy is proven
+	// up, the bot has the target and is in range). Its first cast is thus
+	// inside the window, and the engage order is its readiness floor.
+	t.startFight(t.sit.now())
 	// The pull: the bot attacks the dummy. The module's own rotation does
 	// the casting from here; the serve attack call only starts contact.
 	if name := t.r.BotName; name != "" {
@@ -133,7 +109,6 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 		return map[string]any{"ok": false, "ended": "no_fight",
 			"invalid_reason": "the bot never engaged the dummy"}, nil
 	}
-	t.startFight(t.sit.now())
 	deadline := t.fightStart.Add(time.Duration(t.duration * float64(time.Second)))
 	lastStranger := t.sit.now()
 	for {
@@ -179,58 +154,55 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 // high-health creature the teardown kills). It reuses the tank summon's
 // claim: exactly one fresh unit of the entry, ledgered before anything
 // attacks it, so teardown kills exactly what this repeat spawned.
-func (t *dummyRun) summonDummy(ctx context.Context, entry, level int) string {
-	mobs := t.sit.Mobs
-	if mobs == nil {
-		mobs = LoadMobs()
-	}
-	_ = level
+//
+// Every error path after the command may have gone out ledgers what it can:
+// a lost reply is not proof the add did not run.
+func (t *dummyRun) summonDummy(ctx context.Context, entry int) string {
 	// Never act near a real player: no spawn while one is in reach.
 	if why, near := t.strangerNear(ctx); near {
 		t.sit.logf("no dummy spawn: %s", why)
 		t.strangerWhy = why
-		t.blocked = true
 		return ""
 	}
-	known := map[string]bool{}
+	known := map[string]float64{}
 	for _, g := range t.r.Ledger.SummonGUIDs() {
-		known[normGUIDOf(g)] = true
+		known[normGUIDOf(g)] = 0
 	}
-	before := map[string]bool{}
-	if rows, err := t.r.Client.UnitsFilter(ctx, 30, entry, ""); err == nil {
-		for _, u := range rows {
-			before[normGUIDOf(u.GUID)] = true
-		}
+	before, beforeOK := t.unitsOfEntry(ctx, 30, entry)
+	if !beforeOK {
+		// Without the pre-spawn view a fresh unit cannot be told from an
+		// old one: nothing is claimed (an unknown spawn is counted, never
+		// guessed).
+		t.sit.logf("dummy entry %d: the pre-spawn unit scan failed", entry)
 	}
 	wall := t.r.Marks.NowISO()
 	if err := t.r.Guard.Send(ctx, "npc_add_temp", TargetNone, "", itoa(entry)); err != nil {
+		// The command may have run before the reply was lost (a refused
+		// reply, a disconnect mid-send): the spawn state is unknown, so it
+		// is counted unidentified and every fresh unit the entry shows is
+		// ledgered now for teardown.
+		t.r.Unidentified++
+		t.ledgerUncertainSpawn(ctx, entry, known, before, err)
 		if IsDisconnected(err) {
-			t.blocked = true
 			return ""
 		}
 		t.sit.logf("npc add temp %d refused: %v", entry, err)
 		return ""
 	}
-	guid, seen := t.claim(ctx, wall, entry, 5*time.Second, known, before)
-	_ = mobs
+	guid := ""
+	var seen []map[string]any
+	if beforeOK {
+		guid, seen = t.claim(ctx, wall, entry, 5*time.Second, known, before)
+	}
 	if guid == "" {
 		// The add went through, so something spawned: every fresh
 		// candidate is ledgered at once and teardown kills it. A spawn
 		// nobody can identify is counted and fails the teardown row.
-		for _, c := range seen {
-			if g, _ := c["guid"].(string); g != "" {
-				t.ledgerSummon(g, entry, map[string]any{"unclaimed": true})
-			}
-		}
+		t.ledgerCandidates(entry, seen, "")
 		if len(seen) == 0 {
 			t.r.Unidentified++
 		}
-		row := map[string]any{"kind": "summon_unclaimed", "entry": entry,
-			"new_units": seen, "arena": t.arenaRow()}
-		t.r.Ledger.Add(row)
-		t.r.Marks.Add(map[string]any{"kind": "summon_unclaimed", "entry": entry})
 		t.sit.logf("dummy entry %d: no unit claimed (new units in view: %d)", entry, len(seen))
-		t.blocked = true
 		return ""
 	}
 	// The claim is ledgered before anything else is read or done to it: a
@@ -243,6 +215,62 @@ func (t *dummyRun) summonDummy(ctx context.Context, entry, level int) string {
 	}
 	t.r.Guids.Mobs = append(t.r.Guids.Mobs, guid)
 	return guid
+}
+
+// unitsOfEntry reads the units of one entry in range: guid -> distance, and
+// ok false when the list is unreadable (never an empty "none in view").
+func (t *dummyRun) unitsOfEntry(ctx context.Context, rangeYards float64, entry int) (map[string]float64, bool) {
+	rows, err := t.r.Client.UnitsFilter(ctx, rangeYards, entry, "")
+	if err != nil {
+		return nil, false
+	}
+	out := map[string]float64{}
+	for _, u := range rows {
+		if g := normGUIDOf(u.GUID); g != "" {
+			out[g] = u.Distance
+		}
+	}
+	return out, true
+}
+
+// ledgerUncertainSpawn records what a send error left behind: one read of
+// the entry's units, every fresh one ledgered for teardown. An unreadable
+// view ledgers nothing and says so.
+func (t *dummyRun) ledgerUncertainSpawn(ctx context.Context, entry int, known, before map[string]float64, sendErr error) {
+	after, ok := t.unitsOfEntry(ctx, 30, entry)
+	if !ok {
+		t.ledgerCandidates(entry, nil, "the unit scan after the lost spawn reply failed: "+sendErr.Error())
+		return
+	}
+	var seen []map[string]any
+	for g, distance := range after {
+		if _, ok := known[g]; ok {
+			continue
+		}
+		if _, old := before[g]; old {
+			continue
+		}
+		seen = append(seen, map[string]any{"guid": g, "distance": distance})
+	}
+	t.ledgerCandidates(entry, seen, "the spawn reply was lost: "+sendErr.Error())
+}
+
+// ledgerCandidates ledgeres every fresh spawn candidate and records the
+// repeat's summon_unclaimed row (the ledger's kill list is the only handle
+// teardown has on an unclaimed spawn).
+func (t *dummyRun) ledgerCandidates(entry int, seen []map[string]any, why string) {
+	for _, c := range seen {
+		if g, _ := c["guid"].(string); g != "" {
+			t.ledgerSummon(g, entry, map[string]any{"unclaimed": true})
+		}
+	}
+	row := map[string]any{"kind": "summon_unclaimed", "entry": entry,
+		"new_units": seen, "arena": t.arenaRow()}
+	if why != "" {
+		row["why"] = why
+	}
+	t.r.Ledger.Add(row)
+	t.r.Marks.Add(map[string]any{"kind": "summon_unclaimed", "entry": entry})
 }
 
 // ledgerSummon puts one summoned guid in the ledger at once (the ledger is

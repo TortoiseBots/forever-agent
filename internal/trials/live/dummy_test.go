@@ -38,9 +38,8 @@ func newDummyHarness(t *testing.T, duration float64) *dummyHarness {
 	client := NewClient(h.fake.rpc())
 	h.rep = &Repeat{Index: 1, Dir: repDir, TrialID: "dummy-mage",
 		Trial: map[string]any{"id": "dummy-mage", "duration_s": duration,
-			"player": map[string]any{"level": float64(40)},
-			"situation": map[string]any{"kind": "dummy", "dummy_entry": float64(entry),
-				"rotation": []any{"Fireball", "Fireball"}}},
+			"player":    map[string]any{"level": float64(40)},
+			"situation": map[string]any{"kind": "dummy", "dummy_entry": float64(entry)}},
 		Client: client, Ledger: h.ledger, Marks: h.marks, Guids: Guids{Player: gTester}}
 	h.rep.Collect = NewCollector(client, repDir, h.marks, &h.rep.Guids, h.ledger)
 	h.rep.Guard = NewGuard(client, GuardOptions{Ledger: h.ledger, Marks: h.marks,
@@ -197,5 +196,131 @@ func TestDummyTeardownKillsLedgered(t *testing.T) {
 	_ = rows
 	if len(h.world.killed) != 1 {
 		t.Fatalf("killed = %d, want the 1 ledgered dummy", len(h.world.killed))
+	}
+}
+
+// TestDummyEngagedOnlyByBotAtDummy: the engagement proof is the bot acting
+// on the dummy, never the dummy casting at the bot (MobCasts' source match
+// found the wrong side of the fight), and a passive dummy that never turns
+// InCombat is engaged by that first row.
+func TestDummyEngagedOnlyByBotAtDummy(t *testing.T) {
+	h := newDummyHarness(t, 1)
+	dummy := "0x00000000000000d1"
+	h.rep.Collect.mu.Lock()
+	h.rep.Collect.raw = []map[string]any{
+		{"kind": "spell_go", "seq": 1, "source": map[string]any{"guid": dummy},
+			"target": map[string]any{"guid": gTester}},
+	}
+	h.rep.Collect.mu.Unlock()
+	run := &dummyRun{sit: h.sit, r: h.rep, dummy: dummy}
+	if run.dummyEngaged(context.Background()) {
+		t.Fatal("the dummy's own cast at the bot counted as the bot engaging")
+	}
+	h.rep.Collect.mu.Lock()
+	h.rep.Collect.raw = append(h.rep.Collect.raw, map[string]any{
+		"kind": "spell_go", "seq": 2, "source": map[string]any{"guid": gTester},
+		"target": map[string]any{"guid": dummy}})
+	h.rep.Collect.mu.Unlock()
+	if !run.dummyEngaged(context.Background()) {
+		t.Fatal("the bot's cast at the dummy did not engage the fight")
+	}
+}
+
+// TestDummyFightStartsBeforeTheFirstCast: the scored window opens at the
+// engage order, before the bot's first cast, and a passive dummy (never
+// InCombat) is engaged through the bot's own combat row.
+func TestDummyFightStartsBeforeTheFirstCast(t *testing.T) {
+	h := newDummyHarness(t, 1)
+	base := h.world.hook
+	h.fake.hook = func(method string, params map[string]any) {
+		base(method, params)
+		if method == "attack" {
+			// A training dummy never turns InCombat.
+			h.world.mu.Lock()
+			for _, u := range h.world.mobs {
+				u["in_combat"] = false
+			}
+			h.world.mu.Unlock()
+		}
+	}
+	injected := make(chan time.Time, 1)
+	go func() {
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			guid, started := "", false
+			h.world.mu.Lock()
+			for g := range h.world.mobs {
+				guid = g
+			}
+			h.world.mu.Unlock()
+			for _, m := range h.marks.Rows() {
+				if strOf(m["kind"]) == "fight_start" {
+					started = true
+				}
+			}
+			if guid != "" && started {
+				at := time.Now()
+				h.rep.Collect.mu.Lock()
+				h.rep.Collect.raw = append(h.rep.Collect.raw, map[string]any{
+					"kind": "spell_go", "seq": 9001,
+					"source": map[string]any{"guid": gTester}, "target": map[string]any{"guid": guid}})
+				h.rep.Collect.mu.Unlock()
+				injected <- at
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		injected <- time.Time{}
+	}()
+	h.sit.Now = jumpClock(700 * time.Millisecond)
+	out, err := h.run(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strOf(out["ended"]); got != "duration" {
+		t.Fatalf("ended = %q, want duration: the bot's cast must engage a passive dummy (%v)", got, out)
+	}
+	at := <-injected
+	if at.IsZero() {
+		t.Fatal("never saw the fight_start mark and the spawned dummy")
+	}
+	var start time.Time
+	for _, m := range h.marks.Rows() {
+		if strOf(m["kind"]) != "fight_start" {
+			continue
+		}
+		start, err = time.Parse(time.RFC3339Nano, strOf(m["wall"]))
+		if err != nil {
+			t.Fatalf("fight_start wall %q: %v", m["wall"], err)
+		}
+	}
+	if start.IsZero() {
+		t.Fatal("no fight_start mark")
+	}
+	if start.After(at) {
+		t.Fatalf("fight_start %s is after the engaging cast %s: the window missed the first cast",
+			start.Format(time.RFC3339Nano), at.Format(time.RFC3339Nano))
+	}
+}
+
+// TestDummyLostSpawnReplyIsLedgered: a `.npc add temp` whose reply is lost
+// may still have spawned; the fresh unit is ledgered (so teardown can kill
+// it) and the spawn is counted unidentified, never silently left behind.
+func TestDummyLostSpawnReplyIsLedgered(t *testing.T) {
+	h := newDummyHarness(t, 1)
+	h.fake.errCodes["gm"] = []int{-32000} // the add runs (the hook spawns), its reply is lost
+	run := &dummyRun{sit: h.sit, r: h.rep}
+	if guid := run.summonDummy(context.Background(), 2734); guid != "" {
+		t.Fatalf("summonDummy claimed %q after a lost reply: it cannot know the unit is fresh", guid)
+	}
+	summons := h.ledger.OfKind("summon")
+	if len(summons) != 1 {
+		t.Fatalf("ledgered summons = %d, want the 1 unit the lost reply spawned (%v)", len(summons), h.world.lines)
+	}
+	if h.rep.Unidentified == 0 {
+		t.Fatal("the lost spawn reply was not counted unidentified")
+	}
+	if got := strOf(summons[0]["guid"]); got == "" {
+		t.Fatalf("ledgered summon has no guid: %v", summons[0])
 	}
 }

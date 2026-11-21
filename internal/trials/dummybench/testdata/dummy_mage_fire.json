@@ -1,20 +1,10 @@
-// dummy_mage_fire.json is the round's one documented per-class table:
-// fire mage, the table's format example. Numbers the server has not measured
-// stay null ("to be measured"): they score UNKNOWN, never FAIL. A table the
-// round did not measure at all is all-null: every spell scores UNKNOWN and
-// the card shows the shape, not a claim.
 {
   "class": "mage",
   "spec": "fire",
-  "rotation": [
-    "Fireball",
-    "Fireball",
-    "Fireblast",
-    "Fireball"
-  ],
+  "note": "The round's documented per-class table (doc.go): numbers the server has not measured stay null ('to be measured'), and a null bound scores UNKNOWN, never FAIL. All-null is the honest starting point: the card shows the shape, not a claim.",
   "expects": [
     {"spell": "Fireball", "min_damage": null, "max_reaction_s": null},
-    {"spell": "Fireblast", "min_damage": null, "max_reaction_s": null},
+    {"spell": "Fire Blast", "min_damage": null, "max_reaction_s": null},
     {"spell": "Pyroblast", "min_damage": null, "max_reaction_s": null},
     {"spell": "Scorch", "min_damage": null, "max_reaction_s": null}
   ]

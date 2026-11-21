@@ -7,11 +7,23 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/pjerra/forever-agent/internal/spells"
 	"github.com/pjerra/forever-agent/internal/trials/events"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 )
+
+// DamageGraceS bounds how long after a cast's go that cast's damage may still
+// land (projectile travel and the server's own tick): the scored window ends
+// at fight_end, and a damage row up to this many seconds later still counts
+// for the last in-window cast. Longer is a later fight, not this one.
+const DamageGraceS = 2.0
+
+// gcdFallbackS is 1.12's standard global cooldown, the readiness floor for a
+// cast whose own spell metadata is not in the table.
+const gcdFallbackS = 1.5
 
 // Expect is one row of the per-class table: the spell, the damage the bench
 // expects per cast (floor and half of base points + SP/AP coefficient, per
@@ -29,57 +41,118 @@ type Expect struct {
 	MaxReactionS *float64 `json:"max_reaction_s,omitempty"`
 }
 
+// TableError is a refused expected table: a bound the bench cannot score (a
+// non-finite or negative number, a string, a bool) or a spell named twice.
+// It is a type, so a caller can tell a bad table from a missing file.
+type TableError struct {
+	Path  string // the table's name (file path, or its name in the data dir)
+	Row   int    // the expects[] index, -1 when not row-specific
+	Field string // the offending field ("min_damage", "spell", ...)
+	Value any    // the value read, nil when the field was absent
+	Why   string // the refusal in words
+}
+
+func (e *TableError) Error() string {
+	where := e.Path
+	if e.Row >= 0 {
+		where += fmt.Sprintf(": expects[%d]", e.Row)
+	}
+	if e.Field != "" {
+		where += ": " + e.Field
+	}
+	if e.Value != nil {
+		return fmt.Sprintf("%s: %s (value %v)", where, e.Why, e.Value)
+	}
+	return where + ": " + e.Why
+}
+
 // LoadExpects reads a table file: {"class", "spec", "expects": [{spell,
 // min_damage?, max_reaction_s?}]}. Bounds marked "to be measured" are
 // written as JSON null (or left out), never as a guessed number.
 func LoadExpects(path string) ([]Expect, error) {
-	doc, err := pyjson.UnmarshalFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	return ParseExpects(path, raw)
+}
+
+// ParseExpects decodes one table the loader read (a file, or an embedded
+// table named path). A bound must be a finite JSON number >= 0: NaN,
+// Infinity, negatives, strings and bools are refused with a *TableError, so
+// a hostile table cannot turn `-Infinity min_damage` into an always-PASS or
+// a NaN into an always-FAIL. Spell names are trimmed and folded for
+// matching; a spell named twice is refused.
+func ParseExpects(path string, raw []byte) ([]Expect, error) {
+	doc, err := pyjson.Unmarshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	obj, ok := pyjson.Object(doc)
 	if !ok {
-		return nil, fmt.Errorf("%s: table is not an object", path)
+		return nil, &TableError{Path: path, Row: -1, Why: "table is not an object"}
 	}
 	list, ok := pyjson.List(obj["expects"])
 	if !ok {
-		return nil, fmt.Errorf("%s: table has no expects list", path)
+		return nil, &TableError{Path: path, Row: -1, Why: "table has no expects list"}
 	}
 	var out []Expect
+	seen := map[string]bool{}
 	for i, item := range list {
 		row, ok := pyjson.Object(item)
 		if !ok {
-			return nil, fmt.Errorf("%s: expects[%d] is not an object", path, i)
+			return nil, &TableError{Path: path, Row: i, Why: "not an object"}
 		}
-		name := pyjson.Str(row["spell"])
-		if name == "" {
-			return nil, fmt.Errorf("%s: expects[%d] names no spell", path, i)
+		raw, isStr := row["spell"].(string)
+		name := strings.TrimSpace(raw)
+		if !isStr || name == "" {
+			return nil, &TableError{Path: path, Row: i, Field: "spell", Why: "names no spell"}
 		}
-		var e Expect
-		e.Spell = name
-		if row["min_damage"] != nil {
-			f, ok := pyjson.Float(row["min_damage"])
-			if !ok {
-				return nil, fmt.Errorf("%s: expects[%d] bad min_damage", path, i)
-			}
-			e.MinDamage = &f
+		key := strings.ToLower(name)
+		if seen[key] {
+			return nil, &TableError{Path: path, Row: i, Field: "spell", Value: name, Why: "named twice"}
 		}
-		if row["max_reaction_s"] != nil {
-			f, ok := pyjson.Float(row["max_reaction_s"])
-			if !ok {
-				return nil, fmt.Errorf("%s: expects[%d] bad max_reaction_s", path, i)
-			}
-			e.MaxReactionS = &f
+		seen[key] = true
+		min, err := tableBound(path, i, row, "min_damage")
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, e)
+		maxRT, err := tableBound(path, i, row, "max_reaction_s")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Expect{Spell: name, MinDamage: min, MaxReactionS: maxRT})
 	}
 	return out, nil
 }
 
+// tableBound reads one optional numeric bound. Absent or JSON null is nil
+// (unknown, scores UNKNOWN).
+func tableBound(path string, i int, row map[string]any, field string) (*float64, error) {
+	v := row[field]
+	if v == nil {
+		return nil, nil
+	}
+	_, isFloat := v.(float64)
+	if !pyjson.IsInt(v) && !isFloat {
+		return nil, &TableError{Path: path, Row: i, Field: field, Value: v, Why: "not a number"}
+	}
+	f, ok := pyjson.Num(v)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil, &TableError{Path: path, Row: i, Field: field, Value: v, Why: "not a finite number"}
+	}
+	if f < 0 {
+		return nil, &TableError{Path: path, Row: i, Field: field, Value: v, Why: "negative"}
+	}
+	return &f, nil
+}
+
 // Cast is one scored cast: its spell, the damage it dealt and its reaction.
-// T is the cast's start; Go is the go the start was paired with: the
-// reaction clock is start minus the previous cast's go (the moment the bot
-// was able to act again), not start minus start.
+// T is the cast's start (the spell_start when one preceded the go, else the
+// go itself); Go is the spell_go. Reaction is T minus the moment the bot
+// could act again, never from the previous cast alone; HasReact is false
+// when that moment cannot be bounded (a repeated cast of a spell whose
+// cooldown the spell table does not know).
 type Cast struct {
 	Spell    string
 	Damage   int64
@@ -87,6 +160,34 @@ type Cast struct {
 	HasReact bool
 	T        float64
 	Go       float64
+
+	meta castMeta
+}
+
+// castMeta is the readiness data of one spell, from the spell table: the
+// global cooldown, the cast time, the spell's own cooldown and its shared
+// category cooldown. known is false for a spell id the meta table lacks.
+type castMeta struct {
+	gcdS     float64
+	castS    float64
+	cdS      float64
+	category uint32
+	catCDS   float64
+	known    bool
+}
+
+// metaOf reads the readiness data of one cast's spell id.
+func metaOf(id int64) castMeta {
+	if id <= 0 {
+		return castMeta{}
+	}
+	m, ok := spells.Lookup(uint32(id))
+	if !ok {
+		return castMeta{}
+	}
+	return castMeta{gcdS: float64(m.GCDMS) / 1000, castS: float64(m.CastMS) / 1000,
+		cdS: float64(m.CooldownMS) / 1000, category: m.Category,
+		catCDS: float64(m.CategoryCDMS) / 1000, known: true}
 }
 
 // SpellTally is one spell's bench row: casts, damage, reaction.
@@ -114,162 +215,277 @@ type Verdict struct {
 	Evidence    []string
 }
 
-// window reads the fight_start..fight_end window from marks (the score
-// package's window, re-based seconds). ok is false with no window.
+// window reads the fight_start..fight_end window from marks, in the events'
+// own time base (the normaliser re-bases on the fight_start wall, so lo is
+// 0 and hi is the end wall minus the start wall). A marks file without
+// walls (scripted rows) falls back to its own `t` values. ok is false with
+// no window, so a repeat that never fought scores nothing.
 func window(marks []events.Row) (lo, hi float64, ok bool) {
-	var start, end *float64
+	var fs, fe map[string]any
 	for _, m := range marks {
-		kind, _ := m["kind"].(string)
-		switch kind {
+		switch pyjson.Str(m["kind"]) {
 		case "fight_start":
-			if t, good := rowT(m); good && start == nil {
-				start = &t
+			if fs == nil {
+				fs = m
 			}
 		case "fight_end":
-			if t, good := rowT(m); good {
-				end = &t
-			}
+			fe = m
 		}
 	}
-	if start == nil || end == nil || *end <= *start {
+	if fs == nil || fe == nil {
 		return 0, 0, false
 	}
-	return *start, *end, true
+	fsWall, fsOK := events.WallSecs(fs["wall"])
+	feWall, feOK := events.WallSecs(fe["wall"])
+	if fsOK && feOK {
+		if feWall <= fsWall {
+			return 0, 0, false
+		}
+		return 0, feWall - fsWall, true
+	}
+	lo, ok1 := rowT(fs)
+	h, ok2 := rowT(fe)
+	if !ok1 || !ok2 || h <= lo {
+		return 0, 0, false
+	}
+	return lo, h, true
 }
 
 func rowT(row events.Row) (float64, bool) {
 	return pyjson.Float(row["t"])
 }
 
-// castsInWindow keeps the normaliser's rows inside the scored window.
-func castsInWindow(rows []events.Row, lo, hi float64) []events.Row {
-	var out []events.Row
-	for _, r := range rows {
-		t, ok := rowT(r)
-		if !ok || t < lo || t > hi {
-			continue
-		}
-		out = append(out, r)
+// amountOf reads a damage row's amount.
+func amountOf(row events.Row) (float64, bool) {
+	if n, ok := pyjson.Int64(row["amount"]); ok {
+		return float64(n), true
 	}
-	return out
+	return pyjson.Float(row["amount"])
 }
 
-// Tally folds normalised event rows into casts and damage per spell. Rows
-// are the normaliser's: kind cast/cast_start/cast_fail/damage/heal, spell,
-// amount, src_unit/dst_unit. Only rows the table's bot aimed at the fight
-// count: src_unit $bot, dst_unit the dummy (or $bot for a self heal: the
-// rotation's heal lands on the caster, not the target).
+// spellName is the row's spell name, the spell id as text when it has no
+// name; "?" is the normaliser's unknown and is skipped. A row with neither
+// has no spell and is skipped (never a spell called "None").
+func spellName(row events.Row) string {
+	if s := pyjson.Str(row["spell"]); s != "" && s != "?" {
+		return s
+	}
+	if id, ok := pyjson.Int64(row["spell_id"]); ok {
+		return strconv.FormatInt(id, 10)
+	}
+	return ""
+}
+
+// spellRows is one spell's raw rows inside the window scan.
+type spellRows struct {
+	starts []float64
+	fails  []float64
+	goes   []goRow
+	damage []damageRow
+}
+
+type goRow struct {
+	t  float64
+	id int64
+}
+
+type damageRow struct {
+	t      float64
+	amount float64
+}
+
+// Tally folds normalised event rows into casts and damage per spell inside
+// the fight window [lo, hi]. Rows are the normaliser's: kind
+// cast/cast_start/cast_fail/damage, spell, spell_id, amount,
+// src_unit/dst_unit. Only the bot's own damage at the dummy counts:
+// src_unit is the bot and dst_unit the dummy; heals, self-target rows and a
+// pet's rows are not this bench's damage and are dropped.
 //
-// One cast is one spell_go ("cast"): a cast-time spell also emits a
-// spell_start ("cast_start"), which never counts twice. Damage sums per
-// spell over every damage/heal row of that spell, whether or not a cast
-// row precedes it (a periodic tick, a proc): unattributed damage never
-// invents a cast. A spell the table does not name is a stranger row: kept
-// in the tally so Score marks it INVALID, never silently dropped.
-func Tally(rows []events.Row, botUnit, dummyUnit string) ([]SpellTally, []Cast) {
-	aimed := func(r events.Row) bool {
-		if pyjson.Str(r["src_unit"]) != botUnit {
-			return false
-		}
-		switch dst := pyjson.Str(r["dst_unit"]); dst {
-		case dummyUnit, botUnit:
-			return true
-		}
-		return false
-	}
-	starts := map[string][]float64{}
-	goes := map[string][]float64{}
-	damage := map[string]int64{}
-	casts := map[string]int64{}
+// One cast is one spell_go ("cast") whose go lands in [lo, hi]; a
+// cast-time spell's spell_start ("cast_start") moves that go's time
+// earlier, and a spell_fail ("cast_fail") after a start drops it (a
+// cancelled cast is never paired with the next go). A cast inside the
+// window counts with all its damage rows: a damage row belongs to the
+// latest in-window go at or before it, and is dropped beyond the
+// cast's damage grace (DamageGraceS), so the last cast's projectile still
+// counts and a later DoT tick does not. Damage with no in-window cast never
+// invents a cast, so a proc or a tick is not a stranger.
+//
+// The returned tallies hold only spells with an in-window cast: a spell
+// with damage but no cast is not a rotation spell.
+func Tally(rows []events.Row, botUnit, dummyUnit string, lo, hi float64) ([]SpellTally, []Cast) {
+	bySpell := map[string]*spellRows{}
 	var order []string
-	seen := map[string]bool{}
-	nameOf := func(r events.Row) string {
-		if s := pyjson.Str(r["spell"]); s != "" {
-			return s
-		}
-		return pyjson.Str(r["spell_id"])
-	}
 	for _, r := range rows {
-		if !aimed(r) {
+		if pyjson.Str(r["src_unit"]) != botUnit || pyjson.Str(r["dst_unit"]) != dummyUnit {
 			continue
 		}
-		spell := nameOf(r)
+		spell := spellName(r)
 		if spell == "" || spell == "?" {
 			continue
 		}
-		if !seen[spell] {
-			seen[spell] = true
+		t, ok := rowT(r)
+		if !ok {
+			continue
+		}
+		s, seen := bySpell[spell]
+		if !seen {
+			s = &spellRows{}
+			bySpell[spell] = s
 			order = append(order, spell)
 		}
-		t, _ := rowT(r)
 		switch pyjson.Str(r["kind"]) {
-		case "cast":
-			goes[spell] = append(goes[spell], t)
-			casts[spell]++
 		case "cast_start":
-			starts[spell] = append(starts[spell], t)
-		case "damage", "heal":
-			amt, ok := pyjson.Int64(r["amount"])
-			if !ok {
-				if f, ok := pyjson.Float(r["amount"]); ok {
-					amt = int64(f)
-				} else {
-					continue
-				}
+			s.starts = append(s.starts, t)
+		case "cast_fail":
+			s.fails = append(s.fails, t)
+		case "cast":
+			id, _ := pyjson.Int64(r["spell_id"])
+			s.goes = append(s.goes, goRow{t: t, id: id})
+		case "damage":
+			if amt, ok := amountOf(r); ok {
+				s.damage = append(s.damage, damageRow{t: t, amount: amt})
 			}
-			damage[spell] += amt
 		}
 	}
-	// One cast row per go: the cast's start is its latest cast_start at or
-	// before the go, else the go itself (instant). Both lists arrive in
-	// window order, so one index each pairs them.
-	var out []Cast
+	var tallies []SpellTally
+	var casts []Cast
 	for _, spell := range order {
-		ss := starts[spell]
-		si := 0
-		last := -1
-		for _, g := range goes[spell] {
-			for si < len(ss) && ss[si] <= g {
-				last = si
+		s := bySpell[spell]
+		sort.Float64s(s.starts)
+		sort.Float64s(s.fails)
+		sort.SliceStable(s.goes, func(i, j int) bool { return s.goes[i].t < s.goes[j].t })
+		// Pair each go with its own start: the latest start at or before
+		// the go, dropped by a cast_fail between the two. A start belongs
+		// to one go.
+		si, fi := 0, 0
+		var spellCasts []Cast
+		for _, g := range s.goes {
+			var start *float64
+			for si < len(s.starts) && s.starts[si] <= g.t {
+				v := s.starts[si]
+				start = &v
 				si++
 			}
-			start := g
-			if last >= 0 {
-				start = ss[last]
-				last = -1
+			for fi < len(s.fails) && s.fails[fi] <= g.t {
+				if start != nil && s.fails[fi] >= *start {
+					start = nil
+				}
+				fi++
 			}
-			out = append(out, Cast{Spell: spell, T: start, Go: g})
+			if g.t < lo || g.t > hi {
+				continue
+			}
+			c := Cast{Spell: spell, T: g.t, Go: g.t, meta: metaOf(g.id)}
+			if start != nil {
+				c.T = *start
+			}
+			spellCasts = append(spellCasts, c)
 		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].T < out[j].T })
-	// A consumed start belongs to its go: drop the pairing scan's leftover
-	// bookkeeping (starts only ever move the go's time earlier).
-	var tallies []SpellTally
-	for _, spell := range order {
-		n := casts[spell]
-		t := SpellTally{Spell: spell, Casts: n, Damage: damage[spell]}
-		if n > 0 {
-			t.MeanDmg = float64(damage[spell]) / float64(n)
+		if len(spellCasts) == 0 {
+			continue
 		}
-		tallies = append(tallies, t)
+		// Damage: the latest in-window go at or before the row, within the
+		// grace of that cast.
+		attr := make([]float64, len(spellCasts))
+		for _, d := range s.damage {
+			if d.t < lo || d.t > hi+DamageGraceS {
+				continue
+			}
+			idx := -1
+			for i := range spellCasts {
+				if spellCasts[i].Go <= d.t {
+					idx = i
+				} else {
+					break
+				}
+			}
+			if idx < 0 || d.t > spellCasts[idx].Go+DamageGraceS {
+				continue
+			}
+			attr[idx] += d.amount
+		}
+		var total int64
+		for i := range spellCasts {
+			spellCasts[i].Damage = int64(math.Round(attr[i]))
+			total += spellCasts[i].Damage
+		}
+		n := int64(len(spellCasts))
+		tallies = append(tallies, SpellTally{Spell: spell, Casts: n, Damage: total,
+			MeanDmg: float64(total) / float64(n)})
+		casts = append(casts, spellCasts...)
 	}
-	return tallies, React(out)
+	return tallies, React(casts, lo)
 }
 
-// React fills each cast's reaction: the gap from the previous cast's go
-// (the moment the bot was able to act again: cooldown/GCD spent, target in
-// range on a quiet dummy) to this cast's start. The first cast has no
-// reaction: nothing before it proves when the bot was ready.
-func React(casts []Cast) []Cast {
+// React fills each cast's reaction: the cast's start minus the moment the
+// bot could act again. That moment is the latest of:
+//   - the fight's engage order (lo): the bot is in range, has the target and
+//     is ordered to attack, so it can act from there;
+//   - the previous cast's lockout end: its start plus the longer of its
+//     global cooldown and its cast time (an instant spell's GCD is thus not
+//     counted as reaction, and a 3.5 s cast's GCD is spent inside it);
+//   - the cast's own cooldown end: the last start of the same spell plus
+//     its cooldown, and the last start of a spell in its category plus the
+//     category cooldown.
+//
+// The previous cast's spell data is used, so the value never counts another
+// spell's cooldown as this one's latency. A repeated cast whose own spell id
+// is not in the spell table cannot have its cooldown bounded: it keeps no
+// reaction (HasReact false; the bench scores its reaction UNKNOWN rather
+// than PASS), while a first cast still measures from the engage order. A
+// negative gap (a start before the bound, e.g. a client's own queued cast)
+// is clamped to 0.
+func React(casts []Cast, lo float64) []Cast {
 	out := append([]Cast(nil), casts...)
-	var prev *float64
+	sort.SliceStable(out, func(i, j int) bool { return out[i].T < out[j].T })
+	var prevStart *float64
+	var prev castMeta
+	lastSpell := map[string]float64{}
+	lastCat := map[uint32]float64{}
 	for i := range out {
-		if prev != nil {
-			out[i].Reaction = out[i].T - *prev
+		ready := lo
+		if prevStart != nil {
+			lock := gcdFallbackS
+			if prev.known {
+				lock = math.Max(prev.gcdS, prev.castS)
+			}
+			if r := *prevStart + lock; r > ready {
+				ready = r
+			}
+		}
+		m := out[i].meta
+		_, repeat := lastSpell[out[i].Spell]
+		if m.known {
+			if repeat {
+				if r := lastSpell[out[i].Spell] + m.cdS; r > ready {
+					ready = r
+				}
+			}
+			if m.category != 0 && m.catCDS > 0 {
+				if s, ok := lastCat[m.category]; ok {
+					if r := s + m.catCDS; r > ready {
+						ready = r
+					}
+				}
+			}
+			lastCat[m.category] = out[i].T
+		}
+		lastSpell[out[i].Spell] = out[i].T
+		if !m.known {
+			// The spell's own cooldown is unknown, so the gap to any of
+			// its starts may be cooldown, not reaction: no reaction is
+			// claimed (the bench scores its reaction UNKNOWN, never PASS).
+			out[i].HasReact = false
+		} else {
+			out[i].Reaction = out[i].T - ready
+			if out[i].Reaction < 0 {
+				out[i].Reaction = 0
+			}
 			out[i].HasReact = true
 		}
-		g := out[i].Go
-		prev = &g
+		start := out[i].T
+		prevStart, prev = &start, m
 	}
 	return out
 }
@@ -304,10 +520,13 @@ func FoldReactions(tallies []SpellTally, casts []Cast) []SpellTally {
 	return tallies
 }
 
-// Score compares one spell's tally with its expected row. Unknown stays
-// unknown (a missing bound never fails); a stranger (a cast spell the table
-// does not name, or a table spell with no entry at all) is INVALID, never a
-// silent PASS.
+// Score compares one spell's tally with its expected row. The table
+// decides: a mean damage below MinDamage is FAIL, a mean reaction above
+// MaxReactionS is FAIL, both met is PASS. Unknown stays unknown: a missing
+// bound, or a known reaction bound with no measured reaction, is UNKNOWN,
+// never FAIL and never PASS. A cast spell the table does not name (a
+// stranger: a proc, a wrong rotation, another bot's cast) is INVALID, never
+// a silent PASS.
 func Score(t SpellTally, e *Expect) Verdict {
 	v := Verdict{Spell: t.Spell, Casts: t.Casts, Damage: t.Damage,
 		MeanDamage: t.MeanDmg, MeanReact: t.MeanRT, MaxReact: t.MaxRT, HasReact: t.HasReact}
@@ -326,7 +545,6 @@ func Score(t SpellTally, e *Expect) Verdict {
 	if e.MinDamage == nil {
 		missing = append(missing, "min_damage")
 	}
-	wantRT := e.MaxReactionS != nil && t.HasReact
 	if e.MaxReactionS == nil {
 		missing = append(missing, "max_reaction_s")
 	}
@@ -341,9 +559,15 @@ func Score(t SpellTally, e *Expect) Verdict {
 		}
 		return v
 	}
+	if !t.HasReact {
+		v.Verdict = "UNKNOWN"
+		v.NoNumberFor = "reaction"
+		v.Evidence = []string{fmt.Sprintf("%s: no reaction measured in the scored window (max %.2fs known)",
+			t.Spell, *e.MaxReactionS)}
+		return v
+	}
 	dmgOK := t.MeanDmg >= *e.MinDamage
-	rtOK := !t.HasReact || t.MeanRT <= *e.MaxReactionS
-	_ = wantRT
+	rtOK := t.MeanRT <= *e.MaxReactionS
 	if dmgOK && rtOK {
 		v.Verdict = "PASS"
 	} else {
@@ -372,12 +596,20 @@ func reactMaxS(t SpellTally, max float64) string {
 // RepTally is one dummy repeat's scored content: per-spell tallies plus
 // the expects table keyed by spell. Every caller shares it: ScoreRep (the
 // verdicts.json path) and the score package's dummy rule (the trial
-// verdicts path).
+// verdicts path). Invalid names why a repeat as a whole is INVALID: a
+// stranger or a guard reason voids every spell of the repeat, so no spell
+// in it scores PASS or FAIL.
 type RepTally struct {
 	Tallies []SpellTally
 	Casts   []Cast
 	Expects map[string]*Expect
 	Invalid string
+}
+
+// Expect is the table row naming spell (trimmed, case-folded), nil when
+// the table does not name it.
+func (r RepTally) Expect(spell string) *Expect {
+	return r.Expects[strings.ToLower(strings.TrimSpace(spell))]
 }
 
 // ScoreRep scores one dummy repeat dir: reads setup.json (which names the
@@ -386,28 +618,28 @@ type RepTally struct {
 // verdicts.json. It returns the per-spell verdicts.
 //
 // A failed setup or a missing fight window is INVALID, never PASS: there is
-// no damage to score. A spell with no expected numbers is UNKNOWN. A spell
-// the table does not name (a stranger: a proc, a wrong rotation, another
-// bot's cast leaking in) is INVALID.
-// SetupBad is set when the setup or the window is missing: the repeat is
-// INVALID before any tally.
+// no damage to score. A stranger makes the whole repeat INVALID: every
+// verdict row of that repeat is INVALID, so a card never shows a PASS
+// beside the stranger that voids it. A table spell with no casts is
+// UNKNOWN; a spell with damage but no cast is not a rotation spell and is
+// left out.
 func TallyRep(repDir string, expects []Expect) (RepTally, []Verdict, error) {
 	byName := map[string]*Expect{}
 	for i := range expects {
-		byName[expects[i].Spell] = &expects[i]
+		byName[strings.ToLower(expects[i].Spell)] = &expects[i]
 	}
 	tallied := func(tallies []SpellTally, casts []Cast) (RepTally, []Verdict, error) {
 		rep := RepTally{Tallies: tallies, Casts: casts, Expects: byName}
 		var out []Verdict
 		for _, t := range tallies {
-			out = append(out, Score(t, byName[t.Spell]))
+			out = append(out, Score(t, byName[strings.ToLower(t.Spell)]))
 		}
 		seen := map[string]bool{}
 		for _, t := range tallies {
-			seen[t.Spell] = true
+			seen[strings.ToLower(t.Spell)] = true
 		}
 		for _, e := range expects {
-			if !seen[e.Spell] {
+			if !seen[strings.ToLower(e.Spell)] {
 				out = append(out, Verdict{Spell: e.Spell, Verdict: "UNKNOWN",
 					NoNumberFor: "casts",
 					Evidence:    []string{fmt.Sprintf("%s: no casts in the scored window", e.Spell)}})
@@ -417,6 +649,15 @@ func TallyRep(repDir string, expects []Expect) (RepTally, []Verdict, error) {
 			if v.Verdict == "INVALID" {
 				rep.Invalid = v.Evidence[0]
 				break
+			}
+		}
+		if rep.Invalid != "" {
+			// The stranger (or whatever voided the repeat) voids every
+			// row: no spell in an INVALID repeat scores PASS or FAIL.
+			for i := range out {
+				out[i].Verdict = "INVALID"
+				out[i].NoNumberFor = ""
+				out[i].Evidence = []string{rep.Invalid}
 			}
 		}
 		return rep, out, nil
@@ -452,10 +693,9 @@ func TallyRep(repDir string, expects []Expect) (RepTally, []Verdict, error) {
 	if err != nil {
 		return RepTally{}, nil, err
 	}
-	in := castsInWindow(eventRows, lo, hi)
 	// The fight is the bot against the one summoned target: the
 	// normaliser's $bot against the setup's dummy alias.
-	tallies, casts := Tally(in, "$bot", dummyAlias(setup))
+	tallies, casts := Tally(eventRows, "$bot", dummyAlias(setup), lo, hi)
 	tallies = FoldReactions(tallies, casts)
 	return tallied(tallies, casts)
 }

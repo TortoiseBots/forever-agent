@@ -12,49 +12,111 @@ package live
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/trials/dummybench"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
-	"github.com/pjerra/forever-agent/internal/trials/rules"
 )
 
-// dummyTableDir is the directory of per-class expected tables, beside the
-// embedded trial files: <table dir>/<class>-<spec>.json. Tests override it
-// with a temp dir.
+// dummyTableDir overrides the bench's expected-table data root: the
+// directory the default table name resolves in and the tree an
+// expects_file may not escape. Empty (the shipped default) resolves against
+// the trial file itself: the table is the trial's sibling on disk, so a
+// binary run from anywhere finds it. Tests set it to a temp dir.
 var dummyTableDir = ""
 
-// dummyExpects loads the trial's expected table: situation.expects_file,
-// or <table dir>/<class>-<spec>.json. A missing file is an error, never an
-// empty PASS: the bench refuses to score a rep it cannot check.
-func dummyExpects(trial map[string]any) ([]dummybench.Expect, error) {
+// dummyExpects loads the trial's expected table: situation.expects_file, or
+// <root>/dummy_<class>_<spec>.json. The file must resolve inside the root
+// (no absolute path, no ".." escape), and a missing file is an error, never
+// an empty PASS: the bench refuses to score a rep it cannot check. The
+// trial's declared rotation is checked against the table here: the bot's
+// module still picks the order, but every spell the trial says the fight
+// casts must be a table row, so a typo fails at load instead of turning
+// every repeat INVALID.
+func dummyExpects(trial map[string]any, trialArg string) ([]dummybench.Expect, error) {
 	sit, _ := trial["situation"].(map[string]any)
-	if name, _ := sit["expects_file"].(string); name != "" {
-		return dummybench.LoadExpects(name)
+	name, _ := sit["expects_file"].(string)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		class, _ := trial["class"].(string)
+		spec, _ := trial["spec"].(string)
+		if class == "" || spec == "" {
+			return nil, fmt.Errorf("dummy trial needs class/spec or situation.expects_file")
+		}
+		name = "dummy_" + strings.ToLower(class) + "_" + strings.ToLower(spec) + ".json"
 	}
-	class, _ := trial["class"].(string)
-	spec, _ := trial["spec"].(string)
-	if class == "" || spec == "" {
-		return nil, fmt.Errorf("dummy trial needs class/spec or situation.expects_file")
+	rel, err := dummyTableName(name)
+	if err != nil {
+		return nil, err
 	}
-	dir := dummyTableDir
-	if dir == "" {
-		dir = filepath.Join("internal", "trials", "dummybench", "testdata")
+	var path string
+	switch {
+	case dummyTableDir != "":
+		path = filepath.Join(dummyTableDir, rel)
+	case strings.HasSuffix(trialArg, ".json"):
+		// The table is the trial file's sibling: no working-directory
+		// assumption, wherever the binary runs.
+		path = filepath.Join(filepath.Dir(trialArg), rel)
+	default:
+		return nil, fmt.Errorf("dummy trial %q: set situation.expects_file or pass the trial file from disk", trialArg)
 	}
-	name := strings.ToLower(class) + "-" + strings.ToLower(spec) + ".json"
-	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-		return nil, fmt.Errorf("dummy trial %s/%s: no expected table %s: %w", class, spec, name, err)
+	expects, err := dummybench.LoadExpects(path)
+	if err != nil {
+		return nil, err
 	}
-	return dummybench.LoadExpects(filepath.Join(dir, name))
+	if why := dummyRotationCovered(trial, expects); why != "" {
+		return nil, fmt.Errorf("dummy trial %s: %s", pyjson.Str(trial["id"]), why)
+	}
+	return expects, nil
+}
+
+// dummyRotationCovered checks the trial's declared rotation against the
+// table: every spell it names must have a row (case-folded). "" when every
+// spell is covered.
+func dummyRotationCovered(trial map[string]any, expects []dummybench.Expect) string {
+	sit, _ := trial["situation"].(map[string]any)
+	list, _ := pyjson.List(sit["rotation"])
+	if len(list) == 0 {
+		return ""
+	}
+	known := map[string]bool{}
+	for i := range expects {
+		known[strings.ToLower(expects[i].Spell)] = true
+	}
+	for _, item := range list {
+		name := strings.TrimSpace(pyjson.Str(item))
+		if name == "" {
+			continue
+		}
+		if !known[strings.ToLower(name)] {
+			return fmt.Sprintf("rotation names %q, which the expected table does not: every repeat would be INVALID", name)
+		}
+	}
+	return ""
+}
+
+// dummyTableName cleans an expects_file into a path relative to the data
+// root, refusing an absolute path, a volume name or any ".." escape.
+func dummyTableName(name string) (string, error) {
+	bad := fmt.Errorf("expects_file %q must stay inside the expected-table directory", name)
+	if name == "" || strings.Contains(name, `\`) || strings.HasPrefix(name, "/") || filepath.IsAbs(name) {
+		return "", bad
+	}
+	rel := path.Clean(name)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", bad
+	}
+	return filepath.FromSlash(rel), nil
 }
 
 // scoreDummyRep scores one dummy repeat dir with dummybench: it writes
 // verdicts.json (the per-spell tally rows for the card) and returns the
 // tallies for the trial assembly.
-func scoreDummyRep(repDir string, trial map[string]any) (dummybench.RepTally, map[string]any, error) {
-	expects, err := dummyExpects(trial)
+func scoreDummyRep(repDir string, trial map[string]any, trialArg string) (dummybench.RepTally, map[string]any, error) {
+	expects, err := dummyExpects(trial, trialArg)
 	if err != nil {
 		return dummybench.RepTally{}, nil, err
 	}
@@ -144,8 +206,8 @@ type dummyRepTally struct {
 // its repeats' tallies: one row per trial rule ({metric: dummy, spell,
 // stat}), majority of valid repeats, tie FAIL. INVALID or SKIPPED never
 // become PASS; UNKNOWN never becomes FAIL.
-func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, error) {
-	expects, err := dummyExpects(trial)
+func scoreDummyTrial(trialDir, trialArg string, trial map[string]any) (map[string]any, error) {
+	expects, err := dummyExpects(trial, trialArg)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +235,7 @@ func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, err
 		var pass int64
 		var kSum, nSum int64
 		var sum float64
+		firstReason := ""
 		for _, rep := range reps {
 			got, verdict, value, k, n, evidence := dummyRuleScore(rep.tally, spell, stat, rule)
 			if verdict == "PASS" || verdict == "FAIL" {
@@ -184,10 +247,14 @@ func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, err
 					pass++
 				}
 			}
+			reason := reasonOf(got, evidence)
+			if firstReason == "" {
+				firstReason = reason
+			}
 			detail = append(detail, map[string]any{
 				"rep": rep.rep, "verdict": got, "value": valueOrNil(got, value),
 				"k": k, "n": n, "evidence": evidence,
-				"guard": "", "reason": reasonOf(got, evidence),
+				"guard": "", "reason": reason,
 				"no_match": false, "invalid_reason": invalidOf(got, evidence),
 			})
 		}
@@ -195,7 +262,7 @@ func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, err
 		var value any
 		switch {
 		case valid == 0:
-			verdict, value = dummyNoValid(reps, spell, stat)
+			verdict, value = dummyNoValid(reps)
 		case pass > valid-pass:
 			verdict = "PASS"
 			value = sum / float64(valid)
@@ -203,12 +270,18 @@ func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, err
 			verdict = "FAIL"
 			value = sum / float64(valid)
 		}
+		// A card row says why it is not PASS/FAIL: the repeat's reason
+		// (the stranger, the missing bound), else the rule's own note.
+		reason := orEmpty(rule["reason"])
+		if verdict != "PASS" && verdict != "FAIL" && firstReason != "" {
+			reason = firstReason
+		}
 		outRules = append(outRules, map[string]any{
 			"id": rid, "verdict": verdict, "k": kSum, "n": nSum, "detail": detail,
 			"expected": rule["expect_today"], "metric": "dummy",
 			"pass_if": rule["pass_if"], "source": rule["source"],
 			"desc":   rule["desc"],
-			"reason": orEmpty(rule["reason"]),
+			"reason": reason,
 			"value":  value,
 		})
 	}
@@ -223,99 +296,84 @@ func scoreDummyTrial(trialDir string, trial map[string]any) (map[string]any, err
 }
 
 // dummyRuleScore scores one (repeat, rule): the rule's spell and stat
-// against the repeat's tallies. A stranger spell is INVALID; a missing
-// number is UNKNOWN; else the stat (mean damage, casts, mean reaction)
-// goes through rules.Pass.
+// against the repeat's tallies, with the EXPECTED TABLE deciding. A mean
+// damage below the table's min_damage is FAIL, a mean reaction above its
+// max_reaction_s is FAIL, both met is PASS; the rule's own pass_if is
+// carried for the card and never overrides the table. An INVALID repeat is
+// INVALID for every rule (no spell in it scores PASS or FAIL). A missing
+// bound, a known reaction bound with no measured reaction, a stat the table
+// has no column for, and a spell with no table row and no casts are
+// UNKNOWN; a cast spell the table does not name is INVALID.
 func dummyRuleScore(tally dummybench.RepTally, spell, stat string, rule map[string]any) (string, string, float64, int64, int64, []any) {
-	if tally.Invalid != "" && len(tally.Tallies) == 0 {
+	_ = rule // pass_if no longer decides: the table's bounds do
+	if tally.Invalid != "" {
 		ev := []any{tally.Invalid}
 		return "INVALID", "INVALID", 0, 0, 0, ev
 	}
+	e := tally.Expect(spell)
 	for _, t := range tally.Tallies {
-		if t.Spell != spell {
+		if !strings.EqualFold(t.Spell, spell) {
 			continue
 		}
-		e, ok := tally.Expects[spell]
-		if !ok || e == nil {
+		if e == nil {
 			ev := []any{fmt.Sprintf("%s: not in the expected table (stranger)", spell)}
 			return "INVALID", "INVALID", 0, t.Casts, t.Casts, ev
 		}
 		var value float64
 		switch stat {
-		case "casts":
-			value = float64(t.Casts)
 		case "reaction":
+			if e.MaxReactionS == nil {
+				ev := []any{fmt.Sprintf("%s: casts=%d, no expected max_reaction_s", spell, t.Casts)}
+				return "UNKNOWN", "UNKNOWN", 0, t.Casts, t.Casts, ev
+			}
 			if !t.HasReact {
-				ev := []any{fmt.Sprintf("%s: no reaction measured in the scored window", spell)}
+				ev := []any{fmt.Sprintf("%s: no reaction measured in the scored window (max %.2fs known)",
+					spell, *e.MaxReactionS)}
 				return "UNKNOWN", "UNKNOWN", 0, t.Casts, t.Casts, ev
 			}
 			value = dummybench.Round2(t.MeanRT)
-		default: // damage
+			verdict := "FAIL"
+			if t.MeanRT <= *e.MaxReactionS {
+				verdict = "PASS"
+			}
+			ev := []any{fmt.Sprintf("%s: mean reaction %.2fs max %.2fs (expected <= %.2fs)",
+				spell, t.MeanRT, t.MaxRT, *e.MaxReactionS)}
+			return verdict, verdict, value, t.Casts, t.Casts, ev
+		case "damage", "":
+			if e.MinDamage == nil {
+				ev := []any{fmt.Sprintf("%s: casts=%d damage=%d mean=%.1f, no expected min_damage",
+					spell, t.Casts, t.Damage, t.MeanDmg)}
+				return "UNKNOWN", "UNKNOWN", 0, t.Casts, t.Casts, ev
+			}
 			value = dummybench.Round1(t.MeanDmg)
-		}
-		if missing := dummyMissing(e, stat, t); missing != "" {
-			ev := []any{fmt.Sprintf("%s: casts=%d damage=%d mean=%.1f, no expected %s",
-				spell, t.Casts, t.Damage, t.MeanDmg, missing)}
+			verdict := "FAIL"
+			if t.MeanDmg >= *e.MinDamage {
+				verdict = "PASS"
+			}
+			ev := []any{fmt.Sprintf("%s: casts=%d damage=%d mean=%.1f (expected >= %.1f)",
+				spell, t.Casts, t.Damage, t.MeanDmg, *e.MinDamage)}
+			return verdict, verdict, value, t.Casts, t.Casts, ev
+		default:
+			ev := []any{fmt.Sprintf("%s: stat %q has no column in the expected table", spell, stat)}
 			return "UNKNOWN", "UNKNOWN", 0, t.Casts, t.Casts, ev
 		}
-		verdict := "FAIL"
-		if rules.Pass(rule["pass_if"], value) {
-			verdict = "PASS"
-		}
-		var ev []any
-		switch stat {
-		case "casts":
-			ev = []any{fmt.Sprintf("%s: casts=%d", spell, t.Casts)}
-		case "reaction":
-			ev = []any{fmt.Sprintf("%s: mean reaction %.2fs max %.2fs", spell, t.MeanRT, t.MaxRT)}
-		default:
-			ev = []any{fmt.Sprintf("%s: casts=%d damage=%d mean=%.1f", spell, t.Casts, t.Damage, t.MeanDmg)}
-		}
-		return verdict, verdict, value, t.Casts, t.Casts, ev
 	}
-	if e, ok := tally.Expects[spell]; ok && e != nil {
+	if e != nil {
 		ev := []any{fmt.Sprintf("%s: no casts in the scored window", spell)}
 		return "UNKNOWN", "UNKNOWN", 0, 0, 0, ev
 	}
-	ev := []any{fmt.Sprintf("%s: not in the expected table (stranger)", spell)}
-	return "INVALID", "INVALID", 0, 0, 0, ev
-}
-
-// dummyMissing names the expected bound the tally needs but the table does
-// not know: min_damage for damage/casts, max_reaction_s for reaction.
-func dummyMissing(e *dummybench.Expect, stat string, t dummybench.SpellTally) string {
-	_ = t
-	switch stat {
-	case "reaction":
-		if e.MaxReactionS == nil {
-			return "max_reaction_s"
-		}
-	default:
-		if e.MinDamage == nil {
-			return "min_damage"
-		}
-	}
-	return ""
+	ev := []any{fmt.Sprintf("%s: no table row and no casts (ignored)", spell)}
+	return "UNKNOWN", "UNKNOWN", 0, 0, 0, ev
 }
 
 // dummyNoValid is the trial verdict with no valid repeat: INVALID when a
 // repeat was INVALID and none scored, else INCONCLUSIVE (mirrors the score
 // package's zero-valid rule).
-func dummyNoValid(reps []dummyRepTally, spell, stat string) (string, any) {
-	_ = stat
-	anyInvalid := false
+func dummyNoValid(reps []dummyRepTally) (string, any) {
 	for _, rep := range reps {
-		for _, t := range rep.tally.Tallies {
-			if t.Spell != spell {
-				continue
-			}
-		}
 		if rep.tally.Invalid != "" {
-			anyInvalid = true
+			return "INVALID", nil
 		}
-	}
-	if anyInvalid {
-		return "INVALID", nil
 	}
 	return "INCONCLUSIVE", nil
 }
