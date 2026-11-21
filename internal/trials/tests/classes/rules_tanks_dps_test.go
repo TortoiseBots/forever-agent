@@ -646,7 +646,9 @@ func TestTankRulesTest_TankInterrupts(t *testing.T) {
 	}
 	samples := tndSeries(200, []any{int64(71)}, nil, nil)
 	assertEqual(t, "PASS", tndVerdict(t, tid, rid, append(append([]any{}, casts...), answers...), samples))
-	assertEqual(t, "FAIL", tndVerdict(t, tid, rid, casts, samples))
+	// A recording with no interrupt row at all cannot say whether the bot interrupted (an older recording): the
+	// repeat is INCONCLUSIVE, never FAIL. Casts with interrupt rows that landed on nothing are the FAIL below.
+	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, casts, samples))
 	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, instants, samples))
 	// Hammer of Justice and Bash (60 s responder cooldown): 3 casts at gap 70 all answer
 	for _, pair := range [][2]string{
@@ -825,7 +827,9 @@ func tndInterrupt(t *testing.T, tid, rid string, spellID int64, gap float64, poo
 		instants = append(instants, tndEvent(10+gap*float64(i), "cast_start", tndMob, tndPlayer, int64(355)))
 	}
 	assertEqual(t, "PASS", tndVerdict(t, tid, rid, append(append([]any{}, casts...), answers...), samples))
-	assertEqual(t, "FAIL", tndVerdict(t, tid, rid, casts, samples))
+	// A recording with no interrupt row at all cannot say whether the bot interrupted (an older recording): the
+	// repeat is INCONCLUSIVE, never FAIL. Casts with interrupt rows that landed on nothing are the FAIL below.
+	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, casts, samples))
 	// an instant (not interruptible) cast is no trigger: no triggers at all -> INCONCLUSIVE
 	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, instants, samples))
 	// fewer than min_n 5 triggers is INCONCLUSIVE, not a pass; a pooled rule skips the

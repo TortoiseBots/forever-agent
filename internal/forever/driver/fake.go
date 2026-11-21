@@ -207,14 +207,19 @@ type Fake struct {
 	InstanceBosses []tbcmd.InstanceBoss
 	// PushThreat makes the scripted client's own threat table answer on every call (the server's pushed lists);
 	// ThreatCalls counts the module's `.tb threat` reads. Encounters are the scripted encounter packets, drained
-	// by the run; lastEncounterAt is when the newest one fired.
+	// by the run; encOpen holds the ids a start named and no end closed, and lastEncounterAt is when the newest
+	// packet fired.
 	PushThreat bool
 	// TableMobs is the scripted pushed table's answer; with PushThreat it is what ThreatTable serves, whatever the
-	// scripted fight holds. FailThreat makes the module's `.tb threat` read fail (not the link).
+	// scripted fight holds. TableFreshFor makes it stop answering that long after Start (0: always fresh), so a
+	// test can watch the driver fall back to `.tb threat` when the pushes go stale. FailThreat makes the module's
+	// `.tb threat` read fail (not the link).
 	TableMobs       []tbcmd.ThreatLine
+	TableFreshFor   time.Duration
 	FailThreat      bool
 	ThreatCalls     int
 	encounters      []EncounterEvent
+	encOpen         map[uint32]bool
 	lastEncounterAt time.Time
 	// Uncommanded names a party member the roster reports as not commanded (a watch's PREPARE refusal).
 	Uncommanded string
@@ -530,6 +535,9 @@ func (f *Fake) ThreatTable(now time.Time) (tbcmd.ThreatReport, bool) {
 	if !f.PushThreat {
 		return tbcmd.ThreatReport{}, false
 	}
+	if f.TableFreshFor > 0 && now.Sub(f.Start) > f.TableFreshFor {
+		return tbcmd.ThreatReport{}, false
+	}
 	if len(f.TableMobs) > 0 {
 		return tbcmd.ThreatReport{Mobs: append([]tbcmd.ThreatLine(nil), f.TableMobs...), Count: len(f.TableMobs)}, true
 	}
@@ -546,8 +554,8 @@ func (f *Fake) Encounters() []EncounterEvent {
 	return out
 }
 
-// LastEncounterAt is when the newest scripted encounter packet fired.
-func (f *Fake) LastEncounterAt() time.Time { return f.lastEncounterAt }
+// EncounterOpen says whether a scripted encounter start has not been closed by its end yet.
+func (f *Fake) EncounterOpen() bool { return len(f.encOpen) > 0 }
 
 // PushEncounter scripts one encounter packet at after (from the fake's start), as InstanceScript would send it.
 func (f *Fake) PushEncounter(after time.Duration, ev EncounterEvent) {
@@ -555,6 +563,15 @@ func (f *Fake) PushEncounter(after time.Duration, ev EncounterEvent) {
 		ev.At = f.Clock.Now()
 		f.encounters = append(f.encounters, ev)
 		f.lastEncounterAt = ev.At
+		if f.encOpen == nil {
+			f.encOpen = map[uint32]bool{}
+		}
+		switch ev.Kind {
+		case "start":
+			f.encOpen[ev.EncounterID] = true
+		case "end", "boss_kill":
+			delete(f.encOpen, ev.EncounterID)
+		}
 	})
 }
 

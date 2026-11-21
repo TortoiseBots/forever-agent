@@ -40,9 +40,10 @@ func TestThreatTableEdits(t *testing.T) {
 		t.Fatalf("highest %+v", got)
 	}
 
-	// a remove drops one victim and keeps the list
+	// a remove drops one victim and keeps the list; with the top victim gone the list's own maximum is the top
 	w.ApplyThreatRemove(combat.ThreatRemove{Mob: gainsMob, About: gainsSelf}, now)
-	if got := w.ThreatSnapshot(now)[0]; len(got.Entries) != 1 || got.Entries[0].Unit != testCreature || got.HasHighest {
+	if got := w.ThreatSnapshot(now)[0]; len(got.Entries) != 1 || got.Entries[0].Unit != testCreature ||
+		!got.HasHighest || got.Highest != testCreature {
 		t.Fatalf("after remove %+v", got)
 	}
 
@@ -119,8 +120,8 @@ func TestEncounterEvents(t *testing.T) {
 	if len(evs) != 1 || evs[0].Kind != EncounterBossKilled || evs[0].EncounterID != 9 {
 		t.Fatalf("bare credit %+v", evs)
 	}
-	if got := w.LastEncounterAt(); !got.Equal(t0.Add(time.Hour)) {
-		t.Fatalf("last encounter at %v", got)
+	if w.EncounterOpen() {
+		t.Fatal("the bare credit left an encounter open")
 	}
 }
 
@@ -141,5 +142,138 @@ func TestEncounterRingBound(t *testing.T) {
 	w.ResetForMap(1)
 	if evs := w.DrainEncounters(); len(evs) != 0 {
 		t.Fatalf("the map reset kept %d event(s): %v", len(evs), fmt.Sprint(evs))
+	}
+}
+
+// TestThreatTopIgnoresWireOrder: the wire list is a heap walk, so the victim on top is the greatest value, never the
+// first entry; a plain update keeps the HIGHEST victim while it is listed, and a tie keeps the previous top.
+func TestThreatTopIgnoresWireOrder(t *testing.T) {
+	w := NewWorld(0)
+	now := time.Unix(1000, 0)
+	a := wire.GUID{Low: 0x5001, High: 0x2001180000000000}
+	b := wire.GUID{Low: 0x5002, High: 0x2001180000000000}
+	c := wire.GUID{Low: 0x5003, High: 0x2001180000000000}
+
+	// The greatest value sits in the middle of the wire order, not first.
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob, List: []combat.ThreatInfo{
+		{Unit: a, Threat: 100}, {Unit: b, Threat: 900}, {Unit: c, Threat: 400},
+	}}, now)
+	if got := w.ThreatSnapshot(now)[0]; !got.HasHighest || got.Highest != b {
+		t.Fatalf("top %v, want the greatest value %v (not the first entry)", got.Highest, b)
+	}
+
+	// A HIGHEST packet names the top even when the values would rank another entry higher.
+	w.ApplyHighestThreatUpdate(combat.HighestThreatUpdate{Mob: gainsMob, Highest: c, List: []combat.ThreatInfo{
+		{Unit: a, Threat: 100}, {Unit: b, Threat: 900}, {Unit: c, Threat: 400},
+	}}, now)
+	// A plain update does not wipe it while c is still listed, even in another order.
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob, List: []combat.ThreatInfo{
+		{Unit: c, Threat: 400}, {Unit: a, Threat: 100}, {Unit: b, Threat: 900},
+	}}, now)
+	if got := w.ThreatSnapshot(now)[0]; got.Highest != c {
+		t.Fatalf("top %v after a plain update, want the HIGHEST victim %v", got.Highest, c)
+	}
+
+	// A plain update that no longer lists c falls back to the greatest value.
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob, List: []combat.ThreatInfo{
+		{Unit: a, Threat: 100}, {Unit: b, Threat: 900},
+	}}, now)
+	if got := w.ThreatSnapshot(now)[0]; got.Highest != b {
+		t.Fatalf("top %v after c left the list, want %v", got.Highest, b)
+	}
+
+	// A tie keeps the previous top; the server reordering the same values must not flap the victim.
+	tie := []combat.ThreatInfo{{Unit: a, Threat: 500}, {Unit: b, Threat: 500}}
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob2, List: tie}, now)
+	first := w.ThreatSnapshot(now)
+	var top wire.GUID
+	for _, m := range first {
+		if m.Mob == gainsMob2 {
+			top = m.Highest
+		}
+	}
+	if top.IsZero() {
+		t.Fatalf("no tie top in %+v", first)
+	}
+	for i := range 6 {
+		list := append([]combat.ThreatInfo(nil), tie...)
+		if i%2 == 1 {
+			list[0], list[1] = list[1], list[0]
+		}
+		if i%3 == 2 {
+			list[0].Threat, list[1].Threat = 500, 500
+		}
+		w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob2, List: list}, now)
+		for _, m := range w.ThreatSnapshot(now) {
+			if m.Mob == gainsMob2 && m.Highest != top {
+				t.Fatalf("packet %d flapped the tied top from %v to %v", i, top, m.Highest)
+			}
+		}
+	}
+}
+
+// TestThreatRemoveAbsentIsNotFresh: a remove for a victim the list does not hold changes nothing, so the list stays
+// as old as it was (it must not reset the 5 s window).
+func TestThreatRemoveAbsentIsNotFresh(t *testing.T) {
+	w := NewWorld(0)
+	t0 := time.Unix(1000, 0)
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob, List: []combat.ThreatInfo{{Unit: gainsSelf, Threat: 100}}}, t0)
+	w.ApplyThreatRemove(combat.ThreatRemove{Mob: gainsMob, About: testCreature}, t0.Add(ThreatFreshFor-100*time.Millisecond))
+	if snap := w.ThreatSnapshot(t0.Add(ThreatFreshFor + time.Millisecond)); len(snap) != 0 {
+		t.Fatalf("a remove of an absent victim kept the list fresh: %+v", snap)
+	}
+	// A remove of a listed victim is a fresh packet that keeps the rest of the list.
+	w.ApplyThreatUpdate(combat.ThreatUpdate{Mob: gainsMob, List: []combat.ThreatInfo{
+		{Unit: gainsSelf, Threat: 100}, {Unit: testCreature, Threat: 50},
+	}}, t0)
+	w.ApplyThreatRemove(combat.ThreatRemove{Mob: gainsMob, About: gainsSelf}, t0.Add(ThreatFreshFor+time.Second))
+	if snap := w.ThreatSnapshot(t0.Add(ThreatFreshFor + 2*time.Second)); len(snap) != 1 {
+		t.Fatalf("a listed remove did not refresh the list: %+v", snap)
+	}
+}
+
+// TestBossKillDedupedAcrossADrain: an end and its credit are two packets on the session goroutine and the driver
+// drains on its own, so a drain landing between them must not turn the credit into a second kill.
+func TestBossKillDedupedAcrossADrain(t *testing.T) {
+	w := NewWorld(0)
+	t0 := time.Unix(1000, 0)
+	w.ApplyEncounterStart(combat.EncounterStart{EncounterID: 42}, t0)
+	w.ApplyEncounterEnd(combat.EncounterEnd{EncounterID: 42, DurationMS: 1000, Success: true}, t0.Add(time.Second))
+	if evs := w.DrainEncounters(); len(evs) != 2 {
+		t.Fatalf("events %+v, want the pull and the end", evs)
+	}
+	// The drain above emptied the ring; the credit still belongs to the end.
+	w.ApplyBossKill(combat.BossKill{EncounterID: 42}, t0.Add(2*time.Second))
+	if evs := w.DrainEncounters(); len(evs) != 0 {
+		t.Fatalf("a drained end did not dedupe its credit: %+v", evs)
+	}
+	// A different encounter's credit, or one past the window, is its own kill.
+	w.ApplyBossKill(combat.BossKill{EncounterID: 43}, t0.Add(3*time.Second))
+	w.ApplyBossKill(combat.BossKill{EncounterID: 42}, t0.Add(2*time.Second+bossKillWindow+time.Second))
+	evs := w.DrainEncounters()
+	if len(evs) != 2 || evs[0].EncounterID != 43 || evs[1].EncounterID != 42 {
+		t.Fatalf("the later credits %+v, want both kills", evs)
+	}
+}
+
+// TestEncounterOpen: a start keeps the encounter open until its end (kill or wipe) or its credit.
+func TestEncounterOpen(t *testing.T) {
+	w := NewWorld(0)
+	t0 := time.Unix(1000, 0)
+	if w.EncounterOpen() {
+		t.Fatal("an empty model reports an open encounter")
+	}
+	w.ApplyEncounterStart(combat.EncounterStart{EncounterID: 5}, t0)
+	if !w.EncounterOpen() {
+		t.Fatal("a pulled encounter is not open")
+	}
+	w.ApplyEncounterStart(combat.EncounterStart{EncounterID: 6}, t0)
+	w.ApplyEncounterEnd(combat.EncounterEnd{EncounterID: 5, Success: false}, t0.Add(time.Second))
+	if !w.EncounterOpen() {
+		t.Fatal("one end closed another encounter's open state")
+	}
+	w.ApplyEncounterEnd(combat.EncounterEnd{EncounterID: 6, Success: true}, t0.Add(2*time.Second))
+	if w.EncounterOpen() {
+		t.Fatal("the last end left the encounter open")
 	}
 }

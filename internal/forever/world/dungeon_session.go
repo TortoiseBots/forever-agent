@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
@@ -318,13 +319,18 @@ func (w dungeonWorld) ThreatTable(now time.Time) (tbcmd.ThreatReport, bool) {
 				line.Target = w.unitName(o.Info.Target)
 			}
 		}
+		// The wire list is a heap walk, not a ranking: the report lists it highest threat first (the model resolved
+		// the victim), and ties break by name so two packet orders of the same list read the same.
+		sort.SliceStable(l.Entries, func(i, j int) bool {
+			if l.Entries[i].Threat != l.Entries[j].Threat {
+				return l.Entries[i].Threat > l.Entries[j].Threat
+			}
+			return w.unitName(l.Entries[i].Unit) < w.unitName(l.Entries[j].Unit)
+		})
 		for _, e := range l.Entries {
 			line.Top = append(line.Top, tbcmd.ThreatEntry{Name: w.unitName(e.Unit), Threat: int(e.Threat / 100)})
 		}
 		line.Victim = ""
-		if len(line.Top) > 0 {
-			line.Victim = line.Top[0].Name
-		}
 		if l.HasHighest {
 			line.Victim = w.unitName(l.Highest)
 		}
@@ -365,8 +371,9 @@ func (w dungeonWorld) Encounters() []driver.EncounterEvent {
 	return out
 }
 
-// LastEncounterAt is when the newest encounter packet arrived.
-func (w dungeonWorld) LastEncounterAt() time.Time { return w.s.world.LastEncounterAt() }
+// EncounterOpen says whether a scripted encounter (a boss fight) is running: the watch keeps its `.tb instance`
+// fallback off only while one is.
+func (w dungeonWorld) EncounterOpen() bool { return w.s.world.EncounterOpen() }
 
 // dungeonCombat adapts the session's combat log to the driver's port: the session's rows are encoded as JSON here,
 // once, so the run's combat-log file carries exactly the rows serve's `events` answers.

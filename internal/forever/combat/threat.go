@@ -43,6 +43,9 @@ func ParseThreatUpdate(p []byte) (ThreatUpdate, error) {
 	if err != nil {
 		return v, err
 	}
+	if err := requireMob(v.Mob); err != nil {
+		return v, err
+	}
 	return v, exactly(b)
 }
 
@@ -62,6 +65,9 @@ func ParseHighestThreatUpdate(p []byte) (HighestThreatUpdate, error) {
 	if err != nil {
 		return h, err
 	}
+	if err := requireMob(h.Mob); err != nil {
+		return h, err
+	}
 	h.List = list
 	return h, exactly(b)
 }
@@ -77,6 +83,9 @@ type ThreatRemove struct {
 func ParseThreatRemove(p []byte) (ThreatRemove, error) {
 	b := wire.NewReader(p)
 	v := ThreatRemove{Mob: guid(b), About: guid(b)}
+	if err := requireMob(v.Mob); err != nil {
+		return v, err
+	}
 	return v, exactly(b)
 }
 
@@ -89,7 +98,19 @@ type ThreatClear struct {
 func ParseThreatClear(p []byte) (ThreatClear, error) {
 	b := wire.NewReader(p)
 	v := ThreatClear{Mob: guid(b)}
+	if err := requireMob(v.Mob); err != nil {
+		return v, err
+	}
 	return v, exactly(b)
+}
+
+// requireMob rejects the empty GUID: no unit has it, so a zero mob is a malformed packet, not a list this client
+// could file (and a zero key would poison the table's oldest-list eviction).
+func requireMob(g wire.GUID) error {
+	if g.IsZero() {
+		return fmt.Errorf("combat: the packet names the empty GUID as its mob")
+	}
+	return nil
 }
 
 // parseThreatList is ThreatUpdate's body. The highest form has one more GUID before the count and is read by its own

@@ -739,7 +739,7 @@ func Rule15(r *Run) []Hit {
 		if typ == "" || typ == "never" {
 			continue
 		}
-		if at, ok := dispels[iv.Bot][iv.SpellID]; ok && at >= iv.T0 && at <= iv.T1 {
+		if at, ok := firstRemoval(dispels[iv.Bot][iv.SpellID], iv.T0, iv.T1); ok {
 			iv.T1, iv.Still, iv.Lost = at, false, false
 		}
 		if iv.Lost {
@@ -765,11 +765,16 @@ func Rule15(r *Run) []Hit {
 	return hits
 }
 
-// dispelRemovals indexes the run's dispel rows by victim and dispelled spell: the earliest time an aura of that
-// spell came off that unit, on the run's clock. Only rows whose time could be read and which name at least one
-// spell are indexed; a run without them gives an empty map and Rule15 keeps its frame-only reading.
-func (r *Run) dispelRemovals() map[string]map[uint32]float64 {
-	var out map[string]map[uint32]float64
+// maxDispelTimes bounds the times kept per victim and dispelled spell: a long fight can reapply and dispel one aura
+// many times, and Rule15 needs every episode's own removal, not only the first.
+const maxDispelTimes = 64
+
+// dispelRemovals indexes the run's dispel rows by victim and dispelled spell: every time an aura of that spell came
+// off that unit, on the run's clock and in time order (bounded, oldest dropped past maxDispelTimes). Only rows whose
+// time could be read and which name at least one spell are indexed; a run without them gives an empty map and Rule15
+// keeps its frame-only reading.
+func (r *Run) dispelRemovals() map[string]map[uint32][]float64 {
+	var out map[string]map[uint32][]float64
 	for i := range r.Combat {
 		row := &r.Combat[i]
 		if row.Kind != "dispel" || !row.TKnown || len(row.Dispelled) == 0 {
@@ -780,11 +785,11 @@ func (r *Run) dispelRemovals() map[string]map[uint32]float64 {
 			continue
 		}
 		if out == nil {
-			out = map[string]map[uint32]float64{}
+			out = map[string]map[uint32][]float64{}
 		}
 		bySpell := out[victim]
 		if bySpell == nil {
-			bySpell = map[uint32]float64{}
+			bySpell = map[uint32][]float64{}
 			out[victim] = bySpell
 		}
 		for _, d := range row.Dispelled {
@@ -792,12 +797,32 @@ func (r *Run) dispelRemovals() map[string]map[uint32]float64 {
 				continue
 			}
 			id := uint32(d.SpellID)
-			if at, seen := bySpell[id]; !seen || row.T < at {
-				bySpell[id] = row.T
+			times := bySpell[id]
+			at := len(times)
+			for at > 0 && times[at-1] > row.T {
+				at--
 			}
+			times = append(times, 0)
+			copy(times[at+1:], times[at:])
+			times[at] = row.T
+			if len(times) > maxDispelTimes {
+				times = times[len(times)-maxDispelTimes:]
+			}
+			bySpell[id] = times
 		}
 	}
 	return out
+}
+
+// firstRemoval returns the first removal inside [t0, t1]: the dispel that ended that episode of the aura. A later
+// episode's removal is its own, so a reapplied debuff is not excused by an earlier dispel.
+func firstRemoval(times []float64, t0, t1 float64) (float64, bool) {
+	for _, t := range times {
+		if t >= t0 && t <= t1 {
+			return t, true
+		}
+	}
+	return 0, false
 }
 
 // dispellers is rule 15's judge: the most able dispellers seen in one frame after the grace (any frame when the

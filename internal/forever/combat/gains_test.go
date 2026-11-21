@@ -107,6 +107,32 @@ func TestThreatHostile(t *testing.T) {
 	if _, err := ParseThreatUpdate(b.Bytes()); err == nil {
 		t.Fatal("an empty-GUID threat entry was accepted")
 	}
+	// an empty mob GUID would be a table key with no unit (and the eviction's "no oldest" state)
+	b.Reset()
+	buildThreatList(b, wire.EmptyGUID, []ThreatInfo{{Unit: gainsPlayer(), Threat: 100}})
+	if _, err := ParseThreatUpdate(b.Bytes()); err == nil {
+		t.Fatal("an empty mob GUID on a threat update was accepted")
+	}
+	b.Reset()
+	wire.WritePackedGUID(b, wire.EmptyGUID)
+	wire.WritePackedGUID(b, gainsPlayer())
+	b.WriteU32(1)
+	wire.WritePackedGUID(b, gainsPlayer())
+	b.WriteU64(100)
+	if _, err := ParseHighestThreatUpdate(b.Bytes()); err == nil {
+		t.Fatal("an empty mob GUID on a highest-threat update was accepted")
+	}
+	b.Reset()
+	wire.WritePackedGUID(b, wire.EmptyGUID)
+	wire.WritePackedGUID(b, gainsPlayer())
+	if _, err := ParseThreatRemove(b.Bytes()); err == nil {
+		t.Fatal("an empty mob GUID on a threat remove was accepted")
+	}
+	b.Reset()
+	wire.WritePackedGUID(b, wire.EmptyGUID)
+	if _, err := ParseThreatClear(b.Bytes()); err == nil {
+		t.Fatal("an empty mob GUID on a threat clear was accepted")
+	}
 }
 
 func TestParseEncounterPackets(t *testing.T) {

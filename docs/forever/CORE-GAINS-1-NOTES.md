@@ -11,9 +11,10 @@ this round is the advanced-log flag, beside the login burst, the attack/cast tra
 `CMSG_SET_ADVANCED_COMBAT_LOGGING` (core `0x3D0193`; `MiscHandler.cpp:1237-1240`) is one bit, most significant first
 (`ClientConfigPackets.cpp:77-80`), so the packet is `80` for enable. The session sends it once, right after it answers
 `SMSG_MOVE_SET_ACTIVE_MOVER` with `CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE` (the moment `Report.InWorld` turns true). A
-reconnect builds a fresh session, so the flag goes again exactly once per world entry. The session records the send in
-`Report.AdvancedCombatLog`; the fake world server validates the byte and counts it, and `TestEnterAgainstFakeServer`
-asserts exactly one.
+reconnect builds a fresh session and sends it again, and `mapchange.go` resets the mover gate (`activeMoverDone`), so
+each map transfer sends it too: the flag goes at world entry and at every map change, which is harmless because it is
+idempotent. The session records the send in `Report.AdvancedCombatLog`; the fake world server validates the byte and
+counts it, and `TestEnterAgainstFakeServer` asserts the world-entry send.
 
 With the flag set the server sends such a player the full log packet (`Object.cpp:1126-1148`), whose
 `SpellCastLogData` (`CombatLogPacketsCommon.cpp:150-172`) carries health, attack power, spell power, armor and the
@@ -51,19 +52,29 @@ from the count before both checks pass. `SMSG_THREAT_REMOVE`'s writer names its 
 (`UnitGUID` is the mob, `AboutGUID` the victim), so the parser names them by role.
 
 `internal/forever/objects/threat.go` keeps one list per mob: replace on update/highest, drop one victim on remove
-(an emptied list leaves the table), drop the mob on clear. `ThreatSnapshot(now)` serves only lists whose last packet
-arrived within `objects.ThreatFreshFor` (5 s) and copies them (a caller may hold a snapshot while the next packet
-replaces the list); `ThreatSnapshotAll` is the "did any packet flow" view. The table is bounded at 1024 mobs, evicting
-the oldest list when a hostile server names more; `ResetForMap` clears it with the rest of the instance state.
+(an emptied list leaves the table), drop the mob on clear. The wire order is **not** a ranking — the server walks its
+`fibonacci_heap` with a plain range-for (`ThreatManager.cpp:869-880`) — so the model stores every entry with its value
+and resolves the victim itself: the `SMSG_HIGHEST_THREAT_UPDATE` victim while it is still listed, else the entry with
+the most threat; a plain `SMSG_THREAT_UPDATE` never wipes the HIGHEST victim while it is listed, and a tie keeps the
+previous victim (a reordered heap must not flap the report). A remove for a victim the list does not hold changes
+nothing and does not refresh the 5 s window; a remove that empties the list drops the mob. The parsers reject a zero
+mob GUID (no unit has it, and a zero key would corrupt the oldest-list eviction). `ThreatSnapshot(now)` serves only
+lists whose last packet arrived within `objects.ThreatFreshFor` (5 s) and copies them (a caller may hold a snapshot
+while the next packet replaces the list); `ThreatSnapshotAll` is the "did any packet flow" view. The table is bounded
+at 1024 mobs, evicting the oldest list when a hostile server names more; `ResetForMap` clears it with the rest of the
+instance state.
 
 The driver and the watch read it first:
 
 - `driver.World` gains `ThreatTable(now)` (the pushed lists shaped like the module's report, with the mob's entry,
   name, health percent and position from the world model) and `Encounters`.
-- `Run.threat` returns the pushed report whenever it is fresh. `.tb threat` becomes the fallback: called when no list
-  is fresh (a mob outside the client's visibility pushes nothing to this client), and otherwise at most once per 10 s
-  (`threatFallbackEvery`) instead of once per 2 s tick. The 10 s read also picks up a mob that pushed nothing. The
-  watch's frame takes the same path, so its threat half stops issuing a command on the ticks where pushes answered.
+- `Run.threat` merges the pushed lists into the last whole `.tb threat` report whenever they are fresh: a mob the push
+  covers takes the pushed line (its exact threat and victim), a mob only the push lists is added, and every mob only
+  the module lists stays. A pushed snapshot alone is never served as the whole answer, so a mob outside this client's
+  visibility cannot be hidden for 10 s by another mob's fresh list. `.tb threat` becomes the fallback: called when no
+  list is fresh, and otherwise at most once per 10 s (`threatFallbackEvery`) instead of once per 2 s tick. The watch's
+  frame takes the same path, so its threat half stops issuing a command on the ticks where pushes answered. The fake
+  can make its table go stale (`TableFreshFor`) so the resume is tested.
 - `.tb state` keeps its 2 s cadence: it carries the party's own state (health, position, combat flag, order status),
   which no threat packet has, and `stateFreshFor` (6 s) gates pulls on it. The item's poll that is replaced is the
   threat read; the notes below give its measured count.
@@ -83,19 +94,26 @@ group size, uint16 zero), `SMSG_ENCOUNTER_END` (`0x450229`: the three, int32 dur
 IN_PROGRESS → FAIL/DONE/NOT_STARTED.
 
 `objects.World` keeps a bounded ring (64) of `EncounterEvent` — kind, encounter id, difficulty, group size, duration,
-success, arrival time — drained by the driver. `SMSG_BOSS_KILL` right after an end for the same encounter (within
-10 s, the pair `InstanceScript.cpp:463-466` sends) is not a second event.
+success, arrival time — drained by the driver. `SMSG_BOSS_KILL` right after a successful end for the same encounter
+(within 10 s, the pair `InstanceScript.cpp:463-466` sends) is not a second event; the dedupe lives outside the ring
+(encounter id + time, bounded), because the driver drains on its own goroutine and a drain between the two packets
+must not resurrect the credit. A start also keeps its id **open** until its end or credit, which is what the watch's
+boss-read hold reads.
 
 - Run: `refresh` drains the ring every state poll (the fight loop's 2 s tick, the pull wait, the entry checks) and
   writes trace events `boss_pull`, `boss_kill` and `boss_wipe` with `encounter`, `difficulty`, `group_size`,
-  `duration_ms` and `success`. The trace event list in `internal/trace/trace.go` names them.
-- Watch: `watchLoop` drains them into `RunWatch.Encounters` (`EncounterRecord`: `at_s` on the module run's clock,
+  `duration_ms` and `success`. The trace event list in `internal/trace/trace.go` names them. An event drained without
+  a watch waiting is kept in the run (`encPending`) until a watch reads it, so an action's gate that refreshes inside
+  a watch cannot take an event out of the watch record.
+- Watch: `watchLoop` reads them into `RunWatch.Encounters` (`EncounterRecord`: `at_s` on the module run's clock,
   kind, encounter, difficulty, group size, duration, success) and logs one line per event. The trace gets the same
-  `boss_pull`/`boss_kill`/`boss_wipe` events.
-- Fallback: `watchBosses` skips `.tb instance` while encounter packets flowed within the last 5 minutes, and the
-  forced read at the end of the watch still runs. An instance whose script has no `DungeonEncounter` rows (the
-  classic Ragefire Chasm bosses today) never sends one, so it keeps the old once-a-minute read;
-  `TestWatchBossReadWithoutEncounters` pins that.
+  `boss_pull`/`boss_kill`/`boss_wipe` events, once, at the drain.
+- Fallback: `watchBosses` skips `.tb instance` only while a named encounter is still open (`World.EncounterOpen`).
+  The moment the scripted fight ends, the minute read runs again, so a boss the script never names — the exact case
+  the fallback exists for — is seen after the scripted fight instead of after the old five-minute hold. An instance
+  whose script has no `DungeonEncounter` rows (the classic Ragefire Chasm bosses today) never opens one and keeps the
+  once-a-minute read; `TestWatchBossReadWithoutEncounters` pins that, and
+  `TestWatchBossReadResumesAfterAnEncounterEnds` pins the unscripted boss after a scripted end.
 
 ## D. The six combat-log kinds
 
@@ -123,12 +141,15 @@ Kick/Counterspell trials match a response by spell.
 
 Consumers:
 
-- **Bug hunter rule 15 (missed decurse).** `Run.dispelRemovals` indexes the dispel rows; an interval whose victim and
-  spell appear ends at that row's own time (and an out-of-view interval the row resolves is no longer "unknown"). A
-  run from before this round has no rows and is judged from the frames exactly as before.
+- **Bug hunter rule 15 (missed decurse).** `Run.dispelRemovals` indexes every dispel time per victim and spell
+  (bounded, oldest dropped), so a reapplied debuff's second episode is ended by its own dispel, not excused by the
+  first one; an interval whose victim and spell appear ends at the first row inside it. A run from before this round
+  has no rows and is judged from the frames exactly as before.
 - **Kick/Counterspell trials.** `dps-rogue-kick-caster` and `dps-mage-counterspell-caster` now use response
   `kind: interrupt`; the row names the interrupting spell, so a Kick that the server did not land on a live cast is
-  no answer. The pool, the debounces and the thresholds are unchanged.
+  no answer. A recording with **no interrupt row at all** (an older recording) scores INCONCLUSIVE, never FAIL: the
+  row kind did not exist before this round, so its absence is no evidence the bot never interrupted. Interrupt rows
+  that exist and none of which landed are still a FAIL. The pool, the debounces and the thresholds are unchanged.
 - **Trials normaliser.** `KindMap` maps the new kinds (`environmental` → `damage`, the rest by name) and carries
   `reason`, `interrupted_spell_id`, `absorbed_spell_id` and `dispelled` into `events.jsonl` when present.
 - **Bug hunter rows.** `bughunt.CombatRow` reads the four new fields, so the rules can use them without a schema
@@ -146,16 +167,26 @@ ran 60 s on the VM with no panic (gate line below).
 
 - `combat/gains_test.go`: round-trip fixtures for all 15 new opcodes (built from the writers), `BuildSetAdvanced...`
   bit, hostile counts, the prefix/trailing-byte sweep, and the fuzz target.
-- `objects/gains_test.go`: the threat edits, the 5 s window, the table bound, encounter events, kill-credit dedupe,
-  the ring bound and the map reset.
+- `objects/gains_test.go`: the threat edits, the greatest-value victim in an unordered list, the HIGHEST victim kept
+  through a plain update, the tie that keeps the previous victim, the absent-victim remove that is not fresh, the 5 s
+  window, the table bound, encounter events, a drain between an end and its credit, the open-encounter set, the ring
+  bound and the map reset.
+- `combat/gains_test.go`: the zero mob GUID refused on all four threat packets.
 - `world/combatlog_test.go`: the row fields and the sample; `fake_world_test.go` asserts the advanced flag is sent
   once and `TestEnterAgainstFakeServer` carries it in the sent list.
-- `driver/gains_test.go`: the 5-minute fight's poll count, the fallback at 2 s, `boss_pull`/`boss_kill` on the trace,
-  `boss_wipe` for a failed end, the watch's encounter records with the `.tb instance` read suppressed, and the old
+- `driver/gains_test.go`: the 5-minute fight's poll count, the fallback at 2 s and after the pushed table goes stale,
+  a pushed snapshot that covers one of two engaged mobs (both stay), `boss_pull`/`boss_kill` on the trace,
+  `boss_wipe` for a failed end, the watch's encounter records with the `.tb instance` read suppressed, an event
+  drained by an action's refresh still recorded, the unscripted boss seen after a scripted fight ends, and the old
   read cadence when an instance sends nothing.
+- `world/dungeon_session_test.go`: the adapter's shaped report (hundredths divided, greatest-value victim, HIGHEST
+  victim, stale list refused).
 - `bughunt/rules_events_test.go`: `TestRule15DispelEventEndsTheDebuff` (a dispel at 6 s turns a 30 s episode into no
-  finding; a 16 s dispel ends the hit at 16).
-- `trials/tests/classes` and `trials/tests/pooled`: the interrupt response; `scenario.kindEnum` accepts the new kinds.
+  finding; a 16 s dispel ends the hit at 16) and `TestRule15SecondEpisodeKeepsItsOwnDispel` (a reapplied aura's
+  second episode is ended by its own row).
+- `trials/tests/classes` and `trials/tests/pooled`: the interrupt response (a recording with no interrupt row is
+  INCONCLUSIVE, rows that land nothing are FAIL, Kidney Shot does not answer Kick); `scenario.kindEnum` accepts the
+  new kinds.
 - `wire/opcodes_test.go`: every new opcode translates to a wire number and back, and the client flag does too.
 
 ## Gates

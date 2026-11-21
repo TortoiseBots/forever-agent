@@ -290,13 +290,16 @@ type Run struct {
 	// commander is the module's own party commander, from its roster: the bot the party is bound to and the one a
 	// watched run has to bring to the tank's side. It is never the character this client runs.
 	commander string
-	// threatPollAt is the last `.tb threat` send and threatPushAt the last time the client's own pushed threat
-	// table answered. While pushes flow the module's read is the fallback, at most one per threatFallbackEvery.
+	// threatPollAt is the last `.tb threat` send, threatPushAt the last time the client's own pushed threat
+	// table answered and threatBase the last whole module report. While pushes flow the module's read is the
+	// fallback, at most one per threatFallbackEvery, and each answer is merged with the pushes: a mob only the
+	// module lists is never hidden by a pushed snapshot that does not cover it.
 	threatPollAt time.Time
 	threatPushAt time.Time
-	// encounterAt is when the newest encounter packet was applied: the watch keeps `.tb instance` off while the
-	// packets flow and falls back to it when they do not.
-	encounterAt time.Time
+	threatBase   *tbcmd.ThreatReport
+	// encPending are the encounter events drained for the trace but not yet read into a watch record: refresh may
+	// drain while a watch runs (an action's gate), and the watch record keeps every event the run saw.
+	encPending []EncounterEvent
 }
 
 // fight is one fight's bookkeeping.
@@ -598,9 +601,11 @@ func (r *Run) reportComplete() bool {
 const threatFallbackEvery = 10 * time.Second
 
 // threat reads the threat lists. The client's own pushed table answers first; the module's `.tb threat` is the
-// fallback, and only at once per threatFallbackEvery while pushes reach this client. When no pushed list is fresh
-// (a mob outside our visibility sends none), every call polls as before. ok false means the answer is not usable
-// (an error or a lost link), so a caller never treats a poll that did not answer as "no threat".
+// fallback, and only at once per threatFallbackEvery while pushes reach this client. A pushed snapshot is never
+// served as the whole answer by itself: it is merged into the last whole module report, so a mob whose list never
+// reached this client (out of visibility) is not hidden. When no pushed list is fresh, every call polls as before.
+// ok false means the answer is not usable (an error or a lost link), so a caller never treats a poll that did not
+// answer as "no threat".
 func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 	if r.lost || r.stopReason != "" {
 		return tbcmd.ThreatReport{}, false
@@ -611,13 +616,14 @@ func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 		if r.threatPollAt.IsZero() || now.Sub(r.threatPollAt) >= threatFallbackEvery {
 			r.threatPollAt = now
 			if t, err := r.cmd.Threat(ctx); err == nil {
+				r.threatBase = &t
 				return t, true
 			} else if errors.Is(err, ErrLinkLost) {
 				r.linkLost()
 				return tbcmd.ThreatReport{}, false
 			}
 		}
-		return table, true
+		return mergeThreat(r.threatBase, table), true
 	}
 	r.threatPollAt = now
 	t, err := r.cmd.Threat(ctx)
@@ -625,7 +631,35 @@ func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 		r.linkLost()
 		return t, false
 	}
+	if err == nil {
+		r.threatBase = &t
+	}
 	return t, err == nil
+}
+
+// mergeThreat applies a pushed snapshot to the last whole module report: a line the push covers is replaced by the
+// pushed line (its exact threat and victim), a mob only the push lists is added, and every mob only the module
+// lists stays (the push may not reach this client for it). Without a module report the push is the whole answer.
+func mergeThreat(base *tbcmd.ThreatReport, table tbcmd.ThreatReport) tbcmd.ThreatReport {
+	if base == nil {
+		return table
+	}
+	out := *base
+	out.Mobs = append([]tbcmd.ThreatLine(nil), base.Mobs...)
+	at := make(map[string]int, len(out.Mobs))
+	for i := range out.Mobs {
+		at[out.Mobs[i].Mob] = i
+	}
+	for _, line := range table.Mobs {
+		if i, ok := at[line.Mob]; ok {
+			out.Mobs[i] = line
+			continue
+		}
+		at[line.Mob] = len(out.Mobs)
+		out.Mobs = append(out.Mobs, line)
+	}
+	out.Count = len(out.Mobs)
+	return out
 }
 
 // stateFreshFor is how old the last state read may be before a gate treats the party as unknown.
@@ -1095,54 +1129,93 @@ func (r *Run) sleepDetached(ctx context.Context, d time.Duration) bool {
 }
 
 // applyEncounters drains the world's encounter packets into run events: a pull, a kill, or a wipe told apart from a
-// kill by the end packet's success bit. The watch records the same events in its own record and prints them; the
-// trace carries one event by the same name. An instance whose script sends nothing leaves this empty.
+// kill by the end packet's success bit. The trace gets each event once, at the drain; a watch also records and
+// prints every event the run drained, including those an action's gate drained before the watch's own tick (the
+// events wait in encPending until a watch reads them). An instance whose script sends nothing leaves this empty.
 func (r *Run) applyEncounters(now time.Time, w *watchRun) {
-	evs := r.world.Encounters()
-	for _, e := range evs {
-		at := e.At
-		if at.IsZero() {
-			at = now
+	fresh := r.world.Encounters()
+	for _, e := range fresh {
+		r.traceEncounter(e, atOr(e.At, now))
+	}
+	r.encPending = append(r.encPending, fresh...)
+	if len(r.encPending) > maxPendingEncounters {
+		// A watch reads these on its next tick; the bound is the hostile-server stop for a run that never does.
+		r.encPending = r.encPending[len(r.encPending)-maxPendingEncounters:]
+	}
+	if w == nil {
+		if !r.cfg.Watch {
+			// No watch will read them: the trace is the whole record.
+			r.encPending = r.encPending[:0]
 		}
-		r.encounterAt = now
-		ev := "boss_pull"
-		fields := map[string]any{"encounter": e.EncounterID, "difficulty": e.Difficulty, "group_size": e.GroupSize}
-		rec := EncounterRecord{Kind: e.Kind, EncounterID: e.EncounterID, Difficulty: e.Difficulty, GroupSize: e.GroupSize}
-		word := "pulled"
-		switch e.Kind {
-		case "end":
-			rec.DurationS = float64(e.DurationMS) / 1000
-			rec.Success = e.Success
-			fields["duration_ms"] = e.DurationMS
-			fields["success"] = e.Success
-			if e.Success {
-				ev, word = "boss_kill", "killed"
-			} else {
-				ev, word = "boss_wipe", "wipe"
-			}
-		case "boss_kill":
-			rec.Success = true
-			ev, word = "boss_kill", "kill credit"
+		return
+	}
+	for _, e := range r.encPending {
+		r.watchEncounter(w, e, atOr(e.At, now))
+	}
+	r.encPending = r.encPending[:0]
+}
+
+// maxPendingEncounters bounds the encounter events held for a watch's next tick.
+const maxPendingEncounters = 256
+
+// atOr is a packet's own time, or now when the model had none.
+func atOr(at, now time.Time) time.Time {
+	if at.IsZero() {
+		return now
+	}
+	return at
+}
+
+// traceEncounter writes one encounter packet's run event on the trace.
+func (r *Run) traceEncounter(e EncounterEvent, at time.Time) {
+	ev := "boss_pull"
+	fields := map[string]any{"encounter": e.EncounterID, "difficulty": e.Difficulty, "group_size": e.GroupSize}
+	switch e.Kind {
+	case "end":
+		fields["duration_ms"] = e.DurationMS
+		fields["success"] = e.Success
+		if e.Success {
+			ev = "boss_kill"
+		} else {
+			ev = "boss_wipe"
 		}
-		if r.rec != nil {
-			r.rec.Event(at, ev, fields)
+	case "boss_kill":
+		ev = "boss_kill"
+	}
+	if r.rec != nil {
+		r.rec.Event(at, ev, fields)
+	}
+}
+
+// watchEncounter records one encounter packet in the watch's record, on the module run's clock, and logs it.
+func (r *Run) watchEncounter(w *watchRun, e EncounterEvent, at time.Time) {
+	rec := EncounterRecord{Kind: e.Kind, EncounterID: e.EncounterID, Difficulty: e.Difficulty, GroupSize: e.GroupSize}
+	word := "pulled"
+	switch e.Kind {
+	case "end":
+		rec.DurationS = float64(e.DurationMS) / 1000
+		rec.Success = e.Success
+		if e.Success {
+			word = "killed"
+		} else {
+			word = "wipe"
 		}
-		if w != nil {
-			w.encounterAt = now
-			if !w.startedAt.IsZero() {
-				rec.AtS = at.Sub(w.startedAt).Seconds()
-			}
-			w.encounters = append(w.encounters, rec)
-			switch e.Kind {
-			case "end":
-				r.logf("watch: boss %s encounter=%d difficulty=%d group=%d duration=%.1fs",
-					word, e.EncounterID, e.Difficulty, e.GroupSize, rec.DurationS)
-			case "boss_kill":
-				r.logf("watch: boss kill credit encounter=%d", e.EncounterID)
-			default:
-				r.logf("watch: boss %s encounter=%d difficulty=%d group=%d", word, e.EncounterID, e.Difficulty, e.GroupSize)
-			}
-		}
+	case "boss_kill":
+		rec.Success = true
+		word = "kill credit"
+	}
+	if !w.startedAt.IsZero() {
+		rec.AtS = at.Sub(w.startedAt).Seconds()
+	}
+	w.encounters = append(w.encounters, rec)
+	switch e.Kind {
+	case "end":
+		r.logf("watch: boss %s encounter=%d difficulty=%d group=%d duration=%.1fs",
+			word, e.EncounterID, e.Difficulty, e.GroupSize, rec.DurationS)
+	case "boss_kill":
+		r.logf("watch: boss kill credit encounter=%d", e.EncounterID)
+	default:
+		r.logf("watch: boss %s encounter=%d difficulty=%d group=%d", word, e.EncounterID, e.Difficulty, e.GroupSize)
 	}
 }
 

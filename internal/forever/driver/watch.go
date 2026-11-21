@@ -82,12 +82,10 @@ type watchRun struct {
 	pauseSeen         map[int]bool
 	bosses            map[uint32]string
 	bossAt            time.Time
-	// encounters are the instance's own pull/kill/wipe packets, on the module run's clock; encounterAt is the last
-	// one, which keeps the `.tb instance` read as the fallback of a script that sends none.
-	encounters  []EncounterRecord
-	encounterAt time.Time
-	lastLine    string
-	lastNote    string
+	// encounters are the instance's own pull/kill/wipe packets, on the module run's clock.
+	encounters []EncounterRecord
+	lastLine   string
+	lastNote   string
 	// stopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it (or it could not stop yet), so the result is not a clean end.
 	stopUnconfirmed bool
@@ -614,11 +612,6 @@ func (r *Run) applyRun(w *watchRun, st tbcmd.RunState) {
 
 // watchEvent applies one run event: the pause log, the wipe/pause pairing the rescue needs, progress, and the
 // per-leg evidence the report card reads.
-// encounterHold is how long after the last encounter packet the watch still trusts the pushes and skips the
-// `.tb instance` read. A boss fight's packets arrive minutes apart; the hold bridges the gap, and an instance that
-// never sends one is polled from its first tick.
-const encounterHold = 5 * time.Minute
-
 func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 	w.lastSeq = ev.Seq
 	w.lastEvent = r.now()
@@ -1003,17 +996,13 @@ func (r *Run) watchBosses(ctx context.Context, w *watchRun, force bool) {
 	if !force && !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
 		return
 	}
-	// The encounter packets are the exact boss state while they flow, so the module's boss report is the
-	// fallback: an instance whose script sends nothing (the classic Ragefire Chasm bosses) still gets the read, and
-	// a forced read at the end is never skipped.
-	if !force {
-		last := w.encounterAt
-		if last.IsZero() {
-			last = r.world.LastEncounterAt()
-		}
-		if !last.IsZero() && now.Sub(last) < encounterHold {
-			return
-		}
+	// The encounter packets are the exact boss state of a named fight, so while one is running the module's boss
+	// report is not needed. Outside one, the report is the fallback: an instance whose script sends nothing (the
+	// classic Ragefire Chasm bosses) gets the minute reads, and so does a boss the script never names as soon as a
+	// named fight ends — a five-minute hold from the last packet would hide that kill. A forced read at the end is
+	// never skipped.
+	if !force && r.world.EncounterOpen() {
+		return
 	}
 	rep, why := r.act(ctx, Action{Kind: ActionInstanceInfo, Who: r.cfg.Leader})
 	if why != "" || rep.Info == nil {

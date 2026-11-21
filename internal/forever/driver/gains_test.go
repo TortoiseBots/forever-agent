@@ -278,3 +278,143 @@ func TestWatchFrameReadsPushedThreat(t *testing.T) {
 		t.Fatal("the failing fallback read was never attempted")
 	}
 }
+
+// TestWatchRecordKeepsEventsAnActionDrained: an action's gate calls refresh while a watch runs, and refresh drains
+// the encounter ring for the trace. The watch record must still carry those events (once), or a pull and its kill
+// that landed around an action would be missing from the record.
+func TestWatchRecordKeepsEventsAnActionDrained(t *testing.T) {
+	cfg := watchConfig()
+	run, f, _ := newWatch(t, cfg)
+	f.PushEncounter(time.Second, EncounterEvent{Kind: "start", EncounterID: 7, Difficulty: 2, GroupSize: 5})
+	f.Clock.Advance(2 * time.Second)
+	run.start = run.now()
+	if !run.refresh(context.Background()) {
+		t.Fatalf("refresh: stop %q", run.stopReason)
+	}
+	w := &watchRun{startedAt: run.now().Add(-time.Second)}
+	run.applyEncounters(run.now(), w)
+	if len(w.encounters) != 1 || w.encounters[0].EncounterID != 7 {
+		t.Fatalf("%d watch record(s) after the action's drain, want the pull: %+v", len(w.encounters), w.encounters)
+	}
+	// The next tick does not repeat it.
+	run.applyEncounters(run.now(), w)
+	if len(w.encounters) != 1 {
+		t.Fatalf("the event was recorded %d times", len(w.encounters))
+	}
+}
+
+// TestWatchBossReadResumesAfterAnEncounterEnds: the scripted fight's packets are exact while it runs, but once its
+// end is in, the `.tb instance` fallback must run again at its own cadence: a boss the script never names would
+// otherwise stay invisible for the old five-minute hold.
+func TestWatchBossReadResumesAfterAnEncounterEnds(t *testing.T) {
+	cfg := watchConfig()
+	run, f, logs := newWatch(t, cfg)
+	f.PushEncounter(4*time.Second, EncounterEvent{Kind: "start", EncounterID: 1234, GroupSize: 5})
+	f.PushEncounter(10*time.Second, EncounterEvent{Kind: "end", EncounterID: 1234, GroupSize: 5, DurationMS: 6000, Success: true})
+	f.Clock.After(12*time.Second, func() {
+		f.InstanceBosses = []tbcmd.InstanceBoss{{Entry: 9001, State: "dead"}}
+	})
+	f.ScriptRun(FakeRunScript{Steps: 20, Pulls: 3, ProgressEvery: 5 * time.Second, DoneAt: 140 * time.Second})
+	if res := run.Watch(context.Background()); res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	var at []time.Duration
+	for _, o := range f.Orders() {
+		if o.Verb == "action" && strings.HasSuffix(o.Arg, " info") {
+			at = append(at, o.At)
+		}
+	}
+	// The start read, a read after the scripted end (the minute cadence) and the forced final read.
+	if len(at) < 3 {
+		t.Fatalf("instance reads at %v, want one after the scripted fight ended", at)
+	}
+	mid := false
+	for _, t0 := range at[:len(at)-1] {
+		if t0 >= 60*time.Second {
+			mid = true
+		}
+	}
+	if !mid {
+		t.Fatalf("instance reads at %v; none ran at the minute cadence after the encounter end", at)
+	}
+	seen := false
+	for _, line := range *logs {
+		if strings.Contains(line, "9001:dead") {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("the unscripted boss was never reported: %v", *logs)
+	}
+}
+
+// TestPushedThreatNeverHidesAModuleMob: a pushed snapshot covers only the mobs whose lists reached this client. A
+// mob the module's report lists and the push does not must stay in the answer, or a second mob in the fight is
+// invisible between the 10 s reads.
+func TestPushedThreatNeverHidesAModuleMob(t *testing.T) {
+	plan := `{
+	 "version": 1, "name": "scenario", "map": 389,
+	 "entrance": {"x": 0, "y": 0, "z": 0}, "outside_tele": "outside", "portal": {"map": 1, "x": 10, "y": 10, "z": 10},
+	 "level_band": [13, 18], "fleers": [11319],
+	 "legs": [{"name": "one", "to": {"x": 0, "y": 40, "z": 0},
+	   "pull_groups": [{"entries": [100, 101], "positions": [{"x": 0, "y": 100, "z": 0}, {"x": 3, "y": 100, "z": 0}], "radius": 10}]}]
+	}`
+	route := testRoute(t, plan)
+	cfg := scenarioConfig("none")
+	f := NewFake(route, cfg)
+	run := New(cfg, route, f, f, f, f.Clock)
+	// Two engaged mobs: the module's report lists both.
+	f.Fight(f.UnitGUID(100), time.Hour)
+	f.Fight(f.UnitGUID(101), time.Hour)
+	f.PushThreat = true
+	f.TableMobs = []tbcmd.ThreatLine{{
+		Mob: f.UnitGUID(100), Entry: 100, Name: "mob", Victim: cfg.Leader, Size: 1, HasTop: true,
+		Top: []tbcmd.ThreatEntry{{Name: cfg.Leader, Threat: 500}},
+	}}
+	rep, ok := run.threat(context.Background())
+	if !ok || rep.Count != 2 {
+		t.Fatalf("first answer %d mob(s) ok %v, want the module's two", rep.Count, ok)
+	}
+	f.Clock.Advance(2 * time.Second)
+	rep, ok = run.threat(context.Background())
+	if !ok || rep.Count != 2 {
+		t.Fatalf("pushed answer %d mob(s) ok %v, want both (the push covers one)", rep.Count, ok)
+	}
+	var covered bool
+	for _, m := range rep.Mobs {
+		if m.Mob == f.UnitGUID(100) && m.HasTop && m.Top[0].Threat == 500 {
+			covered = true
+		}
+	}
+	if !covered {
+		t.Fatalf("the pushed mob's exact threat is missing: %+v", rep.Mobs)
+	}
+}
+
+// TestThreatFallbackResumesWhenThePushedTableGoesStale: the pushed lists are fresh for five seconds. When they stop
+// arriving the driver must poll `.tb threat` again, per tick, not keep reading a table nobody updates.
+func TestThreatFallbackResumesWhenThePushedTableGoesStale(t *testing.T) {
+	fight := func(freshFor time.Duration) int {
+		run, f := newScenario(t, oneGroupPlan(), scenarioConfig("none"))
+		f.PushThreat = true
+		f.TableFreshFor = freshFor
+		f.OnOrder = func(f *Fake, who, verb, arg string) {
+			if verb == "pull" {
+				f.Fight(arg, 30*time.Second)
+			}
+		}
+		if res := play(t, run); res.Stop != "clear" {
+			t.Fatalf("fresh=%s: stop %q, want clear", freshFor, res.Stop)
+		}
+		return f.ThreatCalls
+	}
+	always := fight(0)
+	stale := fight(5 * time.Second)
+	t.Logf("30 s fight: %d threat reads with an always-fresh table, %d when it goes stale after 5 s", always, stale)
+	if always > 4 {
+		t.Fatalf("the always-fresh table read %d times in 30 s, want the 10 s fallback", always)
+	}
+	if stale < 10 {
+		t.Fatalf("the stale table still read only %d times, want a poll per 2 s tick after 5 s", stale)
+	}
+}

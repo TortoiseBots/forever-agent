@@ -19,6 +19,10 @@ const (
 	// bossKillWindow is how long after an encounter end a SMSG_BOSS_KILL belongs to it. InstanceScript sends the
 	// kill credit right after the end (InstanceScript.cpp:463-466), and the driver must not count two kills.
 	bossKillWindow = 10 * time.Second
+	// maxEndedEncounters bounds the dedupe memory: the ends of the last few seconds. The driver drains the event
+	// ring on its own goroutine, so the pairing cannot live in the ring (a drain between the two packets would lose
+	// it); it is pruned by bossKillWindow, and this bound is the hostile-server backstop.
+	maxEndedEncounters = 64
 )
 
 // EncounterKind is what one encounter packet said.
@@ -45,39 +49,88 @@ type EncounterEvent struct {
 	At         time.Time
 }
 
-// ApplyEncounterStart records a pulled encounter.
+// ApplyEncounterStart records a pulled encounter. The id stays open until its end: the watch holds its `.tb
+// instance` fallback only while a boss fight is open, never past one.
 func (w *World) ApplyEncounterStart(s combat.EncounterStart, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	id := uint32(s.EncounterID)
+	if w.open == nil {
+		w.open = make(map[uint32]bool)
+	}
+	w.open[id] = true
 	w.pushEncounterLocked(EncounterEvent{
-		Kind: EncounterStarted, EncounterID: uint32(s.EncounterID), Difficulty: s.Difficulty,
+		Kind: EncounterStarted, EncounterID: id, Difficulty: s.Difficulty,
 		GroupSize: s.GroupSize, At: now,
 	})
 }
 
-// ApplyEncounterEnd records the end of an encounter, kill or wipe.
+// ApplyEncounterEnd records the end of an encounter, kill or wipe. A successful end also remembers the encounter id
+// and its time outside the ring, so the kill credit that follows is not a second event even when the ring was
+// drained between the two packets.
 func (w *World) ApplyEncounterEnd(e combat.EncounterEnd, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	id := uint32(e.EncounterID)
+	delete(w.open, id)
+	if e.Success {
+		w.rememberEndLocked(id, now)
+	}
 	w.pushEncounterLocked(EncounterEvent{
-		Kind: EncounterEnded, EncounterID: uint32(e.EncounterID), Difficulty: e.Difficulty,
+		Kind: EncounterEnded, EncounterID: id, Difficulty: e.Difficulty,
 		GroupSize: e.GroupSize, DurationMS: e.DurationMS, Success: e.Success, At: now,
 	})
 }
 
-// ApplyBossKill records the kill credit, unless it belongs to an end this model already saw: the two packets are
-// sent together (InstanceScript.cpp:463-466) and the credit is not a second kill.
+// ApplyBossKill records the kill credit, unless it belongs to a successful end this model saw within
+// bossKillWindow: the two packets are sent together (InstanceScript.cpp:463-466) and the credit is not a second
+// kill. The memory is outside the drained ring, so a drain between the packets cannot resurrect the credit.
 func (w *World) ApplyBossKill(k combat.BossKill, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, e := range w.encounters {
-		if e.Kind == EncounterEnded && e.EncounterID == k.EncounterID && now.Sub(e.At) <= bossKillWindow {
-			return
-		}
+	if endedAt, ok := w.ended[k.EncounterID]; ok && now.Sub(endedAt) <= bossKillWindow {
+		return
 	}
+	delete(w.open, k.EncounterID)
 	w.pushEncounterLocked(EncounterEvent{
 		Kind: EncounterBossKilled, EncounterID: k.EncounterID, Success: true, At: now,
 	})
+}
+
+// rememberEndLocked records one successful end in the dedupe memory, pruning the window and the bound first. The
+// caller holds the lock.
+func (w *World) rememberEndLocked(id uint32, now time.Time) {
+	if w.ended == nil {
+		w.ended = make(map[uint32]time.Time)
+	}
+	for eid, at := range w.ended {
+		if now.Sub(at) > bossKillWindow {
+			delete(w.ended, eid)
+		}
+	}
+	w.ended[id] = now
+	for len(w.ended) > maxEndedEncounters {
+		var oldest uint32
+		var at time.Time
+		found := false
+		for eid, t := range w.ended {
+			if !found || t.Before(at) {
+				oldest, at, found = eid, t, true
+			}
+		}
+		if !found {
+			return
+		}
+		delete(w.ended, oldest)
+	}
+}
+
+// EncounterOpen says whether a pulled encounter has not ended: the watch trusts the pushes and skips its `.tb
+// instance` fallback only then, so a boss the script never names is seen again as soon as the named fight ends.
+func (w *World) EncounterOpen() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return len(w.open) > 0
 }
 
 // pushEncounterLocked appends to the undrained ring under its bound. The caller holds the lock.
@@ -86,7 +139,6 @@ func (w *World) pushEncounterLocked(e EncounterEvent) {
 		w.encounters = append(w.encounters[:0], w.encounters[1:]...)
 	}
 	w.encounters = append(w.encounters, e)
-	w.lastEncounterAt = e.At
 }
 
 // DrainEncounters returns the events that arrived since the last drain and forgets them. The newest last.
@@ -99,12 +151,4 @@ func (w *World) DrainEncounters() []EncounterEvent {
 	out := append([]EncounterEvent(nil), w.encounters...)
 	w.encounters = w.encounters[:0]
 	return out
-}
-
-// LastEncounterAt is when the newest encounter packet arrived (zero when none did), which is the watch's signal to
-// stop polling `.tb instance` while the pushes flow.
-func (w *World) LastEncounterAt() time.Time {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.lastEncounterAt
 }

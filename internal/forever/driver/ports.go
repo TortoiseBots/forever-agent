@@ -86,9 +86,9 @@ type World interface {
 	// Encounters returns the encounter events that arrived since the last call and forgets them: a pull, an end
 	// (kill or wipe) and a kill credit, from the packets InstanceScript sends every player in the instance.
 	Encounters() []EncounterEvent
-	// LastEncounterAt is when the newest encounter packet arrived; the watch uses it to keep the `.tb instance`
-	// read as the fallback of an instance whose script sends nothing.
-	LastEncounterAt() time.Time
+	// EncounterOpen says whether a pulled encounter has not ended. The watch keeps the `.tb instance` read as the
+	// fallback of an instance whose script sends nothing, and skips it only while a named boss fight is running.
+	EncounterOpen() bool
 }
 
 // EncounterEvent is one instance encounter packet, as the world model saw it.

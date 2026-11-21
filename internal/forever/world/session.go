@@ -1778,7 +1778,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			s.opts.logf("world: SMSG_MOVE_SET_ACTIVE_MOVER for %s, CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE sent", guid)
 			// The world is entered: ask for the full combat log (MiscHandler.cpp:1237-1240). The server sends the
 			// basic form until this flag arrives, and then every log packet carries the unit's health and power
-			// (Object.cpp:1126-1148). A reconnect builds a fresh session and sends it again exactly once.
+			// (Object.cpp:1126-1148). A reconnect builds a fresh session and sends it again, and the map change
+			// resets activeMoverDone (mapchange.go), so a new map gets it too; the flag is idempotent.
 			if err := s.sendOnCtx(ctx, ev.side, wire.CMSGSetAdvancedCombatLogging, combat.BuildSetAdvancedCombatLogging(true)); err != nil {
 				return err
 			}

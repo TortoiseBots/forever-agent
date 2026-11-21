@@ -118,10 +118,12 @@ type World struct {
 	// lastUpdate is the client time of the last applied update, for the report.
 	applied int
 	// threat is the pushed per-mob threat table (threat.go) and encounters the undrained encounter events
-	// (encounter.go). Both are rewritten by the packet loop under the model's lock.
-	threat          map[wire.GUID]*ThreatMob
-	encounters      []EncounterEvent
-	lastEncounterAt time.Time
+	// (encounter.go). ended remembers the successful ends for the kill credit's dedupe and open the encounters a
+	// start named and no end closed. All are rewritten by the packet loop under the model's lock.
+	threat     map[wire.GUID]*ThreatMob
+	encounters []EncounterEvent
+	ended      map[uint32]time.Time
+	open       map[uint32]bool
 }
 
 // orderEntry is one touch of an object, for eviction. An entry whose seq is not the object's current seq is stale.
@@ -176,7 +178,8 @@ func (w *World) ResetForMap(mapID uint32) {
 	// the new one's.
 	w.threat = make(map[wire.GUID]*ThreatMob)
 	w.encounters = w.encounters[:0]
-	w.lastEncounterAt = time.Time{}
+	w.ended = nil
+	w.open = nil
 }
 
 // Counts is a snapshot of how many blocks the model applied.

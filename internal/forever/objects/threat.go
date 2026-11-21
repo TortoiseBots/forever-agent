@@ -25,13 +25,20 @@ const (
 // ThreatMob is one mob's current threat list, as the packets last left it.
 type ThreatMob struct {
 	Mob wire.GUID
-	// Entries are the victims in the order the server sent them (highest first, ThreatManager.cpp:867-880).
+	// Entries are the victims and their threat in the order the server sent them. That order is not a ranking: the
+	// server walks its fibonacci_heap with a plain range-for (ThreatManager.cpp:869-880), so the highest is a value
+	// comparison, never the first entry.
 	Entries []combat.ThreatInfo
-	// Highest is the victim SMSG_HIGHEST_THREAT_UPDATE names, when that form arrived; it is zero for a plain update.
+	// Highest is the victim on top: the SMSG_HIGHEST_THREAT_UPDATE victim while it is still in the list, else the
+	// entry with the most threat (a tie keeps the previous highest). HasHighest is false only for an empty list,
+	// and an empty list leaves the table.
 	Highest    wire.GUID
 	HasHighest bool
 	// Updated is when the last packet about this mob's list arrived.
 	Updated time.Time
+	// pinned says Highest is the victim a HIGHEST packet named, not an entry-value maximum: while it is listed it
+	// stays on top even if a later plain update's values would rank another entry higher.
+	pinned bool
 }
 
 // ApplyThreatUpdate replaces one mob's list (SMSG_THREAT_UPDATE).
@@ -49,7 +56,8 @@ func (w *World) ApplyHighestThreatUpdate(u combat.HighestThreatUpdate, now time.
 }
 
 // ApplyThreatRemove drops one victim from a mob's list (SMSG_THREAT_REMOVE). An emptied list leaves the table: the
-// mob no longer holds the party.
+// mob no longer holds the party. A packet about a victim the list does not hold is not a fresh list (the server sent
+// it, this model's list is unchanged), so it must not extend the freshness window.
 func (w *World) ApplyThreatRemove(r combat.ThreatRemove, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -57,22 +65,26 @@ func (w *World) ApplyThreatRemove(r combat.ThreatRemove, now time.Time) {
 	if t == nil {
 		return
 	}
-	kept := t.Entries[:0]
+	kept := make([]combat.ThreatInfo, 0, len(t.Entries))
 	for _, e := range t.Entries {
 		if e.Unit != r.About {
 			kept = append(kept, e)
 		}
+	}
+	if len(kept) == len(t.Entries) {
+		// The victim was not listed: nothing changed, so nothing is fresher.
+		return
 	}
 	if len(kept) == 0 {
 		delete(w.threat, r.Mob)
 		return
 	}
 	t.Entries = kept
-	if t.Highest == r.About {
-		t.HasHighest = false
-		t.Highest = wire.EmptyGUID
-	}
 	t.Updated = now
+	if t.Highest == r.About {
+		t.pinned = false
+		t.Highest, t.HasHighest = topEntry(kept, t)
+	}
 }
 
 // ApplyThreatClear drops a mob's list (SMSG_THREAT_CLEAR).
@@ -83,33 +95,84 @@ func (w *World) ApplyThreatClear(c combat.ThreatClear) {
 }
 
 // setThreatLocked stores one list under the mob bound. The entries are copied: the parser's slice belongs to the
-// packet, and a caller may hold a snapshot while the next packet replaces it.
+// packet, and a caller may hold a snapshot while the next packet replaces it. The victim on top is resolved here:
+// a HIGHEST packet's victim while it is listed, else the entry with most threat, and a tie keeps the previous one.
 func (w *World) setThreatLocked(mob wire.GUID, list []combat.ThreatInfo, highest wire.GUID, hasHighest bool, now time.Time) {
-	if len(list) == 0 {
-		delete(w.threat, mob)
+	if mob.IsZero() || len(list) == 0 {
+		// A zero mob is no unit this client can track; the parsers reject one, and the table never grows on it.
+		if !mob.IsZero() {
+			delete(w.threat, mob)
+		}
 		return
 	}
 	if _, ok := w.threat[mob]; !ok && len(w.threat) >= maxThreatMobs {
 		// The table is past its bound: drop the mob whose list was seen longest ago.
 		var oldest wire.GUID
 		var at time.Time
+		found := false
 		for g, t := range w.threat {
-			if oldest.IsZero() || t.Updated.Before(at) {
-				oldest, at = g, t.Updated
+			if !found || t.Updated.Before(at) {
+				oldest, at, found = g, t.Updated, true
 			}
 		}
-		delete(w.threat, oldest)
+		if found {
+			delete(w.threat, oldest)
+		}
 	}
 	if w.threat == nil {
 		w.threat = make(map[wire.GUID]*ThreatMob)
 	}
-	w.threat[mob] = &ThreatMob{
-		Mob:        mob,
-		Entries:    append([]combat.ThreatInfo(nil), list...),
-		Highest:    highest,
-		HasHighest: hasHighest,
-		Updated:    now,
+	prev := w.threat[mob]
+	t := &ThreatMob{
+		Mob:     mob,
+		Entries: append([]combat.ThreatInfo(nil), list...),
+		Updated: now,
 	}
+	switch {
+	case hasHighest && listed(list, highest):
+		t.Highest, t.HasHighest, t.pinned = highest, true, true
+	case prev != nil && prev.HasHighest && prev.pinned && listed(list, prev.Highest):
+		// A plain update never takes the HIGHEST victim off the top while the server still lists it.
+		t.Highest, t.HasHighest, t.pinned = prev.Highest, true, true
+	default:
+		t.Highest, t.HasHighest = topEntry(list, prev)
+	}
+	w.threat[mob] = t
+}
+
+// listed reports whether g is one of the list's victims.
+func listed(list []combat.ThreatInfo, g wire.GUID) bool {
+	for _, e := range list {
+		if e.Unit == g {
+			return true
+		}
+	}
+	return false
+}
+
+// topEntry is the entry with the most threat, in hundredths as the wire sends it. A tie keeps prev's victim when it
+// is still listed with the maximum; otherwise the first maximum in wire order wins.
+func topEntry(list []combat.ThreatInfo, prev *ThreatMob) (wire.GUID, bool) {
+	if len(list) == 0 {
+		return wire.EmptyGUID, false
+	}
+	top := list[0].Threat
+	for _, e := range list[1:] {
+		top = max(top, e.Threat)
+	}
+	if prev != nil && prev.HasHighest {
+		for _, e := range list {
+			if e.Unit == prev.Highest && e.Threat == top {
+				return prev.Highest, true
+			}
+		}
+	}
+	for _, e := range list {
+		if e.Threat == top {
+			return e.Unit, true
+		}
+	}
+	return list[0].Unit, true
 }
 
 // ThreatSnapshot returns every mob list seen within ThreatFreshFor of now, in mob GUID order (a stable order, so a
