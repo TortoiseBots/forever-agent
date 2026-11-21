@@ -21,7 +21,7 @@ import (
 var adapterMethods = map[string]bool{
 	"State": true, "Threat": true, "Order": true, "Party": true, "Act": true,
 	"RunStatus": true, "RunEvents": true,
-	"Run": true, "gmOn": true, "teleOutside": true, "appear": true,
+	"Run": true, "gmOn": true, "teleOutside": true, "appear": true, "deathRecap": true,
 }
 
 // TestOnlySendReachesTheCommandChannel: the driver adapter's only call of the command session's Run is the send the

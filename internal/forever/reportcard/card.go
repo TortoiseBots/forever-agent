@@ -88,14 +88,17 @@ type Leg struct {
 }
 
 // Death is one death event the module sent. Who is the member's party slot; Why is the event's why= as it arrived,
-// which for a death no member matches is the only name it carries.
+// which for a death no member matches is the only name it carries. Recap is the parsed `.deathrecap` timeline the
+// watch attached once when the death arrived (the core's own header, frame and cast lines); empty when the watch
+// never asked.
 type Death struct {
-	AtS  int    `json:"at_s"`
-	Leg  int    `json:"leg"`
-	Step int    `json:"step"`
-	Unit uint32 `json:"unit,omitempty"`
-	Who  string `json:"who,omitempty"`
-	Why  string `json:"why,omitempty"`
+	AtS   int      `json:"at_s"`
+	Leg   int      `json:"leg"`
+	Step  int      `json:"step"`
+	Unit  uint32   `json:"unit,omitempty"`
+	Who   string   `json:"who,omitempty"`
+	Why   string   `json:"why,omitempty"`
+	Recap []string `json:"recap,omitempty"`
 }
 
 // Pause is one pause event with the module's reason and whether a resume cleared it.
@@ -141,7 +144,7 @@ func Build(sum driver.RunSummary, th Thresholds) Card {
 	c.Deaths, c.Wipes, c.Pauses, c.Rescues = w.Deaths, w.Wipes, w.Pauses, w.Rescues
 	c.DeathLog = make([]Death, 0, len(w.DeathLog))
 	for _, d := range w.DeathLog {
-		c.DeathLog = append(c.DeathLog, Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why})
+		c.DeathLog = append(c.DeathLog, Death{AtS: d.AtS, Leg: d.Leg, Step: d.Step, Unit: d.Unit, Who: d.Who, Why: d.Why, Recap: append([]string(nil), d.Recap...)})
 	}
 	c.PauseLog = make([]Pause, 0, len(w.PauseLog))
 	for _, p := range w.PauseLog {
@@ -512,6 +515,9 @@ func (c Card) Text() string {
 		b.WriteString("deaths:\n")
 		for _, d := range c.DeathLog {
 			fmt.Fprintf(&b, "  leg %d/step %d t=%ds %s\n", d.Leg, d.Step, d.AtS, deathWho(driver.DeathRecord(d)))
+			for _, r := range d.Recap {
+				fmt.Fprintf(&b, "    deathrecap: %s\n", r)
+			}
 		}
 	}
 	if len(c.PauseLog) == 0 {

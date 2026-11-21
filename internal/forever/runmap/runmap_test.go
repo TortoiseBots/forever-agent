@@ -11,9 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/mapview"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
@@ -918,5 +921,67 @@ func TestLoadThinsLongRecords(t *testing.T) {
 	full, _, _ := Load(fixture(t), Options{})
 	if len(full.Tracks[0].Samples) <= 8 || strings.Contains(strings.Join(full.Notes, "\n"), "frame is drawn") {
 		t.Fatal("a short record was thinned")
+	}
+}
+
+// foreverPlayer is a ForeverCore player guid as the world model prints it: 0x, then the high and low halves, 16
+// digits each (a player is HighGuid type 2).
+func foreverPlayer(low uint64) string { return wire.GUID{High: 2 << 58, Low: low}.String() }
+
+// TestForeverWatchRecordRoundTripsIntoRunMap: a watch record written by the driver's own frame writer, the way a
+// watch on ForeverCore writes it (each member's guid as the world model prints it), draws five routes and its
+// markers, and the death label attaches to the dying member by the full guid. A frame with an empty guid, which is
+// what a watch wrote while nothing named the players, draws no member at all.
+func TestForeverWatchRecordRoundTripsIntoRunMap(t *testing.T) {
+	guids := []string{foreverPlayer(0x11), foreverPlayer(0x12), foreverPlayer(0x13), foreverPlayer(0x14), foreverPlayer(0x15)}
+	write := func(guids []string) string {
+		dir := fixture(t)
+		// The fixture's summary and plan stay; its trace is replaced by the recorder's own.
+		if err := os.Remove(filepath.Join(dir, fixtureRun+".jsonl")); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Unix(1700000000, 0)
+		rec, err := driver.NewWatchRecorder(dir, fixtureRun, "fixture_depths", 36, 1, start, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.Event(start.Add(fixtureStartDelay*time.Second), "run_start", map[string]any{"plan": "fixture_depths"})
+		for sec := fixtureStartDelay; sec <= fixtureSeconds; sec++ {
+			var bots []driver.FrameBot
+			for i, g := range guids {
+				role := []string{"tank", "heal", "dps", "dps", "dps"}[i]
+				bots = append(bots, driver.FrameBot{
+					State: tbcmd.BotState{Name: fmt.Sprintf("Bot%d", i), HP: 100, HPMax: 100, State: "non-combat",
+						X: float64(10 + 2*(sec-fixtureStartDelay)), Y: float64(2 * i), Z: 0},
+					GUID: g, Role: role,
+				})
+			}
+			rec.WatchFrame(start.Add(time.Duration(sec)*time.Second), bots, nil, func(string) string { return "" })
+		}
+		rec.Finish(start.Add(fixtureSeconds*time.Second), "done", "leg_three")
+		rec.CloseCombat()
+		// Finish rewrote the summary with the driver's own; put the fixture's back, which carries the death.
+		writeSummary(t, filepath.Join(dir, fixtureRun+".forever-run.json"), fixtureSpec{})
+		return dir
+	}
+
+	dir := write(guids)
+	writeCombatLog(t, dir, combatRowLine(1, "spell_damage", 12, guidBossA, guids[1], 999, 55))
+	run, _, err := Load(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Tracks) != 5 {
+		t.Fatalf("%d route(s), want 5 (one per member)", len(run.Tracks))
+	}
+	if got := marker(t, &run, mapview.MarkDeath).Label; got != "healer died: spell 999 55" {
+		t.Fatalf("death label %q: the combat row did not attach to the healer by guid", got)
+	}
+	marker(t, &run, mapview.MarkLeg)
+
+	// The same record with every guid empty has no member to route.
+	empty := write([]string{"", "", "", "", ""})
+	if run, _, err := Load(empty, Options{}); err == nil && len(run.Tracks) == 5 {
+		t.Fatalf("a record with empty guids drew %d routes", len(run.Tracks))
 	}
 }

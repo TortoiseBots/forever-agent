@@ -36,6 +36,7 @@ func actionRun(t *testing.T, enter string) (*Run, *Fake) {
 func TestActionVocabularyIsClassified(t *testing.T) {
 	all := []ActionKind{
 		ActionEnter, ActionTeleCommander, ActionTeleParty, ActionTeleTo, ActionTeleOutside, ActionAppear,
+		ActionDeathRecap,
 		ActionRevive, ActionInstanceLeave, ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible,
 		ActionRunStart, ActionRunStop, ActionRunPause, ActionRunResume,
 	}
@@ -60,7 +61,7 @@ func TestActionVocabularyIsClassified(t *testing.T) {
 		ActionEnter: actionMove, ActionTeleCommander: actionMove, ActionTeleParty: actionMove, ActionTeleTo: actionMove,
 		ActionTeleOutside: actionMove, ActionAppear: actionMove, ActionInstanceLeave: actionMove,
 		ActionRevive: actionState, ActionInstanceReset: actionState, ActionGMOn: actionState,
-		ActionGMVisible: actionState, ActionInstanceInfo: actionRead,
+		ActionGMVisible: actionState, ActionInstanceInfo: actionRead, ActionDeathRecap: actionRead,
 	} {
 		if got, _ := classifyAction(k); got != want {
 			t.Errorf("classifyAction(%d) = %v, want %v", k, got, want)
@@ -403,5 +404,52 @@ func TestActionLogNamesTheActor(t *testing.T) {
 		if o.Verb != "action" || o.Who != want[i] {
 			t.Fatalf("order %d: %+v, want who %s", i, o, want[i])
 		}
+	}
+}
+
+// TestLinkLostMidSendIsNeverSuccess: a link that dies while an action is being sent means the action was not
+// performed, for every kind of the vocabulary: act answers "link", books no practice cost and no revive, and the
+// run is lost.
+func TestLinkLostMidSendIsNeverSuccess(t *testing.T) {
+	kinds := []Action{
+		{Kind: ActionEnter, Who: "party"},
+		{Kind: ActionTeleCommander, Who: "Lead", Map: 389, Pos: Vec3{0, 0, 0}},
+		{Kind: ActionTeleParty, Map: 389, Pos: Vec3{0, 0, 0}},
+		{Kind: ActionTeleTo, Who: "Lead", Other: "Tank"},
+		{Kind: ActionTeleOutside, Dest: "outside"},
+		{Kind: ActionAppear, Who: "Tank"},
+		{Kind: ActionDeathRecap, Who: "Tank"},
+		{Kind: ActionRevive, Who: "Dps1", Practice: true},
+		{Kind: ActionInstanceLeave, Who: "Tank"},
+		{Kind: ActionInstanceInfo},
+		{Kind: ActionGMOn},
+		{Kind: ActionGMVisible},
+		{Kind: ActionRunStart, Who: "Tank", Plan: "scenario"},
+		{Kind: ActionRunStop, Who: "Tank"},
+		{Kind: ActionRunPause, Who: "Tank"},
+		{Kind: ActionRunResume, Who: "Tank"},
+	}
+	for _, a := range kinds {
+		t.Run(a.String(), func(t *testing.T) {
+			run, f := actionRun(t, "none")
+			if a.Kind == ActionRevive {
+				f.botState("Dps1").dead = true
+				run.refresh(context.Background())
+			}
+			f.DropOnKind = a.Kind
+			rep, why := run.act(context.Background(), a)
+			if why != "link" {
+				t.Fatalf("why %q, want link (the link died mid-send)", why)
+			}
+			if rep.Confirmed {
+				t.Fatalf("a send that lost the link reads as performed: %+v", rep)
+			}
+			if run.practice != 0 {
+				t.Fatalf("practice %d booked for a send that never completed", run.practice)
+			}
+			if !run.lost {
+				t.Fatal("the run does not know the link is lost")
+			}
+		})
 	}
 }

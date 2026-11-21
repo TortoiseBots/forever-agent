@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
@@ -143,6 +144,12 @@ func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.Act
 			return driver.ActionReport{}, fmt.Errorf("world: appear: %w", err)
 		}
 		return c.appear(ctx, name)
+	case driver.ActionDeathRecap:
+		name, err := chat.NormaliseName(a.Who)
+		if err != nil {
+			return driver.ActionReport{}, fmt.Errorf("world: deathrecap: %w", err)
+		}
+		return c.deathRecap(ctx, name)
 	}
 	return driver.ActionReport{}, fmt.Errorf("world: action %d is not in the setup vocabulary", a.Kind)
 }
@@ -217,6 +224,30 @@ func (c *dungeonCommander) appear(ctx context.Context, name string) (driver.Acti
 	return coreReply("appear", n, err)
 }
 
+// deathRecap sends the core's `.deathrecap <name>`: the last recorded death of
+// the named bot of this session's run, as text (PR #380). The line is built
+// here from the validated name, so nothing outside this file can hand a core
+// command line to the channel. A core without the command refuses the line as
+// unknown command; "no recording" arrives as the reply's own line. The send is
+// tokenless (a core line) with the watch's deadline and line cap: at most 60
+// lines parsed.
+func (c *dungeonCommander) deathRecap(ctx context.Context, name string) (driver.ActionReport, error) {
+	o := c.client.Base
+	o.Token = ""
+	o.MaxLines = driver.MaxDeathRecapLines
+	if o.Quiet <= 0 {
+		o.Quiet = 1500 * time.Millisecond
+	}
+	if o.Deadline <= 0 || o.Deadline > driver.DeathRecapWait {
+		o.Deadline = driver.DeathRecapWait
+	}
+	rep, err := c.Run(ctx, ".deathrecap "+name, o)
+	if err != nil {
+		return driver.ActionReport{}, dungeonPortErr(err)
+	}
+	return driver.ActionReport{Verb: "deathrecap", Confirmed: true, Count: len(rep.Raw), Lines: append([]string(nil), rep.Raw...)}, nil
+}
+
 // dungeonWorld is the commander's own client: the mover's position, the map change's epoch, the object model's
 // units, the name cache and the portal packet.
 type dungeonWorld struct {
@@ -274,8 +305,57 @@ func friendlyUnit(o *objects.Object) bool {
 	return o.Info.HasUnit && o.Info.NpcFlags != 0
 }
 
+// dungeonNameAskEvery bounds how often PlayerGUID asks the server for the names of the players in view.
+const dungeonNameAskEvery = 5 * time.Second
+
+// PlayerGUID is the guid of the player with this name, from the three places this client can learn it: the name cache,
+// the party roster (when this character is a member) and, for a player in view whose name is still unknown, the
+// server's own answer to a name query. A watch's character is usually not in the party it watches and nothing else in
+// a dungeon session asks for names, so without the query every member of a frame had an empty guid.
 func (w dungeonWorld) PlayerGUID(name string) (wire.GUID, bool) {
+	if g, ok := w.s.world.PlayerByName(name); ok {
+		return g, true
+	}
+	if g, ok := w.s.rosterGUID(name); ok {
+		return g, true
+	}
+	if !w.s.askVisibleNames(w.pos()) {
+		return wire.EmptyGUID, false
+	}
 	return w.s.world.PlayerByName(name)
+}
+
+// pos is the mover's position, the centre of the name query's nearest-first list.
+func (w dungeonWorld) pos() driver.Vec3 {
+	pos, _, _, _ := w.Self()
+	return pos
+}
+
+// rosterGUID is the guid of the party member with this name, when this character's party roster is valid.
+func (s *session) rosterGUID(name string) (wire.GUID, bool) {
+	if s.party == nil || !s.party.RosterValid {
+		return wire.EmptyGUID, false
+	}
+	for g, m := range s.party.Members {
+		if m.Name != "" && strings.EqualFold(m.Name, name) {
+			return g, true
+		}
+	}
+	return wire.EmptyGUID, false
+}
+
+// askVisibleNames asks the server for the names of the players in view that the model does not name, at most once
+// per dungeonNameAskEvery. It reports whether it asked and the answer came (the names are then in the cache).
+func (s *session) askVisibleNames(pos driver.Vec3) bool {
+	if time.Since(s.nameAskAt) < dungeonNameAskEvery {
+		return false
+	}
+	players, _ := s.world.UnknownUnits(pos[0], pos[1], pos[2], maxPlayerNamesPerQuery)
+	if len(players) == 0 {
+		return false
+	}
+	s.nameAskAt = time.Now()
+	return s.askPlayerNames(players) == nil
 }
 
 // Auras is the model's auras of one unit that are still up: the spell ids the trace's frames record for a bot.

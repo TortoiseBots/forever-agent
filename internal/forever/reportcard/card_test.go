@@ -61,6 +61,30 @@ func playWatch(t *testing.T, sc driver.FakeRunScript) driver.Result {
 	return run.Watch(context.Background())
 }
 
+// playWatchRecap runs one scripted watch whose fake answers `.deathrecap`
+// with lines, and returns its result.
+func playWatchRecap(t *testing.T, sc driver.FakeRunScript, lines []string) driver.Result {
+	t.Helper()
+	route := cardRoute(t)
+	lim := driver.DefaultLimits()
+	cfg := driver.Config{
+		Leader: "Tank", Commander: "Lead", Enter: "none", Watch: true,
+		Limits: lim, Watchdog: lim.Watchdog, Poll: lim.WatchPoll,
+		Logf: func(string, ...any) {},
+	}
+	f := driver.NewFake(route, cfg)
+	cfg.Party = f.PartyNames()
+	run := driver.New(cfg, route, f, f, f, f.Clock)
+	rec, err := driver.NewWatchRecorder(t.TempDir(), "r-card", route.Name, route.Map, 1, f.Start, run.PartyMembers())
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	run.SetRecorder(rec)
+	f.DeathRecapLines = lines
+	f.ScriptRun(sc)
+	return run.Watch(context.Background())
+}
+
 // flagIDs is the card's flag ids in order.
 func flagIDs(c Card) []string {
 	out := make([]string, 0, len(c.Flags))
@@ -156,6 +180,25 @@ func TestCardDeaths(t *testing.T) {
 		t.Fatalf("pack flag %+v", pack)
 	}
 	if !strings.Contains(c.Text(), "leg 0/step 1 t=4s tank") {
+		t.Fatalf("text:\n%s", c.Text())
+	}
+}
+
+// TestCardDeathRecapText: a death the watch asked `.deathrecap` for carries
+// the parsed timeline under its own card line.
+func TestCardDeathRecapText(t *testing.T) {
+	res := playWatchRecap(t, driver.FakeRunScript{
+		Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second,
+		Deaths: []driver.FakeDeath{{After: 7 * time.Second, Unit: 0x100}},
+	}, []string{
+		"Recap #1 of Tank: map 389 instance 1, 1 frames, 0 events, offsets in seconds from the death.",
+		"  no casts recorded",
+	})
+	c := Build(res.Summary, DefaultThresholds())
+	if len(c.DeathLog) != 1 || len(c.DeathLog[0].Recap) != 2 {
+		t.Fatalf("death log %+v", c.DeathLog)
+	}
+	if !strings.Contains(c.Text(), "deathrecap: Recap #1 of Tank:") || !strings.Contains(c.Text(), "deathrecap: no casts recorded") {
 		t.Fatalf("text:\n%s", c.Text())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,15 +16,22 @@ import (
 )
 
 // foreverSummary is the `watch` part of `<run_id>.forever-run.json`, the file a Forever watch writes: the module's
-// progress and its instance report's bosses (entry -> alive or dead), which rule 3 does not count as adds.
+// progress and its instance report's bosses (entry -> alive or dead), which rule 3 does not count as adds, and the
+// death log with the parsed `.deathrecap` timeline the watch attached once per bot death.
 type foreverSummary struct {
 	RunID    string          `json:"run_id"`
 	Instance uint32          `json:"instance"`
 	Bosses   map[string]bool `json:"bosses"`
 	Watch    *struct {
-		State  string            `json:"state"`
-		Frames int               `json:"frames"`
-		Bosses map[string]string `json:"bosses"`
+		State    string            `json:"state"`
+		Frames   int               `json:"frames"`
+		Bosses   map[string]string `json:"bosses"`
+		DeathLog []struct {
+			AtS   int      `json:"at_s"`
+			Who   string   `json:"who"`
+			Why   string   `json:"why"`
+			Recap []string `json:"recap"`
+		} `json:"death_log"`
 	} `json:"watch"`
 }
 
@@ -93,6 +101,7 @@ func loadWatch(path, ds string, skipCombat bool) (*Run, error) {
 	dir := filepath.Dir(tracePath)
 	if sum := readForeverSummary(filepath.Join(dir, simple+".forever-run.json")); sum != nil {
 		r.bossesFrom(sum)
+		r.recapSum = sum
 	}
 	if !skipCombat {
 		rows, err := readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))
@@ -102,6 +111,7 @@ func loadWatch(path, ds string, skipCombat bool) (*Run, error) {
 		r.Combat = stampCombatRows(rows, r.T0)
 	}
 	r.deathsFromFrames()
+	r.recapFrom(r.recapSum)
 	r.finalise()
 	return r, nil
 }
@@ -282,6 +292,72 @@ func (r *Run) deathsFromFrames() {
 				delete(alive, g)
 			}
 		}
+	}
+}
+
+// recapFrom attaches the watch's parsed `.deathrecap` timeline to each dated
+// death: the summary's death log carries the recording the watch asked for
+// once when the death arrived, keyed by the run's own identity (the trace's
+// guid text for a watch). Entries match deaths by member and nearest time; a
+// death the summary does not name keeps no timeline rather than another's.
+func (r *Run) recapFrom(sum *foreverSummary) {
+	if sum == nil || sum.Watch == nil || len(sum.Watch.DeathLog) == 0 {
+		return
+	}
+	// The trace keys members by guid and the summary's death log carries the
+	// event's own words: Why is the character name the module sent, Who its
+	// party slot. The trace's Names map (guid -> name) resolves Why to the
+	// run's own identity; Who resolves through the Roles map instead.
+	guidOfName := map[string]string{}
+	for g, name := range r.Names {
+		if _, dup := guidOfName[strings.ToLower(name)]; !dup {
+			guidOfName[strings.ToLower(name)] = g
+		}
+	}
+	guidOfRole := map[string]string{}
+	for g, role := range r.Roles {
+		if _, dup := guidOfRole[strings.ToLower(role)]; !dup {
+			guidOfRole[strings.ToLower(role)] = g
+		}
+	}
+	// Each log entry with a recap attaches to one dated death of the same member: the globally nearest pairs by
+	// time first, each entry and each death consumed once, so a member's second death keeps its own recap and a later recap never lands
+	// on an earlier death.
+	type pair struct {
+		entry, death int
+		gap          float64
+	}
+	var pairs []pair
+	for ei, d := range sum.Watch.DeathLog {
+		if len(d.Recap) == 0 {
+			continue
+		}
+		g := ""
+		if name := strings.TrimSpace(d.Why); name != "" {
+			g = guidOfName[strings.ToLower(name)]
+		}
+		if g == "" {
+			if role := strings.TrimSpace(d.Who); role != "" {
+				g = guidOfRole[strings.ToLower(role)]
+			}
+		}
+		if g == "" {
+			continue
+		}
+		for di, death := range r.Deaths {
+			if death.Bot == g {
+				pairs = append(pairs, pair{ei, di, math.Abs(death.T - float64(d.AtS))})
+			}
+		}
+	}
+	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].gap < pairs[j].gap })
+	usedEntry, usedDeath := map[int]bool{}, map[int]bool{}
+	for _, p := range pairs {
+		if usedEntry[p.entry] || usedDeath[p.death] {
+			continue
+		}
+		usedEntry[p.entry], usedDeath[p.death] = true, true
+		r.Deaths[p.death].Recap = append([]string(nil), sum.Watch.DeathLog[p.entry].Recap...)
 	}
 }
 

@@ -188,14 +188,18 @@ type PullNote struct {
 // DeathRecord is one death event: when, where, and the party slot the module named (a role word, never a
 // character name). Unit is the module's own unit id when it sent one. Why is the event's why= as it arrived: the
 // dead member's name when it named one of the party, and the name that matched nobody when it did not, in which
-// case Who is empty and the death is unattributed.
+// case Who is empty and the death is unattributed. Recap is the parsed `.deathrecap` timeline the watch asked for
+// once when the death arrived: the core's own header, frame and cast lines, as text (or "no recording" / "not
+// recorded" when the server said so); empty when the watch never asked (a dry run, a record from before this
+// round, a death of no party member).
 type DeathRecord struct {
-	AtS  int    `json:"at_s"`
-	Leg  int    `json:"leg"`
-	Step int    `json:"step"`
-	Unit uint32 `json:"unit,omitempty"`
-	Who  string `json:"who,omitempty"`
-	Why  string `json:"why,omitempty"`
+	AtS   int      `json:"at_s"`
+	Leg   int      `json:"leg"`
+	Step  int      `json:"step"`
+	Unit  uint32   `json:"unit,omitempty"`
+	Who   string   `json:"who,omitempty"`
+	Why   string   `json:"why,omitempty"`
+	Recap []string `json:"recap,omitempty"`
 }
 
 // RescueNote is one practice rescue the watcher sent: when, where, and the pause it answered.

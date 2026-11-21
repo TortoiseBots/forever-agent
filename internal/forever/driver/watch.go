@@ -105,6 +105,10 @@ type watchRun struct {
 	rescueLog  []RescueNote
 	roles      map[string]string
 	elapsed    int
+	// deathRecap is the hook's memory: one `.deathrecap` request per death, parsed and attached to the death in
+	// the record and the bug hunter's ticket text. Once the server answers that the command does not exist (a core
+	// without PR #380) or that a bot has no recording, the watch stops asking for it, never spamming.
+	deathRecap *deathRecapState
 }
 
 // Watch runs the watch machine and returns what it saw. The caller owns the ports; r.cfg.Watch and r.cfg.Leader say
@@ -321,11 +325,13 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 		}
 		switch w.state {
 		case "done":
+			r.deathRecapFlush(ctx, w)
 			r.logf("watch: run done plan=%s elapsed=%ds pulls=%d deaths=%d wipes=%d pauses=%d",
 				w.record.Plan, w.record.Elapsed, w.record.Pull, w.record.Deaths, w.record.Wipes, w.record.Pauses)
 			r.stop("done")
 			return
 		case "stopped":
+			r.deathRecapFlush(ctx, w)
 			r.logf("watch: run stopped by the module why=%s", w.record.Why)
 			r.stop("stopped")
 			return
@@ -354,6 +360,11 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 			} else {
 				r.stop("watchdog")
 			}
+			return
+		}
+		// The recordings come after the event handling and the rescue decisions, one request per tick.
+		r.deathRecapPump(ctx, w, false)
+		if r.stopReason != "" {
 			return
 		}
 		if !r.sleep(ctx, r.cfg.Poll) {
@@ -555,7 +566,13 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 	}
 	r.watchOK(&w.eventsBlind)
 	for _, ev := range rep.Events {
+		before := len(w.deaths)
 		r.watchEvent(w, ev)
+		if ev.Kind == "death" && len(w.deaths) > before && r.cfg.Watch {
+			if _, ok := w.roles[partyNameKey(ev.Why)]; ok {
+				r.deathRecapQueue(w, ev.Why, before, ev.T)
+			}
+		}
 	}
 	if rep.HasLast && rep.Last > w.lastSeq {
 		w.lastSeq = rep.Last

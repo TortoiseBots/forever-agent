@@ -156,6 +156,11 @@ func (w *Writer) Header(h Header) {
 		h.Scope = "party"
 	}
 	h.IntervalMS, h.MaxBytes = int(w.every), w.max
+	// The readers put wall-clock times (the combat log's) on the trace's clock with start_unix: a producer that gives
+	// only the start time still gets it.
+	if h.StartUnix == 0 && !h.Start.IsZero() {
+		h.StartUnix = h.Start.Unix()
+	}
 	if h.Caps == nil {
 		h.Caps = []string{}
 	}
