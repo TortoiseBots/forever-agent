@@ -38,7 +38,7 @@ import (
 // "VisualizeBoundary warning: Reached fail-safe flood boundary - check is your boundary is unbounded!".
 type BoundaryResult struct {
 	// Bounded says the command ran without a failure line: the markers are in the world for the duration.
-	// Complete says the reply ended quietly with no line (AllowEmpty): the markers are the answer. An empty
+	// Complete says the run lasted to its deadline with no line (command.Options.Silent, so a late failure line is still caught): the markers are the answer. An empty
 	// reply that did NOT end quietly (deadline, line cap) is UNKNOWN, never bounded: a late or dropped
 	// failure line must not read as success.
 	Bounded  bool
@@ -63,7 +63,7 @@ func parseBoundary(rep *command.Reply) (BoundaryResult, error) {
 		}
 	}
 	if len(lines) == 0 {
-		if !rep.Complete || rep.End != "quiet" {
+		if !rep.Complete || (rep.End != "deadline" && rep.End != "quiet") {
 			return BoundaryResult{}, fmt.Errorf("%w: the boundary reply ended %q with no line (UNKNOWN, not bounded)", ErrBadReport, rep.End)
 		}
 		out.Bounded = true
@@ -101,7 +101,7 @@ func (c *Client) DebugBoundary(ctx context.Context, fill bool, duration uint32, 
 	o := c.Base
 	o.Token = ""
 	o.EndKind = ""
-	o.AllowEmpty = true
+	o.Silent = true
 	rep, err := c.run.Run(ctx, line, o)
 	if err != nil {
 		return BoundaryResult{}, err
@@ -127,7 +127,7 @@ func parseEvade(rep *command.Reply) (EvadeResult, error) {
 	}
 	out := EvadeResult{Raw: append([]string(nil), rep.Raw...)}
 	if len(rep.RawText) == 0 {
-		if !rep.Complete || rep.End != "quiet" {
+		if !rep.Complete || (rep.End != "deadline" && rep.End != "quiet") {
 			return EvadeResult{}, fmt.Errorf("%w: the evade reply ended %q with no line", ErrBadReport, rep.End)
 		}
 		out.Evaded = true
@@ -159,7 +159,7 @@ func (c *Client) NpcEvade(ctx context.Context, why string, force bool) (EvadeRes
 	o := c.Base
 	o.Token = ""
 	o.EndKind = ""
-	o.AllowEmpty = true
+	o.Silent = true
 	rep, err := c.run.Run(ctx, line, o)
 	if err != nil {
 		return EvadeResult{}, err

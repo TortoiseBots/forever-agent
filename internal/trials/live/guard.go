@@ -222,8 +222,8 @@ func (g *Guard) SetHire(guid string) {
 	g.hire = normGUIDOf(guid)
 }
 
-// normGUIDOf normalises one guid the way the runner compares them.
-func normGUIDOf(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+// normGUIDOf is the one guid normaliser of the bench: see canonGUID.
+func normGUIDOf(s string) string { return canonGUID(s) }
 
 // allowedTarget reports whether kind may act on targetClass for target guid.
 func (g *Guard) allowedTarget(kind string, class GuardTarget, target string) bool {
