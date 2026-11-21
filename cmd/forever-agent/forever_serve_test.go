@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 )
 
 func TestServePasswordFile(t *testing.T) {
@@ -40,7 +41,7 @@ func TestServeManifestOpensAsSlot(t *testing.T) {
 	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := serveManifest(dir, tokenFile, "Character", port); err != nil {
+	if err := serveManifest(dir, tokenFile, "Character", port, false); err != nil {
 		t.Fatalf("serveManifest: %v", err)
 	}
 	c, err := openSlotClient(dir)
@@ -55,5 +56,20 @@ func TestServeManifestOpensAsSlot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "agent.pid")); err != nil {
 		t.Fatalf("pid file: %v", err)
+	}
+}
+
+// TestServeManifestRecordsNoAuth: --no-auth is written into slot.json, so a client can tell a daemon that runs
+// without a token from one whose token file went missing.
+func TestServeManifestRecordsNoAuth(t *testing.T) {
+	for _, noAuth := range []bool{false, true} {
+		dir := t.TempDir()
+		if err := serveManifest(dir, filepath.Join(dir, "rpc-18766.token"), "Character", 18766, noAuth); err != nil {
+			t.Fatal(err)
+		}
+		_, m, err := slotdir.Read(dir)
+		if err != nil || m.NoAuth != noAuth {
+			t.Fatalf("no_auth %v: read back %+v, %v", noAuth, m, err)
+		}
 	}
 }

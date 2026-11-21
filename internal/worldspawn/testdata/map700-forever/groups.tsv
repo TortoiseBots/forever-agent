@@ -1,0 +1,5 @@
+leader_guid	member_guid	dist	angle	group_ai
+100	100	0	0	1
+100	101	3	90	1
+300	300	0	0	512
+300	301	3	0	512

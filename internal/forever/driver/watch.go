@@ -98,14 +98,15 @@ type watchRun struct {
 
 	// The report card's evidence: the module's own event times grouped by leg and step, the deaths, the rescues and
 	// the party slot each unit id is. Units holds role words, never character names.
-	legs      map[int]*LegRecord
-	legSeen   map[int]bool
-	steps     map[[2]int]*StepRecord
-	stepSeen  map[[2]int]bool
-	deaths    []DeathRecord
-	rescueLog []RescueNote
-	roles     map[string]string
-	elapsed   int
+	legs       map[int]*LegRecord
+	legSeen    map[int]bool
+	steps      map[[2]int]*StepRecord
+	stepSeen   map[[2]int]bool
+	deaths     []DeathRecord
+	loosePulls []PullNote // pulls the module sent without a step (or leg)
+	rescueLog  []RescueNote
+	roles      map[string]string
+	elapsed    int
 }
 
 // Watch runs the watch machine and returns what it saw. The caller owns the ports; r.cfg.Watch and r.cfg.Leader say
@@ -706,6 +707,10 @@ func wipePauseReason(why string) bool {
 // noteEvent folds one event into the leg's and step's record: its time span, its pulls, deaths and wipes. The card
 // is built from this, so it sees the module's own event times, not the watcher's poll times.
 func (w *watchRun) noteEvent(ev tbcmd.RunEvent) {
+	if ev.Kind == "pull" && (!ev.HasLeg || !ev.HasStep) {
+		// No step to file it under, but it is still a pull: the record keeps it for the run map.
+		w.loosePulls = append(w.loosePulls, PullNote{Seq: ev.Seq, AtS: ev.T})
+	}
 	if !ev.HasLeg {
 		return
 	}
@@ -1221,7 +1226,7 @@ func (r *Run) watchSummary(w *watchRun) {
 		ElapsedS: float64(st.Elapsed), Why: st.Why, Bosses: bosses, Rescues: w.rescues, Events: w.events,
 		Frames: w.frames, CombatRows: w.combatRows, CombatDropped: w.combatLost,
 		CombatBytes: r.rec.CombatBytes(), CombatTruncated: w.combatTruncated, CombatError: w.combatErr,
-		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), DeathLog: w.deaths,
+		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), LoosePulls: w.loosePulls, DeathLog: w.deaths,
 		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed, Encounters: w.encounters,
 	}
 	r.watch = &rw

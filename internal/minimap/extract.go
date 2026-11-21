@@ -103,7 +103,8 @@ type Result struct {
 
 // Options configure Run.
 type Options struct {
-	ClientDir string // the client's Data folder
+	ClientDir string // the client's Data folder (Run), or the CASC extractor's listfile-named folder (RunForever)
+	DB2Dir    string // RunForever: the server's extracted dbc/<locale> folder, with Map.db2
 	OutDir    string
 	MmapsDirs []string // optional: server mmaps folders, for the navmesh render
 	Maps      []uint32

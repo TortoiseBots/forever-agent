@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pjerra/forever-agent/internal/bughunt"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/mapview"
 	"github.com/pjerra/forever-agent/internal/trace"
@@ -49,6 +50,9 @@ type fixtureSpec struct {
 	durationS  float64
 	elapsedS   float64
 	deathLog   string // the summary's death_log JSON
+	// frameBots lists, by party index and in this order, the bots the frames carry; nil is the whole party.
+	frameBots []int
+	loosePuls string // the summary's loose_pulls JSON (pulls that named no step)
 }
 
 // fixture writes one watch folder: the trace and its summary, plus the plan and the combat log from testdata.
@@ -126,7 +130,14 @@ func writeTrace(t *testing.T, path string, sp fixtureSpec) {
 	}
 	for t5 := fixtureStartDelay; t5 <= fixtureSeconds; t5++ {
 		x := 10 + 2*(t5-fixtureStartDelay)
-		bots := []string{bot(guidTank, x, 0), bot(guidHealer, x, 2), bot(guidDps1, x, 4), bot(guidDps2, x, 6), bot(guidDps3, x, 8)}
+		all := []string{bot(guidTank, x, 0), bot(guidHealer, x, 2), bot(guidDps1, x, 4), bot(guidDps2, x, 6), bot(guidDps3, x, 8)}
+		bots := all
+		if sp.frameBots != nil {
+			bots = []string{}
+			for _, i := range sp.frameBots {
+				bots = append(bots, all[i])
+			}
+		}
 		fighting := ""
 		if t5 < 14 { // the first boss fights until it dies
 			fighting = `,"cb":true`
@@ -173,6 +184,10 @@ func writeSummary(t *testing.T, path string, sp fixtureSpec) {
       {"at_s": 8, "leg": 1, "step": 1, "who": "healer", "why": "Healera"}
     ]`
 	}
+	loose := sp.loosePuls
+	if loose == "" {
+		loose = "[]"
+	}
 	s := fmt.Sprintf(`{
   "schema": "forever-run", "version": 1, "run_id": "%s", "plan": "fixture_depths",
   "mode": "watch", "clear": true, "bosses": {"900": true, "901": false}, "wipes": 0, "deaths": 1, "practice": 1,
@@ -190,6 +205,7 @@ func writeSummary(t *testing.T, path string, sp fixtureSpec) {
       {"leg": 0, "step": 1, "pulls": 1, "pull_events": [{"seq": 2, "at_s": 4}], "deaths": 0}
     ],
     "death_log": %s,
+    "loose_pulls": %s,
     "pause_log": [
       {"at_s": 2, "leg": 0, "step": 1, "why": "wipe", "cleared": true}
     ],
@@ -198,7 +214,7 @@ func writeSummary(t *testing.T, path string, sp fixtureSpec) {
     ]
   }
 }
-`, fixtureRun, duration, elapsed, deathLog)
+`, fixtureRun, duration, elapsed, deathLog, loose)
 	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -426,6 +442,11 @@ func TestWipeStarts(t *testing.T) {
 	if got := wipeStarts(two, 5); len(got) != 2 || got[0] != 1 || got[1] != 17 {
 		t.Fatalf("two wipes: %v, want 1 and 17", got)
 	}
+	// A second wipe that begins inside the first's window (the first completed at 5, the next burst starts at 14).
+	close := append(party(1, 2, 3, 4, 5), party(14, 15, 16, 17, 18)...)
+	if got := wipeStarts(close, 5); len(got) != 2 || got[0] != 1 || got[1] != 14 {
+		t.Fatalf("two close wipes: %v, want 1 and 14", got)
+	}
 }
 
 func TestLoadRefusesABadPlan(t *testing.T) {
@@ -616,5 +637,286 @@ func TestGUIDKey(t *testing.T) {
 	}
 	if GUIDKey("0x00000000000000011111111122222222") == GUIDKey("0x00000000000000021111111122222222") {
 		t.Fatal("two guids that share their low word share a key")
+	}
+}
+
+// notesText is the run's notes in one string.
+func notesText(run *mapview.Run) string { return strings.Join(run.Notes, "\n") }
+
+// TestLoadLeaderMissingUsesANearbyMember: no frame carries the leader, so its markers cannot stand at the leader's
+// place; they take the nearest known position (the first member with a route) and never the origin.
+func TestLoadLeaderMissingUsesANearbyMember(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{frameBots: []int{1, 2, 3, 4}}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pull := marker(t, &run, mapview.MarkPull)
+	if pull.X != 18 || pull.Y != 2 {
+		t.Fatalf("pull at (%.0f,%.0f), want the healer's (18,2), not the origin", pull.X, pull.Y)
+	}
+	for _, m := range run.Markers {
+		if m.X == 0 && m.Y == 0 && m.Kind != mapview.MarkBossKill {
+			t.Fatalf("marker %+v landed at the origin", m)
+		}
+	}
+}
+
+// TestLoadNoRouteDropsMarkersWithANote: frames with no bot at all give no place for any event: those markers are
+// left out and the notes say how many.
+func TestLoadNoRouteDropsMarkersWithANote(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{frameBots: []int{}}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range run.Markers {
+		switch m.Kind {
+		case mapview.MarkLeg, mapview.MarkPull, mapview.MarkDeath, mapview.MarkPause, mapview.MarkRescue:
+			t.Fatalf("marker %+v drawn with no route to place it", m)
+		}
+	}
+	if n := notesText(&run); !strings.Contains(n, "no known position") {
+		t.Fatalf("notes %q do not say the markers have no position", n)
+	}
+}
+
+// TestLoadReportsMarkersOutsideTheRun: an event after the trace ended (a truncated trace) is not drawn, and the
+// notes say so with its kind.
+func TestLoadReportsMarkersOutsideTheRun(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{deathLog: `[{"at_s":8,"who":"healer"},{"at_s":100,"who":"tank"}]`}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, m := range run.Markers {
+		if m.Kind == mapview.MarkDeath {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d death markers, want the one inside the run", n)
+	}
+	if notes := notesText(&run); !strings.Contains(notes, "outside the run") || !strings.Contains(notes, "1 death") {
+		t.Fatalf("notes %q do not report the death outside the run", notes)
+	}
+}
+
+// TestLoadPullWithoutAStep: a pull the module sent with no step is in the summary's loose pulls and is still a
+// marker, numbered in time order with the others.
+func TestLoadPullWithoutAStep(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{loosePuls: `[{"seq":9,"at_s":6}]`}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range run.Markers {
+		if m.Kind == mapview.MarkPull {
+			got = append(got, fmt.Sprintf("%s@%.0f", m.Label, m.T))
+		}
+	}
+	if want := "pull 1@9,pull 2@11"; strings.Join(got, ",") != want {
+		t.Fatalf("pulls %v, want %s", got, want)
+	}
+}
+
+// TestLoadWipeNeedsTheRecordsParty: the party record names five members; only two ever appear in frames. Two
+// deaths are not a wipe of a five-member party.
+func TestLoadWipeNeedsTheRecordsParty(t *testing.T) {
+	log := `[{"at_s":1,"who":"tank"},{"at_s":2,"who":"healer"}]`
+	run, _, err := Load(fixtureWith(t, fixtureSpec{frameBots: []int{0, 1}, deathLog: log}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wipeTimes(&run); len(got) != 0 {
+		t.Fatalf("wipes %v from two deaths in a party of five", got)
+	}
+}
+
+// TestLoadDpsSlotsFollowThePartyIndex: the frames list the third damage dealer last, but the party record puts
+// the first one third; a death of dps1 is placed where the party's first damage dealer stood.
+func TestLoadDpsSlotsFollowThePartyIndex(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{
+		frameBots: []int{0, 1, 3, 4, 2},
+		deathLog:  `[{"at_s":8,"who":"dps1"}]`,
+	}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := marker(t, &run, mapview.MarkDeath); d.Y != 4 {
+		t.Fatalf("dps1 died at y=%.0f, want the first damage dealer's 4", d.Y)
+	}
+}
+
+// TestLoadWipeInferredBesideARecordedWipe: a recorded wipe covers the burst it belongs to; a later burst that no
+// event covers is still a wipe.
+func TestLoadWipeInferredBesideARecordedWipe(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{
+		wipes:    []int{12000},
+		deathLog: partyDeaths(1, 2, 3, 4, 5, 14, 15, 16, 17, 18),
+	}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []float64{12, 14 + fixtureStartDelay}
+	if got := wipeTimes(&run); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("wipes %v, want %v: the recorded one and the uncovered burst", got, want)
+	}
+}
+
+// TestLoadWindow: --from-s/--to-s keep one stretch; the run's zero is the stretch's start and the events outside
+// it are reported.
+func TestLoadWindow(t *testing.T) {
+	run, _, err := Load(fixture(t), Options{FromS: 8, ToS: 18})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Seconds != 10 {
+		t.Fatalf("window is %.0f s, want 10", run.Seconds)
+	}
+	if m := marker(t, &run, mapview.MarkPull); m.T != 4+fixtureStartDelay-8 {
+		t.Fatalf("pull at %.0f s, want %d (moved to the window's zero)", m.T, 4+fixtureStartDelay-8)
+	}
+	if !strings.Contains(notesText(&run), "outside the run") {
+		t.Fatalf("notes %q do not report the leg events before the window", notesText(&run))
+	}
+}
+
+// rewriteTrace changes the fixture's trace text.
+func rewriteTrace(t *testing.T, dir string, edit func(string) string) {
+	t.Helper()
+	path := filepath.Join(dir, fixtureRun+".jsonl")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(edit(string(b))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPartySlotsAreUnique: a member with no role never takes the slot another member has by its role.
+func TestPartySlotsAreUnique(t *testing.T) {
+	dir := fixture(t)
+	rewriteTrace(t, dir, func(s string) string {
+		s = strings.Replace(s, `"name":"Tanka","class":"warrior","role":"tank"`, `"name":"Tanka","class":"warrior"`, 1)
+		return strings.Replace(s, `"name":"Healera","class":"priest","role":"heal"`, `"name":"Healera","class":"priest","role":"tank"`, 1)
+	})
+	run, _, err := Load(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tr := range run.Tracks {
+		if seen[tr.Name] {
+			t.Fatalf("two routes are labelled %q", tr.Name)
+		}
+		seen[tr.Name] = true
+	}
+	if len(run.Tracks) != 5 {
+		t.Fatalf("%d routes, want 5", len(run.Tracks))
+	}
+	// The healer record names the tank role explicitly: it keeps "tank"; the roleless first member does not.
+	rec, err := bughunt.LoadWatch(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newParty(rec, false)
+	if p.slot[bughunt.CanonGUID(guidHealer)] != "tank" || p.slot[bughunt.CanonGUID(guidTank)] == "tank" {
+		t.Fatalf("slots %v", p.slot)
+	}
+}
+
+// TestPartyNamesStayDistinct: two members with one name keep two routes under --names.
+func TestPartyNamesStayDistinct(t *testing.T) {
+	dir := fixture(t)
+	rewriteTrace(t, dir, func(s string) string { return strings.ReplaceAll(s, `"name":"Healera"`, `"name":"Tanka"`) })
+	run, _, err := Load(dir, Options{Names: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tr := range run.Tracks {
+		if seen[tr.Name] {
+			t.Fatalf("two routes are labelled %q", tr.Name)
+		}
+		seen[tr.Name] = true
+	}
+}
+
+// TestPlanNameIsNotAPath: the summary's plan value never chooses a file outside the plan folders.
+func TestPlanNameIsNotAPath(t *testing.T) {
+	dir := fixture(t)
+	b, err := os.ReadFile(filepath.Join(dir, "fixture_depths.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(dir), "fixture_depths.json")
+	if err := os.WriteFile(outside, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+	if err := os.Remove(filepath.Join(dir, "fixture_depths.json")); err != nil {
+		t.Fatal(err)
+	}
+	sum := filepath.Join(dir, fixtureRun+".forever-run.json")
+	sb, _ := os.ReadFile(sum)
+	if err := os.WriteFile(sum, []byte(strings.Replace(string(sb), `"plan": "fixture_depths"`, `"plan": "../fixture_depths"`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run, ov, err := Load(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ov != nil || !strings.Contains(strings.Join(run.Notes, "\n"), "not a plan name") {
+		t.Fatalf("the plan outside the folder was read (overlay %v): %v", ov != nil, run.Notes)
+	}
+}
+
+// TestMemberAtIgnoresOldSamples: a member's position older than a few seconds is not where it is.
+func TestMemberAtIgnoresOldSamples(t *testing.T) {
+	run := &mapview.Run{Tracks: []mapview.Track{{Name: "tank", Samples: []mapview.Sample{
+		{T: 1, Pos: mapview.Pos{X: 1}}, {T: 2, Pos: mapview.Pos{X: 2}},
+	}}}}
+	if pos, ok := memberAt(run, "tank", 4); !ok || pos.X != 2 {
+		t.Fatalf("a fresh sample was refused: %v %v", pos, ok)
+	}
+	if _, ok := memberAt(run, "tank", 60); ok {
+		t.Fatal("a position a minute old was used")
+	}
+	if _, ok := memberAt(run, "tank", -60); ok {
+		t.Fatal("a route's first position was used for a time long before it")
+	}
+}
+
+// TestDeathOfAMemberWithoutARouteFallsBackWithANote: the leader's position stands in, and the notes say so.
+func TestDeathOfAMemberWithoutARouteFallsBackWithANote(t *testing.T) {
+	run, _, err := Load(fixtureWith(t, fixtureSpec{frameBots: []int{0}}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := marker(t, &run, mapview.MarkDeath); m.Y != 0 {
+		t.Fatalf("the healer's death is at y=%.0f, want the leader's 0", m.Y)
+	}
+	if !strings.Contains(strings.Join(run.Notes, "\n"), "stand at the leader") {
+		t.Fatalf("the fallback is not in the notes: %v", run.Notes)
+	}
+}
+
+// TestLoadThinsLongRecords: a record past MaxFrames is drawn from evenly spaced frames, and the notes say so.
+func TestLoadThinsLongRecords(t *testing.T) {
+	run, _, err := Load(fixture(t), Options{MaxFrames: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range run.Tracks {
+		if len(tr.Samples) > 8 {
+			t.Fatalf("%s keeps %d samples, want about 6", tr.Name, len(tr.Samples))
+		}
+	}
+	if !strings.Contains(strings.Join(run.Notes, "\n"), "frame is drawn") {
+		t.Fatalf("the thinning is not in the notes: %v", run.Notes)
+	}
+	full, _, _ := Load(fixture(t), Options{})
+	if len(full.Tracks[0].Samples) <= 8 || strings.Contains(strings.Join(full.Notes, "\n"), "frame is drawn") {
+		t.Fatal("a short record was thinned")
 	}
 }

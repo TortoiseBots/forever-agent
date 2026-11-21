@@ -936,3 +936,22 @@ func TestWatchZeroWipeBudget(t *testing.T) {
 		t.Fatalf("%d revives with no wipe budget", n)
 	}
 }
+
+// TestNoteEventKeepsAPullWithoutAStep: a pull event that carries no step (or no leg) is still a pull in the run's
+// record, kept apart from the step log, so a map can draw it.
+func TestNoteEventKeepsAPullWithoutAStep(t *testing.T) {
+	w := &watchRun{
+		legs: map[int]*LegRecord{}, legSeen: map[int]bool{},
+		steps: map[[2]int]*StepRecord{}, stepSeen: map[[2]int]bool{},
+	}
+	w.noteEvent(tbcmd.RunEvent{Seq: 1, T: 7, Kind: "pull", Leg: 0, HasLeg: true})
+	w.noteEvent(tbcmd.RunEvent{Seq: 2, T: 9, Kind: "pull"})
+	w.noteEvent(tbcmd.RunEvent{Seq: 3, T: 11, Kind: "pull", Leg: 0, HasLeg: true, Step: 1, HasStep: true})
+	got := w.loosePulls
+	if len(got) != 2 || got[0].AtS != 7 || got[1].AtS != 9 {
+		t.Fatalf("loose pulls %+v, want the two without a step at 7 and 9", got)
+	}
+	if recs := w.stepRecords(); len(recs) != 1 || len(recs[0].PullEvents) != 1 {
+		t.Fatalf("step records %+v, want the one stepped pull", recs)
+	}
+}

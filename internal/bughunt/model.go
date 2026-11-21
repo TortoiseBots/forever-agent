@@ -162,6 +162,8 @@ type Run struct {
 	// Names is the party record's name per guid: the character's for a dungeon run, the party slot's word for a
 	// watch (whose records carry no character names).
 	Names map[string]string
+	// PartyOrder is the party records' guids in the order the record lists them: the party index, leader first.
+	PartyOrder []string
 	// Subjects are the members the rules apply to; nil means every unit in a frame.
 	Subjects map[string]bool
 	// CastTimes is every cast, cast start, damage and heal event per source, sorted: rule 1's "no cast/swing" window.
