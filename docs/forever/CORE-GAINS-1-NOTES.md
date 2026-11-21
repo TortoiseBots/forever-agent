@@ -20,11 +20,13 @@ With the flag set the server sends such a player the full log packet (`Object.cp
 current power bar. The parsers already read that block; this round **exposes** it instead of adding polling:
 
 - `world.CombatRow` gains `sample: {health, power, power_type}` (the first `SpellLogPowerData` entry is the unit's own
-  bar, `CombatLogPacketsCommon.cpp:35-45`), written only when the packet carried a log block.
+  bar, `CombatLogPacketsCommon.cpp:35-45`), written when the packet carried a log block with health above zero.
 - The rows that now pass the block on: `melee` (the attacker-state update's full form; the landed-log copy is
   parsed for its layout but the server sends it only to the swing's attacker and victim, so it is not this
-  observer's row), `spell_damage`, `heal`, `periodic`, `absorb` and `environmental` (the last two describe the
-  victim, per their send sites). Nothing polls `.tb state` for this.
+  observer's row), `heal`, `periodic`, `absorb` and `environmental`. The block is the **target's** on a heal,
+  periodic, absorb or environmental packet (`Unit.cpp:5884,7078`, `Player.cpp:683`) and the attacker's on a melee
+  one (`Unit.cpp:5946`); `spell_damage`'s is never initialized by this core (`Unit.cpp:5813-5848` writes all
+  zeros), so a zero-health block is not exposed. Nothing polls `.tb state` for this.
 
 A handful of health/mana points therefore sit on every combat event, which is what the bug hunter's healer-mana and
 overkill evidence, and a trials repeat's 1 Hz `samples.jsonl`, were missing between ticks.
@@ -177,9 +179,10 @@ No live run was made this round. The first live session should check, on a test 
    `kind=interrupt`, `spell_id` = Kick/Counterspell, `interrupted_spell_id` = the mob's cast, source = the bot,
    target = the mob. In a trials repeat, `DPS-ROG-KICK`/`DPS-MAG-COUNTERSPELL` should count the interrupt as the
    answer (the event stream shows `kind: interrupt`), and a Kick into a finished cast should not count.
-4. **Advanced log block.** In the same fight, a `melee`/`spell_damage`/`heal` row should carry
-   `sample.health`/`sample.power`; the healer's mana curve should move between the 1 Hz sample rows. If every row
-   lacks it, the flag packet did not reach the server (check the log line `CMSG_SET_ADVANCED_COMBAT_LOGGING sent`).
+4. **Advanced log block.** In the same fight, a `melee` row (the attacker) and a `heal`/`periodic` row (the
+   target) should carry `sample.health`/`sample.power`; the healer's mana curve should move between the 1 Hz sample
+   rows. If every row lacks it, the flag packet did not reach the server (check the log line
+   `CMSG_SET_ADVANCED_COMBAT_LOGGING sent`); a `spell_damage` row is expected to have none in this core.
 
 ## Known limits
 

@@ -58,8 +58,10 @@ type CombatRow struct {
 	AbsorbedSpellID int32 `json:"absorbed_spell_id,omitempty"`
 	// Dispelled is a dispel row's list of auras the spell removed.
 	Dispelled []CombatDispel `json:"dispelled,omitempty"`
-	// Sample is the advanced combat log's unit block (health and power) when the packet carried one. It is attached
-	// to the row of the unit the server described, so a fight's health and mana curves need no polling.
+	// Sample is the advanced combat log's unit block (health and power) when the packet carried one. The unit it
+	// describes is the packet's own: the attacker on a melee row, the target on a heal, periodic, absorb or
+	// environmental one (the spell-damage packet's block is all zeros in this core and is left out). It is attached
+	// to that event's row, so a fight's health and mana curves need no polling.
 	Sample *CombatSample `json:"sample,omitempty"`
 }
 
@@ -234,9 +236,12 @@ func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount in
 	s.CombatLog().Append(row)
 }
 
-// combatSample turns SpellCastLogData into the row's sample, or nil when the packet carried none.
+// combatSample turns SpellCastLogData into the row's sample, or nil when the packet carried none. A block whose
+// health is zero is not a sample: SMSG_SPELL_NON_MELEE_DAMAGE_LOG always carries the full form to an advanced client
+// but this core never initializes its LogData (Unit.cpp:5813-5848 has no Initialize), so its fields are zeros; a
+// live unit cannot cast at zero health, and a death row's own evidence is the damage amount.
 func combatSample(log *combat.CastLogData) *CombatSample {
-	if log == nil {
+	if log == nil || log.Health <= 0 {
 		return nil
 	}
 	sample := &CombatSample{Health: log.Health}

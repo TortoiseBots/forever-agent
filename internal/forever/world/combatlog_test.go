@@ -149,6 +149,9 @@ func TestCombatRowGains(t *testing.T) {
 	if combatSample(nil) != nil {
 		t.Fatal("a packet without log data got a sample")
 	}
+	if combatSample(&combat.CastLogData{Power: []combat.LogPower{{Type: 0, Amount: 100}}}) != nil {
+		t.Fatal("an uninitialized, zero-health block got a sample")
+	}
 	sample := combatSample(&combat.CastLogData{
 		Health: 4321,
 		Power:  []combat.LogPower{{Type: 1, Amount: 750, Cost: 10}},
