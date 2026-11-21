@@ -200,19 +200,13 @@ func (t FactionTemplate) IsHostileToPlayers() bool {
 // readCString reads one NUL-terminated string (WriteRecord's FT_STRING: the
 // text in the session locale, PacketOperators' `<< string`).
 func readCString(b *wire.Buffer) string {
-	var out []byte
-	for {
-		c := b.ReadU8()
-		if b.Err() != nil {
-			return ""
-		}
-		if c == 0 {
-			return string(out)
-		}
-		out = append(out, c)
-		if len(out) > maxRecordBytes {
-			b.Skip(1 << 30) // force the error: a hostile record without a terminator
-			return ""
-		}
+	s := b.ReadCString()
+	if b.Err() != nil {
+		return ""
 	}
+	if len(s) > maxRecordBytes {
+		b.Skip(1 << 30) // force the error: a hostile record with a giant string
+		return ""
+	}
+	return s
 }
