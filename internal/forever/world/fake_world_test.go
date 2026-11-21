@@ -362,7 +362,8 @@ type fakeServer struct {
 	mu                     sync.Mutex
 	realmWire              []uint32
 	instWire               []uint32
-	// advancedLog counts CMSG_SET_ADVANCED_COMBAT_LOGGING, which the client sends once after world entry.
+	// advancedLog counts CMSG_SET_ADVANCED_COMBAT_LOGGING, which the client sends at world entry (and again at each
+	// map change; this test's scenario has none).
 	advancedLog int
 }
 
@@ -1310,7 +1311,7 @@ func TestEnterAgainstFakeServer(t *testing.T) {
 	advanced := f.advancedLog
 	f.mu.Unlock()
 	if advanced != 1 {
-		t.Fatalf("CMSG_SET_ADVANCED_COMBAT_LOGGING went out %d times, want once after world entry", advanced)
+		t.Fatalf("CMSG_SET_ADVANCED_COMBAT_LOGGING went out %d times, want once at world entry", advanced)
 	}
 	if report.MapID != 0 || report.Position[0] != 1.25 || report.Position[1] != 2.5 || report.Position[2] != 3.75 {
 		t.Fatalf("map %d position %v", report.MapID, report.Position)
