@@ -608,6 +608,8 @@ func (rr *run) finalStep(ctx context.Context, s *Step, n int) {
 		ok = rr.doAddonSend(ctx, s, n, true)
 	case "rpc":
 		ok = rr.doRPC(ctx, s, n, true)
+	case "soap":
+		ok = rr.doSoap(ctx, s, n, true)
 	case "sleep":
 		ok = rr.doSleep(ctx, s, n)
 	default:

@@ -395,7 +395,7 @@ func splitAddr(addr string) (string, int, error) {
 }
 
 // actionKinds are the step kinds allowed in finally.
-var actionKinds = map[string]bool{"section": true, "mark": true, "gm": true, "bot": true, "addon_send": true, "rpc": true, "sleep": true}
+var actionKinds = map[string]bool{"section": true, "mark": true, "gm": true, "bot": true, "addon_send": true, "soap": true, "rpc": true, "sleep": true}
 
 // checkKinds are the step kinds that take name/on_fail.
 var checkKinds = map[string]bool{"expect": true, "expect_not": true, "check_db": true, "check_rpc": true}
@@ -405,6 +405,7 @@ var stepFields = map[string]map[string]bool{
 	"mark":       {"do": true, "note": true},
 	"gm":         {"do": true, "note": true, "session": true, "text": true, "settle_s": true},
 	"bot":        {"do": true, "note": true, "session": true, "command": true, "settle_s": true},
+	"soap":       {"do": true, "note": true, "text": true, "settle_s": true},
 	"addon_send": {"do": true, "note": true, "session": true, "text": true, "channel": true, "prefix": true, "to": true, "settle_s": true},
 	"rpc":        {"do": true, "note": true, "session": true, "method": true, "params": true, "timeout_s": true, "ignore_error": true, "save": true, "record_result": true, "settle_s": true},
 	"sleep":      {"do": true, "note": true, "seconds": true},
@@ -499,6 +500,15 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			return nil, fmt.Errorf("step %d (bot): missing command", n)
 		}
 		s.Command = cmd
+	case "soap":
+		g("text", &text)
+		if text == "" {
+			return nil, fmt.Errorf("step %d (soap): missing text", n)
+		}
+		s.Text = text
+		if err := gmLoadCheck(n, text); err != nil {
+			return nil, err
+		}
 	case "addon_send":
 		g("text", &text)
 		g("channel", &channel)
@@ -1022,7 +1032,7 @@ func (f *File) validate() error {
 		n := i + 1
 		var tmpl []string
 		switch s.Do {
-		case "gm":
+		case "gm", "soap":
 			tmpl = append(tmpl, s.Text)
 		case "bot":
 			tmpl = append(tmpl, s.Command)
@@ -1086,7 +1096,7 @@ func (f *File) validate() error {
 		}
 		var tmpl []string
 		switch s.Do {
-		case "gm":
+		case "gm", "soap":
 			tmpl = append(tmpl, s.Text)
 		case "bot":
 			tmpl = append(tmpl, s.Command)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 	"github.com/pjerra/forever-agent/internal/slots"
 	"github.com/pjerra/forever-agent/internal/trials/live"
 )
@@ -205,10 +206,24 @@ func newTrialsRunner(ctx context.Context, out, server string, sf *live.SlotsFile
 // server's `forever` block names the hire pool and the slot character.
 func liveSetupFor(dry, server string, ext live.ServerExt) live.Setup {
 	if dry == "" {
-		return &live.LiveSetup{Server: server, Player: ext.Player, Pool: ext.BotPool}
+		setup := &live.LiveSetup{Server: server, Player: ext.Player, Pool: ext.BotPool}
+		if ext.SOAP != nil {
+			console, err := soap.New(*ext.SOAP)
+			if err != nil {
+				return setupError{err: err}
+			}
+			setup.Console, setup.ConsoleCommands = console, ext.SOAPSetup
+		}
+		return setup
 	}
 	return &live.DrySetup{}
 }
+
+// setupError is a setup whose only answer is a configured backend that cannot be used (a bad SOAP config or an
+// unreadable password): the repeat is INVALID with that reason, never run without its setup.
+type setupError struct{ err error }
+
+func (e setupError) Run(context.Context, *live.Repeat) (map[string]any, error) { return nil, e.err }
 
 // liveSituationFor selects the situation: the scripted DrySituation under
 // --dry, the live tank_damage situation otherwise (another situation kind

@@ -85,6 +85,46 @@ type LiveSetup struct {
 	// TBRunner overrides the `.tb` transport (tests inject the scripted
 	// fake); nil means the serve-backed runner over Client.
 	TBRunner *TBRunner
+
+	// Console is the optional server-console backend (the SOAP endpoint):
+	// ConsoleCommands run before the client-side setup, so an instance or a
+	// save can be prepared with no login. A configured command that fails
+	// makes the setup invalid; a command without a backend is invalid too,
+	// never silently skipped.
+	Console         Console
+	ConsoleCommands []string
+}
+
+// Console runs one console-capable server command with no client session
+// (the SOAP endpoint's executeCommand). The live setup's Console is one.
+type Console interface {
+	Run(ctx context.Context, command string) (string, error)
+}
+
+// consoleRow runs the configured console setup commands and answers their
+// setup row ({id, ok, value, evidence}). Nothing configured is no row.
+func consoleRow(ctx context.Context, console Console, commands []string) map[string]any {
+	if len(commands) == 0 {
+		return nil
+	}
+	row := map[string]any{"id": "server_console", "ok": true, "value": []any{}, "evidence": ""}
+	var out []any
+	for _, command := range commands {
+		if console == nil {
+			row["ok"] = false
+			row["evidence"] = "console command " + command + " is configured but no SOAP backend is (server's slip: forever.soap)"
+			break
+		}
+		text, err := console.Run(ctx, command)
+		if err != nil {
+			row["ok"] = false
+			row["evidence"] = "console command " + command + ": " + err.Error()
+			break
+		}
+		out = append(out, map[string]any{"command": command, "text": strings.TrimSpace(text)})
+	}
+	row["value"] = out
+	return row
 }
 
 // Run builds setup.json's doc: {ok, bot_name, extra_names, guids, checks,
@@ -92,6 +132,9 @@ type LiveSetup struct {
 // transport error aborts the repeat.
 func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 	trial := r.Trial
+	// The console backend's setup commands run first: an instance boss state or a
+	// save is prepared before any character logs in.
+	consoleCheck := consoleRow(ctx, s.Console, s.ConsoleCommands)
 	wanted := wantedChecks(trial)
 	tb := tbcmd.NewClient(s.runnerOr(r))
 	recovery := s.RecoveryPath
@@ -203,6 +246,9 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 	if wanted["config_read"] {
 		checks = append(checks, rowOf("config_read", false, nil,
 			"thresholds unreadable; rules use defaults 20/50/70 (assumed)"))
+	}
+	if consoleCheck != nil {
+		checks = append(checks, consoleCheck)
 	}
 	ok := true
 	invalid := ""

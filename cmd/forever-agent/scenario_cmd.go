@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/scenario"
 )
@@ -30,11 +31,11 @@ const (
 
 const scenarioUsage = `usage:
   forever-agent scenario check [--var NAME=VALUE]... <file>
-  forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... <file>
+  forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] [--soap-allow-non-loopback] <file>
   forever-agent scenario norm <file> <dir>`
 
 const scenarioCheckUsage = "usage: forever-agent scenario check [--var NAME=VALUE]... <file>"
-const scenarioRunUsage = "usage: forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... <file>"
+const scenarioRunUsage = "usage: forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] [--soap-allow-non-loopback] <file>"
 const scenarioNormUsage = "usage: forever-agent scenario norm <file> <dir>"
 
 type varFlag map[string]string
@@ -109,7 +110,7 @@ func scenarioShort(s *scenario.Step) string {
 	switch s.Do {
 	case "section":
 		return s.Title
-	case "gm":
+	case "gm", "soap":
 		return s.Text
 	case "bot":
 		return s.Command
@@ -142,6 +143,12 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.Var(vars, "var", "override a file var (repeatable)")
 	sess := sessionFlag{}
 	fs.Var(sess, "session", "override a session's address and token file (repeatable)")
+	soapHost := fs.String("soap-host", soap.DefaultHost, "console backend: SOAP host (loopback only unless --soap-allow-non-loopback)")
+	soapPort := fs.Int("soap-port", soap.DefaultPort, "console backend: SOAP port")
+	soapUser := fs.String("soap-user", "", "console backend: admin account name (enables `soap` steps)")
+	soapPasswordFile := fs.String("soap-password-file", "", "console backend: private file (0600) holding the password")
+	soapPasswordEnv := fs.String("soap-password-env", "", "console backend: environment variable holding the password (default "+soap.DefaultPasswordEnv+")")
+	soapAllowNonLoopback := fs.Bool("soap-allow-non-loopback", false, "console backend: allow a host that is not loopback")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -191,6 +198,15 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 		return exitUsage
 	}
 	r := &scenario.Runner{Sessions: map[string]scenario.Caller{}, Out: stdout, Quiet: *quiet}
+	if *soapUser != "" {
+		client, err := soap.New(soap.Config{Host: *soapHost, Port: *soapPort, User: *soapUser,
+			PasswordFile: *soapPasswordFile, PasswordEnv: *soapPasswordEnv, AllowNonLoopback: *soapAllowNonLoopback})
+		if err != nil {
+			fmt.Fprintf(stderr, "scenario: console backend: %v\n", err)
+			return exitUsage
+		}
+		r.Console = client
+	}
 	if f.DB != nil {
 		r.DB = scenario.SSHDB{Host: f.DB.Host, Container: f.DB.Container}
 	}
