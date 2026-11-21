@@ -297,9 +297,13 @@ func TestRouteWalkAgainstFakeServer(t *testing.T) {
 	_, report, err := runRouteWalk(t, "confirm", 0, [3]float32{1002, 2002, 50}, plan, dir, &RouteWalkOptions{
 		Sample:       100 * time.Millisecond,
 		MaxDeviation: 2,
-		StuckAfter:   2 * time.Second,
-		FallDrop:     2,
-		GPSQuiet:     100 * time.Millisecond,
+		// A generous stall bound: this test is about the confirmed positions, not the stall detector. The
+		// check counts wall-clock time between two `.gps` confirmations, and on a loaded machine (the race
+		// detector, other jobs) that gap can pass 2 s while the client is simply not scheduled; the stall
+		// itself has its own tests below at 150 ms.
+		StuckAfter: 30 * time.Second,
+		FallDrop:   2,
+		GPSQuiet:   100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("route-walk: %v", err)

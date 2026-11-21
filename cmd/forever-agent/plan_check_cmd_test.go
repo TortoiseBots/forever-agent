@@ -195,7 +195,10 @@ func gateRig(t *testing.T, checks *int) *agentRig {
 		*checks++
 		return stubNav{off: map[dungeon.Point]bool{{X: 99, Y: 5, Z: 5}: true}}, func() {}, nil
 	}
-	return newRigWith(t, session.Options{}, [3]float32{1, 2, 3}, methodOptions{DungeonsDir: dir, PlanCheckNav: nav, AccountProbeWindow: 50 * time.Millisecond})
+	// The fake server answers no `.bot` line, so a started run would spend the production 4 s wait per line
+	// (a `.bot cmd stay` and the unbind at the stop): 50 ms keeps the same timeouts, not the wall clock.
+	return newRigWith(t, session.Options{}, [3]float32{1, 2, 3}, methodOptions{DungeonsDir: dir, PlanCheckNav: nav,
+		AccountProbeWindow: 50 * time.Millisecond, CommanderWait: 50 * time.Millisecond})
 }
 
 // The gate on the commander driver, with no navmesh files needed: a live-checked plan with a failing point is refused, force runs it; a
@@ -308,7 +311,8 @@ func TestDungeonRunWithoutNavmeshNeedsForce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "ok.json"), []byte(fmt.Sprintf(gatePlan, "ok", "live-checked", 7)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := newRigWith(t, session.Options{}, [3]float32{1, 2, 3}, methodOptions{DungeonsDir: dir, AccountProbeWindow: 50 * time.Millisecond})
+	r := newRigWith(t, session.Options{}, [3]float32{1, 2, 3}, methodOptions{DungeonsDir: dir,
+		AccountProbeWindow: 50 * time.Millisecond, CommanderWait: 50 * time.Millisecond})
 	const cmdr = `"mode":"commander","lead_bot":"Tanky","preflight":"off"`
 	out := r.call("dungeon_run", `{"name":"ok",`+cmdr+`}`)
 	msg, _ := out["error"].(map[string]any)["message"].(string)

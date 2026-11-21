@@ -198,18 +198,21 @@ func TestSecondInterruptKills(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitOut := func(s string) {
-		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(out.String(), s); {
+	waitOut := func(s string, within time.Duration) {
+		for deadline := time.Now().Add(within); !strings.Contains(out.String(), s); {
 			if time.Now().After(deadline) {
 				cmd.Process.Kill()
-				t.Fatalf("child never printed %q: %q", s, out.String())
+				t.Fatalf("child never printed %q within %s: %q", s, within, out.String())
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	waitOut("ready")
+	// The child starts the test binary from scratch: package init, flags, then the env check above. A loaded
+	// machine (the race detector, -count=20, other jobs) can take well over the 5 s a signal has to answer in,
+	// so only the start gets the longer bound; the interrupts keep the prompt-response check below.
+	waitOut("ready", 60*time.Second)
 	cmd.Process.Signal(os.Interrupt)
-	waitOut("first")
+	waitOut("first", 5*time.Second)
 	start := time.Now()
 	cmd.Process.Signal(os.Interrupt)
 	err := cmd.Wait()

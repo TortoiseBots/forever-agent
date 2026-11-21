@@ -205,13 +205,20 @@ func TestTeardownGivesUpAfter30s(t *testing.T) {
 }
 
 // TestTeardownUnreachableDashboardRetriesOnceThenStops: every Fights call times out during the wait. The first
-// failed read is retried once, the second stops the wait (total bounded by the const), teardown proceeds, and
-// the notes name the retry and the stop.
+// failed read is retried once, the second stops the wait (total bounded by the wait), teardown proceeds, and
+// the notes name the retry and the stop. The wait, the poll and the per-read timeout are the walk's test-only
+// fields: a 30 s wait with the fake dashboard blocking until its context ends is 30 s of wall clock in the
+// production shape, and so is each 5 s read.
 func TestTeardownUnreachableDashboardRetriesOnceThenStops(t *testing.T) {
 	goal := zgBossStepOf(t, 14517)
 	now := time.Now()
 	var slept time.Duration
 	w, d := teardownFightsWalk(t, now, &slept)
+	// The wait's context deadline is set from the fake clock, anchored at the test start: 500 ms leaves room for
+	// the phase's own 100 ms stall before the wait, so each read ends at its own 80 ms timeout.
+	w.liveFightWait, w.liveFightPoll = 500*time.Millisecond, 50*time.Millisecond
+	w.liveFightRead = 80 * time.Millisecond
+	w.fightsReadWait = 100 * time.Millisecond // the first saveFights would otherwise block for its own 20 s
 	d.fights = nil
 	w.saveFightsAtStart() // the walk starts with an empty dashboard: nothing is history
 	live := jeklikKillRow("68-9", true, now.Unix()-600)
@@ -221,13 +228,14 @@ func TestTeardownUnreachableDashboardRetriesOnceThenStops(t *testing.T) {
 	d.fightsStallFirst, d.fightsStall = 1000, time.Hour // every later Fights call blocks until its context ends
 	before := time.Now()
 	w.phaseTeardown(context.Background())
-	// The wait spends its whole budget before it gives up (it sleeps up to the deadline and reads until the
-	// context's), so the wall clock lands on teardownLiveFightWait: allow the scheduler tick, not another poll.
-	if took := time.Since(before); took > teardownLiveFightWait+time.Second {
+	// Every read blocks until its own timeout ends it, so the wall clock is the stall before the wait plus two
+	// short reads. The bound only checks that the wait does not run on (the deterministic checks above carry the
+	// proof), so it allows ten seconds of host load on top of the budget.
+	if took := time.Since(before); took > w.fightsReadWait+w.liveFightWait+10*time.Second {
 		t.Fatalf("teardown took %v: an unreachable dashboard must not hold it past the wait", took)
 	}
-	if slept > teardownLiveFightWait {
-		t.Fatalf("slept %v, want at most %s", slept, durWords(teardownLiveFightWait))
+	if slept > w.liveFightWait {
+		t.Fatalf("slept %v, want at most %v", slept, w.liveFightWait)
 	}
 	var retried, stopped []string
 	for _, n := range w.notes {

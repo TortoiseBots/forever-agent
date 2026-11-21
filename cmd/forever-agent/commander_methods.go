@@ -47,13 +47,14 @@ type commanderService struct {
 }
 
 // newCommanderService wires the feed into the session's event log (the log outlives reconnects).
-func newCommanderService(cur func() *session.Session, planner *navmesh.Planner, ledgerPath string, probeWindow time.Duration) *commanderService {
+func newCommanderService(cur func() *session.Session, planner *navmesh.Planner, ledgerPath string, probeWindow, commandWait time.Duration) *commanderService {
 	log := cur().Log()
 	emit := func(kind, text string, data map[string]any) {
 		log.Append(events.Event{Kind: kind, Text: text, Data: data})
 	}
 	c := &commanderService{cur: cur, cmdr: tbm.NewCommander(sessionLink{cur}), feed: tbm.NewViewFeed(log, emit, tbm.DefaultEventEvery), planner: planner,
 		ledger: &entryLedger{path: ledgerPath}, probeWindow: probeWindow}
+	c.cmdr.Wait = commandWait // 0: tbm.DefaultOrderWait
 	log.SetIntercept(c.intercept)
 	return c
 }
@@ -193,8 +194,8 @@ func (c *commanderService) view(ctx context.Context, p botViewParams) (botViewRe
 }
 
 // registerCommanderMethods wires commander and bot_view. The returned func removes the log's intercept.
-func registerCommanderMethods(srv *rpc.Server, cur func() *session.Session, planner *navmesh.Planner, ledgerPath string, probeWindow time.Duration) (*commanderService, func()) {
-	c := newCommanderService(cur, planner, ledgerPath, probeWindow)
+func registerCommanderMethods(srv *rpc.Server, cur func() *session.Session, planner *navmesh.Planner, ledgerPath string, probeWindow, commandWait time.Duration) (*commanderService, func()) {
+	c := newCommanderService(cur, planner, ledgerPath, probeWindow, commandWait)
 	srv.Register("commander", rpc.Typed(func(ctx context.Context, p commanderParams) (commanderResult, error) {
 		return c.do(ctx, p)
 	}))
