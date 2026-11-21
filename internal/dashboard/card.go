@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
@@ -775,13 +776,21 @@ func fillView(c *Card, rep *rawReport, in Inputs) {
 }
 
 // clearedGroup says whether a pack lies behind the run: in an earlier leg, or an earlier group of the current one.
-// serverNames holds the spell names the server itself gave (CORE-GAINS-3): the SpellName records a live session's
-// DB query fetched. It is nil in production until a session fills it; spellText reads it first and falls back to
-// the packed table, then to "spell <id>" as today. No reply from the server means the id as today.
-var serverNames = map[uint32]string{}
+// serverNames holds the spell names the server itself gave (CORE-GAINS-3):
+// the SpellName records a live session's DB query fetched. It starts empty;
+// spellText reads it first and falls back to the packed table, then to
+// "spell <id>" as today. No reply from the server means the id as today.
+// The dashboard poller and the page read it while a session-side fetch may
+// replace it, so every access takes the lock.
+var (
+	serverNamesMu sync.RWMutex
+	serverNames   = map[uint32]string{}
+)
 
 // SetServerSpellNames replaces the server-fetched spell names (a live session's SpellName records by spell id).
 func SetServerSpellNames(names map[uint32]string) {
+	serverNamesMu.Lock()
+	defer serverNamesMu.Unlock()
 	serverNames = names
 }
 
@@ -791,7 +800,10 @@ func spellText(id uint32) string {
 	if id == 0 {
 		return ""
 	}
-	if n := serverNames[id]; n != "" {
+	serverNamesMu.RLock()
+	n := serverNames[id]
+	serverNamesMu.RUnlock()
+	if n != "" {
 		return n
 	}
 	if n := spells.Name(id); n != "" {

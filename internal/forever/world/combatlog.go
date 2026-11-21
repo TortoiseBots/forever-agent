@@ -48,6 +48,11 @@ type CombatRow struct {
 	Amount  int32       `json:"amount"`
 	// Reason is set on a spell_fail only: the core's SpellCastResult in words (combat.SpellFailureName).
 	Reason string `json:"reason,omitempty"`
+	// SpellName is the server's own name for SpellID (CORE-GAINS-3): the
+	// session fills it when it pages the log, from its SpellName record
+	// cache. It is empty when the server holds no name or the fetch failed;
+	// the row's spell_id is the fallback, as today.
+	SpellName string `json:"spell_name,omitempty"`
 }
 
 // CombatLog is the session's ring of combat rows: appended by the session's dispatch (the session goroutine), read

@@ -7,8 +7,6 @@ package tables
 // false for those).
 
 import (
-	"fmt"
-
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -25,77 +23,17 @@ type SpellName struct {
 
 // ParseSpellName decodes one SpellName record: the name as a C string
 // (WriteRecord's FT_STRING in the session locale). The id is the reply's
-// own RecordID, passed in so the result names its spell.
+// own RecordID, passed in so the result names its spell. Bytes past the
+// name are the hotfix optional-data pairs the server appends after the
+// record (a u32 key, then unframed bytes, HotfixHandler.cpp:52-58): the
+// record ends at the name's own terminator, so the tail is ignored.
 func ParseSpellName(data []byte, id uint32) (SpellName, error) {
 	b := wire.NewReader(data)
 	s := SpellName{ID: id, Name: readCString(b)}
 	if err := b.Err(); err != nil {
 		return SpellName{}, err
 	}
-	if b.Remaining() != 0 {
-		return SpellName{}, fmt.Errorf("tables: spell name has %d bytes left", b.Remaining())
-	}
 	return s, nil
-}
-
-// SpellMisc is the SpellMisc.db2 record this round needs. The id travels
-// in the reply header, not the record (same IndexField -1 skip as above),
-// so the record is the Meta's 17 fields in order (SpellMiscMeta): the 17
-// int32 attributes, difficulty, the three duration/range uint16 indexes,
-// the uint8 school mask, three floats and seven int32, ending in the parent
-// SpellID (ParentIndexField 16). The school mask is what this round needs;
-// the rest rides along for the next round that needs it.
-type SpellMisc struct {
-	ID               uint32
-	Attributes       [17]int32
-	DifficultyID     int16
-	CastingTimeIndex uint16
-	DurationIndex    uint16
-	PvPDurationIndex uint16
-	RangeIndex       uint16
-	SchoolMask       uint8
-	Speed            float32
-	LaunchDelay      float32
-	MinDuration      float32
-	SpellIconFile    int32
-	ActiveIconFile   int32
-	ContentTuningID  int32
-	Extra            [3]int32
-	SpellID          uint32
-}
-
-// ParseSpellMisc decodes one SpellMisc record in Meta field order, with the
-// id from the reply header (same skip as ParseSpellName: LoadInfo ID first,
-// then the Meta fields).
-func ParseSpellMisc(data []byte, id uint32) (SpellMisc, error) {
-	b := wire.NewReader(data)
-	m := SpellMisc{ID: id}
-	for i := range m.Attributes {
-		m.Attributes[i] = b.ReadI32()
-	}
-	m.DifficultyID = b.ReadI16()
-	m.CastingTimeIndex = b.ReadU16()
-	m.DurationIndex = b.ReadU16()
-	m.PvPDurationIndex = b.ReadU16()
-	m.RangeIndex = b.ReadU16()
-	m.SchoolMask = b.ReadU8()
-	m.Speed = b.ReadFloat32()
-	m.LaunchDelay = b.ReadFloat32()
-	m.MinDuration = b.ReadFloat32()
-	m.SpellIconFile = b.ReadI32()
-	m.ActiveIconFile = b.ReadI32()
-	m.ContentTuningID = b.ReadI32()
-	for i := range m.Extra {
-		m.Extra[i] = b.ReadI32()
-	}
-	m.SpellID = b.ReadU32()
-	if err := b.Err(); err != nil {
-		return SpellMisc{}, err
-	}
-	if b.Remaining() != 0 {
-		return SpellMisc{}, fmt.Errorf("tables: spell misc has %d bytes left", b.Remaining())
-	}
-	return m, nil
 }
 
 // Faction relations. MAX_FACTION_RELATIONS is 8 (DB2Structure.h:1710); the
@@ -124,7 +62,9 @@ type FactionTemplate struct {
 }
 
 // ParseFactionTemplate decodes one FactionTemplate record in Meta order,
-// with the id from the reply header.
+// with the id from the reply header. Bytes past the seven Meta fields are
+// the hotfix optional-data pairs (HotfixHandler.cpp:52-58), ignored like
+// ParseSpellName ignores its tail.
 func ParseFactionTemplate(data []byte, id uint32) (FactionTemplate, error) {
 	b := wire.NewReader(data)
 	t := FactionTemplate{ID: id}
@@ -141,9 +81,6 @@ func ParseFactionTemplate(data []byte, id uint32) (FactionTemplate, error) {
 	}
 	if err := b.Err(); err != nil {
 		return FactionTemplate{}, err
-	}
-	if b.Remaining() != 0 {
-		return FactionTemplate{}, fmt.Errorf("tables: faction template has %d bytes left", b.Remaining())
 	}
 	return t, nil
 }

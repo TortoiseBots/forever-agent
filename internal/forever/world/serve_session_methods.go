@@ -17,6 +17,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
@@ -480,9 +481,6 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 }
 
 func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
-	if p.Hostile != nil {
-		return nil, errors.New("units: the hostile filter is not ported on this server")
-	}
 	within := p.Within
 	if within == 0 {
 		within = p.Near
@@ -493,6 +491,41 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 	}
 	if limit == 0 {
 		limit = 100
+	}
+	// The hostile filter is a real lookup (CORE-GAINS-3): the mob's faction
+	// template against the character's own, fetched once and cached. Only
+	// callers that pass the filter pay the fetch.
+	hostile := map[int32]bool{}
+	if p.Hostile != nil {
+		units := s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ())
+		var ask []uint32
+		seen := map[uint32]bool{}
+		for _, o := range units {
+			id := o.Info.FactionTemplate
+			if id <= 0 || seen[uint32(id)] {
+				continue
+			}
+			seen[uint32(id)] = true
+			if _, _, ok := s.dbCache().Get(tables.TableFactionTemplate, uint32(id)); !ok {
+				ask = append(ask, uint32(id))
+			}
+		}
+		if len(ask) > 0 {
+			if _, err := s.fetchRecords(tables.TableFactionTemplate, ask); err != nil {
+				return nil, err
+			}
+		}
+		own, err := s.ownFactionTemplate()
+		if err != nil {
+			return nil, err
+		}
+		for id := range seen {
+			tmpl, err := s.factionTemplate(id)
+			if err != nil {
+				return nil, err
+			}
+			hostile[int32(id)] = tmpl.IsHostileTo(own)
+		}
 	}
 	now := s.Now()
 	pattern := strings.ToLower(p.Name)
@@ -507,6 +540,12 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 		}
 		if pattern != "" && !strings.Contains(strings.ToLower(u.Name), pattern) {
 			continue
+		}
+		if p.Hostile != nil {
+			h, ok := hostile[o.Info.FactionTemplate]
+			if !ok || h != *p.Hostile {
+				continue
+			}
 		}
 		out = append(out, u)
 	}
@@ -957,13 +996,25 @@ func serveEventsBounds(p serveEventsParams) (limit int, wait time.Duration, err 
 	return limit, wait, nil
 }
 
-// serveEventsPage is one read of the ring on the session goroutine: the rows above since, oldest first, at most
-// limit, and the channel the ring's next Append closes. It is what the wait below snapshots; the wait itself never
-// runs here.
+// serveEventsPage is one read of the ring on the session goroutine: the rows
+// above since, oldest first, at most limit, and the channel the ring's next
+// Append closes. It fills each row's spell_name from the server's SpellName
+// records (one batched fetch for the ids the page names): the page carries
+// the server's own names, with the row's spell_id as the fallback.
 func (s *session) serveEventsPage(since, limit int) (ServeEventsPage, <-chan struct{}) {
 	rows, next, oldest, dropped, changed := s.CombatLog().SinceChanged(since, limit)
 	if rows == nil {
 		rows = []CombatRow{}
+	}
+	ids := make([]int32, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.SpellID)
+	}
+	names := s.spellNamesFor(ids)
+	for i := range rows {
+		if rows[i].SpellID > 0 {
+			rows[i].SpellName = names[uint32(rows[i].SpellID)]
+		}
 	}
 	return ServeEventsPage{Events: rows, Next: next, Oldest: oldest, Dropped: dropped}, changed
 }

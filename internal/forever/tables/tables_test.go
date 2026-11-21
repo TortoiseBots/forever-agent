@@ -8,6 +8,7 @@ package tables
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -133,13 +134,6 @@ func TestReplyRoundTrip(t *testing.T) {
 	if name.ID != 774 || name.Name != "Rend" {
 		t.Fatalf("spell name %+v", name)
 	}
-	misc, err := ParseSpellMisc(buildSpellMisc(), 150)
-	if err != nil {
-		t.Fatalf("ParseSpellMisc: %v", err)
-	}
-	if misc.SchoolMask != 1 || misc.SpellID != 150 {
-		t.Fatalf("spell misc %+v", misc)
-	}
 	want := FactionTemplate{ID: 35, Faction: 35, FactionGroup: 1, FriendGroup: 1, Enemies: [8]uint16{2: 7}}
 	ft, err := ParseFactionTemplate(buildFactionTemplate(want), 35)
 	if err != nil {
@@ -148,31 +142,6 @@ func TestReplyRoundTrip(t *testing.T) {
 	if ft != want {
 		t.Fatalf("faction template %+v, want %+v", ft, want)
 	}
-}
-
-// buildSpellMisc writes one SpellMisc record in LoadInfo field order.
-func buildSpellMisc() []byte {
-	b := wire.NewWriter()
-	for range 17 {
-		b.WriteI32(0)
-	}
-	b.WriteU16(0) // difficulty
-	b.WriteU16(0) // casting time
-	b.WriteU16(0) // duration
-	b.WriteU16(0) // pvp duration
-	b.WriteU16(0) // range
-	b.WriteU8(1)  // school mask: physical
-	b.WriteFloat32(0)
-	b.WriteFloat32(0)
-	b.WriteFloat32(0)
-	b.WriteI32(0)
-	b.WriteI32(0)
-	b.WriteI32(0)
-	b.WriteI32(0)   // show future
-	b.WriteI32(0)   // visual
-	b.WriteI32(0)   // active visual
-	b.WriteU32(150) // parent SpellID
-	return b.Bytes()
 }
 
 func TestShortAndHostileRepliesNeverPanic(t *testing.T) {
@@ -205,6 +174,9 @@ func TestShortAndHostileRepliesNeverPanic(t *testing.T) {
 		t.Fatal("reply with a trailing byte parsed")
 	}
 	// A short SpellName and a short FactionTemplate are errors, never panics.
+	// (A record the server appended hotfix optional data to still parses:
+	// the decoders read their own fields and ignore the tail; the test below
+	// pins that.)
 	if _, err := ParseSpellName(data[:3], 774); err == nil {
 		t.Fatal("short spell name parsed")
 	}
@@ -212,9 +184,32 @@ func TestShortAndHostileRepliesNeverPanic(t *testing.T) {
 	if _, err := ParseFactionTemplate(ft[:5], 35); err == nil {
 		t.Fatal("short faction template parsed")
 	}
-	// Trailing bytes after a record are an error.
-	if _, err := ParseSpellName(append(data, 0), 774); err == nil {
-		t.Fatal("spell name with a trailing byte parsed")
+}
+
+// TestRecordIgnoresHotfixOptionalTail pins finding 5's fix: the server
+// appends hotfix optional-data pairs (a u32 key, then unframed bytes,
+// HotfixHandler.cpp:52-58) after the record, so the decoders read their own
+// fields and ignore what follows instead of rejecting the record.
+func TestRecordIgnoresHotfixOptionalTail(t *testing.T) {
+	// A SpellName with one optional-data pair after the name.
+	tail := buildSpellName("Fireball")
+	b := wire.NewWriter()
+	b.WriteBytes(tail)
+	b.WriteU32(7) // the optional-data key
+	b.WriteBytes([]byte{1, 2, 3})
+	name, err := ParseSpellName(b.Bytes(), 133)
+	if err != nil || name.Name != "Fireball" {
+		t.Fatalf("spell name with optional tail: %+v %v", name, err)
+	}
+	// A FactionTemplate the same way: the seven Meta fields, then a pair.
+	ft := buildFactionTemplate(FactionTemplate{ID: 35, Faction: 35})
+	b = wire.NewWriter()
+	b.WriteBytes(ft)
+	b.WriteU32(9)
+	b.WriteBytes([]byte{4, 5})
+	got, err := ParseFactionTemplate(b.Bytes(), 35)
+	if err != nil || got.Faction != 35 {
+		t.Fatalf("faction template with optional tail: %+v %v", got, err)
 	}
 }
 
@@ -284,32 +279,65 @@ func TestCacheBound(t *testing.T) {
 	}
 }
 
+// TestCacheNegativeExpires pins decision 3's negative entries: a cached
+// miss is a verdict for a while, not forever, so the client asks again
+// after it lapses instead of missing a record the server gained.
+func TestCacheNegativeExpires(t *testing.T) {
+	c := NewCache(4)
+	c.negTTL = time.Millisecond
+	c.Put(TableSpellName, 9, false, nil)
+	if _, _, ok := c.Get(TableSpellName, 9); !ok {
+		t.Fatal("a fresh miss is not cached")
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, _, ok := c.Get(TableSpellName, 9); ok {
+		t.Fatal("a lapsed miss is still cached")
+	}
+	// A found record does not lapse: the server does not ungive a record.
+	c.Put(TableSpellName, 10, true, buildSpellName("n"))
+	time.Sleep(5 * time.Millisecond)
+	if _, found, ok := c.Get(TableSpellName, 10); !ok || !found {
+		t.Fatal("a found record lapsed")
+	}
+}
+
 func TestFactionHostility(t *testing.T) {
 	// Stormwind (template 12: faction 72, Alliance group, enemy Horde) is
-	// hostile to an Orc (template 29: faction 29, Horde group) and not
-	// hostile to a human; the neutral template is hostile to neither.
+	// hostile to a Horde player (template 29: faction 29, the player and
+	// Horde groups: a real player template carries FactionMaskPlayer, 1,
+	// DBCEnums.h:1012-1014) and not hostile to an Alliance player; the
+	// neutral template is hostile to neither.
 	stormwind := FactionTemplate{ID: 12, Faction: 72, FactionGroup: 2, EnemyGroup: 4}
-	orc := FactionTemplate{ID: 29, Faction: 29, FactionGroup: 4}
-	human := FactionTemplate{ID: 3, Faction: 72, FactionGroup: 2, FriendGroup: 2}
+	hordePlayer := FactionTemplate{ID: 29, Faction: 29, FactionGroup: FactionMaskPlayer | 4}
+	alliancePlayer := FactionTemplate{ID: 3, Faction: 72, FactionGroup: FactionMaskPlayer | 2, FriendGroup: 2}
 	neutral := FactionTemplate{ID: 100, Faction: 100}
-	if !stormwind.IsHostileTo(orc) {
-		t.Fatal("Stormwind not hostile to an Orc")
+	if !stormwind.IsHostileTo(hordePlayer) {
+		t.Fatal("Stormwind not hostile to a Horde player")
 	}
-	if stormwind.IsHostileTo(human) {
-		t.Fatal("Stormwind hostile to a human")
+	if stormwind.IsHostileTo(alliancePlayer) {
+		t.Fatal("Stormwind hostile to an Alliance player")
 	}
-	if orc.IsHostileTo(orc) || stormwind.IsHostileTo(stormwind) {
+	if orc := hordePlayer; orc.IsHostileTo(orc) || stormwind.IsHostileTo(stormwind) {
 		t.Fatal("a template hostile to itself")
 	}
-	if neutral.IsHostileTo(stormwind) || stormwind.IsFriendlyTo(orc) {
+	if neutral.IsHostileTo(stormwind) || stormwind.IsFriendlyTo(hordePlayer) {
 		t.Fatal("neutral/hostile verdict wrong")
 	}
-	if !human.IsFriendlyTo(stormwind) {
-		t.Fatal("a human not friendly to Stormwind")
+	if !alliancePlayer.IsFriendlyTo(stormwind) {
+		t.Fatal("an Alliance player not friendly to Stormwind")
 	}
 	// The enemy list names factions directly, before the group masks.
 	hated := FactionTemplate{ID: 7, Faction: 7, Enemies: [8]uint16{72}}
 	if !hated.IsHostileTo(stormwind) || hated.IsFriendlyTo(stormwind) {
 		t.Fatal("enemy-list hostility wrong")
+	}
+	// IsHostileToPlayers names every player, not a side: only a template
+	// whose enemy group carries the player bit reads hostile.
+	hostileToAll := FactionTemplate{ID: 8, EnemyGroup: FactionMaskPlayer | 4}
+	if !hostileToAll.IsHostileToPlayers() {
+		t.Fatal("a template with the player bit in its enemy group reads not hostile to players")
+	}
+	if stormwind.IsHostileToPlayers() {
+		t.Fatal("Stormwind reads hostile to all players: its enemy group names Horde, not players")
 	}
 }

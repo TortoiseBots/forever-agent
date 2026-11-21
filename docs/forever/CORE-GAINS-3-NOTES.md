@@ -88,28 +88,56 @@ record.
 ## The code
 
 * `internal/forever/tables`: `BuildQuery` (batches), `ParseReply`
-  (short/hostile replies are errors, statuses are typed results), the
-  three record decoders, `Cache` (bounded LRU over (table, id), misses
-  cached too), `ErrUnexpectedReply` (a reply for another table/id is an
-  error: the server answers inline, so it is hostile, not late).
+  (short/hostile replies are errors, statuses are typed results; the
+  record's own trailing bytes are the hotfix optional-data pairs, not a
+  framing error), the SpellName and FactionTemplate decoders (`ParseSpellName`
+  reads the name's own terminator and ignores the tail; the fixed-size
+  FactionTemplate reads its seven Meta fields and ignores the tail, both per
+  HotfixHandler.cpp:52-58), `Cache` (bounded LRU over (table, id) behind its
+  own mutex; a miss is cached for `DefaultNegativeTTL` (5 min), a found
+  record never lapses), `ErrUnexpectedReply` (a reply for another table/id is
+  an error: the server answers inline, so it is hostile, not late).
+  `ParseSpellMisc` is removed: no production path reads school masks, so the
+  decoder had no caller.
 * `internal/forever/wire/opcodes.go`: `CMSGDBQueryBulk` and `SMSGDBReply`
   plus their names (`SMSG_DB_REPLY` was already in servernames_gen).
-* `internal/forever/world/dbquery.go`: `fetchRecords` (cache first, one
-  batch per `BuildQuery` packet, one `SMSG_DB_REPLY` per id with
-  `dbQueryDeadline` (3 s, the name-lookup bound) per wait; a batch whose
-  reply never comes, a short/hostile reply, or a wrong-table/id reply is
-  an error) and `SpellName` (name or false; false means show the id).
-  The cache lives on the session (`s.db`), made on first use.
+* `internal/forever/world/dbquery.go`: `fetchRecords` (deduped ids, cache
+  first, one batch per `BuildQuery` packet, one `SMSG_DB_REPLY` per id inside
+  one `dbQueryDeadline` (3 s) for the batch via `waitForUntil`; a batch whose
+  reply never comes is an error, and the unanswered ids are cached as misses
+  for a while, so a silent server costs one deadline per while, not one per
+  lookup. A short/hostile reply, or a wrong-table/id reply, is an error and
+  caches nothing), `SpellName` (name or false; false means show the id),
+  `spellNamesFor` (one batched fetch for the ids a page names),
+  `ownFactionTemplate`/`factionTemplate`/`hostileToSelf` (the character's
+  own template, fetched once and cached, against the mob's: the core's own
+  `Unit::IsHostileTo` direction). The cache lives on the session (`s.db`),
+  made on first use.
+* `internal/forever/world/combatlog.go`: `CombatRow.spell_name` (the
+  server's own name for the row's `spell_id`, filled when the session pages
+  the log; empty means the server holds no name or the fetch failed, and the
+  row's `spell_id` is the fallback).
+* `internal/forever/world/serve_session_methods.go`: `serveEventsPage`
+  fills `spell_name` from `spellNamesFor` (one batched, cached fetch per
+  page; the fetch runs on the session goroutine like every wait), and the
+  `units` hostile filter is ported: the mob's template against the
+  character's own, fetched once per unknown template and cached. The pull
+  gate (`friendlyUnit`) is unchanged: it still reads NPC flags, and template
+  wiring there waits for a live session.
 * `internal/dashboard/card.go`: `SetServerSpellNames` plus the
   `spellText` fallback chain: server name, then the packed table
-  (`spells.Name`), then `"spell <id>"` as today, `""` for none. No reply
-  from the server means the id as today.
+  (`spells.Name`), then `"spell <id>"` as today, `""` for none. The map sits
+  behind a mutex (the page reads it while a session-side fetch may replace
+  it). It still has no production writer: the dashboard is a separate
+  process and `bot_view` carries spell ids, not names, so live server names
+  reach the page through the session's `events` rows (`spell_name`), not the
+  card. Wiring the card waits for a poller-side name channel.
 
-FactionTemplate is a lookup now: `IsHostileToPlayers` and the pairwise
-`IsHostileTo`/`IsFriendlyTo` answer "is this mob hostile" from two cached
-records (the mob's template from its update fields, the player's from its
-own). The pull gate (`friendlyUnit`) is unchanged: it still reads NPC
-flags, and template wiring there waits for a live session.
+Out of scope, noted: the cache has an entry bound (256) but no total byte
+budget (a 1 MiB hostile record retained per entry); the query/reply fixtures
+are hand-made from the core's reader/writer, not core-produced bytes (the
+round forbids captures, and there was no live run). Both wait for a live
+server check.
 
 ## Tests
 

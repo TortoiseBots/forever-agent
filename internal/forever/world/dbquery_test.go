@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -200,4 +201,153 @@ func TestFetchRecordsRefusesHostileReplies(t *testing.T) {
 	if _, err := s2.fetchRecords(tables.TableSpellName, []uint32{774}); err == nil {
 		t.Fatal("a short reply was accepted")
 	}
+}
+
+// TestFetchRecordsBatchDeadline is one deadline for the batch, not per
+// reply: five ids queue five waits, but the one deadline bounds them all.
+// (The old code armed a fresh 3 s wait per id, so a silent server held one
+// batch for ~15 s; here a silent batch still reports after ~3 s.)
+func TestFetchRecordsBatchDeadline(t *testing.T) {
+	fake := &dbFake{t: t}
+	s := dbSession(t, fake)
+	start := time.Now()
+	if _, err := s.fetchRecords(tables.TableSpellName, []uint32{1, 2, 3, 4, 5}); err == nil {
+		t.Fatal("a silent batch answered")
+	}
+	if took := time.Since(start); took > 2*dbQueryDeadline {
+		t.Fatalf("a silent batch took %s, past twice the one deadline", took)
+	}
+	// An answered batch costs no deadline at all.
+	s2 := dbSession(t, fake)
+	go func() {
+		for i := uint32(1); i <= 5; i++ {
+			dbAnswer(t, s2, tables.TableSpellName, i, tables.StatusValid, dbRecord(t, "n"))
+		}
+	}()
+	got, err := s2.fetchRecords(tables.TableSpellName, []uint32{1, 2, 3, 4, 5})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d records, want 5", len(got))
+	}
+}
+
+// TestFetchRecordsDedupesIds asks a repeated id once: the reply answers
+// both copies, and a second fetch sends nothing.
+func TestFetchRecordsDedupesIds(t *testing.T) {
+	fake := &dbFake{t: t}
+	s := dbSession(t, fake)
+	go dbAnswer(t, s, tables.TableSpellName, 774, tables.StatusValid, dbRecord(t, "Rend"))
+	got, err := s.fetchRecords(tables.TableSpellName, []uint32{774, 774, 774})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got[774]) == 0 {
+		t.Fatal("no record for 774")
+	}
+	if len(fake.asked) != 1 || len(fake.asked[0]) != 1 {
+		t.Fatalf("asked %v, want one batch with one id", fake.asked)
+	}
+}
+
+// TestServeEventsPageFillsSpellNames is decision 1 through the real session
+// path: combat-log rows go in unnamed, the DB answers name two of the ids,
+// and the page carries the server's names (the zero id stays unnamed; its
+// spell_id is the fallback). The repeated id costs one batched query.
+func TestServeEventsPageFillsSpellNames(t *testing.T) {
+	fake := &dbFake{t: t}
+	s := dbSession(t, fake)
+	s.world = objects.NewWorld(0)
+	for _, id := range []int32{774, 133, 774, 0} {
+		s.CombatLog().Append(CombatRow{Kind: "spell_go", SpellID: id})
+	}
+	go func() {
+		dbAnswer(t, s, tables.TableSpellName, 774, tables.StatusValid, dbRecord(t, "Rend"))
+		dbAnswer(t, s, tables.TableSpellName, 133, tables.StatusValid, dbRecord(t, "Fireball"))
+	}()
+	page, _ := s.serveEventsPage(0, CombatPageMax)
+	if len(page.Events) != 4 {
+		t.Fatalf("page holds %d rows, want 4", len(page.Events))
+	}
+	if page.Events[0].SpellName != "Rend" || page.Events[1].SpellName != "Fireball" || page.Events[2].SpellName != "Rend" {
+		t.Fatalf("spell names %+q", []string{page.Events[0].SpellName, page.Events[1].SpellName, page.Events[2].SpellName})
+	}
+	if page.Events[3].SpellName != "" {
+		t.Fatalf("zero spell id named %q", page.Events[3].SpellName)
+	}
+	if len(fake.asked) != 1 {
+		t.Fatalf("the page sent %d queries, want one batch", len(fake.asked))
+	}
+}
+
+// TestServeUnitsHostileFilter is decisions 6 and 8 through the real session
+// path: the character carries the Alliance-player template, one mob the
+// Horde template and one the Alliance template; the hostile filter keeps
+// only the Horde mob, and asking friendly keeps only the Alliance one. The
+// three templates cost one batched fetch.
+func TestServeUnitsHostileFilter(t *testing.T) {
+	fake := &dbFake{t: t}
+	s := dbSession(t, fake)
+	s.world = objects.NewWorld(0)
+	self := wire.GUID{Low: 0x1000}
+	s.self, s.selfSeen = self, true
+	putUnit := func(g wire.GUID, templateID int32) {
+		t.Helper()
+		info := objects.Info{Type: objects.TypeUnit, HasUnit: true, FactionTemplate: templateID}
+		info.Complete()
+		s.world.Apply(&objects.Update{Blocks: []objects.WorldFragment{{GUID: g, ObjectType: objects.TypeUnit, Info: info, ValuesComplete: true}}}, time.Now())
+	}
+	putUnit(self, 3)
+	mobHostile := wire.GUID{Low: 0x2000}
+	mobFriendly := wire.GUID{Low: 0x3000}
+	putUnit(mobHostile, 29)
+	putUnit(mobFriendly, 12)
+	go func() {
+		dbAnswer(t, s, tables.TableFactionTemplate, 3, tables.StatusValid, hostileRecord(1|2, 2, 0))
+		dbAnswer(t, s, tables.TableFactionTemplate, 29, tables.StatusValid, hostileRecord(1|4, 0, 2))
+		dbAnswer(t, s, tables.TableFactionTemplate, 12, tables.StatusValid, hostileRecord(2, 0, 4))
+	}()
+	hostile := true
+	units, err := s.serveUnits(serveUnitsParams{Hostile: &hostile})
+	if err != nil {
+		t.Fatalf("hostile units: %v", err)
+	}
+	if len(units) != 1 || wire.GUID(units[0].GUID) != mobHostile {
+		t.Fatalf("hostile units: %+v", units)
+	}
+	friendly := false
+	units, err = s.serveUnits(serveUnitsParams{Hostile: &friendly})
+	if err != nil {
+		t.Fatalf("friendly units: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("friendly units: %+v", units)
+	}
+	byGUID := map[wire.GUID]bool{}
+	for _, u := range units {
+		byGUID[wire.GUID(u.GUID)] = true
+	}
+	if !byGUID[self] || !byGUID[mobFriendly] {
+		t.Fatalf("friendly units: %+v", units)
+	}
+}
+
+// hostileRecord writes one FactionTemplate record the way the server does:
+// its group bytes with placeholder faction and lists.
+func hostileRecord(factionGroup, friendGroup, enemyGroup uint8) []byte {
+	tmpl := tables.FactionTemplate{Faction: 1, FactionGroup: factionGroup, FriendGroup: friendGroup, EnemyGroup: enemyGroup}
+	b := wire.NewWriter()
+	b.WriteU16(tmpl.Faction)
+	b.WriteI32(0)
+	b.WriteU8(tmpl.FactionGroup)
+	b.WriteU8(tmpl.FriendGroup)
+	b.WriteU8(tmpl.EnemyGroup)
+	for range 8 {
+		b.WriteU16(0)
+	}
+	for range 8 {
+		b.WriteU16(0)
+	}
+	return b.Bytes()
 }
