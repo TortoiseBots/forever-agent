@@ -69,7 +69,7 @@ instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is 
 
 `forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
 [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
-[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR]` keeps that character in the world
+[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR]` keeps that character in the world
 and serves the local JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer
 token, loopback only, the same error codes. The password comes from `--password-file` or
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
@@ -93,6 +93,14 @@ ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a
 concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
 faction template against the character's own (fetched once from the server and cached), so `true` keeps only
 what is hostile to the character and `false` only what is not.
+
+A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
+the link drops), and every login attempt (the first login, each build the automatic selection probes, each reconnect's) waits for its turn in the same login rate the other
+commands keep: this process's 14-per-300 s window, the hour-start hold and, with `--login-budget` (set by a fleet), the
+fleet's shared budget. A login the server refuses for good (wrong password, unknown, banned or suspended account, a
+refused version, an authenticator step) stops the reconnects at once and the daemon goes offline; only a transient
+failure (network, a server that is busy or down, a ticket that ran out) spends another attempt. While idle the daemon
+pings the realm socket every 30 s and asks for the names of players who come into view.
 
 `event_log` (`since`, `limit` up to 1,000, `wait_ms` up to 2,000) is the session's one ordered stream and answers
 `{events, next, more, dropped, epoch, reset}` with `internal/events`-shaped rows (`seq`, `time`, `mono_ms`, `kind`, `source`,

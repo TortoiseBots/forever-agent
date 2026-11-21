@@ -180,6 +180,43 @@ func TestStateRestReasons(t *testing.T) {
 	}
 }
 
+// TestStateOrderFailEncodedColon: the module writes `ord=` as one item of two parts, the sequence and the result, each
+// encoded on its own (Rec::P), so a failed rest order is `ord=182:fail%3Arest`. The read takes it as status fail with
+// code rest; before, the decoded second part "fail:rest" was refused as an unknown status and every state read failed.
+func TestStateOrderFailEncodedColon(t *testing.T) {
+	line := "state bot=Wctank role=tank rolesrc=forced class=warrior level=28 hp=900 hpmax=900 hppct=100 " +
+		"power=rage pw=0 pwmax=100 st=non-combat incombat=no tgt= victim= " +
+		"hold=no mv=follow stuck= engine=yes pos=1.0,2.0,3.0 " +
+		"map=389 inst=1 dl=self dm=2.0 ord=182:fail%3Arest lastorder=rest co= nc= " +
+		"cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no " +
+		"rest_why= #T"
+	r := oneReply("state-begin #T", line, stateEndT(1, 0, "yes", ""))
+	rep, err := NewClient(r).StateReport(context.Background(), "Wctank")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	o := rep.Bots[0].Order
+	if o.Seq != 182 || o.Status != "fail" || o.Code != "rest" {
+		t.Fatalf("order %+v, want seq 182 fail rest", o)
+	}
+	// A code that itself holds an encoded colon keeps it: only the first colon of the result splits status and code.
+	line2 := strings.Replace(line, "ord=182:fail%3Arest", "ord=7:fail%3Ablocked%3Amaster", 1)
+	rep, err = NewClient(oneReply("state-begin #T", line2, stateEndT(1, 0, "yes", ""))).StateReport(context.Background(), "Wctank")
+	if err != nil {
+		t.Fatalf("StateReport: %v", err)
+	}
+	if o := rep.Bots[0].Order; o.Status != "fail" || o.Code != "blocked:master" {
+		t.Fatalf("order %+v, want fail blocked:master", o)
+	}
+	// The other results are unchanged; an encoded colon on a result that is not fail is still refused.
+	for _, bad := range []string{"ord=3:ok%3Ax", "ord=3:fail%3A", "ord=3:done"} {
+		l := strings.Replace(line, "ord=182:fail%3Arest", bad, 1)
+		if _, err := NewClient(oneReply("state-begin #T", l, stateEndT(1, 0, "yes", ""))).StateReport(context.Background(), "Wctank"); !errors.Is(err, ErrBadValue) {
+			t.Errorf("%s: err %v, want ErrBadValue", bad, err)
+		}
+	}
+}
+
 func TestStateRequiresEveryKey(t *testing.T) {
 	// The draft says every key of a state line is always present; a line with only bot= is not a report.
 	r := oneReply("state-begin #T", "state bot=Solo #T", stateEndT(1, 0, "yes", ""))
