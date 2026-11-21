@@ -89,6 +89,8 @@ func (f *fakeServer) serveCommand(c, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGChatSay:
 			lang, secure, text, err := parseClientChatMessage(payload)
 			if err != nil {

@@ -60,6 +60,8 @@ const (
 	fakeCMSGMoveHeartbeat        = 0x42002E
 	fakeCMSGMoveStop             = 0x420002
 	fakeCMSGLogDisconnect        = 0x460007
+	// CMSG_SET_ADVANCED_COMBAT_LOGGING for a 70707 client (Opcodes.h:922, ClassicOpcodes).
+	fakeCMSGSetAdvancedCombatLogging = 0x3E0195
 
 	fakeSMSGAuthChallenge        = 0x4E0000
 	fakeSMSGEnterEncrypted       = 0x4E0004
@@ -360,6 +362,9 @@ type fakeServer struct {
 	mu                     sync.Mutex
 	realmWire              []uint32
 	instWire               []uint32
+	// advancedLog counts CMSG_SET_ADVANCED_COMBAT_LOGGING, which the client sends at world entry (and again at each
+	// map change; this test's scenario has none).
+	advancedLog int
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -455,12 +460,14 @@ func (f *fakeServer) failf(format string, args ...any) {
 // leftOnWrite reports whether a failed write ends the scenario rather than failing it. A socket the harness itself
 // closed (dropNow, a logout step, the fake's own close) answers net.ErrClosed on a write that races that close: only
 // this side can close its own socket, so that is never a protocol failure. A client that left early answers EPIPE,
-// ECONNRESET or EOF instead, and only a scenario that declared clientMayLeave may end that way.
+// ECONNRESET or EOF instead, and only a scenario that declared clientMayLeave, or a test that ended the run on
+// purpose (deliberateClose, set before it cancels the client), may end that way: the client closes its sockets while
+// the fake is still answering its last request, and that answer then meets the reset.
 func (f *fakeServer) leftOnWrite(err error) bool {
 	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	if !f.clientMayLeave {
+	if !f.clientMayLeave && !f.deliberate() {
 		return false
 	}
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF)
@@ -862,6 +869,18 @@ func (f *fakeServer) deliberate() bool {
 	return f.deliberateClose
 }
 
+// checkAdvancedLogging validates the advanced-combat-log flag: one byte, its high bit set (Bits<1>(Enable),
+// ClientConfigPackets.cpp:77-80), and counts it.
+func (f *fakeServer) checkAdvancedLogging(payload []byte) {
+	if len(payload) != 1 || payload[0]&0x80 == 0 {
+		f.failf("CMSG_SET_ADVANCED_COMBAT_LOGGING = % X, want one byte with the enable bit", payload)
+		return
+	}
+	f.mu.Lock()
+	f.advancedLog++
+	f.mu.Unlock()
+}
+
 // dropLink closes the socket the test asked for, as a FIN or (resetLink) a RST.
 func (f *fakeServer) dropLink(realm, inst *fakeConn) {
 	c := inst
@@ -1157,6 +1176,8 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 				continue
 			}
 			sawTimeSync = true
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGMoveInitActiveMover:
 			if len(payload) != 4 || binary.LittleEndian.Uint32(payload) == 0 {
 				f.failf("instance: CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE = % X", payload)
@@ -1284,6 +1305,15 @@ func TestEnterAgainstFakeServer(t *testing.T) {
 	}
 	if !report.InWorld || report.ActiveMoverGUID != report.Character.GUID {
 		t.Fatalf("in world %v, active mover %s, character %s", report.InWorld, report.ActiveMoverGUID, report.Character.GUID)
+	}
+	if !report.AdvancedCombatLog {
+		t.Fatal("the report does not say the advanced combat log flag was sent")
+	}
+	f.mu.Lock()
+	advanced := f.advancedLog
+	f.mu.Unlock()
+	if advanced != 1 {
+		t.Fatalf("CMSG_SET_ADVANCED_COMBAT_LOGGING went out %d times, want once at world entry", advanced)
 	}
 	if report.MapID != 0 || report.Position[0] != 1.25 || report.Position[1] != 2.5 || report.Position[2] != 3.75 {
 		t.Fatalf("map %d position %v", report.MapID, report.Position)
@@ -1581,6 +1611,8 @@ func (f *fakeServer) serveWalk(c *fakeConn, realm *fakeConn) {
 		case fakeCMSGTimeSyncResponse:
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGMoveInitActiveMover:
 			// the client's answer to SMSG_MOVE_SET_ACTIVE_MOVER, which the login burst already delivered
 		case fakeCMSGMoveSetFacing:

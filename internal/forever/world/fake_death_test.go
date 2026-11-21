@@ -87,6 +87,8 @@ func (f *fakeServer) serveDeath(c *fakeConn, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeDeathCMSGRepop:
 			if len(payload) != 1 || payload[0] != 0 {
 				f.failf("death: CMSG_REPOP_REQUEST = % X", payload)

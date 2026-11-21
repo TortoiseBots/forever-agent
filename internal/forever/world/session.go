@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
@@ -217,16 +218,22 @@ type Report struct {
 	Position   [4]float32
 	// InWorld is true once the server sent SMSG_MOVE_SET_ACTIVE_MOVER (the world the client sees) and the
 	// completion was answered.
-	InWorld         bool
-	ActiveMoverGUID wire.GUID
-	Stayed          time.Duration
-	Counts          map[string]int // server packets by opcode name (unknown numbers as "wire 0xNNNNNN")
-	TimeSyncs       int
-	Pings           int
-	Pongs           int
-	Latency         time.Duration
-	Logout          LogoutResponse
-	LogoutComplete  bool
+	InWorld bool
+	// AdvancedCombatLog is true once the full combat-log flag went out (CMSG_SET_ADVANCED_COMBAT_LOGGING), which
+	// is what makes the log packets carry a unit's health and power.
+	AdvancedCombatLog bool
+	// ThreatPackets and EncounterPackets count the pushed lists and the encounter packets the session decoded.
+	ThreatPackets    int
+	EncounterPackets int
+	ActiveMoverGUID  wire.GUID
+	Stayed           time.Duration
+	Counts           map[string]int // server packets by opcode name (unknown numbers as "wire 0xNNNNNN")
+	TimeSyncs        int
+	Pings            int
+	Pongs            int
+	Latency          time.Duration
+	Logout           LogoutResponse
+	LogoutComplete   bool
 	// LinkLost is set when a socket closed (or the peer went silent) during the run: its side and the error are
 	// what the command prints with the last server packet it had seen.
 	LinkLost       bool
@@ -457,7 +464,13 @@ type session struct {
 	death *deathWatch
 
 	// Round 3: the world model, the character's own GUID once the create block names it, and the mover.
-	world    *objects.World
+	world *objects.World
+	// inv is the character's live inventory: the login snapshot kept current by push results, the player's own
+	// InvSlots updates and the destroy lists (items.Tracker). It is built with the session, so both the act runner's
+	// `inv` step and the serve method read it from the first packet on.
+	inv *items.Tracker
+	// itemCast watches the cast an item `use` step asked for (inventory_act.go): the answers the server gives to it.
+	itemCast itemCastWatch
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
@@ -571,6 +584,7 @@ func newSession(opts Options, report *Report, ctx context.Context) *session {
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.death = &deathWatch{started: time.Now()}
 	s.loot = newLootWatch()
+	s.inv = items.NewTracker()
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
@@ -1770,6 +1784,15 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			s.activeMoverDone = true
 			s.report.InWorld = true
 			s.opts.logf("world: SMSG_MOVE_SET_ACTIVE_MOVER for %s, CMSG_MOVE_INIT_ACTIVE_MOVER_COMPLETE sent", guid)
+			// The world is entered: ask for the full combat log (MiscHandler.cpp:1237-1240). The server sends the
+			// basic form until this flag arrives, and then every log packet carries the unit's health and power
+			// (Object.cpp:1126-1148). A reconnect builds a fresh session and sends it again, and the map change
+			// resets activeMoverDone (mapchange.go), so a new map gets it too; the flag is idempotent.
+			if err := s.sendOnCtx(ctx, ev.side, wire.CMSGSetAdvancedCombatLogging, combat.BuildSetAdvancedCombatLogging(true)); err != nil {
+				return err
+			}
+			s.report.AdvancedCombatLog = true
+			s.opts.logf("world: CMSG_SET_ADVANCED_COMBAT_LOGGING sent (health and power on every combat log packet)")
 		}
 	case wire.SMSGCharacterLoginFailed:
 		code, err := ParseCharacterLoginFailed(p.Payload)
@@ -1789,7 +1812,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.logoutComplete = true
 		s.deadMu.Unlock()
 	case wire.SMSGUpdateObject:
-		u, err := objects.ParseUpdateObject(p.Payload)
+		s.capturePacket(p)
+		u, err := objects.ParseUpdateObjectForBuild(p.Payload, s.opts.RealmBuild)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_UPDATE_OBJECT: %w", err)
 		}
@@ -1907,6 +1931,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if isLootPacket(p.Core) {
 			return s.handleLoot(p)
 		}
+		if isInventoryPacket(p.Core) {
+			return s.handleInventory(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -1960,7 +1987,9 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplyAttackRound(v, now)
-		s.combatRow("melee", now, int32(v.MeleeSpellID), v.Damage, v.Attacker, v.Victim, "")
+		// A swing that did not land normally names why (a miss, a dodge, a parry, an evade, an immune), and a full
+		// log copy carries the attacker's health and power.
+		s.combatRowLog("melee", now, int32(v.MeleeSpellID), v.Damage, v.Attacker, v.Victim, v.RoundReason(), v.LogData)
 		if v.Attacker == s.self || v.Victim == s.self {
 			s.fight.swing(v)
 		}
@@ -1989,6 +2018,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.world.ApplySpellCast(&v, true, now)
 		s.combatCast("spell_go", now, &v)
+		s.itemCast.gone(&v, s.self)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}
@@ -2011,6 +2041,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		s.world.ApplySpellFailure(v, now)
 		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureName(v.Reason))
 		if v.Caster == s.self || v.Caster.IsZero() {
+			s.itemCast.failed(v)
 			// CAST_FAILED is the pre-cast answer and carries the client's cast id; the failure forms carry the
 			// server's (see fightLog.castFail). A failure of a generation that gave up is dropped first.
 			if s.fight.staleCast(v.SpellID, v.CastID, now) {
@@ -2024,7 +2055,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		s.combatRow("spell_damage", now, v.SpellID, v.Damage, v.Caster, v.Me, "")
+		s.combatRowLog("spell_damage", now, v.SpellID, v.Damage, v.Caster, v.Me, "", v.LogData)
 		switch {
 		case v.Me == s.self:
 			s.fight.damageTaken += v.Damage
@@ -2039,7 +2070,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		s.combatRow("heal", now, v.SpellID, v.OriginalHeal, v.Caster, v.Target, "")
+		s.combatRowLog("heal", now, v.SpellID, v.OriginalHeal, v.Caster, v.Target, "", v.LogData)
 		if v.Target == s.self || v.Caster == s.self {
 			s.fight.add("spell", fmt.Sprintf("spell %d healed %s for %d", v.SpellID, s.fight.name(v.Target), v.OriginalHeal), v.OriginalHeal)
 		}
@@ -2054,7 +2085,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			if e.PeriodicTickIsHeal() {
 				kind = "heal"
 			}
-			s.combatRow(kind, now, v.SpellID, e.Amount, v.Caster, v.Target, "")
+			s.combatRowLog(kind, now, v.SpellID, e.Amount, v.Caster, v.Target, "", v.LogData)
 		}
 		if v.Target == s.self || v.Caster == s.self {
 			for _, e := range v.Effects {
@@ -2143,6 +2174,142 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.known = append(s.known[:0], v.Known...)
 		s.report.KnownSpells = append([]int32(nil), s.known...)
+	// The core-gains round: the pushed threat lists and the encounter packets feed the world model, and the six
+	// combat-log kinds join the same row stream the fight already writes.
+	case wire.SMSGThreatUpdate:
+		v, err := combat.ParseThreatUpdate(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyThreatUpdate(v, now)
+		s.report.ThreatPackets++
+	case wire.SMSGHighestThreatUpdate:
+		v, err := combat.ParseHighestThreatUpdate(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyHighestThreatUpdate(v, now)
+		s.report.ThreatPackets++
+	case wire.SMSGThreatRemove:
+		v, err := combat.ParseThreatRemove(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyThreatRemove(v, now)
+		s.report.ThreatPackets++
+	case wire.SMSGThreatClear:
+		v, err := combat.ParseThreatClear(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyThreatClear(v)
+		s.report.ThreatPackets++
+	case wire.SMSGEncounterStart:
+		v, err := combat.ParseEncounterStart(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyEncounterStart(v, now)
+		s.report.EncounterPackets++
+	case wire.SMSGEncounterEnd:
+		v, err := combat.ParseEncounterEnd(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyEncounterEnd(v, now)
+		s.report.EncounterPackets++
+	case wire.SMSGBossKill:
+		v, err := combat.ParseBossKill(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.world.ApplyBossKill(v, now)
+		s.report.EncounterPackets++
+	case wire.SMSGSpellInterruptLog:
+		v, err := combat.ParseSpellInterrupt(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		// The row's spell is the interrupting one (Kick), so a trial's response matches it; the victim's
+		// interrupted cast is beside it. The writer's two spell fields are swapped (Spell.cpp:5313-5321).
+		s.combatRowExtras("interrupt", now, v.InterruptSpell, 0, v.Caster, v.Victim, "", combatRowExtra{
+			InterruptedSpellID: v.InterruptedSpell,
+		})
+		if v.Caster == s.self || v.Victim == s.self {
+			s.fight.add("spell", fmt.Sprintf("spell %d interrupted spell %d on %s", v.InterruptSpell, v.InterruptedSpell, s.fight.name(v.Victim)), 0)
+		}
+	case wire.SMSGSpellDispellLog:
+		v, err := combat.ParseSpellDispel(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		dispelled := make([]CombatDispel, 0, len(v.Dispelled))
+		for _, d := range v.Dispelled {
+			dispelled = append(dispelled, CombatDispel{SpellID: d.SpellID, Harmful: d.Harmful})
+		}
+		s.combatRowExtras("dispel", now, v.DispelSpell, 0, v.Caster, v.Target, "", combatRowExtra{Dispelled: dispelled})
+		if v.Caster == s.self || v.Target == s.self {
+			s.fight.add("spell", fmt.Sprintf("spell %d dispelled %d aura(s) on %s", v.DispelSpell, len(v.Dispelled), s.fight.name(v.Target)), 0)
+		}
+	case wire.SMSGSpellAbsorbLog:
+		v, err := combat.ParseSpellAbsorb(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.combatRowExtras("absorb", now, v.AbsorbSpellID, v.Absorbed, v.Caster, v.Victim, "", combatRowExtra{
+			AbsorbedSpellID: v.AbsorbedSpellID,
+			Log:             v.LogData,
+		})
+	case wire.SMSGSpellMissLog:
+		v, err := combat.ParseSpellMiss(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		for _, e := range v.Entries {
+			s.combatRow("miss", now, v.SpellID, 0, v.Caster, e.Victim, combat.MissReasonName(e.Reason))
+		}
+	case wire.SMSGProcResist:
+		v, err := combat.ParseProcResist(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.combatRow("resist", now, v.SpellID, 0, v.Caster, v.Target, "proc")
+	case wire.SMSGSpellOrDamageImmune:
+		v, err := combat.ParseSpellImmune(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.combatRow("immune", now, int32(v.SpellID), 0, v.Caster, v.Victim, "")
+	case wire.SMSGSpellInstakillLog:
+		v, err := combat.ParseSpellInstakill(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.combatRow("instakill", now, v.SpellID, 0, v.Caster, v.Target, "")
+	case wire.SMSGEnvironmentalDamageLog:
+		v, err := combat.ParseEnvironmentalDamage(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.combatRowLog("environmental", now, 0, v.Amount, wire.EmptyGUID, v.Victim, combat.EnvironmentalName(v.Kind), v.LogData)
+		if v.Victim == s.self {
+			s.fight.add("spell", fmt.Sprintf("%s damage for %d", combat.EnvironmentalName(v.Kind), v.Amount), v.Amount)
+		}
 	}
 }
 
@@ -2176,10 +2343,42 @@ func (s *session) observeSelfIfTracking() {
 }
 
 func (s *session) applyUpdate(u *objects.Update) {
+	now := s.transport().Now()
+	inv := s.tracker()
+	if len(u.Destroy)+len(u.OutOfRange) != 0 {
+		gone := make([]wire.GUID, 0, len(u.Destroy)+len(u.OutOfRange))
+		gone = append(gone, u.Destroy...)
+		gone = append(gone, u.OutOfRange...)
+		inv.Destroyed(gone)
+	}
 	for _, b := range u.Blocks {
+		// The server's own slots are the truth: the model merges them, and the tracker lets them confirm the moves
+		// that touched them and drop the placements they contradict.
+		if slots, ok := b.Info.ChangedInvSlots(); ok {
+			inv.ServerSlots(now, slots)
+		}
+		if slots, ok := b.Info.ChangedContainerSlots(); ok {
+			inv.ServerBag(now, b.GUID, slots)
+		}
+		// An update the decoder could not read must never be silent: slots it named are lost (stale), and an
+		// ActivePlayerData update behind an equipment change is explained by the client's own move or is stale too.
+		switch {
+		case b.Info.InvSlotsUndecoded():
+			inv.ServerUndecoded(now, true)
+			s.noteInventoryStale("a server update named inventory slots next to fields this client does not decode")
+		case b.Info.ActivePlayerSkipped():
+			_, was := inv.Stale()
+			inv.ServerUndecoded(now, false)
+			if reason, stale := inv.Stale(); stale && !was {
+				s.noteInventoryStale(reason)
+			}
+		}
 		if b.Movement == nil || !b.Movement.ThisIsYou {
 			continue
 		}
+		// Every own create is a fresh snapshot of the character (the login burst, a map change): the placements the
+		// overlay guessed before it are settled by the slots this block carries.
+		inv.Reset()
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID
