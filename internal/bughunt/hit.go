@@ -1,5 +1,7 @@
 package bughunt
 
+import "math"
+
 // Hit is one finding, with the Python checker's fields and JSON keys so a ticket file and a Python hits.jsonl read
 // alike. Bot is the run's own identity for the member: a trace's guid text for a watch, the character key for a
 // trials repeat.
@@ -19,6 +21,11 @@ type Hit struct {
 	Sparse bool     `json:"sparse"`
 	Cost   float64  `json:"cost"`
 	Note   string   `json:"note"`
+	// Recap is the parsed `.deathrecap` timeline of the member's death nearest
+	// the hit (empty when the watch never asked). It is the ticket text's
+	// own, alongside the evidence, and is not part of the hit's JSON, which
+	// keeps the Python checker's keys.
+	Recap []string `json:"-"`
 
 	// At is the hit's wall time when the run knows its start, 0 otherwise. It is the ticket file's first_seen and
 	// is not part of the hit's JSON, which keeps the Python checker's keys.
@@ -52,9 +59,15 @@ func (r *Run) Hit(rule int, t, dur float64, bot, ev string, key []string, opts .
 		opt(&o)
 	}
 	deaths := 0
+	var recap []string
+	recapGap := 0.0
 	for _, d := range r.Deaths {
 		if d.Bot == bot && t-1 <= d.T && d.T <= t+dur+15 {
 			deaths++
+			// The recap of the death nearest the hit's time, not the first one in the window.
+			if gap := math.Abs(d.T - t); len(d.Recap) > 0 && (recap == nil || gap < recapGap) {
+				recap, recapGap = append([]string(nil), d.Recap...), gap
+			}
 		}
 	}
 	base := dur
@@ -81,6 +94,7 @@ func (r *Run) Hit(rule int, t, dur float64, bot, ev string, key []string, opts .
 		Sparse: o.sparse,
 		Cost:   pyRound(base+float64(deaths)*DEATH_COST_S, 1),
 		Note:   o.note,
+		Recap:  recap,
 		At:     at,
 	}
 }

@@ -177,6 +177,12 @@ func BuildTickets(hits []Hit, baseline []Ticket, complete func(rule int) bool) [
 			}
 			if len(t.Evidence) < 5 {
 				t.Evidence = append(t.Evidence, fmt.Sprintf("%s %s/%s: %s", h.Clock, h.DS, h.Run, h.Ev))
+				for _, line := range h.Recap {
+					if len(t.Evidence) >= 5 {
+						break
+					}
+					t.Evidence = append(t.Evidence, fmt.Sprintf("%s %s/%s: deathrecap: %s", h.Clock, h.DS, h.Run, line))
+				}
 			}
 		}
 		t.Cost = pyRound(t.Cost, 1)

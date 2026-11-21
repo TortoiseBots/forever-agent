@@ -53,3 +53,17 @@ func TestDeathCheckAcceptResurrectFromNeedsAcceptResurrect(t *testing.T) {
 		t.Fatalf("code %d, want %d", code, exitUsage)
 	}
 }
+
+// TestDeathRecapNeedsName: deathrecap needs the named player before it touches
+// the network, and the usage line names the command.
+func TestDeathRecapNeedsName(t *testing.T) {
+	t.Setenv("FOREVER_PASSWORD", "x")
+	base := []string{"forever", "deathrecap", "--rest", "h:1", "--rpc", "h:2", "--ca", "ca.pem",
+		"--account", "a", "--character", "C"}
+	if code, _, _ := runCLI(base...); code != exitUsage {
+		t.Fatalf("code %d, want %d", code, exitUsage)
+	}
+	if _, _, errOut := runCLI("forever"); !strings.Contains(errOut, "deathrecap") {
+		t.Errorf("the forever usage does not name deathrecap: %q", errOut)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -203,6 +204,22 @@ type Fake struct {
 	// StatusBlock makes every status read wait this long for an answer it never sends, until the call's own context
 	// ends: a connected but silent server, which spends the caller's budget instead of returning at once.
 	StatusBlock time.Duration
+	// DeathRecapLines scripts the fake's `.deathrecap` answer: the reply lines
+	// the hook parses. DeathRecapMissing answers the unknown-command refusal
+	// (a core without PR #380), DeathRecapErr a port error. Empty with neither
+	// set answers the core's own "no recording" text.
+	DeathRecapLines   []string
+	DeathRecapMissing bool
+	DeathRecapErr     error
+	// DeathRecapNoPermission answers the core's fall-through for an account without the command's permission.
+	DeathRecapNoPermission bool
+	// DeathRecapFn, when set, scripts each `.deathrecap` call itself: n is the call's number (from 1) and who the
+	// asked name; it answers before every other DeathRecap field.
+	DeathRecapFn func(n int, who string) ([]string, error)
+	// DropOnKind makes the first action of that kind die with the link while it is sent (the zero kind is off).
+	DropOnKind ActionKind
+
+	deathRecapCalls int
 	// InstanceBosses is what the instance report answers with.
 	InstanceBosses []tbcmd.InstanceBoss
 	// PushThreat makes the scripted client's own threat table answer on every call (the server's pushed lists);
@@ -696,11 +713,19 @@ func (f *Fake) Act(ctx context.Context, a Action) (ActionReport, error) {
 	if err := f.dropped(actionDropName(a.Kind)); err != nil {
 		return ActionReport{}, err
 	}
+	if f.DropOnKind != 0 && f.DropOnKind == a.Kind {
+		f.DropOnKind = 0
+		f.linkLost = true
+		return ActionReport{}, ErrLinkLost
+	}
 	if code := f.RefuseActions[a.Kind]; code != "" {
 		return ActionReport{}, &tbcmd.CommandError{Code: code, Cmd: a.String()}
 	}
 	if f.OnAction != nil && f.OnAction(f, a) {
 		return ActionReport{Verb: actionVerb(a.Kind), Confirmed: true}, nil
+	}
+	if a.Kind == ActionDeathRecap {
+		return f.deathRecapAction(a)
 	}
 	if a.isRunAction() {
 		return f.runAction(a)
@@ -719,6 +744,35 @@ func (f *Fake) Act(ctx context.Context, a Action) (ActionReport, error) {
 		}
 	}
 	return out, nil
+}
+
+// deathRecapAction scripts the fake's `.deathrecap` answer: the configured
+// reply lines (parsed by the hook), the unknown-command refusal of a core
+// without PR #380, a port error, or the core's own "no recording" text.
+func (f *Fake) deathRecapAction(a Action) (ActionReport, error) {
+	f.deathRecapCalls++
+	if f.DeathRecapFn != nil {
+		lines, err := f.DeathRecapFn(f.deathRecapCalls, a.Who)
+		if err != nil {
+			return ActionReport{}, err
+		}
+		return ActionReport{Verb: "deathrecap", Confirmed: true, Count: len(lines), Lines: lines}, nil
+	}
+	if f.DeathRecapNoPermission {
+		return ActionReport{}, &command.RefusalError{Err: command.ErrNoPermission, Text: "no permission"}
+	}
+	if f.DeathRecapErr != nil {
+		return ActionReport{}, f.DeathRecapErr
+	}
+	if f.DeathRecapMissing {
+		return ActionReport{}, &command.RefusalError{Err: command.ErrUnknownCommand, Text: "Command '.deathrecap' does not exist"}
+	}
+	if len(f.DeathRecapLines) == 0 {
+		return ActionReport{Verb: "deathrecap", Confirmed: true, Count: 1,
+			Lines: []string{"No death recording for " + a.Who + "."}}, nil
+	}
+	return ActionReport{Verb: "deathrecap", Confirmed: true, Count: len(f.DeathRecapLines),
+		Lines: append([]string(nil), f.DeathRecapLines...)}, nil
 }
 
 // actionDropName is the DropOn name of an action kind.

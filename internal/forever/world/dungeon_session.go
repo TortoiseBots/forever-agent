@@ -144,6 +144,12 @@ func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.Act
 			return driver.ActionReport{}, fmt.Errorf("world: appear: %w", err)
 		}
 		return c.appear(ctx, name)
+	case driver.ActionDeathRecap:
+		name, err := chat.NormaliseName(a.Who)
+		if err != nil {
+			return driver.ActionReport{}, fmt.Errorf("world: deathrecap: %w", err)
+		}
+		return c.deathRecap(ctx, name)
 	}
 	return driver.ActionReport{}, fmt.Errorf("world: action %d is not in the setup vocabulary", a.Kind)
 }
@@ -216,6 +222,30 @@ func (c *dungeonCommander) appear(ctx context.Context, name string) (driver.Acti
 		n = len(rep.Raw)
 	}
 	return coreReply("appear", n, err)
+}
+
+// deathRecap sends the core's `.deathrecap <name>`: the last recorded death of
+// the named bot of this session's run, as text (PR #380). The line is built
+// here from the validated name, so nothing outside this file can hand a core
+// command line to the channel. A core without the command refuses the line as
+// unknown command; "no recording" arrives as the reply's own line. The send is
+// tokenless (a core line) with the watch's deadline and line cap: at most 60
+// lines parsed.
+func (c *dungeonCommander) deathRecap(ctx context.Context, name string) (driver.ActionReport, error) {
+	o := c.client.Base
+	o.Token = ""
+	o.MaxLines = driver.MaxDeathRecapLines
+	if o.Quiet <= 0 {
+		o.Quiet = 1500 * time.Millisecond
+	}
+	if o.Deadline <= 0 || o.Deadline > driver.DeathRecapWait {
+		o.Deadline = driver.DeathRecapWait
+	}
+	rep, err := c.Run(ctx, ".deathrecap "+name, o)
+	if err != nil {
+		return driver.ActionReport{}, dungeonPortErr(err)
+	}
+	return driver.ActionReport{Verb: "deathrecap", Confirmed: true, Count: len(rep.Raw), Lines: append([]string(nil), rep.Raw...)}, nil
 }
 
 // dungeonWorld is the commander's own client: the mover's position, the map change's epoch, the object model's
