@@ -23,6 +23,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -551,6 +552,9 @@ type session struct {
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
 	// one log with one seq axis. A serving daemon hands the dropped session's ring to the one that replaces it.
 	combat *CombatLog
+	// Round CORE-GAINS-3: the DB record cache (tables.Cache), made on first use. One entry per (table, id) so
+	// the agent never asks twice for the same record.
+	db *tables.Cache
 }
 
 const (
@@ -2602,8 +2606,37 @@ func isLinkIOError(err error) bool {
 
 var errWaitTimeout = errors.New("world: wait timed out")
 
-// waitFor reads events until match returns true, answering what the server asks in between (time syncs, active
-// mover, logout packets). One absolute timeout bounds the wait.
+// waitForUntil is waitFor with the caller's own absolute deadline: every
+// reply of one batch shares it, so a slow server cannot stretch the batch
+// past it one reply at a time.
+func (s *session) waitForUntil(what string, deadline time.Time, match func(worldconn.Packet) bool) (worldconn.Packet, error) {
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return worldconn.Packet{}, fmt.Errorf("world: no %s within %s", what, dbQueryDeadline)
+		}
+		ev, err := s.next(what, remaining)
+		if err != nil {
+			return worldconn.Packet{}, err
+		}
+		if ev.err != nil {
+			if lost := s.deadErrorExcept(-1); lost != nil {
+				return worldconn.Packet{}, lost
+			}
+			return worldconn.Packet{}, fmt.Errorf("world: the connection closed while waiting for %s: %w", what, ev.err)
+		}
+		if err := s.handle(s.ctx, ev); err != nil {
+			return worldconn.Packet{}, err
+		}
+		if match(ev.p) {
+			return ev.p, nil
+		}
+	}
+}
+
+// waitFor reads events until match returns true, answering what the server
+// asks in between (time syncs, active mover, logout packets). One absolute
+// timeout bounds the wait.
 func (s *session) waitFor(what string, timeout time.Duration, match func(worldconn.Packet) bool) (worldconn.Packet, error) {
 	deadline := time.Now().Add(timeout)
 	for {
