@@ -345,23 +345,22 @@ func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
 	if err := s.confirmGM(ctx); err != nil {
 		return s.actFail(a, step, err)
 	}
-	if err := s.paceGMCast(ctx, line); err != nil {
+	opts, done, err := s.gmLinePrep(line, command.Options{})
+	if err != nil {
 		return s.actFail(a, step, err)
 	}
-	class, goal := classifyGMLine(line)
-	mark := s.teleportMark()
-	res, err := s.runOneResult(ctx, q, line)
-	if err != nil {
+	rep, runErr := s.runCommandLine(ctx, q, line, opts)
+	res := oneResult{Rep: rep, RunErr: runErr}
+	if err := s.finishOne(rep, runErr, line); err != nil {
 		return s.actFail(a, step, err)
 	}
 	if err := gmOutcome(res.Rep, res.RunErr); err != nil {
 		return s.actFail(a, step, fmt.Errorf("%q: %w", line, err))
 	}
-	// A teleport prints nothing when it works: the position is the proof, not a chat reply (gm_silent.go).
-	if class == gmTeleport {
-		if err := s.confirmTeleport(ctx, line, mark, goal); err != nil {
-			return s.actFail(a, step, err)
-		}
+	// A line that prints nothing when it works is a success only when its effect was seen or no line came; a line
+	// the server did send, or a teleport nobody arrived from, is an error (gm_silent.go).
+	if err := done(rep, runErr); err != nil {
+		return s.actFail(a, step, err)
 	}
 	s.actOK(a, step, line)
 	return nil

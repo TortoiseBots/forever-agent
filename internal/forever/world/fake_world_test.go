@@ -328,7 +328,11 @@ type fakeServer struct {
 	// the core answers a working .go xyz), and a non-nil tele also writes the SMSG_MOVE_TELEPORT that moves the
 	// character there.
 	serveGMScript func(said string) (silent bool, tele *[3]float32)
-	serveOrder    []string
+	// serveGMSay, when set and ok, answers a GM line with that one system line (a core refusal).
+	serveGMSay func(said string) (text string, ok bool)
+	// serveCommandTimeout is the serve daemon's command deadline (zero keeps the default 15 s).
+	serveCommandTimeout time.Duration
+	serveOrder          []string
 	// serveCommander, when set, answers a `.tb` line with grammar-v2 lines in which "#T" is the line's token: the
 	// commander method's test script. Nil keeps the one untagged SERVE-BOT-ANSWER line.
 	serveCommander func(line string) []string

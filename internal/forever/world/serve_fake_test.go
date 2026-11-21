@@ -226,6 +226,12 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
 				continue
 			}
+			if say := f.serveGMSay; say != nil && (strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!")) {
+				if text, ok := say(said); ok {
+					c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", text))
+					continue
+				}
+			}
 			if script := f.serveGMScript; script != nil && (strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!")) {
 				if silent, tele := script(said); silent {
 					if tele != nil {
@@ -240,6 +246,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 					}
 					continue
 				}
+			}
+			if class, _ := classifyGMLine(said); class != gmReplies {
+				// The core prints nothing for a working .aura, .die, .respawn, ...: the fake does the same.
+				continue
 			}
 			if strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!") {
 				// A GM line is not chat: the server runs it and answers with its own lines. An echo here would
@@ -377,6 +387,7 @@ func startServeDaemonTuned(t *testing.T, f *fakeServer, steps *stepLog, tune fun
 		RealmBuild:      70707,
 		Character:       "XXXXXX",
 		Deadline:        30 * time.Second,
+		CommandTimeout:  serveTestCommandTimeout(f.serveCommandTimeout),
 		BuildAuthKey:    f.buildKey[:],
 		Logf: func(format string, args ...any) {
 			steps.add(format, args...)
@@ -2165,4 +2176,12 @@ func TestServeCommanderRunStartNeedsALead(t *testing.T) {
 	a.stop(t)
 	f.close()
 	f.wait(t)
+}
+
+// serveTestCommandTimeout is the serve tests' command deadline: a silent GM line lasts to it, so it is short.
+func serveTestCommandTimeout(d time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return 2 * time.Second
 }

@@ -2,24 +2,22 @@ package world
 
 // The core's GM commands that print nothing when they work, and the teleports among them.
 //
-// A tokenless command ends when its reply goes quiet, and a reply with no line at all used to be the error "the
-// server sent no reply". Most GM commands answer a success with a PSendSysMessage, so that was a fair rule; but a
-// good few do not (checked against the core's own handlers, ForeverCore cs_go.cpp, cs_tele.cpp, cs_misc.cpp,
-// cs_character.cpp, cs_learn.cpp, cs_modify.cpp and cs_npc.cpp):
+// Most GM commands answer a success with a PSendSysMessage, so a reply with no line at all used to be the error "the
+// server sent no reply". A good few do not (checked against the core's own handlers, cs_go.cpp, cs_tele.cpp,
+// cs_misc.cpp, cs_character.cpp, cs_learn.cpp and cs_npc.cpp):
 //
 //	.go xyz / creature / zonexy / ...   DoTeleport and the handlers around it print only a refusal
 //	.tele <place>                       HandleTeleCommand prints only a refusal (`.tele name`/`group` do print)
 //	.aura, .unaura (and their self forms), .revive, .respawn, .die, .damage, .cast
-//	.levelup, .learn, .modify hp|mana|rage|energy, .npc add temp, .npc evade
+//	.levelup (self), .learn, .npc add temp, .npc evade
 //
-// Those lines ask the collector for AllowEmpty: a quiet window with no line is the success. A refusal, a say echo
-// (no permission), an unknown command and a syntax answer still fail as before.
-//
-// A teleport is also never confirmed by chat. The proof is the character's own position: the move or new-world
-// packet the server sends, read back from the mover within a deadline (confirmTeleport).
+// (`.modify hp|mana|rage|energy` is not on the list: it prints.) For such a line the refusal is the only text there
+// can be, so silence is accepted only when nothing can still arrive: the run lasts to its deadline with no line
+// (command.Options.Silent), or the effect is seen first (command.Options.Confirm). Any line the server does send is
+// an error carrying it. A teleport's effect is the character's own position or the new-world packet, never a chat
+// reply (teleportArrived).
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -37,11 +35,15 @@ const (
 	gmTeleport                    // prints nothing on success and moves the character
 )
 
-// teleportGoal is where a teleport line says the character will stand, when the line says it.
+// teleportGoal is where a teleport line says the character will stand, when the line says it. hasMap and hasZ say
+// whether the line named a map and a height: map 0 is a real map, so no value stands for "not given".
 type teleportGoal struct {
-	known bool
-	mapID uint32 // 0 with known true means "the map the character is on"
-	x, y  float32
+	known  bool
+	hasMap bool
+	hasZ   bool
+	mapID  uint32
+	x, y   float32
+	z      float32
 }
 
 // classifyGMLine names how a GM line answers success. An unknown line is gmReplies, the strict default.
@@ -60,7 +62,7 @@ func classifyGMLine(line string) (gmLineClass, teleportGoal) {
 			if g, ok := parseGoXYZ(f[2:]); ok {
 				return gmTeleport, g
 			}
-			return gmTeleport, teleportGoal{}
+			return gmReplies, teleportGoal{} // a malformed line is answered by the core's own syntax text
 		}
 		if len(f) >= 2 && f[1] == "ticket" {
 			return gmReplies, teleportGoal{}
@@ -75,13 +77,6 @@ func classifyGMLine(line string) (gmLineClass, teleportGoal) {
 		}
 	case "aura", "unaura", "revive", "respawn", "die", "damage", "levelup", "learn", "cast":
 		return gmSilent, teleportGoal{}
-	case "modify":
-		if len(f) >= 2 {
-			switch f[1] {
-			case "hp", "mana", "rage", "energy":
-				return gmSilent, teleportGoal{}
-			}
-		}
 	case "npc":
 		if len(f) >= 3 && f[1] == "add" && f[2] == "temp" || len(f) >= 2 && f[1] == "evade" {
 			return gmSilent, teleportGoal{}
@@ -90,128 +85,168 @@ func classifyGMLine(line string) (gmLineClass, teleportGoal) {
 	return gmReplies, teleportGoal{}
 }
 
-// parseGoXYZ reads `x y [z [map [o]]]` of `.go xyz`.
+// parseGoXYZ reads `x y z [map [o]]` of `.go xyz` (the core's z is optional only for a line that names no map;
+// the parse here is of the full form, and a line it refuses is left to the core's own syntax answer).
 func parseGoXYZ(a []string) (teleportGoal, bool) {
-	if len(a) < 2 {
+	if len(a) < 3 {
 		return teleportGoal{}, false
 	}
 	x, err1 := strconv.ParseFloat(a[0], 32)
 	y, err2 := strconv.ParseFloat(a[1], 32)
-	if err1 != nil || err2 != nil {
+	z, err3 := strconv.ParseFloat(a[2], 32)
+	if err1 != nil || err2 != nil || err3 != nil {
 		return teleportGoal{}, false
 	}
-	g := teleportGoal{known: true, x: float32(x), y: float32(y)}
+	g := teleportGoal{known: true, hasZ: true, x: float32(x), y: float32(y), z: float32(z)}
 	if len(a) >= 4 {
 		m, err := strconv.ParseUint(a[3], 10, 32)
 		if err != nil {
 			return teleportGoal{}, false
 		}
-		g.mapID = uint32(m)
+		g.hasMap, g.mapID = true, uint32(m)
 	}
 	return g, true
-}
-
-// gmLineOptions is the collector's options for one GM line: a silent-success command may end quietly with no line.
-func gmLineOptions(line string, o command.Options) command.Options {
-	if class, _ := classifyGMLine(line); class != gmReplies && o.Token == "" {
-		o.AllowEmpty = true
-	}
-	return o
 }
 
 // teleportConfirmWait bounds the wait for the character to arrive. A variable so the tests shorten it.
 var teleportConfirmWait = 8 * time.Second
 
-const (
-	// teleportArriveYd is how close to a named point the character must stand to have arrived; the core may nudge a
-	// point onto the ground.
-	teleportArriveYd = 3.0
-	// teleportMovedYd is how far a teleport with no named point must have moved the character.
-	teleportMovedYd = 1.0
-)
+// teleportArriveYd is how close to the named point the character must stand to have arrived.
+const teleportArriveYd = 2.0
 
 // teleportMark is what the session believed before a teleport line went out.
 type teleportMark struct {
-	teleports int
-	epoch     uint64
-	mapID     uint32
-	x, y      float32
+	selfTeleports int
+	epoch         uint64
+	mapID         uint32
 }
 
 func (s *session) teleportMark() teleportMark {
-	return teleportMark{teleports: s.report.Teleports, epoch: s.mapEpoch(), mapID: s.world.MapID(), x: s.MoverX(), y: s.MoverY()}
+	return teleportMark{selfTeleports: s.selfTeleports, epoch: s.mapEpoch(), mapID: s.world.MapID()}
 }
 
-// confirmTeleport waits for the proof of a teleport line that printed nothing: the server's own move or new-world
-// packet, or the position read back, within teleportConfirmWait. Chat is never the proof.
-func (s *session) confirmTeleport(ctx context.Context, line string, before teleportMark, goal teleportGoal) error {
-	deadline := time.Now().Add(teleportConfirmWait)
-	for {
-		if !s.betweenMaps() {
-			x, y := s.MoverX(), s.MoverY()
-			if goal.known {
-				want := goal.mapID
-				if want == 0 {
-					want = before.mapID
-				}
-				if s.world.MapID() == want && math.Hypot(float64(x-goal.x), float64(y-goal.y)) <= teleportArriveYd {
-					return nil
-				}
-			} else if s.report.Teleports > before.teleports || s.mapEpoch() != before.epoch ||
-				math.Hypot(float64(x-before.x), float64(y-before.y)) > teleportMovedYd {
-				return nil
-			}
+// teleportArrived is the proof of a teleport line: the character stands within teleportArriveYd of the point the
+// line named, on the map it named (the current one when it named none), or, for a line that names no point, the
+// server moved this character (its own SMSG_MOVE_TELEPORT) or sent a new world. Another unit's teleport and a walk
+// of a yard are not proof.
+func (s *session) teleportArrived(before teleportMark, g teleportGoal) bool {
+	if s.betweenMaps() {
+		return false
+	}
+	if g.known {
+		want := before.mapID
+		if g.hasMap {
+			want = g.mapID
 		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf("%q: the teleport is not confirmed: the character did not arrive within %s (at %.1f %.1f on map %d)",
-				line, teleportConfirmWait, s.MoverX(), s.MoverY(), s.world.MapID())
+		if s.world.MapID() != want {
+			return false
 		}
-		if err := s.collect(ctx, 100*time.Millisecond); err != nil {
+		dx, dy := float64(s.MoverX()-g.x), float64(s.MoverY()-g.y)
+		d := math.Hypot(dx, dy)
+		if g.hasZ {
+			d = math.Hypot(d, float64(s.MoverZ()-g.z))
+		}
+		return d <= teleportArriveYd
+	}
+	return s.selfTeleports > before.selfTeleports || s.mapEpoch() != before.epoch
+}
+
+// gmLinePrep checks the cast pace and fills the collector's options for one GM line: a silent-class line is run
+// with command.Options.Silent, and a teleport also with a Confirm of the character's position. The returned func
+// finishes the line once it ran.
+func (s *session) gmLinePrep(line string, o command.Options) (command.Options, func(*command.Reply, error) error, error) {
+	if err := s.checkGMCastPace(line); err != nil {
+		return o, nil, err
+	}
+	class, goal := classifyGMLine(line)
+	done := func(rep *command.Reply, err error) error {
+		if rep != nil {
+			s.noteGMCastSent(line)
+		}
+		if err != nil || class == gmReplies || rep == nil {
 			return err
 		}
+		if class == gmTeleport {
+			if rep.End == "confirmed" {
+				return nil
+			}
+			return fmt.Errorf("%q: the teleport is not confirmed: the character did not arrive within %s (at %.1f %.1f on map %d)%s",
+				line, teleportConfirmWait, s.MoverX(), s.MoverY(), s.world.MapID(), answeredText(rep))
+		}
+		if len(rep.Raw) != 0 {
+			return fmt.Errorf("%q: the server answered a command that prints nothing when it works: %s", line, strings.Join(rep.Raw, " | "))
+		}
+		return nil
 	}
+	if class == gmReplies {
+		return o, done, nil
+	}
+	o.Silent = true
+	if class == gmTeleport {
+		mark := s.teleportMark()
+		o.Confirm = func() bool { return s.teleportArrived(mark, goal) }
+		if o.Deadline <= 0 {
+			o.Deadline = teleportConfirmWait
+		}
+	}
+	return o, done, nil
+}
+
+// answeredText is the server's own words of a reply, for an error that has to carry them.
+func answeredText(rep *command.Reply) string {
+	if rep == nil || len(rep.Raw) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(rep.Raw, " | ")
 }
 
 // GM casts are paced. The live core-gains run lost the character's world connection (the server closed the socket:
 // `reading a frame header: EOF`, and every reconnect was answered `unknown account`) after about fourteen
 // `.cast <spell> triggered` lines at one selected mob in a short time, with the server itself still up. The core's own
-// per-opcode packet limit does not name chat (cs and WorldSession::DosProtection leave CMSG_CHAT_MESSAGE_SAY
-// unlimited), and the agent had not closed the socket, so the cause is on the server side and the evidence cannot
-// tell more. A burst of triggered casts is the one pattern that run shows, so the lines go out at a measured pace: at
-// most gmCastBurst `.cast` lines in any gmCastWindow, the next one waiting for the oldest to age out.
+// per-opcode packet limit does not name chat (WorldSession::DosProtection leaves CMSG_CHAT_MESSAGE_SAY unlimited), and
+// the agent had not closed the socket, so the cause is on the server side and the evidence cannot tell more. A burst
+// of triggered casts is the one pattern that run shows, so the lines go out at a measured pace: at most gmCastBurst
+// `.cast` lines in any gmCastWindow. A line over the pace is refused at once with the time to wait, never held, so
+// the serving loop and every call behind it keep running.
 var (
 	gmCastBurst  = 4
 	gmCastWindow = 8 * time.Second
 )
 
-// isGMCast reports whether a GM line is the core's `.cast` command.
+// isGMCast reports whether a GM line is the core's `.cast` command, in the abbreviations the core accepts (a prefix
+// of "cast" of three letters or more).
 func isGMCast(line string) bool {
 	f := strings.Fields(strings.ToLower(strings.TrimSpace(line)))
-	return len(f) > 0 && (f[0] == ".cast" || f[0] == "!cast")
+	if len(f) == 0 || len(f[0]) < 4 || (f[0][0] != '.' && f[0][0] != '!') {
+		return false
+	}
+	w := f[0][1:]
+	return len(w) >= 3 && strings.HasPrefix("cast", w)
 }
 
-// paceGMCast holds a `.cast` line until the pace allows it.
-func (s *session) paceGMCast(ctx context.Context, line string) error {
-	if !isGMCast(line) {
+// checkGMCastPace refuses a `.cast` line sent over the pace, naming how long to wait.
+func (s *session) checkGMCastPace(line string) error {
+	if !isGMCast(line) || gmCastBurst <= 0 {
 		return nil
 	}
-	for {
-		now := time.Now()
-		keep := s.gmCastAt[:0]
-		for _, at := range s.gmCastAt {
-			if now.Sub(at) < gmCastWindow {
-				keep = append(keep, at)
-			}
+	now := time.Now()
+	keep := s.gmCastAt[:0]
+	for _, at := range s.gmCastAt {
+		if now.Sub(at) < gmCastWindow {
+			keep = append(keep, at)
 		}
-		s.gmCastAt = keep
-		if len(s.gmCastAt) < gmCastBurst {
-			s.gmCastAt = append(s.gmCastAt, now)
-			return nil
-		}
-		wait := gmCastWindow - now.Sub(s.gmCastAt[0])
-		s.opts.logf("gm: %d .cast lines in %s; the next one waits %s", len(s.gmCastAt), gmCastWindow, wait.Round(time.Millisecond))
-		if err := s.collect(ctx, wait); err != nil {
-			return err
-		}
+	}
+	s.gmCastAt = keep
+	if len(s.gmCastAt) < gmCastBurst {
+		return nil
+	}
+	wait := gmCastWindow - now.Sub(s.gmCastAt[0])
+	return fmt.Errorf("gm: %d .cast lines went out in the last %s; the next is allowed in %s", len(s.gmCastAt), gmCastWindow, wait.Round(100*time.Millisecond))
+}
+
+// noteGMCastSent records a `.cast` line that was sent.
+func (s *session) noteGMCastSent(line string) {
+	if isGMCast(line) {
+		s.gmCastAt = append(s.gmCastAt, time.Now())
 	}
 }

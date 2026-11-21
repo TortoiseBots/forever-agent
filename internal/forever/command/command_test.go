@@ -619,3 +619,41 @@ func FuzzVisible(f *testing.F) {
 		}
 	})
 }
+
+// TestSilentWaitsForTheDeadline: a Silent command is a success only when nothing came in the whole deadline, so a
+// refusal that arrives after the quiet window is still caught (the AllowEmpty run ended at the quiet window and
+// missed it); a line ends the run as an answer; Confirm ends it early as confirmed.
+func TestSilentWaitsForTheDeadline(t *testing.T) {
+	tr, _, now := newScript(nil)
+	rep, err := Run(context.Background(), tr, ".die", Options{Quiet: 500 * time.Millisecond, Deadline: 5 * time.Second, Now: now, Silent: true})
+	if err != nil || !rep.Complete || rep.End != "deadline" || len(rep.Raw) != 0 {
+		t.Fatalf("silent run: %v %+v", err, rep)
+	}
+	if rep.Elapsed < 5*time.Second {
+		t.Fatalf("a silent run ended after %v, before its deadline", rep.Elapsed)
+	}
+	tr, _, now = newScript([]chat.Line{sys("You must select a character or a creature.")})
+	rep, err = Run(context.Background(), tr, ".die", Options{Quiet: 100 * time.Millisecond, Deadline: 5 * time.Second, Now: now, Silent: true})
+	if err != nil || len(rep.Raw) != 1 {
+		t.Fatalf("a line of a silent command: %v %+v", err, rep)
+	}
+	tr, _, now = newScript(nil)
+	rep, err = Run(context.Background(), tr, ".go xyz 1 2 3", Options{Quiet: 500 * time.Millisecond, Deadline: 5 * time.Second, Now: now, Silent: true,
+		Confirm: func() bool { return true }})
+	if err != nil || rep.End != "confirmed" || !rep.Complete {
+		t.Fatalf("a confirmed run: %v %+v", err, rep)
+	}
+}
+
+// TestAllowEmptyQuietEndKeepsTheTail: a run that ended quietly with no line proves nothing about a refusal still on
+// its way, so the session keeps its tail window and the next tokened run does not take that refusal for its own.
+func TestAllowEmptyQuietEndKeepsTheTail(t *testing.T) {
+	tr, _, now := newScript(nil)
+	s := NewSession(tr)
+	if _, err := s.Run(context.Background(), ".npc evade", Options{Quiet: 500 * time.Millisecond, Deadline: 5 * time.Second, Now: now, AllowEmpty: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s.tailUntil.IsZero() {
+		t.Fatal("the tail window was cleared after a quiet end with no line")
+	}
+}
