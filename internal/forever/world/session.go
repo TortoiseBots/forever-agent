@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
@@ -463,7 +464,13 @@ type session struct {
 	death *deathWatch
 
 	// Round 3: the world model, the character's own GUID once the create block names it, and the mover.
-	world    *objects.World
+	world *objects.World
+	// inv is the character's live inventory: the login snapshot kept current by push results, the player's own
+	// InvSlots updates and the destroy lists (items.Tracker). It is built with the session, so both the act runner's
+	// `inv` step and the serve method read it from the first packet on.
+	inv *items.Tracker
+	// itemCast watches the cast an item `use` step asked for (inventory_act.go): the answers the server gives to it.
+	itemCast itemCastWatch
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
@@ -577,6 +584,7 @@ func newSession(opts Options, report *Report, ctx context.Context) *session {
 	s.fight = &fightLog{started: time.Now(), now: s.Now}
 	s.death = &deathWatch{started: time.Now()}
 	s.loot = newLootWatch()
+	s.inv = items.NewTracker()
 	s.world = objects.NewWorld(0)
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
@@ -1804,7 +1812,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.logoutComplete = true
 		s.deadMu.Unlock()
 	case wire.SMSGUpdateObject:
-		u, err := objects.ParseUpdateObject(p.Payload)
+		s.capturePacket(p)
+		u, err := objects.ParseUpdateObjectForBuild(p.Payload, s.opts.RealmBuild)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_UPDATE_OBJECT: %w", err)
 		}
@@ -1922,6 +1931,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if isLootPacket(p.Core) {
 			return s.handleLoot(p)
 		}
+		if isInventoryPacket(p.Core) {
+			return s.handleInventory(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -2006,6 +2018,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.world.ApplySpellCast(&v, true, now)
 		s.combatCast("spell_go", now, &v)
+		s.itemCast.gone(&v, s.self)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}
@@ -2028,6 +2041,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		s.world.ApplySpellFailure(v, now)
 		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureName(v.Reason))
 		if v.Caster == s.self || v.Caster.IsZero() {
+			s.itemCast.failed(v)
 			// CAST_FAILED is the pre-cast answer and carries the client's cast id; the failure forms carry the
 			// server's (see fightLog.castFail). A failure of a generation that gave up is dropped first.
 			if s.fight.staleCast(v.SpellID, v.CastID, now) {
@@ -2329,10 +2343,42 @@ func (s *session) observeSelfIfTracking() {
 }
 
 func (s *session) applyUpdate(u *objects.Update) {
+	now := s.transport().Now()
+	inv := s.tracker()
+	if len(u.Destroy)+len(u.OutOfRange) != 0 {
+		gone := make([]wire.GUID, 0, len(u.Destroy)+len(u.OutOfRange))
+		gone = append(gone, u.Destroy...)
+		gone = append(gone, u.OutOfRange...)
+		inv.Destroyed(gone)
+	}
 	for _, b := range u.Blocks {
+		// The server's own slots are the truth: the model merges them, and the tracker lets them confirm the moves
+		// that touched them and drop the placements they contradict.
+		if slots, ok := b.Info.ChangedInvSlots(); ok {
+			inv.ServerSlots(now, slots)
+		}
+		if slots, ok := b.Info.ChangedContainerSlots(); ok {
+			inv.ServerBag(now, b.GUID, slots)
+		}
+		// An update the decoder could not read must never be silent: slots it named are lost (stale), and an
+		// ActivePlayerData update behind an equipment change is explained by the client's own move or is stale too.
+		switch {
+		case b.Info.InvSlotsUndecoded():
+			inv.ServerUndecoded(now, true)
+			s.noteInventoryStale("a server update named inventory slots next to fields this client does not decode")
+		case b.Info.ActivePlayerSkipped():
+			_, was := inv.Stale()
+			inv.ServerUndecoded(now, false)
+			if reason, stale := inv.Stale(); stale && !was {
+				s.noteInventoryStale(reason)
+			}
+		}
 		if b.Movement == nil || !b.Movement.ThisIsYou {
 			continue
 		}
+		// Every own create is a fresh snapshot of the character (the login burst, a map change): the placements the
+		// overlay guessed before it are settled by the slots this block carries.
+		inv.Reset()
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID
