@@ -633,9 +633,29 @@ func TestValidateText(t *testing.T) {
 		{".bot help", ErrCommandText},
 		{"!command", ErrCommandText},
 		{"a\xffb", ErrTextUTF8},
+		// Well-formed client links pass through: an item link, a quest link, and a coloured
+		// spell link, the shapes a real client sends.
+		{"check this |cffa335ee|Hitem:812:0:0:0:0:0:0:0:70|h[Glowing Brightwood Staff]|h|r", nil},
+		{"|cff808080|Hquest:2278:47|h[The Platinum Discs]|h|r", nil},
+		{"|cff71d5ff|Hspell:21563|h[Command]|h|r", nil},
+		{"|cffffd000|Henchant:3919|h[Engineering: Rough Dynamite]|h|r", nil},
+		{"|cff4e96f7|Htalent:2232:-1|h[Taste for Blood]|h|r", nil},
+		// Malformed markup is refused: the server validates every hyperlink and may kick on a
+		// malformed one, so the client never sends it. A bare link without colour passes (the
+		// grammar makes the colour optional) and '||' is the client's literal-pipe escape.
+		{"a |Hitem:1|h[Sword]|h", nil},
+		{"a || b", nil},
 		{"a |cffff0000red|r", ErrTextHyperlink},
-		{"a |Hitem:1|h[Sword]|h", ErrTextHyperlink},
-		{"a || b", ErrTextHyperlink},
+		{"a | b", ErrTextHyperlink},
+		{"|Hitem:1|h[Sword]", ErrTextHyperlink},
+		{"|Hitem:1[Sword]|h", ErrTextHyperlink},
+		{"|Hunknown:1|h[X]|h", ErrTextHyperlink},
+		{"|cffff0000|Hitem:812:0:0:0:0:0:0:0:70|h[Staff]|h", ErrTextHyperlink},
+		{"|Hitem:1|h[|Hspell:2|h[X]|h]|h", ErrTextHyperlink},
+		{"|", ErrTextHyperlink},
+		{"|Hitem:abc|h[Sword]|h", ErrTextHyperlink},
+		{"|Hitem:12 34|h[Sword]|h", ErrTextHyperlink},
+		{"|Hitem:|h[Sword]|h", ErrTextHyperlink},
 		{strings.Repeat("a", 511), nil},
 		{"h\u00e9llo \u4e16\u754c", nil},
 		{"hello", nil},
@@ -645,7 +665,13 @@ func TestValidateText(t *testing.T) {
 		if c.err == nil && err != nil {
 			t.Fatalf("%q: %v", c.text, err)
 		}
-		if c.err != nil && !strings.Contains(err.Error(), c.err.Error()[:20]) {
+		if c.err == nil {
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%q: accepted, want %v", c.text, c.err)
+		}
+		if !strings.Contains(err.Error(), c.err.Error()[:20]) {
 			t.Fatalf("%q: %v, want %v", c.text, err, c.err)
 		}
 	}
@@ -659,7 +685,7 @@ func TestValidateCommandText(t *testing.T) {
 			t.Fatalf("%q: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", ".", "!", "plain text", "/say hi", ".x\x00", ".x|Hitem:1|h"} {
+	for _, bad := range []string{"", ".", "!", "plain text", "/say hi", ".x\x00", ".x|Hitem:1|h", ".say |Hitem:1|h[Sword]|h trailing |"} {
 		if err := ValidateCommandText(bad); err == nil {
 			t.Fatalf("%q was accepted as a command", bad)
 		}

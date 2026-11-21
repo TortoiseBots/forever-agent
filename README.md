@@ -273,8 +273,9 @@ and exits 12 when a leg did not pass. The thresholds are flags; the full contrac
 `forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote
 `--emote TEXT`, then prints every chat line it receives for `--listen` seconds (default 10 s) and logs out. The
-message checks the server makes (non-empty, at most 511 bytes, valid UTF-8, no control characters or newlines, no
-`|` hyperlink escape, and a leading `/`, `.` or `!` is a command, not a line) run before anything is sent and fail
+message checks the server makes (non-empty, at most 511 bytes, valid UTF-8, no control characters or newlines,
+well-formed `|` link markup — a `|Hkind:data|h[label]|h` link, optionally wrapped in `|cAARRGGBB…|r` — and a
+leading `/`, `.` or `!` is a command, not a line) run before anything is sent and fail
 with a named error. Every packet goes out in the character's race language (Common for a human, Orcish for an orc,
 and so on): the server refuses a language the character has not learned. `--watch NAME` prints that player's position
 from the world model once a second for `--listen` instead of the chat log (the name lookup is the server's

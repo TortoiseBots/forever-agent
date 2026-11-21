@@ -352,42 +352,29 @@ var (
 	ErrTextControl   = errors.New("chat: the message carries a control character or a newline, which the server rejects")
 	ErrCommandText   = errors.New("chat: the message starts with /, . or !, which the server runs as a command instead of saying it (Chat.cpp:186)")
 	ErrTextUTF8      = errors.New("chat: the message is not valid UTF-8 (the server's packet reader throws on it, ByteBuffer.cpp:83-84)")
-	ErrTextHyperlink = errors.New("chat: the message carries '|'; the server validates hyperlinks in every chat line and kicks on a malformed one (WorldSession.cpp:819-828), so this client refuses all of them")
+	ErrTextHyperlink = errors.New("chat: the message's '|' markup is malformed (a link is |Hkind:data|h[label]|h, optionally wrapped in |cAARRGGBB...|r, and '||' is a literal pipe; the server validates hyperlinks in every chat line and may kick on a malformed one, WorldSession.cpp:819-828)")
 	ErrBadName       = errors.New("chat: a character name is empty, longer than the server's 12-byte limit, or has a non-printable byte")
 )
 
-// ValidateText is the client-side half of the server's checks: non-empty, at most 511 bytes, valid UTF-8, no
-// control byte or newline, no hyperlink escape, and not a chat command (ChatHandler.cpp:232-243 runs the command
-// parser before the message checks).
+// ValidateText is the client-side half of the server's checks: non-empty, at most 511 bytes, valid UTF-8,
+// control byte or newline, well-formed '|' markup, and not a chat command (ChatHandler.cpp:232-243 runs the
+// command parser before the message checks).
+//
+// A '|' starts markup the real client sends with shift-click: a link |Hkind:data|h[label]|h, optionally
+// wrapped in a colour |cAARRGGBB...|r. The server validates hyperlinks in every chat line and may kick on a
+// malformed one (WorldSession.cpp:819-828, Hyperlinks.cpp:881-921), so this rejects any other use.
 func ValidateText(text string) error {
-	if text == "" {
-		return ErrEmptyText
-	}
-	if len(text) > MaxText {
-		return fmt.Errorf("%w (%d bytes)", ErrTextTooLong, len(text))
-	}
-	if !utf8.ValidString(text) {
-		return ErrTextUTF8
-	}
-	if strings.ContainsRune(text, '|') {
-		return ErrTextHyperlink
-	}
-	for i := range len(text) {
-		if text[i] < 0x20 || text[i] == 0x7F {
-			return ErrTextControl
-		}
-	}
-	if strings.ContainsRune("/.!", rune(text[0])) {
-		return ErrCommandText
-	}
-	return nil
+	return validateChatText(text, true)
 }
 
-// ValidateCommandText checks text that is meant to be a server command. The command parser runs for a leading '.'
-// or '!' before any message validation (Chat.cpp:183-200, called from ChatHandler.cpp:234), so a command may lead
-// with one of them; everything else (length, control bytes, UTF-8, hyperlinks) is the same rule as a chat line.
-func ValidateCommandText(text string) error {
-	if len(text) < 2 || (text[0] != '.' && text[0] != '!') {
+// validateChatText is ValidateText (chat) and ValidateCommandText (a server command, which may lead with .
+// or !): every other rule is the same.
+func validateChatText(text string, chat bool) error {
+	if chat {
+		if text == "" {
+			return ErrEmptyText
+		}
+	} else if len(text) < 2 || (text[0] != '.' && text[0] != '!') {
 		return fmt.Errorf("chat: a command starts with . or ! followed by its name")
 	}
 	if len(text) > MaxText {
@@ -396,15 +383,128 @@ func ValidateCommandText(text string) error {
 	if !utf8.ValidString(text) {
 		return ErrTextUTF8
 	}
-	if strings.ContainsRune(text, '|') {
-		return ErrTextHyperlink
+	if err := validateMarkup(text); err != nil {
+		return err
 	}
 	for i := range len(text) {
 		if text[i] < 0x20 || text[i] == 0x7F {
 			return ErrTextControl
 		}
 	}
+	if chat && strings.ContainsRune("/.!", rune(text[0])) {
+		return ErrCommandText
+	}
 	return nil
+}
+
+// linkKinds are the hyperlink kinds this client passes through: what a real client can link (an item, quest or
+// spell by shift-click, a talent, an enchant, a trade recipe) plus achievement, which has the same shape. The
+// server's checker knows every one (TrinityCore Hyperlinks.cpp, mangos Chat.cpp isValidChatMessage for item and
+// enchant), so a known kind cannot smuggle an unchecked shape through; anything else is malformed markup.
+var linkKinds = map[string]bool{
+	"item": true, "quest": true, "spell": true, "talent": true, "enchant": true, "trade": true, "achievement": true,
+}
+
+// isHexByte reports an ASCII hex digit for the |cAARRGGBB colour.
+func isHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// validateMarkup checks the client link grammar of text: plain text with links |Hkind:data|h[label]|h, each
+// optionally wrapped in one colour |cAARRGGBB...|r. The server validates every hyperlink and drops (or kicks
+// on, depending on its setting) a malformed one, so anything else with a '|' in it is refused here: a stray
+// bar, a half-written link, an unknown kind, a colour without its |r, a second link inside a link label.
+// Plain text without any '|' passes untouched.
+func validateMarkup(text string) error {
+	for i := 0; i < len(text); {
+		if text[i] != '|' {
+			i++
+			continue
+		}
+		if strings.HasPrefix(text[i:], "||") {
+			// A doubled bar is a literal pipe in normal text (the client's own escape), but never inside a
+			// link: there the grammar takes the single-bar form only.
+			i += 2
+			continue
+		}
+		end, ok := scanLink(text[i:])
+		if !ok {
+			return ErrTextHyperlink
+		}
+		i += end
+	}
+	return nil
+}
+
+// linkDataOK reports a link payload made only of digits, ':' and '-' (ids, enchant and talent numbers): the
+// server's link checker parses these as numbers, so a letter or space in one is malformed and may be dropped or kicked.
+func linkDataOK(data string) bool {
+	if data == "" {
+		return false
+	}
+	for i := 0; i < len(data); i++ {
+		if c := data[i]; (c < '0' || c > '9') && c != ':' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// scanLink consumes one well-formed coloured link at the start of s (|H... or |c...|H...|h...|h|r) and reports
+// its length; ok is false for anything else. The shape mirrors what a real client sends: at most one colour
+// wrapper, exactly |Hkind:data|h[label]|h inside, the label in brackets, nothing nested.
+func scanLink(s string) (end int, ok bool) {
+	rest := s[1:]
+	coloured := false
+	if strings.HasPrefix(rest, "c") && len(rest) >= 9 {
+		for _, c := range []byte(rest[1:9]) {
+			if !isHexByte(c) {
+				return 0, false
+			}
+		}
+		rest = rest[9:]
+		// The colour wraps the link, so its own |H opener follows.
+		if !strings.HasPrefix(rest, "|H") {
+			return 0, false
+		}
+		rest = rest[1:]
+		coloured = true
+	}
+	if !strings.HasPrefix(rest, "H") {
+		return 0, false
+	}
+	head := rest[1:]
+	close := strings.Index(head, "|h")
+	if close < 0 {
+		return 0, false
+	}
+	name, data, found := strings.Cut(head[:close], ":")
+	if !found || !linkKinds[name] || !linkDataOK(data) {
+		return 0, false
+	}
+	after := head[close+2:]
+	if !strings.HasPrefix(after, "[") {
+		return 0, false
+	}
+	label := strings.Index(after, "]|h")
+	if label <= 1 || strings.Contains(after[:label], "|") {
+		return 0, false
+	}
+	rest = after[label+3:]
+	if coloured {
+		if !strings.HasPrefix(rest, "|r") {
+			return 0, false
+		}
+		rest = rest[2:]
+	}
+	return len(s) - len(rest), true
+}
+
+// ValidateCommandText checks text that is meant to be a server command. The command parser runs for a leading '.'
+// or '!' before any message validation (Chat.cpp:183-200, called from ChatHandler.cpp:234), so a command may lead
+// with one of them; everything else (length, control bytes, UTF-8, link markup) is the same rule as a chat line.
+func ValidateCommandText(text string) error {
+	return validateChatText(text, false)
 }
 
 // ValidateName checks a character name before it is put in a packet: ASCII letters, 1..12 bytes (the server's
