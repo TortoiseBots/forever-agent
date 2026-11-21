@@ -63,7 +63,8 @@ func (st *sessState) find(m *matcher, from uint64) *events.Event {
 }
 
 // fetch pulls one events page, long-polling wait_ms (the HTTP timeout is
-// wait_ms + 10 s). Empty pages advance the fake clock in tests.
+// wait_ms + 10 s). Empty pages advance the fake clock in tests. Forever
+// slots page event_log instead, decoding rows to events with zero GUIDs.
 func (rr *run) fetch(ctx context.Context, st *sessState, waitMS int) error {
 	if st.closed {
 		return nil
@@ -73,6 +74,9 @@ func (rr *run) fetch(ctx context.Context, st *sessState, waitMS int) error {
 	}
 	if waitMS < 1 {
 		waitMS = 1
+	}
+	if rr.isForever(st.name) {
+		return rr.fetchForever(ctx, st, waitMS)
 	}
 	raw, err := st.caller.Call(ctx, "events",
 		map[string]any{"since": st.cursor, "limit": 1000, "wait_ms": waitMS},
@@ -90,6 +94,27 @@ func (rr *run) fetch(ctx context.Context, st *sessState, waitMS int) error {
 	}
 	st.cursor = page.Next
 	return nil
+}
+
+// fetchForever pulls one event_log page into the session buffer.
+func (rr *run) fetchForever(ctx context.Context, st *sessState, waitMS int) error {
+	raw, err := rr.callForever(ctx, st, "event_log",
+		map[string]any{"since": st.cursor, "limit": 1000, "wait_ms": waitMS},
+		time.Duration(waitMS)*time.Millisecond+10*time.Second)
+	if err != nil {
+		return err
+	}
+	var page foreverPage
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return err
+	}
+	for _, f := range page.Events {
+		st.buf = append(st.buf, foreverToEvent(f))
+	}
+	if len(st.buf) > 20000 {
+		st.buf = append([]events.Event(nil), st.buf[len(st.buf)-20000:]...)
+	}
+	return st.advanceForever(page)
 }
 
 // waitMSLeft clamps the remaining time to a 1-1000 ms fetch wait.
@@ -305,8 +330,22 @@ func dbDesc(s *Step) string {
 }
 
 // checkDBQuery builds the DBQuery from a check_db step with vars expanded.
+// The slot is the step's server key when set, else the file server of the
+// step's session; a step without a session uses the file default.
 func (rr *run) checkDBQuery(s *Step) (DBQuery, error) {
-	q := DBQuery{Op: s.Op}
+	q := DBQuery{Op: s.Op, Forever: s.Server == ServerForever}
+	if s.Server == "" && rr.f != nil {
+		if s.Session != "" {
+			if sess, ok := rr.f.Sessions[s.Session]; ok && sess.Server == ServerForever {
+				q.Forever = true
+			}
+		} else if rr.f.Server == ServerForever {
+			q.Forever = true
+		}
+	}
+	if q.Forever && rr.f != nil && rr.f.DB != nil {
+		q.Schema = rr.f.DB.Schema
+	}
 	if s.Table != "" {
 		q.Table = s.Table
 		q.Want = *s.Rows

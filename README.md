@@ -80,9 +80,13 @@ carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `
 `wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
 answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
 replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
-own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
+own login writes is kept. Each row also carries `spell_name` when the server named the spell: one batched,
+cached `CMSG_DB_QUERY_BULK` per page for the ids the page names, with the row's `spell_id` as the fallback.
+Its `wait_ms` is spent off the session goroutine, on the
 ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
-concurrent long-polls all return at their own cap.
+concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
+faction template against the character's own (fetched once from the server and cached), so `true` keeps only
+what is hostile to the character and `false` only what is not.
 
 The character's own inventory is `inv`: `{known, coinage, items[], quest_log[], free_slot, stale?, stale_reason?}`. Each item row is
 `{guid, container, slot, entry, count, durability?, max_durability?, placed, unconfirmed?}`, where `container` is 255 for the
@@ -552,6 +556,14 @@ floor background; without it, or in a build without cgo, the map says so. Output
 (no path, lowercase `.svg`), and nothing is overwritten without `--force`. `dungeon-watch --map --out DIR` writes the same
 two files after the summary; a failure there is one log line and never changes the watch's exit. See
 [docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
+
+`forever-agent forever gm-walk --follow NAME --character AGENT [--marks-from gm|any] [--out FILE] [--module-out FILE] [--force]
+[--dry FILE]` records a GM character's walk as world data: the agent follows the GM, samples the GM's own object
+position, and turns the GM's whisper (or nearby say) mark words (`point <name>`, `zone <name> <radius-yd>`, `split`) into roads (thinned
+polylines with the map id), points and danger circles in a versioned JSON file with no character names (defaults use the map id and a UTC timestamp). `--module-out`
+(and `forever gm-convert --in DATA --out COPY --module-out MODULE`, no login) renders the module's shape: one row per
+road hop for the `handcrafted_road` table plus the zone/point proposals. `--dry FILE` replays a hand-made recording
+through the same thin/mark/format path with no network. See [docs/forever/GM-WALK-NOTES.md](docs/forever/GM-WALK-NOTES.md).
 
 `forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party

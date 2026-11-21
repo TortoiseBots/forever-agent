@@ -82,7 +82,7 @@ func NewController(p *Poller, cfg ControlConfig) (*Controller, error) {
 		return nil, err
 	}
 	c := &Controller{p: p, cfg: cfg, log: log, recent: map[string][]time.Time{}, locks: map[string]*sync.Mutex{}}
-	c.actions = map[string]actionFunc{"run": c.run}
+	c.actions = map[string]actionFunc{"run": c.run, "order": c.order}
 	return c, nil
 }
 
@@ -290,8 +290,12 @@ type runRequest struct {
 var runVerbs = map[string]string{"pause": "dungeon_pause", "resume": "dungeon_resume", "skip": "dungeon_skip", "stop": "dungeon_stop"}
 
 // run is the run-control handler (D8, D9): a fresh dungeon_status proves the agent is reachable, every pause and stop needs a confirm, and
-// the RPC is logged before it is sent.
+// the RPC is logged before it is sent. On a Forever agent it takes the Forever branch instead: commander {op:run}, never a dungeon_* call.
 func (c *Controller) run(ac *actionContext) {
+	if ac.agent.Kind == AgentForever {
+		c.runForever(ac)
+		return
+	}
 	var req runRequest
 	if !decodeBody(ac.w, ac.r, &req) {
 		return
@@ -301,8 +305,8 @@ func (c *Controller) run(ac *actionContext) {
 		jsonError(ac.w, http.StatusBadRequest, "verb must be one of pause, resume, skip, stop")
 		return
 	}
-	cl := NewControlClient(ac.agent, controlTimeout)
 	ctx := ac.r.Context()
+	cl := NewControlClient(ac.agent, controlTimeout)
 	// D8: ask for a fresh status, never the poller's cache. It is a live check: the confirm is decided by the verb alone (D9).
 	if _, err := cl.Read(ctx, "dungeon_status"); err != nil {
 		jsonError(ac.w, http.StatusBadGateway, "the agent's dungeon_status could not be read: %s", redactMessage(err.Error(), cl.Token()))

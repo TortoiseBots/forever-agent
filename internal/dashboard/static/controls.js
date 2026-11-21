@@ -6,6 +6,14 @@
   // ---- the buttons of a card (D14 / README "Controls"): the matrix, with no DOM ----
   function runButtons(card) {
     if (!card || !card.online || card.synthetic) return [];
+    if (card.kind === "forever") {
+      const running = !!(card.run && card.run.state === "running");
+      return [
+        { verb: "pause", action: "run", label: "Pause run", title: "Pause the module's run: the bots stop where they are and wait.", confirm: true, enabled: running },
+        { verb: "resume", action: "run", label: "Resume run", title: "Let the module's paused run go on.", confirm: false, enabled: !running },
+        { verb: "stop", action: "run", label: "Stop run", title: "Ask the module to stop its run.", confirm: true, enabled: true },
+      ];
+    }
     const r = card.run || {};
     const running = r.state === "running";
     const mode = r.mode || "";
@@ -30,15 +38,38 @@
     return [{ verb: "stop", label: "Stop run", title: "Ends the run and unbinds: the hires go back to your raid and the instance is lost.", confirm: true, enabled: true }];
   }
 
+  // The order buttons of a Forever card (the serve spec's six): stay, follow,
+  // come, attack, pull and release. They go to POST /api/control/<id>/order
+  // through the same token/nonce gate as the run buttons.
+  const ORDER_VERBS = ["stay", "follow", "come", "attack", "pull", "release"];
+  const ORDER_TITLES = {
+    stay: "Tell the bot to stand still where it is.",
+    follow: "Tell the bot to follow again.",
+    come: "Call the bot to you.",
+    attack: "Tell the bot to attack your target.",
+    pull: "Tell the bot to pull your target.",
+    release: "Tell the bot to let go of what it holds.",
+  };
+  function orderButtons(card) {
+    if (!card || !card.online || card.synthetic || card.kind !== "forever") return [];
+    return ORDER_VERBS.map((v) => ({ verb: v, action: "order", label: v.charAt(0).toUpperCase() + v.slice(1), title: ORDER_TITLES[v], confirm: false, enabled: true }));
+  }
+
   // The text of the confirm dialog, naming the character and the plan (a control that ends a run is never silent).
   function confirmText(card, verb) {
     const who = card && card.character ? card.character + " (agent " + card.id + ")" : "agent " + (card && card.id || "?");
     const plan = card && card.label && card.label.plan ? card.label.plan : "no plan";
     if (verb === "pause") {
+      if (card && card.kind === "forever") {
+        return "Pauses the run of " + who + " (" + plan + "): the bots stop where they are and wait. Resume when you are ready.";
+      }
       if (card && card.run && card.run.mode === "observe") {
         return "Pauses the run of " + who + " (" + plan + "): the bots stop where they are and wait. The party and the instance are kept.";
       }
       return "Ends the run of " + who + " (" + plan + "). The party and the instance are kept; go on later with dungeon_run resume.";
+    }
+    if (card && card.kind === "forever") {
+      return "Asks the module to stop the run of " + who + " (" + plan + ").";
     }
     const end = "the hires go back to the commander's raid and the instance is lost.";
     if (card && card.run && card.run.state === "running") return "Ends the run of " + who + " (" + plan + "): " + end;
@@ -94,39 +125,47 @@
       let s = states.get(card.id);
       if (s) return s;
       const el = h("div", { class: "ctls" });
-      s = { el, title: h("h3", { text: "Controls" }), row: h("div", { class: "ctlrow" }), token: h("input", { type: "password", autocomplete: "off", placeholder: "control token", "aria-label": "control token" }),
-        msg: h("div", { class: "ctlmsg", hidden: true }), log: h("details", { class: "ctllog" }), btns: new Map(), busy: new Set(), logAt: 0 };
+      s = { el, title: h("h3", { text: "Controls" }), row: h("div", { class: "ctlrow" }), orderRow: h("div", { class: "ctlrow ctlorders", hidden: true }), token: h("input", { type: "password", autocomplete: "off", placeholder: "control token", "aria-label": "control token" }),
+        msg: h("div", { class: "ctlmsg", hidden: true }), log: h("details", { class: "ctllog" }), btns: new Map(), orderBtns: new Map(), busy: new Set(), logAt: 0 };
       s.token.value = sess.get();
       s.token.addEventListener("change", () => sess.set(s.token.value.trim()));
       const logPre = h("pre", { class: "ctllogpre" });
       s.log.append(h("summary", { text: "Control log (last 5)" }), logPre);
       s.logPre = logPre;
-      s.el.append(s.title, s.row, h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token), s.msg, s.log);
+      s.el.append(s.title, s.row, s.orderRow, h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token), s.msg, s.log);
       states.set(card.id, s);
       return s;
     }
 
-    function paint(s, card) {
-      const specs = runButtons(card);
-      s.card = card; // the buttons keep the card and its specs current: a click never sends last poll's state
-      s.specs = new Map(specs.map((x) => [x.verb, x]));
+    function paintRow(row, btns, specs, s) {
       const have = new Set(specs.map((x) => x.verb));
-      for (const [verb, b] of s.btns) if (!have.has(verb)) { b.remove(); s.btns.delete(verb); }
+      for (const [verb, b] of btns) if (!have.has(verb)) { b.remove(); btns.delete(verb); }
       for (const spec of specs) {
-        let b = s.btns.get(spec.verb);
+        let b = btns.get(spec.verb);
         if (!b) {
           b = h("button", { type: "button", class: "mb ctl" });
-          b.addEventListener("click", () => { const cur = s.specs.get(b.dataset.verb); if (cur) send(s, s.card, cur); });
-          s.btns.set(spec.verb, b);
+          b.addEventListener("click", () => { const cur = s.specs.get(b.dataset.action + ":" + b.dataset.verb); if (cur) send(s, s.card, cur); });
+          btns.set(spec.verb, b);
         }
         b.textContent = spec.label;
         b.title = spec.title;
         b.dataset.verb = spec.verb;
+        b.dataset.action = spec.action || "run";
         b.dataset.confirm = spec.confirm ? "1" : "";
-        b.disabled = !spec.enabled || s.busy.has(spec.verb);
+        b.disabled = !spec.enabled || s.busy.has((spec.action || "run") + ":" + spec.verb);
       }
       // the order of the buttons follows the matrix
-      for (const spec of specs) s.row.append(s.btns.get(spec.verb));
+      for (const spec of specs) row.append(btns.get(spec.verb));
+    }
+
+    function paint(s, card) {
+      const specs = runButtons(card);
+      const orders = orderButtons(card);
+      s.card = card; // the buttons keep the card and its specs current: a click never sends last poll's state
+      s.specs = new Map(specs.concat(orders).map((x) => [(x.action || "run") + ":" + x.verb, x]));
+      paintRow(s.row, s.btns, specs, s);
+      paintRow(s.orderRow, s.orderBtns, orders, s);
+      s.orderRow.hidden = orders.length === 0;
     }
 
     function refreshLog(s, card) {
@@ -140,19 +179,22 @@
       if (spec.confirm && !window.confirm(confirmText(card, spec.verb))) return;
       const token = st.trusted ? "" : s.token.value.trim();
       if (!st.trusted && !token) { s.msg.textContent = "Type the control token first (kept for this browser tab only)."; s.msg.hidden = false; return; }
-      s.busy.add(spec.verb);
+      const action = spec.action || "run";
+      const key = action + ":" + spec.verb;
+      const body = action === "order" ? { verb: spec.verb } : { verb: spec.verb, confirm: !!spec.confirm };
+      s.busy.add(key);
       paint(s, card);
       s.msg.textContent = "Sending " + spec.label + "...";
       s.msg.hidden = false;
       let r;
       try {
-        r = await fetch("/api/control/" + encodeURIComponent(card.id) + "/run", { method: "POST", cache: "no-store",
+        r = await fetch("/api/control/" + encodeURIComponent(card.id) + "/" + action, { method: "POST", cache: "no-store",
           headers: token ? { "Content-Type": "application/json", Authorization: "Bearer " + token } : { "Content-Type": "application/json", "X-Control-Nonce": st.nonce },
-          body: JSON.stringify({ verb: spec.verb, confirm: !!spec.confirm }) });
-      } catch (e) { s.busy.delete(spec.verb); s.msg.textContent = "Could not reach the dashboard: " + e; paint(s, card); return; }
+          body: JSON.stringify(body) });
+      } catch (e) { s.busy.delete(key); s.msg.textContent = "Could not reach the dashboard: " + e; paint(s, card); return; }
       let json = null;
       try { json = await r.json(); } catch (e) { /* not JSON */ }
-      s.busy.delete(spec.verb);
+      s.busy.delete(key);
       if (r.status === 401) { sess.set(""); s.token.value = ""; s.msg.textContent = "Wrong or missing control token" + (st.trusted ? " (the server did not accept this browser without one)." : "."); }
       // The command ran; only its log line failed. Said once, with no retry offered: a retry would send a second command.
       else if (json && json.executed === true && json.log_failed === true) s.msg.textContent = spec.verb + " done (control log write failed).";
@@ -179,6 +221,6 @@
     };
   }
 
-  const api = { runButtons, confirmText, logLines, create, VERBS };
+  const api = { runButtons, orderButtons, ORDER_VERBS, confirmText, logLines, create, VERBS };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.CTL = api;
 })(typeof self !== "undefined" ? self : this);
