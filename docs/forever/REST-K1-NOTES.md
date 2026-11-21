@@ -84,9 +84,9 @@ usage lines, README.
 ## Gates (tree at 108b492f, clean and committed, dirty=0)
 
 * `make fmt-check`, `make vet`, `make cross`: clean.
-* `vm-test ta ~/wt-fa-k1` (go test -count=1 ./... && go vet ./...):
-  `RESULT: PASS  kind=ta wt=wt-fa-k1 sha=108b492f dirty=0 files=2312`, rc=0.
-* Race run, `vm-test ta ~/wt-fa-k1 -- go test -race -count=1 -timeout 20m
+* `vm-test ta <local worktree>` (go test -count=1 ./... && go vet ./...):
+  `RESULT: PASS  kind=ta sha=108b492f dirty=0 files=2312`, rc=0.
+* Race run, `vm-test ta <local worktree> -- go test -race -count=1 -timeout 20m
   ./cmd/forever-agent/... ./internal/slots/... ./internal/forever/...`:
   `ok github.com/pjerra/forever-agent/cmd/forever-agent 730.132s`, every
   other package ok, except `internal/forever/world`, where

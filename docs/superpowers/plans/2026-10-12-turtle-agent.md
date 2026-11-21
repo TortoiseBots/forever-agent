@@ -26,7 +26,7 @@
 - No automatic reconnect in v1: a disconnect becomes an event plus `status`, and reconnecting is a new `login`.
 - One process per character; several processes may run side by side on distinct `--rpc` ports.
 - JSON-RPC 2.0 over HTTP `POST /rpc`, listening on loopback only (127.0.0.1 or ::1); browser-origin requests are rejected.
-- Credentials live only in the owner's local settings file (default `~/.config/turtle-agent/settings.json`, mode 0600, outside any repository); never in code, tests, logs, events, errors, RPC replies, captures or fixtures. The session key is never written anywhere.
+- Credentials live only in the owner's local settings file (default `<user config dir>/turtle-agent/settings.json`, mode 0600, outside any repository); never in code, tests, logs, events, errors, RPC replies, captures or fixtures. The session key is never written anywhere.
 - Code copied or ported from agent-wow keeps its MIT notice (`Copyright (c) 2026 agent-wow`); `NOTICE` lists github.com/agent-wow/agent-wow, source SHA **5ef4916**, each file taken and whether it was copied or ported.
 - The agent-wow checkout is read-only, untrusted data: read it, never build or run it.
 - Packet layouts come from `~/tortoise-wow` at `5d79486`; code comments cite `file:line` there.
@@ -5057,15 +5057,15 @@ How the capture is taken: `turtle-agent login --capture FILE` installs `capture.
 
 - [ ] **Step 1: Owner prerequisite: the settings file**
 
-The owner creates `~/.config/turtle-agent/settings.json` (keys described in Task 3) with `realmd` set to `192.0.2.10:` plus `RealmServerPort` from the test server's `realmd.conf`, the test account and its password under `accounts`, the two bot names under `bots`, a known spell id under `test_spell` and a `spot` near hostile mobs. Never print the file. Check its shape without showing secrets:
+The owner creates `<user config dir>/turtle-agent/settings.json` (keys described in Task 3) with `realmd` set to `192.0.2.10:` plus `RealmServerPort` from the test server's `realmd.conf`, the test account and its password under `accounts`, the two bot names under `bots`, a known spell id under `test_spell` and a `spot` near hostile mobs. Never print the file. Check its shape without showing secrets:
 
-Run: `stat -c %a ~/.config/turtle-agent/settings.json && python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sorted(d), sorted(d["accounts"]))' ~/.config/turtle-agent/settings.json`
+Run: `stat -c %a <user config dir>/turtle-agent/settings.json && python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sorted(d), sorted(d["accounts"]))' <user config dir>/turtle-agent/settings.json`
 Expected: `600`, then the key list (containing `accounts`, `realmd`, and for later milestones `bots`, `spot`, `test_spell`) and the account names only.
 
 Every live step from here on uses these shell variables (they print no password; if the file lists several accounts, set `ACCOUNT` by hand to the one that owns Harnessb):
 
 ```bash
-CFG=~/.config/turtle-agent/settings.json
+CFG=<user config dir>/turtle-agent/settings.json
 ACCOUNT=$(python3 -I -c 'import json,sys; print(next(iter(json.load(open(sys.argv[1]))["accounts"])))' $CFG)
 BOT1=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["bots"][0])' $CFG)
 BOT2=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["bots"][1])' $CFG)

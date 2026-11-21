@@ -149,7 +149,7 @@ On the last code commit `4dda600e` with a clean worktree, each in the foreground
 ```
 make fmt-check            -> clean (no file listed)
 make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
-vm-test ta ~/wt-fa-watch  -> RESULT: PASS kind=ta wt=wt-fa-watch sha=4dda600e dirty=0 files=2131
+vm-test ta <local worktree>  -> RESULT: PASS kind=ta sha=4dda600e dirty=0 files=2131
                              rc=0 vm_duration=980s
 staticcheck ./...         -> rc=0 (no finding)
 go test -race -count=1 -timeout 20m ./... -> every package ok, no FAIL

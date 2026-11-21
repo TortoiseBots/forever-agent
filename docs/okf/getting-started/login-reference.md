@@ -30,7 +30,7 @@ Logs one character in and keeps it online with the RPC server running. One proce
 
 ## Flags
 
-- `--config FILE`: settings file. Default: the default settings path (`<home>/.config/turtle-agent/settings.json` where a home folder exists). Example: `--config <settings-file>`.
+- `--config FILE`: settings file. Default: the default settings path (`<user config dir>/turtle-agent/settings.json` where a home folder exists). Example: `--config <settings-file>`.
 - `--capture FILE`: record decrypted world packets to this new file. Default: off. The file must not exist. Cannot be combined with `--reconnect`. Example: `--capture <capture-file>`. Opened exclusively, mode `0600`; an existing file is refused and captures are never overwritten. The auth session body and Warden packets are never written, and any packet holding the account name, password or session key is stored redacted. `scrub-check` proves a capture is clean before you share or commit it.
 - `--stay DURATION`: log out after this long in world. Default `0` (until interrupted or the logout RPC). Example: `--stay 10m`.
 - `--rpc ADDR`: JSON-RPC listen address. Default: the settings file's `rpc` (`127.0.0.1:8765` when unset). Must be a loopback address; it is bound before realmd so a bad address never costs a login attempt. Example: `--rpc 127.0.0.1:8765`.
