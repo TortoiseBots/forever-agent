@@ -222,3 +222,38 @@ func TestRouteOracleObjectivesFlag(t *testing.T) {
 		t.Errorf("boss-only json: %s", b)
 	}
 }
+
+// TestRouteOracleForeverPlanner is the K2 case: --forever opens a ForeverCore
+// v16 mmaps folder (NewForeverPlanner). The same plan and folder fail under
+// the default 1.12 v6 planner, which reads the v16 map header and refuses it.
+func TestRouteOracleForeverPlanner(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t) // map 700, a flat v16 tile set
+	foreverScoutPlanFile(t, dir, "oracle_f", false)
+
+	var out, errOut bytes.Buffer
+	if code := routeOracleCmd([]string{"--plans", dir, "--mmaps", mmaps,
+		"--out", filepath.Join(dir, "out"), "--plan", "oracle_f", "--forever"}, &out, &errOut); code != exitOK {
+		t.Fatalf("route-oracle --forever: exit %d out %q err %q", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "oracle_f.json")); err != nil {
+		t.Fatalf("no report: %v", err)
+	}
+	if !strings.Contains(out.String(), "oracle_f") {
+		t.Fatalf("no summary: %q", out.String())
+	}
+
+	// The v6 planner must not accept the same folder.
+	var out2, err2 bytes.Buffer
+	if code := routeOracleCmd([]string{"--plans", dir, "--mmaps", mmaps,
+		"--out", filepath.Join(dir, "out6"), "--plan", "oracle_f"}, &out2, &err2); code != exitRouteOracle {
+		t.Fatalf("the v6 planner read a v16 folder: exit %d out %q err %q", code, out2.String(), err2.String())
+	}
+
+	// --parent is a Forever-only rule.
+	var out3, err3 bytes.Buffer
+	if code := routeOracleCmd([]string{"--plans", dir, "--mmaps", mmaps, "--out", filepath.Join(dir, "out3"),
+		"--plan", "oracle_f", "--parent", "700=0"}, &out3, &err3); code != exitUsage {
+		t.Fatalf("--parent without --forever: exit %d err %q", code, err3.String())
+	}
+}

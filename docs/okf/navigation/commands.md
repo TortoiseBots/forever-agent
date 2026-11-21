@@ -86,7 +86,7 @@ Exit 1 when extraction fails (`minimap-extract: ...` on stderr) or any map error
 
 ## patrol-record
 
-`usage: turtle-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2]`
+`usage: turtle-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2] [--forever]`
 
 One positional argument (the slot dir); `--map`, `--area` and `--minutes` are required.
 
@@ -101,5 +101,6 @@ One positional argument (the slot dir); `--map`, `--area` and `--minutes` are re
 | `--spawns` | `""` | World export folder with `creatures.tsv`, to name the patrols' spawns. | `--spawns tools/dungeongen/testdata/map36` |
 | `--mmaps` | `""` | Navmesh folder, to find z when `--z` is absent. | `--mmaps <walk-dir>` |
 | `--entries` | `""` | Comma-separated creature entries to record (default: every creature). | `--entries 123,456` |
+| `--forever` | off | Record through a `forever serve` slot (`serveclient`) instead of the 1.12 slot agent; `--mmaps` is then a v16 folder. The stance lines, safety rules and file are the same. | `--forever` |
 
-Exit 22 when the recording stops early for safety (combat, death, lost world); the file keeps what was recorded with `stopped` set.
+Exit 22 when the recording stops early for safety (combat, death, lost world, a unit targeting the agent by its full 128-bit guid); the file keeps what was recorded with `stopped` set.

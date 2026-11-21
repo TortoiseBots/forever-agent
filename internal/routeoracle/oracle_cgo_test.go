@@ -284,3 +284,35 @@ func TestReportMarshals(t *testing.T) {
 		t.Fatalf("report json is %d bytes", len(b))
 	}
 }
+
+// A ForeverCore v16 folder names its map params file 0700.mmap (four digits);
+// the report must hash that file, not a 700.mmap the server never writes.
+func TestOracleNamesTheForeverMapFile(t *testing.T) {
+	dir := navfixture.WriteForeverDirAt(t, 700,
+		[]navfixture.Poly{navfixture.Square(-300, -300, 300, 300, 0)}, nil, 20, 0)
+	p := navmesh.NewForeverPlanner(dir, nil)
+	t.Cleanup(p.Close)
+	b, err := dungeon.Marshal(&dungeon.Plan{Version: 1, Name: "forever_f", Map: 700,
+		Legs: []dungeon.Leg{{Name: "one", To: dungeon.Point{X: 40},
+			PullGroups: []dungeon.PullGroup{{Entries: []uint32{9999}, Positions: []dungeon.Point{{X: 20}}, Radius: 5}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := dungeon.Parse("forever_f.json", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Oracle(p, dir, plan)
+	if err != nil {
+		t.Fatalf("Oracle: %v", err)
+	}
+	if len(rep.Tiles) == 0 {
+		t.Fatal("no tiles named")
+	}
+	for _, f := range rep.Tiles {
+		if f.Name == "0700.mmap" {
+			return
+		}
+	}
+	t.Fatalf("tiles %+v, want 0700.mmap", rep.Tiles)
+}

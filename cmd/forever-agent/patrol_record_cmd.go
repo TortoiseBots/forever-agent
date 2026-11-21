@@ -31,7 +31,7 @@ import (
 // (combat, death, lost world); the file is still written.
 const exitPatrolRecordStopped = 22
 
-const patrolRecordUsage = "usage: forever-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2]"
+const patrolRecordUsage = "usage: forever-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2] [--forever]"
 
 const (
 	patrolRecordAreaMinR   = 10
@@ -60,6 +60,8 @@ type patrolRecordOptions struct {
 	spawns   string
 	mmaps    string
 	entries  []uint32
+	// forever records through a forever serve slot (serveclient) instead of the 1.12 slot agent.
+	forever bool
 }
 
 // patrolRecordEnv is what the tests replace: the clock, the wait, the slot
@@ -69,15 +71,20 @@ type patrolRecordEnv struct {
 	sleep  func(ctx context.Context, d time.Duration) error
 	open   func(dir string) (*slotClient, error)
 	floors func(mmaps string, mapID uint32, x, y float32) ([]float32, error)
+	// openForever and floorsForever are the --forever halves: a serve slot and a v16 mmaps folder.
+	openForever   func(dir string) (patrolForeverClient, error)
+	floorsForever func(mmaps string, mapID uint32, x, y float32) ([]float32, error)
 }
 
 // patrolRecordEnvDefault is the live environment.
 func patrolRecordEnvDefault() patrolRecordEnv {
 	return patrolRecordEnv{
-		now:    time.Now,
-		sleep:  patrolRecordSleep,
-		open:   openSlotClient,
-		floors: patrolRecordFloors,
+		now:           time.Now,
+		sleep:         patrolRecordSleep,
+		open:          openSlotClient,
+		floors:        patrolRecordFloors,
+		openForever:   patrolForeverOpen,
+		floorsForever: patrolRecordForeverFloors,
 	}
 }
 
@@ -135,6 +142,7 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 	spawnsFlag := fs.String("spawns", "", "world export folder with creatures.tsv, to name the patrols' spawns")
 	mmapsFlag := fs.String("mmaps", "", "navmesh folder, to find z when --z is absent")
 	entriesFlag := fs.String("entries", "", "comma-separated creature entries to record (default: every creature)")
+	foreverFlag := fs.Bool("forever", false, "record through a forever serve slot (serveclient) instead of the 1.12 slot agent; --mmaps is then a v16 folder")
 	pos, rest := splitPositionals(fs, args, 1)
 	if err := fs.Parse(rest); err != nil {
 		return exitUsage
@@ -150,6 +158,7 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		out:      *outFlag,
 		spawns:   *spawnsFlag,
 		mmaps:    *mmapsFlag,
+		forever:  *foreverFlag,
 	}
 	var err error
 	if o.mapID, err = patrolRecordParseMap(*mapFlag); err != nil {
@@ -184,7 +193,11 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 			fmt.Fprintln(stderr, "patrol-record: --z is required without --mmaps (several floors may sit at one x,y)")
 			return exitUsage
 		}
-		zs, err := env.floors(o.mmaps, o.mapID, o.x, o.y)
+		floors := env.floors
+		if o.forever {
+			floors = env.floorsForever
+		}
+		zs, err := floors(o.mmaps, o.mapID, o.x, o.y)
 		if err != nil {
 			fmt.Fprintf(stderr, "patrol-record: navmesh floors at %.1f,%.1f: %v\n", o.x, o.y, err)
 			return exitUsage
@@ -221,6 +234,10 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 			fmt.Fprintf(stderr, "patrol-record: %v\n", err)
 			return exitUsage
 		}
+	}
+
+	if o.forever {
+		return patrolRecordForever(ctx, env, o, spawns, stdout, stderr)
 	}
 
 	client, err := env.open(o.dir)
@@ -277,8 +294,17 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "patrol-record: .gm visible on: %v\n", err)
 	}
 
-	measured, static, wanderers, _ := patrols.Analyze(samples, patrols.Options{})
 	source := fmt.Sprintf("record %s %s", client.Manifest().Server, started.Format("2006-01-02"))
+	return patrolRecordWrite(o, source, started, samples, stop, spawns, nil, stdout, stderr)
+}
+
+// patrolRecordWrite analyses the recording, matches its patrols to the world
+// export, writes the tb-patrols file and prints its rows. guidText maps an
+// analysis key (world.GUID text) to the full 128-bit guid text a serve slot
+// uses, so a Forever recording names the real guids; it is nil for the 1.12
+// agent, whose guids are already 64-bit.
+func patrolRecordWrite(o patrolRecordOptions, source string, started time.Time, samples []patrols.Sample, stop string, spawns []patrolRecordSpawn, guidText map[string]string, stdout, stderr io.Writer) int {
+	measured, static, wanderers, _ := patrols.Analyze(samples, patrols.Options{})
 	for i := range measured {
 		measured[i].Source = source
 	}
@@ -296,6 +322,9 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		Static:    static,
 		Wanderers: wanderers,
 		Stopped:   stop,
+	}
+	if guidText != nil {
+		patrolRecordUseGUIDText(file, guidText)
 	}
 	if file.Patrols == nil {
 		file.Patrols = []patrols.Patrol{}
@@ -318,8 +347,8 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stdout, "%s %s: period %.1f s (%d cycles), %d points, %s\n",
 			p.ID, p.Name, p.PeriodS, p.CyclesSeen, len(p.Path), spawns)
 	}
-	if stop != "" {
-		fmt.Fprintf(stderr, "patrol-record: stopped: %s; wrote %s\n", stop, o.out)
+	if file.Stopped != "" {
+		fmt.Fprintf(stderr, "patrol-record: stopped: %s; wrote %s\n", file.Stopped, o.out)
 		return exitPatrolRecordStopped
 	}
 	return exitOK

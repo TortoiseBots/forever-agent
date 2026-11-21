@@ -46,6 +46,8 @@ turtle-agent patrol-record <slot-dir> --map 36 --area -800,150,60 --minutes 20 -
 
 The command only sends stance GM commands (`.gm on`, `.gm visible`, `.go xyz`); it samples units within the radius plus 60 yd, tracks each unit once it enters the circle, and stops early for combat, death or a lost world. A safety stop exits 22 and writes the file with `stopped` set.
 
+With `--forever` the same loop runs over a `forever serve` slot: the slot is its dir, `--mmaps` is the server's v16 mmaps folder, and the file's guid columns carry each unit's full 32-hex guid (the analysis is keyed by the serve key). A unit whose target is the agent's full 128-bit guid stops the run; one that only shares the low 64 bits does not.
+
 ## 3. Read the file
 
 A `tb-patrols` file (format `tb-patrols`, version 1) holds the map, the area, the minutes and sample rate, and three lists: `patrols` (each with its path, waits, period in seconds, cycles seen and whether the period is an estimate), `static` (units that moved under 3 yd) and `wanderers` (movers under 15 yd with no loop). A loop needs a return within 3 yd after at least 10 s plus 5 confirming samples; the period is estimated until two full cycles are seen.
