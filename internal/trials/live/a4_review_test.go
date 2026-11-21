@@ -36,6 +36,26 @@ func jumpClock(step time.Duration) func() time.Time {
 	}
 }
 
+// fastTeardownRunner is a Runner whose heal read-back gives up quickly (the
+// scripted worlds have no tester row to read).
+func fastTeardownRunner() *Runner {
+	return &Runner{TeardownWait: 100 * time.Millisecond, TeardownPoll: 20 * time.Millisecond}
+}
+
+// fastTypedError answers a typed `.tb` line nobody scripted with the module's
+// error record, so it ends at once: left unanswered it would spin for the
+// runner's whole 15 s deadline.
+func fastTypedError(line string) []string {
+	f := strings.Fields(line)
+	if len(f) >= 2 && f[0] == ".tb" {
+		switch f[1] {
+		case "order", "role", "state", "party", "learn", "equip", "itemscan", "kill", "gm":
+			return []string{"error code=unscripted cmd=" + f[1] + " msg=unscripted #T"}
+		}
+	}
+	return nil
+}
+
 // tankHarness is a tank_damage repeat over the scripted world.
 type tankHarness struct {
 	fake   *fakeServe
@@ -180,7 +200,7 @@ func TestUnclaimedButSpawnedMobsAreLedgeredAndKilled(t *testing.T) {
 			t.Fatalf("spawned unit %v is outside the ledger", u["guid"])
 		}
 	}
-	(&Runner{}).repeatTeardown(context.Background(), h.rep)
+	fastTeardownRunner().repeatTeardown(context.Background(), h.rep)
 	if len(h.world.killed) != 2 {
 		t.Fatalf("teardown killed %v, want both spawned units", h.world.killed)
 	}
@@ -216,7 +236,7 @@ func TestTeardownKillsLedgeredMobsOutsideGuidsMobs(t *testing.T) {
 		h.ledger.Add(map[string]any{"kind": "summon", "guid": g, "entry": 2734})
 	}
 	h.rep.Guids.Mobs = []string{a} // b was ledgered but never reached Guids.Mobs
-	(&Runner{}).repeatTeardown(context.Background(), h.rep)
+	fastTeardownRunner().repeatTeardown(context.Background(), h.rep)
 	if len(h.world.killed) != 2 {
 		t.Fatalf("killed %v: every ledgered mob must be killed", h.world.killed)
 	}
@@ -312,12 +332,13 @@ func newRunnerFixture(t *testing.T, ctx context.Context) *runnerFixture {
 		case strings.HasPrefix(line, ".tb hurt"):
 			return []string{"TortoiseBots: Bheal health is 1000/1000."}
 		}
-		return nil
+		return fastTypedError(line)
 	}
 	out := t.TempDir()
 	runner := &Runner{Out: out, Server: "srv", Label: "fx", Client: s.runner.client,
 		Ledger: NewLedger(filepath.Join(out, "ledger.jsonl")), tbRunner: s.runner,
-		Log: func(line string) { t.Log(line) },
+		Log:          func(line string) { t.Log(line) },
+		TeardownWait: 200 * time.Millisecond, TeardownPoll: 50 * time.Millisecond,
 		Abort: func() string {
 			if ctx.Err() != nil {
 				return "interrupted"
@@ -581,7 +602,7 @@ func healFixture(t *testing.T, apply map[string]bool) (*Runner, *Repeat, *[]stri
 			w.mu.Unlock()
 			return []string{"TortoiseBots: " + f[2] + " health is 1000/1000."}
 		}
-		return nil
+		return fastTypedError(line)
 	}
 	client := s.runner.client
 	ledger := NewLedger("")

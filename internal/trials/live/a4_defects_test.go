@@ -228,7 +228,7 @@ func (b *bagModel) answer(line string) []string {
 	defer b.mu.Unlock()
 	f := strings.Fields(line)
 	if len(f) < 3 || f[0] != ".tb" {
-		return nil
+		return fastTypedError(line)
 	}
 	num := func(i int) (int, bool) {
 		if i >= len(f) {
@@ -277,7 +277,7 @@ func (b *bagModel) answer(line string) []string {
 		b.inv[uint32(id)] -= n
 		return []string{fmt.Sprintf("removeitem bot=%s item=%d removed=%d left=%d", f[2], id, n, b.inv[uint32(id)])}
 	}
-	return nil
+	return fastTypedError(line)
 }
 
 func bagProv(t *testing.T) (*Provisioner, *setupFake, *bagModel) {

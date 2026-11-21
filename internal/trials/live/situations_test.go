@@ -271,7 +271,7 @@ func TestTeardownKillsLedger(t *testing.T) {
 		Client: client, Ledger: ledger, Marks: marks, Guids: Guids{Player: "0x0000000000000001", Mobs: []string{alive, "0x00000000000000bb"}}}
 	rep.Guard = NewGuard(client, GuardOptions{Ledger: ledger, Marks: marks,
 		PlayerGUID: rep.Guids.Player, Summons: ledger.SummonGUIDs})
-	r := &Runner{}
+	r := &Runner{TeardownWait: 100 * time.Millisecond, TeardownPoll: 20 * time.Millisecond}
 	rows := r.repeatTeardown(ctxBackground(), rep)
 	if len(world.killed) != 1 || world.killed[0] != alive {
 		t.Fatalf("gm_kill calls = %v, want only %s", world.killed, alive)

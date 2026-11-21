@@ -162,6 +162,7 @@ func TestBotGearNeedsScanAndEquip(t *testing.T) {
 	trial := healLatencyTrial(t)
 	// The consumables grant fine; the bug is the kit claim after them.
 	s.scriptTB(".tb additem", "TortoiseBots: Bheal now has 20 of item 17083.")
+	s.tbFn = fastTypedError // the unscripted itemscan ends at once
 	spec := botSpecOf(trial["bot"])
 	prov := &Provisioner{Client: s.runner.client, TB: tbcmd.NewClient(s.runner),
 		Guard:  NewGuard(s.runner.client, GuardOptions{PlayerGUID: "0x0000000000000001"}),

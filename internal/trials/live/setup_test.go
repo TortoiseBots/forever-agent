@@ -94,6 +94,14 @@ func (s *setupFake) bot(ctx context.Context, line string, waitMS int) (BotResult
 			return BotResult{Sent: line, Lines: stamped, Complete: true}, nil
 		}
 	}
+	// A typed line nobody scripted answers the module's error record at once;
+	// left empty it would spin for the runner's whole 15 s deadline.
+	if lines := fastTypedError(line); lines != nil {
+		for i := range lines {
+			lines[i] = strings.ReplaceAll(lines[i], " #T", " #"+token)
+		}
+		return BotResult{Sent: line, Lines: lines, Complete: true}, nil
+	}
 	return BotResult{Sent: line, Lines: []string{}, Complete: true}, nil
 }
 
