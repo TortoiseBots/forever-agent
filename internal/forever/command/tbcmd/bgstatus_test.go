@@ -254,3 +254,19 @@ func (t *bgTransport) Pump(_ context.Context, feed func(chat.Line), done func() 
 	}
 	return errors.New("the script ended before the reply did")
 }
+
+// Humans in two matches: the module's answer is global and names no requester, so the watcher's match cannot be
+// told; the parser refuses instead of reporting the first one.
+func TestBGStatusHumansInTwoInstancesRefused(t *testing.T) {
+	rep := &command.Reply{Token: "s1", Complete: true, End: "bg-end", Raw: []string{
+		"TortoiseBots: bg instance=3 map=wsg status=in-progress score=1-0 alliance=1h+4b horde=0h+5b",
+		"TortoiseBots: bg instance=4 map=ab status=in-progress score=0-0 alliance=0h+5b horde=1h+4b",
+		"TortoiseBots: bg-end verb=status lines=2 #s1",
+	}}
+	for _, l := range rep.Raw {
+		rep.Lines = append(rep.Lines, command.ParseReplyLine(l))
+	}
+	if _, err := parseBGStatus(rep); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("err = %v, want ErrBadReport", err)
+	}
+}

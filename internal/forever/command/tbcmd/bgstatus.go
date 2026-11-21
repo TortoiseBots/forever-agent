@@ -368,11 +368,19 @@ func (m *bgModule) fill(out *BGStatusReport) error {
 		return nil
 	}
 	pick := m.instances[0]
+	humans := 0
 	for _, in := range m.instances {
 		if in.allH+in.hordeH > 0 {
-			pick = in
-			break
+			if humans == 0 {
+				pick = in
+			}
+			humans++
 		}
+	}
+	if humans > 1 {
+		// The module's answer is global and names no requester: with humans in two matches the watcher's own
+		// cannot be told apart, so refuse rather than report another match as the watcher's.
+		return fmt.Errorf("%w: .tb bg status lists humans in %d instances; the watcher's cannot be told", ErrBadReport, humans)
 	}
 	out.Map, out.Status = pick.mapName, pick.status
 	out.AllH, out.AllB, out.HordeH, out.HordeB = pick.allH, pick.allB, pick.hordeH, pick.hordeB
