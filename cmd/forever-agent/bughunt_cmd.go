@@ -162,6 +162,9 @@ func selectedRules(list string, tactics *bughunt.Tactics) ([]bughunt.Rule, error
 			}
 		}
 	}
+	// Registry order is rule order: counts.json and the ticket list are stable whatever the order the groups
+	// were registered in (frame rules, event rules, then 16-19).
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Number < all[j].Number })
 	if strings.TrimSpace(list) == "" {
 		return all, nil
 	}

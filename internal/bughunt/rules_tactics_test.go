@@ -201,7 +201,10 @@ func TestRule18ListedDebuffLeftOn(t *testing.T) {
 		}
 		dps := testUnit(gDps3)
 		dps.X = 6
-		frames = append(frames, frameAt(t, tank, priest, dps))
+		f := frameAt(t, tank, priest, dps)
+		f.Mobs = []*Mob{{G: mobGUID(tacCultist, 1), Entry: tacCultist, HPPct: 100, X: 5, Y: 0, Z: 50, Combat: true}}
+		f.GC = true
+		frames = append(frames, f)
 	}
 	combat := withSpan([]CombatRow{
 		crow("spell_go", 2, mobGUID(tacCultist, 1), gHeal, tacDebuff),
@@ -229,8 +232,9 @@ func TestRule18ListedDebuffLeftOn(t *testing.T) {
 	}
 }
 
-// TestRule18UnknownWithoutDispelRows: an older recording with no dispel kind is UNKNOWN, counted.
-func TestRule18UnknownWithoutDispelRows(t *testing.T) {
+// TestRule18UnknownWithoutAuraRemovals: an older recording with no aura_removed kind cannot tell an expired
+// debuff from one still up: an episode with no removal is UNKNOWN, counted, never a finding.
+func TestRule18UnknownWithoutAuraRemovals(t *testing.T) {
 	tac := tacticsFile()
 	frames := tacticsRun(8)
 	combat := withSpan([]CombatRow{
@@ -240,9 +244,9 @@ func TestRule18UnknownWithoutDispelRows(t *testing.T) {
 	withTacticsClasses(r)
 	hits, counts := Hunt([]*Run{r}, TacticsRules(tac)[2:3])
 	if len(hits) != 0 {
-		t.Fatalf("no dispel kind, yet %+v", hits)
+		t.Fatalf("no aura removal kind, yet %+v", hits)
 	}
-	if counts.SkipReasons["rule 18: log has no dispel rows"] != 1 || counts.Complete(18) {
+	if counts.SkipReasons["rule 18: log has no aura_removed rows, so an unpulled debuff's expiry is unknown"] != 1 || counts.Complete(18) {
 		t.Fatalf("the skipped check is counted: %+v", counts)
 	}
 }
@@ -282,7 +286,8 @@ func TestRule19KillOrder(t *testing.T) {
 	}
 }
 
-// TestRule19UnknownWithoutDatedKill: both mobs share the pull but neither has a dated kill: UNKNOWN, counted.
+// TestRule19UnknownWithoutDatedKill: without a death kind the recording cannot date a kill (a frame gap is not a
+// death): UNKNOWN, counted.
 func TestRule19UnknownWithoutDatedKill(t *testing.T) {
 	tac := tacticsFile()
 	var frames []*Frame
@@ -302,9 +307,9 @@ func TestRule19UnknownWithoutDatedKill(t *testing.T) {
 	withClass(r, gTank, "warrior")
 	hits, counts := Hunt([]*Run{r}, TacticsRules(tac)[3:4])
 	if len(hits) != 0 {
-		t.Fatalf("undated kill, yet %+v", hits)
+		t.Fatalf("no death kind, yet %+v", hits)
 	}
-	if counts.SkipReasons["rule 19: a kill has no dated death row or frame"] == 0 || counts.Complete(19) {
+	if counts.SkipReasons["rule 19: log has no death rows"] != 1 || counts.Complete(19) {
 		t.Fatalf("the skipped check is counted: %+v", counts)
 	}
 }
@@ -320,5 +325,391 @@ func TestTacticsSkipWithoutFile(t *testing.T) {
 	}
 	if _, counts := Hunt([]*Run{r}, TacticsRules(nil)); counts.SkipReasons["rule 16: no tactics file"] != 1 {
 		t.Fatalf("counts %+v", counts)
+	}
+}
+
+// nonInterrupterClasses names the tank and healer as classes without an interrupt, so a rule-16 test judges one
+// member: the rogue.
+func nonInterrupterClasses(r *Run) *Run {
+	withClass(r, gTank, "druid")
+	withClass(r, gHeal, "druid")
+	withClass(r, gDps, "rogue")
+	return r
+}
+
+// interruptingRow is an interrupt row for a spell the cultist did not cast: the kind exists without answering the
+// cast under test.
+func interruptingRow(t float64) CombatRow {
+	row := crow("interrupt", t, gDps, mobGUID(tacEnforcer, 2), 1766)
+	row.InterruptedSpellID = 99991
+	return row
+}
+
+// TestRule16InterrupterCooldown: the rogue's own Kick started 6 s before the cast, inside its 10 s cooldown, so it
+// was not free; the tank and healer have no interrupt. No finding.
+func TestRule16InterrupterCooldown(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		crow("spell_start", 4, gDps, mobGUID(tacCultist, 1), 1766),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), tacticsRun(8), combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	nonInterrupterClasses(r)
+	if hits := Rule16(r, tac); len(hits) != 0 {
+		t.Fatalf("kick on cooldown, yet %+v", hits)
+	}
+}
+
+// TestRule16NotFreeWhenStunned: the rogue's own spell_fail names a stun in the 2 s before the completion.
+func TestRule16NotFreeWhenStunned(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		func() CombatRow {
+			row := crow("spell_fail", 9, gDps, mobGUID(tacCultist, 1), 1766)
+			row.Reason = "stunned"
+			return row
+		}(),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), tacticsRun(8), combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	nonInterrupterClasses(r)
+	if hits := Rule16(r, tac); len(hits) != 0 {
+		t.Fatalf("stunned interrupter, yet %+v", hits)
+	}
+}
+
+// TestRule16PerClassRange: the rogue 15 yd and the warrior 40 yd from the caster are outside Kick's and Pummel's
+// 5 yd: the old 30 yd radius would call both free.
+func TestRule16PerClassRange(t *testing.T) {
+	tac := tacticsFile()
+	frames := tacticsRun(8)
+	for _, f := range frames {
+		f.Units[gTank].X, f.Units[gTank].Y = 0, 40
+		f.Units[gDps].X, f.Units[gDps].Y = 20, 0
+	}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), frames, combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	withClass(r, gTank, "warrior")
+	withClass(r, gDps, "rogue")
+	withClass(r, gHeal, "druid")
+	if hits := Rule16(r, tac); len(hits) != 0 {
+		t.Fatalf("out of interrupt range, yet %+v", hits)
+	}
+}
+
+// TestRule16MobNotInCombat: a caster the frames show out of combat cannot be judged (the tactics cast is a pull
+// that did not happen): UNKNOWN, counted.
+func TestRule16MobNotInCombat(t *testing.T) {
+	tac := tacticsFile()
+	frames := tacticsRun(8)
+	for _, f := range frames {
+		for _, m := range f.Mobs {
+			m.Combat = false
+		}
+	}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), frames, combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	withTacticsClasses(r)
+	hits, counts := Hunt([]*Run{r}, TacticsRules(tac)[0:1])
+	if len(hits) != 0 {
+		t.Fatalf("mob out of combat, yet %+v", hits)
+	}
+	if counts.SkipReasons["rule 16: the caster's mob was not in combat"] != 1 || counts.Complete(16) {
+		t.Fatalf("the skipped check is counted: %+v", counts)
+	}
+}
+
+// TestRule16OneHitPerCast: a cast's spell_go rows (one per target) are one event.
+func TestRule16OneHitPerCast(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gDps, tacHeal),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), tacticsRun(8), combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	withTacticsClasses(r)
+	if hits := Rule16(r, tac); len(hits) != 1 {
+		t.Fatalf("one cast, %+v", hits)
+	}
+}
+
+// TestRule17OneHitPerCast: a spell_go and its immune row at the same moment are one cast, one finding.
+func TestRule17OneHitPerCast(t *testing.T) {
+	tac := tacticsFile()
+	tac.CCSpells[tacPoly] = []string{"polymorph", "stun"}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, gHeal, mobGUID(tacEnforcer, 2), tacPoly),
+		crow("immune", 10, gHeal, mobGUID(tacEnforcer, 2), tacPoly),
+	}, 6, 12)
+	r := eventRun("watch", tacticsRoles(), tacticsRun(8), combat, map[int]string{tacPoly: "Polymorph"}, nil)
+	withTacticsClasses(r)
+	hits := Rule17(r, tac)
+	if len(hits) != 1 || !strings.Contains(hits[0].Ev, "immune@10") {
+		t.Fatalf("one cast: %+v", hits)
+	}
+}
+
+// TestRule17AoECastInnocent: one cast that hit two enforcers is an AoE; the immune one's share is not a wrong try.
+func TestRule17AoECastInnocent(t *testing.T) {
+	tac := tacticsFile()
+	tac.CCSpells[tacPoly] = []string{"polymorph", "stun"}
+	frames := tacticsRun(8)
+	for _, f := range frames {
+		f.Mobs = append(f.Mobs, &Mob{G: mobGUID(tacEnforcer, 3), Entry: tacEnforcer, HPPct: 100,
+			X: 9, Y: 0, Z: 50, Combat: true})
+	}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, gHeal, mobGUID(tacEnforcer, 2), tacPoly),
+		crow("spell_go", 10, gHeal, mobGUID(tacEnforcer, 3), tacPoly),
+	}, 6, 12)
+	r := eventRun("watch", tacticsRoles(), frames, combat, map[int]string{tacPoly: "Polymorph"}, nil)
+	withTacticsClasses(r)
+	if hits := Rule17(r, tac); len(hits) != 0 {
+		t.Fatalf("AoE cast, yet %+v", hits)
+	}
+}
+
+// debuffFrames is a fight where the healer is the victim and a paladin stands six yards away, able to dispel
+// magic. The enforcer is in the frames so the rules know its entry.
+func debuffFrames() []*Frame {
+	var frames []*Frame
+	for t := 0.0; t <= 18; t += 2 {
+		tank := testUnit(gTank)
+		tank.Combat, tank.X = true, 2
+		priest := testUnit(gHeal)
+		if t >= 2 && t < 14 {
+			priest.Auras = []uint32{tacDebuff}
+		}
+		dps := testUnit(gDps3)
+		dps.X = 6
+		f := frameAt(t, tank, priest, dps)
+		f.Mobs = []*Mob{
+			{G: mobGUID(tacCultist, 1), Entry: tacCultist, HPPct: 100, X: 5, Y: 0, Z: 50, Combat: true},
+			{G: mobGUID(tacEnforcer, 2), Entry: tacEnforcer, HPPct: 100, X: 8, Y: 0, Z: 50, Combat: true},
+		}
+		f.GC = true
+		frames = append(frames, f)
+	}
+	return frames
+}
+
+// debuffRun is the fixture's run: priest victim, paladin dispeller, warrior tank.
+func debuffRun(combat []CombatRow) *Run {
+	r := eventRun("watch", map[string]string{gHeal: "healer", gTank: "tank", gDps3: "dps"}, debuffFrames(),
+		combat, map[int]string{tacDebuff: "Hex"}, map[int]string{tacDebuff: "magic"})
+	withClass(r, gHeal, "priest")
+	withClass(r, gTank, "warrior")
+	withClass(r, gDps3, "paladin")
+	return r
+}
+
+// TestRule18AuraRemovedEndsEpisode: the aura came off at t=6, four seconds after the cast: inside the 8 s limit.
+func TestRule18AuraRemovedEndsEpisode(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 2, mobGUID(tacCultist, 1), gHeal, tacDebuff),
+		crow("aura_removed", 6, mobGUID(tacCultist, 1), gHeal, tacDebuff),
+	}, -2, 20)
+	if hits := Rule18(debuffRun(combat), tac); len(hits) != 0 {
+		t.Fatalf("removed inside the limit, yet %+v", hits)
+	}
+}
+
+// TestRule18NaturalExpiry: the aura row says six seconds remained at t=2, so it expired at 8: inside the limit,
+// with no removal row at all.
+func TestRule18NaturalExpiry(t *testing.T) {
+	tac := tacticsFile()
+	applied := crow("aura_applied", 2, mobGUID(tacCultist, 1), gHeal, tacDebuff)
+	applied.RemainingMS = 6000
+	combat := withSpan([]CombatRow{
+		applied,
+		crow("aura_removed", 1, mobGUID(tacCultist, 1), gTank, 99999),
+	}, -2, 20)
+	if hits := Rule18(debuffRun(combat), tac); len(hits) != 0 {
+		t.Fatalf("expired inside the limit, yet %+v", hits)
+	}
+}
+
+// TestRule18VictimDeathEndsEpisode: the victim died four seconds in: no living member to dispel.
+func TestRule18VictimDeathEndsEpisode(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 2, mobGUID(tacCultist, 1), gHeal, tacDebuff),
+		crow("death", 6, gHeal, gHeal, 0),
+		crow("aura_removed", 1, mobGUID(tacCultist, 1), gTank, 99999),
+	}, -2, 20)
+	if hits := Rule18(debuffRun(combat), tac); len(hits) != 0 {
+		t.Fatalf("victim died inside the limit, yet %+v", hits)
+	}
+}
+
+// TestRule18CasterOwnLimit: the enforcer lists the same spell with a 30 s limit; its 12 s application is inside
+// it. The cultist's 8 s limit (the strictest in the file) must not judge the enforcer's cast.
+func TestRule18CasterOwnLimit(t *testing.T) {
+	tac := tacticsFile()
+	tac.Creatures[tacEnforcer].MustDispel = []TacticDispel{{Spell: tacDebuff, Type: "magic", WithinS: 30}}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 2, mobGUID(tacEnforcer, 2), gHeal, tacDebuff),
+		func() CombatRow {
+			row := crow("dispel", 14, gDps3, gHeal, 527)
+			row.Dispelled = []DispelledAura{{SpellID: tacDebuff, Harmful: true}}
+			return row
+		}(),
+	}, -2, 20)
+	if hits := Rule18(debuffRun(combat), tac); len(hits) != 0 {
+		t.Fatalf("the caster's own 30 s limit, yet %+v", hits)
+	}
+}
+
+// TestRule18StillUpAtEnd: the recording has aura_removed rows for another spell, so an aura with none is still up
+// at the log's end: the 8 s limit is passed.
+func TestRule18StillUpAtEnd(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 2, mobGUID(tacCultist, 1), gHeal, tacDebuff),
+		crow("aura_removed", 1, mobGUID(tacCultist, 1), gTank, 99999),
+	}, -2, 20)
+	hits := Rule18(debuffRun(combat), tac)
+	if len(hits) != 1 || !strings.Contains(hits[0].Ev, "still up at the end") {
+		t.Fatalf("still up: %+v", hits)
+	}
+}
+
+// sameEntryFrames shows three enforcers and the cultist, all in combat, for the whole fight.
+func sameEntryFrames() []*Frame {
+	var frames []*Frame
+	for t := 0.0; t <= 16; t += 2 {
+		tank := testUnit(gTank)
+		tank.Combat = true
+		f := frameAt(t, tank)
+		f.Mobs = []*Mob{
+			{G: mobGUID(tacCultist, 1), Entry: tacCultist, HPPct: 100, X: 5, Y: 0, Z: 50, Combat: true},
+			{G: mobGUID(tacEnforcer, 2), Entry: tacEnforcer, HPPct: 100, X: 8, Y: 0, Z: 50, Combat: true},
+			{G: mobGUID(tacEnforcer, 3), Entry: tacEnforcer, HPPct: 100, X: 9, Y: 0, Z: 50, Combat: true},
+			{G: mobGUID(tacEnforcer, 4), Entry: tacEnforcer, HPPct: 100, X: 10, Y: 0, Z: 50, Combat: true},
+		}
+		f.GC = true
+		frames = append(frames, f)
+	}
+	return frames
+}
+
+// TestRule19SameEntryPerGUID: the two enforcer GUIDs die at their own times; the living one is not the kill.
+func TestRule19SameEntryPerGUID(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("death", 8, mobGUID(tacEnforcer, 2), mobGUID(tacEnforcer, 2), 0),
+		crow("death", 12, mobGUID(tacEnforcer, 3), mobGUID(tacEnforcer, 3), 0),
+	}, 6, 14)
+	r := eventRun("watch", map[string]string{gTank: "tank"}, sameEntryFrames(), combat, nil, nil)
+	withClass(r, gTank, "warrior")
+	hits := Rule19(r, tac)
+	if len(hits) != 2 {
+		t.Fatalf("two kills, %+v", hits)
+	}
+	if hits[0].T != 8 || hits[1].T != 12 || hits[0].Key[2] == hits[1].Key[2] {
+		t.Fatalf("per-guid kills: %+v", hits)
+	}
+}
+
+// TestRule19UnpulledHigherMob: the cultist is in the frames but never in combat: there is no pull to order.
+func TestRule19UnpulledHigherMob(t *testing.T) {
+	tac := tacticsFile()
+	frames := sameEntryFrames()
+	for _, f := range frames {
+		for _, m := range f.Mobs {
+			if m.Entry == tacCultist {
+				m.Combat = false
+			}
+		}
+	}
+	combat := withSpan([]CombatRow{
+		crow("death", 8, mobGUID(tacEnforcer, 2), mobGUID(tacEnforcer, 2), 0),
+	}, 6, 14)
+	r := eventRun("watch", map[string]string{gTank: "tank"}, frames, combat, nil, nil)
+	withClass(r, gTank, "warrior")
+	if hits := Rule19(r, tac); len(hits) != 0 {
+		t.Fatalf("unpulled mob, yet %+v", hits)
+	}
+}
+
+// TestRule19HigherOutOfGroupReach: the cultist stands 5 yd from the enforcer (the old mob-to-mob reach) but 50 yd
+// from the tank: the group could not have killed it first.
+func TestRule19HigherOutOfGroupReach(t *testing.T) {
+	tac := tacticsFile()
+	frames := sameEntryFrames()
+	for _, f := range frames {
+		for _, m := range f.Mobs {
+			switch m.Entry {
+			case tacCultist:
+				m.X = 50
+			case tacEnforcer:
+				m.X = 45
+			}
+		}
+	}
+	combat := withSpan([]CombatRow{
+		crow("death", 8, mobGUID(tacEnforcer, 2), mobGUID(tacEnforcer, 2), 0),
+	}, 6, 14)
+	r := eventRun("watch", map[string]string{gTank: "tank"}, frames, combat, nil, nil)
+	withClass(r, gTank, "warrior")
+	if hits := Rule19(r, tac); len(hits) != 0 {
+		t.Fatalf("out of group reach, yet %+v", hits)
+	}
+}
+
+// TestRule18UnlistedCaster: an unlisted mob casting the same spell is not judged: the spell's listing is not that
+// entry's tactic.
+func TestRule18UnlistedCaster(t *testing.T) {
+	tac := tacticsFile()
+	unknown := mobGUID(999, 7)
+	frames := debuffFrames()
+	for _, f := range frames {
+		f.Mobs = append(f.Mobs, &Mob{G: unknown, Entry: 999, HPPct: 100, X: 7, Y: 0, Z: 50, Combat: true})
+	}
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 2, unknown, gHeal, tacDebuff),
+		func() CombatRow {
+			row := crow("dispel", 14, gDps3, gHeal, 527)
+			row.Dispelled = []DispelledAura{{SpellID: tacDebuff, Harmful: true}}
+			return row
+		}(),
+	}, -2, 20)
+	r := eventRun("watch", map[string]string{gHeal: "healer", gTank: "tank", gDps3: "dps"}, frames,
+		combat, map[int]string{tacDebuff: "Hex"}, map[int]string{tacDebuff: "magic"})
+	withClass(r, gHeal, "priest")
+	withClass(r, gTank, "warrior")
+	withClass(r, gDps3, "paladin")
+	if hits := Rule18(r, tac); len(hits) != 0 {
+		t.Fatalf("unlisted caster, yet %+v", hits)
+	}
+}
+
+// TestRule16UnknownWithoutClass: no member's class is known, so "nobody could interrupt" is not certain: UNKNOWN.
+func TestRule16UnknownWithoutClass(t *testing.T) {
+	tac := tacticsFile()
+	combat := withSpan([]CombatRow{
+		crow("spell_go", 10, mobGUID(tacCultist, 1), gTank, tacHeal),
+		interruptingRow(4.5),
+	}, 6, 14)
+	r := eventRun("watch", tacticsRoles(), tacticsRun(8), combat, map[int]string{tacHeal: "Dark Heal"}, nil)
+	for _, g := range []string{gTank, gDps, gHeal} {
+		delete(r.Classes, g)
+	}
+	hits, counts := Hunt([]*Run{r}, TacticsRules(tac)[0:1])
+	if len(hits) != 0 {
+		t.Fatalf("unknown classes, yet %+v", hits)
+	}
+	if counts.SkipReasons["rule 16: a member's class is unknown"] != 1 || counts.Complete(16) {
+		t.Fatalf("the skipped check is counted: %+v", counts)
 	}
 }

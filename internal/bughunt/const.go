@@ -105,7 +105,35 @@ const (
 	R15_MIN_S    = 8.0
 	R15_RANGE_YD = 30.0
 	R15_GRACE_S  = 8.0
+
+	// Rule 16: a class's interrupt spells, their base cooldowns (the untalented 1.12 values: Pummel 10 s, Shield
+	// Bash 12 s, Hammer of Justice 60 s, Kick 10 s, Silence 45 s, Earth Shock 6 s, Counterspell 24 s) and their
+	// ranges are in interruptRows below. R16_CAST_PAD_S is how far before a completion a frame is near enough to
+	// judge the interrupters by (the nearest one wins).
+	R16_CAST_PAD_S = 2.0
+
+	// Rule 19: the group must have a member within R19_REACH_YD of the higher-priority mob for it to be "in reach"
+	// of the pull.
+	R19_REACH_YD = 40.0
 )
+
+// interruptRows are a class's interrupt spells: the spell id, how long its cooldown runs from the member's own
+// cast row, and its range in yards. A class not in this table is never counted as an interrupter.
+var interruptRows = map[string][]interruptRow{
+	"warrior": {{spell: 6552, cooldownS: 10, rangeYD: 5}, {spell: 72, cooldownS: 12, rangeYD: 5}},
+	"paladin": {{spell: 853, cooldownS: 60, rangeYD: 10}},
+	"rogue":   {{spell: 1766, cooldownS: 10, rangeYD: 5}},
+	"priest":  {{spell: 15487, cooldownS: 45, rangeYD: 30}},
+	"shaman":  {{spell: 8042, cooldownS: 6, rangeYD: 20}},
+	"mage":    {{spell: 2139, cooldownS: 24, rangeYD: 30}},
+}
+
+// interruptRow is one interrupt spell: its id, its base cooldown and its range.
+type interruptRow struct {
+	spell     int
+	cooldownS float64
+	rangeYD   float64
+}
 
 // ruleNames are the Python checker's RULE_NAMES rows for the rules this package has.
 var ruleNames = map[int]string{
@@ -120,6 +148,7 @@ var ruleNames = map[int]string{
 	10: "power waste at 100% in combat >30 s",
 	11: "cast started but nothing lands while mana rises >10 s (cast-cancel signal)",
 	13: "healer under 30% mana out of combat >20 s, no drink 15 s, group not moving",
+	14: "member >40 yd from the group centroid >20 s in combat",
 	15: "missed decurse: removable debuff >8 s with an able dispeller alive, in range, not casting",
 	16: "trash tactics: must-interrupt cast completed with an interrupter free",
 	17: "trash tactics: crowd control tried on an immune mob",
