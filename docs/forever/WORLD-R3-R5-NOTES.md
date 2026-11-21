@@ -256,19 +256,22 @@ and are not yet checked live (the live checks below name them).
 
 ## Gate lines
 
-* `make fmt-check`: no output, exit 0 (its success line is silence).
-* `make cross`: the Windows and Darwin cross builds and the Windows vet of `./cmd/... ./internal/forever/...`
-  passed.
-* `staticcheck ./...`: `rc=0`, no findings (the two it found — R0's unused quest-greeting bound after the parser
-  moved, and `session.vendorCoinage` — were removed in `149c6d30`).
-* `go test -race -count=1 -timeout 20m ./internal/forever/items/ ./internal/forever/quest/ ./internal/forever/npc/
-  ./internal/forever/wire/`: `ok` for all four (1.419s, 1.470s, 1.641s, 1.595s).
-* `go test -race -count=1 -timeout 20m -run 'TestVendor|TestQuest|TestQuests|TestAct|TestInventory|TestItem|TestCoinage'
-  ./internal/forever/world/`: `ok  github.com/pjerra/forever-agent/internal/forever/world  10.931s`.
-* `vm-test ta ~/wt-fa-wr3`:
-  `RESULT: PASS  kind=ta wt=wt-fa-wr3 sha=149c6d30 dirty=0 files=2391` (`rc=0  vm_duration=1697s`).
-* Capture checks (not in CI, run once each against the private sets): the two lines quoted at the end of the R3 and
-  R5 sections.
+All on the clean committed tree `2ff1a207` (`git status` empty before each run). The first full VM run, on
+`40d0404d`, failed one test, `TestAnEquipmentUpdateWithNoMoveOfItsOwnMarksTheInventoryStale`: its fixture wrote an
+empty PlayerData mask, which the quest-log decoder now walks; the fixture names a PlayerData field the decoder does not
+walk (`2ff1a207`, test file only) and the run below is the one after it.
 
-This notes-only commit comes after the gate: it changes no Go file, so `149c6d30` is the code state the result line
+* `make fmt-check`: no output, `rc=0` (its success line is silence).
+* `make cross`: the Windows and Darwin cross builds and the Windows vet of `./cmd/... ./internal/forever/...` passed,
+  `rc=0`.
+* `staticcheck ./...`: `rc=0`, no findings.
+* `go test -race -count=1 -timeout 20m ./internal/forever/items/ ./internal/forever/quest/ ./internal/forever/objects/
+  ./internal/forever/npc/ ./internal/forever/wire/`: `ok` for all five (1.273s, 3.497s, 114.579s, 10.574s, 14.922s).
+* `go test -race -count=1 -timeout 20m -run 'TestVendor|TestQuest|TestQuests|TestAct|TestInventory|TestItem|TestCoinage|TestAnEquipment|TestPositions|TestServerSlots|TestPush'
+  ./internal/forever/world/`: `ok  github.com/pjerra/forever-agent/internal/forever/world  20.842s`.
+* `vm-test ta ~/wt-fa-wr3`:
+  `RESULT: PASS  kind=ta wt=wt-fa-wr3 sha=2ff1a207 dirty=0 files=2402` (`rc=0  vm_duration=833s`).
+* The private capture checks are not in CI and were not re-run in this fix round.
+
+This notes-only commit comes after the gate: it changes no Go file, so `2ff1a207` is the code state the result line
 names.
