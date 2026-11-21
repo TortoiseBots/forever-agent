@@ -200,7 +200,7 @@ func TestDummyTeardownKillsLedgered(t *testing.T) {
 }
 
 // TestDummyEngagedOnlyByBotAtDummy: the engagement proof is the bot acting
-// on the dummy, never the dummy casting at the bot (MobCasts' source match
+// on the dummy, never the dummy casting at the bot (the old caster match
 // found the wrong side of the fight), and a passive dummy that never turns
 // InCombat is engaged by that first row.
 func TestDummyEngagedOnlyByBotAtDummy(t *testing.T) {
