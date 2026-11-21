@@ -10,7 +10,10 @@ package world
 // Player.cpp:14131-14162).
 
 import (
+	"fmt"
+
 	"github.com/pjerra/forever-agent/internal/forever/items"
+	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -39,6 +42,30 @@ func (s *session) noteInventoryStale(reason string) {
 		s.parseErrorLogged[key] = true
 		s.opts.logf("world: the inventory is stale: %s; slot positions may be wrong until the next login or map change", reason)
 	}
+}
+
+// noteUnwalkedPlayerBits logs, once per login (own create), the Classic mask bits of the own PlayerData update the client
+// could not walk, grouped by field kind: no values, no names. The inventory is marked stale as before; the line is how
+// the next live run names the field to decode.
+func (s *session) noteUnwalkedPlayerBits(bits []int) {
+	if s.unwalkedLogged || len(bits) == 0 {
+		return
+	}
+	s.unwalkedLogged = true
+	groups := map[string][]int{}
+	var order []string
+	for _, bit := range bits {
+		g := objects.PlayerFieldGroup(bit)
+		if _, ok := groups[g]; !ok {
+			order = append(order, g)
+		}
+		groups[g] = append(groups[g], bit)
+	}
+	text := ""
+	for _, g := range order {
+		text += fmt.Sprintf(" %s%v", g, groups[g])
+	}
+	s.opts.logf("world: an own PlayerData update could not be walked; classic mask bits by group:%s", text)
 }
 
 // handleInventory applies one item gain or refusal to the live inventory. A packet this round cannot consume

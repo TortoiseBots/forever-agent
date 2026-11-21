@@ -640,6 +640,7 @@ func TestServeWalkAndFace(t *testing.T) {
 		t.Fatalf("status x %.2f after the walk\n%s", st.X, steps.joined())
 	}
 	a.mustFail(t, "path_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
+	a.mustFail(t, "walk_ray", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
 	a.stop(t)
 	f.wait(t)
 }
@@ -2344,4 +2345,53 @@ func serveTestCommandTimeout(f *fakeServer) time.Duration {
 		return 0
 	}
 	return 2 * time.Second
+}
+
+// TestServeWalkRay is the walk_ray method: the navmesh walkability ray from the session's position, or from an explicit
+// point, to a point (not true line of sight; the answer names its source). A point along the corridor is clear, one round
+// the corner of the L-shaped mesh is blocked, and one off the mesh is unknown.
+func TestServeWalkRay(t *testing.T) {
+	polys := []navfixture.Poly{
+		navfixture.Square(1000, 2000, 1004, 2004, 50),
+		navfixture.Square(1004, 2000, 1008, 2004, 50),
+		navfixture.Square(1008, 2000, 1012, 2004, 50),
+		navfixture.Square(1008, 2004, 1012, 2008, 50),
+		navfixture.Square(1008, 2008, 1012, 2012, 50),
+	}
+	dir := navfixture.WriteForeverDirAt(t, 0, polys, nil, 1000, 2000)
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemonWith(t, f, steps, dir)
+
+	ask := func(params map[string]any) ServeWalkRay {
+		t.Helper()
+		var l ServeWalkRay
+		if err := json.Unmarshal(a.mustCall(t, "walk_ray", params), &l); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	from := []float64{1001, 2001, 50}
+	along := ask(map[string]any{"from": from, "x": 1010.0, "y": 2002.0, "z": 50.0})
+	if !along.Known || !along.In || along.Source != "navmesh_raycast" {
+		t.Fatalf("a point along the corridor: %+v", along)
+	}
+	corner := ask(map[string]any{"from": from, "x": 1010.0, "y": 2010.0, "z": 50.0})
+	if !corner.Known || corner.In || corner.Hit <= 0 {
+		t.Fatalf("a point round the corner is in sight: %+v", corner)
+	}
+	// A target with no mesh ground near it is unknown, not "out of sight".
+	off := ask(map[string]any{"from": from, "x": 1030.0, "y": 2030.0, "z": 50.0})
+	if off.Known {
+		t.Fatalf("a target off the mesh reads as known: %+v", off)
+	}
+	// Without a from point the session's own position is the start.
+	self := ask(map[string]any{"x": 1006.0, "y": 2002.0, "z": 50.0})
+	if self.From == [3]float32{} {
+		t.Fatalf("the default start is the origin: %+v", self)
+	}
+	a.stop(t)
+	f.wait(t)
 }

@@ -300,7 +300,7 @@ func (c *Collector) sample(ctx context.Context) {
 			}
 			continue
 		}
-		if st.State != "in_world" {
+		if !InWorldState(st.State) {
 			c.markLost("disconnected: agent state " + orUnknown(st.State))
 			return
 		}

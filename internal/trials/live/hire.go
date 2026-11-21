@@ -86,6 +86,63 @@ func bringHires(ctx context.Context, tb *tbcmd.Client, r *Repeat, sit *LiveSitua
 	}
 }
 
+// hireEngineWait is how long a hire has to show engine=yes after the bench set it on in the arena. The module builds
+// the bot's engine on its own tick once the bot stands in the world next to its master, so a bot that was just
+// teleported needs a few ticks.
+const hireEngineWait = 20 * time.Second
+
+// proveHireEngines is the check every situation runs after its hires are in the arena; the tests of the situations that
+// have no `.tb` channel replace it.
+var proveHireEngines = ensureHireEngines
+
+// ensureHireEngines proves every hire runs the bot engine before the fight: `.tb engine <bot> on` (which also clears a
+// failed attempt and makes the module build the engine again, TbBotMgr.cpp SetEngine) and then the bot's own `.tb state`
+// engine=yes. A hire with no engine never attacks (the attack order is refused no-engine), so the repeat is INVALID
+// with the state the module reported, never a fight nobody fights. It returns "" when every hire runs it.
+func ensureHireEngines(ctx context.Context, tb *tbcmd.Client, r *Repeat, sit *LiveSituation) string {
+	for _, h := range hireTargets(r) {
+		if _, err := tb.FreeTextEngine(ctx, h.name, true); err != nil {
+			why := fmt.Sprintf("SKIPPED needs=bot_engine: .tb engine %s on: %v", h.name, err)
+			sit.logf("%s", why)
+			return why
+		}
+		deadline := sit.now().Add(hireEngineWait)
+		last := "its state was never read"
+		for {
+			states, err := tb.State(ctx, h.name)
+			if err != nil {
+				last = "the state read failed: " + err.Error()
+			}
+			up := false
+			for _, b := range states {
+				if !strings.EqualFold(b.Name, h.name) {
+					continue
+				}
+				if b.Engine {
+					up = true
+					break
+				}
+				last = "engine=no"
+				if b.NoEngine {
+					last = "engine=no, stuck=noengine"
+				}
+			}
+			if up {
+				r.Marks.Add(map[string]any{"kind": "hire_engine", "bot": h.name, "engine": true})
+				break
+			}
+			if sit.now().After(deadline) || ctx.Err() != nil {
+				why := fmt.Sprintf("SKIPPED needs=bot_engine: %s in the arena after .tb engine on: the state stays %s (the engine starts only while the bot stands next to its master on the master's map, and the master is alive)", h.name, last)
+				r.Marks.Add(map[string]any{"kind": "hire_engine", "bot": h.name, "engine": false, "state": last})
+				sit.logf("%s", why)
+				return why
+			}
+			sleepCtx(ctx, time.Second)
+		}
+	}
+	return ""
+}
+
 // findHire finds one hire in a unit list: by guid when it has one, by name otherwise.
 func findHire(units []Unit, h hireTarget) (Unit, bool) {
 	for _, u := range units {

@@ -105,6 +105,7 @@ func (i *Info) readPlayerUpdate(b *wire.Buffer) (bool, error) {
 			switch {
 			case !ok:
 				other = true // a Classic-only field this client does not know
+				i.f.PlayerUnwalked = append(i.f.PlayerUnwalked, classic)
 			case playerDataGroupBits[core]:
 				has[core] = true
 				questGroup = questGroup || core == 53
@@ -117,6 +118,7 @@ func (i *Info) readPlayerUpdate(b *wire.Buffer) (bool, error) {
 				has[core] = true
 			default:
 				other = true
+				i.f.PlayerUnwalked = append(i.f.PlayerUnwalked, classic)
 			}
 		}
 	}
@@ -287,3 +289,27 @@ func (i *Info) ChangedQuestLog() (map[int]QuestLogDelta, bool) {
 // QuestLogUndecoded reports that this values block named quest-log slots next to a field the decoder does not
 // handle, so the changes to the log it carried could not be read.
 func (i *Info) QuestLogUndecoded() bool { return i.f.QuestLogUndecoded }
+
+// PlayerFieldGroup names the kind of PlayerData field a Classic mask bit stands for, from the core's own bit layout
+// (PlayerData::WriteUpdate, UpdateFields.cpp:2847-3200): no value and no name of a character, only the group, so a log
+// line can say which field an update this client cannot walk was about.
+func PlayerFieldGroup(classic int) string {
+	core, ok := playerDataCoreOf[classic]
+	switch {
+	case !ok:
+		return "classic-only"
+	case core <= 8:
+		return "dynamic-array"
+	case core >= 40 && core <= 49 && core != 45 && core != 46:
+		return "nested-struct"
+	case core == 36 || core == 47:
+		return "name"
+	case core >= 229 && core <= 248:
+		return "visible-items"
+	case core >= 53 && core < 229:
+		return "quest-log"
+	case core >= 256:
+		return "other-array"
+	}
+	return "scalar"
+}

@@ -764,6 +764,9 @@ func (t *tankRun) runOOC(ctx context.Context) (map[string]any, error) {
 		if why := t.bringHire(ctx, name); why != "" {
 			return hireNotBrought(why), nil
 		}
+		if why := proveHireEngines(ctx, t.tb, t.r, t.sit); why != "" {
+			return map[string]any{"ok": false, "ended": "no_engine", "invalid_reason": why}, nil
+		}
 	}
 	var lastStranger time.Time
 	if t.strangerTick(ctx, &lastStranger) {
@@ -993,6 +996,9 @@ func (t *tankRun) runOOCHurt(ctx context.Context) (map[string]any, error) {
 	if name := t.r.BotName; name != "" {
 		if why := t.bringHire(ctx, name); why != "" {
 			return hireNotBrought(why), nil
+		}
+		if why := proveHireEngines(ctx, t.tb, t.r, t.sit); why != "" {
+			return map[string]any{"ok": false, "ended": "no_engine", "invalid_reason": why}, nil
 		}
 	}
 	var lastStranger time.Time

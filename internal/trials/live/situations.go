@@ -270,6 +270,9 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 		if why := t.bringHire(ctx, name); why != "" {
 			return hireNotBrought(why), nil
 		}
+		if why := proveHireEngines(ctx, t.tb, t.r, t.sit); why != "" {
+			return map[string]any{"ok": false, "ended": "no_engine", "invalid_reason": why}, nil
+		}
 	}
 	// prepull_unaura and reset_hire_cooldowns run before the first summon:
 	// the hire is reused across repeats, so a form or a cooldown from the

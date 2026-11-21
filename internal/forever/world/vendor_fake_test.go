@@ -985,3 +985,41 @@ func TestVendorSellJunkSilenceIsNotASweepThatSoldNothing(t *testing.T) {
 		t.Fatal("silence was reported as a sweep that sold nothing")
 	}
 }
+
+// TestVendorSaleIsConfirmedFromTheServersUpdate is the live finding "the sell read back as failed or nothing seen
+// while the server sold it": a sale's one update carries the new Coinage, the emptied slot and the buyback slot with
+// its price and timestamp (Player::SellItemToVendor, Player.cpp:25320-25356), and the step confirms the sale from
+// that update alone: the money it gained, the stack gone, the buyback row, and no stale mark that would refuse the next sale.
+func TestVendorSaleIsConfirmedFromTheServersUpdate(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	was := v.s.inventoryNow().Coinage
+	orig := v.onSend
+	v.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core != wire.CMSGSellItem {
+			orig(f, core, payload)
+			return
+		}
+		coin := was + 77
+		v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{35: {}, 72: itemPotion}, &coin))
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "sell entry=118")); err != nil {
+		t.Fatalf("sell: %v\n%s", err, joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "in buyback slot 72") || !containsLine(v.lines, "gained") {
+		t.Fatalf("the sale was not read from the update:\n%s", joinLines(v.lines))
+	}
+	inv := v.s.inventoryNow()
+	if inv.Stale {
+		t.Fatalf("the sale left the inventory stale: %s", inv.StaleReason)
+	}
+	if inv.Coinage != was+77 {
+		t.Fatalf("the money is %d, want %d", inv.Coinage, was+77)
+	}
+	if b := inv.Buyback(); len(b) != 1 || b[0].GUID != itemPotion || b[0].Slot != 72 {
+		t.Fatalf("the buyback rows are %+v, want the potion at 72", b)
+	}
+}

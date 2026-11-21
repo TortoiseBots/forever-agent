@@ -11,12 +11,18 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
 // newRepA5 builds a repeat over a fake serve's client with the common
 // trial/state the situation tests need.
 func newRepA5(t *testing.T, fake *fakeServe, trial map[string]any, player, bot string) (*Repeat, *Marks, *Ledger) {
 	t.Helper()
+	// These fakes have no `.tb` channel to read a bot's state from: the engine proof has its own tests.
+	old := proveHireEngines
+	proveHireEngines = func(context.Context, *tbcmd.Client, *Repeat, *LiveSituation) string { return "" }
+	t.Cleanup(func() { proveHireEngines = old })
 	dir := t.TempDir()
 	marks := NewMarks(filepath.Join(dir, "marks.jsonl"))
 	marks.Start("")
