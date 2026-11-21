@@ -139,6 +139,22 @@ func TestBughuntCommandRefusesBadInput(t *testing.T) {
 	if !strings.Contains(stderr.String(), "rule 7") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
+	if code := bughuntCmd([]string{"--rules", "16", "--out", out, root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("rule 16 without tactics: exit %d", code)
+	}
+	if !strings.Contains(stderr.String(), "rule 16 needs --tactics") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	bad := filepath.Join(root, "bad-tactics.json")
+	if err := os.WriteFile(bad, []byte(`{"creatures": {"1": {"cc_immune": ["charm"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := bughuntCmd([]string{"--tactics", bad, "--out", out, root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("bad tactics: exit %d", code)
+	}
+	if !strings.Contains(stderr.String(), "bad-tactics.json") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
 }
 
 // TestBughuntCommandRefusesMalformedCombatLog: the combat log is a required input, so a bad line is a usage error

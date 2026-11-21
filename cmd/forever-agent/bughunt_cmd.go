@@ -19,13 +19,14 @@ import (
 	"github.com/pjerra/forever-agent/internal/bughunt"
 )
 
-const bughuntUsage = `usage: forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...
+const bughuntUsage = `usage: forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--tactics F] [--baseline DIR] --out DIR INPUT...
 
   INPUT        a watch folder (trace, party rows, <run>.combatlog.jsonl, <run>.forever-run.json), a watch trace
                file, or a trials repeat folder (samples.jsonl and events.jsonl); folders are searched recursively
   --rules      the rules to run, comma-separated (default every rule this build has)
   --names      the live-checked spell names (JSON id -> name, or a spells.json with by_id); the name rules need it
   --dispel     the live-checked dispel types (JSON id -> magic|curse|disease|poison|never); rule 15 needs it
+  --tactics    the per-dungeon trash tactics file (see docs/forever/TRASH-TACTICS-NOTES.md); rules 16-19 need it
   --baseline   a previous run's tickets.json directory: its tickets become known, absent ones gone
   --out        where hits.jsonl, counts.json, tickets.json and tickets.md are written`
 
@@ -34,6 +35,7 @@ type bughuntOptions struct {
 	rules    string
 	names    string
 	dispel   string
+	tactics  string
 	baseline string
 	out      string
 }
@@ -59,6 +61,13 @@ func bughuntCmd(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
+	var tactics *bughunt.Tactics
+	if o.tactics != "" {
+		if tactics, err = bughunt.LoadTactics(o.tactics); err != nil {
+			fmt.Fprintf(stderr, "bughunt: %v\n", err)
+			return exitUsage
+		}
+	}
 	var baseline []bughunt.Ticket
 	if o.baseline != "" {
 		if baseline, err = bughunt.LoadBaseline(o.baseline); err != nil {
@@ -66,7 +75,7 @@ func bughuntCmd(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	rules, err := selectedRules(o.rules)
+	rules, err := selectedRules(o.rules, tactics)
 	if err != nil {
 		fmt.Fprintf(stderr, "bughunt: %v\n", err)
 		return exitUsage
@@ -127,6 +136,7 @@ func parseBughuntArgs(args []string, stderr io.Writer) (bughuntOptions, []string
 	fs.StringVar(&o.rules, "rules", "", "comma-separated rule numbers (default all)")
 	fs.StringVar(&o.names, "names", "", "the live-checked spell names file")
 	fs.StringVar(&o.dispel, "dispel", "", "the live-checked dispel types file")
+	fs.StringVar(&o.tactics, "tactics", "", "the per-dungeon trash tactics file")
 	fs.StringVar(&o.baseline, "baseline", "", "a previous run's tickets directory")
 	fs.StringVar(&o.out, "out", "", "the output directory")
 	if err := fs.Parse(args); err != nil {
@@ -139,10 +149,19 @@ func parseBughuntArgs(args []string, stderr io.Writer) (bughuntOptions, []string
 	return o, fs.Args(), exitOK
 }
 
-// selectedRules is the registry the caller asked for, in rule order.
-func selectedRules(list string) ([]bughunt.Rule, error) {
+// selectedRules is the registry the caller asked for, in rule order. Rules 16-19 read the tactics file, so
+// they join the registry only when one is loaded; asking for them without `--tactics` names the missing flag.
+func selectedRules(list string, tactics *bughunt.Tactics) ([]bughunt.Rule, error) {
 	all := append(bughunt.FrameRules(), bughunt.EventRules()...)
-	sort.Slice(all, func(i, j int) bool { return all[i].Number < all[j].Number })
+	if tactics != nil && len(tactics.Creatures) > 0 {
+		all = append(all, bughunt.TacticsRules(tactics)...)
+	} else if strings.TrimSpace(list) != "" {
+		for _, part := range strings.Split(list, ",") {
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil && n >= 16 && n <= 19 {
+				return nil, fmt.Errorf("rule %d needs --tactics F", n)
+			}
+		}
+	}
 	if strings.TrimSpace(list) == "" {
 		return all, nil
 	}
