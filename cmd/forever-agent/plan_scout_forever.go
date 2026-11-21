@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/planscout"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
 )
@@ -31,7 +33,18 @@ const (
 	scoutForeverUnitsYd = 40
 	// scoutForeverPoll is the status poll interval of the waits.
 	scoutForeverPoll = 500 * time.Millisecond
+	// scoutForeverWalkMin is the least budget a walk is started with: a walk needs its route planned and walked, so a
+	// pass with less than this left does not start one (the hop is skipped as "walk budget").
+	scoutForeverWalkMin = 2 * time.Second
 )
+
+// scoutForeverCeilingDur is how long --max-minutes gives the live pass; the tests shorten it.
+var scoutForeverCeilingDur = func(o *planScoutOptions) time.Duration {
+	if o.maxMinutes <= 0 {
+		return 0
+	}
+	return time.Duration(o.maxMinutes) * time.Minute
+}
 
 // scoutForeverClient is the part of serveclient the Forever live pass uses; the tests inject a fake.
 type scoutForeverClient interface {
@@ -50,6 +63,22 @@ var planScoutOpenForever = func(dir string, parents map[uint32]uint32) planScout
 // scoutForeverOpen opens the serve slot dir the live pass drives; the tests replace it.
 var scoutForeverOpen = func(dir string) (scoutForeverClient, error) {
 	return serveclient.Open(dir)
+}
+
+// scoutForeverSlotCharacter is the character the serve dir's trusted slot.json names: the only character the pass may
+// enable GM mode on, unbind and teleport. The tests replace it.
+var scoutForeverSlotCharacter = func(dir string) (string, error) {
+	abs, m, err := slotdir.Read(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := slotdir.Check("plan-scout", abs, m); err != nil {
+		return "", err
+	}
+	if m.Character == "" {
+		return "", fmt.Errorf("%s/slot.json names no character", abs)
+	}
+	return m.Character, nil
 }
 
 // foreverParents is --parent MAP=PARENT, repeatable: the server's parent-map rule for the v16 tiles.
@@ -172,8 +201,17 @@ func foreverUnknownLevels(dir string) (map[uint64]bool, error) {
 	return out, nil
 }
 
-// scoutForeverFillLevels replaces the assumed level of every unknown spawn whose entry a live unit names, and returns
-// how many spawns it filled.
+// scoutForeverUnitKey names the spawn a live unit can be trusted to stand for: its low 24 bits (the spawn guid) and its
+// entry. A summon or pet whose low 24 bits collide with a spawn, or the same guid on another entry, is not that spawn.
+type scoutForeverUnitKey struct {
+	guid  uint32
+	entry uint32
+}
+
+// scoutForeverFillLevels replaces the assumed level of every unknown spawn whose own live creature unit the scout read,
+// and returns how many spawns it filled. Only units of type creature with the spawn's entry count: the entry fallback is
+// gone because every spawn of an entry has its own level (the core rolls level_min..level_max per spawn), so one unit's
+// level says nothing about its siblings.
 func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unknown map[uint64]bool) int {
 	if w == nil || len(unknown) == 0 || len(units) == 0 {
 		return 0
@@ -183,21 +221,19 @@ func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unk
 		steps = append(steps, step)
 	}
 	sort.Ints(steps)
-	// A unit's low 24 bits name the spawn it was created from; the entry is the fallback when the export and the live
-	// world disagree on the spawn id.
-	byGUID, byEntry := map[uint64]int{}, map[uint32]int{}
+	byUnit := map[scoutForeverUnitKey]int{}
 	for _, step := range steps {
 		for _, u := range units[step] {
-			if u.Level <= 1 {
+			if u.Type != "creature" || u.Level <= 1 || u.Entry == 0 {
 				continue
 			}
-			if g := uint64(world.Low24(u.GUID)); g != 0 {
-				if _, seen := byGUID[g]; !seen {
-					byGUID[g] = int(u.Level)
-				}
+			g := world.Low24(u.GUID)
+			if g == 0 {
+				continue
 			}
-			if _, seen := byEntry[u.Entry]; !seen {
-				byEntry[u.Entry] = int(u.Level)
+			k := scoutForeverUnitKey{guid: g, entry: u.Entry}
+			if _, seen := byUnit[k]; !seen {
+				byUnit[k] = int(u.Level)
 			}
 		}
 	}
@@ -207,10 +243,7 @@ func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unk
 		if !unknown[s.GUID] {
 			continue
 		}
-		lv, ok := byGUID[s.GUID]
-		if !ok {
-			lv, ok = byEntry[s.Entry]
-		}
+		lv, ok := byUnit[scoutForeverUnitKey{guid: world.Low24(world.GUID(s.GUID)), entry: s.Entry}]
 		if ok && lv != s.LevelMax {
 			s.LevelMax = lv
 			filled++
@@ -220,8 +253,10 @@ func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unk
 }
 
 // runScoutForeverLive is the Forever live pass: online wait, GM mode, an instance unbind, a `.go xyz` and a units read
-// per stop, the server's route for every hop and a walk of the risky ones within the budget. It returns the exit code the
-// turtle pass uses: 0 done, 28 aborted part-way, 18 a phase refused.
+// per stop, a `.go xyz` to each hop's own origin and the server's route from there, and a walk of the risky hops within
+// the walk budget. Every wait, read and walk runs under the --max-minutes ceiling; a walk gets the budget that is left,
+// so the budget is never exceeded. It returns the exit code the turtle pass uses: 0 done, 28 aborted part-way, 18 a
+// phase refused.
 func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.Input, rep *planscout.Report,
 	w *worldspawn.World, nav planscout.Nav) (planscout.LiveData, int, string) {
 	data := planscout.LiveData{
@@ -231,33 +266,87 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		Units:      map[int][]world.Unit{},
 		LOS:        map[planscout.LOSKey]bool{},
 	}
+	// --max-minutes is the pass's overall ceiling: every wait, read and walk below inherits its deadline.
+	if d := scoutForeverCeilingDur(o); d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(d))
+		defer cancel()
+	}
+	ceiling := func() string {
+		switch {
+		case ctx.Err() == nil:
+			return ""
+		case errors.Is(ctx.Err(), context.DeadlineExceeded) && o.maxMinutes > 0:
+			return fmt.Sprintf("the --max-minutes ceiling of %d min", o.maxMinutes)
+		}
+		return "the live pass was cancelled"
+	}
+	stops := planscout.LiveStops(planscout.LiveSpots(rep, in, w, nil))
+	readStops, noteStops := 0, false
+	noteStopCount := func() {
+		if noteStops || len(stops) == 0 {
+			return
+		}
+		noteStops = true
+		data.Notes = append(data.Notes, fmt.Sprintf("live stops: %d of %d read", readStops, len(stops)))
+	}
 	abort := func(reason string) (planscout.LiveData, int, string) {
+		noteStopCount()
 		data.Aborted = true
 		data.AbortReason = reason
 		return data, exitPlanScoutLiveAborted, reason
+	}
+	slotChar, err := scoutForeverSlotCharacter(o.serveSlot)
+	if err != nil {
+		return data, exitLivePhaseRefused, "the serve slot: " + err.Error()
 	}
 	client, err := scoutForeverOpen(o.serveSlot)
 	if err != nil {
 		return data, exitLivePhaseRefused, "the serve slot: " + err.Error()
 	}
 	if err := foreverWaitOnline(ctx, client); err != nil {
+		if r := ceiling(); r != "" {
+			return abort(r)
+		}
 		return data, exitLivePhaseRefused, err.Error()
+	}
+	// The slot's manifest and the session's own status must name the same character before anything mutates it: a slot
+	// path pointed at the wrong dir would otherwise enable GM mode, unbind instances and teleport someone else.
+	st, err := client.Status(ctx)
+	if err != nil {
+		if r := ceiling(); r != "" {
+			return abort(r)
+		}
+		return data, exitLivePhaseRefused, fmt.Sprintf("status: %v", err)
+	}
+	if !strings.EqualFold(st.Character, slotChar) {
+		return data, exitLivePhaseRefused, fmt.Sprintf(
+			"the serve slot is %q's session but its status names %q: refusing to drive another character", slotChar, st.Character)
 	}
 	planMap := in.Rows.Plan.Map
 	for _, line := range []string{".gm on", ".instance unbind all"} {
-		if !scoutAllowedLine(line, planMap, 0) {
-			return data, exitLivePhaseRefused, fmt.Sprintf("%q is not on the scout's allow-list", line)
-		}
-		if _, err := client.GM(ctx, line); err != nil {
-			return data, exitLivePhaseRefused, fmt.Sprintf("%s: %v", line, err)
+		if err := foreverGM(ctx, client, line, planMap); err != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
+			return data, exitLivePhaseRefused, err.Error()
 		}
 	}
-	for _, group := range planscout.LiveStops(planscout.LiveSpots(rep, in, w, nil)) {
+	for _, group := range stops {
+		if r := ceiling(); r != "" {
+			return abort(r)
+		}
 		if err := foreverStandAt(ctx, client, group[0].Point, planMap); err != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
 			return abort(err.Error())
 		}
 		units, err := client.Units(ctx, serveclient.UnitsParams{Within: scoutForeverUnitsYd})
 		if err != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
 			return abort(fmt.Sprintf("units at %.1f %.1f %.1f: %v", group[0].Point.X, group[0].Point.Y, group[0].Point.Z, err))
 		}
 		wu := make([]world.Unit, 0, len(units))
@@ -265,39 +354,75 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 			wu = append(wu, foreverWorldUnit(u))
 		}
 		for _, spot := range group {
-			data.Units[spot.Step] = wu
+			// Each step owns its copy: a later pass over one spot's units must not rewrite another step's read.
+			data.Units[spot.Step] = append([]world.Unit(nil), wu...)
 		}
+		readStops++
 	}
+	noteStopCount()
 	budget := o.walkBudgetD
 	if budget <= 0 {
 		budget = 5 * time.Minute
 	}
-	deadline := time.Now().Add(budget)
+	walkEnd := time.Now().Add(budget)
 	for _, hop := range planscout.LiveHops(rep, in, nav) {
 		if !hop.Primary {
 			continue
 		}
+		if r := ceiling(); r != "" {
+			return abort(r)
+		}
+		// The server plans from the session's position, so every hop starts at its own origin: the last stop, the last
+		// walk's end and the hop before it are all the wrong place to measure from.
+		if err := foreverStandAt(ctx, client, hop.From, planMap); err != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
+			return abort(err.Error())
+		}
 		route, err := client.PathTo(ctx, hop.Point.X, hop.Point.Y, hop.Point.Z)
 		if err != nil {
-			return abort(fmt.Sprintf("path_to %.1f %.1f %.1f: %v", hop.Point.X, hop.Point.Y, hop.Point.Z, err))
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
+			return abort(fmt.Sprintf("path_to %.1f %.1f %.1f from %.1f %.1f %.1f: %v",
+				hop.Point.X, hop.Point.Y, hop.Point.Z, hop.From.X, hop.From.Y, hop.From.Z, err))
 		}
 		data.Paths[hop.Step] = foreverScoutPath(route, hop.Point)
-		if !foreverWalkWanted(rep, hop.Step) {
+		if !foreverWalkWanted(rep, hop.Step) && data.Paths[hop.Step].Verdict == "ok" {
 			continue
 		}
-		if time.Now().After(deadline) {
+		// The walk gets the budget that is left, and only when enough of it is left to walk at all.
+		remaining := time.Until(walkEnd)
+		if remaining < scoutForeverWalkMin {
 			data.Walks[hop.Step] = planscout.WalkResult{Skipped: "walk budget"}
 			continue
 		}
-		walked, walkErr := client.WalkPath(ctx, hop.Point.X, hop.Point.Y, hop.Point.Z)
-		if walkErr == nil {
-			data.Paths[hop.Step] = foreverScoutPath(walked, hop.Point)
+		walkCtx, cancel := context.WithDeadline(ctx, walkEnd)
+		walked, walkErr := client.WalkPath(walkCtx, hop.Point.X, hop.Point.Y, hop.Point.Z)
+		cancel()
+		if walkErr != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
+			if errors.Is(walkErr, context.DeadlineExceeded) {
+				data.Walks[hop.Step] = planscout.WalkResult{Skipped: "walk budget"}
+				continue
+			}
+			// A failed walk is an error row with the reason, never a stop the check measures as a shortfall.
+			reason := fmt.Sprintf("the walk to %.1f %.1f %.1f failed: %v",
+				hop.Point.X, hop.Point.Y, hop.Point.Z, walkErr)
+			data.Walks[hop.Step] = planscout.WalkResult{Skipped: reason}
+			return abort(reason)
 		}
+		data.Paths[hop.Step] = foreverScoutPath(walked, hop.Point)
 		st, err := client.Status(ctx)
 		if err != nil {
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
 			return abort(fmt.Sprintf("status after the walk to %.1f %.1f %.1f: %v", hop.Point.X, hop.Point.Y, hop.Point.Z, err))
 		}
-		// A refused walk (no full route) stopped where the session stands: the check measures the shortfall.
 		data.Walks[hop.Step] = planscout.WalkResult{Stop: dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, Length: float64(walked.Length)}
 	}
 	return data, exitOK, ""
@@ -325,14 +450,91 @@ func foreverWaitOnline(ctx context.Context, c scoutForeverClient) error {
 	}
 }
 
-// foreverStandAt teleports the GM to a stop with `.go xyz` and waits for the status to show it.
+// scoutGMErrorTexts are the parts of the core's refusals of the scout's GM lines that stay the same in every sentence:
+// LANG_INVALID_TARGET_COORD ("Invalid target coordinates ...", row 263) and trinity rows 6-10 and the syntax block.
+// A line carrying one of these is a refusal even when the reply as a whole ended normally.
+var scoutGMErrorTexts = []string{
+	"invalid target coord",
+	"does not exist",
+	"incorrect syntax",
+	"syntax: ",
+	"is ambiguous",
+	"possible subcommands",
+	"commands available to you",
+	"no permission",
+	"not have permission",
+	"not allowed",
+	"must be in gm mode",
+	"not a gm",
+	"unknown command",
+	"not found",
+	"cannot",
+	"can't",
+	"failed",
+}
+
+// scoutGMWantText is the success line the core sends for line, or "" when the core says nothing (`.go xyz` only
+// teleports; its landing is checked from the status instead).
+func scoutGMWantText(line string) string {
+	switch line {
+	case ".gm on":
+		// LANG_GM_ON: "GM mode is ON" (the same line the live pass waits for).
+		return "gm mode is on"
+	case ".instance unbind all":
+		// LANG_COMMAND_INST_UNBIND_UNBOUND: "Unbound N instance(s)."
+		return "unbound"
+	}
+	return ""
+}
+
+// scoutGMRefusal returns the core's refusal text in a GM answer, or "" when the answer says the line worked. A reply
+// that never carries the success line is a refusal too: the daemon's echo of the command is not the server's ack.
+func scoutGMRefusal(line string, cmd serveclient.Command) string {
+	want := scoutGMWantText(line)
+	said := want == ""
+	for _, l := range cmd.Lines {
+		low := strings.ToLower(l)
+		if !said && strings.Contains(low, want) {
+			said = true
+			continue
+		}
+		for _, bad := range scoutGMErrorTexts {
+			if strings.Contains(low, bad) {
+				return strings.TrimSpace(l)
+			}
+		}
+	}
+	if said {
+		return ""
+	}
+	if len(cmd.Lines) == 0 {
+		return fmt.Sprintf("no %q acknowledgement (reply end %q)", want, cmd.End)
+	}
+	return fmt.Sprintf("no %q acknowledgement (lines %q, reply end %q)", want, cmd.Lines, cmd.End)
+}
+
+// foreverGM sends one GM line in its canonical allow-listed form and checks the core's answer: a line it refuses stops
+// the caller with the server's own words.
+func foreverGM(ctx context.Context, c scoutForeverClient, line string, planMap uint32) error {
+	canon, ok := scoutCanonicalGM(line, planMap, 0)
+	if !ok {
+		return fmt.Errorf("%q is not on the scout's allow-list in its canonical form", line)
+	}
+	cmd, err := c.GM(ctx, canon)
+	if err != nil {
+		return fmt.Errorf("%s: %v", canon, err)
+	}
+	if ref := scoutGMRefusal(canon, cmd); ref != "" {
+		return fmt.Errorf("%s: the server refused: %s", canon, ref)
+	}
+	return nil
+}
+
+// foreverStandAt teleports the GM to a point with `.go xyz` and waits for the status to show it on that map.
 func foreverStandAt(ctx context.Context, c scoutForeverClient, p dungeon.Point, planMap uint32) error {
 	line := fmt.Sprintf(".go xyz %s %s %s %d", foreverNum(p.X), foreverNum(p.Y), foreverNum(p.Z), planMap)
-	if !scoutAllowedLine(line, planMap, 0) {
-		return fmt.Errorf("%q is not on the scout's allow-list", line)
-	}
-	if _, err := c.GM(ctx, line); err != nil {
-		return fmt.Errorf("%s: %v", line, err)
+	if err := foreverGM(ctx, c, line, planMap); err != nil {
+		return err
 	}
 	deadline := time.Now().Add(scoutTeleportWait)
 	for {
@@ -340,11 +542,12 @@ func foreverStandAt(ctx context.Context, c scoutForeverClient, p dungeon.Point, 
 		if err != nil {
 			return fmt.Errorf("status after %s: %v", line, err)
 		}
-		if foreverDist2D(st.X, st.Y, p.X, p.Y) <= scoutLandYd {
+		if st.Map == planMap && foreverDist2D(st.X, st.Y, p.X, p.Y) <= scoutLandYd {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not land within %s (the status is at %.1f %.1f)", line, scoutTeleportWait, st.X, st.Y)
+			return fmt.Errorf("%s did not land on map %d within %s (the status is at %.1f %.1f on map %d)",
+				line, planMap, scoutTeleportWait, st.X, st.Y, st.Map)
 		}
 		select {
 		case <-ctx.Done():
@@ -354,8 +557,11 @@ func foreverStandAt(ctx context.Context, c scoutForeverClient, p dungeon.Point, 
 	}
 }
 
-// foreverNum formats a coordinate the way the GM command parsers take it.
-func foreverNum(v float32) string { return strconv.FormatFloat(float64(v), 'f', 2, 32) }
+// foreverNum formats a coordinate in the canonical form the allow-list sends: decimals only, no exponent, and the
+// shortest text that round-trips as the float32 the plan holds.
+func foreverNum(v float32) string {
+	return strconv.FormatFloat(float64(v), 'f', -1, 32)
+}
 
 // foreverDist2D is the ground distance between two points.
 func foreverDist2D(ax, ay, bx, by float32) float64 {

@@ -1369,11 +1369,13 @@ func scoutDist3(a, b dungeon.Point) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
-// gm sends one GM line after the scout's allow-list passes it.
+// gm sends one GM line after the scout's allow-list passes it, in the canonical form the allow-list judged.
 func (sl *scoutLive) gm(ctx context.Context, line string) error {
-	if !scoutAllowedLine(line, sl.plan.Map, sl.portalMap()) {
+	canon, ok := scoutCanonicalGM(line, sl.plan.Map, sl.portalMap())
+	if !ok {
 		return scoutStopf(exitLivePhaseRefused, "plan-scout refused to send a GM line outside its allow-list: %s", line)
 	}
+	line = canon
 	sl.logLine("> " + line)
 	if err := sl.agent.Call(ctx, "gm", map[string]string{"text": line}, nil, 10*time.Second); err != nil {
 		return scoutStopf(exitPlanScoutLiveAborted, "gm %s: %v", line, err)
