@@ -1930,15 +1930,8 @@ func TestServeCommanderNotAvailable(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	f.serveCommander = func(line string) []string {
-		switch {
-		case strings.HasPrefix(line, ".tb commander status"):
+		if strings.HasPrefix(line, ".tb commander status") {
 			return commanderCardLines("Tanka", "Tanka")
-		case line == ".tb cmd loot":
-			// The module has no P6: its answer to the probe is the word that says so.
-			return []string{"error code=unknown-verb cmd=cmd #T"}
-		case line == ".tb cmd":
-			// P3 is installed, as the module's own PR left it; this build still has no typed `.tb cmd` order path.
-			return []string{"error code=missing-verb cmd=cmd #T"}
 		}
 		return nil
 	}
@@ -1947,32 +1940,14 @@ func TestServeCommanderNotAvailable(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	waitServeState(t, a, "online", steps)
 
-	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003, "not-available: loot: needs module package P6")
+	// No typed path is in this build: a P6 verb is refused with the path's code, with no probe and no order.
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003, "not-available: loot: "+cmdctl.PathName)
 	if !strings.HasPrefix(rerr.Message, "not-available: ") {
 		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
 	}
-	// The probe went out once and the order did not.
-	lines := f.serveTBLines()
-	probes := 0
-	for _, ln := range lines {
-		if strings.HasPrefix(ln, ".tb cmd loot #") {
-			probes++
-		}
-		if strings.HasPrefix(ln, ".tb cmd loot ") && !strings.HasPrefix(ln, ".tb cmd loot #") {
-			t.Fatalf("the refused order went out: %q", ln)
-		}
-	}
-	if probes != 1 {
-		t.Fatalf("the fake saw %q, want one probe", lines)
-	}
-	// P3 answers its probe, so the verb is available to the module but not to this build: the refusal names the
-	// path, and no order goes out.
-	a.mustFail(t, "commander", map[string]any{
-		"op": "cmd", "verb": "move", "args": []string{"1", "2", "3"},
-	}, -32003, "not-available: move: "+cmdctl.PathName)
 	for _, ln := range f.serveTBLines() {
-		if strings.HasPrefix(ln, ".tb cmd move ") {
-			t.Fatalf("the refused order went out: %q", ln)
+		if strings.HasPrefix(ln, ".tb cmd ") {
+			t.Fatalf("the refused verb sent %q", ln)
 		}
 	}
 	a.stop(t)
