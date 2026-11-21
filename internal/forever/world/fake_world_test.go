@@ -460,12 +460,14 @@ func (f *fakeServer) failf(format string, args ...any) {
 // leftOnWrite reports whether a failed write ends the scenario rather than failing it. A socket the harness itself
 // closed (dropNow, a logout step, the fake's own close) answers net.ErrClosed on a write that races that close: only
 // this side can close its own socket, so that is never a protocol failure. A client that left early answers EPIPE,
-// ECONNRESET or EOF instead, and only a scenario that declared clientMayLeave may end that way.
+// ECONNRESET or EOF instead, and only a scenario that declared clientMayLeave, or a test that ended the run on
+// purpose (deliberateClose, set before it cancels the client), may end that way: the client closes its sockets while
+// the fake is still answering its last request, and that answer then meets the reset.
 func (f *fakeServer) leftOnWrite(err error) bool {
 	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	if !f.clientMayLeave {
+	if !f.clientMayLeave && !f.deliberate() {
 		return false
 	}
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF)

@@ -247,6 +247,9 @@ func (o RouteWalkOptions) normalise() RouteWalkOptions {
 	return o
 }
 
+// createBlockWait bounds the extra wait for the character's create block after the settle window.
+const createBlockWait = 10 * time.Second
+
 // routeWalk is the session side of `forever route-walk`. A lost link or the run's deadline ends it with its own
 // error; a failed leg is a finding, not an error, and the run goes on from where the character actually stands.
 func (s *session) routeWalk(ctx context.Context) (err error) {
@@ -302,7 +305,21 @@ func (s *session) routeWalk(ctx context.Context) (err error) {
 	if err := s.collect(ctx, o.Settle); err != nil {
 		return err
 	}
-	// The walk starts from the create block's position, which the settle above collects.
+	// The walk starts from the create block's position, which the settle above collects. The settle is a fixed
+	// window, and a slow server or a starved machine can deliver the block after it: keep answering the world, up to
+	// createBlockWait, until the block arrives instead of failing a run whose block is merely late.
+	if s.mover == nil {
+		errBlockArrived := errors.New("create block arrived")
+		err := s.drain(ctx, "the character's create block", time.Now().Add(createBlockWait), func() error {
+			if s.mover != nil {
+				return errBlockArrived
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, errBlockArrived) {
+			return err
+		}
+	}
 	if s.mover == nil {
 		return errors.New("route-walk: no create block of this character arrived, so there is no position to walk from")
 	}
