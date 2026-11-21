@@ -122,14 +122,59 @@ func (t Ticket) Pick(name string) (Realm, error) {
 	return Realm{}, fmt.Errorf("realm %q is not in the realm list (%d realms)", name, len(t.Realms))
 }
 
+// Attempts is what a caller that keeps a login rate asks of Login: Before runs ahead of every connection Login makes
+// (the first, and the retry after a rejected proof), on the context the caller passed, so a wait for a turn is not part
+// of the attempt's time; Timeout, when set, then bounds each attempt.
+type Attempts struct {
+	Before  func(ctx context.Context) error
+	Timeout time.Duration
+}
+
+type attemptsKey struct{}
+
+// WithAttempts makes Login (and only Login) call a.Before ahead of each of its connections.
+func WithAttempts(ctx context.Context, a Attempts) context.Context {
+	return context.WithValue(ctx, attemptsKey{}, a)
+}
+
+// BeginAttempt starts one connection of Login: it runs the Attempts hook the context carries and returns the context
+// the attempt runs on (bounded by Attempts.Timeout) with its cancel. A context without Attempts comes back as it is.
+// Login calls it ahead of every connection; a test double of Login that retries calls it the same way.
+func BeginAttempt(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	a, ok := ctx.Value(attemptsKey{}).(Attempts)
+	if !ok {
+		return ctx, func() {}, nil
+	}
+	if a.Before != nil {
+		if err := a.Before(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	if a.Timeout <= 0 {
+		return ctx, func() {}, nil
+	}
+	actx, cancel := context.WithTimeout(ctx, a.Timeout)
+	return actx, cancel, nil
+}
+
+// attempt is one connection of Login: the caller's hook first, then loginOnce under the attempt's own timeout.
+func attempt(ctx context.Context, addr, account, password string) (*Ticket, error) {
+	actx, done, err := BeginAttempt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return loginOnce(actx, addr, account, password)
+}
+
 // Login runs challenge, proof and realm list. A proof rejected with 0x04 is retried
 // once on a fresh connection (spec: the rare unpadded-BigNumber mismatch); a real
 // wrong password therefore costs two of the server's WrongPass.MaxCount attempts.
 func Login(ctx context.Context, addr, account, password string) (*Ticket, error) {
-	t, err := loginOnce(ctx, addr, account, password)
+	t, err := attempt(ctx, addr, account, password)
 	var ae *AuthError
 	if errors.As(err, &ae) && ae.Stage == "proof" && ae.Code == ResultUnknownAccount {
-		t, err = loginOnce(ctx, addr, account, password)
+		t, err = attempt(ctx, addr, account, password)
 	}
 	return t, err
 }

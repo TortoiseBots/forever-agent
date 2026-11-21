@@ -143,23 +143,29 @@ func (r *reconnector) next(ctx context.Context) (*worldSession, bool) {
 // asks on top. In a fleet the supervisor books the login against every child's logins; if
 // it cannot be reached this process's own window is used.
 func (r *reconnector) wait(ctx context.Context) time.Duration {
+	return gateWait(ctx, r.stderr, r.window, r.budget, backoff(r.used))
+}
+
+// gateWait is how long a login that may start no sooner than wait from now must wait: wait itself, and what the realmd
+// limit asks on top. With a fleet's budget the supervisor books the login against every child's logins; if it cannot
+// be reached this process's own window is used. Every login of a process that logs in again goes through it.
+func gateWait(ctx context.Context, stderr io.Writer, window *loginWindow, budget *budgetClient, wait time.Duration) time.Duration {
 	now := loginHoldNow()
-	wait := backoff(r.used)
-	if r.budget != nil {
+	if budget != nil {
 		// The supervisor books the login and applies realmd's hour-start hold and jitter inside the booking (reserveAdjusted), so the
 		// slot it stores is the time of the login itself and the reply is the final wait.
-		d, err := r.budget.reserve(ctx, wait)
+		d, err := budget.reserve(ctx, wait)
 		if err == nil {
 			if d > wait {
-				fmt.Fprintf(r.stderr, "reconnect: waiting %s for the fleet's share of realmd's login limit and the hour-start window (%d logins per %s for all characters)\n",
+				fmt.Fprintf(stderr, "reconnect: waiting %s for the fleet's share of realmd's login limit and the hour-start window (%d logins per %s for all characters)\n",
 					d.Round(time.Second), realmdThrottleLogins-1, realmdThrottleWindow.Round(time.Second))
 			}
 			return max(wait, d)
 		}
-		fmt.Fprintln(r.stderr, "reconnect: fleet login budget unavailable, using this process's own window:", err)
+		fmt.Fprintln(stderr, "reconnect: fleet login budget unavailable, using this process's own window:", err)
 	}
 	// Without the fleet's budget: this process's window, then the hold, once, on the final time.
-	return withLoginHold(now, max(wait, r.window.wait(now)))
+	return withLoginHold(now, max(wait, window.wait(now)))
 }
 
 // withLoginHold is wait, plus the rest of realmd's hour-start window and a jitter when a login that starts wait after now lands in
@@ -179,9 +185,7 @@ func (r *reconnector) login(ctx context.Context) (*worldSession, error) {
 		return nil, err
 	}
 	r.window.note(time.Now()) // booked after the hold: the login starts now, not when the attempt began
-	actx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	ticket, err := authLogin(actx, r.st.Realmd, r.account, r.password)
-	cancel()
+	ticket, err := authLoginGated(ctx, &loginGate{window: r.window, budget: r.budget, stderr: r.stderr}, r.st.Realmd, r.account, r.password)
 	if err != nil {
 		return nil, err
 	}

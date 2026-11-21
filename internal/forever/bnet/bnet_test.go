@@ -92,8 +92,8 @@ func TestLoginWrongPassword(t *testing.T) {
 		t.Fatal("a wrong password logged in")
 	}
 	// the error kind, not a sentence: a message can be reworded without the refusal changing
-	if !errors.Is(err, errLoginRefused) {
-		t.Fatalf("err = %v, want %v", err, errLoginRefused)
+	if !errors.Is(err, ErrLoginRefused) {
+		t.Fatalf("err = %v, want %v", err, ErrLoginRefused)
 	}
 }
 

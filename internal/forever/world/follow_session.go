@@ -315,6 +315,10 @@ func (s *session) followUnit(name string) (follow.Unit, bool) {
 			}
 		}
 	}
+	if o == nil {
+		// The name is not known (yet): ask for the names of the players in view, so a later tick finds it.
+		s.serveAskNames()
+	}
 	if o == nil || !o.Info.HasUnit {
 		return follow.Unit{}, false
 	}
