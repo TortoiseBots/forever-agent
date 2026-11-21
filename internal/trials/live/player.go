@@ -313,6 +313,14 @@ func (p *PlayerSetup) ensureStance(ctx context.Context, trial map[string]any) (m
 		}
 		return rowOf("player_stance", false, stance, "cast failed ("+errText(lastErr)+") and .learn "+what+": "+err.Error()), nil
 	}
+	// The stance's threat spell is cast by the fight (`threat`) and Taunt is
+	// the only hand the cc_target mark ever sees: learn it with the stance,
+	// as the bench does (check_stance).
+	if threat := ThreatSpell(stance); threat > 0 && threat != stance {
+		if err := p.guardSend(ctx, "learn", self, itoa(threat)); err != nil {
+			return rowOf("player_stance", false, stance, "threat spell .learn refused: "+err.Error()), nil
+		}
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		cast()
 		if held() {

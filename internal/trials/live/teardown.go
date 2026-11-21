@@ -391,15 +391,18 @@ func (r *Runner) waitFull(ctx context.Context, client *Client, guid string) (hp,
 }
 
 // trialTeardown releases the trial's hires at trial end: stay, free, logout
-// for each, with the module's own answers ledgered. A refusal is recorded;
-// it never changes a verdict.
-func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string) {
+// for each, with the module's own answers ledgered. It returns what it could
+// not prove (items not cleared, a logout the module refused, the forced role
+// not cleared): the runner records it and a sweep stops on it. It never
+// changes a verdict.
+func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string) []string {
 	if r.dry() {
-		return
+		return nil
 	}
 	if rep.Guard != nil {
 		rep.Guard.SetAbort(r.TeardownAbort)
 	}
+	var problems []string
 	tb := r.tbOf(rep)
 	names := []string{}
 	if rep.BotName != "" {
@@ -418,6 +421,7 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
 		if !cleared {
 			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
+			problems = append(problems, "items of "+name+" not cleared: "+trimReason(clearEv))
 		}
 		if _, err := tb.Stay(ctx, name); err != nil {
 			r.logf("%s: .tb order %s stay: %v", trialID, name, err)
@@ -430,13 +434,16 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		if err != nil {
 			ev = trimReason(tbErrText(err, lines))
 			r.logf("%s: .tb logout %s: %v", trialID, name, err)
+			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
 		}
 		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": name, "reply": firstLines(lines),
 			"error": ev})
 	}
 	if _, err := tb.RoleSelf(ctx, "clear"); err != nil {
 		r.logf("%s: role self clear: %v", trialID, err)
+		problems = append(problems, "forced role not cleared: "+trimReason(err.Error()))
 	}
+	return problems
 }
 
 func listOrNone(list []string) string {

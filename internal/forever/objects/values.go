@@ -186,6 +186,9 @@ type Fields struct {
 	// the model: the session reads them from the block to mark the inventory stale or to attribute the update to
 	// its own move.
 	InvSlotsUndecoded, ActivePlayerSkipped bool
+	// QuestLogDeltas is set when a PlayerData update carried quest-log slot changes this client decoded;
+	// QuestLogUndecoded when it named quest-log slots next to a field it does not decode (so the changes are lost).
+	QuestLogDeltas, QuestLogUndecoded bool
 }
 
 // ItemData is the item half of a create or values block (UF::ItemData). It and ContainerData are held by pointer:
@@ -231,6 +234,9 @@ type Player struct {
 	// emptied. Nil on a create, which carries every slot.
 	InvSlotDeltas map[int]wire.GUID
 	Coinage       uint64
+	// QuestLogDeltas are the quest-log slots a PlayerData update carried, by slot: only the fields the server
+	// changed (QuestLog::WriteUpdate, UpdateFields.cpp:2307-2342). Nil on a create, which carries every slot.
+	QuestLogDeltas map[int]QuestLogDelta
 }
 
 // item returns the object's item data, allocating it on the first decoded item field.
@@ -258,6 +264,31 @@ type QuestLogEntry struct {
 	QuestID    int32
 	StateFlags uint16
 	Progress   [24]int16
+}
+
+// QuestLogDelta is one quest-log slot's update: each field is present only when the server named it.
+type QuestLogDelta struct {
+	HasQuestID bool
+	QuestID    int32
+	HasState   bool
+	StateFlags uint16
+	// Progress is the objective counters that changed, by objective index.
+	Progress map[int]int16
+}
+
+// Apply writes the delta's fields into one slot.
+func (d QuestLogDelta) Apply(e *QuestLogEntry) {
+	if d.HasQuestID {
+		e.QuestID = d.QuestID
+	}
+	if d.HasState {
+		e.StateFlags = d.StateFlags
+	}
+	for n, v := range d.Progress {
+		if n >= 0 && n < len(e.Progress) {
+			e.Progress[n] = v
+		}
+	}
 }
 
 // Complete marks every decoded field present, which is what a create block carries (a values update carries only

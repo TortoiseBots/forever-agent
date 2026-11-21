@@ -5,7 +5,9 @@ package items
 //
 //   - SMSG_UPDATE_OBJECT: the receiver's own player create (PlayerData and the ActivePlayerData prefix), an item's
 //     create and values update, a bag's container data, and the player's own InvSlots values updates;
-//   - SMSG_ITEM_PUSH_RESULT and SMSG_INVENTORY_CHANGE_FAILURE: the two answers an item action gets.
+//   - SMSG_ITEM_PUSH_RESULT and SMSG_INVENTORY_CHANGE_FAILURE: the two answers an item action gets;
+//   - the vendor's four answers (round R3): SMSG_VENDOR_INVENTORY (with the three flag bits after each row's item),
+//     SMSG_BUY_SUCCEEDED, SMSG_BUY_FAILED and SMSG_SELL_RESPONSE.
 //
 // Each self create must reach the InvSlots prefix, and every non-empty InvSlots GUID must have an item block in the
 // same burst: that is what proves the prefix is aligned, because a shifted read yields GUIDs the server never sent.
@@ -65,7 +67,8 @@ func readCapture(t *testing.T) []capturePacket {
 			}
 			if direction != 0x47534D43 {
 				switch core {
-				case wire.SMSGUpdateObject, wire.SMSGItemPushResult, wire.SMSGInventoryChangeFailure:
+				case wire.SMSGUpdateObject, wire.SMSGItemPushResult, wire.SMSGInventoryChangeFailure,
+					wire.SMSGVendorInventory, wire.SMSGBuySucceeded, wire.SMSGBuyFailed, wire.SMSGSellResponse:
 					payload := make([]byte, size-4)
 					copy(payload, data[off+pktHeaderSize:off+pktHeaderSize+int(size)-4])
 					out = append(out, capturePacket{core: core, payload: payload})
@@ -84,6 +87,7 @@ func TestCaptureInventory(t *testing.T) {
 		t.Skip("set FOREVER_CAPTURE_PKT or FOREVER_CAPTURE_DIR to run the capture cross-check")
 	}
 	var updates, selfCreates, items, containers, itemUpdates, slotUpdates, pushes, refusals int
+	var vendorLists, vendorRows, buys, buyFailures, sellRefusals int
 	for _, p := range packets {
 		switch p.core {
 		case wire.SMSGItemPushResult:
@@ -97,6 +101,32 @@ func TestCaptureInventory(t *testing.T) {
 				t.Fatalf("an inventory change failure did not parse: %v", err)
 			}
 			refusals++
+			continue
+		case wire.SMSGVendorInventory:
+			list, err := ParseVendorInventory(p.payload)
+			if err != nil {
+				t.Fatalf("a vendor inventory did not parse: %v", err)
+			}
+			vendorLists++
+			vendorRows += len(list.Items)
+			continue
+		case wire.SMSGBuySucceeded:
+			if _, err := ParseBuySucceeded(p.payload); err != nil {
+				t.Fatalf("a buy success did not parse: %v", err)
+			}
+			buys++
+			continue
+		case wire.SMSGBuyFailed:
+			if _, err := ParseBuyFailed(p.payload); err != nil {
+				t.Fatalf("a buy refusal did not parse: %v", err)
+			}
+			buyFailures++
+			continue
+		case wire.SMSGSellResponse:
+			if _, err := ParseSellResponse(p.payload); err != nil {
+				t.Fatalf("a sell answer did not parse: %v", err)
+			}
+			sellRefusals++
 			continue
 		}
 		u, err := objects.ParseUpdateObject(p.payload)
@@ -160,6 +190,7 @@ func TestCaptureInventory(t *testing.T) {
 	if selfCreates == 0 {
 		t.Fatalf("%d update objects, none carrying a self create", updates)
 	}
-	t.Logf("%d packets: %d update objects, %d self creates, %d item creates (%d bags), %d item updates, %d slots updates, %d pushes, %d refusals, all consumed",
-		len(packets), updates, selfCreates, items, containers, itemUpdates, slotUpdates, pushes, refusals)
+	t.Logf("%d packets: %d update objects, %d self creates, %d item creates (%d bags), %d item updates, %d slots updates, %d pushes, %d refusals, %d vendor lists (%d rows), %d buys, %d buy refusals, %d sell refusals, all consumed",
+		len(packets), updates, selfCreates, items, containers, itemUpdates, slotUpdates, pushes, refusals,
+		vendorLists, vendorRows, buys, buyFailures, sellRefusals)
 }

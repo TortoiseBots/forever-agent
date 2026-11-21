@@ -709,19 +709,28 @@ func readObjectFragmentUpdateBuild(b *wire.Buffer, info *Info, owner bool, realm
 			return err
 		}
 	}
-	// Player (6) and ActivePlayer (7) updates are the tail of the block, in that order, and only ActivePlayerData is
-	// walked: the one region a backpack move changes, the InvSlots (readActivePlayerUpdate). A block that carries a
-	// PlayerData update before it (an equipment move writes VisibleItems too) is left to its declared size, because
-	// the PlayerData values would have to be skipped to reach the ActivePlayerData mask and this round does not read
-	// them; the inventory then learns an equipment move from the client's own request instead (D1, items.Tracker).
-	if typeMask&(1<<TypePlayer) == 0 && typeMask&(1<<TypeActivePlayer) != 0 {
-		if err := info.readActivePlayerUpdate(b, realmBuild); err != nil {
+	// Player (6) and ActivePlayer (7) updates are the tail of the block, in that order. PlayerData is walked only
+	// for the quest log (readPlayerUpdate); ActivePlayerData only for the InvSlots a backpack move changes and the
+	// money that travels with them (readActivePlayerUpdate). A PlayerData update that carries any other field (an
+	// equipment move writes VisibleItems too) cannot be walked, so the ActivePlayerData update behind it is not
+	// reached: the block says so (Info.ActivePlayerSkipped) and the session decides what that means for the
+	// inventory; the inventory then learns an equipment move from the client's own request (D1, items.Tracker).
+	playerWalked := true
+	if typeMask&(1<<TypePlayer) != 0 {
+		ok, err := info.readPlayerUpdate(b)
+		if err != nil {
 			return err
 		}
-	} else if typeMask&(1<<TypePlayer) != 0 && typeMask&(1<<TypeActivePlayer) != 0 {
-		// The PlayerData values before it are not read, so the ActivePlayerData update behind them is not reached:
-		// the block says so (Info.ActivePlayerSkipped) and the session decides what that means for the inventory.
-		info.f.ActivePlayerSkipped = true
+		playerWalked = ok
+	}
+	if typeMask&(1<<TypeActivePlayer) != 0 {
+		if playerWalked {
+			if err := info.readActivePlayerUpdate(b, realmBuild); err != nil {
+				return err
+			}
+		} else {
+			info.f.ActivePlayerSkipped = true
+		}
 	}
 	return b.Err()
 }
