@@ -126,6 +126,9 @@ type CombatRow struct {
 	AbsorbedSpellID    int             `json:"absorbed_spell_id,omitempty"`
 	Dispelled          []DispelledAura `json:"dispelled,omitempty"`
 	Sample             *CombatSample   `json:"sample,omitempty"`
+	// RemainingMS is an aura_applied row's remaining duration: when the aura would expire by itself. Rule 18 ends a
+	// debuff episode there when no removal row came first; 0 means the row did not say.
+	RemainingMS int64 `json:"remaining_ms,omitempty"`
 
 	// T is the row on the run's clock (seconds from t=0), computed from Time and the run's start, and TKnown
 	// says whether it could be: a row with no readable time is unknown at every rule, never at t=0.

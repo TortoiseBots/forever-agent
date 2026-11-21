@@ -608,3 +608,20 @@ func TestMoverWithoutTheCreateBlock(t *testing.T) {
 		t.Fatalf("units before the create block: %d rows, %v", len(units), err)
 	}
 }
+
+// TestAuraAppliedRowCarriesRemaining: an aura row whose update carried a duration writes the remaining time, so
+// the bug hunter can date a debuff's natural expiry without a removal row.
+func TestAuraAppliedRowCarriesRemaining(t *testing.T) {
+	s := newSession(Options{Logf: func(string, ...any) {}}, &Report{Counts: make(map[string]int)}, context.Background())
+	defer s.pumpCancel()
+	unit := wire.GUID{Low: 0x11, High: 0x0100000000000000}
+	s.world.Apply(&objects.Update{Blocks: []objects.WorldFragment{{
+		GUID: unit, ObjectType: objects.TypeUnit, ValuesComplete: true,
+		Info: objects.Info{Type: objects.TypeUnit, HasObject: true, HasUnit: true},
+	}}}, time.Unix(0, 0))
+	s.handleCombat(worldconn.Packet{Core: wire.SMSGAuraUpdate, Payload: buildAuraUpdateFrom(unit, unit, 0, 100, 1, 6000, 6000)})
+	rows, _, _, _ := s.CombatLog().Since(0, 10)
+	if len(rows) != 1 || rows[0].Kind != "aura_applied" || rows[0].RemainingMS != 6000 {
+		t.Fatalf("the gained aura wrote %+v", rows)
+	}
+}

@@ -2276,7 +2276,8 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		for _, ch := range s.world.ApplyAuraUpdate(&v, now) {
 			switch ch.Kind {
 			case objects.AuraAdded:
-				s.combatRow("aura_applied", now, ch.SpellID, 0, ch.Caster, ch.Unit, "")
+				s.combatRowExtras("aura_applied", now, ch.SpellID, 0, ch.Caster, ch.Unit, "",
+					combatRowExtra{RemainingMS: ch.RemainingMS})
 			case objects.AuraRemoved:
 				s.combatRow("aura_removed", now, ch.SpellID, 0, ch.Caster, ch.Unit, "")
 			}

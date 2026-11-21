@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/bughunt"
 )
 
 // watchRecording writes the smallest watch the hunter needs: a trace with a party and frames, its summary, and a
@@ -139,6 +142,22 @@ func TestBughuntCommandRefusesBadInput(t *testing.T) {
 	if !strings.Contains(stderr.String(), "rule 7") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
+	if code := bughuntCmd([]string{"--rules", "16", "--out", out, root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("rule 16 without tactics: exit %d", code)
+	}
+	if !strings.Contains(stderr.String(), "rule 16 needs --tactics") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	bad := filepath.Join(root, "bad-tactics.json")
+	if err := os.WriteFile(bad, []byte(`{"creatures": {"1": {"cc_immune": ["charm"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := bughuntCmd([]string{"--tactics", bad, "--out", out, root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("bad tactics: exit %d", code)
+	}
+	if !strings.Contains(stderr.String(), "bad-tactics.json") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
 }
 
 // TestBughuntCommandRefusesMalformedCombatLog: the combat log is a required input, so a bad line is a usage error
@@ -164,5 +183,43 @@ func TestBughuntCommandRefusesMalformedCombatLog(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), ".combatlog.jsonl:2") {
 		t.Fatalf("stderr %q", stderr.String())
+	}
+}
+
+// TestSelectedRulesAreInRuleOrder: the registry is handed out in rule order (the doc's "in rule order"), including
+// the tactics rules that join last, so counts.json and the ticket list do not shuffle with registration order.
+func TestSelectedRulesAreInRuleOrder(t *testing.T) {
+	want := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19}
+	numbers := func(rules []bughunt.Rule) []int {
+		out := make([]int, 0, len(rules))
+		for _, r := range rules {
+			out = append(out, r.Number)
+			if r.Name == "" {
+				t.Fatalf("rule %d has an empty name", r.Number)
+			}
+		}
+		return out
+	}
+	all, err := selectedRules("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := numbers(all), want[:13]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order %v, want %v", got, want)
+	}
+	tac := &bughunt.Tactics{Creatures: map[uint32]*bughunt.TacticEntry{113: {Entry: 113}}}
+	withTactics, err := selectedRules("", tac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numbers(withTactics); !reflect.DeepEqual(got, want) {
+		t.Fatalf("order with tactics %v, want %v", got, want)
+	}
+	chosen, err := selectedRules("19,1,15", tac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := numbers(chosen), []int{1, 15, 19}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chosen order %v, want %v", got, want)
 	}
 }

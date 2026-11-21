@@ -347,6 +347,7 @@ type CombatRow struct {
 	AbsorbedSpellID    int32          `json:"absorbed_spell_id,omitempty"`
 	Dispelled          []CombatDispel `json:"dispelled,omitempty"`
 	Sample             *CombatSample  `json:"sample,omitempty"`
+	RemainingMS        int32          `json:"remaining_ms,omitempty"`
 	SpellName          string         `json:"spell_name,omitempty"`
 }
 
