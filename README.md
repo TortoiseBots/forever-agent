@@ -27,6 +27,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Roster dashboard (rounds DASH-1/2) | **Client and watch; no live run yet** (`forever-agent forever dash-bots`: the typed login, the logged-in bots and the heartbeat, and a watch that reports a death, a stuck bot, a lone fight and a bot far from its group; plain http only on loopback unless the explicit flag allows it; the dungeon watch can take the same client and rules; see [docs/forever/DASH-R1-NOTES.md](docs/forever/DASH-R1-NOTES.md) and [docs/forever/DASH-R2-NOTES.md](docs/forever/DASH-R2-NOTES.md)) |
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Dungeon watcher (round S7) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-watch`: PREPARE and ENTER as a run, then one typed `.tb run start`, after which the client never orders a bot — it polls the module's run status and event ring at a stated interval and prints progress, with a watchdog, a pause budget, a time budget, a wipe budget and the practice rescue, and a summary extended with the module's counters; round B1 adds the trace frames (`--frame-every`) and the session's combat log written beside the trace — see [docs/forever/WATCH-R1-NOTES.md](docs/forever/WATCH-R1-NOTES.md) and [docs/forever/HUNT-B1-NOTES.md](docs/forever/HUNT-B1-NOTES.md)) |
+| Bug hunter (round B3) | **Offline, on a watch or a trials repeat** (`forever-agent bughunt`: the rules over the watch's frames (F) and combat log (C), the tickets the board carries with stable ids and a baseline's new/known/gone; see [docs/forever/HUNT-B3-NOTES.md](docs/forever/HUNT-B3-NOTES.md)) |
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
@@ -507,6 +508,33 @@ member is flagged apart as `unattributed-deaths` with its evidence. `forever-age
 --compare A B` takes two cards or two records and prints what got better or worse per leg (seconds, pulls,
 re-pulls, deaths, wipes) and per flag. The plan's recorded leg time is read from the record when it carries one;
 today's plan format records none, so the slow-leg flag stays quiet until a record has it.
+
+`forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
+hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party
+records, `<run_id>.combatlog.jsonl` and `<run_id>.forever-run.json`), a watch trace file, or a trials repeat
+(`samples.jsonl`, `events.jsonl`, and the recorder's `raw-ta.jsonl` when it has one); folders are searched
+recursively, and a watch folder or a repeat is one run. It reads the watch's frames (F) and its combat log (C), and
+a repeat's raw rows are the same C shape on the repeat's clock. `--rules` picks the rules (default: every rule this
+build has), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
+never guessed: a names file is a JSON object of id to name (or a spells.json's `by_id`, whose values may be
+`{"name": ...}`), and a dispel file is a JSON object of id to `magic`, `curse`, `disease`, `poison` or `never` (or
+the core's `spell_template.dispel` numbers 0-4); only debuffs count, so an entry is kept when the names file marks its id
+`"harmful": true` or the entry does. An id the names file does not name is `spell <id>` and never
+matches a buff, AoE or heal name; an id the dispel file does not list is not a known debuff. A rule whose input a
+run does not carry is a skipped check (as is a stretch the combat log does not provably cover, and a malformed combat-log
+line is an error naming the file and line) with its reason in `counts.json`, never a hit from a guess: no combat log
+skips rules 1, 2, 4, 8 and 11; no names skips 2, 4 and 8; no dispel types or no known classes skip 15; no meal report
+skips 13. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
+selected rule's hits, runs with hits, skipped checks and the reasons), `tickets.json` and `tickets.md`. A ticket is
+one (rule, key): its id is `BH-<rule>-<8 hex of sha1(rule|key)>`, so the same finding keeps its id across nights;
+its row is `{id, title, rule, key, count, runs, first_seen, deaths_near, evidence (at most 5), labels [bughunt,
+rule-N, role], status new|known|reopened|gone, cost}`. `--baseline DIR` reads that directory's `tickets.json`: a ticket it
+holds is `known` (and keeps its first night; `reopened` when it was `gone`), one it lacks is `new`, and a baseline
+ticket the new run no longer sees is `gone` only when its rule ran with all its inputs (a skipped or unselected rule
+leaves its tickets as they were). `tickets.md` ranks the tickets by summed cost, worst first. The rules are the Python bug hunt's
+own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids), with the Forever inputs
+the plan's table gives. `BUGHUNT_PY_CHECKER=checker.py` runs the optional parity test against the Python checker on
+one repeat (rules 4 and 8 must agree on every key).
 
 For Turtle WoW servers use turtle-agent. The text below is turtle-agent's README with the name changed and still
 describes the 1.12 client.

@@ -113,6 +113,14 @@ func (c *Client) callMax(ctx context.Context, line, endKind string, maxLines int
 	return rep, nil
 }
 
+// Send is the raw seam: one `.tb` line with a fresh token and the client's base options, the reply's end kind
+// required, and the module's error line returned as a *CommandError. The typed methods above cover every command
+// the agent acts on; this one exists for a caller that has to find out whether a command exists at all (the
+// capability probe of cmdctl), whose answer is the error line of a command the agent does not act on yet.
+func (c *Client) Send(ctx context.Context, line, endKind string) (*command.Reply, error) {
+	return c.call(ctx, line, endKind)
+}
+
 // labelText decodes a structured label (target=party:Tbtank): the parts are split on ':' before decoding, so an
 // encoded ':' inside a name stays in the name.
 func labelText(rec record, key string) (string, error) {
@@ -234,16 +242,18 @@ type OrderResult struct {
 	Verb   string
 	Seq    int
 	HasSeq bool
-	Status string // queued, refused (a per-bot refusal carries Error/Msg)
-	Error  string
-	HasErr bool
-	Msg    string
-	HasMsg bool
+	Status string // queued, refused (a per-bot refusal carries the module's code and message)
+	// Code is the refusal code (no-engine, no-pull-strategy, ...): the grammar's per-record refusal key, as the
+	// module writes it. HasCode is false on a queued line.
+	Code    string
+	HasCode bool
+	Msg     string
+	HasMsg  bool
 	// Extra holds every key this model does not know, decoded. Unknown keys are not an error.
 	Extra map[string]string
 }
 
-var orderRecordKeys = map[string]bool{"bot": true, "verb": true, "seq": true, "status": true, "error": true, "msg": true}
+var orderRecordKeys = map[string]bool{"bot": true, "verb": true, "seq": true, "status": true, "code": true, "msg": true}
 
 // OrderReport is a whole order answer: the bot lines and the end line.
 type OrderReport struct {
@@ -305,7 +315,7 @@ func parseOrder(rep *command.Reply) (OrderReport, error) {
 		if res.Seq, res.HasSeq, err = rec.optionalInt("seq", 0, math.MaxInt32); err != nil {
 			return out, err
 		}
-		if res.Error, res.HasErr, err = rec.text("error"); err != nil {
+		if res.Code, res.HasCode, err = rec.text("code"); err != nil {
 			return out, err
 		}
 		if res.Msg, res.HasMsg, err = rec.text("msg"); err != nil {
@@ -323,8 +333,8 @@ func parseOrder(rep *command.Reply) (OrderReport, error) {
 			q++
 		case "refused":
 			f++
-			if !res.HasErr {
-				return out, fmt.Errorf("%w: order bot=%s is refused without error=", ErrBadReport, res.Bot)
+			if !res.HasCode {
+				return out, fmt.Errorf("%w: order bot=%s is refused without code=", ErrBadReport, res.Bot)
 			}
 		}
 	}
@@ -390,11 +400,17 @@ type RoleResult struct {
 	Role   string
 	Seq    int
 	HasSeq bool
-	Status string // queued, stored
-	Extra  map[string]string
+	Status string // queued, stored, refused
+	// Code is the refusal code (no-tank-kit, ...), present on a refused line; Cleared says the refusal also
+	// dropped a tank bit the bot already had.
+	Code       string
+	HasCode    bool
+	Cleared    bool
+	HasCleared bool
+	Extra      map[string]string
 }
 
-var roleRecordKeys = map[string]bool{"bot": true, "role": true, "seq": true, "status": true}
+var roleRecordKeys = map[string]bool{"bot": true, "role": true, "seq": true, "status": true, "code": true, "cleared": true}
 
 // RoleReport is a whole role answer.
 type RoleReport struct {
@@ -433,7 +449,7 @@ func parseRole(rep *command.Reply) (RoleReport, error) {
 	}
 	end := r.End
 	out := RoleReport{Raw: append([]string(nil), rep.Raw...)}
-	if out.Role, err = requiredWordOrEmpty(end, "role", "tank", "healer", "dps"); err != nil {
+	if out.Role, err = requiredWordOrEmpty(end, "role", "tank", "healer", "dps", "none"); err != nil {
 		return out, err
 	}
 	if out.Target, err = labelText(end, "target"); err != nil {
@@ -450,10 +466,19 @@ func parseRole(rep *command.Reply) (RoleReport, error) {
 		if res.Bot, err = rec.requireText("bot"); err != nil {
 			return out, err
 		}
-		if res.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps"); err != nil {
+		if res.Role, err = requiredWordOrEmpty(rec, "role", "tank", "healer", "dps", "none"); err != nil {
 			return out, err
 		}
-		if res.Status, err = requiredWord(rec, "status", "queued", "stored"); err != nil {
+		if res.Status, err = requiredWord(rec, "status", "queued", "stored", "refused"); err != nil {
+			return out, err
+		}
+		if res.Code, res.HasCode, err = rec.text("code"); err != nil {
+			return out, err
+		}
+		if res.Status == "refused" && !res.HasCode {
+			return out, fmt.Errorf("%w: role bot=%s is refused without code=", ErrBadReport, res.Bot)
+		}
+		if res.Cleared, res.HasCleared, err = rec.optionalBool("cleared"); err != nil {
 			return out, err
 		}
 		if res.Seq, res.HasSeq, err = rec.optionalInt("seq", 0, math.MaxInt32); err != nil {
@@ -480,15 +505,20 @@ func parseRole(rep *command.Reply) (RoleReport, error) {
 type MasterResult struct {
 	Bot              string
 	Commander        string
+	HasCommander     bool
 	CommanderInParty bool
 	HasInParty       bool
 	Seq              int
 	HasSeq           bool
-	Status           string
-	Extra            map[string]string
+	Status           string // queued, stored, bound, refused
+	// Code is the refusal code (bind-failed, release-failed, ...), present on a refused line.
+	Code    string
+	HasCode bool
+	Extra   map[string]string
 }
 
-var masterRecordKeys = map[string]bool{"bot": true, "commander": true, "commander_in_party": true, "seq": true, "status": true}
+var masterRecordKeys = map[string]bool{"bot": true, "commander": true, "commander_in_party": true, "seq": true,
+	"status": true, "code": true}
 
 // MasterReport is a whole master answer.
 type MasterReport struct {
@@ -547,11 +577,17 @@ func parseMaster(rep *command.Reply) (MasterReport, error) {
 		if res.Bot, err = rec.requireText("bot"); err != nil {
 			return out, err
 		}
-		if res.Commander, err = rec.requireText("commander"); err != nil {
+		if res.Commander, res.HasCommander, err = rec.text("commander"); err != nil {
 			return out, err
 		}
-		if res.Status, err = requiredWord(rec, "status", "queued", "stored"); err != nil {
+		if res.Status, err = requiredWord(rec, "status", "queued", "stored", "bound", "refused"); err != nil {
 			return out, err
+		}
+		if res.Code, res.HasCode, err = rec.text("code"); err != nil {
+			return out, err
+		}
+		if res.Status == "refused" && !res.HasCode {
+			return out, fmt.Errorf("%w: master bot=%s is refused without code=", ErrBadReport, res.Bot)
 		}
 		if res.Seq, res.HasSeq, err = rec.optionalInt("seq", 0, math.MaxInt32); err != nil {
 			return out, err
