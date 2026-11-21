@@ -114,20 +114,28 @@ Remote control on ForeverCore is `commander`: the module's TortoiseBots party, c
 character over the session's `.tb` command channel (no add-on bridge, no other account).
 `forever rpc DIR commander '{"op":"bind","lead_bot":"<tank>","bots":["<healer>","<dps>"]}'` forms the lead's party,
 binds it to the character and answers the binding card. Ops are `bind` (`lead_bot`, `bots`), `unbind` (`lead_bot`),
-`status`, `cmd` (`verb`, `args`, `wait_ms`, `pause_run`) and `run` (`verb` start, stop, pause, resume, status or
-events; `lead_bot`; `args` carries the plan, the reason words or the event sequence). The answer carries `sent`
-(the command lines that went out), `bots` (the module's per-bot lines: `queued`, `refused`, `bound`, `joined`),
-`card` (the binding card the call read, or `cards` for a `status`), `final` (each waited bot's `ok` or
-`fail:<code>`), and a run verb's `runs` and `events`. Every mutation reads `.tb commander status <self>` before the
-line and, for a bind, order, role or run mutation, after it: a target outside the character's own bindings is
-refused `not-owned` before anything is sent, and a line whose target changed in between says the line already went
-out. An order while a run is running or paused is refused `run-active` unless `pause_run` is true (the module pauses
-the run itself). A verb of a module package that is not installed answers `not-available` after one cached probe per
-session, and the probe cache is dropped when the world link is re-entered. `view` is the port's cut verb:
+`status`, `cmd` (`verb`, `args`, `wait_ms`, `pause_run`; `lead_bot` scopes the call to that lead's party, and a
+name the character does not command is refused before any line goes out) and `run` (`verb` start, stop, pause,
+resume, status or events; `lead_bot`; `args` carries the plan, the reason words or the event sequence; a `start`
+without `lead_bot` uses the only bound lead, and is refused when there is not exactly one). The answer carries
+`sent` (the command lines that went out), `bots` (the module's per-bot lines), `card` (the binding card the call
+read, or `cards` for a `status`), `final` (each waited bot's `ok` or `fail:<code>`, `{}` when no wait ran),
+`party_error` (why a `status` read the cards but not the party), and a run verb's `runs` and `events`. Every
+mutation reads `.tb commander status <self>` before the line and, for a bind, order, role or run mutation, after
+it: a target outside the character's own bindings is refused `not-owned` before anything is sent, and a line
+whose target changed in between says the line already went through. Every refusal also carries the call's partial
+result in the error's `data` (the lines that went out, the bots, `card` and `final` it had read), so a caller that
+sees an order in `sent` knows it went out and never retries it blindly. An order while a run is running or paused
+is refused `run-active` unless `pause_run` is true (the module pauses the run itself). A verb of a module package
+that is not installed answers `not-available` after one cached probe per session, and the probe cache is dropped
+when the world link is re-entered; a verb whose package answers but whose typed path has not landed (round C5)
+answers `not-available: <verb>: needs-typed-path (round C5)` instead. `view` is the port's cut verb:
 `commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
 (`not-available`, `run-active`, `not-owned`, `refused`, `bind-refused`, or the module's own error code); a lost or
-re-entering link keeps `-32002`/`-32005`. `wait_ms` polls `.tb state` every 500 ms for each queued order's
-per-bot line, at most 10 s, and is ignored by the other ops; an order is sent once and never resent.
+re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
+every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
+capped at 15 s; the poll runs on the session goroutine, so a long wait holds the loop and every other call behind
+it for that bounded time), and is ignored by the other ops; an order is sent once and never resent.
 
 Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
 with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a

@@ -154,12 +154,16 @@ func checkWord(s, extra string) error {
 	return nil
 }
 
+// PathName is the typed path a verb's words need: the module package that carries the verb, with the round that
+// ports it. A verb whose path has not landed is refused with this reason, and no probe line is sent for it.
+const PathName = "needs-typed-path (round C5)"
+
 // NotAvailableError is a verb the module cannot take now: the package that carries it does not answer the
 // session's probe, or the feature was cut from the port.
 type NotAvailableError struct {
 	Verb    string
 	Package string // "P3" or "P6" when the module lacks the package
-	Why     string // the reason when it is not a package (a cut verb, a missing agent-side path)
+	Why     string // the reason when it is not a package (a cut verb) or when the package's path has not landed
 }
 
 func (e *NotAvailableError) Error() string {

@@ -24,29 +24,34 @@ import (
 )
 
 // serveCommanderParams is the commander method's params: the old daemon's shape (a caller's JSON keeps working)
-// with pause_run (D4: an order while a run runs is refused unless the call allows the module to pause it).
+// with pause_run (D4: an order while a run runs is refused unless the call allows the module to pause it). On is
+// the old view shape's flag: it is accepted and ignored, so {"op":"view","on":true} answers the port's own
+// refusal, never an unknown-field error.
 type serveCommanderParams struct {
 	Op       string   `json:"op"`                 // bind, unbind, status, cmd, run or view
-	LeadBot  string   `json:"lead_bot,omitempty"` // bind, unbind and run: the lead the call names
+	LeadBot  string   `json:"lead_bot,omitempty"` // bind, unbind, cmd and run: the lead the call names
 	Bots     []string `json:"bots,omitempty"`     // bind: the other party members
 	Verb     string   `json:"verb,omitempty"`     // cmd: the order's verb; run: start, stop, pause, resume, status or events
 	Args     []string `json:"args,omitempty"`     // cmd: the verb's arguments; run: the plan, the reason or the event sequence
-	WaitMS   int      `json:"wait_ms,omitempty"`  // cmd: how long the order's per-bot line is polled (at most 10 s); other ops ignore it
+	WaitMS   int      `json:"wait_ms,omitempty"`  // cmd: the per-bot poll, 0..30000 ms (clamped); other ops ignore it
 	PauseRun bool     `json:"pause_run,omitempty"`
+	On       *bool    `json:"on,omitempty"`
 }
 
 // ServeCommander is a commander call's answer: the lines that went out, the module's per-bot lines, the binding
 // card (a mutation's own read, or every card of a status), the waited order states, and a run verb's records or
-// events. A refusal is the typed RPC error instead, and its message names each bot the module refused.
+// events. A refusal is the typed RPC error instead; its Data carries the partial result (the lines that went out
+// and the bots, card and final the call had read), and its message names each bot the module refused.
 type ServeCommander struct {
-	Self   string                `json:"self,omitempty"` // status: the character whose cards these are
-	Sent   []string              `json:"sent,omitempty"`
-	Bots   []ServeCommanderBot   `json:"bots,omitempty"`
-	Card   *ServeCommanderCard   `json:"card,omitempty"`
-	Cards  []ServeCommanderCard  `json:"cards,omitempty"`
-	Final  map[string]string     `json:"final,omitempty"`
-	Runs   []ServeCommanderRun   `json:"runs,omitempty"`
-	Events []ServeCommanderEvent `json:"events,omitempty"`
+	Self       string                `json:"self,omitempty"` // status: the character whose cards these are
+	Sent       []string              `json:"sent,omitempty"`
+	Bots       []ServeCommanderBot   `json:"bots,omitempty"`
+	Card       *ServeCommanderCard   `json:"card,omitempty"`
+	Cards      []ServeCommanderCard  `json:"cards,omitempty"`
+	Final      map[string]string     `json:"final"`
+	PartyError string                `json:"party_error,omitempty"` // status: why the party state read failed
+	Runs       []ServeCommanderRun   `json:"runs,omitempty"`
+	Events     []ServeCommanderEvent `json:"events,omitempty"`
 }
 
 // ServeCommanderBot is one bot's line of an answer.
@@ -192,14 +197,13 @@ func (st *serveState) resetCommander(s *session) {
 	st.cmdr.c.Reset()
 }
 
-// serveCommander runs one commander call. It runs on the session goroutine like every other action, so a wait for
-// an order's per-bot line holds the loop for its own bounded time and nothing else of the session interleaves.
+// serveCommander runs one commander call. A waited cmd carries one overall deadline: the clamped wait_ms plus a
+// fixed 5 s read budget, capped at 15 s. The poll itself runs on the session goroutine like every other action, so
+// a long wait still holds the loop (and every other call behind it) for that bounded time; callers that need the
+// loop free use a small wait_ms and poll `status` themselves.
 func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCommanderParams) (ServeCommander, error) {
 	if st.cmdr == nil {
 		return ServeCommander{}, &rpc.Error{Code: rpc.CodeInternal, Message: "internal: the commander controller is not installed"}
-	}
-	if p.WaitMS < 0 {
-		return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander: wait_ms must not be negative"}
 	}
 	c := st.cmdr.c
 	switch strings.ToLower(strings.TrimSpace(p.Op)) {
@@ -216,18 +220,22 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 	case "status":
 		rep, err := c.Status(ctx)
 		if err != nil {
-			return ServeCommander{}, serveCommanderError(err)
+			return ServeCommander{}, serveCommanderError(cmdctl.Result{}, err)
 		}
 		return commanderStatus(rep), nil
 	case "cmd":
 		if strings.TrimSpace(p.Verb) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander cmd: verb is required"}
 		}
-		return commanderAnswer(c.Order(ctx, cmdctl.Order{
+		wait, budget := commanderWait(p.WaitMS)
+		callCtx, cancel := context.WithTimeout(ctx, wait+budget)
+		defer cancel()
+		return commanderAnswer(c.Order(callCtx, cmdctl.Order{
 			Verb:     p.Verb,
 			Args:     p.Args,
+			Lead:     p.LeadBot,
 			PauseRun: p.PauseRun,
-			Wait:     time.Duration(p.WaitMS) * time.Millisecond,
+			Wait:     wait,
 		}))
 	case "run":
 		verb := strings.ToLower(strings.TrimSpace(p.Verb))
@@ -235,8 +243,18 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander run: verb is required: start, stop, pause, resume, status or events"}
 		}
 		lead := p.LeadBot
-		if verb == "status" && strings.TrimSpace(lead) == "" {
-			lead = "all" // a status with no lead reads every run the module holds
+		if strings.TrimSpace(lead) == "" {
+			switch verb {
+			case "status", "events":
+				// A status or events read with no lead reads every run the module holds.
+				lead = "all"
+			case "start":
+				// An old `run start` named no lead: the only lead is what it meant.
+				var err error
+				if lead, err = commanderOnlyLead(ctx, c); err != nil {
+					return ServeCommander{}, err
+				}
+			}
 		}
 		// The reason words of `run stop` are several, the plan and the event sequence one; the controller's
 		// checks are the module's own grammar's.
@@ -248,11 +266,49 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 	}
 }
 
-// serveCommanderError maps the controller's and the module's refusals onto the RPC's codes. Every refusal is the
-// game's answer (-32003) with its machine-readable code first in the message (not-available, run-active,
-// not-owned, refused, bind-refused, or the module's own error code), so a caller keys off the message's first
-// word; the link's own errors keep their codes (-32002 offline, -32005 reconnecting).
-func serveCommanderError(err error) error {
+// commanderReadBudget is the fixed budget for a waited cmd's reads around its poll: the guard, the order and the
+// post-order ownership reads. A waited cmd's overall deadline is the clamped wait plus this, capped at 15 s.
+const commanderReadBudget = 5 * time.Second
+
+// commanderWait clamps the caller's wait_ms to 0..30 s before the Duration conversion (an int millisecond count
+// near 9e12 would otherwise wrap the Duration negative), and pairs it with the read budget; the pair is capped
+// at 15 s.
+func commanderWait(waitMS int) (wait, budget time.Duration) {
+	if waitMS < 0 {
+		waitMS = 0
+	}
+	if waitMS > 30000 {
+		waitMS = 30000
+	}
+	wait = time.Duration(waitMS) * time.Millisecond
+	budget = commanderReadBudget
+	if total := wait + budget; total > 15*time.Second {
+		budget = 15*time.Second - wait
+	}
+	return wait, budget
+}
+
+// commanderOnlyLead names the session character's one bound lead, for an old `run start` that names none. The
+// module answers one card per commander, so anything but exactly one card is refused with a clear error instead
+// of guessing.
+func commanderOnlyLead(ctx context.Context, c cmdctl.Controller) (string, error) {
+	rep, err := c.Status(ctx)
+	if err != nil {
+		return "", serveCommanderError(cmdctl.Result{}, err)
+	}
+	if len(rep.Cards) != 1 {
+		return "", &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander run start: lead_bot is required when the character commands no lead or more than one"}
+	}
+	return rep.Cards[0].Lead, nil
+}
+
+// serveCommanderError maps the controller's and the module's refusals onto the RPC's codes, carrying the call's
+// partial result in Data: the lines that went out and the bots, card and final the call had read. A caller that
+// sees an order in Sent knows it went out and never retries it blindly. Every refusal is the game's answer
+// (-32003) with its machine-readable code first in the message (not-available, run-active, not-owned, refused,
+// bind-refused, or the module's own error code), so a caller keys off the message's first word; the link's own
+// errors keep their codes (-32002 offline, -32005 reconnecting).
+func serveCommanderError(res cmdctl.Result, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -263,28 +319,34 @@ func serveCommanderError(err error) error {
 	var br *cmdctl.BindRefusedError
 	var ue *cmdctl.UsageError
 	var ce *tbcmd.CommandError
+	partial := commanderResult(res)
 	switch {
 	case errors.As(err, &na):
-		return commanderGame(na.Error())
+		return commanderGame(na.Error(), partial)
 	case errors.As(err, &ra):
-		return commanderGame(ra.Error())
+		return commanderGame(ra.Error(), partial)
 	case errors.As(err, &no):
-		return commanderGame("not-owned: " + strings.TrimPrefix(no.Error(), "cmdctl: "))
+		return commanderGame("not-owned: "+strings.TrimPrefix(no.Error(), "cmdctl: "), partial)
 	case errors.As(err, &rf):
-		return commanderGame(rf.Error())
+		return commanderGame(rf.Error(), partial)
 	case errors.As(err, &br):
-		return commanderGame("bind-refused: " + strings.TrimPrefix(br.Error(), "cmdctl: "))
+		return commanderGame("bind-refused: "+strings.TrimPrefix(br.Error(), "cmdctl: "), partial)
 	case errors.As(err, &ue):
-		return &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander: " + ue.Msg}
+		return &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander: " + ue.Msg, Data: partial}
 	case errors.As(err, &ce):
-		return commanderGame(commanderModuleCode(ce))
+		return commanderGame(commanderModuleCode(ce), partial)
 	}
-	return serveError(err)
+	rerr := serveError(err)
+	if re, ok := rerr.(*rpc.Error); ok {
+		re.Data = partial
+		return re
+	}
+	return rerr
 }
 
-// commanderGame is one refusal with a code first.
-func commanderGame(msg string) error {
-	return &rpc.Error{Code: rpc.CodeGame, Message: msg}
+// commanderGame is one refusal with a code first, carrying the call's partial result.
+func commanderGame(msg string, partial ServeCommander) error {
+	return &rpc.Error{Code: rpc.CodeGame, Message: msg, Data: partial}
 }
 
 // commanderModuleCode is the module's error line with its code first: the tbcmd text without the layer's "tb: "
@@ -304,17 +366,22 @@ func commanderModuleCode(e *tbcmd.CommandError) string {
 	return b.String()
 }
 
-// commanderAnswer maps a controller call's answer, or its refusal, onto the RPC's result or typed error.
+// commanderAnswer maps a controller call's answer, or its refusal, onto the RPC's result or typed error. The
+// refusal carries the call's partial result in its Data (see serveCommanderError).
 func commanderAnswer(res cmdctl.Result, err error) (ServeCommander, error) {
 	if err != nil {
-		return ServeCommander{}, serveCommanderError(err)
+		return ServeCommander{}, serveCommanderError(res, err)
 	}
 	return commanderResult(res), nil
 }
 
-// commanderResult maps the controller's answer onto the RPC's result, presence flags included.
+// commanderResult maps the controller's answer onto the RPC's result, presence flags included. Final is kept
+// present on every answer ({} when no wait ran), so "waited, nothing answered" ({}) never looks like "no wait".
 func commanderResult(res cmdctl.Result) ServeCommander {
 	out := ServeCommander{Sent: res.Sent, Final: res.Final}
+	if out.Final == nil {
+		out.Final = map[string]string{}
+	}
 	for _, b := range res.Bots {
 		out.Bots = append(out.Bots, ServeCommanderBot{
 			Bot: b.Bot, Status: b.Status, Seq: b.Seq, Error: b.Error, Msg: b.Msg,
@@ -333,9 +400,9 @@ func commanderResult(res cmdctl.Result) ServeCommander {
 	return out
 }
 
-// commanderStatus maps a status read: the character's binding cards.
+// commanderStatus maps a status read: the character's binding cards, and why the party state read failed.
 func commanderStatus(rep cmdctl.Status) ServeCommander {
-	out := ServeCommander{Self: rep.Self}
+	out := ServeCommander{Self: rep.Self, PartyError: rep.PartyError}
 	for _, c := range rep.Cards {
 		out.Cards = append(out.Cards, commanderCard(c))
 	}

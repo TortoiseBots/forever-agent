@@ -45,12 +45,22 @@ serve method's params.
 
 `ServeCommander` carries `sent` (the command lines), `bots` (the module's per-bot lines: bot, status, seq, the
 refusal code and message), `card` (the card the call read; `cards` and `self` for a status), `final` (each waited
-bot's `ok` or `fail:<code>`), and a run verb's `runs`/`events`. A status also makes the controller read
-`.tb state party`; that read is not in the answer, because the card's member records already carry each bot's
-health, power, role and liveness, and a second typed copy of the state model here would be one more thing to keep
-in step with `tbcmd`. Presence flags of the module's records become
-absent JSON numbers (`group`, `map`, `pos`, `leg`, `ev`, `step`, `unit`, `sub`), never a zero standing in for
-"not known". A refusal is the typed RPC error instead; the message names the bots the module refused.
+bot's `ok` or `fail:<code>`, always present: `{}` when no wait ran, so "waited, nothing answered" never looks like
+"no wait"), `party_error` (why a `status` answered cards but no party state), and a run verb's `runs`/`events`. A
+status also makes the controller read `.tb state party`; that read is not otherwise in the answer, because the
+card's member records already carry each bot's health, power, role and liveness, and a second typed copy of the
+state model here would be one more thing to keep in step with `tbcmd`. Presence flags of the module's records
+become absent JSON numbers (`group`, `map`, `pos`, `leg`, `ev`, `step`, `unit`, `sub`), never a zero standing in
+for "not known". A refusal is the typed RPC error instead; its `data` carries the call's partial result (the lines
+that went out, the bots, card and final it had read), and its message names the bots the module refused.
+
+Fix round (review findings): `cmd` takes `lead_bot`, which scopes the order to that lead's party before the run
+guard (refused `not-owned` when the character commands no such lead; one bound lead is the default when the call
+names none); `run start` without `lead_bot` uses the only bound lead, and is refused clearly otherwise; `wait_ms`
+is clamped to 0..30000 before the `Duration` conversion, and a waited `cmd` carries one overall deadline (the
+clamped wait plus a 5 s read budget, capped at 15 s); a P3/P6 verb whose typed path has not landed (round C5)
+answers `not-available: <verb>: needs-typed-path (round C5)` after the package probe, sending no order line; the
+old `{"op":"view","on":true}` shape is accepted and answers the port's own refusal.
 
 ## Errors
 
@@ -58,7 +68,7 @@ Every refusal is `-32003` with its machine-readable code first in the message:
 
 | source | message start |
 |---|---|
-| `cmdctl.NotAvailableError` | `not-available: <verb>: needs module package P3` (or the cut/why text) |
+| `cmdctl.NotAvailableError` | `not-available: <verb>: needs module package P3`, or `not-available: <verb>: needs-typed-path (round C5)` when the package answers but the typed path has not landed |
 | `cmdctl.RunActiveError` | `run-active: <lead>'s run of <plan> is running; …` |
 | `cmdctl.NotOwnedError` | `not-owned: <target> is not a <kind> this character commands` (or "…the line already went through") |
 | `cmdctl.RefusedError` | `refused: <verb>: nothing was queued (bot: code, …)` |
@@ -67,14 +77,21 @@ Every refusal is `-32003` with its machine-readable code first in the message:
 
 `cmdctl.UsageError` is the caller's mistake and is `-32602` (`commander: …`). The link's own errors keep their
 codes: `ErrLinkLost` and a cancelled context are `-32002`, the reconnecting refusal is `-32005`, a deadline is
-`-32004`.
+`-32004` (an unanswered read inside a waited `cmd` ends the call with `-32004`, carrying the order it had sent).
 
 ## Tests
 
 `serve_fake_test.go`, against the fake world over real sockets (the fake answers `.tb` lines from a per-test
-script, with the run's token): a status round trip (two members); `cmd stay` (the exact `.tb order party stay`
-line, one queued bot, the guard's card); `view` and bad params refused with nothing sent; `commander` in the
-ported list and out of the not-ported one; a call during a re-entry answers `-32005` and the fake sees no line; a
-module error line keeps its code first; an order into a running run is refused `run-active` and `pause_run` sends
-it; a P6 verb probes once and answers `not-available` with no order; `run status` (no lead) and `run events` carry
-`runs` and `events`.
+script, with the run's token): a status round trip (two members, clean `party_error`); a failed `.tb state party`
+read carries `party_error` with the cards it did read; `cmd stay` (the exact `.tb order party stay` line, one
+queued bot, the guard's card, `final` present); an unanswered wait ends `-32004` with the sent order in the error's
+`data`; `view` and the old `{"op":"view","on":true}` shape answer the port's refusal, and bad params are refused
+with nothing sent; `commander` in the ported list and out of the not-ported one; a call during a re-entry answers
+`-32005` and the fake sees no line; the probe is asked once per session and again after the re-entry; a module
+error line keeps its code first; an order into a running run is refused `run-active` (carrying the card) and
+`pause_run` sends it; a P6 verb probes once and answers its package code with no order; a missing typed path
+answers `needs-typed-path` with one probe and no order; `run status` (no lead) and `run events` carry `runs` and
+`events`; an old `run start` without `lead_bot` uses the only bound lead, and is refused when there is not exactly
+one; `bind` sends the party and master lines in order with the card, and `unbind` to an unowned lead is refused
+`not-owned` with no line. `cmdctl_test.go`: one-lead scoping (named, default, unknown, invalid) and the path
+refusal after the probe.
