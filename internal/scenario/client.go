@@ -26,7 +26,10 @@ type HTTPCaller struct {
 	Addr      string
 	TokenFile string
 	HTTP      *http.Client
-	token     string
+	// NoAuth says the agent serves without a bearer token (a `forever serve
+	// --no-auth` slot): no token file is read and no header is sent.
+	NoAuth bool
+	token  string
 }
 
 // Token is the bearer token of the last call ("" before the first).
@@ -66,13 +69,15 @@ func (c *HTTPCaller) Call(ctx context.Context, method string, params any, timeou
 	if req.URL.User != nil {
 		return nil, fmt.Errorf("scenario: rpc %q is not a loopback address (the agent only listens on loopback; a token must never leave the machine)", c.Addr)
 	}
-	tok, err := rpc.ReadTokenFile(c.TokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("scenario: token file: %v", err)
+	if !c.NoAuth {
+		tok, err := rpc.ReadTokenFile(c.TokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("scenario: token file: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		c.token = tok
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
-	c.token = tok
 	hc := c.HTTP
 	if hc == nil {
 		hc = &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}

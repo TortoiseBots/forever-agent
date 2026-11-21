@@ -57,7 +57,11 @@ turtle-agent scenario check --var plan=zulfarrak scenarios/itemleg3-g1-items.jso
 ```sh
 turtle-agent scenario run --out <walk-dir>/lft-1 scenarios/lft-addon-path.json
 turtle-agent scenario run --var plan=zulfarrak --session C=127.0.0.1:8771@<walk-dir>/rpc-8771.token scenarios/itemleg3-g1-items.json
+# two forever serve slots: the address and token come from each slot dir
+forever-agent scenario run --slot A=<slot-a-dir> --slot B=<slot-b-dir> scenarios/forever-chat-party.json
 ```
+
+A `--slot` may be written `NAME=DIR` for any session the file declares `"server": "forever"`, or as a bare `DIR` when the file has one session. The address is the slot `slot.json`'s `127.0.0.1:<port>` and the token file is the dir's `rpc-<port>.token`; a `--no-auth` daemon sends no header. A slot for a turtle session is refused.
 
 Every `run` flag and its default:
 
@@ -68,6 +72,7 @@ Every `run` flag and its default:
 | `--quiet` | off | print only PASS/FAIL/ERROR/SKIP lines and the summary |
 | `--var` | none, repeatable | override a file var (the name must exist) |
 | `--session` | none, repeatable | override a session: `NAME=ADDR[@TOKENFILE]` (the name must exist; the address is re-checked for loopback) |
+| `--slot` | none, repeatable | a forever session's serve slot dir: `NAME=DIR` (or a bare `DIR` for a one-session file); the address and token come from that dir |
 
 The run writes `raw.txt` (seq, times, expanded text), `norm.txt` (templates, no timings, DB counts kept), `transcript.jsonl` (one object per line) and `result.json`. Exit 0 when every check passed, 14 when a check failed, 15 on abort or error, 2 on usage. `scenario` uses plain flag parsing: put flags before the file name. On/off flags take `=` (`--force=true`); a space-separated value is read as the file instead.
 

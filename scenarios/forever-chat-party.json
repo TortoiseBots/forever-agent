@@ -1,0 +1,90 @@
+{
+  "scenario": "forever-chat-party",
+  "description": "Two forever serve slots (K3 sample): A says a line and invites B, B hears the say and the party invite, accepts, and both read their party state from the session's event_log and party method.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "A says a line; B's event log carries it as a chat"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "chat",
+      "params": {
+        "type": "say",
+        "text": "hello from ${A.character}"
+      }
+    },
+    {
+      "do": "expect",
+      "session": "B",
+      "kind": "chat",
+      "match": "hello from ${A.character}"
+    },
+    {
+      "do": "section",
+      "title": "A invites B; B's log carries the party invite"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "invite",
+      "params": {
+        "name": "${B.character}"
+      }
+    },
+    {
+      "do": "expect",
+      "session": "B",
+      "kind": "party",
+      "match": "${A.character}"
+    },
+    {
+      "do": "rpc",
+      "session": "B",
+      "method": "accept_invite"
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "kind": "party",
+      "note": "the roster row carries no text; the party check below reads the roster",
+      "match": "^$"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "check_rpc",
+      "session": "B",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "leave_group",
+      "ignore_error": true
+    }
+  ]
+}
