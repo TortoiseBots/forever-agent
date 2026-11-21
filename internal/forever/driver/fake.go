@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"time"
@@ -207,7 +208,11 @@ type Fake struct {
 	// PushThreat makes the scripted client's own threat table answer on every call (the server's pushed lists);
 	// ThreatCalls counts the module's `.tb threat` reads. Encounters are the scripted encounter packets, drained
 	// by the run; lastEncounterAt is when the newest one fired.
-	PushThreat      bool
+	PushThreat bool
+	// TableMobs is the scripted pushed table's answer; with PushThreat it is what ThreatTable serves, whatever the
+	// scripted fight holds. FailThreat makes the module's `.tb threat` read fail (not the link).
+	TableMobs       []tbcmd.ThreatLine
+	FailThreat      bool
 	ThreatCalls     int
 	encounters      []EncounterEvent
 	lastEncounterAt time.Time
@@ -504,6 +509,9 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 // Threat answers the threat lists: every engaged, living mob is on a bot's list.
 func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
 	f.ThreatCalls++
+	if f.FailThreat {
+		return tbcmd.ThreatReport{}, errors.New("fake: the threat read failed")
+	}
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.ThreatReport{}, err
 	}
@@ -521,6 +529,9 @@ func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
 func (f *Fake) ThreatTable(now time.Time) (tbcmd.ThreatReport, bool) {
 	if !f.PushThreat {
 		return tbcmd.ThreatReport{}, false
+	}
+	if len(f.TableMobs) > 0 {
+		return tbcmd.ThreatReport{Mobs: append([]tbcmd.ThreatLine(nil), f.TableMobs...), Count: len(f.TableMobs)}, true
 	}
 	return f.threatReport(), true
 }

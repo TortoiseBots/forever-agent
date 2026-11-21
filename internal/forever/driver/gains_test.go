@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
@@ -219,5 +220,61 @@ func TestWatchBossReadWithoutEncounters(t *testing.T) {
 	}
 	if reads < 3 {
 		t.Fatalf("%d instance report read(s) in a 130 s watch with no encounter packet, want the cadence and the end", reads)
+	}
+}
+
+// TestWatchFrameReadsPushedThreat: with the pushed table answering and every `.tb threat` read failing, the watch's
+// frames still carry the mob, its victim and its top list. That is the table-first rule on the watch path.
+func TestWatchFrameReadsPushedThreat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := watchConfig()
+	cfg.Out = dir
+	cfg.FrameEvery = 2 * time.Second
+	route := testRoute(t, oneGroupPlan())
+	f := NewFake(route, cfg)
+	cfg.Party = f.PartyNames()
+	run := New(cfg, route, f, f, f, f.Clock)
+	rec, err := NewWatchRecorder(dir, "r-threat", route.Name, route.Map, 1, f.Start, run.PartyMembers())
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	run.SetRecorder(rec)
+
+	mob := f.UnitGUID(100)
+	tankGUID, ok := f.PlayerGUID(cfg.Leader)
+	if !ok {
+		t.Fatalf("the fake knows no %s", cfg.Leader)
+	}
+	f.PushThreat = true
+	f.FailThreat = true
+	f.TableMobs = []tbcmd.ThreatLine{{
+		Mob: mob, Entry: 100, Name: "mob", HPPct: 80, Victim: cfg.Leader, Target: cfg.Leader, Size: 1, HasTop: true,
+		Top: []tbcmd.ThreatEntry{{Name: cfg.Leader, Threat: 412}},
+	}}
+	f.ScriptRun(FakeRunScript{Steps: 6, Pulls: 2, ProgressEvery: 3 * time.Second, DoneAt: 20 * time.Second})
+	if res := run.Watch(context.Background()); res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	tf, err := trace.Read(filepath.Join(dir, "r-threat.jsonl"))
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var seen int
+	for _, fr := range tf.Frames {
+		for _, m := range fr.Mobs {
+			seen++
+			if m.Victim != traceGUID(tankGUID.String()) {
+				t.Fatalf("frame mob victim %q, want %q", m.Victim, traceGUID(tankGUID.String()))
+			}
+			if len(m.Top) != 1 || m.Top[0].Threat != 412 {
+				t.Fatalf("frame mob top %+v", m.Top)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no frame carried the pushed mob while every module read failed")
+	}
+	if f.ThreatCalls == 0 {
+		t.Fatal("the failing fallback read was never attempted")
 	}
 }
