@@ -136,6 +136,40 @@ func TestWatchRouteAcceptsTheFightFields(t *testing.T) {
 	}
 }
 
+// TestWatchRouteAcceptsTheModulesOwnSteps: a fragment shaped like the Wailing Caverns rows the server module runs by
+// itself (a boss wait for a patrolling boss, a stand-on-the-point hop into a straight-line hop) is a route for a
+// watch, and a run this client leads still refuses each of them by name. A GM hop is refused for both.
+func TestWatchRouteAcceptsTheModulesOwnSteps(t *testing.T) {
+	p := minimalPlan()
+	p.Legs[0].Boss.WaitS = 90
+	p.Legs[0].Via = []dungeon.Waypoint{
+		{Point: dungeon.Point{X: 1, Y: 2, Z: 3}, Exact: true},
+		{Point: dungeon.Point{X: 1, Y: 4, Z: 3}, Direct: true},
+	}
+	r, err := NewWatchRoute(p)
+	if err != nil {
+		t.Fatalf("the watch's route refused the module's own steps: %v", err)
+	}
+	if len(r.Legs[0].Via) != 2 || r.Legs[0].Boss == nil {
+		t.Fatalf("route legs %+v", r.Legs)
+	}
+	_, err = NewRoute(p)
+	if err == nil {
+		t.Fatal("the run's route took the module's own steps")
+	}
+	fields := refusalFields(err)
+	for _, want := range []string{"wait_s", "via.exact", "via.direct"} {
+		if !slices.Contains(fields, want) {
+			t.Fatalf("the run's refusal does not name %s: %v", want, fields)
+		}
+	}
+	g := minimalPlan()
+	g.Legs[0].Via = []dungeon.Waypoint{{Point: dungeon.Point{X: 1, Y: 2, Z: 3}, Direct: true, GMCross: true}}
+	if _, err := NewWatchRoute(g); err == nil || !slices.Contains(refusalFields(err), "via.direct") {
+		t.Fatalf("the watch's route took a GM hop: %v", err)
+	}
+}
+
 // TestPlanFiles runs the loader over every plan file of the repository's dungeons folder and records, per file,
 // whether it loads or which fields refuse it. Every refusal must be a PlanRefusal with field names (no silent ignore);
 // Ragefire Chasm's blockers are pinned exactly, so a field that stops being consulted shows up here.
@@ -172,6 +206,10 @@ func TestPlanFiles(t *testing.T) {
 	}
 	if route, err := LoadWatchRoute("../../../dungeons/ragefire_chasm.json"); err != nil || len(route.Legs) != 9 {
 		t.Fatalf("ragefire watch route: %v legs=%d", err, len(route.Legs))
+	}
+	// Wailing Caverns carries a boss wait and two hops the module runs by itself: the watch takes the plan whole.
+	if got := table["wailing_caverns.json"]; len(got) != 0 {
+		t.Fatalf("wailing_caverns.json refuses %v, want it to load for a watch", got)
 	}
 	// A run this client leads still refuses the same plan: this driver does not implement its fight rules, and
 	// loading it would run the dungeon without them.
