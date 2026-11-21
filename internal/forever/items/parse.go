@@ -82,6 +82,10 @@ func readItemInstance(b *wire.Buffer) (ItemInstance, error) {
 	return in, nil
 }
 
+// ReadItemInstance reads one ItemInstance from a packet (ItemPacketsCommon.cpp:186-198). It is exported for the
+// rounds whose packets carry one (the vendor's rows and a quest's reward choice), so one reader serves them all.
+func ReadItemInstance(b *wire.Buffer) (ItemInstance, error) { return readItemInstance(b) }
+
 // Toast is one UiEventToast of a push result (ItemPacketsCommon.cpp:250-256): the event and its asset.
 type Toast struct {
 	EventID int32

@@ -31,9 +31,9 @@ Each writer follows the server's reader, which is what defines the bytes a real 
 Three facts decide the flow:
 
 * **A vendor has no direct open packet.** Classic opens vendors and trainers only through a gossip option
-  (Player.cpp:15160-15181): the core adds "Let me browse your goods." ("Let me browse your goods.", Player.cpp:15180)
-  when the menu lacks a Vendor option, and selecting it sends `SMSG_GOSSIP_COMPLETE` and
-  `SMSG_NPC_INTERACTION_OPEN_RESULT` (Merchant) — not the list (Player.cpp:15286-15300).
+  (Player.cpp:15160-15181): the core adds "Let me browse your goods." when the menu lacks a Vendor option
+  (Player.cpp:15180), and selecting it sends `SMSG_GOSSIP_COMPLETE` and `SMSG_NPC_INTERACTION_OPEN_RESULT`
+  (Merchant) — not the list (Player.cpp:15286-15300).
 * **The list needs a second ask.** For a vendor without the gossip flag the first `CMSG_LIST_INVENTORY` only starts
   the interaction and answers the open result; the second returns `SMSG_VENDOR_INVENTORY`
   (ItemHandler.cpp:619-645, F2). `vendorOpen` therefore sends at most two `CMSG_LIST_INVENTORY`s, 5 s each: one to

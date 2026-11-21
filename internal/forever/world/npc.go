@@ -6,6 +6,7 @@ package world
 
 import (
 	"github.com/pjerra/forever-agent/internal/forever/npc"
+	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -29,7 +30,7 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			s.death.hasGossip = true
 		}
 	case wire.SMSGQuestGiverQuestList:
-		l, err := npc.ParseQuestGiverQuestList(p.Payload)
+		l, err := quest.ParseQuestList(p.Payload)
 		if err != nil {
 			s.noteParseError(p, err)
 			return nil

@@ -15,6 +15,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -44,6 +45,15 @@ const (
 	actVerbSellJunk = "sell-junk"
 	actVerbBuyback  = "buyback"
 	actVerbRepair   = "repair"
+
+	// Round R5's quest steps (quest_act.go).
+	actVerbQuestStatus   = "quest-status"
+	actVerbQuests        = "quests"
+	actVerbQuestAccept   = "quest-accept"
+	actVerbQuestProgress = "quest-progress"
+	actVerbQuestComplete = "quest-complete"
+	actVerbQuestReward   = "quest-reward"
+	actVerbQuestAbandon  = "quest-abandon"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -110,9 +120,11 @@ func ParseActStep(line string) (ActStep, error) {
 	switch verb {
 	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose, actVerbInv,
 		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse,
-		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair:
+		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair,
+		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
+		actVerbQuestReward, actVerbQuestAbandon:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon)", verb)
 	}
 	return step, nil
 }
@@ -158,7 +170,7 @@ type actState struct {
 	menu     npc.GossipMessage
 	hasMenu  bool
 	menuNPC  bool // the menu came from TALK_TO_GOSSIP (false: a QUEST_GIVER_HELLO answers a quest list)
-	quests   *npc.QuestGiverQuestList
+	quests   *quest.QuestList
 	npcEntry int32
 	hasNPC   bool
 	steps    int
@@ -212,6 +224,20 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actBuyback(ctx, a, step)
 	case actVerbRepair:
 		return s.actRepair(ctx, a, step)
+	case actVerbQuestStatus:
+		return s.actQuestStatus(ctx, a, step)
+	case actVerbQuests:
+		return s.actQuests(ctx, a, step)
+	case actVerbQuestAccept:
+		return s.actQuestAccept(ctx, a, step)
+	case actVerbQuestProgress:
+		return s.actQuestProgress(ctx, a, step)
+	case actVerbQuestComplete:
+		return s.actQuestComplete(ctx, a, step)
+	case actVerbQuestReward:
+		return s.actQuestReward(ctx, a, step)
+	case actVerbQuestAbandon:
+		return s.actQuestAbandon(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}
@@ -470,7 +496,7 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 		a.menu = npc.GossipMessage{Unit: guid}
 		a.hasMenu = true
 		a.quests = quests
-		s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("quest list with %d quest(s)", quests.Quests))
+		s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("quest list with %d quest(s)", len(quests.Quests)))
 		return nil
 	}
 	a.menu = *menu
@@ -481,7 +507,7 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 
 // waitActAnswer waits up to wait for the answer of the NPC guid: its gossip menu, or (questList) its quest list. The
 // answers land on the session (handleNPC stores them); only one from this NPC counts. found is false when none came.
-func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.Duration, questList bool) (*npc.GossipMessage, *npc.QuestGiverQuestList, bool, error) {
+func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.Duration, questList bool) (*npc.GossipMessage, *quest.QuestList, bool, error) {
 	end := s.transport().Now().Add(wait)
 	for {
 		if m := s.actMenu; m != nil && m.Unit == guid {

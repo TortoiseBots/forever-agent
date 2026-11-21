@@ -23,6 +23,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -539,10 +540,15 @@ type session struct {
 	loot *lootWatch
 	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
 	actMenu  *npc.GossipMessage
-	actQuest *npc.QuestGiverQuestList
+	actQuest *quest.QuestList
 
 	// Round R3: the vendor's answers since the last step cleared them (vendor.go, vendor_act.go).
 	vendor vendorWatch
+
+	// Round R5: the quest answers since the last step cleared them, and the character's own log (quest.go,
+	// quest_act.go). The log starts from the login create block on first use and an own create re-seeds it.
+	quest    questWatch
+	questLog *quest.Log
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -1925,6 +1931,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if isVendorPacket(p.Core) {
 			return s.handleVendor(p)
 		}
+		if isQuestPacket(p.Core) {
+			return s.handleQuest(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -2233,6 +2242,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// overlay guessed before it are settled by the slots this block carries, and the quest log is re-read from
 		// the block on its next use (round R5).
 		inv.Reset()
+		s.questLog = nil
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID
