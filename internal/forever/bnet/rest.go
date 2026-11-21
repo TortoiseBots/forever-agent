@@ -148,7 +148,7 @@ func (c *restClient) do(req *http.Request) ([]byte, error) {
 		// the login service answers a refusal with a JSON error message; the body is quoted only through
 		// describeRESTFailure, which bounds it, keeps printable ASCII and redacts long hex/base64 runs. The path
 		// can be the server's srp_url, so it goes through the sanitiser too.
-		return nil, fmt.Errorf("bnet: REST %s %s: %s", req.Method, c.scrubServerText(req.URL.Path), c.describeRESTFailure(resp.Status, body))
+		return nil, &restStatusError{status: resp.StatusCode, text: fmt.Sprintf("bnet: REST %s %s: %s", req.Method, c.scrubServerText(req.URL.Path), c.describeRESTFailure(resp.Status, body))}
 	}
 	return body, nil
 }
@@ -169,9 +169,9 @@ func (c *restClient) describeRESTFailure(status string, body []byte) string {
 	return status + ": " + c.scrubServerText(string(body))
 }
 
-// errLoginRefused marks the server's refusal of the credentials (wrong password, banned account, an authenticator
+// ErrLoginRefused marks the server's refusal of the credentials (wrong password, banned account, an authenticator
 // step). The message carries only the server's bounded, sanitised reason; callers test errors.Is, not a sentence.
-var errLoginRefused = errors.New("bnet: login refused")
+var ErrLoginRefused = errors.New("bnet: login refused")
 
 // serverRefusal describes a LoginResult the server refused with, quoting only bounded, sanitised server text, with
 // the account name the server was asked about taken out.
@@ -254,16 +254,16 @@ func (c *restClient) proof(ctx context.Context, account string, s *srpClient) (*
 		return nil, decodeError("login result", err)
 	}
 	if result.AuthenticationState != "DONE" {
-		return nil, fmt.Errorf("%w in state %q: %s", errLoginRefused, c.scrubServerText(result.AuthenticationState), c.serverRefusal(&result))
+		return nil, fmt.Errorf("%w in state %q: %s", ErrLoginRefused, c.scrubServerText(result.AuthenticationState), c.serverRefusal(&result))
 	}
 	if result.ErrorCode != "" {
-		return nil, fmt.Errorf("%w: %s", errLoginRefused, c.serverRefusal(&result))
+		return nil, fmt.Errorf("%w: %s", ErrLoginRefused, c.serverRefusal(&result))
 	}
 	if result.LoginTicket == "" {
 		if result.NextURL != "" {
-			return nil, fmt.Errorf("%w: the server needs a second step at %s (an authenticator code?), which this client does not do", errLoginRefused, c.scrubServerText(result.NextURL))
+			return nil, fmt.Errorf("%w: the server needs a second step at %s (an authenticator code?), which this client does not do", ErrLoginRefused, c.scrubServerText(result.NextURL))
 		}
-		return nil, fmt.Errorf("%w: no ticket, no error code (wrong password)", errLoginRefused)
+		return nil, fmt.Errorf("%w: no ticket, no error code (wrong password)", ErrLoginRefused)
 	}
 	return &result, nil
 }

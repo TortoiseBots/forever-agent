@@ -38,6 +38,9 @@ type foreverCommon struct {
 	// server that checks the key, the client's zero digest cannot pass, so the selection must not retry and the
 	// login says both causes instead.
 	worldChecksBuildAuthKey bool
+	// beforeAttempt is bnet.Options.BeforeAttempt for the logins this command makes: forever serve books every attempt in
+	// its login gate. Nil for the commands that log in once.
+	beforeAttempt func(ctx context.Context) error
 }
 
 // connectionFlags registers the flags every command that talks to the login server takes. --build is 0 (not given)
@@ -133,15 +136,16 @@ func (c *foreverCommon) loginWithPassword(ctx context.Context, cmd string, stdou
 		fmt.Fprintf(stdout, format+"\n", args...)
 	}
 	result, err := bnet.Login(ctx, bnet.Options{
-		RESTAddr:    c.restAddr,
-		RPCAddr:     c.rpcAddr,
-		CAFile:      c.caFile,
-		ServerName:  c.serverName,
-		Account:     c.account,
-		Password:    password,
-		ClientBuild: uint32(c.clientBuild),
-		Logf:        logf,
-		WorldAccept: worldAccept,
+		RESTAddr:      c.restAddr,
+		RPCAddr:       c.rpcAddr,
+		CAFile:        c.caFile,
+		ServerName:    c.serverName,
+		Account:       c.account,
+		Password:      password,
+		ClientBuild:   uint32(c.clientBuild),
+		Logf:          logf,
+		WorldAccept:   worldAccept,
+		BeforeAttempt: c.beforeAttempt,
 		// the setup doc's worldserver.conf: Network.SkipBuildAuthKeyCheck = 1 unless the operator says otherwise.
 		// This is what makes the world's ERROR_BAD_VERSION a statement about build_info; see bnet.Options.
 		WorldSkipBuildAuthKeyCheck: !c.worldChecksBuildAuthKey,
