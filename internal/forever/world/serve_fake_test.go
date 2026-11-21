@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
-	"github.com/pjerra/forever-agent/internal/forever/cmdctl"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -2108,8 +2107,13 @@ func TestServeCommanderNotAvailable(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	f.serveCommander = func(line string) []string {
-		if strings.HasPrefix(line, ".tb commander status") {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
 			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb cmd state Tanka":
+			// A P3-only module: the order grammar lists `state` as a verb it does not carry out (the module's
+			// ParseOrder, code unsupported), so P6 is not there.
+			return []string{"error code=unsupported cmd=cmd msg=The%20order%20%60state%60%20is%20not%20carried%20out%20on%20ForeverCore. #T"}
 		}
 		return nil
 	}
@@ -2118,15 +2122,72 @@ func TestServeCommanderNotAvailable(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	waitServeState(t, a, "online", steps)
 
-	// No typed path is in this build: a P6 verb is refused with the path's code, with no probe and no order.
-	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003, "not-available: loot: "+cmdctl.PathName)
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003,
+		"not-available: loot: needs module package P6")
 	if !strings.HasPrefix(rerr.Message, "not-available: ") {
 		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
 	}
 	for _, ln := range f.serveTBLines() {
-		if strings.HasPrefix(ln, ".tb cmd ") {
+		// The probe is `.tb cmd state Tanka #<token>`; the refused verb itself never goes out.
+		if strings.HasPrefix(ln, ".tb cmd loot") {
 			t.Fatalf("the refused verb sent %q", ln)
 		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// TestServeCommanderCmdTask is a P6 verb through the RPC: the probe answers P3 and P6, the task line goes out, and
+// the answer's bot, target and whole-order fields reach the caller.
+func TestServeCommanderCmdTask(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb cmd":
+			return []string{"error code=missing-verb cmd=cmd msg=move #T"}
+		case line == ".tb cmd state Tanka":
+			return []string{
+				"cmd-begin #T",
+				"task bot=Tanka busy=no status=none #T",
+				"cmd-end count=1 records=1 verb=state #T",
+			}
+		case line == ".tb cmd loot my":
+			return []string{
+				"cmd-begin #T",
+				"cmd verb=loot bot=Tanka status=accepted target=0000000000000000000000000000BEEF #T",
+				"cmd-end count=1 records=1 verb=loot ok=1 refused=0 #T",
+			}
+		case line == ".tb cmd lootmethod ffa":
+			return []string{
+				"cmd-begin #T",
+				"cmd verb=lootmethod status=ok method=ffa threshold=2 #T",
+				"cmd-end count=1 records=1 verb=lootmethod ok=1 refused=0 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"my"}}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb cmd loot my" {
+		t.Fatalf("sent %q\n%s", out.Sent, steps.joined())
+	}
+	if len(out.Bots) != 1 || out.Bots[0].Bot != "Tanka" || out.Bots[0].Status != "queued" ||
+		out.Bots[0].Target != "0000000000000000000000000000BEEF" {
+		t.Fatalf("bots %+v", out.Bots)
+	}
+	out = ServeCommander{}
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "lootmethod", "args": []string{"ffa"}}), &out)
+	if out.Fields["method"] != "ffa" || out.Fields["threshold"] != "2" {
+		t.Fatalf("fields %v", out.Fields)
 	}
 	a.stop(t)
 	f.close()

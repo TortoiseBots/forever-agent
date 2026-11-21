@@ -189,12 +189,30 @@ it: a target outside the character's own bindings is refused `not-owned` before 
 whose target changed in between says the line already went through. Every refusal also carries the call's partial
 result in the error's `data` (the lines that went out, the bots, `card` and `final` it had read), so a caller that
 sees an order in `sent` knows it went out and never retries it blindly. An order while a run is running or paused
-is refused `run-active` unless `pause_run` is true (the module pauses the run itself). A verb of a module package
-that is not installed answers `not-available` after one cached probe per session, and the probe cache is dropped
-when the world link is re-entered; a verb whose typed path has not landed (round C5) answers
-`not-available: <verb>: needs-typed-path (round C5)` with no probe line at all. `view` is the port's cut verb:
+is refused `run-active` unless `pause_run` is true (the module pauses the run itself).
+The module's own order path is `cmd`: `move <x> <y> <z> [direct]`, `pullback <tgt>`, `focus <tgt>`, `rest`,
+`revive party` (package P3) and `loot <tgt> [bot] [itemId]`, `open|use <tgt> [bot]`, `gossip <tgt> [bot] [option]`,
+`state [bot]`, `lootmethod <method> [threshold]` (package P6) go out as `.tb cmd ...`, and their answers are typed
+into the same result shape as the `.tb order party` verbs: `sent` is the exact wire line (a `0x` guid shows as the
+bare digits the module saw), and `bots` names the bots the answer accounts for (`accepted` is reported as `queued`,
+a whole-party answer is expanded from the card the guard read, and a P6 task's `target`, `busy` and `entry` keys are
+carried; a whole-order key such as `lootmethod`'s `method` and `threshold` is the answer's `fields`). The module's
+`.tb cmd` takes no lead: it acts on the caller's own binding, so the call is scoped to the named lead first (the run
+guard reads that lead's card) and a P3 answer whose `lead=` is not that lead is refused `lead-mismatch`, with none
+of its bots reported (a card with no lead is served by the module's first bound bot, which is accepted only when it is one of the card's members). A bot word of a cmd verb (`state`'s, `loot`'s, `open`'s, `use`'s, `gossip`'s, `revive`'s)
+must be one of the character's own bots, or the call is refused `not-owned` before any line is sent; a `state`
+answer that names a bot the character does not command is refused, and none of it is returned. An answer is bound to the verb
+sent (another verb, no record for an order verb, `status=refused` or an unknown status is an error). A cmd answer
+carries no per-bot sequence, so `wait_ms` cannot confirm one (`final` stays `{}`); `.tb state`'s `ord=` shows the
+module's own sequence after the fact. A verb of a module package that is not installed answers `not-available`
+after one probe per session: P3 is present when `.tb cmd` with no verb answers `error code=missing-verb cmd=cmd`
+and absent on `unknown-verb`; P6 is present when `.tb cmd state <bot>` (one of the character's own bots, so a raid-sized party's answer stays one record) answers a report and absent on `unsupported` (what
+a P3-only module answers), and absent without a probe once P3 is known absent. Only those definite answers are remembered, until the world link is re-entered; a
+timeout (the probe keeps its own 3 s budget, so a silent module never costs the caller's whole deadline), a deadline, `not-bound`, `not-in-world`, any other code or an unexpected reply is not remembered and
+answers `not-available: <verb>: the module's answer to the <package> probe is not known (...)`, and the next call
+probes again. `view` is the port's cut verb:
 `commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
-(`not-available`, `run-active`, `not-owned`, `refused`, `bind-refused`, or the module's own error code); a lost or
+(`not-available`, `run-active`, `not-owned`, `lead-mismatch`, `refused`, `bind-refused`, or the module's own error code); a lost or
 re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
 every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
 capped at 15 s; the poll runs on the session goroutine, so a long wait holds the loop and every other call behind

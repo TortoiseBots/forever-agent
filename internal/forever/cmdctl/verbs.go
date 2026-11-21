@@ -4,14 +4,17 @@ package cmdctl
 // package it needs, and whether it is an order (and so waits for the run guard). Adding a module package is a
 // table change: the rows point at a new path, never at a second verb.
 //
-// PathCmd rows carry no path in this build. The module may answer `.tb cmd`, but the agent has no typed parser for
-// its answer until the module's order package is ported with its real output, so an answering package still
-// refuses with a reason that says the path is missing. The parser adds a path to this table, not a verb.
+// PathCmd rows go out on `.tb cmd` (rounds C5/C6): the module's one order path, whose answers the typed layer
+// parses into the same report shape the slice-3 path uses. A row's Package is what the session's capability probe
+// asks about before the first line of that package; a package the module lacks refuses the verb as not-available.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
 // Path is where a verb's words go.
@@ -32,14 +35,35 @@ const (
 	PathCut
 )
 
+// ArgKind says what one argument word of a verb is, for the words the controller checks itself before a line goes
+// out: a bot name must be one of the session character's own bots, a number must be a number.
+type ArgKind int
+
+const (
+	// ArgWord is any word of the grammar: a target, a coordinate, a method.
+	ArgWord ArgKind = iota
+	// ArgBot is the name of a bot this character commands.
+	ArgBot
+	// ArgBotOrNumber is a bot name, or a decimal number where the module's grammar takes one in that place
+	// (loot's itemId, gossip's option index). A number is not a bot name; every other word is.
+	ArgBotOrNumber
+	// ArgBotOrParty is a bot name, or the word `party` (revive's one form the module carries out).
+	ArgBotOrParty
+	// ArgNumber is a decimal number (loot's itemId after the bot).
+	ArgNumber
+)
+
 // Verb is one row of the table. Package names the module package a PathCmd verb needs ("P3" or "P6"). Min and Max
-// bound the argument words; Guard marks the order verbs, which read the card first (D4).
+// bound the argument words, taken from the module's own handlers for the PathCmd rows (the test pins each against
+// a table copied from the module source); Kinds is what each argument position holds (positions past it are
+// ArgWord); Guard marks the order verbs, which read the card first (D4).
 type Verb struct {
 	Name    string
 	Path    Path
 	Package string
 	Min     int
 	Max     int
+	Kinds   []ArgKind
 	Guard   bool
 }
 
@@ -67,19 +91,22 @@ var Verbs = []Verb{
 	{Name: "role", Path: PathRole, Min: 2, Max: 2, Guard: true},
 	{Name: "run", Path: PathRun},
 
-	// P3, one order path: `.tb cmd move x y z [direct]`, pullback, focus, rest, revive.
+	// P3, one order path (the module's `.tb cmd` order grammar, TbRunOrdersPure.h ParseOrder): `move <x> <y> <z>
+	// [direct]`, `pullback <guid>`, `focus <guid>`, `rest`, `revive party`.
 	{Name: "move", Path: PathCmd, Package: "P3", Min: 3, Max: 4, Guard: true},
-	{Name: "pullback", Path: PathCmd, Package: "P3", Min: 0, Max: 0, Guard: true},
+	{Name: "pullback", Path: PathCmd, Package: "P3", Min: 1, Max: 1, Guard: true},
 	{Name: "focus", Path: PathCmd, Package: "P3", Min: 1, Max: 1, Guard: true},
 	{Name: "rest", Path: PathCmd, Package: "P3", Min: 0, Max: 0, Guard: true},
-	{Name: "revive", Path: PathCmd, Package: "P3", Min: 0, Max: 1, Guard: true},
+	{Name: "revive", Path: PathCmd, Package: "P3", Min: 1, Max: 1, Kinds: []ArgKind{ArgBotOrParty}, Guard: true},
 
-	// P6, task orders: `.tb cmd loot|open|use|gossip|state|lootmethod`.
-	{Name: "loot", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Guard: true},
-	{Name: "open", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
-	{Name: "use", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
-	{Name: "gossip", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
-	{Name: "state", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
+	// P6, task orders (TbCmdTasks.cpp): `loot <target> [bot] [itemId]`, `open|use <target> [bot]`, `gossip <target>
+	// [bot] [option...]` (the module's option is the rest of the line; the table takes up to gossipMaxWords words),
+	// `state [bot]`, `lootmethod <ffa|group|rr> [threshold]`.
+	{Name: "loot", Path: PathCmd, Package: "P6", Min: 1, Max: 3, Kinds: []ArgKind{ArgWord, ArgBotOrNumber, ArgNumber}, Guard: true},
+	{Name: "open", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Kinds: []ArgKind{ArgWord, ArgBot}, Guard: true},
+	{Name: "use", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Kinds: []ArgKind{ArgWord, ArgBot}, Guard: true},
+	{Name: "gossip", Path: PathCmd, Package: "P6", Min: 1, Max: gossipMaxWords, Kinds: []ArgKind{ArgWord, ArgBotOrNumber}, Guard: true},
+	{Name: "state", Path: PathCmd, Package: "P6", Min: 0, Max: 1, Kinds: []ArgKind{ArgBot}, Guard: true},
 	{Name: "lootmethod", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Guard: true},
 
 	// Cut from the port (CPS section 5): no line, no package.
@@ -89,6 +116,10 @@ var Verbs = []Verb{
 	{Name: "summon", Path: PathCut},
 	{Name: "layout", Path: PathCut},
 }
+
+// gossipMaxWords caps the words of a gossip call: the target, a bot and an option of up to six words. The module's
+// option is the whole rest of its line; the cap is the controller's own.
+const gossipMaxWords = 8
 
 // Lookup returns the row for a verb name, ignoring case and surrounding space.
 func Lookup(name string) (Verb, bool) {
@@ -112,12 +143,57 @@ func (v Verb) checkArgs(args []string) error {
 	if v.Path == PathCmd {
 		extra = "@,"
 	}
-	for _, a := range args {
+	for i, a := range args {
 		if err := checkWord(a, extra); err != nil {
 			return &UsageError{Msg: v.Name + ": " + err.Error()}
 		}
+		if v.kind(i) == ArgNumber && !isDecimal(a) {
+			return &UsageError{Msg: fmt.Sprintf("%s: %q is not a number", v.Name, a)}
+		}
 	}
 	return nil
+}
+
+// kind is what argument position i holds.
+func (v Verb) kind(i int) ArgKind {
+	if i < len(v.Kinds) {
+		return v.Kinds[i]
+	}
+	return ArgWord
+}
+
+// botArgs returns the words of args that name a bot, in order: the ones the controller checks against the session
+// character's own cards before the line goes out.
+func (v Verb) botArgs(args []string) []string {
+	var bots []string
+	for i, a := range args {
+		switch v.kind(i) {
+		case ArgBot:
+			bots = append(bots, a)
+		case ArgBotOrNumber:
+			if !isDecimal(a) {
+				bots = append(bots, a)
+			}
+		case ArgBotOrParty:
+			if !strings.EqualFold(a, "party") {
+				bots = append(bots, a)
+			}
+		}
+	}
+	return bots
+}
+
+// isDecimal says whether s is a non-empty run of ASCII digits.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // count is the row's argument count in words.
@@ -154,26 +230,58 @@ func checkWord(s, extra string) error {
 	return nil
 }
 
-// PathName is the typed path a verb's words need: the module package that carries the verb, with the round that
-// ports it. A verb whose path has not landed is refused with this reason, and no probe line is sent for it.
-const PathName = "needs-typed-path (round C5)"
+// cmdPath sends `.tb cmd <verb> [args...]`: the module's P3/P6 order path. The typed layer builds the line and
+// parses the answer; this type only joins it to the table.
+type cmdPath struct{ c *tbcmd.Client }
+
+func (p *cmdPath) Send(ctx context.Context, verb string, args []string) (tbcmd.OrderReport, error) {
+	return p.c.Cmd(ctx, verb, args...)
+}
 
 // NotAvailableError is a verb the module cannot take now: the package that carries it does not answer the
 // session's probe, or the feature was cut from the port.
 type NotAvailableError struct {
 	Verb    string
 	Package string // "P3" or "P6" when the module lacks the package
-	Why     string // the reason when it is not a package (a cut verb) or when the package's path has not landed
+	Why     string // the reason when the refusal is not a missing package (a cut verb), or why the probe is undecided
+	// Retry is true when the probe got no definite answer (a timeout, a bind the module has not seen, an answer
+	// that is not the package's): the package is neither known present nor known absent, nothing was cached, and
+	// the next call probes again.
+	Retry bool
 }
 
 func (e *NotAvailableError) Error() string {
 	switch {
+	case e.Retry:
+		return "not-available: " + e.Verb + ": the module's answer to the " + e.Package + " probe is not known (" + e.Why +
+			"); nothing was remembered, ask again"
 	case e.Package != "":
 		return "not-available: " + e.Verb + ": needs module package " + e.Package
 	case e.Why != "":
 		return "not-available: " + e.Verb + ": " + e.Why
 	}
 	return "not-available: " + e.Verb
+}
+
+// LeadMismatchError is a `.tb cmd` order whose answer names another lead than the one the call addressed: the
+// module acts on the caller's own binding and does not take a lead on the wire, so the answer is the only proof of
+// which party the line reached. The line already went out; no bot of the answer is reported as queued.
+type LeadMismatchError struct {
+	// Named is the lead the call addressed. Answered is the lead the module's answer named, empty when it named none.
+	Named, Answered string
+}
+
+func (e *LeadMismatchError) Error() string {
+	got := e.Answered
+	if got == "" {
+		got = "no lead"
+	}
+	named := e.Named + "'s"
+	if e.Named == "" {
+		named = "the card's"
+	}
+	return "lead-mismatch: the order was meant for " + named + " party and the module answered for " +
+		got + "; the line already went through"
 }
 
 // NotOwnedError is a mutation whose target is outside the session character's own bindings. The fresh
@@ -205,6 +313,8 @@ func (e *NotOwnedError) Error() string {
 type RefusedError struct {
 	Verb string
 	Bots []BotResult
+	// Reason is the module's own words when it refused the whole call in one record (a `.tb cmd` answer).
+	Reason string
 }
 
 func (e *RefusedError) Error() string {
@@ -217,6 +327,9 @@ func (e *RefusedError) Error() string {
 		parts = append(parts, p)
 	}
 	msg := "refused: " + e.Verb + ": nothing was queued"
+	if e.Reason != "" {
+		msg += ": " + e.Reason
+	}
 	if len(parts) > 0 {
 		msg += " (" + strings.Join(parts, ", ") + ")"
 	}
