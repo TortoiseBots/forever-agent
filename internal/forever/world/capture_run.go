@@ -7,8 +7,10 @@ package world
 // capture cannot be redirected through a link.
 //
 // Bounds: one run writes at most maxCapturePackets files and maxCaptureBytes of payload in total, each file one
-// packet's payload (a frame header's 16-bit size field caps one payload at 65535 bytes). Past a bound the run says
-// so once and stops capturing; the run itself continues, because the capture is a debug aid.
+// packet's payload (a frame header's 16-bit size field caps one payload at 65535 bytes). A serving daemon has ONE cap
+// for the whole slot, across every reconnect (captureBudget): the same file and byte bounds in total, and at most
+// maxCaptureRuns run directories, so a flapping link cannot write a full run per reconnect. Past a bound the run
+// says so once and stops capturing; the run itself continues, because the capture is a debug aid.
 //
 // The manifest is one TSV line per captured packet, in write order: `<file name>\t0x<core opcode, 6 hex>\t<length>`.
 // The file holds the payload bytes alone. `internal/forever/capturedir` reads a parent of run directories or one run
@@ -24,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -40,8 +43,69 @@ const (
 	maxCaptureBytes   = 32 << 20
 )
 
+// maxCaptureRuns bounds how many run directories one slot may create across its reconnects.
+const maxCaptureRuns = 64
+
+// captureBudget is the one cap of a serving slot: every link of a serving daemon (the first login and every
+// reconnect) shares it, so a flapping link cannot write maxCaptureBytes per reconnect. It carries the same bounds as
+// one run (maxCapturePackets files, maxCaptureBytes of payload) for the whole slot, plus maxCaptureRuns run
+// directories. It is created by Enter for a serving session and handed to each re-entry through the options. A
+// standalone session (a check command) has no budget and is bounded per run, as before.
+type captureBudget struct {
+	mu      sync.Mutex
+	packets int
+	bytes   int
+	runs    int
+}
+
+// startRun reserves one run directory, or errCaptureFull when the slot's runs or payload are spent.
+func (b *captureBudget) startRun() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runs >= maxCaptureRuns || b.packets >= maxCapturePackets || b.bytes >= maxCaptureBytes {
+		return errCaptureFull
+	}
+	b.runs++
+	return nil
+}
+
+// take reserves one packet of n payload bytes, or errCaptureFull.
+func (b *captureBudget) take(n int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.packets >= maxCapturePackets || b.bytes+n > maxCaptureBytes {
+		return errCaptureFull
+	}
+	b.packets++
+	b.bytes += n
+	return nil
+}
+
 // errCaptureFull ends the capture of one run: its bounds are reached so the rest is skipped.
 var errCaptureFull = errors.New("capture: the run's bound is reached")
+
+// captureRepoRefusal refuses a capture parent inside a git work tree, naming the work tree's directory. A capture
+// holds a run's identifiers (names, guids, payloads), so it never lands in a repository: it is refused before
+// anything is created, whether or not the parent itself exists yet (a new directory inside a checkout is inside
+// it too). Lstat is used so a repository whose .git is a worktree file counts like one with a directory.
+func captureRepoRefusal(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("capture: %s: %w", path, err)
+	}
+	for dir := abs; ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return fmt.Errorf("capture: %s is inside the git work tree %s; a capture is written outside a repository", path, dir)
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			break
+		}
+	}
+	return nil
+}
+
+// CheckCaptureDir is captureRepoRefusal for a command that validates its --capture-dir before it logs in.
+func CheckCaptureDir(path string) error { return captureRepoRefusal(path) }
 
 // ensureCaptureDir creates path when it is missing and refuses any existing component that is not a real directory.
 // MkdirAll would follow a symlinked component; this walks the path with Lstat instead.
@@ -81,6 +145,9 @@ func ensureCaptureDir(path string) error {
 // openCaptureRun creates a new run directory under base and opens its manifest exclusively. The directory is named
 // from start's UTC clock and four random bytes; an existing directory of that name is a collision and an error.
 func openCaptureRun(base string, start time.Time, random io.Reader) (string, *os.File, error) {
+	if err := captureRepoRefusal(base); err != nil {
+		return "", nil, err
+	}
 	if err := ensureCaptureDir(base); err != nil {
 		return "", nil, err
 	}
@@ -114,6 +181,8 @@ type captureRun struct {
 	manifest *os.File
 	n        int
 	bytes    int
+	// budget is the slot's shared cap (nil for a standalone session): a packet that would pass it is refused.
+	budget *captureBudget
 }
 
 // start creates the run directory on the first packet and returns the run; the caller logs the error once and
@@ -132,6 +201,11 @@ func startCaptureRun(base string, start time.Time) (*captureRun, error) {
 func (r *captureRun) write(name string, core uint32, payload []byte) error {
 	if r.n >= maxCapturePackets || r.bytes+len(payload) > maxCaptureBytes {
 		return errCaptureFull
+	}
+	if r.budget != nil {
+		if err := r.budget.take(len(payload)); err != nil {
+			return err
+		}
 	}
 	path := filepath.Join(r.dir, name)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -171,7 +245,18 @@ func (s *session) capturePacket(p worldconn.Packet) {
 		return
 	}
 	if s.captureRun == nil {
+		if b := s.opts.captureBudget; b != nil {
+			if err := b.startRun(); err != nil {
+				s.captureErr = err
+				s.opts.logf("capture: the slot's bound (%d packets, %d MiB or %d runs across every link) is reached (captures are skipped)",
+					maxCapturePackets, maxCaptureBytes>>20, maxCaptureRuns)
+				return
+			}
+		}
 		run, err := startCaptureRun(s.opts.CaptureDir, s.start)
+		if err == nil {
+			run.budget = s.opts.captureBudget
+		}
 		if err != nil {
 			s.captureErr = err
 			s.opts.logf("capture: %v (captures are skipped)", err)

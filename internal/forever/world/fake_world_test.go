@@ -302,6 +302,25 @@ type fakeServer struct {
 	// serveSelectionEcho answers CMSG_SET_SELECTION with the character's own target field set to that guid, the way
 	// the server echoes a selection.
 	serveSelectionEcho bool
+	// serveSwingMelee answers a swing with one attacker-state update: an on-demand melee row for the event log's
+	// order test, where the row must arrive after the chat and the GM answer.
+	serveSwingMelee bool
+	// Round W4: mounts. serveMounted sets the create burst's own mount display; serveMountCast answers a cast with a
+	// spell go and then either serveMountResult (a refusal) or serveMountDisplay (the field update that mounts);
+	// serveCancelMount records CMSG_CANCEL_MOUNT_AURA and answers it by clearing the field.
+	serveMounted      bool
+	serveMountCast    bool
+	serveMountResult  int32
+	serveMountDisplay int32
+	serveCancelMount  bool
+	// serveKnownSpells is sent as SMSG_SEND_KNOWN_SPELLS after the create block; serveCasts counts the casts the
+	// scenario saw.
+	serveKnownSpells []int32
+	serveCasts       int
+	// serveLeaderName names the fake creature (it answers the client's creature query with it), so a follow can
+	// resolve it by name; serveLeaderX moves it (default 1005, five yards east of the character at 1000).
+	serveLeaderName string
+	serveLeaderX    float32
 	// What the fake saw, under mu: every selection, every GM line, and the packet/line order ("select" or "say").
 	serveSelections []wire.GUID
 	serveGMLines    []string

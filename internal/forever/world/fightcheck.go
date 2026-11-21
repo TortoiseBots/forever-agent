@@ -383,7 +383,7 @@ func (s *session) retreat(ctx context.Context) {
 		dx, dy, dist = 1, 0, 1
 	}
 	ex, ey := s.MoverX()+dx/dist*25, s.MoverY()+dy/dist*25
-	s.opts.logf("fight-check: at %d/%d health, walking %.0f yd away from the unit on it", cs.Health, cs.MaxHealth, 25)
+	s.opts.logf("fight-check: at %d/%d health, walking %.0f yd away from the unit on it", cs.Health, cs.MaxHealth, float32(25))
 	if err := s.mover.MoveTo(ctx, ex, ey, s.MoverZ()); err != nil {
 		s.opts.logf("fight-check: the retreat stopped: %v", err)
 	}

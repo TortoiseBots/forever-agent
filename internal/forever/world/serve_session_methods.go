@@ -120,6 +120,31 @@ type serveLogoutResult struct {
 	Outcome string `json:"outcome"`
 }
 
+// ServeTeardownStep is one teardown step, in the old daemon's shape: teardown_cmd.go's teardownCallAgent reads
+// step, status and detail, and counts "fail" (and "ending") as a failed step.
+type ServeTeardownStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// ServeTeardown is teardown's result. It answers before the daemon stops: the loop ends after this call returns, so
+// a caller holding the reply knows the session is gone.
+type ServeTeardown struct {
+	Character string              `json:"character,omitempty"`
+	Steps     []ServeTeardownStep `json:"steps"`
+	Failed    int                 `json:"failed"`
+	DryRun    bool                `json:"dry_run,omitempty"`
+	Seconds   float64             `json:"seconds"`
+}
+
+type serveTeardownParams struct {
+	// GM is "off" (the default), "on" or "keep": the GM line the teardown sends before the logout, or none at all.
+	GM string `json:"gm,omitempty"`
+	// DryRun plans the steps and sends nothing; the daemon keeps serving.
+	DryRun bool `json:"dry_run,omitempty"`
+}
+
 type serveUnitsParams struct {
 	Within  float32 `json:"within,omitempty"`
 	Near    float32 `json:"near,omitempty"`
@@ -198,6 +223,45 @@ type serveEventsParams struct {
 	WaitMS int `json:"wait_ms,omitempty"`
 }
 
+type serveEventLogParams struct {
+	Since  uint64 `json:"since"`
+	Limit  int    `json:"limit,omitempty"`
+	WaitMS int    `json:"wait_ms,omitempty"`
+}
+
+// ServeEventPage is event_log's result: the events above since, oldest first, at most the limit; next is the seq to
+// pass next time, more says another page follows, and dropped counts the events that fell out of the ring between
+// since and the oldest it still holds.
+type ServeEventPage struct {
+	Events  []Event `json:"events"`
+	Next    uint64  `json:"next"`
+	More    bool    `json:"more"`
+	Dropped int     `json:"dropped"`
+	// Epoch names the log's life: a daemon restart is a new log, so a reader that keeps its cursor across one sees
+	// the epoch change. Reset says the cursor was above the log's seq (the restart marker): the page starts at the
+	// beginning of the new log instead of staying empty until its seq passes the old cursor.
+	Epoch string `json:"epoch"`
+	Reset bool   `json:"reset,omitempty"`
+}
+
+// serveActDefaultBudget is act's deadline when the caller names none.
+var serveActDefaultBudget = 60 * time.Second
+
+type serveActParams struct {
+	// Steps are act steps, one per entry, in the `--step 'verb k=v'` form (world.ParseActStep).
+	Steps []string `json:"steps"`
+	// TimeoutMS bounds the whole run (1 to 600000 ms). 0 or absent is the default budget (serveActDefaultBudget),
+	// never "no deadline": a run holds the session goroutine, so every other call waits behind it.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+}
+
+// ServeActResult is act's result: the lines `forever act` prints (one per step, plus a menu's option lines), and ok,
+// true only when every step succeeded.
+type ServeActResult struct {
+	Lines []string `json:"lines"`
+	OK    bool     `json:"ok"`
+}
+
 type serveGMSetHPParams struct {
 	GUID GUID   `json:"guid"`
 	HP   *int64 `json:"hp"`
@@ -232,6 +296,25 @@ type ServeEventsPage struct {
 // serveCallTyped posts one typed method to the session goroutine.
 func serveCallTyped[P, R any](st *serveState, fn func(*session, context.Context, P) (R, error)) rpc.Method {
 	return rpc.Typed(func(ctx context.Context, p P) (R, error) {
+		var zero R
+		v, err := st.call(ctx, func(s *session) (any, error) { return fn(s, ctx, p) })
+		if err != nil {
+			return zero, serveError(err)
+		}
+		out, ok := v.(R)
+		if !ok {
+			return zero, &rpc.Error{Code: rpc.CodeInternal, Message: "internal: method result type"}
+		}
+		return out, nil
+	})
+}
+
+// serveCallTypedFirst is serveCallTyped with a hook that runs on the RPC goroutine before the call is queued. A running
+// follow loop holds the session goroutine while it walks, so a method that must end it (follow_stop, teardown) cancels
+// it here, not in the queued body: the cancel is what lets the queued body get its turn.
+func serveCallTypedFirst[P, R any](st *serveState, first func(P), fn func(*session, context.Context, P) (R, error)) rpc.Method {
+	return rpc.Typed(func(ctx context.Context, p P) (R, error) {
+		first(p)
 		var zero R
 		v, err := st.call(ctx, func(s *session) (any, error) { return fn(s, ctx, p) })
 		if err != nil {
@@ -311,6 +394,31 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 			return ServeEventsPage{}, serveError(err)
 		}
 		return page, nil
+	}))
+	srv.Register("event_log", rpc.Typed(func(ctx context.Context, p serveEventLogParams) (ServeEventPage, error) {
+		page, err := st.serveEventLog(ctx, p)
+		if err != nil {
+			return ServeEventPage{}, serveError(err)
+		}
+		return page, nil
+	}))
+	srv.Register("act", serveCallTyped(st, func(s *session, ctx context.Context, p serveActParams) (ServeActResult, error) {
+		return s.serveAct(ctx, p)
+	}))
+	srv.Register("mount", serveCallTyped(st, func(s *session, ctx context.Context, p serveMountParams) (ServeMount, error) {
+		return s.serveMount(ctx, p)
+	}))
+	srv.Register("dismount", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (ServeMount, error) {
+		return s.serveDismount(ctx)
+	}))
+	srv.Register("follow_start", serveCallTyped(st, func(s *session, _ context.Context, p serveFollowParams) (ServeFollow, error) {
+		return st.serveFollowStart(s, p)
+	}))
+	srv.Register("follow_stop", serveCallTypedFirst(st, func(serveEmpty) { st.cancelFollow() }, func(s *session, ctx context.Context, _ serveEmpty) (ServeFollow, error) {
+		return st.serveFollowStop(ctx, s)
+	}))
+	srv.Register("follow_status", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeFollow, error) {
+		return st.followStatus(s, nil), nil
 	}))
 	srv.Register("trial_units", serveCallTyped(st, func(_ *session, _ context.Context, p serveTrialUnitsParams) (ServeTrialUnits, error) {
 		return st.serveTrialUnits(p)
@@ -473,6 +581,16 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		st.stopped = true
 		return serveLogoutResult{Outcome: "complete"}, nil
 	}))
+	srv.Register("teardown", serveCallTypedFirst(st, func(p serveTeardownParams) {
+		// A real teardown (not a dry run, with a gm value it will accept, on a link that is up) ends the follow loop
+		// before it queues, so a walk in flight cannot hold the logout behind it.
+		if p.DryRun || !serveTeardownGMValid(p.GM) || st.actionError() != nil {
+			return
+		}
+		st.cancelFollow()
+	}, func(s *session, ctx context.Context, p serveTeardownParams) (ServeTeardown, error) {
+		return s.serveTeardown(ctx, st, p)
+	}))
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -628,6 +746,107 @@ func (s *session) serveGMResult(ctx context.Context, text string) (ServeCommand,
 		return ServeCommand{}, err
 	}
 	return commandResult(strings.TrimSpace(text), rep), nil
+}
+
+// serveTeardownGM is teardown's gm value, lower-cased, with the default.
+func serveTeardownGM(raw string) string {
+	gm := strings.ToLower(strings.TrimSpace(raw))
+	if gm == "" {
+		gm = "off"
+	}
+	return gm
+}
+
+// serveTeardownGMValid says whether teardown accepts the gm value.
+func serveTeardownGMValid(raw string) bool {
+	switch serveTeardownGM(raw) {
+	case "off", "on", "keep":
+		return true
+	}
+	return false
+}
+
+// serveTeardown ends the session the way a real client does, step by step, and answers the steps before the daemon
+// stops: the loop ends after this call returns. The GM line (`.gm off` by default, `.gm on`, or none for "keep")
+// goes through the same guard as every other command line, and the logout is the full protocol logout. A refused GM
+// line is a failed step and the logout still runs, as the old daemon's teardown does. A dry run plans the steps,
+// sends nothing and leaves the daemon serving.
+func (s *session) serveTeardown(ctx context.Context, st *serveState, p serveTeardownParams) (ServeTeardown, error) {
+	gm := serveTeardownGM(p.GM)
+	if !serveTeardownGMValid(p.GM) {
+		return ServeTeardown{}, fmt.Errorf("teardown: gm must be off, on or keep, not %q", p.GM)
+	}
+	start := s.Now()
+	out := ServeTeardown{Character: s.report.Character.Name, Steps: []ServeTeardownStep{}, DryRun: p.DryRun}
+	add := func(step, status, detail string) {
+		out.Steps = append(out.Steps, ServeTeardownStep{Step: step, Status: status, Detail: detail})
+		if status == "fail" || status == "ending" {
+			out.Failed++
+		}
+	}
+	finish := func() ServeTeardown {
+		out.Seconds = s.Now().Sub(start).Seconds()
+		return out
+	}
+
+	// The follow loop walks the character. It is stopped before the GM line and the logout, as the old daemon's
+	// teardown does, so no movement of ours can go out while the logout is in flight.
+	st.mu.Lock()
+	follow := st.follow
+	st.mu.Unlock()
+	switch {
+	case follow == nil || followEndedOnItsOwn(st, follow):
+		add("follow", "skip", "no follow loop")
+	case p.DryRun:
+		add("follow", "plan", "would stop the follow loop ("+follow.lead+")")
+	default:
+		follow.cancel()
+		detail, err := st.followStopResult(ctx, follow)
+		if err != nil {
+			add("follow", "fail", err.Error())
+		} else {
+			add("follow", "ok", detail)
+		}
+	}
+
+	if gm == "keep" {
+		add("gm", "skip", "left as it is")
+	} else if p.DryRun {
+		add("gm", "plan", "would send .gm "+gm)
+	} else {
+		line := ".gm " + gm
+		// The line goes through the guard the raw gm method uses, so no teardown path can do what a refused gm line
+		// cannot. `.gm` itself is not a unit command, so the guard passes it untouched.
+		err := s.serveGMUnitLine("teardown", line)
+		var rep *command.Reply
+		if err == nil {
+			rep, err = s.serveGM(ctx, line)
+		}
+		switch {
+		case err != nil:
+			add("gm", "fail", err.Error())
+		case rep == nil:
+			add("gm", "fail", "no answer to "+line)
+		default:
+			detail := line
+			if len(rep.Raw) > 0 {
+				detail = rep.Raw[len(rep.Raw)-1]
+			}
+			add("gm", "ok", detail)
+		}
+	}
+
+	if p.DryRun {
+		add("logout", "plan", "would log out")
+		return finish(), nil
+	}
+	if err := s.serveLogout(st); err != nil {
+		add("logout", "fail", err.Error())
+		return finish(), nil
+	}
+	add("logout", "ok", "logged out")
+	st.stopped = true
+	return finish(), nil
 }
 
 // serveGMSelectWait bounds how long a GM hand waits for the server to echo the selection.
@@ -1073,6 +1292,129 @@ func (st *serveState) serveEvents(ctx context.Context, p serveEventsParams) (Ser
 	}
 }
 
+// serveEventLogBounds validates event_log's arguments: a negative limit and a wait_ms outside 0..2,000 are refused
+// and a limit of 0 or above EventPageMax is the page maximum.
+func serveEventLogBounds(p serveEventLogParams) (limit int, wait time.Duration, err error) {
+	if p.Limit < 0 {
+		return 0, 0, errors.New("event_log: limit must not be negative")
+	}
+	limit = p.Limit
+	if limit == 0 || limit > EventPageMax {
+		limit = EventPageMax
+	}
+	wait = time.Duration(p.WaitMS) * time.Millisecond
+	if wait < 0 || wait > 2*time.Second {
+		return 0, 0, errors.New("event_log: wait_ms must be 0 to 2000")
+	}
+	return limit, wait, nil
+}
+
+// eventLogSnapshot is one page of the session event log with the ring's wake signal read in the same lock: an event
+// appended between the page and the wait is either in the page or ends the wait. It does not go through the session
+// queue: the ring has its own lock and outlives the link (a reconnect hands it to the next session), so a poll
+// answers while an act, a walk or a follow step holds the session goroutine.
+type eventLogSnapshot struct {
+	page    ServeEventPage
+	changed <-chan struct{}
+}
+
+func (st *serveState) eventLogSnapshot(since uint64, limit int) (eventLogSnapshot, error) {
+	s := st.session.Load()
+	if s == nil {
+		return eventLogSnapshot{}, ErrLinkLost
+	}
+	r := s.EventLog().Read(since, limit)
+	events := r.Rows
+	if events == nil {
+		events = []Event{}
+	}
+	return eventLogSnapshot{
+		page:    ServeEventPage{Events: events, Next: r.Next, More: r.More, Dropped: r.Dropped, Epoch: r.Epoch, Reset: r.Reset},
+		changed: r.Changed,
+	}, nil
+}
+
+// serveEventLog answers the session's event log: the events above since, oldest first, at most limit (1,000). Like
+// events, a wait_ms is spent off the session goroutine on the ring's own change signal, so an empty long-poll never
+// holds the call queue, and it still answers while the link is reconnecting (the ring outlives the link).
+func (st *serveState) serveEventLog(ctx context.Context, p serveEventLogParams) (ServeEventPage, error) {
+	limit, wait, err := serveEventLogBounds(p)
+	if err != nil {
+		return ServeEventPage{}, err
+	}
+	snap, err := st.eventLogSnapshot(p.Since, limit)
+	if err != nil {
+		return ServeEventPage{}, err
+	}
+	if len(snap.page.Events) > 0 || wait == 0 || snap.page.Reset {
+		return snap.page, nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-snap.changed:
+		case <-timer.C:
+			snap, err = st.eventLogSnapshot(p.Since, limit)
+			if err != nil {
+				return ServeEventPage{}, err
+			}
+			return snap.page, nil
+		case <-ctx.Done():
+			return ServeEventPage{}, ctx.Err()
+		case <-st.done:
+			return ServeEventPage{}, ErrLinkLost
+		}
+		snap, err = st.eventLogSnapshot(p.Since, limit)
+		if err != nil {
+			return ServeEventPage{}, err
+		}
+		if len(snap.page.Events) > 0 || snap.page.Reset {
+			return snap.page, nil
+		}
+	}
+}
+
+// serveAct parses a script, runs it in order on the session goroutine and answers the lines `forever act` prints. A
+// step's own failure is the script's result (ok false, after its fail line), never an rpc.Error; a step that does not
+// parse, or a bad timeout_ms, is refused before anything is sent.
+func (s *session) serveAct(ctx context.Context, p serveActParams) (ServeActResult, error) {
+	if len(p.Steps) == 0 {
+		return ServeActResult{}, errors.New("act needs at least one step")
+	}
+	if p.TimeoutMS < 0 || p.TimeoutMS > 600000 {
+		return ServeActResult{}, errors.New("act: timeout_ms must be 0 to 600000")
+	}
+	steps := make([]ActStep, 0, len(p.Steps))
+	for _, line := range p.Steps {
+		step, err := ParseActStep(line)
+		if err != nil {
+			return ServeActResult{}, fmt.Errorf("act: %w", err)
+		}
+		steps = append(steps, step)
+	}
+	budget := serveActDefaultBudget
+	if p.TimeoutMS > 0 {
+		budget = time.Duration(p.TimeoutMS) * time.Millisecond
+	}
+	runCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	lines, err := s.RunActSteps(runCtx, steps)
+	out := ServeActResult{Lines: lines, OK: err == nil}
+	if err == nil {
+		return out, nil
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		// The script's own budget ran out: a result, with a last line that says so.
+		out.Lines = append(out.Lines, fmt.Sprintf("act: the run ran out of its %s budget: %v", budget, err))
+		return out, nil
+	case errors.Is(err, context.Canceled) && ctx.Err() != nil:
+		return out, err
+	}
+	return out, nil
+}
+
 func (s *session) serveChatLog(ctx context.Context, p serveChatLogParams) (ServeChatPage, error) {
 	limit := p.Limit
 	if limit <= 0 {
@@ -1142,10 +1484,9 @@ var notPortedMethods = []string{
 	"assistant", "bot_view",
 	"brain_start", "brain_status", "brain_stop",
 	"buy", "convert_raid",
-	"disband", "dismount",
+	"disband",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"equip", "equipment",
-	"follow_start", "follow_status", "follow_stop",
 	"gameobjects",
 	"gm_evade", "gm_respawn",
 	"gossip_hello", "gossip_select",
@@ -1153,7 +1494,7 @@ var notPortedMethods = []string{
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
 	"loot", "loot_close", "loot_method", "loot_take",
-	"map_snapshot", "mark", "mount", "open_object",
+	"map_snapshot", "mark", "open_object",
 	"pet", "pet_action", "plan_check",
 	"promote",
 	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
@@ -1161,7 +1502,7 @@ var notPortedMethods = []string{
 	"sell", "spells",
 	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
-	"teardown", "teleport",
+	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"train", "trainer_list", "tt", "tune_list", "tune_set",
 	"use_item", "use_object", "vendor_list",

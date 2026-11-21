@@ -14,12 +14,11 @@
 // The client only ever talks to a loopback address, and sends the bearer
 // token nowhere else (no redirect is followed).
 //
-// Methods the daemon on main registers today: status, units, unit, party, gm,
-// bot, events, logout. EventLog (event_log), Act (act) and Teardown (teardown)
-// need W3/W2: the daemon has no event_log or act yet and answers teardown
-// with the not-ported -32003. Events reads the combat log the daemon serves
-// now, and Commander runs on the daemon too. A test in internal/forever/world pins
-// the daemon's table so the day those methods land the pin flips.
+// Methods the daemon registers today: status, units, unit, party, gm, bot,
+// events, logout, commander, and since serve W2-W4 event_log (EventLog), act
+// (Act) and teardown (Teardown). Events reads the combat log; EventLog the
+// session's one ordered stream. A test in internal/forever/world pins the
+// daemon's table and decodes each of these methods against the real daemon.
 package serveclient
 
 import (
@@ -217,6 +216,8 @@ type Unit struct {
 	Casting    bool    `json:"casting,omitempty"`
 	SpellID    int32   `json:"spell_id,omitempty"`
 	Auras      []Aura  `json:"auras"`
+	// MountDisplayID is the unit's own UNIT_FIELD_MOUNTDISPLAYID: non-zero while it is mounted.
+	MountDisplayID int32 `json:"mount_display_id,omitempty"`
 }
 
 // Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).
@@ -291,7 +292,7 @@ type Command struct {
 	End      string   `json:"end,omitempty"`
 }
 
-// Event is one event_log row (needs W3: the daemon has no event_log yet): the internal/events Event JSON keys, guids as
+// Event is one event_log row: the internal/events Event JSON keys, guids as
 // 0x and 32 hex digits.
 type Event struct {
 	Seq        uint64         `json:"seq"`
@@ -310,14 +311,18 @@ type Event struct {
 	Data       map[string]any `json:"data,omitempty"`
 }
 
-// EventLogPage is one event_log answer: the rows above since, oldest first,
-// and the ring's bounds. Oldest is zero when the daemon omits it.
+// EventLogPage is one event_log answer: the rows above since, oldest first.
+// Dropped is how many events fell out of the ring above since, More says
+// another page follows. Epoch names the log's life (a daemon restart is a new
+// log) and Reset says the cursor was above the log's seq, so the page starts at
+// the beginning of the new log.
 type EventLogPage struct {
 	Events  []Event `json:"events"`
 	Next    uint64  `json:"next"`
-	Oldest  uint64  `json:"oldest"`
-	Dropped bool    `json:"dropped"`
 	More    bool    `json:"more"`
+	Dropped int     `json:"dropped"`
+	Epoch   string  `json:"epoch"`
+	Reset   bool    `json:"reset,omitempty"`
 }
 
 // CombatActor is one side of a combat row, as the daemon's events method
@@ -421,9 +426,13 @@ type TeardownStep struct {
 }
 
 // Teardown is a teardown call's answer: every step ran, even after a failed
-// one.
+// one. Failed counts the failed steps, DryRun says nothing was sent.
 type Teardown struct {
-	Steps []TeardownStep `json:"steps"`
+	Steps     []TeardownStep `json:"steps"`
+	Failed    int            `json:"failed,omitempty"`
+	Seconds   float64        `json:"seconds,omitempty"`
+	Character string         `json:"character,omitempty"`
+	DryRun    bool           `json:"dry_run,omitempty"`
 }
 
 // Client is a typed client of one serve daemon.
@@ -740,8 +749,7 @@ func (c *Client) Events(ctx context.Context, since, limit, waitMS int) (EventsPa
 	return page, err
 }
 
-// EventLog drains one event_log page (needs W3: the daemon on main has no
-// event_log; use Events): wait_ms up to 2000, limit up to 1000.
+// EventLog drains one event_log page: wait_ms up to 2000, limit up to 1000.
 func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) (EventLogPage, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
@@ -758,7 +766,7 @@ func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) 
 	return page, err
 }
 
-// Act (needs W3: the daemon on main has no act) runs steps (one `verb k=v` line each, as forever act takes them) in
+// Act runs steps (one `verb k=v` line each, as forever act takes them) in
 // order on the session goroutine and returns the step lines and whether
 // every step ran. timeout bounds the whole run on the daemon (at most 600 s)
 // and the call waits that long plus a margin.
@@ -794,9 +802,8 @@ func (c *Client) Logout(ctx context.Context) (Logout, error) {
 	return out, err
 }
 
-// Teardown (needs W2: the daemon on main answers -32003 not ported) ends the game presence best-effort, step by step (gm off, on or
-// keep for the GM line); the daemon stops. Every step runs even after a
-// failed one.
+// Teardown ends the game presence best-effort, step by step (the follow loop, then gm off, on or keep for the GM
+// line, then the logout); the daemon stops. Every step runs even after a failed one.
 func (c *Client) Teardown(ctx context.Context, gm string) (Teardown, error) {
 	var res Teardown
 	err := c.call(ctx, "teardown", map[string]string{"gm": gm}, &res, 120*time.Second)

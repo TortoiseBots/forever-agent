@@ -549,11 +549,10 @@ func TestReconnectingRetried(t *testing.T) {
 	}
 }
 
-// TestSpecShapesDecode pins the shapes of event_log, act, teardown (needs
-// W3/W2) and commander against a scripted fake: they are the spec's shapes,
-// not the daemon's. The
-// methods the daemon does serve are tested against it in
-// internal/forever/world (serveclient_daemon_test.go).
+// TestSpecShapesDecode pins the shapes of event_log, act, teardown and
+// commander against a scripted fake (the spec's shapes). The methods the
+// daemon serves are also tested against it in internal/forever/world
+// (serveclient_daemon_test.go).
 func TestSpecShapesDecode(t *testing.T) {
 	f := newScriptServe(t)
 	token, err := rpc.NewToken()
@@ -578,13 +577,13 @@ func TestSpecShapesDecode(t *testing.T) {
 			"target": "Testmob", "spell_id": 133, "amount": 42, "crit": true, "party": true,
 			"text": "hit", "data": map[string]any{"k": "v"},
 		}},
-		"next": 8, "oldest": 1, "dropped": true, "more": true,
+		"next": 8, "dropped": 3, "more": true, "epoch": "e1", "reset": true,
 	}}
 	page, err := c.EventLog(context.Background(), 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EventLog: %v", err)
 	}
-	if len(page.Events) != 1 || page.Next != 8 || !page.Dropped || !page.More || page.Oldest != 1 {
+	if len(page.Events) != 1 || page.Next != 8 || page.Dropped != 3 || !page.More || page.Epoch != "e1" || !page.Reset {
 		t.Fatalf("page %+v", page)
 	}
 	e := page.Events[0]

@@ -5,6 +5,7 @@ package world
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/follow"
 	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
@@ -28,6 +30,11 @@ const (
 	actVerbSelec = "select"
 	actVerbClose = "close"
 	actVerbInv   = "inv"
+
+	// The W4 verbs (mount.go, follow_session.go): the mount, the dismount and the follow loop.
+	actVerbMount    = "mount"
+	actVerbDismount = "dismount"
+	actVerbFollow   = "follow"
 
 	// Round R2's item actions (inventory_act.go). `open` keeps its R0 meaning (the NPC menu) and opens an item when
 	// the step names one.
@@ -119,12 +126,13 @@ func ParseActStep(line string) (ActStep, error) {
 	}
 	switch verb {
 	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose, actVerbInv,
+		actVerbMount, actVerbDismount, actVerbFollow,
 		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse,
 		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair,
 		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
 		actVerbQuestReward, actVerbQuestAbandon:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon)", verb)
 	}
 	return step, nil
 }
@@ -178,6 +186,33 @@ type actState struct {
 	// steps need it, so they cannot run against a vendor nobody opened.
 	vendor    *items.VendorInventory
 	hasVendor bool
+	// lines are the step and menu lines this run printed, in order, bounded by actLinesMax (lines past it are
+	// counted in dropped). Only the run's own lines land here: the log sink also carries the chat, party and world
+	// handler lines of everything else the session does, and those never belong in an act answer.
+	lines   []string
+	dropped int
+}
+
+// The bounds of one act answer: how many lines it keeps and how long one line may be (a menu option's text is the
+// server's).
+const (
+	actLinesMax   = 500
+	actLineMaxLen = 512
+)
+
+// actLine prints one of the run's own lines: it goes to the caller's log sink as before and, bounded, into the
+// answer.
+func (s *session) actLine(a *actState, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	s.opts.logf("%s", line)
+	if len(a.lines) >= actLinesMax {
+		a.dropped++
+		return
+	}
+	if len(line) > actLineMaxLen {
+		line = line[:actLineMaxLen]
+	}
+	a.lines = append(a.lines, line)
 }
 
 // actStep runs one step of the act script and prints its line.
@@ -198,6 +233,12 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actSelect(ctx, a, step)
 	case actVerbClose:
 		return s.actClose(ctx, a, step)
+	case actVerbMount:
+		return s.actMount(ctx, a, step)
+	case actVerbDismount:
+		return s.actDismount(ctx, a, step)
+	case actVerbFollow:
+		return s.actFollow(ctx, a, step)
 	case actVerbInv:
 		return s.actInvStep(ctx, a, step)
 	case actVerbEquip:
@@ -245,16 +286,16 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 
 // actFail prints the step's failure line and returns the error.
 func (s *session) actFail(a *actState, step ActStep, err error) error {
-	s.opts.logf("step %d %s fail %v", a.steps, step.Verb, err)
+	s.actLine(a, "step %d %s fail %v", a.steps, step.Verb, err)
 	return err
 }
 
 // actOK prints the step's success line.
 func (s *session) actOK(a *actState, step ActStep, detail string) {
 	if detail != "" {
-		s.opts.logf("step %d %s ok %s", a.steps, step.Verb, detail)
+		s.actLine(a, "step %d %s ok %s", a.steps, step.Verb, detail)
 	} else {
-		s.opts.logf("step %d %s ok", a.steps, step.Verb)
+		s.actLine(a, "step %d %s ok", a.steps, step.Verb)
 	}
 }
 
@@ -290,6 +331,14 @@ func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
 	line := step.Args["line"]
 	if line == "" {
 		return s.actFail(a, step, fmt.Errorf("gm needs line=TEXT"))
+	}
+	// A serving daemon holds every GM line to the boundary the raw gm method uses: a line that acts on a unit is
+	// refused unless the daemon allows it, and nothing (not even the GM probe) is sent for a refused line. The
+	// one-shot `forever act` has no daemon and keeps the command guard alone.
+	if s.serveRT != nil {
+		if err := s.serveGMUnitLine("act", line); err != nil {
+			return s.actFail(a, step, err)
+		}
 	}
 	s.initChat()
 	q := command.NewSession(&cmdLink{s: s})
@@ -551,7 +600,7 @@ func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.D
 // printActMenu prints the menu one option per line, then the step's ok line.
 func (s *session) printActMenu(a *actState, m npc.GossipMessage) {
 	for _, o := range m.Options {
-		s.opts.logf("menu option %d npc %d %q", o.ID, o.NPC, o.Text)
+		s.actLine(a, "menu option %d npc %d %q", o.ID, o.NPC, o.Text)
 	}
 	s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("menu %d with %d option(s)", m.MenuID, len(m.Options)))
 }
@@ -612,6 +661,119 @@ func (s *session) actClose(ctx context.Context, a *actState, step ActStep) error
 	return nil
 }
 
+// actMount mounts the character: `mount spell=N` runs the method's cast loop, and `mount entry=N` answers the same
+// needs-item-use refusal the method does.
+func (s *session) actMount(ctx context.Context, a *actState, step ActStep) error {
+	spellText, haveSpell := step.Args["spell"]
+	entryText, haveEntry := step.Args["entry"]
+	if haveSpell == haveEntry {
+		return s.actFail(a, step, fmt.Errorf("mount needs exactly one of spell= or entry="))
+	}
+	var p serveMountParams
+	if haveSpell {
+		var spell int32
+		if _, err := fmt.Sscanf(spellText, "%d", &spell); err != nil || spell <= 0 {
+			return s.actFail(a, step, fmt.Errorf("spell=%q is not a spell id", spellText))
+		}
+		p.Spell = spell
+	} else {
+		var entry int32
+		if _, err := fmt.Sscanf(entryText, "%d", &entry); err != nil || entry <= 0 {
+			return s.actFail(a, step, fmt.Errorf("entry=%q is not an item entry", entryText))
+		}
+		p.Entry = entry
+	}
+	out, err := s.serveMount(ctx, p)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if p.Entry > 0 {
+		s.actOK(a, step, fmt.Sprintf("entry %d, display %d", p.Entry, out.DisplayID))
+		return nil
+	}
+	s.actOK(a, step, fmt.Sprintf("spell %d, display %d, %d cast(s)", p.Spell, out.DisplayID, out.Attempts))
+	return nil
+}
+
+// actDismount cancels the mount aura and waits for the display field to reach zero.
+func (s *session) actDismount(ctx context.Context, a *actState, step ActStep) error {
+	out, err := s.serveDismount(ctx)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	detail := "on foot"
+	if out.Mounted {
+		detail = fmt.Sprintf("mounted, display %d", out.DisplayID)
+	}
+	s.actOK(a, step, detail)
+	return nil
+}
+
+// actFollow runs one follow loop: `follow lead=NAME [near= far= lost_s= tick_ms= dur=]`. It returns when the leader
+// is lost or the step's own dur= (or the run's deadline) ends; a lost or failed loop fails the step. The leader is
+// followed with movement only: no chat, no GM line.
+func (s *session) actFollow(ctx context.Context, a *actState, step ActStep) error {
+	if err := step.requireKeys("lead"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	if follow.SameName(step.Args["lead"], s.report.Character.Name) {
+		return s.actFail(a, step, fmt.Errorf("lead=%s is this character: a character cannot follow itself", step.Args["lead"]))
+	}
+	if s.opts.NavmeshDir == "" {
+		return s.actFail(a, step, errors.New("no --navmesh: following walks on the navmesh"))
+	}
+	cfg := follow.Config{Lead: step.Args["lead"], Self: s.report.Character.Name}
+	if raw, ok := step.Args["near"]; ok {
+		v, err := parseActFloat(raw)
+		if err != nil || v <= 0 {
+			return s.actFail(a, step, fmt.Errorf("near=%q is not a distance", raw))
+		}
+		cfg.Near = v
+	}
+	if raw, ok := step.Args["far"]; ok {
+		v, err := parseActFloat(raw)
+		if err != nil || v <= 0 {
+			return s.actFail(a, step, fmt.Errorf("far=%q is not a distance", raw))
+		}
+		cfg.Far = v
+	}
+	if raw, ok := step.Args["lost_s"]; ok {
+		var n int
+		if _, err := fmt.Sscanf(raw, "%d", &n); err != nil || n < 1 || n > serveFollowLostMax {
+			return s.actFail(a, step, fmt.Errorf("lost_s=%q is not 1 to %d", raw, serveFollowLostMax))
+		}
+		cfg.Lost = time.Duration(n) * time.Second
+	}
+	if raw, ok := step.Args["tick_ms"]; ok {
+		var n int
+		if _, err := fmt.Sscanf(raw, "%d", &n); err != nil || n < serveFollowTickMin || n > serveFollowTickMax {
+			return s.actFail(a, step, fmt.Errorf("tick_ms=%q is not %d to %d", raw, serveFollowTickMin, serveFollowTickMax))
+		}
+		cfg.Tick = time.Duration(n) * time.Millisecond
+	}
+	// A follow in a script is bounded: the run holds the session goroutine, so every other call waits behind it.
+	raw, ok := step.Args["dur"]
+	if !ok {
+		return s.actFail(a, step, errors.New("follow needs dur= (a script's follow is bounded: the run holds the session)"))
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 || d > 10*time.Minute {
+		return s.actFail(a, step, fmt.Errorf("dur=%q is not a duration above 0 up to 10m", raw))
+	}
+	actx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	res := follow.Run(actx, followDirectGame{s: s, ctx: actx}, cfg)
+	if ctx.Err() != nil {
+		// The run's own deadline (or the caller) ended the step, not its dur=: that is the run's budget running out.
+		return s.actFail(a, step, ctx.Err())
+	}
+	if res.Reason == follow.ReasonStopped {
+		s.actOK(a, step, fmt.Sprintf("%s, %d walk(s), %d stop(s)", res.Reason, res.Walks, res.Stops))
+		return nil
+	}
+	return s.actFail(a, step, fmt.Errorf("%s: %s", res.Reason, res.Detail))
+}
+
 // act runs the whole script: settle, then one line per step. A failed step ends the run with its error; the
 // caller still logs out.
 func (s *session) act(ctx context.Context, steps []ActStep) error {
@@ -622,11 +784,27 @@ func (s *session) act(ctx context.Context, steps []ActStep) error {
 	if err := s.collect(ctx, settle); err != nil {
 		return err
 	}
+	_, err := s.RunActSteps(ctx, steps)
+	return err
+}
+
+// RunActSteps runs a parsed script on the caller's goroutine (which is the session goroutine for serve) and returns
+// the lines `forever act` prints: the run's own step lines and menu lines, in order, bounded by actLinesMax. It
+// never returns another handler's line (chat, party, world) or a third party's text. A failed step prints its fail
+// line and ends the run with its error; the caller still logs out. The caller's own log sink keeps receiving the
+// lines.
+func (s *session) RunActSteps(ctx context.Context, steps []ActStep) (lines []string, err error) {
 	a := &actState{}
+	defer func() {
+		lines = a.lines
+		if a.dropped > 0 {
+			lines = append(lines, fmt.Sprintf("act: %d more line(s) were not kept (the answer keeps %d)", a.dropped, actLinesMax))
+		}
+	}()
 	for _, step := range steps {
 		if err := s.actStep(ctx, a, step); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return nil, nil
 }

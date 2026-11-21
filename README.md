@@ -67,7 +67,7 @@ instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is 
 
 `forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
 [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
-[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units]` keeps that character in the world
+[--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR]` keeps that character in the world
 and serves the local JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer
 token, loopback only, the same error codes. The password comes from `--password-file` or
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
@@ -76,10 +76,11 @@ works unchanged; without it the token file is `rpc-<port>.token` in the working 
 `inv`, `units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
-`area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
-path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
+`area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
+`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`), and `status`
-carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `limit` up to 1,000,
+carries `mono_ms`, the steady clock every combat row is on, and a `unit` row carries `mount_display_id` (non-zero
+while that unit is mounted). `events` (`since`, `limit` up to 1,000,
 `wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
 answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
 replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
@@ -90,6 +91,47 @@ ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a
 concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
 faction template against the character's own (fetched once from the server and cached), so `true` keeps only
 what is hostile to the character and `false` only what is not.
+
+`event_log` (`since`, `limit` up to 1,000, `wait_ms` up to 2,000) is the session's one ordered stream and answers
+`{events, next, more, dropped, epoch, reset}` with `internal/events`-shaped rows (`seq`, `time`, `mono_ms`, `kind`, `source`,
+`source_guid`, `target`, `target_guid`, `spell_id`, `amount`, `crit`, `party`, `text`, `data`; a GUID is `0x` plus
+32 hex digits, and a zero one is absent). The kinds are `session` (`data.state` is `in_world`, `map_change`,
+`reconnected` or `disconnected`), `chat`, `whisper`, `system` (GM and `.tb` output), `party` (`data.state` names
+the packet), `addon`, the combat ring's kinds copied row for row, `loot_open`, `loot_roll_start`, `loot_roll`,
+`loot_roll_won`, `loot_all_passed`, `gossip` and `gossip_complete`. The 20,000-row ring outlives a reconnect (a
+reader's seq never goes back and the history before the drop stays readable), its wait is spent off the session
+goroutine on the ring's own signal, and it answers while reconnecting, even while an `act` or a walk holds the
+session (the ring is read under its own lock, not through the call queue). `epoch` names the log's life; a cursor
+above the log's seq (the daemon restarted and the seq began again at 1) answers `reset: true` and reads from the
+start. `events` is unchanged.
+
+`act` (`steps`, a list of `--step 'verb k=v'` lines, and `timeout_ms` up to 600,000) parses every step before it
+runs one, runs them in order on the session goroutine and answers `{lines, ok}` with the lines `forever act`
+prints (`step 1 wait ok ...`, a menu's option lines included; only the run's own lines, at most 500, never another
+handler's chat); a `timeout_ms` of 0 is the default 60 s budget, never no deadline; a `gm` step goes through the same
+`--allow-gm-units` / `trial_units` boundary as the raw `gm` method; a step that fails ends the run with `ok: false`
+and its own `fail` line, and a script with an unparseable step is refused before anything is sent. Its verbs are
+`wait`, `gm line=`, `goto`, `npc`, `open`, `select`, `close`, `mount spell=`, `dismount` and
+`follow lead= dur= [near= far= lost_s= tick_ms=]` (a script's follow needs `dur=`; both follow forms need `--navmesh`).
+
+`mount {"spell": N}` casts the riding spell through the ordinary cast path and is mounted when the character's own
+`UNIT_FIELD_MOUNTDISPLAYID` goes non-zero; a non-zero `SMSG_MOUNT_RESULT` is the server's refusal and is named with
+its value. The spell must be one the character knows (`SMSG_SEND_KNOWN_SPELLS`) and is cast once; the wait for the
+display is 4 s and a silent server is a clear failure, not a second cast. A character already mounted is answered
+as it is. `{"entry": N}` is the item form, which needs item use (round R2) and
+answers `needs item use` until that is ported. `dismount` sends the empty `CMSG_CANCEL_MOUNT_AURA`
+(SpellHandler.cpp:338) and is done when the field reaches zero within 2 s; a character on foot answers without a
+packet.
+
+`follow_start {"lead": "NAME", "near": 3, "far": 8, "lost_s": 30, "tick_ms": 250}` runs one follow loop behind
+another character: beyond `far` yards it walks once to `near` yards behind the leader (the core's facing: `(cos o, sin o)`) on
+the navmesh (`follow_start` is refused without `--navmesh`), inside `near` it stops, between the two it does
+nothing, and a leader unseen for `lost_s`, or gone from view after this client changed map or the roster put them in
+another zone, ends the loop as `lost`; a refused walk or a reconnect is retried (bounded by `lost_s`) instead of ending
+it; the only packets it causes are movement ones (no chat, no GM). A character cannot follow itself; a second
+`follow_start` while one runs is refused. `follow_stop` and `teardown` cancel a walk that is in flight. `follow_status` reports the run (`state`, the band, `lead_seen`, `lead_yd`,
+`walks`, `stops`, `stopped_reason`) and answers while reconnecting; `follow_stop` cancels the loop and answers its
+result.
 
 The character's own inventory is `inv`: `{known, coinage, items[], quest_log[], free_slot, stale?, stale_reason?}`. Each item row is
 `{guid, container, slot, entry, count, durability?, max_durability?, placed, unconfirmed?}`, where `container` is 255 for the
@@ -121,6 +163,15 @@ unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`
 refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
 `.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
 and chat are unaffected.
+
+`teardown` (`{"gm": "off"|"on"|"keep", "dry_run": bool}`) is the serve slot's `teardown DIR`: a running follow
+loop is stopped first (its own `follow` step), the GM line (`.gm off` by default) goes through the same command
+guard, the full protocol logout follows, and the answer is the old daemon's step rows (`{steps: [{step, status, detail}], failed, seconds}`) so `teardown_cmd.go` reads it
+unchanged. The daemon stops after the reply; the slot's `slot.json` already says `"server": "forever"`. A refused GM
+line is a failed step and the logout still runs; `dry_run` plans the steps and sends nothing. `ServeConfig.CaptureDir`
+is the debug capture (`--capture-dir` arrives with the CLI round): each link writes under a new run directory, so a
+reconnect starts a fresh capture, and a parent inside a git work tree is refused before the login; the capture's
+per-opcode totals come from the manifest alone (`capturedir.Stats`).
 
 Remote control on ForeverCore is `commander`: the module's TortoiseBots party, commanded by the session's own
 character over the session's `.tb` command channel (no add-on bridge, no other account).

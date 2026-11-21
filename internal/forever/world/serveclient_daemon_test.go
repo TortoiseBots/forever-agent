@@ -229,6 +229,9 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		{"command", reflect.TypeFor[ServeCommand](), reflect.TypeFor[serveclient.Command]()},
 		{"logout", reflect.TypeFor[serveLogoutResult](), reflect.TypeFor[serveclient.Logout]()},
 		{"events page", reflect.TypeFor[ServeEventsPage](), reflect.TypeFor[serveclient.EventsPage]()},
+		{"event_log page", reflect.TypeFor[ServeEventPage](), reflect.TypeFor[serveclient.EventLogPage]()},
+		{"event_log row", reflect.TypeFor[Event](), reflect.TypeFor[serveclient.Event]()},
+		{"act result", reflect.TypeFor[ServeActResult](), reflect.TypeFor[serveclient.ActResult]()},
 		{"combat row", reflect.TypeFor[CombatRow](), reflect.TypeFor[serveclient.CombatRow]()},
 		{"combat actor", reflect.TypeFor[CombatActor](), reflect.TypeFor[serveclient.CombatActor]()},
 	} {
@@ -248,13 +251,17 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 	g := GUID(wire.GUID{Low: 0x2, High: 0x1})
 	unit := ServeUnit{GUID: g, Type: "creature", Entry: 7, Name: "Mob", X: 1, Y: 2, Z: 3, O: 4, Distance: 5, Distance2D: 6,
 		Health: 7, MaxHealth: 8, Power: 9, MaxPower: 10, PowerType: 1, Level: 60, Class: 2, Target: g, InCombat: true,
-		Dead: true, Ghost: true, Moving: true, Casting: true, SpellID: 11,
+		Dead: true, Ghost: true, Moving: true, Casting: true, SpellID: 11, MountDisplayID: 14338,
 		Auras: []ServeAura{{SpellID: 12, Caster: g, Stacks: 2, RemainingMS: 3000}}}
 	roundTrip(t, "unit", unit, new(serveclient.Unit))
 	page := ServeEventsPage{Events: []CombatRow{{Seq: 1, Kind: "melee", Time: "2026-01-02T03:04:05.006+00:00", MonoMS: 9,
 		Source: CombatActor{GUID: g.String(), Name: "A"}, Target: CombatActor{GUID: g.String(), Name: "B"},
 		SpellID: 5, Amount: 6, Reason: "x"}}, Next: 1, Oldest: 1, Dropped: 2}
 	roundTrip(t, "events", page, new(serveclient.EventsPage))
+	log := ServeEventPage{Events: []Event{{Seq: 3, Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), MonoMS: 9, Kind: "chat",
+		Source: "A", SourceGUID: g.String(), Text: "hi", Party: true}}, Next: 3, More: true, Dropped: 2, Epoch: "abc", Reset: true}
+	roundTrip(t, "event_log", log, new(serveclient.EventLogPage))
+	roundTrip(t, "act", ServeActResult{Lines: []string{"step 1 wait ok"}, OK: true}, new(serveclient.ActResult))
 }
 
 // leafKinds maps each JSON key of a struct type to its field's kind.
@@ -370,26 +377,20 @@ func (a *serveAgent) rawPost(t *testing.T, body []byte) (json.RawMessage, *rpcEr
 	return env.Result, env.Error, nil
 }
 
-// TestServeClientMethodPin pins which methods the daemon registers today and
-// what the client's not-yet-served methods answer. event_log and act need
-// W3, teardown needs W2 (the daemon answers them not-ported): when one lands
-// this fails and the client note flips. commander is served now and has its
-// own real-daemon test below.
+// TestServeClientMethodPin pins which methods the daemon registers today and decodes the ones that landed with serve
+// W2-W4 (event_log, act, teardown) against the real daemon. Commander is served too and has its own real-daemon test
+// below. Teardown ends the daemon, so it is the last call.
 func TestServeClientMethodPin(t *testing.T) {
 	ported, notPorted := ServeRPCMethods()
-	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander"} {
+	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander",
+		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}
 	}
-	for _, m := range []string{"event_log", "act"} {
-		if slices.Contains(ported, m) || slices.Contains(notPorted, m) {
-			t.Errorf("%s is registered now: drop its needs-W3 note and test it for real", m)
-		}
-	}
-	for _, m := range []string{"teardown"} {
+	for _, m := range []string{"buy"} {
 		if !slices.Contains(notPorted, m) {
-			t.Errorf("%s is no longer not-ported: drop its needs-W2 note and test it for real", m)
+			t.Errorf("%s is no longer not-ported: drop its note and test it for real", m)
 		}
 	}
 
@@ -401,18 +402,21 @@ func TestServeClientMethodPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	want := func(what string, err error, code int) {
-		t.Helper()
-		if got, ok := serveclient.CodeOf(err); !ok || got != code {
-			t.Errorf("%s: %v, want rpc code %d", what, err, code)
-		}
+	page, err := c.EventLog(ctx, 0, 0, 0)
+	if err != nil || page.Epoch == "" || len(page.Events) == 0 || page.Reset {
+		t.Fatalf("EventLog: %+v, %v", page, err)
 	}
-	_, err = c.EventLog(ctx, 0, 0, 0)
-	want("EventLog", err, rpc.CodeMethodNotFound)
-	_, err = c.Act(ctx, []string{"gm line=.gm"}, 5_000_000_000)
-	want("Act", err, rpc.CodeMethodNotFound)
-	_, err = c.Teardown(ctx, "off")
-	want("Teardown", err, rpc.CodeGame)
+	res, err := c.Act(ctx, []string{"wait dur=10ms"}, 5*time.Second)
+	if err != nil || !res.OK || len(res.Lines) != 1 || !strings.HasPrefix(res.Lines[0], "step 1 wait ok") {
+		t.Fatalf("Act: %+v, %v", res, err)
+	}
+	td, err := c.Teardown(ctx, "keep")
+	if err != nil || td.Failed != 0 || len(td.Steps) < 2 || td.Steps[len(td.Steps)-1].Step != "logout" {
+		t.Fatalf("Teardown: %+v, %v", td, err)
+	}
+	if td.Steps[len(td.Steps)-1].Status != "ok" {
+		t.Fatalf("Teardown logout step: %+v", td.Steps)
+	}
 }
 
 // TestServeClientCommanderAgainstTheRealDaemon: commander is served by the
