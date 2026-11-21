@@ -5,6 +5,7 @@ package world
 // is driven directly (no sockets): neither the step nor the method sends anything, they read the model.
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -96,6 +97,33 @@ func TestActInventoryPrintsTheSnapshot(t *testing.T) {
 	same := s.serveInventory()
 	if len(same.Items) != len(rows.Items) || same.Coinage != rows.Coinage {
 		t.Fatalf("inv method %+v, step %+v", same, rows)
+	}
+}
+
+// TestActInvStep proves the `inv` verb prints the rows and fails with its reason when there is nothing to read.
+func TestActInvStep(t *testing.T) {
+	var lines []string
+	s := inventorySession(t, &lines,
+		inventoryPlayer(map[int]wire.GUID{35: inventoryPotion}, 12),
+		inventoryItem(inventoryPotion, 118, 5, inventorySelf, inventorySelf),
+	)
+	step, err := ParseActStep("inv")
+	if err != nil {
+		t.Fatalf("ParseActStep(inv): %v", err)
+	}
+	a := &actState{}
+	if err := s.actStep(context.Background(), a, step); err != nil {
+		t.Fatalf("inv: %v\n%s", err, joinLines(lines))
+	}
+	if !hasLine(lines, "inv: 1 item(s), 12 copper") {
+		t.Fatalf("no inventory line:\n%s", joinLines(lines))
+	}
+	if !hasText(lines, "entry 118") {
+		t.Fatalf("no item row:\n%s", joinLines(lines))
+	}
+	empty := &session{world: objects.NewWorld(0), report: &Report{}, opts: Options{Logf: func(string, ...any) {}}}
+	if err := empty.actStep(context.Background(), &actState{}, step); err == nil {
+		t.Fatal("inv passed without a character GUID")
 	}
 }
 

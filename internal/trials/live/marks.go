@@ -64,6 +64,11 @@ func nowISO() string {
 // NowISO is the monotonic-backed wall clock.
 func (m *Marks) NowISO() string { return m.nowISO(0) }
 
+// NowISOOffset is the same clock moved by offset (an excluded span's end).
+func (m *Marks) NowISOOffset(offset time.Duration) string {
+	return m.nowISO(offset.Seconds())
+}
+
 // Start sets the time base: wall or now.
 func (m *Marks) Start(wall string) {
 	m.mu.Lock()
@@ -137,7 +142,9 @@ func (m *Marks) Add(row map[string]any) map[string]any {
 }
 
 // Excluded adds an excluded span row.
-func (m *Marks) Excluded(from, to float64, why string) map[string]any {
+// Excluded adds an excluded span; from/to are wall times (the normaliser
+// also takes seconds).
+func (m *Marks) Excluded(from, to any, why string) map[string]any {
 	return m.Add(map[string]any{"kind": "excluded", "from": from, "to": to, "why": why})
 }
 

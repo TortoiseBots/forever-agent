@@ -316,3 +316,25 @@ func TestUnmarshalNonFiniteTokens(t *testing.T) {
 		t.Error("Marshal wrote a NaN; allow_nan=False must refuse it")
 	}
 }
+
+// TestMarshalTypedValues pins the one-int rule for typed Go values: a
+// uint32 is Python's int, a []uint32 is a list, and a struct stays refused.
+func TestMarshalTypedValues(t *testing.T) {
+	doc := map[string]any{
+		"hp":    uint32(817),
+		"ids":   []uint32{1708, 7720},
+		"level": int8(40),
+		"ratio": float32(0.5),
+	}
+	out, err := MarshalLine(doc)
+	if err != nil {
+		t.Fatalf("MarshalLine: %v", err)
+	}
+	want := `{"hp": 817, "ids": [1708, 7720], "level": 40, "ratio": 0.5}`
+	if string(out) != want {
+		t.Fatalf("MarshalLine = %s, want %s", out, want)
+	}
+	if _, err := MarshalLine(struct{ A int }{1}); err == nil {
+		t.Fatal("a struct was serialised")
+	}
+}

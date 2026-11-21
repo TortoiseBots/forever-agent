@@ -162,6 +162,8 @@ func (f *fakeServer) fbdMapChange(c, realm *fakeConn, toMap uint16, pos [3]float
 			if len(payload) == 8 {
 				c.writeFrame(fakeSMSGPong, payload[:4])
 			}
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGTimeSyncResponse, fakeCMSGMoveInitActiveMover:
 		default:
 			f.failf("dungeon: unexpected client wire 0x%06X during the suspend token", wireNo)
