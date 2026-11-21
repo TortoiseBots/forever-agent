@@ -81,10 +81,10 @@ func TestForeverCardBotsFromCommanderStatus(t *testing.T) {
 // TestForeverCardMemberWithoutPositionIsUnknown: a member the daemon sends without a position (or at 0,0) is drawn
 // as unknown, never as a known dot at the map's origin.
 func TestForeverCardMemberWithoutPositionIsUnknown(t *testing.T) {
-	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Aheal","bound":2,"bots":2,"map":0,"members":[
- {"bot":"Aheal","guid":"0x1","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":0,"zone":1,"pos":{"x":-16,"y":-44,"z":-21}},
- {"bot":"Bnopos","guid":"0x2","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1},
- {"bot":"Bzero","guid":"0x3","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1,"pos":{"x":0,"y":0,"z":0}}]}],"final":{}}`
+	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Aheal","bound":2,"bots":2,"map":389,"members":[
+ {"bot":"Aheal","guid":"0x1","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":389,"zone":1,"pos":{"x":-16,"y":-44,"z":-21}},
+ {"bot":"Bnopos","guid":"0x2","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":389,"zone":1},
+ {"bot":"Bzero","guid":"0x3","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":389,"zone":1,"pos":{"x":0,"y":0,"z":0}}]}],"final":{}}`
 	c := BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
 		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmd)})
 	if len(c.Bots) != 3 {
@@ -196,6 +196,72 @@ func TestTurtleAgentUnchanged(t *testing.T) {
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestForeverCardSlotAndRally is the A2 §3.5 card coverage: a held bot's
+// slot is projected and flagged, and the rally flag is set only when the
+// rally point is on the card's map.
+func TestForeverCardSlotAndRally(t *testing.T) {
+	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Atank","bound":2,"bots":2,"map":389,
+ "hold":"place","rally":{"x":-9100.8,"y":-2005.3,"z":132.9},"rally_map":389,"rally_inst":0,
+ "members":[
+ {"bot":"Atank","guid":"0x1","class":"warrior","role":"tank","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":389,"zone":1,"pos":{"x":-18,"y":-44,"z":-21},"hold":"place","slot":{"x":-14.5,"y":-48.1,"z":-21.85}},
+ {"bot":"Aheal","guid":"0x2","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":389,"zone":1,"pos":{"x":-16,"y":-44,"z":-21}}]}],"final":{}}`
+	c := BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmd)})
+	if c.Map != 389 {
+		t.Fatalf("map = %d", c.Map)
+	}
+	if !c.Bots[0].HasSlot || c.Bots[0].Hold != "place" {
+		t.Fatalf("slot = %+v", c.Bots[0])
+	}
+	if c.Bots[1].HasSlot {
+		t.Fatalf("unheld bot has a slot: %+v", c.Bots[1])
+	}
+	if c.Rally == nil || c.Rally.X != 2005.3 || c.Rally.Y != 9100.8 {
+		t.Fatalf("rally is not the projected point: %+v", c.Rally)
+	}
+	// The stored point is on another map: the flag stays unset.
+	other := strings.Replace(cmd, `"rally_map":389`, `"rally_map":1`, 1)
+	c2 := BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(other)})
+	if c2.Rally != nil {
+		t.Fatalf("rally on another map is set: %+v", c2.Rally)
+	}
+}
+
+// TestForeverCardMarkersOnShownMap: a member or a rally point on another map is not drawn on the card (no position, no
+// slot, no flag) and is listed in Elsewhere; the same things on the card's own map are drawn and list nothing else.
+func TestForeverCardMarkersOnShownMap(t *testing.T) {
+	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Atank","bound":2,"bots":2,"map":389,
+ "rally":{"x":-9100.8,"y":-2005.3,"z":132.9},"rally_map":1,
+ "members":[
+ {"bot":"Atank","guid":"0x1","class":"warrior","role":"tank","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":389,"zone":1,"pos":{"x":-18,"y":-44,"z":-21},"hold":"place","slot":{"x":-14.5,"y":-48.1,"z":-21.85}},
+ {"bot":"Aheal","guid":"0x2","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":1,"zone":1,"pos":{"x":-16,"y":-44,"z":-21},"hold":"place","slot":{"x":-12,"y":-40,"z":-21}}]}],"final":{}}`
+	build := func(commander string) Card {
+		return BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+			Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(commander)})
+	}
+	c := build(cmd)
+	if !c.Bots[0].Known || !c.Bots[0].HasSlot {
+		t.Fatalf("the member on the shown map is not drawn: %+v", c.Bots[0])
+	}
+	if b := c.Bots[1]; b.Known || b.InMap || b.HasSlot {
+		t.Fatalf("the member on another map is drawn: %+v", b)
+	}
+	if c.Rally != nil {
+		t.Fatalf("the rally point on another map is drawn: %+v", c.Rally)
+	}
+	if got := strings.Join(c.Elsewhere, "; "); got != "Aheal (map 1); rally point (map 1)" {
+		t.Fatalf("elsewhere = %q", got)
+	}
+	same := build(strings.Replace(cmd, `"rally_map":1`, `"rally_map":389`, 1))
+	if same.Rally == nil {
+		t.Fatalf("the rally point on the shown map is not drawn")
+	}
+	if got := strings.Join(same.Elsewhere, "; "); got != "Aheal (map 1)" {
+		t.Fatalf("elsewhere with the rally on the shown map = %q", got)
+	}
 }
 
 // TestForeverCardOrdersFromCommanderLog: the card's orders come from the commander card's order log, so the stay status

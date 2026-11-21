@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,22 @@ const (
 const (
 	packageP3 = "P3"
 	packageP6 = "P6"
+	packagePL = "PL"
 )
+
+// placePath sends `.tb cmd <verb> [args...]`: the placement verbs' line. The
+// words were checked by placeArgs before the call; the client parses the
+// module's `cmd` answer with the placement parser.
+type placePath struct{ c *tbcmd.Client }
+
+func (p *placePath) Send(ctx context.Context, verb string, args []string) (tbcmd.OrderReport, error) {
+	return tbcmd.OrderReport{}, &NotAvailableError{Verb: verb, Package: packagePL}
+}
+
+// PlaceSend sends one placement verb and reads the typed `cmd` answer.
+func (p *placePath) PlaceSend(ctx context.Context, verb string, args []string) (tbcmd.PlaceReport, error) {
+	return p.c.Place(ctx, append([]string{verb}, args...))
+}
 
 // OrderPath is one way to send an order's words. The verb table picks it; a new module order path is a new
 // implementation, not a new verb.
@@ -56,6 +72,7 @@ type TB struct {
 
 	slice3  OrderPath
 	cmdPath OrderPath
+	place   *placePath
 
 	probes map[string]bool // module package -> the probe's answer, for this session
 	now    func() time.Time
@@ -78,6 +95,7 @@ func NewTB(c *tbcmd.Client, self string) Controller {
 	}
 	b.slice3 = &slice3Path{c: c}
 	b.cmdPath = &cmdPath{c: c}
+	b.place = &placePath{c: c}
 	return b
 }
 
@@ -389,6 +407,11 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 			return Result{}, err
 		}
 	}
+	if v.Package == packagePL {
+		if err := placeArgs(v.Name, args); err != nil {
+			return Result{}, err
+		}
+	}
 	out := Result{}
 	var cards []tbcmd.Card
 	if v.Guard {
@@ -399,24 +422,55 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 		if err != nil {
 			return out, err
 		}
-		scoped, want, err := oneLead(all, o.Lead)
-		if err != nil {
-			// The refusal names the lead; the card shown with it is the one the read would have chosen (the run's
-			// card first), or none when the character commands nothing.
-			if want == nil {
-				want = cardToShow(all)
+		if v.Package == packagePL {
+			// The module's placement verbs act on every bot bound to the caller, across all lead cards
+			// (TbPlace.cpp ReadBinding), so the run guard and the checks use every card. A named lead must still be
+			// one the character commands.
+			want := cardToShow(all)
+			if strings.TrimSpace(o.Lead) != "" {
+				_, named, err := oneLead(all, o.Lead)
+				if err != nil {
+					out.Card = named
+					if out.Card == nil {
+						out.Card = cardToShow(all)
+					}
+					return out, err
+				}
+				want = named
 			}
-			out.Card = want
-			return out, err
-		}
-		cards, out.Card = scoped, want
-		if err := runGuard(cards, o.PauseRun); err != nil {
-			return out, err
+			cards, out.Card = all, want
+			if err := runGuard(all, o.PauseRun); err != nil {
+				return out, err
+			}
+		} else {
+			scoped, want, err := oneLead(all, o.Lead)
+			if err != nil {
+				// The refusal names the lead; the card shown with it is the one the read would have chosen (the run's
+				// card first), or none when the character commands nothing.
+				if want == nil {
+					want = cardToShow(all)
+				}
+				out.Card = want
+				return out, err
+			}
+			cards, out.Card = scoped, want
+			if err := runGuard(cards, o.PauseRun); err != nil {
+				return out, err
+			}
 		}
 	}
 	if v.Path == PathRole {
 		// A role has its own typed caller: it never goes through the order paths.
 		return b.role(ctx, args, cards)
+	}
+	if v.Package == packagePL {
+		// The placement verbs name who words, not table kinds: every word
+		// that is not a keyword must be a member of one of the character's
+		// own cards (D2), checked before any line goes out.
+		if err := placeOwnership(v.Name, args, cards); err != nil {
+			return out, err
+		}
+		return b.placeCall(ctx, o, v, args, cards, out)
 	}
 	if v.Path == PathCmd {
 		// Every bot the call names is one of this character's own, checked before anything goes out: the module's
@@ -505,12 +559,119 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	return out, nil
 }
 
+// placeCall sends one placement verb on the typed `cmd` path. The run guard
+// already ran (rally skips it: the table gives it no guard); the capability
+// probe runs here; then the line goes out, the typed answer fills Result,
+// and the ownership read after the line names any queued bot that was not
+// this character's at either read. A rally read-back or clear with no rows is
+// a normal result, never a refusal.
+func (b *TB) placeCall(ctx context.Context, o Order, v Verb, args []string, cards []tbcmd.Card, out Result) (Result, error) {
+	in, err := b.capability(ctx, v, cards)
+	if err != nil {
+		return out, err
+	}
+	if !in {
+		return out, &NotAvailableError{Verb: v.Name, Package: v.Package}
+	}
+	line, err := orderLine(v.Path, v.Name, args)
+	if err != nil {
+		return out, &UsageError{Msg: v.Name + ": " + err.Error()}
+	}
+	out.Sent = []string{line}
+	rep, err := b.place.PlaceSend(ctx, v.Name, args)
+	if err != nil {
+		var cr *tbcmd.CmdRefusedError
+		if errors.As(err, &cr) {
+			return out, &RefusedError{Verb: v.Name, Reason: cr.Reason}
+		}
+		return out, err
+	}
+	out.Place = &rep
+	out.Bots = placeBots(rep)
+	// The end line names the binding the module acted on. It is read before the line, but the wire names no lead,
+	// so a binding that changed between the read and the send is detected here (like the C5/C6 P3 answer): a lead
+	// that is none of this character's cards means the line went to an unintended binding.
+	// A rally answer names the commander on its head line, not the binding's
+	// lead, so only the verbs whose end line names the lead are checked.
+	if v.Name != "rally" && len(cards) > 0 && rep.Lead != "" && !ownsLeadName(cards, rep.Lead) {
+		return out, &LeadMismatchError{Named: cards[0].Lead, Answered: rep.Lead}
+	}
+	if v.Name == "rally" && rep.Verb == "rally" && len(rep.Bots) == 0 {
+		// A read-back (`status=shown`) or a clear: nothing was queued, and
+		// nothing is refused. `Order.Wait` is a no-op without queued rows.
+		return b.placeWait(ctx, o, out)
+	}
+	// Placement rows carry per-bot refusals (unlike the P3/P6 whole-call
+	// answers): a row set with every row refused queued nothing.
+	if allRefused(out.Bots) {
+		return out, &RefusedError{Verb: v.Name, Bots: out.Bots}
+	}
+	post, err := b.cards(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, br := range out.Bots {
+		// A refused row moved nothing, and the module names a bound bot that is not in the world by its guid
+		// (`bot=<guid> code=no-character`): only a queued row is a bot this call acted on.
+		if br.Status != "queued" {
+			continue
+		}
+		if !ownsBot(post, br.Bot) || !ownsBot(cards, br.Bot) {
+			return out, &NotOwnedError{Target: br.Bot, Kind: "bot", Sent: true}
+		}
+	}
+	if len(cards) > 0 && !ownsLead(post, cards[0].Lead) {
+		return out, &NotOwnedError{Target: cards[0].Lead, Kind: "lead", Sent: true}
+	}
+	return b.placeWait(ctx, o, out)
+}
+
+// placeWait runs Order's wait over the placement rows (the queued sequences
+// are the same `seq=` the wait polls for).
+func (b *TB) placeWait(ctx context.Context, o Order, out Result) (Result, error) {
+	if o.Wait > 0 {
+		final, err := b.wait(ctx, out.Bots, o.Wait)
+		out.Final = final
+		if err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// ownsLeadName reports whether name is the lead of one of the cards.
+func ownsLeadName(cards []tbcmd.Card, name string) bool {
+	for i := range cards {
+		if sameLead(cards[i], name) {
+			return true
+		}
+	}
+	return false
+}
+
+// placeBots copies a placement answer's per-bot lines into the controller's
+// own shape (Status, Seq, Error=code, Msg).
+func placeBots(rep tbcmd.PlaceReport) []BotResult {
+	out := make([]BotResult, 0, len(rep.Bots))
+	for _, r := range rep.Bots {
+		br := BotResult{Bot: r.Bot, Status: r.Status, Seq: r.Seq, HasSeq: r.HasSeq, Msg: r.Msg, HasMsg: r.HasMsg}
+		if r.HasCode {
+			br.Error, br.HasError = r.Code, true
+		}
+		out = append(out, br)
+	}
+	return out
+}
+
 // orderPath is the path a row sends on: the slice-3 order path or `.tb cmd` (rounds C5/C6).
 func (b *TB) orderPath(v Verb) OrderPath {
 	switch v.Path {
 	case PathOrder:
 		return b.slice3
 	case PathCmd:
+		if v.Package == packagePL {
+			return b.place
+		}
 		return b.cmdPath
 	}
 	return nil
@@ -536,6 +697,192 @@ func roleArgs(b *TB, args []string) (bot, role string, err error) {
 		return bot, role, nil
 	}
 	return "", "", &UsageError{Msg: fmt.Sprintf("role %q is not tank, healer, dps or none", args[1])}
+}
+
+// placeWhoKeywords are the words that name no bot: a selector the module
+// resolves (all, the ranks, dps, the classes, group1..group8), the option
+// words (shapes, gaps, anchors) and the key=value options. Anything else is
+// a bot name and is checked against the character's own cards.
+var placeWhoKeywords = map[string]bool{
+	"all": true, "tanks": true, "healers": true, "melee": true, "ranged": true, "dps": true,
+	"close": true, "circle": true, "arc": true, "spread": true, "line": true, "column": true,
+	"spear": true, "arrow": true, "follow": true,
+	"tight": true, "normal": true, "wide": true,
+	"here": true, "target": true, "cursor": true, "tank": true,
+	"rally": true, "last": true, "clear": true,
+	"warrior": true, "paladin": true, "hunter": true, "rogue": true, "priest": true,
+	"shaman": true, "mage": true, "warlock": true, "druid": true,
+	"group1": true, "group2": true, "group3": true, "group4": true,
+	"group5": true, "group6": true, "group7": true, "group8": true,
+}
+
+// placeArgs is the pure argument check for the placement verbs, before any
+// line goes out. `place` takes a shape (or `follow`) first; `cursor` is
+// refused here (the agent never sends a minimap ping); the rally/fallback
+// option words are fixed lists; an `at:` word is 2 or 3 finite decimals. The
+// module does the rest (gap range, face range, shape/anchor pairs): the
+// agent never duplicates the geometry.
+func placeArgs(verb string, args []string) error {
+	switch verb {
+	case "place":
+		if len(args) == 0 {
+			return &UsageError{Msg: "place takes a shape or follow, not no argument"}
+		}
+		switch first := strings.ToLower(args[0]); first {
+		case "close", "circle", "arc", "spread", "line", "column", "spear", "arrow", "follow":
+		default:
+			return &UsageError{Msg: fmt.Sprintf("place %q is not a shape or follow", args[0])}
+		}
+	case "rally":
+		if len(args) > 1 {
+			return &UsageError{Msg: fmt.Sprintf("rally takes 0 to 1 arguments, not %d", len(args))}
+		}
+		if len(args) == 1 {
+			switch w := strings.ToLower(args[0]); w {
+			case "here", "clear":
+			default:
+				if strings.HasPrefix(w, "at:") {
+					if err := checkAtWord(args[0][3:]); err != nil {
+						return err
+					}
+				} else {
+					return &UsageError{Msg: fmt.Sprintf("rally %q is not here, clear or at:<x>,<y>", args[0])}
+				}
+			}
+		}
+	case "fallback":
+		if len(args) > 1 {
+			return &UsageError{Msg: fmt.Sprintf("fallback takes 0 to 1 arguments, not %d", len(args))}
+		}
+		if len(args) == 1 {
+			switch w := strings.ToLower(args[0]); w {
+			case "rally", "last", "here":
+			default:
+				if strings.HasPrefix(w, "at:") {
+					if err := checkAtWord(args[0][3:]); err != nil {
+						return err
+					}
+				} else {
+					return &UsageError{Msg: fmt.Sprintf("fallback %q is not rally, last, here or at:<x>,<y>", args[0])}
+				}
+			}
+		}
+	case "resume":
+		if len(args) != 0 {
+			return &UsageError{Msg: fmt.Sprintf("resume takes no argument, not %d", len(args))}
+		}
+	}
+	for _, a := range args {
+		if strings.EqualFold(a, "cursor") {
+			return &UsageError{Msg: "place: cursor needs the game client's minimap ping; use at:<x>,<y>"}
+		}
+		if i := strings.Index(a, ":"); i >= 0 && strings.EqualFold(a[:i], "at") {
+			if err := checkAtWord(a[i+1:]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkAtWord reads an at:<x>,<y>[,<z>] point exactly as the module's
+// ParsePoint/ParsePointNumber do (TbPlacePure.h): two or three numbers, each at
+// most 24 bytes, an optional leading '-' and digits on both sides of the one
+// optional dot. No sign other than '-', no exponent, no hex, no underscores.
+func checkAtWord(s string) error {
+	parts := strings.Split(s, ",")
+	if len(parts) != 2 && len(parts) != 3 {
+		return &UsageError{Msg: "at:" + s + " is not x,y or x,y,z"}
+	}
+	for _, p := range parts {
+		if !isPointNumber(p) {
+			return &UsageError{Msg: "at:" + s + " is not x,y or x,y,z"}
+		}
+	}
+	return nil
+}
+
+// isPointNumber is the module's ParsePointNumber grammar and range.
+func isPointNumber(p string) bool {
+	if p == "" || len(p) > 24 {
+		return false
+	}
+	i := 0
+	if p[0] == '-' {
+		i++
+	}
+	digits := i
+	for i < len(p) && p[i] >= '0' && p[i] <= '9' {
+		i++
+	}
+	if i == digits {
+		return false
+	}
+	if i < len(p) && p[i] == '.' {
+		i++
+		fraction := i
+		for i < len(p) && p[i] >= '0' && p[i] <= '9' {
+			i++
+		}
+		if i == fraction {
+			return false
+		}
+	}
+	if i != len(p) {
+		return false
+	}
+	f, err := strconv.ParseFloat(p, 32)
+	return err == nil && !math.IsInf(f, 0) && !math.IsNaN(f)
+}
+
+// placeOwnership checks a placement's who words against the character's own
+// cards (D2): every word that is not a keyword must be a member of one of
+// the cards, else NotOwnedError with no line sent. An empty card set (the
+// guard already ran for guarded verbs) means no bots: a named bot is
+// refused, a bare selector passes to the module.
+func placeOwnership(verb string, args []string, cards []tbcmd.Card) error {
+	if verb != "place" {
+		return nil
+	}
+	for _, a := range args {
+		w := strings.ToLower(a)
+		if placeWhoKeywords[w] || strings.Contains(a, ":") || isGapNumber(w) {
+			continue
+		}
+		name, err := chat.NormaliseName(a)
+		if err != nil {
+			return &UsageError{Msg: "bot: " + err.Error()}
+		}
+		if !ownsBot(cards, name) {
+			return &NotOwnedError{Target: name, Kind: "bot"}
+		}
+	}
+	return nil
+}
+
+// isGapNumber reports whether the word is a bare numeric gap (the module's
+// `<yd>`: digits with one optional fraction). A bare number is never a bot
+// name, so the ownership check skips it.
+func isGapNumber(w string) bool {
+	if w == "" {
+		return false
+	}
+	dots := 0
+	digits := 0
+	for _, r := range w {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '.':
+			dots++
+			if dots > 1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return digits > 0
 }
 
 // role sets a bot's role: `.tb role <bot> <role>`. A role is a mutation of one bot, so it goes through the run
@@ -892,6 +1239,12 @@ func (b *TB) capability(ctx context.Context, v Verb, cards []tbcmd.Card) (bool, 
 // with `error code=unsupported` (TbRunOrdersPure.h ParseOrder). Nothing the task package's usage text says counts:
 // a P3-only module answers a bare `loot` with the same `invalid` shape.
 //
+// PL is asked with `.tb cmd place` (TbPlace.cpp Handle/ParseCommand): the module with the placement package answers
+// `error code=missing-argument cmd=cmd` before it moves anything; a module without it refuses the word through its
+// order grammar (`invalid`/`unknown-verb`/`unsupported`/`engine-not-built`), which is a definite "not there". A
+// binding or access refusal comes before the verb, so it proves nothing; a timeout or transport failure does not
+// either.
+//
 // Only those definite answers are remembered. A deadline or transport failure, a bind the module has not seen
 // (`not-bound`, `not-in-world`, `needs-player-sender`, which the module raises before it looks at the verb), any
 // other error code and a reply that is not the expected shape return a non-empty why: the package is not known
@@ -907,6 +1260,12 @@ func (b *TB) probe(ctx context.Context, pkg string, cards []tbcmd.Card) (in bool
 	switch pkg {
 	case packageP3:
 		_, sendErr = b.c.Send(pctx, ".tb cmd", "cmd-end")
+	case packagePL:
+		// The placement package is asked with its own verb: `.tb cmd place`
+		// without its shape is the module's `missing-argument`, which a module
+		// with PL answers before anything moves. A P3-only module's order
+		// grammar refuses the word instead.
+		_, sendErr = b.c.Send(pctx, ".tb cmd place", "cmd-end")
 	case packageP6:
 		if p3, known := b.probes[packageP3]; known && !p3 {
 			// The task package rides on the order package: a module without `.tb cmd` has no `state` to ask.
@@ -969,8 +1328,11 @@ func probeBot(cards []tbcmd.Card) string {
 // probeVerdict reads a probe's outcome: present, absent, or neither (why says what was seen).
 func probeVerdict(pkg string, err error) (present, absent bool, why string) {
 	line := ".tb cmd"
-	if pkg == packageP6 {
+	switch pkg {
+	case packageP6:
 		line = ".tb cmd state <bot>"
+	case packagePL:
+		line = ".tb cmd place"
 	}
 	if err == nil {
 		// P6's success is the answer; P3's probe line has no verb and can only be refused.
@@ -979,7 +1341,7 @@ func probeVerdict(pkg string, err error) (present, absent bool, why string) {
 		}
 		return false, false, "`" + line + "` answered without an error line"
 	}
-	if pkg == packageP3 && errors.Is(err, command.ErrSyntax) {
+	if (pkg == packageP3 || pkg == packagePL) && errors.Is(err, command.ErrSyntax) {
 		// A module with no `.tb cmd` at all: `.tb` has no such subcommand, so the core itself refuses the line
 		// ("Possible subcommands:", ChatCommand.cpp LANG_SUBCMDS_LIST) before any module code runs. A module that
 		// has `cmd` answers a bare line with its own `missing-verb`, never with the core's syntax refusal: its
@@ -999,6 +1361,19 @@ func probeVerdict(pkg string, err error) (present, absent bool, why string) {
 		if ce.Code == "unknown-verb" || ce.Code == "engine-not-built" {
 			return false, true, ""
 		}
+	case packagePL:
+		// Missing the shape is the placement parser speaking: PL is there.
+		// The order grammar's own refusals mean the word is not a placement
+		// verb on this module. A binding or access refusal is raised before
+		// the verb is looked at, so it is not remembered either way.
+		switch ce.Code {
+		case "missing-argument":
+			if ce.Cmd == "cmd" {
+				return true, false, ""
+			}
+		case "invalid", "unknown-verb", "unsupported", "engine-not-built":
+			return false, true, ""
+		}
 	case packageP6:
 		if ce.Code == "unsupported" || ce.Code == "unknown-verb" || ce.Code == "engine-not-built" {
 			return false, true, ""
@@ -1010,7 +1385,7 @@ func probeVerdict(pkg string, err error) (present, absent bool, why string) {
 // cache records a probe's answer.
 func (b *TB) cache(pkg string, in bool) {
 	if b.probes == nil {
-		b.probes = make(map[string]bool, 2)
+		b.probes = make(map[string]bool, 3)
 	}
 	b.probes[pkg] = in
 }

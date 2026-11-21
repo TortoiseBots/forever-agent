@@ -450,6 +450,7 @@ type CommanderResult struct {
 	Self       string            `json:"self,omitempty"`
 	Sent       []string          `json:"sent,omitempty"`
 	Bots       []CommanderBot    `json:"bots,omitempty"`
+	Place      *CommanderPlace   `json:"place,omitempty"`
 	Card       *CommanderCard    `json:"card,omitempty"`
 	Cards      []CommanderCard   `json:"cards,omitempty"`
 	Final      map[string]string `json:"final"`
@@ -464,6 +465,49 @@ type CommanderBot struct {
 	Seq    int    `json:"seq,omitempty"`
 	Error  string `json:"error,omitempty"`
 	Msg    string `json:"msg,omitempty"`
+}
+
+// CommanderPlace is a placement answer: the head in snake_case and the rows.
+// A number the module did not send is absent, never zero.
+type CommanderPlace struct {
+	Verb      string              `json:"verb"`
+	Status    string              `json:"status"`
+	Follow    bool                `json:"follow,omitempty"`
+	Shape     string              `json:"shape,omitempty"`
+	Gap       string              `json:"gap,omitempty"`
+	Anchor    string              `json:"anchor,omitempty"`
+	AnchorBot string              `json:"anchor_bot,omitempty"`
+	Face      *int                `json:"face,omitempty"`
+	Radius    *float64            `json:"radius,omitempty"`
+	Slots     *int                `json:"slots,omitempty"`
+	At        *CommanderPos       `json:"at,omitempty"`
+	Rally     *CommanderPos       `json:"rally,omitempty"`
+	Map       *uint32             `json:"map,omitempty"`
+	Inst      *uint32             `json:"inst,omitempty"`
+	Set       *bool               `json:"set,omitempty"`
+	Cleared   *bool               `json:"cleared,omitempty"`
+	From      string              `json:"from,omitempty"`
+	Lead      string              `json:"lead,omitempty"`
+	Placed    int                 `json:"placed"`
+	Released  int                 `json:"released"`
+	Refused   int                 `json:"refused"`
+	Bots      []CommanderPlaceBot `json:"bots,omitempty"`
+}
+
+// CommanderPlaceBot is one bot row of a placement answer, the daemon's
+// ServeCommanderBot2: the refusal key is code=, and a queued row carries the
+// slot, its position, the sequence and any nudge.
+type CommanderPlaceBot struct {
+	Bot    string        `json:"bot"`
+	Role   string        `json:"role,omitempty"`
+	Status string        `json:"status"`
+	Slot   *int          `json:"slot,omitempty"`
+	Pos    *CommanderPos `json:"pos,omitempty"`
+	Seq    *int          `json:"seq,omitempty"`
+	Code   string        `json:"code,omitempty"`
+	Msg    string        `json:"msg,omitempty"`
+	Nudged *float64      `json:"nudged,omitempty"`
+	To     string        `json:"to,omitempty"`
 }
 
 // CommanderPos is a map position.
@@ -490,6 +534,8 @@ type CommanderMember struct {
 	Map       uint32        `json:"map"`
 	Zone      int           `json:"zone"`
 	Pos       *CommanderPos `json:"pos,omitempty"` // nil: the member has no position
+	Hold      string        `json:"hold,omitempty"`
+	Slot      *CommanderPos `json:"slot,omitempty"`
 }
 
 // CommanderRun is the run record of a card.
@@ -511,17 +557,21 @@ type CommanderRun struct {
 
 // CommanderCard is one commander's binding card.
 type CommanderCard struct {
-	Cmd     string            `json:"cmd"`
-	Online  bool              `json:"online"`
-	Lead    string            `json:"lead"`
-	Bound   int               `json:"bound"`
-	Bots    int               `json:"bots"`
-	InParty bool              `json:"in_party"`
-	Map     *uint32           `json:"map,omitempty"`
-	Pos     *CommanderPos     `json:"pos,omitempty"`
-	Members []CommanderMember `json:"members,omitempty"`
-	Run     *CommanderRun     `json:"run,omitempty"`
-	Log     []CommanderOrder  `json:"log,omitempty"`
+	Cmd       string            `json:"cmd"`
+	Online    bool              `json:"online"`
+	Lead      string            `json:"lead"`
+	Bound     int               `json:"bound"`
+	Bots      int               `json:"bots"`
+	InParty   bool              `json:"in_party"`
+	Map       *uint32           `json:"map,omitempty"`
+	Pos       *CommanderPos     `json:"pos,omitempty"`
+	Hold      string            `json:"hold,omitempty"`
+	Rally     *CommanderPos     `json:"rally,omitempty"`
+	RallyMap  *uint32           `json:"rally_map,omitempty"`
+	RallyInst *uint32           `json:"rally_inst,omitempty"`
+	Members   []CommanderMember `json:"members,omitempty"`
+	Run       *CommanderRun     `json:"run,omitempty"`
+	Log       []CommanderOrder  `json:"log,omitempty"`
 }
 
 // CommanderOrder is one logged order of a card, oldest first: the module's own words. OK says the order queued.

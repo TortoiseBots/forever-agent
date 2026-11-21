@@ -41,7 +41,8 @@ function setLegSel(name, sel) { legSel.set(name, sel); store("legsel:" + name, J
 // The route editor (routeeditui.js): the panel of the plan view and the handles on its map. It is there only when the dashboard was started with --edit.
 const EU = window.RouteEditUI.create({ h, s, MV, rerender: () => scheduleRender(), applyViewBox: (rec) => applyViewBox(rec), geoOf: (name) => { const g = plans.get(name); return g && g.legs ? g : null; }, currentPlan: () => (route.kind === "plan" ? route.plan : ""), routeDoc: (name) => { const r = routes.get(name); return r && r.doc ? r.doc : null; } });
 // The run controls (controls.js): the buttons, the token field and the control log of each agent's card. Off unless GET /api/control/status says enabled.
-const CTLBOX = CTL ? CTL.create({ h, rerender: () => scheduleRender(), footer: (on) => { if (on) $("foot").textContent = "Controls are ON: the buttons send commands to the agents; each one is logged with who sent it."; } }) : null; // controls.js is loaded before this file; the box is just absent without it
+const CTLBOX = CTL ? CTL.create({ h, rerender: () => scheduleRender(), footer: (on) => { if (on) $("foot").textContent = "Controls are ON: the buttons send commands to the agents; each one is logged with who sent it."; },
+  svgFor: (id) => { const rec = cards.get(id); return rec ? rec.svg : null; } }) : null; // controls.js is loaded before this file; the box is just absent without it
 // The real route (realroute.js): the navmesh walk of a plan, traced by the dashboard (GET /api/plan/<name>/route). plan name -> {key, doc, state, msg, at}; state is
 // loading, refreshing (the drawing is the last route, the new one is on its way), ok, off (the dashboard has no --mmaps-dir) or error. While the editor is
 // on, the route is asked with the edits made so far (the editor's route), so it follows each drop.
@@ -966,6 +967,26 @@ function renderMap(c, rec) {
     if (st.length) { anyStatus = true; g.append(statusEl(st, 11, -11)); }
     kids.push(g);
   }
+  // Placement slots (a hollow square per held bot, a dashed line when the
+  // bot is more than 3 yd from its slot) and the rally flag.
+  for (const b of c.bots) {
+    if (!b.has_slot) continue;
+    const g = at(b.slot_x, b.slot_y, "slot");
+    g.append(s("rect", { class: "slot", x: -6, y: -6, width: 12, height: 12 }));
+    unitG(g, "slot:" + b.name, { type: "slot", data: b });
+    g.append(s("title", {}, "slot" + (b.hold ? " (" + b.hold + ")" : "")));
+    kids.push(g);
+  }
+  for (const l of ML.slotLines(c.bots)) {
+    kids.push(s("line", { class: "slot-line", x1: l.from.x, y1: l.from.y, x2: l.to.x, y2: l.to.y }));
+  }
+  if (c.rally) {
+    const g = at(c.rally.x, c.rally.y, "rally");
+    g.append(s("path", { class: "rally", d: "M0,0 L0,-18 M0,-18 L10,-14 L0,-10 Z" }));
+    unitG(g, "rally:" + c.id, { type: "rally", data: c.rally });
+    g.append(s("title", {}, "rally point"));
+    kids.push(g);
+  }
   if (c.commander) {
     const g = at(c.commander.x, c.commander.y, "c");
     const d = s("circle", { r: 10, class: "cmd" });
@@ -996,6 +1017,7 @@ function renderMap(c, rec) {
     picture: !!rec.pick, why: { picture: rec.picWhy || "" }, route: has(".route, .direct"), packs: has(".pull, .pin"), cleared: c.mobs.some((m) => m.cleared) || has(".pull.cleared, .pin.cleared, .leg.done"),
     bosses: has(".boss"), doors: has(".obj"), sections: has(".legname"), steps: has(".stepn"), trail: (c.trail || []).length >= 2, trailtime: stamps.length > 0, heading: !!(hd && lead),
     next: !!nt, bots: c.bots.some((b) => b.known), botTargets: botLines.length > 0, healer: healers.length > 0, commander: !!c.commander, cmdline: !!(c.commander && leadPos),
+    slots: c.bots.some((b) => b.has_slot), rally: !!c.rally,
     hostile: kind("hostile"), neutral: kind("neutral", "friendly"), critter: kind("critter"), threat: threat.length > 0, pulltargets: pulls.length > 0, zones: false,
     bossmob: c.mobs.some((m) => m.boss), hpunits: c.bots.some((b) => b.known) || c.mobs.length > 0, status: anyStatus, threatcolor: anyThreat,
     events: (c.events || []).length > 0, runinfo: !!prog,

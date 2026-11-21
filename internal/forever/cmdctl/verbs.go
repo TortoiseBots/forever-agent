@@ -109,6 +109,15 @@ var Verbs = []Verb{
 	{Name: "state", Path: PathCmd, Package: "P6", Min: 0, Max: 1, Kinds: []ArgKind{ArgBot}, Guard: true},
 	{Name: "lootmethod", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Guard: true},
 
+	// PL, the placement package (COMMANDER-SHAPES-SPEC §3.2): the verbs that
+	// hold the party in a shape (`place`, `place follow`), remember a
+	// fall-back point (`rally`), form up on it (`fallback`) and end the hold
+	// (`resume`). Their words are checked by placeArgs, not by Kinds.
+	{Name: "place", Path: PathCmd, Package: "PL", Min: 1, Max: 12, Guard: true},
+	{Name: "rally", Path: PathCmd, Package: "PL", Min: 0, Max: 1, Guard: false},
+	{Name: "fallback", Path: PathCmd, Package: "PL", Min: 0, Max: 1, Guard: true},
+	{Name: "resume", Path: PathCmd, Package: "PL", Min: 0, Max: 0, Guard: true},
+
 	// Cut from the port (CPS section 5): no line, no package.
 	{Name: "view", Path: PathCut},
 	{Name: "scout", Path: PathCut},

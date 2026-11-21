@@ -119,6 +119,18 @@
       add("What", d.text);
       return { title: d.text, badge: d.kind, rows };
     }
+    if (u.type === "slot") {
+      // A held bot's slot square: the bot, its placement and how far its slot is from the lead.
+      add("Bot", d.name);
+      add("Hold", d.hold);
+      add("Distance to lead", yd(dist({ x: d.slot_x, y: d.slot_y }, c.lead)));
+      return { title: (d.name || "a bot") + " slot", badge: "slot", rows };
+    }
+    if (u.type === "rally") {
+      add("Point", [Math.round(d.x), Math.round(d.y)].filter((n) => isFinite(n)).join(", "));
+      add("Distance to lead", yd(toLead));
+      return { title: "rally point", badge: "rally", rows };
+    }
     add("Distance to lead", yd(toLead));
     return { title: d.name || "commander", badge: "commander", rows: rows.concat([["What", "the agent's own character"]]) };
   }
@@ -248,6 +260,8 @@
     { sample: "lg-combat", glyph: "\u2192", text: "combat lines: red mob to its victim, green healer to the friend it targets (the feed names the target, not the spell), cyan caster to the creature it crowd controls (only for casters the commander ordered; the feed does not say who put a crowd control on)" },
     { sample: "lg-ghost", glyph: "\u25CC", text: "pale dotted line and dot: the best earlier run of this dungeon (the ghost); the run line says how far ahead or behind it is" },
     { sample: "lg-heat", glyph: "\u2588", text: "red patches: where parties died in the latest 20 runs of this dungeon (darker red, more deaths)" },
+    { sample: "lg-slot", glyph: "▢", text: "slot: the hollow square a held bot stands on" },
+    { sample: "lg-rally", glyph: "⚑", text: "rally point: where the group falls back to" },
   ];
 
   const api = { guidKey, mobName, entryText, activity, mobActivity, describeUnit, statuses, STATUS, threatOf, tankTargets, hpColor, eventGlyph, clockOf, feedLine,

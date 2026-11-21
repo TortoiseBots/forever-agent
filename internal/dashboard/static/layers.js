@@ -42,6 +42,8 @@
     { key: "bots", label: "Bot dots", group: "Party", def: true, needs: "bots", why: "no bot position yet" },
     { key: "botnames", label: "Bot names", group: "Party", def: true, needs: "bots", why: "no bot position yet" },
     { key: "bottarget", label: "Bot target lines", group: "Party", def: false, needs: "botTargets", why: "no bot has a target I can place" },
+    { key: "slots", label: "Placement slots (squares) and slot lines", group: "Party", def: true, needs: "slots", why: "no bot holds a placement slot" },
+    { key: "rally", label: "Rally point (flag)", group: "Party", def: true, needs: "rally", why: "no rally point stored" },
     { key: "healring", label: "Healer range (40 yd)", group: "Party", def: false, needs: "healer", why: "no living healer on the map" },
     { key: "commander", label: "Commander", group: "Party", def: true, needs: "commander", why: "the commander is not on this map" },
     { key: "cmdline", label: "Line from the commander to the lead", group: "Party", def: false, needs: "cmdline", why: "needs the commander and a lead on this map" },
@@ -174,6 +176,18 @@
   // Bot to its target: a mob (or another bot).
   function botTargetLines(bots, mobs) { return targetLines(bots.filter((b) => b.known), mobs.concat(bots.filter((b) => b.known))); }
 
+  // A held bot to its slot: the dashed line is drawn only when the bot is
+  // more than 3 yd from its slot (the module's kSlotToleranceYd).
+  function slotLines(bots) {
+    const out = [];
+    for (const b of (bots || [])) {
+      if (!b || !b.has_slot || !b.known) continue;
+      if (!isFinite(b.x) || !isFinite(b.y) || !isFinite(b.slot_x) || !isFinite(b.slot_y)) continue;
+      const d = Math.hypot(b.x - b.slot_x, b.y - b.slot_y);
+      if (d > 3) out.push({ from: { x: b.x, y: b.y }, to: { x: b.slot_x, y: b.slot_y }, bot: b });
+    }
+    return out;
+  }
   // The mobs the party is about to pull or is pulling: the hostile ones of the current pack (leg and group of the run), else the hostile
   // ones that are fighting. run is {leg, group, state}; a mob has leg, group, kind, engaged, cleared.
   function pullTargets(mobs, run) {
@@ -237,7 +251,7 @@
   const api = {
     STORAGE_KEY, HEAL_RANGE_YD, AGGRO_YD, DEFS, keys, defaults, normalize, load, save, set, availability, groups,
     STYLE_KEY, SLIDERS, STYLES, WHOLE_RUN_MIN, styleDefaults, normalizeStyle, loadStyle, saveStyle, setStyle, trailMinutes,
-    guidKey, threatLines, botTargetLines, pullTargets, heading, trailStamps, scaleBar, gridStep, gridLines,
+    guidKey, threatLines, botTargetLines, slotLines, pullTargets, heading, trailStamps, scaleBar, gridStep, gridLines,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.MapLayers = api;
 })(typeof self !== "undefined" ? self : this);

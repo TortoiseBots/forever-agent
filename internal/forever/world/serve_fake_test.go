@@ -1683,6 +1683,73 @@ func TestServeCommanderCmdStay(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeCommanderPlaceGolden is the A2 §3.5 JSON golden: a place answer's
+// field names, with absent numbers omitted (never zeroes).
+func TestServeCommanderPlaceGolden(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka", "Healera")
+		case line == ".tb cmd":
+			return []string{"error code=missing-verb cmd=cmd msg=move%2C%20stay #T"}
+		case line == ".tb cmd place":
+			return []string{"error code=missing-argument cmd=cmd msg=place%20takes%20a%20shape #T"}
+		case line == ".tb cmd place circle wide target Healera":
+			return []string{
+				"cmd-begin #T",
+				"cmd verb=place status=accepted bots=2 shape=circle gap=wide anchor=target radius=6.4 slots=2 #T",
+				"cmd bot=Tanka verb=place role=tank slot=0 pos=-18.24,-46.69,-21.85 seq=41 #T",
+				"cmd bot=Healera verb=place role=healer slot=1 status=refused code=liquid msg=the%20slot%20is%20in%20water%20or%20lava #T",
+				"cmd-end count=3 records=3 verb=place lead=Tanka bots=2 placed=1 refused=1 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "cmd", "verb": "place", "args": []string{"circle", "wide", "target", "Healera"},
+	}), &out)
+	if out.Place == nil || out.Place.Verb != "place" || out.Place.Shape != "circle" || out.Place.Gap != "wide" || out.Place.Anchor != "target" {
+		t.Fatalf("place %+v", out.Place)
+	}
+	if out.Place.Face != nil || out.Place.At != nil {
+		t.Fatalf("absent numbers must stay absent: %+v", out.Place)
+	}
+	if out.Place.Radius == nil || *out.Place.Radius != 6.4 {
+		t.Fatalf("radius %+v", out.Place.Radius)
+	}
+	if len(out.Place.Bots) != 2 || out.Place.Bots[0].Seq == nil || *out.Place.Bots[0].Seq != 41 {
+		t.Fatalf("bots %+v", out.Place.Bots)
+	}
+	if out.Place.Bots[1].Code != "liquid" {
+		t.Fatalf("refused %+v", out.Place.Bots[1])
+	}
+	var second map[string]any
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "cmd", "verb": "place", "args": []string{"circle", "wide", "target", "Healera"},
+	}), &second)
+	raw, err := json.Marshal(second["place"])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	json.Unmarshal(raw, &decoded)
+	for _, k := range []string{"face", "at", "inst", "set", "cleared"} {
+		if _, ok := decoded[k]; ok {
+			t.Fatalf("absent number %q present in %s", k, raw)
+		}
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 // TestServeCommanderErrorCarriesTheOrder is decision 1: the order went out and the waited read lost the link, so
 // the refusal's Data names the sent line and the caller never retries it blindly.
 func TestServeCommanderErrorCarriesTheOrder(t *testing.T) {

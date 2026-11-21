@@ -49,6 +49,7 @@ type ServeCommander struct {
 	Self       string                `json:"self,omitempty"` // status: the character whose cards these are
 	Sent       []string              `json:"sent,omitempty"`
 	Bots       []ServeCommanderBot   `json:"bots,omitempty"`
+	Place      *ServeCommanderPlace  `json:"place,omitempty"` // the placement head and its rows
 	Card       *ServeCommanderCard   `json:"card,omitempty"`
 	Cards      []ServeCommanderCard  `json:"cards,omitempty"`
 	Final      map[string]string     `json:"final"`
@@ -59,6 +60,48 @@ type ServeCommander struct {
 	// threshold=), decoded. It is absent when the verb's answer carried none.
 	Fields map[string]string `json:"fields,omitempty"`
 	Notes  []string          `json:"notes,omitempty"` // what the call did on its own, beyond the lines it sent
+}
+
+// ServeCommanderPlace is a placement call's typed answer: the head in
+// snake_case and the rows. A number the module did not send is absent
+// (a nil pointer), never a zero standing in for "not known".
+type ServeCommanderPlace struct {
+	Verb      string               `json:"verb"`
+	Status    string               `json:"status"`
+	Follow    bool                 `json:"follow,omitempty"`
+	Shape     string               `json:"shape,omitempty"`
+	Gap       string               `json:"gap,omitempty"`
+	Anchor    string               `json:"anchor,omitempty"`
+	AnchorBot string               `json:"anchor_bot,omitempty"`
+	Face      *int                 `json:"face,omitempty"`
+	Radius    *float64             `json:"radius,omitempty"`
+	Slots     *int                 `json:"slots,omitempty"`
+	At        *ServeCommanderPos   `json:"at,omitempty"`
+	Rally     *ServeCommanderPos   `json:"rally,omitempty"`
+	Map       *uint32              `json:"map,omitempty"`
+	Inst      *uint32              `json:"inst,omitempty"`
+	Set       *bool                `json:"set,omitempty"`
+	Cleared   *bool                `json:"cleared,omitempty"`
+	From      string               `json:"from,omitempty"`
+	Lead      string               `json:"lead,omitempty"`
+	Placed    int                  `json:"placed"`
+	Released  int                  `json:"released"`
+	Refused   int                  `json:"refused"`
+	Bots      []ServeCommanderBot2 `json:"bots,omitempty"`
+}
+
+// ServeCommanderBot2 is one bot row of a placement answer.
+type ServeCommanderBot2 struct {
+	Bot    string             `json:"bot"`
+	Role   string             `json:"role,omitempty"`
+	Status string             `json:"status"`
+	Slot   *int               `json:"slot,omitempty"`
+	Pos    *ServeCommanderPos `json:"pos,omitempty"`
+	Seq    *int               `json:"seq,omitempty"`
+	Code   string             `json:"code,omitempty"`
+	Msg    string             `json:"msg,omitempty"`
+	Nudged *float64           `json:"nudged,omitempty"`
+	To     string             `json:"to,omitempty"`
 }
 
 // ServeCommanderBot is one bot's line of an answer.
@@ -92,6 +135,10 @@ type ServeCommanderCard struct {
 	Orders    int                    `json:"orders"`
 	Map       *uint32                `json:"map,omitempty"`
 	Pos       *ServeCommanderPos     `json:"pos,omitempty"`
+	Hold      string                 `json:"hold,omitempty"`
+	Rally     *ServeCommanderPos     `json:"rally,omitempty"`
+	RallyMap  *uint32                `json:"rally_map,omitempty"`
+	RallyInst *uint32                `json:"rally_inst,omitempty"`
 	Members   []ServeCommanderMember `json:"members,omitempty"`
 	Log       []ServeCommanderOrder  `json:"log,omitempty"`
 	Run       *ServeCommanderRun     `json:"run,omitempty"`
@@ -107,23 +154,25 @@ type ServeCommanderPos struct {
 
 // ServeCommanderMember is one bound bot of a card; the lead comes first.
 type ServeCommanderMember struct {
-	Bot       string            `json:"bot"`
-	GUID      string            `json:"guid"`
-	Class     string            `json:"class"`
-	Role      string            `json:"role"`
-	Level     int               `json:"level"`
-	HP        int               `json:"hp"`
-	MaxHP     int               `json:"max_hp"`
-	Power     int               `json:"power"`
-	MaxPower  int               `json:"max_power"`
-	PowerType string            `json:"power_type,omitempty"`
-	Alive     bool              `json:"alive"`
-	Lead      bool              `json:"lead"`
-	Map       uint32            `json:"map"`
-	Zone      int               `json:"zone"`
-	Pos       ServeCommanderPos `json:"pos"`
-	Sub       *int              `json:"sub,omitempty"`
-	Extra     map[string]string `json:"extra,omitempty"`
+	Bot       string             `json:"bot"`
+	GUID      string             `json:"guid"`
+	Class     string             `json:"class"`
+	Role      string             `json:"role"`
+	Level     int                `json:"level"`
+	HP        int                `json:"hp"`
+	MaxHP     int                `json:"max_hp"`
+	Power     int                `json:"power"`
+	MaxPower  int                `json:"max_power"`
+	PowerType string             `json:"power_type,omitempty"`
+	Alive     bool               `json:"alive"`
+	Lead      bool               `json:"lead"`
+	Map       uint32             `json:"map"`
+	Zone      int                `json:"zone"`
+	Pos       ServeCommanderPos  `json:"pos"`
+	Sub       *int               `json:"sub,omitempty"`
+	Hold      string             `json:"hold,omitempty"`
+	Slot      *ServeCommanderPos `json:"slot,omitempty"`
+	Extra     map[string]string  `json:"extra,omitempty"`
 }
 
 // ServeCommanderOrder is one logged order of a card, oldest first.
@@ -425,6 +474,10 @@ func commanderResult(res cmdctl.Result) ServeCommander {
 			Target: b.Target, Extra: b.Extra,
 		})
 	}
+	if res.Place != nil {
+		place := commanderPlace(*res.Place)
+		out.Place = &place
+	}
 	if res.Card != nil {
 		card := commanderCard(*res.Card)
 		out.Card = &card
@@ -436,6 +489,70 @@ func commanderResult(res cmdctl.Result) ServeCommander {
 		out.Events = append(out.Events, commanderEvent(ev))
 	}
 	out.Fields = res.Fields
+	return out
+}
+
+// commanderPlace maps a placement answer onto the RPC's snake_case shape.
+// Absent numbers stay absent (nil pointers), never zeroes.
+func commanderPlace(p tbcmd.PlaceReport) ServeCommanderPlace {
+	out := ServeCommanderPlace{
+		Verb: p.Verb, Status: p.Status, Follow: p.Follow, Shape: p.Shape, Gap: p.Gap,
+		Anchor: p.Anchor, AnchorBot: p.AnchorBot, From: p.From, Lead: p.Lead,
+		Placed: p.Placed, Released: p.Released, Refused: p.Refused,
+	}
+	if p.HasFace {
+		face := p.Face
+		out.Face = &face
+	}
+	if p.HasRadius {
+		radius := p.Radius
+		out.Radius = &radius
+	}
+	if p.HasSlots {
+		slots := p.Slots
+		out.Slots = &slots
+	}
+	if p.At != nil {
+		out.At = &ServeCommanderPos{X: p.At.X, Y: p.At.Y, Z: p.At.Z}
+	}
+	if p.Rally != nil {
+		out.Rally = &ServeCommanderPos{X: p.Rally.X, Y: p.Rally.Y, Z: p.Rally.Z}
+	}
+	if p.HasMap {
+		id := p.Map
+		out.Map = &id
+	}
+	if p.HasInst {
+		inst := p.Inst
+		out.Inst = &inst
+	}
+	if p.HasSet {
+		set := p.Set
+		out.Set = &set
+	}
+	if p.HasClear {
+		cleared := p.Cleared
+		out.Cleared = &cleared
+	}
+	for _, b := range p.Bots {
+		row := ServeCommanderBot2{Bot: b.Bot, Role: b.Role, Status: b.Status, Code: b.Code, Msg: b.Msg, To: b.To}
+		if b.HasSlot {
+			slot := b.Slot
+			row.Slot = &slot
+		}
+		if b.Pos != nil {
+			row.Pos = &ServeCommanderPos{X: b.Pos.X, Y: b.Pos.Y, Z: b.Pos.Z}
+		}
+		if b.HasSeq {
+			seq := b.Seq
+			row.Seq = &seq
+		}
+		if b.HasNudged {
+			nudged := b.Nudged
+			row.Nudged = &nudged
+		}
+		out.Bots = append(out.Bots, row)
+	}
 	return out
 }
 
@@ -466,12 +583,28 @@ func commanderCard(c tbcmd.Card) ServeCommanderCard {
 	if c.Pos != nil {
 		out.Pos = &ServeCommanderPos{X: c.Pos.X, Y: c.Pos.Y, Z: c.Pos.Z}
 	}
+	out.Hold = c.Hold
+	if c.HasRally && c.Rally != nil {
+		out.Rally = &ServeCommanderPos{X: c.Rally.X, Y: c.Rally.Y, Z: c.Rally.Z}
+	}
+	if c.HasRallyMap {
+		m := c.RallyMap
+		out.RallyMap = &m
+	}
+	if c.HasRallyInst {
+		inst := c.RallyInst
+		out.RallyInst = &inst
+	}
 	for _, m := range c.Members {
 		member := ServeCommanderMember{
 			Bot: m.Bot, GUID: m.GUID, Class: m.Class, Role: m.Role, Level: m.Level,
 			HP: m.HP, MaxHP: m.MaxHP, Power: m.Power, MaxPower: m.MaxPower, PowerType: m.PowerTyp,
 			Alive: m.Alive, Lead: m.Lead, Map: m.Map, Zone: m.Zone,
 			Pos: ServeCommanderPos{X: m.Pos.X, Y: m.Pos.Y, Z: m.Pos.Z}, Extra: m.Extra,
+			Hold: m.Hold,
+		}
+		if m.Slot != nil {
+			member.Slot = &ServeCommanderPos{X: m.Slot.X, Y: m.Slot.Y, Z: m.Slot.Z}
 		}
 		if m.HasSub {
 			sub := m.Sub

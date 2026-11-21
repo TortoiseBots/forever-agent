@@ -194,6 +194,79 @@ func TestCommanderStatusIdleCard(t *testing.T) {
 	}
 }
 
+func TestCommanderCardHoldAndRally(t *testing.T) {
+	// A card with hold/rally/rmap/rinst and members with hold/slot: the
+	// typed fields take them, so they leave Extra. Without the change the
+	// keys land in Extra.
+	binding := strings.NewReplacer("bound=5", "bound=2", "bots=5", "bots=2", "orders=5", "orders=0").
+		Replace(commanderBindingTanka)
+	binding = strings.TrimSuffix(binding, " #T") + " hold=place rally=-9100.80,-2005.30,132.90 rmap=1 rinst=0 #T"
+	slot := func(raw string, hold, slot string) string {
+		return strings.TrimSuffix(raw, " #T") + " hold=" + hold + " slot=" + slot + " #T"
+	}
+	raws := []string{
+		"commander-begin #T",
+		binding,
+		slot(commanderMemberTanka("Tanka", "warrior", "tank", 10, "yes", 498, 498, 54, 100, "rage"), "place", "-14.50,-48.10,-21.85"),
+		slot(commanderMemberTanka("Healera", "priest", "healer", 11, "no", 407, 407, 80, 764, "mana"), "place", "-21.90,-48.10,-21.85"),
+		"commander-end count=3 records=3 bindings=1 #T",
+	}
+	rep, err := NewClient(oneReply(raws...)).CommanderStatus(context.Background(), "Cmdr")
+	if err != nil {
+		t.Fatalf("CommanderStatus: %v", err)
+	}
+	card := rep.Cards[0]
+	if card.Hold != "place" {
+		t.Fatalf("hold = %q", card.Hold)
+	}
+	if !card.HasRally || card.Rally == nil || card.Rally.X != -9100.80 || !card.HasRallyMap || card.RallyMap != 1 ||
+		!card.HasRallyInst || card.RallyInst != 0 {
+		t.Fatalf("rally = %+v %v %v %d %v %d", card.Rally, card.HasRally, card.HasRallyMap, card.RallyMap, card.HasRallyInst, card.RallyInst)
+	}
+	if card.Members[0].Hold != "place" || card.Members[0].Slot == nil || card.Members[0].Slot.X != -14.50 {
+		t.Fatalf("slot = %+v", card.Members[0])
+	}
+	if card.Members[1].Hold != "place" || card.Members[1].Slot == nil {
+		t.Fatalf("slot = %+v", card.Members[1])
+	}
+	for _, k := range []string{"hold", "rally", "rmap", "rinst"} {
+		if _, ok := card.Extra[k]; ok {
+			t.Fatalf("card Extra holds %q", k)
+		}
+	}
+	for _, k := range []string{"hold", "slot"} {
+		if _, ok := card.Members[0].Extra[k]; ok {
+			t.Fatalf("member Extra holds %q", k)
+		}
+	}
+}
+
+// TestCommanderCardRallyKeysWithoutPoint: rmap=/rinst= alone never make a
+// rally at the origin. The point comes only from rally=; the map flags stay
+// separate.
+func TestCommanderCardRallyKeysWithoutPoint(t *testing.T) {
+	binding := strings.NewReplacer("bound=5", "bound=1", "bots=5", "bots=1", "orders=5", "orders=0").
+		Replace(commanderBindingTanka)
+	binding = strings.TrimSuffix(binding, " #T") + " rmap=1 rinst=0 #T"
+	raws := []string{
+		"commander-begin #T",
+		binding,
+		commanderMemberTanka("Tanka", "warrior", "tank", 10, "yes", 498, 498, 54, 100, "rage"),
+		"commander-end count=2 records=2 bindings=1 #T",
+	}
+	rep, err := NewClient(oneReply(raws...)).CommanderStatus(context.Background(), "")
+	if err != nil {
+		t.Fatalf("CommanderStatus: %v", err)
+	}
+	card := rep.Cards[0]
+	if card.HasRally || card.Rally != nil {
+		t.Fatalf("a rally was made from rmap alone: %+v", card)
+	}
+	if !card.HasRallyMap || card.RallyMap != 1 || !card.HasRallyInst || card.RallyInst != 0 {
+		t.Fatalf("map flags = %v %d %v %d", card.HasRallyMap, card.RallyMap, card.HasRallyInst, card.RallyInst)
+	}
+}
+
 func TestCommanderStatusEmpty(t *testing.T) {
 	r := oneReply("commander-begin #T", "commander-end count=0 records=0 bindings=0 #T")
 	rep, err := NewClient(r).CommanderStatus(context.Background(), "")
