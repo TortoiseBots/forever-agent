@@ -486,8 +486,6 @@ type session struct {
 	itemCast itemCastWatch
 	self     wire.GUID
 	selfSeen bool
-	// ownCreateAt is when the last own create block (a login or a map change) arrived: the start of its burst.
-	ownCreateAt time.Time
 	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
 	gmCastAt []time.Time
 	mover    *objects.Mover
@@ -2570,15 +2568,6 @@ func (s *session) observeSelfIfTracking() {
 	}
 }
 
-// loginBurstWindow is how long after an own create (a login, a map change) the core's own follow-up updates still
-// belong to that create's burst.
-const loginBurstWindow = 5 * time.Second
-
-// inLoginBurst reports whether now is inside the burst of the last own create.
-func (s *session) inLoginBurst(now time.Time) bool {
-	return !s.ownCreateAt.IsZero() && now.Sub(s.ownCreateAt) < loginBurstWindow
-}
-
 func (s *session) applyUpdate(u *objects.Update) {
 	now := s.transport().Now()
 	inv := s.tracker()
@@ -2603,12 +2592,6 @@ func (s *session) applyUpdate(u *objects.Update) {
 		case b.Info.InvSlotsUndecoded():
 			inv.ServerUndecoded(now, true)
 			s.noteInventoryStale("a server update named inventory slots next to fields this client does not decode")
-		case b.Info.ActivePlayerSkipped() && s.inLoginBurst(now):
-			// The core follows the own create with values updates of the character's own PlayerData and
-			// ActivePlayerData (live R2: every login and map change ended stale). The create just rebuilt the whole
-			// inventory, no move of ours can be pending, and the update the decoder cannot reach behind PlayerData
-			// is the core's own setup, not a missed change: it must not flag a fresh, complete inventory stale.
-			s.opts.logf("world: an own update the decoder cannot read followed the own create at once; the inventory stays as the create gave it")
 		case b.Info.ActivePlayerSkipped():
 			_, was := inv.Stale()
 			inv.ServerUndecoded(now, false)
@@ -2633,7 +2616,6 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// overlay guessed before it are settled by the slots this block carries, and the quest log is re-read from
 		// the block on its next use (round R5).
 		inv.Reset()
-		s.ownCreateAt = now
 		s.questLog = nil
 		s.questStale = ""
 		if !s.selfSeen {
