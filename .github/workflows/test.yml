@@ -120,7 +120,7 @@ jobs:
       - name: cgo build
         run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
 
-  # `go test -race` for the whole module, in 9 parallel jobs (3 groups x 3 shards):
+  # `go test -race` for the whole module, in 9 jobs (3 groups x 3 shards), at most 6 running at once (docs/CI.md):
   #   cmd, world  the two long packages, cmd/forever-agent (about 1500 top-level tests, 8-10 minutes under -race) and
   #               internal/forever/world (about 430, about 10 minutes), split by test name: tools/ci/shard-tests.sh
   #               sorts the names and deals them round robin;
@@ -133,6 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Six at a time, not nine: the org runs 20 jobs at once across its repos (the concurrency cap, docs/CI.md).
+      max-parallel: 6
       matrix:
         group: [cmd, world, rest]
         shard: [0, 1, 2]
@@ -163,15 +165,25 @@ jobs:
               tools/ci/shard-tests.sh list "$pkg" >"$RUNNER_TEMP/all.txt"
               re="$(tools/ci/shard-tests.sh regex "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt")"
               echo "$pkg shard $shard of $SHARDS: $(tools/ci/shard-tests.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" | wc -l) of $(wc -l <"$RUNNER_TEMP/all.txt") tests"
-              # -v so that the log shows every top-level test that started.
-              go test -race -count=1 -timeout 20m -v -run "$re" "$pkg" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              if [ -n "$re" ]; then
+                # -v so that the log shows every top-level test that started.
+                go test -race -count=1 -timeout 20m -v -run "$re" "$pkg" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              else
+                # An empty shard runs nothing: an empty -run would match every test.
+                : >"$RUNNER_TEMP/shard.log"
+              fi
               ;;
             rest)
               tools/ci/shard-pkgs.sh list >"$RUNNER_TEMP/all.txt"
               tools/ci/shard-pkgs.sh load "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt
               tools/ci/shard-pkgs.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt >"$RUNNER_TEMP/pkgs.txt"
               echo "rest shard $shard of $SHARDS: $(wc -l <"$RUNNER_TEMP/pkgs.txt") of $(wc -l <"$RUNNER_TEMP/all.txt") packages"
-              xargs go test -race -count=1 -timeout 20m <"$RUNNER_TEMP/pkgs.txt" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              # An empty shard runs nothing: xargs with no package would run go test in the current directory.
+              if [ -s "$RUNNER_TEMP/pkgs.txt" ]; then
+                xargs go test -race -count=1 -timeout 20m <"$RUNNER_TEMP/pkgs.txt" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              else
+                : >"$RUNNER_TEMP/shard.log"
+              fi
               ;;
           esac
 
@@ -194,7 +206,7 @@ jobs:
           retention-days: 1
 
   # No test and no package can be dropped: for each group, what its 3 shards ran, together, must be exactly the full
-  # list (`go test -list` of the package for cmd and world, `go list ./...` minus those two packages for rest),
+  # list (`go test -list` of the package for cmd and world, `go list -race ./...` minus those two packages for rest),
   # each once.
   race-shards-check:
     needs: race-shards

@@ -11,12 +11,12 @@ Push-only: PR gating is unchanged (`test` and `navmesh` run on pushes to `ci/**`
 ## `test.yml` — the PR gate
 
 It runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
-branch), as parallel jobs that end in one job named `test` (12 jobs a run; the org runs at most 20 at once):
+branch), as parallel jobs that end in one job named `test` (12 jobs a run, at most 8 of them running at once; the org runs at most 20 jobs at once across its repos, see *The race shards*):
 
 | Job | What it runs |
 |---|---|
 | `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
-| `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
+| `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, at most 6 running at once, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
 | `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
 | `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
 
@@ -31,33 +31,54 @@ Two packages are far longer than the rest: `cmd/forever-agent` (about 1500 top-l
 and `internal/forever/world` (about 430 tests, about 10 minutes). Each of them is a group of 3 shards split **by test
 name**; every other package (about 120) is the `rest` group, split **by package**.
 
-- **By test name** (`group` `cmd` and `world`): `tools/ci/shard-tests.sh` lists the package's `Test*`, `Fuzz*` and
-  `Example*` names (`go test -list`; fuzz targets run their seeds and examples run too; benchmarks are not run by
-  `go test` and are left out), sorts them and deals them to the shards round robin (name 0 to shard 0, name 1 to shard
-  1, ...). A shard runs `go test -race -v -run '^(A|B|...)$'`; sub-tests run with their parent. A new test lands in a
-  shard by itself, there is no list to maintain. The deal is by count, not by time.
-- **By package** (`group` `rest`): `tools/ci/shard-pkgs.sh` takes `go list ./...` minus the two packages above and packs
-  the rest by the seconds in `tools/ci/pkg-times.txt` (greedy, longest first). A package that is missing from that file
-  (a new one) counts as 1 s and goes to the lightest shard, so it is never dropped; a name in the file that no longer
-  exists is ignored. `shard-pkgs.sh load 3 <list> tools/ci/pkg-times.txt` prints the estimated seconds per shard. When a
-  package grows a lot, update its line (the `ok ... 12.3s` lines of a CI run give the numbers); a stale file only makes
-  the shards uneven, it cannot drop a package.
+- **By test name** (`group` `cmd` and `world`): `tools/ci/shard-tests.sh` lists the package's `Test*` and `Fuzz*` names
+  (`go test -list`, built with `-race` like the run, so a race-only file counts and a `!race` file does not; benchmarks
+  are not run by `go test` and are left out), sorts them and deals them to the shards round robin (name 0 to shard 0,
+  name 1 to shard 1, ...). A shard runs `go test -race -v -run '^(A|B|...)$'`; sub-tests run with their parent. A new test
+  lands in a shard by itself, there is no list to maintain. The deal is by count, not by time. `go test -list` does not
+  print Example functions, so `list` fails on a package that has one rather than shard without it.
+- **By package** (`group` `rest`): `tools/ci/shard-pkgs.sh` takes `go list -race ./...` minus the two packages above and
+  packs the rest by the seconds in `tools/ci/pkg-times.txt` (greedy, longest first). A package that is missing from that
+  file (a new one) counts as 1 s and goes to the lightest shard, so it is never dropped; `shard` and `load` warn about each
+  package that has tests but no line there. A name in the file that no longer exists is ignored.
+  `shard-pkgs.sh load 3 <list> tools/ci/pkg-times.txt` prints the estimated seconds per shard. When a package grows a lot,
+  update its line (the `ok ... 12.3s` lines of a CI run give the numbers); a stale file only makes the shards uneven, it
+  cannot drop a package.
 - **No test can be dropped**: each shard writes down what its `go test` log shows as run (top-level test names, or the
-  packages with a result line) and uploads it. `race-shards-check` downloads the lists and runs
+  packages with a result line) and uploads it. A package whose test binary ran no test (`[no tests to run]`) or did not
+  build does not count as run. `race-shards-check` downloads the lists and runs
   `shard-tests.sh check <full list> <shard lists>` per group, which fails on a test or package that no shard ran, one that
-  ran twice, or a name outside the full list. The full list is computed fresh in that job: `go test -list` for the two
-  packages, `shard-pkgs.sh list` for `rest` (which itself fails if one of the two packages stops existing, so a rename
-  cannot silently move it). Both scripts have a `selftest` (partitions for several shard counts, a dropped name, a
-  duplicate, an unknown name, a new package) that runs in `lint`.
+  ran more than once (in one shard or in two: a repeat inside a shard is reported, not merged), a name outside the full
+  list, or an empty full list. The full list is computed fresh in that job: `go test -list` for the two packages,
+  `shard-pkgs.sh list` for `rest` (which itself fails if one of the two packages stops existing, so a rename cannot
+  silently move it). An empty shard runs nothing: `regex` and `shard` print nothing and say so on stderr, and the job
+  skips `go test` rather than give it an empty `-run` or no package. Both scripts have a `selftest` that runs in `lint`:
+  partitions for several shard counts, a dropped name, a duplicate, an unknown name, an empty shard, Unicode test names,
+  a small module built with `-race` (a race-only file listed, a `!race` one not), and the `[no tests to run]` and
+  build-failure cases.
 
 The shard count is 3 everywhere (`SHARDS` and the `shard` matrix in `test.yml`, and the `3` in the check step): one more
 shard per group is nine more jobs, so stay inside the 12 jobs a run that the org limit leaves room for.
+
+**Concurrency cap: six race shards at once.** The org runs at most 20 jobs at once across all its repos. Before the cap,
+one run started `lint` and all nine race shards together, so it held 10 of those slots, and other repos' runs queued
+behind it. `race-shards` stays one matrix of nine with `strategy.max-parallel: 6`: at most six race shards run at once,
+so one run takes at most 8 slots (six race shards, `lint` and `race-shards-check`). The price is wall time: the last
+three shards start only when earlier shards finish. `race-shards-check` still `needs` the whole matrix, so the check
+waits for every shard.
+
+**Known limit: the `!cgo` tests run in no job.** `cmd/forever-agent/forever_runmap_nocgo_test.go` and
+`internal/navmesh/raycast_nocgo_test.go` have `//go:build !cgo`. The race shards need cgo, `make nocgo` only builds and
+`make cross` only builds and vets, so nothing runs them. This was already so before the sharding.
 
 Locally, one shard of a long package:
 
 ```sh
 tools/ci/shard-tests.sh list ./cmd/forever-agent >all-tests.txt
-go test -race -count=1 -timeout 20m -run "$(tools/ci/shard-tests.sh regex 0 3 all-tests.txt)" ./cmd/forever-agent
+re="$(tools/ci/shard-tests.sh regex 0 3 all-tests.txt)"
+if [ -n "$re" ]; then
+    go test -race -count=1 -timeout 20m -run "$re" ./cmd/forever-agent
+fi
 ```
 
 ## `navmesh.yml` — the real map files
