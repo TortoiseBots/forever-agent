@@ -8,9 +8,16 @@ package world
 // the accept bit clear, BattleGroundHandler.cpp HandleBattleFieldPortOpcode); CMSG_BATTLEFIELD_LEAVE only leaves a
 // match, and inside one it casts the Deserter debuff (Player.cpp:25691-25706), so bg-leave sends it only when the
 // step says `match=yes`.
+//
+// Every status is bound to the queue the server named: a queued, invite or active status's header carries the packed
+// queue id (BattlegroundMgr.cpp BuildBattlegroundStatusHeader), a failed status carries it beside the ticket, and a
+// NONE names only the ticket slot (BuildBattlegroundStatusNone). bg-queue records the packed id it joined in the
+// watch's selection, and bg-accept and bg-leave act only on that queue: a status, invite or NONE for another queue
+// the character is in never selects, accepts or leaves this one.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +32,10 @@ const (
 	bgWait = 10 * time.Second
 	bgPoll = 50 * time.Millisecond
 )
+
+// errNoBGQueue is the refusal of bg-accept and bg-leave before a bg-queue selected a queue: there is no ticket to
+// echo, and guessing one could remove a queue the caller did not name.
+var errNoBGQueue = errors.New("no battleground queue was selected (a bg-queue step comes first)")
 
 // bgTarget checks the current NPC is a battlemaster within reach and returns it.
 func (s *session) bgTarget(a *actState, verb string) (*objects.Object, error) {
@@ -65,19 +76,16 @@ func (s *session) waitBGAnswer(ctx context.Context, wait time.Duration, cond fun
 
 // actBGQueue probes the battlemaster's list and queues for the battleground: hello, the list, the support probe,
 // the join and the status. A list with no supported battlemaster type stops the round with its report: no support
-// (the spec's own rule). A failure status fails the step with the server's reason; the queued status is the proof
-// of the queue.
+// (the spec's own rule). A failure status for the joined queue fails the step with the server's reason; only a
+// queued or invited status that names the joined queue is the proof of the queue.
 func (s *session) actBGQueue(ctx context.Context, a *actState, step ActStep) error {
 	master, err := s.bgTarget(a, step.Verb)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	s.bg.list = nil
-	s.bg.queued = nil
-	s.bg.failed = nil
-	s.bg.needConfirm = nil
-	s.bg.needConfirmAt = time.Time{}
-	s.bg.active = nil
+	s.bg.nones = nil
+	s.bg.fails = nil
 	if err := s.transport().Send(wire.CMSGBattlemasterHello, bg.BuildBattlemasterHello(master.GUID)); err != nil {
 		return s.actFail(a, step, err)
 	}
@@ -106,143 +114,142 @@ func (s *session) actBGQueue(ctx context.Context, a *actState, step ActStep) err
 		return s.actFail(a, step, err)
 	}
 	ok, err = s.waitBGAnswer(ctx, bgWait, func() bool {
-		return s.bg.queued != nil || s.bg.failed != nil || s.bg.needConfirm != nil
+		if s.bg.failedFor(queueID) != nil {
+			return true
+		}
+		st := s.bg.queue(queueID)
+		return st != nil && (st.queued != nil || st.needConfirm != nil)
 	})
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	if !ok {
-		return s.actFail(a, step, fmt.Errorf("bg-queue: no queue status after the join"))
+		return s.actFail(a, step, fmt.Errorf("bg-queue: no status for queue %#x after the join (another queue's status is not this join's answer)", queueID))
 	}
-	if s.bg.failed != nil {
-		return s.actFail(a, step, fmt.Errorf("bg-queue: the queue refused: %s", bg.FailName(s.bg.failed.Reason)))
+	if failed := s.bg.failedFor(queueID); failed != nil {
+		return s.actFail(a, step, fmt.Errorf("bg-queue: the queue refused: %s", bg.FailName(failed.Reason)))
 	}
-	if s.bg.needConfirm != nil {
-		s.actOK(a, step, fmt.Sprintf("queued for list %d: the invite is ready on map %d", list.ListID, s.bg.needConfirm.MapID))
+	// The joined queue is now the one accept and leave act on.
+	s.bg.selected = queueID
+	s.bg.hasSelected = true
+	st := s.bg.queue(queueID)
+	if st.needConfirm != nil {
+		s.actOK(a, step, fmt.Sprintf("queued for list %d: the invite is ready on map %d", list.ListID, st.needConfirm.MapID))
 		return nil
 	}
-	s.actOK(a, step, fmt.Sprintf("queued for list %d: wait %ds", list.ListID, s.bg.queued.WaitTime))
+	s.actOK(a, step, fmt.Sprintf("queued for list %d: wait %ds", list.ListID, st.queued.WaitTime))
 	return nil
-}
-
-// bgTicketForPort builds the port ticket: the invited queue's slot and kind, the character's own GUID (the core
-// overwrites RequesterGuid from the session) and the invite's own time. The slot is the status's own: the handler
-// points the port at the queue the player really is in (BattleGroundHandler.cpp HandleBattleFieldPortOpcode), so
-// the step echoes the ticket the invite carried.
-func (s *session) bgTicketForPort(verb string) (bg.Ticket, error) {
-	if s.bg.needConfirm == nil {
-		return bg.Ticket{}, fmt.Errorf("%s: no invite (a bg-queue with an invite comes first)", verb)
-	}
-	t := s.bg.needConfirm.Header.Ticket
-	t.Requester = s.selfOrMover()
-	return t, nil
 }
 
 // bgInviteExpired reports an invite the server's own timeout has passed. Timeout is the accept window in
 // milliseconds (BattlegroundQueue.cpp:532 sends INVITE_ACCEPT_WAIT_TIME); counting it from the packet's arrival
 // keeps a stale invite from being replayed.
-func (s *session) bgInviteExpired() bool {
-	st := s.bg.needConfirm
-	if st == nil || st.Timeout == 0 || s.bg.needConfirmAt.IsZero() {
+func (s *session) bgInviteExpired(st *bgQueueState) bool {
+	if st == nil || st.needConfirm == nil || st.needConfirm.Timeout == 0 || st.needConfirmAt.IsZero() {
 		return false
 	}
-	return s.transport().Now().After(s.bg.needConfirmAt.Add(time.Duration(st.Timeout) * time.Millisecond))
+	return s.transport().Now().After(st.needConfirmAt.Add(time.Duration(st.needConfirm.Timeout) * time.Millisecond))
 }
 
-// actBGAccept ports into the battleground on the invite: the need-confirmation's own ticket with the accept bit.
-// The active status is the proof of the port; a failure status fails the step with the server's reason. An invite
-// the accept window already passed is refused before any packet, because the server would have removed the queue
-// entry and the port would go unanswered.
+// actBGAccept ports into the battleground on the invite: the selected queue's need-confirmation ticket with the
+// accept bit. The active status that names the same queue is the proof of the port; a failure status for that
+// queue fails the step with the server's reason. An invite the accept window already passed is refused before any
+// packet, because the server would have removed the queue entry and the port would go unanswered.
 func (s *session) actBGAccept(ctx context.Context, a *actState, step ActStep) error {
-	t, err := s.bgTicketForPort(step.Verb)
+	st, err := s.bg.selectedQueue()
 	if err != nil {
-		return s.actFail(a, step, err)
+		return s.actFail(a, step, fmt.Errorf("%s: %w", step.Verb, err))
 	}
-	if s.bgInviteExpired() {
-		return s.actFail(a, step, fmt.Errorf("%s: the invite expired after %d ms; a new bg-queue is needed", step.Verb, s.bg.needConfirm.Timeout))
+	if st.needConfirm == nil {
+		return s.actFail(a, step, fmt.Errorf("%s: no invite for queue %#x (a bg-queue with an invite comes first)", step.Verb, s.bg.selected))
 	}
-	s.bg.active = nil
-	s.bg.failed = nil
+	if s.bgInviteExpired(st) {
+		return s.actFail(a, step, fmt.Errorf("%s: the invite expired after %d ms; a new bg-queue is needed", step.Verb, st.needConfirm.Timeout))
+	}
+	t := st.needConfirm.Header.Ticket
+	t.Requester = s.selfOrMover()
+	s.bg.fails = nil
 	if err := s.transport().Send(wire.CMSGBattlefieldPort, bg.BuildPort(t, true)); err != nil {
 		return s.actFail(a, step, err)
 	}
-	ok, err := s.waitBGAnswer(ctx, bgWait, func() bool { return s.bg.active != nil || s.bg.failed != nil })
+	queueID := s.bg.selected
+	ok, err := s.waitBGAnswer(ctx, bgWait, func() bool {
+		if s.bg.failedFor(queueID) != nil {
+			return true
+		}
+		got := s.bg.queue(queueID)
+		return got != nil && got.active != nil
+	})
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	if !ok {
-		return s.actFail(a, step, fmt.Errorf("bg-accept: no battleground status after the port"))
+		return s.actFail(a, step, fmt.Errorf("bg-accept: no battleground status for queue %#x after the port (another queue's status is not this port's answer)", queueID))
 	}
-	if s.bg.failed != nil {
-		return s.actFail(a, step, fmt.Errorf("bg-accept: the port refused: %s", bg.FailName(s.bg.failed.Reason)))
+	if failed := s.bg.failedFor(queueID); failed != nil {
+		return s.actFail(a, step, fmt.Errorf("bg-accept: the port refused: %s", bg.FailName(failed.Reason)))
 	}
-	// The active status cleared the invite in the watch; drop the step's own copy too, so a later bg-leave takes
-	// the match branch and never replays the ticket.
-	s.bg.needConfirm = nil
-	s.bg.needConfirmAt = time.Time{}
-	s.actOK(a, step, fmt.Sprintf("inside the battleground on map %d", s.bg.active.MapID))
+	active := s.bg.queue(queueID).active
+	s.actOK(a, step, fmt.Sprintf("inside the battleground on map %d", active.MapID))
 	return nil
 }
 
-// actBGLeave leaves the queue through the core's queue-leave path: CMSG_BATTLEFIELD_PORT with the ticket of the
-// queue the character is in (queued or invited) and the accept bit clear, answered by SMSG_BATTLEFIELD_STATUS_NONE
-// (BattleGroundHandler.cpp HandleBattleFieldPortOpcode). Inside a match that path no longer exists, so the step
-// sends CMSG_BATTLEFIELD_LEAVE only when it is asked with match=yes; the line warns that a started match casts the
-// Deserter debuff (Player.cpp:25691-25706).
+// actBGLeave leaves the selected queue through the core's queue-leave path: CMSG_BATTLEFIELD_PORT with the ticket
+// of that queue (queued or invited) and the accept bit clear, answered by SMSG_BATTLEFIELD_STATUS_NONE with the
+// queue's ticket slot (BattleGroundHandler.cpp HandleBattleFieldPortOpcode). Inside a match that path no longer
+// exists, so the step sends CMSG_BATTLEFIELD_LEAVE only when it is asked with match=yes; the line warns that a
+// started match casts the Deserter debuff (Player.cpp:25691-25706). A NONE for another queue's slot never ends
+// this step, and the watch drops only this queue's state.
 func (s *session) actBGLeave(ctx context.Context, a *actState, step ActStep) error {
 	if raw, ok := step.Args["match"]; ok && raw != "yes" {
 		return s.actFail(a, step, fmt.Errorf("%s: match=%q is not understood (only match=yes leaves a match)", step.Verb, raw))
 	}
-	if s.bg.active != nil {
+	st, err := s.bg.selectedQueue()
+	if err != nil {
+		return s.actFail(a, step, fmt.Errorf("%s: %w", step.Verb, err))
+	}
+	if st.active != nil {
 		if step.Args["match"] != "yes" {
-			return s.actFail(a, step, fmt.Errorf("%s: inside the battleground on map %d; leaving a started match casts the Deserter debuff, so pass match=yes to leave", step.Verb, s.bg.active.MapID))
+			return s.actFail(a, step, fmt.Errorf("%s: inside the battleground on map %d; leaving a started match casts the Deserter debuff, so pass match=yes to leave", step.Verb, st.active.MapID))
 		}
-		s.bg.none = nil
-		mapID := s.bg.active.MapID
+		slot := st.active.Header.Ticket.ID
+		mapID := st.active.MapID
+		s.bg.nones = nil
 		if err := s.transport().Send(wire.CMSGBattlefieldLeave, bg.BuildLeave()); err != nil {
 			return s.actFail(a, step, err)
 		}
-		ok, err := s.waitBGAnswer(ctx, bgWait, func() bool { return s.bg.none != nil })
+		ok, err := s.waitBGAnswer(ctx, bgWait, func() bool { return s.bg.noneFor(slot) != nil })
 		if err != nil {
 			return s.actFail(a, step, err)
 		}
 		if !ok {
-			return s.actFail(a, step, fmt.Errorf("%s: no status after the match leave", step.Verb))
+			return s.actFail(a, step, fmt.Errorf("%s: no status for slot %d after the match leave", step.Verb, slot))
 		}
 		s.actOK(a, step, fmt.Sprintf("left the battleground on map %d (the Deserter debuff applies while the match runs)", mapID))
 		return nil
 	}
-	t, err := s.bgQueueTicket(step.Verb)
-	if err != nil {
+	var ticket bg.Ticket
+	switch {
+	case st.needConfirm != nil:
+		ticket = st.needConfirm.Header.Ticket
+	case st.queued != nil:
+		ticket = st.queued.Header.Ticket
+	default:
+		return s.actFail(a, step, fmt.Errorf("%s: queue %#x has no queued or invited status to leave", step.Verb, s.bg.selected))
+	}
+	ticket.Requester = s.selfOrMover()
+	slot := ticket.ID
+	s.bg.nones = nil
+	if err := s.transport().Send(wire.CMSGBattlefieldPort, bg.BuildPort(ticket, false)); err != nil {
 		return s.actFail(a, step, err)
 	}
-	s.bg.none = nil
-	if err := s.transport().Send(wire.CMSGBattlefieldPort, bg.BuildPort(t, false)); err != nil {
-		return s.actFail(a, step, err)
-	}
-	ok, err := s.waitBGAnswer(ctx, bgWait, func() bool { return s.bg.none != nil })
+	ok, err := s.waitBGAnswer(ctx, bgWait, func() bool { return s.bg.noneFor(slot) != nil })
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	if !ok {
-		return s.actFail(a, step, fmt.Errorf("%s: no status after the queue leave", step.Verb))
+		return s.actFail(a, step, fmt.Errorf("%s: no status for slot %d after the queue leave", step.Verb, slot))
 	}
 	s.actOK(a, step, "out of the battleground queue")
 	return nil
-}
-
-// bgQueueTicket is the ticket of the queue the character is in: the invite's when one stands, otherwise the queued
-// status's own (both carry the queue slot the port's ticket names).
-func (s *session) bgQueueTicket(verb string) (bg.Ticket, error) {
-	switch {
-	case s.bg.needConfirm != nil:
-		t := s.bg.needConfirm.Header.Ticket
-		t.Requester = s.selfOrMover()
-		return t, nil
-	case s.bg.queued != nil:
-		t := s.bg.queued.Header.Ticket
-		t.Requester = s.selfOrMover()
-		return t, nil
-	}
-	return bg.Ticket{}, fmt.Errorf("%s: not in a battleground queue (a bg-queue comes first)", verb)
 }

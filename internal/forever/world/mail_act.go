@@ -23,6 +23,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
 // The mail steps' bounds: one answer's timeout and how often a wait re-reads the state.
@@ -451,25 +452,44 @@ func mailRecipientFor(allowed map[string]wire.GUID, name string) (wire.GUID, boo
 	return wire.GUID{}, false
 }
 
-// confirmMailRecipient asks the server for the guid's name and waits until it answers this exact name. The send-mail
-// packet carries a name, not a guid, so this is the only way the step knows the money goes to the character the
-// caller allow-listed and not to a same-spelled or misspelled stranger.
+// confirmMailRecipient asks the server for the guid's name and reads THE answer to that query: the response row for
+// this guid, parsed from the packet (never the persistent name cache, which may hold a name the character has since
+// lost). The send-mail packet carries a name, not a guid, so this is the only way the step knows the money goes to
+// the character the caller allow-listed and not to a same-spelled or misspelled stranger. A response that names
+// other GUIDs does not answer this query and is skipped; a malformed response, or none at all, is a refusal.
 func (s *session) confirmMailRecipient(ctx context.Context, g wire.GUID, name string) error {
 	if err := s.sendPlayerNamesQuery([]wire.GUID{g}); err != nil {
 		return fmt.Errorf("send-mail: the name query: %w", err)
 	}
-	ok, err := s.waitMailAnswer(ctx, mailWait, func() bool {
-		got := s.world.NameOf(g)
-		return got != "" && strings.EqualFold(got, name)
+	var answer *objects.PlayerName
+	_, err := s.waitFor("SMSG_QUERY_PLAYER_NAMES_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
+		if p.Core != wire.SMSGQueryPlayerNamesResponse {
+			return false
+		}
+		names, perr := objects.ParsePlayerNamesResponse(p.Payload)
+		if perr != nil {
+			// An answer this client cannot read proves nothing; end the wait so the step refuses.
+			return true
+		}
+		for n := range names {
+			if names[n].GUID == g {
+				answer = &names[n]
+				return true
+			}
+		}
+		return false
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("send-mail: the server did not answer the name query for guid %v within %s; refusing", g, nameQueryDeadline)
 	}
-	if !ok {
-		if got := s.world.NameOf(g); got != "" {
-			return fmt.Errorf("send-mail: guid %v is %q, not %q; refusing", g, got, name)
-		}
-		return fmt.Errorf("send-mail: the server never named guid %v; refusing", g)
+	if answer == nil {
+		return fmt.Errorf("send-mail: the name answer did not name guid %v; refusing", g)
+	}
+	if answer.NotFound || !answer.Found || answer.Name == "" {
+		return fmt.Errorf("send-mail: the server has no character for guid %v; refusing", g)
+	}
+	if !strings.EqualFold(answer.Name, name) {
+		return fmt.Errorf("send-mail: guid %v answers %q, not %q; refusing", g, answer.Name, name)
 	}
 	return nil
 }
@@ -515,10 +535,16 @@ func parseGUIDText(s string) (wire.GUID, error) {
 	return wire.GUID{High: hi, Low: lo}, nil
 }
 
+// mailSendPostage is the core's postage for one mail without attachments: 30 copper times the attachment count, and
+// this step sends no items, so it is always 30 (MailHandler.cpp HandleSendMail: cost = 30 when there are none). The
+// debit MAIL_OK promises is money + mailSendPostage.
+const mailSendPostage = uint64(30)
+
 // actSendMail sends a text-and-money mail: to= names the recipient, subject= and body= the text, money= the copper
 // and stationery= the id (default 41, the plain letter). The recipient must be on the caller's allow-list
-// (Options.MailTo), the money may not pass its cap, and the guid the list names must answer this exact name to a
-// name query before the packet goes out. The step waits for the send's own command result.
+// (Options.MailTo), the money may not pass its cap, and the guid the list names must answer this exact name to the
+// answer of this step's own name query before the packet goes out. MAIL_OK is confirmed by the wallet reading back
+// as the exact debit: the money and the postage, nothing missing and nothing else.
 func (s *session) actSendMail(ctx context.Context, a *actState, step ActStep) error {
 	to, ok := step.Args["to"]
 	if !ok || to == "" {
@@ -562,6 +588,17 @@ func (s *session) actSendMail(ctx context.Context, a *actState, step ActStep) er
 	if err := s.confirmMailRecipient(ctx, g, to); err != nil {
 		return s.actFail(a, step, err)
 	}
+	// The wallet is read before the packet and again after MAIL_OK: the answer alone never proves the money moved.
+	before := s.inventoryNow()
+	if !before.Known {
+		return s.actFail(a, step, fmt.Errorf("send-mail: the inventory is not known yet"))
+	}
+	cost := uint64(money) + mailSendPostage
+	if before.Coinage < cost {
+		return s.actFail(a, step, fmt.Errorf("send-mail to %s: the wallet holds %d copper, less than the %d the mail costs (money plus %d postage)",
+			to, before.Coinage, cost, mailSendPostage))
+	}
+	want := before.Coinage - cost
 	s.mail.result = nil
 	if err := s.transport().Send(wire.CMSMSendMail, payload); err != nil {
 		return s.actFail(a, step, err)
@@ -578,6 +615,14 @@ func (s *session) actSendMail(ctx context.Context, a *actState, step ActStep) er
 	if r := s.mail.result; r.Error != mail.ResponseOK {
 		return s.actFail(a, step, fmt.Errorf("send-mail to %s refused: %s", to, r.ErrorName()))
 	}
-	s.actOK(a, step, fmt.Sprintf("to %s (%v): %d copper sent", to, g, money))
+	okWait, err = s.waitMailAnswer(ctx, mailWait, func() bool { return s.inventoryNow().Coinage == want })
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if !okWait {
+		return s.actFail(a, step, fmt.Errorf("send-mail to %s: unconfirmed: MAIL_OK came but the wallet reads %d copper, want %d (money %d plus %d postage)",
+			to, s.inventoryNow().Coinage, want, money, mailSendPostage))
+	}
+	s.actOK(a, step, fmt.Sprintf("to %s (%v): %d copper sent, %d copper paid (money plus %d postage)", to, g, money, cost, mailSendPostage))
 	return nil
 }

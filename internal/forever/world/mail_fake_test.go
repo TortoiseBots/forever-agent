@@ -36,6 +36,10 @@ type mailWorld struct {
 	noItem bool
 	// noCoinage makes a successful money take leave the coinage alone (the money never reads back).
 	noCoinage bool
+	// sendNoCoinage makes a successful send leave the coinage alone (the debit never reads back).
+	sendNoCoinage bool
+	// sendWrongDebit makes a successful send charge only the money and not the postage.
+	sendWrongDebit bool
 	// names are the names the fake answers a name query with.
 	names map[wire.GUID]string
 }
@@ -160,13 +164,22 @@ func (v *mailWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			v.dropMail(id)
 		}
 	case wire.CMSMSendMail:
+		b := wire.NewReader(payload)
+		_ = wire.ReadPackedGUID(b) // the mailbox
+		_ = b.ReadI32()            // stationery
+		money := b.ReadU64()
 		v.deliver(wire.SMSMMailCommandResult, v.resultPayload(0, mail.ResponseSend, v.resultError, 0, 0))
-	case wire.CMSGQueryPlayerNames:
-		// The server answers a name query with the character cache's name; the step reads it back from the
-		// world model (objects.World.SetName is what the session's own handler calls).
-		for g, name := range v.names {
-			v.s.world.SetName(g, name)
+		if v.resultError == mail.ResponseOK {
+			v.paySend(money)
 		}
+	case wire.CMSGQueryPlayerNames:
+		// The server answers the query with SMSG_QUERY_PLAYER_NAMES_RESPONSE; the step reads the row for its guid
+		// out of that answer, so put the answer on the session's packet queue where the dispatch reads it.
+		v.s.events <- event{side: sideInstance, p: worldconn.Packet{
+			Core:    wire.SMSGQueryPlayerNamesResponse,
+			Name:    wire.ServerName(wire.SMSGQueryPlayerNamesResponse),
+			Payload: playerNamesAnswer(v.t, v.names),
+		}}
 	}
 }
 
@@ -276,6 +289,28 @@ func (v *mailWorld) takeAttachment(id, attach uint64) {
 // mailItemGUID is the item GUID a taken attachment becomes in the fake's world model.
 func mailItemGUID(attach uint64) wire.GUID {
 	return wire.GUID{Low: 0x9000000000000000 | attach, High: uint64(objects.TypeItem) << 58}
+}
+
+// fakeSendPostage is the core's postage for one mail without attachments (MailHandler.cpp HandleSendMail: 30 copper
+// when the attachment list is empty). The tests pin it here, not from the step, so a wrong step constant fails.
+const fakeSendPostage = uint64(30)
+
+// paySend takes the money and the postage out of the wallet, the way HandleSendMail's ModifyMoney does.
+func (v *mailWorld) paySend(money uint64) {
+	if v.sendNoCoinage {
+		return
+	}
+	debit := money + fakeSendPostage
+	if v.sendWrongDebit {
+		debit = money
+	}
+	coin := v.s.inventoryNow().Coinage
+	if debit >= coin {
+		coin = 0
+	} else {
+		coin -= debit
+	}
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
 }
 
 // payCOD takes copper out of the character's wallet, the way the item take does.
@@ -546,12 +581,17 @@ func TestSendMailConfirmsTheGuid(t *testing.T) {
 	v.s.opts.MailTo = sendAllowList()
 	v.s.opts.MailMoneyCap = 10000
 	v.names[mailBuddy] = "Buddy"
+	coin := uint64(1000)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
 	a := v.state(t)
 	if err := v.open(t, a); err != nil {
 		t.Fatalf("mail: %v", err)
 	}
 	if err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100 subject=\"hi\" body=\"there\"")); err != nil {
 		t.Fatalf("send-mail: %v", err)
+	}
+	if got := v.s.inventoryNow().Coinage; got != 870 {
+		t.Fatalf("the wallet reads %d after the send, want 870 (100 money plus 30 postage)", got)
 	}
 	if n := v.clientSends(wire.CMSMSendMail); n != 1 {
 		t.Fatalf("%d send packet(s), want 1", n)
@@ -824,5 +864,77 @@ func TestMailMoneyReadBack(t *testing.T) {
 	}
 	if !hasText(a.lines, "0 -> 500 copper") {
 		t.Fatalf("the money line misses the read-back:\n%s", joinLines(a.lines))
+	}
+}
+
+// TestSendMailRefusesAPreCachedRenamedRecipient is the round's failing case: the name cache already holds the
+// allow-listed name for the guid, but the character has since been renamed. The step must read the answer to its own
+// query (which names the new character) and refuse, never accept the stale cache entry.
+func TestSendMailRefusesAPreCachedRenamedRecipient(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.s.world.SetName(mailBuddy, "Buddy") // the cache the old step polled
+	v.names[mailBuddy] = "Renamed"        // what the server answers now
+	coin := uint64(1000)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100"))
+	if err == nil {
+		t.Fatal("send-mail accepted a pre-cached name for a since-renamed recipient")
+	} else if !strings.Contains(err.Error(), "renamed") && !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("send-mail failed with %q, want the name refusal", err)
+	}
+	if n := v.clientSends(wire.CMSMSendMail); n != 0 {
+		t.Fatalf("%d send packet(s), want 0", n)
+	}
+	if got := v.s.inventoryNow().Coinage; got != 1000 {
+		t.Fatalf("the wallet reads %d after the refusal, want 1000", got)
+	}
+}
+
+// TestSendMailUnconfirmedWithoutCoinage: MAIL_OK with no wallet update is not a sent mail.
+func TestSendMailUnconfirmedWithoutCoinage(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.names[mailBuddy] = "Buddy"
+	v.sendNoCoinage = true
+	coin := uint64(1000)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100"))
+	if err == nil {
+		t.Fatal("send-mail passed with no wallet update")
+	} else if !strings.Contains(err.Error(), "unconfirmed") {
+		t.Fatalf("send-mail failed with %q, want the read-back refusal", err)
+	}
+}
+
+// TestSendMailUnconfirmedWrongDebit: a wallet update that charges the money but not the postage is not the debit
+// MAIL_OK promised.
+func TestSendMailUnconfirmedWrongDebit(t *testing.T) {
+	v := newMailWorld(t, npc.NPCFlagMailbox)
+	v.s.opts.MailTo = sendAllowList()
+	v.s.opts.MailMoneyCap = 10000
+	v.names[mailBuddy] = "Buddy"
+	v.sendWrongDebit = true
+	coin := uint64(1000)
+	v.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("mail: %v", err)
+	}
+	err := v.s.actSendMail(v.s.ctx, a, mustItemStep(t, "send-mail to=Buddy money=100"))
+	if err == nil {
+		t.Fatal("send-mail passed with the postage uncharged")
+	} else if !strings.Contains(err.Error(), "unconfirmed") {
+		t.Fatalf("send-mail failed with %q, want the read-back refusal", err)
 	}
 }

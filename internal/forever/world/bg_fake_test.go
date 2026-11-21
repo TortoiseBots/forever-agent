@@ -46,6 +46,10 @@ type bgWorld struct {
 	portAccept bool
 	// portSends counts the port packets whose accept bit was set.
 	portSends int
+	// statusQueueID is the packed queue id the fake's statuses name; zero means the list's own queue.
+	statusQueueID uint64
+	// statusSlot is the ticket slot the fake's statuses name; zero means the default 3.
+	statusSlot uint32
 }
 
 // newBGWorld plants one battlemaster creature at the character's own position (in reach) and answers the queue
@@ -147,19 +151,45 @@ func (v *bgWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 	}
 }
 
-// ticketPayload writes the fixed test ticket (the character's own GUID, slot 3, battlegrounds kind).
+// ticketPayload writes the fixed test ticket (the character's own GUID, the fake's slot, battlegrounds kind).
 func (v *bgWorld) ticketPayload(b *wire.Buffer) {
+	v.ticketPayloadAt(b, v.testSlot())
+}
+
+// ticketPayloadAt writes one ticket with the given slot.
+func (v *bgWorld) ticketPayloadAt(b *wire.Buffer, slot uint32) {
 	wire.WritePackedGUID(b, itemSelf)
-	b.WriteU32(3)
+	b.WriteU32(slot)
 	b.WriteU32(uint32(bg.RideBattlegrounds))
 	b.WriteU64(0x11223344)
 	b.WriteBit(false)
 	b.FlushBits()
 }
 
+// testSlot is the ticket slot the fake's statuses name.
+func (v *bgWorld) testSlot() uint32 {
+	if v.statusSlot != 0 {
+		return v.statusSlot
+	}
+	return 3
+}
+
+// testQueueID is the packed queue id the fake's statuses name.
+func (v *bgWorld) testQueueID() uint64 {
+	if v.statusQueueID != 0 {
+		return v.statusQueueID
+	}
+	return bg.PackQueueID(uint16(v.supportListID()))
+}
+
 // headerPayload writes the fixed test header around one queue id.
 func (v *bgWorld) headerPayload(b *wire.Buffer, queues []uint64) {
-	v.ticketPayload(b)
+	v.headerPayloadAt(b, v.testSlot(), queues)
+}
+
+// headerPayloadAt writes one header for the given ticket slot and queue ids.
+func (v *bgWorld) headerPayloadAt(b *wire.Buffer, slot uint32, queues []uint64) {
+	v.ticketPayloadAt(b, slot)
 	b.WriteU32(uint32(len(queues)))
 	b.WriteU8(10)
 	b.WriteU8(60)
@@ -209,8 +239,13 @@ func (v *bgWorld) supportListID() int32 {
 // queuedPayload writes one queued status around the test queue id: the header first, then the average wait, the
 // wait, the spec and the three bits (BattlegroundPackets.cpp:226-238).
 func (v *bgWorld) queuedPayload() []byte {
+	return v.queuedPayloadAt(v.testSlot(), v.testQueueID())
+}
+
+// queuedPayloadAt writes one queued status for the given slot and packed queue id.
+func (v *bgWorld) queuedPayloadAt(slot uint32, queueID uint64) []byte {
 	b := wire.NewWriter()
-	v.headerPayload(b, []uint64{0x1F10000000000002})
+	v.headerPayloadAt(b, slot, []uint64{queueID})
 	b.WriteU32(30)
 	b.WriteU32(12)
 	b.WriteI32(0)
@@ -225,7 +260,7 @@ func (v *bgWorld) queuedPayload() []byte {
 // (BattlegroundPackets.cpp:202-210).
 func (v *bgWorld) needConfirmPayload() []byte {
 	b := wire.NewWriter()
-	v.headerPayload(b, []uint64{0x1F10000000000002})
+	v.headerPayload(b, []uint64{v.testQueueID()})
 	b.WriteU32(489)
 	b.WriteU32(90000)
 	b.WriteU8(0)
@@ -235,7 +270,7 @@ func (v *bgWorld) needConfirmPayload() []byte {
 // activePayload writes one active status.
 func (v *bgWorld) activePayload() []byte {
 	b := wire.NewWriter()
-	v.headerPayload(b, []uint64{0x1F10000000000002})
+	v.headerPayload(b, []uint64{v.testQueueID()})
 	b.WriteU32(489)
 	b.WriteU32(0)
 	b.WriteU32(300)
@@ -257,7 +292,7 @@ func (v *bgWorld) nonePayload() []byte {
 func (v *bgWorld) failedPayload(reason uint32) []byte {
 	b := wire.NewWriter()
 	v.ticketPayload(b)
-	b.WriteU64(0x1F10000000000002)
+	b.WriteU64(v.testQueueID())
 	b.WriteU32(reason)
 	wire.WritePackedGUID(b, itemSelf)
 	return b.Bytes()
@@ -530,10 +565,11 @@ func TestBGAcceptExpiredInviteRefuses(t *testing.T) {
 	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err != nil {
 		t.Fatalf("bg-queue: %v", err)
 	}
-	if v.s.bg.needConfirm == nil {
+	st := v.s.bg.queue(v.s.bg.selected)
+	if st == nil || st.needConfirm == nil {
 		t.Fatal("the invite is not recorded")
 	}
-	v.s.bg.needConfirmAt = v.now.Add(-2 * time.Duration(v.s.bg.needConfirm.Timeout) * time.Millisecond)
+	st.needConfirmAt = v.now.Add(-2 * time.Duration(st.needConfirm.Timeout) * time.Millisecond)
 	if err := v.s.actBGAccept(v.s.ctx, a, mustItemStep(t, "bg-accept")); err == nil {
 		t.Fatal("bg-accept took an expired invite")
 	} else if !strings.Contains(err.Error(), "expired") {
@@ -557,5 +593,47 @@ func TestBGQueueRejectsAnUnpackableListID(t *testing.T) {
 	}
 	if n := v.clientSends(wire.CMSGBattlemasterJoin); n != 0 {
 		t.Fatalf("%d join packet(s), want 0", n)
+	}
+}
+
+// TestBGQueueIgnoresAnotherQueuesStatus is the round's join-correlation case: a status for another queue the
+// character already sits in is not this join's answer. The step must fail on the silence, never report a queue it
+// did not join.
+func TestBGQueueIgnoresAnotherQueuesStatus(t *testing.T) {
+	v := newBGWorld(t, npc.NPCFlagBattlemaster)
+	v.statusQueueID = bg.PackQueueID(3) // the status names a queue other than the joined list's 2
+	a := v.state(t)
+	err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue"))
+	if err == nil {
+		t.Fatal("bg-queue took another queue's status as its own")
+	} else if !strings.Contains(err.Error(), "no status for queue") {
+		t.Fatalf("bg-queue failed with %q, want the correlation refusal", err)
+	}
+	if v.s.bg.hasSelected {
+		t.Fatalf("bg-queue selected queue %#x although its status never came", v.s.bg.selected)
+	}
+}
+
+// TestBGLeaveKeepsTheOtherQueue is the round's leave-correlation case: with two queues interleaved, bg-leave echoes
+// the selected queue's ticket slot and the NONE for that slot leaves the other queue's state untouched.
+func TestBGLeaveKeepsTheOtherQueue(t *testing.T) {
+	v := newBGWorld(t, npc.NPCFlagBattlemaster)
+	a := v.state(t)
+	if err := v.s.actBGQueue(v.s.ctx, a, mustItemStep(t, "bg-queue")); err != nil {
+		t.Fatalf("bg-queue: %v", err)
+	}
+	other := bg.PackQueueID(3)
+	v.deliver(wire.SMSGBattlefieldStatusQueued, v.queuedPayloadAt(4, other))
+	if err := v.s.actBGLeave(v.s.ctx, a, mustItemStep(t, "bg-leave")); err != nil {
+		t.Fatalf("bg-leave: %v", err)
+	}
+	if v.portTicket.ID != 3 {
+		t.Fatalf("the leave ticket slot = %d, want the selected queue's 3 (never the other queue's 4)", v.portTicket.ID)
+	}
+	if v.s.bg.queue(bg.PackQueueID(2)) != nil {
+		t.Fatal("the left queue's status is still in the watch")
+	}
+	if v.s.bg.queue(other) == nil {
+		t.Fatal("the other queue's status was dropped by the leave")
 	}
 }

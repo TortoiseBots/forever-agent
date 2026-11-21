@@ -55,8 +55,12 @@ The facts that decide the flow:
   mail (`HandleMailDelete`, MailHandler.cpp:396-413), so `mail-delete` re-reads the list first and refuses a mail
   that still holds items, money or a COD.
 * **A send needs the caller's allow-list.** `send-mail` accepts only a name on `--mail-to NAME=GUID`, the guid must
-  answer that exact name to a `CMSG_QUERY_PLAYER_NAMES` query, and the money may not pass `--mail-money-cap`. The
-  send packet names a name, so this is the only way the step knows the guid it pays.
+  answer that exact name in the answer to this step's own `CMSG_QUERY_PLAYER_NAMES` query (the answer's row is
+  parsed directly; a name the client cached earlier is never proof), and the money may not pass `--mail-money-cap`.
+  The send packet names a name, so this is the only way the step knows the guid it pays.
+* **A send's money is read back.** After `MAIL_OK` the step waits for the wallet to show the exact debit: the money
+  plus the core's postage (30 copper for a mail with no attachments, `HandleSendMail`). A missing update, or one
+  that charges a different amount, fails the step as unconfirmed.
 
 ### The server's answers
 
@@ -92,6 +96,10 @@ The facts that decide the flow:
 * **The join names the list's packed queue id.** The queue id packs the list id with the fixed high marker
   (`BattlegroundQueueTypeId::GetPacked`, SharedDefines.h): `PackQueueID` builds it, and the step sends roles and
   blacklists as zero.
+* **Every status is correlated to its queue.** The queued, invite and active headers carry the packed queue id
+  (`BuildBattlegroundStatusHeader`), and a failed status carries it beside the ticket; only `NONE` names the ticket
+  slot alone. The watch keeps one status per slot and `bg-queue` records the queue it joined: another queue's
+  status, invite or `NONE` never makes the join look successful, gets accepted, or leaves the wrong queue.
 * **The port echoes the invite's ticket.** The handler points the port at the queue the player really is in
   (BattleGroundHandler.cpp `HandleBattleFieldPortOpcode`), so the accept sends the need-confirmation's own
   ticket with the accept bit set. A queue is left the same way, with the queued (or invited) ticket and the accept

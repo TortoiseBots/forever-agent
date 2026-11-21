@@ -60,6 +60,7 @@ func newItemWorld(t *testing.T) *itemWorld {
 	s := &session{
 		opts:        opts,
 		ctx:         context.Background(),
+		events:      make(chan event, 16),
 		world:       f.world,
 		report:      &Report{Counts: map[string]int{}},
 		fightSender: f,
