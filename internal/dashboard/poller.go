@@ -105,6 +105,11 @@ func (p *Poller) Tick(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if a.Kind == AgentForever {
+				c, raw := p.pollForeverOne(ctx, newForeverClient(a, p.opt.CallTimeout), now)
+				res[i] = result{c, raw}
+				return
+			}
 			cl := p.client(a)
 			c, raw := p.pollOne(ctx, cl, now)
 			res[i] = result{c, raw}

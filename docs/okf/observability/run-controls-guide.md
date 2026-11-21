@@ -43,7 +43,7 @@ Every flag and its default:
 
 ## 3. Send a control
 
-The page sends `POST /api/control/<agent-id>/run` with `{"verb": "pause" | "resume" | "skip" | "stop", "confirm": true|false}`. `pause` and `stop` need `"confirm": true`. The verbs reach the agent as `dungeon_pause`, `dungeon_resume`, `dungeon_skip`, `dungeon_stop`. One control runs per agent at a time; each token label may send 30 a minute. The same works with curl:
+The page sends `POST /api/control/<agent-id>/run` with `{"verb": "pause" | "resume" | "skip" | "stop", "confirm": true|false}`. `pause` and `stop` need `"confirm": true`. The verbs reach the agent as `dungeon_pause`, `dungeon_resume`, `dungeon_skip`, `dungeon_stop`. One control runs per agent at a time; each token label may send 30 a minute. On a serve slot (`"server": "forever"`) the order buttons (stay, follow, come, attack, pull, release) and run pause/resume/stop all call `commander {op:cmd|run}` instead; the module's `run-active` and `not-available` answers come back shown as the reply. No `tbm*` call is ever made on a Forever agent. The same works with curl:
 
 ```sh
 curl -X POST http://127.0.0.1:8790/api/control/<slot>/run \

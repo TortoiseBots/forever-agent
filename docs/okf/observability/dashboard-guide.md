@@ -34,6 +34,8 @@ turtle-agent dashboard --agents 8765,8766
 
 A comma list of RPC ports or addresses replaces `auto`; `auto,8770` adds one to the automatic set. Only loopback addresses are accepted.
 
+A settings file with `"server": "forever"` marks a serve slot: that entry is polled with `status`, `party`, `commander {op:status}`, `units {within:100}` and the `event_log` tail instead of the turtle reads below, and its card fills the same fields (self, bots with role/hp/pos/order, mobs, run state, stall) from those answers. Guids stay text, keyed by the serve key.
+
 ## 3. Point it at your folders
 
 ```sh
@@ -57,7 +59,7 @@ Every flag and its default:
 
 The table above leaves out the `--edit*` and `--control*` flags on purpose: route editing lives in [Turn on route editing](route-editing-guide.md) and run controls in [Control a run from the dashboard](run-controls-guide.md), with every flag also listed in [Command and flag reference](commands-reference.md).
 
-The page polls each agent every 1.5 s (`Interval`), with a 2 s bound per agent (`CallTimeout`). It calls four RPC methods only: `status`, `dungeon_status`, `tune_list`, and `bot_view`.
+The page polls each agent every 1.5 s (`Interval`), with a 2 s bound per agent (`CallTimeout`). On a turtle agent it calls four RPC methods only: `status`, `dungeon_status`, `tune_list`, and `bot_view`. On a serve slot it calls `status`, `party`, `commander {op:status}`, `units {within:100}`, and the `event_log` tail.
 
 ## 4. Open the page from another machine
 

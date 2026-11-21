@@ -38,6 +38,13 @@ type Inputs struct {
 	PlanCopy  *PlanCopy // which plan file is drawn and which one the run reads
 	StatusErr string    // why the status call failed, when it did
 	WasOnline bool
+	// Party, Commander and Units are the serve poll's answers, set only
+	// for a Forever agent (a slot with "server":"forever"): party, the
+	// commander {op:status} answer, and units {within:100}. The turtle
+	// poll leaves them nil.
+	Party     json.RawMessage
+	Commander json.RawMessage
+	Units     json.RawMessage
 }
 
 // Card is everything the page shows of one commander. It is built from an allow-list of fields (never from a raw reply), so no
