@@ -1953,6 +1953,27 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		s.fight.lastSwingErr = v.Reason
 		s.fight.swingErrSeq++
 		s.fight.add("swing", "swing error: "+v.Reason.String(), 0)
+	case wire.SMSGAIReaction:
+		v, err := combat.ParseAIReaction(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		// A mob turned hostile: who pulled, and an accidental-aggro signal beside the attack start that
+		// follows it. Every reaction is a combat row (kind "hostile", the source guid in the record) so the
+		// watch can see the pull moment without a fight; the fight log only notes the self's own.
+		s.combatRow("hostile", now, int32(v.Kind), 0, v.Unit, wire.EmptyGUID, v.Kind.String())
+		if v.Unit == s.self {
+			s.fight.add("hostile", fmt.Sprintf("you turned %s", v.Kind.String()), 0)
+		} else if o, ok := s.world.Object(v.Unit); ok {
+			name := s.world.Name(o)
+			if name == "" {
+				name = v.Unit.String()
+			}
+			s.fight.add("hostile", fmt.Sprintf("%s turned %s", name, v.Kind.String()), 0)
+		} else {
+			s.fight.add("hostile", fmt.Sprintf("%s turned %s", v.Unit.String(), v.Kind.String()), 0)
+		}
 	case wire.SMSGAttackerStateUpdate:
 		v, err := combat.ParseAttackerStateUpdate(p.Payload)
 		if err != nil {

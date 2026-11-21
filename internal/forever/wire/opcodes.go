@@ -152,12 +152,15 @@ const (
 	SMSGAuraUpdate           uint32 = 0x670011
 	SMSGSpellCooldown        uint32 = 0x670005
 	SMSGCooldownEvent        uint32 = 0x450165
-	SMSGClearCooldown        uint32 = 0x450166
-	SMSGClearCooldowns       uint32 = 0x670015
-	SMSGPowerUpdate          uint32 = 0x45017E
-	SMSGSpellDelayed         uint32 = 0x670032
-	SMSGLogXPGain            uint32 = 0x450190
-	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	// SMSG_AI_REACTION 0x450161 (CombatPackets.h:124-133): the unit that reacted and the reaction as a
+	// uint32; HOSTILE marks the pull moment (Unit.cpp:6242).
+	SMSGAIReaction      uint32 = 0x450161
+	SMSGClearCooldown   uint32 = 0x450166
+	SMSGClearCooldowns  uint32 = 0x670015
+	SMSGPowerUpdate     uint32 = 0x45017E
+	SMSGSpellDelayed    uint32 = 0x670032
+	SMSGLogXPGain       uint32 = 0x450190
+	SMSGDeathReleaseLoc uint32 = 0x45017F
 	// The rest of the death flow (Opcodes.h:27, 228, 1948-1976, 377, 430, 1318): the graveyard, the corpse, a
 	// resurrection offer, the spirit healer's menu and the movement state a ghost is given.
 	SMSGResurrectRequest     uint32 = 0x450012
