@@ -146,43 +146,10 @@ func (t *dummyRun) strangerNear(ctx context.Context) (string, bool) {
 	return "", false
 }
 
-// bringHire puts the hire in the arena and proves it within 10 yards: the
-// party teleport first, then the module's come order, then a failure log
-// (the fight still runs; the hire's distance is not a scored row).
-func (t *dummyRun) bringHire(ctx context.Context, name string) {
-	a := t.arena
-	if a != nil {
-		if err := teleHires(ctx, t.tb, t.r, a); err != nil {
-			t.sit.logf("hire teleport refused (%v); asking %s to come", err, name)
-			_, _ = t.tb.Come(ctx, name)
-		}
-	}
-	deadline := t.sit.now().Add(45 * time.Second)
-	for {
-		u, err := t.unitByName(ctx, name)
-		if err == nil && u.Distance <= 10 {
-			t.r.Marks.Add(map[string]any{"kind": "hire_brought", "bot": name, "distance": u.Distance})
-			return
-		}
-		if t.sit.now().After(deadline) || ctx.Err() != nil {
-			t.sit.logf("hire %s is not within 10 yd (distance %v)", name, distanceOf(u, err))
-			return
-		}
-		sleepCtx(ctx, time.Second)
-	}
-}
-
-func (t *dummyRun) unitByName(ctx context.Context, name string) (Unit, error) {
-	units, err := t.r.Client.UnitsFilter(ctx, 100, 0, name)
-	if err != nil {
-		return Unit{}, err
-	}
-	for _, u := range units {
-		if equalFold(u.Name, name) {
-			return u, nil
-		}
-	}
-	return Unit{}, errf("no unit named %s in view", name)
+// bringHire puts the repeat's hires in the arena (bringHires) and returns why it could not, "" when it did.
+func (t *dummyRun) bringHire(ctx context.Context, name string) string {
+	_ = name
+	return bringHires(ctx, t.tb, t.r, t.sit, t.arena)
 }
 
 // claim finds the unit an `.npc add temp` produced: a fresh unit of the
@@ -264,7 +231,17 @@ func (t *dummyRun) dummyReadyRow(ctx context.Context) map[string]any {
 // the engagement proof when the dummy never fights back).
 func (t *dummyRun) waitDummyFight(ctx context.Context, timeout time.Duration) bool {
 	deadline := t.sit.now().Add(timeout)
+	var lastStranger time.Time
 	for {
+		// The wait for the first engagement is up to a minute, with the bot about to cast at the dummy: a real
+		// player arriving in it ends the repeat, as it would in the fight itself.
+		if lastStranger.IsZero() || t.sit.now().Sub(lastStranger) >= strangerEvery {
+			lastStranger = t.sit.now()
+			if why, near := t.strangerNear(ctx); near {
+				t.strangerWhy = why
+				return false
+			}
+		}
 		if t.dummyEngaged(ctx) {
 			return true
 		}

@@ -267,7 +267,9 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	// teardown: nothing is released here.
 
 	if name := t.r.BotName; name != "" {
-		t.bringHire(ctx, name)
+		if why := t.bringHire(ctx, name); why != "" {
+			return hireNotBrought(why), nil
+		}
 	}
 	// prepull_unaura and reset_hire_cooldowns run before the first summon:
 	// the hire is reused across repeats, so a form or a cooldown from the
@@ -681,50 +683,10 @@ func (t *tankRun) strangerNear(ctx context.Context) (string, bool) {
 
 // ---- hire ---------------------------------------------------------------
 
-// bringHire puts the hire in the arena and proves it within 10 yards: the
-// party teleport first, then the module's come order, then a failure log
-// (the fight still runs; the hire's distance is not a scored row).
-func (t *tankRun) bringHire(ctx context.Context, name string) {
-	a := t.arena
-	if a != nil {
-		if err := teleHires(ctx, t.tb, t.r, a); err != nil {
-			t.sit.logf("hire teleport refused (%v); asking %s to come", err, name)
-			_, _ = t.tb.Come(ctx, name)
-		}
-	}
-	deadline := t.sit.now().Add(45 * time.Second)
-	for {
-		u, err := t.unitByName(ctx, name)
-		if err == nil && u.Distance <= 10 {
-			t.r.Marks.Add(map[string]any{"kind": "hire_brought", "bot": name, "distance": u.Distance})
-			return
-		}
-		if t.sit.now().After(deadline) || ctx.Err() != nil {
-			t.sit.logf("hire %s is not within 10 yd (distance %v)", name, distanceOf(u, err))
-			return
-		}
-		sleepCtx(ctx, time.Second)
-	}
-}
-
-func distanceOf(u Unit, err error) any {
-	if err != nil {
-		return "unreadable"
-	}
-	return u.Distance
-}
-
-func (t *tankRun) unitByName(ctx context.Context, name string) (Unit, error) {
-	units, err := t.r.Client.UnitsFilter(ctx, 100, 0, name)
-	if err != nil {
-		return Unit{}, err
-	}
-	for _, u := range units {
-		if strings.EqualFold(u.Name, name) {
-			return u, nil
-		}
-	}
-	return Unit{}, errf("no unit named %s in view", name)
+// bringHire puts the repeat's hires in the arena (bringHires) and returns why it could not, "" when it did.
+func (t *tankRun) bringHire(ctx context.Context, name string) string {
+	_ = name
+	return bringHires(ctx, t.tb, t.r, t.sit, t.arena)
 }
 
 // ---- summoning ----------------------------------------------------------

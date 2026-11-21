@@ -761,7 +761,9 @@ func (t *tankRun) runOOC(ctx context.Context) (map[string]any, error) {
 		return map[string]any{"ok": false, "ended": "no arena", "invalid_reason": why}, nil
 	}
 	if name := t.r.BotName; name != "" {
-		t.bringHire(ctx, name)
+		if why := t.bringHire(ctx, name); why != "" {
+			return hireNotBrought(why), nil
+		}
 	}
 	var lastStranger time.Time
 	if t.strangerTick(ctx, &lastStranger) {
@@ -989,7 +991,9 @@ func (t *tankRun) runOOCHurt(ctx context.Context) (map[string]any, error) {
 	// The hire stands in the arena too: a healer out of range would score a
 	// scene that is not the trial's.
 	if name := t.r.BotName; name != "" {
-		t.bringHire(ctx, name)
+		if why := t.bringHire(ctx, name); why != "" {
+			return hireNotBrought(why), nil
+		}
 	}
 	var lastStranger time.Time
 	if t.strangerTick(ctx, &lastStranger) {
