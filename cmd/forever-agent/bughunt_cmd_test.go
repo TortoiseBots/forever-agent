@@ -189,7 +189,9 @@ func TestBughuntCommandRefusesMalformedCombatLog(t *testing.T) {
 // TestSelectedRulesAreInRuleOrder: the registry is handed out in rule order (the doc's "in rule order"), including
 // the tactics rules that join last, so counts.json and the ticket list do not shuffle with registration order.
 func TestSelectedRulesAreInRuleOrder(t *testing.T) {
-	want := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19}
+	want := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20}
+	// Without a tactics file the selected list is the frame and event rules: 16-19 are the tactics rules only.
+	noTactics := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 20}
 	numbers := func(rules []bughunt.Rule) []int {
 		out := make([]int, 0, len(rules))
 		for _, r := range rules {
@@ -204,7 +206,7 @@ func TestSelectedRulesAreInRuleOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := numbers(all), want[:13]; !reflect.DeepEqual(got, want) {
+	if got, want := numbers(all), noTactics; !reflect.DeepEqual(got, want) {
 		t.Fatalf("order %v, want %v", got, want)
 	}
 	tac := &bughunt.Tactics{Creatures: map[uint32]*bughunt.TacticEntry{113: {Entry: 113}}}
