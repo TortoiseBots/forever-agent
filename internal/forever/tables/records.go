@@ -7,6 +7,8 @@ package tables
 // false for those).
 
 import (
+	"fmt"
+
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -167,6 +169,13 @@ type ItemSparse struct {
 	AllowableClass int16 // -1 means every class
 }
 
+// itemSparseFixedSize is the fixed part after the five strings: 9 int/float,
+// three 10-entry arrays, 23 int/float, 18 uint16/int16 and 18 byte fields
+// (DB2LoadInfo.h:3370-3478). The layout is the same in the older core the
+// agent was read against and in 0.1.39, so no per-core switch: a different
+// line would come with a different table layout hash (0x6FCC3191).
+const itemSparseFixedSize = 302
+
 // ParseItemSparse decodes one ItemSparse record. WriteRecord writes the LoadInfo fields
 // in declaration order (DB2Store.cpp:42-97), and ItemSparse's declaration
 // (DB2LoadInfo.h:3370-3478) is the five localized strings first — Description, Display3,
@@ -175,7 +184,43 @@ type ItemSparse struct {
 // are the hotfix optional-data pairs (HotfixHandler.cpp:52-58), ignored like
 // ParseSpellName's tail; a record that ends before its fixed part is an error.
 func ParseItemSparse(data []byte, id uint32) (ItemSparse, error) {
-	return ItemSparse{ID: id}, nil
+	b := wire.NewReader(data)
+	e := ItemSparse{ID: id}
+	e.Description = readCString(b)
+	readCString(b)          // Display3
+	readCString(b)          // Display2
+	readCString(b)          // Display1
+	e.Name = readCString(b) // Display: the name the client shows
+	if err := b.Err(); err != nil {
+		return ItemSparse{}, err
+	}
+	if b.Remaining() < itemSparseFixedSize {
+		return ItemSparse{}, fmt.Errorf("tables: ItemSparse record for %d has %d bytes after its strings, want %d",
+			id, b.Remaining(), itemSparseFixedSize)
+	}
+	b.Skip(9 * 4)  // ExpansionID .. ItemRange
+	b.Skip(30 * 4) // StatPercentageOfSocket1-10, StatPercentEditor1-10, StatModifierBonusStat1-10
+	e.Stackable = b.ReadI32()
+	b.Skip(5 * 4) // MaxCount, MinReputation, RequiredAbility, AllowableRace1-2
+	e.SellPrice = b.ReadU32()
+	e.BuyPrice = b.ReadU32()
+	b.Skip(15 * 4) // VendorStackCount .. ItemSquishEraID
+	b.Skip(16 * 2) // ItemNameDescriptionID .. RequiredSkill
+	e.ItemLevel = b.ReadU16()
+	e.AllowableClass = b.ReadI16()
+	b.Skip(9) // ArtifactID .. PageMaterialID
+	e.Bonding = b.ReadU8()
+	b.Skip(1) // DamageDamageType
+	e.ContainerSlots = b.ReadU8()
+	b.Skip(2) // RequiredPVPMedal, RequiredPVPRank
+	e.RequiredLevel = b.ReadI8()
+	e.InventoryType = b.ReadI8()
+	e.Quality = b.ReadI8()
+	b.Skip(1) // AmmunitionType: this is not the quality
+	if err := b.Err(); err != nil {
+		return ItemSparse{}, err
+	}
+	return e, nil
 }
 
 // ItemRecord is an Item.db2 record, the fields this round reads. ItemMeta has IndexField
@@ -191,5 +236,26 @@ type ItemRecord struct {
 // is 43 bytes, ClassID i32 first. Only the class pair is kept; the tail is the hotfix
 // optional-data pairs, ignored.
 func ParseItem(data []byte, id uint32) (ItemRecord, error) {
-	return ItemRecord{ID: id}, nil
+	b := wire.NewReader(data)
+	r := ItemRecord{ID: id}
+	r.Class = b.ReadI32()
+	r.Subclass = b.ReadU8()
+	b.Skip(1) // Material
+	r.InventoryType = b.ReadI8()
+	b.Skip(1) // SheatheType
+	b.Skip(4) // ItemPetFoodID
+	b.Skip(1) // SoundOverrideSubclassID
+	b.Skip(4) // IconFileDataID
+	b.Skip(4) // ItemGroupSoundsID
+	b.Skip(4) // ContentTuningID
+	b.Skip(4) // ModifiedCraftingReagentItemID
+	b.Skip(1) // Unknown1200
+	b.Skip(4) // CraftingQualityID
+	b.Skip(4) // ItemSquishEraID
+	b.Skip(4) // RecraftReagentCountPercentage
+	b.Skip(1) // OrderSource
+	if err := b.Err(); err != nil {
+		return ItemRecord{}, err
+	}
+	return r, nil
 }

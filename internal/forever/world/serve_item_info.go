@@ -57,8 +57,8 @@ type ServeItemFields struct {
 	ContainerSlots uint8  `json:"container_slots"`
 }
 
-// qualityNames is the client's item-quality ladder (ItemQuality, the core's own
-// order in DBCEnums.h): 0 poor through 7 heirloom.
+// qualityNames is the client's item-quality ladder, 0 poor through 7 heirloom
+// (ItemQuality, SharedDefines.h:384).
 var qualityNames = [...]string{"poor", "common", "uncommon", "rare", "epic", "legendary", "artifact", "heirloom"}
 
 // qualityName names a quality id; an id past the ladder stays unnamed rather
