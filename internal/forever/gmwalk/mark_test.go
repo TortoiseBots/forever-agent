@@ -63,14 +63,20 @@ func TestParseMarkRefusals(t *testing.T) {
 
 func TestMarkLandsAtTheGM(t *testing.T) {
 	r := &Recorder{}
-	r.AddSample(Sample{Map: 1, X: 100, Y: 200, Z: 30})
-	if err := r.Mark(Mark{Kind: MarkPoint, Name: "gate"}); err != nil {
+	r.AddSample(Sample{Map: 0, X: 0, Y: 0, Z: 0})
+	// The live tap passes the GM's own object position read from the model, not a sample: the samples here
+	// are decoys from the follower's chase path.
+	pos := Sample{Map: 1, X: 100, Y: 200, Z: 30}
+	if err := r.MarkAtGM(pos, true, Mark{Kind: MarkPoint, Name: "gate"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Mark(Mark{Kind: MarkZone, Name: "lava", Radius: 25}); err != nil {
+	if err := r.MarkAtGM(pos, true, Mark{Kind: MarkZone, Name: "lava", Radius: 25}); err != nil {
 		t.Fatal(err)
 	}
-	d := r.Build(0)
+	d, err := r.Build(0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(d.Points) != 1 || d.Points[0].X != 100 || d.Points[0].Y != 200 || d.Points[0].Z != 30 || d.Points[0].Map != 1 {
 		t.Fatalf("point: %+v", d.Points)
 	}
@@ -79,16 +85,47 @@ func TestMarkLandsAtTheGM(t *testing.T) {
 	}
 }
 
+func TestMarkAtSampleIndex(t *testing.T) {
+	// The dry path names the sample each mark belongs to.
+	r := &Recorder{}
+	r.AddSample(Sample{Map: 1, X: 5, Y: 5, Z: 5})
+	r.AddSample(Sample{Map: 1, X: 6, Y: 6, Z: 6})
+	if err := r.MarkAt(1, Mark{Kind: MarkPoint, Name: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := r.Build(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Points) != 1 || d.Points[0].X != 6 {
+		t.Fatalf("points: %+v", d.Points)
+	}
+	if err := r.MarkAt(9, Mark{Kind: MarkPoint, Name: "past"}); err == nil {
+		t.Fatal("mark past the samples must fail")
+	}
+	// Two marks with one name is a refusal: names become SQL comments and file stems, so one name names one mark.
+	if err := r.MarkAtGM(Sample{Map: 1}, true, Mark{Kind: MarkPoint, Name: "gate"}); err == nil {
+		t.Fatal("duplicate mark name must fail")
+	}
+}
+
 func TestMarkBeforeAnySampleIsCounted(t *testing.T) {
 	r := &Recorder{}
-	if err := r.Mark(Mark{Kind: MarkPoint, Name: "early"}); err == nil {
-		t.Fatal("mark with no position must fail")
+	// The GM's position comes from the world model, not from samples: a known GM position stamps the mark
+	// even before the first sample exists.
+	if err := r.MarkAtGM(Sample{Map: 1, X: 1, Y: 1, Z: 1}, true, Mark{Kind: MarkPoint, Name: "early"}); err != nil {
+		t.Fatalf("mark at a known GM position: %v", err)
+	}
+	// An unknown GM position (not in the model) is ignored and counted, never stamped at the agent.
+	if err := r.MarkAtGM(Sample{}, false, Mark{Kind: MarkPoint, Name: "lost"}); err == nil {
+		t.Fatal("mark with no GM position must fail")
 	}
 	if r.Ignored() != 1 {
 		t.Fatalf("ignored %d, want 1", r.Ignored())
 	}
-	if d := r.Build(0); len(d.Points) != 0 {
-		t.Fatalf("no position, no point: %+v", d.Points)
+	// And a split with no sample at all is a refusal, not a cut of nothing.
+	if err := r.MarkAtGM(Sample{}, false, Mark{Kind: MarkSplit}); err == nil {
+		t.Fatal("split with no samples must fail")
 	}
 }
 

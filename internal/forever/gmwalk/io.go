@@ -87,8 +87,15 @@ func decodeStrict(raw []byte, v any) error {
 }
 
 // WriteFile validates the data and writes it atomically: a temp file in the folder, then a rename. A broken
-// record is never half-written.
+// record is never half-written. An existing target is refused unless force: a second walk never destroys an
+// earlier world-data file by accident. The output folder, when named, must already exist: the writer never
+// creates directories.
 func WriteFile(path string, d WorldData) error {
+	return WriteFileForce(path, d, false)
+}
+
+// WriteFileForce is WriteFile with the caller's overwrite choice: force replays over an earlier run's target.
+func WriteFileForce(path string, d WorldData, force bool) error {
 	if err := Validate(d); err != nil {
 		return err
 	}
@@ -100,10 +107,10 @@ func WriteFile(path string, d WorldData) error {
 	if len(raw) > MaxDataBytes {
 		return fmt.Errorf("gmwalk: the output is %d bytes past the %d bound", len(raw), MaxDataBytes)
 	}
-	return writeAtomic(path, raw, 0o644)
+	return writeAtomic(path, raw, 0o644, force)
 }
 
-func writeAtomic(path string, raw []byte, perm os.FileMode) error {
+func writeAtomic(path string, raw []byte, perm os.FileMode, force bool) error {
 	dir := dirOf(path)
 	if dir != "" {
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
@@ -113,6 +120,9 @@ func writeAtomic(path string, raw []byte, perm os.FileMode) error {
 	if fi, err := os.Lstat(path); err == nil {
 		if !fi.Mode().IsRegular() {
 			return fmt.Errorf("gmwalk: %s exists and is not a plain file; nothing was written", path)
+		}
+		if !force {
+			return fmt.Errorf("gmwalk: %s exists; pass --force to overwrite it", path)
 		}
 	}
 	f, err := os.CreateTemp(dirOrDot(dir), ".gm-walk-*.tmp")
@@ -207,11 +217,17 @@ const DefaultRoadWidthYd = 8.0
 
 // Convert renders world data in the module's shape. Roads become one straight row per hop (the loader only
 // knows from/to segments); zones and points pass through with their names. Verified is always false: a walk
-// is raw material, and a human marks it verified on the module side.
-func Convert(d WorldData) ModuleData {
+// is raw material, and a human marks it verified on the module side. A one-point road renders no row: the
+// loader's segments need two ends, so the dropped hop is reported, never faked.
+func Convert(d WorldData) (ModuleData, int) {
 	out := ModuleData{Version: d.Version, Roads: []RoadRow{}, Zones: []ZoneShape{}, Points: []PointShape{}}
+	dropped := 0
 	for i := range d.Roads {
 		r := &d.Roads[i]
+		if len(r.Points) < 2 {
+			dropped++
+			continue
+		}
 		for j := 1; j < len(r.Points); j++ {
 			a, b := r.Points[j-1], r.Points[j]
 			out.Roads = append(out.Roads, RoadRow{
@@ -234,11 +250,74 @@ func Convert(d WorldData) ModuleData {
 		p := &d.Points[i]
 		out.Points = append(out.Points, PointShape{Name: p.Name, Map: p.Map, X: p.X, Y: p.Y, Z: p.Z})
 	}
-	return out
+	return out, dropped
 }
 
-// WriteModule validates the data and writes the converter's JSON atomically.
+// WriteModule validates the converter's rows the way WriteModuleForce says, then writes the JSON atomically.
 func WriteModule(path string, m ModuleData) error {
+	return WriteModuleForce(path, m, false)
+}
+
+// WriteModuleForce validates and writes the converter's JSON: every road row is finite and inside the world
+// bound, the point and zone names keep the mark rules, radii stay in range, and duplicate names are refused
+// (the same reason the recorder refuses them: names become SQL comments and file stems). The comment names the
+// walk, never who walked it. An existing target is refused unless force.
+func WriteModuleForce(path string, m ModuleData, force bool) error {
+	seen := map[string]bool{}
+	dup := func(kind, name string) error {
+		if name == "" {
+			return fmt.Errorf("gmwalk: module %s has an empty name", kind)
+		}
+		if seen[name] {
+			return fmt.Errorf("gmwalk: duplicate module %s name %q", kind, name)
+		}
+		seen[name] = true
+		return nil
+	}
+	for i := range m.Roads {
+		r := &m.Roads[i]
+		for _, c := range []float32{r.FromX, r.FromY, r.ToX, r.ToY} {
+			if err := checkCoord(c, c, 0); err != nil {
+				return fmt.Errorf("gmwalk: module road %d: %w", i, err)
+			}
+		}
+		if !finite(r.Width) || r.Width <= 0 || r.Width > MaxCoord {
+			return fmt.Errorf("gmwalk: module road %d: width %v yd is out of range", i, r.Width)
+		}
+		if r.Verified {
+			return fmt.Errorf("gmwalk: module road %d is verified; a walk is raw material, never verified", i)
+		}
+		if len(r.Comment) > MaxTextLen {
+			return fmt.Errorf("gmwalk: module road %d comment is past %d bytes", i, MaxTextLen)
+		}
+	}
+	for i := range m.Zones {
+		z := &m.Zones[i]
+		if err := checkName(z.Name); err != nil {
+			return fmt.Errorf("gmwalk: module zone %d: %w", i, err)
+		}
+		if err := dup("zone", z.Name); err != nil {
+			return err
+		}
+		if err := checkCoord(z.X, z.Y, z.Z); err != nil {
+			return fmt.Errorf("gmwalk: module zone %d: %w", i, err)
+		}
+		if !finite(z.RadiusYd) || z.RadiusYd < float32(MinRadiusYd) || z.RadiusYd > float32(MaxRadiusYd) {
+			return fmt.Errorf("gmwalk: module zone %d: radius %v yd is outside %.0f-%.0f", i, z.RadiusYd, MinRadiusYd, MaxRadiusYd)
+		}
+	}
+	for i := range m.Points {
+		p := &m.Points[i]
+		if err := checkName(p.Name); err != nil {
+			return fmt.Errorf("gmwalk: module point %d: %w", i, err)
+		}
+		if err := dup("point", p.Name); err != nil {
+			return err
+		}
+		if err := checkCoord(p.X, p.Y, p.Z); err != nil {
+			return fmt.Errorf("gmwalk: module point %d: %w", i, err)
+		}
+	}
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -247,7 +326,7 @@ func WriteModule(path string, m ModuleData) error {
 	if len(raw) > MaxDataBytes {
 		return fmt.Errorf("gmwalk: the output is %d bytes past the %d bound", len(raw), MaxDataBytes)
 	}
-	return writeAtomic(path, raw, 0o644)
+	return writeAtomic(path, raw, 0o644, force)
 }
 
 // MarkedLine is one dry-recording mark: the line the GM's whisper or say carried, applied at the sample
@@ -276,6 +355,9 @@ func (r Recording) validate() error {
 		if !finite(s.X) || !finite(s.Y) || !finite(s.Z) {
 			return fmt.Errorf("gmwalk: sample %d is not finite", i)
 		}
+		if err := checkCoord(s.X, s.Y, s.Z); err != nil {
+			return fmt.Errorf("gmwalk: sample %d: %w", i, err)
+		}
 	}
 	for i, m := range r.Marks {
 		if m.At < 0 || m.At >= len(r.Samples) {
@@ -289,7 +371,8 @@ func (r Recording) validate() error {
 }
 
 // Replay runs a dry recording through the recorder: samples in order, each mark line parsed and applied at
-// its named sample. Unknown lines and marks past the end are counted, never stored.
+// its named sample. Unknown lines and marks past the end are counted, never stored. Past MaxRoads the build
+// ends with the error: a silent truncation would lose the tail.
 func Replay(rec Recording, toleranceYd float64) (WorldData, int, error) {
 	r := &Recorder{}
 	for _, s := range rec.Samples {
@@ -306,5 +389,9 @@ func Replay(rec Recording, toleranceYd float64) (WorldData, int, error) {
 			unknown++
 		}
 	}
-	return r.Build(toleranceYd), unknown, nil
+	d, err := r.Build(toleranceYd)
+	if err != nil {
+		return d, unknown, err
+	}
+	return d, unknown, nil
 }

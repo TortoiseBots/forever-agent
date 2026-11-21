@@ -123,7 +123,10 @@ func TestWriteFileRefusesNonRegularTarget(t *testing.T) {
 }
 
 func TestConvertRendersModuleShape(t *testing.T) {
-	m := Convert(sampleData())
+	m, dropped := Convert(sampleData())
+	if dropped != 0 {
+		t.Fatalf("dropped %d one-point roads, want 0", dropped)
+	}
 	// Map 0's road has 2 hops, map 1's has 1.
 	if len(m.Roads) != 3 {
 		t.Fatalf("%d road rows, want 3", len(m.Roads))
@@ -156,7 +159,10 @@ func TestConvertRendersModuleShape(t *testing.T) {
 }
 
 func TestConvertEmpty(t *testing.T) {
-	m := Convert(WorldData{Version: Version})
+	m, dropped := Convert(WorldData{Version: Version})
+	if dropped != 0 {
+		t.Fatalf("dropped %d, want 0", dropped)
+	}
 	if m.Roads == nil || m.Zones == nil || m.Points == nil {
 		t.Fatal("converter slices must be non-nil")
 	}
@@ -166,9 +172,76 @@ func TestConvertEmpty(t *testing.T) {
 	}
 }
 
-func TestConvertDegenerateRoad(t *testing.T) {
+func TestConvertReportsDegenerateRoad(t *testing.T) {
 	d := WorldData{Version: Version, Roads: []Road{{Map: 0, Points: [][3]float32{{1, 2, 3}}}}}
-	if got := Convert(d); len(got.Roads) != 0 {
-		t.Fatalf("single-point road made %d rows", len(got.Roads))
+	m, dropped := Convert(d)
+	if len(m.Roads) != 0 {
+		t.Fatalf("single-point road made %d rows", len(m.Roads))
+	}
+	if dropped != 1 {
+		t.Fatalf("dropped %d one-point roads, want 1", dropped)
+	}
+}
+
+func TestWriteRefusesExistingWithoutForce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "walk.json")
+	if err := WriteFile(path, sampleData()); err != nil {
+		t.Fatal(err)
+	}
+	// A second walk over the same target is refused: no earlier world data dies by accident.
+	if err := WriteFile(path, sampleData()); err == nil {
+		t.Fatal("second write over the same target, want refusal")
+	}
+	if err := WriteFileForce(path, sampleData(), true); err != nil {
+		t.Fatalf("force write: %v", err)
+	}
+	modPath := filepath.Join(dir, "module.json")
+	m, _ := Convert(sampleData())
+	if err := WriteModule(modPath, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteModule(modPath, m); err == nil {
+		t.Fatal("second module write, want refusal")
+	}
+	if err := WriteModuleForce(modPath, m, true); err != nil {
+		t.Fatalf("force module write: %v", err)
+	}
+}
+
+func TestWriteModuleRefusesBadRows(t *testing.T) {
+	dir := t.TempDir()
+	good, _ := Convert(sampleData())
+	badVerified := good
+	badVerified.Roads = append([]RoadRow(nil), good.Roads...)
+	badVerified.Roads[0].Verified = true
+	if err := WriteModule(filepath.Join(dir, "verified.json"), badVerified); err == nil {
+		t.Fatal("verified row wrote, want refusal")
+	}
+	badDup := good
+	badDup.Points = append([]PointShape(nil), good.Points...)
+	badDup.Points = append(badDup.Points, good.Points[0])
+	if err := WriteModule(filepath.Join(dir, "dup.json"), badDup); err == nil {
+		t.Fatal("duplicate point name wrote, want refusal")
+	}
+	badRadius := good
+	badRadius.Zones = []ZoneShape{{Name: "z", RadiusYd: 0}}
+	if err := WriteModule(filepath.Join(dir, "radius.json"), badRadius); err == nil {
+		t.Fatal("zero radius wrote, want refusal")
+	}
+}
+
+func TestReadRecordingRefusesOutOfBoundSamples(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rec.json")
+	raw, err := json.Marshal(Recording{Samples: []Sample{{Map: 0, X: MaxCoord + 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRecording(path); err == nil {
+		t.Fatal("recording with a past-bound sample read, want refusal")
 	}
 }

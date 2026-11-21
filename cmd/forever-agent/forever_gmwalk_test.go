@@ -93,21 +93,31 @@ func TestForeverGMWalkDryDefaults(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stdout)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "gm-walk-dry.json")); err != nil {
-		t.Fatalf("default output not written: %v", err)
+	// The default names carry the map id and a UTC timestamp, never a character name.
+	matches, err := filepath.Glob(filepath.Join(dir, "gm-walk-dry-0-*.json"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("default output: %v %v", matches, err)
+	}
+	if strings.Contains(matches[0], "gate") {
+		t.Fatalf("default name carries a character name: %s", matches[0])
 	}
 }
 
-func TestForeverGMWalkDryRefusals(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "bad.json")
-	if err := os.WriteFile(path, []byte(`{"nope": true}`), 0o600); err != nil {
+func TestForeverGMWalkDryRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "walk-out.json")
+	if err := os.WriteFile(out, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, _ := runCLI("forever", "gm-walk", "--dry", path); code != exitUsage {
-		t.Fatalf("bad recording: exit %d, want %d", code, exitUsage)
+	if code, _, _ := runCLI("forever", "gm-walk", "--dry", writeRecording(t), "--out", out); code != exitWorld {
+		t.Fatalf("overwrite without --force: exit %d, want %d", code, exitWorld)
 	}
-	if code, _, _ := runCLI("forever", "gm-walk", "--dry", t.TempDir()+"/missing.json"); code != exitUsage {
-		t.Fatalf("missing recording: exit %d, want %d", code, exitUsage)
+	if code, _, _ := runCLI("forever", "gm-walk", "--dry", writeRecording(t), "--out", out, "--force"); code != 0 {
+		t.Fatalf("overwrite with --force: exit %d, want 0", code)
+	}
+	missing := filepath.Join(dir, "no-such-dir", "walk-out.json")
+	if code, _, _ := runCLI("forever", "gm-walk", "--dry", writeRecording(t), "--out", missing); code != exitWorld {
+		t.Fatalf("missing folder: exit %d, want %d", code, exitWorld)
 	}
 }
 
@@ -200,10 +210,14 @@ func TestForeverGMConvertRefusals(t *testing.T) {
 	if code, _, _ := runCLI("forever", "gm-convert", "--in", in); code != exitUsage {
 		t.Fatalf("no --out: exit %d, want %d", code, exitUsage)
 	}
-	if code, _, _ := runCLI("forever", "gm-convert", "--in", dir+"/missing.json", "--out", dir+"/o.json"); code != exitUsage {
-		t.Fatalf("missing input: exit %d, want %d", code, exitUsage)
-	}
 	if code, _, _ := runCLI("forever", "gm-convert", "--in", in, "--out", dir+"/o.json", "extra"); code != exitUsage {
 		t.Fatalf("extra arg: exit %d, want %d", code, exitUsage)
+	}
+	existing := filepath.Join(dir, "existing.json")
+	if err := gmwalk.WriteFile(existing, gmwalk.WorldData{Version: 1, Roads: []gmwalk.Road{}, Points: []gmwalk.Point{}, Zones: []gmwalk.Zone{}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := runCLI("forever", "gm-convert", "--in", in, "--out", existing); code != exitWorld {
+		t.Fatalf("overwrite without --force: exit %d, want %d", code, exitWorld)
 	}
 }

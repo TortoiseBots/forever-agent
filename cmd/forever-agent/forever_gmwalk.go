@@ -1,8 +1,9 @@
 package main
 
 // forever gm-walk: record a GM character's walk as world data. The agent follows the GM named by --follow,
-// samples its own position, and turns the GM's whisper (or nearby say) mark words into points, danger zones
-// and road splits. --dry replays a hand-made recording instead of the network.
+// samples the GM's own object position, and turns the GM's whisper (or nearby say) mark words into points,
+// danger zones and road splits. --dry replays a hand-made recording instead of the network. Output file names
+// never carry a character name: defaults use the map id and a UTC timestamp.
 
 import (
 	"context"
@@ -11,14 +12,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/gmwalk"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
-const gmWalkUsage = "usage: forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample DURATION] [--tolerance YD] [--follow-yd YD] [--out FILE] [--module-out FILE] [--dry FILE] [--settle DURATION] [--timeout DURATION] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME"
+const gmWalkUsage = "usage: forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample DURATION] [--tolerance YD] [--follow-yd YD] [--out FILE] [--module-out FILE] [--force] [--dry FILE] [--settle DURATION] [--timeout DURATION] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME"
 
 func foreverGMWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever gm-walk", flag.ContinueOnError)
@@ -30,8 +30,9 @@ func foreverGMWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	sample := fs.Duration("sample", world.GMWalkSample, "position sample interval")
 	tolerance := fs.Float64("tolerance", world.GMWalkTolerance, "road thinning tolerance in yards")
 	followYd := fs.Float64("follow-yd", world.GMWalkFollowYd, "how close the agent stays to the GM in yards")
-	out := fs.String("out", "", "world-data JSON file to write (default gm-walk-<follow>-<map>.json in the current directory)")
-	moduleOut := fs.String("module-out", "", "module-shape JSON file to write beside the world data (the handcrafted_road rows plus zone/point proposals)")
+	out := fs.String("out", "", "world-data JSON file to write (default gm-walk-<map>-<utc-timestamp>.json in the current directory; never overwritten unless --force)")
+	moduleOut := fs.String("module-out", "", "module-shape JSON file to write beside the world data (the handcrafted_road rows plus zone/point proposals; never overwritten unless --force)")
+	force := fs.Bool("force", false, "overwrite an existing --out or --module-out file")
 	dry := fs.String("dry", "", "replay a hand-made recording file instead of the network (test data, never a capture)")
 	settle := fs.Duration("settle", 4*time.Second, "how long to settle in the world before the follow starts")
 	timeout := fs.Duration("timeout", 60*time.Minute, "the whole run's budget (login, follow, logout)")
@@ -61,7 +62,7 @@ func foreverGMWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 		return exitUsage
 	}
 	if *dry != "" {
-		return gmWalkDry(*dry, *tolerance, *out, *moduleOut, stdout, stderr)
+		return gmWalkDry(*dry, *tolerance, *out, *moduleOut, *force, stdout, stderr)
 	}
 	if err := common.check("forever gm-walk"); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -89,15 +90,19 @@ func foreverGMWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 		printGMWalkResult(stdout, report.GMWalk)
 		target := *out
 		if target == "" {
-			target = fmt.Sprintf("gm-walk-%s-%d.json", safeWalkStem(report.GMWalk.Follow), report.GMWalk.Map)
+			target = defaultWalkName(report.GMWalk.Map)
 		}
-		if werr := writeGMWalkFile(target, *report.GMWalkData); werr != nil {
+		if werr := writeGMWalkFile(target, *report.GMWalkData, *force); werr != nil {
 			fmt.Fprintf(stderr, "forever gm-walk: %v\n", werr)
 			return exitWorld
 		}
 		printGMWalkData(stdout, target, *report.GMWalkData)
 		if *moduleOut != "" {
-			if werr := gmwalk.WriteModule(*moduleOut, gmwalk.Convert(*report.GMWalkData)); werr != nil {
+			mod, dropped := gmwalk.Convert(*report.GMWalkData)
+			if dropped > 0 {
+				fmt.Fprintf(stdout, "gm-walk: module converter dropped %d one-point road(s): no hop to render\n", dropped)
+			}
+			if werr := gmwalk.WriteModuleForce(*moduleOut, mod, *force); werr != nil {
 				fmt.Fprintf(stderr, "forever gm-walk: %v\n", werr)
 				return exitWorld
 			}
@@ -119,7 +124,7 @@ func foreverGMWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 }
 
 // gmWalkDry replays a recording file: the same thin/mark/format path as the live walk, no network.
-func gmWalkDry(path string, tolerance float64, out, moduleOut string, stdout, stderr io.Writer) int {
+func gmWalkDry(path string, tolerance float64, out, moduleOut string, force bool, stdout, stderr io.Writer) int {
 	rec, err := gmwalk.ReadRecording(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever gm-walk: --dry: %v\n", err)
@@ -132,9 +137,9 @@ func gmWalkDry(path string, tolerance float64, out, moduleOut string, stdout, st
 	}
 	target := out
 	if target == "" {
-		target = "gm-walk-dry.json"
+		target = defaultDryName(data)
 	}
-	if err := gmwalk.WriteFile(target, data); err != nil {
+	if err := gmwalk.WriteFileForce(target, data, force); err != nil {
 		fmt.Fprintf(stderr, "forever gm-walk: %v\n", err)
 		return exitWorld
 	}
@@ -142,7 +147,11 @@ func gmWalkDry(path string, tolerance float64, out, moduleOut string, stdout, st
 		len(rec.Samples), len(rec.Marks), unknown)
 	printGMWalkData(stdout, target, data)
 	if moduleOut != "" {
-		if err := gmwalk.WriteModule(moduleOut, gmwalk.Convert(data)); err != nil {
+		mod, dropped := gmwalk.Convert(data)
+		if dropped > 0 {
+			fmt.Fprintf(stdout, "gm-walk: module converter dropped %d one-point road(s): no hop to render\n", dropped)
+		}
+		if err := gmwalk.WriteModuleForce(moduleOut, mod, force); err != nil {
 			fmt.Fprintf(stderr, "forever gm-walk: %v\n", err)
 			return exitWorld
 		}
@@ -152,8 +161,8 @@ func gmWalkDry(path string, tolerance float64, out, moduleOut string, stdout, st
 }
 
 func printGMWalkResult(stdout io.Writer, r *world.GMWalkReport) {
-	fmt.Fprintf(stdout, "gm-walk: followed %s on map %d for %.1f min: %d samples, %d roads, %d point(s), %d zone(s), %d mark(s), %d unknown, %d ignored (%s)\n",
-		r.Follow, r.Map, r.Minutes, r.Samples, r.Roads, r.Points, r.Zones, r.Marks, r.Unknown, r.Ignored, r.EndedWhy)
+	fmt.Fprintf(stdout, "gm-walk: walked map %d for %.1f min: %d samples, %d roads, %d point(s), %d zone(s), %d mark(s), %d unknown, %d ignored (%s)\n",
+		r.Map, r.Minutes, r.Samples, r.Roads, r.Points, r.Zones, r.Marks, r.Unknown, r.Ignored, r.EndedWhy)
 }
 
 func printGMWalkData(stdout io.Writer, target string, data gmwalk.WorldData) {
@@ -170,33 +179,35 @@ func printGMWalkData(stdout io.Writer, target string, data gmwalk.WorldData) {
 	}
 }
 
-// safeWalkStem makes the follow name a file stem: the name is already sanitised for display, but a stem must
-// also be one path component with no leading dot or dash.
-func safeWalkStem(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
+// defaultWalkName names a live run's output without any character name: the map the run ended on and the UTC
+// time it finished.
+func defaultWalkName(mapID uint32) string {
+	return fmt.Sprintf("gm-walk-%d-%s.json", mapID, time.Now().UTC().Format("20060102T150405Z"))
+}
+
+// defaultDryName names a dry replay's output the same nameless way, from the walk's own first map: roads first,
+// then points, then zones.
+func defaultDryName(data gmwalk.WorldData) string {
+	mapID := uint32(0)
+	switch {
+	case len(data.Roads) > 0:
+		mapID = data.Roads[0].Map
+	case len(data.Points) > 0:
+		mapID = data.Points[0].Map
+	case len(data.Zones) > 0:
+		mapID = data.Zones[0].Map
 	}
-	out := b.String()
-	out = strings.TrimLeft(out, ".-")
-	if out == "" {
-		out = "gm"
-	}
-	return out
+	return fmt.Sprintf("gm-walk-dry-%d-%s.json", mapID, time.Now().UTC().Format("20060102T150405Z"))
 }
 
 // The live command stores the data report in the session; the file the caller asked for is written from the
 // returned world data. The write happens where the report is printed: the session keeps data in memory only.
-func writeGMWalkFile(target string, data gmwalk.WorldData) error {
+// The folder, when named, must already exist: the writer never creates directories.
+func writeGMWalkFile(target string, data gmwalk.WorldData, force bool) error {
 	if dir := filepath.Dir(target); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return fmt.Errorf("gmwalk: the output folder %s is not a directory", dir)
 		}
 	}
-	return gmwalk.WriteFile(target, data)
+	return gmwalk.WriteFileForce(target, data, force)
 }

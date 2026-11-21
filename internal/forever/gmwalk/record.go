@@ -52,34 +52,65 @@ func (r *Recorder) shiftSplits() {
 // Samples is how many positions the recorder holds.
 func (r *Recorder) Samples() int { return len(r.samples) }
 
-// Mark records one parsed mark line at the GM's current position (the last sample). A mark with no sample yet
-// is ignored and counted. A split cuts the road after the last sample; samples always advance, so two splits
-// in a row are one.
-func (r *Recorder) Mark(m Mark) error {
-	return r.MarkAt(len(r.samples)-1, m)
+// MarkAtGM records one parsed mark line at the GM's own position pos, read from the world model when the line
+// arrived. known is false when the GM is not in the model (out of range, or the update has not arrived yet): a
+// point or zone with no position is ignored and counted, never stamped at the agent's position. A split carries
+// no position and only cuts the road after the last sample.
+func (r *Recorder) MarkAtGM(pos Sample, known bool, m Mark) error {
+	if m.Kind == MarkSplit {
+		if len(r.samples) == 0 {
+			r.ignored++
+			return fmt.Errorf("gmwalk: the split names no sample yet")
+		}
+		if r.splits == nil {
+			r.splits = map[int]bool{}
+		}
+		r.splits[len(r.samples)-1] = true
+		return nil
+	}
+	if !known {
+		r.ignored++
+		return fmt.Errorf("gmwalk: the mark %q has no GM position yet", m.Kind)
+	}
+	return r.stamp(pos, m)
 }
 
-// MarkAt records one parsed mark line at the named sample: the live walk passes the last sample, a dry
-// recording the sample the line belongs to. An index past the samples is a broken recording, not a panic.
+// MarkAt records one parsed mark line at the named sample: a dry recording the sample the line belongs to. An
+// index past the samples is a broken recording, not a panic. A duplicate point or zone name is ignored and
+// counted: the module side uses names as SQL comments and file stems, so one name names one mark.
 func (r *Recorder) MarkAt(at int, m Mark) error {
 	if at < 0 || at >= len(r.samples) {
 		r.ignored++
 		return fmt.Errorf("gmwalk: the mark %q names sample %d of %d", m.Kind, at, len(r.samples))
 	}
-	if len(r.points)+len(r.zones) >= MaxMarks {
-		r.ignored++
-		return fmt.Errorf("gmwalk: the %d-mark bound is reached; %q is dropped", MaxMarks, m.Kind)
-	}
-	pos := r.samples[at]
-	switch m.Kind {
-	case MarkSplit:
+	if m.Kind == MarkSplit {
 		if r.splits == nil {
 			r.splits = map[int]bool{}
 		}
 		r.splits[at] = true
+		return nil
+	}
+	return r.stamp(r.samples[at], m)
+}
+
+// stamp stores one point or zone mark at pos, refusing duplicates and anything past the mark bound.
+func (r *Recorder) stamp(pos Sample, m Mark) error {
+	if len(r.points)+len(r.zones) >= MaxMarks {
+		r.ignored++
+		return fmt.Errorf("gmwalk: the %d-mark bound is reached; %q is dropped", MaxMarks, m.Kind)
+	}
+	switch m.Kind {
 	case MarkPoint:
+		if r.haveMark(m.Name) {
+			r.ignored++
+			return fmt.Errorf("gmwalk: duplicate mark name %q", m.Name)
+		}
 		r.points = append(r.points, Point{Name: m.Name, Map: pos.Map, X: pos.X, Y: pos.Y, Z: pos.Z})
 	case MarkZone:
+		if r.haveMark(m.Name) {
+			r.ignored++
+			return fmt.Errorf("gmwalk: duplicate mark name %q", m.Name)
+		}
 		r.zones = append(r.zones, Zone{Name: m.Name, Map: pos.Map, X: pos.X, Y: pos.Y, Z: pos.Z, Radius: float32(m.Radius)})
 	default:
 		r.ignored++
@@ -88,12 +119,30 @@ func (r *Recorder) MarkAt(at int, m Mark) error {
 	return nil
 }
 
+// haveMark reports whether a point or zone already carries name.
+func (r *Recorder) haveMark(name string) bool {
+	for _, p := range r.points {
+		if p.Name == name {
+			return true
+		}
+	}
+	for _, z := range r.zones {
+		if z.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Ignored is how many mark lines arrived with no position or past the bound.
 func (r *Recorder) Ignored() int { return r.ignored }
 
-// Build thins the samples into roads and returns the world data. A map change also cuts the road: roads are
-// per map. The tolerance is in yards: points closer than it to the current segment are dropped.
-func (r *Recorder) Build(toleranceYd float64) WorldData {
+// Build thins the samples into roads and returns the world data: one road per stretch, split at map changes,
+// split marks, jumps past SplitJumpYd, and thinned runs past MaxRoadPoints (a new road starts where the last
+// ended, so no sample is dropped). Past MaxRoads the build ends with the error: the walk no longer fits the
+// bounds, and a silent truncation would lose the tail. The tolerance is in yards: points closer than it to the
+// current segment are dropped.
+func (r *Recorder) Build(toleranceYd float64) (WorldData, error) {
 	d := WorldData{Version: Version, Roads: []Road{}, Points: r.points, Zones: r.zones}
 	if len(r.points) == 0 {
 		d.Points = []Point{}
@@ -102,29 +151,40 @@ func (r *Recorder) Build(toleranceYd float64) WorldData {
 		d.Zones = []Zone{}
 	}
 	start := 0
-	flush := func(end int) {
-		pts := thin(r.samples[start:end], toleranceYd)
+	appendRoad := func(pts []Sample) error {
+		if len(d.Roads) >= MaxRoads {
+			return fmt.Errorf("gmwalk: %d roads pass the %d bound; the walk no longer fits", len(d.Roads)+1, MaxRoads)
+		}
 		if len(pts) > 0 {
 			d.Roads = append(d.Roads, Road{Map: pts[0].Map, Points: positions(pts)})
 		}
+		return nil
+	}
+	flush := func(end int) error {
+		for _, seg := range splitThin(r.samples[start:end], toleranceYd) {
+			if err := appendRoad(seg); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	for i := 1; i < len(r.samples); i++ {
 		cut := r.samples[i].Map != r.samples[i-1].Map ||
 			r.splits[i-1] ||
 			jumpYd(r.samples[i-1], r.samples[i]) > SplitJumpYd
 		if cut {
-			flush(i)
-			start = i
-			if len(d.Roads) >= MaxRoads {
-				start = len(r.samples)
-				break
+			if err := flush(i); err != nil {
+				return d, err
 			}
+			start = i
 		}
 	}
-	if start < len(r.samples) && len(d.Roads) < MaxRoads {
-		flush(len(r.samples))
+	if start < len(r.samples) {
+		if err := flush(len(r.samples)); err != nil {
+			return d, err
+		}
 	}
-	return d
+	return d, nil
 }
 
 func jumpYd(a, b Sample) float64 {
@@ -144,8 +204,20 @@ func positions(s []Sample) [][3]float32 {
 
 // thin drops the samples one straight run does not need: the Ramer-Douglas-Peucker pass on X/Y/Z with the
 // tolerance in yards, endpoints kept. A broken record (NaN, Inf, past the world bound) is cut out before the
-// pass: the road keeps the honest samples, never a spike.
+// pass: the road keeps the honest samples, never a spike. A thinned run past MaxRoadPoints is refused here: use
+// splitThin, which cuts it into contiguous roads instead of dropping its tail.
 func thin(samples []Sample, tol float64) []Sample {
+	segs := splitThin(samples, tol)
+	if len(segs) == 0 {
+		return nil
+	}
+	return segs[0]
+}
+
+// splitThin runs the same thinning as thin, then cuts a thinned run past MaxRoadPoints into contiguous roads:
+// each road holds at most MaxRoadPoints, shares its first point with the last point of the road before it, and
+// keeps the original final endpoint. Nothing is ever dropped.
+func splitThin(samples []Sample, tol float64) [][]Sample {
 	clean := make([]Sample, 0, len(samples))
 	for _, s := range samples {
 		if !finite(s.X) || !finite(s.Y) || !finite(s.Z) {
@@ -157,7 +229,10 @@ func thin(samples []Sample, tol float64) []Sample {
 		clean = append(clean, s)
 	}
 	if len(clean) <= 2 {
-		return clean
+		if len(clean) == 0 {
+			return nil
+		}
+		return [][]Sample{clean}
 	}
 	if tol < 0 {
 		tol = 0
@@ -165,16 +240,26 @@ func thin(samples []Sample, tol float64) []Sample {
 	keep := make([]bool, len(clean))
 	keep[0], keep[len(clean)-1] = true, true
 	rdp(clean, 0, len(clean)-1, tol*tol, keep)
-	out := make([]Sample, 0, len(clean))
+	kept := make([]Sample, 0, len(clean))
 	for i, s := range clean {
 		if keep[i] {
-			out = append(out, s)
-		}
-		if len(out) >= MaxRoadPoints {
-			break
+			kept = append(kept, s)
 		}
 	}
-	return out
+	if len(kept) <= MaxRoadPoints {
+		return [][]Sample{kept}
+	}
+	var segs [][]Sample
+	for start := 0; start+1 < len(kept); {
+		end := start + MaxRoadPoints
+		if end >= len(kept) {
+			segs = append(segs, kept[start:])
+			break
+		}
+		segs = append(segs, kept[start:end])
+		start = end - 1
+	}
+	return segs
 }
 
 func finite(f float32) bool {
