@@ -20,7 +20,11 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 	"  compare <run dir> --baseline <dir> before/after table with Fisher's exact p (reads both card.json)\n" +
 	"  validate [files...]                validate trial files (default: the embedded set)\n" +
 	"  run --slots F --server S [--slot ID|--any] [--repeats N] --out DIR [--dry SCRIPT] TRIAL...\n" +
-	"  cleanup <run dir>                  replay the ledger: kill summons, clear auras, free bots"
+	"  cleanup <run dir>                  replay the ledger: kill summons, clear auras, free bots\n" +
+	"  sweep --classes LIST --slots F --server S [--repeats N] --out DIR [TRIAL...]\n" +
+	"                                     class sweep, tanks first, one card each plus sweep.md\n" +
+	"  forever-data-check --slots F --server S [--scratch NAME] [--out FILE] [--dir RUNDIR] [--allow-unknown]\n" +
+	"                                     ask the live server every spell, item and mob entry the trials name"
 
 // trialsCmd dispatches the scoring half of the Python trials bench, ported into
 // internal/trials. It reads a run folder as the Python tool writes it and never runs a trial.
@@ -42,6 +46,10 @@ func trialsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return trialsRunCmd(ctx, args[1:], stdout, stderr)
 	case "cleanup":
 		return trialsCleanupCmd(args[1:], stdout, stderr)
+	case "sweep":
+		return trialsSweepCmd(ctx, args[1:], stdout, stderr)
+	case "forever-data-check":
+		return trialsDataCheckCmd(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprintln(stdout, trialsUsage)
 		return exitOK

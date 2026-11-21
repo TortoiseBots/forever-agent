@@ -49,8 +49,10 @@ type LiveSituation struct {
 	SlotIndex     int
 	Log           func(string)
 
-	// Timeout bounds the per-step waits (0 is the constants above).
-	Now func() time.Time
+	// Now is the situation's clock; MealWait bounds the ooc meal wait
+	// (0 is mealWaitS). Both are seams for the fake-driven tests.
+	Now      func() time.Time
+	MealWait time.Duration
 
 	// held is the arena lock of the repeat in flight: kept until Finish, so
 	// the lock outlives the repeat teardown (kills, heal) on every path.
@@ -70,15 +72,19 @@ func kindOf(trial map[string]any) string {
 // Run is one repeat's situation: the interface Runner.Situation.
 func (s *LiveSituation) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 	tb := tbcmd.NewClient(NewTBRunner(r.Client))
-	switch kind := kindOf(r.Trial); kind {
-	case "tank_damage":
-		return (&tankRun{sit: s, r: r, tb: tb}).run(ctx)
+	t := &tankRun{sit: s, r: r, tb: tb, kind: kindOf(r.Trial)}
+	switch t.kind {
+	case "ooc_buffs":
+		return t.runOOC(ctx)
+	case "ooc_hurt":
+		return t.runOOCHurt(ctx)
+	case "tank_damage", "caster_mob", "pack", "cc_target", "debuff":
+		return t.run(ctx)
 	case "dummy":
 		return (&dummyRun{sit: s, r: r, tb: tb}).run(ctx)
-	default:
-		return map[string]any{"ok": false, "ended": "unsupported",
-			"invalid_reason": "situation kind " + kind + " is not ported on Forever"}, nil
 	}
+	return map[string]any{"ok": false, "ended": "unsupported",
+		"invalid_reason": "situation kind " + t.kind + " is not ported on Forever"}, nil
 }
 
 // Finish releases the arena the repeat held: the runner calls it after the
@@ -119,9 +125,29 @@ func (s *LiveSituation) logf(format string, args ...any) {
 
 // tankRun is one repeat's tank_damage state.
 type tankRun struct {
-	sit *LiveSituation
-	r   *Repeat
-	tb  *tbcmd.Client
+	sit  *LiveSituation
+	r    *Repeat
+	tb   *tbcmd.Client
+	kind string
+
+	// The situation's own options beyond tank_damage: the tested debuff,
+	// auras stripped before the pull, the hire's cooldown reset, the
+	// rogue energy drain and the out-of-combat hurt cadence.
+	debuffSpell   int
+	prepull       []int
+	resetCooldown bool
+	energyDrain   map[string]any
+	hurtEvery     float64
+
+	// marked is the cc_target summon the bot's crowd control owns: it is
+	// never attacked, and a Taunt is the only thing ever sent at it.
+	marked       string
+	ccRow        map[string]any
+	ccProven     bool
+	gapStart     string
+	lastThreat   time.Time
+	drainNext    time.Time
+	debuffGoneAt time.Time
 
 	arena      *Arena
 	summoned   []string
@@ -165,12 +191,16 @@ func intOpt(m map[string]any, key string) (int, bool) {
 	return int(f), true
 }
 
-// run is the tank_damage driver: arena, summon, pull, fight window, marks.
+// run is the arena fight driver shared by tank_damage, caster_mob, pack,
+// cc_target and debuff: arena, summon, pull, fight window, marks. The kind
+// adds its own trigger (the pack's extra attacks, the cc mark, the tested
+// debuff, the caster proof) without a second loop.
 func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
-	t.sitOpts, _ = t.r.Trial["situation"].(map[string]any)
-	if why := t.unportedOptions(); why != "" {
-		return map[string]any{"ok": false, "ended": "unsupported", "invalid_reason": why}, nil
+	t.sitOpts, _ = pyjson.Object(t.r.Trial["situation"])
+	if t.sitOpts == nil {
+		t.sitOpts = map[string]any{}
 	}
+	t.parseSpecialOptions()
 	player, _ := t.r.Trial["player"].(map[string]any)
 	level, _ := intOpt(player, "level")
 	if level <= 0 {
@@ -239,6 +269,17 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	if name := t.r.BotName; name != "" {
 		t.bringHire(ctx, name)
 	}
+	// prepull_unaura and reset_hire_cooldowns run before the first summon:
+	// the hire is reused across repeats, so a form or a cooldown from the
+	// repeat before would score the wrong thing.
+	if len(t.prepull) > 0 {
+		if why := t.clearPrepullAuras(ctx); why != "" {
+			return map[string]any{"ok": false, "ended": "prepull", "invalid_reason": why}, nil
+		}
+	}
+	if t.resetCooldown {
+		t.resetHireCooldowns(ctx)
+	}
 	if t.count > 0 {
 		made := t.summon(ctx, t.role, t.count)
 		if len(made) == 0 && t.strangerWhy != "" {
@@ -253,6 +294,13 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	window := [2]int{t.levelLo, t.levelHi}
+	if t.kind == "cc_target" {
+		t.runCCPull(ctx)
+		if len(t.summoned) < 2 {
+			t.r.ExtraChecks = append(t.r.ExtraChecks, map[string]any{"id": "cc_mark_set", "ok": false,
+				"value": nil, "evidence": "cc_target wants two humanoid mobs, got " + itoa(len(t.summoned))})
+		}
+	}
 
 	wait, _ := numOpt(t.sitOpts, "pull_after_s")
 	if wait == 0 {
@@ -266,12 +314,40 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	if wait > 0 {
 		sleepCtx(ctx, time.Duration(wait*float64(time.Second)))
 	}
-	for _, guid := range t.summoned {
-		_ = t.r.Client.Target(ctx, guid)
-		_, _ = t.r.Client.Attack(ctx, guid, 2500)
+	// The tested debuff is not a setup aura: a copy left by an earlier repeat
+	// is already up at the pull, and a second `.aura` only refreshes it (no
+	// `aura_applied` event). Prove it absent before the pull.
+	if t.kind == "debuff" && t.debuffSpell != 0 {
+		if why := t.stripDebuff(ctx, t.debuffSpell); why != "" {
+			return map[string]any{"ok": false, "ended": "prepull", "invalid_reason": why}, nil
+		}
+	}
+	if t.kind == "cc_target" && len(t.summoned) > 0 {
+		t.engageCCTargets(ctx)
+	} else if t.playerPulls() {
+		for _, guid := range t.summoned {
+			t.attackOne(ctx, guid)
+		}
+	}
+	if t.kind == "pack" {
+		for _, guid := range t.summoned[1:] {
+			t.attackOne(ctx, guid)
+		}
 	}
 	fightSeen := t.waitFight(ctx, 60*time.Second)
-	t.r.ExtraChecks = append(t.r.ExtraChecks, t.mobsReadyRow(ctx, window, fightSeen))
+	if !hasExtraCheck(t.r.ExtraChecks, "mobs_ready") {
+		t.r.ExtraChecks = append(t.r.ExtraChecks, t.mobsReadyRow(ctx, window, fightSeen))
+	}
+	// The debuff is the trial's own latency zero: stamp the fight BEFORE the
+	// apply, so its `aura_applied` is a t >= 0 trigger, not a pre-fight row.
+	if t.kind == "debuff" && t.debuffSpell != 0 {
+		t.startFight(t.sit.now())
+		if !t.applyDebuff(ctx, t.debuffSpell) {
+			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "debuff"})
+			return map[string]any{"ok": false, "ended": "debuff",
+				"invalid_reason": "no fresh aura_applied for " + itoa(t.debuffSpell) + " after 2 applies"}, nil
+		}
+	}
 
 	gov := t.governor()
 	hook := t.r.Collect.TickHook(gov.Tick)
@@ -331,6 +407,22 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 		if !deadline.IsZero() && !now.Before(deadline) {
 			break
 		}
+		if t.kind == "cc_target" {
+			t.checkCCMark(ctx)
+			if !t.fightStart.IsZero() {
+				t.trackCCGap(ctx)
+			}
+		}
+		if t.playerPulls() && !t.fightStart.IsZero() && now.Sub(t.lastThreat) > 6*time.Second && len(t.summoned) > 0 {
+			t.lastThreat = now
+			t.threat(ctx)
+		}
+		if len(t.energyDrain) > 0 {
+			t.drainTick(now)
+		}
+		if t.kind == "debuff" && t.debuffSpell != 0 {
+			t.refreshDebuff(ctx)
+		}
 		if t.refill && now.Sub(lastRefill) > 3*time.Second && t.count > 0 && len(t.summoned) < summonCap {
 			alive, ok := t.aliveCount(ctx)
 			if ok && alive < t.count {
@@ -347,7 +439,7 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 			alive, ok := t.aliveCount(ctx)
 			if ok && alive < refillCap {
 				if added := t.summonOne(ctx, t.role); added != "" {
-					t.addRefillMark(added, t.summonWall)
+					t.addRefillMark(added, t.summonWall, "every", t.refillEvery)
 					_ = t.r.Client.Target(ctx, added)
 					_, _ = t.r.Client.Attack(ctx, added, 2500)
 				}
@@ -359,30 +451,56 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	if end == "" {
 		end = "duration"
 	}
+	if t.gapStart != "" {
+		t.r.Marks.Excluded(t.gapStart, t.r.Marks.NowISO(), "cc_gap")
+		t.gapStart = ""
+	}
 	t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": end})
+	if t.kind == "caster_mob" && len(t.summoned) > 0 {
+		t.r.ExtraChecks = append(t.r.ExtraChecks, t.casterCastRow())
+	}
 	return map[string]any{"ok": true, "ended": end, "mob_source": t.mobSource}, nil
 }
 
-// unportedOptions names the first situation option this round leaves out, so
-// a repeat is INVALID with the reason instead of silently dropping it.
-func (t *tankRun) unportedOptions() string {
-	if v, ok := t.sitOpts["debuff"]; ok && v != nil {
-		return "situation option debuff is not ported for tank_damage this round"
+// hasExtraCheck reports an id already among the situation's own rows (the
+// cc pull writes mobs_ready before the pull; the fight must not duplicate it).
+func hasExtraCheck(rows []map[string]any, id string) bool {
+	for _, row := range rows {
+		if strOf(row["id"]) == id {
+			return true
+		}
 	}
-	if list, ok := pyjson.List(t.sitOpts["prepull_unaura"]); ok && len(list) > 0 {
-		return "situation option prepull_unaura is not ported this round (the serve refuses .unaura on another player)"
-	}
-	if v, ok := t.sitOpts["reset_hire_cooldowns"].(bool); ok && v {
-		return "situation option reset_hire_cooldowns is not ported this round (the serve refuses .cooldown on another player)"
-	}
-	if v, ok := t.sitOpts["energy_drain"]; ok && v != nil {
-		return "situation option energy_drain is not ported this round (the serve refuses .modify energy on another player)"
-	}
-	if f, ok := numOpt(t.sitOpts, "min_rep_gap_s"); ok && f > 0 {
-		return "situation option min_rep_gap_s is not ported this round"
-	}
-	return ""
+	return false
 }
+
+// parseSpecialOptions reads the situation options the non-tank kinds and the
+// option-carrying tank trials set: the tested debuff, auras stripped off the
+// hire before the pull, the hire's cooldown reset, the rogue energy drain,
+// the minimum gap between repeats and the out-of-combat hurt cadence.
+func (t *tankRun) parseSpecialOptions() {
+	if m, ok := pyjson.Object(t.sitOpts["debuff"]); ok && m != nil {
+		t.debuffSpell, _ = intOpt(m, "spell_id")
+	}
+	if list, ok := pyjson.List(t.sitOpts["prepull_unaura"]); ok {
+		for _, v := range list {
+			if f, ok := pyjson.Num(v); ok && int(f) > 0 {
+				t.prepull = append(t.prepull, int(f))
+			}
+		}
+	}
+	t.resetCooldown, _ = t.sitOpts["reset_hire_cooldowns"].(bool)
+	if m, ok := pyjson.Object(t.sitOpts["energy_drain"]); ok {
+		t.energyDrain = m
+	}
+	t.hurtEvery, _ = numOpt(t.sitOpts, "hurt_every_s")
+	if t.hurtEvery <= 0 {
+		t.hurtEvery = hurtEveryDefault
+	}
+}
+
+// playerPulls reports whether the player pulls and fights: a bot victim is
+// the old bot-victim flow, where the player does not pull.
+func (t *tankRun) playerPulls() bool { return t.victim != "bot" }
 
 // levelWindow is the mob level window: player level plus the mobs
 // level_delta, one level either side (Python level_window).
@@ -427,7 +545,8 @@ func (t *tankRun) abortReason() string {
 
 // acquireArena takes the first eligible arena whose lock this run can hold
 // and that reads quiet, waiting at most arenaGiveUpS. The lock and the
-// in-process claim are released by releaseArena.
+// in-process claim are released by releaseArena. A level of 0 takes any arena
+// (the data check has no character level to match).
 func (t *tankRun) acquireArena(ctx context.Context, level int) (*Arena, string) {
 	arenas := t.sit.Arenas
 	if arenas == nil {
@@ -442,7 +561,7 @@ func (t *tankRun) acquireArena(ctx context.Context, level int) (*Arena, string) 
 		if hi == 0 {
 			hi = 60
 		}
-		if lo <= level && level <= hi {
+		if level <= 0 || (lo <= level && level <= hi) {
 			eligible = append(eligible, a)
 		}
 	}

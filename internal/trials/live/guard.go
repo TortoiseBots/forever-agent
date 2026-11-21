@@ -520,6 +520,29 @@ func (g *Guard) RemoveAura(ctx context.Context, guid string, spell int) error {
 	})
 }
 
+// botNameRe bounds a bot name that may appear in a module order line.
+var botNameRe = regexp.MustCompile(`^[A-Za-z]{2,24}$`)
+
+// CCOrder gives the hired bot the crowd-control assignment on the selected
+// mob (`.bot cc moon <name>`, the module's own command that also sets the
+// raid icon). The guard builds the line itself from a bot name, so no raw
+// `.bot` text can be sent; the order is recorded like a GM line and obeys the
+// run's abort.
+func (g *Guard) CCOrder(ctx context.Context, bot string) (BotResult, error) {
+	if !botNameRe.MatchString(bot) {
+		return BotResult{}, &GmRefused{Text: "cc moon (bad bot name)"}
+	}
+	if fn := g.abortFn(); fn != nil && fn() != "" {
+		return BotResult{}, &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
+	}
+	line := ".bot cc moon " + bot
+	g.record("cc_order", line, "")
+	if g.dryRun {
+		return BotResult{}, nil
+	}
+	return g.client.botLine(ctx, line, 10000)
+}
+
 // SendText classifies raw text against the closed set and sends it only on a
 // whole-line match; anything else is refused and never sent.
 func (g *Guard) SendText(ctx context.Context, text string, class GuardTarget, target string) error {

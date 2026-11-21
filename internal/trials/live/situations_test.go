@@ -66,7 +66,12 @@ func (s *sim) unitRows() []map[string]any {
 	defer s.mu.Unlock()
 	out := []map[string]any{}
 	for _, u := range s.mobs {
-		out = append(out, u)
+		// a copy: the hook flips fields of the live row on another goroutine
+		cp := make(map[string]any, len(u))
+		for k, v := range u {
+			cp[k] = v
+		}
+		out = append(out, cp)
 	}
 	return out
 }

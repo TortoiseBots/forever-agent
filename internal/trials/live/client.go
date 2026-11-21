@@ -420,6 +420,23 @@ func (c *Client) TBM(ctx context.Context, command string) error {
 	return c.call(ctx, "tbm", map[string]string{"command": command}, &out, 10*time.Second)
 }
 
+// NormGUID lower-cases and trims a guid string for map keys (the same form
+// `unit` and `status` answer with).
+func NormGUID(s string) string { return normGUIDOf(s) }
+
+// botLine sends one `.bot` line (the module's own command surface, not the
+// `.tb` test kit) and returns the visible answer. It is unexported: the only
+// caller is Guard.CCOrder, which builds the line itself.
+func (c *Client) botLine(ctx context.Context, line string, waitMS int) (BotResult, error) {
+	return c.commandBot(ctx, line, waitMS)
+}
+
+// WalkTo walks the session's character to a point (the serve plans the
+// route; it returns when the walk ends or the call times out).
+func (c *Client) WalkTo(ctx context.Context, x, y, z float64) error {
+	return c.call(ctx, "walk_to", map[string]any{"x": x, "y": y, "z": z}, nil, 45*time.Second)
+}
+
 // Cast casts spell at target (a guid, empty for no target).
 func (c *Client) Cast(ctx context.Context, spellID uint32, target string) error {
 	params := map[string]any{"spell_id": spellID}
