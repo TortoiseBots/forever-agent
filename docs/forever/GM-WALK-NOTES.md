@@ -132,6 +132,5 @@ vm-test ta ~/wt-fa-gmwalk -> RESULT: PASS  kind=ta wt=wt-fa-gmwalk sha=84b91799 
                              rc=0  vm_duration=3257s  laptop_wall=3278s
 ```
 
-The RESULT line is quoted in the final report. The full log is
-`TortoiseBots-audit/vm-test-logs/wt-fa-gmwalk-20261121-075837-1994367-b1d2.log` (every package ok, no FAIL).
+The RESULT line is quoted in the final report. The full log showed every package ok, no FAIL.
 The notes commit carries no code change.
