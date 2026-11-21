@@ -160,7 +160,49 @@ ran 60 s on the VM with no panic (gate line below).
 
 ## Gates
 
-PENDING
+Run on a clean committed tree at `eecab39b` (the only later change is this section):
+
+```
+make fmt-check            -> (no output) rc=0
+make cross                -> windows/amd64 and darwin/arm64 build, windows vet: rc=0
+staticcheck ./...         -> rc=0 (no finding)
+go vet ./...              -> rc=0
+make build                -> rc=0
+```
+
+Fuzz, 60 s on the VM (`yulon-ubuntu2`, Go from `go.mod`, `FuzzGainsPackets` over every new parser):
+
+```
+fuzz: elapsed: 1m0s, execs: 3373160 (42339/sec), new interesting: 131 (total: 146)
+fuzz: elapsed: 1m1s, execs: 3373160 (0/sec), new interesting: 131 (total: 146)
+PASS
+ok  	github.com/pjerra/forever-agent/internal/forever/combat	61.173s
+```
+
+The race run the brief names (also the fallback if the known world-socket test is the only failure):
+
+```
+go test -race -count=1 -timeout 30m ./internal/forever/... ./internal/bughunt/... ./internal/trials/...
+rc=0
+```
+
+The VM suite:
+
+```
+RESULT: PASS  kind=ta wt=wt-fa-gains sha=eecab39b dirty=0 files=2315
+rc=0  vm_duration=1297s  laptop_wall=1303s
+```
+
+The VM log's footer is `VM-TEST-END rc=0 seconds=1297`; `TestEnterAdoptsTheProbedWorldSocket` did not fail, so the
+fallback command was not needed for this run (it was still run, above, and passed).
+
+One local `make test` run (under `-race`, while the machine was heavily loaded and the
+`internal/forever/world` package took 577 s) failed `TestRouteWalkPlanWaypointNotSnap` with
+`no create block of this character arrived, so there is no position to walk from`. It is a wall-clock timeout in a
+route-walk scene, not this round's code: the test passed 5/5 in isolation (`go test -race -count=5 -run
+'^TestRouteWalkPlanWaypointNotSnap$' ./internal/forever/world/`) and the VM's non-race suite passed the package. The
+same local run's `internal/forever`, `bughunt` and `trials` packages all passed under `-race`.
+
 
 ## Live checks for the lead's live queue
 
