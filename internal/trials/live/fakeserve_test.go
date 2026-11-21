@@ -35,6 +35,9 @@ type fakeServe struct {
 	// instead of the static maps.
 	statusFn func() map[string]any
 	unitsFn  func() []map[string]any
+	// ownUnit, when set, answers the `unit` read of that guid (the session's
+	// own character, which `units` never lists).
+	ownUnit map[string]any
 }
 
 type fakeCall struct {
@@ -152,6 +155,13 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 			GUID string `json:"guid"`
 		}
 		_ = json.Unmarshal(req.Params, &p)
+		f.mu.Lock()
+		own := f.ownUnit
+		f.mu.Unlock()
+		if own != nil && strings.EqualFold(strAny(own["guid"]), p.GUID) {
+			writeRPCResult(w, req.ID, own)
+			return
+		}
 		for _, u := range units {
 			if strings.EqualFold(strAny(u["guid"]), p.GUID) {
 				writeRPCResult(w, req.ID, u)
@@ -198,6 +208,16 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal(req.Params, &p)
 		writeRPCResult(w, req.ID, map[string]any{"guids": p.GUIDs})
+	case "bot":
+		var p struct {
+			Line string `json:"line"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		lines := []string{}
+		if strings.HasPrefix(p.Line, ".bot cc moon") {
+			lines = []string{"TBM:ACTION_ACK|cc moon|bot:Atank|1|Atank"}
+		}
+		writeRPCResult(w, req.ID, map[string]any{"sent": p.Line, "complete": true, "lines": lines})
 	case "gm", "chat", "tbm", "cast", "gm_kill", "gm_set_hp", "gm_aura", "attack", "stop_attack":
 		writeRPCResult(w, req.ID, map[string]any{})
 	default:
