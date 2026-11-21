@@ -32,6 +32,7 @@ var (
 	fakeCMSGGameObjUse    = mustClientWire(wire.CMSGGameObjUse)
 	fakeCMSGGameObjReport = mustClientWire(wire.CMSGGameObjReportUse)
 	fakeCMSGQueryCreature = mustClientWire(wire.CMSGQueryCreature)
+	fakeCMSGQueryGameObj  = mustClientWire(wire.CMSGQueryGameObject)
 	fakeCMSGSetSelection  = mustClientWire(wire.CMSGSetSelection)
 	fakeCMSGAttackSwing   = mustClientWire(wire.CMSGAttackSwing)
 	fakeCMSGAttackStop    = mustClientWire(wire.CMSGAttackStop)
@@ -46,6 +47,7 @@ var (
 	fakeSMSGLootRollWon      = mustServerWire(wire.SMSGLootRollWon)
 	fakeSMSGLootAllPassed    = mustServerWire(wire.SMSGLootAllPassed)
 	fakeSMSGQueryCreatureRes = mustServerWire(wire.SMSGCreatureQueryResponse)
+	fakeSMSGQueryGameObjRes  = mustServerWire(wire.SMSGGameObjectQueryResponse)
 	fakeSMSGAttackStart      = mustServerWire(wire.SMSGAttackStart)
 )
 
@@ -391,6 +393,21 @@ func fakeCreatureNotFound(payload []byte) []byte {
 	return out.Bytes()
 }
 
+// fakeGameObjectNotFound answers a game-object query with Allow clear: the entry and no stats
+// (QueryPackets.cpp:350-388: uint32 entry, GUID, Bits<1>(Allow) flushed, Size<uint32> stats).
+func fakeGameObjectNotFound(payload []byte) []byte {
+	b := wire.NewReader(payload)
+	entry := b.ReadU32()
+	guid := wire.ReadPackedGUID(b)
+	out := wire.NewWriter()
+	out.WriteU32(entry)
+	wire.WritePackedGUID(out, guid)
+	out.WriteBit(false)
+	out.FlushBits()
+	out.WriteU32(0)
+	return out.Bytes()
+}
+
 // serveLoot runs one loot or object-use scenario. The target and the traffic depend on lootCase; every case ends
 // with the client's logout, except the link cases, which drop the socket at the named wait.
 func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
@@ -449,6 +466,8 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGQueryCreature:
 			c.writeFrame(fakeSMSGQueryCreatureRes, fakeCreatureNotFound(payload))
+		case fakeCMSGQueryGameObj:
+			c.writeFrame(fakeSMSGQueryGameObjRes, fakeGameObjectNotFound(payload))
 		case fakeCMSGAttackSwing:
 			c.writeFrame(fakeSMSGAttackStart, append(fakePacked(self), fakePacked(target)...))
 			c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))

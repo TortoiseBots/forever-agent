@@ -26,7 +26,7 @@ Create a second file of `label token` lines, mode 0600. It must not be the route
 ## 2. Start the dashboard with controls on
 
 ```sh
-turtle-agent dashboard --control --control-tokens ~/.config/turtle-agent/dashboard-control-tokens --control-log ~/.local/state/turtle-agent/dashboard-control.jsonl
+turtle-agent dashboard --control --control-tokens <user config dir>/turtle-agent/dashboard-control-tokens --control-log ~/.local/state/turtle-agent/dashboard-control.jsonl
 ```
 
 Every flag and its default:
@@ -34,7 +34,7 @@ Every flag and its default:
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--control` | off | turns run controls on (on/off: takes `=`, e.g. `--control=true`) |
-| `--control-tokens` | `~/.config/turtle-agent/dashboard-control-tokens` | `label token` lines, mode 0600; the label is the who in the control log |
+| `--control-tokens` | `<user config dir>/turtle-agent/dashboard-control-tokens` | `label token` lines, mode 0600; the label is the who in the control log |
 | `--control-trust-local` | off | controls from this machine need no token typed (on/off: takes `=`, e.g. `--control-trust-local=true`) |
 | `--control-trust-label` | `owner` | the token label trusted controls are made as |
 | `--control-log` | `~/.local/state/turtle-agent/dashboard-control.jsonl` | every control appends a request and a result line; the folder is made 0700, the file 0600 |
@@ -43,7 +43,7 @@ Every flag and its default:
 
 ## 3. Send a control
 
-The page sends `POST /api/control/<agent-id>/run` with `{"verb": "pause" | "resume" | "skip" | "stop", "confirm": true|false}`. `pause` and `stop` need `"confirm": true`. The verbs reach the agent as `dungeon_pause`, `dungeon_resume`, `dungeon_skip`, `dungeon_stop`. One control runs per agent at a time; each token label may send 30 a minute. The same works with curl:
+The page sends `POST /api/control/<agent-id>/run` with `{"verb": "pause" | "resume" | "skip" | "stop", "confirm": true|false}`. `pause` and `stop` need `"confirm": true`. The verbs reach the agent as `dungeon_pause`, `dungeon_resume`, `dungeon_skip`, `dungeon_stop`. One control runs per agent at a time; each token label may send 30 a minute. On a serve slot (`"server": "forever"`) the card shows the six order buttons (stay, follow, come, attack, pull, release) and pause/resume/stop, all through the same token/nonce gate: orders go to `POST /api/control/<id>/order` with `{"verb": "stay" | "follow" | "come" | "attack" | "pull" | "release"}`, run controls to `/run` as above. All of them call `commander {op:cmd|run}`; no `tbm*` call is ever made on a Forever agent. An answered call is 200 with the module's reply, and a reply the module marks not ok is `"status": "error"` with `"executed": false` (the page shows it as a refusal). A JSON-RPC error (including the not-ported answer before C3) is 502 with `"status": "error"`, the daemon's code and its scrubbed message, never `"status": "ok"`. The same works with curl:
 
 ```sh
 curl -X POST http://127.0.0.1:8790/api/control/<slot>/run \

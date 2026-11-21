@@ -81,7 +81,7 @@ that starts with a turtle-agent binary and `raid-walk` is taken as a full comman
 {"keys": {"AiPlayerbot.TeleportLandingFall": "1", "AiPlayerbot.HireMaxBotsPerPlayer": "39"}}
 ```
 
-The file lives in `~/.config/turtle-agent/preflight-keys.json`. The ssh host is the slot table's server name: that is
+The file lives in `<user config dir>/turtle-agent/preflight-keys.json`. The ssh host is the slot table's server name: that is
 the name in the owner's ssh config, while realmd may carry a NAT address only the host reaches. The call is
 `ssh -o BatchMode=yes -o ConnectTimeout=10 <server>` and reads `~/tortoise-wow-server/etc/aiplayerbot.conf` and
 `~/tortoise-wow-server/etc/modules/tortoise_bots.conf`.

@@ -237,6 +237,6 @@ For the lead's live queue (one test character, the GM account, the test realm; r
 
 ## Gate lines
 
-Full `vm-test ta` on the clean tree 8a367cd8: `RESULT: PASS  kind=ta wt=wt-fa-wr2 sha=8a367cd8 dirty=0 files=2335`.
+Full `vm-test ta` on the clean tree 8a367cd8: `RESULT: PASS  kind=ta sha=8a367cd8 dirty=0 files=2335`.
 
 Race run (`go test -race -count=1 -timeout 20m ./internal/forever/... ./internal/objects/...`): `VM-TEST-END rc=0 seconds=780`.

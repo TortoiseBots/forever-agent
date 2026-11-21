@@ -41,6 +41,25 @@ for (const mode of ["remote", "commander"]) {
   assert.strictEqual(btn(c, "stop").confirm, true);
 }
 
+// a Forever card: pause/resume/stop through the commander, plus the six orders
+const fv = card({ kind: "forever", run: { state: "running" } });
+assert.deepStrictEqual(verbs(fv), ["pause", "resume", "stop"]);
+assert.strictEqual(btn(fv, "pause").action, "run");
+assert.strictEqual(btn(fv, "pause").enabled, true);
+assert.strictEqual(btn(fv, "resume").enabled, false);
+assert.strictEqual(btn(fv, "stop").confirm, true);
+assert.ok(/^Pauses/.test(C.confirmText(fv, "pause")), "a Forever pause says it pauses");
+assert.ok(/stop the run/.test(C.confirmText(fv, "stop")), "a Forever stop says it stops the module's run");
+const fvPaused = card({ kind: "forever", run: { state: "paused" } });
+assert.strictEqual(btn(fvPaused, "pause").enabled, false);
+assert.strictEqual(btn(fvPaused, "resume").enabled, true);
+assert.deepStrictEqual(C.orderButtons(fv).map((b) => b.verb), C.ORDER_VERBS);
+assert.deepStrictEqual(C.ORDER_VERBS, ["stay", "follow", "come", "attack", "pull", "release"]);
+for (const b of C.orderButtons(fv)) assert.strictEqual(b.action, "order");
+assert.strictEqual(C.orderButtons(fv)[0].label, "Stay");
+assert.deepStrictEqual(C.orderButtons(card({ kind: "turtle" })), [], "a turtle card has no order buttons");
+assert.deepStrictEqual(C.orderButtons(null), []);
+
 // offline and synthetic cards have no controls
 assert.deepStrictEqual(C.runButtons(card({ online: false })), []);
 assert.deepStrictEqual(C.runButtons(null), []);

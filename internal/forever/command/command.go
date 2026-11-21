@@ -110,6 +110,10 @@ type Options struct {
 	// half; either one matching is enough. Both empty disables the check.
 	SelfName string
 	SelfGUID wire.GUID
+	// AllowEmpty lets a tokenless run end quietly with no line as a complete answer: some core commands print
+	// nothing on success (HandleDebugBoundaryCommand, HandleNpcEvadeCommand), so the quiet window with nothing
+	// collected is the success itself. Refusals, echoes, pump errors and overlong replies still fail.
+	AllowEmpty bool
 	// Now is the clock; nil means time.Now. Tests pass a fake clock.
 	Now func() time.Time
 
@@ -202,7 +206,13 @@ func Run(ctx context.Context, conn Transport, line string, opts Options) (*Reply
 	case opts.Token != "" && !rep.Complete:
 		return rep, ErrIncomplete
 	case !rep.Complete && !c.got:
-		return rep, ErrNoReply
+		// A silent-success command (AllowEmpty) ends quietly with no line: PSendSysMessage never ran, so
+		// there is nothing to collect. Anything with a refusal, echo, overlong reply or pump error already
+		// returned above; a deadline or quota end with no line is still no answer.
+		if !opts.AllowEmpty || opts.Token != "" || rep.Echoed || rep.End != "quiet" {
+			return rep, ErrNoReply
+		}
+		rep.Complete = true
 	}
 	return rep, nil
 }
@@ -505,6 +515,7 @@ type collector struct {
 	token    bool
 	deadline time.Time
 	last     time.Time
+	start    time.Time
 	got      bool
 
 	lines []ReplyLine
@@ -525,7 +536,8 @@ type collector struct {
 }
 
 func newCollector(line string, o Options) *collector {
-	return &collector{line: line, o: o, token: o.Token != "", deadline: o.Now().Add(o.Deadline)}
+	now := o.Now()
+	return &collector{line: line, o: o, token: o.Token != "", start: now, deadline: now.Add(o.Deadline)}
 }
 
 // Feed takes one chat line. Only system text is a reply candidate; this character's own say line that is a
@@ -633,7 +645,15 @@ func (c *collector) Complete(now time.Time) bool {
 		return true
 	}
 	if !c.token {
+		// A silent-success command (AllowEmpty) ends its quiet window with no line: PSendSysMessage never
+		// ran, so there is nothing to collect. The deadline still ends it the same way, and Run tells the
+		// two ends apart (quiet is success, deadline is no answer).
 		if c.got && now.Sub(c.last) >= c.o.Quiet {
+			c.complete = true
+			c.end = "quiet"
+			return true
+		}
+		if !c.got && c.o.AllowEmpty && now.Sub(c.start) >= c.o.Quiet {
 			c.complete = true
 			c.end = "quiet"
 			return true
@@ -662,9 +682,12 @@ func (c *collector) Reply() *Reply {
 		LastAt:      c.last,
 	}
 	// A token reply is complete only with its end marker; a tokenless reply is complete once it has any line and
-	// ended by quiet or the line cap (the deadline only ends it with what it had).
+	// ended by quiet or the line cap (the deadline only ends it with what it had). A silent-success command
+	// (AllowEmpty) with nothing collected is complete when it ended quietly.
 	if c.token {
 		rep.Complete = c.complete && !c.echo && !c.tooMany && !c.tooBig
+	} else if !c.got && c.o.AllowEmpty {
+		rep.Complete = c.complete && c.end == "quiet" && !c.echo && !c.tooMany && !c.tooBig
 	} else {
 		rep.Complete = c.got && c.complete && !c.tooMany && !c.tooBig
 	}

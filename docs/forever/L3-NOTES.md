@@ -143,5 +143,5 @@ Run on the clean committed tree `15683f1b` (this section's own commit adds only 
 - `make fmt-check`, `make vet`, `make build`, `make nocgo`, `make cross`: pass.
 - `staticcheck ./...`: pass.
 - `go test -race -count=1 -timeout 20m ./...`: pass.
-- `vm-test ta ~/wt-fa-l3`:
-  `RESULT: PASS  kind=ta wt=wt-fa-l3 sha=15683f1b dirty=0 files=2313` (rc=0, vm_duration=2246s).
+- `vm-test ta <local worktree>`:
+  `RESULT: PASS  kind=ta sha=15683f1b dirty=0 files=2313` (rc=0, vm_duration=2246s).

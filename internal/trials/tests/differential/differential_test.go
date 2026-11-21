@@ -7,8 +7,8 @@
 // without it the test is SKIPPED, so CI stays green without Python. TRIALS_PYTHON names the
 // interpreter (default python3).
 //
-//	TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
-//	go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
+//	TRIALS_PYTHON_ROOT=<local worktree> go test ./internal/trials/tests/differential
+//	go test ./internal/trials/tests/differential -args -python-root <local worktree>
 //
 // Two kinds of case:
 //

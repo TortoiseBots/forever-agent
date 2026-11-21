@@ -26,7 +26,8 @@ import (
 // noFightEnd reports the situation ends that mean no scored fight happened.
 func noFightEnd(ended string) bool {
 	switch ended {
-	case "no arena", "no mobs", "prepull", "meal", "debuff", "unsupported":
+	case "no arena", "no mobs", "no dummy", "no_fight", "dummy_down",
+		"prepull", "meal", "debuff", "unsupported":
 		return true
 	}
 	return false

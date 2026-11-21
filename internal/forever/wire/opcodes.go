@@ -57,6 +57,10 @@ const (
 	CMSGCloseInteraction     uint32 = 0x3E0028
 	CMSGQueryPlayerNames     uint32 = 0x440010
 	CMSGQueryCreature        uint32 = 0x3D0141
+	// CMSG_QUERY_GAME_OBJECT 0x3D0142 (Opcodes.h:781): the uint32 entry then the packed GUID
+	// (QueryGameObject::Read, QueryPackets.cpp:344-348).
+	CMSGQueryGameObject uint32 = 0x3D0142
+	CMSGDBQueryBulk     uint32 = 0x430010
 
 	// The combat the client sends (Opcodes.h:66-67, 168-179, 954).
 	CMSGSetSelection uint32 = 0x3E00CA
@@ -131,6 +135,10 @@ const (
 	SMSGTransferPending          uint32 = 0x450071
 	SMSGQueryPlayerNamesResponse uint32 = 0x640027
 	SMSGCreatureQueryResponse    uint32 = 0x490006
+	// SMSG_QUERY_GAME_OBJECT_RESPONSE 0x490007 (Opcodes.h:2175): the entry, the GUID, the allow bit, the
+	// stats size and the stats block (QueryPackets.cpp:350-388).
+	SMSGGameObjectQueryResponse uint32 = 0x490007
+	SMSGDBReply                 uint32 = 0x490000
 
 	// Combat, spells, auras, cooldowns and experience (Opcodes.h:1177-1178, 1296, 1363-1364, 1403, 1475, 1864,
 	// 2156, 2365-2367, 2379).
@@ -152,12 +160,15 @@ const (
 	SMSGAuraUpdate           uint32 = 0x670011
 	SMSGSpellCooldown        uint32 = 0x670005
 	SMSGCooldownEvent        uint32 = 0x450165
-	SMSGClearCooldown        uint32 = 0x450166
-	SMSGClearCooldowns       uint32 = 0x670015
-	SMSGPowerUpdate          uint32 = 0x45017E
-	SMSGSpellDelayed         uint32 = 0x670032
-	SMSGLogXPGain            uint32 = 0x450190
-	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	// SMSG_AI_REACTION 0x450161 (CombatPackets.h:124-133): the unit that reacted and the reaction as a
+	// uint32; HOSTILE marks the pull moment (Unit.cpp:6242).
+	SMSGAIReaction      uint32 = 0x450161
+	SMSGClearCooldown   uint32 = 0x450166
+	SMSGClearCooldowns  uint32 = 0x670015
+	SMSGPowerUpdate     uint32 = 0x45017E
+	SMSGSpellDelayed    uint32 = 0x670032
+	SMSGLogXPGain       uint32 = 0x450190
+	SMSGDeathReleaseLoc uint32 = 0x45017F
 	// The core-gains round (Opcodes.h:922, 1262, 1466-1472, 1675, 2162, 2361-2384, 2415-2417): the advanced
 	// combat log flag, the pushed threat lists, the encounter packets and the combat-log kinds this round decodes.
 	CMSGSetAdvancedCombatLogging uint32 = 0x3D0193
@@ -294,6 +305,8 @@ var clientNames = map[uint32]string{
 	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
 	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
+	CMSGQueryGameObject:             "CMSG_QUERY_GAME_OBJECT",
+	CMSGDBQueryBulk:                 "CMSG_DB_QUERY_BULK",
 	CMSGSetAdvancedCombatLogging:    "CMSG_SET_ADVANCED_COMBAT_LOGGING",
 	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
 	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",

@@ -50,7 +50,8 @@ const planScoutUsage = `usage: forever-agent plan-scout <dungeon> [--dir dungeon
     [--from LEG] [--until LEG] [--party-level N] [--out DIR] [--json]
     [--fix-out FILE] [--apply-fixes DIR] [--fail-on fail|warn]
     [--live <server>] [--slot N] [--holder NAME] [--slots FILE] [--binary PATH]
-    [--walk-budget 5m] [--max-minutes 20] [--instance-cap-per-account N] [--instance-cap-wait 20m] [--instance-cap-fail] [--instance-cap-reset]`
+    [--walk-budget 5m] [--max-minutes 20] [--instance-cap-per-account N] [--instance-cap-wait 20m] [--instance-cap-fail] [--instance-cap-reset]
+    [--forever [--parent MAP=PARENT]] [--live --slot DIR]`
 
 // planScoutOptions are the command's flags.
 type planScoutOptions struct {
@@ -62,6 +63,11 @@ type planScoutOptions struct {
 	partyLevel  int
 	json        bool
 	failOn      string
+	// forever reads a ForeverCore export with LoadForeverDB on the v16 tiles; parents is its parent-map rule.
+	forever bool
+	parents foreverParents
+	// serveSlot is the serve dir of the Forever live pass (--live --slot DIR).
+	serveSlot string
 	// live flags (parsed; the live phase is built by W3 and refuses here).
 	live             string
 	slot             int
@@ -83,11 +89,20 @@ type planScoutOptions struct {
 }
 
 // planScoutCmd checks a plan's exported rows offline (README, "Plan scout"): the placement lints, the four scout rules and
-// the joiner estimate, a report and a fix file. Only the offline pass is in this build.
+// the joiner estimate, a report and a fix file; with --live it adds the live pass on a test server (turtle: the toolkit;
+// --forever: a serve slot).
 func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// The Forever live pass reads --live as a bool and --slot as a serve dir; split them out before the flag package
+	// takes them as the turtle pass's server and slot number.
+	var slot string
+	var ferr error
+	if args, slot, ferr = foreverLiveArgs(args); ferr != nil {
+		fmt.Fprintf(stderr, "plan-scout: %v\n", ferr)
+		return exitUsage
+	}
 	fs := flag.NewFlagSet("plan-scout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	o := planScoutOptions{}
+	o := planScoutOptions{serveSlot: slot}
 	var out, fixOut, applyTo string
 	fs.StringVar(&o.dir, "dir", "dungeons", "the folder with the plan files")
 	fs.StringVar(&o.sqlFile, "sql", "", "check a deployed world migration's rows instead of the plan file's export")
@@ -112,6 +127,8 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	fs.StringVar(&o.instanceCapWait, "instance-cap-wait", "20m", "how long to wait for a free instance place")
 	fs.BoolVar(&o.instanceCapFail, "instance-cap-fail", false, "fail when the instance ledger is at its cap")
 	fs.BoolVar(&o.instanceCapReset, "instance-cap-reset", false, "reset the instance ledger entry")
+	fs.BoolVar(&o.forever, "forever", false, "read a ForeverCore world export (LoadForeverDB) on the v16 tiles")
+	fs.Var(&o.parents, "parent", "with --forever: the server's parent-map rule, MAP=PARENT (repeatable)")
 	flags, pos, err := splitFlagArgs(fs, args)
 	if err != nil {
 		return exitUsage
@@ -146,7 +163,18 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if o.instanceCapPerAccount < 1 {
 		return fail("--instance-cap-per-account must be 1 or more, not %d", o.instanceCapPerAccount)
 	}
-	if o.live != "" && !placeServers[o.live] {
+	switch {
+	case o.forever && o.spawns == "":
+		return fail("--forever needs --spawns DIR (the world export tools/dungeongen/export-forever.sh writes)")
+	case o.forever && o.live != "" && o.live != "forever":
+		return fail("--forever takes --live without a server name, with --slot DIR")
+	case o.forever && o.live == "forever" && o.serveSlot == "":
+		return fail("--forever --live needs --slot DIR (a running forever serve slot)")
+	case o.forever && o.serveSlot != "" && o.live == "":
+		return fail("--slot DIR needs --live")
+	case !o.forever && o.serveSlot != "":
+		return fail("--slot DIR is the Forever live pass: pass --forever")
+	case !o.forever && o.live != "" && !placeServers[o.live]:
 		fmt.Fprintf(stderr, "plan-scout: %q is not a test server (the live pass runs on %s only)\n", o.live, strings.Join(placeServerList(), ", "))
 		return exitLivePhaseRefused
 	}
@@ -161,7 +189,12 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return fail("--max-minutes takes at least 1")
 	}
 
-	planner := planScoutOpen(o.mmaps)
+	var planner planScoutNav
+	if o.forever {
+		planner = planScoutOpenForever(o.mmaps, o.parents)
+	} else {
+		planner = planScoutOpen(o.mmaps)
+	}
 	defer planner.Close()
 
 	// The rows: the plan's export, or a migration's rows.
@@ -218,13 +251,21 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 
 	// One query tells whether the navmesh can answer at all: that is exit 1, not a report of every row off the mesh.
+	// A v16 tile set cannot replay the 1.12 ServerPath query; the Forever planner answers its own Plan.
 	if len(in.Rows.Steps) > 0 {
 		s := in.Rows.Steps[0]
-		if _, err := planner.ServerPath(in.Rows.Plan.Map, navmesh.Vec3{s.X, s.Y, s.Z}, navmesh.Vec3{s.X, s.Y, s.Z}); err != nil {
-			if reason, unavailable := planCheckUnavailable(err); unavailable {
+		p0 := navmesh.Vec3{s.X, s.Y, s.Z}
+		var probeErr error
+		if o.forever {
+			_, probeErr = planner.Plan(in.Rows.Plan.Map, p0, p0)
+		} else {
+			_, probeErr = planner.ServerPath(in.Rows.Plan.Map, p0, p0)
+		}
+		if probeErr != nil {
+			if reason, unavailable := planCheckUnavailable(probeErr); unavailable {
 				fmt.Fprintf(stderr, "plan-scout: %s\n", reason)
 			} else {
-				fmt.Fprintf(stderr, "plan-scout: %v\n", err)
+				fmt.Fprintf(stderr, "plan-scout: %v\n", probeErr)
 			}
 			return exitPlanScoutNoNavmesh
 		}
@@ -236,40 +277,65 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		spawnDir = filepath.Join(o.dir, "..", "tools", "dungeongen", "testdata", fmt.Sprintf("map%d", in.Rows.Plan.Map))
 	}
 	var world *worldspawn.World
+	// unknown are the spawns LoadForeverDB defaulted to level 60 for; the live pass replaces those from its units read.
+	var unknown map[uint64]bool
 	wnote := ""
-	if _, err := os.Stat(filepath.Join(spawnDir, "creatures.tsv")); err != nil {
-		if o.spawns != "" {
-			return fail("no world export in %s", spawnDir)
-		}
-		wnote = fmt.Sprintf("aggro, patrol and joiner lints skipped: no world export in %s (pass --spawns DIR)", spawnDir)
-	} else {
-		w, notes, err := worldspawn.Load(spawnDir, in.Rows.Plan.Map)
+	switch {
+	case o.forever:
+		w, notes, err := worldspawn.LoadForeverDB(spawnDir, in.Rows.Plan.Map)
 		if err != nil {
+			return fail("%v", err)
+		}
+		world = w
+		if unknown, err = foreverUnknownLevels(spawnDir); err != nil {
+			return fail("%v", err)
+		}
+		if len(notes) > 0 {
+			wnote = strings.Join(notes, "; ")
+		}
+	default:
+		if _, err := os.Stat(filepath.Join(spawnDir, "creatures.tsv")); err != nil {
 			if o.spawns != "" {
-				return fail("%v", err)
+				return fail("no world export in %s", spawnDir)
 			}
-			wnote = fmt.Sprintf("aggro, patrol and joiner lints skipped: %v", err)
+			wnote = fmt.Sprintf("aggro, patrol and joiner lints skipped: no world export in %s (pass --spawns DIR)", spawnDir)
 		} else {
-			world = w
-			if len(notes) > 0 {
-				wnote = strings.Join(notes, "; ")
+			w, notes, err := worldspawn.Load(spawnDir, in.Rows.Plan.Map)
+			if err != nil {
+				if o.spawns != "" {
+					return fail("%v", err)
+				}
+				wnote = fmt.Sprintf("aggro, patrol and joiner lints skipped: %v", err)
+			} else {
+				world = w
+				if len(notes) > 0 {
+					wnote = strings.Join(notes, "; ")
+				}
 			}
 		}
 	}
 
-	rep, err := planscout.Offline(in, planner, world, planscout.Options{Filter: o.from != "" || o.until != "", FromLeg: from, UntilLeg: until, PartyLevel: o.partyLevel})
+	scoutOpts := planscout.Options{Filter: o.from != "" || o.until != "", FromLeg: from, UntilLeg: until, PartyLevel: o.partyLevel}
+	offline := func() (*planscout.Report, error) {
+		r, err := planscout.Offline(in, planner, world, scoutOpts)
+		if err != nil {
+			return nil, err
+		}
+		r.Source, r.Mmaps = source, o.mmaps
+		if from < 0 {
+			r.From = 0
+		}
+		if until < 0 {
+			r.Until = 0
+		}
+		if wnote != "" {
+			r.Notes = append(r.Notes, wnote)
+		}
+		return r, nil
+	}
+	rep, err := offline()
 	if err != nil {
 		return fail("%v", err)
-	}
-	rep.Source, rep.Mmaps = source, o.mmaps
-	if from < 0 {
-		rep.From = 0
-	}
-	if until < 0 {
-		rep.Until = 0
-	}
-	if wnote != "" {
-		rep.Notes = append(rep.Notes, wnote)
 	}
 
 	outDir := out
@@ -283,12 +349,34 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// The live pass (spec 5.6): the offline report is done, the live spots and hops come from it.
 	liveAborted := false
 	if o.live != "" {
-		if in.Plan == nil || in.Plan.Portal == nil {
-			return fail("--live needs the plan file (%s) with its portal", planPath)
+		if in.Plan == nil {
+			return fail("--live needs the plan file (%s)", planPath)
 		}
-		preFixes := planscout.ProposeFixes(rep, in, planner, world)
-		data, code, reason := runScoutLive(ctx, &o, in, rep, world, planner, preFixes, outDir, stdout, stderr)
-		rep.Server = o.live
+		var data planscout.LiveData
+		var code int
+		var reason string
+		if o.forever {
+			data, code, reason = runScoutForeverLive(ctx, &o, in, rep, world, planner)
+			rep.Server = "forever"
+			// The units read fills the levels the core has no row for; the report is rebuilt so its aggro and joiner
+			// numbers use them (MergeLive only adds the live checks).
+			if filled := scoutForeverFillLevels(world, data.Units, unknown); filled > 0 {
+				fresh, err := offline()
+				if err != nil {
+					return fail("%v", err)
+				}
+				rep = fresh
+				rep.Server = "forever"
+				rep.Notes = append(rep.Notes, fmt.Sprintf("live levels: %d spawn(s) the core has no level for took their unit's level", filled))
+			}
+		} else {
+			if in.Plan.Portal == nil {
+				return fail("--live needs the plan file (%s) with its portal", planPath)
+			}
+			preFixes := planscout.ProposeFixes(rep, in, planner, world)
+			data, code, reason = runScoutLive(ctx, &o, in, rep, world, planner, preFixes, outDir, stdout, stderr)
+			rep.Server = o.live
+		}
 		planscout.MergeLive(rep, in, world, data, planscout.Options{PartyLevel: o.partyLevel, Raid: in.Plan.IsRaid(), KillFirst: in.Plan.KillFirst})
 		switch code {
 		case exitOK:

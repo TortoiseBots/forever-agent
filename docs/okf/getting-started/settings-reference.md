@@ -15,7 +15,7 @@ status: draft
 
 # Settings file
 
-JSON file, mode `0600`, default `<home>/.config/turtle-agent/settings.json`. Unknown keys are refused. A leading `~/` in folder paths is the home folder.
+JSON file, mode `0600`, default `<user config dir>/turtle-agent/settings.json`. Unknown keys are refused. A leading `~/` in folder paths is the home folder.
 
 ```json
 {

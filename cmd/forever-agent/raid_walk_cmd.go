@@ -334,7 +334,7 @@ func parseRaidWalkArgs(args []string, stderr io.Writer) (raidWalkOptions, int) {
 	fs.Var(onOffFlag{v: &o.decisions, name: "--decisions"}, "decisions", "pull decision captures after teardown (on or off)")
 	fs.IntVar(&o.decisionsMaxMiB, "decisions-max-mib", 1024, "the decisions pull budget in MiB")
 	fs.StringVar(&o.mmaps, "mmaps", "", "the navmesh dir for slot setup")
-	fs.StringVar(&o.slotsPath, "slots", "", "the slots file (default ~/.config/forever-agent/slots.json)")
+	fs.StringVar(&o.slotsPath, "slots", "", "the slots file (default forever-agent/slots.json in the user config dir)")
 	fs.Var(onOffFlag{v: &o.allowSplitLedger, name: "allow-split-ledger"}, "allow-split-ledger", "allow a --slots file outside the default dir although the default leases hold a live lease for the server: test sandboxes only (the leases and the cap ledger would be split)")
 	fs.StringVar(&o.binary, "binary", "", "the agent binary slot setup copies (default: this executable)")
 	fs.Var(&o.injects, "inject", "a fault to inject, repeatable (at most 4): kill-mt, runaway, add-pack or lag, each with @from=N and its keys")

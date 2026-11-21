@@ -1,0 +1,11 @@
+{
+  "class": "mage",
+  "spec": "fire",
+  "note": "The round's documented per-class table (doc.go): numbers the server has not measured stay null ('to be measured'), and a null bound scores UNKNOWN, never FAIL. All-null is the honest starting point: the card shows the shape, not a claim.",
+  "expects": [
+    {"spell": "Fireball", "min_damage": null, "max_reaction_s": null},
+    {"spell": "Fire Blast", "min_damage": null, "max_reaction_s": null},
+    {"spell": "Pyroblast", "min_damage": null, "max_reaction_s": null},
+    {"spell": "Scorch", "min_damage": null, "max_reaction_s": null}
+  ]
+}
