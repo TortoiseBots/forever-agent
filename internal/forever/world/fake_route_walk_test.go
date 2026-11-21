@@ -804,7 +804,7 @@ func TestRouteWalkCancelBeforeFirstLeg(t *testing.T) {
 	t.Cleanup(f.close)
 	f.wg.Add(1)
 	go f.serveRealm()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	go func() {
 		for {
