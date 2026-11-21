@@ -162,8 +162,10 @@ func loadRoute(path string, watch bool) (*Route, error) {
 func NewRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, false) }
 
 // NewWatchRoute is NewRoute for dungeon-watch: the run is the server module's own bot's, so the plan's in-fight run
-// fields are part of its inputs and are accepted unchanged. The loader has validated them (ranges, the
-// kill_first/cc_priority rule, the summoned subset); this client neither rewrites nor acts on them.
+// fields are part of its inputs and are accepted unchanged, and so are the module's own movement and waiting: a
+// straight-line or stand-on-the-point hop and a boss wait for a patrolling boss (Wailing Caverns). The loader has
+// validated them (ranges, the kill_first/cc_priority rule, the summoned subset); this client neither rewrites nor acts
+// on them.
 func NewWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, true) }
 
 func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
@@ -260,10 +262,14 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 			refuse(where, "companions_loot", "the party's looting is not run by this round")
 		}
 		for j, w := range pl.Via {
-			if w.Direct || w.GMCross {
+			// A straight-line hop and a stand-on-the-point hop are steps of the module's own (remote) run: the watched
+			// bot walks them and the watch only follows the leg, so a watch takes them. A run this client leads
+			// walks the legs itself and cannot do either. A GM hop is done by a GM account of the run's own, which a
+			// watch does not drive, so it is refused for both.
+			if w.GMCross || (!watch && w.Direct) {
 				refuse(fmt.Sprintf("%s.via[%d]", where, j), "via.direct", "a straight-line or GM hop is not run by this round")
 			}
-			if w.Exact {
+			if !watch && w.Exact {
 				refuse(fmt.Sprintf("%s.via[%d]", where, j), "via.exact", "a stand-on-the-point hop is not run by this round")
 			}
 			l.Via = append(l.Via, vec(w.Point))
@@ -337,7 +343,8 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 			if !watch && pl.Boss.Tactics != nil {
 				refuse(bw, "tactics", "the party's fight tactics are not run by this round")
 			}
-			if pl.Boss.WaitS != 0 {
+			// The wait for a patrolling boss is the module's own: the watch follows the leg and sees the boss come.
+			if !watch && pl.Boss.WaitS != 0 {
 				refuse(bw, "wait_s", "a boss wait for a patrolling boss is not run by this round")
 			}
 			if len(pl.Boss.PhaseEntries) > 0 {
