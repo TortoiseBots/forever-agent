@@ -237,6 +237,7 @@ type slotSetupOptions struct {
 	dungeonsFrom string
 	character    string
 	slotsPath    string
+	forever      bool
 }
 
 // parseSlotSetupArgs parses slot setup flags in any position (before,
@@ -253,6 +254,7 @@ func parseSlotSetupArgs(args []string, stderr io.Writer) (slotSetupOptions, int)
 	fs.StringVar(&o.mmapsDir, "mmaps-dir", "", "navmesh folder written to settings.json mmaps_dir (must exist)")
 	fs.StringVar(&o.dungeonsFrom, "dungeons-from", "", "folder of *.json plans copied into the slot's dungeons dir")
 	fs.StringVar(&o.character, "character", "", "character to play (default the slot's)")
+	fs.BoolVar(&o.forever, "forever", false, "set up a forever serve slot (lease and dir as today, no settings; prints the serve line)")
 	fs.StringVar(&o.slotsPath, "slots", "", "slot table file")
 	pos, rest := splitPositionals(fs, args, 2)
 	if err := fs.Parse(rest); err != nil {

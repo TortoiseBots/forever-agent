@@ -319,7 +319,7 @@ func startServeDaemonTuned(t *testing.T, f *fakeServer, steps *stepLog, tune fun
 		},
 		Serve: cfg,
 	}
-	a := &serveAgent{addr: ln.Addr().String(), token: "serve-test-token", result: make(chan serveResult, 1), cancel: cancel}
+	a := &serveAgent{addr: ln.Addr().String(), token: cfg.Token, result: make(chan serveResult, 1), cancel: cancel}
 	go func() {
 		report, err := Enter(ctx, opts)
 		a.result <- serveResult{v: report, err: err}

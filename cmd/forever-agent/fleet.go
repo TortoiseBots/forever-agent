@@ -138,27 +138,50 @@ type fleetOpts struct {
 	budget *loginBudget
 	// now is the clock the start loop books logins with; nil: time.Now.
 	now func() time.Time
+	// ready says whether a polled state counts as in world; nil: the Turtle
+	// rule, in_world only (fleetReadyTurtle). `fleet --forever` sets its own.
+	ready func(state string) bool
 }
+
+// fleetReadyTurtle is the Turtle fleet's ready rule: the old daemon's
+// "in_world", nothing else.
+func fleetReadyTurtle(state string) bool { return state == string(world.StatusInWorld) }
 
 func fleetCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fleet", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fleetPath := fs.String("config", "", "fleet file: {\"members\":[{\"account\",\"character\",\"rpc\"}]} (required)")
 	settingsPath := fs.String("settings", config.DefaultPath(), "settings file (realmd address, accounts)")
+	forever := fs.Bool("forever", false, "run `forever serve` children (members {account,character,dir,listen,password_file}) instead of `login` children")
+	slotsPath := fs.String("slots", "", "slots file holding the per-server `forever` block (the serve's connection flags; --forever only)")
+	serverFlag := fs.String("server", "", "server whose `forever` block supplies the serve's connection flags (--forever only)")
 	stagger := fs.Duration("stagger", 2*time.Second, "pause between starting children (realmd throttles logins)")
 	wait := fs.Duration("wait", 2*time.Minute, "give up if not every character is in world after this long")
-	reconnects := fs.Int("reconnect", 0, "each child logs in again up to N times after an unplanned disconnect (0: off; a member's \"reconnect\" overrides)")
+	reconnects := fs.Int("reconnect", 0, "each child logs in again up to N times after an unplanned disconnect (0: off; a member's \"reconnect\" overrides; login children only)")
 	stopOnFailure := fs.Bool("stop-on-failure", false, "stop every child when one fails (default: report it and keep the others running)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *fleetPath == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "usage: forever-agent fleet --config FILE [--settings FILE] [--stagger D] [--wait D] [--reconnect N] [--stop-on-failure]")
+		fmt.Fprintln(stderr, "       forever-agent fleet --forever --config FILE --slots FILE [--stagger D] [--wait D] [--stop-on-failure]")
 		return exitUsage
 	}
 	if *reconnects < 0 {
 		fmt.Fprintln(stderr, "fleet: --reconnect must be 0 (off) or more")
 		return exitUsage
+	}
+	if !*forever && (*slotsPath != "" || *serverFlag != "") {
+		fmt.Fprintln(stderr, "fleet: --slots and --server are for --forever (the serve's connection flags); the Turtle fleet reads --settings")
+		return exitUsage
+	}
+	if *forever {
+		if *reconnects != 0 {
+			fmt.Fprintln(stderr, "fleet: --reconnect is for login children; a serve reconnects within its own budget")
+			return exitUsage
+		}
+		return fleetForeverCmd(ctx, *fleetPath, *slotsPath, *serverFlag, fleetOpts{stagger: *stagger, poll: 500 * time.Millisecond, wait: *wait,
+			stopGrace: 60 * time.Second, stopOnFailure: *stopOnFailure}, stdout, stderr)
 	}
 	st, err := config.Load(*settingsPath)
 	if err != nil {
@@ -442,6 +465,10 @@ func runFleet(ctx context.Context, members []fleetMember, deps fleetDeps, o flee
 		return first, false
 	}
 
+	isReady := o.ready
+	if isReady == nil {
+		isReady = fleetReadyTurtle
+	}
 	deadline := time.NewTimer(o.wait)
 	defer deadline.Stop()
 	tick := time.NewTicker(o.poll)
@@ -460,7 +487,7 @@ func runFleet(ctx context.Context, members []fleetMember, deps fleetDeps, o flee
 				s = "starting"
 			}
 			states[i] = s
-			if s != string(world.StatusInWorld) {
+			if !isReady(s) {
 				ready = false
 			}
 		}
@@ -502,7 +529,7 @@ func runFleet(ctx context.Context, members []fleetMember, deps fleetDeps, o flee
 	printFleetTable(stdout, members, states)
 	inWorld := 0
 	for _, s := range states {
-		if s == string(world.StatusInWorld) {
+		if isReady(s) {
 			inWorld++
 		}
 	}

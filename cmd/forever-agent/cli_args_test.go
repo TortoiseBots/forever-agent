@@ -166,6 +166,7 @@ func TestSlotSetupFlagOrderSameOptions(t *testing.T) {
 		{"positionals last", []string{"--holder", "w-a", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F", "test1", "1"}, full, exitOK},
 		{"positionals split", []string{"test1", "--holder", "w-a", "1", "--dir", "D", "--binary", "B", "--dungeons-dir", "G", "--mmaps-dir", "M", "--dungeons-from", "P", "--character", "C", "--slots", "F"}, full, exitOK},
 		{"equals form", []string{"--holder=w-a", "--dir=D", "--binary=B", "--dungeons-dir=G", "--mmaps-dir=M", "--dungeons-from=P", "--character=C", "--slots=F", "test1", "1"}, full, exitOK},
+		{"forever", []string{"--forever", "test1", "1", "--holder", "w-a", "--slots", "F"}, slotSetupOptions{server: "test1", slot: "1", holder: "w-a", slotsPath: "F", forever: true}, exitOK},
 		{"no holder", []string{"test1", "1", "--dir", "D"}, slotSetupOptions{}, exitUsage},
 	} {
 		got, code := parseSlotSetupArgs(r.args, io.Discard)
