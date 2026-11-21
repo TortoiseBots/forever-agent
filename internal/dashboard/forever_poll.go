@@ -152,15 +152,15 @@ func foreverProgressKey(st serveclient.Status, cmd serveclient.CommanderResult, 
 	if !haveCmd {
 		return ""
 	}
-	var res foreverCommanderResult
-	if json.Unmarshal(jsonBytes(cmd), &res) != nil || res.Status == nil || res.Status.Run == nil {
+	card := foreverCommanderCard(cmd)
+	if card == nil || card.Run == nil {
 		return ""
 	}
-	r := res.Status.Run
+	r := card.Run
 	if r.State != "" && r.State != "running" {
 		return ""
 	}
-	return fmt.Sprintf("%d|%d|%s|%s|%s|%d|%d|%.1f|%.1f", r.Step, r.Leg, r.Kind, r.Phase, r.Note, r.Deaths, r.Wipes, st.X, st.Y)
+	return fmt.Sprintf("%d|%d|%s|%s|%s|%d|%d|%.1f|%.1f", r.Step, legOf(r.Leg), r.Kind, r.Phase, r.Note, r.Deaths, r.Wipes, st.X, st.Y)
 }
 
 func jsonBytes(v any) []byte {
@@ -229,4 +229,12 @@ func foreverCardEvent(ev serveclient.Event) Event {
 		}
 	}
 	return e
+}
+
+// legOf is a run record's leg, -1 when the record names none.
+func legOf(leg *int) int {
+	if leg == nil {
+		return -1
+	}
+	return *leg
 }

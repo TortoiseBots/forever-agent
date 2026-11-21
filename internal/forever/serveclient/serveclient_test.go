@@ -610,14 +610,19 @@ func TestSpecShapesDecode(t *testing.T) {
 	}
 
 	f.results["commander"] = []any{map[string]any{
-		"sent":  ".bot commander status",
-		"reply": map[string]any{"kind": "commander-status", "ok": true, "lines": []string{"TBM:OK commander status"}},
+		"self": "Atank",
+		"sent": []string{".tb commander status"},
+		"cards": []any{map[string]any{"cmd": "Atank", "online": true, "lead": "Bheal", "bound": 2, "bots": 2, "in_party": false,
+			"map": 0, "members": []any{map[string]any{"bot": "Bheal", "guid": "0x1", "role": "healer", "hp": 10, "max_hp": 20, "alive": true, "lead": true, "map": 0, "pos": map[string]any{"x": 1, "y": 2, "z": 3}}}}},
+		"final": map[string]any{},
 	}}
 	commander, err := c.Commander(context.Background(), CommanderParams{Op: "status"})
 	if err != nil {
 		t.Fatalf("Commander: %v", err)
 	}
-	if commander.Sent != ".bot commander status" || !commander.Reply.OK || commander.Reply.Kind != "commander-status" {
+	if len(commander.Sent) != 1 || commander.Sent[0] != ".tb commander status" || len(commander.Cards) != 1 ||
+		commander.Cards[0].Lead != "Bheal" || commander.Cards[0].Map == nil || *commander.Cards[0].Map != 0 ||
+		len(commander.Cards[0].Members) != 1 || commander.Cards[0].Members[0].MaxHP != 20 {
 		t.Fatalf("commander %+v", commander)
 	}
 

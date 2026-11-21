@@ -52,6 +52,7 @@ type ServeCommander struct {
 	PartyError string                `json:"party_error,omitempty"` // status: why the party state read failed
 	Runs       []ServeCommanderRun   `json:"runs,omitempty"`
 	Events     []ServeCommanderEvent `json:"events,omitempty"`
+	Notes      []string              `json:"notes,omitempty"` // what the call did on its own, beyond the lines it sent
 }
 
 // ServeCommanderBot is one bot's line of an answer.
@@ -211,7 +212,26 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander bind: lead_bot is required"}
 		}
-		return commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		// The module keeps a binding only for a commander who stands OUTSIDE the party: while the commander is a
+		// member it releases the binding when the lead no longer leads the group (leader-changed). So a bind from
+		// inside a group leaves the group first, and the answer says so.
+		var notes []string
+		if s.party != nil && s.party.RosterValid && s.party.InParty {
+			if err := s.serveLeaveGroup(ctx); err != nil {
+				return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander bind: leaving the group first failed: " + err.Error()}
+			}
+			notes = append(notes, "left the group first: the module keeps a binding only while the commander stands outside the party")
+		}
+		out, err := commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		out.Notes = append(out.Notes, notes...)
+		var re *rpc.Error
+		if errors.As(err, &re) {
+			if partial, ok := re.Data.(ServeCommander); ok {
+				partial.Notes = append(partial.Notes, notes...)
+				re.Data = partial
+			}
+		}
+		return out, err
 	case "unbind":
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander unbind: lead_bot is required"}

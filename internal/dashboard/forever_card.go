@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/runmap"
+	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 )
 
 // This file is the dashboard's live view over a forever serve slot (L5):
@@ -51,62 +52,20 @@ type foreverPartyMember struct {
 	Level     uint16 `json:"level"`
 }
 
-// foreverCommanderMember is one member of the commander status: the module's
-// member record as the daemon decodes it.
-type foreverCommanderMember struct {
-	Bot      string    `json:"bot"`
-	GUID     string    `json:"guid"`
-	Class    string    `json:"class"`
-	Role     string    `json:"role"`
-	Level    int       `json:"level"`
-	HP       int64     `json:"hp"`
-	MaxHP    int64     `json:"maxhp"`
-	Power    int64     `json:"power"`
-	MaxPower int64     `json:"maxpower"`
-	PowerTyp string    `json:"ptype"`
-	Alive    bool      `json:"alive"`
-	Lead     bool      `json:"lead"`
-	Map      uint32    `json:"map"`
-	Pos      []float64 `json:"pos"`
-}
-
-// foreverCommanderRun is the run record of the commander status.
-type foreverCommanderRun struct {
-	Lead    string `json:"lead"`
-	Plan    string `json:"plan"`
-	State   string `json:"state"`
-	Step    int    `json:"step"`
-	Steps   int    `json:"steps"`
-	Leg     int    `json:"leg"`
-	LegName string `json:"legname"`
-	Kind    string `json:"kind"`
-	Phase   string `json:"phase"`
-	Note    string `json:"note"`
-	Elapsed int    `json:"elapsed"`
-	Deaths  int    `json:"deaths"`
-	Wipes   int    `json:"wipes"`
-}
-
-// foreverCommanderStatus is the daemon's decode of the module's status
-// report (the commander {op:status} result's status field).
-type foreverCommanderStatus struct {
-	Cmd     string                   `json:"cmd"`
-	Online  bool                     `json:"online"`
-	Lead    string                   `json:"lead"`
-	Bound   int                      `json:"bound"`
-	Map     uint32                   `json:"map"`
-	Pos     []float64                `json:"pos"`
-	Members []foreverCommanderMember `json:"members"`
-	Run     *foreverCommanderRun     `json:"run"`
-}
-
-// foreverCommanderResult is the commander method's answer: sent line, module
-// reply, and the decoded status. Run-active and not-available are shown as
-// the reply (see forever_control.go).
-type foreverCommanderResult struct {
-	Sent   string                  `json:"sent"`
-	Reply  map[string]any          `json:"reply"`
-	Status *foreverCommanderStatus `json:"status,omitempty"`
+// foreverCommanderCard picks the card the dashboard shows from a commander {op:status} answer: the card with a
+// run when one has it, else the first (a character commands one lead in practice). Nil when it commands none.
+func foreverCommanderCard(res serveclient.CommanderResult) *serveclient.CommanderCard {
+	var first *serveclient.CommanderCard
+	for i := range res.Cards {
+		c := &res.Cards[i]
+		if c.Run != nil {
+			return c
+		}
+		if first == nil {
+			first = c
+		}
+	}
+	return first
 }
 
 // foreverUnit is one row of the serve units answer.
@@ -165,17 +124,18 @@ func BuildForeverCard(in Inputs) Card {
 	if len(in.Party) > 0 {
 		_ = json.Unmarshal(in.Party, &party)
 	}
-	var cmd foreverCommanderResult
+	var cmdRes serveclient.CommanderResult
 	if len(in.Commander) > 0 {
-		_ = json.Unmarshal(in.Commander, &cmd)
+		_ = json.Unmarshal(in.Commander, &cmdRes)
 	}
+	cmd := foreverCommanderCard(cmdRes)
 	var units []foreverUnit
 	if len(in.Units) > 0 {
 		_ = json.Unmarshal(in.Units, &units)
 	}
-	fillForeverBots(&c, cmd.Status, party.Members)
+	fillForeverBots(&c, cmd, party.Members)
 	fillForeverMobs(&c, units)
-	fillForeverRun(&c, cmd.Status)
+	fillForeverRun(&c, cmd)
 	fillForeverStall(&c, in.Now, in.ProgressSince)
 	if in.Plan != nil {
 		c.Label.Map = in.Plan.Map
@@ -186,7 +146,7 @@ func BuildForeverCard(in Inputs) Card {
 // fillForeverBots builds the card's bots from the commander status members.
 // Party rows only fill in online/dead when the status names no member for
 // them; the status is the source of roles, hp and positions.
-func fillForeverBots(c *Card, cmd *foreverCommanderStatus, party []foreverPartyMember) {
+func fillForeverBots(c *Card, cmd *serveclient.CommanderCard, party []foreverPartyMember) {
 	if cmd == nil {
 		return
 	}
@@ -201,11 +161,9 @@ func fillForeverBots(c *Card, cmd *foreverCommanderStatus, party []foreverPartyM
 			HPPct: pct(float64(m.HP), float64(m.MaxHP)), PowerPct: pct(float64(m.Power), float64(m.MaxPower)),
 			Alive: m.Alive,
 		}
-		if len(m.Pos) >= 2 {
-			b.X, b.Y = Project(float32(m.Pos[0]), float32(m.Pos[1]))
-			b.Known = true
-			b.InMap = true
-		}
+		b.X, b.Y = Project(float32(m.Pos.X), float32(m.Pos.Y))
+		b.Known = true
+		b.InMap = true
 		if p, ok := byName[m.Bot]; ok {
 			if !p.Online {
 				b.Alive = false
@@ -302,7 +260,7 @@ func fillForeverTargets(c *Card, units []foreverUnit) {
 
 // fillForeverRun fills the run state from the commander run record: the plan,
 // the step counts, and a run state the page's buttons read.
-func fillForeverRun(c *Card, cmd *foreverCommanderStatus) {
+func fillForeverRun(c *Card, cmd *serveclient.CommanderCard) {
 	if cmd == nil || cmd.Run == nil {
 		return
 	}
@@ -316,7 +274,10 @@ func fillForeverRun(c *Card, cmd *foreverCommanderStatus) {
 	if c.Run.Phase == "" {
 		c.Run.Phase = c.Run.State
 	}
-	c.Run.Leg, c.Run.LegName = r.Leg, r.LegName
+	if r.Leg != nil {
+		c.Run.Leg = *r.Leg
+	}
+	c.Run.LegName = r.LegName
 	c.Run.Minutes = round1(float64(r.Elapsed) / 60)
 	c.Run.LastStep = r.Note
 	c.Counters.Deaths = r.Deaths

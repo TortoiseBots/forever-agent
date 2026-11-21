@@ -371,7 +371,7 @@ func (a *serveAgent) rawPost(t *testing.T, body []byte) (json.RawMessage, *rpcEr
 }
 
 // TestServeClientMethodPin pins which methods the daemon registers today and
-// what the client's not-yet-served methods answer. event_log and act need
+// what the client's not-yet-served methods answer. act needs
 // W3, teardown needs W2 (the daemon answers them not-ported): when one lands
 // this fails and the client note flips. commander is served now and has its
 // own real-daemon test below.
@@ -382,7 +382,10 @@ func TestServeClientMethodPin(t *testing.T) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}
 	}
-	for _, m := range []string{"event_log", "act"} {
+	if !slices.Contains(ported, "event_log") {
+		t.Errorf("event_log is not a ported method: %v", ported)
+	}
+	for _, m := range []string{"act"} {
 		if slices.Contains(ported, m) || slices.Contains(notPorted, m) {
 			t.Errorf("%s is registered now: drop its needs-W3 note and test it for real", m)
 		}
@@ -407,8 +410,9 @@ func TestServeClientMethodPin(t *testing.T) {
 			t.Errorf("%s: %v, want rpc code %d", what, err, code)
 		}
 	}
-	_, err = c.EventLog(ctx, 0, 0, 0)
-	want("EventLog", err, rpc.CodeMethodNotFound)
+	if _, err = c.EventLog(ctx, 0, 0, 0); err != nil {
+		t.Errorf("EventLog: %v, want the served page", err)
+	}
 	_, err = c.Act(ctx, []string{"gm line=.gm"}, 5_000_000_000)
 	want("Act", err, rpc.CodeMethodNotFound)
 	_, err = c.Teardown(ctx, "off")

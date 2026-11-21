@@ -223,7 +223,13 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			case "silent":
 				// Nothing: the client's answer wait times out.
 			}
-		case wire.CMSGLeaveGroup, wire.CMSGRequestPartyMemberStats:
+		case wire.CMSGLeaveGroup:
+			f.mu.Lock()
+			f.serveLeft = true
+			f.mu.Unlock()
+			c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(partyGUID, wire.EmptyGUID, guid, nil, nil, true))
+			c.writeFrame(fakeSMSGGroupDestroyed, nil)
+		case wire.CMSGRequestPartyMemberStats:
 		case wire.CMSGAreaTrigger:
 			f.mu.Lock()
 			f.serveArea = true
@@ -495,6 +501,24 @@ func TestServeStatusChatAndLogout(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("chat_log %+v", page)
+	}
+	// event_log is the same cursor over the same lines, in the events.Event keys the scenario runner reads.
+	var elog ServeEventLogPage
+	json.Unmarshal(a.mustCall(t, "event_log", map[string]any{"since": 0, "limit": 1000, "wait_ms": 0}), &elog)
+	if len(elog.Events) != len(page.Events) || elog.Next != page.Next || elog.Oldest != page.Oldest {
+		t.Fatalf("event_log %+v does not follow chat_log %+v", elog, page)
+	}
+	sawSystem := false
+	for i, e := range elog.Events {
+		if e.Seq != page.Events[i].Seq || e.Text != page.Events[i].Text || e.Data["type"] == "" || e.Data["type"] == nil {
+			t.Fatalf("event_log row %d %+v, chat_log row %+v", i, e, page.Events[i])
+		}
+		if e.Text == "SERVE-SYSTEM" && e.Kind == "system" {
+			sawSystem = true
+		}
+	}
+	if !sawSystem {
+		t.Fatalf("event_log has no system row for SERVE-SYSTEM: %+v", elog)
 	}
 
 	var out serveLogoutResult
@@ -1705,6 +1729,66 @@ func TestServeCommanderBindAndUnbind(t *testing.T) {
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// TestServeCommanderBindLeavesTheGroup: the module releases a binding whose commander is a member of the party
+// (leader-changed), so a bind from inside a group leaves it first, sends the lines, and says so in notes. Outside a
+// group no leave goes out and there is no note.
+func TestServeCommanderBindLeavesTheGroup(t *testing.T) {
+	for _, inGroup := range []bool{true, false} {
+		f := newFakeServer(t)
+		f.serveMode = true
+		f.serveInvite = inGroup
+		f.serveAccept = "roster"
+		f.serveCommander = func(line string) []string {
+			switch line {
+			case ".tb commander status":
+				return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+			case ".tb master party Tanka Xxxxxx":
+				return []string{
+					"master-begin #T",
+					"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+					"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+				}
+			case ".tb commander status Xxxxxx":
+				return commanderCardLines("Tanka", "Tanka")
+			}
+			return nil
+		}
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		waitServeState(t, a, "online", steps)
+		if inGroup {
+			waitServeUnits(t, a)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				var party ServePartyInfo
+				json.Unmarshal(a.mustCall(t, "party", nil), &party)
+				if party.PendingInvite != "" || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			a.mustCall(t, "accept_invite", nil)
+		}
+		var bound ServeCommander
+		json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}), &bound)
+		f.mu.Lock()
+		left := f.serveLeft
+		f.mu.Unlock()
+		if left != inGroup {
+			t.Fatalf("inGroup=%v: the fake saw a leave=%v", inGroup, left)
+		}
+		if inGroup != (len(bound.Notes) == 1 && strings.Contains(bound.Notes[0], "left the group")) || (!inGroup && len(bound.Notes) != 0) {
+			t.Fatalf("inGroup=%v: notes %q", inGroup, bound.Notes)
+		}
+		if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" || bound.Card == nil {
+			t.Fatalf("inGroup=%v: bind answered %+v", inGroup, bound)
+		}
+		a.stop(t)
+		f.close()
+		f.wait(t)
+	}
 }
 
 func TestServeCommanderDuringReconnect(t *testing.T) {
