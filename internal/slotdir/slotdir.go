@@ -29,6 +29,9 @@ type Manifest struct {
 	TokenFile string `json:"token_file"`
 	SlotsPath string `json:"slots_path"`
 	Created   string `json:"created"`
+	// NoAuth is set by `forever serve --no-auth`: the daemon runs without a bearer token and no token file
+	// exists. Only then may a client talk to it without a header.
+	NoAuth bool `json:"no_auth,omitempty"`
 }
 
 // ErrUnreadable is a dir without a usable slot.json: missing, not readable as the owner's private regular

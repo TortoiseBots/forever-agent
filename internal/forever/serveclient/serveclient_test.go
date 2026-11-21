@@ -165,6 +165,44 @@ func TestNewRefusesNonLoopback(t *testing.T) {
 	}
 }
 
+// TestLocalhostIsDialledAsTheLiteral: "localhost" is stored as 127.0.0.1, so a
+// resolver or hosts answer can never send the token elsewhere; no environment
+// proxy sits in the path either.
+func TestLocalhostIsDialledAsTheLiteral(t *testing.T) {
+	c, err := New("localhost:4", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.addr != "http://127.0.0.1:4/rpc" {
+		t.Fatalf("addr %q still names localhost", c.addr)
+	}
+	if tr, ok := c.hc.Transport.(*http.Transport); !ok || tr.Proxy != nil {
+		t.Fatalf("transport %T may use a proxy", c.hc.Transport)
+	}
+}
+
+// TestOpenMissingTokenIsNotNoAuth: a dir whose slot.json does not say no_auth
+// but whose token file is gone is refused, never sent unauthenticated; and a
+// no_auth dir that holds a token file is ambiguous and refused.
+func TestOpenMissingTokenIsNotNoAuth(t *testing.T) {
+	token, _ := rpc.NewToken()
+	port, calls := realRPC(t, token)
+	dir := slotDirFor(t, port, token, nil)
+	if err := os.Remove(slotdir.TokenPath(dir, port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("Open sent a daemon with auth, minus its token file, no header")
+	}
+	dir = slotDirFor(t, port, token, func(m *slotdir.Manifest) { m.NoAuth = true })
+	if _, err := Open(dir); err == nil {
+		t.Fatal("Open accepted no_auth next to a token file")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("a refused dir sent %d request(s)", calls.Load())
+	}
+}
+
 // TestRedirectNotFollowed: a daemon (or whatever answers on its port) that
 // redirects never receives the bearer header.
 func TestRedirectNotFollowed(t *testing.T) {
@@ -363,6 +401,8 @@ func slotDirFor(t *testing.T, port int, token string, mutate func(*slotdir.Manif
 		if err := os.WriteFile(m.TokenFile, []byte(token+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	} else {
+		m.NoAuth = true // forever serve --no-auth records it and writes no token file
 	}
 	if mutate != nil {
 		mutate(&m)

@@ -380,6 +380,8 @@ type Client struct {
 
 func newHTTPClient() *http.Client {
 	return &http.Client{
+		// No environment proxy: the token goes straight to the loopback daemon.
+		Transport:     &http.Transport{Proxy: nil},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
@@ -400,6 +402,9 @@ func New(addr, tokenFile string) (*Client, error) {
 	if !loopbackHost(host) {
 		return nil, fmt.Errorf("%w: got %q", ErrNotLoopback, host)
 	}
+	if host == "localhost" {
+		host = "127.0.0.1" // dial the literal: a name is resolved again at every dial
+	}
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return nil, fmt.Errorf("serveclient: bad port %q", port)
 	}
@@ -419,7 +424,8 @@ func New(addr, tokenFile string) (*Client, error) {
 
 // loopbackHost reports whether host is "localhost" or an IP literal in
 // 127.0.0.0/8 or ::1. Any other name is refused without a lookup, so a
-// hostname that resolves elsewhere never gets the token.
+// hostname that resolves elsewhere never gets the token; New dials "localhost"
+// as 127.0.0.1.
 func loopbackHost(host string) bool {
 	if _, _, err := netutil.CheckLoopbackAddr(net.JoinHostPort(host, "1")); err != nil {
 		return false
@@ -430,10 +436,12 @@ func loopbackHost(host string) bool {
 // Open opens the serve daemon behind a serve --dir. It runs the same slot.json
 // checks the rpc command runs (internal/slotdir): server, slot, holder and
 // port present, the dir the one slot.json names, every path inside the dir and
-// no symlink. The token is read only from <dir>/rpc-<port>.token. A dir
-// without that file is a daemon started with --no-auth (it never writes one):
-// the client then sends no header, and a daemon that wants a token answers
-// ErrUnauthorized.
+// no symlink. The token is read only from <dir>/rpc-<port>.token. Without a
+// header only when slot.json says no_auth (a daemon started with --no-auth,
+// which writes no token file); a dir that does not say so and has no token
+// file is an error (a deleted token is never hidden), and no_auth next to a
+// token file is refused as ambiguous. A no_auth dir whose daemon wants a token
+// anyway answers ErrUnauthorized.
 func Open(dir string) (*Client, error) {
 	abs, manifest, err := slotdir.Read(dir)
 	if err != nil {
@@ -446,8 +454,14 @@ func Open(dir string) (*Client, error) {
 		return nil, err
 	}
 	tokenFile := slotdir.TokenPath(abs, manifest.Port)
-	if _, err := os.Lstat(tokenFile); errors.Is(err, os.ErrNotExist) {
+	_, statErr := os.Lstat(tokenFile)
+	switch {
+	case manifest.NoAuth && statErr == nil:
+		return nil, fmt.Errorf("serveclient: slot.json says no_auth but %s exists: refusing to guess", tokenFile)
+	case manifest.NoAuth && errors.Is(statErr, os.ErrNotExist):
 		tokenFile = ""
+	case errors.Is(statErr, os.ErrNotExist):
+		return nil, fmt.Errorf("serveclient: token file %s is missing and slot.json does not say no_auth: not sending unauthenticated requests", tokenFile)
 	}
 	return New(fmt.Sprintf("127.0.0.1:%d", manifest.Port), tokenFile)
 }

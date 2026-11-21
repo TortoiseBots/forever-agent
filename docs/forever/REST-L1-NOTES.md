@@ -20,9 +20,12 @@ untouched.
   and port present, slot.json's dir the one given, settings/pid/binary/token
   paths derived inside the dir, no symlinks. The token is read only from
   `<dir>/rpc-<port>.token`; a `token_file` pointing elsewhere is refused. A
-  dir without that file is a `forever serve --no-auth` daemon (it records the
-  path but never writes the file): the client sends no header, and a daemon
-  that wants a token answers `ErrUnauthorized` (HTTP 401).
+  dir whose slot.json says `no_auth` (`forever serve --no-auth` records it and
+  writes no token file) gets no header; a dir that does not say it and has no
+  token file is refused (a deleted token is never hidden), as is `no_auth`
+  next to a token file. A `no_auth` dir whose daemon wants a token answers
+  `ErrUnauthorized` (HTTP 401). `localhost` is dialled as `127.0.0.1` and no
+  environment proxy is used.
 * Methods the daemon on main serves today, decoded exactly: `Status`,
   `Units`, `Unit`, `Party`, `GM`, `Bot`, `Events` (the combat log, the
   daemon's `CombatRow` and `ServeEventsPage`), `Logout`.

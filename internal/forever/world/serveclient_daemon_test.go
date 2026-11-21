@@ -50,6 +50,7 @@ func startClientDaemon(t *testing.T, auth bool) (*serveAgent, string, func()) {
 		Server: "forever", Slot: "1", Holder: "forever", Character: "Testchar", Port: port, Dir: dir,
 		Binary: filepath.Join(dir, "forever-agent"), Settings: filepath.Join(dir, "settings.json"),
 		PIDFile: filepath.Join(dir, "agent.pid"), TokenFile: slotdir.TokenPath(dir, port),
+		NoAuth: !auth,
 	}
 	if auth {
 		if err := os.WriteFile(m.TokenFile, []byte(token+"\n"), 0o600); err != nil {
@@ -160,18 +161,35 @@ func TestServeClientNoAuthDaemon(t *testing.T) {
 	if st, err := c.Status(context.Background()); err != nil || st.State != "online" {
 		t.Fatalf("Status %+v, %v", st, err)
 	}
-	// A dir for a daemon that wants a token, opened without one, is a typed 401.
+	// An auth daemon whose token file was deleted is refused at Open: no_auth
+	// is not in its slot.json, so the client never goes out without a header.
 	a2, dir2, stop2 := startClientDaemon(t, true)
 	defer stop2()
-	_ = a2
 	if err := os.Remove(filepath.Join(dir2, fmt.Sprintf("rpc-%d.token", portOf(t, a2.addr)))); err != nil {
 		t.Fatal(err)
 	}
-	c2, err := serveclient.Open(dir2)
+	if _, err := serveclient.Open(dir2); err == nil {
+		t.Fatal("Open of an auth dir without its token file succeeded")
+	}
+	// A dir that claims no_auth against a daemon that wants a token: typed 401.
+	a3, dir3, stop3 := startClientDaemon(t, true)
+	defer stop3()
+	port3 := portOf(t, a3.addr)
+	if err := os.Remove(filepath.Join(dir3, fmt.Sprintf("rpc-%d.token", port3))); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir3, "slot.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c2.Status(context.Background()); !errors.Is(err, serveclient.ErrUnauthorized) {
+	if err := os.WriteFile(filepath.Join(dir3, "slot.json"), []byte(strings.Replace(string(raw), "{", `{"no_auth":true,`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c3, err := serveclient.Open(dir3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c3.Status(context.Background()); !errors.Is(err, serveclient.ErrUnauthorized) {
 		t.Fatalf("Status without a token: %v, want ErrUnauthorized", err)
 	}
 }
