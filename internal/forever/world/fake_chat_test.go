@@ -169,6 +169,8 @@ func (f *fakeServer) serveChat(c, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGChatSay, fakeCMSGChatParty:
 			lang, secure, text, err := parseClientChatMessage(payload)
 			if err != nil {
@@ -448,6 +450,8 @@ func (f *fakeServer) serveParty(c, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGPartyInvite:
 			if f.partyAccept || f.partyDecline || f.partyInvalid != "" {
 				f.failf("party: an invite was sent in a flow that waits for one")

@@ -32,6 +32,16 @@ var KindMap = map[string]string{
 	"periodic":     "damage",
 	"heal":         "heal",
 	"death":        "death",
+	// The core-gains round's combat-log kinds: an interrupt is the Kick/Counterspell trials' answer, a dispel
+	// ends a debuff episode for the bug hunter, and the rest join the stream as their own event kinds.
+	"interrupt":     "interrupt",
+	"dispel":        "dispel",
+	"absorb":        "absorb",
+	"miss":          "miss",
+	"resist":        "resist",
+	"immune":        "immune",
+	"instakill":     "instakill",
+	"environmental": "damage",
 }
 
 // Row is one events/samples/marks row.
@@ -694,7 +704,7 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 			// Python's name_for(str(id)) for an id outside the table is str(id).
 			spellName = bigID.String()
 		}
-		out = append(out, Row{
+		ev := Row{
 			"t":          pyjson.Round(t, 2),
 			"wall":       row["time"],
 			"kind":       kind,
@@ -712,7 +722,24 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 			"src_role":   roleOf(srcGUID),
 			"dst_role":   roleOf(dstGUID),
 			"origin":     "ta",
-		})
+		}
+		// The core-gains fields are written only when the row carries them, so older recordings keep their shape.
+		// pyjson.Str(nil) is "None", so a row without the key must be checked first.
+		if row["reason"] != nil {
+			if reason := pyjson.Str(row["reason"]); reason != "" {
+				ev["reason"] = reason
+			}
+		}
+		if row["interrupted_spell_id"] != nil {
+			ev["interrupted_spell_id"] = row["interrupted_spell_id"]
+		}
+		if row["absorbed_spell_id"] != nil {
+			ev["absorbed_spell_id"] = row["absorbed_spell_id"]
+		}
+		if row["dispelled"] != nil {
+			ev["dispelled"] = row["dispelled"]
+		}
+		out = append(out, ev)
 	}
 
 	// Excluded rows from marks (gm_heal, excluded) become kind: excluded rows.

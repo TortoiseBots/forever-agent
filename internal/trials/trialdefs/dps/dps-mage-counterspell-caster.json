@@ -94,10 +94,10 @@
   "rules": [
     {
       "id": "DPS-MAG-COUNTERSPELL",
-      "desc": "The mage casts Counterspell on the mob within 3 s of an interruptible cast start, at least 60 percent of the time (one trigger per mob per 30 s, one counted answer per 30 s: Counterspell's cooldown)",
-      "source": "ai/playerbot/strategy/mage/MageStrategy.cpp:428-455 (MageCcStrategy), :443-444 (counterspell at ACTION_INTERRUPT + 1); ai/playerbot/strategy/mage/MageTriggers.h:113; ai/playerbot/strategy/mage/MageActions.h:153-154 (BEGIN_INTERRUPT_SPELL_ACTION); ai/playerbot/AiFactory.cpp:704-721 (mages get 'cc'); ai/playerbot/strategy/generic/ThreatStrategy.cpp:68-83 (the high-threat veto); ai/playerbot/strategy/triggers/GenericTriggers.cpp:1072-1075 (InterruptSpellTrigger); ai/playerbot/PlayerbotAISpells.cpp:1799-1847 (IsInterruptableSpellCasting); ai/playerbot/strategy/actions/GenericSpellActions.h:131-152 (CastInterruptSpellAction / CastMeleeInterruptSpellAction: 'interrupt target', still the CastSpellAction threat type), :39 (ACTION_THREAT_SINGLE); ai/playerbot/strategy/actions/GenericSpellActions.h:501-505 (Shoot is threat type NONE); TortoiseBots upstream/dev abb91ff62",
+      "desc": "The mage interrupts the mob with Counterspell within 3 s of an interruptible cast start, at least 60 percent of the time (one trigger per mob per 30 s, one counted answer per 30 s: Counterspell's cooldown)",
+      "source": "ai/playerbot/strategy/mage/MageStrategy.cpp:428-455 (MageCcStrategy), :443-444 (counterspell at ACTION_INTERRUPT + 1); ai/playerbot/strategy/mage/MageTriggers.h:113; ai/playerbot/strategy/mage/MageActions.h:153-154 (BEGIN_INTERRUPT_SPELL_ACTION); ai/playerbot/AiFactory.cpp:704-721 (mages get 'cc'); ai/playerbot/strategy/generic/ThreatStrategy.cpp:68-83 (the high-threat veto); ai/playerbot/strategy/triggers/GenericTriggers.cpp:1072-1075 (InterruptSpellTrigger); ai/playerbot/PlayerbotAISpells.cpp:1799-1847 (IsInterruptableSpellCasting); ai/playerbot/strategy/actions/GenericSpellActions.h:131-152 (CastInterruptSpellAction / CastMeleeInterruptSpellAction: 'interrupt target', still the CastSpellAction threat type), :39 (ACTION_THREAT_SINGLE); ai/playerbot/strategy/actions/GenericSpellActions.h:501-505 (Shoot is threat type NONE); TortoiseBots upstream/dev abb91ff62 SMSG_SPELL_INTERRUPT_LOG (Spells/Spell.cpp:5313-5321, SpellEffects.cpp:3136) is the answer: the log row names the interrupting spell and the mob whose cast it stopped.",
       "expect_today": "FAIL",
-      "why_expect": "the arcane mage idles while its target attacks the healer, bot ticket T15",
+      "why_expect": "the arcane mage idles while its target attacks the healer, bot ticket T15 Since the core-gains round the answer is read from the interrupt log, not from a cast: a Kick the server did not land on a live cast is no answer.",
       "check": {
         "metric": "latency",
         "trigger": {
@@ -106,7 +106,7 @@
           "spell_interruptible": true
         },
         "response": {
-          "kind": "cast",
+          "kind": "interrupt",
           "src": "$bot",
           "spell": "Counterspell"
         },

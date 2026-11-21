@@ -273,3 +273,70 @@ func (c SpellCast) CastFlagHasTrajectory() bool { return c.CastFlags&0x00000002 
 func (e PeriodicAuraEffect) PeriodicTickIsHeal() bool {
 	return e.Effect == 8 || e.Effect == 20
 }
+
+// RoundReason names a swing that did not land normally for the combat log: an empty string is a normal hit, and
+// every other value is the victim state or the miss flag in words (Unit.h:48-59, HITINFO_MISS at UnitDefines.h:385).
+func (r AttackRound) RoundReason() string {
+	if r.HitMiss() {
+		return "miss"
+	}
+	switch r.VictimState {
+	case 1:
+		return "" // a clear or blocked hit
+	case 0:
+		return "miss"
+	}
+	return VictimStateName(r.VictimState)
+}
+
+// MissReasonName names SpellMissInfo (SharedDefines.h:3118-3131).
+func MissReasonName(reason uint8) string {
+	switch reason {
+	case 0:
+		return "none"
+	case 1:
+		return "miss"
+	case 2:
+		return "resist"
+	case 3:
+		return "dodge"
+	case 4:
+		return "parry"
+	case 5:
+		return "block"
+	case 6:
+		return "evade"
+	case 7:
+		return "immune"
+	case 8:
+		return "immune2"
+	case 9:
+		return "deflect"
+	case 10:
+		return "absorb"
+	case 11:
+		return "reflect"
+	}
+	return fmt.Sprintf("miss reason %d", reason)
+}
+
+// EnvironmentalName names EnviromentalDamage (Player.h:950-958).
+func EnvironmentalName(kind uint8) string {
+	switch kind {
+	case 0:
+		return "exhausted"
+	case 1:
+		return "drowning"
+	case 2:
+		return "fall"
+	case 3:
+		return "lava"
+	case 4:
+		return "slime"
+	case 5:
+		return "fire"
+	case 6:
+		return "fall-to-void"
+	}
+	return fmt.Sprintf("environment %d", kind)
+}

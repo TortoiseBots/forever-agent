@@ -203,6 +203,8 @@ func (f *fakeServer) serveAddon(c, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGUnregisterAllAddon:
 			if len(payload) != 0 {
 				f.failf("addon: the unregister-all packet carries %d byte(s)", len(payload))
