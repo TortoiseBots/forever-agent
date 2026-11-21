@@ -196,7 +196,7 @@ func (s *session) actQuests(ctx context.Context, a *actState, step ActStep) erro
 		for _, c := range book.Credits(e.QuestID) {
 			line += fmt.Sprintf(", objective %d %d/%d", c.ObjectID, c.Count, c.Required)
 		}
-		s.opts.logf("%s", line)
+		s.actLine(a, "%s", line)
 	}
 	s.actOK(a, step, fmt.Sprintf("%d quest(s) in %d slot(s)", used, book.Slots()))
 	return nil
@@ -295,7 +295,7 @@ func (s *session) actQuestProgress(ctx context.Context, a *actState, step ActSte
 		for _, c := range book.Credits(e.QuestID) {
 			line += fmt.Sprintf(", objective %d %d/%d", c.ObjectID, c.Count, c.Required)
 		}
-		s.opts.logf("%s", line)
+		s.actLine(a, "%s", line)
 	}
 	s.actOK(a, step, fmt.Sprintf("%d quest(s)", used))
 	return nil

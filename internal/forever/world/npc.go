@@ -5,6 +5,7 @@ package world
 // later vendor, trainer, taxi and quest rounds.
 
 import (
+	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -24,6 +25,7 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			return nil
 		}
 		s.actMenu = &m
+		s.eventGossip(events.KindGossip, m.Unit, map[string]any{"menu_id": m.MenuID, "options": len(m.Options)})
 		// The spirit healer's flow (handleDeath) waits on its own copy of the menu.
 		if s.death != nil {
 			s.death.gossip = m
@@ -41,6 +43,7 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		s.eventGossip(events.KindGossipComplete, wire.EmptyGUID, nil)
 	case wire.SMSGGossipOptionNPCInteract:
 		if _, err := npc.ParseGossipOptionInteraction(p.Payload); err != nil {
 			s.noteParseError(p, err)

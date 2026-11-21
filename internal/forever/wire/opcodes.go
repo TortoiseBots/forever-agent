@@ -68,6 +68,9 @@ const (
 	CMSGAttackStop   uint32 = 0x3D011D
 	CMSGCastSpell    uint32 = 0x3D0174
 	CMSGCancelCast   uint32 = 0x3D0177
+	// CMSGCancelMountAura is the empty packet that cancels the character's mount aura (Opcodes.h:173,
+	// SpellHandler.cpp:338 RemoveAurasByType(SPELL_AURA_MOUNTED)).
+	CMSGCancelMountAura uint32 = 0x3D0153
 
 	SMSGAuthChallenge        uint32 = 0x4C0000
 	SMSGEnterEncryptedMode   uint32 = 0x4C0004
@@ -210,6 +213,11 @@ const (
 	SMSGSendKnownSpells     uint32 = 0x670019
 	SMSGLevelUpInfo         uint32 = 0x450194
 	SMSGSpellExecuteLog     uint32 = 0x670033
+	// The mount answers (Opcodes.h:1444, 1891; SpellPackets.cpp:1156-1165): MountResult is one int32, 0 for a
+	// mount that went through. DismountResult shares the shape but this core never sends it
+	// (Opcodes.cpp:1520 STATUS_UNHANDLED): the field update is what ends a dismount.
+	SMSGMountResult    uint32 = 0x45000F
+	SMSGDismountResult uint32 = 0x450010
 )
 
 // Loot and game objects (Opcodes.h:357-358, 579-583, 1499-1500, 1805, 1865-1874, 2395):
