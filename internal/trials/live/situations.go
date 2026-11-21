@@ -70,13 +70,15 @@ func kindOf(trial map[string]any) string {
 // Run is one repeat's situation: the interface Runner.Situation.
 func (s *LiveSituation) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 	tb := tbcmd.NewClient(NewTBRunner(r.Client))
-	t := &tankRun{sit: s, r: r, tb: tb}
-	kind := kindOf(r.Trial)
-	if kind != "tank_damage" {
+	switch kind := kindOf(r.Trial); kind {
+	case "tank_damage":
+		return (&tankRun{sit: s, r: r, tb: tb}).run(ctx)
+	case "dummy":
+		return (&dummyRun{sit: s, r: r, tb: tb}).run(ctx)
+	default:
 		return map[string]any{"ok": false, "ended": "unsupported",
 			"invalid_reason": "situation kind " + kind + " is not ported on Forever"}, nil
 	}
-	return t.run(ctx)
 }
 
 // Finish releases the arena the repeat held: the runner calls it after the
