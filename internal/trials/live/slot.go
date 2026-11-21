@@ -21,6 +21,12 @@ type ServerExt struct {
 	CA           string `json:"ca"`
 	Build        string `json:"build"`
 	ServeDirRoot string `json:"serve_dir_root"`
+	// Player is the slot character the serve logged in (empty: read from
+	// serve status); BotPool the persistent hire pool by class (D5 names).
+	Player  string              `json:"player"`
+	BotPool map[string][]string `json:"bot_pool"`
+	// ArenaStateDir is where the arena locks live (empty: ArenaStateDir()).
+	ArenaStateDir string `json:"arena_state_dir"`
 }
 
 // SlotsFile is a slots file plus the runner's optional per-server `forever`
@@ -94,6 +100,17 @@ func AcquireSlot(sf *SlotsFile, store *slots.Store, server, slotID string, any b
 	}
 	return &Hold{Server: server, Slot: slot, Acq: acq, Store: store, Dir: dir}, nil
 }
+
+// ServeProbe is the lease store's probe for the Forever runner: a slot's
+// port is the serve's own RPC port and the serve is meant to be running
+// (decision 5: the operator starts one serve per slot), so a listening port
+// is not another holder. The serve dir (slot.json and its token) is the real
+// gate, and AcquireSlot opens it right after the lease.
+type ServeProbe struct{ slots.Probe }
+
+// PortListening always answers false: the Forever slot's port belongs to the
+// serve the runner talks to.
+func (ServeProbe) PortListening(int) bool { return false }
 
 // SameHolderHeld reports whether slotID on server is already leased to
 // holder (a second `trials run` with the default holder name): the store

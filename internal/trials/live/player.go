@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,8 +39,42 @@ type PlayerSetup struct {
 	// target, the visibility anchor).
 	Player string
 
-	// Timeout bounds one step; 0 means 20 s.
+	// Timeout bounds one wait inside a step (one cast, one GM line, one
+	// read), not the whole step; 0 means 20 s.
 	Timeout time.Duration
+
+	// Poll is the pause between aura reads; 0 means 500 ms.
+	Poll time.Duration
+}
+
+func (p *PlayerSetup) poll() time.Duration {
+	if p.Poll > 0 {
+		return p.Poll
+	}
+	return 500 * time.Millisecond
+}
+
+// OpTimeout is a real timeout of one setup wait (a cast, a GM line): the
+// deadline of its own wait expired, not a refusal by the server and not a
+// budget another wait used up. Rows name it "timed out".
+type OpTimeout struct {
+	Op    string
+	After time.Duration
+	Err   error
+}
+
+func (e *OpTimeout) Error() string {
+	return fmt.Sprintf("%s timed out after %s", e.Op, e.After)
+}
+func (e *OpTimeout) Unwrap() error { return e.Err }
+
+// timedOut wraps a context deadline error of op's own wait as an *OpTimeout;
+// any other error (a refusal, a transport error) is returned unchanged.
+func (p *PlayerSetup) timedOut(op string, err error) error {
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return &OpTimeout{Op: op, After: p.timeoutOf(), Err: err}
+	}
+	return err
 }
 
 func (p *PlayerSetup) timeoutOf() time.Duration {
@@ -89,38 +124,69 @@ func (p *PlayerSetup) SetupPlayer(ctx context.Context, trial map[string]any) ([]
 }
 
 // ensureLevel brings the player to the trial level via `.levelup` (signed
-// delta) and reads it back from `status`.
+// delta) and reads it back from `status`. Every read, every send and every
+// wait has its own deadline (one budget over three attempts ran dry early),
+// and a level that cannot be read is UNKNOWN: the row fails UNVERIFIED and
+// nothing is sent, never `.levelup` of (want - 0).
 func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (map[string]any, error) {
 	want := trialLevel(trial)
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	st, err := p.Client.StatusOf(tctx)
-	if err != nil {
-		return nil, err
+	level, known := p.playerLevel(ctx)
+	if !known {
+		return rowOf("player_level", false, "unknown",
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from status; no .levelup sent", want)), nil
 	}
-	level := 0
-	if f, ok := pyjson.Num(st.Raw["level"]); ok {
-		level = int(f)
+	if level == want {
+		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, want)), nil
 	}
 	lowered := ""
-	if level != want {
-		delta := want - level
-		if err := p.Guard.Send(tctx, "levelup", TargetSelf, st.GUID, itoa(delta)); err != nil {
+	if level > want {
+		lowered = fmt.Sprintf("lowered from %d; ", level)
+	}
+	// The core's `.levelup <n>` moves the level BY n (the delta, not an
+	// absolute level), so the row re-reads before each step and waits for
+	// the server to land it: a retried row must not add the delta twice.
+	for attempt := 0; attempt < 3 && level != want; attempt++ {
+		sctx, cancel := p.ctxOf(ctx)
+		err := p.Guard.Send(sctx, "levelup", TargetSelf, p.playerGUIDOf(sctx), itoa(want-level))
+		cancel()
+		if err != nil {
 			return rowOf("player_level", false, level, ".levelup refused: "+err.Error()), nil
 		}
-		if delta < 0 {
-			lowered = fmt.Sprintf("lowered from %d; ", level)
-		}
-		// Read back: the level must have moved.
-		st2, err := p.Client.StatusOf(tctx)
-		if err != nil {
-			return nil, err
-		}
-		if f, ok := pyjson.Num(st2.Raw["level"]); ok {
-			level = int(f)
+		deadline := time.Now().Add(p.timeoutOf())
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return rowOf("player_level", false, level, "UNVERIFIED: interrupted while waiting for .levelup to land"), nil
+			case <-time.After(p.poll()):
+			}
+			if got, ok := p.playerLevel(ctx); ok && got != level {
+				level = got
+				break
+			}
 		}
 	}
-	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d)", lowered, level, want)), nil
+	got, ok := p.playerLevel(ctx)
+	if !ok {
+		return rowOf("player_level", false, "unknown",
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable after .levelup", want)), nil
+	}
+	level = got
+	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d, .levelup delta)", lowered, level, want)), nil
+}
+
+// playerLevel reads the session character's level from `status`, on its own
+// deadline. ok is false when it cannot be read: unknown is not level 0.
+func (p *PlayerSetup) playerLevel(ctx context.Context) (int, bool) {
+	rctx, cancel := p.ctxOf(ctx)
+	defer cancel()
+	st, err := p.Client.StatusOf(rctx)
+	if err != nil {
+		return 0, false
+	}
+	if f, ok := pyjson.Num(st.Raw["level"]); ok && f >= 1 {
+		return int(f), true
+	}
+	return 0, false
 }
 
 // trialLevel reads trial["player"]["level"] (40 when absent or bad).
@@ -153,15 +219,21 @@ func (p *PlayerSetup) ensureTalents(ctx context.Context, trial map[string]any) (
 		}
 		return rowOf("player_talents", false, []any{}, "talents missing: no spell ids"), nil
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
 	for _, id := range ids {
 		// The guard learns on the sender's own character (self target):
-		// `.learn <id>` after the selection dance serve does per call.
-		if err := p.Guard.Send(tctx, "learn", TargetSelf, p.playerGUIDOf(tctx), fmt.Sprint(id)); err != nil {
-			return rowOf("player_talents", false, missingIDs(ids, nil), ".learn refused: "+err.Error()), nil
+		// `.learn <id>` after the selection dance serve does per call, each
+		// line within its own deadline.
+		if err := p.guardSend(ctx, "learn", p.playerGUIDOf(ctx), fmt.Sprint(id)); err != nil {
+			what := "refused"
+			var to *OpTimeout
+			if errors.As(err, &to) {
+				what = "timed out"
+			}
+			return rowOf("player_talents", false, missingIDs(ids, nil), ".learn "+what+": "+err.Error()), nil
 		}
 	}
+	tctx, cancel := p.ctxOf(ctx)
+	defer cancel()
 	rep, err := p.TB.Learn(tctx, "", ids...)
 	p.Ledger.Add(map[string]any{"kind": "player_talents", "reply": learnSummary(rep, err)})
 	if err != nil {
@@ -189,41 +261,81 @@ func (p *PlayerSetup) ensureTalents(ctx context.Context, trial map[string]any) (
 }
 
 // ensureStance casts the stance aura on the sender's own character (proved
-// held in the player's auras from `units`/`unit`).
+// held in the player's auras from `units`/`unit`). A stance can be refused
+// for a moment after a level jump (a spell in flight, a cooldown): the cast
+// is retried, then the stance spell is learned and cast again, and the aura
+// read-back decides.
 func (p *PlayerSetup) ensureStance(ctx context.Context, trial map[string]any) (map[string]any, error) {
 	player, _ := trial["player"].(map[string]any)
-	if player["stance"] == nil {
-		return rowOf("player_stance", true, nil, "no stance/form for this trial"), nil
-	}
 	stance := 0
 	if f, ok := pyjson.Num(player["stance"]); ok {
 		stance = int(f)
 	}
-	if stance <= 0 {
+	if player["stance"] == nil || stance <= 0 {
 		return rowOf("player_stance", true, nil, "no stance/form for this trial"), nil
 	}
-	tctx, cancel := p.ctxOf(ctx)
+	// Every wait below has its own deadline: a slow selection echo or a few
+	// slow aura reads must never use up the budget of the cast or the
+	// .learn after it (the live rerun's "cast refused (context deadline
+	// exceeded) and .learn refused" was one shared 20 s step budget).
+	self := p.playerGUIDOf(ctx)
+	// Drop every aura first: the stance lands on a clean character.
+	_ = p.guardSend(ctx, "unaura", self, "all")
+	held := func() bool {
+		for i := 0; i < 4; i++ {
+			if p.auraHeld(ctx, self, stance) {
+				return true
+			}
+			sleepCtx(ctx, p.poll())
+		}
+		return false
+	}
+	var lastErr error
+	cast := func() {
+		cctx, cancel := p.ctxOf(ctx)
+		defer cancel()
+		if err := p.Client.Cast(cctx, uint32(stance), self); err != nil && !IsNoReply(err) {
+			lastErr = p.timedOut("cast", err)
+		}
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		cast()
+		if held() {
+			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil
+		}
+	}
+	// The spell may be unknown: learn what the trial needs, cast again.
+	if err := p.guardSend(ctx, "learn", self, itoa(stance)); err != nil {
+		what := "refused"
+		var to *OpTimeout
+		if errors.As(err, &to) {
+			what = "timed out"
+		}
+		return rowOf("player_stance", false, stance, "cast failed ("+errText(lastErr)+") and .learn "+what+": "+err.Error()), nil
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		cast()
+		if held() {
+			return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held after .learn", stance)), nil
+		}
+	}
+	return rowOf("player_stance", false, stance, fmt.Sprintf("stance %d not held after 5 casts (%s)", stance, errText(lastErr))), nil
+}
+
+// guardSend sends one GM line on the player's own character within its own
+// deadline; a deadline of that wait is an *OpTimeout.
+func (p *PlayerSetup) guardSend(ctx context.Context, kind, self string, args ...string) error {
+	sctx, cancel := p.ctxOf(ctx)
 	defer cancel()
-	self := p.playerGUIDOf(tctx)
-	// Un Aura everything first (the stance lands on a clean character),
-	// then cast the stance on self.
-	if err := p.Guard.Send(tctx, "unaura", TargetSelf, self, "all"); err != nil {
-		return rowOf("player_stance", false, stance, "unaura refused: "+err.Error()), nil
+	return p.timedOut(".gm "+kind, p.Guard.Send(sctx, kind, TargetSelf, self, args...))
+}
+
+// errText is an error's text, or "no error".
+func errText(err error) string {
+	if err == nil {
+		return "no error"
 	}
-	if err := p.Client.Cast(tctx, uint32(stance), self); err != nil {
-		return rowOf("player_stance", false, stance, "cast stance refused: "+err.Error()), nil
-	}
-	if p.auraHeld(tctx, self, stance) {
-		return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held", stance)), nil
-	}
-	// Once more (the runner's retry pattern): a cast can race the aura tick.
-	if err := p.Client.Cast(tctx, uint32(stance), self); err != nil {
-		return rowOf("player_stance", false, stance, "cast stance refused (retry): "+err.Error()), nil
-	}
-	if p.auraHeld(tctx, self, stance) {
-		return rowOf("player_stance", true, stance, fmt.Sprintf("aura %d held (retry)", stance)), nil
-	}
-	return rowOf("player_stance", false, stance, fmt.Sprintf("stance not held: aura %d missing after 2 casts", stance)), nil
+	return err.Error()
 }
 
 // auraHeld reports whether guid's unit row holds aura id.
