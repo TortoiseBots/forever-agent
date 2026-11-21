@@ -94,7 +94,14 @@ type fakeForeverServe struct {
 	rayCalls  int
 	// rayErr makes every walk_ray read fail with this error (not a missing method).
 	rayErr error
+	// unitsAt, when set, answers a units read from the session's own position (the way the serve reads around it).
+	unitsAt func(x, y float32) []serveclient.Unit
+	// rays logs every walk_ray read: the sight point and the target.
+	rays []fakeRay
 }
+
+// fakeRay is one walk_ray read.
+type fakeRay struct{ From, To [3]float32 }
 
 func (f *fakeForeverServe) WalkRay(_ context.Context, from *[3]float32, x, y, z float32) (serveclient.WalkRay, error) {
 	f.mu.Lock()
@@ -111,6 +118,7 @@ func (f *fakeForeverServe) WalkRay(_ context.Context, from *[3]float32, x, y, z 
 	if from != nil {
 		at = *from
 	}
+	f.rays = append(f.rays, fakeRay{From: at, To: [3]float32{x, y, z}})
 	if f.ray != nil {
 		return f.ray(at, x, y, z), nil
 	}
@@ -185,6 +193,9 @@ func (f *fakeForeverServe) Units(ctx context.Context, _ serveclient.UnitsParams)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.unitsAt != nil {
+		return f.unitsAt(f.status.X, f.status.Y), nil
+	}
 	return append([]serveclient.Unit(nil), f.units...), nil
 }
 
@@ -762,6 +773,55 @@ func TestScoutForeverReadsSightFromTheServe(t *testing.T) {
 		if strings.Contains(n, "no walk_ray method") {
 			t.Fatalf("the report says the serve has no walk_ray method: %q", n)
 		}
+	}
+}
+
+// TestScoutForeverReadsEverySpotWhereItStands: two pull rows 60 yd apart share one stop (100 yd), but the units are read
+// within 40 yd of the session, so the second row's pack is only seen when the scout stands there. The live finding: one
+// stop read, no sight answer for the later rows.
+func TestScoutForeverReadsEverySpotWhereItStands(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	leg := dungeon.Leg{Name: "one", To: dungeon.Point{X: 100}, PullGroups: []dungeon.PullGroup{
+		{Entries: []uint32{9999}, Positions: []dungeon.Point{{X: 20}}, Radius: 5},
+		{Entries: []uint32{9999}, Positions: []dungeon.Point{{X: 80}}, Radius: 5},
+	}}
+	b, err := dungeon.Marshal(&dungeon.Plan{Version: 1, Name: "scout_two", Map: 700, Legs: []dungeon.Leg{leg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scout_two.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unit := func(guid string, x float32) serveclient.Unit {
+		return serveclient.Unit{GUID: serveclient.GUID(guid), Type: "creature", Entry: 4100, Name: "Rat",
+			X: x, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100}
+	}
+	fake := newFakeForeverServe()
+	fake.unitsAt = func(x, _ float32) []serveclient.Unit {
+		var out []serveclient.Unit
+		if x < 50 {
+			out = append(out, unit("0x00000000000000000000000000000065", 25))
+		} else {
+			out = append(out, unit("0x00000000000000000000000000000066", 85))
+		}
+		return out
+	}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_two", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var near, far bool
+	for _, r := range fake.rays {
+		near = near || r.To[0] < 30
+		far = far || (r.From[0] > 70 && r.To[0] > 70)
+	}
+	if !near || !far {
+		t.Fatalf("a pull row got no sight ray to its own pack (near %v, far %v): %+v", near, far, fake.rays)
 	}
 }
 

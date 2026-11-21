@@ -68,6 +68,29 @@ func (s *session) noteUnwalkedPlayerBits(bits []int) {
 	s.opts.logf("world: an own PlayerData update could not be walked; classic mask bits by group:%s", text)
 }
 
+// noteUnwalkedActiveBits logs, once per login, the Classic mask bits of an own ActivePlayerData update that named
+// inventory slots next to fields the client does not walk, grouped by region: no values, no names. It is how the next
+// live run names the field that made the inventory stale.
+func (s *session) noteUnwalkedActiveBits(bits []objects.ActiveBit) {
+	if s.activeUnwalkedLogged || len(bits) == 0 {
+		return
+	}
+	s.activeUnwalkedLogged = true
+	groups := map[string][]int{}
+	var order []string
+	for _, b := range bits {
+		if _, ok := groups[b.Group]; !ok {
+			order = append(order, b.Group)
+		}
+		groups[b.Group] = append(groups[b.Group], b.Bit)
+	}
+	text := ""
+	for _, g := range order {
+		text += fmt.Sprintf(" %s%v", g, groups[g])
+	}
+	s.opts.logf("world: an own ActivePlayerData update named inventory slots next to fields it could not walk; classic mask bits by group:%s", text)
+}
+
 // handleInventory applies one item gain or refusal to the live inventory. A packet this round cannot consume
 // exactly is counted and merges nothing, like the combat handlers: the inventory keeps what it had.
 func (s *session) handleInventory(p worldconn.Packet) error {

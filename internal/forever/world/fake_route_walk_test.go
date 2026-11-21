@@ -153,13 +153,15 @@ func (f *fakeServer) answerRouteWalk(c *fakeConn, text, mode string) bool {
 		reads := f.routeWalkGPSReads
 		pos := f.routeWalkPos
 		last, lastSet := f.routeWalkLastGPS, f.routeWalkLastGPSSet
+		moved := f.routeWalkSeen != f.routeWalkSeenAtGPS
+		f.routeWalkSeenAtGPS = f.routeWalkSeen
 		f.mu.Unlock()
 		if reads == f.routeWalkSilentAt {
 			// A block without its coordinates: no confirmation.
 			f.sysChat(c, fmt.Sprintf("Map: %d (test map)", f.mapID))
 			return true
 		}
-		if f.routeWalkStaleMoved > 0 && !f.routeWalkStaleUsed && lastSet && dist3f3(pos, last) > f.routeWalkStaleMoved {
+		if f.routeWalkStaleMoved > 0 && !f.routeWalkStaleUsed && lastSet && moved {
 			// The server was slow: the answer to the previous request is written now, after this request arrived, and
 			// it names where the character stood before it walked. The request's own answer follows on the next read.
 			f.mu.Lock()
