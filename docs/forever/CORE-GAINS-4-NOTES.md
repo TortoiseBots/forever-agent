@@ -81,7 +81,7 @@ names the GUID).
 ### The core's service
 
 `SOAP.Enabled` is off by default, `SOAP.IP` is `127.0.0.1` and `SOAP.Port` is 7878 (worldserver.conf.dist:3560-3579).
-The endpoint is gSOAP's `ns1__executeCommand` (TCSoap.cpp:89-138): HTTP Basic auth, the account must exist and have
+The endpoint is gSOAP's `ns1__executeCommand` (TCSoap.cpp:86-138, set up in CreateSoapThread at :28-70): HTTP Basic auth, the account must exist and have
 `SEC_ADMINISTRATOR` (401/403 otherwise), the command is one console line, and the answer is the command's printed
 text in `ns1:executeCommandResponse/result` (a failing command is a SOAP fault). Only console-capable commands work
 there; anything that needs a selected unit stays on a GM client. TLS is not part of this endpoint, so the helper

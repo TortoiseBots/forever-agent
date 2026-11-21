@@ -126,6 +126,7 @@ func TestSoapRefusalsKeepTheSecret(t *testing.T) {
 	}{
 		{"wrong password", &fakeSoap{user: "console", password: "other", fault: ""}, 0},
 		{"soap fault", &fakeSoap{user: "console", password: fakePassword, status: http.StatusInternalServerError, fault: "Command can not be empty"}, 0},
+		{"fault echoes the secret", &fakeSoap{user: "console", password: fakePassword, status: http.StatusInternalServerError, fault: "bad " + fakePassword}, 0},
 		{"not administrator", &fakeSoap{user: "console", password: fakePassword, status: http.StatusForbidden}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,6 +145,22 @@ func TestSoapRefusalsKeepTheSecret(t *testing.T) {
 			}
 		})
 	}
+	// A server whose result echoes the credential does not get it into the output either.
+	echo := &fakeSoap{user: "console", password: fakePassword, reply: fakePassword}
+	srv := httptest.NewServer(echo)
+	defer srv.Close()
+	c, err := New(soapConfig(t, srv, "console"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := c.Run(context.Background(), ".saveall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text, fakePassword) || !strings.Contains(text, "[redacted]") {
+		t.Fatalf("the result text was not redacted: %q", text)
+	}
+
 	// A closed endpoint (connection refused) is one error line without the secret.
 	closed := httptest.NewServer(http.NotFoundHandler())
 	host, portS, _ := net.SplitHostPort(strings.TrimPrefix(closed.URL, "http://"))
@@ -151,11 +168,11 @@ func TestSoapRefusalsKeepTheSecret(t *testing.T) {
 	var port int
 	_, _ = fmt.Sscanf(portS, "%d", &port)
 	cfg := Config{Host: host, Port: port, User: "console", PasswordEnv: "TEST_SOAP_PASSWORD", TimeoutMS: 300}
-	c, err := New(cfg)
+	closedClient, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Run(context.Background(), ".saveall"); err == nil || strings.Contains(err.Error(), fakePassword) {
+	if _, err := closedClient.Run(context.Background(), ".saveall"); err == nil || strings.Contains(err.Error(), fakePassword) {
 		t.Fatalf("closed endpoint: %v", err)
 	}
 }

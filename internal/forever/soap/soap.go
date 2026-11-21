@@ -230,18 +230,18 @@ func (c *Client) Run(ctx context.Context, command string) (string, error) {
 		return "", errors.New("soap: the account is not an administrator (HTTP 403)")
 	default:
 		if fault := faultString(raw); fault != "" {
-			return "", fmt.Errorf("soap: HTTP %d: %s", resp.StatusCode, cut(fault))
+			return "", fmt.Errorf("soap: HTTP %d: %s", resp.StatusCode, c.redact(cut(fault)))
 		}
 		return "", fmt.Errorf("soap: HTTP %d from %s", resp.StatusCode, c.cfg.Address())
 	}
 	text, fault := parseAnswer(raw)
 	if fault != "" {
-		return "", fmt.Errorf("soap: the command failed: %s", cut(fault))
+		return "", fmt.Errorf("soap: the command failed: %s", c.redact(cut(fault)))
 	}
 	if text == nil {
 		return "", errors.New("soap: the answer has no executeCommandResponse result")
 	}
-	return *text, nil
+	return c.redact(*text), nil
 }
 
 // executeCommandBody is the gSOAP document TCSoap serves: an ns1:executeCommand element with the command as a C
@@ -299,6 +299,15 @@ func parseAnswer(raw []byte) (text *string, fault string) {
 func faultString(raw []byte) string {
 	_, fault := parseAnswer(raw)
 	return fault
+}
+
+// redact removes the password from any text a server supplied (a fault, a result) or a transport error carried.
+// The credential only ever travels in the Basic header; a server that echoes it must not get it into a log line.
+func (c *Client) redact(s string) string {
+	if c.pw != "" {
+		s = strings.ReplaceAll(s, c.pw, "[redacted]")
+	}
+	return s
 }
 
 // withoutSecret keeps a transport error's text but removes the password if a server or a proxy echoed it. A
