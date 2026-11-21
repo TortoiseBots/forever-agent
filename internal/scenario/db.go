@@ -13,9 +13,10 @@ import (
 	"time"
 )
 
-// allowedTables is the read-only allowlist (spec S2): a scenario cannot widen
-// it; a change is a code change with review. Nothing from tw_logon (account
-// hashes), tw_logs, mysql, information_schema, performance_schema or sys.
+// allowedTables is the read-only allowlist for turtle slots (spec S2): a
+// scenario cannot widen it; a change is a code change with review. Nothing
+// from tw_logon (account hashes), tw_logs, mysql, information_schema,
+// performance_schema or sys.
 var allowedTables = map[string]bool{
 	"tw_world.lft_user_groups":      true,
 	"tw_world.ai_dungeon_plan":      true,
@@ -36,14 +37,28 @@ var allowedTables = map[string]bool{
 
 func allowedTable(table string) bool { return allowedTables[table] }
 
+// foreverAllowedTables is the check_db allowlist on a Forever slot: the
+// characters-database tables at core 25fc7ca. Schema-qualified only, so a
+// turtle name never resolves to the wrong database.
+var foreverAllowedTables = map[string]bool{
+	"characters.characters":          true,
+	"characters.item_instance":       true,
+	"characters.character_inventory": true,
+}
+
+func allowedForeverTable(table string) bool { return foreverAllowedTables[table] }
+
 // DBQuery is one read-only count: either a table row count or an item count.
 // Built by the runner from a check_db step, rendered by BuildSQL below.
+// Forever selects the ForeverCore schema (characters_database.sql at core
+// 25fc7ca); the default is the turtle schema.
 type DBQuery struct {
-	Table string
-	Where map[string]any
-	Op    string
-	Want  int64
-	Item  *ItemQuery
+	Table   string
+	Where   map[string]any
+	Op      string
+	Want    int64
+	Item    *ItemQuery
+	Forever bool
 }
 
 // BuildSQL renders a DBQuery as exactly one of the two allowed SELECT forms.
@@ -54,7 +69,11 @@ func BuildSQL(q DBQuery) (string, error) {
 	if q.Item != nil {
 		return buildItemSQL(q)
 	}
-	if !allowedTable(q.Table) {
+	if q.Forever {
+		if !allowedForeverTable(q.Table) {
+			return "", fmt.Errorf("table %s is not on the Forever allowlist (internal/scenario/db.go)", q.Table)
+		}
+	} else if !allowedTable(q.Table) {
 		return "", fmt.Errorf("table %s is not on the read-only allowlist (internal/scenario/db.go)", q.Table)
 	}
 	var b strings.Builder
@@ -93,7 +112,8 @@ func BuildSQL(q DBQuery) (string, error) {
 
 // buildItemSQL renders the item-count form: the stack sum of one entry over
 // the named characters' rows (bags, bank, keyring, mail). Names sort so the
-// text is stable.
+// text is stable. On a Forever slot it reads the 25fc7ca schema: itemEntry
+// and owner_guid, with schema-qualified tables.
 func buildItemSQL(q DBQuery) (string, error) {
 	names := []string{}
 	if q.Item.Char != "" {
@@ -102,7 +122,11 @@ func buildItemSQL(q DBQuery) (string, error) {
 	names = append(names, q.Item.Chars...)
 	sort.Strings(names)
 	var b strings.Builder
-	b.WriteString("SELECT COALESCE(SUM(ii.count), 0) FROM tw_char.item_instance ii JOIN tw_char.characters c ON c.guid = ii.owner_guid WHERE c.name IN (")
+	if q.Forever {
+		b.WriteString("SELECT COALESCE(SUM(ii.count), 0) FROM characters.item_instance ii JOIN characters.characters c ON c.guid = ii.owner_guid WHERE c.name IN (")
+	} else {
+		b.WriteString("SELECT COALESCE(SUM(ii.count), 0) FROM tw_char.item_instance ii JOIN tw_char.characters c ON c.guid = ii.owner_guid WHERE c.name IN (")
+	}
 	for i, n := range names {
 		if i > 0 {
 			b.WriteString(", ")
@@ -172,7 +196,7 @@ func checkSelectOnly(sql string) error {
 			}
 		}
 	}
-	// Every table after FROM or JOIN must be schema.table on the allowlist.
+	// Every table after FROM or JOIN must be schema.table on an allowlist.
 	toks := strings.Fields(b)
 	for i, t := range toks {
 		if strings.ToUpper(t) == "FROM" || strings.ToUpper(t) == "JOIN" {
@@ -181,7 +205,7 @@ func checkSelectOnly(sql string) error {
 			}
 			tab := strings.Trim(toks[i+1], "(),;")
 			parts := strings.Split(tab, ".")
-			if len(parts) != 2 || !allowedTable(tab) {
+			if len(parts) != 2 || (!allowedTable(tab) && !allowedForeverTable(tab)) {
 				offender := tab
 				if len(parts) != 2 {
 					offender = toks[i+1]

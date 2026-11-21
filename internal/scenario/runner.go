@@ -152,6 +152,7 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Result, error) {
 		}
 		var stt struct {
 			Character string `json:"character"`
+			State     string `json:"state"`
 			LastSeq   uint64 `json:"last_seq"`
 		}
 		if err := json.Unmarshal(raw, &stt); err != nil {
@@ -163,6 +164,19 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Result, error) {
 			rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: not in the world (status has no character)", name)
 			res = rr.finish(res, 15)
 			return res, nil
+		}
+		if rr.f.Sessions[name].Server == ServerForever {
+			// Serve reports the link lifecycle: "online" is the world, while
+			// the turtle agent reports "in_world". An empty state still
+			// passes (an older serve without the word counts as in world
+			// once it names a character).
+			switch stt.State {
+			case "", "online":
+			default:
+				rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: not in the world (status state %q)", name, stt.State)
+				res = rr.finish(res, 15)
+				return res, nil
+			}
 		}
 		st.character = stt.Character
 		st.cursor, st.window, st.from, st.recorded = stt.LastSeq, stt.LastSeq, stt.LastSeq, stt.LastSeq

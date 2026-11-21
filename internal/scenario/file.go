@@ -32,10 +32,21 @@ var (
 
 var validOps = map[string]bool{"==": true, "!=": true, ">=": true, "<=": true, ">": true, "<": true}
 
+// Server names which agent a session talks to: "turtle" (the default) or
+// "forever" (a serve slot). Unknown values are refused at load.
+type ServerName string
+
+// ServerTurtle is the 1.12 agent; ServerForever is a forever serve slot.
+const (
+	ServerTurtle  ServerName = "turtle"
+	ServerForever ServerName = "forever"
+)
+
 // Session is one running agent the scenario talks to.
 type Session struct {
-	RPC       string `json:"rpc"`
-	TokenFile string `json:"token_file"`
+	RPC       string     `json:"rpc"`
+	TokenFile string     `json:"token_file"`
+	Server    ServerName `json:"server"`
 }
 
 // DBTarget is where the read-only DB helper runs its counts.
@@ -124,6 +135,9 @@ type Step struct {
 	Op    string         `json:"-"`
 	Item  *ItemQuery     `json:"-"`
 	Count *int64         `json:"-"`
+	// Server overrides the slot for one check_db step: "turtle"
+	// (default) or "forever". Empty means the resolved file server.
+	Server ServerName `json:"-"`
 
 	// check_rpc
 	Path    string `json:"-"`
@@ -213,6 +227,13 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 		}
 		if err := CheckAddr(name, s.RPC); err != nil {
 			return nil, err
+		}
+		if s.Server == "" {
+			s.Server = ServerTurtle
+			f.Sessions[name] = s
+		}
+		if s.Server != ServerTurtle && s.Server != ServerForever {
+			return nil, fmt.Errorf("scenario: bad server %q for session %q (want turtle or forever)", s.Server, name)
 		}
 	}
 	if raw.Vars != nil {
@@ -369,7 +390,7 @@ var stepFields = map[string]map[string]bool{
 	"wait":       {"do": true, "note": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "timeout_s": true, "capture": true},
 	"expect":     {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "timeout_s": true, "capture": true},
 	"expect_not": {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "within_s": true},
-	"check_db":   {"do": true, "note": true, "name": true, "on_fail": true, "within_s": true, "op": true, "table": true, "where": true, "rows": true, "item": true, "count": true},
+	"check_db":   {"do": true, "note": true, "name": true, "on_fail": true, "within_s": true, "op": true, "table": true, "where": true, "rows": true, "item": true, "count": true, "server": true},
 	"check_rpc":  {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "method": true, "params": true, "path": true, "equals": true, "match": true, "len": true, "within_s": true, "timeout_s": true},
 }
 
@@ -612,11 +633,29 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 		if hasTable == hasItem {
 			return nil, fmt.Errorf("step %d (check_db): exactly one of table or item", n)
 		}
+		var server ServerName
+		if v, ok := kv["server"]; ok {
+			var sn string
+			if err := json.Unmarshal(v, &sn); err != nil || (sn != string(ServerTurtle) && sn != string(ServerForever)) {
+				return nil, fmt.Errorf("step %d (check_db): bad server %s (want turtle or forever)", n, strings.TrimSpace(string(v)))
+			}
+			server = ServerName(sn)
+		}
+		s.Server = server
 		if hasTable {
 			var table string
 			g("table", &table)
-			if !allowedTable(table) {
+			if table == "" {
+				return nil, fmt.Errorf("step %d (check_db): missing table", n)
+			}
+			if server == "" && !allowedTable(table) && !allowedForeverTable(table) {
 				return nil, fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, table)
+			}
+			if server == ServerTurtle && !allowedTable(table) {
+				return nil, fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, table)
+			}
+			if server == ServerForever && !allowedForeverTable(table) {
+				return nil, fmt.Errorf("step %d (check_db): table %s is not on the Forever allowlist (internal/scenario/db.go)", n, table)
 			}
 			s.Table = table
 			var where map[string]any

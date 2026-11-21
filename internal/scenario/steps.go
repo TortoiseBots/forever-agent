@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,13 +11,61 @@ import (
 	"github.com/pjerra/forever-agent/internal/events"
 )
 
+// foreverEvent is one event_log row: the internal/events Event JSON keys,
+// with guids as serve text ("0x" and hex) since a scenario never needs the
+// 128-bit halves. The runner maps it to events.Event with zero GUIDs.
+type foreverEvent struct {
+	Seq    uint64         `json:"seq"`
+	Time   time.Time      `json:"time"`
+	MonoMS int64          `json:"mono_ms"`
+	Kind   string         `json:"kind"`
+	Source string         `json:"source,omitempty"`
+	Target string         `json:"target,omitempty"`
+	Text   string         `json:"text,omitempty"`
+	Data   map[string]any `json:"data,omitempty"`
+}
+
+// foreverPage is one event_log answer: rows above since, oldest first.
+type foreverPage struct {
+	Events  []foreverEvent `json:"events"`
+	Next    uint64         `json:"next"`
+	Oldest  uint64         `json:"oldest"`
+	More    bool           `json:"more"`
+	Dropped bool           `json:"dropped"`
+}
+
+// foreverToEvent maps one event_log row to an events.Event. GUIDs are zero:
+// serve guids stay text on the dashboard (keyed by serveclient Key), while
+// the scenario's turtle matchers read text, kind, source and data only.
+func foreverToEvent(f foreverEvent) events.Event {
+	e := events.Event{
+		Seq: f.Seq, Time: f.Time, MonoMS: f.MonoMS,
+		Kind: f.Kind, Source: f.Source, Target: f.Target,
+		Text: f.Text, Data: f.Data,
+	}
+	events.Stamp(&e)
+	return e
+}
+
+// isForever reports whether the session talks to a serve slot.
+func (rr *run) isForever(name string) bool {
+	return rr.f.Sessions[name].Server == ServerForever
+}
+
 // drain fetches new events for every open session until no page reports more,
 // appends them to the buffer (cap 20,000, oldest dropped) and writes the
-// recorded ones after the step.
+// recorded ones after the step. Forever slots drain through event_log; the
+// turtle agent drains through events.
 func (rr *run) drain(ctx context.Context, step int) error {
 	for _, name := range rr.order {
 		st := rr.sess[name]
 		if st.closed {
+			continue
+		}
+		if rr.isForever(name) {
+			if err := rr.drainForever(ctx, step, name, st); err != nil {
+				return err
+			}
 			continue
 		}
 		for {
@@ -44,6 +93,36 @@ func (rr *run) drain(ctx context.Context, step int) error {
 		}
 	}
 	rr.writeRecorded(step)
+	return nil
+}
+
+// drainForever drains one Forever slot through event_log.
+func (rr *run) drainForever(ctx context.Context, step int, name string, st *sessState) error {
+	for {
+		raw, err := st.caller.Call(ctx, "event_log", map[string]any{"since": st.cursor, "limit": 1000}, 20*time.Second)
+		if err != nil {
+			return fmt.Errorf("session %s: drain: %v", name, err)
+		}
+		var page foreverPage
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return fmt.Errorf("session %s: drain: %v", name, err)
+		}
+		if page.Dropped {
+			rr.emit(Record{T: "note", Step: step, Session: name,
+				Raw:  fmt.Sprintf("  note: events of session %s were dropped by the agent's ring: a check may miss lines", name),
+				Norm: fmt.Sprintf("  note: events of session %s were dropped by the agent's ring: a check may miss lines", name)})
+		}
+		for _, f := range page.Events {
+			st.buf = append(st.buf, foreverToEvent(f))
+		}
+		if len(st.buf) > 20000 {
+			st.buf = append([]events.Event(nil), st.buf[len(st.buf)-20000:]...)
+		}
+		st.cursor = page.Next
+		if !page.More {
+			break
+		}
+	}
 	return nil
 }
 
@@ -236,7 +315,13 @@ func (rr *run) doGM(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	raw := fmt.Sprintf("  gm[%s] %s", s.Session, text)
 	norm := fmt.Sprintf("  gm[%s] %s", s.Session, s.Text)
 	rr.emit(Record{T: "action", Step: n, Session: s.Session, Raw: raw, Norm: norm})
-	if _, err := st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s)); err != nil {
+	if rr.isForever(s.Session) {
+		// Serve's gm takes the same text (the GM guard still applies);
+		// a method the serve side does not port is an ERROR naming it.
+		if _, err := st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s)); err != nil {
+			return rr.foreverCallError(ctx, s, n, inFinally, "gm", err)
+		}
+	} else if _, err := st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s)); err != nil {
 		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "gm: %v", rpcText(err))
 		if !inFinally {
 			rr.skipRest(n + 1)
@@ -271,7 +356,13 @@ func (rr *run) doBot(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	if !ok {
 		return false
 	}
-	if _, err := st2.caller.Call(ctx, "gm", map[string]any{"text": ".bot " + cmd}, callTimeout(s)); err != nil {
+	if rr.isForever(s.Session) {
+		// Serve's bot takes the bare module line (its prefix guard
+		// still applies); not-ported is an ERROR naming the method.
+		if _, err := st2.caller.Call(ctx, "bot", map[string]any{"line": cmd}, callTimeout(s)); err != nil {
+			return rr.foreverCallError(ctx, s, n, inFinally, "bot", err)
+		}
+	} else if _, err := st2.caller.Call(ctx, "gm", map[string]any{"text": ".bot " + cmd}, callTimeout(s)); err != nil {
 		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "gm: %v", rpcText(err))
 		if !inFinally {
 			rr.skipRest(n + 1)
@@ -312,7 +403,11 @@ func (rr *run) doAddonSend(ctx context.Context, s *Step, n int, inFinally bool) 
 	if to != "" {
 		params["to"] = to
 	}
-	if _, err := st.caller.Call(ctx, "addon_send", params, callTimeout(s)); err != nil {
+	if rr.isForever(s.Session) {
+		if _, err := st.caller.Call(ctx, "addon_send", params, callTimeout(s)); err != nil {
+			return rr.foreverCallError(ctx, s, n, inFinally, "addon_send", err)
+		}
+	} else if _, err := st.caller.Call(ctx, "addon_send", params, callTimeout(s)); err != nil {
 		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "addon_send: %v", rpcText(err))
 		if !inFinally {
 			rr.skipRest(n + 1)
@@ -366,6 +461,21 @@ func (rr *run) doRPC(ctx context.Context, s *Step, n int, inFinally bool) bool {
 		st.closed, st.closedAt = true, n
 	}
 	if err != nil {
+		if rr.isForever(s.Session) {
+			rr.emit(Record{T: "result", Step: n, Session: s.Session,
+				Raw: fmt.Sprintf("    -> error %s", rpcText(err)), Norm: resultNorm(s, fmt.Sprintf("    -> error %s", rpcText(err)))})
+			if s.IgnoreError {
+				if inFinally {
+					_ = rr.drain(ctx, n)
+					return true
+				}
+				if serr := rr.settle(ctx, s, n); serr != nil {
+					return false
+				}
+				return true
+			}
+			return rr.foreverRPCError(ctx, s, n, inFinally, err)
+		}
 		rr.emit(Record{T: "result", Step: n, Session: s.Session,
 			Raw: fmt.Sprintf("    -> error %s", rpcText(err)), Norm: resultNorm(s, fmt.Sprintf("    -> error %s", rpcText(err)))})
 		if s.IgnoreError {
@@ -415,6 +525,38 @@ func resultNorm(s *Step, line string) string {
 		return line
 	}
 	return ""
+}
+
+// foreverCallError records a failed serve-method call behind a do step on a
+// Forever slot. A method the serve side does not port (commander today) is
+// an ERROR naming the method, never a FAIL: the scenario asked for something
+// the server cannot do.
+func (rr *run) foreverCallError(_ context.Context, s *Step, n int, inFinally bool, method string, err error) bool {
+	rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "%s: %v", method, rpcText(err))
+	if !inFinally {
+		rr.skipRest(n + 1)
+	}
+	return false
+}
+
+// foreverRPCError records a failed rpc-step call on a Forever slot: same
+// rule, the error names the serve method the step named.
+func (rr *run) foreverRPCError(_ context.Context, s *Step, n int, inFinally bool, err error) bool {
+	rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "rpc %s: %s", s.Method, rpcText(err))
+	if !inFinally {
+		rr.skipRest(n + 1)
+	}
+	return false
+}
+
+// isNotPorted reports whether err is the serve side's not-ported answer for
+// a method it has not implemented (-32003 "not ported on this server").
+func isNotPorted(err error) bool {
+	var re *RPCError
+	if errors.As(err, &re) {
+		return re.Code == -32003 && strings.Contains(re.Message, "not ported on this server")
+	}
+	return strings.Contains(err.Error(), "not ported on this server")
 }
 
 func (rr *run) doSleep(ctx context.Context, s *Step, n int) bool {
