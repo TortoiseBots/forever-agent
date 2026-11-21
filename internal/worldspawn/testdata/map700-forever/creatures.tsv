@@ -1,0 +1,6 @@
+guid	entry	name	level_min	level_max	rank	faction	npc_flags	x	y	z	wander	movement_type	group_leader	patrol	auras	detection_range	flags_extra	speed_walk	group_ai	pool
+100	4100	ForeverRat			0	16	0	0	0	0	0	0	100	0			2	1	1	0
+101	4100	ForeverRat			0	16	0	3	0	0	0	0	100	0			0	1	0	0
+200	4200	ForeverPatrol		42	0	16	0	0	20	0	5	2	0	1			0	1	0	0
+300	4300	ForeverBoss	42	42	3	16	0	0	40	0	0	0	0	0			0	1	512	0
+301	4300	ForeverBoss	42	42	0	16	0	3	40	0	0	0	300	0			0	1	512	9
