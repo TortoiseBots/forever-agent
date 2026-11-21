@@ -10,13 +10,43 @@ Push-only: PR gating is unchanged (`test` and `navmesh` run on pushes to `ci/**`
 
 ## `test.yml` — the PR gate
 
-`test` runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
-branch). It runs `make fmt-check vet test` (gofmt, `go vet`, a no-cgo build, `go test -race ./...`), then the
-differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50
-passed sub-tests fails the step, so the table cannot go green without Python), then `staticcheck ./...` with the
-pinned release **2026.2.2** (`go install honnef.co/go/tools/cmd/staticcheck@2026.2.2`), then a cgo build.
-The repo has no suppressions: a staticcheck finding is fixed in the code or, when a check is a false positive, disabled
-one check at a time in a commented `staticcheck.conf` (never a whole category).
+It runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
+branch), as parallel jobs that end in one job named `test`:
+
+| Job | What it runs |
+|---|---|
+| `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), the shard script's self-test, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
+| `race-rest` | `go test -race -count=1 -timeout 20m` on every package except `./cmd/forever-agent` (`go list ./... \| grep -v '/cmd/forever-agent$'`) |
+| `race-cmd` | 4 shards (matrix `0`..`3`) of the top-level tests of `./cmd/forever-agent`, each `go test -race -count=1 -timeout 20m -v -run '^(A\|B\|...)$'` |
+| `race-cmd-check` | fails unless the tests the 4 shards ran, together, are exactly the package's full `go test -list` output, each once |
+| `test` | `needs` all four jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
+
+The staticcheck binary is cached (`actions/cache`) on the pinned version and the hash of `go.mod` (the Go version it is
+built with), so a warm run skips the `go install`. The repo has no suppressions: a staticcheck finding is fixed in the
+code or, when a check is a false positive, disabled one check at a time in a commented `staticcheck.conf` (never a whole
+category). Changing the pin means changing `STATICCHECK_VERSION` in the workflow.
+
+### The `cmd/forever-agent` shards
+
+`cmd/forever-agent` has about 1500 top-level tests and takes 8-10 minutes under `-race`, so it is split.
+`tools/ci/shard-tests.sh` lists the package's `Test*`, `Fuzz*` and `Example*` names (`go test -list`; fuzz targets run
+their seeds and examples run too; benchmarks are not run by `go test` and are left out), sorts them and deals them to the
+shards round robin (name 0 to shard 0, name 1 to shard 1, ..., name 4 to shard 0). Sub-tests run with their parent.
+Each shard prints its `go test -v` log, writes the top-level names that log shows as started (`ran`) and uploads them as
+an artifact; `race-cmd-check` downloads the four lists and runs `shard-tests.sh check`, which fails on a test that no
+shard ran, a test that ran twice, or a name outside the full list. A new test lands in a shard by itself, no list to
+maintain. `tools/ci/shard-tests.sh selftest` covers the script (partitions for several shard counts, a dropped name, a
+duplicate, an unknown name) and runs in `lint`.
+
+The deal is by count, not by time: one slow test makes its shard slow. If the shards drift apart, the fix is a change of
+the shard count (`SHARDS` and the matrix in `test.yml` and the `4` in the `race-cmd-check` step), not a hand-kept list.
+
+Locally, one shard:
+
+```sh
+tools/ci/shard-tests.sh list ./cmd/forever-agent >all-tests.txt
+go test -race -count=1 -timeout 20m -run "$(tools/ci/shard-tests.sh regex 0 4 all-tests.txt)" ./cmd/forever-agent
+```
 
 ## `navmesh.yml` — the real map files
 
