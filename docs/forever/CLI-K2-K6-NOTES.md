@@ -169,3 +169,15 @@ in section 3).
 | the report mixed partial levels after an abort | the report notes `live stops: N of M read` |
 | the slot's identity was never checked (codex) | `slot.json`'s character must equal the session's `status.character` before any GM line |
 | tests mirrored the code | fakes track the session position, fail, refuse and block; the canonical sent lines are asserted |
+
+### Gates (fix round)
+
+Code commit: `80414ed2` (clean tree, no trailers). Hygiene: `git diff origin/main | grep -nE
+'100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'` found only this notes file's own
+documentation line.
+
+- `make fmt-check`: clean (exit 0).
+- `make cross`: clean (exit 0).
+- `staticcheck ./...`: clean (exit 0).
+- `vm-test ta ~/wt-fa-cli` (committed tree, `sha=80414ed2 dirty=0`):
+  `RESULT: PASS  kind=ta wt=wt-fa-cli sha=80414ed2 dirty=0 files=2386`, `rc=0  vm_duration=1698s  laptop_wall=1715s`.
