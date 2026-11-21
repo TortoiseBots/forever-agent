@@ -206,13 +206,13 @@ func newTrialsRunner(ctx context.Context, out, server string, sf *live.SlotsFile
 // server's `forever` block names the hire pool and the slot character.
 func liveSetupFor(dry, server string, ext live.ServerExt) live.Setup {
 	if dry == "" {
-		setup := &live.LiveSetup{Server: server, Player: ext.Player, Pool: ext.BotPool}
+		setup := &live.LiveSetup{Server: server, Player: ext.Player, Pool: ext.BotPool, ConsoleCommands: ext.SOAPSetup}
 		if ext.SOAP != nil {
 			console, err := soap.New(*ext.SOAP)
 			if err != nil {
 				return setupError{err: err}
 			}
-			setup.Console, setup.ConsoleCommands = console, ext.SOAPSetup
+			setup.Console = console
 		}
 		return setup
 	}

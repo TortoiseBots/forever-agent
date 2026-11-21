@@ -88,6 +88,19 @@ func Rule20(r *Run) []Hit {
 				continue
 			}
 			takeoff := r.Combat[ti]
+			// The daemon drops a takeoff whose landing did not arrive within knockLandingFor, so a pair older
+			// than that is two unrelated rows (a lost landing and a later takeoff). The landing row carries the
+			// air time the daemon measured; a pair that disagrees with it is not that flight either.
+			if age := row.T - takeoff.T; age > R20_FLIGHT_S {
+				r.noteUnknown(20, "takeoff older than the flight window")
+				continue
+			}
+			if row.AirMS > 0 {
+				if diffMS := row.AirMS - int64((row.T-takeoff.T)*1000); diffMS > 1000 || diffMS < -1000 {
+					r.noteUnknown(20, "landing air time does not match its takeoff")
+					continue
+				}
+			}
 			if takeoff.Pos == nil || row.Pos == nil {
 				r.noteUnknown(20, "a knockback row has no position")
 				continue

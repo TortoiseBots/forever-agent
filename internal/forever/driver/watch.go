@@ -515,6 +515,7 @@ func (r *Run) drainCombat(w *watchRun) {
 			if w.combatBlind {
 				w.combatBlind = false
 				w.combatErr = ""
+				r.logf("watch: combat log: the writes answer again")
 			}
 			w.combatRows += written
 			r.rec.CombatEvents(rows)

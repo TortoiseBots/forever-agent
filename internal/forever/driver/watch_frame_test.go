@@ -400,6 +400,9 @@ func TestCombatWriteFailureHoldsTheCursor(t *testing.T) {
 	if w.combatErr != "" {
 		t.Fatalf("error %q kept after the write answered", w.combatErr)
 	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "the writes answer again") {
+		t.Fatalf("no line for the write answering; logs:\n%s", strings.Join(*logs, "\n"))
+	}
 	b, err := os.ReadFile(good)
 	if err != nil {
 		t.Fatalf("combat log: %v", err)

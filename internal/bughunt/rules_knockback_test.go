@@ -110,3 +110,30 @@ func TestRule20SkipsARecordingWithoutLandings(t *testing.T) {
 		t.Fatalf("skip reason %q with a landing", reason)
 	}
 }
+
+// TestRule20RefusesAPairOutsideTheFlightWindow: the daemon drops a takeoff whose landing did not arrive within 15 s,
+// so a landing paired with an older takeoff is two unrelated rows. The same holds when the landing's own air time
+// disagrees with the gap between the rows.
+func TestRule20RefusesAPairOutsideTheFlightWindow(t *testing.T) {
+	tank := testUnit(gTank)
+	tank.Combat = true
+	r := testRun("watch", map[string]string{gTank: "tank"}, frameAt(12, tank), frameAt(120, tank))
+	r.Combat = []CombatRow{
+		knockRow("knockback", 5, gTank, 0, 0, 40),
+		knockRow("knockback_land", 120, gTank, 50, 50, 10),
+	}
+	if hits := Rule20(r); len(hits) != 0 || r.unknown[20]["takeoff older than the flight window"] == 0 {
+		t.Fatalf("stale pair hits %+v unknown %v", hits, r.unknown[20])
+	}
+
+	r = testRun("watch", map[string]string{gTank: "tank"}, frameAt(12, tank))
+	land := knockRow("knockback_land", 12, gTank, 50, 50, 10)
+	land.AirMS = 2000 // the landing itself says 2 s, the rows are 7 s apart
+	r.Combat = []CombatRow{
+		knockRow("knockback", 5, gTank, 0, 0, 40),
+		land,
+	}
+	if hits := Rule20(r); len(hits) != 0 || r.unknown[20]["landing air time does not match its takeoff"] == 0 {
+		t.Fatalf("air-time mismatch hits %+v unknown %v", hits, r.unknown[20])
+	}
+}

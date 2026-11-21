@@ -123,6 +123,9 @@ const (
 	R20_MIN_NEW       = 2
 	R20_LEDGE_DROP_YD = 8.0
 	R20_FRAME_PAD_S   = 3.0
+	// R20_FLIGHT_S is the daemon's knockLandingFor: a takeoff older than this never pairs with a landing (the
+	// daemon drops it), so the rule refuses the pair as well instead of crossing a whole fight.
+	R20_FLIGHT_S = 15.0
 )
 
 // interruptRows are a class's interrupt spells: the spell id, how long its cooldown runs from the member's own

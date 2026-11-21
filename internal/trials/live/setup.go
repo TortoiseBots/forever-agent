@@ -133,8 +133,19 @@ func consoleRow(ctx context.Context, console Console, commands []string) map[str
 func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) {
 	trial := r.Trial
 	// The console backend's setup commands run first: an instance boss state or a
-	// save is prepared before any character logs in.
+	// save is prepared before any character logs in. A failed (or backend-less)
+	// console row already invalidates the repeat: return now, so no character is
+	// provisioned and no later row runs behind a setup that did not happen.
 	consoleCheck := consoleRow(ctx, s.Console, s.ConsoleCommands)
+	if consoleCheck != nil && !boolOf(consoleCheck["ok"]) {
+		return map[string]any{
+			"ok": false, "invalid_reason": checkEvidence(consoleCheck),
+			"bot_name": "", "extra_names": []any{},
+			"guids":  map[string]any{"player": "", "bot": nil, "pet": nil, "mobs": []any{}, "marked": nil},
+			"checks": []any{consoleCheck},
+			"config": map[string]any{"critical": 20, "low": 50, "medium": 70, "ok": false, "source": "default"},
+		}, nil
+	}
 	wanted := wantedChecks(trial)
 	tb := tbcmd.NewClient(s.runnerOr(r))
 	recovery := s.RecoveryPath
