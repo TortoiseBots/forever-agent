@@ -39,6 +39,10 @@ type ServeConfig struct {
 	Token string
 	// NavmeshDir enables path_to and walk_path. Empty answers those methods with a typed not-configured error.
 	NavmeshDir string
+	// CaptureDir is the debug capture of the serving session (Options.CaptureDir): each link writes a new run
+	// directory under it, so a reconnect starts a fresh run and the dropped link's files stay as they were. A parent
+	// inside a git work tree is refused before the login, because a capture holds a run's identifiers.
+	CaptureDir string
 	// Parents is the server's instance-map rule for the navmesh planner (an instance map's missing tile comes
 	// from that one parent map's tile file).
 	Parents map[uint32]uint32
@@ -186,6 +190,15 @@ type serveState struct {
 	// stopped is set by logout: the loop ends after that call returns, and the RPC keeps its grace to flush the
 	// reply.
 	stopped bool
+	// follow is the one follow loop (follow_session.go), nil before follow_start and after a daemon start. It is
+	// read and written under mu; the loop's own goroutine writes only its result before closing done.
+	follow *followRun
+	// followCtx is the serving daemon's lifetime for the follow loop: every loop is derived from it and serve cancels
+	// it on every exit, so a loop never outlives the daemon. mapEpochBase keeps follow's map epoch continuous across
+	// a reconnect (the new session's own counter starts at zero); the loop goroutine owns it.
+	followCtx    context.Context
+	followCancel context.CancelFunc
+	mapEpochBase uint64
 }
 
 type serveCall struct {
@@ -207,6 +220,25 @@ type serveResult struct {
 func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	if cfg.Listener == nil {
 		return errors.New("world: serve needs a bound RPC listener")
+	}
+	// The capture parent is checked and set before the first login by Enter; this is the second guard for a caller
+	// that built the session itself.
+	if cfg.CaptureDir != "" {
+		if err := captureRepoRefusal(cfg.CaptureDir); err != nil {
+			return err
+		}
+		if s.opts.CaptureDir == "" {
+			s.opts.CaptureDir = cfg.CaptureDir
+		}
+		if s.opts.captureBudget == nil {
+			s.opts.captureBudget = &captureBudget{}
+		}
+	}
+	// The navmesh walks (walk_to's planner is st.nav, but follow, act goto and act npc walk through walkToPoint)
+	// read the session's own options: a serving daemon with --navmesh must hand them to every session it builds.
+	if cfg.NavmeshDir != "" {
+		s.opts.NavmeshDir = cfg.NavmeshDir
+		s.opts.Parents = cfg.Parents
 	}
 	grace := cfg.DisconnectGrace
 	if grace <= 0 {
@@ -236,6 +268,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		st.loginTimeout = serveReconnectLoginTimeout
 	}
 	st.limit.Store(int32(limit))
+	st.followCtx, st.followCancel = context.WithCancel(context.Background())
 	if cfg.NavmeshDir != "" {
 		st.nav = navmesh.NewPlannerFormat(cfg.NavmeshDir, navmesh.Forever, cfg.Parents)
 		defer st.nav.Close()
@@ -262,6 +295,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	defer func() {
 		stop()
 		<-served
+		st.stopFollow()
 		close(st.done)
 	}()
 	s.opts.logf("rpc: listening on http://%s/rpc (state %s)", cfg.Listener.Addr(), serveOnline)
@@ -307,6 +341,11 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 // fight flags), the command channel's link and the epoch. The old session is not touched again; the loop tore it
 // down before the login.
 func (st *serveState) install(s *session, epoch uint64) {
+	if prev := st.session.Load(); prev != nil && prev != s {
+		// A re-entry's own map counter starts at zero; the base absorbs the difference so the follow loop's epoch
+		// changes on a map change and never on a reconnect.
+		st.mapEpochBase += prev.mapEpoch() - s.mapEpoch()
+	}
 	s.serveRT = &serveRuntime{st: st, epoch: epoch}
 	st.rt.Store(s.serveRT)
 	st.q = command.NewSession(&cmdLink{s: s})
@@ -329,6 +368,7 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 	// runtime (stop_attack) sees a stale epoch and refuses instead of reporting a success the dead link cannot act on.
 	st.drop(cause)
 	st.opts.logf("rpc: the world link dropped: %v; state %s", cause, serveReconnecting)
+	old.eventSession("disconnected", map[string]any{"reason": cause.Error()})
 	old.teardown()
 	limit := int(st.limit.Load())
 	if !st.onlineSince.IsZero() && time.Since(st.onlineSince) >= serveReconnectResetWindow {
@@ -354,7 +394,7 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 		if !st.pause(ctx, wait) {
 			return nil, fmt.Errorf("%w: the daemon stopped while reconnecting (%v)", ErrLinkLost, last)
 		}
-		res := st.attemptLogin(ctx, old.CombatLog())
+		res := st.attemptLogin(ctx, old.CombatLog(), old.EventLog())
 		if res.ctxErr != nil {
 			if res.s != nil {
 				res.s.teardown() // the attempt reached the world as the daemon stopped: close it
@@ -365,6 +405,7 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 			st.attempt.Store(0)
 			st.install(res.s, st.epoch.Load()+1)
 			st.setState(serveOnline, "")
+			res.s.eventSession("reconnected", map[string]any{"attempt": attempt, "map": res.s.report.MapID})
 			pos := res.s.report.Position
 			st.opts.logf("rpc: state %s again (attempt %d of %d, map %d at %.1f %.1f %.1f)",
 				serveOnline, attempt, limit, res.s.report.MapID, pos[0], pos[1], pos[2])
@@ -401,14 +442,14 @@ type serveLogin struct {
 }
 
 // attemptLogin runs one re-entry on its own goroutine, so the loop keeps answering read-only calls while it logs in.
-// combat is the dropped session's ring, handed to the new session before its login dispatch runs.
-func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog) serveLogin {
+// combat and evlog are the dropped session's rings, handed to the new session before its login dispatch runs.
+func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog, evlog *EventLog) serveLogin {
 	done := make(chan serveLogin, 1)
 	st.opts.logf("rpc: logging in again (login bounded by %s)", st.loginTimeout)
 	parent := ctx
 	timeout := st.loginTimeout
 	go func() {
-		s, err := loginAgain(parent, st.opts, timeout, combat)
+		s, err := loginAgain(parent, st.opts, timeout, combat, evlog)
 		done <- serveLogin{s: s, err: err}
 	}()
 	for {
@@ -429,10 +470,10 @@ func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog) serve
 
 // loginAgain builds a fresh session and takes it through the login half: a new world socket, a new instance socket,
 // a new model. Only the login waits are bounded by the attempt's timeout; the pump context outlives it, so the
-// session is usable once it is in the world. combat is the dropped session's ring, installed before the first login
-// packet is dispatched: the re-entry's burst can carry a combat or aura row, and a ring swapped in after it would
-// discard exactly those rows. It is nil only when there is no ring to keep.
-func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat *CombatLog) (*session, error) {
+// session is usable once it is in the world. combat and evlog are the dropped session's rings, installed before the
+// first login packet is dispatched: the re-entry's burst can carry a combat, aura or chat row, and a ring swapped in
+// after it would discard exactly those rows. Each is nil only when there is no ring to keep.
+func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat *CombatLog, evlog *EventLog) (*session, error) {
 	// A re-entry authenticates its own world socket: the one the first login's build probe handed over was that
 	// session's, and it went down with it. The build stays, so the new login claims the same one.
 	opts.WorldConn = nil
@@ -442,6 +483,9 @@ func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat
 	s := newSession(opts, &Report{Counts: make(map[string]int)}, base)
 	if combat != nil {
 		s.combat = combat
+	}
+	if evlog != nil {
+		s.evlog = evlog
 	}
 	s.ctx = actx
 	if err := s.authenticate(actx, timeout); err != nil {
@@ -833,8 +877,11 @@ type ServeUnit struct {
 	Moving     bool    `json:"moving"`
 	Casting    bool    `json:"casting,omitempty"`
 	SpellID    int32   `json:"spell_id,omitempty"`
-	// Auras is every aura the model holds for the unit that is still up, in slot order.
-	Auras []ServeAura `json:"auras"`
+	// Auras is every aura the model holds for the unit that is still up, in slot order. MountDisplayID is the
+	// unit's own UNIT_FIELD_MOUNTDISPLAYID: non-zero while it is mounted (this character's own row is what mount
+	// and dismount read).
+	Auras          []ServeAura `json:"auras"`
+	MountDisplayID int32       `json:"mount_display_id,omitempty"`
 }
 
 func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
@@ -848,7 +895,8 @@ func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
 		Health:     o.Info.Health, MaxHealth: o.Info.MaxHealth,
 		PowerType: o.Info.DisplayPower, Level: o.Info.Level, Class: o.Info.Class,
 		Target: GUID(o.Info.Target), InCombat: o.InCombat, Dead: o.Dead, Ghost: o.Ghost,
-		Moving: o.Spline != nil && !o.SplineAt.IsZero() && now.Sub(o.SplineAt) < time.Duration(o.Spline.MoveTime)*time.Millisecond,
+		MountDisplayID: o.Info.MountDisplayID,
+		Moving:         o.Spline != nil && !o.SplineAt.IsZero() && now.Sub(o.SplineAt) < time.Duration(o.Spline.MoveTime)*time.Millisecond,
 	}
 	if int(o.Info.DisplayPower) < len(o.Info.Power) {
 		u.Power = o.Info.Power[o.Info.DisplayPower]

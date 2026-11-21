@@ -172,6 +172,10 @@ func (s *session) offerAddon(line chat.Line) {
 		s.fbFrames++
 		return
 	}
+	s.eventAddon(addonMessageEvent{
+		senderName: from, sender: m.Sender, prefix: prefix,
+		channel: addonChannelName(m), text: chat.Sanitise(m.Text, chat.MaxDisplayText),
+	})
 	s.logAddon("addon: %s %s from %s: %s", addonChannelName(m), prefix, from, chat.Sanitise(m.Text, chat.MaxDisplayText))
 }
 

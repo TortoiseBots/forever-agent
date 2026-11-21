@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/loot"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -136,6 +137,7 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 			return nil
 		}
 		s.loot.window = r
+		s.eventLoot(events.KindLootOpen, r.Loot, map[string]any{"coins": r.Coins, "items": len(r.Items), "method": r.Method})
 	case wire.SMSGLootRemoved:
 		r, err := loot.ParseRemoved(p.Payload)
 		if err != nil {
@@ -182,6 +184,7 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		if _, exists := s.loot.rolls[key]; !exists {
 			s.loot.rolls[key] = &rollWatch{start: r, ours: 0xFF}
 			s.loot.order = append(s.loot.order, key)
+			s.eventLoot(events.KindLootStart, r.Loot, map[string]any{"item": int32(r.Item.Instance.ItemID), "slot": r.Item.LootListID, "ms": r.RollTimeMs})
 		}
 	case wire.SMSGLootRoll:
 		r, err := loot.ParseRoll(p.Payload)
@@ -191,6 +194,7 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		key := rollKey{loot: r.Loot, listID: r.Item.LootListID}
 		if roll := s.loot.rolls[key]; roll != nil {
 			roll.votes = append(roll.votes, r)
+			s.eventLoot(events.KindLootRoll, r.Loot, map[string]any{"item": int32(r.Item.Instance.ItemID), "slot": r.Item.LootListID, "player": eventGUID(r.Player), "number": r.Number, "type": r.RollType, "autopassed": r.Autopassed})
 		}
 	case wire.SMSGLootRollWon:
 		r, err := loot.ParseRollWon(p.Payload)
@@ -200,6 +204,7 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		key := rollKey{loot: r.Loot, listID: r.Item.LootListID}
 		if roll := s.loot.rolls[key]; roll != nil {
 			roll.won = &r
+			s.eventLoot(events.KindLootWon, r.Loot, map[string]any{"item": int32(r.Item.Instance.ItemID), "slot": r.Item.LootListID, "winner": eventGUID(r.Winner), "number": r.Number})
 		}
 	case wire.SMSGLootAllPassed:
 		r, err := loot.ParseAllPassed(p.Payload)
@@ -209,6 +214,7 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		key := rollKey{loot: r.Loot, listID: r.Item.LootListID}
 		if roll := s.loot.rolls[key]; roll != nil {
 			roll.passed = &r
+			s.eventLoot(events.KindLootAllPassed, r.Loot, map[string]any{"item": int32(r.Item.Instance.ItemID), "slot": r.Item.LootListID})
 		}
 	case wire.SMSGLootRollsComplete:
 		r, err := loot.ParseRollsComplete(p.Payload)

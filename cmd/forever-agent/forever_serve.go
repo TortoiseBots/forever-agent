@@ -163,7 +163,7 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -178,6 +178,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	fs.Var(parents, "parent", "MAP=PARENT: an instance map whose missing tile comes from that parent (repeatable)")
 	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
 	allowGMUnits := fs.Bool("allow-gm-units", false, "test bench: allow gm_kill, gm_set_hp and gm_aura on the guids trial_units registered")
+	captureDir := fs.String("capture-dir", "", "write every packet the combat, chat and party handlers see into a new run directory under this path, from the first login on (one cap for the whole daemon; keep it outside the repository)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -188,6 +189,13 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	if err := common.check("forever serve"); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
+	}
+	if *captureDir != "" {
+		// Refused before the login: a parent inside a repository ends the daemon at once.
+		if err := world.CheckCaptureDir(*captureDir); err != nil {
+			fmt.Fprintf(stderr, "forever serve: %v\n", err)
+			return exitUsage
+		}
 	}
 	if *grace < 0 || *grace > 10*time.Minute {
 		fmt.Fprintln(stderr, "forever serve: --disconnect-grace must be 0 to 10m")
@@ -292,6 +300,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			Parents:         parents,
 			DisconnectGrace: *grace,
 			AllowGMUnits:    *allowGMUnits,
+			CaptureDir:      *captureDir,
 		},
 	})
 	fmt.Fprintf(stdout, "rpc: listening on http://%s/rpc\n", ln.Addr())

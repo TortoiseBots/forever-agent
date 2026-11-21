@@ -63,6 +63,9 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x45021E, "SMSG_BATTLE_PAY_GET_DISTRIBUTION_LIST_RESPONSE", 0x47021F, 0x470220},
 		{0x450360, "SMSG_ACCOUNT_ITEM_COLLECTION_DATA", 0x470361, 0x470362},
 		{0x45036F, "SMSG_MIRROR_VARS", 0x470372, 0x470373},
+		// W4's mount answers: plain group arithmetic below index 0x98, no inserts in this group.
+		{0x45000F, "SMSG_MOUNT_RESULT", 0x47000F, 0x47000F},
+		{0x450010, "SMSG_DISMOUNT_RESULT", 0x470010, 0x470010},
 		// R3 vendor answers: below 0x98 the group+1 is the whole change; above it the index is one higher too
 		// (0x45005C -> 0x47005C; 0x450170 -> 0x470171; 0x450171 -> 0x470172; 0x450172 -> 0x470173), and a 70938
 		// client gets the net +1 of the 70755/70790 inserts from 0x4700ED on.
@@ -218,6 +221,8 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x43000A, "CMSG_START_WAR_GAME", 0x44000A, 0x44000A},
 		{0x4300EA, "CMSG_BATTLE_PAY_GET_PURCHASE_LIST", 0x4400EA, 0x4400EC},
 		{0x43010F, "CMSG_GET_UNDELETE_CHARACTER_COOLDOWN_STATUS", 0x44010F, 0x440111},
+		// W4's dismount: .inc region-2 0x3F0155 -> core 0x3D0153, the same number for both builds.
+		{0x3D0153, "CMSG_CANCEL_MOUNT_AURA", 0x3E0155, 0x3E0155},
 		// main-group insert: classic index >= 0x13B is one higher on the wire
 		{0x430134, "CMSG_CAN_REDEEM_TOKEN_FOR_BALANCE", 0x440133, 0x440135},
 		{0x430176, "CMSG_SOCIAL_CONTRACT_REQUEST", 0x440177, 0x440179},

@@ -199,7 +199,7 @@ func (s *session) actVendor(ctx context.Context, a *actState, step ActStep) erro
 		if row.Quantity < 0 {
 			stock = "unlimited"
 		}
-		s.opts.logf("vendor item muid %d: entry %d, %d copper for %d, stock %s",
+		s.actLine(a, "vendor item muid %d: entry %d, %d copper for %d, stock %s",
 			row.MuID, row.Item.ItemID, row.Price, row.StackCount, stock)
 	}
 	s.actOK(a, step, fmt.Sprintf("entry %d, %d item(s)", unit.Info.Entry, len(inv.Items)))

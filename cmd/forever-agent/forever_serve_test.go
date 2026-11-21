@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -172,6 +173,27 @@ func TestServeManifestRecordsNoAuth(t *testing.T) {
 		if err != nil || m.NoAuth != noAuth {
 			t.Fatalf("no_auth %v: read back %+v, %v", noAuth, m, err)
 		}
+	}
+}
+
+// TestServeCaptureDirRefusedBeforeTheLogin: a --capture-dir inside a git work tree ends the command with a usage
+// error before any password is read or any server is contacted (the addresses here would refuse a connection).
+func TestServeCaptureDirRefusedBeforeTheLogin(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	code := foreverServeCmd(context.Background(), []string{
+		"--rest", "127.0.0.1:1", "--rpc", "127.0.0.1:2", "--ca", filepath.Join(repo, "ca.pem"),
+		"--account", "a@example.invalid", "--character", "Chara",
+		"--capture-dir", filepath.Join(repo, "captures"),
+	}, &out, &errOut)
+	if code != exitUsage || !strings.Contains(errOut.String(), "inside the git work tree") {
+		t.Fatalf("exit %d, stderr %q: want a usage error naming the work tree", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(repo, "captures")); !os.IsNotExist(err) {
+		t.Fatalf("the refused capture parent was created: %v", err)
 	}
 }
 
