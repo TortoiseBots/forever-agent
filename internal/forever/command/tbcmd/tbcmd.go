@@ -249,6 +249,10 @@ type OrderResult struct {
 	HasCode bool
 	Msg     string
 	HasMsg  bool
+	// Target is a `.tb cmd` task answer's `target=` (the 32-hex guid the bot was sent to). HasTarget is false on
+	// the slice-3 order lines, which carry no target.
+	Target    string
+	HasTarget bool
 	// Extra holds every key this model does not know, decoded. Unknown keys are not an error.
 	Extra map[string]string
 }
@@ -264,6 +268,15 @@ type OrderReport struct {
 	Queued  int
 	Refused int
 	Raw     []string
+	// Lead, Status, Bots and Result are a `.tb cmd` answer's whole-call fields (rounds C5/C6). The cmd path
+	// answers one record for the whole party, so Results names only the bots the answer itself accounts for (a
+	// task verb's bot, an order the lead's bot executes), each `queued` where the module wrote `accepted`.
+	Lead   string // the end line's lead= (an order verb)
+	Status string // the cmd record's own word: accepted, ok
+	Bots   int    // the bots the answer accounts for (the end line's bots=, else the result records)
+	Result string // the order verb's result scope, decoded: "party 5" or "bot:<name> 1"
+	// Fields is a whole-call record's keys this model does not type (lootmethod's method= and threshold=).
+	Fields map[string]string
 }
 
 // Order sends one order. arg may be empty.

@@ -35,7 +35,10 @@ type serveCommanderParams struct {
 	Args     []string `json:"args,omitempty"`     // cmd: the verb's arguments; run: the plan, the reason or the event sequence
 	WaitMS   int      `json:"wait_ms,omitempty"`  // cmd: the per-bot poll, 0..30000 ms (clamped); other ops ignore it
 	PauseRun bool     `json:"pause_run,omitempty"`
-	On       *bool    `json:"on,omitempty"`
+	// LeaveParty: bind only. A character in a party is refused (in-party) unless this is set, in which case it
+	// leaves the party first.
+	LeaveParty bool  `json:"leave_party,omitempty"`
+	On         *bool `json:"on,omitempty"`
 }
 
 // ServeCommander is a commander call's answer: the lines that went out, the module's per-bot lines, the binding
@@ -52,15 +55,23 @@ type ServeCommander struct {
 	PartyError string                `json:"party_error,omitempty"` // status: why the party state read failed
 	Runs       []ServeCommanderRun   `json:"runs,omitempty"`
 	Events     []ServeCommanderEvent `json:"events,omitempty"`
+	// Fields is a `.tb cmd` whole-order answer's keys the typed report does not model (lootmethod's method= and
+	// threshold=), decoded. It is absent when the verb's answer carried none.
+	Fields map[string]string `json:"fields,omitempty"`
+	Notes  []string          `json:"notes,omitempty"` // what the call did on its own, beyond the lines it sent
 }
 
 // ServeCommanderBot is one bot's line of an answer.
 type ServeCommanderBot struct {
 	Bot    string `json:"bot"`
-	Status string `json:"status"` // queued, refused, stored, bound, joined
+	Status string `json:"status"` // queued, refused, stored, bound, joined; a cmd answer: queued, ok, or a task's done|failed|running|none
 	Seq    int    `json:"seq,omitempty"`
 	Error  string `json:"error,omitempty"` // the module's refusal code
 	Msg    string `json:"msg,omitempty"`
+	// Target is a `.tb cmd` task answer's 32-hex target guid; a slice-3 order line has none.
+	Target string `json:"target,omitempty"`
+	// Extra holds a task answer's other keys (busy=, entry=), decoded.
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 // ServeCommanderCard is one commander's binding card, in the RPC's own words (the module's §11 record, typed).
@@ -211,7 +222,30 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander bind: lead_bot is required"}
 		}
-		return commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		// The module keeps only bindings made from outside the party. A character that is in a party is refused
+		// unless the call asks to leave it first; a leave that fails (an invalid roster included) ends the call, and
+		// nothing is bound after it.
+		var notes []string
+		if s.party != nil && s.party.InParty {
+			if !p.LeaveParty {
+				note := "this character is in a party and the module keeps only bindings made from outside the party: leave the party first, or bind with leave_party set to leave it"
+				return ServeCommander{}, commanderGame("in-party: "+note, ServeCommander{Notes: []string{note}})
+			}
+			if err := s.serveLeaveGroup(ctx); err != nil {
+				return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander bind: leaving the party first failed: " + err.Error()}
+			}
+			notes = append(notes, "left the party first (leave_party): the module keeps only bindings made from outside the party")
+		}
+		out, err := commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		out.Notes = append(out.Notes, notes...)
+		var re *rpc.Error
+		if errors.As(err, &re) {
+			if partial, ok := re.Data.(ServeCommander); ok {
+				partial.Notes = append(partial.Notes, notes...)
+				re.Data = partial
+			}
+		}
+		return out, err
 	case "unbind":
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander unbind: lead_bot is required"}
@@ -305,7 +339,7 @@ func commanderOnlyLead(ctx context.Context, c cmdctl.Controller) (string, error)
 // serveCommanderError maps the controller's and the module's refusals onto the RPC's codes, carrying the call's
 // partial result in Data: the lines that went out and the bots, card and final the call had read. A caller that
 // sees an order in Sent knows it went out and never retries it blindly. Every refusal is the game's answer
-// (-32003) with its machine-readable code first in the message (not-available, run-active, not-owned, refused,
+// (-32003) with its machine-readable code first in the message (not-available, run-active, not-owned, lead-mismatch, refused,
 // bind-refused, or the module's own error code), so a caller keys off the message's first word; the link's own
 // errors keep their codes (-32002 offline, -32005 reconnecting).
 func serveCommanderError(res cmdctl.Result, err error) error {
@@ -316,6 +350,7 @@ func serveCommanderError(res cmdctl.Result, err error) error {
 	var ra *cmdctl.RunActiveError
 	var no *cmdctl.NotOwnedError
 	var rf *cmdctl.RefusedError
+	var lm *cmdctl.LeadMismatchError
 	var br *cmdctl.BindRefusedError
 	var ue *cmdctl.UsageError
 	var ce *tbcmd.CommandError
@@ -329,6 +364,8 @@ func serveCommanderError(res cmdctl.Result, err error) error {
 		return commanderGame("not-owned: "+strings.TrimPrefix(no.Error(), "cmdctl: "), partial)
 	case errors.As(err, &rf):
 		return commanderGame(rf.Error(), partial)
+	case errors.As(err, &lm):
+		return commanderGame(lm.Error(), partial)
 	case errors.As(err, &br):
 		return commanderGame("bind-refused: "+strings.TrimPrefix(br.Error(), "cmdctl: "), partial)
 	case errors.As(err, &ue):
@@ -385,6 +422,7 @@ func commanderResult(res cmdctl.Result) ServeCommander {
 	for _, b := range res.Bots {
 		out.Bots = append(out.Bots, ServeCommanderBot{
 			Bot: b.Bot, Status: b.Status, Seq: b.Seq, Error: b.Error, Msg: b.Msg,
+			Target: b.Target, Extra: b.Extra,
 		})
 	}
 	if res.Card != nil {
@@ -397,6 +435,7 @@ func commanderResult(res cmdctl.Result) ServeCommander {
 	for _, ev := range res.Events {
 		out.Events = append(out.Events, commanderEvent(ev))
 	}
+	out.Fields = res.Fields
 	return out
 }
 

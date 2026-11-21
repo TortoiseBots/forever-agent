@@ -97,23 +97,83 @@ func TestForeverPollStatusDownIsOffline(t *testing.T) {
 	}
 }
 
-// TestForeverControlRunActiveShownAsReply pins that a commander answer with
-// the run-active outcome comes back shown as the reply, marked as a refusal:
-// 200 with the module's words, status "error" and executed false (a rejected
-// control must never look executed), not a 502.
-func TestForeverControlRunActiveShownAsReply(t *testing.T) {
+// TestForeverControlRunActiveIsAFailedControl pins that the daemon's run-active refusal (a -32003 error, the real
+// answer of a cmd while a run runs) is a failed control: 502 with the module's words and the code, status
+// "error", never "unknown" and never executed.
+func TestForeverControlRunActiveIsAFailedControl(t *testing.T) {
 	f := newForeverFakeServe(t)
-	f.results["commander"] = `{"sent":".tb summon","reply":{"kind":"commander-cmd","ok":false,"line":"run-active: a run is already active"}}`
+	f.refused["commander"] = "run-active: Atank's run of ragefire_chasm is running; set pause_run to order while it runs"
 	_, agent, srv := newForeverRig(t, f)
 	code, out := postForeverControl(t, srv, agent.ID, "order", `{"verb":"stay"}`)
-	if code != 200 {
+	if code != 502 {
 		t.Fatalf("status %d (%v)", code, out)
 	}
-	if out["rpc"] != "commander" {
-		t.Fatalf("rpc %v, want commander", out["rpc"])
-	}
-	if out["status"] != "error" || out["executed"] != false || out["message"] != "run-active: a run is already active" {
+	msg, _ := out["message"].(string)
+	if out["status"] != "error" || out["executed"] != false || out["code"] != float64(-32003) || !strings.Contains(msg, "run-active: Atank's run") {
 		t.Fatalf("a refused control is not marked as one: %v", out)
+	}
+}
+
+// TestForeverControlStayAnswerOfTheRealShape is the stay button of the live check: the daemon answers a cmd with
+// {sent: [...], bots, final}, and the page shows the module's words with status "ok", not "unknown: check the run
+// status" (the old reader failed to decode the answer and called the control indeterminate).
+func TestForeverControlStayAnswerOfTheRealShape(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.results["commander"] = `{"sent":[".tb order party stay"],"bots":[{"bot":"Bheal","status":"queued","seq":29},{"bot":"Bpriest","status":"queued","seq":30}],"final":{"Bheal":"ok","Bpriest":"ok"}}`
+	_, agent, srv := newForeverRig(t, f)
+	code, out := postForeverControl(t, srv, agent.ID, "order", `{"verb":"stay"}`)
+	if code != 200 || out["status"] != "ok" || out["executed"] != true {
+		t.Fatalf("stay: %d %v", code, out)
+	}
+	if msg, _ := out["message"].(string); !strings.Contains(msg, ".tb order party stay") || !strings.Contains(msg, "Bheal: queued") {
+		t.Fatalf("the module's words are not shown: %v", out)
+	}
+	// A waited bot whose order failed, and a call every bot refused, are refusals with the module's words.
+	f.results["commander"] = `{"sent":[".tb order party stay"],"bots":[{"bot":"Bheal","status":"queued"}],"final":{"Bheal":"fail:expired"}}`
+	code, out = postForeverControl(t, srv, agent.ID, "order", `{"verb":"stay"}`)
+	if msg, _ := out["message"].(string); code != 200 || out["status"] != "error" || out["executed"] != false || msg != "Bheal: fail:expired" {
+		t.Fatalf("a failed order: %d %v", code, out)
+	}
+	f.results["commander"] = `{"sent":[".tb order party stay"],"bots":[{"bot":"Bheal","status":"refused","error":"no-engine","msg":"the bot has no running engine"}],"final":{}}`
+	code, out = postForeverControl(t, srv, agent.ID, "order", `{"verb":"stay"}`)
+	if msg, _ := out["message"].(string); code != 200 || out["status"] != "error" || out["executed"] != false || !strings.Contains(msg, "no-engine") {
+		t.Fatalf("a refused order: %d %v", code, out)
+	}
+}
+
+// TestForeverRunButtonNamesTheLead pins that a run verb carries the character's one lead (the daemon refuses a
+// pause with no lead_bot), and that a character with no lead sends nothing.
+func TestForeverRunButtonNamesTheLead(t *testing.T) {
+	f := newForeverFakeServe(t)
+	_, agent, srv := newForeverRig(t, f)
+	f.mu.Lock()
+	f.results["commander"] = foreverCommanderJSON
+	f.mu.Unlock()
+	code, out := postForeverControl(t, srv, agent.ID, "run", `{"verb":"pause","confirm":true}`)
+	if code != 200 {
+		t.Fatalf("pause: %d %v", code, out)
+	}
+	f.mu.Lock()
+	last := f.calls[len(f.calls)-1]
+	nCalls := len(f.calls)
+	f.mu.Unlock()
+	var p struct {
+		Op, Verb string
+		LeadBot  string `json:"lead_bot"`
+	}
+	_ = json.Unmarshal(last.Params, &p)
+	if p.Op != "run" || p.Verb != "pause" || p.LeadBot != "Atank" {
+		t.Fatalf("the run call carried %s", last.Params)
+	}
+	f.mu.Lock()
+	f.results["commander"] = `{"self":"Atank","cards":[],"final":{}}`
+	f.mu.Unlock()
+	code, out = postForeverControl(t, srv, agent.ID, "run", `{"verb":"pause","confirm":true}`)
+	f.mu.Lock()
+	after := len(f.calls)
+	f.mu.Unlock()
+	if code != 502 || out["status"] != "error" || after != nCalls+1 {
+		t.Fatalf("no lead: %d %v, %d calls after %d (only the status read may go out)", code, out, after, nCalls)
 	}
 }
 

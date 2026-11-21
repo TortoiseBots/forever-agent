@@ -46,6 +46,9 @@ func foreverServeTestAgent(t *testing.T, token string) *httptest.Server {
 	}) (map[string]string, error) {
 		return map[string]string{"type": p.Type, "text": p.Text}, nil
 	}))
+	srv.Register("commander", rpc.Typed(func(_ context.Context, p map[string]any) (map[string]any, error) {
+		return p, nil
+	}))
 	srv.Register("units", rpc.Typed(func(_ context.Context, _ struct{}) ([]string, error) {
 		return []string{}, nil
 	}))
@@ -452,5 +455,29 @@ func TestForeverRPCTimeoutAbortsTheCall(t *testing.T) {
 	}
 	if strings.Contains(out+errOut, token) {
 		t.Fatal("token in output")
+	}
+}
+
+// --leave-party sets leave_party on a commander bind and refuses any other call.
+func TestForeverRPCLeavePartyFlag(t *testing.T) {
+	token := rpcCLITestToken(t)
+	ts := foreverServeTestAgent(t, token)
+	dir := foreverServeTestDir(t, rpcCLITestPort(t, ts), token)
+	code, out, errOut := runCLI("forever", "rpc", "--raw", "--leave-party", dir, "commander", `{"op":"bind","lead_bot":"Tanka"}`)
+	if code != exitOK || !strings.Contains(out, `"leave_party":true`) || !strings.Contains(out, `"lead_bot":"Tanka"`) {
+		t.Fatalf("code %d stdout %q stderr %q, want the params echoed with leave_party", code, out, errOut)
+	}
+	code, out, errOut = runCLI("forever", "rpc", "--raw", dir, "commander", `{"op":"bind","lead_bot":"Tanka"}`)
+	if code != exitOK || strings.Contains(out, "leave_party") {
+		t.Fatalf("without the flag: code %d stdout %q stderr %q", code, out, errOut)
+	}
+	for _, args := range [][]string{
+		{"forever", "rpc", "--leave-party", dir, "status"},
+		{"forever", "rpc", "--leave-party", dir, "commander", `{"op":"status"}`},
+		{"forever", "rpc", "--leave-party", dir, "commander"},
+	} {
+		if code, _, errOut := runCLI(args...); code != exitUsage || !strings.Contains(errOut, "--leave-party") {
+			t.Fatalf("%v: code %d stderr %q, want a usage error naming --leave-party", args, code, errOut)
+		}
 	}
 }

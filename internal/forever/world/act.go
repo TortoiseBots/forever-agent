@@ -345,12 +345,22 @@ func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
 	if err := s.confirmGM(ctx); err != nil {
 		return s.actFail(a, step, err)
 	}
-	res, err := s.runOneResult(ctx, q, line)
+	opts, done, err := s.gmLinePrep(line, command.Options{})
 	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	rep, runErr := s.runCommandLine(ctx, q, line, opts)
+	res := oneResult{Rep: rep, RunErr: runErr}
+	if err := s.finishOne(rep, runErr, line); err != nil {
 		return s.actFail(a, step, err)
 	}
 	if err := gmOutcome(res.Rep, res.RunErr); err != nil {
 		return s.actFail(a, step, fmt.Errorf("%q: %w", line, err))
+	}
+	// A line that prints nothing when it works is a success only when its effect was seen or no line came; a line
+	// the server did send, or a teleport nobody arrived from, is an error (gm_silent.go).
+	if err := done(rep, runErr); err != nil {
+		return s.actFail(a, step, err)
 	}
 	s.actOK(a, step, line)
 	return nil

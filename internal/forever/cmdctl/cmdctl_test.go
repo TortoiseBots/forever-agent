@@ -7,6 +7,7 @@ package cmdctl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -486,23 +487,248 @@ func TestOrderAfterRunEnds(t *testing.T) {
 
 // ---- the capability probe (D3) ----
 
-// recPath is a stand-in for the cmd path the typed `.tb cmd` parser will install.
-type recPath struct {
-	sent []string
+// cmdAnswer is a `.tb cmd` order answer: one whole-call record, the party or the executing bot named in the result
+// scope (TB-COMMANDS section 14; the module's own `%20` and `%3A` encoding).
+func cmdAnswer(verb, scope string, bots int) []string {
+	return []string{
+		"cmd-begin #T",
+		"cmd verb=" + verb + " status=accepted bots=" + itoa(bots) + " result=" + scope + " #T",
+		"cmd-end count=1 records=1 verb=" + verb + " lead=Tanka bots=" + itoa(bots) + " #T",
+	}
 }
 
-func (p *recPath) Send(_ context.Context, verb string, args []string) (tbcmd.OrderReport, error) {
-	p.sent = append(p.sent, ".tb cmd "+strings.Join(append([]string{verb}, args...), " "))
-	return tbcmd.OrderReport{
-		Verb:   verb,
-		Count:  1,
-		Queued: 1,
-		Results: []tbcmd.OrderResult{
-			{Bot: "Tanka", Verb: verb, Seq: 7, HasSeq: true, Status: "queued"},
-		},
-	}, nil
+// cmdParty is a whole-party result scope (`party 5`).
+func cmdParty(bots int) string { return "party%20" + itoa(bots) }
+
+// cmdBot is one bot's result scope (`bot:Tanka 1`).
+func cmdBot(bot string, n int) string { return "bot%3A" + bot + "%20" + itoa(n) }
+
+// cmdTaskAnswer is a P6 task answer: the bot and the target guid.
+func cmdTaskAnswer(verb, bot, target string) []string {
+	return []string{
+		"cmd-begin #T",
+		"cmd verb=" + verb + " bot=" + bot + " status=accepted target=" + target + " #T",
+		"cmd-end count=1 records=1 verb=" + verb + " ok=1 refused=0 #T",
+	}
 }
 
+// missingVerb is the P3 probe's positive answer.
+func missingVerb(o command.Options) *command.Reply {
+	return reply(o, "error code=missing-verb cmd=cmd msg=move%2C%20stay #T")
+}
+
+// enc percent-encodes free text the way the module's replies carry it: every byte outside the unreserved set.
+func enc(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+// cmdStateAnswer is the module's `.tb cmd state` reply (TbCmdTasks.cpp HandleState): one `task` record per bound bot
+// in the world, nothing whole-call, and an end line with verb=state. It is also the P6 probe's positive answer.
+func cmdStateAnswer(bots ...string) []string {
+	raws := []string{"cmd-begin #T"}
+	for _, b := range bots {
+		raws = append(raws, "task bot="+b+" busy=no status=none #T")
+	}
+	return append(raws, "cmd-end count="+itoa(len(bots))+" records="+itoa(len(bots))+" verb=state #T")
+}
+
+// p3OnlyState is a P3-only module's answer to `.tb cmd state`: the order grammar lists `state` among the verbs it does
+// not carry out (TbRunOrdersPure.h ParseOrder: code unsupported, "The order `state` is not carried out on
+// ForeverCore.").
+func p3OnlyState(o command.Options) *command.Reply {
+	return reply(o, "error code=unsupported cmd=cmd msg="+enc("The order `state` is not carried out on ForeverCore.")+" #T")
+}
+
+// cmdAnswerLead is cmdAnswer for a module that names another lead in its end line (TbCmdOrders.cpp: lead= is the
+// binding's lead, not the one the caller meant).
+func cmdAnswerLead(verb, scope string, bots int, lead string) []string {
+	return []string{
+		"cmd-begin #T",
+		"cmd verb=" + verb + " status=accepted bots=" + itoa(bots) + " result=" + scope + " #T",
+		"cmd-end count=1 records=1 verb=" + verb + " lead=" + lead + " bots=" + itoa(bots) + " #T",
+	}
+}
+
+// TestProbeCachedTwoCallsOneProbe: the first P3 verb probes once, and the answer is remembered for the session.
+func TestProbeCachedTwoCallsOneProbe(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case line == ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case line == ".tb cmd":
+			return missingVerb(o), nil
+		case line == ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 2 {
+		if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
+			t.Fatalf("move %d: %v", i, err)
+		}
+	}
+	if probes := seenCount(f, ".tb cmd") - seenCount(f, ".tb cmd move"); probes != 1 {
+		t.Fatalf("%d probe(s) in %v, want one", probes, f.seen)
+	}
+	if got := seenCount(f, ".tb cmd move 1 2 3"); got != 2 {
+		t.Fatalf("%d move line(s) in %v, want two", got, f.seen)
+	}
+}
+
+// TestProbeMissAndReset: a module without P3 refuses the probe's verb; the miss is remembered until a reset asks
+// again, and no order reaches the module.
+func TestProbeMissAndReset(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case line == ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case line == ".tb cmd":
+			return reply(o, "error code=unknown-verb cmd=cmd msg=bogus #T"), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packageP3 {
+			t.Fatalf("move %d: err %v, want not-available P3", i, err)
+		}
+		if want := "not-available: move: needs module package P3"; err.Error() != want {
+			t.Fatalf("message %q, want %q", err.Error(), want)
+		}
+	}
+	if got := seenCount(f, ".tb cmd "); got != 0 {
+		t.Fatalf("an unavailable verb reached the module: %v", f.seen)
+	}
+	b.Reset()
+	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err == nil {
+		t.Fatal("move after Reset answered")
+	}
+	if probes := seenCount(f, ".tb cmd") - seenCount(f, ".tb cmd move"); probes != 2 {
+		t.Fatalf("%d probe(s) after Reset, want two", probes)
+	}
+}
+
+func TestAvailable(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			return missingVerb(o), nil
+		case ".tb cmd state Tanka":
+			return reply(o, cmdStateAnswer("Tanka")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	ctx := context.Background()
+	if ok, _, err := b.Available(ctx, "stay"); !ok || err != nil {
+		t.Fatalf("stay: %v %v", ok, err)
+	}
+	if ok, why, err := b.Available(ctx, "view"); ok || why != "not ported on this server" || err != nil {
+		t.Fatalf("view: %v %q %v", ok, why, err)
+	}
+	if ok, why, err := b.Available(ctx, "move"); !ok || why != "" || err != nil {
+		t.Fatalf("move with P3: %v %q %v", ok, why, err)
+	}
+	if ok, why, err := b.Available(ctx, "loot"); !ok || why != "" || err != nil {
+		t.Fatalf("loot with P6: %v %q %v", ok, why, err)
+	}
+	if _, _, err := b.Available(ctx, "dance"); err == nil {
+		t.Fatal("an unknown verb answered")
+	}
+}
+
+func TestProbeTimeoutIsNotRemembered(t *testing.T) {
+	probes := 0
+	up := false
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			probes++
+			if !up {
+				return nil, command.ErrIncomplete
+			}
+			return missingVerb(o), nil
+		case ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packageP3 || !na.Retry {
+			t.Fatalf("move %d: err %v, want a retryable not-available P3", i, err)
+		}
+	}
+	if probes != 2 {
+		t.Fatalf("%d probe(s) after two timeouts, want two (a timeout is never remembered)", probes)
+	}
+	if got := seenCount(f, ".tb cmd move"); got != 0 {
+		t.Fatalf("a move line went out: %v", f.seen)
+	}
+	up = true
+	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("move once the module answers: %v", err)
+	}
+}
+
+// TestProbeCancelledCallIsNotRemembered: a caller that gave up did not hear an answer, so the session still knows
+// nothing about the package.
+func TestProbeCancelledCallIsNotRemembered(t *testing.T) {
+	probes := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			probes++
+			if probes == 1 {
+				return nil, context.Canceled
+			}
+			return missingVerb(o), nil
+		case ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := b.Order(ctx, Order{Verb: "move", Args: []string{"1", "2", "3"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled call: err %v, want the caller's error", err)
+	}
+	var na *NotAvailableError
+	if errors.As(err, &na) {
+		t.Fatal("a cancelled call was remembered as not-available")
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("move after the cancelled probe: %v", err)
+	}
+	if probes != 2 {
+		t.Fatalf("%d probe(s), want two", probes)
+	}
+}
+
+// TestOneLeadScopesTheGuardRead: a named lead narrows the guard's cards to that lead's party; one card and no name
+// keeps the card, and anything else is refused before a line goes out.
 func TestOneLeadScopesTheGuardRead(t *testing.T) {
 	cards := []tbcmd.Card{{Lead: "Tanka"}, {Lead: "Healera"}}
 	scoped, card, err := oneLead(cards, "healera")
@@ -529,154 +755,352 @@ func TestOneLeadScopesTheGuardRead(t *testing.T) {
 	}
 }
 
-// TestOrderToUnknownLeadSendsNothing is decision 3 at the Order level: a named lead the character does not
-// command is refused before any line goes out, and the refusal names the lead.
-func TestOrderToUnknownLeadSendsNothing(t *testing.T) {
-	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
-		if line == ".tb commander status Cmdr" {
-			return reply(o, fullCards("Tanka", "")...), nil
+// withCmdPath points a verb's table row at `.tb cmd` for one test, package probe included: the table is the one
+// place that decides which path a verb takes, so round C5's failing case moves the row exactly as a later port
+// would, and the row's own words still come from the table.
+func withCmdPath(t *testing.T, verb string) {
+	t.Helper()
+	for i := range Verbs {
+		if Verbs[i].Name != verb {
+			continue
 		}
-		return nil, errors.New("unexpected line " + line)
-	}}
-	b, _ := newTB(t, f, "Cmdr")
-	res, err := b.Order(context.Background(), Order{Verb: "stay", Lead: "Rogua"})
-	var no *NotOwnedError
-	if !errors.As(err, &no) || no.Target != "Rogua" || no.Kind != "lead" || no.Sent {
-		t.Fatalf("err %v, want a not-owned lead before the line", err)
+		oldPath, oldPkg := Verbs[i].Path, Verbs[i].Package
+		Verbs[i].Path = PathCmd
+		if Verbs[i].Package == "" {
+			Verbs[i].Package = packageP3
+		}
+		t.Cleanup(func() { Verbs[i].Path, Verbs[i].Package = oldPath, oldPkg })
+		return
 	}
-	if len(res.Sent) != 0 || seenCount(f, ".tb order") != 0 {
-		t.Fatalf("an order went out: sent %v saw %v", res.Sent, f.seen)
-	}
-	if len(f.seen) != 1 {
-		t.Fatalf("the call saw %v, want the guard read only", f.seen)
+	t.Fatalf("%q is not a verb", verb)
+}
+
+// TestSameVerbSameResultFromOrderAndCmd is round C5's failing case: a verb both paths carry gives the caller the
+// same Result whichever path its table row picked. The two answers differ only where the module's own answers do:
+// the slice-3 path names each bot and its sequence (`queued`, `seq=`), the cmd path answers once for the whole call
+// (`accepted`) and names no sequence, so the typed layer reports the same bots as `queued` in both cases and the
+// cmd answer expands a whole-party scope from the card the run guard read. Here is the answer's actionable shape:
+// the same one bot, the same status word, one line out, no wait.
+func TestSameVerbSameResultFromOrderAndCmd(t *testing.T) {
+	const guid = "0000000000000000000000000000BEEF"
+	for _, tc := range []struct {
+		verb string
+		arg  string
+	}{
+		{"stay", ""},
+		{"follow", ""},
+		{"attack", guid},
+		{"pull", guid},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			var order Order
+			order.Verb = tc.verb
+			if tc.arg != "" {
+				order.Arg = tc.arg
+			}
+			orderLine := ".tb order party " + tc.verb
+			cmdLine := ".tb cmd " + tc.verb
+			if tc.arg != "" {
+				orderLine += " " + tc.arg
+				cmdLine += " " + tc.arg
+			}
+			// The slice-3 path: one queued bot with its sequence.
+			f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+				switch line {
+				case ".tb commander status Cmdr":
+					return reply(o, fullCards("Tanka", "")...), nil
+				case orderLine:
+					return reply(o, orderAnswer(tc.verb, "Tanka", 41)...), nil
+				}
+				return nil, errors.New("unexpected line " + line)
+			}}
+			b, _ := newTB(t, f, "Cmdr")
+			want, err := b.Order(context.Background(), order)
+			if err != nil {
+				t.Fatalf("order path: %v", err)
+			}
+			// The cmd path: the same row moved onto `.tb cmd`, one accepted record for the party (the lead's own
+			// bot for attack and pull).
+			withCmdPath(t, tc.verb)
+			scope := cmdParty(1)
+			if tc.arg != "" {
+				scope = cmdBot("Tanka", 1)
+			}
+			f = &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+				switch line {
+				case ".tb commander status Cmdr":
+					return reply(o, fullCards("Tanka", "")...), nil
+				case ".tb cmd":
+					return missingVerb(o), nil
+				case cmdLine:
+					return reply(o, cmdAnswer(tc.verb, scope, 1)...), nil
+				}
+				return nil, errors.New("unexpected line " + line)
+			}}
+			b, _ = newTB(t, f, "Cmdr")
+			got, err := b.Order(context.Background(), order)
+			if err != nil {
+				t.Fatalf("cmd path: %v", err)
+			}
+			if want.Card == nil || got.Card == nil || want.Card.Lead != got.Card.Lead {
+				t.Fatalf("cards %+v / %+v", want.Card, got.Card)
+			}
+			if len(want.Sent) != 1 || len(got.Sent) != 1 || want.Sent[0] != orderLine || got.Sent[0] != cmdLine {
+				t.Fatalf("sent %v / %v", want.Sent, got.Sent)
+			}
+			if len(want.Bots) != 1 || len(got.Bots) != 1 {
+				t.Fatalf("bots %v / %v", want.Bots, got.Bots)
+			}
+			wb, gb := want.Bots[0], got.Bots[0]
+			if wb.Bot != gb.Bot || wb.Status != "queued" || gb.Status != "queued" ||
+				wb.HasError || gb.HasError || wb.HasMsg || gb.HasMsg {
+				t.Fatalf("bot lines %+v / %+v", wb, gb)
+			}
+			if want.Final != nil || got.Final != nil {
+				t.Fatalf("final %v / %v", want.Final, got.Final)
+			}
+		})
 	}
 }
 
-func TestProbeCachedPerSession(t *testing.T) {
+func TestP6ProbeP3OnlyModuleMeansNotAvailable(t *testing.T) {
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
 		switch {
 		case line == ".tb commander status Cmdr":
 			return reply(o, fullCards("Tanka", "")...), nil
 		case line == ".tb cmd":
-			return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
-		}
-		return nil, errors.New("unexpected line " + line)
-	}}
-	b, _ := newTB(t, f, "Cmdr")
-	path := &recPath{}
-	b.cmdPath = path
-	for i := range 2 {
-		if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
-			t.Fatalf("move %d: %v", i, err)
-		}
-	}
-	probes := 0
-	for _, line := range f.seen {
-		if line == ".tb cmd" {
-			probes++
-		}
-	}
-	if probes != 1 {
-		t.Fatalf("%d probe(s) in %v, want one", probes, f.seen)
-	}
-	if len(path.sent) != 2 || path.sent[0] != ".tb cmd move 1 2 3" {
-		t.Fatalf("the path sent %v", path.sent)
-	}
-}
-
-func TestProbeMissAndReset(t *testing.T) {
-	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
-		switch {
-		case line == ".tb commander status Cmdr":
-			return reply(o, fullCards("Tanka", "")...), nil
-		case line == ".tb cmd", line == ".tb cmd loot":
-			return reply(o, "error code=unknown-verb cmd=cmd msg=bogus #T"), nil
-		}
-		return nil, errors.New("unexpected line " + line)
-	}}
-	b, _ := newTB(t, f, "Cmdr")
-	path := &recPath{}
-	b.cmdPath = path
-	// The module lacks both packages: each call probes, refuses with the package's code, and sends no order.
-	for i := range 2 {
-		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
-		var na *NotAvailableError
-		if !errors.As(err, &na) || na.Package != packageP3 {
-			t.Fatalf("move %d: err %v, want not-available P3", i, err)
-		}
-		if want := "not-available: move: needs module package P3"; err.Error() != want {
-			t.Fatalf("message %q, want %q", err.Error(), want)
-		}
-	}
-	if len(path.sent) != 0 {
-		t.Fatalf("an unavailable verb reached the path: %v", path.sent)
-	}
-	b.Reset()
-	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err == nil {
-		t.Fatal("move after Reset answered")
-	}
-	probes := 0
-	for _, line := range f.seen {
-		if line == ".tb cmd" {
-			probes++
-		}
-	}
-	if probes != 2 {
-		t.Fatalf("%d probe(s) after Reset, want two", probes)
-	}
-}
-
-func TestMissingTypedPathSendsNoProbe(t *testing.T) {
-	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
-		if line == ".tb commander status Cmdr" {
-			return reply(o, fullCards("Tanka", "")...), nil
-		}
-		return nil, errors.New("unexpected line " + line)
-	}}
-	b, _ := newTB(t, f, "Cmdr")
-	// No typed path installed: the refusal names the path that has not landed, and no probe goes out.
-	_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
-	var na *NotAvailableError
-	if !errors.As(err, &na) || na.Why != PathName {
-		t.Fatalf("move: err %v, want needs-typed-path", err)
-	}
-	if len(f.seen) != 1 {
-		t.Fatalf("the call saw %v, want the guard read only", f.seen)
-	}
-}
-
-func TestAvailable(t *testing.T) {
-	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
-		switch line {
-		case ".tb cmd":
-			return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
-		case ".tb cmd loot":
-			return nil, &tbcmd.CommandError{Code: "unknown-verb", Cmd: "cmd"}
+			return missingVerb(o), nil
+		case line == ".tb cmd state Tanka":
+			return p3OnlyState(o), nil
+		case line == ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
 		}
 		return nil, errors.New("unexpected line " + line)
 	}}
 	b, _ := newTB(t, f, "Cmdr")
 	ctx := context.Background()
-	if ok, _, err := b.Available(ctx, "stay"); !ok || err != nil {
-		t.Fatalf("stay: %v %v", ok, err)
+	if _, err := b.Order(ctx, Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("the P3 verb with a P3-only module: %v", err)
 	}
-	if ok, why, err := b.Available(ctx, "view"); ok || why != "not ported on this server" || err != nil {
-		t.Fatalf("view: %v %q %v", ok, why, err)
+	_, err := b.Order(ctx, Order{Verb: "loot", Arg: "my"})
+	var na *NotAvailableError
+	if !errors.As(err, &na) || na.Package != packageP6 || na.Retry {
+		t.Fatalf("loot: err %v, want not-available P6", err)
 	}
-	// No typed path is in this build: the reason names the path, and nothing is probed.
-	if ok, why, err := b.Available(ctx, "move"); ok || why != PathName || err != nil {
-		t.Fatalf("move: %v %q %v", ok, why, err)
+	if want := "not-available: loot: needs module package P6"; err.Error() != want {
+		t.Fatalf("message %q, want %q", err.Error(), want)
 	}
-	// No typed path is installed either: a P6 verb is refused with the same code before its probe.
-	if ok, why, err := b.Available(ctx, "loot"); ok || why != PathName || err != nil {
-		t.Fatalf("loot: %v %q %v", ok, why, err)
+	if got := seenCount(f, ".tb cmd loot"); got != 0 {
+		t.Fatalf("a P6 task line went out: %v", f.seen)
 	}
-	b.cmdPath = &recPath{}
-	if ok, _, err := b.Available(ctx, "loot"); ok || err != nil {
-		t.Fatalf("loot with the path but without P6: %v %v", ok, err)
+	// The definite miss is remembered: the second P6 verb probes nothing.
+	_, err = b.Order(ctx, Order{Verb: "gossip", Arg: "my"})
+	if !errors.As(err, &na) {
+		t.Fatalf("gossip: err %v, want not-available P6", err)
 	}
-	if _, _, err := b.Available(ctx, "dance"); err == nil {
-		t.Fatal("an unknown verb answered")
+	if probes := seenCount(f, ".tb cmd state "); probes != 1 {
+		t.Fatalf("%d P6 probe(s), want one", probes)
+	}
+}
+
+func TestP6VerbsWithPackage(t *testing.T) {
+	const target = "0000000000000000000000000000BEEF"
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			return missingVerb(o), nil
+		case ".tb cmd state Tanka":
+			return reply(o, cmdStateAnswer("Tanka")...), nil
+		case ".tb cmd loot my":
+			return reply(o, cmdTaskAnswer("loot", "Tanka", target)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	res, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	if len(res.Bots) != 1 {
+		t.Fatalf("loot bots %v", res.Bots)
+	}
+	bot := res.Bots[0]
+	if bot.Bot != "Tanka" || bot.Status != "queued" || !bot.HasTarget || bot.Target != target {
+		t.Fatalf("loot bot %+v", bot)
+	}
+}
+
+func TestP6UsageTextIsNotAProbeAnswer(t *testing.T) {
+	// A bare `.tb cmd loot` is refused `invalid` with the same usage text by a P3-only module (the run grammar's own
+	// loot parser) and by a P6 one (TbCmdTasks.cpp HandleLootOpenUse). The text proves nothing about P6, so a
+	// probe that sees it neither concludes P6 is in nor remembers anything.
+	probes := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd state Tanka":
+			probes++
+			return reply(o, "error code=invalid cmd=cmd msg="+enc("usage: .tb cmd loot <my|guid|entry:<id>> [bot] [itemId]")+" #T"), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || !na.Retry || na.Package != packageP6 {
+			t.Fatalf("loot %d: err %v, want a retryable not-available P6", i, err)
+		}
+	}
+	if probes != 2 || seenCount(f, ".tb cmd loot") != 0 {
+		t.Fatalf("%d probes, session saw %v", probes, f.seen)
+	}
+}
+
+// TestProbeVerdicts pins what each answer means to each package's probe.
+func TestProbeVerdicts(t *testing.T) {
+	ce := func(code string) error { return &tbcmd.CommandError{Code: code, Cmd: "cmd"} }
+	for _, tc := range []struct {
+		name                    string
+		pkg                     string
+		err                     error
+		present, absent, undone bool
+	}{
+		{"p3 missing-verb", packageP3, ce("missing-verb"), true, false, false},
+		{"p3 unknown-verb", packageP3, ce("unknown-verb"), false, true, false},
+		{"p3 engine-not-built", packageP3, ce("engine-not-built"), false, true, false},
+		{"p3 not-bound", packageP3, ce("not-bound"), false, false, true},
+		{"p3 timeout", packageP3, command.ErrIncomplete, false, false, true},
+		{"p3 no error line", packageP3, nil, false, false, true},
+		{"p6 state answered", packageP6, nil, true, false, false},
+		{"p6 unsupported", packageP6, ce("unsupported"), false, true, false},
+		{"p6 unknown-verb", packageP6, ce("unknown-verb"), false, true, false},
+		{"p6 not-bound", packageP6, ce("not-bound"), false, false, true},
+		{"p6 not-in-world", packageP6, ce("not-in-world"), false, false, true},
+		{"p6 needs-player-sender", packageP6, ce("needs-player-sender"), false, false, true},
+		{"p6 invalid", packageP6, ce("invalid"), false, false, true},
+		{"p6 timeout", packageP6, command.ErrIncomplete, false, false, true},
+	} {
+		present, absent, why := probeVerdict(tc.pkg, tc.err)
+		if present != tc.present || absent != tc.absent || (why != "") != tc.undone {
+			t.Errorf("%s: present=%v absent=%v why=%q", tc.name, present, absent, why)
+		}
+	}
+}
+
+// TestP6ProbeNotBoundIsNotCached: the module checks the caller's binding before it reads the verb, so a probe that
+// runs before the bots are in the world gets `not-bound`, which says nothing about the package. The same session
+// probes again later and finds P6.
+func TestP6ProbeNotBoundIsNotCached(t *testing.T) {
+	bound := false
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd state Tanka":
+			if !bound {
+				return reply(o, "error code=not-bound cmd=cmd msg="+enc("you command no bound bots in the world (use `.tb master`)")+" #T"), nil
+			}
+			return reply(o, cmdStateAnswer("Tanka")...), nil
+		case ".tb cmd loot my":
+			return reply(o, cmdTaskAnswer("loot", "Tanka", "0000000000000000000000000000BEEF")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	if _, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"}); err == nil {
+		t.Fatal("loot before the bots were in the world")
+	}
+	bound = true
+	if _, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"}); err != nil {
+		t.Fatalf("loot once bound: %v", err)
+	}
+	if got := seenCount(f, ".tb cmd state "); got != 2 {
+		t.Fatalf("%d probes, want two", got)
+	}
+}
+
+// TestLootMethodFields is the P6 whole-call answer: lootmethod's method= and threshold= (TbCmdTasks.cpp
+// HandleLootMethod: status=ok, ok=1 refused=0), through a probe that found P6.
+func TestLootMethodFields(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd state Tanka":
+			return reply(o, cmdStateAnswer("Tanka")...), nil
+		case ".tb cmd lootmethod ffa":
+			return reply(o, "cmd-begin #T",
+				"cmd verb=lootmethod status=ok method=ffa threshold=2 #T",
+				"cmd-end count=1 records=1 verb=lootmethod ok=1 refused=0 #T"), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	res, err := b.Order(context.Background(), Order{Verb: "lootmethod", Arg: "ffa"})
+	if err != nil {
+		t.Fatalf("lootmethod with P6: %v", err)
+	}
+	if res.Fields["method"] != "ffa" || res.Fields["threshold"] != "2" {
+		t.Fatalf("lootmethod fields %v", res.Fields)
+	}
+}
+
+// TestCmdOrderHeldByARun is decision 4 on the cmd path: a running run refuses the order with nothing sent, and
+// pause_run lets it through.
+func TestCmdOrderHeldByARun(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case line == ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", runRecord("Tanka", "running"))...), nil
+		case line == ".tb cmd":
+			return missingVerb(o), nil
+		case line == ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	res, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+	var ra *RunActiveError
+	if !errors.As(err, &ra) {
+		t.Fatalf("err %v, want run-active", err)
+	}
+	if len(res.Sent) != 0 || seenCount(f, ".tb cmd") != 0 {
+		t.Fatalf("a refused cmd order reached the module: sent %v saw %v", res.Sent, f.seen)
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}, PauseRun: true}); err != nil {
+		t.Fatalf("pause_run move: %v", err)
+	}
+	if got := seenCount(f, ".tb cmd move 1 2 3"); got != 1 {
+		t.Fatalf("%d move line(s) in %v", got, f.seen)
+	}
+}
+
+// TestCmdOrderNamesTheParty: a whole-party cmd answer is expanded to the card's bots, so a caller sees which bots
+// the order went to; a count that does not match the card is left as the module answered.
+func TestCmdOrderNamesTheParty(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case line == ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case line == ".tb cmd":
+			return missingVerb(o), nil
+		case line == ".tb cmd rest":
+			return reply(o, cmdAnswer("rest", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	res, err := b.Order(context.Background(), Order{Verb: "rest"})
+	if err != nil {
+		t.Fatalf("rest: %v", err)
+	}
+	if len(res.Bots) != 1 || res.Bots[0].Bot != "Tanka" || res.Bots[0].Status != "queued" {
+		t.Fatalf("rest bots %v", res.Bots)
 	}
 }
 
@@ -1074,7 +1498,7 @@ func TestBindingGateReadsFresh(t *testing.T) {
 
 // ---- the capability probe's memory (D3) ----
 
-func TestProbeTransientFailureIsNotCached(t *testing.T) {
+func TestProbeTransportFailureIsNotRemembered(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		fail error
@@ -1091,51 +1515,67 @@ func TestProbeTransientFailureIsNotCached(t *testing.T) {
 					return reply(o, fullCards("Tanka", "")...), nil
 				case ".tb cmd":
 					probes++
-					if probes == 1 {
-						return nil, tc.fail
-					}
-					return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
+					return nil, tc.fail
 				}
 				return nil, errors.New("unexpected line " + line)
 			}}
 			b, _ := newTB(t, f, "Cmdr")
-			path := &recPath{}
-			b.cmdPath = path
-			_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
-			if !errors.Is(err, tc.fail) {
-				t.Fatalf("first move: err %v, want %v", err, tc.fail)
-			}
-			var na *NotAvailableError
-			if errors.As(err, &na) {
-				t.Fatal("a failed probe was remembered as not-available")
-			}
-			if len(path.sent) != 0 {
-				t.Fatalf("the path sent %v after a failed probe", path.sent)
-			}
-			// The link answers: the next call probes again, and this time the package is in.
-			if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
-				t.Fatalf("move after the link recovered: %v", err)
+			for i := range 2 {
+				_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+				var na *NotAvailableError
+				if !errors.As(err, &na) || na.Package != packageP3 || !na.Retry {
+					t.Fatalf("move %d: err %v, want a retryable not-available P3", i, err)
+				}
 			}
 			if probes != 2 {
 				t.Fatalf("%d probe(s), want two", probes)
 			}
-			if len(path.sent) != 1 || path.sent[0] != ".tb cmd move 1 2 3" {
-				t.Fatalf("the path sent %v", path.sent)
-			}
-			// The explicit answer is remembered: a third call does not probe again.
-			if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"4", "5", "6"}}); err != nil {
-				t.Fatalf("third move: %v", err)
-			}
-			if probes != 2 {
-				t.Fatalf("%d probe(s) after the in answer, want two", probes)
+			if got := seenCount(f, ".tb cmd move"); got != 0 {
+				t.Fatalf("a move line went out: %v", f.seen)
 			}
 		})
 	}
 }
 
-func TestProbeAnswerCanChangeOnReconnect(t *testing.T) {
-	// A reconnect to another build is a new session: Reset drops the answer, so the probe asks again and the new
-	// answer governs.
+// TestProbeCallerDeadlineIsNotRemembered: the caller's own deadline ran out during the probe (the RPC's call budget
+// is shorter than the module's reply window). The caller gets its own error, nothing is remembered, and the next call
+// with time left probes again and finds the package.
+func TestProbeCallerDeadlineIsNotRemembered(t *testing.T) {
+	probes := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			probes++
+			if probes == 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return missingVerb(o), nil
+		case ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer cancel()
+	_, err := b.Order(ctx, Order{Verb: "move", Args: []string{"1", "2", "3"}})
+	var na *NotAvailableError
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &na) {
+		t.Fatalf("err %v, want the caller's deadline", err)
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("move after the deadline: %v", err)
+	}
+	if probes != 2 {
+		t.Fatalf("%d probes, want two", probes)
+	}
+}
+
+// TestProbeResetOnReconnect: a reconnect to another build is a new session; Reset drops the answer, the probe asks
+// again, and the new answer governs.
+func TestProbeResetOnReconnect(t *testing.T) {
 	p3 := false
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
 		switch line {
@@ -1143,15 +1583,15 @@ func TestProbeAnswerCanChangeOnReconnect(t *testing.T) {
 			return reply(o, fullCards("Tanka", "")...), nil
 		case ".tb cmd":
 			if p3 {
-				return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
+				return missingVerb(o), nil
 			}
 			return reply(o, "error code=unknown-verb cmd=cmd msg=bogus #T"), nil
+		case ".tb cmd move 1 2 3":
+			return reply(o, cmdAnswer("move", cmdParty(1), 1)...), nil
 		}
 		return nil, errors.New("unexpected line " + line)
 	}}
 	b, _ := newTB(t, f, "Cmdr")
-	path := &recPath{}
-	b.cmdPath = path
 	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err == nil {
 		t.Fatal("move answered without P3")
 	}
@@ -1160,8 +1600,8 @@ func TestProbeAnswerCanChangeOnReconnect(t *testing.T) {
 	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
 		t.Fatalf("move after the reconnect: %v", err)
 	}
-	if len(path.sent) != 1 {
-		t.Fatalf("the path sent %v", path.sent)
+	if got := seenCount(f, ".tb cmd move 1 2 3"); got != 1 {
+		t.Fatalf("%d move line(s) in %v", got, f.seen)
 	}
 }
 
@@ -1355,8 +1795,7 @@ func TestAllRefusedIsAnError(t *testing.T) {
 	}
 }
 
-// Finding 5: only an explicit answer is cached; any other module error is returned and asked again.
-func TestProbeOtherModuleErrorsAreNotCached(t *testing.T) {
+func TestProbeOtherModuleErrorsAreNotRemembered(t *testing.T) {
 	probes := 0
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
 		switch line {
@@ -1364,23 +1803,18 @@ func TestProbeOtherModuleErrorsAreNotCached(t *testing.T) {
 			return reply(o, fullCards("Tanka", "")...), nil
 		case ".tb cmd":
 			probes++
-			if probes == 1 {
-				return nil, &tbcmd.CommandError{Code: "rate-limited", Cmd: "cmd"}
-			}
-			return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
+			return reply(o, "error code=rate-limited cmd=cmd msg=busy #T"), nil
 		}
 		return nil, errors.New("unexpected line " + line)
 	}}
 	b, _ := newTB(t, f, "Cmdr")
-	b.cmdPath = &recPath{}
-	_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
-	var na *NotAvailableError
-	var ce *tbcmd.CommandError
-	if errors.As(err, &na) || !errors.As(err, &ce) || ce.Code != "rate-limited" {
-		t.Fatalf("first move: %v, want the module's own error", err)
-	}
-	if _, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}}); err != nil {
-		t.Fatalf("second move: %v", err)
+	for i := range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		var ce *tbcmd.CommandError
+		if !errors.As(err, &na) || !na.Retry || errors.As(err, &ce) {
+			t.Fatalf("move %d: err %v, want a retryable not-available P3", i, err)
+		}
 	}
 	if probes != 2 {
 		t.Fatalf("%d probes, want two", probes)
@@ -1558,5 +1992,548 @@ func TestRoleHeldByARun(t *testing.T) {
 	}
 	if _, err := b.Order(context.Background(), Order{Verb: "role", Args: []string{"Tanka", "dps"}, PauseRun: true}); err != nil {
 		t.Fatalf("role with pause_run: %v", err)
+	}
+}
+
+// ---- the review round's findings on the `.tb cmd` paths ----
+
+// cmdModule is a session whose module has P3 and P6 and answers a cmd line with answer(line); the character's one card
+// is Tanka's, with the given members.
+func cmdModule(t *testing.T, answer func(line string, o command.Options) *command.Reply, members ...string) (*TB, *fake) {
+	t.Helper()
+	if len(members) == 0 {
+		members = []string{"Tanka"}
+	}
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if rep := answer(line, o); rep != nil {
+			return rep, nil
+		}
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, cardsFor("Tanka", "", members...)...), nil
+		case ".tb cmd":
+			return missingVerb(o), nil
+		case ".tb cmd state " + members[0]:
+			return reply(o, cmdStateAnswer(members[0])...), nil
+		case ".tb cmd state":
+			return reply(o, cmdStateAnswer(members...)...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	return b, f
+}
+
+// cmdLines are the `.tb cmd` lines the session saw other than the two capability probes.
+func cmdLines(f *fake) []string {
+	var out []string
+	for _, l := range f.seen {
+		if strings.HasPrefix(l, ".tb cmd ") && !strings.HasPrefix(l, ".tb cmd state") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// TestCmdOrderMustNameTheLeadItMeant is finding 1: the module's `.tb cmd` takes no lead, it acts on the caller's own
+// binding and names the lead it used in the end line (TbCmdOrders.cpp: lead= the binding's lead). An answer that names
+// another lead than the one the call addressed is an error, and no bot of it is reported queued.
+func TestCmdOrderMustNameTheLeadItMeant(t *testing.T) {
+	for _, tc := range []struct{ name, lead string }{
+		{"another lead", "Healera"},
+		{"the lead's own name in another case", "tanka"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, f := cmdModule(t, func(line string, o command.Options) *command.Reply {
+				if line == ".tb cmd rest" {
+					return reply(o, cmdAnswerLead("rest", cmdParty(1), 1, tc.lead)...)
+				}
+				return nil
+			})
+			res, err := b.Order(context.Background(), Order{Verb: "rest", Lead: "Tanka"})
+			if tc.lead == "tanka" {
+				if err != nil || len(res.Bots) != 1 || res.Bots[0].Status != "queued" {
+					t.Fatalf("a case difference is the same lead: %v %+v", err, res.Bots)
+				}
+				return
+			}
+			var lm *LeadMismatchError
+			if !errors.As(err, &lm) || lm.Named != "Tanka" || lm.Answered != "Healera" {
+				t.Fatalf("err %v, want a lead mismatch", err)
+			}
+			if len(res.Bots) != 0 {
+				t.Fatalf("another lead's bots were reported: %+v", res.Bots)
+			}
+			if len(res.Sent) != 1 || len(cmdLines(f)) != 1 {
+				t.Fatalf("the line must show it went out: sent %v", res.Sent)
+			}
+		})
+	}
+}
+
+// TestCmdOrderAnswerWithNoLeadIsAnError: a P3 answer that does not say which lead it served cannot be checked.
+func TestCmdOrderAnswerWithNoLeadIsAnError(t *testing.T) {
+	b, _ := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		if line == ".tb cmd rest" {
+			return reply(o, "cmd-begin #T",
+				"cmd verb=rest status=accepted bots=1 result=party%201 #T",
+				"cmd-end count=1 records=1 verb=rest bots=1 #T")
+		}
+		return nil
+	})
+	_, err := b.Order(context.Background(), Order{Verb: "rest"})
+	var lm *LeadMismatchError
+	if !errors.As(err, &lm) || lm.Answered != "" {
+		t.Fatalf("err %v, want a lead mismatch with no lead named", err)
+	}
+}
+
+// TestCmdBotArgumentsAreCheckedBeforeSending is finding 2: a bot word of a cmd verb must be one of this commander's
+// cards' bots, or no line goes out at all (not even the capability probe).
+func TestCmdBotArgumentsAreCheckedBeforeSending(t *testing.T) {
+	for _, o := range []Order{
+		{Verb: "state", Args: []string{"Rogua"}},
+		{Verb: "loot", Args: []string{"my", "Rogua"}},
+		{Verb: "loot", Args: []string{"my", "Rogua", "6910"}},
+		{Verb: "open", Args: []string{"entry:6910", "Rogua"}},
+		{Verb: "use", Args: []string{"my", "Rogua"}},
+		{Verb: "gossip", Args: []string{"my", "Rogua", "1"}},
+		{Verb: "revive", Args: []string{"Rogua"}},
+	} {
+		t.Run(o.Verb+" "+strings.Join(o.Args, " "), func(t *testing.T) {
+			b, f := cmdModule(t, func(line string, o command.Options) *command.Reply { return nil })
+			res, err := b.Order(context.Background(), o)
+			var no *NotOwnedError
+			if !errors.As(err, &no) || no.Target != "Rogua" || no.Kind != "bot" || no.Sent {
+				t.Fatalf("err %v, want a not-owned bot before the line", err)
+			}
+			if len(res.Sent) != 0 {
+				t.Fatalf("sent %v", res.Sent)
+			}
+			for _, l := range f.seen {
+				if strings.HasPrefix(l, ".tb cmd") {
+					t.Fatalf("a cmd line reached the module: %v", f.seen)
+				}
+			}
+		})
+	}
+}
+
+// TestCmdOwnBotAndNumberArgumentsGoOut: a name of the commander's own bot, an item id where the grammar takes a number,
+// a gossip option index and `party` for revive are not bot arguments to refuse.
+func TestCmdOwnBotAndNumberArgumentsGoOut(t *testing.T) {
+	const target = "0000000000000000000000000000BEEF"
+	b, f := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		switch {
+		case strings.HasPrefix(line, ".tb cmd loot "), strings.HasPrefix(line, ".tb cmd gossip "):
+			return reply(o, cmdTaskAnswer(strings.Fields(line)[2], "Tanka", target)...)
+		case line == ".tb cmd revive party":
+			return reply(o, cmdAnswer("revive", cmdParty(2), 2)...)
+		}
+		return nil
+	}, "Tanka", "Healera")
+	for _, o := range []Order{
+		{Verb: "loot", Args: []string{"my", "Healera"}},
+		{Verb: "loot", Args: []string{"my", "6910"}},
+		{Verb: "loot", Args: []string{"my", "Tanka", "6910"}},
+		{Verb: "gossip", Args: []string{"my", "2"}},
+		{Verb: "gossip", Args: []string{"my", "Tanka", "Trade"}},
+		{Verb: "revive", Args: []string{"party"}},
+	} {
+		if _, err := b.Order(context.Background(), o); err != nil {
+			t.Fatalf("%+v: %v", o, err)
+		}
+	}
+	if got := len(cmdLines(f)); got != 6 {
+		t.Fatalf("%d cmd lines went out, want six: %v", got, f.seen)
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "loot", Args: []string{"my", "Tanka", "six"}}); err == nil ||
+		!strings.Contains(err.Error(), "not a number") {
+		t.Fatalf("a word for an item id: %v", err)
+	}
+}
+
+func TestStateAnswerIsOwnershipChecked(t *testing.T) {
+	b, _ := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		if line == ".tb cmd state" {
+			return reply(o, cmdStateAnswer("Tanka", "Rogua")...)
+		}
+		return nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "state"})
+	var no *NotOwnedError
+	if !errors.As(err, &no) || no.Target != "Rogua" || !no.Sent {
+		t.Fatalf("err %v, want a not-owned bot", err)
+	}
+	if len(res.Bots) != 0 {
+		t.Fatalf("another commander's bot data was handed back: %+v", res.Bots)
+	}
+}
+
+func TestStateEntryZeroThroughTheController(t *testing.T) {
+	b, _ := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		if line == ".tb cmd state" {
+			return reply(o, "cmd-begin #T", "task bot=Tanka busy=no status=done verb=loot entry=0 #T",
+				"cmd-end count=1 records=1 verb=state #T")
+		}
+		return nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "state"})
+	if err != nil || len(res.Bots) != 1 || res.Bots[0].Extra["entry"] != "0" || res.Bots[0].Status != "done" {
+		t.Fatalf("state with entry=0: %v %+v", err, res.Bots)
+	}
+}
+
+// TestCmdAnswerForAnotherVerbIsAnError is finding 5's binding: the answer to a `move` is a `move` answer.
+func TestCmdAnswerForAnotherVerbIsAnError(t *testing.T) {
+	b, _ := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		if line == ".tb cmd move 1 2 3" {
+			return reply(o, cmdAnswer("rest", cmdParty(1), 1)...)
+		}
+		return nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+	if !errors.Is(err, tbcmd.ErrBadReport) {
+		t.Fatalf("err %v, want a bad report", err)
+	}
+	if len(res.Bots) != 0 {
+		t.Fatalf("bots %+v", res.Bots)
+	}
+}
+
+// TestCmdRefusedRecordIsAnError: `status=refused` and an unknown status word are errors; the refusal carries the
+// module's reason.
+func TestCmdRefusedRecordIsAnError(t *testing.T) {
+	for _, status := range []string{"refused", "queued"} {
+		b, _ := cmdModule(t, func(line string, o command.Options) *command.Reply {
+			if line == ".tb cmd rest" {
+				return reply(o, "cmd-begin #T",
+					"cmd verb=rest status="+status+" bots=1 result=no%20engine #T",
+					"cmd-end count=1 records=1 verb=rest lead=Tanka bots=1 #T")
+			}
+			return nil
+		})
+		res, err := b.Order(context.Background(), Order{Verb: "rest"})
+		if err == nil || len(res.Bots) != 0 {
+			t.Fatalf("status %s: %v %+v", status, err, res.Bots)
+		}
+		var rf *RefusedError
+		if status == "refused" && (!errors.As(err, &rf) || rf.Reason != "no engine" || !strings.Contains(err.Error(), "no engine")) {
+			t.Fatalf("err %v, want a refusal with the reason", err)
+		}
+	}
+}
+
+// TestSentIsTheWireLine is finding 9: a `0x` guid is shown as the bare digits the module saw.
+func TestSentIsTheWireLine(t *testing.T) {
+	const bare = "0000000000000000000000000000BEEF"
+	b, f := cmdModule(t, func(line string, o command.Options) *command.Reply {
+		if line == ".tb cmd focus "+bare {
+			return reply(o, cmdAnswer("focus", cmdParty(1), 1)...)
+		}
+		return nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "focus", Arg: "0x" + bare})
+	if err != nil {
+		t.Fatalf("focus: %v", err)
+	}
+	if want := ".tb cmd focus " + bare; len(res.Sent) != 1 || res.Sent[0] != want || cmdLines(f)[0] != want {
+		t.Fatalf("sent %v, session saw %v, want %q", res.Sent, cmdLines(f), want)
+	}
+}
+
+// TestGuardRunsAfterScopingToTheLead is finding 7: a call that names a lead the character does not command, or an
+// invalid name, is refused for that, not for another lead's running run.
+func TestGuardRunsAfterScopingToTheLead(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, fullCards("Tanka", runRecord("Tanka", "running"))...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	_, err := b.Order(context.Background(), Order{Verb: "stay", Lead: "Rogua"})
+	var no *NotOwnedError
+	if !errors.As(err, &no) || no.Target != "Rogua" || no.Kind != "lead" {
+		t.Fatalf("an unowned lead: err %v, want not-owned", err)
+	}
+	_, err = b.Order(context.Background(), Order{Verb: "stay", Lead: "Ta#nka"})
+	var ue *UsageError
+	if !errors.As(err, &ue) {
+		t.Fatalf("an invalid lead: err %v, want a usage error", err)
+	}
+	_, err = b.Order(context.Background(), Order{Verb: "stay", Lead: "Tanka"})
+	var ra *RunActiveError
+	if !errors.As(err, &ra) {
+		t.Fatalf("the owned lead's own run: err %v, want run-active", err)
+	}
+}
+
+// moduleArity is copied from the module's own handlers: the argument counts `.tb cmd` takes, in words after the verb.
+// max -1 is unbounded. Sources are in the module repo under forever/src/host: run/TbRunOrdersPure.h (ParseOrder),
+// cmd/TbCmdTasks.cpp (HandleLootOpenUse, HandleGossip, HandleState, HandleLootMethod) and run/TbRunTasksPure.h
+// (ParseTaskOrder).
+var moduleArity = []struct {
+	verb     string
+	min, max int
+	source   string
+}{
+	{"move", 3, 4, "ParseOrder move + ParseMoveOrder: x y z, then only the word `direct`"},
+	{"pullback", 1, 1, "ParseOrder pull|pullback: 1 target, a second word is refused `unsupported` for pullback"},
+	{"focus", 1, 1, "ParseOrder focus: args.size() != 1 is invalid"},
+	{"rest", 0, 0, "ParseOrder rest|stay|follow|hold: any argument is invalid"},
+	{"revive", 1, 1, "ParseOrder revive: only the one word `party` is carried out"},
+	{"loot", 1, 3, "HandleLootOpenUse: target, then bot or itemId, then (after a bot) itemId"},
+	{"open", 1, 2, "HandleLootOpenUse: target, bot (a further word is read only for loot)"},
+	{"use", 1, 2, "HandleLootOpenUse: target, bot"},
+	{"gossip", 1, -1, "HandleGossip: target, optional bot, option = the rest of the line"},
+	{"state", 0, 1, "HandleState: optional bot"},
+	{"lootmethod", 1, 2, "ParseTaskOrder lootmethod: args.empty() || args.size() > 2 is invalid"},
+}
+
+// TestVerbArityMatchesTheModule is finding 3: each cmd row's Min and Max are the module's own, and every cmd row is
+// pinned.
+func TestVerbArityMatchesTheModule(t *testing.T) {
+	pinned := map[string]bool{}
+	for _, m := range moduleArity {
+		pinned[m.verb] = true
+		v, ok := Lookup(m.verb)
+		if !ok || v.Path != PathCmd {
+			t.Fatalf("%s (%s) is not a cmd row", m.verb, m.source)
+		}
+		if m.max < 0 {
+			if v.Min != m.min || v.Max < m.min+2 || v.Max != gossipMaxWords {
+				t.Errorf("%s: row %d..%d, module %d.. unbounded (%s)", m.verb, v.Min, v.Max, m.min, m.source)
+			}
+			continue
+		}
+		if v.Min != m.min || v.Max != m.max {
+			t.Errorf("%s: row %d..%d, module %d..%d (%s)", m.verb, v.Min, v.Max, m.min, m.max, m.source)
+		}
+	}
+	for _, v := range Verbs {
+		if v.Path == PathCmd && !pinned[v.Name] {
+			t.Errorf("cmd row %s is not pinned against the module", v.Name)
+		}
+	}
+}
+
+// TestVerbArityIsEnforced: one word under Min and one over Max are usage errors before anything is sent; the
+// verbs the old table refused (a bare state, a pullback with its target, loot with all three words) go out.
+func TestVerbArityIsEnforced(t *testing.T) {
+	for _, m := range moduleArity {
+		v, _ := Lookup(m.verb)
+		words := func(n int) []string {
+			w := make([]string, n)
+			for i := range w {
+				w[i] = "6910"
+			}
+			return w
+		}
+		if v.Min > 0 {
+			if err := v.checkArgs(words(v.Min - 1)); err == nil {
+				t.Errorf("%s with %d word(s) passed", v.Name, v.Min-1)
+			}
+		}
+		if err := v.checkArgs(words(v.Max + 1)); err == nil {
+			t.Errorf("%s with %d word(s) passed", v.Name, v.Max+1)
+		}
+		if err := v.checkArgs(words(v.Min)); err != nil {
+			t.Errorf("%s with %d word(s): %v", v.Name, v.Min, err)
+		}
+		if err := v.checkArgs(words(v.Max)); err != nil {
+			t.Errorf("%s with %d word(s): %v", v.Name, v.Max, err)
+		}
+	}
+}
+
+// ---- the final review's findings ----
+
+// lineCapped emulates the collector's line cap: a reply with more lines than the call allowed never reaches its
+// end marker.
+func lineCapped(o command.Options, raws []string) (*command.Reply, error) {
+	if len(raws) > o.MaxLines {
+		return nil, command.ErrIncomplete
+	}
+	return reply(o, raws...), nil
+}
+
+// TestP6ProbeNamesOneBotOfARaidSizedParty: a bare `.tb cmd state` answers one record per bot, which the typed layer's
+// default line cap cannot hold for a raid, so the probe asks about one bot of the card and the P6 verbs work on a
+// party of 20.
+func TestP6ProbeNamesOneBotOfARaidSizedParty(t *testing.T) {
+	var members []string
+	for i := range 20 {
+		members = append(members, "Bota"+strings.Repeat("x", i%3)+string(rune('a'+i)))
+	}
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case line == ".tb commander status Cmdr":
+			return reply(o, cardsFor(members[0], "", members...)...), nil
+		case line == ".tb cmd":
+			return missingVerb(o), nil
+		case line == ".tb cmd state":
+			return lineCapped(o, cmdStateAnswer(members...))
+		case strings.HasPrefix(line, ".tb cmd state "):
+			return lineCapped(o, cmdStateAnswer(strings.TrimPrefix(line, ".tb cmd state ")))
+		case line == ".tb cmd loot my":
+			return reply(o, cmdTaskAnswer("loot", members[0], "0000000000000000000000000000BEEF")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	if _, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"}); err != nil {
+		t.Fatalf("loot with a 20-bot party: %v", err)
+	}
+	if got := seenCount(f, ".tb cmd state"); got != 1 || seenCount(f, ".tb cmd state "+members[0]) != 1 {
+		t.Fatalf("the probe was not one named bot: %v", f.seen)
+	}
+	// The bare state of the same party goes out with the cap raised.
+	res, err := b.Order(context.Background(), Order{Verb: "state"})
+	if err != nil || len(res.Bots) != 20 {
+		t.Fatalf("state of 20 bots: %v, %d bot(s)", err, len(res.Bots))
+	}
+}
+
+// TestAvailableAsksP6ThroughOneOwnBot: Available reads the cards for the probe's bot, and a character with no bot
+// has nothing to probe with (undecided, nothing remembered).
+func TestAvailableAsksP6ThroughOneOwnBot(t *testing.T) {
+	bound := false
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			if bound {
+				return reply(o, fullCards("Tanka", "")...), nil
+			}
+			return emptyCards(o), nil
+		case ".tb cmd state Tanka":
+			return reply(o, cmdStateAnswer("Tanka")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	_, _, err := b.Available(context.Background(), "loot")
+	var na *NotAvailableError
+	if !errors.As(err, &na) || !na.Retry || seenCount(f, ".tb cmd") != 0 {
+		t.Fatalf("no bot: err %v, saw %v", err, f.seen)
+	}
+	bound = true
+	if ok, _, err := b.Available(context.Background(), "loot"); !ok || err != nil {
+		t.Fatalf("loot once bound: %v %v", ok, err)
+	}
+}
+
+// ctxRunner answers like the fake but a line in block never gets a reply: it waits for the call's own context, as the
+// real collector does.
+type ctxRunner struct {
+	f     *fake
+	block string
+}
+
+func (r *ctxRunner) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
+	if line == r.block {
+		r.f.seen = append(r.f.seen, line)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return r.f.Run(ctx, line, o)
+}
+
+// TestProbeKeepsItsOwnBudget: a module that never answers the probe must not use the caller's whole deadline (the
+// RPC's order budget is shorter than the command layer's reply window). The probe times out by itself and the caller
+// gets a retryable not-available with its own context still alive; nothing is remembered.
+func TestProbeKeepsItsOwnBudget(t *testing.T) {
+	old := probeBudgetMax
+	probeBudgetMax = 20 * time.Millisecond
+	t.Cleanup(func() { probeBudgetMax = old })
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, fullCards("Tanka", "")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	tb, ok := NewTB(tbcmd.NewClient(&ctxRunner{f: f, block: ".tb cmd"}), "Cmdr").(*TB)
+	if !ok {
+		t.Fatal("not the tb controller")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := range 2 {
+		_, err := tb.Order(ctx, Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || !na.Retry || ctx.Err() != nil {
+			t.Fatalf("move %d: err %v (caller ctx %v), want a retryable not-available", i, err, ctx.Err())
+		}
+	}
+	if got := seenCount(f, ".tb cmd"); got != 2 {
+		t.Fatalf("%d probe(s), want two (nothing remembered): %v", got, f.seen)
+	}
+}
+
+// TestUnknownVerbAbsenceIsFinal: a pre-P3 build's `unknown-verb` (whatever command it names) is a definite answer,
+// asked once; the P6 verbs then answer not-available with no probe of their own.
+func TestUnknownVerbAbsenceIsFinal(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			return reply(o, "error code=unknown-verb cmd=tb msg=cmd #T"), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 3 {
+		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packageP3 || na.Retry {
+			t.Fatalf("move %d: err %v, want a final not-available P3", i, err)
+		}
+	}
+	_, err := b.Order(context.Background(), Order{Verb: "loot", Arg: "my"})
+	var na *NotAvailableError
+	if !errors.As(err, &na) || na.Package != packageP6 || na.Retry {
+		t.Fatalf("loot: err %v, want a final not-available P6", err)
+	}
+	if got := seenCount(f, ".tb cmd"); got != 1 {
+		t.Fatalf("%d cmd line(s), want the one P3 probe: %v", got, f.seen)
+	}
+}
+
+// TestCardWithNoLeadIsServedByItsFirstBot: the module names `members.front()` as the lead of a binding it holds no lead
+// for (ResolveBinding); the card then has no lead either. That answer is the same party only when the bot is one of the
+// card's members.
+func TestCardWithNoLeadIsServedByItsFirstBot(t *testing.T) {
+	for _, tc := range []struct {
+		lead string
+		ok   bool
+	}{
+		{"Tanka", true},
+		{"healera", true},
+		{"Rogua", false},
+		{"", false},
+	} {
+		t.Run("answered "+tc.lead, func(t *testing.T) {
+			f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+				switch line {
+				case ".tb commander status Cmdr":
+					return reply(o, cardsFor("", "", "Tanka", "Healera")...), nil
+				case ".tb cmd":
+					return missingVerb(o), nil
+				case ".tb cmd rest":
+					return reply(o, cmdAnswerLead("rest", cmdParty(2), 2, tc.lead)...), nil
+				}
+				return nil, errors.New("unexpected line " + line)
+			}}
+			b, _ := newTB(t, f, "Cmdr")
+			res, err := b.Order(context.Background(), Order{Verb: "rest"})
+			var lm *LeadMismatchError
+			if tc.ok && err != nil || !tc.ok && !errors.As(err, &lm) {
+				t.Fatalf("err %v, ok=%v", err, tc.ok)
+			}
+			if !tc.ok && len(res.Bots) != 0 {
+				t.Fatalf("bots reported on a mismatch: %+v", res.Bots)
+			}
+		})
 	}
 }
