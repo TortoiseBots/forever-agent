@@ -113,7 +113,9 @@ UNKNOWN until the server proves the numbers. The live check to run:
 2. `forever-agent trials report <dir>/dummy-mage-fire` (or `trials score <dir>`): expect three `duration` repeats, `mobs_ready` ok, and UNKNOWN rows naming `min_damage`/`max_reaction_s`.
 3. Fill the table's nulls from the measured means, re-run, and confirm the card flips to PASS/FAIL on the table's numbers (not on `pass_if`).
 
-Gates: `make fmt-check`, `make cross`, `staticcheck ./...`, `vm-test ta ~/wt-fa-dummy` RESULT: PASS on a clean committed tree.
+Gates (a clean committed tree, sha c6aed74e): `make fmt-check` clean, `make cross` (windows/amd64, darwin/arm64 and the windows vet) clean, `staticcheck ./...` clean, and
+
+    RESULT: PASS  kind=ta wt=wt-fa-dummy sha=c6aed74e dirty=0 files=2395
 
 ## What the scripted tests prove (hand-made combat rows, never captures)
 
