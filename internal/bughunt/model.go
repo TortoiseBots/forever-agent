@@ -96,10 +96,14 @@ type Event struct {
 	DstRole string
 }
 
-// Death is one death the run records: its time on the run's clock and the member.
+// Death is one death the run records: its time on the run's clock, the member,
+// and the parsed `.deathrecap` timeline the watch attached once when the death
+// arrived (empty when it never asked: a dry run, a record from before this
+// round, a death of no party member, or a trials repeat).
 type Death struct {
-	T   float64
-	Bot string
+	T     float64
+	Bot   string
+	Recap []string
 }
 
 // CombatActor is one side of a combat-log row.
@@ -199,6 +203,10 @@ type Run struct {
 	// TraceEvents are the trace's own event records (run_start, wipe, pull_start, ...), for adapters that place a
 	// record's events on the trace's clock instead of a summary's module clock.
 	TraceEvents []trace.Event
+	// recapSum stages the watch summary's death log until the deaths are
+	// dated (recapFrom runs after deathsFromFrames): the parsed `.deathrecap`
+	// timeline per death, attached by member.
+	recapSum *foreverSummary
 }
 
 // Role is the member's role, "?" when the run does not know it.

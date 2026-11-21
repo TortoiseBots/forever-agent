@@ -38,7 +38,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample DURATION] [--tolerance YD] [--follow-yd YD] [--out FILE] [--module-out FILE] [--dry FILE] [--settle DURATION] [--timeout DURATION] --rest host:port --rpc host:port --ca FILE --account EMAIL --character NAME")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report RECORD [--json] [--out DIR] [--repulls N] [--member-deaths N] [--slow-factor X]")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report --compare A B")
-		fmt.Fprintln(stderr, "       forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]")
+		fmt.Fprintln(stderr, "       forever-agent forever deathrecap [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --name NAME")
 		return exitUsage
 	}
 	switch args[0] {
@@ -98,6 +98,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverGMConvertCmd(ctx, args[1:], stdout, stderr)
 	case "dash-bots":
 		return foreverDashBotsCmd(ctx, args[1:], stdout, stderr)
+	case "deathrecap":
+		return foreverDeathRecapCmd(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "forever-agent forever: unknown command %q\n", args[0])
 		return exitUsage

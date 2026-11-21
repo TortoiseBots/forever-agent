@@ -54,6 +54,10 @@ const (
 	ActionInstanceReset
 	// ActionInstanceInfo reads the instance's boss state.
 	ActionInstanceInfo
+	// ActionDeathRecap asks the core for the last recorded death of the named
+	// bot (`.deathrecap <name>`, PR #380): a read, one request per death, whose
+	// reply the hook parses into the death's timeline.
+	ActionDeathRecap
 	// ActionGMOn and ActionGMVisible switch the commander's GM mode on.
 	ActionGMOn
 	ActionGMVisible
@@ -129,6 +133,7 @@ var actionClasses = map[ActionKind]actionClass{
 	ActionGMOn:          actionState,
 	ActionGMVisible:     actionState,
 	ActionInstanceInfo:  actionRead,
+	ActionDeathRecap:    actionRead,
 	ActionRunStart:      actionFight,
 	ActionRunStop:       actionPassive,
 	ActionRunPause:      actionPassive,
@@ -157,8 +162,14 @@ type ActionReport struct {
 	// Targets are the `target=` labels a setup answer named: the party (its leader or the commander it was bound
 	// to) a party command resolved to, or the one character. Empty for an answer that only acknowledges.
 	Targets []tbcmd.ActionTarget
-	// Code is the module's refusal code when the action was refused ("refused" for a bad reply or a timeout).
+	// Lines is ActionDeathRecap's answer: the core's own `.deathrecap` reply
+	// lines, as they arrived, for the hook to parse.
+	Lines []string
+	// Code is the module's refusal code when the action was refused ("refused" for a bad reply, a timeout).
 	Code string
+	// Err is the port's own error when the action was refused, so the caller
+	// can tell a missing command from any other refusal without parsing text.
+	Err error
 }
 
 // String is the action in the words of the run's order log: one stable, short form per kind.
@@ -176,6 +187,8 @@ func (a Action) String() string {
 		return "tele-outside " + a.Dest
 	case ActionAppear:
 		return "appear " + a.Who
+	case ActionDeathRecap:
+		return "deathrecap " + a.Who
 	case ActionRevive:
 		return "revive " + a.Who
 	case ActionInstanceLeave:
@@ -291,12 +304,16 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 	})
 	if why == "error" {
 		// The module's refusal is a named error (its own code); the action is recorded failed and the run reads it
-		// as not performed.
+		// as not performed. The port's own error rides along so the caller can tell a missing command from any
+		// other refusal.
 		out.action.Code = actionCode(out.err)
+		out.action.Err = out.err
 		r.event("action_error", map[string]any{"action": a.String(), "code": out.action.Code})
 		return out.action, why
 	}
 	if why != "" {
+		// A lost link (or any other reason sendLine names) means the send did not happen: nothing is booked and the
+		// caller reads it as not performed.
 		return out.action, why
 	}
 	if a.Practice {
