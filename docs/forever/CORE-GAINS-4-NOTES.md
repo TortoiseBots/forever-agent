@@ -37,7 +37,8 @@ consumed exactly; a short packet, a trailing byte or an empty mover is an error.
 
 `internal/forever/world/knockback.go` keeps the takeoffs whose landing has not arrived, keyed by GUID and bounded at
 64 (the oldest past the bound is dropped and counted). For the mover's own packet it records the takeoff at the
-client's position and writes one `knockback` row, then sends exactly one ack. The server's echo of that ack is owed for 5 s from the ack, whether or not the flight
+client's position and writes one `knockback` row, then sends exactly one ack (if the ack cannot be sent, nothing flies: no ack is counted, the takeoff ends as missed, and
+the row stays). The server's echo of that ack is owed for 5 s from the ack, whether or not the flight
 has landed: it refreshes a pending takeoff and writes no row and no second ack, and any other self relay is a stray
 that records nothing. For another mover, the first
 `SMSG_MOVE_UPDATE_KNOCK_BACK` is the takeoff (the only evidence an observer gets) and writes the row with the
@@ -163,7 +164,7 @@ list: they go through a GM client, not this endpoint.
   packet naming another mover, an echo after a short or a real landing writes no row, a stray or late self relay records
   nothing, a relayed takeoff and a landing paired with the air time and drop, no second landing,
   a second takeoff counted as missed, the order list pruned after a landing, a non-finite drop refused, a teleport
-  and a 15 s-old takeoff dropped as missed, and both knockback packets held as map content.
+  and a 15 s-old takeoff dropped as missed, a refused ack flies nothing, and both knockback packets held as map content.
 * `driver/knockback_test.go`: the knockback rows' trace events, at the rows' own times and with their fields.
 * `bughunt/rules_knockback_test.go`: a landing in a new pack, the same pack (no finding), the ledge shape, no
   takeoff / no position / no frame as UNKNOWN windows, a simulated landing (no finding, UNKNOWN), and the skip without a
@@ -223,6 +224,8 @@ suite passed at `687448f3`.
 
 ## Known limits
 
+* A knockback packet naming another unit finishes a pending self landing early as its simulation (the core sends this client only its own knockbacks, so this is not reachable in practice).
+* TestKnockBackLandingIsPaired and TestKnockBackTeleportAndTimeoutDropTheLanding set air time from time.Now() against the session clock, so they pass by wall-clock slack (review item 10).
 * The client's own flight is a ballistic arc on flat ground: it is thrown from its current position with the
   packet's direction and speeds under `Movement::gravity`, sends the airborne heartbeats and `CMSG_MOVE_FALL_LAND`,
   and lands back at the starting height because this session has no terrain floor. The ack carries the airborne

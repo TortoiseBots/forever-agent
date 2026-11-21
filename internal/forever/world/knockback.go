@@ -180,7 +180,13 @@ func (s *session) selfKnockback(k objects.KnockBack, now time.Time) {
 	jump := &objects.JumpInfo{ZSpeed: k.VertSpeed, SinAngle: k.DirY, CosAngle: k.DirX, XYSpeed: k.HorzSpeed}
 	ack := objects.BuildKnockBackAck(s.mover.FlightInfo(now, jump, false), k.Sequence)
 	if err := s.transport().Send(wire.CMSGMoveKnockBackAck, ack); err != nil {
-		s.opts.logf("world: CMSG_MOVE_KNOCK_BACK_ACK: %v", err)
+		// The server never accepted this knockback: the client does not fly it, no ack is counted, and its takeoff
+		// ends as missed (the knockback row stays: the server did knock the mover).
+		s.flight = nil
+		s.mover.EndKnockback()
+		s.dropKnock(k.Mover)
+		s.report.KnockBacksMissed++
+		s.opts.logf("world: CMSG_MOVE_KNOCK_BACK_ACK: %v (the knockback is not flown)", err)
 		return
 	}
 	s.report.KnockBackAcks++

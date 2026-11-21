@@ -5,6 +5,7 @@ package world
 // core's writers (MovementPackets.cpp:964-987), never from captures.
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -639,6 +640,49 @@ func TestSelfLandingTakesATeleportAfterTheFall(t *testing.T) {
 	rows := knockRows(s)
 	if len(rows) != 2 || rows[1].Simulated || rows[1].Pos == nil || rows[1].Pos.X != 1020 || rows[1].Pos.Z != 48 {
 		t.Fatalf("rows %+v, want the teleport's position, not simulated", rows)
+	}
+}
+
+// failingAckSender is the transport of a session whose CMSG_MOVE_KNOCK_BACK_ACK cannot be sent: the ack is refused and
+// everything else is recorded the way the recorder records it.
+type failingAckSender struct{ *transferRecorder }
+
+func (f failingAckSender) Send(core uint32, payload []byte) error {
+	if core == wire.CMSGMoveKnockBackAck {
+		return errors.New("the ack cannot be sent")
+	}
+	return f.transferRecorder.Send(core, payload)
+}
+
+// TestSelfKnockBackFailedAckFliesNothing: when the transport refuses the ack, the server never accepted the knockback,
+// so the client does not fly it: no flight, no airborne state, no ack counted, and no heartbeat or fall-land is ever
+// sent. The knockback row stays (the server did knock the mover) and its takeoff ends as missed.
+func TestSelfKnockBackFailedAckFliesNothing(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(5000, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	s.fightSender = failingAckSender{rec}
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 12, 1, 0, 12.5, -9.5))
+	if s.flight != nil || s.mover.Airborne() {
+		t.Fatalf("a refused ack left the flight: flight %v, airborne %v", s.flight != nil, s.mover.Airborne())
+	}
+	if s.report.KnockBackAcks != 0 || s.report.KnockBacks != 1 {
+		t.Fatalf("report %+v, want the knockback counted and no ack", s.report)
+	}
+	if len(s.knocks) != 0 || s.report.KnockBacksMissed != 1 {
+		t.Fatalf("pending %d, missed %d: the takeoff ends as missed", len(s.knocks), s.report.KnockBacksMissed)
+	}
+	if rows := knockRows(s); len(rows) != 1 || rows[0].Kind != "knockback" || !rows[0].Self {
+		t.Fatalf("rows %+v, want the knockback row", rows)
+	}
+	rec.now = t0.Add(2 * time.Second)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	if hb, fl := rec.count(wire.CMSGMoveHeartbeat), rec.count(wire.CMSGMoveFallLand); hb != 0 || fl != 0 {
+		t.Fatalf("heartbeats %d, fall-lands %d sent for a flight that never started", hb, fl)
 	}
 }
 
