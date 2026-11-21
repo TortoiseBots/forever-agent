@@ -1,0 +1,16 @@
+{
+  "schema": "forever-run", "version": 1, "run_id": "r-20261120T120000-cd34", "plan": "fixture_depths",
+  "mode": "watch", "clear": true, "bosses": {"900": true}, "wipes": 0, "deaths": 0, "practice": 0,
+  "duration_s": 14, "stop_reason": "done", "last_leg": "leg_two", "instance": 1, "pulls": [],
+  "watch": {
+    "state": "done", "step": 1, "steps": 1, "leg": 1, "leg_name": "leg_two", "phase": "done",
+    "pull": 1, "pulls": 1, "deaths": 0, "wipes": 0, "pauses": 1, "elapsed_s": 12, "rescues": 0, "events": 4,
+    "bosses": {"900": "dead"},
+    "legs": [
+      {"leg": 0, "name": "leg_one", "first_s": 0, "last_s": 6, "seconds": 6, "pulls": 1, "steps": 1},
+      {"leg": 1, "name": "leg_two", "first_s": 6, "last_s": 12, "seconds": 6, "pulls": 0, "steps": 0}
+    ],
+    "step_log": [{"leg": 0, "step": 1, "pulls": 1, "pull_events": [{"seq": 2, "at_s": 2}], "deaths": 0}],
+    "pause_log": [{"at_s": 5, "leg": 0, "step": 1, "why": "stuck", "cleared": true}]
+  }
+}

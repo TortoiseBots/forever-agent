@@ -7,6 +7,7 @@ package runmap
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
@@ -21,53 +22,80 @@ const (
 	wipeWindow = 15.0
 )
 
-// appendMarkers adds the watch's own events to the run, after mapview has built it.
-func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSummary, offset float64) {
+// wipeCover is how close (seconds) a recorded wipe event must be to a burst of deaths to be that burst's wipe.
+const wipeCover = 5.0
+
+// appendMarkers adds the watch's own events to the run, after mapview has built it. Times are on the trace's clock
+// until rel moves them onto the run's (the run starts shift seconds into the trace when a window was asked for).
+// Nothing is dropped without a word: a marker with no position to stand at, or outside the run's span, is counted
+// in the run's notes.
+func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSummary, offset, shift float64) {
 	var ms []mapview.Marker
-	add := func(kind string, t float64, label string, pos mapview.Pos) {
+	noPlace := map[string]int{}
+	rel := func(t float64) float64 { return t - shift }
+	fellBack := 0
+	// place puts a marker where the member it belongs to stood. Only when that member has no recent position does it
+	// use the leader's, and the run's notes say how often.
+	place := func(name string, t float64) (mapview.Pos, bool) {
+		if pos, ok := memberAt(run, name, t); ok {
+			return pos, true
+		}
+		// The leader first, then the first member that has a recent position.
+		for _, g := range append([]string{p.leader}, p.order...) {
+			if l := p.label[g]; l != name {
+				if pos, ok := memberAt(run, l, t); ok {
+					fellBack++
+					return pos, true
+				}
+			}
+		}
+		return mapview.Pos{}, false
+	}
+	outside := map[string]int{}
+	addAt := func(kind string, t float64, label string, pos mapview.Pos, ok bool) {
+		if t < 0 || t > run.Seconds+1 {
+			outside[kind]++
+			return
+		}
+		if !ok {
+			noPlace[kind]++
+			return
+		}
 		ms = append(ms, mapview.Marker{Kind: kind, T: t, Label: label, Map: run.Map, Pos: pos})
 	}
-	leader := func(t float64) mapview.Pos {
-		if pos, ok := memberAt(run, p.label[p.leader], t); ok {
-			return pos
-		}
-		return mapview.Pos{}
+	// add places a marker (t on the trace's clock) at the leader, or the nearest known position.
+	add := func(kind string, t float64, label string) {
+		pos, ok := place(p.label[p.leader], rel(t))
+		addAt(kind, rel(t), label, pos, ok)
 	}
 
 	// The trace's wipe events and the frames' boss kills need no summary; an old record without them falls back
 	// to its death log below.
 	wipes := wipeEvents(rec.TraceEvents)
 	for _, t := range wipes {
-		add(mapview.MarkWipe, t, "wipe", leader(t))
+		add(mapview.MarkWipe, t, "wipe")
 	}
 	for _, c := range run.Creatures {
 		if c.Boss && c.Fate == mapview.FateKilled {
 			// The kill is where the creature stood when it died, not where it was first seen: a boss can climb
 			// stairs or a platform between the two, and the marker's floor must be the death's.
 			pos := c.Pos
-			if at, ok := killPlace(rec.Frames, c.GUID, c.FateT); ok {
+			if at, ok := killPlace(rec.Frames, c.GUID, c.FateT+shift); ok {
 				pos = at
 			}
-			add(mapview.MarkBossKill, c.FateT, c.Name+" killed", pos)
+			addAt(mapview.MarkBossKill, c.FateT, c.Name+" killed", pos, true)
 		}
 	}
 
 	if s != nil && s.Watch != nil {
 		w := s.Watch
-		at := func(slot string, t float64) (mapview.Pos, bool) {
-			name, ok := p.bySlot[slot]
-			if !ok {
-				return mapview.Pos{}, false
-			}
-			return memberAt(run, name, t)
-		}
 
 		for _, l := range w.Legs {
 			label := fmt.Sprintf("leg %d", l.Leg)
 			if l.Name != "" {
 				label += " " + l.Name
 			}
-			add(mapview.MarkLeg, float64(l.FirstS)+offset, label, leader(float64(l.FirstS)+offset))
+			add(mapview.MarkLeg, float64(l.FirstS)+offset, label)
 		}
 
 		pulls := 0
@@ -75,11 +103,12 @@ func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSu
 		for _, st := range w.StepLog {
 			events = append(events, st.PullEvents...)
 		}
+		// Pulls the module sent without a step are pulls too.
+		events = append(events, w.LoosePulls...)
 		sort.SliceStable(events, func(i, j int) bool { return events[i].AtS < events[j].AtS })
 		for _, ev := range events {
-			t := float64(ev.AtS) + offset
 			pulls++
-			add(mapview.MarkPull, t, fmt.Sprintf("pull %d", pulls), leader(t))
+			add(mapview.MarkPull, float64(ev.AtS)+offset, fmt.Sprintf("pull %d", pulls))
 		}
 
 		deaths := append([]driver.DeathRecord(nil), w.DeathLog...)
@@ -90,49 +119,99 @@ func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSu
 			if label == "" {
 				label = "death"
 			}
-			pos, ok := at(d.Who, t)
-			if !ok {
-				pos = leader(t)
+			name := p.bySlot[d.Who]
+			if name == "" {
+				name = p.label[p.leader]
 			}
-			add(mapview.MarkDeath, t, label, pos)
+			pos, ok := place(name, rel(t))
+			addAt(mapview.MarkDeath, rel(t), label, pos, ok)
 		}
-		if len(wipes) == 0 {
-			// An old record has no wipe events; its death log is the only evidence. Several bursts are several wipes.
-			for _, t := range wipeStarts(deaths, len(run.Tracks)) {
-				add(mapview.MarkWipe, t+offset, "wipe", leader(t+offset))
+		// A recorded wipe covers the burst of deaths it belongs to. A burst no event covers is a wipe the record
+		// lost (an old record has no wipe events at all), and it is inferred, one per window.
+		for _, bu := range wipeBursts(deaths, p.size) {
+			if coveredBy(wipes, bu.first+offset, bu.last+offset) {
+				continue
 			}
+			add(mapview.MarkWipe, bu.first+offset, "wipe")
 		}
 
 		for _, pa := range w.PauseLog {
-			t := float64(pa.AtS) + offset
 			label := "pause"
 			if pa.Why != "" {
 				label += " (" + pa.Why + ")"
 			}
-			add(mapview.MarkPause, t, label, leader(t))
+			add(mapview.MarkPause, float64(pa.AtS)+offset, label)
 		}
 		for _, r := range w.RescueLog {
-			t := float64(r.AtS) + offset
 			label := "rescue"
 			if r.Why != "" {
 				label += " (" + r.Why + ")"
 			}
-			add(mapview.MarkRescue, t, label, leader(t))
+			add(mapview.MarkRescue, float64(r.AtS)+offset, label)
 		}
 	}
 
-	// Only what happened inside the span of the run.
+	// Only what happened inside the span of the run is drawn; the rest is counted.
 	kept := ms[:0]
 	for _, m := range ms {
 		if m.T >= 0 && m.T <= run.Seconds+1 {
 			kept = append(kept, m)
+		} else {
+			outside[m.Kind]++
 		}
 	}
 	sort.SliceStable(kept, func(i, j int) bool { return kept[i].T < kept[j].T })
 	run.Markers = append(run.Markers, kept...)
+	if fellBack > 0 {
+		run.Notes = append(run.Notes, fmt.Sprintf("%d markers stand at the leader: their own member had no recent position", fellBack))
+	}
+	if n := countText(noPlace); n != "" {
+		run.Notes = append(run.Notes, n+" have no known position (the record has no route to place them) and are not drawn")
+	}
+	if n := countText(outside); n != "" {
+		run.Notes = append(run.Notes, fmt.Sprintf("%s fall outside the run (0 to %.0f s) and are not drawn", n, run.Seconds))
+	}
 }
 
-// memberAt is where a member's route stood at the nearest frame at or before t; a name no route carries is a miss.
+// countText is "3 markers: 2 death, 1 wipe" for a count per kind; empty for none.
+func countText(m map[string]int) string {
+	if len(m) == 0 {
+		return ""
+	}
+	kinds := make([]string, 0, len(m))
+	total := 0
+	for k, n := range m {
+		kinds = append(kinds, k)
+		total += n
+	}
+	sort.Strings(kinds)
+	parts := make([]string, len(kinds))
+	for i, k := range kinds {
+		parts[i] = fmt.Sprintf("%d %s", m[k], k)
+	}
+	word := "markers"
+	if total == 1 {
+		word = "marker"
+	}
+	return fmt.Sprintf("%d %s (%s)", total, word, strings.Join(parts, ", "))
+}
+
+// coveredBy says whether a recorded wipe lies within wipeCover seconds of the burst [first, last].
+func coveredBy(wipes []float64, first, last float64) bool {
+	for _, w := range wipes {
+		if w >= first-wipeCover && w <= last+wipeCover {
+			return true
+		}
+	}
+	return false
+}
+
+// staleS is how old (seconds) a position may be to place a marker: older than that the member's whereabouts are
+// unknown, not "where it last was".
+const staleS = 5.0
+
+// memberAt is where a member's route stood at the nearest frame within staleS of t (before it, or just after it when
+// t is earlier than the route's first frame); a name no route carries, or no recent frame, is a miss.
 func memberAt(run *mapview.Run, name string, t float64) (mapview.Pos, bool) {
 	if name == "" {
 		return mapview.Pos{}, false
@@ -145,10 +224,13 @@ func memberAt(run *mapview.Run, name string, t float64) (mapview.Pos, bool) {
 		s := tr.Samples
 		j := sort.Search(len(s), func(i int) bool { return s[i].T > t })
 		if j == 0 {
-			if len(s) == 0 {
+			if len(s) == 0 || s[0].T-t > staleS {
 				return mapview.Pos{}, false
 			}
 			return s[0].Pos, true // earlier than the route's first frame: where it was first seen
+		}
+		if t-s[j-1].T > staleS {
+			return mapview.Pos{}, false
 		}
 		return s[j-1].Pos, true
 	}
@@ -188,24 +270,35 @@ func killPlace(frames []*bughunt.Frame, guid uint64, at float64) (mapview.Pos, b
 	return pos, ok
 }
 
-// wipeStarts dates every wipe an old record's death log shows: each burst within wipeWindow seconds in which the
-// whole party is dead, each member counted once. A member's repeated deaths count once and a death with no
-// attributed member counts not at all, so neither can fabricate a wipe. After a wipe the scan resumes past its
-// window, so a run with several separated wipes gets several markers. A record whose trace carries the watch's own
-// wipe events never reaches this.
+// burst is one run of deaths that took the whole party down: when it began and when its last member died.
+type burst struct{ first, last float64 }
+
+// wipeStarts dates every wipe a death log shows: the start of each burst (see wipeBursts).
 func wipeStarts(deaths []driver.DeathRecord, members int) []float64 {
-	want := wipeParty
-	if members > 0 && members < want {
-		want = members
-	}
-	if want <= 0 {
-		return nil
-	}
 	var out []float64
+	for _, b := range wipeBursts(deaths, members) {
+		out = append(out, b.first)
+	}
+	return out
+}
+
+// wipeBursts finds each burst within wipeWindow seconds in which the whole party is dead, each member counted
+// once. members is the party size the run record names (0: the full party of wipeParty): it is never shrunk to the
+// members the frames happen to show, so a record where only two members appear cannot turn two deaths into a wipe.
+// A member's repeated deaths count once and a death with no attributed member counts not at all. After a wipe the
+// scan resumes past its window, so a run with several separated wipes gets several bursts.
+func wipeBursts(deaths []driver.DeathRecord, members int) []burst {
+	want := members
+	if want <= 0 {
+		want = wipeParty
+	}
+	var out []burst
 	for i := 0; i < len(deaths); {
 		first := float64(deaths[i].AtS)
 		seen := make(map[string]bool, want)
 		n := 0
+		last := first
+		done := -1 // the index of the death that took the last member down
 		j := i
 		for ; j < len(deaths) && float64(deaths[j].AtS)-first <= wipeWindow; j++ {
 			who := deaths[j].Who
@@ -214,13 +307,17 @@ func wipeStarts(deaths []driver.DeathRecord, members int) []float64 {
 			}
 			seen[who] = true
 			n++
+			if n == want {
+				last, done = float64(deaths[j].AtS), j
+				break
+			}
 		}
 		if n < want {
 			i++
 			continue
 		}
-		out = append(out, first)
-		i = j // one burst is one wipe: the next one starts after this window
+		out = append(out, burst{first, last})
+		i = done + 1 // one burst is one wipe: the next starts after the death that completed it
 	}
 	return out
 }

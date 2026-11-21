@@ -6,6 +6,7 @@ package main
 // rescue) live in the driver's watch machine; this file is the flags, the dry mode and the report.
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 )
 
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry]"
 	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -40,6 +41,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	fs.IntVar(&th.MemberDeaths, "member-deaths", th.MemberDeaths, "report card: flag a member with at least this many deaths and two above the next")
 	fs.Float64Var(&th.SlowFactor, "slow-factor", th.SlowFactor, "report card: flag a leg over this many times its plan's recorded time")
 	out := fs.String("out", "", "folder for the watch's trace and summary; empty writes none")
+	drawMap := fs.Bool("map", false, "after the summary, write the run's map (SVG and HTML replay) into --out; a failure is one log line and never fails the watch")
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live entry walk")
 	dry := fs.Bool("dry", false, "run the watch machine against the scripted world (no network)")
 	if err := fs.Parse(args); err != nil {
@@ -88,6 +90,10 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --repulls is 0-100, --member-deaths 1-20 and --slow-factor 1-20")
 		return exitUsage
 	}
+	if *drawMap && *out == "" {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --map needs --out (the map is written beside the trace)")
+		return exitUsage
+	}
 	route, err := driver.LoadWatchRoute(*plan)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever dungeon-watch: the plan is refused: %v\n", err)
@@ -116,7 +122,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	cfg.Limits.WatchPause = time.Duration(*pause) * time.Minute
 
 	if *dry {
-		return dungeonWatchDry(ctx, cfg, route, th, stdout, stderr)
+		return dungeonWatchDry(ctx, cfg, route, th, *drawMap, stdout, stderr)
 	}
 	if err := common.check("forever dungeon-watch"); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -139,6 +145,9 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	if report != nil && report.Watch != nil {
 		printWatchResult(stdout, report.Watch)
 		writeCard(stdout, report.Watch.Summary, th, report.Watch.SummaryFile)
+		if *drawMap {
+			writeWatchMap(ctx, stdout, report.Watch.Trace, *plan, *navmeshDir)
+		}
 		switch {
 		case report.Watch.Exit == driver.ExitLinkLost:
 			return driver.ExitLinkLost
@@ -160,7 +169,7 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 
 // dungeonWatchDry plays the whole watch over the scripted module: the plan's legs, the module's progress, its pause
 // on a wipe, the practice rescue and its end.
-func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route, th reportcard.Thresholds, stdout, stderr io.Writer) int {
+func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route, th reportcard.Thresholds, drawMap bool, stdout, stderr io.Writer) int {
 	f := driver.NewFake(route, cfg)
 	cfg.Party = f.PartyNames()
 	run := driver.New(cfg, route, f, f, f, f.Clock)
@@ -181,6 +190,9 @@ func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route
 	res := run.Watch(ctx)
 	printWatchResult(stdout, &res)
 	writeCard(stdout, res.Summary, th, res.SummaryFile)
+	if drawMap {
+		writeWatchMap(ctx, stdout, res.Trace, cfg.Plan, "")
+	}
 	if res.Clear {
 		return exitOK
 	}
@@ -215,4 +227,48 @@ func watchPauses(res *driver.Result) int {
 		return 0
 	}
 	return res.Summary.Watch.Pauses
+}
+
+// watchMapTimeout bounds the map step after a watch; mapWriter is the step itself (a test replaces it).
+var (
+	watchMapTimeout = 60 * time.Second
+	mapWriter       = writeRunMap
+)
+
+// writeWatchMap draws the watch's map beside its trace. It never fails the watch: a problem, a panic, a timeout or a
+// Ctrl-C is one log line, and the watch's own exit code is unchanged.
+func writeWatchMap(ctx context.Context, stdout io.Writer, trace, plan, navmeshDir string) {
+	if trace == "" {
+		fmt.Fprintln(stdout, "map: not written: the watch kept no trace (give --out)")
+		return
+	}
+	if ctx.Err() != nil {
+		fmt.Fprintln(stdout, "map: not written: interrupted")
+		return
+	}
+	// The step writes to its own buffer: if it is abandoned at the deadline it must not touch stdout later.
+	var buf bytes.Buffer
+	step, limit := mapWriter, watchMapTimeout
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("the map step failed (panic: %v)", r)
+			}
+		}()
+		done <- step(runMapOpts{Dir: trace, Plan: plan, Navmesh: navmeshDir, HTML: true}, &buf, &buf)
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		stdout.Write(buf.Bytes())
+		if err != nil {
+			fmt.Fprintf(stdout, "map: not written: %v\n", err)
+		}
+	case <-timer.C:
+		fmt.Fprintf(stdout, "map: not written: stopped after %s\n", limit)
+	case <-ctx.Done():
+		fmt.Fprintln(stdout, "map: not written: interrupted")
+	}
 }

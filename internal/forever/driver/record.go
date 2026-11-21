@@ -119,10 +119,12 @@ type RunWatch struct {
 	// Legs, StepLog, DeathLog and RescueLog are the per-leg evidence the report card is built from: the module's own
 	// event times, grouped by leg and step. A watch writes them as it reads; a saved record lets the card be built
 	// offline. They are empty for a record written before this round.
-	Legs      []LegRecord   `json:"legs,omitempty"`
-	StepLog   []StepRecord  `json:"step_log,omitempty"`
-	DeathLog  []DeathRecord `json:"death_log,omitempty"`
-	RescueLog []RescueNote  `json:"rescue_log,omitempty"`
+	Legs     []LegRecord   `json:"legs,omitempty"`
+	StepLog  []StepRecord  `json:"step_log,omitempty"`
+	DeathLog []DeathRecord `json:"death_log,omitempty"`
+	// LoosePulls are the pull events that named no step (or no leg), so the step log cannot hold them.
+	LoosePulls []PullNote   `json:"loose_pulls,omitempty"`
+	RescueLog  []RescueNote `json:"rescue_log,omitempty"`
 }
 
 // PauseNote is one pause event: its time into the watched run, where it happened, the module's reason and whether a
@@ -650,6 +652,7 @@ func (r *Recorder) SetWatch(w RunWatch, t time.Time) {
 	for i := range cp.StepLog {
 		cp.StepLog[i].PullEvents = append([]PullNote(nil), w.StepLog[i].PullEvents...)
 	}
+	cp.LoosePulls = append([]PullNote(nil), w.LoosePulls...)
 	cp.DeathLog = append([]DeathRecord(nil), w.DeathLog...)
 	cp.RescueLog = append([]RescueNote(nil), w.RescueLog...)
 	r.sum.Watch = &cp
