@@ -626,27 +626,22 @@ func TestProbeMissAndReset(t *testing.T) {
 	}
 }
 
-func TestMissingTypedPathNamesItAfterTheProbe(t *testing.T) {
+func TestMissingTypedPathSendsNoProbe(t *testing.T) {
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
-		switch {
-		case line == ".tb commander status Cmdr":
+		if line == ".tb commander status Cmdr" {
 			return reply(o, fullCards("Tanka", "")...), nil
-		case line == ".tb cmd":
-			return nil, &tbcmd.CommandError{Code: "missing-verb", Cmd: "cmd"}
 		}
 		return nil, errors.New("unexpected line " + line)
 	}}
 	b, _ := newTB(t, f, "Cmdr")
-	// No typed path installed: the P3 probe answers, and the refusal names the path that has not landed.
+	// No typed path installed: the refusal names the path that has not landed, and no probe goes out.
 	_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
 	var na *NotAvailableError
 	if !errors.As(err, &na) || na.Why != PathName {
 		t.Fatalf("move: err %v, want needs-typed-path", err)
 	}
-	// P3 answers its probe, so the verb is available to the module but not to this build: the refusal names the
-	// path, and the probe went out once.
-	if seenCount(f, ".tb cmd") != 1 {
-		t.Fatalf("the call saw %v, want one probe", f.seen)
+	if len(f.seen) != 1 {
+		t.Fatalf("the call saw %v, want the guard read only", f.seen)
 	}
 }
 
@@ -668,16 +663,17 @@ func TestAvailable(t *testing.T) {
 	if ok, why, err := b.Available(ctx, "view"); ok || why != "not ported on this server" || err != nil {
 		t.Fatalf("view: %v %q %v", ok, why, err)
 	}
-	// P3 answers its probe, but no typed path is in this build: the reason names the path, and the probe is cached.
+	// No typed path is in this build: the reason names the path, and nothing is probed.
 	if ok, why, err := b.Available(ctx, "move"); ok || why != PathName || err != nil {
 		t.Fatalf("move: %v %q %v", ok, why, err)
 	}
-	if ok, why, err := b.Available(ctx, "loot"); ok || why != "needs module package P6" || err != nil {
+	// No typed path is installed either: a P6 verb is refused with the same code before its probe.
+	if ok, why, err := b.Available(ctx, "loot"); ok || why != PathName || err != nil {
 		t.Fatalf("loot: %v %q %v", ok, why, err)
 	}
 	b.cmdPath = &recPath{}
-	if ok, _, err := b.Available(ctx, "move"); !ok || err != nil {
-		t.Fatalf("move with the path: %v %v", ok, err)
+	if ok, _, err := b.Available(ctx, "loot"); ok || err != nil {
+		t.Fatalf("loot with the path but without P6: %v %v", ok, err)
 	}
 	if _, _, err := b.Available(ctx, "dance"); err == nil {
 		t.Fatal("an unknown verb answered")

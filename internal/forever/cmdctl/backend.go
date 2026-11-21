@@ -416,19 +416,17 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 		return b.role(ctx, args, cards)
 	}
 	if v.Path == PathCmd {
-		probeOnly := b.orderPath(v) == nil
+		// The typed path is not in this build: refuse before the probe, so no probe line goes out naming a
+		// package whose answer has no parser behind it yet (round C5).
+		if b.orderPath(v) == nil {
+			return out, &NotAvailableError{Verb: v.Name, Why: PathName}
+		}
 		in, err := b.probe(ctx, v.Package)
 		if err != nil {
 			return out, err
 		}
 		if !in {
-			// The module lacks the package: name it, whatever the build carries.
 			return out, &NotAvailableError{Verb: v.Name, Package: v.Package}
-		}
-		if probeOnly {
-			// The package answers, but the typed path has not landed (round C5): no line is
-			// sent, and the package's probe already answered, so this also costs one probe.
-			return out, &NotAvailableError{Verb: v.Name, Why: PathName}
 		}
 	}
 	path := b.orderPath(v)
@@ -796,15 +794,16 @@ func (b *TB) Available(ctx context.Context, verb string) (bool, string, error) {
 	case PathCut:
 		return false, "not ported on this server", nil
 	case PathCmd:
+		// The typed path is not in this build: refuse before the probe, like Order does.
+		if b.orderPath(v) == nil {
+			return false, PathName, nil
+		}
 		in, err := b.probe(ctx, v.Package)
 		if err != nil {
 			return false, "", err
 		}
 		if !in {
 			return false, "needs module package " + v.Package, nil
-		}
-		if b.orderPath(v) == nil {
-			return false, PathName, nil
 		}
 	}
 	return true, "", nil

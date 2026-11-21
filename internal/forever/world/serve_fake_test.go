@@ -1733,22 +1733,39 @@ func TestServeCommanderDuringReconnect(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeCommanderProbeResetAfterReconnect is the brief's reset coverage: the capability probe is asked once
-// per session, so the same verb probes again after the re-entry instead of reusing the dropped session's answer.
-func TestServeCommanderProbeResetAfterReconnect(t *testing.T) {
+// TestServeCommanderBindGateResetAfterReconnect is the brief's reset coverage: the bind gate reads the whole
+// binding table before each line goes out, so a change the re-entry brings is caught instead of replaying the
+// dropped session's answer.
+func TestServeCommanderBindGateResetAfterReconnect(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	f.realmLoop = true
 	f.serveReconnects = 3
 	fastReconnect(t, f, 200*time.Millisecond)
-	probes := 0
+	reads := 0
 	f.serveCommander = func(line string) []string {
 		switch {
-		case strings.HasPrefix(line, ".tb commander status"):
+		case line == ".tb commander status":
+			reads++
+			if reads <= 3 {
+				// The pre-gate, pre-master and post-bind reads of the first bind: nobody holds Tanka.
+				return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+			}
+			// After the re-entry another commander holds Tanka: the gate refuses before any line.
+			return []string{
+				"commander-begin #T",
+				"binding cmd=Other cguid=15 online=yes lead=Tanka group=1 bound=1 bots=1 system=no inparty=no raid=no playerled=no boundat=1795138681 orders=0 map=389 pos=0.80,-8.23,-15.53 #T",
+				"member cmd=Other bot=Tanka guid=10 class=warrior role=tank level=18 hp=498 maxhp=498 power=54 maxpower=100 ptype=rage alive=yes lead=yes map=389 zone=2437 pos=-18.24,-46.69,-21.85 #T",
+				"commander-end count=2 records=2 bindings=1 #T",
+			}
+		case line == ".tb commander status Xxxxxx":
 			return commanderCardLines("Tanka", "Tanka")
-		case line == ".tb cmd":
-			probes++
-			return []string{"error code=missing-verb cmd=cmd #T"}
+		case line == ".tb master party Tanka Xxxxxx":
+			return []string{
+				"master-begin #T",
+				"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+				"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+			}
 		}
 		return nil
 	}
@@ -1758,27 +1775,30 @@ func TestServeCommanderProbeResetAfterReconnect(t *testing.T) {
 	waitServeState(t, a, "online", steps)
 	waitServeUnits(t, a)
 
-	// P3 answers, so the verb is refused with the typed-path code, and the probe went out once.
-	a.mustFail(t, "commander", map[string]any{
-		"op": "cmd", "verb": "move", "args": []string{"1", "2", "3"},
-	}, -32003, "not-available: move: "+cmdctl.PathName)
-	if probes != 1 {
-		t.Fatalf("probes %d, want one", probes)
+	// The empty table lets the bind through the gate: the master line goes out, the module answers, and the
+	// post-bind card read finds the lead bound.
+	var bound ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}), &bound)
+	if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" {
+		t.Fatalf("bind sent %q", bound.Sent)
 	}
-	a.mustFail(t, "commander", map[string]any{
-		"op": "cmd", "verb": "move", "args": []string{"1", "2", "3"},
-	}, -32003, "not-available: move: "+cmdctl.PathName)
-	if probes != 1 {
-		t.Fatalf("the cached probe answer was asked again: %d probes", probes)
+	if reads != 2 {
+		t.Fatalf("gate reads %d, want the pre-gate and the pre-master read", reads)
 	}
 	dropServingSocket(t, f)
 	waitServeState(t, a, "online", steps)
-	// The re-entry reset the controller: the next call probes again.
-	a.mustFail(t, "commander", map[string]any{
-		"op": "cmd", "verb": "move", "args": []string{"1", "2", "3"},
-	}, -32003, "not-available: move: "+cmdctl.PathName)
-	if probes != 2 {
-		t.Fatalf("probes %d after the re-entry, want two", probes)
+	// The re-entry changed the table: the next bind reads again and refuses before the master line.
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}, -32003, "Tanka cannot be bound")
+	if partial := commanderErrorData(t, rerr); len(partial.Sent) != 0 {
+		t.Fatalf("a refused bind sent %q", partial.Sent)
+	}
+	if reads != 4 {
+		t.Fatalf("table reads %d after the re-entry, want four", reads)
+	}
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb master ") && !strings.Contains(ln, ".tb master party Tanka Xxxxxx") {
+			t.Fatalf("a refused bind sent a line: %q", ln)
+		}
 	}
 	a.stop(t)
 	f.close()
