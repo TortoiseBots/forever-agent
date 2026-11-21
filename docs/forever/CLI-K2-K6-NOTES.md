@@ -134,8 +134,7 @@ On a running `forever serve` slot for a real ForeverCore test dungeon:
 
 ## 5. Gates (on the final code commit)
 
-Hygiene: `git diff origin/main | grep -nE '100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'`
-printed nothing.
+Hygiene check on the diff: no hosts, accounts or local paths found.
 
 Gate commit: `ca8d0607` (clean tree; before it, `a4cc18f2` failed the VM gate on `TestServeClientTypesMatchTheDaemon`
 because this round briefly added `Hostile/Faction/NPCFlags` to `serveclient.Unit`; the type stays field-for-field with
@@ -147,7 +146,7 @@ the daemon's `ServeUnit`, and the fields are gone).
 - `go test -race ./cmd/forever-agent ./internal/forever/serveclient` (on the VM, same tree):
   `ok  	github.com/pjerra/forever-agent/cmd/forever-agent	648.867s` and
   `ok  	github.com/pjerra/forever-agent/internal/forever/serveclient	1.278s`, `VM-TEST-END rc=0 seconds=1937`.
-- `vm-test ta ~/wt-fa-cli`: `RESULT: PASS  kind=ta wt=wt-fa-cli sha=ca8d0607 dirty=0 files=2337`, `rc=0  vm_duration=3007s  laptop_wall=3021s`.
+- `vm-test ta` on a local worktree: `RESULT: PASS kind=ta sha=ca8d0607 dirty=0`.
 
 ## 6. Fix round: the K4 review findings
 
@@ -172,12 +171,10 @@ in section 3).
 
 ### Gates (fix round)
 
-Code commit: `80414ed2` (clean tree, no trailers). Hygiene: `git diff origin/main | grep -nE
-'100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'` found only this notes file's own
-documentation line.
+Code commit: `80414ed2` (clean tree, no trailers). Hygiene check on the diff: no hosts, accounts or local paths found.
 
 - `make fmt-check`: clean (exit 0).
 - `make cross`: clean (exit 0).
 - `staticcheck ./...`: clean (exit 0).
-- `vm-test ta ~/wt-fa-cli` (committed tree, `sha=80414ed2 dirty=0`):
-  `RESULT: PASS  kind=ta wt=wt-fa-cli sha=80414ed2 dirty=0 files=2386`, `rc=0  vm_duration=1698s  laptop_wall=1715s`.
+- `vm-test ta` on a local worktree (committed tree, `sha=80414ed2 dirty=0`):
+  `RESULT: PASS kind=ta sha=80414ed2 dirty=0`.
