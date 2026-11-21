@@ -1,11 +1,11 @@
 // Package tables is the client side of CMSG_DB_QUERY_BULK -> SMSG_DB_REPLY
 // (HotfixHandler.cpp:31-70, HotfixPackets.h/.cpp): game data the agent asks
-// from the server instead of reading client files. The agent needs three
-// tables now: SpellName (spell id -> name), SpellMisc (school mask and the
-// other per-spell data) and FactionTemplate (friend/enemy masks, so "is this
-// mob hostile" becomes a lookup). Every record the Data2 store writes goes
-// out in DB2LoadInfo field order (DB2Store.cpp WriteRecord); the parsers
-// below read exactly that order, cited at each table.
+// from the server instead of reading client files. The agent needs two
+// tables now: SpellName (spell id -> name) and FactionTemplate (friend/enemy
+// masks, so "is this mob hostile" becomes a lookup). Every record the Data2
+// store writes goes out in DB2LoadInfo field order (DB2Store.cpp
+// WriteRecord); the parsers below read exactly that order, cited at each
+// table.
 package tables
 
 // (no imports: this file is constants only).
@@ -68,6 +68,9 @@ const (
 	// TableSpellName is SpellName.db2 (FileDataId 1990283, LayoutHash 0x782EE721).
 	TableSpellName uint32 = 0x46C66698
 	// TableSpellMisc is SpellMisc.db2 (FileDataId 1003144, LayoutHash 0x434B3607).
+	// It has no decoder: no production path reads school masks (see the
+	// notes). The constant stays for the table's wire hash and the tests
+	// that need a wrong table.
 	TableSpellMisc uint32 = 0xC603EE28
 	// TableFactionTemplate is FactionTemplate.db2 (FileDataId 1361579, LayoutHash 0x22B6DC22).
 	TableFactionTemplate uint32 = 0x1018ADD5
