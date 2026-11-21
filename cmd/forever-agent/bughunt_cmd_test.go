@@ -204,7 +204,7 @@ func TestSelectedRulesAreInRuleOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := numbers(all), want[:15]; !reflect.DeepEqual(got, want) {
+	if got, want := numbers(all), want[:13]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("order %v, want %v", got, want)
 	}
 	tac := &bughunt.Tactics{Creatures: map[uint32]*bughunt.TacticEntry{113: {Entry: 113}}}

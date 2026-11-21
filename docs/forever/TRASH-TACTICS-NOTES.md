@@ -139,3 +139,7 @@ No live run was made this round. The first session that carries a tactics file s
 - Rule 18's start is the first applying row the log holds; a debuff already up when the recording starts is dated
   from its first row, not from its real application. Its natural expiry needs the aura row's `remaining_ms` or an
   `aura_removed` row; an older log with neither is UNKNOWN for an aura no dispel or death ended.
+- The combat log carries no schema or capability field, so "the log records this kind" is read from the recording
+  never carrying a row of that kind: that is a rule's UNKNOWN, never a finding. A run where nobody interrupted is
+  therefore UNKNOWN for rule 16 rather than a silent "no missed interrupt" (and, by the same rule, a run with one
+  unrelated interrupt row answers); a future log schema that names its kinds would replace this signal.

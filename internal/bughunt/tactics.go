@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -261,24 +260,6 @@ func tacticsMap(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("not an object")
 	}
 	return obj, nil
-}
-
-// tacticsEntryID reads a creature entry: a JSON number or a decimal/0x-prefixed string, 1..MaxUint32. Entries are
-// uint32 in full, and one resolved entry has one key: a decimal and a hex spelling of the same value collide and
-// are an error.
-func tacticsEntryID(raw json.RawMessage) (uint32, error) {
-	var n float64
-	if err := json.Unmarshal(raw, &n); err == nil {
-		if n != math.Trunc(n) || n <= 0 || n > math.MaxUint32 {
-			return 0, fmt.Errorf("entry %v is not a creature entry", n)
-		}
-		return uint32(n), nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return 0, fmt.Errorf("not a creature entry")
-	}
-	return entryKey(s)
 }
 
 // entryKey reads an entry key: decimal, or 0x-prefixed hex, as a full uint32 above zero.
