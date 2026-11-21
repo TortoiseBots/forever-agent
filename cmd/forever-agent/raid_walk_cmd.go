@@ -1304,6 +1304,15 @@ type walk struct {
 	exitCode   int
 	teardownWd raidwalk.TeardownSummary
 	hiresLeft  []string
+	// liveFightWait, liveFightPoll and liveFightRead shorten the teardown live-fight wait, its poll and its per-read
+	// timeout, and fightsReadWait the plain fight-list read, for the tests (zero: teardownLiveFightWait,
+	// teardownLiveFightPoll, teardownLiveFightReadTimeout, 20 s). Their fake dashboard reads block until their
+	// context ends, so the tests that prove a retry and a stop would otherwise spend the production timeouts in
+	// wall clock.
+	liveFightWait  time.Duration
+	liveFightPoll  time.Duration
+	liveFightRead  time.Duration
+	fightsReadWait time.Duration
 }
 
 // bossKey identifies one boss step's record: the step when the run's status gave one (the row the run stood on),

@@ -38,6 +38,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Dungeon driver (round D1) | **Works against the scripted world** (`forever-agent forever dungeon-run --dry`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; no session adapter yet, see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md)) |
 | Dungeon watcher (round S7) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-watch`: PREPARE and ENTER as a run, then one typed `.tb run start`, after which the client never orders a bot — it polls the module's run status and event ring at a stated interval and prints progress, with a watchdog, a pause budget, a time budget, a wipe budget and the practice rescue, and a summary extended with the module's counters; round B1 adds the trace frames (`--frame-every`) and the session's combat log written beside the trace; round DEATHRECAP asks `.deathrecap <bot>` once per bot death and attaches the parsed timeline to the death in the record — see [docs/forever/WATCH-R1-NOTES.md](docs/forever/WATCH-R1-NOTES.md), [docs/forever/HUNT-B1-NOTES.md](docs/forever/HUNT-B1-NOTES.md) and [docs/forever/DEATHRECAP-NOTES.md](docs/forever/DEATHRECAP-NOTES.md)) |
 | Bug hunter (round B3) | **Offline, on a watch or a trials repeat** (`forever-agent bughunt`: the rules over the watch's frames (F) and combat log (C), the tickets the board carries with stable ids and a baseline's new/known/gone; round DEATHRECAP carries each death's parsed `.deathrecap` timeline into the ticket evidence; see [docs/forever/HUNT-B3-NOTES.md](docs/forever/HUNT-B3-NOTES.md) and [docs/forever/DEATHRECAP-NOTES.md](docs/forever/DEATHRECAP-NOTES.md)) |
+| Core gains 4: knockback and SOAP setup | **Works against the fake world; no live run yet** (`forever-agent forever soap` runs one console-capable command over the core's SOAP endpoint for setup without a client, loopback only, the password from a private file or an environment variable and never printed; a scenario's `soap` step and the trials bench's `soap`/`soap_setup` slots block use the same backend. The session records `SMSG_MOVE_KNOCK_BACK`/`SMSG_MOVE_UPDATE_KNOCK_BACK` takeoffs, flies and acks the mover once, sends its airborne heartbeats and fall-land packet, and pairs another unit's next grounded position update as its landing, and writes `knockback`/`knockback_land` combat rows, event-log rows and trace events; bug-hunt rule 20 reports a landing in a pack or off a ledge; see [docs/forever/CORE-GAINS-4-NOTES.md](docs/forever/CORE-GAINS-4-NOTES.md)) |
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
@@ -80,9 +81,9 @@ token, loopback only, the same error codes. The password comes from `--password-
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
 `inv`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
-`stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
+`stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
-`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
+`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. Every other old method answers a typed `not ported on this server` error. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`), and `status`
 carries `mono_ms`, the steady clock every combat row is on, and a `unit` row carries `mount_display_id` (non-zero
 while that unit is mounted). `events` (`since`, `limit` up to 1,000,
@@ -691,6 +692,18 @@ floor background; without it, or in a build without cgo, the map says so. Output
 two files after the summary; a failure there is one log line and never changes the watch's exit. See
 [docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
 
+`forever-agent forever soap [--host H] [--port N] [--user NAME] [--password-file FILE | --password-env VAR] [--timeout DURATION] COMMAND`
+runs one console-capable command on a ForeverCore worldserver over its SOAP endpoint (`SOAP.Enabled = 1`,
+`SOAP.IP` loopback by default), for setup with no client: the account must be an administrator, the credentials are
+HTTP Basic only, and the password comes from a private file (0600) or an environment variable (default
+`FOREVER_SOAP_PASSWORD`), never a flag value, stdout, stderr or an error. A non-loopback host is refused: the core's SOAP transport is plain HTTP, so the
+administrator's credential never crosses the network. Redirects are not followed. The printed result is the command's own text.
+Only the setup allow-list is sent (`.saveall`, `.pinfo`, `.instance setbossstate`; anything else is refused, with no
+prefix matching): see the allow-list in [docs/forever/CORE-GAINS-4-NOTES.md](docs/forever/CORE-GAINS-4-NOTES.md). A scenario's `{"do":"soap","text":"..."}` step uses
+`scenario run --soap-host/--soap-port/--soap-user/--soap-password-file/--soap-password-env` (the same loopback rule), and a slots file's `forever` block may name `"soap": {...}` plus
+`"soap_setup": [".saveall"]`, which `trials run`'s live setup sends before provisioning and records as its
+`server_console` row. See [docs/forever/CORE-GAINS-4-NOTES.md](docs/forever/CORE-GAINS-4-NOTES.md).
+
 `forever-agent forever gm-walk --follow NAME --character AGENT [--marks-from gm|any] [--out FILE] [--module-out FILE] [--force]
 [--dry FILE]` records a GM character's walk as world data: the agent follows the GM, samples the GM's own object
 position, and turns the GM's whisper (or nearby say) mark words (`point <name>`, `zone <name> <radius-yd>`, `split`) into roads (thinned
@@ -725,8 +738,9 @@ leaves its tickets as they were). `tickets.md` ranks the tickets by summed cost,
 own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids) plus the trash-tactics
 checks (16 a listed must-interrupt cast that completed with an interrupter free, 17 crowd control tried on an immune
 mob, 18 a listed dispellable debuff left past its within_s with a dispeller free, 19 a lower-priority mob killed
-before a higher one; each hit cites its combat rows, and a recording without the kinds a rule reads is UNKNOWN,
-never a finding), with the Forever inputs
+before a higher one; rule 20 a knockback landing inside a pack it was not near at the takeoff, or off a ledge; each
+hit cites its combat rows, and a recording without the kinds a rule reads is UNKNOWN, never a finding), with the
+Forever inputs
 the plan's table gives. `BUGHUNT_PY_CHECKER=checker.py` runs the optional parity test against the Python checker on
 one repeat (rules 4 and 8 must agree on every key).
 

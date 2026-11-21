@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 )
 
 var (
@@ -395,7 +397,7 @@ func splitAddr(addr string) (string, int, error) {
 }
 
 // actionKinds are the step kinds allowed in finally.
-var actionKinds = map[string]bool{"section": true, "mark": true, "gm": true, "bot": true, "addon_send": true, "rpc": true, "sleep": true}
+var actionKinds = map[string]bool{"section": true, "mark": true, "gm": true, "bot": true, "addon_send": true, "soap": true, "rpc": true, "sleep": true}
 
 // checkKinds are the step kinds that take name/on_fail.
 var checkKinds = map[string]bool{"expect": true, "expect_not": true, "check_db": true, "check_rpc": true}
@@ -405,6 +407,7 @@ var stepFields = map[string]map[string]bool{
 	"mark":       {"do": true, "note": true},
 	"gm":         {"do": true, "note": true, "session": true, "text": true, "settle_s": true},
 	"bot":        {"do": true, "note": true, "session": true, "command": true, "settle_s": true},
+	"soap":       {"do": true, "note": true, "text": true, "settle_s": true},
 	"addon_send": {"do": true, "note": true, "session": true, "text": true, "channel": true, "prefix": true, "to": true, "settle_s": true},
 	"rpc":        {"do": true, "note": true, "session": true, "method": true, "params": true, "timeout_s": true, "ignore_error": true, "save": true, "record_result": true, "settle_s": true},
 	"sleep":      {"do": true, "note": true, "seconds": true},
@@ -499,6 +502,15 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			return nil, fmt.Errorf("step %d (bot): missing command", n)
 		}
 		s.Command = cmd
+	case "soap":
+		g("text", &text)
+		if text == "" {
+			return nil, fmt.Errorf("step %d (soap): missing text", n)
+		}
+		s.Text = text
+		if err := soapLoadCheck(n, text); err != nil {
+			return nil, err
+		}
 	case "addon_send":
 		g("text", &text)
 		g("channel", &channel)
@@ -904,7 +916,9 @@ func parseMatcher(raw json.RawMessage, _ bool) (Matcher, error) {
 
 // gmDenied reports whether expanded GM text changes the world for everyone
 // (AGENTS.md): reload, server, account, ban/unban, npc add/delete/move/set,
-// gobject add/delete.
+// gobject add/delete. The core resolves each token as a case-insensitive prefix
+// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` runs reload and is
+// refused too; a root word needs two characters, a subcommand any length.
 func gmDenied(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	t = strings.TrimPrefix(t, ".")
@@ -912,25 +926,46 @@ func gmDenied(text string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	switch fields[0] {
-	case "reload", "server", "account", "ban", "unban":
-		return true
+	for _, want := range []string{"reload", "server", "account", "ban", "unban"} {
+		if gmTokenPrefix(fields[0], want, 2) {
+			return true
+		}
 	}
 	if len(fields) >= 2 {
-		if fields[0] == "npc" {
-			switch fields[1] {
-			case "add", "delete", "move", "set":
-				return true
+		if gmTokenPrefix(fields[0], "npc", 2) {
+			for _, want := range []string{"add", "delete", "move", "set"} {
+				if gmTokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
-		if fields[0] == "gobject" {
-			switch fields[1] {
-			case "add", "delete":
-				return true
+		if gmTokenPrefix(fields[0], "gobject", 3) {
+			for _, want := range []string{"add", "delete"} {
+				if gmTokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// gmTokenPrefix is the core's command resolution: tok is a case-insensitive
+// prefix of want of at least min bytes.
+func gmTokenPrefix(tok, want string, min int) bool {
+	return len(tok) >= min && len(tok) <= len(want) && strings.HasPrefix(want, tok)
+}
+
+// soapLoadCheck refuses a soap step whose text is not on the setup allow-list (soap.Allowed) at parse time. A text with
+// a variable cannot be judged before the variables expand, so the run-time check decides it before anything is sent.
+func soapLoadCheck(n int, text string) error {
+	if strings.Contains(text, "${") {
+		return nil
+	}
+	if err := soap.Allowed(text); err != nil {
+		return fmt.Errorf("step %d (soap): %v", n, err)
+	}
+	return nil
 }
 
 func gmLoadCheck(n int, text string) error {
@@ -1060,7 +1095,7 @@ func (f *File) validate() error {
 		n := i + 1
 		var tmpl []string
 		switch s.Do {
-		case "gm":
+		case "gm", "soap":
 			tmpl = append(tmpl, s.Text)
 		case "bot":
 			tmpl = append(tmpl, s.Command)
@@ -1124,7 +1159,7 @@ func (f *File) validate() error {
 		}
 		var tmpl []string
 		switch s.Do {
-		case "gm":
+		case "gm", "soap":
 			tmpl = append(tmpl, s.Text)
 		case "bot":
 			tmpl = append(tmpl, s.Command)

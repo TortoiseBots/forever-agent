@@ -406,6 +406,14 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 		return nil
 	}
 	err = g.client.GM(ctx, line) // the one gm call site in this package
+	if kind == "learn" && IsAlreadyKnown(err) {
+		// A rerun on the same character finds the spell learned already: the core answers with its error text
+		// (cs_learn.cpp: LANG_YOU_KNOWN_SPELL). The goal of the line, the spell known, holds.
+		if g.marks != nil {
+			g.marks.Add(map[string]any{"kind": "gm_already_known", "kind_detail": kind, "target": targetOrNil(target)})
+		}
+		return nil
+	}
 	if IsNoReply(err) {
 		// The line ran; this core prints nothing for it. The caller's
 		// read-back proves the effect.

@@ -37,8 +37,8 @@ type CombatActor struct {
 // CombatRow is one row of the combat log. Kind is one of spell_start, spell_go, spell_fail, melee, spell_damage,
 // periodic, heal, aura_applied, aura_removed, death, hostile and alert (SMSG_AI_REACTION: the reacting unit in
 // Source, the reaction word in Reason, spell_id its number; only HOSTILE is "hostile", ALERT is "alert", the
-// rest write no row), and the core-gains round's interrupt, dispel, absorb, miss, resist, immune, instakill and
-// environmental. Time is the wall clock with milliseconds and its offset; MonoMS is the process's steady axis
+// rest write no row), the core-gains round's interrupt, dispel, absorb, miss, resist, immune, instakill and
+// environmental, and the knockback round's knockback (a takeoff) and knockback_land (the landing paired with it). Time is the wall clock with milliseconds and its offset; MonoMS is the process's steady axis
 // (events.MonoMS), the one a client cannot step.
 type CombatRow struct {
 	Seq     int         `json:"seq"`
@@ -73,6 +73,26 @@ type CombatRow struct {
 	// environmental one (the spell-damage packet's block is all zeros in this core and is left out). It is attached
 	// to that event's row, so a fight's health and mana curves need no polling.
 	Sample *CombatSample `json:"sample,omitempty"`
+	// The knockback rows: Pos is the takeoff on a knockback row and the landing on a knockback_land row; Self says
+	// the packet was the mover's own (only it carries the speeds and direction); AirMS and Drop are the landing's
+	// air time and how far it fell. A relayed knockback of another unit carries no speeds (its packet has none).
+	Pos       *CombatPoint `json:"pos,omitempty"`
+	Self      bool         `json:"self,omitempty"`
+	HorzSpeed float32      `json:"horz_speed,omitempty"`
+	VertSpeed float32      `json:"vert_speed,omitempty"`
+	DirX      float32      `json:"dir_x,omitempty"`
+	DirY      float32      `json:"dir_y,omitempty"`
+	AirMS     int32        `json:"air_ms,omitempty"`
+	Drop      float32      `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact.
+	Simulated bool `json:"simulated,omitempty"`
+}
+
+// CombatPoint is a position a knockback row carries.
+type CombatPoint struct {
+	X float32 `json:"x"`
+	Y float32 `json:"y"`
+	Z float32 `json:"z"`
 }
 
 // CombatDispel is one aura a dispel row removed.
@@ -232,6 +252,16 @@ type combatRowExtra struct {
 	AbsorbedSpellID    int32
 	Dispelled          []CombatDispel
 	RemainingMS        int32
+	Pos                *CombatPoint
+	Self               bool
+	HorzSpeed          float32
+	VertSpeed          float32
+	DirX               float32
+	DirY               float32
+	AirMS              int32
+	Drop               float32
+	HasDrop            bool
+	Simulated          bool
 }
 
 // combatRowExtras appends one row from the base shape plus its extras.
@@ -244,6 +274,17 @@ func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount in
 	row.AbsorbedSpellID = extra.AbsorbedSpellID
 	row.Dispelled = extra.Dispelled
 	row.RemainingMS = extra.RemainingMS
+	row.Pos = extra.Pos
+	row.Self = extra.Self
+	row.HorzSpeed = extra.HorzSpeed
+	row.VertSpeed = extra.VertSpeed
+	row.DirX = extra.DirX
+	row.DirY = extra.DirY
+	row.AirMS = extra.AirMS
+	row.Simulated = extra.Simulated
+	if extra.HasDrop {
+		row.Drop = extra.Drop
+	}
 	row.Sample = combatSample(extra.Log)
 	s.CombatLog().Append(row)
 	s.eventCombat(row, now, src, dst)

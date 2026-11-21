@@ -599,3 +599,57 @@ func TestCancelledWalkStopsImmediately(t *testing.T) {
 		}
 	}
 }
+
+// TestMoverRefusesMovementInTheAir: BeginKnockback ends a running leg at its next wake-up with no stop packet (a
+// real client sends none when thrown), and every ordinary movement is refused until EndKnockback.
+func TestMoverRefusesMovementInTheAir(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var guid wire.GUID
+	guid.Low = 0x2211
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		GUID: guid, Sender: sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	waited := 0
+	sender.onWait = func(time.Time) {
+		if waited == 0 {
+			m.BeginKnockback()
+		}
+		waited++
+	}
+	if err := m.MoveTo(context.Background(), 1100, 2000, 50); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("the walk ended with %v, want ErrAirborne", err)
+	}
+	for _, p := range sender.sent {
+		if p.core == wire.CMSGMoveStop {
+			t.Fatal("an airborne client sent a stop packet")
+		}
+	}
+	if !m.Airborne() {
+		t.Fatal("the mover is not airborne")
+	}
+	if err := m.MoveTo(context.Background(), 1100, 2000, 50); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("MoveTo in the air: %v", err)
+	}
+	if err := m.WalkPath(context.Background(), [][3]float32{{1050, 2000, 50}}); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("WalkPath in the air: %v", err)
+	}
+	if err := m.ChaseTo(context.Background(), ChaseGoal{
+		Dest:    func(time.Time) (float32, float32, float32) { return 1100, 2000, 50 },
+		Arrived: func(time.Time) bool { return false },
+	}); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("ChaseTo in the air: %v", err)
+	}
+	if err := m.Face(1); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("Face in the air: %v", err)
+	}
+	if err := m.Stop(); !errors.Is(err, ErrAirborne) {
+		t.Fatalf("Stop in the air: %v", err)
+	}
+	m.EndKnockback()
+	if err := m.MoveTo(context.Background(), 1001, 2000, 50); err != nil {
+		t.Fatalf("a walk after the landing: %v", err)
+	}
+}

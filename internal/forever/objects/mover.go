@@ -76,6 +76,9 @@ type Mover struct {
 	walking     bool
 	teleported  bool
 	betweenMaps bool
+	// airborne is the knockback flight: the mover is thrown and no ordinary movement (walk, chase, facing, stop)
+	// may start or continue until it lands. A walk in progress ends at its next wake-up without a stop packet.
+	airborne bool
 
 	// sendTimes is the ring of the last movement packets' times, so the chase can hold its optional re-aim when the
 	// link has already carried maxMovementPacketsPerSecond in the last second.
@@ -92,6 +95,10 @@ var ErrTeleported = errors.New("objects: teleported during the walk")
 // Every walk, chase, facing and stop is refused while the window is open, so no movement packet carries the old
 // map's coordinates; the caller ends its walk or fight with this error.
 var ErrMapChange = errors.New("objects: the character is between maps")
+
+// ErrAirborne refuses ordinary movement while a knockback flight is under way: a real client cannot walk, turn or
+// stop in the air, and the server would see a movement packet that contradicts the jump block of the ack.
+var ErrAirborne = errors.New("objects: the character is in the air after a knockback")
 
 // BeginMapChange closes the movement window (SMSG_TRANSFER_PENDING). A leg in progress is abandoned: its straight
 // line belongs to the old map, and the wait that drives it returns ErrMapChange.
@@ -135,6 +142,42 @@ func (m *Mover) logf(format string, args ...any) {
 
 // Position returns the client's belief about its own position.
 func (m *Mover) Position() (x, y, z, o float32) { return m.X, m.Y, m.Z, m.O }
+
+// Airborne reports whether a knockback flight is under way.
+func (m *Mover) Airborne() bool { return m.airborne }
+
+// BeginKnockback puts the mover in the air: an ordinary leg in progress ends at its next wake-up with no stop
+// packet (a real client sends none when it is thrown), and every new walk, chase, facing or stop is refused.
+func (m *Mover) BeginKnockback() { m.airborne = true }
+
+// EndKnockback puts the mover back on the ground after the flight's fall-land packet.
+func (m *Mover) EndKnockback() { m.airborne = false }
+
+// FlightInfo is the movement block of one airborne packet: the position the flight has at at, the status bits the
+// create block gave the mover with every moving and ground-contact bit cleared, FlagFalling and FlagKnockback set,
+// and the jump block of a knockback. descending adds MOVEMENTFLAG_FALLING_FAR, as the real client does once the
+// arc turns down (the same pairing internal/session sends).
+func (m *Mover) FlightInfo(at time.Time, jump *JumpInfo, descending bool) MovementInfo {
+	flags := m.base() &^ (FlagMaskMoving | FlagFallingFar | FlagTouchingGround | FlagDisableGravity | FlagRoot | FlagWalking | FlagKnockback)
+	flags |= FlagFalling | FlagKnockback
+	if descending {
+		flags |= FlagFallingFar
+	}
+	mi := m.info(flags, at)
+	mi.Jump = jump
+	return mi
+}
+
+// LandingInfo is the movement block of CMSG_MOVE_FALL_LAND: the position on the ground, the mover's standing flags
+// with every fall and knockback bit cleared, and no jump block.
+func (m *Mover) LandingInfo(at time.Time) MovementInfo {
+	flags := m.base() &^ (FlagFalling | FlagFallingFar | FlagKnockback | FlagTouchingGround | FlagDisableGravity | FlagRoot | FlagWalking)
+	return m.info(flags|FlagTouchingGround, at)
+}
+
+// SetFlightPosition moves the client's belief along its own ballistic arc (the server sends the mover none of its
+// own position updates), leaving the ground flags as the flight packet carries them.
+func (m *Mover) SetFlightPosition(x, y, z float32) { m.X, m.Y, m.Z = x, y, z }
 
 // SetPosition records a position the server put the character at (the login's verify-world, or a later ThisIsYou
 // create). A walk in progress is abandoned there, like a teleport: its straight line no longer starts where the
@@ -214,6 +257,9 @@ func (m *Mover) Face(o float32) error {
 	if m.betweenMaps {
 		return ErrMapChange
 	}
+	if m.airborne {
+		return ErrAirborne
+	}
 	m.O = normalizeOrientation(o)
 	return m.send(wire.CMSGMoveSetFacing, m.base())
 }
@@ -243,6 +289,9 @@ func (m *Mover) advance(sx, sy, sz, tx, ty, tz float32, dist float32, start, now
 func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 	if m.betweenMaps {
 		return ErrMapChange
+	}
+	if m.airborne {
+		return ErrAirborne
 	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
@@ -305,6 +354,11 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			// The map change ended the leg while this wake-up waited: nothing of the old line goes out.
 			return ErrMapChange
 		}
+		if m.airborne {
+			// A knockback threw the character: the leg ends where the flight starts, with no stop packet (a real
+			// client sends none in the air) and no heartbeat on the old line.
+			return ErrAirborne
+		}
 		if m.teleported {
 			m.teleported = false
 			// The server moved the character: stop where it put them and end the leg. The position is the teleport
@@ -351,6 +405,9 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 	if m.betweenMaps {
 		return ErrMapChange
+	}
+	if m.airborne {
+		return ErrAirborne
 	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
@@ -400,6 +457,9 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 		}
 		if m.betweenMaps {
 			return ErrMapChange
+		}
+		if m.airborne {
+			return ErrAirborne
 		}
 		if m.teleported {
 			m.teleported = false
@@ -479,6 +539,11 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 				// placing the old route and sending its stop would put old-map coordinates on the new map.
 				return ErrMapChange
 			}
+			if m.airborne {
+				// A knockback threw the character in this wait: the route ends here, and an airborne client sends
+				// no stop packet.
+				return ErrAirborne
+			}
 			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
@@ -486,12 +551,18 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 		if ctx.Err() != nil {
 			// Cancelled while the wait answered server packets: stop at once, before another heartbeat. Between
 			// maps the stop is refused too (sendAt), so no old-map packet goes out.
+			if m.airborne {
+				return ErrAirborne
+			}
 			place(float32(m.Sender.Now().Sub(start).Seconds()) * m.RunSpeed)
 			_ = m.send(wire.CMSGMoveStop, base)
 			return ctx.Err()
 		}
 		if m.betweenMaps {
 			return ErrMapChange
+		}
+		if m.airborne {
+			return ErrAirborne
 		}
 		if m.teleported {
 			m.teleported = false
@@ -510,8 +581,14 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 					if errors.Is(err, ErrMapChange) || m.betweenMaps {
 						return ErrMapChange
 					}
+					if m.airborne {
+						return ErrAirborne
+					}
 					_ = m.send(wire.CMSGMoveStop, base)
 					return err
+				}
+				if m.airborne {
+					return ErrAirborne
 				}
 				if m.teleported {
 					m.teleported = false
@@ -582,6 +659,9 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 	if m.betweenMaps {
 		return ErrMapChange
 	}
+	if m.airborne {
+		return ErrAirborne
+	}
 	if m.RunSpeed <= 0 {
 		return fmt.Errorf("objects: no run speed for the mover")
 	}
@@ -622,12 +702,18 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 				// position, so neither the old line nor its stop may go out.
 				return ErrMapChange
 			}
+			if m.airborne {
+				return ErrAirborne
+			}
 			m.advance(sx, sy, sz, tx, ty, tz, dist, start, m.Sender.Now())
 			_ = m.send(wire.CMSGMoveStop, base)
 			return err
 		}
 		if m.betweenMaps {
 			return ErrMapChange
+		}
+		if m.airborne {
+			return ErrAirborne
 		}
 		if m.teleported {
 			m.teleported = false
@@ -702,6 +788,9 @@ func walkTimeout(dist, runSpeed float32) time.Duration {
 func (m *Mover) Stop() error {
 	if m.betweenMaps {
 		return ErrMapChange
+	}
+	if m.airborne {
+		return ErrAirborne
 	}
 	return m.send(wire.CMSGMoveStop, m.base())
 }

@@ -554,6 +554,23 @@ func activeUpdate(slots map[int]wire.GUID, coinage *uint64, extra ...int) []byte
 		order = append(order, slot)
 	}
 	sort.Ints(order)
+	// A buyback slot (72-83) is never written alone: Player::AddItemToBuyBackSlot and RemoveItemFromBuyBackSlot set
+	// InvSlots, BuybackPrice and BuybackTimestamp together (Player.cpp:14068-14071, 14110-14113), so the update
+	// names the buyback group (classic bit 355 on the 70425 layout), BuybackPrice[i] (356+i) and
+	// BuybackTimestamp[i] (368+i).
+	var buyback []int
+	for _, slot := range order {
+		if slot >= 72 && slot < 84 {
+			buyback = append(buyback, slot-72)
+		}
+	}
+	if len(buyback) != 0 {
+		set(355)
+	}
+	for _, i := range buyback {
+		set(356 + i)
+		set(368 + i)
+	}
 	if coinage != nil {
 		set(32)
 		set(58)
@@ -582,6 +599,10 @@ func activeUpdate(slots map[int]wire.GUID, coinage *uint64, extra ...int) []byte
 	}
 	for _, slot := range order {
 		wire.WritePackedGUID(body, slots[slot])
+	}
+	for _, i := range buyback { // WriteUpdate: price, then timestamp, entry by entry (UpdateFields.cpp:7251-7263)
+		body.WriteU32(uint32(100 + i))
+		body.WriteU64(uint64(1000 + i))
 	}
 	blk := wire.NewWriter()
 	blk.WriteU8(objects.UpdateValues)

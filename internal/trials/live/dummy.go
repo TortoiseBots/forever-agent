@@ -78,6 +78,11 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 		if why := t.bringHire(ctx, name); why != "" {
 			return hireNotBrought(why), nil
 		}
+		// The hire fights only with its engine on, and the move into the arena is where it can be lost: it is
+		// set and proved by the bot's own state here, after the move, before anything is spawned.
+		if why := proveHireEngines(ctx, t.tb, t.r, t.sit); why != "" {
+			return map[string]any{"ok": false, "ended": "no_engine", "invalid_reason": why}, nil
+		}
 	}
 	guid := t.summonDummy(ctx, entry)
 	if guid == "" {
@@ -100,6 +105,9 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 	if name := t.r.BotName; name != "" {
 		if _, err := t.tb.Attack(ctx, name, guid); err != nil {
 			t.sit.logf("dummy: attack order refused: %v", err)
+			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "attack_refused"})
+			return map[string]any{"ok": false, "ended": "attack_refused",
+				"invalid_reason": "the attack order was refused: " + err.Error()}, nil
 		}
 	} else {
 		_ = t.r.Client.Target(ctx, guid)

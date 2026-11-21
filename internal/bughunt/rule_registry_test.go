@@ -27,6 +27,7 @@ var pinnedRuleNames = map[int]string{
 	17: "trash tactics: crowd control tried on an immune mob",
 	18: "trash tactics: listed dispellable debuff left on too long",
 	19: "trash tactics: lower-priority mob killed before a higher one",
+	20: "knockback: landed in a pack or off a ledge",
 }
 
 // TestRuleNamesPinned pins every name: rule 14 lost its row once and rule 14 still reads ruleNames[14].
@@ -62,7 +63,7 @@ func TestRegistryRulesNamed(t *testing.T) {
 	}
 	// The four groups' own orders are the order the command sorts, so pin them too.
 	wantFrame := []int{3, 5, 6, 9, 10, 13, 14}
-	wantEvent := []int{1, 2, 4, 8, 11, 15}
+	wantEvent := []int{1, 2, 4, 8, 11, 15, 20}
 	wantTactics := []int{16, 17, 18, 19}
 	if got := ruleNumbers(FrameRules()); !reflect.DeepEqual(got, wantFrame) {
 		t.Errorf("frame rules %v, want %v", got, wantFrame)

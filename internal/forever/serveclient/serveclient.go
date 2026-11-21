@@ -248,6 +248,33 @@ func (c *Client) WalkPath(ctx context.Context, x, y, z float32) (Path, error) {
 	return p, err
 }
 
+// WalkRay is the walk_ray method's answer (serve's ServeWalkRay): whether a point is in line of sight, judged on the navmesh's
+// walkability ray. Known false means the mesh cannot say, and In is then meaningless.
+type WalkRay struct {
+	Map    uint32     `json:"map"`
+	From   [3]float32 `json:"from"`
+	To     [3]float32 `json:"to"`
+	Known  bool       `json:"known"`
+	In     bool       `json:"in"`
+	Hit    float32    `json:"hit,omitempty"`
+	Source string     `json:"source"`
+}
+
+// WalkRay asks the navmesh walkability ray from the session's position, or from from when it is not nil, to x, y, z: In is
+// true when the straight line stays on ground the mesh holds. It is not true line of sight (no collision geometry). It needs the
+// daemon's navmesh folder like PathTo.
+func (c *Client) WalkRay(ctx context.Context, from *[3]float32, x, y, z float32) (WalkRay, error) {
+	var l WalkRay
+	params := struct {
+		X    float32     `json:"x"`
+		Y    float32     `json:"y"`
+		Z    float32     `json:"z"`
+		From *[3]float32 `json:"from,omitempty"`
+	}{x, y, z, from}
+	err := c.call(ctx, "walk_ray", params, &l, defaultTimeout)
+	return l, err
+}
+
 // UnitsParams is the units method's filter; every field is optional.
 type UnitsParams struct {
 	Within  float32 `json:"within,omitempty"`
@@ -353,6 +380,23 @@ type CombatRow struct {
 	Sample             *CombatSample  `json:"sample,omitempty"`
 	RemainingMS        int32          `json:"remaining_ms,omitempty"`
 	SpellName          string         `json:"spell_name,omitempty"`
+	Pos                *CombatPoint   `json:"pos,omitempty"`
+	Self               bool           `json:"self,omitempty"`
+	HorzSpeed          float32        `json:"horz_speed,omitempty"`
+	VertSpeed          float32        `json:"vert_speed,omitempty"`
+	DirX               float32        `json:"dir_x,omitempty"`
+	DirY               float32        `json:"dir_y,omitempty"`
+	AirMS              int32          `json:"air_ms,omitempty"`
+	Drop               float32        `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact.
+	Simulated bool `json:"simulated,omitempty"`
+}
+
+// CombatPoint is a knockback row's takeoff or landing position.
+type CombatPoint struct {
+	X float32 `json:"x"`
+	Y float32 `json:"y"`
+	Z float32 `json:"z"`
 }
 
 // CombatDispel is one aura a dispel row removed.

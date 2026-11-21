@@ -23,11 +23,13 @@ type fakeServe struct {
 	// JSON-RPC error answers in order.
 	script   map[string][]any
 	errCodes map[string][]int
-	status   map[string]any
-	units    []map[string]any
-	events   []map[string]any
-	dropped  map[string]any
-	target   string
+	// errMsg, when set for a method, is the text of its queued error answer (default "fake error").
+	errMsg  map[string]string
+	status  map[string]any
+	units   []map[string]any
+	events  []map[string]any
+	dropped map[string]any
+	target  string
 	// hook runs before the canned answer of every call (a simulated world:
 	// it may rewrite status/units). It must use the fake's own setters.
 	hook func(method string, params map[string]any)
@@ -47,7 +49,7 @@ type fakeCall struct {
 
 func newFakeServe(t *testing.T) *fakeServe {
 	t.Helper()
-	f := &fakeServe{t: t, script: map[string][]any{}, errCodes: map[string][]int{}}
+	f := &fakeServe{t: t, script: map[string][]any{}, errCodes: map[string][]int{}, errMsg: map[string]string{}}
 	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.server.Close)
 	return f
@@ -97,7 +99,13 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		units = unitsFn()
 	}
 	if errCode != 0 {
-		writeRPCError(w, req.ID, errCode, "fake error")
+		msg := "fake error"
+		f.mu.Lock()
+		if m := f.errMsg[req.Method]; m != "" {
+			msg = m
+		}
+		f.mu.Unlock()
+		writeRPCError(w, req.ID, errCode, msg)
 		return
 	}
 	if req.Method == "target" {

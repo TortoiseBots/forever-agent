@@ -18,6 +18,25 @@ import (
 // to convert them.
 const walk2Dumps = "../../internal/dashreplay/testdata/walk2"
 
+// smallDumps is a dump folder with the fight list and one fight. The command tests about writing, refusing and
+// dry-running prove the command, not the converter: the full walk2 folder's snapshot timeline is thousands of
+// replayed datagrams under the race detector, and dashreplay's own tests and TestCommandConvertsDumpDir still
+// convert it.
+func smallDumps(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"combat-fights.json", "combat-fight-5-4.json"} {
+		b, err := os.ReadFile(filepath.Join(walk2Dumps, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
 // A replay never leaves the machine by accident: a non-loopback target is
 // refused with exit 17 and the README's text, before anything is sent, and
 // --dry-run sends nothing at all even to a loopback target.
@@ -39,7 +58,7 @@ func TestCommandRefusesNonLoopbackExit17(t *testing.T) {
 	defer pc.Close()
 	stdout.Reset()
 	stderr.Reset()
-	code = run(context.Background(), []string{"dashboard-replay", walk2Dumps, "--to", pc.LocalAddr().String(), "--speed", "1000", "--dry-run"}, &stdout, &stderr)
+	code = run(context.Background(), []string{"dashboard-replay", smallDumps(t), "--to", pc.LocalAddr().String(), "--speed", "1000", "--dry-run"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("dry run exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
@@ -69,16 +88,7 @@ func TestCommandConvertsDumpDir(t *testing.T) {
 
 // convert writes <dir>/replay.jsonl, readable as a replay file, mode 0600.
 func TestCommandConvertWritesFile(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"commanders-pre.json", "commanders-after-stop.json", "combat-fight-5-4.json", "combat-fights.json"} {
-		b, err := os.ReadFile(filepath.Join(walk2Dumps, name))
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
+	dir := smallDumps(t)
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"dashboard-replay", "convert", dir}, &stdout, &stderr)
 	if code != 0 {

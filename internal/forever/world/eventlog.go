@@ -296,6 +296,24 @@ func (s *session) eventCombat(row CombatRow, now time.Time, src, dst wire.GUID) 
 	if row.Reason != "" {
 		e.Data = map[string]any{"reason": row.Reason}
 	}
+	if row.Kind == "knockback" || row.Kind == "knockback_land" {
+		if e.Data == nil {
+			e.Data = map[string]any{}
+		}
+		if row.Pos != nil {
+			e.Data["pos"] = map[string]any{"x": row.Pos.X, "y": row.Pos.Y, "z": row.Pos.Z}
+		}
+		e.Data["self"] = row.Self
+		e.Data["speed_xy"] = row.HorzSpeed
+		e.Data["speed_z"] = row.VertSpeed
+		if row.Simulated {
+			e.Data["simulated"] = true
+		}
+		if row.Kind == "knockback_land" {
+			e.Data["air_ms"] = row.AirMS
+			e.Data["drop"] = row.Drop
+		}
+	}
 	s.event(e)
 }
 

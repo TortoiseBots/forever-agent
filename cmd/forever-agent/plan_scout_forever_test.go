@@ -20,6 +20,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planscout"
+	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
@@ -86,6 +87,34 @@ type fakeForeverServe struct {
 	gmRefusal map[string]string
 	// blockStatus and blockUnits wait for the context in Status and Units (the --max-minutes ceiling).
 	blockStatus, blockUnits bool
+	// ray answers a walk_ray read: nil answers Known and In for every point. noWalkRay makes the serve answer -32601, the
+	// way a serve built before the walk_ray method does.
+	ray       func(from [3]float32, x, y, z float32) serveclient.WalkRay
+	noWalkRay bool
+	rayCalls  int
+	// rayErr makes every walk_ray read fail with this error (not a missing method).
+	rayErr error
+}
+
+func (f *fakeForeverServe) WalkRay(_ context.Context, from *[3]float32, x, y, z float32) (serveclient.WalkRay, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rayErr != nil {
+		f.rayCalls++
+		return serveclient.WalkRay{}, f.rayErr
+	}
+	if f.noWalkRay {
+		return serveclient.WalkRay{}, &serveclient.Error{Code: rpc.CodeMethodNotFound, Message: "Method not found: walk_ray", Method: "walk_ray"}
+	}
+	f.rayCalls++
+	var at [3]float32
+	if from != nil {
+		at = *from
+	}
+	if f.ray != nil {
+		return f.ray(at, x, y, z), nil
+	}
+	return serveclient.WalkRay{Known: true, In: true, Source: "navmesh_raycast"}, nil
 }
 
 func newFakeForeverServe(units ...serveclient.Unit) *fakeForeverServe {
@@ -697,5 +726,104 @@ func TestForeverParents(t *testing.T) {
 		if err := p.Set(s); err == nil {
 			t.Errorf("%q accepted, want refused", s)
 		}
+	}
+}
+
+// TestScoutForeverReadsSightFromTheServe is the live finding "live_los: no q los answer": the live pass asks the serve's
+// walk_ray method from each spot's own sight point to every live unit it read, and stores the answers the checks read. A unit
+// the mesh cannot place stays unanswered.
+func TestScoutForeverReadsSightFromTheServe(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPlanFile(t, dir, "scout_los", true)
+	fake := newFakeForeverServe(
+		serveclient.Unit{GUID: "0x00000000000000000000000000000065", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: 10, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+		serveclient.Unit{GUID: "0x00000000000000000000000000000066", Type: "creature", Entry: 4100, Name: "Dead",
+			X: 11, Y: 0, Z: 0, Level: 30, Dead: true},
+	)
+	fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+		return serveclient.WalkRay{Known: true, In: false, Hit: 3, Source: "navmesh_raycast"}
+	}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_los", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	fake.mu.Lock()
+	calls := fake.rayCalls
+	fake.mu.Unlock()
+	if calls == 0 {
+		t.Fatal("the live pass never asked the serve for sight")
+	}
+	rep := foreverReport(t, dir, "scout_los")
+	for _, n := range rep.Notes {
+		if strings.Contains(n, "no walk_ray method") {
+			t.Fatalf("the report says the serve has no walk_ray method: %q", n)
+		}
+	}
+}
+
+// TestScoutForeverWithoutALosMethodStillFinishes: a serve without the method answers -32601; the pass notes it once and
+// carries on with its other reads instead of aborting.
+func TestScoutForeverWithoutALosMethodStillFinishes(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPlanFile(t, dir, "scout_nolos", true)
+	fake := newFakeForeverServe(
+		serveclient.Unit{GUID: "0x00000000000000000000000000000065", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: 10, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+	)
+	fake.noWalkRay = true
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_nolos", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	rep := foreverReport(t, dir, "scout_nolos")
+	n := 0
+	for _, note := range rep.Notes {
+		if strings.Contains(note, "no walk_ray method") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d notes about the missing walk_ray method, want 1: %v", n, rep.Notes)
+	}
+}
+
+// TestScoutForeverOneRayErrorDoesNotAbortThePass: a walk_ray read that fails (a build without cgo answers an error on
+// every read) leaves its steps unanswered, is noted once, and the pass finishes its other reads.
+func TestScoutForeverOneRayErrorDoesNotAbortThePass(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPlanFile(t, dir, "scout_rayerr", true)
+	fake := newFakeForeverServe(
+		serveclient.Unit{GUID: "0x00000000000000000000000000000065", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: 10, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+	)
+	fake.rayErr = errors.New("navmesh: the engine is not built")
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_rayerr", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("a failed walk_ray read aborted the pass: code %d err %q", code, errOut)
+	}
+	rep := foreverReport(t, dir, "scout_rayerr")
+	n := 0
+	for _, note := range rep.Notes {
+		if strings.Contains(note, "walk_ray read") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d notes about the failed read, want 1: %v", n, rep.Notes)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.paths) == 0 {
+		t.Fatal("the pass never reached its path reads after the failed ray")
 	}
 }
