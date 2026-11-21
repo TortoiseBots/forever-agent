@@ -71,7 +71,6 @@ Every `run` flag and its default:
 | `--session` | none, repeatable | override a session: `NAME=ADDR[@TOKENFILE]` (the name must exist; the address is re-checked for loopback) |
 | `--soap-host` / `--soap-port` / `--soap-user` | `127.0.0.1` / `7878` / none | the console backend for `soap` steps; `--soap-user` enables it |
 | `--soap-password-file` / `--soap-password-env` | none / `FOREVER_SOAP_PASSWORD` | where the console password comes from; never printed |
-| `--soap-allow-non-loopback` | off | allow a console host that is not loopback |
 
 The run writes `raw.txt` (seq, times, expanded text), `norm.txt` (templates, no timings, DB counts kept), `transcript.jsonl` (one object per line) and `result.json`. Exit 0 when every check passed, 14 when a check failed, 15 on abort or error, 2 on usage. `scenario` uses plain flag parsing: put flags before the file name. On/off flags take `=` (`--force=true`); a space-separated value is read as the file instead.
 

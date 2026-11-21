@@ -91,10 +91,10 @@ speaks plain HTTP.
 
 `internal/forever/soap`:
 
-* **Config** (`host`, `port`, `user`, `password_file` or `password_env`, `timeout_ms`, `allow_non_loopback`) with the
+* **Config** (`host`, `port`, `user`, `password_file` or `password_env`, `timeout_ms`) with the
   core's defaults. `Validate` refuses a scheme, a path or userinfo in the host, a port outside 1-65535, a timeout
-  over 2 minutes, a missing user and — unless `AllowNonLoopback` — any host that is not `127.0.0.1`, `::1` or
-  `localhost`. The transport checks the connected peer as well, so a name that resolves off the machine is refused.
+  over 2 minutes, a missing user and any host that is not `127.0.0.1`, `::1` or `localhost` (the core's SOAP
+transport is plain HTTP, so there is no opt-out: the credential never crosses the network). The transport checks the connected peer as well, so a name that resolves off the machine is refused.
 * **Password** from a file (read like every other secret here: regular file, mode 0600, no symlink, at most 4 KiB)
   or from an environment variable (default `FOREVER_SOAP_PASSWORD`). Errors name the path or the variable, never the
   value; the value lives in the Basic header only, redirects are refused so it cannot be forwarded, and a transport
@@ -106,7 +106,7 @@ speaks plain HTTP.
   per-instance setup, never a world change.
 
 `forever-agent forever soap [--host H] [--port N] [--user NAME] [--password-file FILE | --password-env VAR]
-[--allow-non-loopback] [--timeout DURATION] COMMAND` runs one command and prints its result. The password is never a
+[--timeout DURATION] COMMAND` runs one command and prints its result. The password is never a
 flag value (so it is not in the process list) and nothing prints it; a refused or failed command exits 1 with one
 line, a bad flag or config exits 2.
 
@@ -114,7 +114,7 @@ line, a bad flag or config exits 2.
 
 * **Scenarios**: a new step `{"do":"soap","text":".instance setbossstate 0 3"}` runs a console command with no
   session (variables expand; the GM deny list applies at load and at run). `scenario run` builds the backend from
-  `--soap-host/--soap-port/--soap-user/--soap-password-file/--soap-password-env/--soap-allow-non-loopback`; without
+  `--soap-host/--soap-port/--soap-user/--soap-password-file/--soap-password-env`; without
   a backend the step is an ERROR naming the flags, so a setup scenario cannot pass with its setup missing. The
   result lines are recorded in the transcript.
 * **Trials bench**: a slots file's per-server `forever` block may carry
@@ -126,23 +126,31 @@ line, a bad flag or config exits 2.
 ## Tests
 
 * `objects/knockback_test.go`: hand-made `SMSG_MOVE_KNOCK_BACK` / `SMSG_MOVE_UPDATE_KNOCK_BACK` round trips and the
-  ack layout, every prefix length and a trailing byte refused, an empty mover and NaN/Inf flight fields refused.
-* `world/knockback_test.go`: one ack with the sequence index and the mover's block, no ack for the echo or for a
-  packet naming another mover, a relayed takeoff and a landing paired across an airborne update with the air time
-  and drop, no second landing, a teleport and a 15 s-old takeoff dropped as missed.
+  ack layout, every prefix length and a trailing byte refused, an empty mover and NaN/Inf flight or position fields
+  refused, and an impossible removed-forces count refused instead of spinning.
+* `objects/mover_test.go`: a knockback ends a running leg with no stop packet and refuses walk, path, chase, facing
+  and stop until the landing.
+* `world/knockback_test.go`: one ack with the sequence index and the mover's airborne block (flight flags and jump
+  values), the client's own arc (heartbeat, fall-land, self landing row, air time), no ack for the echo or for a
+  packet naming another mover, a relayed takeoff and a landing paired with the air time and drop, no second landing,
+  a second takeoff counted as missed, the order list pruned after a landing, a non-finite drop refused, a teleport
+  and a 15 s-old takeoff dropped as missed, and both knockback packets held as map content.
 * `driver/knockback_test.go`: the knockback rows' trace events, at the rows' own times and with their fields.
 * `bughunt/rules_knockback_test.go`: a landing in a new pack, the same pack (no finding), the ledge shape, no
   takeoff / no position / no frame as UNKNOWN windows, and the skip without a timed landing. The registry test pins
   rule 20's name and group.
 * `soap/soap_test.go`: a fake core-shaped endpoint answers (Basic auth, SOAPAction, escaped command, exact text), a
-  SOAP fault, 401 and 403 and a closed endpoint are errors with no password in them, the loopback rules (including
-  the explicit flag and bad hosts), the private password file and the environment fallback, and the deny list.
+  SOAP fault, 401 and 403 and a closed endpoint are errors with no password in them, the loopback rule (no
+  non-loopback host at all), redaction before truncation, the private password file and the environment fallback,
+  and the deny list with the core's prefix matching.
 * `cmd/forever-agent/forever_soap_test.go`: the CLI end to end, the non-loopback refusal, the deny list, and the
   password absent from stdout and stderr.
 * `scenario/console_test.go`: a `soap` step with variable expansion and recorded result lines, an ERROR without a
-  backend, and a world-changing step refused at parse time.
+  backend, and a world-changing step refused at parse time, at run time through a variable, and in the core's
+  prefix spelling.
 * `trials/live/console_test.go`: the `server_console` row for success, failure and no backend, and the slots block's
-  JSON shape.
+  JSON shape. `cmd/forever-agent/trials_setup_test.go`: `soap_setup` commands travel without a `soap` block (so the
+  setup is INVALID), a configured backend is built, and a failed console row ends the setup before provisioning.
 
 ## Gates
 
@@ -175,8 +183,8 @@ suite passed at `687448f3`.
    landing and flag a landing within 10 yd of two hostiles absent from the takeoff.
 3. **SOAP.** With `SOAP.Enabled = 1`, `SOAP.IP = 127.0.0.1` and an administrator account, run
    `forever-agent forever soap --user NAME --password-file FILE .pinfo`: the account's own info comes back; a wrong
-   password is HTTP 401 and the process prints nothing of the password; `--host` with a LAN address without
-   `--allow-non-loopback` is refused before a connection. Then a scenario with
+   password is HTTP 401 and the process prints nothing of the password; `--host` with a LAN address is refused before a
+   connection (there is no non-loopback opt-out). Then a scenario with
    `{"do":"soap","text":".instance setbossstate 0 3"}` and the same flags must print the core's state line and the
    step's result lines must be in the transcript.
 4. **Bench setup row.** A slots file with a `soap` block and `"soap_setup": [".saveall"]` must add a
@@ -185,15 +193,17 @@ suite passed at `687448f3`.
 
 ## Known limits
 
-* The client does not simulate its own ballistic flight. The ack carries the block the mover holds at the moment of
-  the packet (the server only validates it), and the mover's own landing is paired only if a later position update
-  for it arrives; the server does not echo the mover's own ordinary movement updates back to it (MovementHandler.cpp:580-582
-  skips the sender), so a self landing is usually unknown. The observed landings are other movers'.
+* The client's own flight is a ballistic arc on flat ground: it is thrown from its current position with the
+  packet's direction and speeds under `Movement::gravity`, sends the airborne heartbeats and `CMSG_MOVE_FALL_LAND`,
+  and lands back at the starting height because this session has no terrain floor. The ack carries the airborne
+  block (falling and knockback bits, the order's jump values), not the standing one. Collisions (a slope, a bridge,
+  water) are a real client's; the observed landings of other movers still come from their position updates.
 * A relayed knockback has no direction or speeds: the core's update packet does not carry them.
 * Server-side bots get a parabolic spline from `Unit::KnockbackFrom` (Unit.cpp:13171-13175), not
   `SMSG_MOVE_KNOCK_BACK`; those knockbacks are visible as `SMSG_ON_MONSTER_MOVE` (already parsed) and are not ruled
   on by rule 20. A fleet of real clients (this repository's setup) is where these packets appear.
 * The landing rule uses the falling flag; a knockback that never sets it pairs the first position update, which is
   the best the packet states.
-* SOAP has no TLS in this core; the helper refuses non-loopback hosts by default and never follows a redirect, but a
-  deployment that enables the endpoint on an interface must protect it itself.
+* SOAP has no TLS in this core, so the helper refuses every non-loopback host and never follows a redirect: the
+  administrator's credential never crosses the network. A deployment that enables the endpoint on an interface
+  must protect it itself.
