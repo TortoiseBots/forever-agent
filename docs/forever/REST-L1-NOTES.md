@@ -67,3 +67,11 @@ untouched.
   binary and pid outside, a symlinked token, no slot.json) and `--no-auth`
   dirs.
 * `internal/slotdir/slotdir_test.go`: the shared reader and checker.
+
+## Gates
+
+* `make fmt-check`, `make cross`, `staticcheck ./cmd/... ./internal/forever/... ./internal/slotdir/...`: clean.
+* `vm-test ta <worktree>` on commit c8338da0: `RESULT: PASS  kind=ta wt=wt-fa-l1 sha=c8338da0 dirty=0 files=2312`.
+* `go test -race -count=1 -timeout 20m ./internal/forever/serveclient/... ./internal/rpc/... ./internal/slotdir/...`
+  (the rpc package is `internal/rpc`): `RESULT: PASS  kind=ta wt=wt-fa-l1 sha=c8338da0 dirty=0 files=2312`.
+  `internal/forever/world` also passed under `-race` (590 s, close to Go's 10 min default: use a longer timeout).
