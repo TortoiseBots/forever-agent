@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // Record is one captured packet: the file it was written to, its core opcode and its payload.
@@ -25,11 +27,20 @@ type Record struct {
 // ErrNoRuns is what ReadDir returns when the directory holds neither a manifest nor a run directory.
 var ErrNoRuns = errors.New("capturedir: the directory holds no capture run")
 
-// ReadDir reads the capture under dir. dir may be one run directory (it holds manifest.tsv) or a parent of run
-// directories; every immediate subdirectory with a manifest.tsv is read, in name (clock) order.
-func ReadDir(dir string) ([]Record, error) {
+// Stat is one opcode's totals in a capture: its core opcode, the name this client gives it and how many packets and
+// payload bytes the manifests record for it. A core opcode without a name in this build is named by its number.
+type Stat struct {
+	Opcode  uint32 `json:"opcode"`
+	Name    string `json:"name"`
+	Packets int    `json:"packets"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// captureRuns resolves dir to its run directories: the directory itself when it holds a manifest, else every
+// immediate subdirectory that does, in name (clock) order.
+func captureRuns(dir string) ([]string, error) {
 	if _, err := os.Stat(filepath.Join(dir, "manifest.tsv")); err == nil {
-		return ReadRun(dir)
+		return []string{dir}, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -50,6 +61,16 @@ func ReadDir(dir string) ([]Record, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNoRuns, dir)
 	}
 	sort.Strings(runs)
+	return runs, nil
+}
+
+// ReadDir reads the capture under dir. dir may be one run directory (it holds manifest.tsv) or a parent of run
+// directories; every immediate subdirectory with a manifest.tsv is read, in name (clock) order.
+func ReadDir(dir string) ([]Record, error) {
+	runs, err := captureRuns(dir)
+	if err != nil {
+		return nil, err
+	}
 	var out []Record
 	for _, run := range runs {
 		recs, err := ReadRun(run)
@@ -61,15 +82,62 @@ func ReadDir(dir string) ([]Record, error) {
 	return out, nil
 }
 
-// ReadRun reads one run directory: its manifest, then each packet file. A manifest line that is not three fields,
-// an opcode that is not hex, a length that does not match the file, a packet file that is missing, and a name that
-// is not a plain file name inside the run are all errors.
-func ReadRun(dir string) ([]Record, error) {
+// Stats sums a capture's manifests per opcode, one row per core opcode, by name. dir is what ReadDir takes: one run
+// directory or a parent of them. Only manifest.tsv is read, so the answer is the same when a payload file is
+// missing or was deleted (a run that was cut short, a fixture whose payloads went to a generator).
+func Stats(dir string) ([]Stat, error) {
+	runs, err := captureRuns(dir)
+	if err != nil {
+		return nil, err
+	}
+	byCore := make(map[uint32]*Stat)
+	for _, run := range runs {
+		entries, err := readManifest(run)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			stat := byCore[e.core]
+			if stat == nil {
+				name := wire.ServerName(e.core)
+				if name == "" {
+					name = fmt.Sprintf("0x%06X", e.core)
+				}
+				stat = &Stat{Opcode: e.core, Name: name}
+				byCore[e.core] = stat
+			}
+			stat.Packets++
+			stat.Bytes += int64(e.size)
+		}
+	}
+	out := make([]Stat, 0, len(byCore))
+	for _, stat := range byCore {
+		out = append(out, *stat)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Opcode < out[j].Opcode
+	})
+	return out, nil
+}
+
+// manifestEntry is one parsed manifest line: the packet file's name, its core opcode and its payload length.
+type manifestEntry struct {
+	name string
+	core uint32
+	size int
+}
+
+// readManifest parses a run's manifest. A line that is not three fields, an opcode that is not hex, a negative
+// length and a name that is not a plain file name inside the run are errors. No payload is opened.
+func readManifest(dir string) ([]manifestEntry, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.tsv"))
 	if err != nil {
 		return nil, fmt.Errorf("capturedir: %w", err)
 	}
-	var out []Record
+	var out []manifestEntry
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue
@@ -90,14 +158,29 @@ func ReadRun(dir string) ([]Record, error) {
 		if err != nil || size < 0 {
 			return nil, fmt.Errorf("capturedir: %q: the length %q", line, fields[2])
 		}
-		payload, err := os.ReadFile(filepath.Join(dir, name))
+		out = append(out, manifestEntry{name: name, core: uint32(core), size: size})
+	}
+	return out, nil
+}
+
+// ReadRun reads one run directory: its manifest, then each packet file. A manifest line that is not three fields,
+// an opcode that is not hex, a length that does not match the file, a packet file that is missing, and a name that
+// is not a plain file name inside the run are all errors.
+func ReadRun(dir string) ([]Record, error) {
+	entries, err := readManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, 0, len(entries))
+	for _, e := range entries {
+		payload, err := os.ReadFile(filepath.Join(dir, e.name))
 		if err != nil {
 			return nil, fmt.Errorf("capturedir: %w", err)
 		}
-		if len(payload) != size {
-			return nil, fmt.Errorf("capturedir: %s is %d bytes, the manifest says %d", name, len(payload), size)
+		if len(payload) != e.size {
+			return nil, fmt.Errorf("capturedir: %s is %d bytes, the manifest says %d", e.name, len(payload), e.size)
 		}
-		out = append(out, Record{Name: name, Opcode: uint32(core), Payload: payload})
+		out = append(out, Record{Name: e.name, Opcode: e.core, Payload: payload})
 	}
 	return out, nil
 }

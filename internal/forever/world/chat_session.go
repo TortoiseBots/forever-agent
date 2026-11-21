@@ -122,6 +122,7 @@ func (s *session) handleChat(p worldconn.Packet) error {
 		s.feedCommand(line)
 		chat.SanitiseLine(&line)
 		s.chat.Add(line)
+		s.eventChat(line)
 		s.opts.logf("chat: %s", s.chatLineText(line))
 	case wire.SMSGPrintNotification:
 		text, err := chat.ParseNotification(p.Payload)
@@ -187,6 +188,7 @@ func (s *session) addNotice(text string) {
 	s.report.Chat.Notices++
 	s.feedCommand(chat.Line{Type: chat.TypeSystem, Text: text})
 	s.chat.Add(chat.Line{Type: chat.TypeSystem, Text: text})
+	s.eventChat(chat.Line{Type: chat.TypeSystem, Text: text})
 	s.opts.logf("chat: system: %s", text)
 }
 
@@ -279,6 +281,7 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_PARTY_INVITE: %w", err)
 		}
 		s.party.ApplyInvite(inv)
+		s.eventPartyPacket("invite", map[string]any{"can_accept": inv.CanAccept, "roles": inv.ProposedRoles}, inv.InviterGUID, chat.SanitiseName(inv.InviterName))
 		s.opts.logf("party: invite from %s (can accept %v, roles %d, lfg slots %d)",
 			chat.SanitiseName(inv.InviterName), inv.CanAccept, inv.ProposedRoles, len(inv.LfgSlots))
 	case wire.SMSGPartyUpdate:
@@ -286,7 +289,8 @@ func (s *session) handleParty(p worldconn.Packet) error {
 		if err != nil {
 			return fmt.Errorf("world: SMSG_PARTY_UPDATE: %w", err)
 		}
-		if !s.party.ApplyUpdate(u) {
+		applied := s.party.ApplyUpdate(u)
+		if !applied {
 			switch {
 			case s.party.LastInvalid != "":
 				s.opts.logf("party: invalid roster: %s", s.party.LastInvalid)
@@ -294,12 +298,14 @@ func (s *session) handleParty(p worldconn.Packet) error {
 				s.opts.logf("party: unexpected roster: %s", s.party.LastUnexpected)
 			}
 		}
+		s.eventPartyPacket("roster", map[string]any{"applied": applied, "members": len(u.Members), "leader_guid": eventGUID(u.LeaderGUID)}, u.LeaderGUID, "")
 		s.printParty()
 	case wire.SMSGPartyMemberFullState:
 		ms, err := party.ParseMemberState(p.Payload)
 		if err != nil {
 			return fmt.Errorf("world: SMSG_PARTY_MEMBER_FULL_STATE: %w", err)
 		}
+		s.eventPartyPacket("member_stats", map[string]any{"level": ms.Level, "health": ms.Health, "max_health": ms.MaxHealth, "auras": ms.Auras}, ms.GUID, "")
 		if s.party.ApplyMemberState(ms) {
 			for _, m := range s.party.Members {
 				if m.GUID == ms.GUID {
@@ -321,6 +327,7 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_GROUP_DECLINE: %w", err)
 		}
 		s.party.ApplyDeclined(chat.SanitiseName(name))
+		s.eventPartyPacket("decline", nil, wire.EmptyGUID, chat.SanitiseName(name))
 		s.opts.logf("party: %s declined the invite", chat.SanitiseName(name))
 	case wire.SMSGGroupUninvite:
 		reason, err := party.ParseKicked(p.Payload)
@@ -328,12 +335,14 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_GROUP_UNINVITE: %w", err)
 		}
 		s.party.ApplyKicked(reason)
+		s.eventPartyPacket("kicked", map[string]any{"reason": reason}, wire.EmptyGUID, "")
 		s.opts.logf("party: kicked from the group (reason %d)", reason)
 	case wire.SMSGGroupDestroyed:
 		if err := party.ParseGroupDestroyed(p.Payload); err != nil {
 			return fmt.Errorf("world: %w", err)
 		}
 		s.party.ApplyDestroyed()
+		s.eventPartyPacket("destroyed", nil, wire.EmptyGUID, "")
 		s.opts.logf("party: group destroyed")
 	case wire.SMSGGroupNewLeader:
 		l, err := party.ParseLeaderChanged(p.Payload)
@@ -341,6 +350,7 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_GROUP_NEW_LEADER: %w", err)
 		}
 		s.party.ApplyLeaderChanged(l)
+		s.eventPartyPacket("leader", map[string]any{"index": l.Index}, wire.EmptyGUID, chat.SanitiseName(l.Name))
 		s.opts.logf("party: leader is now %s", chat.SanitiseName(l.Name))
 	case wire.SMSGPartyCommandResult:
 		c, err := party.ParseCommandResult(p.Payload)
@@ -348,6 +358,7 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_PARTY_COMMAND_RESULT: %w", err)
 		}
 		s.party.ApplyCommandResult(c)
+		s.eventPartyPacket("command", map[string]any{"operation": party.OperationName(c.Operation), "result": party.ResultName(c.Result)}, wire.EmptyGUID, chat.SanitiseName(c.Name))
 		s.opts.logf("party: %s %s: %s", party.OperationName(c.Operation), chat.SanitiseName(c.Name), party.ResultName(c.Result))
 	case wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		s.party.ReadyChecks++
