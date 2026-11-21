@@ -2,7 +2,6 @@ package world
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -42,20 +41,6 @@ func TestServeCommanderBindNeverAfterAFailedLeave(t *testing.T) {
 		}
 		if rec.binds != 0 {
 			t.Fatalf("leave_party=%v: bound %d times after the failure", leave, rec.binds)
-		}
-	}
-}
-
-// TestEventLogLimitIsDocumented: event_log serves chat rows only for now, and the README and the scenario guide
-// say so, so a scenario that waits on a combat event is not left to time out without a reason.
-func TestEventLogLimitIsDocumented(t *testing.T) {
-	for _, path := range []string{"../../../README.md", "../../../docs/okf/observability/scenarios-guide.md"} {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(raw), "chat rows only for now") {
-			t.Errorf("%s does not say that event_log carries chat rows only for now", path)
 		}
 	}
 }

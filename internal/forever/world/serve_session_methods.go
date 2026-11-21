@@ -165,48 +165,6 @@ type serveChatParams struct {
 	To   string `json:"to,omitempty"`
 }
 
-// ServeEventLogEvent is one event_log row: the events.Event JSON keys the scenario runner and the dashboard read.
-// This server's rows are the chat log's (kind chat, whisper or system); data.type is the chat type word and
-// data.channel the channel name.
-type ServeEventLogEvent struct {
-	Seq    uint64         `json:"seq"`
-	Kind   string         `json:"kind"`
-	Source string         `json:"source,omitempty"`
-	Text   string         `json:"text,omitempty"`
-	Data   map[string]any `json:"data,omitempty"`
-}
-
-// ServeEventLogPage is event_log's result: the rows above since, oldest first, and the ring's bounds.
-type ServeEventLogPage struct {
-	Events  []ServeEventLogEvent `json:"events"`
-	Next    uint64               `json:"next"`
-	Oldest  uint64               `json:"oldest"`
-	Dropped bool                 `json:"dropped"`
-	More    bool                 `json:"more"`
-}
-
-// eventLogOfChat maps a chat_log page onto the event_log page: the same cursor, each line a row whose kind is
-// system for a system line, whisper for a whisper and chat for the rest.
-func eventLogOfChat(page ServeChatPage) ServeEventLogPage {
-	out := ServeEventLogPage{Events: []ServeEventLogEvent{}, Next: page.Next, Oldest: page.Oldest, Dropped: page.Dropped, More: page.More}
-	for _, e := range page.Events {
-		typ := strings.ToLower(strings.TrimPrefix(e.Type, "CHAT_MSG_"))
-		kind := "chat"
-		switch {
-		case typ == "system":
-			kind = "system"
-		case strings.HasPrefix(typ, "whisper"):
-			kind = "whisper"
-		}
-		data := map[string]any{"type": typ}
-		if e.Channel != "" {
-			data["channel"] = e.Channel
-		}
-		out.Events = append(out.Events, ServeEventLogEvent{Seq: e.Seq, Kind: kind, Source: e.Source, Text: e.Text, Data: data})
-	}
-	return out
-}
-
 type serveChatLogParams struct {
 	Since  uint64 `json:"since"`
 	Limit  int    `json:"limit,omitempty"`
@@ -429,13 +387,6 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("chat_log", serveReadTyped(st, func(s *session, ctx context.Context, p serveChatLogParams) (ServeChatPage, error) {
 		return s.serveChatLog(ctx, p)
-	}))
-	srv.Register("event_log", serveReadTyped(st, func(s *session, ctx context.Context, p serveChatLogParams) (ServeEventLogPage, error) {
-		page, err := s.serveChatLog(ctx, p)
-		if err != nil {
-			return ServeEventLogPage{}, err
-		}
-		return eventLogOfChat(page), nil
 	}))
 	srv.Register("events", rpc.Typed(func(ctx context.Context, p serveEventsParams) (ServeEventsPage, error) {
 		page, err := st.serveEvents(ctx, p)

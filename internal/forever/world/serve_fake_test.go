@@ -551,24 +551,6 @@ func TestServeStatusChatAndLogout(t *testing.T) {
 	if !found {
 		t.Fatalf("chat_log %+v", page)
 	}
-	// event_log is the same cursor over the same lines, in the events.Event keys the scenario runner reads.
-	var elog ServeEventLogPage
-	json.Unmarshal(a.mustCall(t, "event_log", map[string]any{"since": 0, "limit": 1000, "wait_ms": 0}), &elog)
-	if len(elog.Events) != len(page.Events) || elog.Next != page.Next || elog.Oldest != page.Oldest {
-		t.Fatalf("event_log %+v does not follow chat_log %+v", elog, page)
-	}
-	sawSystem := false
-	for i, e := range elog.Events {
-		if e.Seq != page.Events[i].Seq || e.Text != page.Events[i].Text || e.Data["type"] == "" || e.Data["type"] == nil {
-			t.Fatalf("event_log row %d %+v, chat_log row %+v", i, e, page.Events[i])
-		}
-		if e.Text == "SERVE-SYSTEM" && e.Kind == "system" {
-			sawSystem = true
-		}
-	}
-	if !sawSystem {
-		t.Fatalf("event_log has no system row for SERVE-SYSTEM: %+v", elog)
-	}
 
 	var out serveLogoutResult
 	json.Unmarshal(a.mustCall(t, "logout", nil), &out)
