@@ -78,8 +78,8 @@ Commits: L2 `68068ac8`, L5 `717347d2`, cleanup `a0147d71`, file-server fallback 
 - `make cross`: exit 0 (`GOOS=windows GOARCH=amd64`, `GOOS=darwin GOARCH=arm64` builds plus `go vet ./cmd/... ./internal/forever/...`).
 - `staticcheck ./...`: no findings (exit 0; three U1000 dead-code findings on the way were removed).
 - `go test -race ./internal/scenario/ ./internal/dashboard/`: both `ok` (scenario 1.2 s, dashboard 21.4 s).
-- `vm-test ta ~/wt-fa-rest2`: `RESULT: PASS  kind=ta wt=wt-fa-rest2 sha=7102707f dirty=0 files=2343`, `rc=0  vm_duration=2324s  laptop_wall=2338s`; log `~/TortoiseBots-audit/vm-test-logs/wt-fa-rest2-20261121-045241-157180-7b69.log`.
-- Hygiene: `git diff origin/main | grep -nE '100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'` empty (0 matches).
+- `vm-test ta <local worktree>`: `RESULT: PASS  kind=ta sha=7102707f dirty=0 files=2343`, `rc=0  vm_duration=2324s  laptop_wall=2338s`; the vm-test log of that run.
+- Hygiene: a private-path grep of the diff is empty (0 matches).
 
 ## Live checks for the lead's queue (no live run this round)
 
@@ -136,8 +136,7 @@ on a C3 daemon: the five-member card, one order button answering through
 - `staticcheck ./...`: exit 0, no findings.
 - `go test -count=1 ./internal/dashboard/ ./internal/scenario/ ./internal/forever/serveclient/`: all `ok`
   (`-race` run of the same three also `ok`).
-- `vm-test ta ~/wt-fa-rest2`:
-  `RESULT: PASS  kind=ta wt=wt-fa-rest2 sha=c64884c2 dirty=0 files=2355`,
-  `rc=0  vm_duration=1570s  laptop_wall=1579s`; log
-  `~/TortoiseBots-audit/vm-test-logs/wt-fa-rest2-20261121-073407-1794138-01ca.log`.
-- Hygiene on the fix commit: `git show c64884c2 | grep -E '100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'` empty.
+- `vm-test ta <local worktree>`:
+  `RESULT: PASS  kind=ta sha=c64884c2 dirty=0 files=2355`,
+  `rc=0  vm_duration=1570s  laptop_wall=1579s`; the vm-test log of that run.
+- Hygiene on the fix commit: a private-path grep of the fix commit is empty.

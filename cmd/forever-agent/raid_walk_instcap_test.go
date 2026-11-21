@@ -434,7 +434,7 @@ func TestWalkInstanceCapFromFlagAndFile(t *testing.T) {
 	}
 }
 
-// The live finding on 6f4018b: with the per-server caps in the DEFAULT slots dir (~/.config/forever-agent/
+// The live finding on 6f4018b: with the per-server caps in the DEFAULT slots dir (forever-agent/
 // instance-cap-per-account.json = {"test1": 30, "test2": 30}) a walk still printed "the core's cap is 5"
 // and waited on "the oldest of 4". The resolution must read the file beside the default slots file, not only beside
 // an explicit --slots.
