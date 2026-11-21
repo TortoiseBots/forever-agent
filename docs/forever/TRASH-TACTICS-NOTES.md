@@ -78,7 +78,7 @@ Hand-made combat rows (never captures); the example file loads with both entries
 
 ## Gates
 
-Run on a clean committed tree at `<sha>`, after the <review round>:
+Run on a clean committed tree at `54bd2809`, with no review round in between:
 
 ```
 make fmt-check            -> (no output) rc=0
@@ -90,8 +90,8 @@ go vet ./...              -> rc=0
 The VM suite:
 
 ```
-RESULT: PASS  kind=ta wt=wt-fa-trash sha=<sha> dirty=0 files=<n>
-rc=0  vm_duration=<s>s  laptop_wall=<s>s
+RESULT: PASS  kind=ta wt=wt-fa-trash sha=54bd2809 dirty=0 files=2349
+rc=0  vm_duration=749s  laptop_wall=770s
 ```
 
 No live run was made this round.
