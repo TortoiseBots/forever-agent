@@ -132,6 +132,21 @@ result is printed, so a caller must not retry an irreversible method as if the f
 `Commander` and `Teardown` need W3/W2), loopback addresses only, guids as text with `Key()` delegating to the run-map
 key, `-32005` retried for 60 s and `-32002` ending the call at once.
 
+`forever-agent fleet --forever --config FILE --slots FILE [--server NAME] [--stagger D] [--wait D]
+[--stop-on-failure]` runs one `forever serve` per fleet-file member (`{account, character, dir, listen,
+password_file}`) instead of one old `login` child. The serve's connection flags come from the slots file's
+`forever` block (`rest`, `rpc`, `ca`, `build`; `--server` picks it when the file names more than one). Each
+child is `forever serve --dir <dir> --listen <listen> --account <account> --character <character>
+--password-file <file>` plus those flags; the fleet file carries no secret, only paths and names. `online`
+(the serve link lifecycle) counts as in world, on this path only; starts are paced one login per 5 s under the
+per-IP limit. Before any login every member is checked against the slots file: its account must be a slot
+account, its character allowed, and no live lease of another holder may hold that account; accounts are
+unique in a fleet file. `--slots` and `--server` are refused without `--forever`.
+`forever-agent slot setup --forever <server> <slot> --holder NAME ...` leases the slot and builds the dir
+as today (plans included) but writes no `settings.json` and prints the `forever serve --dir` line the fleet
+child runs; `slot.json` carries the real server, slot, holder and lease id, so `teardown` and `rpc` work on
+the dir. `forever serve --dir` keeps a matching `slot.json` and refuses a foreign non-empty dir.
+`--mmaps-dir` is refused with `--forever` (a serve takes `--navmesh` itself).
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
 `CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as
