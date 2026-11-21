@@ -80,9 +80,13 @@ carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `
 `wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
 answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
 replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
-own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
+own login writes is kept. Each row also carries `spell_name` when the server named the spell: one batched,
+cached `CMSG_DB_QUERY_BULK` per page for the ids the page names, with the row's `spell_id` as the fallback.
+Its `wait_ms` is spent off the session goroutine, on the
 ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
-concurrent long-polls all return at their own cap.
+concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
+faction template against the character's own (fetched once from the server and cached), so `true` keeps only
+what is hostile to the character and `false` only what is not.
 
 The character's own inventory is `inv`: `{known, coinage, items[], quest_log[], free_slot, stale?, stale_reason?}`. Each item row is
 `{guid, container, slot, entry, count, durability?, max_durability?, placed, unconfirmed?}`, where `container` is 255 for the
