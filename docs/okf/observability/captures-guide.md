@@ -32,6 +32,8 @@ turtle-agent capture-stats <walk-dir>/run.twcap
 
 `scrub-check` (`--config` defaults to the settings file) fails when the capture holds an account name or password from the settings file in any stored form. Run it on every fixture before committing. A clean file prints `<path>: clean, N records`. `capture-stats` prints one line per opcode plus a `TOTAL` line; it takes no flags.
 
+A `forever serve --capture-dir DIR` writes a different shape: one run directory per link, each with a `manifest.tsv` (file name, core opcode, length) and one payload file per packet. `forever-agent forever capture-stats DIR` reads the manifests only and prints packets and payload bytes per core opcode plus a `TOTAL`; a payload deleted after the run changes no count, and no captured byte is printed. The dirs may be one run or the parent of several.
+
 ## 3. Decode the capture into events
 
 ```sh

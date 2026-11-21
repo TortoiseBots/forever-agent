@@ -342,3 +342,72 @@ func TestStitchRefusesAnImageOverTheCap(t *testing.T) {
 		t.Errorf("a 4096 px map is refused: %v", err)
 	}
 }
+
+// TestForeverRefusesSymlinksOutOfTheRoots: the extract and the dbc folder are the only places RunForever reads, so
+// a Map.db2, map folder or tile that is a link elsewhere is refused as if it were absent.
+func TestForeverRefusesSymlinksOutOfTheRoots(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	// Map.db2 is a link out of --db2.
+	dbdir := filepath.Join(root, "dbc")
+	outDB := filepath.Join(outside, "Map.db2")
+	writeFile(t, outDB, foreverMapDB2(t, []string{"Zul"}, []string{"Zul"}, []uint32{209}, []uint32{1}))
+	if err := os.MkdirAll(dbdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outDB, filepath.Join(dbdir, "Map.db2")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RunForever(Options{ClientDir: filepath.Join(root, "client"), DB2Dir: dbdir,
+		OutDir: filepath.Join(root, "maps"), Maps: []uint32{209}})
+	if err == nil || !strings.Contains(err.Error(), "Map.db2 is not in") {
+		t.Fatalf("a linked Map.db2: %v", err)
+	}
+
+	// A real Map.db2, but the map folder is a link out of --client.
+	if err := os.Remove(filepath.Join(dbdir, "Map.db2")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dbdir, "Map.db2"), foreverMapDB2(t,
+		[]string{"zul"}, []string{"Zul"}, []uint32{209}, []uint32{1}))
+	client := filepath.Join(root, "client")
+	outTiles := filepath.Join(outside, "tiles")
+	writeFile(t, filepath.Join(outTiles, "map0_0.blp"), foreverBLP(4, 4, color.NRGBA{9, 9, 9, 255}))
+	if err := os.MkdirAll(filepath.Join(client, "world", "minimaps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outTiles, filepath.Join(client, "world", "minimaps", "zul")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunForever(Options{ClientDir: client, DB2Dir: dbdir, OutDir: filepath.Join(root, "maps"), Maps: []uint32{209}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Kind != KindNone {
+		t.Fatalf("a linked map folder produced a picture: %+v", res)
+	}
+
+	// A real map folder whose tile is a link out of --client.
+	if err := os.Remove(filepath.Join(client, "world", "minimaps", "zul")); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(client, "world", "minimaps", "zul")
+	writeFile(t, filepath.Join(outside, "tile.blp"), foreverBLP(4, 4, color.NRGBA{9, 9, 9, 255}))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "tile.blp"), filepath.Join(dir, "map0_0.blp")); err != nil {
+		t.Fatal(err)
+	}
+	res, err = RunForever(Options{ClientDir: client, DB2Dir: dbdir, OutDir: filepath.Join(root, "maps"), Maps: []uint32{209}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Kind != KindNone {
+		t.Fatalf("a linked tile produced a picture: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "maps", "209.png")); !os.IsNotExist(err) {
+		t.Fatal("a picture was written from a linked tile")
+	}
+}

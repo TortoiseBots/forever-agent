@@ -14,6 +14,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("AUTO_TEST_CHILD") == "1" {
 		os.Exit(raidAutopilotCmd(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	}
+	// The teardown tests start the test binary as a stand-in `forever serve` daemon (a real process outside the slot
+	// dir): it blocks until SIGTERM, which is the teardown's own signal.
+	if os.Getenv("TEARDOWN_TEST_CHILD") == "1" {
+		select {}
+	}
 	dir, err := os.MkdirTemp("", "forever-agent-traces-")
 	if err != nil {
 		os.Exit(1)

@@ -85,6 +85,37 @@ func TestHTTPCallerSendsTheTokenAndHidesIt(t *testing.T) {
 	_ = base64.StdEncoding
 }
 
+// TestHTTPCallerRefusesANonLoopbackRedirect: a 307 keeps the JSON-RPC body (GetBody is set), so following it to
+// another host would ship the method, its params and no-header no_auth calls off the machine. The guard re-checks
+// every hop and refuses before the destination is dialled.
+func TestHTTPCallerRefusesANonLoopbackRedirect(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := filepath.Join(dir, "rpc-8774.token")
+	if err := os.WriteFile(tokPath, []byte("tok-"+strings.Repeat("s", 40)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "http://192.0.2.1:8765/rpc", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	c := &HTTPCaller{Addr: strings.TrimPrefix(srv.URL, "http://"), TokenFile: tokPath, HTTP: srv.Client()}
+	_, err := c.Call(t.Context(), "gm", map[string]any{"text": ".npc delete"}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not a loopback address") {
+		t.Fatalf("a 307 to another host: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("the request was sent %d time(s), want the one first hop", hits)
+	}
+	// The default client (no HTTP injected) is guarded the same way.
+	c2 := &HTTPCaller{Addr: strings.TrimPrefix(srv.URL, "http://"), TokenFile: tokPath}
+	if _, err := c2.Call(t.Context(), "party", map[string]any{}, time.Second); err == nil ||
+		!strings.Contains(err.Error(), "not a loopback address") {
+		t.Fatalf("default client followed the redirect: %v", err)
+	}
+}
+
 // TestHTTPCallerWorksAgainstTheRealRPCServer runs the scenario client
 // against the real agent RPC server (in-process, token auth): a missing
 // Content-Type header answers 415 there, so this fails without the header.

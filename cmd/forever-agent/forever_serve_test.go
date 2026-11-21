@@ -79,7 +79,8 @@ func serveFixtureSetup(t *testing.T) (dir string, slotsPath string) {
 // TestServeKeepsSetupManifest is the K1 failing case: serve rewrote slot.json
 // with slot 1, holder "forever" and no lease id, so a slot made by `slot
 // setup --forever` lost its lease identity and teardown could not release it.
-// A matching manifest stays byte for byte; serve only adds its pid file.
+// A matching manifest keeps every field; serve only adds its pid file and,
+// for teardown's pid check, the process start time.
 func TestServeKeepsSetupManifest(t *testing.T) {
 	dir, slotsPath := serveFixtureSetup(t)
 	before, err := os.ReadFile(filepath.Join(dir, "slot.json"))
@@ -95,8 +96,26 @@ func TestServeKeepsSetupManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(filepath.Join(dir, "slot.json"))
-	if err != nil || string(after) != string(before) {
-		t.Fatalf("slot.json rewritten:\n%s\n--- was ---\n%s", after, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var was, now map[string]any
+	if err := json.Unmarshal(before, &was); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(after, &now); err != nil {
+		t.Fatalf("slot.json is not JSON:\n%s", after)
+	}
+	for k, v := range was {
+		if now[k] != v {
+			t.Fatalf("slot.json field %s changed: %v -> %v\n%s", k, v, now[k], after)
+		}
+	}
+	if len(now) != len(was)+1 {
+		t.Fatalf("slot.json gained more than pid_start:\n%s", after)
+	}
+	if start, _ := now["pid_start"].(float64); start == 0 {
+		t.Fatalf("no pid_start recorded:\n%s", after)
 	}
 	var m slotManifest
 	if err := json.Unmarshal(after, &m); err != nil || m.Server != "test1" || m.Holder != "w-a" || m.LeaseID == "" {
@@ -173,6 +192,14 @@ func TestServeManifestRecordsNoAuth(t *testing.T) {
 		if err != nil || m.NoAuth != noAuth {
 			t.Fatalf("no_auth %v: read back %+v, %v", noAuth, m, err)
 		}
+		// The pid file's process start time is recorded, so a later reader can tell this daemon from a reused pid.
+		want, werr := slots.ProcStartTicks(os.Getpid())
+		if werr != nil {
+			t.Skipf("no /proc start time here: %v", werr)
+		}
+		if m.PIDStart != want {
+			t.Fatalf("pid_start %d, want %d", m.PIDStart, want)
+		}
 	}
 }
 
@@ -216,6 +243,10 @@ func TestServeKeepMarksNoAuth(t *testing.T) {
 		}
 		if m.Holder != base.Holder || m.LeaseID != base.LeaseID || m.Server != base.Server || m.Slot != base.Slot {
 			t.Fatalf("lease identity lost: %+v vs %+v", m, base)
+		}
+		want, werr := slots.ProcStartTicks(os.Getpid())
+		if werr == nil && m.PIDStart != want {
+			t.Fatalf("the kept manifest lost the start time: %d, want %d", m.PIDStart, want)
 		}
 	}
 }

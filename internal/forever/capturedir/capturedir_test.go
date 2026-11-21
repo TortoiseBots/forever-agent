@@ -85,7 +85,7 @@ func TestReadRejectsBadManifests(t *testing.T) {
 		{"bad opcode", "0000_SMSG_CHAT.bin\tzzz\t1\n", map[string]string{"0000_SMSG_CHAT.bin": "x"}, "opcode"},
 		{"bad length", "0000_SMSG_CHAT.bin\t0x4A0001\tx\n", map[string]string{"0000_SMSG_CHAT.bin": "x"}, "length"},
 		{"length mismatch", "0000_SMSG_CHAT.bin\t0x4A0001\t2\n", map[string]string{"0000_SMSG_CHAT.bin": "x"}, "1 bytes"},
-		{"missing file", "0000_SMSG_CHAT.bin\t0x4A0001\t1\n", nil, "0000_SMSG_CHAT.bin"},
+		{"missing file", "0000_SMSG_CHAT.bin\t0x4A0001\t1\n", nil, "line 1"},
 		{"escaping name", "../outside.bin\t0x4A0001\t1\n", nil, "not a file name"},
 		{"separator in name", "sub/0000.bin\t0x4A0001\t1\n", nil, "not a file name"},
 	}
@@ -107,4 +107,70 @@ func TestReadRejectsBadManifests(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReadManifestBounds: the manifest is a regular file within the writer's bounds, read through a capped scanner,
+// and an error never carries a line's content (a hostile manifest may hold captured chat).
+func TestReadManifestBounds(t *testing.T) {
+	const secret = "hidden-chat-text"
+	t.Run("directory named manifest", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "manifest.tsv"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadRun(dir); err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("ReadRun: %v", err)
+		}
+	})
+	t.Run("symlink outside the run", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "elsewhere")
+		if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(dir, "manifest.tsv")); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadRun(dir)
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("ReadRun: %v", err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("the error read the link target: %v", err)
+		}
+	})
+	t.Run("oversized", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.tsv"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(filepath.Join(dir, "manifest.tsv"), 8<<20); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadRun(dir); err == nil || !strings.Contains(err.Error(), "larger than") {
+			t.Fatalf("ReadRun: %v", err)
+		}
+	})
+	t.Run("over-long line", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.tsv"), []byte(strings.Repeat("z", 5000)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadRun(dir); err == nil || !strings.Contains(err.Error(), "longer than") {
+			t.Fatalf("ReadRun: %v", err)
+		}
+	})
+	t.Run("secret line is not echoed", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.tsv"), []byte(secret+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadRun(dir)
+		if err == nil || !strings.Contains(err.Error(), "line 1") {
+			t.Fatalf("ReadRun: %v", err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("the error echoed the line: %v", err)
+		}
+	})
 }
