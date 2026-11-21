@@ -1931,6 +1931,14 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			return Result{Value: nil, K: 0, N: 0, Verdict: "INCONCLUSIVE",
 				Evidence: []string{"no triggers"}, Guard: guardNote}
 		}
+		// An interrupt answer comes from the server's interrupt log, a row kind only this round's recordings have.
+		// A recording with no interrupt row at all cannot say whether the bot interrupted, so it is no FAIL
+		// (an older recording is not a bot that never interrupted); rows that exist and none landed still is.
+		if answered == 0 && pyjson.Str(respWhere["kind"]) == "interrupt" && !hasKind(rows, "interrupt") {
+			return Result{Value: nil, K: 0, N: counted, Verdict: "INCONCLUSIVE",
+				Evidence: []string{fmt.Sprintf("0/%d; the recording has no interrupt row", counted)},
+				Reason:   "no interrupt rows in the recording", Guard: guardNote}
+		}
 		value := float64(answered) / float64(counted)
 		verdict := "FAIL"
 		if Pass(rule["pass_if"], value) {
@@ -2235,6 +2243,16 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	metricS := pyjson.Str(check["metric"])
 	return Result{Value: nil, Verdict: "INCONCLUSIVE",
 		Evidence: []string{fmt.Sprintf("unknown metric %q", metricS)}, Guard: guardNote}
+}
+
+// hasKind reports whether the recording holds any row of one kind.
+func hasKind(rows []Row, kind string) bool {
+	for _, r := range rows {
+		if r != nil && pyjson.Str(r["kind"]) == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // sameRow reports whether a and b are the same row OBJECT (Python's `cand is trig`).

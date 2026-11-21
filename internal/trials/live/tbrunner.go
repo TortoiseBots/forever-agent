@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command"
@@ -30,6 +31,11 @@ type TBRunner struct {
 	bot func(ctx context.Context, line string, waitMS int) (BotResult, error)
 	// now is the clock; nil means time.Now. Tests pass a fake clock.
 	now func() time.Time
+	// cursor is the shared chat-log cursor: a tokenless reply starts at the
+	// log's current end, not at seq 0 (the session's whole chat history).
+	mu        sync.Mutex
+	cursor    uint64
+	cursorSet bool
 }
 
 // ChatPage is one `chat_log` page: the log rows and the next cursor.
@@ -126,10 +132,11 @@ func (r *TBRunner) runTokened(ctx context.Context, line string, opts command.Opt
 		return nil, err
 	}
 	raw := append([]string(nil), sent.Lines...)
-	var lastSeq uint64
+	lastSeq, _ := r.head(ctx)
 	complete := sent.Complete
 	if rep := collectTokened(raw, line, opts.Token); rep != nil && rep.Complete {
 		rep.Raw = raw
+		r.drainToEnd(ctx)
 		return rep, nil
 	}
 	if complete && len(raw) > 0 {
@@ -177,6 +184,8 @@ func (r *TBRunner) runTokened(ctx context.Context, line string, opts command.Opt
 			rep.Raw = raw
 			rep.Token = opts.Token
 			rep.Line = line
+			r.advance(lastSeq)
+			r.drainToEnd(ctx)
 			return rep, classifyTokened(rep)
 		}
 		if len(page.Lines) == 0 && len(raw) > 0 {
@@ -193,8 +202,68 @@ func (r *TBRunner) runTokened(ctx context.Context, line string, opts command.Opt
 	}
 }
 
+// drainToEnd drops everything already in the chat log from the shared
+// cursor: a reply answered by the RPC's own lines has no seqs here, and its
+// lines must not be read as the next command's answer.
+func (r *TBRunner) drainToEnd(ctx context.Context) {
+	for i := 0; i < 64; i++ {
+		r.mu.Lock()
+		since := r.cursor
+		r.mu.Unlock()
+		page, err := r.chatLog(ctx, since, 0)
+		if err != nil {
+			return
+		}
+		if len(page.Lines) == 0 || page.Next <= since {
+			return
+		}
+		r.advance(page.Next)
+	}
+}
+
+// advance moves the shared cursor forward (never back): the next tokenless
+// reply starts after this one.
+func (r *TBRunner) advance(seq uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seq > r.cursor || !r.cursorSet {
+		r.cursor, r.cursorSet = seq, true
+	}
+}
+
+// head advances the shared chat-log cursor to the log's current end (the
+// first call drains everything already there and discards it): a tokenless
+// reply is the lines after the send, never the session's chat history.
+func (r *TBRunner) head(ctx context.Context) (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cursorSet {
+		return r.cursor, nil
+	}
+	since := uint64(0)
+	for {
+		page, err := r.chatLog(ctx, since, 0)
+		if err != nil {
+			return 0, err
+		}
+		if len(page.Lines) == 0 || page.Next <= since {
+			next := page.Next
+			if next < since {
+				next = since
+			}
+			r.cursor, r.cursorSet = next, true
+			return r.cursor, nil
+		}
+		since = page.Next
+	}
+}
+
 // runTokenless sends the line and collects until the quiet window passes.
 func (r *TBRunner) runTokenless(ctx context.Context, line string, opts command.Options, waitMS int, now func() time.Time) (*command.Reply, error) {
+	lastSeq, err := r.head(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sent, err := r.bot(ctx, line, waitMS)
 	if err != nil {
 		return nil, err
@@ -206,7 +275,6 @@ func (r *TBRunner) runTokenless(ctx context.Context, line string, opts command.O
 		quiet = 1500 * time.Millisecond
 	}
 	lastAt := now()
-	var lastSeq uint64
 	for {
 		if ctx.Err() != nil {
 			return tokenlessReply(line, raw, lastAt, now), ctx.Err()
@@ -241,6 +309,7 @@ func (r *TBRunner) runTokenless(ctx context.Context, line string, opts command.O
 		}
 		lastAt = now()
 		lastSeq = page.Next
+		r.advance(lastSeq)
 	}
 }
 
