@@ -5,10 +5,9 @@ package tables
 // count (flushed), then the uint32 ids. The reply's writer is the core's own
 // (:57-66): table hash, record id, timestamp, a 3-bit status, a uint32 data
 // size, then the record bytes WriteRecord (DB2Store.cpp:42-97) wrote in
-// DB2LoadInfo field order: fixed-size fields first in declaration order,
-// then each localized string as a C string in the session locale (enUS
-// here), then the optional-data pairs the hotfix rows add
-// (HotfixHandler.cpp:52-58).
+// DB2LoadInfo declaration order: each field at its own size, a localized
+// string as one C string in the session locale (enUS here), then the
+// optional-data pairs the hotfix rows add (HotfixHandler.cpp:52-58).
 
 import (
 	"fmt"
