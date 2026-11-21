@@ -35,7 +35,10 @@ type serveCommanderParams struct {
 	Args     []string `json:"args,omitempty"`     // cmd: the verb's arguments; run: the plan, the reason or the event sequence
 	WaitMS   int      `json:"wait_ms,omitempty"`  // cmd: the per-bot poll, 0..30000 ms (clamped); other ops ignore it
 	PauseRun bool     `json:"pause_run,omitempty"`
-	On       *bool    `json:"on,omitempty"`
+	// LeaveParty: bind only. A character in a party is refused (in-party) unless this is set, in which case it
+	// leaves the party first.
+	LeaveParty bool  `json:"leave_party,omitempty"`
+	On         *bool `json:"on,omitempty"`
 }
 
 // ServeCommander is a commander call's answer: the lines that went out, the module's per-bot lines, the binding
@@ -212,15 +215,19 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander bind: lead_bot is required"}
 		}
-		// The module keeps a binding only for a commander who stands OUTSIDE the party: while the commander is a
-		// member it releases the binding when the lead no longer leads the group (leader-changed). So a bind from
-		// inside a group leaves the group first, and the answer says so.
+		// The module keeps only bindings made from outside the party. A character that is in a party is refused
+		// unless the call asks to leave it first; a leave that fails (an invalid roster included) ends the call, and
+		// nothing is bound after it.
 		var notes []string
-		if s.party != nil && s.party.RosterValid && s.party.InParty {
-			if err := s.serveLeaveGroup(ctx); err != nil {
-				return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander bind: leaving the group first failed: " + err.Error()}
+		if s.party != nil && s.party.InParty {
+			if !p.LeaveParty {
+				note := "this character is in a party and the module keeps only bindings made from outside the party: leave the party first, or bind with leave_party set to leave it"
+				return ServeCommander{}, commanderGame("in-party: "+note, ServeCommander{Notes: []string{note}})
 			}
-			notes = append(notes, "left the group first: the module keeps a binding only while the commander stands outside the party")
+			if err := s.serveLeaveGroup(ctx); err != nil {
+				return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander bind: leaving the party first failed: " + err.Error()}
+			}
+			notes = append(notes, "left the party first (leave_party): the module keeps only bindings made from outside the party")
 		}
 		out, err := commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
 		out.Notes = append(out.Notes, notes...)

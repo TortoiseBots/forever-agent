@@ -1731,63 +1731,92 @@ func TestServeCommanderBindAndUnbind(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeCommanderBindLeavesTheGroup: the module releases a binding whose commander is a member of the party
-// (leader-changed), so a bind from inside a group leaves it first, sends the lines, and says so in notes. Outside a
-// group no leave goes out and there is no note.
-func TestServeCommanderBindLeavesTheGroup(t *testing.T) {
-	for _, inGroup := range []bool{true, false} {
-		f := newFakeServer(t)
-		f.serveMode = true
-		f.serveInvite = inGroup
-		f.serveAccept = "roster"
-		f.serveCommander = func(line string) []string {
-			switch line {
-			case ".tb commander status":
-				return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
-			case ".tb master party Tanka Xxxxxx":
-				return []string{
-					"master-begin #T",
-					"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
-					"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+// TestServeCommanderBindInParty: the module keeps only bindings made from outside the party. A character in a
+// party is refused with in-party (nothing sent, no leave) unless the bind sets leave_party, which leaves first, binds
+// and says so in notes. Outside a party no leave goes out and there is no note.
+func TestServeCommanderBindInParty(t *testing.T) {
+	cases := []struct {
+		name               string
+		inGroup, leave     bool
+		wantLeft, wantBind bool
+	}{
+		{"outside", false, false, false, true},
+		{"in party, no flag", true, false, false, false},
+		{"in party, leave_party", true, true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.serveMode = true
+			f.serveInvite = c.inGroup
+			f.serveAccept = "roster"
+			f.serveCommander = func(line string) []string {
+				switch line {
+				case ".tb commander status":
+					return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+				case ".tb master party Tanka Xxxxxx":
+					return []string{
+						"master-begin #T",
+						"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+						"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+					}
+				case ".tb commander status Xxxxxx":
+					return commanderCardLines("Tanka", "Tanka")
 				}
-			case ".tb commander status Xxxxxx":
-				return commanderCardLines("Tanka", "Tanka")
+				return nil
 			}
-			return nil
-		}
-		steps := &stepLog{}
-		a := startServeDaemon(t, f, steps)
-		waitServeState(t, a, "online", steps)
-		if inGroup {
-			waitServeUnits(t, a)
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				var party ServePartyInfo
-				json.Unmarshal(a.mustCall(t, "party", nil), &party)
-				if party.PendingInvite != "" || time.Now().After(deadline) {
-					break
+			steps := &stepLog{}
+			a := startServeDaemon(t, f, steps)
+			waitServeState(t, a, "online", steps)
+			if c.inGroup {
+				waitServeUnits(t, a)
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					var party ServePartyInfo
+					json.Unmarshal(a.mustCall(t, "party", nil), &party)
+					if party.PendingInvite != "" || time.Now().After(deadline) {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
 				}
-				time.Sleep(10 * time.Millisecond)
+				a.mustCall(t, "accept_invite", nil)
 			}
-			a.mustCall(t, "accept_invite", nil)
-		}
-		var bound ServeCommander
-		json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}), &bound)
-		f.mu.Lock()
-		left := f.serveLeft
-		f.mu.Unlock()
-		if left != inGroup {
-			t.Fatalf("inGroup=%v: the fake saw a leave=%v", inGroup, left)
-		}
-		if inGroup != (len(bound.Notes) == 1 && strings.Contains(bound.Notes[0], "left the group")) || (!inGroup && len(bound.Notes) != 0) {
-			t.Fatalf("inGroup=%v: notes %q", inGroup, bound.Notes)
-		}
-		if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" || bound.Card == nil {
-			t.Fatalf("inGroup=%v: bind answered %+v", inGroup, bound)
-		}
-		a.stop(t)
-		f.close()
-		f.wait(t)
+			params := map[string]any{"op": "bind", "lead_bot": "Tanka"}
+			if c.leave {
+				params["leave_party"] = true
+			}
+			var bound ServeCommander
+			if c.wantBind {
+				json.Unmarshal(a.mustCall(t, "commander", params), &bound)
+			} else {
+				rerr := a.mustFail(t, "commander", params, -32003, "in-party")
+				if partial := commanderErrorData(t, rerr); len(partial.Sent) != 0 || len(partial.Notes) != 1 {
+					t.Fatalf("a refused bind sent %q, notes %q", partial.Sent, partial.Notes)
+				}
+			}
+			f.mu.Lock()
+			left := f.serveLeft
+			f.mu.Unlock()
+			if left != c.wantLeft {
+				t.Fatalf("the fake saw a leave=%v, want %v", left, c.wantLeft)
+			}
+			if c.wantBind {
+				if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" || bound.Card == nil {
+					t.Fatalf("bind answered %+v", bound)
+				}
+				if c.leave != (len(bound.Notes) == 1 && strings.Contains(bound.Notes[0], "left the party")) {
+					t.Fatalf("notes %q", bound.Notes)
+				}
+			}
+			for _, ln := range f.serveTBLines() {
+				if strings.HasPrefix(ln, ".tb master ") && !c.wantBind {
+					t.Fatalf("a refused bind sent %q", ln)
+				}
+			}
+			a.stop(t)
+			f.close()
+			f.wait(t)
+		})
 	}
 }
 

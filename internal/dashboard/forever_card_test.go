@@ -77,6 +77,32 @@ func TestForeverCardBotsFromCommanderStatus(t *testing.T) {
 	}
 }
 
+// TestForeverCardMemberWithoutPositionIsUnknown: a member the daemon sends without a position (or at 0,0) is drawn
+// as unknown, never as a known dot at the map's origin.
+func TestForeverCardMemberWithoutPositionIsUnknown(t *testing.T) {
+	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Aheal","bound":2,"bots":2,"map":0,"members":[
+ {"bot":"Aheal","guid":"0x1","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":0,"zone":1,"pos":{"x":-16,"y":-44,"z":-21}},
+ {"bot":"Bnopos","guid":"0x2","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1},
+ {"bot":"Bzero","guid":"0x3","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1,"pos":{"x":0,"y":0,"z":0}}]}],"final":{}}`
+	c := BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmd)})
+	if len(c.Bots) != 3 {
+		t.Fatalf("three members, got %+v", c.Bots)
+	}
+	for _, b := range c.Bots {
+		switch b.Name {
+		case "Aheal":
+			if !b.Known || !b.InMap {
+				t.Fatalf("a member with a position is not known: %+v", b)
+			}
+		default:
+			if b.Known || b.InMap || b.X != 0 || b.Y != 0 {
+				t.Fatalf("%s has no position and must not be drawn: %+v", b.Name, b)
+			}
+		}
+	}
+}
+
 // TestForeverControlNeverCallsTBM pins that every Forever control goes to
 // commander {op:cmd|run}: no tbm* or dungeon_* call on a Forever agent.
 func TestForeverControlNeverCallsTBM(t *testing.T) {

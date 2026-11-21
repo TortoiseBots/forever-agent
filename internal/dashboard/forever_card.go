@@ -161,9 +161,12 @@ func fillForeverBots(c *Card, cmd *serveclient.CommanderCard, party []foreverPar
 			HPPct: pct(float64(m.HP), float64(m.MaxHP)), PowerPct: pct(float64(m.Power), float64(m.MaxPower)),
 			Alive: m.Alive,
 		}
-		b.X, b.Y = Project(float32(m.Pos.X), float32(m.Pos.Y))
-		b.Known = true
-		b.InMap = true
+		// A member with no position (absent, or 0,0 the way the page already reads it) is unknown, never drawn at 0,0.
+		if m.Pos != nil && (m.Pos.X != 0 || m.Pos.Y != 0) {
+			b.X, b.Y = Project(float32(m.Pos.X), float32(m.Pos.Y))
+			b.Known = true
+			b.InMap = true
+		}
 		if p, ok := byName[m.Bot]; ok {
 			if !p.Online {
 				b.Alive = false

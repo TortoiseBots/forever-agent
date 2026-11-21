@@ -426,21 +426,21 @@ type CommanderPos struct {
 
 // CommanderMember is one bound bot of a card; the lead comes first.
 type CommanderMember struct {
-	Bot       string       `json:"bot"`
-	GUID      string       `json:"guid"`
-	Class     string       `json:"class"`
-	Role      string       `json:"role"`
-	Level     int          `json:"level"`
-	HP        int64        `json:"hp"`
-	MaxHP     int64        `json:"max_hp"`
-	Power     int64        `json:"power"`
-	MaxPower  int64        `json:"max_power"`
-	PowerType string       `json:"power_type,omitempty"`
-	Alive     bool         `json:"alive"`
-	Lead      bool         `json:"lead"`
-	Map       uint32       `json:"map"`
-	Zone      int          `json:"zone"`
-	Pos       CommanderPos `json:"pos"`
+	Bot       string        `json:"bot"`
+	GUID      string        `json:"guid"`
+	Class     string        `json:"class"`
+	Role      string        `json:"role"`
+	Level     int           `json:"level"`
+	HP        int64         `json:"hp"`
+	MaxHP     int64         `json:"max_hp"`
+	Power     int64         `json:"power"`
+	MaxPower  int64         `json:"max_power"`
+	PowerType string        `json:"power_type,omitempty"`
+	Alive     bool          `json:"alive"`
+	Lead      bool          `json:"lead"`
+	Map       uint32        `json:"map"`
+	Zone      int           `json:"zone"`
+	Pos       *CommanderPos `json:"pos,omitempty"` // nil: the member has no position
 }
 
 // CommanderRun is the run record of a card.
