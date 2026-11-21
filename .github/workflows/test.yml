@@ -163,15 +163,25 @@ jobs:
               tools/ci/shard-tests.sh list "$pkg" >"$RUNNER_TEMP/all.txt"
               re="$(tools/ci/shard-tests.sh regex "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt")"
               echo "$pkg shard $shard of $SHARDS: $(tools/ci/shard-tests.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" | wc -l) of $(wc -l <"$RUNNER_TEMP/all.txt") tests"
-              # -v so that the log shows every top-level test that started.
-              go test -race -count=1 -timeout 20m -v -run "$re" "$pkg" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              if [ -n "$re" ]; then
+                # -v so that the log shows every top-level test that started.
+                go test -race -count=1 -timeout 20m -v -run "$re" "$pkg" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              else
+                # An empty shard runs nothing: an empty -run would match every test.
+                : >"$RUNNER_TEMP/shard.log"
+              fi
               ;;
             rest)
               tools/ci/shard-pkgs.sh list >"$RUNNER_TEMP/all.txt"
               tools/ci/shard-pkgs.sh load "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt
               tools/ci/shard-pkgs.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt >"$RUNNER_TEMP/pkgs.txt"
               echo "rest shard $shard of $SHARDS: $(wc -l <"$RUNNER_TEMP/pkgs.txt") of $(wc -l <"$RUNNER_TEMP/all.txt") packages"
-              xargs go test -race -count=1 -timeout 20m <"$RUNNER_TEMP/pkgs.txt" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              # An empty shard runs nothing: xargs with no package would run go test in the current directory.
+              if [ -s "$RUNNER_TEMP/pkgs.txt" ]; then
+                xargs go test -race -count=1 -timeout 20m <"$RUNNER_TEMP/pkgs.txt" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              else
+                : >"$RUNNER_TEMP/shard.log"
+              fi
               ;;
           esac
 
@@ -194,7 +204,7 @@ jobs:
           retention-days: 1
 
   # No test and no package can be dropped: for each group, what its 3 shards ran, together, must be exactly the full
-  # list (`go test -list` of the package for cmd and world, `go list ./...` minus those two packages for rest),
+  # list (`go test -list` of the package for cmd and world, `go list -race ./...` minus those two packages for rest),
   # each once.
   race-shards-check:
     needs: race-shards
