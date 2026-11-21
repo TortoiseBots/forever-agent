@@ -89,6 +89,7 @@ type World struct {
 	mapID       uint32
 	objects     map[wire.GUID]*Object
 	entries     map[int32]string
+	goNames     map[int32]GameObjectName
 	players     map[wire.GUID]string
 	created     int
 	updated     int
@@ -142,6 +143,7 @@ func NewWorld(mapID uint32) *World {
 		mapID:          mapID,
 		objects:        make(map[wire.GUID]*Object),
 		entries:        make(map[int32]string),
+		goNames:        make(map[int32]GameObjectName),
 		players:        make(map[wire.GUID]string),
 		partialKinds:   make(map[string]int),
 		unparsed:       make(map[string]int),
@@ -815,8 +817,50 @@ func (w *World) EntryName(entry int32) string {
 	return w.entries[entry]
 }
 
-// Name returns the best name this client has for an object: the player name by GUID, else the creature name of its
-// entry, else "".
+// SetGameObjectName caches a game object's query answer by entry: its names and its type.
+func (w *World) SetGameObjectName(g GameObjectName) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.goNames[int32(g.Entry)]; !ok && len(w.goNames) >= maxNames {
+		return // the cache is full: a new entry is dropped, an existing one still updates
+	}
+	w.goNames[int32(g.Entry)] = g
+}
+
+// GameObjectName returns the cached query answer for an entry, or false.
+func (w *World) GameObjectName(entry int32) (GameObjectName, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	g, ok := w.goNames[entry]
+	return g, ok
+}
+
+// UnknownGameObjects lists up to limit game-object entries this client has seen but has no query answer for
+// yet, nearest first, each entry once: the doors, chests and gossip objects loot and route checks show.
+func (w *World) UnknownGameObjects(x, y, z float32, limit int) []int32 {
+	objs := w.GameObjects(x, y, z)
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var out []int32
+	seen := make(map[int32]bool)
+	for _, o := range objs {
+		if len(out) >= limit {
+			break
+		}
+		entry := o.Info.Entry
+		if entry == 0 || seen[entry] {
+			continue
+		}
+		if _, ok := w.goNames[entry]; !ok {
+			seen[entry] = true
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// Name returns the best name this client has for an object: the player name by GUID, else the creature name of
+// its entry, else the game-object name of its entry from the query cache, else "".
 func (w *World) Name(o *Object) string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -825,6 +869,12 @@ func (w *World) Name(o *Object) string {
 	}
 	if name, ok := w.players[o.GUID]; ok {
 		return name
+	}
+	if o.Info.HasGameObject || o.Type == TypeGameObject {
+		if g, ok := w.goNames[o.Info.Entry]; ok {
+			return g.Name[0]
+		}
+		return ""
 	}
 	if !o.Info.HasUnit {
 		return ""

@@ -1260,7 +1260,8 @@ const (
 )
 
 // queryNames asks for the names of the nearest units this client does not know yet, bounded in rounds and with a
-// deadline per answer.
+// deadline per answer. Game objects go last, one query per entry: the answer carries names and types for the
+// doors, chests and gossip objects the loot and route checks show.
 func (s *session) queryNames(ctx context.Context) {
 	x, y, z := s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2]
 	for round := 0; round < maxNameQueryRounds; round++ {
@@ -1268,7 +1269,8 @@ func (s *session) queryNames(ctx context.Context) {
 		if len(entries) > maxCreatureQueries {
 			entries = entries[:maxCreatureQueries]
 		}
-		if len(players) == 0 && len(entries) == 0 {
+		goEntries := s.world.UnknownGameObjects(x, y, z, maxCreatureQueries)
+		if len(players) == 0 && len(entries) == 0 && len(goEntries) == 0 {
 			return
 		}
 		if len(players) > 0 {
@@ -1298,6 +1300,38 @@ func (s *session) queryNames(ctx context.Context) {
 					return
 				}
 			}
+		}
+		if len(goEntries) > 0 {
+			s.queryGameObjects(ctx, goEntries)
+		}
+	}
+}
+
+// queryGameObjects asks for the names and types of game-object entries, one query each: the query names one
+// entry (QueryPackets.cpp:344-348) and the answer is matched to it. An entry whose answer does not come is
+// skipped: the object still shows by entry, just without its name and type.
+func (s *session) queryGameObjects(ctx context.Context, entries []int32) {
+	objs := s.world.GameObjects(s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2])
+	guidOf := make(map[int32]wire.GUID, len(objs))
+	for _, o := range objs {
+		if _, ok := guidOf[o.Info.Entry]; !ok {
+			guidOf[o.Info.Entry] = o.GUID
+		}
+	}
+	for _, e := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		s.opts.logf("world: CMSG_QUERY_GAME_OBJECT for entry %d", e)
+		if err := s.sendOn(sideInstance, wire.CMSGQueryGameObject, objects.BuildQueryGameObject(uint32(e), guidOf[e])); err != nil {
+			return
+		}
+		s.report.NamesAsked++
+		if _, err := s.waitFor("SMSG_QUERY_GAME_OBJECT_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
+			return p.Core == wire.SMSGGameObjectQueryResponse
+		}); err != nil {
+			s.opts.logf("world: the gameobject answer did not come: %v", err)
+			return
 		}
 	}
 }
@@ -1879,6 +1913,14 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			if c.Found && c.Name != "" {
 				s.world.SetEntryName(int32(c.Entry), c.Name)
 			}
+		}
+	case wire.SMSGGameObjectQueryResponse:
+		g, err := objects.ParseGameObjectQueryResponse(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_QUERY_GAME_OBJECT_RESPONSE: %w", err)
+		}
+		if g.Found {
+			s.world.SetGameObjectName(g)
 		}
 	case wire.SMSGChat, wire.SMSGPrintNotification, wire.SMSGMotd, wire.SMSGChatServerMessage,
 		wire.SMSGChatPlayerNotFound, wire.SMSGChatPlayerAmbiguous, wire.SMSGChatRestricted,
