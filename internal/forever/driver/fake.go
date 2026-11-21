@@ -207,20 +207,18 @@ type Fake struct {
 	InstanceBosses []tbcmd.InstanceBoss
 	// PushThreat makes the scripted client's own threat table answer on every call (the server's pushed lists);
 	// ThreatCalls counts the module's `.tb threat` reads. Encounters are the scripted encounter packets, drained
-	// by the run; encOpen holds the ids a start named and no end closed, and lastEncounterAt is when the newest
-	// packet fired.
+	// by the run; encOpen holds the ids a start named and no end closed.
 	PushThreat bool
 	// TableMobs is the scripted pushed table's answer; with PushThreat it is what ThreatTable serves, whatever the
 	// scripted fight holds. TableFreshFor makes it stop answering that long after Start (0: always fresh), so a
 	// test can watch the driver fall back to `.tb threat` when the pushes go stale. FailThreat makes the module's
 	// `.tb threat` read fail (not the link).
-	TableMobs       []tbcmd.ThreatLine
-	TableFreshFor   time.Duration
-	FailThreat      bool
-	ThreatCalls     int
-	encounters      []EncounterEvent
-	encOpen         map[uint32]bool
-	lastEncounterAt time.Time
+	TableMobs     []tbcmd.ThreatLine
+	TableFreshFor time.Duration
+	FailThreat    bool
+	ThreatCalls   int
+	encounters    []EncounterEvent
+	encOpen       map[uint32]bool
 	// Uncommanded names a party member the roster reports as not commanded (a watch's PREPARE refusal).
 	Uncommanded string
 	// DropOn names one call that dies with the link ("runstart", "runstop", "runpause", "runresume", "revive",
@@ -562,7 +560,6 @@ func (f *Fake) PushEncounter(after time.Duration, ev EncounterEvent) {
 	f.Clock.After(after, func() {
 		ev.At = f.Clock.Now()
 		f.encounters = append(f.encounters, ev)
-		f.lastEncounterAt = ev.At
 		if f.encOpen == nil {
 			f.encOpen = map[uint32]bool{}
 		}
