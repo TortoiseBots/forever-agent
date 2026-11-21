@@ -374,6 +374,8 @@ func (f *fakeServer) serveDungeon(c, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGMoveSetFacing, fakeCMSGMoveStop, fakeCMSGMoveHeartbeat:
 			// A walk's turns and stops are the mover's; the scenario only cares that it started.
 		case fakeCMSGMoveStartForward:

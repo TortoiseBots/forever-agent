@@ -1,0 +1,567 @@
+package world
+
+// The act runner: `forever act` drives one scriptable step per world action, with the same report lines for every
+// later feature round. Each step is one line (`step N verb ok|fail reason`); a later round adds its own verbs here.
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/combat"
+	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/npc"
+	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+)
+
+const (
+	actVerbWait  = "wait"
+	actVerbGM    = "gm"
+	actVerbGoto  = "goto"
+	actVerbNPC   = "npc"
+	actVerbOpen  = "open"
+	actVerbSelec = "select"
+	actVerbClose = "close"
+	actVerbInv   = "inv"
+
+	// Round R2's item actions (inventory_act.go). `open` keeps its R0 meaning (the NPC menu) and opens an item when
+	// the step names one.
+	actVerbEquip   = "equip"
+	actVerbStore   = "store"
+	actVerbSwap    = "swap"
+	actVerbSplit   = "split"
+	actVerbDestroy = "destroy"
+	actVerbUse     = "use"
+)
+
+// Act bounds: how far a step walks to talk, and how long it waits for a menu.
+const (
+	// actInteractReach is the NPC interaction distance, INTERACTION_DISTANCE minus a step (ObjectDefines.h:24 is
+	// 5.0; GetNPCIfCanInteractWith checks it, Player.cpp:1936-1990). The runner stops at three quarters of it so
+	// a discrete step never ends outside the range.
+	actInteractReach = 4.0
+	// actMenuWait bounds one menu answer: the server answers a talk at once, so a silent server is a refusal, not
+	// a longer wait.
+	actMenuWait = 5 * time.Second
+	// actSubmenuWait bounds the wait for a submenu after a select: most options open nothing, so it is short.
+	actSubmenuWait = time.Second
+)
+
+// ActStep is one parsed `--step 'verb k=v'` line.
+type ActStep struct {
+	Verb string
+	Args map[string]string
+	Raw  string
+}
+
+// ParseActStep parses one `--step 'verb k=v'` line: the verb, then k=v pairs. A value is one word, or a double-quoted
+// string (`note="a b c"`, with \" and \\ escapes) when it holds spaces; `line=` (the gm step) takes the whole rest of
+// the step, so `gm line=.additem 6948 1` sends the command with its arguments (a rest that is one quoted string is
+// unquoted). Durations (`wait dur=`) parse with time.ParseDuration; positions and entries parse as numbers at use.
+func ParseActStep(line string) (ActStep, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ActStep{}, fmt.Errorf("world: an act step needs a verb (wait, gm, goto, npc, open, select, close)")
+	}
+	verb, rest, _ := strings.Cut(line, " ")
+	rest = strings.TrimLeft(rest, " \t")
+	step := ActStep{Verb: verb, Args: map[string]string{}, Raw: line}
+	for rest != "" {
+		k, after, ok := strings.Cut(rest, "=")
+		if !ok || k == "" || strings.ContainsAny(k, " \t\"") {
+			word, _, _ := strings.Cut(rest, " ")
+			return ActStep{}, fmt.Errorf("world: step %q: %q is not k=v", line, word)
+		}
+		if _, dup := step.Args[k]; dup {
+			return ActStep{}, fmt.Errorf("world: step %q: duplicate key %q", line, k)
+		}
+		var v string
+		switch {
+		case k == "line":
+			v = strings.TrimSpace(after)
+			if u, err := strconv.Unquote(v); err == nil && strings.HasPrefix(v, `"`) {
+				v = u
+			}
+			rest = ""
+		case strings.HasPrefix(after, `"`):
+			val, tail, err := scanQuoted(after)
+			if err != nil {
+				return ActStep{}, fmt.Errorf("world: step %q: %s=: %w", line, k, err)
+			}
+			v, rest = val, strings.TrimLeft(tail, " \t")
+		default:
+			word, tail, _ := strings.Cut(after, " ")
+			v, rest = word, strings.TrimLeft(tail, " \t")
+		}
+		step.Args[k] = v
+	}
+	switch verb {
+	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose, actVerbInv,
+		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse:
+	default:
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use)", verb)
+	}
+	return step, nil
+}
+
+// scanQuoted reads one double-quoted value from the start of s (backslash escapes a quote or a backslash) and
+// returns it with the text after the closing quote, which must be empty or start with a space.
+func scanQuoted(s string) (value, tail string, err error) {
+	var b strings.Builder
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			i++
+			if i >= len(s) {
+				return "", "", fmt.Errorf("unterminated quote")
+			}
+			b.WriteByte(s[i])
+		case '"':
+			tail = s[i+1:]
+			if tail != "" && tail[0] != ' ' && tail[0] != '\t' {
+				return "", "", fmt.Errorf("text after the closing quote")
+			}
+			return b.String(), tail, nil
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return "", "", fmt.Errorf("unterminated quote")
+}
+
+// requireKeys refuses a step whose args miss a required key.
+func (s ActStep) requireKeys(keys ...string) error {
+	for _, k := range keys {
+		if _, ok := s.Args[k]; !ok {
+			return fmt.Errorf("world: step %q needs %s=", s.Raw, k)
+		}
+	}
+	return nil
+}
+
+// actState is the runner's own state: the current NPC and its last menu.
+type actState struct {
+	npc      *objects.Object
+	menu     npc.GossipMessage
+	hasMenu  bool
+	menuNPC  bool // the menu came from TALK_TO_GOSSIP (false: a QUEST_GIVER_HELLO answers a quest list)
+	quests   *npc.QuestGiverQuestList
+	npcEntry int32
+	hasNPC   bool
+	steps    int
+}
+
+// actStep runs one step of the act script and prints its line.
+func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error {
+	a.steps++
+	switch step.Verb {
+	case actVerbWait:
+		return s.actWait(ctx, a, step)
+	case actVerbGM:
+		return s.actGM(ctx, a, step)
+	case actVerbGoto:
+		return s.actGoto(ctx, a, step)
+	case actVerbNPC:
+		return s.actNPC(ctx, a, step)
+	case actVerbOpen:
+		return s.actOpenStep(ctx, a, step)
+	case actVerbSelec:
+		return s.actSelect(ctx, a, step)
+	case actVerbClose:
+		return s.actClose(ctx, a, step)
+	case actVerbInv:
+		return s.actInvStep(ctx, a, step)
+	case actVerbEquip:
+		return s.actEquip(ctx, a, step)
+	case actVerbStore:
+		return s.actStore(ctx, a, step)
+	case actVerbSwap:
+		return s.actSwap(ctx, a, step)
+	case actVerbSplit:
+		return s.actSplit(ctx, a, step)
+	case actVerbDestroy:
+		return s.actDestroy(ctx, a, step)
+	case actVerbUse:
+		return s.actUse(ctx, a, step)
+	default:
+		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
+	}
+}
+
+// actFail prints the step's failure line and returns the error.
+func (s *session) actFail(a *actState, step ActStep, err error) error {
+	s.opts.logf("step %d %s fail %v", a.steps, step.Verb, err)
+	return err
+}
+
+// actOK prints the step's success line.
+func (s *session) actOK(a *actState, step ActStep, detail string) {
+	if detail != "" {
+		s.opts.logf("step %d %s ok %s", a.steps, step.Verb, detail)
+	} else {
+		s.opts.logf("step %d %s ok", a.steps, step.Verb)
+	}
+}
+
+// actWait answers the server for dur= (default one second).
+func (s *session) actWait(ctx context.Context, a *actState, step ActStep) error {
+	dur := time.Second
+	if raw, ok := step.Args["dur"]; ok {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < 0 || d > 10*time.Minute {
+			return s.actFail(a, step, fmt.Errorf("dur=%q is not a duration from 0 to 10m", raw))
+		}
+		dur = d
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		if left := time.Until(dl); dur > left {
+			return s.actFail(a, step, fmt.Errorf("dur=%s is longer than the %s left of the run deadline", dur, left.Round(time.Second)))
+		}
+	}
+	if err := s.collect(ctx, dur); err != nil {
+		return s.actFail(a, step, err)
+	}
+	s.actOK(a, step, fmt.Sprintf("waited %s", dur))
+	return nil
+}
+
+// actGM sends one command line through the existing command channel and its GM guard. Only a clear success passes:
+// a refused, unknown-command, syntax, no-reply or incomplete result fails the step (the command session itself logs
+// those and carries on, which is right for cmd-check but not for a script whose next step relies on this one).
+func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
+	if err := step.requireKeys("line"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	line := step.Args["line"]
+	if line == "" {
+		return s.actFail(a, step, fmt.Errorf("gm needs line=TEXT"))
+	}
+	s.initChat()
+	q := command.NewSession(&cmdLink{s: s})
+	if err := s.confirmGM(ctx); err != nil {
+		return s.actFail(a, step, err)
+	}
+	res, err := s.runOneResult(ctx, q, line)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if err := gmOutcome(res.Rep, res.RunErr); err != nil {
+		return s.actFail(a, step, fmt.Errorf("%q: %w", line, err))
+	}
+	s.actOK(a, step, line)
+	return nil
+}
+
+// gmOutcome decides whether one command's result is a clear success: the run raised no error and no named refusal,
+// the reply ended the way its mode requires, and it was not echoed back as ordinary say chat.
+func gmOutcome(rep *command.Reply, runErr error) error {
+	switch {
+	case runErr != nil:
+		return runErr
+	case rep == nil:
+		return command.ErrNoReply
+	case rep.Refusal != nil:
+		return rep.Refusal
+	case rep.Echoed:
+		return command.ErrNoPermission
+	case !rep.Complete:
+		return command.ErrIncomplete
+	}
+	return nil
+}
+
+// actGoto walks to x= y= z= on the navmesh when one is configured, in a straight line otherwise.
+func (s *session) actGoto(ctx context.Context, a *actState, step ActStep) error {
+	if err := step.requireKeys("x", "y", "z"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	x, err := parseActFloat(step.Args["x"])
+	if err != nil {
+		return s.actFail(a, step, fmt.Errorf("x=%q is not a number", step.Args["x"]))
+	}
+	y, err := parseActFloat(step.Args["y"])
+	if err != nil {
+		return s.actFail(a, step, fmt.Errorf("y=%q is not a number", step.Args["y"]))
+	}
+	z, err := parseActFloat(step.Args["z"])
+	if err != nil {
+		return s.actFail(a, step, fmt.Errorf("z=%q is not a number", step.Args["z"]))
+	}
+	if s.mover == nil {
+		return s.actFail(a, step, ErrNotReady)
+	}
+	if err := s.requireWalkMode(step); err != nil {
+		return s.actFail(a, step, err)
+	}
+	if err := s.walkToPoint(ctx, float32(x), float32(y), float32(z), "act goto"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	s.actOK(a, step, fmt.Sprintf("at %.1f %.1f %.1f", x, y, z))
+	return nil
+}
+
+// requireWalkMode refuses a walk without --navmesh unless the step says straight=1: a straight line at the given
+// height is a walk at an invented height, which the repo's notes rule out, so it is an explicit choice.
+func (s *session) requireWalkMode(step ActStep) error {
+	if s.opts.NavmeshDir != "" || step.Args["straight"] == "1" {
+		return nil
+	}
+	return fmt.Errorf("no --navmesh: a walk needs straight=1 (a straight line at an invented height) or a navmesh")
+}
+
+// parseActFloat parses one step coordinate.
+func parseActFloat(raw string) (float64, error) {
+	var v float64
+	_, err := fmt.Sscanf(raw, "%g", &v)
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// actNPC finds the nearest unit with the given entry, walks within interaction range and stores it as the current
+// NPC.
+func (s *session) actNPC(ctx context.Context, a *actState, step ActStep) error {
+	if err := step.requireKeys("entry"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	var entry int32
+	if _, err := fmt.Sscanf(step.Args["entry"], "%d", &entry); err != nil || entry <= 0 {
+		return s.actFail(a, step, fmt.Errorf("entry=%q is not a creature entry", step.Args["entry"]))
+	}
+	if s.mover == nil {
+		return s.actFail(a, step, ErrNotReady)
+	}
+	target := s.nearestEntry(entry)
+	if target == nil {
+		return s.actFail(a, step, fmt.Errorf("no unit of entry %d in the world model", entry))
+	}
+	now := s.transport().Now()
+	tx, ty, tz := target.Position(now)
+	if dist := objects.Distance(s.MoverX(), s.MoverY(), s.MoverZ(), tx, ty, tz); dist > actInteractReach {
+		if err := s.requireWalkMode(step); err != nil {
+			return s.actFail(a, step, err)
+		}
+		px, py, pz := approachPoint(s.MoverX(), s.MoverY(), s.MoverZ(), tx, ty, tz, actInteractReach*0.75, 1)
+		if err := s.walkToPoint(ctx, px, py, pz, fmt.Sprintf("entry %d", entry)); err != nil {
+			return s.actFail(a, step, err)
+		}
+		now = s.transport().Now()
+		tx, ty, tz = target.Position(now)
+		dist = objects.Distance(s.MoverX(), s.MoverY(), s.MoverZ(), tx, ty, tz)
+		if dist > actInteractReach {
+			return s.actFail(a, step, fmt.Errorf("entry %d is %.1f yd away after the walk", entry, dist))
+		}
+	}
+	a.npc = target
+	a.npcEntry = entry
+	a.hasNPC = true
+	a.hasMenu = false
+	s.actMenu, s.actQuest = nil, nil
+	s.actOK(a, step, fmt.Sprintf("entry %d within reach", entry))
+	return nil
+}
+
+// nearestEntry returns the nearest unit of the given entry in the world model.
+func (s *session) nearestEntry(entry int32) *objects.Object {
+	mx, my, mz := s.MoverX(), s.MoverY(), s.MoverZ()
+	var best *objects.Object
+	bestDist := float32(0)
+	for _, u := range s.world.Units(mx, my, mz) {
+		if !u.Info.HasUnit || u.Info.Entry != entry {
+			continue
+		}
+		x, y, z := u.Position(s.transport().Now())
+		if d := objects.Distance(mx, my, mz, x, y, z); best == nil || d < bestDist {
+			best, bestDist = u, d
+		}
+	}
+	return best
+}
+
+// npcFlags returns what opening packet an NPC needs: quest hello when it has the quest-giver flag but no gossip
+// flag, talk otherwise.
+func npcNeedsQuestHello(flags uint32) bool {
+	return flags&npc.NPCFlagQuestGiver != 0 && flags&npc.NPCFlagGossip == 0
+}
+
+// actOpenStep routes `open`: a step that names an item opens the item, one that names nothing opens the current
+// NPC's menu.
+func (s *session) actOpenStep(ctx context.Context, a *actState, step ActStep) error {
+	if _, ok := step.Args["entry"]; ok {
+		return s.actOpenItem(ctx, a, step)
+	}
+	if _, ok := step.Args["slot"]; ok {
+		return s.actOpenItem(ctx, a, step)
+	}
+	return s.actOpen(ctx, a, step)
+}
+
+// actOpen sends TALK_TO_GOSSIP when NpcFlags has GOSSIP 0x1, otherwise QUEST_GIVER_HELLO, and prints the menu. The
+// current NPC comes from the last `npc` step; the packet is always select-then-talk, like the spirit healer flow.
+func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error {
+	if !a.hasNPC || a.npc == nil {
+		return s.actFail(a, step, fmt.Errorf("no current NPC (an npc step comes first)"))
+	}
+	now := s.transport().Now()
+	nx, ny, nz := a.npc.Position(now)
+	if dist := objects.Distance(s.MoverX(), s.MoverY(), s.MoverZ(), nx, ny, nz); dist > actInteractReach {
+		return s.actFail(a, step, fmt.Errorf("the NPC is %.1f yd away (walk closer first)", dist))
+	}
+	guid := a.npc.GUID
+	if err := s.transport().Send(wire.CMSGSetSelection, combat.BuildSetSelection(guid)); err != nil {
+		return s.actFail(a, step, fmt.Errorf("CMSG_SET_SELECTION: %w", err))
+	}
+	a.hasMenu, a.quests = false, nil
+	// The stored answer follows this open: a menu left from an earlier exchange must not satisfy the wait.
+	s.actMenu, s.actQuest = nil, nil
+	useQuestHello := npcNeedsQuestHello(a.npc.Info.NpcFlags)
+	if useQuestHello {
+		if err := s.transport().Send(wire.CMSGQuestGiverHello, npc.BuildQuestGiverHello(guid)); err != nil {
+			return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_HELLO: %w", err))
+		}
+	} else {
+		if err := s.transport().Send(wire.CMSGTalkToGossip, npc.BuildTalkToGossip(guid)); err != nil {
+			return s.actFail(a, step, fmt.Errorf("CMSG_TALK_TO_GOSSIP: %w", err))
+		}
+	}
+	menu, quests, found, err := s.waitActAnswer(ctx, guid, actMenuWait, useQuestHello)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if !found {
+		if useQuestHello {
+			return s.actFail(a, step, fmt.Errorf("no quest answer within %s", actMenuWait))
+		}
+		return s.actFail(a, step, fmt.Errorf("no gossip menu within %s", actMenuWait))
+	}
+	a.menuNPC = !useQuestHello
+	if quests != nil {
+		// A quest-only NPC answers the hello with its quest list; there is no gossip menu to choose from.
+		a.menu = npc.GossipMessage{Unit: guid}
+		a.hasMenu = true
+		a.quests = quests
+		s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("quest list with %d quest(s)", quests.Quests))
+		return nil
+	}
+	a.menu = *menu
+	a.hasMenu = true
+	s.printActMenu(a, *menu)
+	return nil
+}
+
+// waitActAnswer waits up to wait for the answer of the NPC guid: its gossip menu, or (questList) its quest list. The
+// answers land on the session (handleNPC stores them); only one from this NPC counts. found is false when none came.
+func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.Duration, questList bool) (*npc.GossipMessage, *npc.QuestGiverQuestList, bool, error) {
+	end := s.transport().Now().Add(wait)
+	for {
+		if m := s.actMenu; m != nil && m.Unit == guid {
+			s.actMenu = nil
+			return m, nil, true, nil
+		}
+		if q := s.actQuest; questList && q != nil && q.Giver == guid {
+			s.actQuest = nil
+			return nil, q, true, nil
+		}
+		if err := s.linkDead(); err != nil {
+			return nil, nil, false, err
+		}
+		now := s.transport().Now()
+		if !now.Before(end) {
+			return nil, nil, false, nil
+		}
+		step := 100 * time.Millisecond
+		if left := end.Sub(now); left < step {
+			step = left
+		}
+		if err := s.transport().WaitUntil(ctx, now.Add(step)); err != nil {
+			return nil, nil, false, err
+		}
+	}
+}
+
+// printActMenu prints the menu one option per line, then the step's ok line.
+func (s *session) printActMenu(a *actState, m npc.GossipMessage) {
+	for _, o := range m.Options {
+		s.opts.logf("menu option %d npc %d %q", o.ID, o.NPC, o.Text)
+	}
+	s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("menu %d with %d option(s)", m.MenuID, len(m.Options)))
+}
+
+// actSelect sends CMSG_GOSSIP_SELECT_OPTION for option= on the current NPC's menu, then adopts a submenu the NPC
+// answers with, so the next select checks the options of the menu now open. With no submenu the menu is spent.
+func (s *session) actSelect(ctx context.Context, a *actState, step ActStep) error {
+	if err := step.requireKeys("option"); err != nil {
+		return s.actFail(a, step, err)
+	}
+	if !a.hasMenu || a.npc == nil {
+		return s.actFail(a, step, fmt.Errorf("no open menu (an open step comes first)"))
+	}
+	var option int32
+	if _, err := fmt.Sscanf(step.Args["option"], "%d", &option); err != nil {
+		return s.actFail(a, step, fmt.Errorf("option=%q is not a number", step.Args["option"]))
+	}
+	found := false
+	for _, o := range a.menu.Options {
+		if o.ID == option {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return s.actFail(a, step, fmt.Errorf("the menu has no option %d", option))
+	}
+	s.actMenu, s.actQuest = nil, nil
+	if err := s.transport().Send(wire.CMSGGossipSelectOption, npc.BuildGossipSelectOption(a.npc.GUID, a.menu.MenuID, option, "")); err != nil {
+		return s.actFail(a, step, fmt.Errorf("CMSG_GOSSIP_SELECT_OPTION: %w", err))
+	}
+	a.hasMenu, a.quests = false, nil
+	sub, _, got, err := s.waitActAnswer(ctx, a.npc.GUID, actSubmenuWait, false)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if got {
+		a.menu, a.hasMenu = *sub, true
+		s.actOK(a, step, fmt.Sprintf("option %d, submenu %d with %d option(s)", option, sub.MenuID, len(sub.Options)))
+		return nil
+	}
+	s.actOK(a, step, fmt.Sprintf("option %d", option))
+	return nil
+}
+
+// actClose sends CMSG_CLOSE_INTERACTION for the current NPC and forgets the menu.
+func (s *session) actClose(ctx context.Context, a *actState, step ActStep) error {
+	_ = ctx
+	if !a.hasNPC || a.npc == nil {
+		return s.actFail(a, step, fmt.Errorf("no current NPC (an npc step comes first)"))
+	}
+	if err := s.transport().Send(wire.CMSGCloseInteraction, npc.BuildCloseInteraction(a.npc.GUID)); err != nil {
+		return s.actFail(a, step, fmt.Errorf("CMSG_CLOSE_INTERACTION: %w", err))
+	}
+	a.hasMenu, a.quests = false, nil
+	s.actMenu, s.actQuest = nil, nil
+	s.actOK(a, step, "closed")
+	return nil
+}
+
+// act runs the whole script: settle, then one line per step. A failed step ends the run with its error; the
+// caller still logs out.
+func (s *session) act(ctx context.Context, steps []ActStep) error {
+	settle := s.opts.Settle
+	if settle <= 0 {
+		settle = 3 * time.Second
+	}
+	if err := s.collect(ctx, settle); err != nil {
+		return err
+	}
+	a := &actState{}
+	for _, step := range steps {
+		if err := s.actStep(ctx, a, step); err != nil {
+			return err
+		}
+	}
+	return nil
+}

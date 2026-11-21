@@ -117,6 +117,13 @@ type World struct {
 	head  int
 	// lastUpdate is the client time of the last applied update, for the report.
 	applied int
+	// threat is the pushed per-mob threat table (threat.go) and encounters the undrained encounter events
+	// (encounter.go). ended remembers the successful ends for the kill credit's dedupe and open the encounters a
+	// start named and no end closed. All are rewritten by the packet loop under the model's lock.
+	threat     map[wire.GUID]*ThreatMob
+	encounters []EncounterEvent
+	ended      map[uint32]time.Time
+	open       map[uint32]bool
 }
 
 // orderEntry is one touch of an object, for eviction. An entry whose seq is not the object's current seq is stale.
@@ -146,6 +153,7 @@ func NewWorld(mapID uint32) *World {
 		partialKinds:   make(map[string]int),
 		unparsed:       make(map[string]int),
 		unparsedDetail: make(map[string]string),
+		threat:         make(map[wire.GUID]*ThreatMob),
 	}
 }
 
@@ -166,6 +174,12 @@ func (w *World) ResetForMap(mapID uint32) {
 	w.order = w.order[:0]
 	w.head = 0
 	w.mapID = mapID
+	// Threat and encounter state belong to one instance: the old instance's lists and events must not be read as
+	// the new one's.
+	w.threat = make(map[wire.GUID]*ThreatMob)
+	w.encounters = w.encounters[:0]
+	w.ended = nil
+	w.open = nil
 }
 
 // Counts is a snapshot of how many blocks the model applied.
@@ -464,6 +478,25 @@ func (w *World) evictLocked() {
 	}
 }
 
+// TouchObjects stamps the named objects as most recently used, without changing their LastSeen, so the object cap
+// evicts other objects before them. Unknown GUIDs are ignored.
+func (w *World) TouchObjects(guids []wire.GUID) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, g := range guids {
+		o := w.objects[g]
+		if o == nil {
+			continue
+		}
+		w.seq++
+		o.seq = w.seq
+		w.order = append(w.order, orderEntry{seq: o.seq, guid: o.GUID})
+	}
+	if len(w.order)-w.head > 4*len(w.objects)+1024 {
+		w.rebuildOrderLocked()
+	}
+}
+
 // SetActiveMover names the object a walk drives; it is never evicted.
 func (w *World) SetActiveMover(guid wire.GUID) {
 	w.mu.Lock()
@@ -637,6 +670,63 @@ func mergeInfo(dst *Info, src Info) {
 	if f.SpellID {
 		dst.SpellID = src.SpellID
 	}
+	if src.Item != nil {
+		if f.ItemOwner {
+			dst.item().Owner = src.Item.Owner
+		}
+		if f.ContainedIn {
+			dst.item().ContainedIn = src.Item.ContainedIn
+		}
+		if f.StackCount {
+			dst.item().StackCount = src.Item.StackCount
+		}
+		if f.Durability {
+			dst.item().Durability = src.Item.Durability
+		}
+		if f.MaxDurability {
+			dst.item().MaxDurability = src.Item.MaxDurability
+		}
+	}
+	if src.Container != nil {
+		if f.NumSlots {
+			dst.container().NumSlots = src.Container.NumSlots
+		}
+		if f.Slots {
+			dc, sc := dst.container(), src.Container
+			if sc.delta {
+				// A ContainerData update names only the changed slots; the others are not in the packet.
+				for n, ch := range sc.changed {
+					if ch {
+						dc.Slots[n] = sc.Slots[n]
+					}
+				}
+			} else {
+				dc.Slots = sc.Slots
+			}
+		}
+	}
+	if src.Player != nil {
+		if f.QuestLog {
+			dst.player().QuestLog = src.Player.QuestLog
+		}
+		if f.VisibleItems {
+			dst.player().VisibleItems = src.Player.VisibleItems
+		}
+		if f.InvSlots {
+			dst.player().InvSlots = src.Player.InvSlots
+		}
+		if f.InvSlotDeltas {
+			pl := dst.player()
+			for slot, guid := range src.Player.InvSlotDeltas {
+				if slot >= 0 && slot < len(pl.InvSlots) {
+					pl.InvSlots[slot] = guid
+				}
+			}
+		}
+		if f.Coinage {
+			dst.player().Coinage = src.Player.Coinage
+		}
+	}
 }
 
 // ApplyMonsterMove applies SMSG_ON_MONSTER_MOVE for one object. A mover the model does not hold is counted, never
@@ -795,6 +885,27 @@ func (w *World) Units(x, y, z float32) []*Object {
 			return di < dj
 		}
 		return out[i].GUID.Low < out[j].GUID.Low
+	})
+	return out
+}
+
+// Items returns a snapshot of the objects that carry item data (items and bags), in GUID order.
+func (w *World) Items() []*Object {
+	w.mu.RLock()
+	out := make([]*Object, 0, 64)
+	for _, o := range w.objects {
+		if o.Info.Item == nil {
+			continue
+		}
+		cp := *o
+		out = append(out, &cp)
+	}
+	w.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].GUID.Low != out[j].GUID.Low {
+			return out[i].GUID.Low < out[j].GUID.Low
+		}
+		return out[i].GUID.High < out[j].GUID.High
 	})
 	return out
 }

@@ -227,12 +227,31 @@ func reader(payload []byte, hook func(wire.GUID)) *wire.Buffer {
 	return b
 }
 
-// ParseUpdateObject parses one SMSG_UPDATE_OBJECT payload (without the opcode).
-func ParseUpdateObject(payload []byte) (*Update, error) { return parseUpdateObject(payload, nil) }
+// pinnedRealmBuild is the realm build whose update-field layouts ParseUpdateObject assumes: the build the wire
+// opcode table is pinned to as well. A session that knows the realm's build passes it to ParseUpdateObjectForBuild.
+const pinnedRealmBuild uint32 = 70707
 
-// parseUpdateObject is ParseUpdateObject with an audit hook: every GUID in the packet, including the ones inside the
-// values and movement blocks that the decoded fields drop, passes through hook.
+// ParseUpdateObject parses one SMSG_UPDATE_OBJECT payload (without the opcode), for the pinned realm build.
+func ParseUpdateObject(payload []byte) (*Update, error) {
+	return parseUpdateObjectBuild(payload, pinnedRealmBuild, nil)
+}
+
+// ParseUpdateObjectForBuild parses one SMSG_UPDATE_OBJECT payload for a realm of the given build. The realm build
+// selects the ActivePlayerData update-field layout (the InvSlots group and its first entry move between builds,
+// UpdateFields.cpp:5823-5849); a build this round has no layout for decodes no ActivePlayerData at all instead of
+// guessing one.
+func ParseUpdateObjectForBuild(payload []byte, realmBuild uint32) (*Update, error) {
+	return parseUpdateObjectBuild(payload, realmBuild, nil)
+}
+
+// parseUpdateObject is parseUpdateObjectBuild for the pinned build.
 func parseUpdateObject(payload []byte, hook func(wire.GUID)) (*Update, error) {
+	return parseUpdateObjectBuild(payload, pinnedRealmBuild, hook)
+}
+
+// parseUpdateObjectBuild is ParseUpdateObject with an audit hook: every GUID in the packet, including the ones
+// inside the values and movement blocks that the decoded fields drop, passes through hook.
+func parseUpdateObjectBuild(payload []byte, realmBuild uint32, hook func(wire.GUID)) (*Update, error) {
 	b := reader(payload, hook)
 	u := &Update{}
 	u.MapID = b.ReadU16()
@@ -276,7 +295,7 @@ func parseUpdateObject(payload []byte, hook func(wire.GUID)) (*Update, error) {
 		if br.Remaining() == 0 {
 			return nil, fmt.Errorf("objects: update declares %d blocks but has data for %d", u.BlockCount, n)
 		}
-		frag, err := parseBlock(br, dataStart, hook)
+		frag, err := parseBlock(br, dataStart, realmBuild, hook)
 		if err != nil {
 			return nil, fmt.Errorf("objects: block %d: %w", n, err)
 		}
@@ -296,7 +315,7 @@ func parseUpdateObject(payload []byte, hook func(wire.GUID)) (*Update, error) {
 
 // parseBlock reads one update block. The update type and the GUID precede both layouts (BaseEntity.cpp:117-122 and
 // BaseEntity::PrepareValuesUpdateBuffer, :213-220).
-func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, error) {
+func parseBlock(b *wire.Buffer, base int, realmBuild uint32, hook func(wire.GUID)) (WorldFragment, error) {
 	updateType := b.ReadU8()
 	guid := wire.ReadPackedGUID(b)
 	switch updateType {
@@ -307,7 +326,7 @@ func parseBlock(b *wire.Buffer, base int, hook func(wire.GUID)) (WorldFragment, 
 		}
 		bodyStart := base + b.Offset()
 		body := reader(b.ReadBytes(size), hook)
-		info, stop, err := parseValuesUpdate(body)
+		info, stop, err := parseValuesUpdateBuild(body, realmBuild)
 		if err != nil {
 			// The body is size-framed: a structure this round cannot decode is skipped whole, never fatal.
 			return WorldFragment{
@@ -466,6 +485,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 	var info Info
 	flags := b.ReadU8()
 	owner := flags&0x01 != 0
+	partyMember := flags&0x02 != 0
 	unitAll := flags&0x04 != 0
 	empath := flags&0x08 != 0
 	ids, err := fragmentIDs(b, 16)
@@ -488,7 +508,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 		}
 		switch id {
 		case fragCGObject:
-			if err := readObjectFragmentCreate(b, &info, objectType, owner, unitAll, empath, thisIsYou); err != nil {
+			if err := readObjectFragmentCreate(b, &info, objectType, owner, unitAll, empath, partyMember, thisIsYou); err != nil {
 				return info, walkStop{}, err
 			}
 		case fragVendor:
@@ -508,7 +528,7 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 // readObjectFragmentCreate is the CGObject fragment of a create: Object::BuildValuesCreate is virtual, so the
 // object type decides which WriteCreate methods follow (Creature.cpp:4124-4128, Player.cpp:3955-3962,
 // GameObject.cpp:4283-4287, Corpse.cpp:240-244, DynamicObject.cpp:252-256, Item.cpp:1867-1871).
-func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owner, unitAll, empath, thisIsYou bool) error {
+func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owner, unitAll, empath, partyMember, thisIsYou bool) error {
 	info.readObjectCreate(b)
 	switch objectType {
 	case TypeUnit, TypePlayer, TypeActivePlayer:
@@ -518,7 +538,14 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 		if objectType == TypeUnit {
 			return nil
 		}
-		// PlayerData (and the self-only ActivePlayerData) follow; this round does not decode them.
+		// PlayerData follows for any player (Player::BuildValuesCreate, Player.cpp:3955-3962); the receiver's own
+		// block is TYPEID_ACTIVE_PLAYER and then carries ActivePlayerData too.
+		if err := info.readPlayerCreate(b, partyMember); err != nil {
+			return err
+		}
+		if objectType == TypeActivePlayer && thisIsYou {
+			return info.readActivePlayerPrefix(b)
+		}
 		return nil
 	case TypeGameObject:
 		return info.readGameObjectCreate(b)
@@ -526,8 +553,16 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 		return info.readCorpseCreate(b)
 	case TypeDynamicObject:
 		return info.readDynamicObjectCreate(b)
-	case TypeItem, TypeContainer, TypeAzeriteEmpItem, TypeAzeriteItem:
-		// ItemData/ContainerData follow and are skipped by the block's declared size.
+	case TypeItem:
+		return info.readItemCreate(b, owner)
+	case TypeContainer:
+		// Bag::BuildValuesCreate (Bag.cpp:185-190): ItemData, then ContainerData.
+		if err := info.readItemCreate(b, owner); err != nil {
+			return err
+		}
+		return info.readContainerCreate(b)
+	case TypeAzeriteEmpItem, TypeAzeriteItem:
+		// More than ItemData follows and this round decodes neither; the block is skipped by its declared size.
 		return nil
 	}
 	return nil
@@ -537,6 +572,11 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 // content mask, then each changed updateable fragment (BaseEntity.cpp:164-194,
 // Object::BuildEntityFragmentsForValuesUpdateForPlayerWithMask, Object.cpp:114-130).
 func parseValuesUpdate(b *wire.Buffer) (Info, walkStop, error) {
+	return parseValuesUpdateBuild(b, pinnedRealmBuild)
+}
+
+// parseValuesUpdateBuild is parseValuesUpdate for a realm of the given build.
+func parseValuesUpdateBuild(b *wire.Buffer, realmBuild uint32) (Info, walkStop, error) {
 	var info Info
 	flags := b.ReadU8()
 	owner := flags&0x01 != 0
@@ -590,7 +630,7 @@ func parseValuesUpdate(b *wire.Buffer) (Info, walkStop, error) {
 		}
 		switch id {
 		case fragCGObject:
-			if err := readObjectFragmentUpdate(b, &info, owner); err != nil {
+			if err := readObjectFragmentUpdateBuild(b, &info, owner, realmBuild); err != nil {
 				return info, walkStop{}, err
 			}
 		case fragVendor:
@@ -641,12 +681,23 @@ func readVendorUpdate(b *wire.Buffer, info *Info) error {
 	return nil
 }
 
-// readObjectFragmentUpdate is the CGObject fragment of a values update: uint32 object-type mask, then the changed
-// type blocks in ascending type order (Creature.cpp:4130-4139, Player.cpp:3964-3979).
-func readObjectFragmentUpdate(b *wire.Buffer, info *Info, owner bool) error {
+// readObjectFragmentUpdateBuild is the CGObject fragment of a values update: uint32 object-type mask, then the
+// changed type blocks in ascending type order (Creature.cpp:4130-4139, Player.cpp:3964-3979). realmBuild selects the
+// ActivePlayerData value layout.
+func readObjectFragmentUpdateBuild(b *wire.Buffer, info *Info, owner bool, realmBuild uint32) error {
 	typeMask := b.ReadU32()
 	if typeMask&(1<<TypeObject) != 0 {
 		info.readObjectUpdate(b)
+	}
+	if typeMask&(1<<TypeItem) != 0 {
+		if err := info.readItemUpdate(b); err != nil {
+			return err
+		}
+	}
+	if typeMask&(1<<TypeContainer) != 0 {
+		if err := info.readContainerUpdate(b); err != nil {
+			return err
+		}
 	}
 	if typeMask&(1<<TypeUnit) != 0 {
 		if err := info.readUnitUpdate(b); err != nil {
@@ -658,8 +709,20 @@ func readObjectFragmentUpdate(b *wire.Buffer, info *Info, owner bool) error {
 			return err
 		}
 	}
-	// Player (6), ActivePlayer (7), Item (1) and the rest are the tail of the block: they are left to the declared
-	// size. Only the receiver's own player data and items are ever sent this way in this round's traffic.
+	// Player (6) and ActivePlayer (7) updates are the tail of the block, in that order, and only ActivePlayerData is
+	// walked: the one region a backpack move changes, the InvSlots (readActivePlayerUpdate). A block that carries a
+	// PlayerData update before it (an equipment move writes VisibleItems too) is left to its declared size, because
+	// the PlayerData values would have to be skipped to reach the ActivePlayerData mask and this round does not read
+	// them; the inventory then learns an equipment move from the client's own request instead (D1, items.Tracker).
+	if typeMask&(1<<TypePlayer) == 0 && typeMask&(1<<TypeActivePlayer) != 0 {
+		if err := info.readActivePlayerUpdate(b, realmBuild); err != nil {
+			return err
+		}
+	} else if typeMask&(1<<TypePlayer) != 0 && typeMask&(1<<TypeActivePlayer) != 0 {
+		// The PlayerData values before it are not read, so the ActivePlayerData update behind them is not reached:
+		// the block says so (Info.ActivePlayerSkipped) and the session decides what that means for the inventory.
+		info.f.ActivePlayerSkipped = true
+	}
 	return b.Err()
 }
 

@@ -650,3 +650,23 @@ func TestRule13SilentOnTrials(t *testing.T) {
 		t.Fatalf("%d rule 13 hits on a trials repeat, want none (the meal input is unknown): %+v", len(hits), hits)
 	}
 }
+
+// TestLoadWatchNoCombatSkipsTheLog: the map reader does not hold the combat log; everything else loads the same.
+func TestLoadWatchNoCombatSkipsTheLog(t *testing.T) {
+	dir := t.TempDir()
+	writeWatch(t, dir)
+	full, err := LoadWatch(dir, "")
+	if err != nil || len(full.Combat) == 0 {
+		t.Fatalf("the full load has %d combat rows (err %v)", len(full.Combat), err)
+	}
+	r, err := LoadWatchNoCombat(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Combat) != 0 {
+		t.Fatalf("the combat log was loaded: %d rows", len(r.Combat))
+	}
+	if len(r.Frames) != len(full.Frames) || r.Name != full.Name {
+		t.Fatalf("the frames differ: %d against %d", len(r.Frames), len(full.Frames))
+	}
+}

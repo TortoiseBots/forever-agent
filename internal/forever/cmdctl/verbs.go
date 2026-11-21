@@ -1,0 +1,259 @@
+package cmdctl
+
+// The verb table (spec section 2.3): the one place that says which module line a verb becomes, which module
+// package it needs, and whether it is an order (and so waits for the run guard). Adding a module package is a
+// table change: the rows point at a new path, never at a second verb.
+//
+// PathCmd rows carry no path in this build. The module may answer `.tb cmd`, but the agent has no typed parser for
+// its answer until the module's order package is ported with its real output, so an answering package still
+// refuses with a reason that says the path is missing. The parser adds a path to this table, not a verb.
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// Path is where a verb's words go.
+type Path int
+
+const (
+	// PathLocal verbs are the controller's own methods: bind, unbind and status.
+	PathLocal Path = iota
+	// PathOrder is `.tb order party <verb> [arg]`, the module's slice-3 order path.
+	PathOrder
+	// PathRole is `.tb role <bot> <role>`.
+	PathRole
+	// PathRun is `.tb run <verb> ...`.
+	PathRun
+	// PathCmd is `.tb cmd <verb> ...`, the module's one order path (packages P3 and P6).
+	PathCmd
+	// PathCut verbs have no line at all: the features the port cut.
+	PathCut
+)
+
+// Verb is one row of the table. Package names the module package a PathCmd verb needs ("P3" or "P6"). Min and Max
+// bound the argument words; Guard marks the order verbs, which read the card first (D4).
+type Verb struct {
+	Name    string
+	Path    Path
+	Package string
+	Min     int
+	Max     int
+	Guard   bool
+}
+
+// Verbs is the table. The cut rows are here so that a caller asking about `view` or `scout` gets the port's answer
+// instead of an unknown verb.
+var Verbs = []Verb{
+	// The controller's own calls.
+	{Name: "bind", Path: PathLocal},
+	{Name: "unbind", Path: PathLocal},
+	{Name: "status", Path: PathLocal},
+
+	// Day one: `.tb order party ...` (slice 3).
+	{Name: "follow", Path: PathOrder, Min: 0, Max: 1, Guard: true},
+	{Name: "stay", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+	{Name: "come", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+	{Name: "attack", Path: PathOrder, Min: 1, Max: 1, Guard: true},
+	{Name: "pull", Path: PathOrder, Min: 1, Max: 1, Guard: true},
+	{Name: "endpull", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+	{Name: "hold", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+	{Name: "free", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+	{Name: "assist", Path: PathOrder, Min: 1, Max: 1, Guard: true},
+	{Name: "release", Path: PathOrder, Min: 0, Max: 0, Guard: true},
+
+	// Day one: `.tb role <bot> <role>` and the run header.
+	{Name: "role", Path: PathRole, Min: 2, Max: 2, Guard: true},
+	{Name: "run", Path: PathRun},
+
+	// P3, one order path: `.tb cmd move x y z [direct]`, pullback, focus, rest, revive.
+	{Name: "move", Path: PathCmd, Package: "P3", Min: 3, Max: 4, Guard: true},
+	{Name: "pullback", Path: PathCmd, Package: "P3", Min: 0, Max: 0, Guard: true},
+	{Name: "focus", Path: PathCmd, Package: "P3", Min: 1, Max: 1, Guard: true},
+	{Name: "rest", Path: PathCmd, Package: "P3", Min: 0, Max: 0, Guard: true},
+	{Name: "revive", Path: PathCmd, Package: "P3", Min: 0, Max: 1, Guard: true},
+
+	// P6, task orders: `.tb cmd loot|open|use|gossip|state|lootmethod`.
+	{Name: "loot", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Guard: true},
+	{Name: "open", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
+	{Name: "use", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
+	{Name: "gossip", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
+	{Name: "state", Path: PathCmd, Package: "P6", Min: 1, Max: 1, Guard: true},
+	{Name: "lootmethod", Path: PathCmd, Package: "P6", Min: 1, Max: 2, Guard: true},
+
+	// Cut from the port (CPS section 5): no line, no package.
+	{Name: "view", Path: PathCut},
+	{Name: "scout", Path: PathCut},
+	{Name: "ritual", Path: PathCut},
+	{Name: "summon", Path: PathCut},
+	{Name: "layout", Path: PathCut},
+}
+
+// Lookup returns the row for a verb name, ignoring case and surrounding space.
+func Lookup(name string) (Verb, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, v := range Verbs {
+		if v.Name == name {
+			return v, true
+		}
+	}
+	return Verb{}, false
+}
+
+// checkArgs enforces the row's argument count and each word's shape before any line is built. The order path's
+// words are the module's own grammar (letters, digits and _ . : -); a cmd word may also carry '@' and ',' (an
+// object's `entry:<id>@x,y,z`).
+func (v Verb) checkArgs(args []string) error {
+	if len(args) < v.Min || len(args) > v.Max {
+		return &UsageError{Msg: fmt.Sprintf("%s takes %s, not %d", v.Name, v.count(), len(args))}
+	}
+	extra := ""
+	if v.Path == PathCmd {
+		extra = "@,"
+	}
+	for _, a := range args {
+		if err := checkWord(a, extra); err != nil {
+			return &UsageError{Msg: v.Name + ": " + err.Error()}
+		}
+	}
+	return nil
+}
+
+// count is the row's argument count in words.
+func (v Verb) count() string {
+	switch {
+	case v.Min == v.Max && v.Min == 0:
+		return "no argument"
+	case v.Min == v.Max:
+		return fmt.Sprintf("%d argument(s)", v.Min)
+	default:
+		return fmt.Sprintf("%d to %d arguments", v.Min, v.Max)
+	}
+}
+
+// checkWord refuses an argument that could not be one word of the grammar: empty, over 96 bytes, or carrying a
+// space, '#' (the token marker), '=' or a character the grammar does not use. extra lists the path's own
+// characters, beyond the common set.
+func checkWord(s, extra string) error {
+	if s == "" {
+		return errors.New("an empty argument")
+	}
+	if len(s) > 96 {
+		return fmt.Errorf("argument %d bytes long (at most 96)", len(s))
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("_.:-", r):
+		case extra != "" && strings.ContainsRune(extra, r):
+		default:
+			return fmt.Errorf("argument %q has an unexpected character %q", s, r)
+		}
+	}
+	return nil
+}
+
+// NotAvailableError is a verb the module cannot take now: the package that carries it does not answer the
+// session's probe, or the feature was cut from the port.
+type NotAvailableError struct {
+	Verb    string
+	Package string // "P3" or "P6" when the module lacks the package
+	Why     string // the reason when it is not a package (a cut verb, a missing agent-side path)
+}
+
+func (e *NotAvailableError) Error() string {
+	switch {
+	case e.Package != "":
+		return "not-available: " + e.Verb + ": needs module package " + e.Package
+	case e.Why != "":
+		return "not-available: " + e.Verb + ": " + e.Why
+	}
+	return "not-available: " + e.Verb
+}
+
+// NotOwnedError is a mutation whose target is outside the session character's own bindings. The fresh
+// `.tb commander status <self>` read named nobody by that name (or named no binding at all), so no command line
+// was sent: the module's own check is not the trust boundary.
+type NotOwnedError struct {
+	// Target is the lead or bot the call named; an order's target is its address, "party".
+	Target string
+	// Kind is what the target had to be: "lead", "bot" or "order".
+	Kind string
+	// Sent is true when the check that failed was the read after the line went out: the bind, order, role or run
+	// verb already went through. The client cannot make read and act one step (the module is the authority), so
+	// this is how a change of ownership between the two shows.
+	Sent bool
+}
+
+func (e *NotOwnedError) Error() string {
+	if e.Kind == "order" {
+		return "cmdctl: this character commands no bots: party has no target"
+	}
+	if e.Sent {
+		return "cmdctl: " + e.Target + " was not a " + e.Kind + " this character commands when read after the line was sent; the line already went through"
+	}
+	return "cmdctl: " + e.Target + " is not a " + e.Kind + " this character commands"
+}
+
+// RefusedError is a call the module answered with every line refused: nothing was queued or changed. Bots holds the
+// per-bot refusals.
+type RefusedError struct {
+	Verb string
+	Bots []BotResult
+}
+
+func (e *RefusedError) Error() string {
+	var parts []string
+	for _, b := range e.Bots {
+		p := b.Bot
+		if b.HasError {
+			p += ": " + b.Error
+		}
+		parts = append(parts, p)
+	}
+	msg := "refused: " + e.Verb + ": nothing was queued"
+	if len(parts) > 0 {
+		msg += " (" + strings.Join(parts, ", ") + ")"
+	}
+	return msg
+}
+
+// BindRefusedError is a bind that names a lead or member this character may not bind: a real player or a real
+// player's party, a commander, or a bot another commander leads or holds. Refused lists every such name. No line
+// was sent.
+type BindRefusedError struct {
+	Refused []BindRefusal
+}
+
+// BindRefusal is one name a bind may not take, and why.
+type BindRefusal struct {
+	Name string
+	Why  string
+}
+
+func (e *BindRefusedError) Error() string {
+	parts := make([]string, 0, len(e.Refused))
+	for _, r := range e.Refused {
+		parts = append(parts, r.Name+" cannot be bound: "+r.Why)
+	}
+	return "cmdctl: " + strings.Join(parts, "; ")
+}
+
+// RunActiveError is an order refused because a run runs on the card (D4).
+type RunActiveError struct {
+	Lead  string
+	Plan  string
+	State string
+}
+
+func (e *RunActiveError) Error() string {
+	return "run-active: " + e.Lead + "'s run of " + e.Plan + " is " + e.State +
+		"; set pause_run to order while it runs"
+}
+
+// UsageError is a call the table or the arguments do not allow: an unknown verb, a wrong argument count, a name
+// the server's rule refuses. It is the caller's mistake, not the module's.
+type UsageError struct{ Msg string }
+
+func (e *UsageError) Error() string { return "cmdctl: " + e.Msg }

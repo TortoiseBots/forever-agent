@@ -287,6 +287,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("status", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeStatus, error) {
 		return s.serveStatus(st), nil
 	}))
+	srv.Register("inv", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeInventory, error) {
+		return s.serveInventory(), nil
+	}))
 	srv.Register("units", serveReadTyped(st, func(s *session, _ context.Context, p serveUnitsParams) ([]ServeUnit, error) {
 		return s.serveUnits(p)
 	}))

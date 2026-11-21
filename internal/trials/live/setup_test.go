@@ -28,9 +28,8 @@ type setupFake struct {
 	runner  *TBRunner
 
 	// tbFn, when set, answers a `.tb` line first (nil falls through to the
-	// prefix script); removed collects the removal lines a test saw.
-	tbFn    func(line string) []string
-	removed []string
+	// prefix script).
+	tbFn func(line string) []string
 }
 
 type chatLinePage struct {

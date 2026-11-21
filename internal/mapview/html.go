@@ -56,7 +56,7 @@ func (s *Scene) data() replayData {
 	d := replayData{Seconds: r1(s.Run.Seconds), Floors: len(s.Floors), Gap: s.Cfg.GapAfter.Seconds(),
 		Colors: map[string]string{string(FateKilled): fateColor(FateKilled), string(FateSkipped): fateColor(FateSkipped),
 			string(FateEvaded): fateColor(FateEvaded), string(FateAlive): fateColor(FateAlive), "boss": colBoss,
-			"teleport": colTeleport, "door": colDoor}}
+			"teleport": colTeleport, "door": colDoor, "pause": colPause, "rescue": colRescue}}
 	if !s.Run.Start.IsZero() {
 		d.Start = s.Run.Start.UTC().Format("2006-01-02 15:04:05")
 	}
@@ -213,6 +213,8 @@ function drawAll(){
   else if(k==='door')e=mk('rect',{x:x-6,y:y-6,width:12,height:12,fill:D.colors.door,stroke:'#fff'},g);
   else if(k==='teleport'||k==='gm')e=mk('path',{d:'M'+x+' '+(y-7)+'l7 12h-14z',fill:D.colors.teleport,stroke:'#fff'},g);
   else if(k==='boss_kill')e=mk('circle',{cx:x,cy:y,r:14,fill:'none',stroke:D.colors.boss,'stroke-width':2},g);
+  else if(k==='pause')e=mk('path',{d:'M'+(x-3)+' '+(y-5)+'v10M'+(x+3)+' '+(y-5)+'v10',stroke:D.colors.pause,'stroke-width':2.4,fill:'none'},g);
+  else if(k==='rescue')e=mk('path',{d:'M'+(x-5)+' '+y+'h10M'+x+' '+(y-5)+'v10',stroke:D.colors.rescue,'stroke-width':2.4,fill:'none'},g);
   else e=mk('path',{d:'M'+x+' '+y+'v-16',stroke:'#222','stroke-width':1.5},g);
   mk('title',{},e).textContent=m.label+' at '+fmt(m.t);});
  var html='';for(var i=Math.max(0,shown.length-60);i<shown.length;i++){var m=shown[i];html='<li><b>'+fmt(m.t)+'</b> '+esc(m.label||m.kind)+'</li>'+html;}

@@ -41,6 +41,9 @@ import (
 type watchRun struct {
 	record tbcmd.RunState
 	have   bool
+	// startedAt is the run-start action's reply time: the module's run zero, and the anchor the trace's run_start
+	// event carries so a map reader can put the module's at_s on the trace's clock.
+	startedAt time.Time
 
 	lastSeq   int
 	lastEvent time.Time
@@ -79,8 +82,10 @@ type watchRun struct {
 	pauseSeen         map[int]bool
 	bosses            map[uint32]string
 	bossAt            time.Time
-	lastLine          string
-	lastNote          string
+	// encounters are the instance's own pull/kill/wipe packets, on the module run's clock.
+	encounters []EncounterRecord
+	lastLine   string
+	lastNote   string
 	// stopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it (or it could not stop yet), so the result is not a clean end.
 	stopUnconfirmed bool
@@ -91,14 +96,15 @@ type watchRun struct {
 
 	// The report card's evidence: the module's own event times grouped by leg and step, the deaths, the rescues and
 	// the party slot each unit id is. Units holds role words, never character names.
-	legs      map[int]*LegRecord
-	legSeen   map[int]bool
-	steps     map[[2]int]*StepRecord
-	stepSeen  map[[2]int]bool
-	deaths    []DeathRecord
-	rescueLog []RescueNote
-	roles     map[string]string
-	elapsed   int
+	legs       map[int]*LegRecord
+	legSeen    map[int]bool
+	steps      map[[2]int]*StepRecord
+	stepSeen   map[[2]int]bool
+	deaths     []DeathRecord
+	loosePulls []PullNote // pulls the module sent without a step (or leg)
+	rescueLog  []RescueNote
+	roles      map[string]string
+	elapsed    int
 }
 
 // Watch runs the watch machine and returns what it saw. The caller owns the ports; r.cfg.Watch and r.cfg.Leader say
@@ -233,7 +239,13 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 				r.stop("start:bad-report")
 				return
 			}
-			w.lastEvent = r.now()
+			// The reply time is the module's run zero on the trace's clock: the map adapter aligns every at_s with
+			// it. The event is written even when the run ends at once, so an old-style duration guess is never used.
+			w.startedAt = r.now()
+			w.lastEvent = w.startedAt
+			if r.rec != nil {
+				r.rec.Event(w.startedAt, "run_start", map[string]any{"plan": r.route.Name})
+			}
 			r.applyRun(w, st)
 			if st.HasLeg {
 				// The module's run starts in its first leg: that leg's time starts at the run's zero.
@@ -292,6 +304,7 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 				}
 			}
 		}
+		r.applyEncounters(r.now(), w)
 		r.drainCombat(w)
 		if r.lim.MaxMinutes > 0 && r.sinceStart() >= time.Duration(r.lim.MaxMinutes)*time.Minute {
 			r.stop("budget")
@@ -373,16 +386,17 @@ func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
 		w.frameBlind = false
 		r.logf("watch: frame: the state read answers again")
 	}
-	thr, terr := r.cmd.Threat(ctx)
-	if errors.Is(terr, ErrLinkLost) {
-		r.linkLost()
+	// The client's pushed threat table answers first; `.tb threat` is now the fallback, at most once per
+	// threatFallbackEvery while the packets flow.
+	thr, tok := r.threat(ctx)
+	if r.stopReason != "" || r.lost {
 		return
 	}
 	var trep *tbcmd.ThreatReport
-	if terr != nil {
+	if !tok {
 		if !w.frameThreatBlind {
 			w.frameThreatBlind = true
-			r.logf("watch: frame: the threat read failed (%v); the frame carries the party only", terr)
+			r.logf("watch: frame: the threat read failed; the frame carries the party only")
 		}
 	} else {
 		if w.frameThreatBlind {
@@ -425,13 +439,17 @@ func (r *Run) partySlot(name string) int {
 }
 
 // frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when this client's model
-// holds the name, else nothing (a frame never carries a character name).
+// holds the name. A pushed threat list names a unit by GUID when the model holds no name for it, and that text is
+// already the trace's own. Nothing when neither is true (a frame never carries a character name).
 func (r *Run) frameGUID(name string) string {
 	if name == "" {
 		return ""
 	}
 	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
 		return g.String()
+	}
+	if len(name) >= 2 && name[0] == '0' && (name[1] == 'x' || name[1] == 'X') {
+		return name
 	}
 	return ""
 }
@@ -605,6 +623,15 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 		w.wipePending = true
 		w.wipeSeq = ev.Seq
 		w.wipeAt = r.now()
+		if r.rec != nil {
+			// The module's own wipe event, at the module's own second: the map draws it where it happened instead
+			// of inferring one from the deaths. A record without it (from before this event) still infers.
+			at := r.now()
+			if !w.startedAt.IsZero() {
+				at = w.startedAt.Add(time.Duration(ev.T) * time.Second)
+			}
+			r.rec.Event(at, "wipe", map[string]any{"at_s": ev.T})
+		}
 	case "pause":
 		// The rescue's pause is the wipe's own pause and nothing else: the event right after the wipe (no other
 		// event between them, by sequence) whose reason names the wipe or the dead party it left. A pause later in
@@ -673,6 +700,10 @@ func wipePauseReason(why string) bool {
 // noteEvent folds one event into the leg's and step's record: its time span, its pulls, deaths and wipes. The card
 // is built from this, so it sees the module's own event times, not the watcher's poll times.
 func (w *watchRun) noteEvent(ev tbcmd.RunEvent) {
+	if ev.Kind == "pull" && (!ev.HasLeg || !ev.HasStep) {
+		// No step to file it under, but it is still a pull: the record keeps it for the run map.
+		w.loosePulls = append(w.loosePulls, PullNote{Seq: ev.Seq, AtS: ev.T})
+	}
 	if !ev.HasLeg {
 		return
 	}
@@ -965,6 +996,14 @@ func (r *Run) watchBosses(ctx context.Context, w *watchRun, force bool) {
 	if !force && !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
 		return
 	}
+	// The encounter packets are the exact boss state of a named fight, so while one is running the module's boss
+	// report is not needed. Outside one, the report is the fallback: an instance whose script sends nothing (the
+	// classic Ragefire Chasm bosses) gets the minute reads, and so does a boss the script never names as soon as a
+	// named fight ends — a five-minute hold from the last packet would hide that kill. A forced read at the end is
+	// never skipped.
+	if !force && r.world.EncounterOpen() {
+		return
+	}
 	rep, why := r.act(ctx, Action{Kind: ActionInstanceInfo, Who: r.cfg.Leader})
 	if why != "" || rep.Info == nil {
 		return
@@ -1176,8 +1215,8 @@ func (r *Run) watchSummary(w *watchRun) {
 		ElapsedS: float64(st.Elapsed), Why: st.Why, Bosses: bosses, Rescues: w.rescues, Events: w.events,
 		Frames: w.frames, CombatRows: w.combatRows, CombatDropped: w.combatLost,
 		CombatBytes: r.rec.CombatBytes(), CombatTruncated: w.combatTruncated, CombatError: w.combatErr,
-		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), DeathLog: w.deaths,
-		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed,
+		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), LoosePulls: w.loosePulls, DeathLog: w.deaths,
+		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed, Encounters: w.encounters,
 	}
 	r.watch = &rw
 	if r.rec == nil {

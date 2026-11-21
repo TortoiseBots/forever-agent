@@ -123,6 +123,14 @@ func (s *Scene) legend(x, y float64, floor int, dynamic bool) (string, float64) 
 		if n := kinds[MarkLeg]; n > 0 {
 			row(fmt.Sprintf(`<path d="M-5 6v-14h9l-3 4l3 4h-9" fill="%s" stroke="%s"/>`, colPlan, colText), fmt.Sprintf("leg of the plan began: %d", n))
 		}
+		if n := kinds[MarkPause]; n > 0 {
+			row(fmt.Sprintf(`<circle r="7" fill="#ffffff" stroke="%s" stroke-width="2"/><path d="M-2.5 -3v6M2.5 -3v6" stroke="%s" stroke-width="2"/>`, colPause, colPause),
+				fmt.Sprintf("module paused the run: %d", n))
+		}
+		if n := kinds[MarkRescue]; n > 0 {
+			row(fmt.Sprintf(`<circle r="7" fill="#ffffff" stroke="%s" stroke-width="2"/><path d="M-3 0h6M0 -3v6" stroke="%s" stroke-width="2"/>`, colRescue, colRescue),
+				fmt.Sprintf("practice rescue: %d", n))
+		}
 	}
 	if o := s.Overlay; o != nil {
 		head("Plan: " + o.Name)

@@ -1137,8 +1137,8 @@ func (r *Run) sendPull(ctx context.Context, p pullPermit, u Unit) (bool, string)
 	if rep.Refused > 0 || rep.Queued == 0 {
 		code := "refused"
 		for _, res := range rep.Results {
-			if res.HasErr {
-				code = res.Error
+			if res.HasCode {
+				code = res.Code
 			}
 		}
 		return false, code
@@ -1174,8 +1174,8 @@ func (r *Run) sendAttack(ctx context.Context, p pullPermit, g wire.GUID) (bool, 
 	if rep.Refused > 0 || rep.Queued == 0 {
 		code := "refused"
 		for _, res := range rep.Results {
-			if res.HasErr {
-				code = res.Error
+			if res.HasCode {
+				code = res.Code
 			}
 		}
 		return false, code

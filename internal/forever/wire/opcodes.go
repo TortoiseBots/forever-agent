@@ -52,6 +52,7 @@ const (
 	CMSGQueryCorpseTransport uint32 = 0x43008D
 	CMSGTalkToGossip         uint32 = 0x3E0027
 	CMSGGossipSelectOption   uint32 = 0x3E0029
+	CMSGQuestGiverHello      uint32 = 0x3E002B
 	CMSGSpiritHealerActivate uint32 = 0x3E0045
 	CMSGCloseInteraction     uint32 = 0x3E0028
 	CMSGQueryPlayerNames     uint32 = 0x440010
@@ -157,6 +158,24 @@ const (
 	SMSGSpellDelayed         uint32 = 0x670032
 	SMSGLogXPGain            uint32 = 0x450190
 	SMSGDeathReleaseLoc      uint32 = 0x45017F
+	// The core-gains round (Opcodes.h:922, 1262, 1466-1472, 1675, 2162, 2361-2384, 2415-2417): the advanced
+	// combat log flag, the pushed threat lists, the encounter packets and the combat-log kinds this round decodes.
+	CMSGSetAdvancedCombatLogging uint32 = 0x3D0193
+	SMSGThreatUpdate             uint32 = 0x450186
+	SMSGHighestThreatUpdate      uint32 = 0x450185
+	SMSGThreatRemove             uint32 = 0x450187
+	SMSGThreatClear              uint32 = 0x450188
+	SMSGEncounterStart           uint32 = 0x450228
+	SMSGEncounterEnd             uint32 = 0x450229
+	SMSGBossKill                 uint32 = 0x4B002B
+	SMSGSpellInterruptLog        uint32 = 0x67000D
+	SMSGSpellDispellLog          uint32 = 0x670007
+	SMSGSpellMissLog             uint32 = 0x670034
+	SMSGSpellInstakillLog        uint32 = 0x670021
+	SMSGEnvironmentalDamageLog   uint32 = 0x67000E
+	SMSGSpellAbsorbLog           uint32 = 0x67000C
+	SMSGProcResist               uint32 = 0x450205
+	SMSGSpellOrDamageImmune      uint32 = 0x67001D
 	// The rest of the death flow (Opcodes.h:27, 228, 1948-1976, 377, 430, 1318): the graveyard, the corpse, a
 	// resurrection offer, the spirit healer's menu and the movement state a ghost is given.
 	SMSGResurrectRequest     uint32 = 0x450012
@@ -166,13 +185,20 @@ const (
 	SMSGPreRessurect         uint32 = 0x450211
 	SMSGStandStateUpdate     uint32 = 0x4501C8
 	SMSGGossipMessage        uint32 = 0x650018
-	SMSGMoveSetRunSpeed      uint32 = 0x5E0020
-	SMSGMoveSetSwimSpeed     uint32 = 0x5E0022
-	SMSGMoveSetWaterWalk     uint32 = 0x5E002B
-	SMSGMoveSetLandWalk      uint32 = 0x5E002E
-	SMSGSendKnownSpells      uint32 = 0x670019
-	SMSGLevelUpInfo          uint32 = 0x450194
-	SMSGSpellExecuteLog      uint32 = 0x670033
+	// The act round's NPC answers (Opcodes.h:1602, 1604, 2058): the menu's completion, the option's NPC
+	// interaction, and the interaction-open result.
+	SMSGGossipComplete           uint32 = 0x650017
+	SMSGGossipOptionNPCInteract  uint32 = 0x650028
+	SMSGNPCInteractionOpenResult uint32 = 0x45031A
+	// A quest-only NPC's answer to the quest hello (Opcodes.h:2200): its quest list.
+	SMSGQuestGiverQuestList uint32 = 0x65001A
+	SMSGMoveSetRunSpeed     uint32 = 0x5E0020
+	SMSGMoveSetSwimSpeed    uint32 = 0x5E0022
+	SMSGMoveSetWaterWalk    uint32 = 0x5E002B
+	SMSGMoveSetLandWalk     uint32 = 0x5E002E
+	SMSGSendKnownSpells     uint32 = 0x670019
+	SMSGLevelUpInfo         uint32 = 0x450194
+	SMSGSpellExecuteLog     uint32 = 0x670033
 )
 
 // Loot and game objects (Opcodes.h:357-358, 579-583, 1499-1500, 1805, 1865-1874, 2395):
@@ -203,6 +229,19 @@ const (
 
 	SMSGGameObjectCustomAnim uint32 = 0x450068
 	SMSGGameObjectDespawn    uint32 = 0x450069
+
+	// The item actions of round R2 (Opcodes.h:88-95, 323, 732, 984, 1000-1001, 1051, 1793): the client's
+	// inventory moves and the two answers that carry an item gain and a refusal.
+	CMSGAutoEquipItem          uint32 = 0x400004
+	CMSGAutoStoreBagItem       uint32 = 0x400005
+	CMSGSwapItem               uint32 = 0x400006
+	CMSGSwapInvItem            uint32 = 0x400007
+	CMSGSplitItem              uint32 = 0x400008
+	CMSGAutoEquipItemSlot      uint32 = 0x400009
+	CMSGDestroyItem            uint32 = 0x3D016A
+	CMSGUseItem                uint32 = 0x3D016F
+	CMSGOpenItem               uint32 = 0x3D0211
+	SMSGInventoryChangeFailure uint32 = 0x680005
 )
 
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
@@ -255,6 +294,7 @@ var clientNames = map[uint32]string{
 	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
 	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
+	CMSGSetAdvancedCombatLogging:    "CMSG_SET_ADVANCED_COMBAT_LOGGING",
 	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
 	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",
 	CMSGAreaTrigger:                 "CMSG_AREA_TRIGGER",
@@ -274,6 +314,11 @@ var clientNames = map[uint32]string{
 	CMSGLeaveGroup:                     "CMSG_LEAVE_GROUP",
 	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",
 	CMSGSetSelection:                   "CMSG_SET_SELECTION",
+	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",
+	CMSGGossipSelectOption:             "CMSG_GOSSIP_SELECT_OPTION",
+	CMSGQuestGiverHello:                "CMSG_QUEST_GIVER_HELLO",
+	CMSGSpiritHealerActivate:           "CMSG_SPIRIT_HEALER_ACTIVATE",
+	CMSGCloseInteraction:               "CMSG_CLOSE_INTERACTION",
 	CMSGAttackSwing:                    "CMSG_ATTACK_SWING",
 	CMSGAttackStop:                     "CMSG_ATTACK_STOP",
 	CMSGCastSpell:                      "CMSG_CAST_SPELL",
@@ -290,6 +335,16 @@ var clientNames = map[uint32]string{
 	CMSGLootRoll:         "CMSG_LOOT_ROLL",
 	CMSGGameObjUse:       "CMSG_GAME_OBJ_USE",
 	CMSGGameObjReportUse: "CMSG_GAME_OBJ_REPORT_USE",
+
+	CMSGAutoEquipItem:     "CMSG_AUTO_EQUIP_ITEM",
+	CMSGAutoEquipItemSlot: "CMSG_AUTO_EQUIP_ITEM_SLOT",
+	CMSGAutoStoreBagItem:  "CMSG_AUTO_STORE_BAG_ITEM",
+	CMSGSwapItem:          "CMSG_SWAP_ITEM",
+	CMSGSwapInvItem:       "CMSG_SWAP_INV_ITEM",
+	CMSGSplitItem:         "CMSG_SPLIT_ITEM",
+	CMSGDestroyItem:       "CMSG_DESTROY_ITEM",
+	CMSGUseItem:           "CMSG_USE_ITEM",
+	CMSGOpenItem:          "CMSG_OPEN_ITEM",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

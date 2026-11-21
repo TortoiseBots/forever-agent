@@ -54,6 +54,11 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		// 70245 0x5F -> 0x60
 		{0x5E0000, "SMSG_TIME_SYNC_REQUEST", 0x600000, 0x600000},
 		{0x5E0003, "SMSG_MOVE_SET_ACTIVE_MOVER", 0x600003, 0x600003},
+		// R0 NPC answers: plain group arithmetic, no inserts in these groups.
+		{0x650018, "SMSG_GOSSIP_MESSAGE", 0x670018, 0x670018},
+		{0x650017, "SMSG_GOSSIP_COMPLETE", 0x670017, 0x670017},
+		{0x650028, "SMSG_GOSSIP_OPTION_NPC_INTERACTION", 0x670028, 0x670028},
+		{0x45031A, "SMSG_NPC_INTERACTION_OPEN_RESULT", 0x47031B, 0x47031C},
 		{0x450362, "SMSG_RECENT_ALLY_DATA_RESPONSE", 0x470363, 0x470364},
 		{0x45021E, "SMSG_BATTLE_PAY_GET_DISTRIBUTION_LIST_RESPONSE", 0x47021F, 0x470220},
 		{0x450360, "SMSG_ACCOUNT_ITEM_COLLECTION_DATA", 0x470361, 0x470362},
@@ -164,6 +169,12 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x41005C, "CMSG_TIME_SYNC_RESPONSE", 0x42005C, 0x42005C},
 		// .inc 0x3F0074 -> 0x3E0072, a manual entry (the arithmetic would be 0x3F0073)
 		{0x3E0072, "CMSG_LOGOUT_REQUEST", 0x3F0074, 0x3F0074},
+		// R0 gossip and quest-hello rows: .inc region-2 0x3F0029/0x3F002D -> core 0x3E0027/0x3E002B; the
+		// 70959 class keeps the same wire numbers (no client inserts in this group).
+		{0x3E0027, "CMSG_TALK_TO_GOSSIP", 0x3F0029, 0x3F0029},
+		{0x3E0029, "CMSG_GOSSIP_SELECT_OPTION", 0x3F002B, 0x3F002B},
+		{0x3E002B, "CMSG_QUEST_GIVER_HELLO", 0x3F002D, 0x3F002D},
+		{0x3E0028, "CMSG_CLOSE_INTERACTION", 0x3F002A, 0x3F002A},
 		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
 		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
 		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},
@@ -219,5 +230,54 @@ func TestClientWireUnknownNames(t *testing.T) {
 		if got := table.TranslateClientWire(wire); got != UnknownOpcode {
 			t.Errorf("70938 wire 0x%06X named 0x%06X, want UNKNOWN_OPCODE", wire, got)
 		}
+	}
+}
+
+// TestGainsOpcodesTranslate: every opcode the core-gains round uses is in the core's tables and survives the
+// translation in both directions for our client's build.
+func TestGainsOpcodesTranslate(t *testing.T) {
+	table := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	servers := []struct {
+		core uint32
+		name string
+	}{
+		{0x450186, "SMSG_THREAT_UPDATE"},
+		{0x450185, "SMSG_HIGHEST_THREAT_UPDATE"},
+		{0x450187, "SMSG_THREAT_REMOVE"},
+		{0x450188, "SMSG_THREAT_CLEAR"},
+		{0x450228, "SMSG_ENCOUNTER_START"},
+		{0x450229, "SMSG_ENCOUNTER_END"},
+		{0x4B002B, "SMSG_BOSS_KILL"},
+		{0x67000D, "SMSG_SPELL_INTERRUPT_LOG"},
+		{0x670007, "SMSG_SPELL_DISPELL_LOG"},
+		{0x670034, "SMSG_SPELL_MISS_LOG"},
+		{0x670021, "SMSG_SPELL_INSTAKILL_LOG"},
+		{0x67000E, "SMSG_ENVIRONMENTAL_DAMAGE_LOG"},
+		{0x67000C, "SMSG_SPELL_ABSORB_LOG"},
+		{0x450205, "SMSG_PROC_RESIST"},
+		{0x67001D, "SMSG_SPELL_OR_DAMAGE_IMMUNE"},
+	}
+	for _, c := range servers {
+		if got := ServerName(c.core); got != c.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w := table.TranslateServerCore(c.core)
+		if w == UnknownOpcode {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if got := table.TranslateServerWire(w); got != c.core {
+			t.Errorf("%s: wire 0x%06X named 0x%06X, want 0x%06X", c.name, w, got, c.core)
+		}
+	}
+	if got := ClientName(CMSGSetAdvancedCombatLogging); got != "CMSG_SET_ADVANCED_COMBAT_LOGGING" {
+		t.Errorf("ClientName = %q", got)
+	}
+	w, ok := table.WireForClient(CMSGSetAdvancedCombatLogging)
+	if !ok || w == UnknownOpcode {
+		t.Fatal("CMSG_SET_ADVANCED_COMBAT_LOGGING has no wire number")
+	}
+	if got := table.TranslateClientWire(w); got != CMSGSetAdvancedCombatLogging {
+		t.Errorf("client wire 0x%06X named 0x%06X", w, got)
 	}
 }

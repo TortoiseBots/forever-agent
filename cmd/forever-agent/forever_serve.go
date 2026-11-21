@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,7 +21,9 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/world"
+	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 )
 
 // mapPairs is --parent MAP=PARENT, repeatable.
@@ -75,24 +78,86 @@ func servePassword(path string) (string, error) {
 	return s, nil
 }
 
+// serveCheckDir decides what serve may do with --dir before it writes anything there. A dir with a slot.json
+// made by `slot setup --forever` (or by an earlier serve) is kept as is when it describes this serve: the same
+// dir, the same port and character, and the same account when the manifest names one. Its holder, slot and lease
+// id are the slot's, not serve's to rewrite. A slot.json that does not match, one that cannot be read, or a
+// non-empty dir with no slot.json is a foreign dir: serve refuses instead of overwriting. An empty dir (or a
+// missing one, already made) is fresh: serve writes its own manifest.
+func serveCheckDir(dir, account, character string, port int) (keep bool, err error) {
+	raw, rerr := privfile.Read(filepath.Join(dir, "slot.json"), 64*1024)
+	if rerr != nil {
+		if !errors.Is(rerr, os.ErrNotExist) {
+			return false, fmt.Errorf("%s/slot.json is not readable (%v): serve will not overwrite it", dir, rerr)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false, err
+		}
+		for _, e := range entries {
+			// A crash between the token and the manifest leaves only these.
+			if n := e.Name(); n == "agent.pid" || (strings.HasPrefix(n, "rpc-") && strings.HasSuffix(n, ".token")) {
+				continue
+			}
+			return false, fmt.Errorf("%s is not empty and has no slot.json: pick an empty --dir or one made by slot setup --forever (serve never overwrites a foreign dir)", dir)
+		}
+		return false, nil
+	}
+	var m teardownSlotManifest
+	if err := json.Unmarshal(raw, &m); err != nil || m.Server == "" || m.Slot == "" || m.Holder == "" {
+		return false, fmt.Errorf("%s/slot.json is not a slot manifest: serve will not overwrite it", dir)
+	}
+	if err := teardownCheckManifest(dir, &m); err != nil {
+		return false, fmt.Errorf("%s/slot.json does not belong to this dir (%v): serve will not overwrite it", dir, err)
+	}
+	if m.Port != port {
+		return false, fmt.Errorf("%s/slot.json is for port %d, this serve listens on %d: serve will not overwrite it", dir, m.Port, port)
+	}
+	if !strings.EqualFold(m.Character, character) || (m.Account != "" && !strings.EqualFold(m.Account, account)) {
+		return false, fmt.Errorf("%s/slot.json is for another account or character: serve will not overwrite it", dir)
+	}
+	return true, nil
+}
+
 // serveManifest writes the no-secret slot.json that the existing `rpc` client reads, plus the pid file teardown
-// uses. The paths are the ones teardownCheckManifest derives from the dir.
-func serveManifest(dir, tokenFile, character string, port int) error {
+// uses. The paths are the ones teardownCheckManifest derives from the dir. keep leaves an existing manifest
+// (see serveCheckDir) as it is, apart from its no_auth mark (which must say how this serve runs), and writes the
+// pid file.
+func serveManifest(dir, tokenFile, account, character string, port int, noAuth, keep bool) error {
 	bin := filepath.Join(dir, "forever-agent")
 	m := teardownSlotManifest{
 		Server: "forever", Slot: "1", Holder: "forever",
-		Character: character, Port: port, Dir: dir,
+		Account: account, Character: character, Port: port, Dir: dir,
 		Binary: bin, Settings: filepath.Join(dir, "settings.json"),
 		PIDFile:   filepath.Join(dir, "agent.pid"),
 		TokenFile: tokenFile,
+		NoAuth:    noAuth,
 		Created:   time.Now().UTC().Format(time.RFC3339),
 	}
-	raw, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "slot.json"), raw, 0o600); err != nil {
-		return err
+	if keep {
+		// The setup manifest stays, but a client tells a no-token daemon from a lost token file by no_auth.
+		_, kept, err := slotdir.Read(dir)
+		if err != nil {
+			return err
+		}
+		if kept.NoAuth != noAuth {
+			kept.NoAuth = noAuth
+			raw, err := json.MarshalIndent(kept, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(dir, "slot.json"), raw, 0o600); err != nil {
+				return err
+			}
+		}
+	} else {
+		raw, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "slot.json"), raw, 0o600); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(m.PIDFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 }
@@ -152,6 +217,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	defer ln.Close()
 	port := ln.Addr().(*net.TCPAddr).Port
 
+	keepManifest := false
 	if *dir != "" {
 		if info, err := os.Lstat(*dir); err == nil {
 			if !info.IsDir() {
@@ -166,6 +232,11 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			return exitUsage
 		}
 		*dir, err = filepath.Abs(*dir)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever serve: %v\n", err)
+			return exitUsage
+		}
+		keepManifest, err = serveCheckDir(*dir, common.account, common.character, port)
 		if err != nil {
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
 			return exitUsage
@@ -198,7 +269,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		defer removeToken()
 	}
 	if *dir != "" {
-		if err := serveManifest(*dir, *tokenFile, common.character, port); err != nil {
+		if err := serveManifest(*dir, *tokenFile, common.account, common.character, port, *noAuth, keepManifest); err != nil {
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
 			return exitUsage
 		}

@@ -269,8 +269,7 @@ func TestArenaLockHeldUntilFinish(t *testing.T) {
 // ---- finding 6: every exit path tears down on a fresh context --------------
 
 type fixtureSetup struct {
-	mode  string
-	names func(rep *Repeat)
+	mode string
 }
 
 func (s *fixtureSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) {

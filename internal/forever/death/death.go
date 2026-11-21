@@ -1,10 +1,11 @@
-// Package death is the death wire layer of the Forever (WoW Classic 1.60.1) client: the packets a dying, released
-// or resurrected character sends (repop, reclaim, resurrect answer, corpse query, spirit healer, gossip) and the
-// packets that describe death, the graveyard, the corpse and a resurrection offer.
+// Package death is the death wire layer of the Forever (WoW Classic 1.60.1) client: the packets a dying or
+// released character sends (repop, reclaim, resurrect answer, corpse query, spirit healer activate) and the
+// packets that describe death, the graveyard, the corpse and a resurrection offer. Talk packets (gossip menu,
+// quest hello, select, close) live in internal/forever/npc, which this package no longer owns.
 //
 // Every layout is the server's own writer or reader; the file:line is cited at each field group
-// (docs/forever/DEATH-R1-NOTES.md). Nothing here touches the world model: the parsers return values and the callers
-// decide what to merge.
+// (docs/forever/DEATH-R1-NOTES.md). Nothing here touches the world model: the parsers return values and the
+// callers decide what to merge.
 package death
 
 import (
@@ -17,27 +18,13 @@ import (
 // Bounds for every count and length a packet declares. A count is server data: the parser refuses the packet when
 // it exceeds the bound instead of allocating from it.
 const (
-	// maxGossipOptions bounds a gossip menu's option list. The server's menus hold a handful of rows; the count is a
-	// uint32 from the packet.
-	maxGossipOptions = 64
-	// maxGossipTexts bounds a gossip menu's quest-text list (a quest giver's menu is one page of quests).
-	maxGossipTexts = 64
-	// maxTreasureItems bounds a gossip option's reward list (a treasure option lists a few items).
-	maxTreasureItems = 32
 	// maxResurrectNameLen bounds SMSG_RESURRECT_REQUEST's 11-bit name length: a creature or player name is far
 	// below it, and the field cannot exceed 2047 in any case.
 	maxResurrectNameLen = 255
-	// maxGossipTextLen bounds the 12-bit Text and Confirm lengths of a gossip option (4095 on the wire).
-	maxGossipTextLen = 1024
-	// maxGossipFailureLen bounds the 8-bit FailureDescription length (255 on the wire is the field's own width).
-	maxGossipFailureLen = 255
-	// maxGossipTitleLen bounds the 9-bit quest title length (511 on the wire).
-	maxGossipTitleLen = 255
-	// maxPromotionCodeLen bounds CMSG_GOSSIP_SELECT_OPTION's 8-bit promotion code.
-	maxPromotionCodeLen = 255
 )
 
-// errShort is a packet that ended before its layout did; wire.ErrShort is the usual cause.
+// errShort is unused since the gossip parse moved to the npc package; parse.go's helpers below serve the
+// remaining death packets. It stays because the alias file's doc comment names the move.
 var errShort = errors.New("death: the packet ended before its layout")
 
 // exactly requires the packet to have been consumed to its last byte. A parser that leaves bytes behind cannot be
@@ -50,18 +37,6 @@ func exactly(b *wire.Buffer) error {
 		return fmt.Errorf("death: %d byte(s) left after the layout", n)
 	}
 	return nil
-}
-
-// count reads a uint32 count and rejects it beyond max.
-func count(b *wire.Buffer, what string, max int) (int, error) {
-	n := int(b.ReadU32())
-	if b.Err() != nil {
-		return 0, fmt.Errorf("death: %s count: %w", what, errShort)
-	}
-	if n < 0 || n > max {
-		return 0, fmt.Errorf("death: %s count %d over the limit %d", what, n, max)
-	}
-	return n, nil
 }
 
 // bitLength reads an n-bit string length and rejects it beyond max.

@@ -277,7 +277,26 @@ func (s *session) noteGuard(rep *command.Reply, err error) {
 // and the loop continues; a say echo, the guard's refusal to send, the link's death or the run's own deadline ends
 // the run.
 func (s *session) runOne(ctx context.Context, q *command.Session, line string) error {
-	rep, err := s.runCommandLine(ctx, q, line, command.Options{})
+	_, err := s.runOneResult(ctx, q, line)
+	return err
+}
+
+// oneResult is one command's reply and the command run's own error (nil when it ended well).
+type oneResult struct {
+	Rep    *command.Reply
+	RunErr error
+}
+
+// runOneResult is runOne that also hands back the reply and the run's own error, for a caller, such as the act
+// runner's gm step, that must tell a clear success from a refusal the command session only logs. The error is what
+// runOne returns.
+func (s *session) runOneResult(ctx context.Context, q *command.Session, line string) (oneResult, error) {
+	rep, runErr := s.runCommandLine(ctx, q, line, command.Options{})
+	return oneResult{Rep: rep, RunErr: runErr}, s.finishOne(rep, runErr, line)
+}
+
+// finishOne records and classifies one command's outcome (see runOne).
+func (s *session) finishOne(rep *command.Reply, err error, line string) error {
 	s.noteGuard(rep, err)
 	s.report.Commands = append(s.report.Commands, commandRun(line, rep, err))
 	s.opts.logf("cmd: %s", line)

@@ -7,24 +7,35 @@ import (
 	"strings"
 )
 
-// Rule is one checker rule: its number, its name and the function over a loaded run.
+// Rule is one checker rule: its number, its name, the function over a loaded run, and the reason the rule cannot
+// judge a run (empty when it can). A skipped check is counted, never answered from a missing input.
 type Rule struct {
-	Number int
-	Name   string
-	Run    func(*Run) []Hit
+	Number  int
+	Name    string
+	Run     func(*Run) []Hit
+	Skipped func(*Run) string
 }
 
 // FrameRules are the rules that need only the frames and the run's own records: 3, 5, 6, 9, 10, 13 and 14.
 func FrameRules() []Rule {
 	return []Rule{
-		{3, ruleNames[3], Rule3},
-		{5, ruleNames[5], Rule5},
-		{6, ruleNames[6], Rule6},
-		{9, ruleNames[9], Rule9},
-		{10, ruleNames[10], Rule10},
-		{13, ruleNames[13], Rule13},
-		{14, ruleNames[14], Rule14},
+		{3, ruleNames[3], Rule3, nil},
+		{5, ruleNames[5], Rule5, nil},
+		{6, ruleNames[6], Rule6, nil},
+		{9, ruleNames[9], Rule9, nil},
+		{10, ruleNames[10], Rule10, nil},
+		{13, ruleNames[13], Rule13, skipNoMealReport},
+		{14, ruleNames[14], Rule14, nil},
 	}
+}
+
+// skipNoMealReport: rule 13 reads "no drink" from the module's meal report, so a run without one (a trials
+// repeat) never answers that check.
+func skipNoMealReport(r *Run) string {
+	if !r.ReportsMeals() {
+		return "no meal report"
+	}
+	return ""
 }
 
 // sparseOpts marks a hit sparse when the run's frames are a walk's 2-14 s snapshots, as the Python's sparse(run)

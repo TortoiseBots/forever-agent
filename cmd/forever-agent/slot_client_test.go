@@ -56,7 +56,7 @@ func TestSlotClientRefusesNonAgentToken(t *testing.T) {
 func TestSlotClientScrubsTokenFromRPCError(t *testing.T) {
 	token := rpcCLITestToken(t)
 	c := &slotClient{token: token}
-	c.post = func(port int, gotToken, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
+	c.post = func(_ context.Context, port int, gotToken, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
 		if gotToken != token {
 			t.Fatalf("post token %q, want the client's", gotToken)
 		}
@@ -94,7 +94,7 @@ func TestSlotClientDecodesResultAndRPCError(t *testing.T) {
 		method string
 		params json.RawMessage
 	}
-	c.post = func(port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
+	c.post = func(_ context.Context, port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
 		if port != 41234 {
 			t.Fatalf("port %d", port)
 		}
@@ -137,5 +137,43 @@ func TestSlotClientDecodesResultAndRPCError(t *testing.T) {
 	err := c.Call(context.Background(), "missing", nil, nil, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "no such method") {
 		t.Fatalf("transport error %v", err)
+	}
+}
+
+// A cancelled Call does not return while its post is still running: it
+// aborts the request (the post sees the cancelled context) and waits for the
+// goroutine to end.
+// Mutation: returning on ctx.Done without waiting lets a cancelled CLI exit
+// while an in-flight mutating call may still land.
+func TestSlotClientCancelWaitsForTheCall(t *testing.T) {
+	c := &slotClient{token: rpcCLITestToken(t)}
+	started := make(chan struct{})
+	ended := make(chan struct{})
+	c.post = func(_ context.Context, port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
+		close(started)
+		time.Sleep(150 * time.Millisecond)
+		close(ended)
+		return nil, nil, context.Canceled
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+	err := c.Call(ctx, "chat", nil, nil, time.Minute)
+	if err == nil {
+		t.Fatal("a cancelled call returned no error")
+	}
+	select {
+	case <-ended:
+	default:
+		t.Fatal("Call returned before its post ended: the call outlived the command")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error %v is not a cancellation", err)
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("error %q has no cancelled line", err)
 	}
 }

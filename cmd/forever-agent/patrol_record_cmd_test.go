@@ -44,7 +44,7 @@ func (f *patrolRecordFake) client(t *testing.T) *slotClient {
 		manifest: teardownSlotManifest{Server: "test1", Slot: "1", Holder: "w-a", Character: "Gmtest"},
 		token:    "patrol-record-test-token",
 	}
-	c.post = func(port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
+	c.post = func(_ context.Context, port int, token, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcError, error) {
 		f.mu.Lock()
 		f.methods = append(f.methods, method)
 		switch method {

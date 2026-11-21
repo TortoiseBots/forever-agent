@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "fixture_depths",
+  "kind": "dungeon",
+  "status": "draft",
+  "map": 36,
+  "entrance": {"x": 0, "y": 0, "z": 0},
+  "level_band": [20, 25],
+  "legs": [
+    {
+      "name": "leg_one",
+      "to": {"x": 10, "y": 0, "z": 0},
+      "pull_groups": [
+        {"entries": [100, 101], "positions": [{"x": 12, "y": 3, "z": 0}, {"x": 12, "y": 4, "z": 0}]}
+      ],
+      "boss": {"entry": 900, "position": {"x": 20, "y": 0, "z": 0}}
+    },
+    {
+      "name": "leg_two",
+      "to": {"x": 30, "y": 0, "z": 0},
+      "pull_groups": [
+        {"entries": [102], "positions": [{"x": 30, "y": 1, "z": 0}]}
+      ]
+    },
+    {
+      "name": "leg_three",
+      "to": {"x": 40, "y": 0, "z": 0},
+      "boss": {"entry": 901, "position": {"x": 40, "y": 0, "z": 0}}
+    }
+  ]
+}
