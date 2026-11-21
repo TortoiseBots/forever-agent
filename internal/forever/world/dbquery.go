@@ -77,13 +77,9 @@ func (s *session) fetchRecords(table uint32, ids []uint32) (map[uint32][]byte, e
 }
 
 // SpellName asks the server for the spell's name (SpellName records by
-// spell id). The second return is false when the server holds no name: the
-// caller shows the id as today. An asker without a link (a log built
-// outside a session) always reports none.
+// spell id). The second return is false when the server holds no name or
+// the fetch fails: the caller shows the id as today.
 func (s *session) SpellName(id uint32) (string, bool) {
-	if s == nil {
-		return "", false
-	}
 	records, err := s.fetchRecords(tables.TableSpellName, []uint32{id})
 	if err != nil {
 		return "", false
