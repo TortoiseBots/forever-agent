@@ -75,4 +75,4 @@ want `healer`); keying by the low word fails `TestCombatRowGUIDHighWord`
 * `staticcheck ./...`: PASS (no output).
 * `go test -race -count=1 ./internal/forever/runmap/`: PASS.
 * `go test -race -count=1 ./cmd/forever-agent/ -run 'TestRunMap|TestWatchMap|TestForeverWatchMap'`: PASS.
-* `vm-test ta ~/wt-fa-map3`: `RESULT: PASS  kind=ta wt=wt-fa-map3 sha=a6530060 dirty=0 files=2318` (rc=0, vm_duration=1113s).
+* `vm-test ta <local worktree>`: `RESULT: PASS  kind=ta sha=a6530060 dirty=0 files=2318` (rc=0, vm_duration=1113s).

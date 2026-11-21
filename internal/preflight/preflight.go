@@ -124,7 +124,7 @@ type Options struct {
 	Servers []string
 	// SlotsPath is the slot table (default slots.DefaultPath()).
 	SlotsPath string
-	// KeysPath is the required-keys file (default ~/.config/forever-agent/preflight-keys.json).
+	// KeysPath is the required-keys file (default preflight-keys.json in the forever-agent folder of the user config dir).
 	KeysPath string
 	// Binary is the forever-agent a target that names none is checked as (a targets.txt line, or a command whose
 	// binary is the bare `forever-agent` name). Default: this executable, exactly what the autopilot launches without

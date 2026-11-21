@@ -165,8 +165,8 @@ concurrent names test under `-race`.
 
 ## Gates
 
-`make fmt-check`, `make cross`, `staticcheck`, `vm-test ta ~/wt-fa-gains3`
-RESULT: PASS  kind=ta wt=wt-fa-gains3 sha=a718932e dirty=0 files=2343.
+`make fmt-check`, `make cross`, `staticcheck`, `vm-test ta <local worktree>`
+RESULT: PASS  kind=ta sha=a718932e dirty=0 files=2343.
 
 ## Live check (no live run this round)
 

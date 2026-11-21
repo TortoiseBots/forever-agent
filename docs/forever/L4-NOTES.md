@@ -132,11 +132,11 @@ common totals equal to the header, sections after the header blocks) accepted th
 
 Run on code commit `fa2b2ed5` (clean committed tree; the notes commit after it changes only this file):
 
-* `vm-test ta ~/wt-fa-l4`: `RESULT: PASS  kind=ta wt=wt-fa-l4 sha=fa2b2ed5 dirty=0 files=2311`, `rc=0`. (An earlier run
+* `vm-test ta <local worktree>`: `RESULT: PASS  kind=ta sha=fa2b2ed5 dirty=0 files=2311`, `rc=0`. (An earlier run
   alongside two other jobs on the same VM timed out in `internal/forever/world`, a package this round does not touch,
   after 10 minutes of load; it passed alone.)
-* `vm-test ta ~/wt-fa-l4 -- 'go test -race -count=1 ./internal/db2/... ./internal/forever/...'`:
-  `RESULT: PASS  kind=ta wt=wt-fa-l4 sha=fa2b2ed5 dirty=0 files=2311`, `rc=0`.
+* `vm-test ta <local worktree> -- 'go test -race -count=1 ./internal/db2/... ./internal/forever/...'`:
+  `RESULT: PASS  kind=ta sha=fa2b2ed5 dirty=0 files=2311`, `rc=0`.
 * `go test -fuzz=FuzzParse -fuzztime=60s ./internal/db2/` on the VM: 415,695 executions, no panic, `PASS`.
 * `make fmt-check`, `make cross`, `staticcheck ./...`: clean.
 

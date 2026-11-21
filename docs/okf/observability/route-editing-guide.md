@@ -24,7 +24,7 @@ Create a file of `label token` lines, mode 0600, owned by you. The label is reco
 ## 2. Start the dashboard with the editor on
 
 ```sh
-turtle-agent dashboard --mmaps-dir <walk-dir>/mmaps --plans-dir <walk-dir>/dungeons --edit --edit-dir ~/turtle-agent-route-edits --edit-tokens ~/.config/turtle-agent/route-edit-tokens
+turtle-agent dashboard --mmaps-dir <walk-dir>/mmaps --plans-dir <walk-dir>/dungeons --edit --edit-dir ~/turtle-agent-route-edits --edit-tokens <user config dir>/turtle-agent/route-edit-tokens
 ```
 
 Every flag and its default:
@@ -35,7 +35,7 @@ Every flag and its default:
 | `--mmaps-dir` | none, required with `--edit` | the navmesh of the server the plans run on; every version records it |
 | `--edit-source` | the first `--plans-dir` | whose plan files an edit starts from; must not lie inside any slot's `dungeons_dir` |
 | `--edit-dir` | `~/turtle-agent-route-edits` | where versions go: `<plan>/vNNNN.json`, `vNNNN.meta.json`, `vNNNN.diff` |
-| `--edit-tokens` | `~/.config/turtle-agent/route-edit-tokens` | `label token` lines, mode 0600 |
+| `--edit-tokens` | `<user config dir>/turtle-agent/route-edit-tokens` | `label token` lines, mode 0600 |
 | `--edit-allow-default-dir` | none | settings files with an `rpc` but no `dungeons_dir` you vouch are not the edits folder; any other such file stops the editor |
 | `--edit-trust-local` | off | saves from this machine need no token typed (read the threat model first) (on/off: takes `=`, e.g. `--edit-trust-local=true`) |
 | `--edit-trust-label` | `owner` | the token label trusted saves are made as |

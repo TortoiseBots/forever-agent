@@ -164,8 +164,8 @@ paths no capture holds now have hand-built cases with sentinels: `TestUpdateOpti
 existing case changed.
 
 **8. The race detector.** Both gate runs are made on the final commit (clean worktree):
-`vm-test ta ~/wt-fa-chat -- 'go test -race -count=1 -timeout 20m ./...'` and
-`vm-test ta ~/wt-fa-chat -- 'go test -race -count=10 ./internal/forever/chat/ ./internal/forever/party/ ./internal/forever/world/'`.
+`vm-test ta <local worktree> -- 'go test -race -count=1 -timeout 20m ./...'` and
+`vm-test ta <local worktree> -- 'go test -race -count=10 ./internal/forever/chat/ ./internal/forever/party/ ./internal/forever/world/'`.
 The party model, the chat log and the capture run are per session and touched only by that session's packet loop;
 the shared-state table is [`SESSION-STATE.md`](SESSION-STATE.md).
 

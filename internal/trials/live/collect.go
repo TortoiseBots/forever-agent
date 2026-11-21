@@ -470,21 +470,24 @@ func pct(hp, maxHP uint32) float64 {
 	return round2(100*float64(hp)/float64(maxHP)*10) / 10
 }
 
-// MobCasts returns the first spell_start/spell_go by any of guids (caster
-// proof), or nil.
-func (c *Collector) MobCasts(guids []string) map[string]any {
-	want := map[string]bool{}
-	for _, g := range guids {
-		want[strings.ToLower(g)] = true
+// EngagedAt returns the first combat row from src at dst (a cast start or
+// go, a melee swing, spell damage or a periodic tick): the proof a passive
+// target that never turns InCombat was engaged. A row of the dummy casting
+// at the bot is not this proof, so source and target are both matched.
+func (c *Collector) EngagedAt(src, dst string) map[string]any {
+	src, dst = strings.ToLower(src), strings.ToLower(dst)
+	if src == "" || dst == "" {
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, row := range c.raw {
-		kind, _ := row["kind"].(string)
-		if kind != "spell_start" && kind != "spell_go" {
+		switch kind, _ := row["kind"].(string); kind {
+		case "spell_start", "spell_go", "melee", "spell_damage", "periodic":
+		default:
 			continue
 		}
-		if want[rowGUID(row, "source")] {
+		if rowGUID(row, "source") == src && rowGUID(row, "target") == dst {
 			return row
 		}
 	}

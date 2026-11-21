@@ -99,7 +99,7 @@ each in the foreground and waited for:
 ```
 make fmt-check            -> clean (no file listed)
 make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
-vm-test ta ~/wt-fa-joint  -> RESULT: PASS  kind=ta wt=wt-fa-joint sha=85a60918 dirty=0 files=2160
+vm-test ta <local worktree>  -> RESULT: PASS  kind=ta sha=85a60918 dirty=0 files=2160
                              rc=0  vm_duration=579s  laptop_wall=680s
 staticcheck ./...         -> rc=0 (no finding)
 go test -race -count=1 -timeout 20m ./... -> every package ok, no FAIL

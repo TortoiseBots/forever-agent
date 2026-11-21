@@ -35,7 +35,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
-| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Setup toolkit and provisioning (round A3): the `.tb` test-kit client, hire-pool and player provisioning, the 22-row setup round; `trials run` provisions live without `--dry`; see [docs/forever/TRIALS-A3-NOTES.md](docs/forever/TRIALS-A3-NOTES.md)** |
+| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Setup toolkit and provisioning (round A3): the `.tb` test-kit client, hire-pool and player provisioning, the 22-row setup round; `trials run` provisions live without `--dry`; see [docs/forever/TRIALS-A3-NOTES.md](docs/forever/TRIALS-A3-NOTES.md). Dummy spell/damage bench (issue #18): `dummy` situation kind, per-spell damage + reaction tallies against a per-class table and a trial file beside it (`internal/trials/dummybench/testdata`), report card per spell; unmeasured bounds stay UNKNOWN, strangers INVALID; see [docs/forever/DUMMY-BENCH-NOTES.md](docs/forever/DUMMY-BENCH-NOTES.md)** |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
@@ -613,7 +613,7 @@ make build                      # bin/turtle-agent
 make test                       # gofmt check, go vet, builds, go test -race ./...
 ```
 
-Create the settings file (default `~/.config/turtle-agent/settings.json`, mode **0600**; the agent refuses a file
+Create the settings file (default `<user config dir>/turtle-agent/settings.json`, mode **0600**; the agent refuses a file
 other users can read) with your server and account in it — placeholders below, never real values:
 
 ```json

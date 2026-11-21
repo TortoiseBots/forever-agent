@@ -49,17 +49,17 @@ Serves the live page. Read-only unless `--edit` or `--control` is given. Exits 2
 | `--plans-dir` | `~/turtle-agent/dungeons` | plan files for the map, comma separated |
 | `--minimap-dir` | `~/turtle-agent-minimaps` | map images from `minimap-extract` |
 | `--embed-from` | none | extra `http://host:port` origins that may frame the page |
-| `--config-dir` | `~/.config/turtle-agent` | settings files and `rpc-<port>.token` files |
+| `--config-dir` | `<user config dir>/turtle-agent` | settings files and `rpc-<port>.token` files |
 | `--mmaps-dir` | none | navmesh folder of the server the plans run on; enables the real-route view, required with `--edit` |
 | `--edit` | off | turn on the route editor (`POST /api/edit/<plan>`) (on/off: takes `=`, e.g. `--edit=true`) |
 | `--edit-dir` | `~/turtle-agent-route-edits` | where versions go (`<plan>/vNNNN.json`, `.meta.json`, `.diff`) |
 | `--edit-source` | the first `--plans-dir` | whose plan files an edit starts from |
-| `--edit-tokens` | `~/.config/turtle-agent/route-edit-tokens` | `label token` lines, mode 0600 |
+| `--edit-tokens` | `<user config dir>/turtle-agent/route-edit-tokens` | `label token` lines, mode 0600 |
 | `--edit-allow-default-dir` | none | settings files with an `rpc` but no `dungeons_dir` vouched as not the edits folder |
 | `--edit-trust-local` | off | saves from this machine need no token typed (needs `--edit`) (on/off: takes `=`, e.g. `--edit-trust-local=true`) |
 | `--edit-trust-label` | `owner` | token label trusted saves are made as |
 | `--control` | off | turn on run controls (`POST /api/control/<id>/run`) (on/off: takes `=`, e.g. `--control=true`) |
-| `--control-tokens` | `~/.config/turtle-agent/dashboard-control-tokens` | `label token` lines, mode 0600; never the editor's file |
+| `--control-tokens` | `<user config dir>/turtle-agent/dashboard-control-tokens` | `label token` lines, mode 0600; never the editor's file |
 | `--control-trust-local` | off | controls from this machine need no token typed (needs `--control`) (on/off: takes `=`, e.g. `--control-trust-local=true`) |
 | `--control-trust-label` | `owner` | token label trusted controls are made as |
 | `--control-log` | `~/.local/state/turtle-agent/dashboard-control.jsonl` | every control appends a request and a result line |

@@ -186,8 +186,8 @@ reference path that is set but has no `trials.py` FAILS the test, so a typo cann
 green:
 
 ```
-TRIALS_PYTHON_ROOT=~/wt-trials-ref go test ./internal/trials/tests/differential
-go test ./internal/trials/tests/differential -args -python-root ~/wt-trials-ref
+TRIALS_PYTHON_ROOT=<local worktree> go test ./internal/trials/tests/differential
+go test ./internal/trials/tests/differential -args -python-root <local worktree>
 ```
 
 Result with the reference: 59 cases (40 whole-run, 16 direct rule evaluations, 3 validate
