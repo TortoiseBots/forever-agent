@@ -140,7 +140,7 @@ func checkName(name string) error {
 		return fmt.Errorf("name %q is empty or past %d bytes", name, MaxNameLen)
 	}
 	if strings.Contains(name, "..") || name[0] == '.' || name[0] == '-' {
-		return fmt.Errorf("name %q must not start with . or - or hold ..", name)
+		return fmt.Errorf("name %q must not start with . or - or hold a double dot", name)
 	}
 	if strings.Trim(name, nameChars) != "" {
 		return fmt.Errorf("name %q holds characters outside [A-Za-z0-9._-]", name)
@@ -162,7 +162,7 @@ type Mark struct {
 	Radius float64
 }
 
-var errUnknownMark = errors.New("not a mark (want \"point <name>\", \"zone <name> <radius-yd>\" or \"split\")")
+var errUnknownMark = errors.New(`not a mark (want "point <name>", "zone <name> <radius-yd>" or "split")`)
 
 // ParseMark parses one whisper or say line into a mark. The keyword is case-insensitive; the name keeps its case.
 // Anything else is errUnknownMark: the caller counts it, never stores it.
