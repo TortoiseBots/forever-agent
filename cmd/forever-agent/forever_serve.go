@@ -77,7 +77,7 @@ func servePassword(path string) (string, error) {
 
 // serveManifest writes the no-secret slot.json that the existing `rpc` client reads, plus the pid file teardown
 // uses. The paths are the ones teardownCheckManifest derives from the dir.
-func serveManifest(dir, tokenFile, character string, port int) error {
+func serveManifest(dir, tokenFile, character string, port int, noAuth bool) error {
 	bin := filepath.Join(dir, "forever-agent")
 	m := teardownSlotManifest{
 		Server: "forever", Slot: "1", Holder: "forever",
@@ -85,6 +85,7 @@ func serveManifest(dir, tokenFile, character string, port int) error {
 		Binary: bin, Settings: filepath.Join(dir, "settings.json"),
 		PIDFile:   filepath.Join(dir, "agent.pid"),
 		TokenFile: tokenFile,
+		NoAuth:    noAuth,
 		Created:   time.Now().UTC().Format(time.RFC3339),
 	}
 	raw, err := json.MarshalIndent(m, "", "  ")
@@ -198,7 +199,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		defer removeToken()
 	}
 	if *dir != "" {
-		if err := serveManifest(*dir, *tokenFile, common.character, port); err != nil {
+		if err := serveManifest(*dir, *tokenFile, common.character, port, *noAuth); err != nil {
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
 			return exitUsage
 		}
