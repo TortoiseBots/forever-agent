@@ -81,8 +81,6 @@ const (
 	maxGossipFailureLen = 255
 	// maxGossipTitleLen bounds the 9-bit quest title length (511 on the wire).
 	maxGossipTitleLen = 255
-	// maxQuestGreetingLen bounds the 11-bit quest list greeting length (2047 on the wire is the field's own width).
-	maxQuestGreetingLen = 2047
 	// maxPromotionCodeLen bounds CMSG_GOSSIP_SELECT_OPTION's 8-bit promotion code.
 	maxPromotionCodeLen = 255
 )

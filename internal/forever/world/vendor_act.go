@@ -233,9 +233,6 @@ func (s *session) vendorRow(a *actState, step ActStep) (items.VendorItem, error)
 	return items.VendorItem{}, fmt.Errorf("entry %d is on %d rows; name the one to buy with muid=<row>", entry, len(found))
 }
 
-// vendorCoinage is the money the inventory reads back now.
-func (s *session) vendorCoinage() uint64 { return s.inventoryNow().Coinage }
-
 // coinageLine describes a money change as the inventory read it back. It is an estimate: the coinage arrives in an
 // update the same burst carries, and a step that reads before it lands would otherwise look like a free purchase.
 func coinageLine(before, after uint64) string {
