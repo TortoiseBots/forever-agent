@@ -456,11 +456,11 @@ func (r *Run) frameGUID(name string) string {
 	if name == "" {
 		return ""
 	}
-	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
-		return g.String()
-	}
 	if len(name) >= 2 && name[0] == '0' && (name[1] == 'x' || name[1] == 'X') {
 		return name
+	}
+	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
+		return g.String()
 	}
 	return ""
 }
@@ -883,6 +883,15 @@ func (r *Run) pauseStuck(w *watchRun) bool {
 	return true
 }
 
+// bossWait is the wait the plan gives the boss of this leg (wait_s: the module waits for a patrolling boss and sends
+// no event meanwhile), which the watchdog's idle limit allows on top of its own.
+func (r *Run) bossWait(leg int) time.Duration {
+	if r.route == nil || leg < 0 || leg >= len(r.route.Legs) || r.route.Legs[leg].Boss == nil {
+		return 0
+	}
+	return time.Duration(r.route.Legs[leg].Boss.WaitS * float64(time.Second))
+}
+
 // watchdog pauses a running run whose event ring has not grown for cfg.Watchdog and reports. A paused run it
 // reaches is reported, not paused again: there is nothing to send, and the caller ends the watch as paused-stuck.
 // A pause the practice rescue still owns is not reached at all: a wipe's pause is silent by design, and the
@@ -893,7 +902,7 @@ func (r *Run) watchdog(ctx context.Context, w *watchRun) bool {
 		return false
 	}
 	idle := r.now().Sub(w.lastEvent)
-	if idle < r.cfg.Watchdog {
+	if idle < r.cfg.Watchdog+r.bossWait(w.record.Leg) {
 		return false
 	}
 	if w.state == "paused" {
