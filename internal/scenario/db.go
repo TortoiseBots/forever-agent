@@ -293,7 +293,10 @@ const dbRemote = `docker exec -i %s sh -c 'export MYSQL_PWD="${MARIADB_ROOT_PASS
 // real guard.
 func dbWrap(sql string) []byte {
 	var b strings.Builder
-	b.WriteString("SET SESSION max_statement_time=10;\n")
+	// MariaDB names its limit max_statement_time (seconds), MySQL 8 max_execution_time (milliseconds, SELECT only);
+	// each rejects the other's name, so the server's version string picks which one is set.
+	b.WriteString("SET @fa_limit = IF(VERSION() LIKE '%MariaDB%', 'SET SESSION max_statement_time=10', 'SET SESSION max_execution_time=10000');\n")
+	b.WriteString("PREPARE fa_limit FROM @fa_limit;\nEXECUTE fa_limit;\nDEALLOCATE PREPARE fa_limit;\n")
 	b.WriteString("SET SESSION TRANSACTION READ ONLY;\n")
 	b.WriteString("START TRANSACTION READ ONLY;\n")
 	b.WriteString(sql)

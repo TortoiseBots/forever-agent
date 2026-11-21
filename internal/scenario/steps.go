@@ -30,7 +30,7 @@ type foreverPage struct {
 	Next    uint64         `json:"next"`
 	Oldest  uint64         `json:"oldest"`
 	More    bool           `json:"more"`
-	Dropped bool           `json:"dropped"`
+	Dropped int            `json:"dropped"`
 }
 
 // foreverToEvent maps one event_log row to an events.Event. GUIDs are zero:
@@ -128,7 +128,7 @@ func (rr *run) drainForever(ctx context.Context, step int, name string, st *sess
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return fmt.Errorf("session %s: drain: %v", name, err)
 		}
-		if page.Dropped {
+		if page.Dropped > 0 {
 			rr.emit(Record{T: "note", Step: step, Session: name,
 				Raw:  fmt.Sprintf("  note: events of session %s were dropped by the agent's ring: a check may miss lines", name),
 				Norm: fmt.Sprintf("  note: events of session %s were dropped by the agent's ring: a check may miss lines", name)})

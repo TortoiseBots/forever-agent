@@ -196,3 +196,24 @@ func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// TestForeverCardOrdersFromCommanderLog: the card's orders come from the commander card's order log, so the stay status
+// shows on the card (it was always empty).
+func TestForeverCardOrdersFromCommanderLog(t *testing.T) {
+	cmdr := strings.Replace(foreverCommanderJSON, `"orders":0,`, `"orders":2,"log":[`+
+		`{"at":5,"verb":"follow","detail":"party","ok":true,"result":"queued"},`+
+		`{"at":9,"verb":"stay","detail":"party","ok":false,"result":"not in world"}],`, 1)
+	c := BuildForeverCard(Inputs{
+		Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmdr),
+	})
+	if len(c.Orders) != 2 {
+		t.Fatalf("orders %+v, want the two logged ones", c.Orders)
+	}
+	if o := c.Orders[0]; o.Verb != "follow" || o.Reply != "ACK" || o.Via != "cmd" || o.Text != "cmd follow party" {
+		t.Fatalf("first order %+v", o)
+	}
+	if o := c.Orders[1]; o.Verb != "stay" || o.Reply != "ERR" || o.Message != "not in world" {
+		t.Fatalf("last order %+v", o)
+	}
+}

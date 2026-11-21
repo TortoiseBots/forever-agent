@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/runmap"
@@ -136,6 +137,7 @@ func BuildForeverCard(in Inputs) Card {
 	fillForeverBots(&c, cmd, party.Members)
 	fillForeverMobs(&c, units)
 	fillForeverRun(&c, cmd)
+	fillForeverOrders(&c, cmd, in.Now)
 	fillForeverStall(&c, in.Now, in.ProgressSince)
 	if in.Plan != nil {
 		c.Label.Map = in.Plan.Map
@@ -285,6 +287,31 @@ func fillForeverRun(c *Card, cmd *serveclient.CommanderCard) {
 	c.Run.LastStep = r.Note
 	c.Counters.Deaths = r.Deaths
 	c.Counters.Wipes = r.Wipes
+}
+
+// fillForeverOrders fills the card's orders from the commander card's order log (the module's own record of what it
+// queued for the bots): the last maxOrders, oldest first, so the page shows the stay status of the latest order. The
+// module's `at` is a unix second when it looks like one; any other value is not a clock the card can show, so the
+// poll's own time stands in for it.
+func fillForeverOrders(c *Card, cmd *serveclient.CommanderCard, now time.Time) {
+	if cmd == nil {
+		return
+	}
+	log := cmd.Log
+	if len(log) > maxOrders {
+		log = log[len(log)-maxOrders:]
+	}
+	for _, o := range log {
+		at := now
+		if o.At >= 1_000_000_000 {
+			at = time.Unix(int64(o.At), 0).UTC()
+		}
+		ord := Order{At: at, Verb: o.Verb, Text: strings.TrimSpace("cmd " + o.Verb + " " + o.Detail), Via: "cmd", Reply: "ACK"}
+		if !o.OK {
+			ord.Reply, ord.Message = "ERR", o.Result
+		}
+		c.Orders = append(c.Orders, ord)
+	}
 }
 
 // fillForeverStall sets the stall timer from the last progress mark the

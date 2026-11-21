@@ -109,8 +109,14 @@ func TestSSHArgvAndStdin(t *testing.T) {
 		}
 	}
 	body := string(gotStdin)
+	if strings.Contains(body, "\nSET SESSION max_statement_time") || strings.HasPrefix(body, "SET SESSION max_statement_time") {
+		t.Fatalf("unconditional MariaDB-only limit (MySQL 8 error 1193): %q", body)
+	}
 	for _, want := range []string{
-		"SET SESSION max_statement_time=10;",
+		"VERSION() LIKE '%MariaDB%'",
+		"'SET SESSION max_statement_time=10'",
+		"'SET SESSION max_execution_time=10000'",
+		"EXECUTE fa_limit;",
 		"SET SESSION TRANSACTION READ ONLY;",
 		"START TRANSACTION READ ONLY;",
 		"SELECT COUNT(*) FROM tw_world.lft_user_groups;",
