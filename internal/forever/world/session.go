@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/gmwalk"
 	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
@@ -198,6 +199,8 @@ type Options struct {
 	// RouteWalk runs `forever route-walk`: enter the plan's instance, walk every selected leg on the navmesh, and
 	// confirm every planned point with the server's own `.gps` position. A nil value runs none of it.
 	RouteWalk *RouteWalkOptions
+	// GMWalk runs `forever gm-walk`: follow the GM, sample the walk, record the GM's mark words. Nil runs none.
+	GMWalk *GMWalkOptions
 	// Serve makes this a long-running session: after the login burst the session serves the RPC socket on
 	// Serve.Listener and stays in the world until the caller's context ends. A dropped link is logged in again
 	// within ServeConfig's budget (a fresh session, rebuilt state), and only a spent budget ends the daemon. Stay
@@ -299,6 +302,11 @@ type Report struct {
 	Watch *driver.Result
 	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
 	RouteWalk *RouteWalkReport
+	// GMWalk is the GM walk's report, nil when the session ran something else.
+	GMWalk *GMWalkReport
+	// GMWalkData is the walk's world data, kept off the JSON report's printed fields but written by the
+	// command. Nil when the session ran something else.
+	GMWalkData *gmwalk.WorldData `json:"-"`
 	// Round A7: the map changes the client followed. Difficulty is the last SMSG_WORLD_SERVER_INFO's difficulty,
 	// AreaTriggers the area triggers sent, AbortedTransfers the transfers the server refused, and MapTransitions
 	// one row per resolved change (map-check fills Objects for each).
@@ -1108,6 +1116,17 @@ func (s *session) enter(ctx context.Context) error {
 	}
 	if s.opts.RouteWalk != nil {
 		if err := s.routeWalk(ctx); err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.GMWalk != nil {
+		res, err := s.gmWalk(ctx)
+		if res != nil {
+			s.report.GMWalk = &res.Report
+			s.report.GMWalkData = &res.Data
+		}
+		if err != nil {
 			return err
 		}
 		return s.logout(ctx)
