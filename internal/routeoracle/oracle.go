@@ -803,7 +803,7 @@ func tiles(p, scratch *navmesh.Planner, dir string, plan *dungeon.Plan) ([]TileF
 	for _, n := range scratch.Tiles(plan.Map) {
 		used[n] = true
 	}
-	used[fmt.Sprintf("%03d.mmap", plan.Map)] = true
+	used[p.Format().MmapName(plan.Map)] = true
 	var out []TileFile
 	var first error
 	for n := range used {

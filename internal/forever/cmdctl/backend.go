@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
@@ -977,6 +978,14 @@ func probeVerdict(pkg string, err error) (present, absent bool, why string) {
 			return true, false, ""
 		}
 		return false, false, "`" + line + "` answered without an error line"
+	}
+	if pkg == packageP3 && errors.Is(err, command.ErrSyntax) {
+		// A module with no `.tb cmd` at all: `.tb` has no such subcommand, so the core itself refuses the line
+		// ("Possible subcommands:", ChatCommand.cpp LANG_SUBCMDS_LIST) before any module code runs. A module that
+		// has `cmd` answers a bare line with its own `missing-verb`, never with the core's syntax refusal: its
+		// handler takes the whole tail untyped (TbCmdOrders.cpp HandleCmd), so the core has no argument to refuse,
+		// and every refusal the handler makes is its own error line.
+		return false, true, ""
 	}
 	var ce *tbcmd.CommandError
 	if !errors.As(err, &ce) {

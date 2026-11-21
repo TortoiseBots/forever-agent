@@ -66,6 +66,10 @@ type Commander interface {
 	// through the one send function and its gate.
 	RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error)
 	RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error)
+	// CommanderStatus reads a commander's binding card (`.tb commander status <name>`, every card for an empty
+	// name): a read, never an order. Each bound bot's record carries the module's own guid of it, which a watch
+	// needs because its observer is neither in the party nor, as a rule, in view of it.
+	CommanderStatus(ctx context.Context, commander string) (tbcmd.CommanderReport, error)
 }
 
 // World is the commander's own client: where it stands, what it sees and the one client packet the entry phase needs.
@@ -75,6 +79,10 @@ type World interface {
 	Self() (pos Vec3, mapID uint32, epoch uint64, between bool)
 	Units() []Unit
 	PlayerGUID(name string) (wire.GUID, bool)
+	// PlayerGUIDOfCounter is the guid of the player whose database counter this is, on this client's own realm: the
+	// module's binding card names a bot by its counter only. false when this client does not know its own player
+	// guid yet.
+	PlayerGUIDOfCounter(counter uint64) (wire.GUID, bool)
 	EnterAreaTrigger(id int32) error
 	// Auras is the spell ids of a unit's auras that are still up, in slot order: what the trace's frames record for
 	// a party member (the module's state report has no aura list).

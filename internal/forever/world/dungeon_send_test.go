@@ -20,7 +20,7 @@ import (
 // escape hatch) fails the test.
 var adapterMethods = map[string]bool{
 	"State": true, "Threat": true, "Order": true, "Party": true, "Act": true,
-	"RunStatus": true, "RunEvents": true,
+	"RunStatus": true, "RunEvents": true, "CommanderStatus": true,
 	"Run": true, "gmOn": true, "teleOutside": true, "appear": true, "deathRecap": true,
 }
 

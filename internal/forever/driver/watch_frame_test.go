@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
@@ -597,5 +598,114 @@ func TestCombatEachGapIsCounted(t *testing.T) {
 		if !strings.Contains(all, line) {
 			t.Fatalf("no line %q; logs:\n%s", line, all)
 		}
+	}
+}
+
+// TestWatchFrameObserverOutOfView is the live watch's shape: the observer runs the watch with --enter none, so it is
+// neither in the party nor in view of it, and this client's model names no member (PlayerGUID answers nothing, as on
+// the server, where every member of every frame was written with "g":"" and run-map drew no member). The
+// commander's binding card names each bound bot by its database counter, and with the observer's own player guid
+// that is the member's full guid: every frame carries the five real guids, each with its party record, after one
+// card read.
+func TestWatchFrameObserverOutOfView(t *testing.T) {
+	dir := t.TempDir()
+	run, f, logs := newFrameWatch(t, dir, FakeRunScript{
+		Steps: 6, Pulls: 1, ProgressEvery: 2 * time.Second, DoneAt: 12 * time.Second, Mobs: true,
+	})
+	// A ForeverCore realm's player guids: type 2 and realm 1 in the high half, the counter in the low half.
+	const high = uint64(2)<<58 | uint64(1)<<42
+	f.SelfGUID = wire.GUID{High: high | 0xFFFF, Low: 9} // bits below the realm are not part of a member's guid
+	want := map[string]string{}
+	for _, name := range f.PartyNames() {
+		b := f.bots[name]
+		b.guid = wire.GUID{High: high, Low: b.guid.Low}
+		f.guidOf[name] = b.guid
+		want[b.guid.String()] = name
+	}
+	f.OutOfView = true
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	frames, parties := 0, map[string]bool{}
+	for _, r := range readTrace(t, res.Trace) {
+		switch r.Kind {
+		case "frame":
+			frames++
+			if len(r.Bots) != 5 {
+				t.Fatalf("frame %d has %d bots, want five", r.T, len(r.Bots))
+			}
+			for _, b := range r.Bots {
+				if _, ok := want[b.G]; !ok {
+					t.Fatalf("frame %d has member identity %q, want one of the party's guids %v", r.T, b.G, want)
+				}
+			}
+			for _, m := range r.Mobs {
+				if m.Victim != "" {
+					if _, ok := want[m.Victim]; !ok {
+						t.Fatalf("frame %d mob victim %q is not a member guid", r.T, m.Victim)
+					}
+				}
+			}
+		case "party":
+			var pr trace.PartyRecord
+			if err := json.Unmarshal(r.Raw, &pr); err != nil {
+				t.Fatalf("party record %q: %v", r.Raw, err)
+			}
+			parties[pr.G] = true
+		}
+	}
+	if frames == 0 {
+		t.Fatal("no frames written")
+	}
+	if len(parties) != 5 {
+		t.Fatalf("%d party records, want 5", len(parties))
+	}
+	if f.CardReads != 1 {
+		t.Fatalf("%d card reads, want 1 (every member learned from the first)", f.CardReads)
+	}
+}
+
+// TestWatchFrameCardReadIsBounded: a card that cannot name the members (its read fails) is read at most once per
+// cardReadEvery, the failure is one line, and the members stay without a guid rather than the watch waiting.
+func TestWatchFrameCardReadIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	run, f, logs := newFrameWatch(t, dir, FakeRunScript{
+		Steps: 20, Pulls: 0, ProgressEvery: 2 * time.Second, DoneAt: 70 * time.Second,
+	})
+	f.OutOfView = true
+	f.SelfGUID = wire.GUID{High: uint64(2) << 58, Low: 9}
+	f.FailCard = errors.New("no-binding")
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	if f.CardReads < 2 || f.CardReads > 4 {
+		t.Fatalf("%d card reads over a 70 s watch, want one per %s", f.CardReads, cardReadEvery)
+	}
+	n := 0
+	for _, l := range *logs {
+		if strings.Contains(l, "card read failed") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d failure lines, want 1", n)
+	}
+}
+
+// TestPlayerGUIDOnRealm: a member's guid is the observer's type and realm bits with the counter; a self that is not
+// a player guid (not known yet) or a zero counter gives none.
+func TestPlayerGUIDOnRealm(t *testing.T) {
+	self := wire.GUID{High: uint64(2)<<58 | uint64(3)<<42 | 0x1234, Low: 77}
+	g, ok := wire.PlayerGUIDOnRealmOf(self, 0x105)
+	if !ok || g.High != uint64(2)<<58|uint64(3)<<42 || g.Low != 0x105 {
+		t.Fatalf("guid %v %v", g, ok)
+	}
+	if _, ok := wire.PlayerGUIDOnRealmOf(wire.EmptyGUID, 0x105); ok {
+		t.Fatal("an unknown self gave a guid")
+	}
+	if _, ok := wire.PlayerGUIDOnRealmOf(self, 0); ok {
+		t.Fatal("a zero counter gave a guid")
 	}
 }

@@ -22,7 +22,7 @@ Scenarios drive the same RPC the agent pages document ([the agent and its RPC](.
 
 ## 1. Write the file
 
-Strict JSON, no comments. The top level holds `scenario` (lower-case name), top-level `server` (`turtle` or `forever`, default `turtle`: the fallback for sessions and `check_db` steps), `sessions` (each `{rpc, token_file, server}` with `server` `turtle` or `forever`, default the file value; RPC must be loopback), `steps`, and these optional keys: `description` (printed as a `#` header line), `db` (`{host, container, schema}` for the read-only `check_db` counts; `schema` is the ForeverCore characters database, default `characters`), `vars` (overridden by `--var`), `addon_prefix` (default `prefix` for addon-kind matchers), `settle_s` (default 1; 0–60), `timeout_s` (default 10; 1–3600), `on_fail` (`continue` or `stop`, default `continue`), `max_minutes` (default 30; 1–360), `record` (matchers saved to the transcript), `normalise` (at most 50 `match`/`replace` rules rewriting each norm line), and `finally` (at most 50 action steps: `section`, `mark`, `gm`, `bot`, `addon_send`, `rpc`, `sleep`). Each step has `do` plus its fields, and every step takes `note`; checks (`expect`, `expect_not`, `check_db`, `check_rpc`) also take `name` and `on_fail`:
+Strict JSON, no comments. The top level holds `scenario` (lower-case name), top-level `server` (`turtle` or `forever`, default `turtle`: the fallback for sessions and `check_db` steps, where a step that names no server takes `forever` when every session is a Forever one; a file that mixes servers must name it on the step), `sessions` (each `{rpc, token_file, server}` with `server` `turtle` or `forever`, default the file value; RPC must be loopback), `steps`, and these optional keys: `description` (printed as a `#` header line), `db` (`{host, container, schema}` for the read-only `check_db` counts; `schema` is the ForeverCore characters database, default `characters`), `vars` (overridden by `--var`), `addon_prefix` (default `prefix` for addon-kind matchers), `settle_s` (default 1; 0–60), `timeout_s` (default 10; 1–3600), `on_fail` (`continue` or `stop`, default `continue`), `max_minutes` (default 30; 1–360), `record` (matchers saved to the transcript), `normalise` (at most 50 `match`/`replace` rules rewriting each norm line), and `finally` (at most 50 action steps: `section`, `mark`, `gm`, `bot`, `addon_send`, `rpc`, `sleep`). Each step has `do` plus its fields, and every step takes `note`; checks (`expect`, `expect_not`, `check_db`, `check_rpc`) also take `name` and `on_fail`:
 
 | `do` | Does |
 | --- | --- |
@@ -36,7 +36,7 @@ Strict JSON, no comments. The top level holds `scenario` (lower-case name), top-
 | `sleep` | waits `seconds` (1–3600) |
 | `wait` / `expect` / `expect_not` | match event lines (`session`, `kind`, `prefix`, `channel`, `source`, `match`, `capture`, `timeout_s`); `expect_not` needs `within_s` (0–600) instead of `timeout_s` (1–3600) |
 | `check_db` | row counts or item counts over ssh (`table`, `where`, `rows`, `op`; or `item`, `count`); optional `within_s` (0–600), optional `server` (`turtle` or `forever`: the characters-database tables `characters`, `item_instance`, `character_inventory` at core 25fc7ca, item count over `itemEntry`/`owner_guid`). On a Forever slot the table is schema-qualified with the file's `db.schema` (default `characters`), never a hardcoded schema: `{"db":{"host":"h","container":"c","schema":"mychars"}}` reads `mychars.characters` and refuses `characters.characters` |
-| `check_rpc` | `equals`, `match` or `len` over a result path; optional `within_s` (0–600) and `timeout_s` (1–600) |
+| `check_rpc` | `equals`, `match` or `len` over a result path; optional `within_s` (0–600) and `timeout_s` (1–600). A `gm` method gets the world-mutating guard of the `gm` step, and a Forever session retries `-32005` |
 
 `gm`, `bot`, `addon_send` and `rpc` steps also take `settle_s` (0–60): the wait after the action before the log is drained, defaulting to the top-level `settle_s`.
 
@@ -58,7 +58,11 @@ turtle-agent scenario check --var plan=zulfarrak scenarios/itemleg3-g1-items.jso
 ```sh
 turtle-agent scenario run --out <walk-dir>/lft-1 scenarios/lft-addon-path.json
 turtle-agent scenario run --var plan=zulfarrak --session C=127.0.0.1:8771@<walk-dir>/rpc-8771.token scenarios/itemleg3-g1-items.json
+# two forever serve slots: the address and token come from each slot dir
+forever-agent scenario run --slot A=<slot-a-dir> --slot B=<slot-b-dir> scenarios/forever-chat-party.json
 ```
+
+A `--slot` may be written `NAME=DIR` for any session the file declares `"server": "forever"`, or as a bare `DIR` when the file has one session. The address is the slot `slot.json`'s `127.0.0.1:<port>` and the token file is the dir's `rpc-<port>.token`; a `--no-auth` daemon sends no header. A slot for a turtle session is refused.
 
 Every `run` flag and its default:
 
@@ -69,6 +73,7 @@ Every `run` flag and its default:
 | `--quiet` | off | print only PASS/FAIL/ERROR/SKIP lines and the summary |
 | `--var` | none, repeatable | override a file var (the name must exist) |
 | `--session` | none, repeatable | override a session: `NAME=ADDR[@TOKENFILE]` (the name must exist; the address is re-checked for loopback) |
+| `--slot` | none, repeatable | a forever session's serve slot dir: `NAME=DIR` (or a bare `DIR` for a one-session file); the address and token come from that dir |
 | `--soap-host` / `--soap-port` / `--soap-user` | `127.0.0.1` / `7878` / none | the console backend for `soap` steps; `--soap-user` enables it |
 | `--soap-password-file` / `--soap-password-env` | none / `FOREVER_SOAP_PASSWORD` | where the console password comes from; never printed |
 

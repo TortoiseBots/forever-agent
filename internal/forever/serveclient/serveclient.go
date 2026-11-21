@@ -494,6 +494,16 @@ type CommanderCard struct {
 	Pos     *CommanderPos     `json:"pos,omitempty"`
 	Members []CommanderMember `json:"members,omitempty"`
 	Run     *CommanderRun     `json:"run,omitempty"`
+	Log     []CommanderOrder  `json:"log,omitempty"`
+}
+
+// CommanderOrder is one logged order of a card, oldest first: the module's own words. OK says the order queued.
+type CommanderOrder struct {
+	At     int    `json:"at"`
+	Verb   string `json:"verb"`
+	Detail string `json:"detail,omitempty"`
+	OK     bool   `json:"ok"`
+	Result string `json:"result,omitempty"`
 }
 
 // Logout is a logout call's answer.

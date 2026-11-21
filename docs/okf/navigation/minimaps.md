@@ -29,6 +29,8 @@ Point `minimap-extract` at the client's `Data` folder (the MPQ archives; read on
 turtle-agent minimap-extract --client <client-data> --out ~/turtle-agent-minimaps
 ```
 
+On ForeverCore the client data is a CASC extract and the map list comes from the server's `Map.db2`: `forever-agent minimap-extract --forever --client <extract-dir> --out <dir> --db2 <dbc-locale-dir>`. There `--client` is an outside CASC extractor's listfile-named folder (no MPQ archives), `--prefer` takes `minimap,navmesh` (the default) and a map with no tiles gets the navmesh render; `--db2` is required with `--forever` and refused without it.
+
 The default `--maps all-instances` extracts every dungeon and raid in `Map.dbc`; pass `--maps 70,209` for just some maps. Each map gets `<id>.png` plus `<id>.json` (position box, pixels per yard, tile list), one per image source: `worldmap` (the area picture, 4x3 tiles cut to 1002x668), `minimap` (the terrain and indoor WMO tiles, 2 pixels per yard) and `navmesh` (a height-shaded render of the server mmaps, needs `--mmaps`). The first source in `--prefer` that exists (default `worldmap,minimap,navmesh`) is copied to `<id>.png`. `--list` reports what each map would get and writes nothing; `--verbose` logs every map and skipped tile.
 
 ## 2. Serve them to the dashboard

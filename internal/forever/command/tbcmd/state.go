@@ -555,8 +555,10 @@ func parseDistance(rec record, key string) (Distance, error) {
 	return Distance{Has: true, Yards: f}, nil
 }
 
-// parseOrderState reads `<seq>:<queued|ok|fail:<code>>`, or the empty value for no order. The parts are split on
-// ':' before any decoding.
+// parseOrderState reads the order part of a state line, or the empty value for no order. The module writes it as one
+// item of two parts (Rec::P): the sequence and the result, each encoded on its own, so a failed order's result
+// `fail:<code>` arrives as `<seq>:fail%3A<code>` and is the second part after decoding. The parts are split on ':'
+// before any decoding; a third raw part (`<seq>:fail:<code>`, an older writer) is read the same way.
 func parseOrderState(rec record) (OrderState, error) {
 	v, err := rec.requireText("ord")
 	if err != nil {
@@ -578,6 +580,12 @@ func parseOrderState(rec record) (OrderState, error) {
 		return o, fmt.Errorf("%w: ord=%q has no sequence", ErrBadValue, v)
 	}
 	o.Seq = n
+	if len(parts) == 2 {
+		// The module's own form: the result is one part, `fail:<code>` decoded from `fail%3A<code>`.
+		if status, code, ok := strings.Cut(parts[1], ":"); ok {
+			parts = []string{parts[0], status, code}
+		}
+	}
 	switch parts[1] {
 	case "queued", "ok":
 		if len(parts) != 2 {

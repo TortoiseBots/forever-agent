@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/soap"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/scenario"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 )
 
 // exitScenarioFail (14) and exitScenarioAbort (15): the run's checks failed
@@ -31,11 +33,11 @@ const (
 
 const scenarioUsage = `usage:
   forever-agent scenario check [--var NAME=VALUE]... <file>
-  forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] <file>
+  forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--slot NAME=DIR]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] <file>
   forever-agent scenario norm <file> <dir>`
 
 const scenarioCheckUsage = "usage: forever-agent scenario check [--var NAME=VALUE]... <file>"
-const scenarioRunUsage = "usage: forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] <file>"
+const scenarioRunUsage = "usage: forever-agent scenario run [--out DIR] [--force] [--quiet] [--var NAME=VALUE]... [--session NAME=ADDR[@TOKENFILE]]... [--slot NAME=DIR]... [--soap-host H] [--soap-port N] [--soap-user NAME] [--soap-password-file FILE | --soap-password-env VAR] <file>"
 const scenarioNormUsage = "usage: forever-agent scenario norm <file> <dir>"
 
 type varFlag map[string]string
@@ -60,6 +62,90 @@ func (v sessionFlag) Set(s string) error {
 	}
 	v[k] = val
 	return nil
+}
+
+// slotFlag is a repeatable --slot NAME=DIR: a serve slot dir for one forever
+// session. A bare DIR applies when the file has exactly one session.
+type slotFlag map[string]string
+
+func (v slotFlag) String() string { return fmt.Sprint(map[string]string(v)) }
+func (v slotFlag) Set(s string) error {
+	name, dir, ok := strings.Cut(s, "=")
+	if !ok {
+		name, dir = "", s
+	}
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("want NAME=DIR (or DIR for a one-session file), got %q", s)
+	}
+	if _, dup := v[name]; dup {
+		return fmt.Errorf("--slot %s: the slot is named twice", name)
+	}
+	v[name] = dir
+	return nil
+}
+
+// scenarioApplySlots points each named forever session at its serve slot: the
+// address and the token file come from the slot's own slot.json (the dir's
+// rpc-<port>.token), never from the file's placeholders. A slot is refused
+// for a session the file does not call a forever one.
+func scenarioApplySlots(f *scenario.File, slots slotFlag) (map[string]bool, error) {
+	noAuth := map[string]bool{}
+	if len(slots) == 0 {
+		return noAuth, nil
+	}
+	resolved := map[string]string{}
+	usedDirs := map[string]string{}
+	if dir, ok := slots[""]; ok {
+		if len(slots) != 1 || len(f.Sessions) != 1 {
+			return nil, fmt.Errorf("--slot %s: name the session (NAME=DIR); the file has %d sessions", dir, len(f.Sessions))
+		}
+		for only := range f.Sessions {
+			resolved[only] = dir
+		}
+	} else {
+		for name, dir := range slots {
+			resolved[name] = dir
+		}
+	}
+	for name, dir := range resolved {
+		sd, ok := f.Sessions[name]
+		if !ok {
+			return nil, fmt.Errorf("--slot %s: the scenario has no session %s", dir, name)
+		}
+		if sd.Server != scenario.ServerForever {
+			return nil, fmt.Errorf("--slot %s: session %s is a %s session; a serve slot needs \"server\": \"forever\"", dir, name, sd.Server)
+		}
+		abs, m, err := slotdir.Read(dir)
+		if err != nil {
+			return nil, fmt.Errorf("--slot %s: %v", dir, err)
+		}
+		for other, used := range usedDirs {
+			if used == abs {
+				return nil, fmt.Errorf("--slot %s: sessions %s and %s name the same slot dir", dir, other, name)
+			}
+		}
+		usedDirs[name] = abs
+		if err := slotdir.Check("scenario", abs, m); err != nil {
+			return nil, err
+		}
+		tokenPath := slotdir.TokenPath(abs, m.Port)
+		_, statErr := os.Lstat(tokenPath)
+		switch {
+		case m.NoAuth && statErr == nil:
+			// Check already refuses this; keep the message here in the command's own words.
+			return nil, fmt.Errorf("--slot %s: slot.json says no_auth but %s exists: refusing to guess", dir, tokenPath)
+		case m.NoAuth && errors.Is(statErr, os.ErrNotExist):
+			sd.TokenFile = "" // the caller sends no header
+			noAuth[name] = true
+		case errors.Is(statErr, os.ErrNotExist):
+			return nil, fmt.Errorf("--slot %s: token file %s is missing and slot.json does not say no_auth: not sending unauthenticated requests", dir, tokenPath)
+		default:
+			sd.TokenFile = tokenPath
+		}
+		sd.RPC = fmt.Sprintf("127.0.0.1:%d", m.Port)
+		f.Sessions[name] = sd
+	}
+	return noAuth, nil
 }
 
 // scenarioCmd is the scenario subcommand: check, run or norm a scenario file.
@@ -143,6 +229,8 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.Var(vars, "var", "override a file var (repeatable)")
 	sess := sessionFlag{}
 	fs.Var(sess, "session", "override a session's address and token file (repeatable)")
+	slots := slotFlag{}
+	fs.Var(slots, "slot", "a forever session's serve slot dir: NAME=DIR (repeatable; a bare DIR for a one-session file)")
 	soapHost := fs.String("soap-host", soap.DefaultHost, "console backend: SOAP host (loopback only)")
 	soapPort := fs.Int("soap-port", soap.DefaultPort, "console backend: SOAP port")
 	soapUser := fs.String("soap-user", "", "console backend: admin account name (enables `soap` steps)")
@@ -178,6 +266,11 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 			sd.TokenFile = tokFile
 		}
 		f.Sessions[name] = sd
+	}
+	noAuth, err := scenarioApplySlots(f, slots)
+	if err != nil {
+		fmt.Fprintf(stderr, "scenario: %v\n", err)
+		return exitUsage
 	}
 	outDir := *out
 	if outDir == "" {
@@ -217,7 +310,9 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 	for _, name := range names {
 		sd := f.Sessions[name]
 		tokFile := sd.TokenFile
-		if tokFile == "" {
+		if noAuth[name] {
+			tokFile = ""
+		} else if tokFile == "" {
 			tokFile = defaultScenarioTokenFile(sd.RPC)
 		} else if strings.HasPrefix(tokFile, "~/") {
 			if u, err := user.Current(); err == nil {
@@ -226,7 +321,8 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 				tokFile = filepath.Join(home, strings.TrimPrefix(tokFile, "~/"))
 			}
 		}
-		r.Sessions[name] = &scenario.HTTPCaller{Addr: sd.RPC, TokenFile: tokFile, HTTP: &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}}
+		r.Sessions[name] = &scenario.HTTPCaller{Addr: sd.RPC, TokenFile: tokFile, NoAuth: noAuth[name],
+			HTTP: &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}}
 	}
 	res, err := r.Run(ctx, f)
 	if err != nil {

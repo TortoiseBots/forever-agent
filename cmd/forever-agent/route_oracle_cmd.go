@@ -19,7 +19,7 @@ import (
 // exitRouteOracle: route-oracle could not report every plan (a failing plan is not a usage error).
 const exitRouteOracle = 12
 
-const routeOracleUsage = "usage: forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--mode walk|bosses] [--objectives plan|bosses] [--plan NAME]..."
+const routeOracleUsage = "usage: forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--mode walk|bosses] [--objectives plan|bosses] [--plan NAME]... [--forever [--parent MAP=PARENT]...]"
 
 // The two modes. walk (the default) plans each plan's own stored sequence hop by hop and
 // scores the stored hops against the navmesh; bosses plans entrance -> each leg's objective
@@ -59,6 +59,9 @@ func routeOracleCmd(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "folder for <plan>.txt and <plan>.json (<plan>-bosses.* in bosses mode, <plan>-bosses-only.* with --objectives bosses); required")
 	objectives := fs.String("objectives", routeoracle.ObjectivesPlan, "bosses mode only. plan: each leg's own objective (its boss, else its to point); bosses: ONLY the chain entrance -> boss 1 -> boss 2 ... (a leg without a boss is folded into the next boss; no stored to point is an objective)")
 	mode := fs.String("mode", modeWalk, "walk: score the plan's stored hops on the navmesh; bosses: plan entrance -> each boss live, with no hand points")
+	forever := fs.Bool("forever", false, "plan on a ForeverCore v16 mmaps folder (navmesh.NewForeverPlanner), not the 1.12 v6 mesh")
+	parents := foreverParents{}
+	fs.Var(&parents, "parent", "MAP=PARENT: a Forever instance map whose missing tile comes from that parent (repeatable; needs --forever)")
 	var plans []string
 	fs.Var(&planList{&plans}, "plan", "a plan name; repeatable (default: "+strings.Join(routeOracleDefaultPlans, ", ")+")")
 	if err := fs.Parse(args); err != nil {
@@ -69,6 +72,10 @@ func routeOracleCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if *mmaps == "" || *out == "" || fs.NArg() > 0 {
 		fmt.Fprintln(stderr, routeOracleUsage)
+		return exitUsage
+	}
+	if !*forever && len(parents) > 0 {
+		fmt.Fprintln(stderr, "route-oracle: --parent needs --forever (the 1.12 mesh has no parent-map rule)")
 		return exitUsage
 	}
 	if *mode != modeWalk && *mode != modeBosses {
@@ -89,7 +96,12 @@ func routeOracleCmd(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	*out = outDir
-	planner := navmesh.NewPlanner(*mmaps)
+	var planner *navmesh.Planner
+	if *forever {
+		planner = navmesh.NewForeverPlanner(*mmaps, parents)
+	} else {
+		planner = navmesh.NewPlanner(*mmaps)
+	}
 	defer planner.Close()
 
 	failed := false

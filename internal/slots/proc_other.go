@@ -16,6 +16,14 @@ func (LinuxProbe) PortListening(port int) bool { return false }
 // procStart cannot tell anything off Linux: a lease is never called dead here.
 func procStart(pid int) (start uint64, alive, exact bool) { return 0, false, false }
 
+// PIDRunning cannot tell anything off Linux; a pid is never called live there, so teardown never signals one.
+func PIDRunning(pid int) bool { return false }
+
+// ProcStartTicks is a process's start time in clock ticks since boot; only Linux can tell.
+func ProcStartTicks(pid int) (uint64, error) {
+	return 0, errors.New("a process start time needs Linux (/proc)")
+}
+
 func ProcStart(pid int) (time.Time, error) {
 	return time.Time{}, errors.New("slot leases need Linux (/proc and flock)")
 }
