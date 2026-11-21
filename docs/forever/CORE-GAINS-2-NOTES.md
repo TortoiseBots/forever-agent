@@ -152,4 +152,6 @@ entries are now told apart by name as well as by position.
 
 ## Gates
 
-`make fmt-check`, `make cross`, staticcheck, `vm-test ta ~/wt-fa-gains2 RESULT: PASS` on a clean committed tree.
+`make fmt-check`, `make cross`, staticcheck, `vm-test ta ~/wt-fa-gains2` on a clean committed tree:
+
+RESULT: PASS  kind=ta wt=wt-fa-gains2 sha=5608b87c dirty=0 files=2347
