@@ -92,7 +92,7 @@ func (s *session) SpellName(id uint32) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	name, err := tables.ParseSpellName(data)
+	name, err := tables.ParseSpellName(data, id)
 	if err != nil || name.Name == "" {
 		return "", false
 	}

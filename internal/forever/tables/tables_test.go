@@ -27,23 +27,21 @@ func buildReply(table, id, ts uint32, status Status, data []byte) []byte {
 	return b.Bytes()
 }
 
-// buildSpellName writes one SpellName record the way WriteRecord does
-// (DB2Store.cpp:42-97, SpellNameLoadInfo): the uint32 id, then the name as
-// a C string in the session locale.
-func buildSpellName(id uint32, name string) []byte {
+// buildSpellName writes one SpellName record the way WriteRecord does for
+// IndexField -1 tables (DB2Store.cpp:47-48): no id on the wire, just the
+// name as a C string in the session locale.
+func buildSpellName(name string) []byte {
 	b := wire.NewWriter()
-	b.WriteU32(id)
 	b.WriteBytes([]byte(name))
 	b.WriteU8(0)
 	return b.Bytes()
 }
 
-// buildFactionTemplate writes one FactionTemplate record in LoadInfo field
-// order (FactionTemplateLoadInfo): ID, uint16 faction, int32 flags, the
-// three group bytes, then the two 8-entry uint16 lists.
+// buildFactionTemplate writes one FactionTemplate record the way WriteRecord
+// does for IndexField -1 tables: no id on the wire, then uint16 faction,
+// int32 flags, the three group bytes, and the two 8-entry uint16 lists.
 func buildFactionTemplate(t FactionTemplate) []byte {
 	b := wire.NewWriter()
-	b.WriteU32(t.ID)
 	b.WriteU16(t.Faction)
 	b.WriteI32(t.Flags)
 	b.WriteU8(t.FactionGroup)
@@ -116,7 +114,7 @@ func TestQueryRoundTrip(t *testing.T) {
 }
 
 func TestReplyRoundTrip(t *testing.T) {
-	data := buildSpellName(774, "Rend")
+	data := buildSpellName("Rend")
 	raw := buildReply(TableSpellName, 774, 42, StatusValid, data)
 	r, err := ParseReply(raw)
 	if err != nil {
@@ -128,14 +126,14 @@ func TestReplyRoundTrip(t *testing.T) {
 	if !r.Found() {
 		t.Fatal("a Valid reply with data is not Found")
 	}
-	name, err := ParseSpellName(r.Data)
+	name, err := ParseSpellName(r.Data, r.RecordID)
 	if err != nil {
 		t.Fatalf("ParseSpellName: %v", err)
 	}
 	if name.ID != 774 || name.Name != "Rend" {
 		t.Fatalf("spell name %+v", name)
 	}
-	misc, err := ParseSpellMisc(buildSpellMisc(150))
+	misc, err := ParseSpellMisc(buildSpellMisc(), 150)
 	if err != nil {
 		t.Fatalf("ParseSpellMisc: %v", err)
 	}
@@ -143,7 +141,7 @@ func TestReplyRoundTrip(t *testing.T) {
 		t.Fatalf("spell misc %+v", misc)
 	}
 	want := FactionTemplate{ID: 35, Faction: 35, FactionGroup: 1, FriendGroup: 1, Enemies: [8]uint16{2: 7}}
-	ft, err := ParseFactionTemplate(buildFactionTemplate(want))
+	ft, err := ParseFactionTemplate(buildFactionTemplate(want), 35)
 	if err != nil {
 		t.Fatalf("ParseFactionTemplate: %v", err)
 	}
@@ -153,9 +151,8 @@ func TestReplyRoundTrip(t *testing.T) {
 }
 
 // buildSpellMisc writes one SpellMisc record in LoadInfo field order.
-func buildSpellMisc(spellID uint32) []byte {
+func buildSpellMisc() []byte {
 	b := wire.NewWriter()
-	b.WriteU32(999) // ID
 	for range 17 {
 		b.WriteI32(0)
 	}
@@ -171,15 +168,15 @@ func buildSpellMisc(spellID uint32) []byte {
 	b.WriteI32(0)
 	b.WriteI32(0)
 	b.WriteI32(0)
-	b.WriteI32(0) // show future
-	b.WriteI32(0) // visual
-	b.WriteI32(0) // active visual
-	b.WriteU32(spellID)
+	b.WriteI32(0)   // show future
+	b.WriteI32(0)   // visual
+	b.WriteI32(0)   // active visual
+	b.WriteU32(150) // parent SpellID
 	return b.Bytes()
 }
 
 func TestShortAndHostileRepliesNeverPanic(t *testing.T) {
-	data := buildSpellName(774, "Rend")
+	data := buildSpellName("Rend")
 	full := buildReply(TableSpellName, 774, 42, StatusValid, data)
 	// Every truncation is an error, never a panic.
 	for i := range len(full) {
@@ -208,15 +205,15 @@ func TestShortAndHostileRepliesNeverPanic(t *testing.T) {
 		t.Fatal("reply with a trailing byte parsed")
 	}
 	// A short SpellName and a short FactionTemplate are errors, never panics.
-	if _, err := ParseSpellName(data[:3]); err == nil {
+	if _, err := ParseSpellName(data[:3], 774); err == nil {
 		t.Fatal("short spell name parsed")
 	}
 	ft := buildFactionTemplate(FactionTemplate{ID: 35})
-	if _, err := ParseFactionTemplate(ft[:5]); err == nil {
+	if _, err := ParseFactionTemplate(ft[:5], 35); err == nil {
 		t.Fatal("short faction template parsed")
 	}
 	// Trailing bytes after a record are an error.
-	if _, err := ParseSpellName(append(data, 0)); err == nil {
+	if _, err := ParseSpellName(append(data, 0), 774); err == nil {
 		t.Fatal("spell name with a trailing byte parsed")
 	}
 }
@@ -246,7 +243,7 @@ func TestNotFoundIsATypedResult(t *testing.T) {
 func TestCacheBound(t *testing.T) {
 	c := NewCache(4)
 	for i := uint32(1); i <= 6; i++ {
-		c.Put(TableSpellName, i, true, buildSpellName(i, "n"))
+		c.Put(TableSpellName, i, true, buildSpellName("n"))
 	}
 	if c.Len() > 4 {
 		t.Fatalf("cache holds %d entries past its bound of 4", c.Len())
@@ -262,7 +259,7 @@ func TestCacheBound(t *testing.T) {
 		if !ok || !found {
 			t.Fatalf("id %d missing", id)
 		}
-		name, err := ParseSpellName(data)
+		name, err := ParseSpellName(data, id)
 		if err != nil {
 			t.Fatalf("id %d: %v", id, err)
 		}
@@ -278,10 +275,10 @@ func TestCacheBound(t *testing.T) {
 	}
 	// Touching an entry keeps it past a later eviction.
 	c2 := NewCache(2)
-	c2.Put(TableSpellName, 1, true, buildSpellName(1, "a"))
-	c2.Put(TableSpellName, 2, true, buildSpellName(2, "b"))
+	c2.Put(TableSpellName, 1, true, buildSpellName("a"))
+	c2.Put(TableSpellName, 2, true, buildSpellName("b"))
 	c2.Get(TableSpellName, 1)
-	c2.Put(TableSpellName, 3, true, buildSpellName(3, "c"))
+	c2.Put(TableSpellName, 3, true, buildSpellName("c"))
 	if _, _, ok := c2.Get(TableSpellName, 1); !ok {
 		t.Fatal("recently used entry evicted first")
 	}

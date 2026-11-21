@@ -12,20 +12,23 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// SpellName is a SpellName.db2 record (SpellNameLoadInfo: ID, Name): the
-// spell id and its enUS name.
+// SpellName is a SpellName.db2 record (SpellNameLoadInfo: ID, Name). The
+// id travels in the reply header, not the record: WriteRecord skips it on
+// the wire for every table here (their Metas have IndexField -1, so
+// HasIndexFieldInData is false, DB2Store.cpp:47-48 and DB2Meta.cpp:22-25),
+// and the SpellName Meta has no other field, so the record is just the
+// enUS name (SpellNameMeta FieldCount 1).
 type SpellName struct {
 	ID   uint32
 	Name string
 }
 
-// ParseSpellName decodes one SpellName record: the uint32 id, then the name
-// as a C string (WriteRecord's FT_STRING in the session locale).
-func ParseSpellName(data []byte) (SpellName, error) {
+// ParseSpellName decodes one SpellName record: the name as a C string
+// (WriteRecord's FT_STRING in the session locale). The id is the reply's
+// own RecordID, passed in so the result names its spell.
+func ParseSpellName(data []byte, id uint32) (SpellName, error) {
 	b := wire.NewReader(data)
-	var s SpellName
-	s.ID = b.ReadU32()
-	s.Name = readCString(b)
+	s := SpellName{ID: id, Name: readCString(b)}
 	if err := b.Err(); err != nil {
 		return SpellName{}, err
 	}
@@ -35,11 +38,13 @@ func ParseSpellName(data []byte) (SpellName, error) {
 	return s, nil
 }
 
-// SpellMisc is the SpellMisc.db2 record this round needs
-// (SpellMiscLoadInfo: 17 int32 attributes, int16 difficulty, three uint16
-// indexes, the range index, the uint8 school mask, three floats, then the
-// int32 ids): the spell id, its school mask and its casting-time index. The
-// rest rides along for the next round that needs it.
+// SpellMisc is the SpellMisc.db2 record this round needs. The id travels
+// in the reply header, not the record (same IndexField -1 skip as above),
+// so the record is the Meta's 17 fields in order (SpellMiscMeta): the 17
+// int32 attributes, difficulty, the three duration/range uint16 indexes,
+// the uint8 school mask, three floats and seven int32, ending in the parent
+// SpellID (ParentIndexField 16). The school mask is what this round needs;
+// the rest rides along for the next round that needs it.
 type SpellMisc struct {
 	ID               uint32
 	Attributes       [17]int32
@@ -55,14 +60,16 @@ type SpellMisc struct {
 	SpellIconFile    int32
 	ActiveIconFile   int32
 	ContentTuningID  int32
+	Extra            [3]int32
 	SpellID          uint32
 }
 
-// ParseSpellMisc decodes one SpellMisc record in LoadInfo field order.
-func ParseSpellMisc(data []byte) (SpellMisc, error) {
+// ParseSpellMisc decodes one SpellMisc record in Meta field order, with the
+// id from the reply header (same skip as ParseSpellName: LoadInfo ID first,
+// then the Meta fields).
+func ParseSpellMisc(data []byte, id uint32) (SpellMisc, error) {
 	b := wire.NewReader(data)
-	var m SpellMisc
-	m.ID = b.ReadU32()
+	m := SpellMisc{ID: id}
 	for i := range m.Attributes {
 		m.Attributes[i] = b.ReadI32()
 	}
@@ -78,11 +85,9 @@ func ParseSpellMisc(data []byte) (SpellMisc, error) {
 	m.SpellIconFile = b.ReadI32()
 	m.ActiveIconFile = b.ReadI32()
 	m.ContentTuningID = b.ReadI32()
-	// The LoadInfo's last four int32 (ShowFutureSpellPlayerConditionID,
-	// SpellVisualScript, ActiveSpellVisualScript) and the parent SpellID
-	// follow; the school mask above is what this round needs, but a record
-	// that ends early is hostile, not a shorter layout.
-	b.Skip(12)
+	for i := range m.Extra {
+		m.Extra[i] = b.ReadI32()
+	}
 	m.SpellID = b.ReadU32()
 	if err := b.Err(); err != nil {
 		return SpellMisc{}, err
@@ -102,10 +107,11 @@ const (
 	FactionMaskPlayer = 1
 )
 
-// FactionTemplate is a FactionTemplate.db2 record (FactionTemplateLoadInfo:
-// ID, uint16 faction, int32 flags, the three uint8 group masks, then the two
-// 8-entry uint16 lists): the masks and lists the core's own IsFriendlyTo and
-// IsHostileTo (DB2Structure.h:1726-1755) read.
+// FactionTemplate is a FactionTemplate.db2 record. The id travels in the
+// reply header (same IndexField -1 skip); the record is the Meta's 7 fields
+// (FactionTemplateMeta): uint16 faction, int32 flags, the three group bytes,
+// then the two 8-entry uint16 lists. These are the masks and lists the
+// core's own IsFriendlyTo and IsHostileTo (DB2Structure.h:1726-1755) read.
 type FactionTemplate struct {
 	ID           uint32
 	Faction      uint16
@@ -117,11 +123,11 @@ type FactionTemplate struct {
 	Friend       [MaxFactionRelations]uint16
 }
 
-// ParseFactionTemplate decodes one FactionTemplate record in LoadInfo order.
-func ParseFactionTemplate(data []byte) (FactionTemplate, error) {
+// ParseFactionTemplate decodes one FactionTemplate record in Meta order,
+// with the id from the reply header.
+func ParseFactionTemplate(data []byte, id uint32) (FactionTemplate, error) {
 	b := wire.NewReader(data)
-	var t FactionTemplate
-	t.ID = b.ReadU32()
+	t := FactionTemplate{ID: id}
 	t.Faction = b.ReadU16()
 	t.Flags = b.ReadI32()
 	t.FactionGroup = b.ReadU8()

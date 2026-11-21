@@ -65,15 +65,22 @@ source; each was verified two ways:
 | SpellMisc.db2 (FileDataId 1003144, LayoutHash `0x434B3607`) | `0xC603EE28` (3322146344) | the `hotfix_data` rows the core SQL pairs with `spell_misc` ids (2026_10_30_21) |
 | FactionTemplate.db2 (FileDataId 1361579, LayoutHash `0x22B6DC22`) | `0x1018ADD5` (270052821) | the `hotfix_data` row for faction_template id 3561 (2026_10_01_02 sniff, line 16928) |
 
-Record layouts (all `WriteRecord` order, i.e. DB2LoadInfo field order):
+Record layouts (all `WriteRecord` Meta order, i.e. the Meta fields for the LoadInfo):
 
-* SpellName (SpellNameLoadInfo: ID, Name): uint32 id, C-string name.
-* SpellMisc (SpellMiscLoadInfo, 34 fields): ID, 17 int32 attributes,
-  int16 difficulty, three uint16 indexes, range index, uint8 school mask,
-  three floats, seven int32 (icons, tuning, visuals), parent SpellID.
-* FactionTemplate (FactionTemplateLoadInfo, 22 fields): ID, uint16
-  faction, int32 flags, the three group bytes, then the two 8-entry uint16
-  lists (`MAX_FACTION_RELATIONS` 8, DB2Structure.h:1710). `IsFriendlyTo` /
+The id travels in the reply header, not the record: every Meta here has
+IndexField -1, so WriteRecord skips the leading LoadInfo ID on the wire
+(DB2Store.cpp:47-48, DB2Meta.cpp:22-25) and the record is the Meta fields
+alone. The decoders take the reply's RecordID so the result still names its
+record.
+
+* SpellName (SpellNameMeta, 1 field): C-string name (LoadInfo ID, Name).
+* SpellMisc (SpellMiscMeta, 17 fields): 17 int32 attributes, int16
+  difficulty, three uint16 indexes, range index, uint8 school mask, three
+  floats, seven int32 (icons, tuning, visuals), parent SpellID
+  (ParentIndexField 16).
+* FactionTemplate (FactionTemplateMeta, 7 fields): uint16 faction, int32
+  flags, the three group bytes, then the two 8-entry uint16 lists
+  (`MAX_FACTION_RELATIONS` 8, DB2Structure.h:1710). `IsFriendlyTo` /
   `IsHostileTo` / `IsHostileToPlayers` are the core's own helpers
   (DB2Structure.h:1726-1756) with `FACTION_MASK_PLAYER = 1`
   (DBCEnums.h:1012-1014).

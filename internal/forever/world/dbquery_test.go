@@ -77,10 +77,11 @@ func dbAnswer(t *testing.T, s *session, table, id uint32, status tables.Status, 
 	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGDBReply, Payload: b.Bytes()}}
 }
 
+// dbRecord writes one SpellName record the way the server does for IndexField
+// -1 tables (DB2Store.cpp:47-48): no id on the wire, just the name.
 func dbRecord(t *testing.T, name string) []byte {
 	t.Helper()
 	b := wire.NewWriter()
-	b.WriteU32(774)
 	b.WriteBytes([]byte(name))
 	b.WriteU8(0)
 	return b.Bytes()
@@ -100,7 +101,7 @@ func TestFetchRecordsAsksOnceAndCaches(t *testing.T) {
 	if len(got[774]) == 0 {
 		t.Fatal("no record for 774")
 	}
-	name, err := tables.ParseSpellName(got[774])
+	name, err := tables.ParseSpellName(got[774], 774)
 	if err != nil || name.Name != "Rend" {
 		t.Fatalf("record: %+v %v", name, err)
 	}
