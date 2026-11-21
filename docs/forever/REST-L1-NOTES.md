@@ -12,7 +12,7 @@ untouched.
 
 * `New(addr, tokenFile)` opens the daemon at host:port (scheme optional) with
   the bearer token from tokenFile. Only loopback addresses are accepted
-  (127.0.0.0/8, `::1`, `localhost`, no lookup of other names): anything else is
+  (the whole IPv4 loopback block, `::1` and `localhost`; no lookup of other names): anything else is
   `ErrNotLoopback`, so the token never leaves the machine. No redirect is
   followed. An empty tokenFile means authentication off.
 * `Open(dir)` opens a serve `--dir` through `internal/slotdir`, the code the
