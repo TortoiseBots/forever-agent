@@ -120,6 +120,9 @@ var ruleNames = map[int]string{
 	10: "power waste at 100% in combat >30 s",
 	11: "cast started but nothing lands while mana rises >10 s (cast-cancel signal)",
 	13: "healer under 30% mana out of combat >20 s, no drink 15 s, group not moving",
-	14: "member >40 yd from the group centroid >20 s in combat",
 	15: "missed decurse: removable debuff >8 s with an able dispeller alive, in range, not casting",
+	16: "trash tactics: must-interrupt cast completed with an interrupter free",
+	17: "trash tactics: crowd control tried on an immune mob",
+	18: "trash tactics: listed dispellable debuff left on too long",
+	19: "trash tactics: lower-priority mob killed before a higher one",
 }
