@@ -41,8 +41,9 @@ func CleanupRun(ctx context.Context, runDir string, ledger *Ledger, openSlot fun
 	for _, dir := range dirs {
 		rpc, err := openSlot(dir)
 		client := NewClient(rpc)
-		guard := NewGuard(client, GuardOptions{Ledger: ledger})
-		for _, guid := range byDir[dir] {
+		guids := byDir[dir]
+		guard := NewGuard(client, GuardOptions{Ledger: ledger, Summons: func() []string { return guids }})
+		for _, guid := range guids {
 			rows = append(rows, killOne(ctx, guard, err, guid, timeout))
 		}
 	}

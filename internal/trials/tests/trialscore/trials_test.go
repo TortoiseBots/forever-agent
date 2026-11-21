@@ -318,6 +318,41 @@ func TestRebase_DedupeAndDroppedKinds(t *testing.T) {
 	assertEqual(t, int64(1), tcObj(summary["dropped_kinds"])["<missing time>"])
 }
 
+// A row with no reason key must not gain "reason": "None" (pyjson.Str(nil)); a row that carries one keeps it.
+func TestNormalise_ReasonOnlyWhenRowCarriesIt(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "setup.json"), tcSetupOK())
+	writeJSONL(t, filepath.Join(dir, "marks.jsonl"), []any{
+		map[string]any{"kind": "setup_ok", "wall": "2026-01-01T00:00:00+00:00"},
+	})
+	writeJSONL(t, filepath.Join(dir, "samples.jsonl"), []any{
+		map[string]any{"t": 10.0, "guid": tcPlayer, "hp": int64(500), "max_hp": int64(1000), "auras": []any{}},
+	})
+	noReason := map[string]any{"seq": int64(1), "time": "2026-01-01T00:00:10+00:00",
+		"kind": "spell_go", "source": map[string]any{"name": "b", "guid": tcBot},
+		"target": map[string]any{"name": "p", "guid": tcPlayer}, "spell_id": int64(6065)}
+	withReason := cloneRow(noReason)
+	withReason["seq"] = int64(2)
+	withReason["reason"] = "interrupted"
+	writeJSONL(t, filepath.Join(dir, "raw-ta.jsonl"), []any{noReason, withReason})
+	rows, err := events.Normalise(dir, tcTrial())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var casts []map[string]any
+	for _, row := range rows {
+		if row["kind"] == "cast" {
+			casts = append(casts, row)
+		}
+	}
+	// The normaliser keeps input order, so casts[0] is the row without a reason.
+	assertEqual(t, 2, len(casts))
+	if _, has := casts[0]["reason"]; has {
+		t.Fatalf("row without reason gained reason %v", casts[0]["reason"])
+	}
+	assertEqual(t, "interrupted", casts[1]["reason"])
+}
+
 func TestRebase_OverlappingExcludedMerged(t *testing.T) {
 	dir := t.TempDir()
 	writeJSON(t, filepath.Join(dir, "setup.json"), tcSetupOK())

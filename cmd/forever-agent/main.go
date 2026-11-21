@@ -162,6 +162,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage:
   forever-agent login [--config FILE] [--capture FILE] [--stay DURATION] [--rpc ADDR] [--reconnect N] [--tune FILE] [--pid-file FILE] [<account>] <character>
   forever-agent fleet --config FILE [--settings FILE] [--stagger DURATION] [--wait DURATION] [--reconnect N] [--stop-on-failure]
+  forever-agent fleet --forever --config FILE --slots FILE [--server NAME] [--stagger DURATION] [--wait DURATION] [--stop-on-failure]
   forever-agent scrub-check [--config FILE] <capture>...
   forever-agent capture-stats <capture>
   forever-agent map [--capture FILE] [--events FILE] [--report FILE] [--botwatch FILE] [--plan FILE] [--out run.svg] [--html] [--force] [--mmaps DIR] [--map N] [--box x0,y0,x1,y1] [--from RFC3339] [--to RFC3339] [--floors auto|off|z,z]
@@ -194,6 +195,7 @@ func usage(w io.Writer) {
   forever-agent scenario norm <file> <dir>
   forever-agent lease acquire <server> (--slot ID | --any) --holder NAME [--ttl MIN] | renew <server> <slot> --holder NAME --lease-id ID [--ttl MIN] | release <server> <slot> --holder NAME [--lease-id ID] [--force] | list [<server>] [--json] | reap [--dry-run]   [--slots FILE]
   forever-agent slot setup <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--character NAME] [--slots FILE]
+  forever-agent slot setup --forever <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--character NAME] [--slots FILE]
   forever-agent teardown [--keep-lease] [--release-anyway] [--gm off|on|keep] [--dry-run] [--json] [--slots FILE] <dir>
   forever-agent rpc [--timeout DUR] [--raw] <dir> <method> [<params-json>|-]
   forever-agent trials score <run-dir> | report <run-dir> | compare <run-dir> --baseline <dir>
