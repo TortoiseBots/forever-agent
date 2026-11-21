@@ -263,7 +263,7 @@ MaNGOS (three-digit) case is unchanged and pinned by the existing report test.
 2. 30 s capture on A, then `forever capture-stats <outside-dir>`: nonzero counts, `TOTAL` matches the
    manifests, and the command's output holds no payload byte. Delete one payload file and repeat.
 3. `patrol-record A --forever --map <m> --area x,y,r --minutes 5 --spawns <export> --mmaps <v16>`: file
-   written, guids 32-hex, the prompt's stance lines only in the slot log.
+   written, guids 32-hex, the command's stance lines only in the slot log.
 4. `route-oracle --forever --mmaps <v16> --out <dir> --plan <name>` on a Forever plan: exit 0 and
    `0700.mmap` (or the map's own) in the tile list.
 
@@ -305,3 +305,23 @@ Tests: `TestMinimapForeverFlagsRequireDB2` (failing case): `--forever` without `
 
 Live (X2): an outside CASC extract plus the server's `dbc/<locale>`: `--maps all-instances --list`, then a
 real extract of one dungeon; a WMO dungeon falls back to the navmesh render.
+
+## 10. Gates (this round)
+
+Gate commit: `512b69ad` (the clean tree the gates ran on: the three code rounds and the notes; no AI or
+co-author trailers). The commit after it is documentation only.
+Hygiene: a grep of the branch diff for private hosts, IPs, accounts, e-mails, local paths, worktree and runner
+names finds nothing.
+
+- `make fmt-check`: exit 0, no output.
+- `make cross`: exit 0 (windows/amd64 and darwin/arm64 builds, then the windows vet of `./cmd/...` and
+  `./internal/forever/...`).
+- `staticcheck ./...`: exit 0, no findings.
+- `go test -race -count=1 ./cmd/forever-agent ./internal/routeoracle ./internal/scenario`: rc 0;
+  `ok github.com/pjerra/forever-agent/cmd/forever-agent 539.122s`,
+  `ok github.com/pjerra/forever-agent/internal/routeoracle 1.286s`,
+  `ok github.com/pjerra/forever-agent/internal/scenario 1.533s`.
+  The first attempt ran beside the VM gate and failed `TestSecondInterruptKills` with
+  `child never printed "ready": ""` (its 5 s child-start deadline under load, unrelated to this round);
+  the test passes alone and in the clean rerun quoted above.
+- `vm-test ta` on the committed tree: `RESULT: PASS kind=ta sha=512b69ad dirty=0`.
