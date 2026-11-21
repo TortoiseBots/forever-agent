@@ -63,6 +63,8 @@ UNKNOWN until the server proves the numbers. The live check to run:
 2. `forever-agent trials report <dir>/dummy-mage-fire` (or `trials score <dir>`): expect three `duration` repeats, `mobs_ready` ok, and UNKNOWN rows naming `min_damage`/`max_reaction_s`.
 3. Fill the table's nulls from the measured means, re-run, and confirm the card flips to PASS/FAIL on real numbers.
 
+Gates: `make fmt-check`, `make cross`, `staticcheck ./...`, `vm-test ta ~/wt-fa-dummy` RESULT: PASS on a clean committed tree.
+
 ## What the scripted tests prove (hand-made combat rows, never captures)
 
 - `TestDamageSumsPerSpell`: 30 + 50 over two Fireball goes scores mean 40 over 2 casts.
