@@ -253,14 +253,31 @@ type ServeEventPage struct {
 	Reset bool   `json:"reset,omitempty"`
 }
 
-// serveActDefaultBudget is act's deadline when the caller names none.
+// serveActDefaultBudget is act's deadline when the caller names none and the script does not fly.
 var serveActDefaultBudget = 60 * time.Second
+
+// serveActSlack is the time a serve act script's other steps need around its flights: the selects and settles of
+// the steps that lead to the flight master and the line the answer keeps.
+const serveActSlack = 30 * time.Second
+
+// serveActTimeoutMax is the largest run a caller may name (ten minutes), the method's old cap; a script with a
+// flight may name up to its flight budget when that is longer.
+const serveActTimeoutMax = 10 * time.Minute
+
+// serveActFlightBudget is the budget a script with flights needs: each fly step at its worst (actFlightStepBudget)
+// plus the slack of the steps around it. A flight is driven by the server for up to actTaxiFlightMax, so the
+// method's own clock must cover it instead of ending the run while ON_TAXI is still set.
+func serveActFlightBudget(steps []ActStep) time.Duration {
+	return time.Duration(actScriptFlights(steps))*actFlightStepBudget + serveActSlack
+}
 
 type serveActParams struct {
 	// Steps are act steps, one per entry, in the `--step 'verb k=v'` form (world.ParseActStep).
 	Steps []string `json:"steps"`
-	// TimeoutMS bounds the whole run (1 to 600000 ms). 0 or absent is the default budget (serveActDefaultBudget),
-	// never "no deadline": a run holds the session goroutine, so every other call waits behind it.
+	// TimeoutMS bounds the whole run. 0 or absent is the default budget: serveActDefaultBudget, or the flights'
+	// own budget when the script has a fly step. It may not be above the default the script earns (serveAct's own
+	// check), nor below what its flights need, and it is never "no deadline": a run holds the session goroutine,
+	// so every other call waits behind it.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
 
@@ -1394,9 +1411,6 @@ func (s *session) serveAct(ctx context.Context, p serveActParams) (ServeActResul
 	if len(p.Steps) == 0 {
 		return ServeActResult{}, errors.New("act needs at least one step")
 	}
-	if p.TimeoutMS < 0 || p.TimeoutMS > 600000 {
-		return ServeActResult{}, errors.New("act: timeout_ms must be 0 to 600000")
-	}
 	steps := make([]ActStep, 0, len(p.Steps))
 	for _, line := range p.Steps {
 		step, err := ParseActStep(line)
@@ -1405,9 +1419,26 @@ func (s *session) serveAct(ctx context.Context, p serveActParams) (ServeActResul
 		}
 		steps = append(steps, step)
 	}
+	// A script with a flight gets the flight's own budget by default; one below what the flights need is refused
+	// before anything is sent, because a budget cannot cut a flight mid-air. The caller's cap keeps the method's old
+	// ten minutes and grows to the flight's own budget when that is longer.
 	budget := serveActDefaultBudget
+	if flights := actScriptFlights(steps); flights > 0 {
+		budget = serveActFlightBudget(steps)
+	}
+	maxBudget := serveActTimeoutMax
+	if f := serveActFlightBudget(steps); f > maxBudget {
+		maxBudget = f
+	}
+	if p.TimeoutMS < 0 || p.TimeoutMS > int(maxBudget/time.Millisecond) {
+		return ServeActResult{}, fmt.Errorf("act: timeout_ms must be 0 to %d", maxBudget.Milliseconds())
+	}
 	if p.TimeoutMS > 0 {
 		budget = time.Duration(p.TimeoutMS) * time.Millisecond
+		if flights := actScriptFlights(steps); flights > 0 && budget < serveActFlightBudget(steps) {
+			return ServeActResult{}, fmt.Errorf("act: timeout_ms %d is below what %d flight(s) need (%d ms): a flight may take %s",
+				p.TimeoutMS, flights, serveActFlightBudget(steps).Milliseconds(), actTaxiFlightMax)
+		}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()

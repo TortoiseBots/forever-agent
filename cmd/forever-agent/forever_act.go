@@ -80,7 +80,7 @@ func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 	report, err := common.enter(ctx, "forever act", stdout, world.Options{
 		Act:        script,
 		Settle:     *stay,
-		Deadline:   5 * time.Minute,
+		Deadline:   world.ActBudget(script, *stay),
 		CaptureDir: *captureDir,
 	})
 	if report != nil {

@@ -32,6 +32,11 @@ const (
 	NPCFlagVendorMasks uint32 = 0x0F00
 	// NPCFlagRepair is UNIT_NPC_FLAG_REPAIR (UnitDefines.h:332): the creature repairs.
 	NPCFlagRepair uint32 = 0x1000
+	// NPCFlagTrainer is UNIT_NPC_FLAG_TRAINER (UnitDefines.h:324): the flag the core's list and buy handlers check.
+	// The class (0x20) and profession (0x40) bits only say what the trainer teaches (UnitDefines.h:325-326).
+	NPCFlagTrainer uint32 = 0x00000010
+	// NPCFlagFlightmaster is UNIT_NPC_FLAG_FLIGHTMASTER (UnitDefines.h:333): the flag every taxi handler checks.
+	NPCFlagFlightmaster uint32 = 0x00002000
 )
 
 // IsVendor reports whether a creature's flags make it a vendor (any of the five vendor bits).
@@ -39,6 +44,14 @@ func IsVendor(flags uint32) bool { return flags&(NPCFlagVendor|NPCFlagVendorMask
 
 // IsRepairer reports whether a creature's flags make it a repairer.
 func IsRepairer(flags uint32) bool { return flags&NPCFlagRepair != 0 }
+
+// IsTrainer reports whether a creature's flags carry the trainer bit the core's list and buy handlers check
+// (NPCHandler.cpp:99, :134). A trainer that only carries a class or profession bit answers neither packet.
+func IsTrainer(flags uint32) bool { return flags&NPCFlagTrainer != 0 }
+
+// IsFlightmaster reports whether a creature's flags carry the flight-master bit every taxi handler checks
+// (TaxiHandler.cpp:35-76, :159-166).
+func IsFlightmaster(flags uint32) bool { return flags&NPCFlagFlightmaster != 0 }
 
 // InteractionMerchant is PlayerInteractionType::Merchant (DBCEnums.h:2236): the interaction SMSG_NPC_INTERACTION_OPEN_RESULT
 // names when a vendor opens.

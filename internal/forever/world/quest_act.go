@@ -37,7 +37,6 @@ const (
 	actQuestWait  = 5 * time.Second
 	actAcceptWait = 5 * time.Second
 	actRewardWait = items.ConfirmWindow
-	actQuestPoll  = 50 * time.Millisecond
 	// requestItemsReady is StatusFlags 0xFF: the request-items screen says the quest can be handed in
 	// (GossipDef.cpp:723).
 	requestItemsReady int32 = 0xFF
@@ -60,27 +59,6 @@ func (s *session) questGiver(a *actState, verb string) (*objects.Object, error) 
 			verb, a.npc.Info.Entry, a.npc.Info.NpcFlags)
 	}
 	return a.npc, nil
-}
-
-// questWait polls cond until it is true or wait passes.
-func (s *session) questWait(ctx context.Context, wait time.Duration, cond func() bool) (bool, error) {
-	end := s.transport().Now().Add(wait)
-	for {
-		if cond() {
-			return true, nil
-		}
-		now := s.transport().Now()
-		if !now.Before(end) {
-			return false, nil
-		}
-		step := actQuestPoll
-		if left := end.Sub(now); left < step {
-			step = left
-		}
-		if err := s.transport().WaitUntil(ctx, now.Add(step)); err != nil {
-			return false, err
-		}
-	}
 }
 
 // questLogTrusted refuses a step that acts on the log when a server update changed it in a way this client could
@@ -165,7 +143,7 @@ func (s *session) actQuestStatus(ctx context.Context, a *actState, step ActStep)
 	if err := s.transport().Send(wire.CMSGQuestGiverStatusQuery, quest.BuildStatusQuery(unit.GUID)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_STATUS_QUERY: %w", err))
 	}
-	ok, err := s.questWait(ctx, actQuestWait, func() bool {
+	ok, err := s.actUntil(ctx, actQuestWait, func() bool {
 		return s.quest.status != nil && s.quest.status.Giver == unit.GUID
 	})
 	if err != nil {
@@ -230,7 +208,7 @@ func (s *session) actQuestAccept(ctx context.Context, a *actState, step ActStep)
 	if err := s.transport().Send(wire.CMSGQuestGiverAcceptQuest, quest.BuildAcceptQuest(unit.GUID, id, false)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_ACCEPT_QUEST: %w", err))
 	}
-	_, err = s.questWait(ctx, actAcceptWait, func() bool {
+	_, err = s.actUntil(ctx, actAcceptWait, func() bool {
 		if _, in := s.questBook().Find(id); in {
 			return true
 		}
@@ -349,7 +327,7 @@ func (s *session) actQuestComplete(ctx context.Context, a *actState, step ActSte
 	if err := s.transport().Send(wire.CMSGQuestGiverCompleteQuest, quest.BuildCompleteQuest(unit.GUID, id, false)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_COMPLETE_QUEST: %w", err))
 	}
-	ok, err := s.questWait(ctx, actQuestWait, func() bool {
+	ok, err := s.actUntil(ctx, actQuestWait, func() bool {
 		if s.quest.invalid != nil || s.questFailedIs(id) {
 			return true
 		}
@@ -379,7 +357,7 @@ func (s *session) actQuestComplete(ctx context.Context, a *actState, step ActSte
 		if err := s.transport().Send(wire.CMSGQuestGiverRequestReward, quest.BuildRequestReward(unit.GUID, id)); err != nil {
 			return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_REQUEST_REWARD: %w", err))
 		}
-		ok, err = s.questWait(ctx, actQuestWait, func() bool {
+		ok, err = s.actUntil(ctx, actQuestWait, func() bool {
 			return s.quest.offer != nil && s.quest.offer.QuestID == id
 		})
 		if err != nil {
@@ -454,7 +432,7 @@ func (s *session) actQuestReward(ctx context.Context, a *actState, step ActStep)
 	if err := s.transport().Send(wire.CMSGQuestGiverChooseReward, quest.BuildChooseReward(unit.GUID, id, choice)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_CHOOSE_REWARD: %w", err))
 	}
-	ok, err := s.questWait(ctx, actQuestWait, func() bool {
+	ok, err := s.actUntil(ctx, actQuestWait, func() bool {
 		if s.quest.invalid != nil || s.questFailedIs(id) {
 			return true
 		}
@@ -489,7 +467,7 @@ func (s *session) actQuestReward(ctx context.Context, a *actState, step ActStep)
 	// The completion itself already took the quest out of the log (handleQuest), which is the server's own word. The
 	// chosen item must also arrive: its push result and slot update follow the completion.
 	if choice.Item.ItemID != 0 {
-		_, err = s.questWait(ctx, actRewardWait, func() bool {
+		_, err = s.actUntil(ctx, actRewardWait, func() bool {
 			return heldCount(s.inventoryNow(), choice.Item.ItemID) > heldBefore
 		})
 		if err != nil {
@@ -534,7 +512,7 @@ func (s *session) actQuestAbandon(ctx context.Context, a *actState, step ActStep
 		return s.actFail(a, step, err)
 	}
 	// One short wait lets an update that is already on the wire (a GM line's, a timer's) land before the slot is read.
-	if err := s.transport().WaitUntil(ctx, s.transport().Now().Add(actQuestPoll)); err != nil {
+	if err := s.transport().WaitUntil(ctx, s.transport().Now().Add(actPollInterval)); err != nil {
 		return err
 	}
 	if err := s.questLogTrusted("abandon"); err != nil {
@@ -547,7 +525,7 @@ func (s *session) actQuestAbandon(ctx context.Context, a *actState, step ActStep
 	if err := s.transport().Send(wire.CMSGQuestLogRemoveQuest, quest.BuildLogRemoveQuest(uint8(slot))); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_LOG_REMOVE_QUEST: %w", err))
 	}
-	_, err = s.questWait(ctx, actQuestWait, func() bool {
+	_, err = s.actUntil(ctx, actQuestWait, func() bool {
 		_, still := s.questBook().Find(id)
 		return !still || s.questStale != ""
 	})

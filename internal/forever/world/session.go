@@ -358,6 +358,9 @@ type ObjectSummary struct {
 	ByType       map[string]int
 	// Resurrections counts units the model saw come back from the ghost state.
 	Resurrections int
+	// OnTaxi counts the other units whose UnitData flags carry UNIT_FLAG_ON_TAXI: a bot that travels by flight path
+	// is on a taxi, not teleported (W2).
+	OnTaxi int
 }
 
 // UnitRow is one line of the nearest-units table.
@@ -606,6 +609,16 @@ type session struct {
 
 	// Round R3: the vendor's answers since the last step cleared them (vendor.go, vendor_act.go).
 	vendor vendorWatch
+
+	// Round R4: the trainer's answers since the last step cleared them (trainer.go, trainer_act.go).
+	trainer trainerWatch
+
+	// Round R6: the flight master's answers since the last step cleared them (taxi.go, taxi_act.go).
+	taxi taxiWatch
+
+	// Round R6: the character's own UNIT_FLAG_ON_TAXI, recorded packet by packet (taxi.go), and the accepted flight
+	// whose landing has not been seen yet: the movement guard reads them.
+	taxiFlight taxiFlightState
 
 	// Round R5: the quest answers since the last step cleared them, and the character's own log (quest.go,
 	// quest_act.go). The log starts from the login create block on first use and an own create re-seeds it.
@@ -1680,6 +1693,7 @@ func (s *session) objectSummary() ObjectSummary {
 		Unparsed:      make(map[string]int, len(c.Unparsed)),
 		ByType:        make(map[string]int),
 		Resurrections: c.Resurrections,
+		OnTaxi:        s.onTaxiUnits(),
 	}
 	for kind, n := range c.PartialKinds {
 		summary.PartialKinds[kind] = n
@@ -1708,6 +1722,9 @@ func (s *session) summarise(x, y, z float32) {
 		s.opts.logf("  %-16s %d", name, summary.ByType[name])
 	}
 	s.opts.logf("world: %d created, %d updated, %d destroyed, %d out of range", summary.Created, summary.Updated, summary.Destroyed, summary.OutOfRange)
+	if summary.OnTaxi > 0 {
+		s.opts.logf("world: %d other unit(s) on a taxi flight", summary.OnTaxi)
+	}
 	if c.Partial > 0 {
 		s.opts.logf("world: %d object(s) partial: a block naming them was not decoded to its declared end", c.Partial)
 		kinds := make([]string, 0, len(c.PartialKinds))
@@ -2049,6 +2066,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.applyUpdate(u)
 		now := s.transport().Now()
 		s.world.Apply(u, now)
+		s.noteSelfTaxi()
 		s.combatDeaths(now)
 		s.observeSelfIfTracking()
 	case wire.SMSGOnMonsterMove:
@@ -2106,6 +2124,13 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if t.MoverGUID == s.self {
 			s.selfTeleports++
 			s.statedSelfPosition(t.X, t.Y, t.Z, s.transport().Now())
+			if s.taxiFlight.pending {
+				// The server moved the character itself: whatever the flight was, it is over (the flight's own
+				// landing clears ON_TAXI and then teleports; a lost landing update would otherwise block movement
+				// for the rest of the session).
+				s.taxiFlight.pending = false
+				s.opts.logf("world: a teleport of the character ends the flight whose landing was not seen")
+			}
 			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
 			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is
 			// empty. An empty transport is no transport (the capture's release teleport is exactly this shape).
@@ -2223,6 +2248,12 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		if isQuestPacket(p.Core) {
 			return s.handleQuest(p)
+		}
+		if isTrainerPacket(p.Core) {
+			return s.handleTrainer(p)
+		}
+		if isTaxiPacket(p.Core) {
+			return s.handleTaxi(p)
 		}
 		s.handleCombat(p)
 	}
@@ -2735,6 +2766,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 					Sender:     s.transport(),
 					ClientTime: func(time.Time) uint32 { return clientTimeMs() },
 					Logf:       s.opts.logf,
+					Refuse:     s.taxiMovementBlocked,
 					X:          b.Movement.X,
 					Y:          b.Movement.Y,
 					Z:          b.Movement.Z,

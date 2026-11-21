@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/quest"
+	"github.com/pjerra/forever-agent/internal/forever/taxi"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -61,6 +62,15 @@ const (
 	actVerbQuestComplete = "quest-complete"
 	actVerbQuestReward   = "quest-reward"
 	actVerbQuestAbandon  = "quest-abandon"
+
+	// Round R4's trainer steps (trainer_act.go).
+	actVerbTrainer = "trainer"
+	actVerbLearn   = "learn"
+
+	// Round R6's flight steps (taxi_act.go).
+	actVerbTaxiNodes  = "taxi-nodes"
+	actVerbTaxiStatus = "taxi-status"
+	actVerbFly        = "fly"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -130,9 +140,10 @@ func ParseActStep(line string) (ActStep, error) {
 		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse,
 		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair,
 		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
-		actVerbQuestReward, actVerbQuestAbandon:
+		actVerbQuestReward, actVerbQuestAbandon,
+		actVerbTrainer, actVerbLearn, actVerbTaxiNodes, actVerbTaxiStatus, actVerbFly:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, trainer, learn, taxi-nodes, taxi-status, fly)", verb)
 	}
 	return step, nil
 }
@@ -186,6 +197,12 @@ type actState struct {
 	// steps need it, so they cannot run against a vendor nobody opened.
 	vendor    *items.VendorInventory
 	hasVendor bool
+	// trainer is the list the last `trainer` step read (and the id a purchase must name), and taxi the window the
+	// last `taxi-nodes` step read (the node a flight may take). A new npc step clears both.
+	trainer    *npc.TrainerList
+	hasTrainer bool
+	taxi       *taxi.ShowTaxiNodes
+	hasTaxi    bool
 	// lines are the step and menu lines this run printed, in order, bounded by actLinesMax (lines past it are
 	// counted in dropped). Only the run's own lines land here: the log sink also carries the chat, party and world
 	// handler lines of everything else the session does, and those never belong in an act answer.
@@ -279,6 +296,16 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actQuestReward(ctx, a, step)
 	case actVerbQuestAbandon:
 		return s.actQuestAbandon(ctx, a, step)
+	case actVerbTrainer:
+		return s.actTrainer(ctx, a, step)
+	case actVerbLearn:
+		return s.actLearn(ctx, a, step)
+	case actVerbTaxiNodes:
+		return s.actTaxiNodes(ctx, a, step)
+	case actVerbTaxiStatus:
+		return s.actTaxiStatus(ctx, a, step)
+	case actVerbFly:
+		return s.actFly(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}
@@ -296,6 +323,57 @@ func (s *session) actOK(a *actState, step ActStep, detail string) {
 		s.actLine(a, "step %d %s ok %s", a.steps, step.Verb, detail)
 	} else {
 		s.actLine(a, "step %d %s ok", a.steps, step.Verb)
+	}
+}
+
+// actPollInterval is how often a step's wait re-reads the session's state while it lets the link's packets in.
+const actPollInterval = 50 * time.Millisecond
+
+// actRunBaseline is the whole-run deadline a script of short steps needs: a login, the settle and the steps' answer
+// waits. It is the deadline `forever act` gave every script before flights; each fly step adds its own
+// actFlightStepBudget on top.
+const actRunBaseline = 5 * time.Minute
+
+// actUntil polls cond until it is true or wait passes, letting the link's packets through between polls. It returns
+// false when the wait ran out. A dead link is an error, not a silent timeout: a step that waits 15 minutes for a
+// landing must not keep waiting for a connection that is gone.
+func (s *session) actUntil(ctx context.Context, wait time.Duration, cond func() bool) (bool, error) {
+	return s.actPoll(ctx, wait, cond, false)
+}
+
+// actUntilAcrossMaps is actUntil for a wait a map change must not end: a flight crosses maps on the server's own
+// schedule (SMSG_TRANSFER_PENDING, SMSG_NEW_WORLD), and the stop in between is the flight continuing, not a failed
+// step. Every other wait keeps actUntil's rule that a map change ends it.
+func (s *session) actUntilAcrossMaps(ctx context.Context, wait time.Duration, cond func() bool) (bool, error) {
+	return s.actPoll(ctx, wait, cond, true)
+}
+
+// actPoll is the wait both of the above run: cond between 50 ms windows that let the link's packets in.
+func (s *session) actPoll(ctx context.Context, wait time.Duration, cond func() bool, acrossMaps bool) (bool, error) {
+	end := s.transport().Now().Add(wait)
+	for {
+		if cond() {
+			return true, nil
+		}
+		if err := s.linkDead(); err != nil {
+			return false, err
+		}
+		now := s.transport().Now()
+		if !now.Before(end) {
+			return false, nil
+		}
+		step := actPollInterval
+		if left := end.Sub(now); left < step {
+			step = left
+		}
+		if err := s.transport().WaitUntil(ctx, now.Add(step)); err != nil {
+			if acrossMaps && errors.Is(err, objects.ErrMapChange) {
+				// The flight is between maps: the next poll reads the new map's create block (and the flag's
+				// clearing after it).
+				continue
+			}
+			return false, err
+		}
 	}
 }
 
@@ -404,6 +482,9 @@ func (s *session) actGoto(ctx context.Context, a *actState, step ActStep) error 
 	if s.mover == nil {
 		return s.actFail(a, step, ErrNotReady)
 	}
+	if err := s.taxiMovementBlocked(); err != nil {
+		return s.actFail(a, step, err)
+	}
 	if err := s.requireWalkMode(step); err != nil {
 		return s.actFail(a, step, err)
 	}
@@ -453,6 +534,9 @@ func (s *session) actNPC(ctx context.Context, a *actState, step ActStep) error {
 	now := s.transport().Now()
 	tx, ty, tz := target.Position(now)
 	if dist := objects.Distance(s.MoverX(), s.MoverY(), s.MoverZ(), tx, ty, tz); dist > actInteractReach {
+		if err := s.taxiMovementBlocked(); err != nil {
+			return s.actFail(a, step, err)
+		}
 		if err := s.requireWalkMode(step); err != nil {
 			return s.actFail(a, step, err)
 		}
@@ -471,8 +555,11 @@ func (s *session) actNPC(ctx context.Context, a *actState, step ActStep) error {
 	a.npcEntry = entry
 	a.hasNPC = true
 	a.hasMenu = false
-	// A vendor list belongs to the vendor it was read from: a new current NPC starts without one.
+	// A vendor list belongs to the vendor it was read from: a new current NPC starts without one. The trainer list
+	// and the taxi window belong to an NPC the same way.
 	a.vendor, a.hasVendor = nil, false
+	a.trainer, a.hasTrainer = nil, false
+	a.taxi, a.hasTaxi = nil, false
 	s.actMenu, s.actQuest = nil, nil
 	s.actOK(a, step, fmt.Sprintf("entry %d within reach", entry))
 	return nil
@@ -718,6 +805,9 @@ func (s *session) actFollow(ctx context.Context, a *actState, step ActStep) erro
 	if follow.SameName(step.Args["lead"], s.report.Character.Name) {
 		return s.actFail(a, step, fmt.Errorf("lead=%s is this character: a character cannot follow itself", step.Args["lead"]))
 	}
+	if err := s.taxiMovementBlocked(); err != nil {
+		return s.actFail(a, step, err)
+	}
 	if s.opts.NavmeshDir == "" {
 		return s.actFail(a, step, errors.New("no --navmesh: following walks on the navmesh"))
 	}
@@ -771,6 +861,24 @@ func (s *session) actFollow(ctx context.Context, a *actState, step ActStep) erro
 		return nil
 	}
 	return s.actFail(a, step, fmt.Errorf("%s: %s", res.Reason, res.Detail))
+}
+
+// actScriptFlights counts a script's fly steps.
+func actScriptFlights(steps []ActStep) int {
+	n := 0
+	for _, step := range steps {
+		if step.Verb == actVerbFly {
+			n++
+		}
+	}
+	return n
+}
+
+// ActBudget is the whole-run deadline a script needs: the baseline a login and the settle take, and one full flight
+// budget per fly step (actTaxiFlightMax and its waits), so the run's own clock never cuts a flight mid-air. The
+// caller sizes its deadline from it instead of a fixed number a long flight outlives.
+func ActBudget(steps []ActStep, settle time.Duration) time.Duration {
+	return actRunBaseline + settle + time.Duration(actScriptFlights(steps))*actFlightStepBudget
 }
 
 // act runs the whole script: settle, then one line per step. A failed step ends the run with its error; the

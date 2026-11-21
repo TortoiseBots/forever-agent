@@ -20,10 +20,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// The vendor steps' waits: one answer's timeout and how often a wait re-reads the state.
+// The vendor steps' waits: one answer's timeout.
 const (
 	actVendorWait = 5 * time.Second
-	actVendorPoll = 50 * time.Millisecond
 	// actVendorQuiet is how long the junk sweep must leave the inventory alone before the step reads its outcome:
 	// 2 s, the same bound items.ConfirmWindow gives the server to confirm an item move. The sweep is one handler
 	// turn (ItemHandler.cpp:489-537) but each sold item is its own slot update and the coinage another, all queued
@@ -50,27 +49,6 @@ func (s *session) vendorTarget(a *actState, verb string, repair bool) (*objects.
 		return nil, fmt.Errorf("%s: entry %d is not a vendor (NpcFlags %#x has no vendor bit)", verb, a.npc.Info.Entry, flags)
 	}
 	return a.npc, nil
-}
-
-// waitVendorAnswer polls cond until it is true or wait passes. It returns false when the wait ran out.
-func (s *session) waitVendorAnswer(ctx context.Context, wait time.Duration, cond func() bool) (bool, error) {
-	end := s.transport().Now().Add(wait)
-	for {
-		if cond() {
-			return true, nil
-		}
-		now := s.transport().Now()
-		if !now.Before(end) {
-			return false, nil
-		}
-		step := actVendorPoll
-		if left := end.Sub(now); left < step {
-			step = left
-		}
-		if err := s.transport().WaitUntil(ctx, now.Add(step)); err != nil {
-			return false, err
-		}
-	}
 }
 
 // vendorOpen is the flow both `vendor` and `repair` use to open the NPC: talk and select the vendor option when the
@@ -119,7 +97,7 @@ func (s *session) vendorOpen(ctx context.Context, unit *objects.Object) (int, er
 // awaitVendorOpen waits for the open result of the vendor. A refusal is the server's own reason: a vendor whose
 // interaction failed answers a sell response instead (ItemHandler.cpp:650-656).
 func (s *session) awaitVendorOpen(ctx context.Context, guid wire.GUID) error {
-	ok, err := s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+	ok, err := s.actUntil(ctx, actVendorWait, func() bool {
 		if s.vendor.open != nil && s.vendor.open.NPC == guid {
 			return true
 		}
@@ -158,7 +136,7 @@ func (s *session) vendorList(ctx context.Context, unit *objects.Object) (*items.
 		if err := s.transport().Send(wire.CMSGListInventory, items.BuildListInventory(guid)); err != nil {
 			return nil, fmt.Errorf("CMSG_LIST_INVENTORY: %w", err)
 		}
-		ok, err := s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+		ok, err := s.actUntil(ctx, actVendorWait, func() bool {
 			return s.vendor.inv != nil || s.vendor.sold != nil
 		})
 		if err != nil {
@@ -346,7 +324,7 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	refused := func() bool {
 		return (s.vendor.buyFail != nil && s.vendor.buyFail.Vendor == unit.GUID) || s.vendor.sold != nil || s.invFail != nil
 	}
-	ok, err := s.waitVendorAnswer(ctx, actVendorWait, func() bool { return mine() || refused() })
+	ok, err := s.actUntil(ctx, actVendorWait, func() bool { return mine() || refused() })
 	if err != nil {
 		return err
 	}
@@ -365,7 +343,7 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	// The item itself must arrive: the push result that names the slot follows the purchase answer
 	// (Player.cpp:24865). A success the inventory never shows is unconfirmed, not a purchase.
 	heldBefore := heldCount(before, row.Item.ItemID)
-	_, err = s.waitVendorAnswer(ctx, items.ConfirmWindow, func() bool {
+	_, err = s.actUntil(ctx, items.ConfirmWindow, func() bool {
 		return s.invFail != nil || heldCount(s.inventoryNow(), row.Item.ItemID) > heldBefore
 	})
 	if err != nil {
@@ -475,7 +453,7 @@ func (s *session) actSell(ctx context.Context, a *actState, step ActStep) error 
 		return s.actFail(a, step, fmt.Errorf("CMSG_SELL_ITEM: %w", err))
 	}
 	what := fmt.Sprintf("sell %d", it.Entry)
-	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+	_, err = s.actUntil(ctx, actVendorWait, func() bool {
 		if r := s.vendor.sold; r != nil {
 			for _, g := range r.ItemGUIDs {
 				if g == guid {
@@ -537,7 +515,7 @@ func (s *session) actSellJunk(ctx context.Context, a *actState, step ActStep) er
 	// The sweep is read when rows and coinage have both held still for actVendorQuiet, counted from the last change.
 	quietSince := time.Time{}
 	rows, coin := len(before.Items), before.Coinage
-	_, err = s.waitVendorAnswer(ctx, actVendorWait+actVendorQuiet, func() bool {
+	_, err = s.actUntil(ctx, actVendorWait+actVendorQuiet, func() bool {
 		if s.vendor.sold != nil {
 			return true
 		}
@@ -603,7 +581,7 @@ func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) err
 		return s.actFail(a, step, fmt.Errorf("CMSG_BUY_BACK_ITEM: %w", err))
 	}
 	what := fmt.Sprintf("buyback slot %d", slot)
-	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+	_, err = s.actUntil(ctx, actVendorWait, func() bool {
 		if s.vendor.buyFail != nil || s.vendor.sold != nil || s.invFail != nil {
 			return true
 		}
@@ -668,7 +646,7 @@ func (s *session) actRepair(ctx context.Context, a *actState, step ActStep) erro
 		}
 		return n
 	}
-	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+	_, err = s.actUntil(ctx, actVendorWait, func() bool {
 		after := s.inventoryNow()
 		return after.Coinage != before.Coinage || rose(after) != 0
 	})
