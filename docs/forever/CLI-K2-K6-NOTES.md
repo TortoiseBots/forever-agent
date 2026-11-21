@@ -99,10 +99,19 @@ On a running `forever serve` slot for a real ForeverCore test dungeon:
    `path_to`/`walk_path` counts and the walk budget left. Then `teardown <slot dir>` when W2 is merged.
 3. Confirm the allow-list never sent a line outside the list (the slot's log) and no `.tb`/toolkit line went out.
 
-## 5. Gates (on the final commit)
+## 5. Gates (on the final code commit)
+
+Hygiene: `git diff origin/main | grep -nE '100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'`
+printed nothing.
+
+Gate commit: `ca8d0607` (clean tree; before it, `a4cc18f2` failed the VM gate on `TestServeClientTypesMatchTheDaemon`
+because this round briefly added `Hostile/Faction/NPCFlags` to `serveclient.Unit`; the type stays field-for-field with
+the daemon's `ServeUnit`, and the fields are gone).
 
 - `make fmt-check`: clean (exit 0).
-- `make cross`:
-- `staticcheck ./...`:
-- `go test -race ./cmd/forever-agent ./internal/forever/serveclient`:
-- `vm-test ta ~/wt-fa-cli`:
+- `make cross`: clean (exit 0).
+- `staticcheck ./...`: clean (exit 0).
+- `go test -race ./cmd/forever-agent ./internal/forever/serveclient` (on the VM, same tree):
+  `ok  	github.com/pjerra/forever-agent/cmd/forever-agent	648.867s` and
+  `ok  	github.com/pjerra/forever-agent/internal/forever/serveclient	1.278s`, `VM-TEST-END rc=0 seconds=1937`.
+- `vm-test ta ~/wt-fa-cli`: `RESULT: PASS  kind=ta wt=wt-fa-cli sha=ca8d0607 dirty=0 files=2337`, `rc=0  vm_duration=3007s  laptop_wall=3021s`.
