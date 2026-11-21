@@ -99,7 +99,7 @@ Hand-made combat rows (never captures); the example file loads with both entries
 
 ## Gates
 
-Run on a clean committed tree at `54bd2809`, with no review round in between:
+Run on a clean committed tree at `e4c90a3d`:
 
 ```
 make fmt-check            -> (no output) rc=0
@@ -111,11 +111,13 @@ go vet ./...              -> rc=0
 The VM suite:
 
 ```
-RESULT: PASS  kind=ta wt=wt-fa-trash sha=54bd2809 dirty=0 files=2349
-rc=0  vm_duration=749s  laptop_wall=770s
+RESULT: PASS  kind=ta wt=wt-fa-trash sha=e4c90a3d dirty=0 files=2390
+rc=0  vm_duration=976s  laptop_wall=983s
 ```
 
-No live run was made this round.
+A first run at `c6e5f9be` failed on two gate findings, both fixed in `e4c90a3d`: the rule-order test sliced its own
+expected list from the wrong end, and the daemon's new `remaining_ms` row key had no field in the daemon client's
+type (its type-match test caught it). No live run was made this round.
 
 ## Live checks for the lead's live queue
 
