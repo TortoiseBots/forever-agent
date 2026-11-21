@@ -175,6 +175,9 @@ type methodOptions struct {
 	// AccountProbeWindow is how long a dungeon run waits for the server's answer to its ".account" probe; 0 means 2 s. The
 	// tests shorten it: their server never answers, and the wait would race their own.
 	AccountProbeWindow time.Duration
+	// CommanderWait is how long a `.bot` line waits for its ACK or ERR (0: tbm.DefaultOrderWait). The tests shorten it
+	// for runs whose fake server never answers: the remote driver then spends the wait per line.
+	CommanderWait time.Duration
 	// EntryLedgerPath is the file that keeps the account's instance entries of the last hour (a remote run's enter phase refuses a 6th);
 	// empty keeps them in memory only.
 	EntryLedgerPath string
@@ -359,7 +362,7 @@ func registerMethodsFor(srv *rpc.Server, cur func() *session.Session, opts metho
 	registerPetMethods(srv, cur)
 	stopAddons := registerAddonHost(srv, cur, opts.AddonDir)
 	brainCtl, lease, stopBrain := registerBrainMethods(srv, cur, opts.TracesDir)
-	cmdrSvc, stopCommander := registerCommanderMethods(srv, cur, opts.Planner, opts.EntryLedgerPath, opts.AccountProbeWindow)
+	cmdrSvc, stopCommander := registerCommanderMethods(srv, cur, opts.Planner, opts.EntryLedgerPath, opts.AccountProbeWindow, opts.CommanderWait)
 	viewFrame = func() (tbm.ViewFrame, bool) {
 		fr, _, ok := cmdrSvc.feed.Latest()
 		return fr, ok

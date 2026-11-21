@@ -2931,6 +2931,9 @@ func (w *walk) saveFights() {
 func (w *walk) saveFightsCtx(ctx context.Context, limit time.Duration) {
 	if limit <= 0 {
 		limit = 20 * time.Second
+		if w.fightsReadWait > 0 {
+			limit = w.fightsReadWait
+		}
 		if w.fightsPrePlacement {
 			// The read before placement is optional (the fallback is the records' start times): a slow or unreachable
 			// dashboard must not hold the run start for the full 20 s.
@@ -6677,7 +6680,17 @@ func (w *walk) waitTeardownLiveFight(ctx context.Context) {
 		ctx = context.Background()
 	}
 	start := w.env.now()
-	deadline := start.Add(teardownLiveFightWait)
+	wait, poll := teardownLiveFightWait, teardownLiveFightPoll
+	if w.liveFightWait > 0 {
+		wait = w.liveFightWait
+	}
+	if w.liveFightPoll > 0 {
+		poll = w.liveFightPoll
+	}
+	if poll > wait {
+		poll = wait
+	}
+	deadline := start.Add(wait)
 	waitCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	first := live
@@ -6686,14 +6699,17 @@ func (w *walk) waitTeardownLiveFight(ctx context.Context) {
 		if !w.env.now().Before(deadline) {
 			break
 		}
-		poll := teardownLiveFightPoll
-		if left := deadline.Sub(w.env.now()); poll > left {
+		left := deadline.Sub(w.env.now())
+		if poll > left {
 			poll = left
 		}
 		if err := w.env.sleep(waitCtx, poll); err != nil {
 			return
 		}
 		read := teardownLiveFightReadTimeout
+		if w.liveFightRead > 0 {
+			read = w.liveFightRead
+		}
 		if left := deadline.Sub(w.env.now()); read > left {
 			read = left
 		}
@@ -6717,7 +6733,7 @@ func (w *walk) waitTeardownLiveFight(ctx context.Context) {
 		}
 		first = live
 	}
-	w.note("fight records: fight %s still live after %s at teardown: not saved", first, durWords(teardownLiveFightWait))
+	w.note("fight records: fight %s still live after %s at teardown: not saved", first, durWords(wait))
 }
 
 // firstLine is a report's first line, for an error text.
