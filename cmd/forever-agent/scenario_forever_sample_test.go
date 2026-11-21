@@ -92,7 +92,7 @@ func (f *fakeForeverAgent) handler() http.Handler {
 				out = []map[string]any{}
 			}
 			enc(map[string]any{"events": out, "next": next, "oldest": uint64(0), "more": false,
-				"dropped": false, "epoch": "test", "last": total})
+				"dropped": 0, "epoch": "test", "last": total})
 		case "chat":
 			var p struct {
 				Type string `json:"type"`
