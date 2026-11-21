@@ -21,17 +21,29 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
-// Agent is one running forever-agent the dashboard watches.
+// Agent is one running agent the dashboard watches. Kind is "turtle" (the
+// default 1.12 agent) or "forever" (a serve slot, from a settings file with
+// "server":"forever"); the poll and the controls branch on it.
 type Agent struct {
 	ID        string // the normalized RPC address (host:port, IPv6 bracketed): unique even when two hosts share a port
 	Addr      string // the same address: loopback only
-	TokenPath string // rpc-<port>.token next to the settings file
+	TokenPath string // rpc-<port>.token next to the agent's settings file
 	// DungeonsDir is the settings file's dungeons_dir (a leading ~/ made the home folder): the folder the agent's runs read their plan files
 	// from. "" when the settings name none (the agent then reads dungeons/ under its working folder, which the dashboard cannot see).
 	DungeonsDir string
-	// TBDashboardURL is the slot's tb_dashboard_url: the TortoiseBots dashboard a raid run links to. "" when unset.
+	// TBDashboardURL is the slot's tb_dashboard_url: the TortoiseBots dashboard a raid run is watched on. "" when unset.
 	TBDashboardURL string
+	Kind           AgentKind
 }
+
+// AgentKind names which agent a dashboard entry talks to.
+type AgentKind string
+
+// AgentTurtle is the 1.12 agent; AgentForever is a forever serve slot.
+const (
+	AgentTurtle  AgentKind = "turtle"
+	AgentForever AgentKind = "forever"
+)
 
 // DefaultConfigDir is where the agent keeps its settings files and RPC token files.
 func DefaultConfigDir() string {
@@ -42,12 +54,14 @@ func DefaultConfigDir() string {
 	return filepath.Join(home, ".config", "forever-agent")
 }
 
-// settingsFields are the two fields of a settings file the dashboard reads: where the agent listens and which folder its runs read
-// plans from. The accounts, the passwords and every other field of the file are skipped by the decoder and never held.
+// settingsFields are the fields of a settings file the dashboard reads: where the agent listens, which folder its runs read
+// plans from, and which server it is (turtle or forever). The accounts, the passwords and every other field of the file are
+// skipped by the decoder and never held.
 type settingsFields struct {
 	RPC            string `json:"rpc"`
 	DungeonsDir    string `json:"dungeons_dir"`
 	TBDashboardURL string `json:"tb_dashboard_url"`
+	Server         string `json:"server"`
 }
 
 // expandHome turns a leading ~/ into the home folder, as the agent's settings loader does.
@@ -117,7 +131,7 @@ func SlotFolders(configDir string, allowDefault []string) ([]string, error) {
 func DiscoverAgents(configDir, spec string) ([]Agent, error) {
 	var out []Agent
 	seen := map[string]bool{}
-	add := func(addr, tokenDir, dungeonsDir, tbURL string) error {
+	add := func(addr, tokenDir, dungeonsDir, tbURL string, kind AgentKind) error {
 		host, port, err := netutil.CheckLoopbackAddr(addr)
 		if err != nil {
 			return fmt.Errorf("agent %q: %w", addr, err)
@@ -130,7 +144,7 @@ func DiscoverAgents(configDir, spec string) ([]Agent, error) {
 			return nil
 		}
 		seen[a] = true
-		out = append(out, Agent{ID: a, Addr: a, TokenPath: filepath.Join(tokenDir, "rpc-"+strconv.Itoa(port)+".token"), DungeonsDir: dungeonsDir, TBDashboardURL: tbURL})
+		out = append(out, Agent{ID: a, Addr: a, TokenPath: filepath.Join(tokenDir, "rpc-"+strconv.Itoa(port)+".token"), DungeonsDir: dungeonsDir, TBDashboardURL: tbURL, Kind: kind})
 		return nil
 	}
 	for _, part := range strings.Split(spec, ",") {
@@ -149,13 +163,21 @@ func DiscoverAgents(configDir, spec string) ([]Agent, error) {
 				if json.Unmarshal(data, &s) != nil || s.RPC == "" {
 					continue
 				}
-				_ = add(s.RPC, filepath.Dir(f), expandHome(s.DungeonsDir), strings.TrimSpace(s.TBDashboardURL)) // a settings file with a bad rpc value is skipped, not fatal
+				kind := AgentTurtle
+				switch strings.TrimSpace(s.Server) {
+				case "", "turtle":
+				case "forever":
+					kind = AgentForever
+				default:
+					continue // a settings file with a bad server value is skipped, not fatal
+				}
+				_ = add(s.RPC, filepath.Dir(f), expandHome(s.DungeonsDir), strings.TrimSpace(s.TBDashboardURL), kind) // a settings file with a bad rpc value is skipped, not fatal
 			}
 		default:
 			if !strings.Contains(part, ":") {
 				part = "127.0.0.1:" + part
 			}
-			if err := add(part, configDir, "", ""); err != nil {
+			if err := add(part, configDir, "", "", AgentTurtle); err != nil {
 				return nil, err
 			}
 		}

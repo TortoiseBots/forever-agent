@@ -51,6 +51,11 @@ type CombatRow struct {
 	// that did not land normally (the victim state, combat.VictimStateName), on a miss or resist, and on an
 	// environmental row (the damage type, combat.EnvironmentalName).
 	Reason string `json:"reason,omitempty"`
+	// SpellName is the server's own name for SpellID (CORE-GAINS-3): the
+	// session fills it when it pages the log, from its SpellName record
+	// cache. It is empty when the server holds no name or the fetch failed;
+	// the row's spell_id is the fallback, as today.
+	SpellName string `json:"spell_name,omitempty"`
 	// InterruptedSpellID is an interrupt row's victim spell: the cast the source stopped. SpellID on that row is
 	// the interrupting spell (Kick), so a trial can match the response by spell and still name what was stopped.
 	InterruptedSpellID int32 `json:"interrupted_spell_id,omitempty"`
