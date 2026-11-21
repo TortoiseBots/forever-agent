@@ -1,9 +1,22 @@
 package tbcmd
 
-// Hand-written samples of the core's leash-and-evade answers. The reference copies of the format strings sit in
-// debug.go: the boundary failures (LANG 11011-11013), the threat lines (cs_debug.cpp:877-968, quoted in the
-// ThreatRow doc) and the combat lines ('Combat refs: (Combat state: %d | Manager state: %d)',
-// '[PvP] %s (SpawnID %u)', '[PvE] %s (SpawnID %u)').
+// Hand-written samples of the core's leash-and-evade answers. Reference copies of the core's format strings
+// (copied here, not just cited): the boundary handlers print no line on success (CreatureAI::VisualizeBoundary
+// returns 0, cs_debug.cpp:1318 prints only when the result is an error id; cs_npc.cpp HandleNpcEvadeCommand
+// returns true with no line); the failure strings are 'VisualizeBoundary warning: No interior point of the
+// creature's boundary could be found - check if you have mutually exclusive boundaries!',
+// 'VisualizeBoundary error: Creature movement is unbounded' and 'VisualizeBoundary warning: Reached fail-safe
+// flood boundary - check is your boundary is unbounded!' (LANG 11011-11013); the threat lines are '%s (%s) is not
+// alive.%s', '%s (%s) does not threaten any units.', 'List of units threatened by %s (%s)',
+// "   %u.   %s   (%s, SpawnID " UI64FMTD ")  - threat %f", 'End of threatened-by-me list.',
+// 'Threat list of %s (%s, SpawnID " UI64FMTD "):', '%s (%s, SpawnID " UI64FMTD ") is not engaged, but still has a
+// threat list? Well, here it is:', "   %u.   %s   (%s)  - threat %f%s%s", 'End of threat list.',
+// '%s (%s, SpawnID " UI64FMTD ") is not currently engaged.',
+// '%s (%s, SpawnID " UI64FMTD ") seems to be engaged, but does not have a threat list??',
+// '%s (%s) is currently engaged. (This unit cannot have a threat list.)',
+// '%s (%s) is not currently engaged. (This unit cannot have a threat list.)' (cs_debug.cpp:877-968); the combat
+// lines are 'Combat refs: (Combat state: %d | Manager state: %d)', '[PvP] %s (SpawnID %u)' and
+// '[PvE] %s (SpawnID %u)' (HandleDebugCombatListCommand).
 
 import (
 	"context"
