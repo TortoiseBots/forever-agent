@@ -65,7 +65,7 @@ var extraBotChecks = []string{"extra_bots_present", "extra_bots_role", "extra_bo
 // MaxExtraBots is the most hires beside `bot`.
 const MaxExtraBots = 3
 
-var metrics = map[string]bool{"count": true, "ratio": true, "latency": true, "uptime": true, "first": true, "rate": true, "walk_metric": true}
+var metrics = map[string]bool{"count": true, "ratio": true, "latency": true, "uptime": true, "first": true, "rate": true, "walk_metric": true, "dummy": true}
 
 var whereKeys = map[string]bool{
 	"kind": true, "src": true, "dst": true, "spell": true, "spell_id": true, "dst_hp_gt": true, "dst_hp_lt": true,
@@ -116,7 +116,8 @@ var extraItemFields = stringSet("name", "count")
 var sitFields = stringSet("kind", "mobs", "hp_band", "floor_pct", "victim", "pull_after_s",
 	"ooc_wait_s", "debuff", "refill", "roles", "max_rescues_per_min",
 	"hurt_every_s", "adaptive", "top_up_to_pct", "damage_interval_s", "reset_hire_cooldowns",
-	"energy_drain", "prepull_unaura", "min_rep_gap_s")
+	"energy_drain", "prepull_unaura", "min_rep_gap_s",
+	"dummy_entry", "rotation", "expects_file")
 
 var talentsFields = stringSet("tree", "spells")
 
@@ -131,7 +132,8 @@ var checkFields = stringSet("metric", "where", "num", "den", "trigger", "respons
 	"within_s", "response_dst", "same_dst", "trigger_debounce_s",
 	"skip_trigger_while",
 	"debounce_responder_s", "debounce_responder_spells", "debounce_responder_across_reps",
-	"per", "min_alive_s", "name", "aura", "unit", "phase", "alive", "triggers", "min_n")
+	"per", "min_alive_s", "name", "aura", "unit", "phase", "alive", "triggers", "min_n",
+	"spell", "stat")
 
 var triggerFields = stringSet("kind", "src", "dst", "spell", "spell_id", "dst_hp_gt", "dst_hp_lt",
 	"dst_hp_le", "in_combat", "t_from", "t_to", "dst_has_aura", "dst_lacks_aura",
@@ -632,6 +634,26 @@ func checkRule(ruleVal any, trialID string, errs *[]string) {
 	}
 	if within := check["within_s"]; within != nil && !isNumVal(within) {
 		errAdd(errs, fmt.Sprintf("%s/%s: bad within_s %s", trialID, rid, pythonRepr(within)))
+	}
+	if metric == "dummy" {
+		spell, _ := check["spell"].(string)
+		if spell == "" {
+			errAdd(errs, fmt.Sprintf("%s/%s: dummy check needs a spell name", trialID, rid))
+		}
+		stat, _ := check["stat"].(string)
+		if stat != "damage" && stat != "casts" && stat != "reaction" {
+			errAdd(errs, fmt.Sprintf("%s/%s: dummy check stat must be damage, casts or reaction %s", trialID, rid, pythonRepr(check["stat"])))
+		}
+		for _, key := range []string{"where", "num", "den", "trigger", "response", "per",
+			"min_alive_s", "name", "aura", "unit", "phase", "alive", "triggers", "min_n",
+			"within_s", "response_dst", "same_dst", "trigger_debounce_s", "skip_trigger_while",
+			"debounce_responder_s", "debounce_responder_spells", "debounce_responder_across_reps"} {
+			if check[key] != nil {
+				errAdd(errs, fmt.Sprintf("%s/%s: dummy check takes only metric, spell and stat", trialID, rid))
+				break
+			}
+		}
+		return
 	}
 	if rd := check["response_dst"]; rd != nil {
 		if s, ok := rd.(string); !ok || !responseDstModes[s] {
