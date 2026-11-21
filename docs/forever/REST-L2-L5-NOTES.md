@@ -1,7 +1,7 @@
 # REST L2 (scenario Forever mode) + L5 (dashboard live view over serve) — notes
 
 Round: NEXT-REST-L2-L5. Packages: `internal/scenario`, `internal/dashboard` only.
-Commits: L2 `68068ac8`, L5 `<L5-SHA>` (this round, two commits; L2 first).
+Commits: L2 `68068ac8`, L5 `717347d2`, cleanup `a0147d71`, file-server fallback `7102707f` (L2 first).
 
 ## Prerequisites on origin/main (checked 2026-11-21)
 
@@ -65,15 +65,14 @@ Commits: L2 `68068ac8`, L5 `<L5-SHA>` (this round, two commits; L2 first).
   `run-controls-guide.md` (commander controls), `scenarios-guide.md`
   (session/check_db server keys, Forever drain/do-step behavior).
 
-## Gates (final commit, clean tree)
+## Gates (final commit 7102707f, clean tree)
 
-```
-<make fmt-check line>
-<make cross line>
-<staticcheck line>
-<vm-test line>
-<go test -race lines>
-```
+- `make fmt-check`: exit 0, no output (gofmt clean on all touched packages).
+- `make cross`: exit 0 (`GOOS=windows GOARCH=amd64`, `GOOS=darwin GOARCH=arm64` builds plus `go vet ./cmd/... ./internal/forever/...`).
+- `staticcheck ./...`: no findings (exit 0; three U1000 dead-code findings on the way were removed).
+- `go test -race ./internal/scenario/ ./internal/dashboard/`: both `ok` (scenario 1.2 s, dashboard 21.4 s).
+- `vm-test ta ~/wt-fa-rest2`: `RESULT: PASS  kind=ta wt=wt-fa-rest2 sha=7102707f dirty=0 files=2343`, `rc=0  vm_duration=2324s  laptop_wall=2338s`; log `~/TortoiseBots-audit/vm-test-logs/wt-fa-rest2-20261121-045241-157180-7b69.log`.
+- Hygiene: `git diff origin/main | grep -nE '100\.|192\.168|forever-test|tortoise-test|TortoiseBots-audit|/home/|@gmail'` empty (0 matches).
 
 ## Live checks for the lead's queue (no live run this round)
 
