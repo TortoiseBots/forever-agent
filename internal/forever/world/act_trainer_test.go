@@ -188,7 +188,7 @@ func TestActLearnNamesSpellInLearnedSpells(t *testing.T) {
 		}
 		return nil
 	}, onWait: func() {
-		if f.s.actLearned == nil {
+		if len(f.s.actLearnedList) == 0 {
 			if err := f.s.handleNPC(worldconn.Packet{Core: wire.SMSGLearnedSpells, Payload: learned}); err != nil {
 				t.Fatalf("handleNPC(learned): %v", err)
 			}
@@ -249,7 +249,7 @@ func TestActLearnRefusesTheFailedBuy(t *testing.T) {
 		t.Fatal("the refused learn passed")
 	} else {
 		last := f.lines[len(f.lines)-1]
-		if want := "step 3 learn fail the trainer refused spell 133 (reason 1)"; last != want {
+		if want := "step 3 learn fail the trainer refused spell 133 (not enough money)"; last != want {
 			t.Fatalf("the failure line is %q, want %q (err %q)", last, want, err)
 		}
 	}

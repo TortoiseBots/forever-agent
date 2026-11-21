@@ -148,6 +148,7 @@ type actState struct {
 	menuNPC    bool // the menu came from TALK_TO_GOSSIP (false: a QUEST_GIVER_HELLO answers a quest list)
 	quests     *npc.QuestGiverQuestList
 	trainer    *npc.TrainerList
+	trainerNPC wire.GUID // the NPC whose gossip select opened the list; a learn binds to it
 	hasTrainer bool
 	npcEntry   int32
 	hasNPC     bool
@@ -349,7 +350,7 @@ func (s *session) actNPC(ctx context.Context, a *actState, step ActStep) error {
 	a.npc = target
 	a.npcEntry = entry
 	a.hasNPC = true
-	a.hasMenu = false
+	a.hasMenu, a.hasTrainer, a.trainer = false, false, nil
 	s.actMenu, s.actQuest = nil, nil
 	s.actOK(a, step, fmt.Sprintf("entry %d within reach", entry))
 	return nil
@@ -394,6 +395,7 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 		return s.actFail(a, step, fmt.Errorf("CMSG_SET_SELECTION: %w", err))
 	}
 	a.hasMenu, a.quests = false, nil
+	a.hasTrainer, a.trainer = false, nil
 	// The stored answer follows this open: a menu left from an earlier exchange must not satisfy the wait.
 	s.actMenu, s.actQuest = nil, nil
 	useQuestHello := npcNeedsQuestHello(a.npc.Info.NpcFlags)
@@ -497,6 +499,7 @@ func (s *session) actSelect(ctx context.Context, a *actState, step ActStep) erro
 		return s.actFail(a, step, fmt.Errorf("CMSG_GOSSIP_SELECT_OPTION: %w", err))
 	}
 	a.hasMenu, a.quests = false, nil
+	a.hasTrainer, a.trainer = false, nil
 	sub, _, got, err := s.waitActAnswer(ctx, a.npc.GUID, actSubmenuWait, false)
 	if err != nil {
 		return s.actFail(a, step, err)
@@ -520,6 +523,7 @@ func (s *session) actClose(ctx context.Context, a *actState, step ActStep) error
 		return s.actFail(a, step, fmt.Errorf("CMSG_CLOSE_INTERACTION: %w", err))
 	}
 	a.hasMenu, a.quests = false, nil
+	a.hasTrainer, a.trainer = false, nil
 	s.actMenu, s.actQuest = nil, nil
 	s.actOK(a, step, "closed")
 	return nil

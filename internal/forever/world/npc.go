@@ -5,6 +5,8 @@ package world
 // later vendor, trainer, taxi and quest rounds.
 
 import (
+	"slices"
+
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -63,8 +65,11 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
-		s.actLearned = &v
+		s.actLearnedList = append(s.actLearnedList, v)
 		for _, sp := range v.Spells {
+			if slices.Contains(s.known, sp.SpellID) {
+				continue
+			}
 			s.known = append(s.known, sp.SpellID)
 		}
 		s.report.KnownSpells = append([]int32(nil), s.known...)

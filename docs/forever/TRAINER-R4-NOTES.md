@@ -40,13 +40,23 @@ is open on its GUID (NPCHandler.cpp:130-158). Success learns the spell (Player::
 
 ## The steps
 
-`trainer` (no keys) selects the menu's Trainer option and waits up to 5 s for the list; `learn spell=` sends the
-buy with the list's trainer id and passes only when the `SMSG_LEARNED_SPELLS` naming the spell arrives within 3 s
-(the plan's success rule). A buy failure fails the step with its reason; the menu is spent after the trainer
-select, as after any select. Every learn also feeds `session.known` (and the report), like the login burst's known
-spells.
+`trainer` (no keys, or `option=` to pick a Trainer row by its option id) selects a menu Trainer option and waits up
+to 5 s for the list. An NPC with several Trainer rows names a different trainer service per row (ForeverCore
+resolves the service from the selected row, NPCHandler.cpp:106-127); without `option=` the step takes the first
+and logs the choice. The list binds to the NPC whose select opened it: `npc`, `open`, `select` and `close` clear
+it, and a `learn` on another NPC fails without sending. `learn spell=` pre-checks the list (the spell is offered,
+not known yet, affordable from the login purse — the character-select money, since the update decoder tracks no
+coinage), then sends the buy with the list's trainer id.
 
-The failing case pins the second half: a `SMSG_TRAINER_BUY_FAILED` for the spell fails `learn`, and the spell never
-reaches `session.known` — a runner that passes on any learn packet fails it. The list's own failing case
-(`TestTrainerListThirtyThreeBytesPerSpell`) reads two spells and pins the second id: a retail-layout reader ends the
-first spell at the wrong offset and fails it.
+Success is the list spell or the spell it teaches, within 3 s. A castable list spell (SPELL_EFFECT_LEARN_SPELL,
+Trainer.cpp:TeachSpell) is learned by casting: the packet then names the triggered taught spell, whose Superceded
+link points back at the list spell. The waiter collects every learned packet in the window (a list, not a slot),
+so two packets in one poll are both seen. A buy failure fails the step with its named reason (unavailable, not
+enough money). The menu is spent after the trainer select, as after any select. Every learn also feeds
+`session.known` without duplicates (and the report), like the login burst's known spells.
+
+The failing cases pin the halves: a `SMSG_TRAINER_BUY_FAILED` for the spell fails `learn`, and the spell never
+reaches `session.known` — a runner that passes on any learn packet fails it. A learned packet for another spell
+fails the learn; silence fails at the 3 s deadline; a re-sent learn does not duplicate `known`. The list's own
+failing case (`TestTrainerListThirtyThreeBytesPerSpell`) reads two spells and pins the second id: a retail-layout
+reader ends the first spell at the wrong offset and fails it.

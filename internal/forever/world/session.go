@@ -533,10 +533,11 @@ type session struct {
 	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
 	actMenu  *npc.GossipMessage
 	actQuest *npc.QuestGiverQuestList
-	// Trainer round (forever-world-r4): the last trainer list, learn and failed buy, set by the same dispatch for
-	// the runner's wait.
+	// Trainer round (forever-world-r4): the last trainer list, the learned packets since the buy, and the
+	// last failed buy, set by the same dispatch for the runner's wait. The learns are a list, not a slot:
+	// one buy can answer with two packets (the taught spell plus a rank or level-up learn) in one poll.
 	actTrainer       *npc.TrainerList
-	actLearned       *npc.LearnedSpells
+	actLearnedList   []npc.LearnedSpells
 	actTrainerFailed *npc.TrainerBuyFailed
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the

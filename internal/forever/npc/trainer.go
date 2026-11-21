@@ -120,6 +120,18 @@ const (
 	TrainerFailReasonNotEnoughMoney = 1
 )
 
+// TrainerFailReasonName names a teach-failure reason the way the server means it.
+func TrainerFailReasonName(reason int32) string {
+	switch reason {
+	case TrainerFailReasonUnavailable:
+		return "unavailable"
+	case TrainerFailReasonNotEnoughMoney:
+		return "not enough money"
+	default:
+		return "unknown"
+	}
+}
+
 // ParseTrainerBuyFailed reads SMSG_TRAINER_BUY_FAILED to its last byte: the trainer's packed GUID, the int32 spell
 // id, and the int32 failure reason.
 func ParseTrainerBuyFailed(p []byte) (TrainerBuyFailed, error) {

@@ -124,6 +124,20 @@ func (m GossipMessage) SpiritHealer() (GossipOption, bool) {
 	return GossipOption{}, false
 }
 
+// TrainerOptions returns every menu option of the given GossipOptionNpc kind, in menu order. A creature with
+// several Trainer rows names a different trainer service per row (ForeverCore resolves the service from the
+// selected row, NPCHandler.cpp:106-127): the trainer step lets the script pick one instead of always taking
+// the first.
+func (m GossipMessage) TrainerOptions(kind uint32) []GossipOption {
+	opts := []GossipOption{}
+	for _, o := range m.Options {
+		if o.NPC == kind {
+			opts = append(opts, o)
+		}
+	}
+	return opts
+}
+
 // OptionNPC returns the menu's first option of the given GossipOptionNpc kind, if it has one.
 func (m GossipMessage) OptionNPC(kind uint32) (GossipOption, bool) {
 	for _, o := range m.Options {
