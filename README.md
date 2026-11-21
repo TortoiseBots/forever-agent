@@ -566,13 +566,13 @@ polylines with the map id), points and danger circles in a versioned JSON file w
 road hop for the `handcrafted_road` table plus the zone/point proposals. `--dry FILE` replays a hand-made recording
 through the same thin/mark/format path with no network. See [docs/forever/GM-WALK-NOTES.md](docs/forever/GM-WALK-NOTES.md).
 
-`forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
+`forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--tactics F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party
 records, `<run_id>.combatlog.jsonl` and `<run_id>.forever-run.json`), a watch trace file, or a trials repeat
 (`samples.jsonl`, `events.jsonl`, and the recorder's `raw-ta.jsonl` when it has one); folders are searched
 recursively, and a watch folder or a repeat is one run. It reads the watch's frames (F) and its combat log (C), and
 a repeat's raw rows are the same C shape on the repeat's clock. `--rules` picks the rules (default: every rule this
-build has), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
+build has, plus rules 16-19 when `--tactics` names a tactics file), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
 never guessed: a names file is a JSON object of id to name (or a spells.json's `by_id`, whose values may be
 `{"name": ...}`), and a dispel file is a JSON object of id to `magic`, `curse`, `disease`, `poison` or `never` (or
 the core's `spell_template.dispel` numbers 0-4); only debuffs count, so an entry is kept when the names file marks its id
@@ -581,7 +581,7 @@ matches a buff, AoE or heal name; an id the dispel file does not list is not a k
 run does not carry is a skipped check (as is a stretch the combat log does not provably cover, and a malformed combat-log
 line is an error naming the file and line) with its reason in `counts.json`, never a hit from a guess: no combat log
 skips rules 1, 2, 4, 8 and 11; no names skips 2, 4 and 8; no dispel types or no known classes skip 15; no meal report
-skips 13. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
+skips 13; no `--tactics` file skips 16-19, and asking for 16-19 without one is a usage error naming the flag. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
 selected rule's hits, runs with hits, skipped checks and the reasons), `tickets.json` and `tickets.md`. A ticket is
 one (rule, key): its id is `BH-<rule>-<8 hex of sha1(rule|key)>`, so the same finding keeps its id across nights;
 its row is `{id, title, rule, key, count, runs, first_seen, deaths_near, evidence (at most 5), labels [bughunt,
@@ -589,7 +589,11 @@ rule-N, role], status new|known|reopened|gone, cost}`. `--baseline DIR` reads th
 holds is `known` (and keeps its first night; `reopened` when it was `gone`), one it lacks is `new`, and a baseline
 ticket the new run no longer sees is `gone` only when its rule ran with all its inputs (a skipped or unselected rule
 leaves its tickets as they were). `tickets.md` ranks the tickets by summed cost, worst first. The rules are the Python bug hunt's
-own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids), with the Forever inputs
+own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids) plus the trash-tactics
+checks (16 a listed must-interrupt cast that completed with an interrupter free, 17 crowd control tried on an immune
+mob, 18 a listed dispellable debuff left past its within_s with a dispeller free, 19 a lower-priority mob killed
+before a higher one; each hit cites its combat rows, and a recording without the kinds a rule reads is UNKNOWN,
+never a finding), with the Forever inputs
 the plan's table gives. `BUGHUNT_PY_CHECKER=checker.py` runs the optional parity test against the Python checker on
 one repeat (rules 4 and 8 must agree on every key).
 

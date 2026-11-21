@@ -65,6 +65,9 @@ type CombatRow struct {
 	AbsorbedSpellID int32 `json:"absorbed_spell_id,omitempty"`
 	// Dispelled is a dispel row's list of auras the spell removed.
 	Dispelled []CombatDispel `json:"dispelled,omitempty"`
+	// RemainingMS is an aura_applied row's remaining duration at the row's moment: when that aura expires by itself.
+	// A row without one leaves it out.
+	RemainingMS int32 `json:"remaining_ms,omitempty"`
 	// Sample is the advanced combat log's unit block (health and power) when the packet carried one. The unit it
 	// describes is the packet's own: the attacker on a melee row, the target on a heal, periodic, absorb or
 	// environmental one (the spell-damage packet's block is all zeros in this core and is left out). It is attached
@@ -228,6 +231,7 @@ type combatRowExtra struct {
 	InterruptedSpellID int32
 	AbsorbedSpellID    int32
 	Dispelled          []CombatDispel
+	RemainingMS        int32
 }
 
 // combatRowExtras appends one row from the base shape plus its extras.
@@ -239,6 +243,7 @@ func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount in
 	row.InterruptedSpellID = extra.InterruptedSpellID
 	row.AbsorbedSpellID = extra.AbsorbedSpellID
 	row.Dispelled = extra.Dispelled
+	row.RemainingMS = extra.RemainingMS
 	row.Sample = combatSample(extra.Log)
 	s.CombatLog().Append(row)
 }
