@@ -237,6 +237,8 @@ func (f *fakeServer) serveFB(c, realm *fakeConn) {
 		f.instWire = append(f.instWire, wireNum)
 		f.mu.Unlock()
 		switch wireNum {
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGTimeSyncResponse, fakeCMSGMoveInitActiveMover:
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])

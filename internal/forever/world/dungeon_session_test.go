@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/combat"
+
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
@@ -256,5 +258,52 @@ func TestDungeonWatchLoadsTheWholePlan(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("a cancelled watch settled with no error")
+	}
+}
+
+// TestDungeonThreatTable: the pushed lists shaped like the module's answer. The wire order is a heap walk, so the
+// victim is the HIGHEST packet's victim while it is listed and the greatest value otherwise; threats are divided
+// from the wire's hundredths; and a list older than the window is no answer at all (the caller polls).
+func TestDungeonThreatTable(t *testing.T) {
+	rec := &portRecorder{now: time.Now()}
+	s := newPortSession(rec)
+	w := dungeonWorld{s: s}
+	mob, a, b, c := unitGUID(900), unitGUID(901), unitGUID(902), unitGUID(903)
+	s.world.SetName(a, "A")
+	s.world.SetName(b, "B")
+	s.world.SetName(c, "C")
+	now := time.Unix(2000, 0)
+
+	// The greatest value sits in the middle of the wire order.
+	s.world.ApplyThreatUpdate(combat.ThreatUpdate{Mob: mob, List: []combat.ThreatInfo{
+		{Unit: a, Threat: 100}, {Unit: b, Threat: 900}, {Unit: c, Threat: 400},
+	}}, now)
+	rep, ok := w.ThreatTable(now)
+	if !ok || rep.Count != 1 || len(rep.Mobs) != 1 {
+		t.Fatalf("table %+v ok %v", rep, ok)
+	}
+	line := rep.Mobs[0]
+	if line.Mob != mob.String() || line.Size != 3 || line.Victim != "B" {
+		t.Fatalf("line %+v, want the greatest value B as victim", line)
+	}
+	if len(line.Top) != 3 || line.Top[0].Name != "B" || line.Top[0].Threat != 9 || line.Top[2].Threat != 1 {
+		t.Fatalf("top %+v, want B 9 first and the hundredths divided", line.Top)
+	}
+
+	// The HIGHEST packet's victim stays on top while it is listed, whatever a later plain update's order.
+	s.world.ApplyHighestThreatUpdate(combat.HighestThreatUpdate{Mob: mob, Highest: c, List: []combat.ThreatInfo{
+		{Unit: a, Threat: 100}, {Unit: b, Threat: 900}, {Unit: c, Threat: 400},
+	}}, now)
+	s.world.ApplyThreatUpdate(combat.ThreatUpdate{Mob: mob, List: []combat.ThreatInfo{
+		{Unit: c, Threat: 400}, {Unit: b, Threat: 900}, {Unit: a, Threat: 100},
+	}}, now)
+	rep, ok = w.ThreatTable(now)
+	if !ok || rep.Mobs[0].Victim != "C" {
+		t.Fatalf("victim %q ok %v, want the HIGHEST victim C", rep.Mobs[0].Victim, ok)
+	}
+
+	// A list past the window is not served.
+	if _, ok := w.ThreatTable(now.Add(objects.ThreatFreshFor + time.Second)); ok {
+		t.Fatal("a stale pushed list was served")
 	}
 }

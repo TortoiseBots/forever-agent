@@ -158,7 +158,7 @@ func cspWriteCastingRep(t *testing.T, root string, trial map[string]any, answers
 		events = append(events, cspEvent(10+40*float64(i), "cast_start", cspMob, cspPlayer, cspLightningBolt))
 	}
 	for i := range answers {
-		events = append(events, cspEvent(11.5+40*float64(i), "cast", cspBot, cspMob, 2139))
+		events = append(events, cspEvent(11.5+40*float64(i), "interrupt", cspBot, cspMob, 2139))
 	}
 	writeJSONL(t, filepath.Join(rep, "events.jsonl"), events)
 	writeJSONL(t, filepath.Join(rep, "marks.jsonl"), []any{

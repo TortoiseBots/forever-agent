@@ -56,6 +56,8 @@ func (f *fakeServer) serveRouteWalk(c *fakeConn, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGSetSelection:
 			// The client selects its own character before `.gps`, exactly as the real client does when the user
 			// clicks it. The pack must name this character.
@@ -804,7 +806,7 @@ func TestRouteWalkCancelBeforeFirstLeg(t *testing.T) {
 	t.Cleanup(f.close)
 	f.wg.Add(1)
 	go f.serveRealm()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	go func() {
 		for {

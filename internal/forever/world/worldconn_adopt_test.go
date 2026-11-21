@@ -5,14 +5,21 @@ package world
 // dead Address, so a run that ignored the probe socket could not connect at all.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"runtime/pprof"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
+
+// adoptStepLimit bounds each blocking step of the test (the probe's handshake, Enter). It is generous for a loaded
+// machine but finite: a step that outlives it fails the test with a message instead of hanging the package.
+const adoptStepLimit = 60 * time.Second
 
 func TestEnterAdoptsTheProbedWorldSocket(t *testing.T) {
 	f := newFakeServer(t)
@@ -32,12 +39,22 @@ func TestEnterAdoptsTheProbedWorldSocket(t *testing.T) {
 		BuildAuthKey:    f.buildKey[:],
 		Deadline:        10 * time.Second,
 	}
-	probe, err := worldconn.Authenticate(context.Background(), cfg)
+	// Every blocking step below has its own deadline, so a run starved by a loaded machine (or a wedged step) fails
+	// with a message naming the step and the goroutines, instead of waiting for go test's package timeout.
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), adoptStepLimit)
+	defer cancelProbe()
+	probe, err := worldconn.Authenticate(probeCtx, cfg)
 	if err != nil {
 		t.Fatalf("the probe's authentication: %v", err)
 	}
 
-	var steps []string
+	var stepsMu sync.Mutex
+	var stepList []string
+	stepsText := func() string {
+		stepsMu.Lock()
+		defer stepsMu.Unlock()
+		return strings.Join(stepList, "\n")
+	}
 	opts := Options{
 		// Dead on purpose: Enter may only use the probed socket. Anything that dials this address fails at once.
 		Address:         "127.0.0.1:1",
@@ -50,16 +67,38 @@ func TestEnterAdoptsTheProbedWorldSocket(t *testing.T) {
 		RealmBuild:      cfg.RealmBuild,
 		BuildAuthKey:    cfg.BuildAuthKey,
 		Character:       "XXXXXX", // the fixture's character name
-		Stay:            time.Second,
-		Deadline:        30 * time.Second,
+		Stay:            100 * time.Millisecond,
+		Deadline:        adoptStepLimit,
 		WorldConn:       probe,
 		Logf: func(format string, args ...any) {
-			steps = append(steps, fmt.Sprintf(format, args...))
+			stepsMu.Lock()
+			stepList = append(stepList, fmt.Sprintf(format, args...))
+			stepsMu.Unlock()
 		},
 	}
-	report, err := Enter(context.Background(), opts)
+	enterCtx, cancelEnter := context.WithTimeout(context.Background(), adoptStepLimit)
+	defer cancelEnter()
+	type result struct {
+		report *Report
+		err    error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		r, err := Enter(enterCtx, opts)
+		resCh <- result{r, err}
+	}()
+	var res result
+	select {
+	case res = <-resCh:
+	case <-time.After(adoptStepLimit + 15*time.Second):
+		// Enter did not return even after its own context ended: dump the goroutines and fail now.
+		var buf bytes.Buffer
+		_ = pprof.Lookup("goroutine").WriteTo(&buf, 1)
+		t.Fatalf("Enter did not return within %s of its deadline\ngoroutines:\n%s", 15*time.Second, buf.String())
+	}
+	report, err := res.report, res.err
 	if err != nil {
-		t.Fatalf("Enter: %v\nsteps:\n%s", err, strings.Join(steps, "\n"))
+		t.Fatalf("Enter: %v\nsteps:\n%s", err, stepsText())
 	}
 	f.wait(t)
 
@@ -69,7 +108,7 @@ func TestEnterAdoptsTheProbedWorldSocket(t *testing.T) {
 	if report.Character.Name != "XXXXXX" {
 		t.Fatalf("character %q", report.Character.Name)
 	}
-	if !strings.Contains(strings.Join(steps, "\n"), "adopting the connection the login authenticated") {
-		t.Errorf("Enter did not report the adopted socket:\n%s", strings.Join(steps, "\n"))
+	if !strings.Contains(stepsText(), "adopting the connection the login authenticated") {
+		t.Errorf("Enter did not report the adopted socket:\n%s", stepsText())
 	}
 }

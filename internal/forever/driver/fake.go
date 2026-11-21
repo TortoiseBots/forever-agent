@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"time"
@@ -204,6 +205,20 @@ type Fake struct {
 	StatusBlock time.Duration
 	// InstanceBosses is what the instance report answers with.
 	InstanceBosses []tbcmd.InstanceBoss
+	// PushThreat makes the scripted client's own threat table answer on every call (the server's pushed lists);
+	// ThreatCalls counts the module's `.tb threat` reads. Encounters are the scripted encounter packets, drained
+	// by the run; encOpen holds the ids a start named and no end closed.
+	PushThreat bool
+	// TableMobs is the scripted pushed table's answer; with PushThreat it is what ThreatTable serves, whatever the
+	// scripted fight holds. TableFreshFor makes it stop answering that long after Start (0: always fresh), so a
+	// test can watch the driver fall back to `.tb threat` when the pushes go stale. FailThreat makes the module's
+	// `.tb threat` read fail (not the link).
+	TableMobs     []tbcmd.ThreatLine
+	TableFreshFor time.Duration
+	FailThreat    bool
+	ThreatCalls   int
+	encounters    []EncounterEvent
+	encOpen       map[uint32]bool
 	// Uncommanded names a party member the roster reports as not commanded (a watch's PREPARE refusal).
 	Uncommanded string
 	// DropOn names one call that dies with the link ("runstart", "runstop", "runpause", "runresume", "revive",
@@ -496,6 +511,10 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 
 // Threat answers the threat lists: every engaged, living mob is on a bot's list.
 func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
+	f.ThreatCalls++
+	if f.FailThreat {
+		return tbcmd.ThreatReport{}, errors.New("fake: the threat read failed")
+	}
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.ThreatReport{}, err
 	}
@@ -505,6 +524,56 @@ func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
 	if err := f.linkErr(); err != nil {
 		return tbcmd.ThreatReport{}, err
 	}
+	return f.threatReport(), nil
+}
+
+// ThreatTable is the scripted client's own pushed threat: the same report the module would send, served without a
+// command while PushThreat is set. A test without it exercises the `.tb threat` fallback.
+func (f *Fake) ThreatTable(now time.Time) (tbcmd.ThreatReport, bool) {
+	if !f.PushThreat {
+		return tbcmd.ThreatReport{}, false
+	}
+	if f.TableFreshFor > 0 && now.Sub(f.Start) > f.TableFreshFor {
+		return tbcmd.ThreatReport{}, false
+	}
+	if len(f.TableMobs) > 0 {
+		return tbcmd.ThreatReport{Mobs: append([]tbcmd.ThreatLine(nil), f.TableMobs...), Count: len(f.TableMobs)}, true
+	}
+	return f.threatReport(), true
+}
+
+// Encounters hands out the scripted encounter events.
+func (f *Fake) Encounters() []EncounterEvent {
+	if len(f.encounters) == 0 {
+		return nil
+	}
+	out := f.encounters
+	f.encounters = nil
+	return out
+}
+
+// EncounterOpen says whether a scripted encounter start has not been closed by its end yet.
+func (f *Fake) EncounterOpen() bool { return len(f.encOpen) > 0 }
+
+// PushEncounter scripts one encounter packet at after (from the fake's start), as InstanceScript would send it.
+func (f *Fake) PushEncounter(after time.Duration, ev EncounterEvent) {
+	f.Clock.After(after, func() {
+		ev.At = f.Clock.Now()
+		f.encounters = append(f.encounters, ev)
+		if f.encOpen == nil {
+			f.encOpen = map[uint32]bool{}
+		}
+		switch ev.Kind {
+		case "start":
+			f.encOpen[ev.EncounterID] = true
+		case "end", "boss_kill":
+			delete(f.encOpen, ev.EncounterID)
+		}
+	})
+}
+
+// threatReport builds the threat answer from the scripted fight.
+func (f *Fake) threatReport() tbcmd.ThreatReport {
 	rep := tbcmd.ThreatReport{Target: "party:" + f.cfg.Tank(), Bots: 5}
 	for _, g := range f.mobOrder {
 		u := f.mobs[g]
@@ -526,7 +595,7 @@ func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
 		rep.Mobs = append(rep.Mobs, line)
 	}
 	rep.Count = len(rep.Mobs)
-	return rep, nil
+	return rep
 }
 
 // botAt names the bot whose GUID is g.

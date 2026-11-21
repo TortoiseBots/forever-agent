@@ -269,3 +269,52 @@ func TestClientWireUnknownNames(t *testing.T) {
 		}
 	}
 }
+
+// TestGainsOpcodesTranslate: every opcode the core-gains round uses is in the core's tables and survives the
+// translation in both directions for our client's build.
+func TestGainsOpcodesTranslate(t *testing.T) {
+	table := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	servers := []struct {
+		core uint32
+		name string
+	}{
+		{0x450186, "SMSG_THREAT_UPDATE"},
+		{0x450185, "SMSG_HIGHEST_THREAT_UPDATE"},
+		{0x450187, "SMSG_THREAT_REMOVE"},
+		{0x450188, "SMSG_THREAT_CLEAR"},
+		{0x450228, "SMSG_ENCOUNTER_START"},
+		{0x450229, "SMSG_ENCOUNTER_END"},
+		{0x4B002B, "SMSG_BOSS_KILL"},
+		{0x67000D, "SMSG_SPELL_INTERRUPT_LOG"},
+		{0x670007, "SMSG_SPELL_DISPELL_LOG"},
+		{0x670034, "SMSG_SPELL_MISS_LOG"},
+		{0x670021, "SMSG_SPELL_INSTAKILL_LOG"},
+		{0x67000E, "SMSG_ENVIRONMENTAL_DAMAGE_LOG"},
+		{0x67000C, "SMSG_SPELL_ABSORB_LOG"},
+		{0x450205, "SMSG_PROC_RESIST"},
+		{0x67001D, "SMSG_SPELL_OR_DAMAGE_IMMUNE"},
+	}
+	for _, c := range servers {
+		if got := ServerName(c.core); got != c.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w := table.TranslateServerCore(c.core)
+		if w == UnknownOpcode {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if got := table.TranslateServerWire(w); got != c.core {
+			t.Errorf("%s: wire 0x%06X named 0x%06X, want 0x%06X", c.name, w, got, c.core)
+		}
+	}
+	if got := ClientName(CMSGSetAdvancedCombatLogging); got != "CMSG_SET_ADVANCED_COMBAT_LOGGING" {
+		t.Errorf("ClientName = %q", got)
+	}
+	w, ok := table.WireForClient(CMSGSetAdvancedCombatLogging)
+	if !ok || w == UnknownOpcode {
+		t.Fatal("CMSG_SET_ADVANCED_COMBAT_LOGGING has no wire number")
+	}
+	if got := table.TranslateClientWire(w); got != CMSGSetAdvancedCombatLogging {
+		t.Errorf("client wire 0x%06X named 0x%06X", w, got)
+	}
+}

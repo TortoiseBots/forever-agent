@@ -82,8 +82,10 @@ type watchRun struct {
 	pauseSeen         map[int]bool
 	bosses            map[uint32]string
 	bossAt            time.Time
-	lastLine          string
-	lastNote          string
+	// encounters are the instance's own pull/kill/wipe packets, on the module run's clock.
+	encounters []EncounterRecord
+	lastLine   string
+	lastNote   string
 	// stopUnconfirmed says the cleanup phase ended without the module's record reaching stopped: the stop may not
 	// have reached it (or it could not stop yet), so the result is not a clean end.
 	stopUnconfirmed bool
@@ -302,6 +304,7 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 				}
 			}
 		}
+		r.applyEncounters(r.now(), w)
 		r.drainCombat(w)
 		if r.lim.MaxMinutes > 0 && r.sinceStart() >= time.Duration(r.lim.MaxMinutes)*time.Minute {
 			r.stop("budget")
@@ -383,16 +386,17 @@ func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
 		w.frameBlind = false
 		r.logf("watch: frame: the state read answers again")
 	}
-	thr, terr := r.cmd.Threat(ctx)
-	if errors.Is(terr, ErrLinkLost) {
-		r.linkLost()
+	// The client's pushed threat table answers first; `.tb threat` is now the fallback, at most once per
+	// threatFallbackEvery while the packets flow.
+	thr, tok := r.threat(ctx)
+	if r.stopReason != "" || r.lost {
 		return
 	}
 	var trep *tbcmd.ThreatReport
-	if terr != nil {
+	if !tok {
 		if !w.frameThreatBlind {
 			w.frameThreatBlind = true
-			r.logf("watch: frame: the threat read failed (%v); the frame carries the party only", terr)
+			r.logf("watch: frame: the threat read failed; the frame carries the party only")
 		}
 	} else {
 		if w.frameThreatBlind {
@@ -435,13 +439,17 @@ func (r *Run) partySlot(name string) int {
 }
 
 // frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when this client's model
-// holds the name, else nothing (a frame never carries a character name).
+// holds the name. A pushed threat list names a unit by GUID when the model holds no name for it, and that text is
+// already the trace's own. Nothing when neither is true (a frame never carries a character name).
 func (r *Run) frameGUID(name string) string {
 	if name == "" {
 		return ""
 	}
 	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
 		return g.String()
+	}
+	if len(name) >= 2 && name[0] == '0' && (name[1] == 'x' || name[1] == 'X') {
+		return name
 	}
 	return ""
 }
@@ -988,6 +996,14 @@ func (r *Run) watchBosses(ctx context.Context, w *watchRun, force bool) {
 	if !force && !w.bossAt.IsZero() && now.Sub(w.bossAt) < time.Minute {
 		return
 	}
+	// The encounter packets are the exact boss state of a named fight, so while one is running the module's boss
+	// report is not needed. Outside one, the report is the fallback: an instance whose script sends nothing (the
+	// classic Ragefire Chasm bosses) gets the minute reads, and so does a boss the script never names as soon as a
+	// named fight ends — a five-minute hold from the last packet would hide that kill. A forced read at the end is
+	// never skipped.
+	if !force && r.world.EncounterOpen() {
+		return
+	}
 	rep, why := r.act(ctx, Action{Kind: ActionInstanceInfo, Who: r.cfg.Leader})
 	if why != "" || rep.Info == nil {
 		return
@@ -1200,7 +1216,7 @@ func (r *Run) watchSummary(w *watchRun) {
 		Frames: w.frames, CombatRows: w.combatRows, CombatDropped: w.combatLost,
 		CombatBytes: r.rec.CombatBytes(), CombatTruncated: w.combatTruncated, CombatError: w.combatErr,
 		PauseLog: w.pauseLog, Legs: w.legRecords(), StepLog: w.stepRecords(), LoosePulls: w.loosePulls, DeathLog: w.deaths,
-		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed,
+		RescueLog: w.rescueLog, StopUnconfirmed: w.stopUnconfirmed, Encounters: w.encounters,
 	}
 	r.watch = &rw
 	if r.rec == nil {
