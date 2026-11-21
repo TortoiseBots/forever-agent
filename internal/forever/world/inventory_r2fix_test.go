@@ -7,8 +7,10 @@ package world
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/items"
@@ -392,4 +394,112 @@ func playerThenActiveUpdate() []byte {
 	out.WriteU32(uint32(blk.Len()))
 	out.WriteBytes(blk.Bytes())
 	return out.Bytes()
+}
+
+// loginFollowUp builds the values update the core follows an own create with: PlayerData holding fields the core sets
+// at login (PlayerFlags, core bit 14, and LogoutTime, core bit 35, classic bit 36), then ActivePlayerData. active names
+// the ActivePlayerData: slots changes InvSlots, none a field that is not an inventory slot (classic bit 100).
+func loginFollowUp(slots map[int]wire.GUID) []byte {
+	body := wire.NewWriter()
+	body.WriteU8(0)
+	body.WriteU8(0)
+	body.WriteU8(0x03)
+	body.WriteU32(uint32(1)<<6 | uint32(1)<<7)
+	// PlayerData: classic bits 0 (group), 14 (PlayerFlags), 32 (group), 36 (LogoutTime).
+	body.WriteBits(0b11, 11)
+	body.WriteBits(1|1<<14, 32)
+	body.WriteBits(1|1<<(36-32), 32)
+	body.WriteBit(false) // IsQuestLogChangesMaskSkipped
+	body.FlushBits()
+	body.WriteU32(0x40)      // PlayerFlags
+	body.WriteU64(123456789) // LogoutTime
+	body.WriteBit(false)     // DeclinedNames presence (classic group 32)
+	body.FlushBits()
+	// ActivePlayerData (70425+ layout: InvSlots group 170, slot n at 171+n).
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	if len(slots) == 0 {
+		set(100)
+	} else {
+		set(170)
+		for slot := range slots {
+			set(171 + slot)
+		}
+	}
+	var present uint64
+	for n := range blocks {
+		present |= 1 << uint(n)
+	}
+	body.WriteBits(present, 14)
+	for n := range 14 {
+		if word, ok := blocks[n]; ok {
+			body.WriteBits(uint64(word), 32)
+		}
+	}
+	body.FlushBits()
+	order := []int{}
+	for slot := range slots {
+		order = append(order, slot)
+	}
+	sort.Ints(order)
+	for _, slot := range order {
+		wire.WritePackedGUID(body, slots[slot])
+	}
+	blk := wire.NewWriter()
+	blk.WriteU8(0) // UpdateValues
+	wire.WritePackedGUID(blk, itemSelf)
+	blk.WriteU32(uint32(body.Len()))
+	blk.WriteBytes(body.Bytes())
+	out := wire.NewWriter()
+	out.WriteU16(0)
+	out.WriteU32(1)
+	out.WriteBit(true)
+	out.WriteBit(false)
+	out.FlushBits()
+	out.WriteU32(uint32(blk.Len()))
+	out.WriteBytes(blk.Bytes())
+	return out.Bytes()
+}
+
+// TestAFreshLoginWithItsFollowUpUpdateIsNotStale is the live R2 blocker: the core follows the own create with a values
+// update of PlayerData fields it sets at login and ActivePlayerData, and every login (and map change) ended with the
+// inventory flagged stale, so destroy and split refused. The update is walked to its end: its InvSlots mask names no
+// slot, which proves the inventory unchanged, however long after the create it arrives.
+func TestAFreshLoginWithItsFollowUpUpdateIsNotStale(t *testing.T) {
+	f := newItemWorld(t)
+	f.server(wire.SMSGUpdateObject, fakeCreateBlockType(fakePackedGUID(itemSelf), 0, 1000, 2000, 50, 7, 6))
+	f.now = f.now.Add(10 * time.Minute) // no time window decides this
+	f.server(wire.SMSGUpdateObject, loginFollowUp(nil))
+	if hasText(f.lines, "the inventory is stale") {
+		t.Fatalf("a login's own follow-up update marked the inventory stale:\n%s", joinLines(f.lines))
+	}
+	if inv := f.s.inventoryNow(); inv.Stale {
+		t.Fatalf("the fresh inventory is stale: %s", inv.StaleReason)
+	}
+}
+
+// TestALoginFollowUpThatMovesAnItemIsApplied: the same walk reaches InvSlots when the update does change a slot, so a
+// real inventory change right after a login is applied, not hidden.
+func TestALoginFollowUpThatMovesAnItemIsApplied(t *testing.T) {
+	f := newItemWorld(t)
+	f.server(wire.SMSGUpdateObject, fakeCreateBlockType(fakePackedGUID(itemSelf), 0, 1000, 2000, 50, 7, 6))
+	f.server(wire.SMSGUpdateObject, loginFollowUp(map[int]wire.GUID{37: itemPotion, 35: {}}))
+	inv := f.s.inventoryNow()
+	if inv.Stale {
+		t.Fatalf("a readable slot change marked the inventory stale: %s", inv.StaleReason)
+	}
+	if pos, ok := inv.Pos(itemPotion); !ok || pos != uint16(255)<<8|37 {
+		t.Fatalf("the potion is at %#x (%v), want 255/37", pos, ok)
+	}
+}
+
+// TestAnUnreadablePlayerDataFieldStillMarksTheInventoryStale: a PlayerData field the walk cannot size (a visible item)
+// leaves ActivePlayerData unreachable; that stays stale, with or without a recent create.
+func TestAnUnreadablePlayerDataFieldStillMarksTheInventoryStale(t *testing.T) {
+	f := newItemWorld(t)
+	f.server(wire.SMSGUpdateObject, fakeCreateBlockType(fakePackedGUID(itemSelf), 0, 1000, 2000, 50, 7, 6))
+	f.server(wire.SMSGUpdateObject, playerThenActiveUpdate())
+	if inv := f.s.inventoryNow(); !inv.Stale {
+		t.Fatal("an update behind an unreadable PlayerData field did not mark the inventory stale")
+	}
 }

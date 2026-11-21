@@ -338,3 +338,21 @@ func (f *fakeServe) gmLines() []string {
 	}
 	return out
 }
+
+// botLines is the module lines the `bot` method was asked to send, in order.
+func (f *fakeServe) botLines() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.calls {
+		if c.method != "bot" {
+			continue
+		}
+		var p struct {
+			Line string `json:"line"`
+		}
+		_ = json.Unmarshal(c.params, &p)
+		out = append(out, p.Line)
+	}
+	return out
+}

@@ -486,7 +486,11 @@ type session struct {
 	itemCast itemCastWatch
 	self     wire.GUID
 	selfSeen bool
-	mover    *objects.Mover
+	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
+	gmCastAt []time.Time
+	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).
+	selfTeleports int
+	mover         *objects.Mover
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID
@@ -2030,6 +2034,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.report.Teleports++
 		s.world.ApplyTeleport(t, s.transport().Now())
 		if t.MoverGUID == s.self {
+			s.selfTeleports++
 			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
 			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is
 			// empty. An empty transport is no transport (the capture's release teleport is exactly this shape).
