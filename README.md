@@ -557,6 +557,14 @@ floor background; without it, or in a build without cgo, the map says so. Output
 two files after the summary; a failure there is one log line and never changes the watch's exit. See
 [docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
 
+`forever-agent forever gm-walk --follow NAME --character AGENT [--marks-from gm|any] [--out FILE] [--module-out FILE] [--force]
+[--dry FILE]` records a GM character's walk as world data: the agent follows the GM, samples the GM's own object
+position, and turns the GM's whisper (or nearby say) mark words (`point <name>`, `zone <name> <radius-yd>`, `split`) into roads (thinned
+polylines with the map id), points and danger circles in a versioned JSON file with no character names (defaults use the map id and a UTC timestamp). `--module-out`
+(and `forever gm-convert --in DATA --out COPY --module-out MODULE`, no login) renders the module's shape: one row per
+road hop for the `handcrafted_road` table plus the zone/point proposals. `--dry FILE` replays a hand-made recording
+through the same thin/mark/format path with no network. See [docs/forever/GM-WALK-NOTES.md](docs/forever/GM-WALK-NOTES.md).
+
 `forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party
 records, `<run_id>.combatlog.jsonl` and `<run_id>.forever-run.json`), a watch trace file, or a trials repeat
