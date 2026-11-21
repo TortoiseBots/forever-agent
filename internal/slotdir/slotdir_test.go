@@ -73,3 +73,22 @@ func TestCheckRefusesPathsOutsideTheDir(t *testing.T) {
 		t.Fatal("a symlinked pid file accepted")
 	}
 }
+
+// TestCheckRefusesNoAuthNextToATokenFile: a daemon started with --no-auth writes no token file, so a token file next
+// to no_auth is ambiguous (a leftover from a daemon that wants one). Check refuses it, as serveclient.Open does.
+func TestCheckRefusesNoAuthNextToATokenFile(t *testing.T) {
+	dir := writeDir(t, func(m *Manifest) { m.NoAuth = true })
+	_, m, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Check("x", dir, m); err != nil {
+		t.Fatalf("no_auth without a token file: %v", err)
+	}
+	if err := os.WriteFile(TokenPath(dir, m.Port), []byte("tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Check("x", dir, m); err == nil || !strings.Contains(err.Error(), "no_auth") {
+		t.Fatalf("no_auth with a token file: %v", err)
+	}
+}

@@ -5,10 +5,41 @@ import (
 	"testing"
 )
 
-// TestCheckDBQueryExpandsCharVar pins that an item check may name its
-// character with a var (e.g. ${A.character} from the status probe): the
-// template expands first and the value is then validated. A value with bad
-// chars is still rejected.
+// TestCheckDBInfersForeverFromSessions: a check_db step cannot name a session, so a file whose sessions are all
+// Forever infers the Forever slot (schema and allowlist), a mixed file must say "server" on the step, and a
+// Forever table is validated against the Forever allowlist, not the turtle one.
+func TestCheckDBInfersForeverFromSessions(t *testing.T) {
+	const db = `"db":{"host":"test1","container":"tortoise-db","schema":"mychars"}`
+	foreverSessions := `"sessions":{"A":{"rpc":"127.0.0.1:1","server":"forever"},"B":{"rpc":"127.0.0.1:2","server":"forever"}}`
+	f, err := Parse([]byte(`{"scenario":"t",`+foreverSessions+`,`+db+`,
+		"steps":[{"do":"check_db","table":"mychars.characters","rows":1}]}`), nil)
+	if err != nil {
+		t.Fatalf("an all-Forever file's check_db was refused: %v", err)
+	}
+	q, err := (&run{f: f}).checkDBQuery(f.Steps[0])
+	if err != nil {
+		t.Fatalf("checkDBQuery: %v", err)
+	}
+	if !q.Forever || q.Schema != "mychars" {
+		t.Fatalf("query %+v, want Forever with the file's schema", q)
+	}
+	if _, err := Parse([]byte(`{"scenario":"t",`+foreverSessions+`,`+db+`,
+		"steps":[{"do":"check_db","table":"tw_char.characters","rows":1}]}`), nil); err == nil ||
+		!strings.Contains(err.Error(), "Forever allowlist") {
+		t.Fatalf("a turtle table was not checked against the Forever allowlist: %v", err)
+	}
+	mixed := `"sessions":{"A":{"rpc":"127.0.0.1:1","server":"forever"},"B":{"rpc":"127.0.0.1:2"}}`
+	if _, err := Parse([]byte(`{"scenario":"t",`+mixed+`,`+db+`,
+		"steps":[{"do":"check_db","item":{"char":"Atank","entry":1},"count":0}]}`), nil); err == nil ||
+		!strings.Contains(err.Error(), "mixes") {
+		t.Fatalf("a mixed-server file's check_db was not refused: %v", err)
+	}
+	if _, err := Parse([]byte(`{"scenario":"t",`+mixed+`,`+db+`,
+		"steps":[{"do":"check_db","server":"forever","item":{"char":"Atank","entry":1},"count":0}]}`), nil); err != nil {
+		t.Fatalf("a mixed-server file with the step's own server was refused: %v", err)
+	}
+}
+
 func TestCheckDBQueryExpandsCharVar(t *testing.T) {
 	f, err := Parse([]byte(`{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},
 		"db":{"host":"test1","container":"tortoise-db"},

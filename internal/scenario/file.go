@@ -791,6 +791,15 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			params = map[string]any{}
 		}
 		s.Params = params
+		if method == "gm" {
+			// The literal part of a GM command is checked like a `gm` step's; variables are expanded and checked
+			// again at run time, as `rpc` does.
+			if t, _ := params["text"].(string); t != "" {
+				if err := gmLoadCheck(n, t); err != nil {
+					return nil, err
+				}
+			}
+		}
 		g("path", &path)
 		if path == "" {
 			return nil, fmt.Errorf("step %d (check_rpc): missing path", n)
@@ -941,6 +950,34 @@ func gmLoadCheck(n int, text string) error {
 	return nil
 }
 
+// checkDBServer is the slot a check_db step reads: its own "server" key, else the file's default server, else
+// Forever when every session is a Forever one. A check_db step cannot name a session (stepFields has no "session"
+// for it), so a file that mixes Forever and other sessions must name "server" on the step (or at the top): picking
+// one silently would validate a Forever table against the turtle allowlist, or the other way round.
+func (f *File) checkDBServer(s *Step) (ServerName, error) {
+	if s.Server != "" {
+		return s.Server, nil
+	}
+	if f.Server != "" {
+		return f.Server, nil
+	}
+	forever, other := 0, 0
+	for _, sess := range f.Sessions {
+		if sess.Server == ServerForever {
+			forever++
+		} else {
+			other++
+		}
+	}
+	switch {
+	case forever > 0 && other == 0:
+		return ServerForever, nil
+	case forever > 0:
+		return "", fmt.Errorf("the scenario mixes Forever and other sessions: name \"server\" on the check_db step")
+	}
+	return ServerTurtle, nil
+}
+
 // validate runs the cross-step rules: session names exist, addon prefix
 // defaults, DB presence, and the static var use-before-set check.
 func (f *File) validate() error {
@@ -954,17 +991,18 @@ func (f *File) validate() error {
 		if s.Do == "check_db" && f.DB == nil {
 			return fmt.Errorf("step %d (check_db): the scenario has no db target", n)
 		}
+		if s.Do == "check_db" && s.Table == "" {
+			if _, err := f.checkDBServer(s); err != nil {
+				return fmt.Errorf("step %d (check_db): %v", n, err)
+			}
+		}
 		if s.Do == "check_db" && s.Table != "" {
-			// The step's slot: its own server key, else the session's,
-			// else the file's. A Forever table is schema-qualified with
-			// the db block's schema (never a hardcoded one).
-			slot := s.Server
-			if slot == "" {
-				if s.Session != "" {
-					slot = f.Sessions[s.Session].Server
-				} else {
-					slot = f.Server
-				}
+			// The step's slot: its own server key, else the file's, else Forever when every session is one (a
+			// check_db step cannot name a session). A Forever table is schema-qualified with the db block's
+			// schema (never a hardcoded one).
+			slot, err := f.checkDBServer(s)
+			if err != nil {
+				return fmt.Errorf("step %d (check_db): %v", n, err)
 			}
 			if slot == ServerForever {
 				schema := ""

@@ -37,6 +37,24 @@ func TestAgentPIDNeedsTheDirsBinary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(fmt.Sprint(cmd.Process.Pid)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, alive := p.AgentPID(dir); alive {
+		t.Fatal("copied binary with no recorded start time reported alive")
+	}
+	st, err := ProcStartTicks(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeStart := func(v uint64) {
+		raw := fmt.Sprintf(`{"pid_start":%d}`, v)
+		if err := os.WriteFile(filepath.Join(dir, "slot.json"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStart(st + 1)
+	if _, alive := p.AgentPID(dir); alive {
+		t.Fatal("copied binary with a different start time reported alive")
+	}
+	writeStart(st)
 	if pid, alive := p.AgentPID(dir); !alive || pid != cmd.Process.Pid {
 		t.Fatalf("copied sleep: pid=%d alive=%v, want alive", pid, alive)
 	}

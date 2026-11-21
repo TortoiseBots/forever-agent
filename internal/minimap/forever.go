@@ -237,7 +237,8 @@ func RunForever(o Options) ([]Result, error) {
 	return out, nil
 }
 
-// findFold finds a file or folder named name under dir, comparing case-insensitively.
+// findFold finds a file or folder named name under dir, comparing case-insensitively. A match that is a symlink
+// leading outside dir is refused (treated as absent): the reader never leaves the root it was given.
 func findFold(dir, name string) (string, bool) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -245,13 +246,35 @@ func findFold(dir, name string) (string, bool) {
 	}
 	for _, e := range ents {
 		if strings.EqualFold(e.Name(), name) {
-			return filepath.Join(dir, e.Name()), true
+			p := filepath.Join(dir, e.Name())
+			if !insideRoot(dir, p) {
+				return "", false
+			}
+			return p, true
 		}
 	}
 	return "", false
 }
 
-// foreverDirs indexes the minimap folders of the extract by their lower-case directory name.
+// insideRoot reports whether path, with every symlink resolved, is still inside root (also resolved).
+func insideRoot(root, path string) bool {
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(r, p)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// foreverDirs indexes the minimap folders of the extract by their lower-case directory name. A symlinked folder
+// that leaves --client is skipped.
 func foreverDirs(clientDir string) (map[string]string, bool) {
 	if clientDir == "" {
 		return nil, false
@@ -270,9 +293,14 @@ func foreverDirs(clientDir string) (map[string]string, bool) {
 	}
 	out := map[string]string{}
 	for _, e := range ents {
-		if e.IsDir() {
-			out[strings.ToLower(e.Name())] = filepath.Join(mm, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		p := filepath.Join(mm, e.Name())
+		if !insideRoot(clientDir, p) {
+			continue
+		}
+		out[strings.ToLower(e.Name())] = p
 	}
 	return out, true
 }
@@ -299,6 +327,14 @@ func foreverTiles(dirs map[string]string, directory string) (map[Tile]string, er
 		if m == nil {
 			continue
 		}
+		if !e.Type().IsRegular() {
+			// A tile is a plain file: a symlink (even one that stays inside) and a directory are not read.
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if !insideRoot(dir, p) {
+			continue
+		}
 		c, _ := strconv.Atoi(m[1])
 		r, _ := strconv.Atoi(m[2])
 		if c > 63 || r > 63 {
@@ -308,7 +344,7 @@ func foreverTiles(dirs map[string]string, directory string) (map[Tile]string, er
 		if prev, dup := out[t]; dup {
 			return nil, fmt.Errorf("two tile files for column %d row %d: %s and %s", c, r, filepath.Base(prev), e.Name())
 		}
-		out[t] = filepath.Join(dir, e.Name())
+		out[t] = p
 	}
 	return out, nil
 }
