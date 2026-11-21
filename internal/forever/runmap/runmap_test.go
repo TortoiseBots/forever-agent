@@ -62,7 +62,7 @@ func fixture(t *testing.T) string { return fixtureWith(t, fixtureSpec{}) }
 func fixtureWith(t *testing.T, sp fixtureSpec) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"fixture_depths.json", "combatlog.jsonl"} {
+	for _, name := range []string{"fixture_depths.json"} {
 		b, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatalf("testdata/%s: %v", name, err)
