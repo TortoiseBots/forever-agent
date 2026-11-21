@@ -724,8 +724,11 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 			"origin":     "ta",
 		}
 		// The core-gains fields are written only when the row carries them, so older recordings keep their shape.
-		if reason := pyjson.Str(row["reason"]); reason != "" {
-			ev["reason"] = reason
+		// pyjson.Str(nil) is "None", so a row without the key must be checked first.
+		if row["reason"] != nil {
+			if reason := pyjson.Str(row["reason"]); reason != "" {
+				ev["reason"] = reason
+			}
 		}
 		if row["interrupted_spell_id"] != nil {
 			ev["interrupted_spell_id"] = row["interrupted_spell_id"]
