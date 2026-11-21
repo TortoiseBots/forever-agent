@@ -28,10 +28,9 @@ type fakeForeverCaller struct {
 }
 
 type fakeForeverEvent struct {
-	seq  uint64
-	ev   events.Event
-	raw  map[string]any
-	text string
+	seq uint64
+	ev  events.Event
+	raw map[string]any
 }
 
 func (f *fakeForeverCaller) add(ev events.Event) uint64 {
@@ -41,14 +40,6 @@ func (f *fakeForeverCaller) add(ev events.Event) uint64 {
 	cp := ev
 	cp.Seq = f.next
 	f.evs = append(f.evs, fakeForeverEvent{seq: f.next, ev: cp})
-	return f.next
-}
-
-func (f *fakeForeverCaller) addRaw(text string, raw map[string]any) uint64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.next++
-	f.evs = append(f.evs, fakeForeverEvent{seq: f.next, text: text, raw: raw})
 	return f.next
 }
 

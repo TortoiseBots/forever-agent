@@ -39,15 +39,6 @@ type foreverOrderRequest struct {
 	Verb string `json:"verb"`
 }
 
-// foreverCommanderReply is the module reply the page shows: run-active and
-// not-available are outcomes, not transport errors.
-type foreverCommanderReply struct {
-	Kind    string `json:"kind"`
-	OK      bool   `json:"ok"`
-	Line    string `json:"line,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 // order is the order handler: a button press on a Forever agent. The action
 // must be "order", the agent must be a Forever slot the dashboard watches
 // (D6), and the verb must be one of the six buttons. The commander call is

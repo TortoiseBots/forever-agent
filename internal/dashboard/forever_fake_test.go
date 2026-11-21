@@ -63,13 +63,6 @@ func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 	return f
 }
 
-// foreverAgentURL returns the fake's host:port as the agent id.
-func foreverAgentURL(t *testing.T, f *foreverFakeServe) string {
-	t.Helper()
-	u, _ := url.Parse(f.srv.URL)
-	return u.Host
-}
-
 // newForeverRig makes a Controller watching one Forever agent, with a
 // throwaway token file and control log, and the served handler.
 func newForeverRig(t *testing.T, f *foreverFakeServe) (*Controller, Agent, *httptest.Server) {

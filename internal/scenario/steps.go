@@ -3,7 +3,6 @@ package scenario
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -547,16 +546,6 @@ func (rr *run) foreverRPCError(_ context.Context, s *Step, n int, inFinally bool
 		rr.skipRest(n + 1)
 	}
 	return false
-}
-
-// isNotPorted reports whether err is the serve side's not-ported answer for
-// a method it has not implemented (-32003 "not ported on this server").
-func isNotPorted(err error) bool {
-	var re *RPCError
-	if errors.As(err, &re) {
-		return re.Code == -32003 && strings.Contains(re.Message, "not ported on this server")
-	}
-	return strings.Contains(err.Error(), "not ported on this server")
 }
 
 func (rr *run) doSleep(ctx context.Context, s *Step, n int) bool {

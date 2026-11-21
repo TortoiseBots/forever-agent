@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/runmap"
-	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 )
 
 // This file is the dashboard's live view over a forever serve slot (L5):
@@ -135,9 +134,6 @@ type foreverUnit struct {
 func keyOf(guid string) uint64 {
 	return runmap.GUIDKey(guid)
 }
-
-// serveKeyOf keys a serveclient GUID the same way.
-func serveKeyOf(g serveclient.GUID) uint64 { return g.Key() }
 
 // BuildForeverCard turns one poll of a serve slot into the card. It is pure:
 // the same inputs give the same card. Bots come from the commander status,
