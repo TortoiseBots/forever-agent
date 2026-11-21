@@ -744,3 +744,30 @@ func TestGovernorNeverHoldsItsMutexAcrossABlockingCall(t *testing.T) {
 		})
 	}
 }
+
+// A stranger who walks in after the first summon, in a trial with no refill,
+// ends the repeat INVALID real_player (never PASS).
+func TestStrangerArrivingMidFightEndsRealPlayer(t *testing.T) {
+	h := newTankHarness(t, 1, 600)
+	h.fake.hook = func(method string, params map[string]any) {
+		h.world.hook(method, params)
+		if text, _ := params["text"].(string); method == "gm" && strings.HasPrefix(text, ".npc add temp ") {
+			h.world.mu.Lock()
+			h.world.mobs["0x00000000000000aa"] = map[string]any{"guid": "0x00000000000000aa", "name": "", "type": "active player",
+				"distance": 5, "level": 33, "dead": false}
+			h.world.mu.Unlock()
+		}
+	}
+	tr := h.tank()
+	h.sit.Now = jumpClock(6 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	tr.sit = h.sit
+	out, err := h.sit.Run(ctx, h.rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strOf(out["ended"]) != "real_player" || strOf(out["invalid_reason"]) == "" || out["ok"] == true {
+		t.Fatalf("outcome %v, want INVALID real_player", out)
+	}
+}

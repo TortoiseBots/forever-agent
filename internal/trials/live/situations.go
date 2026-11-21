@@ -283,6 +283,7 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	if t.refillEvery > 0 {
 		nextRefill = t.sit.now().Add(time.Duration(t.refillEvery * float64(time.Second)))
 	}
+	lastStranger := t.sit.now()
 	for {
 		if why := t.abortReason(); why != "" {
 			ended = "disconnected"
@@ -295,6 +296,19 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 			return map[string]any{"ok": false, "ended": ended, "invalid_reason": t.strangerWhy}, nil
 		}
 		now := t.sit.now()
+		// A real player arriving after the first summon ends the repeat:
+		// checked at most every 5 s (every iteration when iterations are slower).
+		if t.strangerWhy == "" && now.Sub(lastStranger) >= strangerEvery {
+			lastStranger = now
+			if why, near := t.strangerNear(ctx); near {
+				t.strangerWhy = why
+			}
+		}
+		if t.strangerWhy != "" {
+			ended = "real_player"
+			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": ended})
+			return map[string]any{"ok": false, "ended": ended, "invalid_reason": t.strangerWhy}, nil
+		}
 		if !fightSeen && t.fighting(ctx) {
 			fightSeen = true
 		}
@@ -524,6 +538,9 @@ func (t *tankRun) party() map[string]bool {
 func isPlayerRow(u Unit) bool {
 	return strings.Contains(strings.ToLower(u.Type), "player")
 }
+
+// strangerEvery is the longest gap between real-player checks in the fight.
+const strangerEvery = 5 * time.Second
 
 // strangerNear reports a real player within 40 yards of the arena (or an
 // unreadable list: nothing is done on a guess).
