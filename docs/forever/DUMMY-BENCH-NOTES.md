@@ -18,7 +18,7 @@ per spell: damage, casts, mean/max reaction.
 | `internal/trials/live/dummy_test.go` | `a4_review_test.go` (harness shape) | scripted dummy repeats: spawn + fight, stranger, teardown |
 | `internal/trials/dummybench/*` | `events.go` + `score.go` shapes | `Tally` (go = one cast, damage sums per spell), `React` (start minus previous go), `Score` (PASS/FAIL/UNKNOWN/INVALID), `TallyRep`/`ScoreRep` (verdicts.json) |
 | `internal/trials/dummybench/testdata/dummy_mage_fire.json` | `data/forever/*.json` (documented format) | the round's one table: fire mage rotation + expects (all null = to be measured) |
-| `internal/trials/dummybench/testdata/dummy-mage-fire-trial.json` | `trialdefs/*` shape (kept beside the table, not embedded: the shipped `dps/` set pins its file list) | the round's one trial: dummy kind, rotation, three dummy rules |
+| `internal/trials/dummybench/testdata/dummy-mage-fire.json` | `trialdefs/*` shape (kept beside the table, not embedded: the shipped `dps/` set pins its file list) | the round's one trial: dummy kind, rotation, three dummy rules |
 
 ## Decisions
 
@@ -59,7 +59,7 @@ None yet: no live run. The table's bounds are all null ("to be measured")
 and the trial's `expect_today` is `?` on every rule, so any run scores
 UNKNOWN until the server proves the numbers. The live check to run:
 
-1. `forever-agent trials run --slots F --server <srv> --repeats 3 --out <dir> internal/trials/dummybench/testdata/dummy-mage-fire-trial.json` on the test server (GM account, level 3 RBAC for `.npc add temp`; `findTrial` reads a trial file from disk, so the non-embedded path runs).
+1. `forever-agent trials run --slots F --server <srv> --repeats 3 --out <dir> internal/trials/dummybench/testdata/dummy-mage-fire.json` on the test server (GM account, level 3 RBAC for `.npc add temp`; `findTrial` reads a trial file from disk, so the non-embedded path runs).
 2. `forever-agent trials report <dir>/dummy-mage-fire` (or `trials score <dir>`): expect three `duration` repeats, `mobs_ready` ok, and UNKNOWN rows naming `min_damage`/`max_reaction_s`.
 3. Fill the table's nulls from the measured means, re-run, and confirm the card flips to PASS/FAIL on real numbers.
 
