@@ -73,7 +73,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
-`inv`, `units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
 `area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
@@ -183,7 +183,7 @@ resume, status or events; `lead_bot`; `args` carries the plan, the reason words 
 without `lead_bot` uses the only bound lead, and is refused when there is not exactly one). The answer carries
 `sent` (the command lines that went out), `bots` (the module's per-bot lines), `card` (the binding card the call
 read, or `cards` for a `status`), `final` (each waited bot's `ok` or `fail:<code>`, `{}` when no wait ran),
-`party_error` (why a `status` read the cards but not the party), and a run verb's `runs` and `events`. Every
+`party_error` (why a `status` read the cards but not the party), `notes` (what the call did on its own), and a run verb's `runs` and `events`. The module keeps only bindings made from outside the party, so a `bind` made while this character is in a party is refused `in-party` with a note saying so; `leave_party: true` (on `forever rpc`, the `--leave-party` flag) leaves the party first and says so in `notes`, and a failed leave (an invalid roster included) ends the call without binding. Map 0 (Eastern Kingdoms) is a map like any other on a card. Every
 mutation reads `.tb commander status <self>` before the line and, for a bind, order, role or run mutation, after
 it: a target outside the character's own bindings is refused `not-owned` before anything is sent, and a line
 whose target changed in between says the line already went through. Every refusal also carries the call's partial

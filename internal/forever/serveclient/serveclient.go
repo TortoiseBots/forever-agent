@@ -40,7 +40,6 @@ import (
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
-	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // ErrReconnecting is a call the daemon answered with -32005 past the retry
@@ -399,15 +398,85 @@ type CommanderParams struct {
 	WaitMS  int      `json:"wait_ms,omitempty"`
 }
 
-// CommanderResult is the commander method's answer: the line sent, the
-// module's reply, the typed outcome of a loot/open/use/lootmethod order, and
-// the daemon's decode of the module's status report ({op:status}) as raw
-// JSON: it has one card per commander, so callers decode the cards they read.
+// CommanderResult is the commander method's answer, in the daemon's own shape (world.ServeCommander): the lines
+// that went out, the module's per-bot lines, the binding card of a mutation's own read or every card of a status,
+// the waited order states ("ok" or "fail:<code>" per bot) and a run verb's records. A refusal is the RPC error
+// instead, whose Data carries the same shape.
 type CommanderResult struct {
-	Sent   string           `json:"sent"`
-	Reply  tbm.Reply        `json:"reply"`
-	Order  *tbm.OrderResult `json:"order,omitempty"`
-	Status json.RawMessage  `json:"status,omitempty"`
+	Self       string            `json:"self,omitempty"`
+	Sent       []string          `json:"sent,omitempty"`
+	Bots       []CommanderBot    `json:"bots,omitempty"`
+	Card       *CommanderCard    `json:"card,omitempty"`
+	Cards      []CommanderCard   `json:"cards,omitempty"`
+	Final      map[string]string `json:"final"`
+	PartyError string            `json:"party_error,omitempty"`
+	Notes      []string          `json:"notes,omitempty"`
+}
+
+// CommanderBot is one bot's line of a commander answer.
+type CommanderBot struct {
+	Bot    string `json:"bot"`
+	Status string `json:"status"` // queued, refused, stored, bound, joined
+	Seq    int    `json:"seq,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Msg    string `json:"msg,omitempty"`
+}
+
+// CommanderPos is a map position.
+type CommanderPos struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+// CommanderMember is one bound bot of a card; the lead comes first.
+type CommanderMember struct {
+	Bot       string        `json:"bot"`
+	GUID      string        `json:"guid"`
+	Class     string        `json:"class"`
+	Role      string        `json:"role"`
+	Level     int           `json:"level"`
+	HP        int64         `json:"hp"`
+	MaxHP     int64         `json:"max_hp"`
+	Power     int64         `json:"power"`
+	MaxPower  int64         `json:"max_power"`
+	PowerType string        `json:"power_type,omitempty"`
+	Alive     bool          `json:"alive"`
+	Lead      bool          `json:"lead"`
+	Map       uint32        `json:"map"`
+	Zone      int           `json:"zone"`
+	Pos       *CommanderPos `json:"pos,omitempty"` // nil: the member has no position
+}
+
+// CommanderRun is the run record of a card.
+type CommanderRun struct {
+	Lead    string `json:"lead"`
+	Plan    string `json:"plan"`
+	State   string `json:"state"`
+	Step    int    `json:"step"`
+	Steps   int    `json:"steps"`
+	Leg     *int   `json:"leg,omitempty"`
+	LegName string `json:"leg_name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Phase   string `json:"phase,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Elapsed int    `json:"elapsed"`
+	Deaths  int    `json:"deaths"`
+	Wipes   int    `json:"wipes"`
+}
+
+// CommanderCard is one commander's binding card.
+type CommanderCard struct {
+	Cmd     string            `json:"cmd"`
+	Online  bool              `json:"online"`
+	Lead    string            `json:"lead"`
+	Bound   int               `json:"bound"`
+	Bots    int               `json:"bots"`
+	InParty bool              `json:"in_party"`
+	Map     *uint32           `json:"map,omitempty"`
+	Pos     *CommanderPos     `json:"pos,omitempty"`
+	Members []CommanderMember `json:"members,omitempty"`
+	Run     *CommanderRun     `json:"run,omitempty"`
 }
 
 // Logout is a logout call's answer.

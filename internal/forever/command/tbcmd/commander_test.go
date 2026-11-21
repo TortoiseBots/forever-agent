@@ -143,6 +143,26 @@ func TestCommanderStatusRunCard(t *testing.T) {
 	}
 }
 
+// Map 0 is Eastern Kingdoms: a card standing there is a card with a map, not a refused record.
+func TestCommanderStatusMapZero(t *testing.T) {
+	binding := strings.Replace(commanderBindingTanka, "map=389", "map=0", 1)
+	member := strings.Replace(commanderMemberTanka("Tanka", "warrior", "tank", 10, "yes", 498, 498, 54, 100, "rage"),
+		"map=389", "map=0", 1)
+	binding = strings.NewReplacer("bound=5", "bound=1", "bots=5", "bots=1", "orders=5", "orders=0").Replace(binding)
+	r := oneReply("commander-begin #T", binding, member, "commander-end count=2 records=2 bindings=1 #T")
+	rep, err := NewClient(r).CommanderStatus(context.Background(), "")
+	if err != nil {
+		t.Fatalf("CommanderStatus on map 0: %v", err)
+	}
+	card := rep.Cards[0]
+	if !card.HasMap || card.Map != 0 || card.Pos == nil {
+		t.Fatalf("card map: has=%v map=%d pos=%v, want map 0 present", card.HasMap, card.Map, card.Pos)
+	}
+	if card.Members[0].Map != 0 {
+		t.Fatalf("member map %d", card.Members[0].Map)
+	}
+}
+
 func TestCommanderStatusIdleCard(t *testing.T) {
 	raws := []string{
 		"commander-begin #T",

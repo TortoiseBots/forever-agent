@@ -21,19 +21,19 @@ const foreverPartyJSON = `{"in_group":true,"leader":"0x0000000000000001000000000
  {"name":"Adpsb","guid":"0x00000000000000040000000000000004","online":true,"dead":false,"leader":false,"health":3500,"max_health":3500,"power_type":3,"power":100,"max_power":100,"level":60,"zone":2437},
  {"name":"Adpsc","guid":"0x00000000000000050000000000000005","online":true,"dead":false,"leader":false,"health":3000,"max_health":3000,"power_type":0,"power":7000,"max_power":7000,"level":60,"zone":2437}]}`
 
-// foreverCommanderJSON is a serve commander {op:status} answer: the module's
-// TBM:COMMANDER status report decoded to JSON by the daemon. Roles come
-// from the member records; hp and pos likewise; the run from the run record.
-const foreverCommanderJSON = `{"sent":".tb commander status","reply":{"kind":"commander-status","ok":true},"status":{
- "cmd":"Atank","cguid":"0x00000000000000010000000000000001","online":true,"lead":"Atank","bound":5,"bots":5,
- "map":389,"pos":[-18.24,-46.69,-21.85],
+// foreverCommanderJSON is a serve commander {op:status} answer in the daemon's own shape (hand-made from
+// world.ServeCommander): one card per commander with typed members (max_hp, a pos object) and the run record
+// beside them; sent is a list of lines and there is no status field.
+const foreverCommanderJSON = `{"self":"Atank","sent":[".tb commander status"],"cards":[{
+ "cmd":"Atank","cguid":"1","online":true,"lead":"Atank","bound":5,"bots":5,"system":false,"in_party":false,"raid":false,"player_led":false,"orders":0,
+ "map":389,"pos":{"x":-18.24,"y":-46.69,"z":-21.85},
  "members":[
-  {"bot":"Atank","guid":"0x00000000000000010000000000000001","class":"warrior","role":"tank","level":60,"hp":5000,"maxhp":5000,"power":100,"maxpower":100,"ptype":"rage","alive":true,"lead":true,"map":389,"pos":[-18.24,-46.69,-21.85]},
-  {"bot":"Aheal","guid":"0x00000000000000020000000000000002","class":"priest","role":"healer","level":60,"hp":4000,"maxhp":4000,"power":8000,"maxpower":8000,"ptype":"mana","alive":true,"lead":false,"map":389,"pos":[-16.0,-44.0,-21.85]},
-  {"bot":"Adpsa","guid":"0x00000000000000030000000000000003","class":"mage","role":"dps","level":60,"hp":3500,"maxhp":3500,"power":9000,"maxpower":9000,"ptype":"mana","alive":true,"lead":false,"map":389,"pos":[-17.0,-45.0,-21.85]},
-  {"bot":"Adpsb","guid":"0x00000000000000040000000000000004","class":"rogue","role":"dps","level":60,"hp":3500,"maxhp":3500,"power":100,"maxpower":100,"ptype":"energy","alive":true,"lead":false,"map":389,"pos":[-19.0,-47.0,-21.85]},
-  {"bot":"Adpsc","guid":"0x00000000000000050000000000000005","class":"warlock","role":"dps","level":60,"hp":3000,"maxhp":3000,"power":7000,"maxpower":7000,"ptype":"mana","alive":true,"lead":false,"map":389,"pos":[-20.0,-48.0,-21.85]}],
- "run":{"lead":"Atank","plan":"ragefire_chasm","state":"running","step":1,"steps":80,"leg":0,"legname":"tunnel","kind":"pull","phase":"pull","note":"fighting","pulls":51,"deaths":0,"wipes":0,"elapsed":39}}}`
+  {"bot":"Atank","guid":"0x00000000000000010000000000000001","class":"warrior","role":"tank","level":60,"hp":5000,"max_hp":5000,"power":100,"max_power":100,"power_type":"rage","alive":true,"lead":true,"map":389,"zone":2437,"pos":{"x":-18.24,"y":-46.69,"z":-21.85}},
+  {"bot":"Aheal","guid":"0x00000000000000020000000000000002","class":"priest","role":"healer","level":60,"hp":4000,"max_hp":4000,"power":8000,"max_power":8000,"power_type":"mana","alive":true,"lead":false,"map":389,"zone":2437,"pos":{"x":-16.0,"y":-44.0,"z":-21.85}},
+  {"bot":"Adpsa","guid":"0x00000000000000030000000000000003","class":"mage","role":"dps","level":60,"hp":3500,"max_hp":3500,"power":9000,"max_power":9000,"power_type":"mana","alive":true,"lead":false,"map":389,"zone":2437,"pos":{"x":-17.0,"y":-45.0,"z":-21.85}},
+  {"bot":"Adpsb","guid":"0x00000000000000040000000000000004","class":"rogue","role":"dps","level":60,"hp":3500,"max_hp":3500,"power":100,"max_power":100,"power_type":"energy","alive":true,"lead":false,"map":389,"zone":2437,"pos":{"x":-19.0,"y":-47.0,"z":-21.85}},
+  {"bot":"Adpsc","guid":"0x00000000000000050000000000000005","class":"warlock","role":"dps","level":60,"hp":3000,"max_hp":3000,"power":7000,"max_power":7000,"power_type":"mana","alive":true,"lead":false,"map":389,"zone":2437,"pos":{"x":-20.0,"y":-48.0,"z":-21.85}}],
+ "run":{"lead":"Atank","plan":"ragefire_chasm","state":"running","step":1,"steps":80,"leg":0,"leg_name":"tunnel","kind":"pull","phase":"pull","note":"fighting","pulls":51,"deaths":0,"wipes":0,"pauses":0,"elapsed":39}}],"final":{}}`
 
 // foreverUnitsJSON is a serve units {within:100} answer: two hostiles.
 const foreverUnitsJSON = `[
@@ -77,6 +77,32 @@ func TestForeverCardBotsFromCommanderStatus(t *testing.T) {
 	}
 }
 
+// TestForeverCardMemberWithoutPositionIsUnknown: a member the daemon sends without a position (or at 0,0) is drawn
+// as unknown, never as a known dot at the map's origin.
+func TestForeverCardMemberWithoutPositionIsUnknown(t *testing.T) {
+	cmd := `{"cards":[{"cmd":"Atank","online":true,"lead":"Aheal","bound":2,"bots":2,"map":0,"members":[
+ {"bot":"Aheal","guid":"0x1","class":"priest","role":"healer","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":0,"zone":1,"pos":{"x":-16,"y":-44,"z":-21}},
+ {"bot":"Bnopos","guid":"0x2","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1},
+ {"bot":"Bzero","guid":"0x3","class":"mage","role":"dps","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":false,"map":0,"zone":1,"pos":{"x":0,"y":0,"z":0}}]}],"final":{}}`
+	c := BuildForeverCard(Inputs{Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmd)})
+	if len(c.Bots) != 3 {
+		t.Fatalf("three members, got %+v", c.Bots)
+	}
+	for _, b := range c.Bots {
+		switch b.Name {
+		case "Aheal":
+			if !b.Known || !b.InMap {
+				t.Fatalf("a member with a position is not known: %+v", b)
+			}
+		default:
+			if b.Known || b.InMap || b.X != 0 || b.Y != 0 {
+				t.Fatalf("%s has no position and must not be drawn: %+v", b.Name, b)
+			}
+		}
+	}
+}
+
 // TestForeverControlNeverCallsTBM pins that every Forever control goes to
 // commander {op:cmd|run}: no tbm* or dungeon_* call on a Forever agent.
 func TestForeverControlNeverCallsTBM(t *testing.T) {
@@ -114,12 +140,14 @@ func TestForeverControlNeverCallsTBM(t *testing.T) {
 		var p struct {
 			Op string `json:"op"`
 		}
-		if err := json.Unmarshal(c.Params, &p); err != nil || (p.Op != "cmd" && p.Op != "run") {
-			t.Fatalf("commander params %s: want op cmd|run", c.Params)
+		// A run verb reads the lead from a status call first; nothing but the commander is ever called.
+		if err := json.Unmarshal(c.Params, &p); err != nil || (p.Op != "cmd" && p.Op != "run" && p.Op != "status") {
+			t.Fatalf("commander params %s: want op cmd|run|status", c.Params)
 		}
 	}
-	if len(f.calls) != 9 {
-		t.Fatalf("nine controls, got %d: %v", len(f.calls), f.calls)
+	// Nine controls, and the status read each of the three run verbs makes first to name its lead.
+	if len(f.calls) != 12 {
+		t.Fatalf("nine controls and three lead reads, got %d: %v", len(f.calls), f.calls)
 	}
 }
 

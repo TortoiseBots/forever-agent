@@ -287,6 +287,7 @@ type fakeServer struct {
 	serveInvite   bool
 	serveAccept   string
 	serveAccepted bool
+	serveLeft     bool // the fake saw CMSG_LEAVE_GROUP
 	// serveNoKill keeps the creature alive after a swing, so an attack call stays running until a test drops the
 	// link or asks it to stop.
 	serveNoKill bool

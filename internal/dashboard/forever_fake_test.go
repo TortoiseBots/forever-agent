@@ -26,12 +26,13 @@ type foreverFakeServe struct {
 	results   map[string]string
 	failed    map[string]bool
 	notPorted map[string]bool
+	refused   map[string]string // method -> the message of a -32003 game refusal
 	srv       *httptest.Server
 }
 
 func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 	t.Helper()
-	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}}
+	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}, refused: map[string]string{}}
 	f.results["status"] = foreverStatusJSON
 	f.results["party"] = foreverPartyJSON
 	f.results["commander"] = foreverCommanderJSON
@@ -47,8 +48,11 @@ func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 		f.mu.Lock()
 		f.calls = append(f.calls, rpcCall{req.Method, req.Params, r.Header.Get("Authorization")})
 		res, failed, notPorted := f.results[req.Method], f.failed[req.Method], f.notPorted[req.Method]
+		refusal, refused := f.refused[req.Method]
 		f.mu.Unlock()
 		switch {
+		case refused:
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":` + jsonStr(refusal) + `}}`))
 		case failed:
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"world: offline: test down"}}`))
 		case notPorted:
