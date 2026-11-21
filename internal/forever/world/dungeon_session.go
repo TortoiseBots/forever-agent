@@ -87,6 +87,12 @@ func (c *dungeonCommander) RunStatus(ctx context.Context, leader string) (tbcmd.
 	return rep, dungeonPortErr(err)
 }
 
+// CommanderStatus reads a commander's binding card: a read, never an order.
+func (c *dungeonCommander) CommanderStatus(ctx context.Context, commander string) (tbcmd.CommanderReport, error) {
+	rep, err := c.client.CommanderStatus(ctx, commander)
+	return rep, dungeonPortErr(err)
+}
+
 func (c *dungeonCommander) RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error) {
 	rep, err := c.client.RunEvents(ctx, leader, since, hasSince)
 	return rep, dungeonPortErr(err)
@@ -347,6 +353,13 @@ func (w dungeonWorld) PlayerGUID(name string) (wire.GUID, bool) {
 	}
 	w.s.askVisibleNames(w.pos())
 	return wire.EmptyGUID, false
+}
+
+// PlayerGUIDOfCounter is the guid of the player with this database counter on this character's own realm (the
+// module's binding card names a bot by its counter). It needs this character's own player guid, and nothing else:
+// no view of the player and no query.
+func (w dungeonWorld) PlayerGUIDOfCounter(counter uint64) (wire.GUID, bool) {
+	return wire.PlayerGUIDOnRealmOf(w.s.selfOrMover(), counter)
 }
 
 // pos is the mover's position, the centre of the name query's nearest-first list.
