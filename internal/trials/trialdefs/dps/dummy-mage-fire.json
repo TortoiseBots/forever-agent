@@ -1,0 +1,102 @@
+{
+  "id": "dummy-mage-fire",
+  "title": "Fire mage: rotation damage per spell and reaction on a training dummy",
+  "group": "ranged",
+  "class": "mage",
+  "spec": "fire",
+  "player": {
+    "class": "warrior",
+    "level": 40,
+    "talents": {
+      "tree": "arms",
+      "spells": [
+        16462,
+        12286
+      ]
+    },
+    "stance": 71,
+    "forced_role": null,
+    "auras": [],
+    "items": []
+  },
+  "bot": {
+    "class": "mage",
+    "spec": "fire",
+    "role": "dps",
+    "level": 40,
+    "gear": "blue",
+    "items": [],
+    "mana_pct": null,
+    "cc_mark": null
+  },
+  "situation": {
+    "kind": "dummy",
+    "dummy_entry": 2734,
+    "rotation": [
+      "Fireball",
+      "Fireball",
+      "Fireblast"
+    ]
+  },
+  "setup_checks": [
+    "player_level",
+    "player_visible",
+    "player_talents",
+    "player_stance",
+    "player_forced_role",
+    "bot_present",
+    "bot_level",
+    "bot_role",
+    "bot_spec",
+    "grouped",
+    "mobs_ready",
+    "config_read"
+  ],
+  "duration_s": 120,
+  "repeats": 3,
+  "min_valid_s": 60,
+  "rules": [
+    {
+      "id": "DUMMY-FIREBALL-DMG",
+      "desc": "Fireball mean damage per cast on the dummy meets the table floor",
+      "source": "spell data (base points + SP coefficient), table testdata/dummy_mage_fire.json",
+      "expect_today": "?",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "check": {
+        "metric": "dummy",
+        "spell": "Fireball",
+        "stat": "damage"
+      },
+      "pass_if": ">= 0",
+      "min_reps": 2
+    },
+    {
+      "id": "DUMMY-FIREBALL-REACT",
+      "desc": "Fireball mean reaction (able to act to cast start) on the dummy meets the table ceiling",
+      "source": "issue #18 reaction metrics, table testdata/dummy_mage_fire.json",
+      "expect_today": "?",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "check": {
+        "metric": "dummy",
+        "spell": "Fireball",
+        "stat": "reaction"
+      },
+      "pass_if": ">= 0",
+      "min_reps": 2
+    },
+    {
+      "id": "DUMMY-FIREBLAST-DMG",
+      "desc": "Fireblast mean damage per cast on the dummy meets the table floor",
+      "source": "spell data (base points + SP coefficient), table testdata/dummy_mage_fire.json",
+      "expect_today": "?",
+      "why_expect": "numbers to be measured live; the table carries nulls until the server proves them",
+      "check": {
+        "metric": "dummy",
+        "spell": "Fireblast",
+        "stat": "damage"
+      },
+      "pass_if": ">= 0",
+      "min_reps": 2
+    }
+  ]
+}

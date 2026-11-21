@@ -258,7 +258,12 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 		}
 	}
 	teardownTrial()
-	doc, err := score.ScoreTrialE(trialDir, trial)
+	var doc map[string]any
+	if kindOf(trial) == "dummy" {
+		doc, err = scoreDummyTrial(trialDir, trial)
+	} else {
+		doc, err = score.ScoreTrialE(trialDir, trial)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +464,11 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	if _, err := events.Normalise(repDir, trial); err != nil {
 		return err
 	}
-	if _, err := score.ScoreRepE(repDir, trial, nil); err != nil {
+	if kindOf(trial) == "dummy" {
+		if _, _, err := scoreDummyRep(repDir, trial); err != nil {
+			return err
+		}
+	} else if _, err := score.ScoreRepE(repDir, trial, nil); err != nil {
 		return err
 	}
 	r.noteRep(id, index, boolOf(setupDoc["ok"]), strOf(outcome["ended"]))
