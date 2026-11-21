@@ -67,6 +67,14 @@ type Item struct {
 	// Slot is the index inside Container: the player's own slot (0-18, 30-33, 35-62, ...) or the index inside the
 	// bag. SlotUnknown means the model holds the item but cannot place it.
 	Slot uint8
+	// ContainedIn is the container the item's own block names (UF::ItemData::ContainedIn): the character itself for
+	// a carried item, the bag's GUID inside a bag, zero for a block that has not named one yet. The live tracker
+	// uses it to check that a placement still agrees with the item's own word.
+	ContainedIn wire.GUID
+	// Unconfirmed is set while an own move touched this item and the server has not yet sent the slots that confirm
+	// where it is (items.Tracker): Container and Slot then hold the client's own best guess (or SlotUnknown once the
+	// guess's deadline passed), and no destructive action may trust them.
+	Unconfirmed bool
 
 	// direct is set on an unplaced item whose own data names the character itself as its container.
 	direct bool
@@ -96,6 +104,11 @@ type Inventory struct {
 	// Known reports whether the model holds the receiver's own player create: without it the inventory is empty
 	// for a reason, not because the character owns nothing.
 	Known bool
+	// Stale is set when the client lost an inventory change it could not decode (an update that named slots next to
+	// a field it does not read, a placement it could not keep): a position it shows may be wrong until the next
+	// own create (a relog or a map change). StaleReason says what was lost.
+	Stale       bool
+	StaleReason string
 
 	bank, buyback []Item
 }
@@ -235,6 +248,7 @@ func itemOf(w *objects.World, guid wire.GUID) (Item, bool) {
 		Count:         o.Info.Item.StackCount,
 		Durability:    o.Info.Item.Durability,
 		MaxDurability: o.Info.Item.MaxDurability,
+		ContainedIn:   o.Info.Item.ContainedIn,
 	}, true
 }
 

@@ -131,3 +131,14 @@ func UnitTarget(guid wire.GUID) SpellTarget {
 // SelfTarget is the target block of a self cast: no flags and no GUID, which the server resolves to the caster
 // (Spell.cpp:104-110 with CheckSrc/CheckDst at :7600-7604, and SpellCastTargets::Update).
 func SelfTarget() SpellTarget { return SpellTarget{} }
+
+// BuildSetAdvancedCombatLogging is CMSG_SET_ADVANCED_COMBAT_LOGGING: one bit, most significant first, then the
+// flush (ClientConfigPackets.cpp:77-80 reads Bits<1>(Enable)). The server's handler stores the flag on the player
+// (MiscHandler.cpp:1237-1240), and Object.cpp:1126-1148 then sends such a player the full log packet, whose
+// SpellCastLogData (CombatLogPacketsCommon.cpp:150-172) carries health and power with every event.
+func BuildSetAdvancedCombatLogging(enable bool) []byte {
+	b := wire.NewWriter()
+	b.WriteBit(enable)
+	b.FlushBits()
+	return b.Bytes()
+}

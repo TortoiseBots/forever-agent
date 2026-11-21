@@ -25,6 +25,16 @@ const (
 	actVerbOpen  = "open"
 	actVerbSelec = "select"
 	actVerbClose = "close"
+	actVerbInv   = "inv"
+
+	// Round R2's item actions (inventory_act.go). `open` keeps its R0 meaning (the NPC menu) and opens an item when
+	// the step names one.
+	actVerbEquip   = "equip"
+	actVerbStore   = "store"
+	actVerbSwap    = "swap"
+	actVerbSplit   = "split"
+	actVerbDestroy = "destroy"
+	actVerbUse     = "use"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -89,9 +99,10 @@ func ParseActStep(line string) (ActStep, error) {
 		step.Args[k] = v
 	}
 	switch verb {
-	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose:
+	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose, actVerbInv,
+		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use)", verb)
 	}
 	return step, nil
 }
@@ -156,11 +167,25 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 	case actVerbNPC:
 		return s.actNPC(ctx, a, step)
 	case actVerbOpen:
-		return s.actOpen(ctx, a, step)
+		return s.actOpenStep(ctx, a, step)
 	case actVerbSelec:
 		return s.actSelect(ctx, a, step)
 	case actVerbClose:
 		return s.actClose(ctx, a, step)
+	case actVerbInv:
+		return s.actInvStep(ctx, a, step)
+	case actVerbEquip:
+		return s.actEquip(ctx, a, step)
+	case actVerbStore:
+		return s.actStore(ctx, a, step)
+	case actVerbSwap:
+		return s.actSwap(ctx, a, step)
+	case actVerbSplit:
+		return s.actSplit(ctx, a, step)
+	case actVerbDestroy:
+		return s.actDestroy(ctx, a, step)
+	case actVerbUse:
+		return s.actUse(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}
@@ -361,6 +386,18 @@ func (s *session) nearestEntry(entry int32) *objects.Object {
 // flag, talk otherwise.
 func npcNeedsQuestHello(flags uint32) bool {
 	return flags&npc.NPCFlagQuestGiver != 0 && flags&npc.NPCFlagGossip == 0
+}
+
+// actOpenStep routes `open`: a step that names an item opens the item, one that names nothing opens the current
+// NPC's menu.
+func (s *session) actOpenStep(ctx context.Context, a *actState, step ActStep) error {
+	if _, ok := step.Args["entry"]; ok {
+		return s.actOpenItem(ctx, a, step)
+	}
+	if _, ok := step.Args["slot"]; ok {
+		return s.actOpenItem(ctx, a, step)
+	}
+	return s.actOpen(ctx, a, step)
 }
 
 // actOpen sends TALK_TO_GOSSIP when NpcFlags has GOSSIP 0x1, otherwise QUEST_GIVER_HELLO, and prints the menu. The

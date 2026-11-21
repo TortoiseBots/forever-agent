@@ -13,7 +13,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/slots"
 )
 
-const slotSetupUsage = "usage: forever-agent slot setup <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--mmaps-dir DIR] [--dungeons-from DIR] [--character NAME] [--slots FILE]"
+const slotSetupUsage = "usage: forever-agent slot setup <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--mmaps-dir DIR] [--dungeons-from DIR] [--character NAME] [--slots FILE]\n       forever-agent slot setup --forever <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--dungeons-from DIR] [--character NAME] [--slots FILE]"
 
 // slotManifest is the no-secret <dir>/slot.json written by slot setup.
 type slotManifest struct {
@@ -46,210 +46,71 @@ func slotSetupCmd(args []string, stdout, stderr io.Writer) int {
 	if code != exitOK {
 		return code
 	}
-	// Aliases so the body below reads as before.
-	holder, dirFlag := &o.holder, &o.dir
-	binaryFlag, dungeonsFlag := &o.binary, &o.dungeonsDir
-	mmapsFlag, dungeonsFromFlag := &o.mmapsDir, &o.dungeonsFrom
-	characterFlag, slotsPath := &o.character, &o.slotsPath
-	serverName, slotID := o.server, o.slot
-	if !leaseHolderRe.MatchString(*holder) {
-		fmt.Fprintln(stderr, "lease: --holder must be 1-64 letters, digits, . _ -")
-		return exitUsage
+	if o.forever {
+		return slotSetupForeverCmd(o, stdout, stderr)
 	}
-	if *slotsPath == "" {
-		*slotsPath = slots.DefaultPath()
+	b, code := slotSetupPrepare(o, stderr)
+	if code != exitOK {
+		return code
 	}
-	cfg, err := slots.Load(*slotsPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", err)
-		return exitUsage
-	}
-	server, slot, err := cfg.Find(serverName, slotID)
-	if err != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", err)
-		return exitUsage
-	}
-	if slot.Reserved != "" {
-		fmt.Fprintf(stderr, "slot setup: %s/%s is reserved (%s)\n", server.Name, slot.ID, slot.Reserved)
-		return exitSlotRefused
-	}
-	store := slots.NewStore(cfg, *slotsPath)
-	leaseID, err := slotSetupCheckLease(store, server.Name, slot.ID, *holder)
-	if err != nil {
-		fmt.Fprintf(stderr, "slot setup: %s/%s is not leased by %s: run forever-agent lease acquire %s --slot %s --holder %s first\n",
-			server.Name, slot.ID, *holder, server.Name, slot.ID, *holder)
-		return exitSlotRefused
-	}
+	server, slot := b.server, b.slot
 	// --mmaps-dir is validated before anything is created: a missing dir
 	// refuses like other slot refusals and leaves nothing behind.
 	var mmapsOverride string
-	if *mmapsFlag != "" {
-		mmapsOverride = slots.ExpandTilde(*mmapsFlag)
+	if o.mmapsDir != "" {
+		mmapsOverride = slots.ExpandTilde(o.mmapsDir)
 		if info, err := os.Stat(mmapsOverride); err != nil || !info.IsDir() {
 			fmt.Fprintf(stderr, "slot setup: --mmaps-dir %s is not a folder (copy the server's data/mmaps files there)\n", mmapsOverride)
 			return exitSlotRefused
 		}
 	}
-	character := slot.Character
-	if *characterFlag != "" {
-		character = *characterFlag
+	character, code := b.character(o.character, stderr)
+	if code != exitOK {
+		return code
 	}
-	if !slotSetupAllows(slot, character) {
-		fmt.Fprintf(stderr, "slot setup: %s/%s allows %s\n", server.Name, slot.ID, slotSetupAllowed(slot))
-		return exitUsage
+	// Claim the dir first, before any credential exists. Everything setup
+	// creates below is tracked for cleanup on failure; cleanup only removes
+	// setup-created paths inside the claimed dir.
+	c, code := slotSetupClaim(o.dir, o.holder, stderr)
+	if code != exitOK {
+		return code
 	}
-	dir := *dirFlag
-	if dir == "" {
-		home, herr := os.UserHomeDir()
-		if herr != nil {
-			fmt.Fprintf(stderr, "slot setup: %v\n", herr)
-			return exitUsage
-		}
-		dir = filepath.Join(home, "ta-"+*holder)
-	}
-	dir = slots.ExpandTilde(dir)
-	absDir, err := filepath.Abs(dir)
+	dir := c.dir
+	binDst, err := c.copyBinary(o.binary)
 	if err != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", err)
-		return exitUsage
+		return c.fail(stderr, "slot setup: %v", err)
 	}
-	dir = absDir
-	// Claim the dir first, before any credential exists: refuse a symlink
-	// --dir (or a symlink in any existing parent component), create it
-	// 0700, refuse a non-empty dir, chmod an empty one to 0700. Everything
-	// setup creates below is tracked for cleanup on failure; cleanup only
-	// removes setup-created paths inside the claimed dir.
-	if err := slotSetupCheckNoSymlink(dir); err != nil {
-		fmt.Fprintf(stderr, "%v\n", err)
-		return exitUsage
-	}
-	var created []string
-	var claimInfo os.FileInfo
-	cleanup := func() {
-		if claimInfo != nil {
-			// The dir was swapped under setup: never reach through it.
-			if cur, err := os.Lstat(dir); err != nil || cur.Mode()&os.ModeSymlink != 0 || !os.SameFile(claimInfo, cur) {
-				return
-			}
-		}
-		for _, p := range created {
-			if !slotSetupInsideDir(dir, p) {
-				continue
-			}
-			os.RemoveAll(p)
-		}
-	}
-	fail := func(format string, a ...any) int {
-		cleanup()
-		fmt.Fprintf(stderr, format+"\n", a...)
-		return exitUsage
-	}
-	if info, err := os.Lstat(dir); err == nil {
-		if !info.IsDir() {
-			fmt.Fprintf(stderr, "slot setup: %s exists and is not empty: pick a new --dir (setup never overwrites)\n", dir)
-			return exitUsage
-		}
-		entries, rerr := os.ReadDir(dir)
-		if rerr != nil {
-			fmt.Fprintf(stderr, "slot setup: %v\n", rerr)
-			return exitUsage
-		}
-		if len(entries) > 0 {
-			fmt.Fprintf(stderr, "slot setup: %s exists and is not empty: pick a new --dir (setup never overwrites)\n", dir)
-			return exitUsage
-		}
-		if err := os.Chmod(dir, 0o700); err != nil {
-			fmt.Fprintf(stderr, "slot setup: %v\n", err)
-			return exitUsage
-		}
-		claimInfo = info
-	} else if !os.IsNotExist(err) {
-		fmt.Fprintf(stderr, "slot setup: %v\n", err)
-		return exitUsage
-	} else if merr := os.MkdirAll(dir, 0o700); merr != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", merr)
-		return exitUsage
-	} else if merr := os.Chmod(dir, 0o700); merr != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", merr)
-		return exitUsage
-	} else if info, serr := os.Lstat(dir); serr != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", serr)
-		return exitUsage
-	} else {
-		claimInfo = info
-	}
-	// Resolve the claimed dir to its real path once (a refused-symlink
-	// check ran above, so this succeeds only on a plain dir): children
-	// are built from the real path, never through a later-swapped link.
-	realDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		fmt.Fprintf(stderr, "slot setup: %v\n", err)
-		return exitUsage
-	}
-	dir = realDir
-	binSrc := *binaryFlag
-	if binSrc == "" {
-		binSrc, err = os.Executable()
-		if err != nil {
-			return fail("slot setup: %v", err)
-		}
-	}
-	binDst := filepath.Join(dir, "forever-agent")
-	if err := copyFileExcl(binSrc, binDst, 0o755); err != nil {
-		return fail("slot setup: %v", err)
-	}
-	created = append(created, binDst)
 	settingsFrom := slots.ExpandTilde(slot.SettingsFrom)
 	src, err := config.Load(settingsFrom)
 	if err != nil {
-		return fail("%v", err)
+		return c.fail(stderr, "%v", err)
 	}
 	pw, err := src.Password(slot.Account)
 	if err != nil {
-		return fail("slot setup: %s does not hold the slot's account", slot.SettingsFrom)
+		return c.fail(stderr, "slot setup: %s does not hold the slot's account", slot.SettingsFrom)
 	}
-	dungeonsDir := *dungeonsFlag
-	if dungeonsDir == "" {
-		dungeonsDir = filepath.Join(dir, "dungeons")
-	}
-	// Only a dir setup created itself is tracked for cleanup: a
-	// pre-existing caller-supplied --dungeons-dir is never removed.
-	dungeonsMade, err := slotSetupEnsureDir(dungeonsDir, 0o755)
-	if err != nil {
-		return fail("slot setup: %v", err)
-	}
-	if dungeonsMade {
-		created = append(created, dungeonsDir)
-	}
-	// Copy seeded plans (backlog 56: the empty dungeons/ folder made
-	// follow_start/dungeon_run fail with 'no such file'). Copied files
-	// sit inside the claimed dir, so the normal cleanup removes them;
-	// a pre-existing --dungeons-dir keeps its old files (rename never
+	// Seeded plans (backlog 56: the empty dungeons/ folder made
+	// follow_start/dungeon_run fail with 'no such file'). Copied files sit
+	// inside the claimed dir, so the normal cleanup removes them; a
+	// pre-existing --dungeons-dir keeps its old files (rename never
 	// overwrites: it refuses instead).
-	var plansCopied int
-	var plansSource string
-	if *dungeonsFromFlag != "" {
-		copied, src, err := slotSetupCopyPlans(slots.ExpandTilde(*dungeonsFromFlag), dungeonsDir)
-		if err != nil {
-			return fail("slot setup: %v", err)
-		}
-		plansSource = src
-		plansCopied = len(copied)
-		created = append(created, copied...)
+	dungeonsDir, plansCopied, plansSource, err := c.seedDungeons(o.dungeonsDir, o.dungeonsFrom)
+	if err != nil {
+		return c.fail(stderr, "slot setup: %v", err)
 	}
 	tracesDir := filepath.Join(dir, "traces")
 	tracesMade, err := slotSetupEnsureDir(tracesDir, 0o755)
 	if err != nil {
-		return fail("slot setup: %v", err)
+		return c.fail(stderr, "slot setup: %v", err)
 	}
 	if tracesMade {
-		created = append(created, tracesDir)
+		c.created = append(c.created, tracesDir)
 	}
 	stateDir := slots.ExpandTilde(server.StateDir)
 	if stateDir == "" {
 		stateDir = filepath.Dir(settingsFrom)
 	} else if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return fail("slot setup: %v", err)
+		return c.fail(stderr, "slot setup: %v", err)
 	}
 	mmapsDir := slots.ExpandTilde(server.MmapsDir)
 	if mmapsDir == "" {
@@ -280,36 +141,22 @@ func slotSetupCmd(args []string, stdout, stderr io.Writer) int {
 	if slotSetupPreWriteHook != nil {
 		slotSetupPreWriteHook()
 	}
-	// Re-validate the lease identity immediately before writing settings:
+	// Re-validate the lease identity and the dir right before settings land:
 	// a takeover between the check and the write must leave no credentials.
-	cur, err := store.Get(server.Name, slot.ID)
-	if err != nil {
-		return fail("slot setup: %v", err)
+	if code := b.recheck(c, "settings", stderr); code != exitOK {
+		return code
 	}
-	if cur == nil || cur.Holder != *holder || cur.LeaseID != leaseID || store.IsStale(cur) {
-		cleanup()
-		fmt.Fprintf(stderr, "slot setup: %s/%s is not leased by %s: run forever-agent lease acquire %s --slot %s --holder %s first\n",
-			server.Name, slot.ID, *holder, server.Name, slot.ID, *holder)
-		return exitSlotRefused
-	}
-	// The dir must still be the claimed one (not a swapped-in symlink)
-	// right before settings.json lands: re-check via Lstat.
-	curInfo, err := os.Lstat(dir)
-	if err != nil || curInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(claimInfo, curInfo) {
-		return fail("slot setup: %s was replaced during setup: refusing to write settings", dir)
-	}
-
 	settingsPath := filepath.Join(dir, "settings.json")
 	if err := slotSetupWriteSettings(settingsPath, dst, stateDir); err != nil {
-		return fail("slot setup: %v", err)
+		return c.fail(stderr, "slot setup: %v", err)
 	}
-	created = append(created, settingsPath)
+	c.created = append(c.created, settingsPath)
 	tokenFile := filepath.Join(dir, fmt.Sprintf("rpc-%d.token", slot.Port))
 	manifest := slotManifest{
 		Server:    server.Name,
 		Slot:      slot.ID,
-		Holder:    *holder,
-		LeaseID:   leaseID,
+		Holder:    o.holder,
+		LeaseID:   b.leaseID,
 		Account:   slot.Account,
 		Character: character,
 		Port:      slot.Port,
@@ -318,24 +165,10 @@ func slotSetupCmd(args []string, stdout, stderr io.Writer) int {
 		Settings:  settingsPath,
 		PIDFile:   filepath.Join(dir, "agent.pid"),
 		TokenFile: tokenFile,
-		SlotsPath: *slotsPath,
-		Created:   store.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		SlotsPath: b.slotsPath,
 	}
-	rawManifest, err := json.Marshal(manifest)
-	if err != nil {
-		return fail("slot setup: %v", err)
-	}
-	if err := writeFileExcl(filepath.Join(dir, "slot.json"), rawManifest, 0o600); err != nil {
-		return fail("slot setup: %v", err)
-	}
-	created = append(created, filepath.Join(dir, "slot.json"))
-	if err := store.SetDir(server.Name, slot.ID, *holder, leaseID, dir); err != nil {
-		if r, ok := err.(*slots.Refusal); ok {
-			cleanup()
-			fmt.Fprintf(stderr, "slot setup: %s\n", r.Msg)
-			return exitSlotRefused
-		}
-		return fail("slot setup: %v", err)
+	if code := b.writeManifest(c, manifest, stderr); code != exitOK {
+		return code
 	}
 	fmt.Fprintf(stdout, "slot %s/%s ready in %s\n", server.Name, slot.ID, dir)
 	fmt.Fprintf(stdout, "account %s, character %s, port %d\n", slot.Account, character, slot.Port)
@@ -346,7 +179,7 @@ func slotSetupCmd(args []string, stdout, stderr io.Writer) int {
 	if mmapsOverride != "" {
 		fmt.Fprintf(stdout, "mmaps: %s\n", mmapsOverride)
 	}
-	if *dungeonsFromFlag != "" {
+	if o.dungeonsFrom != "" {
 		fmt.Fprintf(stdout, "dungeons: %d plans copied from %s\n", plansCopied, plansSource)
 	}
 	return exitOK

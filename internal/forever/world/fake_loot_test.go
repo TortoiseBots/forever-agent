@@ -458,6 +458,8 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 		f.instWire = append(f.instWire, w)
 		f.mu.Unlock()
 		switch w {
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGTimeSyncResponse, fakeCMSGMoveInitActiveMover, fakeCMSGSetSelection, fakeCMSGAttackStop,
 			fakeCMSGMoveHeartbeat, fakeCMSGMoveSetFacing:
 		case fakeCMSGPing:
