@@ -3,6 +3,7 @@ package world
 import (
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -238,4 +239,30 @@ func TestGMCastPaceZeroBurstDoesNotPanic(t *testing.T) {
 	if err := s.checkGMCastPace(".cast 1"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestServeGMTeleToAPlaceNeedsTheServersOwnMove: a `.tele <place>` names no point, so its proof is the server moving
+// this character (its own SMSG_MOVE_TELEPORT); silence with no move is not confirmed.
+func TestServeGMTeleToAPlaceNeedsTheServersOwnMove(t *testing.T) {
+	old := teleportConfirmWait
+	teleportConfirmWait = 600 * time.Millisecond
+	defer func() { teleportConfirmWait = old }()
+	f := newFakeServer(t)
+	var moves atomic.Bool
+	f.serveGMScript = func(said string) (bool, *[3]float32) {
+		if strings.HasPrefix(said, ".tele ") {
+			if moves.Load() {
+				return true, &[3]float32{1300, 2300, 60}
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+	defer f.close()
+	a := startGM(t, f)
+	a.mustFail(t, "gm", map[string]any{"text": ".tele ragefire"}, -32003, "teleport is not confirmed")
+	moves.Store(true)
+	a.mustCall(t, "gm", map[string]any{"text": ".tele ragefire"})
+	a.stop(t)
+	f.wait(t)
 }
