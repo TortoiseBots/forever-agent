@@ -390,23 +390,37 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	out := Result{}
 	var cards []tbcmd.Card
 	if v.Guard {
-		// The guard's read is also the ownership read: it is fresh, and it is the one the refusal shows.
+		// The guard's read is also the ownership read: it is fresh, and it is the one the refusal shows. A
+		// named lead scopes the call to that lead's party before the run check, so the check and the card the
+		// caller sees are that party's.
 		c, card, err := b.guard(ctx, o.PauseRun)
-		cards, out.Card = c, card
 		if err != nil {
+			out.Card = card
 			return out, err
 		}
+		scoped, want, err := oneLead(c, o.Lead)
+		if err != nil {
+			// The refusal names the lead, and the card the call had read goes with it: a one-lead
+			// character keeps its card, a multi-lead character keeps the run-active card the guard
+			// chose (or none when the character commands nothing).
+			if want == nil {
+				want = card
+			}
+			out.Card = want
+			return out, err
+		}
+		cards, out.Card = scoped, want
 	}
 	if v.Path == PathRole {
-		// The guard's read is the ownership read: it was taken just before the line below goes out.
+		// A role has its own typed caller: it never goes through the order paths.
 		return b.role(ctx, args, cards)
 	}
-	if len(cards) == 0 {
-		// An order addresses `party`: the bots bound to the sender. No card means the call names no bot at all.
-		return out, &NotOwnedError{Target: "party", Kind: "order"}
-	}
-	path := b.orderPath(v)
 	if v.Path == PathCmd {
+		// The typed path is not in this build: refuse before the probe, so no probe line goes out naming a
+		// package whose answer has no parser behind it yet (round C5).
+		if b.orderPath(v) == nil {
+			return out, &NotAvailableError{Verb: v.Name, Why: PathName}
+		}
 		in, err := b.probe(ctx, v.Package)
 		if err != nil {
 			return out, err
@@ -415,8 +429,10 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 			return out, &NotAvailableError{Verb: v.Name, Package: v.Package}
 		}
 	}
-	if path == nil {
-		return out, &NotAvailableError{Verb: v.Name, Why: noPathWhy}
+	path := b.orderPath(v)
+	if path == nil && v.Path != PathRole {
+		// A role has its own typed caller below; only a verb whose path has not landed refuses here.
+		return out, &NotAvailableError{Verb: v.Name, Why: PathName}
 	}
 	out.Sent = []string{orderLine(v.Path, v.Name, args)}
 	rep, err := path.Send(ctx, v.Name, args)
@@ -447,11 +463,8 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	return out, nil
 }
 
-// noPathWhy is the reason a verb whose module package answers is still refused: the agent has no parser for the
-// package's answer in this build.
-const noPathWhy = "the module answers .tb cmd; this build has no typed cmd path"
-
-// orderPath is the path a row sends on; a cmd row has none until the package's parser lands.
+// orderPath is the path a row sends on; a cmd row has none until the package's parser lands (round C5): the
+// refusal names that path, and no probe line is sent for it.
 func (b *TB) orderPath(v Verb) OrderPath {
 	switch v.Path {
 	case PathOrder:
@@ -543,6 +556,28 @@ func (b *TB) guard(ctx context.Context, pause bool) ([]tbcmd.Card, *tbcmd.Card, 
 		return cards, &cards[0], nil
 	}
 	return cards, nil, nil
+}
+
+// oneLead scopes the guard's cards to the named lead: the caller addresses only that lead's party. A name the
+// character commands nothing under is a NotOwnedError before any line goes out; an empty name on a character
+// with one card uses that card, so an old caller that never named a lead keeps working.
+func oneLead(cards []tbcmd.Card, lead string) ([]tbcmd.Card, *tbcmd.Card, error) {
+	if strings.TrimSpace(lead) == "" {
+		if len(cards) == 1 {
+			return cards, &cards[0], nil
+		}
+		return cards, nil, &NotOwnedError{Target: "party", Kind: "order"}
+	}
+	name, err := chat.NormaliseName(lead)
+	if err != nil {
+		return cards, nil, &UsageError{Msg: "lead: " + err.Error()}
+	}
+	for i := range cards {
+		if strings.EqualFold(cards[i].Lead, name) {
+			return []tbcmd.Card{cards[i]}, &cards[i], nil
+		}
+	}
+	return cards, nil, &NotOwnedError{Target: name, Kind: "lead"}
 }
 
 // wait polls the party's state for the queued bots' own order lines and stops as soon as every one is answered,
@@ -759,15 +794,16 @@ func (b *TB) Available(ctx context.Context, verb string) (bool, string, error) {
 	case PathCut:
 		return false, "not ported on this server", nil
 	case PathCmd:
+		// The typed path is not in this build: refuse before the probe, like Order does.
+		if b.orderPath(v) == nil {
+			return false, PathName, nil
+		}
 		in, err := b.probe(ctx, v.Package)
 		if err != nil {
 			return false, "", err
 		}
 		if !in {
 			return false, "needs module package " + v.Package, nil
-		}
-		if b.orderPath(v) == nil {
-			return false, noPathWhy, nil
 		}
 	}
 	return true, "", nil
