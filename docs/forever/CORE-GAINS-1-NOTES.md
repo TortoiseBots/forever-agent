@@ -3,8 +3,8 @@
 ForeverCore rev `d02645dd21`; agent branch `forever-core-gains` from `origin/main`. The round covers items 1-4 of
 `FOREVER-AGENT-CORE-GAINS.md`: decision A (advanced combat log), B (pushed threat), C (encounters) and D (six
 combat-log kinds). No private capture bytes, names or values are in the tree; every fixture was built by hand from
-the core's writer, cited per parser. The client still sends only packets a real 1.60 client sends, and the four sends
-this round adds or keeps are the login burst's, the attack/cast traffic and the chat channel.
+the core's writer, cited per parser. The client still sends only packets a real 1.60 client sends; the only new send
+this round is the advanced-log flag, beside the login burst, the attack/cast traffic and the chat channel.
 
 ## A. The advanced combat log
 
@@ -21,9 +21,10 @@ current power bar. The parsers already read that block; this round **exposes** i
 
 - `world.CombatRow` gains `sample: {health, power, power_type}` (the first `SpellLogPowerData` entry is the unit's own
   bar, `CombatLogPacketsCommon.cpp:35-45`), written only when the packet carried a log block.
-- The rows that now pass the block on: `melee` (the attacker-state update's full form and a landed log),
-  `spell_damage`, `heal`, `periodic`, `absorb` and `environmental` (the last two describe the victim, per their send
-  sites). Nothing polls `.tb state` for this.
+- The rows that now pass the block on: `melee` (the attacker-state update's full form; the landed-log copy is
+  parsed for its layout but the server sends it only to the swing's attacker and victim, so it is not this
+  observer's row), `spell_damage`, `heal`, `periodic`, `absorb` and `environmental` (the last two describe the
+  victim, per their send sites). Nothing polls `.tb state` for this.
 
 A handful of health/mana points therefore sit on every combat event, which is what the bug hunter's healer-mana and
 overkill evidence, and a trials repeat's 1 Hz `samples.jsonl`, were missing between ticks.
@@ -102,7 +103,7 @@ success, arrival time — drained by the driver. `SMSG_BOSS_KILL` right after an
 |---|---|---|---|
 | `interrupt` | `SMSG_SPELL_INTERRUPT_LOG` `0x67000D` | interrupter / interrupted unit | `spell_id` is the interrupting spell, `interrupted_spell_id` the stopped cast |
 | `dispel` | `SMSG_SPELL_DISPELL_LOG` `0x670007` | dispeller / target | `spell_id` is the dispel, `dispelled[]` the auras (spell, harmful) |
-| `absorb` | `SMSG_SPELL_ABSORB_LOG` `0x67000C` | shield caster / victim | `spell_id` is the shield, `spell_id`+`absorbed_spell_id` for the incoming spell, `amount` absorbed, sample (victim) |
+| `absorb` | `SMSG_SPELL_ABSORB_LOG` `0x67000C` | shield caster / victim | `spell_id` is the shield, `absorbed_spell_id` the incoming spell, `amount` absorbed, sample (victim) |
 | `miss` | `SMSG_SPELL_MISS_LOG` `0x670034` | caster / each victim | one row per entry, `reason` = miss reason (dodge, parry, evade, immune, …) |
 | `resist` | `SMSG_PROC_RESIST` `0x450205` | caster / target | `reason: proc` |
 | `immune` | `SMSG_SPELL_OR_DAMAGE_IMMUNE` `0x67001D` | caster / victim | `IsPeriodic` is parsed, not written to the row |
