@@ -211,6 +211,19 @@ const (
 
 	SMSGGameObjectCustomAnim uint32 = 0x450068
 	SMSGGameObjectDespawn    uint32 = 0x450069
+
+	// The item actions of round R2 (Opcodes.h:88-95, 323, 732, 984, 1000-1001, 1051, 1793): the client's
+	// inventory moves and the two answers that carry an item gain and a refusal.
+	CMSGAutoEquipItem          uint32 = 0x400004
+	CMSGAutoStoreBagItem       uint32 = 0x400005
+	CMSGSwapItem               uint32 = 0x400006
+	CMSGSwapInvItem            uint32 = 0x400007
+	CMSGSplitItem              uint32 = 0x400008
+	CMSGAutoEquipItemSlot      uint32 = 0x400009
+	CMSGDestroyItem            uint32 = 0x3D016A
+	CMSGUseItem                uint32 = 0x3D016F
+	CMSGOpenItem               uint32 = 0x3D0211
+	SMSGInventoryChangeFailure uint32 = 0x680005
 )
 
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
@@ -303,6 +316,16 @@ var clientNames = map[uint32]string{
 	CMSGLootRoll:         "CMSG_LOOT_ROLL",
 	CMSGGameObjUse:       "CMSG_GAME_OBJ_USE",
 	CMSGGameObjReportUse: "CMSG_GAME_OBJ_REPORT_USE",
+
+	CMSGAutoEquipItem:     "CMSG_AUTO_EQUIP_ITEM",
+	CMSGAutoEquipItemSlot: "CMSG_AUTO_EQUIP_ITEM_SLOT",
+	CMSGAutoStoreBagItem:  "CMSG_AUTO_STORE_BAG_ITEM",
+	CMSGSwapItem:          "CMSG_SWAP_ITEM",
+	CMSGSwapInvItem:       "CMSG_SWAP_INV_ITEM",
+	CMSGSplitItem:         "CMSG_SPLIT_ITEM",
+	CMSGDestroyItem:       "CMSG_DESTROY_ITEM",
+	CMSGUseItem:           "CMSG_USE_ITEM",
+	CMSGOpenItem:          "CMSG_OPEN_ITEM",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

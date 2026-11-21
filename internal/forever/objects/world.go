@@ -701,6 +701,14 @@ func mergeInfo(dst *Info, src Info) {
 		if f.InvSlots {
 			dst.player().InvSlots = src.Player.InvSlots
 		}
+		if f.InvSlotDeltas {
+			pl := dst.player()
+			for slot, guid := range src.Player.InvSlotDeltas {
+				if slot >= 0 && slot < len(pl.InvSlots) {
+					pl.InvSlots[slot] = guid
+				}
+			}
+		}
 		if f.Coinage {
 			dst.player().Coinage = src.Player.Coinage
 		}
