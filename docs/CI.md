@@ -10,13 +10,55 @@ Push-only: PR gating is unchanged (`test` and `navmesh` run on pushes to `ci/**`
 
 ## `test.yml` — the PR gate
 
-`test` runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
-branch). It runs `make fmt-check vet test` (gofmt, `go vet`, a no-cgo build, `go test -race ./...`), then the
-differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50
-passed sub-tests fails the step, so the table cannot go green without Python), then `staticcheck ./...` with the
-pinned release **2026.2.2** (`go install honnef.co/go/tools/cmd/staticcheck@2026.2.2`), then a cgo build.
-The repo has no suppressions: a staticcheck finding is fixed in the code or, when a check is a false positive, disabled
-one check at a time in a commented `staticcheck.conf` (never a whole category).
+It runs on every push to `dev`/`main`/`ci/**` and every non-draft PR whose base is either branch (or a stacked feature
+branch), as parallel jobs that end in one job named `test` (12 jobs a run; the org runs at most 20 at once):
+
+| Job | What it runs |
+|---|---|
+| `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
+| `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
+| `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
+| `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
+
+The staticcheck binary is cached (`actions/cache`) on the pinned version and the hash of `go.mod` (the Go version it is
+built with), so a warm run skips the `go install`. The repo has no suppressions: a staticcheck finding is fixed in the
+code or, when a check is a false positive, disabled one check at a time in a commented `staticcheck.conf` (never a whole
+category). Changing the pin means changing `STATICCHECK_VERSION` in the workflow.
+
+### The race shards
+
+Two packages are far longer than the rest: `cmd/forever-agent` (about 1500 top-level tests, 8-10 minutes under `-race`)
+and `internal/forever/world` (about 430 tests, about 10 minutes). Each of them is a group of 3 shards split **by test
+name**; every other package (about 120) is the `rest` group, split **by package**.
+
+- **By test name** (`group` `cmd` and `world`): `tools/ci/shard-tests.sh` lists the package's `Test*`, `Fuzz*` and
+  `Example*` names (`go test -list`; fuzz targets run their seeds and examples run too; benchmarks are not run by
+  `go test` and are left out), sorts them and deals them to the shards round robin (name 0 to shard 0, name 1 to shard
+  1, ...). A shard runs `go test -race -v -run '^(A|B|...)$'`; sub-tests run with their parent. A new test lands in a
+  shard by itself, there is no list to maintain. The deal is by count, not by time.
+- **By package** (`group` `rest`): `tools/ci/shard-pkgs.sh` takes `go list ./...` minus the two packages above and packs
+  the rest by the seconds in `tools/ci/pkg-times.txt` (greedy, longest first). A package that is missing from that file
+  (a new one) counts as 1 s and goes to the lightest shard, so it is never dropped; a name in the file that no longer
+  exists is ignored. `shard-pkgs.sh load 3 <list> tools/ci/pkg-times.txt` prints the estimated seconds per shard. When a
+  package grows a lot, update its line (the `ok ... 12.3s` lines of a CI run give the numbers); a stale file only makes
+  the shards uneven, it cannot drop a package.
+- **No test can be dropped**: each shard writes down what its `go test` log shows as run (top-level test names, or the
+  packages with a result line) and uploads it. `race-shards-check` downloads the lists and runs
+  `shard-tests.sh check <full list> <shard lists>` per group, which fails on a test or package that no shard ran, one that
+  ran twice, or a name outside the full list. The full list is computed fresh in that job: `go test -list` for the two
+  packages, `shard-pkgs.sh list` for `rest` (which itself fails if one of the two packages stops existing, so a rename
+  cannot silently move it). Both scripts have a `selftest` (partitions for several shard counts, a dropped name, a
+  duplicate, an unknown name, a new package) that runs in `lint`.
+
+The shard count is 3 everywhere (`SHARDS` and the `shard` matrix in `test.yml`, and the `3` in the check step): one more
+shard per group is nine more jobs, so stay inside the 12 jobs a run that the org limit leaves room for.
+
+Locally, one shard of a long package:
+
+```sh
+tools/ci/shard-tests.sh list ./cmd/forever-agent >all-tests.txt
+go test -race -count=1 -timeout 20m -run "$(tools/ci/shard-tests.sh regex 0 3 all-tests.txt)" ./cmd/forever-agent
+```
 
 ## `navmesh.yml` — the real map files
 
