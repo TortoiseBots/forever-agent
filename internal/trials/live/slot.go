@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 	"github.com/pjerra/forever-agent/internal/slots"
 )
 
@@ -30,6 +31,12 @@ type ServerExt struct {
 	// ScratchBot is the dedicated character the data check learns spells on
 	// (`.tb learn` persists): never a bot_pool bot, never a trial's hire.
 	ScratchBot string `json:"scratch_bot"`
+	// SOAP, when set, is the server-console backend the setup uses with no
+	// client login (the SOAP endpoint's executeCommand); SOAPSetup are the
+	// console commands it sends before provisioning. The block names a
+	// password file or an environment variable, never the password.
+	SOAP      *soap.Config `json:"soap,omitempty"`
+	SOAPSetup []string     `json:"soap_setup,omitempty"`
 }
 
 // SlotsFile is a slots file plus the runner's optional per-server `forever`

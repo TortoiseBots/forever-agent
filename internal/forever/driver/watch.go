@@ -611,6 +611,7 @@ func (r *Run) drainCombat(w *watchRun) {
 				r.logf("watch: combat log: the writes answer again")
 			}
 			w.combatRows += written
+			r.rec.CombatEvents(rows)
 		}
 		if next <= w.combatSeq {
 			return

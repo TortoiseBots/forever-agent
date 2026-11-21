@@ -29,6 +29,7 @@ Strict JSON, no comments. The top level holds `scenario` (lower-case name), top-
 | `section` | prints `=== STEP n: <title>` and moves the match window |
 | `mark` | moves the match window |
 | `gm` | a `.`-command (`text`) |
+| `soap` | one console-capable command on the server's SOAP endpoint (`text`), with no session; needs the `--soap-*` flags, expands variables, and sends only the SOAP setup allow-list (`.saveall`, `.pinfo`, `.instance setbossstate`) |
 | `bot` | a `.bot` command without `.bot` (`command`) |
 | `addon_send` | an addon message (`text`, `channel`, `prefix`, `to`) |
 | `rpc` | any agent method (`method`, `params`, `save`, `record_result`, `ignore_error`) |
@@ -73,6 +74,8 @@ Every `run` flag and its default:
 | `--var` | none, repeatable | override a file var (the name must exist) |
 | `--session` | none, repeatable | override a session: `NAME=ADDR[@TOKENFILE]` (the name must exist; the address is re-checked for loopback) |
 | `--slot` | none, repeatable | a forever session's serve slot dir: `NAME=DIR` (or a bare `DIR` for a one-session file); the address and token come from that dir |
+| `--soap-host` / `--soap-port` / `--soap-user` | `127.0.0.1` / `7878` / none | the console backend for `soap` steps; `--soap-user` enables it |
+| `--soap-password-file` / `--soap-password-env` | none / `FOREVER_SOAP_PASSWORD` | where the console password comes from; never printed |
 
 The run writes `raw.txt` (seq, times, expanded text), `norm.txt` (templates, no timings, DB counts kept), `transcript.jsonl` (one object per line) and `result.json`. Exit 0 when every check passed, 14 when a check failed, 15 on abort or error, 2 on usage. `scenario` uses plain flag parsing: put flags before the file name. On/off flags take `=` (`--force=true`); a space-separated value is read as the file instead.
 

@@ -234,6 +234,7 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		{"act result", reflect.TypeFor[ServeActResult](), reflect.TypeFor[serveclient.ActResult]()},
 		{"combat row", reflect.TypeFor[CombatRow](), reflect.TypeFor[serveclient.CombatRow]()},
 		{"combat actor", reflect.TypeFor[CombatActor](), reflect.TypeFor[serveclient.CombatActor]()},
+		{"combat point", reflect.TypeFor[CombatPoint](), reflect.TypeFor[serveclient.CombatPoint]()},
 	} {
 		if d, c := jsonKeys(p.daemon), jsonKeys(p.client); !slices.Equal(d, c) {
 			t.Errorf("%s: daemon keys %v, client keys %v", p.name, d, c)

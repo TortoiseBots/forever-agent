@@ -9,6 +9,7 @@
 package objects
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -18,27 +19,29 @@ import (
 // Movement flags (MovementInfo.h:34-92). Only the ones this round names are listed; the client writes the rest
 // as they come from the object's create block.
 const (
-	FlagForward          uint64 = 0x00000001
-	FlagBackward         uint64 = 0x00000002
-	FlagStrafeLeft       uint64 = 0x00000004
-	FlagStrafeRight      uint64 = 0x00000008
-	FlagLeft             uint64 = 0x00000010
-	FlagRight            uint64 = 0x00000020
-	FlagPitchUp          uint64 = 0x00000040
-	FlagPitchDown        uint64 = 0x00000080
-	FlagWalking          uint64 = 0x00000100
-	FlagDisableGravity   uint64 = 0x00000200
-	FlagRoot             uint64 = 0x00000400
-	FlagFalling          uint64 = 0x00000800
-	FlagFallingFar       uint64 = 0x00001000
-	FlagSwimming         uint64 = 0x00100000
-	FlagAscending        uint64 = 0x00200000
-	FlagDescending       uint64 = 0x00400000
-	FlagCanFly           uint64 = 0x00800000
-	FlagFlying           uint64 = 0x01000000
-	FlagSplineElev       uint64 = 0x02000000
-	FlagWaterwalking     uint64 = 0x04000000
-	FlagFallingSlow      uint64 = 0x08000000
+	FlagForward        uint64 = 0x00000001
+	FlagBackward       uint64 = 0x00000002
+	FlagStrafeLeft     uint64 = 0x00000004
+	FlagStrafeRight    uint64 = 0x00000008
+	FlagLeft           uint64 = 0x00000010
+	FlagRight          uint64 = 0x00000020
+	FlagPitchUp        uint64 = 0x00000040
+	FlagPitchDown      uint64 = 0x00000080
+	FlagWalking        uint64 = 0x00000100
+	FlagDisableGravity uint64 = 0x00000200
+	FlagRoot           uint64 = 0x00000400
+	FlagFalling        uint64 = 0x00000800
+	FlagFallingFar     uint64 = 0x00001000
+	FlagSwimming       uint64 = 0x00100000
+	FlagAscending      uint64 = 0x00200000
+	FlagDescending     uint64 = 0x00400000
+	FlagCanFly         uint64 = 0x00800000
+	FlagFlying         uint64 = 0x01000000
+	FlagSplineElev     uint64 = 0x02000000
+	FlagWaterwalking   uint64 = 0x04000000
+	FlagFallingSlow    uint64 = 0x08000000
+	// FlagKnockback is MOVEMENTFLAG_KNOCKBACK (MovementInfo.h:62): set while the mover is flying from a knockback.
+	FlagKnockback        uint64 = 0x40000000
 	FlagDisableCollision uint64 = 0x20000000
 	FlagTouchingGround   uint64 = 0x80000000
 	FlagHover            uint64 = 0x0800000000000000
@@ -103,8 +106,16 @@ func ReadMovementInfo(b *wire.Buffer) (MovementInfo, error) {
 	removedForces := b.ReadU32()
 	mi.MoveIndex = b.ReadU32()
 	mi.GravityModifier = b.ReadFloat32()
+	// A count the payload cannot hold is refused before the loop: a crafted 0xFFFFFFFF would otherwise spin four
+	// billion iterations on the session goroutine (each reads past the end and only sticks b.Err).
+	if uint64(removedForces) > uint64(b.Remaining()) {
+		return mi, fmt.Errorf("objects: movement info names %d removed forces with %d byte(s) left", removedForces, b.Remaining())
+	}
 	for range removedForces {
 		wire.ReadPackedGUID(b) // RemoveForcesIDs (:173-174)
+		if b.Err() != nil {
+			return mi, b.Err()
+		}
 	}
 	hasStandingOn := b.ReadBit()
 	hasTransport := b.ReadBit()

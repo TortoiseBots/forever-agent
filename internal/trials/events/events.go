@@ -34,14 +34,16 @@ var KindMap = map[string]string{
 	"death":        "death",
 	// The core-gains round's combat-log kinds: an interrupt is the Kick/Counterspell trials' answer, a dispel
 	// ends a debuff episode for the bug hunter, and the rest join the stream as their own event kinds.
-	"interrupt":     "interrupt",
-	"dispel":        "dispel",
-	"absorb":        "absorb",
-	"miss":          "miss",
-	"resist":        "resist",
-	"immune":        "immune",
-	"instakill":     "instakill",
-	"environmental": "damage",
+	"interrupt":      "interrupt",
+	"dispel":         "dispel",
+	"absorb":         "absorb",
+	"miss":           "miss",
+	"resist":         "resist",
+	"immune":         "immune",
+	"instakill":      "instakill",
+	"environmental":  "damage",
+	"knockback":      "knockback",
+	"knockback_land": "knockback_land",
 }
 
 // Row is one events/samples/marks row.
