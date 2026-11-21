@@ -833,6 +833,58 @@ func (w *World) PlayerByName(name string) (wire.GUID, bool) {
 	return wire.EmptyGUID, false
 }
 
+// ViewPlayerByName is the guid of the one player in view (in the object model) whose name is this, case-insensitively.
+// A cached name of a player not in view (a bystander met before the dungeon, someone who left) is no match, and a
+// name two players in view bear finds none, so a caller never labels the wrong player.
+func (w *World) ViewPlayerByName(name string) (wire.GUID, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var found wire.GUID
+	n := 0
+	for guid, o := range w.objects {
+		if guid.Type() != guidTypePlayer {
+			continue
+		}
+		have := o.Name
+		if have == "" {
+			have = w.players[guid]
+		}
+		if have != "" && strings.EqualFold(have, name) {
+			found = guid
+			n++
+		}
+	}
+	if n != 1 {
+		return wire.EmptyGUID, false
+	}
+	return found, true
+}
+
+// UnknownPlayers lists up to limit players in view whose name this client does not have yet, nearest first, leaving
+// out those skip names. The limit counts only the players kept, so creatures and skipped players never use it up.
+func (w *World) UnknownPlayers(x, y, z float32, limit int, skip func(wire.GUID) bool) []wire.GUID {
+	units := w.Units(x, y, z)
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var out []wire.GUID
+	for _, o := range units {
+		if len(out) >= limit {
+			break
+		}
+		if o.GUID.Type() != guidTypePlayer || o.Name != "" {
+			continue
+		}
+		if _, ok := w.players[o.GUID]; ok {
+			continue
+		}
+		if skip != nil && skip(o.GUID) {
+			continue
+		}
+		out = append(out, o.GUID)
+	}
+	return out
+}
+
 // SetEntryName caches a creature's name by entry.
 func (w *World) SetEntryName(entry int32, name string) {
 	w.mu.Lock()

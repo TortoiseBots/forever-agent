@@ -305,24 +305,48 @@ func friendlyUnit(o *objects.Object) bool {
 	return o.Info.HasUnit && o.Info.NpcFlags != 0
 }
 
-// dungeonNameAskEvery bounds how often PlayerGUID asks the server for the names of the players in view.
-const dungeonNameAskEvery = 5 * time.Second
+// nameAsk is the state of the name queries sent for one player guid.
+type nameAsk struct {
+	at    time.Time
+	tries int
+}
 
-// PlayerGUID is the guid of the player with this name, from the three places this client can learn it: the name cache,
-// the party roster (when this character is a member) and, for a player in view whose name is still unknown, the
-// server's own answer to a name query. A watch's character is usually not in the party it watches and nothing else in
-// a dungeon session asks for names, so without the query every member of a frame had an empty guid.
+// nameAskBackoff is how long an unanswered guid waits before it is asked again, by the number of queries already
+// sent for it: 5 s after the first, 30 s after the second, then at most every 2 minutes.
+func nameAskBackoff(tries int) time.Duration {
+	switch {
+	case tries <= 1:
+		return 5 * time.Second
+	case tries == 2:
+		return 30 * time.Second
+	}
+	return 2 * time.Minute
+}
+
+// PlayerGUID is the guid of the player with this name, from the places this client can learn it: the party roster
+// (when this character is a member; it is authoritative, and a name two members share stops here as ambiguous),
+// the player in view who bears the name and, for a player in view whose name is still unknown, the server's own
+// answer to a name query. A cached name of a player no longer in view is no answer. A watch's character is usually
+// not in the party it watches and nothing else in a dungeon session asks for names, so without the query every
+// member of a frame had an empty guid.
+//
+// It never waits: the query is sent and what is known now is returned (empty for a member not yet named). The answer
+// is applied by the session's own packet handler (the dungeon clock's Sleep drains it), and fills the cache for a
+// later frame. The watch driver, this port and the clock's Sleep all run on the one session goroutine, which is the
+// only reader of s.events, so nothing here can steal a packet from another reader.
 func (w dungeonWorld) PlayerGUID(name string) (wire.GUID, bool) {
-	if g, ok := w.s.world.PlayerByName(name); ok {
+	g, found, ambiguous := w.s.rosterGUID(name)
+	if found {
 		return g, true
 	}
-	if g, ok := w.s.rosterGUID(name); ok {
-		return g, true
-	}
-	if !w.s.askVisibleNames(w.pos()) {
+	if ambiguous {
 		return wire.EmptyGUID, false
 	}
-	return w.s.world.PlayerByName(name)
+	if g, ok := w.s.world.ViewPlayerByName(name); ok {
+		return g, true
+	}
+	w.s.askVisibleNames(w.pos())
+	return wire.EmptyGUID, false
 }
 
 // pos is the mover's position, the centre of the name query's nearest-first list.
@@ -331,31 +355,62 @@ func (w dungeonWorld) pos() driver.Vec3 {
 	return pos
 }
 
-// rosterGUID is the guid of the party member with this name, when this character's party roster is valid.
-func (s *session) rosterGUID(name string) (wire.GUID, bool) {
+// rosterGUID is the guid of the party member with this name, when this character's party roster is valid. A name two
+// members share is reported as ambiguous, so a frame never labels the wrong member and the caller goes no further.
+func (s *session) rosterGUID(name string) (guid wire.GUID, found, ambiguous bool) {
 	if s.party == nil || !s.party.RosterValid {
-		return wire.EmptyGUID, false
+		return wire.EmptyGUID, false, false
 	}
+	n := 0
 	for g, m := range s.party.Members {
 		if m.Name != "" && strings.EqualFold(m.Name, name) {
-			return g, true
+			guid = g
+			n++
 		}
 	}
-	return wire.EmptyGUID, false
+	switch n {
+	case 0:
+		return wire.EmptyGUID, false, false
+	case 1:
+		return guid, true, false
+	}
+	return wire.EmptyGUID, false, true
 }
 
-// askVisibleNames asks the server for the names of the players in view that the model does not name, at most once
-// per dungeonNameAskEvery. It reports whether it asked and the answer came (the names are then in the cache).
+// dungeonNameAskGap is the least time between two name queries of one session, whatever guids they name.
+const dungeonNameAskGap = 2 * time.Second
+
+// askVisibleNames sends one name query for the players in view the model does not name and whose backoff has run
+// out, and returns at once. It reports whether a query went out. A failed send is not counted as an ask. The
+// backoff state of a guid that is named now or no longer in view is dropped.
 func (s *session) askVisibleNames(pos driver.Vec3) bool {
-	if time.Since(s.nameAskAt) < dungeonNameAskEvery {
+	now := s.Now()
+	for g := range s.nameAsks {
+		if _, ok := s.world.Object(g); !ok || s.world.NameOf(g) != "" {
+			delete(s.nameAsks, g)
+		}
+	}
+	if !s.nameAskLast.IsZero() && now.Sub(s.nameAskLast) < dungeonNameAskGap {
 		return false
 	}
-	players, _ := s.world.UnknownUnits(pos[0], pos[1], pos[2], maxPlayerNamesPerQuery)
-	if len(players) == 0 {
+	due := s.world.UnknownPlayers(pos[0], pos[1], pos[2], maxPlayerNamesPerQuery, func(g wire.GUID) bool {
+		a, ok := s.nameAsks[g]
+		return ok && now.Sub(a.at) < nameAskBackoff(a.tries)
+	})
+	if len(due) == 0 {
 		return false
 	}
-	s.nameAskAt = time.Now()
-	return s.askPlayerNames(players) == nil
+	if err := s.sendPlayerNamesQuery(due); err != nil {
+		return false
+	}
+	s.nameAskLast = now
+	if s.nameAsks == nil {
+		s.nameAsks = map[wire.GUID]nameAsk{}
+	}
+	for _, g := range due {
+		s.nameAsks[g] = nameAsk{at: now, tries: s.nameAsks[g].tries + 1}
+	}
+	return true
 }
 
 // Auras is the model's auras of one unit that are still up: the spell ids the trace's frames record for a bot.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
@@ -953,5 +954,59 @@ func TestNoteEventKeepsAPullWithoutAStep(t *testing.T) {
 	}
 	if recs := w.stepRecords(); len(recs) != 1 || len(recs[0].PullEvents) != 1 {
 		t.Fatalf("step records %+v, want the one stepped pull", recs)
+	}
+}
+
+// TestWatchHandlesABossWait: the module waits for a patrolling boss (wait_s) and sends no event meanwhile. The run
+// here is silent for 100 s between events, longer than the 60 s watchdog, and the plan gives the boss 90 s: the watch
+// allows the wait and ends clean. The same run over a plan with no wait is cut by the watchdog.
+func TestWatchHandlesABossWait(t *testing.T) {
+	watch := func(waitS int) Result {
+		p := minimalPlan()
+		p.Legs[0].Boss.WaitS = waitS
+		route, err := NewWatchRoute(p)
+		if err != nil {
+			t.Fatalf("route: %v", err)
+		}
+		cfg := watchConfig()
+		cfg.Watchdog = 60 * time.Second
+		cfg.Logf = func(string, ...any) {}
+		f := NewFake(route, cfg)
+		run := New(cfg, route, f, f, f, f.Clock)
+		f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 100 * time.Second, DoneAt: 250 * time.Second})
+		return run.Watch(context.Background())
+	}
+	if res := watch(90); res.Stop != "done" || !res.Clear {
+		t.Fatalf("a watch over a boss-wait plan: stop %q clear %v, want done", res.Stop, res.Clear)
+	}
+	if res := watch(0); res.Stop != "watchdog" {
+		t.Fatalf("the same silence with no boss wait: stop %q, want watchdog", res.Stop)
+	}
+}
+
+// worldCount counts PlayerGUID calls over the fake world.
+type worldCount struct {
+	*Fake
+	n int
+}
+
+func (w *worldCount) PlayerGUID(name string) (wire.GUID, bool) {
+	w.n++
+	return w.Fake.PlayerGUID(name)
+}
+
+// TestFrameGUIDKeepsAGUIDName: a unit the threat list names by guid text is used as it is, without a name lookup
+// (which may send a query).
+func TestFrameGUIDKeepsAGUIDName(t *testing.T) {
+	cfg := watchConfig()
+	route := testRoute(t, oneGroupPlan())
+	f := NewFake(route, cfg)
+	wc := &worldCount{Fake: f}
+	run := New(cfg, route, f, wc, f, f.Clock)
+	if got := run.frameGUID("0xF130000000000064"); got != "0xF130000000000064" {
+		t.Fatalf("frameGUID = %q", got)
+	}
+	if wc.n != 0 {
+		t.Fatalf("%d name lookups for a guid text", wc.n)
 	}
 }
