@@ -109,7 +109,7 @@ func (c *HTTPCaller) Call(ctx context.Context, method string, params any, timeou
 }
 
 // tokenPathFor returns the default token file for an RPC address: the
-// rpc-<port>.token layout next to the settings file, under ~/.config.
+// rpc-<port>.token layout next to the settings file, under the user config dir.
 // os.UserHomeDir expands the leading ~/.
 func defaultTokenFile(addr string) string {
 	_, port, err := net.SplitHostPort(addr)

@@ -600,7 +600,7 @@ make build                      # bin/turtle-agent
 make test                       # gofmt check, go vet, builds, go test -race ./...
 ```
 
-Create the settings file (default `~/.config/turtle-agent/settings.json`, mode **0600**; the agent refuses a file
+Create the settings file (default `<user config dir>/turtle-agent/settings.json`, mode **0600**; the agent refuses a file
 other users can read) with your server and account in it — placeholders below, never real values:
 
 ```json

@@ -48,7 +48,7 @@
 #
 # Environment (all optional):
 #   TURTLE_AGENT_DIR  the checkout (default ~/forever-agent); the binary goes to its bin/forever-agent-<sha8>
-#   SETTINGS          the agent's settings file (default ~/.config/forever-agent/settings-2.json); only its "rpc" and (if set) "rpc_token" keys
+#   SETTINGS          the agent's settings file (default settings-2.json in the forever-agent folder of the user config dir); only its "rpc" and (if set) "rpc_token" keys
 #                     are read, and neither is ever printed. The token file rpc-<port>.token next to it is read when there is no rpc_token.
 #   CHARACTER         the agent's character (default Glacienne, a GM)
 #   LEAD, BOTS, TANK, HEALER   the party (default Lcwarra; Lcpriest,Lchunter,Lcrogue,Lcwarlock; Lcwarra; Lcpriest)
