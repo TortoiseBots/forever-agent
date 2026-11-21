@@ -567,19 +567,18 @@ func (i *Info) readUnitCreate(b *wire.Buffer, owner, empath, unitAll bool) error
 	}
 	b.Skip(4) // SheatheState, PvpFlags, PetFlags, ShapeshiftForm
 	if owner {
-		// The owner-only AttackPower block is 20 int32/float writes, 80 bytes, not 88
-		// (UpdateFields.cpp:1189-1211: ten attack/ranged values, two Classic zeros, MainHand..SetAttackSpeedAura,
-		// Lifesteal, MinRangedDamage, MaxRangedDamage, ManaCostMultiplier).
-		b.Skip(80)
+		// The owner-only AttackPower block is 23 int32/float writes, 92 bytes (ForeverCore 0.1.39,
+		// UpdateFields.cpp:1190-1263): AttackPower .. APModSupport (5), five Classic zeros, RangedAttackPower ..
+		// RAPModSupport (5), MainHandWeaponAP .. SetAttackSpeedAura (4), Lifesteal, MinRangedDamage,
+		// MaxRangedDamage, ManaCostMultiplier. Before 0.1.39 it was 80 bytes (two zeros inside it) plus three
+		// owner-only int32 after TaxiNodesID; the total is the same, so this decode is aligned on both cores.
+		b.Skip(92)
 	}
 	b.Skip(8)  // MaxHealthModifier, HoverHeight
 	b.Skip(20) // MinItemLevelCutoff, MinItemLevel, MaxItemLevel, AzeriteItemLevel, WildBattlePetLevel
 	b.Skip(4)  // BattlePetCompanionExperience
 	b.Skip(4)  // BattlePetCompanionNameTimestamp
 	b.Skip(28) // InteractSpellID, ScaleDuration, LooksLikeMountID, LooksLikeCreatureID, LookAtControllerID, PerksVendorItemID, TaxiNodesID
-	if owner {
-		b.Skip(12) // 70425: three int32 after TaxiNodesID, owner only
-	}
 	i.Guild = i.guid(b)
 	i.f.Guild = true
 	passive := int(b.ReadU32())

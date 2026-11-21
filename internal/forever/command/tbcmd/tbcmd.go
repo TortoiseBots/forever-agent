@@ -84,6 +84,12 @@ func (c *Client) call(ctx context.Context, line, endKind string) (*command.Reply
 // callMax is call with the collector's line cap raised (the event ring is 200 lines): max of 0 keeps the floor of 16
 // the typed layer has always used.
 func (c *Client) callMax(ctx context.Context, line, endKind string, maxLines int) (*command.Reply, error) {
+	return c.callBare(ctx, line, endKind, maxLines, "")
+}
+
+// callBare is callMax for a module reply whose body rows carry no token (only its end line does): bare names the
+// record kind of those rows (command.Options.BareBody).
+func (c *Client) callBare(ctx context.Context, line, endKind string, maxLines int, bare string) (*command.Reply, error) {
 	tok := c.Token
 	if tok == nil {
 		tok = command.NewToken
@@ -95,6 +101,7 @@ func (c *Client) callMax(ctx context.Context, line, endKind string, maxLines int
 	o := c.Base
 	o.Token = t
 	o.EndKind = endKind
+	o.BareBody = bare
 	if maxLines > o.MaxLines {
 		o.MaxLines = maxLines
 	}

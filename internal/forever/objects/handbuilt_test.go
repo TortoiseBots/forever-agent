@@ -16,6 +16,10 @@ import (
 type unitCreateSpec struct {
 	owner  bool
 	empath bool
+	// core0139 writes the owner-only AttackPower block the way ForeverCore 0.1.39 does: 23 writes (92 bytes) and
+	// nothing after TaxiNodesID. Unset it is the older core's split: 20 writes (80 bytes) and three int32 after
+	// TaxiNodesID. Both are 92 bytes in all.
+	core0139 bool
 }
 
 // sentinelBaseMana is written right after the Empath-gated Resistance block. A parser that does not walk that
@@ -198,8 +202,25 @@ func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 	v.WriteU8(0) // PvpFlags
 	v.WriteU8(0) // PetFlags
 	v.WriteU8(0) // ShapeshiftForm
-	if spec.owner {
-		// The 20-write AttackPower block (:1189-1211), 80 bytes.
+	if spec.owner && spec.core0139 {
+		// The 23-write AttackPower block (0.1.39, UpdateFields.cpp:1190-1263), 92 bytes.
+		for n := range 5 {
+			v.WriteI32(int32(n)) // AttackPower, APModPos, APModNeg, APMultiplier, APModSupport
+		}
+		for range 5 {
+			v.WriteI32(0) // the five Classic zeros
+		}
+		for n := range 5 {
+			v.WriteI32(int32(n)) // RangedAttackPower .. RAPModSupport
+		}
+		for n := range 4 {
+			v.WriteI32(int32(n)) // MainHandWeaponAP .. SetAttackSpeedAura
+		}
+		for n := range 4 {
+			v.WriteFloat32(float32(n)) // Lifesteal, MinRangedDamage, MaxRangedDamage, ManaCostMultiplier
+		}
+	} else if spec.owner {
+		// The 20-write AttackPower block of the older core (:1189-1211), 80 bytes.
 		for n := range 10 {
 			v.WriteI32(int32(n))
 		}
@@ -222,8 +243,8 @@ func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 	for range 7 {
 		v.WriteI32(0) // InteractSpellID .. TaxiNodesID
 	}
-	if spec.owner {
-		v.WriteI32(0) // the 70425 three int32
+	if spec.owner && !spec.core0139 {
+		v.WriteI32(0) // the older core's three int32 after TaxiNodesID
 		v.WriteI32(0)
 		v.WriteI32(0)
 	}
@@ -370,6 +391,8 @@ func TestFixtureEmpathCreate(t *testing.T) {
 		{"empath only", unitCreateSpec{empath: true}},
 		{"owner and empath", unitCreateSpec{owner: true, empath: true}},
 		{"owner only", unitCreateSpec{owner: true}},
+		{"owner, 0.1.39 core", unitCreateSpec{owner: true, core0139: true}},
+		{"owner and empath, 0.1.39 core", unitCreateSpec{owner: true, empath: true, core0139: true}},
 		{"neither", unitCreateSpec{}},
 	} {
 		payload := buildCreate(guid, TypeUnit, buildMovementBlock(false, nil), buildUnitCreate(tc.spec))
@@ -383,6 +406,9 @@ func TestFixtureEmpathCreate(t *testing.T) {
 		}
 		if b.Info.Power[0] != 800 || b.Info.MaxPower[0] != 900 {
 			t.Fatalf("%s: power %d/%d, want the interleaved pair 800/900", tc.name, b.Info.Power[0], b.Info.MaxPower[0])
+		}
+		if b.Info.CurrentAreaID != 77 {
+			t.Fatalf("%s: CurrentAreaID %d, want 77 (the fields after the AttackPower block are misaligned)", tc.name, b.Info.CurrentAreaID)
 		}
 		if !b.ValuesComplete {
 			t.Fatalf("%s: the block was not consumed to its declared end (the sentinel was read from the wrong offset)",

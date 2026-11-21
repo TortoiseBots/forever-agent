@@ -353,3 +353,38 @@ func TestGainsOpcodesTranslate(t *testing.T) {
 		t.Errorf("client wire 0x%06X named 0x%06X", w, got)
 	}
 }
+
+// TestBuild71037IsInThe70790Class: ForeverCore 0.1.39 adds a build_info row for 71037 and numbers it like 70790
+// (Classic.Build70790.FirstBuild covers every later build), so the opcode table gives a 71037 client the same wire
+// numbers as a 70959 one, in both directions. The build is not claimed on its own: it is not in
+// SupportedClientBuilds until one live login has checked its packet layouts.
+func TestBuild71037IsInThe70790Class(t *testing.T) {
+	cases := []struct {
+		core uint32
+		name string
+	}{
+		{0x4501EA, "SMSG_AREA_SPIRIT_HEALER_TIME"},
+		{0x4501F0, "SMSG_INIT_WORLD_STATES"},
+		{0x4501F2, "SMSG_UPDATE_WORLD_STATE"},
+		{0x4B0030, "SMSG_PVP_MATCH_INITIALIZE"},
+	}
+	ref := NewOpcodeTable(Build70959, realmBuild70707)
+	got := NewOpcodeTable(Build71037, realmBuild70707)
+	for _, c := range cases {
+		want := ref.TranslateServerCore(c.core)
+		if w := got.TranslateServerCore(c.core); w != want {
+			t.Errorf("%s: 71037 wire 0x%06X, 70959 wire 0x%06X", c.name, w, want)
+		}
+		if back := got.TranslateServerWire(want); back != c.core {
+			t.Errorf("%s: wire 0x%06X for a 71037 client named 0x%06X, want 0x%06X", c.name, want, back, c.core)
+		}
+	}
+	if want, g := ref.TranslateClientWire(0x440133), got.TranslateClientWire(0x440133); g != want {
+		t.Errorf("client wire 0x440133: 71037 names 0x%06X, 70959 names 0x%06X", g, want)
+	}
+	for _, b := range SupportedClientBuilds() {
+		if b == Build71037 {
+			t.Errorf("71037 is claimed on its own before a live login has checked it")
+		}
+	}
+}

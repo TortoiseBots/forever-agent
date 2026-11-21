@@ -124,8 +124,9 @@ func TestFixtureUpdateObjects(t *testing.T) {
 	}
 
 	// The character's own create (ThisIsYou, TYPEID_ACTIVE_PLAYER): the owner-only UnitData layout. Its tail —
-	// GuildGUID, the 70425 three int32, CurrentAreaID and ComboTarget — sits behind the 80-byte AttackPower block
-	// (UpdateFields.cpp:1189-1211); the old 88-byte skip shifted all of them by eight bytes.
+	// GuildGUID, CurrentAreaID and ComboTarget — sits behind the 92-byte owner-only AttackPower block of the 0.1.39
+	// core (UpdateFields.cpp:1190-1263; the capture is the older core's 80 bytes plus three int32 after
+	// TaxiNodesID, the same 92 in all); the old 88-byte skip shifted all of them by eight bytes.
 	own := update("create_owner")
 	var ob *WorldFragment
 	for i := range own.Blocks {
