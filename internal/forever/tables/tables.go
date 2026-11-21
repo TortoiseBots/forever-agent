@@ -82,3 +82,18 @@ const (
 // batcher stays far below it; 64 keeps every batch on one small packet while
 // the round's own tests pin the split.
 const MaxRecordsPerQuery = 64
+
+// The item tables. ItemSparse carries the fields a player sees (name, quality, level,
+// prices, stack size); Item carries the class pair that says what the item is. Both are
+// read through CMSG_DB_QUERY_BULK like SpellName, and the client sends the DB2 header's
+// own TableHash, the value HotfixHandler keys its store map on.
+const (
+	// TableItemSparse is ItemSparse.db2 (FileDataId 1572924, LayoutHash 0x6FCC3191, ItemSparseMeta,
+	// DB2Metadata.h:12843; the store at DB2Stores.cpp:222). The quest-item hotfix rows the core ships
+	// carry this table's TableHash as 2442913102 (0x919BE54E, sql/custom/hotfixes/
+	// 2026_10_31_90_hotfixes_forever_missing_quest_items.sql).
+	TableItemSparse uint32 = 0x919BE54E
+	// TableItem is Item.db2 (FileDataId 841626, LayoutHash 0x9A2A4834, ItemMeta, DB2Metadata.h:11318;
+	// the store at DB2Stores.cpp:206). Its TableHash travels in the file header, like every table's.
+	TableItem uint32 = 0x50238EC2
+)

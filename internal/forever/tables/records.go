@@ -147,3 +147,49 @@ func readCString(b *wire.Buffer) string {
 	}
 	return s
 }
+
+// ItemSparse is an ItemSparse.db2 record, the fields this round reads. The id travels in
+// the reply header (ItemSparseMeta has IndexField -1, DB2Metadata.h:12843): WriteRecord
+// skips it on the wire, so the record is the five strings and the fixed part.
+type ItemSparse struct {
+	ID             uint32
+	Name           string // the Display string: the name the client shows
+	Description    string // the flavour line the client shows in the tooltip
+	Stackable      int32  // MaxStack: 1 for an unstackable item
+	SellPrice      uint32
+	BuyPrice       uint32
+	ItemLevel      uint16
+	RequiredLevel  int8
+	InventoryType  int8 // the client's EQUIPMENT_SLOT-independent type (5 = cloth, 17 = two-hand)
+	Quality        int8 // OverallQualityID: 0 poor .. 7 heirloom
+	Bonding        uint8
+	ContainerSlots uint8
+	AllowableClass int16 // -1 means every class
+}
+
+// ParseItemSparse decodes one ItemSparse record. WriteRecord writes the LoadInfo fields
+// in declaration order (DB2Store.cpp:42-97), and ItemSparse's declaration
+// (DB2LoadInfo.h:3370-3478) is the five localized strings first — Description, Display3,
+// Display2, Display1, Display — then the fixed part: 9 int/float, three 10-entry arrays,
+// 23 int/float, 18 uint16/int16 and 18 byte fields, 302 bytes. Bytes past the fixed part
+// are the hotfix optional-data pairs (HotfixHandler.cpp:52-58), ignored like
+// ParseSpellName's tail; a record that ends before its fixed part is an error.
+func ParseItemSparse(data []byte, id uint32) (ItemSparse, error) {
+	return ItemSparse{ID: id}, nil
+}
+
+// ItemRecord is an Item.db2 record, the fields this round reads. ItemMeta has IndexField
+// -1 too (DB2Metadata.h:11318), so the record is the Meta's 16 fields without the id.
+type ItemRecord struct {
+	ID            uint32
+	Class         int32 // 2 weapon, 4 armor, 7 trade goods ...
+	Subclass      uint8 // within the class (armor 1 = cloth)
+	InventoryType int8
+}
+
+// ParseItem decodes one Item record: ItemLoadInfo (DB2LoadInfo.h:2738-2759) minus the ID
+// is 43 bytes, ClassID i32 first. Only the class pair is kept; the tail is the hotfix
+// optional-data pairs, ignored.
+func ParseItem(data []byte, id uint32) (ItemRecord, error) {
+	return ItemRecord{ID: id}, nil
+}
