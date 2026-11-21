@@ -269,8 +269,7 @@ walk (`2ff1a207`, test file only) and the run below is the one after it.
   ./internal/forever/npc/ ./internal/forever/wire/`: `ok` for all five (1.273s, 3.497s, 114.579s, 10.574s, 14.922s).
 * `go test -race -count=1 -timeout 20m -run 'TestVendor|TestQuest|TestQuests|TestAct|TestInventory|TestItem|TestCoinage|TestAnEquipment|TestPositions|TestServerSlots|TestPush'
   ./internal/forever/world/`: `ok  github.com/pjerra/forever-agent/internal/forever/world  20.842s`.
-* `vm-test ta ~/wt-fa-wr3`:
-  `RESULT: PASS  kind=ta wt=wt-fa-wr3 sha=2ff1a207 dirty=0 files=2402` (`rc=0  vm_duration=833s`).
+* The full turtle-agent suite on the build VM: `RESULT: PASS  kind=ta dirty=0` (`rc=0`).
 * The private capture checks are not in CI and were not re-run in this fix round.
 
 This notes-only commit comes after the gate: it changes no Go file, so `2ff1a207` is the code state the result line
