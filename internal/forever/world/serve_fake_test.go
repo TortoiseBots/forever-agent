@@ -387,7 +387,7 @@ func startServeDaemonTuned(t *testing.T, f *fakeServer, steps *stepLog, tune fun
 		RealmBuild:      70707,
 		Character:       "XXXXXX",
 		Deadline:        30 * time.Second,
-		CommandTimeout:  serveTestCommandTimeout(f.serveCommandTimeout),
+		CommandTimeout:  serveTestCommandTimeout(f),
 		BuildAuthKey:    f.buildKey[:],
 		Logf: func(format string, args ...any) {
 			steps.add(format, args...)
@@ -2178,10 +2178,14 @@ func TestServeCommanderRunStartNeedsALead(t *testing.T) {
 	f.wait(t)
 }
 
-// serveTestCommandTimeout is the serve tests' command deadline: a silent GM line lasts to it, so it is short.
-func serveTestCommandTimeout(d time.Duration) time.Duration {
-	if d > 0 {
-		return d
+// serveTestCommandTimeout is the serve tests' command deadline: a silent GM line lasts to it, so it is short, except
+// for the commander scripts, whose tests are timed against the call's own budget.
+func serveTestCommandTimeout(f *fakeServer) time.Duration {
+	switch {
+	case f.serveCommandTimeout > 0:
+		return f.serveCommandTimeout
+	case f.serveCommander != nil:
+		return 0
 	}
 	return 2 * time.Second
 }
