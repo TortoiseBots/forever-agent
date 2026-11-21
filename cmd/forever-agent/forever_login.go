@@ -14,7 +14,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
 		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
-		fmt.Fprintln(stderr, "       forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT]")
+		fmt.Fprintln(stderr, "       forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--capture-dir DIR]")
+		fmt.Fprintln(stderr, "       forever-agent forever capture-stats <dir>")
 		fmt.Fprintln(stderr, "       forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]")
 		fmt.Fprintln(stderr, "       forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS]")
 		fmt.Fprintln(stderr, "       forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen DURATION]")
@@ -100,6 +101,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverDashBotsCmd(ctx, args[1:], stdout, stderr)
 	case "deathrecap":
 		return foreverDeathRecapCmd(ctx, args[1:], stdout, stderr)
+	case "capture-stats":
+		return foreverCaptureStatsCmd(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "forever-agent forever: unknown command %q\n", args[0])
 		return exitUsage

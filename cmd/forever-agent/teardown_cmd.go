@@ -147,7 +147,11 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 	add(step, status, detail)
 
 	// 7. lease.
-	if *keepLease {
+	if !teardownSlotHoldsALease(manifest) {
+		// A bare `forever serve --dir` writes its own slot.json: no lease and
+		// no slots file are behind it, so there is nothing to release.
+		add("lease", "skip", "a serve slot holds no lease (forever serve --dir)")
+	} else if *keepLease {
 		add("lease", "skip", "kept (--keep-lease)")
 	} else if gameFailed && !*releaseAnyway {
 		add("lease", "fail", fmt.Sprintf("kept: game-side teardown failed; check the slot, then forever-agent lease release %s %s --holder %s",
@@ -336,6 +340,13 @@ func teardownDeleteFiles(dir string, port int) (string, string, string) {
 	return "files", "ok", detail
 }
 
+// teardownSlotHoldsALease says whether a slot.json was written by `slot setup` (a
+// lease id and the slots file it came from) rather than by `forever serve --dir`,
+// whose manifest names neither.
+func teardownSlotHoldsALease(manifest teardownSlotManifest) bool {
+	return manifest.LeaseID != "" || manifest.SlotsPath != ""
+}
+
 func teardownReleaseLease(slotsPath string, manifest teardownSlotManifest) (string, string, string) {
 	path := slotsPath
 	if path == "" {
@@ -369,7 +380,9 @@ func teardownPlanSteps(dir string, manifest teardownSlotManifest, pid int, alive
 	}
 	add("other_pids", "plan", "would end stray pids of this dir")
 	add("files", "plan", "would delete settings.json, token file and agent.pid")
-	if keepLease {
+	if !teardownSlotHoldsALease(manifest) {
+		add("lease", "plan", "a serve slot holds no lease (forever serve --dir)")
+	} else if keepLease {
 		add("lease", "plan", "would keep the lease (--keep-lease)")
 	} else {
 		add("lease", "plan", fmt.Sprintf("would release %s/%s", manifest.Server, manifest.Slot))

@@ -26,6 +26,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
 | ForeverCore world export (round L3) | **Works offline** (`tools/dungeongen/export-forever.sh` writes the TSVs `worldspawn.Load` reads from a ForeverCore 25fc7ca world database — creatures, formations, waypoint paths, game objects, entrances — and `worldspawn.LoadForeverDB` reads them: levels in the order the core applies them (classic spawn row, classic entry row, content tuning; 60 when unknown), normal difficulty only, and the core groupAI bits mapped to the reader's flags (the leader's own formation row counts); see [docs/forever/L3-NOTES.md](docs/forever/L3-NOTES.md)) |
 | Plan scout on Forever (round K4) | **Offline draft works; the live pass is wired, not yet run** (`forever-agent plan-scout --forever --spawns DIR --mmaps DIR [--parent MAP=PARENT]` drafts from `worldspawn.LoadForeverDB` on the v16 planner and its output passes `plan-check --forever`; `--live --slot DIR` drives a running `forever serve` with `.gm on`, `.instance unbind all`, a `.go xyz` and a `units {within:40}` read per stop — levels the core has no row for take the live unit's — a `path_to` per hop and `walk_path` of the risky hops in the walk budget; allow-list checked before every line; see [docs/forever/CLI-K2-K6-NOTES.md](docs/forever/CLI-K2-K6-NOTES.md)) |
+| CLI on a serve slot (round K2) | **Works against fake serves; the live run is the next step** (`teardown DIR` accepts a bare `forever serve --dir` (a serve slot holds no lease), `forever serve --capture-dir DIR` writes the debug capture and `forever capture-stats DIR` counts its opcodes from the manifests alone; `patrol-record DIR --forever` records through `serveclient` with the unchanged stance allow-list and the full 128-bit target rule; `route-oracle --forever --mmaps DIR [--parent MAP=PARENT]` scores plans on the v16 mesh; see [docs/forever/CLI-K2-K6-NOTES.md](docs/forever/CLI-K2-K6-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
@@ -168,10 +169,13 @@ and chat are unaffected.
 loop is stopped first (its own `follow` step), the GM line (`.gm off` by default) goes through the same command
 guard, the full protocol logout follows, and the answer is the old daemon's step rows (`{steps: [{step, status, detail}], failed, seconds}`) so `teardown_cmd.go` reads it
 unchanged. The daemon stops after the reply; the slot's `slot.json` already says `"server": "forever"`. A refused GM
-line is a failed step and the logout still runs; `dry_run` plans the steps and sends nothing. `ServeConfig.CaptureDir`
-is the debug capture (`--capture-dir` arrives with the CLI round): each link writes under a new run directory, so a
-reconnect starts a fresh capture, and a parent inside a git work tree is refused before the login; the capture's
-per-opcode totals come from the manifest alone (`capturedir.Stats`).
+line is a failed step and the logout still runs; `dry_run` plans the steps and sends nothing. The CLI accepts both
+kinds of dir: one made by `slot setup --forever` (the lease is released as usual) and a bare `forever serve --dir`
+(no lease and no slots file exist, so that step is skipped). `ServeConfig.CaptureDir`
+is the debug capture (`serve --capture-dir DIR`): each link writes under a new run directory, so a
+reconnect starts a fresh capture, and a parent inside a git work tree is refused before the login.
+`forever-agent forever capture-stats DIR` reads those runs' `manifest.tsv` files only and prints packets and
+payload bytes per core opcode (a deleted payload changes nothing, and no captured byte is ever printed).
 
 Remote control on ForeverCore is `commander`: the module's TortoiseBots party, commanded by the session's own
 character over the session's `.tb` command channel (no add-on bridge, no other account).
@@ -219,9 +223,18 @@ is closed) and the command waits for the call to stop before exiting 1 with `can
 result is printed, so a caller must not retry an irreversible method as if the first call had been refused.
 `internal/forever/serveclient` is the typed Go client of the same socket for commands that orchestrate a live slot
 (see [docs/forever/REST-L1-NOTES.md](docs/forever/REST-L1-NOTES.md)): `Open(dir)`/`New(addr, tokenFile)` with typed
-`Status`, `Units`, `Unit`, `Party`, `GM`, `Bot`, `Events` and `Logout` (what the daemon serves today; `EventLog`, `Act`,
-`Commander` and `Teardown` need W3/W2), loopback addresses only, guids as text with `Key()` delegating to the run-map
-key, `-32005` retried for 60 s and `-32002` ending the call at once.
+`Status`, `Units`, `Unit`, `Party`, `GM`, `Bot`, `Events`, `EventLog`, `Act`, `Commander` and `Teardown`, loopback
+addresses only, guids as text with `Key()` delegating to the run-map key, `-32005` retried for 60 s and `-32002`
+ending the call at once.
+
+Two existing CLI tools gained a Forever mode (see
+[docs/forever/CLI-K2-K6-NOTES.md](docs/forever/CLI-K2-K6-NOTES.md)). `patrol-record DIR --forever` is the same
+recording loop and the same stance allow-list (`.gm on`, `.gm visible off`, one `.go xyz`, `.gm visible on`); the
+safety rules read the serve `status`/`units` rows, a unit targeting the agent is matched by its full 128-bit guid
+(a creature that only shares the low 64 bits does not stop the run), and each sample is keyed by `GUID.Key()` while
+the file's rows carry the real 32-hex guid text. `--mmaps` is a v16 folder there. `route-oracle --forever --mmaps DIR
+[--parent MAP=PARENT]` scores plans on a ForeverCore v16 mesh and names the map file the server actually writes
+(`0700.mmap`), instead of the 1.12 v6 planner.
 
 `forever-agent fleet --forever --config FILE --slots FILE [--server NAME] [--stagger D] [--wait D]
 [--stop-on-failure]` runs one `forever serve` per fleet-file member (`{account, character, dir, listen,

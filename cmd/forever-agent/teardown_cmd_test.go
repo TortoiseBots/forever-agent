@@ -322,3 +322,95 @@ func TestTeardownCLIFollowEndingIsAFailure(t *testing.T) {
 		t.Fatalf("lease released despite the follow still ending")
 	}
 }
+
+// TestTeardownServeSlot is the K2 case: a bare `forever serve --dir` writes its
+// own slot.json (server "forever", no lease, no slots file). teardown accepts
+// it: the game-side step runs, the files go, and the lease step is skipped
+// because a serve slot holds none. Before the fix the missing default slots
+// file made the lease step a failure (exit 14).
+func TestTeardownServeSlot(t *testing.T) {
+	oldProbe := teardownProbe
+	oldSleep := teardownCLISleep
+	teardownCLISleep = func(time.Duration) {}
+	t.Cleanup(func() { teardownProbe = oldProbe; teardownCLISleep = oldSleep })
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	tok := "tok-" + strings.Repeat("q", 40)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+tok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{
+			"steps": []map[string]string{{"step": "gm", "status": "ok", "detail": "gm mode off"},
+				{"step": "logout", "status": "ok", "detail": "logged out"}}, "failed": 0,
+		}})
+		w.Write(raw)
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln2(t, port))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, fmt.Sprintf("rpc-%d.token", port))
+	if err := os.WriteFile(tokenFile, []byte(tok+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]any{
+		"server": "forever", "slot": "1", "holder": "forever",
+		"account": "TESTACC", "character": "Testchar", "port": port, "dir": dir,
+		"binary":     filepath.Join(dir, "forever-agent"),
+		"settings":   filepath.Join(dir, "settings.json"),
+		"pid_file":   filepath.Join(dir, "agent.pid"),
+		"token_file": tokenFile,
+	}
+	raw, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(dir, "slot.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	teardownProbe = &teardownCLIFakeProbe{pid: os.Getpid(), alive: true, ports: map[int]bool{}}
+
+	code, out, errOut := runCLI("teardown", dir)
+	if code != exitOK {
+		t.Fatalf("teardown on a serve slot: code %d stdout %q stderr %q", code, out, errOut)
+	}
+	if !strings.Contains(out, "a serve slot holds no lease") {
+		t.Fatalf("no serve-slot lease line: %q", out)
+	}
+	if strings.Contains(out, "FAIL") {
+		t.Fatalf("a serve slot teardown failed: %q", out)
+	}
+	for _, gone := range []string{"agent.pid", fmt.Sprintf("rpc-%d.token", port)} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
+			t.Fatalf("%s still there", gone)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "forever-agent", "slots.json")); !os.IsNotExist(err) {
+		t.Fatal("teardown created a slots file it never had")
+	}
+}
+
+// ln2 listens on an already chosen loopback port (the fake teardown server).
+func ln2(t *testing.T, port int) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ln
+}
