@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/bg"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/follow"
@@ -70,6 +71,11 @@ const (
 	actVerbMailMoney  = "mail-money"
 	actVerbMailDelete = "mail-delete"
 	actVerbSendMail   = "send-mail"
+
+	// Round R9's battleground steps (bg_act.go): the queue probe, the port accept and the leave.
+	actVerbBGQueue  = "bg-queue"
+	actVerbBGAccept = "bg-accept"
+	actVerbBGLeave  = "bg-leave"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -140,9 +146,10 @@ func ParseActStep(line string) (ActStep, error) {
 		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair,
 		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
 		actVerbQuestReward, actVerbQuestAbandon,
-		actVerbMail, actVerbMailTake, actVerbMailMoney, actVerbMailDelete, actVerbSendMail:
+		actVerbMail, actVerbMailTake, actVerbMailMoney, actVerbMailDelete, actVerbSendMail,
+		actVerbBGQueue, actVerbBGAccept, actVerbBGLeave:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, mail, mail-take, mail-money, mail-delete, send-mail)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, mail, mail-take, mail-money, mail-delete, send-mail, bg-queue, bg-accept, bg-leave)", verb)
 	}
 	return step, nil
 }
@@ -201,6 +208,11 @@ type actState struct {
 	mailbox    wire.GUID
 	hasMailbox bool
 	mails      []mail.Mail
+	// bgMaster is the battlemaster the last `bg-queue` step queued at, and bgList its list: the accept and leave
+	// steps match the invite against it.
+	bgMaster    wire.GUID
+	hasBGMaster bool
+	bgList      bg.List
 	// lines are the step and menu lines this run printed, in order, bounded by actLinesMax (lines past it are
 	// counted in dropped). Only the run's own lines land here: the log sink also carries the chat, party and world
 	// handler lines of everything else the session does, and those never belong in an act answer.
@@ -304,6 +316,12 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actMailDelete(ctx, a, step)
 	case actVerbSendMail:
 		return s.actSendMail(ctx, a, step)
+	case actVerbBGQueue:
+		return s.actBGQueue(ctx, a, step)
+	case actVerbBGAccept:
+		return s.actBGAccept(ctx, a, step)
+	case actVerbBGLeave:
+		return s.actBGLeave(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}

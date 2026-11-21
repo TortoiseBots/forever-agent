@@ -331,6 +331,24 @@ const (
 	SMSMNotifyReceivedMail uint32 = 0x4500E5
 )
 
+// The battleground queue of round R9 (Opcodes.h:102-111, 852, 1206-1213): the battlemaster hello, the join, the
+// port, the leave, the list and the status request client packets and the list and status answers. Arenas,
+// rated joins, brawls, skirmishes and groups are out of scope: the round probes the plain battleground support.
+const (
+	CMSGBattlemasterHello                 uint32 = 0x3D018F
+	CMSGBattlemasterJoin                  uint32 = 0x3E00BD
+	CMSGBattlefieldPort                   uint32 = 0x3E00C7
+	CMSGBattlefieldLeave                  uint32 = 0x3D001F
+	CMSGBattlefieldList                   uint32 = 0x3D002A
+	CMSGRequestBattlefieldStatus          uint32 = 0x430008
+	SMSGBattlefieldList                   uint32 = 0x4B0005
+	SMSGBattlefieldStatusNeedConfirmation uint32 = 0x4B0000
+	SMSGBattlefieldStatusActive           uint32 = 0x4B0001
+	SMSGBattlefieldStatusQueued           uint32 = 0x4B0002
+	SMSGBattlefieldStatusNone             uint32 = 0x4B0003
+	SMSGBattlefieldStatusFailed           uint32 = 0x4B0004
+)
+
 // clientNames names the client opcodes this client sends, for error messages.
 var clientNames = map[uint32]string{
 	CMSGAuthSession:             "CMSG_AUTH_SESSION",
@@ -444,6 +462,13 @@ var clientNames = map[uint32]string{
 	CMSMMailMarkAsRead: "CMSG_MAIL_MARK_AS_READ",
 	CMSMMailDelete:     "CMSG_MAIL_DELETE",
 	CMSMSendMail:       "CMSG_SEND_MAIL",
+
+	CMSGBattlemasterHello:        "CMSG_BATTLEMASTER_HELLO",
+	CMSGBattlemasterJoin:         "CMSG_BATTLEMASTER_JOIN",
+	CMSGBattlefieldPort:          "CMSG_BATTLEFIELD_PORT",
+	CMSGBattlefieldLeave:         "CMSG_BATTLEFIELD_LEAVE",
+	CMSGBattlefieldList:          "CMSG_BATTLEFIELD_LIST",
+	CMSGRequestBattlefieldStatus: "CMSG_REQUEST_BATTLEFIELD_STATUS",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

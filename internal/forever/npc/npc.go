@@ -32,6 +32,9 @@ const (
 	NPCFlagVendorMasks uint32 = 0x0F00
 	// NPCFlagRepair is UNIT_NPC_FLAG_REPAIR (UnitDefines.h:332): the creature repairs.
 	NPCFlagRepair uint32 = 0x1000
+	// NPCFlagBattlemaster is UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:340): the creature answers the battlemaster
+	// hello with the battleground list.
+	NPCFlagBattlemaster uint32 = 0x00100000
 	// NPCFlagMailbox is UNIT_NPC_FLAG_MAILBOX (UnitDefines.h:346): the creature answers the mailbox packets.
 	NPCFlagMailbox uint32 = 0x04000000
 )
@@ -41,6 +44,9 @@ func IsVendor(flags uint32) bool { return flags&(NPCFlagVendor|NPCFlagVendorMask
 
 // IsRepairer reports whether a creature's flags make it a repairer.
 func IsRepairer(flags uint32) bool { return flags&NPCFlagRepair != 0 }
+
+// IsBattlemaster reports whether a creature's flags make it a battlemaster.
+func IsBattlemaster(flags uint32) bool { return flags&NPCFlagBattlemaster != 0 }
 
 // IsMailbox reports whether a creature's flags make it a mailbox.
 func IsMailbox(flags uint32) bool { return flags&NPCFlagMailbox != 0 }
