@@ -219,6 +219,35 @@ type Unit struct {
 	Auras      []Aura  `json:"auras"`
 }
 
+// Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).
+type Path struct {
+	Map     uint32       `json:"map"`
+	From    [3]float32   `json:"from"`
+	To      [3]float32   `json:"to"`
+	Status  string       `json:"status"` // complete, partial or none (navmesh.RouteKind)
+	Reason  string       `json:"reason,omitempty"`
+	Points  [][3]float32 `json:"points"`
+	Corners int          `json:"corners"`
+	Length  float32      `json:"length"`
+}
+
+// PathTo asks the server's route planner for a route from the session's position to x, y, z on its
+// current map. It needs the daemon's navmesh folder (a daemon started without one answers a typed
+// not-configured error). An unreachable goal is a Path whose Status is partial or none, not an error.
+func (c *Client) PathTo(ctx context.Context, x, y, z float32) (Path, error) {
+	var p Path
+	err := c.call(ctx, "path_to", map[string]float32{"x": x, "y": y, "z": z}, &p, defaultTimeout)
+	return p, err
+}
+
+// WalkPath plans the same route and has the session walk it as one continuous movement; it returns
+// when the walk ends (the daemon's own long deadline is bounded here at five minutes).
+func (c *Client) WalkPath(ctx context.Context, x, y, z float32) (Path, error) {
+	var p Path
+	err := c.call(ctx, "walk_path", map[string]float32{"x": x, "y": y, "z": z}, &p, 5*time.Minute)
+	return p, err
+}
+
 // UnitsParams is the units method's filter; every field is optional.
 type UnitsParams struct {
 	Within  float32 `json:"within,omitempty"`
@@ -301,7 +330,8 @@ type CombatActor struct {
 // CombatRow is one row of the daemon's combat log (events): Time is the wall
 // clock text with milliseconds and its offset, MonoMS the process's steady
 // axis. Reason is set on a spell_fail, a miss, a resist, a melee row that did
-// not land normally and an environmental row; the interrupt, absorb, dispel
+// not land normally and an environmental row; SpellName is the server's own name for SpellID when the daemon
+// resolved it (empty otherwise; SpellID is the fallback); the interrupt, absorb, dispel
 // and sample fields are the core-gains round's.
 type CombatRow struct {
 	Seq                int            `json:"seq"`
@@ -317,6 +347,7 @@ type CombatRow struct {
 	AbsorbedSpellID    int32          `json:"absorbed_spell_id,omitempty"`
 	Dispelled          []CombatDispel `json:"dispelled,omitempty"`
 	Sample             *CombatSample  `json:"sample,omitempty"`
+	SpellName          string         `json:"spell_name,omitempty"`
 }
 
 // CombatDispel is one aura a dispel row removed.
@@ -363,11 +394,14 @@ type CommanderParams struct {
 }
 
 // CommanderResult is the commander method's answer: the line sent, the
-// module's reply, and the typed outcome of a loot/open/use/lootmethod order.
+// module's reply, the typed outcome of a loot/open/use/lootmethod order, and
+// the daemon's decode of the module's status report ({op:status}) as raw
+// JSON: it has one card per commander, so callers decode the cards they read.
 type CommanderResult struct {
-	Sent  string           `json:"sent"`
-	Reply tbm.Reply        `json:"reply"`
-	Order *tbm.OrderResult `json:"order,omitempty"`
+	Sent   string           `json:"sent"`
+	Reply  tbm.Reply        `json:"reply"`
+	Order  *tbm.OrderResult `json:"order,omitempty"`
+	Status json.RawMessage  `json:"status,omitempty"`
 }
 
 // Logout is a logout call's answer.
@@ -397,6 +431,11 @@ type Client struct {
 	token string       // empty: the daemon runs without a bearer token
 	hc    *http.Client // one per Client; never follows a redirect, so the header stays on addr
 }
+
+// Token is the bearer token the client was opened with ("" when the daemon
+// runs with authentication off), so a caller can redact a reply that echoes
+// it.
+func (c *Client) Token() string { return c.token }
 
 func newHTTPClient() *http.Client {
 	return &http.Client{

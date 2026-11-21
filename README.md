@@ -25,6 +25,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Quests (round R5) | **Works against the fake world; a live run is the next step** (`forever act` steps `quest-status`, `quests`, `quest-accept id=`, `quest-progress [id=]`, `quest-complete id=`, `quest-reward id= choice=entry`, `quest-abandon id=`; the giver's status is the core's uint64 mask, an accept records the quest in the first free log slot (the server answers only the gossip close), a turn-in reads the request-items screen and asks for the reward when it says the quest is ready, the reward screen's choices are named, the credits land in the log's progress, and the log is re-read from the create block on a relog or map change; see [docs/forever/WORLD-R3-R5-NOTES.md](docs/forever/WORLD-R3-R5-NOTES.md)) |
 | Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
 | ForeverCore world export (round L3) | **Works offline** (`tools/dungeongen/export-forever.sh` writes the TSVs `worldspawn.Load` reads from a ForeverCore 25fc7ca world database — creatures, formations, waypoint paths, game objects, entrances — and `worldspawn.LoadForeverDB` reads them: levels in the order the core applies them (classic spawn row, classic entry row, content tuning; 60 when unknown), normal difficulty only, and the core groupAI bits mapped to the reader's flags (the leader's own formation row counts); see [docs/forever/L3-NOTES.md](docs/forever/L3-NOTES.md)) |
+| Plan scout on Forever (round K4) | **Offline draft works; the live pass is wired, not yet run** (`forever-agent plan-scout --forever --spawns DIR --mmaps DIR [--parent MAP=PARENT]` drafts from `worldspawn.LoadForeverDB` on the v16 planner and its output passes `plan-check --forever`; `--live --slot DIR` drives a running `forever serve` with `.gm on`, `.instance unbind all`, a `.go xyz` and a `units {within:40}` read per stop — levels the core has no row for take the live unit's — a `path_to` per hop and `walk_path` of the risky hops in the walk budget; allow-list checked before every line; see [docs/forever/CLI-K2-K6-NOTES.md](docs/forever/CLI-K2-K6-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
@@ -82,9 +83,13 @@ carries `mono_ms`, the steady clock every combat row is on. `events` (`since`, `
 `wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
 answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that
 replaces a dropped one before its login burst is dispatched, so a seq never goes back and a row the re-entry's
-own login writes is kept. Its `wait_ms` is spent off the session goroutine, on the
+own login writes is kept. Each row also carries `spell_name` when the server named the spell: one batched,
+cached `CMSG_DB_QUERY_BULK` per page for the ids the page names, with the row's `spell_id` as the fallback.
+Its `wait_ms` is spent off the session goroutine, on the
 ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
-concurrent long-polls all return at their own cap.
+concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
+faction template against the character's own (fetched once from the server and cached), so `true` keeps only
+what is hostile to the character and `false` only what is not.
 
 The character's own inventory is `inv`: `{known, coinage, items[], quest_log[], free_slot, stale?, stale_reason?}`. Each item row is
 `{guid, container, slot, entry, count, durability?, max_durability?, placed, unconfirmed?}`, where `container` is 255 for the
@@ -554,6 +559,14 @@ floor background; without it, or in a build without cgo, the map says so. Output
 (no path, lowercase `.svg`), and nothing is overwritten without `--force`. `dungeon-watch --map --out DIR` writes the same
 two files after the summary; a failure there is one log line and never changes the watch's exit. See
 [docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
+
+`forever-agent forever gm-walk --follow NAME --character AGENT [--marks-from gm|any] [--out FILE] [--module-out FILE] [--force]
+[--dry FILE]` records a GM character's walk as world data: the agent follows the GM, samples the GM's own object
+position, and turns the GM's whisper (or nearby say) mark words (`point <name>`, `zone <name> <radius-yd>`, `split`) into roads (thinned
+polylines with the map id), points and danger circles in a versioned JSON file with no character names (defaults use the map id and a UTC timestamp). `--module-out`
+(and `forever gm-convert --in DATA --out COPY --module-out MODULE`, no login) renders the module's shape: one row per
+road hop for the `handcrafted_road` table plus the zone/point proposals. `--dry FILE` replays a hand-made recording
+through the same thin/mark/format path with no network. See [docs/forever/GM-WALK-NOTES.md](docs/forever/GM-WALK-NOTES.md).
 
 `forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party

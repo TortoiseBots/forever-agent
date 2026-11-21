@@ -13,9 +13,10 @@ import (
 	"time"
 )
 
-// allowedTables is the read-only allowlist (spec S2): a scenario cannot widen
-// it; a change is a code change with review. Nothing from tw_logon (account
-// hashes), tw_logs, mysql, information_schema, performance_schema or sys.
+// allowedTables is the read-only allowlist for turtle slots (spec S2): a
+// scenario cannot widen it; a change is a code change with review. Nothing
+// from tw_logon (account hashes), tw_logs, mysql, information_schema,
+// performance_schema or sys.
 var allowedTables = map[string]bool{
 	"tw_world.lft_user_groups":      true,
 	"tw_world.ai_dungeon_plan":      true,
@@ -36,14 +37,68 @@ var allowedTables = map[string]bool{
 
 func allowedTable(table string) bool { return allowedTables[table] }
 
+// defaultForeverSchema is the ForeverCore characters database the core
+// creates when the scenario file names no db schema (characters_database.sql
+// at core 25fc7ca).
+const defaultForeverSchema = "characters"
+
+// foreverTableBases is the check_db allowlist on a Forever slot, without the
+// schema: the tables at core 25fc7ca. The schema itself comes from the
+// scenario file's db block (its "schema" key), never from the table text, so
+// one database name is never confused with another.
+var foreverTableBases = map[string]bool{
+	"characters":          true,
+	"item_instance":       true,
+	"character_inventory": true,
+}
+
+// foreverSchema resolves the schema a Forever query reads: the file's db
+// schema, else the core's default.
+func foreverSchema(schema string) string {
+	if schema == "" {
+		return defaultForeverSchema
+	}
+	return schema
+}
+
+// foreverAllowedSet is the schema-qualified allowlist one Forever query may
+// name in its FROM and JOIN.
+func foreverAllowedSet(schema string) map[string]bool {
+	schema = foreverSchema(schema)
+	out := map[string]bool{}
+	for t := range foreverTableBases {
+		out[schema+"."+t] = true
+	}
+	return out
+}
+
+// foreverAllowedTables is the default-schema Forever allowlist, for the
+// read-only guard's default scope.
+var foreverAllowedTables = foreverAllowedSet("")
+
+func allowedForeverTable(table string) bool { return foreverAllowedTables[table] }
+
+// foreverTableOK reports whether table is schema.table, names the schema the
+// file chose, and names an allowlisted table.
+func foreverTableOK(table, schema string) bool {
+	parts := strings.Split(table, ".")
+	return len(parts) == 2 && parts[0] == foreverSchema(schema) && foreverTableBases[parts[1]]
+}
+
 // DBQuery is one read-only count: either a table row count or an item count.
 // Built by the runner from a check_db step, rendered by BuildSQL below.
+// Forever selects the ForeverCore schema (characters_database.sql at core
+// 25fc7ca); the default is the turtle schema.
 type DBQuery struct {
-	Table string
-	Where map[string]any
-	Op    string
-	Want  int64
-	Item  *ItemQuery
+	Table   string
+	Where   map[string]any
+	Op      string
+	Want    int64
+	Item    *ItemQuery
+	Forever bool
+	// Schema is the Forever characters database the file's db block names;
+	// empty means the core's default. Turtle queries ignore it.
+	Schema string
 }
 
 // BuildSQL renders a DBQuery as exactly one of the two allowed SELECT forms.
@@ -54,7 +109,14 @@ func BuildSQL(q DBQuery) (string, error) {
 	if q.Item != nil {
 		return buildItemSQL(q)
 	}
-	if !allowedTable(q.Table) {
+	if q.Forever {
+		if !schemaName.MatchString(foreverSchema(q.Schema)) {
+			return "", fmt.Errorf("bad Forever schema %q (internal/scenario/db.go)", q.Schema)
+		}
+		if !foreverTableOK(q.Table, q.Schema) {
+			return "", fmt.Errorf("table %s is not on the Forever allowlist for schema %s (internal/scenario/db.go)", q.Table, foreverSchema(q.Schema))
+		}
+	} else if !allowedTable(q.Table) {
 		return "", fmt.Errorf("table %s is not on the read-only allowlist (internal/scenario/db.go)", q.Table)
 	}
 	var b strings.Builder
@@ -85,7 +147,13 @@ func BuildSQL(q DBQuery) (string, error) {
 		}
 	}
 	sql := b.String()
-	if err := checkSelectOnly(sql); err != nil {
+	var err error
+	if q.Forever {
+		err = checkSelectOnly(sql, foreverAllowedSet(q.Schema))
+	} else {
+		err = checkSelectOnly(sql)
+	}
+	if err != nil {
 		return "", err
 	}
 	return sql, nil
@@ -93,7 +161,8 @@ func BuildSQL(q DBQuery) (string, error) {
 
 // buildItemSQL renders the item-count form: the stack sum of one entry over
 // the named characters' rows (bags, bank, keyring, mail). Names sort so the
-// text is stable.
+// text is stable. On a Forever slot it reads the 25fc7ca schema: itemEntry
+// and owner_guid, with schema-qualified tables.
 func buildItemSQL(q DBQuery) (string, error) {
 	names := []string{}
 	if q.Item.Char != "" {
@@ -102,7 +171,15 @@ func buildItemSQL(q DBQuery) (string, error) {
 	names = append(names, q.Item.Chars...)
 	sort.Strings(names)
 	var b strings.Builder
-	b.WriteString("SELECT COALESCE(SUM(ii.count), 0) FROM tw_char.item_instance ii JOIN tw_char.characters c ON c.guid = ii.owner_guid WHERE c.name IN (")
+	if q.Forever {
+		schema := foreverSchema(q.Schema)
+		if !schemaName.MatchString(schema) {
+			return "", fmt.Errorf("bad Forever schema %q (internal/scenario/db.go)", q.Schema)
+		}
+		fmt.Fprintf(&b, "SELECT COALESCE(SUM(ii.count), 0) FROM %s.item_instance ii JOIN %s.characters c ON c.guid = ii.owner_guid WHERE c.name IN (", schema, schema)
+	} else {
+		b.WriteString("SELECT COALESCE(SUM(ii.count), 0) FROM tw_char.item_instance ii JOIN tw_char.characters c ON c.guid = ii.owner_guid WHERE c.name IN (")
+	}
 	for i, n := range names {
 		if i > 0 {
 			b.WriteString(", ")
@@ -114,7 +191,13 @@ func buildItemSQL(q DBQuery) (string, error) {
 		fmt.Fprintf(&b, " AND ii.flags = %d", *q.Item.Flags)
 	}
 	sql := b.String()
-	if err := checkSelectOnly(sql); err != nil {
+	var err error
+	if q.Forever {
+		err = checkSelectOnly(sql, foreverAllowedSet(q.Schema))
+	} else {
+		err = checkSelectOnly(sql)
+	}
+	if err != nil {
 		return "", err
 	}
 	return sql, nil
@@ -134,7 +217,7 @@ var wordRe = regexp.MustCompile(`[A-Za-z0-9_]+`)
 // checkSelectOnly is the defence-in-depth guard on the final string (S3):
 // one SELECT, no statement stacking or escapes, no writes, every FROM/JOIN
 // target on the allowlist. The error names the rule, never the content.
-func checkSelectOnly(sql string) error {
+func checkSelectOnly(sql string, allowed ...map[string]bool) error {
 	if !strings.HasPrefix(sql, "SELECT ") {
 		return fmt.Errorf("scenario db: refused non-read-only SQL: not a SELECT")
 	}
@@ -172,7 +255,7 @@ func checkSelectOnly(sql string) error {
 			}
 		}
 	}
-	// Every table after FROM or JOIN must be schema.table on the allowlist.
+	// Every table after FROM or JOIN must be schema.table on an allowlist.
 	toks := strings.Fields(b)
 	for i, t := range toks {
 		if strings.ToUpper(t) == "FROM" || strings.ToUpper(t) == "JOIN" {
@@ -181,7 +264,11 @@ func checkSelectOnly(sql string) error {
 			}
 			tab := strings.Trim(toks[i+1], "(),;")
 			parts := strings.Split(tab, ".")
-			if len(parts) != 2 || !allowedTable(tab) {
+			okTable := allowedTable(tab) || allowedForeverTable(tab)
+			if len(allowed) == 1 {
+				okTable = allowed[0][tab]
+			}
+			if len(parts) != 2 || !okTable {
 				offender := tab
 				if len(parts) != 2 {
 					offender = toks[i+1]

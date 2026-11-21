@@ -35,9 +35,11 @@ type CombatActor struct {
 }
 
 // CombatRow is one row of the combat log. Kind is one of spell_start, spell_go, spell_fail, melee, spell_damage,
-// periodic, heal, aura_applied, aura_removed, death, and the core-gains round's interrupt, dispel, absorb, miss,
-// resist, immune, instakill and environmental. Time is the wall clock with milliseconds and its offset; MonoMS is
-// the process's steady axis (events.MonoMS), the one a client cannot step.
+// periodic, heal, aura_applied, aura_removed, death, hostile and alert (SMSG_AI_REACTION: the reacting unit in
+// Source, the reaction word in Reason, spell_id its number; only HOSTILE is "hostile", ALERT is "alert", the
+// rest write no row), and the core-gains round's interrupt, dispel, absorb, miss, resist, immune, instakill and
+// environmental. Time is the wall clock with milliseconds and its offset; MonoMS is the process's steady axis
+// (events.MonoMS), the one a client cannot step.
 type CombatRow struct {
 	Seq     int         `json:"seq"`
 	Kind    string      `json:"kind"`
@@ -51,6 +53,11 @@ type CombatRow struct {
 	// that did not land normally (the victim state, combat.VictimStateName), on a miss or resist, and on an
 	// environmental row (the damage type, combat.EnvironmentalName).
 	Reason string `json:"reason,omitempty"`
+	// SpellName is the server's own name for SpellID (CORE-GAINS-3): the
+	// session fills it when it pages the log, from its SpellName record
+	// cache. It is empty when the server holds no name or the fetch failed;
+	// the row's spell_id is the fallback, as today.
+	SpellName string `json:"spell_name,omitempty"`
 	// InterruptedSpellID is an interrupt row's victim spell: the cast the source stopped. SpellID on that row is
 	// the interrupting spell (Kick), so a trial can match the response by spell and still name what was stopped.
 	InterruptedSpellID int32 `json:"interrupted_spell_id,omitempty"`
