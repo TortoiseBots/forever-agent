@@ -75,7 +75,9 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 	// repeat teardown: nothing is released here.
 
 	if name := t.r.BotName; name != "" {
-		t.bringHire(ctx, name)
+		if why := t.bringHire(ctx, name); why != "" {
+			return hireNotBrought(why), nil
+		}
 	}
 	guid := t.summonDummy(ctx, entry)
 	if guid == "" {
@@ -104,13 +106,17 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 		_, _ = t.r.Client.Attack(ctx, guid, 2500)
 	}
 	fightSeen := t.waitDummyFight(ctx, 60*time.Second)
+	if !fightSeen && t.strangerWhy != "" {
+		t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "real_player"})
+		return map[string]any{"ok": false, "ended": "real_player", "invalid_reason": t.strangerWhy}, nil
+	}
 	if !fightSeen {
 		t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "no_fight"})
 		return map[string]any{"ok": false, "ended": "no_fight",
 			"invalid_reason": "the bot never engaged the dummy"}, nil
 	}
 	deadline := t.fightStart.Add(time.Duration(t.duration * float64(time.Second)))
-	lastStranger := t.sit.now()
+	var lastStranger time.Time // zero: the first iteration checks at once
 	for {
 		if why := t.abortReason(); why != "" {
 			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": "disconnected"})
@@ -123,7 +129,7 @@ func (t *dummyRun) run(ctx context.Context) (map[string]any, error) {
 		now := t.sit.now()
 		// A real player arriving mid-fight ends the repeat: checked at
 		// most every 5 s (every iteration when iterations are slower).
-		if t.strangerWhy == "" && now.Sub(lastStranger) >= strangerEvery {
+		if t.strangerWhy == "" && (lastStranger.IsZero() || now.Sub(lastStranger) >= strangerEvery) {
 			lastStranger = now
 			if why, near := t.strangerNear(ctx); near {
 				t.strangerWhy = why

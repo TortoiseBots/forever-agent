@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/pjerra/forever-agent/internal/trials/events"
 )
 
 // sampleUnitsYards is the units radius of one sampler tick (Python
@@ -38,13 +36,13 @@ func GuidsOf(setup map[string]any) Guids {
 	if obj == nil {
 		return g
 	}
-	g.Player = events.NormGUID(obj["player"])
-	g.Bot = events.NormGUID(obj["bot"])
-	g.Pet = events.NormGUID(obj["pet"])
-	g.Marked = events.NormGUID(obj["marked"])
+	g.Player = canonGUIDAny(obj["player"])
+	g.Bot = canonGUIDAny(obj["bot"])
+	g.Pet = canonGUIDAny(obj["pet"])
+	g.Marked = canonGUIDAny(obj["marked"])
 	if list, ok := obj["extras"].([]any); ok {
 		for _, e := range list {
-			if s := events.NormGUID(e); s != "" {
+			if s := canonGUIDAny(e); s != "" {
 				g.Extras = append(g.Extras, s)
 			}
 		}
@@ -54,7 +52,7 @@ func GuidsOf(setup map[string]any) Guids {
 	}
 	if list, ok := obj["mobs"].([]any); ok {
 		for _, e := range list {
-			if s := events.NormGUID(e); s != "" {
+			if s := canonGUIDAny(e); s != "" {
 				g.Mobs = append(g.Mobs, s)
 			}
 		}
@@ -345,7 +343,7 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 	out := []map[string]any{}
 	byGUID := map[string]Unit{}
 	for _, u := range units {
-		byGUID[strings.ToLower(u.GUID)] = u
+		byGUID[canonGUID(u.GUID)] = u
 	}
 	row := func(label, guid string, unit map[string]any, inCombat any, target string, x, y, z any) {
 		r := map[string]any{
@@ -363,7 +361,7 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 		}
 		out = append(out, r)
 	}
-	ownGUID := strings.ToLower(st.GUID)
+	ownGUID := canonGUID(st.GUID)
 	own := map[string]any{}
 	if u, ok := byGUID[ownGUID]; ok {
 		own = u.Raw
@@ -379,12 +377,12 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 		"auras": ownAuras(own), "casting": own["casting"],
 	}
 	ownCombat := ownInCombat(st, own, units)
-	row("player", ownGUID, playerUnit, ownCombat, strings.ToLower(st.Target), st.Raw["x"], st.Raw["y"], st.Raw["z"])
+	row("player", ownGUID, playerUnit, ownCombat, canonGUID(st.Target), st.Raw["x"], st.Raw["y"], st.Raw["z"])
 	unitRow := func(key, label, guid string) (Unit, bool) {
 		if guid == "" {
 			return Unit{}, false
 		}
-		u, ok := byGUID[strings.ToLower(guid)]
+		u, ok := byGUID[canonGUID(guid)]
 		if !ok {
 			return Unit{}, false
 		}
@@ -394,7 +392,7 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 			"auras": u.Raw["auras"], "casting": u.Raw["casting"],
 		}
 		_ = key
-		row(label, strings.ToLower(guid), m, u.InCombat, strings.ToLower(u.Target), u.Raw["x"], u.Raw["y"], u.Raw["z"])
+		row(label, canonGUID(guid), m, u.InCombat, canonGUID(u.Target), u.Raw["x"], u.Raw["y"], u.Raw["z"])
 		return u, true
 	}
 	guids := Guids{}
@@ -410,7 +408,7 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 		}
 	}
 	for _, g := range guids.Mobs {
-		unitRow("mob", "mob:"+strings.ToLower(g), g)
+		unitRow("mob", "mob:"+canonGUID(g), g)
 	}
 	sample := map[string]any{
 		"player": compactSample(st.Health, st.MaxHealth, ownAuras(own), ownCombat, st.Dead),
@@ -460,12 +458,12 @@ func ownInCombat(st Status, own map[string]any, units []Unit) bool {
 	if v, ok := own["in_combat"]; ok && own != nil {
 		return boolOf(v)
 	}
-	tg := strings.ToLower(st.Target)
+	tg := canonGUID(st.Target)
 	if tg == "" {
 		return false
 	}
 	for _, u := range units {
-		if strings.ToLower(u.GUID) == tg && !u.Dead {
+		if canonGUID(u.GUID) == tg && !u.Dead {
 			if h, _ := u.Raw["hostile"].(bool); h && u.InCombat {
 				return true
 			}
@@ -533,7 +531,7 @@ func (c *Collector) AuraOnSince(seq uint64, spell int, target string, since time
 func (c *Collector) MobCasts(guids []string) map[string]any {
 	want := map[string]bool{}
 	for _, g := range guids {
-		want[strings.ToLower(g)] = true
+		want[canonGUID(g)] = true
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -554,7 +552,7 @@ func (c *Collector) MobCasts(guids []string) map[string]any {
 // target that never turns InCombat was engaged. A row of the dummy casting
 // at the bot is not this proof, so source and target are both matched.
 func (c *Collector) EngagedAt(src, dst string) map[string]any {
-	src, dst = strings.ToLower(src), strings.ToLower(dst)
+	src, dst = canonGUID(src), canonGUID(dst)
 	if src == "" || dst == "" {
 		return nil
 	}
@@ -577,12 +575,12 @@ func (c *Collector) EngagedAt(src, dst string) map[string]any {
 func rowGUID(row map[string]any, side string) string {
 	if v := row[side+"_guid"]; v != nil {
 		if s, ok := v.(string); ok && s != "" {
-			return strings.ToLower(s)
+			return canonGUID(s)
 		}
 	}
 	if flat, ok := row[side].(map[string]any); ok {
 		if g, ok := flat["guid"].(string); ok {
-			return strings.ToLower(g)
+			return canonGUID(g)
 		}
 	}
 	return ""

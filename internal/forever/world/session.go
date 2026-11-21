@@ -494,7 +494,11 @@ type session struct {
 	itemCast itemCastWatch
 	self     wire.GUID
 	selfSeen bool
-	mover    *objects.Mover
+	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
+	gmCastAt []time.Time
+	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).
+	selfTeleports int
+	mover         *objects.Mover
 	// knockbacks is the takeoff of every mover a knockback packet named and whose landing has not arrived yet:
 	// keyed by GUID, with knockOrder the insertion order for the bound. Only the session goroutine touches them.
 	knocks     map[wire.GUID]knockPending
@@ -512,6 +516,12 @@ type session struct {
 	nameAsks map[wire.GUID]nameAsk
 	// nameAskLast is when the last name query of a dungeon port went out (dungeonNameAskGap).
 	nameAskLast time.Time
+	// realmPingAt is when a serving session next pings the realm socket (serveRealmPing).
+	realmPingAt time.Time
+	// realmPingSerial is the last serial the realm socket's ping used; nameScanAt is when the idle tick next scans for
+	// unnamed players (serveIdleTick).
+	realmPingSerial uint32
+	nameScanAt      time.Time
 	// nowFn replaces the client clock; the tests set a fake so the name backoff runs on a fake clock.
 	nowFn func() time.Time
 	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two
@@ -2060,6 +2070,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.world.ApplyTeleport(t, s.transport().Now())
 		s.cancelKnockback(t.MoverGUID)
 		if t.MoverGUID == s.self {
+			s.selfTeleports++
 			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
 			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is
 			// empty. An empty transport is no transport (the capture's release teleport is exactly this shape).

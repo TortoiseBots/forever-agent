@@ -114,6 +114,14 @@ type Options struct {
 	// nothing on success (HandleDebugBoundaryCommand, HandleNpcEvadeCommand), so the quiet window with nothing
 	// collected is the success itself. Refusals, echoes, pump errors and overlong replies still fail.
 	AllowEmpty bool
+	// Silent marks a tokenless command the core answers with nothing when it works and with a line only when it
+	// refuses (the GM teleport, .aura, .die, ...). Silence is not decided at the quiet window, because a refusal can
+	// still be on its way: with no line, the run lasts to Deadline (or to Confirm) and that is the success; a line
+	// ends it at the quiet window as any reply does, and the caller reads the line as what it is, a refusal.
+	Silent bool
+	// Confirm, when set on a tokenless run, is asked each time the pump looks: true ends the run at once as
+	// confirmed (End "confirmed"), the effect having been seen by the caller itself.
+	Confirm func() bool
 	// Now is the clock; nil means time.Now. Tests pass a fake clock.
 	Now func() time.Time
 
@@ -269,8 +277,9 @@ func (s *Session) Run(ctx context.Context, line string, opts Options) (*Reply, e
 	if rep != nil {
 		switch rep.End {
 		case "quiet", "echo":
-			terminated = true
-		case "maxlines", "deadline", "":
+			// A quiet end with no line at all (AllowEmpty) proves nothing about a reply still on its way.
+			terminated = len(rep.Raw) != 0 || rep.End == "echo"
+		case "maxlines", "deadline", "confirmed", "":
 			terminated = false
 		default:
 			// A tokened run's own end marker or error line: nothing of it can follow.
@@ -644,6 +653,11 @@ func (c *collector) Complete(now time.Time) bool {
 		c.end = "deadline"
 		return true
 	}
+	if !c.token && c.o.Confirm != nil && c.o.Confirm() {
+		c.complete = true
+		c.end = "confirmed"
+		return true
+	}
 	if !c.token {
 		// A silent-success command (AllowEmpty) ends its quiet window with no line: PSendSysMessage never
 		// ran, so there is nothing to collect. The deadline still ends it the same way, and Run tells the
@@ -653,7 +667,7 @@ func (c *collector) Complete(now time.Time) bool {
 			c.end = "quiet"
 			return true
 		}
-		if !c.got && c.o.AllowEmpty && now.Sub(c.start) >= c.o.Quiet {
+		if !c.got && c.o.AllowEmpty && !c.o.Silent && now.Sub(c.start) >= c.o.Quiet {
 			c.complete = true
 			c.end = "quiet"
 			return true
@@ -686,8 +700,11 @@ func (c *collector) Reply() *Reply {
 	// (AllowEmpty) with nothing collected is complete when it ended quietly.
 	if c.token {
 		rep.Complete = c.complete && !c.echo && !c.tooMany && !c.tooBig
-	} else if !c.got && c.o.AllowEmpty {
-		rep.Complete = c.complete && c.end == "quiet" && !c.echo && !c.tooMany && !c.tooBig
+	} else if !c.got && (c.o.AllowEmpty || c.o.Silent || c.end == "confirmed") {
+		// Nothing collected: complete when it ended quietly (AllowEmpty), at its deadline with nothing said (Silent:
+		// no refusal came in the whole window) or confirmed by the caller's own read of the effect.
+		okEnd := c.end == "confirmed" || (c.end == "quiet" && c.o.AllowEmpty && !c.o.Silent) || (c.end == "deadline" && c.o.Silent)
+		rep.Complete = (c.complete || (c.end == "deadline" && c.o.Silent)) && okEnd && !c.echo && !c.tooMany && !c.tooBig
 	} else {
 		rep.Complete = c.got && c.complete && !c.tooMany && !c.tooBig
 	}

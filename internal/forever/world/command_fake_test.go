@@ -35,6 +35,10 @@ const (
 	commandGuardNoAck
 	commandGuardEchoAfterAck
 	commandGuardGMOn
+	// commandSilentGo answers a .go xyz with no line at all, the way the core does when it works; commandSilentGoMoves
+	// also moves the character there with SMSG_MOVE_TELEPORT.
+	commandSilentGo
+	commandSilentGoMoves
 )
 
 // gmHelp is the gm command's help block as ForeverCore prints it for an account that holds
@@ -88,7 +92,7 @@ func (f *fakeServer) serveCommand(c, realm *fakeConn) {
 		case fakeCMSGTimeSyncResponse:
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
-		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGMoveInitActiveMover, fakeCMSGMoveTeleportAck:
 		case fakeCMSGSetAdvancedCombatLogging:
 			f.checkAdvancedLogging(payload)
 		case fakeCMSGChatSay:
@@ -233,6 +237,23 @@ func (f *fakeServer) answerCommand(c, realm *fakeConn, text string) bool {
 			"cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=yes drinking=no resting=yes "+
 			"rest_why=eating #"+token)
 		f.sysChat(c, "state-end count=2 records=2 resting=1 target=party:Tbtank ready=no why=eating #"+token)
+		return true
+	case commandSilentGo, commandSilentGoMoves:
+		if !strings.HasPrefix(body, ".go xyz") {
+			f.failf("command: silent-go scenario got %q", text)
+			return false
+		}
+		if f.command == commandSilentGoMoves {
+			c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlockType(f.clientGUID, 0, 1000, 2000, 50, 7, 6))
+			tp := append([]byte{}, f.clientGUID...)
+			tp = appendU32(tp, 9)
+			tp = append(tp, fakeF32(1100)...)
+			tp = append(tp, fakeF32(2100)...)
+			tp = append(tp, fakeF32(55)...)
+			tp = append(tp, fakeF32(0)...)
+			tp = append(tp, 0)
+			c.writeFrame(fakeSMSGMoveTeleport, tp)
+		}
 		return true
 	case commandGuardGMOn:
 		// The character had GM mode on before the run. The guard must send no restore (it never switches the mode

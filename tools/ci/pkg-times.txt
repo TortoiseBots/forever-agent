@@ -32,6 +32,7 @@ internal/mapview 3.267
 internal/forever/gmwalk 2.216
 internal/forever/runmap 2.125
 internal/rpc 2.120
+internal/forever/follow 2.044
 internal/objects 1.907
 internal/db2 1.794
 tools/tbmbuttongen 1.700
@@ -71,6 +72,7 @@ internal/worldspawn 1.146
 internal/eluna 1.142
 internal/forever/loot 1.134
 internal/forever/tables 1.134
+internal/forever/quest 1.133
 internal/slots 1.124
 internal/navmesh 1.120
 internal/roster 1.111

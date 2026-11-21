@@ -118,6 +118,8 @@ func (s *session) serveUnitByName(guid GUID, name string) (*objects.Object, erro
 			return o, nil
 		}
 	}
+	// A player met after the login has no name yet: ask for it, so the next call finds the unit.
+	s.serveAskNames()
 	return nil, fmt.Errorf("no unit named %q nearby", chat.SanitiseName(name))
 }
 
@@ -151,7 +153,17 @@ func (s *session) serveGM(ctx context.Context, text string) (*command.Reply, err
 	if !strings.HasPrefix(text, ".") && !strings.HasPrefix(text, "!") {
 		text = "." + text
 	}
-	return s.serveCommandLine(ctx, text, 0)
+	opts, done, err := s.gmLinePrep(text, command.Options{})
+	if err != nil {
+		return nil, err
+	}
+	if !s.gmConfirmed {
+		if err := s.confirmGM(ctx); err != nil {
+			return nil, err
+		}
+	}
+	rep, err := s.serveCommandOptions(ctx, text, opts)
+	return rep, done(rep, err)
 }
 
 // The two module prefixes this method accepts. They are built from pieces so the package's own send invariant
