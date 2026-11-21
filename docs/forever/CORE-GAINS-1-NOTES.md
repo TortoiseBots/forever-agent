@@ -131,6 +131,10 @@ boss-read hold reads.
 | `instakill` | `SMSG_SPELL_INSTAKILL_LOG` `0x670021` | caster / target | `spell_id` |
 | `environmental` | `SMSG_ENVIRONMENTAL_DAMAGE_LOG` `0x67000E` | empty / victim | `amount`, `reason` = exhausted/drowning/fall/lava/slime/fire/fall-to-void, sample (victim) |
 
+`internal/forever/serveclient.CombatRow` mirrors the new fields (`interrupted_spell_id`, `absorbed_spell_id`,
+`dispelled`, `sample` and their two types), and `TestServeClientTypesMatchTheDaemon` compares the daemon's and the
+client's JSON keys and leaf kinds so neither side can drift alone.
+
 The attacker-state hit info (D's "misses, immunes, resists" second half) is the melee row's `reason`:
 `AttackRound.RoundReason()` names `HITINFO_MISS` or the victim state (dodge, parry, interrupt, block, evade, immune,
 deflect), so a swing that did not land stops looking like a zero-damage hit.
@@ -192,15 +196,30 @@ ran 60 s on the VM with no panic (gate line below).
 
 ## Gates
 
-Run on a clean committed tree at `eecab39b` (the only later change is this section):
+Run on a clean committed tree at `7d698a6c` (the only later change is this section), after the review round:
 
 ```
 make fmt-check            -> (no output) rc=0
 make cross                -> windows/amd64 and darwin/arm64 build, windows vet: rc=0
 staticcheck ./...         -> rc=0 (no finding)
 go vet ./...              -> rc=0
-make build                -> rc=0
 ```
+
+The full world package locally (the merge's typed-client test failed there until the client gained the new combat-row
+fields): `ok  github.com/pjerra/forever-agent/internal/forever/world  579.115s`.
+
+The VM suite:
+
+```
+RESULT: PASS  kind=ta wt=wt-fa-gains sha=7d698a6c dirty=0 files=2343
+rc=0  vm_duration=2289s  laptop_wall=2305s
+```
+
+The VM log's footer is `VM-TEST-END rc=0 seconds=2289`; the known world-socket flakes (`TestRouteWalk*`,
+`TestEnterAdopts*`) did not fail, so the fallback rerun was not needed. The fuzz block below is the round's own run at
+`eecab39b` (60 s, `FuzzGainsPackets` over every new parser). The review fixes do not change any allocation path: the
+new work is a stored victim choice, a dedupe map outside the ring, an open-id set, a bounded dispel-time slice and
+one error return for a zero mob GUID.
 
 Fuzz, 60 s on the VM (`yulon-ubuntu2`, Go from `go.mod`, `FuzzGainsPackets` over every new parser):
 
@@ -210,31 +229,6 @@ fuzz: elapsed: 1m1s, execs: 3373160 (0/sec), new interesting: 131 (total: 146)
 PASS
 ok  	github.com/pjerra/forever-agent/internal/forever/combat	61.173s
 ```
-
-The race run the brief names (also the fallback if the known world-socket test is the only failure):
-
-```
-go test -race -count=1 -timeout 30m ./internal/forever/... ./internal/bughunt/... ./internal/trials/...
-rc=0
-```
-
-The VM suite:
-
-```
-RESULT: PASS  kind=ta wt=wt-fa-gains sha=eecab39b dirty=0 files=2315
-rc=0  vm_duration=1297s  laptop_wall=1303s
-```
-
-The VM log's footer is `VM-TEST-END rc=0 seconds=1297`; `TestEnterAdoptsTheProbedWorldSocket` did not fail, so the
-fallback command was not needed for this run (it was still run, above, and passed).
-
-One local `make test` run (under `-race`, while the machine was heavily loaded and the
-`internal/forever/world` package took 577 s) failed `TestRouteWalkPlanWaypointNotSnap` with
-`no create block of this character arrived, so there is no position to walk from`. It is a wall-clock timeout in a
-route-walk scene, not this round's code: the test passed 5/5 in isolation (`go test -race -count=5 -run
-'^TestRouteWalkPlanWaypointNotSnap$' ./internal/forever/world/`) and the VM's non-race suite passed the package. The
-same local run's `internal/forever`, `bughunt` and `trials` packages all passed under `-race`.
-
 
 ## Live checks for the lead's live queue
 
@@ -248,7 +242,8 @@ No live run was made this round. The first live session should check, on a test 
    boss: one `watch: boss pulled encounter=…` line at the pull, one `boss killed … duration=…s` at the kill, and
    `encounters` in `<run_id>.forever-run.json`. A wipe or reset should say `boss wipe` with `success: false`. On
    the classic Ragefire Chasm bosses (no script data) the `.tb instance` cadence must still appear and the summary's
-   `bosses` map must still fill.
+   `bosses` map must still fill. In an instance with both, after the scripted fight's end the `.tb instance` read must
+   resume within a minute and show an unscripted boss — not stay silent for five minutes.
 3. **One interrupt.** Kick or Counterspell a casting mob in a fight: the combat log must gain a row
    `kind=interrupt`, `spell_id` = Kick/Counterspell, `interrupted_spell_id` = the mob's cast, source = the bot,
    target = the mob. In a trials repeat, `DPS-ROG-KICK`/`DPS-MAG-COUNTERSPELL` should count the interrupt as the
