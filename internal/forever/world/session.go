@@ -541,6 +541,9 @@ type session struct {
 	actMenu  *npc.GossipMessage
 	actQuest *npc.QuestGiverQuestList
 
+	// Round R3: the vendor's answers since the last step cleared them (vendor.go, vendor_act.go).
+	vendor vendorWatch
+
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
 	// one log with one seq axis. A serving daemon hands the dropped session's ring to the one that replaces it.
@@ -1919,6 +1922,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if isInventoryPacket(p.Core) {
 			return s.handleInventory(p)
 		}
+		if isVendorPacket(p.Core) {
+			return s.handleVendor(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -2224,7 +2230,8 @@ func (s *session) applyUpdate(u *objects.Update) {
 			continue
 		}
 		// Every own create is a fresh snapshot of the character (the login burst, a map change): the placements the
-		// overlay guessed before it are settled by the slots this block carries.
+		// overlay guessed before it are settled by the slots this block carries, and the quest log is re-read from
+		// the block on its next use (round R5).
 		inv.Reset()
 		if !s.selfSeen {
 			s.selfSeen = true

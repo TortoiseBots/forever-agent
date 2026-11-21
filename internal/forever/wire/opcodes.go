@@ -226,6 +226,22 @@ const (
 	SMSGInventoryChangeFailure uint32 = 0x680005
 )
 
+// The vendor of round R3 (Opcodes.h:147-148, 555, 844, 906-907, 1270-1271, 2300, 2483): the six client packets and
+// the four answers. LIST_INVENTORY is the NPC hello (Hello::Read), which is also how a vendor without the gossip
+// flag is opened.
+const (
+	CMSGListInventory    uint32 = 0x3E0036
+	CMSGBuyItem          uint32 = 0x3E0039
+	CMSGSellItem         uint32 = 0x3E0037
+	CMSGSellAllJunkItems uint32 = 0x3E0038
+	CMSGBuyBackItem      uint32 = 0x3E003A
+	CMSGRepairItem       uint32 = 0x3E0087
+	SMSGVendorInventory  uint32 = 0x45005C
+	SMSGSellResponse     uint32 = 0x450170
+	SMSGBuySucceeded     uint32 = 0x450171
+	SMSGBuyFailed        uint32 = 0x450172
+)
+
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
 const (
 	CMSGAreaTrigger          uint32 = 0x3D0089
@@ -326,6 +342,13 @@ var clientNames = map[uint32]string{
 	CMSGDestroyItem:       "CMSG_DESTROY_ITEM",
 	CMSGUseItem:           "CMSG_USE_ITEM",
 	CMSGOpenItem:          "CMSG_OPEN_ITEM",
+
+	CMSGListInventory:    "CMSG_LIST_INVENTORY",
+	CMSGBuyItem:          "CMSG_BUY_ITEM",
+	CMSGSellItem:         "CMSG_SELL_ITEM",
+	CMSGSellAllJunkItems: "CMSG_SELL_ALL_JUNK_ITEMS",
+	CMSGBuyBackItem:      "CMSG_BUY_BACK_ITEM",
+	CMSGRepairItem:       "CMSG_REPAIR_ITEM",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

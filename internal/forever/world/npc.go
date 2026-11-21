@@ -46,10 +46,14 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			return nil
 		}
 	case wire.SMSGNPCInteractionOpenResult:
-		if _, err := npc.ParseInteractionOpenResult(p.Payload); err != nil {
+		r, err := npc.ParseInteractionOpenResult(p.Payload)
+		if err != nil {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// Round R3: the vendor flow waits on it (vendor_act.go); it is the only answer the first
+		// CMSG_LIST_INVENTORY gets (F2).
+		s.vendor.open = &r
 	}
 	return nil
 }

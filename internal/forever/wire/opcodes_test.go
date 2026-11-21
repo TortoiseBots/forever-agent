@@ -63,6 +63,13 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x45021E, "SMSG_BATTLE_PAY_GET_DISTRIBUTION_LIST_RESPONSE", 0x47021F, 0x470220},
 		{0x450360, "SMSG_ACCOUNT_ITEM_COLLECTION_DATA", 0x470361, 0x470362},
 		{0x45036F, "SMSG_MIRROR_VARS", 0x470372, 0x470373},
+		// R3 vendor answers: below 0x98 the group+1 is the whole change; above it the index is one higher too
+		// (0x45005C -> 0x47005C; 0x450170 -> 0x470171; 0x450171 -> 0x470172; 0x450172 -> 0x470173), and a 70938
+		// client gets the net +1 of the 70755/70790 inserts from 0x4700ED on.
+		{0x45005C, "SMSG_VENDOR_INVENTORY", 0x47005C, 0x47005C},
+		{0x450170, "SMSG_SELL_RESPONSE", 0x470171, 0x470172},
+		{0x450171, "SMSG_BUY_SUCCEEDED", 0x470172, 0x470173},
+		{0x450172, "SMSG_BUY_FAILED", 0x470173, 0x470174},
 	}
 	for _, c := range cases {
 		if got := NewOpcodeTable(realmBuild70707, realmBuild70707).TranslateServerCore(c.core); got != c.w70707 {
@@ -175,6 +182,15 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E0029, "CMSG_GOSSIP_SELECT_OPTION", 0x3F002B, 0x3F002B},
 		{0x3E002B, "CMSG_QUEST_GIVER_HELLO", 0x3F002D, 0x3F002D},
 		{0x3E0028, "CMSG_CLOSE_INTERACTION", 0x3F002A, 0x3F002A},
+		// R3 vendor and R5 quest rows in the same 0x3E group: the .inc region-2 table lists each one, so the wire
+		// number is core+2 (0x3E0036 -> 0x3F0038, 0x3E0087 -> 0x3F0089, 0x3E00EC -> 0x3F00EF, ...), unchanged at
+		// 70938 (no client insert in this group).
+		{0x3E0036, "CMSG_LIST_INVENTORY", 0x3F0038, 0x3F0038},
+		{0x3E0037, "CMSG_SELL_ITEM", 0x3F0039, 0x3F0039},
+		{0x3E0038, "CMSG_SELL_ALL_JUNK_ITEMS", 0x3F003A, 0x3F003A},
+		{0x3E0039, "CMSG_BUY_ITEM", 0x3F003B, 0x3F003B},
+		{0x3E003A, "CMSG_BUY_BACK_ITEM", 0x3F003C, 0x3F003C},
+		{0x3E0087, "CMSG_REPAIR_ITEM", 0x3F0089, 0x3F0089},
 		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
 		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
 		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},

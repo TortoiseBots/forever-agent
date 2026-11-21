@@ -12,6 +12,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -35,6 +36,14 @@ const (
 	actVerbSplit   = "split"
 	actVerbDestroy = "destroy"
 	actVerbUse     = "use"
+
+	// Round R3's vendor steps (vendor_act.go).
+	actVerbVendor   = "vendor"
+	actVerbBuy      = "buy"
+	actVerbSell     = "sell"
+	actVerbSellJunk = "sell-junk"
+	actVerbBuyback  = "buyback"
+	actVerbRepair   = "repair"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -100,9 +109,10 @@ func ParseActStep(line string) (ActStep, error) {
 	}
 	switch verb {
 	case actVerbWait, actVerbGM, actVerbGoto, actVerbNPC, actVerbOpen, actVerbSelec, actVerbClose, actVerbInv,
-		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse:
+		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse,
+		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair)", verb)
 	}
 	return step, nil
 }
@@ -152,6 +162,10 @@ type actState struct {
 	npcEntry int32
 	hasNPC   bool
 	steps    int
+	// vendor is the list the last `vendor` step read, and hasVendor that a vendor is open: the purchase and sale
+	// steps need it, so they cannot run against a vendor nobody opened.
+	vendor    *items.VendorInventory
+	hasVendor bool
 }
 
 // actStep runs one step of the act script and prints its line.
@@ -186,6 +200,18 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actDestroy(ctx, a, step)
 	case actVerbUse:
 		return s.actUse(ctx, a, step)
+	case actVerbVendor:
+		return s.actVendor(ctx, a, step)
+	case actVerbBuy:
+		return s.actBuy(ctx, a, step)
+	case actVerbSell:
+		return s.actSell(ctx, a, step)
+	case actVerbSellJunk:
+		return s.actSellJunk(ctx, a, step)
+	case actVerbBuyback:
+		return s.actBuyback(ctx, a, step)
+	case actVerbRepair:
+		return s.actRepair(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}
