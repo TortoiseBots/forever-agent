@@ -203,6 +203,40 @@ func TestNoReply(t *testing.T) {
 	}
 }
 
+// TestAllowEmptyQuietSuccess: a silent-success core command (HandleDebugBoundaryCommand, HandleNpcEvadeCommand:
+// PSendSysMessage runs only for the failure ids) ends its quiet window with no line. With AllowEmpty that is
+// a complete answer; without it, and on a deadline end, a tokened run, a refusal or an echo, it stays ErrNoReply.
+func TestAllowEmptyQuietSuccess(t *testing.T) {
+	tr, _, now := newScript(nil)
+	rep, err := Run(context.Background(), tr, ".debug boundary", Options{Quiet: 500 * time.Millisecond, Deadline: 5 * time.Second, Now: now, AllowEmpty: true})
+	if err != nil {
+		t.Fatalf("AllowEmpty quiet: %v", err)
+	}
+	if !rep.Complete || rep.End != "quiet" || len(rep.Raw) != 0 {
+		t.Fatalf("reply %+v", rep)
+	}
+
+	// Without the flag the same silence is no answer.
+	tr, _, now = newScript(nil)
+	if _, err := Run(context.Background(), tr, ".debug boundary", Options{Quiet: 500 * time.Millisecond, Deadline: 5 * time.Second, Now: now}); !errors.Is(err, ErrNoReply) {
+		t.Fatalf("no-flag silence: err %v, want ErrNoReply", err)
+	}
+	// A deadline end with no line is no answer even with the flag.
+	tr, _, now = newScript(nil)
+	if _, err := Run(context.Background(), tr, ".debug boundary", Options{Quiet: 30 * time.Second, Deadline: time.Second, Now: now, AllowEmpty: true}); !errors.Is(err, ErrNoReply) {
+		t.Fatalf("deadline silence: err %v, want ErrNoReply", err)
+	}
+	// Refusals and echoes still fail: quiet success never masks them.
+	tr, _, now = newScript([]chat.Line{sys("Incorrect syntax.")})
+	if _, err := Run(context.Background(), tr, ".debug boundary", Options{Quiet: 100 * time.Millisecond, Deadline: 5 * time.Second, Now: now, AllowEmpty: true}); !errors.Is(err, ErrSyntax) {
+		t.Fatalf("refusal: err %v, want ErrSyntax", err)
+	}
+	tr, _, now = newScript([]chat.Line{say("Tbtank", ".debug boundary")})
+	if _, err := Run(context.Background(), tr, ".debug boundary", Options{SelfName: "tbtank", Quiet: 100 * time.Millisecond, Deadline: 5 * time.Second, Now: now, AllowEmpty: true}); !errors.Is(err, ErrNoPermission) {
+		t.Fatalf("echo: err %v, want ErrNoPermission", err)
+	}
+}
+
 func TestSayEchoIsNoPermission(t *testing.T) {
 	lines := []chat.Line{say("Tbtank", ".server info")}
 	tr, _, now := newScript(lines)

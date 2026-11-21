@@ -1278,7 +1278,8 @@ const (
 )
 
 // queryNames asks for the names of the nearest units this client does not know yet, bounded in rounds and with a
-// deadline per answer.
+// deadline per answer. Game objects go last, one query per entry: the answer carries names and types for the
+// doors, chests and gossip objects the loot and route checks show.
 func (s *session) queryNames(ctx context.Context) {
 	x, y, z := s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2]
 	for round := 0; round < maxNameQueryRounds; round++ {
@@ -1286,7 +1287,8 @@ func (s *session) queryNames(ctx context.Context) {
 		if len(entries) > maxCreatureQueries {
 			entries = entries[:maxCreatureQueries]
 		}
-		if len(players) == 0 && len(entries) == 0 {
+		goEntries := s.world.UnknownGameObjects(x, y, z, maxCreatureQueries)
+		if len(players) == 0 && len(entries) == 0 && len(goEntries) == 0 {
 			return
 		}
 		if len(players) > 0 {
@@ -1295,8 +1297,27 @@ func (s *session) queryNames(ctx context.Context) {
 			}
 			s.report.NamesAsked += len(players)
 			s.opts.logf("world: CMSG_QUERY_PLAYER_NAMES for %d player(s)", len(players))
+			want := make(map[wire.GUID]bool, len(players))
+			for _, g := range players {
+				want[g] = true
+			}
+			// A delayed answer from an earlier round (or an unsolicited one) carries other GUIDs: only an
+			// answer naming this round's players completes the wait, otherwise a stale response would mark
+			// entries answered that never were.
 			if _, err := s.waitFor("SMSG_QUERY_PLAYER_NAMES_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
-				return p.Core == wire.SMSGQueryPlayerNamesResponse
+				if p.Core != wire.SMSGQueryPlayerNamesResponse {
+					return false
+				}
+				names, err := objects.ParsePlayerNamesResponse(p.Payload)
+				if err != nil {
+					return true
+				}
+				for _, n := range names {
+					if want[n.GUID] {
+						delete(want, n.GUID)
+					}
+				}
+				return len(want) == 0
 			}); err != nil {
 				s.opts.logf("world: the player name answer did not come: %v", err)
 				return
@@ -1309,15 +1330,85 @@ func (s *session) queryNames(ctx context.Context) {
 				if err := s.sendOn(sideInstance, wire.CMSGQueryCreature, packet); err != nil {
 					return
 				}
+				want := unpackCreatureQueryEntries(packet)
 				if _, err := s.waitFor("SMSG_QUERY_CREATURE_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
-					return p.Core == wire.SMSGCreatureQueryResponse
+					if p.Core != wire.SMSGCreatureQueryResponse {
+						return false
+					}
+					got, err := objects.ParseCreatureQueryResponse(p.Payload)
+					if err != nil {
+						return true
+					}
+					for _, c := range got {
+						delete(want, c.Entry)
+					}
+					return len(want) == 0
 				}); err != nil {
 					s.opts.logf("world: the creature name answer did not come: %v", err)
 					return
 				}
 			}
 		}
+		if len(goEntries) > 0 {
+			s.queryGameObjects(ctx, goEntries)
+		}
 	}
+}
+
+// queryGameObjects asks for the names and types of game-object entries, one query each: the query names one
+// entry (QueryPackets.cpp:344-348) and the answer is matched to it. An entry whose answer does not come is
+// skipped: the object still shows by entry, just without its name and type.
+func (s *session) queryGameObjects(ctx context.Context, entries []int32) {
+	objs := s.world.GameObjects(s.report.WalkClientPos[0], s.report.WalkClientPos[1], s.report.WalkClientPos[2])
+	guidOf := make(map[int32]wire.GUID, len(objs))
+	for _, o := range objs {
+		if _, ok := guidOf[o.Info.Entry]; !ok {
+			guidOf[o.Info.Entry] = o.GUID
+		}
+	}
+	for _, e := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		s.opts.logf("world: CMSG_QUERY_GAME_OBJECT for entry %d", e)
+		if err := s.sendOn(sideInstance, wire.CMSGQueryGameObject, objects.BuildQueryGameObject(uint32(e), guidOf[e])); err != nil {
+			return
+		}
+		s.report.NamesAsked++
+		// The answer echoes the queried entry: a delayed answer from an earlier round must not satisfy
+		// this round's wait, or entries would be marked answered that never were.
+		entry := uint32(e)
+		if _, err := s.waitFor("SMSG_QUERY_GAME_OBJECT_RESPONSE", nameQueryDeadline, func(p worldconn.Packet) bool {
+			if p.Core != wire.SMSGGameObjectQueryResponse {
+				return false
+			}
+			got, err := objects.ParseGameObjectQueryResponse(p.Payload)
+			if err != nil {
+				return true
+			}
+			return got.Entry == entry
+		}); err != nil {
+			s.opts.logf("world: the gameobject answer did not come: %v", err)
+			return
+		}
+	}
+}
+
+// unpackCreatureQueryEntries reads the entries back out of a built CMSG_QUERY_CREATURE packet (movement_in.go:
+// a 6-bit entry count, flushed, then the u32 entries): the wait's match set, so a stale answer naming other
+// entries does not complete it.
+func unpackCreatureQueryEntries(packet []byte) map[uint32]bool {
+	want := map[uint32]bool{}
+	if len(packet) < 1 {
+		return want
+	}
+	n := int(packet[0] & 0x3F)
+	for i := 0; i < n && 1+4*(i+1) <= len(packet); i++ {
+		off := 1 + 4*i
+		e := uint32(packet[off]) | uint32(packet[off+1])<<8 | uint32(packet[off+2])<<16 | uint32(packet[off+3])<<24
+		want[e] = true
+	}
+	return want
 }
 
 // uint32Entries narrows the entries to the query's uint32 wire form.
@@ -1891,7 +1982,11 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGQueryPlayerNamesResponse:
 		names, err := objects.ParsePlayerNamesResponse(p.Payload)
 		if err != nil {
-			return fmt.Errorf("world: SMSG_QUERY_PLAYER_NAMES_RESPONSE: %w", err)
+			// A malformed answer is logged and dropped, never an error that can end the session (the name
+			// round simply re-asks; a short packet must not kill the run the way handleCombat already treats
+			// every combat misparse).
+			s.noteParseError(p, err)
+			break
 		}
 		for _, n := range names {
 			if n.Found && n.Name != "" {
@@ -1901,12 +1996,26 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGCreatureQueryResponse:
 		creatures, err := objects.ParseCreatureQueryResponse(p.Payload)
 		if err != nil {
-			return fmt.Errorf("world: SMSG_QUERY_CREATURE_RESPONSE: %w", err)
+			s.noteParseError(p, err)
+			break
 		}
 		for _, c := range creatures {
 			if c.Found && c.Name != "" {
 				s.world.SetEntryName(int32(c.Entry), c.Name)
 			}
+		}
+	case wire.SMSGGameObjectQueryResponse:
+		g, err := objects.ParseGameObjectQueryResponse(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			break
+		}
+		if g.Found {
+			s.world.SetGameObjectName(g)
+		} else {
+			// The core answers Allow=false for a missing template (empty Allow=0 reply): remember it as a
+			// negative entry so the name round stops asking every round.
+			s.world.SetGameObjectName(g)
 		}
 	case wire.SMSGChat, wire.SMSGPrintNotification, wire.SMSGMotd, wire.SMSGChatServerMessage,
 		wire.SMSGChatPlayerNotFound, wire.SMSGChatPlayerAmbiguous, wire.SMSGChatRestricted,
@@ -1984,6 +2093,36 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		s.fight.lastSwingErr = v.Reason
 		s.fight.swingErrSeq++
 		s.fight.add("swing", "swing error: "+v.Reason.String(), 0)
+	case wire.SMSGAIReaction:
+		v, err := combat.ParseAIReaction(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		// Only a HOSTILE reaction is a pull moment (Unit.cpp:6242, sent when a creature engages). ALERT is
+		// the stealth-notice reaction (CreatureAI.cpp:156), and FRIENDLY, AFRAID and DESTROY never reach a
+		// client in play (SharedDefines.h:6636-6642): recording any of them as kind "hostile" makes a watch
+		// consumer count false aggro. Hostile becomes a combat-log row (kind "hostile", the source guid in
+		// the record) plus a fight-log line naming the reacting unit; alert is its own kind; anything else
+		// is ignored.
+		switch v.Kind {
+		case combat.AIReactionHostile:
+			s.combatRow("hostile", now, int32(v.Kind), 0, v.Unit, wire.EmptyGUID, v.Kind.String())
+			if v.Unit == s.self {
+				s.fight.add("hostile", "you turned hostile", 0)
+			} else if o, ok := s.world.Object(v.Unit); ok {
+				name := s.world.Name(o)
+				if name == "" {
+					name = v.Unit.String()
+				}
+				s.fight.add("hostile", fmt.Sprintf("%s turned hostile", name), 0)
+			} else {
+				s.fight.add("hostile", fmt.Sprintf("%s turned hostile", v.Unit.String()), 0)
+			}
+		case combat.AIReactionAlert:
+			s.combatRow("alert", now, int32(v.Kind), 0, v.Unit, wire.EmptyGUID, v.Kind.String())
+		default:
+		}
 	case wire.SMSGAttackerStateUpdate:
 		v, err := combat.ParseAttackerStateUpdate(p.Payload)
 		if err != nil {
