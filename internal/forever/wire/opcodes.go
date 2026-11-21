@@ -255,6 +255,46 @@ const (
 	SMSGInventoryChangeFailure uint32 = 0x680005
 )
 
+// The vendor of round R3 (Opcodes.h:147-148, 555, 844, 906-907, 1270-1271, 2300, 2483): the six client packets and
+// the four answers. LIST_INVENTORY is the NPC hello (Hello::Read), which is also how a vendor without the gossip
+// flag is opened.
+const (
+	CMSGListInventory    uint32 = 0x3E0036
+	CMSGBuyItem          uint32 = 0x3E0039
+	CMSGSellItem         uint32 = 0x3E0037
+	CMSGSellAllJunkItems uint32 = 0x3E0038
+	CMSGBuyBackItem      uint32 = 0x3E003A
+	CMSGRepairItem       uint32 = 0x3E0087
+	SMSGVendorInventory  uint32 = 0x45005C
+	SMSGSellResponse     uint32 = 0x450170
+	SMSGBuySucceeded     uint32 = 0x450171
+	SMSGBuyFailed        uint32 = 0x450172
+)
+
+// The quests of round R5 (Opcodes.h:805-814, 2195-2205, 2214-2217): the giver's client packets (HELLO is R0's)
+// and the answers, credits and log notices.
+const (
+	CMSGQuestGiverStatusQuery      uint32 = 0x3E0031
+	CMSGQuestGiverQueryQuest       uint32 = 0x3E002C
+	CMSGQuestGiverAcceptQuest      uint32 = 0x3E002D
+	CMSGQuestGiverCompleteQuest    uint32 = 0x3E002E
+	CMSGQuestGiverRequestReward    uint32 = 0x3E0030
+	CMSGQuestGiverChooseReward     uint32 = 0x3E002F
+	CMSGQuestGiverCloseQuest       uint32 = 0x3E00EC
+	CMSGQuestLogRemoveQuest        uint32 = 0x3E00D0
+	SMSGQuestGiverStatus           uint32 = 0x65001B
+	SMSGQuestGiverQuestDetails     uint32 = 0x650012
+	SMSGQuestGiverRequestItems     uint32 = 0x650013
+	SMSGQuestGiverOfferReward      uint32 = 0x650014
+	SMSGQuestGiverQuestComplete    uint32 = 0x650003
+	SMSGQuestGiverInvalidQuest     uint32 = 0x650005
+	SMSGQuestGiverQuestFailed      uint32 = 0x650006
+	SMSGQuestUpdateAddCredit       uint32 = 0x65000C
+	SMSGQuestUpdateAddCreditSimple uint32 = 0x65000D
+	SMSGQuestUpdateComplete        uint32 = 0x650009
+	SMSGQuestLogFull               uint32 = 0x650007
+)
+
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
 const (
 	CMSGAreaTrigger          uint32 = 0x3D0089
@@ -358,6 +398,22 @@ var clientNames = map[uint32]string{
 	CMSGDestroyItem:       "CMSG_DESTROY_ITEM",
 	CMSGUseItem:           "CMSG_USE_ITEM",
 	CMSGOpenItem:          "CMSG_OPEN_ITEM",
+
+	CMSGListInventory:    "CMSG_LIST_INVENTORY",
+	CMSGBuyItem:          "CMSG_BUY_ITEM",
+	CMSGSellItem:         "CMSG_SELL_ITEM",
+	CMSGSellAllJunkItems: "CMSG_SELL_ALL_JUNK_ITEMS",
+	CMSGBuyBackItem:      "CMSG_BUY_BACK_ITEM",
+	CMSGRepairItem:       "CMSG_REPAIR_ITEM",
+
+	CMSGQuestGiverStatusQuery:   "CMSG_QUEST_GIVER_STATUS_QUERY",
+	CMSGQuestGiverQueryQuest:    "CMSG_QUEST_GIVER_QUERY_QUEST",
+	CMSGQuestGiverAcceptQuest:   "CMSG_QUEST_GIVER_ACCEPT_QUEST",
+	CMSGQuestGiverCompleteQuest: "CMSG_QUEST_GIVER_COMPLETE_QUEST",
+	CMSGQuestGiverRequestReward: "CMSG_QUEST_GIVER_REQUEST_REWARD",
+	CMSGQuestGiverChooseReward:  "CMSG_QUEST_GIVER_CHOOSE_REWARD",
+	CMSGQuestGiverCloseQuest:    "CMSG_QUEST_GIVER_CLOSE_QUEST",
+	CMSGQuestLogRemoveQuest:     "CMSG_QUEST_LOG_REMOVE_QUEST",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

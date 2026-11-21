@@ -236,6 +236,10 @@ func TestActivePlayerSkippedBehindPlayerData(t *testing.T) {
 	b.WriteU8(0)
 	b.WriteU8(0x03)
 	b.WriteU32(uint32(1)<<uint(TypePlayer) | uint32(1)<<uint(TypeActivePlayer))
+	// A PlayerData mask that names a visible item (classic bit 238), a field this client does not walk.
+	b.WriteBits(1<<7, 11)
+	b.WriteBits(1<<(238-7*32), 32)
+	b.FlushBits()
 	b.WriteBytes(make([]byte, 8))
 	u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, b.Bytes()), 70707)
 	if err != nil || len(u.Blocks) != 1 {

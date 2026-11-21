@@ -728,6 +728,17 @@ func mergeInfo(dst *Info, src Info) {
 		if f.Coinage {
 			dst.player().Coinage = src.Player.Coinage
 		}
+		if f.QuestLogDeltas {
+			// Copy on write: a snapshot reader may still hold the slice the last create or update left.
+			pl := dst.player()
+			log := append([]QuestLogEntry(nil), pl.QuestLog...)
+			for slot, d := range src.Player.QuestLogDeltas {
+				if slot >= 0 && slot < len(log) {
+					d.Apply(&log[slot])
+				}
+			}
+			pl.QuestLog = log
+		}
 	}
 }
 

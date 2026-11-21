@@ -24,7 +24,25 @@ const (
 	// NPCFlagSpiritHealer is UNIT_NPC_FLAG_SPIRIT_HEALER (UnitDefines.h:334), the flag the creature a ghost may
 	// use has.
 	NPCFlagSpiritHealer uint32 = 0x4000
+	// NPCFlagVendor is UNIT_NPC_FLAG_VENDOR (UnitDefines.h:327): the creature's list is what CMSG_LIST_INVENTORY
+	// asks for, and its rows are UNIT_NPC_FLAG_VENDOR_AMMO/FOOD/POISON/REAGENT shops too (0x100-0x800).
+	NPCFlagVendor uint32 = 0x0080
+	// NPCFlagVendorMasks is the four shop flags next to the generic one (UnitDefines.h:328-331): a vendor may have
+	// only one of them, and it is still a vendor.
+	NPCFlagVendorMasks uint32 = 0x0F00
+	// NPCFlagRepair is UNIT_NPC_FLAG_REPAIR (UnitDefines.h:332): the creature repairs.
+	NPCFlagRepair uint32 = 0x1000
 )
+
+// IsVendor reports whether a creature's flags make it a vendor (any of the five vendor bits).
+func IsVendor(flags uint32) bool { return flags&(NPCFlagVendor|NPCFlagVendorMasks) != 0 }
+
+// IsRepairer reports whether a creature's flags make it a repairer.
+func IsRepairer(flags uint32) bool { return flags&NPCFlagRepair != 0 }
+
+// InteractionMerchant is PlayerInteractionType::Merchant (DBCEnums.h:2236): the interaction SMSG_NPC_INTERACTION_OPEN_RESULT
+// names when a vendor opens.
+const InteractionMerchant int32 = 5
 
 // GossipOptionNpc names the server's option kind (GossipDef.h:37, the GossipOptionNpc enum): the icon the menu row
 // carries, which the act runner uses to pick an option by role.
@@ -63,8 +81,6 @@ const (
 	maxGossipFailureLen = 255
 	// maxGossipTitleLen bounds the 9-bit quest title length (511 on the wire).
 	maxGossipTitleLen = 255
-	// maxQuestGreetingLen bounds the 11-bit quest list greeting length (2047 on the wire is the field's own width).
-	maxQuestGreetingLen = 2047
 	// maxPromotionCodeLen bounds CMSG_GOSSIP_SELECT_OPTION's 8-bit promotion code.
 	maxPromotionCodeLen = 255
 )

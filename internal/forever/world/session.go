@@ -24,6 +24,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -554,7 +555,20 @@ type session struct {
 	loot *lootWatch
 	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
 	actMenu  *npc.GossipMessage
-	actQuest *npc.QuestGiverQuestList
+	actQuest *quest.QuestList
+
+	// Round R3: the vendor's answers since the last step cleared them (vendor.go, vendor_act.go).
+	vendor vendorWatch
+
+	// Round R5: the quest answers since the last step cleared them, and the character's own log (quest.go,
+	// quest_act.go). The log starts from the login create block on first use and an own create re-seeds it.
+	quest    questWatch
+	questLog *quest.Log
+	// questStale is why the log cannot be trusted (a PlayerData update named quest-log slots next to a field this
+	// client does not decode), empty when it can; an own create clears it. invFail is the last
+	// SMSG_INVENTORY_CHANGE_FAILURE, which a vendor purchase or buyback refusal arrives as (Player::_StoreOrEquipNewItem).
+	questStale string
+	invFail    *items.ChangeFailure
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -2066,6 +2080,12 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if isInventoryPacket(p.Core) {
 			return s.handleInventory(p)
 		}
+		if isVendorPacket(p.Core) {
+			return s.handleVendor(p)
+		}
+		if isQuestPacket(p.Core) {
+			return s.handleQuest(p)
+		}
 		s.handleCombat(p)
 	}
 	return nil
@@ -2536,12 +2556,25 @@ func (s *session) applyUpdate(u *objects.Update) {
 				s.noteInventoryStale(reason)
 			}
 		}
+		// The quest log is the character's own PlayerData: the slot changes the server names are the only way a quest
+		// taken, rewarded, abandoned or changed by a GM line reaches this client, so they go into the log at once; an
+		// update that named quest-log slots next to a field this client cannot read leaves the log unknown (stale).
+		if deltas, ok := b.Info.ChangedQuestLog(); ok {
+			s.questBook().ApplyServer(deltas)
+		}
+		if b.Info.QuestLogUndecoded() && s.questStale == "" {
+			s.questStale = "a server update named quest-log slots next to fields this client does not decode"
+			s.opts.logf("world: %s; quest steps refuse until the next login or map change", s.questStale)
+		}
 		if b.Movement == nil || !b.Movement.ThisIsYou {
 			continue
 		}
 		// Every own create is a fresh snapshot of the character (the login burst, a map change): the placements the
-		// overlay guessed before it are settled by the slots this block carries.
+		// overlay guessed before it are settled by the slots this block carries, and the quest log is re-read from
+		// the block on its next use (round R5).
 		inv.Reset()
+		s.questLog = nil
+		s.questStale = ""
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID

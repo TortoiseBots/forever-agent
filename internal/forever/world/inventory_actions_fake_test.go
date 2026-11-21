@@ -47,6 +47,8 @@ type itemWorld struct {
 	lines []string
 	// onSend answers one client packet; a nil answer sends nothing.
 	onSend func(f *itemWorld, core uint32, payload []byte)
+	// onWait, when set, runs after the fake clock moved: a server answer that arrives later than the request.
+	onWait func(now time.Time)
 }
 
 // newItemWorld builds the session and its world.
@@ -156,6 +158,9 @@ func (f *itemWorld) WaitUntil(ctx context.Context, until time.Time) error {
 	}
 	if until.After(f.now) {
 		f.now = until
+		if f.onWait != nil {
+			f.onWait(f.now)
+		}
 	}
 	return nil
 }
