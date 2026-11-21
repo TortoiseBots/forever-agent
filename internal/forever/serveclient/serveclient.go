@@ -6,9 +6,20 @@
 // its typed shape, so callers never juggle map[string]any.
 //
 // -32005 (reconnecting) is retried every 2 s for up to 60 s and surfaces as
-// ErrReconnecting past the budget; -32002 (disconnected) surfaces as
-// ErrDisconnected at once. trials/live keeps its own client; this package
-// must not grow one-off shapes for it.
+// an *Error that errors.Is ErrReconnecting past the budget; -32002
+// (disconnected) surfaces at once as an *Error that errors.Is ErrDisconnected.
+// CodeOf reads the code of both. trials/live keeps its own client; this
+// package must not grow one-off shapes for it.
+//
+// The client only ever talks to a loopback address, and sends the bearer
+// token nowhere else (no redirect is followed).
+//
+// Methods the daemon on main registers today: status, units, unit, party, gm,
+// bot, events, logout. EventLog (event_log), Act (act) and Teardown (teardown)
+// need W3/W2: the daemon has no event_log or act yet and answers teardown
+// with the not-ported -32003; Commander is not ported either. Events reads
+// the combat log the daemon serves now. A test in internal/forever/world pins
+// the daemon's table so the day those methods land the pin flips.
 package serveclient
 
 import (
@@ -20,24 +31,45 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/runmap"
+	"github.com/pjerra/forever-agent/internal/netutil"
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // ErrReconnecting is a call the daemon answered with -32005 past the retry
 // budget: its world link is down and being logged in again; the call did
-// nothing and nothing was queued. Wait and call again.
+// nothing and nothing was queued. Wait and call again. The error is an *Error
+// (errors.Is matches this value, CodeOf gives -32005).
 var ErrReconnecting = errors.New("serveclient: reconnecting")
 
 // ErrDisconnected is a call the daemon answered with -32002: the session is
-// gone (a spent reconnect budget), so nothing more goes out.
+// gone (a spent reconnect budget), so nothing more goes out. The error is an
+// *Error (errors.Is matches this value, CodeOf gives -32002).
 var ErrDisconnected = errors.New("serveclient: disconnected")
+
+// ErrUnauthorized is a call the daemon refused with HTTP 401: the token file
+// no longer matches the daemon (it restarted) or the daemon wants a token the
+// client has none for.
+var ErrUnauthorized = errors.New("serveclient: unauthorized: the token does not match the daemon (restarted?)")
+
+// ErrNotLoopback is an address New refuses: the client talks to a loopback
+// daemon only, so a bearer token never leaves the machine.
+var ErrNotLoopback = errors.New("serveclient: the daemon address must be loopback (127.0.0.0/8, ::1 or localhost)")
+
+// ErrRequestTooLarge is a request over the daemon's 64 KB body cap, refused
+// before it is sent.
+var ErrRequestTooLarge = errors.New("serveclient: the request is over the daemon's 64 KB body limit")
+
+// maxRequestBytes is the daemon's request body cap (rpc.Server).
+const maxRequestBytes = 64 << 10
 
 // Retry policy for -32005: one attempt every retryEvery for up to
 // retryWindow. Vars (not consts) so the tests shrink them.
@@ -58,6 +90,18 @@ type Error struct {
 
 func (e *Error) Error() string {
 	return fmt.Sprintf("serveclient: %s: rpc error %d: %s", e.Method, e.Code, e.Message)
+}
+
+// Is makes errors.Is(err, ErrReconnecting) and (err, ErrDisconnected) match
+// the daemon's -32005 and -32002 while the error keeps its code.
+func (e *Error) Is(target error) bool {
+	switch target {
+	case ErrReconnecting:
+		return e.Code == rpc.CodeReconnecting
+	case ErrDisconnected:
+		return e.Code == rpc.CodeDisconnected
+	}
+	return false
 }
 
 // CodeOf unwraps the RPC status code of an *Error, for callers that branch
@@ -218,7 +262,7 @@ type Command struct {
 	End      string   `json:"end,omitempty"`
 }
 
-// Event is one event_log row: the internal/events Event JSON keys, guids as
+// Event is one event_log row (needs W3: the daemon has no event_log yet): the internal/events Event JSON keys, guids as
 // 0x and 32 hex digits.
 type Event struct {
 	Seq        uint64         `json:"seq"`
@@ -245,6 +289,38 @@ type EventLogPage struct {
 	Oldest  uint64  `json:"oldest"`
 	Dropped bool    `json:"dropped"`
 	More    bool    `json:"more"`
+}
+
+// CombatActor is one side of a combat row, as the daemon's events method
+// encodes it: the guid and the name the client knows for the unit.
+type CombatActor struct {
+	GUID GUID   `json:"guid"`
+	Name string `json:"name"`
+}
+
+// CombatRow is one row of the daemon's combat log (events): Time is the wall
+// clock text with milliseconds and its offset, MonoMS the process's steady
+// axis. Reason is set on a spell_fail only.
+type CombatRow struct {
+	Seq     int         `json:"seq"`
+	Kind    string      `json:"kind"`
+	Time    string      `json:"time"`
+	MonoMS  int64       `json:"mono_ms"`
+	Source  CombatActor `json:"source"`
+	Target  CombatActor `json:"target"`
+	SpellID int32       `json:"spell_id"`
+	Amount  int32       `json:"amount"`
+	Reason  string      `json:"reason,omitempty"`
+}
+
+// EventsPage is one events answer: the rows above since, oldest first, and
+// the ring's bounds. Dropped is how many rows fell out of the ring above
+// since.
+type EventsPage struct {
+	Events  []CombatRow `json:"events"`
+	Next    int         `json:"next"`
+	Oldest  int         `json:"oldest"`
+	Dropped int         `json:"dropped"`
 }
 
 // ActResult is an act call's answer: the step lines (`step N verb ok|fail
@@ -297,20 +373,35 @@ type Teardown struct {
 
 // Client is a typed client of one serve daemon.
 type Client struct {
-	addr  string // the daemon's http://host:port/rpc URL
-	token string // empty: the daemon runs without a bearer token
+	addr  string       // the daemon's http://host:port/rpc URL
+	token string       // empty: the daemon runs without a bearer token
+	hc    *http.Client // one per Client; never follows a redirect, so the header stays on addr
+}
+
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // New opens the serve daemon at addr (host:port, scheme optional) with the
-// bearer token in tokenFile. An empty tokenFile means the daemon runs with
-// authentication off and calls go out without a header. The token file must
-// hold exactly the token the daemon generated, never a stray file.
+// bearer token in tokenFile. Only loopback addresses are accepted (127.0.0.0/8,
+// ::1, localhost); anything else is ErrNotLoopback. An empty tokenFile means
+// the daemon runs with authentication off and calls go out without a header.
+// The token file must hold exactly the token the daemon generated, never a
+// stray file.
 func New(addr, tokenFile string) (*Client, error) {
 	addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
 	addr = strings.TrimSuffix(addr, "/rpc")
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("serveclient: bad address %q: %v", addr, err)
+	}
+	if !loopbackHost(host) {
+		return nil, fmt.Errorf("%w: got %q", ErrNotLoopback, host)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return nil, fmt.Errorf("serveclient: bad port %q", port)
 	}
 	var token string
 	if tokenFile != "" {
@@ -323,37 +414,40 @@ func New(addr, tokenFile string) (*Client, error) {
 			return nil, fmt.Errorf("serveclient: the token file is not an agent token")
 		}
 	}
-	return &Client{addr: "http://" + net.JoinHostPort(host, port) + "/rpc", token: token}, nil
+	return &Client{addr: "http://" + net.JoinHostPort(host, port) + "/rpc", token: token, hc: newHTTPClient()}, nil
 }
 
-// Open opens the serve daemon behind a serve --dir: slot.json gives the
-// port (and the token file when set), the token comes from that file. The
-// dir must be the one slot.json names, so a client never opens a neighbour
-// by mistake.
+// loopbackHost reports whether host is "localhost" or an IP literal in
+// 127.0.0.0/8 or ::1. Any other name is refused without a lookup, so a
+// hostname that resolves elsewhere never gets the token.
+func loopbackHost(host string) bool {
+	if _, _, err := netutil.CheckLoopbackAddr(net.JoinHostPort(host, "1")); err != nil {
+		return false
+	}
+	return true
+}
+
+// Open opens the serve daemon behind a serve --dir. It runs the same slot.json
+// checks the rpc command runs (internal/slotdir): server, slot, holder and
+// port present, the dir the one slot.json names, every path inside the dir and
+// no symlink. The token is read only from <dir>/rpc-<port>.token. A dir
+// without that file is a daemon started with --no-auth (it never writes one):
+// the client then sends no header, and a daemon that wants a token answers
+// ErrUnauthorized.
 func Open(dir string) (*Client, error) {
-	abs, err := filepath.Abs(dir)
+	abs, manifest, err := slotdir.Read(dir)
 	if err != nil {
+		if errors.Is(err, slotdir.ErrUnreadable) {
+			return nil, fmt.Errorf("serveclient: %s/slot.json missing or unreadable: not a serve dir", abs)
+		}
 		return nil, fmt.Errorf("serveclient: %v", err)
 	}
-	raw, err := privfile.Read(filepath.Join(abs, "slot.json"), 64*1024)
-	if err != nil {
-		return nil, fmt.Errorf("serveclient: %s/slot.json missing or unreadable: not a serve dir", abs)
+	if err := slotdir.Check("serveclient", abs, manifest); err != nil {
+		return nil, err
 	}
-	var manifest struct {
-		Port      int    `json:"port"`
-		Dir       string `json:"dir"`
-		TokenFile string `json:"token_file"`
-	}
-	if err := json.Unmarshal(raw, &manifest); err != nil ||
-		manifest.Port < 1 || manifest.Port > 65535 {
-		return nil, fmt.Errorf("serveclient: %s/slot.json missing or unreadable: not a serve dir", abs)
-	}
-	if manifest.Dir != "" && manifest.Dir != abs {
-		return nil, fmt.Errorf("serveclient: slot.json dir %q is not this dir %q", manifest.Dir, abs)
-	}
-	tokenFile := manifest.TokenFile
-	if tokenFile == "" {
-		tokenFile = filepath.Join(abs, fmt.Sprintf("rpc-%d.token", manifest.Port))
+	tokenFile := slotdir.TokenPath(abs, manifest.Port)
+	if _, err := os.Lstat(tokenFile); errors.Is(err, os.ErrNotExist) {
+		tokenFile = ""
 	}
 	return New(fmt.Sprintf("127.0.0.1:%d", manifest.Port), tokenFile)
 }
@@ -402,7 +496,8 @@ func (c *Client) call(ctx context.Context, method string, params, out any, timeo
 			switch rpcErr.Code {
 			case rpc.CodeReconnecting:
 				if time.Now().Add(retryEvery).After(deadline) {
-					return fmt.Errorf("serveclient: %s: %w after %s: %s", method, ErrReconnecting, retryWindow, rpcErr.Message)
+					return &Error{Code: rpcErr.Code, Method: method,
+						Message: fmt.Sprintf("still reconnecting after %s: %s", retryWindow, rpcErr.Message)}
 				}
 				select {
 				case <-ctx.Done():
@@ -410,8 +505,6 @@ func (c *Client) call(ctx context.Context, method string, params, out any, timeo
 				case <-time.After(retryEvery):
 				}
 				continue
-			case rpc.CodeDisconnected:
-				return fmt.Errorf("serveclient: %s: %w: %s", method, ErrDisconnected, rpcErr.Message)
 			default:
 				return &Error{Code: rpcErr.Code, Message: rpcErr.Message, Method: method}
 			}
@@ -436,13 +529,21 @@ type rpcWireError struct {
 // is a transport error, so the caller can tell a bad reply from a dead
 // daemon.
 func (c *Client) post(ctx context.Context, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcWireError, error) {
-	reqBody := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method}
+	reqBody := map[string]any{"jsonrpc": "2.0", "id": requestID, "method": method}
 	if params != nil {
 		reqBody["params"] = params
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(body) > maxRequestBytes {
+		return nil, nil, fmt.Errorf("%w (%d bytes)", ErrRequestTooLarge, len(body))
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.addr, bytes.NewReader(body))
 	if err != nil {
@@ -452,33 +553,53 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
+	// Reading the (bounded) rest of the body lets the connection be reused.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, nil, errors.New("unauthorized: the token file no longer matches the daemon (restarted?)")
+		return nil, nil, ErrUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, nil, err
 	}
 	var reply struct {
-		Result json.RawMessage `json:"result"`
-		Error  *rpcWireError   `json:"error"`
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  json.RawMessage `json:"result"`
+		Error   *rpcWireError   `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return nil, nil, fmt.Errorf("bad reply: %v", err)
+	}
+	if reply.JSONRPC != "2.0" {
+		return nil, nil, fmt.Errorf("bad reply: not a JSON-RPC 2.0 envelope")
+	}
+	hasResult := len(reply.Result) > 0
+	if hasResult == (reply.Error != nil) {
+		return nil, nil, fmt.Errorf("bad reply: want exactly one of result and error")
+	}
+	// A request the daemon could not parse is answered with id null (a parse
+	// or invalid-request error); every other reply carries our id.
+	if id := strings.TrimSpace(string(reply.ID)); id != strconv.Itoa(requestID) &&
+		!(reply.Error != nil && (id == "null" || id == "")) {
+		return nil, nil, fmt.Errorf("bad reply: id %s is not the request's %d", id, requestID)
 	}
 	if reply.Error != nil {
 		return nil, reply.Error, nil
 	}
 	return reply.Result, nil, nil
 }
+
+// requestID is the id of every request: a client sends one call at a time
+// per connection, so one id is enough, and a reply is checked against it.
+const requestID = 1
 
 // Status reads status: where the character is, what it is doing, and the
 // link's lifecycle (state online/reconnecting/offline).
@@ -499,7 +620,10 @@ func (c *Client) Units(ctx context.Context, p UnitsParams) ([]Unit, error) {
 // Unit reads one unit row by guid or name (one of them must name the unit).
 func (c *Client) Unit(ctx context.Context, guid, name string) (Unit, error) {
 	var u Unit
-	err := c.call(ctx, "unit", map[string]any{"guid": GUID(guid), "name": name}, &u, defaultTimeout)
+	err := c.call(ctx, "unit", struct {
+		GUID GUID   `json:"guid,omitempty"`
+		Name string `json:"name,omitempty"`
+	}{GUID(guid), name}, &u, defaultTimeout)
 	return u, err
 }
 
@@ -525,7 +649,25 @@ func (c *Client) Bot(ctx context.Context, line string, wait time.Duration) (Comm
 	return cmd, err
 }
 
-// EventLog drains one event_log page: wait_ms up to 2000, limit up to 1000.
+// Events drains one page of the daemon's combat log (the events method):
+// the rows above since, oldest first. limit 0 is the daemon's page maximum
+// (1000); waitMS 0..2000 parks the call until a row arrives or the wait ends.
+func (c *Client) Events(ctx context.Context, since, limit, waitMS int) (EventsPage, error) {
+	if since < 0 {
+		since = 0
+	}
+	if limit < 0 || limit > 1000 {
+		limit = 0
+	}
+	waitMS = min(max(waitMS, 0), 2000)
+	var page EventsPage
+	err := c.call(ctx, "events", map[string]any{"since": since, "limit": limit, "wait_ms": waitMS},
+		&page, time.Duration(waitMS)*time.Millisecond+20*time.Second)
+	return page, err
+}
+
+// EventLog drains one event_log page (needs W3: the daemon on main has no
+// event_log; use Events): wait_ms up to 2000, limit up to 1000.
 func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) (EventLogPage, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
@@ -542,7 +684,7 @@ func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) 
 	return page, err
 }
 
-// Act runs steps (one `verb k=v` line each, as forever act takes them) in
+// Act (needs W3: the daemon on main has no act) runs steps (one `verb k=v` line each, as forever act takes them) in
 // order on the session goroutine and returns the step lines and whether
 // every step ran. timeout bounds the whole run on the daemon (at most 600 s)
 // and the call waits that long plus a margin.
@@ -559,7 +701,7 @@ func (c *Client) Act(ctx context.Context, steps []string, timeout time.Duration)
 	return res, err
 }
 
-// Commander runs one commander call (op bind/unbind/status/view/cmd/run)
+// Commander (not ported on the daemon today: -32003) runs one commander call (op bind/unbind/status/view/cmd/run)
 // and returns the line sent with the module's reply.
 func (c *Client) Commander(ctx context.Context, p CommanderParams) (CommanderResult, error) {
 	var res CommanderResult
@@ -578,7 +720,7 @@ func (c *Client) Logout(ctx context.Context) (Logout, error) {
 	return out, err
 }
 
-// Teardown ends the game presence best-effort, step by step (gm off, on or
+// Teardown (needs W2: the daemon on main answers -32003 not ported) ends the game presence best-effort, step by step (gm off, on or
 // keep for the GM line); the daemon stops. Every step runs even after a
 // failed one.
 func (c *Client) Teardown(ctx context.Context, gm string) (Teardown, error) {

@@ -13,8 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/slotdir"
 )
 
 // scriptServe answers JSON-RPC methods from a script: each method queues
@@ -116,113 +119,346 @@ func TestGUIDKeyHighWordMatters(t *testing.T) {
 	}
 }
 
-// TestStatusStates proves status decodes the daemon's exact JSON, including
-// the reconnect progress and the guids, and that Open+New reach the daemon
-// through its slot dir.
-func TestStatusStates(t *testing.T) {
-	f := newScriptServe(t)
-	f.results["status"] = []any{map[string]any{
-		"character": "Testchar", "guid": "0x00000000000000010000000000000002",
-		"level": 60, "map": 0, "x": 1.5, "y": 2.5, "z": 3.5, "o": 0.5,
-		"health": 5000, "max_health": 6000, "power": 100, "max_power": 100,
-		"in_combat": true, "dead": false, "ghost": false,
-		"server_packets": 7, "parse_errors": 0, "mono_ms": 12345,
-		"state": "reconnecting", "error": "link lost",
-		"reconnect_attempt": 2, "reconnect_limit": 8,
-	}}
-	c := openClient(t, f, nil)
-	st, err := c.Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status: %v", err)
+// TestGUIDDecodeSpellings: the empty guid decodes from null and "", the old
+// daemon's bare number as the low half, and the text form unchanged.
+func TestGUIDDecodeSpellings(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"null", ""}, {`""`, ""}, {"110", "0x000000000000006E"}, {`"0x1"`, "0x1"},
+	} {
+		var g GUID
+		if err := json.Unmarshal([]byte(c.in), &g); err != nil || string(g) != c.want {
+			t.Fatalf("guid %s -> %q, %v; want %q", c.in, g, err, c.want)
+		}
 	}
-	if st.Character != "Testchar" || st.State != "reconnecting" || st.Error != "link lost" {
-		t.Fatalf("status %+v", st)
-	}
-	if st.ReconnectAttempt != 2 || st.ReconnectLimit != 8 {
-		t.Fatalf("reconnect progress %+v", st)
-	}
-	if st.Health != 5000 || st.MaxHealth != 6000 || !st.InCombat || st.MonoMS != 12345 {
-		t.Fatalf("fields %+v", st)
-	}
-	if string(st.GUID) != "0x00000000000000010000000000000002" {
-		t.Fatalf("guid %q", st.GUID)
-	}
-	wantKey := runmap.GUIDKey("0x00000000000000010000000000000002")
-	if st.GUID.Key() != wantKey {
-		t.Fatalf("guid key %d, want %d", st.GUID.Key(), wantKey)
-	}
-
-	// Unknown-field-free decode: status carries target and power_type too.
-	f.results["status"] = []any{map[string]any{
-		"state": "online", "guid": "0x1", "health": 1, "max_health": 1,
-		"target": "0x2", "power_type": 1, "power": 3, "max_power": 4,
-		"map": 1, "x": 0, "y": 0, "z": 0, "o": 0, "mono_ms": 0,
-		"server_packets": 0, "parse_errors": 0,
-	}}
-	st, err = c.Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if string(st.Target) != "0x2" || st.PowerType != 1 || st.Power != 3 {
-		t.Fatalf("status %+v", st)
+	var g GUID
+	if err := json.Unmarshal([]byte("true"), &g); err == nil {
+		t.Fatal("a bool decoded as a guid")
 	}
 }
 
-// TestUnitAurasDecode proves one unit row decodes exactly: the guid, the
-// distances, the aura slots with caster and remaining time, and the empty
-// guid spelling.
-func TestUnitAurasDecode(t *testing.T) {
-	f := newScriptServe(t)
-	f.results["units"] = []any{[]any{map[string]any{
-		"guid": "0x00000000000000010000000000000002", "type": "creature", "entry": 1234,
-		"name": "Testmob", "x": 1.0, "y": 2.0, "z": 3.0, "o": 0.0,
-		"distance": 5.5, "distance_2d": 5.0,
-		"health": 100, "max_health": 100, "power": 0, "max_power": 0,
-		"level": 60, "in_combat": true, "dead": false, "moving": true,
-		"casting": true, "spell_id": 133,
-		"auras": []any{map[string]any{
-			"spell_id": 133, "caster": "0x00000000000000010000000000000002",
-			"stacks": 2, "remaining_ms": 5000,
-		}},
-	}}}
-	c := openClient(t, f, nil)
-	units, err := c.Units(context.Background(), UnitsParams{Within: 100})
+// TestNewRefusesNonLoopback: a bearer token goes to a loopback daemon only.
+// Before the check New accepted any host:port.
+func TestNewRefusesNonLoopback(t *testing.T) {
+	token, err := rpc.NewToken()
 	if err != nil {
-		t.Fatalf("Units: %v", err)
+		t.Fatal(err)
 	}
-	if len(units) != 1 {
-		t.Fatalf("units %d", len(units))
+	tokenFile := filepath.Join(t.TempDir(), "rpc-1.token")
+	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	u := units[0]
-	if u.Name != "Testmob" || u.Entry != 1234 || u.Type != "creature" {
-		t.Fatalf("unit %+v", u)
+	for _, addr := range []string{
+		"10.0.0.5:9000", "192.168.1.2:80", "example.com:80", "[2001:db8::1]:80",
+		"0.0.0.0:80", "http://10.0.0.5:9000/rpc", "128.0.0.1:80",
+	} {
+		if _, err := New(addr, tokenFile); !errors.Is(err, ErrNotLoopback) {
+			t.Fatalf("New(%q) = %v, want ErrNotLoopback", addr, err)
+		}
 	}
-	if u.Distance != 5.5 || u.Distance2D != 5.0 || !u.Moving || !u.Casting || u.SpellID != 133 {
-		t.Fatalf("unit %+v", u)
+	for _, addr := range []string{"127.0.0.1:1", "127.5.4.3:2", "[::1]:3", "localhost:4"} {
+		if _, err := New(addr, tokenFile); err != nil {
+			t.Fatalf("New(%q): %v", addr, err)
+		}
 	}
-	if len(u.Auras) != 1 || u.Auras[0].SpellID != 133 || u.Auras[0].Stacks != 2 || u.Auras[0].RemainingMS != 5000 {
-		t.Fatalf("auras %+v", u.Auras)
+	if _, err := New("127.0.0.1:0", ""); err == nil {
+		t.Fatal("port 0 accepted")
 	}
-	if string(u.Auras[0].Caster) != "0x00000000000000010000000000000002" {
-		t.Fatalf("aura caster %q", u.Auras[0].Caster)
-	}
+}
 
-	// The empty guid decodes from null and from "".
-	f.results["unit"] = []any{
-		map[string]any{"guid": nil, "type": "player", "name": "Testchar", "auras": []any{}},
-		map[string]any{"guid": "", "type": "player", "name": "Testchar", "auras": []any{}},
+// TestRedirectNotFollowed: a daemon (or whatever answers on its port) that
+// redirects never receives the bearer header.
+func TestRedirectNotFollowed(t *testing.T) {
+	var hits atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer other.Close()
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/rpc", http.StatusTemporaryRedirect)
+	}))
+	defer front.Close()
+	token, _ := rpc.NewToken()
+	tokenFile := filepath.Join(t.TempDir(), "rpc-1.token")
+	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if u, err := c.Unit(context.Background(), "", "Testchar"); err != nil || u.GUID != "" {
-		t.Fatalf("unit null guid %+v, %v", u, err)
+	c, err := New(strings.TrimPrefix(front.URL, "http://"), tokenFile)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if u, err := c.Unit(context.Background(), "", "Testchar"); err != nil || u.GUID != "" {
-		t.Fatalf("unit empty guid %+v, %v", u, err)
+	_, err = c.Status(context.Background())
+	if err == nil {
+		t.Fatal("a redirect answered as success")
 	}
+	if hits.Load() != 0 {
+		t.Fatal("the redirect was followed")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatal("the token is in the error text")
+	}
+}
 
-	// The old uint64 guid decodes as the low half.
-	f.results["unit"] = []any{map[string]any{"guid": 110, "type": "creature", "name": "Testmob", "auras": []any{}}}
-	if u, err := c.Unit(context.Background(), "0x6E", ""); err != nil || string(u.GUID) != "0x000000000000006E" {
-		t.Fatalf("unit numeric guid %+v, %v", u, err)
+// rawDaemon answers every request with body (an HTTP 200) and counts them.
+func rawDaemon(t *testing.T, status int, body string) (*Client, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(strings.TrimPrefix(srv.URL, "http://"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, &n
+}
+
+// TestEnvelopeChecked: a reply that is not a 2.0 envelope for our id with
+// exactly one of result/error is a bad reply, never a zero-valued success.
+func TestEnvelopeChecked(t *testing.T) {
+	bad := map[string]string{
+		"empty object":        "{}",
+		"no jsonrpc":          `{"id":1,"result":{"state":"online"}}`,
+		"wrong version":       `{"jsonrpc":"1.0","id":1,"result":{"state":"online"}}`,
+		"wrong id":            `{"jsonrpc":"2.0","id":2,"result":{"state":"online"}}`,
+		"no id":               `{"jsonrpc":"2.0","result":{"state":"online"}}`,
+		"string id":           `{"jsonrpc":"2.0","id":"1","result":{"state":"online"}}`,
+		"no result no error":  `{"jsonrpc":"2.0","id":1}`,
+		"both":                `{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-32000,"message":"x"}}`,
+		"error with wrong id": `{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"x"}}`,
+		"not json":            "<html>proxy error</html>",
+	}
+	for name, body := range bad {
+		c, _ := rawDaemon(t, 200, body)
+		st, err := c.Status(context.Background())
+		if err == nil {
+			t.Fatalf("%s: accepted as %+v", name, st)
+		}
+		if _, ok := CodeOf(err); ok {
+			t.Fatalf("%s: a bad reply carries an rpc code: %v", name, err)
+		}
+	}
+	// A good envelope still decodes, and a null id on an error is the
+	// daemon's own parse/invalid-request answer: its code survives.
+	c, _ := rawDaemon(t, 200, `{"jsonrpc":"2.0","id":1,"result":{"state":"online"}}`)
+	if st, err := c.Status(context.Background()); err != nil || st.State != "online" {
+		t.Fatalf("good envelope: %+v, %v", st, err)
+	}
+	c, _ = rawDaemon(t, 200, `{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}`)
+	if _, err := c.Status(context.Background()); err == nil {
+		t.Fatal("parse error accepted")
+	} else if code, ok := CodeOf(err); !ok || code != rpc.CodeParse {
+		t.Fatalf("parse error: %v", err)
+	}
+}
+
+// TestUnauthorizedTyped: a 401 is ErrUnauthorized, with no token in it.
+func TestUnauthorizedTyped(t *testing.T) {
+	c, _ := rawDaemon(t, http.StatusUnauthorized, "unauthorized\n")
+	_, err := c.Status(context.Background())
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("401 gave %v, want ErrUnauthorized", err)
+	}
+}
+
+// TestRequestOverCapRefused: a request over the daemon's 64 KB body cap is
+// refused before it is sent, with a clear error (not the daemon's Parse
+// error).
+func TestRequestOverCapRefused(t *testing.T) {
+	c, n := rawDaemon(t, 200, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+	_, err := c.GM(context.Background(), strings.Repeat("a", 70<<10))
+	if !errors.Is(err, ErrRequestTooLarge) {
+		t.Fatalf("a 70 KB gm gave %v, want ErrRequestTooLarge", err)
+	}
+	if n.Load() != 0 {
+		t.Fatal("the over-cap request was sent")
+	}
+	if _, err := c.GM(context.Background(), ".gm on"); err != nil {
+		t.Fatalf("a small gm: %v", err)
+	}
+}
+
+// TestOneConnectionReused: the client keeps one http.Client and drains
+// every reply, error statuses included, so the keep-alive connection is
+// reused: one connection serves three calls (a 500, a 401, a 200).
+func TestOneConnectionReused(t *testing.T) {
+	var conns atomic.Int32
+	var call atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch call.Add(1) {
+		case 1:
+			http.Error(w, strings.Repeat("boom ", 2000), http.StatusInternalServerError)
+		case 2:
+			http.Error(w, strings.Repeat("no ", 2000), http.StatusUnauthorized)
+		default:
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"state":"online"}}`)
+		}
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	c, err := New(strings.TrimPrefix(srv.URL, "http://"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Status(context.Background())
+	c.Status(context.Background())
+	if _, err := c.Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := conns.Load(); got != 1 {
+		t.Fatalf("%d connections for three calls, want 1", got)
+	}
+}
+
+// --- Open against a real rpc.Server on a loopback port ---
+
+type fakeStatus struct {
+	State string `json:"state"`
+}
+
+// realRPC serves a status method through the real rpc.Server (Typed,
+// DisallowUnknownFields, the 64 KB cap) and returns its port and call count.
+func realRPC(t *testing.T, token string) (int, *atomic.Int32) {
+	t.Helper()
+	srv := rpc.NewServer()
+	if token == "" {
+		srv.DisableAuth()
+	} else {
+		srv.SetToken(token)
+	}
+	var n atomic.Int32
+	srv.Register("status", rpc.Typed(func(ctx context.Context, _ struct{}) (fakeStatus, error) {
+		n.Add(1)
+		return fakeStatus{State: "online"}, nil
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	ln, err := rpc.Listen(ctx, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { rpc.Serve(ctx, ln, srv.Handler()); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return ln.Addr().(*net.TCPAddr).Port, &n
+}
+
+// slotDirFor writes a serve --dir the way forever serve does: slot.json with
+// every path derived inside the dir and, when token != "", the token file.
+func slotDirFor(t *testing.T, port int, token string, mutate func(*slotdir.Manifest)) string {
+	t.Helper()
+	dir := t.TempDir()
+	m := slotdir.Manifest{
+		Server: "forever", Slot: "1", Holder: "forever", Character: "Testchar", Port: port, Dir: dir,
+		Binary: filepath.Join(dir, "forever-agent"), Settings: filepath.Join(dir, "settings.json"),
+		PIDFile: filepath.Join(dir, "agent.pid"), TokenFile: slotdir.TokenPath(dir, port),
+	}
+	if token != "" {
+		if err := os.WriteFile(m.TokenFile, []byte(token+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mutate != nil {
+		mutate(&m)
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slot.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestOpenReachesTheDaemon: Open's own wiring (port from slot.json, token
+// from the derived file) reaches a real rpc server, no override after Open.
+func TestOpenReachesTheDaemon(t *testing.T) {
+	token, _ := rpc.NewToken()
+	port, calls := realRPC(t, token)
+	c, err := Open(slotDirFor(t, port, token, nil))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var st fakeStatus
+	if err := c.call(context.Background(), "status", nil, &st, time.Second); err != nil || st.State != "online" {
+		t.Fatalf("status %+v, %v", st, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("daemon saw %d calls", calls.Load())
+	}
+}
+
+// TestOpenRefusesWhatTheCLIRefuses: the slot checks of the rpc command
+// (slotdir.Check) apply to Open: a refusal comes before any request or token
+// read.
+func TestOpenRefusesWhatTheCLIRefuses(t *testing.T) {
+	token, _ := rpc.NewToken()
+	port, calls := realRPC(t, token)
+	other := t.TempDir()
+	foreign := filepath.Join(other, "stolen.token")
+	if err := os.WriteFile(foreign, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(*slotdir.Manifest){
+		"no holder":          func(m *slotdir.Manifest) { m.Holder = "" },
+		"no server":          func(m *slotdir.Manifest) { m.Server = "" },
+		"no slot":            func(m *slotdir.Manifest) { m.Slot = "" },
+		"another dir":        func(m *slotdir.Manifest) { m.Dir = other },
+		"token_file outside": func(m *slotdir.Manifest) { m.TokenFile = foreign },
+		"settings outside":   func(m *slotdir.Manifest) { m.Settings = filepath.Join(other, "settings.json") },
+		"binary outside":     func(m *slotdir.Manifest) { m.Binary = filepath.Join(other, "forever-agent") },
+		"pid_file outside":   func(m *slotdir.Manifest) { m.PIDFile = filepath.Join(other, "agent.pid") },
+	}
+	for name, mutate := range cases {
+		if _, err := Open(slotDirFor(t, port, token, mutate)); err == nil {
+			t.Fatalf("%s: Open accepted the dir", name)
+		}
+	}
+	// The derived token path is a symlink to a real token file: refused.
+	dir := slotDirFor(t, port, "", nil)
+	if err := os.Symlink(foreign, slotdir.TokenPath(dir, port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("a symlinked token file was followed")
+	}
+	// No slot.json at all.
+	if _, err := Open(t.TempDir()); err == nil {
+		t.Fatal("Open accepted a dir without slot.json")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("a refused dir sent %d request(s)", calls.Load())
+	}
+}
+
+// TestOpenNoAuthDir: forever serve --no-auth records a token path but never
+// writes the file: Open sends no header and works against an auth-off
+// daemon, and a daemon that wants a token answers ErrUnauthorized.
+func TestOpenNoAuthDir(t *testing.T) {
+	port, _ := realRPC(t, "")
+	c, err := Open(slotDirFor(t, port, "", nil))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var st fakeStatus
+	if err := c.call(context.Background(), "status", nil, &st, time.Second); err != nil || st.State != "online" {
+		t.Fatalf("status %+v, %v", st, err)
+	}
+	token, _ := rpc.NewToken()
+	port, _ = realRPC(t, token)
+	c, err = Open(slotDirFor(t, port, "", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.call(context.Background(), "status", nil, &st, time.Second); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("a daemon with a token and a dir without one gave %v", err)
 	}
 }
 
@@ -249,26 +485,36 @@ func TestReconnectingRetried(t *testing.T) {
 	g := newScriptServe(t)
 	g.errs["status"] = []int{rpc.CodeReconnecting, rpc.CodeReconnecting, rpc.CodeReconnecting}
 	c = openClient(t, g, nil)
-	if _, err := c.Status(context.Background()); !errors.Is(err, ErrReconnecting) {
+	_, err = c.Status(context.Background())
+	if !errors.Is(err, ErrReconnecting) {
 		t.Fatalf("Status error %v, want ErrReconnecting", err)
+	}
+	if code, ok := CodeOf(err); !ok || code != rpc.CodeReconnecting {
+		t.Fatalf("CodeOf(reconnecting) = %d, %v", code, ok)
 	}
 
 	// Disconnected: ErrDisconnected at once, no retry.
 	h := newScriptServe(t)
 	h.errs["units"] = []int{rpc.CodeDisconnected, rpc.CodeDisconnected}
 	c = openClient(t, h, nil)
-	if _, err := c.Units(context.Background(), UnitsParams{}); !errors.Is(err, ErrDisconnected) {
+	_, err = c.Units(context.Background(), UnitsParams{})
+	if !errors.Is(err, ErrDisconnected) {
 		t.Fatalf("Units error %v, want ErrDisconnected", err)
+	}
+	if code, ok := CodeOf(err); !ok || code != rpc.CodeDisconnected {
+		t.Fatalf("CodeOf(disconnected) = %d, %v", code, ok)
 	}
 	if h.calls != 1 {
 		t.Fatalf("disconnected retried %d times", h.calls)
 	}
 }
 
-// TestPageAndActDecode proves the event_log page, the act result, party,
-// command, commander, logout and teardown decode exactly as serve encodes
-// them, and that EventLog clamps its bounds.
-func TestPageAndActDecode(t *testing.T) {
+// TestSpecShapesDecode pins the shapes of the methods the daemon on main
+// does not serve yet (event_log, act, teardown, commander: needs W3/W2),
+// against a scripted fake: they are the spec's shapes, not the daemon's. The
+// methods the daemon does serve are tested against it in
+// internal/forever/world (serveclient_daemon_test.go).
+func TestSpecShapesDecode(t *testing.T) {
 	f := newScriptServe(t)
 	token, err := rpc.NewToken()
 	if err != nil {
@@ -323,38 +569,6 @@ func TestPageAndActDecode(t *testing.T) {
 		t.Fatalf("act %+v", res)
 	}
 
-	f.results["party"] = []any{map[string]any{
-		"in_group": true, "leader": "0x1",
-		"members": []any{map[string]any{
-			"name": "Testchar", "guid": "0x1", "online": true, "leader": true,
-			"health": 100, "max_health": 100, "power": 10, "max_power": 10,
-			"level": 60, "zone": 1,
-		}},
-	}}
-	p, err := c.Party(context.Background())
-	if err != nil {
-		t.Fatalf("Party: %v", err)
-	}
-	if !p.InGroup || len(p.Members) != 1 || p.Members[0].Name != "Testchar" || !p.Members[0].Leader {
-		t.Fatalf("party %+v", p)
-	}
-
-	f.results["gm"] = []any{map[string]any{
-		"sent": ".gm on", "lines": []string{"GM on"}, "complete": true,
-	}}
-	cmd, err := c.GM(context.Background(), ".gm on")
-	if err != nil {
-		t.Fatalf("GM: %v", err)
-	}
-	if cmd.Sent != ".gm on" || len(cmd.Lines) != 1 || !cmd.Complete {
-		t.Fatalf("command %+v", cmd)
-	}
-
-	f.results["bot"] = []any{map[string]any{"sent": ".bot state", "lines": []string{}, "complete": false}}
-	if _, err := c.Bot(context.Background(), ".bot state", time.Second); err != nil {
-		t.Fatalf("Bot: %v", err)
-	}
-
 	f.results["commander"] = []any{map[string]any{
 		"sent":  ".bot commander status",
 		"reply": map[string]any{"kind": "commander-status", "ok": true, "lines": []string{"TBM:OK commander status"}},
@@ -365,11 +579,6 @@ func TestPageAndActDecode(t *testing.T) {
 	}
 	if commander.Sent != ".bot commander status" || !commander.Reply.OK || commander.Reply.Kind != "commander-status" {
 		t.Fatalf("commander %+v", commander)
-	}
-
-	f.results["logout"] = []any{map[string]any{"outcome": "complete"}}
-	if out, err := c.Logout(context.Background()); err != nil || out.Outcome != "complete" {
-		t.Fatalf("logout %+v, %v", out, err)
 	}
 
 	// Teardown decodes both the serve shape ({step, result}) and the old
@@ -401,70 +610,5 @@ func TestPageAndActDecode(t *testing.T) {
 	}
 	if _, ok := CodeOf(errors.New("boom")); ok {
 		t.Fatal("CodeOf found a code in a plain error")
-	}
-}
-
-// TestOpenSlotDir proves Open reads the daemon's own slot dir: the port from
-// slot.json and the token from the manifest's file. A foreign dir and a
-// stray token file are refused before anything is sent.
-func TestOpenSlotDir(t *testing.T) {
-	f := newScriptServe(t)
-	f.results["status"] = []any{map[string]any{"state": "online", "guid": "0x1"}}
-	hostport := strings.TrimPrefix(f.server.URL, "http://")
-	_, portStr, err := net.SplitHostPort(hostport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var port int
-	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-		t.Fatal(err)
-	}
-	token, err := rpc.NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, fmt.Sprintf("rpc-%d.token", port))
-	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	slot, err := json.Marshal(map[string]any{
-		"server": "forever", "slot": "1", "holder": "forever",
-		"character": "Testchar", "port": port, "dir": dir,
-		"token_file": tokenFile,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "slot.json"), slot, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	c.addr = f.server.URL
-	c.token = token
-	st, err := c.Status(context.Background())
-	if err != nil || st.State != "online" {
-		t.Fatalf("status %+v, %v", st, err)
-	}
-	// A slot.json naming another dir is refused.
-	if _, err := Open(t.TempDir()); err == nil {
-		t.Fatal("Open accepted a dir without slot.json")
-	}
-	// A stray token file is refused before anything is sent.
-	badFile := filepath.Join(t.TempDir(), "rpc-1.token")
-	if err := os.WriteFile(badFile, []byte("not-a-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before := f.calls
-	cBad, err := New(strings.TrimPrefix(f.server.URL, "http://"), badFile)
-	if err == nil {
-		if _, serr := cBad.Status(context.Background()); serr == nil {
-			t.Fatal("a stray token file reached the daemon")
-		}
-	} else if f.calls != before {
-		t.Fatal("a stray token file was sent before the refusal")
 	}
 }

@@ -13,11 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 )
 
 // slotCallStopWait bounds how long a cancelled Call waits for its post
@@ -92,21 +91,14 @@ func (e *scrubError) Unwrap() error { return e.err }
 // posts through rpcPostCall. A refusal is a *slotOpenError carrying the
 // exact line rpc prints and its exit code.
 func openSlotClient(dir string) (*slotClient, error) {
-	absDir, err := filepath.Abs(dir)
+	dir, parsed, err := slotdir.Read(dir)
 	if err != nil {
+		if errors.Is(err, slotdir.ErrUnreadable) {
+			return nil, &slotOpenError{code: exitUsage, msg: fmt.Sprintf("rpc: %s/slot.json missing or unreadable: rpc works on a dir made by slot setup", dir)}
+		}
 		return nil, &slotOpenError{code: exitUsage, msg: fmt.Sprintf("rpc: %v", err)}
 	}
-	dir = absDir
-	unreadable := fmt.Sprintf("rpc: %s/slot.json missing or unreadable: rpc works on a dir made by slot setup", dir)
-	raw, err := privfile.Read(filepath.Join(dir, "slot.json"), 64*1024)
-	if err != nil {
-		return nil, &slotOpenError{code: exitUsage, msg: unreadable}
-	}
-	var manifest teardownSlotManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil ||
-		manifest.Server == "" || manifest.Slot == "" || manifest.Holder == "" || manifest.Port == 0 {
-		return nil, &slotOpenError{code: exitUsage, msg: unreadable}
-	}
+	manifest := *parsed
 	if err := teardownCheckManifest(dir, &manifest); err != nil {
 		return nil, &slotOpenError{code: exitUsage, msg: err.Error()}
 	}
@@ -114,7 +106,7 @@ func openSlotClient(dir string) (*slotClient, error) {
 	// random bytes as 43 base64url characters): anything else (quotes, a
 	// backslash, markup, an inner newline, the wrong length) is refused
 	// before use, without printing it.
-	token, err := rpc.ReadTokenFile(filepath.Join(dir, fmt.Sprintf("rpc-%d.token", manifest.Port)))
+	token, err := rpc.ReadTokenFile(slotdir.TokenPath(dir, manifest.Port))
 	if err != nil {
 		return nil, &slotOpenError{code: exitSlotRefused, msg: "rpc: token file: " + rpcScrub(err.Error(), "")}
 	}

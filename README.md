@@ -127,8 +127,9 @@ is closed) and the command waits for the call to stop before exiting 1 with `can
 result is printed, so a caller must not retry an irreversible method as if the first call had been refused.
 `internal/forever/serveclient` is the typed Go client of the same socket for commands that orchestrate a live slot
 (see [docs/forever/REST-L1-NOTES.md](docs/forever/REST-L1-NOTES.md)): `Open(dir)`/`New(addr, tokenFile)` with typed
-`Status`, `Units`, `Unit`, `Party`, `GM`, `Bot`, `EventLog`, `Act`, `Commander`, `Logout` and `Teardown`, guids as
-text with `Key()` delegating to the run-map key, `-32005` retried for 60 s and `-32002` ending the call at once.
+`Status`, `Units`, `Unit`, `Party`, `GM`, `Bot`, `Events` and `Logout` (what the daemon serves today; `EventLog`, `Act`,
+`Commander` and `Teardown` need W3/W2), loopback addresses only, guids as text with `Key()` delegating to the run-map
+key, `-32005` retried for 60 s and `-32002` ending the call at once.
 
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
