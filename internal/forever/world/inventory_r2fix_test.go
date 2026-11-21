@@ -9,6 +9,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/items"
@@ -392,4 +393,27 @@ func playerThenActiveUpdate() []byte {
 	out.WriteU32(uint32(blk.Len()))
 	out.WriteBytes(blk.Bytes())
 	return out.Bytes()
+}
+
+// TestAFreshLoginWithItsFollowUpUpdateIsNotStale is the live R2 blocker: the core follows the own create with an
+// update of PlayerData and ActivePlayerData that the decoder cannot walk, and every login (and map change) ended with
+// the inventory flagged stale, so destroy and split refused. Inside the create's burst the update is the core's setup
+// and the inventory stays as the create gave it; the same update later, with no move of ours to explain it, is still
+// stale.
+func TestAFreshLoginWithItsFollowUpUpdateIsNotStale(t *testing.T) {
+	f := newItemWorld(t)
+	f.server(wire.SMSGUpdateObject, fakeCreateBlockType(fakePackedGUID(itemSelf), 0, 1000, 2000, 50, 7, 6))
+	f.server(wire.SMSGUpdateObject, playerThenActiveUpdate())
+	if hasText(f.lines, "the inventory is stale") {
+		t.Fatalf("a login's own follow-up update marked the inventory stale:\n%s", joinLines(f.lines))
+	}
+	if inv := f.s.inventoryNow(); inv.Stale {
+		t.Fatalf("the fresh inventory is stale: %s", inv.StaleReason)
+	}
+	// Later in the session, the same update with no move of ours is a real miss.
+	f.now = f.now.Add(loginBurstWindow + time.Second)
+	f.server(wire.SMSGUpdateObject, playerThenActiveUpdate())
+	if inv := f.s.inventoryNow(); !inv.Stale {
+		t.Fatal("an unexplained update long after the login did not mark the inventory stale")
+	}
 }
