@@ -466,3 +466,58 @@ func readRawFrame(nc net.Conn) ([16]byte, []byte, error) {
 }
 
 func toHex(p []byte) string { return fmt.Sprintf("%X", p) }
+
+// A send that never reached the wire must not use up a frame counter: the server counts the frames it received,
+// so a counter spent on a write that a cancelled context or an expired deadline refused made every later frame
+// fail its AES-GCM check (the serving daemon's logout, sent after its answers on a cancelled context).
+func TestFailedSendDoesNotSpendACounter(t *testing.T) {
+	var key [32]byte
+	pc, err := newPacketCrypt(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	defer server.Close()
+	c := testConn(client)
+	c.crypt = pc
+	c.encrypted = true
+	defer c.close()
+
+	// 1: a context that has already ended.
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.sendFrame(dead, wire.CMSGTimeSyncResponse, []byte{1, 2, 3, 4}); err == nil {
+		t.Fatal("a send on a cancelled context succeeded")
+	}
+	// 2: a deadline that runs out mid-write (net.Pipe has no buffer and nobody reads yet).
+	short, cancelShort := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancelShort()
+	if err := c.sendFrame(short, wire.CMSGTimeSyncResponse, []byte{1, 2, 3, 4}); err == nil {
+		t.Fatal("a send nobody read succeeded")
+	}
+
+	type rawFrame struct {
+		header [16]byte
+		body   []byte
+		err    error
+	}
+	got := make(chan rawFrame, 1)
+	go func() {
+		h, b, err := readRawFrame(server)
+		got <- rawFrame{h, b, err}
+	}()
+	if err := c.sendFrame(context.Background(), wire.CMSGTimeSyncResponse, []byte{9, 9, 9, 9}); err != nil {
+		t.Fatal(err)
+	}
+	f := <-got
+	if f.err != nil {
+		t.Fatal(f.err)
+	}
+	// The first frame the server sees is its counter 0 in the client direction.
+	var tag [12]byte
+	copy(tag[:], f.header[4:16])
+	iv := makeIV(0, clientMagic)
+	if _, err := pc.aead.Open(nil, iv[:], append(append([]byte{}, f.body...), tag[:]...), nil); err != nil {
+		t.Fatalf("the frame after two failed sends is not at counter 0: %v", err)
+	}
+}

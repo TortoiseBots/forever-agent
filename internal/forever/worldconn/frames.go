@@ -211,6 +211,12 @@ func (c *conn) sendFrame(ctx context.Context, core uint32, payload []byte) error
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	// A context that has already ended sends nothing, so it must not spend a frame counter either: the server
+	// counts the frames it received, and a counter used up by a frame that never left makes every later frame
+	// (the logout of a daemon that was just cancelled) fail its AES-GCM check.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("worldconn: sending %s: %w", wire.ClientName(core), err)
+	}
 	header := wire.Header{Size: uint32(len(body))}
 	if c.encrypted {
 		var tag [wire.TagSize]byte
@@ -222,7 +228,13 @@ func (c *conn) sendFrame(ctx context.Context, core uint32, payload []byte) error
 	stop := c.armWrite(ctx)
 	defer stop()
 	frame := append(wire.EncodeHeader(header), body...)
-	if _, err := c.nc.Write(frame); err != nil {
+	n, err := c.nc.Write(frame)
+	if err != nil {
+		if n == 0 {
+			// Nothing reached the wire (the context ended or the deadline ran out before the first byte): the
+			// counter is still the next one the server expects. A frame written in part is lost with its stream.
+			c.sendSeq--
+		}
 		return fmt.Errorf("worldconn: sending %s: %w", wire.ClientName(core), contextError(ctx, err))
 	}
 	return nil

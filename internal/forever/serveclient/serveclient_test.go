@@ -549,9 +549,9 @@ func TestReconnectingRetried(t *testing.T) {
 	}
 }
 
-// TestSpecShapesDecode pins the shapes of the methods the daemon on main
-// does not serve yet (event_log, act, teardown, commander: needs W3/W2),
-// against a scripted fake: they are the spec's shapes, not the daemon's. The
+// TestSpecShapesDecode pins the shapes of event_log, act, teardown (needs
+// W3/W2) and commander against a scripted fake: they are the spec's shapes,
+// not the daemon's. The
 // methods the daemon does serve are tested against it in
 // internal/forever/world (serveclient_daemon_test.go).
 func TestSpecShapesDecode(t *testing.T) {

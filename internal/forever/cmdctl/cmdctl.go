@@ -56,13 +56,15 @@ type Controller interface {
 }
 
 // Order is one order call. Verb is a name of Verbs. Arg is a single argument (`attack <tgt>`); Args is a list for
-// the verbs that take one (`move x y z`), and wins when both are set. PauseRun allows the order while a run runs
-// on the card (D4). Wait, above zero, polls `.tb state party` for each queued bot's `ord=<seq>:...` and fills
-// Result.Final.
+// the verbs that take one (`move x y z`), and wins when both are set. Lead scopes the order to that lead's party:
+// the call is refused before any line goes out when the character commands no such lead. PauseRun allows the
+// order while a run runs on the card (D4). Wait, above zero, polls `.tb state party` for each queued bot's
+// `ord=<seq>:...` and fills Result.Final.
 type Order struct {
 	Verb     string
 	Arg      string
 	Args     []string
+	Lead     string
 	PauseRun bool
 	Wait     time.Duration
 }

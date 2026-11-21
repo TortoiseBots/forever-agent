@@ -12,12 +12,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/cmdctl"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -158,7 +160,21 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			if bytes.HasPrefix([]byte(said), []byte(".tb ")) {
 				f.mu.Lock()
 				f.serveBotSent = true
+				script := f.serveCommander
 				f.mu.Unlock()
+				if script != nil {
+					// The typed client's answers carry the run's own token (the line's trailing "#..." word); the
+					// script matches the line itself and writes "#T" where the token goes.
+					token, bare := "", said
+					if i := strings.LastIndex(said, " #"); i >= 0 {
+						token, bare = said[i+1:], said[:i]
+					}
+					for _, ln := range script(bare) {
+						ln = strings.ReplaceAll(ln, "#T", token)
+						c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", ln))
+					}
+					continue
+				}
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-BOT-ANSWER"))
 				continue
 			}
@@ -376,8 +392,9 @@ func (a *serveAgent) call(t *testing.T, method string, params any) (json.RawMess
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 func (a *serveAgent) mustCall(t *testing.T, method string, params any) json.RawMessage {
@@ -402,6 +419,20 @@ func (a *serveAgent) mustFail(t *testing.T, method string, params any, code int,
 		t.Fatalf("%s: %q does not contain %q", method, rerr.Message, contains)
 	}
 	return rerr
+}
+
+// commanderErrorData decodes an error's Data into a commander answer: the partial result the call had sent or
+// read before it was refused.
+func commanderErrorData(t *testing.T, rerr *rpcError) ServeCommander {
+	t.Helper()
+	var out ServeCommander
+	if len(rerr.Data) == 0 {
+		t.Fatal("the error carries no partial result")
+	}
+	if err := json.Unmarshal(rerr.Data, &out); err != nil {
+		t.Fatalf("the error's partial result does not decode: %v (%s)", err, rerr.Data)
+	}
+	return out
 }
 
 func TestServeStatusChatAndLogout(t *testing.T) {
@@ -1363,4 +1394,677 @@ func TestServeStopAttackHoldsTheLifecycleLock(t *testing.T) {
 	if rt.stopFight.Load() {
 		t.Fatal("the fast path wrote the stop flag of a session already reconnecting")
 	}
+}
+
+// ---- the commander method (round C3) ----
+
+// commanderCardLines is the fake module's answer to `.tb commander status`: one card for the session's character,
+// with one member record per bot and no logged orders; the totals are the records it emits.
+func commanderCardLines(lead string, members ...string) []string {
+	n := len(members)
+	raws := []string{
+		"commander-begin #T",
+		"binding cmd=Xxxxxx cguid=15 online=yes lead=" + lead + " group=" + itoaServe(n) + " bound=" + itoaServe(n) +
+			" bots=" + itoaServe(n) + " system=no inparty=no raid=no playerled=no boundat=1795138681 orders=0 " +
+			"map=389 pos=0.80,-8.23,-15.53 #T",
+	}
+	for i, m := range members {
+		leadFlag := "no"
+		if i == 0 {
+			leadFlag = "yes"
+		}
+		raws = append(raws, "member cmd=Xxxxxx bot="+m+" guid=10 class=warrior role=tank level=18 hp=498 maxhp=498 "+
+			"power=54 maxpower=100 ptype=rage alive=yes lead="+leadFlag+" map=389 zone=2437 "+
+			"pos=-18.24,-46.69,-21.85 #T")
+	}
+	n = len(raws) - 1
+	return append(raws, "commander-end count="+itoaServe(n)+" records="+itoaServe(n)+" bindings=1 #T")
+}
+
+// commanderStateLines is the fake module's `.tb state party`: one awake bot and a ready party.
+func commanderStateLines(bot string) []string {
+	return []string{
+		"state-begin #T",
+		"state bot=" + bot + " role=tank rolesrc=forced class=warrior level=18 hp=498 hpmax=498 hppct=100 " +
+			"power=rage pw=54 pwmax=100 st=non-combat incombat=no tgt= victim= hold=no mv=follow stuck= engine=yes " +
+			"pos=1.0,2.0,3.0 map=389 inst=0 dl= dm= ord= lastorder=stay co= nc= cast_queued=0 " +
+			"cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= #T",
+		"state-end count=1 records=1 resting=0 target=party:Tanka ready=yes #T",
+	}
+}
+
+// commanderOrderLines is the fake module's `.tb order party <verb>`: one queued bot.
+func commanderOrderLines(verb, bot string, seq int) []string {
+	return []string{
+		"order-begin #T",
+		"order bot=" + bot + " verb=" + verb + " seq=" + itoaServe(seq) + " status=queued #T",
+		"order-end count=1 records=1 verb=" + verb + " target=party:commander:Xxxxxx bots=1 queued=1 refused=0 #T",
+	}
+}
+
+func itoaServe(n int) string { return strconv.Itoa(n) }
+
+// serveTBLines is what the fake saw of the session's `.tb` lines.
+func (f *fakeServer) serveTBLines() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, ln := range f.serveGMLines {
+		if strings.HasPrefix(ln, ".tb ") {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+func TestServeCommanderStatus(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka", "Healera")
+		case line == ".tb state party":
+			return commanderStateLines("Tanka")
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "status"}), &out)
+	if out.Self != "Xxxxxx" {
+		t.Fatalf("status self %q", out.Self)
+	}
+	if len(out.Cards) != 1 || out.Cards[0].Lead != "Tanka" || out.Cards[0].Bots != 2 {
+		t.Fatalf("status cards %+v\n%s", out.Cards, steps.joined())
+	}
+	if got := len(out.Cards[0].Members); got != 2 {
+		t.Fatalf("status members %d, want 2 (%+v)", got, out.Cards[0].Members)
+	}
+	if !out.Cards[0].Members[0].Lead || !out.Cards[0].Members[1].Alive {
+		t.Fatalf("member flags %+v", out.Cards[0].Members)
+	}
+	if lines := f.serveTBLines(); len(lines) != 2 || !strings.HasPrefix(lines[0], ".tb commander status Xxxxxx ") ||
+		!strings.HasPrefix(lines[1], ".tb state party ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	if out.PartyError != "" {
+		t.Fatalf("status party_error %q, want empty on a clean read", out.PartyError)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeCommanderStatusPartyError is decision 6: a failed `.tb state party` read is not silent — the answer
+// carries party_error and the cards it did read.
+func TestServeCommanderStatusPartyError(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb state party":
+			return nil // no answer: the party read fails while the cards read fine
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "status"}), &out)
+	if len(out.Cards) != 1 || out.Cards[0].Lead != "Tanka" {
+		t.Fatalf("status cards %+v", out.Cards)
+	}
+	if out.PartyError == "" {
+		t.Fatal("a failed party read answers no party_error")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderCmdStay(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb order party stay":
+			return commanderOrderLines("stay", "Tanka", 1)
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "stay"}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb order party stay" {
+		t.Fatalf("sent %q\n%s", out.Sent, steps.joined())
+	}
+	if len(out.Bots) != 1 || out.Bots[0].Bot != "Tanka" || out.Bots[0].Status != "queued" || out.Bots[0].Seq != 1 {
+		t.Fatalf("bots %+v", out.Bots)
+	}
+	if out.Card == nil || out.Card.Lead != "Tanka" {
+		t.Fatalf("the guard's card %+v", out.Card)
+	}
+	if out.Final == nil {
+		t.Fatal("a success answer must carry final, even when no wait ran")
+	}
+	if lines := f.serveTBLines(); len(lines) != 3 || !strings.HasPrefix(lines[1], ".tb order party stay ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeCommanderErrorCarriesTheOrder is decision 1: the order went out and the waited read lost the link, so
+// the refusal's Data names the sent line and the caller never retries it blindly.
+func TestServeCommanderErrorCarriesTheOrder(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	reads := 0
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb order party stay":
+			return commanderOrderLines("stay", "Tanka", 1)
+		case line == ".tb state party":
+			reads++
+			if reads == 1 {
+				return nil // the link drops inside the wait: reply nothing and let the read time out
+			}
+			return commanderStateLines("Tanka")
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "stay", "wait_ms": 5000}, -32004, "")
+	partial := commanderErrorData(t, rerr)
+	if len(partial.Sent) != 1 || partial.Sent[0] != ".tb order party stay" {
+		t.Fatalf("the partial result sent %q: the order went out and must be named", partial.Sent)
+	}
+	if len(partial.Bots) != 1 || partial.Bots[0].Bot != "Tanka" || partial.Bots[0].Status != "queued" {
+		t.Fatalf("the partial result bots %+v", partial.Bots)
+	}
+	if partial.Card == nil || partial.Card.Lead != "Tanka" {
+		t.Fatalf("the partial result card %+v", partial.Card)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderViewRefused(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "commander", map[string]any{"op": "view"}, -32003, "commander view: not ported on this server")
+	// The old view shape's flag is accepted, not an unknown field: the refusal is the port's, not -32602.
+	a.mustFail(t, "commander", map[string]any{"op": "view", "on": true}, -32003, "commander view: not ported on this server")
+	a.mustFail(t, "commander", map[string]any{"op": "frobnicate"}, -32602, "bind, unbind, status, cmd, run or view")
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("a refused call sent %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderNotPortedList(t *testing.T) {
+	ported, notPorted := ServeRPCMethods()
+	found := false
+	for _, name := range ported {
+		if name == "commander" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("commander is not in the ported method list")
+	}
+	for _, name := range notPorted {
+		if name == "commander" {
+			t.Fatal("commander is still in the not-ported list")
+		}
+	}
+}
+
+// TestServeCommanderBindAndUnbind is the brief's bind/unbind coverage: the exact lines go out in order, the
+// answer carries the sent lines and the card, and an unbind to a lead the character does not command is refused
+// with not-owned and no line.
+func TestServeCommanderBindAndUnbind(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch line {
+		case ".tb commander status":
+			return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+		case ".tb party Tanka Healera":
+			return []string{
+				"party-begin #T",
+				"party-join bot=Healera leader=Tanka status=joined #T",
+				"party-end count=1 records=1 leader=Tanka joined=1 asked=1 #T",
+			}
+		case ".tb master party Tanka Xxxxxx":
+			return []string{
+				"master-begin #T",
+				"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+				"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+			}
+		case ".tb commander status Xxxxxx":
+			return commanderCardLines("Tanka", "Tanka")
+		case ".tb master party Tanka none":
+			return []string{
+				"master-begin #T",
+				"master bot=Tanka commander= status=queued seq=45 #T",
+				"master-end target=party:Tanka commander= count=1 records=1 bound=1 queued=1 refused=0 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var bound ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "bind", "lead_bot": "Tanka", "bots": []string{"Healera"},
+	}), &bound)
+	if len(bound.Sent) != 2 || bound.Sent[0] != ".tb party Tanka Healera" || bound.Sent[1] != ".tb master party Tanka Xxxxxx" {
+		t.Fatalf("bind sent %q", bound.Sent)
+	}
+	if bound.Card == nil || bound.Card.Lead != "Tanka" {
+		t.Fatalf("bind card %+v", bound.Card)
+	}
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "unbind", "lead_bot": "Rogua"}, -32003, "not-owned: Rogua is not a lead")
+	if partial := commanderErrorData(t, rerr); len(partial.Sent) != 0 {
+		t.Fatalf("a refused unbind sent %q", partial.Sent)
+	}
+	var freed ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "unbind", "lead_bot": "Tanka"}), &freed)
+	if len(freed.Sent) != 1 || freed.Sent[0] != ".tb master party Tanka none" {
+		t.Fatalf("unbind sent %q", freed.Sent)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderDuringReconnect(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 200*time.Millisecond)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	waitServeUnits(t, a)
+
+	// The first attempt is made to fail, so the reconnecting window lasts long enough to answer a call in.
+	f.failLogins(1)
+	dropServingSocket(t, f)
+	waitServeState(t, a, "reconnecting", steps)
+	a.mustFail(t, "commander", map[string]any{"op": "status"}, -32005, "reconnecting")
+	waitServeState(t, a, "online", steps)
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("a call during the re-entry reached the command channel: %q", lines)
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// TestServeCommanderBindGateResetAfterReconnect is the brief's reset coverage: the bind gate reads the whole
+// binding table before each line goes out, so a change the re-entry brings is caught instead of replaying the
+// dropped session's answer.
+func TestServeCommanderBindGateResetAfterReconnect(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.realmLoop = true
+	f.serveReconnects = 3
+	fastReconnect(t, f, 200*time.Millisecond)
+	reads := 0
+	f.serveCommander = func(line string) []string {
+		switch {
+		case line == ".tb commander status":
+			reads++
+			if reads <= 3 {
+				// The pre-gate, pre-master and post-bind reads of the first bind: nobody holds Tanka.
+				return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+			}
+			// After the re-entry another commander holds Tanka: the gate refuses before any line.
+			return []string{
+				"commander-begin #T",
+				"binding cmd=Other cguid=15 online=yes lead=Tanka group=1 bound=1 bots=1 system=no inparty=no raid=no playerled=no boundat=1795138681 orders=0 map=389 pos=0.80,-8.23,-15.53 #T",
+				"member cmd=Other bot=Tanka guid=10 class=warrior role=tank level=18 hp=498 maxhp=498 power=54 maxpower=100 ptype=rage alive=yes lead=yes map=389 zone=2437 pos=-18.24,-46.69,-21.85 #T",
+				"commander-end count=2 records=2 bindings=1 #T",
+			}
+		case line == ".tb commander status Xxxxxx":
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb master party Tanka Xxxxxx":
+			return []string{
+				"master-begin #T",
+				"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+				"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	waitServeUnits(t, a)
+
+	// The empty table lets the bind through the gate: the master line goes out, the module answers, and the
+	// post-bind card read finds the lead bound.
+	var bound ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}), &bound)
+	if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" {
+		t.Fatalf("bind sent %q", bound.Sent)
+	}
+	if reads != 2 {
+		t.Fatalf("gate reads %d, want the pre-gate and the pre-master read", reads)
+	}
+	dropServingSocket(t, f)
+	waitServeState(t, a, "online", steps)
+	// The re-entry changed the table: the next bind reads again and refuses before the master line.
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "bind", "lead_bot": "Tanka"}, -32003, "Tanka cannot be bound")
+	if partial := commanderErrorData(t, rerr); len(partial.Sent) != 0 {
+		t.Fatalf("a refused bind sent %q", partial.Sent)
+	}
+	if reads != 4 {
+		t.Fatalf("table reads %d after the re-entry, want four", reads)
+	}
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb master ") && !strings.Contains(ln, ".tb master party Tanka Xxxxxx") {
+			t.Fatalf("a refused bind sent a line: %q", ln)
+		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// commanderRunningCardLines is commanderCardLines with the card's run record running: the order guard's refusal.
+func commanderRunningCardLines(lead string, members ...string) []string {
+	raws := commanderCardLines(lead, members...)
+	run := "run lead=" + lead + " plan=ragefire_chasm state=running step=1 steps=80 leg=0 legname=tunnel " +
+		"kind=pull phase=pull note=fighting pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 " +
+		"cmd=Xxxxxx #T"
+	raws = append(raws[:len(raws)-1], run, raws[len(raws)-1])
+	n := len(raws) - 2
+	raws[len(raws)-1] = "commander-end count=" + itoaServe(n) + " records=" + itoaServe(n) + " bindings=1 #T"
+	return raws
+}
+
+func TestServeCommanderModuleError(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if strings.HasPrefix(line, ".tb commander status") {
+			return []string{"error code=bad-card cmd=commander msg=the%20card%20is%20corrupt #T"}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	// The module's own error line reaches the caller with its code first.
+	a.mustFail(t, "commander", map[string]any{"op": "status"}, -32003, "bad-card (commander): the card is corrupt")
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderRunGuard(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderRunningCardLines("Tanka", "Tanka")
+		case line == ".tb order party stay":
+			return commanderOrderLines("stay", "Tanka", 1)
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "stay"}, -32003, "run-active: Tanka's run of ragefire_chasm is running")
+	if !strings.HasPrefix(rerr.Message, "run-active: ") {
+		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
+	}
+	if got := commanderErrorData(t, rerr); got.Card == nil || got.Card.Lead != "Tanka" {
+		t.Fatalf("the run-active refusal carries no card: %+v", got.Card)
+	}
+	// The same call with pause_run sends the order: the module pauses the run itself.
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "cmd", "verb": "stay", "pause_run": true}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb order party stay" {
+		t.Fatalf("sent %q\n%s", out.Sent, steps.joined())
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// TestCommanderWaitClamp is decision 4: negative waits become zero, huge waits clamp to 30 s before the
+// Duration conversion, and the wait plus the read budget never exceeds 15 s.
+func TestCommanderWaitClamp(t *testing.T) {
+	wait, budget := commanderWait(-5)
+	if wait != 0 || budget != commanderReadBudget {
+		t.Fatalf("negative wait_ms gives %v + %v, want 0 + %v", wait, budget, commanderReadBudget)
+	}
+	wait, _ = commanderWait(10000000000000)
+	if wait != 30*time.Second {
+		t.Fatalf("huge wait_ms gives %v, want 30 s (a wrapped Duration would be negative)", wait)
+	}
+	for _, ms := range []int{0, 5000, 30000} {
+		wait, budget = commanderWait(ms)
+		if wait+budget > 15*time.Second {
+			t.Fatalf("wait_ms=%d gives %v + %v, over the 15 s cap", ms, wait, budget)
+		}
+	}
+}
+
+// TestServeCommanderCmdUnknownLead is decision 3 at the RPC level: lead_bot scoping happens before any line
+// goes out, and the refusal Data carries the guard's card.
+func TestServeCommanderCmdUnknownLead(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if strings.HasPrefix(line, ".tb commander status") {
+			return commanderCardLines("Tanka", "Tanka")
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "stay", "lead_bot": "Rogua"}, -32003, "not-owned: Rogua is not a lead")
+	partial := commanderErrorData(t, rerr)
+	if partial.Card == nil || partial.Card.Lead != "Tanka" {
+		t.Fatalf("the partial result card %+v", partial.Card)
+	}
+	if len(partial.Sent) != 0 {
+		t.Fatalf("an order went out: %q", partial.Sent)
+	}
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb order ") {
+			t.Fatalf("an order went out to the wrong lead: %q", ln)
+		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderNotAvailable(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if strings.HasPrefix(line, ".tb commander status") {
+			return commanderCardLines("Tanka", "Tanka")
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	// No typed path is in this build: a P6 verb is refused with the path's code, with no probe and no order.
+	rerr := a.mustFail(t, "commander", map[string]any{"op": "cmd", "verb": "loot", "args": []string{"12345"}}, -32003, "not-available: loot: "+cmdctl.PathName)
+	if !strings.HasPrefix(rerr.Message, "not-available: ") {
+		t.Fatalf("the refusal does not start with its code: %q", rerr.Message)
+	}
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb cmd ") {
+			t.Fatalf("the refused verb sent %q", ln)
+		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+func TestServeCommanderRunStatusAndEvents(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch line {
+		case ".tb run status all":
+			return []string{
+				"run-begin #T",
+				"run lead=Tanka plan=ragefire_chasm state=running step=1 steps=80 leg=0 legname=tunnel kind=pull " +
+					"phase=pull note=fighting pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 #T",
+				"run-end count=1 records=1 verb=status #T",
+			}
+		case ".tb run events Tanka since=4":
+			return []string{
+				"run-begin #T",
+				"event seq=4 t=40 kind=pull step=1 leg=0 unit=12345 why= #T",
+				"run-end count=1 records=1 verb=events lead=Tanka last=4 #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	// A run status with no lead reads every run the module holds.
+	var status ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{"op": "run", "verb": "status"}), &status)
+	if len(status.Runs) != 1 || status.Runs[0].Lead != "Tanka" || status.Runs[0].State != "running" ||
+		status.Runs[0].Steps != 80 || status.Runs[0].Leg == nil {
+		t.Fatalf("run status %+v\n%s", status.Runs, steps.joined())
+	}
+	var events ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "run", "verb": "events", "lead_bot": "Tanka", "args": []string{"4"},
+	}), &events)
+	if len(events.Events) != 1 || events.Events[0].Seq != 4 || events.Events[0].Kind != "pull" ||
+		events.Events[0].Unit == nil || *events.Events[0].Unit != 12345 {
+		t.Fatalf("run events %+v\n%s", events.Events, steps.joined())
+	}
+	lines := f.serveTBLines()
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], ".tb run status all ") || !strings.HasPrefix(lines[1], ".tb run events Tanka since=4 ") {
+		t.Fatalf("the fake saw %q", lines)
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
+}
+
+// TestServeCommanderRunStartDefaultLead is decision 8: an old `run start` without lead_bot uses the only bound
+// lead, and refuses clearly when there is not exactly one.
+func TestServeCommanderRunStartDefaultLead(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case line == ".tb run start Tanka ragefire_chasm":
+			return []string{
+				"run-begin #T",
+				"run lead=Tanka plan=ragefire_chasm state=running step=1 steps=80 leg=0 legname=tunnel kind=pull " +
+					"phase=pull note=fighting pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 #T",
+				"run-end count=1 records=1 verb=start #T",
+			}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeCommander
+	json.Unmarshal(a.mustCall(t, "commander", map[string]any{
+		"op": "run", "verb": "start", "args": []string{"ragefire_chasm"},
+	}), &out)
+	if len(out.Sent) != 1 || out.Sent[0] != ".tb run start Tanka ragefire_chasm" {
+		t.Fatalf("sent %q: the only bound lead is the default", out.Sent)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+func TestServeCommanderRunStartNeedsALead(t *testing.T) {
+	// The module answers one card per commander: the ambiguous case at this layer is zero cards, where no
+	// lead can be defaulted.
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if strings.HasPrefix(line, ".tb commander status") {
+			return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "commander", map[string]any{
+		"op": "run", "verb": "start", "args": []string{"ragefire_chasm"},
+	}, -32602, "lead_bot is required")
+	for _, ln := range f.serveTBLines() {
+		if strings.HasPrefix(ln, ".tb run start") {
+			t.Fatalf("a run started without a lead: %q", ln)
+		}
+	}
+	a.stop(t)
+	f.close()
+	f.wait(t)
 }

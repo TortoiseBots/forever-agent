@@ -174,6 +174,9 @@ type serveState struct {
 	// q and nav belong to the loop goroutine: q is rebuilt when a session is installed, nav outlives the sessions.
 	q   *command.Session
 	nav *navmesh.Planner
+	// cmdr is the commander method's controller, built for the first session and reset by every install (a
+	// re-entry drops what the old session knew about the module's packages). It belongs to the loop goroutine.
+	cmdr *commanderCtl
 	// allowGMUnits is ServeConfig.AllowGMUnits; gmUnits is the trial allowlist the runner replaces through
 	// trial_units (the guids the GM hands may act on). Both belong to the loop goroutine: trial_units is a call
 	// and the hands are calls, so no lock is needed. The allowlist outlives a reconnect as it is the runner's
@@ -308,6 +311,7 @@ func (st *serveState) install(s *session, epoch uint64) {
 	st.rt.Store(s.serveRT)
 	st.q = command.NewSession(&cmdLink{s: s})
 	st.epoch.Store(epoch)
+	st.resetCommander(s)
 	st.onlineSince = time.Now()
 	st.session.Store(s)
 }
