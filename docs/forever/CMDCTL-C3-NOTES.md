@@ -59,8 +59,8 @@ guard (refused `not-owned` when the character commands no such lead; one bound l
 names none); `run start` without `lead_bot` uses the only bound lead, and is refused clearly otherwise; `wait_ms`
 is clamped to 0..30000 before the `Duration` conversion, and a waited `cmd` carries one overall deadline (the
 clamped wait plus a 5 s read budget, capped at 15 s); a P3/P6 verb whose typed path has not landed (round C5)
-answers `not-available: <verb>: needs-typed-path (round C5)` after the package probe, sending no order line; the
-old `{"op":"view","on":true}` shape is accepted and answers the port's own refusal.
+answers `not-available: <verb>: needs-typed-path (round C5)` with no probe line and no order line; the old
+`{"op":"view","on":true}` shape is accepted and answers the port's own refusal.
 
 ## Errors
 
@@ -68,7 +68,7 @@ Every refusal is `-32003` with its machine-readable code first in the message:
 
 | source | message start |
 |---|---|
-| `cmdctl.NotAvailableError` | `not-available: <verb>: needs module package P3`, or `not-available: <verb>: needs-typed-path (round C5)` when the package answers but the typed path has not landed |
+| `cmdctl.NotAvailableError` | `not-available: <verb>: needs module package P3` (a missing package), or `not-available: <verb>: needs-typed-path (round C5)` (no typed path in this build: no probe is sent) |
 | `cmdctl.RunActiveError` | `run-active: <lead>'s run of <plan> is running; …` |
 | `cmdctl.NotOwnedError` | `not-owned: <target> is not a <kind> this character commands` (or "…the line already went through") |
 | `cmdctl.RefusedError` | `refused: <verb>: nothing was queued (bot: code, …)` |
@@ -87,11 +87,12 @@ read carries `party_error` with the cards it did read; `cmd stay` (the exact `.t
 queued bot, the guard's card, `final` present); an unanswered wait ends `-32004` with the sent order in the error's
 `data`; `view` and the old `{"op":"view","on":true}` shape answer the port's refusal, and bad params are refused
 with nothing sent; `commander` in the ported list and out of the not-ported one; a call during a re-entry answers
-`-32005` and the fake sees no line; the probe is asked once per session and again after the re-entry; a module
+`-32005` and the fake sees no line; the bind gate reads before each line and again after the re-entry; a module
 error line keeps its code first; an order into a running run is refused `run-active` (carrying the card) and
-`pause_run` sends it; a P6 verb probes once and answers its package code with no order; a missing typed path
-answers `needs-typed-path` with one probe and no order; `run status` (no lead) and `run events` carry `runs` and
-`events`; an old `run start` without `lead_bot` uses the only bound lead, and is refused when there is not exactly
+`pause_run` sends it; a P6 verb whose package is missing probes once per session (and again after the re-entry)
+and answers the package code with no order; a missing typed path answers `needs-typed-path` with no probe and no
+order; `run status` (no lead) and `run events` carry `runs` and `events`; an old `run start` without `lead_bot`
+uses the only bound lead, and is refused when there is not exactly
 one; `bind` sends the party and master lines in order with the card, and `unbind` to an unowned lead is refused
-`not-owned` with no line. `cmdctl_test.go`: one-lead scoping (named, default, unknown, invalid) and the path
-refusal after the probe.
+`not-owned` with no line. `cmdctl_test.go`: one-lead scoping (named, default, unknown, invalid) and the no-probe
+path refusal.

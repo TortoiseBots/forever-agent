@@ -128,8 +128,8 @@ result in the error's `data` (the lines that went out, the bots, `card` and `fin
 sees an order in `sent` knows it went out and never retries it blindly. An order while a run is running or paused
 is refused `run-active` unless `pause_run` is true (the module pauses the run itself). A verb of a module package
 that is not installed answers `not-available` after one cached probe per session, and the probe cache is dropped
-when the world link is re-entered; a verb whose package answers but whose typed path has not landed (round C5)
-answers `not-available: <verb>: needs-typed-path (round C5)` instead. `view` is the port's cut verb:
+when the world link is re-entered; a verb whose typed path has not landed (round C5) answers
+`not-available: <verb>: needs-typed-path (round C5)` with no probe line at all. `view` is the port's cut verb:
 `commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
 (`not-available`, `run-active`, `not-owned`, `refused`, `bind-refused`, or the module's own error code); a lost or
 re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
