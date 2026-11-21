@@ -84,6 +84,8 @@ type Card struct {
 	Feed      Feed         `json:"feed"`
 	Bots      []BotView    `json:"bots"`
 	Mobs      []MobView    `json:"mobs"`
+	Rally     *Pos         `json:"rally,omitempty"`     // the stored rally point in the drawing plane, when on the card's map
+	Elsewhere []string     `json:"elsewhere,omitempty"` // the bots and the rally point on another map: listed as text, never drawn
 	Commander *Dot         `json:"commander,omitempty"` // the agent's own character, when it stands on the plan's map
 	TrailT    []int64      `json:"trail_t,omitempty"`   // the unix second of each point of Trail (the lead was last seen there)
 	Trail     [][2]float64 `json:"trail,omitempty"`     // where the lead bot has been this run ([x, y] in the drawing's plane), oldest first
@@ -238,6 +240,10 @@ type BotView struct {
 	Y          float64  `json:"y"`
 	Known      bool     `json:"known"` // x and y are a position (the drawing plane)
 	InMap      bool     `json:"in_map"`
+	Hold       string   `json:"hold,omitempty"` // the placement the bot stands in (place/fallback)
+	SlotX      float64  `json:"slot_x,omitempty"`
+	SlotY      float64  `json:"slot_y,omitempty"`
+	HasSlot    bool     `json:"has_slot,omitempty"`
 }
 
 // MobView is one creature of the feed.

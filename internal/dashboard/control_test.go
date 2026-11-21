@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
@@ -1093,3 +1095,141 @@ func TestControlLogFileChecks(t *testing.T) {
 
 // Test 13: the run controls' button matrix, confirm texts and log lines (controls.js, run under node).
 func TestControlButtons(t *testing.T) { runCheck(t, "controls_check.js", "controls.js") }
+
+// TestPlaceRequestArgs is the A2 §3.5 table: the panel's picks become the
+// `.tb cmd` words, and anything else is an error with no commander call.
+func uint32Ptr(n uint32) *uint32 { return &n }
+
+func TestPlaceRequestArgs(t *testing.T) {
+	mapID := uint32(389)
+	card := &serveclient.CommanderCard{Map: &mapID, Pos: &serveclient.CommanderPos{X: 0, Y: 0},
+		Members: []serveclient.CommanderMember{{Bot: "Tanka"}, {Bot: "Healera"}}}
+	intPtr := func(n int) *int { return &n }
+	pt := func(x, y float64) *foreverPlacePoint { return &foreverPlacePoint{X: x, Y: y} }
+	onMap := func() *uint32 { m := mapID; return &m }
+	cases := []struct {
+		name string
+		req  foreverPlaceRequest
+		want []string
+	}{
+		{"place circle wide target healers",
+			foreverPlaceRequest{Verb: "place", Shape: "circle", Gap: "wide", Anchor: "target", Who: []string{"Healers"}},
+			[]string{"circle", "wide", "target", "healers"}},
+		{"place line 5 point",
+			foreverPlaceRequest{Verb: "place", Shape: "line", Gap: "5", Anchor: "point", Point: pt(12.5, -30), Map: onMap()},
+			[]string{"line", "5.0", "at:12.50,-30.00"}},
+		{"place face",
+			foreverPlaceRequest{Verb: "place", Shape: "circle", Anchor: "here", Face: intPtr(90)},
+			[]string{"circle", "here", "face:90"}},
+		{"follow who",
+			foreverPlaceRequest{Verb: "place_follow", Who: []string{"Tanka"}},
+			[]string{"follow", "Tanka"}},
+		{"rally here",
+			foreverPlaceRequest{Verb: "rally", Rally: "here"},
+			[]string{"here"}},
+		{"rally show is bare",
+			foreverPlaceRequest{Verb: "rally", Rally: "show"},
+			nil},
+		{"rally clear",
+			foreverPlaceRequest{Verb: "rally", Rally: "clear"},
+			[]string{"clear"}},
+		{"fallback to point",
+			foreverPlaceRequest{Verb: "fallback", To: "point", Point: pt(1, 2), Map: onMap()},
+			[]string{"at:1.00,2.00"}},
+		{"fallback default is bare",
+			foreverPlaceRequest{Verb: "fallback"},
+			nil},
+		{"resume is bare",
+			foreverPlaceRequest{Verb: "resume"},
+			nil},
+	}
+	for _, tc := range cases {
+		got, err := placeRequestArgs(tc.req, card)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+	bad := []foreverPlaceRequest{
+		{Verb: "place", Shape: "square", Anchor: "here"},
+		{Verb: "place", Shape: "line", Gap: "13", Anchor: "here"},
+		{Verb: "place", Shape: "line", Gap: "wide", Anchor: "here", Face: intPtr(360)},
+		{Verb: "place", Shape: "line", Anchor: "here", Who: []string{"Stranger"}},
+		{Verb: "place", Shape: "line", Anchor: "point"},
+		{Verb: "place", Shape: "line", Anchor: "point", Point: pt(1, 2)},                        // no map
+		{Verb: "place", Shape: "line", Anchor: "point", Point: pt(1, 2), Map: uint32Ptr(1)},     // another map
+		{Verb: "place", Shape: "line", Anchor: "point", Point: pt(1e300, 2), Map: onMap()},      // off the map
+		{Verb: "place", Shape: "line", Anchor: "point", Point: pt(math.NaN(), 2), Map: onMap()}, // not finite
+		{Verb: "place", Shape: "line", Anchor: "point", Point: pt(0, 101), Map: onMap()},        // past the module's 100 yd reach
+		{Verb: "rally", Rally: "there"},
+		{Verb: "dance"},
+	}
+	for i, req := range bad {
+		if _, err := placeRequestArgs(req, card); err == nil {
+			t.Fatalf("bad %d (%+v): expected an error", i, req)
+		}
+	}
+}
+
+// TestPlaceEndpointForbiddenAndValidation is the A2 §3.5 endpoint coverage:
+// non-Forever agents get a 404, bad bodies a 400 with no commander call,
+// and the request log line (with the args words) is written before the call.
+func TestPlaceEndpointForbiddenAndValidation(t *testing.T) {
+	r := newControlRig(t)
+	// The rig's agent has no kind: the place action is not registered for it.
+	rec := r.post("/api/control/"+r.agent.ID+"/place", map[string]any{"verb": "place", "shape": "circle"}, r.token, nil)
+	if rec.code != http.StatusNotFound {
+		t.Fatalf("non-Forever place: %d %s", rec.code, rec.body)
+	}
+	if got := r.fake.methods(); len(got) != 0 {
+		t.Fatalf("a 404 reached the agent: %v", got)
+	}
+
+	// A Forever agent with a bad shape: 400 and no commander call.
+	f := newFakeWriteAgent(t)
+	u, _ := url.Parse(f.srv.URL)
+	id := u.Port()
+	tok := testAgentToken
+	must(t, os.WriteFile(filepath.Join(r.p.opt.ConfigDir, "rpc-"+id+".token"), []byte(tok+"\n"), 0o600))
+	a := Agent{ID: u.Host, Addr: u.Host, TokenPath: filepath.Join(r.p.opt.ConfigDir, "rpc-"+id+".token"), Kind: AgentForever}
+	r.p.mu.Lock()
+	r.p.known = append(r.p.known, a)
+	r.p.mu.Unlock()
+	f.set("commander", `{"cards":[{"cmd":"X","lead":"Tanka","bound":1,"bots":1,"members":[{"bot":"Tanka","class":"warrior","role":"tank","level":60,"hp":10,"max_hp":10,"power":1,"max_power":1,"alive":true,"lead":true,"map":389,"zone":1,"pos":{"x":1,"y":2,"z":3}}]}],"final":{}}`)
+	rec = r.post("/api/control/"+a.ID+"/place", map[string]any{"verb": "place", "shape": "square", "anchor": "here"}, r.token, nil)
+	if rec.code != http.StatusBadRequest {
+		t.Fatalf("bad shape: %d %s", rec.code, rec.body)
+	}
+	if got := f.methods(); len(got) != 1 || got[0] != "commander" {
+		t.Fatalf("a 400 must read only the card (got %v)", got)
+	}
+	// A refused place (400 after the card read) writes no control line:
+	// the request record is written by foreverCommander before the call,
+	// and a call that never gets that far must not look sent.
+	if len(r.logRecords()) != 0 {
+		t.Fatalf("a 400 wrote a control line: %v", r.logRecords())
+	}
+}
+
+// TestForeverSummaryPlaceRefusalCode decodes the daemon's own JSON (the wire
+// key is `code`, not `error`) and checks the summary names each refusal: a
+// client-side struct built by hand would never catch a wrong JSON tag.
+func TestForeverSummaryPlaceRefusalCode(t *testing.T) {
+	const body = `{"sent":[".tb cmd place circle"],"place":{"verb":"place","status":"accepted","placed":1,"refused":1,` +
+		`"bots":[{"bot":"Mhunter","status":"refused","code":"liquid"}]}}`
+	var res serveclient.CommanderResult
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := foreverSummary(res)
+	if want := ".tb cmd place circle -> placed 1, refused 1 (Mhunter: liquid)"; got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+}

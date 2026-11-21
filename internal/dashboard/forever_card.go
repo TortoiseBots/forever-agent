@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -147,7 +148,10 @@ func BuildForeverCard(in Inputs) Card {
 
 // fillForeverBots builds the card's bots from the commander status members.
 // Party rows only fill in online/dead when the status names no member for
-// them; the status is the source of roles, hp and positions.
+// them; the status is the source of roles, hp and positions. A held bot
+// carries its slot (projected); the hold name is shown as-is. A member on
+// another map has no position and no slot on this card: it is listed in
+// Elsewhere instead.
 func fillForeverBots(c *Card, cmd *serveclient.CommanderCard, party []foreverPartyMember) {
 	if cmd == nil {
 		return
@@ -161,13 +165,21 @@ func fillForeverBots(c *Card, cmd *serveclient.CommanderCard, party []foreverPar
 			GUID: m.GUID, Name: m.Bot, Class: m.Class, Role: m.Role,
 			Lead: m.Lead, Level: m.Level,
 			HPPct: pct(float64(m.HP), float64(m.MaxHP)), PowerPct: pct(float64(m.Power), float64(m.MaxPower)),
-			Alive: m.Alive,
+			Alive: m.Alive, Hold: m.Hold,
 		}
-		// A member with no position (absent, or 0,0 the way the page already reads it) is unknown, never drawn at 0,0.
-		if m.Pos != nil && (m.Pos.X != 0 || m.Pos.Y != 0) {
-			b.X, b.Y = Project(float32(m.Pos.X), float32(m.Pos.Y))
-			b.Known = true
-			b.InMap = true
+		if m.Map != c.Map {
+			c.Elsewhere = append(c.Elsewhere, fmt.Sprintf("%s (map %d)", m.Bot, m.Map))
+		} else {
+			// A member with no position (absent, or 0,0 the way the page already reads it) is unknown, never drawn at 0,0.
+			if m.Pos != nil && (m.Pos.X != 0 || m.Pos.Y != 0) {
+				b.X, b.Y = Project(float32(m.Pos.X), float32(m.Pos.Y))
+				b.Known = true
+				b.InMap = true
+			}
+			if m.Slot != nil {
+				b.SlotX, b.SlotY = Project(float32(m.Slot.X), float32(m.Slot.Y))
+				b.HasSlot = true
+			}
 		}
 		if p, ok := byName[m.Bot]; ok {
 			if !p.Online {
@@ -180,6 +192,18 @@ func fillForeverBots(c *Card, cmd *serveclient.CommanderCard, party []foreverPar
 		c.Bots = append(c.Bots, b)
 	}
 	sort.SliceStable(c.Bots, func(i, j int) bool { return c.Bots[i].Lead && !c.Bots[j].Lead })
+	// The rally flag is drawn only when the stored point is on the card's
+	// map: a point on another map would pin the wrong place, so it is listed
+	// in Elsewhere instead. The card has no instance to compare rally_inst
+	// with (the A2 notes, documented limits).
+	if cmd.Rally != nil && cmd.RallyMap != nil {
+		if *cmd.RallyMap == c.Map {
+			sx, sy := Project(float32(cmd.Rally.X), float32(cmd.Rally.Y))
+			c.Rally = &Pos{X: float32(sx), Y: float32(sy), Z: float32(cmd.Rally.Z)}
+		} else {
+			c.Elsewhere = append(c.Elsewhere, fmt.Sprintf("rally point (map %d)", *cmd.RallyMap))
+		}
+	}
 }
 
 // fillForeverMobs builds the card's mobs from the units answer: every

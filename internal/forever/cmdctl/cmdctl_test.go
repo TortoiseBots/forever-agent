@@ -517,6 +517,13 @@ func missingVerb(o command.Options) *command.Reply {
 	return reply(o, "error code=missing-verb cmd=cmd msg=move%2C%20stay #T")
 }
 
+// missingPlaceArg is the placement package's probe answer (TbPlacePlan.h
+// ParseCommand): `.tb cmd place` without a shape is the module's own
+// missing-argument, so the package is there.
+func missingPlaceArg(o command.Options) *command.Reply {
+	return reply(o, "error code=missing-argument cmd=cmd msg=place%20takes%20a%20shape #T")
+}
+
 // enc percent-encodes free text the way the module's replies carry it: every byte outside the unreserved set.
 func enc(s string) string {
 	var b strings.Builder
@@ -639,6 +646,9 @@ func TestAvailable(t *testing.T) {
 	}
 	if ok, why, err := b.Available(ctx, "view"); ok || why != "not ported on this server" || err != nil {
 		t.Fatalf("view: %v %q %v", ok, why, err)
+	}
+	if ok, why, err := b.Available(ctx, "ritual"); ok || why != "not ported on this server" || err != nil {
+		t.Fatalf("ritual: %v %q %v", ok, why, err)
 	}
 	if ok, why, err := b.Available(ctx, "move"); !ok || why != "" || err != nil {
 		t.Fatalf("move with P3: %v %q %v", ok, why, err)
@@ -2290,6 +2300,10 @@ var moduleArity = []struct {
 	{"gossip", 1, -1, "HandleGossip: target, optional bot, option = the rest of the line"},
 	{"state", 0, 1, "HandleState: optional bot"},
 	{"lootmethod", 1, 2, "ParseTaskOrder lootmethod: args.empty() || args.size() > 2 is invalid"},
+	{"place", 1, 12, "TbPlacePlan.h ParseCommand place: shape, options, who words (the controller caps the words at 12)"},
+	{"rally", 0, 1, "TbPlacePlan.h ParseCommand rally: bare read-back, or here|clear|at:.."},
+	{"fallback", 0, 1, "TbPlacePlan.h ParseCommand fallback: default, or rally|last|here|at:.."},
+	{"resume", 0, 0, "TbPlacePlan.h ParseCommand resume: no word"},
 }
 
 // TestVerbArityMatchesTheModule is finding 3: each cmd row's Min and Max are the module's own, and every cmd row is
@@ -2561,5 +2575,422 @@ func TestCardWithNoLeadIsServedByItsFirstBot(t *testing.T) {
 				t.Fatalf("bots reported on a mismatch: %+v", res.Bots)
 			}
 		})
+	}
+}
+
+// ---- the placement verbs (COMMANDER-SHAPES-SPEC §3.5) ----
+
+// placeFixture is a controller whose card holds Tanka and whose `.tb cmd`
+// lines are answered by script. The module's placement answers are the
+// section 2.6 samples, bot names replaced.
+func placeFixture(t *testing.T, runLine string, script func(line, verb string, o command.Options) (*command.Reply, error)) (*TB, *fake) {
+	t.Helper()
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", runLine, "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd" {
+			return missingVerb(o), nil
+		}
+		if line == ".tb cmd place" {
+			return missingPlaceArg(o), nil
+		}
+		if strings.HasPrefix(line, ".tb cmd ") {
+			words := strings.Fields(line)
+			verb := ""
+			if len(words) >= 3 {
+				verb = words[2]
+			}
+			return script(line, verb, o)
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	return b, f
+}
+func placeAccepted(o command.Options) *command.Reply {
+	return reply(o,
+		"cmd-begin #T",
+		"cmd verb=place status=accepted bots=2 shape=circle gap=wide anchor=target radius=6.4 slots=2 #T",
+		"cmd bot=Tanka verb=place role=tank slot=0 pos=-18.24,-46.69,-21.85 seq=41 #T",
+		"cmd bot=Healera verb=place role=healer slot=1 pos=-14.50,-48.10,-21.85 seq=42 #T",
+		"cmd-end count=3 records=3 verb=place lead=Tanka bots=2 placed=2 refused=0 #T",
+	)
+}
+
+func TestPlaceUsageSendsNothing(t *testing.T) {
+	b, f := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return nil, errors.New("unexpected line " + line)
+	})
+	for _, args := range [][]string{nil, make([]string, 13)} {
+		if _, err := b.Order(context.Background(), Order{Verb: "place", Args: args}); err == nil {
+			t.Fatalf("place %v: expected a usage error", args)
+		} else {
+			var ue *UsageError
+			if !errors.As(err, &ue) {
+				t.Fatalf("place %v: err %v, want UsageError", args, err)
+			}
+		}
+	}
+	// A usage error fails before the guard's card read: nothing reached the session.
+	if len(f.seen) != 0 {
+		t.Fatalf("usage errors reached the session: %v", f.seen)
+	}
+}
+
+func TestPlaceCursorSendsNothing(t *testing.T) {
+	b, f := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return nil, errors.New("unexpected line " + line)
+	})
+	_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle", "cursor"}})
+	var ue *UsageError
+	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "minimap ping") {
+		t.Fatalf("err %v, want the cursor usage error", err)
+	}
+	if n := seenCount(f, ".tb cmd"); n != 0 {
+		t.Fatalf("%d cmd line(s) sent for a cursor word", n)
+	}
+}
+
+func TestPlaceStrangerSendsNothing(t *testing.T) {
+	b, f := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return nil, errors.New("unexpected line " + line)
+	})
+	_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"line", "Stranger"}})
+	var no *NotOwnedError
+	if !errors.As(err, &no) || no.Target != "Stranger" || no.Kind != "bot" || no.Sent {
+		t.Fatalf("err %v, want a not-owned bot before send", err)
+	}
+	if n := seenCount(f, ".tb cmd place"); n != 0 {
+		t.Fatalf("%d place line(s) sent for a stranger", n)
+	}
+}
+
+func TestPlaceSendsAndFillsResult(t *testing.T) {
+	b, f := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return placeAccepted(o), nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle", "wide", "target", "Healera"}})
+	if err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if len(res.Sent) != 1 || res.Sent[0] != ".tb cmd place circle wide target Healera" {
+		t.Fatalf("sent = %v", res.Sent)
+	}
+	if res.Place == nil || res.Place.Shape != "circle" || res.Place.Anchor != "target" {
+		t.Fatalf("place = %+v", res.Place)
+	}
+	if len(res.Bots) != 2 || res.Bots[0].Status != "queued" || !res.Bots[0].HasSeq {
+		t.Fatalf("bots = %+v", res.Bots)
+	}
+	_ = f
+}
+
+func TestPlaceGuard(t *testing.T) {
+	b, _ := placeFixture(t, runRecord("Tanka", "running"), func(line, verb string, o command.Options) (*command.Reply, error) {
+		if verb == "place" || verb == "fallback" || verb == "resume" {
+			return nil, errors.New("unexpected line " + line)
+		}
+		if verb == "rally" {
+			return reply(o,
+				"cmd-begin #T",
+				"cmd verb=rally status=accepted pos=-9100.80,-2005.30,132.90 map=1 inst=0 #T",
+				"cmd-end count=1 records=1 verb=rally set=1 #T",
+			), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	})
+	for _, verb := range []string{"place", "fallback", "resume"} {
+		args := []string{}
+		if verb == "place" {
+			args = []string{"circle"}
+		}
+		if _, err := b.Order(context.Background(), Order{Verb: verb, Args: args}); err == nil {
+			t.Fatalf("%s under a running run: expected RunActiveError", verb)
+		} else {
+			var ra *RunActiveError
+			if !errors.As(err, &ra) {
+				t.Fatalf("%s: err %v, want RunActiveError", verb, err)
+			}
+		}
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "rally", Args: []string{"here"}}); err != nil {
+		t.Fatalf("rally under a running run: %v", err)
+	}
+}
+
+func TestPlaceProbe(t *testing.T) {
+	probed := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", "", "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd place" {
+			probed++
+			return missingPlaceArg(o), nil
+		}
+		if strings.HasPrefix(line, ".tb cmd place ") {
+			return placeAccepted(o), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	if _, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}}); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if probed != 1 {
+		t.Fatalf("%d probe(s), want one", probed)
+	}
+	if _, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}}); err != nil {
+		t.Fatalf("place again: %v", err)
+	}
+	if probed != 1 {
+		t.Fatalf("%d probe(s), want the answer cached", probed)
+	}
+}
+
+func TestPlaceProbeOut(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", "", "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd place" {
+			return nil, &tbcmd.CommandError{Code: "unknown-verb", Cmd: "cmd"}
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}})
+	var na *NotAvailableError
+	if !errors.As(err, &na) || na.Package != packagePL {
+		t.Fatalf("err %v, want not-available PL", err)
+	}
+}
+
+func TestPlaceProbeTimeoutRetries(t *testing.T) {
+	probed := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", "", "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd place" {
+			probed++
+			return nil, context.DeadlineExceeded
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packagePL || !na.Retry {
+			t.Fatalf("err %v, want a retryable not-available PL", err)
+		}
+	}
+	if probed != 2 {
+		t.Fatalf("%d probe(s), want a fresh probe per call", probed)
+	}
+}
+
+func TestPlaceAllRefusedIsAnError(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return reply(o,
+			"cmd-begin #T",
+			"cmd verb=place status=accepted bots=1 shape=line gap=normal anchor=here radius=0 slots=1 #T",
+			"cmd bot=Tanka verb=place role=tank status=refused code=liquid msg=the%20slot%20is%20in%20water%20or%20lava #T",
+			"cmd-end count=2 records=2 verb=place lead=Tanka bots=1 placed=0 refused=1 #T",
+		), nil
+	})
+	_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"line"}})
+	var re *RefusedError
+	if !errors.As(err, &re) || re.Verb != "place" {
+		t.Fatalf("err %v, want RefusedError", err)
+	}
+}
+
+func TestPlaceAvailableFollowsProbe(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return nil, errors.New("unexpected line " + line)
+	})
+	ok, why, err := b.Available(context.Background(), "place")
+	if err != nil || !ok || why != "" {
+		t.Fatalf("available = %v %q %v", ok, why, err)
+	}
+	ok, why, err = b.Available(context.Background(), "move")
+	if err != nil || !ok || why != "" {
+		t.Fatalf("move available = %v %q %v", ok, why, err)
+	}
+}
+
+func TestRallyReadbackIsAResult(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		if verb == "rally" {
+			return reply(o,
+				"cmd-begin #T",
+				"cmd verb=rally status=shown set=yes pos=-9100.80,-2005.30,132.90 map=1 inst=0 #T",
+				"cmd-end count=1 records=1 verb=rally set=1 #T",
+			), nil
+		}
+		if line == ".tb cmd" {
+			return missingVerb(o), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "rally"})
+	if err != nil {
+		t.Fatalf("rally: %v", err)
+	}
+	if res.Place == nil || res.Place.Verb != "rally" || res.Place.Status != "shown" {
+		t.Fatalf("place = %+v", res.Place)
+	}
+	if len(res.Bots) != 0 {
+		t.Fatalf("bots = %+v", res.Bots)
+	}
+}
+
+// ---- the A2 fix round's placement cases ----
+
+// TestPlaceLeadMismatch: the answer's end-line lead is the binding the module
+// acted on. A lead this character does not command is detected before the
+// post-read (and before a wait), like the C5/C6 P3 answer.
+func TestPlaceLeadMismatch(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		raws := []string{
+			"cmd-begin #T",
+			"cmd verb=place status=accepted bots=2 shape=circle gap=wide anchor=target radius=6.4 slots=2 #T",
+			"cmd bot=Tanka verb=place role=tank slot=0 pos=-18.24,-46.69,-21.85 seq=41 #T",
+			"cmd bot=Healera verb=place role=healer slot=1 pos=-14.50,-48.10,-21.85 seq=42 #T",
+			"cmd-end count=3 records=3 verb=place lead=Other bots=2 placed=2 refused=0 #T",
+		}
+		return reply(o, raws...), nil
+	})
+	_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle", "wide", "target"}})
+	var lm *LeadMismatchError
+	if !errors.As(err, &lm) || lm.Answered != "Other" {
+		t.Fatalf("err %v, want LeadMismatchError with Answered=Other", err)
+	}
+}
+
+// TestPlaceRefusedGUIDRowIsNotOwnership: the module names a bound bot that is
+// not in the world by its guid (bot=<guid> code=no-character). A refused row
+// moved nothing, so it must never turn a successful placement into Sent=true
+// not-owned.
+func TestPlaceRefusedGUIDRowIsNotOwnership(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		return reply(o,
+			"cmd-begin #T",
+			"cmd verb=place status=accepted bots=2 shape=line gap=normal anchor=here radius=0 slots=2 #T",
+			"cmd bot=Tanka verb=place role=tank slot=0 pos=-18.24,-46.69,-21.85 seq=41 #T",
+			"cmd bot=00000000000000000000000000000042 verb=place status=refused code=no-character msg=the%20bound%20bot%20is%20not%20in%20the%20world #T",
+			"cmd-end count=3 records=3 verb=place lead=Tanka bots=2 placed=1 refused=1 #T",
+		), nil
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"line"}})
+	if err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if res.Place == nil || res.Place.Refused != 1 {
+		t.Fatalf("place = %+v", res.Place)
+	}
+}
+
+// TestPlacePointGrammar is the module's ParsePointNumber: no +, no exponent,
+// no hex, digits on both sides of the dot, at most 24 bytes.
+func TestPlacePointGrammar(t *testing.T) {
+	good := []string{"at:1,2", "at:-1.5,2.25", "at:1,2,3", "at:-0.25,17066,-17066"}
+	bad := []string{"at:1e5,2", "at:+1,2", "at:.5,2", "at:5.,2", "at:0x1p2,2", "at:1_0,2",
+		"at:" + strings.Repeat("1", 25) + ",2", "at:1,2,", "at:1,2,3,4", "at:nan,2", "at:1,inf"}
+	for _, w := range good {
+		args := []string{"line"}
+		args = append(args, w)
+		if err := placeArgs("place", args); err != nil {
+			t.Fatalf("%s: %v", w, err)
+		}
+	}
+	for _, w := range bad {
+		args := []string{"fallback", w}
+		if err := placeArgs("fallback", args); err == nil {
+			t.Fatalf("%s: accepted", w)
+		}
+	}
+}
+
+// TestPlaceProbeIsThePLVerb pins the probe line: `.tb cmd place` (the module's
+// missing-argument), never the bare P3 probe.
+func TestPlaceProbeIsThePLVerb(t *testing.T) {
+	var probed []string
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", "", "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd place" {
+			probed = append(probed, line)
+			return missingPlaceArg(o), nil
+		}
+		if strings.HasPrefix(line, ".tb cmd place ") {
+			return placeAccepted(o), nil
+		}
+		if line == ".tb cmd" {
+			return missingVerb(o), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	if _, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}}); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if len(probed) != 1 || probed[0] != ".tb cmd place" {
+		t.Fatalf("probes = %v, want one `.tb cmd place`", probed)
+	}
+}
+
+// TestPlaceProbeBindingRefusalIsNotRemembered: the binding checks run before
+// the placement verb, so a not-bound answer proves nothing about PL; the next
+// call probes again.
+func TestPlaceProbeBindingRefusalIsNotRemembered(t *testing.T) {
+	probes := 0
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, cardsFor("Tanka", "", "Tanka", "Healera")...), nil
+		}
+		if line == ".tb cmd place" {
+			probes++
+			return nil, &tbcmd.CommandError{Code: "not-bound", Cmd: "cmd"}
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 2 {
+		_, err := b.Order(context.Background(), Order{Verb: "place", Args: []string{"circle"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packagePL || !na.Retry {
+			t.Fatalf("place %d: err %v, want a retryable not-available PL", i, err)
+		}
+	}
+	if probes != 2 {
+		t.Fatalf("%d probe(s), want a fresh probe per call", probes)
+	}
+}
+
+// TestRallyHereLeadIsTheCommander: a rally answer's lead= is the commander's
+// name, so it is never compared with the binding's lead (that would refuse a
+// perfectly good rally here).
+func TestRallyHereLeadIsTheCommander(t *testing.T) {
+	b, _ := placeFixture(t, "", func(line, verb string, o command.Options) (*command.Reply, error) {
+		if verb == "rally" {
+			return reply(o,
+				"cmd-begin #T",
+				"cmd verb=rally status=accepted lead=Cmdr pos=-9100.80,-2005.30,132.90 map=389 inst=0 #T",
+				"cmd-end count=1 records=1 verb=rally set=1 #T",
+			), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	})
+	res, err := b.Order(context.Background(), Order{Verb: "rally", Args: []string{"here"}})
+	if err != nil {
+		t.Fatalf("rally here: %v", err)
+	}
+	if res.Place == nil || res.Place.Rally == nil {
+		t.Fatalf("place = %+v", res.Place)
 	}
 }

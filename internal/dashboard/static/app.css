@@ -165,6 +165,8 @@ svg.hide-bosses .boss { display: none; }
 svg.hide-doors .obj { display: none; }
 svg.hide-bots .b, svg.hide-bots .o { display: none; }
 svg.hide-botnames .botname { display: none; }
+svg.hide-slots .slot, svg.hide-slots .slot-line { display: none; }
+svg.hide-rally .rally { display: none; }
 svg.hide-commander .c { display: none; }
 svg.hide-sections .legname { display: none; }
 svg.hide-steps .stepn { display: none; }
@@ -177,6 +179,9 @@ svg .tline, svg .btline, svg .cmdline { fill: none; vector-effect: non-scaling-s
 svg .tline { stroke: #ff3b3b; stroke-width: 2; stroke-dasharray: 4 4; }
 svg .btline { stroke: #ffd400; stroke-width: 1.5; }
 svg .cmdline { stroke: #c084fc; stroke-width: 1.5; stroke-dasharray: 2 5; }
+svg rect.slot { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+svg line.slot-line { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+svg path.rally { fill: none; stroke: var(--warn); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 svg polygon.heading { fill: #fff; stroke: #000; stroke-width: 1.5; stroke-linejoin: round; }
 svg .tsdot { fill: #fff; stroke: #000; stroke-width: 1.5; }
 svg .tslbl .lbg { fill: rgba(0, 0, 0, .78); }

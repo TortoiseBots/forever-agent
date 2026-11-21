@@ -656,3 +656,25 @@ func TestSpecShapesDecode(t *testing.T) {
 		t.Fatal("CodeOf found a code in a plain error")
 	}
 }
+
+// TestCommanderPlaceRowsDecodeCode: a placement row's refusal is the
+// daemon's `code` key (ServeCommanderBot2), not the older `error`, and the
+// row keeps its slot, position, sequence and destination.
+func TestCommanderPlaceRowsDecodeCode(t *testing.T) {
+	const body = `{"place":{"verb":"fallback","status":"accepted","placed":1,"refused":1,"bots":[` +
+		`{"bot":"Ttank","status":"queued","slot":0,"pos":{"x":1,"y":2,"z":3},"seq":7,"to":"centre"},` +
+		`{"bot":"Mhunter","status":"refused","code":"liquid","msg":"in water"}]}}`
+	var res CommanderResult
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.Place == nil || len(res.Place.Bots) != 2 {
+		t.Fatalf("place = %+v", res.Place)
+	}
+	if b := res.Place.Bots[1]; b.Bot != "Mhunter" || b.Code != "liquid" || b.Msg != "in water" {
+		t.Fatalf("refused row = %+v", b)
+	}
+	if b := res.Place.Bots[0]; b.Slot == nil || *b.Slot != 0 || b.Pos == nil || b.Pos.X != 1 || b.Seq == nil || *b.Seq != 7 || b.To != "centre" {
+		t.Fatalf("queued row = %+v", b)
+	}
+}

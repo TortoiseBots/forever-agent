@@ -93,6 +93,9 @@ type Result struct {
 	// Final is each waited bot's last order state: "ok" or "fail:<code>". It is nil without a wait, and holds
 	// only the bots whose `ord=` matched the sequence their order was queued with.
 	Final map[string]string
+	// Place is a placement verb's typed answer (the `cmd` head and its rows).
+	// It is nil for every other verb.
+	Place *tbcmd.PlaceReport
 	// Runs holds a `run` verb's run records.
 	Runs []tbcmd.RunState
 	// Events holds a `run events` answer's events.

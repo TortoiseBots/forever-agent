@@ -34,33 +34,46 @@ type XYZ struct {
 // card (8); Group is the lead's live party counter (the module stores none).
 // Pos is the commander's own spot when the line carries map/pos, nil when
 // not known; Map has the same presence (HasMap false when absent). Run is
-// the card's run record (§10), nil when no run runs.
+// the card's run record (§10), nil when no run runs. Hold names the standing
+// placement (place/fallback) when the commander holds rows; Rally is the
+// stored rally point (nil when none), with its map and instance when the
+// module stores them (HasRally false when no point is stored; HasRallyMap and
+// HasRallyInst say whether rmap=/rinst= came at all).
 type Card struct {
-	Cmd       string
-	CGUID     string
-	Online    bool
-	Lead      string
-	Group     int
-	HasGroup  bool
-	Bound     int
-	Bots      int
-	System    bool
-	InParty   bool
-	Raid      bool
-	PlayerLed bool
-	BoundAt   int
-	Orders    int
-	Map       uint32
-	HasMap    bool
-	Pos       *XYZ
-	Members   []CardMember
-	Log       []CardOrder
-	Run       *RunState
-	Extra     map[string]string
+	Cmd          string
+	CGUID        string
+	Online       bool
+	Lead         string
+	Group        int
+	HasGroup     bool
+	Bound        int
+	Bots         int
+	System       bool
+	InParty      bool
+	Raid         bool
+	PlayerLed    bool
+	BoundAt      int
+	Orders       int
+	Map          uint32
+	HasMap       bool
+	Pos          *XYZ
+	Hold         string
+	Rally        *XYZ
+	RallyMap     uint32
+	HasRallyMap  bool
+	RallyInst    uint32
+	HasRallyInst bool
+	HasRally     bool
+	Members      []CardMember
+	Log          []CardOrder
+	Run          *RunState
+	Extra        map[string]string
 }
 
 // CardMember is one bound bot. The lead comes first; Sub is the raid
-// subgroup and HasSub false when the line carries no sub=.
+// subgroup and HasSub false when the line carries no sub=. Hold names the
+// placement the bot stands in (place/fallback) when it holds a row; Slot is
+// the held slot's point, nil when the bot holds none.
 type CardMember struct {
 	Bot      string
 	GUID     string
@@ -79,6 +92,8 @@ type CardMember struct {
 	Pos      XYZ
 	Sub      int
 	HasSub   bool
+	Hold     string
+	Slot     *XYZ
 	Extra    map[string]string
 }
 
@@ -108,6 +123,7 @@ var commanderRecordKeys = map[string]bool{
 	"cmd": true, "cguid": true, "online": true, "lead": true, "group": true,
 	"bound": true, "bots": true, "system": true, "inparty": true, "raid": true,
 	"playerled": true, "boundat": true, "orders": true, "map": true, "pos": true,
+	"hold": true, "rally": true, "rmap": true, "rinst": true,
 }
 
 // commanderMemberKeys are the member record's typed keys.
@@ -115,7 +131,7 @@ var commanderMemberKeys = map[string]bool{
 	"cmd": true, "bot": true, "guid": true, "class": true, "role": true,
 	"level": true, "hp": true, "maxhp": true, "power": true, "maxpower": true,
 	"ptype": true, "alive": true, "lead": true, "map": true, "zone": true,
-	"pos": true, "sub": true,
+	"pos": true, "sub": true, "hold": true, "slot": true,
 }
 
 // commanderOrderKeys are the order record's typed keys.
@@ -448,6 +464,32 @@ func parseCommanderCard(rec record) (Card, error) {
 	if out.HasMap && out.Pos == nil {
 		return out, fmt.Errorf("%w: binding map= without pos=", ErrBadReport)
 	}
+	// The placement the commander holds (place/fallback), and the stored
+	// rally point with its map and instance. All absent when nothing is
+	// held: an absent key is empty, never a zero standing in for a point.
+	if out.Hold, _, err = rec.text("hold"); err != nil {
+		return out, err
+	}
+	if raw, ok := rec.rawValue("rally"); ok {
+		x, y, z, err := coordinate(rec, "rally", raw)
+		if err != nil {
+			return out, err
+		}
+		out.Rally = &XYZ{X: x, Y: y, Z: z}
+		out.HasRally = true
+	}
+	// rmap=/rinst= say where the stored point is; they never make a point
+	// of their own (an absent rally= stays absent, never 0,0,0).
+	if m, ok, err := rec.optionalMapID("rmap"); err != nil {
+		return out, err
+	} else if ok {
+		out.RallyMap, out.HasRallyMap = m, true
+	}
+	if m, ok, err := rec.optionalMapID("rinst"); err != nil {
+		return out, err
+	} else if ok {
+		out.RallyInst, out.HasRallyInst = m, true
+	}
 	if out.Extra, err = rec.extra(commanderRecordKeys); err != nil {
 		return out, err
 	}
@@ -519,6 +561,18 @@ func parseCommanderMember(rec record) (CardMember, error) {
 	}
 	if out.Sub, out.HasSub, err = rec.optionalInt("sub", 0, math.MaxInt32); err != nil {
 		return out, err
+	}
+	// The placement the bot stands in, and the held slot's point. Absent
+	// when the bot holds none: the slot stays nil, never the origin.
+	if out.Hold, _, err = rec.text("hold"); err != nil {
+		return out, err
+	}
+	if raw, ok := rec.rawValue("slot"); ok {
+		x, y, z, err := coordinate(rec, "slot", raw)
+		if err != nil {
+			return out, err
+		}
+		out.Slot = &XYZ{X: x, Y: y, Z: z}
 	}
 	if out.Extra, err = rec.extra(commanderMemberKeys); err != nil {
 		return out, err
