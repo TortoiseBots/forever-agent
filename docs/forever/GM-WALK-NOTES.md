@@ -103,7 +103,10 @@ On the last code commit with a clean worktree, each in the foreground and waited
 make fmt-check            -> clean (no file listed)
 make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
 staticcheck ./...         -> rc=0 (no finding)
-vm-test ta ~/wt-fa-gmwalk RESULT: PASS on a clean committed tree
+vm-test ta ~/wt-fa-gmwalk -> RESULT: PASS  kind=ta wt=wt-fa-gmwalk sha=1283b528 dirty=0 files=2346
+                             rc=0  vm_duration=1226s  laptop_wall=1238s
 ```
 
-The RESULT line is quoted in the final report. The notes commit carries no code change.
+The RESULT line is quoted in the final report. The full log is
+`TortoiseBots-audit/vm-test-logs/wt-fa-gmwalk-20261121-061525-1084831-b17a.log` (every package ok, no FAIL).
+The notes commit carries no code change.
