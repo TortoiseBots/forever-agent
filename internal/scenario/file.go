@@ -18,6 +18,7 @@ var (
 	sessionName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,15}$`)
 	varName      = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	hostName     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	schemaName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 	contName     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 	methodName   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	whereKey     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
@@ -32,16 +33,30 @@ var (
 
 var validOps = map[string]bool{"==": true, "!=": true, ">=": true, "<=": true, ">": true, "<": true}
 
+// Server names which agent a session talks to: "turtle" (the default) or
+// "forever" (a serve slot). Unknown values are refused at load.
+type ServerName string
+
+// ServerTurtle is the 1.12 agent; ServerForever is a forever serve slot.
+const (
+	ServerTurtle  ServerName = "turtle"
+	ServerForever ServerName = "forever"
+)
+
 // Session is one running agent the scenario talks to.
 type Session struct {
-	RPC       string `json:"rpc"`
-	TokenFile string `json:"token_file"`
+	RPC       string     `json:"rpc"`
+	TokenFile string     `json:"token_file"`
+	Server    ServerName `json:"server"`
 }
 
-// DBTarget is where the read-only DB helper runs its counts.
+// DBTarget is where the read-only DB helper runs its counts. Schema names
+// the ForeverCore characters database (its "schema" key); empty means the
+// core's default "characters". Turtle counts never read it.
 type DBTarget struct {
 	Host      string `json:"host"`
 	Container string `json:"container"`
+	Schema    string `json:"schema"`
 }
 
 // NormRule rewrites one regexp on every norm line, after the built-in rules.
@@ -124,6 +139,9 @@ type Step struct {
 	Op    string         `json:"-"`
 	Item  *ItemQuery     `json:"-"`
 	Count *int64         `json:"-"`
+	// Server overrides the slot for one check_db step: "turtle"
+	// (default) or "forever". Empty means the resolved file server.
+	Server ServerName `json:"-"`
 
 	// check_rpc
 	Path    string `json:"-"`
@@ -141,8 +159,11 @@ type Step struct {
 
 // File is a parsed and validated scenario file.
 type File struct {
-	Scenario    string             `json:"scenario"`
-	Description string             `json:"description"`
+	Scenario    string `json:"scenario"`
+	Description string `json:"description"`
+	// Server is the file-level default for sessions and check_db steps
+	// without their own "server" key: "turtle" (the default) or "forever".
+	Server      ServerName         `json:"server"`
 	Sessions    map[string]Session `json:"sessions"`
 	DB          *DBTarget          `json:"db"`
 	Vars        map[string]string  `json:"vars"`
@@ -180,6 +201,7 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 	var raw struct {
 		Scenario    *string            `json:"scenario"`
 		Description *string            `json:"description"`
+		Server      *string            `json:"server"`
 		Sessions    map[string]Session `json:"sessions"`
 		DB          *DBTarget          `json:"db"`
 		Vars        map[string]string  `json:"vars"`
@@ -204,6 +226,16 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 	if raw.Description != nil {
 		f.Description = *raw.Description
 	}
+	if raw.Server != nil {
+		switch *raw.Server {
+		case string(ServerTurtle):
+			f.Server = ServerTurtle
+		case string(ServerForever):
+			f.Server = ServerForever
+		default:
+			return nil, fmt.Errorf("scenario: bad server %q (want turtle or forever)", *raw.Server)
+		}
+	}
 	if len(f.Sessions) == 0 || len(f.Sessions) > 8 {
 		return nil, fmt.Errorf("scenario: need 1-8 sessions, have %d", len(f.Sessions))
 	}
@@ -213,6 +245,16 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 		}
 		if err := CheckAddr(name, s.RPC); err != nil {
 			return nil, err
+		}
+		if s.Server == "" {
+			s.Server = f.Server
+			if s.Server == "" {
+				s.Server = ServerTurtle
+			}
+			f.Sessions[name] = s
+		}
+		if s.Server != ServerTurtle && s.Server != ServerForever {
+			return nil, fmt.Errorf("scenario: bad server %q for session %q (want turtle or forever)", s.Server, name)
 		}
 	}
 	if raw.Vars != nil {
@@ -369,7 +411,7 @@ var stepFields = map[string]map[string]bool{
 	"wait":       {"do": true, "note": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "timeout_s": true, "capture": true},
 	"expect":     {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "timeout_s": true, "capture": true},
 	"expect_not": {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "within_s": true},
-	"check_db":   {"do": true, "note": true, "name": true, "on_fail": true, "within_s": true, "op": true, "table": true, "where": true, "rows": true, "item": true, "count": true},
+	"check_db":   {"do": true, "note": true, "name": true, "on_fail": true, "within_s": true, "op": true, "table": true, "where": true, "rows": true, "item": true, "count": true, "server": true},
 	"check_rpc":  {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "method": true, "params": true, "path": true, "equals": true, "match": true, "len": true, "within_s": true, "timeout_s": true},
 }
 
@@ -612,11 +654,20 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 		if hasTable == hasItem {
 			return nil, fmt.Errorf("step %d (check_db): exactly one of table or item", n)
 		}
+		var server ServerName
+		if v, ok := kv["server"]; ok {
+			var sn string
+			if err := json.Unmarshal(v, &sn); err != nil || (sn != string(ServerTurtle) && sn != string(ServerForever)) {
+				return nil, fmt.Errorf("step %d (check_db): bad server %s (want turtle or forever)", n, strings.TrimSpace(string(v)))
+			}
+			server = ServerName(sn)
+		}
+		s.Server = server
 		if hasTable {
 			var table string
 			g("table", &table)
-			if !allowedTable(table) {
-				return nil, fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, table)
+			if table == "" {
+				return nil, fmt.Errorf("step %d (check_db): missing table", n)
 			}
 			s.Table = table
 			var where map[string]any
@@ -903,12 +954,39 @@ func (f *File) validate() error {
 		if s.Do == "check_db" && f.DB == nil {
 			return fmt.Errorf("step %d (check_db): the scenario has no db target", n)
 		}
+		if s.Do == "check_db" && s.Table != "" {
+			// The step's slot: its own server key, else the session's,
+			// else the file's. A Forever table is schema-qualified with
+			// the db block's schema (never a hardcoded one).
+			slot := s.Server
+			if slot == "" {
+				if s.Session != "" {
+					slot = f.Sessions[s.Session].Server
+				} else {
+					slot = f.Server
+				}
+			}
+			if slot == ServerForever {
+				schema := ""
+				if f.DB != nil {
+					schema = f.DB.Schema
+				}
+				if !foreverTableOK(s.Table, schema) {
+					return fmt.Errorf("step %d (check_db): table %s is not on the Forever allowlist for schema %s (internal/scenario/db.go)", n, s.Table, foreverSchema(schema))
+				}
+			} else if !allowedTable(s.Table) {
+				return fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, s.Table)
+			}
+		}
 		if f.DB != nil {
 			if !hostName.MatchString(f.DB.Host) || strings.Contains(f.DB.Host, "@") || strings.HasPrefix(f.DB.Host, "-") {
 				return fmt.Errorf("scenario: bad db host %q", f.DB.Host)
 			}
 			if !contName.MatchString(f.DB.Container) {
 				return fmt.Errorf("scenario: bad db container %q", f.DB.Container)
+			}
+			if f.DB.Schema != "" && !schemaName.MatchString(f.DB.Schema) {
+				return fmt.Errorf("scenario: bad db schema %q", f.DB.Schema)
 			}
 		}
 	}
@@ -918,6 +996,9 @@ func (f *File) validate() error {
 		}
 		if !contName.MatchString(f.DB.Container) {
 			return fmt.Errorf("scenario: bad db container %q", f.DB.Container)
+		}
+		if f.DB.Schema != "" && !schemaName.MatchString(f.DB.Schema) {
+			return fmt.Errorf("scenario: bad db schema %q", f.DB.Schema)
 		}
 	}
 	// Static var check: walk the steps in order; every ${x} must be a
