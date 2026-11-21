@@ -186,6 +186,9 @@ type Fields struct {
 	// the model: the session reads them from the block to mark the inventory stale or to attribute the update to
 	// its own move.
 	InvSlotsUndecoded, ActivePlayerSkipped bool
+	// PlayerUnwalked is the Classic mask bits of a PlayerData update that this client cannot walk (the update is then
+	// not read to its end); the session logs them by field group once per login so a live run can name the field.
+	PlayerUnwalked []int
 	// QuestLogDeltas is set when a PlayerData update carried quest-log slot changes this client decoded;
 	// QuestLogUndecoded when it named quest-log slots next to a field it does not decode (so the changes are lost).
 	QuestLogDeltas, QuestLogUndecoded bool
@@ -1632,6 +1635,25 @@ const (
 	activePlayerBankCoinBit uint32 = 59
 )
 
+// The buyback arrays an update carries next to a sale: Player::AddItemToBuyBackSlot sets InvSlots[72..83], then
+// BuybackPrice[i] and BuybackTimestamp[i] (Player.cpp:14068-14071), and RemoveItemFromBuyBackSlot clears the three
+// (14110-14113); every sale and every purchase back is therefore one update with all of them. The core's group bit is
+// 311 with BuybackPrice at 312+i and BuybackTimestamp at 324+i (UpdateFields.cpp:7251-7263); the Classic numbering
+// adds 42 (ClassicActivePlayerDataBit70291) and, from build 70425, 2 more. The values follow the InvSlots, one
+// uint32 price and one int64 timestamp per changed entry, entry by entry.
+const (
+	buybackEntries         = 12
+	activePlayerBuybackBit = 353 // the group bit on the 70291 layout; 70425 and later add 2
+)
+
+// activePlayerBuybackGroup returns the Classic mask bit of the buyback group for a realm of the given build.
+func activePlayerBuybackGroup(realmBuild uint32) uint32 {
+	if realmBuild >= build70425First {
+		return activePlayerBuybackBit + 2
+	}
+	return activePlayerBuybackBit
+}
+
 // readActivePlayerUpdate decodes the regions of ActivePlayerData::WriteUpdate this round applies: the InvSlots a
 // move of the character's own items changes, and the Coinage fields that travel with them. The changes mask is the
 // fourteen-block Classic header (WriteClassicChangesMaskHeader, UpdateFields.cpp:1374-1399); the values follow in
@@ -1669,6 +1691,9 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 	// update that touches none of them reaches its values at the next byte boundary.
 	var slots []int
 	hasMeta, hasCoinage, hasBankCoin, slotsGroup, other := false, false, false, false, false
+	buybackGroup := activePlayerBuybackGroup(realmBuild)
+	var buyPrice, buyStamp [buybackEntries]bool
+	hasBuyback := false
 	for n := range blocks {
 		for bit := range 32 {
 			if blocks[n]&(1<<uint(bit)) == 0 {
@@ -1686,6 +1711,14 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 				hasCoinage = true
 			case classic == activePlayerBankCoinBit:
 				hasBankCoin = true
+			case classic == buybackGroup:
+				continue // group bit: any changed child sets it
+			case classic > buybackGroup && classic <= buybackGroup+buybackEntries:
+				buyPrice[classic-buybackGroup-1] = true
+				hasBuyback = true
+			case classic > buybackGroup+buybackEntries && classic <= buybackGroup+2*buybackEntries:
+				buyStamp[classic-buybackGroup-buybackEntries-1] = true
+				hasBuyback = true
 			case classic < base || classic >= base+activePlayerInvSlots:
 				other = true // a field this round does not walk
 			default:
@@ -1699,15 +1732,11 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 		i.f.InvSlotsUndecoded = slotsGroup || len(slots) != 0
 		return nil
 	}
-	if len(slots) == 0 && !hasMeta && !hasCoinage && !hasBankCoin {
+	if len(slots) == 0 && !hasMeta && !hasCoinage && !hasBankCoin && !hasBuyback {
 		return nil
 	}
-	// The structure's bit fields come before its values: from build 70425 a present group 166 writes one optional
-	// presence bit, flushed (ActivePlayerData::WriteUpdate, UpdateFields.cpp:5886-5887, 7160-7163). The 70291 layout
-	// writes nothing there.
-	if realmBuild >= build70425First && blocks[metaGroup/32]&(1<<uint(metaGroup%32)) != 0 {
-		b.ReadBit()
-	}
+	// Nothing is written between the changes mask and the first value: the group 166 bit of build 70425 is not here but
+	// after the values below (ActivePlayerData::WriteUpdate, UpdateFields.cpp:7160-7163).
 	b.FlushBits()
 	if hasCoinage {
 		coinage := b.ReadU64()
@@ -1725,23 +1754,49 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 		// float, then the Locked bit and its flush: eleven value bytes and the flushed bit byte.
 		b.Skip(12)
 	}
+	// WriteUpdate's order (UpdateFields.cpp): the scalar values (Coinage 6751-6755, TransmogMetadata 7150-7151), then the
+	// group 134 and group 166 presence bits and one flush (7153-7163: from build 70425 a present group 166 writes
+	// one optional presence bit, `WriteBit(false)`), and only then InvSlots (7195-7203) and the buyback arrays.
+	if realmBuild >= build70425First && blocks[metaGroup/32]&(1<<uint(metaGroup%32)) != 0 {
+		b.ReadBit()
+		b.FlushBits()
+	}
 	if err := b.Err(); err != nil {
 		return fmt.Errorf("active player update transmog metadata: %w", err)
 	}
-	if len(slots) == 0 {
-		return b.Err()
+	var deltas map[int]wire.GUID
+	if len(slots) != 0 {
+		deltas = make(map[int]wire.GUID, len(slots))
+		for _, slot := range slots {
+			deltas[slot] = i.guid(b)
+		}
+		if err := b.Err(); err != nil {
+			return fmt.Errorf("active player update slots: %w", err)
+		}
 	}
-	deltas := make(map[int]wire.GUID, len(slots))
-	for _, slot := range slots {
-		deltas[slot] = i.guid(b)
+	// The buyback prices and timestamps come after the slots; they only have to be walked, the slot they belong to is
+	// the InvSlots entry the sale named.
+	for n := range buybackEntries {
+		if buyPrice[n] {
+			b.Skip(4)
+		}
+		if buyStamp[n] {
+			b.Skip(8)
+		}
 	}
 	if err := b.Err(); err != nil {
-		return fmt.Errorf("active player update slots: %w", err)
+		return fmt.Errorf("active player update buyback: %w", err)
+	}
+	if len(slots) == 0 {
+		return nil
 	}
 	i.player().InvSlotDeltas = deltas
 	i.f.InvSlotDeltas = true
 	return nil
 }
+
+// PlayerUnwalkedBits returns the Classic mask bits of the PlayerData fields this block named and the decoder cannot walk.
+func (i *Info) PlayerUnwalkedBits() []int { return i.f.PlayerUnwalked }
 
 // InvSlotsUndecoded reports that this values block named inventory slots next to a field the decoder does not
 // handle, so the slot changes it carried could not be read (readActivePlayerUpdate).

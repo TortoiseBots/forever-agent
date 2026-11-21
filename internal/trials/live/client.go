@@ -293,6 +293,17 @@ func unitFrom(raw map[string]any) Unit {
 	return u
 }
 
+// InWorldState reports whether a status state says the session is in the world. The turtle agent calls it in_world,
+// a Forever serve calls it online (its other states, reconnecting and the disconnect ones, are not in the world). This
+// is the one place the two spellings are mapped.
+func InWorldState(state string) bool {
+	switch state {
+	case "in_world", "online":
+		return true
+	}
+	return false
+}
+
 // GM sends one raw `gm` line. Only the guard may call it: a silent command
 // answers after the serve's quiet window, but a heavy one (a level jump)
 // can hold the session's serialised channel, so the call gets a minute.
@@ -306,6 +317,12 @@ func (c *Client) GM(ctx context.Context, line string) error {
 // read-back; a proof failure is still a failure.
 func IsNoReply(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "sent no reply")
+}
+
+// IsAlreadyKnown reports the core's answer to a `.learn` of a spell the character already has ("You already know that
+// spell"): the line did not change anything, and nothing needed changing.
+func IsAlreadyKnown(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "already know")
 }
 
 // TrialUnits replaces the serve's GM-unit allowlist (the guids the GM hands

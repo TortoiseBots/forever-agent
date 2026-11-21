@@ -21,6 +21,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/planscout"
+	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/world"
 	"github.com/pjerra/forever-agent/internal/worldspawn"
@@ -53,6 +54,7 @@ type scoutForeverClient interface {
 	Units(context.Context, serveclient.UnitsParams) ([]serveclient.Unit, error)
 	PathTo(context.Context, float32, float32, float32) (serveclient.Path, error)
 	WalkPath(context.Context, float32, float32, float32) (serveclient.Path, error)
+	WalkRay(context.Context, *[3]float32, float32, float32, float32) (serveclient.WalkRay, error)
 }
 
 // planScoutOpenForever opens the v16 planner of the Forever draft; the tests replace it.
@@ -283,6 +285,8 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 	}
 	stops := planscout.LiveStops(planscout.LiveSpots(rep, in, w, nil))
 	readStops, noteStops := 0, false
+	rayNoted := false
+	losOK := true // false once the serve answers that it has no walk_ray method
 	noteStopCount := func() {
 		if noteStops || len(stops) == 0 {
 			return
@@ -358,6 +362,24 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 			data.Units[spot.Step] = append([]world.Unit(nil), wu...)
 		}
 		readStops++
+		if losOK {
+			for _, spot := range group {
+				ok, rayErr := foreverWalkRayAt(ctx, client, spot, wu, data.LOS)
+				if r := ceiling(); r != "" {
+					return abort(r)
+				}
+				if rayErr != nil && !rayNoted {
+					rayNoted = true
+					data.Notes = append(data.Notes, fmt.Sprintf("live sight: a walk_ray read from %.1f %.1f %.1f failed (%v); its steps stay unanswered and the pass goes on",
+						spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z, rayErr))
+				}
+				if !ok {
+					losOK = false
+					data.Notes = append(data.Notes, "live sight: this serve has no walk_ray method; no sight answer was read")
+					break
+				}
+			}
+		}
 	}
 	noteStopCount()
 	budget := o.walkBudgetD
@@ -426,6 +448,45 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		data.Walks[hop.Step] = planscout.WalkResult{Stop: dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, Length: float64(walked.Length)}
 	}
 	return data, exitOK, ""
+}
+
+// foreverWalkRayAt reads the navmesh walkability ray from one spot's sight point to every live unit read at its stop (and
+// to its target pack, which is among them when its units stood within reach) and stores each answer under the spot's
+// step as the live_los input. It is not true line of sight: the serve has no collision geometry (serve's walk_ray method).
+// A unit the mesh cannot place is left unanswered, never stored as out of sight. A read that fails leaves that unit
+// unanswered and the spot goes on; the first such error is returned for the note. ok is false when the serve has no
+// walk_ray method at all.
+func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.LiveSpot, units []world.Unit,
+	out map[planscout.LOSKey]bool) (ok bool, err error) {
+	from := [3]float32{spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z}
+	seen := map[uint32]bool{}
+	for _, u := range units {
+		if u.Dead {
+			continue
+		}
+		low := world.Low24(u.GUID)
+		if seen[low] || foreverDist2D(u.X, u.Y, spot.LOSPoint.X, spot.LOSPoint.Y) > scoutForeverUnitsYd {
+			continue
+		}
+		seen[low] = true
+		ans, rerr := c.WalkRay(ctx, &from, u.X, u.Y, u.Z)
+		if rerr != nil {
+			if code, coded := serveclient.CodeOf(rerr); coded && code == rpc.CodeMethodNotFound {
+				return false, nil
+			}
+			if ctx.Err() != nil {
+				return true, ctx.Err()
+			}
+			if err == nil {
+				err = rerr
+			}
+			continue
+		}
+		if ans.Known {
+			out[planscout.LOSKey{Step: spot.Step, Guid: low}] = ans.In
+		}
+	}
+	return true, err
 }
 
 // foreverWaitOnline waits for the session to be in the world.

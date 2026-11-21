@@ -195,6 +195,15 @@ type serveWalkParams struct {
 	Z float32 `json:"z"`
 }
 
+// serveWalkRayParams is the walk_ray method's input: the point to look at and, optionally, the point to look from (default:
+// the session's own position).
+type serveWalkRayParams struct {
+	X    float32     `json:"x"`
+	Y    float32     `json:"y"`
+	Z    float32     `json:"z"`
+	From *[3]float32 `json:"from,omitempty"`
+}
+
 type serveAreaTriggerParams struct {
 	ID int32 `json:"id"`
 }
@@ -539,6 +548,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("path_to", serveCallTyped(st, func(s *session, _ context.Context, p serveWalkParams) (ServePath, error) {
 		return s.servePath(p.X, p.Y, p.Z)
+	}))
+	srv.Register("walk_ray", serveCallTyped(st, func(s *session, _ context.Context, p serveWalkRayParams) (ServeWalkRay, error) {
+		return s.serveWalkRay(p)
 	}))
 	srv.Register("walk_path", serveCallTyped(st, func(s *session, ctx context.Context, p serveWalkParams) (ServePath, error) {
 		return s.serveWalkPath(ctx, p.X, p.Y, p.Z)

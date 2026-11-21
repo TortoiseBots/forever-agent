@@ -301,3 +301,221 @@ func TestActivePlayerUpdateSlotBitsMoveWithTheRealmBuild(t *testing.T) {
 		t.Fatalf("a 70009 realm decoded slots %+v", slots)
 	}
 }
+
+// saleBody builds the update a sale writes (Player::SellItemToVendor, Player.cpp:25320-25356): Coinage, the emptied
+// carried slot and the buyback slot named with its price and timestamp (AddItemToBuyBackSlot, Player.cpp:14068-14071).
+// The values follow WriteUpdate's order: money, the InvSlots run, then BuybackPrice[i] and BuybackTimestamp[i] entry by
+// entry (UpdateFields.cpp:7195-7203, 7251-7263). group is the layout's InvSlots group bit (170 on 70425, 168 on 70291);
+// the buyback group is 353 on 70291 and 355 on 70425.
+func saleBody(group int, coinage uint64, slots map[int]wire.GUID, buyback ...int) []byte {
+	buybackGroup := 353
+	if group == 170 {
+		buybackGroup = 355
+	}
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	set(32)
+	set(58)
+	set(group)
+	var order []int
+	for slot := range slots {
+		set(group + 1 + slot)
+		order = append(order, slot)
+	}
+	sort.Ints(order)
+	set(buybackGroup)
+	for _, i := range buyback {
+		set(buybackGroup + 1 + i)
+		set(buybackGroup + 13 + i)
+	}
+	b := wire.NewWriter()
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU8(0x03)
+	b.WriteU32(uint32(1) << uint(TypeActivePlayer))
+	writeClassicMaskHeader(b, blocks)
+	b.FlushBits()
+	b.WriteU64(coinage)
+	for _, slot := range order {
+		wire.WritePackedGUID(b, slots[slot])
+	}
+	for _, i := range buyback {
+		b.WriteU32(uint32(40 + i))   // BuybackPrice
+		b.WriteU64(uint64(9000 + i)) // BuybackTimestamp (int64)
+	}
+	return b.Bytes()
+}
+
+// TestActivePlayerUpdateSaleIsDecoded is the sale's failing case: the update a sale writes carries the buyback
+// arrays next to the slots and the money, and a decoder that does not know them dropped the whole update (the money,
+// the emptied slot and the buyback slot were all lost, so a sale read back as "nothing seen" and left the inventory
+// stale). Both layouts must name the slot the item left, the buyback slot it entered and the new Coinage.
+func TestActivePlayerUpdateSaleIsDecoded(t *testing.T) {
+	for _, tc := range []struct {
+		build uint32
+		group int
+	}{{70707, 170}, {70300, 168}} {
+		body := saleBody(tc.group, 4321, map[int]wire.GUID{35: {}, 72: apSword}, 0)
+		u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, body), tc.build)
+		if err != nil || len(u.Blocks) != 1 {
+			t.Fatalf("build %d: %v", tc.build, err)
+		}
+		info := u.Blocks[0].Info
+		if info.InvSlotsUndecoded() || info.ActivePlayerSkipped() {
+			t.Fatalf("build %d: the sale update is reported undecoded", tc.build)
+		}
+		slots, ok := info.ChangedInvSlots()
+		if !ok || len(slots) != 2 || !slots[35].IsZero() || slots[72] != apSword {
+			t.Fatalf("build %d: the slots are %+v (%v)", tc.build, slots, ok)
+		}
+		if info.Player == nil || info.Player.Coinage != 4321 {
+			t.Fatalf("build %d: the coinage is %+v", tc.build, info.Player)
+		}
+	}
+	// A buyback purchase and a full buyback list rolling over: several entries, price and timestamp each.
+	body := saleBody(170, 10, map[int]wire.GUID{72: {}, 73: apSword, 83: {}}, 0, 1, 11)
+	u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, body), 70707)
+	if err != nil || u.Blocks[0].Info.InvSlotsUndecoded() {
+		t.Fatalf("a three-entry buyback update: %v", err)
+	}
+	if slots, _ := u.Blocks[0].Info.ChangedInvSlots(); len(slots) != 3 || slots[73] != apSword {
+		t.Fatalf("the three-entry slots are %+v", slots)
+	}
+}
+
+// coreOrderBody writes an ActivePlayerData update on build 70425 and later in the order of the core's writer
+// (ActivePlayerData::WriteUpdate, UpdateFields.cpp:5884-7263), not in the order the decoder reads: the changes mask;
+// the scalar values (Coinage, then TransmogMetadata's eleven bytes and its own flushed Locked bit, 7150-7151); the
+// group 166 presence bit and its flush (7160-7163); InvSlots (7195-7203); BuybackPrice and BuybackTimestamp entry by
+// entry (7251-7263). Classic bits on this build: money group 32 and Coinage 58, TransmogMetadata group 166 and child
+// 168, InvSlots group 170 and entries 171+, buyback group 355 with prices 356+ and timestamps 368+.
+func coreOrderBody(coinage *uint64, meta bool, slots map[int]wire.GUID, buyback ...int) []byte {
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	if coinage != nil {
+		set(32)
+		set(58)
+	}
+	if meta {
+		set(166)
+		set(168)
+	}
+	var order []int
+	if len(slots) != 0 {
+		set(170)
+	}
+	for slot := range slots {
+		set(171 + slot)
+		order = append(order, slot)
+	}
+	sort.Ints(order)
+	if len(buyback) != 0 {
+		set(355)
+	}
+	for _, i := range buyback {
+		set(356 + i)
+		set(368 + i)
+	}
+	b := wire.NewWriter()
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU8(0x03)
+	b.WriteU32(uint32(1) << uint(TypeActivePlayer))
+	writeClassicMaskHeader(b, blocks)
+	b.FlushBits()
+	if coinage != nil {
+		b.WriteU64(*coinage)
+	}
+	if meta {
+		b.WriteU8(1)           // SituationTrigger
+		b.WriteU32(77)         // TransmogOutfitID
+		b.WriteU8(2)           // StampedOptionMainHand
+		b.WriteU8(3)           // StampedOptionOffHand
+		b.WriteU32(0x3F800000) // CostMod 1.0
+		b.WriteBit(false)      // Locked
+		b.FlushBits()
+	}
+	if meta { // classicGroup166: the optional's has-value bit, then the flush
+		b.WriteBit(false)
+		b.FlushBits()
+	}
+	for _, slot := range order {
+		wire.WritePackedGUID(b, slots[slot])
+	}
+	for _, i := range buyback {
+		b.WriteU32(uint32(40 + i))
+		b.WriteU64(uint64(9000 + i))
+	}
+	return b.Bytes()
+}
+
+// TestActivePlayerUpdateFollowsTheCoresWriteOrder is the review's high finding: on build 70425+ an equipment swap
+// writes TransmogMetadata next to InvSlots, and the group 166 presence bit comes AFTER TransmogMetadata's values, not
+// before Coinage. A decoder that reads it first reads every slot one byte early. The money, the slots and the buyback
+// entries must come out as the core wrote them, with and without the metadata, and for a buyback-only update.
+func TestActivePlayerUpdateFollowsTheCoresWriteOrder(t *testing.T) {
+	coin := uint64(5150)
+	for name, tc := range map[string]struct {
+		body     []byte
+		coinage  bool
+		slots    map[int]wire.GUID
+		wantMeta bool
+	}{
+		"meta, coinage and slots": {coreOrderBody(&coin, true, map[int]wire.GUID{15: apSword, 36: {}}), true, map[int]wire.GUID{15: apSword, 36: {}}, true},
+		"meta and slots":          {coreOrderBody(nil, true, map[int]wire.GUID{15: apSword}), false, map[int]wire.GUID{15: apSword}, true},
+		"meta, slots, buyback":    {coreOrderBody(&coin, true, map[int]wire.GUID{35: {}, 72: apSword}, 0), true, map[int]wire.GUID{35: {}, 72: apSword}, true},
+		"no meta":                 {coreOrderBody(&coin, false, map[int]wire.GUID{15: apSword}), true, map[int]wire.GUID{15: apSword}, false},
+		"buyback only":            {coreOrderBody(nil, false, nil, 2), false, nil, false},
+		"meta and coinage only":   {coreOrderBody(&coin, true, nil), true, nil, true},
+	} {
+		u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, tc.body), 70707)
+		if err != nil || len(u.Blocks) != 1 {
+			t.Fatalf("%s: %v", name, err)
+		}
+		info := u.Blocks[0].Info
+		if info.InvSlotsUndecoded() || info.ActivePlayerSkipped() {
+			t.Fatalf("%s: reported undecoded", name)
+		}
+		got, ok := info.ChangedInvSlots()
+		if ok != (len(tc.slots) != 0) || len(got) != len(tc.slots) {
+			t.Fatalf("%s: slots %+v (%v), want %+v", name, got, ok, tc.slots)
+		}
+		for slot, g := range tc.slots {
+			if got[slot] != g {
+				t.Fatalf("%s: slot %d is %v, want %v (read out of step)", name, slot, got[slot], g)
+			}
+		}
+		if tc.coinage && (info.Player == nil || info.Player.Coinage != coin) {
+			t.Fatalf("%s: coinage %+v", name, info.Player)
+		}
+	}
+}
+
+// TestActivePlayerCoinageUpdateReachesTheModel: every own ActivePlayerData values update applies the money it carries to
+// the model, not only the login create (a GM money change or a purchase while the session runs).
+func TestActivePlayerCoinageUpdateReachesTheModel(t *testing.T) {
+	w := NewWorld(0)
+	create := &Update{Blocks: []WorldFragment{{GUID: apSelf, ObjectType: TypeActivePlayer,
+		Info: Info{Type: TypeActivePlayer, Player: &Player{Coinage: 100}}, ValuesComplete: true}}}
+	w.Apply(create, time.Unix(0, 0))
+	for _, coin := range []uint64{4000, 7} {
+		c := coin
+		u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, coreOrderBody(&c, true, map[int]wire.GUID{15: apSword})), 70707)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Apply(u, time.Unix(1, 0))
+		pl, _ := w.Object(apSelf)
+		if pl.Info.Player.Coinage != coin || pl.Info.Player.InvSlots[15] != apSword {
+			t.Fatalf("after an update of %d the model holds %+v", coin, pl.Info.Player.Coinage)
+		}
+	}
+	u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, activePlayerMoneyBody(55, nil, nil)), 70707)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Apply(u, time.Unix(2, 0))
+	if pl, _ := w.Object(apSelf); pl.Info.Player.Coinage != 55 {
+		t.Fatalf("a coinage-only update left the model at %d", pl.Info.Player.Coinage)
+	}
+}

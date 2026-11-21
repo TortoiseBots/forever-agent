@@ -584,6 +584,8 @@ type session struct {
 	// quest_act.go). The log starts from the login create block on first use and an own create re-seeds it.
 	quest    questWatch
 	questLog *quest.Log
+	// unwalkedLogged is set once the unwalkable PlayerData bits of this login were logged (noteUnwalkedPlayerBits).
+	unwalkedLogged bool
 	// questStale is why the log cannot be trusted (a PlayerData update named quest-log slots next to a field this
 	// client does not decode), empty when it can; an own create clears it. invFail is the last
 	// SMSG_INVENTORY_CHANGE_FAILURE, which a vendor purchase or buyback refusal arrives as (Player::_StoreOrEquipNewItem).
@@ -2620,6 +2622,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 			inv.ServerUndecoded(now, true)
 			s.noteInventoryStale("a server update named inventory slots next to fields this client does not decode")
 		case b.Info.ActivePlayerSkipped():
+			s.noteUnwalkedPlayerBits(b.Info.PlayerUnwalkedBits())
 			_, was := inv.Stale()
 			inv.ServerUndecoded(now, false)
 			if reason, stale := inv.Stale(); stale && !was {
@@ -2643,6 +2646,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// overlay guessed before it are settled by the slots this block carries, and the quest log is re-read from
 		// the block on its next use (round R5).
 		inv.Reset()
+		s.unwalkedLogged = false
 		s.questLog = nil
 		s.questStale = ""
 		if !s.selfSeen {

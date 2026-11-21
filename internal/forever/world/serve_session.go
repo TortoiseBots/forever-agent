@@ -237,6 +237,54 @@ func (s *session) servePath(x, y, z float32) (ServePath, error) {
 	}, nil
 }
 
+// ServeWalkRay is the walk_ray method's result. It is the navmesh walkability ray, NOT true line of sight: the agent has
+// no collision geometry (the server's vmaps), so In reads "blocked" for a cliff, a water edge or a target off the
+// mesh, and "clear" through a ceiling or a bridge.
+type ServeWalkRay struct {
+	Map  uint32     `json:"map"`
+	From [3]float32 `json:"from"`
+	To   [3]float32 `json:"to"`
+	// Known is false when the mesh cannot say (an end off the mesh, a tile file missing): In is then false and
+	// means nothing.
+	Known bool `json:"known"`
+	// In says the straight line from From to To stays on ground the navmesh holds: nothing the mesh marks as a wall,
+	// a pillar or a drop lies between the two points.
+	In bool `json:"in"`
+	// Hit is how far from From the line meets the mesh's edge (0 when In).
+	Hit float32 `json:"hit,omitempty"`
+	// Source names what answered: the agent holds no collision geometry (the server's vmaps), so the answer is the
+	// navmesh walkability ray (navmesh.Planner.Raycast), which is the same on every machine and needs only --navmesh.
+	Source string `json:"source"`
+}
+
+// serveWalkRay answers the walk_ray method: whether the straight line from the session's own position (or an explicit
+// from point) to a point stays on ground the navmesh holds. Not true line of sight (see ServeWalkRay); a target with no
+// mesh ground near it is Known false.
+func (s *session) serveWalkRay(p serveWalkRayParams) (ServeWalkRay, error) {
+	if s.serveRT == nil || s.serveRT.st.nav == nil {
+		return ServeWalkRay{}, ErrNavmeshNotConfigured
+	}
+	from := navmesh.Vec3{s.MoverX(), s.MoverY(), s.MoverZ()}
+	if p.From != nil {
+		from = navmesh.Vec3(*p.From)
+	}
+	to := navmesh.Vec3{p.X, p.Y, p.Z}
+	// A target the mesh holds no ground near is unknown, not out of sight: the scout leaves it unanswered.
+	_, onMesh, err := s.serveRT.st.nav.Nearest(s.world.MapID(), to)
+	if err != nil {
+		return ServeWalkRay{}, err
+	}
+	ray, err := s.serveRT.st.nav.Raycast(s.world.MapID(), from, to)
+	if err != nil {
+		return ServeWalkRay{}, err
+	}
+	ray.Known = ray.Known && onMesh
+	return ServeWalkRay{
+		Map: s.world.MapID(), From: [3]float32(from), To: [3]float32(to),
+		Known: ray.Known, In: ray.Known && ray.Clear, Hit: ray.Hit, Source: "navmesh_raycast",
+	}, nil
+}
+
 // serveWalkPath plans and walks a route as one continuous movement.
 func (s *session) serveWalkPath(ctx context.Context, x, y, z float32) (ServePath, error) {
 	path, err := s.servePath(x, y, z)
