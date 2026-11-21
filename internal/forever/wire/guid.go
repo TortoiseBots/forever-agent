@@ -18,6 +18,21 @@ func (g GUID) IsZero() bool { return g.Low == 0 && g.High == 0 }
 // Type returns the ObjectGuid high-type nibble (bits 58-63 of High).
 func (g GUID) Type() uint8 { return uint8(g.High>>58) & 0x3F }
 
+// TypePlayer is HighGuid::Player, the type of a player guid (ObjectGuid.h).
+const TypePlayer = 2
+
+// PlayerGUIDOnRealmOf is the guid of the player with this database counter on the realm of self, a player guid: the
+// server builds every player guid of a realm as the type and realm id in the high half (bits 58-63 and 42-57, the
+// rest zero) and the counter as the low half (ObjectGuidFactory::CreatePlayer, ObjectGuid.cpp:906-913, through
+// ObjectGuid::Create<HighGuid::Player>). false when self is not a player guid (not known yet) or the counter is 0.
+func PlayerGUIDOnRealmOf(self GUID, counter uint64) (GUID, bool) {
+	if self.Type() != TypePlayer || counter == 0 {
+		return EmptyGUID, false
+	}
+	const typeAndRealm = uint64(0x3FFFFF) << 42 // bits 42-63
+	return GUID{High: self.High & typeAndRealm, Low: counter}, true
+}
+
 // String prints both halves so a log line is unambiguous.
 func (g GUID) String() string { return fmt.Sprintf("0x%016X%016X", g.High, g.Low) }
 

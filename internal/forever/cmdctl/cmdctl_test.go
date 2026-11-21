@@ -973,6 +973,7 @@ func TestProbeVerdicts(t *testing.T) {
 		{"p3 unknown-verb", packageP3, ce("unknown-verb"), false, true, false},
 		{"p3 engine-not-built", packageP3, ce("engine-not-built"), false, true, false},
 		{"p3 not-bound", packageP3, ce("not-bound"), false, false, true},
+		{"p3 core syntax refusal", packageP3, &command.RefusalError{Err: command.ErrSyntax, Text: "Possible subcommands:"}, false, true, false},
 		{"p3 timeout", packageP3, command.ErrIncomplete, false, false, true},
 		{"p3 no error line", packageP3, nil, false, false, true},
 		{"p6 state answered", packageP6, nil, true, false, false},
@@ -2494,6 +2495,31 @@ func TestUnknownVerbAbsenceIsFinal(t *testing.T) {
 	var na *NotAvailableError
 	if !errors.As(err, &na) || na.Package != packageP6 || na.Retry {
 		t.Fatalf("loot: err %v, want a final not-available P6", err)
+	}
+	if got := seenCount(f, ".tb cmd"); got != 1 {
+		t.Fatalf("%d cmd line(s), want the one P3 probe: %v", got, f.seen)
+	}
+}
+
+// TestCoreSyntaxRefusalAbsenceIsFinal: a module with no `.tb cmd` makes the core answer the probe with its own syntax
+// refusal; that is definite absence, asked once for the session.
+func TestCoreSyntaxRefusalAbsenceIsFinal(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".tb commander status Cmdr":
+			return reply(o, fullCards("Tanka", "")...), nil
+		case ".tb cmd":
+			return nil, &command.RefusalError{Err: command.ErrSyntax, Text: "Possible subcommands:"}
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	for i := range 3 {
+		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+		var na *NotAvailableError
+		if !errors.As(err, &na) || na.Package != packageP3 || na.Retry || !strings.Contains(err.Error(), "needs module package P3") {
+			t.Fatalf("move %d: err %v, want a final not-available P3", i, err)
+		}
 	}
 	if got := seenCount(f, ".tb cmd"); got != 1 {
 		t.Fatalf("%d cmd line(s), want the one P3 probe: %v", got, f.seen)

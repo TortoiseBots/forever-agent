@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -195,4 +196,50 @@ func TestTurtleAgentUnchanged(t *testing.T) {
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestForeverCardOrdersFromCommanderLog: the card's orders come from the commander card's order log, so the stay status
+// shows on the card (it was always empty).
+func TestForeverCardOrdersFromCommanderLog(t *testing.T) {
+	cmdr := strings.Replace(foreverCommanderJSON, `"orders":0,`, `"orders":2,"log":[`+
+		`{"at":5,"verb":"follow","detail":"party","ok":true,"result":"queued"},`+
+		`{"at":9,"verb":"stay","detail":"party","ok":false,"result":"not in world"}],`, 1)
+	c := BuildForeverCard(Inputs{
+		Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmdr),
+	})
+	if len(c.Orders) != 2 {
+		t.Fatalf("orders %+v, want the two logged ones", c.Orders)
+	}
+	if o := c.Orders[0]; o.Verb != "follow" || o.Reply != "ACK" || o.Via != "cmd" || o.Text != "cmd follow party" {
+		t.Fatalf("first order %+v", o)
+	}
+	if o := c.Orders[1]; o.Verb != "stay" || o.Reply != "ERR" || o.Message != "not in world" {
+		t.Fatalf("last order %+v", o)
+	}
+	if c.LastRefusal != "not in world" {
+		t.Fatalf("last refusal %q, want the newest refused order's message", c.LastRefusal)
+	}
+	if !c.Orders[0].At.Equal(t0) {
+		t.Fatalf("a non-unix at falls back to the poll time: %v", c.Orders[0].At)
+	}
+}
+
+// TestForeverCardOrdersUnixAtAndCap: a unix-second at is kept, and only the last maxOrders entries are shown, oldest first.
+func TestForeverCardOrdersUnixAtAndCap(t *testing.T) {
+	var rows []string
+	for i := 0; i < maxOrders+3; i++ {
+		rows = append(rows, fmt.Sprintf(`{"at":%d,"verb":"stay","detail":"n%d","ok":true,"result":"queued"}`, 1700000000+i, i))
+	}
+	cmdr := strings.Replace(foreverCommanderJSON, `"orders":0,`, `"orders":13,"log":[`+strings.Join(rows, ",")+`],`, 1)
+	c := BuildForeverCard(Inputs{
+		Agent: Agent{ID: "127.0.0.1:8774", Addr: "127.0.0.1:8774", Kind: AgentForever}, Now: t0,
+		Status: json.RawMessage(foreverStatusJSON), Commander: json.RawMessage(cmdr),
+	})
+	if len(c.Orders) != maxOrders || c.Orders[0].Text != "cmd stay n3" || c.Orders[maxOrders-1].Text != "cmd stay n12" {
+		t.Fatalf("orders %+v", c.Orders)
+	}
+	if want := time.Unix(1700000003, 0).UTC(); !c.Orders[0].At.Equal(want) {
+		t.Fatalf("at %v, want %v", c.Orders[0].At, want)
+	}
 }

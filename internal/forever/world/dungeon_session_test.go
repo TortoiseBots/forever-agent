@@ -591,3 +591,19 @@ func TestDungeonWorldNamesThePartyFromTheRoster(t *testing.T) {
 		t.Fatalf("%d packet(s) sent for a roster name", n)
 	}
 }
+
+// TestDungeonWorldPlayerGUIDOfCounter: a member's guid from its counter takes this character's own type and realm,
+// with no view of the member: the binding card's counter becomes the guid the world model would print for it. A
+// session whose own guid is not a player's (not known yet) gives none.
+func TestDungeonWorldPlayerGUIDOfCounter(t *testing.T) {
+	s := newPortSession(&portRecorder{now: time.Now()})
+	w := dungeonWorld{s: s}
+	if _, ok := w.PlayerGUIDOfCounter(0x105); ok {
+		t.Fatal("a self that is not a player guid gave a member guid")
+	}
+	s.self = wire.GUID{High: uint64(2)<<58 | uint64(1)<<42, Low: 0x1000}
+	g, ok := w.PlayerGUIDOfCounter(0x105)
+	if !ok || g.String() != "0x08000400000000000000000000000105" {
+		t.Fatalf("member guid %v %v", g, ok)
+	}
+}
