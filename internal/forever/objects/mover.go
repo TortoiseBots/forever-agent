@@ -59,6 +59,10 @@ type Mover struct {
 	// ClientTime is the value of the movement time field: milliseconds since the client started. The server maps
 	// it to its own clock with the time-sync delta (MovementHandler.cpp:169-179).
 	ClientTime func(now time.Time) uint32
+	// Refuse, when set, is the session's own guard: it answers an error while the server is driving the character
+	// (UNIT_FLAG_ON_TAXI), so no movement packet of any caller goes out. The session sets it on the mover it builds;
+	// nil means no guard (a plain mover in a test).
+	Refuse func() error
 	// Logf, when set, receives one line per step.
 	Logf func(format string, args ...any)
 	// X, Y, Z, O is the client's belief about where the character is; the walk updates it.
@@ -215,6 +219,11 @@ func (m *Mover) send(core uint32, flags uint64) error {
 // sendAt sends one movement opcode with the position the mover holds and the timestamp of at. A stop uses it to
 // carry the computed arrival time even when the wake-up was a little late.
 func (m *Mover) sendAt(core uint32, flags uint64, at time.Time) error {
+	if m.Refuse != nil {
+		if err := m.Refuse(); err != nil {
+			return err
+		}
+	}
 	if m.betweenMaps {
 		// The old map's coordinates must not go out while the character is between maps (ErrMapChange): the
 		// refusal lives here, so a stop or a re-aim on an abandoned leg cannot slip through.
@@ -254,6 +263,11 @@ func (m *Mover) SetTeleport(x, y, z, o float32, sequence uint32) {
 
 // Face turns in place to o (CMSG_MOVE_SET_FACING) and updates the client's belief.
 func (m *Mover) Face(o float32) error {
+	if m.Refuse != nil {
+		if err := m.Refuse(); err != nil {
+			return err
+		}
+	}
 	if m.betweenMaps {
 		return ErrMapChange
 	}

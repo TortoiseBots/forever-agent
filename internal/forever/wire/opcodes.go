@@ -310,6 +310,29 @@ const (
 	SMSGQuestLogFull               uint32 = 0x650007
 )
 
+// The trainer of round R4 (Opcodes.h:1019-1020, 1886, 2430-2431): the list ask (an NPC hello), the purchase, and
+// the list, a refusal and a learned-spell answer.
+const (
+	CMSGTrainerList     uint32 = 0x3E0043
+	CMSGTrainerBuySpell uint32 = 0x3E0044
+	SMSGLearnedSpells   uint32 = 0x670040
+	SMSGTrainerList     uint32 = 0x45018A
+	SMSGTrainerBuyFail  uint32 = 0x45018B
+)
+
+// The flight paths of round R6 (Opcodes.h:49, 348, 1006-1008, 1141, 2052, 2350, 2413): the node status ask, the
+// node list ask (and the enable a client sends when it meets a flight master), the flight, and the answers.
+const (
+	CMSGTaxiNodeStatusQuery     uint32 = 0x3E003E
+	CMSGEnableTaxiNode          uint32 = 0x3E003F
+	CMSGTaxiQueryAvailableNodes uint32 = 0x3E0040
+	CMSGActivateTaxi            uint32 = 0x3E0041
+	SMSGTaxiNodeStatus          uint32 = 0x450128
+	SMSGActivateTaxiReply       uint32 = 0x450129
+	SMSGNewTaxiPath             uint32 = 0x45012A
+	SMSGShowTaxiNodes           uint32 = 0x450179
+)
+
 // The battleground watch (Opcodes.h:102-110, 358, 775, 852, 1162, 1206-1219, 1756, 2166-2170, 2458, 2473):
 // the queue/port/leave/status/log/spirit-queue client packets this client sends, and the status/world-state/match/
 // positions/join/leave/spirit-time/capture server packets it reads.
@@ -465,6 +488,13 @@ var clientNames = map[uint32]string{
 	CMSGQuestGiverCloseQuest:    "CMSG_QUEST_GIVER_CLOSE_QUEST",
 	CMSGQuestLogRemoveQuest:     "CMSG_QUEST_LOG_REMOVE_QUEST",
 
+	CMSGTrainerList:     "CMSG_TRAINER_LIST",
+	CMSGTrainerBuySpell: "CMSG_TRAINER_BUY_SPELL",
+
+	CMSGTaxiNodeStatusQuery:      "CMSG_TAXI_NODE_STATUS_QUERY",
+	CMSGEnableTaxiNode:           "CMSG_ENABLE_TAXI_NODE",
+	CMSGTaxiQueryAvailableNodes:  "CMSG_TAXI_QUERY_AVAILABLE_NODES",
+	CMSGActivateTaxi:             "CMSG_ACTIVATE_TAXI",
 	CMSGAreaSpiritHealerQuery:    "CMSG_AREA_SPIRIT_HEALER_QUERY",
 	CMSGAreaSpiritHealerQueue:    "CMSG_AREA_SPIRIT_HEALER_QUEUE",
 	CMSGBattlefieldLeave:         "CMSG_BATTLEFIELD_LEAVE",

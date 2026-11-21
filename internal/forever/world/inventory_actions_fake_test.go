@@ -114,6 +114,14 @@ func (f *itemWorld) apply(blocks ...objects.WorldFragment) {
 	u := &objects.Update{Blocks: blocks}
 	f.s.applyUpdate(u)
 	f.world.Apply(u, f.now)
+	f.s.noteSelfTaxi()
+}
+
+// fundSelf gives the character's own purse the money a values update carries. The login create and every later money
+// change arrive as an ActivePlayerData values update, so the tests read the coinage through the decoder, never by
+// writing it into the model.
+func fundSelf(f *itemWorld, copper uint64) {
+	f.server(wire.SMSGUpdateObject, activeUpdate(nil, &copper))
 }
 
 // server delivers one server packet to the session the way the dispatch loop does.
@@ -127,6 +135,7 @@ func (f *itemWorld) server(core uint32, payload []byte) {
 		}
 		f.s.applyUpdate(u)
 		f.world.Apply(u, f.now)
+		f.s.noteSelfTaxi()
 	case wire.SMSGItemPushResult, wire.SMSGInventoryChangeFailure:
 		if err := f.s.handleInventory(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload}); err != nil {
 			f.t.Fatalf("%s: %v", wire.ServerName(core), err)

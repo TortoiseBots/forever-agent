@@ -86,6 +86,17 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x650009, "SMSG_QUEST_UPDATE_COMPLETE", 0x670009, 0x670009},
 		{0x650007, "SMSG_QUEST_LOG_FULL", 0x670007, 0x670007},
 		{0x65001A, "SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE", 0x67001A, 0x67001A},
+		// R4 trainer and R6 taxi answers: their 0x45 rows follow the same group and index arithmetic as the vendor's
+		// (0x45018A -> 0x47018A, 0x450179 -> 0x47017A, 0x450128 -> 0x470129), and a 70938 client gets the net +1 of
+		// the 70755/70790 inserts from 0x4700ED on. SMSG_LEARNED_SPELLS is in the 0x67 group: group+1, then the
+		// shift.
+		{0x45018A, "SMSG_TRAINER_LIST", 0x47018A, 0x47018B},
+		{0x45018B, "SMSG_TRAINER_BUY_FAILED", 0x47018B, 0x47018C},
+		{0x670040, "SMSG_LEARNED_SPELLS", 0x690040, 0x690040},
+		{0x450128, "SMSG_TAXI_NODE_STATUS", 0x470129, 0x47012A},
+		{0x450129, "SMSG_ACTIVATE_TAXI_REPLY", 0x47012A, 0x47012B},
+		{0x45012A, "SMSG_NEW_TAXI_PATH", 0x47012B, 0x47012C},
+		{0x450179, "SMSG_SHOW_TAXI_NODES", 0x47017A, 0x47017B},
 		// A1 BG answers: group 0x4B -> 0x4D with the group shift (no index bump: index 0x00-0x10 and 0x2E-0x30
 		// are all below 0x98), and group 0x45 -> 0x47 likewise. Neither the 70755 nor the 70790 insert touches
 		// these groups (the only 0x47 insert is at index 0xED/0x125), so both builds share the wire numbers.
@@ -236,6 +247,14 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E002F, "CMSG_QUEST_GIVER_CHOOSE_REWARD", 0x3F0031, 0x3F0031},
 		{0x3E00EC, "CMSG_QUEST_GIVER_CLOSE_QUEST", 0x3F00EF, 0x3F00EF},
 		{0x3E00D0, "CMSG_QUEST_LOG_REMOVE_QUEST", 0x3F00D3, 0x3F00D3},
+		// R4 trainer and R6 taxi rows in the same 0x3E group, listed by the .inc region-2 table: wire = core+2,
+		// unchanged at 70938.
+		{0x3E0043, "CMSG_TRAINER_LIST", 0x3F0045, 0x3F0045},
+		{0x3E0044, "CMSG_TRAINER_BUY_SPELL", 0x3F0046, 0x3F0046},
+		{0x3E003E, "CMSG_TAXI_NODE_STATUS_QUERY", 0x3F0040, 0x3F0040},
+		{0x3E003F, "CMSG_ENABLE_TAXI_NODE", 0x3F0041, 0x3F0041},
+		{0x3E0040, "CMSG_TAXI_QUERY_AVAILABLE_NODES", 0x3F0042, 0x3F0042},
+		{0x3E0041, "CMSG_ACTIVATE_TAXI", 0x3F0043, 0x3F0043},
 		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
 		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
 		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},

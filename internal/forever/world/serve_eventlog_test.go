@@ -220,6 +220,33 @@ func TestServeActRunsSteps(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeActReachesTheNewVerbs: the trainer and flight steps parse through serve's act like the older verbs, and a
+// step's own failure (no current NPC) is the run's result, never an unknown-verb refusal.
+func TestServeActReachesTheNewVerbs(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	for _, script := range []string{"trainer", "taxi-nodes", "taxi-status", "fly node=1", "learn spell=1"} {
+		var res ServeActResult
+		json.Unmarshal(a.mustCall(t, "act", map[string]any{"steps": []string{script}}), &res)
+		if res.OK {
+			t.Fatalf("%q succeeded without an NPC", script)
+		}
+		if len(res.Lines) == 0 || !strings.Contains(res.Lines[len(res.Lines)-1], "fail") {
+			t.Fatalf("%q answered %v", script, res.Lines)
+		}
+		if strings.Contains(strings.Join(res.Lines, "\n"), "unknown act verb") {
+			t.Fatalf("%q parsed as an unknown verb: %v", script, res.Lines)
+		}
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 // TestServeActBadStepSendsNothing: a script with one unparseable step is refused before anything is sent, even when
 // the earlier steps are valid.
 func TestServeActBadStepSendsNothing(t *testing.T) {
@@ -234,7 +261,7 @@ func TestServeActBadStepSendsNothing(t *testing.T) {
 	sayBefore, selBefore := len(f.serveGMLines), len(f.serveSelections)
 	f.mu.Unlock()
 
-	a.mustFail(t, "act", map[string]any{"steps": []string{"wait dur=10ms", "fly"}}, -32003, "unknown act verb")
+	a.mustFail(t, "act", map[string]any{"steps": []string{"wait dur=10ms", "not-a-verb"}}, -32003, "unknown act verb")
 
 	f.mu.Lock()
 	sayAfter, selAfter := len(f.serveGMLines), len(f.serveSelections)
