@@ -231,6 +231,9 @@ func (s *session) openMapChange(phase transferPhase) {
 	s.mapChg.hasPending = false
 	s.mapChg.pendingMap = -1
 	s.mapChg.pendingRow = MapChangeRow{}
+	// A knockback flight belongs to the old map's positions: the transfer ends it, with no landing row (the map
+	// change is not a landing).
+	s.dropKnockbacks()
 	// A new transfer starts with an open instance gate: between the pending and the suspend token the server has
 	// not taken the character off its map yet (it removes it between the two packets, Player.cpp:1522-1527), so
 	// map content read there is still the old map's and may be applied to the old model. The suspend token closes

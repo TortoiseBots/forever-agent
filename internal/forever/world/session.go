@@ -503,6 +503,8 @@ type session struct {
 	// keyed by GUID, with knockOrder the insertion order for the bound. Only the session goroutine touches them.
 	knocks     map[wire.GUID]knockPending
 	knockOrder []wire.GUID
+	// flight is the mover's own knockback arc, which the client simulates: the server sends none of its positions.
+	flight *selfFlight
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID
@@ -2856,7 +2858,22 @@ func (s *session) nextExceptCtx(ctx context.Context, what string, timeout time.D
 		if err := s.mapChangeTimedOut(); err != nil {
 			return event{}, err
 		}
+		// The mover's own knockback flight is the client's to send: its heartbeat and fall-land packets go out on
+		// every wait, so a walk, a settle and serve's idle loop all fly it.
+		now := s.transport().Now()
+		if err := s.flightTick(now); err != nil {
+			return event{}, err
+		}
 		remaining := time.Until(end)
+		if s.flight != nil && !s.mapChg.between {
+			next := s.flight.nextBeat
+			if s.flight.land.Before(next) {
+				next = s.flight.land
+			}
+			if d := next.Sub(now); d < remaining {
+				remaining = d
+			}
+		}
 		if s.mapChg.between {
 			if left := mapChangeLimit - s.Now().Sub(s.mapChg.since); left < remaining {
 				// Wake at the map change's own deadline, so a lost new world ends the run promptly instead of

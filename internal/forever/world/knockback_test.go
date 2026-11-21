@@ -52,10 +52,6 @@ func knockRows(s *session) []CombatRow {
 	return rows
 }
 
-// TestSelfKnockBackIsAckedOnce: SMSG_MOVE_KNOCK_BACK for the active mover answers exactly one
-// CMSG_MOVE_KNOCK_BACK_ACK, carrying the mover's current movement block and the packet's sequence index, and writes
-// one knockback row with the speeds and takeoff. The server's echo of that ack (SMSG_MOVE_UPDATE_KNOCK_BACK) is not
-// answered again.
 // TestKnockBackIsMapContent: both knockback packets are movement of the map the client stands on, so the map-change
 // gate holds or drops them with the other movement state.
 func TestKnockBackIsMapContent(t *testing.T) {
@@ -64,6 +60,10 @@ func TestKnockBackIsMapContent(t *testing.T) {
 	}
 }
 
+// TestSelfKnockBackIsAckedOnce: SMSG_MOVE_KNOCK_BACK for the active mover answers exactly one
+// CMSG_MOVE_KNOCK_BACK_ACK, carrying the airborne movement block and the packet's sequence index, and writes one
+// knockback row with the speeds and takeoff. The server's echo of that ack (SMSG_MOVE_UPDATE_KNOCK_BACK) is not
+// answered again.
 func TestSelfKnockBackIsAckedOnce(t *testing.T) {
 	s, rec := newTransferSession()
 	s.self, s.mover.GUID = knockUnit, knockUnit
@@ -83,6 +83,15 @@ func TestSelfKnockBackIsAckedOnce(t *testing.T) {
 	}
 	if mi.GUID != s.self || mi.X != s.mover.X || mi.Y != s.mover.Y || mi.Z != s.mover.Z {
 		t.Fatalf("ack movement info %+v, mover at %.1f %.1f %.1f", mi, s.mover.X, s.mover.Y, s.mover.Z)
+	}
+	// The ack is the mover's airborne block: no ground contact or walking bit, the flying flags of a knockback,
+	// and the order's jump values (the ack a real client sends).
+	if mi.Flags&objects.FlagFalling == 0 || mi.Flags&objects.FlagKnockback == 0 ||
+		mi.Flags&(objects.FlagTouchingGround|objects.FlagForward|objects.FlagFallingFar) != 0 {
+		t.Fatalf("ack flags %#x are not an airborne knockback", mi.Flags)
+	}
+	if mi.Jump == nil || mi.Jump.ZSpeed != 9.5 || mi.Jump.CosAngle != 0.6 || mi.Jump.SinAngle != -0.8 || mi.Jump.XYSpeed != 12.5 {
+		t.Fatalf("ack jump block %+v", mi.Jump)
 	}
 	rows := knockRows(s)
 	if len(rows) != 1 || rows[0].Kind != "knockback" || !rows[0].Self {
@@ -214,5 +223,233 @@ func TestKnockBackTeleportAndTimeoutDropTheLanding(t *testing.T) {
 	}
 	if got := len(knockRows(s)); got != 1 {
 		t.Fatalf("%d row(s), want no landing row for a stale takeoff", got)
+	}
+}
+
+// recPacket returns the last packet of core in the recording.
+func recPacket(rec *transferRecorder, core uint32) []byte {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for i := len(rec.sent) - 1; i >= 0; i-- {
+		if rec.sent[i].core == core {
+			return rec.sent[i].payload
+		}
+	}
+	return nil
+}
+
+// parseMovement reads one recorded movement packet's block.
+func parseMovement(t *testing.T, payload []byte) objects.MovementInfo {
+	t.Helper()
+	b := wire.NewReader(payload)
+	mi, err := objects.ReadMovementInfo(b)
+	if err != nil {
+		t.Fatalf("movement info: %v", err)
+	}
+	return mi
+}
+
+// TestSelfKnockBackFlightAndLanding: the client flies its own arc. The ack is airborne; a heartbeat 500 ms later
+// carries the descending jump block at the arc's position; the fall-land packet grounds the mover at the computed
+// landing, and the landing row is the mover's own (self=true) with its air time. A real client's flight is what the
+// server sees; it sends the mover none of these positions back.
+func TestSelfKnockBackFlightAndLanding(t *testing.T) {
+	s, rec := newTransferSession()
+	t0 := time.Unix(1000, 0)
+	rec.now = t0
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	s.mover.X, s.mover.Y, s.mover.Z = 1000, 2000, 50
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 77, 1, 0, 12.5, -9.5))
+	if !s.mover.Airborne() {
+		t.Fatal("the mover did not start its flight")
+	}
+	if got := rec.count(wire.CMSGMoveHeartbeat); got != 0 {
+		t.Fatalf("%d heartbeat(s) right after the ack", got)
+	}
+
+	// 500 ms in: falling (the arc is past its top), a heartbeat at the arc's position.
+	rec.now = t0.Add(500 * time.Millisecond)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	beat := parseMovement(t, recPacket(rec, wire.CMSGMoveHeartbeat))
+	if beat.Flags&objects.FlagFalling == 0 || beat.Flags&objects.FlagKnockback == 0 || beat.Flags&objects.FlagTouchingGround != 0 {
+		t.Fatalf("heartbeat flags %#x", beat.Flags)
+	}
+	if beat.Flags&objects.FlagFallingFar == 0 {
+		t.Fatalf("heartbeat while descending lost FlagFallingFar: %#x", beat.Flags)
+	}
+	if beat.Jump == nil || beat.Jump.FallTime != 500 || beat.Jump.ZSpeed != -9.5 {
+		t.Fatalf("heartbeat jump block %+v", beat.Jump)
+	}
+	if beat.Z == 50 || beat.X <= 1000 {
+		t.Fatalf("heartbeat at %.2f %.2f %.2f is not on the arc", beat.X, beat.Y, beat.Z)
+	}
+
+	// 1.1 s in: the arc has landed (9.5 yd/s up under 19.29 yd/s² is 0.985 s). One fall-land packet, grounded.
+	rec.now = t0.Add(1100 * time.Millisecond)
+	if err := s.flightTick(rec.now); err != nil {
+		t.Fatal(err)
+	}
+	if s.mover.Airborne() {
+		t.Fatal("the mover is still airborne after the landing")
+	}
+	land := parseMovement(t, recPacket(rec, wire.CMSGMoveFallLand))
+	if land.Flags&objects.FlagTouchingGround == 0 || land.Flags&(objects.FlagFalling|objects.FlagKnockback) != 0 {
+		t.Fatalf("fall-land flags %#x", land.Flags)
+	}
+	if land.Jump != nil {
+		t.Fatalf("fall-land carries a jump block %+v", land.Jump)
+	}
+	if x, y, z, _ := s.mover.Position(); x != land.X || y != land.Y || z != land.Z {
+		t.Fatalf("mover at %.2f %.2f %.2f, fall-land at %.2f %.2f %.2f", x, y, z, land.X, land.Y, land.Z)
+	}
+	if land.Z != 50 || land.X <= 1000 {
+		t.Fatalf("landing at %.2f %.2f %.2f is not the arc's end", land.X, land.Y, land.Z)
+	}
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[1].Kind != "knockback_land" || !rows[1].Self {
+		t.Fatalf("rows %+v", rows)
+	}
+	if rows[1].AirMS < 1050 || rows[1].AirMS > 1150 {
+		t.Fatalf("self landing air time %d ms", rows[1].AirMS)
+	}
+	if rows[1].Pos == nil || rows[1].Pos.X != land.X || rows[1].Drop != 0 {
+		t.Fatalf("self landing row %+v", rows[1])
+	}
+	if s.report.KnockBackLandings != 1 || len(s.knocks) != 0 {
+		t.Fatalf("report %+v, pending %d", s.report, len(s.knocks))
+	}
+	// One ack for the one self packet, and no ordinary movement packet was invented.
+	if rec.count(wire.CMSGMoveKnockBackAck) != 1 {
+		t.Fatalf("%d ack(s)", rec.count(wire.CMSGMoveKnockBackAck))
+	}
+}
+
+// TestSelfKnockBackReplacesAPendingTakeoff: a second knockback while the first flight is still pending replaces it,
+// counts the first as missed and acks again.
+func TestSelfKnockBackReplacesAPendingTakeoff(t *testing.T) {
+	s, rec := newTransferSession()
+	rec.now = time.Unix(3000, 0)
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 1, 1, 0, 10, -4.9))
+	mustFeed(t, s, sideInstance, wire.SMSGMoveKnockBack, knockPacket(s.self, 2, 0, 1, 10, -4.9))
+	if got := rec.count(wire.CMSGMoveKnockBackAck); got != 2 {
+		t.Fatalf("%d ack(s), want 2", got)
+	}
+	if s.report.KnockBacksMissed != 1 {
+		t.Fatalf("missed %d, want the replaced takeoff", s.report.KnockBacksMissed)
+	}
+	if got := len(knockRows(s)); got != 2 {
+		t.Fatalf("%d takeoff row(s), want 2", got)
+	}
+}
+
+// TestRelayedSecondTakeoffIsANewRow: SMSG_MOVE_UPDATE_KNOCK_BACK for another unit is a takeoff even when one is
+// still pending (a second knock inside one flight): the row is written and the replaced takeoff counts as missed.
+func TestRelayedSecondTakeoffIsANewRow(t *testing.T) {
+	s, _ := newTransferSession()
+	first := objects.MovementInfo{GUID: knockOther, Flags: objects.FlagFalling, Time: 1, X: 10, Y: 20, Z: 30}
+	second := objects.MovementInfo{GUID: knockOther, Flags: objects.FlagFalling, Time: 2, X: 40, Y: 50, Z: 60}
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(first))
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdateKnockBack, knockUpdatePacket(second))
+	rows := knockRows(s)
+	if len(rows) != 2 || rows[1].Kind != "knockback" || rows[1].Pos == nil || rows[1].Pos.Z != 60 {
+		t.Fatalf("rows %+v", rows)
+	}
+	if s.report.KnockBacksMissed != 1 {
+		t.Fatalf("missed %d, want the replaced takeoff", s.report.KnockBacksMissed)
+	}
+	// The replaced takeoff really is gone: only the second is pending.
+	if p, ok := s.knocks[knockOther]; !ok || p.z != 60 {
+		t.Fatalf("pending %+v %v", p, ok)
+	}
+}
+
+// TestKnockBackOrderIsPruned: a landed GUID leaves both the table and the eviction order, so a long run of
+// knock/land cycles of the same few units does not grow the order list without bound; the bound still evicts the
+// oldest live takeoffs.
+func TestKnockBackOrderIsPruned(t *testing.T) {
+	s, _ := newTransferSession()
+	now := time.Now()
+	a := wire.GUID{Low: 0xA1}
+	for i := 0; i < 200; i++ {
+		s.setKnock(a, knockPending{at: now, x: 1, y: 2, z: 3, hasPos: true})
+		s.knockMove(objects.MovementInfo{GUID: a, Flags: objects.FlagTouchingGround, X: 1, Y: 2, Z: 3}, now)
+	}
+	if len(s.knockOrder) != 0 || len(s.knocks) != 0 {
+		t.Fatalf("after 200 knock/land cycles: order %d, table %d", len(s.knockOrder), len(s.knocks))
+	}
+	for i := uint64(0); i < 70; i++ {
+		s.setKnock(wire.GUID{Low: 0x1000 + i}, knockPending{at: now, hasPos: true})
+	}
+	if len(s.knocks) != maxPendingKnocks || len(s.knockOrder) != maxPendingKnocks {
+		t.Fatalf("table %d, order %d, want the bound %d", len(s.knocks), len(s.knockOrder), maxPendingKnocks)
+	}
+	if _, ok := s.knocks[wire.GUID{Low: 0x1000}]; ok {
+		t.Fatal("the oldest takeoff was not evicted")
+	}
+	if _, ok := s.knocks[wire.GUID{Low: 0x1000 + 69}]; !ok {
+		t.Fatal("the newest takeoff was evicted")
+	}
+}
+
+// TestKnockBackLandingNonFiniteDrop: two huge finite Z values overflow the drop to Inf. The row is dropped and
+// counted, never written into the ring where encoding/json would refuse the whole page.
+func TestKnockBackLandingNonFiniteDrop(t *testing.T) {
+	s, _ := newTransferSession()
+	s.setKnock(knockOther, knockPending{at: time.Now(), z: 3e38, hasPos: true})
+	mustFeed(t, s, sideInstance, wire.SMSGMoveUpdate, knockUpdatePacket(objects.MovementInfo{
+		GUID: knockOther, Flags: objects.FlagTouchingGround, X: 1, Y: 2, Z: -3e38}))
+	if got := len(knockRows(s)); got != 0 {
+		t.Fatalf("%d row(s) written with an infinite drop", got)
+	}
+	if s.report.KnockBacksMissed != 1 || len(s.knocks) != 0 {
+		t.Fatalf("missed %d, pending %d", s.report.KnockBacksMissed, len(s.knocks))
+	}
+}
+
+// TestKnockBackPacketsAreGatedMapContent: both knockback packets are movement of the map the client stands on, so
+// the between-maps gate holds them, writes no row and answers no ack; the resume drops them as stale.
+func TestKnockBackPacketsAreGatedMapContent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		core uint32
+		body []byte
+	}{
+		{"self knockback", wire.SMSGMoveKnockBack, knockPacket(knockUnit, 9, 0, 1, 10, -4.9)},
+		{"relayed knockback", wire.SMSGMoveUpdateKnockBack,
+			knockUpdatePacket(objects.MovementInfo{GUID: knockOther, Flags: objects.FlagFalling, X: 1, Y: 2, Z: 3})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, rec := newTransferSession()
+			s.self, s.mover.GUID = knockUnit, knockUnit
+			mustFeed(t, s, sideRealm, wire.SMSGTransferPending, pendingPayload(389, 1010, 2020, 55))
+			mustFeed(t, s, sideInstance, wire.SMSGSuspendToken, tokenPayload(9, 1))
+			mustFeed(t, s, sideInstance, tc.core, tc.body)
+			if got := len(s.mapChg.held); got != 1 {
+				t.Fatalf("%d packet(s) held", got)
+			}
+			if got := rec.count(wire.CMSGMoveKnockBackAck); got != 0 {
+				t.Fatalf("%d ack(s) before the resume", got)
+			}
+			if got := len(knockRows(s)); got != 0 {
+				t.Fatalf("%d row(s) before the resume", got)
+			}
+			mustFeed(t, s, sideRealm, wire.SMSGNewWorld, newWorldPayload(389, 1010, 2020, 55, 0.5, objects.NewWorldReasonNormal, 1))
+			mustFeed(t, s, sideInstance, wire.SMSGResumeToken, tokenPayload(9, 1))
+			if s.report.StaleMapPackets != 1 {
+				t.Fatalf("%d stale packet(s)", s.report.StaleMapPackets)
+			}
+			if got := rec.count(wire.CMSGMoveKnockBackAck); got != 0 {
+				t.Fatalf("%d ack(s) after the resume", got)
+			}
+			if got := len(knockRows(s)); got != 0 {
+				t.Fatalf("%d row(s) after the resume", got)
+			}
+			if s.flight != nil {
+				t.Fatal("a dropped packet started a flight")
+			}
+		})
 	}
 }

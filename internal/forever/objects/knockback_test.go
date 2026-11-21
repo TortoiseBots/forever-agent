@@ -6,6 +6,7 @@ package objects
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -82,6 +83,47 @@ func TestMoveUpdateKnockBackParse(t *testing.T) {
 	}
 	if _, err := ParseMoveUpdateKnockBack(nil); err == nil {
 		t.Fatal("an empty payload was accepted")
+	}
+	// The position is copied into the combat ring and JSON-encoded there, so a non-finite one is refused just
+	// like the mover's own packet's flight fields.
+	for _, bad := range []float32{float32(math.NaN()), float32(math.Inf(1))} {
+		hostile := MovementInfo{GUID: knockMover, Flags: FlagFalling, X: bad, Z: bad, O: bad}
+		w := wire.NewWriter()
+		WriteMovementInfo(w, hostile)
+		if _, err := ParseMoveUpdateKnockBack(w.Bytes()); err == nil {
+			t.Fatalf("a %v position was accepted", bad)
+		}
+	}
+}
+
+// TestMovementInfoRefusesAForceCountItCannotHold: removed-forces is a u32 the core writes as zero, but a crafted
+// movement block with 0xFFFFFFFF must fail on the count instead of spinning four billion iterations on the session
+// goroutine (each read past the end only sticks the reader's error).
+func TestMovementInfoRefusesAForceCountItCannotHold(t *testing.T) {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, knockMover)
+	b.WriteU64(FlagTouchingGround)
+	b.WriteU32(0)
+	for range 6 {
+		b.WriteFloat32(0) // X, Y, Z, O, Pitch, StepUpStartElevation
+	}
+	b.WriteU32(0xFFFFFFFF) // RemoveForcesIDs count
+	b.WriteU32(0)          // MoveIndex
+	b.WriteFloat32(1)      // GravityModifier
+	b.WriteBit(false)
+	b.FlushBits()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadMovementInfo(wire.NewReader(b.Bytes()))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("an impossible force count was accepted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadMovementInfo spun on the impossible force count")
 	}
 }
 

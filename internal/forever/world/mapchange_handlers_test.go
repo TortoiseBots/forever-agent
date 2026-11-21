@@ -22,10 +22,12 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
-// transferRecorder is the session's transport in these tests: it keeps every packet the handlers write.
+// transferRecorder is the session's transport in these tests: it keeps every packet the handlers write. now, when
+// set, is the session clock flights and heartbeats are timed on.
 type transferRecorder struct {
 	mu   sync.Mutex
 	sent []recordedPacket
+	now  time.Time
 }
 
 type recordedPacket struct {
@@ -41,7 +43,12 @@ func (r *transferRecorder) Send(core uint32, payload []byte) error {
 }
 
 func (r *transferRecorder) WaitUntil(context.Context, time.Time) error { return nil }
-func (r *transferRecorder) Now() time.Time                             { return time.Now() }
+func (r *transferRecorder) Now() time.Time {
+	if !r.now.IsZero() {
+		return r.now
+	}
+	return time.Now()
+}
 
 func (r *transferRecorder) cores() []uint32 {
 	r.mu.Lock()

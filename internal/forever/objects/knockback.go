@@ -71,6 +71,13 @@ func ParseMoveUpdateKnockBack(payload []byte) (MovementInfo, error) {
 	if mi.GUID.IsZero() {
 		return MovementInfo{}, fmt.Errorf("objects: move update knock back names an empty mover")
 	}
+	// The position is copied into the combat ring and JSON-encoded there: a NaN or Inf would poison the page for
+	// as long as the row stays in it. ParseKnockBack already refuses one on the mover's own packet.
+	for _, v := range []float32{mi.X, mi.Y, mi.Z, mi.O} {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return MovementInfo{}, fmt.Errorf("objects: move update knock back carries a non-finite position")
+		}
+	}
 	return mi, nil
 }
 
