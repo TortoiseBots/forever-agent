@@ -955,3 +955,23 @@ func TestNoteEventKeepsAPullWithoutAStep(t *testing.T) {
 		t.Fatalf("step records %+v, want the one stepped pull", recs)
 	}
 }
+
+// TestWatchHandlesABossWait: a watch route keeps a leg's boss wait (wait_s) for the module's own run, and the watch
+// over such a plan ends clean: the awaited boss is no stuck, timeout or refusal verdict.
+func TestWatchHandlesABossWait(t *testing.T) {
+	p := minimalPlan()
+	p.Legs[0].Boss.WaitS = 90
+	route, err := NewWatchRoute(p)
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	cfg := watchConfig()
+	cfg.Logf = func(string, ...any) {}
+	f := NewFake(route, cfg)
+	run := New(cfg, route, f, f, f, f.Clock)
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 120 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" || !res.Clear {
+		t.Fatalf("a watch over a boss-wait plan: stop %q clear %v, want done", res.Stop, res.Clear)
+	}
+}

@@ -351,41 +351,150 @@ func playerNamesAnswer(t *testing.T, names map[wire.GUID]string) []byte {
 	return b.Bytes()
 }
 
-// TestDungeonWorldNamesThePartyFromTheServer: a watch's character is not in the party it watches and nothing else in
-// a dungeon session asks for names, so a bot in view had no guid and every frame of a watch record carried an empty
-// one. PlayerGUID now asks the server for the players in view it cannot name and answers from the reply; a name nobody
-// in view bears is asked once per throttle window, not on every frame.
-func TestDungeonWorldNamesThePartyFromTheServer(t *testing.T) {
+// nameTestSession is a port session on a fake clock the test steps.
+func nameTestSession(t *testing.T) (*session, *portRecorder, *time.Time) {
+	t.Helper()
 	rec := &portRecorder{now: time.Now()}
 	s := newPortSession(rec)
+	clock := time.Unix(1_700_000_000, 0)
+	s.nowFn = func() time.Time { return clock }
+	return s, rec, &clock
+}
+
+// answerNames hands the session the server's name answer the way the packet loop does.
+func answerNames(t *testing.T, s *session, names map[wire.GUID]string) {
+	t.Helper()
+	ev := event{side: sideInstance, p: worldconn.Packet{
+		Core:    wire.SMSGQueryPlayerNamesResponse,
+		Payload: playerNamesAnswer(t, names),
+	}}
+	if err := s.handle(s.ctx, ev); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+}
+
+// TestDungeonWorldNamesThePartyFromTheServer: a watch's character is not in the party it watches and nothing else in
+// a dungeon session asks for names, so a bot in view had no guid. PlayerGUID sends the query and returns at once
+// (empty for a member not yet named); the answer fills the cache and a later frame finds the guid.
+func TestDungeonWorldNamesThePartyFromTheServer(t *testing.T) {
+	s, rec, _ := nameTestSession(t)
 	tank, healer := playerGUID(0x11), playerGUID(0x12)
 	addUnit(t, s, tank, 0, 12, 21, 30, 100, 100, 28, 0)
 	addUnit(t, s, healer, 0, 13, 21, 30, 100, 100, 28, 0)
 	w := dungeonWorld{s: s}
-	s.events <- event{side: sideInstance, p: worldconn.Packet{
-		Core:    wire.SMSGQueryPlayerNamesResponse,
-		Payload: playerNamesAnswer(t, map[wire.GUID]string{tank: "Wctank", healer: "Wcpri"}),
-	}}
+	start := time.Now()
+	if g, ok := w.PlayerGUID("wctank"); ok {
+		t.Fatalf("PlayerGUID(wctank) = %v before any answer", g)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("PlayerGUID blocked for %s", d)
+	}
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d name query(ies) sent, want one", n)
+	}
+	answerNames(t, s, map[wire.GUID]string{tank: "Wctank", healer: "Wcpri"})
 	if g, ok := w.PlayerGUID("wctank"); !ok || g != tank {
 		t.Fatalf("PlayerGUID(wctank) = %v %v, want %v", g, ok, tank)
 	}
 	if g, ok := w.PlayerGUID("Wcpri"); !ok || g != healer {
 		t.Fatalf("PlayerGUID(Wcpri) = %v %v, want %v", g, ok, healer)
 	}
-	asked := len(rec.cores())
-	if asked != 1 {
-		t.Fatalf("%d name query(ies) sent, want one", asked)
-	}
-	// Everyone in view is named now, so a stranger asks nothing; a new unnamed player waits out the throttle.
 	if _, ok := w.PlayerGUID("Nobody"); ok {
 		t.Fatal("a name nobody bears was found")
 	}
-	addUnit(t, s, playerGUID(0x13), 0, 14, 21, 30, 100, 100, 28, 0)
-	if _, ok := w.PlayerGUID("Wcmag"); ok {
-		t.Fatal("a member that was not answered was found")
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries after everyone in view was named, want 1", n)
 	}
-	if got := len(rec.cores()); got != asked {
-		t.Fatalf("a second query went out inside the throttle window (%d sent)", got)
+}
+
+// TestDungeonWorldNameAskBacksOff: an unanswered guid is asked again after 5 s, then 30 s, then at most every 2 min.
+func TestDungeonWorldNameAskBacksOff(t *testing.T) {
+	s, rec, clock := nameTestSession(t)
+	addUnit(t, s, playerGUID(0x31), 0, 12, 21, 30, 100, 100, 28, 0)
+	w := dungeonWorld{s: s}
+	asks := func() int { return len(rec.cores()) }
+	step := func(d time.Duration, want int, why string) {
+		t.Helper()
+		*clock = clock.Add(d)
+		w.PlayerGUID("ghost")
+		if got := asks(); got != want {
+			t.Fatalf("%s: %d queries, want %d", why, got, want)
+		}
+	}
+	step(0, 1, "first frame")
+	step(4*time.Second, 1, "inside 5 s")
+	step(time.Second, 2, "at 5 s")
+	step(29*time.Second, 2, "inside 30 s")
+	step(time.Second, 3, "at 30 s")
+	step(119*time.Second, 3, "inside 2 min")
+	step(time.Second, 4, "at 2 min")
+	step(119*time.Second, 4, "inside the next 2 min")
+	step(time.Second, 5, "at the next 2 min")
+}
+
+// TestDungeonWorldNameAskAfterReopenedSession: a new session has no backoff state, so a reopened session asks at
+// once again.
+func TestDungeonWorldNameAskAfterReopenedSession(t *testing.T) {
+	s, rec, _ := nameTestSession(t)
+	addUnit(t, s, playerGUID(0x41), 0, 12, 21, 30, 100, 100, 28, 0)
+	(dungeonWorld{s: s}).PlayerGUID("x")
+	(dungeonWorld{s: s}).PlayerGUID("x")
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries in one session, want 1", n)
+	}
+	s2 := newPortSession(rec)
+	s2.nowFn = s.nowFn
+	addUnit(t, s2, playerGUID(0x41), 0, 12, 21, 30, 100, 100, 28, 0)
+	(dungeonWorld{s: s2}).PlayerGUID("x")
+	if n := len(rec.cores()); n != 2 {
+		t.Fatalf("%d queries after a reopened session, want 2", n)
+	}
+}
+
+// TestDungeonWorldNameAskFailedSend: a send that fails is not an ask, so the next frame tries again at once.
+func TestDungeonWorldNameAskFailedSend(t *testing.T) {
+	s, rec, _ := nameTestSession(t)
+	addUnit(t, s, playerGUID(0x51), 0, 12, 21, 30, 100, 100, 28, 0)
+	w := dungeonWorld{s: s}
+	rec.mu.Lock()
+	rec.fail = errors.New("send failed")
+	rec.mu.Unlock()
+	if _, ok := w.PlayerGUID("x"); ok {
+		t.Fatal("found a guid with no answer")
+	}
+	rec.mu.Lock()
+	rec.fail = nil
+	rec.mu.Unlock()
+	w.PlayerGUID("x")
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries after the failed one, want 1 sent now", n)
+	}
+}
+
+// TestDungeonWorldNameCollision: two cached players with one name never resolve to a random one: the roster's guid
+// wins, and with no roster the answer is empty.
+func TestDungeonWorldNameCollision(t *testing.T) {
+	s, _, _ := nameTestSession(t)
+	a, b := playerGUID(0x61), playerGUID(0x62)
+	s.world.SetName(a, "Twin")
+	s.world.SetName(b, "TWIN")
+	w := dungeonWorld{s: s}
+	for range 20 {
+		if g, ok := w.PlayerGUID("twin"); ok {
+			t.Fatalf("a same-name collision picked %v", g)
+		}
+	}
+	s.party.RosterValid = true
+	s.party.Members = map[wire.GUID]*party.Member{b: {GUID: b, Name: "Twin"}}
+	for range 20 {
+		if g, ok := w.PlayerGUID("twin"); !ok || g != b {
+			t.Fatalf("PlayerGUID(twin) = %v %v, want the roster's %v", g, ok, b)
+		}
+	}
+	// A name two members share is no answer either.
+	s.party.Members[a] = &party.Member{GUID: a, Name: "twin"}
+	if g, ok := w.PlayerGUID("twin"); ok {
+		t.Fatalf("a roster collision picked %v", g)
 	}
 }
 

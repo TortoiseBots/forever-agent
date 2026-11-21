@@ -833,6 +833,26 @@ func (w *World) PlayerByName(name string) (wire.GUID, bool) {
 	return wire.EmptyGUID, false
 }
 
+// UniquePlayerByName is PlayerByName for a caller that must not label the wrong player: when two cached players bear
+// the name (a bystander or a namesake from another realm in view, a stale entry of someone who left) it finds none,
+// where PlayerByName returns whichever the map yields first.
+func (w *World) UniquePlayerByName(name string) (wire.GUID, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var found wire.GUID
+	n := 0
+	for guid, have := range w.players {
+		if strings.EqualFold(have, name) {
+			found = guid
+			n++
+		}
+	}
+	if n != 1 {
+		return wire.EmptyGUID, false
+	}
+	return found, true
+}
+
 // SetEntryName caches a creature's name by entry.
 func (w *World) SetEntryName(entry int32, name string) {
 	w.mu.Lock()

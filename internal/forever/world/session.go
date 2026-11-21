@@ -492,9 +492,11 @@ type session struct {
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
 	party *party.State
-	// nameAskAt is when a dungeon port last asked the server for the names of the players in view: the ask waits for
-	// the answer, so a name the model cannot learn is retried at most every dungeonNameAskEvery.
-	nameAskAt time.Time
+	// nameAsks is, per player guid, when a dungeon port last sent a name query for it and how many it has sent: an
+	// unanswered guid is asked again on a growing backoff (nameAskBackoff). Only the session goroutine touches it.
+	nameAsks map[wire.GUID]nameAsk
+	// nowFn replaces the client clock; the tests set a fake so the name backoff runs on a fake clock.
+	nowFn func() time.Time
 	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two
 	// counters are the receive feed's log budget: lines printed, and messages whose line was withheld.
 	addon           *addonmsg.Inbox
@@ -1228,7 +1230,12 @@ func (s *session) SendCtx(ctx context.Context, core uint32, payload []byte) erro
 }
 
 // Now is the client clock the movement time field carries.
-func (s *session) Now() time.Time { return time.Now() }
+func (s *session) Now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
 
 // drain is the one timed wait the session has: it answers server packets until end, applying each. A wait that
 // runs out of time is not an error; a dead or silent link ends it with ErrLinkLost through next. check, when it is
@@ -1313,16 +1320,25 @@ const (
 	maxCreatureQueries = 11
 )
 
-// askPlayerNames sends one CMSG_QUERY_PLAYER_NAMES for the players and waits for the answer that names them: a
-// delayed answer from an earlier round (or an unsolicited one) carries other GUIDs, so only an answer naming this
-// round's players completes the wait, otherwise a stale response would mark entries answered that never were. The
-// answers themselves are applied by the packet handler (world.SetName).
-func (s *session) askPlayerNames(players []wire.GUID) error {
+// sendPlayerNamesQuery sends one CMSG_QUERY_PLAYER_NAMES and does not wait: the answer is applied by the packet
+// handler whenever it arrives.
+func (s *session) sendPlayerNamesQuery(players []wire.GUID) error {
 	if err := s.sendOn(sideInstance, wire.CMSGQueryPlayerNames, objects.BuildQueryPlayerNames(players)); err != nil {
 		return err
 	}
 	s.report.NamesAsked += len(players)
 	s.opts.logf("world: CMSG_QUERY_PLAYER_NAMES for %d player(s)", len(players))
+	return nil
+}
+
+// askPlayerNames sends one CMSG_QUERY_PLAYER_NAMES for the players and waits for the answer that names them: a
+// delayed answer from an earlier round (or an unsolicited one) carries other GUIDs, so only an answer naming this
+// round's players completes the wait, otherwise a stale response would mark entries answered that never were. The
+// answers themselves are applied by the packet handler (world.SetName).
+func (s *session) askPlayerNames(players []wire.GUID) error {
+	if err := s.sendPlayerNamesQuery(players); err != nil {
+		return err
+	}
 	want := make(map[wire.GUID]bool, len(players))
 	for _, g := range players {
 		want[g] = true
