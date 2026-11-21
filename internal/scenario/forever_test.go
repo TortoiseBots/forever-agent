@@ -102,6 +102,18 @@ func TestForeverItemCountSQL(t *testing.T) {
 	}
 }
 
+// TestFileServerKey pins the file-level "server" key: sessions without
+// their own key inherit it, and a bad file value is refused at load.
+func TestFileServerKey(t *testing.T) {
+	f := parseFile(t, `{"scenario":"t","server":"forever","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"steps":[{"do":"mark"}]}`)
+	if f.Server != ServerForever || f.Sessions["A"].Server != ServerForever {
+		t.Fatalf("file server did not inherit: %+v", f)
+	}
+	if _, err := Parse([]byte(`{"scenario":"t","server":"nope","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"steps":[{"do":"mark"}]}`), nil); err == nil {
+		t.Fatal("bad file server accepted")
+	}
+}
+
 // TestTurtleFileUnchanged pins the default: no "server" key means turtle,
 // with the tw_ table names the old SQL renders.
 func TestTurtleFileUnchanged(t *testing.T) {

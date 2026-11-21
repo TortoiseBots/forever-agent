@@ -155,8 +155,11 @@ type Step struct {
 
 // File is a parsed and validated scenario file.
 type File struct {
-	Scenario    string             `json:"scenario"`
-	Description string             `json:"description"`
+	Scenario    string `json:"scenario"`
+	Description string `json:"description"`
+	// Server is the file-level default for sessions and check_db steps
+	// without their own "server" key: "turtle" (the default) or "forever".
+	Server      ServerName         `json:"server"`
 	Sessions    map[string]Session `json:"sessions"`
 	DB          *DBTarget          `json:"db"`
 	Vars        map[string]string  `json:"vars"`
@@ -194,6 +197,7 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 	var raw struct {
 		Scenario    *string            `json:"scenario"`
 		Description *string            `json:"description"`
+		Server      *string            `json:"server"`
 		Sessions    map[string]Session `json:"sessions"`
 		DB          *DBTarget          `json:"db"`
 		Vars        map[string]string  `json:"vars"`
@@ -218,6 +222,16 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 	if raw.Description != nil {
 		f.Description = *raw.Description
 	}
+	if raw.Server != nil {
+		switch *raw.Server {
+		case string(ServerTurtle):
+			f.Server = ServerTurtle
+		case string(ServerForever):
+			f.Server = ServerForever
+		default:
+			return nil, fmt.Errorf("scenario: bad server %q (want turtle or forever)", *raw.Server)
+		}
+	}
 	if len(f.Sessions) == 0 || len(f.Sessions) > 8 {
 		return nil, fmt.Errorf("scenario: need 1-8 sessions, have %d", len(f.Sessions))
 	}
@@ -229,7 +243,10 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 			return nil, err
 		}
 		if s.Server == "" {
-			s.Server = ServerTurtle
+			s.Server = f.Server
+			if s.Server == "" {
+				s.Server = ServerTurtle
+			}
 			f.Sessions[name] = s
 		}
 		if s.Server != ServerTurtle && s.Server != ServerForever {

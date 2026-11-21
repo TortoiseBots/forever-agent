@@ -335,8 +335,12 @@ func dbDesc(s *Step) string {
 // step's session; a step without a session uses the file default.
 func (rr *run) checkDBQuery(s *Step) (DBQuery, error) {
 	q := DBQuery{Op: s.Op, Forever: s.Server == ServerForever}
-	if s.Server == "" && s.Session != "" {
-		if sess, ok := rr.f.Sessions[s.Session]; ok && sess.Server == ServerForever {
+	if s.Server == "" && rr.f != nil {
+		if s.Session != "" {
+			if sess, ok := rr.f.Sessions[s.Session]; ok && sess.Server == ServerForever {
+				q.Forever = true
+			}
+		} else if rr.f.Server == ServerForever {
 			q.Forever = true
 		}
 	}
