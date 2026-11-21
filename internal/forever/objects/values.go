@@ -179,7 +179,13 @@ type Fields struct {
 	Vendor                                                        bool
 	ItemOwner, ContainedIn, StackCount, Durability, MaxDurability bool
 	NumSlots, Slots                                               bool
-	VisibleItems, QuestLog, InvSlots, Coinage                     bool
+	VisibleItems, QuestLog, InvSlots, InvSlotDeltas, Coinage      bool
+	// InvSlotsUndecoded is set when a values update named inventory slots (or their group) next to a field this
+	// client does not decode, so the slot values could not be reached; ActivePlayerSkipped when an ActivePlayerData
+	// update sat behind a PlayerData update (an equipment change) and was not read at all. Neither is merged into
+	// the model: the session reads them from the block to mark the inventory stale or to attribute the update to
+	// its own move.
+	InvSlotsUndecoded, ActivePlayerSkipped bool
 }
 
 // ItemData is the item half of a create or values block (UF::ItemData). It and ContainerData are held by pointer:
@@ -220,7 +226,11 @@ type Player struct {
 	QuestLog     []QuestLogEntry
 	VisibleItems [19]int32
 	InvSlots     [145]wire.GUID
-	Coinage      uint64
+	// InvSlotDeltas are the slots a values update carried, by slot number: a values update sends only the slots
+	// that changed (ActivePlayerData::WriteUpdate, UpdateFields.cpp:7195-7203), and a zero GUID means the slot was
+	// emptied. Nil on a create, which carries every slot.
+	InvSlotDeltas map[int]wire.GUID
+	Coinage       uint64
 }
 
 // item returns the object's item data, allocating it on the first decoded item field.
@@ -1551,6 +1561,192 @@ func (i *Info) readActivePlayerPrefix(b *wire.Buffer) error {
 	i.f.Coinage = true
 	b.Skip(8) // AccountBankCoinage: the prefix this round decodes ends here
 	return b.Err()
+}
+
+// The ActivePlayerData changes mask: fourteen blocks in the Classic numbering, the group bit of the InvSlots array
+// and the bit of its first entry, which move with the realm build (UpdateFields.cpp:5823-5879). The server keeps 108
+// real slots and the client reads 145 (UpdateFields.cpp:5398-5404).
+const (
+	activePlayerMaskBlocks = 14
+	activePlayerInvSlots   = 108
+	// build70291First is the realm build from which the 70291 update-field remap applies, build70425First the one
+	// from which the 70425 remap does (ClassicOpcodes.h, "selects that build's update field layouts").
+	build70291First uint32 = 70291
+	build70425First uint32 = 70425
+)
+
+// activePlayerInvSlotBits returns the Classic mask bit of the InvSlots group and of slot 0, for a realm of the given
+// build. A build this round has no layout for reports false.
+func activePlayerInvSlotBits(realmBuild uint32) (group, base uint32, ok bool) {
+	switch {
+	case realmBuild == 0:
+		return 0, 0, false
+	case realmBuild >= build70425First:
+		// ClassicActivePlayerDataBit: the InvSlots group moves 168 -> 170 and every entry two higher.
+		return 170, 171, true
+	case realmBuild >= build70291First:
+		return 168, 169, true
+	}
+	return 0, 0, false
+}
+
+// The two ActivePlayerData money fields an update can carry next to the slots: Coinage and AccountBankCoinage are
+// uint64 values at the Classic bits 58 and 59 on every layout this client reads (the remaps leave bits up to 120
+// alone, UpdateFields.cpp:5834-5865), and they sit in the group 32 that any of them sets (5818-5880). A purchase, a
+// sale, a loot or a quest reward changes them in the same update as the slots (WriteUpdate order: values 6751-6755
+// come before TransmogMetadata and InvSlots, UpdateFields.cpp:7150-7203).
+const (
+	activePlayerMoneyGroup  uint32 = 32
+	activePlayerCoinageBit  uint32 = 58
+	activePlayerBankCoinBit uint32 = 59
+)
+
+// readActivePlayerUpdate decodes the regions of ActivePlayerData::WriteUpdate this round applies: the InvSlots a
+// move of the character's own items changes, and the Coinage fields that travel with them. The changes mask is the
+// fourteen-block Classic header (WriteClassicChangesMaskHeader, UpdateFields.cpp:1374-1399); the values follow in
+// the structure's own order after the mask and the bit fields, and InvSlots is a run of packed GUIDs
+// (UpdateFields.cpp:7195-7203). Any other set field means this update changes something this round does not walk,
+// so nothing is decoded and the block is left to its declared size (a half-read update is worse than an undecoded
+// one). When that undecoded update also names inventory slots the block says so (Info.InvSlotsUndecoded): the slots
+// it changed are lost, and the session must not stay silent about it.
+func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
+	group, base, ok := activePlayerInvSlotBits(realmBuild)
+	if !ok {
+		i.f.ActivePlayerSkipped = true
+		return nil
+	}
+	// The bits of the one other structure an equipment change carries: TransmogMetadata is stamped for a main-hand or
+	// off-hand swap (Player::SetVisibleItemSlot, Player.cpp:12847-12852) and its update is a fixed 16-byte block
+	// (TransmogOutfitMetadata::WriteCreate, UpdateFields.cpp:5377-5386). Its group bit and child differ per layout
+	// (166/168 from 70425, 166/167 before).
+	metaGroup := uint32(166)
+	metaChild := uint32(168)
+	if realmBuild < build70425First {
+		metaChild = 167
+	}
+	present := b.ReadBits(activePlayerMaskBlocks)
+	var blocks [activePlayerMaskBlocks]uint32
+	for n := range blocks {
+		if present&(1<<uint(n)) != 0 {
+			blocks[n] = b.ReadBits(32)
+		}
+	}
+	if err := b.Err(); err != nil {
+		return fmt.Errorf("active player update mask: %w", err)
+	}
+	// The mask header is followed by the structure's bit fields, if any are set, and only then by a flush. An
+	// update that touches none of them reaches its values at the next byte boundary.
+	var slots []int
+	hasMeta, hasCoinage, hasBankCoin, slotsGroup, other := false, false, false, false, false
+	for n := range blocks {
+		for bit := range 32 {
+			if blocks[n]&(1<<uint(bit)) == 0 {
+				continue
+			}
+			classic := uint32(n)*32 + uint32(bit)
+			switch {
+			case classic == group:
+				slotsGroup = true // group bits are set by any changed child
+			case classic == metaGroup || classic == activePlayerMoneyGroup:
+				continue
+			case classic == metaChild:
+				hasMeta = true
+			case classic == activePlayerCoinageBit:
+				hasCoinage = true
+			case classic == activePlayerBankCoinBit:
+				hasBankCoin = true
+			case classic < base || classic >= base+activePlayerInvSlots:
+				other = true // a field this round does not walk
+			default:
+				slots = append(slots, int(classic-base))
+			}
+		}
+	}
+	if other {
+		// Nothing can be decoded, because the walk does not know the size of the field it cannot name. When the
+		// update also named slots, they are lost: say so.
+		i.f.InvSlotsUndecoded = slotsGroup || len(slots) != 0
+		return nil
+	}
+	if len(slots) == 0 && !hasMeta && !hasCoinage && !hasBankCoin {
+		return nil
+	}
+	// The structure's bit fields come before its values: from build 70425 a present group 166 writes one optional
+	// presence bit, flushed (ActivePlayerData::WriteUpdate, UpdateFields.cpp:5886-5887, 7160-7163). The 70291 layout
+	// writes nothing there.
+	if realmBuild >= build70425First && blocks[metaGroup/32]&(1<<uint(metaGroup%32)) != 0 {
+		b.ReadBit()
+	}
+	b.FlushBits()
+	if hasCoinage {
+		coinage := b.ReadU64()
+		if err := b.Err(); err != nil {
+			return fmt.Errorf("active player update coinage: %w", err)
+		}
+		i.player().Coinage = coinage
+		i.f.Coinage = true
+	}
+	if hasBankCoin {
+		b.Skip(8) // AccountBankCoinage
+	}
+	if hasMeta {
+		// SituationalTrigger u8, TransmogOutfitID u32, StampedOptionMainHand u8, StampedOptionOffHand u8, CostMod
+		// float, then the Locked bit and its flush: eleven value bytes and the flushed bit byte.
+		b.Skip(12)
+	}
+	if err := b.Err(); err != nil {
+		return fmt.Errorf("active player update transmog metadata: %w", err)
+	}
+	if len(slots) == 0 {
+		return b.Err()
+	}
+	deltas := make(map[int]wire.GUID, len(slots))
+	for _, slot := range slots {
+		deltas[slot] = i.guid(b)
+	}
+	if err := b.Err(); err != nil {
+		return fmt.Errorf("active player update slots: %w", err)
+	}
+	i.player().InvSlotDeltas = deltas
+	i.f.InvSlotDeltas = true
+	return nil
+}
+
+// InvSlotsUndecoded reports that this values block named inventory slots next to a field the decoder does not
+// handle, so the slot changes it carried could not be read (readActivePlayerUpdate).
+func (i *Info) InvSlotsUndecoded() bool { return i.f.InvSlotsUndecoded }
+
+// ActivePlayerSkipped reports that this values block carried an ActivePlayerData update the decoder never reached:
+// an equipment change writes a PlayerData update first, whose values this round does not read.
+func (i *Info) ActivePlayerSkipped() bool { return i.f.ActivePlayerSkipped }
+
+// ChangedContainerSlots returns the bag slots a ContainerData values update carried (the slot index inside the bag,
+// and the GUID now there, zero for an emptied slot), and whether it carried any.
+func (i *Info) ChangedContainerSlots() (map[int]wire.GUID, bool) {
+	if i.Container == nil || !i.Container.delta {
+		return nil, false
+	}
+	var out map[int]wire.GUID
+	for n, changed := range i.Container.changed {
+		if !changed {
+			continue
+		}
+		if out == nil {
+			out = map[int]wire.GUID{}
+		}
+		out[n] = i.Container.Slots[n]
+	}
+	return out, out != nil
+}
+
+// ChangedInvSlots returns the item slots a values block carried, and whether it carried any. A create carries the
+// whole array as InvSlots instead, and reports false here. The session feeds these to the live inventory: they are
+// the server's own word on where the character's items are after a move it accepted.
+func (i *Info) ChangedInvSlots() (map[int]wire.GUID, bool) {
+	if !i.f.InvSlotDeltas || i.Player == nil || len(i.Player.InvSlotDeltas) == 0 {
+		return nil, false
+	}
+	return i.Player.InvSlotDeltas, true
 }
 
 // readItemCreate is ItemData::WriteCreate (UpdateFields.cpp:268-331) in declaration order. owner is the block's
