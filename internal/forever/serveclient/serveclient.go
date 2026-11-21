@@ -300,17 +300,20 @@ type CombatActor struct {
 
 // CombatRow is one row of the daemon's combat log (events): Time is the wall
 // clock text with milliseconds and its offset, MonoMS the process's steady
-// axis. Reason is set on a spell_fail only.
+// axis. Reason is set on a spell_fail only. SpellName is the server's own
+// name for SpellID when the daemon resolved it (empty otherwise; SpellID is
+// the fallback).
 type CombatRow struct {
-	Seq     int         `json:"seq"`
-	Kind    string      `json:"kind"`
-	Time    string      `json:"time"`
-	MonoMS  int64       `json:"mono_ms"`
-	Source  CombatActor `json:"source"`
-	Target  CombatActor `json:"target"`
-	SpellID int32       `json:"spell_id"`
-	Amount  int32       `json:"amount"`
-	Reason  string      `json:"reason,omitempty"`
+	Seq       int         `json:"seq"`
+	Kind      string      `json:"kind"`
+	Time      string      `json:"time"`
+	MonoMS    int64       `json:"mono_ms"`
+	Source    CombatActor `json:"source"`
+	Target    CombatActor `json:"target"`
+	SpellID   int32       `json:"spell_id"`
+	Amount    int32       `json:"amount"`
+	Reason    string      `json:"reason,omitempty"`
+	SpellName string      `json:"spell_name,omitempty"`
 }
 
 // EventsPage is one events answer: the rows above since, oldest first, and
