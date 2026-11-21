@@ -11,7 +11,9 @@ Everything below was checked in ForeverCore at d02645dd21 (`git show d02645dd21:
 (`set2` vendor and quest logs) were read once to check the layouts; the capture checks print counts only, and no
 capture byte, GUID, name or file name is in the repository. Fixtures are hand-made from the core's writers.
 
-Status: (filled in below when the rounds are done)
+Status: both rounds are implemented, tested against the fake world and the private captures, and committed (`6db81e49`
+R3, `be9b52ed` R5, `149c6d30` the last two unused declarations removed). The gates below are on `149c6d30`. **No live
+run yet**: the live checks for the lead's queue are at the end, and the notes quote the RESULT line of the VM suite.
 
 ## R3: the vendor
 
@@ -217,4 +219,21 @@ own rows read between the stages.
 
 ## Gate lines
 
-(filled in)
+All on the clean committed tree `149c6d30` (`git status` empty before each run).
+
+* `make fmt-check`: no output, exit 0 (its success line is silence).
+* `make cross`: the Windows and Darwin cross builds and the Windows vet of `./cmd/... ./internal/forever/...`
+  passed.
+* `staticcheck ./...`: `rc=0`, no findings (the two it found — R0's unused quest-greeting bound after the parser
+  moved, and `session.vendorCoinage` — were removed in `149c6d30`).
+* `go test -race -count=1 -timeout 20m ./internal/forever/items/ ./internal/forever/quest/ ./internal/forever/npc/
+  ./internal/forever/wire/`: `ok` for all four (1.419s, 1.470s, 1.641s, 1.595s).
+* `go test -race -count=1 -timeout 20m -run 'TestVendor|TestQuest|TestQuests|TestAct|TestInventory|TestItem|TestCoinage'
+  ./internal/forever/world/`: `ok  github.com/pjerra/forever-agent/internal/forever/world  10.931s`.
+* `vm-test ta ~/wt-fa-wr3`:
+  `RESULT: PASS  kind=ta wt=wt-fa-wr3 sha=149c6d30 dirty=0 files=2391` (`rc=0  vm_duration=1697s`).
+* Capture checks (not in CI, run once each against the private sets): the two lines quoted at the end of the R3 and
+  R5 sections.
+
+This notes-only commit comes after the gate: it changes no Go file, so `149c6d30` is the code state the result line
+names.
