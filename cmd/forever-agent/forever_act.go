@@ -18,7 +18,7 @@ import (
 )
 
 func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever act [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--steps FILE | --step 'verb k=v'...]"
+	const usage = "usage: forever-agent forever act [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--steps FILE | --step 'verb k=v'...] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever act", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -27,6 +27,7 @@ func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 	stepsFile := fs.String("steps", "", "file of act steps, one 'verb k=v' per line (JSON lines: verb plus k=v pairs)")
 	var steps repeatStep
 	fs.Var(&steps, "step", "one act step, e.g. --step 'npc entry=1234' (repeatable; run in order)")
+	captureDir := fs.String("capture-dir", "", "write the packets this run's handlers see into a new run directory under this path (keep it outside the repository)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -77,9 +78,10 @@ func foreverActCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 
 	report, err := common.enter(ctx, "forever act", stdout, world.Options{
-		Act:      script,
-		Settle:   *stay,
-		Deadline: 5 * time.Minute,
+		Act:        script,
+		Settle:     *stay,
+		Deadline:   5 * time.Minute,
+		CaptureDir: *captureDir,
 	})
 	if report != nil {
 		printLinkLost(stdout, report)

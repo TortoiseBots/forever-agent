@@ -63,7 +63,7 @@ func TestCollectorRoundTrip(t *testing.T) {
 	guids := Guids{Player: "0x0000000000000001", Bot: "0x0000000000000002",
 		Mobs: []string{"0xf130000aae3d0d9b"}}
 	client := NewClient(fake.rpc())
-	collect := NewCollector(client, repDir, marks, guids, nil)
+	collect := NewCollector(client, repDir, marks, &guids, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	collect.Start(ctx)
 	time.Sleep(2500 * time.Millisecond)
@@ -119,7 +119,7 @@ func TestCollectorRoundTrip(t *testing.T) {
 // refused, template lines pass.
 func TestGuardRefusesRaw(t *testing.T) {
 	fake := newFakeServe(t)
-	g := NewGuard(NewClient(fake.rpc()), GuardOptions{})
+	g := NewGuard(NewClient(fake.rpc()), GuardOptions{PlayerGUID: "0x1", Summons: func() []string { return []string{"0x2"} }})
 	ctx := context.Background()
 	for _, line := range []string{".npc delete", ".reset all", ".tb run stop", ".respawn", ".bot stop"} {
 		if err := g.SendText(ctx, line, TargetNone, ""); err == nil {
@@ -285,7 +285,7 @@ func TestPumpDedupeAndDropped(t *testing.T) {
 	repDir := t.TempDir()
 	marks := NewMarks(filepath.Join(repDir, "marks.jsonl"))
 	marks.Start("")
-	collect := NewCollector(NewClient(fake.rpc()), repDir, marks, Guids{}, nil)
+	collect := NewCollector(NewClient(fake.rpc()), repDir, marks, &Guids{}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	collect.Start(ctx)
 	time.Sleep(1500 * time.Millisecond)
@@ -354,7 +354,7 @@ func TestRepeatLostOnDisconnect(t *testing.T) {
 	repDir := t.TempDir()
 	marks := NewMarks(filepath.Join(repDir, "marks.jsonl"))
 	marks.Start("")
-	collect := NewCollector(NewClient(fake.rpc()), repDir, marks, Guids{}, nil)
+	collect := NewCollector(NewClient(fake.rpc()), repDir, marks, &Guids{}, nil)
 	collect.OnLost(func(reason string) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	collect.Start(ctx)

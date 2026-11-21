@@ -2,6 +2,8 @@ package live
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,16 +17,29 @@ import (
 )
 
 // writeTestSlots writes a one-slot slots file with the permission bits
-// slots.Load demands.
+// slots.Load demands. The port comes from a listener opened and closed here:
+// a fixed one collides with a real serve listening on this machine.
 func writeTestSlots(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	doc := `{"version":1,"servers":[{"name":"s1","realmd":"127.0.0.1:3724","slots":[{"id":"1","account":"a","character":"Atank","port":18790,"settings_from":"x"}]}]}`
+	doc := fmt.Sprintf(`{"version":1,"servers":[{"name":"s1","realmd":"127.0.0.1:3724","slots":[{"id":"1","account":"a","character":"Atank","port":%d,"settings_from":"x"}]}]}`, freePort(t))
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// freePort is a loopback port nothing listens on right now.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
 }
 
 func loadTestSlots(t *testing.T, path string) *slots.Config {

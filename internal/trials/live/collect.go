@@ -70,7 +70,7 @@ type Collector struct {
 	client  *Client
 	repDir  string
 	marks   *Marks
-	guids   Guids
+	guids   *Guids
 	ledger  *Ledger
 	rawPath string
 	samples string
@@ -82,18 +82,30 @@ type Collector struct {
 	samplesN  int
 	lost      string
 	onLost    func(reason string)
-	tickHooks []func(sample map[string]any)
+	tickHooks []tickHook
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
+
+	last     map[string]any
+	hookNext int
 }
 
 // NewCollector returns the collector for repDir; guids is the setup.json
-// guid table (GuidsOf), ledger may be nil.
-func NewCollector(client *Client, repDir string, marks *Marks, guids Guids, ledger *Ledger) *Collector {
+// guid table (GuidsOf), ledger may be nil. The table is held by pointer: the
+// situation adds the guids of the mobs it summons mid-repeat, and the
+// sampler must see them.
+func NewCollector(client *Client, repDir string, marks *Marks, guids *Guids, ledger *Ledger) *Collector {
 	return &Collector{client: client, repDir: repDir, marks: marks, guids: guids,
 		ledger: ledger, rawPath: filepath.Join(repDir, "raw-ta.jsonl"),
 		samples: filepath.Join(repDir, "samples.jsonl"), seq: map[any]bool{}}
+}
+
+// SetGuids points the collector at the repeat's guid table.
+func (c *Collector) SetGuids(g *Guids) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.guids = g
 }
 
 // OnLost sets the hook the pump and sampler call once with the reason.
@@ -103,11 +115,41 @@ func (c *Collector) OnLost(fn func(reason string)) {
 	c.onLost = fn
 }
 
-// TickHook adds a sampler hook (situation governors observe through it).
-func (c *Collector) TickHook(fn func(sample map[string]any)) {
+// tickHook is one sampler hook with its handle: function values cannot be
+// compared, so removal matches the handle.
+type tickHook struct {
+	id int
+	fn func(sample map[string]any)
+}
+
+// TickHook adds a sampler hook (situation governors observe through it)
+// and returns its handle for RemoveTickHook.
+func (c *Collector) TickHook(fn func(sample map[string]any)) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tickHooks = append(c.tickHooks, fn)
+	c.hookNext++
+	c.tickHooks = append(c.tickHooks, tickHook{id: c.hookNext, fn: fn})
+	return c.hookNext
+}
+
+// RemoveTickHook drops a hook added by TickHook; an unknown handle is a
+// no-op.
+func (c *Collector) RemoveTickHook(id int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.tickHooks {
+		if c.tickHooks[i].id == id {
+			c.tickHooks = append(c.tickHooks[:i], c.tickHooks[i+1:]...)
+			return
+		}
+	}
+}
+
+// LastSample is the sampler's latest compact sample (nil before the first).
+func (c *Collector) LastSample() map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
 }
 
 // Lost is the disconnect reason, "" while the session lives.
@@ -276,10 +318,11 @@ func (c *Collector) sample(ctx context.Context) {
 		}
 		c.mu.Lock()
 		c.samplesN += len(rows)
-		hooks := append([]func(map[string]any){}, c.tickHooks...)
+		c.last = sample
+		hooks := append([]tickHook(nil), c.tickHooks...)
 		c.mu.Unlock()
 		for _, hook := range hooks {
-			hook(sample)
+			hook.fn(sample)
 		}
 		_ = begin
 	}
@@ -352,15 +395,19 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 		row(label, strings.ToLower(guid), m, u.InCombat, strings.ToLower(u.Target), u.Raw["x"], u.Raw["y"], u.Raw["z"])
 		return u, true
 	}
-	botUnit, botOK := unitRow("bot", "bot", c.guids.Bot)
-	_, _ = unitRow("pet", "pet", c.guids.Pet)
+	guids := Guids{}
+	if c.guids != nil {
+		guids = *c.guids
+	}
+	botUnit, botOK := unitRow("bot", "bot", guids.Bot)
+	_, _ = unitRow("pet", "pet", guids.Pet)
 	extras := map[int]Unit{}
-	for i, g := range c.guids.Extras {
+	for i, g := range guids.Extras {
 		if u, ok := unitRow("extra", "extra"+itoa(i+1), g); ok {
 			extras[i+1] = u
 		}
 	}
-	for _, g := range c.guids.Mobs {
+	for _, g := range guids.Mobs {
 		unitRow("mob", "mob:"+strings.ToLower(g), g)
 	}
 	sample := map[string]any{
@@ -370,7 +417,7 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 	if botOK {
 		sample["bot"] = compactSample(botUnit.Health, botUnit.MaxHealth, botUnit.Raw["auras"], botUnit.InCombat, botUnit.Dead)
 	}
-	for i, g := range c.guids.Extras {
+	for i, g := range guids.Extras {
 		_ = g
 		if u, ok := extras[i+1]; ok {
 			sample["extra"+itoa(i+1)] = compactSample(u.Health, u.MaxHealth, u.Raw["auras"], u.InCombat, u.Dead)
