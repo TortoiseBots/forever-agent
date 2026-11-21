@@ -416,6 +416,7 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.mapChg.report = true
 	s.mapChg.last = MapChangeRow{FromMap: from, ToMap: nw.MapID, Reason: nw.Reason, Position: pos}
 
+	s.eventSession("map_change", map[string]any{"from": from, "to": nw.MapID, "reason": nw.Reason})
 	s.report.MapID = nw.MapID
 	s.report.Position = pos
 	s.report.WalkClientPos = pos

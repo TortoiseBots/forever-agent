@@ -14,12 +14,11 @@
 // The client only ever talks to a loopback address, and sends the bearer
 // token nowhere else (no redirect is followed).
 //
-// Methods the daemon on main registers today: status, units, unit, party, gm,
-// bot, events, event_log, logout. Act (act) and Teardown (teardown) need W3/W2:
-// the daemon has no act yet and answers teardown with the not-ported -32003.
-// Events reads the combat log the daemon serves, EventLog reads its chat rows
-// (the chat log under the events.Event keys), and Commander runs on the daemon too. A test in internal/forever/world pins
-// the daemon's table so the day those methods land the pin flips.
+// Methods the daemon registers today: status, units, unit, party, gm, bot,
+// events, logout, commander, and since serve W2-W4 event_log (EventLog), act
+// (Act) and teardown (Teardown). Events reads the combat log; EventLog the
+// session's one ordered stream. A test in internal/forever/world pins the
+// daemon's table and decodes each of these methods against the real daemon.
 package serveclient
 
 import (
@@ -41,6 +40,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // ErrReconnecting is a call the daemon answered with -32005 past the retry
@@ -216,6 +216,8 @@ type Unit struct {
 	Casting    bool    `json:"casting,omitempty"`
 	SpellID    int32   `json:"spell_id,omitempty"`
 	Auras      []Aura  `json:"auras"`
+	// MountDisplayID is the unit's own UNIT_FIELD_MOUNTDISPLAYID: non-zero while it is mounted.
+	MountDisplayID int32 `json:"mount_display_id,omitempty"`
 }
 
 // Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).
@@ -290,7 +292,7 @@ type Command struct {
 	End      string   `json:"end,omitempty"`
 }
 
-// Event is one event_log row (the daemon serves the chat log's rows): the internal/events Event JSON keys, guids as
+// Event is one event_log row: the internal/events Event JSON keys, guids as
 // 0x and 32 hex digits.
 type Event struct {
 	Seq        uint64         `json:"seq"`
@@ -309,14 +311,18 @@ type Event struct {
 	Data       map[string]any `json:"data,omitempty"`
 }
 
-// EventLogPage is one event_log answer: the rows above since, oldest first,
-// and the ring's bounds. Oldest is zero when the daemon omits it.
+// EventLogPage is one event_log answer: the rows above since, oldest first.
+// Dropped is how many events fell out of the ring above since, More says
+// another page follows. Epoch names the log's life (a daemon restart is a new
+// log) and Reset says the cursor was above the log's seq, so the page starts at
+// the beginning of the new log.
 type EventLogPage struct {
 	Events  []Event `json:"events"`
 	Next    uint64  `json:"next"`
-	Oldest  uint64  `json:"oldest"`
-	Dropped bool    `json:"dropped"`
 	More    bool    `json:"more"`
+	Dropped int     `json:"dropped"`
+	Epoch   string  `json:"epoch"`
+	Reset   bool    `json:"reset,omitempty"`
 }
 
 // CombatActor is one side of a combat row, as the daemon's events method
@@ -393,85 +399,15 @@ type CommanderParams struct {
 	WaitMS  int      `json:"wait_ms,omitempty"`
 }
 
-// CommanderResult is the commander method's answer, in the daemon's own shape (world.ServeCommander): the lines
-// that went out, the module's per-bot lines, the binding card of a mutation's own read or every card of a status,
-// the waited order states ("ok" or "fail:<code>" per bot) and a run verb's records. A refusal is the RPC error
-// instead, whose Data carries the same shape.
+// CommanderResult is the commander method's answer: the line sent, the
+// module's reply, the typed outcome of a loot/open/use/lootmethod order, and
+// the daemon's decode of the module's status report ({op:status}) as raw
+// JSON: it has one card per commander, so callers decode the cards they read.
 type CommanderResult struct {
-	Self       string            `json:"self,omitempty"`
-	Sent       []string          `json:"sent,omitempty"`
-	Bots       []CommanderBot    `json:"bots,omitempty"`
-	Card       *CommanderCard    `json:"card,omitempty"`
-	Cards      []CommanderCard   `json:"cards,omitempty"`
-	Final      map[string]string `json:"final"`
-	PartyError string            `json:"party_error,omitempty"`
-	Notes      []string          `json:"notes,omitempty"`
-}
-
-// CommanderBot is one bot's line of a commander answer.
-type CommanderBot struct {
-	Bot    string `json:"bot"`
-	Status string `json:"status"` // queued, refused, stored, bound, joined
-	Seq    int    `json:"seq,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Msg    string `json:"msg,omitempty"`
-}
-
-// CommanderPos is a map position.
-type CommanderPos struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
-}
-
-// CommanderMember is one bound bot of a card; the lead comes first.
-type CommanderMember struct {
-	Bot       string        `json:"bot"`
-	GUID      string        `json:"guid"`
-	Class     string        `json:"class"`
-	Role      string        `json:"role"`
-	Level     int           `json:"level"`
-	HP        int64         `json:"hp"`
-	MaxHP     int64         `json:"max_hp"`
-	Power     int64         `json:"power"`
-	MaxPower  int64         `json:"max_power"`
-	PowerType string        `json:"power_type,omitempty"`
-	Alive     bool          `json:"alive"`
-	Lead      bool          `json:"lead"`
-	Map       uint32        `json:"map"`
-	Zone      int           `json:"zone"`
-	Pos       *CommanderPos `json:"pos,omitempty"` // nil: the member has no position
-}
-
-// CommanderRun is the run record of a card.
-type CommanderRun struct {
-	Lead    string `json:"lead"`
-	Plan    string `json:"plan"`
-	State   string `json:"state"`
-	Step    int    `json:"step"`
-	Steps   int    `json:"steps"`
-	Leg     *int   `json:"leg,omitempty"`
-	LegName string `json:"leg_name,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	Phase   string `json:"phase,omitempty"`
-	Note    string `json:"note,omitempty"`
-	Elapsed int    `json:"elapsed"`
-	Deaths  int    `json:"deaths"`
-	Wipes   int    `json:"wipes"`
-}
-
-// CommanderCard is one commander's binding card.
-type CommanderCard struct {
-	Cmd     string            `json:"cmd"`
-	Online  bool              `json:"online"`
-	Lead    string            `json:"lead"`
-	Bound   int               `json:"bound"`
-	Bots    int               `json:"bots"`
-	InParty bool              `json:"in_party"`
-	Map     *uint32           `json:"map,omitempty"`
-	Pos     *CommanderPos     `json:"pos,omitempty"`
-	Members []CommanderMember `json:"members,omitempty"`
-	Run     *CommanderRun     `json:"run,omitempty"`
+	Sent   string           `json:"sent"`
+	Reply  tbm.Reply        `json:"reply"`
+	Order  *tbm.OrderResult `json:"order,omitempty"`
+	Status json.RawMessage  `json:"status,omitempty"`
 }
 
 // Logout is a logout call's answer.
@@ -490,9 +426,13 @@ type TeardownStep struct {
 }
 
 // Teardown is a teardown call's answer: every step ran, even after a failed
-// one.
+// one. Failed counts the failed steps, DryRun says nothing was sent.
 type Teardown struct {
-	Steps []TeardownStep `json:"steps"`
+	Steps     []TeardownStep `json:"steps"`
+	Failed    int            `json:"failed,omitempty"`
+	Seconds   float64        `json:"seconds,omitempty"`
+	Character string         `json:"character,omitempty"`
+	DryRun    bool           `json:"dry_run,omitempty"`
 }
 
 // Client is a typed client of one serve daemon.
@@ -809,8 +749,7 @@ func (c *Client) Events(ctx context.Context, since, limit, waitMS int) (EventsPa
 	return page, err
 }
 
-// EventLog drains one event_log page (the daemon's chat rows; the combat log
-// is Events): wait_ms up to 2000, limit up to 1000.
+// EventLog drains one event_log page: wait_ms up to 2000, limit up to 1000.
 func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) (EventLogPage, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
@@ -827,7 +766,7 @@ func (c *Client) EventLog(ctx context.Context, since uint64, limit, waitMS int) 
 	return page, err
 }
 
-// Act (needs W3: the daemon on main has no act) runs steps (one `verb k=v` line each, as forever act takes them) in
+// Act runs steps (one `verb k=v` line each, as forever act takes them) in
 // order on the session goroutine and returns the step lines and whether
 // every step ran. timeout bounds the whole run on the daemon (at most 600 s)
 // and the call waits that long plus a margin.
@@ -863,9 +802,8 @@ func (c *Client) Logout(ctx context.Context) (Logout, error) {
 	return out, err
 }
 
-// Teardown (needs W2: the daemon on main answers -32003 not ported) ends the game presence best-effort, step by step (gm off, on or
-// keep for the GM line); the daemon stops. Every step runs even after a
-// failed one.
+// Teardown ends the game presence best-effort, step by step (the follow loop, then gm off, on or keep for the GM
+// line, then the logout); the daemon stops. Every step runs even after a failed one.
 func (c *Client) Teardown(ctx context.Context, gm string) (Teardown, error) {
 	var res Teardown
 	err := c.call(ctx, "teardown", map[string]string{"gm": gm}, &res, 120*time.Second)

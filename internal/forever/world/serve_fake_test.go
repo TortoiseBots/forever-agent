@@ -42,7 +42,28 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	// This character's create block (the model's self) and one creature five yards east, from the committed
 	// creature fixture.
 	c.writeFrame(fakeSMSGUpdateObject, fakeCreateBlockType(f.clientGUID, 0, 1000, 2000, 50, 7, 6))
-	targetPayload := patchFloats(f.t, loadObjectFixture(f.t, "create_creature"), 1000, 1005)
+	if f.serveMounted {
+		c.writeFrame(fakeSMSGUpdateObject, buildMountValues(guid, 14338))
+	}
+	leaderX := f.serveLeaderX
+	if leaderX == 0 {
+		leaderX = 1005
+	}
+	f.mu.Lock()
+	known := append([]int32(nil), f.serveKnownSpells...)
+	f.mu.Unlock()
+	if len(known) > 0 {
+		w := wire.NewWriter()
+		w.WriteBits(1, 1)
+		w.FlushBits()
+		w.WriteU32(uint32(len(known)))
+		w.WriteU32(0)
+		for _, id := range known {
+			w.WriteU32(uint32(id))
+		}
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSendKnownSpells), w.Bytes())
+	}
+	targetPayload := patchFloats(f.t, loadObjectFixture(f.t, "create_creature"), 1000, leaderX)
 	targetUpdate, err := objects.ParseUpdateObject(targetPayload)
 	if err != nil || len(targetUpdate.Blocks) != 1 {
 		f.failf("serve: the creature fixture: %v", err)
@@ -50,6 +71,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	}
 	target := targetUpdate.Blocks[0].GUID
 	c.writeFrame(fakeSMSGUpdateObject, targetPayload)
+	if f.serveLeaderName != "" {
+		// The fixture creature is entry 1: name it, so a follow can resolve it as the leader.
+		c.writeFrame(table.TranslateServerCore(wire.SMSGCreatureQueryResponse), fakeCreatureNamed([]uint32{1}, f.serveLeaderName))
+	}
 	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "SERVE-SYSTEM"))
 	f.mu.Lock()
 	eventsBurst, eventsOne, auraBurst := f.serveEventsBurst, f.serveEventsOne, f.serveAuraBurst
@@ -115,8 +140,12 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		case wire.CMSGAttackSwing:
 			f.mu.Lock()
 			f.serveSwing = true
+			melee := f.serveSwingMelee
 			f.mu.Unlock()
 			c.writeFrame(table.TranslateServerCore(wire.SMSGAttackStart), buildAttackStart(guid, target))
+			if melee {
+				c.writeFrame(table.TranslateServerCore(wire.SMSGAttackerStateUpdate), buildAttackerStateUpdate(target, guid, 7))
+			}
 			if !f.serveNoKill {
 				c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))
 			}
@@ -134,8 +163,27 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			spell := r.ReadI32()
 			f.mu.Lock()
 			f.serveCast = true
+			f.serveCasts++
+			mountCast := f.serveMountCast
+			mountResult, mountDisplay := f.serveMountResult, f.serveMountDisplay
 			f.mu.Unlock()
+			if mountCast {
+				c.writeFrame(table.TranslateServerCore(wire.SMSGSpellGo), buildSpellGo(guid, guid, castID, spell, 0, combat.SpellTarget{Unit: guid}))
+				if mountResult != 0 {
+					res := wire.NewWriter()
+					res.WriteI32(mountResult)
+					c.writeFrame(table.TranslateServerCore(wire.SMSGMountResult), res.Bytes())
+				} else if mountDisplay != 0 {
+					c.writeFrame(fakeSMSGUpdateObject, buildMountValues(guid, mountDisplay))
+				}
+				continue
+			}
 			c.writeFrame(table.TranslateServerCore(wire.SMSGCastFailed), buildCastFailed(castID, spell, 1))
+		case wire.CMSGCancelMountAura:
+			f.mu.Lock()
+			f.serveCancelMount = true
+			f.mu.Unlock()
+			c.writeFrame(fakeSMSGUpdateObject, buildMountValues(guid, 0))
 		case wire.CMSGChatMessageSay:
 			_, _, said, err := parseClientChatMessage(payload)
 			if err != nil {
@@ -237,6 +285,7 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		case wire.CMSGLogoutRequest:
 			f.mu.Lock()
 			f.serveLogout = true
+			f.serveOrder = append(f.serveOrder, "logout")
 			f.mu.Unlock()
 			f.fakeLogout(c, realm)
 			return
@@ -715,7 +764,7 @@ func TestServeNotPortedAndUnknown(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 
 	a.mustFail(t, "trade", map[string]any{}, -32003, "not ported on this server")
-	a.mustFail(t, "teardown", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "teleport", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
 
@@ -1418,6 +1467,40 @@ func TestServeStopAttackHoldsTheLifecycleLock(t *testing.T) {
 	if rt.stopFight.Load() {
 		t.Fatal("the fast path wrote the stop flag of a session already reconnecting")
 	}
+}
+
+// fakeCreatureNamed is a creature query answer with a found result named name for every entry, in the layout
+// objects.ParseCreatureQueryResponse reads (QueryPackets.cpp:64-151).
+func fakeCreatureNamed(entries []uint32, name string) []byte {
+	out := wire.NewWriter()
+	out.WriteBits(uint64(len(entries)), 6)
+	out.FlushBits()
+	for _, e := range entries {
+		out.WriteU32(e)
+		out.WriteU8(0)
+		out.WriteBits(0, 11) // title
+		out.WriteBits(0, 11) // title alt
+		out.WriteBits(0, 6)  // cursor name
+		out.WriteBits(0, 1)  // leader
+		for n := range 4 {
+			if n == 0 {
+				out.WriteBits(uint64(len(name)+1), 11)
+			} else {
+				out.WriteBits(0, 11)
+			}
+			out.WriteBits(0, 11)
+		}
+		out.FlushBits()
+		out.WriteBytes([]byte(name))
+		out.WriteU8(0)
+		out.WriteBytes(make([]byte, 12+1+4+1+8)) // flags, type, family, classification, proxy ids
+		out.WriteU32(0)                          // displays
+		out.WriteBytes(make([]byte, 4+8))        // total probability, hp/energy multipliers
+		out.WriteU32(0)                          // quest items
+		out.WriteU32(0)                          // quest currencies
+		out.WriteBytes(make([]byte, 32))         // movement info .. widget set
+	}
+	return out.Bytes()
 }
 
 // ---- the commander method (round C3) ----

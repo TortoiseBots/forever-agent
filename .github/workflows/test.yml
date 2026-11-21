@@ -1,7 +1,7 @@
 name: test
 
-# Gate for dev and main: every PR (to dev, main or a stacked feature branch) and every push runs the
-# job `test`; branch protection on dev and main requires it. A push to a ci/** branch runs it too, so a worker can
+# Gate for dev and main: every PR (to dev, main or a stacked feature branch) and every push runs these jobs and ends
+# in the job `test`, which passes only when all of them did; branch protection on dev and main requires `test`. A push to a ci/** branch runs it too, so a worker can
 # run the full CI without a PR (docs/CI.md).
 on:
   push:
@@ -16,11 +16,19 @@ concurrency:
 permissions:
   contents: read
 
+# The Makefile sets the same: the toolchain is the one setup-go installed from go.mod, never a download.
+env:
+  GOTOOLCHAIN: local
+
 jobs:
-  test:
+  # Everything but the race tests: formatting, vet, builds for the three targets, staticcheck and the differential table.
+  lint:
     # Draft PRs are work in progress; CI runs when the PR is marked ready.
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    env:
+      # Pinned: a new staticcheck release must not turn an unrelated PR red.
+      STATICCHECK_VERSION: 2026.2.2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,10 +43,14 @@ jobs:
           cache-dependency-path: go.mod
 
       # The Makefile defaults to a Go under $HOME/.local/go; point it at the runner's Go.
-      # fmt-check, vet and `go test -race` need no secrets: the tests use fakes and the
-      # committed, scrubbed fixtures.
-      - name: gofmt, go vet, no-cgo build, go test -race
-        run: make GOROOT_LOCAL="$(go env GOROOT)" fmt-check vet test
+      - name: gofmt, go vet, no-cgo build
+        run: make GOROOT_LOCAL="$(go env GOROOT)" fmt-check vet nocgo
+
+      # The scripts that split the race tests into shards check themselves here.
+      - name: shard scripts self-test
+        run: |
+          tools/ci/shard-tests.sh selftest
+          tools/ci/shard-pkgs.sh selftest
 
       # Compile for the two other targets the README names and vet the Windows test files (make cross; about 40 s
       # with an empty build cache, seconds warm). The Unix-only pieces of the raid commands and their tests sit
@@ -85,14 +97,155 @@ jobs:
             exit 1
           fi
 
-      # Pinned: a new staticcheck release must not turn an unrelated PR red. No checks are disabled; a false positive
-      # is a single `-check` in a commented staticcheck.conf, never a whole category.
+      # The staticcheck binary is cached on the pinned version and the Go version in go.mod (the binary is built
+      # with that Go); a cache hit skips the `go install`. No checks are disabled; a false positive is a single
+      # `-check` in a commented staticcheck.conf, never a whole category.
+      - name: staticcheck binary cache
+        id: sc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/staticcheck-bin
+          key: staticcheck-${{ env.STATICCHECK_VERSION }}-${{ runner.os }}-${{ hashFiles('go.mod') }}
+
       - name: staticcheck
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
-          "$(go env GOPATH)/bin/staticcheck" ./...
+          set -euo pipefail
+          if [ "${{ steps.sc-cache.outputs.cache-hit }}" != "true" ]; then
+            GOBIN="$RUNNER_TEMP/staticcheck-bin" go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          fi
+          "$RUNNER_TEMP/staticcheck-bin/staticcheck" ./...
 
-      # `make test` builds the navmesh engine through cgo (the runner has g++) and runs the navmesh tests, which
+      # `go test` builds the navmesh engine through cgo (the runner has g++) and runs the navmesh tests, which
       # skip without mmaps. This builds the real binary with cgo explicitly.
       - name: cgo build
         run: CGO_ENABLED=1 make GOROOT_LOCAL="$(go env GOROOT)" build
+
+  # `go test -race` for the whole module, in 9 parallel jobs (3 groups x 3 shards):
+  #   cmd, world  the two long packages, cmd/forever-agent (about 1500 top-level tests, 8-10 minutes under -race) and
+  #               internal/forever/world (about 430, about 10 minutes), split by test name: tools/ci/shard-tests.sh
+  #               sorts the names and deals them round robin;
+  #   rest        every other package, split by package: tools/ci/shard-pkgs.sh packs them by the seconds in
+  #               tools/ci/pkg-times.txt (greedy, longest first; a package missing there goes to the lightest shard).
+  # Each shard uploads what its log shows ran (test names, or packages for rest); race-shards-check compares the union
+  # to the full list. The tests need no secrets: they use fakes and the committed, scrubbed fixtures.
+  race-shards:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [cmd, world, rest]
+        shard: [0, 1, 2]
+    env:
+      SHARDS: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      # Same flags as `make test` (the package timeout is 20m there too), run through the shard's own selection.
+      - name: go test -race (${{ matrix.group }}, shard ${{ matrix.shard }} of 3)
+        run: |
+          set -euo pipefail
+          group="${{ matrix.group }}"
+          shard="${{ matrix.shard }}"
+          mkdir -p "$RUNNER_TEMP/ran"
+          case "$group" in
+            cmd | world)
+              pkg="./cmd/forever-agent"
+              if [ "$group" = world ]; then pkg="./internal/forever/world"; fi
+              tools/ci/shard-tests.sh list "$pkg" >"$RUNNER_TEMP/all.txt"
+              re="$(tools/ci/shard-tests.sh regex "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt")"
+              echo "$pkg shard $shard of $SHARDS: $(tools/ci/shard-tests.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" | wc -l) of $(wc -l <"$RUNNER_TEMP/all.txt") tests"
+              # -v so that the log shows every top-level test that started.
+              go test -race -count=1 -timeout 20m -v -run "$re" "$pkg" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              ;;
+            rest)
+              tools/ci/shard-pkgs.sh list >"$RUNNER_TEMP/all.txt"
+              tools/ci/shard-pkgs.sh load "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt
+              tools/ci/shard-pkgs.sh shard "$shard" "$SHARDS" "$RUNNER_TEMP/all.txt" tools/ci/pkg-times.txt >"$RUNNER_TEMP/pkgs.txt"
+              echo "rest shard $shard of $SHARDS: $(wc -l <"$RUNNER_TEMP/pkgs.txt") of $(wc -l <"$RUNNER_TEMP/all.txt") packages"
+              xargs go test -race -count=1 -timeout 20m <"$RUNNER_TEMP/pkgs.txt" 2>&1 | tee "$RUNNER_TEMP/shard.log"
+              ;;
+          esac
+
+      - name: list what this shard ran
+        if: always()
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/ran/ran-${{ matrix.group }}-${{ matrix.shard }}.txt"
+          if [ "${{ matrix.group }}" = rest ]; then
+            tools/ci/shard-pkgs.sh ran "$RUNNER_TEMP/shard.log" >"$out"
+          else
+            tools/ci/shard-tests.sh ran "$RUNNER_TEMP/shard.log" >"$out"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ran-${{ matrix.group }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ran/ran-${{ matrix.group }}-${{ matrix.shard }}.txt
+          retention-days: 1
+
+  # No test and no package can be dropped: for each group, what its 3 shards ran, together, must be exactly the full
+  # list (`go test -list` of the package for cmd and world, `go list ./...` minus those two packages for rest),
+  # each once.
+  race-shards-check:
+    needs: race-shards
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ran-*
+          path: ${{ runner.temp }}/ran
+          merge-multiple: true
+
+      - name: union of the shard lists equals the full list
+        run: |
+          set -euo pipefail
+          for group in cmd world rest; do
+            test "$(ls "$RUNNER_TEMP"/ran/ran-"$group"-?.txt | wc -l)" -eq 3
+            case "$group" in
+              cmd) tools/ci/shard-tests.sh list ./cmd/forever-agent >"$RUNNER_TEMP/all.txt" ;;
+              world) tools/ci/shard-tests.sh list ./internal/forever/world >"$RUNNER_TEMP/all.txt" ;;
+              rest) tools/ci/shard-pkgs.sh list >"$RUNNER_TEMP/all.txt" ;;
+            esac
+            echo "== $group"
+            tools/ci/shard-tests.sh check "$RUNNER_TEMP/all.txt" "$RUNNER_TEMP"/ran/ran-"$group"-?.txt
+          done
+
+  # The one check branch protection requires. It runs even when a job it needs failed or was skipped, and fails unless
+  # every one of them succeeded.
+  test:
+    needs: [lint, race-shards, race-shards-check]
+    if: always() && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - name: every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needed jobs: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ]; then
+              echo "a needed job did not succeed ($r)" >&2
+              exit 1
+            fi
+          done

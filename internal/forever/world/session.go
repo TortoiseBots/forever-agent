@@ -100,6 +100,9 @@ type Options struct {
 	// exclusive files and the bounds). The directory holds the run's identifiers, so the fixture generators rewrite
 	// them before a payload becomes a fixture.
 	CaptureDir string
+	// captureBudget is the slot-wide capture cap of a serving daemon, made by Enter and shared by every link's
+	// session through the options copy a reconnect logs in with. Nil for a standalone session.
+	captureBudget *captureBudget
 	// Provoke is a debug option (--provoke): before the fight, provoke the refusals a fight log otherwise has no
 	// real packet for — a swing from out of range and a self cast at no rage — so their traffic can be captured.
 	Provoke bool
@@ -577,6 +580,12 @@ type session struct {
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
 	// one log with one seq axis. A serving daemon hands the dropped session's ring to the one that replaces it.
 	combat *CombatLog
+	// Round W3: the session event log (eventlog.go), the one ordered stream serve's event_log answers. It is fed
+	// beside the models by the dispatch and outlives a reconnect the same way the combat ring does.
+	evlog *EventLog
+	// Round W4: the last mount answer this session saw (mount.go): SMSG_MOUNT_RESULT's int32, kept for the cast
+	// loop's wait. Only the session goroutine touches it.
+	mount mountWatch
 	// Round CORE-GAINS-3: the DB record cache (tables.Cache), made on first use. One entry per (table, id) so
 	// the agent never asks twice for the same record.
 	db *tables.Cache
@@ -618,6 +627,9 @@ func newSession(opts Options, report *Report, ctx context.Context) *session {
 	s.chat = chat.NewLog(0)
 	s.party = party.NewState()
 	s.combat = &CombatLog{}
+	// The event ring exists from construction: event_log reads it from an RPC goroutine, under its own lock, while the
+	// session goroutine appends, so it must never be created lazily.
+	s.evlog = &EventLog{}
 	// The readers run on their own context, detached from the caller's: an interrupt or an expired run window ends
 	// the run's waits (they use s.ctx), but the stop and cleanup paths that detach from that context still need the
 	// packet loop to read their answers. shutdown ends the readers, and it closes the sockets whatever the run left
@@ -647,6 +659,15 @@ func Enter(ctx context.Context, opts Options) (*Report, error) {
 		sessionCtx = context.WithoutCancel(ctx)
 	}
 
+	// A serving daemon's debug capture starts with the first login, so the login packets are captured: the parent
+	// is checked and set before any session exists, and one budget covers every link of the slot.
+	if opts.Serve != nil && opts.Serve.CaptureDir != "" {
+		if err := captureRepoRefusal(opts.Serve.CaptureDir); err != nil {
+			return nil, err
+		}
+		opts.CaptureDir = opts.Serve.CaptureDir
+		opts.captureBudget = &captureBudget{}
+	}
 	report := &Report{Counts: make(map[string]int)}
 	s := newSession(opts, report, sessionCtx)
 	defer s.pumpCancel()
@@ -1064,6 +1085,7 @@ func (s *session) loginWorld(ctx context.Context) error {
 	s.report.Position = [4]float32{verify.X, verify.Y, verify.Z, verify.O}
 	s.opts.logf("world: in world on map %d at %.2f %.2f %.2f (orientation %.2f), reason %d",
 		verify.MapID, verify.X, verify.Y, verify.Z, verify.O, verify.Reason)
+	s.eventSession("in_world", map[string]any{"map": verify.MapID})
 	// the real client sends the loading screen notification on the realm socket, with the map it just entered
 	if err := s.sendOn(sideRealm, wire.CMSGLoadingScreenNotify, BuildLoadingScreenNotify(verify.MapID)); err != nil {
 		return err
@@ -2109,6 +2131,14 @@ func (s *session) handleCombat(p worldconn.Packet) {
 	now := s.transport().Now()
 	s.capturePacket(p)
 	switch p.Core {
+	case wire.SMSGMountResult, wire.SMSGDismountResult:
+		res, err := ParseMountResult(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.mount.lastResult, s.mount.haveResult = res, true
+		s.opts.logf("world: %s: result %d", wire.ServerName(p.Core), res)
 	case wire.SMSGAttackStart:
 		v, err := combat.ParseAttackStart(p.Payload)
 		if err != nil {

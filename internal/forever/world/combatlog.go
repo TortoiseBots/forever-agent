@@ -246,6 +246,7 @@ func (s *session) combatRowExtras(kind string, now time.Time, spellID, amount in
 	row.RemainingMS = extra.RemainingMS
 	row.Sample = combatSample(extra.Log)
 	s.CombatLog().Append(row)
+	s.eventCombat(row, now, src, dst)
 }
 
 // combatSample turns SpellCastLogData into the row's sample, or nil when the packet carried none. A block whose
