@@ -97,6 +97,9 @@ type Result struct {
 	Runs []tbcmd.RunState
 	// Events holds a `run events` answer's events.
 	Events []tbcmd.RunEvent
+	// Fields holds a `.tb cmd` whole-order answer's keys the typed report does not model (lootmethod's method= and
+	// threshold=), decoded. It is nil when the verb's answer carried none.
+	Fields map[string]string
 }
 
 // BotResult is one bot's line of an answer.
@@ -110,6 +113,11 @@ type BotResult struct {
 	HasError bool
 	Msg      string
 	HasMsg   bool
+	// Target is a `.tb cmd` task answer's 32-hex target guid; a slice-3 order line has none.
+	Target    string
+	HasTarget bool
+	// Extra holds the other keys a `.tb cmd` task answer carried (busy=, entry=), decoded.
+	Extra map[string]string
 }
 
 // Status is one status read. Cards is empty, not an error, when the character commands no bots. Party is the

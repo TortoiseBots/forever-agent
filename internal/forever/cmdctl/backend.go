@@ -76,6 +76,7 @@ func NewTB(c *tbcmd.Client, self string) Controller {
 		b.self = name
 	}
 	b.slice3 = &slice3Path{c: c}
+	b.cmdPath = &cmdPath{c: c}
 	return b
 }
 
@@ -390,38 +391,41 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	out := Result{}
 	var cards []tbcmd.Card
 	if v.Guard {
-		// The guard's read is also the ownership read: it is fresh, and it is the one the refusal shows. A
-		// named lead scopes the call to that lead's party before the run check, so the check and the card the
-		// caller sees are that party's.
-		c, card, err := b.guard(ctx, o.PauseRun)
+		// One fresh read is both the ownership read and the run guard's. The call is scoped to the named lead's
+		// party first, so the run check, the card the caller sees and every later ownership check are that
+		// party's, never another lead's.
+		all, err := b.cards(ctx)
 		if err != nil {
-			out.Card = card
 			return out, err
 		}
-		scoped, want, err := oneLead(c, o.Lead)
+		scoped, want, err := oneLead(all, o.Lead)
 		if err != nil {
-			// The refusal names the lead, and the card the call had read goes with it: a one-lead
-			// character keeps its card, a multi-lead character keeps the run-active card the guard
-			// chose (or none when the character commands nothing).
+			// The refusal names the lead; the card shown with it is the one the read would have chosen (the run's
+			// card first), or none when the character commands nothing.
 			if want == nil {
-				want = card
+				want = cardToShow(all)
 			}
 			out.Card = want
 			return out, err
 		}
 		cards, out.Card = scoped, want
+		if err := runGuard(cards, o.PauseRun); err != nil {
+			return out, err
+		}
 	}
 	if v.Path == PathRole {
 		// A role has its own typed caller: it never goes through the order paths.
 		return b.role(ctx, args, cards)
 	}
 	if v.Path == PathCmd {
-		// The typed path is not in this build: refuse before the probe, so no probe line goes out naming a
-		// package whose answer has no parser behind it yet (round C5).
-		if b.orderPath(v) == nil {
-			return out, &NotAvailableError{Verb: v.Name, Why: PathName}
+		// Every bot the call names is one of this character's own, checked before anything goes out: the module's
+		// own check is not the trust boundary.
+		for _, bot := range v.botArgs(args) {
+			if !ownsBot(cards, bot) {
+				return out, &NotOwnedError{Target: bot, Kind: "bot"}
+			}
 		}
-		in, err := b.probe(ctx, v.Package)
+		in, err := b.capability(ctx, v, cards)
 		if err != nil {
 			return out, err
 		}
@@ -431,27 +435,64 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	}
 	path := b.orderPath(v)
 	if path == nil && v.Path != PathRole {
-		// A role has its own typed caller below; only a verb whose path has not landed refuses here.
-		return out, &NotAvailableError{Verb: v.Name, Why: PathName}
+		// No table row without a path reaches here (a local, run, cut or role verb returned above); this keeps a
+		// future row from sending on a nil path.
+		return out, &UsageError{Msg: v.Name + " has no path"}
 	}
-	out.Sent = []string{orderLine(v.Path, v.Name, args)}
+	line, err := orderLine(v.Path, v.Name, args)
+	if err != nil {
+		return out, &UsageError{Msg: v.Name + ": " + err.Error()}
+	}
+	out.Sent = []string{line}
 	rep, err := path.Send(ctx, v.Name, args)
 	if err != nil {
+		var cr *tbcmd.CmdRefusedError
+		if errors.As(err, &cr) {
+			return out, &RefusedError{Verb: v.Name, Reason: cr.Reason}
+		}
 		return out, err
 	}
-	out.Bots = orderBots(rep)
-	if allRefused(out.Bots) {
+	bots := orderBots(rep)
+	if v.Path == PathCmd {
+		// The module's `.tb cmd` names no lead on the wire: it acts on the caller's own binding. A P3 answer names
+		// the lead it went to, and that must be the lead this call named (or the one lead the character has).
+		if v.Package == packageP3 {
+			if len(cards) == 0 || !sameLead(cards[0], rep.Lead) {
+				want := ""
+				if len(cards) > 0 {
+					want = cards[0].Lead
+				}
+				return out, &LeadMismatchError{Named: want, Answered: rep.Lead}
+			}
+		}
+		out.Fields = rep.Fields
+		bots = cmdPartyBots(bots, rep, cards)
+	}
+	out.Bots = bots
+	// A cmd answer is one record for the whole call and refuses with the module's error line or a refused record
+	// (a RefusedError above), never with a refused per-bot line: an answer that arrived was accepted, and an empty
+	// bot list (lootmethod) is not a refusal.
+	if v.Path != PathCmd && allRefused(out.Bots) {
 		return out, &RefusedError{Verb: v.Name, Bots: out.Bots}
 	}
-	// The check after the act: every bot the order queued must still be one of this character's own.
+	// The check after the act: every bot the order queued (every bot a cmd answer names, whatever its status: a
+	// `state` answer's records are `none`, `running`, `done` or `failed`) must still be one of this character's own,
+	// and so must the lead the call addressed.
 	post, err := b.cards(ctx)
 	if err != nil {
 		return out, err
 	}
 	for _, br := range out.Bots {
-		if br.Status == "queued" && (!ownsBot(post, br.Bot) || !ownsBot(cards, br.Bot)) {
+		if (br.Status == "queued" || v.Path == PathCmd) && (!ownsBot(post, br.Bot) || !ownsBot(cards, br.Bot)) {
+			if v.Name == "state" {
+				// A read: nothing of another character's bots is handed back.
+				out.Bots = nil
+			}
 			return out, &NotOwnedError{Target: br.Bot, Kind: "bot", Sent: true}
 		}
+	}
+	if v.Path == PathCmd && len(cards) > 0 && !ownsLead(post, cards[0].Lead) {
+		return out, &NotOwnedError{Target: cards[0].Lead, Kind: "lead", Sent: true}
 	}
 	if o.Wait > 0 {
 		final, err := b.wait(ctx, out.Bots, o.Wait)
@@ -463,8 +504,7 @@ func (b *TB) Order(ctx context.Context, o Order) (Result, error) {
 	return out, nil
 }
 
-// orderPath is the path a row sends on; a cmd row has none until the package's parser lands (round C5): the
-// refusal names that path, and no probe line is sent for it.
+// orderPath is the path a row sends on: the slice-3 order path or `.tb cmd` (rounds C5/C6).
 func (b *TB) orderPath(v Verb) OrderPath {
 	switch v.Path {
 	case PathOrder:
@@ -475,14 +515,13 @@ func (b *TB) orderPath(v Verb) OrderPath {
 	return nil
 }
 
-// orderLine renders the line a path sends, from the table's own words; the path builds the same words for the
-// wire through the typed layer, which validates them again.
-func orderLine(p Path, verb string, args []string) string {
-	prefix := ".tb order party "
+// orderLine renders the line a path sends: for `.tb cmd` the exact wire line (the typed layer's own builder, so a
+// `0x` guid shows as the bare digits the module takes), for the order path the table's own words.
+func orderLine(p Path, verb string, args []string) (string, error) {
 	if p == PathCmd {
-		prefix = ".tb cmd "
+		return tbcmd.CmdLine(verb, args)
 	}
-	return prefix + strings.Join(append([]string{verb}, args...), " ")
+	return ".tb order party " + strings.Join(append([]string{verb}, args...), " "), nil
 }
 
 // roleArgs checks a role call's words: a bot name and one of the four roles.
@@ -534,28 +573,42 @@ func (b *TB) role(ctx context.Context, args []string, cards []tbcmd.Card) (Resul
 	return out, nil
 }
 
-// guard reads the card and refuses an order while a run runs on it, unless the call allows a pause (D4). The cards
-// it read and the card to show are returned with the refusal, so the caller can show the run and check the order's
-// target from the same read.
-func (b *TB) guard(ctx context.Context, pause bool) ([]tbcmd.Card, *tbcmd.Card, error) {
-	cards, err := b.cards(ctx)
-	if err != nil {
-		return nil, nil, err
+// sameLead says whether the lead a `.tb cmd` answer names is the card's lead. A card the module reports with no lead
+// is served by the module's fallback, the first bound bot (`ResolveBinding`): that bot is accepted as the lead only
+// when it is one of the card's own members.
+func sameLead(card tbcmd.Card, answered string) bool {
+	if card.Lead == "" {
+		return answered != "" && ownsBot([]tbcmd.Card{card}, answered)
+	}
+	return strings.EqualFold(answered, card.Lead)
+}
+
+// runGuard refuses an order while a run runs on the cards it is given, unless the call allows a pause (D4). The
+// cards are already scoped to the lead the call addresses.
+func runGuard(cards []tbcmd.Card, pause bool) error {
+	if pause {
+		return nil
 	}
 	for i := range cards {
-		st := cards[i].Run
-		if st == nil || (st.State != "running" && st.State != "paused") {
-			continue
+		if st := cards[i].Run; st != nil && (st.State == "running" || st.State == "paused") {
+			return &RunActiveError{Lead: st.Lead, Plan: st.Plan, State: st.State}
 		}
-		if !pause {
-			return cards, &cards[i], &RunActiveError{Lead: st.Lead, Plan: st.Plan, State: st.State}
+	}
+	return nil
+}
+
+// cardToShow is the card a refusal shows when the call could not be scoped to one lead: the card whose run is
+// running or paused, else the first card, else none.
+func cardToShow(cards []tbcmd.Card) *tbcmd.Card {
+	for i := range cards {
+		if st := cards[i].Run; st != nil && (st.State == "running" || st.State == "paused") {
+			return &cards[i]
 		}
-		return cards, &cards[i], nil
 	}
 	if len(cards) > 0 {
-		return cards, &cards[0], nil
+		return &cards[0]
 	}
-	return cards, nil, nil
+	return nil
 }
 
 // oneLead scopes the guard's cards to the named lead: the caller addresses only that lead's party. A name the
@@ -794,11 +847,15 @@ func (b *TB) Available(ctx context.Context, verb string) (bool, string, error) {
 	case PathCut:
 		return false, "not ported on this server", nil
 	case PathCmd:
-		// The typed path is not in this build: refuse before the probe, like Order does.
-		if b.orderPath(v) == nil {
-			return false, PathName, nil
+		var cards []tbcmd.Card
+		if _, known := b.probes[v.Package]; !known && v.Package == packageP6 {
+			// The P6 probe names one of the character's own bots, so it needs the cards.
+			var err error
+			if cards, err = b.cards(ctx); err != nil {
+				return false, "", err
+			}
 		}
-		in, err := b.probe(ctx, v.Package)
+		in, err := b.capability(ctx, v, cards)
 		if err != nil {
 			return false, "", err
 		}
@@ -809,52 +866,136 @@ func (b *TB) Available(ctx context.Context, verb string) (bool, string, error) {
 	return true, "", nil
 }
 
-// probe answers whether the module carries a command package, once per session. P3 is in when `.tb cmd` with no
-// verb answers the missing-verb error; P6 when `.tb cmd loot` answers a missing-argument or missing-target error.
-// Only an explicit module answer is remembered: the expected answer means in, and unknown-verb, unknown-command or
-// not-available means out. Everything else is not an answer and is not
-// cached: a transport failure, a timeout, a cut context or a malformed reply is returned to the caller, and the
-// next call probes again.
-func (b *TB) probe(ctx context.Context, pkg string) (bool, error) {
-	if in, ok := b.probes[pkg]; ok {
-		return in, nil
+// capability says whether the module carries the package a verb needs. A definite answer is remembered for the
+// session (see probe). A probe that got no definite answer is a NotAvailableError with Retry set, and nothing is
+// remembered: the next call asks again. A caller whose own context ended gets that error back.
+func (b *TB) capability(ctx context.Context, v Verb, cards []tbcmd.Card) (bool, error) {
+	in, why, err := b.probe(ctx, v.Package, cards)
+	if err != nil {
+		return false, err
 	}
-	var (
-		line string
-		want func(*tbcmd.CommandError) bool
-	)
+	if why != "" {
+		return false, &NotAvailableError{Verb: v.Name, Package: v.Package, Why: why, Retry: true}
+	}
+	return in, nil
+}
+
+// probe asks whether the module carries a command package, once per definite answer per session (D3).
+//
+// P3 is in when `.tb cmd` with no verb answers `error code=missing-verb cmd=cmd` (the module's own check runs
+// before its sender and binding checks, TbCmdOrders.cpp HandleCmd), and out when it answers `unknown-verb` or
+// `engine-not-built`.
+//
+// P6 is asked with `.tb cmd state`, a read-only verb only the P6 handlers answer (TbCmdTasks.cpp HandleState): a
+// module with P6 answers it with a `cmd-end verb=state` report; a P3-only module's order grammar refuses `state`
+// with `error code=unsupported` (TbRunOrdersPure.h ParseOrder). Nothing the task package's usage text says counts:
+// a P3-only module answers a bare `loot` with the same `invalid` shape.
+//
+// Only those definite answers are remembered. A deadline or transport failure, a bind the module has not seen
+// (`not-bound`, `not-in-world`, `needs-player-sender`, which the module raises before it looks at the verb), any
+// other error code and a reply that is not the expected shape return a non-empty why: the package is not known
+// either way, nothing is cached, and the next call asks again. A reconnect's Reset drops what was remembered. A
+// caller whose context ended gets its own error back.
+func (b *TB) probe(ctx context.Context, pkg string, cards []tbcmd.Card) (in bool, why string, err error) {
+	if known, ok := b.probes[pkg]; ok {
+		return known, "", nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, probeBudget(ctx))
+	defer cancel()
+	var sendErr error
 	switch pkg {
 	case packageP3:
-		line = ".tb cmd"
-		want = func(e *tbcmd.CommandError) bool { return e.Code == "missing-verb" && e.Cmd == "cmd" }
+		_, sendErr = b.c.Send(pctx, ".tb cmd", "cmd-end")
 	case packageP6:
-		line = ".tb cmd loot"
-		want = func(e *tbcmd.CommandError) bool {
-			return e.Code == "missing-argument" || e.Code == "missing-target"
-		}
-	default:
-		return true, nil
-	}
-	// A reply without an error line is not one of the two answers the probe knows: it says neither that the
-	// package is in nor that the module refused the line, so it is not cached either.
-	if _, err := b.c.Send(ctx, line, "cmd-end"); err != nil {
-		var ce *tbcmd.CommandError
-		switch {
-		case !errors.As(err, &ce):
-			return false, err
-		case want(ce):
-			b.cache(pkg, true)
-			return true, nil
-		case ce.Code == "unknown-verb" || ce.Code == "unknown-command" || ce.Code == "not-available":
+		if p3, known := b.probes[packageP3]; known && !p3 {
+			// The task package rides on the order package: a module without `.tb cmd` has no `state` to ask.
 			b.cache(pkg, false)
-			return false, nil
-		default:
-			// The module answered, but not with a word that says the package is absent (a rate limit, a busy
-			// core, a permission refusal): that is not a capability answer, so it is returned uncached.
-			return false, err
+			return false, "", nil
+		}
+		// One named bot of the character's own: a bare `state` answers a record per bot, which is no probe for a
+		// raid-sized party.
+		bot := probeBot(cards)
+		if bot == "" {
+			return false, "the character commands no bot to ask `.tb cmd state` about", nil
+		}
+		_, sendErr = b.c.Cmd(pctx, "state", bot)
+	default:
+		return true, "", nil
+	}
+	if sendErr != nil && ctx.Err() != nil {
+		// The caller's own context ended (cancelled, or its deadline ran out): its error, nothing remembered.
+		return false, "", sendErr
+	}
+	present, absent, why := probeVerdict(pkg, sendErr)
+	switch {
+	case present:
+		b.cache(pkg, true)
+		return true, "", nil
+	case absent:
+		b.cache(pkg, false)
+		return false, "", nil
+	}
+	return false, why, nil
+}
+
+// probeBudgetMax is how long one capability probe may wait for the module. The caller's own deadline is shorter
+// than the command layer's reply window (the RPC gives an order 5 s), so a module that never answers would use the
+// caller's whole budget and come back as the caller's timeout; the probe keeps its own, shorter one and answers an
+// undecided not-available instead.
+var probeBudgetMax = 3 * time.Second
+
+// probeBudget is the probe's own deadline: probeBudgetMax, or half of what the caller has left when that is less.
+func probeBudget(ctx context.Context) time.Duration {
+	budget := probeBudgetMax
+	if dl, ok := ctx.Deadline(); ok {
+		if half := time.Until(dl) / 2; half < budget {
+			budget = half
 		}
 	}
-	return false, nil
+	return budget
+}
+
+// probeBot is the bot the P6 probe asks `.tb cmd state` about: the first member the cards list, or none.
+func probeBot(cards []tbcmd.Card) string {
+	for i := range cards {
+		if len(cards[i].Members) > 0 {
+			return cards[i].Members[0].Bot
+		}
+	}
+	return ""
+}
+
+// probeVerdict reads a probe's outcome: present, absent, or neither (why says what was seen).
+func probeVerdict(pkg string, err error) (present, absent bool, why string) {
+	line := ".tb cmd"
+	if pkg == packageP6 {
+		line = ".tb cmd state <bot>"
+	}
+	if err == nil {
+		// P6's success is the answer; P3's probe line has no verb and can only be refused.
+		if pkg == packageP6 {
+			return true, false, ""
+		}
+		return false, false, "`" + line + "` answered without an error line"
+	}
+	var ce *tbcmd.CommandError
+	if !errors.As(err, &ce) {
+		return false, false, err.Error()
+	}
+	switch pkg {
+	case packageP3:
+		if ce.Code == "missing-verb" && ce.Cmd == "cmd" {
+			return true, false, ""
+		}
+		if ce.Code == "unknown-verb" || ce.Code == "engine-not-built" {
+			return false, true, ""
+		}
+	case packageP6:
+		if ce.Code == "unsupported" || ce.Code == "unknown-verb" || ce.Code == "engine-not-built" {
+			return false, true, ""
+		}
+	}
+	return false, false, "`" + line + "` answered " + ce.Code
 }
 
 // cache records a probe's answer.
@@ -875,7 +1016,29 @@ func orderBots(rep tbcmd.OrderReport) []BotResult {
 		if r.HasCode {
 			br.Error, br.HasError = r.Code, true
 		}
+		if r.HasTarget {
+			br.Target, br.HasTarget = r.Target, true
+		}
+		br.Extra = r.Extra
 		out = append(out, br)
+	}
+	return out
+}
+
+// cmdPartyBots fills a `.tb cmd` whole-party answer with the bots it went to: the module answers one record for
+// the party (`result=party <count>`), so the card the run guard read just before the line names them. Only a count
+// that matches the card is expanded; every other answer keeps exactly the module's own lines.
+func cmdPartyBots(bots []BotResult, rep tbcmd.OrderReport, cards []tbcmd.Card) []BotResult {
+	if len(bots) > 0 || len(cards) != 1 || rep.Bots == 0 || rep.Bots != len(cards[0].Members) {
+		return bots
+	}
+	if scope, _, ok := strings.Cut(rep.Result, " "); !ok || scope != "party" {
+		return bots
+	}
+	out := make([]BotResult, 0, rep.Bots)
+	for _, m := range cards[0].Members {
+		// The typed layer already turned the module's `accepted` into `queued`, the word the slice-3 path uses.
+		out = append(out, BotResult{Bot: m.Bot, Status: "queued"})
 	}
 	return out
 }
