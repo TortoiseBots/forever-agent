@@ -97,7 +97,7 @@ panic, and a refused write leaves no file.
 ## Tests
 
 `internal/forever/gmwalk` over hand-made data (never captures): RDP thinning (straight collapses, corners
-kept, shallow 2° vs 30° angles at 2 yd, hairpin, map/jump cuts, NaN/Inf evicted, road split past 4096 points
+kept, shallow 10° vs 30° angles at 1.5 yd, hairpin, map/jump cuts, NaN/Inf evicted, road split past 4096 points
 keeping the final endpoint, MaxRoads refusal), mark words and refusals (GUID gate, fake sender names, GM
 object positions, duplicates), read/write round trip, hostile files (bad version, unknown fields, bad names,
 bad radii, oversize, symlink target), overwrite refusal without `--force`, and the converter's rows
@@ -128,7 +128,10 @@ On the last code commit with a clean worktree, each in the foreground and waited
 make fmt-check            -> clean (no file listed)
 make cross                -> CROSS-OK (windows/amd64 and darwin/arm64 builds, then their vet)
 staticcheck ./...         -> rc=0 (no finding)
-vm-test ta ~/wt-fa-gmwalk -> RESULT: PENDING
+vm-test ta ~/wt-fa-gmwalk -> RESULT: PASS  kind=ta wt=wt-fa-gmwalk sha=84b91799 dirty=0 files=2354
+                             rc=0  vm_duration=3257s  laptop_wall=3278s
 ```
 
-The RESULT line is quoted in the final report. The notes commit carries no code change.
+The RESULT line is quoted in the final report. The full log is
+`TortoiseBots-audit/vm-test-logs/wt-fa-gmwalk-20261121-075837-1994367-b1d2.log` (every package ok, no FAIL).
+The notes commit carries no code change.
