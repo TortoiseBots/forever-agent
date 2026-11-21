@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
+	"github.com/pjerra/forever-agent/internal/forever/bg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
@@ -200,6 +201,10 @@ type Options struct {
 	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
+	// Round BG-A1: forever bg-watch. BGWatch queues the character into a
+	// battleground, accepts, observes the match and records it. A nil value
+	// runs none of it.
+	BGWatch *bg.WatcherConfig
 	// RouteWalk runs `forever route-walk`: enter the plan's instance, walk every selected leg on the navmesh, and
 	// confirm every planned point with the server's own `.gps` position. A nil value runs none of it.
 	RouteWalk *RouteWalkOptions
@@ -312,6 +317,8 @@ type Report struct {
 	Dungeon *driver.Result
 	// Round S7: the watch's result, nil when the session ran something else.
 	Watch *driver.Result
+	// Round BG-A1: the bg-watch result, nil when the session ran something else.
+	BGWatch *bg.Result
 	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
 	RouteWalk *RouteWalkReport
 	// GMWalk is the GM walk's report, nil when the session ran something else.
@@ -622,6 +629,9 @@ type session struct {
 	// Round W4: the last mount answer this session saw (mount.go): SMSG_MOUNT_RESULT's int32, kept for the cast
 	// loop's wait. Only the session goroutine touches it.
 	mount mountWatch
+	// Round BG-A1: the battleground watch's decoded state (world states,
+	// invite, match end, join refusal). Only the session goroutine touches it.
+	bg *bgState
 	// Round CORE-GAINS-3: the DB record cache (tables.Cache), made on first use. One entry per (table, id) so
 	// the agent never asks twice for the same record.
 	db *tables.Cache
@@ -1263,6 +1273,14 @@ func (s *session) enter(ctx context.Context) error {
 	if s.opts.DungeonWatch != nil {
 		res, err := s.dungeonWatch(ctx, s.opts.DungeonWatch)
 		s.report.Watch = res
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.BGWatch != nil {
+		res, err := s.bgWatch(ctx, s.opts.BGWatch)
+		s.report.BGWatch = res
 		if err != nil {
 			return err
 		}
@@ -2182,6 +2200,17 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
 		return s.handleTransfer(ctx, p)
+	// Round BG-A1's handlers live in bg_session.go; this is their one registration line.
+	case wire.SMSGBattlefieldStatusNeedConfirmation, wire.SMSGBattlefieldStatusActive,
+		wire.SMSGBattlefieldStatusQueued, wire.SMSGBattlefieldStatusNone,
+		wire.SMSGBattlefieldStatusFailed, wire.SMSGBattlefieldList,
+		wire.SMSGBattlegroundPlayerPositions, wire.SMSGUpdateCapturePoint,
+		wire.SMSGCapturePointRemoved, wire.SMSGBattlegroundPlayerJoined,
+		wire.SMSGBattlegroundPlayerLeft, wire.SMSGPVPMatchStatistics,
+		wire.SMSGPVPMatchSetState, wire.SMSGPVPMatchComplete,
+		wire.SMSGPVPMatchInitialize, wire.SMSGAreaSpiritHealerTime,
+		wire.SMSGInitWorldStates, wire.SMSGUpdateWorldState:
+		return s.handleBG(p)
 	default:
 		if isLootPacket(p.Core) {
 			return s.handleLoot(p)

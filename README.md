@@ -879,6 +879,7 @@ It reads the slot's token file itself and prints only the call's `result`. See
 - Walk the navmesh and draw the run as a map: [navigation](docs/okf/navigation/index.md).
 - Fight with data: rotations, tactics, the brain: [combat](docs/okf/combat/index.md).
 - Watch it live, record and score it: [observability](docs/okf/observability/index.md).
+- Watch a battleground (WSG/AB queue, passive observer, score/flag/node record, report card): `forever-agent forever bg-watch --map wsg|ab [--dry]` (see [BG-A1 notes](docs/forever/BG-A1-NOTES.md)).
 
 ## Documentation
 

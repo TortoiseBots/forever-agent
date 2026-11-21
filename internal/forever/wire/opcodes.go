@@ -310,6 +310,40 @@ const (
 	SMSGQuestLogFull               uint32 = 0x650007
 )
 
+// The battleground watch (Opcodes.h:102-110, 358, 775, 852, 1162, 1206-1219, 1756, 2166-2170, 2458, 2473):
+// the queue/port/leave/status/log/spirit-queue client packets this client sends, and the status/world-state/match/
+// positions/join/leave/spirit-time/capture server packets it reads.
+const (
+	CMSGAreaSpiritHealerQuery    uint32 = 0x3E0046
+	CMSGAreaSpiritHealerQueue    uint32 = 0x3E0047
+	CMSGBattlefieldLeave         uint32 = 0x3D001F
+	CMSGBattlefieldList          uint32 = 0x3D002A
+	CMSGBattlefieldPort          uint32 = 0x3E00C7
+	CMSGBattlemasterJoin         uint32 = 0x3E00BD
+	CMSGBattlemasterJoinArena    uint32 = 0x3E00BE
+	CMSGPVPLogData               uint32 = 0x3D0028
+	CMSGRequestBattlefieldStatus uint32 = 0x430008
+
+	SMSGBattlefieldStatusNeedConfirmation uint32 = 0x4B0000
+	SMSGBattlefieldStatusActive           uint32 = 0x4B0001
+	SMSGBattlefieldStatusQueued           uint32 = 0x4B0002
+	SMSGBattlefieldStatusNone             uint32 = 0x4B0003
+	SMSGBattlefieldStatusFailed           uint32 = 0x4B0004
+	SMSGBattlefieldList                   uint32 = 0x4B0005
+	SMSGBattlegroundPlayerPositions       uint32 = 0x4B0006
+	SMSGUpdateCapturePoint                uint32 = 0x4B0007
+	SMSGCapturePointRemoved               uint32 = 0x4B0008
+	SMSGBattlegroundPlayerJoined          uint32 = 0x4B0009
+	SMSGBattlegroundPlayerLeft            uint32 = 0x4B000A
+	SMSGPVPMatchStatistics                uint32 = 0x4B0010
+	SMSGPVPMatchSetState                  uint32 = 0x4B002E
+	SMSGPVPMatchComplete                  uint32 = 0x4B002F
+	SMSGPVPMatchInitialize                uint32 = 0x4B0030
+	SMSGAreaSpiritHealerTime              uint32 = 0x4501EA
+	SMSGInitWorldStates                   uint32 = 0x4501F0
+	SMSGUpdateWorldState                  uint32 = 0x4501F2
+)
+
 // The map change of round A7 (Opcodes.h:62, 998, 1064, 1783, 2273, 2410, 2433, 2468, 2510).
 const (
 	CMSGAreaTrigger          uint32 = 0x3D0089
@@ -430,6 +464,15 @@ var clientNames = map[uint32]string{
 	CMSGQuestGiverChooseReward:  "CMSG_QUEST_GIVER_CHOOSE_REWARD",
 	CMSGQuestGiverCloseQuest:    "CMSG_QUEST_GIVER_CLOSE_QUEST",
 	CMSGQuestLogRemoveQuest:     "CMSG_QUEST_LOG_REMOVE_QUEST",
+
+	CMSGAreaSpiritHealerQuery:    "CMSG_AREA_SPIRIT_HEALER_QUERY",
+	CMSGAreaSpiritHealerQueue:    "CMSG_AREA_SPIRIT_HEALER_QUEUE",
+	CMSGBattlefieldLeave:         "CMSG_BATTLEFIELD_LEAVE",
+	CMSGBattlefieldList:          "CMSG_BATTLEFIELD_LIST",
+	CMSGBattlefieldPort:          "CMSG_BATTLEFIELD_PORT",
+	CMSGBattlemasterJoin:         "CMSG_BATTLEMASTER_JOIN",
+	CMSGPVPLogData:               "CMSG_PVP_LOG_DATA",
+	CMSGRequestBattlefieldStatus: "CMSG_REQUEST_BATTLEFIELD_STATUS",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.
