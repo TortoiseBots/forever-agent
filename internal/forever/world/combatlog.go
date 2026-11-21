@@ -35,9 +35,11 @@ type CombatActor struct {
 }
 
 // CombatRow is one row of the combat log. Kind is one of spell_start, spell_go, spell_fail, melee, spell_damage,
-// periodic, heal, aura_applied, aura_removed, death, and the core-gains round's interrupt, dispel, absorb, miss,
-// resist, immune, instakill and environmental. Time is the wall clock with milliseconds and its offset; MonoMS is
-// the process's steady axis (events.MonoMS), the one a client cannot step.
+// periodic, heal, aura_applied, aura_removed, death, hostile and alert (SMSG_AI_REACTION: the reacting unit in
+// Source, the reaction word in Reason, spell_id its number; only HOSTILE is "hostile", ALERT is "alert", the
+// rest write no row), and the core-gains round's interrupt, dispel, absorb, miss, resist, immune, instakill and
+// environmental. Time is the wall clock with milliseconds and its offset; MonoMS is the process's steady axis
+// (events.MonoMS), the one a client cannot step.
 type CombatRow struct {
 	Seq     int         `json:"seq"`
 	Kind    string      `json:"kind"`
