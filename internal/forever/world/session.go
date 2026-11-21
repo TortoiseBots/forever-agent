@@ -22,6 +22,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -538,6 +539,9 @@ type session struct {
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
 	// one log with one seq axis. A serving daemon hands the dropped session's ring to the one that replaces it.
 	combat *CombatLog
+	// Round CORE-GAINS-3: the DB record cache (tables.Cache), made on first use. One entry per (table, id) so
+	// the agent never asks twice for the same record.
+	db *tables.Cache
 }
 
 const (

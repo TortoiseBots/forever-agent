@@ -57,6 +57,7 @@ const (
 	CMSGCloseInteraction     uint32 = 0x3E0028
 	CMSGQueryPlayerNames     uint32 = 0x440010
 	CMSGQueryCreature        uint32 = 0x3D0141
+	CMSGDBQueryBulk          uint32 = 0x430010
 
 	// The combat the client sends (Opcodes.h:66-67, 168-179, 954).
 	CMSGSetSelection uint32 = 0x3E00CA
@@ -131,6 +132,7 @@ const (
 	SMSGTransferPending          uint32 = 0x450071
 	SMSGQueryPlayerNamesResponse uint32 = 0x640027
 	SMSGCreatureQueryResponse    uint32 = 0x490006
+	SMSGDBReply                  uint32 = 0x490000
 
 	// Combat, spells, auras, cooldowns and experience (Opcodes.h:1177-1178, 1296, 1363-1364, 1403, 1475, 1864,
 	// 2156, 2365-2367, 2379).
@@ -263,6 +265,7 @@ var clientNames = map[uint32]string{
 	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
 	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
+	CMSGDBQueryBulk:                 "CMSG_DB_QUERY_BULK",
 	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
 	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",
 	CMSGAreaTrigger:                 "CMSG_AREA_TRIGGER",

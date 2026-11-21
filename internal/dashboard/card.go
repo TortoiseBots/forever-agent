@@ -775,10 +775,24 @@ func fillView(c *Card, rep *rawReport, in Inputs) {
 }
 
 // clearedGroup says whether a pack lies behind the run: in an earlier leg, or an earlier group of the current one.
-// spellText is a spell's name for the page, "spell <id>" for one the name table lacks, and "" for none.
+// serverNames holds the spell names the server itself gave (CORE-GAINS-3): the SpellName records a live session's
+// DB query fetched. It is nil in production until a session fills it; spellText reads it first and falls back to
+// the packed table, then to "spell <id>" as today. No reply from the server means the id as today.
+var serverNames = map[uint32]string{}
+
+// SetServerSpellNames replaces the server-fetched spell names (a live session's SpellName records by spell id).
+func SetServerSpellNames(names map[uint32]string) {
+	serverNames = names
+}
+
+// spellText is a spell's name for the page: the server's own name first, then the packed table, then "spell <id>"
+// for one neither holds, and "" for none.
 func spellText(id uint32) string {
 	if id == 0 {
 		return ""
+	}
+	if n := serverNames[id]; n != "" {
+		return n
 	}
 	if n := spells.Name(id); n != "" {
 		return n

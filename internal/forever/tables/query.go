@@ -76,3 +76,10 @@ func ParseReply(payload []byte) (Reply, error) {
 	}
 	return r, nil
 }
+
+// ErrUnexpectedReply reports a reply for another table or record: the
+// server answers every query inline, so a reply that names neither is a
+// hostile packet, not a late answer.
+func ErrUnexpectedReply(wantTable, wantID, gotTable, gotID uint32) error {
+	return fmt.Errorf("tables: reply for table %#x record %d, want table %#x record %d", gotTable, gotID, wantTable, wantID)
+}
