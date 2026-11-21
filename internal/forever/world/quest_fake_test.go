@@ -39,6 +39,7 @@ type questWorld struct {
 	// requestStatus is the status flag the request-items screen carries (0xFF: ready).
 	requestStatus int32
 	refuse        uint32
+	refuseNone    bool // the refusal with reason 0 (QUEST_ERR_NONE)
 	// silentAccept makes the fake's giver answer an accept with the gossip close only (QuestHandler.cpp:100-128: a
 	// giver that does not offer the quest returns without a packet); acceptSlot is the slot a taken quest gets.
 	silentAccept bool
@@ -216,7 +217,7 @@ func (q *questWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		q.deliver(wire.SMSGQuestGiverStatus, questStatusPayload(questNPCGUID, 0x400000))
 	case wire.CMSGQuestGiverAcceptQuest:
 		q.accept = append([]byte(nil), payload...)
-		if q.refuse != 0 {
+		if q.refuse != 0 || q.refuseNone {
 			q.deliver(wire.SMSGQuestGiverInvalidQuest, questInvalidPayload(q.refuse, "no"))
 			return
 		}
@@ -605,6 +606,23 @@ func TestQuestAcceptRefusalFails(t *testing.T) {
 	}
 	if _, ok := q.s.questBook().Find(questNew); ok {
 		t.Fatal("the refused quest was recorded")
+	}
+}
+
+// TestQuestAcceptRefusalNoneSaysWhatToCheck: the core's QUEST_ERR_NONE names no cause, so the live check that met it
+// ("the giver refused it: none") now reads what to look at.
+func TestQuestAcceptRefusalNoneSaysWhatToCheck(t *testing.T) {
+	q := newQuestWorld(t)
+	q.refuseNone = true
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-accept id=900"))
+	if err == nil {
+		t.Fatal("a refused accept passed")
+	}
+	for _, want := range []string{"the server names no cause", "class", "level range", "prerequisite", "quest-giver bit"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal %q lacks %q", err, want)
+		}
 	}
 }
 

@@ -297,9 +297,7 @@ func loginCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	window := &loginWindow{}
 	window.note(time.Now()) // after the hold: the login starts now
-	actx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	ticket, err := authLogin(actx, st.Realmd, account, password)
-	cancel()
+	ticket, err := authLoginGated(ctx, &loginGate{window: window, budget: budget, stderr: stderr}, st.Realmd, account, password)
 	if err != nil {
 		// A busy answer closes realmd's window for the whole fleet, not just this child.
 		var ae *auth.AuthError

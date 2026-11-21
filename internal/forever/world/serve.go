@@ -56,11 +56,25 @@ type ServeConfig struct {
 	// method that registers the guids they may act on. Off by default: a serving daemon that was not started as
 	// a test bench refuses every one of them with rpc.CodeForbidden.
 	AllowGMUnits bool
+	// Relogin makes a fresh Battle.net login for a reconnect and returns opts with the new connection fields (the
+	// address, the realm join ticket, both secrets and the builds, and the world socket its build probe
+	// authenticated, which the re-entry adopts). The join ticket of the first login is single use: the server clears
+	// the account's session key when the link drops, so a re-entry with the old ticket is answered "unknown
+	// account" on every attempt. Nil reuses the first login's fields (the tests' fake server does not care).
+	Relogin func(ctx context.Context, opts Options) (Options, error)
 	// The reconnect timings are zero for the constants above; the tests shorten them.
 	reconnectBackoff      time.Duration
 	reconnectMaxBackoff   time.Duration
 	reconnectLoginTimeout time.Duration
 }
+
+// PermanentLoginError is what a Relogin returns for a failure no later attempt can fix (a wrong password, an unknown,
+// banned or suspended account, a refused version): the daemon stops reconnecting at once and goes offline, because
+// every further wrong proof would count towards the login service's failed-login auto-ban.
+type PermanentLoginError struct{ Err error }
+
+func (e *PermanentLoginError) Error() string { return e.Err.Error() }
+func (e *PermanentLoginError) Unwrap() error { return e.Err }
 
 // The reconnect budget of a serving session. A world-socket drop is not fatal: the daemon logs in again with the
 // same account and character, and the RPC answers reads in between. The limits are:
@@ -144,10 +158,12 @@ type serveRuntime struct {
 // epoch and everything bound to it, while the RPC listener, the method table and the call queue stay.
 type serveState struct {
 	// opts is the login the daemon makes again; it is immutable after serve starts.
-	opts  Options
-	grace time.Duration
-	calls chan *serveCall
-	done  chan struct{}
+	opts Options
+	// relogin is ServeConfig.Relogin.
+	relogin func(ctx context.Context, opts Options) (Options, error)
+	grace   time.Duration
+	calls   chan *serveCall
+	done    chan struct{}
 	// The reconnect budget's timings (ServeConfig's overrides, or the constants).
 	backoff, maxBackoff, loginTimeout time.Duration
 
@@ -250,6 +266,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	}
 	st := &serveState{
 		opts:         s.opts,
+		relogin:      cfg.Relogin,
 		grace:        grace,
 		calls:        make(chan *serveCall, 64),
 		done:         make(chan struct{}),
@@ -325,6 +342,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		if ctx.Err() != nil {
 			return cur.serveLogout(st)
 		}
+		cur.serveIdleTick()
 		if err := cur.collect(ctx, 50*time.Millisecond); err != nil {
 			if isServeLinkLost(err) {
 				continue // the top of the loop sees the dead link and reconnects
@@ -413,6 +431,12 @@ func (st *serveState) reconnect(ctx context.Context, cause error) (*session, err
 		}
 		last = res.err
 		st.opts.logf("rpc: reconnect attempt %d of %d failed: %v", attempt, limit, last)
+		var permanent *PermanentLoginError
+		if errors.As(last, &permanent) {
+			st.attempt.Store(0)
+			st.opts.logf("rpc: reconnect stopped: that answer will not change")
+			return nil, fmt.Errorf("%w: reconnect stopped after attempt %d: the login cannot succeed: %v", ErrLinkLost, attempt, last)
+		}
 	}
 	st.attempt.Store(0)
 	return nil, fmt.Errorf("%w: reconnect gave up after %d attempt(s): %v", ErrLinkLost, limit, last)
@@ -449,7 +473,7 @@ func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog, evlog
 	parent := ctx
 	timeout := st.loginTimeout
 	go func() {
-		s, err := loginAgain(parent, st.opts, timeout, combat, evlog)
+		s, err := loginAgain(parent, st.opts, st.relogin, timeout, combat, evlog)
 		done <- serveLogin{s: s, err: err}
 	}()
 	for {
@@ -473,10 +497,30 @@ func (st *serveState) attemptLogin(ctx context.Context, combat *CombatLog, evlog
 // session is usable once it is in the world. combat and evlog are the dropped session's rings, installed before the
 // first login packet is dispatched: the re-entry's burst can carry a combat, aura or chat row, and a ring swapped in
 // after it would discard exactly those rows. Each is nil only when there is no ring to keep.
-func loginAgain(ctx context.Context, opts Options, timeout time.Duration, combat *CombatLog, evlog *EventLog) (*session, error) {
-	// A re-entry authenticates its own world socket: the one the first login's build probe handed over was that
-	// session's, and it went down with it. The build stays, so the new login claims the same one.
+func loginAgain(ctx context.Context, opts Options, relogin func(context.Context, Options) (Options, error), timeout time.Duration, combat *CombatLog, evlog *EventLog) (*session, error) {
+	// A re-entry never reuses the first login's world socket: that one went down with its session. With a Relogin
+	// the Battle.net login runs again and hands over a fresh join ticket (and the socket its build probe
+	// authenticated, which authenticate adopts); without one the first login's fields authenticate a new socket.
+	// The Relogin runs on the daemon's own context, not the attempt's: it may wait for its share of the login rate
+	// (the caller's gate) and bounds the login itself, and the attempt's timeout starts when it has returned.
 	opts.WorldConn = nil
+	if relogin != nil {
+		fresh, err := relogin(ctx, opts)
+		if err != nil {
+			// A socket the failed login still handed over is nobody's: close it.
+			if fresh.WorldConn != nil {
+				_ = fresh.WorldConn.Close()
+			}
+			return nil, fmt.Errorf("login again: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			if fresh.WorldConn != nil {
+				_ = fresh.WorldConn.Close()
+			}
+			return nil, fmt.Errorf("login again: %w", err)
+		}
+		opts = fresh
+	}
 	actx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	base := context.WithoutCancel(ctx)

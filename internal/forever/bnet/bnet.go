@@ -63,6 +63,15 @@ type Options struct {
 	// default; a caller that has not established the setting must not have its login retried on an assumption.
 	WorldSkipBuildAuthKeyCheck bool
 
+	// BeforeAttempt, when set, is called before EVERY login attempt: the one-build login, each build probe of the
+	// automatic selection (ClientBuild 0 logs in once per build the realm refuses) and so each re-login of a caller
+	// that logs in again. A caller that keeps a login rate (a window of logins per IP, a fleet's shared budget) waits
+	// for its turn and books it there, so one reservation never covers several real logins. It runs on the caller's
+	// context, outside the attempt's deadline: with a hook the Deadline bounds each attempt (the login, the realm join
+	// and WorldAccept) instead of the whole selection, so a wait for a turn cannot eat it. An error ends the login and
+	// is returned as it is.
+	BeforeAttempt func(ctx context.Context) error
+
 	// srpPrivate pins the client private to a test vector's value. It is unexported so no caller can weaken the
 	// randomness; only the package's own tests set it.
 	srpPrivate *big.Int
@@ -175,15 +184,33 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Deadline <= 0 {
 		opts.Deadline = defaultLoginDeadline
 	}
-	// one absolute deadline for the whole login; the caller's context may be earlier and wins
+	// one absolute deadline for the whole login; the caller's context may be earlier and wins. With a BeforeAttempt
+	// hook the deadline is each attempt's instead (see begin).
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, opts.Deadline)
 	defer cancel()
+	// begin starts one attempt: the hook runs first, on the caller's context, then the attempt gets its context.
+	begin := func() (context.Context, context.CancelFunc, error) {
+		if opts.BeforeAttempt == nil {
+			return ctx, func() {}, nil
+		}
+		if err := opts.BeforeAttempt(parent); err != nil {
+			return nil, nil, err
+		}
+		actx, done := context.WithTimeout(parent, opts.Deadline)
+		return actx, done, nil
+	}
 	if opts.ClientBuild != 0 {
-		result, err := loginOnce(ctx, opts)
+		actx, done, err := begin()
 		if err != nil {
 			return nil, err
 		}
-		return acceptWorld(ctx, opts, result)
+		defer done()
+		result, err := loginOnce(actx, opts)
+		if err != nil {
+			return nil, err
+		}
+		return acceptWorld(actx, opts, result)
 	}
 	supported := wire.SupportedClientBuilds()
 	// newest first: prefer the newest build this client knows, then older ones
@@ -208,13 +235,19 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		}
 		probe := opts
 		probe.ClientBuild = build
-		result, err := loginOnce(ctx, probe)
+		actx, done, err := begin()
+		if err != nil {
+			return nil, err
+		}
+		result, err := loginOnce(actx, probe)
 		if err == nil {
 			realmName = result.RealmName
 			if opts.WorldAccept == nil {
+				done()
 				return result, nil
 			}
-			result, err = acceptWorld(ctx, opts, result)
+			result, err = acceptWorld(actx, opts, result)
+			done()
 			if err == nil {
 				return result, nil
 			}
@@ -232,6 +265,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 			opts.logf("client build: the world server does not accept build %d (ERROR_BAD_VERSION); trying the next known build", build)
 			continue
 		}
+		done()
 		var mismatch *RealmMismatch
 		if !errors.As(err, &mismatch) {
 			return nil, err
@@ -430,7 +464,7 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 		realm.CfgRealmsID, sanitizeServerText(realm.Name), realm.WowRealmAddress, realm.Version.Build, realm.PopulationState, realm.Flags)
 	if realm.PopulationState == 0 {
 		// RealmPopulationState::Offline (Realm.h:61-71): listed, but JoinRealm refuses it
-		return nil, &RealmError{Err: fmt.Errorf("bnet: realm %q is offline; its world server has not written the realmlist row", sanitizeServerText(realm.Name))}
+		return nil, &RealmError{Err: &realmOfflineError{text: fmt.Sprintf("bnet: realm %q is offline; its world server has not written the realmlist row", sanitizeServerText(realm.Name))}}
 	}
 	if realm.Flags&realmFlagVersionMismatch != 0 {
 		return nil, &RealmError{Err: &RealmMismatch{Realm: realm.Name, Claimed: opts.ClientBuild, RealmBuild: realm.Version.Build}}

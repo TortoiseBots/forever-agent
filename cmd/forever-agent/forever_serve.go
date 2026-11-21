@@ -20,7 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/world"
+	"github.com/pjerra/forever-agent/internal/netutil"
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
@@ -163,7 +165,7 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -179,12 +181,26 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
 	allowGMUnits := fs.Bool("allow-gm-units", false, "test bench: allow gm_kill, gm_set_hp and gm_aura on the guids trial_units registered")
 	captureDir := fs.String("capture-dir", "", "write every packet the combat, chat and party handlers see into a new run directory under this path, from the first login on (one cap for the whole daemon; keep it outside the repository)")
+	budgetAddr := fs.String("login-budget", "", "loopback address of the fleet's shared login budget (set by `fleet`; its token is in the environment)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
+	}
+	var budget *budgetClient
+	if *budgetAddr != "" {
+		if _, port, err := netutil.CheckLoopbackAddr(*budgetAddr); err != nil || port == 0 {
+			fmt.Fprintln(stderr, "forever serve: --login-budget must be a loopback address with a port")
+			return exitUsage
+		}
+		tok := os.Getenv(budgetTokenEnv)
+		if tok == "" {
+			fmt.Fprintf(stderr, "forever serve: --login-budget needs the token in %s\n", budgetTokenEnv)
+			return exitUsage
+		}
+		budget = newBudgetClient(*budgetAddr, tok)
 	}
 	if err := common.check("forever serve"); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -284,8 +300,13 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		defer os.Remove(filepath.Join(*dir, "agent.pid"))
 	}
 
+	// Every login attempt of the daemon, the first login's build probes and each reconnect's, waits for its turn in the
+	// gate and books it (bnet.Options.BeforeAttempt).
+	gate := newLoginGate(budget, stdout)
+	common.beforeAttempt = func(ctx context.Context) error { return gate.enter(ctx, 0) }
 	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
 	if err != nil {
+		gate.failed(err)
 		if code, isLogin := loginExit(err, stderr); isLogin {
 			return code
 		}
@@ -301,6 +322,12 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			DisconnectGrace: *grace,
 			AllowGMUnits:    *allowGMUnits,
 			CaptureDir:      *captureDir,
+			// A reconnect logs in again: the first login's join ticket is spent when the link drops.
+			Relogin: func(ctx context.Context, o world.Options) (world.Options, error) {
+				return reloginThrough(ctx, gate, o, func(lctx context.Context) (*bnet.Result, error) {
+					return common.loginWithPassword(lctx, "forever serve", stdout, password, common.worldAccept(stdout))
+				}, func(r *bnet.Result, o world.Options) world.Options { return common.withLogin(r, stdout, o) })
+			},
 		},
 	})
 	fmt.Fprintf(stdout, "rpc: listening on http://%s/rpc\n", ln.Addr())

@@ -276,3 +276,36 @@ func TestLoginHonoursCancel(t *testing.T) {
 		t.Fatalf("err = %v after %s", err, time.Since(start))
 	}
 }
+
+// A caller that keeps a login rate books every connection Login makes: the hook runs before the first one and before the
+// retry after a rejected proof, on the caller's context.
+func TestLoginHookRunsBeforeEveryConnection(t *testing.T) {
+	f := newFakeRealm("harness", "pw", bigFrom(23), bigFrom(24))
+	one := 1
+	addr, conns := startRealmd(t, f, fakeOpts{rejects: &one, realms: testRealms})
+	var before []int32 // connections already made when the hook ran
+	ctx := WithAttempts(ctx5s(t), Attempts{Before: func(context.Context) error {
+		before = append(before, conns.Load())
+		return nil
+	}})
+	if _, err := Login(ctx, addr, "harness", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 2 || before[0] != 0 || before[1] != 1 {
+		t.Fatalf("the hook ran with %v connections already made, want [0 1] (once before each connection)", before)
+	}
+}
+
+// A hook that refuses ends the login before any connection is made.
+func TestLoginHookRefusalMakesNoConnection(t *testing.T) {
+	f := newFakeRealm("harness", "pw", bigFrom(25), bigFrom(26))
+	addr, conns := startRealmd(t, f, fakeOpts{realms: testRealms})
+	want := errors.New("no turn")
+	ctx := WithAttempts(ctx5s(t), Attempts{Before: func(context.Context) error { return want }})
+	if _, err := Login(ctx, addr, "harness", "pw"); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want the hook's", err)
+	}
+	if conns.Load() != 0 {
+		t.Fatalf("%d connections made", conns.Load())
+	}
+}
