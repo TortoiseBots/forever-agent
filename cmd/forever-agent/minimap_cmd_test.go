@@ -27,3 +27,27 @@ func TestMinimapExtractWithoutArchives(t *testing.T) {
 		t.Errorf("exit %d, stderr %q", code, errb.String())
 	}
 }
+
+// TestMinimapForeverFlagsRequireDB2 is the K5 case: --forever reads the map
+// list from the server's Map.db2, so without --db2 it is a usage error that
+// names the flag; --db2 without --forever is refused the other way round.
+func TestMinimapForeverFlagsRequireDB2(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	if code := run(t.Context(), []string{"minimap-extract", "--forever",
+		"--client", dir, "--out", dir}, &out, &errb); code != exitUsage {
+		t.Fatalf("exit %d, want %d (%s)", code, exitUsage, errb.String())
+	}
+	if !strings.Contains(errb.String(), "--db2") {
+		t.Fatalf("the refusal does not name --db2: %q", errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(t.Context(), []string{"minimap-extract",
+		"--client", dir, "--out", dir, "--db2", dir}, &out, &errb); code != exitUsage {
+		t.Fatalf("--db2 without --forever: exit %d, want %d (%s)", code, exitUsage, errb.String())
+	}
+	if !strings.Contains(errb.String(), "--forever") {
+		t.Fatalf("the refusal does not name --forever: %q", errb.String())
+	}
+}

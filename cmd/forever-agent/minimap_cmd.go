@@ -10,19 +10,22 @@ import (
 	"github.com/pjerra/forever-agent/internal/minimap"
 )
 
-const minimapUsage = "usage: forever-agent minimap-extract --client <Data dir> --out <dir> [--maps 70,209|all-instances] [--mmaps DIR] [--list] [--verbose]\n" +
+const minimapUsage = "usage: forever-agent minimap-extract --client <Data dir> --out <dir> [--maps 70,209|all-instances] [--mmaps DIR] [--list] [--verbose] [--forever --client <extract dir> --db2 <dbc dir>]\n" +
 	"  reads the game client's MPQ archives and writes <out>/<map>.png + <map>.json for the dashboard (README \"Minimaps\")\n" +
-	"  the minimap picture is the terrain tiles, the client's indoor WMO tiles, or the WMO tiles over the terrain"
+	"  the minimap picture is the terrain tiles, the client's indoor WMO tiles, or the WMO tiles over the terrain\n" +
+	"  with --forever: --client is an outside CASC extractor's listfile-named folder and --db2 the server's dbc/<locale> with Map.db2"
 
 // minimapCmd extracts the in-game minimaps of maps from the client the owner owns.
 func minimapCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("minimap-extract", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	client := fs.String("client", "", "the client's Data folder (the MPQ archives; read only)")
+	client := fs.String("client", "", "the client's Data folder (the MPQ archives; read only); with --forever, the CASC extractor's listfile-named folder")
 	out := fs.String("out", "", "folder to write <map>.png and <map>.json into")
 	maps := fs.String("maps", "all-instances", `map ids, comma separated, or "all-instances" (every dungeon and raid of Map.dbc)`)
 	mmaps := fs.String("mmaps", "", "server mmaps folder(s), comma separated: a map with no minimap tiles gets a height-shaded floor render of its navmesh")
-	prefer := fs.String("prefer", "", "order of the image sources for <map>.png, comma separated: minimap (the terrain and indoor WMO tiles), worldmap (the map picture of the area), navmesh (default worldmap,minimap,navmesh)")
+	prefer := fs.String("prefer", "", "order of the image sources for <map>.png, comma separated: minimap (the terrain and indoor WMO tiles), worldmap (the map picture of the area), navmesh (default worldmap,minimap,navmesh; with --forever minimap,navmesh)")
+	forever := fs.Bool("forever", false, "extract the 1.60 client data: --client is an outside CASC extractor's folder and --db2 the server's extracted Map.db2 folder")
+	db2Dir := fs.String("db2", "", "with --forever: the server's dbc/<locale> folder holding Map.db2")
 	list := fs.Bool("list", false, "only report what each map would get; write nothing")
 	verbose := fs.Bool("verbose", false, "log every map and every skipped tile to stderr")
 	if err := fs.Parse(args); err != nil {
@@ -32,22 +35,37 @@ func minimapCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, minimapUsage)
 		return exitUsage
 	}
+	if *forever && *db2Dir == "" {
+		fmt.Fprintln(stderr, "minimap-extract: --forever needs --db2 DIR (the server's dbc/<locale> folder with Map.db2)")
+		return exitUsage
+	}
+	if !*forever && *db2Dir != "" {
+		fmt.Fprintln(stderr, "minimap-extract: --db2 is a --forever flag (the 1.12 client's maps come from Map.dbc inside its MPQ archives)")
+		return exitUsage
+	}
 	ids, all, err := minimap.ParseMapList(*maps)
 	if err != nil {
 		fmt.Fprintln(stderr, "minimap-extract:", err)
 		return exitUsage
 	}
-	pref, err := minimap.ParsePrefer(*prefer)
-	if err != nil {
-		fmt.Fprintln(stderr, "minimap-extract:", err)
-		return exitUsage
+	var pref []string
+	if *prefer != "" {
+		pref, err = minimap.ParsePrefer(*prefer)
+		if err != nil {
+			fmt.Fprintln(stderr, "minimap-extract:", err)
+			return exitUsage
+		}
 	}
-	opts := minimap.Options{ClientDir: expandHome(*client), OutDir: expandHome(*out), MmapsDirs: splitDirs(*mmaps),
-		Maps: ids, All: all, Prefer: pref, ListOnly: *list}
+	opts := minimap.Options{ClientDir: expandHome(*client), DB2Dir: expandHome(*db2Dir), OutDir: expandHome(*out),
+		MmapsDirs: splitDirs(*mmaps), Maps: ids, All: all, Prefer: pref, ListOnly: *list}
 	if *verbose {
 		opts.Log = func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) }
 	}
-	res, err := minimap.Run(opts)
+	run := minimap.Run
+	if *forever {
+		run = minimap.RunForever
+	}
+	res, err := run(opts)
 	if err != nil {
 		fmt.Fprintln(stderr, "minimap-extract:", err)
 		return 1
