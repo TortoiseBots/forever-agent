@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/trials/events"
 )
 
 // The closed template set of gm_guard.py for ForeverCore, rendered here
@@ -222,8 +224,10 @@ func (g *Guard) SetHire(guid string) {
 	g.hire = normGUIDOf(guid)
 }
 
-// normGUIDOf normalises one guid the way the runner compares them.
-func normGUIDOf(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+// normGUIDOf normalises one guid the way the runner compares them: the same form events.NormGUID gives the guids of a
+// setup document, so a guid read from a unit row and the same guid read from the hire's setup compare equal whatever
+// their leading zeros (a player guid is 0x0801..., and NormGUID drops that zero).
+func normGUIDOf(s string) string { return events.NormGUID(strings.TrimSpace(s)) }
 
 // allowedTarget reports whether kind may act on targetClass for target guid.
 func (g *Guard) allowedTarget(kind string, class GuardTarget, target string) bool {

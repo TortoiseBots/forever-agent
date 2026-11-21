@@ -121,3 +121,31 @@ func TestActGMTeleportNeedsNoChatReply(t *testing.T) {
 		t.Fatalf("a silent teleport that never arrived passed: %v\n%s", err, joinLines(lines))
 	}
 }
+
+// TestGMCastsArePaced: a burst of `.cast` lines is held back so the server is never handed fourteen triggered casts
+// in a moment (the live core-gains session drop); the first ones go at once, the extra one waits for the window.
+func TestGMCastsArePaced(t *testing.T) {
+	oldB, oldW := gmCastBurst, gmCastWindow
+	gmCastBurst, gmCastWindow = 2, 4*time.Second
+	defer func() { gmCastBurst, gmCastWindow = oldB, oldW }()
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveGMScript = func(said string) (bool, *[3]float32) { return strings.HasPrefix(said, ".cast"), nil }
+	defer f.close()
+	a := startServeDaemon(t, f, &stepLog{})
+	waitServeUnits(t, a)
+
+	var stamps []time.Duration
+	start := time.Now()
+	for range 3 {
+		a.mustCall(t, "gm", map[string]any{"text": ".cast 133 triggered"})
+		stamps = append(stamps, time.Since(start))
+	}
+	// Each silent line takes the quiet window to answer (about 1.5 s), so three unpaced casts end near 4.5 s; the
+	// third held until the first one ages out of the 4 s window starts at 4 s and ends past 5.2 s.
+	if stamps[2] < 5200*time.Millisecond {
+		t.Fatalf("the third cast in the window ended at %v, want it held to the window's end: %v", stamps[2], stamps)
+	}
+	a.stop(t)
+	f.wait(t)
+}

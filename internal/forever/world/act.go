@@ -296,6 +296,9 @@ func (s *session) actGM(ctx context.Context, a *actState, step ActStep) error {
 	if err := s.confirmGM(ctx); err != nil {
 		return s.actFail(a, step, err)
 	}
+	if err := s.paceGMCast(ctx, line); err != nil {
+		return s.actFail(a, step, err)
+	}
 	class, goal := classifyGMLine(line)
 	mark := s.teleportMark()
 	res, err := s.runOneResult(ctx, q, line)

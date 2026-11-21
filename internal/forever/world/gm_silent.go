@@ -171,3 +171,47 @@ func (s *session) confirmTeleport(ctx context.Context, line string, before telep
 		}
 	}
 }
+
+// GM casts are paced. The live core-gains run lost the character's world connection (the server closed the socket:
+// `reading a frame header: EOF`, and every reconnect was answered `unknown account`) after about fourteen
+// `.cast <spell> triggered` lines at one selected mob in a short time, with the server itself still up. The core's own
+// per-opcode packet limit does not name chat (cs and WorldSession::DosProtection leave CMSG_CHAT_MESSAGE_SAY
+// unlimited), and the agent had not closed the socket, so the cause is on the server side and the evidence cannot
+// tell more. A burst of triggered casts is the one pattern that run shows, so the lines go out at a measured pace: at
+// most gmCastBurst `.cast` lines in any gmCastWindow, the next one waiting for the oldest to age out.
+var (
+	gmCastBurst  = 4
+	gmCastWindow = 8 * time.Second
+)
+
+// isGMCast reports whether a GM line is the core's `.cast` command.
+func isGMCast(line string) bool {
+	f := strings.Fields(strings.ToLower(strings.TrimSpace(line)))
+	return len(f) > 0 && (f[0] == ".cast" || f[0] == "!cast")
+}
+
+// paceGMCast holds a `.cast` line until the pace allows it.
+func (s *session) paceGMCast(ctx context.Context, line string) error {
+	if !isGMCast(line) {
+		return nil
+	}
+	for {
+		now := time.Now()
+		keep := s.gmCastAt[:0]
+		for _, at := range s.gmCastAt {
+			if now.Sub(at) < gmCastWindow {
+				keep = append(keep, at)
+			}
+		}
+		s.gmCastAt = keep
+		if len(s.gmCastAt) < gmCastBurst {
+			s.gmCastAt = append(s.gmCastAt, now)
+			return nil
+		}
+		wait := gmCastWindow - now.Sub(s.gmCastAt[0])
+		s.opts.logf("gm: %d .cast lines in %s; the next one waits %s", len(s.gmCastAt), gmCastWindow, wait.Round(time.Millisecond))
+		if err := s.collect(ctx, wait); err != nil {
+			return err
+		}
+	}
+}

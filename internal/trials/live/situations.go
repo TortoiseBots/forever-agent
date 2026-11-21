@@ -687,7 +687,7 @@ func (t *tankRun) strangerNear(ctx context.Context) (string, bool) {
 func (t *tankRun) bringHire(ctx context.Context, name string) {
 	a := t.arena
 	if a != nil {
-		if _, err := t.tb.TeleParty(ctx, uint32(a.Map), a.X, a.Y, a.Z); err != nil {
+		if err := teleHires(ctx, t.tb, t.r, a); err != nil {
 			t.sit.logf("hire teleport refused (%v); asking %s to come", err, name)
 			_, _ = t.tb.Come(ctx, name)
 		}

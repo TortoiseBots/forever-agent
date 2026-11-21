@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 )
 
 // dummyHarness is a dummy repeat over the scripted world.
@@ -322,5 +324,68 @@ func TestDummyLostSpawnReplyIsLedgered(t *testing.T) {
 	}
 	if got := strOf(summons[0]["guid"]); got == "" {
 		t.Fatalf("ledgered summon has no guid: %v", summons[0])
+	}
+}
+
+// TestDummyOwnHireIsNotAStranger is the live dummy-bench finding: the hire's guid reached the repeat through
+// GuidsOf (events.NormGUID drops the leading zero of a player guid, 0x0801... becomes 0x801...), while the unit rows
+// keep it, so the bench counted its own hire as a real player. A hire known by its guid from the hire reply is
+// ours, in any spelling; a different player in view still stops the arena.
+func TestDummyOwnHireIsNotAStranger(t *testing.T) {
+	const hire = "0x0801180000000000000000000000000b"
+	h := newDummyHarness(t, 1)
+	h.rep.Guids = GuidsOf(map[string]any{"guids": map[string]any{"player": gTester, "bot": hire}})
+	h.world.mobs[hire] = map[string]any{"guid": hire, "name": "Bmage", "type": "active player",
+		"distance": 3, "level": 40, "dead": false}
+	h.sit.Now = jumpClock(700 * time.Millisecond)
+	out, err := h.run(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strOf(out["ended"]); got != "duration" {
+		t.Fatalf("outcome %v: the bench's own hire was taken for a real player", out)
+	}
+}
+
+func TestSameGUIDSpellings(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"0x0801180000000000000000000000000b", "0x801180000000000000000000000000b"},
+		{"0X0801180000000000000000000000000B", "0x0801180000000000000000000000000b"},
+		{" 0x00000000000000aa ", "0xaa"},
+	} {
+		if normGUIDOf(pair[0]) != normGUIDOf(pair[1]) {
+			t.Errorf("%q and %q are the same guid but normalise to %q and %q", pair[0], pair[1], normGUIDOf(pair[0]), normGUIDOf(pair[1]))
+		}
+	}
+	if normGUIDOf("0x0801180000000000000000000000000b") == normGUIDOf("0x0801180000000000000000000000000c") {
+		t.Error("two guids normalised alike")
+	}
+}
+
+// TestBringHireTeleportsByName is the live dummy-bench finding: `.tb tele party <map> x y z` with no leader is
+// refused ambiguous-party, so the hire never reached the arena. The teleport names each hire.
+func TestBringHireTeleportsByName(t *testing.T) {
+	h := newDummyHarness(t, 1)
+	h.rep.BotName = "Bmage"
+	h.rep.ExtraNames = []string{"Bheal"}
+	h.sit.Now = jumpClock(700 * time.Second)
+	tb := tbcmd.NewClient(NewTBRunner(h.rep.Client))
+	d := &dummyRun{sit: h.sit, r: h.rep, tb: tb, arena: &h.sit.Arenas[0]}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	d.bringHire(ctx, "Bmage")
+	var teles []string
+	for _, line := range h.fake.botLines() {
+		if strings.HasPrefix(line, ".tb tele") {
+			teles = append(teles, line)
+		}
+	}
+	if len(teles) != 2 || !strings.HasPrefix(teles[0], ".tb tele Bmage 0 ") || !strings.HasPrefix(teles[1], ".tb tele Bheal 0 ") {
+		t.Fatalf("the teleport lines were %q, want one named line per hire", teles)
+	}
+	for _, line := range teles {
+		if strings.HasPrefix(line, ".tb tele party") {
+			t.Fatalf("a party teleport with no leader went out: %q", line)
+		}
 	}
 }

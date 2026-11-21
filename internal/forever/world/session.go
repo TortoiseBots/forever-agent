@@ -485,7 +485,9 @@ type session struct {
 	selfSeen bool
 	// ownCreateAt is when the last own create block (a login or a map change) arrived: the start of its burst.
 	ownCreateAt time.Time
-	mover       *objects.Mover
+	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
+	gmCastAt []time.Time
+	mover    *objects.Mover
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID

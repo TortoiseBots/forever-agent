@@ -151,6 +151,9 @@ func (s *session) serveGM(ctx context.Context, text string) (*command.Reply, err
 	if !strings.HasPrefix(text, ".") && !strings.HasPrefix(text, "!") {
 		text = "." + text
 	}
+	if err := s.paceGMCast(ctx, text); err != nil {
+		return nil, err
+	}
 	class, goal := classifyGMLine(text)
 	if class == gmReplies {
 		return s.serveCommandLine(ctx, text, 0)
