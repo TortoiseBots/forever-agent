@@ -56,7 +56,7 @@ Every flag and its default:
 | `--plans-dir` | `~/turtle-agent/dungeons` | plan files for the map, comma separated; reloaded when a file changes |
 | `--minimap-dir` | `~/turtle-agent-minimaps` | map images from `minimap-extract`; the run map draws over the image of its map id |
 | `--embed-from` | none | extra `http://host:port` origins that may show the page in a frame |
-| `--config-dir` | `~/.config/turtle-agent` | settings files and the `rpc-<port>.token` files |
+| `--config-dir` | `<user config dir>/turtle-agent` | settings files and the `rpc-<port>.token` files |
 | `--mmaps-dir` | none | the navmesh folder of the server the plans run on; enables the real-route plan view |
 
 The table above leaves out the `--edit*` and `--control*` flags on purpose: route editing lives in [Turn on route editing](route-editing-guide.md) and run controls in [Control a run from the dashboard](run-controls-guide.md), with every flag also listed in [Command and flag reference](commands-reference.md).

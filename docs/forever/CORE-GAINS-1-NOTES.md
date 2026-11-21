@@ -211,7 +211,7 @@ fields): `ok  github.com/pjerra/forever-agent/internal/forever/world  579.115s`.
 The VM suite:
 
 ```
-RESULT: PASS  kind=ta wt=wt-fa-gains sha=7d698a6c dirty=0 files=2343
+RESULT: PASS  kind=ta sha=7d698a6c dirty=0 files=2343
 rc=0  vm_duration=2289s  laptop_wall=2305s
 ```
 

@@ -23,13 +23,13 @@ Three JSON files configure the agent. Each has one job; only two carry secrets.
 
 ## Settings file
 
-The settings file holds the server address, your account passwords, and folder paths. Default `<home>/.config/turtle-agent/settings.json`, mode `0600`. `login`, `fleet` and `slot setup` read it. Only `realmd` and `accounts` are required.
+The settings file holds the server address, your account passwords, and folder paths. Default `<user config dir>/turtle-agent/settings.json`, mode `0600`. `login`, `fleet` and `slot setup` read it. Only `realmd` and `accounts` are required.
 
 It is the only file with passwords, so nothing read from it may reach a log line, an error, an event or a capture. Account names stay out of logs and errors too: with one account in the file, `login <character>` keeps the name off the command line.
 
 ## Slot table
 
-The slot table names each server's slots: their account, character, laptop RPC port, and the `settings_from` file that holds the account's password. It holds no passwords itself. Default `<home>/.config/turtle-agent/slots.json` (`--slots FILE` picks another file). Each server entry names its `realmd`, optional `realm` and `world_addr` overrides, and its slots. A slot needs `id`, `account`, `character`, `port` and `settings_from` (a `reserved` slot names a reason instead and is never leased).
+The slot table names each server's slots: their account, character, laptop RPC port, and the `settings_from` file that holds the account's password. It holds no passwords itself. Default `<user config dir>/turtle-agent/slots.json` (`--slots FILE` picks another file). Each server entry names its `realmd`, optional `realm` and `world_addr` overrides, and its slots. A slot needs `id`, `account`, `character`, `port` and `settings_from` (a `reserved` slot names a reason instead and is never leased).
 
 Leases live beside the slot table, one file per server and slot, so a `--slots FILE` outside the default directory keeps its own leases. Two ledgers cannot see each other, so mixing them for one server is refused.
 

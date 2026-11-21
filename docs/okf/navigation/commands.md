@@ -40,7 +40,7 @@ Needs `--capture` and/or `--botwatch`; no positional arguments.
 | `--out` | `map.svg` | The SVG to write (`.svg` appended when missing); several floors write `NAME-f1.svg`, `NAME-f2.svg`, … | `--out /tmp/fight.svg` |
 | `--html` | `false` | Also write the single-file HTML replay next to the SVG with `.html`. | `--html` |
 | `--force` | `false` | Let `--out` replace an existing file (never a capture). | `--force` |
-| `--config` | `~/.config/turtle-agent/settings.json` | Settings file; its `mmaps_dir` gives the navmesh background. | `--config <slot-dir>/settings.json` |
+| `--config` | `<user config dir>/turtle-agent/settings.json` | Settings file; its `mmaps_dir` gives the navmesh background. | `--config <slot-dir>/settings.json` |
 | `--mmaps` | `""` | Folder with the server's mmaps (overrides `mmaps_dir`); empty with no `mmaps_dir` draws no background. | `--mmaps <walk-dir>` |
 | `--map` | `-1` | The map to draw (default: the one with most positions). | `--map 1` |
 | `--box` | `""` | Draw this area only: `x0,y0,x1,y1` in game coordinates, corners in any order. | `--box -1314,-2409,-1251,-2349` |

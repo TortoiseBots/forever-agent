@@ -76,7 +76,7 @@ turtle-agent route-edits promote [--edit-dir DIR] [--message-file FILE] --worktr
 | --- | --- | --- |
 | `--edit-dir` | `<home>/turtle-agent-route-edits` | Where the route editor wrote its versions. Applies to all three subcommands. |
 | `--json` | `false` | `list`: print the records as JSON. |
-| `--config-dir` | `<home>/.config/turtle-agent` | `export`: folder with the slot settings (which folders a slot uses; guards overlap). |
+| `--config-dir` | `<user config dir>/turtle-agent` | `export`: folder with the slot settings (which folders a slot uses; guards overlap). |
 | `--to` | _(required)_ | `export`: fresh folder to write `<plan>.json` into (must not exist or be empty). |
 | `--worktree` | _(required)_ | `promote`: worktree whose `dungeons/<plan>.json` is replaced. |
 | `--message-file` | _(empty)_ | `promote`: also write the commit message to this file. |

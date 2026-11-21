@@ -233,7 +233,7 @@ func scenarioRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 }
 
 // defaultScenarioTokenFile is rpc.TokenFile's layout: rpc-<port>.token next
-// to the settings file, defaulting to ~/.config/forever-agent.
+// to the settings file, defaulting to the forever-agent folder in the user config dir.
 func defaultScenarioTokenFile(addr string) string {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil || port == "" {

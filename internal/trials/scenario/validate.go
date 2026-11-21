@@ -133,43 +133,66 @@ func Validate(trialVal any) []string {
 			kind := pyjson.Str(sit["kind"])
 			switch kind {
 			case "tank_damage", "member_damage", "pack", "cc_target",
-				"ooc_buffs", "ooc_hurt", "mana_pressure", "caster_mob", "debuff":
+				"ooc_buffs", "ooc_hurt", "mana_pressure", "caster_mob", "debuff", "dummy":
 			default:
 				errAdd(&errs, fmt.Sprintf("%s: bad situation.kind %s", tid, pythonRepr(sit["kind"])))
 			}
-			mobsVal := sit["mobs"]
-			mobs := pyjson.ObjectOrEmpty(mobsVal)
-			if _, ok := pyjson.Object(mobsVal); ok {
-				checkDict(mobsVal, mobsFields, "mobs", tid, "", &errs)
-			}
-			role := pyjson.Str(mobs["role"])
-			if role != "melee" && role != "caster" && role != "humanoid" {
-				errAdd(&errs, fmt.Sprintf("%s: bad mobs.role %s", tid, pythonRepr(mobs["role"])))
-			}
-			for _, numkey := range []string{"count", "level_delta"} {
-				if !isIntLike(mobs[numkey]) {
-					errAdd(&errs, fmt.Sprintf("%s: mobs.%s must be int", tid, numkey))
+			if kind == "dummy" {
+				if _, ok := pyjson.Object(sit["mobs"]); ok {
+					errAdd(&errs, fmt.Sprintf("%s: dummy takes no mobs block (one dummy_entry target)", tid))
 				}
-			}
-			if refill := mobs["refill_every_s"]; refill != nil {
-				if !isIntLike(refill) || floatOf(refill) < 5 {
-					errAdd(&errs, fmt.Sprintf("%s: refill_every_s must be an int >= 5", tid))
+				dummyEntry, hasEntry := sit["dummy_entry"]
+				if !hasEntry || !isIntStrict(dummyEntry) || floatOf(dummyEntry) < 1 {
+					errAdd(&errs, fmt.Sprintf("%s: dummy_entry must be a creature entry id", tid))
 				}
-			}
-			band, bandOK := pyjson.List(sit["hp_band"])
-			bandGood := bandOK && len(band) == 2
-			if bandGood {
-				for _, x := range band {
-					if !numLenient(x) {
-						bandGood = false
+				rotation, ok := pyjson.List(sit["rotation"])
+				if !ok || len(rotation) == 0 {
+					errAdd(&errs, fmt.Sprintf("%s: rotation must be a non-empty list of spell names", tid))
+				} else {
+					for _, item := range rotation {
+						if s, ok := item.(string); !ok || s == "" {
+							errAdd(&errs, fmt.Sprintf("%s: rotation must be a non-empty list of spell names", tid))
+							break
+						}
+					}
+				}
+			} else {
+				mobsVal := sit["mobs"]
+				mobs := pyjson.ObjectOrEmpty(mobsVal)
+				if _, ok := pyjson.Object(mobsVal); ok {
+					checkDict(mobsVal, mobsFields, "mobs", tid, "", &errs)
+				}
+				role := pyjson.Str(mobs["role"])
+				if role != "melee" && role != "caster" && role != "humanoid" {
+					errAdd(&errs, fmt.Sprintf("%s: bad mobs.role %s", tid, pythonRepr(mobs["role"])))
+				}
+				for _, numkey := range []string{"count", "level_delta"} {
+					if !isIntLike(mobs[numkey]) {
+						errAdd(&errs, fmt.Sprintf("%s: mobs.%s must be int", tid, numkey))
+					}
+				}
+				if refill := mobs["refill_every_s"]; refill != nil {
+					if !isIntLike(refill) || floatOf(refill) < 5 {
+						errAdd(&errs, fmt.Sprintf("%s: refill_every_s must be an int >= 5", tid))
 					}
 				}
 			}
-			if !bandGood {
-				errAdd(&errs, fmt.Sprintf("%s: hp_band must be [low, high]", tid))
-			}
-			if !numLenient(sit["floor_pct"]) {
-				errAdd(&errs, fmt.Sprintf("%s: floor_pct must be a number", tid))
+			band, bandOK := pyjson.List(sit["hp_band"])
+			if kind != "dummy" {
+				bandGood := bandOK && len(band) == 2
+				if bandGood {
+					for _, x := range band {
+						if !numLenient(x) {
+							bandGood = false
+						}
+					}
+				}
+				if !bandGood {
+					errAdd(&errs, fmt.Sprintf("%s: hp_band must be [low, high]", tid))
+				}
+				if !numLenient(sit["floor_pct"]) {
+					errAdd(&errs, fmt.Sprintf("%s: floor_pct must be a number", tid))
+				}
 			}
 			if rescues := sit["max_rescues_per_min"]; rescues != nil {
 				if !isIntStrict(rescues) || floatOf(rescues) < 1 {
@@ -266,27 +289,29 @@ func Validate(trialVal any) []string {
 				if pyjson.IsBool(waitVal) || !ok || f <= 0 {
 					errAdd(&errs, fmt.Sprintf("%s: ooc_hurt needs ooc_wait_s > 0 (the window length)", tid))
 				}
-				if n, ok := pyjson.Num(mobs["count"]); !ok || n != 0 {
+				if n, ok := pyjson.Num(pyjson.ObjectOrEmpty(sit["mobs"])["count"]); !ok || n != 0 {
 					errAdd(&errs, fmt.Sprintf("%s: ooc_hurt takes mobs.count 0", tid))
 				}
 			}
-			victim := pyjson.Str(sit["victim"])
-			extraList, _ := pyjson.List(trial["extra_bots"])
-			nExtras := len(extraList)
-			if victim == "extra1" || victim == "extra2" || victim == "extra3" {
-				n, _ := strconv.Atoi(string(victim[len(victim)-1]))
-				if n > nExtras {
-					errAdd(&errs, fmt.Sprintf("%s: victim %s has no extra_bots bot behind it", tid, pythonRepr(victim)))
+			if kind != "dummy" {
+				victim := pyjson.Str(sit["victim"])
+				extraList, _ := pyjson.List(trial["extra_bots"])
+				nExtras := len(extraList)
+				if victim == "extra1" || victim == "extra2" || victim == "extra3" {
+					n, _ := strconv.Atoi(string(victim[len(victim)-1]))
+					if n > nExtras {
+						errAdd(&errs, fmt.Sprintf("%s: victim %s has no extra_bots bot behind it", tid, pythonRepr(victim)))
+					}
+				} else if victim != "player" && victim != "bot" {
+					errAdd(&errs, fmt.Sprintf("%s: bad victim %s", tid, pythonRepr(sit["victim"])))
 				}
-			} else if victim != "player" && victim != "bot" {
-				errAdd(&errs, fmt.Sprintf("%s: bad victim %s", tid, pythonRepr(sit["victim"])))
-			}
-			floorVal := sit["floor_pct"]
-			if f, ok := pyjson.Num(floorVal); ok && !pyjson.IsBool(floorVal) && len(band) == 2 && bandGoodBlock(band) {
-				// a floor at or above the band's low edge would rescue the victim the whole time
-				if !(0 < f && f < floatOf(band[0])) {
-					errAdd(&errs, fmt.Sprintf("%s: floor_pct %s must be above 0 and below the hp_band low %s",
-						tid, pyjson.Str(floorVal), pyjson.Str(band[0])))
+				floorVal := sit["floor_pct"]
+				if f, ok := pyjson.Num(floorVal); ok && !pyjson.IsBool(floorVal) && len(band) == 2 && bandGoodBlock(band) {
+					// a floor at or above the band's low edge would rescue the victim the whole time
+					if !(0 < f && f < floatOf(band[0])) {
+						errAdd(&errs, fmt.Sprintf("%s: floor_pct %s must be above 0 and below the hp_band low %s",
+							tid, pyjson.Str(floorVal), pyjson.Str(band[0])))
+					}
 				}
 			}
 		}
