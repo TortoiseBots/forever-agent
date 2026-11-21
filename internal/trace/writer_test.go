@@ -392,3 +392,31 @@ func TestSummaryTakesTheInstanceFromTheInstanceEvent(t *testing.T) {
 		})
 	}
 }
+
+// TestHeaderStartUnixFollowsStart: a producer that gives the start time only (the watch's recorder) still writes
+// start_unix, which the readers use to put the combat log's wall-clock rows on the trace's clock. An explicit
+// start_unix is kept.
+func TestHeaderStartUnixFollowsStart(t *testing.T) {
+	read := func(h Header) int64 {
+		w := open(t, Options{})
+		w.Header(h)
+		w.Close()
+		b, err := os.ReadFile(w.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			StartUnix int64 `json:"start_unix"`
+		}
+		if err := json.Unmarshal([]byte(strings.SplitN(string(b), "\n", 2)[0]), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.StartUnix
+	}
+	if got := read(Header{Source: "watch", Start: time.Unix(1_700_000_000, 0).UTC()}); got != 1_700_000_000 {
+		t.Fatalf("start_unix %d, want 1700000000", got)
+	}
+	if got := read(Header{Source: "watch", Start: time.Unix(1_700_000_000, 0).UTC(), StartUnix: 5}); got != 5 {
+		t.Fatalf("start_unix %d, want the explicit 5", got)
+	}
+}

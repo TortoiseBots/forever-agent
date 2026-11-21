@@ -307,3 +307,100 @@ func TestDungeonThreatTable(t *testing.T) {
 		t.Fatal("a stale pushed list was served")
 	}
 }
+
+// playerGUID is a player guid for the tests (HighGuid::Player is type 2).
+func playerGUID(low uint64) wire.GUID {
+	return wire.GUID{High: 2 << 58, Low: low}
+}
+
+// playerNamesAnswer is one SMSG_QUERY_PLAYER_NAMES_RESPONSE naming the given players (guid to name), built the way
+// ParsePlayerNamesResponse reads it.
+func playerNamesAnswer(t *testing.T, names map[wire.GUID]string) []byte {
+	t.Helper()
+	b := wire.NewWriter()
+	b.WriteU32(uint32(len(names)))
+	for g, name := range names {
+		b.WriteU8(0)
+		wire.WritePackedGUID(b, g)
+		b.WriteBit(true)  // has data
+		b.WriteBit(false) // no guild
+		b.WriteBit(false) // no house
+		b.FlushBits()
+		b.WriteBit(false) // not deleted
+		b.WriteBits(uint64(len(name)), 6)
+		b.WriteBits(0, 9) // surname
+		b.WriteBits(0, 9)
+		for range 5 {
+			b.WriteBits(0, 7)
+		}
+		b.FlushBits()
+		wire.WritePackedGUID(b, wire.GUID{}) // account
+		wire.WritePackedGUID(b, wire.GUID{}) // bnet account
+		wire.WritePackedGUID(b, g)           // guid actual
+		b.WriteU64(0)                        // guild club member id
+		b.WriteU32(0)                        // realm address
+		for range 5 {
+			b.WriteU8(1) // race, gender, class, level, faction
+		}
+		b.WriteU32(0) // timerunning season
+		b.WriteString(name)
+	}
+	if _, err := objects.ParsePlayerNamesResponse(b.Bytes()); err != nil {
+		t.Fatalf("the test's name answer does not parse: %v", err)
+	}
+	return b.Bytes()
+}
+
+// TestDungeonWorldNamesThePartyFromTheServer: a watch's character is not in the party it watches and nothing else in
+// a dungeon session asks for names, so a bot in view had no guid and every frame of a watch record carried an empty
+// one. PlayerGUID now asks the server for the players in view it cannot name and answers from the reply; a name nobody
+// in view bears is asked once per throttle window, not on every frame.
+func TestDungeonWorldNamesThePartyFromTheServer(t *testing.T) {
+	rec := &portRecorder{now: time.Now()}
+	s := newPortSession(rec)
+	tank, healer := playerGUID(0x11), playerGUID(0x12)
+	addUnit(t, s, tank, 0, 12, 21, 30, 100, 100, 28, 0)
+	addUnit(t, s, healer, 0, 13, 21, 30, 100, 100, 28, 0)
+	w := dungeonWorld{s: s}
+	s.events <- event{side: sideInstance, p: worldconn.Packet{
+		Core:    wire.SMSGQueryPlayerNamesResponse,
+		Payload: playerNamesAnswer(t, map[wire.GUID]string{tank: "Wctank", healer: "Wcpri"}),
+	}}
+	if g, ok := w.PlayerGUID("wctank"); !ok || g != tank {
+		t.Fatalf("PlayerGUID(wctank) = %v %v, want %v", g, ok, tank)
+	}
+	if g, ok := w.PlayerGUID("Wcpri"); !ok || g != healer {
+		t.Fatalf("PlayerGUID(Wcpri) = %v %v, want %v", g, ok, healer)
+	}
+	asked := len(rec.cores())
+	if asked != 1 {
+		t.Fatalf("%d name query(ies) sent, want one", asked)
+	}
+	// Everyone in view is named now, so a stranger asks nothing; a new unnamed player waits out the throttle.
+	if _, ok := w.PlayerGUID("Nobody"); ok {
+		t.Fatal("a name nobody bears was found")
+	}
+	addUnit(t, s, playerGUID(0x13), 0, 14, 21, 30, 100, 100, 28, 0)
+	if _, ok := w.PlayerGUID("Wcmag"); ok {
+		t.Fatal("a member that was not answered was found")
+	}
+	if got := len(rec.cores()); got != asked {
+		t.Fatalf("a second query went out inside the throttle window (%d sent)", got)
+	}
+}
+
+// TestDungeonWorldNamesThePartyFromTheRoster: when the watching character is in the party, its roster names every
+// member with a guid and no query is needed.
+func TestDungeonWorldNamesThePartyFromTheRoster(t *testing.T) {
+	rec := &portRecorder{now: time.Now()}
+	s := newPortSession(rec)
+	g := playerGUID(0x21)
+	s.party.RosterValid = true
+	s.party.Members = map[wire.GUID]*party.Member{g: {GUID: g, Name: "Wcrog"}}
+	if got, ok := (dungeonWorld{s: s}).PlayerGUID("WCROG"); !ok || got != g {
+		t.Fatalf("PlayerGUID(WCROG) = %v %v, want %v", got, ok, g)
+	}
+	if n := len(rec.cores()); n != 0 {
+		t.Fatalf("%d packet(s) sent for a roster name", n)
+	}
+}
