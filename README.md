@@ -505,6 +505,17 @@ member is flagged apart as `unattributed-deaths` with its evidence. `forever-age
 re-pulls, deaths, wipes) and per flag. The plan's recorded leg time is read from the record when it carries one;
 today's plan format records none, so the slow-leg flag stays quiet until a record has it.
 
+`forever-agent forever run-map DIR [--plan FILE] [--navmesh DIR [--parent MAP=PARENT]] [--out NAME.svg] [--html] [--names]
+[--floors auto|off|z1,z2] [--width PX] [--from-s N] [--to-s N] [--force]` draws a saved watch (the folder `dungeon-watch
+--out` wrote, or one of its trace files) as a top-down map: one SVG per floor (`<run_id>.svg`, `-f2` ... when the map has
+several) and, with `--html`, one self-contained HTML replay with a time slider (no script, font or image from outside the
+file). The routes are labelled by party slot (`--names` uses the characters' names), with the plan's route and pull groups,
+the creatures seen, boss kills, legs, pulls, deaths, wipes, pauses and practice rescues. `--navmesh` gives the
+floor background; without it, or in a build without cgo, the map says so. Output names are one file name written into DIR
+(no path, lowercase `.svg`), and nothing is overwritten without `--force`. `dungeon-watch --map --out DIR` writes the same
+two files after the summary; a failure there is one log line and never changes the watch's exit. See
+[docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
+
 `forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party
 records, `<run_id>.combatlog.jsonl` and `<run_id>.forever-run.json`), a watch trace file, or a trials repeat
