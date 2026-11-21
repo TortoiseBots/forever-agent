@@ -55,6 +55,14 @@ func minimapCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "minimap-extract:", err)
 			return exitUsage
 		}
+		if *forever {
+			for _, p := range pref {
+				if p != minimap.KindMinimap && p != minimap.KindNavmesh {
+					fmt.Fprintf(stderr, "minimap-extract: --forever has no %q image: --prefer takes minimap,navmesh (this client's world maps are not read)\n", p)
+					return exitUsage
+				}
+			}
+		}
 	}
 	opts := minimap.Options{ClientDir: expandHome(*client), DB2Dir: expandHome(*db2Dir), OutDir: expandHome(*out),
 		MmapsDirs: splitDirs(*mmaps), Maps: ids, All: all, Prefer: pref, ListOnly: *list}

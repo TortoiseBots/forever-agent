@@ -122,10 +122,14 @@ func (f *fakeForeverAgent) handler() http.Handler {
 		case "accept_invite":
 			f.pair.mu.Lock()
 			f.pair.accepted++
-			f.pair.a.inGroup, f.pair.b.inGroup = true, true
-			f.pair.a.add("party", "", "", map[string]any{"state": "roster", "members": 2})
-			f.pair.b.add("party", "", "", map[string]any{"state": "roster", "members": 2})
+			agents := []*fakeForeverAgent{f.pair.a, f.pair.b}
 			f.pair.mu.Unlock()
+			for _, ag := range agents {
+				ag.mu.Lock()
+				ag.inGroup = true
+				ag.add("party", "", "", map[string]any{"state": "roster", "members": 2})
+				ag.mu.Unlock()
+			}
 			enc(map[string]any{})
 		case "party":
 			f.mu.Lock()
@@ -133,9 +137,12 @@ func (f *fakeForeverAgent) handler() http.Handler {
 			f.mu.Unlock()
 			enc(map[string]any{"in_group": group})
 		case "leave_group":
-			f.pair.mu.Lock()
-			f.pair.a.inGroup, f.pair.b.inGroup = false, false
-			f.pair.mu.Unlock()
+			agents := []*fakeForeverAgent{f.pair.a, f.pair.b}
+			for _, ag := range agents {
+				ag.mu.Lock()
+				ag.inGroup = false
+				ag.mu.Unlock()
+			}
 			enc(map[string]any{})
 		default:
 			enc(map[string]any{})

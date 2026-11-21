@@ -1,9 +1,10 @@
 # CLI rounds K2-K6: what ran, what was skipped
 
 Round CLI-K2-K6 of `FOREVER-AGENT-REST-SPEC.md` (sections 2, 3 K2-K6, 6). Base: `origin/main` 9f72f496.
-Round K4 ran; K2, K3, K5 and K6 are skipped because a dependency they name is not on `origin/main` (never stubbed).
+At that base round K4 ran; K2, K3, K5 and K6 were skipped because a dependency they name was not on
+`origin/main` (never stubbed). A later round (sections 7-9) landed K2, K3 and K5 on `origin/main` 15c7b9ff.
 
-## 1. Dependency check (before any work)
+## 1. History: the first dependency check (superseded by sections 7-9)
 
 `git log origin/main --oneline -1` = `9f72f496 Forever: a typed client for the session daemon (#47)`.
 
@@ -15,7 +16,7 @@ Round K4 ran; K2, K3, K5 and K6 are skipped because a dependency they name is no
 | K5 | L4, L5 | **L5 no** (L4 yes) | `internal/db2/` and `internal/minimap/forever.go` are on `origin/main` (#46); `internal/dashboard/` has no `forever_card.go`/`forever_poll.go`. |
 | K6 | module decision-capture API | **blocked** | The brief: skip unless the spawn message says the module landed its `/api/v1/decisions` API; it did not. |
 
-K2, K3, K5 and K6 are therefore skipped with no code change. The one runnable round, K4, is below.
+K2, K3, K5 and K6 were therefore skipped at that base with no code change. The one runnable round, K4, is below.
 
 A later round on `origin/main` 15c7b9ff (W2-W4 and L1 merged) landed K2, K3 and K5; sections 7-9 are its
 notes. K6 is still blocked on the module's decision-capture API.
@@ -124,7 +125,7 @@ Each fix was shown failing before: reverting it in turn made its test fail (`pat
 `2 walks started, want 1`, `live reach 20.0, want 5`, `filled 0 spawns, want 1`, `the abort does not name the
 ceiling`, the refusal tests, the allow-list grammar test).
 
-## 4. Live checks for the lead's live queue (not run here)
+## 4. Live checks (not run here)
 
 On a running `forever serve` slot for a real ForeverCore test dungeon:
 
@@ -139,9 +140,9 @@ On a running `forever serve` slot for a real ForeverCore test dungeon:
 
 Hygiene check on the diff: no hosts, accounts or local paths found.
 
-Gate commit: `ca8d0607` (clean tree; before it, `a4cc18f2` failed the VM gate on `TestServeClientTypesMatchTheDaemon`
-because this round briefly added `Hostile/Faction/NPCFlags` to `serveclient.Unit`; the type stays field-for-field with
-the daemon's `ServeUnit`, and the fields are gone).
+The gates ran on the round's final committed tree (clean, no uncommitted changes). One earlier tree failed the
+`TestServeClientTypesMatchTheDaemon` check because the round briefly added `Hostile/Faction/NPCFlags` to
+`serveclient.Unit`; the type stays field-for-field with the daemon's `ServeUnit`, and those fields are gone.
 
 - `make fmt-check`: clean (exit 0).
 - `make cross`: clean (exit 0).
@@ -149,7 +150,7 @@ the daemon's `ServeUnit`, and the fields are gone).
 - `go test -race ./cmd/forever-agent ./internal/forever/serveclient` (on the VM, same tree):
   `ok  	github.com/pjerra/forever-agent/cmd/forever-agent	648.867s` and
   `ok  	github.com/pjerra/forever-agent/internal/forever/serveclient	1.278s`, `VM-TEST-END rc=0 seconds=1937`.
-- `vm-test ta` on a local worktree: `RESULT: PASS kind=ta sha=ca8d0607 dirty=0`.
+- The full VM gate passed on that tree (`dirty=0`).
 
 ## 6. Fix round: the K4 review findings
 
@@ -174,13 +175,13 @@ in section 3).
 
 ### Gates (fix round)
 
-Code commit: `80414ed2` (clean tree, no trailers). Hygiene check on the diff: no hosts, accounts or local paths found.
+The gates ran on the fix round's committed tree (clean, no trailers). Hygiene check on the diff: no hosts,
+accounts or local paths found.
 
 - `make fmt-check`: clean (exit 0).
 - `make cross`: clean (exit 0).
 - `staticcheck ./...`: clean (exit 0).
-- `vm-test ta` on a local worktree (committed tree, `sha=80414ed2 dirty=0`):
-  `RESULT: PASS kind=ta sha=80414ed2 dirty=0`.
+- The full VM gate passed on that committed tree (`dirty=0`).
 
 ## 7. K2: teardown, capture, patrol-record and route-oracle on a serve slot
 
@@ -256,7 +257,7 @@ MaNGOS (three-digit) case is unchanged and pinned by the existing report test.
   target compare fails the decoy run; `%03d.mmap` fails `TestRouteOracleForeverPlanner`; reading payloads
   fails `TestCaptureStatsPrintsNoBytes`.
 
-### Live checks for the lead's live queue (not run here)
+### Live checks (not run here)
 
 1. Two serve slots: `forever serve --dir A --capture-dir <outside-dir>` and `--dir B`; after the start,
    `teardown A` (a bare serve dir) → every step ok, the lease step skipped, the process gone.
@@ -277,8 +278,7 @@ file's placeholder. A `no_auth` slot sends no header (`scenario.HTTPCaller.NoAut
 still drives the run itself (L2: `online` start wait, `event_log` drain, serve methods by name).
 
 `scenarios/forever-chat-party.json`: two sessions, A says `hello from ${A.character}` and invites B, B's
-event log is checked for the `chat` line and the `party` invite, B accepts, both `check_rpc party in_group`,
-A expects its party roster row and leaves the group. `--prefer`/`--var` untouched.
+event log is checked for the `chat` line and the `party` invite, B accepts, both `check_rpc party in_group`, and A leaves the group. `--prefer`/`--var` untouched.
 
 Tests: `TestScenarioRunForeverSample` (failing case) runs the shipped sample through `scenario run --slot
 A=DIR --slot B=DIR` against two fake serves; the fakes answer `status`, `event_log`, `chat`, `invite`,
@@ -308,10 +308,9 @@ real extract of one dungeon; a WMO dungeon falls back to the navmesh render.
 
 ## 10. Gates (this round)
 
-Gate commit: `512b69ad` (the clean tree the gates ran on: the three code rounds and the notes; no AI or
+The gates ran on the clean tree of the last code commit (the three code rounds and the notes; no AI or
 co-author trailers). The commit after it is documentation only.
-Hygiene: a grep of the branch diff for private hosts, IPs, accounts, e-mails, local paths, worktree and runner
-names finds nothing.
+Hygiene: a grep of the branch diff for private hosts, IPs, accounts, e-mails or local paths finds nothing.
 
 - `make fmt-check`: exit 0, no output.
 - `make cross`: exit 0 (windows/amd64 and darwin/arm64 builds, then the windows vet of `./cmd/...` and
@@ -321,7 +320,56 @@ names finds nothing.
   `ok github.com/pjerra/forever-agent/cmd/forever-agent 539.122s`,
   `ok github.com/pjerra/forever-agent/internal/routeoracle 1.286s`,
   `ok github.com/pjerra/forever-agent/internal/scenario 1.533s`.
-  The first attempt ran beside the VM gate and failed `TestSecondInterruptKills` with
-  `child never printed "ready": ""` (its 5 s child-start deadline under load, unrelated to this round);
-  the test passes alone and in the clean rerun quoted above.
-- `vm-test ta` on the committed tree: `RESULT: PASS kind=ta sha=512b69ad dirty=0`.
+  A first attempt failed `TestSecondInterruptKills` with `child never printed "ready": ""` (its 5 s
+  child-start deadline under load, unrelated to this round); the test passes alone and in the clean rerun
+  whose result is quoted above.
+- The full VM gate passed on that committed tree (`dirty=0`).
+
+## 11. Hardening on a serve slot
+
+A hardening pass over the K2, K3 and K5 paths changed how a running serve dir is recognised and how hostile input
+is bounded; all of it is on the same commands.
+
+### Teardown of a real serve daemon
+
+`forever serve --dir` runs the binary from wherever it lives, so `agent.pid` is no longer checked against a copy
+inside the dir. The dir's agent is the pid in `agent.pid` **and** a process whose `/proc/<pid>/cmdline` is
+`forever-agent forever serve ... --dir <dir>` **and** whose start time (field 22 of `/proc/<pid>/stat`) equals the
+`pid_start` the daemon records in `slot.json`. A slot setup dir still runs the copied `<dir>/forever-agent`, which
+the same probe accepts as before. A pid that is running but fails these checks is a reused pid: the run reports it,
+signals nothing and keeps `settings.json`, the token file and `agent.pid`. `--no-auth` dirs are called with no
+`Authorization` header and no token file read; a `slot.json` that says `no_auth` while a token file exists is
+refused as ambiguous (the same rule `serveclient.Open` applies). A `slots_path` taken from `slot.json` must be an
+absolute regular file; a missing, relative or symlinked one is the lease step's failure, and nothing is created
+beside it. A serve started as `--dir D --token-file /elsewhere/tok` writes a manifest whose `token_file` is
+outside D; `slotdir.Check` refuses such a dir to `teardown` and `scenario --slot` (a safe failure with a clear
+message), so the token path is always the dir's own `rpc-<port>.token`.
+
+### capture-stats
+
+The manifests are read as regular files (a symlink, FIFO or device is refused) with a byte cap, a line cap and the
+writer's per-run entry bound (8192 packets, 65535 bytes each). A parse error names the line number and the reason,
+never the line's text (a hostile manifest may hold captured chat), and neither the per-opcode nor the printed
+TOTAL can overflow.
+
+### Scenario
+
+The HTTP client re-checks every redirect hop against the loopback rule, so a 307 cannot carry the JSON-RPC body or
+a no-header `no_auth` call to another host. `--slot` takes its token rules from `serveclient.Open` (no_auth and no
+token file; a token file with no_auth, or no token file without no_auth, is refused), refuses a name given twice
+and a dir given to two sessions, and `check_rpc` enforces the world-mutating `gm` guard (literal text at load, the
+expanded text at run time) and retries `-32005` on a Forever session. A `check_db` step (which cannot name a
+session) infers the Forever slot when every session is a Forever one and refuses a mixed-server file that does not
+name `server` on the step.
+
+### patrol-record --forever
+
+The final `.gm visible on` runs on a fresh bounded context, so Ctrl-C still restores visibility; a refusal line in
+a GM reply is an error; the teleport wait needs the status on the map near the area centre, not only the map; and
+the units read asks for more than serve's default 100 units, so a hostile unit is not cut off the list.
+
+### minimap-extract --forever
+
+`Map.db2`, the minimap folders and the tile files are read only when they resolve inside `--db2` / `--client`; a
+symlink that leaves them is treated as absent. `--prefer worldmap` with `--forever` is a usage error (this client's
+world maps are not read).

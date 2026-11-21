@@ -32,6 +32,10 @@ type Manifest struct {
 	// NoAuth is set by `forever serve --no-auth`: the daemon runs without a bearer token and no token file
 	// exists. Only then may a client talk to it without a header.
 	NoAuth bool `json:"no_auth,omitempty"`
+	// PIDStart is the start time of the process named by PIDFile, in clock ticks since boot (field 22 of
+	// /proc/<pid>/stat on Linux), recorded by `forever serve --dir` as it writes the pid file. A later reader
+	// uses it to tell that daemon from an unrelated process that inherited its pid.
+	PIDStart uint64 `json:"pid_start,omitempty"`
 }
 
 // ErrUnreadable is a dir without a usable slot.json: missing, not readable as the owner's private regular
@@ -95,6 +99,15 @@ func Check(prefix, dir string, m *Manifest) error {
 		}
 		if fi, err := os.Lstat(want[k]); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%s: %s is a symlink: %s works on a dir made by slot setup", prefix, want[k], prefix)
+		}
+	}
+	// A daemon started with --no-auth writes no token file. A token file next to no_auth is ambiguous: it may be
+	// a leftover of a daemon that wants one, and sending no header would hide a lost token. Refuse, as serveclient
+	// does.
+	tokenPath := want["token_file"]
+	if m.NoAuth {
+		if _, err := os.Lstat(tokenPath); err == nil {
+			return fmt.Errorf("%s: slot.json says no_auth but %s exists: refusing to guess", prefix, tokenPath)
 		}
 	}
 	return nil

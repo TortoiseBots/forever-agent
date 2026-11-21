@@ -330,21 +330,19 @@ func dbDesc(s *Step) string {
 }
 
 // checkDBQuery builds the DBQuery from a check_db step with vars expanded.
-// The slot is the step's server key when set, else the file server of the
-// step's session; a step without a session uses the file default.
+// The slot is the step's server key when set, else the file server, else
+// Forever when every session is a Forever one (see checkDBServer).
 func (rr *run) checkDBQuery(s *Step) (DBQuery, error) {
-	q := DBQuery{Op: s.Op, Forever: s.Server == ServerForever}
-	if s.Server == "" && rr.f != nil {
-		if s.Session != "" {
-			if sess, ok := rr.f.Sessions[s.Session]; ok && sess.Server == ServerForever {
-				q.Forever = true
-			}
-		} else if rr.f.Server == ServerForever {
-			q.Forever = true
+	q := DBQuery{Op: s.Op}
+	if rr.f != nil {
+		slot, err := rr.f.checkDBServer(s)
+		if err != nil {
+			return q, err
 		}
-	}
-	if q.Forever && rr.f != nil && rr.f.DB != nil {
-		q.Schema = rr.f.DB.Schema
+		q.Forever = slot == ServerForever
+		if q.Forever && rr.f.DB != nil {
+			q.Schema = rr.f.DB.Schema
+		}
 	}
 	if s.Table != "" {
 		q.Table = s.Table
@@ -498,9 +496,22 @@ func (rr *run) doCheckRPC(ctx context.Context, s *Step, n int) bool {
 	if pm == nil {
 		pm = map[string]any{}
 	}
+	if s.Method == "gm" {
+		if t, _ := pm["text"].(string); t != "" && gmDenied(t) {
+			rr.errorf(n, desc, "GM command %q changes the world for everyone (AGENTS.md): refused", t)
+			rr.skipRest(n + 1)
+			return false
+		}
+	}
 	deadline := rr.now().Add(time.Duration(s.WithinS * float64(time.Second)))
 	for {
-		raw, err := st.caller.Call(ctx, s.Method, pm, callTimeout(s))
+		var raw json.RawMessage
+		var err error
+		if rr.isForever(s.Session) {
+			raw, err = rr.callForever(ctx, st, s.Method, pm, callTimeout(s))
+		} else {
+			raw, err = st.caller.Call(ctx, s.Method, pm, callTimeout(s))
+		}
 		if err != nil {
 			rr.errorf(n, desc, "rpc %s: %s", s.Method, rpcText(err))
 			rr.skipRest(n + 1)

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/pjerra/forever-agent/internal/forever/capturedir"
 )
@@ -32,13 +33,21 @@ func foreverCaptureStatsCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "forever capture-stats: %v\n", err)
 		return exitUsage
 	}
-	fmt.Fprintf(stdout, "%-34s %8s %12s\n", "opcode", "packets", "bytes")
+	// The totals are summed (and checked) before anything is printed, so a refused
+	// answer never leaves a partial table on stdout.
 	var packets int
 	var bytes int64
 	for _, s := range stats {
-		fmt.Fprintf(stdout, "%-34s %8d %12d\n", s.Name, s.Packets, s.Bytes)
+		if s.Packets > math.MaxInt-packets || s.Bytes > math.MaxInt64-bytes {
+			fmt.Fprintln(stderr, "forever capture-stats: the totals overflow")
+			return exitUsage
+		}
 		packets += s.Packets
 		bytes += s.Bytes
+	}
+	fmt.Fprintf(stdout, "%-34s %8s %12s\n", "opcode", "packets", "bytes")
+	for _, s := range stats {
+		fmt.Fprintf(stdout, "%-34s %8d %12d\n", s.Name, s.Packets, s.Bytes)
 	}
 	fmt.Fprintf(stdout, "%-34s %8d %12d\n", "TOTAL", packets, bytes)
 	return exitOK

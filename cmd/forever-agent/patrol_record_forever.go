@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
@@ -140,8 +141,11 @@ func patrolRecordForever(ctx context.Context, env patrolRecordEnv, o patrolRecor
 
 	started := env.now()
 	samples, stop, guidText := patrolForeverLoop(ctx, client, env, o)
-	// Visibility is restored whatever ended the recording.
-	if err := patrolForeverGM(ctx, client, ".gm visible on"); err != nil {
+	// Visibility is restored whatever ended the recording, including Ctrl-C: the loop's ctx is already cancelled
+	// then, so the restore gets a fresh one of its own.
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := patrolForeverGM(restoreCtx, client, ".gm visible on"); err != nil {
 		fmt.Fprintf(stderr, "patrol-record: .gm visible on: %v\n", err)
 	}
 	source := fmt.Sprintf("record %s %s", patrolForeverServer(o.dir), started.Format("2006-01-02"))
@@ -158,16 +162,45 @@ func patrolForeverLive(st serveclient.Status) bool {
 	return !st.Dead && !st.Ghost
 }
 
-// patrolForeverGM sends one stance line, and only a line of the allow-list.
+// patrolForeverGM sends one stance line, and only a line of the allow-list. The core's refusal lines are errors:
+// a line that only looks accepted still leaves the character in the wrong stance (invisible, not a GM, elsewhere).
 func patrolForeverGM(ctx context.Context, client patrolForeverClient, line string) error {
 	if !patrolRecordAllowedLine(line) {
 		return fmt.Errorf("line outside the allow-list: %q", line)
 	}
-	_, err := client.GM(ctx, line)
-	return err
+	cmd, err := client.GM(ctx, line)
+	if err != nil {
+		return err
+	}
+	if ref := patrolForeverRefusal(cmd); ref != "" {
+		return fmt.Errorf("the server refused: %s", ref)
+	}
+	return nil
 }
 
-// patrolForeverWaitForMap polls status until the teleport shows map M.
+// patrolForeverRefusal returns the core's refusal text in a GM answer, or "" when the answer carried none. The
+// refusal phrases are the ones the plan scout's GM calls already check (core LANG_* error rows).
+func patrolForeverRefusal(cmd serveclient.Command) string {
+	for _, l := range cmd.Lines {
+		low := strings.ToLower(l)
+		for _, bad := range scoutGMErrorTexts {
+			if strings.Contains(low, bad) {
+				return strings.TrimSpace(l)
+			}
+		}
+	}
+	return ""
+}
+
+// patrolForeverLandYd is how near (x, y) the teleport must land before the recording starts: `.go xyz` acking says
+// nothing about where the server put the character.
+const patrolForeverLandYd = 10
+
+// patrolForeverUnitsLimit keeps a busy area's units read from being cut at serve's default of 100: a hostile unit
+// targeting the agent must not fall off the end of the list the safety rules scan.
+const patrolForeverUnitsLimit = 5000
+
+// patrolForeverWaitForMap polls status until the teleport shows map M near (o.x, o.y).
 func patrolForeverWaitForMap(ctx context.Context, client patrolForeverClient, env patrolRecordEnv, o patrolRecordOptions, stderr io.Writer) int {
 	deadline := env.now().Add(patrolRecordArriveWait)
 	for {
@@ -181,12 +214,12 @@ func patrolForeverWaitForMap(ctx context.Context, client patrolForeverClient, en
 				st.State, st.Dead, st.Ghost)
 			return exitSlotRefused
 		}
-		if st.Map == o.mapID {
+		if st.Map == o.mapID && patrolRecordDist2DSq(st.X, st.Y, o.x, o.y) <= patrolForeverLandYd*patrolForeverLandYd {
 			return exitOK
 		}
 		if !env.now().Before(deadline) {
-			fmt.Fprintf(stderr, "patrol-record: the agent did not reach map %d (it is on map %d) within %s\n",
-				o.mapID, st.Map, patrolRecordArriveWait)
+			fmt.Fprintf(stderr, "patrol-record: the agent did not reach map %d at %.0f,%.0f (it is on map %d at %.0f,%.0f) within %s\n",
+				o.mapID, o.x, o.y, st.Map, st.X, st.Y, patrolRecordArriveWait)
 			return exitSlotRefused
 		}
 		if err := env.sleep(ctx, time.Second); err != nil {
@@ -229,7 +262,7 @@ func patrolForeverLoop(ctx context.Context, client patrolForeverClient, env patr
 		if own.InCombat {
 			return samples, "in combat", guidText
 		}
-		units, err := client.Units(ctx, serveclient.UnitsParams{Within: o.r + patrolRecordNearYd})
+		units, err := client.Units(ctx, serveclient.UnitsParams{Within: o.r + patrolRecordNearYd, Limit: patrolForeverUnitsLimit})
 		if err != nil {
 			return samples, "lost the agent: " + err.Error(), guidText
 		}

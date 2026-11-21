@@ -24,6 +24,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
+	"github.com/pjerra/forever-agent/internal/slots"
 )
 
 // mapPairs is --parent MAP=PARENT, repeatable.
@@ -125,6 +126,9 @@ func serveCheckDir(dir, account, character string, port int) (keep bool, err err
 // pid file.
 func serveManifest(dir, tokenFile, account, character string, port int, noAuth, keep bool) error {
 	bin := filepath.Join(dir, "forever-agent")
+	// The start time binds agent.pid to this process: a later teardown (or lease check) that finds the pid reused by
+	// another process is not fooled by a command line alone. Off Linux there is no /proc and no serve slot either.
+	start, _ := slots.ProcStartTicks(os.Getpid())
 	m := teardownSlotManifest{
 		Server: "forever", Slot: "1", Holder: "forever",
 		Account: account, Character: character, Port: port, Dir: dir,
@@ -132,16 +136,19 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 		PIDFile:   filepath.Join(dir, "agent.pid"),
 		TokenFile: tokenFile,
 		NoAuth:    noAuth,
+		PIDStart:  start,
 		Created:   time.Now().UTC().Format(time.RFC3339),
 	}
 	if keep {
-		// The setup manifest stays, but a client tells a no-token daemon from a lost token file by no_auth.
+		// The setup manifest stays, but a client tells a no-token daemon from a lost token file by no_auth, and the
+		// pid file must name this process's start time.
 		_, kept, err := slotdir.Read(dir)
 		if err != nil {
 			return err
 		}
-		if kept.NoAuth != noAuth {
+		if kept.NoAuth != noAuth || kept.PIDStart != start {
 			kept.NoAuth = noAuth
+			kept.PIDStart = start
 			raw, err := json.MarshalIndent(kept, "", "  ")
 			if err != nil {
 				return err

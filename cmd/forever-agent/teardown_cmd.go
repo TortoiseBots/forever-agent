@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -81,8 +82,21 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return exitUsage
 	}
+	var slotsPathErr error
 	if *slotsPath == "" {
+		// slot.json's slots_path is a claim about a file outside the dir: take it only when it is an absolute
+		// regular file (never a symlink or a device), so a tampered manifest cannot make the lease step create
+		// a leases dir and lock beside something else.
 		*slotsPath = manifest.SlotsPath
+		if *slotsPath != "" {
+			if !filepath.IsAbs(*slotsPath) {
+				slotsPathErr = fmt.Errorf("slot.json names a relative slots_path %q: pass --slots", *slotsPath)
+			} else if fi, err := os.Lstat(*slotsPath); err != nil {
+				slotsPathErr = fmt.Errorf("slot.json names %s, which is not readable: %v", *slotsPath, err)
+			} else if !fi.Mode().IsRegular() {
+				slotsPathErr = fmt.Errorf("slot.json names %s, which is not a regular file", *slotsPath)
+			}
+		}
 	}
 
 	steps := []teardownCLIStep{}
@@ -98,8 +112,9 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 	pid, alive := teardownProbe.AgentPID(dir)
 	pidFilePresent := teardownPIDFilePresent(dir)
 	gameFailed := false
+	reused := false
 	if alive {
-		rpcSteps, rerr := teardownCallAgent(dir, manifest.Port, manifest.TokenFile, *dryRun, *gm)
+		rpcSteps, rerr := teardownCallAgent(dir, manifest.Port, manifest.TokenFile, manifest.NoAuth, *dryRun, *gm)
 		if rerr != nil {
 			add("rpc", "fail", rerr.Error())
 			gameFailed = true
@@ -113,6 +128,11 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 		}
 	} else if !pidFilePresent {
 		add("rpc", "skip", "no agent was started from this dir (or it logged out and removed agent.pid)")
+	} else if teardownPIDReused(dir, pid) {
+		// The pid in agent.pid is running, but it is not this dir's agent. Signalling it could kill an unrelated
+		// process, and deleting the pid/token files would hide it: report and leave everything alone.
+		add("rpc", "fail", fmt.Sprintf("agent pid %d is another process (pid reused): not signalled, files kept", pid))
+		gameFailed, reused = true, true
 	} else {
 		add("rpc", "fail", fmt.Sprintf("agent pid %d is gone without a clean exit: game-side steps not run (its hires end after the server's offline grace)", pid))
 		gameFailed = true
@@ -120,7 +140,7 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 
 	if *dryRun {
 		// 3-7 become plan lines; nothing is changed.
-		teardownPlanSteps(dir, manifest, pid, alive, *keepLease, add)
+		teardownPlanSteps(dir, manifest, pid, alive, reused, *keepLease, add)
 		return teardownReport(manifest, steps, failed, *asJSON, stdout)
 	}
 
@@ -143,8 +163,12 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 6. files: only the derived in-dir paths, never the manifest's strings.
-	step, status, detail := teardownDeleteFiles(dir, manifest.Port)
-	add(step, status, detail)
+	if reused {
+		add("files", "skip", fmt.Sprintf("kept: agent pid %d is another process, not this dir's agent", pid))
+	} else {
+		step, status, detail := teardownDeleteFiles(dir, manifest.Port)
+		add(step, status, detail)
+	}
 
 	// 7. lease.
 	if !teardownSlotHoldsALease(manifest) {
@@ -156,6 +180,8 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 	} else if gameFailed && !*releaseAnyway {
 		add("lease", "fail", fmt.Sprintf("kept: game-side teardown failed; check the slot, then forever-agent lease release %s %s --holder %s",
 			manifest.Server, manifest.Slot, manifest.Holder))
+	} else if slotsPathErr != nil {
+		add("lease", "fail", slotsPathErr.Error())
 	} else {
 		step, status, detail := teardownReleaseLease(*slotsPath, manifest)
 		add(step, status, detail)
@@ -167,6 +193,28 @@ func teardownCmd(args []string, stdout, stderr io.Writer) int {
 func teardownPIDFilePresent(dir string) bool {
 	_, err := os.Lstat(filepath.Join(dir, "agent.pid"))
 	return err == nil
+}
+
+// teardownAgentPid reads the pid agent.pid names (0 when unreadable).
+func teardownAgentPid(dir string) int {
+	raw, err := os.ReadFile(filepath.Join(dir, "agent.pid"))
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// teardownPIDReused reports whether the pid in agent.pid names a running process that the probe did not accept as
+// this dir's agent: the pid was reused, so signalling it or deleting the pid file would reach the wrong process.
+func teardownPIDReused(dir string, pid int) bool {
+	if pid <= 0 {
+		pid = teardownAgentPid(dir)
+	}
+	return pid > 0 && slots.PIDRunning(pid)
 }
 
 func teardownReport(manifest teardownSlotManifest, steps []teardownCLIStep, failed int, asJSON bool, stdout io.Writer) int {
@@ -218,11 +266,7 @@ type teardownRPCReply struct {
 	} `json:"error"`
 }
 
-func teardownCallAgent(dir string, port int, tokenFile string, dryRun bool, gm string) ([]teardownCLIStep, error) {
-	token, err := rpc.ReadTokenFile(tokenFile)
-	if err != nil {
-		return nil, err
-	}
+func teardownCallAgent(dir string, port int, tokenFile string, noAuth, dryRun bool, gm string) ([]teardownCLIStep, error) {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -237,7 +281,13 @@ func teardownCallAgent(dir string, port int, tokenFile string, dryRun bool, gm s
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	if !noAuth {
+		token, err := rpc.ReadTokenFile(tokenFile)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -367,7 +417,7 @@ func teardownReleaseLease(slotsPath string, manifest teardownSlotManifest) (stri
 }
 
 // teardownPlanSteps appends plan lines for steps 3-7 during --dry-run.
-func teardownPlanSteps(dir string, manifest teardownSlotManifest, pid int, alive, keepLease bool, add func(string, string, string)) {
+func teardownPlanSteps(dir string, manifest teardownSlotManifest, pid int, alive, reused, keepLease bool, add func(string, string, string)) {
 	if alive {
 		add("agent_exit", "plan", fmt.Sprintf("would wait for pid %d to exit", pid))
 	} else {
@@ -379,7 +429,11 @@ func teardownPlanSteps(dir string, manifest teardownSlotManifest, pid int, alive
 		add("port", "plan", fmt.Sprintf("port %d closed", manifest.Port))
 	}
 	add("other_pids", "plan", "would end stray pids of this dir")
-	add("files", "plan", "would delete settings.json, token file and agent.pid")
+	if reused {
+		add("files", "plan", fmt.Sprintf("would keep settings.json, token file and agent.pid (pid %d is another process)", pid))
+	} else {
+		add("files", "plan", "would delete settings.json, token file and agent.pid")
+	}
 	if !teardownSlotHoldsALease(manifest) {
 		add("lease", "plan", "a serve slot holds no lease (forever serve --dir)")
 	} else if keepLease {

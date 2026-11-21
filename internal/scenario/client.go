@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -63,11 +64,8 @@ func (c *HTTPCaller) Call(ctx context.Context, method string, params any, timeou
 	if err != nil {
 		return nil, err
 	}
-	if h := req.URL.Hostname(); h != "127.0.0.1" && h != "localhost" && h != "::1" {
-		return nil, fmt.Errorf("scenario: rpc %q is not a loopback address (the agent only listens on loopback; a token must never leave the machine)", c.Addr)
-	}
-	if req.URL.User != nil {
-		return nil, fmt.Errorf("scenario: rpc %q is not a loopback address (the agent only listens on loopback; a token must never leave the machine)", c.Addr)
+	if err := checkLoopbackURL(req.URL); err != nil {
+		return nil, err
 	}
 	if !c.NoAuth {
 		tok, err := rpc.ReadTokenFile(c.TokenFile)
@@ -82,7 +80,20 @@ func (c *HTTPCaller) Call(ctx context.Context, method string, params any, timeou
 	if hc == nil {
 		hc = &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}
 	}
-	resp, err := hc.Do(req)
+	// A redirect is a new destination, and the guard must see it: Go follows a 307/308 (which re-sends the JSON-RPC
+	// body, GetBody is set) before this code sees the response, so every hop is re-checked here. A hop that leaves
+	// loopback is refused; a loopback hop is allowed, bounded like net/http's own ten.
+	cc := *hc
+	cc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := checkLoopbackURL(req.URL); err != nil {
+			return err
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("scenario: stopped after 10 redirects")
+		}
+		return nil
+	}
+	resp, err := cc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +122,35 @@ func (c *HTTPCaller) Call(ctx context.Context, method string, params any, timeou
 		return nil, &RPCError{Code: env.Error.Code, Message: env.Error.Message}
 	}
 	return env.Result, nil
+}
+
+// checkLoopbackURL refuses a URL the agent could not be behind: a host that is not 127.0.0.1, localhost or ::1, a
+// missing or non-numeric port, or a userinfo that smuggles another authority. Used for the request and every redirect
+// hop, so a redirect cannot carry the token or a JSON-RPC body off the machine.
+func checkLoopbackURL(u *url.URL) error {
+	deny := func() error {
+		return fmt.Errorf("scenario: rpc %q is not a loopback address (the agent only listens on loopback; a token must never leave the machine)", u.Host)
+	}
+	if u == nil || u.User != nil {
+		return deny()
+	}
+	if h := u.Hostname(); h != "127.0.0.1" && h != "localhost" && h != "::1" {
+		return deny()
+	}
+	portS := u.Port()
+	if portS == "" {
+		return deny()
+	}
+	for _, b := range []byte(portS) {
+		if b < '0' || b > '9' {
+			return deny()
+		}
+	}
+	port, err := strconv.Atoi(portS)
+	if err != nil || port < 1 || port > 65535 {
+		return deny()
+	}
+	return nil
 }
 
 // tokenPathFor returns the default token file for an RPC address: the

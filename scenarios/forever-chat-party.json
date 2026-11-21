@@ -58,13 +58,6 @@
       "method": "accept_invite"
     },
     {
-      "do": "expect",
-      "session": "A",
-      "kind": "party",
-      "note": "the roster row carries no text; the party check below reads the roster",
-      "match": "^$"
-    },
-    {
       "do": "check_rpc",
       "session": "A",
       "method": "party",
