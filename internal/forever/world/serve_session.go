@@ -180,14 +180,26 @@ func (s *session) serveCommandLine(ctx context.Context, line string, wait time.D
 			return nil, err
 		}
 	}
-	opts := s.commandOptions(command.Options{})
+	opts := command.Options{}
 	if wait > 0 {
 		if wait > 30*time.Second {
 			return nil, errors.New("a command deadline is at most 30s")
 		}
 		opts.Deadline = wait
 	}
-	return s.serveRT.st.q.Run(ctx, line, opts)
+	return s.serveCommandOptions(ctx, line, opts)
+}
+
+// serveCommandOptions is serveCommandLine for a caller that brings its own options: the typed `.tb` client sets
+// the token, the end marker and the line cap itself, and the session's GM guard still comes first. The session's
+// own defaults are filled under the caller's options, and the line rides the same serialised channel.
+func (s *session) serveCommandOptions(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
+	if !s.gmConfirmed {
+		if err := s.confirmGM(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return s.serveRT.st.q.Run(ctx, line, s.commandOptions(opts))
 }
 
 // servePath plans a walking route on the current map.

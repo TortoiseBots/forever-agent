@@ -1,0 +1,27 @@
+{
+  "comment": "Example trash tactics file: two hand-made creature entries in the loader's shape. Real rows come from the core's creature data (module issue #23); this file only shows the format. spell ids and creature entries are decimal or 0x hex strings (the lexicon's spelling).",
+  "dungeon": "example",
+  "cc_spells": {
+    "118": "polymorph",
+    "5782": "fear",
+    "20066": "shackle"
+  },
+  "creatures": {
+    "113": {
+      "name": "Searing Blade Cultist",
+      "must_interrupt": [34887],
+      "cc_immune": [],
+      "must_dispel": [
+        {"spell": 34888, "type": "magic", "within_s": 8}
+      ],
+      "priority": 1
+    },
+    "114": {
+      "name": "Searing Blade Enforcer",
+      "must_interrupt": [],
+      "cc_immune": ["stun"],
+      "must_dispel": [],
+      "priority": 2
+    }
+  }
+}

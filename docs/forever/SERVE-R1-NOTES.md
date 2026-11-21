@@ -98,7 +98,8 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 |---|---|---|
 | `bot` | DONE (addition) | One `.bot`/`.tb` line through the same command channel and GM guard; returns the sent line and the visible answer. |
 | `addon_send` | DONE | Registers the prefix and sends one add-on message on `party`, `raid`, `instance`, `guild`, `officer` or `whisper:NAME`. |
-| `commander`, `bot_view`, `tbm`, `tbm_handshake`, `tbm_click`, `tbm_buttons`, `tbm_send` | NOT-PORTED | These speak the 1.12 module protocol; the ForeverCore module uses the command channel (`bot`). |
+| `commander` | DONE (round C3) | Remote control of the module's bots over the session's own command channel: `bind`, `unbind`, `status`, `cmd` and `run`, with the binding card, per-bot lines and run records as typed results; a refusal is `-32003` with its code first. `view` is the cut op. See [CMDCTL-C3-NOTES.md](CMDCTL-C3-NOTES.md). |
+| `bot_view`, `tbm`, `tbm_handshake`, `tbm_click`, `tbm_buttons`, `tbm_send` | NOT-PORTED | These speak the 1.12 module protocol; the ForeverCore module uses the command channel (`bot`, `commander`). |
 | `addon_start`, `addon_stop`, `addon_state`, `addon_tick`, `addon_click` | NOT-PORTED | No headless add-on host in the ForeverCore client. |
 
 ### The rest of the old method set

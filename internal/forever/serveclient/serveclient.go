@@ -17,8 +17,8 @@
 // Methods the daemon on main registers today: status, units, unit, party, gm,
 // bot, events, logout. EventLog (event_log), Act (act) and Teardown (teardown)
 // need W3/W2: the daemon has no event_log or act yet and answers teardown
-// with the not-ported -32003; Commander is not ported either. Events reads
-// the combat log the daemon serves now. A test in internal/forever/world pins
+// with the not-ported -32003. Events reads the combat log the daemon serves
+// now, and Commander runs on the daemon too. A test in internal/forever/world pins
 // the daemon's table so the day those methods land the pin flips.
 package serveclient
 
@@ -347,6 +347,7 @@ type CombatRow struct {
 	AbsorbedSpellID    int32          `json:"absorbed_spell_id,omitempty"`
 	Dispelled          []CombatDispel `json:"dispelled,omitempty"`
 	Sample             *CombatSample  `json:"sample,omitempty"`
+	RemainingMS        int32          `json:"remaining_ms,omitempty"`
 	SpellName          string         `json:"spell_name,omitempty"`
 }
 
@@ -774,7 +775,7 @@ func (c *Client) Act(ctx context.Context, steps []string, timeout time.Duration)
 	return res, err
 }
 
-// Commander (not ported on the daemon today: -32003) runs one commander call (op bind/unbind/status/view/cmd/run)
+// Commander runs one commander call (op bind/unbind/status/view/cmd/run)
 // and returns the line sent with the module's reply.
 func (c *Client) Commander(ctx context.Context, p CommanderParams) (CommanderResult, error) {
 	var res CommanderResult

@@ -74,7 +74,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
 `inv`, `units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
-`gm_aura`, `trial_units`, `bot`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
+`gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
 `area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
 path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
@@ -121,6 +121,34 @@ unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`
 refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
 `.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
 and chat are unaffected.
+
+Remote control on ForeverCore is `commander`: the module's TortoiseBots party, commanded by the session's own
+character over the session's `.tb` command channel (no add-on bridge, no other account).
+`forever rpc DIR commander '{"op":"bind","lead_bot":"<tank>","bots":["<healer>","<dps>"]}'` forms the lead's party,
+binds it to the character and answers the binding card. Ops are `bind` (`lead_bot`, `bots`), `unbind` (`lead_bot`),
+`status`, `cmd` (`verb`, `args`, `wait_ms`, `pause_run`; `lead_bot` scopes the call to that lead's party, and a
+name the character does not command is refused before any line goes out) and `run` (`verb` start, stop, pause,
+resume, status or events; `lead_bot`; `args` carries the plan, the reason words or the event sequence; a `start`
+without `lead_bot` uses the only bound lead, and is refused when there is not exactly one). The answer carries
+`sent` (the command lines that went out), `bots` (the module's per-bot lines), `card` (the binding card the call
+read, or `cards` for a `status`), `final` (each waited bot's `ok` or `fail:<code>`, `{}` when no wait ran),
+`party_error` (why a `status` read the cards but not the party), and a run verb's `runs` and `events`. Every
+mutation reads `.tb commander status <self>` before the line and, for a bind, order, role or run mutation, after
+it: a target outside the character's own bindings is refused `not-owned` before anything is sent, and a line
+whose target changed in between says the line already went through. Every refusal also carries the call's partial
+result in the error's `data` (the lines that went out, the bots, `card` and `final` it had read), so a caller that
+sees an order in `sent` knows it went out and never retries it blindly. An order while a run is running or paused
+is refused `run-active` unless `pause_run` is true (the module pauses the run itself). A verb of a module package
+that is not installed answers `not-available` after one cached probe per session, and the probe cache is dropped
+when the world link is re-entered; a verb whose typed path has not landed (round C5) answers
+`not-available: <verb>: needs-typed-path (round C5)` with no probe line at all. `view` is the port's cut verb:
+`commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
+(`not-available`, `run-active`, `not-owned`, `refused`, `bind-refused`, or the module's own error code); a lost or
+re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
+every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
+capped at 15 s; the poll runs on the session goroutine, so a long wait holds the loop and every other call behind
+it for that bounded time), and is ignored by the other ops; an order is sent once and never resent.
+
 Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
 with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
@@ -568,13 +596,13 @@ polylines with the map id), points and danger circles in a versioned JSON file w
 road hop for the `handcrafted_road` table plus the zone/point proposals. `--dry FILE` replays a hand-made recording
 through the same thin/mark/format path with no network. See [docs/forever/GM-WALK-NOTES.md](docs/forever/GM-WALK-NOTES.md).
 
-`forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
+`forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--tactics F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party
 records, `<run_id>.combatlog.jsonl` and `<run_id>.forever-run.json`), a watch trace file, or a trials repeat
 (`samples.jsonl`, `events.jsonl`, and the recorder's `raw-ta.jsonl` when it has one); folders are searched
 recursively, and a watch folder or a repeat is one run. It reads the watch's frames (F) and its combat log (C), and
 a repeat's raw rows are the same C shape on the repeat's clock. `--rules` picks the rules (default: every rule this
-build has), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
+build has, plus rules 16-19 when `--tactics` names a tactics file), `--names` and `--dispel` name the spells and give the dispel types — both are live-checked data files,
 never guessed: a names file is a JSON object of id to name (or a spells.json's `by_id`, whose values may be
 `{"name": ...}`), and a dispel file is a JSON object of id to `magic`, `curse`, `disease`, `poison` or `never` (or
 the core's `spell_template.dispel` numbers 0-4); only debuffs count, so an entry is kept when the names file marks its id
@@ -583,7 +611,7 @@ matches a buff, AoE or heal name; an id the dispel file does not list is not a k
 run does not carry is a skipped check (as is a stretch the combat log does not provably cover, and a malformed combat-log
 line is an error naming the file and line) with its reason in `counts.json`, never a hit from a guess: no combat log
 skips rules 1, 2, 4, 8 and 11; no names skips 2, 4 and 8; no dispel types or no known classes skip 15; no meal report
-skips 13. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
+skips 13; no `--tactics` file skips 16-19, and asking for 16-19 without one is a usage error naming the flag. The command writes `hits.jsonl` (one hit per line, the Python checker's own keys), `counts.json` (every
 selected rule's hits, runs with hits, skipped checks and the reasons), `tickets.json` and `tickets.md`. A ticket is
 one (rule, key): its id is `BH-<rule>-<8 hex of sha1(rule|key)>`, so the same finding keeps its id across nights;
 its row is `{id, title, rule, key, count, runs, first_seen, deaths_near, evidence (at most 5), labels [bughunt,
@@ -591,7 +619,11 @@ rule-N, role], status new|known|reopened|gone, cost}`. `--baseline DIR` reads th
 holds is `known` (and keeps its first night; `reopened` when it was `gone`), one it lacks is `new`, and a baseline
 ticket the new run no longer sees is `gone` only when its rule ran with all its inputs (a skipped or unselected rule
 leaves its tickets as they were). `tickets.md` ranks the tickets by summed cost, worst first. The rules are the Python bug hunt's
-own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids), with the Forever inputs
+own (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14 and 15; 7 waits for pet data and 12 for raids) plus the trash-tactics
+checks (16 a listed must-interrupt cast that completed with an interrupter free, 17 crowd control tried on an immune
+mob, 18 a listed dispellable debuff left past its within_s with a dispeller free, 19 a lower-priority mob killed
+before a higher one; each hit cites its combat rows, and a recording without the kinds a rule reads is UNKNOWN,
+never a finding), with the Forever inputs
 the plan's table gives. `BUGHUNT_PY_CHECKER=checker.py` runs the optional parity test against the Python checker on
 one repeat (rules 4 and 8 must agree on every key).
 

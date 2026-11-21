@@ -5,6 +5,7 @@ package objects
 // the round-3 trust rule: a packet the parser did not consume exactly is counted and merges nothing.
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -129,6 +130,9 @@ type AuraChange struct {
 	SpellID int32
 	Caster  wire.GUID
 	Kind    AuraChangeKind
+	// RemainingMS is the aura's remaining duration on an AuraAdded change (0 when the record carried none): the
+	// combat row's natural-expiry time for a debuff the log must judge.
+	RemainingMS int32
 }
 
 // ApplyAuraUpdate applies SMSG_AURA_UPDATE: a slot with data is an aura gained or refreshed, a slot without data is
@@ -178,18 +182,25 @@ func (w *World) ApplyAuraUpdate(u *combat.AuraUpdate, now time.Time) []AuraChang
 		if info.Data.CastUnit != nil {
 			a.Caster = *info.Data.CastUnit
 		}
+		var remainingMS int32
 		if info.Data.Duration != nil && info.Data.Remaining != nil {
 			a.HasDuration = true
 			a.Duration = time.Duration(*info.Data.Duration) * time.Millisecond
 			a.Remaining = time.Duration(*info.Data.Remaining) * time.Millisecond
 			a.ExpiresAt = now.Add(a.Remaining)
+			if *info.Data.Remaining > math.MaxInt32 {
+				remainingMS = math.MaxInt32
+			} else {
+				remainingMS = int32(*info.Data.Remaining)
+			}
 		}
 		auras[info.Slot] = a
 		kind := AuraRefreshed
 		if !exists {
 			kind = AuraAdded
 		}
-		changes = append(changes, AuraChange{Unit: u.Unit, Slot: info.Slot, SpellID: a.SpellID, Caster: a.Caster, Kind: kind})
+		changes = append(changes, AuraChange{Unit: u.Unit, Slot: info.Slot, SpellID: a.SpellID, Caster: a.Caster, Kind: kind,
+			RemainingMS: remainingMS})
 	}
 	if named != nil {
 		for slot, a := range o.Auras {
