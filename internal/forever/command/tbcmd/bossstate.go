@@ -65,9 +65,14 @@ func BossStateName(state uint32) (string, bool) {
 	return "", false
 }
 
-// SetBossState sets the encounter state of boss id and reads the core's own answer back. state is the
-// EncounterState number (0-5); a name outside 0-5 is refused before anything is sent. player names the character
-// whose instance is addressed; empty addresses the sender's own map (PlayerIdentifier::FromSelf).
+// SetBossState sets the encounter state of boss id and reads the state back with a getbossstate: the set
+// command prints the REQUESTED state unconditionally (cs_instance.cpp: the SetBossState call's return is
+// ignored, then PSendSysMessage prints state), while InstanceScript::SetBossState refuses transitions
+// (TO_BE_DECIDED loading, same-state, DONE-is-terminal in InstanceScript.cpp) by returning false. The caller
+// gets the core's real stored state: when the get disagrees with the set, the transition was refused and the
+// error names both. state is the EncounterState number (0-5); a name outside 0-5 is refused before anything is
+// sent. player names the character whose instance is addressed; empty addresses the sender's own map
+// (PlayerIdentifier::FromSelf).
 func (c *Client) SetBossState(ctx context.Context, id, state uint32, player string) (BossState, error) {
 	if state > 5 {
 		return BossState{}, fmt.Errorf("tbcmd: boss state %d is not an EncounterState (0-5)", state)
@@ -91,7 +96,16 @@ func (c *Client) SetBossState(ctx context.Context, id, state uint32, player stri
 	if out.ID != id {
 		return BossState{}, fmt.Errorf("%w: the core answered boss %d for boss %d", ErrBadReport, out.ID, id)
 	}
-	return out, nil
+	got, err := c.GetBossState(ctx, id, player)
+	if err != nil {
+		return BossState{}, err
+	}
+	if got.State != state {
+		return BossState{}, fmt.Errorf("%w: the core refused setbossstate %d to %d (%s): getbossstate reads %d (%s)",
+			ErrBadValue, id, state, out.Name, got.State, got.Name)
+	}
+	got.Set = true
+	return got, nil
 }
 
 // GetBossState reads the encounter state of boss id. player names the character whose instance is read; empty

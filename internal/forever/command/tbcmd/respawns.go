@@ -88,13 +88,14 @@ type RespawnReport struct {
 var respawnTitles = map[string]bool{"Creature": true, "Gameobject": true, "AreaTrigger": true}
 
 // Reference copies of the core's format strings (cs_list.cpp:663-690 with LANG_LIST_RESPAWNS_RANGE 5077,
-// LANG_LIST_RESPAWNS_ZONE 5078 and LANG_LIST_RESPAWNS_LISTHEADER 5079):
+// LANG_LIST_RESPAWNS_ZONE 5078 and LANG_LIST_RESPAWNS_LISTHEADER 5079;
+// 2020_08_22_00_world_2017_07_31_00_world.sql:198-200):
 // 'Listing %s respawns within %uyd', 'Listing %s respawns for %s (zone %u)',
-// 'SpawnID | Entry | GridXY| Zone | Respawn time'.
+// 'SpawnID | Entry | GridXY| Zone | Respawn time (Full)'.
 var (
 	respawnRangeRE  = regexp.MustCompile(`^Listing (\S+) respawns within (\d+)yd$`)
 	respawnZoneRE   = regexp.MustCompile(`^Listing (\S+) respawns for (.+) \(zone (\d+)\)$`)
-	respawnHeaderRE = regexp.MustCompile(`^SpawnID \| Entry \| GridXY\| Zone \| Respawn time$`)
+	respawnHeaderRE = regexp.MustCompile(`^SpawnID \| Entry \| GridXY\| Zone \| Respawn time \(Full\)$`)
 	// The row (cs_list.cpp:690): UI64FMTD " | " %u " | " [%02u,%02u] " | " %s (%u) " | " %s [" (inactive)"].
 	respawnRowRE = regexp.MustCompile(`^(\d+) \| (\d+) \| \[(\d\d),(\d\d)\] \| (.+) \((\d+)\) \| (.*?)((?: \(inactive\))?)$`)
 )
@@ -257,7 +258,9 @@ var (
 )
 
 // DebugInstanceSpawn reads the instance's spawn rules: `.debug instancespawn [groupID|explain]`. groupID limits
-// the answer to one group; explain asks for the rule tree instead of the compact lines.
+// the answer to one group; explain asks for the rule tree instead of the compact lines. With a group id the
+// core never prints the managed-by line (cs_debug.cpp: `if (!groupID) PSendSysMessage(...)`), so the parser
+// takes hasGroup and skips the managed-by requirement on that path.
 func (c *Client) DebugInstanceSpawn(ctx context.Context, groupID uint32, hasGroup, explain bool) (InstanceSpawnReport, error) {
 	line := ".debug instancespawn"
 	switch {
@@ -270,13 +273,16 @@ func (c *Client) DebugInstanceSpawn(ctx context.Context, groupID uint32, hasGrou
 	if err != nil {
 		return InstanceSpawnReport{}, err
 	}
-	return parseInstanceSpawn(rep)
+	return parseInstanceSpawn(rep, hasGroup)
 }
 
-// parseInstanceSpawn reads a tokenless `.debug instancespawn` reply: the managed-by line, then one compact line
-// or one explain group each. Unexplained rule lines (' | |-- ...', ' | |=> ...') belong to the open group; a rule
-// line before any group header is another command's tail.
-func parseInstanceSpawn(rep *command.Reply) (InstanceSpawnReport, error) {
+// parseInstanceSpawn reads a tokenless `.debug instancespawn` reply: the managed-by line (only without a
+// group id), then one compact line or one explain group each. Unexplained rule lines (' | |-- ...',
+// ' | |=> ...') belong to the open group; a rule line before any group header is another command's tail. The
+// core's refusal lines ('There is no spawn group with ID %u.', '%s has no instance script.', '%s's instance
+// script does not manage any spawn groups.', '%s's instance script does not manage group '%s'.') come back
+// through the collector as command errors, so anything collected that is not a group line is refused.
+func parseInstanceSpawn(rep *command.Reply, hasGroup bool) (InstanceSpawnReport, error) {
 	if rep == nil || len(rep.RawText) == 0 {
 		return InstanceSpawnReport{}, fmt.Errorf("%w: the instance-spawn reply is empty", ErrBadReport)
 	}
@@ -300,7 +306,7 @@ func parseInstanceSpawn(rep *command.Reply) (InstanceSpawnReport, error) {
 			managed = true
 			continue
 		}
-		if !managed {
+		if !managed && !hasGroup {
 			return InstanceSpawnReport{}, fmt.Errorf("%w: %q is before the managed-by line", ErrBadReport, line)
 		}
 		if m := spawnActiveRE.FindStringSubmatch(line); m != nil {
@@ -336,8 +342,11 @@ func parseInstanceSpawn(rep *command.Reply) (InstanceSpawnReport, error) {
 		cur.Raw = append(cur.Raw, line)
 		cur.Active = explainGroupActive(cur.Rules)
 	}
-	if !managed {
+	if !managed && !hasGroup {
 		return InstanceSpawnReport{}, fmt.Errorf("%w: no managed-by line in the reply", ErrBadReport)
+	}
+	if len(out.Groups) == 0 {
+		return InstanceSpawnReport{}, fmt.Errorf("%w: no spawn group in the reply", ErrBadReport)
 	}
 	return out, nil
 }

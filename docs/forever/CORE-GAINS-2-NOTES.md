@@ -27,8 +27,10 @@ InstanceScript.h:68-76, enuminfo_InstanceScript.cpp:30-41). The 2017 seed rows
 
 The client sends the core commands with no token (the core has no begin/end markers) and parses the single
 server line: the id and the word must agree, a get line never parses as a set and vice versa, and any second
-line, refusal or syntax text is refused. Out-of-range states (6+) are refused before anything is sent. This
-replaces the old `--gm-instance-data` hack (the raw `.debug instancedata` lines of internal/raidwalk/instdata.go):
+line, refusal or syntax text is refused. The set is always read back with a getbossstate and the real
+stored state is returned: the core prints the requested state even when InstanceScript::SetBossState refuses
+it, so a mismatch is a typed refusal error naming both. Out-of-range states (6+) are refused before anything
+is sent. This replaces the old `--gm-instance-data` hack (the raw `.debug instancedata` lines of internal/raidwalk/instdata.go):
 test setup opens a later boss directly and reads the state back instead of poking instance data by hand.
 
 No behaviour change (a bug fix in test tooling, not in how a bot plays): bots never send these lines on their
@@ -41,9 +43,8 @@ enuminfo_SpawnData.cpp: Creature, Gameobject, AreaTrigger), a header line, the c
 pending respawn: `<spawnId> | <entry> | [<gridX>,<gridY>] | <zone> (<id>) | <time>[ (inactive)]`
 (cs_list.cpp:690; UI64FMTD row, grid as %02u, the (inactive) suffix when the spawn group is not active). The
 head-line shapes are LANG_LIST_RESPAWNS_RANGE 5077 ('Listing %s respawns within %uyd'), ZONE 5078 ('Listing %s
-respawns for %s (zone %u)') and the column header 5079 ('SpawnID | Entry | GridXY| Zone | Respawn time'); the
-2014 seed texts are 'Listing %s respawns within %uyd', 'Listing %s respawns for %s (zone %u)', 'SpawnID | Entry
-| GridXY| Zone | Respawn time' and 'overdue' (the 59db2eeea0 dynamic-spawn commit). The row zone may itself hold
+respawns for %s (zone %u)') and the column header 5079 ('SpawnID | Entry | GridXY| Zone | Respawn time (Full)';
+2020_08_22_00_world_2017_07_31_00_world.sql:200) with 'overdue' the LANG 5080 word. The row zone may itself hold
 parentheses, so the parser takes the LAST pair as the id (see the Deadmines gate test).
 
 Proof that a pack stays dead is read as the absence of its spawn ids from every section; the timers are the
@@ -51,10 +52,10 @@ ShortText waits ('45s', '1h2m3s'; Util.cpp:116-165) or the overdue word. A secti
 without the column header is a cut reply, never an empty world: the handler always prints one section per type.
 
 `.debug instancespawn [groupID|explain]` (cs_debug.cpp:1431-1565) prints 'Spawn groups managed by %s (%u):'
-then, compact, " - '<name>' (<id>) is [not ]active", or with explain one " |-- '<name>' (<id>)" group header
-plus the rule lines (' | |-- ...' and the verdict ' | |=> ...'). The typed read keeps the compact facts and
-the raw rule text for bug reports; it does not re-decide the rules (the verdict line's active/not-active is
-kept from the last '|=>' line).
+(only without a group id: `if (!groupID)`) then, compact, " - '<name>' (<id>) is [not ]active", or with explain
+one " |-- '<name>' (<id>)" group header plus the rule lines (' | |-- ...' and the verdict ' | |=> ...'). The
+typed read keeps the compact facts and the raw rule text for bug reports; it does not re-decide the rules (the
+verdict line's active/not-active is kept from the last '|=>' line).
 
 No behaviour change: read-only setup/test evidence.
 
@@ -70,7 +71,9 @@ failsafe (11013). The 2016 seed texts ('VisualizeBoundary warning: No interior p
 
 `.npc evade [why] [force]` (cs_npc.cpp HandleNpcEvadeCommand) likewise prints nothing on success; its two
 refusals (LANG_SELECT_CREATURE, LANG_CREATURE_NOT_AI_ENABLED) surface as command errors through the collector,
-so any collected line is another command's tail and is refused.
+so any collected line is another command's tail and is refused. Both run through the collector's AllowEmpty
+mode (a quiet window with no line is the complete success answer) and nil-check before reading; an empty
+boundary reply that did not end quietly is UNKNOWN, never bounded.
 
 `.debug combat` (cs_debug.cpp HandleDebugCombatListCommand) prints 'Combat refs: (Combat state: %d | Manager
 state: %d)' then '[PvP]/[PvE] %s (SpawnID %u)' rows; `.debug threat` (HandleDebugThreatListCommand :877-968
@@ -87,11 +90,12 @@ The packet is the packed GUID then the uint32 reaction (CombatPackets.h:118-133,
 AI_REACTION_ALERT 0 (pre-aggro, CreatureAI.cpp:156), FRIENDLY 1, HOSTILE 2 (every attack, Unit.cpp:6242),
 AFRAID 3, DESTROY 4 (SharedDefines.h:6636-6642). The parser names all five and refuses short/trailing packets.
 
-The session writes one combat-log row per reaction (kind "hostile", spell_id the reaction, source the reacting
-unit's guid, reason the word) plus a fight-log line, so the watch record carries the pull moment with its source
-guid: who pulled, and an accidental-aggro signal beside the attack start that follows. This is gain, not guess:
-the driver's "lost or dead" and "fight end" inference still uses its own polls; the reaction is an extra event,
-never a replacement.
+Fix round (reviews claude-core-gains-2, codex-core-gains-2): only HOSTILE becomes kind "hostile" (a pull
+moment); ALERT is its own "alert" kind (stealth notice, not aggro, so a watch counting hostile rows no longer
+flags false accidental pulls); FRIENDLY, AFRAID, DESTROY and unknown values write no row. The reaction joins
+describesMapContent (mapchange.go), so an old-map copy held between the suspend and the resume is dropped at
+the resume instead of landing in the fresh map's log. This is gain, not guess: the driver's "lost or dead"
+and "fight end" inference still uses its own polls; the reaction is an extra event, never a replacement.
 
 ## Item 13: game-object query
 
@@ -104,21 +108,47 @@ entry then the packed GUID (QueryPackets.cpp:344-348).
 
 The session's queryNames round now asks one query per unknown game-object entry after the player/creature rounds
 (same deadline, skipped when the answer does not come), caches the answer per entry beside the creature name
-cache, and World.Name serves it: doors, chests and gossip objects show their names where the loot and route
-checks list them. That unblocks loot/route callers that refuse when two entries are in range: the entries are
-now told apart by name as well as by position.
+cache (Allow=false answers as negative entries under the same bound), and World.Name serves it: doors, chests
+and gossip objects show their names where the loot and route checks list them. Malformed answers are logged and
+dropped, never session errors. That unblocks loot/route callers that refuse when two entries are in range: the
+entries are now told apart by name as well as by position.
+
+## Fix round: what the reviews changed (core rev d02645dd21 throughout)
+
+* `.list respawns` column header is the real trinity_string 5079 text 'SpawnID | Entry | GridXY| Zone | Respawn
+  time (Full)' (2020_08_22_00_world_2017_07_31_00_world.sql:200); the old guess without ' (Full)' failed every
+  real reply with "is not the respawn column header". Tests quote the exact string.
+* `.debug instancespawn <id>` never prints the managed-by line (cs_debug.cpp `if (!groupID)`): the parser takes
+  hasGroup and makes the line optional on that path. The core's four refusal lines ("There is no spawn group
+  with ID %u.", "%s has no instance script.", "%s's instance script does not manage any spawn groups.", "%s's
+  instance script does not manage group '%s'.") arrive as command errors, so anything collected that is not a
+  group line is refused.
+* `SetBossState` reads back with `getbossstate` and returns the real state: the set command prints the
+  requested state unconditionally while InstanceScript::SetBossState can refuse (loading, same state,
+  DONE-is-terminal), so a refused transition is now a typed error naming the requested and the real state.
+* Silent-success commands (`.debug boundary`, `.npc evade`) run through the collector's AllowEmpty mode: a
+  quiet window with no line is a complete answer (the failure ids / refusals still come back as errors), and
+  the parsers nil-check first. An empty boundary reply that did NOT end quietly is UNKNOWN, never bounded.
+* Name/query waits are correlated: the player wait needs every asked GUID named, the creature wait every asked
+  entry, the gameobject wait the echoed entry — a delayed answer for another entry no longer completes them.
+* Malformed name/query answers are logged and dropped (parse error), never session errors; Allow=false
+  gameobject answers are kept as negative cache entries under the same bound, so UnknownGameObjects stops
+  re-asking them.
 
 ## Live checks (not run; the brief asks for none)
 
 * `.instance setbossstate 0 3` then `.instance getbossstate 0` on a test server: the get answers
-  'Boss id 0 state is 3 (DONE).'; out-of-range states print the core's LANG_BAD_VALUE refusal.
-* `.list respawns 100` in a cleared wing prints the type sections with no rows for the dead packs and ShortText
-  waits for the live ones; `.debug instancespawn explain` names the blocking boss states.
+  'Boss id 0 state is 3 (DONE).'; a refused transition answers DONE on the set but the get still reads the
+  old state, and the client reports the refusal. Out-of-range states print the core's LANG_BAD_VALUE refusal.
+* `.list respawns 100` in a cleared wing prints the type sections with the ' (Full)' header, no rows for the
+  dead packs and ShortText waits for the live ones; `.debug instancespawn 12` prints only the compact line;
+  `.debug instancespawn explain` names the blocking boss states.
 * `.debug threat` on an engaged boss lists the tank first with its threat float; `.debug combat` names the
   combat refs; `.debug boundary` on a room boss prints nothing and summons the markers.
-* Pull a mob: the combat log gains a "hostile" row naming the reacting unit before the first swing.
-* Walk to a door and a chest: `units` shows their names after the query round; two same-entry objects still
-  refuse without `--at`.
+* Pull a mob: the combat log gains a "hostile" row naming the reacting unit before the first swing; a
+  stealthed player noticed gains an "alert" row instead.
+* Walk to a door and a chest: `units` shows their names after the query round; a missing template stays
+  unnamed (negative cache) without stalling later entries; two same-entry objects still refuse without `--at`.
 
 ## Gates
 

@@ -21,13 +21,23 @@ package tbcmd
 import (
 	"context"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
 func TestDebugBoundary(t *testing.T) {
-	// Success prints nothing: the markers in the world are the answer.
+	// Success prints nothing: the markers in the world are the answer. Only a reply that ended quietly
+	// with no line (the runner's AllowEmpty path) is success; a missing reply or a non-quiet end is
+	// UNKNOWN, never bounded.
 	got, err := parseBoundary(bossReply())
-	if err != nil || !got.Bounded || got.Failure != "" {
+	if err != nil || !got.Bounded || !got.Complete || got.Failure != "" {
 		t.Fatalf("empty %+v %v", got, err)
+	}
+	if _, err := parseBoundary(nil); err == nil {
+		t.Fatal("nil reply parsed")
+	}
+	if _, err := parseBoundary(&command.Reply{End: "deadline"}); err == nil {
+		t.Fatal("deadline-empty reply parsed as bounded")
 	}
 	got, err = parseBoundary(bossReply("VisualizeBoundary error: Creature movement is unbounded"))
 	if err != nil || got.Bounded || got.Failure != "unbounded" {
@@ -71,6 +81,12 @@ func TestNpcEvade(t *testing.T) {
 	got, err := parseEvade(bossReply())
 	if err != nil || !got.Evaded {
 		t.Fatalf("empty %+v %v", got, err)
+	}
+	if _, err := parseEvade(nil); err == nil {
+		t.Fatal("nil reply parsed")
+	}
+	if _, err := parseEvade(&command.Reply{End: "deadline"}); err == nil {
+		t.Fatal("deadline-empty reply parsed as evaded")
 	}
 	// Any line at all is another command's tail: evade prints nothing on success.
 	if _, err := parseEvade(bossReply("whatever")); err == nil {

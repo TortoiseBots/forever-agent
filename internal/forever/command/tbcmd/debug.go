@@ -29,27 +29,33 @@ import (
 )
 
 // BoundaryResult is a `.debug boundary` answer: whether the creature's movement is bounded, and the server's own
-// failure when it is not.
-// Reference copies of the failure strings (LANG 11011-11013, 2016_03_22_09_world_2016_01_13_00_world.sql):
+// failure when it is not. The core prints nothing on success (cs_debug.cpp HandleDebugBoundaryCommand: the markers
+// summoned in the world ARE the answer); an empty reply is therefore only meaningful when the runner saw a truly
+// quiet window. Reference copies of the failure strings (LANG 11011-11013,
+// 2016_03_22_09_world_2016_01_13_00_world.sql:8-10):
 // "VisualizeBoundary warning: No interior point of the creature's boundary could be found - check if you have
 // mutually exclusive boundaries!", "VisualizeBoundary error: Creature movement is unbounded",
 // "VisualizeBoundary warning: Reached fail-safe flood boundary - check is your boundary is unbounded!".
 type BoundaryResult struct {
 	// Bounded says the command ran without a failure line: the markers are in the world for the duration.
-	Bounded bool
+	// Complete says the reply ended quietly with no line (AllowEmpty): the markers are the answer. An empty
+	// reply that did NOT end quietly (deadline, line cap) is UNKNOWN, never bounded: a late or dropped
+	// failure line must not read as success.
+	Bounded  bool
+	Complete bool
 	// Failure is the failure kind when not bounded: no-interior, unbounded or failsafe.
 	Failure string
 	Raw     []string
 }
 
-// parseBoundary reads a tokenless `.debug boundary` reply: empty (or only blank lines) is success — the markers
-// are summoned in the world. One failure line is the failure; anything else is another command's tail.
+// parseBoundary reads a tokenless `.debug boundary` reply: empty (or only blank lines) with a quiet end is
+// success — the markers are summoned in the world. One failure line is the failure; anything else is another
+// command's tail. The nil check comes first: rep.Raw is never read before it.
 func parseBoundary(rep *command.Reply) (BoundaryResult, error) {
-	out := BoundaryResult{Raw: append([]string(nil), rep.Raw...)}
-	if rep == nil || len(rep.RawText) == 0 {
-		out.Bounded = true
-		return out, nil
+	if rep == nil {
+		return BoundaryResult{}, fmt.Errorf("%w: the boundary reply is missing", ErrBadReport)
 	}
+	out := BoundaryResult{Raw: append([]string(nil), rep.Raw...)}
 	var lines []string
 	for _, l := range rep.RawText {
 		if strings.TrimSpace(l) != "" {
@@ -57,7 +63,11 @@ func parseBoundary(rep *command.Reply) (BoundaryResult, error) {
 		}
 	}
 	if len(lines) == 0 {
+		if !rep.Complete || rep.End != "quiet" {
+			return BoundaryResult{}, fmt.Errorf("%w: the boundary reply ended %q with no line (UNKNOWN, not bounded)", ErrBadReport, rep.End)
+		}
 		out.Bounded = true
+		out.Complete = true
 		return out, nil
 	}
 	if len(lines) > 1 {
@@ -88,7 +98,11 @@ func (c *Client) DebugBoundary(ctx context.Context, fill bool, duration uint32, 
 	if hasDuration {
 		line += fmt.Sprintf(" %d", duration)
 	}
-	rep, err := c.run.Run(ctx, line, command.Options{})
+	o := c.Base
+	o.Token = ""
+	o.EndKind = ""
+	o.AllowEmpty = true
+	rep, err := c.run.Run(ctx, line, o)
 	if err != nil {
 		return BoundaryResult{}, err
 	}
@@ -102,12 +116,20 @@ type EvadeResult struct {
 	Raw    []string
 }
 
-// parseEvade reads a tokenless `.npc evade` reply: no line is success. The only lines this command prints are its
-// two refusals (LANG_SELECT_CREATURE 2, LANG_CREATURE_NOT_AI_ENABLED 11015), and both come back as command errors
-// through the collector, not as collected lines — so any collected line is another command's tail.
+// parseEvade reads a tokenless `.npc evade` reply: a quiet end with no line is success (the core prints
+// nothing: cs_npc.cpp HandleNpcEvadeCommand returns true with no line). The only lines this command prints are
+// its two refusals (LANG_SELECT_CREATURE 2 'Select a creature', LANG_CREATURE_NOT_AI_ENABLED 11015), and both
+// come back as command errors through the collector, not as collected lines — so any collected line is another
+// command's tail. The nil check comes first: rep.Raw is never read before it.
 func parseEvade(rep *command.Reply) (EvadeResult, error) {
+	if rep == nil {
+		return EvadeResult{}, fmt.Errorf("%w: the evade reply is missing", ErrBadReport)
+	}
 	out := EvadeResult{Raw: append([]string(nil), rep.Raw...)}
-	if rep == nil || len(rep.RawText) == 0 {
+	if len(rep.RawText) == 0 {
+		if !rep.Complete || rep.End != "quiet" {
+			return EvadeResult{}, fmt.Errorf("%w: the evade reply ended %q with no line", ErrBadReport, rep.End)
+		}
 		out.Evaded = true
 		return out, nil
 	}
@@ -134,7 +156,11 @@ func (c *Client) NpcEvade(ctx context.Context, why string, force bool) (EvadeRes
 	if force {
 		line += " force"
 	}
-	rep, err := c.run.Run(ctx, line, command.Options{})
+	o := c.Base
+	o.Token = ""
+	o.EndKind = ""
+	o.AllowEmpty = true
+	rep, err := c.run.Run(ctx, line, o)
 	if err != nil {
 		return EvadeResult{}, err
 	}

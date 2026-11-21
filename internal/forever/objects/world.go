@@ -817,7 +817,9 @@ func (w *World) EntryName(entry int32) string {
 	return w.entries[entry]
 }
 
-// SetGameObjectName caches a game object's query answer by entry: its names and its type.
+// SetGameObjectName caches a game object's query answer by entry: its names and its type. An Allow=false
+// answer (Found false: the core has no template for the entry) is kept as a negative entry under the same
+// bound, so UnknownGameObjects stops re-asking it every round.
 func (w *World) SetGameObjectName(g GameObjectName) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -836,7 +838,8 @@ func (w *World) GameObjectName(entry int32) (GameObjectName, bool) {
 }
 
 // UnknownGameObjects lists up to limit game-object entries this client has seen but has no query answer for
-// yet, nearest first, each entry once: the doors, chests and gossip objects loot and route checks show.
+// yet (including negative Allow=false answers), nearest first, each entry once: the doors, chests and gossip
+// objects loot and route checks show.
 func (w *World) UnknownGameObjects(x, y, z float32, limit int) []int32 {
 	objs := w.GameObjects(x, y, z)
 	w.mu.RLock()

@@ -14,10 +14,15 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
-// bossReply is a tokenless core reply carrying one server line. Raw and RawText are both set the way the
-// collector sets them (command.go: the raw text is the matching copy, Raw its visible form).
+// bossReply is a tokenless core reply carrying server lines. Raw and RawText are both set the way the
+// collector sets them (command.go: the raw text is the matching copy, Raw its visible form). An empty reply
+// stands for the production runner's quiet window with nothing collected: Complete with End "quiet", the
+// AllowEmpty success of `.debug boundary` and `.npc evade`.
 func bossReply(lines ...string) *command.Reply {
-	return &command.Reply{Raw: append([]string(nil), lines...), RawText: append([]string(nil), lines...), Complete: true}
+	if len(lines) == 0 {
+		return &command.Reply{Complete: true, End: "quiet"}
+	}
+	return &command.Reply{Raw: append([]string(nil), lines...), RawText: append([]string(nil), lines...), Complete: true, End: "quiet"}
 }
 
 // bossRunner answers every line with the same reply and records what it was sent.
@@ -32,29 +37,64 @@ func bossRunner(rep *command.Reply, sent *string) *fakeRunner {
 }
 
 func TestBossStateSetAndGet(t *testing.T) {
-	var sent string
-	c := NewClient(bossRunner(bossReply("Boss id 3 state is now set to 1 (IN_PROGRESS)."), &sent))
+	// The set is read back with a get (the core prints the requested state even when the script
+	// refuses the transition): the fake runner answers each line, the way the collector does.
+	var sent []string
+	run := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		sent = append(sent, line)
+		switch line {
+		case ".instance setbossstate 3 1":
+			return bossReply("Boss id 3 state is now set to 1 (IN_PROGRESS)."), nil
+		case ".instance getbossstate 3":
+			return bossReply("Boss id 3 state is 1 (IN_PROGRESS)."), nil
+		}
+		t.Fatalf("unexpected line %q", line)
+		return nil, nil
+	}}
+	c := NewClient(run)
 	got, err := c.SetBossState(context.Background(), 3, 1, "")
 	if err != nil {
 		t.Fatalf("SetBossState: %v", err)
 	}
-	if sent != ".instance setbossstate 3 1" {
-		t.Fatalf("line %q", sent)
+	if len(sent) != 2 || sent[0] != ".instance setbossstate 3 1" || sent[1] != ".instance getbossstate 3" {
+		t.Fatalf("lines %q", sent)
 	}
 	if got.ID != 3 || got.State != 1 || got.Name != "IN_PROGRESS" || !got.Set {
 		t.Fatalf("report %+v", got)
 	}
 
-	c = NewClient(bossRunner(bossReply("Boss id 3 state is 1 (IN_PROGRESS)."), &sent))
+	var getSent string
+	c = NewClient(bossRunner(bossReply("Boss id 3 state is 1 (IN_PROGRESS)."), &getSent))
 	got, err = c.GetBossState(context.Background(), 3, "")
 	if err != nil {
 		t.Fatalf("GetBossState: %v", err)
 	}
-	if sent != ".instance getbossstate 3" {
-		t.Fatalf("line %q", sent)
+	if getSent != ".instance getbossstate 3" {
+		t.Fatalf("line %q", getSent)
 	}
 	if got.ID != 3 || got.State != 1 || got.Name != "IN_PROGRESS" || got.Set {
 		t.Fatalf("report %+v", got)
+	}
+}
+
+// TestBossStateRefusedTransition: the set prints DONE but the get still reads IN_PROGRESS — the script
+// refused (DONE-is-terminal and TO_BE_DECIDED rules in InstanceScript.cpp) — so the set is a typed error
+// naming both, never a DONE report.
+func TestBossStateRefusedTransition(t *testing.T) {
+	run := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch line {
+		case ".instance setbossstate 0 3":
+			return bossReply("Boss id 0 state is now set to 3 (DONE)."), nil
+		case ".instance getbossstate 0":
+			return bossReply("Boss id 0 state is 1 (IN_PROGRESS)."), nil
+		}
+		t.Fatalf("unexpected line %q", line)
+		return nil, nil
+	}}
+	if _, err := NewClient(run).SetBossState(context.Background(), 0, 3, ""); err == nil {
+		t.Fatal("refused transition reported DONE")
+	} else if !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "IN_PROGRESS") {
+		t.Fatalf("error %v names neither the refusal nor the real state", err)
 	}
 }
 

@@ -490,9 +490,9 @@ func describesMapContent(core uint32) bool {
 	switch core {
 	case wire.SMSGUpdateObject, wire.SMSGOnMonsterMove, wire.SMSGMoveUpdate, wire.SMSGMoveUpdateTeleport,
 		wire.SMSGMoveTeleport, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
-		wire.SMSGAttackerStateUpdate, wire.SMSGSpellStart, wire.SMSGSpellGo, wire.SMSGCastFailed,
-		wire.SMSGSpellFailure, wire.SMSGSpellFailedOther, wire.SMSGSpellNonMeleeDamage, wire.SMSGAuraUpdate,
-		wire.SMSGPowerUpdate,
+		wire.SMSGAIReaction, wire.SMSGAttackerStateUpdate, wire.SMSGSpellStart, wire.SMSGSpellGo,
+		wire.SMSGCastFailed, wire.SMSGSpellFailure, wire.SMSGSpellFailedOther, wire.SMSGSpellNonMeleeDamage,
+		wire.SMSGAuraUpdate, wire.SMSGPowerUpdate,
 		// The self movement-state packets: the four the death flow handles and answers (run and swim speed,
 		// water and land walk). A copy written for the old map would move the mover, satisfy the release's ghost
 		// speed wait, and make the client answer (CMSG_MOVE_FORCE_*_SPEED_CHANGE_ACK, MovementHandler.cpp:662-733;
