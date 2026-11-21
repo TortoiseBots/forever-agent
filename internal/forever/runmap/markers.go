@@ -29,7 +29,7 @@ const wipeCover = 5.0
 // until rel moves them onto the run's (the run starts shift seconds into the trace when a window was asked for).
 // Nothing is dropped without a word: a marker with no position to stand at, or outside the run's span, is counted
 // in the run's notes.
-func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSummary, offset, shift float64) {
+func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSummary, offset, shift float64, dmg []combatDamage) {
 	var ms []mapview.Marker
 	noPlace := map[string]int{}
 	rel := func(t float64) float64 { return t - shift }
@@ -122,6 +122,9 @@ func appendMarkers(run *mapview.Run, p *party, rec *bughunt.Run, s *driver.RunSu
 			name := p.bySlot[d.Who]
 			if name == "" {
 				name = p.label[p.leader]
+			}
+			if g := p.guidOfSlot(d.Who); g != "" {
+				label = deathLabel(label, GUIDKey(g), t, dmg)
 			}
 			pos, ok := place(name, rel(t))
 			addAt(mapview.MarkDeath, rel(t), label, pos, ok)

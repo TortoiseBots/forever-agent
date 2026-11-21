@@ -72,6 +72,12 @@ func LoadRun(dir string, o Options) (*Loaded, error) {
 	folder := filepath.Dir(rec.Path)
 	stem := filepath.Join(folder, strings.TrimSuffix(filepath.Base(rec.Path), ".jsonl"))
 	sum, sumNote := readSummary(stem + ".forever-run.json")
+	dmg, dmgSkipped, err := readCombatDamage(stem+".combatlog.jsonl", rec.T0)
+	var dmgNote string
+	if err != nil {
+		// A combat log that cannot be read (all of it, or past some line) never breaks the map: draw with what was read.
+		dmgNote = "combat log not fully read, death labels may lack the blow"
+	}
 	plan, planNote, err := resolvePlan(o.PlanPath, sum, folder)
 	if err != nil {
 		return nil, err
@@ -125,7 +131,13 @@ func LoadRun(dir string, o Options) (*Loaded, error) {
 		// The trace does not know when it started: its times are still the run's, but the wall clock is not.
 		run.Start = time.Time{}
 	}
-	appendMarkers(&run, p, rec, sum, clock, shift)
+	appendMarkers(&run, p, rec, sum, clock, shift, dmg)
+	if dmgNote != "" {
+		run.Notes = append(run.Notes, dmgNote)
+	}
+	if dmgSkipped > 0 {
+		run.Notes = append(run.Notes, fmt.Sprintf("skipped %d combat log rows: not a damage row with a readable time", dmgSkipped))
+	}
 	if thinned {
 		run.Notes = append(run.Notes, fmt.Sprintf("a long record: every %d. frame is drawn (%d frames kept)", step, len(kept)))
 	}
