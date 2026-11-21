@@ -130,6 +130,9 @@ type Boss struct {
 	First    []uint32
 	Radius   float32
 	Approach []Vec3
+	// WaitS is the plan's wait for a patrolling boss; a watch route keeps it (the module runs the wait), the run
+	// route refuses it.
+	WaitS float64
 }
 
 // LoadRoute reads a dungeon plan file and builds the driver's view of it for a run this client leads: the plan's
@@ -366,6 +369,9 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 				refuse(bw, "companions_loot", "the party's looting is not run by this round")
 			}
 			l.Boss = &Boss{Leg: i, Entry: pl.Boss.Entry, Pos: vec(pl.Boss.Position), First: skipEntries(pl.Boss.First, l.Skip), Radius: pl.Boss.Radius}
+			if watch {
+				l.Boss.WaitS = float64(pl.Boss.WaitS)
+			}
 			for _, p := range pl.Boss.Approach {
 				l.Boss.Approach = append(l.Boss.Approach, vec(p))
 			}

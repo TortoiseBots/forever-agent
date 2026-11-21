@@ -150,8 +150,9 @@ func TestDungeonWorldReadsTheModel(t *testing.T) {
 	if !friendlyUnit(&objects.Object{Type: objects.TypePlayer}) {
 		t.Fatal("a player is not friendly")
 	}
-	s.world.SetName(unitGUID(3), "Tbtank")
-	if g, ok := w.PlayerGUID("tbtank"); !ok || g != unitGUID(3) {
+	addUnit(t, s, playerGUID(3), 0, 14, 21, 30, 100, 100, 28, 0)
+	s.world.SetName(playerGUID(3), "Tbtank")
+	if g, ok := w.PlayerGUID("tbtank"); !ok || g != playerGUID(3) {
 		t.Fatalf("PlayerGUID: %v %v", g, ok)
 	}
 	if _, ok := w.PlayerGUID("nobody"); ok {
@@ -361,38 +362,39 @@ func nameTestSession(t *testing.T) (*session, *portRecorder, *time.Time) {
 	return s, rec, &clock
 }
 
-// answerNames hands the session the server's name answer the way the packet loop does.
-func answerNames(t *testing.T, s *session, names map[wire.GUID]string) {
+// queueNames puts the server's name answer on the session's event channel, where the packet loop leaves it.
+func queueNames(t *testing.T, s *session, names map[wire.GUID]string) {
 	t.Helper()
-	ev := event{side: sideInstance, p: worldconn.Packet{
+	s.events <- event{side: sideInstance, p: worldconn.Packet{
 		Core:    wire.SMSGQueryPlayerNamesResponse,
 		Payload: playerNamesAnswer(t, names),
 	}}
-	if err := s.handle(s.ctx, ev); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
 }
 
 // TestDungeonWorldNamesThePartyFromTheServer: a watch's character is not in the party it watches and nothing else in
 // a dungeon session asks for names, so a bot in view had no guid. PlayerGUID sends the query and returns at once
-// (empty for a member not yet named); the answer fills the cache and a later frame finds the guid.
+// (empty for a member not yet named, the answer still unread on the event channel); the clock's Sleep drains the
+// answer into the cache and a later frame finds the guid.
 func TestDungeonWorldNamesThePartyFromTheServer(t *testing.T) {
-	s, rec, _ := nameTestSession(t)
+	s, rec, clock := nameTestSession(t)
 	tank, healer := playerGUID(0x11), playerGUID(0x12)
 	addUnit(t, s, tank, 0, 12, 21, 30, 100, 100, 28, 0)
 	addUnit(t, s, healer, 0, 13, 21, 30, 100, 100, 28, 0)
 	w := dungeonWorld{s: s}
-	start := time.Now()
+	queueNames(t, s, map[wire.GUID]string{tank: "Wctank", healer: "Wcpri"})
 	if g, ok := w.PlayerGUID("wctank"); ok {
-		t.Fatalf("PlayerGUID(wctank) = %v before any answer", g)
+		t.Fatalf("PlayerGUID(wctank) = %v before the answer was read", g)
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("PlayerGUID blocked for %s", d)
+	if len(s.events) != 1 {
+		t.Fatal("PlayerGUID read the event channel")
 	}
 	if n := len(rec.cores()); n != 1 {
 		t.Fatalf("%d name query(ies) sent, want one", n)
 	}
-	answerNames(t, s, map[wire.GUID]string{tank: "Wctank", healer: "Wcpri"})
+	if err := (dungeonClock{s: s}).Sleep(context.Background(), 50*time.Millisecond); err != nil {
+		t.Fatalf("Sleep: %v", err)
+	}
+	*clock = clock.Add(time.Second)
 	if g, ok := w.PlayerGUID("wctank"); !ok || g != tank {
 		t.Fatalf("PlayerGUID(wctank) = %v %v, want %v", g, ok, tank)
 	}
@@ -412,12 +414,11 @@ func TestDungeonWorldNameAskBacksOff(t *testing.T) {
 	s, rec, clock := nameTestSession(t)
 	addUnit(t, s, playerGUID(0x31), 0, 12, 21, 30, 100, 100, 28, 0)
 	w := dungeonWorld{s: s}
-	asks := func() int { return len(rec.cores()) }
 	step := func(d time.Duration, want int, why string) {
 		t.Helper()
 		*clock = clock.Add(d)
 		w.PlayerGUID("ghost")
-		if got := asks(); got != want {
+		if got := len(rec.cores()); got != want {
 			t.Fatalf("%s: %d queries, want %d", why, got, want)
 		}
 	}
@@ -432,22 +433,61 @@ func TestDungeonWorldNameAskBacksOff(t *testing.T) {
 	step(time.Second, 5, "at the next 2 min")
 }
 
-// TestDungeonWorldNameAskAfterReopenedSession: a new session has no backoff state, so a reopened session asks at
-// once again.
-func TestDungeonWorldNameAskAfterReopenedSession(t *testing.T) {
+// TestDungeonWorldNameAskAfterMapChange: a map change empties the model, so the backoff state of the units that are
+// gone goes with them, and a player met again in the new map is asked at once (after the session gap).
+func TestDungeonWorldNameAskAfterMapChange(t *testing.T) {
+	s, rec, clock := nameTestSession(t)
+	g := playerGUID(0x41)
+	addUnit(t, s, g, 0, 12, 21, 30, 100, 100, 28, 0)
+	w := dungeonWorld{s: s}
+	w.PlayerGUID("x")
+	w.PlayerGUID("x")
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries in one map, want 1", n)
+	}
+	s.world.ResetForMap(1)
+	*clock = clock.Add(3 * time.Second)
+	w.PlayerGUID("x")
+	if len(s.nameAsks) != 0 {
+		t.Fatalf("the backoff of a unit that left is kept: %v", s.nameAsks)
+	}
+	addUnit(t, s, g, 0, 12, 21, 30, 100, 100, 28, 0)
+	w.PlayerGUID("x")
+	if n := len(rec.cores()); n != 2 {
+		t.Fatalf("%d queries after the map change, want 2", n)
+	}
+}
+
+// TestDungeonWorldNameAskSessionGap: two different new players in view in quick frames cost one query, not one per
+// frame.
+func TestDungeonWorldNameAskSessionGap(t *testing.T) {
+	s, rec, clock := nameTestSession(t)
+	w := dungeonWorld{s: s}
+	addUnit(t, s, playerGUID(0x71), 0, 12, 21, 30, 100, 100, 28, 0)
+	w.PlayerGUID("x")
+	addUnit(t, s, playerGUID(0x72), 0, 13, 21, 30, 100, 100, 28, 0)
+	w.PlayerGUID("x")
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries inside the gap, want 1", n)
+	}
+	*clock = clock.Add(dungeonNameAskGap)
+	w.PlayerGUID("x")
+	if n := len(rec.cores()); n != 2 {
+		t.Fatalf("%d queries after the gap, want 2", n)
+	}
+}
+
+// TestDungeonWorldNameAskNotStarvedByCreatures: fifty creature entries nearer than the one unnamed player must not use
+// up the query's budget; the player is asked.
+func TestDungeonWorldNameAskNotStarvedByCreatures(t *testing.T) {
 	s, rec, _ := nameTestSession(t)
-	addUnit(t, s, playerGUID(0x41), 0, 12, 21, 30, 100, 100, 28, 0)
-	(dungeonWorld{s: s}).PlayerGUID("x")
+	for i := range 60 {
+		addUnit(t, s, unitGUID(uint64(100+i)), int32(1000+i), 10.5, 20, 30, 40, 40, 2, 0)
+	}
+	addUnit(t, s, playerGUID(0x81), 0, 200, 20, 30, 100, 100, 28, 0)
 	(dungeonWorld{s: s}).PlayerGUID("x")
 	if n := len(rec.cores()); n != 1 {
-		t.Fatalf("%d queries in one session, want 1", n)
-	}
-	s2 := newPortSession(rec)
-	s2.nowFn = s.nowFn
-	addUnit(t, s2, playerGUID(0x41), 0, 12, 21, 30, 100, 100, 28, 0)
-	(dungeonWorld{s: s2}).PlayerGUID("x")
-	if n := len(rec.cores()); n != 2 {
-		t.Fatalf("%d queries after a reopened session, want 2", n)
+		t.Fatalf("%d queries, want the player asked", n)
 	}
 }
 
@@ -471,11 +511,14 @@ func TestDungeonWorldNameAskFailedSend(t *testing.T) {
 	}
 }
 
-// TestDungeonWorldNameCollision: two cached players with one name never resolve to a random one: the roster's guid
-// wins, and with no roster the answer is empty.
+// TestDungeonWorldNameCollision: two players in view with one name never resolve to a random one: the roster's guid
+// wins, with no roster the answer is empty, and a roster that names the name twice stops there: neither the cache nor
+// a name query is consulted.
 func TestDungeonWorldNameCollision(t *testing.T) {
-	s, _, _ := nameTestSession(t)
+	s, rec, _ := nameTestSession(t)
 	a, b := playerGUID(0x61), playerGUID(0x62)
+	addUnit(t, s, a, 0, 12, 21, 30, 100, 100, 28, 0)
+	addUnit(t, s, b, 0, 13, 21, 30, 100, 100, 28, 0)
 	s.world.SetName(a, "Twin")
 	s.world.SetName(b, "TWIN")
 	w := dungeonWorld{s: s}
@@ -491,10 +534,45 @@ func TestDungeonWorldNameCollision(t *testing.T) {
 			t.Fatalf("PlayerGUID(twin) = %v %v, want the roster's %v", g, ok, b)
 		}
 	}
-	// A name two members share is no answer either.
-	s.party.Members[a] = &party.Member{GUID: a, Name: "twin"}
-	if g, ok := w.PlayerGUID("twin"); ok {
+	// A name two members share is ambiguous: only one of them is named in view, and the cache must not answer.
+	s2, rec2, _ := nameTestSession(t)
+	addUnit(t, s2, a, 0, 12, 21, 30, 100, 100, 28, 0)
+	addUnit(t, s2, playerGUID(0x63), 0, 14, 21, 30, 100, 100, 28, 0)
+	s2.world.SetName(a, "Twin")
+	s2.party.RosterValid = true
+	s2.party.Members = map[wire.GUID]*party.Member{
+		a: {GUID: a, Name: "Twin"}, b: {GUID: b, Name: "twin"},
+	}
+	if g, ok := (dungeonWorld{s: s2}).PlayerGUID("twin"); ok {
 		t.Fatalf("a roster collision picked %v", g)
+	}
+	if n := len(rec2.cores()); n != 0 {
+		t.Fatalf("%d queries after a roster collision, want none", n)
+	}
+	_ = rec
+}
+
+// TestDungeonWorldNameCacheNeedsAUnitInView: a name cached earlier for a player who is not in view (met before the
+// dungeon) is not the watched party's member of that name; the member in view is asked for and then found.
+func TestDungeonWorldNameCacheNeedsAUnitInView(t *testing.T) {
+	s, rec, clock := nameTestSession(t)
+	g1, g2 := playerGUID(0x91), playerGUID(0x92)
+	s.world.SetName(g1, "Tank")
+	addUnit(t, s, g2, 0, 12, 21, 30, 100, 100, 28, 0)
+	w := dungeonWorld{s: s}
+	if g, ok := w.PlayerGUID("Tank"); ok {
+		t.Fatalf("the stale cache answered with %v", g)
+	}
+	if n := len(rec.cores()); n != 1 {
+		t.Fatalf("%d queries, want the unnamed player asked", n)
+	}
+	queueNames(t, s, map[wire.GUID]string{g2: "Tank"})
+	if err := (dungeonClock{s: s}).Sleep(context.Background(), 50*time.Millisecond); err != nil {
+		t.Fatalf("Sleep: %v", err)
+	}
+	*clock = clock.Add(time.Second)
+	if g, ok := w.PlayerGUID("tank"); !ok || g != g2 {
+		t.Fatalf("PlayerGUID(tank) = %v %v, want the one in view %v", g, ok, g2)
 	}
 }
 

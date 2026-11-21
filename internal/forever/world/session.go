@@ -495,6 +495,8 @@ type session struct {
 	// nameAsks is, per player guid, when a dungeon port last sent a name query for it and how many it has sent: an
 	// unanswered guid is asked again on a growing backoff (nameAskBackoff). Only the session goroutine touches it.
 	nameAsks map[wire.GUID]nameAsk
+	// nameAskLast is when the last name query of a dungeon port went out (dungeonNameAskGap).
+	nameAskLast time.Time
 	// nowFn replaces the client clock; the tests set a fake so the name backoff runs on a fake clock.
 	nowFn func() time.Time
 	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two
