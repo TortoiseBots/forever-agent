@@ -646,9 +646,8 @@ func TestTankRulesTest_TankInterrupts(t *testing.T) {
 	}
 	samples := tndSeries(200, []any{int64(71)}, nil, nil)
 	assertEqual(t, "PASS", tndVerdict(t, tid, rid, append(append([]any{}, casts...), answers...), samples))
-	// A recording with no interrupt row at all cannot say whether the bot interrupted (an older recording): the
-	// repeat is INCONCLUSIVE, never FAIL. Casts with interrupt rows that landed on nothing are the FAIL below.
-	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, casts, samples))
+	// This tank rule still answers on the cast row (not the interrupt log), so its absence is a FAIL.
+	assertEqual(t, "FAIL", tndVerdict(t, tid, rid, casts, samples))
 	assertEqual(t, "INCONCLUSIVE", tndVerdict(t, tid, rid, instants, samples))
 	// Hammer of Justice and Bash (60 s responder cooldown): 3 casts at gap 70 all answer
 	for _, pair := range [][2]string{
