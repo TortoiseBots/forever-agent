@@ -59,6 +59,16 @@ type VendorInventory struct {
 	Items  []VendorItem
 }
 
+// vendorCount checks a list's row count. It goes through int32 first, which is what int is on a 32-bit build: a
+// count of 0x80000000 is negative there, passes a plain "> max" test, and would panic in make.
+func vendorCount(raw uint32) (int, error) {
+	n := int(int32(raw))
+	if n < 0 || n > maxVendorItems {
+		return 0, fmt.Errorf("vendor inventory names %d items", raw)
+	}
+	return n, nil
+}
+
 // ParseVendorInventory parses one SMSG_VENDOR_INVENTORY and requires it to be consumed exactly.
 //
 // The trailing three bits of every row follow the row's ItemInstance — the item id, its modifier list and the bonus
@@ -68,12 +78,13 @@ func ParseVendorInventory(payload []byte) (VendorInventory, error) {
 	b := wire.NewReader(payload)
 	inv := VendorInventory{Vendor: wire.ReadPackedGUID(b)}
 	inv.Reason = b.ReadI32()
-	count := int(b.ReadU32())
+	raw := b.ReadU32()
 	if err := b.Err(); err != nil {
 		return inv, fmt.Errorf("vendor inventory head: %w", err)
 	}
-	if count > maxVendorItems {
-		return inv, fmt.Errorf("vendor inventory names %d items", count)
+	count, err := vendorCount(raw)
+	if err != nil {
+		return inv, err
 	}
 	inv.Items = make([]VendorItem, 0, count)
 	for i := range count {

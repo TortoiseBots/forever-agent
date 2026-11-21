@@ -24,9 +24,12 @@ import (
 const (
 	actVendorWait = 5 * time.Second
 	actVendorPoll = 50 * time.Millisecond
-	// actVendorQuiet is how long a silent action (a sale, the junk sweep) must leave the inventory alone before the
-	// step reads its outcome.
-	actVendorQuiet = 300 * time.Millisecond
+	// actVendorQuiet is how long the junk sweep must leave the inventory alone before the step reads its outcome:
+	// 2 s, the same bound items.ConfirmWindow gives the server to confirm an item move. The sweep is one handler
+	// turn (ItemHandler.cpp:489-537) but each sold item is its own slot update and the coinage another, all queued
+	// into the player's next update flush; a 300 ms window read the count before those arrived and reported "no
+	// poor-quality item(s)" for a sweep that had worked.
+	actVendorQuiet = items.ConfirmWindow
 )
 
 // vendorTarget checks the current NPC is a vendor (or a repairer, for `repair`) within reach and returns it.
@@ -120,6 +123,11 @@ func (s *session) awaitVendorOpen(ctx context.Context, guid wire.GUID) error {
 		if s.vendor.open != nil && s.vendor.open.NPC == guid {
 			return true
 		}
+		// An interaction that is already started (a second `vendor` step on the same vendor) answers the ask with
+		// the list itself and no open result (ItemHandler.cpp:619-643, IsInteractingWith).
+		if s.vendor.inv != nil && s.vendor.inv.Vendor == guid {
+			return true
+		}
 		return s.vendor.sold != nil
 	})
 	if err != nil {
@@ -131,6 +139,9 @@ func (s *session) awaitVendorOpen(ctx context.Context, guid wire.GUID) error {
 	}
 	if !ok {
 		return fmt.Errorf("no interaction result within %s", actVendorWait)
+	}
+	if s.vendor.open == nil {
+		return nil // the list came instead; vendorList reuses it
 	}
 	open := *s.vendor.open
 	s.vendor.open = nil
@@ -164,6 +175,7 @@ func (s *session) vendorList(ctx context.Context, unit *objects.Object) (*items.
 	if inv.Vendor != guid {
 		return nil, fmt.Errorf("the list came from another vendor")
 	}
+	inv.Items = append([]items.VendorItem(nil), inv.Items...)
 	return &inv, nil
 }
 
@@ -260,10 +272,29 @@ func newRowOf(before, after items.Inventory, entry int32) (items.Item, bool) {
 	return items.Item{}, false
 }
 
-// actBuy buys from the open vendor: entry= or muid= names the row, n= the quantity (default the row's stack size).
-// The step waits for the purchase's own answer: a refusal fails it with the server's reason, a success waits for
-// the push result that names the slot it went to.
+// heldCount is how many items of one entry the inventory holds, in every stack.
+func heldCount(inv items.Inventory, entry int32) uint64 {
+	var n uint64
+	for _, it := range inv.Find(entry) {
+		n += uint64(it.Count)
+	}
+	return n
+}
+
+// actBuy buys from the open vendor: entry= or muid= names the row, n= the quantity of items (default 1; the price
+// is for the row's stack size, ceil(price*n/stack), Player.cpp:25229). The step waits for the purchase's own answer:
+// a refusal (SMSG_BUY_FAILED or, for a full bag and the like, SMSG_INVENTORY_CHANGE_FAILURE) fails it with the
+// server's reason, and a success counts only when the inventory then holds more of the item.
 func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
+	unit, err := s.vendorTarget(a, "buy", false)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	// The list belongs to the vendor it was read from: a purchase names a row of THAT list (its Muid, price and
+	// stock), so it must not be sent to another NPC the script moved on to.
+	if !a.hasVendor || a.vendor == nil || a.vendor.Vendor != unit.GUID {
+		return s.actFail(a, step, fmt.Errorf("buy: the open vendor list is not this NPC's (a vendor step on entry %d comes first)", unit.Info.Entry))
+	}
 	row, err := s.vendorRow(a, step)
 	if err != nil {
 		return s.actFail(a, step, err)
@@ -293,9 +324,9 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 		return s.actFail(a, step, fmt.Errorf("buy: the character's own GUID is not known yet"))
 	}
 	before := s.inventoryNow()
-	s.vendor.bought, s.vendor.buyFail, s.vendor.sold = nil, nil, nil
+	s.vendor.bought, s.vendor.buyFail, s.vendor.sold, s.invFail = nil, nil, nil, nil
 	payload := items.BuildBuyItem(items.BuyRequest{
-		Vendor:    a.npc.GUID,
+		Vendor:    unit.GUID,
 		Container: self, // the player's own GUID means the backpack (ItemHandler.cpp:589-593)
 		ItemID:    row.Item.ItemID,
 		Quantity:  int32(quantity),
@@ -307,15 +338,23 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 		return s.actFail(a, step, fmt.Errorf("CMSG_BUY_ITEM: %w", err))
 	}
 	what := fmt.Sprintf("buy %d", row.Item.ItemID)
-	ok, err := s.waitVendorAnswer(ctx, actVendorWait, func() bool {
-		return s.vendor.bought != nil || s.vendor.buyFail != nil || s.vendor.sold != nil
-	})
+	// The success answer counts only when it is this vendor's and this row's: a late answer to an earlier request
+	// must not satisfy this one.
+	mine := func() bool {
+		return s.vendor.bought != nil && s.vendor.bought.Vendor == unit.GUID && s.vendor.bought.MuID == row.MuID
+	}
+	refused := func() bool {
+		return (s.vendor.buyFail != nil && s.vendor.buyFail.Vendor == unit.GUID) || s.vendor.sold != nil || s.invFail != nil
+	}
+	ok, err := s.waitVendorAnswer(ctx, actVendorWait, func() bool { return mine() || refused() })
 	if err != nil {
 		return err
 	}
 	switch {
-	case s.vendor.buyFail != nil:
+	case s.vendor.buyFail != nil && s.vendor.buyFail.Vendor == unit.GUID:
 		return s.actFail(a, step, fmt.Errorf("%s: the server refused it: %s", what, s.vendor.buyFail.Name()))
+	case s.invFail != nil:
+		return s.actFail(a, step, refusedError(what, *s.invFail))
 	case s.vendor.sold != nil:
 		return s.actFail(a, step, fmt.Errorf("%s: the server refused it: %s", what, s.vendor.sold.Name()))
 	case !ok:
@@ -323,18 +362,31 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	}
 	bought := *s.vendor.bought
 	s.vendor.bought = nil
-	// The push result that names the slot arrives right after the purchase answer (Player.cpp:24865).
-	_, err = s.waitVendorAnswer(ctx, items.MoveWindow, func() bool {
-		after := s.inventoryNow()
-		if _, placed := newRowOf(before, after, row.Item.ItemID); placed {
-			return true
-		}
-		return after.Coinage != before.Coinage
+	// The item itself must arrive: the push result that names the slot follows the purchase answer
+	// (Player.cpp:24865). A success the inventory never shows is unconfirmed, not a purchase.
+	heldBefore := heldCount(before, row.Item.ItemID)
+	_, err = s.waitVendorAnswer(ctx, items.ConfirmWindow, func() bool {
+		return s.invFail != nil || heldCount(s.inventoryNow(), row.Item.ItemID) > heldBefore
 	})
 	if err != nil {
 		return err
 	}
+	if s.invFail != nil {
+		return s.actFail(a, step, refusedError(what, *s.invFail))
+	}
 	after := s.inventoryNow()
+	if heldCount(after, row.Item.ItemID) <= heldBefore {
+		return s.actFail(a, step, fmt.Errorf("%s: the server answered success but the inventory shows no new item within %s (unconfirmed)",
+			what, items.ConfirmWindow))
+	}
+	// The answer carries the row's stock afterwards: keep the list's own copy current for the next purchase.
+	if bought.NewQuantity >= -1 {
+		for n := range a.vendor.Items {
+			if a.vendor.Items[n].MuID == row.MuID {
+				a.vendor.Items[n].Quantity = bought.NewQuantity
+			}
+		}
+	}
 	line := fmt.Sprintf("muid %d entry %d x%d", bought.MuID, row.Item.ItemID, bought.QuantityBought)
 	if it, placed := newRowOf(before, after, row.Item.ItemID); placed {
 		line += ", " + whereItem(it)
@@ -343,18 +395,63 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	return nil
 }
 
+// equippedItem reports an item the character wears: the equipment slots 0-18 and the four bag slots 30-33 of its
+// own container. Selling one takes it off the character (CanSellItemToVendor has no equipped check,
+// Player.cpp:25299), so no sale is sent for it.
+func equippedItem(it items.Item) bool {
+	if it.Container != items.BackpackContainer {
+		return false
+	}
+	return it.Slot < items.EquippedSlots || (it.Slot >= items.FirstBagSlot && it.Slot < items.FirstBagSlot+items.BagSlots)
+}
+
+// questObjectiveItem is QUEST_OBJECTIVE_ITEM (QuestDef.h:353-358).
+const questObjectiveItem int32 = 1
+
+// questItemOf names a quest in the log whose item objective needs this entry. The client holds no item template, so
+// it knows a quest item only through what the quests told it: the objective lists of the details it received this
+// session. A quest whose details were never seen is not covered, and the server's own sell check is the only guard
+// for it; the notes say so.
+func (s *session) questItemOf(entry int32) (int32, bool) {
+	book := s.questBook()
+	for _, e := range book.Entries {
+		if e.QuestID == 0 {
+			continue
+		}
+		objs, _ := book.Objectives(e.QuestID)
+		for _, o := range objs {
+			if o.Type == questObjectiveItem && o.ObjectID == entry {
+				return e.QuestID, true
+			}
+		}
+	}
+	return 0, false
+}
+
 // actSell sells an item to the open vendor: entry= or slot= names it, n= the amount (absent or 0: the whole stack).
-// A sale is silent (SMSG_SELL_RESPONSE only on an error), so the step waits for the item to leave the carried
-// inventory — its object moves into a buyback slot 72-83 — or for a refusal that names it.
+// The item is resolved the way the destructive R2 steps resolve theirs: one stack (entry= in two stacks is refused,
+// name slot=), the position the server confirmed, a stale inventory refused. An equipped item (slots 0-18, the bag
+// slots 30-33) is never sold, and a quest item (see questItemOf) only with force=1. A sale is silent (SMSG_SELL_RESPONSE
+// only on an error), so the step waits for the item to leave the carried inventory — its object moves into a buyback
+// slot 72-83 — or for a refusal that names it.
 func (s *session) actSell(ctx context.Context, a *actState, step ActStep) error {
 	unit, err := s.vendorTarget(a, "sell", false)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
-	before := s.inventoryNow()
-	it, err := s.actResolveItem(before, step, false, "slot")
+	before, it, err := s.actResolveConfirmed(ctx, step, true, "slot")
 	if err != nil {
 		return s.actFail(a, step, err)
+	}
+	if err := staleRefusal("sell", before); err != nil {
+		return s.actFail(a, step, err)
+	}
+	if equippedItem(it) {
+		return s.actFail(a, step, fmt.Errorf("sell: entry %d is equipped (slot %d); a sale would take it off the character, so no step sells it (unequip it first)",
+			it.Entry, it.Slot))
+	}
+	if qid, quest := s.questItemOf(it.Entry); quest && step.Args["force"] != "1" {
+		return s.actFail(a, step, fmt.Errorf("sell: entry %d is an item objective of quest %d; add force=1 to sell it anyway", it.Entry, qid))
 	}
 	amount := uint32(0)
 	if raw, ok := step.Args["n"]; ok {
@@ -421,35 +518,40 @@ func (s *session) actSell(ctx context.Context, a *actState, step ActStep) error 
 }
 
 // actSellJunk sends the junk sweep. It sells every poor-quality item the character carries (ItemHandler.cpp:489-537)
-// and answers nothing, so the step waits for the carried rows to stop changing and counts what left.
+// and answers nothing, so the step waits for the carried rows and the money to stop changing (actVendorQuiet) and
+// counts what left. The client has no item quality, so it cannot name the items the sweep should take; a sweep that
+// changed neither a row nor the coinage is therefore reported as "nothing seen", never as a sweep that sold nothing.
 func (s *session) actSellJunk(ctx context.Context, a *actState, step ActStep) error {
 	unit, err := s.vendorTarget(a, "sell-junk", false)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	before := s.inventoryNow()
+	if err := staleRefusal("sell-junk", before); err != nil {
+		return s.actFail(a, step, err)
+	}
 	s.vendor.sold = nil
 	if err := s.transport().Send(wire.CMSGSellAllJunkItems, items.BuildSellAllJunk(unit.GUID)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_SELL_ALL_JUNK_ITEMS: %w", err))
 	}
-	// Two quiet polls: the server sells the whole sweep in one turn, and its slot updates land together.
+	// The sweep is read when rows and coinage have both held still for actVendorQuiet, counted from the last change.
 	quietSince := time.Time{}
-	last := s.transport().Now()
-	rows := len(before.Items)
-	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+	rows, coin := len(before.Items), before.Coinage
+	_, err = s.waitVendorAnswer(ctx, actVendorWait+actVendorQuiet, func() bool {
 		if s.vendor.sold != nil {
 			return true
 		}
 		now := s.transport().Now()
-		if n := len(s.inventoryNow().Items); n != rows {
-			rows, quietSince = n, time.Time{}
+		cur := s.inventoryNow()
+		if n := len(cur.Items); n != rows || cur.Coinage != coin {
+			rows, coin, quietSince = n, cur.Coinage, time.Time{}
 			return false
 		}
 		if quietSince.IsZero() {
 			quietSince = now
 			return false
 		}
-		return now.Sub(quietSince) >= actVendorQuiet && now.Sub(last) >= actVendorQuiet
+		return now.Sub(quietSince) >= actVendorQuiet
 	})
 	if err != nil {
 		return err
@@ -460,15 +562,18 @@ func (s *session) actSellJunk(ctx context.Context, a *actState, step ActStep) er
 	after := s.inventoryNow()
 	sold := len(before.Items) - len(after.Items)
 	line := fmt.Sprintf("%d item(s) sold", sold)
-	if sold == 0 {
-		line = "no poor-quality item(s) carried"
+	if sold <= 0 && after.Coinage == before.Coinage {
+		line = fmt.Sprintf("nothing seen within %s (no row left and the money did not change: no poor-quality item was carried, or the server's answer did not arrive)",
+			actVendorQuiet)
 	}
 	s.actOK(a, step, line+"; "+coinageLine(before.Coinage, after.Coinage))
 	return nil
 }
 
 // actBuyback buys one item back from slot= (72-83). The item leaves the buyback range for the backpack and a push
-// result names its new slot; a refusal is a sell response (the core's buyback path reuses it, ItemHandler.cpp:540-582).
+// result names its new slot. A refusal arrives on its own opcode: SMSG_BUY_FAILED (no money, no such slot) or, when
+// the bags are full, SMSG_INVENTORY_CHANGE_FAILURE (ItemHandler.cpp:546-581); a sell response only answers a
+// vendor that cannot be reached.
 func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) error {
 	unit, err := s.vendorTarget(a, "buyback", false)
 	if err != nil {
@@ -493,17 +598,14 @@ func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) err
 	if want.IsZero() {
 		return s.actFail(a, step, fmt.Errorf("buyback slot %d is empty", slot))
 	}
-	s.vendor.sold = nil
+	s.vendor.sold, s.vendor.buyFail, s.vendor.bought, s.invFail = nil, nil, nil, nil
 	if err := s.transport().Send(wire.CMSGBuyBackItem, items.BuildBuyBackItem(unit.GUID, uint32(slot))); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_BUY_BACK_ITEM: %w", err))
 	}
+	what := fmt.Sprintf("buyback slot %d", slot)
 	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
-		if r := s.vendor.sold; r != nil {
-			for _, g := range r.ItemGUIDs {
-				if g == want {
-					return true
-				}
-			}
+		if s.vendor.buyFail != nil || s.vendor.sold != nil || s.invFail != nil {
+			return true
 		}
 		_, held := rowByGUID(s.inventoryNow(), want)
 		return held
@@ -511,17 +613,18 @@ func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) err
 	if err != nil {
 		return err
 	}
-	if r := s.vendor.sold; r != nil {
-		for _, g := range r.ItemGUIDs {
-			if g == want {
-				return s.actFail(a, step, fmt.Errorf("buyback slot %d: the server refused it: %s", slot, r.Name()))
-			}
-		}
+	switch {
+	case s.vendor.buyFail != nil:
+		return s.actFail(a, step, fmt.Errorf("%s: the server refused it: %s", what, s.vendor.buyFail.Name()))
+	case s.invFail != nil:
+		return s.actFail(a, step, refusedError(what, *s.invFail))
+	case s.vendor.sold != nil:
+		return s.actFail(a, step, fmt.Errorf("%s: the server refused it: %s", what, s.vendor.sold.Name()))
 	}
 	after := s.inventoryNow()
 	row, held := rowByGUID(after, want)
 	if !held {
-		return s.actFail(a, step, fmt.Errorf("buyback slot %d: the item did not come back (the server did nothing, or its answer did not arrive)", slot))
+		return s.actFail(a, step, fmt.Errorf("%s: the item did not come back (the server did nothing, or its answer did not arrive)", what))
 	}
 	s.actOK(a, step, whereItem(row)+"; "+coinageLine(before.Coinage, after.Coinage))
 	return nil
@@ -529,7 +632,8 @@ func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) err
 
 // actRepair repairs everything the character wears and carries at the current repairer: an empty item GUID is the
 // repair-all form (NPCHandler.cpp:438-461). The server answers no packet, so the step reads its own evidence: the
-// coinage change and the items whose durability rose.
+// coinage change and the items whose durability rose. When something was damaged and neither moved, the repair
+// was refused (no money, out of reach: DurabilityRepairAll sends nothing, NPCHandler.cpp:441-461) and the step fails.
 func (s *session) actRepair(ctx context.Context, a *actState, step ActStep) error {
 	unit, err := s.vendorTarget(a, "repair", true)
 	if err != nil {
@@ -546,41 +650,46 @@ func (s *session) actRepair(ctx context.Context, a *actState, step ActStep) erro
 		return out
 	}
 	was := durability(before)
+	damaged := 0
+	for _, it := range before.Items {
+		if it.MaxDurability != 0 && it.Durability < it.MaxDurability {
+			damaged++
+		}
+	}
 	if err := s.transport().Send(wire.CMSGRepairItem, items.BuildRepairItem(unit.GUID, wire.EmptyGUID, false)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_REPAIR_ITEM: %w", err))
 	}
-	repaired := 0
-	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
-		after := s.inventoryNow()
-		if after.Coinage != before.Coinage {
-			return true
-		}
-		for guid, now := range durability(after) {
+	rose := func(inv items.Inventory) int {
+		n := 0
+		for guid, now := range durability(inv) {
 			if old, ok := was[guid]; ok && now > old {
-				return true
+				n++
 			}
 		}
-		return false
+		return n
+	}
+	_, err = s.waitVendorAnswer(ctx, actVendorWait, func() bool {
+		after := s.inventoryNow()
+		return after.Coinage != before.Coinage || rose(after) != 0
 	})
 	if err != nil {
 		return err
 	}
 	after := s.inventoryNow()
-	durabilityAfter := durability(after)
+	repaired := rose(after)
+	if damaged != 0 && repaired == 0 && after.Coinage >= before.Coinage {
+		return s.actFail(a, step, fmt.Errorf("repair: %d item(s) were damaged but no durability rose and no money was taken within %s (refused: not enough money, or out of reach)",
+			damaged, actVendorWait))
+	}
 	full := 0
-	for guid, now := range durabilityAfter {
-		if old, ok := was[guid]; ok && now > old {
-			repaired++
-		}
-		for _, it := range after.Items {
-			if it.GUID == guid && it.MaxDurability != 0 && it.Durability == it.MaxDurability {
-				full++
-			}
+	for _, it := range after.Items {
+		if it.MaxDurability != 0 && it.Durability == it.MaxDurability {
+			full++
 		}
 	}
 	line := fmt.Sprintf("%d item(s) repaired, %d at full durability", repaired, full)
-	if repaired == 0 && after.Coinage == before.Coinage {
-		line = "no repair seen (nothing may have needed it)"
+	if damaged == 0 && repaired == 0 && after.Coinage == before.Coinage {
+		line = "nothing needed repair (no item was damaged)"
 	}
 	s.actOK(a, step, line+"; "+coinageLine(before.Coinage, after.Coinage))
 	return nil

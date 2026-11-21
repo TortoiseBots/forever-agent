@@ -555,6 +555,11 @@ type session struct {
 	// quest_act.go). The log starts from the login create block on first use and an own create re-seeds it.
 	quest    questWatch
 	questLog *quest.Log
+	// questStale is why the log cannot be trusted (a PlayerData update named quest-log slots next to a field this
+	// client does not decode), empty when it can; an own create clears it. invFail is the last
+	// SMSG_INVENTORY_CHANGE_FAILURE, which a vendor purchase or buyback refusal arrives as (Player::_StoreOrEquipNewItem).
+	questStale string
+	invFail    *items.ChangeFailure
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -2388,6 +2393,16 @@ func (s *session) applyUpdate(u *objects.Update) {
 				s.noteInventoryStale(reason)
 			}
 		}
+		// The quest log is the character's own PlayerData: the slot changes the server names are the only way a quest
+		// taken, rewarded, abandoned or changed by a GM line reaches this client, so they go into the log at once; an
+		// update that named quest-log slots next to a field this client cannot read leaves the log unknown (stale).
+		if deltas, ok := b.Info.ChangedQuestLog(); ok {
+			s.questBook().ApplyServer(deltas)
+		}
+		if b.Info.QuestLogUndecoded() && s.questStale == "" {
+			s.questStale = "a server update named quest-log slots next to fields this client does not decode"
+			s.opts.logf("world: %s; quest steps refuse until the next login or map change", s.questStale)
+		}
 		if b.Movement == nil || !b.Movement.ThisIsYou {
 			continue
 		}
@@ -2396,6 +2411,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// the block on its next use (round R5).
 		inv.Reset()
 		s.questLog = nil
+		s.questStale = ""
 		if !s.selfSeen {
 			s.selfSeen = true
 			s.self = b.GUID

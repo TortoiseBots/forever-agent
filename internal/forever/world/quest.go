@@ -2,8 +2,9 @@ package world
 
 // The quests of round R5: the server's answers (handleQuest), the character's own quest log and the act steps that
 // drive them (quest_act.go). The log starts from the login create block (items.Inventory.QuestLog) and is kept
-// current by the accept, the credits and the completions this round sees; an own create re-seeds it, because the
-// server's quest-log updates are part of a layout this client does not walk (WORLD-R1-NOTES.md, decision 1).
+// current by the PlayerData quest-log updates the server sends (objects.QuestLogDelta, applied in applyUpdate), the
+// credits and the completions this round sees; an own create re-seeds it, and an update the decoder cannot read marks
+// it stale (session.questStale) until the next create.
 
 import (
 	"github.com/pjerra/forever-agent/internal/forever/quest"

@@ -7,13 +7,14 @@ progress). Code: `internal/forever/items` (`vendor.go` builders, `vendor_parse.g
 glue, `vendor_act.go` and `quest_act.go` the act steps), `internal/forever/wire` (the opcodes of both rounds),
 `cmd/forever-agent` (no new flags: the verbs run through `forever act`).
 
-Everything below was checked in ForeverCore at d02645dd21 (`git show d02645dd21:<path>`). The private captures
-(`set2` vendor and quest logs) were read once to check the layouts; the capture checks print counts only, and no
-capture byte, GUID, name or file name is in the repository. Fixtures are hand-made from the core's writers.
+Everything below was checked in ForeverCore at d02645dd21 (`git show d02645dd21:<path>`). Private captures were read
+once to check the layouts; the capture checks print counts only, and no capture byte, GUID, name or file name is in
+the repository. Fixtures are hand-made from the core's writers.
 
-Status: both rounds are implemented, tested against the fake world and the private captures, and committed (`6db81e49`
-R3, `be9b52ed` R5, `149c6d30` the last two unused declarations removed). The gates below are on `149c6d30`. **No live
-run yet**: the live checks for the lead's queue are at the end, and the notes quote the RESULT line of the VM suite.
+Status: both rounds are implemented, tested against the fake world, and committed (`6db81e49` R3, `be9b52ed` R5,
+`149c6d30` the last two unused declarations removed), then changed by one fix round for the cold and Codex reviews
+(see "The fix round" below). **No live run yet**: the live checks for the lead's queue are at the end, and the notes
+quote the RESULT line of the VM suite.
 
 ## R3: the vendor
 
@@ -70,9 +71,9 @@ no packet at all: its evidence is the coinage the server took and the durability
 |---|---|---|
 | `vendor` | selection, then the gossip option (or `CMSG_LIST_INVENTORY`), then the list ask | one line per row (`vendor item muid 2: entry 118, 250 copper for 5, stock 3`) and the step line |
 | `buy entry=<id> n=<count>` / `buy muid=<row> n=` | `CMSG_BUY_ITEM` | `SMSG_BUY_SUCCEEDED`/`SMSG_BUY_FAILED` by MuID, then the push result's slot; the coinage as an estimate |
-| `sell entry=<id> [n=]` / `sell slot=<pos> [n=]` | `CMSG_SELL_ITEM` | the item leaving the carried rows for a buyback slot, or its count falling by `n`; a refusal names the item |
+| `sell entry=<id> [n=] [force=1]` / `sell slot=<pos> [n=] [force=1]` | `CMSG_SELL_ITEM` | the item leaving the carried rows for a buyback slot, or its count falling by `n`; a refusal names the item |
 | `sell-junk` | `CMSG_SELL_ALL_JUNK_ITEMS` | the rows that left (the sweep answers nothing); a refusal fails it |
-| `buyback slot=<72-83>` | `CMSG_BUY_BACK_ITEM` | the item coming back into the carried rows, its new place; a refusal is a sell response |
+| `buyback slot=<72-83>` | `CMSG_BUY_BACK_ITEM` | the item coming back into the carried rows, its new place; a refusal is `SMSG_BUY_FAILED` (no money, no such slot) or `SMSG_INVENTORY_CHANGE_FAILURE` (bags full), read by its own name (ItemHandler.cpp:546-581) |
 | `repair` | `CMSG_REPAIR_ITEM` (empty item GUID = all) | the durability that rose and the coinage that fell |
 
 A money change is printed as `est.` (`1000 -> 995 copper (est., 5 spent)`): the coinage arrives in the same burst as
@@ -80,8 +81,9 @@ the slot updates (items.Tracker), and the step reads it as soon as the purchase'
 what the client had decoded at that moment, not a value the server named.
 
 The `vendor` step needs the current NPC from an `npc` step, checks the vendor flag (any of the five vendor bits,
-UnitDefines.h:327-331) before sending anything, and keeps the list on the act state, so `buy` cannot run against a
-vendor nobody opened. `repair` checks the repair flag (UnitDefines.h:332) instead.
+UnitDefines.h:327-331) before sending anything, and keeps the list on the act state. A new `npc` step clears the list,
+and `buy` requires the list's vendor to be the current NPC, so it cannot run against a vendor nobody opened or one the
+script moved away from. `repair` checks the repair flag (UnitDefines.h:332) instead.
 
 ## R5: the quests
 
@@ -146,9 +148,13 @@ Four layouts decide the parsers, and each is a trap for a plausible reading:
 ### The log model
 
 `quest.Log` holds the slots the login create block carried (`items.Inventory.QuestLog`, i.e. PlayerData's 175-slot
-array) and the changes this round sees. An accept takes the first slot whose quest id is zero (Player::FindQuestSlot,
-Player.cpp:16150) — the server sends no accept answer, so the client's own record is what makes the next step
-possible, and a relog or map change re-seeds it from the create block. A credit names the objective's **ObjectID**,
+array) and the changes the server sends: a quest taken, rewarded, abandoned or changed by a GM line reaches the
+character as a PlayerData update naming the log slot (Player::SetQuestSlot and its siblings, Player.cpp:17727-17790),
+which `objects.readPlayerUpdate` decodes (the Classic eleven-block mask: bit 26 the quest-id map, bit 57 the quest-log
+group, bits 58-232 the 175 slots; QuestLog::WriteUpdate, UpdateFields.cpp:2307-2342) and `Log.ApplyServer` merges. A
+PlayerData update that carries any other field cannot be walked; if it also names quest-log slots the session marks
+the log stale and the accept and abandon steps refuse until the next login or map change. The client never invents a
+slot: the accept does not record anything itself. A credit names the objective's **ObjectID**,
 not its progress index, so it lands in `Progress[i]` only when the quest's details were parsed and named that
 objective; otherwise the credit is reported and kept apart rather than guessed into a slot. A completion notice fills
 the progress and marks the slot complete; a failure marks it failed; a completion removes it.
@@ -159,11 +165,11 @@ the progress and marks the slot complete; a failure marks it failed; a completio
 |---|---|---|
 | `quest-status` | `CMSG_QUEST_GIVER_STATUS_QUERY` | the uint64 mask, named (`quest`, `reward`, ...) |
 | `quests` | nothing | the log: slot, quest, state, every credit |
-| `quest-accept id=` | `CMSG_QUEST_GIVER_ACCEPT_QUEST` | a refusal (`INVALID_QUEST`, a failed quest, a full log) within 2 s; on silence the quest is recorded in the first free slot |
+| `quest-accept id=` | `CMSG_QUEST_GIVER_ACCEPT_QUEST` | the quest appearing in the character's own quest-log update fields within 5 s; a refusal (`INVALID_QUEST`, this quest's `QUEST_FAILED`, a full log) fails it; silence is a failure ("not confirmed"), never an accepted quest |
 | `quest-progress [id=]` | nothing | the log's state and credits |
 | `quest-complete id=` | `CMSG_QUEST_GIVER_COMPLETE_QUEST`, then `CMSG_QUEST_GIVER_REQUEST_REWARD` when the screen says ready | the request-items screen (its wants, or its "not ready" status) and/or the reward screen (money, experience, every choice) |
-| `quest-reward id= choice=entry` | `CMSG_QUEST_GIVER_CHOOSE_REWARD` | `SMSG_QUEST_GIVER_QUEST_COMPLETE` and the reward's push result; the quest leaves the log (the completion does that) |
-| `quest-abandon id=` | `CMSG_QUEST_LOG_REMOVE_QUEST` (the slot) | nothing; the log drops it |
+| `quest-reward id= choice=entry` | `CMSG_QUEST_GIVER_CHOOSE_REWARD`, only while this giver's reward screen for the quest is open | `SMSG_QUEST_GIVER_QUEST_COMPLETE` (it must name the chosen item) and then the inventory holding more of that item; the quest leaves the log (the completion does that) |
+| `quest-abandon id=` | `CMSG_QUEST_LOG_REMOVE_QUEST` (the slot the quest holds in the log as the server last updated it) | the log's update showing the slot emptied; a quest still in its slot after 5 s fails the step |
 
 The request-items screen's `StatusFlags` is 0xFF when the quest can be handed in and 0xFD when it cannot
 (GossipDef.cpp:723); only 0xFF sends the reward request, because a real client would not press the button on an
@@ -179,7 +185,7 @@ the `open` step, and a second builder would be a second convention.
 
 ## Live checks for the lead's queue
 
-No live run was made in this round (the fake server and the private captures are the evidence below). One test
+No live run was made in this round (the fake server is the evidence below). One test
 character on the GM account, one `forever act` run per stage, `.gm on` for the setup lines only, and the server's
 own rows read between the stages.
 
@@ -203,7 +209,10 @@ own rows read between the stages.
 
 1. **Status and list.** `npc entry=<a starting-zone giver>`; `open` prints the quest list; `quest-status` names the
    mask (an exclamation-mark quest is `quest`).
-2. **Accept.** `quest-accept id=<a kill quest>` records it in a slot; `quests` shows the slot and `incomplete`.
+2. **Accept.** `quest-accept id=<a kill quest>` succeeds only when the server's quest-log update names the quest
+   (the line says which slot); `quests` shows the slot and `incomplete`. A quest the giver does not offer fails as
+   "not confirmed" after 5 s. This is the first live read of the PlayerData quest-log update: if the step says "the
+   quest log became stale", the server's update carried a field next to the log that this client does not decode.
    A quest the character cannot take fails with the server's reason (`failed_low_level`, ...).
 3. **Progress.** Kill the required creatures: one `quest 123 objective <id>: 2/4` line per credit, and
    `quest-progress id=123` shows the same numbers.
@@ -214,12 +223,38 @@ own rows read between the stages.
    refused before any packet.
 6. **Abandon.** `quest-accept id=<a second quest>`, then `quest-abandon id=`: the slot frees, and the server's
    `character_queststatus` no longer has the quest.
+   Also `.quest add <id>` by GM, then `quest-abandon id=<id>`: the slot named is the one the update gave it.
 7. **Relog.** `quests` after a relog matches the server's quest rows; a quest completed while offline appears with
    its real state.
 
-## Gate lines
+## The fix round
 
-All on the clean committed tree `149c6d30` (`git status` empty before each run).
+One round for all findings of the Claude cold review and the Codex adversarial review of R3 and R5. Each fix has a
+test that fails on the code before it.
+
+| Finding | Fix |
+|---|---|
+| `sell` could sell worn gear, the wrong stack, a stale guess | resolves through R2's confirmed resolve (`entry=` in two stacks is refused, the slot must be server-confirmed), refuses a stale inventory, never sells an equipped item (slots 0-18) or an equipped bag (30-33), even with `force=1`; a quest item (an item objective of a quest whose details the client saw) only with `force=1`. The client has no item template, so a quest item whose quest details were never seen is guarded only by the server's own sell price check |
+| `quest-accept` read silence as success | accepted only when the quest-log update fields show the quest; silence, a gossip close alone and a refused accept without a packet fail the step as "not confirmed" |
+| `quest-abandon` sent a guessed slot | refuses a stale log, drains pending updates, sends the slot the quest holds in the log as the server last updated it (a GM-added quest works), and waits for the log to show it gone |
+| `buy` against the wrong vendor | an `npc` step clears the list; `buy` runs `vendorTarget` and requires the list's vendor to be the current NPC |
+| refused repair reported ok | damaged items and no durability rise and no money taken fails the step |
+| `quest-reward` unchecked | sends only while this giver's reward screen for the quest is open, the choice must match exactly one offered row (its loot type and quantity are echoed), the completion must name the chosen item, and the inventory must then hold more of it |
+| second `vendor` step timed out | the list itself completes the step (the interaction is already started) |
+| purchase/buyback refusals on the wrong opcode | read as `SMSG_BUY_FAILED` and `SMSG_INVENTORY_CHANGE_FAILURE` |
+| status names for the high bits | the table follows QuestDef.h:154-205 |
+| refusals not matched to the quest | `QUEST_FAILED` is matched by quest id (`INVALID_QUEST` names no quest, so it cannot be) |
+| `buy` default quantity | the quantity is an item count and defaults to 1; the comment now says so |
+| sell-junk quiet window | 2 s (`items.ConfirmWindow`), because each sold item and the coinage are separate updates in the next flush and 300 ms read the count before they arrived; a sweep that changed nothing says "nothing seen", never "no poor-quality item carried" |
+| 32-bit vendor list panic | the row count goes through `int32` and a negative count is refused |
+| Codex: a purchase answered but the item never arrives | the step fails as unconfirmed; the success answer must name this vendor and row |
+| notes | the capture set name is removed (no capture names in this public repo) and a buyback refusal is `SMSG_BUY_FAILED` |
+
+Known limits kept: the sweep cannot name the items it should take (no item quality in the client); the quest guard
+covers only quests whose details this session saw; the accept and reward steps depend on the server's update fields
+and are not yet checked live (the live checks below name them).
+
+## Gate lines
 
 * `make fmt-check`: no output, exit 0 (its success line is silence).
 * `make cross`: the Windows and Darwin cross builds and the Windows vet of `./cmd/... ./internal/forever/...`

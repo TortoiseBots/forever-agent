@@ -8,6 +8,7 @@ package world
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,6 +39,109 @@ type questWorld struct {
 	// requestStatus is the status flag the request-items screen carries (0xFF: ready).
 	requestStatus int32
 	refuse        uint32
+	// silentAccept makes the fake's giver answer an accept with the gossip close only (QuestHandler.cpp:100-128: a
+	// giver that does not offer the quest returns without a packet); acceptSlot is the slot a taken quest gets.
+	silentAccept bool
+	acceptSlot   int
+	// ignoreAbandon makes the fake server leave the log alone on CMSG_QUEST_LOG_REMOVE_QUEST.
+	ignoreAbandon bool
+	// offerChoices are the item entries the reward screen offers (nil: the one choice, questRewardItem);
+	// rewardItem is the item the completion names and pushes (0: questRewardItem); noRewardPush withholds the item.
+	offerChoices []int32
+	rewardItem   int32
+	noRewardPush bool
+	// failedOther, when set, is the quest id of a timed quest that fails during the accept's window.
+	failedOther uint32
+}
+
+// questLogUpdate builds an SMSG_UPDATE_OBJECT carrying one PlayerData quest-log update for the character, the way
+// Player::SetQuestSlot makes the server write it (UpdateFields.cpp:2307-2342, 2847-3222): the Classic eleven-block
+// mask (bit 0, the quest-id map 26, the group 57 and the slots 58+n), the always-false skip bit, the map delta, then
+// one QuestLog::WriteUpdate per slot. extraBits are classic bits this client does not walk; with any, the body ends
+// at the mask because the walker must not read past a field it does not know.
+func questLogUpdate(slots map[int]objects.QuestLogDelta, extraBits ...int) []byte {
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	set(0)
+	set(26)
+	order := make([]int, 0, len(slots))
+	if len(slots) != 0 {
+		set(57)
+	}
+	for slot := range slots {
+		set(58 + slot)
+		order = append(order, slot)
+	}
+	sort.Ints(order)
+	for _, bit := range extraBits {
+		set(bit)
+	}
+	body := wire.NewWriter()
+	body.WriteU8(0)
+	body.WriteU8(0)
+	body.WriteU8(0x03)
+	body.WriteU32(uint32(1) << uint(objects.TypePlayer))
+	var present uint32
+	for n := range blocks {
+		present |= 1 << uint(n)
+	}
+	body.WriteBits(uint64(present), 11)
+	for n := range 11 {
+		if word, ok := blocks[n]; ok {
+			body.WriteBits(uint64(word), 32)
+		}
+	}
+	body.WriteBit(false)
+	body.FlushBits()
+	if len(extraBits) == 0 {
+		body.WriteU8(0)  // the map update is a delta
+		body.WriteU16(0) // no entries: the log slots below are what this client reads
+		for _, slot := range order {
+			d := slots[slot]
+			var m uint32
+			if d.HasQuestID {
+				m |= 1 | 1<<1
+			}
+			if d.HasState {
+				m |= 1 | 1<<2
+			}
+			body.WriteBits(1, 1)
+			body.WriteBits(uint64(m), 32)
+			body.FlushBits()
+			if d.HasQuestID {
+				body.WriteI32(d.QuestID)
+			}
+			if d.HasState {
+				body.WriteU16(d.StateFlags)
+			}
+		}
+	}
+	blk := wire.NewWriter()
+	blk.WriteU8(objects.UpdateValues)
+	wire.WritePackedGUID(blk, itemSelf)
+	blk.WriteU32(uint32(body.Len()))
+	blk.WriteBytes(body.Bytes())
+	out := wire.NewWriter()
+	out.WriteU16(0)
+	out.WriteU32(1)
+	out.WriteBit(true)
+	out.WriteBit(false)
+	out.FlushBits()
+	out.WriteU32(uint32(blk.Len()))
+	out.WriteBytes(blk.Bytes())
+	return out.Bytes()
+}
+
+// takeQuest is the server's log update for a quest taken into a slot (SetQuestSlot, then the incomplete state).
+func takeQuest(slot int, id int32) []byte {
+	return questLogUpdate(map[int]objects.QuestLogDelta{
+		slot: {HasQuestID: true, QuestID: id, HasState: true, StateFlags: quest.StatusIncomplete},
+	})
+}
+
+// dropQuest is the server's log update for a slot emptied.
+func dropQuest(slot int) []byte {
+	return questLogUpdate(map[int]objects.QuestLogDelta{slot: {HasQuestID: true, QuestID: 0, HasState: true, StateFlags: 0}})
 }
 
 // newQuestWorld plants a quest giver at the character's position and a three-slot log with one quest taken.
@@ -116,22 +220,43 @@ func (q *questWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			q.deliver(wire.SMSGQuestGiverInvalidQuest, questInvalidPayload(q.refuse, "no"))
 			return
 		}
-		// A successful accept answers the gossip close, nothing else (QuestHandler.cpp:184-222).
+		if q.failedOther != 0 {
+			q.deliver(wire.SMSGQuestGiverQuestFailed, questFailedPayload(q.failedOther, 5))
+		}
+		r := wire.NewReader(payload)
+		_ = wire.ReadPackedGUID(r)
+		id := r.ReadI32()
+		// A successful accept answers the gossip close and writes the quest into the character's log
+		// (QuestHandler.cpp:184-222, Player::AddQuest); a giver that does not offer the quest only closes.
+		if !q.silentAccept {
+			q.deliver(wire.SMSGUpdateObject, takeQuest(q.acceptSlot, id))
+		}
 		q.deliver(wire.SMSGGossipComplete, []byte{0x00})
 	case wire.CMSGQuestGiverCompleteQuest:
 		q.complete = append([]byte(nil), payload...)
 		q.deliver(wire.SMSGQuestGiverRequestItems, questRequestPayload(questTaken, q.requestStatus, 1))
 	case wire.CMSGQuestGiverRequestReward:
 		q.request = append([]byte(nil), payload...)
-		q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken))
+		q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken, q.offerChoices...))
 	case wire.CMSGQuestGiverChooseReward:
 		q.choose = append([]byte(nil), payload...)
 		q.deliver(wire.SMSGQuestGiverQuestComplete, questCompletePayloadAndPush(q, questTaken))
 	case wire.CMSGQuestLogRemoveQuest:
 		q.abandon = append([]byte(nil), payload...)
+		if !q.ignoreAbandon {
+			q.deliver(wire.SMSGUpdateObject, dropQuest(int(payload[0])))
+		}
 	default:
 		q.t.Fatalf("the fake has no answer for %s", wire.ClientName(core))
 	}
+}
+
+// questFailedPayload writes SMSG_QUEST_GIVER_QUEST_FAILED (QuestPackets.cpp:705-711).
+func questFailedPayload(questID uint32, reason uint32) []byte {
+	b := wire.NewWriter()
+	b.WriteU32(questID)
+	b.WriteU32(reason)
+	return b.Bytes()
 }
 
 // questStatusPayload writes SMSG_QUEST_GIVER_STATUS (QuestPackets.cpp:49-55).
@@ -240,7 +365,10 @@ func questRequestPayload(questID int32, status int32, amount int32) []byte {
 }
 
 // questOfferPayload writes SMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE with one choice (QuestPackets.cpp:387-441).
-func questOfferPayload(questID int32) []byte {
+func questOfferPayload(questID int32, choices ...int32) []byte {
+	if choices == nil {
+		choices = []int32{questRewardItem}
+	}
 	b := wire.NewWriter()
 	// QuestRewards, with the single choice naming the reward item.
 	for range quest.RewardItemCount {
@@ -256,12 +384,12 @@ func questOfferPayload(questID int32) []byte {
 		b.WriteBit(false)
 		b.FlushBits()
 	}
-	b.WriteI32(1)
+	b.WriteI32(int32(len(choices)))
 	for i := range quest.ChoiceCount {
 		b.WriteBits(0, 2)
 		b.WriteBit(false)
-		if i == 0 {
-			b.WriteI32(questRewardItem)
+		if i < len(choices) {
+			b.WriteI32(choices[i])
 		} else {
 			b.WriteI32(0)
 		}
@@ -269,7 +397,7 @@ func questOfferPayload(questID int32) []byte {
 		b.FlushBits()
 		b.WriteBit(false)
 		b.FlushBits()
-		if i == 0 {
+		if i < len(choices) {
 			b.WriteI32(1)
 		} else {
 			b.WriteI32(0)
@@ -333,14 +461,20 @@ func questOfferPayload(questID int32) []byte {
 
 // questCompletePayloadAndPush writes SMSG_QUEST_GIVER_QUEST_COMPLETE and the reward's push result.
 func questCompletePayloadAndPush(q *questWorld, questID int32) []byte {
-	q.pushReward()
+	item := q.rewardItem
+	if item == 0 {
+		item = questRewardItem
+	}
+	if !q.noRewardPush {
+		q.pushReward(item)
+	}
 	b := wire.NewWriter()
 	b.WriteI32(questID)
 	b.WriteI32(300) // xp
 	b.WriteU64(150) // money
 	b.WriteI32(0)   // skill line
 	b.WriteI32(0)   // skill ups
-	b.WriteI32(questRewardItem)
+	b.WriteI32(item)
 	b.WriteBits(0, 7)
 	b.FlushBits()
 	b.WriteBit(false)
@@ -349,10 +483,10 @@ func questCompletePayloadAndPush(q *questWorld, questID int32) []byte {
 }
 
 // pushReward delivers the reward item's push result and slot update, the way RewardQuest does.
-func (q *questWorld) pushReward() {
-	q.apply(fragmentItem(itemBack, questRewardItem, 1))
+func (q *questWorld) pushReward(item int32) {
+	q.apply(fragmentItem(itemBack, item, 1))
 	coin := uint64(150)
-	q.deliver(wire.SMSGItemPushResult, pushResult(itemBack, questRewardItem, 1, 9, 255, 38))
+	q.deliver(wire.SMSGItemPushResult, pushResult(itemBack, item, 1, 9, 255, 38))
 	q.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{38: itemBack}, &coin))
 }
 
@@ -383,9 +517,9 @@ func TestQuestStatusNamesTheMask(t *testing.T) {
 	}
 }
 
-// TestQuestAcceptRecordsTheFirstFreeSlot is the round's failing case: the accept's answer is a gossip close, so the
-// step records the quest in the first free slot (0 here) and names the packet it sent.
-func TestQuestAcceptRecordsTheFirstFreeSlot(t *testing.T) {
+// TestQuestAcceptNeedsTheLogToShowTheQuest: the accept's own answer is a gossip close, so the step is done only when
+// the character's quest-log update names the quest (here the server's first free slot, 0).
+func TestQuestAcceptNeedsTheLogToShowTheQuest(t *testing.T) {
 	q := newQuestWorld(t)
 	a := q.state(t)
 	if err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-accept id=900")); err != nil {
@@ -406,6 +540,54 @@ func TestQuestAcceptRecordsTheFirstFreeSlot(t *testing.T) {
 	}
 	if slot, ok := q.s.questBook().Find(questNew); !ok || slot != 0 {
 		t.Fatalf("the accepted quest is in slot %d (%v)", slot, ok)
+	}
+}
+
+// TestQuestAcceptSilenceFails is the finding's failing case: a giver that does not offer the quest returns without a
+// packet (QuestHandler.cpp:100-128), and the gossip close arrives either way, so neither is an accept. Before this
+// round the step recorded the quest in the first free slot and printed ok.
+func TestQuestAcceptSilenceFails(t *testing.T) {
+	q := newQuestWorld(t)
+	q.silentAccept = true
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-accept id=900"))
+	if err == nil {
+		t.Fatalf("a silent accept passed\n%s", joinLines(q.lines))
+	}
+	if !strings.Contains(err.Error(), "not confirmed") {
+		t.Fatalf("the failure is %q", err)
+	}
+	if _, ok := q.s.questBook().Find(questNew); ok {
+		t.Fatal("a quest the server never put in the log was recorded")
+	}
+	if containsLine(q.lines, "quest-accept ok") {
+		t.Fatalf("an ok line was printed for a silent accept:\n%s", joinLines(q.lines))
+	}
+}
+
+// TestQuestAcceptIgnoresAnotherQuestsFailure: a timed quest of the character failing inside the accept's window is
+// not this accept's refusal (the packet names its quest).
+func TestQuestAcceptIgnoresAnotherQuestsFailure(t *testing.T) {
+	q := newQuestWorld(t)
+	q.failedOther = uint32(questTaken)
+	a := q.state(t)
+	if err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-accept id=900")); err != nil {
+		t.Fatalf("an unrelated failure failed the accept: %v\n%s", err, joinLines(q.lines))
+	}
+}
+
+// TestQuestAcceptRefusesAStaleLog: a PlayerData update that named quest-log slots next to a field this client cannot
+// read leaves the log unknown, so no accept is sent on a guessed slot.
+func TestQuestAcceptRefusesAStaleLog(t *testing.T) {
+	q := newQuestWorld(t)
+	q.deliver(wire.SMSGUpdateObject, questLogUpdate(map[int]objects.QuestLogDelta{2: {HasQuestID: true, QuestID: 5}}, 238))
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-accept id=900"))
+	if err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("the accept on a stale log gave %v", err)
+	}
+	if len(q.accept) != 0 {
+		t.Fatal("an accept went out on a stale log")
 	}
 }
 
@@ -513,7 +695,8 @@ func TestQuestRewardChoosesAndRecords(t *testing.T) {
 	}
 }
 
-// TestQuestAbandonSendsTheSlot: the abandon names the log slot, not the quest id.
+// TestQuestAbandonSendsTheSlot: the abandon names the log slot, not the quest id, and is done when the server's log
+// update shows the slot empty.
 func TestQuestAbandonSendsTheSlot(t *testing.T) {
 	q := newQuestWorld(t)
 	a := q.state(t)
@@ -525,6 +708,178 @@ func TestQuestAbandonSendsTheSlot(t *testing.T) {
 	}
 	if _, ok := q.s.questBook().Find(questTaken); ok {
 		t.Fatal("the abandoned quest is still in the log")
+	}
+}
+
+// TestQuestAbandonUsesTheSlotAGMLineGave is the finding's failing case: a quest added by a GM line between steps sits
+// in a slot the login create never named, and the abandon must send the slot the server's update put it in. Before
+// this round the step said the quest was not in the log (or, with a stale entry, dropped another quest).
+func TestQuestAbandonUsesTheSlotAGMLineGave(t *testing.T) {
+	q := newQuestWorld(t)
+	a := q.state(t)
+	q.deliver(wire.SMSGUpdateObject, takeQuest(2, 901)) // `.quest add 901`, taken into slot 2
+	if err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-abandon id=901")); err != nil {
+		t.Fatalf("quest-abandon: %v\n%s", err, joinLines(q.lines))
+	}
+	if len(q.abandon) != 1 || q.abandon[0] != 2 {
+		t.Fatalf("the abandon packet is % X, want slot 2 (the slot the GM-added quest holds)", q.abandon)
+	}
+	if _, ok := q.s.questBook().Find(901); ok {
+		t.Fatal("the quest is still in the log")
+	}
+	// The quest the login create named is untouched.
+	if slot, ok := q.s.questBook().Find(questTaken); !ok || slot != 1 {
+		t.Fatalf("the original quest is in slot %d (%v)", slot, ok)
+	}
+}
+
+// TestQuestAbandonFollowsAMovedQuest: a quest the server moved to another slot (removed and added again by a GM line)
+// is abandoned by its new slot, never the one the login create gave it.
+func TestQuestAbandonFollowsAMovedQuest(t *testing.T) {
+	q := newQuestWorld(t)
+	a := q.state(t)
+	q.deliver(wire.SMSGUpdateObject, dropQuest(1))
+	q.deliver(wire.SMSGUpdateObject, takeQuest(0, questTaken))
+	if err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-abandon id=700")); err != nil {
+		t.Fatalf("quest-abandon: %v\n%s", err, joinLines(q.lines))
+	}
+	if len(q.abandon) != 1 || q.abandon[0] != 0 {
+		t.Fatalf("the abandon packet is % X, want slot 0", q.abandon)
+	}
+}
+
+// TestQuestAbandonStillInLogFails: a quest the server keeps (QUEST_FLAGS_EX_NO_ABANDON_ONCE_BEGUN answers nothing)
+// fails the step instead of being removed from the client's log.
+func TestQuestAbandonStillInLogFails(t *testing.T) {
+	q := newQuestWorld(t)
+	q.ignoreAbandon = true
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-abandon id=700"))
+	if err == nil || !strings.Contains(err.Error(), "still in slot 1") {
+		t.Fatalf("an abandon the server ignored gave %v", err)
+	}
+	if _, ok := q.s.questBook().Find(questTaken); !ok {
+		t.Fatal("the client dropped a quest the server kept")
+	}
+}
+
+// TestQuestAbandonRefusesAStaleLog: after an update the client could not read, no slot is sent.
+func TestQuestAbandonRefusesAStaleLog(t *testing.T) {
+	q := newQuestWorld(t)
+	q.deliver(wire.SMSGUpdateObject, questLogUpdate(map[int]objects.QuestLogDelta{2: {HasQuestID: true, QuestID: 5}}, 238))
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-abandon id=700"))
+	if err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("the abandon on a stale log gave %v", err)
+	}
+	if len(q.abandon) != 0 {
+		t.Fatal("an abandon went out on a stale log")
+	}
+}
+
+// TestQuestRewardNeedsAnOpenScreen: without a reward screen of this giver for the quest nothing is sent, so a
+// stale or invented choice never reaches the server.
+func TestQuestRewardNeedsAnOpenScreen(t *testing.T) {
+	q := newQuestWorld(t)
+	a := q.state(t)
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-reward id=700 choice=777"))
+	if err == nil || !strings.Contains(err.Error(), "no reward screen") {
+		t.Fatalf("a reward with no screen gave %v", err)
+	}
+	if len(q.choose) != 0 {
+		t.Fatal("a choice went out with no reward screen open")
+	}
+}
+
+// TestQuestRewardChoiceMustBeOffered: an entry the screen does not offer is refused before any packet, a screen
+// with choices needs one, and a screen without any takes none.
+func TestQuestRewardChoiceMustBeOffered(t *testing.T) {
+	cases := map[string]struct {
+		choices []int32
+		step    string
+		want    string
+	}{
+		"wrong entry":         {[]int32{777, 778}, "quest-reward id=700 choice=999", "not one of the screen's choices"},
+		"choice needed":       {[]int32{777, 778}, "quest-reward id=700", "name one with choice"},
+		"duplicate row":       {[]int32{777, 777}, "quest-reward id=700 choice=777", "ambiguous"},
+		"choice but no items": {[]int32{}, "quest-reward id=700 choice=777", "not one of the screen's choices"},
+	}
+	for name, c := range cases {
+		q := newQuestWorld(t)
+		a := q.state(t)
+		q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken, c.choices...))
+		err := q.s.actStep(context.Background(), a, mustActStep(t, c.step))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: the step gave %v, want %q", name, err, c.want)
+		}
+		if len(q.choose) != 0 {
+			t.Fatalf("%s: a choice went out", name)
+		}
+	}
+}
+
+// TestQuestRewardWithoutChoicesTakesNone: a money-only screen is accepted with no choice and names no item.
+func TestQuestRewardWithoutChoicesTakesNone(t *testing.T) {
+	q := newQuestWorld(t)
+	q.offerChoices = []int32{}
+	q.noRewardPush = true
+	a := q.state(t)
+	q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken, []int32{}...))
+	// The completion of a money-only quest names no item.
+	q.rewardItem = 0
+	if err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-reward id=700")); err != nil {
+		t.Fatalf("quest-reward: %v\n%s", err, joinLines(q.lines))
+	}
+}
+
+// TestQuestRewardChecksTheItemTheServerGave: the completion names another item than the chosen one, and a reward whose
+// item never reaches the inventory, both fail the step.
+func TestQuestRewardChecksTheItemTheServerGave(t *testing.T) {
+	q := newQuestWorld(t)
+	q.offerChoices = []int32{777, 778}
+	q.rewardItem = 778
+	a := q.state(t)
+	q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken, 777, 778))
+	err := q.s.actStep(context.Background(), a, mustActStep(t, "quest-reward id=700 choice=777"))
+	if err == nil || !strings.Contains(err.Error(), "rewarded item 778, not the chosen 777") {
+		t.Fatalf("a different reward gave %v", err)
+	}
+
+	q = newQuestWorld(t)
+	q.noRewardPush = true
+	a = q.state(t)
+	q.deliver(wire.SMSGQuestGiverOfferReward, questOfferPayload(questTaken))
+	err = q.s.actStep(context.Background(), a, mustActStep(t, "quest-reward id=700 choice=777"))
+	if err == nil || !strings.Contains(err.Error(), "did not reach the inventory") {
+		t.Fatalf("a reward that never arrived gave %v", err)
+	}
+	if containsLine(q.lines, "quest-reward ok") {
+		t.Fatal("an ok line was printed for an item that never arrived")
+	}
+}
+
+// TestQuestStatusNamesTheHighBits: the names of the bits above the low word follow QuestDef.h:154-205.
+func TestQuestStatusNamesTheHighBits(t *testing.T) {
+	cases := map[uint64]string{
+		0x100000000:    "important quest",
+		0x200000000:    "reward complete (no poi)",
+		0x400000000:    "reward complete (poi)",
+		0x4000000000:   "meta quest reward complete (poi)",
+		0x10000000000:  "covenant calling reward complete (poi)",
+		0x400000000000: "important quest reward complete (poi)",
+		0x10000000:     "journey quest",
+		0x400000:       "quest",
+	}
+	for bit, want := range cases {
+		if got := statusNames(bit); got != want {
+			t.Fatalf("statusNames(%#x) = %q, want %q", bit, got, want)
+		}
+	}
+	if got := statusNames(0x400000 | 0x2000); got != "reward, quest" {
+		t.Fatalf("a two-bit mask reads %q", got)
+	}
+	if got := statusNames(1 << 50); !strings.Contains(got, "unnamed") {
+		t.Fatalf("an unnamed bit reads %q", got)
 	}
 }
 

@@ -12,10 +12,12 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/quest"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -48,6 +50,27 @@ type vendorWorld struct {
 	refuseOpen  bool
 	failOpen    bool
 	answerCoins uint64
+	// The purchase and repair variants of the round's fix: a success answer with no item behind it, one that names
+	// another vendor, a refusal that arrives as an inventory failure (a full bag), a buyback refusal, a silent repairer.
+	noItemAfterBuy    bool
+	foreignBuyAnswer  bool
+	refuseBuyInv      bool
+	refuseBuyback     int32
+	repairSilent      bool
+	repairRestoresAll bool
+	// The sweep variants: the server's updates arrive sweepDelay after the request, or never.
+	sweepDelay   time.Duration
+	sweepSilent  bool
+	sweepPending bool
+	sweepAt      time.Time
+}
+
+// tick runs after the fake clock moves: a delayed sweep's updates arrive.
+func (v *vendorWorld) tick(now time.Time) {
+	if v.sweepPending && !now.Before(v.sweepAt) {
+		v.sweepPending = false
+		v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{35: {}, 36: {}, 72: itemPotion, 73: itemSword2}, nil))
+	}
 }
 
 // newVendorWorld plants one vendor of the given flags at the character's own position (in reach) and answers the
@@ -68,6 +91,7 @@ func newVendorWorld(t *testing.T, flags uint32) *vendorWorld {
 	}
 	f.world.Apply(u, f.now)
 	f.onSend = v.answer
+	f.onWait = v.tick
 	return v
 }
 
@@ -161,7 +185,26 @@ func (v *vendorWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			v.deliver(wire.SMSGBuyFailed, vendorBuyFailed(vendorNPCGUID, muid, v.refuseBuy))
 			return
 		}
+		if v.refuseBuyInv {
+			// A full bag is an inventory failure, not a buy failure (Player::_StoreOrEquipNewItem).
+			b := wire.NewWriter()
+			b.WriteI32(4) // bag_full
+			wire.WritePackedGUID(b, wire.EmptyGUID)
+			wire.WritePackedGUID(b, wire.EmptyGUID)
+			b.WriteU8(0)
+			v.deliver(wire.SMSGInventoryChangeFailure, b.Bytes())
+			return
+		}
+		if v.foreignBuyAnswer {
+			// An answer to some other request: another vendor's, which this purchase must not take for its own.
+			other := wire.GUID{Low: 0xD0D0, High: uint64(objects.TypeUnit) << 58}
+			v.deliver(wire.SMSGBuySucceeded, vendorBuySucceeded(other, muid, -1, uint32(quantity)))
+			return
+		}
 		v.deliver(wire.SMSGBuySucceeded, vendorBuySucceeded(vendorNPCGUID, muid, -1, uint32(quantity)))
+		if v.noItemAfterBuy {
+			return
+		}
 		// The item's own block, the push result that names the slot, the slots update that places it and the coinage
 		// that fell: the burst a purchase sends (Player.cpp:24861-24866).
 		v.apply(fragmentItem(itemLate, itemID, uint32(quantity)))
@@ -190,6 +233,13 @@ func (v *vendorWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		v.setCount(guid, 5-amount)
 	case wire.CMSGSellAllJunkItems:
 		v.sweep = true
+		if v.sweepSilent {
+			return
+		}
+		if v.sweepDelay > 0 {
+			v.sweepPending, v.sweepAt = true, v.now.Add(v.sweepDelay)
+			return
+		}
 		// Every sold item moves into a buyback slot, which is what takes it out of the carried rows.
 		v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{35: {}, 36: {}, 72: itemPotion, 73: itemSword2}, nil))
 	case wire.CMSGBuyBackItem:
@@ -200,12 +250,22 @@ func (v *vendorWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		if slot != 72 {
 			v.t.Fatalf("CMSG_BUY_BACK_ITEM names slot %d, want 72", slot)
 		}
+		if v.refuseBuyback != 0 {
+			v.deliver(wire.SMSGBuyFailed, vendorBuyFailed(vendorNPCGUID, 0, v.refuseBuyback))
+			return
+		}
 		v.deliver(wire.SMSGBuySucceeded, vendorBuySucceeded(vendorNPCGUID, 1, -1, 1))
 		v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{72: {}, 40: itemBack}, nil))
 	case wire.CMSGRepairItem:
 		v.repair = append([]byte(nil), payload...)
+		if v.repairSilent {
+			return // not enough money, or out of reach: DurabilityRepairAll sends nothing (NPCHandler.cpp:441-461)
+		}
 		coin := uint64(900)
 		v.deliver(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
+		if v.repairRestoresAll {
+			v.setDurability(itemSword, 100, 100)
+		}
 	default:
 		v.t.Fatalf("the fake has no answer for %s", wire.ClientName(core))
 	}
@@ -586,5 +646,342 @@ func TestVendorRepairWaitsForTheCoinage(t *testing.T) {
 	}
 	if !containsLine(v.lines, "copper (est.") {
 		t.Fatalf("the coinage estimate is missing:\n%s", joinLines(v.lines))
+	}
+}
+
+// setDurability applies an item's own values update carrying its durability (every other field as the create had it).
+func (f *itemWorld) setDurability(guid wire.GUID, durability, max uint32) {
+	f.t.Helper()
+	info := objects.Info{Type: objects.TypeItem, Item: &objects.ItemData{
+		Owner: itemSelf, ContainedIn: itemSelf, StackCount: 1, Durability: durability, MaxDurability: max}}
+	info.Complete()
+	f.apply(objects.WorldFragment{GUID: guid, ObjectType: objects.TypeItem, Info: info, ValuesComplete: true, Values: true})
+}
+
+// sellRefused runs one sell step and asserts it failed with the text and sent no CMSG_SELL_ITEM.
+func sellRefused(t *testing.T, v *vendorWorld, a *actState, step, want string) {
+	t.Helper()
+	err := v.s.actStep(context.Background(), a, mustActStep(t, step))
+	if err == nil {
+		t.Fatalf("%q passed\n%s", step, joinLines(v.lines))
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte(want)) {
+		t.Fatalf("%q failed with %q, want %q", step, err, want)
+	}
+	if len(v.sell) != 0 {
+		t.Fatalf("%q sent a CMSG_SELL_ITEM", step)
+	}
+}
+
+// TestVendorSellNeverSellsAnEquippedItem is the finding's failing case: a worn item is not sold by slot, by entry or
+// as a bag slot, because the core sells it without an equipped check (Player.cpp:25299). Before this round
+// `sell slot=15` sent the sale of the main hand.
+func TestVendorSellNeverSellsAnEquippedItem(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	sellRefused(t, v, a, "sell slot=15", "equipped")
+	sellRefused(t, v, a, "sell entry=25", "equipped")
+	sellRefused(t, v, a, "sell slot=30", "equipped")
+	sellRefused(t, v, a, "sell slot=15 force=1", "equipped") // force never covers worn gear
+}
+
+// TestVendorSellNamesTheStackWhenTwoHoldTheEntry: a worn sword and a spare of the same entry are two stacks, so the
+// entry alone is refused (before, the worn one sorted first and was sold) and slot= names the spare.
+func TestVendorSellNamesTheStackWhenTwoHoldTheEntry(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.addItem(itemLate, 25, 1, 40) // a spare of the worn sword's entry
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	sellRefused(t, v, a, "sell entry=25", "2 stacks")
+	// slot=40 sells the spare, and only it.
+	orig := v.onSend
+	v.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core != wire.CMSGSellItem {
+			orig(f, core, payload)
+			return
+		}
+		v.sell = append([]byte(nil), payload...)
+		v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{40: {}, 72: itemLate}, nil))
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "sell slot=40")); err != nil {
+		t.Fatalf("sell slot=40: %v\n%s", err, joinLines(v.lines))
+	}
+	r := wire.NewReader(v.sell)
+	_ = wire.ReadPackedGUID(r)
+	if g := wire.ReadPackedGUID(r); g != itemLate {
+		t.Fatalf("the sold item is %s, want the spare", g)
+	}
+}
+
+// TestVendorSellRefusesAStaleOrUnconfirmedItem: R2's destructive rules apply to a sale. A stale inventory refuses it,
+// and an item an own move left unconfirmed is never addressed by its guessed position.
+func TestVendorSellRefusesAStaleOrUnconfirmedItem(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	v.s.tracker().MarkStale("a test lost an inventory change")
+	sellRefused(t, v, a, "sell entry=118", "stale")
+
+	v = newVendorWorld(t, npc.NPCFlagVendor)
+	a = v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	// An own move of the potion the server has not confirmed.
+	if _, err := v.s.tracker().Begin(v.now, items.Req{Asked: []wire.GUID{itemPotion}, Touch: []wire.GUID{itemPotion}}); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	sellRefused(t, v, a, "sell entry=118", "not confirmed")
+}
+
+// TestVendorSellGuardsAQuestItem: an item the character's quest log needs is sold only with force=1 (the client has
+// no item template; it knows quest items from the objectives of the quests it saw).
+func TestVendorSellGuardsAQuestItem(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	entries := make([]objects.QuestLogEntry, 3)
+	entries[0] = objects.QuestLogEntry{QuestID: 700, StateFlags: quest.StatusIncomplete}
+	frag := fragmentPlayer(map[int]wire.GUID{15: itemSword, 30: itemBag, 35: itemPotion, 36: itemSword2})
+	frag.Info.Player.QuestLog = entries
+	v.apply(frag)
+	v.s.questBook().RememberObjectives(700, []quest.Objective{{Type: questObjectiveItem, ObjectID: 118, Amount: 5}})
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	sellRefused(t, v, a, "sell entry=118", "quest 700")
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "sell entry=118 force=1")); err != nil {
+		t.Fatalf("a forced sale of a quest item: %v\n%s", err, joinLines(v.lines))
+	}
+}
+
+// TestVendorBuyRefusesAnotherNPCsList: the list belongs to the vendor it was read from. After the script moved on to
+// another vendor, a purchase is refused before any packet (before, it sent the old list's Muid to the new NPC), and
+// an `npc` step starts without a list.
+func TestVendorBuyRefusesAnotherNPCsList(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	other := wire.GUID{Low: 0xD1D1D1, High: uint64(objects.TypeUnit) << 58}
+	u, err := objects.ParseUpdateObject(fakeUnitCreateBlock(fakePackedGUID(other), 0, 0, 0, 0, 0, 42432, 100, 100, 5, npc.NPCFlagVendor))
+	if err != nil || len(u.Blocks) == 0 {
+		t.Fatalf("the second vendor's create: %v", err)
+	}
+	v.world.Apply(u, v.now)
+	o, ok := v.world.Object(other)
+	if !ok {
+		t.Fatal("the second vendor is not in the world model")
+	}
+	a.npc = o // the script's `npc` step moved on
+	err = v.s.actStep(context.Background(), a, mustActStep(t, "buy muid=2 n=1"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("not this NPC's")) {
+		t.Fatalf("a purchase from another NPC's list gave %v", err)
+	}
+	if len(v.buy) != 0 {
+		t.Fatal("a CMSG_BUY_ITEM went to the second NPC")
+	}
+}
+
+// TestVendorNPCStepClearsTheList: a new current NPC starts with no vendor list.
+func TestVendorNPCStepClearsTheList(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	v.s.mover = &objects.Mover{GUID: itemSelf, Sender: v.itemWorld, RunSpeed: 7,
+		ClientTime: func(time.Time) uint32 { return 0 }}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "npc entry=42431")); err != nil {
+		t.Fatalf("npc: %v\n%s", err, joinLines(v.lines))
+	}
+	if a.vendor != nil || a.hasVendor {
+		t.Fatal("the npc step kept the previous vendor's list")
+	}
+	err := v.s.actStep(context.Background(), a, mustActStep(t, "buy muid=2 n=1"))
+	if err == nil || len(v.buy) != 0 {
+		t.Fatalf("a purchase with no list for this NPC gave %v (sent %d bytes)", err, len(v.buy))
+	}
+}
+
+// TestVendorSecondOpenOnTheSameVendorWorks: the interaction is already started, so the core answers the second ask
+// with the list itself (ItemHandler.cpp:619-643); the step must take that for completion. Before, it waited for an
+// open result that never came and failed after 5 s.
+func TestVendorSecondOpenOnTheSameVendorWorks(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("the first vendor step: %v", err)
+	}
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("the second vendor step: %v\n%s", err, joinLines(v.lines))
+	}
+	if v.listSends != 3 {
+		t.Fatalf("%d CMSG_LIST_INVENTORY sends, want 3 (two to open and list, one to refresh)", v.listSends)
+	}
+	if a.vendor == nil || len(a.vendor.Items) != 3 {
+		t.Fatal("the second step left no fresh list")
+	}
+}
+
+// TestVendorBuyNeedsTheItemToArrive: a success answer with no item behind it is unconfirmed, not a purchase (Codex
+// high), and an answer that names another vendor is not this purchase's answer.
+func TestVendorBuyNeedsTheItemToArrive(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.noItemAfterBuy = true
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	err := v.s.actStep(context.Background(), a, mustActStep(t, "buy entry=117 n=1"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("unconfirmed")) {
+		t.Fatalf("a success with no item gave %v", err)
+	}
+	if containsLine(v.lines, "buy ok") {
+		t.Fatal("an ok line was printed for a purchase the inventory never showed")
+	}
+
+	v = newVendorWorld(t, npc.NPCFlagVendor)
+	v.foreignBuyAnswer = true
+	a = v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	err = v.s.actStep(context.Background(), a, mustActStep(t, "buy entry=117 n=1"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("no answer")) {
+		t.Fatalf("another vendor's success answer gave %v", err)
+	}
+}
+
+// TestVendorBuyReadsAnInventoryFailure: a full bag refuses a purchase as SMSG_INVENTORY_CHANGE_FAILURE, which the step
+// names instead of waiting out its 5 s (Claude 8).
+func TestVendorBuyReadsAnInventoryFailure(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.refuseBuyInv = true
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	start := v.now
+	err := v.s.actStep(context.Background(), a, mustActStep(t, "buy entry=117 n=1"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("bag_full")) {
+		t.Fatalf("a refused purchase gave %v", err)
+	}
+	if v.now.Sub(start) >= actVendorWait {
+		t.Fatalf("the step waited %s for an answer that had come", v.now.Sub(start))
+	}
+}
+
+// TestVendorBuyKeepsTheListsStock: the success answer names the row's stock afterwards and the list follows it, so
+// a second purchase checks the new stock.
+func TestVendorBuyKeepsTheListsStock(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "buy muid=2 n=1")); err != nil {
+		t.Fatalf("buy: %v\n%s", err, joinLines(v.lines))
+	}
+	// The fake's success answer names stock -1 (unlimited), which the list now carries for that row.
+	for _, row := range a.vendor.Items {
+		if row.MuID == 2 && row.Quantity != -1 {
+			t.Fatalf("the row's stock is %d, want the answer's -1", row.Quantity)
+		}
+	}
+}
+
+// TestVendorBuybackRefusalIsABuyFailure: a refused buyback is SMSG_BUY_FAILED (ItemHandler.cpp:569-581), whose reason
+// the step names; before, only a sell response was read and the step reported "did not come back" after 5 s.
+func TestVendorBuybackRefusalIsABuyFailure(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{72: itemBack}, nil))
+	v.apply(fragmentItem(itemBack, 25, 1))
+	v.refuseBuyback = 2 // BUY_ERR_NOT_ENOUGHT_MONEY
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	start := v.now
+	err := v.s.actStep(context.Background(), a, mustActStep(t, "buyback slot=72"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("not_enough_money")) {
+		t.Fatalf("a refused buyback gave %v", err)
+	}
+	if v.now.Sub(start) >= actVendorWait {
+		t.Fatalf("the step waited %s for a refusal that had come", v.now.Sub(start))
+	}
+}
+
+// TestVendorRepairRefusedFails: a damaged item and no durability rise and no money taken is a refused repair (not
+// enough money, out of reach: the core sends nothing), not "nothing needed it".
+func TestVendorRepairRefusedFails(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagRepair)
+	v.setDurability(itemSword, 10, 100)
+	v.repairSilent = true
+	a := v.state(t)
+	err := v.s.actStep(context.Background(), a, mustActStep(t, "repair"))
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("were damaged")) {
+		t.Fatalf("a refused repair gave %v\n%s", err, joinLines(v.lines))
+	}
+	if containsLine(v.lines, "repair ok") {
+		t.Fatal("an ok line was printed for a refused repair")
+	}
+}
+
+// TestVendorRepairCountsTheRisingDurability: a repair that worked raises the durability and takes money.
+func TestVendorRepairCountsTheRisingDurability(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagRepair)
+	v.setDurability(itemSword, 10, 100)
+	v.repairRestoresAll = true
+	a := v.state(t)
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "repair")); err != nil {
+		t.Fatalf("repair: %v\n%s", err, joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "1 item(s) repaired, 1 at full durability") {
+		t.Fatalf("the repair line is missing:\n%s", joinLines(v.lines))
+	}
+}
+
+// TestVendorSellJunkWaitsForALateAnswer: the sweep's updates arrive a second after the request; the old 300 ms quiet
+// window had already read "no poor-quality item(s) carried" by then.
+func TestVendorSellJunkWaitsForALateAnswer(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.sweepDelay = time.Second
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "sell-junk")); err != nil {
+		t.Fatalf("sell-junk: %v\n%s", err, joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "step 2 sell-junk ok 2 item(s) sold") {
+		t.Fatalf("a late sweep was not counted:\n%s", joinLines(v.lines))
+	}
+}
+
+// TestVendorSellJunkSilenceIsNotASweepThatSoldNothing: a server that answers nothing leaves a line that says nothing
+// was seen, with the window, never that no poor item was carried.
+func TestVendorSellJunkSilenceIsNotASweepThatSoldNothing(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.sweepSilent = true
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "sell-junk")); err != nil {
+		t.Fatalf("sell-junk: %v\n%s", err, joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "nothing seen within 2s") {
+		t.Fatalf("the silence is not labelled:\n%s", joinLines(v.lines))
+	}
+	if containsLine(v.lines, "no poor-quality item(s) carried") {
+		t.Fatal("silence was reported as a sweep that sold nothing")
 	}
 }

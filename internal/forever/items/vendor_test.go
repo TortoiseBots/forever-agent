@@ -318,3 +318,24 @@ func TestParseSellResponse(t *testing.T) {
 		t.Fatal("a sell answer with trailing bytes parsed")
 	}
 }
+
+// TestVendorCountRejectsWhatIsNegativeOn32Bit proves the row count is bounded from below as well: 0x80000000 is
+// negative as an int on a 32-bit build, passes a bare "> max" check and panics in make. The count goes through int32
+// so the check is the same on every platform.
+func TestVendorCountRejectsWhatIsNegativeOn32Bit(t *testing.T) {
+	for _, raw := range []uint32{0x80000000, 0xFFFFFFFF, maxVendorItems + 1} {
+		if _, err := vendorCount(raw); err == nil {
+			t.Fatalf("count %#x was accepted", raw)
+		}
+	}
+	if n, err := vendorCount(maxVendorItems); err != nil || n != maxVendorItems {
+		t.Fatalf("the largest allowed count: %d %v", n, err)
+	}
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, wire.GUID{Low: 1, High: 0xF130000000000000})
+	b.WriteI32(0)
+	b.WriteU32(0x80000000)
+	if _, err := ParseVendorInventory(b.Bytes()); err == nil {
+		t.Fatal("a list naming 0x80000000 rows parsed")
+	}
+}

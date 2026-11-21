@@ -17,41 +17,33 @@ func testLog() *Log {
 	return NewLog(entries)
 }
 
-// TestLogAcceptTakesTheFirstFreeSlot proves the slot rule (Player::FindQuestSlot, Player.cpp:16150): the first slot
-// whose quest id is zero, not the next after the last occupied one.
-func TestLogAcceptTakesTheFirstFreeSlot(t *testing.T) {
+// TestLogApplyServerWritesTheNamedSlots proves a PlayerData update's slot change is the log's only way to take a
+// quest: the slot the server names (the first free one, Player::FindQuestSlot, Player.cpp:16150), only the fields it
+// carries, and a slot reused by another quest drops the credits kept for the old one.
+func TestLogApplyServerWritesTheNamedSlots(t *testing.T) {
 	l := testLog()
-	slot, err := l.Accept(21)
-	if err != nil {
-		t.Fatalf("accept: %v", err)
-	}
-	if slot != 0 {
-		t.Fatalf("the accepted quest went to slot %d, want 0", slot)
-	}
+	l.Credit(11, 5001, 2, 8)
+	l.ApplyServer(map[int]objects.QuestLogDelta{
+		0: {HasQuestID: true, QuestID: 21, HasState: true, StateFlags: StatusIncomplete, Progress: map[int]int16{1: 4}},
+		1: {HasQuestID: true, QuestID: 0},
+		9: {HasQuestID: true, QuestID: 5}, // past the log: ignored
+	})
 	if got, ok := l.Find(21); !ok || got != 0 {
 		t.Fatalf("the quest is in slot %d (%v)", got, ok)
 	}
-	if e := l.Entries[0]; e.QuestID != 21 || e.StateFlags != StatusIncomplete {
+	if e := l.Entries[0]; e.QuestID != 21 || e.StateFlags != StatusIncomplete || e.Progress[1] != 4 {
 		t.Fatalf("the slot is %+v", e)
 	}
-	// The next accept takes the gap after it, not slot 5.
-	if slot, err = l.Accept(22); err != nil || slot != 2 {
-		t.Fatalf("the second accept went to slot %d (%v), want 2", slot, err)
+	if _, ok := l.Find(11); ok {
+		t.Fatal("the emptied slot still holds its quest")
 	}
-	// Accepting a quest already in the log names its slot and changes nothing.
-	if slot, err = l.Accept(11); err != nil || slot != 1 {
-		t.Fatalf("the repeated accept went to slot %d (%v)", slot, err)
+	if _, ok := l.CreditOf(11, 5001); ok {
+		t.Fatal("the credits of a quest that left the log were kept")
 	}
-}
-
-// TestLogAcceptRefusesAFullLog proves a full log is a named error, not a guessed slot.
-func TestLogAcceptRefusesAFullLog(t *testing.T) {
-	l := NewLog([]objects.QuestLogEntry{{QuestID: 1}, {QuestID: 2}})
-	if _, err := l.Accept(3); err == nil {
-		t.Fatal("a full log accepted a quest")
-	}
-	if _, ok := l.Find(3); ok {
-		t.Fatal("the refused quest was recorded")
+	// A state-only change keeps the quest id.
+	l.ApplyServer(map[int]objects.QuestLogDelta{3: {HasState: true, StateFlags: StatusComplete}})
+	if e := l.Entries[3]; e.QuestID != 13 || e.StateFlags != StatusComplete {
+		t.Fatalf("a state-only change left %+v", e)
 	}
 }
 
@@ -106,9 +98,9 @@ func TestLogCompleteAndRemove(t *testing.T) {
 	if _, ok := l.CreditOf(11, 5001); ok {
 		t.Fatal("the removed quest's credits were kept")
 	}
-	// Slot 0 was free all along, so it is the first free slot again after the removal.
-	if slot, err := l.Accept(31); err != nil || slot != 0 {
-		t.Fatalf("the accept after the removal went to slot %d (%v), want 0", slot, err)
+	// Slot 0 was free all along, so it is the first free slot.
+	if slot, ok := l.FirstFree(); !ok || slot != 0 {
+		t.Fatalf("the first free slot is %d (%v), want 0", slot, ok)
 	}
 }
 

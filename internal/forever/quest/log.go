@@ -1,10 +1,10 @@
 package quest
 
 // The character's own quest log, as the round keeps it: the slots the login create block carried
-// (objects.QuestLogEntry, UpdateFields.cpp:2294-2304) and the changes the round's own actions and the server's
-// credits make to them. The server's quest-log updates are part of ActivePlayerData's retail update layout, which
-// this client does not walk (docs/forever/WORLD-R1-NOTES.md, decision 1), so an own create is the only resync: a
-// relog or a map change re-seeds the log from the create block.
+// (objects.QuestLogEntry, UpdateFields.cpp:2294-2304), the slot changes the server's PlayerData updates name
+// (ApplyServer; objects.QuestLogDelta) and the server's credits. An own create re-seeds the log: a relog or a map
+// change reads it from the create block again. A PlayerData update this client cannot decode leaves the log
+// unknown until the next create (the session marks it stale), so a step never acts on a guessed slot.
 //
 // A slot is the index in the wire array, which is what CMSG_QUEST_LOG_REMOVE_QUEST names (QuestPackets.cpp:614-617):
 // the accept takes the first one whose QuestID is zero (Player::FindQuestSlot, Player::AddQuest, Player.cpp:16150).
@@ -87,18 +87,19 @@ func (l *Log) FirstFree() (int, bool) {
 	return 0, false
 }
 
-// Accept records a quest the character took: the first free slot, its state incomplete and every progress zero.
-// A quest already in the log is its existing slot (an accept the server answered with nothing changes nothing).
-func (l *Log) Accept(questID int32) (int, error) {
-	if slot, ok := l.Find(questID); ok {
-		return slot, nil
+// ApplyServer merges the slot changes a PlayerData update carried: the server's own word on the log. A slot whose
+// quest id changes drops the credits kept for the quest that left it.
+func (l *Log) ApplyServer(deltas map[int]objects.QuestLogDelta) {
+	for slot, d := range deltas {
+		if slot < 0 || slot >= len(l.Entries) {
+			continue
+		}
+		old := l.Entries[slot].QuestID
+		d.Apply(&l.Entries[slot])
+		if now := l.Entries[slot].QuestID; old != 0 && now != old {
+			delete(l.credits, old)
+		}
 	}
-	slot, ok := l.FirstFree()
-	if !ok {
-		return 0, fmt.Errorf("the quest log has no free slot (%d slots)", len(l.Entries))
-	}
-	l.Entries[slot] = objects.QuestLogEntry{QuestID: questID, StateFlags: StatusIncomplete}
-	return slot, nil
 }
 
 // Credit records one objective credit and updates the quest's progress when the quest's objectives are known. It

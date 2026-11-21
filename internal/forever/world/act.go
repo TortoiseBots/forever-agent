@@ -412,6 +412,8 @@ func (s *session) actNPC(ctx context.Context, a *actState, step ActStep) error {
 	a.npcEntry = entry
 	a.hasNPC = true
 	a.hasMenu = false
+	// A vendor list belongs to the vendor it was read from: a new current NPC starts without one.
+	a.vendor, a.hasVendor = nil, false
 	s.actMenu, s.actQuest = nil, nil
 	s.actOK(a, step, fmt.Sprintf("entry %d within reach", entry))
 	return nil
