@@ -86,7 +86,11 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 		if *fromGroup >= 0 {
 			opt.FromPullGroup = fromGroup
 		}
-		res, err := dungeon.CheckPlanWith(p, planner, opt)
+		var nav dungeon.Navmesh = planner
+		if *forever {
+			nav = foreverNav{planner}
+		}
+		res, err := dungeon.CheckPlanWith(p, nav, opt)
 		if err != nil {
 			fmt.Fprintf(stderr, "plan-check: %s: %v\n", n, err)
 			return exitUsage
@@ -191,6 +195,21 @@ func planLints(p *dungeon.Plan, planner *navmesh.Planner, dir, spawnDir string, 
 func lintResult(res planexport.Result, planner *navmesh.Planner, dir, spawnDir string, p *dungeon.Plan, forever bool) ([]planlint.Finding, string, error) {
 	return lintRows(res.Rows, res.Origins, planner, dir, spawnDir, p, forever)
 }
+
+// foreverNav is a v16 planner as the plan check takes it. It does not offer ServerQuerier: a ForeverCore tile set cannot
+// replay the 1.12 core's own query, so the check plans every hop with the v16 planner (Plan) and skips the server walk.
+type foreverNav struct{ p *navmesh.Planner }
+
+func (n foreverNav) Plan(mapID uint32, from, to navmesh.Vec3) (navmesh.Path, error) {
+	return n.p.Plan(mapID, from, to)
+}
+func (n foreverNav) Raycast(mapID uint32, from, to navmesh.Vec3) (navmesh.Ray, error) {
+	return n.p.Raycast(mapID, from, to)
+}
+func (n foreverNav) Nearest(mapID uint32, p navmesh.Vec3) (navmesh.Vec3, bool, error) {
+	return n.p.Nearest(mapID, p)
+}
+func (n foreverNav) SetAvoid(mapID uint32, boxes []navmesh.Box) { n.p.SetAvoid(mapID, boxes) }
 
 // foreverServer is the alt_entries key of the second server: plan-check --forever reads its spawns and selects its object entries.
 const foreverServer = planexport.ServerForever

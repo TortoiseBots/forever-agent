@@ -29,6 +29,11 @@ func scoutAllowedLine(line string, planMap, portalMap uint32) bool {
 	case ".gm on", raidwalk.GMVisibleOff:
 		return true
 	}
+	// A Forever live pass starts from a clean instance list: `.instance unbind all` resets the session player's own
+	// instance locks (ForeverCore cs_instance.cpp:93-111).
+	if line == ".instance unbind all" {
+		return true
+	}
 	f := strings.Fields(line)
 	if len(f) == 0 {
 		return false
