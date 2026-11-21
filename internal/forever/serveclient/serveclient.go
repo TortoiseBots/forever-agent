@@ -219,6 +219,35 @@ type Unit struct {
 	Auras      []Aura  `json:"auras"`
 }
 
+// Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).
+type Path struct {
+	Map     uint32       `json:"map"`
+	From    [3]float32   `json:"from"`
+	To      [3]float32   `json:"to"`
+	Status  string       `json:"status"` // complete, partial or none (navmesh.RouteKind)
+	Reason  string       `json:"reason,omitempty"`
+	Points  [][3]float32 `json:"points"`
+	Corners int          `json:"corners"`
+	Length  float32      `json:"length"`
+}
+
+// PathTo asks the server's route planner for a route from the session's position to x, y, z on its
+// current map. It needs the daemon's navmesh folder (a daemon started without one answers a typed
+// not-configured error). An unreachable goal is a Path whose Status is partial or none, not an error.
+func (c *Client) PathTo(ctx context.Context, x, y, z float32) (Path, error) {
+	var p Path
+	err := c.call(ctx, "path_to", map[string]float32{"x": x, "y": y, "z": z}, &p, defaultTimeout)
+	return p, err
+}
+
+// WalkPath plans the same route and has the session walk it as one continuous movement; it returns
+// when the walk ends (the daemon's own long deadline is bounded here at five minutes).
+func (c *Client) WalkPath(ctx context.Context, x, y, z float32) (Path, error) {
+	var p Path
+	err := c.call(ctx, "walk_path", map[string]float32{"x": x, "y": y, "z": z}, &p, 5*time.Minute)
+	return p, err
+}
+
 // UnitsParams is the units method's filter; every field is optional.
 type UnitsParams struct {
 	Within  float32 `json:"within,omitempty"`
