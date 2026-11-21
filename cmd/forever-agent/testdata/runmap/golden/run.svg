@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="992.0" height="1084.0" viewBox="0 0 992.0 1084.0" role="img" font-family="DejaVu Sans, Verdana, Arial, sans-serif" font-size="11">
+<title>fixture_depths</title>
+<desc>Top-down map of map 36: 2 routes, 2 hostile creatures, 5 events. North is up.</desc>
+<defs><clipPath id="map-clip"><rect x="24.0" y="70.0" width="640.0" height="960.0"/></clipPath><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#c2185b"/></marker></defs>
+<rect width="100%" height="100%" fill="#f7f6f2"/>
+<text x="24.0" y="38.0" font-size="17" font-weight="bold" fill="#222222">fixture_depths</text>
+<text x="24.0" y="56.0" fill="#666666">map 36, 2023-11-14 22:13:20 UTC, 0:14 long, 2 members, 2 hostile creatures seen</text>
+<rect x="24.0" y="70.0" width="640.0" height="960.0" fill="#ffffff" stroke="#bbbbbb"/>
+<g clip-path="url(#map-clip)"><g transform="translate(24.0 70.0)">
+<g class="plan" fill="none" stroke="#4b3fa0">
+<path d="M341.3 693.3L341.3 586.7L341.3 373.3L341.3 266.7" stroke-width="2" stroke-dasharray="7 4" opacity="0.75"/>
+<rect x="337.3" y="689.3" width="8" height="8" fill="#ffffff" stroke-width="1.6"/>
+<text x="348.3" y="687.3" stroke="none" fill="#4b3fa0" font-size="10">entrance</text>
+<rect x="337.3" y="582.7" width="8" height="8" fill="#ffffff" stroke-width="1.6"/>
+<text x="348.3" y="580.7" stroke="none" fill="#4b3fa0" font-size="10">1 leg_one</text>
+<rect x="337.3" y="369.3" width="8" height="8" fill="#ffffff" stroke-width="1.6"/>
+<text x="348.3" y="367.3" stroke="none" fill="#4b3fa0" font-size="10">2 leg_two</text>
+<rect x="337.3" y="262.7" width="8" height="8" fill="#ffffff" stroke-width="1.6"/>
+<text x="348.3" y="260.7" stroke="none" fill="#4b3fa0" font-size="10">3 leg_three</text>
+<path d="M309.3 561.3l4 4l-4 4l-4 -4z" stroke-width="1.3"/>
+<path d="M298.7 561.3l4 4l-4 4l-4 -4z" stroke-width="1.3"/>
+<path d="M330.7 369.3l4 4l-4 4l-4 -4z" stroke-width="1.3"/>
+<path d="M341.3 471.0L343.7 476.8L349.9 477.2L345.1 481.2L346.6 487.3L341.3 484.0L336.0 487.3L337.5 481.2L332.8 477.2L339.0 476.8Z" stroke-width="1.6"/>
+<text x="352.3" y="484.0" stroke="none" fill="#4b3fa0" font-size="10">planned boss 900</text>
+<path d="M341.3 257.7L343.7 263.4L349.9 263.9L345.1 267.9L346.6 273.9L341.3 270.7L336.0 273.9L337.5 267.9L332.8 263.9L339.0 263.4Z" stroke-width="1.6"/>
+<text x="352.3" y="270.7" stroke="none" fill="#4b3fa0" font-size="10">planned boss 901</text>
+</g>
+<g class="route" data-member="healer" fill="none" stroke="#D55E00" stroke-linejoin="round" stroke-linecap="round">
+<path d="M309.3 586.7L309.3 330.7" stroke-width="1.5" opacity="0.9"/>
+</g>
+<g class="route" data-member="tank" fill="none" stroke="#0072B2" stroke-linejoin="round" stroke-linecap="round">
+<path d="M341.3 586.7L341.3 330.7" stroke-width="2.2" opacity="0.9"/>
+</g>
+<g class="creatures">
+<circle cx="309.3" cy="522.7" r="3.2" fill="#b2182b" stroke="#ffffff" stroke-width="1"><title>Trash A (entry 100): killed at 0:08</title></circle>
+</g>
+<g class="boss"><path d="M341.3 363.3L344.0 369.7L350.8 370.2L345.6 374.7L347.2 381.4L341.3 377.8L335.5 381.4L337.1 374.7L331.8 370.2L338.7 369.7Z" fill="#b2182b" stroke="#c99700" stroke-width="2"/><text x="354.3" y="377.3" font-size="11" font-weight="bold" fill="#222222" stroke="#ffffff" stroke-width="3" paint-order="stroke">Boss One (killed 0:12)</text></g>
+<g class="leg"><path d="M341.3 586.7v-16" stroke="#222222" stroke-width="1.5"/><path d="M341.3 570.7h10l-3 4l3 4h-10z" fill="#4b3fa0"/><text x="354.3" y="577.7" font-size="9" fill="#222222" stroke="#ffffff" stroke-width="2.5" paint-order="stroke">leg 0 leg_one</text><title>leg 0 leg_one at 0:02</title></g>
+<g class="pull"><path d="M341.3 537.0l7 7l-7 7l-7 -7z" fill="#ffffff" stroke="#e08214" stroke-width="1.8"/><text x="341.3" y="547.0" font-size="8" text-anchor="middle" fill="#222222">1</text><title>pull 1 at 0:04</title></g>
+<g class="pause"><circle cx="341.3" cy="501.3" r="9" fill="#ffffff" fill-opacity="0.85" stroke="#6b6b6b" stroke-width="2"/><path d="M338.3 496.3v6M344.3 496.3v6" stroke="#6b6b6b" stroke-width="2.4"/><title>pause (stuck) at 0:07</title></g>
+<g class="leg"><path d="M341.3 458.7v-16" stroke="#222222" stroke-width="1.5"/><path d="M341.3 442.7h10l-3 4l3 4h-10z" fill="#4b3fa0"/><text x="354.3" y="449.7" font-size="9" fill="#222222" stroke="#ffffff" stroke-width="2.5" paint-order="stroke">leg 1 leg_two</text><title>leg 1 leg_two at 0:08</title></g>
+<circle class="boss-kill" cx="341.3" cy="373.3" r="14" fill="none" stroke="#c99700" stroke-width="2"><title>Boss One killed at 0:12</title></circle>
+</g></g>
+<g class="scale"><rect x="30.0" y="1000.0" width="172.7" height="22" fill="#ffffff" fill-opacity="0.8"/><path d="M36.0 1016.0h106.7M36.0 1016.0v-5M142.7 1016.0v-5" stroke="#222222" stroke-width="2"/><text x="148.7" y="1016.0" font-size="10" fill="#222222">10 yd</text></g>
+<g class="north"><path d="M642.0 86.0l5 14h-10z" fill="#222222"/><text x="642.0" y="112.0" font-size="11" font-weight="bold" text-anchor="middle" fill="#222222">N</text></g>
+<text x="688.0" y="86.0" font-weight="bold" fill="#222222">Party routes</text>
+<g transform="translate(699.0 101.0)"><path d="M-10 0H10" stroke="#0072B2" stroke-width="2.4" stroke-dasharray="" fill="none"/></g><text x="716.0" y="105.0" fill="#222222">tank (leader), 24 yd</text>
+<g transform="translate(699.0 118.0)"><path d="M-10 0H10" stroke="#D55E00" stroke-width="1.6" stroke-dasharray="" fill="none"/></g><text x="716.0" y="122.0" fill="#222222">healer, 24 yd</text>
+<g transform="translate(699.0 135.0)"><circle r="2.6" fill="#555555" stroke="#ffffff"/></g><text x="716.0" y="139.0" fill="#222222">time tick every 15s</text>
+<text x="688.0" y="160.0" font-weight="bold" fill="#222222">Hostile creatures</text>
+<g transform="translate(699.0 175.0)"><circle r="3.2" fill="#b2182b" stroke="#ffffff" stroke-width="1"/></g><text x="716.0" y="179.0" fill="#222222">killed: 2</text>
+<g transform="translate(699.0 192.0)"><path d="M0.0 -8.0L2.1 -2.9L7.6 -2.5L3.4 1.1L4.7 6.5L0.0 3.6L-4.7 6.5L-3.4 1.1L-7.6 -2.5L-2.1 -2.9Z" fill="#b2182b" stroke="#c99700" stroke-width="1.5"/></g><text x="716.0" y="196.0" fill="#222222">boss: 1</text>
+<text x="688.0" y="217.0" font-weight="bold" fill="#222222">Events</text>
+<g transform="translate(699.0 232.0)"><path d="M0 -6l6 6l-6 6l-6 -6z" fill="#ffffff" stroke="#e08214" stroke-width="1.6"/></g><text x="716.0" y="236.0" fill="#222222">pull (first combat): 1</text>
+<g transform="translate(699.0 249.0)"><path d="M-5 6v-14h9l-3 4l3 4h-9" fill="#4b3fa0" stroke="#222222"/></g><text x="716.0" y="253.0" fill="#222222">leg of the plan began: 2</text>
+<g transform="translate(699.0 266.0)"><circle r="7" fill="#ffffff" stroke="#6b6b6b" stroke-width="2"/><path d="M-2.5 -3v6M2.5 -3v6" stroke="#6b6b6b" stroke-width="2"/></g><text x="716.0" y="270.0" fill="#222222">module paused the run: 1</text>
+<text x="688.0" y="291.0" font-weight="bold" fill="#222222">Plan: fixture_depths</text>
+<g transform="translate(699.0 306.0)"><path d="M-10 0H10" stroke="#4b3fa0" stroke-width="2.0" stroke-dasharray="7 4" fill="none"/></g><text x="716.0" y="310.0" fill="#222222">planned walk through the legs</text>
+<g transform="translate(699.0 323.0)"><path d="M0 -5l4 5l-4 5l-4 -5z" fill="none" stroke="#4b3fa0" stroke-width="1.3"/></g><text x="716.0" y="327.0" fill="#222222">planned pull group position</text>
+<g transform="translate(699.0 340.0)"><path d="M0.0 -8.0L2.1 -2.9L7.6 -2.5L3.4 1.1L4.7 6.5L0.0 3.6L-4.7 6.5L-3.4 1.1L-7.6 -2.5L-2.1 -2.9Z" fill="none" stroke="#4b3fa0" stroke-width="1.5"/></g><text x="716.0" y="344.0" fill="#222222">planned boss</text>
+<text x="688.0" y="365.0" font-weight="bold" fill="#222222">Notes</text>
+<text x="688.0" y="382.0" fill="#666666" font-size="10">- only what the agent saw is drawn: units</text>
+<text x="688.0" y="395.0" fill="#666666" font-size="10">  outside its view distance are missing</text>
+<text x="688.0" y="408.0" fill="#666666" font-size="10">- the module&#39;s run started 2 s into the trace;</text>
+<text x="688.0" y="421.0" fill="#666666" font-size="10">  its times are moved onto it</text>
+<text x="688.0" y="434.0" fill="#666666" font-size="10">- no navmesh background: --navmesh was not</text>
+<text x="688.0" y="447.0" fill="#666666" font-size="10">  given</text>
+<text x="24.0" y="1072.0" fill="#666666">forever-agent map: drawn from what the agent saw, not from the game world. North is up.</text>
+</svg>

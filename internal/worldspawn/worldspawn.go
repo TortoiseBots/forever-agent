@@ -134,6 +134,15 @@ func AggroRadius(s Spawn, partyLevel int, rate float32) float32 {
 // (its entry in the wrong column): no radius, so a wander this large counts as none (planlint's wanderCapYd).
 const WanderCapYd = 50
 
+// Typed errors a malformed export hits before the model reads it. They mark the export's own damage, not a missing optional
+// file: a duplicated spawn row (a join that fanned out), a numeric level that is not positive (only an empty cell means
+// "unknown"), and a Forever export of a map with no spawns (a wrong database name or map id writes the header only).
+var (
+	ErrDuplicateGUID = errors.New("creatures.tsv: a guid is listed twice")
+	ErrLevelZero     = errors.New("creatures.tsv: a numeric level is not positive")
+	ErrNoSpawns      = errors.New("creatures.tsv: the map has no spawns")
+)
+
 // WanderYd is the wander a spawn adds to its wake reach: its wander, or 0 when the wander is at or above WanderCapYd.
 func WanderYd(s Spawn) float32 {
 	if s.Wander >= WanderCapYd {
@@ -146,6 +155,13 @@ func WanderYd(s Spawn) float32 {
 // notes say what the export could not give (an old export's missing columns and files, unresolved entry links, patrolling
 // spawns without waypoints); they are informational, never errors.
 func Load(dir string, mapID uint32) (*World, []string, error) {
+	return load(dir, mapID, false)
+}
+
+// load is Load with the export dialect: forever reads what tools/dungeongen/export-forever.sh writes from a ForeverCore
+// world database, whose level columns are empty when the entry has no content tuning row (LoadForeverDB fills and notes
+// them). Everything else is the same reader.
+func load(dir string, mapID uint32, forever bool) (*World, []string, error) {
 	var notes []string
 	creatures, err := readTSV(filepath.Join(dir, "creatures.tsv"))
 	if err != nil {
@@ -154,7 +170,7 @@ func Load(dir string, mapID uint32) (*World, []string, error) {
 	if creatures == nil {
 		return nil, nil, fmt.Errorf("%s: no creatures.tsv (tools/dungeongen/export.sh writes the export)", dir)
 	}
-	spawns, err := loadSpawns(creatures, &notes)
+	spawns, err := loadSpawns(creatures, &notes, forever)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,7 +181,12 @@ func Load(dir string, mapID uint32) (*World, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := applyGroups(w, groups, &notes); err != nil {
+	if forever {
+		err = applyForeverGroups(w, groups, &notes)
+	} else {
+		err = applyGroups(w, groups, &notes)
+	}
+	if err != nil {
 		return nil, nil, err
 	}
 	if err := loadLinks(w, dir, &notes); err != nil {
@@ -178,29 +199,57 @@ func Load(dir string, mapID uint32) (*World, []string, error) {
 }
 
 // loadSpawns reads creatures.tsv. The five raid columns are appended by C0's export.sh; an older file gets their defaults.
-func loadSpawns(t *tsvFile, notes *[]string) ([]Spawn, error) {
+// A Forever export (forever) writes the level columns empty when the core has no level for the spawn; that is level 0
+// here, which LoadForeverDB fills with 60 and notes. Its group column is the raw creature_formations.groupAI (group_ai),
+// which foreverGroupFlags maps to the reader's option set; a numeric level that is not positive is an export error, since
+// only an empty cell means "no level".
+func loadSpawns(t *tsvFile, notes *[]string, forever bool) ([]Spawn, error) {
 	if err := t.require("guid", "entry", "name", "level_max", "rank", "faction", "npc_flags", "x", "y", "z", "wander",
 		"movement_type", "group_leader"); err != nil {
 		return nil, err
 	}
+	optional := []string{"detection_range", "flags_extra", "speed_walk", "pool"}
+	if !forever {
+		optional = append(optional, "group_flags")
+	}
 	var missing []string
-	for _, col := range []string{"detection_range", "flags_extra", "speed_walk", "group_flags", "pool"} {
+	for _, col := range optional {
 		if !t.has(col) {
 			missing = append(missing, col)
 		}
 	}
 	if len(missing) > 0 {
-		*notes = append(*notes, fmt.Sprintf("creatures.tsv: old export (no %s columns): detection %d yd, flags_extra 0, speed_walk %d, group_flags 0, pool 0 assumed",
-			strings.Join(missing, ", "), defaultDetectionYd, defaultSpeedWalk))
+		groups := "group_flags 0"
+		if forever {
+			groups = "group_ai 0"
+		}
+		*notes = append(*notes, fmt.Sprintf("creatures.tsv: old export (no %s columns): detection %d yd, flags_extra 0, speed_walk %d, %s, pool 0 assumed",
+			strings.Join(missing, ", "), defaultDetectionYd, defaultSpeedWalk, groups))
 	}
 	out := make([]Spawn, 0, len(t.rows))
+	seen := make(map[uint64]bool, len(t.rows))
 	for _, row := range t.rows {
 		r := rowReader{t: t, row: row}
+		var levelMax float64
+		if forever {
+			if strings.TrimSpace(r.text("level_max")) != "" {
+				levelMax = r.num("level_max")
+				if r.err == nil && levelMax <= 0 {
+					return nil, fmt.Errorf("%w: %s:%d guid %s has level_max %q", ErrLevelZero, t.path, row.line, r.text("guid"), r.text("level_max"))
+				}
+			}
+		} else {
+			levelMax = r.num("level_max")
+		}
+		groupFlags := uint32(r.optional("group_flags", 0))
+		if forever {
+			groupFlags = foreverGroupFlags(uint32(r.optional("group_ai", 0)))
+		}
 		s := Spawn{
 			GUID:         uint64(r.num("guid")),
 			Entry:        uint32(r.num("entry")),
 			Name:         r.text("name"),
-			LevelMax:     int(r.num("level_max")),
+			LevelMax:     int(levelMax),
 			Rank:         int(r.num("rank")),
 			Faction:      int(r.num("faction")),
 			NPCFlags:     uint32(r.num("npc_flags")),
@@ -211,12 +260,16 @@ func loadSpawns(t *tsvFile, notes *[]string) ([]Spawn, error) {
 			FlagsExtra:   uint32(r.optional("flags_extra", 0)),
 			SpeedWalk:    float32(r.optional("speed_walk", defaultSpeedWalk)),
 			GroupLeader:  uint64(r.num("group_leader")),
-			GroupFlags:   uint32(r.optional("group_flags", 0)),
+			GroupFlags:   groupFlags,
 			Pool:         uint32(r.optional("pool", 0)),
 		}
 		if r.err != nil {
 			return nil, r.err
 		}
+		if seen[s.GUID] {
+			return nil, fmt.Errorf("%w: guid %d at %s:%d (a join fanned out or the export was concatenated)", ErrDuplicateGUID, s.GUID, t.path, row.line)
+		}
+		seen[s.GUID] = true
 		out = append(out, s)
 	}
 	return out, nil
