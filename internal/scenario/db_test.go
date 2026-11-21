@@ -2,7 +2,10 @@ package scenario
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -97,7 +100,7 @@ func TestSSHArgvAndStdin(t *testing.T) {
 		t.Fatalf("remote %q", last)
 	}
 	inner := strings.TrimSuffix(strings.TrimPrefix(last, "docker exec -i tortoise-db sh -c '"), "'")
-	if !strings.Contains(inner, "MYSQL_PWD") || !strings.Contains(inner, "$MARIADB_ROOT_PASSWORD") {
+	if !strings.Contains(inner, "MYSQL_PWD") || !strings.Contains(inner, "MARIADB_ROOT_PASSWORD") || !strings.Contains(inner, "MYSQL_ROOT_PASSWORD") {
 		t.Fatalf("no env password: %q", inner)
 	}
 	for _, a := range gotArgs[:len(gotArgs)-1] {
@@ -115,6 +118,38 @@ func TestSSHArgvAndStdin(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("stdin %q lacks %q", body, want)
+		}
+	}
+}
+
+// TestDBRemotePasswordEnvNames runs the remote shell command (without docker) against a stub mysql that prints
+// the MYSQL_PWD it was given: a box whose DB container carries only MYSQL_ROOT_PASSWORD must work as well as
+// one with MARIADB_ROOT_PASSWORD, and the MariaDB name wins when both are set.
+func TestDBRemotePasswordEnvNames(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "mysql")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$MYSQL_PWD\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(fmt.Sprintf(dbRemote, "db"), "docker exec -i db sh -c '"), "'")
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"mariadb name", []string{"MARIADB_ROOT_PASSWORD=maria-pw"}, "maria-pw"},
+		{"mysql name", []string{"MYSQL_ROOT_PASSWORD=mysql-pw"}, "mysql-pw"},
+		{"both", []string{"MARIADB_ROOT_PASSWORD=maria-pw", "MYSQL_ROOT_PASSWORD=mysql-pw"}, "maria-pw"},
+	}
+	for _, c := range cases {
+		cmd := exec.Command("sh", "-c", inner)
+		cmd.Env = append([]string{"PATH=" + dir + ":/usr/bin:/bin"}, c.env...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if string(out) != c.want {
+			t.Errorf("%s: the password reaching mysql is %q, want %q", c.name, out, c.want)
 		}
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
-	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // This file is the Forever controls (L5): on a serve slot the buttons (stay,
@@ -110,23 +112,36 @@ func (c *Controller) foreverCommander(ac *actionContext, op, verb string, args m
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlTimeout)
 	defer cancel()
-	out, callErr := cl.Commander(wctx, serveclient.CommanderParams{Op: op, Verb: verb})
+	params := serveclient.CommanderParams{Op: op, Verb: verb}
+	var out serveclient.CommanderResult
+	var callErr error
+	if op == "run" {
+		// The daemon's run verbs need the lead they act on: the dashboard's buttons name none, so the character's one
+		// bound lead is read first. Nothing is sent when that read fails or the character commands none or several.
+		params.LeadBot, callErr = foreverOnlyLead(wctx, cl)
+	}
+	if callErr == nil {
+		out, callErr = cl.Commander(wctx, params)
+	}
+	reply := foreverReplyOf(out)
 	res := controlRecord{Phase: "result", At: c.cfg.Now().UTC().Format(time.RFC3339), Who: ac.who, Via: ac.via, Peer: ac.peer,
 		Agent: ac.agent.ID, Action: ac.action, Verb: verb, RPC: "commander", Outcome: "ok"}
 	okv := callErr == nil
 	code, isRPC := serveclient.CodeOf(callErr)
 	switch {
 	case callErr == nil:
-		if out.Reply.Kind != "" && !out.Reply.OK {
-			okv = false
+		var refusal string
+		if refusal, okv = foreverRefusal(out); !okv {
 			res.Outcome = "error"
-			res.Message = redactMessage(moduleRefusal(out.Reply), cl.Token())
+			res.Message = redactMessage(refusal, cl.Token())
+		} else {
+			res.Message = redactMessage(foreverSummary(out), cl.Token())
 		}
 	case isRPC:
 		res.Outcome = "error"
 		res.Code = code
 		res.Message = redactMessage(callErr.Error(), cl.Token())
-	case errors.Is(callErr, serveclient.ErrUnauthorized), errors.Is(callErr, serveclient.ErrReconnecting), errors.Is(callErr, serveclient.ErrDisconnected), neverSent(callErr):
+	case errors.Is(callErr, errForeverNoLead), errors.Is(callErr, serveclient.ErrUnauthorized), errors.Is(callErr, serveclient.ErrReconnecting), errors.Is(callErr, serveclient.ErrDisconnected), neverSent(callErr):
 		res.Outcome = "error"
 		res.Message = redactMessage(callErr.Error(), cl.Token())
 	default:
@@ -157,7 +172,7 @@ func (c *Controller) foreverCommander(ac *actionContext, op, verb string, args m
 			status = "error"
 		}
 		writeAny(ac.w, 200, map[string]any{"status": status, "action": ac.action, "verb": verb, "rpc": "commander",
-			"executed": okv, "message": res.Message, "reply": out.Reply, "result": json.RawMessage(scrubOrNull(jsonBytes(out), cl.Token()))})
+			"executed": okv, "message": res.Message, "reply": reply, "result": json.RawMessage(scrubOrNull(jsonBytes(out), cl.Token()))})
 		return
 	case isRPC:
 		// The daemon answered with an error (not-ported before C3, a
@@ -174,18 +189,89 @@ func (c *Controller) foreverCommander(ac *actionContext, op, verb string, args m
 	}
 }
 
-// moduleRefusal is the module's own words for a reply it marked not ok.
-func moduleRefusal(r tbm.Reply) string {
-	if r.Err != nil && r.Err.Message != "" {
-		return r.Err.Message
+// foreverReply is the module's answer to a control, as the page shows it: the lines that went out, the per-bot lines
+// and the waited order states.
+type foreverReply struct {
+	Sent  []string                   `json:"sent,omitempty"`
+	Bots  []serveclient.CommanderBot `json:"bots,omitempty"`
+	Final map[string]string          `json:"final,omitempty"`
+	Notes []string                   `json:"notes,omitempty"`
+}
+
+func foreverReplyOf(r serveclient.CommanderResult) foreverReply {
+	return foreverReply{Sent: r.Sent, Bots: r.Bots, Final: r.Final, Notes: r.Notes}
+}
+
+// foreverRefusal says whether the module refused an answered control, with its words. The daemon answers a call the
+// module refused outright as an RPC error, so what reaches here is a call that went out: it is a refusal when every
+// bot line is refused or a waited bot's order state is "fail:<code>".
+func foreverRefusal(r serveclient.CommanderResult) (string, bool) {
+	var parts []string
+	refused := 0
+	for _, b := range r.Bots {
+		if b.Status != "refused" {
+			continue
+		}
+		refused++
+		p := b.Bot + ": refused"
+		if b.Error != "" {
+			p += " " + b.Error
+		}
+		if b.Msg != "" {
+			p += ": " + b.Msg
+		}
+		parts = append(parts, p)
 	}
-	if r.Line != "" {
-		return r.Line
+	if len(r.Bots) > 0 && refused == len(r.Bots) {
+		return strings.Join(parts, "; "), false
 	}
-	if len(r.Lines) > 0 {
-		return r.Lines[len(r.Lines)-1]
+	names := make([]string, 0, len(r.Final))
+	for bot := range r.Final {
+		names = append(names, bot)
 	}
-	return "the module refused the control"
+	sort.Strings(names)
+	var failed []string
+	for _, bot := range names {
+		if st := r.Final[bot]; st != "ok" {
+			failed = append(failed, bot+": "+st)
+		}
+	}
+	if len(failed) > 0 {
+		return strings.Join(failed, "; "), false
+	}
+	return "", true
+}
+
+// foreverSummary is the module's answer in words for an executed control: the line sent and each bot's status.
+func foreverSummary(r serveclient.CommanderResult) string {
+	var parts []string
+	for _, b := range r.Bots {
+		parts = append(parts, b.Bot+": "+b.Status)
+	}
+	msg := strings.Join(r.Sent, "; ")
+	if len(parts) > 0 {
+		msg += " -> " + strings.Join(parts, ", ")
+	}
+	return msg
+}
+
+// errForeverNoLead is a run button pressed while the character commands no lead or several: nothing was sent.
+var errForeverNoLead = errors.New("the character commands no lead or more than one, so there is no run to name")
+
+// foreverOnlyLead is the lead of the character's one binding card, for the run buttons. A character that commands
+// none or more than one has no lead the page can mean.
+func foreverOnlyLead(ctx context.Context, cl *serveclient.Client) (string, error) {
+	res, err := cl.Commander(ctx, serveclient.CommanderParams{Op: "status"})
+	if err != nil {
+		if _, ok := serveclient.CodeOf(err); ok {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: reading the lead failed: %v", errForeverNoLead, err)
+	}
+	if len(res.Cards) != 1 {
+		return "", errForeverNoLead
+	}
+	return res.Cards[0].Lead, nil
 }
 
 func scrubOrNull(raw json.RawMessage, secret string) json.RawMessage {

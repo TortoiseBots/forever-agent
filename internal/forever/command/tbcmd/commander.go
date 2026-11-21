@@ -433,7 +433,7 @@ func parseCommanderCard(rec record) (Card, error) {
 	if out.Orders > 8 {
 		return out, fmt.Errorf("%w: binding orders=%d, the log holds at most 8", ErrBadReport, out.Orders)
 	}
-	if m, ok, err := rec.optionalUint32("map"); err != nil {
+	if m, ok, err := rec.optionalMapID("map"); err != nil {
 		return out, err
 	} else if ok {
 		out.Map, out.HasMap = m, true

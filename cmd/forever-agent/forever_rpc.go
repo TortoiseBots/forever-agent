@@ -24,7 +24,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
-const foreverRPCUsage = "usage: forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]"
+const foreverRPCUsage = "usage: forever-agent forever rpc [--timeout DUR] [--raw] [--leave-party] <dir> <method|list> [<params-json>|-]"
 
 // exitRPCCancel is a call aborted by Ctrl-C/SIGTERM or --timeout before the
 // daemon answered. The connection is closed and no reply was printed, so a
@@ -64,6 +64,12 @@ func foreverRPCCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "forever rpc: %v\n", err)
 		return exitUsage
 	}
+	if o.leaveParty {
+		if params, err = withLeaveParty(o.method, params); err != nil {
+			fmt.Fprintf(stderr, "forever rpc: %v\n", err)
+			return exitUsage
+		}
+	}
 	var result json.RawMessage
 	if err := c.Call(ctx, o.method, params, &result, o.timeout); err != nil {
 		return foreverRPCCallError(c, err, stderr)
@@ -91,6 +97,18 @@ type foreverRPCOptions struct {
 	paramsFromStdin bool
 	timeout         time.Duration
 	raw             bool
+	leaveParty      bool
+}
+
+// withLeaveParty sets leave_party on a commander bind's params: the character leaves its party first (without it
+// a bind from inside a party is refused). Any other call is a usage error.
+func withLeaveParty(method string, params json.RawMessage) (json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if method != "commander" || len(params) == 0 || json.Unmarshal(params, &obj) != nil || string(obj["op"]) != `"bind"` {
+		return nil, errors.New(`--leave-party goes with the commander method and an object with "op":"bind"`)
+	}
+	obj["leave_party"] = json.RawMessage("true")
+	return json.Marshal(obj)
 }
 
 // parseForeverRPCArgs parses forever rpc flags in any position (before,
@@ -103,6 +121,7 @@ func parseForeverRPCArgs(args []string, stderr io.Writer) (foreverRPCOptions, in
 	fs.SetOutput(stderr)
 	fs.StringVar(&timeoutStr, "timeout", "30s", "per-call timeout (Go duration)")
 	fs.BoolVar(&o.raw, "raw", false, "print the result compactly")
+	fs.BoolVar(&o.leaveParty, "leave-party", false, `with commander {"op":"bind"}: leave the character's party first (a bind from inside a party is refused otherwise)`)
 	pos, rest := splitPositionals(fs, args, 3)
 	if err := fs.Parse(rest); err != nil {
 		return o, exitUsage

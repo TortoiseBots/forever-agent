@@ -281,9 +281,11 @@ func checkSelectOnly(sql string, allowed ...map[string]bool) error {
 }
 
 // dbRemote is the exact remote command (S5): docker exec into the DB
-// container, reading the root password from the container env. The single
-// quotes keep $MARIADB_ROOT_PASSWORD unexpanded on the ssh host.
-const dbRemote = `docker exec -i %s sh -c 'export MYSQL_PWD="$MARIADB_ROOT_PASSWORD"; exec mysql -uroot --batch --skip-column-names --no-auto-rehash'`
+// container, reading the root password from the container env: a MariaDB
+// image names it MARIADB_ROOT_PASSWORD, a MySQL image MYSQL_ROOT_PASSWORD, and
+// either is taken (the first wins). The single quotes keep the variables
+// unexpanded on the ssh host.
+const dbRemote = `docker exec -i %s sh -c 'export MYSQL_PWD="${MARIADB_ROOT_PASSWORD:-$MYSQL_ROOT_PASSWORD}"; exec mysql -uroot --batch --skip-column-names --no-auto-rehash'`
 
 // dbWrap wraps the SELECT in the read-only session (S4): a READ ONLY
 // transaction (MariaDB refuses writes there with error 1792), plus a

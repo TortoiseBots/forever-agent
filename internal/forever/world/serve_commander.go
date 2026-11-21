@@ -35,7 +35,10 @@ type serveCommanderParams struct {
 	Args     []string `json:"args,omitempty"`     // cmd: the verb's arguments; run: the plan, the reason or the event sequence
 	WaitMS   int      `json:"wait_ms,omitempty"`  // cmd: the per-bot poll, 0..30000 ms (clamped); other ops ignore it
 	PauseRun bool     `json:"pause_run,omitempty"`
-	On       *bool    `json:"on,omitempty"`
+	// LeaveParty: bind only. A character in a party is refused (in-party) unless this is set, in which case it
+	// leaves the party first.
+	LeaveParty bool  `json:"leave_party,omitempty"`
+	On         *bool `json:"on,omitempty"`
 }
 
 // ServeCommander is a commander call's answer: the lines that went out, the module's per-bot lines, the binding
@@ -52,6 +55,7 @@ type ServeCommander struct {
 	PartyError string                `json:"party_error,omitempty"` // status: why the party state read failed
 	Runs       []ServeCommanderRun   `json:"runs,omitempty"`
 	Events     []ServeCommanderEvent `json:"events,omitempty"`
+	Notes      []string              `json:"notes,omitempty"` // what the call did on its own, beyond the lines it sent
 }
 
 // ServeCommanderBot is one bot's line of an answer.
@@ -211,7 +215,30 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander bind: lead_bot is required"}
 		}
-		return commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		// The module keeps only bindings made from outside the party. A character that is in a party is refused
+		// unless the call asks to leave it first; a leave that fails (an invalid roster included) ends the call, and
+		// nothing is bound after it.
+		var notes []string
+		if s.party != nil && s.party.InParty {
+			if !p.LeaveParty {
+				note := "this character is in a party and the module keeps only bindings made from outside the party: leave the party first, or bind with leave_party set to leave it"
+				return ServeCommander{}, commanderGame("in-party: "+note, ServeCommander{Notes: []string{note}})
+			}
+			if err := s.serveLeaveGroup(ctx); err != nil {
+				return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander bind: leaving the party first failed: " + err.Error()}
+			}
+			notes = append(notes, "left the party first (leave_party): the module keeps only bindings made from outside the party")
+		}
+		out, err := commanderAnswer(c.Bind(ctx, p.LeadBot, p.Bots))
+		out.Notes = append(out.Notes, notes...)
+		var re *rpc.Error
+		if errors.As(err, &re) {
+			if partial, ok := re.Data.(ServeCommander); ok {
+				partial.Notes = append(partial.Notes, notes...)
+				re.Data = partial
+			}
+		}
+		return out, err
 	case "unbind":
 		if strings.TrimSpace(p.LeadBot) == "" {
 			return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander unbind: lead_bot is required"}

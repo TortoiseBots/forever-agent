@@ -271,7 +271,13 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			case "silent":
 				// Nothing: the client's answer wait times out.
 			}
-		case wire.CMSGLeaveGroup, wire.CMSGRequestPartyMemberStats:
+		case wire.CMSGLeaveGroup:
+			f.mu.Lock()
+			f.serveLeft = true
+			f.mu.Unlock()
+			c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(partyGUID, wire.EmptyGUID, guid, nil, nil, true))
+			c.writeFrame(fakeSMSGGroupDestroyed, nil)
+		case wire.CMSGRequestPartyMemberStats:
 		case wire.CMSGAreaTrigger:
 			f.mu.Lock()
 			f.serveArea = true
@@ -1788,6 +1794,95 @@ func TestServeCommanderBindAndUnbind(t *testing.T) {
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// TestServeCommanderBindInParty: the module keeps only bindings made from outside the party. A character in a
+// party is refused with in-party (nothing sent, no leave) unless the bind sets leave_party, which leaves first, binds
+// and says so in notes. Outside a party no leave goes out and there is no note.
+func TestServeCommanderBindInParty(t *testing.T) {
+	cases := []struct {
+		name               string
+		inGroup, leave     bool
+		wantLeft, wantBind bool
+	}{
+		{"outside", false, false, false, true},
+		{"in party, no flag", true, false, false, false},
+		{"in party, leave_party", true, true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.serveMode = true
+			f.serveInvite = c.inGroup
+			f.serveAccept = "roster"
+			f.serveCommander = func(line string) []string {
+				switch line {
+				case ".tb commander status":
+					return []string{"commander-begin #T", "commander-end count=0 records=0 bindings=0 #T"}
+				case ".tb master party Tanka Xxxxxx":
+					return []string{
+						"master-begin #T",
+						"master bot=Tanka commander=Xxxxxx commander_in_party=no seq=44 status=queued #T",
+						"master-end target=party:Tanka commander=Xxxxxx count=1 records=1 bound=1 queued=1 refused=0 #T",
+					}
+				case ".tb commander status Xxxxxx":
+					return commanderCardLines("Tanka", "Tanka")
+				}
+				return nil
+			}
+			steps := &stepLog{}
+			a := startServeDaemon(t, f, steps)
+			waitServeState(t, a, "online", steps)
+			if c.inGroup {
+				waitServeUnits(t, a)
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					var party ServePartyInfo
+					json.Unmarshal(a.mustCall(t, "party", nil), &party)
+					if party.PendingInvite != "" || time.Now().After(deadline) {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				a.mustCall(t, "accept_invite", nil)
+			}
+			params := map[string]any{"op": "bind", "lead_bot": "Tanka"}
+			if c.leave {
+				params["leave_party"] = true
+			}
+			var bound ServeCommander
+			if c.wantBind {
+				json.Unmarshal(a.mustCall(t, "commander", params), &bound)
+			} else {
+				rerr := a.mustFail(t, "commander", params, -32003, "in-party")
+				if partial := commanderErrorData(t, rerr); len(partial.Sent) != 0 || len(partial.Notes) != 1 {
+					t.Fatalf("a refused bind sent %q, notes %q", partial.Sent, partial.Notes)
+				}
+			}
+			f.mu.Lock()
+			left := f.serveLeft
+			f.mu.Unlock()
+			if left != c.wantLeft {
+				t.Fatalf("the fake saw a leave=%v, want %v", left, c.wantLeft)
+			}
+			if c.wantBind {
+				if len(bound.Sent) != 1 || bound.Sent[0] != ".tb master party Tanka Xxxxxx" || bound.Card == nil {
+					t.Fatalf("bind answered %+v", bound)
+				}
+				if c.leave != (len(bound.Notes) == 1 && strings.Contains(bound.Notes[0], "left the party")) {
+					t.Fatalf("notes %q", bound.Notes)
+				}
+			}
+			for _, ln := range f.serveTBLines() {
+				if strings.HasPrefix(ln, ".tb master ") && !c.wantBind {
+					t.Fatalf("a refused bind sent %q", ln)
+				}
+			}
+			a.stop(t)
+			f.close()
+			f.wait(t)
+		})
+	}
 }
 
 func TestServeCommanderDuringReconnect(t *testing.T) {
