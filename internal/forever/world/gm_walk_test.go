@@ -4,6 +4,8 @@ package world
 // GM's own object, and marks with no position.
 
 import (
+	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -136,5 +138,86 @@ func TestGMWalkOptionsDefaults(t *testing.T) {
 	o := (&GMWalkOptions{Follow: "Gm"}).withDefaults()
 	if o.MarksFrom != GMWalkFromGM || o.Sample != GMWalkSample || o.ToleranceYd != GMWalkTolerance || o.FollowYd != GMWalkFollowYd {
 		t.Fatalf("defaults: %+v", o)
+	}
+}
+
+// gmWalkFakeSender is a virtual-clock sender: every wait moves the clock and walks the GM along an L-shaped road
+// (east, then north) at a steady pace, as the server's object updates would while the agent runs after it.
+type gmWalkFakeSender struct {
+	now   time.Time
+	onNow func(time.Time)
+}
+
+func (f *gmWalkFakeSender) Send(uint32, []byte) error { return nil }
+func (f *gmWalkFakeSender) Now() time.Time            { return f.now }
+func (f *gmWalkFakeSender) WaitUntil(ctx context.Context, until time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if until.After(f.now) {
+		f.now = until
+	}
+	f.onNow(f.now)
+	return nil
+}
+
+func TestGMWalkSamplesWhileChasing(t *testing.T) {
+	const (
+		leg   = 400.0 // yards per leg of the L
+		pace  = 5.0   // GM yards per second
+		start = 12.0  // the agent starts this far behind
+	)
+	t0 := time.Unix(1_000_000, 0)
+	s := gmWalkSession()
+	moveGM := func(now time.Time) {
+		d := math.Min(pace*now.Sub(t0).Seconds(), 2*leg)
+		x, y := float32(math.Min(d, leg)), float32(math.Max(d-leg, 0))
+		s.world.Apply(&objects.Update{Blocks: []objects.WorldFragment{{
+			GUID: gmWalkGM, ObjectType: objects.TypePlayer,
+			Movement:       &objects.MoveBlock{MovementUpdate: true, X: x, Y: y, Z: 30},
+			ValuesComplete: true,
+		}}}, now)
+	}
+	fs := &gmWalkFakeSender{now: t0, onNow: moveGM}
+	moveGM(t0)
+	s.mover = &objects.Mover{Sender: fs, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5, X: -start, Y: 0, Z: 30}
+	rec := &gmwalk.Recorder{}
+	smp := &gmWalkSampler{s: s, guid: gmWalkGM, rec: rec, sample: GMWalkSample, lastMove: t0, sampleAt: t0}
+	walkEnd := t0.Add(time.Duration(2 * leg / pace * float64(time.Second)))
+	// The main loop's shape: a chase whenever the agent is out of reach, retried after a failed leg.
+	for fs.now.Before(walkEnd.Add(10 * time.Second)) {
+		obj, _ := s.world.Object(gmWalkGM)
+		ax, ay, az, _ := s.mover.Position()
+		if objects.Distance(ax, ay, az, obj.X, obj.Y, obj.Z) > 2 {
+			_ = s.mover.ChaseTo(context.Background(), s.gmWalkChaseGoal(gmWalkGM, 2, smp, obj.X, obj.Y, obj.Z))
+		} else {
+			fs.now = fs.now.Add(time.Second)
+			moveGM(fs.now)
+		}
+		smp.tick(fs.now)
+	}
+	// 160 s of walking: one sample every 2 s, taken inside the chase, not only where chases end.
+	if got := rec.Samples(); got < 70 {
+		t.Fatalf("%d samples over an 160 s chase, want one per interval (>= 70)", got)
+	}
+	if smp.idle {
+		t.Fatal("idle bound fired while the GM kept walking (the agent's chase time counted as idleness)")
+	}
+	d, err := rec.Build(1.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Roads) != 1 {
+		t.Fatalf("roads: %d, want 1", len(d.Roads))
+	}
+	// The corner at (leg, 0) survives the thinning: some kept point lies within the tolerance of it.
+	near := false
+	for _, p := range d.Roads[0].Points {
+		if math.Hypot(float64(p[0])-leg, float64(p[1])) <= 1.0+pace*GMWalkSample.Seconds() {
+			near = true
+		}
+	}
+	if !near {
+		t.Fatalf("corner (%v, 0) missing from the road: %+v", leg, d.Roads[0].Points)
 	}
 }

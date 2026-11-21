@@ -186,10 +186,7 @@ func (s *session) gmWalk(ctx context.Context) (*GMWalkResult, error) {
 	defer func() { s.cmdFeed = prevFeed }()
 
 	start := time.Now()
-	lastMove := start
-	var lastX, lastY, lastZ float32
-	moved := false
-	sampleAt := time.Now()
+	smp := &gmWalkSampler{s: s, guid: guid, rec: rec, sample: o.Sample, lastMove: start, sampleAt: start}
 	for {
 		if err := ctx.Err(); err != nil {
 			break
@@ -200,28 +197,11 @@ func (s *session) gmWalk(ctx context.Context) (*GMWalkResult, error) {
 			// bound below ends the run if nothing moves.
 			s.opts.logf("gm-walk: the followed GM is not in the world model (holding position)")
 		} else {
-			gx, gy, gz := obj.X, obj.Y, obj.Z
 			ax, ay, az, _ := s.mover.Position()
-			if objects.Distance(ax, ay, az, gx, gy, gz) > o.FollowYd {
-				goal := objects.ChaseGoal{
-					Dest: func(time.Time) (float32, float32, float32) {
-						if cur, ok := s.world.Object(guid); ok {
-							return cur.X, cur.Y, cur.Z
-						}
-						return gx, gy, gz
-					},
-					Arrived: func(time.Time) bool {
-						bx, by, bz, _ := s.mover.Position()
-						var tx, ty, tz float32
-						if cur, ok := s.world.Object(guid); ok {
-							tx, ty, tz = cur.X, cur.Y, cur.Z
-						} else {
-							tx, ty, tz = gx, gy, gz
-						}
-						return objects.Distance(bx, by, bz, tx, ty, tz) <= o.FollowYd
-					},
-				}
-				if err := s.mover.ChaseTo(ctx, goal); err != nil {
+			if objects.Distance(ax, ay, az, obj.X, obj.Y, obj.Z) > o.FollowYd {
+				// The chase blocks, but its Dest/Arrived callbacks run each heartbeat and take the samples,
+				// so the road follows the GM while the agent runs after it.
+				if err := s.mover.ChaseTo(ctx, s.gmWalkChaseGoal(guid, o.FollowYd, smp, obj.X, obj.Y, obj.Z)); err != nil {
 					if ctx.Err() != nil {
 						break
 					}
@@ -237,22 +217,10 @@ func (s *session) gmWalk(ctx context.Context) (*GMWalkResult, error) {
 			}
 			return nil, err
 		}
-		now := time.Now()
-		if now.Sub(sampleAt) >= o.Sample {
-			sampleAt = now
-			smp, ok := s.gmWalkSample(guid)
-			if !ok {
-				continue
-			}
-			rec.AddSample(smp)
-			if !moved || dist3(smp.X, smp.Y, smp.Z, lastX, lastY, lastZ) > 0.5 {
-				lastX, lastY, lastZ, moved = smp.X, smp.Y, smp.Z, true
-				lastMove = now
-			}
-			if now.Sub(lastMove) > GMWalkIdle {
-				s.opts.logf("gm-walk: no movement for %s; ending the run", GMWalkIdle)
-				break
-			}
+		smp.tick(time.Now())
+		if smp.idle {
+			s.opts.logf("gm-walk: no movement for %s; ending the run", GMWalkIdle)
+			break
 		}
 	}
 	ended := time.Now()
@@ -307,4 +275,64 @@ func (s *session) settleFor() time.Duration {
 func dist3(ax, ay, az, bx, by, bz float32) float32 {
 	dx, dy, dz := ax-bx, ay-by, az-bz
 	return float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+}
+
+// gmWalkSampler takes the GM's samples on the sample interval and tracks the GM's real idleness. It is ticked
+// from the main loop and from inside a chase, on the session goroutine, so it needs no lock.
+type gmWalkSampler struct {
+	s        *session
+	guid     wire.GUID
+	rec      *gmwalk.Recorder
+	sample   time.Duration
+	sampleAt time.Time
+	lastMove time.Time
+	lastX    float32
+	lastY    float32
+	lastZ    float32
+	moved    bool
+	idle     bool
+}
+
+// tick takes a sample when the interval has passed and sets idle when the GM itself has not moved for
+// GMWalkIdle. The agent's own chase time never counts: only the GM's object position moves lastMove.
+func (m *gmWalkSampler) tick(now time.Time) {
+	if now.Sub(m.sampleAt) >= m.sample {
+		m.sampleAt = now
+		if smp, ok := m.s.gmWalkSample(m.guid); ok {
+			m.rec.AddSample(smp)
+			if !m.moved || dist3(smp.X, smp.Y, smp.Z, m.lastX, m.lastY, m.lastZ) > 0.5 {
+				m.lastX, m.lastY, m.lastZ, m.moved = smp.X, smp.Y, smp.Z, true
+				m.lastMove = now
+			}
+		}
+	}
+	if now.Sub(m.lastMove) > GMWalkIdle {
+		m.idle = true
+	}
+}
+
+// gmWalkChaseGoal aims a chase at the GM's latest model position. Both callbacks run once per heartbeat and
+// tick the sampler; Arrived also ends the chase when the GM has been idle too long.
+func (s *session) gmWalkChaseGoal(guid wire.GUID, followYd float32, smp *gmWalkSampler, gx, gy, gz float32) objects.ChaseGoal {
+	return objects.ChaseGoal{
+		Dest: func(now time.Time) (float32, float32, float32) {
+			smp.tick(now)
+			if cur, ok := s.world.Object(guid); ok {
+				return cur.X, cur.Y, cur.Z
+			}
+			return gx, gy, gz
+		},
+		Arrived: func(now time.Time) bool {
+			smp.tick(now)
+			if smp.idle {
+				return true
+			}
+			bx, by, bz, _ := s.mover.Position()
+			tx, ty, tz := gx, gy, gz
+			if cur, ok := s.world.Object(guid); ok {
+				tx, ty, tz = cur.X, cur.Y, cur.Z
+			}
+			return objects.Distance(bx, by, bz, tx, ty, tz) <= followYd
+		},
+	}
 }
