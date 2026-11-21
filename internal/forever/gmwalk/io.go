@@ -250,11 +250,19 @@ func WriteModule(path string, m ModuleData) error {
 	return writeAtomic(path, raw, 0o644)
 }
 
-// Recording is the --dry input: a hand-made list of samples and mark lines the offline path replays. It is
-// test data by design; the live walk never writes one.
+// MarkedLine is one dry-recording mark: the line the GM's whisper or say carried, applied at the sample
+// with index At (the live walk applies each mark at the sample the GM stood at when it arrived; the recording
+// names that sample explicitly so a hand-made file interleaves marks and movement).
+type MarkedLine struct {
+	At   int    `json:"at"`
+	Line string `json:"line"`
+}
+
+// Recording is the --dry input: hand-made samples plus the marks with the sample each belongs to. It is test
+// data by design; the live walk never writes one.
 type Recording struct {
-	Samples []Sample `json:"samples"`
-	Marks   []string `json:"marks"`
+	Samples []Sample     `json:"samples"`
+	Marks   []MarkedLine `json:"marks"`
 }
 
 func (r Recording) validate() error {
@@ -269,28 +277,32 @@ func (r Recording) validate() error {
 			return fmt.Errorf("gmwalk: sample %d is not finite", i)
 		}
 	}
+	for i, m := range r.Marks {
+		if m.At < 0 || m.At >= len(r.Samples) {
+			return fmt.Errorf("gmwalk: mark %d names sample %d of %d", i, m.At, len(r.Samples))
+		}
+		if len(m.Line) > MaxTextLen {
+			return fmt.Errorf("gmwalk: mark %d is past %d bytes", i, MaxTextLen)
+		}
+	}
 	return nil
 }
 
 // Replay runs a dry recording through the recorder: samples in order, each mark line parsed and applied at
-// the position the GM stood at. Unknown lines are counted, never stored.
+// its named sample. Unknown lines and marks past the end are counted, never stored.
 func Replay(rec Recording, toleranceYd float64) (WorldData, int, error) {
 	r := &Recorder{}
 	for _, s := range rec.Samples {
 		r.AddSample(s)
 	}
 	unknown := 0
-	for _, line := range rec.Marks {
-		if len(line) > MaxTextLen {
-			unknown++
-			continue
-		}
-		m, err := ParseMark(line)
+	for _, ml := range rec.Marks {
+		m, err := ParseMark(ml.Line)
 		if err != nil {
 			unknown++
 			continue
 		}
-		if err := r.Mark(m); err != nil {
+		if err := r.MarkAt(ml.At, m); err != nil {
 			unknown++
 		}
 	}

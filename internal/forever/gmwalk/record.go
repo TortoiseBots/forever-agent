@@ -56,25 +56,31 @@ func (r *Recorder) Samples() int { return len(r.samples) }
 // is ignored and counted. A split cuts the road after the last sample; samples always advance, so two splits
 // in a row are one.
 func (r *Recorder) Mark(m Mark) error {
-	if len(r.samples) == 0 {
+	return r.MarkAt(len(r.samples)-1, m)
+}
+
+// MarkAt records one parsed mark line at the named sample: the live walk passes the last sample, a dry
+// recording the sample the line belongs to. An index past the samples is a broken recording, not a panic.
+func (r *Recorder) MarkAt(at int, m Mark) error {
+	if at < 0 || at >= len(r.samples) {
 		r.ignored++
-		return fmt.Errorf("gmwalk: the mark %q arrived before any position", m.Kind)
+		return fmt.Errorf("gmwalk: the mark %q names sample %d of %d", m.Kind, at, len(r.samples))
 	}
 	if len(r.points)+len(r.zones) >= MaxMarks {
 		r.ignored++
 		return fmt.Errorf("gmwalk: the %d-mark bound is reached; %q is dropped", MaxMarks, m.Kind)
 	}
-	at := r.samples[len(r.samples)-1]
+	pos := r.samples[at]
 	switch m.Kind {
 	case MarkSplit:
 		if r.splits == nil {
 			r.splits = map[int]bool{}
 		}
-		r.splits[len(r.samples)-1] = true
+		r.splits[at] = true
 	case MarkPoint:
-		r.points = append(r.points, Point{Name: m.Name, Map: at.Map, X: at.X, Y: at.Y, Z: at.Z})
+		r.points = append(r.points, Point{Name: m.Name, Map: pos.Map, X: pos.X, Y: pos.Y, Z: pos.Z})
 	case MarkZone:
-		r.zones = append(r.zones, Zone{Name: m.Name, Map: at.Map, X: at.X, Y: at.Y, Z: at.Z, Radius: float32(m.Radius)})
+		r.zones = append(r.zones, Zone{Name: m.Name, Map: pos.Map, X: pos.X, Y: pos.Y, Z: pos.Z, Radius: float32(m.Radius)})
 	default:
 		r.ignored++
 		return fmt.Errorf("gmwalk: unknown mark kind %q", m.Kind)

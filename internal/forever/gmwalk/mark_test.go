@@ -95,7 +95,12 @@ func TestMarkBeforeAnySampleIsCounted(t *testing.T) {
 func TestReplayCountsUnknownLines(t *testing.T) {
 	rec := Recording{
 		Samples: []Sample{{Map: 0, X: 0}, {Map: 0, X: 10}},
-		Marks:   []string{"point gate", "hello there", "zone pit five", "split now"},
+		Marks: []MarkedLine{
+			{At: 0, Line: "point gate"},
+			{At: 0, Line: "hello there"},
+			{At: 1, Line: "zone pit five"},
+			{At: 1, Line: "split now"},
+		},
 	}
 	d, unknown, err := Replay(rec, 0.5)
 	if err != nil {
