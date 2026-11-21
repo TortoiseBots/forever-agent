@@ -15,6 +15,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/follow"
 	"github.com/pjerra/forever-agent/internal/forever/items"
+	"github.com/pjerra/forever-agent/internal/forever/mail"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/quest"
@@ -61,6 +62,14 @@ const (
 	actVerbQuestComplete = "quest-complete"
 	actVerbQuestReward   = "quest-reward"
 	actVerbQuestAbandon  = "quest-abandon"
+
+	// Round R7's mail steps (mail_act.go). `open` keeps its R0 meaning (the NPC menu); the mailbox is the
+	// current NPC with the mailbox flag, and `mail` lists it.
+	actVerbMail       = "mail"
+	actVerbMailTake   = "mail-take"
+	actVerbMailMoney  = "mail-money"
+	actVerbMailDelete = "mail-delete"
+	actVerbSendMail   = "send-mail"
 )
 
 // Act bounds: how far a step walks to talk, and how long it waits for a menu.
@@ -130,9 +139,10 @@ func ParseActStep(line string) (ActStep, error) {
 		actVerbEquip, actVerbStore, actVerbSwap, actVerbSplit, actVerbDestroy, actVerbUse,
 		actVerbVendor, actVerbBuy, actVerbSell, actVerbSellJunk, actVerbBuyback, actVerbRepair,
 		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
-		actVerbQuestReward, actVerbQuestAbandon:
+		actVerbQuestReward, actVerbQuestAbandon,
+		actVerbMail, actVerbMailTake, actVerbMailMoney, actVerbMailDelete, actVerbSendMail:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, mail, mail-take, mail-money, mail-delete, send-mail)", verb)
 	}
 	return step, nil
 }
@@ -186,6 +196,11 @@ type actState struct {
 	// steps need it, so they cannot run against a vendor nobody opened.
 	vendor    *items.VendorInventory
 	hasVendor bool
+	// mailbox is the mailbox the last `mail` step read, and mails its mails: the take and delete steps need
+	// them, so they cannot run against a mailbox nobody listed.
+	mailbox    wire.GUID
+	hasMailbox bool
+	mails      []mail.Mail
 	// lines are the step and menu lines this run printed, in order, bounded by actLinesMax (lines past it are
 	// counted in dropped). Only the run's own lines land here: the log sink also carries the chat, party and world
 	// handler lines of everything else the session does, and those never belong in an act answer.
@@ -279,6 +294,16 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actQuestReward(ctx, a, step)
 	case actVerbQuestAbandon:
 		return s.actQuestAbandon(ctx, a, step)
+	case actVerbMail:
+		return s.actMail(ctx, a, step)
+	case actVerbMailTake:
+		return s.actMailTakeItem(ctx, a, step)
+	case actVerbMailMoney:
+		return s.actMailTakeMoney(ctx, a, step)
+	case actVerbMailDelete:
+		return s.actMailDelete(ctx, a, step)
+	case actVerbSendMail:
+		return s.actSendMail(ctx, a, step)
 	default:
 		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
 	}

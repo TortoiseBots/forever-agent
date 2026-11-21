@@ -316,6 +316,21 @@ const (
 	SMSGInstanceInfo         uint32 = 0x4500DD
 )
 
+// The mail of round R7 (Opcodes.h:586-592, 786, 852, 910, 1876-1878, 2057): the get/list, take item and money, mark
+// read, delete and send client packets and the list, command-result and received-mail answers. Return-to-sender and
+// the next-mail-time query are out of scope: no round needs them.
+const (
+	CMSMMailGetList        uint32 = 0x3E00D8
+	CMSMMailTakeItem       uint32 = 0x3E00DA
+	CMSMMailTakeMoney      uint32 = 0x3E00D9
+	CMSMMailMarkAsRead     uint32 = 0x3E00DC
+	CMSMMailDelete         uint32 = 0x3D00E7
+	CMSMSendMail           uint32 = 0x430026
+	SMSMMailListResult     uint32 = 0x450200
+	SMSMMailCommandResult  uint32 = 0x4500E4
+	SMSMNotifyReceivedMail uint32 = 0x4500E5
+)
+
 // clientNames names the client opcodes this client sends, for error messages.
 var clientNames = map[uint32]string{
 	CMSGAuthSession:             "CMSG_AUTH_SESSION",
@@ -422,6 +437,13 @@ var clientNames = map[uint32]string{
 	CMSGQuestGiverChooseReward:  "CMSG_QUEST_GIVER_CHOOSE_REWARD",
 	CMSGQuestGiverCloseQuest:    "CMSG_QUEST_GIVER_CLOSE_QUEST",
 	CMSGQuestLogRemoveQuest:     "CMSG_QUEST_LOG_REMOVE_QUEST",
+
+	CMSMMailGetList:    "CMSG_MAIL_GET_LIST",
+	CMSMMailTakeItem:   "CMSG_MAIL_TAKE_ITEM",
+	CMSMMailTakeMoney:  "CMSG_MAIL_TAKE_MONEY",
+	CMSMMailMarkAsRead: "CMSG_MAIL_MARK_AS_READ",
+	CMSMMailDelete:     "CMSG_MAIL_DELETE",
+	CMSMSendMail:       "CMSG_SEND_MAIL",
 }
 
 // ClientName returns the core name of a client opcode this client sends, or its hex value.

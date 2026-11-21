@@ -583,6 +583,8 @@ type session struct {
 	// SMSG_INVENTORY_CHANGE_FAILURE, which a vendor purchase or buyback refusal arrives as (Player::_StoreOrEquipNewItem).
 	questStale string
 	invFail    *items.ChangeFailure
+	// Round R7: the mail answers since the last step cleared them (mail.go, mail_act.go).
+	mail mailWatch
 
 	// Round B1: the combat log. The ring lives with the session (decision 2 of the trials plan), is fed by the
 	// combat dispatch and outlives a reconnect, so serve's `events`, the watch's record and the trials runner read
@@ -2141,6 +2143,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		if isQuestPacket(p.Core) {
 			return s.handleQuest(p)
+		}
+		if isMailPacket(p.Core) {
+			return s.handleMail(p)
 		}
 		s.handleCombat(p)
 	}

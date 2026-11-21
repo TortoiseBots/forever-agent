@@ -84,8 +84,13 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x65000C, "SMSG_QUEST_UPDATE_ADD_CREDIT", 0x67000C, 0x67000C},
 		{0x65000D, "SMSG_QUEST_UPDATE_ADD_CREDIT_SIMPLE", 0x67000D, 0x67000D},
 		{0x650009, "SMSG_QUEST_UPDATE_COMPLETE", 0x670009, 0x670009},
-		{0x650007, "SMSG_QUEST_LOG_FULL", 0x670007, 0x670007},
 		{0x65001A, "SMSG_QUEST_GIVER_QUEST_LIST_MESSAGE", 0x67001A, 0x67001A},
+		// R7 mail answers: plain group arithmetic (group+1, then +1 for the shift) below index 0x98, and +1 for
+		// index >= 0x98 in group 0x46 before the shift step (0x450200 -> 0x470201); a 70959 client gets the net
+		// +1 of the 70755/70790 inserts from 0x4700ED on for the list result, and nothing for the two low answers.
+		{0x450200, "SMSG_MAIL_LIST_RESULT", 0x470201, 0x470202},
+		{0x4500E4, "SMSG_MAIL_COMMAND_RESULT", 0x4700E5, 0x4700E5},
+		{0x4500E5, "SMSG_NOTIFY_RECEIVED_MAIL", 0x4700E6, 0x4700E6},
 	}
 	for _, c := range cases {
 		if got := NewOpcodeTable(realmBuild70707, realmBuild70707).TranslateServerCore(c.core); got != c.w70707 {
@@ -214,7 +219,15 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E0030, "CMSG_QUEST_GIVER_REQUEST_REWARD", 0x3F0032, 0x3F0032},
 		{0x3E002F, "CMSG_QUEST_GIVER_CHOOSE_REWARD", 0x3F0031, 0x3F0031},
 		{0x3E00EC, "CMSG_QUEST_GIVER_CLOSE_QUEST", 0x3F00EF, 0x3F00EF},
-		{0x3E00D0, "CMSG_QUEST_LOG_REMOVE_QUEST", 0x3F00D3, 0x3F00D3},
+		// R7 mail and R9 battleground rows: the .inc table lists each one, so the wire number is the table's
+		// (0x3E00D8 -> 0x3F00DB, 0x3D00E7 -> 0x3E00E9, 0x430026 -> 0x440026, 0x3D018F -> 0x3E0191, ...),
+		// unchanged at 70938 (no client insert in these groups).
+		{0x3E00D8, "CMSG_MAIL_GET_LIST", 0x3F00DB, 0x3F00DB},
+		{0x3E00D9, "CMSG_MAIL_TAKE_MONEY", 0x3F00DC, 0x3F00DC},
+		{0x3E00DA, "CMSG_MAIL_TAKE_ITEM", 0x3F00DD, 0x3F00DD},
+		{0x3E00DC, "CMSG_MAIL_MARK_AS_READ", 0x3F00DF, 0x3F00DF},
+		{0x3D00E7, "CMSG_MAIL_DELETE", 0x3E00E9, 0x3E00E9},
+		{0x430026, "CMSG_SEND_MAIL", 0x440026, 0x440026},
 		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
 		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
 		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},
