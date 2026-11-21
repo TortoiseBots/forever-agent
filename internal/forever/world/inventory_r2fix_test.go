@@ -373,6 +373,10 @@ func playerThenActiveUpdate() []byte {
 	body.WriteU8(0)
 	body.WriteU8(0x03)
 	body.WriteU32(uint32(1)<<6 | uint32(1)<<7)
+	// A PlayerData mask naming a visible item (classic bit 238), which the decoder does not walk.
+	body.WriteBits(1<<7, 11)
+	body.WriteBits(1<<(238-7*32), 32)
+	body.FlushBits()
 	body.WriteBytes([]byte{0, 0, 0, 0, 0, 0, 0, 0})
 	blk := wire.NewWriter()
 	blk.WriteU8(0) // UpdateValues

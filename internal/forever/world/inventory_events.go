@@ -72,6 +72,8 @@ func (s *session) handleInventory(p worldconn.Packet) error {
 			return nil
 		}
 		s.tracker().Fail(f, now)
+		fail := f
+		s.invFail = &fail
 		switch {
 		case f.RequiredLevel != nil:
 			s.opts.logf("world: inventory refused: %s (needs level %d)", f.Name(), *f.RequiredLevel)
