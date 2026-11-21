@@ -258,19 +258,27 @@ type Report struct {
 	Captured int
 
 	// Round 3: what the client understood of the world and where it walked.
-	Objects       ObjectSummary
-	Units         []UnitRow
-	MonsterMoves  int
-	MoveRelays    int
-	Teleports     int
-	MapChanges    int
-	NamesAsked    int
-	NamesFound    int
-	Walked        bool
-	WalkFrom      [4]float32
-	WalkTo        [4]float32
-	BackAt        [4]float32
-	WalkClientPos [4]float32
+	Objects      ObjectSummary
+	Units        []UnitRow
+	MonsterMoves int
+	MoveRelays   int
+	Teleports    int
+	MapChanges   int
+	// Knockback: the packets the server sent the mover (and their acks), the ones relayed for other movers, and the
+	// landings paired with them. Missed counts the knockbacks whose landing never arrived (a timeout or a new
+	// knockback for the same unit).
+	KnockBacks        int
+	KnockBackAcks     int
+	KnockBackRelays   int
+	KnockBackLandings int
+	KnockBacksMissed  int
+	NamesAsked        int
+	NamesFound        int
+	Walked            bool
+	WalkFrom          [4]float32
+	WalkTo            [4]float32
+	BackAt            [4]float32
+	WalkClientPos     [4]float32
 	// The navmesh option's route (forever walk-check --navmesh DIR --to-x/y/z): the route kind, its
 	// corner count and length, and the terrain flags of the corridor.
 	NavPath        bool
@@ -487,6 +495,10 @@ type session struct {
 	self     wire.GUID
 	selfSeen bool
 	mover    *objects.Mover
+	// knockbacks is the takeoff of every mover a knockback packet named and whose landing has not arrived yet:
+	// keyed by GUID, with knockOrder the insertion order for the bound. Only the session goroutine touches them.
+	knocks     map[wire.GUID]knockPending
+	knockOrder []wire.GUID
 	// routeSelectGUID and routeSelectMap are the selection the route-walk has open for its `.gps` reads: the core
 	// reports the selected unit, so the character selects itself once per map and only again when either changes.
 	routeSelectGUID wire.GUID
@@ -2014,7 +2026,23 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			return fmt.Errorf("world: SMSG_MOVE_UPDATE: %w", err)
 		}
 		s.report.MoveRelays++
-		s.world.ApplyMoveUpdate(m.Info, nil, s.transport().Now())
+		now := s.transport().Now()
+		s.world.ApplyMoveUpdate(m.Info, nil, now)
+		s.knockMove(m.Info, now)
+	case wire.SMSGMoveUpdateKnockBack:
+		mi, err := objects.ParseMoveUpdateKnockBack(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_MOVE_UPDATE_KNOCK_BACK: %w", err)
+		}
+		now := s.transport().Now()
+		s.world.ApplyMoveUpdate(mi, nil, now)
+		s.relayedKnockback(mi, now)
+	case wire.SMSGMoveKnockBack:
+		k, err := objects.ParseKnockBack(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_MOVE_KNOCK_BACK: %w", err)
+		}
+		s.selfKnockback(k, s.transport().Now())
 	case wire.SMSGMoveUpdateTeleport:
 		m, err := objects.ParseMoveUpdateTeleport(p.Payload)
 		if err != nil {
@@ -2022,6 +2050,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		s.report.MoveRelays++
 		s.world.ApplyMoveUpdate(m.Info, m.Speeds, s.transport().Now())
+		s.cancelKnockback(m.Info.GUID)
 	case wire.SMSGMoveTeleport:
 		t, err := objects.ParseMoveTeleport(p.Payload)
 		if err != nil {
@@ -2029,6 +2058,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		s.report.Teleports++
 		s.world.ApplyTeleport(t, s.transport().Now())
+		s.cancelKnockback(t.MoverGUID)
 		if t.MoverGUID == s.self {
 			// The graveyard teleport carries TransportGUID as an *engaged* empty GUID: RepopAtGraveyard passes
 			// ObjectGuid::Empty into the Optional (Player.cpp:5254-5259), so the bit is set while the GUID is

@@ -115,6 +115,14 @@ const (
 	// Rule 19: the group must have a member within R19_REACH_YD of the higher-priority mob for it to be "in reach"
 	// of the pull.
 	R19_REACH_YD = 40.0
+
+	// Rule 20: a knockback the combat log pairs with its landing. A landing inside R20_PACK_YD of at least
+	// R20_MIN_NEW hostiles that were not that near the takeoff is "into a pack"; a landing R20_LEDGE_DROP_YD or
+	// more below the takeoff is "off a ledge". R20_FRAME_PAD_S is how near a frame has to be to place the mobs.
+	R20_PACK_YD       = 10.0
+	R20_MIN_NEW       = 2
+	R20_LEDGE_DROP_YD = 8.0
+	R20_FRAME_PAD_S   = 3.0
 )
 
 // interruptRows are a class's interrupt spells: the spell id, how long its cooldown runs from the member's own
@@ -154,4 +162,5 @@ var ruleNames = map[int]string{
 	17: "trash tactics: crowd control tried on an immune mob",
 	18: "trash tactics: listed dispellable debuff left on too long",
 	19: "trash tactics: lower-priority mob killed before a higher one",
+	20: "knockback: landed in a pack or off a ledge",
 }

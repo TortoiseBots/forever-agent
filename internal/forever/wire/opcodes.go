@@ -44,6 +44,9 @@ const (
 	CMSGMoveForceRunSpeedChangeAck  uint32 = 0x410029
 	CMSGMoveForceSwimSpeedChangeAck uint32 = 0x41002B
 	CMSGMoveWaterWalkAck            uint32 = 0x41003B
+	// CMSG_MOVE_KNOCK_BACK_ACK 0x410030 (Opcodes.h:644): the ack the mover sends for SMSG_MOVE_KNOCK_BACK
+	// (HandleMoveKnockBackAck, MovementHandler.cpp:760-776).
+	CMSGMoveKnockBackAck uint32 = 0x410030
 	// The death flow's client packets (Opcodes.h:252, 413, 777-778, 837, 846, 891, 981).
 	CMSGRepopRequest         uint32 = 0x3E00C8
 	CMSGReclaimCorpse        uint32 = 0x3E0076
@@ -127,10 +130,14 @@ const (
 	SMSGReadyCheckCompleted     uint32 = 0x45009B
 
 	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
-	SMSGUpdateObject             uint32 = 0x5C0000
-	SMSGOnMonsterMove            uint32 = 0x5E0002
-	SMSGMoveUpdate               uint32 = 0x5E000E
-	SMSGMoveUpdateTeleport       uint32 = 0x5E000F
+	SMSGUpdateObject       uint32 = 0x5C0000
+	SMSGOnMonsterMove      uint32 = 0x5E0002
+	SMSGMoveUpdate         uint32 = 0x5E000E
+	SMSGMoveUpdateTeleport uint32 = 0x5E000F
+	// SMSG_MOVE_UPDATE_KNOCK_BACK 0x5E0010 and SMSG_MOVE_KNOCK_BACK 0x5E0033 (Opcodes.h:1915, 2005): the
+	// knockback the acked mover broadcasts and the one the server sends to the mover itself.
+	SMSGMoveUpdateKnockBack      uint32 = 0x5E0010
+	SMSGMoveKnockBack            uint32 = 0x5E0033
 	SMSGMoveTeleport             uint32 = 0x5E0034
 	SMSGMoveRoot                 uint32 = 0x5E0029
 	SMSGMoveUnroot               uint32 = 0x5E002A
@@ -351,6 +358,7 @@ var clientNames = map[uint32]string{
 	CMSGMoveForceRunSpeedChangeAck:  "CMSG_MOVE_FORCE_RUN_SPEED_CHANGE_ACK",
 	CMSGMoveForceSwimSpeedChangeAck: "CMSG_MOVE_FORCE_SWIM_SPEED_CHANGE_ACK",
 	CMSGMoveWaterWalkAck:            "CMSG_MOVE_WATER_WALK_ACK",
+	CMSGMoveKnockBackAck:            "CMSG_MOVE_KNOCK_BACK_ACK",
 	CMSGQueryPlayerNames:            "CMSG_QUERY_PLAYER_NAMES",
 	CMSGQueryCreature:               "CMSG_QUERY_CREATURE",
 	CMSGQueryGameObject:             "CMSG_QUERY_GAME_OBJECT",

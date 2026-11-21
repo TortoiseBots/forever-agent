@@ -134,10 +134,28 @@ type CombatRow struct {
 	// debuff episode there when no removal row came first; 0 means the row did not say.
 	RemainingMS int64 `json:"remaining_ms,omitempty"`
 
+	// The knockback round's fields: the takeoff (knockback) or landing (knockback_land) position, the flight
+	// speeds and direction the mover's own packet carried, and the landing's air time and drop.
+	Pos       *CombatPoint `json:"pos,omitempty"`
+	Self      bool         `json:"self,omitempty"`
+	HorzSpeed float64      `json:"horz_speed,omitempty"`
+	VertSpeed float64      `json:"vert_speed,omitempty"`
+	DirX      float64      `json:"dir_x,omitempty"`
+	DirY      float64      `json:"dir_y,omitempty"`
+	AirMS     int64        `json:"air_ms,omitempty"`
+	Drop      float64      `json:"drop,omitempty"`
+
 	// T is the row on the run's clock (seconds from t=0), computed from Time and the run's start, and TKnown
 	// says whether it could be: a row with no readable time is unknown at every rule, never at t=0.
 	T      float64 `json:"-"`
 	TKnown bool    `json:"-"`
+}
+
+// CombatPoint is a knockback row's takeoff or landing position.
+type CombatPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 // DispelledAura is one aura a dispel row removed.

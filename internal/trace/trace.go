@@ -288,7 +288,7 @@ type Frame struct {
 // s and s2 (text); the agent's use those where they fit and add fields of their own. A field named like an envelope field is
 // written with an x_ prefix. The agent's events: leg, step, leader, order, refusal, run_start (a watch's module run zero, at
 // the run-start action's reply time), pull_start, pull_end, rest, walk_start, walk_end, death, wipe, boss_pull, boss_kill,
-// boss_wipe, combat_on, combat_off,
+// boss_wipe, combat_on, combat_off, knockback, knockback_land,
 // gm_shortcut, note, feed_stall, roster, stuck, unstuck, brain, brain_state, unreachable, trace_limit.
 type Event struct {
 	Envelope

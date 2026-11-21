@@ -421,6 +421,7 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.report.Position = pos
 	s.report.WalkClientPos = pos
 	s.world.ResetForMap(uint32(nw.MapID))
+	s.dropKnockbacks()
 	// A roster held before this character's own GUID was known is the old map's: the new map's party update follows
 	// the new world, so keeping it would apply a stale snapshot after the clear.
 	if s.party != nil && s.party.DropHeld() {
@@ -490,7 +491,7 @@ func (s *session) abortMapChange(a objects.TransferAborted) {
 func describesMapContent(core uint32) bool {
 	switch core {
 	case wire.SMSGUpdateObject, wire.SMSGOnMonsterMove, wire.SMSGMoveUpdate, wire.SMSGMoveUpdateTeleport,
-		wire.SMSGMoveTeleport, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
+		wire.SMSGMoveTeleport, wire.SMSGMoveKnockBack, wire.SMSGMoveUpdateKnockBack, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
 		wire.SMSGAIReaction, wire.SMSGAttackerStateUpdate, wire.SMSGSpellStart, wire.SMSGSpellGo,
 		wire.SMSGCastFailed, wire.SMSGSpellFailure, wire.SMSGSpellFailedOther, wire.SMSGSpellNonMeleeDamage,
 		wire.SMSGAuraUpdate, wire.SMSGPowerUpdate,
