@@ -590,20 +590,31 @@ func TestOOCBuffsStrangerDuringTheWindow(t *testing.T) {
 	fake := newFakeServe(t)
 	hire := "0x0000000000000002"
 	var mu sync.Mutex
-	start := time.Now()
+	var rows []map[string]any
 	fake.unitsFn = func() []map[string]any {
 		mu.Lock()
 		defer mu.Unlock()
-		rows := []map[string]any{{"guid": hire, "name": "Bheal", "type": "player",
+		out := []map[string]any{{"guid": hire, "name": "Bheal", "type": "player",
 			"level": float64(40), "max_power": float64(2000), "auras": []any{}}}
-		if time.Since(start) > 4*time.Second {
-			rows = append(rows, dcStranger())
-		}
-		return rows
+		return append(out, rows...)
 	}
 	rep, marks, _ := newRepA5(t, fake, oocTrial("ooc_buffs", map[string]any{"ooc_wait_s": float64(20)}),
 		"0x0000000000000001", hire)
 	rep.BotName = "Bheal"
+	// The stranger comes in with the window, not 4 s after the test began: the arena, the hire and the meal
+	// are settled first, and on a loaded machine that can take longer than any fixed time. The window marks
+	// its start with fight_start, so the stranger is there from the first look inside it.
+	units := fake.unitsFn
+	fake.unitsFn = func() []map[string]any {
+		if len(marks.Kinds("fight_start")) > 0 {
+			mu.Lock()
+			if len(rows) == 0 {
+				rows = []map[string]any{dcStranger()}
+			}
+			mu.Unlock()
+		}
+		return units()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	sit := &LiveSituation{Arenas: arenaA5(), ArenaStateDir: t.TempDir(), Now: time.Now,

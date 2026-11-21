@@ -116,6 +116,7 @@ func TestGMLineRunsOnTheConfirmedSelectionWhenSelectionAndChatAreOnSeparateThrea
 	var mu sync.Mutex
 	var inForce world.GUID
 	var ranOn []world.GUID
+	ran := make(chan struct{}, 1000) // one signal per chat line the world thread read
 	mapThread := make(chan world.GUID, 1000)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -154,6 +155,10 @@ func TestGMLineRunsOnTheConfirmedSelectionWhenSelectionAndChatAreOnSeparateThrea
 				mu.Lock()
 				ranOn = append(ranOn, inForce)
 				mu.Unlock()
+				select {
+				case ran <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
@@ -182,15 +187,30 @@ func TestGMLineRunsOnTheConfirmedSelectionWhenSelectionAndChatAreOnSeparateThrea
 	}
 	defer func() { gmAfterConfirm = nil }()
 	g := remoteGame{c: &commanderService{cur: func() *session.Session { return r.s }}}
+	// Ten lines: each one is the whole property (the line runs on the unit it was meant for), and the odd
+	// attempts still put a competitor's selection in force between the confirmation and the line. The other
+	// thirty added no case, only the race detector's time per goroutine round trip.
+	const lines = 10
 	sent := 0
-	for i := 0; i < 40; i++ {
+	for i := 0; i < lines; i++ {
 		if err := g.selectThenGM(context.Background(), lead, ".additem 9240"); err == nil {
 			sent++
 		}
 	}
 	close(stopSel)
 	swg.Wait()
-	time.Sleep(200 * time.Millisecond) // the world thread reads what is still on the wire
+	// Wait for the world thread to read every line that went out (it signals each one), not a fixed 200 ms: a
+	// line the server never got is the test's own failure, below.
+	drain := time.NewTimer(10 * time.Second)
+	defer drain.Stop()
+	for i := 0; i < sent; i++ {
+		select {
+		case <-ran:
+		case <-drain.C:
+			mu.Lock()
+			t.Fatalf("%d lines reported sent, the server read %d of them", sent, len(ranOn))
+		}
+	}
 	close(stop)
 	wg.Wait()
 	mu.Lock()
