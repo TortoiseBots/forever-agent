@@ -177,17 +177,15 @@ func TestSoapRefusalsKeepTheSecret(t *testing.T) {
 	}
 }
 
-// TestSoapLoopbackOnly: a non-loopback host is refused unless the explicit flag is set; a scheme, a userinfo and a
-// bad port are refused always.
+// TestSoapLoopbackOnly: a non-loopback host is refused, with no opt-out: the core's SOAP transport is plain HTTP,
+// so the administrator's password would cross the network in cleartext. A scheme, a userinfo and a bad port are
+// refused too.
 func TestSoapLoopbackOnly(t *testing.T) {
 	hosts := []string{"elsewhere", "remote-console", "another-machine"}
 	for _, host := range hosts {
 		if err := (Config{Host: host, User: "u"}).Validate(); err == nil {
-			t.Fatalf("%s was accepted without --allow-non-loopback", host)
+			t.Fatalf("%s was accepted", host)
 		}
-	}
-	if err := (Config{Host: "elsewhere", User: "u", AllowNonLoopback: true}).Validate(); err != nil {
-		t.Fatalf("the explicit flag still refuses a remote host: %v", err)
 	}
 	for _, host := range []string{"127.0.0.1", "localhost"} {
 		if err := (Config{Host: host, User: "u"}).Validate(); err != nil {
@@ -261,5 +259,47 @@ func TestSoapDeniedWorldCommands(t *testing.T) {
 	fake.reply = "Saved."
 	if _, err := c.Run(context.Background(), ".saveall"); err != nil {
 		t.Fatalf(".saveall: %v", err)
+	}
+}
+
+// TestSoapDeniedMatchingTheCorePrefix: the core resolves a command token as a case-insensitive prefix
+// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` is reload and `acc create` is account create. The guard
+// must see those spellings, and a longer word that merely starts with a denied word must still pass.
+func TestSoapDeniedMatchingTheCorePrefix(t *testing.T) {
+	for _, cmd := range []string{
+		".rel all", ".REL all", ".ser shutdown 1", ".acc create x y", ".ba X", ".unb X",
+		".npc a 1", ".npc d 2", ".npc m 3", ".npc s 4", ".np add 1", ".gob d 2", "gobject a 3",
+	} {
+		if !Denied(cmd) {
+			t.Fatalf("%q is not denied", cmd)
+		}
+	}
+	for _, cmd := range []string{
+		".saveall", ".pinfo", ".repop", ".announce hi", ".npc info 1", ".gobject near 2", ".services",
+	} {
+		if Denied(cmd) {
+			t.Fatalf("%q was denied", cmd)
+		}
+	}
+}
+
+// TestSoapFaultIsRedactedBeforeItIsCut: cut() keeps 160 bytes of a server text. If the password straddles that
+// boundary, cutting first leaves its prefix in the error line; redacting first removes the whole secret.
+func TestSoapFaultIsRedactedBeforeItIsCut(t *testing.T) {
+	t.Setenv("TEST_SOAP_PASSWORD", fakePassword)
+	fault := strings.Repeat("a", 155) + fakePassword + " tail"
+	fake := &fakeSoap{user: "console", password: fakePassword, status: http.StatusInternalServerError, fault: fault}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	c, err := New(soapConfig(t, srv, "console"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Run(context.Background(), ".saveall")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if strings.Contains(err.Error(), fakePassword[:5]) {
+		t.Fatal("the error keeps a prefix of the password")
 	}
 }

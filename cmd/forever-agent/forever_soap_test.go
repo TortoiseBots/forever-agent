@@ -91,13 +91,14 @@ func TestForeverSoapRefusesNonLoopbackAndDeniedCommands(t *testing.T) {
 	if code != exitUsage || !strings.Contains(errOut.String(), "not loopback") {
 		t.Fatalf("non-loopback: exit %d, stderr %q", code, errOut.String())
 	}
-	// The explicit flag gets past the host rule and fails only at the network, never as a usage refusal.
+	// There is no opt-out: a remote host would carry the administrator's password over plain HTTP, so the old flag
+	// is not defined at all.
 	out.Reset()
 	errOut.Reset()
 	code = foreverCmd(context.Background(), []string{"soap", "--host", "elsewhere", "--port", "9", "--user", "console",
 		"--password-file", pw, "--allow-non-loopback", "--timeout", "1s", ".saveall"}, &out, &errOut)
-	if code != 1 || strings.Contains(errOut.String(), "not loopback") {
-		t.Fatalf("allowed non-loopback: exit %d, stderr %q", code, errOut.String())
+	if code != exitUsage || !strings.Contains(errOut.String(), "allow-non-loopback") {
+		t.Fatalf("the non-loopback opt-out was accepted: exit %d, stderr %q", code, errOut.String())
 	}
 	// A world-changing command is refused before any request, flag or not.
 	fake := &cliSoapFake{user: "console", password: cliSoapPassword}

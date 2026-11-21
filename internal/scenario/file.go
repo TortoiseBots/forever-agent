@@ -905,7 +905,9 @@ func parseMatcher(raw json.RawMessage, _ bool) (Matcher, error) {
 
 // gmDenied reports whether expanded GM text changes the world for everyone
 // (AGENTS.md): reload, server, account, ban/unban, npc add/delete/move/set,
-// gobject add/delete.
+// gobject add/delete. The core resolves each token as a case-insensitive prefix
+// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` runs reload and is
+// refused too; a root word needs two characters, a subcommand any length.
 func gmDenied(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	t = strings.TrimPrefix(t, ".")
@@ -913,25 +915,34 @@ func gmDenied(text string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	switch fields[0] {
-	case "reload", "server", "account", "ban", "unban":
-		return true
+	for _, want := range []string{"reload", "server", "account", "ban", "unban"} {
+		if gmTokenPrefix(fields[0], want, 2) {
+			return true
+		}
 	}
 	if len(fields) >= 2 {
-		if fields[0] == "npc" {
-			switch fields[1] {
-			case "add", "delete", "move", "set":
-				return true
+		if gmTokenPrefix(fields[0], "npc", 2) {
+			for _, want := range []string{"add", "delete", "move", "set"} {
+				if gmTokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
-		if fields[0] == "gobject" {
-			switch fields[1] {
-			case "add", "delete":
-				return true
+		if gmTokenPrefix(fields[0], "gobject", 3) {
+			for _, want := range []string{"add", "delete"} {
+				if gmTokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// gmTokenPrefix is the core's command resolution: tok is a case-insensitive
+// prefix of want of at least min bytes.
+func gmTokenPrefix(tok, want string, min int) bool {
+	return len(tok) >= min && len(tok) <= len(want) && strings.HasPrefix(want, tok)
 }
 
 func gmLoadCheck(n int, text string) error {

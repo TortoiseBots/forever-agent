@@ -39,7 +39,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever run-report RECORD [--json] [--out DIR] [--repulls N] [--member-deaths N] [--slow-factor X]")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report --compare A B")
 		fmt.Fprintln(stderr, "       forever-agent forever deathrecap [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --name NAME")
-		fmt.Fprintln(stderr, "       forever-agent forever soap [--host H] [--port N] [--user NAME] [--password-file FILE | --password-env VAR] [--allow-non-loopback] [--timeout DURATION] COMMAND")
+		fmt.Fprintln(stderr, "       forever-agent forever soap [--host H] [--port N] [--user NAME] [--password-file FILE | --password-env VAR] [--timeout DURATION] COMMAND")
 		return exitUsage
 	}
 	switch args[0] {

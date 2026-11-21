@@ -96,3 +96,50 @@ func TestSoapStepRefusesWorldCommands(t *testing.T) {
 		t.Fatalf("console saw %v", console.sent)
 	}
 }
+
+// TestSoapStepRefusesAnExpandedWorldCommand: a variable can hide the command from the load-time check; the runtime
+// check reads the expanded text with the core's prefix matching, so it never reaches the backend.
+func TestSoapStepRefusesAnExpandedWorldCommand(t *testing.T) {
+	f := parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"vars":{"cmd":"account"},"steps":[
+		{"do":"soap","text":".${cmd} create x y"}
+	]}`)
+	console := &fakeConsole{}
+	clk := newFakeClock()
+	r := &Runner{Sessions: map[string]Caller{}, Now: clk.Now, Sleep: clk.Sleep, Out: io.Discard, Console: console}
+	a := &fakeCaller{char: "Testchar"}
+	r.Sessions["A"] = bindFake(a, clk)
+	res, err := r.Run(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Errors != 1 || res.Exit != 15 {
+		t.Fatalf("result %+v", res)
+	}
+	if len(console.sent) != 0 {
+		t.Fatalf("the expanded world command reached the console: %v", console.sent)
+	}
+	found := false
+	for _, rec := range res.Records {
+		if rec.T == "check" && strings.Contains(rec.Raw, "changes the world for everyone") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no refusal record: %+v", res.Records)
+	}
+
+	// The same spelling with the core's prefix resolution (`rel` is reload) is refused too.
+	f = parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"vars":{"cmd":"rel"},"steps":[
+		{"do":"soap","text":".${cmd} all"}
+	]}`)
+	console = &fakeConsole{}
+	r = &Runner{Sessions: map[string]Caller{}, Now: clk.Now, Sleep: clk.Sleep, Out: io.Discard, Console: console}
+	r.Sessions["A"] = bindFake(a, clk)
+	res, err = r.Run(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Errors != 1 || len(console.sent) != 0 {
+		t.Fatalf("prefix command: result %+v, console %v", res, console.sent)
+	}
+}

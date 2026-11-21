@@ -44,9 +44,6 @@ type Config struct {
 	// environment variable instead; when both are empty DefaultPasswordEnv is read.
 	PasswordFile string `json:"password_file,omitempty"`
 	PasswordEnv  string `json:"password_env,omitempty"`
-	// AllowNonLoopback permits a host that is not loopback. Off by default: the core's SOAP credential is an
-	// administrator's, and a setup helper has no reason to send it across the network.
-	AllowNonLoopback bool `json:"allow_non_loopback,omitempty"`
 	// TimeoutMS bounds one request; 0 is defaultTimeout, more than 2 minutes is refused.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
@@ -95,14 +92,14 @@ func (c Config) Validate() error {
 	if port < 1 {
 		return fmt.Errorf("soap: port %d is not a TCP port", port)
 	}
-	if !c.AllowNonLoopback {
-		if ip := net.ParseIP(host); ip != nil {
-			if !ip.IsLoopback() {
-				return fmt.Errorf("soap: %s is not loopback; the SOAP account is an administrator's (pass --allow-non-loopback to mean it)", host)
-			}
-		} else if !strings.EqualFold(host, "localhost") {
-			return fmt.Errorf("soap: host %q is not loopback (127.0.0.1, ::1 or localhost); pass --allow-non-loopback to mean it", host)
+	// The endpoint is loopback only, always: the core's SOAP transport is plain HTTP, so the administrator's
+	// credential would cross the network in cleartext. A name that resolves elsewhere is refused after the dial too.
+	if ip := net.ParseIP(host); ip != nil {
+		if !ip.IsLoopback() {
+			return fmt.Errorf("soap: %s is not loopback; the SOAP account is an administrator's and the endpoint is plain HTTP", host)
 		}
+	} else if !strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("soap: host %q is not loopback (127.0.0.1, ::1 or localhost)", host)
 	}
 	if strings.TrimSpace(c.User) == "" {
 		return errors.New("soap: no user (the SOAP account's name)")
@@ -154,7 +151,6 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	allow := cfg.AllowNonLoopback
 	dialer := &net.Dialer{Timeout: cfg.Timeout()}
 	tr := &http.Transport{
 		Proxy: nil,
@@ -163,12 +159,10 @@ func New(cfg Config) (*Client, error) {
 			if err != nil {
 				return nil, err
 			}
-			if !allow {
-				// The host check above is by name; a name can resolve elsewhere, so the connected peer is checked too.
-				if ta, ok := conn.RemoteAddr().(*net.TCPAddr); !ok || !ta.IP.IsLoopback() {
-					_ = conn.Close()
-					return nil, errors.New("soap: the endpoint resolved to a non-loopback address (pass --allow-non-loopback to mean it)")
-				}
+			// The host check above is by name; a name can resolve elsewhere, so the connected peer is checked too.
+			if ta, ok := conn.RemoteAddr().(*net.TCPAddr); !ok || !ta.IP.IsLoopback() {
+				_ = conn.Close()
+				return nil, errors.New("soap: the endpoint resolved to a non-loopback address; the endpoint is plain HTTP")
 			}
 			return conn, nil
 		},
@@ -230,13 +224,13 @@ func (c *Client) Run(ctx context.Context, command string) (string, error) {
 		return "", errors.New("soap: the account is not an administrator (HTTP 403)")
 	default:
 		if fault := faultString(raw); fault != "" {
-			return "", fmt.Errorf("soap: HTTP %d: %s", resp.StatusCode, c.redact(cut(fault)))
+			return "", fmt.Errorf("soap: HTTP %d: %s", resp.StatusCode, cut(c.redact(fault)))
 		}
 		return "", fmt.Errorf("soap: HTTP %d from %s", resp.StatusCode, c.cfg.Address())
 	}
 	text, fault := parseAnswer(raw)
 	if fault != "" {
-		return "", fmt.Errorf("soap: the command failed: %s", c.redact(cut(fault)))
+		return "", fmt.Errorf("soap: the command failed: %s", cut(c.redact(fault)))
 	}
 	if text == nil {
 		return "", errors.New("soap: the answer has no executeCommandResponse result")
@@ -330,7 +324,10 @@ func cut(s string) string {
 }
 
 // Denied reports a console command that changes the world for everyone, which AGENTS.md keeps off every GM path:
-// the same list the scenario runner's gm step uses.
+// the same list the scenario runner's gm step uses. The core resolves each token as a case-insensitive prefix
+// (StringStartsWithI, ChatCommand.cpp:240-246), so `rel` runs reload and `acc create` runs account create: a denied
+// word is matched the same way. Root words need two characters (a one-letter token is ambiguous enough that the
+// core rarely resolves it); subcommands match at any length.
 func Denied(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	t = strings.TrimPrefix(t, ".")
@@ -338,23 +335,31 @@ func Denied(text string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	switch fields[0] {
-	case "reload", "server", "account", "ban", "unban":
-		return true
+	for _, want := range []string{"reload", "server", "account", "ban", "unban"} {
+		if tokenPrefix(fields[0], want, 2) {
+			return true
+		}
 	}
 	if len(fields) >= 2 {
-		if fields[0] == "npc" {
-			switch fields[1] {
-			case "add", "delete", "move", "set":
-				return true
+		if tokenPrefix(fields[0], "npc", 2) {
+			for _, want := range []string{"add", "delete", "move", "set"} {
+				if tokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
-		if fields[0] == "gobject" {
-			switch fields[1] {
-			case "add", "delete":
-				return true
+		if tokenPrefix(fields[0], "gobject", 3) {
+			for _, want := range []string{"add", "delete"} {
+				if tokenPrefix(fields[1], want, 1) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// tokenPrefix reports whether tok is a prefix of want of at least min bytes, the core's command resolution.
+func tokenPrefix(tok, want string, min int) bool {
+	return len(tok) >= min && len(tok) <= len(want) && strings.HasPrefix(want, tok)
 }
