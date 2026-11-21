@@ -111,7 +111,7 @@ go vet ./...              -> rc=0
 The VM suite:
 
 ```
-RESULT: PASS  kind=ta wt=wt-fa-trash sha=e4c90a3d dirty=0 files=2390
+RESULT: PASS kind=ta sha=e4c90a3d dirty=0
 rc=0  vm_duration=976s  laptop_wall=983s
 ```
 
