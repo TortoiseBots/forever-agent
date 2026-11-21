@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/forever/soap"
 )
 
 // foreverEvent is one event_log row: the internal/events Event JSON keys,
@@ -357,6 +358,57 @@ func (rr *run) doGM(ctx context.Context, s *Step, n int, inFinally bool) bool {
 		return false
 	}
 	_ = st
+	if inFinally {
+		_ = rr.drain(ctx, n)
+		return true
+	}
+	if err := rr.settle(ctx, s, n); err != nil {
+		return false
+	}
+	return true
+}
+
+// doSoap runs one setup command on the server's console through the configured Console (the SOAP backend): no
+// session, no GM guard round trip, and no world-changing command. Without a backend the step is an ERROR naming
+// the flags, never a silent skip: a scenario that needs setup has not run it.
+func (rr *run) doSoap(ctx context.Context, s *Step, n int, inFinally bool) bool {
+	if rr.r.Console == nil {
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do),
+			"no SOAP console configured (pass --soap-user and its password to scenario run)")
+		if !inFinally {
+			rr.skipRest(n + 1)
+		}
+		return false
+	}
+	text, err := expand(s.Text, rr.vars, false)
+	if err != nil {
+		return rr.checkErr(n, s, err)
+	}
+	if err := soap.Allowed(text); err != nil {
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "%v", err)
+		if !inFinally {
+			rr.skipRest(n + 1)
+		}
+		return false
+	}
+	raw := fmt.Sprintf("  soap %s", text)
+	norm := fmt.Sprintf("  soap %s", s.Text)
+	rr.emit(Record{T: "action", Step: n, Raw: raw, Norm: norm})
+	out, err := rr.r.Console.Run(ctx, text)
+	if err != nil {
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "soap: %v", err)
+		if !inFinally {
+			rr.skipRest(n + 1)
+		}
+		return false
+	}
+	out = strings.TrimRight(out, "\r\n")
+	if out != "" {
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			rr.emit(Record{T: "result", Step: n, Raw: "  " + line, Norm: "  " + line})
+		}
+	}
 	if inFinally {
 		_ = rr.drain(ctx, n)
 		return true

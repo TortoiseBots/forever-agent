@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// EventRules are the rules that need the combat log beside the frames: 1, 2, 4, 8, 11 and 15.
+// EventRules are the rules that need the combat log beside the frames: 1, 2, 4, 8, 11, 15 and 20.
 func EventRules() []Rule {
 	return []Rule{
 		{1, ruleNames[1], Rule1, skipNoCombatLog},
@@ -21,6 +21,7 @@ func EventRules() []Rule {
 		{8, ruleNames[8], Rule8, skipAoENeedsNames},
 		{11, ruleNames[11], Rule11, skipNoCombatLog},
 		{15, ruleNames[15], Rule15, skipDispel},
+		{20, ruleNames[20], Rule20, skipNoKnockback},
 	}
 }
 

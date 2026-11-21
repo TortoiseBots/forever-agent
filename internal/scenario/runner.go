@@ -109,6 +109,13 @@ type Counter interface {
 	Count(ctx context.Context, q DBQuery) (int64, error)
 }
 
+// Console runs one console-capable server command without a client session: the setup path a SOAP endpoint gives
+// (internal/forever/soap). A scenario's `soap` steps use it; a runner without one refuses them, so a file that needs
+// the backend cannot pass silently.
+type Console interface {
+	Run(ctx context.Context, command string) (string, error)
+}
+
 // tokenReader is implemented by callers that remember their last bearer
 // token, so a reply echoing it can be redacted from the transcript.
 type tokenReader interface {
@@ -120,10 +127,12 @@ type tokenReader interface {
 type Runner struct {
 	Sessions map[string]Caller
 	DB       Counter // nil when the file has no db
-	Now      func() time.Time
-	Sleep    func(ctx context.Context, d time.Duration) error
-	Out      io.Writer // live raw lines (stdout); may be io.Discard
-	Quiet    bool
+	// Console is the server's console backend for `soap` steps (the SOAP endpoint); nil refuses those steps.
+	Console Console
+	Now     func() time.Time
+	Sleep   func(ctx context.Context, d time.Duration) error
+	Out     io.Writer // live raw lines (stdout); may be io.Discard
+	Quiet   bool
 }
 
 // Result is what a run leaves: the transcript records, the check outcomes,
@@ -478,6 +487,8 @@ func (rr *run) step(ctx context.Context, s *Step, n int) bool {
 		return rr.doAddonSend(ctx, s, n, false)
 	case "rpc":
 		return rr.doRPC(ctx, s, n, false)
+	case "soap":
+		return rr.doSoap(ctx, s, n, false)
 	case "sleep":
 		return rr.doSleep(ctx, s, n)
 	case "wait":

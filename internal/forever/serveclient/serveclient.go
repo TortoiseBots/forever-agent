@@ -353,6 +353,23 @@ type CombatRow struct {
 	Sample             *CombatSample  `json:"sample,omitempty"`
 	RemainingMS        int32          `json:"remaining_ms,omitempty"`
 	SpellName          string         `json:"spell_name,omitempty"`
+	Pos                *CombatPoint   `json:"pos,omitempty"`
+	Self               bool           `json:"self,omitempty"`
+	HorzSpeed          float32        `json:"horz_speed,omitempty"`
+	VertSpeed          float32        `json:"vert_speed,omitempty"`
+	DirX               float32        `json:"dir_x,omitempty"`
+	DirY               float32        `json:"dir_y,omitempty"`
+	AirMS              int32          `json:"air_ms,omitempty"`
+	Drop               float32        `json:"drop,omitempty"`
+	// Simulated marks a self landing the server never stated: its position is the client's flat arc, not a fact.
+	Simulated bool `json:"simulated,omitempty"`
+}
+
+// CombatPoint is a knockback row's takeoff or landing position.
+type CombatPoint struct {
+	X float32 `json:"x"`
+	Y float32 `json:"y"`
+	Z float32 `json:"z"`
 }
 
 // CombatDispel is one aura a dispel row removed.

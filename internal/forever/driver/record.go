@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -642,6 +643,63 @@ func combatErrText(err error) string {
 		return pe.Op + ": " + pe.Err.Error()
 	}
 	return err.Error()
+}
+
+// CombatEvents writes the knockback rows of a drained combat page to the trace: a knockback event at the takeoff and
+// a knockback_land event at the landing, on the trace's own clock. The combat log keeps every row; these events make
+// the knockback timeline readable beside the frames, where the landing's position can be compared with the mobs.
+func (r *Recorder) CombatEvents(rows []json.RawMessage) {
+	if r == nil || r.trace == nil {
+		return
+	}
+	for _, raw := range rows {
+		if !bytes.Contains(raw, []byte(`"kind":"knockback`)) {
+			continue
+		}
+		var row struct {
+			Kind   string `json:"kind"`
+			Time   string `json:"time"`
+			Source struct {
+				GUID string `json:"guid"`
+			} `json:"source"`
+			Pos *struct {
+				X float32 `json:"x"`
+				Y float32 `json:"y"`
+				Z float32 `json:"z"`
+			} `json:"pos"`
+			Self      bool    `json:"self"`
+			HorzSpeed float32 `json:"horz_speed"`
+			VertSpeed float32 `json:"vert_speed"`
+			AirMS     int64   `json:"air_ms"`
+			Drop      float32 `json:"drop"`
+			Simulated bool    `json:"simulated"`
+		}
+		if err := json.Unmarshal(raw, &row); err != nil {
+			continue
+		}
+		if row.Kind != "knockback" && row.Kind != "knockback_land" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, row.Time)
+		if err != nil {
+			continue
+		}
+		d := map[string]any{"guid": row.Source.GUID, "self": row.Self}
+		if row.Pos != nil {
+			d["pos"] = map[string]any{"x": row.Pos.X, "y": row.Pos.Y, "z": row.Pos.Z}
+		}
+		if row.Simulated {
+			d["simulated"] = true
+		}
+		if row.Kind == "knockback" {
+			d["speed_xy"] = row.HorzSpeed
+			d["speed_z"] = row.VertSpeed
+		} else {
+			d["air_ms"] = row.AirMS
+			d["drop"] = row.Drop
+		}
+		r.Event(t, row.Kind, d)
+	}
 }
 
 // CloseCombat closes the combat-log file once the watch has drained its last page.

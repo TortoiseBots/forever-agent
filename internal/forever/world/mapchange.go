@@ -231,6 +231,9 @@ func (s *session) openMapChange(phase transferPhase) {
 	s.mapChg.hasPending = false
 	s.mapChg.pendingMap = -1
 	s.mapChg.pendingRow = MapChangeRow{}
+	// A knockback flight belongs to the old map's positions: the transfer ends it, with no landing row (the map
+	// change is not a landing).
+	s.dropKnockbacks()
 	// A new transfer starts with an open instance gate: between the pending and the suspend token the server has
 	// not taken the character off its map yet (it removes it between the two packets, Player.cpp:1522-1527), so
 	// map content read there is still the old map's and may be applied to the old model. The suspend token closes
@@ -421,6 +424,7 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.report.Position = pos
 	s.report.WalkClientPos = pos
 	s.world.ResetForMap(uint32(nw.MapID))
+	s.dropKnockbacks()
 	// A roster held before this character's own GUID was known is the old map's: the new map's party update follows
 	// the new world, so keeping it would apply a stale snapshot after the clear.
 	if s.party != nil && s.party.DropHeld() {
@@ -490,7 +494,7 @@ func (s *session) abortMapChange(a objects.TransferAborted) {
 func describesMapContent(core uint32) bool {
 	switch core {
 	case wire.SMSGUpdateObject, wire.SMSGOnMonsterMove, wire.SMSGMoveUpdate, wire.SMSGMoveUpdateTeleport,
-		wire.SMSGMoveTeleport, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
+		wire.SMSGMoveTeleport, wire.SMSGMoveKnockBack, wire.SMSGMoveUpdateKnockBack, wire.SMSGAttackStart, wire.SMSGAttackStop, wire.SMSGCancelCombat,
 		wire.SMSGAIReaction, wire.SMSGAttackerStateUpdate, wire.SMSGSpellStart, wire.SMSGSpellGo,
 		wire.SMSGCastFailed, wire.SMSGSpellFailure, wire.SMSGSpellFailedOther, wire.SMSGSpellNonMeleeDamage,
 		wire.SMSGAuraUpdate, wire.SMSGPowerUpdate,
