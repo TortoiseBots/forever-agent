@@ -290,6 +290,13 @@ type Run struct {
 	// commander is the module's own party commander, from its roster: the bot the party is bound to and the one a
 	// watched run has to bring to the tank's side. It is never the character this client runs.
 	commander string
+	// memberGUID is a watched party member's guid by its lower-case name, once known: from the commander's binding
+	// card (the module's own guid of each bound bot, which needs no view of the party) or from this client's model.
+	// The first answer is kept, so a member's identity never changes within a run. cardReadAt is the last card
+	// read, cardBlind makes one line of a failing one.
+	memberGUID map[string]wire.GUID
+	cardReadAt time.Time
+	cardBlind  bool
 	// threatPollAt is the last `.tb threat` send, threatPushAt the last time the client's own pushed threat
 	// table answered and threatBase the last whole module report. While pushes flow the module's read is the
 	// fallback, at most one per threatFallbackEvery, and each answer is merged with the pushes: a mob only the

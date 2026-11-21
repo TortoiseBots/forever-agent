@@ -31,10 +31,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // watchRun is the watcher's own bookkeeping over the module's records.
@@ -416,27 +418,118 @@ func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
 		}
 		trep = &thr
 	}
-	r.rec.WatchFrame(r.now(), r.frameBots(rep), trep, r.frameGUID)
+	bots := r.frameBots(ctx, rep)
+	if r.stopReason != "" || r.lost {
+		return
+	}
+	r.rec.WatchFrame(r.now(), bots, trep, r.frameGUID)
 	w.frames++
 }
 
-// frameBots is the frame's party: the module's lines in the order it sent them, each with the guid this client's
-// model gives its name, the party slot's role and the auras the model holds for it.
-func (r *Run) frameBots(rep tbcmd.StateReport) []FrameBot {
+// frameBots is the frame's party: the module's lines in the order it sent them, each with its member's guid (see
+// memberGUIDOf), the party slot's role and the auras the model holds for it. A member whose guid is not known yet
+// has the commander's binding card read for it (cardReadEvery at most), so a frame never waits on a name.
+func (r *Run) frameBots(ctx context.Context, rep tbcmd.StateReport) []FrameBot {
 	out := make([]FrameBot, 0, len(rep.Bots))
+	for i := range rep.Bots {
+		if _, ok := r.memberGUIDOf(rep.Bots[i].Name); !ok {
+			r.readCardGUIDs(ctx)
+			break
+		}
+	}
 	for i := range rep.Bots {
 		b := rep.Bots[i]
 		fb := FrameBot{State: b}
 		if slot := r.partySlot(b.Name); slot >= 0 {
 			fb.Role = traceRole(slot)
 		}
-		if g, ok := r.world.PlayerGUID(b.Name); ok && !g.IsZero() {
+		if g, ok := r.memberGUIDOf(b.Name); ok {
 			fb.GUID = g.String()
 			fb.Auras = r.world.Auras(g)
 		}
 		out = append(out, fb)
 	}
 	return out
+}
+
+// cardReadEvery is the least time between two binding-card reads for a member whose guid is not known yet.
+const cardReadEvery = 30 * time.Second
+
+// memberGUIDOf is a watched member's guid: the one already learned for its name, else what this client's model
+// answers (the party roster, a player in view), which is then kept. A watch's observer is neither in the party nor,
+// as a rule, in view of it, so the model alone leaves every member unknown; the commander's binding card
+// (readCardGUIDs) is the source that needs neither.
+func (r *Run) memberGUIDOf(name string) (wire.GUID, bool) {
+	key := strings.ToLower(name)
+	if g, ok := r.memberGUID[key]; ok {
+		return g, true
+	}
+	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
+		r.learnMemberGUID(key, g)
+		return g, true
+	}
+	return wire.EmptyGUID, false
+}
+
+// learnMemberGUID keeps a member's guid; the first one learned stays.
+func (r *Run) learnMemberGUID(key string, g wire.GUID) {
+	if r.memberGUID == nil {
+		r.memberGUID = map[string]wire.GUID{}
+	}
+	if _, ok := r.memberGUID[key]; !ok {
+		r.memberGUID[key] = g
+	}
+}
+
+// readCardGUIDs reads the commander's binding card and learns each bound bot's guid from it: the module writes the
+// bot's database counter (guid=, decimal), which on this realm is the low half of the player's guid. A bot two
+// cards name with two counters is ambiguous and learned from neither. It reads at most once per cardReadEvery; a
+// failed read is one line until a read answers again.
+func (r *Run) readCardGUIDs(ctx context.Context) {
+	if r.lost || r.stopReason != "" {
+		return
+	}
+	now := r.now()
+	if !r.cardReadAt.IsZero() && now.Sub(r.cardReadAt) < cardReadEvery {
+		return
+	}
+	r.cardReadAt = now
+	rep, err := r.cmd.CommanderStatus(ctx, r.commander)
+	if errors.Is(err, ErrLinkLost) {
+		r.linkLost()
+		return
+	}
+	if err != nil {
+		if !r.cardBlind {
+			r.cardBlind = true
+			r.logf("watch: frame: the commander's card read failed (%v); members without a guid stay unnamed", err)
+		}
+		return
+	}
+	r.cardBlind = false
+	found := map[string]uint64{}
+	bad := map[string]bool{}
+	for _, c := range rep.Cards {
+		for _, m := range c.Members {
+			n, err := strconv.ParseUint(strings.TrimSpace(m.GUID), 10, 64)
+			if err != nil || n == 0 {
+				continue
+			}
+			key := strings.ToLower(m.Bot)
+			if have, ok := found[key]; ok && have != n {
+				bad[key] = true
+			}
+			found[key] = n
+		}
+	}
+	for key, n := range found {
+		if bad[key] {
+			continue
+		}
+		if g, ok := r.world.PlayerGUIDOfCounter(n); ok && !g.IsZero() {
+			r.learnMemberGUID(key, g)
+		}
+	}
 }
 
 // partySlot is a bot's party position, -1 for a name outside the party.
@@ -449,8 +542,8 @@ func (r *Run) partySlot(name string) int {
 	return -1
 }
 
-// frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when this client's model
-// holds the name. A pushed threat list names a unit by GUID when the model holds no name for it, and that text is
+// frameGUID is a unit name as the trace names it: its guid (the combat row's own text) when the watch has learned it
+// (memberGUIDOf: the binding card or this client's model). A pushed threat list names a unit by GUID when the model holds no name for it, and that text is
 // already the trace's own. Nothing when neither is true (a frame never carries a character name).
 func (r *Run) frameGUID(name string) string {
 	if name == "" {
@@ -459,7 +552,7 @@ func (r *Run) frameGUID(name string) string {
 	if len(name) >= 2 && name[0] == '0' && (name[1] == 'x' || name[1] == 'X') {
 		return name
 	}
-	if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
+	if g, ok := r.memberGUIDOf(name); ok {
 		return g.String()
 	}
 	return ""

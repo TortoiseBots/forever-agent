@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -243,6 +244,14 @@ type Fake struct {
 	DropOn string
 	// FailEvents answers every event read with this error (a read that fails while the status read answers).
 	FailEvents error
+	// OutOfView is the watch's usual observer: neither in the party nor in view of it, so PlayerGUID answers no
+	// member. The binding card still names every bound bot by its counter.
+	OutOfView bool
+	// SelfGUID is the observer's own player guid; PlayerGUIDOfCounter takes its realm from it.
+	SelfGUID wire.GUID
+	// FailCard answers every binding-card read with this error; CardReads counts the reads.
+	FailCard  error
+	CardReads int
 	// FailState answers every state read with this error (a read that blinds a watch's PREPARE).
 	FailState error
 	// BotCommander is the commander a watched roster names: the module's own bot, outside the party. Empty in a run,
@@ -1320,10 +1329,45 @@ func (f *Fake) Units() []Unit {
 	return out
 }
 
-// PlayerGUID is a party member's GUID.
+// PlayerGUID is a party member's GUID, or nothing for an observer out of view (OutOfView).
 func (f *Fake) PlayerGUID(name string) (wire.GUID, bool) {
+	if f.OutOfView {
+		return wire.EmptyGUID, false
+	}
 	g, ok := f.guidOf[name]
 	return g, ok
+}
+
+// PlayerGUIDOfCounter is a player guid on the observer's realm: SelfGUID's high half (type and realm bits) and the
+// counter as the low half.
+func (f *Fake) PlayerGUIDOfCounter(counter uint64) (wire.GUID, bool) {
+	return wire.PlayerGUIDOnRealmOf(f.SelfGUID, counter)
+}
+
+// CommanderStatus is the scripted module's binding card: the bot commander's card with each party bot's counter
+// (the low half of its guid, decimal, as the module writes it).
+func (f *Fake) CommanderStatus(ctx context.Context, commander string) (tbcmd.CommanderReport, error) {
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.CommanderReport{}, err
+	}
+	if err := f.linkErr(); err != nil {
+		return tbcmd.CommanderReport{}, err
+	}
+	f.CardReads++
+	if f.FailCard != nil {
+		return tbcmd.CommanderReport{}, f.FailCard
+	}
+	card := tbcmd.Card{Cmd: f.BotCommander, Online: true, Lead: f.cfg.Tank()}
+	for _, name := range f.cfg.Party {
+		b, ok := f.bots[name]
+		if !ok {
+			continue
+		}
+		card.Members = append(card.Members, tbcmd.CardMember{Bot: b.name, GUID: strconv.FormatUint(b.guid.Low, 10),
+			Class: b.class, Role: b.role, Level: b.level, Alive: true})
+	}
+	card.Bots, card.Bound = len(card.Members), len(card.Members)
+	return tbcmd.CommanderReport{Cards: []tbcmd.Card{card}, Bindings: 1}, nil
 }
 
 // Auras is the scripted world's aura list for a unit: a scenario sets it with SetAuras, and a bot without one has
