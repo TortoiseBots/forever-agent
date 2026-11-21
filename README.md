@@ -21,6 +21,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Death, release and resurrection (round 6) | **Works** (`forever-agent forever death-check`: the character dies, releases its spirit, learns where its corpse is, runs back and reclaims it, or answers another unit's resurrection offer or uses the spirit healer; the world model also tracks every other unit's dead/ghost/resurrected state; see [docs/forever/DEATH-R1-NOTES.md](docs/forever/DEATH-R1-NOTES.md)) |
 | Act runner and NPC talk (forever-world-r0) | **Works against the fake world; a live run is the next step** (`forever-agent forever act`: one scriptable step per world action — wait, gm (through the command channel and its GM guard), goto (navmesh or straight line), npc (find by entry, walk within reach), open (talk or quest hello by NpcFlags, prints the menu), select, close — with one `step N verb ok|fail reason` line each; see [docs/forever/ACT-R0-NOTES.md](docs/forever/ACT-R0-NOTES.md)) |
 | Loot and game objects (round LOOT-1) | **Works against the fake world; a live run is the next step** (`forever-agent forever loot-check` and `forever object-use`: open a corpse's or chest's window, read the items, money, slots and roll-required flags, vote on a group roll (need, greed or pass; need only when asked), take money and items, release the window; use a door, lever, chest or quest object and read its open/closed state from the object updates; see [docs/forever/LOOT-R1-NOTES.md](docs/forever/LOOT-R1-NOTES.md)) |
+| ForeverCore world export (round L3) | **Works offline** (`tools/dungeongen/export-forever.sh` writes the TSVs `worldspawn.Load` reads from a ForeverCore 25fc7ca world database — creatures, formations, waypoint paths, game objects, entrances — and `worldspawn.LoadForeverDB` reads them: levels in the order the core applies them (classic spawn row, classic entry row, content tuning; 60 when unknown), normal difficulty only, and the core groupAI bits mapped to the reader's flags (the leader's own formation row counts); see [docs/forever/L3-NOTES.md](docs/forever/L3-NOTES.md)) |
 | Command channel (round A6) | **Works** (`forever-agent forever cmd-check`: one chat-command line at a time, the reply's system lines collected by token or quiet window, the core's refusals as named errors, a GM guard before anything is sent, and the typed state/order/threat/party model of the server module's `.tb` commands; see [docs/forever/COMMAND-R1-NOTES.md](docs/forever/COMMAND-R1-NOTES.md)) |
 | WoW Forever Bots module (round A1) | **Works** (`forever-agent forever fb-check`: the module's own `.bot` commands through the command channel, orders by whisper (the bot answers) or by a party word, and state read through the module's add-on protocol — PING, the roster, one bot's detail — with chunked answers, a shape-based drift rule and a soft fallback to the chat commands; see [docs/forever/WFB-BOTS-R1-NOTES.md](docs/forever/WFB-BOTS-R1-NOTES.md)) |
 | WoW Forever Bots module, dungeon (round A2) | **Works** (`forever-agent forever fb-dungeon`: `.bot lfg` fills the party to five, `.bot dungeon` queues, entry is confirmed only by the module's `inside` **and** the client's own map change, the tank bot leads, and the run watches health, deaths, party lines and the module's events; see [docs/forever/WFB-BOTS-R2-NOTES.md](docs/forever/WFB-BOTS-R2-NOTES.md)) |
@@ -509,6 +510,17 @@ member is flagged apart as `unattributed-deaths` with its evidence. `forever-age
 --compare A B` takes two cards or two records and prints what got better or worse per leg (seconds, pulls,
 re-pulls, deaths, wipes) and per flag. The plan's recorded leg time is read from the record when it carries one;
 today's plan format records none, so the slow-leg flag stays quiet until a record has it.
+
+`forever-agent forever run-map DIR [--plan FILE] [--navmesh DIR [--parent MAP=PARENT]] [--out NAME.svg] [--html] [--names]
+[--floors auto|off|z1,z2] [--width PX] [--from-s N] [--to-s N] [--force]` draws a saved watch (the folder `dungeon-watch
+--out` wrote, or one of its trace files) as a top-down map: one SVG per floor (`<run_id>.svg`, `-f2` ... when the map has
+several) and, with `--html`, one self-contained HTML replay with a time slider (no script, font or image from outside the
+file). The routes are labelled by party slot (`--names` uses the characters' names), with the plan's route and pull groups,
+the creatures seen, boss kills, legs, pulls, deaths, wipes, pauses and practice rescues. `--navmesh` gives the
+floor background; without it, or in a build without cgo, the map says so. Output names are one file name written into DIR
+(no path, lowercase `.svg`), and nothing is overwritten without `--force`. `dungeon-watch --map --out DIR` writes the same
+two files after the summary; a failure there is one log line and never changes the watch's exit. See
+[docs/forever/MAP-M2-NOTES.md](docs/forever/MAP-M2-NOTES.md).
 
 `forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...`
 hunts bot misbehaviour in what a watch or a trials repeat recorded. An input is a watch folder (its trace, party

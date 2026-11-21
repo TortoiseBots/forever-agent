@@ -28,21 +28,53 @@ type Options struct {
 	PlanPath string
 	// Names labels the routes with the party's names from the trace's party records instead of its slots.
 	Names bool
+	// FromS and ToS keep one stretch of the trace, in seconds from its start (0: no limit). The run's zero is then
+	// the stretch's start, and the events outside it are reported in the notes.
+	FromS, ToS float64
+	// MaxFrames bounds the frames the map is built from (0: DefaultMaxFrames).
+	MaxFrames int
+}
+
+// DefaultMaxFrames is the most frames a map is built from; longer records are thinned evenly.
+const DefaultMaxFrames = 20000
+
+func (o Options) maxFrames() int {
+	if o.MaxFrames > 0 {
+		return o.MaxFrames
+	}
+	return DefaultMaxFrames
+}
+
+// Loaded is a run with what a command needs to name and write it.
+type Loaded struct {
+	Run     mapview.Run
+	Overlay *mapview.Overlay
+	// ID is the watch's run id: the trace's own, else its file's stem.
+	ID string
 }
 
 // Load reads the watch folder dir (or one of its trace files) and returns the run, the plan's overlay (nil when
 // no plan was found) and any note about what the record did not carry.
 func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
-	rec, err := bughunt.LoadWatch(dir, "")
+	l, err := LoadRun(dir, o)
 	if err != nil {
 		return mapview.Run{}, nil, err
+	}
+	return l.Run, l.Overlay, nil
+}
+
+// LoadRun is Load with the run's id.
+func LoadRun(dir string, o Options) (*Loaded, error) {
+	rec, err := bughunt.LoadWatchNoCombat(dir, "")
+	if err != nil {
+		return nil, err
 	}
 	folder := filepath.Dir(rec.Path)
 	stem := filepath.Join(folder, strings.TrimSuffix(filepath.Base(rec.Path), ".jsonl"))
 	sum, sumNote := readSummary(stem + ".forever-run.json")
 	plan, planNote, err := resolvePlan(o.PlanPath, sum, folder)
 	if err != nil {
-		return mapview.Run{}, nil, err
+		return nil, err
 	}
 	var mapID uint32
 	title := rec.Name
@@ -57,10 +89,31 @@ func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
 	cfg := mapview.DefaultConfig()
 	cfg.Map, cfg.Title = int(mapID), title
 	b := mapview.NewBuilder(cfg)
-	b.AddFrame(mapview.Frame{T: base, Map: mapID})
+	shift := 0.0
+	if o.FromS > 0 {
+		shift = o.FromS
+	}
+	b.AddFrame(mapview.Frame{T: base.Add(time.Duration(shift * float64(time.Second))), Map: mapID})
+	var kept []*bughunt.Frame
 	for _, f := range rec.Frames {
+		if f.T < shift || (o.ToS > 0 && f.T > o.ToS) {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	// A very long watch is thinned to about MaxFrames evenly spaced frames (the first and last always stay), so the
+	// map's own copy of the route and the creatures stays bounded.
+	step := 1
+	if max := o.maxFrames(); len(kept) > max {
+		step = (len(kept) + max - 1) / max
+	}
+	for i, f := range kept {
+		if step > 1 && i%step != 0 && i != len(kept)-1 {
+			continue
+		}
 		b.AddFrame(p.frame(f, base, mapID))
 	}
+	thinned := step > 1
 	var bosses []uint32
 	var overlay *mapview.Overlay
 	if plan != nil {
@@ -72,7 +125,10 @@ func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
 		// The trace does not know when it started: its times are still the run's, but the wall clock is not.
 		run.Start = time.Time{}
 	}
-	appendMarkers(&run, p, rec, sum, clock)
+	appendMarkers(&run, p, rec, sum, clock, shift)
+	if thinned {
+		run.Notes = append(run.Notes, fmt.Sprintf("a long record: every %d. frame is drawn (%d frames kept)", step, len(kept)))
+	}
 	run.Notes = append(run.Notes, clockNote(clock, clockFound))
 	if planNote != "" {
 		run.Notes = append(run.Notes, planNote)
@@ -80,7 +136,7 @@ func Load(dir string, o Options) (mapview.Run, *mapview.Overlay, error) {
 	if sumNote != "" {
 		run.Notes = append(run.Notes, sumNote)
 	}
-	return run, overlay, nil
+	return &Loaded{Run: run, Overlay: overlay, ID: rec.Name}, nil
 }
 
 // readSummary reads the watch's `<run_id>.forever-run.json`; nil and a note say why there is none.
@@ -115,6 +171,9 @@ func resolvePlan(path string, s *driver.RunSummary, dir string) (*dungeon.Plan, 
 	}
 	if name == "" {
 		return nil, "no plan named in the summary: no plan overlay and no map id", nil
+	}
+	if name == "." || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || filepath.Base(name) != name {
+		return nil, fmt.Sprintf("the summary's plan %q is not a plan name (no separators or ..): no plan overlay and no map id", name), nil
 	}
 	for _, cand := range planCandidates(name, dir) {
 		if _, err := os.Stat(cand); err != nil {
@@ -173,13 +232,22 @@ type party struct {
 	slot   map[string]string // guid text -> tank, healer or dpsN
 	bySlot map[string]string // tank, healer or dpsN -> the route's label
 	leader string
+	size   int // the members the run record names (0: it names none)
 }
 
-// newParty names the members in the order the frames list them. The module's role word places a member in its
+// newParty names the members in the party records' order (then any the frames add). The module's role word places a member in its
 // slot; a member without one takes the slot its place in the party gives (the leader is the tank, the second the
 // healer). With names set, the route is labelled with the party record's name.
 func newParty(rec *bughunt.Run, names bool) *party {
 	p := &party{label: map[string]string{}, slot: map[string]string{}, bySlot: map[string]string{}}
+	// The party index comes from the run record's party records; a member only the frames know follows them.
+	for _, g := range rec.PartyOrder {
+		if _, ok := p.slot[g]; !ok {
+			p.order = append(p.order, g)
+			p.slot[g] = ""
+		}
+	}
+	p.size = len(p.order)
 	for _, f := range rec.Frames {
 		for _, g := range f.Order {
 			if _, ok := p.slot[g]; !ok {
@@ -188,31 +256,53 @@ func newParty(rec *bughunt.Run, names bool) *party {
 			}
 		}
 	}
+	// An explicit role is kept; a member with no role (or a second one for a taken slot) never takes a slot another
+	// member has explicitly. Slots are unique, so a route's label is too.
 	dps := 0
-	for i, g := range p.order {
-		switch strings.ToLower(strings.TrimSpace(rec.Roles[g])) {
-		case "tank":
-			p.slot[g] = "tank"
-		case "heal", "healer":
-			p.slot[g] = "healer"
-		case "dps", "damage", "dd":
-			dps++
-			p.slot[g] = fmt.Sprintf("dps%d", dps)
-		default:
-			switch i {
-			case 0:
-				p.slot[g] = "tank"
-			case 1:
-				p.slot[g] = "healer"
-			default:
-				dps++
-				p.slot[g] = fmt.Sprintf("dps%d", dps)
+	nextDps := func() string { dps++; return fmt.Sprintf("dps%d", dps) }
+	taken := map[string]bool{}
+	claim := func(g, slot string) {
+		if slot == "tank" || slot == "healer" {
+			if taken[slot] {
+				slot = nextDps()
 			}
 		}
+		taken[slot] = true
+		p.slot[g] = slot
+	}
+	for _, g := range p.order {
+		switch strings.ToLower(strings.TrimSpace(rec.Roles[g])) {
+		case "tank":
+			claim(g, "tank")
+		case "heal", "healer":
+			claim(g, "healer")
+		case "dps", "damage", "dd":
+			claim(g, nextDps())
+		}
+	}
+	for i, g := range p.order {
+		if p.slot[g] != "" {
+			continue
+		}
+		switch {
+		case i == 0 && !taken["tank"]:
+			claim(g, "tank")
+		case i == 1 && !taken["healer"]:
+			claim(g, "healer")
+		default:
+			claim(g, nextDps())
+		}
+	}
+	used := map[string]bool{}
+	for _, g := range p.order {
 		p.label[g] = p.slot[g]
 		p.bySlot[p.slot[g]] = p.label[g]
 		if names {
 			if n := rec.Names[g]; n != "" {
+				if used[n] {
+					n = n + " (" + p.slot[g] + ")" // two members with one name keep two routes
+				}
+				used[n] = true
 				p.label[g] = n
 				p.bySlot[p.slot[g]] = n
 			}

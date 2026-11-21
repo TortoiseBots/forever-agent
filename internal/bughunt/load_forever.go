@@ -31,7 +31,13 @@ type foreverSummary struct {
 // summary (`<run_id>.forever-run.json`) and its combat log (`<run_id>.combatlog.jsonl`). A folder that holds several
 // runs takes the last run id, which is the newest one. The summary and the combat log are optional; a run without
 // them still loads (its rules that need the combat log stay silent).
-func LoadWatch(path, ds string) (*Run, error) {
+func LoadWatch(path, ds string) (*Run, error) { return loadWatch(path, ds, false) }
+
+// LoadWatchNoCombat is LoadWatch without the combat log: a reader that only needs the frames (the run map) does
+// not hold a log that can be hundreds of megabytes.
+func LoadWatchNoCombat(path, ds string) (*Run, error) { return loadWatch(path, ds, true) }
+
+func loadWatch(path, ds string, skipCombat bool) (*Run, error) {
 	tracePath, err := watchTracePath(path)
 	if err != nil {
 		return nil, err
@@ -65,6 +71,9 @@ func LoadWatch(path, ds string) (*Run, error) {
 		if g == "" {
 			continue
 		}
+		if !r.Subjects[g] {
+			r.PartyOrder = append(r.PartyOrder, g)
+		}
 		if m.Role != "" {
 			r.Roles[g] = m.Role
 		}
@@ -85,11 +94,13 @@ func LoadWatch(path, ds string) (*Run, error) {
 	if sum := readForeverSummary(filepath.Join(dir, simple+".forever-run.json")); sum != nil {
 		r.bossesFrom(sum)
 	}
-	rows, err := readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))
-	if err != nil {
-		return nil, err
+	if !skipCombat {
+		rows, err := readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))
+		if err != nil {
+			return nil, err
+		}
+		r.Combat = stampCombatRows(rows, r.T0)
 	}
-	r.Combat = stampCombatRows(rows, r.T0)
 	r.deathsFromFrames()
 	r.finalise()
 	return r, nil
