@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 )
 
 // Options configure the dashboard.
@@ -44,6 +46,9 @@ type Poller struct {
 	known    []Agent                 // the agents of the last discovery, for the handlers (agents itself belongs to Tick)
 	lastDis  time.Time
 	livePath map[string]string // agent id -> the trace file of its run, for the path layers
+
+	foreverProg map[string]foreverProgress // agent id -> the run's last progress mark (the card's stall)
+	foreverFeed map[string]*foreverFeed    // agent id -> the event_log tail already shown on the card
 }
 
 // NewPoller applies the defaults.
@@ -63,7 +68,7 @@ func NewPoller(o Options) *Poller {
 	if o.Agents == "" {
 		o.Agents = "auto"
 	}
-	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}}
+	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}, foreverProg: map[string]foreverProgress{}, foreverFeed: map[string]*foreverFeed{}}
 	p.state = []byte(`{"agents":[],"offline":[]}`)
 	return p
 }
@@ -106,7 +111,13 @@ func (p *Poller) Tick(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			if a.Kind == AgentForever {
-				c, raw := p.pollForeverOne(ctx, newForeverClient(a, p.opt.CallTimeout), now)
+				cl, err := serveclient.New(a.Addr, a.TokenPath)
+				if err != nil {
+					c := BuildForeverCard(Inputs{Agent: a, StatusErr: err.Error()})
+					res[i] = result{c, nil}
+					return
+				}
+				c, raw := p.pollForeverOne(ctx, a, cl, now)
 				res[i] = result{c, raw}
 				return
 			}

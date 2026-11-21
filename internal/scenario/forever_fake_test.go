@@ -25,6 +25,17 @@ type fakeForeverCaller struct {
 	results   map[string]fakeResult
 	notPorted map[string]bool
 	clk       *fakeClock
+
+	// statusScript answers the nth status call (n starts at 1); statusCalls
+	// counts them. nil keeps char/state "online".
+	statusScript func(n int) map[string]any
+	statusCalls  int
+	// failOnce is one scripted error per method: the next call of that
+	// method returns it and the entry is removed.
+	failOnce map[string]error
+	// eventLogRaw, when set, is the answer of every event_log call (encoded
+	// as JSON); the since argument is the call's since.
+	eventLogRaw func(since uint64) any
 }
 
 type fakeForeverEvent struct {
@@ -48,12 +59,26 @@ func (f *fakeForeverCaller) Call(ctx context.Context, method string, params any,
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeCall{Method: method, Params: raw})
 	char, status, results, notPorted := f.char, f.status, f.results, f.notPorted
+	if err := f.failOnce[method]; err != nil {
+		delete(f.failOnce, method)
+		f.mu.Unlock()
+		return nil, err
+	}
 	f.mu.Unlock()
 	switch method {
 	case "status":
 		st := map[string]any{"character": char, "state": "online"}
 		for k, v := range status {
 			st[k] = v
+		}
+		f.mu.Lock()
+		f.statusCalls++
+		n, script := f.statusCalls, f.statusScript
+		f.mu.Unlock()
+		if script != nil {
+			for k, v := range script(n) {
+				st[k] = v
+			}
 		}
 		if _, ok := st["last_seq"]; !ok {
 			f.mu.Lock()
@@ -64,6 +89,15 @@ func (f *fakeForeverCaller) Call(ctx context.Context, method string, params any,
 		return json.Marshal(st)
 	case "event_log":
 		f.mu.Lock()
+		if f.eventLogRaw != nil {
+			hook := f.eventLogRaw
+			f.mu.Unlock()
+			var p struct {
+				Since uint64 `json:"since"`
+			}
+			_ = json.Unmarshal(raw, &p)
+			return json.Marshal(hook(p.Since))
+		}
 		f.polls++
 		n := f.polls
 		script := f.script
@@ -178,4 +212,21 @@ func (f *fakeForeverCaller) callCount(method string) int { return len(f.called(m
 func bindForeverFake(c *fakeForeverCaller, clk *fakeClock) *fakeForeverCaller {
 	c.clk = clk
 	return c
+}
+
+// failNext makes the next call of method answer err, once.
+func (f *fakeForeverCaller) failNext(method string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failOnce == nil {
+		f.failOnce = map[string]error{}
+	}
+	f.failOnce[method] = err
+}
+
+// answerEventLog makes every event_log call answer hook(since).
+func (f *fakeForeverCaller) answerEventLog(hook func(since uint64) any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.eventLogRaw = hook
 }

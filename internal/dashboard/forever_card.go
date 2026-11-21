@@ -140,7 +140,7 @@ func keyOf(guid string) uint64 {
 // mobs from units; the run state and stall come from the commander run
 // record, not from dungeon_status.
 func BuildForeverCard(in Inputs) Card {
-	c := Card{ID: in.Agent.ID, RPC: in.Agent.Addr, Orders: []Order{}, Changes: []Change{}, Bots: []BotView{}, Mobs: []MobView{}, Events: []Event{}}
+	c := Card{ID: in.Agent.ID, RPC: in.Agent.Addr, Kind: "forever", Orders: []Order{}, Changes: []Change{}, Bots: []BotView{}, Mobs: []MobView{}, Events: []Event{}}
 	c.Run = RunInfo{State: "idle", Phase: "idle", Leg: -1}
 	c.Stall.Level = "none"
 	var st foreverStatus
@@ -175,8 +175,8 @@ func BuildForeverCard(in Inputs) Card {
 	}
 	fillForeverBots(&c, cmd.Status, party.Members)
 	fillForeverMobs(&c, units)
-	fillForeverRun(&c, cmd.Status, in.Now)
-	fillForeverStall(&c, in.Now)
+	fillForeverRun(&c, cmd.Status)
+	fillForeverStall(&c, in.Now, in.ProgressSince)
 	if in.Plan != nil {
 		c.Label.Map = in.Plan.Map
 	}
@@ -281,16 +281,18 @@ func fillForeverTargets(c *Card, units []foreverUnit) {
 		if !ok {
 			continue
 		}
+		self := keyOf(u.GUID)
+		if self == 0 {
+			continue
+		}
 		for i := range c.Bots {
-			if c.Bots[i].GUID == u.GUID {
+			if keyOf(c.Bots[i].GUID) == self {
 				c.Bots[i].Target = name
-				if keyOf(u.Target) != 0 {
-					c.Bots[i].TargetGUID = u.Target
-				}
+				c.Bots[i].TargetGUID = u.Target
 			}
 		}
 		for i := range c.Mobs {
-			if c.Mobs[i].GUID == u.GUID {
+			if keyOf(c.Mobs[i].GUID) == self {
 				c.Mobs[i].Target = name
 			}
 		}
@@ -300,7 +302,7 @@ func fillForeverTargets(c *Card, units []foreverUnit) {
 
 // fillForeverRun fills the run state from the commander run record: the plan,
 // the step counts, and a run state the page's buttons read.
-func fillForeverRun(c *Card, cmd *foreverCommanderStatus, now time.Time) {
+func fillForeverRun(c *Card, cmd *foreverCommanderStatus) {
 	if cmd == nil || cmd.Run == nil {
 		return
 	}
@@ -319,24 +321,27 @@ func fillForeverRun(c *Card, cmd *foreverCommanderStatus, now time.Time) {
 	c.Run.LastStep = r.Note
 	c.Counters.Deaths = r.Deaths
 	c.Counters.Wipes = r.Wipes
-	_ = now
 }
 
-// fillForeverStall sets the stall timer from the run's elapsed time: a run
-// that makes no progress stalls like a turtle one (yellow at two minutes
-// without progress, red at five). The commander report carries no
-// last-progress word, so elapsed is the stall age while running.
-func fillForeverStall(c *Card, now time.Time) {
-	_ = now
-	if c.Run.State != "running" {
+// fillForeverStall sets the stall timer from the last progress mark the
+// poller tracked: yellow at two minutes without progress, red at five, never
+// from the run's total elapsed time (a healthy long run is not stalled). A
+// run that is not running, and a run whose progress is not known yet, has no
+// stall: the module's run record carries no progress timestamp of its own.
+func fillForeverStall(c *Card, now, since time.Time) {
+	if c.Run.State != "running" || since.IsZero() {
 		c.Stall = StallInfo{Level: "none"}
 		return
 	}
-	secs := c.Run.Minutes * 60
+	age := now.Sub(since)
+	if age < 0 {
+		age = 0
+	}
+	secs := round1(age.Seconds())
 	switch {
-	case secs >= 5*60:
+	case age >= StallRed:
 		c.Stall = StallInfo{Seconds: secs, Level: "red"}
-	case secs >= 2*60:
+	case age >= StallYellow:
 		c.Stall = StallInfo{Seconds: secs, Level: "yellow"}
 	default:
 		c.Stall = StallInfo{Seconds: secs, Level: "none"}

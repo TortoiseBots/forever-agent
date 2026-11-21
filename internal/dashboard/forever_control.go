@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/serveclient"
+	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
 // This file is the Forever controls (L5): on a serve slot the buttons (stay,
@@ -82,80 +84,108 @@ func (c *Controller) runForever(ac *actionContext) {
 
 // foreverCommander is the shared body of the Forever controls: the params
 // name commander {op:verb}, the call is logged before it is sent, and the
-// module's reply (including run-active and not-available) is shown as the
-// reply. A transport failure is a 502 like the turtle run handler.
+// module's answer is shown as the reply. A JSON-RPC error is a failure: the
+// response is non-2xx with the code and the scrubbed message, never
+// status "ok" (a rejected pause, stop, attack or pull must not look
+// executed). A decoded module reply with ok false is a refusal: 200, but
+// status "error" and executed false. A transport failure is a 502 like the
+// turtle run handler; a call that never left is an error, one that may have
+// run is indeterminate.
 func (c *Controller) foreverCommander(ac *actionContext, op, verb string, args map[string]bool) {
-	cl := newForeverClient(ac.agent, controlTimeout)
 	ctx := ac.r.Context()
 	if err := c.log.append(controlRecord{Phase: "request", At: c.cfg.Now().UTC().Format(time.RFC3339), Who: ac.who, Via: ac.via, Peer: ac.peer,
 		Agent: ac.agent.ID, Action: ac.action, Verb: verb, Args: args}); err != nil {
 		jsonError(ac.w, 500, "the control log could not be written, so nothing was sent: %v", err)
 		return
 	}
-	params := map[string]any{"op": op, "verb": verb}
+	cl, err := serveclient.New(ac.agent.Addr, ac.agent.TokenPath)
+	if err != nil {
+		res := controlRecord{Phase: "result", At: c.cfg.Now().UTC().Format(time.RFC3339), Who: ac.who, Via: ac.via, Peer: ac.peer,
+			Agent: ac.agent.ID, Action: ac.action, Verb: verb, RPC: "commander", Outcome: "error", Message: err.Error()}
+		if lerr := c.log.append(res); lerr != nil {
+			logLost(res, lerr)
+		}
+		jsonError(ac.w, 502, "the serve client could not be opened, so nothing was sent: %v", err)
+		return
+	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlTimeout)
 	defer cancel()
-	out, rpcErr, callErr := foreverCommanderCall(wctx, cl, params)
-	okv := callErr == nil && rpcErr == nil
+	out, callErr := cl.Commander(wctx, serveclient.CommanderParams{Op: op, Verb: verb})
 	res := controlRecord{Phase: "result", At: c.cfg.Now().UTC().Format(time.RFC3339), Who: ac.who, Via: ac.via, Peer: ac.peer,
-		Agent: ac.agent.ID, Action: ac.action, Verb: verb, RPC: "commander", OK: &okv, Outcome: "ok"}
+		Agent: ac.agent.ID, Action: ac.action, Verb: verb, RPC: "commander", Outcome: "ok"}
+	okv := callErr == nil
+	code, isRPC := serveclient.CodeOf(callErr)
 	switch {
-	case callErr != nil:
-		if errors.Is(callErr, ErrIndeterminate) {
-			res.Outcome, res.OK = "indeterminate", nil
-		} else {
+	case callErr == nil:
+		if out.Reply.Kind != "" && !out.Reply.OK {
+			okv = false
 			res.Outcome = "error"
-			res.Message = redactMessage(callErr.Error(), cl.Token())
+			res.Message = redactMessage(moduleRefusal(out.Reply), cl.Token())
 		}
-	case rpcErr != nil:
+	case isRPC:
 		res.Outcome = "error"
-		res.Code = rpcErr.Code
-		res.Message = redactMessage(rpcErr.Message, cl.Token())
+		res.Code = code
+		res.Message = redactMessage(callErr.Error(), cl.Token())
+	case errors.Is(callErr, serveclient.ErrUnauthorized), errors.Is(callErr, serveclient.ErrReconnecting), errors.Is(callErr, serveclient.ErrDisconnected), neverSent(callErr):
+		res.Outcome = "error"
+		res.Message = redactMessage(callErr.Error(), cl.Token())
+	default:
+		res.Outcome = "indeterminate"
+	}
+	res.OK = &okv
+	if res.Outcome == "indeterminate" {
+		res.OK = nil
 	}
 	if lerr := c.log.append(res); lerr != nil {
 		logLost(res, lerr)
-		if callErr == nil && rpcErr == nil {
-			writeAny(ac.w, 200, map[string]any{"executed": true, "log_failed": true})
+		if callErr == nil {
+			status := "ok"
+			if !okv {
+				status = "error"
+			}
+			writeAny(ac.w, 200, map[string]any{"status": status, "executed": okv, "log_failed": true})
 			return
 		}
 	}
 	switch {
-	case errors.Is(callErr, ErrIndeterminate):
+	case callErr == nil:
+		// An answered call: the module's words, verbatim. A refusal (ok
+		// false) is marked as one, so the page and a script can tell it
+		// from an executed control.
+		status := "ok"
+		if !okv {
+			status = "error"
+		}
+		writeAny(ac.w, 200, map[string]any{"status": status, "action": ac.action, "verb": verb, "rpc": "commander",
+			"executed": okv, "message": res.Message, "reply": out.Reply, "result": json.RawMessage(scrubOrNull(jsonBytes(out), cl.Token()))})
+		return
+	case isRPC:
+		// The daemon answered with an error (not-ported before C3, a
+		// refusal, a lost link): a failed control, not status "ok".
+		writeAny(ac.w, 502, map[string]any{"status": "error", "action": ac.action, "verb": verb, "rpc": "commander",
+			"executed": false, "code": code, "message": redactMessage(res.Message, cl.Token())})
+		return
+	case res.Outcome == "indeterminate":
 		jsonError(ac.w, 502, "unknown: check the run status")
 		return
-	case callErr != nil:
-		jsonError(ac.w, 502, "%s", res.Message)
-		return
-	case rpcErr != nil:
-		// The daemon answered: run-active and not-available are the
-		// module's words, shown as the reply with its code.
-		writeAny(ac.w, 200, map[string]any{"status": "ok", "action": ac.action, "verb": verb, "rpc": "commander",
-			"reply": map[string]any{"code": rpcErr.Code, "message": rpcErr.Message}, "result": json.RawMessage(scrubOrNull(out, cl.Token()))})
+	default:
+		jsonError(ac.w, 502, "%s", redactMessage(res.Message, cl.Token()))
 		return
 	}
-	scrubbed, serr := Scrub(orNull(out), cl.Token())
-	if serr != nil {
-		jsonError(ac.w, 500, "the agent's answer could not be scrubbed: %v", serr)
-		return
-	}
-	writeAny(ac.w, 200, map[string]any{"status": "ok", "action": ac.action, "verb": verb, "rpc": "commander", "result": json.RawMessage(scrubbed)})
 }
 
-// foreverCommanderCall sends one commander call and splits the outcome:
-// result, JSON-RPC error, or transport/Indeterminate failure.
-func foreverCommanderCall(ctx context.Context, cl *foreverClient, params map[string]any) (json.RawMessage, *RPCError, error) {
-	out, err := cl.Call(ctx, "commander", params)
-	if err == nil {
-		return out, nil, nil
+// moduleRefusal is the module's own words for a reply it marked not ok.
+func moduleRefusal(r tbm.Reply) string {
+	if r.Err != nil && r.Err.Message != "" {
+		return r.Err.Message
 	}
-	var re *RPCError
-	if errors.As(err, &re) {
-		return nil, re, nil
+	if r.Line != "" {
+		return r.Line
 	}
-	if neverSent(err) {
-		return nil, nil, err
+	if len(r.Lines) > 0 {
+		return r.Lines[len(r.Lines)-1]
 	}
-	return nil, nil, fmt.Errorf("%w: %v", ErrIndeterminate, err)
+	return "the module refused the control"
 }
 
 func scrubOrNull(raw json.RawMessage, secret string) json.RawMessage {

@@ -70,7 +70,7 @@ func newForeverRig(t *testing.T, f *foreverFakeServe) (*Controller, Agent, *http
 	u, _ := url.Parse(f.srv.URL)
 	_, port, _ := splitHostPort(u.Host)
 	dir := t.TempDir()
-	agentTok := "forever-agent-token-0123456789abcdef"
+	agentTok := testAgentToken
 	must(t, os.WriteFile(filepath.Join(dir, "rpc-"+port+".token"), []byte(agentTok+"\n"), 0o600))
 	tokens := filepath.Join(dir, "control-tokens")
 	must(t, os.WriteFile(tokens, []byte("owner "+controlToken+"\n"), 0o600))
@@ -138,9 +138,13 @@ func tokenPathFor(t *testing.T, dir, hostport string) string {
 	return filepath.Join(dir, "rpc-"+hostport[i+1:]+".token")
 }
 
-// writeToken writes any token for the fake addr.
+// testAgentToken is a token of the shape rpc.NewToken writes (32 random
+// bytes, base64url, 43 chars): serveclient.New refuses anything else.
+const testAgentToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+
+// writeToken writes a valid agent token for the fake addr.
 func writeToken(t *testing.T, dir, hostport string) {
 	t.Helper()
 	i := strings.LastIndex(hostport, ":")
-	must(t, os.WriteFile(filepath.Join(dir, "rpc-"+hostport[i+1:]+".token"), []byte("tok\n"), 0o600))
+	must(t, os.WriteFile(filepath.Join(dir, "rpc-"+hostport[i+1:]+".token"), []byte(testAgentToken+"\n"), 0o600))
 }

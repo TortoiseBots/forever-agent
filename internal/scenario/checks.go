@@ -98,7 +98,7 @@ func (rr *run) fetch(ctx context.Context, st *sessState, waitMS int) error {
 
 // fetchForever pulls one event_log page into the session buffer.
 func (rr *run) fetchForever(ctx context.Context, st *sessState, waitMS int) error {
-	raw, err := st.caller.Call(ctx, "event_log",
+	raw, err := rr.callForever(ctx, st, "event_log",
 		map[string]any{"since": st.cursor, "limit": 1000, "wait_ms": waitMS},
 		time.Duration(waitMS)*time.Millisecond+10*time.Second)
 	if err != nil {
@@ -114,8 +114,7 @@ func (rr *run) fetchForever(ctx context.Context, st *sessState, waitMS int) erro
 	if len(st.buf) > 20000 {
 		st.buf = append([]events.Event(nil), st.buf[len(st.buf)-20000:]...)
 	}
-	st.cursor = page.Next
-	return nil
+	return st.advanceForever(page)
 }
 
 // waitMSLeft clamps the remaining time to a 1-1000 ms fetch wait.
@@ -343,6 +342,9 @@ func (rr *run) checkDBQuery(s *Step) (DBQuery, error) {
 		} else if rr.f.Server == ServerForever {
 			q.Forever = true
 		}
+	}
+	if q.Forever && rr.f != nil && rr.f.DB != nil {
+		q.Schema = rr.f.DB.Schema
 	}
 	if s.Table != "" {
 		q.Table = s.Table

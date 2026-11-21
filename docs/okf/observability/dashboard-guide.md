@@ -34,7 +34,9 @@ turtle-agent dashboard --agents 8765,8766
 
 A comma list of RPC ports or addresses replaces `auto`; `auto,8770` adds one to the automatic set. Only loopback addresses are accepted.
 
-A settings file with `"server": "forever"` marks a serve slot: that entry is polled with `status`, `party`, `commander {op:status}`, `units {within:100}` and the `event_log` tail instead of the turtle reads below, and its card fills the same fields (self, bots with role/hp/pos/order, mobs, run state, stall) from those answers. Guids stay text, keyed by the serve key.
+A settings file with `"server": "forever"` marks a serve slot: that entry is polled through the merged `internal/forever/serveclient` package with `status`, `party`, `commander {op:status}`, `units {within:100}` and the `event_log` tail instead of the turtle reads below, and its card fills the same fields (self, bots with role/hp/pos/order, mobs, run state, stall) from those answers. Guids stay text, keyed by the serve key. The slot is an offline card with a clear reason when its token file cannot be opened: the call is never sent unauthenticated. `-32005` is retried by the client; other errors leave that answer off the card.
+
+The stall is the time since the run last made progress (a step, leg, phase, note or self-position change tracked across polls), never the run's total elapsed time: a healthy ten-minute run is not stalled, and a run stuck for two or five minutes is yellow or red. Until the run's first progress is seen the card shows no stall. The `event_log` tail fills the card's event feed (bounded to the last 100 rows, deduplicated by seq), so deaths, chat and orders show under the map.
 
 ## 3. Point it at your folders
 

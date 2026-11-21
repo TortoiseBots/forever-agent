@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 )
 
 // TestForeverPollReadsServeMethods pins the Forever poll: status, party,
@@ -18,8 +20,11 @@ func TestForeverPollReadsServeMethods(t *testing.T) {
 	agent := Agent{ID: u, Addr: u, TokenPath: tokenPathFor(t, dir, u), Kind: AgentForever}
 	writeToken(t, dir, u)
 	p := NewPoller(Options{ConfigDir: dir, Agents: "127.0.0.1:1", Now: func() time.Time { return t0 }})
-	cl := newForeverClient(agent, 5*time.Second)
-	card, raw := p.pollForeverOne(context.Background(), cl, t0)
+	cl, err := serveclient.New(agent.Addr, agent.TokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, raw := p.pollForeverOne(context.Background(), agent, cl, t0)
 	if !card.Online || card.Character != "Atank" {
 		t.Fatalf("card: %+v", card)
 	}
@@ -82,16 +87,20 @@ func TestForeverPollStatusDownIsOffline(t *testing.T) {
 	agent := Agent{ID: u, Addr: u, TokenPath: tokenPathFor(t, dir, u), Kind: AgentForever}
 	writeToken(t, dir, u)
 	p := NewPoller(Options{ConfigDir: dir, Agents: "127.0.0.1:1", Now: func() time.Time { return t0 }})
-	cl := newForeverClient(agent, 5*time.Second)
-	card, _ := p.pollForeverOne(context.Background(), cl, t0)
+	cl, err := serveclient.New(agent.Addr, agent.TokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, _ := p.pollForeverOne(context.Background(), agent, cl, t0)
 	if card.Online || card.Error == "" {
 		t.Fatalf("offline card: %+v", card)
 	}
 }
 
 // TestForeverControlRunActiveShownAsReply pins that a commander answer with
-// the run-active outcome comes back shown as the reply: 200 with the
-// module's words, not a 502.
+// the run-active outcome comes back shown as the reply, marked as a refusal:
+// 200 with the module's words, status "error" and executed false (a rejected
+// control must never look executed), not a 502.
 func TestForeverControlRunActiveShownAsReply(t *testing.T) {
 	f := newForeverFakeServe(t)
 	f.results["commander"] = `{"sent":".tb summon","reply":{"kind":"commander-cmd","ok":false,"line":"run-active: a run is already active"}}`
@@ -103,21 +112,23 @@ func TestForeverControlRunActiveShownAsReply(t *testing.T) {
 	if out["rpc"] != "commander" {
 		t.Fatalf("rpc %v, want commander", out["rpc"])
 	}
+	if out["status"] != "error" || out["executed"] != false || out["message"] != "run-active: a run is already active" {
+		t.Fatalf("a refused control is not marked as one: %v", out)
+	}
 }
 
-// TestForeverControlNotPortedShownAsReply pins that a daemon without
-// commander (before C3) answers the control with the not-ported words shown
-// as the reply, not a transport failure.
-func TestForeverControlNotPortedShownAsReply(t *testing.T) {
+// TestForeverControlNotPortedIsError pins that a daemon without commander
+// (before C3) answers the control as a failed control: 502, status "error",
+// the daemon's code and its scrubbed message, never status "ok".
+func TestForeverControlNotPortedIsError(t *testing.T) {
 	f := newForeverFakeServe(t)
 	f.notPorted["commander"] = true
 	_, agent, srv := newForeverRig(t, f)
 	code, out := postForeverControl(t, srv, agent.ID, "run", `{"verb":"stop","confirm":true}`)
-	if code != 200 {
+	if code != 502 {
 		t.Fatalf("status %d (%v)", code, out)
 	}
-	rep, _ := out["reply"].(map[string]any)
-	if rep["code"] != float64(-32003) {
-		t.Fatalf("reply %v, want code -32003", out["reply"])
+	if out["status"] != "error" || out["code"] != float64(-32003) || out["executed"] != false {
+		t.Fatalf("not-ported control is not a failure: %v", out)
 	}
 }

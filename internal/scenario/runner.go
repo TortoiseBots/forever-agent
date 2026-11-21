@@ -3,9 +3,11 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
@@ -18,6 +20,84 @@ type RPCError struct {
 }
 
 func (e *RPCError) Error() string { return fmt.Sprintf("error %d: %s", e.Code, e.Message) }
+
+// The serve error codes the scenario reads (internal/rpc/server.go).
+const (
+	rpcCodeGame           = -32003
+	rpcCodeReconnecting   = -32005
+	rpcCodeForbidden      = -32006
+	rpcCodeMethodNotFound = -32601
+)
+
+// rpcCodeOf unwraps a JSON-RPC error's code.
+func rpcCodeOf(err error) (int, bool) {
+	var re *RPCError
+	if errors.As(err, &re) {
+		return re.Code, true
+	}
+	return 0, false
+}
+
+// notPortedErr reports a serve method the daemon does not implement: an
+// unknown method (-32601) or the typed -32003 whose message says so.
+func notPortedErr(err error) bool {
+	var re *RPCError
+	if !errors.As(err, &re) {
+		return false
+	}
+	return re.Code == rpcCodeMethodNotFound || (re.Code == rpcCodeGame && strings.Contains(re.Message, "not ported on this server"))
+}
+
+// stepRefusal reports the daemon's answer that the step's own call was
+// refused and changed nothing: a game refusal (-32003 that is not a
+// not-ported method) or the server's boundary (-32006). Only these two codes
+// may be swallowed by a step's ignore_error; -32002 (the session is gone) and
+// -32005 (still reconnecting past the retry budget) are failures of the link
+// and always ERROR.
+func stepRefusal(err error) bool {
+	code, ok := rpcCodeOf(err)
+	return ok && (code == rpcCodeGame || code == rpcCodeForbidden) && !notPortedErr(err)
+}
+
+// A serve slot that is still connecting when the run starts is waited for
+// (state "reconnecting"/"offline" turns into "online" seconds after a fleet
+// start), up to this long and never past the run's own deadline.
+const (
+	foreverStartWait  = time.Minute
+	foreverProbeEvery = time.Second
+)
+
+// foreverCursorError is an event_log answer the scenario cannot trust: the
+// daemon says more, but the cursor did not advance, or the cursor went
+// backwards (the daemon restarted). The drain refuses to loop or to reset its
+// cursor, so old events are never replayed into a PASS.
+type foreverCursorError struct {
+	Session     string
+	Since, Next uint64
+	More        bool
+}
+
+func (e *foreverCursorError) Error() string {
+	if e.More {
+		return fmt.Sprintf("session %s: event_log says more but the cursor did not advance (since %d, next %d)", e.Session, e.Since, e.Next)
+	}
+	return fmt.Sprintf("session %s: event_log cursor went backwards (since %d, next %d): the daemon restarted", e.Session, e.Since, e.Next)
+}
+
+// advanceForever moves the cursor only forward, and refuses a page that
+// cannot make progress. A next of 0 (or any value below the cursor) is a
+// reset and an error, never a cursor reset.
+func (st *sessState) advanceForever(page foreverPage) error {
+	switch {
+	case page.More && page.Next <= st.cursor:
+		return &foreverCursorError{Session: st.name, Since: st.cursor, Next: page.Next, More: true}
+	case page.Next < st.cursor:
+		return &foreverCursorError{Session: st.name, Since: st.cursor, Next: page.Next}
+	case page.Next > st.cursor:
+		st.cursor = page.Next
+	}
+	return nil
+}
 
 // Caller is one session: a JSON-RPC client of a running agent.
 type Caller interface {
@@ -169,13 +249,40 @@ func (r *Runner) Run(ctx context.Context, f *File) (*Result, error) {
 			// Serve reports the link lifecycle: "online" is the world, while
 			// the turtle agent reports "in_world". An empty state still
 			// passes (an older serve without the word counts as in world
-			// once it names a character).
-			switch stt.State {
-			case "", "online":
-			default:
-				rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: not in the world (status state %q)", name, stt.State)
-				res = rr.finish(res, 15)
-				return res, nil
+			// once it names a character). A slot still connecting is waited
+			// for, bounded by the run's deadline: a fleet start must not
+			// ERROR a slot that is seconds from online.
+			waitTo := rr.now().Add(foreverStartWait)
+			if rr.deadline.Before(waitTo) {
+				waitTo = rr.deadline
+			}
+			for stt.State != "" && stt.State != "online" {
+				if !rr.now().Before(waitTo) {
+					rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: not in the world (status state %q after waiting %s)", name, stt.State, foreverStartWait)
+					res = rr.finish(res, 15)
+					return res, nil
+				}
+				if err := rr.sleep(ctx, foreverProbeEvery); err != nil {
+					rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: interrupted while connecting (%v)", name, err)
+					res = rr.finish(res, 15)
+					return res, nil
+				}
+				raw, err = st.caller.Call(ctx, "status", map[string]any{}, 10*time.Second)
+				if err != nil {
+					rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: no answer at %s (%v): start the agent first", name, sd.RPC, err)
+					res = rr.finish(res, 15)
+					return res, nil
+				}
+				if err := json.Unmarshal(raw, &stt); err != nil {
+					rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: bad status reply (%v)", name, err)
+					res = rr.finish(res, 15)
+					return res, nil
+				}
+				if stt.Character == "" {
+					rr.errorf(0, fmt.Sprintf("session %s", name), "session %s: not in the world (status has no character)", name)
+					res = rr.finish(res, 15)
+					return res, nil
+				}
 			}
 		}
 		st.character = stt.Character

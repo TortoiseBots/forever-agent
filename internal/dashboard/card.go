@@ -45,13 +45,18 @@ type Inputs struct {
 	Party     json.RawMessage
 	Commander json.RawMessage
 	Units     json.RawMessage
+	// ProgressSince is when the Forever run last made progress (a step,
+	// leg, phase, note or position change), tracked across polls by the
+	// poller. Zero means no progress is known yet: the card shows no stall.
+	ProgressSince time.Time
 }
 
 // Card is everything the page shows of one commander. It is built from an allow-list of fields (never from a raw reply), so no
 // account, password or token can get into it; Scrub runs over it once more before it is served.
 type Card struct {
-	ID        string `json:"id"`  // the agent's normalized RPC address (host:port, IPv6 bracketed): unique per process
-	RPC       string `json:"rpc"` // the same address, for the page's older readers
+	ID        string `json:"id"`             // the agent's normalized RPC address (host:port, IPv6 bracketed): unique per process
+	RPC       string `json:"rpc"`            // the same address, for the page's older readers
+	Kind      string `json:"kind,omitempty"` // "forever" on a serve slot (the page's order buttons); empty on a turtle agent
 	Online    bool   `json:"online"`
 	Error     string `json:"error,omitempty"`
 	Character string `json:"character,omitempty"`

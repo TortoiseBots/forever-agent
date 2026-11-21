@@ -95,10 +95,32 @@ func (rr *run) drain(ctx context.Context, step int) error {
 	return nil
 }
 
+// callForever calls one serve method, retrying -32005 (reconnecting) every
+// 2 s for up to 60 s (the serveclient policy), never past the run's deadline.
+// A call the daemon did not run is safe to repeat; -32002 is not retried.
+func (rr *run) callForever(ctx context.Context, st *sessState, method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	until := rr.now().Add(60 * time.Second)
+	if rr.deadline.Before(until) {
+		until = rr.deadline
+	}
+	for {
+		raw, err := st.caller.Call(ctx, method, params, timeout)
+		if code, ok := rpcCodeOf(err); !ok || code != rpcCodeReconnecting {
+			return raw, err
+		}
+		if !rr.now().Add(2 * time.Second).Before(until) {
+			return nil, err
+		}
+		if serr := rr.sleep(ctx, 2*time.Second); serr != nil {
+			return nil, err
+		}
+	}
+}
+
 // drainForever drains one Forever slot through event_log.
 func (rr *run) drainForever(ctx context.Context, step int, name string, st *sessState) error {
 	for {
-		raw, err := st.caller.Call(ctx, "event_log", map[string]any{"since": st.cursor, "limit": 1000}, 20*time.Second)
+		raw, err := rr.callForever(ctx, st, "event_log", map[string]any{"since": st.cursor, "limit": 1000}, 20*time.Second)
 		if err != nil {
 			return fmt.Errorf("session %s: drain: %v", name, err)
 		}
@@ -117,7 +139,9 @@ func (rr *run) drainForever(ctx context.Context, step int, name string, st *sess
 		if len(st.buf) > 20000 {
 			st.buf = append([]events.Event(nil), st.buf[len(st.buf)-20000:]...)
 		}
-		st.cursor = page.Next
+		if err := st.advanceForever(page); err != nil {
+			return err
+		}
 		if !page.More {
 			break
 		}
@@ -314,14 +338,19 @@ func (rr *run) doGM(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	raw := fmt.Sprintf("  gm[%s] %s", s.Session, text)
 	norm := fmt.Sprintf("  gm[%s] %s", s.Session, s.Text)
 	rr.emit(Record{T: "action", Step: n, Session: s.Session, Raw: raw, Norm: norm})
+	// Serve's gm takes the same text (the GM guard still applies); a
+	// method the serve side does not port is an ERROR naming it.
+	var gmErr error
 	if rr.isForever(s.Session) {
-		// Serve's gm takes the same text (the GM guard still applies);
-		// a method the serve side does not port is an ERROR naming it.
-		if _, err := st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s)); err != nil {
-			return rr.foreverCallError(ctx, s, n, inFinally, "gm", err)
+		_, gmErr = rr.callForever(ctx, st, "gm", map[string]any{"text": text}, callTimeout(s))
+	} else {
+		_, gmErr = st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s))
+	}
+	if gmErr != nil {
+		if rr.isForever(s.Session) {
+			return rr.foreverCallError(ctx, s, n, inFinally, "gm", gmErr)
 		}
-	} else if _, err := st.caller.Call(ctx, "gm", map[string]any{"text": text}, callTimeout(s)); err != nil {
-		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "gm: %v", rpcText(err))
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "gm: %v", rpcText(gmErr))
 		if !inFinally {
 			rr.skipRest(n + 1)
 		}
@@ -358,7 +387,7 @@ func (rr *run) doBot(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	if rr.isForever(s.Session) {
 		// Serve's bot takes the bare module line (its prefix guard
 		// still applies); not-ported is an ERROR naming the method.
-		if _, err := st2.caller.Call(ctx, "bot", map[string]any{"line": cmd}, callTimeout(s)); err != nil {
+		if _, err := rr.callForever(ctx, st2, "bot", map[string]any{"line": cmd}, callTimeout(s)); err != nil {
 			return rr.foreverCallError(ctx, s, n, inFinally, "bot", err)
 		}
 	} else if _, err := st2.caller.Call(ctx, "gm", map[string]any{"text": ".bot " + cmd}, callTimeout(s)); err != nil {
@@ -402,12 +431,17 @@ func (rr *run) doAddonSend(ctx context.Context, s *Step, n int, inFinally bool) 
 	if to != "" {
 		params["to"] = to
 	}
+	var sendErr error
 	if rr.isForever(s.Session) {
-		if _, err := st.caller.Call(ctx, "addon_send", params, callTimeout(s)); err != nil {
-			return rr.foreverCallError(ctx, s, n, inFinally, "addon_send", err)
+		_, sendErr = rr.callForever(ctx, st, "addon_send", params, callTimeout(s))
+	} else {
+		_, sendErr = st.caller.Call(ctx, "addon_send", params, callTimeout(s))
+	}
+	if sendErr != nil {
+		if rr.isForever(s.Session) {
+			return rr.foreverCallError(ctx, s, n, inFinally, "addon_send", sendErr)
 		}
-	} else if _, err := st.caller.Call(ctx, "addon_send", params, callTimeout(s)); err != nil {
-		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "addon_send: %v", rpcText(err))
+		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "addon_send: %v", rpcText(sendErr))
 		if !inFinally {
 			rr.skipRest(n + 1)
 		}
@@ -455,7 +489,12 @@ func (rr *run) doRPC(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	rr.emit(Record{T: "action", Step: n, Session: s.Session,
 		Raw:  fmt.Sprintf("  rpc[%s] %s %s", s.Session, s.Method, cut(rp, maxParams)),
 		Norm: fmt.Sprintf("  rpc[%s] %s %s", s.Session, s.Method, cut(tp, maxParams))})
-	res, err := st.caller.Call(ctx, s.Method, pm, callTimeout(s))
+	var res json.RawMessage
+	if rr.isForever(s.Session) {
+		res, err = rr.callForever(ctx, st, s.Method, pm, callTimeout(s))
+	} else {
+		res, err = st.caller.Call(ctx, s.Method, pm, callTimeout(s))
+	}
 	if s.Method == "logout" {
 		st.closed, st.closedAt = true, n
 	}
@@ -463,7 +502,10 @@ func (rr *run) doRPC(ctx context.Context, s *Step, n int, inFinally bool) bool {
 		if rr.isForever(s.Session) {
 			rr.emit(Record{T: "result", Step: n, Session: s.Session,
 				Raw: fmt.Sprintf("    -> error %s", rpcText(err)), Norm: resultNorm(s, fmt.Sprintf("    -> error %s", rpcText(err)))})
-			if s.IgnoreError {
+			// ignore_error covers only the step's own refusals (-32003
+			// that is not a not-ported method, and -32006). -32002, a
+			// still-reconnecting -32005 and a missing method always ERROR.
+			if s.IgnoreError && stepRefusal(err) {
 				if inFinally {
 					_ = rr.drain(ctx, n)
 					return true

@@ -18,6 +18,7 @@ var (
 	sessionName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,15}$`)
 	varName      = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	hostName     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	schemaName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 	contName     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 	methodName   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	whereKey     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
@@ -49,10 +50,13 @@ type Session struct {
 	Server    ServerName `json:"server"`
 }
 
-// DBTarget is where the read-only DB helper runs its counts.
+// DBTarget is where the read-only DB helper runs its counts. Schema names
+// the ForeverCore characters database (its "schema" key); empty means the
+// core's default "characters". Turtle counts never read it.
 type DBTarget struct {
 	Host      string `json:"host"`
 	Container string `json:"container"`
+	Schema    string `json:"schema"`
 }
 
 // NormRule rewrites one regexp on every norm line, after the built-in rules.
@@ -665,15 +669,6 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			if table == "" {
 				return nil, fmt.Errorf("step %d (check_db): missing table", n)
 			}
-			if server == "" && !allowedTable(table) && !allowedForeverTable(table) {
-				return nil, fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, table)
-			}
-			if server == ServerTurtle && !allowedTable(table) {
-				return nil, fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, table)
-			}
-			if server == ServerForever && !allowedForeverTable(table) {
-				return nil, fmt.Errorf("step %d (check_db): table %s is not on the Forever allowlist (internal/scenario/db.go)", n, table)
-			}
 			s.Table = table
 			var where map[string]any
 			if v, ok := kv["where"]; ok {
@@ -959,12 +954,39 @@ func (f *File) validate() error {
 		if s.Do == "check_db" && f.DB == nil {
 			return fmt.Errorf("step %d (check_db): the scenario has no db target", n)
 		}
+		if s.Do == "check_db" && s.Table != "" {
+			// The step's slot: its own server key, else the session's,
+			// else the file's. A Forever table is schema-qualified with
+			// the db block's schema (never a hardcoded one).
+			slot := s.Server
+			if slot == "" {
+				if s.Session != "" {
+					slot = f.Sessions[s.Session].Server
+				} else {
+					slot = f.Server
+				}
+			}
+			if slot == ServerForever {
+				schema := ""
+				if f.DB != nil {
+					schema = f.DB.Schema
+				}
+				if !foreverTableOK(s.Table, schema) {
+					return fmt.Errorf("step %d (check_db): table %s is not on the Forever allowlist for schema %s (internal/scenario/db.go)", n, s.Table, foreverSchema(schema))
+				}
+			} else if !allowedTable(s.Table) {
+				return fmt.Errorf("step %d (check_db): table %s is not on the read-only allowlist (internal/scenario/db.go)", n, s.Table)
+			}
+		}
 		if f.DB != nil {
 			if !hostName.MatchString(f.DB.Host) || strings.Contains(f.DB.Host, "@") || strings.HasPrefix(f.DB.Host, "-") {
 				return fmt.Errorf("scenario: bad db host %q", f.DB.Host)
 			}
 			if !contName.MatchString(f.DB.Container) {
 				return fmt.Errorf("scenario: bad db container %q", f.DB.Container)
+			}
+			if f.DB.Schema != "" && !schemaName.MatchString(f.DB.Schema) {
+				return fmt.Errorf("scenario: bad db schema %q", f.DB.Schema)
 			}
 		}
 	}
@@ -974,6 +996,9 @@ func (f *File) validate() error {
 		}
 		if !contName.MatchString(f.DB.Container) {
 			return fmt.Errorf("scenario: bad db container %q", f.DB.Container)
+		}
+		if f.DB.Schema != "" && !schemaName.MatchString(f.DB.Schema) {
+			return fmt.Errorf("scenario: bad db schema %q", f.DB.Schema)
 		}
 	}
 	// Static var check: walk the steps in order; every ${x} must be a
