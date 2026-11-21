@@ -35,6 +35,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS --character NAME [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--reset] [--out DIR] [--navmesh DIR] [--dry]")
 		fmt.Fprintln(stderr, "       forever-agent forever dungeon-watch --leader NAME --plan FILE --character NAME [--rest host:port] [--rpc host:port] [--ca FILE] [--account EMAIL] [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry]")
 		fmt.Fprintln(stderr, "       forever-agent forever run-map DIR [--plan FILE] [--navmesh DIR [--parent MAP=PARENT[,..]]] [--out NAME.svg] [--html] [--names] [--floors auto|off|z1,z2] [--width PX] [--from-s N] [--to-s N] [--force]")
+		fmt.Fprintln(stderr, "       forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample DURATION] [--tolerance YD] [--follow-yd YD] [--out FILE] [--module-out FILE] [--dry FILE] [--settle DURATION] [--timeout DURATION] --rest host:port --rpc host:port --ca FILE --account EMAIL --character NAME")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report RECORD [--json] [--out DIR] [--repulls N] [--member-deaths N] [--slow-factor X]")
 		fmt.Fprintln(stderr, "       forever-agent forever run-report --compare A B")
 		fmt.Fprintln(stderr, "       forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]] [--stuck-after 20s] [--lone-combat-after 5s] [--group-distance 60] [--timeout 15s]")
@@ -91,6 +92,10 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverRunMapCmd(ctx, args[1:], stdout, stderr)
 	case "run-report":
 		return foreverRunReportCmd(ctx, args[1:], stdout, stderr)
+	case "gm-walk":
+		return foreverGMWalkCmd(ctx, args[1:], stdout, stderr)
+	case "gm-convert":
+		return foreverGMConvertCmd(ctx, args[1:], stdout, stderr)
 	case "dash-bots":
 		return foreverDashBotsCmd(ctx, args[1:], stdout, stderr)
 	default:

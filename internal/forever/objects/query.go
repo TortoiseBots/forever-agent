@@ -151,9 +151,15 @@ func ParseCreatureQueryResponse(payload []byte) ([]CreatureName, error) {
 // parseCreatureQueryResponse is ParseCreatureQueryResponse with the audit hook (the answer carries no GUIDs, but
 // the fixture sweep installs the hook on every parser so the audit never depends on a per-parser field list).
 func parseCreatureQueryResponse(payload []byte, hook func(wire.GUID)) ([]CreatureName, error) {
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("objects: creature response is empty")
+	}
 	b := reader(payload, hook)
 	count := int(b.ReadBits(6))
 	b.FlushBits()
+	if b.Err() != nil {
+		return nil, b.Err()
+	}
 	if count < 0 || count > 32 {
 		return nil, fmt.Errorf("objects: creature response names %d entries", count)
 	}
