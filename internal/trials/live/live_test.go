@@ -119,7 +119,7 @@ func TestCollectorRoundTrip(t *testing.T) {
 // refused, template lines pass.
 func TestGuardRefusesRaw(t *testing.T) {
 	fake := newFakeServe(t)
-	g := NewGuard(NewClient(fake.rpc()), GuardOptions{})
+	g := NewGuard(NewClient(fake.rpc()), GuardOptions{PlayerGUID: "0x1", Summons: func() []string { return []string{"0x2"} }})
 	ctx := context.Background()
 	for _, line := range []string{".npc delete", ".reset all", ".tb run stop", ".respawn", ".bot stop"} {
 		if err := g.SendText(ctx, line, TargetNone, ""); err == nil {

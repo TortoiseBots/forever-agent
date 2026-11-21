@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -181,111 +182,303 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-const itemScanInv = "itemscan bot=Bheal item=1708 exists=yes name=Sweet%%20Nectar class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no slot=0 why= #T"
-
-func scanReply(inv int) []string {
-	return []string{"itemscan-begin #T", fmt.Sprintf(itemScanInv, inv),
-		"itemscan-end bot=Bheal count=1 records=1 exist=1 canequip=0 #T"}
+// bagModel is a hire's bags as the real module shows them: itemscan reports
+// the bag count, `.tb additem <bot> <id> [n]` adds n (bags full past cap),
+// `.tb removeitem <bot> <id> [n]` takes out n (all when no n) and answers the
+// real record shape. The old negative-count additem is NOT a removal here
+// (the real module answers a usage line that names no bot, so the typed
+// layer sees nothing): a clear that still used it changes nothing and its
+// read-back fails.
+type bagModel struct {
+	mu    sync.Mutex
+	inv   map[uint32]int
+	cap   int
+	lines []string
 }
 
-// Defect 4: what the trial gave is taken back out of the bags; the clear is
-// proved by an itemscan read-back and the mark is dropped only then.
-func TestClearGivenRemovesAndReadsBack(t *testing.T) {
-	s, _ := newSetupFake(t)
-	prov := levelProv(s)
-	prov.RecoveryPath = filepath.Join(t.TempDir(), "mark.json")
-	if err := prov.marks().add(givenItem{Bot: "Bheal", Item: 1708, Count: 20}); err != nil {
-		t.Fatal(err)
-	}
-	s.scriptTB(".tb itemscan Bheal 1708", scanReply(20)...)
-	s.scriptTB(".tb additem Bheal 1708 -20", "TortoiseBots: Bheal now has 0 of item 1708.")
-	// the read-back after the removal: the scripted prefix answers again with 20
-	// unless re-scripted; the fake answers by prefix, so switch the reply.
-	calls := 0
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb itemscan") {
-			calls++
-			if calls == 1 {
-				return scanReply(20)
-			}
-			return scanReply(0)
+func newBagModel() *bagModel { return &bagModel{inv: map[uint32]int{}, cap: 1000} }
+
+func (b *bagModel) count(item uint32) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.inv[item]
+}
+
+func (b *bagModel) set(item uint32, n int) {
+	b.mu.Lock()
+	b.inv[item] = n
+	b.mu.Unlock()
+}
+
+func (b *bagModel) seen(prefix string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	for _, l := range b.lines {
+		if strings.HasPrefix(l, prefix) {
+			out = append(out, l)
 		}
+	}
+	return out
+}
+
+// answer is a setupFake.tbFn: nil for a line the model does not own.
+func (b *bagModel) answer(line string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	f := strings.Fields(line)
+	if len(f) < 3 || f[0] != ".tb" {
 		return nil
 	}
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok {
-		t.Fatalf("clear must be proved: %s", ev)
+	num := func(i int) (int, bool) {
+		if i >= len(f) {
+			return 0, false
+		}
+		n, err := strconv.Atoi(f[i])
+		return n, err == nil
 	}
-	if got := prov.marks().forBot("Bheal"); len(got) != 0 {
+	switch f[1] {
+	case "itemscan":
+		b.lines = append(b.lines, line)
+		out := []string{"itemscan-begin #T"}
+		for _, w := range f[3:] {
+			id, err := strconv.Atoi(w)
+			if err != nil {
+				continue
+			}
+			out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no why= #T", f[2], id, id, b.inv[uint32(id)]))
+		}
+		return append(out, fmt.Sprintf("itemscan-end bot=%s count=%d records=%d exist=%d canequip=0 #T", f[2], len(out)-1, len(out)-1, len(out)-1))
+	case "additem":
+		b.lines = append(b.lines, line)
+		id, ok1 := num(3)
+		n, ok2 := num(4)
+		if !ok2 {
+			n = 1
+		}
+		if !ok1 || n < 1 {
+			return []string{} // usage refusal: names no bot, nothing happens
+		}
+		if b.inv[uint32(id)]+n > b.cap {
+			return []string{"TortoiseBots: " + f[2] + ": bags full, the item was not stored."}
+		}
+		b.inv[uint32(id)] += n
+		return []string{fmt.Sprintf("TortoiseBots: %s now has %d of item %d.", f[2], b.inv[uint32(id)], id)}
+	case "removeitem":
+		b.lines = append(b.lines, line)
+		id, ok1 := num(3)
+		if !ok1 {
+			return []string{}
+		}
+		n, ok2 := num(4)
+		if !ok2 || n > b.inv[uint32(id)] {
+			n = b.inv[uint32(id)]
+		}
+		b.inv[uint32(id)] -= n
+		return []string{fmt.Sprintf("removeitem bot=%s item=%d removed=%d left=%d", f[2], id, n, b.inv[uint32(id)])}
+	}
+	return nil
+}
+
+func bagProv(t *testing.T) (*Provisioner, *setupFake, *bagModel) {
+	t.Helper()
+	s, _ := newSetupFake(t)
+	bags := newBagModel()
+	s.tbFn = bags.answer
+	prov := levelProv(s)
+	prov.Server = "test2"
+	prov.RecoveryPath = filepath.Join(t.TempDir(), "mark.json")
+	return prov, s, bags
+}
+
+// Finding 2/3: what the trial gave is taken back with the module's
+// `.tb removeitem` (never the negative additem), the mark is written only
+// after the give was read back, and the clear is proved by an itemscan.
+func TestClearGivenUsesRemoveItemAndReadsBack(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	got := prov.marks().forBot("test2", "Bheal")
+	if len(got) != 1 || got[0].Item != 1708 || got[0].Count != 20 || got[0].Server != "test2" {
+		t.Fatalf("mark after a confirmed give: %+v", got)
+	}
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok || bags.count(1708) != 0 {
+		t.Fatalf("clear must be proved and empty the bags: ok=%v bags=%d %s", ok, bags.count(1708), ev)
+	}
+	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
+		t.Fatalf("the removal must be `.tb removeitem Bheal 1708 20`, saw %v", bags.lines)
+	}
+	for _, l := range bags.seen(".tb additem") {
+		if strings.Contains(l, " -") {
+			t.Fatalf("the negative-count additem must never be sent: %s", l)
+		}
+	}
+	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 0 {
 		t.Fatalf("the mark must be dropped after a proved clear: %v", got)
+	}
+}
+
+// A refused give (bags full) is never marked: a later clear must not remove
+// the items the hire already carried.
+func TestRefusedGiveWritesNoMarkAndClearKeepsOldStack(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.set(1708, 5) // the hire already carried 5
+	bags.cap = 10     // 20 more do not fit
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err == nil {
+		t.Fatal("a refused give must be an error")
+	}
+	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 0 {
+		t.Fatalf("a refused give must write no mark: %+v", got)
+	}
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok || bags.count(1708) != 5 {
+		t.Fatalf("the hire's own 5 items must stay: ok=%v bags=%d %s", ok, bags.count(1708), ev)
+	}
+	if len(bags.seen(".tb removeitem")) != 0 {
+		t.Fatalf("nothing may be removed without a mark: %v", bags.lines)
+	}
+}
+
+// A clear removes at most what the trial gave on top of the baseline.
+func TestClearNeverRemovesWhatTheHireHadBefore(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.set(1708, 5)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
+		t.Fatal("clear must be proved")
+	}
+	if bags.count(1708) != 5 {
+		t.Fatalf("the hire's own 5 must remain, bags=%d", bags.count(1708))
+	}
+	// The hire used 3 of the gift: only the 17 still above the baseline go.
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	bags.set(1708, 22) // 25 - 3 used
+	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
+		t.Fatal("clear must be proved")
+	}
+	if bags.count(1708) != 5 {
+		t.Fatalf("clear must stop at the baseline, bags=%d", bags.count(1708))
 	}
 }
 
 // A removal the read-back does not show stays marked and is reported.
 func TestClearGivenUnprovedStaysMarked(t *testing.T) {
-	s, _ := newSetupFake(t)
-	prov := levelProv(s)
-	prov.RecoveryPath = filepath.Join(t.TempDir(), "mark.json")
-	_ = prov.marks().add(givenItem{Bot: "Bheal", Item: 1708, Count: 20})
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb itemscan") {
-			return scanReply(20) // still 20 after the removal
-		}
-		return nil
+	prov, s, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
 	}
-	s.scriptTB(".tb additem Bheal 1708 -20", "TortoiseBots: ok.")
+	// The module acknowledges the removal but the bags keep the items.
+	s.tbFn = func(line string) []string {
+		if strings.HasPrefix(line, ".tb removeitem") {
+			return []string{"removeitem bot=Bheal item=1708 removed=20 left=0"}
+		}
+		return bags.answer(line)
+	}
 	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
 	if ok || !strings.Contains(ev, "UNVERIFIED") {
 		t.Fatalf("an unproved clear must not read ok: ok=%v %s", ok, ev)
 	}
-	if len(prov.marks().forBot("Bheal")) != 1 {
+	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
 		t.Fatal("the mark must stay for the next run")
 	}
 }
 
+// A fake that still accepts the old negative additem as a removal must not
+// make the clear pass: the agent never sends that form, so a fake that only
+// understands it leaves the bags full and the clear reads UNVERIFIED.
+func TestClearFailsAgainstAFakeThatOnlyKnowsTheOldForm(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	s.tbFn = func(line string) []string {
+		if strings.HasPrefix(line, ".tb additem Bheal 1708 -") {
+			bags.set(1708, 0)
+			return []string{"TortoiseBots: Bheal now has 0 of item 1708."}
+		}
+		if strings.HasPrefix(line, ".tb removeitem") {
+			return []string{}
+		}
+		return bags.answer(line)
+	}
+	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); ok {
+		t.Fatal("a clear that needs the old negative additem form must not pass")
+	}
+}
+
+// Marks name the server: the same character on another server is not touched.
+func TestMarksAreScopedToTheServer(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	other := levelProv(s)
+	other.Server = "test3"
+	other.RecoveryPath = prov.RecoveryPath
+	if got := other.marks().forBot("test3", "Bheal"); len(got) != 0 {
+		t.Fatalf("a mark of test2 must not show on test3: %+v", got)
+	}
+	if _, ok := other.ClearGiven(context.Background(), "Bheal"); !ok || bags.count(1708) != 20 {
+		t.Fatalf("test3's clear must leave test2's items alone (bags=%d)", bags.count(1708))
+	}
+	if RecoveryPathFor("test2", "Atank") == RecoveryPathFor("test3", "Atank") {
+		t.Fatal("the recovery file path must carry the server")
+	}
+}
+
+// An equipped kit piece is not in the bags: it is reported as worn, never as
+// cleared, and its mark stays.
+func TestWornKitPieceIsNotClaimedCleared(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 9434, 1); err != nil {
+		t.Fatal(err)
+	}
+	bags.set(9434, 0) // equipped: out of the bags
+	prov.marks().setWorn("test2", "Bheal", 9434)
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok {
+		t.Fatalf("a worn piece is not a failed clear: %s", ev)
+	}
+	if !strings.Contains(ev, "worn") || strings.Contains(ev, "cleared 1") {
+		t.Fatalf("evidence must say the piece stays worn, not cleared: %q", ev)
+	}
+	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
+		t.Fatal("the worn mark must stay")
+	}
+}
+
 // A killed run's mark (a file) is cleaned by the next run before it gives
-// new items; a give writes the mark before it sends.
-func TestGiveWritesMarkAndNextRunClearsIt(t *testing.T) {
-	s, _ := newSetupFake(t)
-	path := filepath.Join(t.TempDir(), "mark.json")
-	first := levelProv(s)
-	first.RecoveryPath = path
-	s.scriptTB(".tb additem Bheal 1708 20", "TortoiseBots: Bheal now has 20 of item 1708.")
+// new items.
+func TestNextRunClearsAKilledRunsMark(t *testing.T) {
+	first, s, bags := bagProv(t)
 	if _, err := first.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
 		t.Fatal(err)
 	}
 	// the run is killed here: a brand new Provisioner reads the file.
 	next := levelProv(s)
-	next.RecoveryPath = path
-	got := next.marks().forBot("Bheal")
+	next.Server = "test2"
+	next.RecoveryPath = first.RecoveryPath
+	got := next.marks().forBot("test2", "Bheal")
 	if len(got) != 1 || got[0].Item != 1708 || got[0].Count != 20 {
 		t.Fatalf("the killed run's mark must be on disk: %v", got)
 	}
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb itemscan") {
-			return scanReply(map[bool]int{true: 0, false: 20}[len(s.removed) > 0])
-		}
-		if strings.HasPrefix(line, ".tb additem Bheal 1708 -20") {
-			s.removed = append(s.removed, line)
-			return []string{"TortoiseBots: Bheal now has 0 of item 1708."}
-		}
-		return nil
-	}
-	if _, ok := next.ClearGiven(context.Background(), "Bheal"); !ok {
-		t.Fatal("the next run must clear the killed run's items")
-	}
-	if len(s.removed) != 1 {
-		t.Fatalf("removal sent %d times", len(s.removed))
+	if _, ok := next.ClearGiven(context.Background(), "Bheal"); !ok || bags.count(1708) != 0 {
+		t.Fatalf("the next run must clear the killed run's items (bags=%d)", bags.count(1708))
 	}
 }
 
 // "bags full" that clearing does not free: SKIPPED with the reason, never a
 // silent failure and never ok.
 func TestBagsFullIsSkippedWithReason(t *testing.T) {
-	s, _ := newSetupFake(t)
-	prov := levelProv(s)
+	prov, _, bags := bagProv(t)
+	bags.cap = 0
 	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
-	s.scriptTB(".tb additem Bheal", "TortoiseBots: Bheal: bags full, the item was not stored.")
 	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
 	if row == nil || rowOK(row) {
 		t.Fatalf("a refused give must not be ok: %v", row)
@@ -297,25 +490,18 @@ func TestBagsFullIsSkippedWithReason(t *testing.T) {
 
 // The trial's teardown clears what it gave while the hire is still online.
 func TestTrialTeardownClearsGivenItems(t *testing.T) {
-	s, f := newSetupFake(t)
-	_ = f
-	path := filepath.Join(t.TempDir(), "mark.json")
-	prov := levelProv(s)
-	prov.RecoveryPath = path
-	_ = prov.marks().add(givenItem{Bot: "Bheal", Item: 1708, Count: 20})
+	prov, s, bags := bagProv(t)
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
 	var seen []string
+	inner := s.tbFn
 	s.tbFn = func(line string) []string {
 		seen = append(seen, line)
-		switch {
-		case strings.HasPrefix(line, ".tb itemscan"):
-			return scanReply(map[bool]int{true: 0, false: 20}[strings.Contains(strings.Join(seen, "|"), "-20")])
-		case strings.HasPrefix(line, ".tb additem Bheal 1708 -20"):
-			return []string{"TortoiseBots: Bheal now has 0 of item 1708."}
-		}
-		return nil
+		return inner(line)
 	}
-	r := &Runner{Client: s.runner.client, Ledger: NewLedger("")}
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", RecoveryPath: path, TrialID: "t"}
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", RecoveryPath: prov.RecoveryPath, TrialID: "t"}
 	r.tbRunner = s.runner
 	r.trialTeardown(context.Background(), rep, "t")
 	idx := func(prefix string) int {
@@ -326,11 +512,11 @@ func TestTrialTeardownClearsGivenItems(t *testing.T) {
 		}
 		return -1
 	}
-	rm, logout := idx(".tb additem Bheal 1708 -20"), idx(".tb logout")
+	rm, logout := idx(".tb removeitem Bheal 1708 20"), idx(".tb logout")
 	if rm < 0 || (logout >= 0 && rm > logout) {
 		t.Fatalf("items must be cleared before the logout: %v", seen)
 	}
-	if len(prov.marks().forBot("Bheal")) != 0 {
-		t.Fatal("the mark must be gone after the teardown clear")
+	if bags.count(1708) != 0 || len(prov.marks().forBot("test2", "Bheal")) != 0 {
+		t.Fatal("the bags and the mark must be empty after the teardown clear")
 	}
 }

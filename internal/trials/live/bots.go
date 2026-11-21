@@ -52,11 +52,21 @@ type Provisioner struct {
 	// Timeout bounds one provisioning step; 0 means 20 s.
 	Timeout time.Duration
 
-	// RecoveryPath is the recovery mark file of the items this trial gives
-	// (see items.go); empty keeps the marks in memory only.
+	// Server names the test server the marks belong to (a character name
+	// may exist on two servers); RecoveryPath is the recovery mark file of
+	// the items this trial gives (see items.go); empty keeps the marks in
+	// memory only.
+	Server       string
 	RecoveryPath string
-	markOnce     sync.Once
-	recovery     *recoveryMarks
+
+	// OnHire and OnExtra are told a hire's name as soon as it is logged in
+	// (or found already online), before any later step can fail, so a
+	// failed setup can still log it out.
+	OnHire  func(name string)
+	OnExtra func(name string)
+
+	markOnce sync.Once
+	recovery *recoveryMarks
 }
 
 // BotSpec is trial["bot"] (or one extra_bots entry): what to provision.
@@ -162,6 +172,7 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 	name := ""
 	if previous != "" && p.partyHas(ctx, previous) {
 		name = previous
+		p.hired(name)
 		rows = append(rows, rowOf("bot_present", true, previous, "reused hire "+previous+" from the previous repeat"))
 	} else {
 		candidate := pool(spec.Class)
@@ -180,6 +191,7 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 			rows = append(rows, rowOf("bot_present", false, nil, ".tb login "+name+": "+tbErrText(err, lines)))
 			return out, rows, nil
 		}
+		p.hired(name) // from here on a failed setup must still log it out
 		// The login is asynchronous: the hire appears in the party roster
 		// (or the units model) a moment later. The party row is the
 		// identity; a name in chat is not.
@@ -306,6 +318,7 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 			p.Ledger.Add(map[string]any{"kind": "hire", "name": name, "class": spec.Class, "extra": i + 1, "reply": firstLines(lines)})
 			presentEv = append(presentEv, fmt.Sprintf("extra%d: .tb login %s", i+1, name))
 		}
+		p.hiredExtra(name)
 		guid := p.partyGUIDOf(ctx, name)
 		if name != "" && (guid == "" || guid == out.HireGUID || hasGUID(guidList, guid)) {
 			presentOK = false
@@ -359,6 +372,19 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 	out.ExtraSlots = slots
 	guids["extras"] = guidsList(guidList)
 	return out, rows, nil
+}
+
+// hired tells the caller the hire's name the moment it is online.
+func (p *Provisioner) hired(name string) {
+	if p.OnHire != nil && name != "" {
+		p.OnHire(name)
+	}
+}
+
+func (p *Provisioner) hiredExtra(name string) {
+	if p.OnExtra != nil && name != "" {
+		p.OnExtra(name)
+	}
 }
 
 // defaultD5 picks the first pool bot of a class.
@@ -774,6 +800,8 @@ func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, ki
 			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
 		}
 		equipped++
+		// The piece left the bags: its mark is kept as worn, never claimed cleared.
+		p.marks().setWorn(p.Server, name, item.Entry)
 	}
 	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
 }
@@ -959,8 +987,11 @@ func (p *Provisioner) ensureGrouped(ctx context.Context, name string) map[string
 	return rowOf("grouped", ok && hit, len(members), "in_group="+boolWord(ok)+", members="+strings.Join(members, ", "))
 }
 
-// ensureMana sets the bot's power through typed GM and reads it back from
-// the units model (within 3 points).
+// ensureMana sets the bot's power through the module's own command and reads
+// it back from the units model (within 3 points). The hire's row is matched
+// by its party guid (player rows carry no name on this core); an unreadable
+// power is UNKNOWN and fails the row, never a 0% that could satisfy a 0%
+// target.
 func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Mana == nil {
 		return rowOf("bot_mana", true, nil, "not a mana trial")
@@ -969,10 +1000,10 @@ func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string)
 	if guid == "" {
 		return rowOf("bot_mana", false, nil, name+" not in view")
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	maxP := p.unitMaxPower(ctx, name)
-	cancel()
-	_ = tctx
+	maxP, _, known := p.unitPower(ctx, guid)
+	if !known {
+		return rowOf("bot_mana", false, "unknown", "UNVERIFIED: "+name+" power is not readable from its unit row (guid "+guid+")")
+	}
 	if maxP <= 0 {
 		return rowOf("bot_mana", false, nil, name+" has no power pool")
 	}
@@ -985,41 +1016,38 @@ func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string)
 	if err != nil {
 		return rowOf("bot_mana", false, nil, ".tb power "+name+" mana: "+tbErrText(err, lines))
 	}
-	have := p.unitPowerPct(ctx, name)
+	maxAfter, power, known := p.unitPower(ctx, guid)
+	if !known || maxAfter <= 0 {
+		return rowOf("bot_mana", false, "unknown", "UNVERIFIED: "+name+" power is not readable after .tb power")
+	}
+	have := 100 * float64(power) / float64(maxAfter)
 	ok := math.Abs(have-*spec.Mana) <= 3
-	return rowOf("bot_mana", ok, math.Round(have*10)/10, fmt.Sprintf("power %.0f%% of %d (set %.0f%%)", have, maxP, *spec.Mana))
+	return rowOf("bot_mana", ok, math.Round(have*10)/10, fmt.Sprintf("power %.0f%% of %d (set %.0f%%)", have, maxAfter, *spec.Mana))
 }
 
-// unitMaxPower reads the hire's max power from the units model.
-func (p *Provisioner) unitMaxPower(ctx context.Context, name string) uint32 {
+// unitPower reads one unit's max power and power by guid from the units
+// model. known is false when the row is missing or carries no power fields
+// (never a guessed 0).
+func (p *Provisioner) unitPower(ctx context.Context, guid string) (maxP, power uint32, known bool) {
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	units, err := p.Client.Units(tctx, 60)
 	if err != nil {
-		return 0
+		return 0, 0, false
 	}
 	for _, u := range units {
-		if strings.EqualFold(u.Name, name) {
-			return u.MaxPower
+		if normGUIDOf(u.GUID) != normGUIDOf(guid) {
+			continue
 		}
-	}
-	return 0
-}
-
-// unitPowerPct reads the hire's power percent from the units model.
-func (p *Provisioner) unitPowerPct(ctx context.Context, name string) float64 {
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	units, err := p.Client.Units(tctx, 60)
-	if err != nil {
-		return 0
-	}
-	for _, u := range units {
-		if strings.EqualFold(u.Name, name) && u.MaxPower > 0 {
-			return 100 * float64(u.Power) / float64(u.MaxPower)
+		if _, ok := numOf(u.Raw["max_power"]); !ok {
+			return 0, 0, false
 		}
+		if _, ok := numOf(u.Raw["power"]); !ok {
+			return 0, 0, false
+		}
+		return u.MaxPower, u.Power, true
 	}
-	return 0
+	return 0, 0, false
 }
 
 // Helpers: rows, summaries, names.

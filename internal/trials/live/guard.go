@@ -169,10 +169,10 @@ type GuardOptions struct {
 // AbortReason reports the runner's abort reason ("", while the run holds
 // its lease): the aborted callback the runner wires from Hold.RenewErr.
 func (g *Guard) AbortReason() string {
-	if g == nil || g.aborted == nil {
-		return ""
+	if fn := g.abortFn(); fn != nil {
+		return fn()
 	}
-	return g.aborted()
+	return ""
 }
 
 // NewGuard returns the runner's GM guard over client.
@@ -187,6 +187,31 @@ func NewGuard(client *Client, opts GuardOptions) *Guard {
 		}
 	}
 	return g
+}
+
+// abortFn reads the abort check under the mutex (teardown swaps it).
+func (g *Guard) abortFn() func() string {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.aborted
+}
+
+// PlayerGUID is the session's own character (the "self" target).
+func (g *Guard) PlayerGUID() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.playerGUID
+}
+
+// SetAbort replaces the abort check: teardown swaps in its own (a lost lease
+// still stops it, a Ctrl-C does not).
+func (g *Guard) SetAbort(fn func() string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.aborted = fn
 }
 
 // SetHire sets the hire guid once the setup knows it (the guard is built
@@ -220,6 +245,11 @@ func (g *Guard) allowedTarget(kind string, class GuardTarget, target string) boo
 		return false
 	}
 	if class == TargetSelf && g.playerGUID != "" && tg != g.playerGUID {
+		return false
+	}
+	// A hire or summon target must be one of this trial's own units: the
+	// serve's trial_units allowlist is the second barrier, not the only one.
+	if (class == TargetHire || class == TargetSummon) && g.where(tg) != class {
 		return false
 	}
 	return true
@@ -318,7 +348,7 @@ func (g *Guard) ensureUnits(ctx context.Context) error {
 	return nil
 }
 
-// selectUnit selects guid and waits up to 4 s for the server's echo in the
+// selectUnit selects guid and waits up to 10 s for the server's echo in the
 // character's target field.
 func (g *Guard) selectUnit(ctx context.Context, guid string) error {
 	want := normGUIDOf(guid)
@@ -356,7 +386,7 @@ func (g *Guard) Send(ctx context.Context, kind string, class GuardTarget, target
 	if !g.allowedTarget(kind, class, target) {
 		return &GmRefused{Text: line}
 	}
-	if fn := g.aborted; fn != nil && fn() != "" {
+	if fn := g.abortFn(); fn != nil && fn() != "" {
 		return &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
 	}
 	if !g.dryRun {
@@ -433,7 +463,7 @@ func (g *Guard) where(guid string) GuardTarget {
 // hand is the shared body of the typed GM hands: the abort check, the unit
 // allowlist and the ledger row, then the one RPC.
 func (g *Guard) hand(ctx context.Context, kind, guid string, want GuardTarget, call func() error) error {
-	if fn := g.aborted; fn != nil && fn() != "" {
+	if fn := g.abortFn(); fn != nil && fn() != "" {
 		return &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
 	}
 	class := g.where(guid)

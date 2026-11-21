@@ -133,13 +133,22 @@ func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Stor
 		fmt.Fprintf(stderr, "trials run: %v\n", err)
 		return finish(1)
 	}
+	live.LockLog = func(line string) { fmt.Fprintln(stderr, line) }
 	runner := &live.Runner{
 		Out: live.AbsPath(out), Server: server, Label: filepath.Base(live.AbsPath(out)),
 		Client: live.NewClient(rpcClient), Ledger: live.NewLedger(filepath.Join(live.AbsPath(out), "ledger.jsonl")),
-		Hold: hold, Setup: liveSetupFor(dry, sf.Forever[server]),
+		Hold: hold, Setup: liveSetupFor(dry, server, sf.Forever[server]),
 		Situation: liveSituationFor(dry, server, sf.Forever[server], func(line string) { fmt.Fprintln(stderr, line) }),
 		Log:       func(line string) { fmt.Fprintln(stderr, line) },
 		Now:       time.Now,
+		// Teardown (kills, heal, logout) goes on after a Ctrl-C: only a lost
+		// lease, when another run may own the slot, stops it.
+		TeardownAbort: func() string {
+			if rerr := hold.RenewErr(); rerr != nil {
+				return "lease renewal failed: " + rerr.Error()
+			}
+			return ""
+		},
 		Abort: func() string {
 			if rerr := hold.RenewErr(); rerr != nil {
 				return "lease renewal failed: " + rerr.Error()
@@ -186,9 +195,9 @@ func trialsRunCommand(ctx context.Context, sf *live.SlotsFile, store *slots.Stor
 // liveSetupFor selects the setup: the scripted DrySetup under --dry, the
 // live setup otherwise (player + bot provisioning with read-backs). The
 // server's `forever` block names the hire pool and the slot character.
-func liveSetupFor(dry string, ext live.ServerExt) live.Setup {
+func liveSetupFor(dry, server string, ext live.ServerExt) live.Setup {
 	if dry == "" {
-		return &live.LiveSetup{Player: ext.Player, Pool: ext.BotPool}
+		return &live.LiveSetup{Server: server, Player: ext.Player, Pool: ext.BotPool}
 	}
 	return &live.DrySetup{}
 }

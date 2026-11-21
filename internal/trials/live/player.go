@@ -124,12 +124,17 @@ func (p *PlayerSetup) SetupPlayer(ctx context.Context, trial map[string]any) ([]
 }
 
 // ensureLevel brings the player to the trial level via `.levelup` (signed
-// delta) and reads it back from `status`.
+// delta) and reads it back from `status`. Every read, every send and every
+// wait has its own deadline (one budget over three attempts ran dry early),
+// and a level that cannot be read is UNKNOWN: the row fails UNVERIFIED and
+// nothing is sent, never `.levelup` of (want - 0).
 func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (map[string]any, error) {
 	want := trialLevel(trial)
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	level := p.playerLevel(tctx)
+	level, known := p.playerLevel(ctx)
+	if !known {
+		return rowOf("player_level", false, "unknown",
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from status; no .levelup sent", want)), nil
+	}
 	if level == want {
 		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, want)), nil
 	}
@@ -141,32 +146,47 @@ func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (ma
 	// absolute level), so the row re-reads before each step and waits for
 	// the server to land it: a retried row must not add the delta twice.
 	for attempt := 0; attempt < 3 && level != want; attempt++ {
-		delta := want - level
-		if err := p.Guard.Send(tctx, "levelup", TargetSelf, p.playerGUIDOf(tctx), itoa(delta)); err != nil {
+		sctx, cancel := p.ctxOf(ctx)
+		err := p.Guard.Send(sctx, "levelup", TargetSelf, p.playerGUIDOf(sctx), itoa(want-level))
+		cancel()
+		if err != nil {
 			return rowOf("player_level", false, level, ".levelup refused: "+err.Error()), nil
 		}
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(p.timeoutOf())
 		for time.Now().Before(deadline) {
-			time.Sleep(500 * time.Millisecond)
-			if got := p.playerLevel(tctx); got != level {
+			select {
+			case <-ctx.Done():
+				return rowOf("player_level", false, level, "UNVERIFIED: interrupted while waiting for .levelup to land"), nil
+			case <-time.After(p.poll()):
+			}
+			if got, ok := p.playerLevel(ctx); ok && got != level {
 				level = got
 				break
 			}
 		}
 	}
+	got, ok := p.playerLevel(ctx)
+	if !ok {
+		return rowOf("player_level", false, "unknown",
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable after .levelup", want)), nil
+	}
+	level = got
 	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d, .levelup delta)", lowered, level, want)), nil
 }
 
-// playerLevel reads the session character's level from `status`.
-func (p *PlayerSetup) playerLevel(ctx context.Context) int {
-	st, err := p.Client.StatusOf(ctx)
+// playerLevel reads the session character's level from `status`, on its own
+// deadline. ok is false when it cannot be read: unknown is not level 0.
+func (p *PlayerSetup) playerLevel(ctx context.Context) (int, bool) {
+	rctx, cancel := p.ctxOf(ctx)
+	defer cancel()
+	st, err := p.Client.StatusOf(rctx)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	if f, ok := pyjson.Num(st.Raw["level"]); ok {
-		return int(f)
+	if f, ok := pyjson.Num(st.Raw["level"]); ok && f >= 1 {
+		return int(f), true
 	}
-	return 0
+	return 0, false
 }
 
 // trialLevel reads trial["player"]["level"] (40 when absent or bad).

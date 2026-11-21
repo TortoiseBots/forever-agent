@@ -76,8 +76,10 @@ type LiveSetup struct {
 	// Timeout bounds one check; 0 means 20 s.
 	Timeout time.Duration
 
+	// Server is the test server's name (the recovery marks' word);
 	// RecoveryPath is the recovery mark file of the items the trial gives;
-	// empty means RecoveryPathFor(player) under the state dir.
+	// empty means RecoveryPathFor(server, player) under the state dir.
+	Server       string
 	RecoveryPath string
 
 	// TBRunner overrides the `.tb` transport (tests inject the scripted
@@ -94,11 +96,22 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 	tb := tbcmd.NewClient(s.runnerOr(r))
 	recovery := s.RecoveryPath
 	if recovery == "" {
-		recovery = RecoveryPathFor(s.playerOr(r))
+		recovery = RecoveryPathFor(s.Server, s.playerOr(r))
 	}
 	r.RecoveryPath = recovery
 	prov := &Provisioner{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
-		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout, RecoveryPath: recovery}
+		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout, Server: s.Server, RecoveryPath: recovery}
+	// The hires are known to the repeat the moment they log in: a setup that
+	// fails or is SKIPPED later still gets them logged out and cleared.
+	prov.OnHire = func(name string) { r.BotName = name }
+	prov.OnExtra = func(name string) {
+		for _, have := range r.ExtraNames {
+			if have == name {
+				return
+			}
+		}
+		r.ExtraNames = append(r.ExtraNames, name)
+	}
 	ps := &PlayerSetup{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
 		Player: s.playerOr(r), Timeout: s.Timeout}
 

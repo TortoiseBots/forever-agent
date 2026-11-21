@@ -439,31 +439,95 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 	return raws, nil
 }
 
-// FreeTextRemoveItem takes count of an item back out of the bot's bags with
-// the negative-count form `.tb additem <bot> <item id> -<count>`, the way the
-// core's own .additem removes. The caller proves it with `ItemScan` (the
-// carried count reads back lower); a refusal is the server's text.
-func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32, count uint32) ([]string, error) {
-	setup, err := setupName("additem", bot)
+// RemoveItemResult is the module's `removeitem` answer: how many of the item
+// it took out of the bot's bags and how many the bags still hold.
+type RemoveItemResult struct {
+	Bot     string
+	Item    uint32
+	Removed int
+	Left    int
+}
+
+// FreeTextRemoveItem sends `.tb removeitem <bot> <item id> [count]`: the
+// module takes count of an item out of the bot's bags (no count removes
+// every one). The module answers one line,
+// `removeitem bot=<name> item=<id> removed=<n> left=<n>`; that line is
+// parsed and must name the asked bot and item. The old negative-count
+// `.tb additem` form is not a removal and is never sent. The caller still
+// proves the result with `ItemScan`.
+func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32, count uint32) (RemoveItemResult, []string, error) {
+	setup, err := setupName("removeitem", bot)
 	if err != nil {
-		return nil, err
+		return RemoveItemResult{}, nil, err
 	}
-	if item == 0 || count == 0 {
-		return nil, fmt.Errorf("tbcmd: remove item needs an item id and a count")
+	if item == 0 {
+		return RemoveItemResult{}, nil, fmt.Errorf("tbcmd: removeitem item id 0 is not an id")
 	}
-	line := ".tb additem " + setup + " " + strconv.FormatUint(uint64(item), 10) + " -" + strconv.FormatUint(uint64(count), 10)
+	line := ".tb removeitem " + setup + " " + strconv.FormatUint(uint64(item), 10)
+	if count > 0 {
+		line += " " + strconv.FormatUint(uint64(count), 10)
+	}
 	raws, rep, err := c.freeTextNamed(ctx, line, bot)
 	if err != nil {
-		return raws, err
+		return RemoveItemResult{}, raws, err
+	}
+	if res, ok, perr := parseRemoveItem(raws); ok {
+		if perr != nil {
+			return RemoveItemResult{}, raws, perr
+		}
+		if !strings.EqualFold(res.Bot, setup) || res.Item != item {
+			return res, raws, fmt.Errorf("%w: removeitem answered for %q item %d, asked for %q item %d",
+				ErrBadReport, res.Bot, res.Item, setup, item)
+		}
+		return res, raws, nil
 	}
 	joined := strings.Join(raws, "\n")
 	if rep != nil && rep.Refusal != nil {
-		return raws, &TestkitRefused{Cmd: "additem", Text: firstNonEmpty(raws, rep.RefusalText)}
+		return RemoveItemResult{}, raws, &TestkitRefused{Cmd: "removeitem", Text: firstNonEmpty(raws, rep.RefusalText)}
 	}
 	if looksLikeRefusal(joined) {
-		return raws, &TestkitRefused{Cmd: "additem", Text: joined}
+		return RemoveItemResult{}, raws, &TestkitRefused{Cmd: "removeitem", Text: joined}
 	}
-	return raws, nil
+	return RemoveItemResult{}, raws, fmt.Errorf("%w: .tb %s: no removeitem record in the answer", ErrBadReport, line)
+}
+
+// parseRemoveItem finds the `removeitem bot= item= removed= left=` line. ok
+// is false when no line starts with the record word; err is set when the
+// record is there but a key is missing or not a number.
+func parseRemoveItem(raws []string) (RemoveItemResult, bool, error) {
+	for _, raw := range raws {
+		fields := strings.Fields(raw)
+		at := -1
+		for i, f := range fields {
+			if f == "removeitem" {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		kv := map[string]string{}
+		for _, f := range fields[at+1:] {
+			if strings.HasPrefix(f, "#") {
+				continue
+			}
+			if k, v, found := strings.Cut(f, "="); found {
+				kv[k] = v
+			}
+		}
+		var res RemoveItemResult
+		res.Bot = kv["bot"]
+		item, ierr := strconv.ParseUint(kv["item"], 10, 32)
+		removed, rerr := strconv.Atoi(kv["removed"])
+		left, lerr := strconv.Atoi(kv["left"])
+		if res.Bot == "" || ierr != nil || rerr != nil || lerr != nil || removed < 0 || left < 0 {
+			return res, true, fmt.Errorf("%w: removeitem record needs bot=, item=, removed=, left=: %q", ErrBadReport, raw)
+		}
+		res.Item, res.Removed, res.Left = uint32(item), removed, left
+		return res, true, nil
+	}
+	return RemoveItemResult{}, false, nil
 }
 
 // firstNonEmpty prefers the raw lines the server sent; the collector's

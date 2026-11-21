@@ -51,6 +51,14 @@ type Repeat struct {
 	// the teardown clears them (see items.go). Empty: in-memory marks only.
 	RecoveryPath string
 
+	// Server is the test server's name (recovery marks are per server).
+	Server string
+
+	// Unidentified counts spawns the situation could not identify (an
+	// `.npc add temp` that worked but whose unit was never claimed and had no
+	// candidate): teardown cannot kill them and says so.
+	Unidentified int
+
 	// ExtraChecks are the situation's own read-backs (mobs_ready); the
 	// repeat appends them to setup.json's checks when the situation ends.
 	ExtraChecks []map[string]any
@@ -76,6 +84,15 @@ type Runner struct {
 	Log func(line string)
 	Now func() time.Time
 
+	// TeardownTimeout bounds one teardown (0 is two minutes); TeardownWait and
+	// TeardownPoll bound the heal read-back (0 is 6 s and 500 ms);
+	// TeardownAbort, when set, is the only abort the teardown's GM hands
+	// honour (nil: none, so Ctrl-C cannot cancel the kills).
+	TeardownTimeout time.Duration
+	TeardownWait    time.Duration
+	TeardownPoll    time.Duration
+	TeardownAbort   func() string
+
 	// Abort reports why the run must stop (a lost lease renewal, an
 	// interrupt): runRepeat checks it before every repeat and the guard
 	// checks it before every GM line.
@@ -88,6 +105,7 @@ type Runner struct {
 	repeats  map[string]int
 	skipped  map[string]string
 	lastRep  *Repeat
+	reaped   map[string]bool // summon guids a repeat teardown proved dead or gone
 }
 
 // findTrial resolves a TRIAL arg: an embedded path, an embedded id, or a
@@ -211,6 +229,22 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	if err := dumpDoc(joinPath(trialDir, scenario.SnapshotName), trial); err != nil {
 		return nil, err
 	}
+	// The hires, items and summons of this trial are cleaned on EVERY way out
+	// (an error, SKIPPED, a disconnect, a panic) on a teardown context of its
+	// own, not only after the last repeat finished normally.
+	tornDown := false
+	teardownTrial := func() {
+		if tornDown {
+			return
+		}
+		tornDown = true
+		if rep := r.lastRep; rep != nil && rep.TrialID == id {
+			tctx, cancel := r.teardownCtx(ctx)
+			defer cancel()
+			r.trialTeardown(tctx, rep, id)
+		}
+	}
+	defer teardownTrial()
 	for i := 1; i <= repeats; i++ {
 		if err := r.runRepeat(ctx, trial, id, i); err != nil {
 			// SKIPPED stops the trial after rep 1: every repeat
@@ -223,9 +257,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 			return nil, err
 		}
 	}
-	if rep := r.lastRep; rep != nil && rep.TrialID == id {
-		r.trialTeardown(ctx, rep, id)
-	}
+	teardownTrial()
 	doc, err := score.ScoreTrialE(trialDir, trial)
 	if err != nil {
 		return nil, err
@@ -267,7 +299,22 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 		PlayerGUID: playerGUID, DryRun: r.dry(), Abort: r.Abort,
 		Summons: func() []string { return r.Ledger.SummonGUIDs() }})
 	rep.Guard, rep.Collect = guard, collect
+	rep.Server = r.Server
 	r.lastRep = rep
+	// Whatever way this repeat ends, its summons are torn down (on a context
+	// of their own) and the situation lets go of its arena AFTER that.
+	situationStarted, tornDown := false, false
+	defer func() {
+		if situationStarted && !tornDown {
+			tctx, cancel := r.teardownCtx(ctx)
+			rows := r.repeatTeardown(tctx, rep)
+			cancel()
+			marks.Add(map[string]any{"kind": "teardown", "rows": rows})
+		}
+		if fin, ok := r.Situation.(interface{ Finish() }); ok {
+			fin.Finish()
+		}
+	}()
 	// The serve confirms the GM channel once per session, and that probe's
 	// help text can leak into the first command's reply: spend it here on a
 	// line the setup sends anyway, before any module command is read.
@@ -320,6 +367,7 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	collect.SetGuids(&rep.Guids)
 	guard.SetHire(rep.Guids.Bot)
 	rep.BotName, _ = setupDoc["bot_name"].(string)
+	rep.ExtraNames = nil
 	if list, ok := setupDoc["extra_names"].([]any); ok {
 		for _, e := range list {
 			if name, ok := e.(string); ok && name != "" {
@@ -347,6 +395,7 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	collect.Start(ctx)
 	outcome := map[string]any{"ended": "dry"}
 	if r.Situation != nil {
+		situationStarted = true
 		got, err := r.Situation.Run(ctx, rep)
 		if err != nil {
 			collect.Stop()
@@ -385,11 +434,11 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, id string,
 	// The situation added the mobs it summoned: setup.json's guid table is
 	// the scorer's role map, so it is rewritten from the repeat's own table.
 	setupDoc["guids"] = guidsDoc(rep.Guids)
-	teardown := r.repeatTeardown(ctx, rep)
+	tornDown = true
+	tctx, tcancel := r.teardownCtx(ctx)
+	teardown := r.repeatTeardown(tctx, rep)
+	tcancel()
 	marks.Add(map[string]any{"kind": "teardown", "rows": teardown})
-	if fin, ok := r.Situation.(interface{ Finish() }); ok {
-		fin.Finish()
-	}
 	failed := failedChecks(setupDoc)
 	reason := outcomeInvalid(outcome)
 	setupDoc["ok"] = len(failed) == 0 && reason == ""

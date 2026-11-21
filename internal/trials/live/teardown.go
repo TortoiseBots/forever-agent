@@ -32,10 +32,72 @@ func noFightEnd(ended string) bool {
 	return false
 }
 
+// tbOf is the `.tb` client of a teardown: the runner's override (tests) or
+// the serve-backed runner over the repeat's client.
+func (r *Runner) tbOf(rep *Repeat) *tbcmd.Client {
+	tbr := r.tbRunner
+	if tbr == nil {
+		tbr = NewTBRunner(rep.Client)
+	}
+	return tbcmd.NewClient(tbr)
+}
+
+// teardownCtx is a teardown's own context: it does not inherit the run's
+// cancellation (Ctrl-C must not cancel the kills) and has its own deadline.
+func (r *Runner) teardownCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	d := r.TeardownTimeout
+	if d <= 0 {
+		d = 2 * time.Minute
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), d)
+}
+
+func (r *Runner) healWait() time.Duration {
+	if r.TeardownWait > 0 {
+		return r.TeardownWait
+	}
+	return 6 * time.Second
+}
+
+func (r *Runner) healPoll() time.Duration {
+	if r.TeardownPoll > 0 {
+		return r.TeardownPoll
+	}
+	return 500 * time.Millisecond
+}
+
+// repeatMobs is every guid the repeat must clean up: its own Guids.Mobs plus
+// every ledgered summon not already torn down by an earlier repeat (the
+// ledger is the kill list, an unclaimed spawn is in it too).
+func (r *Runner) repeatMobs(rep *Repeat) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(g string) {
+		v := normGUIDOf(g)
+		if v == "" || seen[v] || r.reaped[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, g)
+	}
+	for _, g := range rep.Guids.Mobs {
+		add(g)
+	}
+	for _, g := range rep.Ledger.SummonGUIDs() {
+		add(g)
+	}
+	return out
+}
+
 // repeatTeardown cleans one repeat and returns its rows.
 func (r *Runner) repeatTeardown(ctx context.Context, rep *Repeat) []map[string]any {
 	rows := []map[string]any{}
-	tb := tbcmd.NewClient(NewTBRunner(rep.Client))
+	tb := r.tbOf(rep)
+	// Only the lease decides whether teardown may touch the server: a Ctrl-C
+	// is exactly when the kills must still go out.
+	if rep.Guard != nil {
+		rep.Guard.SetAbort(r.TeardownAbort)
+	}
 	if r.dry() {
 		for _, guid := range rep.Ledger.SummonGUIDs() {
 			if guid == "" {
@@ -57,12 +119,10 @@ func (r *Runner) repeatTeardown(ctx context.Context, rep *Repeat) []map[string]a
 	}
 	_ = rep.Client.StopAttack(ctx)
 
-	// This repeat's own summons: the arena only holds those, and an earlier
-	// repeat's leftover may sit in another arena.
-	only := append([]string(nil), rep.Guids.Mobs...)
-	if len(only) == 0 {
-		only = rep.Ledger.SummonGUIDs()
-	}
+	// Every ledgered summon of this repeat (Guids.Mobs and the ledger, the
+	// unclaimed and out-of-window ones included); earlier repeats' mobs that
+	// teardown already proved gone are not read again.
+	only := r.repeatMobs(rep)
 	states, stateErr := r.summonStates(ctx, rep.Client, only)
 	killed := []any{}
 	if stateErr != nil {
@@ -115,8 +175,20 @@ func (r *Runner) repeatTeardown(ctx context.Context, rep *Repeat) []map[string]a
 		if stateErr != nil {
 			evidence += "; last status read: " + trimReason(stateErr.Error())
 		}
-		rows = append(rows, map[string]any{"id": "mobs_dead", "ok": len(still) == 0 && len(unknown) == 0 && stateErr == nil,
+		unidentified := rep.Unidentified > 0
+		if unidentified {
+			evidence += fmt.Sprintf("; UNIDENTIFIED: %d spawned unit(s) could not be claimed and cannot be killed", rep.Unidentified)
+		}
+		rows = append(rows, map[string]any{"id": "mobs_dead", "ok": len(still) == 0 && len(unknown) == 0 && stateErr == nil && !unidentified,
 			"value": killed, "evidence": evidence, "verified": verified})
+		for _, g := range verified {
+			if v, _ := g.(string); v != "" {
+				if r.reaped == nil {
+					r.reaped = map[string]bool{}
+				}
+				r.reaped[v] = true
+			}
+		}
 		for _, g := range still {
 			rep.Ledger.Add(map[string]any{"kind": "mob_leftover", "guids": []any{g}, "reason": "still alive"})
 		}
@@ -228,9 +300,17 @@ func anyInCombat(ctx context.Context, client *Client) bool {
 }
 
 // healFull refills the player (gm_set_hp with the character's own maximum,
-// the only value that leaves the maximum alone) and the hire (the module's
-// hurt command at 100 percent), each proved by a unit read.
+// the only value that leaves the maximum alone), the hire and the extras (the
+// module's hurt command at 100 percent, by name). Every unit is then read
+// back by its recorded guid and must be at full health: an acknowledged but
+// unapplied refill, or an unreadable unit, fails the row.
 func (r *Runner) healFull(ctx context.Context, rep *Repeat, tb *tbcmd.Client) map[string]any {
+	ok := true
+	var evidence []string
+	fail := func(format string, args ...any) {
+		ok = false
+		evidence = append(evidence, fmt.Sprintf(format, args...))
+	}
 	self := rep.Guids.Player
 	st, err := rep.Client.StatusOf(ctx)
 	if err != nil {
@@ -243,20 +323,70 @@ func (r *Runner) healFull(ctx context.Context, rep *Repeat, tb *tbcmd.Client) ma
 				"evidence": "gm_set_hp self: " + trimReason(err.Error())}
 		}
 	}
-	if hire := rep.Guids.Bot; hire != "" {
-		if _, err := tb.FreeTextHurt(ctx, hire, 100); err != nil {
-			return map[string]any{"id": "healed_full", "ok": false, "value": nil,
-				"evidence": ".tb hurt " + hire + " 100: " + trimReason(err.Error())}
-		}
-	}
-	ok := true
-	evidence := ".modify hp self full and .tb hurt hire 100"
+	type target struct{ label, name, guid string }
+	var targets []target
 	if self != "" {
-		if u, uerr := rep.Client.Unit(ctx, self); uerr == nil && u.MaxHealth > 0 && u.Health < u.MaxHealth {
-			ok, evidence = false, fmt.Sprintf("self at %d/%d after the refill", u.Health, u.MaxHealth)
+		targets = append(targets, target{"self", "", self})
+	}
+	if rep.Guids.Bot != "" {
+		targets = append(targets, target{"hire", rep.BotName, rep.Guids.Bot})
+	}
+	for i, g := range rep.Guids.Extras {
+		name := ""
+		if i < len(rep.ExtraNames) {
+			name = rep.ExtraNames[i]
+		}
+		targets = append(targets, target{fmt.Sprintf("extra%d", i+1), name, g})
+	}
+	for _, tg := range targets {
+		if tg.name == "" {
+			continue
+		}
+		if _, err := tb.FreeTextHurt(ctx, tg.name, 100); err != nil {
+			fail(".tb hurt %s 100: %s", tg.name, trimReason(err.Error()))
 		}
 	}
-	return map[string]any{"id": "healed_full", "ok": ok, "value": int(st.MaxHealth), "evidence": evidence}
+	for _, tg := range targets {
+		if tg.name == "" && tg.label != "self" {
+			fail("%s has no name to refill: not proved full", tg.label)
+			continue
+		}
+		hp, max, rerr := r.waitFull(ctx, rep.Client, tg.guid)
+		switch {
+		case rerr != nil:
+			fail("%s %s unreadable after the refill: %s", tg.label, tg.guid, trimReason(rerr.Error()))
+		case hp < max:
+			fail("%s %s at %d/%d after the refill", tg.label, tg.guid, hp, max)
+		}
+	}
+	if ok {
+		evidence = append(evidence, fmt.Sprintf("%d unit(s) read back at full health after the refill", len(targets)))
+	}
+	return map[string]any{"id": "healed_full", "ok": ok, "value": int(st.MaxHealth),
+		"evidence": strings.Join(evidence, "; ")}
+}
+
+// waitFull reads one unit by guid until it is at full health or the wait is
+// over; it returns the last health read (an error when no read worked).
+func (r *Runner) waitFull(ctx context.Context, client *Client, guid string) (hp, max uint32, err error) {
+	deadline := time.Now().Add(r.healWait())
+	for {
+		u, uerr := client.Unit(ctx, guid)
+		if uerr != nil {
+			err = uerr
+		} else if u.MaxHealth > 0 {
+			hp, max, err = u.Health, u.MaxHealth, nil
+			if hp >= max {
+				return hp, max, nil
+			}
+		} else {
+			err = fmt.Errorf("no max health on the unit row")
+		}
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
+			return hp, max, err
+		}
+		time.Sleep(r.healPoll())
+	}
 }
 
 // trialTeardown releases the trial's hires at trial end: stay, free, logout
@@ -266,17 +396,16 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	if r.dry() {
 		return
 	}
-	tbr := r.tbRunner
-	if tbr == nil {
-		tbr = NewTBRunner(rep.Client)
+	if rep.Guard != nil {
+		rep.Guard.SetAbort(r.TeardownAbort)
 	}
-	tb := tbcmd.NewClient(tbr)
+	tb := r.tbOf(rep)
 	names := []string{}
 	if rep.BotName != "" {
 		names = append(names, rep.BotName)
 	}
 	names = append(names, rep.ExtraNames...)
-	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, RecoveryPath: rep.RecoveryPath}
+	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, Server: r.Server, RecoveryPath: rep.RecoveryPath}
 	for _, name := range names {
 		if name == "" {
 			continue

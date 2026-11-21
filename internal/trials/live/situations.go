@@ -51,6 +51,11 @@ type LiveSituation struct {
 
 	// Timeout bounds the per-step waits (0 is the constants above).
 	Now func() time.Time
+
+	// held is the arena lock of the repeat in flight: kept until Finish, so
+	// the lock outlives the repeat teardown (kills, heal) on every path.
+	heldMu sync.Mutex
+	held   *ArenaLock
 }
 
 // kindOf reads the trial's situation kind, tank_damage when absent.
@@ -75,10 +80,26 @@ func (s *LiveSituation) Run(ctx context.Context, r *Repeat) (map[string]any, err
 }
 
 // Finish releases the arena the repeat held: the runner calls it after the
-// repeat's teardown, on every path.
+// repeat's teardown, on every path (a normal end, an error, a panic).
 func (s *LiveSituation) Finish() {
-	// One LiveSituation serves a whole run; the arena it held is released by
-	// the tank run itself when its repeat ends, so nothing is left here.
+	s.heldMu.Lock()
+	lock := s.held
+	s.held = nil
+	s.heldMu.Unlock()
+	if lock != nil {
+		lock.Release()
+	}
+}
+
+// hold keeps lock until Finish (an earlier unreleased lock goes first).
+func (s *LiveSituation) hold(lock *ArenaLock) {
+	s.heldMu.Lock()
+	prev := s.held
+	s.held = lock
+	s.heldMu.Unlock()
+	if prev != nil && prev != lock {
+		prev.Release()
+	}
 }
 
 func (s *LiveSituation) now() time.Time {
@@ -101,12 +122,14 @@ type tankRun struct {
 	tb  *tbcmd.Client
 
 	arena      *Arena
-	lock       *ArenaLock
 	summoned   []string
 	mobSource  string
 	summonWall string
 	fightStart time.Time
 	blocked    bool
+	// strangerWhy is set when a real player came within reach: nothing is
+	// summoned or fought near them, and the repeat ends INVALID.
+	strangerWhy string
 
 	// levelLo/levelHi are the trial's mob level window.
 	levelLo, levelHi int
@@ -208,13 +231,17 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 	if arena == nil {
 		return map[string]any{"ok": false, "ended": "no arena", "invalid_reason": why}, nil
 	}
-	defer t.releaseArena()
+	// The arena lock is held until the runner calls Finish after the repeat
+	// teardown: nothing is released here.
 
 	if name := t.r.BotName; name != "" {
 		t.bringHire(ctx, name)
 	}
 	if t.count > 0 {
 		made := t.summon(ctx, t.role, t.count)
+		if len(made) == 0 && t.strangerWhy != "" {
+			return map[string]any{"ok": false, "ended": "real_player", "invalid_reason": t.strangerWhy}, nil
+		}
 		if len(made) == 0 && t.blocked {
 			return map[string]any{"ok": false, "ended": "no mobs", "invalid_reason": "summon unclaimed"}, nil
 		}
@@ -223,7 +250,6 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 				"invalid_reason": "no mobs (npc add temp refused and no world mob)"}, nil
 		}
 	}
-	t.r.Guids.Mobs = append([]string(nil), t.summoned...)
 	window := [2]int{t.levelLo, t.levelHi}
 
 	wait, _ := numOpt(t.sitOpts, "pull_after_s")
@@ -262,6 +288,11 @@ func (t *tankRun) run(ctx context.Context) (map[string]any, error) {
 			ended = "disconnected"
 			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": ended})
 			return map[string]any{"ok": false, "ended": ended, "invalid_reason": why}, nil
+		}
+		if t.strangerWhy != "" {
+			ended = "real_player"
+			t.r.Marks.Add(map[string]any{"kind": "fight_end", "ended": ended})
+			return map[string]any{"ok": false, "ended": ended, "invalid_reason": t.strangerWhy}, nil
 		}
 		now := t.sit.now()
 		if !fightSeen && t.fighting(ctx) {
@@ -427,7 +458,8 @@ func (t *tankRun) acquireArena(ctx context.Context, level int) (*Arena, string) 
 			sleepCtx(ctx, 2500*time.Millisecond)
 			if t.quiet(ctx) {
 				t.sit.logf("arena %s quiet", a.ID)
-				t.arena, t.lock = a, lock
+				t.arena = a
+				t.sit.hold(lock)
 				t.r.Marks.Add(map[string]any{"kind": "arena", "id": a.ID, "map": a.Map,
 					"x": a.X, "y": a.Y, "z": a.Z})
 				return a, ""
@@ -446,36 +478,67 @@ func (t *tankRun) acquireArena(ctx context.Context, level int) (*Arena, string) 
 }
 
 // quiet reports whether the arena holds no unit but the party: the serve's
-// unit rows carry no faction, so any live creature or stranger within 40
-// yards counts as not quiet (stricter than the module's own probe).
+// unit rows carry no faction, so any live creature within 40 yards counts as
+// not quiet, and so does EVERY player character that is not the tester or a
+// hire of this trial (a stranger, dead or alive, whatever its row type). An
+// unreadable list is not quiet.
 func (t *tankRun) quiet(ctx context.Context) bool {
 	units, err := t.r.Client.Units(ctx, 40)
 	if err != nil {
 		return false
 	}
-	// The tester itself, its own pet and the hired bots of this trial are
-	// the party: none of them makes the arena busy.
-	party := map[string]bool{}
-	for _, g := range append([]string{t.r.Guids.Player, t.r.Guids.Bot, t.r.Guids.Pet}, t.r.Guids.Extras...) {
-		if g != "" {
-			party[normGUIDOf(g)] = true
-		}
-	}
+	party := t.party()
 	for _, u := range units {
-		if u.Dead || u.Type == "active player" || party[normGUIDOf(u.GUID)] {
+		if party[normGUIDOf(u.GUID)] {
 			continue
 		}
-		return false
+		if isPlayerRow(u) || !u.Dead {
+			return false
+		}
 	}
 	return true
 }
 
-// releaseArena gives the arena back after the repeat's teardown.
-func (t *tankRun) releaseArena() {
-	if t.lock != nil {
-		t.lock.Release()
-		t.lock = nil
+// party is the guids that belong to this trial: the tester, its own pet and
+// the hired bots. Nobody else is a friend.
+func (t *tankRun) party() map[string]bool {
+	party := map[string]bool{}
+	add := func(g string) {
+		if g = normGUIDOf(g); g != "" {
+			party[g] = true
+		}
 	}
+	add(t.r.Guids.Player)
+	add(t.r.Guids.Bot)
+	add(t.r.Guids.Pet)
+	for _, g := range t.r.Guids.Extras {
+		add(g)
+	}
+	if t.r.Guard != nil {
+		add(t.r.Guard.PlayerGUID())
+	}
+	return party
+}
+
+// isPlayerRow reports a player character row (active or not).
+func isPlayerRow(u Unit) bool {
+	return strings.Contains(strings.ToLower(u.Type), "player")
+}
+
+// strangerNear reports a real player within 40 yards of the arena (or an
+// unreadable list: nothing is done on a guess).
+func (t *tankRun) strangerNear(ctx context.Context) (string, bool) {
+	units, err := t.r.Client.Units(ctx, 40)
+	if err != nil {
+		return "the unit list is unreadable, so a real player cannot be ruled out", true
+	}
+	party := t.party()
+	for _, u := range units {
+		if isPlayerRow(u) && !party[normGUIDOf(u.GUID)] {
+			return "a real player (" + normGUIDOf(u.GUID) + ") came within reach of the arena", true
+		}
+	}
+	return "", false
 }
 
 // ---- hire ---------------------------------------------------------------
@@ -562,6 +625,13 @@ func (t *tankRun) summonOne(ctx context.Context, role string) string {
 		t.blocked = true
 		return ""
 	}
+	// Never act near a real player: no summon while one is in reach.
+	if why, near := t.strangerNear(ctx); near {
+		t.sit.logf("no summon: %s", why)
+		t.strangerWhy = why
+		t.blocked = true
+		return ""
+	}
 	tries := minInt(5, maxInt(1, len(entries)*2))
 	for i := range tries {
 		entry := entries[i%len(entries)]
@@ -586,6 +656,17 @@ func (t *tankRun) summonOne(ctx context.Context, role string) string {
 		}
 		guid, seen := t.claim(ctx, entry.Entry, 5*time.Second, known, before)
 		if guid == "" {
+			// The add went through, so something spawned: every fresh
+			// candidate is ledgered at once and teardown kills it. A spawn
+			// nobody can identify is counted and fails the teardown row.
+			for _, c := range seen {
+				if g, _ := c["guid"].(string); g != "" {
+					t.ledgerSummon(g, entry.Entry, map[string]any{"unclaimed": true})
+				}
+			}
+			if len(seen) == 0 {
+				t.r.Unidentified++
+			}
 			row := map[string]any{"kind": "summon_unclaimed", "entry": entry.Entry,
 				"new_units": seen, "arena": t.arenaRow()}
 			t.r.Ledger.Add(row)
@@ -594,30 +675,43 @@ func (t *tankRun) summonOne(ctx context.Context, role string) string {
 			t.blocked = true
 			return ""
 		}
+		// The claim is ledgered before anything else is read or done to it:
+		// a kill of an unledgered guid is refused.
+		t.ledgerSummon(guid, entry.Entry, nil)
 		u, err := t.r.Client.Unit(ctx, guid)
 		if err != nil {
-			dc := &Disconnected{err: err}
-			_ = dc
-			t.r.Ledger.Add(map[string]any{"kind": "summon", "guid": guid, "entry": entry.Entry})
 			t.r.Marks.Add(map[string]any{"kind": "summon", "guid": guid, "entry": entry.Entry, "wall": t.summonWall})
 			t.summoned = append(t.summoned, guid)
+			t.r.Guids.Mobs = append(t.r.Guids.Mobs, guid)
 			continue
 		}
 		if u.Level < t.levelLo || u.Level > t.levelHi || u.Dead {
 			t.sit.logf("summon entry %d: guid %s level %d is outside %d-%d; killed", entry.Entry, guid, u.Level, t.levelLo, t.levelHi)
-			_ = t.r.Guard.Kill(ctx, guid)
+			if kerr := t.r.Guard.Kill(ctx, guid); kerr != nil {
+				t.sit.logf("kill of the out-of-window summon %s: %v (teardown retries it)", guid, kerr)
+			}
 			continue
 		}
-		t.r.Ledger.Add(map[string]any{"kind": "summon", "guid": guid, "entry": entry.Entry,
-			"level": u.Level, "wall": t.summonWall})
 		t.r.Ledger.Add(map[string]any{"kind": "mob_ready", "guid": guid, "entry": entry.Entry, "level": u.Level})
 		t.r.Marks.Add(map[string]any{"kind": "summon", "guid": guid, "entry": entry.Entry,
 			"level": u.Level, "wall": t.summonWall})
 		t.summoned = append(t.summoned, guid)
+		t.r.Guids.Mobs = append(t.r.Guids.Mobs, guid)
 		return guid
 	}
 	t.blocked = true
 	return ""
+}
+
+// ledgerSummon puts one summoned guid in the ledger at once (the ledger is
+// the kill list: the guard kills only ledgered summons and teardown kills
+// every ledgered one).
+func (t *tankRun) ledgerSummon(guid string, entry int, extra map[string]any) {
+	row := map[string]any{"kind": "summon", "guid": guid, "entry": entry, "wall": t.summonWall}
+	for k, v := range extra {
+		row[k] = v
+	}
+	t.r.Ledger.Add(row)
 }
 
 // claim finds the unit an `.npc add temp` produced: a fresh unit of the
@@ -871,11 +965,15 @@ func (t *tankRun) governor() *Governor {
 			name = t.r.ExtraNames[idx-1]
 		}
 		g.Hurt = func(pct float64) error {
-			_, err := t.tb.FreeTextHurt(context.Background(), name, uint8(math.Round(pct)))
+			ctx, cancel := context.WithTimeout(context.Background(), governorCallTimeout)
+			defer cancel()
+			_, err := t.tb.FreeTextHurt(ctx, name, uint8(math.Round(pct)))
 			return err
 		}
 		g.Refill = func() error {
-			_, err := t.tb.FreeTextHurt(context.Background(), name, 100)
+			ctx, cancel := context.WithTimeout(context.Background(), governorCallTimeout)
+			defer cancel()
+			_, err := t.tb.FreeTextHurt(ctx, name, 100)
 			return err
 		}
 	}
@@ -925,24 +1023,53 @@ func (g *Governor) EndedNow() string {
 	return g.Ended
 }
 
-// Tick is one sampler tick's governor step (the python Governor.tick).
+// govAction is what one tick decided to do: planned under the governor's
+// lock, performed WITHOUT it (the serve call can block for a minute), and its
+// result applied under the lock again.
+type govAction struct {
+	kind      string // "rescue" or "topup"
+	hp, maxHP int
+	percent   float64
+	now       time.Time
+	dmg       int // topup of the player: GM damage
+	hurtPct   float64
+	hurtBot   bool
+}
+
+// governorCallTimeout bounds one of the governor's serve calls.
+const governorCallTimeout = 30 * time.Second
+
+// Tick is one sampler tick's governor step (the python Governor.tick). The
+// sampler goroutine is the only caller; the mutex only guards the state the
+// situation loop's EndedNow reads, and is never held across a serve call.
 func (g *Governor) Tick(sample map[string]any) {
 	if g == nil || sample == nil {
 		return
 	}
+	act := g.plan(sample)
+	if act == nil {
+		return
+	}
+	err := g.perform(act)
+	g.apply(act, err)
+}
+
+// plan updates the fall bookkeeping from one sample and decides the action
+// (nil: none), under the lock.
+func (g *Governor) plan(sample map[string]any) *govAction {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.Stopped != nil && g.Stopped() {
-		return
+		return nil
 	}
 	victim, _ := sample[g.sampleKey()].(map[string]any)
 	if victim == nil {
-		return
+		return nil
 	}
 	hp := int(intOf(victim["hp"]))
 	maxHP := int(intOf(victim["max_hp"]))
 	if maxHP <= 0 {
-		return
+		return nil
 	}
 	if hp <= 0 || boolOf(victim["dead"]) {
 		if g.Victim == "player" {
@@ -950,7 +1077,7 @@ func (g *Governor) Tick(sample map[string]any) {
 		} else {
 			g.Ended = "victim_dead"
 		}
-		return
+		return nil
 	}
 	percent := 100 * float64(hp) / float64(maxHP)
 	now := g.now()
@@ -993,55 +1120,19 @@ func (g *Governor) Tick(sample map[string]any) {
 		if early {
 			g.EarlyRescues++
 		}
-		g.rescue(hp, maxHP, percent, now)
-		recent := g.Rescues[:0]
-		for _, at := range g.Rescues {
-			if now.Sub(at) <= time.Minute {
-				recent = append(recent, at)
-			}
-		}
-		g.Rescues = recent
-		if len(recent) >= g.MaxRescues {
-			g.Ended = "floor"
-		}
-		return
+		return &govAction{kind: "rescue", hp: hp, maxHP: maxHP, percent: percent, now: now}
 	}
 	if inCombat, ok := victim["in_combat"].(bool); ok && !inCombat {
-		return
+		return nil
 	}
 	if percent > g.Band[1] && now.Sub(g.LastDamage) > time.Duration(g.TopUpGap*float64(time.Second)) {
-		g.topUp(hp, maxHP)
+		return g.planTopUp(hp, maxHP, now)
 	}
+	return nil
 }
 
-// rescue puts the victim back to full. The core's `.modify hp <hp>` sets
-// current AND maximum health to its argument, so a player rescue passes the
-// victim's own maximum (the only value that leaves the maximum alone); a
-// hire is refilled through the module's own hurt command.
-func (g *Governor) rescue(hp, maxHP int, percent float64, now time.Time) {
-	var err error
-	if g.Victim == "player" {
-		err = g.Guard.SetHP(context.Background(), g.VictimGUID, maxHP)
-	} else if g.Refill != nil {
-		err = g.Refill()
-	}
-	if err != nil {
-		g.logf("governor floor heal skipped: %v", err)
-		return
-	}
-	wall := g.wall()
-	g.Marks.Add(map[string]any{"kind": "gm_heal", "hp": hp, "max_hp": maxHP,
-		"pct": round2(percent), "to": maxHP, "wall": wall})
-	g.Marks.Excluded(wall, g.wallAt(3*time.Second), "floor")
-	g.Rescues = append(g.Rescues, now)
-	g.LastDamage = now
-	if g.OOC {
-		g.logf("!!! OOC RESCUE FIRED: %s fell to %.1f%% (%d/%d) out of combat", g.Victim, percent, hp, maxHP)
-	}
-}
-
-// topUp brings a victim above the band down to the band's middle.
-func (g *Governor) topUp(hp, maxHP int) {
+// planTopUp decides how a victim above the band comes down to its middle.
+func (g *Governor) planTopUp(hp, maxHP int, now time.Time) *govAction {
 	middlePct := (g.Band[0] + g.Band[1]) / 2
 	if g.TopUpTo != nil {
 		middlePct = *g.TopUpTo
@@ -1049,31 +1140,85 @@ func (g *Governor) topUp(hp, maxHP int) {
 	if g.Victim == "player" {
 		dmg := damageStep(hp, maxHP, g.Band[0], g.Band[1], g.TopUpTo)
 		if dmg < 1 {
-			return
+			return nil
 		}
-		if err := g.Guard.Send(context.Background(), "damage", TargetSelf, g.VictimGUID, itoa(dmg)); err != nil {
-			g.logf("governor damage skipped: %v", err)
+		return &govAction{kind: "topup", hp: hp, maxHP: maxHP, now: now, dmg: dmg}
+	}
+	middle := int(middlePct * float64(maxHP) / 100)
+	if hp <= middle || g.Hurt == nil {
+		return nil
+	}
+	return &govAction{kind: "topup", hp: hp, maxHP: maxHP, now: now, hurtBot: true,
+		hurtPct: float64(100 * middle / maxHP), dmg: hp - middle}
+}
+
+// perform makes the serve call of one action. It holds no lock.
+func (g *Governor) perform(a *govAction) error {
+	ctx, cancel := context.WithTimeout(context.Background(), governorCallTimeout)
+	defer cancel()
+	switch a.kind {
+	case "rescue":
+		// The core's `.modify hp <hp>` sets current AND maximum health to
+		// its argument, so a player rescue passes the victim's own maximum
+		// (the only value that leaves the maximum alone); a hire is
+		// refilled through the module's own hurt command.
+		if g.Victim == "player" {
+			return g.Guard.SetHP(ctx, g.VictimGUID, a.maxHP)
+		}
+		if g.Refill != nil {
+			return g.Refill()
+		}
+	case "topup":
+		if g.Victim == "player" {
+			return g.Guard.Send(ctx, "damage", TargetSelf, g.VictimGUID, itoa(a.dmg))
+		}
+		return g.Hurt(a.hurtPct)
+	}
+	return nil
+}
+
+// apply records the result of an action, under the lock.
+func (g *Governor) apply(a *govAction, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch a.kind {
+	case "rescue":
+		if err != nil {
+			g.logf("governor floor heal skipped: %v", err)
+		} else {
+			wall := g.wall()
+			g.Marks.Add(map[string]any{"kind": "gm_heal", "hp": a.hp, "max_hp": a.maxHP,
+				"pct": round2(a.percent), "to": a.maxHP, "wall": wall})
+			g.Marks.Excluded(wall, g.wallAt(3*time.Second), "floor")
+			g.Rescues = append(g.Rescues, a.now)
+			g.LastDamage = a.now
+			if g.OOC {
+				g.logf("!!! OOC RESCUE FIRED: %s fell to %.1f%% (%d/%d) out of combat", g.Victim, a.percent, a.hp, a.maxHP)
+			}
+		}
+		recent := g.Rescues[:0]
+		for _, at := range g.Rescues {
+			if a.now.Sub(at) <= time.Minute {
+				recent = append(recent, at)
+			}
+		}
+		g.Rescues = recent
+		if len(recent) >= g.MaxRescues {
+			g.Ended = "floor"
+		}
+	case "topup":
+		if err != nil {
+			if a.hurtBot {
+				g.logf("governor bot hurt skipped: %v", err)
+			} else {
+				g.logf("governor damage skipped: %v", err)
+			}
 			return
 		}
 		g.LastDamage = g.now()
-		g.Pending = float64(dmg) * 100 / float64(maxInt(1, maxHP))
+		g.Pending = float64(a.dmg) * 100 / float64(maxInt(1, a.maxHP))
 		g.PendingSamps = gmFallSamples
-		return
 	}
-	middle := int(middlePct * float64(maxHP) / 100)
-	if hp <= middle {
-		return
-	}
-	if g.Hurt == nil {
-		return
-	}
-	if err := g.Hurt(float64(100 * middle / maxHP)); err != nil {
-		g.logf("governor bot hurt skipped: %v", err)
-		return
-	}
-	g.LastDamage = g.now()
-	g.Pending = float64(hp-middle) * 100 / float64(maxInt(1, maxHP))
-	g.PendingSamps = gmFallSamples
 }
 
 // damageStep is the largest GM damage that keeps the victim above bandLow.
