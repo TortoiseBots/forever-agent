@@ -439,3 +439,92 @@ func TestEventRulesSkipWithoutInput(t *testing.T) {
 		t.Fatalf("counts %+v", counts)
 	}
 }
+
+// TestRule15DispelEventEndsTheDebuff: the frame list still shows the aura to the end (a stale aura row), and a
+// dispel row says it came off at 6 s: the episode is 6 s, under the 8 s minimum, so no hit. The same frames
+// without the row are the rule's 30 s hit.
+func TestRule15DispelEventEndsTheDebuff(t *testing.T) {
+	dispel := map[int]string{17172: "magic"}
+	names := map[int]string{17172: "Hex"}
+	var frames []*Frame
+	for t := 0.0; t <= 30; t += 2 {
+		tank := testUnit(gTank)
+		tank.Combat, tank.X, tank.Y = true, 2, 0
+		priest := testUnit(gHeal)
+		priest.Auras = []uint32{17172}
+		paladin := testUnit(gDps3)
+		paladin.X, paladin.Y = 6, 0
+		frames = append(frames, frameAt(t, tank, priest, paladin))
+	}
+	roles := map[string]string{gHeal: "healer", gTank: "tank", gDps3: "paladin"}
+	without := eventRun("watch", roles, frames, nil, names, dispel)
+	withClass(without, gHeal, "priest")
+	withClass(without, gTank, "warrior")
+	withClass(without, gDps3, "paladin")
+	if hits := Rule15(without); len(hits) != 1 || hits[0].Dur != 30 {
+		t.Fatalf("without the dispel row: hits %+v", hits)
+	}
+
+	row := crow("dispel", 6, gDps3, gHeal, 527)
+	row.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	with := eventRun("watch", roles, frames, []CombatRow{row}, names, dispel)
+	withClass(with, gHeal, "priest")
+	withClass(with, gTank, "warrior")
+	withClass(with, gDps3, "paladin")
+	if hits := Rule15(with); len(hits) != 0 {
+		t.Fatalf("the dispel at 6 s did not end the episode: %+v", hits)
+	}
+
+	// a later dispel (16 s) leaves a 16 s episode: a hit that ends where the row says, not at the frames' end
+	late := crow("dispel", 16, gDps3, gHeal, 527)
+	late.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	withLate := eventRun("watch", roles, frames, []CombatRow{late}, names, dispel)
+	withClass(withLate, gHeal, "priest")
+	withClass(withLate, gTank, "warrior")
+	withClass(withLate, gDps3, "paladin")
+	hits := Rule15(withLate)
+	if len(hits) != 1 || hits[0].Dur != 16 {
+		t.Fatalf("the 16 s dispel: hits %+v, want one 16 s hit", hits)
+	}
+}
+
+// TestRule15SecondEpisodeKeepsItsOwnDispel: one aura reapplied after a gap is two episodes, and each has its own
+// dispel row. The index must keep every removal time: with only the first, the second episode (22-40 s) would be
+// judged as never dispelled because its 26 s row is later than its start.
+func TestRule15SecondEpisodeKeepsItsOwnDispel(t *testing.T) {
+	dispel := map[int]string{17172: "magic"}
+	names := map[int]string{17172: "Hex"}
+	var frames []*Frame
+	for t := 0.0; t <= 40; t += 2 {
+		tank := testUnit(gTank)
+		tank.Combat, tank.X, tank.Y = true, 2, 0
+		priest := testUnit(gHeal)
+		if (t >= 0 && t <= 10) || t >= 22 {
+			priest.Auras = []uint32{17172}
+		}
+		paladin := testUnit(gDps3)
+		paladin.X, paladin.Y = 6, 0
+		frames = append(frames, frameAt(t, tank, priest, paladin))
+	}
+	roles := map[string]string{gHeal: "healer", gTank: "tank", gDps3: "paladin"}
+	first := crow("dispel", 6, gDps3, gHeal, 527)
+	first.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	second := crow("dispel", 26, gDps3, gHeal, 527)
+	second.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	run := eventRun("watch", roles, frames, []CombatRow{first, second}, names, dispel)
+	withClass(run, gHeal, "priest")
+	withClass(run, gTank, "warrior")
+	withClass(run, gDps3, "paladin")
+	if hits := Rule15(run); len(hits) != 0 {
+		t.Fatalf("the second episode's own dispel did not end it: %+v", hits)
+	}
+	// With only the first row the second episode is undispelled: 22-40 s is a hit, and it is the row at 26 s that
+	// changes that — the first row cannot excuse it.
+	onlyFirst := eventRun("watch", roles, frames, []CombatRow{first}, names, dispel)
+	withClass(onlyFirst, gHeal, "priest")
+	withClass(onlyFirst, gTank, "warrior")
+	withClass(onlyFirst, gDps3, "paladin")
+	if hits := Rule15(onlyFirst); len(hits) != 1 {
+		t.Fatalf("without the second row: hits %+v, want the 22-40 s episode", hits)
+	}
+}

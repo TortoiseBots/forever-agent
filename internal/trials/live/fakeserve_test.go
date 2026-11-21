@@ -27,6 +27,14 @@ type fakeServe struct {
 	units    []map[string]any
 	events   []map[string]any
 	dropped  map[string]any
+	target   string
+	// hook runs before the canned answer of every call (a simulated world:
+	// it may rewrite status/units). It must use the fake's own setters.
+	hook func(method string, params map[string]any)
+	// statusFn and unitsFn, when set, answer those reads from a live world
+	// instead of the static maps.
+	statusFn func() map[string]any
+	unitsFn  func() []map[string]any
 }
 
 type fakeCall struct {
@@ -52,8 +60,18 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, nil, -32700, "parse error")
 		return
 	}
+	var decoded map[string]any
+	if len(req.Params) > 0 {
+		_ = json.Unmarshal(req.Params, &decoded)
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeCall{method: req.Method, params: req.Params})
+	hook := f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook(req.Method, decoded)
+	}
+	f.mu.Lock()
 	errQueue := f.errCodes[req.Method]
 	var errCode int
 	if len(errQueue) > 0 {
@@ -67,9 +85,30 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 	status := f.status
 	units := f.units
 	events := f.events
+	statusFn, unitsFn := f.statusFn, f.unitsFn
 	f.mu.Unlock()
+	if statusFn != nil {
+		status = statusFn()
+	}
+	if unitsFn != nil {
+		units = unitsFn()
+	}
 	if errCode != 0 {
 		writeRPCError(w, req.ID, errCode, "fake error")
+		return
+	}
+	if req.Method == "target" {
+		var p struct {
+			GUID string `json:"guid"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		f.mu.Lock()
+		f.target = p.GUID
+		if f.status != nil {
+			f.status["target"] = p.GUID
+		}
+		f.mu.Unlock()
+		writeRPCResult(w, req.ID, map[string]any{"guid": p.GUID})
 		return
 	}
 	if answer != nil {
@@ -79,14 +118,48 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "status":
 		if status == nil {
-			status = map[string]any{"state": "in_world", "guid": "0x0000000000000001"}
+			status = map[string]any{"state": "in_world", "guid": "0x0000000000000001", "target": f.target}
 		}
 		writeRPCResult(w, req.ID, status)
 	case "units":
 		if units == nil {
 			units = []map[string]any{}
 		}
-		writeRPCResult(w, req.ID, units)
+		var p struct {
+			Within float64 `json:"within"`
+			Entry  int     `json:"entry"`
+			Name   string  `json:"name"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		out := []map[string]any{}
+		for _, u := range units {
+			if p.Within > 0 {
+				if d, ok := numOrZeroOK(u["distance"]); ok && d > p.Within {
+					continue
+				}
+			}
+			if p.Entry != 0 && int(numOrZero(u["entry"])) != p.Entry {
+				continue
+			}
+			if p.Name != "" && !strings.Contains(strings.ToLower(strAny(u["name"])), strings.ToLower(p.Name)) {
+				continue
+			}
+			out = append(out, u)
+		}
+		writeRPCResult(w, req.ID, out)
+	case "unit":
+		var p struct {
+			GUID string `json:"guid"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		for _, u := range units {
+			if strings.EqualFold(strAny(u["guid"]), p.GUID) {
+				writeRPCResult(w, req.ID, u)
+				return
+			}
+		}
+		writeRPCError(w, req.ID, -32003, "unit "+p.GUID+" is not in view")
+		return
 	case "events":
 		var p struct {
 			Since uint64 `json:"since"`
@@ -119,7 +192,13 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeRPCResult(w, req.ID, map[string]any{"events": out, "next": next,
 			"oldest": oldest, "dropped": dropped, "more": false})
-	case "gm", "chat", "tbm", "cast":
+	case "trial_units":
+		var p struct {
+			GUIDs []string `json:"guids"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		writeRPCResult(w, req.ID, map[string]any{"guids": p.GUIDs})
+	case "gm", "chat", "tbm", "cast", "gm_kill", "gm_set_hp", "gm_aura", "attack", "stop_attack":
 		writeRPCResult(w, req.ID, map[string]any{})
 	default:
 		writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)
@@ -141,6 +220,16 @@ func rpcID(id any) string {
 	}
 	raw, _ := json.Marshal(id)
 	return string(raw)
+}
+
+func numOrZeroOK(v any) (float64, bool) {
+	f := numOrZero(v)
+	return f, v != nil
+}
+
+func strAny(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func numOrZero(v any) float64 {

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -49,6 +51,22 @@ type Provisioner struct {
 
 	// Timeout bounds one provisioning step; 0 means 20 s.
 	Timeout time.Duration
+
+	// Server names the test server the marks belong to (a character name
+	// may exist on two servers); RecoveryPath is the recovery mark file of
+	// the items this trial gives (see items.go); empty keeps the marks in
+	// memory only.
+	Server       string
+	RecoveryPath string
+
+	// OnHire and OnExtra are told a hire's name as soon as it is logged in
+	// (or found already online), before any later step can fail, so a
+	// failed setup can still log it out.
+	OnHire  func(name string)
+	OnExtra func(name string)
+
+	markOnce sync.Once
+	recovery *recoveryMarks
 }
 
 // BotSpec is trial["bot"] (or one extra_bots entry): what to provision.
@@ -109,6 +127,13 @@ type ProvisionResult struct {
 	GUID string
 }
 
+// alreadyLoggedIn is the module's "that bot is already logged in or
+// loading" answer: the hire is there (a leftover session of an earlier
+// repeat or run), so the login step is satisfied and the read-backs decide.
+func alreadyLoggedIn(lines []string) bool {
+	return strings.Contains(strings.ToLower(strings.Join(lines, " ")), "already logged in")
+}
+
 // timeoutOf bounds one step.
 func (p *Provisioner) timeoutOf() time.Duration {
 	if p.Timeout > 0 {
@@ -147,6 +172,7 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 	name := ""
 	if previous != "" && p.partyHas(ctx, previous) {
 		name = previous
+		p.hired(name)
 		rows = append(rows, rowOf("bot_present", true, previous, "reused hire "+previous+" from the previous repeat"))
 	} else {
 		candidate := pool(spec.Class)
@@ -158,22 +184,35 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 		loginCtx, cancel := p.ctxOf(ctx)
 		lines, err := p.TB.FreeTextLogin(loginCtx, name, p.Player)
 		cancel()
-		if err != nil {
-			rows = append(rows, rowOf("bot_present", false, nil, ".tb login "+name+": "+tbErrText(err, lines)))
-			p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
-			return out, rows, nil
-		}
 		p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
-		guid := p.unitGUIDOf(ctx, name)
-		if guid == "" {
-			rows = append(rows, rowOf("bot_present", false, name, name+" logged in but has no unit guid in view"))
+		if err != nil && !alreadyLoggedIn(lines) {
+			// "already logged in or loading" is a leftover session of this
+			// same hire: it is there, and the read-backs below decide.
+			rows = append(rows, rowOf("bot_present", false, nil, ".tb login "+name+": "+tbErrText(err, lines)))
 			return out, rows, nil
 		}
-		// The hire's identity is the party row (never a chat guess): a
-		// login without a party guid is not a hire.
-		pg := p.partyGUIDOf(ctx, name)
+		p.hired(name) // from here on a failed setup must still log it out
+		// The login is asynchronous: the hire appears in the party roster
+		// (or the units model) a moment later. The party row is the
+		// identity; a name in chat is not.
+		guid, pg := "", ""
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			pg = p.partyGUIDOf(ctx, name)
+			if pg == "" {
+				guid = p.unitGUIDOf(ctx, name)
+			}
+			if pg != "" || guid != "" || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if guid == "" && pg == "" {
+			rows = append(rows, rowOf("bot_present", false, name, name+" logged in but is neither in the party roster nor in view after 20 s"))
+			return out, rows, nil
+		}
 		if pg == "" {
-			rows = append(rows, rowOf("bot_present", false, name, name+" is no party member; no hire identity"))
+			rows = append(rows, rowOf("bot_present", false, name, name+" is in view but not a party member; no hire identity"))
 			return out, rows, nil
 		}
 		rows = append(rows, rowOf("bot_present", true, name, ".tb login "+name+" (party guid "+pg+")"))
@@ -186,6 +225,15 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 	}
 	out.HireGUID = guid
 	guids["bot"] = guid
+
+	// The pool bot is reused across runs and may be left dead: revive it and
+	// refill it before anything is measured, proved by `.tb state`.
+	if row := p.ensureAlive(ctx, name); row != nil {
+		rows = append(rows, row)
+		if !rowOK(row) {
+			return out, rows, nil
+		}
+	}
 
 	// Engine on: the spike behaviour never proves a trial.
 	if ok, ev := p.engineOn(ctx, name); !ok {
@@ -270,6 +318,7 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 			p.Ledger.Add(map[string]any{"kind": "hire", "name": name, "class": spec.Class, "extra": i + 1, "reply": firstLines(lines)})
 			presentEv = append(presentEv, fmt.Sprintf("extra%d: .tb login %s", i+1, name))
 		}
+		p.hiredExtra(name)
 		guid := p.partyGUIDOf(ctx, name)
 		if name != "" && (guid == "" || guid == out.HireGUID || hasGUID(guidList, guid)) {
 			presentOK = false
@@ -325,6 +374,19 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 	return out, rows, nil
 }
 
+// hired tells the caller the hire's name the moment it is online.
+func (p *Provisioner) hired(name string) {
+	if p.OnHire != nil && name != "" {
+		p.OnHire(name)
+	}
+}
+
+func (p *Provisioner) hiredExtra(name string) {
+	if p.OnExtra != nil && name != "" {
+		p.OnExtra(name)
+	}
+}
+
 // defaultD5 picks the first pool bot of a class.
 func (p *Provisioner) defaultD5(class string) string {
 	for _, n := range p.Pool[strings.ToLower(class)] {
@@ -341,14 +403,22 @@ func (p *Provisioner) partyHas(ctx context.Context, name string) bool {
 	return hasName(members, name)
 }
 
-// partyGUIDOf is the hire's guid by name: the `Party` roster names the
-// members but carries no guids, so the identity is the units model by name
-// (the collector's own guid source).
+// partyGUIDOf is the hire's guid from the serve's party roster, which names
+// every member with its guid. The units model cannot answer this: this core
+// sends no creature/player names in its unit rows.
 func (p *Provisioner) partyGUIDOf(ctx context.Context, name string) string {
-	if ok, members := p.partyGrouped(ctx, []string{name}); !ok || !hasName(members, name) {
+	tctx, cancel := p.ctxOf(ctx)
+	defer cancel()
+	info, err := p.Client.Party(tctx)
+	if err != nil {
 		return ""
 	}
-	return p.unitGUIDOf(ctx, name)
+	for _, m := range info.Members {
+		if strings.EqualFold(m.Name, name) {
+			return normGUIDOf(m.GUID)
+		}
+	}
+	return ""
 }
 
 // partyGrouped reads `Party`: the member names, grouped when the hire
@@ -373,8 +443,12 @@ func (p *Provisioner) partyGrouped(ctx context.Context, names []string) (bool, [
 	return len(members) > 0, members
 }
 
-// unitGUIDOf reads the hire's guid from the units model by name.
+// unitGUIDOf reads the hire's guid: the party roster first (it carries the
+// guids), then the units model by name (a server that sends names).
 func (p *Provisioner) unitGUIDOf(ctx context.Context, name string) string {
+	if g := p.partyGUIDOf(ctx, name); g != "" {
+		return g
+	}
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	units, err := p.Client.Units(tctx, 60)
@@ -389,6 +463,52 @@ func (p *Provisioner) unitGUIDOf(ctx context.Context, name string) string {
 	return ""
 }
 
+// ensureAlive revives a dead hire and refills it to full health, proved by
+// `.tb state` (life alive, hp full). A hire that cannot be revived fails the
+// repeat: nothing heals from a corpse. A nil row means it was alive.
+func (p *Provisioner) ensureAlive(ctx context.Context, name string) map[string]any {
+	dead := false
+	if bots, err := p.TB.State(ctx, name); err == nil {
+		for _, b := range bots {
+			if strings.EqualFold(b.Name, name) {
+				dead = b.State == "dead" || b.HP <= 1
+			}
+		}
+	}
+	if dead {
+		tctx, cancel := p.ctxOf(ctx)
+		rep, err := p.TB.Revive(tctx, name)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "revive", "bot": name, "reply": fmt.Sprint(rep), "error": errText(err)})
+		if err != nil {
+			return rowOf("bot_present", false, name, ".tb revive "+name+": "+err.Error())
+		}
+		time.Sleep(2 * time.Second)
+	}
+	// Full health either way (a revive lands at a reduced share).
+	hctx, hcancel := p.ctxOf(ctx)
+	_, err := p.TB.FreeTextHurt(hctx, name, 100)
+	hcancel()
+	if err != nil && !IsNoReply(err) {
+		return rowOf("bot_present", false, name, ".tb hurt "+name+" 100: "+err.Error())
+	}
+	sctx, scancel := p.ctxOf(ctx)
+	defer scancel()
+	bots, err := p.TB.State(sctx, name)
+	if err != nil {
+		return rowOf("bot_present", false, name, ".tb state "+name+" after revive: "+err.Error())
+	}
+	for _, b := range bots {
+		if strings.EqualFold(b.Name, name) {
+			if b.State == "dead" || b.HP <= 1 {
+				return rowOf("bot_present", false, name, name+" is still dead after .tb revive")
+			}
+			return nil
+		}
+	}
+	return rowOf("bot_present", false, name, ".tb state lists no "+name)
+}
+
 // engineOn runs `.tb engine <bot> on` and proves engine=yes in `State`.
 func (p *Provisioner) engineOn(ctx context.Context, name string) (bool, string) {
 	tctx, cancel := p.ctxOf(ctx)
@@ -399,29 +519,43 @@ func (p *Provisioner) engineOn(ctx context.Context, name string) (bool, string) 
 		return false, ".tb engine " + name + " on: " + tbErrText(err, lines)
 	}
 	p.Ledger.Add(map[string]any{"kind": "engine", "bot": name, "reply": firstLines(lines)})
-	st, err := p.TB.State(tctx, name)
-	if err != nil {
-		return false, ".tb state " + name + " after engine on: " + err.Error()
-	}
-	for _, b := range st {
-		if strings.EqualFold(b.Name, name) {
+	// The module acks the command; the engine itself attaches on its own
+	// tick. Give it a moment, then read the state: engine=no with
+	// stuck=noengine is a build without the bot engine (a spike-only
+	// module), a missing server capability, not a failed hire.
+	var last string
+	for attempt := 0; attempt < 5; attempt++ {
+		st, err := p.TB.State(tctx, name)
+		if err != nil {
+			return false, ".tb state " + name + " after engine on: " + err.Error()
+		}
+		for _, b := range st {
+			if !strings.EqualFold(b.Name, name) {
+				continue
+			}
 			if b.Engine {
 				return true, "engine on (state engine=yes)"
 			}
-			return false, ".tb engine " + name + " on sent, state engine=no"
+			last = "engine=no"
+			if b.NoEngine {
+				last = "engine=no, stuck=noengine"
+			}
 		}
+		time.Sleep(time.Second)
 	}
-	return false, ".tb state " + name + " lists no such bot after engine on"
+	return false, "SKIPPED needs=bot_engine: .tb engine " + name + " on is acknowledged, but the state stays " + last +
+		" (this module build has no bot engine, so the hire runs no strategies)"
 }
 
 // ensureLevel sets the hire's level via free text and reads it back from
-// the units model.
+// the hire's own unit record (by guid). A level that cannot be read back is
+// UNVERIFIED and fails the row; it is never read as 0 and never ok.
 func (p *Provisioner) ensureLevel(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Level <= 0 {
 		return nil
 	}
-	have := p.unitLevelOf(ctx, name)
-	if have == spec.Level {
+	have, known := p.unitLevelOf(ctx, name)
+	if known && have == spec.Level {
 		return rowOf("bot_level", true, have, fmt.Sprintf("%s level %d (target %d)", name, have, spec.Level))
 	}
 	tctx, cancel := p.ctxOf(ctx)
@@ -429,29 +563,49 @@ func (p *Provisioner) ensureLevel(ctx context.Context, spec BotSpec, name string
 	cancel()
 	if err != nil {
 		p.Ledger.Add(map[string]any{"kind": "level", "bot": name, "reply": firstLines(lines)})
-		return rowOf("bot_level", false, have, ".tb level "+name+": "+tbErrText(err, lines))
+		return rowOf("bot_level", false, levelValue(have, known), ".tb level "+name+": "+tbErrText(err, lines))
 	}
 	p.Ledger.Add(map[string]any{"kind": "level", "bot": name, "reply": firstLines(lines)})
-	have = p.unitLevelOf(ctx, name)
+	have, known = p.unitLevelOf(ctx, name)
+	if !known {
+		return rowOf("bot_level", false, "unknown", fmt.Sprintf("UNVERIFIED: %s level (target %d): no level readable from the bot's own unit record", name, spec.Level))
+	}
 	return rowOf("bot_level", have == spec.Level, have, fmt.Sprintf("%s level %d (target %d)", name, have, spec.Level))
 }
 
-// unitLevelOf reads the hire's level from the units model (0 when absent).
-func (p *Provisioner) unitLevelOf(ctx context.Context, name string) int {
+// levelValue is a row value for a level that may be unknown.
+func levelValue(level int, known bool) any {
+	if !known {
+		return "unknown"
+	}
+	return level
+}
+
+// unitLevelOf reads the hire's level from the hire's own unit record: the
+// row whose guid is the hire's (guid from the party roster). Player rows can
+// carry an empty name on this client, so a nameless row is never matched by
+// name and never yields a level of its own. ok is false when the level cannot
+// be read (no guid, no such row, no level on it): the caller reports
+// UNVERIFIED, never 0.
+func (p *Provisioner) unitLevelOf(ctx context.Context, name string) (int, bool) {
+	guid := p.partyGUIDOf(ctx, name)
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	units, err := p.Client.Units(tctx, 60)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	for _, u := range units {
-		if strings.EqualFold(u.Name, name) {
-			if lvl, ok := numOf(u.Raw["level"]); ok {
-				return int(lvl)
-			}
+		byGUID := guid != "" && normGUIDOf(u.GUID) == guid
+		byName := u.Name != "" && strings.EqualFold(u.Name, name)
+		if !byGUID && !byName {
+			continue
+		}
+		if lvl, ok := numOf(u.Raw["level"]); ok && lvl > 0 {
+			return int(lvl), true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // ensureTrain runs `.tb train <bot>`; the talent kit's Learn proves it.
@@ -510,6 +664,11 @@ func talentKit(class, spec string) []uint32 {
 		return nil
 	}
 	list, _ := cls[strings.ToLower(spec)].([]any)
+	// The Forever overlay's kit wins for the same class and spec: a marker
+	// the live server proved replaces the copied one.
+	if over, err := pyjson.Unmarshal(data.ReadOverlay("specs.json")); err == nil {
+		list = specOverlay(over, class, spec, list)
+	}
 	var out []uint32
 	for _, e := range list {
 		if f, ok := pyjson.Num(e); ok && f >= 1 {
@@ -518,6 +677,23 @@ func talentKit(class, spec string) []uint32 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// specOverlay returns the overlay's kit for class/spec, else base.
+func specOverlay(over any, class, spec string, base []any) []any {
+	oobj, ok := pyjson.Object(over)
+	if !ok {
+		return base
+	}
+	ocls, ok := pyjson.Object(oobj[strings.ToLower(class)])
+	if !ok {
+		return base
+	}
+	olist, ok := pyjson.List(ocls[strings.ToLower(spec)])
+	if !ok || len(olist) == 0 {
+		return base
+	}
+	return olist
 }
 
 // ensureBotGear covers the trial's `bot_items` row: the consumable luggage
@@ -533,21 +709,29 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 	if spec.Gear == "" && len(spec.Items) == 0 {
 		return nil
 	}
+	// A killed run leaves what it gave in the bags: take that back first so
+	// the new items fit. A clear that fails is not fatal here; a full bag
+	// then ends the give as SKIPPED needs=bot_bag_space.
+	if ev, ok := p.ClearGiven(ctx, name); !ok {
+		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": ev})
+	}
 	if spec.Gear != "" {
-		return rowOf("bot_items", false, kitSummary(spec),
-			"SKIPPED needs=bot_items: no Forever item source for the "+spec.Gear+" bot kit (gear_kits.json covers warriors only); nothing scanned or equipped")
+		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
+		if len(kit) == 0 {
+			return rowOf("bot_items", false, kitSummary(spec),
+				"SKIPPED needs=bot_items: no "+spec.Gear+" kit for "+spec.Class+" level "+itoa(spec.Level)+" in the Forever overlay (nothing scanned or equipped)")
+		}
+		return p.wearKit(ctx, spec, name, kit)
 	}
 	for _, item := range spec.Items {
 		id := mustItemID(item.Name)
 		if id == 0 {
 			return rowOf("bot_items", false, nil, "no item id for "+item.Name)
 		}
-		tctx, cancel := p.ctxOf(ctx)
-		lines, err := p.TB.FreeTextAddItem(tctx, name, id, uint32(item.Count))
-		cancel()
-		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "reply": firstLines(lines)})
+		lines, err := p.giveItem(ctx, name, id, uint32(item.Count))
+		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": id, "count": item.Count, "reply": firstLines(lines)})
 		if err != nil {
-			return rowOf("bot_items", false, nil, ".tb additem "+name+" "+item.Name+": "+tbErrText(err, lines))
+			return p.giveFailedRow(ctx, name, item.Name, nil, err, lines)
 		}
 	}
 	row := p.scanItems(ctx, name, itemIDs(spec.Items))
@@ -555,6 +739,127 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return row
 	}
 	return rowOf("bot_items", true, len(spec.Items), ".tb itemscan proves every consumable exists")
+}
+
+// giveFailedRow is the bot_items row for a refused give. A full bag gets one
+// more clearing pass first (what the marks say was given), then the row says
+// SKIPPED needs=bot_bag_space with the clearing evidence.
+func (p *Provisioner) giveFailedRow(ctx context.Context, bot, item string, ids any, err error, lines []string) map[string]any {
+	ev, ok := "", true
+	if isBagsFull(err, lines) {
+		ev, ok = p.ClearGiven(ctx, bot)
+	}
+	return itemsGiveRow(bot, item, ids, err, lines, ev, ok)
+}
+
+// wearKit grants, scans and wears one bot kit: every piece must scan as
+// existing and equippable and every equip must answer "equipped", else the
+// row is a failed read-back (the core's own refusal is the evidence).
+func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, kit []botKitItem) map[string]any {
+	ids := make([]uint32, 0, len(kit))
+	for _, item := range kit {
+		ids = append(ids, item.Entry)
+	}
+	for _, item := range kit {
+		lines, err := p.giveItem(ctx, name, item.Entry, 1)
+		p.Ledger.Add(map[string]any{"kind": "additem", "bot": name, "item": item.Name, "item_id": item.Entry, "count": 1, "reply": firstLines(lines)})
+		if err != nil {
+			return p.giveFailedRow(ctx, name, item.Name, ids, err, lines)
+		}
+	}
+	tctx, cancel := p.ctxOf(ctx)
+	rep, err := p.TB.ItemScan(tctx, name, ids...)
+	cancel()
+	p.Ledger.Add(map[string]any{"kind": "itemscan", "bot": name, "reply": itemScanSummary(rep, err)})
+	if err != nil {
+		return rowOf("bot_items", false, ids, ".tb itemscan "+name+": "+err.Error())
+	}
+	byID := map[uint32]tbcmd.ItemScanResult{}
+	for _, r := range rep.Results {
+		byID[r.Item] = r
+	}
+	for _, item := range kit {
+		r, ok := byID[item.Entry]
+		if !ok || !r.Exists {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb itemscan %s: item %d (%s) not proven to exist", name, item.Entry, item.Name))
+		}
+		if r.HasCan && !r.CanEquip {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb itemscan %s: item %d (%s) cannot be equipped", name, item.Entry, item.Name))
+		}
+	}
+	equipped := 0
+	for _, item := range kit {
+		tctx, cancel := p.ctxOf(ctx)
+		eq, err := p.TB.Equip(tctx, name, item.Entry, true)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "equip", "bot": name, "item": item.Entry, "reply": eq.Result + " " + eq.Why})
+		if err != nil {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d: %s", name, item.Entry, tbErrText(err, nil)))
+		}
+		if !strings.EqualFold(eq.Result, "equipped") {
+			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
+		}
+		equipped++
+		// The piece left the bags: its mark is kept as worn, never claimed cleared.
+		p.marks().setWorn(p.Server, name, item.Entry)
+	}
+	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
+}
+
+// botKitItem is one piece of a bot gear kit.
+type botKitItem struct {
+	Entry uint32
+	Name  string
+	Slot  string
+}
+
+// botGearKit reads the Forever bot kit overlay (class -> gear -> level ->
+// items) for the highest kit level at or below the bot's (at most 9 levels
+// below, like the player kits). An empty result means the overlay has no
+// kit and the row must stay SKIPPED, never guessed.
+func botGearKit(class, gear string, level int) []botKitItem {
+	return botGearKitFrom(data.ReadOverlay("gear_kits.json"), class, gear, level)
+}
+
+// botGearKitFrom is botGearKit over one overlay document (tests).
+func botGearKitFrom(overlay []byte, class, gear string, level int) []botKitItem {
+	doc, err := pyjson.Unmarshal(overlay)
+	if err != nil {
+		return nil
+	}
+	root, ok := pyjson.Object(doc)
+	if !ok {
+		return nil
+	}
+	byGear, _ := pyjson.Object(root[strings.ToLower(class)])
+	byLevel, _ := pyjson.Object(byGear[strings.ToLower(gear)])
+	best := -1
+	for key := range byLevel {
+		n, err := strconv.Atoi(key)
+		if err != nil || n > level || n < level-9 {
+			continue
+		}
+		if n > best {
+			best = n
+		}
+	}
+	if best < 0 {
+		return nil
+	}
+	list, _ := pyjson.List(byLevel[strconv.Itoa(best)])
+	out := []botKitItem{}
+	for _, e := range list {
+		item, _ := pyjson.Object(e)
+		entry, ok := pyjson.Int64(item["entry"])
+		if !ok || entry <= 0 {
+			continue
+		}
+		name, _ := item["name"].(string)
+		slot, _ := item["slot"].(string)
+		out = append(out, botKitItem{Entry: uint32(entry), Name: name, Slot: slot})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Entry < out[j].Entry })
+	return out
 }
 
 // itemIDs maps the spec's consumable names to ids (0 for an unknown name).
@@ -608,10 +913,20 @@ func itemScanSummary(rep tbcmd.ItemScanReport, err error) string {
 	return strings.Join(parts, " ")
 }
 
-// mustItemID maps a trial consumable name to its item id (the data
-// collaborator's list; only Sweet Nectar appears in the 48 trials).
+// mustItemID maps a trial consumable name to its item id. The Forever
+// overlay's name -> id map wins (a live `.lookup item`/`.tb itemscan` proved
+// the id); the copied list is the fallback. Only Sweet Nectar appears in the
+// 48 trials.
 func mustItemID(name string) uint32 {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if over, err := pyjson.Unmarshal(data.ReadOverlay("items.json")); err == nil {
+		if obj, ok := pyjson.Object(over); ok {
+			if n, ok := pyjson.Int64(obj[key]); ok && n > 0 {
+				return uint32(n)
+			}
+		}
+	}
+	switch key {
 	case "sweet nectar":
 		return 17083
 	}
@@ -672,8 +987,11 @@ func (p *Provisioner) ensureGrouped(ctx context.Context, name string) map[string
 	return rowOf("grouped", ok && hit, len(members), "in_group="+boolWord(ok)+", members="+strings.Join(members, ", "))
 }
 
-// ensureMana sets the bot's power through typed GM and reads it back from
-// the units model (within 3 points).
+// ensureMana sets the bot's power through the module's own command and reads
+// it back from the units model (within 3 points). The hire's row is matched
+// by its party guid (player rows carry no name on this core); an unreadable
+// power is UNKNOWN and fails the row, never a 0% that could satisfy a 0%
+// target.
 func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Mana == nil {
 		return rowOf("bot_mana", true, nil, "not a mana trial")
@@ -682,60 +1000,120 @@ func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string)
 	if guid == "" {
 		return rowOf("bot_mana", false, nil, name+" not in view")
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	maxP := p.unitMaxPower(ctx, name)
-	cancel()
-	_ = tctx
+	maxP, _, known := p.unitPower(ctx, guid)
+	if !known {
+		return rowOf("bot_mana", false, "unknown", "UNVERIFIED: "+name+" power is not readable from its unit row (guid "+guid+")")
+	}
 	if maxP <= 0 {
 		return rowOf("bot_mana", false, nil, name+" has no power pool")
 	}
-	want := int(math.Round(float64(maxP) * *spec.Mana / 100))
 	gctx, gcancel := p.ctxOf(ctx)
 	defer gcancel()
-	if err := p.Guard.Send(gctx, "modify_mana", TargetHire, guid, guid, itoa(want), itoa(int(maxP))); err != nil {
-		return rowOf("bot_mana", false, nil, ".modify mana refused: "+err.Error())
+	// The hire is another player: the serve's GM hands refuse it, so the
+	// module's own power command sets the bar (proved by the same read).
+	lines, err := p.TB.FreeTextPower(gctx, name, "mana", uint8(*spec.Mana))
+	p.Ledger.Add(map[string]any{"kind": "power", "bot": name, "pct": *spec.Mana, "reply": firstLines(lines)})
+	if err != nil {
+		return rowOf("bot_mana", false, nil, ".tb power "+name+" mana: "+tbErrText(err, lines))
 	}
-	have := p.unitPowerPct(ctx, name)
+	maxAfter, power, known := p.unitPower(ctx, guid)
+	if !known || maxAfter <= 0 {
+		return rowOf("bot_mana", false, "unknown", "UNVERIFIED: "+name+" power is not readable after .tb power")
+	}
+	have := 100 * float64(power) / float64(maxAfter)
 	ok := math.Abs(have-*spec.Mana) <= 3
-	return rowOf("bot_mana", ok, math.Round(have*10)/10, fmt.Sprintf("power %.0f%% of %d (set %.0f%%)", have, maxP, *spec.Mana))
+	return rowOf("bot_mana", ok, math.Round(have*10)/10, fmt.Sprintf("power %.0f%% of %d (set %.0f%%)", have, maxAfter, *spec.Mana))
 }
 
-// unitMaxPower reads the hire's max power from the units model.
-func (p *Provisioner) unitMaxPower(ctx context.Context, name string) uint32 {
+// unitPower reads one unit's max power and power by guid from the units
+// model. known is false when the row is missing or carries no power fields
+// (never a guessed 0).
+func (p *Provisioner) unitPower(ctx context.Context, guid string) (maxP, power uint32, known bool) {
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	units, err := p.Client.Units(tctx, 60)
 	if err != nil {
-		return 0
+		return 0, 0, false
 	}
 	for _, u := range units {
-		if strings.EqualFold(u.Name, name) {
-			return u.MaxPower
+		if normGUIDOf(u.GUID) != normGUIDOf(guid) {
+			continue
 		}
-	}
-	return 0
-}
-
-// unitPowerPct reads the hire's power percent from the units model.
-func (p *Provisioner) unitPowerPct(ctx context.Context, name string) float64 {
-	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	units, err := p.Client.Units(tctx, 60)
-	if err != nil {
-		return 0
-	}
-	for _, u := range units {
-		if strings.EqualFold(u.Name, name) && u.MaxPower > 0 {
-			return 100 * float64(u.Power) / float64(u.MaxPower)
+		if _, ok := numOf(u.Raw["max_power"]); !ok {
+			return 0, 0, false
 		}
+		if _, ok := numOf(u.Raw["power"]); !ok {
+			return 0, 0, false
+		}
+		return u.MaxPower, u.Power, true
 	}
-	return 0
+	return 0, 0, false
 }
 
 // Helpers: rows, summaries, names.
 
 func rowOf(id string, ok bool, value any, evidence string) map[string]any {
-	return map[string]any{"id": id, "ok": ok, "value": value, "evidence": evidence}
+	return map[string]any{"id": id, "ok": ok, "value": anyValue(value), "evidence": evidence}
+}
+
+// anyValue renders a row value the document writer can carry: pyjson (like
+// Python's json) has no typed Go slices, so an id list becomes []any.
+// Unknown concrete types are returned as they are (the writer reports them).
+func anyValue(v any) any {
+	switch list := v.(type) {
+	case []uint32:
+		out := make([]any, 0, len(list))
+		for _, e := range list {
+			out = append(out, e)
+		}
+		return out
+	case []int:
+		out := make([]any, 0, len(list))
+		for _, e := range list {
+			out = append(out, e)
+		}
+		return out
+	case []string:
+		out := make([]any, 0, len(list))
+		for _, e := range list {
+			out = append(out, e)
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, 0, len(list))
+		for _, e := range list {
+			out = append(out, e)
+		}
+		return out
+	// Python has one int type: the document writer does too, so a typed Go
+	// integer becomes int64 (uint64 above the int64 range becomes float64,
+	// as Python would read such a number from JSON).
+	case int:
+		return int64(v.(int))
+	case int8:
+		return int64(v.(int8))
+	case int16:
+		return int64(v.(int16))
+	case int32:
+		return int64(v.(int32))
+	case uint:
+		return int64(v.(uint))
+	case uint8:
+		return int64(v.(uint8))
+	case uint16:
+		return int64(v.(uint16))
+	case uint32:
+		return int64(v.(uint32))
+	case uint64:
+		n := v.(uint64)
+		if n <= math.MaxInt64 {
+			return int64(n)
+		}
+		return float64(n)
+	case float32:
+		return float64(v.(float32))
+	}
+	return v
 }
 
 func rowOK(r map[string]any) bool { return boolOf(r["ok"]) }

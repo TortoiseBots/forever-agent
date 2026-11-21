@@ -83,11 +83,14 @@ func looksLikeRefusal(text string) bool {
 	return false
 }
 
-// freeText sends one tokenless plain-text `.tb` line and returns the server's
-// visible answer lines (the collector's tokenless tail). A tokenless run has
-// no begin/end markers, so the quiet window ends the reply; the callers
-// prove the change with a typed read-back and never with this text alone.
-func (c *Client) freeText(ctx context.Context, line string) ([]string, *command.Reply, error) {
+// freeTextNamed sends one tokenless plain-text `.tb` line and returns the
+// server's visible answer lines (the collector's tokenless tail), narrowed
+// to the lines that name
+// the command's subject: the tokenless channel also carries other lines
+// (a GM probe block, a concurrent typed reply), and a refusal matcher must
+// not read those as this command's answer. Lines that name nobody are
+// dropped; an empty answer is not a refusal (the caller's read-back decides).
+func (c *Client) freeTextNamed(ctx context.Context, line, name string) ([]string, *command.Reply, error) {
 	o := c.Base
 	o.Token = ""
 	o.EndKind = ""
@@ -98,7 +101,44 @@ func (c *Client) freeText(ctx context.Context, line string) ([]string, *command.
 	if rep == nil {
 		return nil, nil, fmt.Errorf("%w: .tb %s: no reply", ErrBadReport, line)
 	}
-	return append([]string(nil), rep.Raw...), rep, nil
+	lines := dropServerNoise(rep.Raw)
+	if name != "" {
+		lines = namedOnly(lines, name)
+	}
+	return lines, rep, nil
+}
+
+// namedOnly keeps the lines that name subject (case-insensitive).
+func namedOnly(lines []string, subject string) []string {
+	needle := strings.ToLower(subject)
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.Contains(strings.ToLower(l), needle) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// dropServerNoise removes lines the command channel sends beside the answer:
+// the GM probe's help block (the serve confirms the GM channel once per
+// session, and a late block can land in the next reply) and the login
+// welcome. They contain words a refusal matcher reads as a refusal, but the
+// command itself answered.
+func dropServerNoise(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "### USAGE:"),
+			strings.HasPrefix(t, "|- "),
+			strings.HasPrefix(t, "Possible subcommands:"),
+			strings.HasPrefix(t, "Welcome to a TrinityCore server."):
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // FreeTextCreate sends `.tb create <account> <name> <race id> <class id>
@@ -121,7 +161,7 @@ func (c *Client) FreeTextCreate(ctx context.Context, account, name string, raceI
 		}
 		line += " " + strconv.Itoa(int(*gender))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, name)
 	if err != nil {
 		return raws, err
 	}
@@ -151,7 +191,7 @@ func (c *Client) FreeTextLogin(ctx context.Context, name, master string) ([]stri
 		}
 		line += " " + m
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, name)
 	if err != nil {
 		return raws, err
 	}
@@ -171,7 +211,7 @@ func (c *Client) FreeTextLogout(ctx context.Context, name string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb logout "+setup)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb logout "+setup, name)
 	if err != nil {
 		return raws, err
 	}
@@ -197,7 +237,7 @@ func (c *Client) FreeTextGroup(ctx context.Context, bot, master string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb group "+b+" "+m)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb group "+b+" "+m, b)
 	if err != nil {
 		return raws, err
 	}
@@ -217,7 +257,7 @@ func (c *Client) FreeTextUngroup(ctx context.Context, bot string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb ungroup "+b)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb ungroup "+b, b)
 	if err != nil {
 		return raws, err
 	}
@@ -243,7 +283,7 @@ func (c *Client) FreeTextEngine(ctx context.Context, name string, on bool) ([]st
 	if on {
 		word = "on"
 	}
-	raws, rep, err := c.freeText(ctx, ".tb engine "+setup+" "+word)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb engine "+setup+" "+word, name)
 	if err != nil {
 		return raws, err
 	}
@@ -267,7 +307,7 @@ func (c *Client) FreeTextLevel(ctx context.Context, name string, level uint8) ([
 	if level < 1 || level > 60 {
 		return nil, fmt.Errorf("tbcmd: level must be 1 to 60 (got %d)", level)
 	}
-	raws, rep, err := c.freeText(ctx, ".tb level "+setup+" "+strconv.Itoa(int(level)))
+	raws, rep, err := c.freeTextNamed(ctx, ".tb level "+setup+" "+strconv.Itoa(int(level)), name)
 	if err != nil {
 		return raws, err
 	}
@@ -289,7 +329,7 @@ func (c *Client) FreeTextTrain(ctx context.Context, name string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	raws, rep, err := c.freeText(ctx, ".tb train "+setup)
+	raws, rep, err := c.freeTextNamed(ctx, ".tb train "+setup, name)
 	if err != nil {
 		return raws, err
 	}
@@ -319,7 +359,7 @@ func (c *Client) FreeTextHurt(ctx context.Context, target string, pct uint8) ([]
 		}
 		line = ".tb hurt " + setup + " " + strconv.Itoa(int(pct))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, target)
 	if err != nil {
 		return raws, err
 	}
@@ -354,7 +394,7 @@ func (c *Client) FreeTextPower(ctx context.Context, target, kind string, pct uin
 		}
 		line = ".tb power " + setup + " " + kind + " " + strconv.Itoa(int(pct))
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, target)
 	if err != nil {
 		return raws, err
 	}
@@ -385,7 +425,7 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 	if count != 1 {
 		line += " " + strconv.FormatUint(uint64(count), 10)
 	}
-	raws, rep, err := c.freeText(ctx, line)
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
 	if err != nil {
 		return raws, err
 	}
@@ -397,6 +437,97 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 		return raws, &TestkitRefused{Cmd: "additem", Text: joined}
 	}
 	return raws, nil
+}
+
+// RemoveItemResult is the module's `removeitem` answer: how many of the item
+// it took out of the bot's bags and how many the bags still hold.
+type RemoveItemResult struct {
+	Bot     string
+	Item    uint32
+	Removed int
+	Left    int
+}
+
+// FreeTextRemoveItem sends `.tb removeitem <bot> <item id> [count]`: the
+// module takes count of an item out of the bot's bags (no count removes
+// every one). The module answers one line,
+// `removeitem bot=<name> item=<id> removed=<n> left=<n>`; that line is
+// parsed and must name the asked bot and item. The old negative-count
+// `.tb additem` form is not a removal and is never sent. The caller still
+// proves the result with `ItemScan`.
+func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32, count uint32) (RemoveItemResult, []string, error) {
+	setup, err := setupName("removeitem", bot)
+	if err != nil {
+		return RemoveItemResult{}, nil, err
+	}
+	if item == 0 {
+		return RemoveItemResult{}, nil, fmt.Errorf("tbcmd: removeitem item id 0 is not an id")
+	}
+	line := ".tb removeitem " + setup + " " + strconv.FormatUint(uint64(item), 10)
+	if count > 0 {
+		line += " " + strconv.FormatUint(uint64(count), 10)
+	}
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
+	if err != nil {
+		return RemoveItemResult{}, raws, err
+	}
+	if res, ok, perr := parseRemoveItem(raws); ok {
+		if perr != nil {
+			return RemoveItemResult{}, raws, perr
+		}
+		if !strings.EqualFold(res.Bot, setup) || res.Item != item {
+			return res, raws, fmt.Errorf("%w: removeitem answered for %q item %d, asked for %q item %d",
+				ErrBadReport, res.Bot, res.Item, setup, item)
+		}
+		return res, raws, nil
+	}
+	joined := strings.Join(raws, "\n")
+	if rep != nil && rep.Refusal != nil {
+		return RemoveItemResult{}, raws, &TestkitRefused{Cmd: "removeitem", Text: firstNonEmpty(raws, rep.RefusalText)}
+	}
+	if looksLikeRefusal(joined) {
+		return RemoveItemResult{}, raws, &TestkitRefused{Cmd: "removeitem", Text: joined}
+	}
+	return RemoveItemResult{}, raws, fmt.Errorf("%w: .tb %s: no removeitem record in the answer", ErrBadReport, line)
+}
+
+// parseRemoveItem finds the `removeitem bot= item= removed= left=` line. ok
+// is false when no line starts with the record word; err is set when the
+// record is there but a key is missing or not a number.
+func parseRemoveItem(raws []string) (RemoveItemResult, bool, error) {
+	for _, raw := range raws {
+		fields := strings.Fields(raw)
+		at := -1
+		for i, f := range fields {
+			if f == "removeitem" {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		kv := map[string]string{}
+		for _, f := range fields[at+1:] {
+			if strings.HasPrefix(f, "#") {
+				continue
+			}
+			if k, v, found := strings.Cut(f, "="); found {
+				kv[k] = v
+			}
+		}
+		var res RemoveItemResult
+		res.Bot = kv["bot"]
+		item, ierr := strconv.ParseUint(kv["item"], 10, 32)
+		removed, rerr := strconv.Atoi(kv["removed"])
+		left, lerr := strconv.Atoi(kv["left"])
+		if res.Bot == "" || ierr != nil || rerr != nil || lerr != nil || removed < 0 || left < 0 {
+			return res, true, fmt.Errorf("%w: removeitem record needs bot=, item=, removed=, left=: %q", ErrBadReport, raw)
+		}
+		res.Item, res.Removed, res.Left = uint32(item), removed, left
+		return res, true, nil
+	}
+	return RemoveItemResult{}, false, nil
 }
 
 // firstNonEmpty prefers the raw lines the server sent; the collector's
