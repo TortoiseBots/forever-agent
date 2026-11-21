@@ -372,11 +372,12 @@ func (a *serveAgent) rawPost(t *testing.T, body []byte) (json.RawMessage, *rpcEr
 
 // TestServeClientMethodPin pins which methods the daemon registers today and
 // what the client's not-yet-served methods answer. event_log and act need
-// W3, teardown and commander need W2 (the daemon answers them not-ported):
-// when one lands this fails and the client note flips.
+// W3, teardown needs W2 (the daemon answers them not-ported): when one lands
+// this fails and the client note flips. commander is served now and has its
+// own real-daemon test below.
 func TestServeClientMethodPin(t *testing.T) {
 	ported, notPorted := ServeRPCMethods()
-	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout"} {
+	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}
@@ -386,7 +387,7 @@ func TestServeClientMethodPin(t *testing.T) {
 			t.Errorf("%s is registered now: drop its needs-W3 note and test it for real", m)
 		}
 	}
-	for _, m := range []string{"teardown", "commander"} {
+	for _, m := range []string{"teardown"} {
 		if !slices.Contains(notPorted, m) {
 			t.Errorf("%s is no longer not-ported: drop its needs-W2 note and test it for real", m)
 		}
@@ -412,6 +413,22 @@ func TestServeClientMethodPin(t *testing.T) {
 	want("Act", err, rpc.CodeMethodNotFound)
 	_, err = c.Teardown(ctx, "off")
 	want("Teardown", err, rpc.CodeGame)
-	_, err = c.Commander(ctx, serveclient.CommanderParams{Op: "status"})
-	want("Commander", err, rpc.CodeGame)
+}
+
+// TestServeClientCommanderAgainstTheRealDaemon: commander is served by the
+// real daemon, so the typed client reaches its handler, and a refused call
+// keeps its typed code through the client.
+func TestServeClientCommanderAgainstTheRealDaemon(t *testing.T) {
+	a, dir, stop := startClientDaemon(t, true)
+	defer stop()
+	waitServeUnits(t, a)
+	c, err := serveclient.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// bind without lead_bot is refused by the handler before the module is touched.
+	_, err = c.Commander(context.Background(), serveclient.CommanderParams{Op: "bind"})
+	if code, ok := serveclient.CodeOf(err); !ok || code != rpc.CodeInvalidParams {
+		t.Fatalf("Commander bind without lead_bot: %v, want a rpc.CodeInvalidParams *Error", err)
+	}
 }
