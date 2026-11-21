@@ -122,6 +122,11 @@ type Options struct {
 	// Confirm, when set on a tokenless run, is asked each time the pump looks: true ends the run at once as
 	// confirmed (End "confirmed"), the effect having been seen by the caller itself.
 	Confirm func() bool
+	// BareBody, when set on a token run, also takes the module's untagged lines of that record kind ("bg" accepts
+	// "bg: ..." and "bg bot=..." rows) as part of the reply. A module that tags only its end line (the battleground
+	// status) would otherwise lose every body row to the "somebody else's line" rule. A line that carries another
+	// token is still not ours.
+	BareBody string
 	// Now is the clock; nil means time.Now. Tests pass a fake clock.
 	Now func() time.Time
 
@@ -388,6 +393,20 @@ func (l *ReplyLine) setField(key, value string) {
 	l.Fields[key] = value
 }
 
+// ModulePrefix is what the module puts before a line it sends through the core's system message ("TortoiseBots: ").
+const ModulePrefix = "TortoiseBots: "
+
+// bareBodyLine reports whether raw is an untagged body line of record kind kind: the module prefix is optional, the
+// kind is the first word and may end in a colon ("bg:" and "bg bot=..." both match "bg"). An empty kind matches
+// nothing.
+func bareBodyLine(raw, kind string) bool {
+	if kind == "" {
+		return false
+	}
+	w := strings.Fields(strings.TrimPrefix(raw, ModulePrefix))
+	return len(w) > 0 && strings.TrimSuffix(w[0], ":") == kind
+}
+
 // IsEndKind reports whether kind is an end marker: the module's "*-end" line or its error line.
 func IsEndKind(kind string) bool { return kind == "error" || strings.HasSuffix(kind, "-end") }
 
@@ -611,9 +630,15 @@ func (c *collector) Feed(line chat.Line) {
 	}
 	if c.token {
 		tok, ok := trailingToken(raw)
-		if !ok || tok != c.o.Token {
+		if ok && tok != c.o.Token {
 			return // somebody else's line: not this command's reply
 		}
+		if !ok && !bareBodyLine(raw, c.o.BareBody) {
+			return // an untagged line that is not this command's body
+		}
+		// The module sends the battleground rows through its "TortoiseBots: " system message, end line
+		// included; the record kind is the word after the prefix.
+		vis = strings.TrimPrefix(vis, ModulePrefix)
 	}
 	ln := ParseReplyLine(chat.Sanitise(vis, MaxLineBytes))
 	c.append(ln, raw)

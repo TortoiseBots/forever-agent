@@ -657,3 +657,32 @@ func TestAllowEmptyQuietEndKeepsTheTail(t *testing.T) {
 		t.Fatal("the tail window was cleared after a quiet end with no line")
 	}
 }
+
+// The battleground status answers with "TortoiseBots: "-prefixed rows that carry no token, and only its end row is
+// tagged: with BareBody set the body rows are collected, the prefix is dropped and the end row ends the reply.
+func TestTokenCollectorBareBodyAndModulePrefix(t *testing.T) {
+	lines := []chat.Line{
+		sys("TortoiseBots: bg: enabled=1 maps=wsg fill=1 queued=0 inside=2 events=3"),
+		sys("TortoiseBots: bg bot=Mother role=- objective=- map=wsg instance=3 team=alliance alive=1 move_age=2s"),
+		sys("TortoiseBots: bg bot=Other role=- objective=- map=wsg instance=3 team=alliance alive=1 move_age=2s #zzz"),
+		sys("TortoiseBots: unrelated announcement"),
+		sys("TortoiseBots: bg-end verb=status lines=2 #s1"),
+	}
+	tr, _, now := newScript(lines)
+	rep, err := Run(context.Background(), tr, ".tb bg status", Options{Token: "s1", EndKind: "bg-end", BareBody: "bg", Now: now})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rep.Complete || rep.End != "bg-end" || len(rep.Lines) != 3 {
+		t.Fatalf("reply = complete %v end %q lines %d (%v)", rep.Complete, rep.End, len(rep.Lines), rep.Raw)
+	}
+	if rep.Lines[2].Kind != "bg-end" || rep.Lines[1].Kind != "bg" {
+		t.Fatalf("kinds = %q %q", rep.Lines[1].Kind, rep.Lines[2].Kind)
+	}
+	// Without BareBody the same text keeps the old rule: the body rows are not ours.
+	tr2, _, now2 := newScript(lines)
+	rep2, err := Run(context.Background(), tr2, ".tb bg status", Options{Token: "s1", EndKind: "bg-end", Now: now2})
+	if err != nil || len(rep2.Lines) != 1 {
+		t.Fatalf("no BareBody: err %v lines %d", err, len(rep2.Lines))
+	}
+}
