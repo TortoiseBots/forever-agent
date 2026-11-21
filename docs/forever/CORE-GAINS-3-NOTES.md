@@ -128,7 +128,7 @@ clear restores today, unknown stays `"spell <id>"`).
 ## Gates
 
 `make fmt-check`, `make cross`, `staticcheck`, `vm-test ta ~/wt-fa-gains3`
-RESULT: PASS.
+RESULT: PASS  kind=ta wt=wt-fa-gains3 sha=ea696546 dirty=0 files=2332.
 
 ## Live check (no live run this round)
 
