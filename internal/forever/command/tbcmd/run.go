@@ -457,6 +457,19 @@ func (r record) optionalUint32(key string) (n uint32, present bool, err error) {
 	return uint32(v), true, nil
 }
 
+// optionalMapID reads an optional map id. 0 is a real map (Eastern Kingdoms), so only an absent key means no map.
+func (r record) optionalMapID(key string) (n uint32, present bool, err error) {
+	s, ok, err := r.text(key)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, true, fmt.Errorf("%w: %s=%q is not a map id", ErrBadValue, key, s)
+	}
+	return uint32(v), true, nil
+}
+
 // phaseWords are the policy's phase words, in a stable order for the error text.
 func phaseWords() []string {
 	return []string{"begin", "gather", "walk", "pull", "task", "rest", "wait", "hold"}
