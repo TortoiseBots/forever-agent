@@ -120,11 +120,30 @@ type CombatRow struct {
 	SpellID int         `json:"spell_id"`
 	Amount  int         `json:"amount"`
 	Reason  string      `json:"reason,omitempty"`
+	// The core-gains round's row fields: an interrupt's stopped cast, an absorb's incoming spell, a dispel's list,
+	// and the advanced log's unit block.
+	InterruptedSpellID int             `json:"interrupted_spell_id,omitempty"`
+	AbsorbedSpellID    int             `json:"absorbed_spell_id,omitempty"`
+	Dispelled          []DispelledAura `json:"dispelled,omitempty"`
+	Sample             *CombatSample   `json:"sample,omitempty"`
 
 	// T is the row on the run's clock (seconds from t=0), computed from Time and the run's start, and TKnown
 	// says whether it could be: a row with no readable time is unknown at every rule, never at t=0.
 	T      float64 `json:"-"`
 	TKnown bool    `json:"-"`
+}
+
+// DispelledAura is one aura a dispel row removed.
+type DispelledAura struct {
+	SpellID int  `json:"spell_id"`
+	Harmful bool `json:"harmful,omitempty"`
+}
+
+// CombatSample is an advanced-log row's unit block: health and the unit's power bar.
+type CombatSample struct {
+	Health    int64 `json:"health"`
+	Power     int32 `json:"power"`
+	PowerType int8  `json:"power_type"`
 }
 
 // Run is one loaded input: a watch recording, a trials repeat or a roster-only run.

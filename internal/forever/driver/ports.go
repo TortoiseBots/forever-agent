@@ -79,6 +79,29 @@ type World interface {
 	// Auras is the spell ids of a unit's auras that are still up, in slot order: what the trace's frames record for
 	// a party member (the module's state report has no aura list).
 	Auras(guid wire.GUID) []uint32
+	// ThreatTable is the client's own pushed threat table, as a report in the module's shape, for the mobs whose
+	// list arrived within objects.ThreatFreshFor of now. ok is false when no fresh list exists: the caller then
+	// falls back to `.tb threat` (Subject: the pushed lists replace the poll).
+	ThreatTable(now time.Time) (tbcmd.ThreatReport, bool)
+	// Encounters returns the encounter events that arrived since the last call and forgets them: a pull, an end
+	// (kill or wipe) and a kill credit, from the packets InstanceScript sends every player in the instance.
+	Encounters() []EncounterEvent
+	// LastEncounterAt is when the newest encounter packet arrived; the watch uses it to keep the `.tb instance`
+	// read as the fallback of an instance whose script sends nothing.
+	LastEncounterAt() time.Time
+}
+
+// EncounterEvent is one instance encounter packet, as the world model saw it.
+type EncounterEvent struct {
+	// Kind is "start", "end" or "boss_kill".
+	Kind        string
+	EncounterID uint32
+	Difficulty  int32
+	GroupSize   int32
+	// DurationMS is the end packet's duration; Success says the end was a kill.
+	DurationMS int32
+	Success    bool
+	At         time.Time
 }
 
 // Walker is the navmesh route and the walk. Path plans on the walking filter (ground, steep, water and road; lava and

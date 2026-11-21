@@ -88,7 +88,10 @@ var whereMetrics = map[string]bool{"count": true, "first": true, "rate": true}
 var responseDstModes = map[string]bool{"$trigger.src": true, "$trigger.dst": true}
 
 var kindEnum = map[string]bool{"cast": true, "cast_start": true, "cast_fail": true, "aura_on": true, "aura_off": true,
-	"damage": true, "heal": true, "death": true}
+	"damage": true, "heal": true, "death": true,
+	// The core-gains round's event kinds: the interrupt log (a Kick/Counterspell answer), a dispel, an absorb, a
+	// miss, a proc resist, an immune and an instant kill.
+	"interrupt": true, "dispel": true, "absorb": true, "miss": true, "resist": true, "immune": true, "instakill": true}
 
 var unitAliases = map[string]bool{"$player": true, "$bot": true, "$pet": true, "$marked": true, "$mob": true,
 	"$extra1": true, "$extra2": true, "$extra3": true, "$extras": true}

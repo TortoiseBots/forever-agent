@@ -290,6 +290,13 @@ type Run struct {
 	// commander is the module's own party commander, from its roster: the bot the party is bound to and the one a
 	// watched run has to bring to the tank's side. It is never the character this client runs.
 	commander string
+	// threatPollAt is the last `.tb threat` send and threatPushAt the last time the client's own pushed threat
+	// table answered. While pushes flow the module's read is the fallback, at most one per threatFallbackEvery.
+	threatPollAt time.Time
+	threatPushAt time.Time
+	// encounterAt is when the newest encounter packet was applied: the watch keeps `.tb instance` off while the
+	// packets flow and falls back to it when they do not.
+	encounterAt time.Time
 }
 
 // fight is one fight's bookkeeping.
@@ -560,6 +567,9 @@ func (r *Run) refresh(ctx context.Context) bool {
 	r.failures = 0
 	r.blindSince = time.Time{}
 	r.reports++
+	// The encounter packets arrive between state polls: drain them here so a fight's pull and kill land on the
+	// trace at once.
+	r.applyEncounters(now, nil)
 	if len(rep.Bots) > 0 {
 		r.instance = rep.Bots[0].Instance
 	}
@@ -583,11 +593,33 @@ func (r *Run) reportComplete() bool {
 	return true
 }
 
-// threat reads the threat lists; ok false means the answer is not usable (an error, not a lost link).
+// threatFallbackEvery is the module read's rate while the client's pushed threat table answers: the 2 s poll of
+// the older rounds becomes one read per 10 s, and the ticks between read the table for free.
+const threatFallbackEvery = 10 * time.Second
+
+// threat reads the threat lists. The client's own pushed table answers first; the module's `.tb threat` is the
+// fallback, and only at once per threatFallbackEvery while pushes reach this client. When no pushed list is fresh
+// (a mob outside our visibility sends none), every call polls as before. ok false means the answer is not usable
+// (an error or a lost link), so a caller never treats a poll that did not answer as "no threat".
 func (r *Run) threat(ctx context.Context) (tbcmd.ThreatReport, bool) {
 	if r.lost || r.stopReason != "" {
 		return tbcmd.ThreatReport{}, false
 	}
+	now := r.now()
+	if table, fresh := r.world.ThreatTable(now); fresh {
+		r.threatPushAt = now
+		if r.threatPollAt.IsZero() || now.Sub(r.threatPollAt) >= threatFallbackEvery {
+			r.threatPollAt = now
+			if t, err := r.cmd.Threat(ctx); err == nil {
+				return t, true
+			} else if errors.Is(err, ErrLinkLost) {
+				r.linkLost()
+				return tbcmd.ThreatReport{}, false
+			}
+		}
+		return table, true
+	}
+	r.threatPollAt = now
 	t, err := r.cmd.Threat(ctx)
 	if errors.Is(err, ErrLinkLost) {
 		r.linkLost()
@@ -1060,6 +1092,58 @@ func (r *Run) pollDetached(ctx context.Context) bool {
 // sleepDetached waits without consulting the run's stop reason; ctx is the stop path's detached context.
 func (r *Run) sleepDetached(ctx context.Context, d time.Duration) bool {
 	return r.clock.Sleep(ctx, d) == nil
+}
+
+// applyEncounters drains the world's encounter packets into run events: a pull, a kill, or a wipe told apart from a
+// kill by the end packet's success bit. The watch records the same events in its own record and prints them; the
+// trace carries one event by the same name. An instance whose script sends nothing leaves this empty.
+func (r *Run) applyEncounters(now time.Time, w *watchRun) {
+	evs := r.world.Encounters()
+	for _, e := range evs {
+		at := e.At
+		if at.IsZero() {
+			at = now
+		}
+		r.encounterAt = now
+		ev := "boss_pull"
+		fields := map[string]any{"encounter": e.EncounterID, "difficulty": e.Difficulty, "group_size": e.GroupSize}
+		rec := EncounterRecord{Kind: e.Kind, EncounterID: e.EncounterID, Difficulty: e.Difficulty, GroupSize: e.GroupSize}
+		word := "pulled"
+		switch e.Kind {
+		case "end":
+			rec.DurationS = float64(e.DurationMS) / 1000
+			rec.Success = e.Success
+			fields["duration_ms"] = e.DurationMS
+			fields["success"] = e.Success
+			if e.Success {
+				ev, word = "boss_kill", "killed"
+			} else {
+				ev, word = "boss_wipe", "wipe"
+			}
+		case "boss_kill":
+			rec.Success = true
+			ev, word = "boss_kill", "kill credit"
+		}
+		if r.rec != nil {
+			r.rec.Event(at, ev, fields)
+		}
+		if w != nil {
+			w.encounterAt = now
+			if !w.startedAt.IsZero() {
+				rec.AtS = at.Sub(w.startedAt).Seconds()
+			}
+			w.encounters = append(w.encounters, rec)
+			switch e.Kind {
+			case "end":
+				r.logf("watch: boss %s encounter=%d difficulty=%d group=%d duration=%.1fs",
+					word, e.EncounterID, e.Difficulty, e.GroupSize, rec.DurationS)
+			case "boss_kill":
+				r.logf("watch: boss kill credit encounter=%d", e.EncounterID)
+			default:
+				r.logf("watch: boss %s encounter=%d difficulty=%d group=%d", word, e.EncounterID, e.Difficulty, e.GroupSize)
+			}
+		}
+	}
 }
 
 // noteBossDead records a boss the run killed, in the run and in the summary's boss list.

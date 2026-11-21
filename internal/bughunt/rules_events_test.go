@@ -439,3 +439,51 @@ func TestEventRulesSkipWithoutInput(t *testing.T) {
 		t.Fatalf("counts %+v", counts)
 	}
 }
+
+// TestRule15DispelEventEndsTheDebuff: the frame list still shows the aura to the end (a stale aura row), and a
+// dispel row says it came off at 6 s: the episode is 6 s, under the 8 s minimum, so no hit. The same frames
+// without the row are the rule's 30 s hit.
+func TestRule15DispelEventEndsTheDebuff(t *testing.T) {
+	dispel := map[int]string{17172: "magic"}
+	names := map[int]string{17172: "Hex"}
+	var frames []*Frame
+	for t := 0.0; t <= 30; t += 2 {
+		tank := testUnit(gTank)
+		tank.Combat, tank.X, tank.Y = true, 2, 0
+		priest := testUnit(gHeal)
+		priest.Auras = []uint32{17172}
+		paladin := testUnit(gDps3)
+		paladin.X, paladin.Y = 6, 0
+		frames = append(frames, frameAt(t, tank, priest, paladin))
+	}
+	roles := map[string]string{gHeal: "healer", gTank: "tank", gDps3: "paladin"}
+	without := eventRun("watch", roles, frames, nil, names, dispel)
+	withClass(without, gHeal, "priest")
+	withClass(without, gTank, "warrior")
+	withClass(without, gDps3, "paladin")
+	if hits := Rule15(without); len(hits) != 1 || hits[0].Dur != 30 {
+		t.Fatalf("without the dispel row: hits %+v", hits)
+	}
+
+	row := crow("dispel", 6, gDps3, gHeal, 527)
+	row.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	with := eventRun("watch", roles, frames, []CombatRow{row}, names, dispel)
+	withClass(with, gHeal, "priest")
+	withClass(with, gTank, "warrior")
+	withClass(with, gDps3, "paladin")
+	if hits := Rule15(with); len(hits) != 0 {
+		t.Fatalf("the dispel at 6 s did not end the episode: %+v", hits)
+	}
+
+	// a later dispel (16 s) leaves a 16 s episode: a hit that ends where the row says, not at the frames' end
+	late := crow("dispel", 16, gDps3, gHeal, 527)
+	late.Dispelled = []DispelledAura{{SpellID: 17172, Harmful: true}}
+	withLate := eventRun("watch", roles, frames, []CombatRow{late}, names, dispel)
+	withClass(withLate, gHeal, "priest")
+	withClass(withLate, gTank, "warrior")
+	withClass(withLate, gDps3, "paladin")
+	hits := Rule15(withLate)
+	if len(hits) != 1 || hits[0].Dur != 16 {
+		t.Fatalf("the 16 s dispel: hits %+v, want one 16 s hit", hits)
+	}
+}

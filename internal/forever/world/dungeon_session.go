@@ -294,6 +294,80 @@ func (w dungeonWorld) EnterAreaTrigger(id int32) error {
 	return dungeonPortErr(w.s.EnterAreaTrigger(id))
 }
 
+// ThreatTable is the client's pushed threat, shaped like the module's `.tb threat` report so every existing caller
+// reads it unchanged: the mob's GUID, entry, name, health percent and position from the world model, the victims
+// and their threat (the packets' x100 divided to the points the module prints), and the victim on top. Only lists
+// pushed within objects.ThreatFreshFor of now are served: an older one is no answer, and the caller polls.
+func (w dungeonWorld) ThreatTable(now time.Time) (tbcmd.ThreatReport, bool) {
+	lists := w.s.world.ThreatSnapshot(now)
+	if len(lists) == 0 {
+		return tbcmd.ThreatReport{}, false
+	}
+	rep := tbcmd.ThreatReport{Mobs: make([]tbcmd.ThreatLine, 0, len(lists)), Count: len(lists)}
+	for _, l := range lists {
+		line := tbcmd.ThreatLine{Mob: l.Mob.String(), Size: len(l.Entries), HasTop: true}
+		if o, ok := w.s.world.Object(l.Mob); ok {
+			line.Entry = int(o.Info.Entry)
+			line.Name = w.s.world.Name(o)
+			x, y, z := o.Position(now)
+			line.X, line.Y, line.Z, line.HasPos = float64(x), float64(y), float64(z), true
+			if o.Info.MaxHealth > 0 {
+				line.HPPct = int(100 * o.Info.Health / o.Info.MaxHealth)
+			}
+			if !o.Info.Target.IsZero() {
+				line.Target = w.unitName(o.Info.Target)
+			}
+		}
+		for _, e := range l.Entries {
+			line.Top = append(line.Top, tbcmd.ThreatEntry{Name: w.unitName(e.Unit), Threat: int(e.Threat / 100)})
+		}
+		line.Victim = ""
+		if len(line.Top) > 0 {
+			line.Victim = line.Top[0].Name
+		}
+		if l.HasHighest {
+			line.Victim = w.unitName(l.Highest)
+		}
+		rep.Mobs = append(rep.Mobs, line)
+	}
+	return rep, true
+}
+
+// unitName is a unit as the module's reports name it: its known name, else the GUID text (a frame's guidOf accepts
+// both).
+func (w dungeonWorld) unitName(g wire.GUID) string {
+	if name := w.s.world.NameOf(g); name != "" {
+		return name
+	}
+	return g.String()
+}
+
+// Encounters hands the driver the encounter events the model has not served yet.
+func (w dungeonWorld) Encounters() []driver.EncounterEvent {
+	evs := w.s.world.DrainEncounters()
+	if len(evs) == 0 {
+		return nil
+	}
+	out := make([]driver.EncounterEvent, 0, len(evs))
+	for _, e := range evs {
+		kind := "start"
+		switch e.Kind {
+		case objects.EncounterEnded:
+			kind = "end"
+		case objects.EncounterBossKilled:
+			kind = "boss_kill"
+		}
+		out = append(out, driver.EncounterEvent{
+			Kind: kind, EncounterID: e.EncounterID, Difficulty: e.Difficulty, GroupSize: e.GroupSize,
+			DurationMS: e.DurationMS, Success: e.Success, At: e.At,
+		})
+	}
+	return out
+}
+
+// LastEncounterAt is when the newest encounter packet arrived.
+func (w dungeonWorld) LastEncounterAt() time.Time { return w.s.world.LastEncounterAt() }
+
 // dungeonCombat adapts the session's combat log to the driver's port: the session's rows are encoded as JSON here,
 // once, so the run's combat-log file carries exactly the rows serve's `events` answers.
 type dungeonCombat struct {

@@ -56,6 +56,8 @@ func (f *fakeServer) serveRouteWalk(c *fakeConn, realm *fakeConn) {
 		case fakeCMSGPing:
 			c.writeFrame(fakeSMSGPong, payload[:4])
 		case fakeCMSGMoveInitActiveMover:
+		case fakeCMSGSetAdvancedCombatLogging:
+			f.checkAdvancedLogging(payload)
 		case fakeCMSGSetSelection:
 			// The client selects its own character before `.gps`, exactly as the real client does when the user
 			// clicks it. The pack must name this character.

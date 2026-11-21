@@ -464,7 +464,11 @@ same kind and 30 s without a good one end the watch with `blind`, whichever read
 reason — a blind one names the last read error it saw. At the end it sends a stop
 (a run that ended by itself needs none), waits (bounded) for the module's state to reach stopped, and writes the
 run's usual trace and `<run_id>.forever-run.json` summary with a `watch` block holding the module's own counters,
-the per-leg and per-step evidence, the deaths and the pauses. The stop and that wait run on a context detached from
+the per-leg and per-step evidence, the deaths, the pauses and the instance's own encounter packets
+(`encounters`: `start`, `end` with its success, duration and group, and `boss_kill`), and the trace carries
+`boss_pull`, `boss_kill` and `boss_wipe` at those packets' own times. While encounter packets flow the watch does not
+read `.tb instance`; the report is the fallback for an instance whose script sends nothing (the classic Ragefire
+Chasm bosses today), and the forced read at the end still happens. The stop and that wait run on a context detached from
 the caller's: an interrupt or the caller's deadline still lets the module receive the stop, and the phase is bounded
 by 600 s on the run's clock and 600 s of real time when the watch ended on its own, but by 60 s in total after an
 interrupt or the caller's deadline (each call by 10 s); when the run has not reached stopped by then the result and
@@ -482,10 +486,17 @@ frame's first sight of a bot writes its party record (guid, role, class) and of 
 name), so one record stands alone. A guid is one text everywhere in the record, frames, party rows, threat entries and
 combat rows alike: `0x` and 32 upper-case hex digits. A party member this client's model has not resolved yet is a
 frame row with no guid (its role still names the slot), never its character name, so a member's identity does not
-change under a frame once the model knows it. Every tick (frames on or off) it drains the session's own combat log into
+change under a frame once the model knows it. The threat a frame carries comes first from the client's own pushed
+table (`SMSG_THREAT_UPDATE` and its three kin, `Combat/ThreatManager.cpp:859-893`), and the module's `.tb threat`
+read is the fallback: no fresh pushed list in the last 5 s means a read, and while pushes flow that read is at most
+one per 10 s instead of one per 2 s tick. Every tick (frames on or off) it drains the session's own combat log into
 `<run_id>.combatlog.jsonl`, one row per line in the trials runner's raw row shape (`seq kind time mono_ms
 source{guid,name} target{guid,name} spell_id amount`, plus `reason` on a spell_fail), so the normaliser, the trials
-runner and the bug hunter read one file. The watch's summary counts both (`frames`, `combat_rows`,
+runner and the bug hunter read one file. The core-gains round's kinds join the same file: `interrupt` (spell id is
+the interrupting spell and `interrupted_spell_id` the stopped cast), `dispel` (`dispelled` lists the auras),
+`absorb` (`absorbed_spell_id` is the incoming spell), `miss`, `resist`, `immune`, `instakill` and `environmental`.
+A row whose packet carried the advanced log's unit block also has `sample` (health, power and power type), and the
+client asks for that form once after world entry (`CMSG_SET_ADVANCED_COMBAT_LOGGING`). The watch's summary counts both (`frames`, `combat_rows`,
 `combat_dropped`); a frame read that fails is one line and the next tick retries, and the watch still ends on the
 same reasons as before. A combat-log page is all or nothing: a write that fails leaves the page in the cursor and the
 next tick retries it, so no failure can skip rows the summary would call complete (`combat_error` names the last one).

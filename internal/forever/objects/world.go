@@ -117,6 +117,11 @@ type World struct {
 	head  int
 	// lastUpdate is the client time of the last applied update, for the report.
 	applied int
+	// threat is the pushed per-mob threat table (threat.go) and encounters the undrained encounter events
+	// (encounter.go). Both are rewritten by the packet loop under the model's lock.
+	threat          map[wire.GUID]*ThreatMob
+	encounters      []EncounterEvent
+	lastEncounterAt time.Time
 }
 
 // orderEntry is one touch of an object, for eviction. An entry whose seq is not the object's current seq is stale.
@@ -146,6 +151,7 @@ func NewWorld(mapID uint32) *World {
 		partialKinds:   make(map[string]int),
 		unparsed:       make(map[string]int),
 		unparsedDetail: make(map[string]string),
+		threat:         make(map[wire.GUID]*ThreatMob),
 	}
 }
 
@@ -166,6 +172,11 @@ func (w *World) ResetForMap(mapID uint32) {
 	w.order = w.order[:0]
 	w.head = 0
 	w.mapID = mapID
+	// Threat and encounter state belong to one instance: the old instance's lists and events must not be read as
+	// the new one's.
+	w.threat = make(map[wire.GUID]*ThreatMob)
+	w.encounters = w.encounters[:0]
+	w.lastEncounterAt = time.Time{}
 }
 
 // Counts is a snapshot of how many blocks the model applied.

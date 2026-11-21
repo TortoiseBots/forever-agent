@@ -123,6 +123,22 @@ type RunWatch struct {
 	StepLog   []StepRecord  `json:"step_log,omitempty"`
 	DeathLog  []DeathRecord `json:"death_log,omitempty"`
 	RescueLog []RescueNote  `json:"rescue_log,omitempty"`
+	// Encounters are the instance's own pull, kill and wipe packets: the exact moments, where the boss report
+	// could only say alive or dead. An instance whose script sends nothing leaves it empty and the boss map is
+	// the evidence.
+	Encounters []EncounterRecord `json:"encounters,omitempty"`
+}
+
+// EncounterRecord is one encounter packet on the watched run's clock: "start" (the pull), "end" (a kill when
+// Success, a wipe or reset otherwise) or "boss_kill" (the credit that follows a kill).
+type EncounterRecord struct {
+	AtS         float64 `json:"at_s"`
+	Kind        string  `json:"kind"`
+	EncounterID uint32  `json:"encounter"`
+	Difficulty  int32   `json:"difficulty,omitempty"`
+	GroupSize   int32   `json:"group_size,omitempty"`
+	DurationS   float64 `json:"duration_s,omitempty"`
+	Success     bool    `json:"success,omitempty"`
 }
 
 // PauseNote is one pause event: its time into the watched run, where it happened, the module's reason and whether a

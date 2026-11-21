@@ -723,7 +723,13 @@ func canDispel(class, typ string) bool {
 // Rule15: a removable debuff (a dispel file type) on a member for longer than R15_MIN_S while an able dispeller
 // was alive, within R15_RANGE_YD and not casting after the grace. The debuff's name is the live-checked name, or
 // `spell <id>`.
+//
+// A dispel row (the core-gains round's SMSG_SPELL_DISPELL_LOG) is the exact moment the aura came off: when the log
+// has one for the victim and this spell inside the interval, the interval ends there and an out-of-view interval
+// that the row resolves is no longer unknown. A run without dispel rows (an older recording) is judged from the
+// frames exactly as before.
 func Rule15(r *Run) []Hit {
+	dispels := r.dispelRemovals()
 	var hits []Hit
 	for _, iv := range r.auraIntervals() {
 		if !r.IsSubject(iv.Bot) {
@@ -732,6 +738,9 @@ func Rule15(r *Run) []Hit {
 		typ := r.DispelType(int(iv.SpellID))
 		if typ == "" || typ == "never" {
 			continue
+		}
+		if at, ok := dispels[iv.Bot][iv.SpellID]; ok && at >= iv.T0 && at <= iv.T1 {
+			iv.T1, iv.Still, iv.Lost = at, false, false
 		}
 		if iv.Lost {
 			r.noteUnknown(15, whyOutOfView)
@@ -754,6 +763,41 @@ func Rule15(r *Run) []Hit {
 		hits = append(hits, r.Hit(15, iv.T0, iv.T1-iv.T0, iv.Bot, ev, []string{"15", typ, name}))
 	}
 	return hits
+}
+
+// dispelRemovals indexes the run's dispel rows by victim and dispelled spell: the earliest time an aura of that
+// spell came off that unit, on the run's clock. Only rows whose time could be read and which name at least one
+// spell are indexed; a run without them gives an empty map and Rule15 keeps its frame-only reading.
+func (r *Run) dispelRemovals() map[string]map[uint32]float64 {
+	var out map[string]map[uint32]float64
+	for i := range r.Combat {
+		row := &r.Combat[i]
+		if row.Kind != "dispel" || !row.TKnown || len(row.Dispelled) == 0 {
+			continue
+		}
+		victim := CanonGUID(row.Target.GUID)
+		if victim == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]map[uint32]float64{}
+		}
+		bySpell := out[victim]
+		if bySpell == nil {
+			bySpell = map[uint32]float64{}
+			out[victim] = bySpell
+		}
+		for _, d := range row.Dispelled {
+			if d.SpellID <= 0 {
+				continue
+			}
+			id := uint32(d.SpellID)
+			if at, seen := bySpell[id]; !seen || row.T < at {
+				bySpell[id] = row.T
+			}
+		}
+	}
+	return out
 }
 
 // dispellers is rule 15's judge: the most able dispellers seen in one frame after the grace (any frame when the

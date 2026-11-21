@@ -6,6 +6,8 @@ package world
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 )
 
 func TestCombatLogSincePages(t *testing.T) {
@@ -138,5 +140,60 @@ func TestCombatRowShape(t *testing.T) {
 	}
 	if _, ok := got2["reason"]; ok {
 		t.Fatalf("a melee row carries a reason: %s", b2)
+	}
+}
+
+// TestCombatRowGains: the core-gains row fields and the advanced-log sample are written only when the packet had
+// them, so a row from a basic log keeps its old shape.
+func TestCombatRowGains(t *testing.T) {
+	if combatSample(nil) != nil {
+		t.Fatal("a packet without log data got a sample")
+	}
+	sample := combatSample(&combat.CastLogData{
+		Health: 4321,
+		Power:  []combat.LogPower{{Type: 1, Amount: 750, Cost: 10}},
+	})
+	if sample == nil || sample.Health != 4321 || sample.PowerType != 1 || sample.Power != 750 {
+		t.Fatalf("sample %+v", sample)
+	}
+
+	row := CombatRow{
+		Kind: "interrupt", SpellID: 1766, InterruptedSpellID: 9532,
+		AbsorbedSpellID: 9, Dispelled: []CombatDispel{{SpellID: 17172, Harmful: true}}, Sample: sample,
+	}
+	b, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["interrupted_spell_id"] != float64(9532) || got["absorbed_spell_id"] != float64(9) {
+		t.Fatalf("row %s", b)
+	}
+	list, _ := got["dispelled"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("dispelled %v", got["dispelled"])
+	}
+	if first, _ := list[0].(map[string]any); first["spell_id"] != float64(17172) || first["harmful"] != true {
+		t.Fatalf("dispelled entry %v", list[0])
+	}
+	if s, _ := got["sample"].(map[string]any); s["health"] != float64(4321) || s["power_type"] != float64(1) {
+		t.Fatalf("sample %v", got["sample"])
+	}
+
+	plain, err := json.Marshal(CombatRow{Kind: "melee"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plainMap map[string]any
+	if err := json.Unmarshal(plain, &plainMap); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"interrupted_spell_id", "absorbed_spell_id", "dispelled", "sample"} {
+		if _, ok := plainMap[key]; ok {
+			t.Fatalf("a plain row carries %q: %s", key, plain)
+		}
 	}
 }

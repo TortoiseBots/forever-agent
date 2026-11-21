@@ -820,7 +820,8 @@ func tndInterrupt(t *testing.T, tid, rid string, spellID int64, gap float64, poo
 	var casts, answers, instants []any
 	for i := range 5 {
 		casts = append(casts, tndEvent(10+gap*float64(i), "cast_start", tndMob, tndPlayer, tndLightningBolt))
-		answers = append(answers, tndEvent(11.5+gap*float64(i), "cast", tndBot, tndMob, spellID))
+		// The core-gains round: the answer is the server's interrupt log row, whose spell is the interrupting one.
+		answers = append(answers, tndEvent(11.5+gap*float64(i), "interrupt", tndBot, tndMob, spellID))
 		instants = append(instants, tndEvent(10+gap*float64(i), "cast_start", tndMob, tndPlayer, int64(355)))
 	}
 	assertEqual(t, "PASS", tndVerdict(t, tid, rid, append(append([]any{}, casts...), answers...), samples))
@@ -839,10 +840,10 @@ func tndInterrupt(t *testing.T, tid, rid string, spellID int64, gap float64, poo
 
 func TestDpsRulesTest_Kick(t *testing.T) {
 	casts, samples := tndInterrupt(t, "dps-rogue-kick-caster", "DPS-ROG-KICK", tndSid(t, "Kick"), 20, false)
-	// Kidney Shot does not answer: the events cannot show that it stopped the cast
+	// Kidney Shot does not answer: an interrupt row whose spell is Kidney Shot is not the Kick the rule asks for
 	var kidney []any
 	for i := range 5 {
-		kidney = append(kidney, tndEvent(11.5+20*float64(i), "cast", tndBot, tndMob, tndSid(t, "Kidney Shot")))
+		kidney = append(kidney, tndEvent(11.5+20*float64(i), "interrupt", tndBot, tndMob, tndSid(t, "Kidney Shot")))
 	}
 	assertEqual(t, "FAIL", tndVerdict(t, "dps-rogue-kick-caster", "DPS-ROG-KICK",
 		append(append([]any{}, casts...), kidney...), samples))
