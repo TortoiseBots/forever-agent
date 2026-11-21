@@ -27,6 +27,9 @@ type ServerExt struct {
 	BotPool map[string][]string `json:"bot_pool"`
 	// ArenaStateDir is where the arena locks live (empty: ArenaStateDir()).
 	ArenaStateDir string `json:"arena_state_dir"`
+	// ScratchBot is the dedicated character the data check learns spells on
+	// (`.tb learn` persists): never a bot_pool bot, never a trial's hire.
+	ScratchBot string `json:"scratch_bot"`
 }
 
 // SlotsFile is a slots file plus the runner's optional per-server `forever`

@@ -3460,11 +3460,18 @@ func TestAutoInstanceCapRefusalRelaunchesAtOnce(t *testing.T) {
 	finishAttempt(t, s) // the wipe: a fresh instance next, one wipe counted
 	for i := range 3 {
 		// No clearWait here: the relaunch must come at once, not after a second 30m wait of the autopilot's own.
-		start := time.Now()
-		tickUntil(t, s, fmt.Sprintf("the relaunch after cap refusal %d", i+1), func() bool { return len(f.args()) >= i+2 })
-		if d := time.Since(start); d > 5*time.Second {
-			t.Fatalf("the relaunch after cap refusal %d waited %v: the autopilot repeated raid-walk's wait", i+1, d)
-		}
+		// No wall-clock measurement (a loaded host stretches it): a repeated wait would put the id's next start in the
+		// future, so check that deadline on every tick instead, and the launch itself must come without clearWait.
+		tickUntil(t, s, fmt.Sprintf("the relaunch after cap refusal %d", i+1), func() bool {
+			st := s.states[0]
+			st.mu.Lock()
+			next := st.nextAt
+			st.mu.Unlock()
+			if next.After(time.Now()) {
+				t.Fatalf("after cap refusal %d the next start is set %v ahead: the autopilot repeated raid-walk's wait", i+1, time.Until(next))
+			}
+			return len(f.args()) >= i+2
+		})
 		if a := f.args()[i+1]; strings.Contains(a, "--reuse-instance") {
 			t.Fatalf("launch %d after the cap refusal reused the instance: %s", i+2, a)
 		}

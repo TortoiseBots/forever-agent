@@ -78,7 +78,7 @@ Commits: L2 `68068ac8`, L5 `717347d2`, cleanup `a0147d71`, file-server fallback 
 - `make cross`: exit 0 (`GOOS=windows GOARCH=amd64`, `GOOS=darwin GOARCH=arm64` builds plus `go vet ./cmd/... ./internal/forever/...`).
 - `staticcheck ./...`: no findings (exit 0; three U1000 dead-code findings on the way were removed).
 - `go test -race ./internal/scenario/ ./internal/dashboard/`: both `ok` (scenario 1.2 s, dashboard 21.4 s).
-- `vm-test ta <local worktree>`: `RESULT: PASS  kind=ta sha=7102707f dirty=0 files=2343`, `rc=0  vm_duration=2324s  laptop_wall=2338s`; the vm-test log of that run.
+- `vm-test ta <local worktree>`: `RESULT: PASS  kind=ta sha=7102707f dirty=0 files=2343`; the vm-test log of that run.
 - Hygiene: a private-path grep of the diff is empty (0 matches).
 
 ## Live checks for the lead's queue (no live run this round)

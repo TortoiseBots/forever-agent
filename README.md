@@ -35,7 +35,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | not started |
-| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Setup toolkit and provisioning (round A3): the `.tb` test-kit client, hire-pool and player provisioning, the 22-row setup round; `trials run` provisions live without `--dry`; see [docs/forever/TRIALS-A3-NOTES.md](docs/forever/TRIALS-A3-NOTES.md). Dummy spell/damage bench (issue #18): `dummy` situation kind, per-spell damage + reaction tallies against a per-class table and a trial file beside it (`internal/trials/dummybench/testdata`), report card per spell; unmeasured bounds stay UNKNOWN, strangers INVALID; see [docs/forever/DUMMY-BENCH-NOTES.md](docs/forever/DUMMY-BENCH-NOTES.md)** |
+| Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Every situation kind and the class sweep (round A5): `trials run` provisions live and drives `tank_damage`, `caster_mob`, `pack`, `cc_target`, `debuff`, `ooc_buffs` and `ooc_hurt` (arenas, the HP governor, the pulled debuff, the cc mark, the ooc meal window and hurt cadence); `trials forever-data-check` asks the live server every spell, item and mob entry the trials and kits name into `forever-data-report.json` (ok/unknown/differs); `trials sweep --classes warrior,priest,mage,rogue` runs tanks first, one card per trial, plus `sweep.md`; `trials cleanup` replays a ledger; see [docs/forever/TRIALS-A5-NOTES.md](docs/forever/TRIALS-A5-NOTES.md); dummy spell/damage bench (issue #18): `dummy` situation kind, per-spell damage + reaction tallies against a per-class table and a trial file beside it (`internal/trials/dummybench/testdata`), report card per spell; unmeasured bounds stay UNKNOWN, strangers INVALID; see [docs/forever/DUMMY-BENCH-NOTES.md](docs/forever/DUMMY-BENCH-NOTES.md)** |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the
 login server (password from `FOREVER_PASSWORD`) and stops at the realm join ticket: one line per step, then the realm
@@ -72,7 +72,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
 `inv`, `units`, `unit`, `party`, `chat_log`, `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
-`gm_aura`, `trial_units`, `bot`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
+`gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`,
 `area_trigger`, the five death methods, `addon_send` and `logout` are ported; `--navmesh` enables the two
 path methods. Every other old method answers a typed `not ported on this server` error. A `unit` row
@@ -119,6 +119,34 @@ unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`
 refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
 `.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
 and chat are unaffected.
+
+Remote control on ForeverCore is `commander`: the module's TortoiseBots party, commanded by the session's own
+character over the session's `.tb` command channel (no add-on bridge, no other account).
+`forever rpc DIR commander '{"op":"bind","lead_bot":"<tank>","bots":["<healer>","<dps>"]}'` forms the lead's party,
+binds it to the character and answers the binding card. Ops are `bind` (`lead_bot`, `bots`), `unbind` (`lead_bot`),
+`status`, `cmd` (`verb`, `args`, `wait_ms`, `pause_run`; `lead_bot` scopes the call to that lead's party, and a
+name the character does not command is refused before any line goes out) and `run` (`verb` start, stop, pause,
+resume, status or events; `lead_bot`; `args` carries the plan, the reason words or the event sequence; a `start`
+without `lead_bot` uses the only bound lead, and is refused when there is not exactly one). The answer carries
+`sent` (the command lines that went out), `bots` (the module's per-bot lines), `card` (the binding card the call
+read, or `cards` for a `status`), `final` (each waited bot's `ok` or `fail:<code>`, `{}` when no wait ran),
+`party_error` (why a `status` read the cards but not the party), and a run verb's `runs` and `events`. Every
+mutation reads `.tb commander status <self>` before the line and, for a bind, order, role or run mutation, after
+it: a target outside the character's own bindings is refused `not-owned` before anything is sent, and a line
+whose target changed in between says the line already went through. Every refusal also carries the call's partial
+result in the error's `data` (the lines that went out, the bots, `card` and `final` it had read), so a caller that
+sees an order in `sent` knows it went out and never retries it blindly. An order while a run is running or paused
+is refused `run-active` unless `pause_run` is true (the module pauses the run itself). A verb of a module package
+that is not installed answers `not-available` after one cached probe per session, and the probe cache is dropped
+when the world link is re-entered; a verb whose typed path has not landed (round C5) answers
+`not-available: <verb>: needs-typed-path (round C5)` with no probe line at all. `view` is the port's cut verb:
+`commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
+(`not-available`, `run-active`, `not-owned`, `refused`, `bind-refused`, or the module's own error code); a lost or
+re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
+every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
+capped at 15 s; the poll runs on the session goroutine, so a long wait holds the loop and every other call behind
+it for that bounded time), and is ignored by the other ops; an order is sent once and never resent.
+
 Ctrl-C logs out. An unplanned world-socket drop is not fatal: the daemon tears the old session down, logs in again
 with the same account and character (up to 8 attempts, 2 s doubling to 60 s apart, one attempt bounded by 60 s; a
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
@@ -245,8 +273,9 @@ and exits 12 when a leg did not pass. The thresholds are flags; the full contrac
 `forever-agent forever chat-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME`
 settles for `--stay` seconds, optionally says `--say TEXT`, whispers `--whisper NAME:TEXT`, sends a text emote
 `--emote TEXT`, then prints every chat line it receives for `--listen` seconds (default 10 s) and logs out. The
-message checks the server makes (non-empty, at most 511 bytes, valid UTF-8, no control characters or newlines, no
-`|` hyperlink escape, and a leading `/`, `.` or `!` is a command, not a line) run before anything is sent and fail
+message checks the server makes (non-empty, at most 511 bytes, valid UTF-8, no control characters or newlines,
+well-formed `|` link markup — a `|Hkind:data|h[label]|h` link, optionally wrapped in `|cAARRGGBB…|r` — and a
+leading `/`, `.` or `!` is a command, not a line) run before anything is sent and fail
 with a named error. Every packet goes out in the character's race language (Common for a human, Orcish for an orc,
 and so on): the server refuses a language the character has not learned. `--watch NAME` prints that player's position
 from the world model once a second for `--listen` instead of the chat log (the name lookup is the server's

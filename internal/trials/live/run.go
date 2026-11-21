@@ -106,6 +106,7 @@ type Runner struct {
 	skipped  map[string]string
 	lastRep  *Repeat
 	reaped   map[string]bool // summon guids a repeat teardown proved dead or gone
+	unproven map[string][]string
 }
 
 // findTrial resolves a TRIAL arg: an embedded path, an embedded id, or a
@@ -221,7 +222,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	if repeats <= 0 {
 		repeats = trialRepeats(trial)
 	}
-	trialDir := joinPath(r.Out, id)
+	trialDir := TrialDirOf(r.Out, id)
 	if err := mkdirAll(trialDir); err != nil {
 		return nil, err
 	}
@@ -233,6 +234,7 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	// (an error, SKIPPED, a disconnect, a panic) on a teardown context of its
 	// own, not only after the last repeat finished normally.
 	tornDown := false
+	var unproven []string
 	teardownTrial := func() {
 		if tornDown {
 			return
@@ -241,7 +243,10 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 		if rep := r.lastRep; rep != nil && rep.TrialID == id {
 			tctx, cancel := r.teardownCtx(ctx)
 			defer cancel()
-			r.trialTeardown(tctx, rep, id)
+			unproven = r.trialTeardown(tctx, rep, id)
+			if len(unproven) > 0 {
+				r.noteTeardownUnproven(id, unproven)
+			}
 		}
 	}
 	defer teardownTrial()
@@ -255,6 +260,13 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 				return map[string]any{"trial": id, "verdict": "SKIPPED", "needs": needs}, nil
 			}
 			return nil, err
+		}
+		// min_rep_gap_s: the hire's item cooldowns are per character and
+		// survive a repeat, so the next repeat waits the trial's gap out.
+		if i < repeats {
+			if gap := RepGap(trial); gap > 0 {
+				r.waitGap(ctx, gap)
+			}
 		}
 	}
 	teardownTrial()
@@ -271,7 +283,54 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 	if err := r.writeRUN(); err != nil {
 		return nil, err
 	}
+	if len(unproven) > 0 {
+		// The trial was scored, but the slot is not provably clean: the caller
+		// (a sweep) must not start another trial on it.
+		return doc, &TeardownUnproven{Trial: id, Problems: unproven}
+	}
 	return doc, nil
+}
+
+// TeardownUnproven is a trial whose teardown could not be proven (items not
+// cleared, a hire not logged out, the forced role not cleared): the next
+// trial would start on a dirty slot, so a sweep stops here.
+type TeardownUnproven struct {
+	Trial    string
+	Problems []string
+}
+
+func (e *TeardownUnproven) Error() string {
+	return "teardown of " + e.Trial + " not proven: " + strings.Join(e.Problems, "; ")
+}
+
+// noteTeardownUnproven records the unproven teardown in RUN.json's
+// `teardown_unproven`.
+func (r *Runner) noteTeardownUnproven(id string, problems []string) {
+	if r.unproven == nil {
+		r.unproven = map[string][]string{}
+	}
+	r.unproven[id] = append([]string(nil), problems...)
+}
+
+// waitGap sleeps gap in one-second steps, stopping at once on an abort.
+func (r *Runner) waitGap(ctx context.Context, gap time.Duration) {
+	end := time.Now().Add(gap)
+	for time.Now().Before(end) {
+		if r.Abort != nil {
+			if why := r.Abort(); why != "" {
+				return
+			}
+		}
+		step := time.Second
+		if left := time.Until(end); left < step {
+			step = left
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(step):
+		}
+	}
 }
 
 // runRepeat runs one repeat: setup, marks start, collect, situation,
@@ -553,6 +612,17 @@ func (r *Runner) writeRUN() error {
 		"reps": repLogAny(r.repLog), "started": started,
 		"ended":           now.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 		"trial_snapshots": true,
+	}
+	if len(r.unproven) > 0 {
+		up := map[string]any{}
+		for id, problems := range r.unproven {
+			list := make([]any, 0, len(problems))
+			for _, p := range problems {
+				list = append(list, p)
+			}
+			up[id] = list
+		}
+		doc["teardown_unproven"] = up
 	}
 	if len(r.skipped) > 0 {
 		sk := map[string]any{}

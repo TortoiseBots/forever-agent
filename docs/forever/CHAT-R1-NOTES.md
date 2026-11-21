@@ -61,9 +61,10 @@ race, and the bytes each builder carries).
   word, lower case then upper case the first letter, ObjectMgr.cpp:157-185). `--invite`, `--accept-from`,
   `--decline-from`, `--uninvite`, `--watch` and `--whisper` all normalize before use.
 * `ValidateText` requires valid UTF-8 (the server's packet reader throws on invalid UTF-8, ByteBuffer.cpp:72-86 via
-  PacketOperators.h:303-312) and refuses every `|` (`ErrTextHyperlink`): the server validates hyperlinks in every
-  chat line and may kick on a malformed one (WorldSession.cpp:819-828, Hyperlinks.cpp:881-921). This round refuses
-  all of them rather than re-implementing the link checker.
+  PacketOperators.h:303-312) and well-formed `|` markup (`ErrTextHyperlink` otherwise): the server validates
+  hyperlinks in every chat line and may kick on a malformed one (WorldSession.cpp:819-828, Hyperlinks.cpp:881-921).
+  A link is `|Hkind:data|h[label]|h`, optionally wrapped in one `|cAARRGGBB…|r` colour, for a known kind (item,
+  quest, spell, talent, enchant, trade, achievement); anything else with a `|` in it never leaves the client.
 * Name comparisons are case-insensitive, the server's rule (`PlayerNameMapHolder::Find` normalises before the lookup:
   ObjectAccessor.cpp:89-97, ObjectMgr.cpp:157-185). The invite is cleared once answered (`State.ClearInvite`), and
   an invite whose `CanAccept` is false is refused with a named error instead of answered.

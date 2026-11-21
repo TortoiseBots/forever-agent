@@ -503,6 +503,55 @@ func (p *recPath) Send(_ context.Context, verb string, args []string) (tbcmd.Ord
 	}, nil
 }
 
+func TestOneLeadScopesTheGuardRead(t *testing.T) {
+	cards := []tbcmd.Card{{Lead: "Tanka"}, {Lead: "Healera"}}
+	scoped, card, err := oneLead(cards, "healera")
+	if err != nil || len(scoped) != 1 || card == nil || card.Lead != "Healera" {
+		t.Fatalf("scoped %+v card %+v err %v", scoped, card, err)
+	}
+	if _, _, err := oneLead(cards, "Rogua"); err == nil {
+		t.Fatal("an unknown lead scoped")
+	} else if !strings.Contains(err.Error(), "Rogua") {
+		t.Fatalf("the refusal does not name the lead: %q", err)
+	}
+	scoped, card, err = oneLead(cards[:1], "")
+	if err != nil || len(scoped) != 1 || card == nil {
+		t.Fatalf("one card with no name: %+v %+v %v", scoped, card, err)
+	}
+	if _, _, err := oneLead(cards, ""); err == nil {
+		t.Fatal("an empty name with two cards scoped")
+	}
+	if _, _, err := oneLead(nil, ""); err == nil {
+		t.Fatal("an empty name with no cards scoped")
+	}
+	if _, _, err := oneLead(cards, "has space"); err == nil {
+		t.Fatal("an invalid lead name scoped")
+	}
+}
+
+// TestOrderToUnknownLeadSendsNothing is decision 3 at the Order level: a named lead the character does not
+// command is refused before any line goes out, and the refusal names the lead.
+func TestOrderToUnknownLeadSendsNothing(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, fullCards("Tanka", "")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	res, err := b.Order(context.Background(), Order{Verb: "stay", Lead: "Rogua"})
+	var no *NotOwnedError
+	if !errors.As(err, &no) || no.Target != "Rogua" || no.Kind != "lead" || no.Sent {
+		t.Fatalf("err %v, want a not-owned lead before the line", err)
+	}
+	if len(res.Sent) != 0 || seenCount(f, ".tb order") != 0 {
+		t.Fatalf("an order went out: sent %v saw %v", res.Sent, f.seen)
+	}
+	if len(f.seen) != 1 {
+		t.Fatalf("the call saw %v, want the guard read only", f.seen)
+	}
+}
+
 func TestProbeCachedPerSession(t *testing.T) {
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
 		switch {
@@ -548,6 +597,7 @@ func TestProbeMissAndReset(t *testing.T) {
 	b, _ := newTB(t, f, "Cmdr")
 	path := &recPath{}
 	b.cmdPath = path
+	// The module lacks both packages: each call probes, refuses with the package's code, and sends no order.
 	for i := range 2 {
 		_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
 		var na *NotAvailableError
@@ -576,6 +626,25 @@ func TestProbeMissAndReset(t *testing.T) {
 	}
 }
 
+func TestMissingTypedPathSendsNoProbe(t *testing.T) {
+	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
+		if line == ".tb commander status Cmdr" {
+			return reply(o, fullCards("Tanka", "")...), nil
+		}
+		return nil, errors.New("unexpected line " + line)
+	}}
+	b, _ := newTB(t, f, "Cmdr")
+	// No typed path installed: the refusal names the path that has not landed, and no probe goes out.
+	_, err := b.Order(context.Background(), Order{Verb: "move", Args: []string{"1", "2", "3"}})
+	var na *NotAvailableError
+	if !errors.As(err, &na) || na.Why != PathName {
+		t.Fatalf("move: err %v, want needs-typed-path", err)
+	}
+	if len(f.seen) != 1 {
+		t.Fatalf("the call saw %v, want the guard read only", f.seen)
+	}
+}
+
 func TestAvailable(t *testing.T) {
 	f := &fake{script: func(line string, o command.Options) (*command.Reply, error) {
 		switch line {
@@ -594,16 +663,17 @@ func TestAvailable(t *testing.T) {
 	if ok, why, err := b.Available(ctx, "view"); ok || why != "not ported on this server" || err != nil {
 		t.Fatalf("view: %v %q %v", ok, why, err)
 	}
-	// P3 answers, but no typed path is in this build: the reason says so, and the probe is cached.
-	if ok, why, err := b.Available(ctx, "move"); ok || !strings.Contains(why, "no typed cmd path") || err != nil {
+	// No typed path is in this build: the reason names the path, and nothing is probed.
+	if ok, why, err := b.Available(ctx, "move"); ok || why != PathName || err != nil {
 		t.Fatalf("move: %v %q %v", ok, why, err)
 	}
-	if ok, why, err := b.Available(ctx, "loot"); ok || why != "needs module package P6" || err != nil {
+	// No typed path is installed either: a P6 verb is refused with the same code before its probe.
+	if ok, why, err := b.Available(ctx, "loot"); ok || why != PathName || err != nil {
 		t.Fatalf("loot: %v %q %v", ok, why, err)
 	}
 	b.cmdPath = &recPath{}
-	if ok, _, err := b.Available(ctx, "move"); !ok || err != nil {
-		t.Fatalf("move with the path: %v %v", ok, err)
+	if ok, _, err := b.Available(ctx, "loot"); ok || err != nil {
+		t.Fatalf("loot with the path but without P6: %v %v", ok, err)
 	}
 	if _, _, err := b.Available(ctx, "dance"); err == nil {
 		t.Fatal("an unknown verb answered")

@@ -78,6 +78,7 @@ type Collector struct {
 	mu        sync.Mutex
 	seq       map[any]bool
 	raw       []map[string]any
+	rawAt     []time.Time // when the pump took raw[i] (parallel; tests may leave it short)
 	rawRows   int
 	samplesN  int
 	lost      string
@@ -261,6 +262,7 @@ func (c *Collector) pump(ctx context.Context) {
 			}
 			c.seq[seqKey(seq)] = true
 			c.raw = append(c.raw, row)
+			c.rawAt = append(c.rawAt, time.Now())
 			c.rawRows++
 			c.mu.Unlock()
 			appendJSONL(c.rawPath, row)
@@ -428,7 +430,17 @@ func (c *Collector) rows(st Status, units []Unit, ctx context.Context) ([]map[st
 
 func compactSample(hp, maxHP uint32, auras any, inCombat, dead bool) map[string]any {
 	return map[string]any{"hp": hp, "max_hp": maxHP, "pct": pct(hp, maxHP),
-		"auras": sortedSpellIDs(auras), "in_combat": inCombat, "dead": dead}
+		"auras": auraSample(auras), "in_combat": inCombat, "dead": dead}
+}
+
+// auraSample is the governor sample's aura list: the sorted spell ids, or nil
+// when the unit row carried no aura list (unknown stays unknown: a consumer
+// that re-casts on "no aura" must not read nil as "none").
+func auraSample(auras any) any {
+	if _, ok := auras.([]any); !ok {
+		return nil
+	}
+	return sortedSpellIDs(auras)
 }
 
 // ownAuras is the player's aura list from its own unit row.
@@ -468,6 +480,73 @@ func pct(hp, maxHP uint32) float64 {
 		return 0
 	}
 	return round2(100*float64(hp)/float64(maxHP)*10) / 10
+}
+
+// LastRawSeq is the highest seq the pump has written (0 before the first
+// row): the cursor a trigger proof is taken against.
+func (c *Collector) LastRawSeq() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var max uint64
+	for _, row := range c.raw {
+		if seq := uint64(intOf(row["seq"])); seq > max {
+			max = seq
+		}
+	}
+	return max
+}
+
+// AuraOnSince reports a fresh `aura_applied` row for spell on target: its
+// seq is past the cursor (a row with no seq never counts), it names exactly
+// target (a row with no target never counts, nor does another unit's), and
+// the pump took it at or after `since` (a stale row cannot prove a trigger).
+func (c *Collector) AuraOnSince(seq uint64, spell int, target string, since time.Time) bool {
+	want := normGUIDOf(target)
+	if want == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, row := range c.raw {
+		if kind, _ := row["kind"].(string); kind != "aura_applied" {
+			continue
+		}
+		if int(intOf(row["spell_id"])) != spell {
+			continue
+		}
+		if s := uint64(intOf(row["seq"])); s == 0 || s <= seq {
+			continue
+		}
+		if rowGUID(row, "target") != want {
+			continue
+		}
+		if i >= len(c.rawAt) || c.rawAt[i].Before(since) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// MobCasts returns the first spell_start/spell_go by any of guids (caster
+// proof), or nil.
+func (c *Collector) MobCasts(guids []string) map[string]any {
+	want := map[string]bool{}
+	for _, g := range guids {
+		want[strings.ToLower(g)] = true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, row := range c.raw {
+		kind, _ := row["kind"].(string)
+		if kind != "spell_start" && kind != "spell_go" {
+			continue
+		}
+		if want[rowGUID(row, "source")] {
+			return row
+		}
+	}
+	return nil
 }
 
 // EngagedAt returns the first combat row from src at dst (a cast start or
