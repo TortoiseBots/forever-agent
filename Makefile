@@ -9,7 +9,7 @@ export GOTOOLCHAIN := local
 .PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract addon-host
 
 # The package timeout is 20m: cmd/forever-agent runs about 1500 tests under -race and takes 8-10 minutes, so Go's 10m
-# default leaves no room on a loaded machine. CI runs the same checks as parallel jobs, with that package in 4 shards
+# default leaves no room on a loaded machine. CI runs the same checks as parallel jobs, with the race tests in 9 shards
 # (docs/CI.md); this target is the single-machine equivalent.
 test: fmt-check vet nocgo
 	$(GO) test -race -count=1 -timeout 20m ./...
