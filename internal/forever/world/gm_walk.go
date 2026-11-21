@@ -132,6 +132,9 @@ func (s *session) gmWalk(ctx context.Context) (*GMWalkResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gm-walk: --follow: %w", err)
 	}
+	if err := s.collect(ctx, s.settleFor()); err != nil {
+		return nil, err
+	}
 	for {
 		s.queryNames(ctx)
 		if g, ok := s.world.PlayerByName(name); ok {
