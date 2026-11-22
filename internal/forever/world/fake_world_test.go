@@ -324,10 +324,12 @@ type fakeServer struct {
 	serveLeaderName string
 	serveLeaderX    float32
 	// G2 group control: groupNames is the roster the daemon already holds, the other members in roster order (this
-	// character is added last); groupLeaderName names another leader (empty: this character leads) and groupSilent
-	// confirms nothing, the way this core answers a refused group command. groupIcons, groupLoot and groupFlags are
-	// the fake's own group state; the groupSeen* slices are what it saw. All under mu.
+	// character is added last); groupSlots hands each name its GUID slot once, so an uninvite does not renumber the
+	// members that stay; groupLeaderName names another leader (empty: this character leads) and groupSilent confirms
+	// nothing, the way this core answers a refused group command. groupIcons, groupLoot and groupFlags are the fake's
+	// own group state; the groupSeen* slices are what it saw. All under mu.
 	groupNames         []string
+	groupSlots         map[string]int
 	groupLeaderName    string
 	groupSilent        bool
 	groupIcons         [8]wire.GUID
