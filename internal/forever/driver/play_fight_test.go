@@ -1,0 +1,423 @@
+package driver
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+)
+
+// The fight cases of round P2b: the pull's marks, the dps' orders, the skull's rotation, the adds, the fight's cap,
+// the rest's bars, the boss's evidence and the whole Ragefire Chasm on the fake. The plans are hand-made: one pack of
+// two entries with Ragefire Chasm's kill order (11319 first), one boss, no steps, no real plan's positions.
+
+// playFightPlan is one small dungeon with one pack of two entries and a kill order, one boss, no steps.
+func playFightPlan() *dungeon.Plan {
+	return &dungeon.Plan{
+		Version: 1, Name: "test_fight", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		KillFirst:       []uint32{11319},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 40},
+			PullGroups: []dungeon.PullGroup{{
+				Entries:   []uint32{11320, 11319},
+				Positions: []dungeon.Point{{X: 40, Y: 10}},
+			}},
+			Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}},
+		}},
+	}
+}
+
+// playTwoPackPlan is one leg of two packs and no boss: the rest between the two fights is what the mana case reads.
+func playTwoPackPlan() *dungeon.Plan {
+	return &dungeon.Plan{
+		Version: 1, Name: "test_two_packs", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 40},
+			PullGroups: []dungeon.PullGroup{
+				{Entries: []uint32{11320}, Positions: []dungeon.Point{{X: 30, Y: 10}}},
+				{Entries: []uint32{11321}, Positions: []dungeon.Point{{X: 45, Y: -10}}},
+			},
+		}},
+	}
+}
+
+// playTwoBossPlan is two legs, each with its own boss: the clear needs both.
+func playTwoBossPlan() *dungeon.Plan {
+	p := playFightPlan()
+	p.Name = "test_two_bosses"
+	p.Legs[0].PullGroups = nil
+	p.Legs = append(p.Legs, dungeon.Leg{
+		Name: "two",
+		To:   dungeon.Point{X: 80},
+		Boss: &dungeon.Boss{Entry: 300, Position: dungeon.Point{X: 80}},
+	})
+	return p
+}
+
+// newPlayFightRig builds a rig over a plan whose bosses are alive (the P2a rigs' fake starts with them dead) and
+// whose packs and bosses mut puts in the view.
+func newPlayFightRig(t *testing.T, plan *dungeon.Plan, mut func(*PlayFake)) *playRig {
+	t.Helper()
+	route, err := NewPlayRoute(plan)
+	if err != nil {
+		t.Fatalf("the play route refused the fight plan: %v", err)
+	}
+	clock := NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
+	fake := NewPlayFake(route, clock, "Ownerchar", playBots[:]...)
+	fake.SetBotHP("Botone", 900, 900)
+	if mut != nil {
+		mut(fake)
+	}
+	cfg := PlayConfig{Plan: route.Name, Bots: playBots, RunID: "play-fight"}
+	return &playRig{
+		fake: fake, route: route, cfg: cfg,
+		ports: PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock},
+	}
+}
+
+// fightGUID is a scripted hostile's guid.
+func fightGUID(n uint64) wire.GUID { return wire.GUID{High: 0xF130000000000000, Low: 0x60000 + n} }
+
+// playActionAt is the first action whose line has the prefix, -1 when there is none.
+func playActionAt(actions []PlaySend, prefix string) int {
+	for i, a := range actions {
+		if strings.HasPrefix(a.Line, prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+// playActionTime is when the first action with that prefix was sent.
+func playActionTime(t *testing.T, actions []PlaySend, prefix string) time.Time {
+	t.Helper()
+	i := playActionAt(actions, prefix)
+	if i < 0 {
+		t.Fatalf("%q was never sent (actions %v)", prefix, actions)
+	}
+	return actions[i].At
+}
+
+// playCountLines is how many actions have the prefix.
+func playCountLines(actions []PlaySend, prefix string) int {
+	n := 0
+	for _, a := range actions {
+		if strings.HasPrefix(a.Line, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPlayPullMarksSkullOnKillFirst is the round's first case: the pack in the way is pulled, the skull goes on the
+// plan's kill order's entry even though the other unit stands nearer the agent, the cross on the nearest other unit,
+// and the tank is ordered onto the selected skull.
+func TestPlayPullMarksSkullOnKillFirst(t *testing.T) {
+	near, kill := fightGUID(1), fightGUID(2)
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: near, Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: kill, Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("the run ended stop=%q clear=%v; want clear", res.Stop, res.Clear)
+	}
+	if want := "PULL FIGHT REST"; !strings.Contains(strings.Join(res.States, " "), want) {
+		t.Fatalf("states = %q; want them to hold %q", strings.Join(res.States, " "), want)
+	}
+	want := []party.MarkEntry{{Mark: party.MarkSkull, Target: kill}, {Mark: party.MarkCross, Target: near}}
+	if len(rig.fake.Marks) < 2 || rig.fake.Marks[0] != want[0] || rig.fake.Marks[1] != want[1] {
+		t.Fatalf("marks = %v; want the skull on the kill order's unit and the cross on the other", rig.fake.Marks)
+	}
+	sel := playActionAt(rig.fake.Actions, "select "+kill.String())
+	tank := playActionAt(rig.fake.Actions, ".bot attack Botone")
+	if sel < 0 || tank < 0 || sel > tank {
+		t.Fatalf("the selection came at %d and the tank's order at %d; want the selection of the skull first", sel, tank)
+	}
+}
+
+// TestPlayDpsOrderedAfterTankAggro: the damage dealers are ordered only once the pack has turned on the tank, never
+// before it.
+func TestPlayDpsOrderedAfterTankAggro(t *testing.T) {
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AggroDelay = 5 * time.Second
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if rig.fake.AggroAt.IsZero() {
+		t.Fatal("no pack ever turned on the party")
+	}
+	tank := playActionTime(t, rig.fake.Actions, ".bot attack Botone")
+	if tank.After(rig.fake.AggroAt) {
+		t.Fatalf("the tank was ordered %v after the aggro; want the order first", tank.Sub(rig.fake.AggroAt))
+	}
+	for _, line := range []string{".bot attack Botthree", ".bot attack Botfour"} {
+		if at := playActionTime(t, rig.fake.Actions, line); at.Before(rig.fake.AggroAt) {
+			t.Fatalf("%q came %v before the pack turned on the tank", line, rig.fake.AggroAt.Sub(at))
+		}
+	}
+}
+
+// TestPlaySkullMovesToCross: a dead skull moves the skull mark to the cross unit, the cross to the next living one,
+// and the damage dealers are re-ordered onto the new skull.
+func TestPlaySkullMovesToCross(t *testing.T) {
+	skull, cross := fightGUID(1), fightGUID(2)
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: skull, Entry: 11319, Pos: Vec3{38, 8, 0}, HP: 700, MaxHP: 700})
+		f.AddUnit(Unit{GUID: cross, Entry: 11320, Pos: Vec3{42, 12, 0}, HP: 4000, MaxHP: 4000})
+		f.SpawnBosses()
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	want := []party.MarkEntry{
+		{Mark: party.MarkSkull, Target: skull},
+		{Mark: party.MarkCross, Target: cross},
+		{Mark: party.MarkSkull, Target: cross},
+	}
+	if len(rig.fake.Marks) < len(want) {
+		t.Fatalf("marks = %v; want them to start with %v", rig.fake.Marks, want)
+	}
+	for i := range want {
+		if rig.fake.Marks[i] != want[i] {
+			t.Fatalf("marks = %v; want them to start with %v", rig.fake.Marks, want)
+		}
+	}
+	// The damage dealers are re-ordered onto the new skull, after the agent selected it.
+	first := playActionAt(rig.fake.Actions, ".bot attack Botthree")
+	selCross := playActionAt(rig.fake.Actions, "select "+cross.String())
+	if first < 0 || selCross < 0 {
+		t.Fatalf("the damage dealers were ordered at %d and the cross selected at %d; want both", first, selCross)
+	}
+	later := -1
+	for i := first + 1; i < len(rig.fake.Actions); i++ {
+		if rig.fake.Actions[i].Line == ".bot attack Botthree" {
+			later = i
+			break
+		}
+	}
+	if later < selCross {
+		t.Fatalf("the damage dealers were re-ordered at %d and the new skull selected at %d; want the order after the selection", later, selCross)
+	}
+}
+
+// TestPlayAddJoinsFight: a unit that turns on the party mid-fight is fought too, and the fight ends only after it is
+// down: the pull's record counts it as an add.
+func TestPlayAddJoinsFight(t *testing.T) {
+	add := fightGUID(9)
+	ticks := 0
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+		f.OnFightTick = func(f *PlayFake) {
+			ticks++
+			if ticks != 2 {
+				return
+			}
+			f.AddUnit(Unit{GUID: add, Entry: 11321, Pos: Vec3{45, 15, 0}})
+			f.AggroUnit(add)
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if len(res.Summary.Pulls) == 0 {
+		t.Fatal("the first fight left no pull record")
+	}
+	if got := res.Summary.Pulls[0].Adds; got != 1 {
+		t.Fatalf("the pull's adds = %d; want 1", got)
+	}
+	if _, ok := rig.fake.UnitOf(11321); !ok {
+		t.Fatal("the add was never in the view")
+	}
+}
+
+// TestPlayFightTimeout: a fight that no one ends is the run's own stop, at the fight's cap.
+func TestPlayFightTimeout(t *testing.T) {
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}, HP: 200000, MaxHP: 200000})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}, HP: 200000, MaxHP: 200000})
+		f.SpawnBosses()
+	})
+	rig.cfg.Limits.Fight = 60 * time.Second
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "fight-timeout" {
+		t.Fatalf("stop = %q; want fight-timeout", res.Stop)
+	}
+	tank := playActionTime(t, rig.fake.Actions, ".bot attack Botone")
+	if d := rig.fake.Clock.Now().Sub(tank); d < 60*time.Second {
+		t.Fatalf("the run stopped %v after the pull; want at least 60 s (the fight's cap)", d)
+	}
+}
+
+// TestPlayRestWaitsForMana: the rest holds the run until the healer's mana is back over 70% after the fight, and a
+// party that is already ready goes on at once.
+func TestPlayRestWaitsForMana(t *testing.T) {
+	run := func(short bool) time.Duration {
+		spent := false
+		rig := newPlayFightRig(t, playTwoPackPlan(), func(f *PlayFake) {
+			f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{30, 10, 0}})
+			f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11321, Pos: Vec3{45, -10, 0}})
+			if !short {
+				return
+			}
+			// The healer spends its pool on the first fight and drinks it back at 100 a second.
+			f.SetBotPower("Bottwo", 0, 1000, 1000)
+			f.BotRegen["bottwo"] = 100
+			f.OnFightTick = func(f *PlayFake) {
+				if spent {
+					return
+				}
+				spent = true
+				f.SetBotPower("Bottwo", 0, 100, 1000)
+			}
+		})
+		if res := Play(context.Background(), rig.route, rig.ports, rig.cfg); res.Stop != "clear" {
+			t.Fatalf("stop = %q; want clear", res.Stop)
+		}
+		second := 0
+		for i, a := range rig.fake.Actions {
+			if a.Line != ".bot attack Botone" {
+				continue
+			}
+			second++
+			if second != 2 {
+				continue
+			}
+			last := i
+			for j := i - 1; j >= 0; j-- {
+				if strings.HasPrefix(rig.fake.Actions[j].Line, ".bot follow ") {
+					last = j
+					break
+				}
+			}
+			return rig.fake.Actions[i].At.Sub(rig.fake.Actions[last].At)
+		}
+		t.Fatal("the second pack was never pulled")
+		return 0
+	}
+	if d := run(true); d < 4*time.Second {
+		t.Fatalf("the run went on %v after the fight with the healer at 10%% mana; want it to rest (the pool is ready at 6 s)", d)
+	}
+	if d := run(false); d >= 4*time.Second {
+		t.Fatalf("the run waited %v for a party that was already ready", d)
+	}
+}
+
+// TestPlayBossCountsFromEncounter: a boss whose corpse the view never shows still counts dead from its encounter's
+// end, so the clear is judged from the fight and not only from the last view.
+func TestPlayBossCountsFromEncounter(t *testing.T) {
+	ticks := 0
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.OnFightTick = func(f *PlayFake) {
+			ticks++
+			if ticks != 4 {
+				return
+			}
+			if u, ok := f.UnitOf(200); ok {
+				f.RemoveUnit(u.GUID)
+			}
+			f.Encounter(EncounterEvent{Kind: "end", EncounterID: 1, Success: true, At: f.Clock.Now()})
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear from the encounter's end", res.Stop, res.Clear)
+	}
+	if !res.Summary.Bosses["200"] {
+		t.Fatalf("the summary's bosses = %v; want 200 dead", res.Summary.Bosses)
+	}
+}
+
+// TestPlayClearNeedsEveryBoss: a plan boss the run never saw die keeps the run from a clear.
+func TestPlayClearNeedsEveryBoss(t *testing.T) {
+	rig := newPlayFightRig(t, playTwoBossPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 200, Pos: Vec3{60, 0, 0}})
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "bosses-alive" || res.Clear {
+		t.Fatalf("stop = %q clear = %v; want bosses-alive and no clear", res.Stop, res.Clear)
+	}
+}
+
+// TestPlayPullRetryThenFail: a pull no one answers is retried once and then stops the run.
+func TestPlayPullRetryThenFail(t *testing.T) {
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AggroDelay = 45 * time.Second
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 2 {
+		t.Fatalf("the tank was ordered %d times; want 2 (the try and the retry)", n)
+	}
+}
+
+// TestPlayScriptedRFCClear: the whole Ragefire Chasm on the fake: every pack and boss pulled, every boss of the plan
+// counted, no line outside the contract, and the run inside its 90 minutes.
+func TestPlayScriptedRFCClear(t *testing.T) {
+	plan, err := dungeon.Load("../../../dungeons/ragefire_chasm.json")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want a clear (states %s)", res.Stop, res.Clear, strings.Join(res.States, " "))
+	}
+	for _, a := range rig.fake.Actions {
+		if strings.HasPrefix(a.Line, ".") && !strings.HasPrefix(a.Line, ".bot ") {
+			t.Fatalf("the run sent %q; a player run sends .bot lines only", a.Line)
+		}
+	}
+	bosses := 0
+	for entry, dead := range res.Summary.Bosses {
+		bosses++
+		if !dead {
+			t.Fatalf("boss %s = alive; want every plan boss dead", entry)
+		}
+	}
+	if bosses != 4 {
+		t.Fatalf("bosses = %v; want Ragefire Chasm's four", res.Summary.Bosses)
+	}
+	if res.Summary.DurationS >= 90*60 {
+		t.Fatalf("the run took %.0f s; want it inside the plan's 90 minutes", res.Summary.DurationS)
+	}
+	if len(res.Summary.Pulls) < 40 {
+		t.Fatalf("pulls = %d; want every pack of the plan fought", len(res.Summary.Pulls))
+	}
+	t.Logf("Ragefire Chasm cleared in %.0f s: %d pulls, %d bosses", res.Summary.DurationS, len(res.Summary.Pulls), bosses)
+}

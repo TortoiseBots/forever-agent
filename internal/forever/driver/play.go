@@ -4,21 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // The player run (forever-agent #88): the agent plays one character, party leader of the owner's four bots, and walks
 // the plan as one of the group. It is not a commander: every line it sends is a bot-commands v1 line or one of the two
-// whisper words (D-3), and it never travels by GM. This round runs PREPARE, FORM, TRAVEL, ENTER and LEG_WALK; the
-// pulls, the fight, the deaths and the steps come in P2b-P4.
+// whisper words (D-3), and it never travels by GM. P2a ran PREPARE, FORM, TRAVEL, ENTER and LEG_WALK; P2b adds the
+// pulls, the fight, the rest and the boss (play_fight.go); the deaths and the steps come in P3 and P4.
 //
 // The machine shares the commander's route, walker, world, clock and record. Its ports are the module (Owner), the
 // group it leads (GroupPort) and its own character (PlayerPort).
@@ -84,6 +85,13 @@ type PlayLimits struct {
 	SummonAt     time.Duration // the summon for a straggler in a leg
 	StopAt       time.Duration // the straggler stop in a leg
 	Patrol       time.Duration // a patrol on the way, before the stop
+	Pull         time.Duration // the wait for the tank's aggro after `.bot attack`, before the retry
+	FightPoll    time.Duration // between two polls of the fight
+	FightQuiet   time.Duration // no living unit on a party member this long ends the fight
+	Fight        time.Duration // the whole fight's cap
+	AgentHit     time.Duration // the agent's own attack, this long after the tank got the skull
+	TankBreak    time.Duration // the skull on a non-tank member this long re-orders the tank
+	Rest         time.Duration // REST's cap
 }
 
 // DefaultPlayLimits is the player run's table of defaults, from the spec's round P2a.
@@ -101,6 +109,13 @@ func DefaultPlayLimits() PlayLimits {
 		SummonAt:     90 * time.Second,
 		StopAt:       150 * time.Second,
 		Patrol:       120 * time.Second,
+		Pull:         20 * time.Second,
+		FightPoll:    500 * time.Millisecond,
+		FightQuiet:   3 * time.Second,
+		Fight:        600 * time.Second,
+		AgentHit:     1500 * time.Millisecond,
+		TankBreak:    3 * time.Second,
+		Rest:         180 * time.Second,
 	}
 }
 
@@ -142,6 +157,27 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	}
 	if l.Patrol == 0 {
 		l.Patrol = d.Patrol
+	}
+	if l.Pull == 0 {
+		l.Pull = d.Pull
+	}
+	if l.FightPoll == 0 {
+		l.FightPoll = d.FightPoll
+	}
+	if l.FightQuiet == 0 {
+		l.FightQuiet = d.FightQuiet
+	}
+	if l.Fight == 0 {
+		l.Fight = d.Fight
+	}
+	if l.AgentHit == 0 {
+		l.AgentHit = d.AgentHit
+	}
+	if l.TankBreak == 0 {
+		l.TankBreak = d.TankBreak
+	}
+	if l.Rest == 0 {
+		l.Rest = d.Rest
 	}
 	return l
 }
@@ -198,6 +234,17 @@ type playRun struct {
 	selfMap uint32
 
 	legIdx int
+	// walkAt is the leg-walk's next waypoint: a pack in the way is fought first, and the walk resumes where it stopped.
+	walkAt int
+	// pack is the group being pulled or fought (-1 between pulls); bossRun says the pull is the leg's boss.
+	pack    int
+	bossRun bool
+	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
+	pulled     map[int]bool
+	bossKilled map[uint32]bool
+	// pullSet is every unit the pull brought and skull the one its marks and orders point at.
+	pullSet []wire.GUID
+	skull   wire.GUID
 
 	// farSince and farStage are the straggler timers, by normalised bot name.
 	farSince map[string]time.Time
@@ -218,6 +265,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 	p := &playRun{
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
 		farSince: map[string]time.Time{}, farStage: map[string]int{}, bosses: map[string]bool{},
+		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{},
 	}
 	if p.ports.Clock == nil {
 		p.ports.Clock = WallClock{}
@@ -305,6 +353,14 @@ func (p *playRun) state(ctx context.Context, st string) string {
 		return p.enter(ctx)
 	case StateLegWalk:
 		return p.legWalk(ctx)
+	case StatePull:
+		return p.pull(ctx)
+	case StateFight:
+		return p.fight(ctx)
+	case StateRest:
+		return p.rest(ctx)
+	case StateBoss:
+		return p.boss(ctx)
 	case StateDone:
 		return p.done(ctx)
 	case StateLeave:
@@ -593,29 +649,80 @@ func (p *playRun) waitMap(ctx context.Context, mapID uint32, limit time.Duration
 	}
 }
 
-// legWalk walks one leg's via points and its end in segments, then moves on; after the last leg the run is done.
+// legWalk walks one leg's via points and its end in segments, fights what is left of its packs, pulls its boss and moves
+// on; after the last leg the run is done. A pack in the way stops the walk (the pull comes first) and the walk resumes
+// at the same waypoint when the fight is over.
 func (p *playRun) legWalk(ctx context.Context) string {
-	if p.legIdx >= len(p.route.Legs) {
+	leg := p.leg()
+	if leg == nil {
 		return StateDone
 	}
-	leg := &p.route.Legs[p.legIdx]
 	points := append(append([]Vec3(nil), leg.Via...), leg.To)
-	for i, wp := range points {
+	for p.walkAt < len(points) {
 		exact, direct := false, false
-		if i < len(leg.Via) {
-			exact, direct = leg.ViaExact[i], leg.ViaDirect[i]
+		if p.walkAt < len(leg.Via) {
+			exact, direct = leg.ViaExact[p.walkAt], leg.ViaDirect[p.walkAt]
 		}
-		p.walkTo(ctx, wp, exact, direct)
+		p.walkTo(ctx, points[p.walkAt], exact, direct)
 		if p.stopReason != "" {
 			return ""
 		}
+		if p.pack >= 0 {
+			return StatePull
+		}
+		p.walkAt++
 	}
-	p.rec.Event(p.now(), "leg_done", map[string]any{"leg": leg.Index, "name": leg.Name})
+	if p.walkAt == len(points) {
+		p.rec.Event(p.now(), "leg_done", map[string]any{"leg": leg.Index, "name": leg.Name})
+		p.walkAt++
+	}
+	if g, ok := p.nextPack(leg); ok {
+		p.pack = g
+		return StatePull
+	}
+	if leg.Boss != nil && !p.bossDone(leg.Boss.Entry) {
+		return StateBoss
+	}
 	p.legIdx++
+	p.walkAt = 0
 	if p.legIdx >= len(p.route.Legs) {
 		return StateDone
 	}
 	return StateLegWalk
+}
+
+// leg is the leg the run is on, nil past the last one.
+func (p *playRun) leg() *Leg {
+	if p.legIdx < 0 || p.legIdx >= len(p.route.Legs) {
+		return nil
+	}
+	return &p.route.Legs[p.legIdx]
+}
+
+// legName is the leg the run is on, for the record.
+func (p *playRun) legName() string {
+	if leg := p.leg(); leg != nil {
+		return leg.Name
+	}
+	return ""
+}
+
+// nextPack is the leg's first group, in plan order, with a living unit in view that the run has not fought yet.
+func (p *playRun) nextPack(leg *Leg) (int, bool) {
+	units := p.ports.World.Units()
+	claim := p.claim(units)
+	for i := range leg.Groups {
+		g := &leg.Groups[i]
+		if p.pulled[g.ID] {
+			continue
+		}
+		for _, ui := range claim.Members(g.ID) {
+			if u := units[ui]; !u.Dead && !u.Friendly {
+				return g.ID, true
+			}
+		}
+	}
+	return -1, false
 }
 
 // walkTo walks to one point: planned on the navmesh and cut into segments of PlaySegmentYd, or, for a plan's direct
@@ -635,7 +742,10 @@ func (p *playRun) walkTo(ctx context.Context, to Vec3, exact, direct bool) {
 	if direct {
 		from := [3]float32{p.self[0], p.self[1], p.self[2]}
 		end := [3]float32{to[0], to[1], to[2]}
-		p.walkSegments(ctx, [][][3]float32{{from, end}})
+		switch p.walkSegments(ctx, [][][3]float32{{from, end}}) {
+		case walkStopped, walkPulling:
+			return
+		}
 		return
 	}
 	for range 3 {
@@ -653,17 +763,28 @@ func (p *playRun) walkTo(ctx context.Context, to Vec3, exact, direct bool) {
 			p.stop("walk:" + string(route.Kind))
 			return
 		}
-		changed := p.walkSegments(ctx, SplitRoute(route.Points, PlaySegmentYd))
-		if p.stopReason != "" {
+		switch p.walkSegments(ctx, SplitRoute(route.Points, PlaySegmentYd)) {
+		case walkStopped, walkPulling:
 			return
+		case walkChanged:
+			continue
 		}
-		if !changed {
-			p.checkExact(to, exact)
-			return
-		}
+		p.checkExact(to, exact)
+		return
 	}
 	p.stop("walk:mapchange")
 }
+
+// walkEnd is how one walk ended: an arrival, a map change (the rest is planned again), a pack in the way to pull
+// before the walk goes on, or a stop of the run's.
+type walkEnd int
+
+const (
+	walkArrived walkEnd = iota
+	walkChanged
+	walkPulling
+	walkStopped
+)
 
 // checkExact stops the run when a walk to a plan's exact via did not end on the point: the hop after it (a straight
 // line the map data has no link for) is only safe from the foot the plan names.
@@ -677,38 +798,80 @@ func (p *playRun) checkExact(to Vec3, exact bool) {
 	}
 }
 
-// walkSegments walks the segments, polling the party and the way between them. It reports whether a map change
-// interrupted the walk; a stop of its own is the run's stop reason.
-func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) bool {
+// walkSegments walks the segments, polling the party and the way between them. A pack of the leg that stands in the
+// way is the pull that comes first (P2b); a live patrol the plan does not know holds the walk and then stops it.
+func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd {
 	for _, seg := range segs {
 		if p.timeUp() {
 			p.stop("time")
-			return false
+			return walkStopped
 		}
 		if err := p.ports.Walker.Walk(ctx, seg); err != nil {
 			if errors.Is(err, ErrMapChange) {
-				return true
+				return walkChanged
 			}
 			if errors.Is(err, ErrLinkLost) {
 				p.linkLost()
 			} else {
 				p.stop("walk")
 			}
-			return false
+			return walkStopped
 		}
 		p.refreshSelf()
 		if _, bad := p.route.InAvoid(p.self); bad {
 			p.stop("avoid")
-			return false
+			return walkStopped
 		}
 		if !p.waitNear(ctx, PlayFollowYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
-			return false
+			return walkStopped
+		}
+		if g, ok := p.packInWay(); ok {
+			p.pack = g
+			return walkPulling
 		}
 		if p.patrolHold(ctx) {
-			return false
+			return walkStopped
 		}
 	}
-	return false
+	return walkArrived
+}
+
+// packInWay is the plan's next uncleared pack a live unit of which stands within PlayPullYd of the agent: a pack in
+// the way is fought before the walk goes on. It is any pack of the plan, not only the current leg's (a party that
+// walks past another leg's pack fights it where it stands; aggro does not read the plan), and a patrol counts by its
+// entry, because it walks through the party while its spawn is out of the pack's radius. A hostile no pack claims and
+// no patrol names is patrolHold's business.
+func (p *playRun) packInWay() (int, bool) {
+	if p.selfMap != p.route.Map {
+		return -1, false
+	}
+	units := p.ports.World.Units()
+	groups := p.route.AllGroups()
+	claim := MatchPacks(units, groups, len(groups))
+	best, bestD := -1, math.Inf(1)
+	consider := func(g *Group, u Unit) {
+		if p.pulled[g.ID] || u.Dead || u.Friendly {
+			return
+		}
+		if d := dist3(u.Pos, p.self); d <= PlayPullYd && d < bestD {
+			best, bestD = g.ID, d
+		}
+	}
+	for i := range groups {
+		g := &groups[i]
+		for _, ui := range claim.Members(g.ID) {
+			consider(g, units[ui])
+		}
+		if g.Patrol == nil {
+			continue
+		}
+		for _, u := range units {
+			if slices.Contains(g.Patrol.Entries, u.Entry) {
+				consider(g, u)
+			}
+		}
+	}
+	return best, best >= 0
 }
 
 // waitNear waits until every bot stands within yd of the agent on its map. A far bot gets one follow at followAt, one
@@ -763,25 +926,22 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 	}
 }
 
-// patrolHold holds the walk while a live member of the leg's patrol stands near the agent, up to the patrol budget,
-// and then stops the run: the pack is in the way, and the player run pulls it before it walks on (P2b). It reports
-// whether the run stopped.
+// patrolHold holds the walk while a live hostile the plan knows nothing about stands near the agent, up to the patrol
+// budget, and then stops the run. A hostile a pack or a patrol of the plan names is pulled instead (packInWay): the
+// plan's packs do not walk out of the way, and a player run fights what comes at it. It reports whether the run
+// stopped.
 func (p *playRun) patrolHold(ctx context.Context) bool {
-	if p.legIdx >= len(p.route.Legs) {
+	if !p.strangerNear(PlayPatrolYd) {
 		return false
 	}
-	leg := &p.route.Legs[p.legIdx]
-	if !patrolNear(leg, p.ports.World.Units(), p.self, PlayPatrolYd) {
-		return false
-	}
-	p.rec.Event(p.now(), "patrol_hold", map[string]any{"leg": leg.Index})
+	p.rec.Event(p.now(), "patrol_hold", map[string]any{"leg": p.legIdx})
 	deadline := p.now().Add(p.lim.Patrol)
 	for {
 		if !p.sleep(ctx, p.lim.Poll) {
 			return true
 		}
 		p.refreshSelf()
-		if !patrolNear(leg, p.ports.World.Units(), p.self, PlayPatrolYd) {
+		if !p.strangerNear(PlayPatrolYd) {
 			return false
 		}
 		if !p.now().Before(deadline) {
@@ -791,35 +951,63 @@ func (p *playRun) patrolHold(ctx context.Context) bool {
 	}
 }
 
-// patrolNear says whether a live member of the leg's patrols stands within yd of p.
-func patrolNear(leg *Leg, units []Unit, p Vec3, yd float64) bool {
-	for _, g := range leg.Groups {
-		if g.Patrol == nil {
+// strangerNear says whether a live hostile stands within yd of the agent that no pack of the plan claims and that the
+// plan does not name (a boss and a boss's adds are named; the run goes to them itself).
+func (p *playRun) strangerNear(yd float64) bool {
+	units := p.ports.World.Units()
+	groups := p.route.AllGroups()
+	claim := MatchPacks(units, groups, len(groups))
+	known := p.knownEntries()
+	for ui, u := range units {
+		if u.Dead || u.Friendly || dist3(u.Pos, p.self) > yd || known[u.Entry] {
 			continue
 		}
-		for _, u := range units {
-			if u.Dead || u.Friendly {
-				continue
-			}
-			if slices.Contains(g.Patrol.Entries, u.Entry) && dist3(u.Pos, p) <= yd {
-				return true
-			}
+		if _, ok := claim.GroupOf(ui); !ok {
+			return true
 		}
 	}
 	return false
 }
 
-// done is the end of the walk: every plan boss dead is the clear. This round has no fight, so a boss left alive stops
-// the run; P2b pulls what is left instead.
+// knownEntries is every entry the plan names: its packs', its patrols', its bosses' and a boss's adds.
+func (p *playRun) knownEntries() map[uint32]bool {
+	out := map[uint32]bool{}
+	for i := range p.route.Legs {
+		leg := &p.route.Legs[i]
+		for j := range leg.Groups {
+			g := &leg.Groups[j]
+			for _, e := range g.Entries {
+				out[e] = true
+			}
+			if g.Patrol == nil {
+				continue
+			}
+			for _, e := range g.Patrol.Entries {
+				out[e] = true
+			}
+		}
+		if leg.Boss == nil {
+			continue
+		}
+		out[leg.Boss.Entry] = true
+		for _, e := range leg.Boss.First {
+			out[e] = true
+		}
+	}
+	return out
+}
+
+// done is the end of the run: every plan boss dead is the clear. A boss counts dead from its unit's dead flag or from
+// the instance's encounter end (§3.9), so the verdict is the fight's evidence and not only the last view.
 func (p *playRun) done(ctx context.Context) string {
-	units := p.ports.World.Units()
+	p.drainEncounters()
 	all := true
 	for _, leg := range p.route.Legs {
 		if leg.Boss == nil {
 			continue
 		}
-		dead := bossDead(units, leg.Boss.Entry)
-		p.bosses[strconv.FormatUint(uint64(leg.Boss.Entry), 10)] = dead
+		dead := p.bossDone(leg.Boss.Entry)
+		p.bosses[bossKey(leg.Boss.Entry)] = dead
 		if !dead {
 			all = false
 		}
