@@ -163,6 +163,10 @@ func LoadRoute(path string) (*Route, error) { return loadRoute(path, modeRun) }
 // in-fight run fields are accepted unchanged (the loader has validated them).
 func LoadWatchRoute(path string) (*Route, error) { return loadRoute(path, modeWatch) }
 
+// LoadPlayRoute reads a dungeon plan file for dungeon-play: the player run leads the fights itself and refuses what it
+// cannot run (NewPlayRoute).
+func LoadPlayRoute(path string) (*Route, error) { return loadRoute(path, modePlay) }
+
 func loadRoute(path string, mode routeMode) (*Route, error) {
 	p, err := dungeon.Load(path)
 	if err != nil {

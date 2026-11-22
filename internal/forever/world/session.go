@@ -218,6 +218,10 @@ type Options struct {
 	// Round S7: forever dungeon-watch. DungeonWatch watches a run the server module leads: the same ports, PREPARE and
 	// ENTER as a run, then the module's status and events and no order of ours. A nil value runs none of it.
 	DungeonWatch *driver.Config
+	// Round P5b: forever dungeon-play. DungeonPlay plays one dungeon plan as the player: the character leads the owner's
+	// four bots through it on the player's own ports (play_session.go), with no GM line and no GM guard. A nil value
+	// runs none of it.
+	DungeonPlay *PlayRunOptions
 	// Round BG-A1: forever bg-watch. BGWatch queues the character into a
 	// battleground, accepts, observes the match and records it. A nil value
 	// runs none of it.
@@ -337,6 +341,8 @@ type Report struct {
 	Dungeon *driver.Result
 	// Round S7: the watch's result, nil when the session ran something else.
 	Watch *driver.Result
+	// Round P5b: the player run's result, nil when the session ran something else.
+	Play *driver.Result
 	// Round BG-A1: the bg-watch result, nil when the session ran something else.
 	BGWatch *bg.Result
 	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
@@ -1330,6 +1336,14 @@ func (s *session) enter(ctx context.Context) error {
 	if s.opts.DungeonWatch != nil {
 		res, err := s.dungeonWatch(ctx, s.opts.DungeonWatch)
 		s.report.Watch = res
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.DungeonPlay != nil {
+		res, err := s.dungeonPlay(ctx, s.opts.DungeonPlay)
+		s.report.Play = res
 		if err != nil {
 			return err
 		}

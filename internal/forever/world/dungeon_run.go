@@ -128,3 +128,41 @@ func (s *session) dungeonWatch(ctx context.Context, cfg *driver.Config) (*driver
 		res.Summary.Practice, res.Clear)
 	return &res, nil
 }
+
+// PlayRunOptions is one player run for the session: the route the command loaded (a plan this build refuses never costs
+// a login) and the run's config.
+type PlayRunOptions struct {
+	Route  *driver.Route
+	Config driver.PlayConfig
+}
+
+// dungeonPlay is the session side of `forever dungeon-play`: the same login and settle as a run, then the player run
+// over the player's ports. It never asks for the GM guard: a player has no GM permission to confirm, and the player
+// ports' command link admits bot-commands v1 lines only. The recorder opens inside the machine (Config.Out, RunID).
+func (s *session) dungeonPlay(ctx context.Context, o *PlayRunOptions) (*driver.Result, error) {
+	if o == nil {
+		return nil, nil
+	}
+	if o.Route == nil {
+		return nil, errors.New("world: dungeon-play: no route")
+	}
+	c, route := o.Config, o.Route
+	s.initChat()
+	settle := s.opts.Settle
+	if settle <= 0 {
+		settle = dungeonSettle
+	}
+	if err := s.collect(ctx, settle); err != nil {
+		return nil, err
+	}
+	if c.Out != "" && c.RunID == "" {
+		c.RunID = trace.NewRunID(time.Now())
+	}
+	ports := newPlayPorts(ctx, s)
+	ports.Combat = dungeonCombat{s: s}
+	s.opts.logf("dungeon-play: plan %s, map %d, %d leg(s)", route.Name, route.Map, len(route.Legs))
+	res := driver.Play(ctx, route, ports, c)
+	s.opts.logf("dungeon-play: stop %s, %d pull(s), %d wipe(s), %d death(s), clear=%v", res.Stop,
+		len(res.Summary.Pulls), res.Summary.Wipes, res.Summary.Deaths, res.Clear)
+	return res, nil
+}

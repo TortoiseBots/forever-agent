@@ -226,6 +226,8 @@ type PlayPorts struct {
 	World  World
 	Walker Walker
 	Clock  Clock
+	// Combat is the session's combat log, optional: the run copies its rows into its record for the spell judge.
+	Combat CombatLog
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -288,6 +290,18 @@ type playRun struct {
 	looted      map[wire.GUID]bool
 	// deadFrom is where the run goes back to once the character is up: the fight it died in.
 	deadFrom string
+
+	// The record's evidence (play_record.go): who says each bot's class and level, inFight whether a fight is on (the
+	// frames' combat flag), the frames written and the combat log's cursor and counters.
+	who               map[string]playMember
+	inFight           bool
+	frames            int
+	combatSeq         int
+	combatRows        int
+	combatLost        int
+	combatLostThrough int
+	combatFull        bool
+	combatErr         string
 }
 
 // Play runs one player run to STOP and returns what it did.
@@ -360,8 +374,8 @@ func (p *playRun) openRecorder() *Recorder {
 		runID = "play"
 	}
 	party := make([]trace.Member, 0, len(p.cfg.Bots))
-	for i, name := range p.cfg.Bots {
-		party = append(party, trace.Member{Name: name, Role: traceRole(i)})
+	for i := range p.cfg.Bots {
+		party = append(party, trace.Member{Name: playSlot(i), Role: traceRole(i)})
 	}
 	rec, err := NewPlayRecorder(p.cfg.Out, runID, p.cfg.Plan, p.route.Map, 0, p.start, party)
 	if err != nil {
@@ -417,6 +431,8 @@ func (p *playRun) finish() {
 	p.rec.sum.Bosses = p.bosses
 	p.rec.sum.Wipes = p.wipes
 	p.rec.sum.Deaths = p.deaths
+	p.drainCombat()
+	p.rec.sum.Play = p.playRecord(p.now())
 	p.rec.Finish(p.now(), p.stopReason, p.lastLegName())
 }
 
@@ -500,7 +516,7 @@ func (p *playRun) form(ctx context.Context) string {
 				}
 				return ""
 			}
-			p.rec.Event(p.now(), "bot_added", map[string]any{"bot": name})
+			p.rec.Event(p.now(), "bot_added", map[string]any{"bot": p.slot(name)})
 		case errors.Is(err, botcmd.ErrRefused):
 			if rep.Code != "already-online" {
 				p.stop("form-refused:" + rep.Code)
@@ -539,6 +555,9 @@ func (p *playRun) form(ctx context.Context) string {
 			p.stop("tank-too-weak")
 			return ""
 		}
+	}
+	if !p.learnParty(ctx) {
+		return ""
 	}
 	return StateTravel
 }
@@ -639,7 +658,7 @@ func (p *playRun) enter(ctx context.Context) string {
 					stage[name], until[name] = 1, now.Add(p.lim.SummonArrive)
 				case errors.Is(err, botcmd.ErrRefused) && rep.Code == "on-cooldown":
 					stage[name], until[name] = 2, now.Add(p.lim.SummonWait)
-					p.rec.Event(now, "summon_cooldown", map[string]any{"bot": name})
+					p.rec.Event(now, "summon_cooldown", map[string]any{"bot": p.slot(name)})
 				default:
 					p.stop("bot-not-entered")
 					return ""
@@ -945,7 +964,7 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 		for _, name := range far {
 			if p.farSince[name].IsZero() {
 				p.farSince[name] = now
-				p.rec.Event(now, "straggler", map[string]any{"bot": name})
+				p.rec.Event(now, "straggler", map[string]any{"bot": p.slot(name)})
 			}
 			d := now.Sub(p.farSince[name])
 			if d >= stopAt {
@@ -1214,6 +1233,9 @@ func (p *playRun) now() time.Time { return p.ports.Clock.Now() }
 func (p *playRun) sleep(ctx context.Context, d time.Duration) bool {
 	if p.stopReason != "" {
 		return false
+	}
+	if !p.inFight {
+		p.sample(nil)
 	}
 	if err := p.ports.Clock.Sleep(ctx, d); err != nil {
 		p.stop("interrupt")

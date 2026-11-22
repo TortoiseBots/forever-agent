@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -133,6 +135,10 @@ type PlayFake struct {
 	pending     []pendingAggro
 	encounters  []EncounterEvent
 	OnFightTick func(f *PlayFake)
+	// EmitCasts makes every online bot of the party cast on each fight tick: one spell_go row per bot in the scripted
+	// combat log (CombatRows), the evidence the spell judge reads. The dry command sets it; the rows are the fake's own.
+	EmitCasts bool
+	combat    [][]byte
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
 }
@@ -586,6 +592,9 @@ func (f *PlayFake) FightTick(ctx context.Context, target wire.GUID) error {
 		f.OnFightTick(f)
 	}
 	f.settle()
+	if f.EmitCasts {
+		f.emitCasts()
+	}
 	for i := range f.units {
 		u := &f.units[i]
 		if u.Dead || u.Friendly || u.Target.IsZero() {
@@ -600,6 +609,66 @@ func (f *PlayFake) FightTick(ctx context.Context, target wire.GUID) error {
 		}
 	}
 	return nil
+}
+
+// playCasts is the one spell each class of the fake's bots casts: an ability of that class in the shared spell table.
+// A class the table lacks casts nothing.
+var playCasts = map[string]struct {
+	id   int
+	name string
+}{
+	"warrior": {78, "Heroic Strike"},
+	"rogue":   {1752, "Sinister Strike"},
+	"priest":  {2050, "Lesser Heal"},
+	"mage":    {133, "Fireball"},
+}
+
+// SetBotClass gives a bot of the table its class (the `who` row and the spell it casts).
+func (f *PlayFake) SetBotClass(name, class string) {
+	if b := f.GoldenOwner.bot(name); b != nil {
+		b.Class = class
+	}
+}
+
+// emitCasts appends one spell_go row for every online bot in the party, as the session's combat log would write it.
+func (f *PlayFake) emitCasts() {
+	now := f.Clock.Now()
+	// The agent's own swing: a row that names the player's character, so redaction has something to hide.
+	f.combat = append(f.combat, []byte(fmt.Sprintf(`{"seq":%d,"kind":"swing","time":%q,"mono_ms":%d,"source":{"guid":%q,"name":%q},"target":{"guid":"","name":"Mob"},"amount":10}`,
+		len(f.combat)+1, now.Format("2006-01-02T15:04:05.000-07:00"), now.UnixMilli(), f.selfGUID.String(), f.SelfName)))
+	for _, b := range f.GoldenOwner.Bots {
+		if !b.Online || !b.InParty || b.Dead || b.Ghost {
+			continue
+		}
+		c, ok := playCasts[strings.ToLower(b.Class)]
+		if !ok {
+			continue
+		}
+		row := fmt.Sprintf(`{"seq":%d,"kind":"spell_go","time":%q,"mono_ms":%d,"source":{"guid":%q,"name":%q},"target":{"guid":"","name":""},"spell_id":%d,"spell_name":%q}`,
+			len(f.combat)+1, now.Format("2006-01-02T15:04:05.000-07:00"), now.UnixMilli(), f.botGUID(b.Name).String(), b.Name,
+			c.id, c.name)
+		f.combat = append(f.combat, []byte(row))
+	}
+}
+
+// CombatRows is the scripted combat log: the rows above seq, in order. It never drops a row.
+func (f *PlayFake) CombatRows(seq, limit int) ([]json.RawMessage, int, int, int) {
+	if len(f.combat) == 0 {
+		return nil, seq, 0, 0
+	}
+	if limit <= 0 || limit > combatPageMax {
+		limit = combatPageMax
+	}
+	start := max(seq, 0)
+	if start >= len(f.combat) {
+		return nil, seq, 1, 0
+	}
+	end := min(len(f.combat), start+limit)
+	rows := make([]json.RawMessage, 0, end-start)
+	for _, row := range f.combat[start:end] {
+		rows = append(rows, json.RawMessage(row))
+	}
+	return rows, end, 1, 0
 }
 
 // friendTarget says whether a unit's target is a party member.
