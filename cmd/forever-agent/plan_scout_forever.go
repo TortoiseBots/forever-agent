@@ -606,29 +606,51 @@ func foreverGM(ctx context.Context, c scoutForeverClient, line string, planMap u
 }
 
 // scoutTeleportUnconfirmed reports the serve's own "not confirmed" answer to a `.go xyz`: the line went out and the
-// server sent no refusal, but the landing did not show within the serve's own budget (a slow landing, a map change
-// still loading). A live pass met exactly that and aborted at the second stand although the teleport arrived right
-// after; the scout's own status read below is what decides, so this answer is not a failure here.
+// server sent no refusal, but its own move of the character never came within the serve's budget. The core drops a
+// `.go xyz` that arrives while a previous teleport is still settling (Player::TeleportTo returns false, in silence,
+// while GetTeleportState() != TeleportState::NotTeleporting), so a stand that gets this answer sends its line once
+// more after that settle instead of stopping the pass there.
 func scoutTeleportUnconfirmed(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "the teleport is not confirmed")
 }
 
+// scoutTeleportAttempts is how many times a stand sends its `.go xyz`: the first line can be the one the core dropped
+// in silence while the previous teleport was settling, and the send after that settle lands.
+const scoutTeleportAttempts = 2
+
+// scoutTeleportSettle is how long a stand waits before sending its line again; a variable so the tests shorten it.
+var scoutTeleportSettle = 500 * time.Millisecond
+
 // foreverStandAt teleports the GM to a point with `.go xyz` and waits for the status to show it on that map: the
-// arrival, never the packet, is the confirmation.
+// arrival, never the packet, is the confirmation. A line the serve did not confirm is sent once more after the settle
+// window, and the error of the last attempt is the stand's.
 func foreverStandAt(ctx context.Context, c scoutForeverClient, p dungeon.Point, planMap uint32) error {
 	line := fmt.Sprintf(".go xyz %s %s %s %d", foreverNum(p.X), foreverNum(p.Y), foreverNum(p.Z), planMap)
+	for attempt := 1; ; attempt++ {
+		err := foreverStandOnce(ctx, c, line, p, planMap)
+		if err == nil || !scoutTeleportUnconfirmed(err) || attempt == scoutTeleportAttempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(scoutTeleportSettle):
+		}
+	}
+}
+
+// foreverStandOnce sends one `.go xyz` and waits for the status to show the landing on the plan's map.
+func foreverStandOnce(ctx context.Context, c scoutForeverClient, line string, p dungeon.Point, planMap uint32) error {
 	canon, ok := scoutCanonicalGM(line, planMap, 0)
 	if !ok {
 		return fmt.Errorf("%q is not on the scout's allow-list in its canonical form", line)
 	}
 	cmd, gmErr := c.GM(ctx, canon)
-	if gmErr != nil && !scoutTeleportUnconfirmed(gmErr) {
+	if gmErr != nil {
 		return fmt.Errorf("%s: %v", canon, gmErr)
 	}
-	if gmErr == nil {
-		if ref := scoutGMRefusal(canon, cmd); ref != "" {
-			return fmt.Errorf("%s: the server refused: %s", canon, ref)
-		}
+	if ref := scoutGMRefusal(canon, cmd); ref != "" {
+		return fmt.Errorf("%s: the server refused: %s", canon, ref)
 	}
 	deadline := time.Now().Add(scoutTeleportWait)
 	for {

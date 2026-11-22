@@ -482,35 +482,92 @@ func TestScoutForeverLevelFillTrustsOnlyTheSpawnsOwnCreature(t *testing.T) {
 	}
 }
 
-// TestScoutForeverWalkBudgetIsNotExceeded: a walk that never returns is cut at the budget's end, and no later walk is
-// started, so the pass spends the budget once instead of once per hop.
-// TestScoutStandConfirmsOnArrival is the live stand failure: the serve answered `.go xyz -15.99 -50.17 -21.78 389`
-// with "the teleport is not confirmed: the character did not arrive within 8s", the landing showed right after, and the
-// pass aborted. The stand's own status read is the confirmation, so that answer goes on to it; any other GM error is
-// still a failure.
-func TestScoutStandConfirmsOnArrival(t *testing.T) {
-	notConfirmed := errors.New(`serveclient: gm: rpc error -32003: ".go xyz 40 0 0 700": the teleport is not confirmed: the character did not arrive within 8s (at 0 0 on map 700)`)
-	f := &fakeForeverServe{
-		status:    serveclient.Status{Character: "Testchar", State: "online", Map: 700},
-		gmErr:     map[string]error{".go xyz ": notConfirmed},
-		landAfter: 2,
+// unconfirmedServe is a fake serve whose first drop `.go xyz` lines are the core's silent drop: the serve answers
+// each of them with its own "not confirmed" once its budget is spent and the character stays where it was, and the
+// line after them lands.
+type unconfirmedServe struct {
+	*fakeForeverServe
+	mu    sync.Mutex
+	drops int
+	sends int
+}
+
+func (f *unconfirmedServe) GM(ctx context.Context, text string) (serveclient.Command, error) {
+	if strings.HasPrefix(text, ".go xyz ") {
+		f.mu.Lock()
+		f.sends++
+		drop := f.sends <= f.drops
+		f.mu.Unlock()
+		if drop {
+			f.fakeForeverServe.mu.Lock()
+			f.gm = append(f.gm, text)
+			f.fakeForeverServe.mu.Unlock()
+			return serveclient.Command{Sent: text, Complete: true},
+				errors.New(`serveclient: gm: rpc error -32003: "` + text + `": the teleport is not confirmed: the character did not arrive within 8s (at 0 0 on map 700)`)
+		}
 	}
-	if err := foreverStandAt(context.Background(), f, dungeon.Point{X: 40}, 700); err != nil {
-		t.Fatalf("the stand gave up on the serve's unconfirmed answer: %v", err)
+	return f.fakeForeverServe.GM(ctx, text)
+}
+
+// TestScoutStandResendsALineTheCoreDropped is the live K4 stop: the core drops a `.go xyz` that arrives while the
+// previous teleport is still settling, and says nothing about it, so the serve answers "not confirmed". The stand
+// sends the line once more after that settle and the pass goes on; before, it took the unconfirmed answer for a slow
+// landing, polled the status it already stood at and aborted on the next stand.
+func TestScoutStandResendsALineTheCoreDropped(t *testing.T) {
+	old := scoutTeleportSettle
+	scoutTeleportSettle = time.Millisecond
+	defer func() { scoutTeleportSettle = old }()
+	f := &fakeForeverServe{status: serveclient.Status{Character: "Testchar", State: "online", Map: 700}}
+	s := &unconfirmedServe{fakeForeverServe: f, drops: 1}
+	if err := foreverStandAt(context.Background(), s, dungeon.Point{X: 40}, 700); err != nil {
+		t.Fatalf("the stand gave up on the line the core dropped: %v", err)
 	}
-	if len(f.gm) != 1 || !strings.HasPrefix(f.gm[0], ".go xyz ") {
-		t.Fatalf("GM lines %q", f.gm)
+	if s.sends != 2 {
+		t.Fatalf("%d `.go xyz` lines, want 2 (the first one was dropped in silence)", s.sends)
 	}
-	// Another GM error is not the landing's race: the stand stops with it.
-	g := &fakeForeverServe{
-		status: serveclient.Status{Character: "Testchar", State: "online", Map: 700},
-		gmErr:  map[string]error{".go xyz ": errors.New(`serveclient: gm: rpc error -32003: "no permission"`)},
-	}
-	if err := foreverStandAt(context.Background(), g, dungeon.Point{X: 40}, 700); err == nil || !strings.Contains(err.Error(), "no permission") {
-		t.Fatalf("a refused line gave %v, want the server's own words", err)
+	if f.status.X != 40 {
+		t.Fatalf("the character stands at %.1f, want 40: the second line did not land", f.status.X)
 	}
 }
 
+// TestScoutStandStopsWhenTheLineIsTwiceUnconfirmed: the retry is bounded, and the last answer is the stand's error.
+func TestScoutStandStopsWhenTheLineIsTwiceUnconfirmed(t *testing.T) {
+	old := scoutTeleportSettle
+	scoutTeleportSettle = time.Millisecond
+	defer func() { scoutTeleportSettle = old }()
+	s := &unconfirmedServe{
+		fakeForeverServe: &fakeForeverServe{status: serveclient.Status{Character: "Testchar", State: "online", Map: 700}},
+		drops:            scoutTeleportAttempts,
+	}
+	err := foreverStandAt(context.Background(), s, dungeon.Point{X: 40}, 700)
+	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
+		t.Fatalf("two dropped lines gave %v, want the serve's own words", err)
+	}
+	if s.sends != scoutTeleportAttempts {
+		t.Fatalf("%d `.go xyz` lines, want %d", s.sends, scoutTeleportAttempts)
+	}
+}
+
+// TestScoutStandDoesNotRetryAnotherGMError: a refusal that is not the core's silent drop is the stand's answer at
+// once, with the server's own words.
+func TestScoutStandDoesNotRetryAnotherGMError(t *testing.T) {
+	s := &unconfirmedServe{fakeForeverServe: &fakeForeverServe{
+		status: serveclient.Status{Character: "Testchar", State: "online", Map: 700},
+		gmErr:  map[string]error{".go xyz ": errors.New(`serveclient: gm: rpc error -32003: "no permission"`)},
+	}}
+	if err := foreverStandAt(context.Background(), s, dungeon.Point{X: 40}, 700); err == nil || !strings.Contains(err.Error(), "no permission") {
+		t.Fatalf("a refused line gave %v, want the server's own words", err)
+	}
+	if s.sends != 1 {
+		t.Fatalf("%d `.go xyz` lines, want 1 (a refusal is not retried)", s.sends)
+	}
+	if len(foreverSentLines(s.fakeForeverServe)) != 1 {
+		t.Fatalf("GM lines %q, want one", foreverSentLines(s.fakeForeverServe))
+	}
+}
+
+// TestScoutForeverWalkBudgetIsNotExceeded: a walk that never returns is cut at the budget's end, and no later walk is
+// started, so the pass spends the budget once instead of once per hop.
 func TestScoutForeverWalkBudgetIsNotExceeded(t *testing.T) {
 	dir := t.TempDir()
 	mmaps := foreverFlat(t)
