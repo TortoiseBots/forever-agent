@@ -166,7 +166,11 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 			return fmt.Errorf("world: SMSG_LOOT_RELEASE: %w", err)
 		}
 		s.loot.releases++
-		if s.loot.window != nil && r.Loot == s.loot.window.Loot {
+		// SMSG_LOOT_RELEASE names the window's OWNER, not the LootObject: DoLootRelease sends
+		// `player->SendLootRelease(lguid)` with lguid = loot->GetOwnerGUID(), and Player::SendLootRelease puts that
+		// guid in LootObj (LootHandler.cpp:269-283, Player.cpp:10102-10108). The LootObject GUID the window's own
+		// Loot field carries is what CMSG_LOOT_ITEM and the removals name, never the release.
+		if s.loot.window != nil && r.Loot == s.loot.window.Owner {
 			s.report.Loot.Released = true
 		}
 	case wire.SMSGLootReleaseAll:

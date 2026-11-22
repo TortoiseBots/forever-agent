@@ -139,8 +139,10 @@ func TestCaptureStatsRefusesHostileManifests(t *testing.T) {
 		{"negative length", func(t *testing.T, parent string) string {
 			return captureStatsRun(t, parent, "a.bin\t0x4A0001\t-1\n")
 		}, "length"},
-		{"length past a frame", func(t *testing.T, parent string) string {
-			return captureStatsRun(t, parent, "a.bin\t0x4A0001\t65536\n")
+		{"length past the payload cap", func(t *testing.T, parent string) string {
+			// The header's Size is a uint32 and the reader's cap is wire.MaxUncompressed: one byte past it is the
+			// bound a manifest may not cross (65536 is a legitimate hotfix list, not a hostile length).
+			return captureStatsRun(t, parent, fmt.Sprintf("a.bin\t0x4A0001\t%d\n", wire.MaxUncompressed+1))
 		}, "length"},
 		{"two huge lengths", func(t *testing.T, parent string) string {
 			return captureStatsRun(t, parent, "a\t0x4A0001\t9223372036854775807\nb\t0x4A0001\t9223372036854775807\n")

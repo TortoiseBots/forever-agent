@@ -469,6 +469,76 @@ func TestMoverWalkPathHoldsThePacketCapForALongDensifiedRoute(t *testing.T) {
 	}
 }
 
+// TestMoverWalkPathContinuesThroughACorrectionInPlace: a live walk met a teleport to the same x/y with the z
+// 0.62 yd lower — the core re-grounding a client whose height it does not accept. That is not a teleport away: the
+// walk goes on from the corrected height instead of ending with ErrTeleported, and its stop carries that height.
+func TestMoverWalkPathContinuesThroughACorrectionInPlace(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	waits := 0
+	sender.onWait = func(time.Time) {
+		if waits++; waits == 2 {
+			x, y, z, _ := m.Position()
+			m.SetTeleport(x, y, z-0.62, 0, 3)
+		}
+	}
+	if err := m.WalkPath(context.Background(), [][3]float32{{1000, 2030, 50}, {1000, 2060, 50}}); err != nil {
+		t.Fatalf("a correction in place ended the walk: %v", err)
+	}
+	last := sender.sent[len(sender.sent)-1]
+	if last.core != wire.CMSGMoveStop {
+		t.Fatalf("the last packet is %s, want a stop", wire.ClientName(last.core))
+	}
+	if mi := moveOf(t, last); !near(mi.X, 1000) || !near(mi.Y, 2060) || !near(mi.Z, 49.38) {
+		t.Fatalf("the stop is at %.2f %.2f %.2f, want the route's end at the corrected height 1000 2060 49.38",
+			mi.X, mi.Y, mi.Z)
+	}
+}
+
+// TestMoverMoveToContinuesThroughACorrectionInPlace is the same rule on one straight leg.
+func TestMoverMoveToContinuesThroughACorrectionInPlace(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	waits := 0
+	sender.onWait = func(time.Time) {
+		if waits++; waits == 2 {
+			x, y, z, _ := m.Position()
+			m.SetTeleport(x, y, z-0.62, 0, 3)
+		}
+	}
+	if err := m.MoveTo(context.Background(), 1000, 2060, 50); err != nil {
+		t.Fatalf("a correction in place ended the leg: %v", err)
+	}
+	// The leg goes on from the server's height: its heartbeats interpolate from 49.38 up to the target's 50, so one
+	// of them carries the corrected height, which an ended leg (ErrTeleported) would never send.
+	corrected := false
+	for _, p := range sender.sent {
+		if p.core != wire.CMSGMoveHeartbeat {
+			continue
+		}
+		if mi := moveOf(t, p); mi.Z < 49.9 {
+			corrected = true
+		}
+	}
+	if !corrected {
+		t.Fatalf("no heartbeat carried the corrected height (packets %v)", sender.sent)
+	}
+	last := sender.sent[len(sender.sent)-1]
+	if mi := moveOf(t, last); !near(mi.Y, 2060) {
+		t.Fatalf("the stop is at %.2f %.2f, want the target 1000 2060", mi.X, mi.Y)
+	}
+}
+
 // isMovement reports the opcodes the mover's packet cap counts.
 func isMovement(core uint32) bool {
 	switch core {
@@ -651,5 +721,35 @@ func TestMoverRefusesMovementInTheAir(t *testing.T) {
 	m.EndKnockback()
 	if err := m.MoveTo(context.Background(), 1001, 2000, 50); err != nil {
 		t.Fatalf("a walk after the landing: %v", err)
+	}
+}
+
+// TestMoverShortSidewaysTeleportEndsTheLeg: a relocation of a couple of yards sideways is the server moving the
+// character, not re-grounding it, so the leg ends with ErrTeleported (SetTeleport and SetPosition alike).
+func TestMoverShortSidewaysTeleportEndsTheLeg(t *testing.T) {
+	for _, name := range []string{"SetTeleport", "SetPosition"} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			sender := &fakeSender{now: start}
+			m := &Mover{
+				Sender:     sender,
+				ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+				X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+			}
+			waits := 0
+			sender.onWait = func(time.Time) {
+				if waits++; waits == 2 {
+					x, y, z, _ := m.Position()
+					if name == "SetTeleport" {
+						m.SetTeleport(x+2, y, z, 0, 3)
+					} else {
+						m.SetPosition(x+2, y, z, 0)
+					}
+				}
+			}
+			if err := m.WalkPath(context.Background(), [][3]float32{{1000, 2030, 50}, {1000, 2060, 50}}); !errors.Is(err, ErrTeleported) {
+				t.Fatalf("a sideways relocation ended the walk with %v, want ErrTeleported", err)
+			}
+		})
 	}
 }

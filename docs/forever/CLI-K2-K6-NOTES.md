@@ -226,6 +226,9 @@ teleported map, the sample loop, `.gm visible on`. Safety rules are the same, wi
 - `--mmaps` is a v16 folder (`patrolRecordForeverFloors` uses `navmesh.NewForeverPlanner`); `--z` still
   skips it. `--spawns` reads the same `creatures.tsv`; spawn matching is by entry and position, unchanged.
 - The file's `source` is `record <slot server> <date>` (the slot manifest's own server name).
+- The sample loop keeps NPC creatures only. A Forever serve names an object type (`objects.TypeName`), so its NPCs
+  arrive as `unit`; the 1.12 agent's `creature` is accepted too. Filters on the 1.12 word alone recorded nothing on a
+  serve slot (0 patrols, 0 static, 0 wanderers with ~30 units in range).
 
 ### `route-oracle --forever --mmaps DIR [--parent MAP=PARENT]`
 
@@ -348,7 +351,9 @@ message), so the token path is always the dir's own `rpc-<port>.token`.
 ### capture-stats
 
 The manifests are read as regular files (a symlink, FIFO or device is refused) with a byte cap, a line cap and the
-writer's per-run entry bound (8192 packets, 65535 bytes each). A parse error names the line number and the reason,
+writer's per-run entry bound (8192 packets, each at most the frame reader's `wire.MaxUncompressed`: the world
+socket's header carries a uint32 `Size`, so a 16-bit byte bound rejected every live capture that holds a hotfix
+list). A parse error names the line number and the reason,
 never the line's text (a hostile manifest may hold captured chat), and neither the per-opcode nor the printed
 TOTAL can overflow.
 

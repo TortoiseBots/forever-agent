@@ -31,6 +31,9 @@ type fakePatrolServe struct {
 	refuse    map[string]string
 	noMove    bool
 	unitReads []serveclient.UnitsParams
+	// driftX moves the last unit (the walker the tests plant after the others) this far along x on every units
+	// read, so a recording sees one unit leave its spot (a wanderer) next to one that never moves (a static row).
+	driftX float32
 }
 
 func (f *fakePatrolServe) Status(context.Context) (serveclient.Status, error) {
@@ -54,6 +57,9 @@ func (f *fakePatrolServe) Units(_ context.Context, p serveclient.UnitsParams) ([
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unitReads = append(f.unitReads, p)
+	if f.driftX != 0 && len(f.units) > 1 {
+		f.units[len(f.units)-1].X += f.driftX
+	}
 	return append([]serveclient.Unit(nil), f.units...), nil
 }
 
@@ -163,6 +169,43 @@ func TestPatrolRecordForeverStopsWhenTargeted(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("GM line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestPatrolRecordForeverRecordsTheServesCreatures is the live failure of the round: a Forever serve names a
+// creature's object type ("unit", objects.TypeName), not the 1.12 agent's "creature", so a recording on a serve
+// slot found every unit filtered out and wrote 0 patrols, 0 static and 0 wanderers while ~30 units stood in range.
+// Rows must be written when units are there: one that never moves is a static row, one that leaves its spot a
+// wanderer, and the player the recording runs from is neither.
+func TestPatrolRecordForeverRecordsTheServesCreatures(t *testing.T) {
+	own := "0x0000000000000001F1300000000000AA"
+	still := serveclient.Unit{GUID: "0x0000000000000004F1300000000000D1", Type: "unit",
+		Name: "Still", Entry: 300, X: 2, Y: 2}
+	walker := serveclient.Unit{GUID: "0x0000000000000005F1300000000000E1", Type: "unit",
+		Name: "Walker", Entry: 301, X: 0, Y: 5}
+	f := &fakePatrolServe{
+		st:     serveclient.Status{Character: "Testchar", GUID: serveclient.GUID(own), State: "online", Map: 700},
+		units:  []serveclient.Unit{{GUID: serveclient.GUID(own), Type: "player", Name: "Testchar"}, still, walker},
+		driftX: 0.1, // 120 reads: 12 yd across, so the median is 6 yd from either end (a wanderer, not a static row)
+	}
+	code, out, errOut, path := patrolForeverRun(t, f)
+	if code != exitOK {
+		t.Fatalf("code %d (out %q err %q)", code, out, errOut)
+	}
+	file, err := patrols.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Static) != 1 || file.Static[0].GUID != string(still.GUID) {
+		t.Fatalf("static rows %+v, want the still unit %q", file.Static, still.GUID)
+	}
+	if len(file.Wanderers) != 1 || file.Wanderers[0].GUID != string(walker.GUID) {
+		t.Fatalf("wanderer rows %+v, want the walking unit %q", file.Wanderers, walker.GUID)
+	}
+	for _, row := range append([]patrols.Static(nil), file.Static...) {
+		if row.GUID == own {
+			t.Fatalf("the recording tracked its own character: %+v", row)
 		}
 	}
 }

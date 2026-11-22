@@ -444,7 +444,9 @@ consistent with the level-1 zone and with the health the modifier produces.
   Z is interpolated between the two endpoints, so a walk over a slope puts the character below or above the ground
   and the server's under-map check would send it to the graveyard. On a hard deadline it stops where the
   interpolation is and returns an error (it never snaps to the target); a teleport in the middle of a leg stops the
-  leg at the teleport destination (`ErrTeleported`).
+  leg at the teleport destination (`ErrTeleported`). One exception: a teleport that lands within 3 yd of where the leg
+  has the character (the core re-grounding a client whose z it rejects; a live walk met the same x/y with the z 0.62
+  lower) is a correction in place — the leg adopts the server's height and goes on.
 * **Skipped**: `PlayerData` and `ActivePlayerData` (the tail of a player block), items and containers (object values
   only, counted), the vendor fragment, and the `FVendor_C`/housing fragments. Inertia, advanced flying, drive
   status, removed/active movement forces, a game object's assist action data and a monster move's spell-visual data
