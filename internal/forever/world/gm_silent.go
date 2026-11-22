@@ -136,30 +136,44 @@ func (s *session) teleportMark() teleportMark {
 	return teleportMark{selfTeleports: s.selfTeleports, epoch: s.mapEpoch(), mapID: s.world.MapID()}
 }
 
-// teleportArrived is the proof of a teleport line: the character stands within teleportArriveYd of the point the
-// line named, on the map it named (the current one when it named none), or, for a line that names no point, the
-// server moved this character (its own SMSG_MOVE_TELEPORT) or sent a new world. Another unit's teleport and a walk
-// of a yard are not proof.
+// teleportArrived is the proof of a teleport line: the server moved this character for it (its own
+// SMSG_MOVE_TELEPORT, or a new world) and the character stands within teleportArriveYd of the point the line named,
+// on the map it named (the current one when it named none). Another unit's teleport and a walk of a yard are not
+// proof.
+//
+// The position alone is not proof, which is what the live K4 pass taught: a `.go xyz` to a point the character
+// already stands on (the scout's stand after a walk, a few tenths of a yard from the walk's stop) matched before the
+// server had answered, so the caller went on to its next line while the core was still waiting for this teleport's
+// ack. The core then dropped that next teleport in silence (Player::TeleportTo returns false while
+// GetTeleportState() != TeleportState::NotTeleporting, and the whole line does nothing, with no refusal), the
+// pass's next stand never landed and it aborted (exit 28), and the same line re-sent later worked. Waiting for the
+// server's own move also puts the ack on the wire (the teleport handler answers it before this check runs), so no
+// later line can overtake it.
 func (s *session) teleportArrived(before teleportMark, g teleportGoal) bool {
 	if s.betweenMaps() {
 		return false
 	}
-	if g.known {
-		want := before.mapID
-		if g.hasMap {
-			want = g.mapID
-		}
-		if s.world.MapID() != want {
-			return false
-		}
-		dx, dy := float64(s.MoverX()-g.x), float64(s.MoverY()-g.y)
-		d := math.Hypot(dx, dy)
-		if g.hasZ {
-			d = math.Hypot(d, float64(s.MoverZ()-g.z))
-		}
-		return d <= teleportArriveYd
+	// The server's own move of this character is the line's answer: a near teleport's SMSG_MOVE_TELEPORT, or the
+	// new world of a far one. Anything else that happens to move the character is not.
+	if s.selfTeleports <= before.selfTeleports && s.mapEpoch() == before.epoch {
+		return false
 	}
-	return s.selfTeleports > before.selfTeleports || s.mapEpoch() != before.epoch
+	if !g.known {
+		return true
+	}
+	want := before.mapID
+	if g.hasMap {
+		want = g.mapID
+	}
+	if s.world.MapID() != want {
+		return false
+	}
+	dx, dy := float64(s.MoverX()-g.x), float64(s.MoverY()-g.y)
+	d := math.Hypot(dx, dy)
+	if g.hasZ {
+		d = math.Hypot(d, float64(s.MoverZ()-g.z))
+	}
+	return d <= teleportArriveYd
 }
 
 // gmLinePrep checks the cast pace and fills the collector's options for one GM line: a silent-class line is run

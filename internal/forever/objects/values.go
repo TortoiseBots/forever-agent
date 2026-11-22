@@ -16,6 +16,7 @@ package objects
 
 import (
 	"fmt"
+	"math/bits"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -1691,10 +1692,54 @@ func activePlayerBuybackGroup(realmBuild uint32) uint32 {
 	return activePlayerBuybackBit
 }
 
+// The ActivePlayerData fields a purchase's own update names next to the slots, and that this round steps over so the
+// slots can still be read: Transmog (a DynamicUpdateField of u32 appearance ids), LocalFlags (u32) and
+// TransportServerTime (int32). The live purchase of 2026-11-22 set exactly these three next to Coinage and the bought
+// item's InvSlots entry; before, the whole block was left undecoded, the inventory was marked stale and every
+// sell-junk after a buy refused for the rest of the session (a relog or a map change was the only way out, ticket
+// #87). The bits are the TC fields 18, 101 and 143 through ClassicActivePlayerDataBit
+// (UpdateFields.cpp:5830-5865): 18 and 101 are the same on both layouts, TransportServerTime moves from 145 to 146 at
+// build 70425.
+const (
+	activePlayerTransmogBit   uint32 = 18
+	activePlayerLocalFlagsBit uint32 = 101
+)
+
+// activePlayerTransportBit returns the Classic mask bit of TransportServerTime for a realm of the given build.
+func activePlayerTransportBit(realmBuild uint32) uint32 {
+	if realmBuild >= build70425First {
+		return 146
+	}
+	return 145
+}
+
+// activePlayerGroups70291 and activePlayerGroups70425 are the Classic group bits of ActivePlayerData on the two
+// layouts this client reads (the first bit of each nested group, UpdateFields.cpp:5870-5879). A group bit says one of
+// the group's fields changed and carries no value of its own: the changed field's own bit names it.
+var (
+	activePlayerGroups70291 = [16]uint32{0, 32, 70, 102, 134, 166, 168, 314, 317, 346, 353, 378, 411, 416, 419, 425}
+	activePlayerGroups70425 = [16]uint32{0, 32, 70, 102, 134, 166, 170, 316, 319, 348, 355, 380, 413, 418, 421, 427}
+)
+
+// activePlayerIsGroup reports whether a Classic mask bit is one of the structure's group bits.
+func activePlayerIsGroup(realmBuild uint32, classic uint32) bool {
+	groups := activePlayerGroups70291[:]
+	if realmBuild >= build70425First {
+		groups = activePlayerGroups70425[:]
+	}
+	for _, g := range groups {
+		if classic == g {
+			return true
+		}
+	}
+	return false
+}
+
 // readActivePlayerUpdate decodes the regions of ActivePlayerData::WriteUpdate this round applies: the InvSlots a
-// move of the character's own items changes, and the Coinage fields that travel with them. The changes mask is the
-// fourteen-block Classic header (WriteClassicChangesMaskHeader, UpdateFields.cpp:1374-1399); the values follow in
-// the structure's own order after the mask and the bit fields, and InvSlots is a run of packed GUIDs
+// move of the character's own items changes, the Coinage fields that travel with them, and the three fields a
+// purchase names next to those (Transmog, LocalFlags, TransportServerTime), which are stepped over. The changes mask
+// is the fourteen-block Classic header (WriteClassicChangesMaskHeader, UpdateFields.cpp:1374-1399); the values follow
+// in the structure's own order after the mask and the bit fields, and InvSlots is a run of packed GUIDs
 // (UpdateFields.cpp:7195-7203). Any other set field means this update changes something this round does not walk,
 // so nothing is decoded and the block is left to its declared size (a half-read update is worse than an undecoded
 // one). When that undecoded update also names inventory slots the block says so (Info.InvSlotsUndecoded): the slots
@@ -1727,8 +1772,10 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 	// The mask header is followed by the structure's bit fields, if any are set, and only then by a flush. An
 	// update that touches none of them reaches its values at the next byte boundary.
 	var slots []int
-	hasMeta, hasCoinage, hasBankCoin, slotsGroup, other := false, false, false, false, false
+	hasMeta, hasCoinage, hasBankCoin, hasTransmog, hasLocalFlags, hasTransport := false, false, false, false, false, false
+	slotsGroup, other := false, false
 	buybackGroup := activePlayerBuybackGroup(realmBuild)
+	transportBit := activePlayerTransportBit(realmBuild)
 	var buyPrice, buyStamp [buybackEntries]bool
 	hasBuyback := false
 	for n := range blocks {
@@ -1738,8 +1785,10 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 			}
 			classic := uint32(n)*32 + uint32(bit)
 			switch {
-			case classic == group:
-				slotsGroup = true // group bits are set by any changed child
+			case activePlayerIsGroup(realmBuild, classic):
+				if classic == group {
+					slotsGroup = true // any changed entry of the InvSlots run sets its group bit
+				}
 			case classic == metaGroup || classic == activePlayerMoneyGroup:
 				continue
 			case classic == metaChild:
@@ -1748,8 +1797,12 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 				hasCoinage = true
 			case classic == activePlayerBankCoinBit:
 				hasBankCoin = true
-			case classic == buybackGroup:
-				continue // group bit: any changed child sets it
+			case classic == activePlayerTransmogBit:
+				hasTransmog = true
+			case classic == activePlayerLocalFlagsBit:
+				hasLocalFlags = true
+			case classic == transportBit:
+				hasTransport = true
 			case classic > buybackGroup && classic <= buybackGroup+buybackEntries:
 				buyPrice[classic-buybackGroup-1] = true
 				hasBuyback = true
@@ -1770,12 +1823,38 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 		i.f.InvSlotsUndecoded = slotsGroup || len(slots) != 0
 		return nil
 	}
-	if len(slots) == 0 && !hasMeta && !hasCoinage && !hasBankCoin && !hasBuyback {
+	if len(slots) == 0 && !hasMeta && !hasCoinage && !hasBankCoin && !hasBuyback && !hasTransmog && !hasLocalFlags && !hasTransport {
 		return nil
 	}
-	// Nothing is written between the changes mask and the first value: the group 166 bit of build 70425 is not here but
-	// after the values below (ActivePlayerData::WriteUpdate, UpdateFields.cpp:7160-7163).
+	// The bit section comes before every value, in the structure's own order: the bool fields and the change mask of
+	// every dynamic field, written in three runs that are each flushed before the next block
+	// (ActivePlayerData::WriteUpdate: 5891-6031, 6032-6290, 6291-6697). The Transmog run is the one bit-writing field
+	// this round steps over, and it lies in the second run, so its mask is read there and its changed entries are
+	// counted for the value skip below (DynamicUpdateFieldBase::WriteUpdateMask, UpdateFieldImpl.h:28-51: the size in
+	// 32 bits, then one bit per entry). Every other field of the three runs is one this round does not walk, and the
+	// update is left undecoded above.
+	var transmogValues int
+	if hasTransmog {
+		b.FlushBits() // the first run wrote no bits (any field of it is undecoded)
+		size := int(b.ReadBits(32))
+		for read := 0; read < size; read += 32 {
+			chunk := 32
+			if size-read < chunk {
+				chunk = size - read
+			}
+			transmogValues += bits.OnesCount32(b.ReadBits(chunk))
+		}
+		if err := b.Err(); err != nil {
+			return fmt.Errorf("active player update transmog mask: %w", err)
+		}
+		b.FlushBits() // the second run's flush, before the dynamic fields' values
+	}
+	// Nothing else is written between the bit runs and the first value: the group 166 bit of build 70425 is not here
+	// but after the values below (ActivePlayerData::WriteUpdate, UpdateFields.cpp:7160-7163).
 	b.FlushBits()
+	if transmogValues != 0 {
+		b.Skip(4 * transmogValues) // Transmog: one u32 appearance id per changed entry
+	}
 	if hasCoinage {
 		coinage := b.ReadU64()
 		if err := b.Err(); err != nil {
@@ -1787,16 +1866,33 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 	if hasBankCoin {
 		b.Skip(8) // AccountBankCoinage
 	}
+	if hasLocalFlags {
+		b.Skip(4) // LocalFlags
+	}
+	if hasTransport {
+		b.Skip(4) // TransportServerTime
+	}
 	if hasMeta {
 		// SituationalTrigger u8, TransmogOutfitID u32, StampedOptionMainHand u8, StampedOptionOffHand u8, CostMod
 		// float, then the Locked bit and its flush: eleven value bytes and the flushed bit byte.
 		b.Skip(12)
 	}
 	// WriteUpdate's order (UpdateFields.cpp): the scalar values (Coinage 6751-6755, TransmogMetadata 7150-7151), then the
-	// group 134 and group 166 presence bits and one flush (7153-7163: from build 70425 a present group 166 writes
-	// one optional presence bit, `WriteBit(false)`), and only then InvSlots (7195-7203) and the buyback arrays.
-	if realmBuild >= build70425First && blocks[metaGroup/32]&(1<<uint(metaGroup%32)) != 0 {
+	// group 134 and group 166 presence bits and one flush (7153-7163: a present group 134 writes the four optional
+	// fields' has-value bits, and from build 70425 a present group 166 writes one optional presence bit of its own,
+	// `WriteBit(false)`), and only then InvSlots (7195-7203) and the buyback arrays. TransportServerTime is a group
+	// 134 field, so a purchase's own update carries those four bits too.
+	group134 := blocks[134/32]&(1<<uint(134%32)) != 0
+	group166 := realmBuild >= build70425First && blocks[metaGroup/32]&(1<<uint(metaGroup%32)) != 0
+	if group134 {
+		for range 4 {
+			b.ReadBit()
+		}
+	}
+	if group166 {
 		b.ReadBit()
+	}
+	if group134 || group166 {
 		b.FlushBits()
 	}
 	if err := b.Err(); err != nil {

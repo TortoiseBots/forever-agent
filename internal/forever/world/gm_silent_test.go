@@ -66,9 +66,10 @@ func startGM(t *testing.T, f *fakeServer) *serveAgent {
 	return a
 }
 
-// TestServeGMTeleportIsConfirmedByPosition is the live K4 failure: the core prints nothing for a working `.go xyz`,
-// and the gm method turned that into "the server sent no reply". The teleport is proved by the character's position.
-func TestServeGMTeleportIsConfirmedByPosition(t *testing.T) {
+// TestServeGMTeleportIsConfirmedByTheServersMove is the live K4 failure: the core prints nothing for a working
+// `.go xyz`, and the gm method turned that into "the server sent no reply". The teleport is proved by the server's
+// own move of this character and the landing, never by the position the character already stood on.
+func TestServeGMTeleportIsConfirmedByTheServersMove(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveGMScript = goScript(&[3]float32{1100, 2100, 55})
 	defer f.close()
@@ -263,6 +264,38 @@ func TestServeGMTeleToAPlaceNeedsTheServersOwnMove(t *testing.T) {
 	a.mustFail(t, "gm", map[string]any{"text": ".tele ragefire"}, -32003, "teleport is not confirmed")
 	moves.Store(true)
 	a.mustCall(t, "gm", map[string]any{"text": ".tele ragefire"})
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeGMGoXYZToWhereTheCharacterStandsNeedsTheServersMove is the live K4 stand that aborted the pass: a
+// `.go xyz` to the point the character already stood on (the walk's own stop, a few tenths of a yard off) matched the
+// position before the server had answered, so the call returned at once and the next line (`-106.32 -37.66 -30.04`
+// for the next hop) went out while the core was still settling this teleport. The core drops a teleport in that
+// window in silence (Player::TeleportTo returns false while GetTeleportState() != NotTeleporting), the next stand
+// never landed and the pass stopped (exit 28). The server's own teleport packet is the proof, not the position.
+func TestServeGMGoXYZToWhereTheCharacterStandsNeedsTheServersMove(t *testing.T) {
+	old := teleportConfirmWait
+	teleportConfirmWait = 600 * time.Millisecond
+	defer func() { teleportConfirmWait = old }()
+	f := newFakeServer(t)
+	var answered atomic.Bool
+	f.serveGMScript = func(said string) (bool, *[3]float32) {
+		if !strings.HasPrefix(said, ".go xyz") {
+			return false, nil
+		}
+		if !answered.Swap(true) {
+			return true, &[3]float32{1100, 2100, 55}
+		}
+		return true, nil // the core's silent drop: no SMSG_MOVE_TELEPORT
+	}
+	defer f.close()
+	a := startGM(t, f)
+	var out ServeCommand
+	json.Unmarshal(a.mustCall(t, "gm", map[string]any{"text": ".go xyz 1100 2100 55"}), &out)
+	// The character stands on the point already; the second line, which the fake answers without moving it, is still
+	// not confirmed.
+	a.mustFail(t, "gm", map[string]any{"text": ".go xyz 1100 2100 55"}, -32003, "teleport is not confirmed")
 	a.stop(t)
 	f.wait(t)
 }
