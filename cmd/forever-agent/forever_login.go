@@ -23,6 +23,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--invite NAME | --accept-from NAME] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever cmd-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--line TEXT]... [--tb-state TARGET]")
 		fmt.Fprintln(stderr, "       forever-agent forever addon-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --prefix PREFIX [--send TEXT] [--channel party|whisper:NAME] [--invite NAME | --accept-from NAME] [--listen DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever tbm-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--cmd COMMAND]... [--transport auto|addon|chat] [--timeout DURATION] [--capture-dir DIR]")
 		fmt.Fprintln(stderr, "       forever-agent forever fb-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--add CLASS[:ROLE]] [--order WORD|party:WORD] [--dismiss NAME|all] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever fb-dungeon [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--dungeon NAME] [--role tank|healer|dps] [--watch SECONDS] [--leave=false] [--settle DURATION] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--fight-for DURATION]")
@@ -64,6 +65,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverCommandCheckCmd(ctx, args[1:], stdout, stderr)
 	case "addon-check":
 		return foreverAddonCheckCmd(ctx, args[1:], stdout, stderr)
+	case "tbm-check":
+		return foreverTBMCheckCmd(ctx, args[1:], stdout, stderr)
 	case "fb-check":
 		return foreverFBCheckCmd(ctx, args[1:], stdout, stderr)
 	case "fb-dungeon":

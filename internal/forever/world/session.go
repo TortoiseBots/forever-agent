@@ -152,6 +152,13 @@ type Options struct {
 	// and accept flow party-check uses, but the group is kept until the add-on listen ends and then left.
 	AddonInvite     string
 	AddonAcceptFrom string
+	// Round TBM: forever tbm-check. TBMCheck runs the TBM client's hello and the requested commands through the
+	// session's add-on and chat paths. TBMTransport is auto, addon or chat; TBMCommands are run in order after the
+	// hello; TBMTimeout bounds each hello and command.
+	TBMCheck     bool
+	TBMTransport string
+	TBMCommands  []string
+	TBMTimeout   time.Duration
 	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
 	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
 	// collector's defaults for every command of the run.
@@ -1177,6 +1184,14 @@ func (s *session) enter(ctx context.Context) error {
 	// ---- stay: answer time syncs, the active-mover exchange and pings
 	if s.opts.AddonCheck {
 		err := s.addonCheck(ctx)
+		s.summariseChat()
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.TBMCheck {
+		err := s.tbmCheck(ctx)
 		s.summariseChat()
 		if err != nil {
 			return err
