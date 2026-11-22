@@ -15,6 +15,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "usage: forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL")
 		fmt.Fprintln(stderr, "       forever-agent forever world-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--capture-dir DIR]")
+		fmt.Fprintln(stderr, "       forever-agent forever spell-score [--json] [--min-active 30] [--fail-unknown] --oracle DIR [--spells DIR] <watch dir|trace>")
 		fmt.Fprintln(stderr, "       forever-agent forever capture-stats <dir>")
 		fmt.Fprintln(stderr, "       forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]")
 		fmt.Fprintln(stderr, "       forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS]")
@@ -107,6 +108,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverDeathRecapCmd(ctx, args[1:], stdout, stderr)
 	case "soap":
 		return foreverSoapCmd(ctx, args[1:], stdout, stderr)
+	case "spell-score":
+		return foreverSpellScoreCmd(args[1:], stdout, stderr)
 	case "capture-stats":
 		return foreverCaptureStatsCmd(args[1:], stdout, stderr)
 	default:

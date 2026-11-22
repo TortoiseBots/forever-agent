@@ -170,7 +170,7 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 				continue
 			}
 			if b.Level > 0 {
-				if lvl, ok := firstRankLevel(name); ok && lvl > b.Level {
+				if lvl, ok := o.firstRankLevel(name); ok && lvl > b.Level {
 					continue // the bot cannot have learnt it yet
 				}
 			}
@@ -290,9 +290,19 @@ func classWide(specs []SpecOracle) (core, situational []string) {
 	return core, situational
 }
 
+// firstRankLevel is the character level at which the first rank of a spell is learnt in the oracle's own data source: the
+// Turtle table for Load and Default, the Forever spell table for LoadWith.
+func (o *Oracle) firstRankLevel(name string) (int, bool) {
+	d := o.data
+	if d == nil {
+		d = turtleData{}
+	}
+	return d.FirstRankLevel(name)
+}
+
 // firstRankLevel is the character level at which the first rank of a spell is learnt: the lowest level of the spells of that name
 // with "Rank 1" in the data, or of the rankless ones when no rank is listed (the rule of brain.FirstRankLevels). The oracle
-// cannot import the brain, so the table is read here.
+// cannot import the brain, so the table is read here. It is the Turtle table's reading, which turtleData uses.
 func firstRankLevel(name string) (int, bool) {
 	var ranked, rankless []int
 	for _, id := range spells.IDsByName(name) {

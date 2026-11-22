@@ -1,0 +1,19 @@
+# forever-spells v1 source=WOWSTATIC_1_60_1_70399
+id	name	class	skill_line	rank	level	recovery_ms	category_recovery_ms	category	gcd_ms	gcd_category	mechanic	dispel	attr0
+17	Power Word: Shield	priest	56	0	6	0	0	0	1500	133	0	0	0
+78	Heroic Strike	warrior	26	0	1	0	0	0	1500	133	0	0	0
+116	Frostbolt	mage	6	0	4	0	0	0	1500	133	0	0	0
+122	Frost Nova	mage	6	0	10	0	0	0	1500	133	0	0	0
+139	Renew	priest	56	0	8	0	0	0	1500	133	0	0	0
+355	Taunt	warrior	26	0	10	0	0	0	1500	133	0	0	0
+1243	Power Word: Fortitude	priest	56	0	1	0	0	0	1500	133	0	0	0
+1459	Arcane Intellect	mage	6	0	1	0	0	0	1500	133	0	0	0
+1752	Sinister Strike	rogue	38	0	1	0	0	0	1500	133	0	0	0
+2061	Flash Heal	priest	56	0	20	0	0	0	1500	133	0	0	0
+2098	Eviscerate	rogue	38	0	20	0	0	0	1500	133	0	0	0
+2136	Fire Blast	mage	6	0	6	0	0	0	1500	133	0	0	0
+5171	Slice and Dice	rogue	38	0	42	0	0	0	1500	133	0	0	0
+6572	Revenge	warrior	257	0	14	0	0	0	1500	133	0	0	0
+6673	Battle Shout	warrior	26	0	1	0	0	0	1500	133	0	0	0
+7386	Sunder Armor	warrior	257	0	10	0	0	0	1500	133	0	0	0
+23922	Shield Slam	warrior	257	0	30	0	0	0	1500	133	0	0	0

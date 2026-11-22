@@ -888,14 +888,14 @@ func (f *File) Uints(r Row, field int) ([]uint32, error) {
 		return f.values(r.rec, field)
 	}
 	if fs.compression == compNone && fs.bitSize%32 == 0 && fs.bitSize > 32 {
-		v, err := f.value(r.rec, field)
-		if err != nil {
-			return nil, err
+		// Each element is read from the record itself: a column wider than 64 bits cannot come from one value.
+		if r.rec < 0 || r.rec >= f.RecordCount {
+			return nil, fmt.Errorf("record %d, field %d: out of range", r.rec, field)
 		}
-		n := int(fs.bitSize / 32)
-		out := make([]uint32, n)
+		rec := f.record(r.rec)
+		out := make([]uint32, fs.bitSize/32)
 		for i := range out {
-			out[i] = uint32(v >> (32 * i))
+			out[i] = uint32(readBits(rec, uint64(fs.bitOffset)+32*uint64(i), 32))
 		}
 		return out, nil
 	}

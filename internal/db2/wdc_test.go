@@ -1001,6 +1001,29 @@ func TestRowValues(t *testing.T) {
 	}
 }
 
+// TestUintsWideInlineArray reads a plain 128-bit column: all four u32 elements come back, not zeros past
+// the second (post-merge finding F1 of #129).
+func TestUintsWideInlineArray(t *testing.T) {
+	m := twoMaps()
+	m.fields = mapFields()
+	m.fields[3] = tField{bitOffset: 96, bitSize: 128}
+	m.inlineIDs = false
+	m.patch = func(i int, r []byte) {
+		for k := 0; k < 4; k++ {
+			binary.LittleEndian.PutUint32(r[12+4*k:], uint32(0x1000+k+1))
+		}
+	}
+	f := openBytes(t, buildMapDB2(t, m))
+	rows, _, err := f.Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, err := f.Uints(rows[0], 3)
+	if err != nil || len(vs) != 4 || vs[0] != 0x1001 || vs[1] != 0x1002 || vs[2] != 0x1003 || vs[3] != 0x1004 {
+		t.Errorf("Uints(128-bit) = %v, %v, want 0x1001..0x1004", vs, err)
+	}
+}
+
 // FuzzParse feeds arbitrary bytes to the reader: it must return a File or an error, never panic, and
 // never allocate more than the input's size allows. The seeds are hand-built files, not client data:
 //

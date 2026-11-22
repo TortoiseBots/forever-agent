@@ -46,14 +46,40 @@ type Common struct {
 	Limits  Limits              `json:"limits"`
 }
 
+// Data is the spell data an oracle is validated against: the names it lists and the character level at which the
+// first rank of a spell is learnt. The Turtle table is the default; a Forever build plugs the Forever spell table in,
+// so the same judge validates Forever names.
+type Data interface {
+	HasName(string) bool
+	FirstRankLevel(string) (int, bool)
+}
+
+// turtleData is the Turtle spell table (internal/spells), the data every Turtle oracle is validated against.
+type turtleData struct{}
+
+func (turtleData) HasName(name string) bool { return spells.HasName(name) }
+
+func (turtleData) FirstRankLevel(name string) (int, bool) { return firstRankLevel(name) }
+
 // Oracle is the judge's data: one spec list per class and the common lists.
 type Oracle struct {
 	Classes map[string][]SpecOracle
 	Common  Common
+	data    Data // nil is the Turtle table
 }
 
-// Load reads an oracle from a file system: `_common.json` and one `<class>.json` per class at the root of fsys.
-func Load(fsys fs.FS) (*Oracle, error) { return load(fsys, ".", "_common.json") }
+// Load reads an oracle from a file system: `_common.json` and one `<class>.json` per class at the root of fsys. The
+// names and levels are validated against the Turtle spell data.
+func Load(fsys fs.FS) (*Oracle, error) { return load(fsys, ".", "_common.json", turtleData{}) }
+
+// LoadWith reads an oracle the way Load does and validates it against d instead of the Turtle table (a Forever build
+// passes its Forever spell table). A nil d is the Turtle table.
+func LoadWith(fsys fs.FS, d Data) (*Oracle, error) {
+	if d == nil {
+		d = turtleData{}
+	}
+	return load(fsys, ".", "_common.json", d)
+}
 
 //go:embed oracle/*.json
 var embedded embed.FS
@@ -62,7 +88,7 @@ var embedded embed.FS
 // from the KB rotations) and the hand-written common data.
 func Default() *Oracle {
 	defOnce.Do(func() {
-		o, err := load(embedded, "oracle", "oracle/_common.json")
+		o, err := load(embedded, "oracle", "oracle/_common.json", turtleData{})
 		if err != nil {
 			panic("kbspells: embedded oracle: " + err.Error())
 		}
@@ -81,8 +107,11 @@ type classFile struct {
 	Specs []SpecOracle `json:"specs"`
 }
 
-func load(fsys fs.FS, dir, commonPath string) (*Oracle, error) {
-	o := &Oracle{Classes: map[string][]SpecOracle{}}
+func load(fsys fs.FS, dir, commonPath string, d Data) (*Oracle, error) {
+	if d == nil {
+		d = turtleData{}
+	}
+	o := &Oracle{Classes: map[string][]SpecOracle{}, data: d}
 	b, err := fs.ReadFile(fsys, commonPath)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", commonPath, err)
@@ -90,7 +119,7 @@ func load(fsys fs.FS, dir, commonPath string) (*Oracle, error) {
 	if err := json.Unmarshal(b, &o.Common); err != nil {
 		return nil, fmt.Errorf("%s: %w", commonPath, err)
 	}
-	if err := validateCommon(o.Common); err != nil {
+	if err := validateCommon(o.Common, d); err != nil {
 		return nil, fmt.Errorf("%s: %w", commonPath, err)
 	}
 	entries, err := fs.ReadDir(fsys, dir)
@@ -119,7 +148,7 @@ func load(fsys fs.FS, dir, commonPath string) (*Oracle, error) {
 			return nil, fmt.Errorf("%s: class %s is in two files", p, class)
 		}
 		slices.SortFunc(cf.Specs, func(a, b SpecOracle) int { return strings.Compare(a.Spec, b.Spec) })
-		if err := validateClass(class, cf.Specs); err != nil {
+		if err := validateClass(class, cf.Specs, d); err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		o.Classes[class] = cf.Specs
@@ -130,12 +159,12 @@ func load(fsys fs.FS, dir, commonPath string) (*Oracle, error) {
 	return o, nil
 }
 
-func validateCommon(c Common) error {
+func validateCommon(c Common, d Data) error {
 	if len(c.Taunts) == 0 {
 		return fmt.Errorf("no taunts")
 	}
 	for _, n := range c.Taunts {
-		if !spells.HasName(n) {
+		if !d.HasName(n) {
 			return fmt.Errorf("taunt %q is not in the spell data", n)
 		}
 	}
@@ -143,7 +172,7 @@ func validateCommon(c Common) error {
 		if strings.TrimSpace(class) == "" {
 			return fmt.Errorf("generic: a class with no name")
 		}
-		if err := namesInData("generic "+class, names); err != nil {
+		if err := namesInData(d, "generic "+class, names); err != nil {
 			return err
 		}
 	}
@@ -154,7 +183,7 @@ func validateCommon(c Common) error {
 	return nil
 }
 
-func validateClass(class string, specs []SpecOracle) error {
+func validateClass(class string, specs []SpecOracle, d Data) error {
 	if len(specs) == 0 {
 		return fmt.Errorf("class %s has no spec", class)
 	}
@@ -184,7 +213,7 @@ func validateClass(class string, specs []SpecOracle) error {
 			what  string
 			names []string
 		}{{"core", s.Core}, {"situational", s.Situational}, {"never", s.Never}, {"signature", s.Signature}, {"taunt", s.Taunt}} {
-			if err := namesInData("spec "+name+" "+l.what, l.names); err != nil {
+			if err := namesInData(d, "spec "+name+" "+l.what, l.names); err != nil {
 				return err
 			}
 		}
@@ -202,12 +231,12 @@ func validateClass(class string, specs []SpecOracle) error {
 	return nil
 }
 
-func namesInData(what string, names []string) error {
+func namesInData(d Data, what string, names []string) error {
 	for _, n := range names {
 		if strings.TrimSpace(n) == "" {
 			return fmt.Errorf("%s: an empty name", what)
 		}
-		if !spells.HasName(n) {
+		if !d.HasName(n) {
 			return fmt.Errorf("%s: %q is not in the spell data", what, n)
 		}
 	}

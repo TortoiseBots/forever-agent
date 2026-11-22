@@ -1,0 +1,12 @@
+{
+  "taunts": [
+    "Taunt"
+  ],
+  "ignore": [],
+  "generic": {},
+  "limits": {
+    "sunder_ok_per_10s": 1.0,
+    "sunder_warn_per_10s": 0.5,
+    "min_fight_ms": 1000
+  }
+}
