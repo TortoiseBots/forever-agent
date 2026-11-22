@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,7 +70,15 @@ type PlayFake struct {
 	Graveyard Vec3
 
 	units []Unit
-	epoch uint64
+	// objects is the scripted game objects the steps read back (Objects is the PlayerPort's view), and UseNoChange
+	// names the entries whose use changes no state: a door that stays shut, which the use_object step cannot claim.
+	objects     []PlayObject
+	UseNoChange map[uint32]bool
+	// GossipMissing is how many talks answer a menu without the plan's option (ErrNoGossipOption) before the menu has
+	// it, and GossipErr answers every talk instead.
+	GossipMissing int
+	GossipErr     error
+	epoch         uint64
 
 	// Actions is every port call the fake can see, in order and on the run's clock: the `.bot` lines and the group
 	// commands (as "loot-method", "mark" and "disband"). Walks is every polyline the walker was given.
@@ -153,7 +162,8 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
 		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
-		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
+		UseNoChange: map[uint32]bool{},
+		BotPower:    map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
 	}
 	f.Module = &PlayModule{GoldenOwner: owner, f: f}
@@ -670,17 +680,69 @@ func (f *PlayFake) Loot(ctx context.Context, guid wire.GUID) error {
 	return nil
 }
 
-// UseObject uses one game object.
+// UseObject uses one game object: it becomes active unless UseNoChange names its entry.
 func (f *PlayFake) UseObject(ctx context.Context, entry uint32, stand Vec3) error {
 	f.Used = append(f.Used, entry)
+	f.act("use " + strconv.FormatUint(uint64(entry), 10))
+	if f.UseNoChange[entry] {
+		return nil
+	}
+	for i := range f.objects {
+		if f.objects[i].Entry == entry {
+			f.objects[i].State = "active"
+		}
+	}
 	return nil
 }
 
-// Gossip picks one gossip option.
+// Gossip picks one gossip option: every talk is recorded, and a menu the test scripts without the option (or a
+// GossipErr) answers instead of the close.
 func (f *PlayFake) Gossip(ctx context.Context, entry uint32, option int) error {
 	f.Gossips = append(f.Gossips, option)
+	if f.GossipErr != nil {
+		return f.GossipErr
+	}
+	if f.GossipMissing > 0 {
+		f.GossipMissing--
+		return ErrNoGossipOption
+	}
 	return nil
 }
+
+// AddObject puts one scripted game object in the view; one a test gave no guid and no state gets them (ready).
+func (f *PlayFake) AddObject(o PlayObject) {
+	if o.State == "" {
+		o.State = "ready"
+	}
+	if o.GUID.IsZero() {
+		o.GUID = wire.GUID{High: 0xF110000000000000, Low: 0x70000 + uint64(len(f.objects)) + uint64(o.Entry)}
+	}
+	f.objects = append(f.objects, o)
+}
+
+// ObjectOf finds a scripted game object of that entry: the first one of the list.
+func (f *PlayFake) ObjectOf(entry uint32) (PlayObject, bool) {
+	for _, o := range f.objects {
+		if o.Entry == entry {
+			return o, true
+		}
+	}
+	return PlayObject{}, false
+}
+
+// RemoveObject drops a game object from the view: a door the plan's wait reads as gone once it saw it.
+func (f *PlayFake) RemoveObject(guid wire.GUID) {
+	out := f.objects[:0]
+	for _, o := range f.objects {
+		if o.GUID != guid {
+			out = append(out, o)
+		}
+	}
+	f.objects = out
+}
+
+// Objects is the character's view of the game objects, as the steps read it.
+func (f *PlayFake) Objects() []PlayObject { return f.objects }
 
 // --- World ---
 

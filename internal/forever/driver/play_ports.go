@@ -25,8 +25,22 @@ const (
 
 // ErrCannotLoot is what a loot attempt answers for a corpse this character may not loot: the dynamic flag said no (a
 // corpse that is another player's, or one whose window is gone). §3.7 loots only the corpses it may loot, so the run
-// reads this as "nothing here" and goes on to the next one.
+// reads this as "nothing here" and goes on to the next one. A loot_object step reads it as the object's window never
+// opening, which fails the step.
 var ErrCannotLoot = errors.New("driver: the character may not loot that corpse")
+
+// ErrNoGossipOption is what Gossip answers for a menu that lacks the option the plan names: the phase lags one update
+// behind the event that adds it, so the run asks again for the plan's retry_s before the step fails (§3.11).
+var ErrNoGossipOption = errors.New("driver: the gossip menu has no such option")
+
+// PlayObject is one game object in the agent's view: what a use_object's and a wait's readback needs. State is the
+// object's state as a plan names it ("ready", "active", "active_alt"); the view holds only objects the client has seen.
+type PlayObject struct {
+	GUID  wire.GUID
+	Entry uint32
+	Pos   Vec3
+	State string
+}
 
 // RezOffer is a resurrect offer that is up for the agent's own character: who offers it (§3.10 answers a party
 // member's offer and declines anyone else's).
@@ -67,9 +81,10 @@ type GroupPort interface {
 	Disband() error
 }
 
-// PlayerPort is the agent's own character: the selection and attack the bot orders point at, the fight tick, the
-// rest, the death watch, the loot and the two setup actions of the plan's steps. It is what the fight-check and the
-// death watch already do, seen through the run's one goroutine.
+// PlayerPort is the agent's own character and what its client sees: the selection and attack the bot orders point at,
+// the fight tick, the rest, the death watch, the loot, the two setup actions of the plan's steps and the game objects a
+// step's readback needs. It is what the fight-check and the death watch already do, seen through the run's one
+// goroutine.
 type PlayerPort interface {
 	// Select is CMSG_SET_SELECTION: the unit `.bot attack` takes for a bot.
 	Select(guid wire.GUID) error
@@ -90,9 +105,12 @@ type PlayerPort interface {
 	RezOffer() (RezOffer, bool)
 	// DeclineRez refuses the offer that is up, so the next one may come.
 	DeclineRez() error
-	// Loot opens one corpse the character may loot, takes everything and closes it.
+	// Loot opens one corpse or one game object's window the character may loot, takes everything and closes it.
 	Loot(ctx context.Context, guid wire.GUID) error
 	// UseObject uses a game object (a door, a lever) standing at stand, and Gossip picks one gossip option.
 	UseObject(ctx context.Context, entry uint32, stand Vec3) error
 	Gossip(ctx context.Context, entry uint32, option int) error
+	// Objects is the game objects in the agent's own view: a use_object's and a wait_for's readback of a door's or a
+	// lever's state. A caller must not keep the slice.
+	Objects() []PlayObject
 }

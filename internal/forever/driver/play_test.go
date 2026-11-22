@@ -366,7 +366,26 @@ func TestPlayRouteRefusals(t *testing.T) {
 	}{
 		{"team", func(p *dungeon.Plan) { p.Team = dungeon.TeamHorde }, "team"},
 		{"raid", func(p *dungeon.Plan) { p.Kind = dungeon.KindRaid }, "kind"},
-		{"steps", func(p *dungeon.Plan) { p.Legs[0].Steps = []dungeon.Step{{UseObject: &dungeon.UseObject{}}} }, "steps"},
+		{"use_item", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{UseItem: &dungeon.UseItem{Entry: 5}}}
+		}, "use_item"},
+		{"ritual", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{Ritual: &dungeon.Ritual{Entry: 5, Participants: dungeon.MinRitualParticipants}}}
+		}, "ritual"},
+		{"area_trigger", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{AreaTrigger: &dungeon.AreaTrigger{ID: 962}}}
+		}, "area_trigger"},
+		{"gossip_text", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{Gossip: &dungeon.Gossip{NPC: 5, Text: "hello"}}}
+		}, "gossip.text"},
+		{"use_object_spawn", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{UseObject: &dungeon.UseObject{ObjectRef: dungeon.ObjectRef{Entry: 5, Spawn: 7}}}}
+		}, "use_object.spawn"},
+		{"loot_expect_item", func(p *dungeon.Plan) {
+			p.Legs[0].Steps = []dungeon.Step{{LootObject: &dungeon.LootObject{
+				ObjectRef: dungeon.ObjectRef{Entry: 5}, ExpectItem: &dungeon.ItemRef{Entry: 9},
+			}}}
+		}, "loot_object.expect_item"},
 		{"after_boss", func(p *dungeon.Plan) { p.Legs[0].AfterBoss = []dungeon.Step{{UseObject: &dungeon.UseObject{}}} }, "after_boss"},
 		{"optional", func(p *dungeon.Plan) { p.Legs[0].Optional = &dungeon.OptionalLeg{Item: 1} }, "optional"},
 		{"needs_walk", func(p *dungeon.Plan) { p.Legs[0].NeedsWalk = true }, "needs_walk"},
