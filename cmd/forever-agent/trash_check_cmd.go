@@ -21,7 +21,7 @@ import (
 // exitTrashCheckFound: with --fail-on, the named class of finding exists (spec 1.2).
 const exitTrashCheckFound = 21
 
-const trashCheckUsage = "usage: forever-agent trash-check [--dir dungeons] [--sql FILE [--plan NAME]] [--spawns DIR] [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 10] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any] [<plan>|<path.json>] | forever-agent trash-check --forever --sql FILE [--plan NAME] --spawns FILE [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 10] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any]"
+const trashCheckUsage = "usage: forever-agent trash-check [--dir dungeons] [--sql FILE [--plan NAME]] [--spawns DIR] [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 10] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any] [<plan>|<path.json>] | forever-agent trash-check --forever --sql FILE [--plan NAME] --spawns DIR|FILE [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 20] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any]"
 
 // trashCheckCmd reports what one walk of a plan wakes: body pulls before the plan's own pulls, the family assist hop, links and
 // groups, and the patrol windows at the route and the stands (README, "Trash check"). It reads the plan rows, a world export
@@ -33,12 +33,12 @@ func trashCheckCmd(args []string, stdout, stderr io.Writer) int {
 	sql := fs.String("sql", "", "a deployed migration (the rows the server runs); the recommended input; with --forever: the run leader's exported migration, as plan-export --forever writes it")
 	planFlag := fs.String("plan", "", "with --sql: the plan to report when the file holds several")
 	forever := fs.Bool("forever", false, "report against the Forever side's inputs: a run leader's exported migration (--sql) matched against a spawn list (--spawns), on v16 tiles (--mmaps)")
-	spawns := fs.String("spawns", "", "the world export of the plan's map (default <--dir>/../tools/dungeongen/testdata/map<N>); with --forever: the spawn list TSV (guid entry x y z movetype [kind])")
+	spawns := fs.String("spawns", "", "the world export of the plan's map (default <--dir>/../tools/dungeongen/testdata/map<N>); with --forever: a world export (a map folder, or a root of map<N> folders: tools/dungeongen/export-forever.sh) or the thin spawn list TSV (guid entry x y z movetype [kind])")
 	mmaps := fs.String("mmaps", "", "folder with the server's mmaps: the route is the server's own path (without it: straight lines); with --forever: v16 tiles")
 	level := fs.Int("level", 0, "the party's lowest level (default: the plan's level_band[0])")
 	spread := fs.Float64("spread", 0, "how far the party spreads from the route, yd (default 10 for a raid plan, else 3)")
 	rate := fs.Float64("aggro-rate", 1, "scales every aggro radius")
-	assist := fs.Float64("assist-yd", 10, "the family assist hop's radius, yd")
+	assist := fs.Float64("assist-yd", 10, "the family assist hop's radius, yd (with --forever: default 20, the run leader's ring)")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
 	out := fs.String("out", "", "write trash-<plan>.json and trash-<plan>.txt there")
 	dashOut := fs.String("dash-out", "", "write the patrols as the dashboard's patrols.json data file")
@@ -66,7 +66,7 @@ func trashCheckCmd(args []string, stdout, stderr io.Writer) int {
 		return fail("--forever reports on a run leader's exported migration: pass --sql FILE (plan-export --forever output)")
 	}
 	if *forever && *spawns == "" {
-		return fail("--forever needs --spawns FILE (the spawn list TSV the rows' entries are matched against)")
+		return fail("--forever needs --spawns (a world export folder, or the spawn list TSV the rows' entries are matched against)")
 	}
 	if *planFlag != "" && *sql == "" {
 		return fail("--plan names a plan of --sql")
@@ -79,7 +79,7 @@ func trashCheckCmd(args []string, stdout, stderr io.Writer) int {
 		return fail("%d inputs, want one plan name, a .json path or --sql", fs.NArg())
 	}
 	if *forever {
-		return trashCheckForever(*dir, *sql, *planFlag, *spawns, *mmaps, *level, *spread, *rate, *assist, given["level"], given["spread"], *asJSON, *out, *dashOut, *failOn, patrolFiles, stdout, stderr)
+		return trashCheckForever(*dir, *sql, *planFlag, *spawns, *mmaps, *level, *spread, *rate, *assist, given["level"], given["spread"], given["assist-yd"], *asJSON, *out, *dashOut, *failOn, patrolFiles, stdout, stderr)
 	}
 
 	// The rows: the deployed migration (B1's lenient reader) or the plan file rebuilt with the exporter.

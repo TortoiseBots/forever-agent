@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Export one map's spawns, formations, waypoint paths, game objects and entrances from a ForeverCore world database to the
 # TSV files dungeongen and internal/worldspawn read:   export-forever.sh <map> <outdir>
+# With --all it exports every map that has a normal spawn, one folder each:   export-forever.sh --all <rootdir>
+# writes <rootdir>/map<N> for every map N (the layout the plan tools take as --spawns: a world root holding map<N>
+# folders, or one map's folder). A failing map stops the run and names it; the maps before it stay exported.
 # It writes <outdir>/creatures.tsv, groups.tsv, movement.tsv, movement_template.tsv, gameobjects.tsv, entrances.tsv and
 # portals.tsv, with the column sets tools/dungeongen/export.sh writes except that the formations column is group_ai (the
 # core's raw creature_formations.groupAI) rather than the reader's group_flags; worldspawn.LoadForeverDB reads them.
@@ -33,9 +36,15 @@
 #               DUNGEONGEN_DB             world database (default forever_world)
 #               DUNGEONGEN_HOTFIXES_DB    hotfixes database (default forever_hotfixes)
 set -euo pipefail
-[ $# -eq 2 ] || { sed -n '2,4p' "$0"; exit 2; }
-map=$1 out=$2
-[[ $map =~ ^[0-9]+$ ]] || { echo "map must be a number" >&2; exit 2; }
+[ $# -eq 2 ] || { sed -n '2,7p' "$0"; exit 2; }
+all=0 map=
+if [ "$1" = --all ]; then
+  all=1
+else
+  map=$1
+  [[ $map =~ ^[0-9]+$ ]] || { echo "map must be a number" >&2; exit 2; }
+fi
+out=$2
 host=${DUNGEONGEN_HOST:-local} ctr=${DUNGEONGEN_CONTAINER:-forever-db} db=${DUNGEONGEN_DB:-forever_world}
 hotdb=${DUNGEONGEN_HOTFIXES_DB:-forever_hotfixes}
 
@@ -49,14 +58,30 @@ valid_env DUNGEONGEN_CONTAINER "$ctr"
 valid_env DUNGEONGEN_DB "$db"
 valid_env DUNGEONGEN_HOTFIXES_DB "$hotdb"
 
-tmp="$out.tmp.$$"
-trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp"
-
 query() { # reads one SELECT on stdin, prints tab-separated rows without a header
   local remote="docker exec -i $ctr sh -c 'MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" exec mariadb -uroot -N -B --init-command=\"SET SESSION TRANSACTION READ ONLY\" $db'"
   if [ "$host" = local ]; then bash -c "$remote"; else ssh -o LogLevel=ERROR "$host" "$remote"; fi
 }
+
+# --all: one export per map that has a normal spawn (the same normal-difficulty filter the per-map export uses). Each map
+# runs this script again for its own folder, so a map is staged and published whole, exactly as a single export is.
+if [ "$all" = 1 ]; then
+  maps=$(query <<SQL
+SELECT DISTINCT c.map FROM creature c WHERE FIND_IN_SET('0', REPLACE(c.spawnDifficulties, ' ', '')) > 0 ORDER BY c.map;
+SQL
+)
+  [ -n "$maps" ] || { echo "export found no map with spawns" >&2; exit 1; }
+  mkdir -p "$out"
+  for m in $maps; do
+    [[ $m =~ ^[0-9]+$ ]] || { echo "the database returned a map id that is not a number: $m" >&2; exit 1; }
+    bash "$0" "$m" "$out/map$m" || { echo "export of map $m failed: the maps before it are exported, map $m and the rest are not" >&2; exit 1; }
+  done
+  exit 0
+fi
+
+tmp="$out.tmp.$$"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp"
 
 # normal is the row filter for the normal difficulty: spawnDifficulties is a comma list of difficulty ids and 0 is the
 # one a normal group sees (ObjectMgr::ParseSpawnDifficulties, ObjectMgr.cpp:2464-2482). REPLACE drops spaces so the

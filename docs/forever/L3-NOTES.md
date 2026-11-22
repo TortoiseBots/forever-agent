@@ -10,9 +10,21 @@ produces. The reader feeds the offline plan tools and plan-scout; nothing here t
 # on a machine that can reach the database container: one map, one folder
 tools/dungeongen/export-forever.sh 36 forever/map36
 
+# every map with a normal spawn, one folder each: forever/world/map<N>
+tools/dungeongen/export-forever.sh --all forever/world
+
 # read it back (map id; the folder's files carry no map)
-forever-agent plan-check --forever ...        # via the loaders of the plan tools
+forever-agent plan-check --forever --spawns forever/world ...
+forever-agent plan-probe --forever --spawns forever/world ...
+forever-agent trash-check --forever --spawns forever/world ...
 ```
+
+`--spawns` of the three plan tools is a world root (`map<N>/creatures.tsv`, the plan's map picks the folder), one map's
+folder (`creatures.tsv` in it; taken as the plan's map, the files carry no map id) or the thin TSV spawn list a server
+module prints (guid entry x y z movetype [kind]; no groups, levels or waypoint loops). The export is Blizzard game data:
+it is never committed here; tests use small hand-made folders. `trash-check --forever` takes the family assist ring from
+the port (`kAggroFamilyAssistMinYd`, 20 yd, `PullAggroEstimatePolicy.h`) unless `--assist-yd` is given; its 3 yd party /
+10 yd raid spread and `aggroest`'s ring, hop and floor numbers already match the port.
 
 The script is SELECT-only: the session is opened with `SET SESSION TRANSACTION READ ONLY` (in the `mariadb` command
 line that `query()` runs) and every statement is a SELECT. It reads no credential: the database password is expanded

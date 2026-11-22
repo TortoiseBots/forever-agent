@@ -24,17 +24,49 @@ import (
 // its groups, links and waypoint tables, the v6 tiles) are refused in this mode: the spawn list carries none of those
 // tables, and rows rebuilt against one tile set prove nothing about the other.
 //
-// What the Forever inputs do not carry is skipped with a note, never guessed:
-//   - linked packs: the list has no creature_linking or creature_groups rows, so every spawn walks alone;
-//   - patrols: the list has no waypoint loops, so no patrol window is simulated unless a tb-patrols recording
-//     (--patrols) gives one. The plan's own patrol paths do not stand in: they are waypoints without waits or
-//     periods, and a guessed period would invent windows.
-//   - the family assist hop still runs, over faction alone (the list carries no flags_extra): a flagged spawn would
-//     assist in the old report and stays quiet here, and the note says so.
+// The spawns are --spawns: a world export (export-forever.sh: one map's folder, or a root of map<N> folders) or the thin
+// spawn list. A world export carries the formation groups, factions and waypoint loops, so linked packs and patrol windows
+// are judged; the thin list carries none of that and the notes say so, never guessing:
+//   - linked packs: ForeverCore has no creature_linking tables, so a pack is its creature_formations group (none in the list);
+//   - patrols: the list has no waypoint loops, so no patrol window is simulated unless a tb-patrols recording (--patrols)
+//     gives one. The plan's own patrol paths do not stand in: they are waypoints without waits or periods, and a guessed
+//     period would invent windows.
+//   - the family assist hop runs over the faction template (the list carries no flags_extra).
+// The assist ring defaults to the port's 20 yd (foreverAssistYd); the spread and aggro numbers already match.
+
+// foreverAssistYd is the family assist ring Forever mode defaults to: the port's kAggroFamilyAssistMinYd
+// (ai/playerbot/PullAggroEstimatePolicy.h:90), the least the run leader's pull estimate takes a call for help to carry. The
+// core's own CreatureFamilyAssistanceRadius is 10 yd (:86), but the cross-pack wakes measured on the Zul'Gurub terrace were
+// spawn pairs 11.0-19.5 yd apart (:87-89), so the estimate never goes under 20. The Turtle run leader's 10 yd is the
+// --assist-yd default of the old mode only. The spread (3 yd party, 10 yd raid: kSpreadSettledDistance) and the aggro
+// ring's reach are the model's own and match (aggroest.TestConstantsMirrorTheRunLeader).
+const foreverAssistYd = 20.0
+
+func foreverAssistSource(given bool) string {
+	if given {
+		return "--assist-yd"
+	}
+	return "the port's pull estimate never goes under 20 yd (kAggroFamilyAssistMinYd); --assist-yd sets it"
+}
+
+// foreverTrashWorldNotes says what the spawn input did and did not carry. A world export carries groups (the
+// creature_formations rows), factions and flags_extra's not-aggro bit; its waypoint loops make patrols, with the waits the
+// core has. The thin list carries none of that: every spawn walks alone and no patrol is simulated unless a tb-patrols
+// recording gives one. ForeverCore has no creature_linking tables, so a pack is its formation group in both.
+func foreverTrashWorldNotes(fw *foreverSpawns) []string {
+	if fw.Full {
+		return []string{"the spawns are a world export: packs are its creature_formations groups (ForeverCore has no creature_linking), patrols are its waypoint loops, the family assist hop matches the faction template and skips a spawn the export flags not-aggro"}
+	}
+	return []string{
+		"the spawn list carries no groups or links: every spawn walks alone (no linked packs; pass a world export folder for them)",
+		"the spawn list carries no waypoint loops: no patrol is simulated from it (pass a world export folder or a tb-patrols --patrols recording for patrol windows)",
+		"the family assist hop matches on faction alone (the list carries no flags): a spawn the flags would silence still assists",
+	}
+}
 
 // trashCheckForever runs the Forever mode: the exported migration's rows against the spawn list, routes on the v16
 // tiles when --mmaps is given, straight lines otherwise.
-func trashCheckForever(dir, sqlFile, planFlag, spawnsFile, mmaps string, level int, spread, rate, assist float64, haveLevel, haveSpread, asJSON bool, out, dashOut, failOn string, patrolFiles []string, stdout, stderr io.Writer) int {
+func trashCheckForever(dir, sqlFile, planFlag, spawnsFile, mmaps string, level int, spread, rate, assist float64, haveLevel, haveSpread, haveAssist, asJSON bool, out, dashOut, failOn string, patrolFiles []string, stdout, stderr io.Writer) int {
 	fail := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "trash-check: "+format+"\n", a...)
 		return exitUsage
@@ -71,10 +103,11 @@ func trashCheckForever(dir, sqlFile, planFlag, spawnsFile, mmaps string, level i
 	if !planName.MatchString(rows.Plan.Plan) {
 		return fail("the plan name %q is not a plan name (a-z, 0-9, _ and -)", rows.Plan.Plan)
 	}
-	w, notes, err := worldspawn.LoadForeverSpawns(spawnsFile, rows.Plan.Map)
+	fw, err := loadForeverWorld(spawnsFile, rows.Plan.Map)
 	if err != nil {
 		return fail("%v", err)
 	}
+	w, notes := fw.World, fw.Notes
 	meta, metaNote := trashForeverMeta(dir, rows)
 	if metaNote != "" {
 		notes = append(notes, metaNote)
@@ -103,12 +136,12 @@ func trashCheckForever(dir, sqlFile, planFlag, spawnsFile, mmaps string, level i
 	if rate <= 0 {
 		return fail("--aggro-rate %g: a positive scale", rate)
 	}
-	notes = append(notes,
-		"the spawn list carries no groups or links: every spawn walks alone (no linked packs)",
-		"the spawn list carries no waypoint loops: no patrol is simulated from it (pass a tb-patrols --patrols recording for patrol windows)",
-		"the family assist hop matches on faction alone (the list carries no flags): a spawn the flags would silence still assists",
-		"the plan's own patrol paths are not simulated: waypoints without waits or periods invent no windows",
-	)
+	if !haveAssist {
+		assist = foreverAssistYd
+	}
+	notes = append(notes, foreverTrashWorldNotes(fw)...)
+	notes = append(notes, fmt.Sprintf("the family assist hop reaches %g yd (%s)", assist, foreverAssistSource(haveAssist)),
+		"the plan's own patrol paths are not simulated: waypoints without waits or periods invent no windows")
 	var recorded []patrols.Patrol
 	for _, path := range patrolFiles {
 		f, err := patrols.Read(path)
@@ -144,7 +177,7 @@ func trashCheckForever(dir, sqlFile, planFlag, spawnsFile, mmaps string, level i
 	}
 	check := trashcheck.Check(rows, w, opt)
 	check.Source = "forever-sql " + sqlFile
-	check.SpawnsDir = spawnsFile
+	check.SpawnsDir = fw.Path
 	check.Notes = append(check.Notes, notes...)
 	if unplanned := foreverTrashUnplanned(rep.Units, w, check); len(unplanned) > 0 {
 		check.Notes = append(check.Notes, unplanned...)

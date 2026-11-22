@@ -21,7 +21,7 @@ import (
 // exitPlanCheck: plan-check found a point the navmesh cannot take (a failing plan is not a usage error).
 const exitPlanCheck = 11
 
-const planCheckUsage = "usage: forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--floor-aware] [--approach-hops] [--forever [--spawns FILE]] [--strict] [--json] <plan>... | forever-agent plan-check --mmaps DIR --sql FILE [--plan NAME] [--spawns DIR] [--forever [--spawns FILE]] [--strict] [--json]"
+const planCheckUsage = "usage: forever-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--floor-aware] [--approach-hops] [--forever [--spawns DIR|FILE]] [--strict] [--json] <plan>... | forever-agent plan-check --mmaps DIR --sql FILE [--plan NAME] [--spawns DIR] [--forever [--spawns DIR|FILE]] [--strict] [--json]"
 
 // planCheckCmd walks the named plans on the navmesh (README, "Plan check") and prints each failing point. It reads the plan files and
 // the mmaps folder and nothing else.
@@ -39,7 +39,7 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 	approachHops := fs.Bool("approach-hops", false, "build the plan's rows for the lints with the approach hops (plan-export --approach-hops)")
 	strict := fs.Bool("strict", false, "make a lint finding fail the check (by default the lints are warnings)")
 	asJSON := fs.Bool("json", false, "print the results as JSON")
-	forever := fs.Bool("forever", false, "read --mmaps as the v16 tiles and --spawns as a TSV spawn list (guid entry x y z movetype [kind: creature, or object for a game object]) for a server module that runs dungeon plans")
+	forever := fs.Bool("forever", false, "read --mmaps as the v16 tiles and --spawns as the spawns: a world export (a map folder, or a root of map<N> folders: tools/dungeongen/export-forever.sh) or a TSV spawn list (guid entry x y z movetype [kind: creature, or object for a game object]) for a server module that runs dungeon plans")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -250,19 +250,18 @@ func lintRows(rows planexport.Rows, origins []planexport.RowOrigin, planner *nav
 	return fs, note, nil
 }
 
-// worldForLintsForever loads a server's TSV spawn list (guid entry x y z movetype [kind]) for the aggro, patrol and object lints.
+// worldForLintsForever loads a server's spawns for the aggro, patrol and object lints from --spawns: a world export (one
+// map's folder, or a root of map<N> folders, as tools/dungeongen/export-forever.sh writes them: groups, levels, factions
+// and waypoint loops) or the thin TSV list (guid entry x y z movetype [kind]); see loadForeverWorld.
 func worldForLintsForever(spawnFile string, mapID uint32) (*worldspawn.World, string) {
 	if spawnFile == "" {
-		return nil, "aggro, patrol and object lints skipped: pass --spawns FILE (a TSV: guid entry x y z movetype [kind])"
+		return nil, "aggro, patrol and object lints skipped: pass --spawns (a world export folder from export-forever.sh, or a TSV file: guid entry x y z movetype [kind])"
 	}
-	if st, err := os.Stat(spawnFile); err == nil && st.IsDir() {
-		return nil, fmt.Sprintf("aggro, patrol and object lints skipped: --forever reads --spawns as a TSV file, and %s is a folder", spawnFile)
-	}
-	w, notes, err := worldspawn.LoadForeverSpawns(spawnFile, mapID)
+	fw, err := loadForeverWorld(spawnFile, mapID)
 	if err != nil {
 		return nil, fmt.Sprintf("aggro and patrol lints skipped: %v", err)
 	}
-	return w, strings.Join(notes, "; ")
+	return fw.World, strings.Join(fw.Notes, "; ")
 }
 
 // worldForLints loads the map's world export for the aggro and patrol lints; nil (with the reason) when it is not there.

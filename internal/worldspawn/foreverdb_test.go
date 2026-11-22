@@ -297,8 +297,8 @@ func TestExportScriptSelectsOnly(t *testing.T) {
 		}
 		queries++
 	}
-	if queries != 7 {
-		t.Errorf("%d queries, want the six table blocks and the orphan count (portals.tsv is a header)", queries)
+	if queries != 8 {
+		t.Errorf("%d queries, want the six table blocks, the orphan count and the --all map list (portals.tsv is a header)", queries)
 	}
 	for _, file := range []string{"creatures.tsv", "groups.tsv", "movement.tsv", "movement_template.tsv", "gameobjects.tsv", "entrances.tsv", "portals.tsv"} {
 		if !strings.Contains(script, `> "$tmp/`+file+`"`) {
@@ -330,6 +330,9 @@ func TestExportScriptNormalSpawnsAndMissingTemplates(t *testing.T) {
 	if !strings.Contains(script, `normal="FIND_IN_SET('0', REPLACE(c.spawnDifficulties, ' ', '')) > 0"`) {
 		t.Error("the normal-difficulty filter is not defined")
 	}
+	if !strings.Contains(script, "SELECT DISTINCT c.map FROM creature c WHERE FIND_IN_SET('0', REPLACE(c.spawnDifficulties, ' ', '')) > 0") {
+		t.Error("the --all map list does not use the normal-difficulty filter")
+	}
 	if n := strings.Count(script, "$normal"); n != 5 {
 		t.Errorf("the normal-difficulty filter is used in %d creature queries, want 5 (the four blocks and the orphan count)", n)
 	}
@@ -353,8 +356,8 @@ func scriptEnv(t *testing.T, bin string, extra map[string]string) []string {
 	t.Helper()
 	env := []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "DUNGEONGEN_") {
-			continue
+		if strings.HasPrefix(kv, "DUNGEONGEN_") || strings.HasPrefix(kv, "PATH=") {
+			continue // PATH is set above: a second PATH entry would win over the stub's
 		}
 		env = append(env, kv)
 	}
@@ -442,5 +445,95 @@ func TestExportScriptKeepsPreviousExportOnFailure(t *testing.T) {
 		if strings.HasPrefix(e.Name(), "out.tmp.") {
 			t.Errorf("staging directory %s left behind", e.Name())
 		}
+	}
+}
+
+// writeAllStubDocker writes a docker stub for --all: it reads the SQL on stdin, answers the map-list query with maps
+// (one per line), the orphan count with 0, every other query with no rows, and fails any query that names failMap.
+func writeAllStubDocker(t *testing.T, dir, maps, failMap string) string {
+	t.Helper()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "#!/bin/sh\nsql=$(cat)\n" +
+		"case \"$sql\" in\n" +
+		"  *'DISTINCT c.map'*) printf '" + maps + "';;\n"
+	if failMap != "" {
+		body += "  *'c.map = " + failMap + " '*) exit 1;;\n"
+	}
+	body += "  *'COUNT(*)'*) echo 0;;\nesac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestExportScriptAllWritesEveryMap: --all lists the maps with a normal spawn and writes <root>/map<N> for each, the
+// layout the plan tools read.
+func TestExportScriptAllWritesEveryMap(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeAllStubDocker(t, dir, `36\n389\n700\n`, "")
+	root := filepath.Join(dir, "world")
+	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
+	cmd.Env = scriptEnv(t, bin, nil)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("--all: %v\n%s", err, out)
+	}
+	for _, m := range []string{"36", "389", "700"} {
+		for _, f := range []string{"creatures.tsv", "groups.tsv", "movement.tsv", "gameobjects.tsv"} {
+			if _, err := os.Stat(filepath.Join(root, "map"+m, f)); err != nil {
+				t.Errorf("map %s: %v", m, err)
+			}
+		}
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 3 {
+		t.Errorf("%d entries in the root, want 3 map folders", len(entries))
+	}
+}
+
+// TestExportScriptAllStopsAtAFailingMap: a map whose queries fail stops the run with an error that names it; the maps
+// before it stay exported and the later ones are not written.
+func TestExportScriptAllStopsAtAFailingMap(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeAllStubDocker(t, dir, `36\n389\n700\n`, "389")
+	root := filepath.Join(dir, "world")
+	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
+	cmd.Env = scriptEnv(t, bin, nil)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("--all succeeded although map 389 failed")
+	}
+	if !strings.Contains(string(out), "map 389") {
+		t.Errorf("the error does not name map 389: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "map36", "creatures.tsv")); err != nil {
+		t.Errorf("map 36 before the failure is not exported: %v", err)
+	}
+	for _, m := range []string{"map389", "map700"} {
+		if _, err := os.Stat(filepath.Join(root, m)); err == nil {
+			t.Errorf("%s exists after the run stopped at 389", m)
+		}
+	}
+}
+
+// TestExportScriptAllRejectsBadArgs: --all takes exactly a root folder, and a bare map argument still has to be a number.
+func TestExportScriptAllRejectsBadArgs(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeAllStubDocker(t, dir, "", "")
+	script := filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh")
+	for _, args := range [][]string{{"--all"}, {"--all", "a", "b"}, {"x", filepath.Join(dir, "o")}} {
+		cmd := exec.Command("bash", append([]string{script}, args...)...)
+		cmd.Env = scriptEnv(t, bin, nil)
+		if err := cmd.Run(); err == nil {
+			t.Errorf("%v: accepted", args)
+		}
+	}
+	// --all with no map listed: nothing to export is an error, not an empty success.
+	cmd := exec.Command("bash", script, "--all", filepath.Join(dir, "root"))
+	cmd.Env = scriptEnv(t, bin, nil)
+	if err := cmd.Run(); err == nil {
+		t.Error("--all with no maps succeeded")
 	}
 }
