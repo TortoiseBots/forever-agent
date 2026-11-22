@@ -19,7 +19,8 @@ import (
 // The player run (forever-agent #88): the agent plays one character, party leader of the owner's four bots, and walks
 // the plan as one of the group. It is not a commander: every line it sends is a bot-commands v1 line or one of the two
 // whisper words (D-3), and it never travels by GM. P2a ran PREPARE, FORM, TRAVEL, ENTER and LEG_WALK; P2b adds the
-// pulls, the fight, the rest and the boss (play_fight.go); the deaths and the steps come in P3 and P4.
+// pulls, the fight, the rest and the boss (play_fight.go); P3 adds the deaths, the wipes and the loot (play_death.go);
+// the steps come in P4.
 //
 // The machine shares the commander's route, walker, world, clock and record. Its ports are the module (Owner), the
 // group it leads (GroupPort) and its own character (PlayerPort).
@@ -51,11 +52,6 @@ const (
 	// PlayLootMethod and PlayLootThreshold are D-9: group loot at the uncommon threshold.
 	PlayLootMethod    = party.GroupLoot
 	PlayLootThreshold = 2
-
-	// whisperRelease and whisperCorpseRun are the two whisper words of the module's chat grammar (B-6). They are the
-	// only lines of the run that are not `.bot` lines.
-	whisperRelease   = "release"
-	whisperCorpseRun = "corpse run"
 )
 
 // playMinutes is a player run's time budget by plan name (D-14): Ragefire Chasm 90 minutes, Wailing Caverns 150,
@@ -92,6 +88,10 @@ type PlayLimits struct {
 	AgentHit     time.Duration // the agent's own attack, this long after the tank got the skull
 	TankBreak    time.Duration // the skull on a non-tank member this long re-orders the tank
 	Rest         time.Duration // REST's cap
+	Rez          time.Duration // a dead character's wait for a resurrect offer, and a ghost's raise on arrival
+	Recover      time.Duration // one wipe's whole recovery, before the run ends unrecovered
+	CorpseWord   time.Duration // between the release whispers and the corpse-run ones
+	Loot         time.Duration // the loot of one fight
 }
 
 // DefaultPlayLimits is the player run's table of defaults, from the spec's round P2a.
@@ -116,6 +116,10 @@ func DefaultPlayLimits() PlayLimits {
 		AgentHit:     1500 * time.Millisecond,
 		TankBreak:    3 * time.Second,
 		Rest:         180 * time.Second,
+		Rez:          30 * time.Second,
+		Recover:      10 * time.Minute,
+		CorpseWord:   10 * time.Second,
+		Loot:         10 * time.Second,
 	}
 }
 
@@ -179,6 +183,18 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	if l.Rest == 0 {
 		l.Rest = d.Rest
 	}
+	if l.Rez == 0 {
+		l.Rez = d.Rez
+	}
+	if l.Recover == 0 {
+		l.Recover = d.Recover
+	}
+	if l.CorpseWord == 0 {
+		l.CorpseWord = d.CorpseWord
+	}
+	if l.Loot == 0 {
+		l.Loot = d.Loot
+	}
 	return l
 }
 
@@ -190,7 +206,7 @@ type PlayConfig struct {
 	Bots [4]string
 	// MaxMinutes overrides the plan's budget; 0 takes the route's (playMinutes).
 	MaxMinutes int
-	// MaxWipes is the wipe budget (D-14): 0 takes 2, a negative value is no budget. P3 reads it.
+	// MaxWipes is the wipe budget (D-14): 0 takes 2, a negative value is no budget.
 	MaxWipes int
 	// Disband disbands the group before the bots are logged out.
 	Disband bool
@@ -258,6 +274,16 @@ type playRun struct {
 	// end-of-run disband and logouts, so a failed run's cleanup does not repeat them.
 	added []string
 	left  bool
+
+	// wipes and deaths are the run's counters (D-14's budget reads the first), deathSeen the members already counted
+	// dead until they stand up again, and looted the corpses this run opened or was refused.
+	wipes     int
+	maxWipes  int
+	deaths    int
+	deathSeen map[string]bool
+	looted    map[wire.GUID]bool
+	// deadFrom is where the run goes back to once the character is up: the fight it died in.
+	deadFrom string
 }
 
 // Play runs one player run to STOP and returns what it did.
@@ -266,6 +292,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
 		farSince: map[string]time.Time{}, farStage: map[string]int{}, bosses: map[string]bool{},
 		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{},
+		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
 	if p.ports.Clock == nil {
 		p.ports.Clock = WallClock{}
@@ -359,6 +386,12 @@ func (p *playRun) state(ctx context.Context, st string) string {
 		return p.fight(ctx)
 	case StateRest:
 		return p.rest(ctx)
+	case StateLoot:
+		return p.loot(ctx)
+	case StateDeadWait:
+		return p.deadWait(ctx)
+	case StateWipe:
+		return p.wipe(ctx)
 	case StateBoss:
 		return p.boss(ctx)
 	case StateDone:
@@ -376,6 +409,8 @@ func (p *playRun) finish() {
 	}
 	p.rec.sum.Clear = p.clear
 	p.rec.sum.Bosses = p.bosses
+	p.rec.sum.Wipes = p.wipes
+	p.rec.sum.Deaths = p.deaths
 	p.rec.Finish(p.now(), p.stopReason, p.lastLegName())
 }
 
@@ -1100,7 +1135,7 @@ func (p *playRun) sendBot(v botcmd.Verb, bot string) error {
 // `.` line can reach the server from a player run.
 func (p *playRun) sendLine(line string) error {
 	switch line {
-	case whisperRelease, whisperCorpseRun:
+	case botcmd.WhisperRelease, botcmd.WhisperCorpseRun:
 		p.sent = append(p.sent, line)
 		return nil
 	}

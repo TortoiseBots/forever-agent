@@ -185,6 +185,14 @@ func (p *playRun) fight(ctx context.Context) string {
 	swinging := false
 	var calm, broke time.Time
 	adds := 0
+	// A fight resumed after the character's death has lost its selection, and the module's attack takes the requester's
+	// selected unit: the skull is selected again before either order.
+	if !p.skull.IsZero() {
+		if err := p.ports.Player.Select(p.skull); err != nil {
+			p.playerErr(err, "select")
+			return ""
+		}
+	}
 	if !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
 		return ""
 	}
@@ -204,6 +212,14 @@ func (p *playRun) fight(ctx context.Context) string {
 			}
 		}
 		units := p.ports.World.Units()
+		p.noteDeaths()
+		if p.wiped() {
+			return p.endFight(ctx, adds, units)
+		}
+		if p.ports.Player.Phase() != PhaseAlive {
+			p.deadFrom = StateFight
+			return StateDeadWait
+		}
 		live, extra := p.engaged(units)
 		adds = max(adds, extra)
 		if live == 0 && !p.pullAlive(units) {
@@ -275,15 +291,30 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	p.drainEncounters()
 	p.rec.UpdatePull(func(r *PullRecord) { r.Adds = adds })
 	p.rec.PullEnd(p.now(), 0)
+	p.noteDeaths()
+	boss := p.bossRun
+	down := p.pullDown(units)
+	p.bossRun = false
+	p.skull, p.pullSet = wire.GUID{}, p.pullSet[:0]
+	// Nobody walks on while a member is down (§3.10): the whole party is the budget's wipe, the character's own death
+	// takes the resurrect wait, and a bot's corpse alone is a regroup that costs no wipe.
+	switch {
+	case p.wiped():
+		p.pack = -1
+		return StateWipe
+	case p.ports.Player.Phase() != PhaseAlive:
+		p.deadFrom = ""
+		p.pack = -1
+		return StateDeadWait
+	case len(p.downBots()) > 0:
+		p.pack = -1
+		return StateWipe
+	}
 	for _, name := range p.cfg.Bots {
 		if _, err := p.follow(ctx, name); p.fatal(err) {
 			return ""
 		}
 	}
-	boss := p.bossRun
-	p.bossRun = false
-	down := p.pullDown(units)
-	p.skull, p.pullSet = wire.GUID{}, p.pullSet[:0]
 	if boss {
 		entry := uint32(0)
 		if leg := p.leg(); leg != nil && leg.Boss != nil {
@@ -293,13 +324,13 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 			p.stop("bosses-alive")
 			return ""
 		}
-		return StateRest
+		return StateLoot
 	}
 	if down {
 		p.pulled[p.pack] = true
 	}
 	p.pack = -1
-	return StateRest
+	return StateLoot
 }
 
 // rest sits the party down after a fight: the run goes on once every member's health and every mana user's pool are
@@ -535,6 +566,9 @@ func (p *playRun) tankGUID() wire.GUID {
 // PlayRestMana (§3.8).
 func (p *playRun) ready() bool {
 	for _, m := range p.roster() {
+		if m.Dead || m.Ghost {
+			continue // a corpse's bars say nothing about whether the party may go on
+		}
 		if m.MaxHP > 0 && m.HP*100 < m.MaxHP*PlayRestHP {
 			return false
 		}

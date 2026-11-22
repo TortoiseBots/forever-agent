@@ -21,4 +21,9 @@ type Owner interface {
 	Attack(ctx context.Context, bot string) (botcmd.Reply, error)
 	Summon(ctx context.Context, bot string) (botcmd.Reply, error)
 	Who(ctx context.Context) (botcmd.Reply, error)
+	// Whisper says one word of the module's chat grammar A (B-6) to one bot: `release` for a dead bot, `corpse run`
+	// once it is a ghost. It is the one Owner call that is not a bot-commands v1 request — a whisper is a chat word
+	// with a target, and the module answers nothing a reply could be classified from — so it reports the channel's
+	// failure only.
+	Whisper(ctx context.Context, bot, word string) error
 }

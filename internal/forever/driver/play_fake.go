@@ -25,6 +25,15 @@ type PlaySend struct {
 	Line string
 }
 
+// PlayVote is one roll the character answered while it looted a corpse: greed for every item it rolled on (D-9). The
+// vote is the port's own, as it is in the live adapter (lootTarget and voteRolls): the run's decision is which
+// corpses it opens, not how the window is filled.
+type PlayVote struct {
+	Corpse wire.GUID
+	Item   string
+	Vote   string
+}
+
 // PlayFake is the player run's GroupPort, PlayerPort, World and Walker over one virtual clock; its Module is the
 // Owner port over the same bot table.
 //
@@ -52,6 +61,12 @@ type PlayFake struct {
 	Moved map[string]bool
 	// Stuck names the bots whose follow order does not move them: the run has to summon those.
 	Stuck map[string]bool
+	// NoAnswer names the bots (by lower-cased name, like Moved) that do not answer the corpse-run whisper: they stay
+	// ghosts, and a recovery that needs them cannot finish (§3.10's wipe-unrecovered).
+	NoAnswer map[string]bool
+	// Graveyard is where a released ghost stands, on the plan's portal map: the plan's portal, 40 yd out, unless a test
+	// scripts another point.
+	Graveyard Vec3
 
 	units []Unit
 	epoch uint64
@@ -71,12 +86,22 @@ type PlayFake struct {
 	Marks     []party.MarkEntry
 	Disbanded bool
 
-	// Selected and Attacked are the agent's own selection and attack, Looted the corpses it opened.
-	Selected wire.GUID
-	Attacked wire.GUID
-	Looted   []wire.GUID
+	// Selected and Attacked are the agent's own selection and attack, Looted the corpses it opened, and LootRefused
+	// the corpses it tried and may not loot. Votes is every roll the character answered greed (§3.7, D-9).
+	Selected    wire.GUID
+	Attacked    wire.GUID
+	Looted      []wire.GUID
+	LootRefused []wire.GUID
+	Votes       []PlayVote
+	// Rolls is the items whose roll is open on a corpse, and NoLoot the corpses the character may not loot.
+	Rolls  map[wire.GUID][]string
+	NoLoot map[wire.GUID]bool
+	// Released and Rezzed are the character's own release and accept, Declined the offers it refused. Offer is the
+	// resurrect offer that is up, if any.
 	Released bool
 	Rezzed   bool
+	Declined int
+	Offer    *RezOffer
 	Used     []uint32
 	Gossips  []int
 	// TriggeredAt is when the entrance trigger was sent; TriggerFails makes it do nothing, so the agent never
@@ -125,6 +150,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 	f := &PlayFake{
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
+		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
 		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
 	}
@@ -133,9 +159,11 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 	if route.Portal != nil {
 		f.SelfPos = route.Portal.Pos
 		f.GoldenOwner.SelfMap = route.Portal.Map
+		f.Graveyard = Vec3{route.Portal.Pos[0] + 40, route.Portal.Pos[1], route.Portal.Pos[2]}
 	} else {
 		f.SelfPos = route.Entrance
 		f.GoldenOwner.SelfMap = route.Map
+		f.Graveyard = Vec3{route.Entrance[0] + 40, route.Entrance[1], route.Entrance[2]}
 	}
 	// An offline bot that logs in stands where its owner is.
 	for _, b := range owner.Bots {
@@ -407,6 +435,27 @@ func (m *PlayModule) Summon(ctx context.Context, name string) (botcmd.Reply, err
 	return rep, err
 }
 
+// Whisper says one word of the chat grammar to a bot. A bot that does not answer the corpse-run whisper (NoAnswer)
+// stays a ghost: the recovery then runs out of time.
+func (m *PlayModule) Whisper(ctx context.Context, name, word string) error {
+	norm, err := botcmd.Whisper(name, word)
+	if err != nil {
+		return err
+	}
+	m.f.act("whisper " + norm + ": " + word)
+	key := strings.ToLower(norm)
+	if m.f.NoAnswer[key] {
+		return nil
+	}
+	if err := m.GoldenOwner.Whisper(ctx, norm, word); err != nil {
+		return err
+	}
+	if word == botcmd.WhisperCorpseRun {
+		m.f.Moved[key] = true // it runs back to its owner's side
+	}
+	return nil
+}
+
 // Who is `.bot who`.
 func (m *PlayModule) Who(ctx context.Context) (botcmd.Reply, error) {
 	m.f.send(botcmd.VerbWho, "")
@@ -443,7 +492,7 @@ func (f *PlayFake) Roster() []PartyMember {
 			}
 		}
 		out = append(out, PartyMember{
-			Name: b.Name, GUID: f.botGUID(b.Name), Online: true, Dead: b.Dead,
+			Name: b.Name, GUID: f.botGUID(b.Name), Online: true, Dead: b.Dead, Ghost: b.Ghost,
 			HP: hp, MaxHP: maxHP, PowerType: p[0], Power: p[1], MaxPower: p[2],
 			Pos: f.botPos(b), Map: b.Map,
 		})
@@ -560,15 +609,59 @@ func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error { return
 // Phase is the character's state.
 func (f *PlayFake) Phase() PlayerPhase { return f.SelfPhase }
 
-// Release makes the character a ghost.
-func (f *PlayFake) Release() error { f.Released, f.SelfPhase = true, PhaseGhost; return nil }
+// Release makes the character a ghost at the graveyard on the plan's portal map.
+func (f *PlayFake) Release() error {
+	f.Released, f.SelfPhase = true, PhaseGhost
+	if p, mapID := f.portal(); p != nil {
+		f.SelfPos, f.GoldenOwner.SelfMap = f.Graveyard, mapID
+	}
+	f.act("release")
+	return nil
+}
 
-// AcceptRez brings the character back.
-func (f *PlayFake) AcceptRez() error { f.Rezzed, f.SelfPhase = true, PhaseAlive; return nil }
+// portal is the plan's portal point and map, nil when the plan has none.
+func (f *PlayFake) portal() (*Vec3, uint32) {
+	if f.Route.Portal == nil {
+		return nil, 0
+	}
+	return &f.Route.Portal.Pos, f.Route.Portal.Map
+}
 
-// Loot opens one corpse.
+// AcceptRez answers the offer that is up and brings the character back.
+func (f *PlayFake) AcceptRez() error {
+	f.Rezzed, f.SelfPhase, f.Offer = true, PhaseAlive, nil
+	f.act("accept-rez")
+	return nil
+}
+
+// RezOffer is the offer that is up.
+func (f *PlayFake) RezOffer() (RezOffer, bool) {
+	if f.Offer == nil {
+		return RezOffer{}, false
+	}
+	return *f.Offer, true
+}
+
+// DeclineRez refuses the offer that is up.
+func (f *PlayFake) DeclineRez() error {
+	f.Declined++
+	f.Offer = nil
+	f.act("decline-rez")
+	return nil
+}
+
+// Loot opens one corpse: a corpse the character may not loot answers ErrCannotLoot, and every roll open on the one it
+// opens is answered greed (D-9).
 func (f *PlayFake) Loot(ctx context.Context, guid wire.GUID) error {
+	if f.NoLoot[guid] {
+		f.LootRefused = append(f.LootRefused, guid)
+		return ErrCannotLoot
+	}
 	f.Looted = append(f.Looted, guid)
+	for _, item := range f.Rolls[guid] {
+		f.Votes = append(f.Votes, PlayVote{Corpse: guid, Item: item, Vote: "greed"})
+	}
+	f.act("loot " + guid.String())
 	return nil
 }
 
@@ -618,6 +711,10 @@ func (f *PlayFake) EnterAreaTrigger(id int32) error {
 	}
 	f.SelfPos = f.Route.Entrance
 	f.GoldenOwner.SelfMap = f.Route.Map
+	// The core resurrects a ghost whose corpse is in the instance the moment it arrives (§3.10).
+	if f.SelfPhase == PhaseGhost {
+		f.SelfPhase = PhaseAlive
+	}
 	f.epoch++
 	for _, b := range f.GoldenOwner.Bots {
 		if b.Online && b.InParty && b.Move != "stay" {
