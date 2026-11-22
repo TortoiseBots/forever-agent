@@ -1,0 +1,9 @@
+case bad-roster-count
+desc BEGIN promises 2 rows, 1 arrives: the stream is discarded
+recv system TBM:ROSTER_BEGIN|2
+recv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn Forest|-|Warrior
+recv system TBM:ROSTER_END
+expect roster.committed false
+expect roster.count 0
+expect problems.count 1
+expect problem.0 stream-count

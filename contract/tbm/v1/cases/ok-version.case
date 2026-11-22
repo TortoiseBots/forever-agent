@@ -1,0 +1,12 @@
+case ok-version
+desc the version command: one TBM line between two stock chat lines
+module yes
+send chat version
+frame chat WHISPER_SELF .bot version
+recv system TortoiseBots v0.1.0-forever
+recv system TBM:VERSION|v0.1.0-forever
+recv system TortoiseBots by Sagiroth, AGPL-3.0 or GPL-2.0+
+expect hello.version v0.1.0-forever
+expect hello.complete false
+expect ignored.count 2
+expect problems.count 0

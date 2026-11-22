@@ -1,0 +1,9 @@
+case bad-proto-too-new
+desc the module needs protocol 2 add-ons
+recv system TBM:VERSION|v0.4.0-forever
+recv system TBM:PROTO|3|2
+recv system TBM:CAPS|behavior
+recv system TBM:TRANSPORT|party
+expect hello.complete true
+expect hello.check proto-incompatible
+expect problems.count 0

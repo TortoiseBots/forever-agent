@@ -1,0 +1,10 @@
+case bad-roster-row-skipped
+desc a bad row is skipped but counts toward BEGIN, so the good rows commit
+recv system TBM:ROSTER_BEGIN|2
+recv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn Forest|-|Warrior
+recv system TBM:ROSTER|x|Bravo|5|online|1|-|-|Priest
+recv system TBM:ROSTER_END
+expect roster.committed true
+expect roster.count 1
+expect problems.count 1
+expect problem.0 bad-row

@@ -1,0 +1,7 @@
+case bad-hello-no-transport
+desc the trailer never arrived
+recv system TBM:VERSION|v0.1.0-forever
+recv system TBM:PROTO|1|1
+recv system TBM:CAPS|behavior
+expect hello.complete false
+expect hello.check hello-incomplete

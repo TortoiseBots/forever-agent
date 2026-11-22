@@ -1,0 +1,15 @@
+case ok-roster-short-rows
+desc older 7- and 6-field rows: a 7th field that is a CC mark id is the mark, else the class name
+recv system TBM:ROSTER_BEGIN|3
+recv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn Forest|Warrior
+recv system TBM:ROSTER|103|Charlie|8|online|1|Goldshire|moon
+recv system TBM:ROSTER|104|Delta|4|online|0|Stormwind City
+recv system TBM:ROSTER_END
+expect roster.count 3
+expect roster.0.class_name Warrior
+expect roster.0.cc_mark (empty)
+expect roster.1.cc_mark moon
+expect roster.1.class_name (empty)
+expect roster.2.cc_mark (empty)
+expect roster.2.class_name (empty)
+expect problems.count 0

@@ -1,0 +1,6 @@
+case ok-multiline-message
+desc one add-on message carrying several lines joined by LF; the empty part is skipped
+recv addon WHISPER TBM TBM:VERSION|v0.1.0-forever\nTBM:PROTO|1|1\n\nTBM:CAPS|behavior\nTBM:TRANSPORT|party
+expect hello.complete true
+expect hello.check ok
+expect problems.count 0
