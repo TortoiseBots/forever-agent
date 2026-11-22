@@ -1,0 +1,119 @@
+# bot-commands v1 golden cases. Each block is one request, its reply lines and the parse a v1 client must make of
+# them; ../README.md gives the format. Names are invented.
+
+# case: add-ok
+> .bot add Botone
+< TortoiseBots: add Botone: ok queued for login; it joins your party
+= verb=add bot=Botone ok=true code= text=queued for login; it joins your party
+
+# case: logout-ok
+> .bot logout Botone
+< TortoiseBots: logout Botone: ok logging it out
+= verb=logout bot=Botone ok=true code= text=logging it out
+
+# case: follow-ok
+> .bot follow Botone
+< TortoiseBots: follow Botone: ok following you
+= verb=follow bot=Botone ok=true code= text=following you
+
+# case: stay-ok
+> .bot stay Botone
+< TortoiseBots: stay Botone: ok staying where it is
+= verb=stay bot=Botone ok=true code= text=staying where it is
+
+# case: attack-ok
+> .bot attack Bottwo
+< TortoiseBots: attack Bottwo: ok attacking your selected unit
+= verb=attack bot=Bottwo ok=true code= text=attacking your selected unit
+
+# case: flee-ok
+> .bot flee Bottwo
+< TortoiseBots: flee Bottwo: ok fleeing
+= verb=flee bot=Bottwo ok=true code= text=fleeing
+
+# case: summon-ok
+> .bot summon Bottwo
+< TortoiseBots: summon Bottwo: ok moving it next to you
+= verb=summon bot=Bottwo ok=true code= text=moving it next to you
+
+# case: stats-ok
+> .bot stats Bottwo
+< TortoiseBots: stats Bottwo: ok level=13 class=Priest health=91% mana=74%
+= verb=stats bot=Bottwo ok=true code= text=level=13 class=Priest health=91% mana=74%
+
+# case: add-not-found
+> .bot add Botfour
+< TortoiseBots: add Botfour: refused not-found: no character by that name
+= verb=add bot=Botfour ok=false code=not-found text=no character by that name
+
+# case: add-already-online
+> .bot add Botone
+< TortoiseBots: add Botone: refused already-online: it is already in the world
+= verb=add bot=Botone ok=false code=already-online text=it is already in the world
+
+# case: add-too-many
+> .bot add Botfour
+< TortoiseBots: add Botfour: refused too-many: you already lead the most bots you may
+= verb=add bot=Botfour ok=false code=too-many text=you already lead the most bots you may
+
+# case: add-not-leader
+> .bot add Botone
+< TortoiseBots: add Botone: refused not-leader: you do not lead the group
+= verb=add bot=Botone ok=false code=not-leader text=you do not lead the group
+
+# case: add-not-yours
+> .bot add Botfour
+< TortoiseBots: add Botfour: refused not-yours: it is not your character
+= verb=add bot=Botfour ok=false code=not-yours text=it is not your character
+
+# case: add-players-off
+> .bot add Botone
+< TortoiseBots: add: refused players-off: player commands are off (TortoiseBots.Player.Commands = 0)
+= verb=add bot= ok=false code=players-off text=player commands are off (TortoiseBots.Player.Commands = 0)
+
+# case: attack-no-selection
+> .bot attack Bottwo
+< TortoiseBots: attack Bottwo: refused no-selection: nothing is selected
+= verb=attack bot=Bottwo ok=false code=no-selection text=nothing is selected
+
+# case: attack-target-dead
+> .bot attack Bottwo
+< TortoiseBots: attack Bottwo: refused target-dead: your selection is dead
+= verb=attack bot=Bottwo ok=false code=target-dead text=your selection is dead
+
+# case: attack-in-combat
+> .bot attack Bottwo
+< TortoiseBots: attack Bottwo: refused in-combat: it is in combat
+= verb=attack bot=Bottwo ok=false code=in-combat text=it is in combat
+
+# case: attack-queue-full
+> .bot attack Bottwo
+< TortoiseBots: attack Bottwo: refused queue-full: its order queue is full
+= verb=attack bot=Bottwo ok=false code=queue-full text=its order queue is full
+
+# case: summon-on-cooldown
+> .bot summon Bottwo
+< TortoiseBots: summon Bottwo: refused on-cooldown: the summon is on cooldown
+= verb=summon bot=Bottwo ok=false code=on-cooldown text=the summon is on cooldown
+
+# case: who-none
+> .bot who
+< TortoiseBots: who: 0 bot(s)
+= who n=0
+
+# case: who-two
+> .bot who
+< TortoiseBots: who: 2 bot(s)
+< TortoiseBots: who: Botone level 12 Warrior map 389 follow engine
+< TortoiseBots: who: Bottwo level 13 Priest map 389 stay engine
+= who n=2 row=Botone,12,Warrior,389,follow,engine row=Bottwo,13,Priest,389,stay,engine
+
+# case: unknown-verb
+> .bot flee Botone
+< TortoiseBots: flee: refused unknown-verb: no such command; try .bot help
+= verb=flee bot= ok=false code=unknown-verb text=no such command; try .bot help
+
+# case: module-absent
+> .bot add Botone
+< There is no such command
+= no-module
