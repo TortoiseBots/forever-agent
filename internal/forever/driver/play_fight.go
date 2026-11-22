@@ -179,6 +179,8 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 // has targeted a party member for the quiet window. The fight's cap stops the run.
 func (p *playRun) fight(ctx context.Context) string {
 	p.refreshSelf()
+	p.inFight = true
+	defer func() { p.inFight = false }()
 	start := p.now()
 	deadline := start.Add(p.lim.Fight)
 	agentAt := start.Add(p.lim.AgentHit)
@@ -212,6 +214,7 @@ func (p *playRun) fight(ctx context.Context) string {
 			}
 		}
 		units := p.ports.World.Units()
+		p.sample(units)
 		p.noteDeaths()
 		if p.wiped() {
 			return p.endFight(ctx, adds, units)

@@ -226,6 +226,8 @@ type PlayPorts struct {
 	World  World
 	Walker Walker
 	Clock  Clock
+	// Combat is the session's combat log, optional: the run copies its rows into its record for the spell judge.
+	Combat CombatLog
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -288,6 +290,17 @@ type playRun struct {
 	looted      map[wire.GUID]bool
 	// deadFrom is where the run goes back to once the character is up: the fight it died in.
 	deadFrom string
+
+	// The record's evidence (play_record.go): who says each bot's class and level, inFight whether a fight is on (the
+	// frames' combat flag), the frames written and the combat log's cursor and counters.
+	who               map[string]playMember
+	inFight           bool
+	frames            int
+	combatSeq         int
+	combatRows        int
+	combatLost        int
+	combatLostThrough int
+	combatFull        bool
 }
 
 // Play runs one player run to STOP and returns what it did.
@@ -417,6 +430,8 @@ func (p *playRun) finish() {
 	p.rec.sum.Bosses = p.bosses
 	p.rec.sum.Wipes = p.wipes
 	p.rec.sum.Deaths = p.deaths
+	p.drainCombat()
+	p.rec.sum.Play = p.playRecord(p.now())
 	p.rec.Finish(p.now(), p.stopReason, p.lastLegName())
 }
 
@@ -539,6 +554,9 @@ func (p *playRun) form(ctx context.Context) string {
 			p.stop("tank-too-weak")
 			return ""
 		}
+	}
+	if !p.learnParty(ctx) {
+		return ""
 	}
 	return StateTravel
 }
@@ -1214,6 +1232,9 @@ func (p *playRun) now() time.Time { return p.ports.Clock.Now() }
 func (p *playRun) sleep(ctx context.Context, d time.Duration) bool {
 	if p.stopReason != "" {
 		return false
+	}
+	if !p.inFight {
+		p.sample(nil)
 	}
 	if err := p.ports.Clock.Sleep(ctx, d); err != nil {
 		p.stop("interrupt")

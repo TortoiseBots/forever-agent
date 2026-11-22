@@ -79,6 +79,28 @@ type RunSummary struct {
 	// Watch is set for a watched run: the module's own progress and counters, plus what the watcher did (the
 	// practice rescues and the pauses it saw). A dungeon-run leaves it nil.
 	Watch *RunWatch `json:"watch,omitempty"`
+	// Play is set for a player run (forever dungeon-play): its time, its budgets, the lines it sent and the evidence
+	// the spell judge reads. Other modes leave it nil.
+	Play *PlayRecord `json:"play,omitempty"`
+}
+
+// PlayRecord is a player run's own counters (#88). Minutes is the run's length on its clock, MaxMinutes and MaxWipes
+// the budgets it ran under (MaxWipes -1 is no budget). LinesByPrefix counts every line the run's send gate admitted
+// by its first words (`.bot add`, `whisper release`), and GMLines the lines that began with a `.` and were not a
+// `.bot` line: the gate admits none, so a non-zero count is a broken gate, and the milestone fails on it.
+type PlayRecord struct {
+	Minutes       float64        `json:"minutes"`
+	MaxMinutes    int            `json:"max_minutes"`
+	MaxWipes      int            `json:"max_wipes"`
+	GMLines       int            `json:"gm_lines"`
+	LinesByPrefix map[string]int `json:"lines_by_prefix"`
+	// Frames is how many trace frames the run wrote and CombatRows how many combat-log rows reached the run's
+	// combat-log file; CombatDropped is how many rows the session's ring lost before the run read them, and
+	// CombatTruncated says the file's size bound stopped the log.
+	Frames          int  `json:"frames"`
+	CombatRows      int  `json:"combat_rows"`
+	CombatDropped   int  `json:"combat_dropped,omitempty"`
+	CombatTruncated bool `json:"combat_truncated,omitempty"`
 }
 
 // RunWatch is a watched run's record: the module's progress at the end (or at the last read), its counters, the
@@ -338,6 +360,66 @@ func (r *Recorder) Frame(t time.Time, rep *tbcmd.StateReport, units []Unit, botG
 		})
 	}
 	r.trace.Frame(f)
+}
+
+// PlayFrameBot is one bot of a player run's frame: the roster's reading of it, the slot's role and name in the trace
+// (never the character's name), the class and level `.bot who` gave, and whether the run is in a fight.
+type PlayFrameBot struct {
+	Member PartyMember
+	Name   string
+	Role   string
+	Class  string
+	Level  int
+	Combat bool
+}
+
+// PlayFrame writes one frame of a player run from the party roster and the hostile units in view. The first frame a
+// bot is in also writes its party record (guid, role, class and level), which the spell judge joins the combat log
+// on. It reports whether the writer kept the frame (it samples). A frame never carries a character name.
+func (r *Recorder) PlayFrame(t time.Time, bots []PlayFrameBot, units []Unit) bool {
+	if r == nil || r.trace == nil {
+		return false
+	}
+	ms := r.ms(t)
+	f := trace.Frame{Via: "session", Envelope: trace.Envelope{T: ms}}
+	for _, b := range bots {
+		m := b.Member
+		g := m.GUID.String()
+		if m.GUID.IsZero() {
+			g = ""
+		}
+		alive := !m.Dead && !m.Ghost
+		st := "n"
+		switch {
+		case !alive:
+			st = "d"
+		case b.Combat:
+			st = "c"
+		}
+		f.Bots = append(f.Bots, trace.Bot{
+			G: g, Alive: alive, Combat: alive && b.Combat, State: st,
+			HP: uint32(max(m.HP, 0)), MaxHP: uint32(max(m.MaxHP, 0)),
+			Power: uint32(max(m.Power, 0)), MaxPow: uint32(max(m.MaxPower, 0)), PType: uint8(max(m.PowerType, 0)),
+			X: m.Pos[0], Y: m.Pos[1], Z: m.Pos[2], Role: b.Role,
+		})
+		if g != "" {
+			r.trace.Party(ms, trace.Member{G: g, Name: b.Name, Role: b.Role, Class: b.Class, Level: b.Level})
+		}
+	}
+	for _, u := range units {
+		if u.Friendly {
+			continue
+		}
+		pct := 0
+		if u.MaxHP > 0 {
+			pct = u.HP * 100 / u.MaxHP
+		}
+		f.Mobs = append(f.Mobs, trace.Mob{
+			G: u.GUID.String(), HPPct: pct, X: u.Pos[0], Y: u.Pos[1], Z: u.Pos[2],
+			Combat: !u.Dead && !u.Target.IsZero(), Target: u.Target.String(), Cast: u.Cast, Entry: u.Entry,
+		})
+	}
+	return r.trace.Frame(f)
 }
 
 // FrameBot is one party member of a frame taken from the module's own state report: its line, the guid this

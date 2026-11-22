@@ -13,6 +13,7 @@ Run a TortoiseBots party through a dungeon with the commander.
 - [Hire the party and enter](hire-party.md) — the prepare step, the enter phase, and the kit check.
 - [Start anywhere](start-anywhere.md) — begin at any leg or pull group, and stage a start first.
 - [Watch a run leader](run-observe.md) — observe mode: the server clears, you watch.
+- [Play a dungeon as the player](play.md) — `forever dungeon-play`: the agent leads its four bots with no GM help, and the run gets a PASS or FAIL.
 - [Play in the party](run-leader.md) — leader mode: your character fights with a brain.
 - [Score one pack](pulltest.md) — the pull test: one pull group, several tries, scored.
 - [Tune a live run](live-tuning.md) — tunables files, `tune_set`, and `tune-diff`.

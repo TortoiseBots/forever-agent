@@ -43,6 +43,17 @@ type GoldenOwner struct {
 	seen    []string
 }
 
+// Rows is the rows `.bot who` lists: one per online bot, in the table's order. It makes the fake a WhoRows.
+func (o *GoldenOwner) Rows() []botcmd.WhoRow {
+	var rows []botcmd.WhoRow
+	for _, b := range o.Bots {
+		if b.Online {
+			rows = append(rows, botcmd.WhoRow{Bot: b.Name, Level: b.Level, Class: b.Class, Map: b.Map, Move: b.Move, Mode: b.Mode})
+		}
+	}
+	return rows
+}
+
 // Lines returns the lines the fake was asked, in order.
 func (o *GoldenOwner) Lines() []string { return append([]string(nil), o.seen...) }
 
