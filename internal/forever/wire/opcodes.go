@@ -104,30 +104,36 @@ const (
 	CMSGPartyInvite                    uint32 = 0x430030
 	CMSGPartyInviteResponse            uint32 = 0x430032
 	CMSGPartyUninvite                  uint32 = 0x430073
+	CMSGSetLootMethod                  uint32 = 0x430074
 	CMSGLeaveGroup                     uint32 = 0x430075
+	CMSGSetPartyLeader                 uint32 = 0x430076
+	CMSGSetAssistantLeader             uint32 = 0x43007B
+	CMSGUpdateRaidTarget               uint32 = 0x43007C
 	CMSGRequestPartyMemberStats        uint32 = 0x43007F
 
-	SMSGChat                    uint32 = 0x4A0001
-	SMSGChatPlayerAmbiguous     uint32 = 0x4A0004
-	SMSGChatRestricted          uint32 = 0x4A0007
-	SMSGChatPlayerNotFound      uint32 = 0x4A000D
-	SMSGChatServerMessage       uint32 = 0x4A001C
-	SMSGPrintNotification       uint32 = 0x45006E
-	SMSGMotd                    uint32 = 0x4A0003
-	SMSGEmote                   uint32 = 0x450273
-	SMSGTextEmote               uint32 = 0x450126
-	SMSGPartyInvite             uint32 = 0x450061
-	SMSGPartyUpdate             uint32 = 0x450097
-	SMSGPartyMemberFullState    uint32 = 0x450203
-	SMSGPartyMemberPartialState uint32 = 0x450202
-	SMSGGroupDecline            uint32 = 0x45023B
-	SMSGGroupUninvite           uint32 = 0x45023D
-	SMSGGroupDestroyed          uint32 = 0x45023E
-	SMSGGroupNewLeader          uint32 = 0x4500D6
-	SMSGPartyCommandResult      uint32 = 0x450240
-	SMSGReadyCheckStarted       uint32 = 0x450099
-	SMSGReadyCheckResponse      uint32 = 0x45009A
-	SMSGReadyCheckCompleted     uint32 = 0x45009B
+	SMSGChat                       uint32 = 0x4A0001
+	SMSGChatPlayerAmbiguous        uint32 = 0x4A0004
+	SMSGChatRestricted             uint32 = 0x4A0007
+	SMSGChatPlayerNotFound         uint32 = 0x4A000D
+	SMSGChatServerMessage          uint32 = 0x4A001C
+	SMSGPrintNotification          uint32 = 0x45006E
+	SMSGMotd                       uint32 = 0x4A0003
+	SMSGEmote                      uint32 = 0x450273
+	SMSGTextEmote                  uint32 = 0x450126
+	SMSGPartyInvite                uint32 = 0x450061
+	SMSGPartyUpdate                uint32 = 0x450097
+	SMSGPartyMemberFullState       uint32 = 0x450203
+	SMSGPartyMemberPartialState    uint32 = 0x450202
+	SMSGGroupDecline               uint32 = 0x45023B
+	SMSGGroupUninvite              uint32 = 0x45023D
+	SMSGGroupDestroyed             uint32 = 0x45023E
+	SMSGGroupNewLeader             uint32 = 0x4500D6
+	SMSGSendRaidTargetUpdateAll    uint32 = 0x4500D7
+	SMSGSendRaidTargetUpdateSingle uint32 = 0x4500D8
+	SMSGPartyCommandResult         uint32 = 0x450240
+	SMSGReadyCheckStarted          uint32 = 0x450099
+	SMSGReadyCheckResponse         uint32 = 0x45009A
+	SMSGReadyCheckCompleted        uint32 = 0x45009B
 
 	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
 	SMSGUpdateObject       uint32 = 0x5C0000
@@ -437,7 +443,11 @@ var clientNames = map[uint32]string{
 	CMSGPartyInvite:                    "CMSG_PARTY_INVITE",
 	CMSGPartyInviteResponse:            "CMSG_PARTY_INVITE_RESPONSE",
 	CMSGPartyUninvite:                  "CMSG_PARTY_UNINVITE",
+	CMSGSetLootMethod:                  "CMSG_SET_LOOT_METHOD",
 	CMSGLeaveGroup:                     "CMSG_LEAVE_GROUP",
+	CMSGSetPartyLeader:                 "CMSG_SET_PARTY_LEADER",
+	CMSGSetAssistantLeader:             "CMSG_SET_ASSISTANT_LEADER",
+	CMSGUpdateRaidTarget:               "CMSG_UPDATE_RAID_TARGET",
 	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",
 	CMSGSetSelection:                   "CMSG_SET_SELECTION",
 	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",

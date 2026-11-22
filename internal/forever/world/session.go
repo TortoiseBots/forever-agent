@@ -2211,6 +2211,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGPartyInvite, wire.SMSGPartyUpdate, wire.SMSGPartyMemberFullState,
 		wire.SMSGPartyMemberPartialState, wire.SMSGGroupDecline, wire.SMSGGroupUninvite,
 		wire.SMSGGroupDestroyed, wire.SMSGGroupNewLeader, wire.SMSGPartyCommandResult,
+		wire.SMSGSendRaidTargetUpdateSingle, wire.SMSGSendRaidTargetUpdateAll,
 		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		return s.handleParty(p)
 	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
