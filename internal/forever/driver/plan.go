@@ -107,6 +107,9 @@ type Leg struct {
 	Start     Vec3 // where a wiped party comes back to: the previous leg's end, or the entrance
 	Groups    []Group
 	Boss      *Boss
+	// Steps are the leg's scripted steps in plan order (P4): they run once the leg's packs are down and before its
+	// boss, as the module's own stepper orders them.
+	Steps []Step
 	// Skip lists entries the leg never pulls or waits for.
 	Skip map[uint32]bool
 }
@@ -191,9 +194,10 @@ func NewWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modeWat
 // NewPlayRoute is NewRoute for the player run: the party is the owner's four bots and this character, and the run
 // walks the plan's legs and pulls its packs itself (P2b). It accepts the in-fight fields the run uses (a kill order,
 // the tank preflight) and loads the crowd-control lists and the bosses' fight tactics without acting on them, noting
-// them in Route.Notes (D-8: no player order for either exists in v1). It still refuses what it cannot run: a scripted
-// step (until P4), a hold, an ambush, a stand pull, a leg or pack the map data cannot walk, an optional leg, an
-// after-boss step, a raid plan and a one-team plan. The time budget comes from the plan's name (playMinutes).
+// them in Route.Notes (D-8: no player order for either exists in v1). P4 reads a leg's four step kinds (use_object,
+// gossip, loot_object and wait_for); the step kinds a player run cannot do are refused by their plan path. It still
+// refuses what it cannot run: a hold, an ambush, a stand pull, a leg or pack the map data cannot walk, an optional leg,
+// an after-boss step, a raid plan and a one-team plan. The time budget comes from the plan's name (playMinutes).
 func NewPlayRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modePlay) }
 
 // routeMode says who runs the fight: this client (modeRun), the server module's own bot (modeWatch) or the player
@@ -281,6 +285,8 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 		r.MaxMinutes = playMinutes(p.Name)
 	}
 	hasTactics := false
+	// gossipBy says a plan's gossip step names a bot to talk: a player run talks itself and notes it once.
+	gossipBy := false
 	nextID := 0
 	for i, pl := range p.Legs {
 		where := fmt.Sprintf("legs[%d]", i)
@@ -291,7 +297,21 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 			l.Start = vec(p.Legs[i-1].To)
 		}
 		if len(pl.Steps) > 0 {
-			refuse(where, "steps", "a step is not run by this round")
+			if mode != modePlay {
+				refuse(where, "steps", "a step is not run by this round")
+			} else {
+				for j, s := range pl.Steps {
+					st, errs := playStep(fmt.Sprintf("%s.steps[%d]", where, j), s)
+					refusals = append(refusals, errs...)
+					if len(errs) > 0 {
+						continue
+					}
+					l.Steps = append(l.Steps, st)
+					if g := st.Gossip; g != nil && g.By != "" && g.By != dungeon.GossipByAgent {
+						gossipBy = true
+					}
+				}
+			}
 		}
 		if len(pl.AfterBoss) > 0 {
 			refuse(where, "after_boss", "a step after the boss is not run by this round")
@@ -441,6 +461,9 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	}
 	if hasTactics {
 		r.Notes = append(r.Notes, playTacticsNote)
+	}
+	if gossipBy {
+		r.Notes = append(r.Notes, playGossipByNote)
 	}
 	if err := errors.Join(refusals...); err != nil {
 		return nil, err

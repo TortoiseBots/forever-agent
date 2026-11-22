@@ -20,7 +20,7 @@ import (
 // the plan as one of the group. It is not a commander: every line it sends is a bot-commands v1 line or one of the two
 // whisper words (D-3), and it never travels by GM. P2a ran PREPARE, FORM, TRAVEL, ENTER and LEG_WALK; P2b adds the
 // pulls, the fight, the rest and the boss (play_fight.go); P3 adds the deaths, the wipes and the loot (play_death.go);
-// the steps come in P4.
+// P4 the plan's four step kinds between a leg's packs and its boss (play_steps.go).
 //
 // The machine shares the commander's route, walker, world, clock and record. Its ports are the module (Owner), the
 // group it leads (GroupPort) and its own character (PlayerPort).
@@ -252,6 +252,8 @@ type playRun struct {
 	legIdx int
 	// walkAt is the leg-walk's next waypoint: a pack in the way is fought first, and the walk resumes where it stopped.
 	walkAt int
+	// stepIdx is the leg's next step (P4): a step a pack interrupted is begun again after the fight.
+	stepIdx int
 	// pack is the group being pulled or fought (-1 between pulls); bossRun says the pull is the leg's boss.
 	pack    int
 	bossRun bool
@@ -390,6 +392,8 @@ func (p *playRun) state(ctx context.Context, st string) string {
 		return p.rest(ctx)
 	case StateLoot:
 		return p.loot(ctx)
+	case StateSteps:
+		return p.steps(ctx)
 	case StateDeadWait:
 		return p.deadWait(ctx)
 	case StateWipe:
@@ -686,9 +690,9 @@ func (p *playRun) waitMap(ctx context.Context, mapID uint32, limit time.Duration
 	}
 }
 
-// legWalk walks one leg's via points and its end in segments, fights what is left of its packs, pulls its boss and moves
-// on; after the last leg the run is done. A pack in the way stops the walk (the pull comes first) and the walk resumes
-// at the same waypoint when the fight is over.
+// legWalk walks one leg's via points and its end in segments, fights what is left of its packs, runs the leg's steps
+// (P4) and pulls its boss, then moves on; after the last leg the run is done. A pack in the way stops the walk (the
+// pull comes first) and the walk resumes at the same waypoint when the fight is over.
 func (p *playRun) legWalk(ctx context.Context) string {
 	leg := p.leg()
 	if leg == nil {
@@ -717,11 +721,15 @@ func (p *playRun) legWalk(ctx context.Context) string {
 		p.pack = g
 		return StatePull
 	}
+	if p.stepIdx < len(leg.Steps) {
+		return StateSteps
+	}
 	if leg.Boss != nil && !p.bossDone(leg.Boss.Entry) {
 		return StateBoss
 	}
 	p.legIdx++
 	p.walkAt = 0
+	p.stepIdx = 0
 	if p.legIdx >= len(p.route.Legs) {
 		return StateDone
 	}
