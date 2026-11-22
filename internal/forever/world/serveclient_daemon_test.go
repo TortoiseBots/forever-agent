@@ -418,12 +418,13 @@ func TestServeClientMethodPin(t *testing.T) {
 		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select",
 		"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log",
 		"taxi",
-		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll"} {
+		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll",
+		"trainer_list", "train"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}
 	}
-	for _, m := range []string{"trainer_list"} {
+	for _, m := range []string{"trade"} {
 		if !slices.Contains(notPorted, m) {
 			t.Errorf("%s is no longer not-ported: drop its note and test it for real", m)
 		}
