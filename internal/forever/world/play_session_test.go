@@ -555,7 +555,7 @@ func TestPlaySessionLootUsesLootTarget(t *testing.T) {
 		sc.serverEvent(wire.SMSGLootResponse, fakeLootWindow(corpse, lootGUID, 2, 0, nil))
 	}
 	sc.on[wire.CMSGLootRelease] = func([]byte) {
-		sc.serverEvent(wire.SMSGLootRelease, fakeRelease(lootGUID, corpse))
+		sc.serverEvent(wire.SMSGLootRelease, fakeRelease(corpse, corpse))
 	}
 	p := newPlayPlayer(context.Background(), s)
 	if err := p.Loot(context.Background(), corpse); err != nil {
