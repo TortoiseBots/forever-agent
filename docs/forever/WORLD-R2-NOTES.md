@@ -78,9 +78,14 @@ never a second model; it holds two small things:
 What is decoded of `ActivePlayerData::WriteUpdate` (the fourteen-block Classic changes mask,
 UpdateFields.cpp:1374-1399): the InvSlots run (UpdateFields.cpp:7195-7203), `Coinage` (classic bit 58, group 32)
 and `AccountBankCoinage` (bit 59), which a purchase, sale, loot or quest reward sends in the same update as the
-slots (values written before TransmogMetadata and InvSlots, UpdateFields.cpp:6751-6755, 7150-7203), and the
-fixed `TransmogMetadata` block a main-hand or off-hand swap stamps (Player.cpp:12847-12852, UpdateFields.cpp:5377-5386).
-Any other set field means the walk cannot find the slot values, and such an update is **never silent**: when it also
+slots (values written before TransmogMetadata and InvSlots, UpdateFields.cpp:6751-6755, 7150-7203), the
+fixed `TransmogMetadata` block a main-hand or off-hand swap stamps (Player.cpp:12847-12852, UpdateFields.cpp:5377-5386),
+and the three fields a purchase's own update names next to the slot and the money, which are **stepped over**:
+Transmog (classic bit 18, a dynamic field of u32 appearance ids whose change mask is written in the second bit run),
+LocalFlags (101) and TransportServerTime (145, or 146 from build 70425); a present group 134 also writes the four
+optional-field presence bits and their flush before the slots (UpdateFields.cpp:7153-7163). The structure's **group
+bits** are recognized as such and never counted as fields the walk does not know. Any other set field means the walk
+cannot find the slot values, and such an update is **never silent**: when it also
 names inventory slots the block says so (`Info.InvSlotsUndecoded`), the session counts `inventory_stale` in the
 report, logs the first one and the tracker marks the inventory **stale** (`inv` prints a `STALE` line, `destroy`
 and `split` refuse by slot, and the server `inv` method carries `stale`). Stale clears on the next own create (a
@@ -159,9 +164,11 @@ releases a loot window it opened (`CMSG_LOOT_RELEASE`; the release is sent, its 
   `CANT_EQUIP_LEVEL_I`, which a reader that stops at the base layout leaves behind. Trailing and truncated bodies
   are refused, and the result names are pinned.
 * `objects/activeplayer_update_test.go`: the InvSlots region against masks written by hand; Coinage (and
-  AccountBankCoinage) next to the slots decode for both; an update with another field set decodes nothing and
-  reports that slots were lost; a block with PlayerData and ActivePlayerData reports the second as skipped; the
-  70291 layout and an unknown build; the bag slots a ContainerData update names.
+  AccountBankCoinage) next to the slots decode for both; a purchase's own update (Transmog, LocalFlags and
+  TransportServerTime next to the slot and the money, the live mask of 2026-11-22) decodes to the slot and the
+  money; an update with another field set decodes nothing and reports that slots were lost; a block with PlayerData
+  and ActivePlayerData reports the second as skipped; the 70291 layout and an unknown build; the bag slots a
+  ContainerData update names.
 * `items/tracker_test.go`: a move bridges (snapshot, guess, unknown) and the server's slots confirm it, a refusal is
   matched by item GUID, a partial slot update keeps unrelated placements, placements expire and the cap is an error,
   a bag-to-bag store shows the new slot only, undecoded updates mark the inventory stale, the move list is bounded.

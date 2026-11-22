@@ -61,7 +61,11 @@ flag package reads the turtle pass's `--live <server>` / `--slot N`. The pass re
    trinity syntax/unknown-command refusals); a refusal stops the phase with the server's own words;
 3. per stop group (`planscout.LiveStops(planscout.LiveSpots(...))`): `.go xyz X Y Z MAP`, a status wait for that map
    and within 10 yd, then `units {within:40}`; every unit is converted to `world.Unit` and each spot of the group gets
-   its own copy of the slice; the report notes `live stops: N of M read`;
+   its own copy of the slice; the report notes `live stops: N of M read`. The serve confirms the line by the server's
+   own teleport of this character, not by the position (a stand to the spot the character already stands on matched
+   before the server answered, the next line then overtook the ack and the core dropped it in silence); a line the
+   serve did not confirm is sent once more after `scoutTeleportSettle`, at most `scoutTeleportAttempts` times, and
+   the pass stops on the last answer (see [LIVE-PROOFS-FIX2-NOTES.md](LIVE-PROOFS-FIX2-NOTES.md));
 4. per primary hop: `.go xyz` to the hop's own origin row (`hop.From`) first, because the server plans from the
    session's position; then `path_to` (recorded as `live_path`), and for the risky hops (`climb_anchor`, `water`,
    `arrival`, `drop`, a live path that is not ok: the turtle walk list) a `walk_path` whose context deadline is the
