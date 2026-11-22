@@ -538,6 +538,16 @@ func TestServePetModeOffBarAndRPC(t *testing.T) {
 	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "cast", SpellID: 172}); err == nil || !strings.Contains(err.Error(), "bar has not arrived") {
 		t.Fatalf("no-bar refusal: %v", err)
 	}
+	// Every order needs the bar, not only cast (spec P2: "bar not known").
+	for _, act := range []string{"follow", "stay", "attack", "passive", "aggressive"} {
+		before := p.sentCount(wire.CMSGPetAction)
+		if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: act, Target: GUID(petTestPet2)}); err == nil || !strings.Contains(err.Error(), "bar has not arrived") {
+			t.Fatalf("no-bar refusal for %s: %v", act, err)
+		}
+		if n := p.sentCount(wire.CMSGPetAction); n != before {
+			t.Fatalf("%s without a bar sent %d packet(s)", act, n-before)
+		}
+	}
 
 	var bar [pet.BarSlots]uint32
 	bar[3] = pet.Button(172, pet.ActEnabled)

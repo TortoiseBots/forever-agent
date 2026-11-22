@@ -64,7 +64,7 @@ Mutations run by hand, one at a time, each caught by a named test:
 
 - No live run yet: L1 is the round that puts a hunter's pet through `pet`, `pet_action` and `units owner=` on a real
   realm.
-- No recording has the agent's own pet bar yet (the lead's set-8 request lists what to capture). The bar, its
+- No recording has the agent's own pet bar yet (a capture of one is wanted). The bar, its
   button order and the orders' bytes are the core's writers (`PetPackets.cpp:23-66`, `:140-148`, `:173-178`), not a
   capture.
 - The orders are applied to the session's copy because the core sends nothing back for a successful order

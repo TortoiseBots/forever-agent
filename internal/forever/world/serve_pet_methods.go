@@ -47,6 +47,9 @@ func (s *session) servePetAction(_ context.Context, p servePetActionParams) (Ser
 	if s.mountDisplay() != 0 {
 		return ServePet{}, errors.New("pet_action: the server drops pet orders while mounted")
 	}
+	if !info.Bar {
+		return ServePet{}, errors.New("pet_action: the pet's bar has not arrived")
+	}
 	action := strings.ToLower(strings.TrimSpace(p.Action))
 	petGUID := wire.GUID(info.GUID)
 	w := s.petState()
