@@ -344,7 +344,7 @@ func TestListenLoopbackOnly(t *testing.T) {
 }
 
 func TestListenRefusals(t *testing.T) {
-	for _, addr := range []string{"192.168.1.10:0", "example.com:0", "[::]:0", "127.0.0.1", "127.0.0.1:99999"} {
+	for _, addr := range []string{"203.0.113.10:0", "example.com:0", "[::]:0", "127.0.0.1", "127.0.0.1:99999"} {
 		if ln, err := Listen(context.Background(), addr); err == nil {
 			ln.Close()
 			t.Errorf("Listen(%q) accepted", addr)

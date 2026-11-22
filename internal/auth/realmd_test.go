@@ -184,7 +184,7 @@ func TestLogonChallengeLayout(t *testing.T) {
 
 func TestParseRealmListAndPick(t *testing.T) {
 	list := packet.NewWriter().U32(0).U8(2).
-		U32(1).U8(realmFlagOffline).CString("Old").CString("10.0.0.1:8085").F32(0).U8(0).U8(1).U8(0).
+		U32(1).U8(realmFlagOffline).CString("Old").CString("192.0.2.1:8085").F32(0).U8(0).U8(1).U8(0).
 		U32(1).U8(0).CString("Tortoise").CString("192.0.2.10:8090").F32(1).U8(3).U8(1).U8(0).
 		U16(2)
 	realms, err := ParseRealmList(list.Bytes())

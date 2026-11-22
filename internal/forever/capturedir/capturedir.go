@@ -138,14 +138,20 @@ type manifestEntry struct {
 }
 
 // The bounds a manifest reader accepts. They are the writer's (internal/forever/world/capture_run.go): one run writes
-// at most 8192 packets and 32 MiB of payload, each payload at most a frame's 65535 bytes, and a manifest line is a
-// short name plus two numbers. A hostile file is refused before its content reaches an error message or an int64
-// total; the writer's per-run line count also keeps the sum far inside int64.
+// at most 8192 packets and 32 MiB of payload, and a manifest line is a short name plus two numbers. A hostile file is
+// refused before its content reaches an error message or an int64 total; the writer's per-run line count also keeps
+// the sum far inside int64.
+//
+// The per-packet bound is the largest payload the frame reader hands to a session, not a 16-bit length: the world
+// socket's header carries a uint32 Size (wire.Header, 16 bytes: uint32 and the GCM tag), the reader refuses a frame
+// over wire.MaxFrame, and a compressed packet may decompress to wire.MaxUncompressed (16 MiB). A real hotfix list is
+// about 240 KB, so a 65535 bound rejected every live capture. The writer's own 32 MiB run cap is above this bound, so
+// no file one run writes is refused here.
 const (
 	maxManifestBytes   = 4 << 20
 	maxManifestEntries = 8192
 	maxManifestLine    = 4096
-	maxPacketBytes     = 65535
+	maxPacketBytes     = wire.MaxUncompressed
 )
 
 // readManifest parses a run's manifest. The file must be a regular file (a symlink, FIFO or device is refused) and

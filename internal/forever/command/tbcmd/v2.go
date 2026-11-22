@@ -7,9 +7,11 @@ package tbcmd
 //   - A report starts with <command>-begin #token and ends with <command>-end count=<lines> records=<records>
 //     ... #token. count counts the lines between the two markers, continuation lines included; records counts the
 //     lines that are not continuations. Only an error is a single-line reply and has no markers.
-//   - A key is [a-z][a-z0-9_]{0,23} and appears at most once per line, and at most once in a record (its base line
-//     plus its continuation lines). A continuation line is <kind>+ and repeats the record's identity key as its
-//     first key, immediately after its base line.
+//   - A key is [A-Za-z][A-Za-z0-9_]{0,23} and appears at most once per line, and at most once in a record (its base
+//     line plus its continuation lines). Case is kept as it arrives: the module writes a camel-case key (`onTaxi` on
+//     a state line), and a key the typed layer does not know is left for the caller's Extra map, never refused for
+//     its case. A continuation line is <kind>+ and repeats the record's identity key as its first key, immediately
+//     after its base line.
 //   - A value is percent-encoded: every byte outside [A-Za-z0-9._-] is %XX with upper-case hex; a '%' is always
 //     an escape. Inside a value, ';' separates list items, ':' separates the parts of one item and ',' separates
 //     coordinates; those three never come from encoding data.
@@ -257,12 +259,14 @@ func (r record) bad(key string, err error) error {
 // ---- line and report decoding ----
 
 func validKey(k string) bool {
-	if len(k) == 0 || len(k) > 24 || k[0] < 'a' || k[0] > 'z' {
+	if len(k) == 0 || len(k) > 24 {
 		return false
 	}
-	for i := 1; i < len(k); i++ {
+	for i := range len(k) {
+		c := k[i]
 		switch {
-		case k[i] >= 'a' && k[i] <= 'z', k[i] >= '0' && k[i] <= '9', k[i] == '_':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '_'):
 		default:
 			return false
 		}

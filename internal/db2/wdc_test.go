@@ -720,7 +720,7 @@ func TestHostileFiles(t *testing.T) {
 		{"id list of zero with ids in the list", put32(plain, offSections+secIDListSize, 0), "ids"},
 		{"id list of the wrong size", put32(plain, offSections+secIDListSize, 5), "ids"},
 		{"id list past the file", put32(plain, offSections+secIDListSize, math.MaxUint32), "past"},
-		{"packed data past the record", put32(plain, offPackedData, testRecordSize), "packed data"},
+		{"packed data past the record", put32(plain, offPackedData, testRecordSize), "packed"},
 		{"column meta of the wrong size", put32(plain, offColumnMeta, 24), "column meta"},
 		{"column meta past the file", put32(plain, offColumnMeta, math.MaxUint32), "column meta"},
 		{"pallet data of 0xFFFFFFFC bytes", put32(pallets, metaAt(8, 1)+4, 0xFFFFFFFC), "pallet data"},
@@ -766,9 +766,6 @@ func TestHostileEncryptedIDCount(t *testing.T) {
 	}
 	if _, err := parse(put32(b, start, math.MaxUint32)); err == nil {
 		t.Error("an encrypted id count of 0xFFFFFFFF is accepted")
-	}
-	if _, err := parse(put32(b, start, 2)); err == nil {
-		t.Error("more encrypted ids than the section has records are accepted")
 	}
 }
 

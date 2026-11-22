@@ -65,7 +65,10 @@ block, but the parser walks both because a later round's DB or a chest's item ca
 The other window packets:
 
 * `SMSG_LOOT_REMOVED` (`LootPackets.cpp:104-111`): owner, loot, `uint8` list id.
-* `SMSG_LOOT_RELEASE` (`LootPackets.cpp:147-153`): loot, player.
+* `SMSG_LOOT_RELEASE` (`LootPackets.cpp:147-153`): the window's **owner** (the creature or game object:
+  `DoLootRelease` passes `loot->GetOwnerGUID()`, `Player::SendLootRelease` puts it in `LootObj`) and the player. The
+  LootObject the window's own `Loot` field carries is never in this packet, so the release is matched on the owner
+  (the money-only live take failed at that match until this fix).
 * `SMSG_LOOT_RELEASE_ALL`: no payload (`LootPackets.h:159-164`); the server closes every window at once.
 * `SMSG_COIN_REMOVED` (`LootPackets.cpp:133-138`): the loot GUID; sent to every player looting when the money goes.
 * `SMSG_LOOT_MONEY_NOTIFY` (`LootPackets.cpp:123-131`): `uint64` money, `uint64` modifier, one `SoleLooter` bit.

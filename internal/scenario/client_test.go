@@ -70,7 +70,7 @@ func TestHTTPCallerSendsTheTokenAndHidesIt(t *testing.T) {
 	}
 
 	// A non-loopback address fails before any dial.
-	c4 := &HTTPCaller{Addr: "10.0.0.5:8774", TokenFile: tokPath, HTTP: srv.Client()}
+	c4 := &HTTPCaller{Addr: "192.0.2.5:8774", TokenFile: tokPath, HTTP: srv.Client()}
 	if _, err := c4.Call(t.Context(), "party", map[string]any{}, time.Second); err == nil ||
 		!strings.Contains(err.Error(), "not a loopback address") {
 		t.Fatalf("got %v", err)

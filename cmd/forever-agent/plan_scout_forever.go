@@ -605,11 +605,30 @@ func foreverGM(ctx context.Context, c scoutForeverClient, line string, planMap u
 	return nil
 }
 
-// foreverStandAt teleports the GM to a point with `.go xyz` and waits for the status to show it on that map.
+// scoutTeleportUnconfirmed reports the serve's own "not confirmed" answer to a `.go xyz`: the line went out and the
+// server sent no refusal, but the landing did not show within the serve's own budget (a slow landing, a map change
+// still loading). A live pass met exactly that and aborted at the second stand although the teleport arrived right
+// after; the scout's own status read below is what decides, so this answer is not a failure here.
+func scoutTeleportUnconfirmed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "the teleport is not confirmed")
+}
+
+// foreverStandAt teleports the GM to a point with `.go xyz` and waits for the status to show it on that map: the
+// arrival, never the packet, is the confirmation.
 func foreverStandAt(ctx context.Context, c scoutForeverClient, p dungeon.Point, planMap uint32) error {
 	line := fmt.Sprintf(".go xyz %s %s %s %d", foreverNum(p.X), foreverNum(p.Y), foreverNum(p.Z), planMap)
-	if err := foreverGM(ctx, c, line, planMap); err != nil {
-		return err
+	canon, ok := scoutCanonicalGM(line, planMap, 0)
+	if !ok {
+		return fmt.Errorf("%q is not on the scout's allow-list in its canonical form", line)
+	}
+	cmd, gmErr := c.GM(ctx, canon)
+	if gmErr != nil && !scoutTeleportUnconfirmed(gmErr) {
+		return fmt.Errorf("%s: %v", canon, gmErr)
+	}
+	if gmErr == nil {
+		if ref := scoutGMRefusal(canon, cmd); ref != "" {
+			return fmt.Errorf("%s: the server refused: %s", canon, ref)
+		}
 	}
 	deadline := time.Now().Add(scoutTeleportWait)
 	for {

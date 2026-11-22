@@ -45,7 +45,7 @@ func TestParseAcceptsACaptureAndASave(t *testing.T) {
 // TestParseRejectsANonLoopbackSession pins that a token must never leave the
 // machine: only loopback RPC addresses parse.
 func TestParseRejectsANonLoopbackSession(t *testing.T) {
-	for _, addr := range []string{"10.0.0.5:8774", "example.com:1", "127.0.0.1:80@evil.example", "127.0.0.1:abc", "127.0.0.1:0", "127.0.0.1:99999", "127.0.0.1", "[::1]:80@evil.example"} {
+	for _, addr := range []string{"192.0.2.5:8774", "example.com:1", "127.0.0.1:80@evil.example", "127.0.0.1:abc", "127.0.0.1:0", "127.0.0.1:99999", "127.0.0.1", "[::1]:80@evil.example"} {
 		data := `{"scenario":"x","sessions":{"A":{"rpc":"` + addr + `"}},"steps":[{"do":"mark"}]}`
 		_, err := Parse([]byte(data), nil)
 		if err == nil || !strings.Contains(err.Error(), "is not a loopback address") {

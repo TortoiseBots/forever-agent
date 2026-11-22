@@ -17,9 +17,9 @@ import (
 // The --edit-trust-local path (trust.go): who is let save without a token, and that the token is never sent out.
 
 const (
-	trustSelf  = "100.86.248.75" // the dashboard's own tailnet address (the --listen address)
-	trustPeer  = "100.101.102.103"
-	trustOther = "100.99.99.99" // a tailnet device that is not named
+	trustSelf  = "100.64.0.10" // the dashboard's own tailnet address (the --listen address)
+	trustPeer  = "100.64.0.13"
+	trustOther = "100.64.0.12" // a tailnet device that is not named
 )
 
 type trustRig struct {
@@ -34,10 +34,10 @@ func newTrustRig(t *testing.T, on bool) *trustRig {
 	t.Helper()
 	r := newEditRig(t, nil)
 	if on {
-		peers, _ := TrustPeers([]string{trustSelf, trustPeer, "laptop.tail1234.ts.net", "192.168.1.5", "127.0.0.1"})
+		peers, _ := TrustPeers([]string{trustSelf, trustPeer, "laptop.example.test", "203.0.113.5", "127.0.0.1"})
 		must(t, r.ed.EnableTrustLocal("owner", peers))
 	}
-	allow := []string{trustSelf, trustPeer, trustOther, "laptop.tail1234.ts.net", "192.168.1.5", "203.0.113.9"}
+	allow := []string{trustSelf, trustPeer, trustOther, "laptop.example.test", "203.0.113.5", "203.0.113.9"}
 	tr := &trustRig{editRig: r, uid: uint32(os.Getuid()), found: true}
 	if on {
 		r.ed.trust.owner = func(netip.AddrPort) (uint32, bool) { return tr.uid, tr.found }
@@ -111,10 +111,10 @@ func TestTrustLocalRejectsEveryoneElse(t *testing.T) {
 	before := tree(t, tr.edits)
 	for name, remote := range map[string]string{
 		"a tailnet device that is not named": trustOther + ":50000",
-		"a LAN address in the list":          "192.168.1.5:50000",
+		"a LAN address in the list":          "203.0.113.5:50000",
 		"a public address in the list":       "203.0.113.9:50000",
 		"an address nobody named":            "198.51.100.7:50000",
-		"a name in the list is no caller":    "10.0.0.1:50000",
+		"a name in the list is no caller":    "192.0.2.1:50000",
 		"no port":                            "garbage",
 	} {
 		rec := tr.as(http.MethodPost, "/api/edit/edit1", remote, trustSelf+":8790", nil)
@@ -124,7 +124,7 @@ func TestTrustLocalRejectsEveryoneElse(t *testing.T) {
 	}
 	// a named peer that reaches the dashboard other than over Tailscale (a LAN or public address of the machine, or no recorded local address) is
 	// not a Tailscale peer
-	for name, host := range map[string]string{"a LAN address": "192.168.1.5:8790", "a public address": "203.0.113.9:8790"} {
+	for name, host := range map[string]string{"a LAN address": "203.0.113.5:8790", "a public address": "203.0.113.9:8790"} {
 		if rec := tr.as(http.MethodPost, "/api/edit/edit1", trustPeer+":50000", host, nil); rec.Code != http.StatusUnauthorized {
 			t.Errorf("peer reaching %s: %d %s", name, rec.Code, rec.Body)
 		}
@@ -237,7 +237,7 @@ func TestParseProcAddr(t *testing.T) {
 // The page it serves is then same-origin with a socket of the owner's user: Host, Origin and Sec-Fetch-Site all agree. A name never makes a caller
 // local, so none of these is trusted.
 func TestTrustLocalIgnoresAHostNameOnThisMachine(t *testing.T) {
-	const rebind = "laptop.tail1234.ts.net:8790" // allowed by name, as the owner may have listed it
+	const rebind = "laptop.example.test:8790" // allowed by name, as the owner may have listed it
 	same := map[string]string{"Origin": "http://" + rebind, "Sec-Fetch-Site": "same-origin"}
 	for name, c := range map[string]struct{ remote, local string }{
 		"rebound to loopback":                  {"127.0.0.1:50000", "127.0.0.1"},
@@ -259,7 +259,7 @@ func TestTrustLocalIgnoresAHostNameOnThisMachine(t *testing.T) {
 	}
 	// a literal address that is not this connection's own address is no better
 	tr := newTrustRig(t, true)
-	if rec := tr.asOn(http.MethodPost, "/api/edit/edit1", "127.0.0.1:50000", "192.168.1.5:8790", "127.0.0.1", nil); rec.Code != http.StatusUnauthorized {
+	if rec := tr.asOn(http.MethodPost, "/api/edit/edit1", "127.0.0.1:50000", "203.0.113.5:8790", "127.0.0.1", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("a literal LAN Host on a loopback connection: %d", rec.Code)
 	}
 }
@@ -267,7 +267,7 @@ func TestTrustLocalIgnoresAHostNameOnThisMachine(t *testing.T) {
 // The remote branch is by the peer's Tailscale address and works for a Host that is a name (the owner opens the page by its Tailscale name).
 func TestTrustLocalAPeerByTheTailscaleName(t *testing.T) {
 	tr := newTrustRig(t, true)
-	const host = "laptop.tail1234.ts.net:8790"
+	const host = "laptop.example.test:8790"
 	st := tr.asOn(http.MethodGet, "/api/edit/status", trustPeer+":50000", host, trustSelf, nil)
 	var got struct {
 		Trusted bool   `json:"local_trusted"`
@@ -445,13 +445,13 @@ func TestEnableTrustLocalNeedsTheLabelAndTailnetPeers(t *testing.T) {
 	if err := r.ed.EnableTrustLocal("nobody", nil); err == nil {
 		t.Error("an unknown label")
 	}
-	if err := r.ed.EnableTrustLocal("owner", []netip.Addr{netip.MustParseAddr("192.168.1.5")}); err == nil {
+	if err := r.ed.EnableTrustLocal("owner", []netip.Addr{netip.MustParseAddr("203.0.113.5")}); err == nil {
 		t.Error("a LAN peer")
 	}
 	if r.ed.trust != nil {
 		t.Error("trust set by a refused call")
 	}
-	peers, ignored := TrustPeers([]string{"100.64.0.1", "fd7a:115c:a1e0::5", "100.128.0.1", "10.0.0.1", "host.ts.net", "127.0.0.1", "::1", "localhost"})
+	peers, ignored := TrustPeers([]string{"100.64.0.14", "fd7a:115c:a1e0::12", "100.128.0.1", "192.0.2.1", "host.example.test", "127.0.0.1", "::1", "localhost"})
 	if len(peers) != 2 || len(ignored) != 4 {
 		t.Errorf("peers %v ignored %v", peers, ignored)
 	}

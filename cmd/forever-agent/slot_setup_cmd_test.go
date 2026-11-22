@@ -25,7 +25,7 @@ func slotSetupTestEnv(t *testing.T) (slotsPath, srcPath, home string) {
 	if err := os.WriteFile(srcPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	table := `{"version":1,"servers":[{"name":"test1","realmd":"100.78.24.50:3724","slots":[
+	table := `{"version":1,"servers":[{"name":"test1","realmd":"192.0.2.50:3724","slots":[
 		{"id":"1","account":"TESTACC","character":"Gbmage","other_characters":["Gbrother"],"port":28771,"settings_from":"SRC"},
 		{"id":"3","reserved":"owner rule: never slot 3 on test1"}]}]}`
 	table = strings.ReplaceAll(table, "SRC", srcPath)

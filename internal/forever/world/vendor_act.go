@@ -551,7 +551,9 @@ func (s *session) actSellJunk(ctx context.Context, a *actState, step ActStep) er
 // actBuyback buys one item back from slot= (72-83). The item leaves the buyback range for the backpack and a push
 // result names its new slot. A refusal arrives on its own opcode: SMSG_BUY_FAILED (no money, no such slot) or, when
 // the bags are full, SMSG_INVENTORY_CHANGE_FAILURE (ItemHandler.cpp:546-581); a sell response only answers a
-// vendor that cannot be reached.
+// vendor that cannot be reached. A purchase that worked sends no packet of its own, so the price being taken is the
+// answer that proves it (the core charges before it stores, ItemHandler.cpp:521-540): the step then has the item
+// carried even when the slot update that names its new place was not read.
 func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) error {
 	unit, err := s.vendorTarget(a, "buyback", false)
 	if err != nil {
@@ -585,7 +587,15 @@ func (s *session) actBuyback(ctx context.Context, a *actState, step ActStep) err
 		if s.vendor.buyFail != nil || s.vendor.sold != nil || s.invFail != nil {
 			return true
 		}
-		_, held := rowByGUID(s.inventoryNow(), want)
+		now := s.inventoryNow()
+		if now.Coinage < before.Coinage {
+			// The core takes the price and then clears the buyback slot and stores the item
+			// (ItemHandler.cpp:521-540): a charge this step did not see before is the purchase's own answer, so the
+			// item is carried even when the slot update that names its new place was not read.
+			s.tracker().BoughtBack(s.transport().Now(), want)
+			now = s.inventoryNow()
+		}
+		_, held := rowByGUID(now, want)
 		return held
 	})
 	if err != nil {

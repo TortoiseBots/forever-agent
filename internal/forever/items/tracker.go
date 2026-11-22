@@ -121,15 +121,19 @@ type Tracker struct {
 	placements map[wire.GUID]placement
 	moves      []*move
 	bagEvents  []bagEvent
-	seq        uint64
-	self       wire.GUID
-	failure    *ChangeFailure
-	stale      string
+	// bought holds the items a buyback purchase's price was taken for: the charge is the core's own proof that the
+	// purchase went through (ItemHandler.cpp:521-540 charges before it stores), so a snapshot that still shows one
+	// in a buyback slot is listing a row the server already moved.
+	bought  map[wire.GUID]time.Time
+	seq     uint64
+	self    wire.GUID
+	failure *ChangeFailure
+	stale   string
 }
 
 // NewTracker returns an empty tracker: the first Sync reads the login snapshot.
 func NewTracker() *Tracker {
-	return &Tracker{placements: map[wire.GUID]placement{}}
+	return &Tracker{placements: map[wire.GUID]placement{}, bought: map[wire.GUID]time.Time{}}
 }
 
 // Reset forgets every overlay entry and move: a fresh snapshot of the character's own block (the login burst, a map
@@ -138,6 +142,7 @@ func (t *Tracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.placements = map[wire.GUID]placement{}
+	t.bought = map[wire.GUID]time.Time{}
 	t.moves = nil
 	t.bagEvents = nil
 	t.failure = nil
@@ -154,11 +159,52 @@ func (t *Tracker) Sync(w *objects.World, self wire.GUID, now time.Time) Inventor
 	inv := Snapshot(w, self)
 	t.absorbBags(inv.Bags)
 	t.prune(now)
+	t.applyBought(&inv)
 	t.apply(&inv, now)
 	if t.stale != "" {
 		inv.Stale, inv.StaleReason = true, t.stale
 	}
 	return inv
+}
+
+// BoughtBack records that the server took a buyback purchase's price for this item. The core checks the money, then
+// clears the item's buyback slot and stores it in the backpack (ItemHandler.cpp:521-540), so the charge is the
+// purchase's own answer; a snapshot still naming the buyback slot is one whose slot update was not read. The entry
+// lives until a slot update names the item (named) or placementTTL passes.
+func (t *Tracker) BoughtBack(at time.Time, guid wire.GUID) {
+	if guid.IsZero() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.bought == nil {
+		t.bought = map[wire.GUID]time.Time{}
+	}
+	if _, held := t.bought[guid]; !held && len(t.bought) >= maxPlacements {
+		t.prune(at)
+		if len(t.bought) >= maxPlacements {
+			return
+		}
+	}
+	t.bought[guid] = at
+}
+
+// applyBought moves every item a purchase took the price for out of the buyback rows and lists it as carried, its
+// slot unknown until the server's slots name it.
+func (t *Tracker) applyBought(inv *Inventory) {
+	if len(t.bought) == 0 || len(inv.buyback) == 0 {
+		return
+	}
+	kept := inv.buyback[:0]
+	for _, it := range inv.buyback {
+		if _, ok := t.bought[it.GUID]; ok {
+			it.Container, it.Slot = BackpackContainer, SlotUnknown
+			inv.Items = append(inv.Items, it)
+			continue
+		}
+		kept = append(kept, it)
+	}
+	inv.buyback = kept
 }
 
 // live reports whether a move still shapes the inventory.
@@ -180,6 +226,11 @@ func (t *Tracker) prune(now time.Time) {
 	for g, pl := range t.placements {
 		if now.Sub(pl.at) >= placementTTL {
 			delete(t.placements, g)
+		}
+	}
+	for g, at := range t.bought {
+		if now.Sub(at) >= placementTTL {
+			delete(t.bought, g)
 		}
 	}
 	kept := t.moves[:0]
@@ -467,6 +518,9 @@ func (t *Tracker) named(at time.Time, pos Pos, g wire.GUID) {
 		if pl.pos == pos || (!g.IsZero() && pg == g) {
 			delete(t.placements, pg)
 		}
+	}
+	if !g.IsZero() {
+		delete(t.bought, g)
 	}
 	for _, m := range t.moves {
 		if !m.live() || m.at.After(at) {

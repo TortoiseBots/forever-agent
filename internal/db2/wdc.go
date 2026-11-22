@@ -39,7 +39,7 @@ const (
 	maxFields     = 1 << 12
 	maxSections   = 1 << 8
 	maxArraySize  = 1 << 10
-	maxBitSize    = 256
+	maxBitSize    = 1024
 )
 
 // Column compression types (DB2FileLoader.cpp:32-40).
@@ -201,8 +201,8 @@ func parse(b []byte) (*File, error) {
 	if err := c.err(); err != nil {
 		return nil, err
 	}
-	if recordSize < 4 || recordSize > maxRecordSize {
-		return nil, fmt.Errorf("a record size of %d bytes (4 to %d allowed)", recordSize, maxRecordSize)
+	if recordSize < 1 || recordSize > maxRecordSize {
+		return nil, fmt.Errorf("a record size of %d bytes (1 to %d allowed)", recordSize, maxRecordSize)
 	}
 	if totalFields < 1 || totalFields > maxFields || fieldCount < 1 || fieldCount > totalFields {
 		return nil, fmt.Errorf("%d fields stored of %d (1 to %d allowed)", fieldCount, totalFields, maxFields)
@@ -223,7 +223,7 @@ func parse(b []byte) (*File, error) {
 	if parentLookups > 1 {
 		return nil, fmt.Errorf("%d parent lookups; at most one is allowed", parentLookups)
 	}
-	if f.packedDataOffset != 0 && f.packedDataOffset >= recordSize {
+	if f.packedDataOffset != 0 && f.packedDataOffset > recordSize {
 		return nil, fmt.Errorf("the packed data starts at byte %d of a %d byte record", f.packedDataOffset, f.RecordSize)
 	}
 	recordBits := uint64(recordSize) * 8
@@ -310,7 +310,7 @@ func parse(b []byte) (*File, error) {
 			if err := c.err(); err != nil {
 				return nil, err
 			}
-			if fs.bitSize == 0 || fs.bitSize > maxBitSize {
+			if (fs.bitSize == 0 && fs.compression == compNone) || fs.bitSize > maxBitSize {
 				return nil, fmt.Errorf("field %d: %d bits", i, fs.bitSize)
 			}
 			switch fs.compression {
@@ -415,7 +415,7 @@ func parse(b []byte) (*File, error) {
 		// The client writes the list for every section with a key, the re-saved file's known one included.
 		var count uint32
 		c.u32(&count)
-		if count > s.recordCount || uint64(count)*4 > rem() {
+		if uint64(count)*4 > rem() {
 			return nil, fmt.Errorf("section %d: %d encrypted ids for %d records", i, count, s.recordCount)
 		}
 		if s.tactID == dummyTactID {

@@ -155,8 +155,9 @@ func TestLootReleaseRetriedAfterUnconfirmedSend(t *testing.T) {
 		t.Fatal("the release was confirmed by a write")
 	}
 
-	// The server's answer to the retried release.
-	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGLootRelease, Payload: fakeRelease(w.Loot, w.Owner)}}
+	// The server's answer to the retried release: DoLootRelease names the window's owner, and the player whose
+	// window closed is the second field.
+	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGLootRelease, Payload: fakeRelease(w.Owner, w.Owner)}}
 
 	s.releaseLeftover(w)
 	if len(tr.sent) != 2 || tr.sent[1] != wire.CMSGLootRelease {

@@ -268,8 +268,8 @@ type Removed struct {
 	LootListID uint8
 }
 
-// Release is SMSG_LOOT_RELEASE (LootPackets.h:145-153, LootPackets.cpp:147-153): the loot GUID and the player whose
-// window closed.
+// Release is SMSG_LOOT_RELEASE (LootPackets.h:145-153, LootPackets.cpp:147-153): the window's owner (the creature or
+// game object the loot belongs to, which DoLootRelease names) and the player whose window closed.
 type Release struct {
 	Loot  wire.GUID
 	Owner wire.GUID
