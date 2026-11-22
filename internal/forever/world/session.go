@@ -662,6 +662,8 @@ type session struct {
 
 	// Round R3: the vendor's answers since the last step cleared them (vendor.go, vendor_act.go).
 	vendor vendorWatch
+	// The trade window (trade.go, trade_flow.go).
+	trade tradeWatch
 
 	// Round R4: the trainer's answers since the last step cleared them (trainer.go, trainer_act.go).
 	trainer trainerWatch
@@ -2341,6 +2343,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		if isVendorPacket(p.Core) {
 			return s.handleVendor(p)
+		}
+		if isTradePacket(p.Core) {
+			return s.handleTrade(p)
 		}
 		if isQuestPacket(p.Core) {
 			return s.handleQuest(p)

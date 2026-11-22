@@ -644,7 +644,14 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("cast", serveCallTyped(st, func(s *session, ctx context.Context, p serveCastParams) (serveEmpty, error) {
 		if p.TradeSlot != nil {
-			return serveEmpty{}, errors.New("cast: trade_slot is not ported on this server")
+			outcome, err := s.castTradeSlot(ctx, p.SpellID, *p.TradeSlot)
+			if err != nil {
+				return serveEmpty{}, err
+			}
+			if outcome != "success" {
+				return serveEmpty{}, fmt.Errorf("cast: the server refused the spell: %s", outcome)
+			}
+			return serveEmpty{}, nil
 		}
 		if p.SpellID <= 0 {
 			return serveEmpty{}, errors.New("cast needs a spell id")
@@ -761,6 +768,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerPetMethods(srv, st)
 	registerTrainerMethods(srv, st)
 	registerMailMethods(srv, st)
+	registerTradeMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -1742,6 +1750,5 @@ var notPortedMethods = []string{
 	"plan_check",
 	"raid_move",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
-	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"tt", "tune_list", "tune_set",
 }

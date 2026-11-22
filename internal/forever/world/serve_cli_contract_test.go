@@ -83,9 +83,9 @@ func TestServeCLITableContract(t *testing.T) {
 	if _, code, _ := serveCLIPost(t, a.addr, a.token, "no_such_method_xyz", nil); code != -32601 {
 		t.Fatalf("unknown method code %d, want -32601", code)
 	}
-	res, code, msg := serveCLIPost(t, a.addr, a.token, "trade", nil)
-	if code != -32003 || !strings.Contains(msg, "trade: not ported on this server") || res != nil {
-		t.Fatalf("trade: code %d msg %q result %s, want the typed not-ported error and no result", code, msg, res)
+	res, code, msg := serveCLIPost(t, a.addr, a.token, "lfg_status", nil)
+	if code != -32003 || !strings.Contains(msg, "lfg_status: not ported on this server") || res != nil {
+		t.Fatalf("lfg_status: code %d msg %q result %s, want the typed not-ported error and no result", code, msg, res)
 	}
 	res, code, _ = serveCLIPost(t, a.addr, a.token, "status", nil)
 	if code != 0 {
