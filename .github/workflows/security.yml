@@ -17,7 +17,7 @@ permissions:
 env:
   GOTOOLCHAIN: local
   # Pinned: a new release must not change what the weekly check reports without a review.
-  GOVULNCHECK_VERSION: v1.1.4
+  GOVULNCHECK_VERSION: v1.10.0
 
 jobs:
   security:
