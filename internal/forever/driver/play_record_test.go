@@ -120,7 +120,10 @@ type droppingLog struct{ *PlayFake }
 
 func (d droppingLog) CombatRows(seq, limit int) ([]json.RawMessage, int, int, int) {
 	rows, next, oldest, _ := d.PlayFake.CombatRows(seq, limit)
-	return rows, next, oldest, 5
+	if seq == 0 {
+		return rows, next, oldest, 5 // the hole above the first cursor, reported once as the session's ring does
+	}
+	return rows, next, oldest, 0
 }
 
 // TestPlaySummaryCountsDroppedCombatRows: a hole the ring reports reaches the summary, so a verdict can refuse a

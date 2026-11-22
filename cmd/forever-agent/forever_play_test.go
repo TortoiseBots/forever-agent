@@ -157,7 +157,7 @@ func okJudge(roles ...string) []spelljudge.Finding {
 func goodPlaySummary() driver.RunSummary {
 	return driver.RunSummary{
 		Clear: true, Wipes: 1, DurationS: 80 * 60, StopReason: "clear",
-		Play: &driver.PlayRecord{Minutes: 80, MaxMinutes: 90, MaxWipes: 2, LinesByPrefix: map[string]int{".bot add": 4}},
+		Play: &driver.PlayRecord{Minutes: 80, MaxMinutes: 90, MaxWipes: 2, CombatRows: 900, LinesByPrefix: map[string]int{".bot add": 4}},
 	}
 }
 
@@ -185,6 +185,7 @@ func TestPlayVerdictRules(t *testing.T) {
 		{"no findings at all", nil, nil, 90, false, "judge"},
 		{"combat rows dropped", func(s *driver.RunSummary) { s.Play.CombatDropped = 3 }, four, 90, false, "dropped"},
 		{"combat log truncated", func(s *driver.RunSummary) { s.Play.CombatTruncated = true }, four, 90, false, "truncated"},
+		{"no combat rows at all", func(s *driver.RunSummary) { s.Play.CombatRows = 0 }, four, 90, false, "no rows"},
 		{"combat write failed", func(s *driver.RunSummary) { s.Play.CombatError = "write: disk full" }, four, 90, false, "write failed"},
 	}
 	for _, tc := range cases {
@@ -249,8 +250,8 @@ func TestDungeonPlayJudgesItsOwnTrace(t *testing.T) {
 		t.Fatalf("own findings = %v", mine)
 	}
 	for _, f := range mine {
-		if f.Level == "na" || f.Level == "fail" {
-			t.Fatalf("own trace: %s is %s (%s)", f.Bot, f.Level, f.Text)
+		if f.Level == "na" || f.Level == "fail" || f.Casts == 0 {
+			t.Fatalf("own trace: %s is %s with %d casts (%s)", f.Bot, f.Level, f.Casts, f.Text)
 		}
 	}
 	// The folder's newest run is the other one: reading by folder would have judged its empty combat log.
@@ -258,13 +259,13 @@ func TestDungeonPlayJudgesItsOwnTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	na := 0
+	empty := 0
 	for _, f := range byDir {
-		if f.Level == "na" {
-			na++
+		if f.Casts == 0 {
+			empty++
 		}
 	}
-	if na == 0 {
+	if empty == 0 {
 		t.Fatalf("the folder read judged %v; want the other run's empty log to show (the test's trap is not set)", byDir)
 	}
 }

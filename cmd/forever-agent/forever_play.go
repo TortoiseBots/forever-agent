@@ -309,6 +309,9 @@ func playVerdict(sum driver.RunSummary, findings []spelljudge.Finding, judged bo
 			if sum.Play.CombatTruncated {
 				why = append(why, "combat log: truncated at its size bound")
 			}
+			if sum.Play.CombatRows == 0 {
+				why = append(why, "combat log: no rows (nothing to judge)")
+			}
 			if sum.Play.CombatError != "" {
 				why = append(why, "combat log: write failed ("+sum.Play.CombatError+")")
 			}
