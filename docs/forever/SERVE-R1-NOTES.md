@@ -47,6 +47,10 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `equipment` | DONE | The occupied equipment slots 0-18 with the core's names (head .. tabard); `names: true` fills name/quality. Round D2. |
 | `equip` | DONE | The act `equip` step (AutoEquip; the server chooses the slot) and the item's row after the move; neither `item_entry` nor `bag`+`slot` is an RPC error before any packet. Round D2. |
 | `use_item` | DONE | The act `use` step for an item; `spell_id` is required (the on-use spell is in ItemEffect, not a queryable record); a target goes through a fresh act state, never the shared one. Round D2. |
+| `vendor_list` | DONE | Opens the vendor (the gossip option or the two-step list ask) and answers its rows (`muid`, `item_entry`, `price`, `stack_count`, `stock`, -1 unlimited) with the `vendor_list` event. Round D3; see [DAEMON-D3-NOTES.md](DAEMON-D3-NOTES.md). No live run yet. |
+| `buy` | DONE | `item_entry` or `muid`, `count` 1-255; reads the list first when this NPC's is not cached; the purchase goes to the backpack (`bag`/`slot` are refused). Answers `ok`, the `vendor_buy` or `vendor_buy_failed` event and the new row. Round D3. |
+| `sell` | DONE | `item_entry` or `bag`+`slot`, `count`, `force`; answers the row as it stood before the sale and `vendor_sell` or `vendor_sell_failed`. Round D3. |
+| `gossip_hello`, `gossip_select` | DONE | Talk (or quest hello) and choose an option; each answers `ok`, the first answering event, and the open `menu` (`menu_id`, `options`, `quests`). Coded options are refused. Round D3. |
 | `party` | DONE | The party model's roster, leader, health/power and pending invite. Raid groups are not modelled. |
 | `chat_log` | DONE | The chat log as the old page (`since`, `limit`, `wait_ms`): seq, chat type name, source, channel, text. It is the chat model, not the 78-kind event log. |
 | `logout` | DONE | The full logout (request, response and completion), then the daemon stops. |
@@ -112,7 +116,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | Methods | Status | Why |
 |---|---|---|
 | `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects` | NOT-PORTED | No loot or object-use model in `internal/forever`. |
-| `vendor_list`, `buy`, `sell`, `trainer_list`, `train`, `gossip_hello`, `gossip_select`, `taxi`, `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log` | NOT-PORTED | No NPC, vendor, trainer, taxi or quest model. |
+| `trainer_list`, `train`, `taxi`, `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log` | NOT-PORTED | No trainer, taxi or quest method yet (the vendor and gossip methods are ported, round D3). |
 | `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |
 | `brain_start`, `brain_stop`, `brain_status`, `follow_start`, `follow_stop`, `follow_status` | NOT-PORTED | The old brain and follow loops are 1.12 code. |

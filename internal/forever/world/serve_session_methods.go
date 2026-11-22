@@ -731,6 +731,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	registerItemInfoMethods(srv, st)
 	registerItemMethods(srv, st)
+	registerNPCMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -1681,11 +1682,10 @@ var notPortedMethods = []string{
 	"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
 	"bot_view",
 	"brain_start", "brain_status", "brain_stop",
-	"buy", "convert_raid",
+	"convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"gameobjects",
 	"gm_evade", "gm_respawn",
-	"gossip_hello", "gossip_select",
 	"join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
@@ -1694,11 +1694,10 @@ var notPortedMethods = []string{
 	"pet", "pet_action", "plan_check",
 	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
 	"raid_move", "roll",
-	"sell",
 	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"train", "trainer_list", "tt", "tune_list", "tune_set",
-	"use_object", "vendor_list",
+	"use_object",
 }

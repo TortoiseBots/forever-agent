@@ -522,7 +522,7 @@ type session struct {
 	inv *items.Tracker
 	// itemCast watches the cast an item `use` step asked for (inventory_act.go): the answers the server gives to it.
 	itemCast itemCastWatch
-	// methodAct is the act state the D2+ serve methods share across calls (serve_method_frame.go), so a vendor list
+	// methodAct is the act state the D2+ serve methods (items, vendors, gossip) share across calls (serve_method_frame.go), so a vendor list
 	// or a menu one call read serves the next. Lazily created; a reconnect starts empty.
 	methodAct *actState
 	self      wire.GUID
