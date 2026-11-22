@@ -51,7 +51,7 @@ func planProbeCmd(args []string, stdout, stderr io.Writer) int {
 	sqlFile := fs.String("sql", "", "a deployed world migration (the exact rows the server runs; recommended); with --forever: the run leader's exported migration, as plan-export --forever writes it")
 	planFlag := fs.String("plan", "", "with --sql: the plan to probe (needed when the file holds several)")
 	forever := fs.Bool("forever", false, "probe against the Forever side's inputs: a run leader's exported migration (--sql) matched against a spawn list (--spawns), on v16 tiles (--mmaps)")
-	spawns := fs.String("spawns", "", "with --forever: the spawn list TSV (guid entry x y z movetype [kind]) the probe matches the row and unit entries and positions against")
+	spawns := fs.String("spawns", "", "with --forever: a world export (a map folder, or a root of map<N> folders: tools/dungeongen/export-forever.sh) or the spawn list TSV (guid entry x y z movetype [kind]) the probe matches the row and unit entries and positions against")
 	mmaps := fs.String("mmaps", "", "folder with the server's mmaps: v6 (<map>.mmap and <map>*.mmtile) or, with --forever, v16 (MMMM.mmap and MMMM_XX_YY.mmtile); required")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
 	out := fs.String("out", "", "folder for probe-<plan>.json and probe-<plan>.txt")
@@ -76,7 +76,7 @@ func planProbeCmd(args []string, stdout, stderr io.Writer) int {
 		return fail("--forever probes a run leader's exported migration: pass --sql FILE (plan-export --forever output)")
 	}
 	if *forever && *spawns == "" {
-		return fail("--forever needs --spawns FILE (the spawn list TSV the rows' entries and units are matched against)")
+		return fail("--forever needs --spawns (a world export folder or the spawn list TSV the rows' entries and units are matched against)")
 	}
 	if !*forever && *spawns != "" {
 		return fail("--spawns needs --forever (the old-server inputs carry their own world)")

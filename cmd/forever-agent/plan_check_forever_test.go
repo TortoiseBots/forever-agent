@@ -156,13 +156,16 @@ func TestPlanCheckForeverEmptyObjectsFailsDeadminesPassesWailingCaverns(t *testi
 	}
 }
 
-// --forever reads --spawns as a TSV file: a folder or a missing file skips
-// the spawn-based lints with a reason instead of failing.
-func TestWorldForLintsForeverNeedsAFile(t *testing.T) {
-	if _, note := worldForLintsForever(t.TempDir(), 36); !strings.Contains(note, "reads --spawns as a TSV file") {
+// --forever reads --spawns as a world export folder or a TSV file: a folder with no export for the map or a missing
+// file skips the spawn-based lints with a reason instead of failing.
+func TestWorldForLintsForeverNeedsAnExport(t *testing.T) {
+	if _, note := worldForLintsForever(t.TempDir(), 36); !strings.Contains(note, "no world export for map 36") {
 		t.Fatalf("note %q", note)
 	}
 	if _, note := worldForLintsForever(filepath.Join(t.TempDir(), "missing.tsv"), 36); !strings.Contains(note, "lints skipped") {
+		t.Fatalf("note %q", note)
+	}
+	if w, note := worldForLintsForever("", 36); w != nil || !strings.Contains(note, "pass --spawns") {
 		t.Fatalf("note %q", note)
 	}
 }

@@ -209,10 +209,11 @@ func planProbeForever(mmaps, sqlFile, planFlag, spawnsFile, dir string, fromStep
 	}
 	rep := reps2[0]
 	rows := rep.Rows
-	w, notes, err := worldspawn.LoadForeverSpawns(spawnsFile, rows.Plan.Map)
+	fw, err := loadForeverWorld(spawnsFile, rows.Plan.Map)
 	if err != nil {
 		return fail("%v", err)
 	}
+	w, notes := fw.World, fw.Notes
 	pl := navmesh.NewForeverPlanner(mmaps, nil)
 	defer pl.Close()
 	paths := &foreverProbePaths{pl: pl}
