@@ -3,6 +3,7 @@ package tbmclient
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +86,32 @@ func TestHelloWithoutRegistrationTimesOut(t *testing.T) {
 	_, err = c.Hello(context.Background(), 150*time.Millisecond)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("hello without registration = %v, want ErrTimeout", err)
+	}
+}
+
+// TestDoRefusesOverlongCommand: a command over the 255-byte cap is rejected before anything is sent.
+func TestDoRefusesOverlongCommand(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(NewFakeModule(cases))
+	c.transport = tbmproto.TransportAddon
+	long := "action follow " + strings.Repeat("a", 300)
+	if _, err := c.Do(context.Background(), long, time.Second); err == nil {
+		t.Fatal("an over-long command must be refused")
+	}
+}
+
+// TestDoUnknownCommandTimesOut: the fake answers only golden cases, so an unknown command gets no reply.
+func TestDoUnknownCommandTimesOut(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(NewFakeModule(cases))
+	c.transport = tbmproto.TransportAddon
+	if _, err := c.Do(context.Background(), "action nonsense", 150*time.Millisecond); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("unknown command = %v, want ErrTimeout", err)
 	}
 }

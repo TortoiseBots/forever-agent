@@ -69,6 +69,9 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 	a.s.initAddon()
 	for {
 		if m, ok := a.s.addon.Next(); ok {
+			if !tbmAcceptAddon(m) {
+				continue
+			}
 			return tbmproto.Incoming{
 				Kind: "addon", Channel: addonChannelName(m), Prefix: m.Prefix, Text: m.Text,
 			}, nil
@@ -76,6 +79,9 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 		if len(a.feed) > 0 {
 			line := a.feed[0]
 			a.feed = a.feed[1:]
+			if !tbmAcceptChat(line) {
+				continue
+			}
 			return tbmproto.Incoming{Kind: "system", Text: line.Text}, nil
 		}
 		if err := a.s.collect(ctx, 50*time.Millisecond); err != nil {
@@ -86,6 +92,15 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 		}
 	}
 }
+
+// tbmAcceptAddon keeps only what the module sends: the contract's replies arrive as add-on whispers. A party,
+// raid or guild frame under the TBM prefix is another player's and never completes a hello or a command. The
+// sender's identity is not bound yet; the live proof (R4) settles what the module's sender GUID is.
+func tbmAcceptAddon(m addonmsg.Message) bool { return m.Channel == addonmsg.Whisper }
+
+// tbmAcceptChat keeps only system messages: the module's chat-transport replies are system lines, so a say, party
+// or whisper line cannot forge a TBM: record.
+func tbmAcceptChat(l chat.Line) bool { return l.Type == chat.TypeSystem }
 
 // tbmCheck is forever tbm-check: the client's hello and the requested commands, printed without identifiers.
 func (s *session) tbmCheck(ctx context.Context) error {
@@ -115,7 +130,7 @@ func (s *session) tbmCheck(ctx context.Context) error {
 	for _, cmd := range s.opts.TBMCommands {
 		res, err := cli.Do(ctx, cmd, timeout)
 		printTBMResult(s, cmd, res)
-		if err != nil && !errors.Is(err, tbmclient.ErrTimeout) {
+		if err != nil {
 			return fmt.Errorf("tbm do %q: %w", cmd, err)
 		}
 	}
