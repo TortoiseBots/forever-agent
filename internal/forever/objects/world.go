@@ -25,6 +25,9 @@ type Object struct {
 	Info Info
 
 	X, Y, Z, O float32
+	// Positioned is true once a packet gave the object a position (a create's movement or stationary block, a move
+	// update, a teleport); a (0,0,0) position is then a real one.
+	Positioned bool
 	Speeds     Speeds
 	// Flags is the object's last movement flags (the create block's, then the relays').
 	Flags uint64
@@ -323,6 +326,7 @@ func (w *World) Apply(u *Update, received time.Time) {
 		if mv := b.Movement; mv != nil {
 			if mv.MovementUpdate {
 				o.X, o.Y, o.Z, o.O = mv.X, mv.Y, mv.Z, mv.O
+				o.Positioned = true
 				o.Flags = mv.Flags
 				o.Speeds = Speeds{
 					Walk: mv.Walk, Run: mv.Run, RunBack: mv.RunBack, Swim: mv.Swim,
@@ -353,6 +357,7 @@ func (w *World) Apply(u *Update, received time.Time) {
 				}
 			} else if mv.Stationary {
 				o.X, o.Y, o.Z, o.O = mv.StationaryPosition[0], mv.StationaryPosition[1], mv.StationaryPosition[2], mv.StationaryPosition[3]
+				o.Positioned = true
 			}
 		}
 	}
@@ -703,6 +708,9 @@ func mergeInfo(dst *Info, src Info) {
 	if f.SpellID {
 		dst.SpellID = src.SpellID
 	}
+	if f.DynRadius {
+		dst.DynRadius = src.DynRadius
+	}
 	if src.Item != nil {
 		if f.ItemOwner {
 			dst.item().Owner = src.Item.Owner
@@ -786,6 +794,7 @@ func (w *World) ApplyMonsterMove(m *MonsterMove, received time.Time) {
 	w.updated++
 	w.touchLocked(o, received)
 	o.X, o.Y, o.Z = m.StartX, m.StartY, m.StartZ
+	o.Positioned = true
 	o.Spline = m
 	o.SplineAt = received.Add(-time.Duration(m.Elapsed) * time.Millisecond)
 }
@@ -803,6 +812,7 @@ func (w *World) ApplyMoveUpdate(mi MovementInfo, speeds map[string]float32, rece
 	w.updated++
 	w.touchLocked(o, received)
 	o.X, o.Y, o.Z, o.O = mi.X, mi.Y, mi.Z, mi.O
+	o.Positioned = true
 	o.Flags = mi.Flags
 	o.Spline = nil
 	if speeds != nil {
@@ -827,6 +837,7 @@ func (w *World) ApplyTeleport(t MoveTeleport, received time.Time) {
 	w.updated++
 	w.touchLocked(o, received)
 	o.X, o.Y, o.Z, o.O = t.X, t.Y, t.Z, t.O
+	o.Positioned = true
 	o.Spline = nil
 }
 

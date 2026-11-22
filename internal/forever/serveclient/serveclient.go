@@ -236,6 +236,8 @@ type Unit struct {
 	PetNumber      uint32 `json:"pet_number,omitempty"`
 	CreatedBySpell int32  `json:"created_by_spell,omitempty"`
 	CreatureFamily int32  `json:"creature_family,omitempty"`
+	// CC is true while an aura crowd-controls the unit; omitted when false.
+	CC bool `json:"cc,omitempty"`
 }
 
 // Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).

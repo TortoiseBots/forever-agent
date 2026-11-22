@@ -661,6 +661,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("spells", serveReadTyped(st, func(s *session, _ context.Context, p serveSpellsParams) ([]ServeSpellRow, error) {
 		return s.serveSpells(p)
 	}))
+	srv.Register("dynamic_objects", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) ([]ServeDynamicObject, error) {
+		return s.serveDynamicObjects()
+	}))
 	srv.Register("face", serveCallTyped(st, func(s *session, _ context.Context, p serveUnitParams) (serveEmpty, error) {
 		o, err := s.serveUnitByName(p.GUID, p.Name)
 		if err != nil {

@@ -254,7 +254,7 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 	g := GUID(wire.GUID{Low: 0x2, High: 0x1})
 	unit := ServeUnit{GUID: g, Type: "creature", Entry: 7, Name: "Mob", X: 1, Y: 2, Z: 3, O: 4, Distance: 5, Distance2D: 6,
 		Health: 7, MaxHealth: 8, Power: 9, MaxPower: 10, PowerType: 1, Level: 60, Class: 2, Target: g, InCombat: true,
-		Dead: true, Ghost: true, Moving: true, Casting: true, SpellID: 11, MountDisplayID: 14338,
+		Dead: true, Ghost: true, Moving: true, Casting: true, SpellID: 11, MountDisplayID: 14338, CC: true,
 		Auras: []ServeAura{{SpellID: 12, Caster: g, Stacks: 2, RemainingMS: 3000}}}
 	roundTrip(t, "unit", unit, new(serveclient.Unit))
 	page := ServeEventsPage{Events: []CombatRow{{Seq: 1, Kind: "melee", Time: "2026-01-02T03:04:05.006+00:00", MonoMS: 9,

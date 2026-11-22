@@ -972,6 +972,22 @@ type ServeUnit struct {
 	PetNumber      uint32 `json:"pet_number,omitempty"`
 	CreatedBySpell int32  `json:"created_by_spell,omitempty"`
 	CreatureFamily int32  `json:"creature_family,omitempty"`
+
+	// CC is true while an aura crowd-controls the unit (objects.CrowdControlled, ticket #93 D15); omitted when false.
+	CC bool `json:"cc,omitempty"`
+}
+
+// ServeDynamicObject is one row of the dynamic_objects method: a ground spell's area (Blizzard, a fire patch), with
+// the flat distance from the mover, -1 while the object has no position.
+type ServeDynamicObject struct {
+	GUID     GUID    `json:"guid"`
+	SpellID  int32   `json:"spell_id"`
+	Caster   GUID    `json:"caster"`
+	Radius   float32 `json:"radius"`
+	X        float32 `json:"x"`
+	Y        float32 `json:"y"`
+	Z        float32 `json:"z"`
+	Distance float32 `json:"distance"`
 }
 
 func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
@@ -1010,5 +1026,17 @@ func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
 		}
 		u.Auras = append(u.Auras, au)
 	}
+	u.CC = objects.CrowdControlled(auras, s.spellTable(), s.spellName)
 	return u
+}
+
+// serveDynamicObjects lists the ground spells in view, nearest the mover first.
+func (s *session) serveDynamicObjects() ([]ServeDynamicObject, error) {
+	list := s.world.DynamicObjects(s.MoverX(), s.MoverY())
+	out := make([]ServeDynamicObject, 0, len(list))
+	for _, d := range list {
+		out = append(out, ServeDynamicObject{GUID: GUID(d.GUID), SpellID: d.SpellID, Caster: GUID(d.Caster),
+			Radius: d.Radius, X: d.X, Y: d.Y, Z: d.Z, Distance: d.Distance})
+	}
+	return out, nil
 }
