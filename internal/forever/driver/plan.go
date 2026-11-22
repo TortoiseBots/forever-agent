@@ -79,17 +79,34 @@ type Route struct {
 	Fleers           map[uint32]bool
 	Avoid            []Box
 	Legs             []Leg
+	// TankMinHP is the plan's least tank max health. A player run reads it in FORM and stops a weaker tank
+	// (tank-too-weak); the other modes refuse the field.
+	TankMinHP int
+	// KillFirst is the plan's kill order, best first. A player run puts the skull on the first entry of it that is
+	// in the pack (P2b); the other modes refuse the field.
+	KillFirst []uint32
+	// MaxMinutes is the run's time budget. A player run sets it by plan name (90/150/120, D-14); the other modes
+	// take the command's own default.
+	MaxMinutes int
+	// Notes are the plan fields a player run accepted without acting on them (its crowd-control lists, its bosses'
+	// fight tactics, D-8), so the run's record can say so once instead of dropping them silently.
+	Notes []string
 }
 
 // Leg is one stretch of the dungeon: walk the via points and To, clear the groups in order, then kill the boss.
 type Leg struct {
-	Index  int
-	Name   string
-	To     Vec3
-	Via    []Vec3
-	Start  Vec3 // where a wiped party comes back to: the previous leg's end, or the entrance
-	Groups []Group
-	Boss   *Boss
+	Index int
+	Name  string
+	To    Vec3
+	Via   []Vec3
+	// ViaExact and ViaDirect are a player run's reading of the via points (nil in the other modes, which refuse a
+	// plan carrying either): an exact point is stood on within PlayExactYd before the walk goes on, and a direct one
+	// is a straight-line hop the map data has no link for.
+	ViaExact  []bool
+	ViaDirect []bool
+	Start     Vec3 // where a wiped party comes back to: the previous leg's end, or the entrance
+	Groups    []Group
+	Boss      *Boss
 	// Skip lists entries the leg never pulls or waits for.
 	Skip map[uint32]bool
 }
@@ -137,18 +154,18 @@ type Boss struct {
 
 // LoadRoute reads a dungeon plan file and builds the driver's view of it for a run this client leads: the plan's
 // in-fight run fields are refused, because this driver does not run them.
-func LoadRoute(path string) (*Route, error) { return loadRoute(path, false) }
+func LoadRoute(path string) (*Route, error) { return loadRoute(path, modeRun) }
 
 // LoadWatchRoute reads a dungeon plan file for dungeon-watch: the module's own run executes the fight, so the plan's
 // in-fight run fields are accepted unchanged (the loader has validated them).
-func LoadWatchRoute(path string) (*Route, error) { return loadRoute(path, true) }
+func LoadWatchRoute(path string) (*Route, error) { return loadRoute(path, modeWatch) }
 
-func loadRoute(path string, watch bool) (*Route, error) {
+func loadRoute(path string, mode routeMode) (*Route, error) {
 	p, err := dungeon.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return newRoute(p, watch)
+	return newRoute(p, mode)
 }
 
 // NewRoute builds the driver's view of a loaded plan for a run this client leads. Every field the driver cannot run is
@@ -162,16 +179,34 @@ func loadRoute(path string, watch bool) (*Route, error) {
 // preparation happens before this driver), and entrance_tele, skip_export, a via's check_skip and a patrol's
 // period_s/source/period_estimate (they belong to the remote entry mode, to plan-check or to plan-export; the driver
 // enters through Portal or EnterAreaTrigger and gates a patrol by its live units, not by its period).
-func NewRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, false) }
+func NewRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modeRun) }
 
 // NewWatchRoute is NewRoute for dungeon-watch: the run is the server module's own bot's, so the plan's in-fight run
 // fields are part of its inputs and are accepted unchanged, and so are the module's own movement and waiting: a
 // straight-line or stand-on-the-point hop and a boss wait for a patrolling boss (Wailing Caverns). The loader has
 // validated them (ranges, the kill_first/cc_priority rule, the summoned subset); this client neither rewrites nor acts
 // on them.
-func NewWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, true) }
+func NewWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modeWatch) }
 
-func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
+// NewPlayRoute is NewRoute for the player run: the party is the owner's four bots and this character, and the run
+// walks the plan's legs and pulls its packs itself (P2b). It accepts the in-fight fields the run uses (a kill order,
+// the tank preflight) and loads the crowd-control lists and the bosses' fight tactics without acting on them, noting
+// them in Route.Notes (D-8: no player order for either exists in v1). It still refuses what it cannot run: a scripted
+// step (until P4), a hold, an ambush, a stand pull, a leg or pack the map data cannot walk, an optional leg, an
+// after-boss step, a raid plan and a one-team plan. The time budget comes from the plan's name (playMinutes).
+func NewPlayRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modePlay) }
+
+// routeMode says who runs the fight: this client (modeRun), the server module's own bot (modeWatch) or the player
+// who leads the party himself (modePlay). It decides which plan fields are inputs and which are refused.
+type routeMode int
+
+const (
+	modeRun routeMode = iota
+	modeWatch
+	modePlay
+)
+
+func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	var refusals []error
 	refuse := func(where, field, why string) {
 		refusals = append(refusals, &PlanRefusal{Where: where, Field: field, Why: why})
@@ -183,8 +218,11 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 		refuse("kind", "kind", "this round runs a five-bot dungeon party, not a raid")
 	}
 	// The in-fight run fields are the watched module's own inputs; a run this client leads does not run them, so it
-	// refuses them rather than silently dropping them.
-	if !watch {
+	// refuses them rather than silently dropping them. A player run is the party's leader and fights itself: it reads
+	// the kill order and the tank preflight, and loads the crowd-control lists and the bosses' tactics without acting
+	// on them (D-8), so they are neither refused nor silently dropped.
+	noCC := len(p.CCPriority) > 0 || len(p.CCAlways) > 0 || len(p.NoCC) > 0
+	if mode == modeRun {
 		if len(p.KillFirst) > 0 {
 			refuse("kill_first", "kill_first", "a kill order inside a fight is not run by this round")
 		}
@@ -203,6 +241,9 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 		if p.TankMinHP != 0 {
 			refuse("tank_min_hp", "tank_min_hp", "the tank health preflight is not run by this round")
 		}
+	}
+	if mode == modePlay && len(p.SummonedKillFirst) > 0 {
+		refuse("summoned_kill_first", "summoned_kill_first", "a summoned kill target is not run by this round")
 	}
 	if p.PullCeiling != 0 {
 		refuse("pull_ceiling", "pull_ceiling", "the pull-size ceiling is a plan-check rule, not a run rule")
@@ -231,6 +272,15 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 	for _, b := range p.Avoid {
 		r.Avoid = append(r.Avoid, Box{Min: vec(b.Min), Max: vec(b.Max)})
 	}
+	if mode == modePlay {
+		if noCC {
+			r.Notes = append(r.Notes, playNoCCNote)
+		}
+		r.KillFirst = append([]uint32(nil), p.KillFirst...)
+		r.TankMinHP = int(p.TankMinHP)
+		r.MaxMinutes = playMinutes(p.Name)
+	}
+	hasTactics := false
 	nextID := 0
 	for i, pl := range p.Legs {
 		where := fmt.Sprintf("legs[%d]", i)
@@ -266,16 +316,23 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 		}
 		for j, w := range pl.Via {
 			// A straight-line hop and a stand-on-the-point hop are steps of the module's own (remote) run: the watched
-			// bot walks them and the watch only follows the leg, so a watch takes them. A run this client leads
-			// walks the legs itself and cannot do either. A GM hop is done by a GM account of the run's own, which a
-			// watch does not drive, so it is refused for both.
-			if w.GMCross || (!watch && w.Direct) {
+			// bot walks them and the watch only follows the leg, so a watch takes them. A player run walks them too
+			// (the walk is its own, and Wailing Caverns' jump needs both) and keeps their flags. A run this client
+			// leads without a player keeps refusing them, and a GM hop is refused for every mode: only a GM account
+			// travels by GM.
+			if w.GMCross || mode == modeRun && w.Direct {
 				refuse(fmt.Sprintf("%s.via[%d]", where, j), "via.direct", "a straight-line or GM hop is not run by this round")
 			}
-			if !watch && w.Exact {
+			if mode == modeRun && w.Exact {
 				refuse(fmt.Sprintf("%s.via[%d]", where, j), "via.exact", "a stand-on-the-point hop is not run by this round")
 			}
 			l.Via = append(l.Via, vec(w.Point))
+			if mode == modePlay {
+				// Wailing Caverns' Serpentis leg: stand on the foot of the jump, then hop it. A player run walks
+				// both itself (the walk is this round's), so it keeps the flags instead of refusing the plan.
+				l.ViaExact = append(l.ViaExact, w.Exact)
+				l.ViaDirect = append(l.ViaDirect, w.Direct)
+			}
 		}
 		for _, e := range pl.Skip {
 			l.Skip[e] = true
@@ -343,11 +400,15 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 			if pl.Boss.LootItem != nil {
 				refuse(bw, "loot_item", "looting the boss is not run by this round")
 			}
-			if !watch && pl.Boss.Tactics != nil {
+			if mode == modeRun && pl.Boss.Tactics != nil {
 				refuse(bw, "tactics", "the party's fight tactics are not run by this round")
 			}
+			if mode == modePlay && pl.Boss.Tactics != nil {
+				hasTactics = true // noted once, after the legs: no player order for a tactic exists in v1
+			}
 			// The wait for a patrolling boss is the module's own: the watch follows the leg and sees the boss come.
-			if !watch && pl.Boss.WaitS != 0 {
+			// A player run waits for it on the walk to the boss (P2b), so it keeps the plan's value.
+			if mode == modeRun && pl.Boss.WaitS != 0 {
 				refuse(bw, "wait_s", "a boss wait for a patrolling boss is not run by this round")
 			}
 			if len(pl.Boss.PhaseEntries) > 0 {
@@ -369,7 +430,7 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 				refuse(bw, "companions_loot", "the party's looting is not run by this round")
 			}
 			l.Boss = &Boss{Leg: i, Entry: pl.Boss.Entry, Pos: vec(pl.Boss.Position), First: skipEntries(pl.Boss.First, l.Skip), Radius: pl.Boss.Radius}
-			if watch {
+			if mode != modeRun {
 				l.Boss.WaitS = float64(pl.Boss.WaitS)
 			}
 			for _, p := range pl.Boss.Approach {
@@ -377,6 +438,9 @@ func newRoute(p *dungeon.Plan, watch bool) (*Route, error) {
 			}
 		}
 		r.Legs = append(r.Legs, l)
+	}
+	if hasTactics {
+		r.Notes = append(r.Notes, playTacticsNote)
 	}
 	if err := errors.Join(refusals...); err != nil {
 		return nil, err

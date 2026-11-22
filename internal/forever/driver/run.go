@@ -208,6 +208,9 @@ type Result struct {
 	// StopUnconfirmed is set when a watch's cleanup phase ended with the module's record still not stopped: the
 	// module may not have received the stop. It is a distinct outcome from a watch whose run reached stopped.
 	StopUnconfirmed bool
+	// Notes are what the run's plan carried without the run acting on it (a player run's crowd-control lists and
+	// boss tactics, D-8): said once, never dropped silently.
+	Notes []string
 }
 
 // Run is one run of the machine.

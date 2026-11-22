@@ -23,6 +23,8 @@ const (
 	TraceSource    = "forever_dungeon_run"
 	// TraceSourceWatch is the watch's source word: the same summary schema, filled from the module's own counters.
 	TraceSourceWatch = "forever_dungeon_watch"
+	// TraceSourcePlay is the player run's source word: the same summary schema, filled by the run's own leader.
+	TraceSourcePlay = "forever_dungeon_play"
 	// DefaultCombatMaxBytes is the combat log's size bound: some 370,000 rows of the trials row shape, far more than
 	// a dungeon run's fights write. A page that would cross it is not written, so the file never holds a partial page
 	// and the summary says the log is truncated.
@@ -236,6 +238,11 @@ type Recorder struct {
 // summary.
 func NewRecorder(dir, runID, plan string, planMap, instance uint32, start time.Time, party []trace.Member) (*Recorder, error) {
 	return newRecorder(dir, runID, plan, planMap, instance, start, party, "commander", TraceSource)
+}
+
+// NewPlayRecorder opens a player run's trace: the same files and schema, with the player run's own mode and source.
+func NewPlayRecorder(dir, runID, plan string, planMap, instance uint32, start time.Time, party []trace.Member) (*Recorder, error) {
+	return newRecorder(dir, runID, plan, planMap, instance, start, party, "play", TraceSourcePlay)
 }
 
 // NewWatchRecorder opens a watched run's trace: the same files and schema, with the watch's own mode and source.
