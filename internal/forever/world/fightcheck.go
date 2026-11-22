@@ -79,7 +79,8 @@ var casterBolts = []struct {
 	{"priest", []string{"Smite"}},
 	{"shaman", []string{"Lightning Bolt"}},
 	{"druid", []string{"Wrath"}},
-	{"hunter", []string{"Arcane Shot"}},
+	// No hunter: Arcane Shot has an 8 yard minimum range and Attack closes to melee reach before the plan casts, so
+	// it would be refused every time; a hunter needs ranged positioning, which this plan does not do.
 }
 
 // casterWindow is the range window a caster's bolt is cast in.

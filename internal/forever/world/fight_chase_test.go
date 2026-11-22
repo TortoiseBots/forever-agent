@@ -141,7 +141,7 @@ func TestFightPlanUsesTheCastersSpells(t *testing.T) {
 		{"priest", []int32{585, 591, 598}, 598},
 		{"shaman", []int32{403, 529}, 529},
 		{"druid", []int32{5176, 5177}, 5177},
-		{"hunter", []int32{3044}, 3044},
+		{"hunter stays melee-only: Arcane Shot has an 8 yd minimum, the fighter closes to melee", []int32{3044}, 0},
 		{"warrior keeps the melee plan", []int32{772, 1464}, 772},
 		{"nothing ranged", []int32{6603}, 0},
 		{"empty", nil, 0},
