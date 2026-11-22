@@ -14,17 +14,20 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/reportcard"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
+	var pf preflightFlags
+	pf.register(fs, true)
 	plan := fs.String("plan", "", "dungeon plan file (version 1)")
 	leader := fs.String("leader", "", "the bot that leads the module's run")
 	enter := fs.String("enter", "tele", "how the party enters: tele (default), portal or none (already placed)")
@@ -94,6 +97,9 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
+	if !pf.check("forever dungeon-watch", *dry, stderr) {
+		return exitUsage
+	}
 	route, err := driver.LoadWatchRoute(*plan)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever dungeon-watch: the plan is refused: %v\n", err)
@@ -131,6 +137,9 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	if err := common.passwordCheck("forever dungeon-watch"); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
+	}
+	if stop, code := runPreflight(ctx, "forever dungeon-watch", fpreflight.KindWatch, &pf, planLoader(driver.LoadWatchRoute, *plan), common.character, []string{*leader}, stdout, stderr); stop {
+		return code
 	}
 	deadline := time.Duration(*maxMinutes+15) * time.Minute
 	report, err := common.enter(ctx, "forever dungeon-watch", stdout, world.Options{

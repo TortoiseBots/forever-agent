@@ -18,6 +18,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/reportcard"
 	"github.com/pjerra/forever-agent/internal/forever/spelljudge"
 	"github.com/pjerra/forever-agent/internal/forever/world"
@@ -30,11 +31,13 @@ import (
 const playMilestoneWipes = 2
 
 func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-play", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
+	var pf preflightFlags
+	pf.register(fs, true)
 	plan := fs.String("plan", "", "dungeon plan file (version 1)")
 	bots := fs.String("bots", "", "the four bots the account owns: the tank, the healer and two damage dealers, in that order")
 	maxMinutes := fs.Int("max-minutes", 0, "the run's budget in minutes; 0 takes the plan's (Ragefire Chasm 90, Wailing Caverns 150, else 120)")
@@ -70,6 +73,9 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintln(stderr, "forever dungeon-play: --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
+	if !pf.check("forever dungeon-play", *dry, stderr) {
+		return exitUsage
+	}
 	// The plan is checked before any login: a plan the player route refuses must not cost a session.
 	route, err := driver.LoadPlayRoute(*plan)
 	if err != nil {
@@ -94,6 +100,9 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		if err := common.passwordCheck("forever dungeon-play"); err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitUsage
+		}
+		if stop, code := runPreflight(ctx, "forever dungeon-play", fpreflight.KindPlay, &pf, planLoader(driver.LoadPlayRoute, *plan), common.character, names[:], stdout, stderr); stop {
+			return code
 		}
 		budget := *maxMinutes
 		if budget == 0 {
