@@ -22,9 +22,20 @@ type Frame struct {
 	Units      map[string]*Unit
 	Order      []string // the units' order, so a rule's output does not depend on map iteration
 	Mobs       []*Mob
+	Pets       []*Pet
 	GC         bool
 	GCSince    float64
 	HasGCSince bool
+}
+
+// Pet is one party member's pet in a frame.
+type Pet struct {
+	G       string
+	Owner   string
+	HPPct   float64
+	Combat  bool
+	Target  string
+	X, Y, Z float64
 }
 
 // Unit is one party member in a frame.

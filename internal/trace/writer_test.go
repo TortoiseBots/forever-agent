@@ -420,3 +420,47 @@ func TestHeaderStartUnixFollowsStart(t *testing.T) {
 		t.Fatalf("start_unix %d, want the explicit 5", got)
 	}
 }
+
+// TestFramePetsRoundTrip: a frame's Pets slice serialises under `pt` with its compact keys and reads back whole;
+// an empty Pets slice omits `pt`, and an empty pet target omits `tg`.
+func TestFramePetsRoundTrip(t *testing.T) {
+	w := open(t, Options{FrameEvery: time.Millisecond})
+	w.Header(Header{Source: "forever_dungeon_watch", Start: time.Unix(1_700_000_000, 0).UTC()})
+	fr := frame(1000)
+	fr.Pets = []Pet{
+		{G: "0xE1", Owner: "0x11", HPPct: 85, Combat: true, Target: "0xF1", X: 1.5, Y: 2.5, Z: 3.5},
+		{G: "0xE2", Owner: "0x11", HPPct: 100, Combat: false, X: 4, Y: 5, Z: 6},
+	}
+	w.Frame(fr)
+	w.Frame(frame(2000))
+	w.Close()
+
+	b, err := os.ReadFile(w.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("%d lines:\n%s", len(lines), b)
+	}
+	if !strings.Contains(lines[1], `"pt":[`) || !strings.Contains(lines[1], `"ow":"0x11"`) || !strings.Contains(lines[1], `"tg":"0xF1"`) {
+		t.Fatalf("frame 1 JSON %s", lines[1])
+	}
+	if strings.Contains(lines[2], `"pt":[`) {
+		t.Fatalf("frame 2 without pets wrote pt: %s", lines[2])
+	}
+	f, err := Read(w.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Frames) != 2 || len(f.Frames[0].Pets) != 2 || len(f.Frames[1].Pets) != 0 {
+		t.Fatalf("round-trip frames %+v", f.Frames)
+	}
+	got := f.Frames[0].Pets[0]
+	if got.G != "0xE1" || got.Owner != "0x11" || got.HPPct != 85 || !got.Combat || got.Target != "0xF1" || got.X != 1.5 || got.Y != 2.5 || got.Z != 3.5 {
+		t.Fatalf("round-trip pet %+v", got)
+	}
+	if f.Frames[0].Pets[1].Target != "" {
+		t.Fatalf("pet 2 target %q, want empty", f.Frames[0].Pets[1].Target)
+	}
+}

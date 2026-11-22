@@ -274,6 +274,18 @@ func (t *TopEntry) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Pet is a party member's pet in a frame.
+type Pet struct {
+	G      string  `json:"g"`
+	Owner  string  `json:"ow"`
+	HPPct  int     `json:"hp"`
+	Combat bool    `json:"cb"`
+	Target string  `json:"tg,omitempty"`
+	X      float32 `json:"x"`
+	Y      float32 `json:"y"`
+	Z      float32 `json:"z"`
+}
+
 // Frame is a sample of the world. Via is "session" (the agent's own object store and party list) or "feed" (a TBM:VIEW frame).
 type Frame struct {
 	Envelope
@@ -282,6 +294,7 @@ type Frame struct {
 	Cut  bool   `json:"cut,omitempty"` // the source marked the frame as cut short
 	Bots []Bot  `json:"bots"`
 	Mobs []Mob  `json:"mobs"`
+	Pets []Pet  `json:"pt,omitempty"`
 }
 
 // Event is one thing that happened: Ev names it, D holds its fields, written flat beside ev. The server's events use a and b (guids),

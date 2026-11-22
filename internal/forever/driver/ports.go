@@ -37,6 +37,8 @@ type Unit struct {
 	MaxHP int
 	// Target is the unit's current target (a mob's victim, a bot's target); the empty GUID when it has none.
 	Target wire.GUID
+	// Combat reports whether the unit is in combat.
+	Combat bool
 	Dead   bool
 	// Ghost is set for a dead player who is a ghost rather than a corpse.
 	Ghost bool
@@ -45,6 +47,8 @@ type Unit struct {
 	// Friendly marks a unit that cannot be pulled (a quest giver, a player of the same faction, a totem); the
 	// adapter knows the faction, the fake sets it.
 	Friendly bool
+	// Owner is the unit's owner GUID (SummonedBy, else CreatedBy, else CharmedBy), zero when unowned.
+	Owner wire.GUID
 }
 
 // Alive reports whether the unit can still be fought.

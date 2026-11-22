@@ -22,6 +22,7 @@ func FrameRules() []Rule {
 		{3, ruleNames[3], Rule3, nil},
 		{5, ruleNames[5], Rule5, nil},
 		{6, ruleNames[6], Rule6, nil},
+		{7, ruleNames[7], Rule7, nil},
 		{9, ruleNames[9], Rule9, nil},
 		{10, ruleNames[10], Rule10, nil},
 		{13, ruleNames[13], Rule13, skipNoMealReport},

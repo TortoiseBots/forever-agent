@@ -226,6 +226,22 @@ func watchFrame(f *trace.Frame, registry map[string]trace.MobInfo) *Frame {
 		}
 		out.Mobs = append(out.Mobs, mob)
 	}
+	for _, p := range f.Pets {
+		g := CanonGUID(p.G)
+		if g == "" {
+			continue
+		}
+		out.Pets = append(out.Pets, &Pet{
+			G:      g,
+			Owner:  CanonGUID(p.Owner),
+			HPPct:  float64(p.HPPct),
+			Combat: p.Combat,
+			Target: CanonGUID(p.Target),
+			X:      float64(p.X),
+			Y:      float64(p.Y),
+			Z:      float64(p.Z),
+		})
+	}
 	out.GC = false
 	for _, u := range out.Units {
 		if u.Combat {

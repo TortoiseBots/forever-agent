@@ -56,6 +56,9 @@ const (
 	R6_NEAR_COMBAT_YD     = 60.0 // and an in-combat hostile must be this near the eater
 	R6_LOW_MANA_PCT       = 30.0 // eating at or below this mana % is a need, above it a waste
 
+	// Rule 7: a pet fighting a mob while its alive owner is out of combat or has no target, longer than rule7MinS.
+	rule7MinS = 5.0
+
 	// Rule 8: the same buff cast more than R8_MAX_CASTS times in R8_WINDOW_S on one target. R8_NEAR_START_S and
 	// R8_NEAR_AURA_S are the Python's genuineness windows: a spell_start just before the completion, or an
 	// aura_applied just after it, says the cast was real and not a periodic row.
@@ -154,6 +157,7 @@ var ruleNames = map[int]string{
 	4:  "standing in damaging AoE >3 s",
 	5:  "stuck >30 s while group moves",
 	6:  "eat/drink while group in combat",
+	7:  "pet attacks unit master is not fighting",
 	8:  "buff flip-flop (>3 casts / 60 s / target)",
 	9:  "fall/drown death",
 	10: "power waste at 100% in combat >30 s",

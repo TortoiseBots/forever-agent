@@ -956,7 +956,7 @@ func TestForeverWatchRecordRoundTripsIntoRunMap(t *testing.T) {
 					GUID: g, Role: role,
 				})
 			}
-			rec.WatchFrame(start.Add(time.Duration(sec)*time.Second), bots, nil, func(string) string { return "" })
+			rec.WatchFrame(start.Add(time.Duration(sec)*time.Second), bots, nil, func(string) string { return "" }, nil)
 		}
 		rec.Finish(start.Add(fixtureSeconds*time.Second), "done", "leg_three")
 		rec.CloseCombat()
