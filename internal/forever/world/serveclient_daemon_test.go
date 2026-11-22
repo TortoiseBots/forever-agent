@@ -385,12 +385,13 @@ func (a *serveAgent) rawPost(t *testing.T, body []byte) (json.RawMessage, *rpcEr
 func TestServeClientMethodPin(t *testing.T) {
 	ported, notPorted := ServeRPCMethods()
 	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander",
-		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status"} {
+		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status",
+		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}
 	}
-	for _, m := range []string{"buy"} {
+	for _, m := range []string{"trainer_list"} {
 		if !slices.Contains(notPorted, m) {
 			t.Errorf("%s is no longer not-ported: drop its note and test it for real", m)
 		}
