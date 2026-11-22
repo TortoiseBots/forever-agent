@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "contract/**"
+      - "tools/tbmcontract/forever/**"
   workflow_dispatch:
 
 concurrency:
@@ -46,3 +47,10 @@ jobs:
             exit 0
           fi
           go test -race -count=1 -timeout 10m "${pkgs[@]}"
+
+      - name: replay the cases through TortoiseBotsForeverManager
+        run: |
+          set -euo pipefail
+          if [ ! -d tools/tbmcontract/forever ]; then echo "no TBFM replay on this branch yet"; exit 0; fi
+          sudo apt-get install -y --no-install-recommends lua5.1
+          TBM_CONTRACT_STRICT=1 sh tools/tbmcontract/forever/run.sh
