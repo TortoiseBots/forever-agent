@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
 	"github.com/pjerra/forever-agent/internal/forever/death"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
@@ -216,7 +217,17 @@ func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
 		".bot add Botone":           true,
 		".bot attack Bottwo":        true,
 		".bot who":                  true,
-		".bot  add   Botone":        true,
+		".bot  add   Botone":        false,
+		".bot who extra":            false,
+		".bot who ":                 false,
+		".bot help Botone":          false,
+		".bot add":                  false,
+		".bot add Botone Bottwo":    false,
+		".bot add Botone ":          false,
+		".bot add botone":           false,
+		".bot add Bot\\one":         false,
+		".bot add Botone\\.gm on":   false,
+		".bot add 12345":            false,
 		".bot summon Bottwo":        true,
 		".bot help":                 true,
 		".tb run start":             false,
@@ -241,7 +252,7 @@ func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
 	}
 	s, sc := newPlaySession(t)
 	l := &playLink{cmdLink: cmdLink{s: s}}
-	for _, text := range []string{".tb run start", ".gm on", ".tele orgrimmar", ".bot add Botone\n.gm on", "hi"} {
+	for _, text := range []string{".tb run start", ".gm on", ".tele orgrimmar", ".bot add Botone\n.gm on", "hi", ".bot who extra", ".bot add Botone\\.gm", ".bot add botone"} {
 		if err := l.SendCommand(context.Background(), text); err == nil {
 			t.Errorf("SendCommand(%q) was sent", text)
 		}
@@ -457,6 +468,34 @@ func TestPlaySessionFightTickSwingsOnceAndStops(t *testing.T) {
 	s.setLinkDead(sideInstance, errors.New("gone"))
 	if err := p.FightTick(ctx, skull); !errors.Is(err, driver.ErrLinkLost) {
 		t.Fatalf("FightTick on a dead link: %v", err)
+	}
+}
+
+func TestPlaySessionFightTickCountsContactWithItsTarget(t *testing.T) {
+	s, sc := newPlaySession(t)
+	skull := unitGUID(7)
+	addUnitOnMap(t, s, skull, 389, 10, 21, 30, 40, 40, 0)
+	p := newPlayPlayer(context.Background(), s)
+	ctx := context.Background()
+	if err := p.Attack(skull); err != nil {
+		t.Fatal(err)
+	}
+	// Each swing is a real round between the agent and its target, then the server ends the attack: that is the
+	// end of a fight with contact, never a refusal.
+	for i := 0; i < 6; i++ {
+		if i > 0 {
+			s.fight.swing(combat.AttackRound{Attacker: s.self, Victim: skull, Damage: 5})
+			s.fight.attackStops++
+		}
+		if err := p.FightTick(ctx, skull); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+	if p.refused != 0 || p.gaveUp[skull] {
+		t.Fatalf("a stop after contact was read as a refused swing (refused %d, gave up %v)", p.refused, p.gaveUp[skull])
+	}
+	if got := sc.count(wire.CMSGAttackSwing); got != 6 {
+		t.Fatalf("%d swings, want one per tick", got)
 	}
 }
 

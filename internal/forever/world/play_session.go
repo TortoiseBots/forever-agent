@@ -92,22 +92,26 @@ type playLink struct {
 	cmdLink
 }
 
-// playLineAllowed is the closed vocabulary of the player run's command channel: `.bot`, one of the contract's verbs,
-// and arguments of plain words. A newline or a chain separator never gets through (the validator below also refuses
-// them), and nothing that is not `.bot` does, whatever it names.
+// playLineAllowed is the closed vocabulary of the player run's command channel, held to the contract's whole grammar
+// and not only its prefix: `.bot`, one verb of the contract, and the bot's name where the verb takes one, as single
+// spaced words. It is admitted only when botcmd.Line, the one builder of v1 requests, would write this very line, so
+// the verb's arity, the bot's normalised name, the module's chain separator and the chat validator's rules are the
+// builder's own and nothing but a typed request gets through.
 func playLineAllowed(text string) bool {
-	if strings.ContainsAny(text, "\r\n\x00") {
+	parts := strings.Split(text, " ")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != ".bot" {
 		return false
 	}
-	if !strings.HasPrefix(text, ".bot ") {
+	verb, ok := botcmd.ParseVerb(parts[1])
+	if !ok {
 		return false
 	}
-	fields := strings.Fields(text)
-	if len(fields) < 2 {
-		return false
+	bot := ""
+	if len(parts) == 3 {
+		bot = parts[2]
 	}
-	_, ok := botcmd.ParseVerb(fields[1])
-	return ok
+	line, err := botcmd.Line(verb, bot, "")
+	return err == nil && line == text
 }
 
 func (l *playLink) SendCommand(ctx context.Context, text string) error {
@@ -373,6 +377,9 @@ func (p *playPlayer) Attack(guid wire.GUID) error {
 		return err
 	}
 	p.target, p.attacking, p.refused = guid, false, 0
+	// The fight log counts a round as contact only with the unit it was told is the target: without this a stop
+	// after real contact would read as a refused swing.
+	s.fight.setTarget(guid)
 	p.plan = planSpells(s.known)
 	p.hook = s.castBetweenSwings(&p.plan, guid)
 	return nil
