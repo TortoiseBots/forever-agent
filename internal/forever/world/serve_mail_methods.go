@@ -603,7 +603,6 @@ func (s *session) serveMailSend(parent context.Context, p serveMailParams) (Serv
 		}
 		return res, err
 	}
-	s.mail.sendUnknown = false
 	if !r.OK() {
 		return res, nil
 	}

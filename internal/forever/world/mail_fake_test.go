@@ -793,15 +793,20 @@ func TestServeMailSendSilentIsUnknownOutcome(t *testing.T) {
 	if m.sentCount(wire.CMSGSendMail) != 1 {
 		t.Fatal("the refused retry sent a packet")
 	}
-	// A forced send that is answered lifts the barrier.
+	// A forced send goes out, but the barrier stays: a send result names no mail, so a late result of the first send
+	// could answer the forced one, and the next send needs force again.
 	delete(m.silent, wire.CMSGSendMail)
 	p.Force = true
 	if res, err := m.s.serveMailSend(context.Background(), p); err != nil || !res.OK {
 		t.Fatalf("the forced send: %+v %v", res, err)
 	}
 	p.Force = false
-	if res, err := m.s.serveMailSend(context.Background(), p); err != nil || !res.OK {
-		t.Fatalf("the barrier outlived an answered send: %+v %v", res, err)
+	sent := m.sentCount(wire.CMSGSendMail)
+	if _, err := m.s.serveMailSend(context.Background(), p); err == nil || !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("the barrier lifted after a forced send: %v", err)
+	}
+	if m.sentCount(wire.CMSGSendMail) != sent {
+		t.Fatal("the blocked send put a packet out")
 	}
 }
 

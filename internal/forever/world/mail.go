@@ -32,8 +32,9 @@ type mailWatch struct {
 	nextSeq int
 	// notices counts SMSG_NOTIFY_RECEIVED_MAIL.
 	notices int
-	// sendUnknown is set when a mail_send went out and no result came: the mail may have been delivered and charged,
-	// so the next mail_send needs force until a send gets an answer.
+	// sendUnknown is set when a mail_send went out and no result came: the mail may have been delivered and charged, and
+	// its late result cannot be told from a later send's (a send result names no mail), so every later send needs force
+	// until the session restarts.
 	sendUnknown bool
 }
 

@@ -99,7 +99,7 @@ money and item counts, and the bodies only appear in the method answer.
 
 Every command after `mail_list` addresses a mail that list showed, from that mailbox: a call for another mail, or from
 another mailbox, is an RPC error before any packet ("mail_list comes first"). A refusal after a packet went out is
-`ok: false` with a `mail_result` event; a result that never came is an error that says the outcome is unknown. After a send whose result never came, the next `mail_send` is refused (no packet) until the caller sets `force: true`, because the mail may have been delivered and charged and a retry would repeat it. The core answers some sends with nothing (a receiver below the mail level only gets a
+`ok: false` with a `mail_result` event; a result that never came is an error that says the outcome is unknown. After a send whose result never came, the next `mail_send` is refused (no packet) and stays refused until the caller sets `force: true` on each one, for the rest of the session: the mail may have been delivered and charged, a retry would repeat it, and a send result names no mail, so a late result of the first send cannot be told from a later send's. The core answers some sends with nothing (a receiver below the mail level only gets a
 notification, MailHandler.cpp:221-225), so a silent send is the unknown outcome too.
 
 `mail_send` does not pre-check the purse: a game master sends free (MailHandler.cpp:187), and the server's
