@@ -323,17 +323,24 @@ func (s *session) serveSell(parent context.Context, p serveNPCParams) (ServeNPCR
 
 // serveGossipHello talks to the NPC (a quest hello for a quest-only NPC) and answers its menu, or its quest list.
 func (s *session) serveGossipHello(parent context.Context, p serveNPCParams) (ServeNPCResult, error) {
-	ctx, cancel, err := methodCtx(parent, p.WaitMS, methodWaitDefaultMS, methodWaitMaxMS)
+	return s.serveHello(parent, p.GUID, p.WaitMS, npc.NPCFlagGossip|npc.NPCFlagQuestGiver, "has neither a gossip menu nor quests")
+}
+
+// serveHello is the flow gossip_hello and quest_hello share: the act open step on the NPC, answered by the first
+// gossip or quest-list row. need is the NpcFlags bits of which the NPC must carry one, checked before any packet;
+// lack words the refusal.
+func (s *session) serveHello(parent context.Context, guid GUID, waitMS int, need uint32, lack string) (ServeNPCResult, error) {
+	ctx, cancel, err := methodCtx(parent, waitMS, methodWaitDefaultMS, methodWaitMaxMS)
 	if err != nil {
 		return ServeNPCResult{}, err
 	}
 	defer cancel()
-	unit, err := s.methodNPC(p.GUID)
+	unit, err := s.methodNPC(guid)
 	if err != nil {
 		return ServeNPCResult{}, err
 	}
-	if unit.Info.NpcFlags&(npc.NPCFlagGossip|npc.NPCFlagQuestGiver) == 0 {
-		return ServeNPCResult{}, fmt.Errorf("entry %d has neither a gossip menu nor quests (NpcFlags %#x)", unit.Info.Entry, unit.Info.NpcFlags)
+	if unit.Info.NpcFlags&need == 0 {
+		return ServeNPCResult{}, fmt.Errorf("entry %d %s (NpcFlags %#x)", unit.Info.Entry, lack, unit.Info.NpcFlags)
 	}
 	res := ServeNPCResult{Since: s.EventLog().Last(), Lines: []string{}}
 	a := s.methodState()

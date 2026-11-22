@@ -53,6 +53,16 @@ type questWorld struct {
 	noRewardPush bool
 	// failedOther, when set, is the quest id of a timed quest that fails during the accept's window.
 	failedOther uint32
+	// acceptState is the StateFlags the accepted quest's log slot carries (0: the core sets none on an accept,
+	// QuestSlotStateMask, Player.h:689). Zero is the default here; the older fixtures use takeQuest's value.
+	acceptState uint16
+	// querySilent makes the giver ignore CMSG_QUEST_GIVER_QUERY_QUEST (a quest it neither gives nor takes, or one
+	// the character cannot take: QuestHandler.cpp:201-222); queryTurnIn answers the request-items screen instead of
+	// the details (a turn-in quest, QuestHandler.cpp:221-222); queryTitle is the details' title.
+	querySilent bool
+	queryTurnIn bool
+	queryTitle  string
+	query       []byte
 }
 
 // questLogUpdate builds an SMSG_UPDATE_OBJECT carrying one PlayerData quest-log update for the character, the way
@@ -135,8 +145,13 @@ func questLogUpdate(slots map[int]objects.QuestLogDelta, extraBits ...int) []byt
 
 // takeQuest is the server's log update for a quest taken into a slot (SetQuestSlot, then the incomplete state).
 func takeQuest(slot int, id int32) []byte {
+	return takeQuestState(slot, id, quest.StatusIncomplete)
+}
+
+// takeQuestState is takeQuest with the slot's StateFlags named.
+func takeQuestState(slot int, id int32, state uint16) []byte {
 	return questLogUpdate(map[int]objects.QuestLogDelta{
-		slot: {HasQuestID: true, QuestID: id, HasState: true, StateFlags: quest.StatusIncomplete},
+		slot: {HasQuestID: true, QuestID: id, HasState: true, StateFlags: state},
 	})
 }
 
@@ -215,6 +230,18 @@ func (q *questWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			q.t.Fatalf("the status query names %s", g)
 		}
 		q.deliver(wire.SMSGQuestGiverStatus, questStatusPayload(questNPCGUID, 0x400000))
+	case wire.CMSGQuestGiverQueryQuest:
+		q.query = append([]byte(nil), payload...)
+		r := wire.NewReader(payload)
+		_ = wire.ReadPackedGUID(r)
+		id := r.ReadI32()
+		switch {
+		case q.querySilent:
+		case q.queryTurnIn:
+			q.deliver(wire.SMSGQuestGiverRequestItems, questRequestPayload(id, q.requestStatus, 1))
+		default:
+			q.deliver(wire.SMSGQuestGiverQuestDetails, questDetailsTitled(id, 5001, 4, q.queryTitle))
+		}
 	case wire.CMSGQuestGiverAcceptQuest:
 		q.accept = append([]byte(nil), payload...)
 		if q.refuse != 0 || q.refuseNone {
@@ -230,7 +257,7 @@ func (q *questWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		// A successful accept answers the gossip close and writes the quest into the character's log
 		// (QuestHandler.cpp:184-222, Player::AddQuest); a giver that does not offer the quest only closes.
 		if !q.silentAccept {
-			q.deliver(wire.SMSGUpdateObject, takeQuest(q.acceptSlot, id))
+			q.deliver(wire.SMSGUpdateObject, takeQuestState(q.acceptSlot, id, q.acceptState))
 		}
 		q.deliver(wire.SMSGGossipComplete, []byte{0x00})
 	case wire.CMSGQuestGiverCompleteQuest:
@@ -334,10 +361,15 @@ func writeEmptyRewards(b *wire.Buffer, money, xp int32) {
 
 // questRequestPayload writes SMSG_QUEST_GIVER_REQUEST_ITEMS with one collect objective (QuestPackets.cpp:546-592).
 func questRequestPayload(questID int32, status int32, amount int32) []byte {
+	return questRequestFrom(questNPCGUID, questID, status, amount)
+}
+
+// questRequestFrom is questRequestPayload from the named giver.
+func questRequestFrom(giver wire.GUID, questID int32, status int32, amount int32) []byte {
 	b := wire.NewWriter()
 	b.WriteU32(1) // collect
 	b.WriteU32(0) // currency
-	wire.WritePackedGUID(b, questNPCGUID)
+	wire.WritePackedGUID(b, giver)
 	for range 4 {
 		b.WriteU32(0)
 	}
@@ -367,6 +399,11 @@ func questRequestPayload(questID int32, status int32, amount int32) []byte {
 
 // questOfferPayload writes SMSG_QUEST_GIVER_OFFER_REWARD_MESSAGE with one choice (QuestPackets.cpp:387-441).
 func questOfferPayload(questID int32, choices ...int32) []byte {
+	return questOfferFrom(questNPCGUID, questID, choices...)
+}
+
+// questOfferFrom is questOfferPayload from the named giver.
+func questOfferFrom(giver wire.GUID, questID int32, choices ...int32) []byte {
 	if choices == nil {
 		choices = []int32{questRewardItem}
 	}
@@ -428,7 +465,7 @@ func questOfferPayload(questID int32, choices ...int32) []byte {
 	b.FlushBits()
 	// QuestGiverOfferReward: no emotes, the giver, the flags, the ids and the three bits.
 	b.WriteU32(0)
-	wire.WritePackedGUID(b, questNPCGUID)
+	wire.WritePackedGUID(b, giver)
 	for range 4 {
 		b.WriteU32(0)
 	}
@@ -916,8 +953,18 @@ func TestQuestStepsRefuseANonGiver(t *testing.T) {
 
 // questDetailsPayload writes SMSG_QUEST_GIVER_QUEST_DETAILS with one objective (QuestPackets.cpp:478-543).
 func questDetailsPayload(questID int32, objectiveID int32, amount int32) []byte {
+	return questDetailsTitled(questID, objectiveID, amount, "")
+}
+
+// questDetailsTitled is questDetailsPayload with the quest's title (the first of the seven sized strings).
+func questDetailsTitled(questID int32, objectiveID int32, amount int32, title string) []byte {
+	return questDetailsFrom(questNPCGUID, questID, objectiveID, amount, title)
+}
+
+// questDetailsFrom is questDetailsTitled from the named giver.
+func questDetailsFrom(giver wire.GUID, questID int32, objectiveID int32, amount int32, title string) []byte {
 	b := wire.NewWriter()
-	wire.WritePackedGUID(b, questNPCGUID)
+	wire.WritePackedGUID(b, giver)
 	wire.WritePackedGUID(b, wire.EmptyGUID)
 	b.WriteI32(questID)
 	for range 5 { // package and four portraits
@@ -940,7 +987,7 @@ func questDetailsPayload(questID int32, objectiveID int32, amount int32) []byte 
 	b.WriteI32(0) // objective type
 	b.WriteI32(objectiveID)
 	b.WriteI32(amount)
-	b.WriteBits(0, 9)
+	b.WriteBits(uint64(len(title)), 9)
 	b.WriteBits(0, 12)
 	b.WriteBits(0, 12)
 	b.WriteBits(0, 10)
@@ -951,6 +998,7 @@ func questDetailsPayload(questID int32, objectiveID int32, amount int32) []byte 
 		b.WriteBit(false)
 	}
 	b.FlushBits()
+	b.WriteString(title)
 	return b.Bytes()
 }
 

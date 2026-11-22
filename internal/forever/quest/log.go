@@ -24,9 +24,21 @@ const (
 	StatusRewarded   uint16 = 6
 )
 
+// The bits of a slot's StateFlags (QuestSlotStateMask, Player.h:689-694). The core sets QUEST_STATE_COMPLETE when
+// the quest completes (Player::CompleteQuest, Player.cpp:16170-16181), clears it when it becomes incomplete again
+// (Player::IncompleteQuest, Player.cpp:16200-16209) and sets QUEST_STATE_FAIL when it fails (Player.cpp:16620-16624).
+// An accepted quest carries neither (Player::AddQuest sets only the quest id), so the mask is 0 while it is in
+// progress: it is not the QuestStatus values above.
+const (
+	SlotStateComplete uint16 = 0x1
+	SlotStateFail     uint16 = 0x2
+)
+
 // StatusName names a slot's state for a report line.
 func StatusName(v uint16) string {
 	switch v {
+	case SlotStateFail:
+		return "failed"
 	case StatusNone:
 		return "none"
 	case StatusComplete:
@@ -170,7 +182,7 @@ func (l *Log) Failed(questID int32) bool {
 	if !ok {
 		return false
 	}
-	l.Entries[slot].StateFlags = StatusFailed
+	l.Entries[slot].StateFlags |= SlotStateFail
 	return true
 }
 
