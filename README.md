@@ -79,7 +79,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
-`inv`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
@@ -166,9 +166,9 @@ the client sent itself only bridges the gap: the client's guess shows (`unconfir
 it or two seconds pass, and then the item is `placed: false` rather than silently at the guess; an equipment change's
 answer is not decoded, so an equipped item stays unknown until the next login. An update the client could not
 decode that named slots makes `stale` true until the next login or map change. A refusal is printed as its name and tail (`cant_equip_level_i (needs level 12)`). The token is
-`inv`; the old daemon's
-`inventory` method keeps its "not ported" answer, because its result is a plain row array and a caller written for
-it must not be handed another shape. The act runner's `inv` step (round R2) prints the same rows, one line per item
+`inv`; the daemon's `inventory` method (round D2) answers the same rows in its own plain row array
+(`bag`, `slot`, `guid`, `item_entry`, `count`, `placed`, plus `name`/`quality` with `names`), the bag contents with
+`bags`, and the items the snapshot cannot place last (`placed: false`, bag and slot 255). The act runner's `inv` step (round R2) prints the same rows, one line per item
 (`entry 118 count 5 slot 35`, `slot unknown (arrived after the snapshot)`, or `(unconfirmed)` while a move of the item waits for the server), a `STALE` line when slots were lost,, then the first free backpack slot and
 the quest log's occupied slots.
 
