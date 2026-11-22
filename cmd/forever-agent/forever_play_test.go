@@ -183,6 +183,9 @@ func TestPlayVerdictRules(t *testing.T) {
 		{"a bot was not judged", nil, append(okJudge("tank", "heal", "dps1"), spelljudge.Finding{Finding: kbspells.Finding{Bot: "dps2", Role: "dps", Level: "na"}}), 90, false, "judge"},
 		{"only three bots judged", nil, okJudge("tank", "heal", "dps1"), 90, false, "judge"},
 		{"no findings at all", nil, nil, 90, false, "judge"},
+		{"combat rows dropped", func(s *driver.RunSummary) { s.Play.CombatDropped = 3 }, four, 90, false, "dropped"},
+		{"combat log truncated", func(s *driver.RunSummary) { s.Play.CombatTruncated = true }, four, 90, false, "truncated"},
+		{"combat write failed", func(s *driver.RunSummary) { s.Play.CombatError = "write: disk full" }, four, 90, false, "write failed"},
 	}
 	for _, tc := range cases {
 		sum := goodPlaySummary()
@@ -202,5 +205,66 @@ func TestPlayVerdictRules(t *testing.T) {
 	sum := goodPlaySummary()
 	if got, _ := playVerdict(sum, nil, false, 90); !got {
 		t.Error("a dry run with the judge skipped failed")
+	}
+}
+
+// TestDungeonPlayJudgesItsOwnTrace: a folder that holds another run, newer by name and with no combat log, does not
+// change the verdict of the run just played: the judge reads the trace the run wrote, not the newest one in the folder.
+func TestDungeonPlayJudgesItsOwnTrace(t *testing.T) {
+	out := t.TempDir()
+	code, stdout, stderr := runPlayCmd(t, "--dry", "--plan", rfcPlan(), "--bots", playBotsArg, "--character", "Hero", "--out", out)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, stdout, stderr)
+	}
+	traces, _ := filepath.Glob(filepath.Join(out, "r-*.jsonl"))
+	var own string
+	for _, f := range traces {
+		if !strings.HasSuffix(f, ".combatlog.jsonl") {
+			own = f
+		}
+	}
+	if own == "" {
+		t.Fatalf("no trace in %s", out)
+	}
+	// A later run in the same folder: the same trace and summary, an empty combat log.
+	stem := strings.TrimSuffix(own, ".jsonl")
+	other := filepath.Join(out, "r-99991231T235959-ffff")
+	for _, ext := range []string{".jsonl", ".forever-run.json"} {
+		raw, err := os.ReadFile(stem + ext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(other+ext, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(other+".combatlog.jsonl", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := playJudge(own, 30, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 4 {
+		t.Fatalf("own findings = %v", mine)
+	}
+	for _, f := range mine {
+		if f.Level == "na" || f.Level == "fail" {
+			t.Fatalf("own trace: %s is %s (%s)", f.Bot, f.Level, f.Text)
+		}
+	}
+	// The folder's newest run is the other one: reading by folder would have judged its empty combat log.
+	byDir, err := playJudge(out, 30, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	na := 0
+	for _, f := range byDir {
+		if f.Level == "na" {
+			na++
+		}
+	}
+	if na == 0 {
+		t.Fatalf("the folder read judged %v; want the other run's empty log to show (the test's trap is not set)", byDir)
 	}
 }

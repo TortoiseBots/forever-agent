@@ -135,7 +135,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	}
 	// A lost link is its own exit: the verdict still prints, and it says why the run is not a clear.
 	judged := !*dry || *out != ""
-	findings, jerr := playJudge(*out, *minActive, judged)
+	findings, jerr := playJudge(res.Trace, *minActive, judged)
 	printPlayJudge(stdout, findings, jerr, judged)
 	pass, reasons := playVerdict(res.Summary, findings, judged && jerr == nil, route.MaxMinutes)
 	if jerr != nil {
@@ -233,11 +233,12 @@ func linesText(by map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-// playJudge judges the run's bots from the recording in dir (the newest run in it): the same judge `forever
-// spell-score` runs, over the Forever oracle and spell table embedded in this build. The findings are keyed by the
-// trace's slot names (tank, heal, dps1, dps2), never a character's name.
-func playJudge(dir string, minActive float64, judged bool) ([]spelljudge.Finding, error) {
-	if !judged || dir == "" {
+// playJudge judges the run's bots from the run's own trace file (its summary and combat log are the files beside it
+// with the same run id, so another run in the same folder is never read): the same judge `forever spell-score`
+// runs, over the Forever oracle and spell table embedded in this build. The findings are keyed by the trace's slot
+// names (tank, heal, dps1, dps2), never a character's name.
+func playJudge(tracePath string, minActive float64, judged bool) ([]spelljudge.Finding, error) {
+	if !judged || tracePath == "" {
 		return nil, nil
 	}
 	table := foreverspells.Default()
@@ -248,7 +249,7 @@ func playJudge(dir string, minActive float64, judged bool) ([]spelljudge.Finding
 	if err != nil {
 		return nil, err
 	}
-	r, err := bughunt.LoadWatch(dir, "")
+	r, err := bughunt.LoadWatch(tracePath, "")
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +278,9 @@ func printPlayJudge(stdout io.Writer, findings []spelljudge.Finding, err error, 
 }
 
 // playVerdict is the milestone's rule over one run's summary and the judge's findings. judged says the judge was
-// meant to run (a live run, or a dry one with a recording): then four findings must exist and none may fail or be "na"
-// (a bot with no class or too little fight to judge is no evidence). capMinutes is the plan's own time cap; the wipe
+// meant to run (a live run, or a dry one with a recording): then the combat log must be complete (no dropped row, no
+// truncation, no failed write) and four findings must exist, none failed or "na" (a bot with no class or too little
+// fight to judge is no evidence). capMinutes is the plan's own time cap; the wipe
 // limit is the milestone's two whatever budget the run ran under. It returns the verdict and the reasons it failed.
 func playVerdict(sum driver.RunSummary, findings []spelljudge.Finding, judged bool, capMinutes int) (bool, []string) {
 	var why []string
@@ -299,6 +301,18 @@ func playVerdict(sum driver.RunSummary, findings []spelljudge.Finding, judged bo
 		}
 	}
 	if judged {
+		// A log the run knows is incomplete can hide a cast, so the judge's pass on what is left proves nothing.
+		if sum.Play != nil {
+			if sum.Play.CombatDropped > 0 {
+				why = append(why, fmt.Sprintf("combat log: %d rows dropped", sum.Play.CombatDropped))
+			}
+			if sum.Play.CombatTruncated {
+				why = append(why, "combat log: truncated at its size bound")
+			}
+			if sum.Play.CombatError != "" {
+				why = append(why, "combat log: write failed ("+sum.Play.CombatError+")")
+			}
+		}
 		if len(findings) != 4 {
 			why = append(why, fmt.Sprintf("judge: %d of 4 bots judged", len(findings)))
 		}

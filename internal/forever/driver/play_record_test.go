@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -112,4 +113,23 @@ func slicesContains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// droppingLog is a combat log whose ring lost rows before the run read them.
+type droppingLog struct{ *PlayFake }
+
+func (d droppingLog) CombatRows(seq, limit int) ([]json.RawMessage, int, int, int) {
+	rows, next, oldest, _ := d.PlayFake.CombatRows(seq, limit)
+	return rows, next, oldest, 5
+}
+
+// TestPlaySummaryCountsDroppedCombatRows: a hole the ring reports reaches the summary, so a verdict can refuse a
+// log that is known to be incomplete.
+func TestPlaySummaryCountsDroppedCombatRows(t *testing.T) {
+	rig := playRecordRig(t)
+	rig.ports.Combat = droppingLog{rig.fake}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Summary.Play == nil || res.Summary.Play.CombatDropped != 5 {
+		t.Fatalf("play record = %+v; want 5 dropped rows", res.Summary.Play)
+	}
 }

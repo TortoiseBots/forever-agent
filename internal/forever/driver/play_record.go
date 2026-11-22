@@ -128,9 +128,14 @@ func (p *playRun) drainCombat() {
 			if err != nil {
 				if errors.Is(err, errCombatFull) {
 					p.combatFull = true
+				} else {
+					// The page stays where it is and the next drain retries it; if no later drain gets it through, the
+					// record says its log is incomplete.
+					p.combatErr = combatErrText(err)
 				}
 				return
 			}
+			p.combatErr = ""
 			p.combatRows += n
 		}
 		if next <= p.combatSeq {
@@ -153,6 +158,6 @@ func (p *playRun) playRecord(end time.Time) *PlayRecord {
 	return &PlayRecord{
 		Minutes: end.Sub(p.start).Seconds() / 60, MaxMinutes: budget, MaxWipes: p.maxWipes,
 		GMLines: gm, LinesByPrefix: by, Frames: p.frames, CombatRows: p.combatRows,
-		CombatDropped: p.combatLost, CombatTruncated: p.combatFull,
+		CombatDropped: p.combatLost, CombatTruncated: p.combatFull, CombatError: p.combatErr,
 	}
 }

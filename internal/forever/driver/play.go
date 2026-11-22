@@ -301,6 +301,7 @@ type playRun struct {
 	combatLost        int
 	combatLostThrough int
 	combatFull        bool
+	combatErr         string
 }
 
 // Play runs one player run to STOP and returns what it did.

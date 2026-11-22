@@ -101,6 +101,9 @@ type PlayRecord struct {
 	CombatRows      int  `json:"combat_rows"`
 	CombatDropped   int  `json:"combat_dropped,omitempty"`
 	CombatTruncated bool `json:"combat_truncated,omitempty"`
+	// CombatError is the last write error of a page the run could not put in the file (the rows were lost to the
+	// record); empty when the file has every row the run read.
+	CombatError string `json:"combat_error,omitempty"`
 }
 
 // RunWatch is a watched run's record: the module's progress at the end (or at the last read), its counters, the
