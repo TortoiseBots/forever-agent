@@ -558,6 +558,18 @@ func mergeInfo(dst *Info, src Info) {
 	if f.Target {
 		dst.Target = src.Target
 	}
+	if f.PetNumber {
+		dst.PetNumber = src.PetNumber
+	}
+	if f.CreatedBySpell {
+		dst.CreatedBySpell = src.CreatedBySpell
+	}
+	if f.CreatureFamily {
+		dst.CreatureFamily = src.CreatureFamily
+	}
+	if f.PetFlags {
+		dst.PetFlags = src.PetFlags
+	}
 	if f.Race {
 		dst.Race = src.Race
 	}

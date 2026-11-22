@@ -276,6 +276,18 @@ const (
 	SMSGInventoryChangeFailure uint32 = 0x680005
 )
 
+// The pets of round P1 (Opcodes.h:756, 770-771, 2090, 2107, 2113, 2116 at the pinned core): the control bar, the
+// mode, the pet's cast failure and action feedback, and the three client packets. Each GUID in them is packed.
+const (
+	SMSGPetSpellsMessage  uint32 = 0x670014
+	SMSGPetMode           uint32 = 0x45001F
+	SMSGPetCastFailed     uint32 = 0x67004B
+	SMSGPetActionFeedback uint32 = 0x4501F3
+	CMSGPetAction         uint32 = 0x3E001F
+	CMSGPetSpellAutocast  uint32 = 0x3E0024
+	CMSGPetStopAttack     uint32 = 0x3E0020
+)
+
 // The vendor of round R3 (Opcodes.h:147-148, 555, 844, 906-907, 1270-1271, 2300, 2483): the six client packets and
 // the four answers. LIST_INVENTORY is the NPC hello (Hello::Read), which is also how a vendor without the gossip
 // flag is opened.
@@ -471,6 +483,10 @@ var clientNames = map[uint32]string{
 	CMSGLootRoll:         "CMSG_LOOT_ROLL",
 	CMSGGameObjUse:       "CMSG_GAME_OBJ_USE",
 	CMSGGameObjReportUse: "CMSG_GAME_OBJ_REPORT_USE",
+
+	CMSGPetAction:        "CMSG_PET_ACTION",
+	CMSGPetSpellAutocast: "CMSG_PET_SPELL_AUTOCAST",
+	CMSGPetStopAttack:    "CMSG_PET_STOP_ATTACK",
 
 	CMSGAutoEquipItem:     "CMSG_AUTO_EQUIP_ITEM",
 	CMSGAutoEquipItemSlot: "CMSG_AUTO_EQUIP_ITEM_SLOT",
