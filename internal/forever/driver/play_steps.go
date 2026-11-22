@@ -169,6 +169,9 @@ func playStep(where string, s dungeon.Step) (Step, []error) {
 		if u.RequiresItem != nil {
 			refuse("use_object.requires_item", "the character's bags are not read by this round")
 		}
+		if u.Proof != nil {
+			refuse("use_object.proof", "a use whose proof is another object or creature is not read by this round: the state readback would fail it")
+		}
 		return Step{Use: &UseStep{ObjectAt: objectAt(u.ObjectRef, u.Stand)}}, errs
 	case s.LootObject != nil:
 		l := s.LootObject

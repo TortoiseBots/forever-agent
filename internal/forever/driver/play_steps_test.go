@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,5 +308,16 @@ func TestPlayStepsRunBeforeTheBoss(t *testing.T) {
 	}
 	if useAt > selectAt {
 		t.Fatalf("the door's use came at call %d and the boss's selection at %d; want the step first", useAt, selectAt)
+	}
+}
+
+// TestPlayRouteRefusesUseObjectProof: a use_object whose success shows as a proof, not as the object's own state change,
+// is refused by its plan path instead of failing after 10 s.
+func TestPlayRouteRefusesUseObjectProof(t *testing.T) {
+	st := playDoorStep()
+	st.UseObject.Proof = &dungeon.UseProof{GameObject: 1234, Radius: 10}
+	_, err := NewPlayRoute(playStepPlan(st))
+	if err == nil || !strings.Contains(err.Error(), "use_object.proof") {
+		t.Fatalf("err = %v; want a refusal naming use_object.proof", err)
 	}
 }
