@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
@@ -322,6 +323,21 @@ type fakeServer struct {
 	// resolve it by name; serveLeaderX moves it (default 1005, five yards east of the character at 1000).
 	serveLeaderName string
 	serveLeaderX    float32
+	// G2 group control: groupNames is the roster the daemon already holds, the other members in roster order (this
+	// character is added last); groupLeaderName names another leader (empty: this character leads) and groupSilent
+	// confirms nothing, the way this core answers a refused group command. groupIcons, groupLoot and groupFlags are
+	// the fake's own group state; the groupSeen* slices are what it saw. All under mu.
+	groupNames         []string
+	groupLeaderName    string
+	groupSilent        bool
+	groupIcons         [8]wire.GUID
+	groupLoot          *party.LootSettings
+	groupFlags         map[wire.GUID]uint8
+	groupSeenLeader    []wire.GUID
+	groupSeenAssistant []fakeAssistSeen
+	groupSeenLoot      []party.LootSettings
+	groupSeenMark      []fakeMarkSeen
+	groupSeenUninvite  []wire.GUID
 	// What the fake saw, under mu: every selection, every GM line, and the packet/line order ("select" or "say").
 	serveSelections []wire.GUID
 	serveGMLines    []string
