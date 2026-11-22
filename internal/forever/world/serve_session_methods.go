@@ -271,9 +271,11 @@ type serveAssistantParams struct {
 // serveLootMethodParams is the loot_method method's input: the method's name (or 0..5), the master looter's name for
 // master loot (optional) and the threshold quality 2..6 (optional, uncommon).
 type serveLootMethodParams struct {
-	Method    string `json:"method"`
-	Master    string `json:"master,omitempty"`
-	Threshold *int   `json:"threshold,omitempty"`
+	Method string `json:"method"`
+	Master string `json:"master,omitempty"`
+	// MasterName is turtle-agent's spelling of Master.
+	MasterName string `json:"master_name,omitempty"`
+	Threshold  *int   `json:"threshold,omitempty"`
 }
 
 // serveMarkParams is the mark method's input: the unit (its guid, or its name) and the icon's name.
@@ -566,11 +568,15 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		if !ok {
 			return serveEmpty{}, fmt.Errorf("loot_method: %q is not a loot method", p.Method)
 		}
+		master := p.Master
+		if master == "" {
+			master = p.MasterName
+		}
 		threshold := 2 // uncommon, the player run's setting
 		if p.Threshold != nil {
 			threshold = *p.Threshold
 		}
-		return serveEmpty{}, s.groupLootMethod(ctx, method, p.Master, threshold)
+		return serveEmpty{}, s.groupLootMethod(ctx, method, master, threshold)
 	}))
 	srv.Register("mark", serveCallTyped(st, func(s *session, ctx context.Context, p serveMarkParams) (ServeMark, error) {
 		mark, ok := party.ParseMarkName(p.Icon)

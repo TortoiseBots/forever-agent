@@ -528,3 +528,11 @@ func TestServeGroupMethodTable(t *testing.T) {
 	a.stop(t)
 	f.wait(t)
 }
+
+func TestParseLootMethodAcceptsUnderscoreNames(t *testing.T) {
+	for in, want := range map[string]party.LootMethod{"master_loot": party.MasterLoot, "need_before_greed": party.NeedBeforeGreed, "free_for_all": party.FreeForAll} {
+		if got, ok := ParseLootMethod(in); !ok || got != want {
+			t.Errorf("ParseLootMethod(%q) = %v, %v", in, got, ok)
+		}
+	}
+}

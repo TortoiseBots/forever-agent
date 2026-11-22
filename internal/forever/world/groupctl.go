@@ -48,7 +48,7 @@ var lootMethodNames = map[string]party.LootMethod{
 
 // ParseLootMethod parses a loot method's name (LootName's spelling or the short form) or its number 0..5.
 func ParseLootMethod(s string) (party.LootMethod, bool) {
-	if m, ok := lootMethodNames[strings.ToLower(strings.TrimSpace(s))]; ok {
+	if m, ok := lootMethodNames[strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "_", "-")]; ok {
 		return m, true
 	}
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 0 && n <= int(party.PersonalLoot) {
@@ -324,21 +324,8 @@ func (s *session) partyGroupControl(ctx context.Context) error {
 	if !s.party.RosterValid {
 		return fmt.Errorf("world: party-check: no valid party roster (%s)", s.party.LastInvalid)
 	}
-	if s.opts.PartyPromote != "" {
-		if err := s.groupPromote(ctx, s.opts.PartyPromote); err != nil {
-			return fmt.Errorf("world: party-check: %w", err)
-		}
-		s.opts.logf("party-check: promoted %s", chat.SanitiseName(s.opts.PartyPromote))
-		if s.opts.PartyPromoteBack > 0 {
-			// The other side is an agent session that promotes back: wait for the lead to come home.
-			if err := s.waitGroupConfirm(ctx, "promote back", s.opts.PartyPromoteBack, func() bool {
-				return s.party.LeaderGUID == s.party.SelfGUID
-			}); err != nil {
-				return fmt.Errorf("world: party-check: %w", err)
-			}
-			s.opts.logf("party-check: the new leader promoted back")
-		}
-	}
+	// Leader-only steps first: the promote hands the lead away, so a loot change after it would fail with the
+	// group already changed.
 	if s.opts.PartyLoot != "" {
 		method, threshold, err := ParseLootSpec(s.opts.PartyLoot)
 		if err != nil {
@@ -368,6 +355,21 @@ func (s *session) partyGroupControl(ctx context.Context) error {
 			return fmt.Errorf("world: party-check: --mark: the icon list does not hold %s on %s", party.MarkName(mark), chat.SanitiseName(name))
 		}
 		s.opts.logf("party-check: mark %s read back on %s", party.MarkName(mark), chat.SanitiseName(name))
+	}
+	if s.opts.PartyPromote != "" {
+		if err := s.groupPromote(ctx, s.opts.PartyPromote); err != nil {
+			return fmt.Errorf("world: party-check: %w", err)
+		}
+		s.opts.logf("party-check: promoted %s", chat.SanitiseName(s.opts.PartyPromote))
+		if s.opts.PartyPromoteBack > 0 {
+			// The other side is an agent session that promotes back: wait for the lead to come home.
+			if err := s.waitGroupConfirm(ctx, "promote back", s.opts.PartyPromoteBack, func() bool {
+				return s.party.LeaderGUID == s.party.SelfGUID
+			}); err != nil {
+				return fmt.Errorf("world: party-check: %w", err)
+			}
+			s.opts.logf("party-check: the new leader promoted back")
+		}
 	}
 	return nil
 }
