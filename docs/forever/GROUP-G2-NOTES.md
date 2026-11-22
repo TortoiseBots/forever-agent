@@ -42,7 +42,9 @@ with the raid card: `convert_raid` and `raid_move` remain not-ported serve metho
 `method` is `party.LootName`'s spelling (`group-loot`) or the short form the commands use (`group`, `need`, `master`,
 `round`, `ffa`, `personal`) or a number 0..5; `threshold` is 2..6, absent meaning uncommon (2). `icon` is one of
 `star circle diamond triangle moon square cross skull` (case-insensitive). `party` gains `loot_method`,
-`loot_threshold`, `loot_master` and `marks`, read from the model's last roster and icon packets.
+`loot_threshold`, `loot_master` and `marks`, read from the model's last roster and icon packets; the serve client
+(`internal/forever/serveclient`) carries the same four fields and a `PartyMark` type, so the strict
+client-decode test (`TestServeClientTypesMatchTheDaemon`) keeps matching both ways.
 
 The five old names leave `notPortedMethods`: `promote`, `assistant`, `loot_method`, `mark`, `disband`. `marks` is
 new. `convert_raid` and `raid_move` stay, as do `loot`, `loot_take`, `loot_close`, `roll` and the rest.
