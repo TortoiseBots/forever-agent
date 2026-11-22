@@ -14,16 +14,19 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--reset] [--max-minutes N] [--max-wipes N] [--practice=true] [--out DIR] [--navmesh DIR] [--dry]"
+	const usage = "usage: forever-agent forever dungeon-run --plan FILE --party TANK,HEALER,DPS,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--from-leg N] [--legs a,b] [--reset] [--max-minutes N] [--max-wipes N] [--practice=true] [--out DIR] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
+	var pf preflightFlags
+	pf.register(fs, true)
 	plan := fs.String("plan", "", "dungeon plan file (version 1)")
 	party := fs.String("party", "", "the five party members, tank first, then the healer, then three damage dealers")
 	fromLeg := fs.Int("from-leg", 0, "the first leg's index (0-based)")
@@ -61,6 +64,9 @@ func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.
 	}
 	if *maxMinutes < 1 || *maxMinutes > 24*60 || *maxWipes < -1 || *maxWipes > 20 {
 		fmt.Fprintln(stderr, "forever dungeon-run: --max-minutes is 1-1440 and --max-wipes -1 (no budget) to 20")
+		return exitUsage
+	}
+	if !pf.check("forever dungeon-run", *dry, stderr) {
 		return exitUsage
 	}
 	// The plan and the leg selection are checked before the login: a plan this build refuses must not cost a
@@ -102,6 +108,9 @@ func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.
 	if err := common.passwordCheck("forever dungeon-run"); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
+	}
+	if stop, code := runPreflight(ctx, "forever dungeon-run", fpreflight.KindRun, &pf, planLoader(driver.LoadRoute, *plan), common.character, names, stdout, stderr); stop {
+		return code
 	}
 	// The whole session's deadline covers the run's budget and the stop path's own wait for a fight to end, with
 	// room for the login and the logout.
