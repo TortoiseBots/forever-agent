@@ -54,6 +54,10 @@ const (
 	KindGossipComplete = "gossip_complete" // SMSG_GOSSIP_COMPLETE: the menu closed
 	// KindTaxiReply is SMSG_ACTIVATETAXIREPLY: the flight master's answer to a taxi call. data holds result and reason.
 	KindTaxiReply = "taxi_reply"
+	// KindTaxiNode is SMSG_NEW_TAXI_PATH: the server added a flight node to this character's mask. data holds node.
+	KindTaxiNode = "taxi_node"
+	// KindTaxiFlight is the character's own UNIT_FLAG_ON_TAXI changing: data.state is takeoff or landed.
+	KindTaxiFlight = "taxi_flight"
 	// The loot window of a corpse, its guid in source.
 	KindLootOpen       = "loot_open"        // SMSG_LOOT_RESPONSE: the window with its money and items
 	KindLootError      = "loot_error"       // SMSG_LOOT_RESPONSE refused: data.reason

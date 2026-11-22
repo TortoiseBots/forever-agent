@@ -8,6 +8,7 @@ package world
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/taxi"
@@ -47,6 +48,9 @@ type taxiFlightState struct {
 	// pending is true from an accepted ACTIVATE_TAXI until the flag's clearing: a flight the caller's own clock cut
 	// short is still in the air, and no movement may go out while it is.
 	pending bool
+	// learned is every node SMSG_NEW_TAXI_PATH named this session, in the order the server added them: the flight
+	// nodes this character discovered since it logged in (the login's own mask is the window's, not this list).
+	learned []uint32
 }
 
 // noteSelfTaxi records the character's own flags after one update of the world model. The dispatch calls it right
@@ -67,11 +71,19 @@ func (s *session) noteSelfTaxi() {
 	case on && !st.on:
 		st.on = true
 		st.set++
+		s.taxiFlightEvent("takeoff")
 	case !on && st.on:
 		st.on = false
 		st.clear++
 		st.pending = false
+		s.taxiFlightEvent("landed")
 	}
+}
+
+// taxiFlightEvent logs one change of the character's own ON_TAXI: the takeoff or the landing. The landing's own
+// teleport follows the flag's clearing in a later packet, so the event is the flag, not the position.
+func (s *session) taxiFlightEvent(state string) {
+	s.event(Event{Kind: events.KindTaxiFlight, Text: "taxi flight: " + state, Data: map[string]any{"state": state}})
 }
 
 // selfOnTaxi is the character's own ON_TAXI as the model holds it now.
@@ -95,7 +107,7 @@ func (s *session) taxiMovementBlocked() error {
 // isTaxiPacket reports the opcodes handleTaxi owns.
 func isTaxiPacket(core uint32) bool {
 	switch core {
-	case wire.SMSGShowTaxiNodes, wire.SMSGTaxiNodeStatus, wire.SMSGActivateTaxiReply:
+	case wire.SMSGShowTaxiNodes, wire.SMSGTaxiNodeStatus, wire.SMSGActivateTaxiReply, wire.SMSGNewTaxiPath:
 		return true
 	}
 	return false
@@ -125,6 +137,13 @@ func (s *session) handleTaxi(p worldconn.Packet) error {
 		}
 		s.taxi.status = &st
 		s.opts.logf("world: the flight master's node is %s", taxi.TaxiStatusName(st.Status))
+	case wire.SMSGNewTaxiPath:
+		node, err := taxi.ParseNewTaxiPath(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.noteNewTaxiNode(node)
 	case wire.SMSGActivateTaxiReply:
 		reply, err := taxi.ParseActivateTaxiReply(p.Payload)
 		if err != nil {
@@ -141,6 +160,16 @@ func (s *session) handleTaxi(p worldconn.Packet) error {
 		})
 	}
 	return nil
+}
+
+// noteNewTaxiNode records a node the server just added to the character's mask (SMSG_NEW_TAXI_PATH) and logs it. A
+// node already in the list is not added twice; the event goes out each time, because the server said it.
+func (s *session) noteNewTaxiNode(node uint32) {
+	if !slices.Contains(s.taxiFlight.learned, node) {
+		s.taxiFlight.learned = append(s.taxiFlight.learned, node)
+	}
+	s.opts.logf("world: taxi node %d learned", node)
+	s.event(Event{Kind: events.KindTaxiNode, Text: fmt.Sprintf("taxi node %d learned", node), Data: map[string]any{"node": node}})
 }
 
 // selfFlags is the character's own UnitData flags from the world model, and whether the model holds them yet.

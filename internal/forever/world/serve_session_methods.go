@@ -493,6 +493,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("mount", serveCallTyped(st, func(s *session, ctx context.Context, p serveMountParams) (ServeMount, error) {
 		return s.serveMount(ctx, p)
 	}))
+	srv.Register("taxi", serveCallTyped(st, func(s *session, ctx context.Context, p serveTaxiParams) (ServeTaxi, error) {
+		return s.serveTaxi(ctx, p)
+	}))
 	srv.Register("dismount", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (ServeMount, error) {
 		return s.serveDismount(ctx)
 	}))
@@ -1717,7 +1720,6 @@ var notPortedMethods = []string{
 	"map_snapshot",
 	"plan_check",
 	"raid_move",
-	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",

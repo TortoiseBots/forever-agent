@@ -441,7 +441,7 @@ func TestServeNPCMethodsAreRegistered(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 	}
-	for _, name := range []string{"trade", "teleport", "map_snapshot", "trainer_list", "train", "taxi"} {
+	for _, name := range []string{"trade", "teleport", "map_snapshot", "trainer_list", "train"} {
 		if !slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s should stay not ported", name)
 		}

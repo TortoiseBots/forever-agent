@@ -194,3 +194,29 @@ func TestBuildTaxiAsksAreTheGUIDAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestParseNewTaxiPathIsOneInt32: the packet is one int32 node (TaxiPackets.cpp:75-80). 0x0123 needs two bytes, so a
+// one-byte read names node 0x23 and leaves three bytes behind.
+func TestParseNewTaxiPathIsOneInt32(t *testing.T) {
+	b := wire.NewWriter()
+	b.WriteI32(0x0123)
+	node, err := ParseNewTaxiPath(b.Bytes())
+	if err != nil || node != 0x0123 {
+		t.Fatalf("ParseNewTaxiPath = %d, %v, want 291", node, err)
+	}
+}
+
+// TestParseNewTaxiPathRefusesBadBodies: a short or long body and a node that is not a 1-based id are errors.
+func TestParseNewTaxiPathRefusesBadBodies(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"empty":    nil,
+		"short":    {1, 0, 0},
+		"long":     {1, 0, 0, 0, 9},
+		"zero":     {0, 0, 0, 0},
+		"negative": {0xff, 0xff, 0xff, 0xff},
+	} {
+		if node, err := ParseNewTaxiPath(body); err == nil {
+			t.Errorf("%s: ParseNewTaxiPath accepted the body as node %d", name, node)
+		}
+	}
+}

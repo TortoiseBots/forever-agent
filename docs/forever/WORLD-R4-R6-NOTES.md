@@ -151,6 +151,36 @@ budget (the 15-minute ceiling and its waits) plus the steps' slack, a caller's `
 and may not be below what the flights need, and any other figure is refused before anything is sent. The old fixed
 caps (60 s by default, 10 minutes at most) are gone from the flight path.
 
+### The `taxi` method and the flight state (forever-agent #107)
+
+`forever serve` answers `taxi` (the old daemon's name, `taxi_serve.go`). `{guid}` alone opens the flight master's
+window and answers the current node and both masks' node ids (status `window`). `{guid, node}` takes one flight:
+the same window and guards as `fly` (the node must be known and usable and not the current one, no copper at all is
+refused, a character already in the air is refused), then one `CMSG_ACTIVATE_TAXI`. The call returns at takeoff
+(status `flying`, `on_taxi` true), so the session stays free for `status`, `chat` and the rest while the flight goes
+on; `wait_landing` holds it to the landing instead (status `landed` with the position and the landing line). The
+old method's `nodes` list (source first) is accepted: its first node must be the flight master's own, its last is the
+destination, and the hops in between are the server's.
+
+**There is no express packet.** ForeverCore's `HandleActivateTaxiOpcode` reads one destination node and routes the
+hops itself with `TaxiPathGraph::GetCompleteNodeRoute` (TaxiHandler.cpp:207-208, the request layout
+TaxiPackets.cpp:67-73), and the opcode table has no `ACTIVATE_TAXI_EXPRESS`. The old multi-hop request is therefore
+one `CMSG_ACTIVATE_TAXI` for the last node of the list.
+
+A refusal after the request went out is an answer (`ok` false, `status` `refused`, the reply's name, the `taxi_reply`
+event); a call that is wrong before anything is sent is an RPC error.
+
+**Node discovery** is `SMSG_NEW_TAXI_PATH`: one int32 node, sent when a flight master's node is new
+(`SendLearnNewTaxiNode`, TaxiHandler.cpp:129-140) or a spell discovers one (TaxiHandler.cpp:153-156,
+SpellEffects.cpp:5202). The session keeps the nodes it learned and logs each as a `taxi_node` event. The flight's own
+state is `taxi_flight` events (`takeoff`, `landed`, from the character's own `UNIT_FLAG_ON_TAXI` changing) and
+`status.on_taxi`, true while the flag is set or an accepted flight's landing has not been seen.
+
+**Mount and dismount around a flight.** The core removes the mount aura itself when a taxi starts
+(`ActivateTaxiPathTo`, Player.cpp:24517), so the method sends no dismount before a flight. In the air the model's
+mount display is the flight's own: `mount` and `dismount` refuse while `on_taxi` (nothing is sent), and work again
+after the landing.
+
 ### The act steps
 
 | Step | Sends | Reads back |
@@ -233,6 +263,11 @@ one `forever act` run per stage, `.gm on` for the setup lines only, and the serv
 5. **While flying**, another unit that takes a flight shows `ON_TAXI` in the world model, and the next run's world
    summary counts it (`N other unit(s) on a taxi flight`): the W2 check that a bot flies rather than teleports.
 6. **A relog** at the destination shows the character there, with the money spent on the first leg.
+7. **The `taxi` method (#107).** `taxi {guid}` at a flight master prints the window; `taxi {guid, node}` returns at
+   takeoff with `on_taxi` true, `status` shows `on_taxi` until the landing, `chat`/`gm` calls answer during the flight
+   (the TBF #203 check: `.bot summon` with the owner on a taxi is refused in-flight), `mount` and `dismount` refuse in
+   the air, and `taxi_flight` events read takeoff and landed. Not covered by a fake: the zeppelin (a transport, not a
+   taxi) and a flight across maps through this method.
 
 ## Gate lines
 

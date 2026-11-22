@@ -39,7 +39,11 @@ type taxiWorld struct {
 	statuses int
 	flights  int
 	refuse   uint8
-	lastNode uint32
+	// silent makes the server answer a flight request with nothing at all (no reply, no flag).
+	silent bool
+	// acceptOnly makes the server answer reply 0 and never set the flag.
+	acceptOnly bool
+	lastNode   uint32
 	// firstVisit makes the first hello (and the first query) answer the node's discovery, as the core does while it
 	// prepares a taxi menu and learns the node.
 	firstVisit bool
@@ -211,6 +215,13 @@ func (tw *taxiWorld) answer(f *itemWorld, core uint32, payload []byte) {
 		}
 		if ground != 0 || flying != 0 {
 			f.t.Fatalf("the flight request names mounts %d/%d, want 0/0", ground, flying)
+		}
+		if tw.silent {
+			return
+		}
+		if tw.acceptOnly {
+			tw.deliver(wire.SMSGActivateTaxiReply, activateTaxiReplyPayload(taxi.TaxiReplyOK))
+			return
 		}
 		if tw.refuse != taxi.TaxiReplyOK {
 			tw.deliver(wire.SMSGActivateTaxiReply, activateTaxiReplyPayload(tw.refuse))

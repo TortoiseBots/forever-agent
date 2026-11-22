@@ -245,52 +245,93 @@ func (s *session) actFly(ctx context.Context, a *actState, step ActStep) error {
 	if err != nil || node64 == 0 {
 		return s.actFail(a, step, fmt.Errorf("node=%q is not a taxi node id", nodeRaw))
 	}
-	node := uint32(node64)
 	unit, err := s.taxiTarget(a, actVerbFly)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
+	run, err := s.flightStart(ctx, a, unit, uint32(node64))
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
+	if !run.landed {
+		if err := s.flightAwaitLanding(ctx, run); err != nil {
+			return s.actFail(a, step, err)
+		}
+	}
+	detail, _, _, _ := s.flightLanded(ctx, run)
+	s.actOK(a, step, detail)
+	return nil
+}
+
+// flightRun is one accepted flight from takeoff on: what the landing line needs and the counters the landing is read
+// from.
+type flightRun struct {
+	node    uint32
+	before  items.Inventory
+	takeoff time.Time
+	// teleports is the self-teleport count at the request: the landing's own teleport moves it.
+	teleports int
+	// start is where the character stood at the request.
+	startX, startY, startZ float32
+	// landingClear is the clear counter at the request: a flight is over when it moves past it.
+	landingClear uint64
+	// sent is true once CMSG_ACTIVATE_TAXI went out.
+	sent bool
+	// landed is true when the flight was already over by the time the takeoff wait returned (a short flight).
+	landed bool
+}
+
+// flightStart runs every guard of a flight and sends the one CMSG_ACTIVATE_TAXI, then waits for the takeoff: the
+// server's refusal, or the character's own ON_TAXI being set. The window in a (a.taxi) is the one the caller read
+// from this flight master. On a nil error the flight is in the air (or already over, landed) and, until its landing
+// is seen, no movement may go out: taxiFlight.pending says so to the mover. An error before the request went out
+// returns a nil run; an error after it (a refusal, a silent server, a cut wait) returns the run too, so a caller can
+// tell "nothing was sent" from "the request is out and its outcome is the server's".
+func (s *session) flightStart(ctx context.Context, a *actState, unit *objects.Object, node uint32) (*flightRun, error) {
 	if !a.hasTaxi || a.taxi == nil {
-		return s.actFail(a, step, fmt.Errorf("fly: no taxi window (a taxi-nodes step comes first)"))
+		return nil, fmt.Errorf("fly: no taxi window (a taxi-nodes step comes first)")
 	}
 	if !a.taxi.HasWindow {
-		return s.actFail(a, step, fmt.Errorf("fly: the window carries no window block (its flight master and current node are unknown)"))
+		return nil, fmt.Errorf("fly: the window carries no window block (its flight master and current node are unknown)")
 	}
 	if a.taxi.WindowUnit != unit.GUID {
-		return s.actFail(a, step, fmt.Errorf("fly: the taxi window is another flight master's (run taxi-nodes on entry %d)", unit.Info.Entry))
+		return nil, fmt.Errorf("fly: the taxi window is another flight master's (run taxi-nodes on entry %d)", unit.Info.Entry)
 	}
 	if !a.taxi.CanLand.Known(node) {
-		return s.actFail(a, step, fmt.Errorf("fly: node %d is not in the window's known mask", node))
+		return nil, fmt.Errorf("fly: node %d is not in the window's known mask", node)
 	}
 	if !a.taxi.CanUse.Known(node) {
-		return s.actFail(a, step, fmt.Errorf("fly: node %d is not in the window's usable mask", node))
+		return nil, fmt.Errorf("fly: node %d is not in the window's usable mask", node)
 	}
 	if a.taxi.CurrentNode != 0 && uint32(a.taxi.CurrentNode) == node {
-		return s.actFail(a, step, fmt.Errorf("fly: node %d is the current node", node))
+		return nil, fmt.Errorf("fly: node %d is the current node", node)
 	}
 	flags, known := s.selfFlags()
 	if !known {
-		return s.actFail(a, step, fmt.Errorf("fly: the character's own flags are not in the world model yet"))
+		return nil, fmt.Errorf("fly: the character's own flags are not in the world model yet")
 	}
 	if flags&unitFlagOnTaxi != 0 {
-		return s.actFail(a, step, fmt.Errorf("fly: the character is already on a taxi flight"))
+		return nil, fmt.Errorf("fly: the character is already on a taxi flight")
 	}
 	if s.taxiFlight.pending {
-		return s.actFail(a, step, fmt.Errorf("fly: the last flight's landing was not seen; no movement or flight until it is"))
+		return nil, fmt.Errorf("fly: the last flight's landing was not seen; no movement or flight until it is")
 	}
 	// The fare is the server's data (the window carries no price), so the only client-side test is a character with no
 	// money at all; the server's refusal answer is the rest.
-	before := s.inventoryNow()
-	if before.Known && before.Coinage == 0 {
-		return s.actFail(a, step, fmt.Errorf("fly: the character has no copper for a fare"))
+	run := &flightRun{node: node, before: s.inventoryNow(),
+		startX: s.MoverX(), startY: s.MoverY(), startZ: s.MoverZ(),
+		teleports: s.selfTeleports, landingClear: s.taxiFlight.clear}
+	if run.before.Known && run.before.Coinage == 0 {
+		return nil, fmt.Errorf("fly: the character has no copper for a fare")
 	}
-	startX, startY, startZ := s.MoverX(), s.MoverY(), s.MoverZ()
-	takeoffSet, landingClear := s.taxiFlight.set, s.taxiFlight.clear
-	teleports := s.selfTeleports
+	takeoffSet := s.taxiFlight.set
 	s.taxi.reply = nil
+	// The server routes the flight itself: the request names the destination alone, and a path of several hops is the
+	// server's TaxiPathGraph answer (TaxiHandler.cpp:207-208, TaxiPathGraph::GetCompleteNodeRoute). ForeverCore has no express opcode for a hop list.
 	if err := s.transport().Send(wire.CMSGActivateTaxi, taxi.BuildActivateTaxi(unit.GUID, node)); err != nil {
-		return s.actFail(a, step, fmt.Errorf("CMSG_ACTIVATE_TAXI: %w", err))
+		return nil, fmt.Errorf("CMSG_ACTIVATE_TAXI: %w", err)
 	}
+	run.sent = true
 	// Takeoff: the refusal, or the flag's own setting read from the transition counters. A reply of 0 alone is not
 	// enough, because the flag is what says the character is flying (and its clearing is the landing).
 	ok, err := s.actUntilAcrossMaps(ctx, actTaxiWait, func() bool {
@@ -300,49 +341,56 @@ func (s *session) actFly(ctx context.Context, a *actState, step ActStep) error {
 		return s.taxiFlight.set > takeoffSet
 	})
 	if err != nil {
-		return s.actFail(a, step, err)
+		return run, err
 	}
 	if r := s.taxi.reply; r != nil && *r != taxi.TaxiReplyOK {
-		return s.actFail(a, step, fmt.Errorf("the flight master refused node %d: %s", node, taxi.TaxiReplyName(*r)))
+		return run, fmt.Errorf("the flight master refused node %d: %s", node, taxi.TaxiReplyName(*r))
 	}
 	if !ok {
-		return s.actFail(a, step, fmt.Errorf("node %d: no ON_TAXI and no refusal within %s; a silent server starts no flight (no path, client control removed, or an instant-taxi teleport)",
-			node, actTaxiWait))
+		return run, fmt.Errorf("node %d: no ON_TAXI and no refusal within %s; a silent server starts no flight (no path, client control removed, or an instant-taxi teleport)",
+			node, actTaxiWait)
 	}
-	takeoff := s.transport().Now()
-	if s.taxiFlight.clear > landingClear {
+	run.takeoff = s.transport().Now()
+	if s.taxiFlight.clear > run.landingClear {
 		// A short flight can be over before the takeoff wait returned: its landing is the clearing, already seen.
-		return s.flyLanded(ctx, a, step, node, before, takeoff, teleports, startX, startY, startZ)
+		run.landed = true
+		return run, nil
 	}
 	// From here the flight is the server's: until its clearing no movement packet may go out, even if the caller's
-	// own deadline ends this wait (the mover's guard reads pending).
+	// own deadline ends a wait (the mover's guard reads pending).
 	s.taxiFlight.pending = true
-	ok, err = s.actUntilAcrossMaps(ctx, actTaxiFlightMax, func() bool { return s.taxiFlight.clear > landingClear })
-	if err != nil {
-		return s.actFail(a, step, err)
-	}
-	if !ok {
-		return s.actFail(a, step, fmt.Errorf("node %d: still on the taxi after %s (its landing was not seen; no movement until it is)", node, actTaxiFlightMax))
-	}
-	return s.flyLanded(ctx, a, step, node, before, takeoff, teleports, startX, startY, startZ)
+	return run, nil
 }
 
-// flyLanded waits for the core's landing teleport and prints the landing: the core clears ON_TAXI and then teleports
-// the player to the destination node (FlightPathMovementGenerator::DoFinalize), and the mover moves only when that
-// SMSG_MOVE_TELEPORT is processed. Reading the position at the flag's clearing would print the takeoff point. The
-// line also carries the money the fare took from the inventory the inventory tracker read back.
-func (s *session) flyLanded(ctx context.Context, a *actState, step ActStep, node uint32, before items.Inventory,
-	takeoff time.Time, teleports int, startX, startY, startZ float32) error {
+// flightAwaitLanding waits for the flag's clearing: the flight's own ceiling, then the step reports the character
+// still on the taxi.
+func (s *session) flightAwaitLanding(ctx context.Context, run *flightRun) error {
+	ok, err := s.actUntilAcrossMaps(ctx, actTaxiFlightMax, func() bool { return s.taxiFlight.clear > run.landingClear })
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("node %d: still on the taxi after %s (its landing was not seen; no movement until it is)", run.node, actTaxiFlightMax)
+	}
+	return nil
+}
+
+// flightLanded waits for the core's landing teleport and describes the landing: the core clears ON_TAXI and then
+// teleports the player to the destination node (FlightPathMovementGenerator::DoFinalize), and the mover moves only
+// when that SMSG_MOVE_TELEPORT is processed. Reading the position at the flag's clearing would print the takeoff
+// point. The text also carries the money the fare took from the inventory the inventory tracker read back; x, y, z
+// and the flight's length are returned for the method's answer.
+func (s *session) flightLanded(ctx context.Context, run *flightRun) (detail string, x, y, z float32) {
 	// The teleport is optional (a path whose last node is a teleport flag lands in place), so the wait is bounded and
 	// its result is not an error.
-	_, _ = s.actUntil(ctx, actTaxiLandingWait, func() bool { return s.selfTeleports > teleports })
-	x, y, z := s.MoverX(), s.MoverY(), s.MoverZ()
+	_, _ = s.actUntil(ctx, actTaxiLandingWait, func() bool { return s.selfTeleports > run.teleports })
+	x, y, z = s.MoverX(), s.MoverY(), s.MoverZ()
 	money := "coinage unknown"
-	if after := s.inventoryNow(); before.Known && after.Known {
-		money = coinageLine(before.Coinage, after.Coinage)
+	if after := s.inventoryNow(); run.before.Known && after.Known {
+		money = coinageLine(run.before.Coinage, after.Coinage)
 	}
-	s.actOK(a, step, fmt.Sprintf("landed at %.1f %.1f %.1f after %s, node %d, %.0f yd from takeoff, %s",
-		x, y, z, s.transport().Now().Sub(takeoff).Round(time.Second), node,
-		objects.Distance(startX, startY, startZ, x, y, z), money))
-	return nil
+	detail = fmt.Sprintf("landed at %.1f %.1f %.1f after %s, node %d, %.0f yd from takeoff, %s",
+		x, y, z, s.transport().Now().Sub(run.takeoff).Round(time.Second), run.node,
+		objects.Distance(run.startX, run.startY, run.startZ, x, y, z), money)
+	return detail, x, y, z
 }

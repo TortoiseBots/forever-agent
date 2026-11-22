@@ -119,7 +119,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `open_object`, `use_object` | DONE | `open_object` walks to the object, opens it with the game-object use and optionally takes everything; `use_object` sends the use and answers the first outcome (`loot_open`, `gossip`, `quest_list`, `state_changed`, `none`). Round D5. |
 | `gameobjects` | DONE | The game objects in view nearest first (`within`/`radius`, `entry`, `name`, numeric `type`, `limit`). Round D5. |
 | `roll` | DONE | Votes need, greed or pass on a started group roll named by `looted` + `item_slot` (or the only open one). Round D5. |
-| `trainer_list`, `train`, `taxi` | NOT-PORTED | No trainer or taxi method yet (the vendor and gossip methods are ported, round D3; the quest methods, round D4: [DAEMON-D4-NOTES.md](DAEMON-D4-NOTES.md)). |
+| `trainer_list`, `train` | NOT-PORTED | No trainer method yet (the vendor and gossip methods are ported, round D3; the quest methods, round D4: [DAEMON-D4-NOTES.md](DAEMON-D4-NOTES.md); `taxi` is ported, #107). |
 | `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |
 | `brain_start`, `brain_stop`, `brain_status`, `follow_start`, `follow_stop`, `follow_status` | NOT-PORTED | The old brain and follow loops are 1.12 code. |
