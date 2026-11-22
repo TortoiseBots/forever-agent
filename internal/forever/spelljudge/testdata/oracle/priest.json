@@ -1,0 +1,18 @@
+{
+  "class": "priest",
+  "specs": [
+    {
+      "spec": "holy",
+      "role": "heal",
+      "rotation": "test_holy",
+      "core": [
+        "Renew",
+        "Flash Heal"
+      ],
+      "situational": [
+        "Power Word: Shield",
+        "Power Word: Fortitude"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "class": "rogue",
+  "specs": [
+    {
+      "spec": "assassination",
+      "role": "dps",
+      "rotation": "test_assassination",
+      "core": [
+        "Sinister Strike",
+        "Eviscerate",
+        "Slice and Dice"
+      ]
+    }
+  ]
+}

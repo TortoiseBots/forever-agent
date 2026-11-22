@@ -1,0 +1,26 @@
+{
+  "class": "warrior",
+  "specs": [
+    {
+      "spec": "protection",
+      "role": "tank",
+      "rotation": "test_protection",
+      "core": [
+        "Sunder Armor",
+        "Revenge",
+        "Heroic Strike"
+      ],
+      "situational": [
+        "Taunt",
+        "Battle Shout",
+        "Test Only Strike"
+      ],
+      "taunt": [
+        "Taunt"
+      ],
+      "signature": [
+        "Shield Slam"
+      ]
+    }
+  ]
+}

@@ -88,6 +88,12 @@ func loadWatch(path, ds string, skipCombat bool) (*Run, error) {
 		if m.Class != "" {
 			r.Classes[g] = m.Class
 		}
+		if m.Level > 0 {
+			if r.Levels == nil {
+				r.Levels = map[string]int{}
+			}
+			r.Levels[g] = m.Level
+		}
 		if m.Name != "" {
 			r.Names[g] = m.Name
 		}

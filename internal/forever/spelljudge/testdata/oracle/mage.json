@@ -1,0 +1,18 @@
+{
+  "class": "mage",
+  "specs": [
+    {
+      "spec": "frost",
+      "role": "dps",
+      "rotation": "test_frost",
+      "core": [
+        "Frostbolt"
+      ],
+      "situational": [
+        "Fire Blast",
+        "Frost Nova",
+        "Arcane Intellect"
+      ]
+    }
+  ]
+}

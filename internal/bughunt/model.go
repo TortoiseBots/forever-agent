@@ -122,8 +122,11 @@ type CombatRow struct {
 	Source  CombatActor `json:"source"`
 	Target  CombatActor `json:"target"`
 	SpellID int         `json:"spell_id"`
-	Amount  int         `json:"amount"`
-	Reason  string      `json:"reason,omitempty"`
+	// SpellName is the server's own spell name for the row (the session's DB2 reply cache fills it); empty when the
+	// row does not carry one, and then the name comes from the spell table.
+	SpellName string `json:"spell_name,omitempty"`
+	Amount    int    `json:"amount"`
+	Reason    string `json:"reason,omitempty"`
 	// The core-gains round's row fields: an interrupt's stopped cast, an absorb's incoming spell, a dispel's list,
 	// and the advanced log's unit block.
 	InterruptedSpellID int             `json:"interrupted_spell_id,omitempty"`
@@ -187,6 +190,8 @@ type Run struct {
 	Combat  []CombatRow
 	Roles   map[string]string
 	Classes map[string]string
+	// Levels is the party record's character level per member; absent (0) when the record carries none.
+	Levels map[string]int
 	// Names is the party record's name per guid: the character's for a dungeon run, the party slot's word for a
 	// watch (whose records carry no character names).
 	Names map[string]string
