@@ -273,7 +273,7 @@ func patrolForeverLoop(ctx context.Context, client patrolForeverClient, env patr
 		}
 		now := env.now()
 		for _, u := range units {
-			if u.Type != "creature" || u.Dead {
+			if !patrolForeverCreature(u.Type) || u.Dead {
 				continue
 			}
 			if u.Entry <= 0 || (len(o.entries) > 0 && !patrolRecordHasEntry(o.entries, uint32(u.Entry))) {
@@ -299,6 +299,14 @@ func patrolForeverLoop(ctx context.Context, client patrolForeverClient, env patr
 		}
 	}
 	return samples, "", guidText
+}
+
+// patrolForeverCreature says whether a serve unit is an NPC creature: the Forever serve names an object type
+// (objects.TypeName), so its NPCs are "unit"; the 1.12 slot agent calls them "creature". Players are "player" or
+// "active player" in both, so a recording never tracks one. A filter on the 1.12 word alone recorded nothing on a
+// Forever slot (0 patrols, 0 static, 0 wanderers with ~30 units in range).
+func patrolForeverCreature(t string) bool {
+	return t == "unit" || t == "creature"
 }
 
 // patrolForeverUnitName is the unit's name for a stop reason, its entry when

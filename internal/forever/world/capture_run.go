@@ -7,8 +7,9 @@ package world
 // capture cannot be redirected through a link.
 //
 // Bounds: one run writes at most maxCapturePackets files and maxCaptureBytes of payload in total, each file one
-// packet's payload (a frame header's 16-bit size field caps one payload at 65535 bytes). A serving daemon has ONE cap
-// for the whole slot, across every reconnect (captureBudget): the same file and byte bounds in total, and at most
+// packet's payload (the frame reader's wire.MaxUncompressed caps one payload; a frame header's Size is a uint32). A
+// serving daemon has ONE cap for the whole slot, across every reconnect (captureBudget): the same file and byte
+// bounds in total, and at most
 // maxCaptureRuns run directories, so a flapping link cannot write a full run per reconnect. Past a bound the run
 // says so once and stops capturing; the run itself continues, because the capture is a debug aid.
 //

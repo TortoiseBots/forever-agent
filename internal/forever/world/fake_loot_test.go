@@ -645,7 +645,9 @@ func (f *fakeServer) serveLoot(c *fakeConn, realm *fakeConn) {
 				return
 			}
 			if windowOpen {
-				c.writeFrame(fakeSMSGLootRelease, fakeRelease(windowLoot, self))
+				// DoLootRelease names the loot's OWNER (Player::SendLootRelease(loot->GetOwnerGUID())), never the
+				// LootObject the window's Loot field carries.
+				c.writeFrame(fakeSMSGLootRelease, fakeRelease(windowOwner, self))
 				windowOpen = false
 			}
 		case fakeCMSGLogoutRequest:
@@ -764,6 +766,35 @@ func TestLootCheckAgainstFakeServer(t *testing.T) {
 	}
 	if !f.lootMoney || !f.lootReleased {
 		t.Fatalf("money packet %v, release %v", f.lootMoney, f.lootReleased)
+	}
+}
+
+// TestLootCheckMoneyOnlyWindowIsReleased is the live money-only case: the corpse held nothing but coin, the take
+// sent CMSG_LOOT_MONEY and the window stayed open (the core releases only an item container on a money take,
+// LootHandler.cpp:186-190), so the step's own CMSG_LOOT_RELEASE is what closes it. The confirmation the server sends
+// names the window's owner, never the LootObject the window was opened with.
+func TestLootCheckMoneyOnlyWindowIsReleased(t *testing.T) {
+	target := fakeLootTarget{guid: wire.GUID{Low: 0x305, High: 8 << 58}, entry: fakeLootCorpseEntry, dead: true}
+	target.packed = fakePacked(target.guid)
+	f, _, _ := newLootScenario(t, "creature", target, nil, nil)
+	report, steps := runLootScenario(t, f, Options{LootCheck: true, LootMoney: true})
+
+	r := report.Loot
+	if !r.Opened || len(r.Items) != 0 {
+		t.Fatalf("the window: %+v\nsteps:\n%s", r, joinLines(steps))
+	}
+	if r.MoneyTaken != 311 {
+		t.Fatalf("money taken %d, want 311", r.MoneyTaken)
+	}
+	if !r.Released {
+		t.Fatalf("the release was not confirmed for a money-only window (released %v, attempted %v, err %q)\n%s",
+			r.Released, r.ReleaseAttempted, r.ReleaseErr, joinLines(steps))
+	}
+	f.mu.Lock()
+	sent, released := f.lootMoney, f.lootReleased
+	f.mu.Unlock()
+	if !sent || !released {
+		t.Fatalf("money packet %v, release %v", sent, released)
 	}
 }
 
