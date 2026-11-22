@@ -84,6 +84,8 @@ type File struct {
 	strings          []byte   // every section's string table in order; an encrypted section's stays zero
 	ids              []uint32 // the ID list, one per record
 	copies           []copyRow
+	parents          []uint32        // one per record, set from the section parent blocks (DB2FileLoader.cpp:1976-1993); only when the file has parent lookups
+	hasParent        []bool          // one per record: whether the parent block names a parent for it
 	encrypted        []bool          // one per section
 	encryptedIDs     map[uint32]bool // the ids the skipped sections list
 }
@@ -444,7 +446,7 @@ func parse(b []byte) (*File, error) {
 		if uint64(s.fileOffset) < headerEnd {
 			return nil, fmt.Errorf("section %d starts at %d, inside the %d byte header", i, s.fileOffset, headerEnd)
 		}
-		bytesIn := uint64(s.recordCount)*uint64(f.RecordSize) + uint64(s.stringTableSize) + uint64(s.idListSize) + uint64(s.copyTableCount)*8
+		bytesIn := uint64(s.recordCount)*uint64(f.RecordSize) + uint64(s.stringTableSize) + uint64(s.idListSize) + uint64(s.copyTableCount)*8 + uint64(s.relationshipData)
 		if uint64(s.fileOffset)+bytesIn > size {
 			return nil, fmt.Errorf("section %d ends at %d, past the %d byte file", i, uint64(s.fileOffset)+bytesIn, size)
 		}
@@ -458,6 +460,10 @@ func parse(b []byte) (*File, error) {
 	f.records = make([]byte, f.RecordCount*f.RecordSize)
 	f.strings = make([]byte, stringBytes)
 	f.ids = make([]uint32, f.RecordCount)
+	if parentLookups == 1 {
+		f.parents = make([]uint32, f.RecordCount)
+		f.hasParent = make([]bool, f.RecordCount)
+	}
 	for i := range f.sections {
 		s := &f.sections[i]
 		if f.encrypted[i] {
@@ -487,6 +493,46 @@ func parse(b []byte) (*File, error) {
 				newID:    binary.LittleEndian.Uint32(b[off+k*8:]),
 				sourceID: binary.LittleEndian.Uint32(b[off+k*8+4:]),
 			})
+		}
+		off += int(s.copyTableCount) * 8
+		// The parent lookup block sits last in the section, after the copy table
+		// (DB2FileLoader.cpp:1976-1993): NumEntries, MinId, MaxId, then one
+		// {ParentId, RecordIndex} pair per entry. An encrypted (skipped) section's
+		// parent block is not read (its records are not read either).
+		if parentLookups == 1 {
+			if !f.encrypted[i] {
+				if s.relationshipData == 0 {
+					return nil, fmt.Errorf("section %d: parent lookups on but the section holds no parent data", i)
+				}
+				pb := b[off : off+int(s.relationshipData)]
+				if len(pb) < 12 {
+					return nil, fmt.Errorf("section %d: %d bytes of parent data hold no NumEntries, MinId and MaxId", i, len(pb))
+				}
+				num := binary.LittleEndian.Uint32(pb)
+				if uint64(num) > uint64(s.recordCount) {
+					return nil, fmt.Errorf("section %d: %d parent entries for %d records", i, num, s.recordCount)
+				}
+				if uint64(len(pb)) != 12+8*uint64(num) {
+					return nil, fmt.Errorf("section %d: %d bytes of relationship data for %d entries; %d expected", i, len(pb), num, 12+8*num)
+				}
+				wantRecs := make([]bool, s.recordCount)
+				for k := range int(num) {
+					parentID := binary.LittleEndian.Uint32(pb[12+k*8:])
+					idx := binary.LittleEndian.Uint32(pb[12+k*8+4:])
+					if idx >= s.recordCount {
+						return nil, fmt.Errorf("section %d: parent entry %d names record %d of %d", i, k, idx, s.recordCount)
+					}
+					if wantRecs[idx] {
+						return nil, fmt.Errorf("section %d: record %d is listed twice in the parent block", i, s.firstRecord+int(idx))
+					}
+					wantRecs[idx] = true
+					f.parents[s.firstRecord+int(idx)] = parentID
+					f.hasParent[s.firstRecord+int(idx)] = true
+				}
+				off += int(s.relationshipData)
+			}
+		} else if s.relationshipData != 0 {
+			return nil, fmt.Errorf("section %d: %d bytes of relationship data with no parent lookups", i, s.relationshipData)
 		}
 	}
 	return f, nil
@@ -724,7 +770,140 @@ func (f *File) Maps() ([]Map, []string, error) {
 	return rows, notes, nil
 }
 
-// maskBits keeps the low n bits of v (n up to 64).
+// Row is one readable row: its id, its parent (the section parent lookup; a copy row has its source's),
+// and the record it reads (a copy row reads its source's record).
+type Row struct {
+	ID        uint32
+	Parent    uint32
+	HasParent bool
+	rec       int
+}
+
+// CheckLayout refuses a file whose field count or layout hash is not the table's: reading another
+// client layout's columns would misread every value.
+func (f *File) CheckLayout(table string, layoutHash uint32, totalFields int) error {
+	if f.TotalFieldCount != totalFields || f.LayoutHash != layoutHash {
+		return fmt.Errorf("%s has %d fields and layout hash %#08x; want %d and %#08x",
+			table, f.TotalFieldCount, f.LayoutHash, totalFields, uint32(layoutHash))
+	}
+	return nil
+}
+
+// Rows reads every non-encrypted record in record order, then the copy rows in copy-table order
+// (a copy of a row read here; a copy whose source id is not a row read here is skipped and counted
+// in one note). A duplicate id (record or copy) is an error. A copy row reads its source's record
+// and has its source's parent.
+func (f *File) Rows() ([]Row, []string, error) {
+	rows := make([]Row, 0, f.RecordCount)
+	byID := make(map[uint32]int, f.RecordCount)
+	recOf := make(map[uint32]int, f.RecordCount)
+	for rec := range f.RecordCount {
+		if f.encryptedRecord(rec) {
+			continue
+		}
+		id, err := f.recordID(rec)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, dup := byID[id]; dup {
+			return nil, nil, fmt.Errorf("id %d is in the file twice", id)
+		}
+		byID[id] = len(rows)
+		recOf[id] = rec
+		rows = append(rows, Row{ID: id, Parent: f.parentOf(rec), HasParent: f.hasParentOf(rec), rec: rec})
+	}
+	var notes []string
+	skipped := 0
+	for _, c := range f.copies {
+		src, ok := recOf[c.sourceID]
+		if !ok {
+			skipped++
+			continue
+		}
+		if _, dup := byID[c.newID]; dup {
+			return nil, nil, fmt.Errorf("id %d is in the file twice (copy of %d)", c.newID, c.sourceID)
+		}
+		byID[c.newID] = len(rows)
+		rows = append(rows, Row{ID: c.newID, Parent: f.parentOf(src), HasParent: f.hasParentOf(src), rec: src})
+	}
+	if skipped > 0 {
+		notes = append(notes, fmt.Sprintf("%d copy rows skipped: their source row is in a skipped section or not in the file", skipped))
+	}
+	return rows, notes, nil
+}
+
+// parentOf is the section parent lookup's parent of a record, 0 when the file has no parent
+// lookups or the block names none for it.
+func (f *File) parentOf(rec int) uint32 {
+	if rec < 0 || rec >= len(f.parents) {
+		return 0
+	}
+	return f.parents[rec]
+}
+
+// hasParentOf reports whether the parent block names a parent for a record.
+func (f *File) hasParentOf(rec int) bool {
+	if rec < 0 || rec >= len(f.hasParent) {
+		return false
+	}
+	return f.hasParent[rec]
+}
+
+// Uint reads a scalar column widened to 64 bits.
+func (f *File) Uint(r Row, field int) (uint64, error) { return f.value(r.rec, field) }
+
+// Int reads a scalar column as a signed number of the column's width: a SignedImmediate value is
+// already extended (return it as-is); compNone sign-extends at the column's bit size; Immediate at
+// its packed width; Pallet, PalletArray (size 1) and CommonData at 32.
+func (f *File) Int(r Row, field int) (int64, error) {
+	v, err := f.value(r.rec, field)
+	if err != nil {
+		return 0, err
+	}
+	if field < 0 || field >= len(f.fields) {
+		return 0, fmt.Errorf("record %d, field %d: out of range", r.rec, field)
+	}
+	fs := &f.fields[field]
+	switch fs.compression {
+	case compSignedImmediate:
+		return int64(v), nil
+	case compNone:
+		return int64(signExtend(v, fs.bitSize)), nil
+	case compImmediate:
+		return int64(signExtend(v, fs.packedWidth)), nil
+	case compPallet, compPalletArray, compCommonData:
+		return int64(int32(v)), nil
+	}
+	return 0, fmt.Errorf("field %d: compression %d", field, fs.compression)
+}
+
+// Uints reads an inline array column (a compNone column whose bit size is a multiple of 32, as
+// bitSize/32 little-endian u32s) or a pallet array column through values; anything else is an error.
+func (f *File) Uints(r Row, field int) ([]uint32, error) {
+	if field < 0 || field >= len(f.fields) {
+		return nil, fmt.Errorf("record %d, field %d: out of range", r.rec, field)
+	}
+	fs := &f.fields[field]
+	if fs.compression == compPalletArray {
+		return f.values(r.rec, field)
+	}
+	if fs.compression == compNone && fs.bitSize%32 == 0 && fs.bitSize > 32 {
+		v, err := f.value(r.rec, field)
+		if err != nil {
+			return nil, err
+		}
+		n := int(fs.bitSize / 32)
+		out := make([]uint32, n)
+		for i := range out {
+			out[i] = uint32(v >> (32 * i))
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("field %d is not an array column", field)
+}
+
+// String reads a plain 32-bit string column.
+func (f *File) String(r Row, field int) (string, error) { return f.stringField(r.rec, field) }
 func maskBits(v uint64, n uint32) uint64 {
 	if n >= 64 {
 		return v

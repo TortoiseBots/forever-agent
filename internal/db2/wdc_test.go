@@ -44,27 +44,30 @@ const (
 
 // Offsets in a WDC5 file the builder writes, for the tests that corrupt one number.
 const (
-	offRecordCount  = 136
-	offRecordSize   = 144
-	offFlags        = 172
-	offIDIndex      = 174
-	offTotalFields  = 176
-	offPackedData   = 180
-	offColumnMeta   = 188
-	offCommonData   = 192
-	offPalletData   = 196
-	offSectionCount = 200
-	offSections     = 204
-	secTact         = 0
-	secFileOffset   = 8
-	secRecordCount  = 12
-	secStringSize   = 16
-	secIDListSize   = 24
-	secCopyCount    = 36
+	offRecordCount   = 136
+	offRecordSize    = 144
+	offFlags         = 172
+	offIDIndex       = 174
+	offTotalFields   = 176
+	offPackedData    = 180
+	offParentLookups = 184
+	offColumnMeta    = 188
+	offCommonData    = 192
+	offPalletData    = 196
+	offSectionCount  = 200
+	offSections      = 204
+	secTact          = 0
+	secFileOffset    = 8
+	secRecordCount   = 12
+	secStringSize    = 16
+	secIDListSize    = 24
+	secRelationship  = 28
+	secCopyCount     = 36
 )
 
-// mapDB2 is one file to build: the directory and name of every record, its id, the copy table and
-// which sections are encrypted (an encrypted file gives every record its own section).
+// mapDB2 is one file to build: the directory and name of every record, its id, the copy table,
+// which sections are encrypted (an encrypted file gives every record its own section), and every
+// record's parent (non-nil writes parentLookups=1 with a parent block per section).
 type mapDB2 struct {
 	wdc4      bool
 	dirs      []string
@@ -72,6 +75,7 @@ type mapDB2 struct {
 	ids       []uint32
 	copies    [][2]uint32
 	encrypted []bool
+	parents   []uint32 // one per record; non-nil writes the parent lookup blocks
 	fields    []tField // nil: mapFields()
 	inlineIDs bool     // the ids are field 2 of every record, there is no ID list
 	layout    uint32   // 0: the 70959 layout hash
@@ -162,15 +166,33 @@ func buildMapDB2(t testing.TB, m mapDB2) []byte {
 		}
 	}
 
-	// The sections' data offsets: records, the first section's strings, ids, copies.
+	// The sections' data offsets: records, the first section's strings, ids, copies, and each
+	// section's parent block after its copy table (one entry per record with a non-zero
+	// parent; none when parents is nil or the section is encrypted).
 	encBytes := 0
 	for i := range secs {
 		if m.isEncrypted(i) {
 			encBytes += 4 + 4*secs[i][1] // the encrypted id count and the ids
 		}
 	}
+	if m.parents != nil && len(m.parents) != len(m.dirs) {
+		t.Fatalf("parents has %d entries for %d records", len(m.parents), len(m.dirs))
+	}
+	parentOf := make([][][2]uint32, len(secs))
+	if m.parents != nil {
+		for i, s := range secs {
+			if m.isEncrypted(i) {
+				continue
+			}
+			for k := range s[1] {
+				if p := m.parents[s[0]+k]; p != 0 {
+					parentOf[i] = append(parentOf[i], [2]uint32{p, uint32(k)})
+				}
+			}
+		}
+	}
 	dataStart := headerLen + 40*len(secs) + 4*len(fields) + columnMetaLen*len(fields) + len(palletData) + len(commonData) + encBytes
-	type layoutOf struct{ records, strs, ids, copies int }
+	type layoutOf struct{ records, strs, ids, copies, parents int }
 	ls := make([]layoutOf, len(secs))
 	off := dataStart
 	for i, s := range secs {
@@ -187,6 +209,10 @@ func buildMapDB2(t testing.TB, m mapDB2) []byte {
 		if i == 0 && len(m.copies) > 0 {
 			l.copies = off
 			off += 8 * len(m.copies)
+		}
+		l.parents = off
+		if m.parents != nil && !m.isEncrypted(i) {
+			off += 12 + 8*len(parentOf[i])
 		}
 		ls[i] = l
 	}
@@ -220,7 +246,11 @@ func buildMapDB2(t testing.TB, m mapDB2) []byte {
 	u16(idIndex)
 	u32(uint32(len(fields)))
 	u32(testPackedOffset)
-	u32(0) // parent lookups
+	parents := uint32(0)
+	if m.parents != nil {
+		parents = 1
+	}
+	u32(parents) // parent lookups
 	u32(uint32(columnMetaLen * len(fields)))
 	u32(uint32(len(commonData)))
 	u32(uint32(len(palletData)))
@@ -245,8 +275,12 @@ func buildMapDB2(t testing.TB, m mapDB2) []byte {
 			idBytes = 0
 		}
 		u32(uint32(idBytes))
-		u32(0) // relationship data
-		u32(0) // offset map ids
+		rel := 0
+		if m.parents != nil && !m.isEncrypted(i) {
+			rel = 12 + 8*len(parentOf[i])
+		}
+		u32(uint32(rel)) // relationship data
+		u32(0)           // offset map ids
 		copies := 0
 		if i == 0 {
 			copies = len(m.copies)
@@ -325,6 +359,17 @@ func buildMapDB2(t testing.TB, m mapDB2) []byte {
 			for _, c := range m.copies {
 				u32(c[0])
 				u32(c[1])
+			}
+		}
+		// The parent block sits last in the section, after its copy table
+		// (DB2FileLoader.cpp:1976-1993).
+		if m.parents != nil && !m.isEncrypted(i) {
+			u32(uint32(len(parentOf[i])))
+			u32(0) // MinId: unused by this reader
+			u32(0) // MaxId: unused by this reader
+			for _, e := range parentOf[i] {
+				u32(e[0])
+				u32(e[1])
 			}
 		}
 	}
@@ -812,6 +857,153 @@ func TestEveryTruncationAndByteFlip(t *testing.T) {
 	}
 }
 
+// TestParentLookupRows checks the parent block: two records with parents 6 and 8, one per
+// section, plus one copy row of the first record. Rows gives 3 rows: the parents 6 and 8
+// and the copy's source parent, with HasParent true and the built ids.
+func TestParentLookupRows(t *testing.T) {
+	m := mapDB2{dirs: []string{"A", "B"}, names: []string{"A", "B"}, ids: []uint32{1, 2},
+		parents: []uint32{6, 8}, copies: [][2]uint32{{9, 1}}}
+	rows, _, err := openBytes(t, buildMapDB2(t, m)).Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Row{{ID: 1, Parent: 6, HasParent: true}, {ID: 2, Parent: 8, HasParent: true}, {ID: 9, Parent: 6, HasParent: true}}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v, want %d rows", rows, len(want))
+	}
+	for i, w := range want {
+		if rows[i].ID != w.ID || rows[i].Parent != w.Parent || rows[i].HasParent != w.HasParent {
+			t.Errorf("row %d = %+v, want id %d parent %d", i, rows[i], w.ID, w.Parent)
+		}
+	}
+	two := mapDB2{dirs: []string{"A", "B"}, names: []string{"A", "B"}, ids: []uint32{1, 2},
+		encrypted: []bool{false, false}, parents: []uint32{6, 8}}
+	twoRows, _, err := openBytes(t, buildMapDB2(t, two)).Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(twoRows) != 2 || twoRows[0].Parent != 6 || twoRows[1].Parent != 8 ||
+		!twoRows[0].HasParent || !twoRows[1].HasParent || twoRows[0].ID != 1 || twoRows[1].ID != 2 {
+		t.Errorf("two sections: rows = %+v, want ids 1 and 2 with parents 6 and 8", twoRows)
+	}
+}
+
+// TestParentLookupHostile corrupts the parent block one rule at a time: parse must return an error,
+// never panic. Cases: (a) relationshipData one byte short, (b) a RecordIndex equal to the section's
+// record count, (c) the same record twice, (d) parentLookups=0 with a non-zero relationshipData,
+// (e) NumEntries above the record count.
+func TestParentLookupHostile(t *testing.T) {
+	rel := func(b []byte) int {
+		return int(binary.LittleEndian.Uint32(b[offSections+secRelationship:]))
+	}
+	base := func() mapDB2 {
+		return mapDB2{dirs: []string{"A", "B"}, names: []string{"A", "B"}, ids: []uint32{1, 2}, parents: []uint32{6, 8}}
+	}
+	// The parent block is the file's last 28 bytes: 12 header + 2 entries of 8.
+	cases := []struct {
+		name string
+		b    []byte
+		want string
+	}{
+		{"relationship data short", put32(buildMapDB2(t, base()), offSections+secRelationship, uint32(rel(buildMapDB2(t, base()))-1)), "relationship"},
+		{"record index past the section", func(t testing.TB) []byte {
+			b := buildMapDB2(t, base())
+			binary.LittleEndian.PutUint32(b[len(b)-4:], 2) // last entry's RecordIndex = record count 2
+			return b
+		}(t), "section 0"},
+		{"record listed twice", func(t testing.TB) []byte {
+			b := buildMapDB2(t, base())
+			copy(b[len(b)-8:], b[len(b)-16:len(b)-8]) // both entries name record 0
+			return b
+		}(t), "twice"},
+		{"relationship without parent lookups", func(t testing.TB) []byte {
+			b := buildMapDB2(t, base())
+			return put32(b, offParentLookups, 0)
+		}(t), "relationship"},
+		{"entries above the record count", func(t testing.TB) []byte {
+			b := buildMapDB2(t, base())
+			binary.LittleEndian.PutUint32(b[len(b)-28:], 3) // NumEntries 3 > 2 records
+			return b
+		}(t), "section 0"},
+		{"relationship data past the file", put32(buildMapDB2(t, base()), offSections+secRelationship, uint32(1<<30)), "past"},
+	}
+	for _, c := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: panic %v", c.name, r)
+				}
+			}()
+			if _, err := parse(c.b); err == nil {
+				t.Errorf("%s: no error", c.name)
+			} else if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: error %q does not mention %q", c.name, err, c.want)
+			}
+		}()
+	}
+}
+
+// TestCheckLayout checks the layout gate: the Map layout passes for (mapLayoutHash, 26) and fails
+// for another hash and for 25 fields.
+func TestCheckLayout(t *testing.T) {
+	f := openBytes(t, buildMapDB2(t, twoMaps()))
+	if err := f.CheckLayout("Map.db2", mapLayoutHash, 26); err != nil {
+		t.Errorf("the Map layout is refused: %v", err)
+	}
+	if err := f.CheckLayout("Map.db2", mapLayoutHash+1, 26); err == nil {
+		t.Error("another layout hash is accepted")
+	}
+	if err := f.CheckLayout("Map.db2", mapLayoutHash, 25); err == nil {
+		t.Error("25 fields are accepted")
+	}
+}
+
+// TestRowValues reads scalar columns through the new row API: a plain 16-bit column holding 0xFFFF
+// reads Uint 65535 and Int -1; the packed signed InstanceType (field 8, width 3, raw 7) reads
+// Int -1; a plain 64-bit column reads Uints [a b]; Uints on a 16-bit scalar and String on the
+// directory column behave as specified.
+func TestRowValues(t *testing.T) {
+	m := twoMaps()
+	m.fields = mapFields()
+	m.fields[2] = tField{bitOffset: 64, bitSize: 16} // id column: plain 16 bits
+	m.fields[3] = tField{bitOffset: 96, bitSize: 64} // a plain 64-bit column
+	m.inlineIDs = false                              // ids stay in the ID list
+	m.patch = func(i int, r []byte) {
+		binary.LittleEndian.PutUint16(r[8:], 0xFFFF)                                     // field 2: 16-bit 0xFFFF
+		binary.LittleEndian.PutUint64(r[12:], uint64(0x22334455)<<32|uint64(0x11223344)) // field 3: u32 pair
+		r[testPackedOffset] = 7 << 2                                                     // field 8: raw 7 = -1 in 3 bits
+	}
+	f := openBytes(t, buildMapDB2(t, m))
+	rows, _, err := f.Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("Rows = %d rows, want 2", len(rows))
+	}
+	if v, err := f.Uint(rows[0], 2); err != nil || v != 65535 {
+		t.Errorf("Uint(16-bit 0xFFFF) = %d, %v, want 65535", v, err)
+	}
+	if v, err := f.Int(rows[0], 2); err != nil || v != -1 {
+		t.Errorf("Int(16-bit 0xFFFF) = %d, %v, want -1", v, err)
+	}
+	if v, err := f.Int(rows[0], 8); err != nil || v != -1 {
+		t.Errorf("Int(packed signed 3-bit 7) = %d, %v, want -1", v, err)
+	}
+	if vs, err := f.Uints(rows[0], 3); err != nil || len(vs) != 2 || vs[0] != 0x11223344 || vs[1] != 0x22334455 {
+		t.Errorf("Uints(64-bit pair) = %v, %v", vs, err)
+	}
+	if _, err := f.Uints(rows[0], 2); err == nil {
+		t.Error("Uints on a 16-bit scalar is accepted")
+	}
+	if _, err := f.Uints(rows[0], 4); err == nil {
+		t.Error("Uints on a 32-bit scalar is accepted")
+	}
+	if s, err := f.String(rows[0], 0); err != nil || s != "Azeroth" {
+		t.Errorf("String(directory) = %q, %v", s, err)
+	}
+}
+
 // FuzzParse feeds arbitrary bytes to the reader: it must return a File or an error, never panic, and
 // never allocate more than the input's size allows. The seeds are hand-built files, not client data:
 //
@@ -821,7 +1013,7 @@ func FuzzParse(f *testing.F) {
 		twoMaps(),
 		{wdc4: true, dirs: []string{"Azeroth"}, names: []string{"E"}, ids: []uint32{0}},
 		{dirs: []string{"A", ""}, names: []string{"A", ""}, ids: []uint32{0, 99}, encrypted: []bool{false, true}, copies: [][2]uint32{{5, 0}}},
-		{dirs: []string{"A", "B"}, names: []string{"A", "B"}, ids: []uint32{1, 2}, inlineIDs: true},
+		{dirs: []string{"A", "B"}, names: []string{"A", "B"}, ids: []uint32{1, 2}, parents: []uint32{6, 8}},
 	} {
 		f.Add(buildMapDB2(f, m))
 	}
