@@ -372,6 +372,43 @@ func Build(ch Channel, target, prefix, text string, logged bool) (uint32, []byte
 	return wire.CMSGChatAddonMessageTargeted, b.Bytes(), nil
 }
 
+// BuildChannel validates and writes one add-on message to a chat channel the character is on: the targeted packet
+// (ChatPackets.cpp:93-110) with Type CHAT_MSG_CHANNEL, the channel's GUID (the server looks the channel up by it,
+// ChatHandler.cpp:526-530, :640-647) and its name in the 8-bit SizedCString. The GUID comes from the join answer
+// (SMSG_CHANNEL_NOTIFY_JOINED); the player fields stay empty, as for the other targeted kinds.
+func BuildChannel(channel wire.GUID, name, prefix, text string, logged bool) (uint32, []byte, error) {
+	if err := ValidatePrefix(prefix); err != nil {
+		return 0, nil, err
+	}
+	if err := ValidateText(text); err != nil {
+		return 0, nil, err
+	}
+	if channel.IsZero() {
+		return 0, nil, errors.New("addonmsg: a channel message needs the channel's GUID (join the channel first)")
+	}
+	if name == "" || len(name) > 127 {
+		return 0, nil, errors.New("addonmsg: a channel name is 1 to 127 bytes")
+	}
+	b := wire.NewWriter()
+	b.WriteBits(uint64(len(prefix)), 5)
+	b.WriteBits(uint64(len(text)), 8)
+	b.WriteBit(logged)
+	b.FlushBits()
+	b.WriteI32(int32(chat.TypeChannel))
+	b.WriteString(prefix)
+	b.WriteString(text)
+	wire.WritePackedGUID(b, channel)
+	wire.WritePackedGUID(b, wire.EmptyGUID) // PlayerGUID
+	b.WriteU32(0)                           // player virtual realm address
+	b.WriteBits(0, 9)                       // PlayerName: empty
+	b.WriteBits(0, 9)                       // the Classic 1.60 second name: empty
+	b.WriteBits(cstringSize(name), 8)
+	b.FlushBits()
+	b.WriteString(name)
+	b.WriteU8(0)
+	return wire.CMSGChatAddonMessageTargeted, b.Bytes(), nil
+}
+
 // Inbox is the bounded receive side: the prefixes this client registered, the FIFO of delivered messages, and the
 // counters. Everything runs on the session goroutine (the packet loop and the command share it), so there is no
 // mutex; a caller that hands it to another goroutine must add its own.

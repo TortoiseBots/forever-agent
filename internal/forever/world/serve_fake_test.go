@@ -129,6 +129,9 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		f.instWire = append(f.instWire, code)
 		f.mu.Unlock()
 		core := table.TranslateClientWire(code)
+		if hook := f.serveWire; hook != nil {
+			hook(c, table, core, payload)
+		}
 		switch core {
 		case wire.CMSGTimeSyncResponse, wire.CMSGMoveInitActiveMoverDone, wire.CMSGLoadingScreenNotify:
 		case wire.CMSGPing:

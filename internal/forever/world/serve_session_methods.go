@@ -202,6 +202,12 @@ type serveChatParams struct {
 	To   string `json:"to,omitempty"`
 }
 
+// serveChannelParams is the input of join_channel (name, password), leave_channel and channel_list (name).
+type serveChannelParams struct {
+	Name     string `json:"name"`
+	Password string `json:"password,omitempty"`
+}
+
 type serveChatLogParams struct {
 	Since  uint64 `json:"since"`
 	Limit  int    `json:"limit,omitempty"`
@@ -469,6 +475,15 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("chat", serveCallTyped(st, func(s *session, ctx context.Context, p serveChatParams) (serveEmpty, error) {
 		return serveEmpty{}, s.serveChat(ctx, p.Type, p.Text, p.To)
+	}))
+	srv.Register("join_channel", serveCallTyped(st, func(s *session, ctx context.Context, p serveChannelParams) (ServeChannelJoin, error) {
+		return s.serveJoinChannel(ctx, p.Name, p.Password)
+	}))
+	srv.Register("leave_channel", serveCallTyped(st, func(s *session, ctx context.Context, p serveChannelParams) (ServeChannelLeave, error) {
+		return s.serveLeaveChannel(ctx, p.Name)
+	}))
+	srv.Register("channel_list", serveCallTyped(st, func(s *session, ctx context.Context, p serveChannelParams) (ServeChannelList, error) {
+		return s.serveChannelList(ctx, p.Name)
 	}))
 	srv.Register("chat_log", serveReadTyped(st, func(s *session, ctx context.Context, p serveChatLogParams) (ServeChatPage, error) {
 		return s.serveChatLog(ctx, p)
@@ -1680,7 +1695,7 @@ func (s *session) serveChatLog(ctx context.Context, p serveChatLogParams) (Serve
 				ln := lines[i]
 				page.Events = append(page.Events, ServeChatEvent{
 					Seq:  oldest + uint64(i) + 1,
-					Kind: "chat", Type: chat.TypeName(ln.Type), Source: ln.SenderName,
+					Kind: "chat", Type: chat.TypeName(ln.Type), Source: s.eventName(ln.SenderName, ln.SenderGUID),
 					Channel: ln.Channel, Text: ln.Text,
 				})
 			}
@@ -1721,7 +1736,6 @@ var notPortedMethods = []string{
 	"brain_start", "brain_status", "brain_stop",
 	"convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
 	"map_snapshot",

@@ -130,6 +130,7 @@ func (s *session) handleChat(p worldconn.Packet) error {
 		s.feedCommand(line)
 		chat.SanitiseLine(&line)
 		s.chat.Add(line)
+		s.askChatSender(line)
 		s.eventChat(line)
 		s.opts.logf("chat: %s", s.chatLineText(line))
 	case wire.SMSGPrintNotification:

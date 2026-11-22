@@ -20,8 +20,9 @@ import (
 	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
-// serveChat sends one chat line. The forms with a client writer behind them are ported; a channel, guild or raid
-// line is refused by name instead of being sent as something else.
+// serveChat sends one chat line: say, yell, party, emote, whisper (with to), guild, officer, raid, raid_warning,
+// battleground (the instance chat line) and channel (with to, the channel name). A leader's line is refused by name:
+// the server marks it itself.
 func (s *session) serveChat(ctx context.Context, typ, text, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -62,21 +63,32 @@ func (s *session) serveChat(ctx context.Context, typ, text, to string) error {
 		}
 		return s.Send(wire.CMSGChatMessageWhisper, chat.BuildWhisper(lang, name, text))
 	case "channel":
-		return errors.New("chat: channel messages are not ported on this server")
-	case "guild", "officer", "raid", "raid_leader", "raid_warning", "battleground", "battleground_leader":
-		return fmt.Errorf("chat: %s messages are not ported on this server", strings.ToLower(typ))
+		return s.serveChannelSay(lang, to, text)
 	default:
-		return fmt.Errorf("chat: unknown type %q (say, yell, party, emote, whisper)", typ)
+		kind := strings.ToLower(strings.TrimSpace(typ))
+		if handled, err := s.serveGroupChat(kind, lang, text); handled {
+			return err
+		}
+		return fmt.Errorf("chat: unknown type %q (say, yell, party, emote, whisper, guild, officer, raid, raid_warning, battleground, channel)", typ)
 	}
 }
 
 // serveAddon sends one add-on message under one prefix, registering the prefix first when this session has not.
-// The group kinds need a message the server accepts; the channel kind is refused by addonmsg itself.
+// The group kinds need a message the server accepts; channel:NAME goes to a channel this character joined.
 func (s *session) serveAddon(ctx context.Context, channel, prefix, text, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.initAddon()
+	if channel == "channel" {
+		return errChannelSpec
+	}
+	if name, ok := strings.CutPrefix(channel, "channel:"); ok {
+		if to != "" {
+			name = to
+		}
+		return s.serveAddonChannel(ctx, name, prefix, text)
+	}
 	ch, target, err := addonmsg.ParseChannel(channel)
 	if err != nil {
 		return err

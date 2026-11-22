@@ -565,6 +565,8 @@ type session struct {
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
 	party *party.State
+	// channels is the chat channel model (channel_session.go).
+	channels *channelState
 	// nameAsks is, per player guid, when a dungeon port last sent a name query for it and how many it has sent: an
 	// unanswered guid is asked again on a growing backoff (nameAskBackoff). Only the session goroutine touches it.
 	nameAsks map[wire.GUID]nameAsk
@@ -2293,6 +2295,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGChatPlayerNotFound, wire.SMSGChatPlayerAmbiguous, wire.SMSGChatRestricted,
 		wire.SMSGEmote, wire.SMSGTextEmote:
 		return s.handleChat(p)
+	case wire.SMSGChannelNotify, wire.SMSGChannelNotifyJoined, wire.SMSGChannelNotifyLeft, wire.SMSGChannelList:
+		return s.handleChannel(p)
 	case wire.SMSGPartyInvite, wire.SMSGPartyUpdate, wire.SMSGPartyMemberFullState,
 		wire.SMSGPartyMemberPartialState, wire.SMSGGroupDecline, wire.SMSGGroupUninvite,
 		wire.SMSGGroupDestroyed, wire.SMSGGroupNewLeader, wire.SMSGPartyCommandResult,

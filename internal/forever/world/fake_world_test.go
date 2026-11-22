@@ -358,6 +358,9 @@ type fakeServer struct {
 	// serveCommander, when set, answers a `.tb` line with grammar-v2 lines in which "#T" is the line's token: the
 	// commander method's test script. Nil keeps the one untagged SERVE-BOT-ANSWER line.
 	serveCommander func(line string) []string
+	// serveWire, when set, sees every client packet of the serving scenario (by core opcode) before the default
+	// answer; it lets one test script a subsystem (the channel server of fake_channel_test.go) without a case here.
+	serveWire func(c *fakeConn, table *wire.OpcodeTable, core uint32, payload []byte)
 	// serveReconnects is ServeConfig.ReconnectAttempts for the daemon these helpers start (0 keeps the default);
 	// serveBackoff/serveLoginTimeout shorten its reconnect timings.
 	serveReconnects   int
