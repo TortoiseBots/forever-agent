@@ -1,0 +1,87 @@
+{
+  "taunts": [
+    "Taunt",
+    "Mocking Blow",
+    "Challenging Shout",
+    "Growl",
+    "Challenging Roar"
+  ],
+  "ignore": [],
+  "generic": {
+    "warrior": [
+      "Battle Stance",
+      "Defensive Stance",
+      "Berserker Stance",
+      "Battle Shout",
+      "Bloodrage"
+    ],
+    "priest": [
+      "Power Word: Fortitude",
+      "Prayer of Fortitude",
+      "Inner Fire",
+      "Divine Spirit",
+      "Shadow Protection",
+      "Fear Ward"
+    ],
+    "mage": [
+      "Arcane Intellect",
+      "Arcane Brilliance",
+      "Frost Armor",
+      "Ice Armor",
+      "Mage Armor",
+      "Conjure Water",
+      "Conjure Food"
+    ],
+    "rogue": [
+      "Stealth",
+      "Sprint"
+    ],
+    "paladin": [
+      "Blessing of Might",
+      "Blessing of Kings",
+      "Blessing of Wisdom",
+      "Blessing of Light",
+      "Devotion Aura",
+      "Retribution Aura",
+      "Concentration Aura",
+      "Righteous Fury"
+    ],
+    "hunter": [
+      "Aspect of the Hawk",
+      "Aspect of the Monkey",
+      "Aspect of the Cheetah",
+      "Aspect of the Pack",
+      "Trueshot Aura"
+    ],
+    "shaman": [
+      "Lightning Shield",
+      "Rockbiter Weapon",
+      "Flametongue Weapon",
+      "Windfury Weapon",
+      "Frostbrand Weapon",
+      "Ghost Wolf",
+      "Stoneskin Totem"
+    ],
+    "warlock": [
+      "Demon Skin",
+      "Demon Armor",
+      "Create Healthstone",
+      "Create Soulstone",
+      "Summon Imp",
+      "Summon Voidwalker",
+      "Summon Succubus",
+      "Summon Felhunter"
+    ],
+    "druid": [
+      "Mark of the Wild",
+      "Gift of the Wild",
+      "Thorns",
+      "Travel Form"
+    ]
+  },
+  "limits": {
+    "sunder_ok_per_10s": 1.5,
+    "sunder_warn_per_10s": 0.8,
+    "min_fight_ms": 10000
+  }
+}

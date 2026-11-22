@@ -1,0 +1,99 @@
+{
+  "class": "rogue",
+  "specs": [
+    {
+      "spec": "assassination",
+      "role": "dps",
+      "rotation": "classic_assassination_rogue",
+      "core": [
+        "Sinister Strike",
+        "Eviscerate",
+        "Slice and Dice"
+      ],
+      "situational": [
+        "Backstab",
+        "Rupture",
+        "Expose Armor",
+        "Kick",
+        "Gouge",
+        "Sap",
+        "Kidney Shot",
+        "Cheap Shot",
+        "Ambush",
+        "Garrote",
+        "Evasion",
+        "Sprint",
+        "Vanish",
+        "Feint",
+        "Blind"
+      ],
+      "never": [],
+      "signature": [
+        "Cold Blood"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "combat",
+      "role": "dps",
+      "rotation": "classic_combat_rogue",
+      "core": [
+        "Sinister Strike",
+        "Eviscerate",
+        "Slice and Dice"
+      ],
+      "situational": [
+        "Backstab",
+        "Rupture",
+        "Expose Armor",
+        "Kick",
+        "Gouge",
+        "Sap",
+        "Kidney Shot",
+        "Riposte",
+        "Evasion",
+        "Sprint",
+        "Vanish",
+        "Feint",
+        "Blind"
+      ],
+      "never": [],
+      "signature": [
+        "Blade Flurry",
+        "Adrenaline Rush"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "subtlety",
+      "role": "dps",
+      "rotation": "classic_subtlety_rogue",
+      "core": [
+        "Hemorrhage",
+        "Eviscerate"
+      ],
+      "situational": [
+        "Slice and Dice",
+        "Backstab",
+        "Ambush",
+        "Garrote",
+        "Cheap Shot",
+        "Premeditation",
+        "Preparation",
+        "Ghostly Strike",
+        "Kick",
+        "Sap",
+        "Vanish",
+        "Feint",
+        "Blind"
+      ],
+      "never": [],
+      "signature": [
+        "Hemorrhage",
+        "Premeditation",
+        "Ghostly Strike"
+      ],
+      "taunt": []
+    }
+  ]
+}

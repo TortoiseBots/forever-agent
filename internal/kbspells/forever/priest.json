@@ -1,0 +1,99 @@
+{
+  "class": "priest",
+  "specs": [
+    {
+      "spec": "discipline",
+      "role": "heal",
+      "rotation": "classic_discipline_priest",
+      "core": [
+        "Power Word: Shield",
+        "Flash Heal"
+      ],
+      "situational": [
+        "Renew",
+        "Heal",
+        "Greater Heal",
+        "Lesser Heal",
+        "Prayer of Healing",
+        "Power Infusion",
+        "Inner Focus",
+        "Dispel Magic",
+        "Cure Disease",
+        "Abolish Disease",
+        "Fade",
+        "Smite",
+        "Resurrection"
+      ],
+      "never": [
+        "Shadowform"
+      ],
+      "signature": [
+        "Power Infusion"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "holy",
+      "role": "heal",
+      "rotation": "classic_holy_priest",
+      "core": [
+        "Renew",
+        "Flash Heal"
+      ],
+      "situational": [
+        "Heal",
+        "Greater Heal",
+        "Lesser Heal",
+        "Power Word: Shield",
+        "Prayer of Healing",
+        "Dispel Magic",
+        "Cure Disease",
+        "Abolish Disease",
+        "Inner Focus",
+        "Desperate Prayer",
+        "Fade",
+        "Psychic Scream",
+        "Smite",
+        "Holy Fire",
+        "Holy Nova",
+        "Shadow Word: Pain",
+        "Resurrection"
+      ],
+      "never": [
+        "Shadowform"
+      ],
+      "signature": [],
+      "taunt": []
+    },
+    {
+      "spec": "shadow",
+      "role": "dps",
+      "rotation": "classic_shadow_priest",
+      "core": [
+        "Shadow Word: Pain",
+        "Mind Blast"
+      ],
+      "situational": [
+        "Mind Flay",
+        "Devouring Plague",
+        "Vampiric Embrace",
+        "Shadowform",
+        "Silence",
+        "Psychic Scream",
+        "Fade",
+        "Power Word: Shield",
+        "Smite",
+        "Flash Heal",
+        "Renew",
+        "Inner Focus"
+      ],
+      "never": [],
+      "signature": [
+        "Mind Flay",
+        "Shadowform",
+        "Vampiric Embrace"
+      ],
+      "taunt": []
+    }
+  ]
+}

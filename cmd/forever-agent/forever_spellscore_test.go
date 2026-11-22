@@ -91,3 +91,16 @@ func TestForeverSpellScoreCmd(t *testing.T) {
 		t.Fatalf("text %q", out.String())
 	}
 }
+
+// TestForeverSpellScoreCmdDefaultOracle: with no --oracle the command judges against the Forever oracle the build
+// ships, so the mage fixture scores ok without a directory to point at.
+func TestForeverSpellScoreCmdDefaultOracle(t *testing.T) {
+	td := spellScoreTestdata(t)
+	var out, errb bytes.Buffer
+	if code := foreverSpellScoreCmd([]string{"--spells", td, filepath.Join(td, "mage")}, &out, &errb); code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "(mage dps)") {
+		t.Fatalf("text %q", out.String())
+	}
+}

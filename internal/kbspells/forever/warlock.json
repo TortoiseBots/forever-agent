@@ -1,0 +1,97 @@
+{
+  "class": "warlock",
+  "specs": [
+    {
+      "spec": "affliction",
+      "role": "dps",
+      "rotation": "classic_affliction_warlock",
+      "core": [
+        "Corruption",
+        "Curse of Agony",
+        "Shadow Bolt"
+      ],
+      "situational": [
+        "Siphon Life",
+        "Drain Life",
+        "Drain Soul",
+        "Drain Mana",
+        "Life Tap",
+        "Fear",
+        "Howl of Terror",
+        "Death Coil",
+        "Amplify Curse",
+        "Curse of the Elements",
+        "Curse of Shadow",
+        "Curse of Recklessness",
+        "Curse of Weakness",
+        "Curse of Tongues",
+        "Immolate",
+        "Health Funnel"
+      ],
+      "never": [],
+      "signature": [
+        "Siphon Life",
+        "Amplify Curse"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "demonology",
+      "role": "dps",
+      "rotation": "classic_demonology_warlock",
+      "core": [
+        "Shadow Bolt",
+        "Corruption"
+      ],
+      "situational": [
+        "Curse of Agony",
+        "Immolate",
+        "Life Tap",
+        "Drain Life",
+        "Fear",
+        "Health Funnel",
+        "Fel Domination",
+        "Soul Link",
+        "Searing Pain",
+        "Curse of the Elements",
+        "Curse of Shadow",
+        "Curse of Recklessness"
+      ],
+      "never": [],
+      "signature": [
+        "Soul Link",
+        "Fel Domination"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "destruction",
+      "role": "dps",
+      "rotation": "classic_destruction_warlock",
+      "core": [
+        "Shadow Bolt",
+        "Immolate"
+      ],
+      "situational": [
+        "Conflagrate",
+        "Shadowburn",
+        "Searing Pain",
+        "Corruption",
+        "Curse of Agony",
+        "Curse of the Elements",
+        "Curse of Shadow",
+        "Life Tap",
+        "Rain of Fire",
+        "Hellfire",
+        "Fear",
+        "Death Coil"
+      ],
+      "never": [],
+      "signature": [
+        "Conflagrate",
+        "Shadowburn"
+      ],
+      "taunt": []
+    }
+  ]
+}

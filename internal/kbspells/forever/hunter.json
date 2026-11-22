@@ -1,0 +1,103 @@
+{
+  "class": "hunter",
+  "specs": [
+    {
+      "spec": "beast_mastery",
+      "role": "dps",
+      "rotation": "classic_beast_mastery_hunter",
+      "core": [
+        "Auto Shot",
+        "Arcane Shot"
+      ],
+      "situational": [
+        "Multi-Shot",
+        "Serpent Sting",
+        "Hunter's Mark",
+        "Concussive Shot",
+        "Raptor Strike",
+        "Mongoose Bite",
+        "Wing Clip",
+        "Freezing Trap",
+        "Frost Trap",
+        "Immolation Trap",
+        "Explosive Trap",
+        "Feign Death",
+        "Disengage",
+        "Rapid Fire",
+        "Volley",
+        "Viper Sting",
+        "Scorpid Sting",
+        "Tranquilizing Shot",
+        "Mend Pet"
+      ],
+      "never": [],
+      "signature": [
+        "Bestial Wrath",
+        "Intimidation"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "marksmanship",
+      "role": "dps",
+      "rotation": "classic_marksmanship_hunter",
+      "core": [
+        "Auto Shot",
+        "Aimed Shot"
+      ],
+      "situational": [
+        "Arcane Shot",
+        "Multi-Shot",
+        "Serpent Sting",
+        "Hunter's Mark",
+        "Concussive Shot",
+        "Scatter Shot",
+        "Raptor Strike",
+        "Wing Clip",
+        "Freezing Trap",
+        "Feign Death",
+        "Rapid Fire",
+        "Volley",
+        "Viper Sting",
+        "Tranquilizing Shot"
+      ],
+      "never": [],
+      "signature": [
+        "Aimed Shot",
+        "Scatter Shot"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "survival",
+      "role": "dps",
+      "rotation": "classic_survival_hunter",
+      "core": [
+        "Auto Shot",
+        "Arcane Shot"
+      ],
+      "situational": [
+        "Multi-Shot",
+        "Serpent Sting",
+        "Hunter's Mark",
+        "Raptor Strike",
+        "Mongoose Bite",
+        "Wing Clip",
+        "Counterattack",
+        "Freezing Trap",
+        "Frost Trap",
+        "Immolation Trap",
+        "Explosive Trap",
+        "Feign Death",
+        "Disengage",
+        "Wyvern Sting"
+      ],
+      "never": [],
+      "signature": [
+        "Wyvern Sting",
+        "Counterattack"
+      ],
+      "taunt": []
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "class": "paladin",
+  "specs": [
+    {
+      "spec": "holy",
+      "role": "heal",
+      "rotation": "classic_holy_paladin",
+      "core": [
+        "Holy Light",
+        "Flash of Light"
+      ],
+      "situational": [
+        "Holy Shock",
+        "Cleanse",
+        "Purify",
+        "Lay on Hands",
+        "Divine Shield",
+        "Divine Protection",
+        "Divine Favor",
+        "Blessing of Protection",
+        "Blessing of Freedom",
+        "Hammer of Justice",
+        "Judgement",
+        "Seal of Wisdom",
+        "Seal of Light",
+        "Redemption"
+      ],
+      "never": [
+        "Righteous Fury"
+      ],
+      "signature": [
+        "Holy Shock"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "protection",
+      "role": "tank",
+      "rotation": "classic_protection_paladin",
+      "core": [
+        "Seal of Righteousness",
+        "Judgement",
+        "Consecration"
+      ],
+      "situational": [
+        "Holy Shield",
+        "Hammer of Justice",
+        "Holy Light",
+        "Flash of Light",
+        "Lay on Hands",
+        "Divine Protection",
+        "Cleanse",
+        "Blessing of Freedom"
+      ],
+      "never": [],
+      "signature": [
+        "Holy Shield"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "retribution",
+      "role": "dps",
+      "rotation": "classic_retribution_paladin",
+      "core": [
+        "Seal of Righteousness",
+        "Judgement"
+      ],
+      "situational": [
+        "Seal of Command",
+        "Seal of the Crusader",
+        "Hammer of Justice",
+        "Consecration",
+        "Exorcism",
+        "Hammer of Wrath",
+        "Repentance",
+        "Holy Light",
+        "Flash of Light",
+        "Cleanse",
+        "Divine Protection"
+      ],
+      "never": [
+        "Righteous Fury"
+      ],
+      "signature": [
+        "Seal of Command",
+        "Repentance"
+      ],
+      "taunt": []
+    }
+  ]
+}

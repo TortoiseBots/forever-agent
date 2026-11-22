@@ -1,0 +1,126 @@
+{
+  "class": "druid",
+  "specs": [
+    {
+      "spec": "balance",
+      "role": "dps",
+      "rotation": "classic_balance_druid",
+      "core": [
+        "Wrath",
+        "Moonfire"
+      ],
+      "situational": [
+        "Starfire",
+        "Insect Swarm",
+        "Hurricane",
+        "Faerie Fire",
+        "Entangling Roots",
+        "Hibernate",
+        "Moonkin Form",
+        "Innervate",
+        "Healing Touch",
+        "Rejuvenation",
+        "Remove Curse",
+        "Abolish Poison",
+        "Barkskin"
+      ],
+      "never": [
+        "Bear Form",
+        "Cat Form"
+      ],
+      "signature": [
+        "Moonkin Form",
+        "Insect Swarm"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "feral_bear",
+      "role": "tank",
+      "rotation": "classic_feral_bear_druid",
+      "core": [
+        "Bear Form",
+        "Maul",
+        "Swipe"
+      ],
+      "situational": [
+        "Dire Bear Form",
+        "Demoralizing Roar",
+        "Enrage",
+        "Bash",
+        "Feral Charge",
+        "Frenzied Regeneration",
+        "Faerie Fire"
+      ],
+      "never": [
+        "Moonkin Form"
+      ],
+      "signature": [
+        "Feral Charge"
+      ],
+      "taunt": [
+        "Growl",
+        "Challenging Roar"
+      ]
+    },
+    {
+      "spec": "feral_cat",
+      "role": "dps",
+      "rotation": "classic_feral_cat_druid",
+      "core": [
+        "Claw",
+        "Rip",
+        "Cat Form"
+      ],
+      "situational": [
+        "Rake",
+        "Shred",
+        "Ferocious Bite",
+        "Tiger's Fury",
+        "Ravage",
+        "Pounce",
+        "Prowl",
+        "Dash",
+        "Faerie Fire"
+      ],
+      "never": [
+        "Moonkin Form"
+      ],
+      "signature": [
+        "Shred",
+        "Ferocious Bite"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "restoration",
+      "role": "heal",
+      "rotation": "classic_restoration_druid",
+      "core": [
+        "Rejuvenation",
+        "Healing Touch"
+      ],
+      "situational": [
+        "Regrowth",
+        "Swiftmend",
+        "Tranquility",
+        "Innervate",
+        "Rebirth",
+        "Remove Curse",
+        "Abolish Poison",
+        "Cure Poison",
+        "Nature's Grasp",
+        "Barkskin"
+      ],
+      "never": [
+        "Bear Form",
+        "Cat Form",
+        "Moonkin Form"
+      ],
+      "signature": [
+        "Swiftmend"
+      ],
+      "taunt": []
+    }
+  ]
+}
