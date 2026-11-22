@@ -93,7 +93,7 @@ type DynamicObject struct {
 }
 
 // DynamicObjects lists the dynamic objects the model holds, nearest first to (x, y); the ones without a position
-// (all three coordinates zero: none was ever delivered) come last with distance -1.
+// (no packet ever gave them one) come last with distance -1.
 func (w *World) DynamicObjects(x, y float32) []DynamicObject {
 	w.mu.RLock()
 	out := make([]DynamicObject, 0, 8)
@@ -103,7 +103,7 @@ func (w *World) DynamicObjects(x, y float32) []DynamicObject {
 		}
 		d := DynamicObject{GUID: o.GUID, SpellID: o.Info.SpellID, Caster: o.Info.Caster, Radius: o.Info.DynRadius,
 			X: o.X, Y: o.Y, Z: o.Z, Distance: -1}
-		if o.X != 0 || o.Y != 0 || o.Z != 0 {
+		if o.Positioned {
 			d.Distance = float32(math.Hypot(float64(o.X-x), float64(o.Y-y)))
 		}
 		out = append(out, d)

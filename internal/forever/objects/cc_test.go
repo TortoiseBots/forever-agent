@@ -157,6 +157,7 @@ func TestDynamicObjectsList(t *testing.T) {
 	near := wire.GUID{Low: 0x11, High: 0x0F00000000000000}
 	far := wire.GUID{Low: 0x12, High: 0x0F00000000000000}
 	lost := wire.GUID{Low: 0x13, High: 0x0F00000000000000}
+	origin := wire.GUID{Low: 0x14, High: 0x0F00000000000000}
 	for _, c := range []struct {
 		guid   wire.GUID
 		spell  int32
@@ -166,6 +167,7 @@ func TestDynamicObjectsList(t *testing.T) {
 		{far, 10, 20, &[3]float32{40, 0, 9}},
 		{near, 42, 8, &[3]float32{3, 4, 100}},
 		{lost, 11, 6, nil},
+		{origin, 12, 4, &[3]float32{0, 0, 0}},
 	} {
 		u, err := ParseUpdateObject(buildDynamicObjectCreate(c.guid, caster, c.spell, c.radius, 5000, c.pos))
 		if err != nil {
@@ -177,26 +179,29 @@ func TestDynamicObjectsList(t *testing.T) {
 		w.Apply(u, now)
 	}
 	got := w.DynamicObjects(0, 0)
-	if len(got) != 3 {
-		t.Fatalf("%d dynamic objects, want 3: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("%d dynamic objects, want 4: %+v", len(got), got)
 	}
-	if got[0].GUID != near || got[1].GUID != far || got[2].GUID != lost {
-		t.Fatalf("order %v %v %v, want near, far, lost", got[0].GUID, got[1].GUID, got[2].GUID)
+	if got[0].GUID != origin || got[1].GUID != near || got[2].GUID != far || got[3].GUID != lost {
+		t.Fatalf("order %v %v %v %v, want origin, near, far, lost", got[0].GUID, got[1].GUID, got[2].GUID, got[3].GUID)
 	}
-	n := got[0]
+	if got[0].Distance != 0 || got[0].Radius != 4 || got[0].SpellID != 12 {
+		t.Fatalf("a positioned object at (0,0,0) is %+v, want distance 0, not unknown", got[0])
+	}
+	n := got[1]
 	if n.SpellID != 42 || n.Caster != caster || n.Radius != 8 || n.X != 3 || n.Y != 4 || n.Z != 100 {
 		t.Fatalf("near row %+v", n)
 	}
 	if n.Distance != 5 {
 		t.Fatalf("near distance %v, want the flat 5 (z ignored)", n.Distance)
 	}
-	if got[1].Distance != 40 || got[1].Radius != 20 {
-		t.Fatalf("far row %+v", got[1])
+	if got[2].Distance != 40 || got[2].Radius != 20 {
+		t.Fatalf("far row %+v", got[2])
 	}
-	if got[2].Distance != -1 || got[2].Radius != 6 {
-		t.Fatalf("a dynamic object without a position is %+v, want distance -1", got[2])
+	if got[3].Distance != -1 || got[3].Radius != 6 {
+		t.Fatalf("a dynamic object without a position is %+v, want distance -1", got[3])
 	}
-	if len(w.DynamicObjects(1000, 1000)) != 3 {
+	if len(w.DynamicObjects(1000, 1000)) != 4 {
 		t.Fatal("the list does not depend on the asker")
 	}
 }
