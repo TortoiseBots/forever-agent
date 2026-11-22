@@ -452,3 +452,16 @@ func TestStartCooldownCategoryAndExpire(t *testing.T) {
 		t.Fatalf("on-hold cooldown lost or 2136 kept: %+v", cs.Cooldowns)
 	}
 }
+
+func TestStartCooldownCategoryKeepsLaterEnd(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, order := range [][2]time.Duration{{8 * time.Second, 3 * time.Second}, {3 * time.Second, 8 * time.Second}} {
+		w := unitWorld(t)
+		w.StartCooldown(testSelf, 2136, now.Add(order[0]), 19)
+		w.StartCooldown(testSelf, 2948, now.Add(order[1]), 19)
+		cs, _ := w.Combat(testSelf)
+		if end := cs.CategoryCooldowns[19]; !end.Equal(now.Add(8 * time.Second)) {
+			t.Fatalf("order %v: category end %v, want +8s", order, end.Sub(now))
+		}
+	}
+}

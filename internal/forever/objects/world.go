@@ -54,7 +54,7 @@ type Object struct {
 	// has 1 health, so Dead stays true while Ghost is (objects/death.go).
 	Ghost bool
 	// ResurrectedAt is the last time a ghost came back (its aura went and its health was above 0).
-	ResurrectedAt time.Time
+	ResurrectedAt     time.Time
 	Auras             map[uint16]*Aura
 	Cast              *CastState
 	Cooldowns         map[int32]time.Time

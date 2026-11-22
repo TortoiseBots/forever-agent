@@ -57,7 +57,7 @@ func r6TestSession(t *testing.T, race, class uint8, clk *fakeClock) (*session, w
 
 type fakeClock struct{ t time.Time }
 
-func (c *fakeClock) Now() time.Time        { return c.t }
+func (c *fakeClock) Now() time.Time          { return c.t }
 func (c *fakeClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
 
 // spawnPlayerSelf delivers a minimal ThisIsYou create block for self with the given race and class.
@@ -111,7 +111,7 @@ func buildSelfPlayerCreate(self wire.GUID, race, class uint8, power0 int32) []by
 	}
 	v.WriteU8(displayPower) // DisplayPower
 	v.WriteU32(0)           // OverrideDisplayPowerID
-	v.WriteU64(100)  // Health
+	v.WriteU64(100)         // Health
 	for i := range 10 {
 		if i == 0 {
 			v.WriteI32(power0)
@@ -207,14 +207,14 @@ func buildSelfPlayerCreate(self wire.GUID, race, class uint8, power0 int32) []by
 	for range 3 { // DuelArbiter, WowAccount, BnetAccount
 		fakeZeroGUID(v)
 	}
-	v.WriteU64(0) // GuildClubMemberID
-	fakeZeroGUID(v) // LootTargetGUID
+	v.WriteU64(0)                  // GuildClubMemberID
+	fakeZeroGUID(v)                // LootTargetGUID
 	v.WriteBytes(make([]byte, 20)) // PlayerFlags..GuildLevel
 	v.WriteU32(1)                  // super district
 	v.WriteBytes(make([]byte, 13))
-	v.WriteBytes(make([]byte, 8))  // Customizations, RandomCustomizations
-	v.WriteBytes(make([]byte, 14)) // PartyType..GuildTimeStamp
-	v.WriteBytes(make([]byte, 19*27)) // VisibleItems[19]
+	v.WriteBytes(make([]byte, 8))               // Customizations, RandomCustomizations
+	v.WriteBytes(make([]byte, 14))              // PartyType..GuildTimeStamp
+	v.WriteBytes(make([]byte, 19*27))           // VisibleItems[19]
 	v.WriteBytes(make([]byte, 6*4+6*4+1+4+8+4)) // PlayerTitle..ArenaCooldowns
 	v.WriteBytes(make([]byte, 32*8))            // ForcedReactions[32]
 	v.WriteBytes(make([]byte, 16))              // OfferedAdvJournalQuestID..PetNames
@@ -235,7 +235,7 @@ func buildSelfPlayerCreate(self wire.GUID, race, class uint8, power0 int32) []by
 		v.WriteBit(false)
 		v.FlushBits()
 	}
-	v.WriteU32(0) // VisualItemReplacements
+	v.WriteU32(0)                        // VisualItemReplacements
 	v.WriteBytes(make([]byte, (19+5)*4)) // PlunderstormItemDisplayID + PersonalTabard
 	v.WriteBytes(make([]byte, 3*4+4*4))  // NPCAsPlayerInfo
 	fakeZeroGUID(v)
@@ -648,9 +648,9 @@ func TestStatusFields(t *testing.T) {
 
 type noopSender struct{}
 
-func (noopSender) Send(uint32, []byte) error                   { return nil }
-func (noopSender) WaitUntil(context.Context, time.Time) error  { return nil }
-func (noopSender) Now() time.Time                              { return time.Now() }
+func (noopSender) Send(uint32, []byte) error                  { return nil }
+func (noopSender) WaitUntil(context.Context, time.Time) error { return nil }
+func (noopSender) Now() time.Time                             { return time.Now() }
 
 func testClassicUnitBit(bit int) int {
 	c := bit + 9
@@ -723,3 +723,24 @@ func buildMultiUnitValuesUpdate(guid wire.GUID, fields map[int]func(*wire.Buffer
 }
 
 var _ = worldconn.Packet{}
+
+func TestSpellStateHistoryBeforeSelfEmitsAfterFlush(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1700000000, 0)}
+	s, self := r6TestSession(t, 4, 4, clk)
+	s.selfSeen = false // SMSG_SEND_SPELL_HISTORY can precede the self object
+	dispatchSpellPacket(t, s, wire.SMSGSendSpellHistory, r6HistoryPayload([]combat.SpellHistoryEntry{
+		{SpellID: 2136, Category: 19, CategoryRecoveryTime: 8000, ModRate: 1},
+	}))
+	for _, e := range r6SpellEvents(t, s, events.KindCooldownStart) {
+		if e.SourceGUID == "" {
+			t.Fatalf("cooldown_start emitted without a source guid: %+v", e)
+		}
+	}
+	s.selfSeen = true
+	s.self = self
+	s.flushPendingHistory()
+	starts := r6SpellEvents(t, s, events.KindCooldownStart)
+	if len(starts) != 1 || starts[0].SourceGUID == "" || starts[0].Data["source"] != "login" {
+		t.Fatalf("login cooldown_start after flush = %+v", starts)
+	}
+}

@@ -809,30 +809,30 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 
 // ServeStatus is the status method's result: where the character is, what it is doing, and the session's errors.
 type ServeStatus struct {
-	Character     string    `json:"character,omitempty"`
-	Team          string    `json:"team,omitempty"`
-	GUID          GUID      `json:"guid"`
-	Level         int32     `json:"level,omitempty"`
-	Map           uint32    `json:"map"`
-	X             float32   `json:"x"`
-	Y             float32   `json:"y"`
-	Z             float32   `json:"z"`
-	O             float32   `json:"o"`
-	Target        GUID      `json:"target,omitempty"`
-	Health        int64     `json:"health"`
-	MaxHealth     int64     `json:"max_health"`
-	Power         int32     `json:"power"`
-	MaxPower      int32     `json:"max_power"`
-	PowerType     uint8     `json:"power_type,omitempty"`
-	InCombat      bool      `json:"in_combat"`
-	Falling       bool      `json:"falling"`
-	ZUnknown      bool      `json:"z_unknown"`
-	TeleportSeq   uint64    `json:"teleport_seq"`
-	LatencyMS     uint32    `json:"latency_ms"`
-	Dead          bool      `json:"dead"`
-	Ghost         bool      `json:"ghost"`
-	ServerPackets int       `json:"server_packets"`
-	ParseErrors   int       `json:"parse_errors"`
+	Character     string  `json:"character,omitempty"`
+	Team          string  `json:"team,omitempty"`
+	GUID          GUID    `json:"guid"`
+	Level         int32   `json:"level,omitempty"`
+	Map           uint32  `json:"map"`
+	X             float32 `json:"x"`
+	Y             float32 `json:"y"`
+	Z             float32 `json:"z"`
+	O             float32 `json:"o"`
+	Target        GUID    `json:"target,omitempty"`
+	Health        int64   `json:"health"`
+	MaxHealth     int64   `json:"max_health"`
+	Power         int32   `json:"power"`
+	MaxPower      int32   `json:"max_power"`
+	PowerType     uint8   `json:"power_type,omitempty"`
+	InCombat      bool    `json:"in_combat"`
+	Falling       bool    `json:"falling"`
+	ZUnknown      bool    `json:"z_unknown"`
+	TeleportSeq   uint64  `json:"teleport_seq"`
+	LatencyMS     uint32  `json:"latency_ms"`
+	Dead          bool    `json:"dead"`
+	Ghost         bool    `json:"ghost"`
+	ServerPackets int     `json:"server_packets"`
+	ParseErrors   int     `json:"parse_errors"`
 	// MonoMS is the process's steady clock at this answer, the axis a combat row's mono_ms is on.
 	MonoMS       int64     `json:"mono_ms"`
 	BaseTime     time.Time `json:"base_time"`

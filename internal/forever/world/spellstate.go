@@ -43,6 +43,15 @@ type pendingHistoryCooldown struct {
 	spellID  int32
 	end      time.Time
 	category uint32
+	// emit, when set, is the login cooldown_start event held until the self identity exists.
+	emit *pendingCooldownEvent
+}
+
+type pendingCooldownEvent struct {
+	spellID  uint32
+	ms       uint32
+	category uint16
+	onHold   bool
 }
 
 type spellState struct {
@@ -251,8 +260,8 @@ func (s *session) clearSpellCooldown(spellID int32, now time.Time) {
 func (s *session) onSpellHistory(v combat.SpellHistory, now time.Time) {
 	for _, e := range v.Entries {
 		if e.OnHold {
-			s.applyOrQueueHistoryCooldown(int32(e.SpellID), time.Time{}, 0)
-			s.emitCooldownStart(e.SpellID, 0, uint16(e.Category), "login", true)
+			s.applyOrQueueHistoryCooldown(int32(e.SpellID), time.Time{}, 0,
+				&pendingCooldownEvent{spellID: e.SpellID, category: uint16(e.Category), onHold: true})
 			continue
 		}
 		ownMS := int64(e.RecoveryTime)
@@ -267,30 +276,37 @@ func (s *session) onSpellHistory(v combat.SpellHistory, now time.Time) {
 			continue
 		}
 		if e.Category != 0 && catMS > 0 {
-			s.applyOrQueueHistoryCooldown(0, now.Add(time.Duration(catMS)*time.Millisecond), e.Category)
+			s.applyOrQueueHistoryCooldown(0, now.Add(time.Duration(catMS)*time.Millisecond), e.Category, nil)
 		}
 		durMS := ownMS
 		if durMS <= 0 {
 			durMS = catMS
 		}
 		if durMS > 0 {
-			s.applyOrQueueHistoryCooldown(int32(e.SpellID), now.Add(time.Duration(durMS)*time.Millisecond), 0)
-			s.emitCooldownStart(e.SpellID, uint32(durMS), uint16(e.Category), "login", false)
+			s.applyOrQueueHistoryCooldown(int32(e.SpellID), now.Add(time.Duration(durMS)*time.Millisecond), 0,
+				&pendingCooldownEvent{spellID: e.SpellID, ms: uint32(durMS), category: uint16(e.Category)})
 		}
 	}
 }
 
-func (s *session) applyOrQueueHistoryCooldown(spellID int32, end time.Time, category uint32) {
+func (s *session) applyOrQueueHistoryCooldown(spellID int32, end time.Time, category uint32, ev *pendingCooldownEvent) {
 	if s.selfSeen && s.world != nil {
 		if _, ok := s.world.Object(s.self); ok {
 			s.world.StartCooldown(s.self, spellID, end, category)
+			s.emitPendingCooldown(ev)
 			return
 		}
 	}
 	st := s.spellState()
 	st.pendingHistory = append(st.pendingHistory, pendingHistoryCooldown{
-		spellID: spellID, end: end, category: category,
+		spellID: spellID, end: end, category: category, emit: ev,
 	})
+}
+
+func (s *session) emitPendingCooldown(ev *pendingCooldownEvent) {
+	if ev != nil {
+		s.emitCooldownStart(ev.spellID, ev.ms, ev.category, "login", ev.onHold)
+	}
 }
 
 func (s *session) flushPendingHistory() {
@@ -300,10 +316,12 @@ func (s *session) flushPendingHistory() {
 	if _, ok := s.world.Object(s.self); !ok {
 		return
 	}
-	for _, p := range s.spellSt.pendingHistory {
-		s.world.StartCooldown(s.self, p.spellID, p.end, p.category)
-	}
+	pending := s.spellSt.pendingHistory
 	s.spellSt.pendingHistory = nil
+	for _, p := range pending {
+		s.world.StartCooldown(s.self, p.spellID, p.end, p.category)
+		s.emitPendingCooldown(p.emit)
+	}
 }
 
 // expireCooldowns drains expired spell and category cooldowns from the world model and emits cooldown_end events.

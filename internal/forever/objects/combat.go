@@ -74,16 +74,16 @@ func (c CooldownState) Active(now time.Time) bool { return c.EndsAt.IsZero() || 
 
 // CombatState is a snapshot of one unit's combat state.
 type CombatState struct {
-	Attacking  wire.GUID
-	AttackedBy wire.GUID
-	InCombat   bool
-	Dead       bool
-	Ghost      bool
-	Health     int64
-	MaxHealth  int64
-	Power      int32
-	MaxPower   int32
-	PowerType  uint8
+	Attacking         wire.GUID
+	AttackedBy        wire.GUID
+	InCombat          bool
+	Dead              bool
+	Ghost             bool
+	Health            int64
+	MaxHealth         int64
+	Power             int32
+	MaxPower          int32
+	PowerType         uint8
 	Auras             []Aura
 	Cast              *CastState
 	Cooldowns         []CooldownState
@@ -358,7 +358,12 @@ func (w *World) startCooldownLocked(o *Object, spellID int32, end time.Time, cat
 		if o.CategoryCooldowns == nil {
 			o.CategoryCooldowns = make(map[uint32]time.Time)
 		}
-		if _, exists := o.CategoryCooldowns[category]; exists || len(o.CategoryCooldowns) < maxCooldownsPerUnit {
+		// A category shared by several spells keeps the later end: a shorter entry must not free it early.
+		cur, exists := o.CategoryCooldowns[category]
+		if exists && cur.After(end) {
+			end = cur
+		}
+		if exists || len(o.CategoryCooldowns) < maxCooldownsPerUnit {
 			o.CategoryCooldowns[category] = end
 		}
 	}
