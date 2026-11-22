@@ -1,0 +1,56 @@
+name: security
+
+# Weekly: govulncheck over the module, and the Go version in go.mod against the latest stable release (reported in the
+# job summary; a newer stable is a notice, a vulnerability is a failure). One job.
+on:
+  schedule:
+    - cron: "7 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  # Pinned: a new release must not change what the weekly check reports without a review.
+  GOVULNCHECK_VERSION: v1.1.4
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Go version in go.mod vs the latest stable
+        run: |
+          set -uo pipefail
+          mod="$(awk '/^go /{print $2; exit}' go.mod)"
+          latest="$(curl -fsS --max-time 30 'https://go.dev/dl/?mode=json' | jq -r '[.[] | select(.stable)][0].version' | sed 's/^go//' || true)"
+          {
+            echo "### Go version"
+            echo "go.mod: \`${mod}\`"
+            echo "latest stable: \`${latest:-unknown}\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "go.mod: ${mod}, latest stable: ${latest:-unknown}"
+          if [ -n "${latest}" ] && [ "$(printf '%s\n%s\n' "$mod" "$latest" | sort -V | tail -1)" != "$mod" ]; then
+            echo "::notice::go.mod says go ${mod}, the latest stable is go ${latest}"
+          fi
+
+      - name: govulncheck
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "$RUNNER_TEMP/bin/govulncheck" ./...

@@ -1,0 +1,48 @@
+name: contract-check
+
+# Nightly, and on a PR that touches contract/**: the contract and tbmproto tests. A path that does not exist on this
+# branch yet is skipped, so the job passes until the contract lands.
+on:
+  schedule:
+    - cron: "29 4 * * *"
+  pull_request:
+    paths:
+      - "contract/**"
+  workflow_dispatch:
+
+concurrency:
+  group: contract-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: go test contract and tbmproto
+        run: |
+          set -euo pipefail
+          pkgs=()
+          if [ -d contract ] && [ -n "$(find contract -name '*.go' -print -quit)" ]; then pkgs+=("./contract/..."); fi
+          if [ -d internal/forever/tbmproto ]; then pkgs+=("./internal/forever/tbmproto/..."); fi
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "no contract/ or internal/forever/tbmproto/ on this branch yet: nothing to test"
+            exit 0
+          fi
+          go test -race -count=1 -timeout 10m "${pkgs[@]}"
