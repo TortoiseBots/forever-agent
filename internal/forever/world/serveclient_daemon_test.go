@@ -415,7 +415,9 @@ func TestServeClientMethodPin(t *testing.T) {
 	ported, notPorted := ServeRPCMethods()
 	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander",
 		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status",
-		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select"} {
+		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select",
+		"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log",
+		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}

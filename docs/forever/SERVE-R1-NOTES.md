@@ -70,7 +70,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `gm_kill`, `gm_set_hp`, `gm_aura` | DONE | Select one unit by guid, wait up to 1 s for the server's selection echo in the character's target field, then send the one line: `.die` (a player is refused), `.modify hp <hp>`, `.aura <spell>`/`.unaura <spell>`. Fail-closed: refused with `-32006` unless serve runs with `--allow-gm-units`, the guid is on the allowlist `trial_units` registered, and a player target is this session's own character. |
 | `trial_units` | DONE | `{guids: [...]}` replaces the GM hands' allowlist for the current trial and answers `{guids}`; it outlives a reconnect. Refused with `-32006` without `--allow-gm-units`; a zero guid is `-32602`. |
 | `gm_evade`, `gm_respawn` | NOT-PORTED | The old helpers select a unit and send a unit-targeted GM line; these two lines are not ported. |
-| `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark`, `roll` | NOT-PORTED | The party model has no senders or records for these. |
+| `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark` | NOT-PORTED | The party model has no senders or records for these. |
 | `join_channel`, `leave_channel` | NOT-PORTED | There is no channel join in the chat round. |
 
 ### Movement, combat and map change
@@ -115,7 +115,10 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 
 | Methods | Status | Why |
 |---|---|---|
-| `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects` | NOT-PORTED | No loot or object-use model in `internal/forever`. |
+| `loot`, `loot_take`, `loot_close` | DONE | `loot` opens a corpse's (or object's) window and keeps it across calls (no `guid`/`name` re-reads the held window); `loot_take` takes `slot`, `all` (every slot plus the money) or `money` without releasing; `loot_close` and the take that empties the window release it. Round D5; see [DAEMON-D5-NOTES.md](DAEMON-D5-NOTES.md). No live run yet. |
+| `open_object`, `use_object` | DONE | `open_object` walks to the object, opens it with the game-object use and optionally takes everything; `use_object` sends the use and answers the first outcome (`loot_open`, `gossip`, `quest_list`, `state_changed`, `none`). Round D5. |
+| `gameobjects` | DONE | The game objects in view nearest first (`within`/`radius`, `entry`, `name`, numeric `type`, `limit`). Round D5. |
+| `roll` | DONE | Votes need, greed or pass on a started group roll named by `looted` + `item_slot` (or the only open one). Round D5. |
 | `trainer_list`, `train`, `taxi` | NOT-PORTED | No trainer or taxi method yet (the vendor and gossip methods are ported, round D3; the quest methods, round D4: [DAEMON-D4-NOTES.md](DAEMON-D4-NOTES.md)). |
 | `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |
