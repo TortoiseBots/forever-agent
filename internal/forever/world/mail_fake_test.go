@@ -43,6 +43,8 @@ type fakeAttach struct {
 	id    uint64
 	entry int32
 	count int32
+	// hidden leaves the attachment out of the list row, as the core does for an item it cannot find.
+	hidden bool
 }
 
 // mailWorld is the item-world fake with one mailbox game object in the world model and the mailbox's own answers.
@@ -128,13 +130,19 @@ func (m *mailWorld) listPayload() []byte {
 		b.WriteI32(e.flags)
 		b.WriteFloat32(30)
 		b.WriteI32(0)
-		b.WriteU32(uint32(len(e.attached)))
+		var visible []fakeAttach
+		for _, a := range e.attached {
+			if !a.hidden {
+				visible = append(visible, a)
+			}
+		}
+		b.WriteU32(uint32(len(visible)))
 		if e.kind == 0 {
 			wire.WritePackedGUID(b, e.sender)
 		} else {
 			b.WriteI32(e.alt)
 		}
-		for i, a := range e.attached {
+		for i, a := range visible {
 			b.WriteU8(uint8(i))
 			b.WriteU64(a.id)
 			writeFakeInstance(b, a.entry)
@@ -579,7 +587,7 @@ func TestServeMailDeleteGuardsAContentMail(t *testing.T) {
 	m.list(t)
 	p := boxParams()
 	p.MailID = u64(101)
-	if _, err := m.s.serveMailDelete(context.Background(), p); err == nil || !strings.Contains(err.Error(), "destroys them") {
+	if _, err := m.s.serveMailDelete(context.Background(), p); err == nil || !strings.Contains(err.Error(), "force: true") {
 		t.Fatalf("a delete of a mail with an item: %v", err)
 	}
 	p.MailID = u64(102)
@@ -597,12 +605,36 @@ func TestServeMailDeleteGuardsAContentMail(t *testing.T) {
 	if res.Event == nil || res.Event.Data["command"] != "delete" {
 		t.Fatalf("event %+v", res.Event)
 	}
-	// An empty mail needs no force.
+	// An empty mail is refused without force too: the list may omit an attachment the server could not load.
 	m.mails = append(m.mails, fakeMail{id: 200, kind: 0, sender: mailSender, subject: "hi"})
 	m.list(t)
 	p.Force, p.MailID = false, u64(200)
+	if _, err := m.s.serveMailDelete(context.Background(), p); err == nil || !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("an empty mail without force: %v", err)
+	}
+	p.Force = true
 	if res, err := m.s.serveMailDelete(context.Background(), p); err != nil || !res.OK {
-		t.Fatalf("an empty mail: %+v %v", res, err)
+		t.Fatalf("an empty mail with force: %+v %v", res, err)
+	}
+}
+
+// TestServeMailDeleteNeverTrustsAnEmptyList: the server holds an attachment its list row omitted, as it does when
+// the item cannot be found (MailPackets.cpp:115-119); a delete with no force must not go out on the strength of a row
+// that shows no items.
+func TestServeMailDeleteNeverTrustsAnEmptyList(t *testing.T) {
+	m := newMailWorld(t)
+	m.mails = []fakeMail{{id: 300, kind: 0, sender: mailSender, subject: "x", attached: []fakeAttach{{id: 0x99, entry: 1, count: 1, hidden: true}}}}
+	res := m.list(t)
+	if len(res.Mails[0].Items) != 0 {
+		t.Fatalf("the list shows the hidden item: %+v", res.Mails[0].Items)
+	}
+	p := boxParams()
+	p.MailID = u64(300)
+	if _, err := m.s.serveMailDelete(context.Background(), p); err == nil {
+		t.Fatal("a delete with no force passed on an empty-looking row")
+	}
+	if len(m.deleted) != 0 {
+		t.Fatal("the refused delete sent a packet")
 	}
 }
 
@@ -753,6 +785,23 @@ func TestServeMailSendSilentIsUnknownOutcome(t *testing.T) {
 	}
 	if m.sentCount(wire.CMSGSendMail) != 1 {
 		t.Fatal("the send did not go out once")
+	}
+	// The server may have delivered and charged: another send needs force, and no packet goes out without it.
+	if _, err := m.s.serveMailSend(context.Background(), p); err == nil || !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("a retry without force: %v", err)
+	}
+	if m.sentCount(wire.CMSGSendMail) != 1 {
+		t.Fatal("the refused retry sent a packet")
+	}
+	// A forced send that is answered lifts the barrier.
+	delete(m.silent, wire.CMSGSendMail)
+	p.Force = true
+	if res, err := m.s.serveMailSend(context.Background(), p); err != nil || !res.OK {
+		t.Fatalf("the forced send: %+v %v", res, err)
+	}
+	p.Force = false
+	if res, err := m.s.serveMailSend(context.Background(), p); err != nil || !res.OK {
+		t.Fatalf("the barrier outlived an answered send: %+v %v", res, err)
 	}
 }
 

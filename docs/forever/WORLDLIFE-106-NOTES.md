@@ -92,15 +92,14 @@ money and item counts, and the bodies only appear in the method answer.
 | `mail_read` | `guid`, `mail_id` | marks the mail read, then asks the list again: the core answers a mark with nothing, so the flag in the new list is the proof (`ok` false when the server ignored it); an already read mail sends nothing |
 | `mail_take_item` | `guid`, `mail_id`, `index` (optional when the mail holds one item), `force` | takes one attachment, waits for the result (`item`, and for a COD mail the purse before and after). A COD mail pays the sender on the take, so it needs `force: true` |
 | `mail_take_money` | `guid`, `mail_id` | takes the money the list showed (the server checks the amount, MailHandler.cpp:572-573), with the purse before and after |
-| `mail_delete` | `guid`, `mail_id`, `force` | deletes; a mail that still holds items or money needs `force: true` because the core deletes it with its contents |
+| `mail_delete` | `guid`, `mail_id`, `force` | deletes, and always needs `force: true`: the core deletes a mail with whatever it still holds, and the list may omit an attachment the server could not load (MailPackets.cpp:115-119), so an empty-looking row proves nothing |
 | `mail_return` | `guid`, `mail_id` | returns a player's mail; auction and creature mail, a returned mail and a mail the sender made unreturnable are refused before any packet |
 | `mail_send` | `guid`, `to`, `subject`, `body`, `money`, `cod`, `attachments[]` (`item_entry`, or `bag` and `slot`) | sends one mail; attachments are the character's own bag items (never an equipped item or a worn bag, none twice); postage is 30 copper per attachment, 30 for a text-only mail (MailHandler.cpp:171); the answer is the server's result and the purse before and after |
 | `mail_status` | `wait_ms` | asks when the next mail arrives and who sent the unread ones; names no mailbox |
 
 Every command after `mail_list` addresses a mail that list showed, from that mailbox: a call for another mail, or from
 another mailbox, is an RPC error before any packet ("mail_list comes first"). A refusal after a packet went out is
-`ok: false` with a `mail_result` event; a result that never came is an error that says the outcome is unknown (a retry
-may repeat a send or a take). The core answers some sends with nothing (a receiver below the mail level only gets a
+`ok: false` with a `mail_result` event; a result that never came is an error that says the outcome is unknown. After a send whose result never came, the next `mail_send` is refused (no packet) until the caller sets `force: true`, because the mail may have been delivered and charged and a retry would repeat it. The core answers some sends with nothing (a receiver below the mail level only gets a
 notification, MailHandler.cpp:221-225), so a silent send is the unknown outcome too.
 
 `mail_send` does not pre-check the purse: a game master sends free (MailHandler.cpp:187), and the server's

@@ -61,8 +61,10 @@ type serveMailParams struct {
 	Money       uint64            `json:"money,omitempty"`
 	COD         uint64            `json:"cod,omitempty"`
 	Attachments []serveMailAttach `json:"attachments,omitempty"`
-	Force       bool              `json:"force,omitempty"`
-	WaitMS      int               `json:"wait_ms,omitempty"`
+	// Force confirms what the call would otherwise refuse: a COD take (it pays the sender), any delete, and a send after
+	// one whose result never came.
+	Force  bool `json:"force,omitempty"`
+	WaitMS int  `json:"wait_ms,omitempty"`
 }
 
 // ServeMailItem is one attachment of a listed mail. Index is its position in the mail (what mail_take_item names),
@@ -462,9 +464,11 @@ func (s *session) serveMailTakeMoney(parent context.Context, p serveMailParams) 
 	return res, nil
 }
 
-// serveMailDelete deletes a mail. A mail that still holds items or money is refused unless force is set: the core
-// deletes it with its contents (MailHandler.cpp:396-413). It names no mailbox on the wire, but the call still
-// addresses a listed mail, so a mailbox is required here too.
+// serveMailDelete deletes a mail. The core deletes it with whatever it still holds (MailHandler.cpp:396-413), and the
+// list does not prove a mail empty: an attachment whose item the server could not find is left out of the row
+// (MailPackets.cpp:115-119). So a delete always needs force: true, and a mail the list shows holding items or money is
+// refused with the count. It names no mailbox on the wire, but the call still addresses a listed mail, so a mailbox is
+// required here too.
 func (s *session) serveMailDelete(parent context.Context, p serveMailParams) (ServeMailResult, error) {
 	ctx, cancel, err := methodCtx(parent, p.WaitMS, methodWaitDefaultMS, methodWaitMaxMS)
 	if err != nil {
@@ -479,8 +483,8 @@ func (s *session) serveMailDelete(parent context.Context, p serveMailParams) (Se
 	if err != nil {
 		return ServeMailResult{}, err
 	}
-	if (len(m.Attachments) > 0 || m.SentMoney > 0) && !p.Force {
-		return ServeMailResult{}, fmt.Errorf("mail %d still holds %d item(s) and %d copper: deleting destroys them (force: true to delete)",
+	if !p.Force {
+		return ServeMailResult{}, fmt.Errorf("mail %d would be deleted with whatever it still holds (the list shows %d item(s) and %d copper, and may omit an attachment the server could not load): force: true to delete",
 			m.MailID, len(m.Attachments), m.SentMoney)
 	}
 	res := ServeMailResult{Since: s.EventLog().Last()}
@@ -587,11 +591,19 @@ func (s *session) serveMailSend(parent context.Context, p serveMailParams) (Serv
 	if err != nil {
 		return ServeMailResult{}, err
 	}
+	if s.mail.sendUnknown && !p.Force {
+		return ServeMailResult{}, errors.New("the last mail_send went out and no result came, so it may have been delivered and charged: check the purse and the recipient's mailbox, then force: true to send again")
+	}
 	res := ServeMailResult{Since: s.EventLog().Last()}
 	r, err := s.mailCommand(ctx, &res, wire.CMSGSendMail, payload, mail.CommandSend, 0)
 	if err != nil {
+		var unknown unknownOutcomeError
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
+			s.mail.sendUnknown = true
+		}
 		return res, err
 	}
+	s.mail.sendUnknown = false
 	if !r.OK() {
 		return res, nil
 	}
