@@ -736,6 +736,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	registerItemInfoMethods(srv, st)
 	registerItemMethods(srv, st)
+	registerLootMethods(srv, st)
 	registerNPCMethods(srv, st)
 	registerQuestMethods(srv, st)
 	registerPetMethods(srv, st)
@@ -957,6 +958,21 @@ func (s *session) serveTeardown(ctx context.Context, st *serveState, p serveTear
 			add("follow", "fail", err.Error())
 		} else {
 			add("follow", "ok", detail)
+		}
+	}
+
+	// A loot window a method left open is given back before the GM line and the logout; a character that logs out
+	// with a window open leaves the corpse locked to it until the server's own timeout. Nothing is added to the
+	// steps when no window is held.
+	switch {
+	case s.methodLoot == nil:
+	case p.DryRun:
+		add("loot", "plan", "would release the held loot window")
+	default:
+		if detail, ok := s.serveReleaseHeldLoot(); ok {
+			add("loot", "ok", detail)
+		} else {
+			add("loot", "fail", detail)
 		}
 	}
 
@@ -1694,19 +1710,16 @@ var notPortedMethods = []string{
 	"brain_start", "brain_status", "brain_stop",
 	"convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"gameobjects",
 	"gm_evade", "gm_respawn",
 	"join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
-	"loot", "loot_close", "loot_take",
-	"map_snapshot", "open_object",
+	"map_snapshot",
 	"plan_check",
-	"raid_move", "roll",
+	"raid_move",
 	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"train", "trainer_list", "tt", "tune_list", "tune_set",
-	"use_object",
 }

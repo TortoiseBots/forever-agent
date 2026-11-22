@@ -21,6 +21,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/gmwalk"
 	"github.com/pjerra/forever-agent/internal/forever/items"
+	"github.com/pjerra/forever-agent/internal/forever/loot"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
@@ -531,8 +532,12 @@ type session struct {
 	// methodAct is the act state the D2+ serve methods (items, vendors, gossip) share across calls (serve_method_frame.go), so a vendor list
 	// or a menu one call read serves the next. Lazily created; a reconnect starts empty.
 	methodAct *actState
-	self      wire.GUID
-	selfSeen  bool
+	// methodLoot is the loot window a D5 loot method holds open across calls (serve_loot_methods.go): loot, open_object
+	// and use_object set it, loot_take shrinks it as the server removes slots, and a release (the call's own, the
+	// server's, or teardown's) clears it.
+	methodLoot *loot.Response
+	self       wire.GUID
+	selfSeen   bool
 	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
 	gmCastAt []time.Time
 	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).

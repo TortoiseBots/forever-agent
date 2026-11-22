@@ -549,6 +549,9 @@ func loginAgain(ctx context.Context, opts Options, relogin func(context.Context,
 // context is already cancelled when a signal brought us here.
 func (s *session) serveLogout(st *serveState) error {
 	s.opts.logf("rpc: shutting down, logging out")
+	if detail, ok := s.serveReleaseHeldLoot(); !ok {
+		s.opts.logf("rpc: the held loot window was not released: %s", detail)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	if err := s.logout(ctx); err != nil {

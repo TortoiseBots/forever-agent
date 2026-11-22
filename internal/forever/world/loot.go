@@ -147,11 +147,25 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		if s.loot.window != nil && r.Loot == s.loot.window.Loot {
 			s.report.Loot.Removed = append(s.report.Loot.Removed, r.LootListID)
 		}
+		if h := s.methodLoot; h != nil && r.Loot == h.Loot {
+			// The held window loses the slot the server removed (a new slice: the copy may share its array).
+			kept := make([]loot.Item, 0, len(h.Items))
+			for _, it := range h.Items {
+				if it.LootListID != r.LootListID {
+					kept = append(kept, it)
+				}
+			}
+			h.Items = kept
+		}
 	case wire.SMSGCoinRemoved:
-		if _, err := loot.ParseCoinRemoved(p.Payload); err != nil {
+		g, err := loot.ParseCoinRemoved(p.Payload)
+		if err != nil {
 			return fmt.Errorf("world: SMSG_COIN_REMOVED: %w", err)
 		}
 		s.loot.coinRemoved++
+		if h := s.methodLoot; h != nil && g == h.Loot {
+			h.Coins = 0
+		}
 	case wire.SMSGLootMoneyNotify:
 		r, err := loot.ParseMoneyNotify(p.Payload)
 		if err != nil {
@@ -173,8 +187,12 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		if s.loot.window != nil && r.Loot == s.loot.window.Owner {
 			s.report.Loot.Released = true
 		}
+		if s.methodLoot != nil && r.Loot == s.methodLoot.Owner {
+			s.methodLoot = nil
+		}
 	case wire.SMSGLootReleaseAll:
 		// No payload: the server closed every window of this player (WorldSession::DoLootReleaseAll).
+		s.methodLoot = nil
 	case wire.SMSGLootList:
 		if _, err := loot.ParseList(p.Payload); err != nil {
 			return fmt.Errorf("world: SMSG_LOOT_LIST: %w", err)
@@ -247,7 +265,8 @@ func isLootPacket(core uint32) bool {
 }
 
 // lootWait answers server packets until ready is true or the budget runs out. A timeout is not an error: the
-// caller decides what silence means.
+// caller decides what silence means. The wait ends with ctx (a caller's cancel or a call's wait_ms), not only with the
+// session's own context.
 func (s *session) lootWait(ctx context.Context, what string, d time.Duration, ready func() bool) (bool, error) {
 	if ready() {
 		return true, nil
@@ -261,7 +280,7 @@ func (s *session) lootWait(ctx context.Context, what string, d time.Duration, re
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		ev, err := s.next(what, left)
+		ev, err := s.nextCtx(ctx, what, left)
 		if err != nil {
 			if errors.Is(err, errWaitTimeout) {
 				return false, nil
