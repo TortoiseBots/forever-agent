@@ -32,6 +32,13 @@ type ChatSummary struct {
 	Lines      []chat.Line
 }
 
+// PartyMark is one raid target icon the summary prints: the icon's name and the unit it is on (its name when the
+// session knows one, else its kind).
+type PartyMark struct {
+	Icon string
+	Name string
+}
+
 // PartySnapshot is the party model at the end of the run.
 type PartySnapshot struct {
 	InParty     bool
@@ -40,6 +47,7 @@ type PartySnapshot struct {
 	MemberCount int
 	LeaderName  string
 	LootMethod  string
+	Marks       []PartyMark
 	Members     []party.Member
 	Events      []party.Event
 	InviteFrom  string
@@ -716,6 +724,10 @@ func (s *session) partyCheck(ctx context.Context) error {
 	} else if s.party.LastInvalid != "" {
 		s.opts.logf("party-check: no party line sent: the roster is invalid (%s)", s.party.LastInvalid)
 	}
+	// Group control (#95 G2): --promote, --loot and --mark act on the group and end the run without leaving it.
+	if s.opts.PartyPromote != "" || s.opts.PartyLoot != "" || s.opts.PartyMark != "" {
+		return s.partyGroupControl(ctx)
+	}
 	stay := s.opts.PartyStay
 	if stay <= 0 {
 		stay = 5 * time.Second
@@ -1013,6 +1025,16 @@ func (s *session) summariseParty() {
 	}
 	if s.party.HasLoot {
 		snap.LootMethod = party.LootName(s.party.Loot.Method)
+	}
+	for i, g := range s.party.Marks {
+		if g.IsZero() {
+			continue
+		}
+		who := s.eventName("", g)
+		if who == "" {
+			who = guidKind(g)
+		}
+		snap.Marks = append(snap.Marks, PartyMark{Icon: party.MarkName(party.Mark(i)), Name: who})
 	}
 	if s.party.Invite != nil {
 		snap.InviteFrom = s.party.Invite.InviterName

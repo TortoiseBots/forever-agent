@@ -120,6 +120,15 @@ type Options struct {
 	PartyAcceptFrom  string
 	PartyDeclineFrom string
 	PartyUninvite    string
+	// Group control (#95 G2): --promote NAME makes the member the leader, and PartyPromoteBack, when above zero,
+	// then waits that long for the new leader to promote this character back (two agent sessions trade the lead);
+	// --loot METHOD[:THRESHOLD] sets the loot method and reads the roster's block back; --mark ICON sets that raid
+	// target on the nearest attackable creature and reads the icon list back. A run with any of them ends without
+	// leaving the group: leaving is what those flags exist to avoid.
+	PartyPromote     string
+	PartyPromoteBack time.Duration
+	PartyLoot        string
+	PartyMark        string
 	// MapCheck runs round A7's map check (forever map-check): settle, print the map, send one area trigger when
 	// AreaTrigger is set, then stay in the world and follow every map change the server makes.
 	MapCheck    bool

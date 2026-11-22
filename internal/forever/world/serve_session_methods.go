@@ -17,6 +17,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
@@ -41,6 +42,40 @@ type ServePartyInfo struct {
 	Leader        GUID               `json:"leader,omitempty"`
 	Members       []ServePartyMember `json:"members"`
 	PendingInvite string             `json:"pending_invite,omitempty"`
+	// The group's loot settings from the last roster that carried them: the method's name (party.LootName), the
+	// threshold quality and the master looter when there is one.
+	LootMethod    string `json:"loot_method,omitempty"`
+	LootThreshold int    `json:"loot_threshold,omitempty"`
+	LootMaster    GUID   `json:"loot_master,omitempty"`
+	// Marks are the raid target icons the group holds, one row per set icon (the model's eight slots, empty ones
+	// omitted).
+	Marks []ServeMark `json:"marks,omitempty"`
+}
+
+// ServeMark is one raid target icon: the icon's name (star, circle, diamond, triangle, moon, square, cross, skull)
+// and the unit it is on. It is the mark method's result and one row of marks and of the party method.
+type ServeMark struct {
+	Icon string `json:"icon"`
+	GUID GUID   `json:"guid"`
+}
+
+// ServeMarks is the marks method's result: every icon the group holds, in slot order.
+type ServeMarks struct {
+	Marks []ServeMark `json:"marks"`
+}
+
+// serveMarks lists the icons a slot array holds: one row per set icon, in slot order.
+func serveMarks(icons [party.MaxMarks]wire.GUID) []ServeMark {
+	out := make([]ServeMark, 0, party.MaxMarks)
+	for i := range icons {
+		if icons[i].IsZero() {
+			continue
+		}
+		if name := party.MarkName(party.Mark(i)); name != "" {
+			out = append(out, ServeMark{Icon: name, GUID: GUID(icons[i])})
+		}
+	}
+	return out
 }
 
 // ServePartyMember is one party row.
@@ -224,6 +259,28 @@ type serveAddonParams struct {
 type serveBotParams struct {
 	Line   string `json:"line"`
 	WaitMS int    `json:"wait_ms,omitempty"`
+}
+
+// serveAssistantParams is the assistant method's input: the member and whether to clear the flag instead of setting
+// it.
+type serveAssistantParams struct {
+	Name  string `json:"name"`
+	Clear bool   `json:"clear,omitempty"`
+}
+
+// serveLootMethodParams is the loot_method method's input: the method's name (or 0..5), the master looter's name for
+// master loot (optional) and the threshold quality 2..6 (optional, uncommon).
+type serveLootMethodParams struct {
+	Method    string `json:"method"`
+	Master    string `json:"master,omitempty"`
+	Threshold *int   `json:"threshold,omitempty"`
+}
+
+// serveMarkParams is the mark method's input: the unit (its guid, or its name) and the icon's name.
+type serveMarkParams struct {
+	GUID GUID   `json:"guid,omitempty"`
+	Name string `json:"name,omitempty"`
+	Icon string `json:"icon"`
 }
 
 type serveEventsParams struct {
@@ -496,6 +553,55 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("leave_group", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.serveLeaveGroup(ctx)
+	}))
+	// Group control (#95 G2): each sends its packet and answers only once the readback confirms it.
+	srv.Register("promote", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {
+		return serveEmpty{}, s.groupPromote(ctx, p.Name)
+	}))
+	srv.Register("assistant", serveCallTyped(st, func(s *session, ctx context.Context, p serveAssistantParams) (serveEmpty, error) {
+		return serveEmpty{}, s.groupAssistant(ctx, p.Name, !p.Clear)
+	}))
+	srv.Register("loot_method", serveCallTyped(st, func(s *session, ctx context.Context, p serveLootMethodParams) (serveEmpty, error) {
+		method, ok := ParseLootMethod(p.Method)
+		if !ok {
+			return serveEmpty{}, fmt.Errorf("loot_method: %q is not a loot method", p.Method)
+		}
+		threshold := 2 // uncommon, the player run's setting
+		if p.Threshold != nil {
+			threshold = *p.Threshold
+		}
+		return serveEmpty{}, s.groupLootMethod(ctx, method, p.Master, threshold)
+	}))
+	srv.Register("mark", serveCallTyped(st, func(s *session, ctx context.Context, p serveMarkParams) (ServeMark, error) {
+		mark, ok := party.ParseMarkName(p.Icon)
+		if !ok {
+			return ServeMark{}, fmt.Errorf("mark: %q is not a raid target icon (star circle diamond triangle moon square cross skull)", p.Icon)
+		}
+		target := wire.GUID(p.GUID)
+		if target.IsZero() {
+			if err := s.groupRoster("mark"); err != nil {
+				return ServeMark{}, err
+			}
+			m, err := s.groupMember("mark", p.Name)
+			if err != nil {
+				return ServeMark{}, err
+			}
+			target = m.GUID
+		}
+		if err := s.groupMark(ctx, target, mark); err != nil {
+			return ServeMark{}, err
+		}
+		return ServeMark{Icon: party.MarkName(mark), GUID: GUID(target)}, nil
+	}))
+	srv.Register("marks", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (ServeMarks, error) {
+		icons, err := s.groupMarks(ctx)
+		if err != nil {
+			return ServeMarks{}, err
+		}
+		return ServeMarks{Marks: serveMarks(icons)}, nil
+	}))
+	srv.Register("disband", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.groupDisband(ctx)
 	}))
 	srv.Register("attack", serveCallTyped(st, func(s *session, ctx context.Context, p serveAttackParams) (ServeAttack, error) {
 		return s.serveAttack(ctx, p)
@@ -1569,10 +1675,9 @@ func (s *session) serveDeath() ServeDeath {
 // a caller that was written for it gets the reason instead of "method not found".
 var notPortedMethods = []string{
 	"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
-	"assistant", "bot_view",
+	"bot_view",
 	"brain_start", "brain_status", "brain_stop",
 	"buy", "convert_raid",
-	"disband",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"equip", "equipment",
 	"gameobjects",
@@ -1581,10 +1686,9 @@ var notPortedMethods = []string{
 	"inventory", "join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
-	"loot", "loot_close", "loot_method", "loot_take",
-	"map_snapshot", "mark", "open_object",
+	"loot", "loot_close", "loot_take",
+	"map_snapshot", "open_object",
 	"pet", "pet_action", "plan_check",
-	"promote",
 	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
 	"raid_move", "roll",
 	"sell", "spells",
