@@ -374,7 +374,7 @@ func (p *playRun) openRecorder() *Recorder {
 		runID = "play"
 	}
 	party := make([]trace.Member, 0, len(p.cfg.Bots))
-	for i, name := range p.cfg.Bots {
+	for i := range p.cfg.Bots {
 		party = append(party, trace.Member{Name: playSlot(i), Role: traceRole(i)})
 	}
 	rec, err := NewPlayRecorder(p.cfg.Out, runID, p.cfg.Plan, p.route.Map, 0, p.start, party)
