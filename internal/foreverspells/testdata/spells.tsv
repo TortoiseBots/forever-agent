@@ -1,0 +1,8 @@
+# forever-spells v1 source=WOWSTATIC_1_60_1_70399
+id	name	class	skill_line	rank	level	recovery_ms	category_recovery_ms	category	gcd_ms	gcd_category	mechanic	dispel	attr0
+116	Frostbolt	mage	6	1	4	0	0	0	1500	133	0	1	0
+118	Polymorph	mage	237	0	20	0	0	0	1500	133	17	1	0
+205	Frostbolt	mage	6	2	8	0	0	0	1500	133	0	1	0
+355	Taunt	warrior	26	0	10	0	0	0	1500	133	0	0	0
+837	Frostbolt	mage	6	3	14	0	0	0	1500	133	0	1	0
+1752	Sinister Strike	rogue	38	0	1	0	0	0	1500	133	0	0	0
