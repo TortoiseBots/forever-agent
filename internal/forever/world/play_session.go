@@ -376,6 +376,9 @@ func (p *playPlayer) Attack(guid wire.GUID) error {
 	if err := p.Select(guid); err != nil {
 		return err
 	}
+	// An explicit attack is a fresh attempt: a unit the server refused in an earlier fight (an evade, a reset) is tried
+	// again, and the give-up below holds only for the attempt it was made in.
+	delete(p.gaveUp, guid)
 	p.target, p.attacking, p.refused = guid, false, 0
 	// The fight log counts a round as contact only with the unit it was told is the target: without this a stop
 	// after real contact would read as a refused swing.

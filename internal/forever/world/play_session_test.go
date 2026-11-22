@@ -520,6 +520,17 @@ func TestPlaySessionFightTickLeavesAUnitTheServerRefuses(t *testing.T) {
 	if got := sc.count(wire.CMSGAttackSwing); got != playMaxRefusedSwings {
 		t.Fatalf("%d swings sent at a unit the server refuses, want %d", got, playMaxRefusedSwings)
 	}
+	// The give-up belongs to that attempt: a later fight that points at the same unit again swings again.
+	if err := p.Attack(skull); err != nil {
+		t.Fatal(err)
+	}
+	before := sc.count(wire.CMSGAttackSwing)
+	if err := p.FightTick(ctx, skull); err != nil {
+		t.Fatalf("tick after a fresh attack: %v", err)
+	}
+	if sc.count(wire.CMSGAttackSwing) != before+1 {
+		t.Fatalf("the swing did not resume on a fresh attack at the same unit: %v", sc.cores())
+	}
 }
 
 // --- Player: death ---
