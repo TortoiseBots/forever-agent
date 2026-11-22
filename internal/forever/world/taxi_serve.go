@@ -39,8 +39,9 @@ type serveTaxiParams struct {
 	WaitMS      int  `json:"wait_ms,omitempty"`
 }
 
-// ServeTaxi is taxi's answer. Status is "window" (no node asked), "flying", "landed" or "refused" (the request went
-// out and the server did not start a flight; Error says why). OnTaxi is the character's own flag as the call ends.
+// ServeTaxi is taxi's answer. Status is "window" (no node asked), "flying", "landed", "refused" (the server answered the request
+// with a refusal) or "no_takeoff" (the request went out and the server neither refused nor started a flight within
+// the wait; a late flight may still start, and status.on_taxi says so). Error says why. OnTaxi is the character's own flag as the call ends.
 type ServeTaxi struct {
 	Since       uint64   `json:"since"`
 	OK          bool     `json:"ok"`
@@ -145,9 +146,11 @@ func (s *session) serveTaxi(parent context.Context, p serveTaxiParams) (ServeTax
 		if s.methodStopped(parent, err) {
 			return res, sentTimeout(err, res.Since)
 		}
-		res.OK, res.Status, res.Error = false, "refused", err.Error()
+		// A reply that is not 0 is the server's refusal; no reply and no flag is a silent server (no path, client
+		// control removed): the request is out and a late flight may still start, so it is its own status.
+		res.OK, res.Status, res.Error = false, "no_takeoff", err.Error()
 		if r := s.taxi.reply; r != nil {
-			res.Reply = taxi.TaxiReplyName(*r)
+			res.Status, res.Reply = "refused", taxi.TaxiReplyName(*r)
 		}
 		res.Event = s.firstEventSince(res.Since, events.KindTaxiReply)
 		res.OnTaxi = s.selfOnTaxi()

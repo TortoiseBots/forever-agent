@@ -226,6 +226,23 @@ func TestTaxiMethodRefusedByTheServerIsAResult(t *testing.T) {
 	}
 }
 
+// TestTaxiMethodSilentServerIsNoTakeoff: a request the server neither refuses nor starts is its own status, with the
+// session not held in the air.
+func TestTaxiMethodSilentServerIsNoTakeoff(t *testing.T) {
+	tw := newTaxiWorld(t, flyer)
+	tw.silent = true
+	res, err := tw.s.serveTaxi(context.Background(), serveTaxiParams{GUID: GUID(flightGUID), Node: taxiDestNode})
+	if err != nil {
+		t.Fatalf("taxi: %v", err)
+	}
+	if res.OK || res.Status != "no_takeoff" || res.Reply != "" || res.OnTaxi || !contains(res.Error, "no ON_TAXI") {
+		t.Fatalf("the silent answer is %+v", res)
+	}
+	if err := tw.s.taxiMovementBlocked(); err != nil {
+		t.Fatalf("a flight that never started left the guard shut: %v", err)
+	}
+}
+
 // TestTaxiMethodFirstVisitDiscoversTheNode: a first visit's answer is the node's discovery (SMSG_NEW_TAXI_PATH and a
 // learned status); the method asks again and answers the window, with the node recorded.
 func TestTaxiMethodFirstVisitDiscoversTheNode(t *testing.T) {
