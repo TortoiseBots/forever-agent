@@ -231,6 +231,9 @@ func (s *session) serveBuy(parent context.Context, p serveNPCParams) (ServeNPCRe
 		lines, refusal, err := s.methodStep(parent, ctx, a, "vendor", nil)
 		res.Lines = append(res.Lines, lines...)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				err = fmt.Errorf("%w while reading the vendor list; no purchase was sent", err)
+			}
 			return res, err
 		}
 		if refusal != "" {
@@ -240,7 +243,7 @@ func (s *session) serveBuy(parent context.Context, p serveNPCParams) (ServeNPCRe
 	lines, refusal, err := s.methodStep(parent, ctx, a, "buy", args)
 	res.Lines = append(res.Lines, lines...)
 	if err != nil {
-		return res, err
+		return res, sentTimeout(err, res.Since)
 	}
 	if refusal != "" {
 		return failed(refusal)
@@ -306,7 +309,7 @@ func (s *session) serveSell(parent context.Context, p serveNPCParams) (ServeNPCR
 	lines, refusal, err := s.methodStep(parent, ctx, s.methodState(), "sell", args)
 	res.Lines = lines
 	if err != nil {
-		return res, err
+		return res, sentTimeout(err, res.Since)
 	}
 	data := map[string]any{"item_entry": it.Entry, "count": sold}
 	if refusal != "" {

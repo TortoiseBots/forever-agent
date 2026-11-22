@@ -19,8 +19,11 @@ world model, an NPC further than 4 yards (methods never walk), the wrong NPC fla
 open menu does not have. Once a packet went out the call answers a result: `ok: false` with the
 failure event, whose `text` is the act's error. A cancel by the caller and a dead link stay
 errors. `wait_ms` bounds the whole call (default 15000, at most 60000). Running out of it is an RPC
-error that says the outcome is unknown, not a failure result: the server may still complete the
-purchase or sale, and a caller that retried a reported failure would do it twice. The act steps keep
+error, not a failure result: after the purchase or sale went out the message says the outcome is unknown and
+names the event-log cursor the call started from (the server may still complete it, and a caller that retried a
+reported failure would do it twice); while the list was still being read it says no purchase was sent. The
+method does not track a timed-out request to a later event: a caller that needs the outcome reads `event_log`
+from that cursor and the inventory. The act steps keep
 their own 5 s answer waits, and what they report after those (no answer, a success the inventory
 did not show) is still `ok: false` with the act's text; a caller that sees one of those reads
 the inventory before retrying.

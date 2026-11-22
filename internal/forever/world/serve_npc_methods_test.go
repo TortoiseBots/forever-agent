@@ -500,3 +500,20 @@ func TestServeSellTimeoutIsNotAFailure(t *testing.T) {
 		t.Fatalf("a timed-out sale wrote %s", e.Kind)
 	}
 }
+
+// TestServeBuyTimeoutDuringTheListSendsNoPurchase: a deadline that fires while the list is read does not claim an
+// unknown purchase, because none was sent.
+func TestServeBuyTimeoutDuringTheListSendsNoPurchase(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	slowAnswer(v, wire.CMSGListInventory)
+	p := vendorParams()
+	p.ItemEntry = testI32(117)
+	p.WaitMS = 1
+	_, err := v.s.serveBuy(context.Background(), p)
+	if err == nil || !strings.Contains(err.Error(), "no purchase was sent") || strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("a timed-out list answered %v", err)
+	}
+	if v.clientSends(wire.CMSGBuyItem) != 0 {
+		t.Fatal("a purchase went out")
+	}
+}
