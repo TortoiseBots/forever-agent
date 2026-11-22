@@ -61,9 +61,6 @@ func (b *spellBook) remove(id int32) bool {
 	return true
 }
 
-// has reports whether the character knows the spell.
-func (b *spellBook) has(id int32) bool { return b.known[id] }
-
 // ids returns the known ids sorted ascending, the shape the report and the fight plan read.
 func (b *spellBook) ids() []int32 {
 	out := append([]int32(nil), b.order...)
