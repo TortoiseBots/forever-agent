@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
@@ -444,5 +445,58 @@ func TestServeNPCMethodsAreRegistered(t *testing.T) {
 		if !slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s should stay not ported", name)
 		}
+	}
+}
+
+// slowAnswer makes the fake server take longer than the method's wait_ms (real time) over one client packet and
+// answer nothing within it, so the deadline fires after the packet went out.
+func slowAnswer(v *vendorWorld, slow uint32) {
+	v.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core == slow {
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		v.answer(f, core, payload)
+	}
+}
+
+// TestServeBuyTimeoutIsNotAFailure: a deadline that fires after the purchase went out is an unknown outcome, never
+// vendor_buy_failed (a retry would buy twice).
+func TestServeBuyTimeoutIsNotAFailure(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	if _, err := v.s.serveVendorList(context.Background(), vendorParams()); err != nil {
+		t.Fatalf("vendor_list: %v", err)
+	}
+	slowAnswer(v, wire.CMSGBuyItem)
+	since := v.s.EventLog().Last()
+	p := vendorParams()
+	p.ItemEntry = testI32(117)
+	p.WaitMS = 1
+	if _, err := v.s.serveBuy(context.Background(), p); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("a timed-out buy answered %v", err)
+	}
+	if v.clientSends(wire.CMSGBuyItem) != 1 {
+		t.Fatal("the purchase did not go out")
+	}
+	if e := v.s.firstEventSince(since, events.KindVendorBuyFailed, events.KindVendorBuy); e != nil {
+		t.Fatalf("a timed-out buy wrote %s", e.Kind)
+	}
+}
+
+func TestServeSellTimeoutIsNotAFailure(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	slowAnswer(v, wire.CMSGSellItem)
+	since := v.s.EventLog().Last()
+	p := vendorParams()
+	p.Slot = testInt(35)
+	p.WaitMS = 1
+	if _, err := v.s.serveSell(context.Background(), p); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("a timed-out sale answered %v", err)
+	}
+	if v.clientSends(wire.CMSGSellItem) != 1 {
+		t.Fatal("the sale did not go out")
+	}
+	if e := v.s.firstEventSince(since, events.KindVendorSellFailed, events.KindVendorSell); e != nil {
+		t.Fatalf("a timed-out sale wrote %s", e.Kind)
 	}
 }

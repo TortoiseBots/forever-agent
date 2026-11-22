@@ -18,8 +18,12 @@ A call that fails before any packet is an RPC error: a bad parameter, a unit tha
 world model, an NPC further than 4 yards (methods never walk), the wrong NPC flags, an option the
 open menu does not have. Once a packet went out the call answers a result: `ok: false` with the
 failure event, whose `text` is the act's error. A cancel by the caller and a dead link stay
-errors. `wait_ms` bounds the whole call (default 15000, at most 60000); running out of it is a
-refusal, not an error.
+errors. `wait_ms` bounds the whole call (default 15000, at most 60000). Running out of it is an RPC
+error that says the outcome is unknown, not a failure result: the server may still complete the
+purchase or sale, and a caller that retried a reported failure would do it twice. The act steps keep
+their own 5 s answer waits, and what they report after those (no answer, a success the inventory
+did not show) is still `ok: false` with the act's text; a caller that sees one of those reads
+the inventory before retrying.
 
 ## The methods
 

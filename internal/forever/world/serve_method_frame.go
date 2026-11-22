@@ -124,10 +124,11 @@ func (s *session) methodNPC(guid GUID) (*objects.Object, error) {
 }
 
 // methodStopped reports whether a step's error is a stop the method must return as an error (the caller gave up,
-// the link died) instead of a refusal it reports in its result. A deadline of the method's own wait_ms is a
-// refusal: the answer did not come in time.
+// the link died, the method's own wait_ms ran out) instead of a refusal it reports in its result. Running out of
+// wait_ms after a packet went out is not a refusal: the server may still complete the request, so reporting it as a
+// failure would invite a retry that buys or sells twice.
 func (s *session) methodStopped(parent context.Context, err error) bool {
-	return parent.Err() != nil || errors.Is(err, context.Canceled) || s.linkDead() != nil
+	return parent.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || s.linkDead() != nil
 }
 
 // methodStep runs one act step on a shared state. refusal is the act's error text when the step failed (the
@@ -139,6 +140,9 @@ func (s *session) methodStep(parent, ctx context.Context, a *actState, verb stri
 		return lines, "", nil
 	}
 	if s.methodStopped(parent, stepErr) {
+		if parent.Err() == nil && errors.Is(stepErr, context.DeadlineExceeded) {
+			return lines, "", fmt.Errorf("wait_ms ran out before the server answered; the outcome is unknown, so read the inventory and the event log before retrying: %w", stepErr)
+		}
 		return lines, "", stepErr
 	}
 	return lines, stepErr.Error(), nil
