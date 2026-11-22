@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,6 +85,34 @@ type PlayFake struct {
 	TriggerFails bool
 	// OnWalk, when set, is asked before a walk of that destination: a test scripts the party's state there.
 	OnWalk func(f *PlayFake, to Vec3)
+
+	// The fight. A unit the group is ordered onto turns on the tank (and its pack-mates on their own members) after
+	// AggroDelay, and loses playHitPerTick of its health on every FightTick until it dies. BotPower is a bot's power:
+	// the type (0 mana, 1 rage, 2 focus, 3 energy) and its value and maximum; BotRegen is what it regains per second
+	// (a bot that eats and drinks between fights). A bot both maps lack uses rage and is never short of it. AggroAt is
+	// when a pack first turned on the party.
+	AggroDelay  time.Duration
+	BotPower    map[string][3]int
+	BotRegen    map[string]int
+	powerAt     map[string]time.Time
+	AggroAt     time.Time
+	pending     []pendingAggro
+	encounters  []EncounterEvent
+	OnFightTick func(f *PlayFake)
+}
+
+// The fake's fight numbers: a scripted unit's health when a test gave it none, and what the group takes off a unit
+// per tick of the agent's fight. They are the fake's own, not the server's.
+const (
+	playMobHP      = 2000
+	playHitPerTick = 700
+)
+
+// pendingAggro is one pack's turn on the party, due at a.
+type pendingAggro struct {
+	at     time.Time
+	target wire.GUID
+	guids  []wire.GUID
 }
 
 // NewPlayFake builds the fake for a route, with the agent at the plan's portal on the outer map and every bot of
@@ -96,6 +125,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 	f := &PlayFake{
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
+		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
 	}
 	f.Module = &PlayModule{GoldenOwner: owner, f: f}
@@ -134,8 +164,149 @@ func (f *PlayFake) ClearBosses() {
 	}
 }
 
-// AddUnit puts one scripted unit in the view.
-func (f *PlayFake) AddUnit(u Unit) { f.units = append(f.units, u) }
+// AddUnit puts one scripted unit in the view; a hostile a test gave no health gets playMobHP.
+func (f *PlayFake) AddUnit(u Unit) {
+	if !u.Friendly && !u.Dead && u.MaxHP == 0 {
+		u.HP, u.MaxHP = playMobHP, playMobHP
+	}
+	f.units = append(f.units, u)
+}
+
+// SpawnPacks puts one unit of every plan group in the view, on the group's own positions: the fake's dungeon holds
+// all of its packs from the start, and the run walks up to them.
+func (f *PlayFake) SpawnPacks() {
+	for _, g := range f.Route.AllGroups() {
+		for i, e := range g.Entries {
+			if e == VoidwalkerEntry {
+				continue // a warlock bot's summoned pet: it has no spawn of its own in the view
+			}
+			pos := g.Centre
+			if len(g.Positions) > 0 {
+				pos = g.Positions[i%len(g.Positions)]
+			}
+			f.AddUnit(Unit{GUID: f.newGUID(e), Entry: e, Pos: pos})
+		}
+	}
+}
+
+// SpawnBosses puts one live unit of every plan boss in the view, on its plan position.
+func (f *PlayFake) SpawnBosses() {
+	for _, leg := range f.Route.Legs {
+		if leg.Boss == nil {
+			continue
+		}
+		f.AddUnit(Unit{GUID: f.newGUID(leg.Boss.Entry), Entry: leg.Boss.Entry, Pos: leg.Boss.Pos})
+	}
+}
+
+// newGUID gives a scripted hostile of entry its guid: a creature guid's high half, a counter in the low one.
+func (f *PlayFake) newGUID(entry uint32) wire.GUID {
+	return wire.GUID{High: 0xF130000000000000, Low: 0x50000 + uint64(len(f.units)) + uint64(entry)}
+}
+
+// UnitOf finds a scripted unit of that entry: the first one still alive, else the first.
+func (f *PlayFake) UnitOf(entry uint32) (Unit, bool) {
+	var first *Unit
+	for i := range f.units {
+		if f.units[i].Entry != entry {
+			continue
+		}
+		if !f.units[i].Dead {
+			return f.units[i], true
+		}
+		if first == nil {
+			first = &f.units[i]
+		}
+	}
+	if first == nil {
+		return Unit{}, false
+	}
+	return *first, true
+}
+
+// RemoveUnit drops a unit from the view: a boss that vanishes before its corpse is seen.
+func (f *PlayFake) RemoveUnit(guid wire.GUID) {
+	out := f.units[:0]
+	for _, u := range f.units {
+		if u.GUID != guid {
+			out = append(out, u)
+		}
+	}
+	f.units = out
+}
+
+// SetBotPower scripts a bot's power type (0 mana, 1 rage, 2 focus, 3 energy) and its value and maximum.
+func (f *PlayFake) SetBotPower(name string, ptype, power, maxPower int) {
+	f.BotPower[strings.ToLower(name)] = [3]int{ptype, power, maxPower}
+}
+
+// Encounter puts one instance encounter event in the world's queue: the next read answers it.
+func (f *PlayFake) Encounter(e EncounterEvent) { f.encounters = append(f.encounters, e) }
+
+// AggroUnit turns one unit and its pack on the party at once (a test's add).
+func (f *PlayFake) AggroUnit(guid wire.GUID) { f.engage(guid, 0) }
+
+// engage turns a unit's pack on the party after d: the unit and every living unit of its plan group target the tank.
+// A unit no plan group claims (a boss, an add) turns on the party alone.
+func (f *PlayFake) engage(guid wire.GUID, d time.Duration) {
+	tank := wire.GUID{Low: 0x200}
+	if len(f.GoldenOwner.Bots) > 0 {
+		if g, ok := f.PlayerGUID(f.GoldenOwner.Bots[0].Name); ok {
+			tank = g
+		}
+	}
+	f.pending = append(f.pending, pendingAggro{at: f.Clock.Now().Add(d), target: tank, guids: f.packOf(guid)})
+	f.settle()
+}
+
+// settle applies the packs whose aggro is due: every living unit of them that is not already fighting turns on the
+// party. A unit keeps the target it has (an add does not take a fighting pack's members).
+func (f *PlayFake) settle() {
+	now := f.Clock.Now()
+	rest := f.pending[:0]
+	for _, a := range f.pending {
+		if now.Before(a.at) {
+			rest = append(rest, a)
+			continue
+		}
+		for i := range f.units {
+			u := &f.units[i]
+			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || !u.Target.IsZero() {
+				continue
+			}
+			u.Target = a.target
+			if f.AggroAt.IsZero() {
+				f.AggroAt = now
+			}
+		}
+	}
+	f.pending = rest
+}
+
+// packOf is the units one unit's plan group claims, or the unit alone when no group holds it.
+func (f *PlayFake) packOf(guid wire.GUID) []wire.GUID {
+	idx := -1
+	for i := range f.units {
+		if f.units[i].GUID == guid {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil
+	}
+	groups := f.Route.AllGroups()
+	claim := MatchPacks(f.units, groups, len(groups))
+	gid, ok := claim.GroupOf(idx)
+	if !ok {
+		return []wire.GUID{guid}
+	}
+	out := make([]wire.GUID, 0, len(claim.Members(gid)))
+	for _, ui := range claim.Members(gid) {
+		out = append(out, f.units[ui].GUID)
+	}
+	return out
+}
 
 // send records the line a bot command of v and name builds.
 func (f *PlayFake) send(v botcmd.Verb, name string) {
@@ -215,10 +386,15 @@ func (m *PlayModule) Stay(ctx context.Context, name string) (botcmd.Reply, error
 	return m.GoldenOwner.Stay(ctx, name)
 }
 
-// Attack is `.bot attack`: the module takes the requester's selected unit, which the fake does not model.
+// Attack is `.bot attack`: the module takes the requester's selected unit, so the fake turns that unit's pack on the
+// party the way a pulled pack does.
 func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, error) {
 	m.f.send(botcmd.VerbAttack, name)
-	return m.GoldenOwner.Attack(ctx, name)
+	rep, err := m.GoldenOwner.Attack(ctx, name)
+	if err == nil {
+		m.f.engage(m.f.Selected, m.f.AggroDelay)
+	}
+	return rep, err
 }
 
 // Summon is `.bot summon`: the bot moves to the agent's map and side.
@@ -249,13 +425,27 @@ func (f *PlayFake) Roster() []PartyMember {
 		if !b.Online || !b.InParty {
 			continue
 		}
+		key := strings.ToLower(b.Name)
 		hp, maxHP := 900, 900
-		if v, ok := f.BotHP[strings.ToLower(b.Name)]; ok {
+		if v, ok := f.BotHP[key]; ok {
 			hp, maxHP = v[0], v[1]
+		}
+		// Rage unless the test scripted a pool: a bot short of nothing is always ready to go on.
+		p := [3]int{1, 100, 100}
+		if v, ok := f.BotPower[key]; ok {
+			p = v
+			if rate := f.BotRegen[key]; rate > 0 {
+				if at, ok := f.powerAt[key]; ok {
+					p[1] = min(p[2], p[1]+rate*int(f.Clock.Now().Sub(at)/time.Second))
+					f.BotPower[key] = p
+				}
+				f.powerAt[key] = f.Clock.Now()
+			}
 		}
 		out = append(out, PartyMember{
 			Name: b.Name, GUID: f.botGUID(b.Name), Online: true, Dead: b.Dead,
-			HP: hp, MaxHP: maxHP, Pos: f.botPos(b), Map: b.Map,
+			HP: hp, MaxHP: maxHP, PowerType: p[0], Power: p[1], MaxPower: p[2],
+			Pos: f.botPos(b), Map: b.Map,
 		})
 	}
 	f.MaxRoster = max(f.MaxRoster, len(out))
@@ -315,8 +505,12 @@ func (f *PlayFake) Disband() error {
 
 // --- PlayerPort ---
 
-// Select is the agent's own selection.
-func (f *PlayFake) Select(guid wire.GUID) error { f.Selected = guid; return nil }
+// Select is the agent's own selection (recorded as a "select <guid>" action, the order of `.bot attack` it is for).
+func (f *PlayFake) Select(guid wire.GUID) error {
+	f.Selected = guid
+	f.act("select " + guid.String())
+	return nil
+}
 
 // Attack starts the agent's own attack.
 func (f *PlayFake) Attack(guid wire.GUID) error { f.Attacked = guid; return nil }
@@ -324,8 +518,41 @@ func (f *PlayFake) Attack(guid wire.GUID) error { f.Attacked = guid; return nil 
 // StopAttack ends it.
 func (f *PlayFake) StopAttack() error { f.Attacked = wire.GUID{}; return nil }
 
-// FightTick is one tick of the agent's fight; the fake's fights are scripted by the units.
-func (f *PlayFake) FightTick(ctx context.Context, target wire.GUID) error { return nil }
+// FightTick is one tick of the agent's fight: the units the group turned on lose health, and one that runs out dies
+// and clears its target. OnFightTick runs first, so a test can script an add or a removal at that moment.
+func (f *PlayFake) FightTick(ctx context.Context, target wire.GUID) error {
+	if f.OnFightTick != nil {
+		f.OnFightTick(f)
+	}
+	f.settle()
+	for i := range f.units {
+		u := &f.units[i]
+		if u.Dead || u.Friendly || u.Target.IsZero() {
+			continue
+		}
+		if !f.friendTarget(u.Target) {
+			continue
+		}
+		u.HP -= playHitPerTick
+		if u.HP <= 0 {
+			u.HP, u.Dead, u.Target = 0, true, wire.GUID{}
+		}
+	}
+	return nil
+}
+
+// friendTarget says whether a unit's target is a party member.
+func (f *PlayFake) friendTarget(g wire.GUID) bool {
+	if g == f.selfGUID {
+		return true
+	}
+	for _, b := range f.GoldenOwner.Bots {
+		if b.Online && b.InParty && f.botGUID(b.Name) == g {
+			return true
+		}
+	}
+	return false
+}
 
 // Rest sits the agent down; the fake's party is always rested.
 func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error { return nil }
@@ -364,8 +591,11 @@ func (f *PlayFake) Self() (Vec3, uint32, uint64, bool) {
 	return f.SelfPos, f.GoldenOwner.SelfMap, f.epoch, false
 }
 
-// Units is the scripted view.
-func (f *PlayFake) Units() []Unit { return f.units }
+// Units is the scripted view, with the packs whose aggro is due settled first.
+func (f *PlayFake) Units() []Unit {
+	f.settle()
+	return f.units
+}
 
 // PlayerGUID is a party member's guid.
 func (f *PlayFake) PlayerGUID(name string) (wire.GUID, bool) {
@@ -405,8 +635,13 @@ func (f *PlayFake) ThreatTable(time.Time) (tbcmd.ThreatReport, bool) {
 	return tbcmd.ThreatReport{}, false
 }
 
-// Encounters has none: the fake's bosses die by their units.
-func (f *PlayFake) Encounters() []EncounterEvent { return nil }
+// Encounters answers the events a test queued and forgets them: a boss whose corpse the view never shows still
+// counts dead from its encounter's end.
+func (f *PlayFake) Encounters() []EncounterEvent {
+	out := f.encounters
+	f.encounters = nil
+	return out
+}
 
 // EncounterOpen is always false.
 func (f *PlayFake) EncounterOpen() bool { return false }
@@ -445,3 +680,12 @@ func (f *PlayFake) Walk(ctx context.Context, pts [][3]float32) error {
 
 // Stop ends a walk; the fake has none to end.
 func (f *PlayFake) Stop() error { return nil }
+
+// ClearTarget makes one unit stop targeting anyone while it stays alive (an evade or a reset, a test's script).
+func (f *PlayFake) ClearTarget(guid wire.GUID) {
+	for i := range f.units {
+		if f.units[i].GUID == guid {
+			f.units[i].Target = wire.GUID{}
+		}
+	}
+}
