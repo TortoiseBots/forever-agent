@@ -25,7 +25,7 @@ type mailWatch struct {
 	listBox wire.GUID
 	// results are the command results since the list was last asked for, oldest first and bounded; resultSeq counts
 	// every result ever received so a method knows which are new even when the bound dropped the oldest.
-	results   []mail.CommandResult
+	results   []mailResult
 	resultSeq int
 	// next is the last SMSG_MAIL_QUERY_NEXT_TIME_RESULT, nextSeq counts them.
 	next    *mail.NextTime
@@ -36,6 +36,13 @@ type mailWatch struct {
 	// its late result cannot be told from a later send's (a send result names no mail), so every later send needs force
 	// until the session restarts.
 	sendUnknown bool
+}
+
+// mailResult is one command result with the sequence of the mail_result event the handler wrote for it, so a method
+// answers the event of the result it matched and never an unrelated late one.
+type mailResult struct {
+	mail.CommandResult
+	eventSeq uint64
 }
 
 // isMailPacket reports the opcodes handleMail owns.
@@ -67,12 +74,12 @@ func (s *session) handleMail(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
-		s.mail.results = append(s.mail.results, r)
+		e := s.eventMailResult(r)
+		s.mail.results = append(s.mail.results, mailResult{CommandResult: r, eventSeq: e.Seq})
 		if len(s.mail.results) > mailResultsMax {
-			s.mail.results = append([]mail.CommandResult(nil), s.mail.results[len(s.mail.results)-mailResultsMax:]...)
+			s.mail.results = append([]mailResult(nil), s.mail.results[len(s.mail.results)-mailResultsMax:]...)
 		}
 		s.mail.resultSeq++
-		s.eventMailResult(r)
 	case wire.SMSGMailQueryNextTimeResult:
 		n, err := mail.ParseNextTime(p.Payload)
 		if err != nil {
@@ -126,8 +133,8 @@ func (s *session) mailRow(m mail.Entry, body bool) map[string]any {
 	return row
 }
 
-// eventMailResult appends one command result as a mail_result event.
-func (s *session) eventMailResult(r mail.CommandResult) {
+// eventMailResult appends one command result as a mail_result event and returns the stored row.
+func (s *session) eventMailResult(r mail.CommandResult) Event {
 	data := map[string]any{
 		"command": mail.CommandName(r.Command), "ok": r.OK(), "error": r.ErrorCode, "mail_id": r.MailID,
 	}
@@ -140,5 +147,5 @@ func (s *session) eventMailResult(r mail.CommandResult) {
 		data["attach_id"] = r.AttachID
 		data["quantity"] = r.QtyInInventory
 	}
-	s.event(Event{Kind: events.KindMailResult, Text: text, Data: data})
+	return s.event(Event{Kind: events.KindMailResult, Text: text, Data: data})
 }

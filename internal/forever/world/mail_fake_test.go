@@ -65,6 +65,8 @@ type mailWorld struct {
 	refuseBag int32
 	// silent answers nothing to the named commands.
 	silent map[uint32]bool
+	// stray delivers an unrelated result (another mail's delete) before every answer: a late result of another call.
+	stray bool
 	// ignoreMark makes the fake ignore CMSG_MAIL_MARK_AS_READ (the mail stays unread).
 	ignoreMark bool
 	// known are the recipients the fake accepts.
@@ -177,6 +179,9 @@ func resultPayload(id uint64, command, code, bag int32, attach uint64, qty int32
 
 // result answers a command: the fake's refusal, or the success the caller names.
 func (m *mailWorld) result(id uint64, command int32, attach uint64, qty int32) bool {
+	if m.stray {
+		m.deliver(wire.SMSGMailCommandResult, resultPayload(999, mail.CommandDeleted, mail.ResultInternalError, 0, 0, 0))
+	}
 	if m.refuse != 0 {
 		m.deliver(wire.SMSGMailCommandResult, resultPayload(id, command, m.refuse, m.refuseBag, 0, 0))
 		return false
@@ -901,5 +906,22 @@ func TestServeMailMethodsAreRegistered(t *testing.T) {
 				t.Fatalf("%s is still not ported", name)
 			}
 		}
+	}
+}
+
+// TestServeMailAnswerEventIsTheMatchedResults: an unrelated late result arrives before the answer; the call's event
+// still names its own command and mail, not the first result event after the cursor.
+func TestServeMailAnswerEventIsTheMatchedResults(t *testing.T) {
+	m := newMailWorld(t).stocked()
+	m.list(t)
+	m.stray = true
+	p := boxParams()
+	p.MailID = u64(101)
+	res, err := m.s.serveMailTakeItem(context.Background(), p)
+	if err != nil || !res.OK {
+		t.Fatalf("take: %+v %v", res, err)
+	}
+	if res.Event == nil || res.Event.Data["command"] != "take_item" || res.Event.Data["mail_id"] != uint64(101) || res.Event.Data["ok"] != true {
+		t.Fatalf("the answer's event is not the matched result's: %+v", res.Event)
 	}
 }

@@ -239,7 +239,7 @@ func mailItem(a mail.Attachment) ServeMailItem {
 
 // mailResultSince returns the first command result of the wanted command (and mail, for the ones that name one)
 // received after the cursor, or nil.
-func (s *session) mailResultSince(since int, command int32, mailID uint64) *mail.CommandResult {
+func (s *session) mailResultSince(since int, command int32, mailID uint64) *mailResult {
 	n := s.mail.resultSeq - since
 	if n > len(s.mail.results) {
 		n = len(s.mail.results)
@@ -253,6 +253,15 @@ func (s *session) mailResultSince(since int, command int32, mailID uint64) *mail
 	return nil
 }
 
+// mailResultEvent is the mail_result event the handler wrote for one result: the answer's event is the matched
+// result's own, never the first result event after the cursor (a late result of another call may sit before it).
+func (s *session) mailResultEvent(r *mailResult) *Event {
+	if r.eventSeq == 0 {
+		return nil
+	}
+	return s.firstEventSince(r.eventSeq-1, events.KindMailResult)
+}
+
 // mailCommand sends one command packet and waits for its result. A packet that could not be sent is an error with
 // nothing out; a result that never came is an unknown outcome (the server may still complete the command). The
 // answer's event is the mail_result row the handler wrote.
@@ -261,7 +270,7 @@ func (s *session) mailCommand(ctx context.Context, res *ServeMailResult, core ui
 	if err := s.transport().Send(core, payload); err != nil {
 		return nil, fmt.Errorf("%s: %w", wire.ClientName(core), err)
 	}
-	var got *mail.CommandResult
+	var got *mailResult
 	ok, err := s.actUntil(ctx, mailAnswerWait, func() bool {
 		got = s.mailResultSince(since, command, mailID)
 		return got != nil
@@ -272,8 +281,8 @@ func (s *session) mailCommand(ctx context.Context, res *ServeMailResult, core ui
 	if !ok {
 		return nil, sentTimeout(unknownOutcomeError{fmt.Sprintf("%s: no mail result within %s", mail.CommandName(command), mailAnswerWait)}, res.Since)
 	}
-	res.Event = s.firstEventSince(res.Since, events.KindMailResult)
-	return got, nil
+	res.Event = s.mailResultEvent(got)
+	return &got.CommandResult, nil
 }
 
 // mailPurse waits (bounded) for the purse to show a payment or payout and returns it with the figure before. The
