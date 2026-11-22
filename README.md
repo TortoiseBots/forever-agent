@@ -79,7 +79,7 @@ token, loopback only, the same error codes. The password comes from `--password-
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
 works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
-`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state`, `spells` (the spellbook: `spell_id`, `name`, `rank`, `highest`, `meta`, `level`, `passive`, `cooldown_ms`, `category`, `category_cd_ms`, `gcd_ms`, `mechanic`, `dispel`, `class`; it filters on `spell_id`, `name` and `highest`, and hides passive spells unless `passive` is true), `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
