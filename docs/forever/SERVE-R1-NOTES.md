@@ -43,6 +43,10 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `units` | DONE | The model's units, nearest first: `within`/`near`, `entry`, `name`, `limit`. The `hostile` filter is refused by name (the model has faction templates, not factions). |
 | `unit` | DONE | One unit by `guid` or `name`, with distance, health, power, level, target, combat, dead/ghost, cast and `auras` (`spell_id`, `caster`, `stacks`, `remaining_ms`). |
 | `item_info` | DONE | The server's own ItemSparse and Item records for `entries` (1-64 positive item ids), one row per entry in the request's order: `found` (the ItemSparse record), name, quality and `quality_name`, class/subclass when the Item store answered, level, required level, prices, stack size, bonding and bag slots. Two record fetches per call, then the session's record cache. Round D1; see [DAEMON-D1-NOTES.md](DAEMON-D1-NOTES.md). No live run yet. |
+| `inventory` | DONE | The character's own placed backpack rows (container 255, slots 35-62) in slot order, the bag contents (30-33) when `bags` is true, then the items the snapshot cannot place (255/255, `placed: false`); `names: true` fills name/quality from one DB batch per table. Round D2; see [DAEMON-D2-NOTES.md](DAEMON-D2-NOTES.md). No live run yet. |
+| `equipment` | DONE | The occupied equipment slots 0-18 with the core's names (head .. tabard); `names: true` fills name/quality. Round D2. |
+| `equip` | DONE | The act `equip` step (AutoEquip; the server chooses the slot) and the item's row after the move; neither `item_entry` nor `bag`+`slot` is an RPC error before any packet. Round D2. |
+| `use_item` | DONE | The act `use` step for an item; `spell_id` is required (the on-use spell is in ItemEffect, not a queryable record); a target goes through a fresh act state, never the shared one. Round D2. |
 | `party` | DONE | The party model's roster, leader, health/power and pending invite. Raid groups are not modelled. |
 | `chat_log` | DONE | The chat log as the old page (`since`, `limit`, `wait_ms`): seq, chat type name, source, channel, text. It is the chat model, not the 78-kind event log. |
 | `logout` | DONE | The full logout (request, response and completion), then the daemon stops. |
@@ -107,7 +111,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 
 | Methods | Status | Why |
 |---|---|---|
-| `inventory`, `equipment`, `equip`, `use_item`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects` | NOT-PORTED | No item, loot or object-use model in `internal/forever`. |
+| `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects` | NOT-PORTED | No loot or object-use model in `internal/forever`. |
 | `vendor_list`, `buy`, `sell`, `trainer_list`, `train`, `gossip_hello`, `gossip_select`, `taxi`, `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log` | NOT-PORTED | No NPC, vendor, trainer, taxi or quest model. |
 | `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |

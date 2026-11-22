@@ -730,6 +730,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		return s.serveTeardown(ctx, st, p)
 	}))
 	registerItemInfoMethods(srv, st)
+	registerItemMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -1682,11 +1683,10 @@ var notPortedMethods = []string{
 	"brain_start", "brain_status", "brain_stop",
 	"buy", "convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"equip", "equipment",
 	"gameobjects",
 	"gm_evade", "gm_respawn",
 	"gossip_hello", "gossip_select",
-	"inventory", "join_channel", "leave_channel",
+	"join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
 	"loot", "loot_close", "loot_take",
@@ -1700,5 +1700,5 @@ var notPortedMethods = []string{
 	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"train", "trainer_list", "tt", "tune_list", "tune_set",
-	"use_item", "use_object", "vendor_list",
+	"use_object", "vendor_list",
 }
