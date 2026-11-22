@@ -620,6 +620,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}, func(s *session, ctx context.Context, p serveTeardownParams) (ServeTeardown, error) {
 		return s.serveTeardown(ctx, st, p)
 	}))
+	registerItemInfoMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
