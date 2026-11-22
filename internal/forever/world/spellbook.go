@@ -125,20 +125,24 @@ func (s *session) cachedSpellName(id uint32) string {
 // book and the event names it, so a reader sees the replacement rather than a second rank beside the old.
 func (s *session) learnSpell(v combat.LearnedSpell) {
 	book := s.spellbook()
-	book.add(v.SpellID)
+	added := book.add(v.SpellID)
 	if v.Superceded != nil {
-		book.remove(*v.Superceded)
-		s.spellEvent(events.KindSpellSuperseded, v.SpellID, map[string]any{"was": *v.Superceded})
-	} else {
+		// A repeated or out-of-order packet that changes nothing writes no event.
+		removed := book.remove(*v.Superceded)
+		if added || removed {
+			s.spellEvent(events.KindSpellSuperseded, v.SpellID, map[string]any{"was": *v.Superceded})
+		}
+	} else if added {
 		s.spellEvent(events.KindSpellLearned, v.SpellID, nil)
 	}
 	s.syncKnown()
 }
 
-// unlearnSpell drops the spell and writes spell_removed.
+// unlearnSpell drops the spell and writes spell_removed, only when the spell was in the book.
 func (s *session) unlearnSpell(id int32) {
-	s.spellbook().remove(id)
-	s.spellEvent(events.KindSpellRemoved, id, nil)
+	if s.spellbook().remove(id) {
+		s.spellEvent(events.KindSpellRemoved, id, nil)
+	}
 	s.syncKnown()
 }
 

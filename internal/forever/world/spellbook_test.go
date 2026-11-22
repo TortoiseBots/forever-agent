@@ -303,3 +303,25 @@ func TestSpellsMethodTable(t *testing.T) {
 		t.Fatal("spells is still on the not-ported list")
 	}
 }
+
+// TestSpellBookNoOpPacketsWriteNoEvents: a repeated learn, an unlearn of an unknown id and a repeated supersede
+// (the server may send both LEARNED_SPELLS and SUPERCEDED_SPELLS for one rank-up) change nothing and write no
+// event, so the event stream never claims a book change that did not happen.
+func TestSpellBookNoOpPacketsWriteNoEvents(t *testing.T) {
+	s := spellbookTestSession(t)
+	dispatchSpellPacket(t, s, wire.SMSGSendKnownSpells, r5KnownPayload([]int32{116}, nil))
+	dispatchSpellPacket(t, s, wire.SMSGLearnedSpells, r5LearnedPayload([]combat.LearnedSpell{{SpellID: 116}}, false, false))
+	dispatchSpellPacket(t, s, wire.SMSGUnlearnedSpells, r5UnlearnedPayload([]int32{4242}))
+	if evs := r5SpellEvents(t, s); len(evs) != 0 {
+		t.Fatalf("duplicate learn and unknown unlearn wrote %+v, want no events", evs)
+	}
+	sup := r5SupercededPayload([]combat.LearnedSpell{{SpellID: 837, Superceded: new(int32(116))}})
+	dispatchSpellPacket(t, s, wire.SMSGSupercededSpells, sup)
+	dispatchSpellPacket(t, s, wire.SMSGSupercededSpells, sup)
+	if evs := r5SpellEvents(t, s); len(evs) != 1 || evs[0].Kind != events.KindSpellSuperseded {
+		t.Fatalf("a repeated supersede wrote %+v, want exactly one spell_superseded", evs)
+	}
+	if got := s.spellbook().ids(); !slices.Equal(got, []int32{837}) {
+		t.Fatalf("the book is %v, want [837]", got)
+	}
+}
