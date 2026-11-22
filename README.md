@@ -82,7 +82,7 @@ works unchanged; without it the token file is `rpc-<port>.token` in the working 
 `inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state` (the current cast, `gcd` / `gcd_known`, `last_cast`, `last_failure`, `failures`, `combo_points` / `combo_target`, active `cooldowns`), `spells` (the spellbook: `spell_id`, `name`, `rank`, `highest`, `meta`, `level`, `passive`, `cooldown_ms`, `category`, `category_cd_ms`, `gcd_ms`, `mechanic`, `dispel`, `class`; it filters on `spell_id`, `name` and `highest`, and hides passive spells unless `passive` is true), `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
-`area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `follow_start`,
+`area_trigger`, the five death methods, `addon_send`, `teardown`, `mount`, `dismount`, `pet`, `pet_action`, `follow_start`,
 `follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. Every other old method answers a typed `not ported on this server` error. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`), and `status`
 carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target` and `gcd_ms`, and a `unit` row carries `mount_display_id` (non-zero
@@ -96,7 +96,10 @@ Its `wait_ms` is spent off the session goroutine, on the
 ring's own new-row signal, so an empty long-poll never holds `status`, a chat, a GM hand or a logout;
 concurrent long-polls all return at their own cap. `units` takes an optional `hostile` filter: the mob's
 faction template against the character's own (fetched once from the server and cached), so `true` keeps only
-what is hostile to the character and `false` only what is not.
+what is hostile to the character and `false` only what is not. A `unit` row also carries `owner` and `owner_kind`
+(`summoned_by`, `created_by` or `charmed_by`, the first of the unit's owner GUIDs the server sent), the unit's own
+`pet` (its Summon), and a pet's `pet_number`, `created_by_spell` and `creature_family`; `units` takes an optional
+`owner` GUID that keeps only the units whose owner is that one, which is how a party's hunter pets are listed.
 
 A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
 the link drops), and every login attempt (the first login, each build the automatic selection probes, each reconnect's) waits for its turn in the same login rate the other

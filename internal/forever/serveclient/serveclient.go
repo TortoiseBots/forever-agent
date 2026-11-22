@@ -227,6 +227,15 @@ type Unit struct {
 	Auras      []Aura  `json:"auras"`
 	// MountDisplayID is the unit's own UNIT_FIELD_MOUNTDISPLAYID: non-zero while it is mounted.
 	MountDisplayID int32 `json:"mount_display_id,omitempty"`
+	// Owner is whichever of the unit's SummonedBy, CreatedBy and CharmedBy names its owner, with OwnerKind naming
+	// that field ("summoned_by", "created_by" or "charmed_by"); Pet is the unit's own Summon, the pet it controls.
+	// The three pet fields are the pet's own PetNumber, CreatedBySpell and CreatureFamily.
+	Owner          GUID   `json:"owner,omitempty"`
+	OwnerKind      string `json:"owner_kind,omitempty"`
+	Pet            GUID   `json:"pet,omitempty"`
+	PetNumber      uint32 `json:"pet_number,omitempty"`
+	CreatedBySpell int32  `json:"created_by_spell,omitempty"`
+	CreatureFamily int32  `json:"creature_family,omitempty"`
 }
 
 // Path is path_to/walk_path's answer: the session's route on its current map (serve's ServePath).
@@ -293,6 +302,8 @@ type UnitsParams struct {
 	Name    string  `json:"name,omitempty"`
 	Hostile *bool   `json:"hostile,omitempty"`
 	Limit   int     `json:"limit,omitempty"`
+	// Owner keeps only the units whose owner (Unit.Owner) is this GUID: a hunter's pet, a warlock's demon.
+	Owner GUID `json:"owner,omitempty"`
 }
 
 // PartyMember is one party row.

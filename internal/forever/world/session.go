@@ -634,6 +634,9 @@ type session struct {
 	serveRT *serveRuntime
 	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
 	loot *lootWatch
+	// Round P2 (ticket #90): the pet's control bar, its mode and the last pet the character's own Summon named
+	// (pet.go). Only the session goroutine touches it, and a reconnect starts fresh.
+	pet *petWatch
 	// Act runner (forever-world-r0): the last gossip menu and quest list, set by the NPC dispatch for the runner's wait.
 	actMenu  *npc.GossipMessage
 	actQuest *quest.QuestList
@@ -2120,6 +2123,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		s.noteSelfTaxi()
 		s.combatDeaths(now)
+		s.petCheck()
 		s.observeSelfIfTracking()
 	case wire.SMSGOnMonsterMove:
 		m, err := objects.ParseMonsterMove(p.Payload)
@@ -2275,6 +2279,10 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGGossipMessage, wire.SMSGGossipComplete, wire.SMSGGossipOptionNPCInteract,
 		wire.SMSGNPCInteractionOpenResult, wire.SMSGQuestGiverQuestList:
 		return s.handleNPC(p)
+	// Round P2 (ticket #90): the pet's control bar, mode and refusals live in pet.go; this is their one
+	// registration line.
+	case wire.SMSGPetSpellsMessage, wire.SMSGPetMode, wire.SMSGPetCastFailed, wire.SMSGPetActionFeedback:
+		return s.handlePet(p)
 	// Round A7's handlers live in mapchange.go; this is their one registration line.
 	case wire.SMSGTransferPending, wire.SMSGSuspendToken, wire.SMSGResumeToken, wire.SMSGNewWorld,
 		wire.SMSGTransferAborted, wire.SMSGUpdateLastInstance, wire.SMSGWorldServerInfo, wire.SMSGInstanceInfo:
