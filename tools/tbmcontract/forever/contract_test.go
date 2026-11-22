@@ -79,16 +79,24 @@ func TestForeverContract(t *testing.T) {
 
 func TestDriverRejectsBrokenCase(t *testing.T) {
 	addonDir := requireAddonAndLua(t)
-	broken := filepath.Join(t.TempDir(), "broken-check.case")
-	body := "case broken-check\ndesc synthetic mismatch check\nrecv system TBM:VERSION|v0.1.0-forever\nexpect hello.version wrong-version\n"
-	if err := os.WriteFile(broken, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
+	cases := map[string]string{
+		"broken-version": "case broken-version\nrecv system TBM:VERSION|v0.1.0-forever\nexpect hello.version wrong-version\n",
+		"broken-roster":  "case broken-roster\nrecv system TBM:ROSTER_BEGIN|2\nrecv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn|-|Warrior\nrecv system TBM:ROSTER_END\nexpect roster.committed true\n",
 	}
-	out, err := exec.Command("lua5.1", "contract.lua", addonDir, broken).CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected broken case to fail, got pass:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "MISMATCH") {
-		t.Fatalf("expected MISMATCH output on broken case, got:\n%s", string(out))
+	dir := t.TempDir()
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(dir, name+".case")
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("lua5.1", "contract.lua", addonDir, p).CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected broken case %s to fail, got pass:\n%s", name, string(out))
+			}
+			if !strings.Contains(string(out), "MISMATCH") {
+				t.Fatalf("expected MISMATCH output on %s, got:\n%s", name, string(out))
+			}
+		})
 	}
 }

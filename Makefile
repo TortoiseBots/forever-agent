@@ -6,7 +6,7 @@ CORE ?= $(HOME)/tortoise-wow
 DBC ?= $(HOME)/tortoise-docker-penqle/data/dbc
 export GOTOOLCHAIN := local
 
-.PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract addon-host
+.PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract tbm-contract-forever addon-host
 
 # The package timeout is 20m: cmd/forever-agent runs about 1500 tests under -race and takes 8-10 minutes, so Go's 10m
 # default leaves no room on a loaded machine. CI runs the same checks as parallel jobs, with the race tests in 9 shards
@@ -76,6 +76,11 @@ spellnames:
 # EVENTS="a.json b.json" replays the TBM: lines of those saved events replies instead of the fixtures.
 tbm-contract:
 	GO=$(GO) tools/tbmcontract/run.sh $(foreach e,$(EVENTS),--events $(e))
+
+# Replay contract/tbm/v1/cases/*.case through TortoiseBotsForeverManager (Lua 5.1, git clone --depth 1).
+# Needs lua5.1 and, on first run, network; it skips with a message without them.
+tbm-contract-forever:
+	tools/tbmcontract/forever/run.sh
 
 # The addon host's end-to-end tests against the real addon (README "Addon host"). `make test` runs them when the addon
 # is cached and lua5.1 is installed; this target fetches the addon first and fails instead of skipping.
