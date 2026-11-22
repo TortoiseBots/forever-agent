@@ -224,8 +224,13 @@ const (
 	SMSGMoveSetWaterWalk    uint32 = 0x5E002B
 	SMSGMoveSetLandWalk     uint32 = 0x5E002E
 	SMSGSendKnownSpells     uint32 = 0x670019
-	SMSGLevelUpInfo         uint32 = 0x450194
-	SMSGSpellExecuteLog     uint32 = 0x670033
+	// The spell book changes of ticket #93 round R5 (Opcodes.h:1810, 2407, 2450; SpellPackets.cpp:506-530,
+	// 607-618): a learned spell (a higher rank carries the one it supersedes), a superseded pair, and unlearns.
+	SMSGLearnedSpells    uint32 = 0x670040
+	SMSGSupercededSpells uint32 = 0x67003F
+	SMSGUnlearnedSpells  uint32 = 0x670041
+	SMSGLevelUpInfo      uint32 = 0x450194
+	SMSGSpellExecuteLog  uint32 = 0x670033
 	// The mount answers (Opcodes.h:1444, 1891; SpellPackets.cpp:1156-1165): MountResult is one int32, 0 for a
 	// mount that went through. DismountResult shares the shape but this core never sends it
 	// (Opcodes.cpp:1520 STATUS_UNHANDLED): the field update is what ends a dismount.
@@ -329,11 +334,11 @@ const (
 )
 
 // The trainer of round R4 (Opcodes.h:1019-1020, 1886, 2430-2431): the list ask (an NPC hello), the purchase, and
-// the list, a refusal and a learned-spell answer.
+// the list and its refusal. A purchase's success answer is SMSG_LEARNED_SPELLS, declared above with the spell book
+// (round R5, #93), which is the packet any learn arrives on.
 const (
 	CMSGTrainerList     uint32 = 0x3E0043
 	CMSGTrainerBuySpell uint32 = 0x3E0044
-	SMSGLearnedSpells   uint32 = 0x670040
 	SMSGTrainerList     uint32 = 0x45018A
 	SMSGTrainerBuyFail  uint32 = 0x45018B
 )

@@ -24,8 +24,6 @@ const (
 	// maxTrainerGreeting bounds the 11-bit greeting length (2047 on the wire): the field's own maximum, which is
 	// also the allocation bound a 2047-byte string gives.
 	maxTrainerGreeting = 2047
-	// maxLearnedSpells bounds SMSG_LEARNED_SPELLS' declared count.
-	maxLearnedSpells = 256
 )
 
 // BuildTrainerList is CMSG_TRAINER_LIST (Hello::Read, NPCPackets.cpp:94-97): the trainer's packed GUID, the same
@@ -172,72 +170,4 @@ func TrainerFailName(reason int32) string {
 		return "not_enough_money"
 	}
 	return fmt.Sprintf("unknown(%d)", reason)
-}
-
-// LearnedSpell is one LearnedSpellInfo of SMSG_LEARNED_SPELLS (LearnedSpellInfo, SpellPackets.h:408-415): the spell,
-// a favourite bit and up to three optional int32s.
-type LearnedSpell struct {
-	SpellID            int32
-	Favorite           bool
-	EquipSlot          int32
-	HasSlot            bool
-	Superceded         int32
-	HasSuperceded      bool
-	TraitDefinitionID  int32
-	HasTraitDefinition bool
-}
-
-// ParseLearnedSpells reads SMSG_LEARNED_SPELLS to its last byte (LearnedSpells::Write, SpellPackets.cpp:506-519):
-// the uint32 count, the uint32 specialization, the int32 minimum action-bar slot, one LearnedSpellInfo per spell
-// (int32 then a flushed bit block, then its optional int32s) and the two trailing bits, flushed.
-func ParseLearnedSpells(p []byte) ([]LearnedSpell, error) {
-	b := wire.NewReader(p)
-	n, err := count(b, "learned spell", maxLearnedSpells)
-	if err != nil {
-		return nil, err
-	}
-	b.ReadU32() // SpecializationID
-	b.ReadI32() // MinActionBarSlot
-	out := make([]LearnedSpell, 0, n)
-	for i := range n {
-		s, err := parseLearnedSpell(b)
-		if err != nil {
-			return nil, fmt.Errorf("npc: learned spell %d: %w", i, err)
-		}
-		out = append(out, s)
-	}
-	b.ReadBit() // SuppressMessaging
-	b.ReadBit() // TraitGrantedByAura
-	flush(b)
-	if err := exactly(b); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// parseLearnedSpell reads one LearnedSpellInfo: the int32 spell, then Favorite and the three optional bits in one
-// flushed byte, then the optional int32s in order.
-func parseLearnedSpell(b *wire.Buffer) (LearnedSpell, error) {
-	s := LearnedSpell{SpellID: b.ReadI32()}
-	s.Favorite = b.ReadBit()
-	s.HasSlot = b.ReadBit()
-	s.HasSuperceded = b.ReadBit()
-	s.HasTraitDefinition = b.ReadBit()
-	flush(b)
-	if b.Err() != nil {
-		return LearnedSpell{}, errShort
-	}
-	if s.HasSlot {
-		s.EquipSlot = b.ReadI32()
-	}
-	if s.HasSuperceded {
-		s.Superceded = b.ReadI32()
-	}
-	if s.HasTraitDefinition {
-		s.TraitDefinitionID = b.ReadI32()
-	}
-	if b.Err() != nil {
-		return LearnedSpell{}, errShort
-	}
-	return s, nil
 }
