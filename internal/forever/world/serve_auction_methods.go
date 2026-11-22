@@ -174,7 +174,7 @@ func (s *session) auctionSilent(res *ServeAuctionResult, auctioneer wire.GUID, w
 // id is one of ids (any id when none is given), or nil. Matching is exact: ForeverCore uses the one PlaceBid command
 // for a bid (the result names the auction) and a commodity purchase (the result names auction 0), so a result with the
 // other's id never answers the wait.
-func (s *session) auctionResultSince(since int, command int32, ids ...int32) *auction.CommandResult {
+func (s *session) auctionResultSince(since int, command int32, ids ...int32) *auctionResult {
 	w := &s.auction
 	n := w.resultSeq - since
 	if n > len(w.results) {
@@ -198,6 +198,15 @@ func (s *session) auctionResultSince(since int, command int32, ids ...int32) *au
 	return nil
 }
 
+// auctionResultEvent is the auction_result event the handler wrote for one result: the answer's event is the matched
+// result's own, never the first result event after the cursor (a late result of another call may sit before it).
+func (s *session) auctionResultEvent(r *auctionResult) *Event {
+	if r.eventSeq == 0 {
+		return nil
+	}
+	return s.firstEventSince(r.eventSeq-1, events.KindAuctionResult)
+}
+
 // auctionCommand sends one command packet and waits for its result. A packet that could not be sent is an error with
 // nothing out; a result that never came is an unknown outcome, and it blocks every later auction command for the rest of the
 // session unless the caller sets force on each: the answer of the earlier command may still arrive and cannot be told from the next one's
@@ -210,7 +219,7 @@ func (s *session) auctionCommand(ctx context.Context, res *ServeAuctionResult, f
 	if err := s.transport().Send(core, payload); err != nil {
 		return nil, fmt.Errorf("%s: %w", wire.ClientName(core), err)
 	}
-	var got *auction.CommandResult
+	var got *auctionResult
 	ok, err := s.actUntil(ctx, auctionAnswerWait, func() bool {
 		got = s.auctionResultSince(since, command, ids...)
 		return got != nil
@@ -223,8 +232,8 @@ func (s *session) auctionCommand(ctx context.Context, res *ServeAuctionResult, f
 		s.auction.cmdUnknown = true
 		return nil, sentTimeout(unknownOutcomeError{fmt.Sprintf("%s: no auction result within %s (a throttled request is dropped without an answer)", auction.CommandName(command), auctionAnswerWait)}, res.Since)
 	}
-	res.Event = s.firstEventSince(res.Since, events.KindAuctionResult)
-	return got, nil
+	res.Event = s.auctionResultEvent(got)
+	return &got.CommandResult, nil
 }
 
 // auctionPurse waits (bounded) for the purse to show a payment and returns it with the figure before. The wait ending

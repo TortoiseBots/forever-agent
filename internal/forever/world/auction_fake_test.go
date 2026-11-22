@@ -45,6 +45,9 @@ type ahWorld struct {
 	deposit       uint64
 	quoteDuration int64
 	nextAuctionID int32
+	// stray delivers an unrelated result (another auction's cancel) before every command answer: a late result of
+	// another call.
+	stray bool
 	// noQuote answers a quote ask with no price (the house cannot fill it).
 	noQuote bool
 }
@@ -66,6 +69,12 @@ func newAHWorld(t *testing.T, flags uint32) *ahWorld {
 
 func (a *ahWorld) deliver(core uint32, payload []byte) {
 	a.t.Helper()
+	if core == wire.SMSGAuctionCommandResult && a.stray {
+		stray := ahResult(31337, auction.CommandCancel, auction.ResultDatabaseError)
+		if err := a.s.handleAuction(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: stray}); err != nil {
+			a.t.Fatalf("stray: %v", err)
+		}
+	}
 	if err := a.s.handleAuction(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload}); err != nil {
 		a.t.Fatalf("%s: %v", wire.ServerName(core), err)
 	}
@@ -825,5 +834,21 @@ func TestServeAuctionMethodsAreRegistered(t *testing.T) {
 				t.Fatalf("%s is still not ported", name)
 			}
 		}
+	}
+}
+
+// TestServeAuctionAnswerEventIsTheMatchedResults: an unrelated late result arrives before the answer; the call's event
+// still names its own command and auction, not the first result event after the cursor.
+func TestServeAuctionAnswerEventIsTheMatchedResults(t *testing.T) {
+	a := newAHWorld(t, npcFlagAuctioneer)
+	a.stray = true
+	p := ahParams()
+	p.AuctionID, p.Amount = testI32(7001), 700
+	res, err := a.s.serveAuctionBid(context.Background(), p)
+	if err != nil || !res.OK {
+		t.Fatalf("bid: %+v %v", res, err)
+	}
+	if res.Event == nil || res.Event.Data["command"] != "bid" || res.Event.Data["auction_id"] != int32(7001) || res.Event.Data["ok"] != true {
+		t.Fatalf("the answer's event is not the matched result's: %+v", res.Event)
 	}
 }

@@ -25,7 +25,7 @@ type auctionWatch struct {
 	hello    *auction.Hello
 	helloSeq int
 
-	results   []auction.CommandResult
+	results   []auctionResult
 	resultSeq int
 
 	buckets    *auction.BucketList
@@ -48,6 +48,13 @@ type auctionWatch struct {
 	// be told from the next command's, so every later one needs force (the flag is never cleared in the session: a forced
 	// command's own answer could be the earlier one's).
 	cmdUnknown bool
+}
+
+// auctionResult is one command result with the sequence of the auction_result event the handler wrote for it, so a
+// method answers the event of the result it matched and never an unrelated late one.
+type auctionResult struct {
+	auction.CommandResult
+	eventSeq uint64
 }
 
 // isAuctionPacket reports the opcodes handleAuction owns.
@@ -84,12 +91,12 @@ func (s *session) handleAuction(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
-		w.results = append(w.results, r)
+		e := s.eventAuctionResult(r)
+		w.results = append(w.results, auctionResult{CommandResult: r, eventSeq: e.Seq})
 		if len(w.results) > auctionResultsMax {
-			w.results = append([]auction.CommandResult(nil), w.results[len(w.results)-auctionResultsMax:]...)
+			w.results = append([]auctionResult(nil), w.results[len(w.results)-auctionResultsMax:]...)
 		}
 		w.resultSeq++
-		s.eventAuctionResult(r)
 	case wire.SMSGAuctionListBucketsResult:
 		l, err := auction.ParseBucketList(p.Payload)
 		if err != nil {
@@ -177,8 +184,8 @@ func (s *session) handleAuction(p worldconn.Packet) error {
 	return nil
 }
 
-// eventAuctionResult appends one command result as an auction_result event.
-func (s *session) eventAuctionResult(r auction.CommandResult) {
+// eventAuctionResult appends one command result as an auction_result event and returns the stored row.
+func (s *session) eventAuctionResult(r auction.CommandResult) Event {
 	data := map[string]any{"command": auction.CommandName(r.Command), "ok": r.OK(), "error": r.ErrorCode, "auction_id": r.AuctionID, "delay": r.DesiredDelay}
 	text := auction.CommandName(r.Command) + " ok"
 	if !r.OK() {
@@ -188,5 +195,5 @@ func (s *session) eventAuctionResult(r auction.CommandResult) {
 			data["min_increment"] = r.MinIncrement
 		}
 	}
-	s.event(Event{Kind: events.KindAuctionResult, Text: text, Data: data})
+	return s.event(Event{Kind: events.KindAuctionResult, Text: text, Data: data})
 }
