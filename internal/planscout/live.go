@@ -766,7 +766,7 @@ func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 	switch {
 	case answered == 0:
 		c.Verdict = VerdictSkip
-		c.Reason = "no q los answer for the target pack" + abortedSuffix(live)
+		c.Reason = "no sight answer for the target pack" + abortedSuffix(live)
 	case in > 0:
 		c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand", in, len(targets))
 	default:

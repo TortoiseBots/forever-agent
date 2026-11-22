@@ -363,14 +363,16 @@ type fakeServer struct {
 	routeWalkFreezeAfter int
 	routeWalkSeen        int
 	routeWalkSelects     int
-	// The `.gps` freshness cases: routeWalkGPSReads counts the requests, routeWalkStaleMoved makes one read a delayed
-	// answer (the first read whose stored position is more than that many yards from the previous answer is answered
-	// with that previous answer, and its own answer follows on the next read), routeWalkFlip shifts the answer 4 yd
+	// The `.gps` freshness cases: routeWalkGPSReads counts the requests, routeWalkStaleMoved (any value above 0) makes one read a delayed
+	// answer (the first read after the character moved is answered with the previous answer, and its own answer follows on the next read), routeWalkFlip shifts the answer 4 yd
 	// east on odd requests and 6 yd on even ones (two reads that disagree), routeWalkSilentAt answers that request
 	// with the map line only, and routeWalkLastGPS/routeWalkLastGPSSet remember the last answer.
 	routeWalkGPSReads   int
 	routeWalkStaleMoved float64
 	routeWalkStaleUsed  bool
+	// routeWalkSeenAtGPS is routeWalkSeen at the last `.gps` request: the stale answer goes to the first read after the
+	// character moved at all, whatever distance the timing of its packets left it at.
+	routeWalkSeenAtGPS  int
 	routeWalkFlip       bool
 	routeWalkSilentAt   int
 	routeWalkLastGPS    [3]float32

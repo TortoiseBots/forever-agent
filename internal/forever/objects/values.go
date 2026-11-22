@@ -189,6 +189,9 @@ type Fields struct {
 	// PlayerUnwalked is the Classic mask bits of a PlayerData update that this client cannot walk (the update is then
 	// not read to its end); the session logs them by field group once per login so a live run can name the field.
 	PlayerUnwalked []int
+	// ActiveUnwalked is the Classic mask bits of an ActivePlayerData update that this client does not walk, with the
+	// region each lies in (ActivePlayerRegion); the session logs them once per login when the update also named slots.
+	ActiveUnwalked []ActiveBit
 	// QuestLogDeltas is set when a PlayerData update carried quest-log slot changes this client decoded;
 	// QuestLogUndecoded when it named quest-log slots next to a field it does not decode (so the changes are lost).
 	QuestLogDeltas, QuestLogUndecoded bool
@@ -1721,6 +1724,7 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 				hasBuyback = true
 			case classic < base || classic >= base+activePlayerInvSlots:
 				other = true // a field this round does not walk
+				i.f.ActiveUnwalked = append(i.f.ActiveUnwalked, ActiveBit{Bit: int(classic), Group: activePlayerRegion(classic, group, buybackGroup)})
 			default:
 				slots = append(slots, int(classic-base))
 			}
@@ -1794,6 +1798,32 @@ func (i *Info) readActivePlayerUpdate(b *wire.Buffer, realmBuild uint32) error {
 	i.f.InvSlotDeltas = true
 	return nil
 }
+
+// ActiveBit is one Classic mask bit of an ActivePlayerData update and the region of the structure it lies in.
+type ActiveBit struct {
+	Bit   int
+	Group string
+}
+
+// activePlayerRegion names where a mask bit lies relative to the InvSlots and buyback arrays: no value, no field name,
+// only the region, so a log line can say which part of the structure an update this client cannot walk was about.
+func activePlayerRegion(classic, invGroup, buybackGroup uint32) string {
+	switch {
+	case classic < invGroup:
+		return "before-inv-slots"
+	case classic <= invGroup+activePlayerInvSlots:
+		return "inv-slots-range"
+	case classic < buybackGroup:
+		return "between-inv-and-buyback"
+	case classic <= buybackGroup+2*buybackEntries:
+		return "buyback"
+	}
+	return "after-buyback"
+}
+
+// ActiveUnwalkedBits returns the Classic mask bits of the ActivePlayerData fields this block named and the decoder
+// does not walk, each with its region (set when the update was left undecoded).
+func (i *Info) ActiveUnwalkedBits() []ActiveBit { return i.f.ActiveUnwalked }
 
 // PlayerUnwalkedBits returns the Classic mask bits of the PlayerData fields this block named and the decoder cannot walk.
 func (i *Info) PlayerUnwalkedBits() []int { return i.f.PlayerUnwalked }

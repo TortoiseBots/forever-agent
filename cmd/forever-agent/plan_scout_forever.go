@@ -346,40 +346,54 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 			}
 			return abort(err.Error())
 		}
-		units, err := client.Units(ctx, serveclient.UnitsParams{Within: scoutForeverUnitsYd})
-		if err != nil {
-			if r := ceiling(); r != "" {
-				return abort(r)
-			}
-			return abort(fmt.Sprintf("units at %.1f %.1f %.1f: %v", group[0].Point.X, group[0].Point.Y, group[0].Point.Z, err))
-		}
-		wu := make([]world.Unit, 0, len(units))
-		for _, u := range units {
-			wu = append(wu, foreverWorldUnit(u))
-		}
+		// A stop's spots chain (each within LiveSpotYd of an earlier one), so a later spot can stand far past the units
+		// read at the stop: every spot is read where it stands, and the sight rays start from there.
+		at := group[0].Point
 		for _, spot := range group {
-			// Each step owns its copy: a later pass over one spot's units must not rewrite another step's read.
-			data.Units[spot.Step] = append([]world.Unit(nil), wu...)
-		}
-		readStops++
-		if losOK {
-			for _, spot := range group {
-				ok, rayErr := foreverWalkRayAt(ctx, client, spot, wu, data.LOS)
+			if foreverDist2D(spot.Point.X, spot.Point.Y, at.X, at.Y) > scoutLandYd {
+				if err := foreverStandAt(ctx, client, spot.Point, planMap); err != nil {
+					if r := ceiling(); r != "" {
+						return abort(r)
+					}
+					return abort(err.Error())
+				}
+				at = spot.Point
+			}
+			// The session may stand up to scoutLandYd from the spot (a landing within tolerance, or a spot read without
+			// moving), so the read is widened by that much and then cut back to the spot's own 40 yd.
+			units, err := client.Units(ctx, serveclient.UnitsParams{Within: scoutForeverUnitsYd + scoutLandYd})
+			if err != nil {
 				if r := ceiling(); r != "" {
 					return abort(r)
 				}
-				if rayErr != nil && !rayNoted {
-					rayNoted = true
-					data.Notes = append(data.Notes, fmt.Sprintf("live sight: a walk_ray read from %.1f %.1f %.1f failed (%v); its steps stay unanswered and the pass goes on",
-						spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z, rayErr))
+				return abort(fmt.Sprintf("units at %.1f %.1f %.1f: %v", spot.Point.X, spot.Point.Y, spot.Point.Z, err))
+			}
+			wu := make([]world.Unit, 0, len(units))
+			for _, u := range units {
+				if foreverDist2D(u.X, u.Y, spot.Point.X, spot.Point.Y) > scoutForeverUnitsYd {
+					continue
 				}
-				if !ok {
-					losOK = false
-					data.Notes = append(data.Notes, "live sight: this serve has no walk_ray method; no sight answer was read")
-					break
-				}
+				wu = append(wu, foreverWorldUnit(u))
+			}
+			data.Units[spot.Step] = wu
+			if !losOK {
+				continue
+			}
+			ok, rayErr := foreverWalkRayAt(ctx, client, spot, wu, data.LOS)
+			if r := ceiling(); r != "" {
+				return abort(r)
+			}
+			if rayErr != nil && !rayNoted {
+				rayNoted = true
+				data.Notes = append(data.Notes, fmt.Sprintf("live sight: a walk_ray read from %.1f %.1f %.1f failed (%v); its steps stay unanswered and the pass goes on",
+					spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z, rayErr))
+			}
+			if !ok {
+				losOK = false
+				data.Notes = append(data.Notes, "live sight: this serve has no walk_ray method; no sight answer was read")
 			}
 		}
+		readStops++
 	}
 	noteStopCount()
 	budget := o.walkBudgetD
@@ -451,7 +465,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 }
 
 // foreverWalkRayAt reads the navmesh walkability ray from one spot's sight point to every live unit read at its stop (and
-// to its target pack, which is among them when its units stood within reach) and stores each answer under the spot's
+// to its target pack, which is among them when its units stood within reach of the spot's own point) and stores each answer under the spot's
 // step as the live_los input. It is not true line of sight: the serve has no collision geometry (serve's walk_ray method).
 // A unit the mesh cannot place is left unanswered, never stored as out of sight. A read that fails leaves that unit
 // unanswered and the spot goes on; the first such error is returned for the note. ok is false when the serve has no
@@ -465,7 +479,7 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 			continue
 		}
 		low := world.Low24(u.GUID)
-		if seen[low] || foreverDist2D(u.X, u.Y, spot.LOSPoint.X, spot.LOSPoint.Y) > scoutForeverUnitsYd {
+		if seen[low] || foreverDist2D(u.X, u.Y, spot.Point.X, spot.Point.Y) > scoutForeverUnitsYd {
 			continue
 		}
 		seen[low] = true
