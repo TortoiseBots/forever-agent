@@ -203,6 +203,83 @@ func TestActivePlayerUpdateCoinageWithSlots(t *testing.T) {
 	}
 }
 
+// activePlayerPurchaseBody builds the ActivePlayerData fragment a purchase's own self block carried in the live proofs
+// of 2026-11-22 (ticket #87): Transmog (classic 18, one changed u32 entry), Coinage (58), LocalFlags (101),
+// TransportServerTime (146) and one InvSlots entry, with the group bits 0, 32, 70, 134 and 170 the server promotes for
+// them (UpdateFields.cpp:5870-5879). The writer's order: three flushed bit runs, the dynamic field's value, the
+// scalars, the group 134 presence bits and their flush, then the slot (5891-6031, 6032-6290, 6291-6697, 6751, 6922,
+// 7082, 7153-7163, 7195-7203).
+func activePlayerPurchaseBody(coinage uint64, slot int, guid wire.GUID) []byte {
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	set(0)   // the group 0 bit, set by Transmog
+	set(18)  // Transmog
+	set(32)  // the money group, set by Coinage
+	set(58)  // Coinage
+	set(70)  // the group 70 bit, set by LocalFlags
+	set(101) // LocalFlags
+	set(134) // the group 134 bit, set by TransportServerTime
+	set(146) // TransportServerTime
+	set(170) // the InvSlots group
+	set(171 + slot)
+	b := wire.NewWriter()
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU8(0x03)
+	b.WriteU32(uint32(1) << uint(TypeActivePlayer))
+	writeClassicMaskHeader(b, blocks)
+	b.FlushBits()      // the first bit run wrote no bits
+	b.WriteBits(1, 32) // Transmog's size
+	b.WriteBits(1, 1)  // its entry 0 changed
+	b.FlushBits()      // the second bit run's flush, before the dynamic fields' values
+	b.WriteU32(4242)   // Transmog[0]
+	b.WriteU64(coinage)
+	b.WriteU32(3)    // LocalFlags
+	b.WriteU32(7000) // TransportServerTime
+	// The group 134 presence bits (QuestSession, PetStable, WalkInData, ChallengeModeData) and their flush.
+	b.WriteBits(0, 4)
+	b.FlushBits()
+	wire.WritePackedGUID(b, guid)
+	return b.Bytes()
+}
+
+// TestActivePlayerUpdateNextToAPurchasesOwnFields is the live vendor failure (forever-agent#87): a buy's own update
+// names the bought slot and the money next to Transmog, LocalFlags and TransportServerTime, the decoder left the whole
+// block undecoded, the inventory was marked stale and every later sell-junk refused with "the inventory is stale"
+// until a relog or a map change. The three fields are stepped over, so the slot and the money land.
+func TestActivePlayerUpdateNextToAPurchasesOwnFields(t *testing.T) {
+	u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, activePlayerPurchaseBody(1188, 39, apSword)), 70707)
+	if err != nil {
+		t.Fatalf("ParseUpdateObjectForBuild: %v", err)
+	}
+	if len(u.Blocks) != 1 {
+		t.Fatalf("%d blocks", len(u.Blocks))
+	}
+	blk := u.Blocks[0]
+	if !blk.ValuesComplete {
+		t.Fatalf("the block was not consumed to its end (%d undecoded)", blk.Unparsed)
+	}
+	if blk.Info.InvSlotsUndecoded() {
+		t.Fatal("the purchase's own update was reported as losing its slots")
+	}
+	slots, ok := blk.Info.ChangedInvSlots()
+	if !ok || len(slots) != 1 || slots[39] != apSword {
+		t.Fatalf("the slots are %+v (%v)", slots, ok)
+	}
+	w := NewWorld(0)
+	w.Apply(u, time.Unix(0, 0))
+	pl, ok := w.Object(apSelf)
+	if !ok || pl.Info.Player == nil {
+		t.Fatal("the model holds no player data")
+	}
+	if pl.Info.Player.Coinage != 1188 {
+		t.Fatalf("coinage %d, want 1188", pl.Info.Player.Coinage)
+	}
+	if pl.Info.Player.InvSlots[39] != apSword {
+		t.Fatalf("slot 39 is %v", pl.Info.Player.InvSlots[39])
+	}
+}
+
 // TestActivePlayerUpdateOtherFieldIsReportedNotSilent proves an update that touches a field the decoder does not walk
 // (classic bit 60 is XP) next to slots decodes nothing and says that slots were lost, and one with no slots is left
 // alone without the report.

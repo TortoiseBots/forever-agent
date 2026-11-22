@@ -146,6 +146,31 @@ func TestCoinagePlusSlotsIsDecoded(t *testing.T) {
 	}
 }
 
+// TestAPurchaseNextToItsOwnFieldsIsNotStale is the live vendor failure (forever-agent#87): a buy's own update names
+// the bought slot and the money next to Transmog, LocalFlags and TransportServerTime, and the block used to be left
+// undecoded — the inventory was marked stale and every later sell-junk refused "the inventory is stale" until a relog.
+// The three fields are stepped over, so the slot and the money land and nothing is stale.
+func TestAPurchaseNextToItsOwnFieldsIsNotStale(t *testing.T) {
+	f := newItemWorld(t)
+	f.server(wire.SMSGUpdateObject, purchaseUpdate(map[int]wire.GUID{35: {}, 37: itemPotion}, 1188))
+	inv := f.s.inventoryNow()
+	if inv.Stale {
+		t.Fatalf("the purchase marked the inventory stale: %s", inv.StaleReason)
+	}
+	if pos, ok := inv.Pos(itemPotion); !ok || pos != uint16(255)<<8|37 {
+		t.Fatalf("the potion is at %#x (%v), want 255/37", pos, ok)
+	}
+	if inv.Coinage != 1188 {
+		t.Fatalf("coinage is %d, want 1188", inv.Coinage)
+	}
+	if n := f.s.report.Counts["inventory_stale"]; n != 0 {
+		t.Fatalf("inventory_stale counts %d, want a purchase's own update to be decoded", n)
+	}
+	if hasText(f.lines, "the inventory is stale") {
+		t.Fatalf("a stale line for a purchase's own update:\n%s", joinLines(f.lines))
+	}
+}
+
 // TestAnUndecodedFieldNextToSlotsMarksTheInventoryStale is finding 4: slots next to a field the decoder does not walk
 // are lost, and that is never silent: a count, a log line, a warning in `inv`, and no destroy or split by slot.
 func TestAnUndecodedFieldNextToSlotsMarksTheInventoryStale(t *testing.T) {

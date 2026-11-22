@@ -627,3 +627,66 @@ func activeUpdate(slots map[int]wire.GUID, coinage *uint64, extra ...int) []byte
 	out.WriteBytes(blk.Bytes())
 	return out.Bytes()
 }
+
+// purchaseUpdate is the self update a buy of one item carries on the 70425 layout: the bought slot and the money next
+// to Transmog (classic 18, a DynamicUpdateField with one changed u32 entry), LocalFlags (101) and TransportServerTime
+// (146), each with its group bit (0, 70, 134), and the four group 134 presence bits before the slots. This is the
+// mask the live purchase carried (its client log named before-inv-slots[0 18 70 101 134 146]); the order is the server's
+// (UpdateFields.cpp:5891-6031, 6032-6290, 6291-6697, 6751, 6922, 7082, 7153-7163, 7195-7203).
+func purchaseUpdate(slots map[int]wire.GUID, coinage uint64) []byte {
+	blocks := map[int]uint32{}
+	set := func(bit int) { blocks[bit/32] |= 1 << uint(bit%32) }
+	order := make([]int, 0, len(slots))
+	for slot := range slots {
+		order = append(order, slot)
+	}
+	sort.Ints(order)
+	for _, bit := range []int{0, 18, 32, 58, 70, 101, 134, 146, 170} {
+		set(bit)
+	}
+	for _, slot := range order {
+		set(171 + slot)
+	}
+	body := wire.NewWriter()
+	body.WriteU8(0)
+	body.WriteU8(0)
+	body.WriteU8(0x03)
+	body.WriteU32(uint32(1) << uint(objects.TypeActivePlayer))
+	var present uint32
+	for n := range blocks {
+		present |= 1 << uint(n)
+	}
+	body.WriteBits(uint64(present), 14)
+	for n := range 14 {
+		if word, ok := blocks[n]; ok {
+			body.WriteBits(uint64(word), 32)
+		}
+	}
+	body.FlushBits()      // the first bit run wrote nothing
+	body.WriteBits(1, 32) // Transmog's size
+	body.WriteBits(1, 1)  // its entry 0 changed
+	body.FlushBits()      // the second bit run's flush, before the dynamic fields' values
+	body.WriteU32(4242)   // Transmog[0]
+	body.WriteU64(coinage)
+	body.WriteU32(3)     // LocalFlags
+	body.WriteU32(7000)  // TransportServerTime
+	body.WriteBits(0, 4) // the group 134 presence bits
+	body.FlushBits()
+	for _, slot := range order {
+		wire.WritePackedGUID(body, slots[slot])
+	}
+	blk := wire.NewWriter()
+	blk.WriteU8(objects.UpdateValues)
+	wire.WritePackedGUID(blk, itemSelf)
+	blk.WriteU32(uint32(body.Len()))
+	blk.WriteBytes(body.Bytes())
+	out := wire.NewWriter()
+	out.WriteU16(0)
+	out.WriteU32(1)
+	out.WriteBit(true)
+	out.WriteBit(false)
+	out.FlushBits()
+	out.WriteU32(uint32(blk.Len()))
+	out.WriteBytes(blk.Bytes())
+	return out.Bytes()
+}
