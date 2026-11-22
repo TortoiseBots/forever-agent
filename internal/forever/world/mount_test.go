@@ -62,9 +62,9 @@ func TestMountResultFailure(t *testing.T) {
 	f.wait(t)
 }
 
-// TestMountEntryNeedsItemUse: an item mount needs the item-use packet this round does not port; the method says so
-// and sends nothing.
-func TestMountEntryNeedsItemUse(t *testing.T) {
+// TestMountEntryNeedsTheItemsSpell: an item mount names the item's on-use spell as well (it is not a queried record);
+// an entry alone is refused by name, and neither field is refused too, with nothing sent.
+func TestMountEntryNeedsTheItemsSpell(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	defer f.close()
@@ -72,16 +72,16 @@ func TestMountEntryNeedsItemUse(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	waitServeState(t, a, "online", steps)
 
-	a.mustFail(t, "mount", map[string]any{"entry": 5656}, -32003, "needs item use")
+	a.mustFail(t, "mount", map[string]any{"entry": 5656}, -32003, "needs spell=")
+	a.mustFail(t, "mount", map[string]any{}, -32003, "exactly one")
+	// With both, the item path runs: this character holds no such item, so it is refused there, and no cast goes out.
+	a.mustFail(t, "mount", map[string]any{"spell": 133, "entry": 5656}, -32003, "using item 5656")
 	f.mu.Lock()
 	sawCast := f.serveCast
 	f.mu.Unlock()
 	if sawCast {
 		t.Fatal("the entry form sent a cast")
 	}
-	// Both or neither is refused too, before anything is sent.
-	a.mustFail(t, "mount", map[string]any{}, -32003, "exactly one")
-	a.mustFail(t, "mount", map[string]any{"spell": 133, "entry": 5656}, -32003, "exactly one")
 	a.stop(t)
 	f.wait(t)
 }

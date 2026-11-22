@@ -69,6 +69,9 @@ type CreateSpec struct {
 	// list and returns true), but no real game client has been seen creating such a character, so it must be asked
 	// for by name, never defaulted to: create needs Choices or NoAppearance.
 	NoAppearance bool
+	// OnlyIfMissing makes the call create the character on login: when the account's list already holds the name, no
+	// create is sent and the report says Existed (serve's --create-* flags, #99).
+	OnlyIfMissing bool
 }
 
 // DeleteSpec is DeleteCharacter's input: the GUID of the character, or a name to resolve against the account's
@@ -95,8 +98,10 @@ type NameCheckSpec struct {
 // CreateReport is what CreateCharacter observed: the list before, the name's answer, and the list after (which the
 // caller uses to prove the character is there).
 type CreateReport struct {
-	Name     string
-	Before   []Character
+	Name   string
+	Before []Character
+	// Existed says OnlyIfMissing found the name on the list, so nothing was sent.
+	Existed  bool
 	Code     uint32
 	CodeName string
 	GUID     wire.GUID
@@ -147,6 +152,16 @@ func CreateCharacter(ctx context.Context, spec CreateSpec) (*CreateReport, error
 
 	if report.Before, err = s.list(ctx); err != nil {
 		return report, err
+	}
+	if spec.OnlyIfMissing {
+		for _, c := range report.Before {
+			if nameMatchesCharacter(c, spec.Name, spec.Surname) {
+				report.Existed = true
+				report.GUID = c.GUID
+				s.logf("char create: %s is already on the account: nothing sent", bounded(spec.Name))
+				return report, nil
+			}
+		}
 	}
 	// The answer bound plus the margin has to fit in the run: a create that timed out after its packet went out
 	// would leave the character's existence unknown for the rest of the Deadline.

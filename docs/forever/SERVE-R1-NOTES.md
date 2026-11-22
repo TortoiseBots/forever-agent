@@ -69,7 +69,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `leave_group` | DONE | Leaves a party the model holds a valid roster for. |
 | `gm_kill`, `gm_set_hp`, `gm_aura` | DONE | Select one unit by guid, wait up to 1 s for the server's selection echo in the character's target field, then send the one line: `.die` (a player is refused), `.modify hp <hp>`, `.aura <spell>`/`.unaura <spell>`. Fail-closed: refused with `-32006` unless serve runs with `--allow-gm-units`, the guid is on the allowlist `trial_units` registered, and a player target is this session's own character. |
 | `trial_units` | DONE | `{guids: [...]}` replaces the GM hands' allowlist for the current trial and answers `{guids}`; it outlives a reconnect. Refused with `-32006` without `--allow-gm-units`; a zero guid is `-32602`. |
-| `gm_evade`, `gm_respawn` | NOT-PORTED | The old helpers select a unit and send a unit-targeted GM line; these two lines are not ported. |
+| `gm_evade`, `gm_respawn` | DONE (#99) | Select one creature with the echo confirmed, then `.npc evade` / `.respawn` (a dead creature only), under the `gm_kill` boundary. See DAEMON-GAPS-99-NOTES.md. |
 | `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark` | NOT-PORTED | The party model has no senders or records for these. |
 | `join_channel`, `leave_channel` | NOT-PORTED | There is no channel join in the chat round. |
 
@@ -88,7 +88,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `path_to` | DONE | A navmesh route on the current map. Needs `--navmesh`; without it the method answers `-32003` naming the missing folder. |
 | `walk_path` | DONE | The same route, walked as one continuous movement. Same `--navmesh` rule. |
 | `area_trigger` | DONE | `CMSG_AREA_TRIGGER` for one trigger id. |
-| `teleport` | NOT-PORTED | The old client-side GM teleport and its landing wait are not in `internal/forever`. |
+| `teleport` | DONE (#99) | `.go xyz x y z [map]` through the command channel, confirmed by the server's own move; with `--navmesh`, the fall from a point above the ground. See DAEMON-GAPS-99-NOTES.md. |
 | `spells` | NOT-PORTED | The login burst's known-spell list is not a spellbook model. |
 
 ### Death

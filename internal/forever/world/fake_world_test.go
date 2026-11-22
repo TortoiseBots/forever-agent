@@ -304,6 +304,9 @@ type fakeServer struct {
 	// serveSelectionEcho answers CMSG_SET_SELECTION with the character's own target field set to that guid, the way
 	// the server echoes a selection.
 	serveSelectionEcho bool
+	// serveCreatureDead sends a zero-health update for the fixture creature right after its create block (#99: the
+	// corpse gm_respawn acts on).
+	serveCreatureDead bool
 	// serveSwingMelee answers a swing with one attacker-state update: an on-demand melee row for the event log's
 	// order test, where the row must arrive after the chat and the GM answer.
 	serveSwingMelee bool

@@ -172,7 +172,7 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -188,6 +188,10 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
 	allowGMUnits := fs.Bool("allow-gm-units", false, "test bench: allow gm_kill, gm_set_hp and gm_aura on the guids trial_units registered")
 	captureDir := fs.String("capture-dir", "", "write every packet the combat, chat and party handlers see into a new run directory under this path, from the first login on (one cap for the whole daemon; keep it outside the repository)")
+	createSpec := fs.String("create", "", "create the character on login when the account lacks it: RACE,CLASS[,SEX] (needs --create-choice or --create-no-appearance)")
+	var createChoices charChoiceList
+	fs.Var(&createChoices, "create-choice", "with --create: appearance choice OPTION:CHOICE (repeatable; sent as given)")
+	createNoAppearance := fs.Bool("create-no-appearance", false, "with --create: a test character with no appearance choices")
 	budgetAddr := fs.String("login-budget", "", "loopback address of the fleet's shared login budget (set by `fleet`; its token is in the environment)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -211,6 +215,11 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 	if err := common.check("forever serve"); err != nil {
 		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	create, err := parseServeCreate(*createSpec, createChoices, *createNoAppearance)
+	if err != nil {
+		fmt.Fprintf(stderr, "forever serve: %v\n", err)
 		return exitUsage
 	}
 	if *captureDir != "" {
@@ -311,6 +320,11 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	// gate and books it (bnet.Options.BeforeAttempt).
 	gate := newLoginGate(budget, stdout)
 	common.beforeAttempt = func(ctx context.Context) error { return gate.enter(ctx, 0) }
+	if create != nil {
+		if code := serveEnsureCharacter(ctx, &common, password, create, stdout, stderr); code != exitOK {
+			return code
+		}
+	}
 	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
 	if err != nil {
 		gate.failed(err)

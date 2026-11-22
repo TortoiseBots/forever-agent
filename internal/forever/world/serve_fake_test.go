@@ -71,6 +71,9 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	}
 	target := targetUpdate.Blocks[0].GUID
 	c.writeFrame(fakeSMSGUpdateObject, targetPayload)
+	if f.serveCreatureDead {
+		c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))
+	}
 	if f.serveLeaderName != "" {
 		// The fixture creature is entry 1: name it, so a follow can resolve it as the leader.
 		c.writeFrame(table.TranslateServerCore(wire.SMSGCreatureQueryResponse), fakeCreatureNamed([]uint32{1}, f.serveLeaderName))
@@ -900,9 +903,13 @@ func TestServeNotPortedAndUnknown(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 
 	a.mustFail(t, "trade", map[string]any{}, -32003, "not ported on this server")
-	a.mustFail(t, "teleport", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
 	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
+
+	// teleport left the list with #99: it answers its own argument refusal, never the port.
+	a.mustFail(t, "teleport", map[string]any{}, -32003, "needs x, y and z")
+	a.mustFail(t, "gm_evade", map[string]any{}, -32003, "guid or a name")
+	a.mustFail(t, "gm_respawn", map[string]any{}, -32003, "guid or a name")
 
 	// The combat log and the GM unit hands are ported: their refusals name the argument, never the port.
 	var page trialsEventPage
