@@ -1,6 +1,7 @@
 // route-regen rewrites one leg's route from the navmesh: the audit's §4.2 method (research/zg-waypoints/WAYPOINT-AUDIT.md).
 //
 //	dungeongen route-regen --mmaps DIR --leg 7 [--dry-run] [--spawns DIR] [--dir dungeons] [--out FILE] zul_gurub
+//	dungeongen route-regen --forever --mmaps FOREVER_MMAPS --spawns FOREVER_EXPORT --leg 0 wailing_caverns   # ForeverCore v16 tiles and world export
 //
 // It keeps the leg's anchors (its `to`, its gm_cross vias, every pull group's stand or last approach point, the boss and
 // its approach), moves an anchor that fails the placement rules to the cheapest passing point within 25 yd, orders the
@@ -12,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -62,15 +64,18 @@ const (
 	regenExitUsage = 2
 )
 
-const routeRegenUsage = "usage: dungeongen route-regen --mmaps DIR --leg N [--leg N...] [--dry-run] [--dir dungeons] [--spawns DIR] [--out FILE] [--force] <plan>"
+const routeRegenUsage = "usage: dungeongen route-regen --mmaps DIR --leg N [--leg N...] [--dry-run] [--dir dungeons] [--spawns DIR] [--out FILE] [--force] [--forever [--parent MAP=PARENT...]] <plan>"
 
 // routeRegenCmd is `dungeongen route-regen`: one leg's route rewritten from the navmesh (§4.2 of the ZG waypoint audit).
 func routeRegenCmd(args []string) int {
 	fs := flag.NewFlagSet("dungeongen route-regen", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dir := fs.String("dir", "dungeons", "the folder with the plan files")
-	mmaps := fs.String("mmaps", "", "folder with the server's mmaps (<map>.mmap and <map>*.mmtile); required")
-	spawns := fs.String("spawns", "", "the map's world export for the aggro and patrol checks (default: tools/dungeongen/testdata/mapN)")
+	mmaps := fs.String("mmaps", "", "folder with the server's mmaps (<map>.mmap and <map>*.mmtile; with --forever MMMM.mmap and MMMM_XX_YY.mmtile); required")
+	spawns := fs.String("spawns", "", "the map's world export folder for the aggro and patrol checks (default: tools/dungeongen/testdata/mapN; required with --forever)")
+	forever := fs.Bool("forever", false, "read --mmaps as ForeverCore's v16 tiles and --spawns as a ForeverCore world export (tools/dungeongen/export-forever.sh)")
+	var parents parentFlag
+	fs.Var(&parents, "parent", "with --forever: the server's parent-map rule, MAP=PARENT (repeatable): an instance map with no tile of its own reads its parent's")
 	out := fs.String("out", "", "the plan file to write (default: the plan file named)")
 	force := fs.Bool("force", false, "with --out: replace an existing file")
 	dryRun := fs.Bool("dry-run", false, "print the diff and write nothing")
@@ -121,18 +126,17 @@ func routeRegenCmd(args []string) int {
 		}
 		before[n] = c
 	}
-	spawnDir := *spawns
-	if spawnDir == "" {
-		spawnDir = filepath.Join(*dir, "..", "tools", "dungeongen", "testdata", fmt.Sprintf("map%d", p.Map))
+	if len(parents) > 0 && !*forever {
+		return fail("--parent applies to --forever")
 	}
-	world, notes, err := worldspawn.Load(spawnDir, p.Map)
+	world, notes, err := loadRouteWorld(*forever, *spawns, *dir, p.Map)
 	if err != nil {
-		return fail("the world export in %s: %v (pass --spawns DIR)", spawnDir, err)
+		return fail("%v", err)
 	}
 	if len(notes) > 0 {
 		fmt.Fprintf(os.Stdout, "%s: world export: %s\n", name, strings.Join(notes, "; "))
 	}
-	planner := navmesh.NewPlanner(*mmaps)
+	planner := routePlanner(*forever, *mmaps, parents.m())
 	defer planner.Close()
 	if err := probeNavmesh(planner, p.Map); err != nil {
 		return fail("%v", err)
@@ -167,6 +171,46 @@ func routeRegenCmd(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "%s: wrote %s\n%s\n", name, target, strings.Join(reports, "\n"))
 	return regenExitOK
+}
+
+// loadRouteWorld reads the map's world export for the route tools. Turtle mode reads the export export.sh writes (default
+// tools/dungeongen/testdata/mapN next to the plans folder). Forever mode reads the ForeverCore export export-forever.sh
+// writes with worldspawn.LoadForeverDB, which fills the levels the core has no row for (60) and takes the groups from the
+// core's formation rows; it has no default folder (no export is committed) and refuses a file: the spawn list plan-check
+// takes carries no levels, groups or waypoints, and a route checked against it would pass packs it cannot see.
+func loadRouteWorld(forever bool, spawnDir, plansDir string, mapID uint32) (*worldspawn.World, []string, error) {
+	if forever {
+		if spawnDir == "" {
+			return nil, nil, errors.New("--forever needs --spawns DIR: the ForeverCore world export export-forever.sh wrote (no export is committed)")
+		}
+		if st, err := os.Stat(spawnDir); err != nil {
+			return nil, nil, fmt.Errorf("the world export in %s: %w", spawnDir, err)
+		} else if !st.IsDir() {
+			return nil, nil, fmt.Errorf("--spawns %s is a file: the route tools need the export folder (creatures.tsv, groups.tsv, ...), not a spawn list", spawnDir)
+		}
+		w, notes, err := worldspawn.LoadForeverDB(spawnDir, mapID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the world export in %s: %w", spawnDir, err)
+		}
+		return w, notes, nil
+	}
+	if spawnDir == "" {
+		spawnDir = filepath.Join(plansDir, "..", "tools", "dungeongen", "testdata", fmt.Sprintf("map%d", mapID))
+	}
+	w, notes, err := worldspawn.Load(spawnDir, mapID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the world export in %s: %v (pass --spawns DIR)", spawnDir, err)
+	}
+	return w, notes, nil
+}
+
+// routePlanner opens the navmesh of the generation the run names; the format is never guessed from the folder (a folder of
+// the other generation fails on its map header).
+func routePlanner(forever bool, mmaps string, parents map[uint32]uint32) *navmesh.Planner {
+	if forever {
+		return navmesh.NewForeverPlanner(mmaps, parents)
+	}
+	return navmesh.NewPlanner(mmaps)
 }
 
 // legFlag collects --leg (it may be given once per leg).
@@ -336,7 +380,9 @@ func (r *regen) regenLegOnce(legIdx int) (string, error) {
 	hasBossStand := false
 	if leg.Boss != nil {
 		bossStand = regenLastApproachBoss(leg.Boss)
-		hasBossStand = true
+		// A boss with no approach has no stand yet: the zero point is "none", and a stand is estimated for it below (without
+		// this the boss was placed at 0 0 0, which is off every mesh).
+		hasBossStand = bossStand != (dungeon.Point{})
 	}
 
 	// 1b. The leg's entry is an anchor too: a via point off the mesh (a walk-log frame) moves to the floor near it.
@@ -849,7 +895,7 @@ func (r *regen) plane(p dungeon.Point) (navmesh.Floor, bool, error) {
 		return navmesh.Floor{}, false, nil
 	}
 	best, ok := regenNearestFloor(fl, p.Z)
-	if !ok || best.Flags&navmesh.NavGround == 0 || best.Flags&(navmesh.NavWater|navmesh.NavSteep|navmesh.NavMagma|navmesh.NavSlime) != 0 {
+	if !ok || !terrainOf(r.nav).plain(best.Flags) {
 		return navmesh.Floor{}, false, nil
 	}
 	if math.Abs(float64(best.Z-p.Z)) > regenGroundZtolYd {
@@ -1122,8 +1168,9 @@ func (r *regen) snap(q navmesh.Vec3) (dungeon.Point, bool, error) {
 	if err != nil {
 		return dungeon.Point{}, false, err
 	}
+	tr := terrainOf(r.nav)
 	for _, f := range fl {
-		if f.Flags&navmesh.NavGround != 0 && f.Flags&(navmesh.NavWater|navmesh.NavSteep|navmesh.NavMagma|navmesh.NavSlime) == 0 {
+		if tr.plain(f.Flags) {
 			return dungeon.Point{X: q[0], Y: q[1], Z: f.Z}, true, nil
 		}
 	}
@@ -2299,7 +2346,7 @@ func (r *regen) walkLen(legIdx int) (total float64, water, points int) {
 	points = len(seq)
 	for i, p := range seq {
 		if f, err := r.nav.Floors(r.mapID, p.X, p.Y, p.Z-regenFloorWindowYd, p.Z+regenFloorWindowYd); err == nil {
-			if best, ok := regenNearestFloor(f, p.Z); ok && best.Flags&navmesh.NavWater != 0 {
+			if best, ok := regenNearestFloor(f, p.Z); ok && terrainOf(r.nav).water(best.Flags) {
 				water++
 			}
 		}
@@ -2448,6 +2495,7 @@ func regenWetLine(r *regen, a, b dungeon.Point) bool {
 	if n < 1 {
 		return false
 	}
+	tr := terrainOf(r.nav)
 	for k := 0; k <= n; k++ {
 		f := float32(k) / float32(n)
 		p := dungeon.Point{X: a.X + (b.X-a.X)*f, Y: a.Y + (b.Y-a.Y)*f, Z: a.Z + (b.Z-a.Z)*f}
@@ -2458,10 +2506,10 @@ func regenWetLine(r *regen, a, b dungeon.Point) bool {
 		wet := false
 		ground := false
 		for _, floor := range fl {
-			if floor.Flags&navmesh.NavWater != 0 && math.Abs(float64(floor.Z-p.Z)) <= 1.5 {
+			if tr.water(floor.Flags) && math.Abs(float64(floor.Z-p.Z)) <= 1.5 {
 				wet = true
 			}
-			if floor.Flags&navmesh.NavGround != 0 && floor.Flags&(navmesh.NavWater|navmesh.NavSteep|navmesh.NavMagma|navmesh.NavSlime) == 0 && math.Abs(float64(floor.Z-p.Z)) <= regenGroundZtolYd {
+			if tr.plain(floor.Flags) && math.Abs(float64(floor.Z-p.Z)) <= regenGroundZtolYd {
 				ground = true
 			}
 		}

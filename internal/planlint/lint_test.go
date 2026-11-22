@@ -155,3 +155,38 @@ func TestLintPasses(t *testing.T) {
 		t.Fatalf("findings %v", fs)
 	}
 }
+
+// foreverNav is a fakeNav on a Forever mesh: water is 0x04 and 0x08 is magma or slime (navmesh.Format.Terrain).
+type foreverNav struct{ fakeNav }
+
+func (foreverNav) WaterFlag() uint16 { return navmesh.Forever.Terrain().Water }
+
+func bothEnds(fs []Finding) bool {
+	for _, f := range fs {
+		if strings.Contains(f.Detail, "both ends on NavWater") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLintBothEndsWaterReadsTheMeshsWaterBit: a walk between two Forever water cells (0x04) is the core's straight swim line,
+// and one between two lava cells (0x08, the 1.12 water bit) is not.
+func TestLintBothEndsWaterReadsTheMeshsWaterBit(t *testing.T) {
+	floorsOf := func(flags uint16) fakeNav {
+		return fakeNav{floors: func(x, y, lo, hi float32) ([]navmesh.Floor, error) {
+			return []navmesh.Floor{{Z: 0, Flags: flags}}, nil
+		}}
+	}
+	rows := func() planexport.Rows { return rowsOf(move(10, 0, 0), move(40, 0, 0)) }
+	if fs := lintOne(t, rows(), foreverNav{floorsOf(0x04)}, nil); !bothEnds(fs) {
+		t.Errorf("two Forever water floors: no both-ends finding in %v", fs)
+	}
+	if fs := lintOne(t, rows(), foreverNav{floorsOf(0x08)}, nil); bothEnds(fs) {
+		t.Errorf("two Forever lava floors read as water: %v", fs)
+	}
+	// the 1.12 bits are unchanged for a reader with no table
+	if fs := lintOne(t, rows(), floorsOf(navmesh.NavWater), nil); !bothEnds(fs) {
+		t.Errorf("two 1.12 water floors: no both-ends finding in %v", fs)
+	}
+}

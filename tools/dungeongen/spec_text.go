@@ -30,6 +30,13 @@ walkable floor on the same level (within 5 yd sideways and 3 yd up or down, the 
 ` + "`go run ./tools/dungeongen -spec tools/dungeongen/plans.json -snap-update ~/tb-ci`" + ` (needs the mmaps folders). A point with no such floor keeps its spawn position and carries ` + "`needs_walk`" + `
 (on the leg for its ` + "`to`" + `, on the pull group, on the boss); the mapping walk has to find the real waypoint, and the navmesh sweep (TestPlansOnNavmeshWhereTheMachineHasIt) skips exactly those. Pull
 positions are the creatures' own, so one up to 4 yd off the floor or 2.5 yd to the side is left as it is.
+
+**Route tools on ForeverCore data.** ` + "`route-regen`" + `, the snap sweep and ` + "`route-aggro`" + ` also run on ForeverCore's v16 tiles and its world export (neither is committed):
+` + "`dungeongen route-regen --forever --mmaps FOREVER_MMAPS --spawns EXPORT --leg N wailing_caverns`" + ` (` + "`--parent MAP=PARENT`" + ` for an instance map with no tiles of its own),
+` + "`dungeongen -spec tools/dungeongen/plans.json -forever -snap-update FOREVER_MMAPS`" + ` (a Forever mesh has its own floors, so it writes ` + "`snaps-forever.json`" + ` and leaves ` + "`snaps.json`" + ` alone),
+and ` + "`dungeongen route-aggro --forever --spawns EXPORT wailing_caverns`" + ` (exit 1 when a walked segment enters a later pack's aggro). EXPORT is the folder ` + "`tools/dungeongen/export-forever.sh`" + ` writes;
+a spawn the core has no level for counts as level 60. The polygon flags are read through the planner's format (Forever water is 0x04, magma 0x08, and a road is ground), never the 1.12 constants.
+The sight check of ` + "`plan-scout`" + ` stays the navmesh ray on Forever: the server has no query for true line of sight (its ` + "`walk_ray`" + ` method is the mesh walkability, see ` + "`plan_scout_forever.go`" + `).
 `
 
 const tableTail = `
