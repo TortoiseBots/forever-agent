@@ -424,3 +424,44 @@ func TestCooldownZeroDurationIsActive(t *testing.T) {
 		t.Fatalf("a 2 s cooldown: %+v", cs.Cooldowns[0])
 	}
 }
+
+func TestStartCooldownCategoryAndExpire(t *testing.T) {
+	w := unitWorld(t)
+	now := time.Unix(1000, 0)
+	w.StartCooldown(testSelf, 2136, now.Add(8*time.Second), 19)
+	w.StartCooldown(testSelf, 1784, time.Time{}, 0) // on-hold: zero end never expires
+	cs, ok := w.Combat(testSelf)
+	if !ok {
+		t.Fatal("missing combat state")
+	}
+	if end, ok := cs.CategoryCooldowns[19]; !ok || !end.Equal(now.Add(8*time.Second)) {
+		t.Fatalf("category 19 end = %v (%v), want +8s", end, ok)
+	}
+	if got := w.ExpireCooldowns(testSelf, now.Add(7*time.Second)); len(got) != 0 {
+		t.Fatalf("expired too early: %v", got)
+	}
+	got := w.ExpireCooldowns(testSelf, now.Add(8*time.Second))
+	if len(got) != 1 || got[0] != 2136 {
+		t.Fatalf("expired = %v, want [2136]", got)
+	}
+	cs, _ = w.Combat(testSelf)
+	if len(cs.CategoryCooldowns) != 0 {
+		t.Fatalf("category cooldown did not expire: %+v", cs.CategoryCooldowns)
+	}
+	if len(cs.Cooldowns) != 1 || cs.Cooldowns[0].SpellID != 1784 {
+		t.Fatalf("on-hold cooldown lost or 2136 kept: %+v", cs.Cooldowns)
+	}
+}
+
+func TestStartCooldownCategoryKeepsLaterEnd(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, order := range [][2]time.Duration{{8 * time.Second, 3 * time.Second}, {3 * time.Second, 8 * time.Second}} {
+		w := unitWorld(t)
+		w.StartCooldown(testSelf, 2136, now.Add(order[0]), 19)
+		w.StartCooldown(testSelf, 2948, now.Add(order[1]), 19)
+		cs, _ := w.Combat(testSelf)
+		if end := cs.CategoryCooldowns[19]; !end.Equal(now.Add(8 * time.Second)) {
+			t.Fatalf("order %v: category end %v, want +8s", order, end.Sub(now))
+		}
+	}
+}

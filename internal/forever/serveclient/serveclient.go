@@ -152,30 +152,40 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 
 // Status is the status method's result, field for field what serve encodes.
 type Status struct {
-	Character        string  `json:"character,omitempty"`
-	GUID             GUID    `json:"guid"`
-	Level            int32   `json:"level,omitempty"`
-	Map              uint32  `json:"map"`
-	X                float32 `json:"x"`
-	Y                float32 `json:"y"`
-	Z                float32 `json:"z"`
-	O                float32 `json:"o"`
-	Target           GUID    `json:"target,omitempty"`
-	Health           int64   `json:"health"`
-	MaxHealth        int64   `json:"max_health"`
-	Power            int32   `json:"power"`
-	MaxPower         int32   `json:"max_power"`
-	PowerType        uint8   `json:"power_type,omitempty"`
-	InCombat         bool    `json:"in_combat"`
-	Dead             bool    `json:"dead"`
-	Ghost            bool    `json:"ghost"`
-	ServerPackets    int     `json:"server_packets"`
-	ParseErrors      int     `json:"parse_errors"`
-	MonoMS           int64   `json:"mono_ms"`
-	State            string  `json:"state"`
-	Error            string  `json:"error,omitempty"`
-	ReconnectAttempt int     `json:"reconnect_attempt,omitempty"`
-	ReconnectLimit   int     `json:"reconnect_limit,omitempty"`
+	Character        string    `json:"character,omitempty"`
+	Team             string    `json:"team,omitempty"`
+	GUID             GUID      `json:"guid"`
+	Level            int32     `json:"level,omitempty"`
+	Map              uint32    `json:"map"`
+	X                float32   `json:"x"`
+	Y                float32   `json:"y"`
+	Z                float32   `json:"z"`
+	O                float32   `json:"o"`
+	Target           GUID      `json:"target,omitempty"`
+	Health           int64     `json:"health"`
+	MaxHealth        int64     `json:"max_health"`
+	Power            int32     `json:"power"`
+	MaxPower         int32     `json:"max_power"`
+	PowerType        uint8     `json:"power_type,omitempty"`
+	InCombat         bool      `json:"in_combat"`
+	Falling          bool      `json:"falling"`
+	ZUnknown         bool      `json:"z_unknown"`
+	TeleportSeq      uint64    `json:"teleport_seq"`
+	LatencyMS        uint32    `json:"latency_ms"`
+	Dead             bool      `json:"dead"`
+	Ghost            bool      `json:"ghost"`
+	ServerPackets    int       `json:"server_packets"`
+	ParseErrors      int       `json:"parse_errors"`
+	MonoMS           int64     `json:"mono_ms"`
+	BaseTime         time.Time `json:"base_time"`
+	WallOffsetMS     int64     `json:"wall_offset_ms"`
+	ComboPoints      uint8     `json:"combo_points"`
+	ComboTarget      GUID      `json:"combo_target,omitzero"`
+	GCDMS            int64     `json:"gcd_ms"`
+	State            string    `json:"state"`
+	Error            string    `json:"error,omitempty"`
+	ReconnectAttempt int       `json:"reconnect_attempt,omitempty"`
+	ReconnectLimit   int       `json:"reconnect_limit,omitempty"`
 }
 
 // Aura is one aura a unit holds: the spell, the caster's guid, the stack

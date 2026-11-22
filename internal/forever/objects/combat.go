@@ -74,19 +74,20 @@ func (c CooldownState) Active(now time.Time) bool { return c.EndsAt.IsZero() || 
 
 // CombatState is a snapshot of one unit's combat state.
 type CombatState struct {
-	Attacking  wire.GUID
-	AttackedBy wire.GUID
-	InCombat   bool
-	Dead       bool
-	Ghost      bool
-	Health     int64
-	MaxHealth  int64
-	Power      int32
-	MaxPower   int32
-	PowerType  uint8
-	Auras      []Aura
-	Cast       *CastState
-	Cooldowns  []CooldownState
+	Attacking         wire.GUID
+	AttackedBy        wire.GUID
+	InCombat          bool
+	Dead              bool
+	Ghost             bool
+	Health            int64
+	MaxHealth         int64
+	Power             int32
+	MaxPower          int32
+	PowerType         uint8
+	Auras             []Aura
+	Cast              *CastState
+	Cooldowns         []CooldownState
+	CategoryCooldowns map[uint32]time.Time
 }
 
 // unitLocked returns the object a combat packet names, or nil. It never creates an object: combat traffic for a
@@ -330,6 +331,44 @@ func (w *World) ApplySpellFailure(f combat.SpellFailure, now time.Time) {
 	w.touchLocked(o, now)
 }
 
+// StartCooldown starts or updates one spell cooldown and, when category is non-zero with a known end, its category
+// cooldown on guid. A zero end keeps the spell active on hold until a clear or cooldown event.
+func (w *World) StartCooldown(guid wire.GUID, spellID int32, end time.Time, category uint32) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	o := w.unitLocked(guid)
+	if o == nil {
+		return
+	}
+	w.startCooldownLocked(o, spellID, end, category)
+}
+
+func (w *World) startCooldownLocked(o *Object, spellID int32, end time.Time, category uint32) {
+	if spellID != 0 {
+		if o.Cooldowns == nil {
+			o.Cooldowns = make(map[int32]time.Time)
+		}
+		if _, exists := o.Cooldowns[spellID]; exists || len(o.Cooldowns) < maxCooldownsPerUnit {
+			// 0 is not "no cooldown": it is the spell's own cooldown or an on-hold entry, whose length this client
+			// does not have. Store it as active with no known end (a zero EndsAt) instead of an end that passed.
+			o.Cooldowns[spellID] = end
+		}
+	}
+	if category != 0 && !end.IsZero() {
+		if o.CategoryCooldowns == nil {
+			o.CategoryCooldowns = make(map[uint32]time.Time)
+		}
+		// A category shared by several spells keeps the later end: a shorter entry must not free it early.
+		cur, exists := o.CategoryCooldowns[category]
+		if exists && cur.After(end) {
+			end = cur
+		}
+		if exists || len(o.CategoryCooldowns) < maxCooldownsPerUnit {
+			o.CategoryCooldowns[category] = end
+		}
+	}
+}
+
 // ApplyCooldowns applies SMSG_SPELL_COOLDOWN: each entry starts (or replaces) that spell's cooldown for the caster.
 func (w *World) ApplyCooldowns(c combat.Cooldowns, now time.Time) {
 	w.mu.Lock()
@@ -338,20 +377,12 @@ func (w *World) ApplyCooldowns(c combat.Cooldowns, now time.Time) {
 	if o == nil {
 		return
 	}
-	if o.Cooldowns == nil {
-		o.Cooldowns = make(map[int32]time.Time)
-	}
 	for _, cd := range c.List {
-		if _, exists := o.Cooldowns[int32(cd.SpellID)]; !exists && len(o.Cooldowns) >= maxCooldownsPerUnit {
-			continue
-		}
-		// 0 is not "no cooldown": it is the spell's own cooldown, whose length this client does not carry. Store it
-		// as active with no known end (a zero EndsAt) instead of an end that has already passed.
 		end := time.Time{}
 		if cd.ForcedCooldown > 0 {
 			end = now.Add(time.Duration(cd.ForcedCooldown) * time.Millisecond)
 		}
-		o.Cooldowns[int32(cd.SpellID)] = end
+		w.startCooldownLocked(o, int32(cd.SpellID), end, 0)
 	}
 	w.touchLocked(o, now)
 }
@@ -368,6 +399,20 @@ func (w *World) ClearCooldown(guid wire.GUID, spellID int32, now time.Time) {
 	w.touchLocked(o, now)
 }
 
+// ClearCategoryCooldown drops one category cooldown from guid.
+func (w *World) ClearCategoryCooldown(guid wire.GUID, category uint32) {
+	if category == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	o := w.unitLocked(guid)
+	if o == nil {
+		return
+	}
+	delete(o.CategoryCooldowns, category)
+}
+
 // ClearCooldowns applies SMSG_CLEAR_COOLDOWNS: every listed spell's cooldown is over.
 func (w *World) ClearCooldowns(guid wire.GUID, spells []int32, now time.Time) {
 	w.mu.Lock()
@@ -380,6 +425,31 @@ func (w *World) ClearCooldowns(guid wire.GUID, spells []int32, now time.Time) {
 		delete(o.Cooldowns, id)
 	}
 	w.touchLocked(o, now)
+}
+
+// ExpireCooldowns removes every spell and category cooldown whose end has passed at now and returns the expired
+// spell ids in ascending order. Zero-end (on-hold) entries never expire on the clock.
+func (w *World) ExpireCooldowns(guid wire.GUID, now time.Time) []int32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	o := w.objects[guid]
+	if o == nil {
+		return nil
+	}
+	var expired []int32
+	for id, end := range o.Cooldowns {
+		if !end.IsZero() && !now.Before(end) {
+			expired = append(expired, id)
+			delete(o.Cooldowns, id)
+		}
+	}
+	for cat, end := range o.CategoryCooldowns {
+		if !end.IsZero() && !now.Before(end) {
+			delete(o.CategoryCooldowns, cat)
+		}
+	}
+	sort.Slice(expired, func(i, j int) bool { return expired[i] < expired[j] })
+	return expired
 }
 
 // ApplyCancelCombat clears a unit's combat state (SMSG_CANCEL_COMBAT is empty, CombatPackets.h:135-141).
@@ -437,6 +507,12 @@ func (w *World) Combat(guid wire.GUID) (CombatState, bool) {
 		cs.Cooldowns = append(cs.Cooldowns, CooldownState{SpellID: id, EndsAt: end})
 	}
 	sort.Slice(cs.Cooldowns, func(i, j int) bool { return cs.Cooldowns[i].SpellID < cs.Cooldowns[j].SpellID })
+	if len(o.CategoryCooldowns) > 0 {
+		cs.CategoryCooldowns = make(map[uint32]time.Time, len(o.CategoryCooldowns))
+		for cat, end := range o.CategoryCooldowns {
+			cs.CategoryCooldowns[cat] = end
+		}
+	}
 	return cs, true
 }
 
