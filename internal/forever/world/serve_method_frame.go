@@ -139,6 +139,10 @@ func (s *session) methodStep(parent, ctx context.Context, a *actState, verb stri
 	if stepErr == nil {
 		return lines, "", nil
 	}
+	var unknown unknownOutcomeError
+	if errors.As(stepErr, &unknown) {
+		return lines, "", stepErr
+	}
 	if s.methodStopped(parent, stepErr) {
 		if parent.Err() == nil && errors.Is(stepErr, context.DeadlineExceeded) {
 			return lines, "", fmt.Errorf("wait_ms ran out before the server answered: %w", stepErr)
@@ -184,7 +188,8 @@ func (s *session) methodEvent(kind string, source wire.GUID, data map[string]any
 // sentTimeout words a wait_ms that ran out after a state-changing packet went out: the server may still complete
 // it. since is the event-log cursor the call started from, so the caller can read what the call produced.
 func sentTimeout(err error, since uint64) error {
-	if !errors.Is(err, context.DeadlineExceeded) {
+	var unknown unknownOutcomeError
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.As(err, &unknown) {
 		return err
 	}
 	return fmt.Errorf("%w; the request went out, so its outcome is unknown (event_log from %d and the inventory show what it did) and a retry may repeat it", err, since)

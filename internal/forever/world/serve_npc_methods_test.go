@@ -517,3 +517,61 @@ func TestServeBuyTimeoutDuringTheListSendsNoPurchase(t *testing.T) {
 		t.Fatal("a purchase went out")
 	}
 }
+
+// TestServeBuySilentSuccessIsAnUnknownOutcome: a success answer the inventory never shows (the act's own
+// ConfirmWindow) may still complete, so it is no vendor_buy_failed.
+func TestServeBuySilentSuccessIsAnUnknownOutcome(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.noItemAfterBuy = true
+	since := v.s.EventLog().Last()
+	p := vendorParams()
+	p.ItemEntry = testI32(117)
+	if _, err := v.s.serveBuy(context.Background(), p); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("an unconfirmed purchase answered %v", err)
+	}
+	if e := v.s.firstEventSince(since, events.KindVendorBuyFailed, events.KindVendorBuy); e != nil {
+		t.Fatalf("an unconfirmed purchase wrote %s", e.Kind)
+	}
+}
+
+// TestServeBuyNoAnswerIsAnUnknownOutcome and its sale twin: the act's 5 s answer wait running out after the
+// packet went out is not a refusal.
+func TestServeBuyNoAnswerIsAnUnknownOutcome(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	if _, err := v.s.serveVendorList(context.Background(), vendorParams()); err != nil {
+		t.Fatalf("vendor_list: %v", err)
+	}
+	v.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core != wire.CMSGBuyItem {
+			v.answer(f, core, payload)
+		}
+	}
+	since := v.s.EventLog().Last()
+	p := vendorParams()
+	p.ItemEntry = testI32(117)
+	if _, err := v.s.serveBuy(context.Background(), p); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("a silent purchase answered %v", err)
+	}
+	if e := v.s.firstEventSince(since, events.KindVendorBuyFailed); e != nil {
+		t.Fatal("a silent purchase wrote vendor_buy_failed")
+	}
+}
+
+func TestServeSellNoAnswerIsAnUnknownOutcome(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core != wire.CMSGSellItem {
+			v.answer(f, core, payload)
+		}
+	}
+	since := v.s.EventLog().Last()
+	p := vendorParams()
+	p.ItemEntry = testI32(118)
+	p.Count = 2
+	if _, err := v.s.serveSell(context.Background(), p); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("a silent sale answered %v", err)
+	}
+	if e := v.s.firstEventSince(since, events.KindVendorSellFailed); e != nil {
+		t.Fatal("a silent sale wrote vendor_sell_failed")
+	}
+}

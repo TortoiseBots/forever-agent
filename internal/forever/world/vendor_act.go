@@ -31,6 +31,13 @@ const (
 	actVendorQuiet = items.ConfirmWindow
 )
 
+// unknownOutcomeError is a step failure after its request went out whose server answer never came (or never showed in
+// the inventory): the request may still complete, so a serve method reports it as an unknown outcome instead of a
+// refusal. Its text is the step's own.
+type unknownOutcomeError struct{ msg string }
+
+func (e unknownOutcomeError) Error() string { return e.msg }
+
 // vendorTarget checks the current NPC is a vendor (or a repairer, for `repair`) within reach and returns it.
 func (s *session) vendorTarget(a *actState, verb string, repair bool) (*objects.Object, error) {
 	if !a.hasNPC || a.npc == nil {
@@ -336,7 +343,7 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	case s.vendor.sold != nil:
 		return s.actFail(a, step, fmt.Errorf("%s: the server refused it: %s", what, s.vendor.sold.Name()))
 	case !ok:
-		return s.actFail(a, step, fmt.Errorf("%s: no answer within %s", what, actVendorWait))
+		return s.actFail(a, step, unknownOutcomeError{fmt.Sprintf("%s: no answer within %s", what, actVendorWait)})
 	}
 	bought := *s.vendor.bought
 	s.vendor.bought = nil
@@ -354,8 +361,8 @@ func (s *session) actBuy(ctx context.Context, a *actState, step ActStep) error {
 	}
 	after := s.inventoryNow()
 	if heldCount(after, row.Item.ItemID) <= heldBefore {
-		return s.actFail(a, step, fmt.Errorf("%s: the server answered success but the inventory shows no new item within %s (unconfirmed)",
-			what, items.ConfirmWindow))
+		return s.actFail(a, step, unknownOutcomeError{fmt.Sprintf("%s: the server answered success but the inventory shows no new item within %s (unconfirmed)",
+			what, items.ConfirmWindow)})
 	}
 	// The answer carries the row's stock afterwards: keep the list's own copy current for the next purchase.
 	if bought.NewQuantity >= -1 {
@@ -479,8 +486,8 @@ func (s *session) actSell(ctx context.Context, a *actState, step ActStep) error 
 	line := fmt.Sprintf("entry %d x%d", it.Entry, want)
 	if row, held := rowByGUID(after, guid); held {
 		if row.Count != it.Count-want {
-			return s.actFail(a, step, fmt.Errorf("%s: the stack holds %d, want %d (the server did nothing, or its answer did not arrive)",
-				what, row.Count, it.Count-want))
+			return s.actFail(a, step, unknownOutcomeError{fmt.Sprintf("%s: the stack holds %d, want %d (the server did nothing, or its answer did not arrive)",
+				what, row.Count, it.Count-want)})
 		}
 		line += fmt.Sprintf(", %d left", row.Count)
 	} else {

@@ -23,10 +23,11 @@ error, not a failure result: after the purchase or sale went out the message say
 names the event-log cursor the call started from (the server may still complete it, and a caller that retried a
 reported failure would do it twice); while the list was still being read it says no purchase was sent. The
 method does not track a timed-out request to a later event: a caller that needs the outcome reads `event_log`
-from that cursor and the inventory. The act steps keep
-their own 5 s answer waits, and what they report after those (no answer, a success the inventory
-did not show) is still `ok: false` with the act's text; a caller that sees one of those reads
-the inventory before retrying.
+from that cursor and the inventory. The act steps'
+own waits after the packet (the 5 s answer wait, the inventory confirmation window) end the same way: a
+purchase or sale with no answer, a success the inventory never showed, a sale whose stack did not change
+is an unknown outcome, an RPC error, never `vendor_buy_failed` or `vendor_sell_failed`. Only a refusal
+the server (or a precondition the act checks) names is `ok: false`.
 
 ## The methods
 
