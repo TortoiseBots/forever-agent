@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/foreverspells"
 )
 
 const (
@@ -63,13 +65,36 @@ var selfSpells = []struct {
 	{71, RangeWindow{0, 0}, "Defensive Stance (self)"},
 }
 
+// casterBolts are the ranged single-target bolts a caster's plan may cast, by class and in preference order: the
+// class's first bolt in the list that the book holds, at the highest rank known. They are named, not numbered: the
+// ids and ranks come from the generated spell data (internal/foreverspells), which also says which class a spell
+// belongs to. The window's far edge is conservatively inside every one of them (Fireball 35, the other bolts 30 yards
+// in the client's spell data; the client has no Spell.dbc here, so this is stated, as hostileSpells' windows are).
+var casterBolts = []struct {
+	class string
+	names []string
+}{
+	{"mage", []string{"Fireball", "Frostbolt"}},
+	{"warlock", []string{"Shadow Bolt"}},
+	{"priest", []string{"Smite"}},
+	{"shaman", []string{"Lightning Bolt"}},
+	{"druid", []string{"Wrath"}},
+	{"hunter", []string{"Arcane Shot"}},
+}
+
+// casterWindow is the range window a caster's bolt is cast in.
+var casterWindow = RangeWindow{0, 28}
+
 // spellPlan is what the fight-check will cast, chosen from the spells the server said the character knows.
 type spellPlan struct {
 	Hostile       int32
 	HostileWindow RangeWindow
 	HostileNote   string
-	Self          int32
-	SelfNote      string
+	// Repeat says the hostile spell is the character's main attack, cast again after every success while the target
+	// lives (a caster's bolt), not the one opener of a warrior's rage ability.
+	Repeat   bool
+	Self     int32
+	SelfNote string
 }
 
 // planSpells picks the first known spell of each list. Nothing is cast when the list is empty.
@@ -97,6 +122,42 @@ func planSpells(known []int32) spellPlan {
 	}
 	return plan
 }
+
+// planSpellsFor is planSpells with the caster's bolts: when the warrior list holds nothing hostile, the class's ranged
+// bolt the book holds is the plan (forever-agent#149: a level-52 character with 189 known spells was "melee only"
+// because only warrior ability ids were looked for). tab is the generated spell data; nil or empty keeps planSpells.
+func planSpellsFor(known []int32, tab *foreverspells.Table) spellPlan {
+	plan := planSpells(known)
+	if plan.Hostile != 0 || !tab.Loaded() {
+		return plan
+	}
+	for _, c := range casterBolts {
+		for _, name := range c.names {
+			var best foreverspells.Spell
+			for _, id := range known {
+				if id <= 0 {
+					continue
+				}
+				sp, ok := tab.Lookup(uint32(id))
+				if !ok || sp.Class != c.class || !strings.EqualFold(sp.Name, name) {
+					continue
+				}
+				if best.ID == 0 || sp.Rank > best.Rank || (sp.Rank == best.Rank && sp.ID > best.ID) {
+					best = sp
+				}
+			}
+			if best.ID != 0 {
+				plan.Hostile, plan.HostileWindow, plan.Repeat = int32(best.ID), casterWindow, true
+				plan.HostileNote = fmt.Sprintf("%s rank %d (%s, cast again while the target lives)", best.Name, best.Rank, c.class)
+				return plan
+			}
+		}
+	}
+	return plan
+}
+
+// spellPlan is the plan for this character's book.
+func (s *session) spellPlan() spellPlan { return planSpellsFor(s.known, s.spellTable()) }
 
 // targetWalkRange is how far the fallback walk may look for a target when none is within the fight's 40 yards.
 const targetWalkRange = 200
@@ -175,7 +236,7 @@ func (s *session) fightCheck(ctx context.Context) error {
 		}
 		return nil
 	}
-	plan := planSpells(s.known)
+	plan := s.spellPlan()
 	s.opts.logf("fight-check: the character knows %d spell(s)%s", len(s.known), spellListText(s.known))
 	switch {
 	case plan.Hostile != 0 && plan.Self != 0:
@@ -289,7 +350,7 @@ func (s *session) fightCheck(ctx context.Context) error {
 //     tick answers "not in range" (Unit::DoMeleeAttackIfReady, Unit.cpp:2251-2257, SMSG_ATTACK_SWING_ERROR), and the
 //     client then stops the attack the ordinary way.
 func (s *session) provokeRefusals(ctx context.Context, candidates []*objects.Object) {
-	plan := planSpells(s.known)
+	plan := s.spellPlan()
 	if plan.Self != 0 {
 		for i := 0; i < 2; i++ {
 			result, err := s.Cast(ctx, plan.Self, wire.EmptyGUID, RangeWindow{})
@@ -554,13 +615,17 @@ func (s *session) castBetweenSwings(plan *spellPlan, target wire.GUID) FightHook
 		now := link.Now()
 		// The character's rage bar, by power type (rage = 1): tenths of rage as the server stores them.
 		power := s.powerOfType(ragePowerType)
-		if plan.Hostile != 0 && hostileTries < maxTries && now.After(nextHostile) && power >= 1 {
+		// A caster's bolt costs mana, not rage: its cost is the server's to refuse ("no power"), so no rage gate.
+		if plan.Hostile != 0 && hostileTries < maxTries && now.After(nextHostile) && (power >= 1 || plan.Repeat) {
 			result, err := s.Cast(ctx, plan.Hostile, target, plan.HostileWindow)
 			hostileTries++
 			nextHostile = now.Add(retry)
-			if err != nil {
+			switch {
+			case err != nil:
 				s.opts.logf("fight-check: spell %d: %v", plan.Hostile, err)
-			} else {
+			case plan.Repeat:
+				s.opts.logf("fight-check: spell %d: %s", plan.Hostile, result)
+			default:
 				s.opts.logf("fight-check: spell %d at %s rage: %s", plan.Hostile, combat.PowerText(ragePowerType, power, s.powerMaxOfType(ragePowerType)), result)
 				if result != "no power" && result != "not ready" {
 					plan.Hostile = 0
