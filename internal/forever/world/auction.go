@@ -45,7 +45,8 @@ type auctionWatch struct {
 	quoteQty uint32
 
 	// cmdUnknown is set when a command went out and no result came: it may still complete, and its late answer cannot
-	// be told from the next command's, so the next one needs force.
+	// be told from the next command's, so every later one needs force (the flag is never cleared in the session: a forced
+	// command's own answer could be the earlier one's).
 	cmdUnknown bool
 }
 

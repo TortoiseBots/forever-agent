@@ -545,9 +545,11 @@ func TestServeAuctionSellSilentBlocksTheNextPost(t *testing.T) {
 	if res, err := a.s.serveAuctionSell(context.Background(), p); err != nil || !res.OK {
 		t.Fatalf("the forced post: %+v %v", res, err)
 	}
+	// The barrier stays: a post result names no auction on a commodity post, so the first post's late result could
+	// have answered the forced one.
 	p.Force = false
-	if res, err := a.s.serveAuctionSell(context.Background(), p); err != nil || !res.OK {
-		t.Fatalf("the barrier outlived an answered post: %+v %v", res, err)
+	if _, err := a.s.serveAuctionSell(context.Background(), p); err == nil || !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("the barrier lifted after a forced post: %v", err)
 	}
 }
 
@@ -803,8 +805,8 @@ func TestAuctionUnknownOutcomeBlocksEveryCommand(t *testing.T) {
 		t.Fatalf("the forced bid: %+v %v", res, err)
 	}
 	bid.Force = false
-	if _, err := a.s.serveAuctionBid(context.Background(), bid); err != nil {
-		t.Fatalf("the barrier outlived an answered command: %v", err)
+	if _, err := a.s.serveAuctionBid(context.Background(), bid); err == nil || !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("the barrier lifted after a forced command: %v", err)
 	}
 }
 

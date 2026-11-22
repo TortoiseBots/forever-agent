@@ -93,9 +93,10 @@ auctioneer flag) are RPC errors before any packet.
 The item to post is one of the character's own bag items: never an equipped item or a worn bag, and an item whose slot
 the inventory has not confirmed is refused (the same rules as `mail_send` and `sell`). An item post is one item
 (`count` above one is refused) with `min_bid`, `buyout` or both (a minimum bid above the buyout is refused); a commodity
-post takes `unit_price` and posts `count` of the stack (the whole stack when omitted). A post whose result never came
-blocks the next one until `force: true`, because the item may be listed and a part-stack post repeated would list it
-twice.
+post takes `unit_price` and posts `count` of the stack (the whole stack when omitted). Any command (post, bid, cancel, buy) whose result never came blocks every later command for the rest of the session
+unless the caller sets `force: true` on each: the command may still complete, and its late answer cannot be told from
+the next command's (a commodity post and a commodity purchase both answer with auction 0). Check `auction_owned` and
+the purse before forcing.
 
 ## Live checks (for the lead's queue)
 

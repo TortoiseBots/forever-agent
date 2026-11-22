@@ -199,8 +199,8 @@ func (s *session) auctionResultSince(since int, command int32, ids ...int32) *au
 }
 
 // auctionCommand sends one command packet and waits for its result. A packet that could not be sent is an error with
-// nothing out; a result that never came is an unknown outcome, and it blocks every later auction command until the
-// caller sets force: the answer of the earlier command may still arrive and cannot be told from the next one's
+// nothing out; a result that never came is an unknown outcome, and it blocks every later auction command for the rest of the
+// session unless the caller sets force on each: the answer of the earlier command may still arrive and cannot be told from the next one's
 // (a throttled request is dropped without an answer, a committed one answers after the database).
 func (s *session) auctionCommand(ctx context.Context, res *ServeAuctionResult, force bool, core uint32, payload []byte, command int32, ids ...int32) (*auction.CommandResult, error) {
 	if s.auction.cmdUnknown && !force {
@@ -223,7 +223,6 @@ func (s *session) auctionCommand(ctx context.Context, res *ServeAuctionResult, f
 		s.auction.cmdUnknown = true
 		return nil, sentTimeout(unknownOutcomeError{fmt.Sprintf("%s: no auction result within %s (a throttled request is dropped without an answer)", auction.CommandName(command), auctionAnswerWait)}, res.Since)
 	}
-	s.auction.cmdUnknown = false
 	res.Event = s.firstEventSince(res.Since, events.KindAuctionResult)
 	return got, nil
 }
