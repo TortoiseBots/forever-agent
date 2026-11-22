@@ -74,6 +74,9 @@ type Mover struct {
 	Flags uint64
 	// Sequence is the teleport sequence a SMSG_MOVE_TELEPORT carried (the ack index the server waits for).
 	Sequence uint32
+	// teleportFrom is where the mover stood when a teleport arrived during a leg: the correction test compares it
+	// with the position the teleport named.
+	teleportFrom [3]float32
 	// walking is true while MoveTo drives a leg; teleported is set by SetTeleport during one, because a leg
 	// cannot continue along the old line after the server moved the character. betweenMaps is the map change's
 	// window: every packet is refused until EndMapChange.
@@ -187,10 +190,8 @@ func (m *Mover) SetFlightPosition(x, y, z float32) { m.X, m.Y, m.Z = x, y, z }
 // create). A walk in progress is abandoned there, like a teleport: its straight line no longer starts where the
 // server says the character is, so the next MoveTo wake-up ends the leg at the new position.
 func (m *Mover) SetPosition(x, y, z, o float32) {
+	m.noteTeleport()
 	m.X, m.Y, m.Z, m.O = x, y, z, normalizeOrientation(o)
-	if m.walking {
-		m.teleported = true
-	}
 }
 
 // info builds the movement info of one packet at the current position with the given flags.
@@ -254,11 +255,34 @@ func (m *Mover) movementsInLastSecond(now time.Time) int {
 // SetTeleport applies a teleport the server accepted: the new position, facing and the sequence the ack carries.
 // The next movement packet starts from here (the server's own position changed at acceptance).
 func (m *Mover) SetTeleport(x, y, z, o float32, sequence uint32) {
+	m.noteTeleport()
 	m.X, m.Y, m.Z, m.O = x, y, z, normalizeOrientation(o)
 	m.Sequence = sequence
-	if m.walking {
-		m.teleported = true
+}
+
+// teleportCorrectionYd is how far a teleport may move the character from where a leg has it and still be the
+// server re-grounding it in place rather than moving it: a live walk met exactly that (the same x/y, the z 0.62 yd
+// lower the core's own floor has), while a GM teleport or a graveyard jump is hundreds of yards away.
+const teleportCorrectionYd = 3.0
+
+// noteTeleport records a position the server put the character at during a leg: a leg cannot go on along its old
+// line, and settleTeleport decides whether it was a correction in place (the leg goes on) or a move (it ends).
+func (m *Mover) noteTeleport() {
+	if !m.walking {
+		return
 	}
+	m.teleportFrom = [3]float32{m.X, m.Y, m.Z}
+	m.teleported = true
+}
+
+// settleTeleport settles the teleport a leg met: it clears the flag and reports whether it was a correction in
+// place, so the leg adopts the corrected position and goes on. False means the character was moved and the leg must
+// end where the server put it (ErrTeleported).
+func (m *Mover) settleTeleport() bool {
+	corrected := m.teleported &&
+		Distance(m.teleportFrom[0], m.teleportFrom[1], m.teleportFrom[2], m.X, m.Y, m.Z) <= teleportCorrectionYd
+	m.teleported = false
+	return corrected
 }
 
 // Face turns in place to o (CMSG_MOVE_SET_FACING) and updates the client's belief.
@@ -374,7 +398,12 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			return ErrAirborne
 		}
 		if m.teleported {
-			m.teleported = false
+			if m.settleTeleport() {
+				// The server re-grounded the character where the leg has it (a live walk met the same x/y with the
+				// floor 0.62 yd lower): adopt the corrected height and keep walking the same line.
+				sz = m.Z
+				continue
+			}
 			// The server moved the character: stop where it put them and end the leg. The position is the teleport
 			// destination, never a point on the abandoned line.
 			_ = m.send(wire.CMSGMoveStop, base)
@@ -461,6 +490,10 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 		}
 	}
 
+	// zShift is the height the server corrected the character by in place: the route's own samples are the mesh's
+	// floor, and a correction that only re-grounds the character (settleTeleport) is carried by every later sample
+	// so the walk does not report the same wrong floor at every packet.
+	var zShift float32
 	base := m.base()
 	// The start's two packets are movement packets too: if the previous second is already full, wait for the slots
 	// they need, so even a walk that begins right after another burst keeps the four-a-second cap.
@@ -476,7 +509,10 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			return ErrAirborne
 		}
 		if m.teleported {
-			m.teleported = false
+			if m.settleTeleport() {
+				zShift += m.Z - m.teleportFrom[2]
+				continue
+			}
 			_ = m.send(wire.CMSGMoveStop, base)
 			return ErrTeleported
 		}
@@ -503,11 +539,11 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 	// between corners instead of the straight chord.
 	place := func(walked float32) {
 		if walked <= 0 {
-			m.X, m.Y, m.Z = path[0][0], path[0][1], path[0][2]
+			m.X, m.Y, m.Z = path[0][0], path[0][1], path[0][2]+zShift
 			return
 		}
 		if walked >= total {
-			m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]
+			m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]+zShift
 			return
 		}
 		for i := 1; i < len(path); i++ {
@@ -521,10 +557,10 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			}
 			m.X = lerp(path[i-1][0], path[i][0], t)
 			m.Y = lerp(path[i-1][1], path[i][1], t)
-			m.Z = lerp(path[i-1][2], path[i][2], t)
+			m.Z = lerp(path[i-1][2], path[i][2], t) + zShift
 			return
 		}
-		m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]
+		m.X, m.Y, m.Z = path[len(path)-1][0], path[len(path)-1][1], path[len(path)-1][2]+zShift
 	}
 	place(0)
 
@@ -579,7 +615,11 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			return ErrAirborne
 		}
 		if m.teleported {
-			m.teleported = false
+			if m.settleTeleport() {
+				// A correction in place: the route goes on from the server's height.
+				zShift += m.Z - m.teleportFrom[2]
+				continue
+			}
 			_ = m.send(wire.CMSGMoveStop, base)
 			return ErrTeleported
 		}
@@ -605,9 +645,12 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 					return ErrAirborne
 				}
 				if m.teleported {
-					m.teleported = false
-					_ = m.send(wire.CMSGMoveStop, base)
-					return ErrTeleported
+					if m.settleTeleport() {
+						zShift += m.Z - m.teleportFrom[2]
+					} else {
+						_ = m.send(wire.CMSGMoveStop, base)
+						return ErrTeleported
+					}
 				}
 				now = m.Sender.Now()
 			}
@@ -730,7 +773,11 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 			return ErrAirborne
 		}
 		if m.teleported {
-			m.teleported = false
+			if m.settleTeleport() {
+				// A correction in place: the chase goes on from the server's height.
+				sz = m.Z
+				continue
+			}
 			_ = m.send(wire.CMSGMoveStop, base)
 			return ErrTeleported
 		}

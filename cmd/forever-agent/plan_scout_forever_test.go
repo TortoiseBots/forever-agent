@@ -85,6 +85,13 @@ type fakeForeverServe struct {
 	walkHang bool
 	// gmRefusal answers a GM line that starts with the key with this line instead of succeeding.
 	gmRefusal map[string]string
+	// gmErr makes a GM line that starts with the key return this error (the serve's own "not confirmed" answer).
+	gmErr map[string]error
+	// landAfter delays a `.go xyz` landing: the status shows the point only after this many status reads (0 means at
+	// once, as the serve's answer arrives with the command).
+	landAfter int
+	landing   *serveclient.Status
+	landReads int
 	// blockStatus and blockUnits wait for the context in Status and Units (the --max-minutes ceiling).
 	blockStatus, blockUnits bool
 	// ray answers a walk_ray read: nil answers Known and In for every point. noWalkRay makes the serve answer -32601, the
@@ -98,6 +105,19 @@ type fakeForeverServe struct {
 	unitsAt func(x, y float32) []serveclient.Unit
 	// rays logs every walk_ray read: the sight point and the target.
 	rays []fakeRay
+}
+
+// fakeLanding is where a `.go xyz` line puts the character, or nil for a line that names no point.
+func fakeLanding(text string) *serveclient.Status {
+	fs := strings.Fields(text)
+	if len(fs) != 6 || !strings.HasPrefix(text, ".go xyz ") {
+		return nil
+	}
+	x, _ := strconv.ParseFloat(fs[2], 32)
+	y, _ := strconv.ParseFloat(fs[3], 32)
+	z, _ := strconv.ParseFloat(fs[4], 32)
+	m, _ := strconv.ParseUint(fs[5], 10, 32)
+	return &serveclient.Status{X: float32(x), Y: float32(y), Z: float32(z), Map: uint32(m)}
 }
 
 // fakeRay is one walk_ray read.
@@ -142,6 +162,13 @@ func (f *fakeForeverServe) Status(ctx context.Context) (serveclient.Status, erro
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.landing != nil {
+		f.landReads++
+		if f.landReads > f.landAfter {
+			f.status = *f.landing
+			f.landing = nil
+		}
+	}
 	return f.status, nil
 }
 
@@ -149,6 +176,14 @@ func (f *fakeForeverServe) GM(_ context.Context, text string) (serveclient.Comma
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gm = append(f.gm, text)
+	for prefix, err := range f.gmErr {
+		if strings.HasPrefix(text, prefix) {
+			if landing := fakeLanding(text); landing != nil && f.landAfter > 0 {
+				f.landing, f.landReads = landing, 0
+			}
+			return serveclient.Command{Sent: text, Complete: true}, err
+		}
+	}
 	for prefix, line := range f.gmRefusal {
 		if strings.HasPrefix(text, prefix) {
 			return serveclient.Command{Sent: text, Complete: true, Lines: []string{line}}, nil
@@ -161,8 +196,13 @@ func (f *fakeForeverServe) GM(_ context.Context, text string) (serveclient.Comma
 			y, _ := strconv.ParseFloat(fs[3], 32)
 			z, _ := strconv.ParseFloat(fs[4], 32)
 			m, _ := strconv.ParseUint(fs[5], 10, 32)
-			f.status.X, f.status.Y, f.status.Z = float32(x), float32(y), float32(z)
-			f.status.Map = uint32(m)
+			if f.landAfter > 0 {
+				f.landing = &serveclient.Status{X: float32(x), Y: float32(y), Z: float32(z), Map: uint32(m)}
+				f.landReads = 0
+			} else {
+				f.status.X, f.status.Y, f.status.Z = float32(x), float32(y), float32(z)
+				f.status.Map = uint32(m)
+			}
 		}
 		// The core's `.go xyz` says nothing; the landing is checked from the status.
 		return serveclient.Command{Sent: text, Complete: true}, nil
@@ -444,6 +484,33 @@ func TestScoutForeverLevelFillTrustsOnlyTheSpawnsOwnCreature(t *testing.T) {
 
 // TestScoutForeverWalkBudgetIsNotExceeded: a walk that never returns is cut at the budget's end, and no later walk is
 // started, so the pass spends the budget once instead of once per hop.
+// TestScoutStandConfirmsOnArrival is the live stand failure: the serve answered `.go xyz -15.99 -50.17 -21.78 389`
+// with "the teleport is not confirmed: the character did not arrive within 8s", the landing showed right after, and the
+// pass aborted. The stand's own status read is the confirmation, so that answer goes on to it; any other GM error is
+// still a failure.
+func TestScoutStandConfirmsOnArrival(t *testing.T) {
+	notConfirmed := errors.New(`serveclient: gm: rpc error -32003: ".go xyz 40 0 0 700": the teleport is not confirmed: the character did not arrive within 8s (at 0 0 on map 700)`)
+	f := &fakeForeverServe{
+		status:    serveclient.Status{Character: "Testchar", State: "online", Map: 700},
+		gmErr:     map[string]error{".go xyz ": notConfirmed},
+		landAfter: 2,
+	}
+	if err := foreverStandAt(context.Background(), f, dungeon.Point{X: 40}, 700); err != nil {
+		t.Fatalf("the stand gave up on the serve's unconfirmed answer: %v", err)
+	}
+	if len(f.gm) != 1 || !strings.HasPrefix(f.gm[0], ".go xyz ") {
+		t.Fatalf("GM lines %q", f.gm)
+	}
+	// Another GM error is not the landing's race: the stand stops with it.
+	g := &fakeForeverServe{
+		status: serveclient.Status{Character: "Testchar", State: "online", Map: 700},
+		gmErr:  map[string]error{".go xyz ": errors.New(`serveclient: gm: rpc error -32003: "no permission"`)},
+	}
+	if err := foreverStandAt(context.Background(), g, dungeon.Point{X: 40}, 700); err == nil || !strings.Contains(err.Error(), "no permission") {
+		t.Fatalf("a refused line gave %v, want the server's own words", err)
+	}
+}
+
 func TestScoutForeverWalkBudgetIsNotExceeded(t *testing.T) {
 	dir := t.TempDir()
 	mmaps := foreverFlat(t)
