@@ -275,7 +275,11 @@ func (m *Mover) noteTeleport() {
 	if !m.walking {
 		return
 	}
-	m.teleportFrom = [3]float32{m.X, m.Y, m.Z}
+	if !m.teleported {
+		// A second update before the leg settles the first must not hide it: the correction test compares against
+		// where the character stood before the FIRST one.
+		m.teleportFrom = [3]float32{m.X, m.Y, m.Z}
+	}
 	m.teleported = true
 }
 

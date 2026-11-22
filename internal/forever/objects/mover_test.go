@@ -753,3 +753,23 @@ func TestMoverShortSidewaysTeleportEndsTheLeg(t *testing.T) {
 		})
 	}
 }
+
+// TestMoverSettleTeleportKeepsTheFirstOrigin: a real relocation followed by a small correction before the leg looks
+// at the flag is still a move, not a re-grounding (the second update must not replace the first one's origin).
+func TestMoverSettleTeleportKeepsTheFirstOrigin(t *testing.T) {
+	m := &Mover{walking: true}
+	m.X, m.Y, m.Z = 100, 100, 10
+	m.noteTeleport()
+	m.X, m.Y, m.Z = 600, 100, 10 // the server moved the character 500 yd
+	m.noteTeleport()
+	m.Z = 9.5 // a near re-grounding on top of the move
+	if m.settleTeleport() {
+		t.Fatal("a relocation followed by a small correction settled as a correction in place")
+	}
+	m.X, m.Y, m.Z = 100, 100, 10
+	m.noteTeleport()
+	m.Z = 9.5
+	if !m.settleTeleport() {
+		t.Fatal("a lone re-grounding no longer settles as a correction in place")
+	}
+}
