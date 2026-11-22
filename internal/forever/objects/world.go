@@ -703,6 +703,9 @@ func mergeInfo(dst *Info, src Info) {
 	if f.SpellID {
 		dst.SpellID = src.SpellID
 	}
+	if f.DynRadius {
+		dst.DynRadius = src.DynRadius
+	}
 	if src.Item != nil {
 		if f.ItemOwner {
 			dst.item().Owner = src.Item.Owner

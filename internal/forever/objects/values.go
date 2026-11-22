@@ -145,6 +145,7 @@ type Info struct {
 	CorpseDisplayID  uint32
 	Caster           wire.GUID
 	SpellID          int32
+	DynRadius        float32 // DynamicObjectData.Radius (UpdateFields.cpp:7789)
 
 	// item (UF::ItemData) and, for a bag, its container (UF::ContainerData); nil when the object is not one.
 	Item      *ItemData
@@ -182,7 +183,7 @@ type Fields struct {
 	MountDisplayID, NativeDisplayID                               bool
 	PetNumber, CreatedBySpell, CreatureFamily, PetFlags           bool
 	GOState, GOType, GODisplayID, GOFlags, GOFaction              bool
-	Owner, CorpseDisplayID, Caster, SpellID                       bool
+	Owner, CorpseDisplayID, Caster, SpellID, DynRadius            bool
 	Vendor                                                        bool
 	ItemOwner, ContainedIn, StackCount, Durability, MaxDurability bool
 	NumSlots, Slots                                               bool
@@ -325,7 +326,7 @@ func (f *Fields) all() {
 		MountDisplayID: true, NativeDisplayID: true,
 		PetNumber: true, CreatedBySpell: true, CreatureFamily: true, PetFlags: true,
 		GOState: true, GOType: true, GODisplayID: true, GOFlags: true, GOFaction: true,
-		Owner: true, CorpseDisplayID: true, Caster: true, SpellID: true,
+		Owner: true, CorpseDisplayID: true, Caster: true, SpellID: true, DynRadius: true,
 		Vendor:    true,
 		ItemOwner: true, ContainedIn: true, StackCount: true, Durability: true, MaxDurability: true,
 		NumSlots: true, Slots: true,
@@ -1399,7 +1400,11 @@ func (i *Info) readDynamicObjectCreate(b *wire.Buffer) error {
 	b.Skip(1) // Type
 	b.Skip(8) // SpellVisual
 	i.SpellID = b.ReadI32()
-	b.Skip(8) // Radius, CastTime
+	i.DynRadius = b.ReadFloat32()
+	b.Skip(4) // CastTime
+	// A create carries every field, but only a unit or game object create marks them (Fields.all): without these
+	// three the merge would drop the caster, the spell and the radius.
+	i.f.Caster, i.f.SpellID, i.f.DynRadius = true, true, true
 	return b.Err()
 }
 
