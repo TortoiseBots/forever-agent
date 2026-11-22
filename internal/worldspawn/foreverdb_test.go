@@ -493,12 +493,19 @@ func TestExportScriptAllWritesEveryMap(t *testing.T) {
 	}
 }
 
-// TestExportScriptAllStopsAtAFailingMap: a map whose queries fail stops the run with an error that names it; the maps
-// before it stay exported and the later ones are not written.
-func TestExportScriptAllStopsAtAFailingMap(t *testing.T) {
+// TestExportScriptAllKeepsThePreviousRootOnFailure: a map whose queries fail stops the run with an error that names it
+// and publishes nothing: the previous root is byte-identical (no hybrid generation), and no staging folder is left.
+func TestExportScriptAllKeepsThePreviousRootOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeAllStubDocker(t, dir, `36\n389\n700\n`, "389")
 	root := filepath.Join(dir, "world")
+	if err := os.MkdirAll(filepath.Join(root, "map36"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(root, "map36", "creatures.tsv")
+	if err := os.WriteFile(old, []byte("previous\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
 	cmd.Env = scriptEnv(t, bin, nil)
 	out, err := cmd.CombinedOutput()
@@ -508,13 +515,45 @@ func TestExportScriptAllStopsAtAFailingMap(t *testing.T) {
 	if !strings.Contains(string(out), "map 389") {
 		t.Errorf("the error does not name map 389: %s", out)
 	}
-	if _, err := os.Stat(filepath.Join(root, "map36", "creatures.tsv")); err != nil {
-		t.Errorf("map 36 before the failure is not exported: %v", err)
+	if b, err := os.ReadFile(old); err != nil || string(b) != "previous\n" {
+		t.Errorf("map 36 of the previous root = %q, %v, want it untouched", b, err)
 	}
-	for _, m := range []string{"map389", "map700"} {
-		if _, err := os.Stat(filepath.Join(root, m)); err == nil {
-			t.Errorf("%s exists after the run stopped at 389", m)
+	if _, err := os.Stat(filepath.Join(root, "map700")); err == nil {
+		t.Error("map700 was published after the run stopped at 389")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "world.tmp.") || strings.HasPrefix(e.Name(), "world.old.") {
+			t.Errorf("%s left behind", e.Name())
 		}
+	}
+}
+
+// TestExportScriptAllDropsMapsTheDatabaseNoLongerLists: a rerun replaces the whole root, so a map folder of an earlier
+// export that the database no longer lists is gone and the listed maps carry the new files.
+func TestExportScriptAllDropsMapsTheDatabaseNoLongerLists(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeAllStubDocker(t, dir, `36\n`, "")
+	root := filepath.Join(dir, "world")
+	for _, m := range []string{"map36", "map999"} {
+		if err := os.MkdirAll(filepath.Join(root, m), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, m, "creatures.tsv"), []byte("previous\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
+	cmd.Env = scriptEnv(t, bin, nil)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("--all: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "map999")); err == nil {
+		t.Error("map999 survived a rerun that does not list it")
+	}
+	b, err := os.ReadFile(filepath.Join(root, "map36", "creatures.tsv"))
+	if err != nil || strings.Contains(string(b), "previous") {
+		t.Errorf("map36 = %q, %v, want the new export", b, err)
 	}
 }
 

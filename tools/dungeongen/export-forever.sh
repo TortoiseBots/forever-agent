@@ -3,7 +3,8 @@
 # TSV files dungeongen and internal/worldspawn read:   export-forever.sh <map> <outdir>
 # With --all it exports every map that has a normal spawn, one folder each:   export-forever.sh --all <rootdir>
 # writes <rootdir>/map<N> for every map N (the layout the plan tools take as --spawns: a world root holding map<N>
-# folders, or one map's folder). A failing map stops the run and names it; the maps before it stay exported.
+# folders, or one map's folder). The root is staged and swapped in whole: a failing map stops the run, names it and
+# leaves the previous root untouched; a map the database no longer lists disappears from the root.
 # It writes <outdir>/creatures.tsv, groups.tsv, movement.tsv, movement_template.tsv, gameobjects.tsv, entrances.tsv and
 # portals.tsv, with the column sets tools/dungeongen/export.sh writes except that the formations column is group_ai (the
 # core's raw creature_formations.groupAI) rather than the reader's group_flags; worldspawn.LoadForeverDB reads them.
@@ -71,11 +72,19 @@ SELECT DISTINCT c.map FROM creature c WHERE FIND_IN_SET('0', REPLACE(c.spawnDiff
 SQL
 )
   [ -n "$maps" ] || { echo "export found no map with spawns" >&2; exit 1; }
-  mkdir -p "$out"
+  # The whole root is staged beside <rootdir> and replaces it only after every map finished: a failing map leaves the
+  # previous root as it was, and a map the database no longer lists is gone from the new root (no hybrid generation).
+  stage="$out.tmp.$$"
+  trap 'rm -rf "$stage"' EXIT
+  mkdir -p "$stage"
   for m in $maps; do
     [[ $m =~ ^[0-9]+$ ]] || { echo "the database returned a map id that is not a number: $m" >&2; exit 1; }
-    bash "$0" "$m" "$out/map$m" || { echo "export of map $m failed: the maps before it are exported, map $m and the rest are not" >&2; exit 1; }
+    bash "$0" "$m" "$stage/map$m" || { echo "export of map $m failed: nothing was published, $out is as it was" >&2; exit 1; }
   done
+  old="$out.old.$$"
+  if [ -e "$out" ]; then mv "$out" "$old"; fi
+  mv "$stage" "$out"
+  rm -rf "$old"
   exit 0
 fi
 
