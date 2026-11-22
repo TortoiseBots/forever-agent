@@ -376,6 +376,32 @@ const (
 	SMSGMailQueryNextTimeResult uint32 = 0x450201
 )
 
+// The auction house of issue #106 part 2 (Opcodes.h:70-85, 1179-1195): the client's hello, browse, bucket listing, own
+// listing, post, bid, cancel and commodity quote and purchase, and the server's hello, command result, lists, quote
+// and notifications. The modern bucket protocol: the favourite, replicate and bidded-list packets are not built.
+const (
+	CMSGAuctionHelloRequest               uint32 = 0x3E005F
+	CMSGAuctionSellItem                   uint32 = 0x3E0060
+	CMSGAuctionRemoveItem                 uint32 = 0x3E0061
+	CMSGAuctionPlaceBid                   uint32 = 0x3E0063
+	CMSGAuctionBrowseQuery                uint32 = 0x3E0064
+	CMSGAuctionListItemsByBucketKey       uint32 = 0x3E0065
+	CMSGAuctionListOwnedItems             uint32 = 0x3E0067
+	CMSGAuctionGetCommodityQuote          uint32 = 0x3E006A
+	CMSGAuctionConfirmCommoditiesPurchase uint32 = 0x3E006B
+	CMSGAuctionSellCommodity              uint32 = 0x3E006D
+	SMSGAuctionHelloResponse              uint32 = 0x450199
+	SMSGAuctionCommandResult              uint32 = 0x45019B
+	SMSGAuctionWonNotification            uint32 = 0x45019C
+	SMSGAuctionOutbidNotification         uint32 = 0x45019D
+	SMSGAuctionClosedNotification         uint32 = 0x45019E
+	SMSGAuctionOwnerBidNotification       uint32 = 0x45019F
+	SMSGAuctionListBucketsResult          uint32 = 0x4502F5
+	SMSGAuctionListItemsResult            uint32 = 0x4502F6
+	SMSGAuctionListOwnedItemsResult       uint32 = 0x4502F8
+	SMSGAuctionGetCommodityQuoteResult    uint32 = 0x4502FA
+)
+
 // The flight paths of round R6 (Opcodes.h:49, 348, 1006-1008, 1141, 2052, 2350, 2413): the node status ask, the
 // node list ask (and the enable a client sends when it meets a flight master), the flight, and the answers.
 const (
@@ -564,14 +590,24 @@ var clientNames = map[uint32]string{
 	CMSGTrainerList:     "CMSG_TRAINER_LIST",
 	CMSGTrainerBuySpell: "CMSG_TRAINER_BUY_SPELL",
 
-	CMSGMailGetList:        "CMSG_MAIL_GET_LIST",
-	CMSGMailTakeMoney:      "CMSG_MAIL_TAKE_MONEY",
-	CMSGMailTakeItem:       "CMSG_MAIL_TAKE_ITEM",
-	CMSGQueryNextMailTime:  "CMSG_QUERY_NEXT_MAIL_TIME",
-	CMSGMailMarkAsRead:     "CMSG_MAIL_MARK_AS_READ",
-	CMSGMailDelete:         "CMSG_MAIL_DELETE",
-	CMSGMailReturnToSender: "CMSG_MAIL_RETURN_TO_SENDER",
-	CMSGSendMail:           "CMSG_SEND_MAIL",
+	CMSGMailGetList:                       "CMSG_MAIL_GET_LIST",
+	CMSGMailTakeMoney:                     "CMSG_MAIL_TAKE_MONEY",
+	CMSGMailTakeItem:                      "CMSG_MAIL_TAKE_ITEM",
+	CMSGQueryNextMailTime:                 "CMSG_QUERY_NEXT_MAIL_TIME",
+	CMSGMailMarkAsRead:                    "CMSG_MAIL_MARK_AS_READ",
+	CMSGMailDelete:                        "CMSG_MAIL_DELETE",
+	CMSGMailReturnToSender:                "CMSG_MAIL_RETURN_TO_SENDER",
+	CMSGSendMail:                          "CMSG_SEND_MAIL",
+	CMSGAuctionHelloRequest:               "CMSG_AUCTION_HELLO_REQUEST",
+	CMSGAuctionSellItem:                   "CMSG_AUCTION_SELL_ITEM",
+	CMSGAuctionRemoveItem:                 "CMSG_AUCTION_REMOVE_ITEM",
+	CMSGAuctionPlaceBid:                   "CMSG_AUCTION_PLACE_BID",
+	CMSGAuctionBrowseQuery:                "CMSG_AUCTION_BROWSE_QUERY",
+	CMSGAuctionListItemsByBucketKey:       "CMSG_AUCTION_LIST_ITEMS_BY_BUCKET_KEY",
+	CMSGAuctionListOwnedItems:             "CMSG_AUCTION_LIST_OWNED_ITEMS",
+	CMSGAuctionGetCommodityQuote:          "CMSG_AUCTION_GET_COMMODITY_QUOTE",
+	CMSGAuctionConfirmCommoditiesPurchase: "CMSG_AUCTION_CONFIRM_COMMODITIES_PURCHASE",
+	CMSGAuctionSellCommodity:              "CMSG_AUCTION_SELL_COMMODITY",
 
 	CMSGTaxiNodeStatusQuery:      "CMSG_TAXI_NODE_STATUS_QUERY",
 	CMSGEnableTaxiNode:           "CMSG_ENABLE_TAXI_NODE",
