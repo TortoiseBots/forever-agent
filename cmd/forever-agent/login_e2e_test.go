@@ -182,7 +182,7 @@ func TestLoginBadRPCAddressNeverSpendsARealmdAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer busy.Close()
-	for _, addr := range []string{"0.0.0.0:8765", "192.168.1.10:8765", "example.com:8765", "8765", "127.0.0.1:65536", busy.Addr().String()} {
+	for _, addr := range []string{"0.0.0.0:8765", "203.0.113.10:8765", "example.com:8765", "8765", "127.0.0.1:65536", busy.Addr().String()} {
 		if code, _, errOut := runCLI("login", "--config", cfg, "--rpc", addr, "harness", "Harnessb"); code != exitUsage || !strings.Contains(errOut, "rpc: ") {
 			t.Errorf("%s: %d %q", addr, code, errOut)
 		}

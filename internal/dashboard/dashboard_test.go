@@ -457,7 +457,7 @@ func TestFilesHandlerServesOnlyTheTestsFolder(t *testing.T) {
 func TestAllowedHostNamesPassTheGuard(t *testing.T) {
 	root := t.TempDir()
 	p := NewPoller(Options{TestsDir: root, ConfigDir: t.TempDir(), Agents: "auto"})
-	allow, err := AllowedHosts("100.86.248.75", "test1.tail1234.ts.net, [fd7a:115c:a1e0::53]")
+	allow, err := AllowedHosts("100.64.0.10", "test1.example.test, [fd7a:115c:a1e0::10]")
 	must(t, err)
 	srv := httptest.NewServer(Handler(p, root, allow))
 	defer srv.Close()
@@ -472,35 +472,35 @@ func TestAllowedHostNamesPassTheGuard(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	for _, h := range []string{"127.0.0.1:8790", "localhost:8790", "100.86.248.75", "100.86.248.75:8790", "test1.tail1234.ts.net:8790", "TEST1.Tail1234.TS.NET.", "[fd7a:115c:a1e0::53]:8790"} {
+	for _, h := range []string{"127.0.0.1:8790", "localhost:8790", "100.64.0.10", "100.64.0.10:8790", "test1.example.test:8790", "TEST1.Example.TEST.", "[fd7a:115c:a1e0::10]:8790"} {
 		if code := status(srv, "GET", h); code != http.StatusOK {
 			t.Errorf("Host %q: %d, want 200", h, code)
 		}
 	}
-	for _, h := range []string{"100.86.248.76", "100.86.248.75.evil.example.com", "evil.example.com", "test1.tail1234.ts.net.evil.example.com", "test1.tail1234", "fd7a:115c:a1e0::54", "0.0.0.0"} {
+	for _, h := range []string{"100.64.0.11", "100.64.0.10.evil.example.com", "evil.example.com", "test1.example.test.evil.example.com", "test1.example", "fd7a:115c:a1e0::11", "0.0.0.0"} {
 		if code := status(srv, "GET", h); code != http.StatusForbidden {
 			t.Errorf("Host %q: %d, want 403", h, code)
 		}
 	}
-	if code := status(plain, "GET", "100.86.248.75:8790"); code != http.StatusForbidden {
+	if code := status(plain, "GET", "100.64.0.10:8790"); code != http.StatusForbidden {
 		t.Errorf("without --allow-host: %d, want 403", code)
 	}
-	if code := status(srv, "POST", "100.86.248.75:8790"); code != http.StatusMethodNotAllowed {
+	if code := status(srv, "POST", "100.64.0.10:8790"); code != http.StatusMethodNotAllowed {
 		t.Errorf("POST by an allowed host: %d, want 405", code)
 	}
 }
 
 func TestAllowedHostsList(t *testing.T) {
-	got, err := AllowedHosts("100.86.248.75", "test1.tail1234.ts.net, [fd7a:115c:a1e0::53],")
-	if err != nil || !reflect.DeepEqual(got, []string{"test1.tail1234.ts.net", "fd7a:115c:a1e0::53", "100.86.248.75"}) {
+	got, err := AllowedHosts("100.64.0.10", "test1.example.test, [fd7a:115c:a1e0::10],")
+	if err != nil || !reflect.DeepEqual(got, []string{"test1.example.test", "fd7a:115c:a1e0::10", "100.64.0.10"}) {
 		t.Fatalf("list: %q %v", got, err)
 	}
-	for listen, want := range map[string]int{"127.0.0.1": 0, "localhost": 0, "0.0.0.0": 0, "::": 0, "test1": 0, "100.86.248.75": 1} {
+	for listen, want := range map[string]int{"127.0.0.1": 0, "localhost": 0, "0.0.0.0": 0, "::": 0, "test1": 0, "100.64.0.10": 1} {
 		if got, err := AllowedHosts(listen, ""); err != nil || len(got) != want {
 			t.Errorf("listen %q: %q %v, want %d names", listen, got, err, want)
 		}
 	}
-	for _, bad := range []string{"*.tail1234.ts.net", "test1:8790", "http://test1", "test1/x", "test1.tail1234.ts.net evil", "0.0.0.0", "::", "[::]", "-test1", "test1..ts.net", "m_910q", "[fd7a::1", "[]"} {
+	for _, bad := range []string{"*.example.test", "test1:8790", "http://test1", "test1/x", "test1.example.test evil", "0.0.0.0", "::", "[::]", "-test1", "test1..example.test", "m_910q", "[fd7a::1", "[]"} {
 		if _, err := AllowedHosts("127.0.0.1", bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -542,7 +542,7 @@ func TestDiscoverAgents(t *testing.T) {
 	if err != nil || len(as) != 1 || as[0].ID != "[::1]:8773" || as[0].Addr != "[::1]:8773" {
 		t.Fatalf("an IPv6 agent is bracketed in its id and address: %+v %v", as, err)
 	}
-	for _, bad := range []string{"10.0.0.5:8765", "example.com:80", "0.0.0.0:8765", "127.0.0.1:0"} {
+	for _, bad := range []string{"192.0.2.5:8765", "example.com:80", "0.0.0.0:8765", "127.0.0.1:0"} {
 		if _, err := DiscoverAgents(dir, bad); err == nil {
 			t.Errorf("%q must be refused: agents are loopback only", bad)
 		}
@@ -836,7 +836,7 @@ func TestFramingIsLimitedToLoopbackAndNamedOrigins(t *testing.T) {
 	if strings.Contains(csp, "frame-ancestors *") {
 		t.Errorf("anyone may frame: %q", csp)
 	}
-	for _, ok := range []string{"http://test1:8095", "https://dash.example.org", "http://192.168.1.5:8095", "http://[::1]:8095/"} {
+	for _, ok := range []string{"http://test1:8095", "https://dash.example.org", "http://203.0.113.5:8095", "http://[::1]:8095/"} {
 		if err := CheckEmbedOrigin(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}

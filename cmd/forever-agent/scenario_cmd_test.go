@@ -207,7 +207,7 @@ func TestScenarioCmdVarAndSessionFlags(t *testing.T) {
 	}
 	// A --session override to a non-loopback address is refused before any dial.
 	var out4, err4 bytes.Buffer
-	if code := scenarioCmd(t.Context(), []string{"run", "--session", "A=10.0.0.5:8774", "--out", filepath.Join(dir, "o2"), file}, &out4, &err4); code != exitUsage {
+	if code := scenarioCmd(t.Context(), []string{"run", "--session", "A=192.0.2.5:8774", "--out", filepath.Join(dir, "o2"), file}, &out4, &err4); code != exitUsage {
 		t.Fatalf("exit %d", code)
 	}
 	if !strings.Contains(err4.String(), "is not a loopback address") {

@@ -403,9 +403,9 @@ func TestWalkInstanceCapFromFlagAndFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "slots.json")
 	body := `{"version":1,"servers":[
-		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
-		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"192.0.2.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8772,"settings_from":"/s.json"}]}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -446,9 +446,9 @@ func TestWalkInstanceCapUsesTheDefaultSlotsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	slotsBody := `{"version":1,"servers":[
-		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
-		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"192.0.2.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8772,"settings_from":"/s.json"}]}]}`
 	if err := os.WriteFile(filepath.Join(dir, "slots.json"), []byte(slotsBody), 0o600); err != nil {
 		t.Fatal(err)

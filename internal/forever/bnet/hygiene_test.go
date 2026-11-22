@@ -157,7 +157,7 @@ func TestCommittedTextCarriesNoRunIdentifiers(t *testing.T) {
 	for _, c := range []struct{ name, text, want string }{
 		{"ciid", `rpc connect: ciid "0123456789ABCDEF-FEDCBA9876543210", bindless true`, "ciid 0123456789ABCDEF-FEDCBA9876543210"},
 		{"account", "realm join: join ticket 76 bytes, gameAccount 1234#1, join secret 32 bytes", "account 1234#1"},
-		{"ipv4", "world server 10.1.2.3:8085", "ipv4 10.1.2.3"},
+		{"ipv4", "world server 198.51.100.123:8085", "ipv4 198.51.100.123"},
 		{"millisecond time", "server time 1234567890123", "millisecond time 1234567890123"},
 		{"coordinates", "the server saved the character at -1234.56 -765.43 21.09", "coordinates -1234.56 -765.43 21.09"},
 	} {
@@ -171,7 +171,7 @@ func TestCommittedTextCarriesNoRunIdentifiers(t *testing.T) {
 
 	t.Run("every kind at once", func(t *testing.T) {
 		text := fmt.Sprintf("ciid %s, account %s, addressed %s, time %s",
-			"0123456789ABCDEF-FEDCBA9876543210", "77#3", "192.168.1.7", "1234567890123")
+			"0123456789ABCDEF-FEDCBA9876543210", "77#3", "203.0.113.7", "1234567890123")
 		if got := runIdentifiers(text); len(got) != 4 {
 			t.Fatalf("runIdentifiers = %q, want the four identifiers", got)
 		}

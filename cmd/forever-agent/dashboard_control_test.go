@@ -31,7 +31,7 @@ func TestDashboardControlFlags(t *testing.T) {
 	for name, args := range map[string][]string{
 		"trust without the controls": {"--control-trust-local", "--config-dir", cfg, "--listen", "127.0.0.1:0"},
 		"a wildcard listen":          {"--control", "--control-tokens", tokens, "--config-dir", cfg, "--listen", "0.0.0.0:8790"},
-		"a LAN listen":               {"--control", "--control-tokens", tokens, "--config-dir", cfg, "--listen", "192.168.1.5:8790"},
+		"a LAN listen":               {"--control", "--control-tokens", tokens, "--config-dir", cfg, "--listen", "203.0.113.5:8790"},
 		"a missing token file":       {"--control", "--control-tokens", filepath.Join(cfg, "none"), "--config-dir", cfg, "--listen", "127.0.0.1:0"},
 		"the editor's token file":    {"--control", "--control-tokens", tokens, "--edit-tokens", tokens, "--config-dir", cfg, "--listen", "127.0.0.1:0"},
 		"a token in both files":      {"--control", "--control-tokens", tokens, "--edit-tokens", sharedEdit, "--config-dir", cfg, "--listen", "127.0.0.1:0"},

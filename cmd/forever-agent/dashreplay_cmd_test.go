@@ -42,11 +42,11 @@ func smallDumps(t *testing.T) string {
 // --dry-run sends nothing at all even to a loopback target.
 func TestCommandRefusesNonLoopbackExit17(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"dashboard-replay", walk2Dumps, "--to", "10.0.0.5:9195"}, &stdout, &stderr)
+	code := run(context.Background(), []string{"dashboard-replay", walk2Dumps, "--to", "192.0.2.5:9195"}, &stdout, &stderr)
 	if code != 17 {
 		t.Fatalf("exit code = %d, want 17; stderr: %s", code, stderr.String())
 	}
-	want := "refusing to replay to 10.0.0.5:9195: not a loopback address; pass --i-know if this daemon is a test dashboard"
+	want := "refusing to replay to 192.0.2.5:9195: not a loopback address; pass --i-know if this daemon is a test dashboard"
 	if !strings.Contains(stderr.String(), want) {
 		t.Errorf("stderr = %q, want %q", stderr.String(), want)
 	}

@@ -23,9 +23,9 @@ func TestCheckTarget(t *testing.T) {
 		{"loopback v4", "127.0.0.1:9195", false, true, false},
 		{"loopback v6", "[::1]:9195", false, true, false},
 		{"the name localhost", "localhost:9195", false, true, false},
-		{"a private address", "10.0.0.5:9195", false, false, false},
-		{"a tailscale address", "100.86.248.75:8790", false, false, false},
-		{"a private address with i-know", "10.0.0.5:9195", true, true, true},
+		{"a private address", "192.0.2.5:9195", false, false, false},
+		{"a tailscale address", "100.64.0.10:8790", false, false, false},
+		{"a private address with i-know", "192.0.2.5:9195", true, true, true},
 		{"port 0", "127.0.0.1:0", false, false, false},
 	}
 	for _, tc := range cases {
@@ -55,11 +55,11 @@ func TestCheckTarget(t *testing.T) {
 
 // The exact refusal text the command prints and the README quotes.
 func TestCheckTargetRefusalText(t *testing.T) {
-	_, err := CheckTarget("10.0.0.5:9195", false)
+	_, err := CheckTarget("192.0.2.5:9195", false)
 	if err == nil {
 		t.Fatal("CheckTarget accepted a private address")
 	}
-	want := "refusing to replay to 10.0.0.5:9195: not a loopback address; pass --i-know if this daemon is a test dashboard"
+	want := "refusing to replay to 192.0.2.5:9195: not a loopback address; pass --i-know if this daemon is a test dashboard"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
 	}

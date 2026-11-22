@@ -148,8 +148,8 @@ func TestNewRefusesNonLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, addr := range []string{
-		"10.0.0.5:9000", "192.168.1.2:80", "example.com:80", "[2001:db8::1]:80",
-		"0.0.0.0:80", "http://10.0.0.5:9000/rpc", "128.0.0.1:80",
+		"192.0.2.5:9000", "203.0.113.2:80", "example.com:80", "[2001:db8::1]:80",
+		"0.0.0.0:80", "http://192.0.2.5:9000/rpc", "128.0.0.1:80",
 	} {
 		if _, err := New(addr, tokenFile); !errors.Is(err, ErrNotLoopback) {
 			t.Fatalf("New(%q) = %v, want ErrNotLoopback", addr, err)

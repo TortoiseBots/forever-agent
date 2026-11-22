@@ -45,13 +45,13 @@ func TestPracticeGMLinesClosedSet(t *testing.T) {
 // TestPracticeGMRefusedWithoutAuthorize: an agent that dialled anything but a test server's configured world_addr has
 // AllowGMKill false (login.go sets it from gmKillAuthorize), and every practice hand is refused before it sends.
 func TestPracticeGMRefusedWithoutAuthorize(t *testing.T) {
-	servers := []slots.Server{{Name: "m910q", WorldAddr: "10.1.1.1:8085"}}
+	servers := []slots.Server{{Name: "m910q", WorldAddr: "198.51.100.11:8085"}}
 	st := config.Settings{ServerName: "m910q"}
 	// The authorized address passes, so the refusal below is the address rule and not a blanket false.
-	if ok, why := gmKillAllowed(st, "10.1.1.1:8085", servers); !ok {
+	if ok, why := gmKillAllowed(st, "198.51.100.11:8085", servers); !ok {
 		t.Fatalf("the configured world_addr was refused: %s", why)
 	}
-	for _, dialed := range []string{"10.1.1.1:3724", "10.2.2.3:8085", "10.1.1.1:9999", "10.1.1.1"} {
+	for _, dialed := range []string{"198.51.100.11:3724", "198.51.100.23:8085", "198.51.100.11:9999", "198.51.100.11"} {
 		ok, why := gmKillAllowed(st, dialed, servers)
 		if ok {
 			t.Fatalf("dialling %s authorized the practice hands", dialed)
