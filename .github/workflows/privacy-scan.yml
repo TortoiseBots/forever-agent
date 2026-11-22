@@ -1,0 +1,62 @@
+name: privacy-scan
+
+# Nightly on main: the tree must not name a private path, host, address or e-mail. The same patterns the ship script
+# hard-blocks on a diff, here over the whole tree. Fails with the file:line list. The patterns are written with a
+# character class around one letter so that this file does not match itself, and it is also excluded from the scan.
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: privacy-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: grep the tree
+        run: |
+          set -uo pipefail
+          # An extended regex per line: private directories and checkouts, work-tree and runner names, a personal
+          # mail host, and any 100.x.x.x address (a Tailscale address).
+          patterns=(
+            '[T]ortoiseBots-audit'
+            '/home/[a-z]+/'
+            '[f]orever-captures'
+            '[f]orever-client/captures'
+            '@[g]mail'
+            '[w]t=wt-'
+            '~/wt-[a-z]'
+            '[y]ulon-ubuntu'
+            '[r]unner='
+            '(^|[^0-9.])100\.[0-9]+\.[0-9]+\.[0-9]+'
+          )
+          re="$(IFS='|'; echo "${patterns[*]}")"
+          git grep -n -I -E "$re" -- . ':!.github/workflows/privacy-scan.yml' >"$RUNNER_TEMP/all-hits.txt" || true
+          # .github/privacy-allow.txt (optional): fixed strings, one per line, that are known to be fake (documentation
+          # ranges, test fixtures). A line that matches only through one of them is not reported.
+          allow=.github/privacy-allow.txt
+          if [ -s "$allow" ]; then
+            grep -v -F -f "$allow" "$RUNNER_TEMP/all-hits.txt" >"$RUNNER_TEMP/hits.txt" || true
+          else
+            cp "$RUNNER_TEMP/all-hits.txt" "$RUNNER_TEMP/hits.txt"
+          fi
+          if [ -s "$RUNNER_TEMP/hits.txt" ]; then
+            echo "Private-looking values found (file:line:text):"
+            cut -c1-200 "$RUNNER_TEMP/hits.txt"
+            echo
+            echo "::error::$(wc -l <"$RUNNER_TEMP/hits.txt") lines match a privacy pattern"
+            exit 1
+          fi
+          echo "clean"

@@ -1,0 +1,87 @@
+name: flake-hunt
+
+# Nightly: the tests with a known flake history run 10 times under -race. On a failure the job creates or updates ONE
+# open issue titled "Flaky tests" (the log's failing test names and a run link). One job; no secrets beyond the default
+# GITHUB_TOKEN (issues: write only).
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: flake-hunt
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  flake-hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: go test -race -count=10 (known flakes)
+        id: hunt
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/hunt.log"
+          : >"$log"
+          rc=0
+          # internal/session: the gossip menu test and the learn-supersede-remove spells test (both flaked).
+          go test -race -count=10 -timeout 20m -run '^(TestGossipMenuClosesOnMoveAndNewHello|TestLearnSupersedeAndRemoveSpells)$' ./internal/session 2>&1 | tee -a "$log"
+          [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+          # The slots and route packages, whole.
+          go test -race -count=10 -timeout 20m ./internal/slots ./internal/slotdir ./internal/routeoracle ./internal/routeedit 2>&1 | tee -a "$log"
+          [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+          # The world-socket tests: the dungeon link death test, the route walks and the enter-adopt tests.
+          go test -race -count=10 -timeout 30m -run '^(TestDungeonRunLinkDeathPerPort|TestRouteWalk.*|TestEnterAdopts.*)$' ./internal/forever/world ./cmd/forever-agent 2>&1 | tee -a "$log"
+          [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+          echo "rc=$rc" >>"$GITHUB_OUTPUT"
+          # The failure is reported by the issue step; the run itself stays green so one flake does not email every night.
+          exit 0
+
+      - name: Create or update the "Flaky tests" issue
+        if: steps.hunt.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          failing="$(grep -E -o '^--- FAIL: [A-Za-z0-9_/]+' "$RUNNER_TEMP/hunt.log" | sed 's/^--- FAIL: //' | sort | uniq -c | sort -rn | head -20 || true)"
+          races="$(grep -c 'WARNING: DATA RACE' "$RUNNER_TEMP/hunt.log" || true)"
+          {
+            echo "Nightly flake hunt ($(date -u +%F)): ${RUN_URL}"
+            echo
+            echo "Failures across 10 runs under -race (count, test):"
+            echo '```'
+            if [ -n "$failing" ]; then echo "$failing"; else echo "(no '--- FAIL' line: a build error, a timeout or a panic; see the run log)"; fi
+            echo '```'
+            echo "Data race reports: ${races}"
+          } >"$RUNNER_TEMP/body.md"
+          n="$(gh api "repos/${REPO}/issues?state=open&per_page=100" --jq '[.[] | select(.pull_request == null) | select(.title == "Flaky tests")][0].number // empty')"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --repo "$REPO" --title "Flaky tests" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Fail the run when a flake was found
+        if: steps.hunt.outputs.rc != '0'
+        run: |
+          echo "::error::flaky tests found, see the 'Flaky tests' issue"
+          exit 1
