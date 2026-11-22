@@ -124,6 +124,8 @@ type PlayFake struct {
 	pending     []pendingAggro
 	encounters  []EncounterEvent
 	OnFightTick func(f *PlayFake)
+	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
+	OnRezPoll func(f *PlayFake)
 }
 
 // The fake's fight numbers: a scripted unit's health when a test gave it none, and what the group takes off a unit
@@ -636,6 +638,9 @@ func (f *PlayFake) AcceptRez() error {
 
 // RezOffer is the offer that is up.
 func (f *PlayFake) RezOffer() (RezOffer, bool) {
+	if f.OnRezPoll != nil {
+		f.OnRezPoll(f)
+	}
 	if f.Offer == nil {
 		return RezOffer{}, false
 	}

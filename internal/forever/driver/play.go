@@ -277,11 +277,13 @@ type playRun struct {
 
 	// wipes and deaths are the run's counters (D-14's budget reads the first), deathSeen the members already counted
 	// dead until they stand up again, and looted the corpses this run opened or was refused.
-	wipes     int
-	maxWipes  int
-	deaths    int
-	deathSeen map[string]bool
-	looted    map[wire.GUID]bool
+	wipes    int
+	maxWipes int
+	// wipeLatched is a whole-party death seen before wipe() ran (see latchWipe).
+	wipeLatched bool
+	deaths      int
+	deathSeen   map[string]bool
+	looted      map[wire.GUID]bool
 	// deadFrom is where the run goes back to once the character is up: the fight it died in.
 	deadFrom string
 }

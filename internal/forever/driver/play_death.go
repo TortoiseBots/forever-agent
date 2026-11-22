@@ -46,6 +46,7 @@ func (p *playRun) deadWait(ctx context.Context) string {
 	released := false
 	deadline := p.now().Add(p.lim.Rez)
 	for {
+		p.latchWipe()
 		if p.ports.Player.Phase() == PhaseAlive {
 			p.rec.Event(p.now(), "alive", nil)
 			return p.afterDeath()
@@ -76,6 +77,7 @@ func (p *playRun) deadWait(ctx context.Context) string {
 			if !p.ghostRun(ctx) {
 				return ""
 			}
+			p.latchWipe()
 			continue
 		}
 		if p.timeUp() {
@@ -187,7 +189,9 @@ func (p *playRun) wipe(ctx context.Context) string {
 	started := p.now()
 	deadline := started.Add(p.lim.Recover)
 	p.noteDeaths()
-	if p.wiped() {
+	p.latchWipe()
+	if p.wipeLatched {
+		p.wipeLatched = false
 		p.wipes++
 		p.rec.Event(started, "wipe", map[string]any{"leg": p.legName(), "group": p.pack, "wipe": p.wipes})
 		if p.maxWipes >= 0 && p.wipes > p.maxWipes {
@@ -303,6 +307,15 @@ func (p *playRun) playerErr(err error, reason string) {
 }
 
 // --- the party's state, as the roster gives it ---
+
+// latchWipe remembers that the whole party was down at once. The character's own death comes first in a wipe the bots
+// finish while it waits for a rez, and it may stand up again before wipe() reads the roster, so the observation is kept
+// until wipe() spends it (D-14's budget must not miss it).
+func (p *playRun) latchWipe() {
+	if p.wiped() || (p.ports.Player.Phase() != PhaseAlive && len(p.downBots()) == len(p.cfg.Bots)) {
+		p.wipeLatched = true
+	}
+}
 
 // wiped says whether every member of the party is dead or a ghost.
 func (p *playRun) wiped() bool {

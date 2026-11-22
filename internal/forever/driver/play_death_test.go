@@ -277,3 +277,33 @@ func TestPlayGreedOnRoll(t *testing.T) {
 		}
 	}
 }
+
+// TestPlayWipeDuringRezWaitCounts: the character dies first and the bots die while it waits for a rez, then it stands
+// up before the recovery reads the roster. It was still a wipe (all five down at once) and spends the budget.
+func TestPlayWipeDuringRezWaitCounts(t *testing.T) {
+	ticks, polls := 0, 0
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+		f.OnFightTick = func(f *PlayFake) {
+			ticks++
+			if ticks == 2 {
+				f.SelfPhase = PhaseDead
+			}
+		}
+		f.OnRezPoll = func(f *PlayFake) {
+			polls++
+			if polls == 3 {
+				for _, b := range f.GoldenOwner.Bots {
+					b.Dead = true
+				}
+			}
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Summary.Wipes != 1 {
+		t.Fatalf("wipes = %d; want 1 (stop %q, states %s)", res.Summary.Wipes, res.Stop, strings.Join(res.States, " "))
+	}
+}
