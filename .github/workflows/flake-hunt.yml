@@ -41,8 +41,8 @@ jobs:
           log="$RUNNER_TEMP/hunt.log"
           : >"$log"
           rc=0
-          # internal/session: the gossip menu test.
-          go test -race -count=10 -timeout 20m -run '^TestGossipMenuClosesOnMoveAndNewHello$' ./internal/session 2>&1 | tee -a "$log"
+          # internal/session: the gossip menu test and the learn-supersede-remove spells test (both flaked).
+          go test -race -count=10 -timeout 20m -run '^(TestGossipMenuClosesOnMoveAndNewHello|TestLearnSupersedeAndRemoveSpells)$' ./internal/session 2>&1 | tee -a "$log"
           [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
           # The slots and route packages, whole.
           go test -race -count=10 -timeout 20m ./internal/slots ./internal/slotdir ./internal/routeoracle ./internal/routeedit 2>&1 | tee -a "$log"
