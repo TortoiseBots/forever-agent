@@ -273,7 +273,7 @@ func TestStatusKeysPinContract(t *testing.T) {
 	pinned := []string{
 		"base_time", "character", "combo_points", "combo_target", "dead", "error", "falling",
 		"gcd_ms", "ghost", "guid", "health", "in_combat", "latency_ms", "level", "map",
-		"max_health", "max_power", "mono_ms", "o", "parse_errors", "power", "power_type",
+		"max_health", "max_power", "mono_ms", "o", "on_taxi", "parse_errors", "power", "power_type",
 		"reconnect_attempt", "reconnect_limit", "server_packets", "state", "target", "team",
 		"teleport_seq", "wall_offset_ms", "x", "y", "z", "z_unknown",
 	}
@@ -417,6 +417,7 @@ func TestServeClientMethodPin(t *testing.T) {
 		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status",
 		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select",
 		"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log",
+		"taxi",
 		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)

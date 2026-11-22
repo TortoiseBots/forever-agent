@@ -83,11 +83,14 @@ func ParseMountResult(payload []byte) (int32, error) {
 // field (or the server's refusal). The cast is never repeated: a second cast of a spell that did work would toggle or
 // double-cast it, and a spell that is not a mount would be cast for nothing. The spell must be one the character
 // knows (SMSG_SEND_KNOWN_SPELLS), so an arbitrary spell id is refused before anything is sent. A character already
-// mounted (or on a taxi flight, which also shows a display) is answered as it is, without a cast the server would
-// refuse.
+// mounted is answered as it is, without a cast the server would refuse; one on a taxi flight is refused (its display
+// is the flight's own).
 func (s *session) serveMount(ctx context.Context, p serveMountParams) (ServeMount, error) {
 	if (p.Spell > 0) == (p.Entry > 0) {
 		return ServeMount{}, errors.New("mount needs exactly one of spell or entry")
+	}
+	if err := s.refuseMountOnTaxi("mount"); err != nil {
+		return ServeMount{}, err
 	}
 	if p.Entry > 0 {
 		return ServeMount{}, ErrMountNeedsItemUse
@@ -136,6 +139,9 @@ func (s *session) knowsSpell(spell int32) bool {
 // serveDismount cancels the mount aura and waits for the display field to reach zero. A character already on foot is
 // answered as it is, sending nothing.
 func (s *session) serveDismount(ctx context.Context) (ServeMount, error) {
+	if err := s.refuseMountOnTaxi("dismount"); err != nil {
+		return ServeMount{}, err
+	}
 	if d := s.mountDisplay(); d == 0 {
 		return ServeMount{Mounted: false}, nil
 	}
@@ -154,6 +160,16 @@ func (s *session) serveDismount(ctx context.Context) (ServeMount, error) {
 		return ServeMount{Mounted: true, DisplayID: display}, fmt.Errorf("dismount: still mounted after %s (display %d)", dismountWait, display)
 	}
 	return ServeMount{Mounted: false}, nil
+}
+
+// refuseMountOnTaxi stops a mount or a dismount while the character is on a taxi flight: the display the model holds
+// is the flight's own mount, the server owns it (a taxi start removes the mount aura itself, Player.cpp:24517), and a
+// CMSG_CANCEL_MOUNT_AURA in the air is not the caller's to send.
+func (s *session) refuseMountOnTaxi(verb string) error {
+	if err := s.taxiMovementBlocked(); err != nil {
+		return fmt.Errorf("%s: %w", verb, err)
+	}
+	return nil
 }
 
 // mountResultReset forgets the last mount result before a new cast or cancel.

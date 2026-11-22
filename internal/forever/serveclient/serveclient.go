@@ -174,6 +174,7 @@ type Status struct {
 	LatencyMS        uint32    `json:"latency_ms"`
 	Dead             bool      `json:"dead"`
 	Ghost            bool      `json:"ghost"`
+	OnTaxi           bool      `json:"on_taxi"`
 	ServerPackets    int       `json:"server_packets"`
 	ParseErrors      int       `json:"parse_errors"`
 	MonoMS           int64     `json:"mono_ms"`

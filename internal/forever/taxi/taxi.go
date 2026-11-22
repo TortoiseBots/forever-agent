@@ -257,3 +257,22 @@ func ParseActivateTaxiReply(p []byte) (uint8, error) {
 	}
 	return reply, nil
 }
+
+// ParseNewTaxiPath reads SMSG_NEW_TAXI_PATH to its last byte (NewTaxiPath::Write, TaxiPackets.cpp:75-80): one int32,
+// the taxi node the server just added to the character's mask. It is how a node is discovered: the core sends it
+// from SendLearnNewTaxiNode when a flight master's node is new (TaxiHandler.cpp:129-140) and from
+// SendDiscoverNewTaxiNode when a spell discovers one (TaxiHandler.cpp:153-156, SpellEffects.cpp:5202).
+//
+// The failing case is TestParseNewTaxiPathIsOneInt32: a reader that takes the node as a packed GUID or a byte loses
+// every node above 255 and leaves bytes behind.
+func ParseNewTaxiPath(p []byte) (uint32, error) {
+	b := wire.NewReader(p)
+	node := b.ReadI32()
+	if err := exactly(b); err != nil {
+		return 0, err
+	}
+	if node <= 0 {
+		return 0, fmt.Errorf("taxi: new taxi path names node %d", node)
+	}
+	return uint32(node), nil
+}
