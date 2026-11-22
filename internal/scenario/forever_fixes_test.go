@@ -288,7 +288,7 @@ func TestForeverDoStepsAgainstFakeDaemon(t *testing.T) {
 	var bot struct {
 		Line string `json:"line"`
 	}
-	if err := json.Unmarshal(d.called("bot")[0].Params, &bot); err != nil || bot.Line != ".bot status" {
+	if err := json.Unmarshal(d.called("bot")[0].Params, &bot); err != nil || bot.Line != ".tb status" {
 		t.Fatalf("bot params %s %v", d.called("bot")[0].Params, err)
 	}
 	var addon struct {

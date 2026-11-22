@@ -137,7 +137,7 @@ func TestTurtleFileUnchanged(t *testing.T) {
 func TestForeverDoStepsCallServeMethods(t *testing.T) {
 	f := parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774","server":"forever"}},"steps":[
 		{"do":"gm","session":"A","text":".go xyz 1 2 3"},
-		{"do":"bot","session":"A","command":".bot status"},
+		{"do":"bot","session":"A","command":"state Bheal"},
 		{"do":"rpc","session":"A","method":"party"}
 	]}`)
 	a := &fakeForeverCaller{char: "Atank"}
@@ -170,8 +170,20 @@ func TestForeverDoStepsCallServeMethods(t *testing.T) {
 		Line string `json:"line"`
 	}
 	bcalls := a.called("bot")
-	if err := json.Unmarshal(bcalls[0].Params, &botParams); err != nil || botParams.Line != ".bot status" {
+	if err := json.Unmarshal(bcalls[0].Params, &botParams); err != nil || botParams.Line != ".tb state Bheal" {
 		t.Fatalf("bot params %s %v", bcalls[0].Params, err)
+	}
+	// The transcript prints the line that went out, once (before the fix it was the hardcoded `.bot state
+	// Bheal`, which this module never answers).
+	wantRaw := "  gm[A] .tb state Bheal"
+	found := false
+	for _, rec := range res.Records {
+		if rec.T == "action" && rec.Step == 2 && rec.Raw == wantRaw && rec.Norm == wantRaw {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the bot step's raw line is not %q: %+v", wantRaw, res.Records)
 	}
 }
 

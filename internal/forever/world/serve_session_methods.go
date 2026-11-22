@@ -907,7 +907,8 @@ func (s *session) serveSelectConfirmed(ctx context.Context, o *objects.Object, w
 // unit only when the daemon was started as a test bench (--allow-gm-units), the unit is on the trial allowlist the
 // runner registered through trial_units, and, when it is a player, it is this session's own character. Every refusal
 // is a typed rpc.Error, and it is fail-closed: a daemon without the flag, an empty allowlist, or an allowlist the
-// runner has not (re)registered yet all refuse.
+// runner has not (re)registered yet all refuse. The `.revive` line has its own boundary (serveGMReviveUnit): it
+// raises players only, so the allowlist is not what protects them there.
 func (s *session) serveGMUnit(o *objects.Object, method string) error {
 	if err := s.serveGMUnitGate(method); err != nil {
 		return err
@@ -950,6 +951,7 @@ const (
 	serveGMHandSelected                         // the selected unit (the character itself when nothing is selected)
 	serveGMHandSelf                             // the ".aura self"/".unaura self" form
 	serveGMHandNamed                            // a player the line names (".revive <name>")
+	serveGMHandRevive                           // the bare ".revive" form, which the core applies to the selected player
 )
 
 // serveGMHandCommand classifies one raw gm text. It is the core's own command table that decides which lines act on
@@ -1001,7 +1003,9 @@ func serveGMHandCommand(text string) (serveGMHandClass, string) {
 		if len(fields) > 1 {
 			return serveGMHandNamed, fields[1]
 		}
-		return serveGMHandSelected, ""
+		// The bare form raises the selected player, or the character itself when the selection is not a player
+		// (Chat::getSelectedPlayerOrSelf), so it has a boundary of its own.
+		return serveGMHandRevive, ""
 	}
 	return serveGMHandNone, ""
 }
@@ -1019,8 +1023,10 @@ func serveGMNameIs(typed string, names ...string) bool {
 
 // serveGMUnitLine is the raw gm method's boundary: a line the core would run as one of the unit commands above is
 // checked against the same boundary as the typed hands (serveGMUnit) before it is sent, so the raw path cannot do
-// what gm_kill, gm_set_hp or gm_aura refuse. A refusal is the typed -32006 and sends nothing, the GM guard's probe
-// included. A line that is not a unit command passes untouched.
+// what gm_kill, gm_set_hp or gm_aura refuse. The one exception is `.revive`, which raises players and is held to
+// its own boundary (serveGMReviveUnit): the session's own character and the trial units the runner registered. A
+// refusal is the typed -32006 and sends nothing, the GM guard's probe included. A line that is not a unit command
+// passes untouched.
 //
 // The selected-target lines act on the unit the server has selected. Two selections can be in play for one line:
 // the one this session last sent and the one the server's own model last echoed, because the core applies a
@@ -1035,20 +1041,29 @@ func (s *session) serveGMUnitLine(method, text string) error {
 		if err := s.serveGMUnitGate(method); err != nil {
 			return err
 		}
-		if s.serveGMSelfName(name) {
-			self, ok := s.world.Object(s.selfOrMover())
-			if !ok {
-				return serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
-			}
-			return s.serveGMUnit(self, method)
-		}
-		return serveGMRefused(method, fmt.Sprintf("the line names a player other than this session's character (%s)", chat.SanitiseName(name)))
+		return s.serveGMReviveNamed(name, method)
 	case serveGMHandSelf:
 		self, ok := s.world.Object(s.selfOrMover())
 		if !ok {
 			return serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
 		}
 		return s.serveGMUnit(self, method)
+	case serveGMHandRevive:
+		units, err := s.serveGMSelectedUnits(method)
+		if err != nil {
+			return err
+		}
+		// The core's getSelectedPlayerOrSelf skips a selection that is not a player, so only players are checked;
+		// with no player selected the character itself is the target, which its own rule allows.
+		for _, o := range units {
+			if o.Type != objects.TypePlayer && o.Type != objects.TypeActivePlayer {
+				continue
+			}
+			if err := s.serveGMReviveUnit(o, method); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	units, err := s.serveGMSelectedUnits(method)
 	if err != nil {
@@ -1060,6 +1075,51 @@ func (s *session) serveGMUnitLine(method, text string) error {
 		}
 	}
 	return nil
+}
+
+// serveGMReviveNamed resolves the name a `.revive <name>` line carries. This session's own character is matched by
+// the login report's name first, because the model may not have learned it yet (nothing has asked for it), then by
+// the world's name; any other name is looked up in the model, so a trial bot the runner registered is found. A name
+// the model does not hold is refused without sending the line.
+func (s *session) serveGMReviveNamed(name, method string) error {
+	name = strings.TrimSpace(strings.Trim(name, "\"'"))
+	self, haveSelf := s.world.Object(s.selfOrMover())
+	isSelf := name != "" && (strings.EqualFold(name, s.report.Character.Name) || (haveSelf && strings.EqualFold(name, s.world.Name(self))))
+	if isSelf {
+		if !haveSelf {
+			return serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
+		}
+		return s.serveGMReviveUnit(self, method)
+	}
+	o, err := s.serveUnitByName(GUID{}, name)
+	if err != nil {
+		return serveGMRefused(method, fmt.Sprintf("the line names a player other than this session's character (%s)", chat.SanitiseName(name)))
+	}
+	return s.serveGMReviveUnit(o, method)
+}
+
+// serveGMReviveUnit is the `.revive` line's own boundary. A revive raises a player, so it cannot damage a unit the
+// allowlist guards, but the line must still not raise a player this session has nothing to do with. The session's
+// own character passes with the bench flag alone: a bench whose character died must be able to raise it before the
+// runner has registered anything, which is what the live trials needed. A unit the runner registered through
+// trial_units passes too, which is how a trial's own bots (its scope) are raised. Any other player is refused.
+//
+// The line is sent by the same serveGMResult as every other GM unit hand, so the core's own GM log carries the same
+// audit line: nothing here bypasses the command channel.
+func (s *session) serveGMReviveUnit(o *objects.Object, method string) error {
+	if err := s.serveGMUnitGate(method); err != nil {
+		return err
+	}
+	if o.Type != objects.TypePlayer && o.Type != objects.TypeActivePlayer {
+		return serveGMRefused(method, fmt.Sprintf("%s is not a player; .revive raises players only", o.GUID))
+	}
+	if o.GUID == s.selfOrMover() {
+		return nil
+	}
+	if _, ok := s.serveRT.st.gmUnits[o.GUID]; ok {
+		return nil
+	}
+	return serveGMRefused(method, fmt.Sprintf("%s is a player other than this session's character", o.GUID))
 }
 
 // serveGMSelectedUnits resolves every unit a selected-target line can act on: the selection this session last sent
@@ -1101,22 +1161,6 @@ func (s *session) serveGMSelectedUnits(method string) ([]*objects.Object, error)
 		return nil, serveGMRefused(method, "the character's own unit is not in view, so the target cannot be checked")
 	}
 	return out, nil
-}
-
-// serveGMSelfName says whether the name a .revive line carries is this session's own character: only that player
-// passes the player rule, every other name (a bot of the trial included) is refused.
-func (s *session) serveGMSelfName(name string) bool {
-	name = strings.TrimSpace(strings.Trim(name, "\"'"))
-	if name == "" {
-		return false
-	}
-	if own := s.report.Character.Name; own != "" && strings.EqualFold(name, own) {
-		return true
-	}
-	if o, ok := s.world.Object(s.selfOrMover()); ok {
-		return strings.EqualFold(name, s.world.Name(o))
-	}
-	return false
 }
 
 // serveTrialUnits replaces the GM hands' allowlist with the guids the runner registered for the current trial. It is

@@ -52,9 +52,10 @@ type ServeConfig struct {
 	// ReconnectAttempts bounds how many times a dropped world link is logged in again before the daemon goes
 	// offline. Zero takes serveReconnectAttempts; a negative value turns the retries off.
 	ReconnectAttempts int
-	// AllowGMUnits enables the GM hands that act on one unit (gm_kill, gm_set_hp, gm_aura) and the trial_units
-	// method that registers the guids they may act on. Off by default: a serving daemon that was not started as
-	// a test bench refuses every one of them with rpc.CodeForbidden.
+	// AllowGMUnits enables the GM hands that act on one unit (gm_kill, gm_set_hp, gm_aura, the unit lines of the
+	// raw gm method and gm_revive) and the trial_units method that registers the guids they may act on. Off by
+	// default: a serving daemon that was not started as a test bench refuses every one of them with
+	// rpc.CodeForbidden.
 	AllowGMUnits bool
 	// Relogin makes a fresh Battle.net login for a reconnect and returns opts with the new connection fields (the
 	// address, the realm join ticket, both secrets and the builds, and the world socket its build probe
