@@ -344,6 +344,25 @@ const (
 	SMSGTrainerBuyFail  uint32 = 0x45018B
 )
 
+// The mail of round W-106 (Opcodes.h:586-592, 786, 910, 1876-1877, 1954, 2057): the client's mailbox packets (every
+// one names the mailbox except the delete) and the server's list, command result, next-mail answer and new-mail
+// notice. The mailbox itself is opened client-side: no use packet precedes the list ask (the core only checks the
+// interaction range in CanOpenMailBox, MailHandler.cpp:39-63).
+const (
+	CMSGMailGetList             uint32 = 0x3E00D8
+	CMSGMailTakeMoney           uint32 = 0x3E00D9
+	CMSGMailTakeItem            uint32 = 0x3E00DA
+	CMSGQueryNextMailTime       uint32 = 0x3E00DB
+	CMSGMailMarkAsRead          uint32 = 0x3E00DC
+	CMSGMailDelete              uint32 = 0x3D00E7
+	CMSGMailReturnToSender      uint32 = 0x430081
+	CMSGSendMail                uint32 = 0x430026
+	SMSGMailCommandResult       uint32 = 0x4500E4
+	SMSGNotifyReceivedMail      uint32 = 0x4500E5
+	SMSGMailListResult          uint32 = 0x450200
+	SMSGMailQueryNextTimeResult uint32 = 0x450201
+)
+
 // The flight paths of round R6 (Opcodes.h:49, 348, 1006-1008, 1141, 2052, 2350, 2413): the node status ask, the
 // node list ask (and the enable a client sends when it meets a flight master), the flight, and the answers.
 const (
@@ -522,6 +541,15 @@ var clientNames = map[uint32]string{
 
 	CMSGTrainerList:     "CMSG_TRAINER_LIST",
 	CMSGTrainerBuySpell: "CMSG_TRAINER_BUY_SPELL",
+
+	CMSGMailGetList:        "CMSG_MAIL_GET_LIST",
+	CMSGMailTakeMoney:      "CMSG_MAIL_TAKE_MONEY",
+	CMSGMailTakeItem:       "CMSG_MAIL_TAKE_ITEM",
+	CMSGQueryNextMailTime:  "CMSG_QUERY_NEXT_MAIL_TIME",
+	CMSGMailMarkAsRead:     "CMSG_MAIL_MARK_AS_READ",
+	CMSGMailDelete:         "CMSG_MAIL_DELETE",
+	CMSGMailReturnToSender: "CMSG_MAIL_RETURN_TO_SENDER",
+	CMSGSendMail:           "CMSG_SEND_MAIL",
 
 	CMSGTaxiNodeStatusQuery:      "CMSG_TAXI_NODE_STATUS_QUERY",
 	CMSGEnableTaxiNode:           "CMSG_ENABLE_TAXI_NODE",

@@ -667,6 +667,9 @@ type session struct {
 	// Round R6: the flight master's answers since the last step cleared them (taxi.go, taxi_act.go).
 	taxi taxiWatch
 
+	// Round W-106: the mailbox's answers (mail.go): the last list, each command's result and the next-mail answer.
+	mail mailWatch
+
 	// Round R6: the character's own UNIT_FLAG_ON_TAXI, recorded packet by packet (taxi.go), and the accepted flight
 	// whose landing has not been seen yet: the movement guard reads them.
 	taxiFlight taxiFlightState
@@ -2343,6 +2346,9 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		}
 		if isTaxiPacket(p.Core) {
 			return s.handleTaxi(p)
+		}
+		if isMailPacket(p.Core) {
+			return s.handleMail(p)
 		}
 		s.handleCombat(p)
 	}
