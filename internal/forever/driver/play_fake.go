@@ -633,6 +633,9 @@ func (f *PlayFake) SetBotClass(name, class string) {
 // emitCasts appends one spell_go row for every online bot in the party, as the session's combat log would write it.
 func (f *PlayFake) emitCasts() {
 	now := f.Clock.Now()
+	// The agent's own swing: a row that names the player's character, so redaction has something to hide.
+	f.combat = append(f.combat, []byte(fmt.Sprintf(`{"seq":%d,"kind":"swing","time":%q,"mono_ms":%d,"source":{"guid":%q,"name":%q},"target":{"guid":"","name":"Mob"},"amount":10}`,
+		len(f.combat)+1, now.Format("2006-01-02T15:04:05.000-07:00"), now.UnixMilli(), f.selfGUID.String(), f.SelfName)))
 	for _, b := range f.GoldenOwner.Bots {
 		if !b.Online || !b.InParty || b.Dead || b.Ghost {
 			continue

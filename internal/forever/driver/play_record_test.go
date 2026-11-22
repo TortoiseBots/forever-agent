@@ -140,7 +140,7 @@ func TestPlaySummaryCountsDroppedCombatRows(t *testing.T) {
 }
 
 // TestPlayTraceCarriesNoCharacterNames: the raw trace and summary files name nobody: not the bots (header, events,
-// party records) and not the player's own character.
+// party records, combat log) and not the player's own character.
 func TestPlayTraceCarriesNoCharacterNames(t *testing.T) {
 	rig := playRecordRig(t)
 	rig.fake.Stuck["botone"] = true // a straggler event
@@ -148,7 +148,11 @@ func TestPlayTraceCarriesNoCharacterNames(t *testing.T) {
 	if res.Stop != "clear" {
 		t.Fatalf("stop = %q; want clear", res.Stop)
 	}
-	for _, file := range []string{res.Trace, res.SummaryFile} {
+	combat, _ := filepath.Glob(filepath.Join(rig.cfg.Out, "*.combatlog.jsonl"))
+	if len(combat) != 1 {
+		t.Fatalf("combat logs = %v; want one", combat)
+	}
+	for _, file := range []string{res.Trace, res.SummaryFile, combat[0]} {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

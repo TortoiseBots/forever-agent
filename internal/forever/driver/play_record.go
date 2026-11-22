@@ -1,8 +1,11 @@
 package driver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,6 +147,7 @@ func (p *playRun) drainCombat() {
 			p.combatLostThrough = lost
 		}
 		if len(rows) > 0 {
+			rows = p.redactRows(rows)
 			n, err := p.rec.Combat(rows)
 			if err != nil {
 				if errors.Is(err, errCombatFull) {
@@ -166,6 +170,35 @@ func (p *playRun) drainCombat() {
 			return
 		}
 	}
+}
+
+// redactRows replaces each party member's name in the combat rows with its slot (tank, heal, dps1, dps2, agent), so the
+// combat log names nobody either. The GUIDs stay: the judge joins the rows to the party records on them. A row is
+// copied only when it carries a name.
+func (p *playRun) redactRows(rows []json.RawMessage) []json.RawMessage {
+	names := map[string]string{}
+	for i, b := range p.cfg.Bots {
+		names[b] = playSlot(i)
+	}
+	for _, m := range p.roster() {
+		if p.slot(m.Name) == "agent" {
+			names[m.Name] = "agent"
+		}
+	}
+	out := make([]json.RawMessage, len(rows))
+	for i, row := range rows {
+		out[i] = row
+		for name, slot := range names {
+			if name == "" {
+				continue
+			}
+			quoted := []byte(strconv.Quote(name))
+			if bytes.Contains(out[i], quoted) {
+				out[i] = bytes.ReplaceAll(out[i], quoted, []byte(strconv.Quote(slot)))
+			}
+		}
+	}
+	return out
 }
 
 // playRecord is the summary's play record at the run's end.
