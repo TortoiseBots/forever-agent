@@ -150,6 +150,73 @@ func TestStateEveryKey(t *testing.T) {
 	}
 }
 
+// realStateLine is the module's own `.tb state` line: the contract's real output, with the keys the printer appends
+// for the flight, chat, profession and guild state. The shape is the printer's, not a fixture's convenience: tgtentry
+// and tgthp are empty for a bot with no target, the values carry the encoder's escapes (%20, %2F), and onTaxi is the
+// camel-case key the Wailing Caverns run 6 watch went blind on.
+const realStateLine = "state bot=Mtank role=tank rolesrc=forced class=warrior level=18 hp=708 hpmax=708 hppct=100 " +
+	"power=rage pw=0 pwmax=100 st=non-combat incombat=no tgt= tgtentry= tgthp= victim= hold=no mv=stay " +
+	"stuck= engine=yes pos=-3.85,-11.03,-15.83 map=389 inst=1 dl=self dm=2.4 ord=2:ok lastorder=stay " +
+	"co=close;protection;protection%20raid;pull;stay;tank%20assist;tank%20face " +
+	"nc=default;food;protection;protection%20raid;stay;tank%20assist " +
+	"cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= " +
+	"life=alive relhold= resreq= outside=no entered= entry= block= catchup=0 practice=no " +
+	"rticc=moon ccfam= form=none totems= imbue= seal= paura= bagfree=9 money=49 spec= " +
+	"gear=3:38;6:39;7:80;15:25;16:2362 dur=100 mail=0 " +
+	"free=no kills=3 deaths=1 xp=1200 xpnext=3400 bags=9 sick=no rescue=0 tele=1 corpserun= " +
+	"chatin=0:0:0 chatlast= prof=First%20Aid:1%2F75 taxi=4 onTaxi=no transport=none ah=0%2F0 order=2840:3%2F10 #T"
+
+// realStateEnd is the module's end line of that reply: the totals it types plus the ones the state model only keeps.
+const realStateEnd = "state-end count=1 records=1 bots=1 resting=0 ready=yes marks=0 target=Mtank " +
+	"alive=1 dead=0 ghost=0 wipe=no whole=yes #T"
+
+// TestStateRealModuleLine reads a reply in the module's real shape: every key the model types, the empty optional
+// numbers of a bot with no target, the camel-case onTaxi, and the keys it does not type in Extra. It is the watch's
+// own read: a reply the module really sends must parse, or the watch goes blind on it.
+func TestStateRealModuleLine(t *testing.T) {
+	r := oneReply("state-begin #T", realStateLine, realStateEnd)
+	rep, err := NewClient(r).StateReport(context.Background(), "Mtank")
+	if err != nil {
+		t.Fatalf("StateReport over the module's own line: %v", err)
+	}
+	if len(rep.Bots) != 1 {
+		t.Fatalf("%d bot(s)", len(rep.Bots))
+	}
+	b := rep.Bots[0]
+	if b.Name != "Mtank" || b.Class != "warrior" || b.Level != 18 {
+		t.Errorf("bot %q %q level %d", b.Name, b.Class, b.Level)
+	}
+	if b.HasTargetEntry || b.HasTargetHPPct || b.TargetGUID != "" {
+		t.Errorf("a bot with no target: entry %v hp %v tgt %q", b.HasTargetEntry, b.HasTargetHPPct, b.TargetGUID)
+	}
+	if b.Map != 389 || b.Instance != 1 || b.X != -3.85 || b.Y != -11.03 || b.Z != -15.83 {
+		t.Errorf("map %d inst %d pos %v,%v,%v", b.Map, b.Instance, b.X, b.Y, b.Z)
+	}
+	if b.DistLeader.Kind != "self" || !b.DistMaster.Has || b.DistMaster.Yards != 2.4 {
+		t.Errorf("distances %+v %+v", b.DistLeader, b.DistMaster)
+	}
+	if b.Order.Seq != 2 || b.Order.Status != "ok" || b.LastOrder != "stay" {
+		t.Errorf("order %+v last %q", b.Order, b.LastOrder)
+	}
+	if got := strings.Join(b.CombatStrategies, ","); got != "close,protection,protection raid,pull,stay,tank assist,tank face" {
+		t.Errorf("CombatStrategies = %q", got)
+	}
+	// The camel-case key is accepted and kept, like every other key the model does not type.
+	extra := []struct{ key, want string }{
+		{"onTaxi", "no"}, {"taxi", "4"}, {"transport", "none"}, {"ah", "0/0"},
+		{"order", "2840:3/10"}, {"prof", "First Aid:1/75"}, {"chatin", "0:0:0"}, {"life", "alive"},
+	}
+	for _, e := range extra {
+		if got, ok := b.Extra[e.key]; !ok || got != e.want {
+			t.Errorf("Extra[%q] = %q, %v; want %q", e.key, got, ok, e.want)
+		}
+	}
+	if !rep.Ready || rep.Resting != 0 || rep.Target != "Mtank" || rep.Count != 1 || rep.Records != 1 {
+		t.Errorf("end line: ready %v resting %d target %q count %d records %d",
+			rep.Ready, rep.Resting, rep.Target, rep.Count, rep.Records)
+	}
+}
+
 func TestStateRestReasons(t *testing.T) {
 	line := "state bot=Tbtank role=tank rolesrc=forced class=warrior level=18 hp=10 hpmax=100 hppct=10 " +
 		"power=mana pw=0 pwmax=100 manapct=0 st=dead incombat=no tgt= victim= " +
@@ -350,6 +417,7 @@ func TestV2Strictness(t *testing.T) {
 		{"empty why when not ready", []string{"state-begin #T", strings.Replace(fullState, "resting=no", "resting=yes", 1), "state-end count=1 records=1 resting=1 target=party:Tbtank ready=no why= #T"}},
 		{"literal none", []string{"state-begin #T", strings.Replace(fullState, "mv=follow", "mv=none", 1), stateEndT(1, 0, "yes", "")}},
 		{"separate x key", []string{"state-begin #T", strings.Replace(fullState, "pos=1.25,2.5,3.75", "x=1.25 y=2.5 z=3.75", 1), stateEndT(1, 0, "yes", "")}},
+		{"a key outside the grammar", []string{"state-begin #T", strings.Replace(fullState, "future_key=a%23b", "fu|ture=1", 1), stateEndT(1, 0, "yes", "")}},
 		{"too long", []string{"state-begin #T", "state bot=A pad=" + strings.Repeat("a", maxReplyLineBytes) + " #T", stateEndT(1, 0, "yes", "")}},
 		{"duplicate record", []string{"state-begin #T", fullState, fullState, stateEndT(2, 0, "yes", "")}},
 	}
