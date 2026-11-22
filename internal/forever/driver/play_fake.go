@@ -680,3 +680,12 @@ func (f *PlayFake) Walk(ctx context.Context, pts [][3]float32) error {
 
 // Stop ends a walk; the fake has none to end.
 func (f *PlayFake) Stop() error { return nil }
+
+// ClearTarget makes one unit stop targeting anyone while it stays alive (an evade or a reset, a test's script).
+func (f *PlayFake) ClearTarget(guid wire.GUID) {
+	for i := range f.units {
+		if f.units[i].GUID == guid {
+			f.units[i].Target = wire.GUID{}
+		}
+	}
+}

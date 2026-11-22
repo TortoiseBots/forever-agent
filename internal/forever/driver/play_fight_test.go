@@ -421,3 +421,59 @@ func TestPlayScriptedRFCClear(t *testing.T) {
 	}
 	t.Logf("Ragefire Chasm cleared in %.0f s: %d pulls, %d bosses", res.Summary.DurationS, len(res.Summary.Pulls), bosses)
 }
+
+// TestPlayBossAddsFirst: the plan's First entries are the skull before the boss (the review's finding): the first
+// mark and the first order go to the add, and the boss takes the skull once the add is down.
+func TestPlayBossAddsFirst(t *testing.T) {
+	plan := playFightPlan()
+	plan.Legs[0].PullGroups = nil
+	plan.Legs[0].Boss.First = []uint32{201}
+	add := fightGUID(7)
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: add, Entry: 201, Pos: Vec3{58, 2, 0}})
+		f.SpawnBosses()
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if len(rig.fake.Marks) < 2 || rig.fake.Marks[0].Mark != party.MarkSkull || rig.fake.Marks[0].Target != add {
+		t.Fatalf("marks = %v; want the first skull on the add", rig.fake.Marks)
+	}
+	boss, ok := rig.fake.UnitOf(200)
+	if !ok {
+		t.Fatal("no boss unit")
+	}
+	var skullOnBoss bool
+	for _, m := range rig.fake.Marks {
+		if m.Mark == party.MarkSkull && m.Target == boss.GUID {
+			skullOnBoss = true
+		}
+	}
+	if !skullOnBoss {
+		t.Fatalf("marks = %v; want the skull on the boss after the add", rig.fake.Marks)
+	}
+}
+
+// TestPlayEvadedPackKeepsFightOpen: a living unit that stops targeting the party is not a dead one; the fight does not
+// end on it (the review's finding), so the run stops at the cap and the pack is not counted fought.
+func TestPlayEvadedPackKeepsFightOpen(t *testing.T) {
+	ticks := 0
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}, HP: 200000, MaxHP: 200000})
+		f.SpawnBosses()
+		f.OnFightTick = func(f *PlayFake) {
+			ticks++
+			if ticks == 2 {
+				f.ClearTarget(fightGUID(2))
+			}
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "fight-timeout" {
+		t.Fatalf("stop = %q; want fight-timeout (the evaded unit is alive)", res.Stop)
+	}
+}

@@ -91,14 +91,9 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 		members = append(members, x)
 	}
 	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{b.Entry}, Boss: true, Mobs: len(members)})
-	// The boss is the skull, whatever the kill order says; the cross goes on its nearest add.
-	skull, cross := u, Unit{}
-	for _, m := range members {
-		if m.GUID != u.GUID {
-			cross = m
-			break
-		}
-	}
+	// The plan's entries to kill before the boss are the skull first, in its order; the boss is the skull once they are
+	// down, and the cross goes on the next unit of the order.
+	skull, cross := p.bossOrder(b, members)
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": b.Entry})
@@ -112,6 +107,37 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	}
 	p.stop("pull-failed")
 	return ""
+}
+
+// bossOrder is the boss fight's kill order over the living units of the pull: the leg's First entries in the plan's
+// order, then the boss. It returns the first as the skull and the second as the cross.
+func (p *playRun) bossOrder(b *Boss, units []Unit) (Unit, Unit) {
+	var order []Unit
+	for _, e := range b.First {
+		for _, u := range units {
+			if u.Entry == e && !u.Dead && !u.Friendly && !slices.ContainsFunc(order, func(o Unit) bool { return o.GUID == u.GUID }) {
+				order = append(order, u)
+			}
+		}
+	}
+	for _, u := range units {
+		if u.Entry == b.Entry && !u.Dead && !u.Friendly {
+			order = append(order, u)
+			break
+		}
+	}
+	for _, u := range units {
+		if !u.Dead && !u.Friendly && !slices.ContainsFunc(order, func(o Unit) bool { return o.GUID == u.GUID }) && slices.Contains(p.pullSet, u.GUID) {
+			order = append(order, u)
+		}
+	}
+	switch len(order) {
+	case 0:
+		return Unit{}, Unit{}
+	case 1:
+		return order[0], Unit{}
+	}
+	return order[0], order[1]
 }
 
 // engage is one pull: the two marks, the agent's selection of the skull and `.bot attack <Tank>`, then the wait for the
@@ -180,12 +206,12 @@ func (p *playRun) fight(ctx context.Context) string {
 		units := p.ports.World.Units()
 		live, extra := p.engaged(units)
 		adds = max(adds, extra)
-		if live == 0 {
+		if live == 0 && !p.pullAlive(units) {
 			if calm.IsZero() {
 				calm = now
 			}
 			if now.Sub(calm) >= p.lim.FightQuiet {
-				return p.endFight(ctx, adds)
+				return p.endFight(ctx, adds, units)
 			}
 		} else {
 			calm = time.Time{}
@@ -244,7 +270,7 @@ func (p *playRun) fight(ctx context.Context) string {
 
 // endFight closes a fight: the agent stops swinging, the instance's encounters are read, the pull's record is written
 // and every bot is told to follow again. A boss fight whose boss the evidence does not count dead stops the run.
-func (p *playRun) endFight(ctx context.Context, adds int) string {
+func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	_ = p.ports.Player.StopAttack()
 	p.drainEncounters()
 	p.rec.UpdatePull(func(r *PullRecord) { r.Adds = adds })
@@ -256,6 +282,7 @@ func (p *playRun) endFight(ctx context.Context, adds int) string {
 	}
 	boss := p.bossRun
 	p.bossRun = false
+	down := p.pullDown(units)
 	p.skull, p.pullSet = wire.GUID{}, p.pullSet[:0]
 	if boss {
 		entry := uint32(0)
@@ -268,7 +295,9 @@ func (p *playRun) endFight(ctx context.Context, adds int) string {
 		}
 		return StateRest
 	}
-	p.pulled[p.pack] = true
+	if down {
+		p.pulled[p.pack] = true
+	}
 	p.pack = -1
 	return StateRest
 }
@@ -404,6 +433,17 @@ func (p *playRun) skullAndCross(members []Unit) (Unit, Unit) {
 // nextSkull is the fight's next target once the skull is down: the nearest living unit of the pull (which is the old
 // cross), and as the new cross the next nearest after it.
 func (p *playRun) nextSkull(units []Unit) (Unit, Unit) {
+	if p.bossRun {
+		if leg := p.leg(); leg != nil && leg.Boss != nil {
+			var pool []Unit
+			for _, u := range units {
+				if !u.Dead && !u.Friendly && (slices.Contains(p.pullSet, u.GUID) || u.Entry == leg.Boss.Entry) {
+					pool = append(pool, u)
+				}
+			}
+			return p.bossOrder(leg.Boss, pool)
+		}
+	}
 	live := make([]Unit, 0, len(p.pullSet))
 	for _, u := range units {
 		if u.Dead || u.Friendly || !slices.Contains(p.pullSet, u.GUID) {
@@ -588,3 +628,26 @@ func (p *playRun) attack(ctx context.Context, bot string) (botcmd.Reply, error) 
 
 // bossKey is a boss' key in the run's record.
 func bossKey(entry uint32) string { return strconv.FormatUint(uint64(entry), 10) }
+
+// pullAlive says whether a unit of the pull is still alive in the view: a unit that stopped targeting the party (an
+// evade, a reset) is not a dead one, so it keeps the fight open and the skull moves to it.
+func (p *playRun) pullAlive(units []Unit) bool {
+	for _, u := range units {
+		if !u.Dead && !u.Friendly && slices.Contains(p.pullSet, u.GUID) {
+			return true
+		}
+	}
+	return false
+}
+
+// pullDown says whether every unit of the pull is confirmed dead in the view. A unit that left the view is not
+// confirmed: its pack is not marked fought, so the run pulls it again when it shows.
+func (p *playRun) pullDown(units []Unit) bool {
+	for _, g := range p.pullSet {
+		u, ok := unitByGUID(units, g)
+		if !ok || !u.Dead {
+			return false
+		}
+	}
+	return true
+}
