@@ -1,0 +1,27 @@
+case ok-roster-three
+desc Forever rows have 8 fields; ALTBOTS inside the stream is not counted
+module yes
+send addon roster
+frame addon PARTY TBM roster
+recv addon WHISPER TBM TBM:ROSTER_BEGIN|3
+recv addon WHISPER TBM TBM:ROSTER|101|Alpha|1|online|1|Elwynn Forest|-|Warrior
+recv addon WHISPER TBM TBM:ROSTER|102|Bravo|5|offline|0|-|-|Priest
+recv addon WHISPER TBM TBM:ROSTER|103|Charlie|8|online|1|Goldshire|moon|Mage
+recv addon WHISPER TBM TBM:ALTBOTS|Bravo
+recv addon WHISPER TBM TBM:ROSTER_END
+expect roster.committed true
+expect roster.count 3
+expect roster.0.guid 101
+expect roster.0.name Alpha
+expect roster.0.class 1
+expect roster.0.state online
+expect roster.0.grouped true
+expect roster.0.location Elwynn Forest
+expect roster.0.cc_mark (empty)
+expect roster.0.class_name Warrior
+expect roster.1.grouped false
+expect roster.1.location -
+expect roster.2.cc_mark moon
+expect roster.2.class_name Mage
+expect altbots Bravo
+expect problems.count 0

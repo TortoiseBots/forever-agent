@@ -1,0 +1,13 @@
+case bad-ack-shapes
+desc malformed acknowledgements are problems, never acks
+recv system TBM:ACTION_ACK|follow|party|3|-|extra
+recv system TBM:ACTION_ACK|follow|party|many|-
+recv system TBM:ACTION_ACK|follow|everyone|3|-
+recv system TBM:ACTION_ERR|pull||No code.
+expect ack.count 0
+expect err.count 0
+expect problems.count 4
+expect problem.0 field-count
+expect problem.1 bad-number
+expect problem.2 bad-scope
+expect problem.3 empty-field

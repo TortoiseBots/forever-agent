@@ -1,0 +1,13 @@
+case ok-hello-latest-caps-replace
+desc a second CAPS replaces the first, lowercased and split on commas and spaces; LATEST read
+recv addon WHISPER TBM TBM:VERSION|v0.1.0-forever
+recv addon WHISPER TBM TBM:PROTO|1|1
+recv addon WHISPER TBM TBM:CAPS|loot-log,choice
+recv addon WHISPER TBM TBM:LATEST|v0.2.0|-
+recv addon WHISPER TBM TBM:CAPS|Behavior, inventory
+recv addon WHISPER TBM TBM:TRANSPORT|party
+expect hello.caps behavior,inventory
+expect hello.latest_module v0.2.0
+expect hello.latest_addon -
+expect hello.check ok
+expect problems.count 0

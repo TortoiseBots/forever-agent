@@ -1,0 +1,10 @@
+case ok-ignored-lines
+desc the own whisper echo, another prefix and a stock chat line are ignored; an unknown TBM type is recorded
+recv addon WHISPER TBM roster
+recv addon PARTY OTHER TBM:VERSION|v9
+recv system Bot commands: roster, version
+recv addon WHISPER TBM TBM:FROBNICATE|1
+expect ignored.count 3
+expect unknown.count 1
+expect hello.version (empty)
+expect problems.count 0

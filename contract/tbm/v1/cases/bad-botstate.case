@@ -1,0 +1,12 @@
+case bad-botstate
+desc a pair without '=' is skipped; a short stream is discarded
+recv system TBM:BOTSTATE_BEGIN|1
+recv system TBM:BOTSTATE|Alpha|move
+recv system TBM:BOTSTATE_END
+recv system TBM:BOTSTATE_BEGIN|2
+recv system TBM:BOTSTATE|Bravo|move=stay
+recv system TBM:BOTSTATE_END
+expect botstate.count 0
+expect problems.count 2
+expect problem.0 bad-pair
+expect problem.1 stream-count

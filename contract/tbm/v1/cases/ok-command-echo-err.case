@@ -1,0 +1,12 @@
+case ok-command-echo-err
+desc a refused action on the chat transport
+module yes
+send chat action pull Zed
+frame chat WHISPER_SELF .bot action pull Zed
+recv system TBM:ACTION_ERR|pull|not-found|No bot named Zed.
+expect err.count 1
+expect err.0.intent pull
+expect err.0.code not-found
+expect err.0.message No bot named Zed.
+expect ack.count 0
+expect problems.count 0

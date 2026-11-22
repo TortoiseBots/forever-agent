@@ -1,0 +1,8 @@
+case bad-hello-no-proto
+desc a module older than the protocol check: complete but not acceptable to the agent
+recv system TBM:VERSION|v0.0.9
+recv system TBM:CAPS|behavior
+recv system TBM:TRANSPORT|party
+expect hello.complete true
+expect hello.proto 0
+expect hello.check hello-incomplete

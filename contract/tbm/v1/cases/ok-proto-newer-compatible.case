@@ -1,0 +1,9 @@
+case ok-proto-newer-compatible
+desc a newer module that still accepts protocol 1 add-ons
+recv system TBM:VERSION|v0.3.0-forever
+recv system TBM:PROTO|2|1
+recv system TBM:CAPS|behavior
+recv system TBM:TRANSPORT|party
+expect hello.proto 2
+expect hello.check ok
+expect problems.count 0

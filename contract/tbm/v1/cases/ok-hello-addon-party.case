@@ -1,0 +1,24 @@
+case ok-hello-addon-party
+desc roster over the add-on channel; trailer order as the old module (streams, BOTSTATE, VERSION, PROTO, CAPS, TRANSPORT)
+module yes
+send addon roster
+frame addon PARTY TBM roster
+recv addon WHISPER TBM TBM:ROSTER_BEGIN|0
+recv addon WHISPER TBM TBM:ROSTER_END
+recv addon WHISPER TBM TBM:BOTSTATE_BEGIN|0
+recv addon WHISPER TBM TBM:BOTSTATE_END
+recv addon WHISPER TBM TBM:VERSION|v0.1.0-forever
+recv addon WHISPER TBM TBM:PROTO|1|1
+recv addon WHISPER TBM TBM:CAPS|behavior,inventory
+recv addon WHISPER TBM TBM:TRANSPORT|party
+expect hello.complete true
+expect hello.transport party
+expect hello.proto 1
+expect hello.min_addon 1
+expect hello.version v0.1.0-forever
+expect hello.caps behavior,inventory
+expect hello.check ok
+expect roster.committed true
+expect roster.count 0
+expect botstate.count 0
+expect problems.count 0

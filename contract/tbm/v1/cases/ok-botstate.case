@@ -1,0 +1,14 @@
+case ok-botstate
+desc a BOTSTATE snapshot then a single-bot update outside the stream
+module yes
+send addon behavior Alpha
+frame addon PARTY TBM behavior Alpha
+recv addon WHISPER TBM TBM:BOTSTATE_BEGIN|2
+recv addon WHISPER TBM TBM:BOTSTATE|Alpha|move=follow,loot=on
+recv addon WHISPER TBM TBM:BOTSTATE|Bravo|move=stay,loot=off
+recv addon WHISPER TBM TBM:BOTSTATE_END
+recv addon WHISPER TBM TBM:BOTSTATE|Alpha|move=stay,loot=on
+expect botstate.count 2
+expect botstate.Alpha move=stay,loot=on
+expect botstate.Bravo move=stay,loot=off
+expect problems.count 0

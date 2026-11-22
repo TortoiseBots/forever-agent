@@ -1,0 +1,7 @@
+case ok-roster-error
+desc the module refuses the roster
+module yes
+recv system TBM:ROSTER_ERROR|not-in-game|You must be in-game.
+expect roster.error not-in-game
+expect roster.error_message You must be in-game.
+expect problems.count 0

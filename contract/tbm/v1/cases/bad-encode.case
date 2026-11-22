@@ -1,0 +1,14 @@
+case bad-encode
+desc commands the encoder refuses, and the longest chat command it accepts
+send addon
+encode-error empty-command
+send addon action follow|x
+encode-error unsafe-arg
+send addon action a\nb
+encode-error unsafe-arg
+send addon action {rep 249 x}
+encode-error text-too-long
+send chat {rep 251 x}
+encode-error text-too-long
+send chat {rep 250 x}
+frame chat WHISPER_SELF .bot {rep 250 x}

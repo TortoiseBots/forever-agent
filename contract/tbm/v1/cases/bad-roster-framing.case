@@ -1,0 +1,12 @@
+case bad-roster-framing
+desc a row outside the stream, an END without BEGIN, a bad count, a stream never closed
+recv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn Forest|-|Warrior
+recv system TBM:ROSTER_END
+recv system TBM:ROSTER_BEGIN|two
+recv system TBM:ROSTER_BEGIN|1
+expect roster.committed false
+expect problems.count 4
+expect problem.0 row-outside-stream
+expect problem.1 end-without-begin
+expect problem.2 bad-number
+expect problem.3 unterminated-stream

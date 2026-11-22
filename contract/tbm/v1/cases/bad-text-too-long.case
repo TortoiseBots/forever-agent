@@ -1,0 +1,7 @@
+case bad-text-too-long
+desc 256 bytes of add-on text are dropped, 255 are read
+recv addon WHISPER TBM TBM:VERSION|{rep 244 x}
+recv addon WHISPER TBM TBM:VERSION|{rep 243 x}
+expect hello.version {rep 243 x}
+expect problems.count 1
+expect problem.0 text-too-long

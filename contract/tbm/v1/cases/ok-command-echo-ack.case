@@ -1,0 +1,15 @@
+case ok-command-echo-ack
+desc two actions over the add-on channel and their acknowledgements
+module yes
+send addon action follow
+frame addon PARTY TBM action follow
+recv addon WHISPER TBM TBM:ACTION_ACK|follow|party|3|-
+recv addon WHISPER TBM TBM:ACTION_ACK|attack|bot:Alpha|1|Alpha
+expect ack.count 2
+expect ack.0.intent follow
+expect ack.0.scope party
+expect ack.0.count 3
+expect ack.0.detail -
+expect ack.1.scope bot:Alpha
+expect ack.1.detail Alpha
+expect problems.count 0

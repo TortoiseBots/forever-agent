@@ -1,0 +1,15 @@
+case ok-hello-chat-none
+desc first hello on chat while the transport is unknown; no group, so the module answers none
+module yes
+send chat roster
+frame chat WHISPER_SELF .bot roster
+recv system TBM:ROSTER_BEGIN|0
+recv system TBM:ROSTER_END
+recv system TBM:VERSION|v0.1.0-forever
+recv system TBM:PROTO|1|1
+recv system TBM:CAPS|behavior
+recv system TBM:TRANSPORT|none
+expect hello.complete true
+expect hello.transport none
+expect hello.check ok
+expect problems.count 0
