@@ -29,6 +29,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
+	"github.com/pjerra/forever-agent/internal/foreverspells"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
@@ -224,6 +225,9 @@ type Options struct {
 	// within ServeConfig's budget (a fresh session, rebuilt state), and only a spent budget ends the daemon. Stay
 	// and the one-shot modes are ignored; Deadline, when above 0, still bounds the whole run.
 	Serve *ServeConfig
+	// spellTable is the Forever spell data this session reads (spellbook.go, ticket #93 R5). Unexported: it is
+	// the embedded table, and a test injects its own; a command never picks a different spell book.
+	spellTable *foreverspells.Table
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -605,6 +609,10 @@ type session struct {
 	known            []int32
 	castSerial       uint32
 	parseErrorLogged map[string]bool
+	// Round R5 (#93): the spellbook the three change packets maintain (spellbook.go) and the spell data it reads,
+	// taken from Options.spellTable or the embedded table on first use.
+	spells    *spellBook
+	spellData *foreverspells.Table
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
@@ -2544,8 +2552,40 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		s.known = append(s.known[:0], v.Known...)
-		s.report.KnownSpells = append([]int32(nil), s.known...)
+		// The packet's favourite list is the action bar's star, not the known set: only Known fills the book.
+		s.spellbook().replace(v.Known)
+		s.syncKnown()
+	// The spell book changes of round R5 (#93): every learn, supersede and unlearn keeps the book and writes its
+	// one event.
+	case wire.SMSGLearnedSpells:
+		v, err := combat.ParseLearnedSpells(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		// The trainer watch reads the same rows: a purchase is confirmed by this packet, whichever learned it.
+		s.trainer.learned = append(s.trainer.learned[:0], v.Spells...)
+		for _, e := range v.Spells {
+			s.learnSpell(e)
+		}
+	case wire.SMSGSupercededSpells:
+		v, err := combat.ParseSupercededSpells(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		for _, e := range v.Spells {
+			s.learnSpell(e)
+		}
+	case wire.SMSGUnlearnedSpells:
+		v, err := combat.ParseUnlearnedSpells(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		for _, id := range v.SpellIDs {
+			s.unlearnSpell(id)
+		}
 	// The core-gains round: the pushed threat lists and the encounter packets feed the world model, and the six
 	// combat-log kinds join the same row stream the fight already writes.
 	case wire.SMSGThreatUpdate:

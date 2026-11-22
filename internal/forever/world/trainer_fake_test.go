@@ -98,8 +98,11 @@ func (tr *trainerWorld) deliver(core uint32, payload []byte) {
 	switch core {
 	case wire.SMSGGossipMessage, wire.SMSGGossipComplete:
 		err = tr.s.handleNPC(packet)
-	default:
+	case wire.SMSGTrainerList, wire.SMSGTrainerBuyFail:
 		err = tr.s.handleTrainer(packet)
+	default:
+		// A learned spell goes through the session's own dispatch (the spell book owns that packet).
+		err = tr.s.handle(context.Background(), event{p: packet})
 	}
 	if err != nil {
 		tr.t.Fatalf("%s: %v", wire.ServerName(core), err)

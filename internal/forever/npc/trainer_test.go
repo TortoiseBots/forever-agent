@@ -175,51 +175,6 @@ func TestParseTrainerBuyFailed(t *testing.T) {
 	}
 }
 
-// TestParseLearnedSpells reads two LearnedSpellInfo rows with different optional blocks: each row's four bits are
-// flushed into their own byte, so the second row's spell id must follow the first row's optional int32s.
-func TestParseLearnedSpells(t *testing.T) {
-	b := wire.NewWriter()
-	b.WriteU32(2) // count
-	b.WriteU32(0) // SpecializationID
-	b.WriteI32(0) // MinActionBarSlot
-	// Spell one: favourite, no optional fields.
-	b.WriteI32(0x11223344)
-	b.WriteBit(true)
-	b.WriteBit(false)
-	b.WriteBit(false)
-	b.WriteBit(false)
-	b.FlushBits()
-	// Spell two: a superseded rank.
-	b.WriteI32(0x55667788)
-	b.WriteBit(false)
-	b.WriteBit(false)
-	b.WriteBit(true)
-	b.WriteBit(false)
-	b.FlushBits()
-	b.WriteI32(0x0BADF00D)
-	// The trailing SuppressMessaging and TraitGrantedByAura bits.
-	b.WriteBit(true)
-	b.WriteBit(false)
-	b.FlushBits()
-
-	spells, err := ParseLearnedSpells(b.Bytes())
-	if err != nil {
-		t.Fatalf("ParseLearnedSpells: %v", err)
-	}
-	if len(spells) != 2 {
-		t.Fatalf("the packet names %d spell(s), want 2", len(spells))
-	}
-	if spells[0].SpellID != 0x11223344 || !spells[0].Favorite || spells[0].HasSlot || spells[0].HasSuperceded {
-		t.Fatalf("the first spell is %+v", spells[0])
-	}
-	if spells[1].SpellID != 0x55667788 || !spells[1].HasSuperceded || spells[1].Superceded != 0x0BADF00D {
-		t.Fatalf("the second spell is %+v", spells[1])
-	}
-	if _, err := ParseLearnedSpells(append(b.Bytes(), 0)); err == nil {
-		t.Fatal("the parser accepted a trailing byte")
-	}
-}
-
 // TestTrainerGreetingAtTheElevenBitLimit: the greeting field is 11 bits (2047 bytes), so a greeting longer than
 // 1024 bytes is still the layout, not a reason to drop the list.
 func TestTrainerGreetingAtTheElevenBitLimit(t *testing.T) {

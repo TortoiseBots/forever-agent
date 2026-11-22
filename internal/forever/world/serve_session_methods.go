@@ -656,6 +656,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("cast_state", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeCastState, error) {
 		return s.serveCastState(), nil
 	}))
+	srv.Register("spells", serveReadTyped(st, func(s *session, _ context.Context, p serveSpellsParams) ([]ServeSpellRow, error) {
+		return s.serveSpells(p)
+	}))
 	srv.Register("face", serveCallTyped(st, func(s *session, _ context.Context, p serveUnitParams) (serveEmpty, error) {
 		o, err := s.serveUnitByName(p.GUID, p.Name)
 		if err != nil {
@@ -1691,7 +1694,7 @@ var notPortedMethods = []string{
 	"pet", "pet_action", "plan_check",
 	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
 	"raid_move", "roll",
-	"sell", "spells",
+	"sell",
 	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"teleport",

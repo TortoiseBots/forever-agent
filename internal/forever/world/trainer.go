@@ -1,15 +1,15 @@
 package world
 
-// The trainer of round R4: the three server answers that change what the client knows at a trainer, and the packet a
-// step stores for the flow in trainer_act.go. A trainer opens through its gossip option (the core adds "Train me."
-// when the menu lacks it, Player.cpp:15160-15181), and a trainer without the gossip flag answers CMSG_TRAINER_LIST
-// itself (NPCHandler.cpp:97-110). A purchase answers SMSG_LEARNED_SPELLS on success (Player::LearnSpell) and
-// SMSG_TRAINER_BUY_FAILED with its reason otherwise (Trainer.cpp:158-470).
+// The trainer of round R4: the server answers that change what the client knows at a trainer, and the packet a step
+// stores for the flow in trainer_act.go. A trainer opens through its gossip option (the core adds "Train me." when
+// the menu lacks it, Player.cpp:15160-15181), and a trainer without the gossip flag answers CMSG_TRAINER_LIST itself
+// (NPCHandler.cpp:97-110). A purchase answers SMSG_TRAINER_BUY_FAILED with its reason on refusal (Trainer.cpp:158-470)
+// and SMSG_LEARNED_SPELLS on success (Player::LearnSpell); the learned packet belongs to the spell book (round R5,
+// #93), so the dispatch there parses it once and leaves the rows here for the purchase's wait.
 
 import (
-	"fmt"
-
 	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
@@ -22,14 +22,15 @@ type trainerWatch struct {
 	list *npc.TrainerList
 	// failed is the last SMSG_TRAINER_BUY_FAILED.
 	failed *npc.TrainerBuyFailed
-	// learned is the last SMSG_LEARNED_SPELLS' rows.
-	learned []npc.LearnedSpell
+	// learned is the last SMSG_LEARNED_SPELLS' rows, filled by the spell book's dispatch.
+	learned []combat.LearnedSpell
 }
 
-// isTrainerPacket reports the opcodes handleTrainer owns.
+// isTrainerPacket reports the opcodes handleTrainer owns. SMSG_LEARNED_SPELLS is not one of them: any learn, at a
+// trainer or not, goes through the spell book's dispatch, which also stores the rows in this watch.
 func isTrainerPacket(core uint32) bool {
 	switch core {
-	case wire.SMSGTrainerList, wire.SMSGTrainerBuyFail, wire.SMSGLearnedSpells:
+	case wire.SMSGTrainerList, wire.SMSGTrainerBuyFail:
 		return true
 	}
 	return false
@@ -65,24 +66,6 @@ func (s *session) handleTrainer(p worldconn.Packet) error {
 			Text:       "training failed: " + reason,
 			Data:       map[string]any{"code": f.Reason, "reason": reason},
 		})
-	case wire.SMSGLearnedSpells:
-		spells, err := npc.ParseLearnedSpells(p.Payload)
-		if err != nil {
-			s.noteParseError(p, err)
-			return nil
-		}
-		s.trainer.learned = append(s.trainer.learned[:0], spells...)
-		self := s.selfOrMover()
-		for _, sp := range spells {
-			s.learnKnown(sp.SpellID)
-			s.event(Event{
-				Kind:       events.KindSpellLearned,
-				Source:     s.eventName("", self),
-				SourceGUID: eventGUID(self),
-				SpellID:    uint32(sp.SpellID),
-				Text:       "spell learned: " + spellText(sp.SpellID),
-			})
-		}
 	}
 	return nil
 }
@@ -119,26 +102,4 @@ func (s *session) eventTrainerList(l npc.TrainerList) {
 			"spells":       spells,
 		},
 	})
-}
-
-// learnKnown adds one spell to the session's spellbook when it is not there. SMSG_LEARNED_SPELLS is the server's own
-// word that the spell is known; SMSG_SEND_KNOWN_SPELLS replaces the list when it arrives.
-func (s *session) learnKnown(spell int32) {
-	if spell == 0 {
-		return
-	}
-	for _, known := range s.known {
-		if known == spell {
-			return
-		}
-	}
-	s.known = append(s.known, spell)
-	if s.report != nil {
-		s.report.KnownSpells = append([]int32(nil), s.known...)
-	}
-}
-
-// spellText names a spell for a log or event line: the id alone, because this client carries no spell names.
-func spellText(spell int32) string {
-	return fmt.Sprintf("spell %d", spell)
 }

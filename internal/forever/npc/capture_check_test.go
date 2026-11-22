@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -120,7 +121,8 @@ func npcCaptureCounts(packets []pktPacket) (map[string]int, error) {
 		case wire.SMSGTrainerBuyFail:
 			_, err = ParseTrainerBuyFailed(p.Payload)
 		case wire.SMSGLearnedSpells:
-			_, err = ParseLearnedSpells(p.Payload)
+			// The spell book round (R5, #93) owns this layout: the trainer watch reads the same parser.
+			_, err = combat.ParseLearnedSpells(p.Payload)
 		}
 		if err != nil {
 			return counts, fmt.Errorf("%s (%d bytes): %w", wire.ServerName(p.Core), len(p.Payload), err)
