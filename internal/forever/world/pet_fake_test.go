@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/pet"
+	"github.com/pjerra/forever-agent/internal/forever/tables"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -476,4 +478,121 @@ func petTenButtonBody(petGUID wire.GUID) []byte {
 	b.WriteU32(0) // cooldowns
 	b.WriteU32(0) // history
 	return b.Bytes()
+}
+
+// TestServePetModeOffBarAndRPC covers the remaining P2 paths: RPC table registration, CreatedBy/CharmedBy and pet
+// unit fields, SMSG_PET_MODE updates, off-bar Actions (slot -1), cached spell-name cast, attack target fallback,
+// dead/no-bar refusals, and a pet announced already dead.
+func TestServePetModeOffBarAndRPC(t *testing.T) {
+	ported, notPorted := ServeRPCMethods()
+	for _, name := range []string{"pet", "pet_action"} {
+		if !slices.Contains(ported, name) {
+			t.Fatalf("%s is not in ServeRPCMethods ported", name)
+		}
+		if slices.Contains(notPorted, name) {
+			t.Fatalf("%s is still in notPortedMethods", name)
+		}
+	}
+
+	p := newPetWorld(t)
+	ctx := context.Background()
+	p.apply(
+		fragmentUnitCreate(petTestHunter, objects.Info{Entry: 1, Health: 100, MaxHealth: 100, Level: 10, Summon: petTestPet}),
+		fragmentUnitCreate(petTestPet, objects.Info{
+			Entry: petUnitEntry, Health: 80, MaxHealth: 80, Level: 10,
+			CreatedBy: petTestCreator, PetNumber: 7, CreatedBySpell: 883, CreatureFamily: 1,
+		}),
+		fragmentUnitCreate(petTestPet2, objects.Info{
+			Entry: petUnitEntry + 1, Health: 0, MaxHealth: 90, Level: 10, CharmedBy: petTestHunter,
+		}),
+	)
+
+	// CreatedBy and CharmedBy owner_kind + pet fields on ServeUnit.
+	u1, err := p.s.serveOneUnit(serveUnitParams{GUID: GUID(petTestPet)})
+	if err != nil || u1.Owner != GUID(petTestCreator) || u1.OwnerKind != "created_by" ||
+		u1.PetNumber != 7 || u1.CreatedBySpell != 883 || u1.CreatureFamily != 1 {
+		t.Fatalf("unit created_by: %+v, err=%v", u1, err)
+	}
+	u2, err := p.s.serveOneUnit(serveUnitParams{GUID: GUID(petTestPet2)})
+	if err != nil || u2.Owner != GUID(petTestHunter) || u2.OwnerKind != "charmed_by" {
+		t.Fatalf("unit charmed_by: %+v, err=%v", u2, err)
+	}
+	hunterUnit, err := p.s.serveOneUnit(serveUnitParams{GUID: GUID(petTestHunter)})
+	if err != nil || hunterUnit.Pet != GUID(petTestPet) {
+		t.Fatalf("hunter pet field: %+v, err=%v", hunterUnit, err)
+	}
+
+	// Summon a pet that is already dead -> pet_summoned (dead:true) + pet_died, and dead pet refusal.
+	p.apply(fragmentUnitCreate(itemSelf, objects.Info{Entry: 1, Health: 100, MaxHealth: 100, Level: 10}))
+	p.summonSelf(petTestPet2)
+	rows, _, _, _ := p.s.EventLog().Since(0, 20)
+	if len(rows) != 2 || rows[0].Kind != "pet_summoned" || rows[1].Kind != "pet_died" {
+		t.Fatalf("dead summon events: %+v", rows)
+	}
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "follow"}); err == nil || !strings.Contains(err.Error(), "dead") {
+		t.Fatalf("dead pet refusal: %v", err)
+	}
+
+	// Alive pet without a bar -> bar not arrived refusal on cast/autocast_on, then deliver bar with off-bar action.
+	p.summonSelf(petTestPet)
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "cast", SpellID: 172}); err == nil || !strings.Contains(err.Error(), "bar has not arrived") {
+		t.Fatalf("no-bar refusal: %v", err)
+	}
+
+	var bar [pet.BarSlots]uint32
+	bar[3] = pet.Button(172, pet.ActEnabled)
+	var extra [pet.BarExtra]uint32
+	p.deliver(wire.SMSGPetSpellsMessage, petSpellsBody(petTestPet, uint8(pet.CmdFollow), 0, pet.ReactDefensive, bar, extra, []uint32{
+		pet.Button(172, pet.ActEnabled),  // duplicated on bar -> deduplicated
+		pet.Button(1742, pet.ActDisabled), // off-bar spell -> slot -1
+	}))
+	// Cached SpellName fills Spell.Name without fetching.
+	p.s.dbCache().Put(tables.TableSpellName, 172, true, []byte("Growl\x00"))
+	info := p.s.servePet()
+	if len(info.Spells) != 2 || info.Spells[0].Name != "Growl" || info.Spells[1].Slot != -1 || info.Spells[1].SpellID != 1742 {
+		t.Fatalf("spells with cached name and off-bar action: %+v", info.Spells)
+	}
+
+	// Off-bar spell cannot be cast, but autocast_on/off work on it.
+	offSlot := -1
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "cast", Slot: &offSlot}); err == nil || !strings.Contains(err.Error(), "castable") {
+		t.Fatalf("off-bar cast refusal: %v", err)
+	}
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "autocast_off", SpellID: 1742}); err != nil {
+		t.Fatalf("autocast_off off-bar: %v", err)
+	}
+	wantOff := pet.BuildSpellAutocast(petTestPet, 1742, false)
+	if got := p.lastSent(t, wire.CMSGPetSpellAutocast); !bytes.Equal(got, wantOff) {
+		t.Fatalf("autocast_off wrote %x, want %x", got, wantOff)
+	}
+
+	// Cast by cached name and attack using current selection.
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "cast", Name: "growl"}); err != nil {
+		t.Fatalf("cast by name: %v", err)
+	}
+	p.s.serveRT = &serveRuntime{target: petTestHunter}
+	if _, err := p.s.servePetAction(ctx, servePetActionParams{Action: "attack"}); err != nil {
+		t.Fatalf("attack selection: %v", err)
+	}
+	wantAtk := pet.BuildAction(petTestPet, pet.Button(pet.CmdAttack, pet.ActCommand), petTestHunter)
+	if got := p.lastSent(t, wire.CMSGPetAction); !bytes.Equal(got, wantAtk) {
+		t.Fatalf("attack wrote %x, want %x", got, wantAtk)
+	}
+
+	// SMSG_PET_MODE updates the matching pet's bar and ignores a different GUID.
+	mode := wire.NewWriter()
+	wire.WritePackedGUID(mode, petTestPet)
+	mode.WriteU8(uint8(pet.CmdStay))
+	mode.WriteU8(0)
+	mode.WriteU8(pet.ReactPassive)
+	p.deliver(wire.SMSGPetMode, mode.Bytes())
+	otherMode := wire.NewWriter()
+	wire.WritePackedGUID(otherMode, petTestPet2)
+	otherMode.WriteU8(uint8(pet.CmdFollow))
+	otherMode.WriteU8(0)
+	otherMode.WriteU8(pet.ReactAggressive)
+	p.deliver(wire.SMSGPetMode, otherMode.Bytes())
+	if got := p.s.servePet(); got.Command != "stay" || got.React != "passive" {
+		t.Fatalf("after SMSG_PET_MODE: command=%q react=%q", got.Command, got.React)
+	}
 }
