@@ -3,6 +3,8 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -134,5 +136,27 @@ func TestPlaySummaryCountsDroppedCombatRows(t *testing.T) {
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Summary.Play == nil || res.Summary.Play.CombatDropped != 5 {
 		t.Fatalf("play record = %+v; want 5 dropped rows", res.Summary.Play)
+	}
+}
+
+// TestPlayTraceCarriesNoCharacterNames: the raw trace and summary files name nobody: not the bots (header, events,
+// party records) and not the player's own character.
+func TestPlayTraceCarriesNoCharacterNames(t *testing.T) {
+	rig := playRecordRig(t)
+	rig.fake.Stuck["botone"] = true // a straggler event
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	for _, file := range []string{res.Trace, res.SummaryFile} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range append(playBots[:], "Ownerchar") {
+			if strings.Contains(string(raw), name) {
+				t.Fatalf("%s names %q", filepath.Base(file), name)
+			}
+		}
 	}
 }

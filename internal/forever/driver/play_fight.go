@@ -649,7 +649,7 @@ func (p *playRun) order(ctx context.Context, bot string, target wire.GUID) bool 
 		return true
 	}
 	if errors.Is(err, botcmd.ErrRefused) {
-		p.rec.Event(p.now(), "order_refused", map[string]any{"bot": bot, "code": rep.Code})
+		p.rec.Event(p.now(), "order_refused", map[string]any{"bot": p.slot(bot), "code": rep.Code})
 		return true
 	}
 	return !p.fatal(err)

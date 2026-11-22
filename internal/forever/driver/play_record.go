@@ -38,6 +38,26 @@ func playSlot(i int) string {
 	return "dps2"
 }
 
+// slot is the trace's name for a character of the run: a bot's slot (tank, heal, dps1, dps2), or "agent" for anything
+// else (the player's own character). The record never carries a character's name.
+func (p *playRun) slot(name string) string {
+	for i, b := range p.cfg.Bots {
+		if strings.EqualFold(b, name) {
+			return playSlot(i)
+		}
+	}
+	return "agent"
+}
+
+// slots is slot over a list.
+func (p *playRun) slots(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, p.slot(n))
+	}
+	return out
+}
+
 // playLineCounts counts the lines the send gate admitted by their first words and how many were GM lines (a `.` line
 // that is not a `.bot` line). A whisper word is counted as `whisper <word>`.
 func playLineCounts(sent []string) (map[string]int, int) {

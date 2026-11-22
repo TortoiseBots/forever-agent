@@ -375,7 +375,7 @@ func (p *playRun) openRecorder() *Recorder {
 	}
 	party := make([]trace.Member, 0, len(p.cfg.Bots))
 	for i, name := range p.cfg.Bots {
-		party = append(party, trace.Member{Name: name, Role: traceRole(i)})
+		party = append(party, trace.Member{Name: playSlot(i), Role: traceRole(i)})
 	}
 	rec, err := NewPlayRecorder(p.cfg.Out, runID, p.cfg.Plan, p.route.Map, 0, p.start, party)
 	if err != nil {
@@ -516,7 +516,7 @@ func (p *playRun) form(ctx context.Context) string {
 				}
 				return ""
 			}
-			p.rec.Event(p.now(), "bot_added", map[string]any{"bot": name})
+			p.rec.Event(p.now(), "bot_added", map[string]any{"bot": p.slot(name)})
 		case errors.Is(err, botcmd.ErrRefused):
 			if rep.Code != "already-online" {
 				p.stop("form-refused:" + rep.Code)
@@ -658,7 +658,7 @@ func (p *playRun) enter(ctx context.Context) string {
 					stage[name], until[name] = 1, now.Add(p.lim.SummonArrive)
 				case errors.Is(err, botcmd.ErrRefused) && rep.Code == "on-cooldown":
 					stage[name], until[name] = 2, now.Add(p.lim.SummonWait)
-					p.rec.Event(now, "summon_cooldown", map[string]any{"bot": name})
+					p.rec.Event(now, "summon_cooldown", map[string]any{"bot": p.slot(name)})
 				default:
 					p.stop("bot-not-entered")
 					return ""
@@ -964,7 +964,7 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 		for _, name := range far {
 			if p.farSince[name].IsZero() {
 				p.farSince[name] = now
-				p.rec.Event(now, "straggler", map[string]any{"bot": name})
+				p.rec.Event(now, "straggler", map[string]any{"bot": p.slot(name)})
 			}
 			d := now.Sub(p.farSince[name])
 			if d >= stopAt {

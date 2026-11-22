@@ -199,7 +199,7 @@ func (p *playRun) wipe(ctx context.Context) string {
 			return ""
 		}
 	} else {
-		p.rec.Event(started, "regroup", map[string]any{"down": p.downBots()})
+		p.rec.Event(started, "regroup", map[string]any{"down": p.slots(p.downBots())})
 	}
 	if p.ports.Player.Phase() != PhaseAlive {
 		if p.ports.Player.Phase() == PhaseDead {
@@ -293,7 +293,7 @@ func (p *playRun) whisper(ctx context.Context, bot, word string) bool {
 		p.playerErr(err, "whisper")
 		return false
 	}
-	p.rec.Event(p.now(), "whisper", map[string]any{"bot": name, "word": word})
+	p.rec.Event(p.now(), "whisper", map[string]any{"bot": p.slot(name), "word": word})
 	return true
 }
 
@@ -376,7 +376,7 @@ func (p *playRun) noteDeaths() {
 			continue
 		}
 		p.deaths++
-		p.rec.Event(p.now(), "death", map[string]any{"who": m.Name})
+		p.rec.Event(p.now(), "death", map[string]any{"who": p.slot(m.Name)})
 	}
 	p.deathSeen = seen
 }
