@@ -10,12 +10,20 @@ package botcmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
 // Prefix starts every line of a v1 reply.
 const Prefix = "TortoiseBots: "
+
+// coreAbsent is the core's own answer to a line no command handles: on a server without the module, `.bot` comes
+// back as this, and it is not a reply at all.
+const coreAbsent = "There is no such command"
 
 // Verb is one request verb. The set is closed: the module answers anything else refused unknown-verb.
 type Verb string
@@ -53,6 +61,17 @@ type Reply struct {
 	Text string
 }
 
+// Err is nil for an ok reply; a refusal is ErrRefused wrapped with the code the module gave.
+func (r Reply) Err() error {
+	if r.OK {
+		return nil
+	}
+	if r.Text != "" {
+		return fmt.Errorf("%w: %s: %s", ErrRefused, r.Code, r.Text)
+	}
+	return fmt.Errorf("%w: %s", ErrRefused, r.Code)
+}
+
 // WhoRow is one row of a `who` answer.
 type WhoRow struct {
 	Bot   string
@@ -61,6 +80,230 @@ type WhoRow struct {
 	Map   uint32
 	Move  string
 	Mode  string
+}
+
+// ParseVerb reports whether s is one of the ten v1 verbs.
+func ParseVerb(s string) (Verb, bool) {
+	switch Verb(s) {
+	case VerbHelp, VerbWho, VerbAdd, VerbLogout, VerbFollow, VerbStay, VerbAttack, VerbFlee, VerbSummon, VerbStats:
+		return Verb(s), true
+	}
+	return "", false
+}
+
+// Line builds one request line from the verb and the bot. arg is part of the signature for v2's argument verbs;
+// no v1 verb takes one, so a non-empty arg is refused as firmly as an unknown verb.
+func Line(v Verb, bot, arg string) (string, error) {
+	if _, ok := ParseVerb(string(v)); !ok {
+		return "", fmt.Errorf("botcmd: %q is not a v1 verb", v)
+	}
+	line := ".bot " + string(v)
+	switch v {
+	case VerbHelp, VerbWho:
+		if bot != "" || arg != "" {
+			return "", fmt.Errorf("botcmd: %s names no bot and takes no argument", v)
+		}
+	default:
+		if arg != "" {
+			return "", errors.New("botcmd: no v1 verb takes an argument")
+		}
+		name, err := chat.NormaliseName(bot)
+		if err != nil {
+			return "", err
+		}
+		line += " " + name
+	}
+	if strings.Contains(line, `\`) {
+		return "", errors.New("botcmd: the module's chain separator never appears in a v1 line")
+	}
+	if err := chat.ValidateCommandText(line); err != nil {
+		return "", err
+	}
+	return line, nil
+}
+
+// ParseReply parses one reply line. A line without the module's prefix, the `who` header or row, or a word where
+// `ok` or `refused` belongs is not a reply; the caller then keeps looking instead of acting on it.
+func ParseReply(line string) (Reply, bool) {
+	rest, ok := strings.CutPrefix(line, Prefix)
+	if !ok {
+		return Reply{}, false
+	}
+	verb, rest, ok := cutWord(rest)
+	if !ok || strings.HasSuffix(verb, ":") {
+		return Reply{}, false
+	}
+	namedBot, rest, ok := cutWord(rest)
+	if !ok || !strings.HasSuffix(namedBot, ":") || len(namedBot) < 2 {
+		return Reply{}, false
+	}
+	rep := Reply{Verb: verb, Bot: strings.TrimSuffix(namedBot, ":")}
+	word, rest, _ := cutWord(rest)
+	switch word {
+	case "ok":
+		rep.OK, rep.Text = true, rest
+		return rep, true
+	case "refused":
+		code, text, ok := cutWord(rest)
+		if !ok || !strings.HasSuffix(code, ":") || len(code) < 2 {
+			return Reply{}, false
+		}
+		rep.Code, rep.Text = strings.TrimSuffix(code, ":"), text
+		return rep, true
+	}
+	return Reply{}, false
+}
+
+// cutWord splits the first blank-separated word off s and returns it with the rest of the line. A leading blank is
+// not skipped: it would hide a missing field.
+func cutWord(s string) (word, rest string, ok bool) {
+	if s == "" {
+		return "", "", false
+	}
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		return s[:i], s[i+1:], s[:i] != ""
+	}
+	return s, "", true
+}
+
+// ParseWho parses a `who` answer: the header's count, then one row per bot. Lines that are not who lines are
+// ignored (the collector sees whatever else arrived), but a malformed who line fails the whole answer: a run that
+// cannot read the roster must not act on half of it.
+func ParseWho(lines []string) ([]WhoRow, error) {
+	n := -1
+	var rows []WhoRow
+	for _, line := range lines {
+		field, ok := strings.CutPrefix(line, Prefix+"who: ")
+		if !ok {
+			continue
+		}
+		if count, ok := parseWhoCount(field); ok {
+			if n >= 0 {
+				return nil, errors.New("botcmd: the who answer has two headers")
+			}
+			n = count
+			continue
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("botcmd: a who row came before the header (%q)", line)
+		}
+		row, ok := parseWhoRow(field)
+		if !ok {
+			return nil, fmt.Errorf("botcmd: who line %q does not fit the row shape", line)
+		}
+		rows = append(rows, row)
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("%w: no who header", ErrNoReply)
+	}
+	if n != len(rows) {
+		return nil, fmt.Errorf("botcmd: the who header says %d bot(s) and %d rows came", n, len(rows))
+	}
+	return rows, nil
+}
+
+// parseWhoCount reads the header's `<n> bot(s)`.
+func parseWhoCount(field string) (int, bool) {
+	const suffix = " bot(s)"
+	if !strings.HasSuffix(field, suffix) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(field, suffix))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseWhoRow reads one row: the name, then level, class, map, move and mode. The five keys are all required and
+// the move and mode words are the contract's closed sets.
+func parseWhoRow(field string) (WhoRow, bool) {
+	words := strings.Fields(field)
+	if len(words) != 6 {
+		return WhoRow{}, false
+	}
+	row := WhoRow{Bot: words[0]}
+	var seen int
+	for _, w := range words[1:] {
+		key, val, ok := strings.Cut(w, "=")
+		if !ok || val == "" {
+			return WhoRow{}, false
+		}
+		switch key {
+		case "level":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return WhoRow{}, false
+			}
+			row.Level, seen = n, seen|1
+		case "class":
+			row.Class, seen = val, seen|2
+		case "map":
+			n, err := strconv.ParseUint(val, 10, 32)
+			if err != nil {
+				return WhoRow{}, false
+			}
+			row.Map, seen = uint32(n), seen|4
+		case "move":
+			if val != "follow" && val != "stay" && val != "free" {
+				return WhoRow{}, false
+			}
+			row.Move, seen = val, seen|8
+		case "mode":
+			if val != "engine" && val != "spike" {
+				return WhoRow{}, false
+			}
+			row.Mode, seen = val, seen|16
+		default:
+			return WhoRow{}, false
+		}
+	}
+	if seen != 0b11111 {
+		return WhoRow{}, false
+	}
+	return row, true
+}
+
+// Classify picks the answer line for v and bot. The core's unknown-command line is ErrNoModule; no matching line is
+// ErrNoReply; a refusal is returned as a Reply with OK false and nil error, so the caller decides whether to call
+// Reply.Err. Another bot's or another verb's line is never taken.
+func Classify(rep *command.Reply, v Verb, bot string) (Reply, error) {
+	if rep == nil {
+		return Reply{}, ErrNoReply
+	}
+	if absent(rep) {
+		return Reply{}, ErrNoModule
+	}
+	for _, line := range raw(rep) {
+		r, ok := ParseReply(line)
+		if !ok || r.Verb != string(v) || !strings.EqualFold(r.Bot, bot) {
+			continue
+		}
+		return r, nil
+	}
+	return Reply{}, ErrNoReply
+}
+
+// absent reports the core's own unknown-command answer, in either form: the collector's classification of its
+// string-table line, or the line itself.
+func absent(rep *command.Reply) bool {
+	if errors.Is(rep.Refusal, command.ErrUnknownCommand) {
+		return true
+	}
+	for _, line := range raw(rep) {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(line), "."), coreAbsent) {
+			return true
+		}
+	}
+	return false
+}
+
+// raw is the lines matched on: the collector's exact server text when it kept one, else its display copy.
+func raw(rep *command.Reply) []string {
+	if len(rep.RawText) > 0 {
+		return rep.RawText
+	}
+	return rep.Raw
 }
 
 // Runner is what a session offers: one command line, one collected reply. *command.Session implements it.
@@ -74,20 +317,86 @@ type Client struct {
 	Base command.Options
 }
 
-// ParseVerb reports whether s is one of the ten v1 verbs.
-func ParseVerb(s string) (Verb, bool) { return "", false }
+// NewClient wraps s; Base carries the session-wide options (SelfName for the say-echo check, the quiet window).
+func NewClient(s *command.Session) *Client { return &Client{run: s} }
 
-// Line builds one request line.
-func Line(v Verb, bot, arg string) (string, error) { return "", nil }
+// call sends one verb's line and classifies the answer. A refusal is returned as both a Reply and an error.
+func (c *Client) call(ctx context.Context, v Verb, bot string) (Reply, error) {
+	line, err := Line(v, bot, "")
+	if err != nil {
+		return Reply{}, err
+	}
+	rep, err := c.run.Run(ctx, line, c.Base)
+	if err != nil {
+		return Reply{}, err
+	}
+	r, err := Classify(rep, v, bot)
+	if err != nil {
+		return Reply{}, err
+	}
+	if err := r.Err(); err != nil {
+		return r, err
+	}
+	return r, nil
+}
 
-// ParseReply parses one reply line.
-func ParseReply(line string) (Reply, bool) { return Reply{}, false }
+// Add asks for one bot: it logs in and joins the requester's party.
+func (c *Client) Add(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbAdd, bot)
+}
 
-// Err is nil for an ok reply and ErrRefused wrapped with the code otherwise.
-func (r Reply) Err() error { return nil }
+// Logout logs one bot out.
+func (c *Client) Logout(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbLogout, bot)
+}
 
-// ParseWho parses a `who` answer.
-func ParseWho(lines []string) ([]WhoRow, error) { return nil, nil }
+// Follow orders one bot to follow the requester.
+func (c *Client) Follow(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbFollow, bot)
+}
 
-// Classify picks the reply line for v and bot.
-func Classify(rep *command.Reply, v Verb, bot string) (Reply, error) { return Reply{}, nil }
+// Stay orders one bot to stay where it is.
+func (c *Client) Stay(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbStay, bot)
+}
+
+// Attack orders one bot onto the requester's selected unit.
+func (c *Client) Attack(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbAttack, bot)
+}
+
+// Flee orders one bot to leave the fight.
+func (c *Client) Flee(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbFlee, bot)
+}
+
+// Summon moves one bot next to the requester, within the module's cooldown.
+func (c *Client) Summon(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbSummon, bot)
+}
+
+// Stats asks for one bot's stats line.
+func (c *Client) Stats(ctx context.Context, bot string) (Reply, error) {
+	return c.call(ctx, VerbStats, bot)
+}
+
+// Who reads `.bot who`: the header's count and one row per bot. The rows are the roster check of the run's later
+// phases, so a malformed answer is an error here rather than an empty list.
+func (c *Client) Who(ctx context.Context) ([]WhoRow, error) {
+	line, err := Line(VerbWho, "", "")
+	if err != nil {
+		return nil, err
+	}
+	o := c.Base
+	if o.MaxLines < 8 {
+		o.MaxLines = 8
+	}
+	rep, err := c.run.Run(ctx, line, o)
+	if err != nil {
+		return nil, err
+	}
+	if absent(rep) {
+		return nil, ErrNoModule
+	}
+	return ParseWho(raw(rep))
+}
