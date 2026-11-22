@@ -22,10 +22,13 @@ type OwnerBot struct {
 	Map                 uint32
 	SummonCooldownUntil time.Time
 	Dead                bool
-	Level               int
-	Class               string
-	Move                string
-	Mode                string
+	// Ghost is set for a dead bot that released: it is at the spirit healer until the whisper `corpse run` brings it
+	// back (B-6).
+	Ghost bool
+	Level int
+	Class string
+	Move  string
+	Mode  string
 }
 
 // GoldenOwner is the fake bot module of the player-run rounds: it answers contract bot-commands v1 from a scripted
@@ -170,6 +173,31 @@ func (o *GoldenOwner) Summon(ctx context.Context, name string) (botcmd.Reply, er
 		b.SummonCooldownUntil = o.Clock.Now().Add(summonCooldown)
 	}
 	return o.ok(botcmd.VerbSummon, bot, "moving it next to you"), nil
+}
+
+// Whisper is one word of the module's chat grammar A (B-6) said to a bot: `release` makes a dead bot a ghost and
+// `corpse run` brings a ghost back on its owner's map. The module answers no whisper, so there is no refusal here; a
+// bot that is not in the state the word is for simply stays as it is.
+func (o *GoldenOwner) Whisper(ctx context.Context, name, word string) error {
+	bot, err := botcmd.Whisper(name, word)
+	if err != nil {
+		return err
+	}
+	b := o.bot(bot)
+	if b == nil {
+		return nil
+	}
+	switch word {
+	case botcmd.WhisperRelease:
+		if b.Dead {
+			b.Dead, b.Ghost = false, true
+		}
+	case botcmd.WhisperCorpseRun:
+		if b.Ghost {
+			b.Ghost, b.Map = false, o.SelfMap
+		}
+	}
+	return nil
 }
 
 // Who is `.bot who`: the header's count of the table's online bots (the module lists online bots only).

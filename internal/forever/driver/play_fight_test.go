@@ -136,7 +136,7 @@ func TestPlayPullMarksSkullOnKillFirst(t *testing.T) {
 	if res.Stop != "clear" || !res.Clear {
 		t.Fatalf("the run ended stop=%q clear=%v; want clear", res.Stop, res.Clear)
 	}
-	if want := "PULL FIGHT REST"; !strings.Contains(strings.Join(res.States, " "), want) {
+	if want := "PULL FIGHT LOOT REST"; !strings.Contains(strings.Join(res.States, " "), want) {
 		t.Fatalf("states = %q; want them to hold %q", strings.Join(res.States, " "), want)
 	}
 	want := []party.MarkEntry{{Mark: party.MarkSkull, Target: kill}, {Mark: party.MarkCross, Target: near}}
