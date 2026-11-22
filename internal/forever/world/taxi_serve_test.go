@@ -243,6 +243,20 @@ func TestTaxiMethodSilentServerIsNoTakeoff(t *testing.T) {
 	}
 }
 
+// TestTaxiMethodAcceptedWithoutTheFlagIsNoTakeoff: reply 0 and no ON_TAXI within the wait is no_takeoff, not a
+// refusal: the server accepted, the flight may still start.
+func TestTaxiMethodAcceptedWithoutTheFlagIsNoTakeoff(t *testing.T) {
+	tw := newTaxiWorld(t, flyer)
+	tw.acceptOnly = true
+	res, err := tw.s.serveTaxi(context.Background(), serveTaxiParams{GUID: GUID(flightGUID), Node: taxiDestNode})
+	if err != nil {
+		t.Fatalf("taxi: %v", err)
+	}
+	if res.OK || res.Status != "no_takeoff" || res.Reply != "ok" {
+		t.Fatalf("the answer is %+v", res)
+	}
+}
+
 // TestTaxiMethodFirstVisitDiscoversTheNode: a first visit's answer is the node's discovery (SMSG_NEW_TAXI_PATH and a
 // learned status); the method asks again and answers the window, with the node recorded.
 func TestTaxiMethodFirstVisitDiscoversTheNode(t *testing.T) {

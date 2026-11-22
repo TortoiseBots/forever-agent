@@ -147,10 +147,13 @@ func (s *session) serveTaxi(parent context.Context, p serveTaxiParams) (ServeTax
 			return res, sentTimeout(err, res.Since)
 		}
 		// A reply that is not 0 is the server's refusal; no reply and no flag is a silent server (no path, client
-		// control removed): the request is out and a late flight may still start, so it is its own status.
+		// control removed), or an accepted request whose flag never came: the request is out and a late flight may still start, so it is its own status.
 		res.OK, res.Status, res.Error = false, "no_takeoff", err.Error()
 		if r := s.taxi.reply; r != nil {
-			res.Status, res.Reply = "refused", taxi.TaxiReplyName(*r)
+			res.Reply = taxi.TaxiReplyName(*r)
+			if *r != taxi.TaxiReplyOK {
+				res.Status = "refused"
+			}
 		}
 		res.Event = s.firstEventSince(res.Since, events.KindTaxiReply)
 		res.OnTaxi = s.selfOnTaxi()
@@ -168,7 +171,7 @@ func (s *session) serveTaxi(parent context.Context, p serveTaxiParams) (ServeTax
 			if err := s.flightAwaitLanding(landCtx, run); err != nil {
 				res.OnTaxi = s.selfOnTaxi()
 				if s.methodStopped(parent, err) {
-					return res, err
+					return res, sentTimeout(err, res.Since)
 				}
 				res.OK, res.Error = false, err.Error()
 				return res, nil
