@@ -3,8 +3,8 @@ package world
 // The inventory verb: what the character's own login snapshot says it carries, kept current by the item blocks the
 // world model applies (objects.Info.Player, objects.Info.Item, objects.Info.Container; the model itself is
 // items/inventory.go). The `inv` step of the act runner (round R0) and the serve `inv` method are the same code:
-// the method returns the rows the step prints. The old daemon's `inventory` method keeps its "not ported" answer:
-// its result shape is a plain row array, and a caller written for it must not be handed a different one.
+// the method returns the rows the step prints. The old daemon's `inventory` method answers through
+// serve_item_methods.go in its own plain row array ([]ServeInvItem), so a caller written for it gets that shape.
 
 import (
 	"context"
