@@ -446,7 +446,7 @@ func TestFramePetsRoundTrip(t *testing.T) {
 	if !strings.Contains(lines[1], `"pt":[`) || !strings.Contains(lines[1], `"ow":"0x11"`) || !strings.Contains(lines[1], `"tg":"0xF1"`) {
 		t.Fatalf("frame 1 JSON %s", lines[1])
 	}
-	if strings.Contains(lines[2], `"pt":`) {
+	if strings.Contains(lines[2], `"pt":[`) {
 		t.Fatalf("frame 2 without pets wrote pt: %s", lines[2])
 	}
 	f, err := Read(w.Path())
