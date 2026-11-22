@@ -53,7 +53,7 @@ func setNow(st *Store, now time.Time) {
 }
 
 const twoSlotCfg = `{"version":1,"servers":[
-	{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+	{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 		{"id":"1","account":"TAGENT1","character":"Gbmage","port":8771,"settings_from":"/s.json"},
 		{"id":"2","account":"HARNESSC","character":"Glacienne","port":8769,"settings_from":"/s.json"}]}]}`
 
@@ -79,7 +79,7 @@ func TestAcquireTwoHoldersOneSlot(t *testing.T) {
 // 6. Concurrent --any: the flock lets exactly 3 succeed on distinct slots.
 func TestAcquireConcurrent(t *testing.T) {
 	st := testStore(t, `{"version":1,"servers":[
-		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"192.0.2.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"},
 			{"id":"2","account":"B","character":"Glacienne","port":8769,"settings_from":"/s.json"},
 			{"id":"4","account":"C","character":"Tacmdaron","port":8774,"settings_from":"/s.json"}]}]}`)
@@ -159,7 +159,7 @@ func TestStaleNeedsExpiryAndDeadAgent(t *testing.T) {
 // 8. --any skips reserved slots and busy ports; the none-free message names every slot.
 func TestAnySkipsReservedAndBusyPorts(t *testing.T) {
 	st := testStore(t, `{"version":1,"servers":[
-		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"},
 			{"id":"2","account":"B","character":"Glacienne","port":8769,"settings_from":"/s.json"},
 			{"id":"3","reserved":"owner rule: never slot 3 on test1"}]}]}`)

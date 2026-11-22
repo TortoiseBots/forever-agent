@@ -337,7 +337,7 @@ func TestLoginBudgetFlagCheck(t *testing.T) {
 		t.Fatalf("no token: %d %q", code, errOut)
 	}
 	t.Setenv(budgetTokenEnv, testBudgetToken)
-	for _, bad := range []string{"not-an-address", "10.0.0.1:5000", "127.0.0.1:0"} {
+	for _, bad := range []string{"not-an-address", "192.0.2.1:5000", "127.0.0.1:0"} {
 		if code, _, errOut := runCLI("login", "--config", cfg, "--reconnect", "1", "--login-budget", bad, "harness", "Harnessb"); code != exitUsage || !strings.Contains(errOut, "--login-budget") {
 			t.Fatalf("%s: %d %q", bad, code, errOut)
 		}

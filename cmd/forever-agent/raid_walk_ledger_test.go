@@ -32,9 +32,9 @@ func TestRaidWalkRefusesSplitLeaseLedger(t *testing.T) {
 	// The split ledger the walk was told to use.
 	second := t.TempDir()
 	slotsBody := `{"version":1,"servers":[
-		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 			{"id":"7","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]},
-		{"name":"test2","realmd":"10.0.0.2:3724","slots":[
+		{"name":"test2","realmd":"192.0.2.2:3724","slots":[
 			{"id":"1","account":"A","character":"Gbmage","port":8772,"settings_from":"/s.json"}]}]}`
 	secondSlots := filepath.Join(second, "slots-w38.json")
 	if err := os.WriteFile(secondSlots, []byte(slotsBody), 0o600); err != nil {
@@ -83,7 +83,7 @@ func TestRaidWalkSplitLeaseLedgerWithoutLiveDefaultLease(t *testing.T) {
 	}
 	second := t.TempDir()
 	slotsBody := `{"version":1,"servers":[
-		{"name":"test1","realmd":"10.0.0.1:3724","slots":[
+		{"name":"test1","realmd":"192.0.2.1:3724","slots":[
 			{"id":"7","account":"A","character":"Gbmage","port":8771,"settings_from":"/s.json"}]}]}`
 	secondSlots := filepath.Join(second, "slots-w38.json")
 	if err := os.WriteFile(secondSlots, []byte(slotsBody), 0o600); err != nil {
