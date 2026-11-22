@@ -7,6 +7,7 @@ package tables
 // after it).
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -339,5 +340,158 @@ func TestFactionHostility(t *testing.T) {
 	}
 	if stormwind.IsHostileToPlayers() {
 		t.Fatal("Stormwind reads hostile to all players: its enemy group names Horde, not players")
+	}
+}
+
+// The ItemSparse fixed part's byte offsets, computed from ItemSparseLoadInfo's own
+// field sizes (DB2LoadInfo.h:3370-3478): 9 int/float, three 10-entry arrays, 23
+// int/float, 18 uint16/int16, 18 byte fields = 302 bytes after the five strings.
+const (
+	sparseFixedSize      = 302
+	sparseStackable      = 156
+	sparseSellPrice      = 180
+	sparseBuyPrice       = 184
+	sparseItemLevel      = 280
+	sparseAllowableClass = 282
+	sparseBonding        = 293
+	sparseContainerSlots = 295
+	sparseRequiredLevel  = 298
+	sparseInventoryType  = 299
+	sparseQuality        = 300
+	sparseAmmunitionType = 301
+)
+
+// sparseFixture names the fixture's fields after the LoadInfo ones they stand for.
+type sparseFixture struct {
+	Description, Display3, Display2, Display1, Display string
+	Stackable                                          int32
+	SellPrice, BuyPrice                                uint32
+	ItemLevel                                          uint16
+	AllowableClass                                     int16
+	Bonding, ContainerSlots                            uint8
+	RequiredLevel, InventoryType, Quality              int8
+	AmmunitionType                                     uint8
+}
+
+func putU16(dst []byte, off int, v uint16) { binary.LittleEndian.PutUint16(dst[off:], v) }
+func putU32(dst []byte, off int, v uint32) { binary.LittleEndian.PutUint32(dst[off:], v) }
+
+// buildItemSparse writes one ItemSparse record the way WriteRecord does for an
+// IndexField -1 table: five C strings in LoadInfo order, then the 302-byte fixed
+// part at its documented offsets.
+func buildItemSparse(f sparseFixture) []byte {
+	b := wire.NewWriter()
+	for _, s := range []string{f.Description, f.Display3, f.Display2, f.Display1, f.Display} {
+		b.WriteBytes([]byte(s))
+		b.WriteU8(0)
+	}
+	fixed := make([]byte, sparseFixedSize)
+	putU32(fixed, sparseStackable, uint32(f.Stackable))
+	putU32(fixed, sparseSellPrice, f.SellPrice)
+	putU32(fixed, sparseBuyPrice, f.BuyPrice)
+	putU16(fixed, sparseItemLevel, f.ItemLevel)
+	putU16(fixed, sparseAllowableClass, uint16(f.AllowableClass))
+	fixed[sparseBonding] = f.Bonding
+	fixed[sparseContainerSlots] = f.ContainerSlots
+	fixed[sparseRequiredLevel] = byte(f.RequiredLevel)
+	fixed[sparseInventoryType] = byte(f.InventoryType)
+	fixed[sparseQuality] = byte(f.Quality)
+	fixed[sparseAmmunitionType] = f.AmmunitionType
+	b.WriteBytes(fixed)
+	return b.Bytes()
+}
+
+// TestParseItemSparseNameAndQuality pins the kept fields at their own offsets: the
+// name is the fifth string (Display), the quality is OverallQualityID at offset 300
+// and not AmmunitionType at 301, and the six bytes after the fixed part are a
+// hotfix optional-data tail the decoder ignores.
+func TestParseItemSparseNameAndQuality(t *testing.T) {
+	raw := buildItemSparse(sparseFixture{
+		Description: "A square of linen cloth.", Display3: "d3", Display2: "d2", Display1: "Wrong Name",
+		Display:   "Linen Cloth",
+		Stackable: 20, SellPrice: 6, BuyPrice: 25,
+		ItemLevel: 25, AllowableClass: -1,
+		Bonding: 1, ContainerSlots: 4,
+		RequiredLevel: 20, InventoryType: 5, Quality: 3,
+		AmmunitionType: 1,
+	})
+	raw = append(raw, 9, 8, 7, 6, 5, 4)
+	it, err := ParseItemSparse(raw, 2589)
+	if err != nil {
+		t.Fatalf("ParseItemSparse: %v", err)
+	}
+	if it.ID != 2589 {
+		t.Fatalf("id %d", it.ID)
+	}
+	if it.Name != "Linen Cloth" {
+		t.Fatalf("name %q, want the Display string", it.Name)
+	}
+	if it.Description != "A square of linen cloth." {
+		t.Fatalf("description %q", it.Description)
+	}
+	if it.Quality != 3 {
+		t.Fatalf("quality %d, want 3 (OverallQualityID, not AmmunitionType)", it.Quality)
+	}
+	if it.ItemLevel != 25 || it.RequiredLevel != 20 || it.InventoryType != 5 {
+		t.Fatalf("level %d required %d inventory type %d", it.ItemLevel, it.RequiredLevel, it.InventoryType)
+	}
+	if it.Stackable != 20 || it.SellPrice != 6 || it.BuyPrice != 25 {
+		t.Fatalf("stackable %d sell %d buy %d", it.Stackable, it.SellPrice, it.BuyPrice)
+	}
+	if it.Bonding != 1 || it.ContainerSlots != 4 || it.AllowableClass != -1 {
+		t.Fatalf("bonding %d slots %d class %d", it.Bonding, it.ContainerSlots, it.AllowableClass)
+	}
+}
+
+// TestParseItemSparseShortRecord: one byte short of the strings plus the fixed part is
+// an error, never a record with fields read from whatever follows.
+func TestParseItemSparseShortRecord(t *testing.T) {
+	full := buildItemSparse(sparseFixture{Display: "Linen Cloth"})
+	if _, err := ParseItemSparse(full[:len(full)-1], 1); err == nil {
+		t.Fatal("a 301-byte fixed part parsed")
+	}
+	// A bare string with no fixed part is an error too.
+	if _, err := ParseItemSparse([]byte("Linen Cloth\x00"), 1); err == nil {
+		t.Fatal("a record with only the first string parsed")
+	}
+	// The exact 302 bytes parse, with no tail at all.
+	if _, err := ParseItemSparse(full, 1); err != nil {
+		t.Fatalf("a full record without a tail: %v", err)
+	}
+}
+
+// TestParseItem pins Item's kept fields at ItemLoadInfo's order: ClassID i32 first,
+// SubclassID second, InventoryType after Material; the tail is ignored.
+func TestParseItem(t *testing.T) {
+	b := wire.NewWriter()
+	b.WriteI32(4)     // ClassID
+	b.WriteU8(2)      // SubclassID
+	b.WriteU8(7)      // Material
+	b.WriteU8(17)     // InventoryType
+	b.WriteU8(3)      // SheatheType
+	b.WriteI32(-1)    // ItemPetFoodID
+	b.WriteU8(0xFF)   // SoundOverrideSubclassID
+	b.WriteI32(1234)  // IconFileDataID
+	b.WriteU32(0)     // ItemGroupSoundsID
+	b.WriteI32(-1)    // ContentTuningID
+	b.WriteI32(0)     // ModifiedCraftingReagentItemID
+	b.WriteU8(0)      // Unknown1200
+	b.WriteI32(0)     // CraftingQualityID
+	b.WriteI32(0)     // ItemSquishEraID
+	b.WriteFloat32(0) // RecraftReagentCountPercentage
+	b.WriteU8(0)      // OrderSource
+	if got := len(b.Bytes()); got != 43 {
+		t.Fatalf("the fixture writes %d bytes, want ItemLoadInfo minus the id, 43", got)
+	}
+	raw := append(b.Bytes(), 1, 2, 3)
+	it, err := ParseItem(raw, 2589)
+	if err != nil {
+		t.Fatalf("ParseItem: %v", err)
+	}
+	if it.ID != 2589 || it.Class != 4 || it.Subclass != 2 || it.InventoryType != 17 {
+		t.Fatalf("item %+v", it)
+	}
+	if _, err := ParseItem(raw[:42], 2589); err == nil {
+		t.Fatal("a 42-byte Item record parsed")
 	}
 }
