@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // statsLine is one hand-built manifest line: a packet file name, its core opcode and its payload length.
@@ -35,6 +38,40 @@ func writeStatsRun(t *testing.T, parent, run string, lines []statsLine) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestCaptureStatsLargePacket: a live capture holds a ~240 KB hotfix list, far above a 16-bit length. The manifest
+// reader must count it and keep its bound at the frame reader's own payload cap (wire.MaxUncompressed): one byte
+// past that is still refused.
+func TestCaptureStatsLargePacket(t *testing.T) {
+	parent := t.TempDir()
+	writeStatsRun(t, parent, "20260101T000000Z-00000001", []statsLine{
+		{"0004_SMSG_AVAILABLE_HOTFIXES.bin", 0x490001, 240400},
+		{"0005_SMSG_CHAT.bin", 0x4A0001, 9},
+	})
+	stats, err := Stats(parent)
+	if err != nil {
+		t.Fatalf("Stats refused a 240400-byte packet: %v", err)
+	}
+	byName := map[string]Stat{}
+	for _, s := range stats {
+		byName[s.Name] = s
+	}
+	hotfixes, ok := byName["SMSG_AVAILABLE_HOTFIXES"]
+	if !ok || hotfixes.Packets != 1 || hotfixes.Bytes != 240400 {
+		t.Fatalf("SMSG_AVAILABLE_HOTFIXES %+v, want 1 packet of 240400 bytes", hotfixes)
+	}
+
+	// The bound is still there: one byte past the frame reader's uncompressed cap is refused, and nothing reads a
+	// huge sum from it.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.tsv"),
+		[]byte(fmt.Sprintf("%s\t0x490001\t%d\n", "0000_big.bin", wire.MaxUncompressed+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Stats(dir); err == nil || !strings.Contains(err.Error(), "length") {
+		t.Fatalf("Stats accepted a packet above the cap: %v", err)
+	}
 }
 
 // TestCaptureStatsManifestOnly: the totals come from the manifest; a payload file that is gone changes nothing.
