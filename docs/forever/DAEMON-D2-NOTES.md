@@ -8,12 +8,9 @@ the proof.
 ## The frame
 
 `methodAct` is one `actState` the methods share for the life of the session, so a vendor list or
-a menu one call read can serve the next; a reconnect starts empty. `methodNPC` resolves a unit,
-enforces `actInteractReach` (4 yd) without walking, and resets vendor/menu/quest state when the
-GUID changes, exactly as the act `npc` step does. `runMethodStep` clears the line buffer, builds
-the canonical `verb k=v` Raw form and calls `actStep`. `methodCtx` gives 0 -> 15 s, refuses a
-negative or over-60 s wait. `EventLog.Last`, `firstEventSince` and `methodEvent` are the event
-helpers D3-D5 use.
+a menu one call read can serve the next; a reconnect starts empty. `runMethodStep` clears the line buffer, builds
+the canonical `verb k=v` Raw form and calls `actStep`. `EventLog.Last` is the event helper D3-D5
+use. The NPC reach check, the wait bound and the other event helpers were removed as unused (staticcheck U1000) and come back with the round that first calls them.
 
 ## The methods
 

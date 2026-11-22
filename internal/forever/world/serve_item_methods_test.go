@@ -19,8 +19,7 @@ import (
 
 var itemPotion2 = wire.GUID{Low: 0x7D7D, High: 0x4000000000000000}
 
-func testInt(v int) *int       { return &v }
-func testInt32(v int32) *int32 { return &v }
+func testInt(v int) *int { return &v }
 
 func testGUIDBytes(g wire.GUID) []byte {
 	b := wire.NewWriter()
