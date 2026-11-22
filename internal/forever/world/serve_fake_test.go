@@ -21,6 +21,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 	"github.com/pjerra/forever-agent/internal/rpc"
@@ -101,6 +102,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	if f.serveInvite {
 		// A pending invite for accept_invite: the inviter leads the roster the accept's answer brings.
 		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite("Inviter", inviter, true))
+	}
+	if frame := f.groupFrame(); frame != nil {
+		// G2: the group the daemon is already in (the group-control scene's roster).
+		c.writeFrame(fakeSMSGPartyUpdate, frame)
 	}
 
 	for {
@@ -302,6 +307,129 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(partyGUID, wire.EmptyGUID, guid, nil, nil, true))
 			c.writeFrame(fakeSMSGGroupDestroyed, nil)
 		case wire.CMSGRequestPartyMemberStats:
+		case wire.CMSGSetPartyLeader:
+			target, err := parseFakeGroupLeader(payload)
+			if err != nil {
+				f.failf("serve: CMSG_SET_PARTY_LEADER: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenLeader = append(f.groupSeenLeader, target)
+			var frame []byte
+			if !f.groupSilent {
+				f.groupSetLeaderLocked(target)
+				frame = f.groupUpdateLocked()
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		case wire.CMSGSetAssistantLeader:
+			target, apply, err := parseFakeGroupAssistant(payload)
+			if err != nil {
+				f.failf("serve: CMSG_SET_ASSISTANT_LEADER: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenAssistant = append(f.groupSeenAssistant, fakeAssistSeen{GUID: target, Apply: apply})
+			var frame []byte
+			if !f.groupSilent {
+				if f.groupFlags == nil {
+					f.groupFlags = make(map[wire.GUID]uint8, 1)
+				}
+				if apply {
+					f.groupFlags[target] |= 0x01 // MEMBER_FLAG_ASSISTANT
+				} else {
+					f.groupFlags[target] &^= 0x01
+				}
+				frame = f.groupUpdateLocked()
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		case wire.CMSGSetLootMethod:
+			loot, err := parseFakeGroupLoot(payload)
+			if err != nil {
+				f.failf("serve: CMSG_SET_LOOT_METHOD: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenLoot = append(f.groupSeenLoot, loot)
+			var frame []byte
+			if !f.groupSilent {
+				f.groupLoot = &loot
+				frame = f.groupUpdateLocked()
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		case wire.CMSGUpdateRaidTarget:
+			target, mark, err := parseFakeGroupMark(payload)
+			if err != nil {
+				f.failf("serve: CMSG_UPDATE_RAID_TARGET: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenMark = append(f.groupSeenMark, fakeMarkSeen{GUID: target, Mark: mark})
+			var frames []fakeGroupFrame
+			if !f.groupSilent {
+				switch {
+				case party.Mark(mark) == party.MarkRequestAll:
+					frames = append(frames, fakeGroupFrame{core: wire.SMSGSendRaidTargetUpdateAll, payload: fakeMarkAll(f.groupIcons)})
+				case mark >= 0 && mark < party.MaxMarks:
+					// SetTargetIcon clears the target from every other icon first, one update each
+					// (Group.cpp:825-829), then stores the new slot.
+					for i := range f.groupIcons {
+						if party.Mark(i) != party.Mark(mark) && f.groupIcons[i] == target && !target.IsZero() {
+							f.groupIcons[i] = wire.EmptyGUID
+							frames = append(frames, fakeGroupFrame{core: wire.SMSGSendRaidTargetUpdateSingle, payload: fakeMarkSingle(0, int8(i), wire.EmptyGUID, guid)})
+						}
+					}
+					f.groupIcons[mark] = target
+					frames = append(frames, fakeGroupFrame{core: wire.SMSGSendRaidTargetUpdateSingle, payload: fakeMarkSingle(0, mark, target, guid)})
+				}
+			}
+			f.mu.Unlock()
+			for _, fr := range frames {
+				c.writeFrame(table.TranslateServerCore(fr.core), fr.payload)
+			}
+		case wire.CMSGPartyUninvite:
+			target, err := parseFakeGroupUninvite(payload)
+			if err != nil {
+				f.failf("serve: CMSG_PARTY_UNINVITE: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenUninvite = append(f.groupSeenUninvite, target)
+			silent := f.groupSilent
+			guids, names := f.groupMembersLocked()
+			kept := make([]string, 0, len(f.groupNames))
+			for i := range f.groupNames {
+				if guids[i] != target {
+					kept = append(kept, names[i])
+				}
+			}
+			// This core destroys a group when the uninvite leaves it with this character alone (Group.cpp:588-591).
+			gone := len(kept) == 0
+			if !gone {
+				f.groupNames = kept
+			}
+			var frame []byte
+			if !gone {
+				frame = f.groupUpdateLocked()
+			}
+			f.mu.Unlock()
+			if silent {
+				break
+			}
+			if gone {
+				c.writeFrame(fakeSMSGPartyUpdate, groupDestroyedFrame(guid))
+				c.writeFrame(fakeSMSGGroupDestroyed, nil)
+			} else if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
 		case wire.CMSGAreaTrigger:
 			f.mu.Lock()
 			f.serveArea = true

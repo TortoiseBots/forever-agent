@@ -301,12 +301,24 @@ type PartyMember struct {
 	Zone      uint16 `json:"zone"`
 }
 
+// PartyMark is one raid target icon the group holds: the icon's name and the unit it is on. It is one row of
+// Party.Marks.
+type PartyMark struct {
+	Icon string `json:"icon"`
+	GUID GUID   `json:"guid"`
+}
+
 // Party is the party method's result.
 type Party struct {
 	InGroup       bool          `json:"in_group"`
 	Leader        GUID          `json:"leader,omitempty"`
 	Members       []PartyMember `json:"members"`
 	PendingInvite string        `json:"pending_invite,omitempty"`
+	// The group's loot settings from the last roster that carried them, and the raid target icons it holds.
+	LootMethod    string      `json:"loot_method,omitempty"`
+	LootThreshold int         `json:"loot_threshold,omitempty"`
+	LootMaster    GUID        `json:"loot_master,omitempty"`
+	Marks         []PartyMark `json:"marks,omitempty"`
 }
 
 // Command is a gm/bot method's result: the line sent and the server's

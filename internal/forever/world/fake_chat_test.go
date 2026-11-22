@@ -243,6 +243,13 @@ func (f *fakeServer) serveChat(c, realm *fakeConn) {
 
 // fakePartyUpdate writes SMSG_PARTY_UPDATE for this build (PartyPackets.cpp:584-627) with no optional blocks.
 func fakePartyUpdate(partyGUID, leader, self wire.GUID, members []wire.GUID, names []string, destroyed bool) []byte {
+	return fakePartyUpdateFull(partyGUID, leader, self, members, names, nil, nil, false, destroyed)
+}
+
+// fakePartyUpdateFull is fakePartyUpdate with the per-member flags (flags parallels members, nil leaves every member
+// at 0: the assistant bit is 0x01), the optional loot block (PartyPackets.cpp:565-577) and allOnline: every member's
+// Connected bit, where fakePartyUpdate sets only the first one's.
+func fakePartyUpdateFull(partyGUID, leader, self wire.GUID, members []wire.GUID, names []string, memberFlags []uint8, loot *party.LootSettings, allOnline, destroyed bool) []byte {
 	b := wire.NewWriter()
 	flags := uint16(0)
 	typ := uint8(party.GroupTypeNormal)
@@ -278,12 +285,16 @@ func fakePartyUpdate(partyGUID, leader, self wire.GUID, members []wire.GUID, nam
 	for i, g := range list {
 		b.WriteBits(uint64(len(names[i])), 6)
 		b.WriteBits(1, 9) // empty voice id
-		b.WriteBit(i == 0)
+		b.WriteBit(i == 0 || allOnline)
 		b.WriteBit(false)
 		b.WriteBit(false)
 		wire.WritePackedGUID(b, g)
+		mflags := uint8(0)
+		if i < len(memberFlags) {
+			mflags = memberFlags[i]
+		}
 		b.WriteU8(0)                            // subgroup
-		b.WriteU8(0)                            // flags
+		b.WriteU8(mflags)                       // flags (MEMBER_FLAG_ASSISTANT is 0x01)
 		b.WriteU8(0)                            // roles assigned
 		b.WriteU8(0)                            // roles unknown
 		b.WriteU8(1)                            // class
@@ -303,9 +314,14 @@ func fakePartyUpdate(partyGUID, leader, self wire.GUID, members []wire.GUID, nam
 	}
 	b.WriteBit(false) // challenge mode
 	b.WriteBit(false) // lfg
-	b.WriteBit(false) // loot
+	b.WriteBit(loot != nil)
 	b.WriteBit(false) // difficulty
 	b.FlushBits()
+	if loot != nil {
+		b.WriteU8(uint8(loot.Method))
+		wire.WritePackedGUID(b, loot.Master)
+		b.WriteU8(loot.Threshold)
+	}
 	return b.Bytes()
 }
 

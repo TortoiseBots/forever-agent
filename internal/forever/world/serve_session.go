@@ -327,6 +327,12 @@ func (s *session) servePartyInfo() ServePartyInfo {
 			Zone: m.ZoneID,
 		})
 	}
+	if s.party.HasLoot {
+		out.LootMethod = party.LootName(s.party.Loot.Method)
+		out.LootThreshold = int(s.party.Loot.Threshold)
+		out.LootMaster = GUID(s.party.Loot.Master)
+	}
+	out.Marks = serveMarks(s.party.Marks)
 	return out
 }
 

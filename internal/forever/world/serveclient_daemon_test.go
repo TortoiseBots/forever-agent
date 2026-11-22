@@ -226,6 +226,7 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		{"aura", reflect.TypeFor[ServeAura](), reflect.TypeFor[serveclient.Aura]()},
 		{"party", reflect.TypeFor[ServePartyInfo](), reflect.TypeFor[serveclient.Party]()},
 		{"party member", reflect.TypeFor[ServePartyMember](), reflect.TypeFor[serveclient.PartyMember]()},
+		{"party mark", reflect.TypeFor[ServeMark](), reflect.TypeFor[serveclient.PartyMark]()},
 		{"command", reflect.TypeFor[ServeCommand](), reflect.TypeFor[serveclient.Command]()},
 		{"logout", reflect.TypeFor[serveLogoutResult](), reflect.TypeFor[serveclient.Logout]()},
 		{"events page", reflect.TypeFor[ServeEventsPage](), reflect.TypeFor[serveclient.EventsPage]()},

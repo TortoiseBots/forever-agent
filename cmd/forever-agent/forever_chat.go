@@ -297,7 +297,7 @@ func printChatSummary(w io.Writer, report *world.Report) {
 }
 
 func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--loot METHOD[:THRESHOLD]] [--mark ICON] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever party-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -308,6 +308,10 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	acceptFrom := fs.String("accept-from", "", "wait for an invite from this character name and accept it")
 	declineFrom := fs.String("decline-from", "", "wait for an invite from this character name and decline it")
 	uninvite := fs.String("uninvite", "", "after the group has formed, uninvite this member (the leader only)")
+	promote := fs.String("promote", "", "promote this member to leader and wait for the roster that shows it (the leader only)")
+	promoteBack := fs.Duration("promote-back", 0, "with --promote: then wait up to this long for the new leader to promote this character back (an agent session on the other side)")
+	loot := fs.String("loot", "", "set the loot method METHOD[:THRESHOLD] and read the roster back (free-for-all, round-robin, master-loot, group-loot, need-before-greed, personal-loot, or 0..5; threshold 2..6, default 2)")
+	mark := fs.String("mark", "", "set this raid target icon on the nearest attackable creature and read the icon list back (star circle diamond triangle moon square cross skull)")
 	waitJoin := fs.Duration("wait-join", 0, "with --invite: wait up to this long for the group to form (stats, party line, stay)")
 	captureDir := fs.String("capture-dir", "", "write every packet the combat, chat and party handlers see into a new run directory under this path (keep it outside the repository)")
 	if err := fs.Parse(args); err != nil {
@@ -333,6 +337,26 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever party-check: --accept-from and --decline-from are different answers to the same invite; choose one")
 		return exitUsage
 	}
+	if *promoteBack < 0 || *promoteBack > 2*time.Minute {
+		fmt.Fprintln(stderr, "forever party-check: --promote-back is at most 2m")
+		return exitUsage
+	}
+	if *promoteBack > 0 && *promote == "" {
+		fmt.Fprintln(stderr, "forever party-check: --promote-back needs --promote: it waits for the new leader to hand the lead back")
+		return exitUsage
+	}
+	if *loot != "" {
+		if _, _, err := world.ParseLootSpec(*loot); err != nil {
+			fmt.Fprintf(stderr, "forever party-check: --loot: %v\n", err)
+			return exitUsage
+		}
+	}
+	if *mark != "" {
+		if _, ok := world.ParseRaidMark(*mark); !ok {
+			fmt.Fprintln(stderr, "forever party-check: --mark: not a raid target icon (star circle diamond triangle moon square cross skull)")
+			return exitUsage
+		}
+	}
 	if *uninvite != "" && *invite == "" {
 		fmt.Fprintln(stderr, "forever party-check: --uninvite needs --invite: only the leader who invited can uninvite")
 		return exitUsage
@@ -349,6 +373,10 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		PartyAcceptFrom:  *acceptFrom,
 		PartyDeclineFrom: *declineFrom,
 		PartyUninvite:    *uninvite,
+		PartyPromote:     *promote,
+		PartyPromoteBack: *promoteBack,
+		PartyLoot:        *loot,
+		PartyMark:        *mark,
 		WaitJoin:         *waitJoin,
 		PartyStay:        *stay,
 		CaptureDir:       *captureDir,
@@ -383,6 +411,9 @@ func printPartySummary(w io.Writer, report *world.Report) {
 		fmt.Fprintf(w, ", loot %s", p.LootMethod)
 	}
 	fmt.Fprintln(w)
+	for _, m := range p.Marks {
+		fmt.Fprintf(w, "  mark %s on %s\n", m.Icon, safeName(m.Name))
+	}
 	for _, m := range p.Members {
 		line := fmt.Sprintf("  %s connected=%v subgroup=%d class=%d roles=%d", safeName(m.Name), m.Connected, m.Subgroup, m.Class, m.RolesAssigned)
 		if m.Full {
