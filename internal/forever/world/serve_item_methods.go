@@ -19,7 +19,7 @@ import (
 // equipmentSlotNames is Player.h:739-757 EQUIPMENT_SLOT_* order (0 head .. 18 tabard). TA's list matches it.
 var equipmentSlotNames = [...]string{
 	"head", "neck", "shoulders", "body", "chest", "waist", "legs", "feet", "wrists", "hands",
-	"finger1", "finger2", "trinket1", "trinket2", "back", "mainhand", "offhand", "ranged", "tabard",
+	"finger1", "finger2", "trinket1", "trinket2", "back", "main_hand", "off_hand", "ranged", "tabard",
 }
 
 // serveInventoryParams is inventory's parameter object.

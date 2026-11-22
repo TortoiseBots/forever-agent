@@ -20,7 +20,7 @@ helpers D3-D5 use.
 | Method | Answer |
 |---|---|
 | `inventory {bags?, names?}` | placed backpack rows (container 255, slots 35-62) in slot order, the bag contents (30-33) when `bags` is true, then the items the snapshot cannot place (255/255, `placed:false`). Unknown inventory is an RPC error; a stale one still answers (the `inv` method carries the stale flag). `names:true` fills name/quality with one DB batch per table; a failed fetch leaves them unnamed. |
-| `equipment {names?}` | occupied slots 0-18 with the core's names (`Player.h:739-757`: head .. tabard). |
+| `equipment {names?}` | occupied slots 0-18 with the core's names (`Player.h:739-757`: head .. tabard; slot names as the old daemon (`main_hand`, `off_hand`); no `temp_enchant` (the model does not track it)). |
 | `equip {item_entry? | bag?+slot?}` | the act `equip` step (AutoEquip; the server chooses the slot) and the item's row after the move. Neither selector is an RPC error before any packet. |
 | `use_item {item_entry? | bag?+slot?, target?, spell_id}` | `spell_id` is required: the on-use spell is in ItemEffect, not a queryable record. A non-zero target is resolved from the world model and passed through a fresh `actState`, never `methodAct`. The answer is the used item's row; a server refusal is the act's cast-failure error. |
 

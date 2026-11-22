@@ -113,12 +113,12 @@ func TestServeEquipmentSlotNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("equipment: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Slot != 15 || rows[0].SlotName != "mainhand" || rows[0].ItemEntry != 25 {
+	if len(rows) != 1 || rows[0].Slot != 15 || rows[0].SlotName != "main_hand" || rows[0].ItemEntry != 25 {
 		t.Fatalf("equipment rows %+v", rows)
 	}
 	want := []string{
 		"head", "neck", "shoulders", "body", "chest", "waist", "legs", "feet", "wrists", "hands",
-		"finger1", "finger2", "trinket1", "trinket2", "back", "mainhand", "offhand", "ranged", "tabard",
+		"finger1", "finger2", "trinket1", "trinket2", "back", "main_hand", "off_hand", "ranged", "tabard",
 	}
 	for slot, name := range want {
 		if got := equipmentSlotName(slot); got != name {
