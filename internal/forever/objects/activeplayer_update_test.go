@@ -519,3 +519,39 @@ func TestActivePlayerCoinageUpdateReachesTheModel(t *testing.T) {
 		t.Fatalf("a coinage-only update left the model at %d", pl.Info.Player.Coinage)
 	}
 }
+
+// TestActivePlayerUpdateSellJunkBurstIsDecoded: a sell-junk writes several emptied carried slots, the buyback slots they
+// land in (a full list rolling over) and the money in ONE update, in the core's write order. Every slot, in ascending
+// order, must come out as written whatever the count.
+func TestActivePlayerUpdateSellJunkBurstIsDecoded(t *testing.T) {
+	for _, n := range []int{2, 5, 9, 12} {
+		slots := map[int]wire.GUID{}
+		var buyback []int
+		for k := range n {
+			slots[23+k*2] = wire.GUID{} // a carried slot emptied
+			slots[72+k] = apSword       // the buyback slot it entered
+			buyback = append(buyback, k)
+		}
+		body := saleBody(170, 7777, slots, buyback...)
+		u, err := ParseUpdateObjectForBuild(updateObjectPayload(apSelf, body), 70707)
+		if err != nil || len(u.Blocks) != 1 {
+			t.Fatalf("%d sold: %v", n, err)
+		}
+		info := u.Blocks[0].Info
+		if info.InvSlotsUndecoded() || info.ActivePlayerSkipped() || !u.Blocks[0].ValuesComplete {
+			t.Fatalf("%d sold: reported undecoded", n)
+		}
+		got, ok := info.ChangedInvSlots()
+		if !ok || len(got) != len(slots) {
+			t.Fatalf("%d sold: slots %+v (%v), want %d", n, got, ok, len(slots))
+		}
+		for slot, g := range slots {
+			if got[slot] != g {
+				t.Fatalf("%d sold: slot %d is %v, want %v", n, slot, got[slot], g)
+			}
+		}
+		if info.Player == nil || info.Player.Coinage != 7777 {
+			t.Fatalf("%d sold: coinage %+v", n, info.Player)
+		}
+	}
+}

@@ -626,6 +626,8 @@ type session struct {
 	questLog *quest.Log
 	// unwalkedLogged is set once the unwalkable PlayerData bits of this login were logged (noteUnwalkedPlayerBits).
 	unwalkedLogged bool
+	// activeUnwalkedLogged is the same once-per-login flag for the ActivePlayerData branch (noteUnwalkedActiveBits).
+	activeUnwalkedLogged bool
 	// questStale is why the log cannot be trusted (a PlayerData update named quest-log slots next to a field this
 	// client does not decode), empty when it can; an own create clears it. invFail is the last
 	// SMSG_INVENTORY_CHANGE_FAILURE, which a vendor purchase or buyback refusal arrives as (Player::_StoreOrEquipNewItem).
@@ -2724,6 +2726,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// ActivePlayerData update behind an equipment change is explained by the client's own move or is stale too.
 		switch {
 		case b.Info.InvSlotsUndecoded():
+			s.noteUnwalkedActiveBits(b.Info.ActiveUnwalkedBits())
 			inv.ServerUndecoded(now, true)
 			s.noteInventoryStale("a server update named inventory slots next to fields this client does not decode")
 		case b.Info.ActivePlayerSkipped():
@@ -2752,6 +2755,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 		// the block on its next use (round R5).
 		inv.Reset()
 		s.unwalkedLogged = false
+		s.activeUnwalkedLogged = false
 		s.questLog = nil
 		s.questStale = ""
 		if !s.selfSeen {
