@@ -281,6 +281,7 @@ func (w dungeonWorld) Units() []driver.Unit {
 	out := make([]driver.Unit, 0, len(objs))
 	for _, o := range objs {
 		ux, uy, uz := o.Position(now)
+		owner, _ := unitOwner(o.Info)
 		u := driver.Unit{
 			GUID:     o.GUID,
 			Entry:    uint32(o.Info.Entry),
@@ -288,9 +289,11 @@ func (w dungeonWorld) Units() []driver.Unit {
 			HP:       int(o.Info.Health),
 			MaxHP:    int(o.Info.MaxHealth),
 			Target:   o.Info.Target,
+			Combat:   o.InCombat,
 			Dead:     w.s.world.DeadAt(o.GUID),
 			Ghost:    w.s.world.GhostAt(o.GUID),
 			Friendly: friendlyUnit(o),
+			Owner:    owner,
 		}
 		if cs, ok := w.s.world.Combat(o.GUID); ok && cs.Cast != nil {
 			u.Cast = uint32(cs.Cast.SpellID)

@@ -148,6 +148,8 @@ type Fake struct {
 	combat [][]byte
 	// flee marks the mobs whose threat line says flee=yes (the key is on every line, as slice 4 sends it).
 	flee map[string]bool
+	// pets holds scripted non-hostile units (such as party members' pets) returned by Units for frame recording.
+	pets []Unit
 
 	// ordered is every order and action, in the driver's own view of time; acted is the actions themselves.
 	ordered []Order
@@ -1317,7 +1319,7 @@ func (f *Fake) Self() (pos Vec3, mapID uint32, epoch uint64, between bool) {
 	return f.selfPos, f.selfMap, f.epoch, f.between
 }
 
-// Units are the units in the commander's view (within 60 yd).
+// Units are the units in the commander's view (within 60 yd), plus scripted pets.
 func (f *Fake) Units() []Unit {
 	var out []Unit
 	for _, g := range f.mobOrder {
@@ -1326,7 +1328,14 @@ func (f *Fake) Units() []Unit {
 			out = append(out, *u)
 		}
 	}
+	out = append(out, f.pets...)
 	return out
+}
+
+// AddPet appends a scripted unit (such as a party member's pet) to the fake world's view.
+func (f *Fake) AddPet(u Unit) {
+	u.Friendly = true
+	f.pets = append(f.pets, u)
 }
 
 // PlayerGUID is a party member's GUID, or nothing for an observer out of view (OutOfView).

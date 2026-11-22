@@ -136,10 +136,10 @@ func TestBughuntCommandRefusesBadInput(t *testing.T) {
 	if !strings.Contains(stderr.String(), "nope.json") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
-	if code := bughuntCmd([]string{"--rules", "7", "--out", out, root}, &stdout, &stderr); code != exitUsage {
-		t.Fatalf("rule 7: exit %d", code)
+	if code := bughuntCmd([]string{"--rules", "12", "--out", out, root}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("rule 12: exit %d", code)
 	}
-	if !strings.Contains(stderr.String(), "rule 7") {
+	if !strings.Contains(stderr.String(), "rule 12") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
 	if code := bughuntCmd([]string{"--rules", "16", "--out", out, root}, &stdout, &stderr); code != exitUsage {
@@ -189,9 +189,9 @@ func TestBughuntCommandRefusesMalformedCombatLog(t *testing.T) {
 // TestSelectedRulesAreInRuleOrder: the registry is handed out in rule order (the doc's "in rule order"), including
 // the tactics rules that join last, so counts.json and the ticket list do not shuffle with registration order.
 func TestSelectedRulesAreInRuleOrder(t *testing.T) {
-	want := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20}
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20}
 	// Without a tactics file the selected list is the frame and event rules: 16-19 are the tactics rules only.
-	noTactics := []int{1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 20}
+	noTactics := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 20}
 	numbers := func(rules []bughunt.Rule) []int {
 		out := make([]int, 0, len(rules))
 		for _, r := range rules {

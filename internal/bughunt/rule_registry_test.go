@@ -16,6 +16,7 @@ var pinnedRuleNames = map[int]string{
 	4:  "standing in damaging AoE >3 s",
 	5:  "stuck >30 s while group moves",
 	6:  "eat/drink while group in combat",
+	7:  "pet attacks unit master is not fighting",
 	8:  "buff flip-flop (>3 casts / 60 s / target)",
 	9:  "fall/drown death",
 	10: "power waste at 100% in combat >30 s",
@@ -62,7 +63,7 @@ func TestRegistryRulesNamed(t *testing.T) {
 		}
 	}
 	// The four groups' own orders are the order the command sorts, so pin them too.
-	wantFrame := []int{3, 5, 6, 9, 10, 13, 14}
+	wantFrame := []int{3, 5, 6, 7, 9, 10, 13, 14}
 	wantEvent := []int{1, 2, 4, 8, 11, 15, 20}
 	wantTactics := []int{16, 17, 18, 19}
 	if got := ruleNumbers(FrameRules()); !reflect.DeepEqual(got, wantFrame) {

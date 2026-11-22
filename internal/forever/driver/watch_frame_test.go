@@ -709,3 +709,59 @@ func TestPlayerGUIDOnRealm(t *testing.T) {
 		t.Fatal("a zero counter gave a guid")
 	}
 }
+
+// TestWatchFrameCarriesPets: a watch frame carries world units whose Owner is a party member in `pt`, and drops
+// units whose Owner is empty or belongs to someone outside the party.
+func TestWatchFrameCarriesPets(t *testing.T) {
+	dir := t.TempDir()
+	run, f, logs := newFrameWatch(t, dir, FakeRunScript{
+		Steps: 4, Pulls: 0, ProgressEvery: 2 * time.Second, DoneAt: 6 * time.Second, Mobs: true,
+	})
+	hunterGUID := f.guidOf["Watchdps1"]
+	petGUID := wire.GUID{High: uint64(5) << 58, Low: 0xE01}
+	targetGUID := wire.GUID{High: uint64(5) << 58, Low: 0xB01}
+	strayPetGUID := wire.GUID{High: uint64(5) << 58, Low: 0xE02}
+	strayOwner := wire.GUID{High: uint64(2) << 58, Low: 0x9999}
+	f.AddPet(Unit{
+		GUID:   petGUID,
+		Owner:  hunterGUID,
+		HP:     75,
+		MaxHP:  100,
+		Combat: true,
+		Target: targetGUID,
+		Pos:    Vec3{11, 22, 33},
+	})
+	f.AddPet(Unit{
+		GUID:   strayPetGUID,
+		Owner:  strayOwner,
+		HP:     100,
+		MaxHP:  100,
+		Combat: true,
+		Target: targetGUID,
+	})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done; logs:\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	var frames []trace.Frame
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace.Read: %v", err)
+	}
+	frames = tf.Frames
+	if len(frames) == 0 {
+		t.Fatal("no frames written")
+	}
+	for _, fr := range frames {
+		if len(fr.Pets) != 1 {
+			t.Fatalf("frame %d has %d pets, want 1 (party pet only): %+v", fr.T, len(fr.Pets), fr.Pets)
+		}
+		p := fr.Pets[0]
+		if p.G != petGUID.String() || p.Owner != hunterGUID.String() || p.HPPct != 75 || !p.Combat || p.Target != targetGUID.String() {
+			t.Fatalf("frame %d pet %+v", fr.T, p)
+		}
+		if p.X != 11 || p.Y != 22 || p.Z != 33 {
+			t.Fatalf("frame %d pet pos (%v,%v,%v), want (11,22,33)", fr.T, p.X, p.Y, p.Z)
+		}
+	}
+}

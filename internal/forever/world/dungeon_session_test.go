@@ -607,3 +607,42 @@ func TestDungeonWorldPlayerGUIDOfCounter(t *testing.T) {
 		t.Fatalf("member guid %v %v", g, ok)
 	}
 }
+
+// TestDungeonWorldUnitsOwnerAndCombat: dungeonWorld.Units carries each unit's combat flag and owner using P2's
+// owner rule (SummonedBy, else CreatedBy, else CharmedBy).
+func TestDungeonWorldUnitsOwnerAndCombat(t *testing.T) {
+	s := newPortSession(&portRecorder{now: time.Now()})
+	ownerSum := playerGUID(0x31)
+	ownerCre := playerGUID(0x32)
+	ownerChm := playerGUID(0x33)
+	targetMob := wire.GUID{Low: 0x401, High: uint64(objects.TypeUnit) << 58}
+	pSum := wire.GUID{Low: 0x501, High: uint64(objects.TypeUnit) << 58}
+	pCre := wire.GUID{Low: 0x502, High: uint64(objects.TypeUnit) << 58}
+	pChm := wire.GUID{Low: 0x503, High: uint64(objects.TypeUnit) << 58}
+
+	makeUnit := func(g wire.GUID, info objects.Info) objects.WorldFragment {
+		info.Type = objects.TypeUnit
+		info.HasObject, info.HasUnit = true, true
+		info.Complete()
+		return objects.WorldFragment{GUID: g, ObjectType: objects.TypeUnit, Info: info, ValuesComplete: true}
+	}
+	s.world.Apply(&objects.Update{Blocks: []objects.WorldFragment{
+		makeUnit(pSum, objects.Info{Entry: 100, Health: 50, MaxHealth: 100, SummonedBy: ownerSum, CreatedBy: ownerCre, Target: targetMob, Flags: 0x00080000}),
+		makeUnit(pCre, objects.Info{Entry: 101, Health: 80, MaxHealth: 100, CreatedBy: ownerCre, CharmedBy: ownerChm}),
+		makeUnit(pChm, objects.Info{Entry: 102, Health: 90, MaxHealth: 100, CharmedBy: ownerChm}),
+	}}, time.Now())
+
+	byGUID := map[wire.GUID]driver.Unit{}
+	for _, u := range (dungeonWorld{s: s}).Units() {
+		byGUID[u.GUID] = u
+	}
+	if u := byGUID[pSum]; u.Owner != ownerSum || !u.Combat || u.Target != targetMob {
+		t.Fatalf("summoned pet %+v, want owner %v combat=true target %v", u, ownerSum, targetMob)
+	}
+	if u := byGUID[pCre]; u.Owner != ownerCre || u.Combat {
+		t.Fatalf("created pet %+v, want owner %v combat=false", u, ownerCre)
+	}
+	if u := byGUID[pChm]; u.Owner != ownerChm {
+		t.Fatalf("charmed pet %+v, want owner %v", u, ownerChm)
+	}
+}

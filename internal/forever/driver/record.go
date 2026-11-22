@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -317,8 +318,9 @@ func (r *Recorder) Frame(t time.Time, rep *tbcmd.StateReport, units []Unit, botG
 			f.Bots = append(f.Bots, botFrame(b, botGUID[b.Name], "", nil))
 		}
 	}
+	members := frameMembers(f.Bots)
 	for _, u := range units {
-		if u.Friendly {
+		if u.Friendly || (!u.Owner.IsZero() && members[strings.ToUpper(u.Owner.String())]) {
 			continue
 		}
 		pct := 0
@@ -337,6 +339,7 @@ func (r *Recorder) Frame(t time.Time, rep *tbcmd.StateReport, units []Unit, botG
 			Entry:  u.Entry,
 		})
 	}
+	f.Pets = framePets(members, units)
 	r.trace.Frame(f)
 }
 
@@ -350,11 +353,11 @@ type FrameBot struct {
 	Auras []uint32
 }
 
-// WatchFrame writes one frame of a watched run from the module's own reports: the party from `.tb state` and the
-// mobs from `.tb threat`. Both are reads; a frame never carries an order. The party's first frame also writes the
-// party records (guid, name, role, class) the rest of the run joins on: a watch's roster comes from the module, so
-// the header could not carry it.
-func (r *Recorder) WatchFrame(t time.Time, bots []FrameBot, thr *tbcmd.ThreatReport, guidOf func(string) string) {
+// WatchFrame writes one frame of a watched run from the module's own reports: the party from `.tb state`, the
+// mobs from `.tb threat` and the party members' pets from the world model's units. Both are reads; a frame never
+// carries an order. The party's first frame also writes the party records (guid, name, role, class) the rest of
+// the run joins on: a watch's roster comes from the module, so the header could not carry it.
+func (r *Recorder) WatchFrame(t time.Time, bots []FrameBot, thr *tbcmd.ThreatReport, guidOf func(string) string, units []Unit) {
 	if r == nil || r.trace == nil {
 		return
 	}
@@ -392,7 +395,55 @@ func (r *Recorder) WatchFrame(t time.Time, bots []FrameBot, thr *tbcmd.ThreatRep
 			f.Mobs = append(f.Mobs, mob)
 		}
 	}
+	f.Pets = framePets(frameMembers(f.Bots), units)
 	r.trace.Frame(f)
+}
+
+func frameMembers(bots []trace.Bot) map[string]bool {
+	members := make(map[string]bool, len(bots))
+	for _, b := range bots {
+		if b.G != "" {
+			members[strings.ToUpper(b.G)] = true
+		}
+	}
+	return members
+}
+
+// framePets selects the world units whose owner is a member of the frame (using P2's owner rule, carried on
+// Unit.Owner) and shapes them into trace.Pet rows.
+func framePets(members map[string]bool, units []Unit) []trace.Pet {
+	if len(members) == 0 || len(units) == 0 {
+		return nil
+	}
+	var pets []trace.Pet
+	for _, u := range units {
+		if u.Owner.IsZero() {
+			continue
+		}
+		ow := u.Owner.String()
+		if !members[strings.ToUpper(ow)] {
+			continue
+		}
+		pct := 0
+		if u.MaxHP > 0 {
+			pct = u.HP * 100 / u.MaxHP
+		}
+		tg := ""
+		if !u.Target.IsZero() {
+			tg = u.Target.String()
+		}
+		pets = append(pets, trace.Pet{
+			G:      u.GUID.String(),
+			Owner:  ow,
+			HPPct:  pct,
+			Combat: u.Combat,
+			Target: tg,
+			X:      u.Pos[0],
+			Y:      u.Pos[1],
+			Z:      u.Pos[2],
+		})
+	}
+	return pets
 }
 
 // botFrame is one party member's frame entry from the module's state line: the engine state, health, power,

@@ -422,7 +422,7 @@ func (r *Run) watchFrame(ctx context.Context, w *watchRun) {
 	if r.stopReason != "" || r.lost {
 		return
 	}
-	r.rec.WatchFrame(r.now(), bots, trep, r.frameGUID)
+	r.rec.WatchFrame(r.now(), bots, trep, r.frameGUID, r.world.Units())
 	w.frames++
 }
 
