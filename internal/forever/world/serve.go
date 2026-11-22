@@ -962,6 +962,16 @@ type ServeUnit struct {
 	// and dismount read).
 	Auras          []ServeAura `json:"auras"`
 	MountDisplayID int32       `json:"mount_display_id,omitempty"`
+
+	// The pet fields (round P2): Owner is whichever of UF::UnitData SummonedBy, CreatedBy and CharmedBy names the
+	// unit's owner, OwnerKind says which field it came from, and Pet is the unit's own Summon (the pet it controls,
+	// zero for a pet itself). PetNumber, CreatedBySpell and CreatureFamily are the pet fields P1 decodes.
+	Owner          GUID   `json:"owner,omitempty"`
+	OwnerKind      string `json:"owner_kind,omitempty"`
+	Pet            GUID   `json:"pet,omitempty"`
+	PetNumber      uint32 `json:"pet_number,omitempty"`
+	CreatedBySpell int32  `json:"created_by_spell,omitempty"`
+	CreatureFamily int32  `json:"creature_family,omitempty"`
 }
 
 func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
@@ -977,7 +987,11 @@ func (s *session) serveUnit(o *objects.Object, now time.Time) ServeUnit {
 		Target: GUID(o.Info.Target), InCombat: o.InCombat, Dead: o.Dead, Ghost: o.Ghost,
 		MountDisplayID: o.Info.MountDisplayID,
 		Moving:         o.Spline != nil && !o.SplineAt.IsZero() && now.Sub(o.SplineAt) < time.Duration(o.Spline.MoveTime)*time.Millisecond,
+		Pet:            GUID(o.Info.Summon), PetNumber: o.Info.PetNumber,
+		CreatedBySpell: o.Info.CreatedBySpell, CreatureFamily: o.Info.CreatureFamily,
 	}
+	owner, kind := unitOwner(o.Info)
+	u.Owner, u.OwnerKind = GUID(owner), kind
 	if int(o.Info.DisplayPower) < len(o.Info.Power) {
 		u.Power = o.Info.Power[o.Info.DisplayPower]
 		u.MaxPower = o.Info.MaxPower[o.Info.DisplayPower]

@@ -187,6 +187,8 @@ type serveUnitsParams struct {
 	Name    string  `json:"name,omitempty"`
 	Hostile *bool   `json:"hostile,omitempty"`
 	Limit   int     `json:"limit,omitempty"`
+	// Owner keeps only the units whose owner (ServeUnit.Owner) is this GUID: a hunter's pet, a warlock's demon.
+	Owner GUID `json:"owner,omitempty"`
 }
 
 type serveUnitParams struct {
@@ -732,6 +734,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerItemInfoMethods(srv, st)
 	registerItemMethods(srv, st)
 	registerNPCMethods(srv, st)
+	registerPetMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -789,6 +792,9 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 			if !ok || h != *p.Hostile {
 				continue
 			}
+		}
+		if !wire.GUID(p.Owner).IsZero() && u.Owner != p.Owner {
+			continue
 		}
 		out = append(out, u)
 	}
@@ -1691,7 +1697,7 @@ var notPortedMethods = []string{
 	"lfg_role_check_answer", "lfg_status",
 	"loot", "loot_close", "loot_take",
 	"map_snapshot", "open_object",
-	"pet", "pet_action", "plan_check",
+	"plan_check",
 	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
 	"raid_move", "roll",
 	"taxi",
