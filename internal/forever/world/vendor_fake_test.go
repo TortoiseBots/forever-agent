@@ -52,10 +52,14 @@ type vendorWorld struct {
 	answerCoins uint64
 	// The purchase and repair variants of the round's fix: a success answer with no item behind it, one that names
 	// another vendor, a refusal that arrives as an inventory failure (a full bag), a buyback refusal, a silent repairer.
-	noItemAfterBuy    bool
-	foreignBuyAnswer  bool
-	refuseBuyInv      bool
-	refuseBuyback     int32
+	noItemAfterBuy   bool
+	foreignBuyAnswer bool
+	refuseBuyInv     bool
+	refuseBuyback    int32
+	// buybackOwnAnswer answers a buyback the way the core does: no buy-success packet, only the money it took, with
+	// no InvSlots update the client could read (the item's own block does not change: a sold item keeps the
+	// character as its container, Player::RemoveItem does not change the item, Player.cpp:13086-13092).
+	buybackOwnAnswer  bool
 	repairSilent      bool
 	repairRestoresAll bool
 	// The sweep variants: the server's updates arrive sweepDelay after the request, or never.
@@ -252,6 +256,13 @@ func (v *vendorWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		}
 		if v.refuseBuyback != 0 {
 			v.deliver(wire.SMSGBuyFailed, vendorBuyFailed(vendorNPCGUID, 0, v.refuseBuyback))
+			return
+		}
+		if v.buybackOwnAnswer {
+			// The core sends no buy-success packet for a buyback (ItemHandler.cpp:541-581): the price it takes is
+			// the only answer. Here the player's InvSlots update that names the new slot did not reach the model.
+			coin := uint64(900)
+			v.deliver(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
 			return
 		}
 		v.deliver(wire.SMSGBuySucceeded, vendorBuySucceeded(vendorNPCGUID, 1, -1, 1))
@@ -623,6 +634,48 @@ func TestVendorBuybackComesBack(t *testing.T) {
 	}
 	if !containsLine(v.lines, "step 2 buyback ok entry 25 at slot 40") {
 		t.Fatalf("the buyback line is missing:\n%s", joinLines(v.lines))
+	}
+}
+
+// TestVendorBuybackReadsTheCharge is the live buyback failure: the server gave the item back and took the money, but
+// sent no packet of its own for the purchase, and the slot update that names the item's new place was not read, so
+// the model still showed it in buyback slot 72 and the step timed out with "the item did not come back" (the later
+// steps then saw a stale buyback row). The price being taken is the core's own proof that the purchase went through
+// (it charges before it stores), so the step must read it.
+func TestVendorBuybackReadsTheCharge(t *testing.T) {
+	v := newVendorWorld(t, npc.NPCFlagVendor)
+	v.buybackOwnAnswer = true
+	// A partial sale left half the stack in buyback slot 72; a sold item keeps the character as its container
+	// (Player::RemoveItem does not change the item, Player.cpp:13086-13092).
+	v.deliver(wire.SMSGUpdateObject, activeUpdate(map[int]wire.GUID{72: itemBack}, nil))
+	v.apply(fragmentItem(itemBack, 25, 2))
+	fundSelf(v.itemWorld, 1260)
+	a := v.state(t)
+	if err := v.open(t, a); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if rows := v.s.inventoryNow().Buyback(); len(rows) != 1 || rows[0].GUID != itemBack {
+		t.Fatalf("the buyback rows before the step: %+v", rows)
+	}
+	if err := v.s.actStep(context.Background(), a, mustActStep(t, "buyback slot=72")); err != nil {
+		t.Fatalf("buyback: %v\n%s", err, joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "step 2 buyback ok entry 25 slot unknown") {
+		t.Fatalf("the buyback line is missing:\n%s", joinLines(v.lines))
+	}
+	if !containsLine(v.lines, "360 spent") {
+		t.Fatalf("the money the server took is missing:\n%s", joinLines(v.lines))
+	}
+	after := v.s.inventoryNow()
+	row, held := rowByGUID(after, itemBack)
+	if !held {
+		t.Fatalf("the returned item is not in the carried rows: %+v", after.Items)
+	}
+	if row.Placed() {
+		t.Fatalf("the returned item was placed at %d/%d, want the slot unknown (no slot update was read)", row.Container, row.Slot)
+	}
+	if b := after.Buyback(); len(b) != 0 {
+		t.Fatalf("the stale buyback claim survived: %+v", b)
 	}
 }
 
