@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -151,8 +153,9 @@ func snapPoint(pl *navmesh.Planner, m uint32, pt dungeon.Point) (dungeon.Point, 
 		d    float64
 	}
 	var cs []cand
+	tr := terrainOf(pl)
 	for _, poly := range polys {
-		if poly.Flags&navmesh.NavGround == 0 || len(poly.Verts) < 3 {
+		if !tr.ground(poly.Flags) || len(poly.Verts) < 3 {
 			continue
 		}
 		x, y, d := closestInPoly(poly.Verts, float64(pt.X), float64(pt.Y))
@@ -168,7 +171,7 @@ func snapPoint(pl *navmesh.Planner, m uint32, pt dungeon.Point) (dungeon.Point, 
 		}
 		z, found := float32(0), false
 		for _, f := range fl { // highest first
-			if f.Flags&navmesh.NavGround == 0 {
+			if !tr.ground(f.Flags) {
 				continue
 			}
 			if f.Z <= pt.Z+0.5 {
@@ -178,7 +181,7 @@ func snapPoint(pl *navmesh.Planner, m uint32, pt dungeon.Point) (dungeon.Point, 
 		}
 		if !found { // nothing at or below: the lowest floor above
 			for i := len(fl) - 1; i >= 0; i-- {
-				if fl[i].Flags&navmesh.NavGround != 0 {
+				if tr.ground(fl[i].Flags) {
 					z, found = fl[i].Z, true
 					break
 				}
@@ -246,17 +249,77 @@ func closestInPoly(vs []navmesh.Vec3, px, py float64) (x, y, d float64) {
 	return bx, by, bd
 }
 
-func mmapsFor(root string, m uint32) string {
+// mmapsFor is the folder holding the map's navmesh files under root, or "" when there are none. A Turtle navmesh is one
+// folder per map (root/mmaps-turtleNNN holding NNN.mmap); a ForeverCore one is a single folder holding every map's
+// MMMM.mmap and MMMM_XX_YY.mmtile (Format.MmapName), which is root itself.
+func mmapsFor(root string, m uint32, f navmesh.Format) string {
 	d := filepath.Join(root, fmt.Sprintf("mmaps-turtle%03d", m))
-	if _, err := os.Stat(filepath.Join(d, fmt.Sprintf("%03d.mmap", m))); err != nil {
+	if f == navmesh.Forever {
+		d = root
+	}
+	if _, err := os.Stat(filepath.Join(d, f.MmapName(m))); err != nil {
 		return ""
 	}
 	return d
 }
 
+// snapsFileName is the table a mesh generation's snaps are kept in: a Forever mesh has its own floors, so its table never
+// replaces the Turtle one.
+func snapsFileName(forever bool) string {
+	if forever {
+		return "snaps-forever.json"
+	}
+	return "snaps.json"
+}
+
+// parentFlag is a repeatable MAP=PARENT flag: the server's parent-map rule for a Forever navmesh (an instance map with no
+// tile of its own reads its parent's; MMapManager.cpp:353-357, navmesh.NewForeverPlanner).
+type parentFlag map[uint32]uint32
+
+func (p parentFlag) m() map[uint32]uint32 {
+	if len(p) == 0 {
+		return nil
+	}
+	return p
+}
+
+func (p parentFlag) String() string {
+	keys := make([]int, 0, len(p))
+	for k := range p {
+		keys = append(keys, int(k))
+	}
+	sort.Ints(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%d=%d", k, p[uint32(k)]))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (p *parentFlag) Set(s string) error {
+	eq := strings.IndexByte(s, '=')
+	if eq <= 0 || eq == len(s)-1 {
+		return fmt.Errorf("-parent takes MAP=PARENT, not %q", s)
+	}
+	m, err := strconv.ParseUint(s[:eq], 10, 32)
+	if err != nil {
+		return fmt.Errorf("-parent: %q is not a map id", s[:eq])
+	}
+	parent, err := strconv.ParseUint(s[eq+1:], 10, 32)
+	if err != nil {
+		return fmt.Errorf("-parent: %q is not a map id", s[eq+1:])
+	}
+	if *p == nil {
+		*p = parentFlag{}
+	}
+	(*p)[uint32(m)] = uint32(parent)
+	return nil
+}
+
 // UpdateSnaps rebuilds the table for every generated plan whose map has navmesh files under root: it generates the plan without snaps, looks at
-// each point and records the moves. The other plans keep their entries. It returns the lines of a report.
-func UpdateSnaps(sf *SpecFile, dataRoot, root string) (Snaps, []string, error) {
+// each point and records the moves. The other plans keep their entries. It returns the lines of a report. f is the mesh
+// generation under root (see mmapsFor); parents is the Forever parent-map rule (nil for none, and ignored for MaNGOS).
+func UpdateSnaps(sf *SpecFile, dataRoot, root string, f navmesh.Format, parents map[uint32]uint32) (Snaps, []string, error) {
 	out := Snaps{}
 	for k, v := range sf.Snaps {
 		out[k] = v
@@ -266,7 +329,7 @@ func UpdateSnaps(sf *SpecFile, dataRoot, root string) (Snaps, []string, error) {
 		if ps.Handwritten {
 			continue
 		}
-		dir := mmapsFor(root, ps.Map)
+		dir := mmapsFor(root, ps.Map, f)
 		if dir == "" {
 			report = append(report, fmt.Sprintf("%s: no navmesh files for map %d, entries kept", ps.Name, ps.Map))
 			continue
@@ -275,7 +338,7 @@ func UpdateSnaps(sf *SpecFile, dataRoot, root string) (Snaps, []string, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", ps.Name, err)
 		}
-		pl := navmesh.NewPlanner(dir)
+		pl := navmesh.NewPlannerFormat(dir, f, parents)
 		var es []Snap
 		seen := map[dungeon.Point]bool{}
 		var ferr error

@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // SpecFile is plans.json.
@@ -386,15 +387,23 @@ func GenerateAll(sf *SpecFile, dataRoot, outDir string) ([]string, error) {
 }
 
 // runSpec is the -spec command.
-func runSpec(specPath, dataRoot, outDir, table, plansDir, snapRoot string) int {
+func runSpec(specPath, dataRoot, outDir, table, plansDir, snapRoot string, forever bool, parents map[uint32]uint32) int {
 	sf, err := LoadSpec(specPath)
+	if err == nil && forever {
+		// A Forever mesh has floors of its own: its table is separate, and generation applies it in place of the Turtle one.
+		sf.Snaps, err = loadSnaps(filepath.Join(filepath.Dir(specPath), snapsFileName(true)))
+	}
+	format := navmesh.MaNGOS
+	if forever {
+		format = navmesh.Forever
+	}
 	if err == nil && snapRoot != "" {
 		var sn Snaps
 		var report []string
-		if sn, report, err = UpdateSnaps(sf, dataRoot, snapRoot); err == nil {
+		if sn, report, err = UpdateSnaps(sf, dataRoot, snapRoot, format, parents); err == nil {
 			fmt.Println(strings.Join(report, "\n"))
 			sf.Snaps = sn
-			err = sn.write(filepath.Join(filepath.Dir(specPath), "snaps.json"))
+			err = sn.write(filepath.Join(filepath.Dir(specPath), snapsFileName(forever)))
 		}
 	}
 	if err == nil && outDir != "" {

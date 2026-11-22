@@ -341,6 +341,16 @@ func (c *checker) checkBothEndsWater(i int, s planexport.StepRow) []Finding {
 	return []Finding{f}
 }
 
+// waterBit is the polygon-flag bit the mesh gives water: the planner's own (a Forever mesh has water at 0x04 and magma or
+// slime at 0x08, where the 1.12 bit navmesh.NavWater is 0x08), and the 1.12 bit for a reader that cannot say (as
+// navmesh.LiquidAt does).
+func (c *checker) waterBit() uint16 {
+	if w, ok := c.nav.(navmesh.WaterFlagger); ok {
+		return w.WaterFlag()
+	}
+	return navmesh.NavWater
+}
+
 // waterFloor says the floor at p (within 5 yd, 2 yd in height) is NavWater.
 func (c *checker) waterFloor(p dungeon.Point) (navmesh.Floor, bool) {
 	fl, err := c.nav.Floors(c.opt.Map, p.X, p.Y, p.Z-5, p.Z+5)
@@ -348,7 +358,7 @@ func (c *checker) waterFloor(p dungeon.Point) (navmesh.Floor, bool) {
 		return navmesh.Floor{}, false
 	}
 	f, ok := nearestFloor(fl, p.Z)
-	if !ok || math.Abs(float64(f.Z-p.Z)) > 2 || f.Flags&navmesh.NavWater == 0 {
+	if !ok || math.Abs(float64(f.Z-p.Z)) > 2 || f.Flags&c.waterBit() == 0 {
 		return navmesh.Floor{}, false
 	}
 	return f, true
@@ -369,6 +379,7 @@ func (c *checker) checkRiverBelow(i int, s planexport.StepRow) []Finding {
 	if err != nil || len(path.Points) < 2 {
 		return nil
 	}
+	water := c.waterBit()
 	for k := 1; k < len(path.Points); k++ {
 		a, b := path.Points[k-1], path.Points[k]
 		d := dist3(point3(a), point3(b))
@@ -386,7 +397,7 @@ func (c *checker) checkRiverBelow(i int, s planexport.StepRow) []Finding {
 					continue
 				}
 				for _, f := range fl {
-					if f.Flags&navmesh.NavWater != 0 {
+					if f.Flags&water != 0 {
 						return []Finding{c.severityFinding(i, s, LintWater, fmt.Sprintf("river below: a NavWater floor %.1f yd under the path at %.1f %.1f (a chase or a fall lands in water)", float64(p.Z-f.Z), p.X+off[0], p.Y+off[1]), SeverityWarning)}
 					}
 				}

@@ -8,6 +8,8 @@
 //	dungeongen -format dungeons/uldaman.json            # check a plan and print it in the form the files are kept in
 //	dungeongen -spec tools/dungeongen/plans.json -out-dir dungeons -table docs/PLANS.md   # every draft dungeon and raid plan, and their table
 //	dungeongen route-regen --mmaps DIR --leg 7 dungeons/zul_gurub.json   # one leg's route rewritten from the navmesh (see route_regen.go)
+//	dungeongen route-regen --forever --mmaps DIR --spawns EXPORT --leg 0 dungeons/wailing_caverns.json   # the same on ForeverCore tiles and a ForeverCore world export
+//	dungeongen route-aggro [--forever --spawns EXPORT] dungeons/wailing_caverns.json   # the route segments that walk into a later pack's aggro (see route_aggro.go)
 //
 // What the skeleton is: one leg per boss, in the order of -bosses; each pack of hostile creatures (spawns within -cluster
 // yards of each other, or in one creature_groups group) goes into the leg of the boss nearest to it, packs ordered by a
@@ -91,6 +93,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "route-regen" {
 		os.Exit(routeRegenCmd(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "route-aggro" {
+		os.Exit(routeAggroCmd(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	dir := flag.String("dir", "", "folder holding creatures.tsv, gameobjects.tsv and entrances.tsv (written by export.sh)")
 	out := flag.String("out", "", "plan file to write (default: standard output)")
 	name := flag.String("name", "", "plan name (the file is dungeons/<name>.json)")
@@ -113,10 +118,17 @@ func main() {
 	plansDir := flag.String("plans-dir", "dungeons", "with -spec -table: the folder the plan files are read from")
 	scripted := flag.String("scripted", "", "with -check: comma separated creature entries that are NPCs (npc_flags, faction 35) until a script or dialogue makes them hostile; no warning for them")
 	format := flag.String("format", "", "plan file to validate and print in canonical form (to -out, default standard output); no generation")
-	snapRoot := flag.String("snap-update", "", "with -spec: rebuild snaps.json from the navmesh folders <dir>/mmaps-turtle<map> (points off the mesh move to the nearest floor, or get needs_walk), then generate as asked")
+	snapRoot := flag.String("snap-update", "", "with -spec: rebuild snaps.json from the navmesh folders <dir>/mmaps-turtle<map> (with -forever: snaps-forever.json from the Forever mmaps folder <dir>) (points off the mesh move to the nearest floor, or get needs_walk), then generate as asked")
+	forever := flag.Bool("forever", false, "with -spec -snap-update: -snap-update names a ForeverCore mmaps folder (MMMM.mmap, MMMM_XX_YY.mmtile) and the table is snaps-forever.json, which -spec generation then applies instead of snaps.json")
+	var parents parentFlag
+	flag.Var(&parents, "parent", "with -forever: the server's parent-map rule, MAP=PARENT (repeatable)")
 	flag.Parse()
+	if (*forever || len(parents) > 0) && *spec == "" {
+		fmt.Fprintln(os.Stderr, "dungeongen: -forever and -parent apply to -spec -snap-update; route-regen and route-aggro take --forever themselves")
+		os.Exit(2)
+	}
 	if *spec != "" {
-		os.Exit(runSpec(*spec, *dataRoot, *outDir, *table, *plansDir, *snapRoot))
+		os.Exit(runSpec(*spec, *dataRoot, *outDir, *table, *plansDir, *snapRoot, *forever, parents.m()))
 	}
 	if *format != "" {
 		os.Exit(formatFile(*format, *out))
