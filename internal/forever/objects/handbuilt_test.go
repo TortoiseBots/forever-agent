@@ -16,6 +16,13 @@ import (
 type unitCreateSpec struct {
 	owner  bool
 	empath bool
+	// The pet block: the core writes these for every unit (UpdateFields.cpp, UnitData::WriteCreate at the pinned
+	// core: CreatureFamily before the display ids, PetNumber as the first of the four pet words, CreatedBySpell
+	// before EmoteState, PetFlags as the third of the four state bytes). Zero is what a non-pet carries.
+	petNumber      uint32
+	createdBySpell int32
+	creatureFamily int32
+	petFlags       uint8
 }
 
 // sentinelBaseMana is written right after the Empath-gated Resistance block. A parser that does not walk that
@@ -133,15 +140,15 @@ func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 	if spec.owner {
 		v.WriteU32(0) // RangedAttackRoundBaseTime
 	}
-	v.WriteFloat32(0.5) // BoundingRadius
-	v.WriteFloat32(1.5) // CombatReach
-	v.WriteFloat32(1)   // DisplayScale
-	v.WriteI32(0)       // CreatureFamily
-	v.WriteU8(0)        // OverrideCreatureType
-	v.WriteI32(200)     // NativeDisplayID
-	v.WriteFloat32(1)   // NativeXDisplayScale
-	v.WriteI32(0)       // MountDisplayID
-	v.WriteI32(0)       // CosmeticMountDisplayID
+	v.WriteFloat32(0.5)             // BoundingRadius
+	v.WriteFloat32(1.5)             // CombatReach
+	v.WriteFloat32(1)               // DisplayScale
+	v.WriteI32(spec.creatureFamily) // CreatureFamily
+	v.WriteU8(0)                    // OverrideCreatureType
+	v.WriteI32(200)                 // NativeDisplayID
+	v.WriteFloat32(1)               // NativeXDisplayScale
+	v.WriteI32(0)                   // MountDisplayID
+	v.WriteI32(0)                   // CosmeticMountDisplayID
 	if spec.owner || spec.empath {
 		// Owner | Empath (:1124-1130).
 		v.WriteFloat32(1) // MinDamage
@@ -149,28 +156,28 @@ func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 		v.WriteFloat32(3) // MinOffHandDamage
 		v.WriteFloat32(4) // MaxOffHandDamage
 	}
-	v.WriteU8(0)      // StandState
-	v.WriteU8(0)      // PetTalentPoints
-	v.WriteU8(0)      // AnimTier
-	v.WriteU8(0)      // VisFlags
-	v.WriteU8(0)      // the fifth byte of the group
-	v.WriteU32(0)     // PetNumber
-	v.WriteU32(0)     // PetNameTimestamp
-	v.WriteU32(0)     // PetExperience
-	v.WriteU32(0)     // PetNextLevelExperience
-	v.WriteFloat32(1) // ModCastingSpeed
-	v.WriteFloat32(1) // ModCastingSpeedNeg
+	v.WriteU8(0)               // StandState
+	v.WriteU8(0)               // PetTalentPoints
+	v.WriteU8(0)               // AnimTier
+	v.WriteU8(0)               // VisFlags
+	v.WriteU8(0)               // the fifth byte of the group
+	v.WriteU32(spec.petNumber) // PetNumber
+	v.WriteU32(0)              // PetNameTimestamp
+	v.WriteU32(0)              // PetExperience
+	v.WriteU32(0)              // PetNextLevelExperience
+	v.WriteFloat32(1)          // ModCastingSpeed
+	v.WriteFloat32(1)          // ModCastingSpeedNeg
 	if spec.owner {
 		v.WriteFloat32(0) // ModSpellHaste
 	}
-	v.WriteFloat32(0) // ModHaste
-	v.WriteFloat32(0) // ModRangedHaste
-	v.WriteFloat32(0) // ModHasteRegen
-	v.WriteFloat32(0) // ModTimeRate
-	v.WriteI32(0)     // CreatedBySpell
-	v.WriteI32(0)     // EmoteState
-	v.WriteU16(0)     // ClassicTrainingPointsUsed
-	v.WriteU16(0)     // ClassicTrainingPointsTotal
+	v.WriteFloat32(0)               // ModHaste
+	v.WriteFloat32(0)               // ModRangedHaste
+	v.WriteFloat32(0)               // ModHasteRegen
+	v.WriteFloat32(0)               // ModTimeRate
+	v.WriteI32(spec.createdBySpell) // CreatedBySpell
+	v.WriteI32(0)                   // EmoteState
+	v.WriteU16(0)                   // ClassicTrainingPointsUsed
+	v.WriteU16(0)                   // ClassicTrainingPointsTotal
 	if spec.owner {
 		for range 5 {
 			v.WriteI32(0) // Stats
@@ -194,10 +201,10 @@ func writeUnitCreateBody(v *wire.Buffer, spec unitCreateSpec) {
 	if spec.owner {
 		v.WriteI32(777) // BaseHealth
 	}
-	v.WriteU8(0) // SheatheState
-	v.WriteU8(0) // PvpFlags
-	v.WriteU8(0) // PetFlags
-	v.WriteU8(0) // ShapeshiftForm
+	v.WriteU8(0)             // SheatheState
+	v.WriteU8(0)             // PvpFlags
+	v.WriteU8(spec.petFlags) // PetFlags
+	v.WriteU8(0)             // ShapeshiftForm
 	if spec.owner {
 		// The 20-write AttackPower block (:1189-1211), 80 bytes.
 		for n := range 10 {

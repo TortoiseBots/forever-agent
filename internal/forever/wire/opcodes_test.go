@@ -297,6 +297,58 @@ func TestClientOpcodeTranslation(t *testing.T) {
 	}
 }
 
+// TestPetOpcodesTranslate: the seven pet opcodes of round P1 are in the core's tables and survive the translation
+// in both directions. The three client packets are explicit entries of the client's own table (0x3F0021, 0x3F0022
+// and 0x3F0026), not the plain group arithmetic, so a body is pinned to the number the real client sends.
+func TestPetOpcodesTranslate(t *testing.T) {
+	table := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	for _, c := range []struct {
+		core uint32
+		name string
+	}{
+		{SMSGPetSpellsMessage, "SMSG_PET_SPELLS_MESSAGE"},
+		{SMSGPetMode, "SMSG_PET_MODE"},
+		{SMSGPetCastFailed, "SMSG_PET_CAST_FAILED"},
+		{SMSGPetActionFeedback, "SMSG_PET_ACTION_FEEDBACK"},
+	} {
+		if got := ServerName(c.core); got != c.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w := table.TranslateServerCore(c.core)
+		if w == UnknownOpcode {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if got := table.TranslateServerWire(w); got != c.core {
+			t.Errorf("%s: wire 0x%06X named 0x%06X, want 0x%06X", c.name, w, got, c.core)
+		}
+	}
+	for _, c := range []struct {
+		core uint32
+		name string
+		wire uint32
+	}{
+		{CMSGPetAction, "CMSG_PET_ACTION", 0x3F0021},
+		{CMSGPetStopAttack, "CMSG_PET_STOP_ATTACK", 0x3F0022},
+		{CMSGPetSpellAutocast, "CMSG_PET_SPELL_AUTOCAST", 0x3F0026},
+	} {
+		if got := ClientName(c.core); got != c.name {
+			t.Errorf("ClientName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w, ok := table.WireForClient(c.core)
+		if !ok {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if w != c.wire {
+			t.Errorf("%s wire 0x%06X, want the client table's 0x%06X", c.name, w, c.wire)
+		}
+		if got := table.TranslateClientWire(w); got != c.core {
+			t.Errorf("client wire 0x%06X named 0x%06X, want %s", w, got, c.name)
+		}
+	}
+}
+
 // TestShiftFromRealmBuild: the group shift follows the realm's build, not the client's (ClassicOpcodes.cpp
 // ExtraGroupShift reads sRealmList->GetCurrentRealm()->Build). A realm below 70291 keeps the 70245 groups.
 func TestShiftFromRealmBuild(t *testing.T) {

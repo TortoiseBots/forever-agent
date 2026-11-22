@@ -124,6 +124,10 @@ type Info struct {
 	CurrentAreaID   uint32
 	MountDisplayID  int32
 	NativeDisplayID int32
+	PetNumber       uint32
+	CreatedBySpell  int32
+	CreatureFamily  int32
+	PetFlags        uint8
 
 	// game object (GameObjectData); Entry comes from ObjectData.
 	HasGameObject bool
@@ -174,6 +178,7 @@ type Fields struct {
 	StandState, VisFlags, AnimTier                                bool
 	Guild, ComboTarget, CurrentAreaID                             bool
 	MountDisplayID, NativeDisplayID                               bool
+	PetNumber, CreatedBySpell, CreatureFamily, PetFlags           bool
 	GOState, GOType, GODisplayID, GOFlags, GOFaction              bool
 	Owner, CorpseDisplayID, Caster, SpellID                       bool
 	Vendor                                                        bool
@@ -314,6 +319,7 @@ func (f *Fields) all() {
 		StandState: true, VisFlags: true, AnimTier: true,
 		Guild: true, ComboTarget: true, CurrentAreaID: true,
 		MountDisplayID: true, NativeDisplayID: true,
+		PetNumber: true, CreatedBySpell: true, CreatureFamily: true, PetFlags: true,
 		GOState: true, GOType: true, GODisplayID: true, GOFlags: true, GOFaction: true,
 		Owner: true, CorpseDisplayID: true, Caster: true, SpellID: true,
 		Vendor:    true,
@@ -527,7 +533,9 @@ func (i *Info) readUnitCreate(b *wire.Buffer, owner, empath, unitAll bool) error
 	i.f.CombatReach = true
 	i.DisplayScale = b.ReadFloat32()
 	i.f.DisplayScale = true
-	b.Skip(4) // CreatureFamily
+	// Pet: the family the control bar names (UpdateFields.cpp UnitData::WriteCreate, int32 before the display ids).
+	i.CreatureFamily = b.ReadI32()
+	i.f.CreatureFamily = true
 	b.Skip(1) // OverrideCreatureType
 	i.NativeDisplayID = b.ReadI32()
 	i.f.NativeDisplayID = true
@@ -546,15 +554,21 @@ func (i *Info) readUnitCreate(b *wire.Buffer, owner, empath, unitAll bool) error
 	i.f.AnimTier = true
 	i.VisFlags = b.ReadU8()
 	i.f.VisFlags = true
-	b.Skip(1)  // the fifth byte of the group (Classic 1.60.1: client UnitData +0x1A8)
-	b.Skip(16) // PetNumber, PetNameTimestamp, PetExperience, PetNextLevelExperience
+	b.Skip(1) // the fifth byte of the group (Classic 1.60.1: client UnitData +0x1A8)
+	// Pet: PetNumber is the first of the four pet words; the timestamp and the two experience counters are not
+	// decoded (UpdateFields.cpp, uint32 each).
+	i.PetNumber = b.ReadU32()
+	i.f.PetNumber = true
+	b.Skip(12) // PetNameTimestamp, PetExperience, PetNextLevelExperience
 	b.Skip(8)  // ModCastingSpeed, ModCastingSpeedNeg
 	if owner {
 		b.Skip(4) // ModSpellHaste
 	}
-	b.Skip(16) // ModHaste, ModRangedHaste, ModHasteRegen, ModTimeRate
-	b.Skip(8)  // CreatedBySpell, EmoteState
-	b.Skip(4)  // ClassicTrainingPointsUsed, ClassicTrainingPointsTotal
+	b.Skip(16)                     // ModHaste, ModRangedHaste, ModHasteRegen, ModTimeRate
+	i.CreatedBySpell = b.ReadI32() // the spell that created the pet (a hunter's tame, a warlock's summon)
+	i.f.CreatedBySpell = true
+	b.Skip(4) // EmoteState
+	b.Skip(4) // ClassicTrainingPointsUsed, ClassicTrainingPointsTotal
 	if owner {
 		b.Skip(80) // Stats[5] x (Stats, StatPosBuff, StatNegBuff, StatSupportBuff) (:1156-1165)
 	}
@@ -568,7 +582,10 @@ func (i *Info) readUnitCreate(b *wire.Buffer, owner, empath, unitAll bool) error
 	if owner {
 		b.Skip(4) // BaseHealth
 	}
-	b.Skip(4) // SheatheState, PvpFlags, PetFlags, ShapeshiftForm
+	b.Skip(2)               // SheatheState, PvpFlags
+	i.PetFlags = b.ReadU8() // the pet action-bar flags; the third of the four state bytes
+	i.f.PetFlags = true
+	b.Skip(1) // ShapeshiftForm
 	if owner {
 		// The owner-only AttackPower block is 20 int32/float writes, 80 bytes, not 88
 		// (UpdateFields.cpp:1189-1211: ten attack/ranged values, two Classic zeros, MainHand..SetAttackSpeedAura,
@@ -899,7 +916,8 @@ func (i *Info) readUnitUpdate(b *wire.Buffer) error {
 			i.f.DisplayScale = true
 		}
 		if m.present(57) {
-			b.Skip(4) // CreatureFamily
+			i.CreatureFamily = b.ReadI32()
+			i.f.CreatureFamily = true
 		}
 		if m.present(58) {
 			b.Skip(1) // OverrideCreatureType
@@ -945,7 +963,17 @@ func (i *Info) readUnitUpdate(b *wire.Buffer) error {
 			i.f.VisFlags = true
 		}
 		for bit := 72; bit <= 84; bit++ { // pet fields and the modifier floats
-			if m.present(bit) {
+			if !m.present(bit) {
+				continue
+			}
+			switch bit {
+			case 72: // PetNumber
+				i.PetNumber = b.ReadU32()
+				i.f.PetNumber = true
+			case 83: // CreatedBySpell
+				i.CreatedBySpell = b.ReadI32()
+				i.f.CreatedBySpell = true
+			default:
 				b.Skip(4)
 			}
 		}
@@ -962,9 +990,15 @@ func (i *Info) readUnitUpdate(b *wire.Buffer) error {
 			b.Skip(4) // BaseHealth
 		}
 		for bit := 87; bit <= 90; bit++ { // SheatheState, PvpFlags, PetFlags, ShapeshiftForm
-			if m.present(bit) {
-				b.Skip(1)
+			if !m.present(bit) {
+				continue
 			}
+			if bit == 89 { // PetFlags
+				i.PetFlags = b.ReadU8()
+				i.f.PetFlags = true
+				continue
+			}
+			b.Skip(1)
 		}
 		for bit := 91; bit <= 95; bit++ { // AttackPower .. AttackPowerModSupport
 			if m.present(bit) {
