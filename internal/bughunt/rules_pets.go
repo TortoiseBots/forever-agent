@@ -7,7 +7,7 @@ import "fmt"
 // with an unknown owner is never judged. One hit per owner episode, keyed (7, owner class).
 func Rule7(r *Run) []Hit {
 	pred := func(f *Frame, n string, u *Unit) (string, bool) {
-		if !u.Alive || len(f.Pets) == 0 {
+		if !u.Alive || !lifeOK(u) || len(f.Pets) == 0 {
 			return "", false
 		}
 		if u.Combat && u.Target != "" {

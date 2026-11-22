@@ -147,3 +147,24 @@ func TestLoadWatchCarriesPetsAndRunsRule7(t *testing.T) {
 		t.Fatalf("rule 7 hits %d (counts %+v), want 1: %+v", len(got), counts, hits)
 	}
 }
+
+// TestRule7SkipsOwnerInNonActionableLife: an owner whose Alive flag is set but whose life word says it cannot act
+// (dead, ghost, awaiting a resurrection, running back) is not judged.
+func TestRule7SkipsOwnerInNonActionableLife(t *testing.T) {
+	mob := gid(0xB01)
+	for _, life := range []string{"dead", "ghost", "awaiting-res", "running-back"} {
+		var frames []*Frame
+		for i := range 4 {
+			owner := testUnit(gDps)
+			owner.Life = life
+			f := frameAt(float64(i)*2, owner)
+			f.Mobs = []*Mob{{G: mob, Entry: 1234, HPPct: 90, Combat: true}}
+			f.Pets = []*Pet{{G: gid(0xE01), Owner: gDps, Combat: true, Target: mob}}
+			frames = append(frames, f)
+		}
+		r := testRun("watch", map[string]string{gDps: "dps"}, frames...)
+		if got := Rule7(r); len(got) != 0 {
+			t.Fatalf("life %q: %d hits, want 0", life, len(got))
+		}
+	}
+}
