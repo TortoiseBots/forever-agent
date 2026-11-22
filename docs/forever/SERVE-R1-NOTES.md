@@ -116,7 +116,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | Methods | Status | Why |
 |---|---|---|
 | `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects` | NOT-PORTED | No loot or object-use model in `internal/forever`. |
-| `trainer_list`, `train`, `taxi`, `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log` | NOT-PORTED | No trainer, taxi or quest method yet (the vendor and gossip methods are ported, round D3). |
+| `trainer_list`, `train`, `taxi` | NOT-PORTED | No trainer or taxi method yet (the vendor and gossip methods are ported, round D3; the quest methods, round D4: [DAEMON-D4-NOTES.md](DAEMON-D4-NOTES.md)). |
 | `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |
 | `brain_start`, `brain_stop`, `brain_status`, `follow_start`, `follow_stop`, `follow_status` | NOT-PORTED | The old brain and follow loops are 1.12 code. |

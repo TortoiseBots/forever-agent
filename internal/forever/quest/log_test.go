@@ -82,10 +82,11 @@ func TestLogCompleteAndRemove(t *testing.T) {
 	if e := l.Entries[1]; e.StateFlags != StatusComplete || e.Progress[0] != 8 {
 		t.Fatalf("the completed slot is %+v", e)
 	}
+	l.Entries[3].StateFlags = 0
 	if !l.Failed(13) {
 		t.Fatal("the failure did not find the quest")
 	}
-	if e := l.Entries[3]; e.StateFlags != StatusFailed {
+	if e := l.Entries[3]; e.StateFlags != SlotStateFail {
 		t.Fatalf("the failed slot is %+v", e)
 	}
 	slot, ok := l.Remove(11)

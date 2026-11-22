@@ -737,6 +737,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerItemInfoMethods(srv, st)
 	registerItemMethods(srv, st)
 	registerNPCMethods(srv, st)
+	registerQuestMethods(srv, st)
 	registerPetMethods(srv, st)
 
 	for _, name := range notPortedMethods {
@@ -1701,7 +1702,6 @@ var notPortedMethods = []string{
 	"loot", "loot_close", "loot_take",
 	"map_snapshot", "open_object",
 	"plan_check",
-	"quest_abandon", "quest_accept", "quest_complete", "quest_hello", "quest_log", "quest_query", "quest_reward",
 	"raid_move", "roll",
 	"taxi",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",

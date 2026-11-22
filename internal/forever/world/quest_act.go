@@ -327,14 +327,19 @@ func (s *session) actQuestComplete(ctx context.Context, a *actState, step ActSte
 	if err := s.transport().Send(wire.CMSGQuestGiverCompleteQuest, quest.BuildCompleteQuest(unit.GUID, id, false)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_COMPLETE_QUEST: %w", err))
 	}
+	// A screen counts only when it names this quest AND this giver: a delayed answer of an earlier, timed-out
+	// exchange with another giver of the same quest must not be read as this giver's.
+	requestHere := func() bool {
+		return s.quest.request != nil && s.quest.request.QuestID == id && s.quest.request.Giver == unit.GUID
+	}
+	offerHere := func() bool {
+		return s.quest.offer != nil && s.quest.offer.QuestID == id && s.quest.offer.Giver == unit.GUID
+	}
 	ok, err := s.actUntil(ctx, actQuestWait, func() bool {
 		if s.quest.invalid != nil || s.questFailedIs(id) {
 			return true
 		}
-		if s.quest.request != nil && s.quest.request.QuestID == id {
-			return true
-		}
-		return s.quest.offer != nil && s.quest.offer.QuestID == id
+		return requestHere() || offerHere()
 	})
 	if err != nil {
 		return err
@@ -347,7 +352,8 @@ func (s *session) actQuestComplete(ctx context.Context, a *actState, step ActSte
 	case !ok:
 		return s.actFail(a, step, fmt.Errorf("complete %d: no answer within %s", id, actQuestWait))
 	}
-	if r := s.quest.request; r != nil {
+	if requestHere() {
+		r := s.quest.request
 		wants := fmt.Sprintf("%d item(s), %d currency, %d copper", len(r.Collect), len(r.Currency), r.MoneyToGet)
 		if r.StatusFlags != requestItemsReady {
 			return s.actFail(a, step, fmt.Errorf("complete %d: the quest is not ready (%s; status %#x)", id, wants, r.StatusFlags))
@@ -357,9 +363,7 @@ func (s *session) actQuestComplete(ctx context.Context, a *actState, step ActSte
 		if err := s.transport().Send(wire.CMSGQuestGiverRequestReward, quest.BuildRequestReward(unit.GUID, id)); err != nil {
 			return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_REQUEST_REWARD: %w", err))
 		}
-		ok, err = s.actUntil(ctx, actQuestWait, func() bool {
-			return s.quest.offer != nil && s.quest.offer.QuestID == id
-		})
+		ok, err = s.actUntil(ctx, actQuestWait, offerHere)
 		if err != nil {
 			return err
 		}
