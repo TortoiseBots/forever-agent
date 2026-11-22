@@ -73,13 +73,12 @@ func (s *session) handlePet(p worldconn.Packet) error {
 		if sp.Cleared {
 			// The core's "remove the bar" body: SendRemoveControlBar answers an empty pet GUID.
 			w.bar = nil
+			w.mode = nil
 			s.opts.logf("world: the pet's control bar was removed")
 			return nil
 		}
+		// The newest bar is the server's latest word: an older SMSG_PET_MODE is not laid over it.
 		bar := sp
-		if w.mode != nil && w.mode.Pet == bar.Pet {
-			bar.Command, bar.React = w.mode.Command, w.mode.React
-		}
 		w.bar = &bar
 		s.opts.logf("world: the pet's control bar: %d spell button(s), %d action(s), react %s, command %s",
 			petSpellButtons(bar), len(bar.Actions), pet.ReactName(bar.React), pet.CommandName(bar.Command))

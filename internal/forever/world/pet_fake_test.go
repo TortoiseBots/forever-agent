@@ -553,7 +553,7 @@ func TestServePetModeOffBarAndRPC(t *testing.T) {
 	bar[3] = pet.Button(172, pet.ActEnabled)
 	var extra [pet.BarExtra]uint32
 	p.deliver(wire.SMSGPetSpellsMessage, petSpellsBody(petTestPet, uint8(pet.CmdFollow), 0, pet.ReactDefensive, bar, extra, []uint32{
-		pet.Button(172, pet.ActEnabled),  // duplicated on bar -> deduplicated
+		pet.Button(172, pet.ActEnabled),   // duplicated on bar -> deduplicated
 		pet.Button(1742, pet.ActDisabled), // off-bar spell -> slot -1
 	}))
 	// Cached SpellName fills Spell.Name without fetching.
@@ -604,5 +604,32 @@ func TestServePetModeOffBarAndRPC(t *testing.T) {
 	p.deliver(wire.SMSGPetMode, otherMode.Bytes())
 	if got := p.s.servePet(); got.Command != "stay" || got.React != "passive" {
 		t.Fatalf("after SMSG_PET_MODE: command=%q react=%q", got.Command, got.React)
+	}
+
+	// An autocast order on an off-bar spell shows in the returned state and the next read.
+	on, err := p.s.servePetAction(ctx, servePetActionParams{Action: "autocast_on", SpellID: 1742})
+	if err != nil {
+		t.Fatalf("autocast_on off-bar: %v", err)
+	}
+	if len(on.Spells) != 2 || !on.Spells[1].Autocast || !p.s.servePet().Spells[1].Autocast {
+		t.Fatalf("off-bar autocast_on not reflected: %+v", on.Spells)
+	}
+
+	// A newer bar is the server's word: the earlier mode (stay/passive) is not laid over it, and a removed bar
+	// forgets the mode.
+	var nb [pet.BarSlots]uint32
+	nb[3] = pet.Button(172, pet.ActEnabled)
+	var nx [pet.BarExtra]uint32
+	p.deliver(wire.SMSGPetSpellsMessage, petSpellsBody(petTestPet, uint8(pet.CmdFollow), 0, pet.ReactAggressive, nb, nx, nil))
+	if got := p.s.servePet(); got.Command != "follow" || got.React != "aggressive" {
+		t.Fatalf("a newer bar was overridden by an older mode: command=%q react=%q", got.Command, got.React)
+	}
+	if p.s.pet.mode == nil {
+		t.Fatalf("setup: the mode should still be held")
+	}
+	var zero [pet.BarSlots]uint32
+	p.deliver(wire.SMSGPetSpellsMessage, petSpellsBody(wire.EmptyGUID, 0, 0, 0, zero, nx, nil))
+	if p.s.pet.mode != nil {
+		t.Fatalf("a removed bar kept the old mode")
 	}
 }

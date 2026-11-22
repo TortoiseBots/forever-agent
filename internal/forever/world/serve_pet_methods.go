@@ -126,6 +126,17 @@ func (s *session) servePetAction(_ context.Context, p servePetActionParams) (Ser
 				}
 				b.Bar[i] = pet.Button(sp.SpellID, typ)
 			}
+			// A spell the list holds off the bar (slot -1) keeps its state in Actions.
+			for i, button := range b.Actions {
+				if pet.ButtonAction(button) != sp.SpellID || pet.ButtonType(button) == pet.ActPassive {
+					continue
+				}
+				typ := pet.ActDisabled
+				if on {
+					typ = pet.ActEnabled
+				}
+				b.Actions[i] = pet.Button(sp.SpellID, typ)
+			}
 		})
 	default:
 		return ServePet{}, fmt.Errorf("pet_action: unknown action %q (attack, follow, stay, passive, defensive, aggressive, cast, autocast_on, autocast_off)", p.Action)
