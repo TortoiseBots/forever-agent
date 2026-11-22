@@ -419,6 +419,39 @@ func (rr *run) doSoap(ctx context.Context, s *Step, n int, inFinally bool) bool 
 	return true
 }
 
+// botModulePrefix is a server's bot-module command prefix. ForeverCore's module registers its whole table under
+// `.tb` (forever/src/TbScripts.cpp: the one "tb" ChatCommandTable), and the turtle module answers `.bot`
+// (host/BotChatAdapter.cpp). A scenario's bot step carries the bare module line, so the prefix is mapped here once
+// and the transcript's raw line is the line that went out.
+func botModulePrefix(forever bool) string {
+	if forever {
+		return ".tb "
+	}
+	return ".bot "
+}
+
+// botModuleLine maps one bot step's command to the line sent to the session's module: the session's own prefix,
+// whatever mark the file wrote (a file moved from one server to the other runs unchanged).
+func botModuleLine(forever bool, command string) string {
+	line := strings.TrimSpace(command)
+	lower := strings.ToLower(line)
+	for _, mark := range []string{".bot", ".tb"} {
+		if lower == mark {
+			line = ""
+			break
+		}
+		if strings.HasPrefix(lower, mark+" ") {
+			line = strings.TrimSpace(line[len(mark)+1:])
+			break
+		}
+	}
+	if line == "" {
+		// A bare mark names no command: keep it as the mark rather than a prefixed empty line.
+		return strings.TrimSpace(botModulePrefix(forever))
+	}
+	return botModulePrefix(forever) + line
+}
+
 func (rr *run) doBot(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	st, ok := rr.openSession(s, n)
 	if !ok {
@@ -428,8 +461,9 @@ func (rr *run) doBot(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	if err != nil {
 		return rr.checkErr(n, s, err)
 	}
-	raw := fmt.Sprintf("  gm[%s] .bot %s", s.Session, cmd)
-	norm := fmt.Sprintf("  gm[%s] .bot %s", s.Session, s.Command)
+	line := botModuleLine(rr.isForever(s.Session), cmd)
+	raw := fmt.Sprintf("  gm[%s] %s", s.Session, line)
+	norm := fmt.Sprintf("  gm[%s] %s", s.Session, botModuleLine(rr.isForever(s.Session), s.Command))
 	_ = st
 	rr.emit(Record{T: "action", Step: n, Session: s.Session, Raw: raw, Norm: norm})
 	st2, ok := rr.openSession(s, n)
@@ -437,12 +471,12 @@ func (rr *run) doBot(ctx context.Context, s *Step, n int, inFinally bool) bool {
 		return false
 	}
 	if rr.isForever(s.Session) {
-		// Serve's bot takes the bare module line (its prefix guard
-		// still applies); not-ported is an ERROR naming the method.
-		if _, err := rr.callForever(ctx, st2, "bot", map[string]any{"line": cmd}, callTimeout(s)); err != nil {
+		// Serve's bot takes the module line itself (its prefix guard still applies); not-ported is an ERROR
+		// naming the method.
+		if _, err := rr.callForever(ctx, st2, "bot", map[string]any{"line": line}, callTimeout(s)); err != nil {
 			return rr.foreverCallError(ctx, s, n, inFinally, "bot", err)
 		}
-	} else if _, err := st2.caller.Call(ctx, "gm", map[string]any{"text": ".bot " + cmd}, callTimeout(s)); err != nil {
+	} else if _, err := st2.caller.Call(ctx, "gm", map[string]any{"text": line}, callTimeout(s)); err != nil {
 		rr.errorf(n, fmt.Sprintf("step %d (%s)", n, s.Do), "gm: %v", rpcText(err))
 		if !inFinally {
 			rr.skipRest(n + 1)

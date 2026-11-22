@@ -178,11 +178,15 @@ the quest log's occupied slots.
 session's own character: another player is refused even when registered. Every refusal is the typed
 `-32006` error and sends nothing. The allowlist outlives a reconnect. A permitted hand selects the unit,
 waits for the server's selection echo and sends the one line (`.die`, `.modify hp N`, `.aura N`/`.unaura
-N`). The raw `gm` method and `gm_revive` are held to the same boundary: a line the core runs as one of the
-unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`, `.revive`) is
-refused with `-32006` unless the flag is on and every unit it could act on is a registered trial unit, and
-`.revive` only ever names this session's own character. Ordinary GM lines (`.tb ...`, `.gps`, `.server info`)
-and chat are unaffected.
+N`). The raw `gm` method is held to the same boundary: a line the core runs as one of the unit commands
+(`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`) is refused with `-32006`
+unless the flag is on and every unit it could act on is a registered trial unit. `.revive` (the bare form
+and `gm_revive`, which sends `.revive <name>`) is a resurrection, so it has its own boundary: with the flag
+on, this session's own character passes without being registered (a bench whose character died raises it
+before the runner has registered anything), a player the runner registered passes (a trial's own bot), and
+any other player is refused. It sends the same `.revive <name>` line through the command channel as every
+other GM hand, so the core's GM log carries the same audit line. Ordinary GM lines (`.tb ...`, `.gps`,
+`.server info`) and chat are unaffected.
 
 `teardown` (`{"gm": "off"|"on"|"keep", "dry_run": bool}`) is the serve slot's `teardown DIR`: a running follow
 loop is stopped first (its own `follow` step), the GM line (`.gm off` by default) goes through the same command

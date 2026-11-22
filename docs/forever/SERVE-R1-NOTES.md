@@ -53,8 +53,8 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | Method | Status | What it does |
 |---|---|---|
 | `chat` | DONE | `say`, `yell`, `party`, `emote`, `whisper` (with `to`). A channel, guild or raid line is refused by name. |
-| `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. A line the core runs as one of the unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`, `.revive`) goes through the GM hands' boundary below first: same `--allow-gm-units` flag, same `trial_units` allowlist, same "never another player" rule, typed `-32006` and nothing sent on refusal. `.revive <name>` is gated for the player the line names. |
-| `gm_revive` | DONE | `.revive <name>` through the same channel and the same unit-line boundary; the name is validated first, and only this session's own character can be revived (any other player is refused). |
+| `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. A line the core runs as one of the unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`) goes through the GM hands' boundary below first: same `--allow-gm-units` flag, same `trial_units` allowlist, same "never another player" rule, typed `-32006` and nothing sent on refusal. `.revive` has its own boundary (own character or a registered trial unit), described under `gm_revive`. |
+| `gm_revive` | DONE | `.revive <name>` through the same channel and the same command path. With the flag on, this session's own character passes without being registered, and a player the runner registered through `trial_units` passes (a trial's own bot); any other player is refused with `-32006` and nothing is sent. The name is validated first, and the line that goes out is the core's own `.revive <name>`, so its GM log carries the same audit line. |
 | `invite` | DONE | `CMSG_PARTY_INVITE` and the server's command result for that name. |
 | `accept_invite` | DONE | Answers the pending invite the model holds and waits under the caller's context for the server's answer: a roster naming the inviter confirms membership; a failed party command result or a roster the model refuses is a `-32003` error, and a silent server is a timeout error. |
 | `leave_group` | DONE | Leaves a party the model holds a valid roster for. |
@@ -181,9 +181,10 @@ Two review findings were fixed here.
    line — and sends a line that acts on a unit's life, health, power, auras or damage through `serveGMUnit`:
    the flag, the trial allowlist and the player rule, with a typed `-32006` and no line (not even the guard's
    probe) on refusal. Both selections a line could act on are checked (the last one this session sent and the
-   server's last echo), because the core applies the two on different threads. `gm_revive` carries `.revive
-   <name>` and goes through the same boundary, so reviving another player is refused there too. Ordinary GM
-   lines (`.tb ...`, `.gps`, `.server info`, and plain chat) keep working with no flag.
+   server's last echo), because the core applies the two on different threads. `.revive` raises players, so it
+   has its own boundary: the own character passes with the flag alone, a registered trial player (the trial's
+   own bot) passes, and another player is refused. `gm_revive` carries `.revive <name>` through that boundary.
+   Ordinary GM lines (`.tb ...`, `.gps`, `.server info`, and plain chat) keep working with no flag.
 2. **A reconnect could discard rows the login burst produced.** The retained ring was installed after
    `loginWorld` returned, so a combat or aura row the login dispatch wrote in the meantime went into the fresh
    session's own ring and was thrown away. The dropped session's ring is now given to the replacement session
@@ -244,9 +245,10 @@ Two review findings were fixed here.
   line; registering the creature lets the same raw lines run.
 * `TestServeRawGMPassesOrdinaryCommands`: without the flag `.tb status` and `.gps` still run, and a raw `.die` is
   refused and not sent.
-* `TestServeRawGMRevive`: `.revive` through the raw method and `gm_revive` refuses another player even when
-  registered; the session's own character passes with the flag and its guid registered. The raw and the typed
-  form are refused before any line (and before the guard's probe) when they name anyone else.
+* `TestServeRawGMRevive`: the session's own character passes with the flag alone (nothing registered), so does a
+  bare `.revive`; a name the session cannot resolve is refused before any line, whether the allowlist holds a
+  guid or not. `TestServeGMReviveUnit` pins the boundary without a socket: a registered trial player (a trial's
+  own bot) passes, an unregistered player and a creature are refused, and the flag is still the outer wall.
 * `TestServeCleanShutdown`: cancelling the parent context logs out and returns cleanly.
 
 `cmd/forever-agent/forever_serve_test.go` pins the password file and that the `--dir` manifest opens through the

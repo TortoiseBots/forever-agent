@@ -2,14 +2,20 @@ package world
 
 // The raw gm method's boundary: a line the core runs as one of the unit commands (life, health, power, auras,
 // damage) is checked against the same flag, allowlist and player rule as gm_kill, gm_set_hp and gm_aura; every
-// other line keeps working with no test-bench flag at all. The tests are against the fake over real sockets, so
-// "refused" is also "the fake saw no line", and the classifier itself is pinned without a session.
+// other line keeps working with no test-bench flag at all. `.revive` raises players and has its own boundary (the
+// own character without registration, a registered trial unit, never an unknown player), pinned here too. The
+// tests are against the fake over real sockets, so "refused" is also "the fake saw no line", and the classifier
+// itself is pinned without a session.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
@@ -40,7 +46,7 @@ func TestServeGMHandCommand(t *testing.T) {
 		{".unaura 845", serveGMHandSelected, ""},
 		{".aura self 845", serveGMHandSelf, ""},
 		{".unaura SELF", serveGMHandSelf, ""},
-		{".revive", serveGMHandSelected, ""},
+		{".revive", serveGMHandRevive, ""},
 		{".revive Testchar", serveGMHandNamed, "Testchar"},
 		{".revi Testchar", serveGMHandNamed, "Testchar"},
 
@@ -155,8 +161,10 @@ func TestServeRawGMPassesOrdinaryCommands(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeRawGMRevive: .revive is gated too, through both the raw line and the gm_revive method. Another player is
-// refused even when registered; this session's own character passes with the flag and its guid registered.
+// TestServeRawGMRevive: .revive is gated too, through both the raw line and the gm_revive method, and the session's
+// own character passes with --allow-gm-units alone. A bench whose character died has to raise it before the runner
+// has registered anything (the live trials hit exactly that refusal), so the own character is not subject to the
+// trial allowlist. A player the session cannot name is still refused, and nothing is sent.
 func TestServeRawGMRevive(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
@@ -173,30 +181,73 @@ func TestServeRawGMRevive(t *testing.T) {
 		t.Fatal("status has no character name")
 	}
 
-	// The refused forms send nothing, and no name other than the session's own character is ever revived.
-	a.mustFail(t, "gm", map[string]any{"text": ".revive Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
-	a.mustFail(t, "gm_revive", map[string]any{"name": "Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
-	// Even registered, another player is refused: the player rule comes before the allowlist.
-	a.mustCall(t, "trial_units", map[string]any{"guids": []GUID{st.GUID, {Low: 0x2222, High: 0x0100000000000000}}})
-	a.mustFail(t, "gm_revive", map[string]any{"name": "Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
-	f.mu.Lock()
-	lines := append([]string(nil), f.serveGMLines...)
-	f.mu.Unlock()
-	if len(lines) != 0 {
-		t.Fatalf("a refused revive sent %v", lines)
-	}
-
-	// The session's own name passes (self is on the allowlist); so does the raw form.
+	// Nothing is registered yet: the character's own name passes, and so does the bare form (no selection, so the
+	// core raises the character itself).
 	var out ServeCommand
 	want := ".revive " + st.Character
 	json.Unmarshal(a.mustCall(t, "gm_revive", map[string]any{"name": st.Character}), &out)
 	if !strings.EqualFold(out.Sent, want) {
 		t.Fatalf("gm_revive sent %q, want %q", out.Sent, want)
 	}
-	json.Unmarshal(a.mustCall(t, "gm", map[string]any{"text": want}), &out)
-	if !strings.EqualFold(out.Sent, want) {
-		t.Fatalf("the raw .revive sent %q, want %q", out.Sent, want)
+	json.Unmarshal(a.mustCall(t, "gm", map[string]any{"text": ".revive"}), &out)
+	if out.Sent != ".revive" {
+		t.Fatalf("the bare .revive sent %q", out.Sent)
+	}
+
+	// A name this session cannot resolve is refused and sends nothing, whatever the allowlist says.
+	f.mu.Lock()
+	before := append([]string(nil), f.serveGMLines...)
+	f.mu.Unlock()
+	a.mustFail(t, "gm", map[string]any{"text": ".revive Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
+	a.mustFail(t, "gm_revive", map[string]any{"name": "Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
+	a.mustCall(t, "trial_units", map[string]any{"guids": []GUID{st.GUID, {Low: 0x2222, High: 0x0100000000000000}}})
+	a.mustFail(t, "gm_revive", map[string]any{"name": "Someoneelse"}, rpc.CodeForbidden, "other than this session's character")
+	f.mu.Lock()
+	lines := append([]string(nil), f.serveGMLines...)
+	f.mu.Unlock()
+	if len(lines) != len(before) {
+		t.Fatalf("a refused revive sent lines: %q", lines[len(before):])
+	}
+	for _, ln := range lines {
+		if strings.Contains(strings.ToLower(ln), "someoneelse") {
+			t.Fatalf("a refused revive sent %q", ln)
+		}
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// TestServeGMReviveUnit is the revive boundary without a socket: the own character needs no registration, a player
+// the runner registered (a trial's own bot) passes, an unregistered player is refused, a creature is refused (the
+// core's .revive raises players only), and the bench flag is still the outer wall.
+func TestServeGMReviveUnit(t *testing.T) {
+	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background())
+	defer s.pumpCancel()
+	self := wire.GUID{Low: 0x11, High: 0x0100000000000000}
+	bot := wire.GUID{Low: 0x33, High: 0x0100000000000000}
+	stranger := wire.GUID{Low: 0x44, High: 0x0100000000000000}
+	s.self, s.selfSeen = self, true
+	st := &serveState{allowGMUnits: true, gmUnits: map[wire.GUID]struct{}{bot: {}}}
+	st.install(s, 1)
+
+	player := func(g wire.GUID) *objects.Object { return &objects.Object{GUID: g, Type: objects.TypePlayer} }
+	if err := s.serveGMReviveUnit(player(self), "gm_revive"); err != nil {
+		t.Fatalf("the session's own character was refused without registration: %v", err)
+	}
+	if err := s.serveGMReviveUnit(player(bot), "gm_revive"); err != nil {
+		t.Fatalf("a registered trial player (the trial's own bot) was refused: %v", err)
+	}
+	err := s.serveGMReviveUnit(player(stranger), "gm_revive")
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != rpc.CodeForbidden || !strings.Contains(re.Message, "other than this session's character") {
+		t.Fatalf("an unregistered player answered %v, want the typed refusal", err)
+	}
+	err = s.serveGMReviveUnit(&objects.Object{GUID: wire.GUID{Low: 0x55}, Type: objects.TypeUnit}, "gm_revive")
+	if !errors.As(err, &re) || re.Code != rpc.CodeForbidden || !strings.Contains(re.Message, "not a player") {
+		t.Fatalf("a creature answered %v, want the typed refusal", err)
+	}
+	st.allowGMUnits = false
+	if err := s.serveGMReviveUnit(player(self), "gm_revive"); err == nil {
+		t.Fatal("a daemon without --allow-gm-units allowed a revive")
+	}
 }

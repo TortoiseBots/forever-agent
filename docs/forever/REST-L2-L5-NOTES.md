@@ -32,9 +32,10 @@ Commits: L2 `68068ac8`, L5 `717347d2`, cleanup `a0147d71`, file-server fallback 
 - Forever `drain`/`fetch` call `event_log`, decoding a local
   `foreverEvent` (text guids) into `events.Event` with zero GUIDs.
 - Forever `do` steps call serve methods by name: `gm` same text, `bot`
-  the bare module line (`command`), `addon_send` same fields, `rpc`
-  names the serve method. `not ported` is ERROR naming the method,
-  never FAIL.
+  the bare module line (`command`) sent with the session's own prefix
+  (`.tb` here; the transcript prints that line), `addon_send` same
+  fields, `rpc` names the serve method. `not ported` is ERROR naming the
+  method, never FAIL.
 - `check_db` Forever allowlist: `characters`, `item_instance`,
   `character_inventory` (schema-qualified `characters.*`, core 25fc7ca:
   `item_instance(itemEntry, owner_guid)`, `character_inventory(guid,
