@@ -58,6 +58,17 @@ var ErrStillOutOfRange = errors.New("world: the server still says the target is 
 // keeps facing and distance current without flooding the server.
 const swingErrorRetry = 500 * time.Millisecond
 
+// reachHold is how far inside the server's reach the model's distance may sit before a swinging fighter walks after
+// its target again: the model's position of a creature lags its spline by a tick, so the edge itself is not trusted,
+// but a target 4.8 yd away in a 5 yd reach is in reach.
+const reachHold = 0.1
+
+// approachInside is how far inside the server's reach a walk toward the target stops (the leg's standoff): well
+// inside, so the swing does not sit on the edge of the reach, and well outside the 0.5 yd (CONTACT_DISTANCE) at which
+// a chasing creature steps back. Longer than the mover's 0.5 yd stop distance from where a chase starts (reachHold
+// from the edge), so a chase that is called is a chase that moves.
+const approachInside = 1.0
+
 // maxForcedApproaches bounds the swing-error-driven approaches of one fight. A "not in range" answer to a swing the
 // client believes is in reach is ground truth for one step, but a target the server never lets the client reach must
 // not keep the fight spinning: after this many forced approaches Attack returns ErrStillOutOfRange.
@@ -636,12 +647,15 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 				forced = true
 			}
 		}
-		if dist > reach-0.3 || forced {
+		// A target past the server's reach (less reachHold, for the model's position lag) is walked after, swinging or
+		// not; one inside it is not. A wolf that shuffles inside the 5 yd costs no chase: every chase is a stop
+		// packet and a start packet the server answers with a creature that repositions.
+		if dist > reach-reachHold || forced {
 			// One continuous chase: no start/stop pair per position sample, one leg that is re-aimed at most once
 			// per heartbeat. The destination is the target's position now; the chase ends when the distance the
 			// fight cares about is reached (inside the server's reach, or closer than the client believes when the
 			// server answered "not in range").
-			stopAt := reach - 0.3
+			stopAt := reach - approachInside
 			if forced {
 				// Bounded: a server that keeps saying "not in range" whatever the client does must not keep the
 				// fight spinning.
@@ -659,6 +673,9 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 			}
 			bx, by, bz := s.MoverX(), s.MoverY(), s.MoverZ()
 			goal := objects.ChaseGoal{
+				// The leg ends stopAt yards from the target, never on it: a creature with its target closer than
+				// 0.5 yd steps back and the chase starts over (ChaseMovementGenerator.cpp:46-48, :111-134).
+				Standoff: stopAt,
 				Dest: func(now time.Time) (float32, float32, float32) {
 					return target.Position(now)
 				},
@@ -695,7 +712,7 @@ func (s *session) Attack(ctx context.Context, guid wire.GUID, hooks ...FightHook
 				return fmt.Errorf("world: facing the target: %w", err)
 			}
 		}
-		if !attacking && dist > reach-0.3 {
+		if !attacking && dist > reach-reachHold {
 			// The walk stopped short of the server's reach: close in again on the next tick instead of asking the
 			// server for a swing it would answer with "not in range".
 			if err := link.WaitUntil(ctx, link.Now().Add(swingErrorRetry)); err != nil {

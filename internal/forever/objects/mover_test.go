@@ -753,3 +753,56 @@ func TestMoverShortSidewaysTeleportEndsTheLeg(t *testing.T) {
 		})
 	}
 }
+
+// TestChaseStopsWhereTheGoalIsMetNotAHeartbeatLater: at 7 yd/s one heartbeat (500 ms) is 3.5 yards, so a chase that
+// asks its goal only at heartbeats runs up to 3.5 yards past the distance the caller named. Attack names a few yards inside reach
+// from a wolf; running 3.5 yards past that puts the fighter on top of it, and a creature whose target is closer than
+// CONTACT_DISTANCE (0.5) steps back (ChaseMovementGenerator.cpp:46-48, :111-134), which restarts the chase: the
+// "hops" of forever-agent#149. The goal is asked between heartbeats, so the stop lands within a fraction of a
+// yard of the named distance.
+func TestChaseStopsWhereTheGoalIsMetNotAHeartbeatLater(t *testing.T) {
+	f := &fakeSender{now: time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)}
+	m := &Mover{GUID: wire.GUID{Low: 1}, Sender: f, X: 0, Y: 0, Z: 0, RunSpeed: 7,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(f.now).Milliseconds()) }}
+	const stopAt = 4.7
+	err := m.ChaseTo(context.Background(), ChaseGoal{
+		Dest:    func(time.Time) (float32, float32, float32) { return 20, 0, 0 },
+		Arrived: func(time.Time) bool { return Distance(m.X, m.Y, m.Z, 20, 0, 0) <= stopAt },
+	})
+	if err != nil {
+		t.Fatalf("the chase: %v", err)
+	}
+	left := Distance(m.X, m.Y, m.Z, 20, 0, 0)
+	if left > stopAt || left < stopAt-1 {
+		t.Fatalf("the chase stopped %.2f yd from the target, want %.1f yd or a little closer (under 1 yd past it)", left, stopAt)
+	}
+}
+
+// TestChaseStandoffNeverRunsOntoTheTarget: a goal with a standoff ends its leg that far short of the destination,
+// whatever the polling, and a leg that reaches it without the goal being met stops and returns so the caller can
+// look again (a target that backed off) instead of running on to the target's own position.
+func TestChaseStandoffNeverRunsOntoTheTarget(t *testing.T) {
+	f := &fakeSender{now: time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)}
+	m := &Mover{GUID: wire.GUID{Low: 1}, Sender: f, X: 0, Y: 0, Z: 0, RunSpeed: 7,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(f.now).Milliseconds()) }}
+	err := m.ChaseTo(context.Background(), ChaseGoal{
+		Dest:     func(time.Time) (float32, float32, float32) { return 20, 0, 0 },
+		Arrived:  func(time.Time) bool { return false }, // never met: only the standoff can end the leg
+		Standoff: 4,
+	})
+	if err != nil {
+		t.Fatalf("the chase: %v", err)
+	}
+	if left := Distance(m.X, m.Y, m.Z, 20, 0, 0); left < 3.99 {
+		t.Fatalf("the chase ended %.2f yd from the target, inside its 4 yd standoff", left)
+	}
+	stops := 0
+	for _, p := range f.sent {
+		if p.core == wire.CMSGMoveStop {
+			stops++
+		}
+	}
+	if stops != 1 {
+		t.Fatalf("%d stop packet(s), want one", stops)
+	}
+}

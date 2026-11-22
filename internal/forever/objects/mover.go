@@ -712,6 +712,29 @@ func walkPathTimeout(dist, runSpeed float32) time.Duration {
 type ChaseGoal struct {
 	Dest    func(now time.Time) (x, y, z float32)
 	Arrived func(now time.Time) bool
+	// Standoff, when positive, ends every leg that many yards short of Dest: the mover never runs onto the point it
+	// follows (a creature whose target is closer than CONTACT_DISTANCE steps back, ChaseMovementGenerator.cpp:46-48,
+	// which turns a chase into a dance). A leg that reaches its end without Arrived stops and returns nil, so the
+	// caller looks at the world again instead of the chase running on to Dest.
+	Standoff float32
+}
+
+// chaseArrivalPoll is how often a chase asks its goal whether it is over. A heartbeat is 500 ms, which at run speed is
+// 3.5 yards: a goal asked only at heartbeats is met up to 3.5 yards late.
+const chaseArrivalPoll = 100 * time.Millisecond
+
+// chaseLeg is the end of one straight leg from (sx,sy,sz) toward the point (dx,dy,dz): the point itself, or the one
+// standoff yards short of it on the line when the goal has a standoff and the point is farther than that.
+func chaseLeg(sx, sy, sz, dx, dy, dz, standoff float32) (x, y, z float32) {
+	if standoff <= 0 {
+		return dx, dy, dz
+	}
+	d := Distance(sx, sy, sz, dx, dy, dz)
+	if d <= standoff {
+		return sx, sy, sz
+	}
+	k := (d - standoff) / d
+	return sx + (dx-sx)*k, sy + (dy-sy)*k, sz + (dz-sz)*k
 }
 
 // ChaseTo walks after a moving point: one CMSG_MOVE_START_FORWARD at the beginning, one heartbeat every
@@ -735,8 +758,9 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 	if goal.Arrived(now) {
 		return ctx.Err()
 	}
-	tx, ty, tz := goal.Dest(now)
+	dx, dy, dz := goal.Dest(now) // the point followed; the leg ends at tx,ty,tz, short of it by the standoff
 	sx, sy, sz := m.X, m.Y, m.Z
+	tx, ty, tz := chaseLeg(sx, sy, sz, dx, dy, dz, goal.Standoff)
 	dist := Distance(sx, sy, sz, tx, ty, tz)
 	if dist <= StopDistance {
 		return ctx.Err()
@@ -759,7 +783,13 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 	heartbeats := 0
 	replans := 0
 	for {
-		if err := m.Sender.WaitUntil(ctx, lastSend.Add(HeartbeatInterval)); err != nil {
+		// Wake for the next heartbeat, or sooner to ask the goal: the heartbeat cadence is the server's, the goal's
+		// is ours.
+		wake := lastSend.Add(HeartbeatInterval)
+		if poll := m.Sender.Now().Add(chaseArrivalPoll); poll.Before(wake) {
+			wake = poll
+		}
+		if err := m.Sender.WaitUntil(ctx, wake); err != nil {
 			if errors.Is(err, ErrMapChange) || m.betweenMaps {
 				// The transfer may have completed inside this wait: the mover is on the new map at the new world's
 				// position, so neither the old line nor its stop may go out.
@@ -788,7 +818,7 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 			return ErrTeleported
 		}
 		now = m.Sender.Now()
-		m.advance(sx, sy, sz, tx, ty, tz, dist, start, now)
+		walked := m.advance(sx, sy, sz, tx, ty, tz, dist, start, now)
 		// The chase ends where the caller says, not where one walk point was: a target that walks inside reach
 		// during the leg ends it here.
 		if goal.Arrived(now) {
@@ -803,14 +833,25 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 			return fmt.Errorf("objects: the chase from %.2f %.2f %.2f did not finish in %s",
 				sx, sy, sz, walkTimeout(dist, m.RunSpeed))
 		}
+		if goal.Standoff > 0 && walked >= dist {
+			// The leg is walked out to its standoff and the goal is not met (the target backed off, or the caller's
+			// distance is shorter than the standoff): stop here and let the caller look again.
+			if err := m.sendAt(wire.CMSGMoveStop, base, now); err != nil {
+				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
+			}
+			m.logf("chase: stop at %.2f %.2f %.2f, the standoff of %.1f yd (%d heartbeats)", m.X, m.Y, m.Z, goal.Standoff, heartbeats)
+			return ctx.Err()
+		}
+		reaimed := false
 		nx, ny, nz := goal.Dest(now)
 		// Re-line only on a real change: a destination that is a function of the mover's own position would differ
 		// a little every tick and turn every heartbeat into a turn. And only while the one-second cap has room for
 		// the extra packet: the heartbeat below always goes.
-		moved := Distance(nx, ny, nz, tx, ty, tz) > chaseRetarget
+		moved := Distance(nx, ny, nz, dx, dy, dz) > chaseRetarget
 		dir := OrientationTo(m.X, m.Y, nx, ny)
 		if (moved || orientationDiff(dir, m.O) > chaseTurn) && m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
 			replans++
+			reaimed = true
 			if replans > maxChaseReplans {
 				_ = m.send(wire.CMSGMoveStop, base)
 				return fmt.Errorf("objects: the chase re-planned %d times without arriving", maxChaseReplans)
@@ -818,8 +859,9 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 			if err := m.Face(dir); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
 			}
-			tx, ty, tz = nx, ny, nz
+			dx, dy, dz = nx, ny, nz
 			sx, sy, sz = m.X, m.Y, m.Z
+			tx, ty, tz = chaseLeg(sx, sy, sz, dx, dy, dz, goal.Standoff)
 			dist = Distance(sx, sy, sz, tx, ty, tz)
 			if dist <= StopDistance {
 				// Standing on the walk point: the leg has no length to interpolate (a zero-length leg would divide
@@ -830,6 +872,9 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 			// Each straight leg gets its own timeout: a target that keeps moving is followed leg by leg, not
 			// abandoned at the first leg's deadline.
 			deadline = now.Add(walkTimeout(dist, m.RunSpeed))
+		}
+		if !reaimed && now.Sub(lastSend) < HeartbeatInterval {
+			continue // a goal poll between heartbeats: nothing to send yet
 		}
 		if err := m.sendAt(wire.CMSGMoveHeartbeat, base|FlagForward, now); err != nil {
 			return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
