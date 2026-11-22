@@ -1,0 +1,145 @@
+{
+  "class": "warrior",
+  "specs": [
+    {
+      "spec": "arms",
+      "role": "dps",
+      "rotation": "classic_arms_warrior",
+      "core": [
+        "Mortal Strike",
+        "Heroic Strike"
+      ],
+      "situational": [
+        "Rend",
+        "Overpower",
+        "Execute",
+        "Slam",
+        "Sweeping Strikes",
+        "Whirlwind",
+        "Charge",
+        "Hamstring",
+        "Sunder Armor",
+        "Intimidating Shout",
+        "Piercing Howl",
+        "Recklessness",
+        "Death Wish",
+        "Retaliation",
+        "Pummel",
+        "Cleave",
+        "Thunder Clap",
+        "Berserker Rage"
+      ],
+      "never": [
+        "Taunt",
+        "Shield Slam"
+      ],
+      "signature": [
+        "Mortal Strike"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "fury",
+      "role": "dps",
+      "rotation": "classic_fury_warrior",
+      "core": [
+        "Bloodthirst",
+        "Heroic Strike"
+      ],
+      "situational": [
+        "Whirlwind",
+        "Execute",
+        "Slam",
+        "Cleave",
+        "Charge",
+        "Intercept",
+        "Hamstring",
+        "Sunder Armor",
+        "Pummel",
+        "Recklessness",
+        "Death Wish",
+        "Berserker Rage",
+        "Intimidating Shout",
+        "Piercing Howl"
+      ],
+      "never": [
+        "Taunt",
+        "Shield Slam"
+      ],
+      "signature": [
+        "Bloodthirst"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "fury_tank",
+      "role": "tank",
+      "rotation": "classic_fury_tank_warrior",
+      "core": [
+        "Sunder Armor",
+        "Bloodthirst",
+        "Heroic Strike"
+      ],
+      "situational": [
+        "Revenge",
+        "Shield Block",
+        "Shield Slam",
+        "Thunder Clap",
+        "Demoralizing Shout",
+        "Shield Bash",
+        "Whirlwind",
+        "Cleave",
+        "Last Stand",
+        "Shield Wall",
+        "Disarm",
+        "Berserker Rage",
+        "Charge",
+        "Intercept"
+      ],
+      "never": [],
+      "signature": [],
+      "taunt": [
+        "Taunt",
+        "Mocking Blow",
+        "Challenging Shout"
+      ]
+    },
+    {
+      "spec": "protection",
+      "role": "tank",
+      "rotation": "classic_protection_warrior",
+      "core": [
+        "Sunder Armor",
+        "Revenge",
+        "Heroic Strike"
+      ],
+      "situational": [
+        "Shield Slam",
+        "Shield Block",
+        "Thunder Clap",
+        "Demoralizing Shout",
+        "Shield Bash",
+        "Concussion Blow",
+        "Last Stand",
+        "Shield Wall",
+        "Disarm",
+        "Charge",
+        "Intercept",
+        "Cleave",
+        "Rend",
+        "Bloodthirst",
+        "Mortal Strike",
+        "Berserker Rage"
+      ],
+      "never": [],
+      "signature": [
+        "Shield Slam"
+      ],
+      "taunt": [
+        "Taunt",
+        "Mocking Blow",
+        "Challenging Shout"
+      ]
+    }
+  ]
+}

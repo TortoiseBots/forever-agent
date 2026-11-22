@@ -13,9 +13,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/kbspells"
 )
 
-const spellScoreUsage = "usage: forever-agent forever spell-score [--json] [--min-active 30] [--fail-unknown] --oracle DIR [--spells DIR] <watch dir|trace>\n" +
-	"  judges a Forever class fight from the watch's combat log against the oracle of its classes; a cast of another\n" +
-	"  class's ability fails. Exit 0, 1 when a member fails, 2 on a usage or load error."
+const spellScoreUsage = "usage: forever-agent forever spell-score [--json] [--min-active 30] [--fail-unknown] [--oracle DIR] [--spells DIR] <watch dir|trace>\n" +
+	"  judges a Forever class fight from the watch's combat log against the oracle of its classes (the one embedded in\n" +
+	"  this build unless --oracle names a directory); a cast of another class's ability fails. Exit 0, 1 when a member\n" +
+	"  fails, 2 on a usage or load error."
 
 // spellScoreOut is the --json shape: the run and one finding per party member.
 type spellScoreOut struct {
@@ -30,13 +31,13 @@ func foreverSpellScoreCmd(args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print the reading as JSON")
 	minActive := fs.Float64("min-active", 30, "seconds a member must be alive and in combat in the frames to be judged")
 	failUnknown := fs.Bool("fail-unknown", false, "fail a member that cast a spell neither the row nor the spell table names")
-	oracleDir := fs.String("oracle", "", "the directory holding _common.json and one <class>.json per class")
+	oracleDir := fs.String("oracle", "", "a directory holding _common.json and one <class>.json per class (default: the Forever oracle embedded in this build)")
 	spellsDir := fs.String("spells", "", "the directory holding spells.tsv and names.tsv(.gz) (default: the table embedded in this build)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, spellScoreUsage)
 		return exitUsage
 	}
-	if fs.NArg() == 0 || *oracleDir == "" {
+	if fs.NArg() == 0 {
 		fmt.Fprintln(stderr, spellScoreUsage)
 		return exitUsage
 	}
@@ -55,10 +56,21 @@ func foreverSpellScoreCmd(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	oracle, err := kbspells.LoadWith(os.DirFS(*oracleDir), table)
-	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", *oracleDir, err)
-		return exitUsage
+	var oracle *kbspells.Oracle
+	if *oracleDir != "" {
+		o, err := kbspells.LoadWith(os.DirFS(*oracleDir), table)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", *oracleDir, err)
+			return exitUsage
+		}
+		oracle = o
+	} else {
+		o, err := kbspells.ForeverDefault()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		oracle = o
 	}
 	code := exitOK
 	for _, path := range fs.Args() {

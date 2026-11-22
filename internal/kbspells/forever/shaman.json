@@ -1,0 +1,86 @@
+{
+  "class": "shaman",
+  "specs": [
+    {
+      "spec": "elemental",
+      "role": "dps",
+      "rotation": "classic_elemental_shaman",
+      "core": [
+        "Lightning Bolt"
+      ],
+      "situational": [
+        "Chain Lightning",
+        "Earth Shock",
+        "Flame Shock",
+        "Frost Shock",
+        "Searing Totem",
+        "Fire Nova Totem",
+        "Magma Totem",
+        "Purge",
+        "Healing Wave",
+        "Lesser Healing Wave",
+        "Grounding Totem",
+        "Tremor Totem"
+      ],
+      "never": [],
+      "signature": [
+        "Chain Lightning"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "enhancement",
+      "role": "dps",
+      "rotation": "classic_enhancement_shaman",
+      "core": [
+        "Stormstrike",
+        "Earth Shock"
+      ],
+      "situational": [
+        "Flame Shock",
+        "Frost Shock",
+        "Lightning Bolt",
+        "Searing Totem",
+        "Strength of Earth Totem",
+        "Windfury Totem",
+        "Grace of Air Totem",
+        "Purge",
+        "Healing Wave",
+        "Lesser Healing Wave"
+      ],
+      "never": [],
+      "signature": [
+        "Stormstrike"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "restoration",
+      "role": "heal",
+      "rotation": "classic_restoration_shaman",
+      "core": [
+        "Healing Wave",
+        "Lesser Healing Wave"
+      ],
+      "situational": [
+        "Chain Heal",
+        "Mana Tide Totem",
+        "Nature's Swiftness",
+        "Healing Stream Totem",
+        "Mana Spring Totem",
+        "Cure Poison",
+        "Cure Disease",
+        "Purge",
+        "Earth Shock",
+        "Ancestral Spirit",
+        "Tremor Totem",
+        "Grounding Totem"
+      ],
+      "never": [],
+      "signature": [
+        "Mana Tide Totem"
+      ],
+      "taunt": []
+    }
+  ]
+}

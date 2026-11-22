@@ -1,0 +1,94 @@
+{
+  "class": "mage",
+  "specs": [
+    {
+      "spec": "arcane",
+      "role": "dps",
+      "rotation": "classic_arcane_mage",
+      "core": [
+        "Arcane Missiles",
+        "Frostbolt"
+      ],
+      "situational": [
+        "Arcane Explosion",
+        "Frost Nova",
+        "Polymorph",
+        "Counterspell",
+        "Blink",
+        "Blizzard",
+        "Flamestrike",
+        "Evocation",
+        "Mana Shield",
+        "Remove Lesser Curse",
+        "Shoot"
+      ],
+      "never": [],
+      "signature": [
+        "Arcane Power",
+        "Presence of Mind"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "fire",
+      "role": "dps",
+      "rotation": "classic_fire_mage",
+      "core": [
+        "Fireball",
+        "Fire Blast"
+      ],
+      "situational": [
+        "Scorch",
+        "Pyroblast",
+        "Flamestrike",
+        "Blast Wave",
+        "Frost Nova",
+        "Polymorph",
+        "Counterspell",
+        "Blink",
+        "Arcane Explosion",
+        "Evocation",
+        "Fire Ward",
+        "Remove Lesser Curse",
+        "Shoot"
+      ],
+      "never": [],
+      "signature": [
+        "Combustion",
+        "Blast Wave",
+        "Pyroblast"
+      ],
+      "taunt": []
+    },
+    {
+      "spec": "frost",
+      "role": "dps",
+      "rotation": "classic_frost_mage",
+      "core": [
+        "Frostbolt"
+      ],
+      "situational": [
+        "Frost Nova",
+        "Cone of Cold",
+        "Blizzard",
+        "Ice Barrier",
+        "Ice Block",
+        "Cold Snap",
+        "Polymorph",
+        "Counterspell",
+        "Blink",
+        "Arcane Explosion",
+        "Frost Ward",
+        "Evocation",
+        "Remove Lesser Curse",
+        "Shoot"
+      ],
+      "never": [],
+      "signature": [
+        "Ice Barrier",
+        "Cold Snap"
+      ],
+      "taunt": []
+    }
+  ]
+}
