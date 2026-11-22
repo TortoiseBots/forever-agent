@@ -267,6 +267,14 @@ func guidKind(g wire.GUID) string {
 	return fmt.Sprintf("guid type %d", g.Type())
 }
 
+// markLabel names a raid target icon for a log line; a symbol this core does not use prints its number.
+func markLabel(m party.Mark) string {
+	if name := party.MarkName(m); name != "" {
+		return name
+	}
+	return fmt.Sprintf("symbol %d", m)
+}
+
 // handleParty decodes one party packet and merges it into the model.
 func (s *session) handleParty(p worldconn.Packet) error {
 	s.initChat()
@@ -360,6 +368,34 @@ func (s *session) handleParty(p worldconn.Packet) error {
 		s.party.ApplyCommandResult(c)
 		s.eventPartyPacket("command", map[string]any{"operation": party.OperationName(c.Operation), "result": party.ResultName(c.Result)}, wire.EmptyGUID, chat.SanitiseName(c.Name))
 		s.opts.logf("party: %s %s: %s", party.OperationName(c.Operation), chat.SanitiseName(c.Name), party.ResultName(c.Result))
+	case wire.SMSGSendRaidTargetUpdateSingle:
+		u, err := party.ParseMarkSingle(p.Payload)
+		if err != nil {
+			// Readback only: a mark packet this round cannot read is counted and logged once like the other
+			// packets' parse failures, and never ends the run.
+			s.noteParseError(p, err)
+			break
+		}
+		s.party.ApplyMarkSingle(u)
+		s.eventRaidMarkSingle(u)
+		who := s.eventName("", u.Target)
+		if who == "" {
+			who = guidKind(u.Target)
+		}
+		if u.Target.IsZero() {
+			s.opts.logf("party: raid mark %s cleared", markLabel(u.Mark))
+		} else {
+			s.opts.logf("party: raid mark %s on %s", markLabel(u.Mark), who)
+		}
+	case wire.SMSGSendRaidTargetUpdateAll:
+		l, err := party.ParseMarkAll(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			break
+		}
+		s.party.ApplyMarkAll(l)
+		s.eventRaidMarkList(l)
+		s.opts.logf("party: %d raid mark(s) listed", len(l.Marks))
 	case wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		s.party.ReadyChecks++
 		s.opts.logf("party: %s (detected, not answered in this round)", wire.ServerName(p.Core))

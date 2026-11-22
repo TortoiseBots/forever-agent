@@ -113,6 +113,14 @@ type State struct {
 	HeldRosters    int // rosters that arrived before this character's own GUID was known (applied by SetSelf)
 	LeaderChanges  int
 	Invites        int
+
+	// Marks is the group's raid target icons, indexed by Mark: what the client shows and the mark commands read
+	// back. The core sends one single update per change and the whole list on request (Group.cpp:820-852).
+	Marks [8]wire.GUID
+	// MarksKnown says a mark packet has been applied, so a reader can tell "no icons set" from "nothing heard yet".
+	MarksKnown  bool
+	MarkUpdates int // SMSG_SEND_RAID_TARGET_UPDATE_SINGLE packets applied (or refused for a bad symbol)
+	MarkLists   int // SMSG_SEND_RAID_TARGET_UPDATE_ALL packets applied
 }
 
 // Roster is a diagnostic copy of a roster that was displaced. It is never actionable.
@@ -337,6 +345,10 @@ func (s *State) apply(u Update) bool {
 	s.Index = u.Index
 	s.Type = u.Type
 	s.MyIndex = u.MyIndex
+	if s.PartyGUID != u.PartyGUID {
+		// A roster of another group is another group's icon list: the slots cannot carry over.
+		s.clearMarks()
+	}
 	s.PartyGUID = u.PartyGUID
 	s.LeaderGUID = u.LeaderGUID
 	s.Sequence = u.Sequence
@@ -416,6 +428,64 @@ func (s *State) ApplyMemberState(ms MemberState) bool {
 	return true
 }
 
+// ApplyMarkSingle merges one raid target update. A non-empty target is first cleared from every other icon, as
+// Group::SetTargetIcon does before it stores the new slot (Group.cpp:825-831): the core sends its own clear updates
+// for the old icon, but a target must never show two icons even if one of them is lost. A symbol outside 0..7 is
+// counted and refused (SetTargetIcon drops it too, Group.cpp:822-823).
+func (s *State) ApplyMarkSingle(u MarkUpdate) bool {
+	s.MarkUpdates++
+	if u.Mark < MarkStar || u.Mark > MarkSkull {
+		return false
+	}
+	if !u.Target.IsZero() {
+		for i := range s.Marks {
+			if Mark(i) != u.Mark && s.Marks[i] == u.Target {
+				s.Marks[i] = wire.EmptyGUID
+			}
+		}
+	}
+	s.Marks[u.Mark] = u.Target
+	s.MarksKnown = true
+	return true
+}
+
+// ApplyMarkAll replaces every icon with the full list: the answer to a list request is the group's whole target
+// state, so a slot the list omits (or names empty) is not set.
+func (s *State) ApplyMarkAll(l MarkList) bool {
+	s.MarkLists++
+	for _, e := range l.Marks {
+		if e.Mark < MarkStar || e.Mark > MarkSkull {
+			return false
+		}
+	}
+	var marks [MaxMarks]wire.GUID
+	for _, e := range l.Marks {
+		marks[e.Mark] = e.Target
+	}
+	s.Marks = marks
+	s.MarksKnown = true
+	return true
+}
+
+// MarkOf returns the icon a target holds.
+func (s *State) MarkOf(guid wire.GUID) (Mark, bool) {
+	if guid.IsZero() {
+		return 0, false
+	}
+	for i := range s.Marks {
+		if s.Marks[i] == guid {
+			return Mark(i), true
+		}
+	}
+	return 0, false
+}
+
+// clearMarks forgets every icon: the icons belong to one group, so the group's end drops them with it.
+func (s *State) clearMarks() {
+	s.Marks = [MaxMarks]wire.GUID{}
+	s.MarksKnown = false
+}
+
 // ApplyInvite stores an incoming invite.
 func (s *State) ApplyInvite(inv Invite) {
 	s.Invites++
@@ -462,6 +532,7 @@ func (s *State) ApplyKicked(reason uint8) {
 	s.Stale = nil
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil
+	s.clearMarks()
 	s.addEvent(Event{Kind: EventKicked, Text: fmt.Sprintf("kicked (reason %d)", reason)})
 }
 
@@ -486,6 +557,7 @@ func (s *State) markDestroyed(why string) {
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil
 	s.LeaderGUID = wire.EmptyGUID
+	s.clearMarks()
 	s.addEvent(Event{Kind: EventDestroyed, Text: why})
 }
 
@@ -524,6 +596,7 @@ func (s *State) ApplyCommandResult(c CommandResult) {
 		s.Stale = nil
 		s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 		s.Order = nil
+		s.clearMarks()
 		s.addEvent(Event{Kind: EventLeft, Text: "left the group"})
 	}
 }

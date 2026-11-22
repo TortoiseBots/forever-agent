@@ -18,6 +18,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -340,6 +341,31 @@ func (s *session) eventPartyPacket(state string, data map[string]any, src wire.G
 		Party:      true,
 		Data:       data,
 	})
+}
+
+// eventRaidMarkSingle appends one raid target update: the icon, the unit that now carries it and who set it. The
+// row kind is the shared events.KindRaidMark, so a reader that already reads the turtle-agent session's raid_mark
+// rows reads this log's too.
+func (s *session) eventRaidMarkSingle(u party.MarkUpdate) {
+	s.event(Event{
+		Kind:       events.KindRaidMark,
+		Source:     s.eventName("", u.ChangedBy),
+		SourceGUID: eventGUID(u.ChangedBy),
+		Target:     s.eventName("", u.Target),
+		TargetGUID: eventGUID(u.Target),
+		Text:       party.MarkName(u.Mark),
+		Data:       map[string]any{"state": "single", "symbol": int(u.Mark)},
+	})
+}
+
+// eventRaidMarkList appends the whole icon list a list request answered: every slot the server sent, its target
+// empty for an unset one.
+func (s *session) eventRaidMarkList(l party.MarkList) {
+	marks := make([]map[string]any, 0, len(l.Marks))
+	for _, e := range l.Marks {
+		marks = append(marks, map[string]any{"symbol": int(e.Mark), "target": eventGUID(e.Target)})
+	}
+	s.event(Event{Kind: events.KindRaidMark, Data: map[string]any{"state": "list", "marks": marks}})
 }
 
 // eventAddon appends one delivered add-on message.
