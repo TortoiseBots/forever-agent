@@ -223,7 +223,8 @@ const (
 	SMSGMoveSetSwimSpeed    uint32 = 0x5E0022
 	SMSGMoveSetWaterWalk    uint32 = 0x5E002B
 	SMSGMoveSetLandWalk     uint32 = 0x5E002E
-	SMSGSendKnownSpells     uint32 = 0x670019
+	SMSGSendKnownSpells  uint32 = 0x670019
+	SMSGSendSpellHistory uint32 = 0x67001A
 	// The spell book changes of ticket #93 round R5 (Opcodes.h:1810, 2407, 2450; SpellPackets.cpp:506-530,
 	// 607-618): a learned spell (a higher rank carries the one it supersedes), a superseded pair, and unlearns.
 	SMSGLearnedSpells    uint32 = 0x670040

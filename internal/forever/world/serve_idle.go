@@ -57,6 +57,10 @@ func (s *session) serveAskNames() {
 func (s *session) serveIdleTick() {
 	s.serveRealmPing()
 	now := s.Now()
+	if !now.Before(s.cooldownScanAt) {
+		s.cooldownScanAt = now.Add(time.Second)
+		s.expireCooldowns(now)
+	}
 	if now.Before(s.nameScanAt) {
 		return
 	}

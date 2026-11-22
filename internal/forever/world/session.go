@@ -531,6 +531,8 @@ type session struct {
 	gmCastAt []time.Time
 	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).
 	selfTeleports int
+	teleportSeq   uint64
+	zUnknown      bool
 	mover         *objects.Mover
 	// knockbacks is the takeoff of every mover a knockback packet named and whose landing has not arrived yet:
 	// keyed by GUID, with knockOrder the insertion order for the bound. Only the session goroutine touches them.
@@ -560,9 +562,10 @@ type session struct {
 	// realmPingAt is when a serving session next pings the realm socket (serveRealmPing).
 	realmPingAt time.Time
 	// realmPingSerial is the last serial the realm socket's ping used; nameScanAt is when the idle tick next scans for
-	// unnamed players (serveIdleTick).
+	// unnamed players (serveIdleTick); cooldownScanAt is the 1 s cooldown-expiry tick.
 	realmPingSerial uint32
 	nameScanAt      time.Time
+	cooldownScanAt  time.Time
 	// nowFn replaces the client clock; the tests set a fake so the name backoff runs on a fake clock.
 	nowFn func() time.Time
 	// Round A0: the add-on inbox: the registered prefixes and the bounded FIFO of delivered messages. The two
@@ -620,9 +623,10 @@ type session struct {
 	castSerial       uint32
 	parseErrorLogged map[string]bool
 	// Round R5 (#93): the spellbook the three change packets maintain (spellbook.go) and the spell data it reads,
-	// taken from Options.spellTable or the embedded table on first use.
+	// taken from Options.spellTable or the embedded table on first use; R6: GCD, cast history and combo state.
 	spells    *spellBook
 	spellData *foreverspells.Table
+	spellSt   *spellState
 	// fightSender is what Attack and Cast write through and wait on: nil means the session itself (the sockets).
 	// The tests set a fake so a fight runs on a fake clock.
 	fightSender objects.Sender
@@ -2103,6 +2107,17 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.applyUpdate(u)
 		now := s.transport().Now()
 		s.world.Apply(u, now)
+		s.flushPendingHistory()
+		if s.selfSeen {
+			selfValuesUpdated := false
+			for i := range u.Blocks {
+				if u.Blocks[i].GUID == s.self && u.Blocks[i].Values {
+					selfValuesUpdated = true
+					break
+				}
+			}
+			s.observeComboPoints(selfValuesUpdated)
+		}
 		s.noteSelfTaxi()
 		s.combatDeaths(now)
 		s.observeSelfIfTracking()
@@ -2189,6 +2204,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			if err := s.sendOnCtx(ctx, sideInstance, wire.CMSGMoveTeleportAck, objects.BuildTeleportAck(t.MoverGUID, sequence, clientTimeMs())); err != nil {
 				return err
 			}
+			s.teleportSeq++
 			s.opts.logf("world: SMSG_MOVE_TELEPORT answered (map %d, client position %.2f %.2f %.2f)", s.world.MapID(), t.X, t.Y, t.Z)
 		}
 	case wire.SMSGMoveRoot, wire.SMSGMoveUnroot:
@@ -2403,6 +2419,13 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.world.ApplySpellCast(&v, false, now)
 		s.combatCast("spell_start", now, &v)
+		caster := v.CasterUnit
+		if caster.IsZero() {
+			caster = v.Caster
+		}
+		if s.selfSeen && caster == s.self {
+			s.onOwnSpellStart(&v, now)
+		}
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}
@@ -2415,6 +2438,13 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.world.ApplySpellCast(&v, true, now)
 		s.combatCast("spell_go", now, &v)
+		caster := v.CasterUnit
+		if caster.IsZero() {
+			caster = v.Caster
+		}
+		if s.selfSeen && caster == s.self {
+			s.onOwnSpellGo(&v, now)
+		}
 		s.itemCast.gone(&v, s.self)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
@@ -2437,6 +2467,9 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		}
 		s.world.ApplySpellFailure(v, now)
 		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureName(v.Reason))
+		if p.Core == wire.SMSGCastFailed || (s.selfSeen && v.Caster == s.self) {
+			s.onOwnSpellFailure(p.Core, v, now)
+		}
 		if v.Caster == s.self || v.Caster.IsZero() {
 			s.itemCast.failed(v)
 			// CAST_FAILED is the pre-cast answer and carries the client's cast id; the failure forms carry the
@@ -2527,28 +2560,41 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		s.world.ApplyCooldowns(v, now)
+		s.onSpellCooldown(v, now)
 	case wire.SMSGCooldownEvent:
 		v, err := combat.ParseCooldownEvent(p.Payload)
 		if err != nil {
 			s.noteParseError(p, err)
 			return
 		}
-		s.world.ClearCooldown(s.self, v.SpellID, now)
+		s.onCooldownEvent(v, now)
 	case wire.SMSGClearCooldown:
 		v, err := combat.ParseClearCooldown(p.Payload)
 		if err != nil {
 			s.noteParseError(p, err)
 			return
 		}
-		s.world.ClearCooldown(s.self, int32(v.SpellID), now)
+		if !v.Pet {
+			s.clearSpellCooldown(int32(v.SpellID), now)
+		}
 	case wire.SMSGClearCooldowns:
 		v, err := combat.ParseClearCooldowns(p.Payload)
 		if err != nil {
 			s.noteParseError(p, err)
 			return
 		}
-		s.world.ClearCooldowns(s.self, v.Spells, now)
+		if !v.Pet {
+			for _, id := range v.Spells {
+				s.clearSpellCooldown(id, now)
+			}
+		}
+	case wire.SMSGSendSpellHistory:
+		v, err := combat.ParseSpellHistory(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return
+		}
+		s.onSpellHistory(v, now)
 	case wire.SMSGPowerUpdate:
 		v, err := combat.ParsePowerUpdate(p.Payload)
 		if err != nil {
@@ -2556,6 +2602,9 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplyPowerUpdate(&v, now)
+		if s.selfSeen && v.GUID == s.self {
+			s.observeComboPoints(true)
+		}
 	case wire.SMSGLogXPGain:
 		v, err := combat.ParseXPGain(p.Payload)
 		if err != nil {

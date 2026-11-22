@@ -55,9 +55,10 @@ type Object struct {
 	Ghost bool
 	// ResurrectedAt is the last time a ghost came back (its aura went and its health was above 0).
 	ResurrectedAt time.Time
-	Auras         map[uint16]*Aura
-	Cast          *CastState
-	Cooldowns     map[int32]time.Time
+	Auras             map[uint16]*Aura
+	Cast              *CastState
+	Cooldowns         map[int32]time.Time
+	CategoryCooldowns map[uint32]time.Time
 }
 
 // Position returns the object's position, following the spline when it is moving and now is inside it (linear
@@ -592,10 +593,28 @@ func mergeInfo(dst *Info, src Info) {
 		dst.MaxHealth = src.MaxHealth
 	}
 	if f.Power {
-		dst.Power = src.Power
+		var zeroMask [10]bool
+		if f.powerMask == zeroMask {
+			dst.Power = src.Power
+		} else {
+			for n := range 10 {
+				if f.powerMask[n] {
+					dst.Power[n] = src.Power[n]
+				}
+			}
+		}
 	}
 	if f.MaxPower {
-		dst.MaxPower = src.MaxPower
+		var zeroMask [10]bool
+		if f.maxPowerMask == zeroMask {
+			dst.MaxPower = src.MaxPower
+		} else {
+			for n := range 10 {
+				if f.maxPowerMask[n] {
+					dst.MaxPower[n] = src.MaxPower[n]
+				}
+			}
+		}
 	}
 	if f.Level {
 		dst.Level = src.Level

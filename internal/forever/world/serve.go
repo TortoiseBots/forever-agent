@@ -809,27 +809,37 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 
 // ServeStatus is the status method's result: where the character is, what it is doing, and the session's errors.
 type ServeStatus struct {
-	Character     string  `json:"character,omitempty"`
-	GUID          GUID    `json:"guid"`
-	Level         int32   `json:"level,omitempty"`
-	Map           uint32  `json:"map"`
-	X             float32 `json:"x"`
-	Y             float32 `json:"y"`
-	Z             float32 `json:"z"`
-	O             float32 `json:"o"`
-	Target        GUID    `json:"target,omitempty"`
-	Health        int64   `json:"health"`
-	MaxHealth     int64   `json:"max_health"`
-	Power         int32   `json:"power"`
-	MaxPower      int32   `json:"max_power"`
-	PowerType     uint8   `json:"power_type,omitempty"`
-	InCombat      bool    `json:"in_combat"`
-	Dead          bool    `json:"dead"`
-	Ghost         bool    `json:"ghost"`
-	ServerPackets int     `json:"server_packets"`
-	ParseErrors   int     `json:"parse_errors"`
+	Character     string    `json:"character,omitempty"`
+	Team          string    `json:"team,omitempty"`
+	GUID          GUID      `json:"guid"`
+	Level         int32     `json:"level,omitempty"`
+	Map           uint32    `json:"map"`
+	X             float32   `json:"x"`
+	Y             float32   `json:"y"`
+	Z             float32   `json:"z"`
+	O             float32   `json:"o"`
+	Target        GUID      `json:"target,omitempty"`
+	Health        int64     `json:"health"`
+	MaxHealth     int64     `json:"max_health"`
+	Power         int32     `json:"power"`
+	MaxPower      int32     `json:"max_power"`
+	PowerType     uint8     `json:"power_type,omitempty"`
+	InCombat      bool      `json:"in_combat"`
+	Falling       bool      `json:"falling"`
+	ZUnknown      bool      `json:"z_unknown"`
+	TeleportSeq   uint64    `json:"teleport_seq"`
+	LatencyMS     uint32    `json:"latency_ms"`
+	Dead          bool      `json:"dead"`
+	Ghost         bool      `json:"ghost"`
+	ServerPackets int       `json:"server_packets"`
+	ParseErrors   int       `json:"parse_errors"`
 	// MonoMS is the process's steady clock at this answer, the axis a combat row's mono_ms is on.
-	MonoMS int64 `json:"mono_ms"`
+	MonoMS       int64     `json:"mono_ms"`
+	BaseTime     time.Time `json:"base_time"`
+	WallOffsetMS int64     `json:"wall_offset_ms"`
+	ComboPoints  uint8     `json:"combo_points"`
+	ComboTarget  GUID      `json:"combo_target,omitzero"`
+	GCDMS        int64     `json:"gcd_ms"`
 	// State is the link's lifecycle: "online", "reconnecting" (see ReconnectAttempt/ReconnectLimit) or "offline".
 	State string `json:"state"`
 	// Error is why the link is not online: the drop's reason while reconnecting, the last attempt's failure (or
@@ -839,19 +849,34 @@ type ServeStatus struct {
 	ReconnectLimit   int    `json:"reconnect_limit,omitempty"`
 }
 
+func raceTeam(race uint8) string {
+	switch race {
+	case 1, 3, 4, 7:
+		return "alliance"
+	case 2, 5, 6, 8:
+		return "horde"
+	}
+	return ""
+}
+
 // serveStatus builds the status from the loop-owned session, the model and the link's lifecycle.
 func (s *session) serveStatus(st *serveState) ServeStatus {
+	now := s.Now()
+	s.expireCooldowns(now)
 	state, reason, attempt, limit := st.statusText()
 	out := ServeStatus{
 		State: state, Error: reason, ReconnectAttempt: attempt, ReconnectLimit: limit,
 		Character: s.report.Character.Name, Level: int32(s.report.Character.Level),
-		MonoMS: events.MonoMS(),
+		Team: raceTeam(s.report.Character.Race), ZUnknown: s.zUnknown, TeleportSeq: s.teleportSeq,
+		LatencyMS: uint32(s.report.Latency.Milliseconds()),
+		MonoMS:    events.MonoMS(), BaseTime: events.BaseTime(), WallOffsetMS: events.WallOffsetMS(),
 	}
 	if s.world != nil {
 		out.Map = s.world.MapID()
 	}
 	if s.mover != nil {
 		out.X, out.Y, out.Z, out.O = s.mover.Position()
+		out.Falling = s.mover.Flags&(objects.FlagFalling|objects.FlagFallingFar) != 0 || s.mover.Airborne()
 	} else {
 		p := s.report.Position
 		out.X, out.Y, out.Z, out.O = p[0], p[1], p[2], p[3]
@@ -866,12 +891,15 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 			if out.Target == GUID(wire.EmptyGUID) {
 				out.Target = GUID(o.Info.Target)
 			}
-			out.Health, out.MaxHealth = o.Info.Health, o.Info.MaxHealth
-			if int(o.Info.DisplayPower) < len(o.Info.Power) {
-				out.PowerType = o.Info.DisplayPower
-				out.Power = o.Info.Power[o.Info.DisplayPower]
-				out.MaxPower = o.Info.MaxPower[o.Info.DisplayPower]
+			if o.Info.Race != 0 {
+				out.Team = raceTeam(o.Info.Race)
 			}
+			if s.mover == nil {
+				out.Falling = o.Flags&(objects.FlagFalling|objects.FlagFallingFar) != 0
+			}
+			out.Health, out.MaxHealth = o.Info.Health, o.Info.MaxHealth
+			out.PowerType = o.Info.DisplayPower
+			out.Power, out.MaxPower = o.Info.PowerValue()
 			out.InCombat = o.InCombat
 			out.Dead = o.Dead
 			out.Ghost = o.Ghost
@@ -880,6 +908,13 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 			}
 		}
 	}
+	pts, ctarget := s.comboPoints()
+	out.ComboPoints = pts
+	if pts > 0 {
+		out.ComboTarget = GUID(ctarget)
+	}
+	_, gcdLeft, _ := s.gcdState(now)
+	out.GCDMS = gcdLeft.Milliseconds()
 	for _, n := range s.report.Counts {
 		out.ServerPackets += n
 	}

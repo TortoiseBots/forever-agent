@@ -169,3 +169,69 @@ func parseUnlearnedSpells(b *wire.Buffer) (UnlearnedSpells, error) {
 	}
 	return v, nil
 }
+
+// SpellHistoryEntry is one entry of SMSG_SEND_SPELL_HISTORY (SpellPackets.cpp:691-720): a spell or item cooldown
+// already running when the character enters the world.
+type SpellHistoryEntry struct {
+	SpellID              uint32
+	ItemID               uint32
+	Category             uint32
+	RecoveryTime         int32
+	CategoryRecoveryTime int32
+	ModRate              float32
+	RecoveryStartOffset  *uint32
+	CategoryStartOffset  *uint32
+	OnHold               bool
+}
+
+// SpellHistory is SMSG_SEND_SPELL_HISTORY (SpellPackets.cpp:691-720).
+type SpellHistory struct {
+	Entries []SpellHistoryEntry
+}
+
+// ParseSpellHistory reads SMSG_SEND_SPELL_HISTORY.
+func ParseSpellHistory(p []byte) (SpellHistory, error) {
+	b := wire.NewReader(p)
+	v, err := parseSpellHistory(b)
+	if err != nil {
+		return v, err
+	}
+	return v, exactly(b)
+}
+
+func parseSpellHistory(b *wire.Buffer) (SpellHistory, error) {
+	var v SpellHistory
+	n, err := count(b, "spell history", maxSpellBookEntries)
+	if err != nil {
+		return v, err
+	}
+	v.Entries = make([]SpellHistoryEntry, 0, n)
+	for range n {
+		e := SpellHistoryEntry{
+			SpellID:              b.ReadU32(),
+			ItemID:               b.ReadU32(),
+			Category:             b.ReadU32(),
+			RecoveryTime:         b.ReadI32(),
+			CategoryRecoveryTime: b.ReadI32(),
+			ModRate:              b.ReadFloat32(),
+		}
+		hasRecoveryOffset := b.ReadBit()
+		hasCategoryOffset := b.ReadBit()
+		e.OnHold = b.ReadBit()
+		flush(b)
+		if b.Err() != nil {
+			return v, fmt.Errorf("combat: spell history bits: %w", errShort)
+		}
+		if hasRecoveryOffset {
+			e.RecoveryStartOffset = new(b.ReadU32())
+		}
+		if hasCategoryOffset {
+			e.CategoryStartOffset = new(b.ReadU32())
+		}
+		if b.Err() != nil {
+			return v, fmt.Errorf("combat: spell history entry %d: %w", e.SpellID, errShort)
+		}
+		v.Entries = append(v.Entries, e)
+	}
+	return v, nil
+}

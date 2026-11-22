@@ -26,6 +26,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/rpc"
 	"github.com/pjerra/forever-agent/internal/slotdir"
+	taworld "github.com/pjerra/forever-agent/internal/world"
 )
 
 // startClientDaemon starts the fake-backed daemon with a real generated
@@ -264,6 +265,34 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		Source: "A", SourceGUID: g.String(), Text: "hi", Party: true}}, Next: 3, More: true, Dropped: 2, Epoch: "abc", Reset: true}
 	roundTrip(t, "event_log", log, new(serveclient.EventLogPage))
 	roundTrip(t, "act", ServeActResult{Lines: []string{"step 1 wait ok"}, OK: true}, new(serveclient.ActResult))
+}
+
+// TestStatusKeysPinContract pins ServeStatus's JSON keys and verifies that every TA StatusInfo JSON key except the
+// TA-stack counters unknown_opcodes and last_seq exists on ServeStatus.
+func TestStatusKeysPinContract(t *testing.T) {
+	pinned := []string{
+		"base_time", "character", "combo_points", "combo_target", "dead", "error", "falling",
+		"gcd_ms", "ghost", "guid", "health", "in_combat", "latency_ms", "level", "map",
+		"max_health", "max_power", "mono_ms", "o", "parse_errors", "power", "power_type",
+		"reconnect_attempt", "reconnect_limit", "server_packets", "state", "target", "team",
+		"teleport_seq", "wall_offset_ms", "x", "y", "z", "z_unknown",
+	}
+	got := jsonKeys(reflect.TypeFor[ServeStatus]())
+	if !slices.Equal(got, pinned) {
+		t.Fatalf("ServeStatus JSON keys = %v, want pinned %v", got, pinned)
+	}
+	have := make(map[string]bool, len(got))
+	for _, k := range got {
+		have[k] = true
+	}
+	for _, k := range jsonKeys(reflect.TypeFor[taworld.StatusInfo]()) {
+		if k == "unknown_opcodes" || k == "last_seq" {
+			continue
+		}
+		if !have[k] {
+			t.Errorf("TA StatusInfo JSON key %q missing from ServeStatus", k)
+		}
+	}
 }
 
 // leafKinds maps each JSON key of a struct type to its field's kind.

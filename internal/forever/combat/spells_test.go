@@ -172,3 +172,82 @@ func writeTestUnlearnedCount(n uint32) []byte {
 	b.u32(n)
 	return b.done()
 }
+
+// writeTestSpellHistory writes SMSG_SEND_SPELL_HISTORY (SpellPackets.cpp:691-720).
+func writeTestSpellHistory(entries []SpellHistoryEntry) []byte {
+	b := &bb{}
+	b.u32(uint32(len(entries)))
+	for _, e := range entries {
+		b.u32(e.SpellID)
+		b.u32(e.ItemID)
+		b.u32(e.Category)
+		b.i32(e.RecoveryTime)
+		b.i32(e.CategoryRecoveryTime)
+		b.f32(e.ModRate)
+		b.bit(e.RecoveryStartOffset != nil)
+		b.bit(e.CategoryStartOffset != nil)
+		b.bit(e.OnHold)
+		b.flushBits()
+		if e.RecoveryStartOffset != nil {
+			b.u32(*e.RecoveryStartOffset)
+		}
+		if e.CategoryStartOffset != nil {
+			b.u32(*e.CategoryStartOffset)
+		}
+	}
+	return b.done()
+}
+
+func TestParseSpellHistory(t *testing.T) {
+	payload := writeTestSpellHistory([]SpellHistoryEntry{
+		{
+			SpellID:              2136,
+			ItemID:               0,
+			Category:             19,
+			RecoveryTime:         0,
+			CategoryRecoveryTime: 8000,
+			ModRate:              1,
+			CategoryStartOffset:  new(uint32(2500)),
+		},
+		{
+			SpellID:             1784,
+			RecoveryTime:        10000,
+			ModRate:             1,
+			RecoveryStartOffset: new(uint32(1200)),
+			OnHold:              true,
+		},
+	})
+	h, err := ParseSpellHistory(payload)
+	if err != nil {
+		t.Fatalf("ParseSpellHistory: %v", err)
+	}
+	if len(h.Entries) != 2 {
+		t.Fatalf("%d entries, want 2", len(h.Entries))
+	}
+	e0 := h.Entries[0]
+	if e0.SpellID != 2136 || e0.Category != 19 || e0.CategoryRecoveryTime != 8000 ||
+		e0.RecoveryStartOffset != nil || e0.CategoryStartOffset == nil || *e0.CategoryStartOffset != 2500 || e0.OnHold {
+		t.Fatalf("entry 0 = %+v", e0)
+	}
+	e1 := h.Entries[1]
+	if e1.SpellID != 1784 || e1.RecoveryTime != 10000 ||
+		e1.RecoveryStartOffset == nil || *e1.RecoveryStartOffset != 1200 || e1.CategoryStartOffset != nil || !e1.OnHold {
+		t.Fatalf("entry 1 = %+v", e1)
+	}
+}
+
+func TestParseSpellHistoryHostile(t *testing.T) {
+	good := writeTestSpellHistory([]SpellHistoryEntry{{SpellID: 2136, ModRate: 1}})
+	for name, payload := range map[string][]byte{
+		"count over the bound":  writeTestUnlearnedCount(4097),
+		"count absurd":          writeTestUnlearnedCount(0xFFFFFFFF),
+		"trailing byte":         append(append([]byte{}, good...), 0x00),
+		"cut inside an entry":   good[:len(good)-3],
+		"empty":                 nil,
+		"count without entries": writeTestUnlearnedCount(1),
+	} {
+		if _, err := ParseSpellHistory(payload); err == nil {
+			t.Errorf("%s: parsed without an error", name)
+		}
+	}
+}

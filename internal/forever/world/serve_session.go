@@ -454,26 +454,97 @@ func (s *session) serveLeaveGroup(ctx context.Context) error {
 	return s.waitPartyLeft(ctx, 10*time.Second)
 }
 
-// ServeCastState is the cast_state result: the current cast, the global cooldown and the combo points.
+// ServeGCD is the global cooldown block of cast_state.
+type ServeGCD struct {
+	Active      bool  `json:"active"`
+	RemainingMS int64 `json:"remaining_ms"`
+	TotalMS     int64 `json:"total_ms"`
+}
+
+// ServeLastCast is the most recent completed own cast.
+type ServeLastCast struct {
+	SpellID int32  `json:"spell_id"`
+	Name    string `json:"name,omitempty"`
+	AgoMS   int64  `json:"ago_ms"`
+}
+
+// ServeLastFailure is the most recent failed own cast.
+type ServeLastFailure struct {
+	SpellID    int32  `json:"spell_id"`
+	Name       string `json:"name,omitempty"`
+	ReasonName string `json:"reason_name"`
+	AgoMS      int64  `json:"ago_ms"`
+}
+
+// ServeCooldown is one active spell cooldown reported by cast_state.
+type ServeCooldown struct {
+	SpellID     int32  `json:"spell_id"`
+	Name        string `json:"name,omitempty"`
+	RemainingMS int64  `json:"remaining_ms"`
+	Category    uint16 `json:"category,omitempty"`
+}
+
+// ServeCastState is the cast_state result: the current cast, the global cooldown, history, combo points and active cooldowns.
 type ServeCastState struct {
-	Casting     bool   `json:"casting"`
-	SpellID     int32  `json:"spell_id,omitempty"`
-	CastID      GUID   `json:"cast_id,omitempty"`
-	Target      GUID   `json:"target,omitempty"`
-	RemainingMS int64  `json:"remaining_ms,omitempty"`
-	InCombat    bool   `json:"in_combat"`
-	Dead        bool   `json:"dead"`
-	Ghost       bool   `json:"ghost"`
-	Health      int64  `json:"health"`
-	MaxHealth   int64  `json:"max_health"`
-	Power       int32  `json:"power"`
-	MaxPower    int32  `json:"max_power"`
-	PowerType   uint8  `json:"power_type,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Casting     bool              `json:"casting"`
+	SpellID     int32             `json:"spell_id,omitempty"`
+	CastID      GUID              `json:"cast_id,omitempty"`
+	Target      GUID              `json:"target,omitempty"`
+	RemainingMS int64             `json:"remaining_ms,omitempty"`
+	InCombat    bool              `json:"in_combat"`
+	Dead        bool              `json:"dead"`
+	Ghost       bool              `json:"ghost"`
+	Health      int64             `json:"health"`
+	MaxHealth   int64             `json:"max_health"`
+	Power       int32             `json:"power"`
+	MaxPower    int32             `json:"max_power"`
+	PowerType   uint8             `json:"power_type,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	GCD         ServeGCD          `json:"gcd"`
+	GCDKnown    bool              `json:"gcd_known"`
+	LastCast    *ServeLastCast    `json:"last_cast,omitempty"`
+	LastFailure *ServeLastFailure `json:"last_failure,omitempty"`
+	Failures    uint64            `json:"failures"`
+	ComboPoints uint8             `json:"combo_points"`
+	ComboTarget GUID              `json:"combo_target,omitzero"`
+	Cooldowns   []ServeCooldown   `json:"cooldowns"`
 }
 
 func (s *session) serveCastState() ServeCastState {
-	out := ServeCastState{}
+	now := s.Now()
+	total, left, known := s.gcdState(now)
+	pts, ctarget := s.comboPoints()
+	out := ServeCastState{
+		GCD: ServeGCD{
+			Active:      left > 0,
+			RemainingMS: left.Milliseconds(),
+			TotalMS:     total.Milliseconds(),
+		},
+		GCDKnown:    known,
+		ComboPoints: pts,
+		Cooldowns:   s.activeCooldowns(now),
+	}
+	if pts > 0 {
+		out.ComboTarget = GUID(ctarget)
+	}
+	if s.spellSt != nil {
+		out.Failures = s.spellSt.failures
+		if lc := s.spellSt.lastCast; lc != nil {
+			out.LastCast = &ServeLastCast{
+				SpellID: lc.spell,
+				Name:    s.spellName(lc.spell),
+				AgoMS:   now.Sub(lc.at).Milliseconds(),
+			}
+		}
+		if lf := s.spellSt.lastFailure; lf != nil {
+			out.LastFailure = &ServeLastFailure{
+				SpellID:    lf.spell,
+				Name:       s.spellName(lf.spell),
+				ReasonName: combat.SpellFailureName(lf.reason),
+				AgoMS:      now.Sub(lf.at).Milliseconds(),
+			}
+		}
+	}
 	self := s.selfOrMover()
 	if s.world == nil {
 		return out
@@ -487,8 +558,8 @@ func (s *session) serveCastState() ServeCastState {
 	if cs.Cast != nil {
 		out.Casting = true
 		out.SpellID, out.CastID, out.Target = cs.Cast.SpellID, GUID(cs.Cast.CastID), GUID(cs.Cast.Target)
-		if left := cs.Cast.Ends().Sub(s.Now()); left > 0 {
-			out.RemainingMS = left.Milliseconds()
+		if rem := cs.Cast.Ends().Sub(now); rem > 0 {
+			out.RemainingMS = rem.Milliseconds()
 		}
 	}
 	return out

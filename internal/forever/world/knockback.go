@@ -327,6 +327,7 @@ func (s *session) flightTick(now time.Time) error {
 	if air < 0 {
 		air = 0
 	}
+	s.zUnknown = true
 	s.landing = &selfLanding{
 		at: now, deadline: now.Add(knockConfirmFor),
 		simX: f.landX, simY: f.landY, simZ: f.landZ,
@@ -340,6 +341,7 @@ func (s *session) flightTick(now time.Time) error {
 // statedSelfPosition is the server stating where the mover is: a teleport, a movement update or a create block for it.
 // It settles a pending self landing at that position, unless the landing's bound has passed: then the simulation stands.
 func (s *session) statedSelfPosition(x, y, z float32, now time.Time) {
+	s.zUnknown = false
 	if s.landing == nil {
 		return
 	}
@@ -359,6 +361,7 @@ func (s *session) finishSelfLanding(stated bool, x, y, z float32) {
 		return
 	}
 	s.landing = nil
+	s.zUnknown = !stated
 	if !stated {
 		x, y, z = l.simX, l.simY, l.simZ
 	}

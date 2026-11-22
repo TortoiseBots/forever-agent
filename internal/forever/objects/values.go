@@ -174,6 +174,7 @@ type Fields struct {
 	Charm, Summon, CharmedBy, SummonedBy, CreatedBy, Target       bool
 	Race, Class, Gender, CreatureType, DisplayPower               bool
 	Health, MaxHealth, Power, MaxPower, Level                     bool
+	powerMask, maxPowerMask                                       [10]bool
 	FactionTemplate, Flags, Flags2, Flags3, Flags4                bool
 	BoundingRadius, CombatReach, DisplayScale                     bool
 	StandState, VisFlags, AnimTier                                bool
@@ -315,6 +316,8 @@ func (f *Fields) all() {
 		Charm: true, Summon: true, CharmedBy: true, SummonedBy: true, CreatedBy: true, Target: true,
 		Race: true, Class: true, Gender: true, CreatureType: true, DisplayPower: true,
 		Health: true, MaxHealth: true, Power: true, MaxPower: true, Level: true,
+		powerMask:    [10]bool{true, true, true, true, true, true, true, true, true, true},
+		maxPowerMask: [10]bool{true, true, true, true, true, true, true, true, true, true},
 		FactionTemplate: true, Flags: true, Flags2: true, Flags3: true, Flags4: true,
 		BoundingRadius: true, CombatReach: true, DisplayScale: true,
 		StandState: true, VisFlags: true, AnimTier: true,
@@ -1061,10 +1064,12 @@ func (i *Info) readUnitUpdate(b *wire.Buffer) error {
 			if m.present(140 + n) {
 				i.Power[n] = b.ReadI32()
 				i.f.Power = true
+				i.f.powerMask[n] = true
 			}
 			if m.present(150 + n) {
 				i.MaxPower[n] = b.ReadI32()
 				i.f.MaxPower = true
+				i.f.maxPowerMask[n] = true
 			}
 			if m.present(160 + n) {
 				b.Skip(4) // PowerRegenFlatModifier

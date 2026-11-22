@@ -419,6 +419,7 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.mapChg.report = true
 	s.mapChg.last = MapChangeRow{FromMap: from, ToMap: nw.MapID, Reason: nw.Reason, Position: pos}
 
+	s.zUnknown = false
 	s.eventSession("map_change", map[string]any{"from": from, "to": nw.MapID, "reason": nw.Reason})
 	s.report.MapID = nw.MapID
 	s.report.Position = pos
@@ -440,6 +441,8 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.activeMoverDone = false
 	if err := s.sendRealm(wire.CMSGWorldPortResponse, objects.BuildWorldPortResponse()); err != nil {
 		s.opts.logf("world: CMSG_WORLD_PORT_RESPONSE: %v", err)
+	} else if nw.Reason != objects.NewWorldReasonSeamless {
+		s.teleportSeq++
 	}
 	// The resume token precedes the first new-map packet on the instance connection (MovementHandler.cpp:254-260),
 	// so once it was handled every packet the gate still holds is new-map content and may be applied now that the
