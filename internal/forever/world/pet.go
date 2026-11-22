@@ -352,20 +352,3 @@ func (s *session) petSpell(id uint32, slot int, btn uint32) ServePetSpell {
 		Autocast: typ == pet.ActEnabled, Passive: typ == pet.ActPassive,
 	}
 }
-
-// cachedSpellName is the server's name for a spell when its SpellName record is already cached: no fetch happens
-// here, so a pet read never waits on the server.
-func (s *session) cachedSpellName(id uint32) string {
-	if id == 0 {
-		return ""
-	}
-	data, found, ok := s.dbCache().Get(tables.TableSpellName, id)
-	if !ok || !found {
-		return ""
-	}
-	name, err := tables.ParseSpellName(data, id)
-	if err != nil {
-		return ""
-	}
-	return name.Name
-}
