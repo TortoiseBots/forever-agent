@@ -35,8 +35,8 @@ var etRole = map[string]string{
 }
 
 var etEdgeIDs = []string{"dps-rogue-low-energy", "dps-rogue-thistle-tea", "priest-holy-low-mana-drinks",
-	"priest-holy-low-mana-fight", "priest-holy-low-mana-potion", "tank-warrior-two-bot-tanks",
-	"tank-warrior-zero-rage-opening"}
+	"priest-holy-low-mana-fight", "priest-holy-low-mana-innervate", "priest-holy-low-mana-potion",
+	"tank-warrior-two-bot-tanks", "tank-warrior-zero-rage-opening"}
 
 var etExpect = map[string]string{
 	"TNK-WAR-2T-NO-STEAL": "PASS", "TNK-WAR-2T-OTHER-HELD": "PASS", "TNK-WAR-2T-FOUGHT": "PASS",
@@ -44,7 +44,9 @@ var etExpect = map[string]string{
 	"PRI-LOWMANA-DRINK": "PASS", "PRI-LOWMANA-DRINK-UPTIME": "PASS",
 	"PRI-LOWMANA-NO-NUKE": "PASS", "PRI-LOWMANA-HEALS": "?",
 	"PRI-LOWMANA-POTION": "PASS", "PRI-LOWMANA-POTION-HEALS": "PASS",
-	"TNK-WAR-RAGE0-BLOODRAGE": "?", "TNK-WAR-RAGE0-ENGAGE": "PASS", "TNK-WAR-RAGE0-EMPTY": "PASS",
+	"DRU-BAL-INNERVATE-HEALER": "PASS", "DRU-BAL-INNERVATE-NOT-PLAYER": "PASS",
+	"DRU-BAL-INNERVATE-PRECOND": "?",
+	"TNK-WAR-RAGE0-BLOODRAGE":   "?", "TNK-WAR-RAGE0-ENGAGE": "PASS", "TNK-WAR-RAGE0-EMPTY": "PASS",
 	"TNK-WAR-RAGE0-STANCE":     "PASS",
 	"DPS-ROG-LOWENERGY-SWINGS": "PASS", "DPS-ROG-LOWENERGY-ACTIVE": "PASS", "DPS-ROG-LOWENERGY-STANCE": "PASS",
 	"DPS-ROG-TEA": "?", "DPS-ROG-TEA-ACTIVE": "PASS", "DPS-ROG-TEA-STANCE": "PASS",
@@ -722,6 +724,65 @@ func TestLowManaPotionTest_HealsAfterThePotion(t *testing.T) {
 	}
 	assertEqual(t, "PASS", etVerdict(t, tid, "PRI-LOWMANA-POTION-HEALS", heals, etSeries(200, etSeriesOpts{}), 200, nil))
 	assertEqual(t, "FAIL", etVerdict(t, tid, "PRI-LOWMANA-POTION-HEALS", heals[:1], etSeries(200, etSeriesOpts{}), 200, nil))
+}
+
+// ---- innervate on the low-mana healer ---------------------------------------
+
+// TestEdgeInnervateTrialRules pins the staging (the low-mana priest is `bot`, the balance druid an extra), the three
+// rule ids and every rule's target filter and pass line. Round 1 covers the behaviour of today only, so the file
+// carries no variants.
+func TestEdgeInnervateTrialRules(t *testing.T) {
+	const tid = "priest-holy-low-mana-innervate"
+	trial := etLoad(t, tid)
+	if errs := scenario.Validate(trial); len(errs) != 0 {
+		t.Fatalf("%s: %v", tid, errs)
+	}
+	bot := obj(t, trial["bot"])
+	assertEqual(t, "priest", pyjson.Str(bot["class"]))
+	assertEqual(t, "holy", pyjson.Str(bot["spec"]))
+	assertEqual(t, "healer", pyjson.Str(bot["role"]))
+	if got := num(t, bot["mana_pct"]); got != 15 {
+		t.Fatalf("%s: bot mana_pct %v, want 15 (under the 25 percent Innervate threshold)", tid, got)
+	}
+	extras := list(t, trial["extra_bots"])
+	if len(extras) != 1 {
+		t.Fatalf("%s: %d extra_bots, want 1", tid, len(extras))
+	}
+	druid := obj(t, extras[0])
+	assertEqual(t, "druid", pyjson.Str(druid["class"]))
+	assertEqual(t, "balance", pyjson.Str(druid["spec"]))
+	assertEqual(t, "dps", pyjson.Str(druid["role"]))
+	if _, ok := trial["variants"]; ok {
+		t.Fatalf("%s: round 1 carries no variants", tid)
+	}
+
+	var ids []any
+	for _, ruleVal := range etRulesOf(t, trial) {
+		ids = append(ids, pyjson.Str(obj(t, ruleVal)["id"]))
+	}
+	assertEqual(t, []any{"DRU-BAL-INNERVATE-HEALER", "DRU-BAL-INNERVATE-NOT-PLAYER", "DRU-BAL-INNERVATE-PRECOND"}, ids)
+
+	for _, want := range []struct{ id, metric, src, dst, passIf string }{
+		{"DRU-BAL-INNERVATE-HEALER", "first", "$extra1", "$bot", "<= 20"},
+		{"DRU-BAL-INNERVATE-NOT-PLAYER", "count", "$extra1", "$player", "== 0"},
+	} {
+		rule := etRuleByID(t, trial, want.id)
+		check := obj(t, rule["check"])
+		where := obj(t, check["where"])
+		assertEqual(t, want.metric, pyjson.Str(check["metric"]))
+		assertEqual(t, "cast", pyjson.Str(where["kind"]))
+		assertEqual(t, want.src, pyjson.Str(where["src"]))
+		assertEqual(t, want.dst, pyjson.Str(where["dst"]))
+		assertEqual(t, "Innervate", pyjson.Str(where["spell"]))
+		assertEqual(t, want.passIf, pyjson.Str(rule["pass_if"]))
+	}
+
+	// the precondition counts the priest's own casts: a fight where it never acts has nothing to score
+	precond := obj(t, etRuleByID(t, trial, "DRU-BAL-INNERVATE-PRECOND")["check"])
+	assertEqual(t, "count", pyjson.Str(precond["metric"]))
+	assertEqual(t, "cast", pyjson.Str(obj(t, precond["where"])["kind"]))
+	assertEqual(t, "$bot", pyjson.Str(obj(t, precond["where"])["src"]))
+	assertEqual(t, ">= 3", pyjson.Str(etRuleByID(t, trial, "DRU-BAL-INNERVATE-PRECOND")["pass_if"]))
 }
 
 // ---- potion cooldown across reps --------------------------------------------
