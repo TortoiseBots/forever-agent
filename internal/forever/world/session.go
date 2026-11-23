@@ -158,12 +158,14 @@ type Options struct {
 	AddonInvite     string
 	AddonAcceptFrom string
 	// Round TBM: forever tbm-check. TBMCheck runs the TBM client's hello and the requested commands through the
-	// session's add-on and chat paths. TBMTransport is auto, addon or chat; TBMCommands are run in order after the
-	// hello; TBMTimeout bounds each hello and command.
+	// session's add-on and chat paths. TBMTransport is auto, addon, addon-self or chat; TBMCommands are run in
+	// order after the hello; TBMTimeout bounds each hello and command; TBMRaw appends every accepted message to
+	// that file as case recv records for a live capture.
 	TBMCheck     bool
 	TBMTransport string
 	TBMCommands  []string
 	TBMTimeout   time.Duration
+	TBMRaw       string
 	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
 	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
 	// collector's defaults for every command of the run.

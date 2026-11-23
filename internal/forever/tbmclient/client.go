@@ -1,6 +1,7 @@
 // Package tbmclient drives the TBM add-on protocol over a Forever session:
-// the hello on chat, the switch to the add-on transport on party, and one
-// command at a time with the 350 ms send gap the module expects.
+// the hello as an add-on whisper to self while the transport is unknown, the
+// switch to PARTY once the module answers party, and one command at a time
+// with the 350 ms send gap the module expects.
 package tbmclient
 
 import (
@@ -14,8 +15,8 @@ import (
 )
 
 // Conn is the session the client speaks through: prefix registration, the
-// add-on send, a whisper to self for the chat transport, and the next
-// delivered message.
+// add-on send (PARTY), the add-on whisper to self, a whisper to self for the
+// chat transport, and the next delivered message.
 type Conn interface {
 	RegisterAddonPrefixes(prefixes ...string) error
 	SendAddon(ch addonmsg.Channel, target, prefix, text string, logged bool) error
@@ -31,27 +32,33 @@ var ErrTimeout = errors.New("tbmclient: timed out")
 // sendGap is the gap between sends, the module's SEND_DELAY (spec D3).
 const sendGap = 350 * time.Millisecond
 
-// Client speaks TBM over one session. The transport starts as chat; the
-// hello switches it to add-on when the module answers party.
+// Client speaks TBM over one session. The transport starts as addon-self;
+// the hello switches it to add-on when the module answers party.
 type Client struct {
 	conn       Conn
 	transport  tbmproto.Transport
+	forced     bool
 	registered bool
 	lastSend   time.Time
 }
 
-// New returns a client on the chat transport.
+// New returns a client on the addon-self transport: an add-on whisper to self
+// is the way to reach the module while the transport is unknown.
 func New(conn Conn) *Client {
-	return &Client{conn: conn, transport: tbmproto.TransportChat}
+	return &Client{conn: conn, transport: tbmproto.TransportAddonSelf}
 }
 
 // Transport reports the transport commands go out on.
 func (c *Client) Transport() tbmproto.Transport { return c.transport }
 
-// SetTransport forces the transport commands go out on. The hello normally
-// switches it to add-on when the module answers party; a caller can also set
-// it before the first send.
-func (c *Client) SetTransport(t tbmproto.Transport) { c.transport = t }
+// SetTransport forces the transport commands go out on, for a caller that
+// pinned one; the hello then leaves it alone instead of following
+// TRANSPORT. Without it the hello decides: party sends on add-on, none keeps
+// addon-self.
+func (c *Client) SetTransport(t tbmproto.Transport) {
+	c.transport = t
+	c.forced = true
+}
 
 // send registers the prefix once and encodes the command on the transport.
 // It waits the send gap after the previous send.
@@ -77,6 +84,9 @@ func (c *Client) send(ctx context.Context, t tbmproto.Transport, command string)
 	}
 	c.lastSend = time.Now()
 	if f.Kind == "addon" {
+		if f.Channel == "WHISPER_SELF" {
+			return c.conn.SendAddonSelf(f.Prefix, f.Text)
+		}
 		return c.conn.SendAddon(addonmsg.Party, "", f.Prefix, f.Text, false)
 	}
 	return c.conn.WhisperSelf(f.Text)
@@ -109,23 +119,27 @@ func (c *Client) Hello(ctx context.Context, timeout time.Duration) (tbmproto.Hel
 			if err := h.Check(); err != nil {
 				return h, err
 			}
-			if h.Transport == "party" {
-				c.transport = tbmproto.TransportAddon
+			if !c.forced {
+				switch h.Transport {
+				case "party":
+					c.transport = tbmproto.TransportAddon
+				case "none":
+					c.transport = tbmproto.TransportAddonSelf
+				}
 			}
 			return h, nil
 		}
 	}
 }
 
-// Do sends one command on the current transport and reads until the ACK or
-// ERR whose intent is the command's action intent, a stream END, or the
-// timeout.
+// Do sends one command on the current transport and reads until the command
+// is answered: roster and list end at the TRANSPORT line, alts at ALTSUM_END,
+// every other command at the ACK or ERR whose intent is its own or "-".
 func (c *Client) Do(ctx context.Context, command string, timeout time.Duration) (tbmproto.Result, error) {
 	if err := c.send(ctx, c.transport, command); err != nil {
 		return tbmproto.Result{}, err
 	}
 	r := tbmproto.NewReader()
-	want, wantAck := ackIntent(command)
 	deadline := time.Now().Add(timeout)
 	for {
 		if time.Now().After(deadline) {
@@ -144,52 +158,66 @@ func (c *Client) Do(ctx context.Context, command string, timeout time.Duration) 
 			return r.Result(), err
 		}
 		r.Feed(in)
-		res := r.Result()
-		if wantAck {
-			for _, a := range res.Acks {
-				if a.Intent == want {
-					r.Finish()
-					return r.Result(), nil
-				}
-			}
-			for _, e := range res.Errs {
-				if e.Intent == want {
-					r.Finish()
-					return r.Result(), nil
-				}
-			}
-		}
-		if streamEnded(in) {
+		if commandDone(in, command, r.Result()) {
 			r.Finish()
 			return r.Result(), nil
 		}
 	}
 }
 
-// ackIntent names the intent a command's ACK or ERR carries: "action <intent>"
-// answers with that intent; every other command has no matching intent.
-func ackIntent(command string) (string, bool) {
+// commandIntent names the intent a command's ACK or ERR carries: "action
+// <intent>" answers with that intent; every other command with its first word.
+func commandIntent(command string) string {
 	fields := strings.Fields(command)
 	if len(fields) >= 2 && fields[0] == "action" {
-		return fields[1], true
+		return fields[1]
 	}
-	return "", false
+	if len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
 }
 
-// streamEnded reports whether a delivered message closes a stream.
-func streamEnded(in tbmproto.Incoming) bool {
+// commandDone reports whether the last message answers the command.
+func commandDone(in tbmproto.Incoming, command string, res tbmproto.Result) bool {
+	first := ""
+	if fields := strings.Fields(command); len(fields) > 0 {
+		first = fields[0]
+	}
+	switch first {
+	case "roster", "list":
+		return res.Hello.Complete
+	case "alts":
+		return hasLine(in, "ALTSUM_END")
+	}
+	want := commandIntent(command)
+	for _, a := range res.Acks {
+		if a.Intent == want || a.Intent == "-" {
+			return true
+		}
+	}
+	for _, e := range res.Errs {
+		if e.Intent == want || e.Intent == "-" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLine reports whether a delivered message carries a TBM line of type typ.
+func hasLine(in tbmproto.Incoming, typ string) bool {
 	if in.Kind == "addon" && in.Prefix != tbmproto.Prefix {
 		return false
 	}
 	for _, line := range strings.Split(in.Text, "\n") {
-		if !strings.HasPrefix(line, tbmproto.LinePrefix) {
+		rest, ok := strings.CutPrefix(line, tbmproto.LinePrefix)
+		if !ok {
 			continue
 		}
-		typ := strings.TrimPrefix(line, tbmproto.LinePrefix)
-		if i := strings.Index(typ, "|"); i >= 0 {
-			typ = typ[:i]
+		if i := strings.Index(rest, "|"); i >= 0 {
+			rest = rest[:i]
 		}
-		if strings.HasSuffix(typ, "_END") {
+		if rest == typ {
 			return true
 		}
 	}
