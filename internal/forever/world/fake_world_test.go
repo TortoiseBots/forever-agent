@@ -313,6 +313,10 @@ type fakeServer struct {
 	// serveCreatureDead sends a zero-health update for the fixture creature right after its create block (#99: the
 	// corpse gm_respawn acts on).
 	serveCreatureDead bool
+	// serveCreatureInCombat sends the fixture creature's UNIT_FLAG_IN_COMBAT right after its create block (#99:
+	// gm_evade's before state); serveEvadeClears answers `.npc evade` with the flag cleared, as the core's evade does.
+	serveCreatureInCombat bool
+	serveEvadeClears      bool
 	// serveSwingMelee answers a swing with one attacker-state update: an on-demand melee row for the event log's
 	// order test, where the row must arrive after the chat and the GM answer.
 	serveSwingMelee bool

@@ -7,7 +7,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -86,6 +88,41 @@ func TestMountItemServerRefusals(t *testing.T) {
 	m, err = f.s.serveMount(context.Background(), serveMountParams{Entry: 118, Spell: 5784})
 	if err == nil || !strings.Contains(err.Error(), "SMSG_MOUNT_RESULT 7") || m.Mounted {
 		t.Fatalf("a refused mount answered %+v, %v", m, err)
+	}
+}
+
+// TestMountItemDroppedUseIsNamed is the #99 live failure: the core drops a use whose spell is not one of the item's
+// on-use spells (Player::CastItemUseSpell, Player.cpp:9726-9744) without any packet, so the call used to end in "no
+// mount display" with nothing to say why. With no spell start, no cast failure and no refusal the error names it.
+func TestMountItemDroppedUseIsNamed(t *testing.T) {
+	old := mountWait
+	mountWait = 300 * time.Millisecond
+	defer func() { mountWait = old }()
+	f := newItemWorld(t)
+	m, err := f.s.serveMount(context.Background(), serveMountParams{Entry: 118, Spell: 6653})
+	if err == nil || m.Mounted || !strings.Contains(err.Error(), "never started spell 6653") || !strings.Contains(err.Error(), "not item 118's spell") {
+		t.Fatalf("a dropped use answered %+v, %v", m, err)
+	}
+	if got := f.sentCount(wire.CMSGUseItem); got != 1 {
+		t.Fatalf("%d use packets, want exactly one", got)
+	}
+}
+
+// TestMountItemStartedButNoDisplay: a spell the server did start is not called dropped.
+func TestMountItemStartedButNoDisplay(t *testing.T) {
+	old := mountWait
+	mountWait = 300 * time.Millisecond
+	defer func() { mountWait = old }()
+	f := newItemWorld(t)
+	f.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core == wire.CMSGUseItem {
+			castID := wire.GUID{Low: 0x5001, High: 0x0800000000000000}
+			f.server(wire.SMSGSpellStart, buildSpellStart(itemSelf, itemSelf, castID, 5784, 1500, combat.SpellTarget{Unit: itemSelf}))
+		}
+	}
+	m, err := f.s.serveMount(context.Background(), serveMountParams{Entry: 118, Spell: 5784})
+	if err == nil || m.Mounted || strings.Contains(err.Error(), "never started") || !strings.Contains(err.Error(), "spell 5784 started") {
+		t.Fatalf("a started spell answered %+v, %v", m, err)
 	}
 }
 

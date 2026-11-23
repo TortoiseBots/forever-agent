@@ -239,6 +239,55 @@ func TestServeGMEvadeSelectsThenEvades(t *testing.T) {
 	f.wait(t)
 }
 
+// gm_evade reports what the server did, not only that the line went out (#99: it used to answer ok whatever happened).
+func TestServeGMEvadeReportsTheEffect(t *testing.T) {
+	old := gmEvadeSettle
+	gmEvadeSettle = 400 * time.Millisecond
+	defer func() { gmEvadeSettle = old }()
+	for _, tc := range []struct {
+		name    string
+		tune    func(*fakeServer)
+		want    string // the effect, or "" for an error
+		wantErr string
+	}{
+		{"left combat", func(f *fakeServer) { f.serveCreatureInCombat, f.serveEvadeClears = true, true }, "left_combat", ""},
+		{"idle creature", nil, "none", ""},
+		{"still in combat", func(f *fakeServer) { f.serveCreatureInCombat = true }, "", "still in combat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, a, creature, _ := gmHands(t, tc.tune)
+			defer f.close()
+			a.mustCall(t, "trial_units", map[string]any{"guids": []GUID{creature.GUID}})
+			if f.serveCreatureInCombat {
+				// The combat flag arrives right behind the create block: wait until the client shows it.
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					var u ServeUnit
+					json.Unmarshal(a.mustCall(t, "unit", map[string]any{"guid": creature.GUID}), &u)
+					if u.InCombat {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("the creature never showed in combat")
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+			}
+			if tc.wantErr != "" {
+				a.mustFail(t, "gm_evade", map[string]any{"guid": creature.GUID}, -32003, tc.wantErr)
+			} else {
+				var out ServeGMEvade
+				json.Unmarshal(a.mustCall(t, "gm_evade", map[string]any{"guid": creature.GUID}), &out)
+				if out.Effect != tc.want || out.Sent != ".npc evade" || out.InCombatBefore != (tc.want == "left_combat") || out.InCombatAfter {
+					t.Fatalf("gm_evade answered %+v, want effect %q", out, tc.want)
+				}
+			}
+			a.stop(t)
+			f.wait(t)
+		})
+	}
+}
+
 func TestServeGMRespawnOnlyForADeadCreature(t *testing.T) {
 	// Alive: refused before anything is sent (the bare form would respawn every dead creature around).
 	f, a, creature, _ := gmHands(t, nil)

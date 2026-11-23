@@ -43,5 +43,10 @@ func (s *session) serveMountItem(ctx context.Context, p serveMountParams) (Serve
 	case refused:
 		return out, fmt.Errorf("mount: item %d was used but the server refused the mount (SMSG_MOUNT_RESULT %d)", p.Entry, result)
 	}
-	return out, fmt.Errorf("mount: item %d was used once and no mount display came within %s (is it a mount item for spell %d?)", p.Entry, mountWait, p.Spell)
+	if !s.itemCast.begun && !s.itemCast.went && !s.itemCast.refused {
+		// No SMSG_SPELL_START, no cast failure, no inventory refusal: the server dropped the use without a word.
+		// CastItemUseSpell (Player.cpp:9726-9744) does that for a spell that is not an on-use effect of the item.
+		return out, fmt.Errorf("mount: item %d was used but the server never started spell %d and refused nothing: it drops a use whose spell is not one of that item's on-use spells without a reply (Player::CastItemUseSpell), so spell %d is probably not item %d's spell", p.Entry, p.Spell, p.Spell, p.Entry)
+	}
+	return out, fmt.Errorf("mount: item %d was used once and no mount display came within %s (the spell %d started; is it a mount spell?)", p.Entry, mountWait, p.Spell)
 }

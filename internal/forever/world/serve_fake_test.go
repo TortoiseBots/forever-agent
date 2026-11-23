@@ -74,6 +74,9 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	if f.serveCreatureDead {
 		c.writeFrame(fakeSMSGUpdateObject, buildHealthValues(target, 0))
 	}
+	if f.serveCreatureInCombat {
+		c.writeFrame(fakeSMSGUpdateObject, buildFlagsValues(target, 0x00080000))
+	}
 	if f.serveLeaderName != "" {
 		// The fixture creature is entry 1: name it, so a follow can resolve it as the leader.
 		c.writeFrame(table.TranslateServerCore(wire.SMSGCreatureQueryResponse), fakeCreatureNamed([]uint32{1}, f.serveLeaderName))
@@ -274,6 +277,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 					}
 					continue
 				}
+			}
+			if said == ".npc evade" && f.serveEvadeClears {
+				c.writeFrame(fakeSMSGUpdateObject, buildFlagsValues(target, 0))
+				continue
 			}
 			if class, _ := classifyGMLine(said); class != gmReplies {
 				// The core prints nothing for a working .aura, .die, .respawn, ...: the fake does the same.
