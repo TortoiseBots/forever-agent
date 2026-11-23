@@ -383,22 +383,25 @@ func (s *session) serveInvite(ctx context.Context, name string) error {
 // serveAcceptInvite answers the pending invite and waits under the caller's context for the server's answer: a
 // roster that names the inviter (the model's transition check also refuses a roster whose leader is not the
 // inviter), or a refusal (a failed party command result). Success is returned only once membership is confirmed; a
-// server that answers nothing is a timeout error.
-func (s *session) serveAcceptInvite(ctx context.Context) error {
+// server that answers nothing is a timeout error. The result names the inviter the held invite carried.
+func (s *session) serveAcceptInvite(ctx context.Context) (ServeAcceptInviteResult, error) {
 	if s.party.Invite == nil {
-		return errors.New("no pending group invite")
+		return ServeAcceptInviteResult{}, errors.New("no pending group invite")
 	}
 	inv := *s.party.Invite
 	if !inv.CanAccept {
-		return errors.New("the pending group invite cannot be accepted")
+		return ServeAcceptInviteResult{}, errors.New("the pending group invite cannot be accepted")
 	}
 	resultsBefore := s.party.CommandResults
 	badBefore := s.party.InvalidRosters + s.party.UnexpectedRosters
 	if err := s.Send(wire.CMSGPartyInviteResponse, party.BuildInviteResponse(true)); err != nil {
-		return err
+		return ServeAcceptInviteResult{}, err
 	}
 	s.party.AcceptInvite()
-	return s.waitAccepted(ctx, serveAcceptInviteWait, badBefore, resultsBefore, inv)
+	if err := s.waitAccepted(ctx, serveAcceptInviteWait, badBefore, resultsBefore, inv); err != nil {
+		return ServeAcceptInviteResult{}, err
+	}
+	return ServeAcceptInviteResult{Inviter: chat.SanitiseName(inv.InviterName), InviterGUID: GUID(inv.InviterGUID)}, nil
 }
 
 // serveAcceptInviteWait bounds the wait for the answer to an accepted invite. A variable so the tests shorten it.

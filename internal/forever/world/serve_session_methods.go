@@ -57,6 +57,13 @@ type ServePartyInfo struct {
 	Marks []ServeMark `json:"marks,omitempty"`
 }
 
+// ServeAcceptInviteResult is accept_invite's result: the inviter the held invite named, so a scenario can tell who
+// offered the group (the roster's leader may be another member).
+type ServeAcceptInviteResult struct {
+	Inviter     string `json:"inviter"`
+	InviterGUID GUID   `json:"inviter_guid"`
+}
+
 // ServeMark is one raid target icon: the icon's name (star, circle, diamond, triangle, moon, square, cross, skull)
 // and the unit it is on. It is the mark method's result and one row of marks and of the party method.
 type ServeMark struct {
@@ -619,8 +626,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("invite", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {
 		return serveEmpty{}, s.serveInvite(ctx, p.Name)
 	}))
-	srv.Register("accept_invite", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
-		return serveEmpty{}, s.serveAcceptInvite(ctx)
+	srv.Register("accept_invite", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (ServeAcceptInviteResult, error) {
+		return s.serveAcceptInvite(ctx)
 	}))
 	srv.Register("leave_group", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.serveLeaveGroup(ctx)

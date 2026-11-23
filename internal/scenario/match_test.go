@@ -30,6 +30,23 @@ func TestMatcherReadsTheRawSystemLine(t *testing.T) {
 	}
 }
 
+// TestMatcherReadsThePartyState pins that a party row's packet state is matchable: a live invite names the bot in
+// its text and says "invite" only in data, and the quest scenario has no bot name to match.
+func TestMatcherReadsThePartyState(t *testing.T) {
+	m, err := Matcher{Kind: "party", Match: "invite"}.compile(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite := events.Event{Kind: events.KindParty, Source: "Botname", Text: "Botname", Data: map[string]any{"state": "invite"}}
+	if !m.matches(invite) {
+		t.Fatalf("line %q does not match", eventLine(invite))
+	}
+	roster := events.Event{Kind: events.KindParty, Text: "Botname", Data: map[string]any{"state": "roster"}}
+	if m.matches(roster) {
+		t.Fatalf("line %q matches an invite", eventLine(roster))
+	}
+}
+
 // TestMatcherAddonPrefixAndChannel pins addon matching on prefix and channel.
 func TestMatcherAddonPrefixAndChannel(t *testing.T) {
 	e := addonEvent("S2C_GROUPS_LIST_UPDATE;start", "TW_LFG", "guild")

@@ -1,0 +1,179 @@
+{
+  "scenario": "forever-quest-group-offer",
+  "description": "One Forever serve slot, ungrouped: the live runner puts quest QUEST_ID in A's quest log beforehand and the first step records the log. A walks to the quest target (TARGET_X/Y/Z), attacks a MOB_ENTRY mob and waits up to WAIT_S for a pool bot on the same quest to invite it. A accepts (the result names the inviter), proves party membership, then works two more MOB_ENTRY mobs: the closing combat_near over 40 s must count at least one party hit, so the bot fights the same target. A leaves the group at the end. Set QUEST_ID, TARGET_X/Y/Z and MOB_ENTRY before the run; the file declares no default for them and `scenario check` refuses to load without every one.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    }
+  },
+  "vars": {
+    "QUEST_ID": "",
+    "TARGET_X": "",
+    "TARGET_Y": "",
+    "TARGET_Z": "",
+    "MOB_ENTRY": "",
+    "WAIT_S": "120"
+  },
+  "settle_s": 1,
+  "timeout_s": 15,
+  "on_fail": "continue",
+  "max_minutes": 10,
+  "steps": [
+    {
+      "do": "section",
+      "title": "A's quest log names the target quest"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "quest_log",
+      "record_result": true,
+      "note": "the runner accepted QUEST_ID before the run; the recorded log shows it"
+    },
+    {
+      "do": "section",
+      "title": "A stands on the quest target and attacks a MOB_ENTRY mob"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "walk_to",
+      "params": {
+        "x": "${TARGET_X}",
+        "y": "${TARGET_Y}",
+        "z": "${TARGET_Z}"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "note": "units is nearest first, so 0 is the nearest MOB_ENTRY within 60 yd",
+      "params": {
+        "entry": "${MOB_ENTRY}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "MOB_GUID": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${MOB_GUID}",
+        "for_ms": 18000
+      }
+    },
+    {
+      "do": "section",
+      "title": "a bot on the same quest invites A"
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "kind": "party",
+      "match": "invite",
+      "timeout_s": "${WAIT_S}",
+      "note": "no invite means no bot on this quest met A within WAIT_S (the baseline)"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "accept_invite",
+      "record_result": true,
+      "note": "the result names the inviter (inviter, inviter_guid)"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "name": "A is in the group",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "section",
+      "title": "A works two more MOB_ENTRY mobs while the bot fights with it"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "entry": "${MOB_ENTRY}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "MOB_GUID": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${MOB_GUID}",
+        "for_ms": 15000
+      }
+    },
+    {
+      "do": "sleep",
+      "seconds": 15
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "entry": "${MOB_ENTRY}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "MOB_GUID": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${MOB_GUID}",
+        "for_ms": 15000
+      }
+    },
+    {
+      "do": "sleep",
+      "seconds": 15
+    },
+    {
+      "do": "section",
+      "title": "a party member hit A's target in the last 40 s"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "name": "the bot fights A's target",
+      "method": "combat_near",
+      "params": {
+        "who": "party",
+        "window_s": 40
+      },
+      "path": "count",
+      "match": "^[1-9][0-9]*$",
+      "note": "at least one hit from a group member, never another player's"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "leave_group",
+      "ignore_error": true
+    }
+  ]
+}

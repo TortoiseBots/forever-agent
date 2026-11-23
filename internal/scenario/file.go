@@ -123,6 +123,7 @@ type Step struct {
 	Method       string            `json:"-"`
 	Params       map[string]any    `json:"-"`
 	TimeoutS     float64           `json:"-"`
+	TimeoutTmpl  string            `json:"-"` // expect/wait timeout_s written as a ${var} template, resolved at load
 	IgnoreError  bool              `json:"-"`
 	Save         map[string]string `json:"-"`
 	RecordResult bool              `json:"-"`
@@ -280,6 +281,18 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 	for k, v := range vars {
 		f.Vars[k] = v
 	}
+	// A var the file leaves empty is required: the live runner sets it with --var before the load, so a bare
+	// `scenario check` names what a run needs instead of expanding an empty string later.
+	var empty []string
+	for k, v := range f.Vars {
+		if v == "" {
+			empty = append(empty, k)
+		}
+	}
+	if len(empty) > 0 {
+		sort.Strings(empty)
+		return nil, fmt.Errorf("scenario: vars %s have no value; set them with --var NAME=VALUE", strings.Join(empty, ", "))
+	}
 	if raw.AddonPrefix != nil {
 		f.AddonPrefix = *raw.AddonPrefix
 	}
@@ -351,6 +364,25 @@ func Parse(data []byte, vars map[string]string) (*File, error) {
 			return nil, err
 		}
 		f.Finally = append(f.Finally, s)
+	}
+	// An expect/wait timeout_s written as a ${var} resolves here, against the vars the load carries: the runner
+	// then reads a number, and a --var WAIT_S override changes the wait.
+	for _, steps := range [][]*Step{f.Steps, f.Finally} {
+		for i, s := range steps {
+			if s.TimeoutTmpl == "" {
+				continue
+			}
+			v, err := expand(s.TimeoutTmpl, f.Vars, false)
+			if err != nil {
+				return nil, err
+			}
+			ts, err := strconv.ParseFloat(v, 64)
+			if err != nil || ts < 1 || ts > 3600 {
+				return nil, fmt.Errorf("step %d (%s): timeout_s %q out of range 1-3600", i+1, s.Do, v)
+			}
+			s.TimeoutS = ts
+			s.TimeoutTmpl = ""
+		}
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
@@ -641,12 +673,21 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 			}
 			s.WithinS = w
 		} else if do.Do == "expect" || do.Do == "wait" {
-			var ts float64
-			if g("timeout_s", &ts) {
-				if ts < 1 || ts > 3600 {
-					return nil, fmt.Errorf("step %d (%s): timeout_s %g out of range", n, do.Do, ts)
+			if v, ok := kv["timeout_s"]; ok {
+				var ts float64
+				if err := json.Unmarshal(v, &ts); err == nil {
+					if ts < 1 || ts > 3600 {
+						return nil, fmt.Errorf("step %d (%s): timeout_s %g out of range", n, do.Do, ts)
+					}
+					s.TimeoutS = ts
+				} else {
+					// A ${var} template: the load resolves it against the vars (WAIT_S in the live scenarios).
+					var tmpl string
+					if err := json.Unmarshal(v, &tmpl); err != nil || !strings.Contains(tmpl, "${") {
+						return nil, fmt.Errorf("step %d (%s): timeout_s must be a number or a ${var}", n, do.Do)
+					}
+					s.TimeoutTmpl = tmpl
 				}
-				s.TimeoutS = ts
 			}
 		}
 	case "check_db":
