@@ -29,11 +29,10 @@ const (
 )
 
 var (
-	tradeBot      = wire.GUID{Low: 0x99, High: uint64(wire.TypePlayer) << 58}
-	tradeDead     = wire.GUID{Low: 0x98, High: uint64(wire.TypePlayer) << 58}
-	tradeFar      = wire.GUID{Low: 0x97, High: uint64(wire.TypePlayer) << 58}
-	tradeBotAcct  = wire.GUID{Low: 0x1001, High: uint64(0x1A) << 58}
-	tradeGiftItem = wire.GUID{Low: 0x7D7D, High: 0x4000000000000000}
+	tradeBot     = wire.GUID{Low: 0x99, High: uint64(wire.TypePlayer) << 58}
+	tradeDead    = wire.GUID{Low: 0x98, High: uint64(wire.TypePlayer) << 58}
+	tradeFar     = wire.GUID{Low: 0x97, High: uint64(wire.TypePlayer) << 58}
+	tradeBotAcct = wire.GUID{Low: 0x1001, High: uint64(0x1A) << 58}
 )
 
 // tradeWorld is the item world with three other players in view and a scripted bot partner.
