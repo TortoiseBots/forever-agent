@@ -1108,7 +1108,8 @@ func (f *Fake) runEvent(kind string, step, leg int, unit uint32, why string) {
 		return
 	}
 	r.seq++
-	ev := tbcmd.RunEvent{Seq: r.seq, T: int(f.Clock.Now().Sub(r.started).Seconds()), Kind: kind, Why: why}
+	ev := tbcmd.RunEvent{Seq: r.seq, T: int(f.Clock.Now().Sub(r.started).Seconds()), Kind: kind,
+		Known: tbcmd.KnownEventKind(kind), Why: why}
 	if step > 0 || kind != "start" {
 		ev.Step, ev.HasStep = step, true
 	}

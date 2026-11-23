@@ -10,6 +10,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/tactics"
 )
 
@@ -567,5 +568,42 @@ func TestPlayNoLastLegUnchanged(t *testing.T) {
 	}
 	if res.Summary.LastLeg != "two" {
 		t.Fatalf("last_leg = %q; want two", res.Summary.LastLeg)
+	}
+}
+
+// petGUID is a scripted pet's guid: a creature guid whose low half no pack or plan entry carries.
+func petGUID(n uint64) wire.GUID { return wire.GUID{High: 0xF140000000000000, Low: 0x700 + n} }
+
+// TestPlayHunterPetIsNotAStranger: the hunter bot's pet stands by the party, owned by its bot and not marked
+// friendly; it must not hold the walk as a stranger the plan does not know.
+func TestPlayHunterPetIsNotAStranger(t *testing.T) {
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(1), Entry: 11320, Pos: Vec3{42, 0, 0}, Owner: f.botGUID(playBots[2])})
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the hunter's pet is no stranger", res.Stop, res.Clear)
+	}
+}
+
+// TestPlayAgentPetIsNotAStranger: the agent's own pet is a roster member's too (the roster includes the agent).
+func TestPlayAgentPetIsNotAStranger(t *testing.T) {
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(2), Entry: 11320, Pos: Vec3{42, 0, 0}, Owner: f.SelfGUID()})
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the agent's pet is no stranger", res.Stop, res.Clear)
+	}
+}
+
+// TestPlayStrangerStillStops: a hostile owned by nobody in the party still holds the walk and ends it as patrol.
+func TestPlayStrangerStillStops(t *testing.T) {
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(3), Entry: 11320, Pos: Vec3{42, 0, 0}, Owner: wire.GUID{Low: 0x999}})
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "patrol" {
+		t.Fatalf("stop = %q; want patrol (a stranger with an owner outside the party still stops the walk)", res.Stop)
 	}
 }

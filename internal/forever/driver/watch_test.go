@@ -143,6 +143,42 @@ func TestWatchWipeRescue(t *testing.T) {
 	}
 }
 
+// TestWatchSurvivesUnknownEventKind: one record the client cannot name must not end the watch blind. The unknown kind
+// is logged once and otherwise ignored; the module's self-recover is a known kind (it clears the wipe pair) and the
+// run goes on to its own end.
+func TestWatchSurvivesUnknownEventKind(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	f.ScriptRun(FakeRunScript{Steps: 30, Pulls: 10, ProgressEvery: 5 * time.Second, DoneAt: 400 * time.Second})
+	f.Clock.After(10*time.Second, func() { f.runEvent("self-recover", 0, 0, 0, "") })
+	f.Clock.After(20*time.Second, func() { f.runEvent("lunch", 0, 0, 0, "") })
+	res := run.Watch(context.Background())
+	joined := strings.Join(*logs, "\n")
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done\n%s", res.Stop, joined)
+	}
+	if strings.Contains(joined, "blind") {
+		t.Fatalf("an unknown event kind blinded the watch:\n%s", joined)
+	}
+	if got := strings.Count(joined, "unknown event kind=lunch"); got != 1 {
+		t.Fatalf("%d unknown-kind lines, want one:\n%s", got, joined)
+	}
+}
+
+// TestWatchSelfRecoverClearsTheWipePair: the module's own recovery means there is no rescue to make, so the pair a
+// wipe left (and the pause follow-up) is cleared and a trace event records it.
+func TestWatchSelfRecoverClearsTheWipePair(t *testing.T) {
+	run, f, _ := newWatch(t, watchConfig())
+	w := &watchRun{pauseSeen: map[int]bool{}, unknownKinds: map[string]bool{}}
+	w.wipePending = true
+	w.onWipe = true
+	w.wipeAt = f.Start
+	w.startedAt = f.Start
+	run.watchEvent(w, tbcmd.RunEvent{Seq: 2, T: 10, Kind: "self-recover", Known: true, Why: ""})
+	if w.wipePending || w.onWipe || !w.wipeAt.IsZero() {
+		t.Fatalf("self-recover left the wipe pair: pending=%v onWipe=%v at=%v", w.wipePending, w.onWipe, w.wipeAt)
+	}
+}
+
 func TestWatchRescueBudget(t *testing.T) {
 	cfg := watchConfig()
 	cfg.Limits.MaxPractice = 0

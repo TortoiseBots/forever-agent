@@ -73,9 +73,12 @@ type RunReport struct {
 
 // RunEvent is one `event` record: seq and t are seconds into the run and its position in the ring.
 type RunEvent struct {
-	Seq     int
-	T       int
-	Kind    string
+	Seq  int
+	T    int
+	Kind string
+	// Known says the kind is one of the module's documented event kinds; an unknown kind is kept (the server's
+	// vocabulary can grow), not refused.
+	Known   bool
 	Step    int
 	HasStep bool
 	Leg     int
@@ -423,9 +426,13 @@ func parseRunEvent(rec record) (RunEvent, error) {
 	if out.T, err = rec.requireInt("t", 0, math.MaxInt32); err != nil {
 		return out, err
 	}
-	if out.Kind, err = requiredWord(rec, "kind", eventKinds()...); err != nil {
+	if out.Kind, err = rec.requireText("kind"); err != nil {
 		return out, err
 	}
+	if !eventKindWord(out.Kind) {
+		return out, fmt.Errorf("%w: kind=%q is not an event kind", ErrBadValue, out.Kind)
+	}
+	out.Known = KnownEventKind(out.Kind)
 	if out.Step, out.HasStep, err = rec.optionalInt("step", 0, math.MaxInt32); err != nil {
 		return out, err
 	}
@@ -477,7 +484,37 @@ func phaseWords() []string {
 
 // eventKinds are the module's event kinds, in a stable order.
 func eventKinds() []string {
-	return []string{"start", "step", "pull", "fight-end", "rest", "death", "wipe", "revive", "pause", "resume", "done", "stop"}
+	return []string{"start", "step", "pull", "fight-end", "rest", "death", "wipe", "revive", "pause", "resume",
+		"done", "stop", "self-recover", "cc", "cc-clear", "gather-wait"}
+}
+
+// KnownEventKind says whether kind is one of the module's documented event kinds. An unknown kind is kept by the
+// read (the server's vocabulary can grow), so callers use this to tell which records they understand.
+func KnownEventKind(kind string) bool {
+	for _, k := range eventKinds() {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// eventKindWord says whether a string is an event kind's shape: a lower-case word of digits, dashes and underscores,
+// 1 to 24 bytes. The vocabulary is the server's, so only the shape is checked; an unknown word is kept, not refused.
+func eventKindWord(s string) bool {
+	if s == "" || len(s) > 24 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c == '_' || c == '-' || (c >= '0' && c <= '9'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // stepKindWord says whether a run record's kind is a plan step kind: a lower-case word, optionally with one
