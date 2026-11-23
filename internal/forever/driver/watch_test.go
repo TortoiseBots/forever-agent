@@ -1010,3 +1010,99 @@ func TestFrameGUIDKeepsAGUIDName(t *testing.T) {
 		t.Fatalf("%d name lookups for a guid text", wc.n)
 	}
 }
+
+// --- proof-3 part C: dungeon-watch --attach follows a run another client started ---
+
+// TestWatchAttachSendsNoStart: with --attach the watch sends no `.tb run start`; it attaches to the running run and
+// follows it to its end.
+func TestWatchAttachSendsNoStart(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.StartForeignRun("running")
+	res := run.Watch(context.Background())
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+	if res.Stop != "done" || !res.Clear {
+		t.Fatalf("stop %q clear %v, want done\n%s", res.Stop, res.Clear, strings.Join(*logs, "\n"))
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=running") {
+		t.Fatalf("no attach line:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchAttachWaitsForRunningRun: the run is not there for the first two reads; the third shows it running and the
+// watch attaches, still with no start of its own.
+func TestWatchAttachWaitsForRunningRun(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.OnStatus = func(f *Fake, n int) {
+		if n == 3 {
+			f.StartForeignRun("running")
+		}
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=running") {
+		t.Fatalf("no attach line:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchAttachPausedRun: a run already paused is attached too, with its state applied (its pause is the watch's
+// own, and the pause budget ends the watch as paused-stuck).
+func TestWatchAttachPausedRun(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	// A paused run sends no event and no finish: the watch's own pause budget is what ends this watch.
+	f.ScriptRun(FakeRunScript{Silent: true})
+	f.StartForeignRun("paused")
+	res := run.Watch(context.Background())
+	// The attach applies the run's paused state (the watch ends on the pause budget and its own stop then moves the
+	// module's record on, so the attach line is the evidence the state was read).
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=paused") {
+		t.Fatalf("no attach line for the paused run:\n%s", strings.Join(*logs, "\n"))
+	}
+	if res.Stop != StopPausedStuck {
+		t.Fatalf("stop %q, want %q\n%s", res.Stop, StopPausedStuck, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+}
+
+// TestWatchAttachTimeout: a leader with no run to attach to ends the watch as start:attach-timeout, with no start.
+func TestWatchAttachTimeout(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	cfg.AttachWait = 30 * time.Second
+	run, f, _ := newWatch(t, cfg)
+	res := run.Watch(context.Background())
+	if res.Stop != "start:attach-timeout" {
+		t.Fatalf("stop %q, want start:attach-timeout", res.Stop)
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+}
+
+// TestWatchForeignBotWithoutAttachStops: a start the module refuses as foreign-bot ends the watch, and the log says
+// that a run started elsewhere can be watched with --attach.
+func TestWatchForeignBotWithoutAttachStops(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	f.RefuseActions = map[ActionKind]string{ActionRunStart: "foreign-bot"}
+	res := run.Watch(context.Background())
+	if res.Stop != "start:foreign-bot" {
+		t.Fatalf("stop %q, want start:foreign-bot", res.Stop)
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "a run started elsewhere can be watched with --attach") {
+		t.Fatalf("no --attach hint:\n%s", strings.Join(*logs, "\n"))
+	}
+}

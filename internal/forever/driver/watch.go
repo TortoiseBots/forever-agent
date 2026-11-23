@@ -233,9 +233,17 @@ func startRecord(rep ActionReport, leader, plan string) (tbcmd.RunState, error) 
 	return st, nil
 }
 
+// defaultAttachWait bounds a watch's wait for a run started elsewhere (--attach) when the flag does not say.
+const defaultAttachWait = 300 * time.Second
+
 // watchStart starts the module's run: `.tb run start <leader> <plan>`, a fight-starting action (the run pulls from
-// then on), retried while its gate is shut and ended with the module's own refusal code when it refuses.
+// then on), retried while its gate is shut and ended with the module's own refusal code when it refuses. With
+// --attach it sends no start at all: it waits for the run another client started and attaches to it.
 func (r *Run) watchStart(ctx context.Context, w *watchRun) {
+	if r.cfg.Attach {
+		r.watchAttach(ctx, w)
+		return
+	}
 	deadline := r.now().Add(r.lim.Enter)
 	for r.stopReason == "" {
 		rep, why := r.act(ctx, Action{Kind: ActionRunStart, Who: r.cfg.Leader, Plan: r.route.Name})
@@ -275,6 +283,11 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 			if code == "" {
 				code = "refused"
 			}
+			if code == "foreign-bot" {
+				// The run's leader is not this module's to start: another client started it, and --attach is how a
+				// watch follows that run.
+				r.logf("watch: start refused foreign-bot; a run started elsewhere can be watched with --attach")
+			}
 			r.stop("start:" + code)
 			return
 		}
@@ -284,6 +297,61 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 		}
 		if !r.now().Before(deadline) {
 			r.stop("start:" + reasonCode(why))
+			return
+		}
+		if !r.sleep(ctx, r.cfg.Poll) {
+			return
+		}
+	}
+}
+
+// watchAttach waits for the run another client started (--attach) and attaches to it: no `.tb run start` is sent.
+// The leader's one run in state running is the run; a paused one is attached too, with its state applied. The wait
+// is bounded by --attach-wait (300 s by default) and ends as `start:attach-timeout`.
+func (r *Run) watchAttach(ctx context.Context, w *watchRun) {
+	wait := r.cfg.AttachWait
+	if wait <= 0 {
+		wait = defaultAttachWait
+	}
+	deadline := r.now().Add(wait)
+	logged := false
+	for r.stopReason == "" {
+		rep, err := r.cmd.RunStatus(ctx, r.cfg.Leader)
+		switch {
+		case errors.Is(err, ErrLinkLost):
+			r.linkLost()
+			return
+		case err != nil:
+			// No run yet (or a read that failed): the wait goes on. One line says why, so a silent server is visible
+			// without a line per poll.
+			if !logged {
+				logged = true
+				r.logf("watch: attach: %v", err)
+			}
+		case len(rep.Runs) == 1 && (rep.Runs[0].State == "running" || rep.Runs[0].State == "paused"):
+			st := rep.Runs[0]
+			// The attach time is the watch's run zero on the trace's clock, as a start's reply time is.
+			w.startedAt = r.now()
+			w.lastEvent = w.startedAt
+			if r.rec != nil {
+				r.rec.Event(w.startedAt, "run_start", map[string]any{"plan": st.Plan, "attached": true})
+			}
+			r.applyRun(w, st)
+			// The leg and the event cursor the run already reached are the watch's own from now on, as a start's
+			// record gives them: without them the leg's time and the early events would be lost.
+			if st.HasLeg {
+				w.legSeen[st.Leg] = true
+				w.leg(st.Leg).FirstS = 0
+			}
+			if st.HasEv {
+				w.lastSeq = st.Ev
+			}
+			r.progress()
+			r.logf("watch: attached state=%s", st.State)
+			return
+		}
+		if !r.now().Before(deadline) {
+			r.stop("start:attach-timeout")
 			return
 		}
 		if !r.sleep(ctx, r.cfg.Poll) {

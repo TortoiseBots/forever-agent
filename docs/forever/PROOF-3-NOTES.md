@@ -1,0 +1,72 @@
+# PROOF-3 notes: the pull from the stand, the whole plan for a cut run, and dungeon-watch --attach
+
+Spec: `SPEC-forever-agent-proof-3.md`. Milestone: #88, proof-3. No host, account, private path, capture name or
+byte is in this change or its tests.
+
+## Part A: the pack pull is made from the plan's stand, with the party beside the agent
+
+- `pull()` (pack pulls only, never the boss pull) now calls `pullApproach` before its first `engage`:
+  - the agent walks to `Group.Stand(p.self)` (the group's last approach point, else the driver's default standoff)
+    unless it already stands within `PlayArriveYd`; `pullWalk` is set for that walk, and `walkSegments` skips
+    `packInWay` and `patrolHold` while it is set, so the walk to the stand never starts a nested pull;
+  - `pull_stand` {group, x, y, z, yd} is recorded. **Decision:** x/y/z are the stand point the walk was given and
+    `yd` is the stand's distance to the group's centre (the pull's reach: RFC's road packs stand ~21 yd off), not the
+    distance the agent walked; the trace's own walk frames already carry that.
+  - then `waitNear(PlayPullGatherYd = 10, FollowAt, SummonAt, StopAt)`: the marks and `.bot attack` wait for the tank.
+- A first attempt with no aggro (`engage` false, no stop) steps closer before the retry: `pullStep` walks to the point
+  `PlayPullStepYd = 5` yd along the line to the skull, never nearer than `PlayPullMinYd = 10` yd to it, records
+  `pull_step` and gathers the party again. An agent already inside 10 yd does not move. The loop still ends as
+  `pull-failed` after two unanswered attempts. `pullWalk` is set for the step walk too: a pull is in flight, so a
+  pack met on the few yards of the step must not overwrite the pull.
+- Walk stops (avoid, walk, time) end the pull exactly as they end a walk.
+
+## Part B: `--last-leg` keeps the whole plan and ends the run at a leg
+
+- `forever dungeon-play --last-leg <leg name>` → `driver.PlayConfig.LastLeg`.
+- The name is checked before anything is sent: the command answers exit 2 and lists the plan's legs; the machine
+  (`Play`) resolves it before its first state and stops `last-leg` with no line out (a plan-driven caller's guard).
+- `legWalk` goes to `StateDone` after the last leg's boss (or after the leg, when it has none); `done()` counts only
+  the bosses of the legs up to and including that one. `knownEntries`, `strangerNear`, `packInWay` and `AllGroups`
+  keep reading the full route: a later leg's unit met on the way is the plan's own (pulled when a pack claims it, not
+  a `patrol_hold` stranger).
+- `last_leg` is in the run summary (already a field) and now also in the report card (`last_leg`, omitted when empty).
+  Without the flag nothing changes: every leg runs and every boss is the clear's.
+
+## Part C: `dungeon-watch --attach`
+
+- Flags `--attach` (bool) and `--attach-wait` (duration, default `300s`) → `driver.Config.Attach` / `AttachWait`.
+- With `--attach`, `watchStart` sends no `.tb run start`: `watchAttach` polls `.tb run status <leader>` at `cfg.Poll`
+  until exactly one run of the leader is `running` (a `paused` one is attached too, with its state applied), records
+  `run_start` with `"attached": true`, applies the record, copies `legSeen`/`FirstS` from `HasLeg` and `lastSeq` from
+  `HasEv`, and logs `watch: attached state=<state>`. On timeout: `start:attach-timeout`.
+- Without `--attach` the start path is unchanged; a `foreign-bot` refusal now also logs
+  `watch: start refused foreign-bot; a run started elsewhere can be watched with --attach`.
+- The fake gained `StartForeignRun(state)` (a run as another client's start would leave it) and an `OnStatus` hook
+  (per status read), so the attach cases do not need a second client.
+
+## Tests
+
+- `internal/forever/driver/play_fight_test.go`: `TestPullWalksToTheStandFirst`, `TestPullWaitsForTheTankAtTheStand`,
+  `TestPullRetryStepsCloser`, `TestPullStepNeverInsideMinYd`, `TestPullStandWalkNoNestedPull`.
+- `internal/forever/driver/play_test.go`: `TestPlayLastLegStopsAfterItsBoss`,
+  `TestPlayLastLegKeepsLaterLegsKnown`, `TestPlayLastLegUnknownName`, `TestPlayNoLastLegUnchanged`.
+- `cmd/forever-agent/forever_play_test.go`: `TestPlayCmdLastLegChecksTheName` (the exit-2 usage error lists the legs),
+  `TestPlayCmdLastLegDry` (a dry run cut at a leg clears).
+- `internal/forever/driver/watch_test.go`: `TestWatchAttachSendsNoStart`, `TestWatchAttachWaitsForRunningRun`,
+  `TestWatchAttachPausedRun`, `TestWatchAttachTimeout`, `TestWatchForeignBotWithoutAttachStops`.
+
+## Mutations (each must fail the named test)
+
+| Mutation | Test | Result |
+|---|---|---|
+| no stand walk (`if false` around the walk to the stand) | TestPullWalksToTheStandFirst | caught |
+| gather at 35 yd | TestPullWaitsForTheTankAtTheStand | caught |
+| no step clamp (`step := min(PlayPullStepYd, d)`) | TestPullStepNeverInsideMinYd | caught |
+| `packInWay` not skipped during the pull walk | TestPullStandWalkNoNestedPull | caught (the test also checks the pack met on the way is fought at its own pull; with the mutation the interrupted pull marks it fought) |
+| `knownEntries` from the cut legs only | TestPlayLastLegKeepsLaterLegsKnown | caught |
+| `--attach` still sends start | TestWatchAttachSendsNoStart | caught |
+
+## Gates
+
+- Full suite: `vm-test ta ~/wt-proof3` (RESULT line below).
+- Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --last-leg oggleflint`.

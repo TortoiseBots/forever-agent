@@ -31,7 +31,7 @@ import (
 const playMilestoneWipes = 2
 
 func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	const usage = "usage: forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-play", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -42,6 +42,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	bots := fs.String("bots", "", "the four bots the account owns: the tank, the healer and two damage dealers, in that order")
 	maxMinutes := fs.Int("max-minutes", 0, "the run's budget in minutes; 0 takes the plan's (Ragefire Chasm 90, Wailing Caverns 150, else 120)")
 	maxWipes := fs.Int("max-wipes", playMilestoneWipes, "the run's wipe budget: the (n+1)th wipe ends it; -1 is no budget, 1-20 otherwise")
+	lastLeg := fs.String("last-leg", "", "end the run after this leg's boss: plans are walked whole, and a run cut by hand counted later legs' units as strangers (the route keeps every leg)")
 	disband := fs.Bool("disband", false, "disband the group before the bots are logged out")
 	out := fs.String("out", "", "folder for the run's trace, summary, combat log, card and map; the spell judge reads it, so a live verdict needs it")
 	drawMap := fs.Bool("map", false, "after the run, write its map (SVG and HTML replay) into --out; a failure is one log line and never fails the run")
@@ -82,11 +83,18 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintf(stderr, "forever dungeon-play: the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused
 	}
+	// A leg name is checked before anything is sent: a run with an unknown one would walk nowhere.
+	if *lastLeg != "" {
+		if _, ok := route.LegNamed(*lastLeg); !ok {
+			fmt.Fprintf(stderr, "forever dungeon-play: --last-leg %q is not a leg of %s (legs: %s)\n", *lastLeg, route.Name, strings.Join(routeLegNames(route), ", "))
+			return exitUsage
+		}
+	}
 	runID := ""
 	if *out != "" {
 		runID = trace.NewRunID(time.Now())
 	}
-	cfg := playConfig(route.Name, names, *maxMinutes, *maxWipes, *disband, *out, runID)
+	cfg := playConfig(route.Name, names, *maxMinutes, *maxWipes, *lastLeg, *disband, *out, runID)
 
 	var res *driver.Result
 	if *dry {
@@ -165,11 +173,20 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 }
 
 // playConfig is the run's config from the flags. A zero maxMinutes takes the plan's budget in the machine.
-func playConfig(plan string, bots [4]string, maxMinutes, maxWipes int, disband bool, out, runID string) driver.PlayConfig {
+func playConfig(plan string, bots [4]string, maxMinutes, maxWipes int, lastLeg string, disband bool, out, runID string) driver.PlayConfig {
 	return driver.PlayConfig{
-		Plan: plan, Bots: bots, MaxMinutes: maxMinutes, MaxWipes: maxWipes, Disband: disband,
+		Plan: plan, Bots: bots, MaxMinutes: maxMinutes, MaxWipes: maxWipes, LastLeg: lastLeg, Disband: disband,
 		Out: out, RunID: runID, Limits: driver.DefaultPlayLimits(),
 	}
+}
+
+// routeLegNames lists the route's legs in order, for a usage message.
+func routeLegNames(route *driver.Route) []string {
+	out := make([]string, 0, len(route.Legs))
+	for _, l := range route.Legs {
+		out = append(out, l.Name)
+	}
+	return out
 }
 
 // splitBots parses the four bot names.

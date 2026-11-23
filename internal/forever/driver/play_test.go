@@ -483,3 +483,89 @@ func TestPlayFailedRunLogsOutItsBots(t *testing.T) {
 		t.Fatalf("logouts = %v; want only the one bot the run added", l)
 	}
 }
+
+// --- proof-3 part B: --last-leg ends the run at a leg, with the whole route known ---
+
+// TestPlayLastLegStopsAfterItsBoss: --last-leg ends the run after that leg's boss: the legs after it are not walked,
+// not pulled, and not the clear's.
+func TestPlayLastLegStopsAfterItsBoss(t *testing.T) {
+	rig := newPlayFightRig(t, playTwoBossPlan(), func(f *PlayFake) { f.SpawnBosses() })
+	rig.cfg.LastLeg = "one"
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear", res.Stop, res.Clear)
+	}
+	if res.Summary.LastLeg != "one" {
+		t.Fatalf("last_leg = %q; want one", res.Summary.LastLeg)
+	}
+	if !res.Summary.Bosses["200"] || len(res.Summary.Bosses) != 1 {
+		t.Fatalf("bosses = %v; want only the first leg's 200", res.Summary.Bosses)
+	}
+	if u, ok := rig.fake.UnitOf(300); !ok || u.Dead {
+		t.Fatalf("the second leg's boss was fought or left the view (%+v)", u)
+	}
+	for _, w := range rig.fake.Walks {
+		for _, p := range w {
+			if dist3(p, Vec3{80, 0, 0}) < 5 {
+				t.Fatalf("the run walked to %v; want it stopped at the first leg", p)
+			}
+		}
+	}
+}
+
+// TestPlayLastLegKeepsLaterLegsKnown: the route keeps every leg, so a live unit of a later leg's pack beside the walk
+// is the plan's own and is not a stranger the patrol rule holds the run on.
+func TestPlayLastLegKeepsLaterLegsKnown(t *testing.T) {
+	plan := &dungeon.Plan{
+		Version: 1, Name: "test_last_leg_known", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		Legs: []dungeon.Leg{
+			{Name: "one", To: dungeon.Point{X: 40}, Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}}},
+			{Name: "two", To: dungeon.Point{X: 80}, PullGroups: []dungeon.PullGroup{{
+				Entries: []uint32{600}, Positions: []dungeon.Point{{X: 70, Y: 20}},
+			}}},
+		},
+	}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		// The later leg's unit strayed from its pack's positions, so nothing claims it; the plan still names it.
+		f.AddUnit(Unit{GUID: fightGUID(9), Entry: 600, Pos: Vec3{45, 8, 0}})
+		f.SpawnBosses()
+	})
+	rig.cfg.LastLeg = "one"
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: a later leg's unit beside the walk is the plan's, not a stranger", res.Stop, res.Clear)
+	}
+}
+
+// TestPlayLastLegUnknownName: a leg name the plan does not hold ends the run before anything is sent.
+func TestPlayLastLegUnknownName(t *testing.T) {
+	rig := newPlayFightRig(t, playTwoBossPlan(), func(f *PlayFake) { f.SpawnBosses() })
+	rig.cfg.LastLeg = "nowhere"
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "last-leg" {
+		t.Fatalf("stop = %q; want last-leg", res.Stop)
+	}
+	if len(rig.fake.Actions) != 0 {
+		t.Fatalf("the run sent %v; want nothing", rig.fake.Actions)
+	}
+}
+
+// TestPlayNoLastLegUnchanged: without --last-leg the run walks every leg and the clear is every plan boss.
+func TestPlayNoLastLegUnchanged(t *testing.T) {
+	rig := newPlayFightRig(t, playTwoBossPlan(), func(f *PlayFake) { f.SpawnBosses() })
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear", res.Stop, res.Clear)
+	}
+	if len(res.Summary.Bosses) != 2 || !res.Summary.Bosses["200"] || !res.Summary.Bosses["300"] {
+		t.Fatalf("bosses = %v; want both legs'", res.Summary.Bosses)
+	}
+	if res.Summary.LastLeg != "two" {
+		t.Fatalf("last_leg = %q; want two", res.Summary.LastLeg)
+	}
+}

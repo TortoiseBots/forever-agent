@@ -208,6 +208,10 @@ type PlayConfig struct {
 	MaxMinutes int
 	// MaxWipes is the wipe budget (D-14): 0 takes 2, a negative value is no budget.
 	MaxWipes int
+	// LastLeg is the leg the run ends on (--last-leg): after that leg's boss is down the run is done. The rest of
+	// the route is still the run's own (a pack of a later leg met on the way is fought there), and only that leg's
+	// bosses up to it are the clear's. Empty runs every leg.
+	LastLeg string
 	// Disband disbands the group before the bots are logged out.
 	Disband bool
 	// Out is the folder of the run's record and RunID the name of its files; an empty Out writes nothing.
@@ -252,6 +256,9 @@ type playRun struct {
 	selfMap uint32
 
 	legIdx int
+	// lastLeg is the leg the run ends on (-1 when --last-leg names no leg of the plan): its end is DONE, and only
+	// the bosses up to it and including it are the clear's. The route's own readers keep every leg.
+	lastLeg int
 	// walkAt is the leg-walk's next waypoint: a pack in the way is fought first, and the walk resumes where it stopped.
 	walkAt int
 	// stepIdx is the leg's next step (P4): a step a pack interrupted is begun again after the fight.
@@ -259,6 +266,9 @@ type playRun struct {
 	// pack is the group being pulled or fought (-1 between pulls); bossRun says the pull is the leg's boss.
 	pack    int
 	bossRun bool
+	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
+	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
+	pullWalk bool
 	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
 	pulled     map[int]bool
 	bossKilled map[uint32]bool
@@ -316,6 +326,17 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		p.ports.Clock = WallClock{}
 	}
 	p.start = p.now()
+	// The leg the run ends on is resolved before anything is sent (--last-leg): a name the plan does not hold ends
+	// the run here, with no line out and no session spent.
+	p.lastLeg = len(route.Legs) - 1
+	if cfg.LastLeg != "" {
+		if i, ok := route.LegNamed(cfg.LastLeg); ok {
+			p.lastLeg = i
+		} else {
+			p.lastLeg = -1
+			p.stop("last-leg")
+		}
+	}
 	p.notes = append(p.notes, route.Notes...)
 	p.rec = p.openRecorder()
 	for _, note := range p.notes {
@@ -746,6 +767,10 @@ func (p *playRun) legWalk(ctx context.Context) string {
 	if leg.Boss != nil && !p.bossDone(leg.Boss.Entry) {
 		return StateBoss
 	}
+	if p.legIdx >= p.lastLeg {
+		// The legs past --last-leg's are not the run's: done, with the route whole for the walk that got here.
+		return StateDone
+	}
 	p.legIdx++
 	p.walkAt = 0
 	p.stepIdx = 0
@@ -889,12 +914,14 @@ func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd
 		if !p.waitNear(ctx, PlayFollowYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
 			return walkStopped
 		}
-		if g, ok := p.packInWay(); ok {
-			p.pack = g
-			return walkPulling
-		}
-		if p.patrolHold(ctx) {
-			return walkStopped
+		if !p.pullWalk {
+			if g, ok := p.packInWay(); ok {
+				p.pack = g
+				return walkPulling
+			}
+			if p.patrolHold(ctx) {
+				return walkStopped
+			}
 		}
 	}
 	return walkArrived
@@ -1066,7 +1093,10 @@ func (p *playRun) knownEntries() map[uint32]bool {
 func (p *playRun) done(ctx context.Context) string {
 	p.drainEncounters()
 	all := true
-	for _, leg := range p.route.Legs {
+	for i, leg := range p.route.Legs {
+		if i > p.lastLeg {
+			break
+		}
 		if leg.Boss == nil {
 			continue
 		}

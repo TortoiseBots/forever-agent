@@ -56,6 +56,8 @@ type Card struct {
 	Why         string     `json:"why,omitempty"`
 	Leg         int        `json:"leg"`
 	LegName     string     `json:"leg_name,omitempty"`
+	// LastLeg is the leg the run ended on (the record's own field): a run cut with --last-leg ends here.
+	LastLeg     string     `json:"last_leg,omitempty"`
 	Step        int        `json:"step"`
 	Steps       int        `json:"steps"`
 	ElapsedS    float64    `json:"elapsed_s"`
@@ -126,7 +128,7 @@ func Build(sum driver.RunSummary, th Thresholds) Card {
 	c := Card{
 		Schema: Schema, Version: Version, RunID: sum.RunID, Plan: sum.Plan, Mode: sum.Mode,
 		Clear: sum.Clear, StopReason: sum.StopReason, ElapsedS: sum.DurationS, Thresholds: th,
-		Legs: []Leg{}, Flags: []Flag{},
+		LastLeg: sum.LastLeg, Legs: []Leg{}, Flags: []Flag{},
 	}
 	w := sum.Watch
 	if w == nil {
