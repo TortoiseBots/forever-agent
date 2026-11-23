@@ -38,6 +38,7 @@ const (
 
 	// Resurrection and the corpse run (README "Death and the corpse run").
 	KindResurrectRequest   = "resurrect_request"    // SMSG_RESURRECT_REQUEST: a spell offers to resurrect the player; source the caster, data.caster, name, sickness, timer
+	KindSummonRequest      = "summon_request"       // SMSG_SUMMON_REQUEST: a portal offers to summon the player; source the summoner, data.summoner, area, reason
 	KindCorpseReclaimDelay = "corpse_reclaim_delay" // SMSG_CORPSE_RECLAIM_DELAY after the release: data.ms until the corpse may be reclaimed
 
 	// Group loot rolls, tied together by data.roll_id.

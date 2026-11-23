@@ -122,6 +122,13 @@ type ServeDeath struct {
 	CorpseZ     float32 `json:"corpse_z,omitempty"`
 }
 
+// ServeAcceptSummon is accept_summon's result: the summoner whose offer was answered, and the bit that went out
+// (the accept default is true).
+type ServeAcceptSummon struct {
+	Summoner GUID `json:"summoner"`
+	Accepted bool `json:"accepted"`
+}
+
 // ServeCorpse is corpse_query's result.
 type ServeCorpse struct {
 	Found bool    `json:"found"`
@@ -237,6 +244,11 @@ type serveCastParams struct {
 
 type serveCancelCastParams struct {
 	SpellID int32 `json:"spell_id,omitempty"`
+}
+
+// serveAcceptSummonParams is accept_summon's input: the Accept bit, true when omitted.
+type serveAcceptSummonParams struct {
+	Accept *bool `json:"accept,omitempty"`
 }
 
 type serveWalkParams struct {
@@ -774,6 +786,17 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 			return ServeDeath{}, err
 		}
 		return s.serveDeath(), nil
+	}))
+	srv.Register("accept_summon", serveCallTyped(st, func(s *session, _ context.Context, p serveAcceptSummonParams) (ServeAcceptSummon, error) {
+		accept := true
+		if p.Accept != nil {
+			accept = *p.Accept
+		}
+		g, answer, err := s.AcceptSummon(accept)
+		if err != nil {
+			return ServeAcceptSummon{}, err
+		}
+		return ServeAcceptSummon{Summoner: GUID(g), Accepted: answer}, nil
 	}))
 	srv.Register("release_spirit", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.Release(ctx)

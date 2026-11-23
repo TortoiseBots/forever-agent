@@ -18,14 +18,16 @@ import (
 var (
 	scenarioName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	sessionName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,15}$`)
-	varName      = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	hostName     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	schemaName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
-	contName     = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
-	methodName   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	whereKey     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
-	whereValue   = regexp.MustCompile(`^[A-Za-z0-9 _.:-]{0,64}$`)
-	charName     = regexp.MustCompile(`^[A-Za-z]{2,12}$`)
+	// varName is a scenario variable (a file var, --var, a capture or a save key). Upper case is allowed: a row's
+	// vars are often the placeholders a reader passes with --var (MAP, BOT1), and the name is only a map key.
+	varName    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
+	hostName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	schemaName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	contName   = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+	methodName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	whereKey   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+	whereValue = regexp.MustCompile(`^[A-Za-z0-9 _.:-]{0,64}$`)
+	charName   = regexp.MustCompile(`^[A-Za-z]{2,12}$`)
 	// varRef matches a whole ${name} template: allowed wherever a var
 	// expands to the value at run time (char names, where values with vars).
 	// Dotted session built-ins (${A.character}) match too: refs plus the static
@@ -1129,7 +1131,7 @@ func (f *File) validate() error {
 		case "check_rpc":
 			tmpl = append(tmpl, jsonStrings(s.Params)...)
 			tmpl = append(tmpl, jsonStrings(s.Equals)...)
-			tmpl = append(tmpl, s.Path)
+			tmpl = append(tmpl, s.Path, s.MatchRe)
 		}
 		for _, t := range tmpl {
 			if err := checkRefs(fmt.Sprintf("step %d (%s)", n, s.Do), t); err != nil {

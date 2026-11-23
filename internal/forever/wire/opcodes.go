@@ -48,9 +48,12 @@ const (
 	// (HandleMoveKnockBackAck, MovementHandler.cpp:760-776).
 	CMSGMoveKnockBackAck uint32 = 0x410030
 	// The death flow's client packets (Opcodes.h:252, 413, 777-778, 837, 846, 891, 981).
-	CMSGRepopRequest         uint32 = 0x3E00C8
-	CMSGReclaimCorpse        uint32 = 0x3E0076
-	CMSGResurrectResponse    uint32 = 0x4300AF
+	CMSGRepopRequest      uint32 = 0x3E00C8
+	CMSGReclaimCorpse     uint32 = 0x3E0076
+	CMSGResurrectResponse uint32 = 0x4300AF
+	// CMSG_SUMMON_RESPONSE 0x430096 (Opcodes.h:994): the answer to a summon offer, the summoner's packed GUID and
+	// the Accept bit (MovementPackets.cpp:1079-1083).
+	CMSGSummonResponse       uint32 = 0x430096
 	CMSGQueryCorpseLocation  uint32 = 0x43008C
 	CMSGQueryCorpseTransport uint32 = 0x43008D
 	CMSGTalkToGossip         uint32 = 0x3E0027
@@ -221,7 +224,10 @@ const (
 	SMSGSpellOrDamageImmune      uint32 = 0x67001D
 	// The rest of the death flow (Opcodes.h:27, 228, 1948-1976, 377, 430, 1318): the graveyard, the corpse, a
 	// resurrection offer, the spirit healer's menu and the movement state a ghost is given.
-	SMSGResurrectRequest     uint32 = 0x450012
+	SMSGResurrectRequest uint32 = 0x450012
+	// SMSG_SUMMON_REQUEST 0x4501CC (Opcodes.h:2406): a summoning portal offers the player the summon
+	// (MovementPackets.cpp:1100-1110).
+	SMSGSummonRequest        uint32 = 0x4501CC
 	SMSGCorpseLocation       uint32 = 0x4500F7
 	SMSGCorpseTransportQuery uint32 = 0x4501BE
 	SMSGCorpseReclaimDelay   uint32 = 0x4501F4
@@ -509,6 +515,7 @@ var clientNames = map[uint32]string{
 	CMSGSuspendTokenResponse:        "CMSG_SUSPEND_TOKEN_RESPONSE",
 	CMSGWorldPortResponse:           "CMSG_WORLD_PORT_RESPONSE",
 	CMSGAreaTrigger:                 "CMSG_AREA_TRIGGER",
+	CMSGSummonResponse:              "CMSG_SUMMON_RESPONSE",
 
 	CMSGChatMessageSay:                 "CMSG_CHAT_MESSAGE_SAY",
 	CMSGChatMessageYell:                "CMSG_CHAT_MESSAGE_YELL",
