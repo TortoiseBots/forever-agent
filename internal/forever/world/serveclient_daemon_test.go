@@ -412,21 +412,16 @@ func (a *serveAgent) rawPost(t *testing.T, body []byte) (json.RawMessage, *rpcEr
 // W2-W4 (event_log, act, teardown) against the real daemon. Commander is served too and has its own real-daemon test
 // below. Teardown ends the daemon, so it is the last call.
 func TestServeClientMethodPin(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, _ := ServeRPCMethods()
 	for _, m := range []string{"status", "units", "unit", "party", "gm", "bot", "events", "logout", "commander",
 		"event_log", "act", "teardown", "mount", "dismount", "follow_start", "follow_stop", "follow_status",
 		"vendor_list", "buy", "sell", "gossip_hello", "gossip_select",
 		"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log",
 		"taxi",
 		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll",
-		"trainer_list", "train"} {
+		"trainer_list", "train", "trade"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
-		}
-	}
-	for _, m := range []string{"trade"} {
-		if !slices.Contains(notPorted, m) {
-			t.Errorf("%s is no longer not-ported: drop its note and test it for real", m)
 		}
 	}
 

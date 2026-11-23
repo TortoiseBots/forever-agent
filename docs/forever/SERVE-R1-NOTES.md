@@ -50,6 +50,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `vendor_list` | DONE | Opens the vendor (the gossip option or the two-step list ask) and answers its rows (`muid`, `item_entry`, `price`, `stack_count`, `stock`, -1 unlimited) with the `vendor_list` event. Round D3; see [DAEMON-D3-NOTES.md](DAEMON-D3-NOTES.md). No live run yet. |
 | `buy` | DONE | `item_entry` or `muid`, `count` 1-255; reads the list first when this NPC's is not cached; the purchase goes to the backpack (`bag`/`slot` are refused). Answers `ok`, the `vendor_buy` or `vendor_buy_failed` event and the new row. Round D3. |
 | `sell` | DONE | `item_entry` or `bag`+`slot`, `count`, `force`; answers the row as it stood before the sale and `vendor_sell` or `vendor_sell_failed`. Round D3. |
+| `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, `cast` with `trade_slot` 6 | DONE | The trade window: one call, or step by step (open or expect a proposal, set items and gold, accept, cancel, status), the `trade_status` events, and the enchant cast at the other player's slot 6. Round #96; see [DAEMON-TRADE-NOTES.md](DAEMON-TRADE-NOTES.md). No live run yet. |
 | `gossip_hello`, `gossip_select` | DONE | Talk (or quest hello) and choose an option; each answers `ok`, the first answering event, and the open `menu` (`menu_id`, `options`, `quests`). Coded options are refused. Round D3. |
 | `party` | DONE | The party model's roster, leader, health/power and pending invite. Raid groups are not modelled. |
 | `chat_log` | DONE | The chat log as the old page (`since`, `limit`, `wait_ms`): seq, chat type name, source, channel, text. It is the chat model, not the 78-kind event log. |
@@ -122,7 +123,6 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `gameobjects` | DONE | The game objects in view nearest first (`within`/`radius`, `entry`, `name`, numeric `type`, `limit`). Round D5. |
 | `roll` | DONE | Votes need, greed or pass on a started group roll named by `looted` + `item_slot` (or the only open one). Round D5. |
 | `trainer_list`, `train` | NOT-PORTED | No trainer method yet (the vendor and gossip methods are ported, round D3; the quest methods, round D4: [DAEMON-D4-NOTES.md](DAEMON-D4-NOTES.md); `taxi` is ported, #107). |
-| `trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_accept`, `trade_cancel`, `trade_status` | NOT-PORTED | No trade model. |
 | `pet`, `pet_action`, `mount`, `dismount` | NOT-PORTED | No pet or mount model. |
 | `brain_start`, `brain_stop`, `brain_status`, `follow_start`, `follow_stop`, `follow_status` | NOT-PORTED | The old brain and follow loops are 1.12 code. |
 | `dungeon_run`, `dungeon_status`, `dungeon_stop`, `dungeon_pause`, `dungeon_resume`, `dungeon_skip`, `dungeon_stage`, `plan_check`, `tune_set`, `tune_list` | NOT-PORTED | A ForeverCore run is a command (`dungeon-run`, `dungeon-watch`), not a daemon service. |
@@ -233,7 +233,7 @@ Two review findings were fixed here.
 * `TestServeAcceptInvite`: three subtests against the fake's invite: the roster naming the inviter confirms the
   accept, a failed party command result (group-full) is the typed refusal, and a silent server is the timeout; the
   fake sees CMSG_PARTY_INVITE_RESPONSE in every case.
-* `TestServeNotPortedAndUnknown`: `trade`, `teardown` and `map_snapshot` answer `-32003` with the ported-on-this-
+* `TestServeNotPortedAndUnknown`: `lfg_status`, `teardown` and `map_snapshot` answer `-32003` with the ported-on-this-
   server text; an unknown name answers `-32601`; the five death methods answer their own refusals for a living
   character.
 * `TestServeNavmeshPath`: a `navfixture` mesh in a temporary folder; `path_to` is complete and `walk_path` walks it.
