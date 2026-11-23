@@ -23,6 +23,8 @@ var adapterMethods = map[string]bool{
 	"RunStatus": true, "RunEvents": true, "CommanderStatus": true,
 	"Run": true, "gmOn": true, "teleOutside": true, "appear": true, "deathRecap": true,
 	"combatLog": true, "combatLogUnit": true,
+	// The group layer's raid calls (#108): typed client packets sent by the session, never a `.tb` line.
+	"ConvertRaid": true, "RaidMove": true,
 }
 
 // TestOnlySendReachesTheCommandChannel: the driver adapter's only call of the command session's Run is the send the

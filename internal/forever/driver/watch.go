@@ -150,7 +150,13 @@ func (r *Run) Watch(ctx context.Context) Result {
 			st = StateLegWalk
 		}
 	} else {
-		if r.readCommander(ctx) {
+		// A roster read that fails is not the end here: PREPARE reads it again and names its own failure. A raid
+		// watch still makes the module's group the plan's raid, with its layout, before anything else goes out.
+		r.readCommander(ctx)
+		if r.cfg.Raid && r.stopReason == "" && !r.lost {
+			r.raidSetup(ctx)
+		}
+		if r.stopReason == "" && !r.lost {
 			r.commanderToTank(ctx, commanderMoveBudget)
 		}
 		if r.stopReason == "" && !r.lost {
@@ -535,7 +541,7 @@ func (r *Run) frameBots(ctx context.Context, rep tbcmd.StateReport) []FrameBot {
 		b := rep.Bots[i]
 		fb := FrameBot{State: b}
 		if slot := r.partySlot(b.Name); slot >= 0 {
-			fb.Role = traceRole(slot)
+			fb.Role = r.traceRoleOf(b.Name, slot)
 		}
 		if g, ok := r.memberGUIDOf(b.Name); ok {
 			fb.GUID = g.String()
@@ -1015,11 +1021,11 @@ func (w *watchRun) step(leg, step int) *StepRecord {
 // name) becomes a role and never a name on the card.
 func (r *Run) watchRoles() map[string]string {
 	out := make(map[string]string, len(r.cfg.Party))
-	for i, name := range r.cfg.Party {
+	for _, name := range r.cfg.Party {
 		if name == "" {
 			continue
 		}
-		out[partyNameKey(name)] = partyRole(i)
+		out[partyNameKey(name)] = r.roleName(name)
 	}
 	return out
 }
@@ -1028,17 +1034,6 @@ func (r *Run) watchRoles() map[string]string {
 // the event value may carry the surrounding blanks of the record it was written from.
 func partyNameKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// partyRole is the party slot's word: the leader is the tank, the second the healer, the rest the damage dealers.
-func partyRole(i int) string {
-	switch i {
-	case 0:
-		return "tank"
-	case 1:
-		return "healer"
-	}
-	return fmt.Sprintf("dps%d", i-1)
 }
 
 // StopPausedStuck is the watch's stop reason when the module's pause never cleared within Limits.WatchPause (or,
@@ -1517,6 +1512,9 @@ func (r *Run) watchResult(w *watchRun) Result {
 	// The combat-log watch the run asked for (or could not start): group, unit, off, unsupported. It is set after
 	// the recorder's summary replaces the result's, so both a recorded watch and a dry one carry it.
 	res.Summary.CombatLogWatch = r.combatlogMode
+	// A raid watch also leaves its summary.json in the tb-raid-walk shape beside the run's own file, on every end:
+	// a short roster or a refused convert is as much a result raid-autopilot has to read as a finished run.
+	r.writeRaidSummary(w, &res)
 	return res
 }
 

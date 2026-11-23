@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -160,7 +161,7 @@ type Fake struct {
 	StateErr     error
 	StateDelay   time.Duration
 	CallDelay    time.Duration
-	IncompleteAt int // this state call (1-based) returns four lines and an error
+	IncompleteAt int // this state call (1-based) returns all but the last party line, and an error
 	linkLost     bool
 	linkAfter    time.Duration
 	hasLinkAfter bool
@@ -271,6 +272,20 @@ type Fake struct {
 	// EmptyStateOn, when set, is asked before a state read; true answers it with no report at all and a timeout: the
 	// transient loss a gate's own poll can hit after the party's entry was already verified.
 	EmptyStateOn func(f *Fake) bool
+	// The scripted group's raid state, as the core holds it (#108 R3): Raid is the roster's raid flag (false until a
+	// convert_raid or the script sets it), PlayerLed says a real player leads the group (the card's playerled), and
+	// Subgroups is each bot's subgroup as the raid frame numbers it (1-8). CardLimit cuts the card's member list
+	// short (0 lists the whole party). ConvertErr and MoveErr refuse the two group calls; RaidOps is every card
+	// read, convert and move in the order the driver sent them, and ConvertCalls, RaidMoves count them.
+	Raid         bool
+	PlayerLed    bool
+	Subgroups    map[string]int
+	CardLimit    int
+	ConvertErr   error
+	MoveErr      error
+	ConvertCalls int
+	RaidMoves    []RaidSlot
+	RaidOps      []string
 }
 
 // FakeDeath is one scripted death: at After, a member of the party dies. Unit is the fight's unit id the module's
@@ -351,12 +366,27 @@ func NewFakeWith(route *Route, cfg Config, patrols bool) *Fake {
 	} else {
 		f.selfPos = route.Entrance
 	}
-	if cfg.Watch && len(cfg.Party) == 0 && cfg.Leader != "" {
-		// A watch names only the leader; the scripted module's party is the leader's own.
-		cfg.Party = []string{cfg.Leader, "Watchheal", "Watchdps1", "Watchdps2", "Watchdps3"}
+	if (cfg.Watch || cfg.Raid) && len(cfg.Party) == 0 && cfg.Leader != "" {
+		// A watch names only the leader; the scripted module's party is the leader's own, as many bots as the plan's
+		// raid says (its tanks and healers take the first slots, the damage dealers the rest) or five for a dungeon.
+		size := 5
+		if cfg.Raid && route.Raid != nil && route.Raid.Size > 0 {
+			size = route.Raid.Size
+		}
+		cfg.Party = watchPartyNames(cfg.Leader, size)
 		f.cfg.Party = cfg.Party
+		if cfg.Raid {
+			// The scripted raid is a raid already and starts in the core's default layout (five per subgroup,
+			// filling them in order): a dry raid watch walks straight into PREPARE. A scenario that wants the
+			// watch's convert sets Raid false and PlayerLed true.
+			f.Raid = true
+			f.Subgroups = map[string]int{}
+			for i, name := range cfg.Party {
+				f.Subgroups[name] = i/5 + 1
+			}
+		}
 	}
-	if cfg.Watch && f.BotCommander == "" {
+	if (cfg.Watch || cfg.Raid) && f.BotCommander == "" {
 		// The module's own bot commander, outside the party: never the observer.
 		f.BotCommander = "Botcmd"
 	}
@@ -430,7 +460,7 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	f.stateCalls++
 	if f.StaleAt == f.stateCalls || f.StaleAlways {
 		// The report as it was before the last order, delivered after its freshness limit: the run must refuse it.
-		snap := f.report(5)
+		snap := f.reportAll()
 		if f.orderSnap != nil && !f.missingNow {
 			snap = *f.orderSnap
 		}
@@ -455,9 +485,9 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 	defer func() { f.missingNow = false }()
 	if f.OnState != nil {
 		if err := f.OnState(f, f.stateCalls); err != nil {
-			n := 5
+			n := len(f.cfg.Party)
 			if f.IncompleteAt == f.stateCalls {
-				n = 4
+				n--
 			}
 			return f.report(n), err
 		}
@@ -469,7 +499,7 @@ func (f *Fake) State(ctx context.Context) (tbcmd.StateReport, error) {
 		}
 		return tbcmd.StateReport{}, f.StateErr
 	}
-	return f.report(5), nil
+	return f.reportAll(), nil
 }
 
 // orSelf is the leader distance kind the fake reports: self unless the test scripted another kind.
@@ -540,6 +570,9 @@ func (f *Fake) report(n int) tbcmd.StateReport {
 	}
 	return rep
 }
+
+// reportAll is the whole party's state answer: five lines for a dungeon party, the plan's raid size for a raid.
+func (f *Fake) reportAll() tbcmd.StateReport { return f.report(len(f.cfg.Party)) }
 
 // Threat answers the threat lists: every engaged, living mob is on a bot's list.
 func (f *Fake) Threat(ctx context.Context) (tbcmd.ThreatReport, error) {
@@ -652,7 +685,7 @@ func (f *Fake) Order(ctx context.Context, who, verb, arg string) (tbcmd.OrderRep
 		return tbcmd.OrderReport{}, err
 	}
 	// The answer is taken before the order's script runs: a stale report has to show that state.
-	snap := f.report(5)
+	snap := f.reportAll()
 	f.orderSnap = &snap
 	f.ordered = append(f.ordered, Order{At: f.Clock.Now().Sub(f.Start), Who: who, Verb: verb, Arg: arg})
 	rep := tbcmd.OrderReport{Verb: verb, Target: who}
@@ -688,7 +721,7 @@ func (f *Fake) Party(ctx context.Context) (tbcmd.PartyReport, error) {
 	}
 	// A watch's party is commanded by the module's own bot, outside the party; a run's by this character.
 	commander := f.cfg.Commander
-	if f.cfg.Watch && f.BotCommander != "" {
+	if (f.cfg.Watch || f.cfg.Raid) && f.BotCommander != "" {
 		commander = f.BotCommander
 	}
 	leader := f.cfg.Tank()
@@ -1386,20 +1419,91 @@ func (f *Fake) CommanderStatus(ctx context.Context, commander string) (tbcmd.Com
 		return tbcmd.CommanderReport{}, err
 	}
 	f.CardReads++
+	f.RaidOps = append(f.RaidOps, "card")
 	if f.FailCard != nil {
 		return tbcmd.CommanderReport{}, f.FailCard
 	}
-	card := tbcmd.Card{Cmd: f.BotCommander, Online: true, Lead: f.cfg.Tank()}
+	card := tbcmd.Card{Cmd: f.BotCommander, Online: true, Lead: f.cfg.Tank(), Raid: f.Raid, PlayerLed: f.PlayerLed}
 	for _, name := range f.cfg.Party {
 		b, ok := f.bots[name]
 		if !ok {
 			continue
 		}
-		card.Members = append(card.Members, tbcmd.CardMember{Bot: b.name, GUID: strconv.FormatUint(b.guid.Low, 10),
-			Class: b.class, Role: b.role, Level: b.level, Alive: true})
+		m := tbcmd.CardMember{Bot: b.name, GUID: strconv.FormatUint(b.guid.Low, 10),
+			Class: b.class, Role: b.role, Level: b.level, Alive: true}
+		if sub, ok := f.Subgroups[b.name]; ok {
+			m.Sub, m.HasSub = sub, true
+		}
+		card.Members = append(card.Members, m)
+	}
+	if f.CardLimit > 0 && len(card.Members) > f.CardLimit {
+		// A card that shows fewer members than the group holds: the short roster a raid watch must refuse.
+		card.Members = card.Members[:f.CardLimit]
 	}
 	card.Bots, card.Bound = len(card.Members), len(card.Members)
 	return tbcmd.CommanderReport{Cards: []tbcmd.Card{card}, Bindings: 1}, nil
+}
+
+// ConvertRaid is the scripted group layer's convert_raid: the leader's group turns into a raid, or ConvertErr
+// refuses it with the group layer's own text.
+func (f *Fake) ConvertRaid(ctx context.Context) error {
+	if err := ctxErr(ctx); err != nil {
+		return err
+	}
+	if err := f.linkErr(); err != nil {
+		return err
+	}
+	f.RaidOps = append(f.RaidOps, "convert")
+	f.ConvertCalls++
+	if f.ConvertErr != nil {
+		return f.ConvertErr
+	}
+	if f.Subgroups == nil {
+		f.Subgroups = map[string]int{}
+	}
+	for i, name := range f.cfg.Party {
+		if _, ok := f.Subgroups[name]; !ok {
+			f.Subgroups[name] = i/5 + 1
+		}
+	}
+	f.Raid = true
+	return nil
+}
+
+// RaidMove is the scripted group layer's raid_move: the member goes to its subgroup, or MoveErr refuses it.
+func (f *Fake) RaidMove(ctx context.Context, name string, subgroup int) error {
+	if err := ctxErr(ctx); err != nil {
+		return err
+	}
+	if err := f.linkErr(); err != nil {
+		return err
+	}
+	f.RaidOps = append(f.RaidOps, fmt.Sprintf("move:%s:%d", name, subgroup))
+	if f.MoveErr != nil {
+		return f.MoveErr
+	}
+	if f.Subgroups == nil {
+		f.Subgroups = map[string]int{}
+	}
+	for key := range f.bots {
+		if strings.EqualFold(key, name) {
+			name = key
+			break
+		}
+	}
+	f.Subgroups[name] = subgroup
+	f.RaidMoves = append(f.RaidMoves, RaidSlot{Name: name, Subgroup: subgroup})
+	return nil
+}
+
+// watchPartyNames is a watch's scripted party: the leader (its tank), its healer and as many damage dealers as the
+// group has room for.
+func watchPartyNames(leader string, size int) []string {
+	names := []string{leader, "Watchheal"}
+	for i := 2; i < size; i++ {
+		names = append(names, fmt.Sprintf("Watchdps%d", i-1))
+	}
+	return names
 }
 
 // Auras is the scripted world's aura list for a unit: a scenario sets it with SetAuras, and a bot without one has

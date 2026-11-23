@@ -22,15 +22,37 @@ import (
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
+// foreverDungeonWatchCmd is forever dungeon-watch: the watch over a five-bot dungeon party.
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
-	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
+	return foreverWatchCmd(ctx, args, false, stdout, stderr)
+}
+
+// foreverRaidWatchCmd is forever raid-watch: the same watch over a raid plan, with a raid group (10, 20 or 40 bots)
+// converted and laid out before PREPARE and a summary.json in the Turtle tools' tb-raid-walk shape at its end.
+func foreverRaidWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return foreverWatchCmd(ctx, args, true, stdout, stderr)
+}
+
+// foreverWatchCmd runs the watch either way: raid false is forever dungeon-watch, raid true is forever raid-watch
+// (the same flags, plus --layout, and a plan that must be a raid).
+func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stderr io.Writer) int {
+	cmdName := "forever dungeon-watch"
+	planHint := "dungeon plan file (version 1)"
+	if raid {
+		cmdName = "forever raid-watch"
+		planHint = "raid plan file (version 1, with its raid block)"
+	}
+	usage := "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	if raid {
+		usage = "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--layout FILE] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	}
+	fs := flag.NewFlagSet(cmdName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
 	var pf preflightFlags
 	pf.register(fs, true)
-	plan := fs.String("plan", "", "dungeon plan file (version 1)")
+	plan := fs.String("plan", "", planHint)
 	leader := fs.String("leader", "", "the bot that leads the module's run")
 	enter := fs.String("enter", "tele", "how the party enters: tele (default), portal or none (already placed)")
 	maxMinutes := fs.Int("max-minutes", 120, "the watch's budget in minutes")
@@ -52,6 +74,10 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	drawMap := fs.Bool("map", false, "after the summary, write the run's map (SVG and HTML replay) into --out; a failure is one log line and never fails the watch")
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live entry walk")
 	dry := fs.Bool("dry", false, "run the watch machine against the scripted world (no network)")
+	var layoutPath string
+	if raid {
+		fs.StringVar(&layoutPath, "layout", "", "raid layout file: one bot per line, its name and the subgroup 1-8 it is moved to before PREPARE (optional)")
+	}
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -60,67 +86,81 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		return exitUsage
 	}
 	if *plan == "" || *leader == "" || common.character == "" {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --plan, --leader and --character are required")
+		fmt.Fprintln(stderr, cmdName+": --plan, --leader and --character are required")
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
 	switch *enter {
 	case "tele", "portal", "none":
 	default:
-		fmt.Fprintf(stderr, "forever dungeon-watch: --enter %q is not tele, portal or none\n", *enter)
+		fmt.Fprintf(stderr, cmdName+": --enter %q is not tele, portal or none\n", *enter)
 		return exitUsage
 	}
 	if *maxMinutes < 1 || *maxMinutes > 24*60 || *maxWipes < -1 || *maxWipes > 20 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --max-minutes is 1-1440 and --max-wipes -1 (no budget) to 20")
+		fmt.Fprintln(stderr, cmdName+": --max-minutes is 1-1440 and --max-wipes -1 (no budget) to 20")
 		return exitUsage
 	}
 	if *watchdog < 1 || *watchdog > 120 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --watchdog-minutes is 1-120")
+		fmt.Fprintln(stderr, cmdName+": --watchdog-minutes is 1-120")
 		return exitUsage
 	}
 	if *pause < 1 || *pause > 120 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --pause-minutes is 1-120")
+		fmt.Fprintln(stderr, cmdName+": --pause-minutes is 1-120")
 		return exitUsage
 	}
 	if *poll < 1 || *poll > 30 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --poll is 1-30 seconds")
+		fmt.Fprintln(stderr, cmdName+": --poll is 1-30 seconds")
 		return exitUsage
 	}
 	if *attachWait < time.Second || *attachWait > 24*time.Hour {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --attach-wait is 1s-24h")
+		fmt.Fprintln(stderr, cmdName+": --attach-wait is 1s-24h")
 		return exitUsage
 	}
 	if *frameEvery != 0 && (*frameEvery < 2 || *frameEvery > 60) {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --frame-every is 2-60 seconds, or 0 for no frames")
+		fmt.Fprintln(stderr, cmdName+": --frame-every is 2-60 seconds, or 0 for no frames")
 		return exitUsage
 	}
 	if *combatMaxMB < 1 || *combatMaxMB > 4096 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --combat-max-mb is 1-4096")
+		fmt.Fprintln(stderr, cmdName+": --combat-max-mb is 1-4096")
 		return exitUsage
 	}
 	switch *combatlogWatch {
 	case "group", "unit", "off":
 	default:
-		fmt.Fprintf(stderr, "forever dungeon-watch: --combatlog-watch %q is not group, unit or off\n", *combatlogWatch)
+		fmt.Fprintf(stderr, cmdName+": --combatlog-watch %q is not group, unit or off\n", *combatlogWatch)
 		return exitUsage
 	}
 	if th.Repulls < 0 || th.Repulls > 100 || th.MemberDeaths < 1 || th.MemberDeaths > 20 || th.SlowFactor < 1 || th.SlowFactor > 20 {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --repulls is 0-100, --member-deaths 1-20 and --slow-factor 1-20")
+		fmt.Fprintln(stderr, cmdName+": --repulls is 0-100, --member-deaths 1-20 and --slow-factor 1-20")
 		return exitUsage
 	}
 	if *drawMap && *out == "" {
-		fmt.Fprintln(stderr, "forever dungeon-watch: --map needs --out (the map is written beside the trace)")
+		fmt.Fprintln(stderr, cmdName+": --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
-	if !pf.check("forever dungeon-watch", *dry, stderr) {
+	if !pf.check(cmdName, *dry, stderr) {
 		return exitUsage
 	}
-	route, err := driver.LoadWatchRoute(*plan)
+	load := driver.LoadWatchRoute
+	if raid {
+		load = driver.LoadRaidWatchRoute
+	}
+	route, err := load(*plan)
 	if err != nil {
-		fmt.Fprintf(stderr, "forever dungeon-watch: the plan is refused: %v\n", err)
+		fmt.Fprintf(stderr, cmdName+": the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused
 	}
+	var layout []driver.RaidSlot
+	if layoutPath != "" {
+		layout, err = driver.LoadRaidLayout(layoutPath)
+		if err != nil {
+			fmt.Fprintf(stderr, cmdName+": --layout: %v\n", err)
+			return exitUsage
+		}
+	}
 	cfg := driver.Config{
+		Raid:           raid,
+		Layout:         layout,
 		Plan:           *plan,
 		Leader:         *leader,
 		Commander:      common.character,
@@ -148,19 +188,19 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	if *dry {
 		return dungeonWatchDry(ctx, cfg, route, th, *drawMap, stdout, stderr)
 	}
-	if err := common.check("forever dungeon-watch"); err != nil {
+	if err := common.check(cmdName); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if err := common.passwordCheck("forever dungeon-watch"); err != nil {
+	if err := common.passwordCheck(cmdName); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if stop, code := runPreflight(ctx, "forever dungeon-watch", fpreflight.KindWatch, &pf, planLoader(driver.LoadWatchRoute, *plan), common.character, []string{*leader}, stdout, stderr); stop {
+	if stop, code := runPreflight(ctx, cmdName, fpreflight.KindWatch, &pf, planLoader(load, *plan), common.character, []string{*leader}, stdout, stderr); stop {
 		return code
 	}
 	deadline := time.Duration(*maxMinutes+15) * time.Minute
-	report, err := common.enter(ctx, "forever dungeon-watch", stdout, world.Options{
+	report, err := common.enter(ctx, cmdName, stdout, world.Options{
 		Deadline:     deadline,
 		Settle:       2 * time.Second,
 		NavmeshDir:   *navmeshDir,
@@ -182,21 +222,25 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 			return exitOK
 		}
 		if err != nil {
-			fmt.Fprintf(stderr, "forever dungeon-watch: %v\n", err)
+			fmt.Fprintf(stderr, cmdName+": %v\n", err)
 		}
 		return exitWorld
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "forever dungeon-watch: %v\n", err)
+		fmt.Fprintf(stderr, cmdName+": %v\n", err)
 		return exitWorld
 	}
-	fmt.Fprintln(stderr, "forever dungeon-watch: the session ended without a watch result")
+	fmt.Fprintln(stderr, cmdName+": the session ended without a watch result")
 	return exitWorld
 }
 
 // dungeonWatchDry plays the whole watch over the scripted module: the plan's legs, the module's progress, its pause
 // on a wipe, the practice rescue and its end.
 func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route, th reportcard.Thresholds, drawMap bool, stdout, stderr io.Writer) int {
+	cmdName := "forever dungeon-watch"
+	if cfg.Raid {
+		cmdName = "forever raid-watch"
+	}
 	f := driver.NewFake(route, cfg)
 	cfg.Party = f.PartyNames()
 	run := driver.New(cfg, route, f, f, f, f.Clock)
@@ -208,12 +252,12 @@ func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route
 		// The party records (with each member's class) come from the state report's first frame, as in a live watch.
 		rec, err := driver.NewWatchRecorder(cfg.Out, cfg.RunID, route.Name, route.Map, 1, f.Start, nil)
 		if err != nil {
-			fmt.Fprintf(stderr, "forever dungeon-watch: %v\n", err)
+			fmt.Fprintf(stderr, cmdName+": %v\n", err)
 			return exitUsage
 		}
 		run.SetRecorder(rec)
 	}
-	fmt.Fprintf(stdout, "forever dungeon-watch: plan %s, map %d, legs %d (dry)\n", route.Name, route.Map, len(route.Legs))
+	fmt.Fprintf(stdout, cmdName+": plan %s, map %d, legs %d (dry)\n", route.Name, route.Map, len(route.Legs))
 	res := run.Watch(ctx)
 	printWatchResult(stdout, &res)
 	writeCard(stdout, res.Summary, th, res.SummaryFile)
@@ -236,6 +280,9 @@ func printWatchResult(stdout io.Writer, res *driver.Result) {
 	}
 	if res.SummaryFile != "" {
 		fmt.Fprintf(stdout, "summary: %s\n", res.SummaryFile)
+	}
+	if res.RaidSummaryFile != "" {
+		fmt.Fprintf(stdout, "raid summary: %s\n", res.RaidSummaryFile)
 	}
 	if res.Trace != "" {
 		fmt.Fprintf(stdout, "trace: %s\n", res.Trace)

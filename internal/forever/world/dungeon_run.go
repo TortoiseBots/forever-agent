@@ -86,8 +86,13 @@ func (s *session) dungeonWatch(ctx context.Context, cfg *driver.Config) (*driver
 		return nil, errors.New("world: dungeon-watch: no leader")
 	}
 	// The watch runs the module's plan whole: its in-fight run fields (kill_first, cc_priority, cc_always,
-	// tank_min_hp, a boss's tactics) are inputs of the module's own run, which this client does not lead.
-	route, err := driver.LoadWatchRoute(c.Plan)
+	// tank_min_hp, a boss's tactics) are inputs of the module's own run, which this client does not lead. A raid
+	// watch loads the plan as a raid (its raid block says the group's size).
+	load := driver.LoadWatchRoute
+	if c.Raid {
+		load = driver.LoadRaidWatchRoute
+	}
+	route, err := load(c.Plan)
 	if err != nil {
 		return nil, fmt.Errorf("world: dungeon-watch: the plan is refused: %w", err)
 	}

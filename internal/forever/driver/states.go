@@ -169,14 +169,18 @@ func (r *Run) adoptWatchParty(ctx context.Context) bool {
 }
 
 // adoptRoster fills a watch's party from the module's roster: the tank first (so every role lookup has the tank
-// where the driver's own run keeps it), then the one healer, then the three damage dealers. The party's commander is
-// the module's own bot, outside the party; this character is only an observer and is refused if the roster names it
-// as the commander. It refuses what a run's PREPARE refuses — five members, exactly one member leader flag naming
-// the leader the summary names, the module's run leader being neither the party's tank nor its leader, everyone
-// online and above the entry level, the roles — and two things only a watch needs: every member a host bot, and
-// every member already commanded, because the module's start refuses a party it would have to bind itself.
+// where the driver's own run keeps it), then the one healer, then the three damage dealers — a raid watch's party is
+// the plan's raid size, its tanks, healers and damage dealers in that order. The party's commander is the module's
+// own bot, outside the party; this character is only an observer and is refused if the roster names it as the
+// commander. It refuses what a run's PREPARE refuses — the group's size (five, or the plan's raid size), exactly one
+// member leader flag naming the leader the summary names, the module's run leader being neither the party's tank nor
+// its leader, everyone online and above the entry level, the roles — and two things only a watch needs: every member
+// a host bot, and every member already commanded, because the module's start refuses a party it would have to bind
+// itself. A raid needs at least one tank, one healer and one damage dealer (its plan's split is a placeholder until a
+// raid has been run); a dungeon party needs exactly one tank, one healer and three damage dealers.
 func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
-	if len(p.Members) != 5 {
+	size := r.partySize()
+	if len(p.Members) != size {
 		return "roster"
 	}
 	if r.cfg.Leader == "" {
@@ -188,7 +192,7 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	}
 	var tank, heal, flagged string
 	var flags int
-	var dps []string
+	var tanks, heals, dps []string
 	for _, m := range p.Members {
 		if !m.Online {
 			return "offline"
@@ -207,22 +211,26 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 		}
 		switch {
 		case m.HasRole && m.Role == "tank":
-			if tank != "" {
-				return "roles"
+			if tank == "" {
+				tank = m.Name
 			}
-			tank = m.Name
+			tanks = append(tanks, m.Name)
 		case m.HasRole && m.Role == "healer":
-			if heal != "" {
-				return "roles"
+			if heal == "" {
+				heal = m.Name
 			}
-			heal = m.Name
+			heals = append(heals, m.Name)
 		case m.HasRole && m.Role == "dps":
 			dps = append(dps, m.Name)
 		default:
 			return "roles"
 		}
 	}
-	if tank == "" || heal == "" || len(dps) != 3 {
+	if r.cfg.Raid {
+		if tank == "" || heal == "" || len(dps) == 0 {
+			return "roles"
+		}
+	} else if tank == "" || heal == "" || len(dps) != 3 || len(tanks) != 1 || len(heals) != 1 {
 		return "roles"
 	}
 	// The summary and the member lines must agree on who leads: exactly one member carries the flag, and it is the
@@ -237,7 +245,14 @@ func (r *Run) adoptRoster(p tbcmd.PartyReport) string {
 	if !strings.EqualFold(r.cfg.Leader, tank) && !strings.EqualFold(r.cfg.Leader, p.Leader) {
 		return "leader"
 	}
-	r.cfg.Party = append([]string{tank, heal}, dps...)
+	order := append([]string{tank, heal}, tanks[1:]...)
+	order = append(order, heals[1:]...)
+	order = append(order, dps...)
+	r.cfg.Party = order
+	r.partyRoles = make(map[string]string, len(p.Members))
+	for _, m := range p.Members {
+		r.partyRoles[strings.ToLower(m.Name)] = m.Role
+	}
 	return ""
 }
 
@@ -308,7 +323,7 @@ func (r *Run) travel(ctx context.Context) string {
 
 // allAtPortal says whether the whole party stands on the outer map within the portal's reach.
 func (r *Run) allAtPortal(p *Portal) bool {
-	if len(r.rep.Bots) != 5 {
+	if len(r.rep.Bots) != r.partySize() {
 		return false
 	}
 	for _, b := range r.rep.Bots {
@@ -1903,7 +1918,7 @@ func (r *Run) leave(ctx context.Context) string {
 
 // allOutside says whether every bot is off the instance map.
 func (r *Run) allOutside() bool {
-	if len(r.rep.Bots) != 5 {
+	if len(r.rep.Bots) != r.partySize() {
 		return false
 	}
 	for _, b := range r.rep.Bots {
