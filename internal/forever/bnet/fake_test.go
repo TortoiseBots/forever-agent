@@ -7,6 +7,7 @@ package bnet
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -25,6 +26,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -352,6 +354,28 @@ type fakeLogin struct {
 	// hostile overrides one server field with poisoned text, for the sanitiser test: the values of the map are what
 	// the server sends in that field (see fakeField and the keys the handlers read)
 	hostile map[string]string
+
+	// gameAccounts are the game account ids the logon lists (nil: the one fakeGameAccountID). joinSuffix is the #N
+	// suffix the realm join ticket carries for the account the realm list ticket asked for (nil: "0000", naming the
+	// account the proof's login was joined on, not the one it asked for).
+	gameAccounts []uint32
+	joinSuffix   func(account uint32) string
+}
+
+// accounts is the game account ids the fake's logon lists.
+func (f *fakeLogin) accounts() []uint32 {
+	if len(f.gameAccounts) != 0 {
+		return f.gameAccounts
+	}
+	return []uint32{fakeGameAccountID}
+}
+
+// suffix is the join ticket's #N for an account: the test's own, else the proof's "0000".
+func (f *fakeLogin) suffix(account uint32) string {
+	if f.joinSuffix != nil {
+		return f.joinSuffix(account)
+	}
+	return "0000"
 }
 
 // fakeRealm is one realm row the fake's realm list carries.
@@ -610,6 +634,9 @@ func (f *fakeLogin) startRPC(cert tls.Certificate) net.Listener {
 
 type fakeConn struct {
 	net.Conn
+	// account is the game account id this connection's realm list ticket asked for: the join ticket answers with
+	// its suffix.
+	account uint32
 }
 
 func (c fakeConn) writeFrame(h header, body []byte) error {
@@ -660,13 +687,13 @@ func readFull(c net.Conn, buf []byte) (int, error) {
 	return n, nil
 }
 
-func (f *fakeLogin) respond(c fakeConn, request header, body []byte) error {
+func (f *fakeLogin) respond(c *fakeConn, request header, body []byte) error {
 	return c.writeFrame(header{ServiceID: serviceIDResponse, Token: request.Token, Size: uint32(len(body))}, body)
 }
 
 func (f *fakeLogin) serveRPC(raw net.Conn) {
 	defer raw.Close()
-	c := fakeConn{Conn: raw}
+	c := &fakeConn{Conn: raw}
 	_ = raw.SetDeadline(time.Now().Add(30 * time.Second))
 	if f.rpcDrip {
 		if _, _, err := c.readFrame(); err != nil {
@@ -732,7 +759,9 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 			key := bytes.Repeat([]byte{0x5A}, 64)
 			result := putVarint(nil, 1, 0)
 			result = append(result, putBytes(nil, 2, entityID{High: 0x0100000000000000, Low: 4242}.marshal())...)
-			result = append(result, putBytes(nil, 3, entityID{High: 0x0200000200576F57, Low: fakeGameAccountID}.marshal())...)
+			for _, id := range f.accounts() {
+				result = append(result, putBytes(nil, 3, entityID{High: 0x0200000200576F57, Low: uint64(id)}.marshal())...)
+			}
 			result = append(result, putBytes(nil, 9, key)...)
 			if err := c.writeFrame(header{
 				ServiceID: serviceIDRequest, ServiceHash: authenticationListenerHash,
@@ -763,7 +792,7 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 	}
 }
 
-func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logonBuild uint32) error {
+func (f *fakeLogin) handleClientRequest(c *fakeConn, h header, body []byte, logonBuild uint32) error {
 	resp, err := unmarshalClientResponse(body) // a request has the same repeated attribute field 1
 	if err != nil {
 		f.fail("client request: %v", err)
@@ -782,9 +811,10 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logon
 		if err := json.Unmarshal(stripPrefix(identityBlob), &identity); err != nil {
 			f.fail("identity: %v", err)
 		}
-		if identity.GameAccountID != fakeGameAccountID || identity.GameAccountRegion != 2 {
+		if !slices.Contains(f.accounts(), identity.GameAccountID) || identity.GameAccountRegion != 2 {
 			f.fail("identity = %+v", identity)
 		}
+		c.account = identity.GameAccountID
 		var info realmListTicketClientInformation
 		infoBlob, _ := resp.blob("Param_ClientInfo")
 		if err := json.Unmarshal(stripPrefix(infoBlob), &info); err != nil {
@@ -855,7 +885,7 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logon
 				return c.writeFrame(header{ServiceID: serviceIDResponse, Token: h.Token, Status: status}, nil)
 			}
 		}
-		ticket := map[string]any{"gameAccount": "agent#0000", "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
+		ticket := map[string]any{"gameAccount": "agent#" + f.suffix(c.account), "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
 		ticketJSON, err := json.Marshal(ticket)
 		if err != nil {
 			f.fail("join ticket: %v", err)
@@ -881,4 +911,73 @@ func stripPrefix(blob []byte) []byte {
 		return blob[i+1:]
 	}
 	return blob
+}
+
+// TestLoginPicksNamedGameAccount: --game-account 2 on an account with two game accounts. The realm joins the first
+// accounts' #1 whatever was asked; the login closes that attempt and logs in again until the join ticket names #2.
+func TestLoginPicksNamedGameAccount(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.gameAccounts = []uint32{7, 8}
+	f.joinSuffix = func(account uint32) string {
+		if account == 8 {
+			return "0002"
+		}
+		return "0001"
+	}
+	attempts := 0
+	opts := f.options()
+	opts.ClientBuild = wire.Build70938
+	opts.GameAccount = 2
+	opts.BeforeAttempt = func(context.Context) error {
+		attempts++
+		return nil
+	}
+	result, err := Login(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	select {
+	case err := <-f.errs:
+		t.Fatal("fake server:", err)
+	default:
+	}
+	if result.GameAccountID != 8 {
+		t.Fatalf("game account id %d; want the second listed (8)", result.GameAccountID)
+	}
+	if result.GameAccounts != 2 {
+		t.Fatalf("game accounts %d; want 2", result.GameAccounts)
+	}
+	if attempts != 2 {
+		t.Fatalf("BeforeAttempt ran %d times; want one per real login (2)", attempts)
+	}
+}
+
+// TestLoginNamedGameAccountMissing: --game-account 3 on an account with two game accounts is nobody's account: every
+// listed account is tried, then the login says so.
+func TestLoginNamedGameAccountMissing(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.gameAccounts = []uint32{7, 8}
+	f.joinSuffix = func(account uint32) string {
+		if account == 8 {
+			return "0002"
+		}
+		return "0001"
+	}
+	attempts := 0
+	opts := f.options()
+	opts.ClientBuild = wire.Build70938
+	opts.GameAccount = 3
+	opts.BeforeAttempt = func(context.Context) error {
+		attempts++
+		return nil
+	}
+	_, err := Login(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "bnet: no game account #3") {
+		t.Fatalf("err %v; want bnet: no game account #3", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("BeforeAttempt ran %d times; want one per listed account (2)", attempts)
+	}
 }

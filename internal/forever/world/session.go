@@ -51,9 +51,12 @@ type Options struct {
 	// and the character screen adopt it instead of authenticating again, and close it with the session. The socket
 	// belongs to this Options once set: nothing else may close it. Nil means authenticate from the fields above.
 	WorldConn *worldconn.Realm
-	Character string        // character name (the surname may be omitted)
-	Stay      time.Duration // how long to stay in the world after the login burst
-	Deadline  time.Duration // whole run; default 2 minutes + Stay + Settle
+	Character string // character name (the surname may be omitted)
+	// GameAccounts is how many game accounts the login listed (bnet.Result.GameAccounts): a character-list error
+	// says so only when there is one to choose from (--game-account).
+	GameAccounts int
+	Stay         time.Duration // how long to stay in the world after the login burst
+	Deadline     time.Duration // whole run; default 2 minutes + Stay + Settle
 	// WalkCheck runs round 3's walk (forever walk-check): look at the world for Settle (the command's --stay), walk
 	// Dx/Dy yards from the spawn, wait WalkPause, walk back, report, log out. There is no plain stay after it; the
 	// settle is a stay-like phase and counts in the default Deadline like Stay.
@@ -1155,7 +1158,11 @@ func (s *session) loginWorld(ctx context.Context) error {
 	}
 	character, ok := findCharacter(s.report.Characters, s.opts.Character)
 	if !ok {
-		return fmt.Errorf("world: the account has no character named %q", chat.SanitiseName(s.opts.Character))
+		hint := ""
+		if s.opts.GameAccounts > 1 {
+			hint = fmt.Sprintf("; the login has %d game accounts: pass --game-account N", s.opts.GameAccounts)
+		}
+		return fmt.Errorf("world: the account has no character named %q%s", chat.SanitiseName(s.opts.Character), hint)
 	}
 	s.report.Character = character
 
