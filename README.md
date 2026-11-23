@@ -910,6 +910,18 @@ It reads the slot's token file itself and prints only the call's `result`. See
 
 - Check a Forever run before it starts: `forever-agent forever preflight --mode dungeon-watch|dungeon-run|dungeon-play ...` checks the serve slot (pid and port), its lease, the plan and its export file (`--export`: the file only, not the rows the server loaded), the module answering `.tb state party` over the serve link (`--serve-dir`), the SOAP console (`--soap-user`) and the named bots (exist, online, owned by the player's account for `dungeon-play`). Exit 0 all good (warnings print), 13 a check failed. The three run commands make the same preflight before they log in; `--preflight-only` stops after it, `--no-preflight` skips it. SOAP is loopback only, so the preflight runs on the server's host.
 
+## Scrub a Forever capture
+
+A `forever serve --capture-dir DIR` capture holds the run's raw server packets, so check it before sharing one:
+`forever-agent forever scrub-check [--slots FILE] [--account EMAIL]... [--password-file FILE] <dir>...` reads every
+file of every run — the payloads, `manifest.tsv` and any file beside them — and looks for each account of a slot
+under a server whose slots file entry has a `forever` block, each `--account`, and the password (`--password-file`,
+else `FOREVER_PASSWORD`). Each needle is matched in every form a server can send it (the bytes as they are, reversed,
+upper or lower case, and the hex of each). A run with no needle to check against exits 2, as does a symlink, a file
+past the writer's bounds or a run over 33 MiB; exit 7 is a hit, exit 0 clean. A finding names the run and the file
+(`DIR: RUN/FILE contains an account name` or `... a password`) and never the secret. The placeholder in this section
+is `bot@example.invalid`, never a real account.
+
 ## Documentation
 
 The manual lives in [docs/okf](docs/okf/index.md): one topic per page, each starting with a header that says what

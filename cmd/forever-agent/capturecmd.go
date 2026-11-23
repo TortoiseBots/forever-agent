@@ -33,6 +33,12 @@ func scrubCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: forever-agent scrub-check [--config FILE] <capture>...")
 		return exitUsage
 	}
+	for _, path := range fs.Args() {
+		if hint := foreverCaptureHint(path, "scrub-check"); hint != "" {
+			fmt.Fprintln(stderr, hint)
+			return exitUsage
+		}
+	}
 	st, err := config.Load(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "config:", err)
@@ -85,6 +91,10 @@ func scrubCmd(args []string, stdout, stderr io.Writer) int {
 func statsCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: forever-agent capture-stats <capture>")
+		return exitUsage
+	}
+	if hint := foreverCaptureHint(args[0], "capture-stats"); hint != "" {
+		fmt.Fprintln(stderr, hint)
 		return exitUsage
 	}
 	recs, err := capture.ReadFile(args[0])
@@ -141,6 +151,10 @@ func captureEventsCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(files) != 1 {
 		fmt.Fprintln(stderr, captureEventsUsage)
+		return exitUsage
+	}
+	if hint := foreverCaptureHint(files[0], "capture events"); hint != "" {
+		fmt.Fprintln(stderr, hint)
 		return exitUsage
 	}
 	var tFrom, tTo time.Time
