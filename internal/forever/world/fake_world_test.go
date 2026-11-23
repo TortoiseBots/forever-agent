@@ -336,6 +336,7 @@ type fakeServer struct {
 	groupSlots         map[string]int
 	groupLeaderName    string
 	groupSilent        bool
+	groupSelfOnly      bool // the roster lists this character alone (a group of one the convert refusal test needs)
 	groupIcons         [8]wire.GUID
 	groupLoot          *party.LootSettings
 	groupFlags         map[wire.GUID]uint8
@@ -346,6 +347,9 @@ type fakeServer struct {
 	groupSeenLoot      []party.LootSettings
 	groupSeenMark      []fakeMarkSeen
 	groupSeenUninvite  []wire.GUID
+	groupSeenConvert   []bool
+	groupSeenChange    []fakeSubSeen
+	groupSeenSwap      []fakeSwapSeen
 	// What the fake saw, under mu: every selection, every GM line, and the packet/line order ("select" or "say").
 	serveSelections []wire.GUID
 	serveGMLines    []string
