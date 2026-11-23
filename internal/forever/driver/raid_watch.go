@@ -141,7 +141,7 @@ func (r *Run) raidSetup(ctx context.Context) bool {
 		return false
 	}
 	if !card.Raid {
-		r.logf("raid: the group is not a raid and this character does not lead it: nothing was converted")
+		r.logf("raid: the group is not a raid: the card shows no raid flag")
 		r.stop("raid:not-raid")
 		return false
 	}
