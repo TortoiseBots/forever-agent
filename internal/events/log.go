@@ -134,6 +134,12 @@ const (
 	KindPetRevived   = "pet_revived"   // the pet, dead before, has health again
 	KindPetDismissed = "pet_dismissed" // the field was cleared: the pet was dismissed, replaced, unsummoned or despawned; data.was_dead
 	KindPetError     = "pet_error"     // SMSG_PET_CAST_FAILED (data.spell_id, data.reason) or SMSG_PET_ACTION_FEEDBACK (data.feedback): the pet's refusal
+
+	// Mail (README "Mail"): the list the mailbox answered, each command's result, and the new-mail notice. A mail's text
+	// is another player's: the list event carries ids, senders, subjects and the money and item counts, never bodies.
+	KindMailList   = "mail_list"   // SMSG_MAIL_LIST_RESULT: data.total, count, mails (rows without bodies)
+	KindMailResult = "mail_result" // SMSG_MAIL_COMMAND_RESULT: data.command, ok, error, reason, mail_id, attach_id, quantity
+	KindMailNew    = "mail_new"    // SMSG_NOTIFY_RECEIVED_MAIL: new mail is waiting, data.delay
 )
 
 // ChatKinds is what the chat_log method returns.

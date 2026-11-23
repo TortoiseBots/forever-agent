@@ -94,6 +94,13 @@ func TestServerOpcodeTranslation(t *testing.T) {
 		{0x45018B, "SMSG_TRAINER_BUY_FAILED", 0x47018B, 0x47018C},
 		{0x670040, "SMSG_LEARNED_SPELLS", 0x690040, 0x690040},
 		{0x67001A, "SMSG_SEND_SPELL_HISTORY", 0x69001A, 0x69001A},
+		// W-106 mail answers: group 0x45 -> 0x47, and the translation shifts the two 0xE4/0xE5 rows up by one on both
+		// builds (measured, as the vendor rows above); the two list rows (0x200, 0x201) take the 70707 shift (+1)
+		// and, at 70938, the second insert (+2).
+		{0x4500E4, "SMSG_MAIL_COMMAND_RESULT", 0x4700E5, 0x4700E5},
+		{0x4500E5, "SMSG_NOTIFY_RECEIVED_MAIL", 0x4700E6, 0x4700E6},
+		{0x450200, "SMSG_MAIL_LIST_RESULT", 0x470201, 0x470202},
+		{0x450201, "SMSG_MAIL_QUERY_NEXT_TIME_RESULT", 0x470202, 0x470203},
 		{0x450128, "SMSG_TAXI_NODE_STATUS", 0x470129, 0x47012A},
 		{0x450129, "SMSG_ACTIVATE_TAXI_REPLY", 0x47012A, 0x47012B},
 		{0x45012A, "SMSG_NEW_TAXI_PATH", 0x47012B, 0x47012C},
@@ -256,6 +263,17 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E003F, "CMSG_ENABLE_TAXI_NODE", 0x3F0041, 0x3F0041},
 		{0x3E0040, "CMSG_TAXI_QUERY_AVAILABLE_NODES", 0x3F0042, 0x3F0042},
 		{0x3E0041, "CMSG_ACTIVATE_TAXI", 0x3F0043, 0x3F0043},
+		// W-106 mail rows: the .inc region-2 table lists the five 0x3E rows (wire = core+3 at 0x3E00D8..0x3E00DC), the
+		// delete is a manual region-1 entry (0x3D00E7 -> 0x3E00E9), CMSG_SEND_MAIL is in the main group below the
+		// 70755 inserts, and the return-to-sender row is plain group arithmetic past them (+2 from 70755).
+		{0x3E00D8, "CMSG_MAIL_GET_LIST", 0x3F00DB, 0x3F00DB},
+		{0x3E00D9, "CMSG_MAIL_TAKE_MONEY", 0x3F00DC, 0x3F00DC},
+		{0x3E00DA, "CMSG_MAIL_TAKE_ITEM", 0x3F00DD, 0x3F00DD},
+		{0x3E00DB, "CMSG_QUERY_NEXT_MAIL_TIME", 0x3F00DE, 0x3F00DE},
+		{0x3E00DC, "CMSG_MAIL_MARK_AS_READ", 0x3F00DF, 0x3F00DF},
+		{0x3D00E7, "CMSG_MAIL_DELETE", 0x3E00E9, 0x3E00E9},
+		{0x430026, "CMSG_SEND_MAIL", 0x440026, 0x440026},
+		{0x430081, "CMSG_MAIL_RETURN_TO_SENDER", 0x440081, 0x440083},
 		// the two 70755 inserts: base 0x440070 unchanged, 0x440071 -> 0x440073, 0x440072 -> 0x440074
 		{0x430070, "CMSG_CREATE_CHARACTER", 0x440070, 0x440070},
 		{0x430071, "CMSG_CHECK_CHARACTER_NAME_AVAILABILITY", 0x440071, 0x440073},

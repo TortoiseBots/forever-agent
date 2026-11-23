@@ -744,6 +744,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerNPCMethods(srv, st)
 	registerQuestMethods(srv, st)
 	registerPetMethods(srv, st)
+	registerTrainerMethods(srv, st)
+	registerMailMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
@@ -1727,5 +1729,5 @@ var notPortedMethods = []string{
 	"raid_move",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
-	"train", "trainer_list", "tt", "tune_list", "tune_set",
+	"tt", "tune_list", "tune_set",
 }
