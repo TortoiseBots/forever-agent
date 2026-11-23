@@ -913,14 +913,33 @@ It reads the slot's token file itself and prints only the call's `result`. See
 ## Scrub a Forever capture
 
 A `forever serve --capture-dir DIR` capture holds the run's raw server packets, so check it before sharing one:
-`forever-agent forever scrub-check [--slots FILE] [--account EMAIL]... [--password-file FILE] <dir>...` reads every
-file of every run — the payloads, `manifest.tsv` and any file beside them — and looks for each account of a slot
-under a server whose slots file entry has a `forever` block, each `--account`, and the password (`--password-file`,
-else `FOREVER_PASSWORD`). Each needle is matched in every form a server can send it (the bytes as they are, reversed,
-upper or lower case, and the hex of each). A run with no needle to check against exits 2, as does a symlink, a file
-past the writer's bounds or a run over 33 MiB; exit 7 is a hit, exit 0 clean. A finding names the run and the file
-(`DIR: RUN/FILE contains an account name` or `... a password`) and never the secret. The placeholder in this section
-is `bot@example.invalid`, never a real account.
+`forever-agent forever scrub-check [--slots FILE] [--account EMAIL]... [--password-file FILE] [--session-key-file FILE]... [--auth-token-file FILE]... <dir>...`
+reads every file of every run — the payloads, `manifest.tsv` and any file beside them — and looks for each account
+of a slot under a server whose slots file entry has a `forever` block, each `--account`, the password
+(`--password-file`, else `FOREVER_PASSWORD`), each session key (`--session-key-file`: the key raw, or its hex text,
+which is decoded too) and each auth token (`--auth-token-file`: an rpc token file's token, or a `<label> <token>`
+line's last field). Each needle is matched in every form a server can send it (the bytes as they are, reversed, upper
+or lower case, and the hex of each). Every file is also read for an IPv4 address, which is a finding with no needle
+of its own: a capture of a transfer or a chat line can name the server. A run with no needle to check against exits
+2, as does a symlink, a file past the writer's bounds or a run over 33 MiB; exit 7 is a hit, exit 0 clean. A finding
+names the run, the file and the class (`DIR: RUN/FILE contains an account name`, `... a session key`, `... an IP
+address`) and never the secret.
+
+With `--redact DIR` the command writes a cleaned copy instead: one capture directory in, a new directory out (it must
+not exist), every needle in every form and every address masked by one `*` per byte, so each run's manifest keeps its
+lengths and the copy still reads. The copy is read back before the command answers: exit 0 says it is clean, and the
+original capture is never touched. The placeholders in this section are `bot@example.invalid` and `192.0.2.77`,
+never a real account or host.
+
+## Replay a Forever capture
+
+`forever-agent forever capture-events [--kinds a,b] [--out FILE [--force]] <dir>` replays a capture directory (one
+run or a parent of runs) through the world session with no sockets and prints one JSON event per line — the same keys
+the serve `event_log` answers (`seq`, `time`, `kind`, …) — then a summary on stderr. The times are synthetic: the run
+directory's clock (its name) plus 100 ms per record, and the summary says so. `--kinds` keeps only the named kinds;
+`--out` writes the rows to a file (mode 0600, never over a capture, and never over an existing file without
+`--force`). Opcodes the writer never captures (time syncs, movement relays, the map change's own traffic) are counted
+as skipped and not dispatched, because a capture holding one was edited and its handler would answer it.
 
 ## Documentation
 

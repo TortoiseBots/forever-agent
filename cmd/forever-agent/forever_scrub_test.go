@@ -24,7 +24,12 @@ const (
 // an account that must never become a needle.
 func scrubSlotsFile(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "slots.json")
+	dir := t.TempDir()
+	// slots.Load refuses a folder anyone can write to; testing.TempDir's subdirectories are 0777&^umask.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "slots.json")
 	body := `{"version":1,"servers":[` +
 		`{"name":"forever-srv","realmd":"192.0.2.10:3724","slots":[{"id":"1","account":"` + scrubAccount + `","character":"Scrubbot","port":9200,"settings_from":"a.json"}]},` +
 		`{"name":"turtle-srv","realmd":"192.0.2.11:3724","slots":[{"id":"1","account":"` + scrubTurtle + `","character":"Turt","port":9201,"settings_from":"b.json"}]}` +

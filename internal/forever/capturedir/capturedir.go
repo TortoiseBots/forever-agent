@@ -20,8 +20,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// Record is one captured packet: the file it was written to, its core opcode and its payload.
+// Record is one captured packet: the run directory it was read from, the file it was written to, its core opcode and
+// its payload.
 type Record struct {
+	Run     string
 	Name    string
 	Opcode  uint32
 	Payload []byte
@@ -241,7 +243,7 @@ func ReadRun(dir string) ([]Record, error) {
 		if len(payload) != e.size {
 			return nil, fmt.Errorf("capturedir: manifest line %d: the packet is %d bytes, the manifest says %d", e.line, len(payload), e.size)
 		}
-		out = append(out, Record{Name: e.name, Opcode: e.core, Payload: payload})
+		out = append(out, Record{Run: filepath.Base(dir), Name: e.name, Opcode: e.core, Payload: payload})
 	}
 	return out, nil
 }
