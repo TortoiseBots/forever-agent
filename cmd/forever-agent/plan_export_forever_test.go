@@ -27,7 +27,7 @@ func TestPlanExportForeverRagefire(t *testing.T) {
 	if strings.Contains(strings.ToLower(sql), "guid") {
 		t.Fatal("the SQL mentions a guid")
 	}
-	if !strings.Contains(out, "ragefire_chasm: map 389, 9 legs, 74 steps (51 pull, 4 boss, 19 move), 93 pack units, 103 unit rows, 4 boss rows") {
+	if !strings.Contains(out, "ragefire_chasm: map 389, 9 legs, 72 steps (50 pull, 4 boss, 18 move), 93 pack units, 103 unit rows, 4 boss rows") {
 		t.Fatalf("stdout %q", out)
 	}
 	if !strings.Contains(out, "wrote "+file) {
@@ -54,7 +54,7 @@ func TestPlanExportForeverReport(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
-	if !strings.Contains(out, "plan=ragefire_chasm map=389 status=exported legs=9 steps=74 pulls=51 moves=19 bosses=4 units=103 boss_rows=4") {
+	if !strings.Contains(out, "plan=ragefire_chasm map=389 status=exported legs=9 steps=72 pulls=50 moves=18 bosses=4 units=103 boss_rows=4") {
 		t.Fatalf("stdout %q", out)
 	}
 	for _, want := range []string{"dropped legs[3].skip", "entries 11834", `dropped avoid[0] (plan, box "lava basin of the trogg cave")`} {
