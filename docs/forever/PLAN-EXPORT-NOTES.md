@@ -73,8 +73,8 @@ forever-agent plan-check --forever --mmaps /path/to/mmaps --spawns rfc-spawns.ts
 | Item | Count |
 | --- | --- |
 | Legs | 9 |
-| Steps | 74 (19 move, 51 pull, 4 boss) |
-| Pull groups | 51 |
+| Steps | 72 (18 move, 50 pull, 4 boss) |
+| Pull groups | 50 |
 | Pack unit rows | 93 |
 | Boss unit rows | 4 |
 | `boss.first` unit rows | 0 |
