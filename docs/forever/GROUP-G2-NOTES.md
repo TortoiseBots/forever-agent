@@ -25,7 +25,8 @@ Ranks and limits the model cannot satisfy are refused by name rather than guesse
 model set `party.State.Raid` with `RosterValid` false), so every call answered "the party model keeps no raid
 roster". R1 of #108 models the raid roster (docs/forever/RAID-R1-NOTES.md), so the refusal reads "raid group control
 is not ported yet": the raid ranks differ (an assistant may mark icons) and the raid operations come with the raid
-walk. `convert_raid` and `raid_move` remain not-ported serve methods.
+walk. R2 of #108 ports `convert_raid` and `raid_move` (docs/forever/RAID-R2-NOTES.md); the party surfaces above
+still refuse a raid until the raid ranks are modelled for them.
 
 `groupPromote` also refuses this character itself ("already leads the group"), so the leader readback always moves.
 
@@ -48,7 +49,8 @@ walk. `convert_raid` and `raid_move` remain not-ported serve methods.
 client-decode test (`TestServeClientTypesMatchTheDaemon`) keeps matching both ways.
 
 The five old names leave `notPortedMethods`: `promote`, `assistant`, `loot_method`, `mark`, `disband`. `marks` is
-new. `convert_raid` and `raid_move` stay, as do `loot`, `loot_take`, `loot_close`, `roll` and the rest.
+new. R2 of #108 then took `convert_raid` and `raid_move` off the list too (docs/forever/RAID-R2-NOTES.md); the
+not-ported methods that remain are listed in `notPortedMethods`.
 
 ## `party-check` (G2)
 
@@ -78,8 +80,8 @@ error, not a run that logs in and fails.
 - `TestServeDisband`: one uninvite per other member in roster order, never this character, and the group gone; a
   member that does not lead is refused with nothing sent.
 - `TestServeGroupCallsNeedAGroup`: every call names the missing group.
-- `TestServeGroupMethodTable`: the CLI contract table (the five names ported, `marks` new, `convert_raid` and
-  `raid_move` still not ported) and `convert_raid`'s typed refusal over the socket.
+- `TestServeGroupMethodTable`: the CLI contract table (the five names ported, `marks` new, and after R2 of #108
+  `convert_raid` and `raid_move` too) and both raid names' refusals over the socket.
 
 The fake's side (`serve_group_test.go`, `fake_chat_test.go`, `serve_fake_test.go`, `fake_world_test.go`): a roster
 the daemon is already in (`groupNames`, leader, member flags, loot block, eight icon slots), the five client

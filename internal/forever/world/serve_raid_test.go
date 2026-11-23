@@ -3,13 +3,165 @@ package world
 // R1 of the raid work (#108): the party method reports a raid roster with each member's subgroup and assistant flag,
 // and the character's own subgroup and assistant flag. The fake writes the fields from its own group state
 // (PartyPackets.cpp:584-627, Group.h:59-108).
+//
+// R2: convert_raid and raid_move send their packet, wait for the roster that shows the change, and refuse before any
+// packet what the core would drop (a raid packet it refuses gets no answer, GroupHandler.cpp:519-526).
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
+
+// fakeSubSeen is one CMSG_CHANGE_SUB_GROUP the fake saw: the member and the 0-based wire subgroup it was sent.
+type fakeSubSeen struct {
+	GUID     wire.GUID
+	Subgroup uint8
+}
+
+// fakeSwapSeen is one CMSG_SWAP_SUB_GROUPS the fake saw: the two members in the packet's order.
+type fakeSwapSeen struct {
+	A, B wire.GUID
+}
+
+// raidSceneNames are nine bots: with this character, the ten-member raid the R2 scenes use.
+var raidSceneNames = []string{"Botone", "Bottwo", "Botthree", "Botfour", "Botfive", "Botsix", "Botseven", "Boteight", "Botnine"}
+
+// raidScene builds the fake's own ten-member raid state: bots one to five in subgroup 1, the rest (this character
+// included) in subgroup 2.
+func raidScene(f *fakeServer) {
+	f.groupNames = append([]string(nil), raidSceneNames...)
+	f.groupRaid = true
+	sub := make(map[string]uint8, len(raidSceneNames)+1)
+	for i, name := range raidSceneNames {
+		if i < 5 {
+			sub[strings.ToLower(name)] = 0
+		} else {
+			sub[strings.ToLower(name)] = 1
+		}
+	}
+	sub["testchar"] = 1
+	f.groupSubgroup = sub
+}
+
+// memberSubgroup returns a party row's subgroup, 0 when the row is absent.
+func memberSubgroup(info ServePartyInfo, name string) int {
+	for _, m := range info.Members {
+		if m.Name == name {
+			return m.Subgroup
+		}
+	}
+	return 0
+}
+
+// parseFakeRaidConvert reads CMSG_CONVERT_RAID (PartyPackets.cpp:395-398): one bit, Raid, flushed.
+func parseFakeRaidConvert(payload []byte) (bool, error) {
+	b := wire.NewReader(payload)
+	raid := b.ReadBit()
+	b.FlushBits()
+	return raid, b.Err()
+}
+
+// parseFakeRaidChange reads CMSG_CHANGE_SUB_GROUP (PartyPackets.cpp:633-640): the packed target GUID, the uint8
+// subgroup, the optional-index bit and the index.
+func parseFakeRaidChange(payload []byte) (wire.GUID, uint8, error) {
+	b := wire.NewReader(payload)
+	target := wire.ReadPackedGUID(b)
+	sub := b.ReadU8()
+	b.ReadBit() // the party index present
+	b.FlushBits()
+	b.ReadU8() // party index
+	return target, sub, b.Err()
+}
+
+// parseFakeRaidSwap reads CMSG_SWAP_SUB_GROUPS (PartyPackets.cpp:642-649): the optional-index bit, the two packed
+// GUIDs, then the index.
+func parseFakeRaidSwap(payload []byte) (wire.GUID, wire.GUID, error) {
+	b := wire.NewReader(payload)
+	b.ReadBit() // the party index present
+	b.FlushBits()
+	a := wire.ReadPackedGUID(b)
+	bb := wire.ReadPackedGUID(b)
+	b.ReadU8() // party index
+	return a, bb, b.Err()
+}
+
+// fakeRaidRankLocked reports whether this character may send a raid move: the leader or an assistant
+// (GroupHandler.cpp:519-526).
+func (f *fakeServer) fakeRaidRankLocked() bool {
+	self := mustGUID(f.clientGUID)
+	if f.groupLeaderGUIDLocked() == self {
+		return true
+	}
+	return f.groupFlags[self]&party.FlagAssistant != 0
+}
+
+// fakeMemberNameLocked maps a roster GUID to its lowercased name.
+func (f *fakeServer) fakeMemberNameLocked(target wire.GUID) (string, bool) {
+	guids, names := f.groupMembersLocked()
+	for i, g := range guids {
+		if g == target {
+			return strings.ToLower(names[i]), true
+		}
+	}
+	return "", false
+}
+
+// fakeSubgroupCountLocked counts the roster's members in a 0-based wire subgroup.
+func (f *fakeServer) fakeSubgroupCountLocked(sub uint8) int {
+	guids, names := f.groupMembersLocked()
+	n := 0
+	for i := range guids {
+		if f.groupSubgroup[strings.ToLower(names[i])] == sub {
+			n++
+		}
+	}
+	return n
+}
+
+// fakeChangeSubgroupLocked applies CMSG_CHANGE_SUB_GROUP the way the core does: a party, a subgroup outside 0..7, a
+// sender neither leader nor assistant, an unlisted member and a full subgroup are dropped without an answer
+// (GroupHandler.cpp:519-526); anything else moves the member and answers the roster.
+func (f *fakeServer) fakeChangeSubgroupLocked(target wire.GUID, sub uint8) []byte {
+	if !f.groupRaid || sub >= party.MaxSubgroups || !f.fakeRaidRankLocked() {
+		return nil
+	}
+	name, ok := f.fakeMemberNameLocked(target)
+	if !ok {
+		return nil
+	}
+	if f.groupSubgroup[name] != sub && f.fakeSubgroupCountLocked(sub) >= party.MaxPartyMembers {
+		return nil
+	}
+	if f.groupSubgroup == nil {
+		f.groupSubgroup = make(map[string]uint8, len(f.groupNames)+1)
+	}
+	f.groupSubgroup[name] = sub
+	return f.groupUpdateLocked()
+}
+
+// fakeSwapSubgroupsLocked applies CMSG_SWAP_SUB_GROUPS the way the core does: the two members trade subgroups
+// (GroupHandler.cpp:542), and a dropped packet answers nothing.
+func (f *fakeServer) fakeSwapSubgroupsLocked(a, b wire.GUID) []byte {
+	if !f.groupRaid || !f.fakeRaidRankLocked() {
+		return nil
+	}
+	nameA, okA := f.fakeMemberNameLocked(a)
+	nameB, okB := f.fakeMemberNameLocked(b)
+	if !okA || !okB || nameA == nameB {
+		return nil
+	}
+	if f.groupSubgroup == nil {
+		f.groupSubgroup = make(map[string]uint8, len(f.groupNames)+1)
+	}
+	subA, subB := f.groupSubgroup[nameA], f.groupSubgroup[nameB]
+	f.groupSubgroup[nameA], f.groupSubgroup[nameB] = subB, subA
+	return f.groupUpdateLocked()
+}
 
 // TestServePartyShowsSubgroups: a ten-member raid roster, subgroups 1-2, one assistant, reported by the party method.
 func TestServePartyShowsSubgroups(t *testing.T) {
@@ -55,6 +207,228 @@ func TestServePartyShowsSubgroups(t *testing.T) {
 	}
 	if assistants != 1 {
 		t.Fatalf("%d assistant rows, want only Botone", assistants)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeConvertRaidSendsAndReadsBack: the leader converts a party of three; the packet carries Raid true, the
+// fake answers the raid roster, and the method answers only once party reports the raid flag.
+func TestServeConvertRaidSendsAndReadsBack(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.groupNames = []string{"Bottwo", "Botthree"}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	if info := awaitGroup(t, a, steps, 3); info.Raid {
+		t.Fatalf("a party before the convert: %+v", info)
+	}
+
+	a.mustCall(t, "convert_raid", nil)
+
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if !info.Raid || len(info.Members) != 3 {
+		t.Fatalf("party after the convert: %+v\n%s", info, steps.joined())
+	}
+	f.mu.Lock()
+	seen := append([]bool(nil), f.groupSeenConvert...)
+	raid := f.groupRaid
+	f.mu.Unlock()
+	if len(seen) != 1 || !seen[0] {
+		t.Fatalf("the fake saw converts %v, want one Raid=true", seen)
+	}
+	if !raid {
+		t.Fatal("the fake's group is not a raid after the convert")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeConvertRaidRefusesAlone: a group of one is refused before any packet (the core converts two or more), and
+// so is a member that does not lead it.
+func TestServeConvertRaidRefusesAlone(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.groupSelfOnly = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 1)
+
+	a.mustFail(t, "convert_raid", nil, -32003, "two or more")
+	f.mu.Lock()
+	seen := len(f.groupSeenConvert)
+	f.mu.Unlock()
+	if seen != 0 {
+		t.Fatalf("a refused convert sent %d packet(s)", seen)
+	}
+	a.stop(t)
+	f.wait(t)
+
+	// A member that is not the leader: the core takes the convert only from Group::IsLeader (GroupHandler.cpp:489).
+	g := newFakeServer(t)
+	g.serveMode = true
+	g.groupNames = []string{"Bottwo", "Botthree"}
+	g.groupLeaderName = "Bottwo"
+	defer g.close()
+	steps = &stepLog{}
+	b := startServeDaemon(t, g, steps)
+	awaitGroup(t, b, steps, 3)
+	b.mustFail(t, "convert_raid", nil, -32003, "needs the group leader")
+	g.mu.Lock()
+	sent := len(g.groupSeenConvert)
+	g.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("a refused convert sent %d packet(s)", sent)
+	}
+	b.stop(t)
+	g.wait(t)
+}
+
+// TestServeRaidMoveFullSubgroupNeedsSwap: a plain move sends CMSG_CHANGE_SUB_GROUP with the 0-based wire subgroup and
+// waits for the roster; a move into a subgroup of five is refused before any packet, with swap_with the way through.
+func TestServeRaidMoveFullSubgroupNeedsSwap(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	// Botsix (subgroup 2) to subgroup 3: the wire subgroup is 2, the core's own numbering.
+	a.mustCall(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 3})
+	f.mu.Lock()
+	changes := append([]fakeSubSeen(nil), f.groupSeenChange...)
+	f.mu.Unlock()
+	if len(changes) != 1 || changes[0].GUID != fakeGroupMemberGUID(5) || changes[0].Subgroup != 2 {
+		t.Fatalf("the fake saw changes %+v, want Botsix with wire subgroup 2", changes)
+	}
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if got := memberSubgroup(info, "Botsix"); got != 3 {
+		t.Fatalf("Botsix in subgroup %d, want 3\n%s", got, steps.joined())
+	}
+
+	// Subgroup 1 holds five: the move is refused before any packet, the way the core drops it (GroupHandler.cpp:526).
+	a.mustFail(t, "raid_move", map[string]any{"name": "Botseven", "subgroup": 1}, -32003, "is full")
+	f.mu.Lock()
+	after := len(f.groupSeenChange)
+	f.mu.Unlock()
+	if after != 1 {
+		t.Fatalf("a move into a full subgroup sent %d packet(s)", after-1)
+	}
+
+	// swap_with names a member of the full subgroup: the swap packet trades their places.
+	a.mustCall(t, "raid_move", map[string]any{"name": "Botseven", "subgroup": 1, "swap_with": "Botone"})
+	f.mu.Lock()
+	swaps := append([]fakeSwapSeen(nil), f.groupSeenSwap...)
+	f.mu.Unlock()
+	if len(swaps) != 1 || swaps[0].A != fakeGroupMemberGUID(6) || swaps[0].B != fakeGroupMemberGUID(0) {
+		t.Fatalf("the fake saw swaps %+v, want Botseven then Botone", swaps)
+	}
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if got, other := memberSubgroup(info, "Botseven"), memberSubgroup(info, "Botone"); got != 1 || other != 2 {
+		t.Fatalf("after the swap Botseven is in %d and Botone in %d, want 1 and 2\n%s", got, other, steps.joined())
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeRaidMoveSwapSendsSwap: the swap packet names the moving member first and its swap target second, and the
+// method answers once both rows show the trade; a party, a swap target outside the target subgroup and a swap with
+// itself are refused without a packet.
+func TestServeRaidMoveSwapSendsSwap(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustCall(t, "raid_move", map[string]any{"guid": GUID(fakeGroupMemberGUID(5)), "subgroup": 1, "swap_with": "Botone"})
+	f.mu.Lock()
+	swaps := append([]fakeSwapSeen(nil), f.groupSeenSwap...)
+	f.mu.Unlock()
+	if len(swaps) != 1 || swaps[0].A != fakeGroupMemberGUID(5) || swaps[0].B != fakeGroupMemberGUID(0) {
+		t.Fatalf("the fake saw swaps %+v, want Botsix then Botone", swaps)
+	}
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if got, other := memberSubgroup(info, "Botsix"), memberSubgroup(info, "Botone"); got != 1 || other != 2 {
+		t.Fatalf("after the swap Botsix is in %d and Botone in %d, want 1 and 2\n%s", got, other, steps.joined())
+	}
+
+	// Botseven is in subgroup 2: swap_with must name a member of the target subgroup.
+	a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 1, "swap_with": "Botseven"}, -32003,
+		"swap_with must name a member of subgroup 1")
+	// A member cannot trade places with itself.
+	a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 1, "swap_with": "Botsix"}, -32003, "itself")
+	f.mu.Lock()
+	after := len(f.groupSeenSwap)
+	f.mu.Unlock()
+	if after != 1 {
+		t.Fatalf("a refused swap sent %d packet(s)", after-1)
+	}
+	a.stop(t)
+	f.wait(t)
+
+	// A party: the core takes a subgroup change only in a raid (GroupHandler.cpp:519).
+	g := newFakeServer(t)
+	g.serveMode = true
+	g.groupNames = []string{"Bottwo", "Botthree"}
+	defer g.close()
+	steps = &stepLog{}
+	b := startServeDaemon(t, g, steps)
+	awaitGroup(t, b, steps, 3)
+	b.mustFail(t, "raid_move", map[string]any{"name": "Bottwo", "subgroup": 1}, -32003, "needs a raid: convert_raid first")
+	b.stop(t)
+	g.wait(t)
+
+	// A member that neither leads nor assists: refused before the packet (GroupHandler.cpp:523).
+	h := newFakeServer(t)
+	h.serveMode = true
+	raidScene(h)
+	h.groupLeaderName = "Bottwo"
+	defer h.close()
+	steps = &stepLog{}
+	c := startServeDaemon(t, h, steps)
+	awaitGroup(t, c, steps, 10)
+	c.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 3}, -32003, "needs the group leader or an assistant")
+	h.mu.Lock()
+	sent := len(h.groupSeenChange)
+	h.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("a refused rank sent %d CMSG_CHANGE_SUB_GROUP", sent)
+	}
+	c.stop(t)
+	h.wait(t)
+}
+
+// TestServeRaidMoveNoReadbackFails: a server that answers nothing leaves the roster unchanged, so the call fails
+// with "the server did not apply it" once the wait runs out, after the packet went out.
+func TestServeRaidMoveNoReadbackFails(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	f.groupSilent = true
+	defer f.close()
+	old := groupConfirmWait
+	groupConfirmWait = 300 * time.Millisecond
+	t.Cleanup(func() { groupConfirmWait = old })
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 3}, -32003, "the server did not apply it")
+	f.mu.Lock()
+	sent := len(f.groupSeenChange)
+	f.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("the move sent %d packet(s), want 1", sent)
 	}
 	a.stop(t)
 	f.wait(t)

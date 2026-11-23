@@ -354,6 +354,57 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			if frame != nil {
 				c.writeFrame(fakeSMSGPartyUpdate, frame)
 			}
+		case wire.CMSGConvertRaid:
+			raid, err := parseFakeRaidConvert(payload)
+			if err != nil {
+				f.failf("serve: CMSG_CONVERT_RAID: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenConvert = append(f.groupSeenConvert, raid)
+			var frame []byte
+			// The core converts only the leader's group of two or more members and drops the rest
+			// (GroupHandler.cpp:489-497).
+			if !f.groupSilent && raid && f.groupLeaderGUIDLocked() == mustGUID(f.clientGUID) && len(f.groupNames) >= 1 {
+				f.groupRaid = true
+				frame = f.groupUpdateLocked()
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		case wire.CMSGChangeSubGroup:
+			target, sub, err := parseFakeRaidChange(payload)
+			if err != nil {
+				f.failf("serve: CMSG_CHANGE_SUB_GROUP: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenChange = append(f.groupSeenChange, fakeSubSeen{GUID: target, Subgroup: sub})
+			var frame []byte
+			if !f.groupSilent {
+				frame = f.fakeChangeSubgroupLocked(target, sub)
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		case wire.CMSGSwapSubGroups:
+			a, b, err := parseFakeRaidSwap(payload)
+			if err != nil {
+				f.failf("serve: CMSG_SWAP_SUB_GROUPS: %v", err)
+				return
+			}
+			f.mu.Lock()
+			f.groupSeenSwap = append(f.groupSeenSwap, fakeSwapSeen{A: a, B: b})
+			var frame []byte
+			if !f.groupSilent {
+				frame = f.fakeSwapSubgroupsLocked(a, b)
+			}
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
 		case wire.CMSGSetLootMethod:
 			loot, err := parseFakeGroupLoot(payload)
 			if err != nil {

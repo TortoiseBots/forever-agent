@@ -130,6 +130,18 @@ func (s *session) groupMember(what, name string) (party.Member, error) {
 // waitGroupConfirm waits for a group command's readback: check is polled after every packet, and a server that
 // answers nothing is the error a refused command gets. ctx ends the wait with the caller's reason.
 func (s *session) waitGroupConfirm(ctx context.Context, what string, timeout time.Duration, check func() bool) error {
+	return s.waitGroupReadback(ctx, what, timeout, "the server did not confirm it", "a refused group command gets no answer", check)
+}
+
+// waitRaidConfirm is waitGroupConfirm for the raid commands: the core drops a raid packet it refuses without an
+// answer (GroupHandler.cpp:519-526), so a readback that never comes is "the server did not apply it".
+func (s *session) waitRaidConfirm(ctx context.Context, what string, timeout time.Duration, check func() bool) error {
+	return s.waitGroupReadback(ctx, what, timeout, "the server did not apply it", "the core drops a refused raid command silently", check)
+}
+
+// waitGroupReadback polls check after every packet until it holds or timeout passes; a timeout is "<what>:
+// <refusal> within <timeout> (<hint>)".
+func (s *session) waitGroupReadback(ctx context.Context, what string, timeout time.Duration, refusal, hint string, check func() bool) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -140,7 +152,7 @@ func (s *session) waitGroupConfirm(ctx context.Context, what string, timeout tim
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return fmt.Errorf("%s: the server did not confirm it within %s (a refused group command gets no answer)", what, timeout)
+			return fmt.Errorf("%s: %s within %s (%s)", what, refusal, timeout, hint)
 		}
 		if remaining > groupConfirmPoll {
 			remaining = groupConfirmPoll

@@ -75,6 +75,21 @@ func (f *fakeServer) groupFrame() []byte {
 	return f.groupUpdateLocked()
 }
 
+// groupLeaderGUIDLocked returns the roster's leader GUID: this character unless groupLeaderName names another member.
+func (f *fakeServer) groupLeaderGUIDLocked() wire.GUID {
+	leader := mustGUID(f.clientGUID)
+	if f.groupLeaderName == "" {
+		return leader
+	}
+	guids, names := f.groupMembersLocked()
+	for i, name := range names {
+		if strings.EqualFold(name, f.groupLeaderName) {
+			return guids[i]
+		}
+	}
+	return leader
+}
+
 // groupSetLeaderLocked makes target the roster's leader (it must be a listed member).
 func (f *fakeServer) groupSetLeaderLocked(target wire.GUID) {
 	guids, names := f.groupMembersLocked()
@@ -88,18 +103,11 @@ func (f *fakeServer) groupSetLeaderLocked(target wire.GUID) {
 
 // groupUpdateLocked builds the roster frame for the fake's current group state, or nil when it holds no group.
 func (f *fakeServer) groupUpdateLocked() []byte {
-	if len(f.groupNames) == 0 {
+	if len(f.groupNames) == 0 && !f.groupSelfOnly {
 		return nil
 	}
 	guids, names := f.groupMembersLocked()
-	leader := mustGUID(f.clientGUID)
-	if f.groupLeaderName != "" {
-		for i, name := range names {
-			if strings.EqualFold(name, f.groupLeaderName) {
-				leader = guids[i]
-			}
-		}
-	}
+	leader := f.groupLeaderGUIDLocked()
 	flags := make([]uint8, len(guids))
 	subgroups := make([]uint8, len(guids))
 	for i, g := range guids {
@@ -495,8 +503,8 @@ func TestServeGroupCallsNeedAGroup(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeGroupMethodTable is the CLI contract table for the five ported names and the new marks method: the five
-// leave the not-ported list (convert_raid and raid_move stay), and convert_raid still answers the typed refusal.
+// TestServeGroupMethodTable is the CLI contract table for the group and raid names: every one is ported (R2 of #108
+// took convert_raid and raid_move off the not-ported list), and a call outside a group still answers by name.
 func TestServeGroupMethodTable(t *testing.T) {
 	ported, notPorted := ServeRPCMethods()
 	has := func(list []string, name string) bool {
@@ -507,17 +515,12 @@ func TestServeGroupMethodTable(t *testing.T) {
 		}
 		return false
 	}
-	for _, name := range []string{"promote", "assistant", "loot_method", "mark", "marks", "disband"} {
+	for _, name := range []string{"promote", "assistant", "convert_raid", "raid_move", "loot_method", "mark", "marks", "disband"} {
 		if !has(ported, name) {
 			t.Fatalf("%q is not in the ported set", name)
 		}
 		if has(notPorted, name) {
 			t.Fatalf("%q is in both sets", name)
-		}
-	}
-	for _, name := range []string{"convert_raid", "raid_move"} {
-		if !has(notPorted, name) {
-			t.Fatalf("%q left the not-ported set", name)
 		}
 	}
 
@@ -526,7 +529,8 @@ func TestServeGroupMethodTable(t *testing.T) {
 	defer f.close()
 	steps := &stepLog{}
 	a := startServeDaemon(t, f, steps)
-	a.mustFail(t, "convert_raid", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "convert_raid", map[string]any{}, -32003, "not in a group")
+	a.mustFail(t, "raid_move", map[string]any{"name": "Bottwo", "subgroup": 1}, -32003, "not in a group")
 	a.stop(t)
 	f.wait(t)
 }

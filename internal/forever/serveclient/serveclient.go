@@ -966,6 +966,26 @@ func (c *Client) Party(ctx context.Context) (Party, error) {
 	return p, err
 }
 
+// RaidMoveParams names the member raid_move moves, the target subgroup 1-8 and, for a full subgroup, the member of
+// that subgroup who trades places instead.
+type RaidMoveParams struct {
+	GUID     GUID   `json:"guid,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Subgroup int    `json:"subgroup"`
+	SwapWith string `json:"swap_with,omitempty"`
+}
+
+// ConvertRaid turns the leader's party into a raid (convert_raid): leader only, two or more members.
+func (c *Client) ConvertRaid(ctx context.Context) error {
+	return c.call(ctx, "convert_raid", nil, nil, defaultTimeout)
+}
+
+// RaidMove puts a member in a raid subgroup (raid_move): leader or assistant, raid only. The call answers once the
+// roster shows the move.
+func (c *Client) RaidMove(ctx context.Context, p RaidMoveParams) error {
+	return c.call(ctx, "raid_move", p, nil, defaultTimeout)
+}
+
 // GM sends one raw gm line through the GM guard and returns the server's
 // visible answer.
 func (c *Client) GM(ctx context.Context, text string) (Command, error) {

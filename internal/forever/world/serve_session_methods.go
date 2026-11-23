@@ -283,6 +283,15 @@ type serveAssistantParams struct {
 	Clear bool   `json:"clear,omitempty"`
 }
 
+// serveRaidMoveParams is the raid_move method's input, the Turtle daemon's own params: the member by guid or by
+// name, the target subgroup 1-8 and the member of that subgroup who trades places instead (a full subgroup).
+type serveRaidMoveParams struct {
+	GUID     GUID   `json:"guid,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Subgroup int    `json:"subgroup"`
+	SwapWith string `json:"swap_with,omitempty"`
+}
+
 // serveLootMethodParams is the loot_method method's input: the method's name (or 0..5), the master looter's name for
 // master loot (optional) and the threshold quality 2..6 (optional, uncommon).
 type serveLootMethodParams struct {
@@ -610,6 +619,13 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("assistant", serveCallTyped(st, func(s *session, ctx context.Context, p serveAssistantParams) (serveEmpty, error) {
 		return serveEmpty{}, s.groupAssistant(ctx, p.Name, !p.Clear)
+	}))
+	// The raid ranks (#108 R2): the leader converts, the leader or an assistant moves, and both wait for the roster.
+	srv.Register("convert_raid", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.convertRaid(ctx)
+	}))
+	srv.Register("raid_move", serveCallTyped(st, func(s *session, ctx context.Context, p serveRaidMoveParams) (serveEmpty, error) {
+		return serveEmpty{}, s.raidMove(ctx, wire.GUID(p.GUID), p.Name, p.Subgroup, p.SwapWith)
 	}))
 	srv.Register("loot_method", serveCallTyped(st, func(s *session, ctx context.Context, p serveLootMethodParams) (serveEmpty, error) {
 		method, ok := ParseLootMethod(p.Method)
@@ -1852,12 +1868,10 @@ var notPortedMethods = []string{
 	"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
 	"bot_view",
 	"brain_start", "brain_status", "brain_stop",
-	"convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
 	"plan_check",
-	"raid_move",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
 	"tt", "tune_list", "tune_set",
 }
