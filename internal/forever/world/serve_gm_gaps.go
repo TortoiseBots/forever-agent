@@ -65,7 +65,7 @@ func registerGapMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("teleport", serveCallTyped(st, func(s *session, ctx context.Context, p serveTeleportParams) (ServeTeleport, error) {
 		return s.serveTeleport(ctx, p)
 	}))
-	srv.Register("gm_evade", serveCallTyped(st, func(s *session, ctx context.Context, p serveUnitParams) (ServeCommand, error) {
+	srv.Register("gm_evade", serveCallTyped(st, func(s *session, ctx context.Context, p serveUnitParams) (ServeGMEvade, error) {
 		return s.serveGMEvade(ctx, p)
 	}))
 	srv.Register("gm_respawn", serveCallTyped(st, func(s *session, ctx context.Context, p serveUnitParams) (ServeCommand, error) {
@@ -172,16 +172,63 @@ func (s *session) serveGMCreatureHand(ctx context.Context, method string, p serv
 	return o, nil
 }
 
-// serveGMEvade makes one creature leave combat, walk home and reset (`.npc evade`).
-func (s *session) serveGMEvade(ctx context.Context, p serveUnitParams) (ServeCommand, error) {
+// ServeGMEvade is gm_evade's result: the line's answer and what the server did to the creature. `.npc evade` prints
+// nothing when it works (cs_npc.cpp:1140-1161), so the line's silence proves nothing about the creature: Effect says
+// what the client's own view of it shows afterwards. "left_combat": it was in combat and is not any more. "none": it
+// was not in combat, so there was nothing to leave (the call changed nothing the client can see). A creature that is
+// still in combat after the settle wait is an error, never a result.
+type ServeGMEvade struct {
+	ServeCommand
+	InCombatBefore bool   `json:"in_combat_before"`
+	InCombatAfter  bool   `json:"in_combat_after"`
+	Effect         string `json:"effect"`
+}
+
+// gmEvadeSettle bounds the wait for the creature's combat flag to clear after the line. A variable so the tests
+// shorten it.
+var gmEvadeSettle = 3 * time.Second
+
+// serveGMEvade makes one creature leave combat, walk home and reset (`.npc evade`), and reports whether the server
+// did it: the creature's in-combat flag before and after, read from the update stream.
+func (s *session) serveGMEvade(ctx context.Context, p serveUnitParams) (ServeGMEvade, error) {
 	o, err := s.serveGMCreatureHand(ctx, "gm_evade", p)
 	if err != nil {
-		return ServeCommand{}, err
+		return ServeGMEvade{}, err
 	}
 	if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
-		return ServeCommand{}, fmt.Errorf("gm_evade: %w", err)
+		return ServeGMEvade{}, fmt.Errorf("gm_evade: %w", err)
 	}
-	return s.serveGMResult(ctx, ".npc evade")
+	out := ServeGMEvade{InCombatBefore: o.InCombat}
+	guid := o.GUID
+	cmd, err := s.serveGMResult(ctx, ".npc evade")
+	if err != nil {
+		return ServeGMEvade{}, err
+	}
+	out.ServeCommand = cmd
+	inCombat := func() bool {
+		if cur, ok := s.world.Object(guid); ok {
+			return cur.InCombat
+		}
+		return false
+	}
+	if out.InCombatBefore {
+		end := s.Now().Add(gmEvadeSettle)
+		for inCombat() && s.Now().Before(end) {
+			if err := s.collect(ctx, 50*time.Millisecond); err != nil {
+				return ServeGMEvade{}, err
+			}
+		}
+	}
+	out.InCombatAfter = inCombat()
+	switch {
+	case out.InCombatBefore && out.InCombatAfter:
+		return ServeGMEvade{}, fmt.Errorf("gm_evade: %s is still in combat %s after .npc evade (the core printed no refusal)", guid, gmEvadeSettle)
+	case out.InCombatBefore:
+		out.Effect = "left_combat"
+	default:
+		out.Effect = "none"
+	}
+	return out, nil
 }
 
 // serveGMRespawn brings one dead creature back (`.respawn` with it selected). A unit the client shows alive is

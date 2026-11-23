@@ -164,7 +164,7 @@ packet.
 Test-setup hands (#99; see [docs/forever/DAEMON-GAPS-99-NOTES.md](docs/forever/DAEMON-GAPS-99-NOTES.md)):
 `teleport {x, y, z, map?}` sends `.go xyz`, waits for the server's own move of the character and, when `--navmesh`
 puts ground at least a yard under the point, for the fall the client flies from there (`fell`, `drop_yd`, the landing
-`z`); `gm_evade {guid|name}` (`.npc evade`) and `gm_respawn {guid|name}` (`.respawn`, a dead creature only) select the
+`z`); `gm_evade {guid|name}` (`.npc evade`; its answer adds `in_combat_before`, `in_combat_after` and `effect`: `left_combat`, or `none` for a creature that was not in combat; a creature still in combat after the settle wait is an error) and `gm_respawn {guid|name}` (`.respawn`, a dead creature only) select the
 creature with the server's echo confirmed first and keep the `--allow-gm-units` / `trial_units` boundary. `forever
 serve --create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)` creates the character
 on login when the account lacks it (a character already there sends nothing).

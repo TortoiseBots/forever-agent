@@ -2505,6 +2505,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		if s.selfSeen && caster == s.self {
 			s.onOwnSpellStart(&v, now)
 		}
+		s.itemCast.start(&v, s.self)
 		if s.fight.staleCast(v.SpellID, v.CastID, now) {
 			return
 		}

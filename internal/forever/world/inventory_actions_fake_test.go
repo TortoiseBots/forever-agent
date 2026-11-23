@@ -144,7 +144,7 @@ func (f *itemWorld) server(core uint32, payload []byte) {
 		if err := f.s.handleLoot(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload}); err != nil {
 			f.t.Fatalf("%s: %v", wire.ServerName(core), err)
 		}
-	case wire.SMSGCastFailed, wire.SMSGSpellGo:
+	case wire.SMSGCastFailed, wire.SMSGSpellGo, wire.SMSGSpellStart:
 		f.s.handleCombat(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload})
 	default:
 		f.t.Fatalf("the fake has no answer for %s", wire.ServerName(core))

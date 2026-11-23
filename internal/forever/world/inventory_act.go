@@ -668,6 +668,11 @@ type itemCastWatch struct {
 	reason  int32
 	refused bool
 	went    bool
+	// begun is set when the server started the watched spell for this character (SMSG_SPELL_START). The server
+	// sends it only after it accepted the use: Player::CastItemUseSpell drops a spell that is not one of the item's
+	// on-use effects with a log line and no packet (Player.cpp:9726-9744). It is kept after end(), so a caller
+	// that read the result later can tell a dropped use from a cast still in progress.
+	begun bool
 }
 
 // begin starts watching a cast of one spell.
@@ -675,6 +680,13 @@ func (w *itemCastWatch) begin(spell int32) { *w = itemCastWatch{active: true, sp
 
 // end stops watching.
 func (w *itemCastWatch) end() { w.active = false }
+
+// start notes the server starting the watched spell with the character as its caster.
+func (w *itemCastWatch) start(v *combat.SpellCast, self wire.GUID) {
+	if w.spell != 0 && v.SpellID == w.spell && (v.Caster == self || v.CasterUnit == self) {
+		w.begun = true
+	}
+}
 
 // failed notes a cast failure (SMSG_CAST_FAILED, SMSG_SPELL_FAILURE) of the character for the watched spell.
 func (w *itemCastWatch) failed(v combat.SpellFailure) {
