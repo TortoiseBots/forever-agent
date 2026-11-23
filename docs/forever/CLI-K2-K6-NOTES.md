@@ -380,5 +380,16 @@ the units read asks for more than serve's default 100 units, so a hostile unit i
 ### minimap-extract --forever
 
 `Map.db2`, the minimap folders and the tile files are read only when they resolve inside `--db2` / `--client`; a
-symlink that leaves them is treated as absent. `--prefer worldmap` with `--forever` is a usage error (this client's
-world maps are not read).
+symlink that leaves them is treated as absent. `--prefer worldmap` with `--forever --client` is a usage error (a
+listfile folder holds no world-map textures).
+
+`--forever --casc INSTALL [--product P]` replaces `--client` with the install itself (both is a usage error, neither
+is one too), so the textures are read by FileDataID instead of by listfile name. The terrain minimap is the
+`Map.db2` row's `WdtFileDataID` WDT, whose `MAID` chunk lists 64 x 64 tiles of eight FileDataIDs: entry 7 is the
+tile's minimap texture, 0 is none; entry index is row*64+col as the `MAIN` ADT list is. The world map is the map's
+`UiMapAssignment` row (lowest `OrderIndex`, then the largest world region), its `UiMapXMapArt` picture in phase 0,
+and that `UiMapArtTile` art's `LayerIndex` 0 tiles (256 px, stitched by row and column). The picture's `<id>.json`
+places it by the assignment's world region and UI rect: the region covers the UiMin..UiMax rectangle of the
+picture, X to the right and Y down, and `px_per_yard` is its west-east scale. `--prefer worldmap` works on this
+path only, and the three UiMap tables are required in `--db2` (`Map.db2`'s own field and layout checks apply to
+each: field count and layout hash as in `UiMapArtTileMeta`, `UiMapAssignmentMeta` and `UiMapXMapArtMeta`).

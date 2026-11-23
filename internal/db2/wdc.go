@@ -53,12 +53,14 @@ const (
 )
 
 // Map is one row of Map.db2: the map's id, the folder of its world data and minimap
-// (World\Maps\<Directory>, world/minimaps/<Directory>), its name and its instance type.
+// (World\Maps\<Directory>, world/minimaps/<Directory>), its name, its instance type and the WDT file that
+// lists its terrain tiles (0 or less when the map has none, as an indoor dungeon has).
 type Map struct {
-	ID           uint32
-	Directory    string
-	MapName      string
-	InstanceType uint32
+	ID            uint32
+	Directory     string
+	MapName       string
+	InstanceType  uint32
+	WdtFileDataID int32
 }
 
 // File is an open DB2 file. Open reads and parses the whole file; the data is kept in memory, so the
@@ -695,6 +697,7 @@ const (
 	mapFieldDirectory    = 0
 	mapFieldMapName      = 1
 	mapFieldInstanceType = 8
+	mapFieldWdt          = 21 // MapLoadInfo's WdtFileDataID: MapMeta's 22nd field (DB2Metadata.h:14538), not the load-info index
 )
 
 // Maps reads Map.db2's rows, and says what it left out. The layout hash and the field count must be the
@@ -727,6 +730,14 @@ func (f *File) Maps() ([]Map, []string, error) {
 			return m, fmt.Errorf("record %d: the instance type %d is not a 32-bit count", rec, int64(v))
 		}
 		m.InstanceType = uint32(v)
+		w, err := f.Int(Row{rec: rec}, mapFieldWdt)
+		if err != nil {
+			return m, err
+		}
+		if w < math.MinInt32 || w > math.MaxInt32 {
+			return m, fmt.Errorf("record %d: the WDT file id %d is not a 32-bit number", rec, w)
+		}
+		m.WdtFileDataID = int32(w)
 		return m, nil
 	}
 	rows := make([]Map, 0, f.RecordCount)
