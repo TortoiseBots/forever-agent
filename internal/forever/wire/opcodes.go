@@ -97,6 +97,15 @@ const (
 	CMSGChatMessageParty               uint32 = 0x2C0026
 	CMSGChatMessageWhisper             uint32 = 0x2C0008
 	CMSGChatMessageEmote               uint32 = 0x2C0024
+	CMSGChatMessageGuild               uint32 = 0x2C000D
+	CMSGChatMessageOfficer             uint32 = 0x2C000E
+	CMSGChatMessageRaid                uint32 = 0x2C0027
+	CMSGChatMessageRaidWarning         uint32 = 0x2C0029
+	CMSGChatMessageInstanceChat        uint32 = 0x2C0028
+	CMSGChatMessageChannel             uint32 = 0x2C0007
+	CMSGChatJoinChannel                uint32 = 0x2C0000
+	CMSGChatLeaveChannel               uint32 = 0x2C0001
+	CMSGChatChannelList                uint32 = 0x2C0011
 	CMSGChatAddonMessage               uint32 = 0x2C002A
 	CMSGChatAddonMessageTargeted       uint32 = 0x2C002B
 	CMSGChatRegisterAddonPrefixes      uint32 = 0x2C0005
@@ -116,6 +125,10 @@ const (
 	SMSGChatRestricted             uint32 = 0x4A0007
 	SMSGChatPlayerNotFound         uint32 = 0x4A000D
 	SMSGChatServerMessage          uint32 = 0x4A001C
+	SMSGChannelNotify              uint32 = 0x4A0017
+	SMSGChannelNotifyJoined        uint32 = 0x4A0019
+	SMSGChannelNotifyLeft          uint32 = 0x4A001A
+	SMSGChannelList                uint32 = 0x4A001B
 	SMSGPrintNotification          uint32 = 0x45006E
 	SMSGMotd                       uint32 = 0x4A0003
 	SMSGEmote                      uint32 = 0x450273
@@ -473,6 +486,15 @@ var clientNames = map[uint32]string{
 	CMSGChatMessageParty:               "CMSG_CHAT_MESSAGE_PARTY",
 	CMSGChatMessageWhisper:             "CMSG_CHAT_MESSAGE_WHISPER",
 	CMSGChatMessageEmote:               "CMSG_CHAT_MESSAGE_EMOTE",
+	CMSGChatMessageGuild:               "CMSG_CHAT_MESSAGE_GUILD",
+	CMSGChatMessageOfficer:             "CMSG_CHAT_MESSAGE_OFFICER",
+	CMSGChatMessageRaid:                "CMSG_CHAT_MESSAGE_RAID",
+	CMSGChatMessageRaidWarning:         "CMSG_CHAT_MESSAGE_RAID_WARNING",
+	CMSGChatMessageInstanceChat:        "CMSG_CHAT_MESSAGE_INSTANCE_CHAT",
+	CMSGChatMessageChannel:             "CMSG_CHAT_MESSAGE_CHANNEL",
+	CMSGChatJoinChannel:                "CMSG_CHAT_JOIN_CHANNEL",
+	CMSGChatLeaveChannel:               "CMSG_CHAT_LEAVE_CHANNEL",
+	CMSGChatChannelList:                "CMSG_CHAT_CHANNEL_LIST",
 	CMSGChatAddonMessage:               "CMSG_CHAT_ADDON_MESSAGE",
 	CMSGChatAddonMessageTargeted:       "CMSG_CHAT_ADDON_MESSAGE_TARGETED",
 	CMSGChatRegisterAddonPrefixes:      "CMSG_CHAT_REGISTER_ADDON_PREFIXES",

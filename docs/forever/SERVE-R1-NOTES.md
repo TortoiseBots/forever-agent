@@ -61,7 +61,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 
 | Method | Status | What it does |
 |---|---|---|
-| `chat` | DONE | `say`, `yell`, `party`, `emote`, `whisper` (with `to`). A channel, guild or raid line is refused by name. |
+| `chat` | DONE | `say`, `yell`, `party`, `emote`, `whisper` (with `to`), `guild`, `officer`, `raid`, `raid_warning`, `battleground` (alias `instance`: this core has one instance-chat message for a battleground's group) and `channel` (`to` is the channel name; the session must have joined it). `raid_leader`, `battleground_leader` and `instance_leader` are refused by name: the server marks a leader's line itself. A line that is empty, over 511 bytes or starts with `/`, `.` or `!` is refused before it is sent. Incoming lines of every type are chat rows (`chat_log` names the sender once the server has told this client the name) and `chat` events. |
 | `gm` | DONE | One GM line through the command channel; the dot is added when missing. The GM guard (the non-mutating `.gm` probe) is confirmed once per session before the first line. A line the core runs as one of the unit commands (`.die`/`.kill`, `.damage`, `.modify hp/mana/rage/energy`, `.aura`/`.unaura`) goes through the GM hands' boundary below first: same `--allow-gm-units` flag, same `trial_units` allowlist, same "never another player" rule, typed `-32006` and nothing sent on refusal. `.revive` has its own boundary (own character or a registered trial unit), described under `gm_revive`. |
 | `gm_revive` | DONE | `.revive <name>` through the same channel and the same command path. With the flag on, this session's own character passes without being registered, and a player the runner registered through `trial_units` passes (a trial's own bot); any other player is refused with `-32006` and nothing is sent. The name is validated first, and the line that goes out is the core's own `.revive <name>`, so its GM log carries the same audit line. |
 | `invite` | DONE | `CMSG_PARTY_INVITE` and the server's command result for that name. |
@@ -71,7 +71,9 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `trial_units` | DONE | `{guids: [...]}` replaces the GM hands' allowlist for the current trial and answers `{guids}`; it outlives a reconnect. Refused with `-32006` without `--allow-gm-units`; a zero guid is `-32602`. |
 | `gm_evade`, `gm_respawn` | DONE (#99) | Select one creature with the echo confirmed, then `.npc evade` / `.respawn` (a dead creature only), under the `gm_kill` boundary. See DAEMON-GAPS-99-NOTES.md. |
 | `promote`, `assistant`, `convert_raid`, `raid_move`, `loot_method`, `disband`, `mark` | NOT-PORTED | The party model has no senders or records for these. |
-| `join_channel`, `leave_channel` | NOT-PORTED | There is no channel join in the chat round. |
+| `join_channel` | DONE | `name*`, `password?`: joins a custom channel (name 1-31 characters, not starting with a digit) and waits up to 5 s for the server's answer. `{channel, joined, flags, already?}`; a refusal notice (`wrong_password`, `banned`, `invalid_name`, `wrong_faction`, ...) is an error naming it. The answer's GUID is what later messages to the channel carry. Every notice is also a `channel_notify` event (`data.notice`, `data.channel`). System (zone) channels are not joined: they need a client-side channel id this client does not have. |
+| `leave_channel` | DONE | `name*`: leaves a channel this session is on. `{channel, left}`. A channel it never joined is refused by name and nothing is sent. |
+| `channel_list` | DONE | `name*` (a unique prefix is enough): the members of a channel this session is on: `{channel, flags, total, members[]}`, a row `{name?, self?, owner?, moderator?, muted?}` (at most 500 rows). Unknown member names are asked for first; a row stays unnamed if the server does not answer in 1.5 s. |
 
 ### Movement, combat and map change
 
