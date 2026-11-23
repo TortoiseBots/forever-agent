@@ -1,0 +1,38 @@
+case ok-hello-addon-self
+desc ungrouped hello: the roster request as an add-on whisper to self, echoed back ungated, answered with VERBS and TRANSPORT none
+module yes
+send addon-self roster
+frame addon WHISPER_SELF TBM roster
+recv addon WHISPER TBM roster
+recv addon WHISPER TBM TBM:ROSTER_BEGIN|1
+recv addon WHISPER TBM TBM:ROSTER|101|Alpha|1|online|0|Elwynn Forest|Warrior
+recv addon WHISPER TBM TBM:ROSTER_END
+recv addon WHISPER TBM TBM:ALTBOTS|
+recv addon WHISPER TBM TBM:CC_ASSIGN_BEGIN|0
+recv addon WHISPER TBM TBM:CC_ASSIGN_END
+recv addon WHISPER TBM TBM:CLAIMED_BEGIN|0
+recv addon WHISPER TBM TBM:CLAIMED_END
+recv addon WHISPER TBM TBM:BOTSTATE_BEGIN|0
+recv addon WHISPER TBM TBM:BOTSTATE_END
+recv addon WHISPER TBM TBM:VERSION|v0.1.0-forever
+recv addon WHISPER TBM TBM:PROTO|1|1
+recv addon WHISPER TBM TBM:LATEST|-|-
+recv addon WHISPER TBM TBM:VERBS_BEGIN|3
+recv addon WHISPER TBM TBM:VERBS|action,action:follow,roster
+recv addon WHISPER TBM TBM:VERBS_END
+recv addon WHISPER TBM TBM:CAPS|behavior,inventory
+recv addon WHISPER TBM TBM:TRANSPORT|none
+expect hello.complete true
+expect hello.transport none
+expect hello.proto 1
+expect hello.min_addon 1
+expect hello.version v0.1.0-forever
+expect hello.caps behavior,inventory
+expect hello.has_verbs true
+expect hello.verbs action,action:follow,roster
+expect hello.check ok
+expect roster.count 1
+expect roster.0.class_name Warrior
+expect unknown.count 0
+expect ignored.count 1
+expect problems.count 0

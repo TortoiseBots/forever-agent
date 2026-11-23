@@ -43,7 +43,11 @@ type Hello struct {
 	Proto, MinAddon               int
 	HasProto, HasVersion, HasCaps bool
 	Caps                          []string
-	LatestModule, LatestAddon     string
+	// Verbs is the module's verb set from the VERBS stream, lowercased and in
+	// the order received; HasVerbs reports whether the stream committed.
+	Verbs                     []string
+	HasVerbs                  bool
+	LatestModule, LatestAddon string
 }
 
 // Check accepts a hello only when the trailer is whole: TRANSPORT plus
@@ -86,6 +90,7 @@ type openStream struct {
 	kept, skipped int
 	rows          []RosterRow
 	pairs         map[string]string
+	verbs         []string
 	counted       int
 }
 
@@ -129,7 +134,7 @@ func (r *Reader) Feed(in Incoming) {
 
 // Finish turns every still-open stream into an unterminated-stream problem.
 func (r *Reader) Finish() {
-	for _, name := range []string{"ROSTER", "BOTSTATE", "CC_ASSIGN", "CLAIMED"} {
+	for _, name := range []string{"ROSTER", "BOTSTATE", "CC_ASSIGN", "CLAIMED", "VERBS"} {
 		if r.streams[name] != nil {
 			r.problem("unterminated-stream", name)
 		}
@@ -193,7 +198,7 @@ func (r *Reader) line(line string) {
 			r.res.Hello.Transport = fields[0]
 		}
 		r.res.Hello.Complete = true
-	case "ROSTER_BEGIN", "BOTSTATE_BEGIN", "CC_ASSIGN_BEGIN", "CLAIMED_BEGIN":
+	case "ROSTER_BEGIN", "BOTSTATE_BEGIN", "CC_ASSIGN_BEGIN", "CLAIMED_BEGIN", "VERBS_BEGIN":
 		name := strings.TrimSuffix(typ, "_BEGIN")
 		if len(fields) != 1 {
 			r.problem("field-count", line)
@@ -212,7 +217,7 @@ func (r *Reader) line(line string) {
 			s.pairs = map[string]string{}
 		}
 		r.streams[name] = s
-	case "ROSTER_END", "BOTSTATE_END", "CC_ASSIGN_END", "CLAIMED_END":
+	case "ROSTER_END", "BOTSTATE_END", "CC_ASSIGN_END", "CLAIMED_END", "VERBS_END":
 		name := strings.TrimSuffix(typ, "_END")
 		s := r.streams[name]
 		r.streams[name] = nil
@@ -234,6 +239,13 @@ func (r *Reader) line(line string) {
 				return
 			}
 			r.res.BotState = s.pairs
+		case "VERBS":
+			if s.counted != s.want {
+				r.problem("stream-count", line)
+				return
+			}
+			r.res.Hello.Verbs = s.verbs
+			r.res.Hello.HasVerbs = true
 		default:
 			if s.counted != s.want {
 				r.problem("stream-count", line)
@@ -280,6 +292,17 @@ func (r *Reader) line(line string) {
 		if s := r.streams[typ]; s != nil {
 			s.counted++
 		}
+	case "VERBS":
+		if s := r.streams["VERBS"]; s != nil {
+			for _, tok := range strings.Split(strings.Join(fields, "|"), ",") {
+				if tok = strings.ToLower(strings.TrimSpace(tok)); tok != "" {
+					s.verbs = append(s.verbs, tok)
+					s.counted++
+				}
+			}
+			return
+		}
+		r.problem("row-outside-stream", line)
 	case "ALTBOTS":
 		joined := strings.Join(fields, "|")
 		if joined == "" {

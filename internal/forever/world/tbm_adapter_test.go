@@ -5,14 +5,19 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 func TestTBMAcceptOnlyModuleTraffic(t *testing.T) {
-	if !tbmAcceptAddon(addonmsg.Message{Prefix: "TBM", Channel: addonmsg.Whisper}) {
-		t.Fatal("an add-on whisper must be accepted")
+	own := wire.GUID{Low: 7, High: 0x0800000000000000}
+	if !tbmAcceptAddon(addonmsg.Message{Prefix: "TBM", Channel: addonmsg.Whisper, Sender: own}, own) {
+		t.Fatal("an add-on whisper from the character's own GUID must be accepted")
+	}
+	if tbmAcceptAddon(addonmsg.Message{Prefix: "TBM", Channel: addonmsg.Whisper, Sender: wire.GUID{Low: 8, High: 0x0800000000000000}}, own) {
+		t.Fatal("an add-on whisper from another GUID must be dropped")
 	}
 	for _, ch := range []addonmsg.Channel{addonmsg.Party, addonmsg.Raid, addonmsg.Guild, addonmsg.Other} {
-		if tbmAcceptAddon(addonmsg.Message{Prefix: "TBM", Channel: ch}) {
+		if tbmAcceptAddon(addonmsg.Message{Prefix: "TBM", Channel: ch, Sender: own}, own) {
 			t.Fatalf("add-on channel %v must be refused", ch)
 		}
 	}

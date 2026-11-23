@@ -21,8 +21,8 @@ func TestCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 23 {
-		t.Fatalf("want 23 cases, got %d", len(cases))
+	if len(cases) != 28 {
+		t.Fatalf("want 28 cases, got %d", len(cases))
 	}
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
@@ -154,6 +154,13 @@ func resolveExpect(res tbmproto.Result, p string) (string, error) {
 		return res.Hello.Version, nil
 	case p == "hello.caps":
 		return strings.Join(res.Hello.Caps, ","), nil
+	case p == "hello.verbs":
+		if len(res.Hello.Verbs) == 0 {
+			return "(empty)", nil
+		}
+		return strings.Join(res.Hello.Verbs, ","), nil
+	case p == "hello.has_verbs":
+		return boolStr(res.Hello.HasVerbs), nil
 	case p == "hello.latest_module":
 		return res.Hello.LatestModule, nil
 	case p == "hello.latest_addon":
@@ -304,7 +311,7 @@ func buildManifest(t *testing.T) string {
 	}
 	sort.Strings(paths)
 	var b strings.Builder
-	b.WriteString("tbm-contract v1 rev 1 proto 1 min-addon 1\n")
+	b.WriteString("tbm-contract v1 rev 2 proto 1 min-addon 1\n")
 	for _, rel := range paths {
 		data, err := fs.ReadFile(tbmcontract.V1, path.Join("v1", rel))
 		if err != nil {

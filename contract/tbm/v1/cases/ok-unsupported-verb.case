@@ -1,0 +1,13 @@
+case ok-unsupported-verb
+desc an unknown verb is answered with ACTION_ERR naming it, not silence
+module yes
+send addon-self version
+frame addon WHISPER_SELF TBM version
+recv addon WHISPER TBM version
+recv addon WHISPER TBM TBM:ACTION_ERR|version|unsupported|not available on this server yet
+expect err.count 1
+expect err.0.intent version
+expect err.0.code unsupported
+expect err.0.message not available on this server yet
+expect ignored.count 1
+expect problems.count 0

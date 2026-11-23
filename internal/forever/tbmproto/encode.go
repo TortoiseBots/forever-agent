@@ -6,17 +6,19 @@ import "strings"
 type Transport string
 
 const (
-	TransportAddon Transport = "addon"
-	TransportChat  Transport = "chat"
+	TransportAddon     Transport = "addon"
+	TransportAddonSelf Transport = "addon-self"
+	TransportChat      Transport = "chat"
 )
 
 // Frame is an encoded command awaiting the session.
 type Frame struct{ Kind, Channel, Prefix, Text string }
 
 // Encode wraps a command for its transport: addon sends the bare command
-// with prefix TBM on PARTY, chat whispers ".bot <command>" to self. The
-// command is rejected, never rewritten: blank, a separator or line break,
-// or a frame over 255 bytes all fail.
+// with prefix TBM on PARTY, addon-self whispers it to self with the same
+// prefix, chat whispers ".bot <command>" to self. The command is rejected,
+// never rewritten: blank, a separator or line break, or a frame over 255
+// bytes all fail.
 func Encode(t Transport, command string) (Frame, error) {
 	if strings.TrimSpace(command) == "" {
 		return Frame{}, &Error{Code: "empty-command", Line: command}
@@ -25,8 +27,11 @@ func Encode(t Transport, command string) (Frame, error) {
 		return Frame{}, &Error{Code: "unsafe-arg", Line: command}
 	}
 	f := Frame{Kind: "chat", Channel: "WHISPER_SELF", Text: ChatCommand + " " + command}
-	if t == TransportAddon {
+	switch t {
+	case TransportAddon:
 		f = Frame{Kind: "addon", Channel: "PARTY", Prefix: Prefix, Text: command}
+	case TransportAddonSelf:
+		f = Frame{Kind: "addon", Channel: "WHISPER_SELF", Prefix: Prefix, Text: command}
 	}
 	if len(f.Text) > MaxText {
 		return Frame{}, &Error{Code: "text-too-long", Line: command}

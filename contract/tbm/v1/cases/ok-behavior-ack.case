@@ -1,0 +1,16 @@
+case ok-behavior-ack
+desc behavior answers a BOTSTATE stream first and then its acknowledgement
+module yes
+send addon behavior Alpha
+frame addon PARTY TBM behavior Alpha
+recv addon WHISPER TBM TBM:BOTSTATE_BEGIN|1
+recv addon WHISPER TBM TBM:BOTSTATE|Alpha|state=follow
+recv addon WHISPER TBM TBM:BOTSTATE_END
+recv addon WHISPER TBM TBM:ACTION_ACK|behavior|bot:Alpha|1|-
+expect botstate.count 1
+expect ack.count 1
+expect ack.0.intent behavior
+expect ack.0.scope bot:Alpha
+expect ack.0.count 1
+expect ack.0.detail -
+expect problems.count 0

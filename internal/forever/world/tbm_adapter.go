@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
@@ -23,6 +26,8 @@ type tbmAdapter struct {
 	s    *session
 	feed []chat.Line
 	prev func(chat.Line)
+	// raw, when set, receives every accepted message as a case recv record for a live capture.
+	raw io.Writer
 }
 
 // newTBMAdapter builds the adapter and takes over the session's chat feed. close restores the previous feed.
@@ -49,6 +54,16 @@ func (a *tbmAdapter) SendAddon(ch addonmsg.Channel, target, prefix, text string,
 	return a.s.SendAddon(ch, target, prefix, text, logged)
 }
 
+// SendAddonSelf sends one add-on whisper to this character's own name, the
+// add-on whisper transport the ungrouped hello uses.
+func (a *tbmAdapter) SendAddonSelf(prefix, text string) error {
+	name := a.s.report.Character.Name
+	if name == "" {
+		return fmt.Errorf("tbm: the character's name is not known yet")
+	}
+	return a.s.SendAddon(addonmsg.Whisper, name, prefix, text, false)
+}
+
 // WhisperSelf sends the chat command as a whisper to this character's own name. The chat transport has no other
 // way to reach the module, and the core delivers a self whisper back to the sender.
 func (a *tbmAdapter) WhisperSelf(text string) error {
@@ -69,12 +84,12 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 	a.s.initAddon()
 	for {
 		if m, ok := a.s.addon.Next(); ok {
-			if !tbmAcceptAddon(m) {
+			if !tbmAcceptAddon(m, a.s.report.Character.GUID) {
 				continue
 			}
-			return tbmproto.Incoming{
-				Kind: "addon", Channel: addonChannelName(m), Prefix: m.Prefix, Text: m.Text,
-			}, nil
+			in := tbmproto.Incoming{Kind: "addon", Channel: addonChannelName(m), Prefix: m.Prefix, Text: m.Text}
+			a.record(in)
+			return in, nil
 		}
 		if len(a.feed) > 0 {
 			line := a.feed[0]
@@ -82,7 +97,9 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 			if !tbmAcceptChat(line) {
 				continue
 			}
-			return tbmproto.Incoming{Kind: "system", Text: line.Text}, nil
+			in := tbmproto.Incoming{Kind: "system", Text: line.Text}
+			a.record(in)
+			return in, nil
 		}
 		if err := a.s.collect(ctx, 50*time.Millisecond); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -93,24 +110,52 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 	}
 }
 
-// tbmAcceptAddon keeps only what the module sends: the contract's replies arrive as add-on whispers. A party,
-// raid or guild frame under the TBM prefix is another player's and never completes a hello or a command. The
-// sender's identity is not bound yet; the live proof (R4) settles what the module's sender GUID is.
-func tbmAcceptAddon(m addonmsg.Message) bool { return m.Channel == addonmsg.Whisper }
+// tbmAcceptAddon keeps only what the module sends: the contract's replies arrive as add-on whispers whose sender
+// is the character's own GUID. A party, raid or guild frame under the TBM prefix is another player's, and so is a
+// whisper from any other sender; neither ever completes a hello or a command.
+func tbmAcceptAddon(m addonmsg.Message, own wire.GUID) bool {
+	return m.Channel == addonmsg.Whisper && m.Sender == own
+}
 
 // tbmAcceptChat keeps only system messages: the module's chat-transport replies are system lines, so a say, party
 // or whisper line cannot forge a TBM: record.
 func tbmAcceptChat(l chat.Line) bool { return l.Type == chat.TypeSystem }
 
+// record appends one accepted message to the raw case capture, one recv record per message. A capture file is for
+// a live run's evidence and never goes to stdout.
+func (a *tbmAdapter) record(in tbmproto.Incoming) {
+	if a.raw == nil {
+		return
+	}
+	if in.Kind == "addon" {
+		fmt.Fprintf(a.raw, "recv addon %s %s %s\n", in.Channel, in.Prefix, caseField(in.Text))
+		return
+	}
+	fmt.Fprintf(a.raw, "recv system %s\n", caseField(in.Text))
+}
+
+// caseField escapes one case-file field: a backslash and a line feed, so a whole message stays one record.
+var caseField = strings.NewReplacer(`\`, `\\`, "\n", `\n`).Replace
+
 // tbmCheck is forever tbm-check: the client's hello and the requested commands, printed without identifiers.
 func (s *session) tbmCheck(ctx context.Context) error {
 	a := newTBMAdapter(s)
 	defer a.close()
+	if path := s.opts.TBMRaw; path != "" {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("tbm raw: %w", err)
+		}
+		defer f.Close()
+		a.raw = f
+	}
 
 	cli := tbmclient.New(a)
 	switch s.opts.TBMTransport {
 	case "addon":
 		cli.SetTransport(tbmproto.TransportAddon)
+	case "addon-self":
+		cli.SetTransport(tbmproto.TransportAddonSelf)
 	case "chat":
 		cli.SetTransport(tbmproto.TransportChat)
 	}
@@ -143,8 +188,12 @@ func printTBMHello(s *session, h tbmproto.Hello) {
 	if err := h.Check(); err != nil {
 		check = err.Error()
 	}
-	s.opts.logf("tbm hello: complete=%t transport=%q version=%q proto=%d min-addon=%d caps=%v latest=%q/%q check=%s",
-		h.Complete, h.Transport, h.Version, h.Proto, h.MinAddon, h.Caps, h.LatestModule, h.LatestAddon, check)
+	verbs := "(none)"
+	if h.HasVerbs {
+		verbs = strings.Join(h.Verbs, ",")
+	}
+	s.opts.logf("tbm hello: complete=%t transport=%q version=%q proto=%d min-addon=%d verbs=%s caps=%v latest=%q/%q check=%s",
+		h.Complete, h.Transport, h.Version, h.Proto, h.MinAddon, verbs, h.Caps, h.LatestModule, h.LatestAddon, check)
 }
 
 // printTBMResult prints the result's counts and codes, never a name, a GUID or a location.

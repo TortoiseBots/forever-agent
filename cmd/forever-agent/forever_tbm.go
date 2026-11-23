@@ -15,7 +15,7 @@ import (
 )
 
 func foreverTBMCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever tbm-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--cmd COMMAND]... [--transport auto|addon|chat] [--timeout DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever tbm-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--cmd COMMAND]... [--transport auto|addon|addon-self|chat] [--timeout DURATION] [--tbm-raw FILE] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever tbm-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -23,8 +23,9 @@ func foreverTBMCheckCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	stay := fs.Duration("stay", 4*time.Second, "how long to settle in the world before the hello")
 	var cmds stringList
 	fs.Var(&cmds, "cmd", "a TBM command to run after the hello, e.g. 'action follow' (repeatable; run in order)")
-	transport := fs.String("transport", "auto", "the command transport: auto (the hello's answer), addon or chat")
+	transport := fs.String("transport", "auto", "the command transport: auto (the hello's answer), addon, addon-self or chat")
 	timeout := fs.Duration("timeout", 5*time.Second, "how long the hello and each command may take")
+	raw := fs.String("tbm-raw", "", "append every accepted TBM message to this file as case recv records, for a live capture (keep it outside the repository)")
 	captureDir := fs.String("capture-dir", "", "write every packet the combat, chat and party handlers see into a new run directory under this path (keep it outside the repository)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -42,9 +43,9 @@ func foreverTBMCheckCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		return exitUsage
 	}
 	switch *transport {
-	case "auto", "addon", "chat":
+	case "auto", "addon", "addon-self", "chat":
 	default:
-		fmt.Fprintln(stderr, "forever tbm-check: --transport is auto, addon or chat")
+		fmt.Fprintln(stderr, "forever tbm-check: --transport is auto, addon, addon-self or chat")
 		return exitUsage
 	}
 	if *timeout <= 0 || *timeout > 2*time.Minute {
@@ -62,6 +63,7 @@ func foreverTBMCheckCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		TBMTransport: *transport,
 		TBMCommands:  cmds,
 		TBMTimeout:   *timeout,
+		TBMRaw:       *raw,
 		CaptureDir:   *captureDir,
 	})
 	if report != nil {
