@@ -42,8 +42,22 @@ const (
 	// test makes AttackRTITargetAction whisper "I dont see my rti attack target" (AttackAction.cpp:163) and the tank
 	// never moves. Both tests are made from the TANK's own position, not the agent's.
 	PlayModuleSightYd = 60.0
-	// The close-in that puts the tank where that check passes is bounded two ways: at most PlayCloseTries steps (of
-	// PlayPullStepYd each, so 20 yd walked in all) and at most PlayCloseTime from the first look.
+	// PlaySightStepYd is how finely the close-in samples the navmesh path to the skull (2 yd): the first sample with a
+	// clear ray is the stand it walks to. A straight line toward the skull can keep the party on a ledge whose lip
+	// hides it (the trogg cave's shelf, proof 2026-11-23: four straight steps to 9.7 yd and still no sight), and the
+	// path is where the party can walk.
+	PlaySightStepYd = 2.0
+	// PlaySightTouchYd is the nearest the close-in stands to the skull (5 yd): a sight stand nearer than a body's
+	// reach is the skull's own feet, not a place to pull from.
+	PlaySightTouchYd = 5.0
+	// PlayTankBesideYd is how near the tank must stand to the sight stand before the sight is read from its own
+	// position (5 yd): the module reads the line from the TANK, and a tank a ledge behind or a wall away sees nothing.
+	PlayTankBesideYd = 5.0
+	// PlayTankWait is how long one close-in stand waits for the tank to come beside it (15 s): a tank that cannot
+	// follow is not waited for forever, and the pull is ordered from where the party stands (the module is the judge).
+	PlayTankWait = 15 * time.Second
+	// The close-in that puts the tank where that check passes is bounded two ways: at most PlayCloseTries steps and at
+	// most PlayCloseTime from the first look.
 	PlayCloseTries = 4
 	PlayCloseTime  = 90 * time.Second
 )
@@ -132,20 +146,18 @@ func (p *playRun) stopPullFailed() {
 // skullSeen is the module's check for the tank (see PlayModuleSightYd): the skull within PlayModuleSightYd of where the
 // tank stands, and in line of sight from there. The agent holds no collision geometry, so the line is the navmesh's
 // walkability ray (the same stand-in plan-scout uses); known is false when there is no such port or the mesh cannot
-// say, and the caller then lets the module judge. The tank's position is the roster's; the agent's own stands in for it
-// when the roster has none on the run's map (the tank follows beside the agent).
+// say, and the caller then lets the module judge. The tank's position is its live unit in the view (the roster lags a
+// follow order by a poll or two); the roster's row stands in, and the agent's own position when the roster has none on
+// the run's map (the tank follows beside the agent).
 func (p *playRun) skullSeen(skull Unit) (seen, known bool) {
 	from := p.self
-	if m, ok := p.member(p.cfg.Bots[0]); ok && m.Map == p.selfMap {
-		from = m.Pos
+	if at, ok := p.tankPos(); ok {
+		from = at
 	}
 	if dist3(from, skull.Pos) > PlayModuleSightYd {
 		return false, true
 	}
-	if p.ports.Sight == nil {
-		return true, false
-	}
-	in, ok := p.ports.Sight.InSight(from, skull.Pos)
+	in, ok := p.sightAt(from, skull.Pos)
 	if !ok {
 		return true, false
 	}
@@ -153,10 +165,12 @@ func (p *playRun) skullSeen(skull Unit) (seen, known bool) {
 }
 
 // closeToSee puts the tank where the module's check passes before the pull is ordered. While the skull is out of the
-// tank's range or sight, the agent steps toward it along pullStep's line (5 yd, never nearer than PlayPullMinYd) and
-// gathers the party, so the tank closes in behind its leader, and looks again. It is bounded by PlayCloseTries and
-// PlayCloseTime; spent, or with no step left to take, the pull is ordered as it stands (the module is
-// the judge) and p.sightBlocked names the refusal if it comes. A stop of the run's own is the run's.
+// tank's sight, the agent walks to the nearest point of the navmesh path to the skull that has a clear ray (the path
+// goes down a shelf the straight line stays on top of; proof 2026-11-23), waits for the tank to come beside that stand
+// and looks again from where the tank actually stands. With no path answer it steps toward the skull along
+// pullStepPoint's line as before. It is bounded by PlayCloseTries and PlayCloseTime; spent, or with no step left to
+// take, the pull is ordered as it stands (the module is the judge) and p.sightBlocked names the refusal if it comes. A
+// stop of the run's own is the run's.
 func (p *playRun) closeToSee(ctx context.Context, group int, skull Unit) {
 	p.sightBlocked = false
 	if skull.GUID.IsZero() {
@@ -180,15 +194,116 @@ func (p *playRun) closeToSee(ctx context.Context, group int, skull Unit) {
 		if try >= PlayCloseTries || p.now().Sub(start) >= PlayCloseTime {
 			return
 		}
-		to := pullStepPoint(p.self, u.Pos)
-		d := dist3(p.self, to)
-		if d <= 0.01 {
-			return // inside PlayPullMinYd already: nothing nearer to try
+		// The agent's own stand is left alone when it has sight and the tank has not yet come beside it (it trails the
+		// follow a step or two behind): the tank has only to catch up, and the next look reads the line from where it
+		// then stands. A tank already beside the agent and still blind needs a stand further on instead.
+		if in, ok := p.sightAt(p.self, u.Pos); ok && in && !p.tankNear(p.self, PlayTankBesideYd) {
+			if !p.waitTankNear(ctx, p.self, PlayTankBesideYd) {
+				return
+			}
+			p.sightBlocked = false
+			continue
 		}
-		if !p.pullStep(ctx, u) {
+		stand, ok := p.sightStand(u.Pos)
+		if !ok {
+			stand = pullStepPoint(p.self, u.Pos)
+		}
+		if dist3(p.self, stand) <= 0.01 {
+			return // nothing nearer to try
+		}
+		p.pullWalk = true
+		p.walkTo(ctx, stand, false, false)
+		p.pullWalk = false
+		if p.stopReason != "" {
+			return
+		}
+		// The module reads the line from the TANK's own position: a stand that gives the agent sight gives the tank
+		// none until it comes beside it. Bounded, and looked at again from where it stands.
+		if !p.waitTankNear(ctx, stand, PlayTankBesideYd) {
 			return
 		}
 		p.sightBlocked = false
+	}
+}
+
+// sightAt is the Sight port's answer for one line, known false when it cannot say; with no port it never knows.
+func (p *playRun) sightAt(from, to Vec3) (in, known bool) {
+	if p.ports.Sight == nil {
+		return false, false
+	}
+	return p.ports.Sight.InSight(from, to)
+}
+
+// sightStand is the nearest point of the navmesh path from the agent to the skull with a clear walkability ray to it,
+// sampled every PlaySightStepYd and never nearer than PlaySightTouchYd: where the party can walk and the tank can
+// then see the skull (the trogg cave's shelf is crossed only by the path down its west end). ok is false when there
+// is no path, the mesh cannot answer or no sample clears, and the caller then steps along the straight line.
+func (p *playRun) sightStand(skull Vec3) (Vec3, bool) {
+	if p.ports.Sight == nil {
+		return Vec3{}, false
+	}
+	p.refreshSelf()
+	route, err := p.ports.Walker.Path(p.self, skull)
+	if err != nil || len(route.Points) < 2 {
+		return Vec3{}, false
+	}
+	for _, at := range sightSamples(route.Points, PlaySightStepYd) {
+		if dist3(at, skull) < PlaySightTouchYd {
+			return Vec3{}, false // the rest of the path stands on the skull
+		}
+		if dist3(at, p.self) < 1 {
+			continue // the agent's own stand was looked at already
+		}
+		in, known := p.ports.Sight.InSight(at, skull)
+		if known && in {
+			return at, true
+		}
+	}
+	return Vec3{}, false
+}
+
+// sightSamples is the path's points every yd or so, the first point included.
+func sightSamples(points []Vec3, yd float64) []Vec3 {
+	if len(points) == 0 || yd <= 0 {
+		return nil
+	}
+	out := []Vec3{points[0]}
+	for i := 1; i < len(points); i++ {
+		a, b := points[i-1], points[i]
+		n := max(1, int(math.Ceil(dist3(a, b)/yd)))
+		for k := 1; k <= n; k++ {
+			f := float64(k) / float64(n)
+			out = append(out, Vec3{
+				a[0] + float32(float64(b[0]-a[0])*f),
+				a[1] + float32(float64(b[1]-a[1])*f),
+				a[2] + float32(float64(b[2]-a[2])*f),
+			})
+		}
+	}
+	return out
+}
+
+// tankNear says whether the tank's live position stands within yd of at.
+func (p *playRun) tankNear(at Vec3, yd float64) bool {
+	tank, ok := p.tankPos()
+	return ok && dist3(tank, at) <= yd
+}
+
+// waitTankNear waits until the tank's live position stands within yd of at, up to PlayTankWait. It reports whether it
+// did: a tank that cannot come beside the stand (a ledge it cannot follow down) is one bounded wait, and the pull is
+// then ordered from where the party stands and the module judges.
+func (p *playRun) waitTankNear(ctx context.Context, at Vec3, yd float64) bool {
+	deadline := p.now().Add(PlayTankWait)
+	for {
+		if p.tankNear(at, yd) {
+			return true
+		}
+		if !p.now().Before(deadline) {
+			return false
+		}
+		if !p.sleep(ctx, p.lim.Poll) {
+			return false
+		}
 	}
 }
 
@@ -740,6 +855,26 @@ func (p *playRun) tankGUID() wire.GUID {
 		return m.GUID
 	}
 	return wire.GUID{}
+}
+
+// tankPos is the tank's live position: its unit in the view the packet loop keeps (the roster lags a follow order by a
+// poll or two, and the close-in judges the line from where the tank really stands), else the roster's row on the run's
+// map. ok is false when neither knows it.
+func (p *playRun) tankPos() (Vec3, bool) {
+	if len(p.cfg.Bots) == 0 {
+		return Vec3{}, false
+	}
+	if g := p.tankGUID(); !g.IsZero() {
+		for _, u := range p.ports.World.Units() {
+			if u.GUID == g && !u.Dead {
+				return u.Pos, true
+			}
+		}
+	}
+	if m, ok := p.member(p.cfg.Bots[0]); ok && m.Map == p.selfMap {
+		return m.Pos, true
+	}
+	return Vec3{}, false
 }
 
 // ready says whether the party is rested: every member's health at PlayRestHP per cent, and every mana user's pool at

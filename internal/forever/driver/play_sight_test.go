@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // The pull's close-in (#167 follow-up, part of #88): the module orders the tank onto the skull only when the tank sees
@@ -219,5 +220,115 @@ func TestPlayBossPullClosesIn(t *testing.T) {
 	}
 	if rig.fake.BlindOrders != 0 {
 		t.Fatalf("the module refused %d orders; want none", rig.fake.BlindOrders)
+	}
+}
+
+// sightWindow is the off-line spot the path tests pull from: 19 yd off the straight line from the stand to the skull,
+// and only a point within 6 yd of it sees the skull (the trogg cave's shelf in miniature: the ledge's lip blocks the
+// straight line, and the path round the pillar has a spot with sight).
+var sightWindow = Vec3{25, 14, 0}
+
+// sightSkull is the sight tests' skull: behind the ledge (the wall at y 11) from the stand at (40,5).
+var sightSkull = Vec3{42, 22, 0}
+
+// windowSight is the sight of a ledge that only the path's spot clears: the skull is seen from sightWindow's radius
+// and nothing on the straight line from the stand, and every other target keeps wallSight's rule.
+func windowSight(from, to Vec3) bool {
+	if dist3(to, sightSkull) < 1 {
+		return dist3(from, sightWindow) <= 6
+	}
+	return wallSight(from, to)
+}
+
+// doglegPath answers the walker: the route to the skull goes round the pillar by sightWindow (the navmesh's own way
+// round a wall), and every other walk is a straight line.
+func doglegPath(from, to Vec3) navmesh.Route {
+	pts := []Vec3{from, to}
+	if dist3(to, sightSkull) < 1 {
+		pts = []Vec3{from, sightWindow, to}
+	}
+	var length float32
+	for i := 1; i < len(pts); i++ {
+		length += float32(dist3(pts[i-1], pts[i]))
+	}
+	return navmesh.Route{Kind: navmesh.RouteComplete, Corners: len(pts), Start: from, End: to, Points: pts, Length: length}
+}
+
+// TestPlayPullClosesInAlongThePathWhereTheTankSees (proof 2026-11-23, the trogg cave's shelf): the straight line from
+// the stand toward the skull stays behind the ledge, so stepping along it never gives the tank sight (the run's four
+// steps to 9.7 yd and the stop pull-no-sight); the navmesh path round the pillar has a spot with sight, so the close-in
+// walks that path to it, waits for the tank and orders from there.
+func TestPlayPullClosesInAlongThePathWhereTheTankSees(t *testing.T) {
+	rig := newPlayFightRig(t, sightWallPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: sightSkull})
+		f.SpawnBosses()
+		f.SightFunc = windowSight
+		f.PathFunc = doglegPath
+	})
+	rig.ports.Sight = rig.fake
+	rig.cfg.Out = t.TempDir()
+	walks := logPlayWalks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the path's sight spot must be taken, not the straight line)", res.Stop)
+	}
+	if rig.fake.BlindOrders != 0 {
+		t.Fatalf("the module refused %d orders; want none (the tank sees the skull from the path's spot)", rig.fake.BlindOrders)
+	}
+	at := -1
+	for i, w := range *walks {
+		if windowSight(w.To, sightSkull) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		t.Fatalf("the agent never walked to a stand with sight of the skull (stop %q, walks %v)", res.Stop, *walks)
+	}
+	if (*walks)[at].Attacks != 0 {
+		t.Fatalf("the tank was ordered before the walk to the stand with sight")
+	}
+}
+
+// TestPlayPullWaitsForTheTankBoundedly (#88 proof, the shelf): the path's sight spot gives the AGENT sight, but the
+// tank stands on the shelf the whole time and never comes beside it, so each stand waits at most 15 s for the
+// tank and the tries bound the search: the run stops pull-no-sight, never hanging on a tank that cannot follow.
+func TestPlayPullWaitsForTheTankBoundedly(t *testing.T) {
+	rig := newPlayFightRig(t, sightWallPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: sightSkull})
+		f.SpawnBosses()
+		f.SightFunc = windowSight
+		f.PathFunc = doglegPath
+		// The tank stays on the shelf: a live unit in the view (the roster's row says the agent's side, the lag a
+		// follow order leaves a poll behind), 11.7 yd from the path's stand and never beside it.
+		f.AddUnit(Unit{GUID: f.botGUID(playBots[0]), Pos: Vec3{40, 5, 0}, Friendly: true, HP: 900, MaxHP: 900})
+	})
+	rig.ports.Sight = rig.fake
+	rig.cfg.Out = t.TempDir()
+	walks := logPlayWalks(rig.fake)
+	logged := rig.fake.OnWalk
+	var atSightSpot time.Time
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		logged(f, to)
+		if atSightSpot.IsZero() && windowSight(to, sightSkull) {
+			atSightSpot = f.Clock.Now()
+		}
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-no-sight" {
+		t.Fatalf("stop = %q; want pull-no-sight (a tank that cannot follow is not waited for forever); walks %v", res.Stop, *walks)
+	}
+	if steps := closingSteps(rig.fake, *walks, Vec3{40, 5, 0}); steps < 1 || steps > PlayCloseTries {
+		t.Fatalf("the agent took %d closing steps; want 1..%d (the tries)", steps, PlayCloseTries)
+	}
+	if atSightSpot.IsZero() {
+		t.Fatalf("the agent never walked to a stand with sight of the skull (stop %q, walks %v)", res.Stop, *walks)
+	}
+	order := playActionTime(t, rig.fake.Actions, ".bot attack Botone")
+	if gap := order.Sub(atSightSpot); gap < 15*time.Second || gap > PlayCloseTries*15*time.Second+time.Minute {
+		t.Fatalf("the first tank order came %v after the sight-spot walk; want one 15 s wait per stand (at most %v)",
+			gap, PlayCloseTries*15*time.Second+time.Minute)
 	}
 }
