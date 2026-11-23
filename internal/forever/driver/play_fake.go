@@ -466,6 +466,13 @@ func (f *PlayFake) tankBlind(name string) bool {
 		return false
 	}
 	from := f.botPos(f.GoldenOwner.bot(name))
+	// The module reads the bot's own unit; a scripted unit of the tank (a live position the table's rule lacks) is
+	// what it sees.
+	if g, ok := f.PlayerGUID(name); ok {
+		if bu, ok := unitByGUID(f.units, g); ok && !bu.Dead {
+			from = bu.Pos
+		}
+	}
 	return dist3(from, u.Pos) > PlayModuleSightYd || !f.SightFunc(from, u.Pos)
 }
 

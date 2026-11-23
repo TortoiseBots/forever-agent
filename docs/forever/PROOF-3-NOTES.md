@@ -21,11 +21,19 @@ byte is in this change or its tests.
 - Before the first order the agent checks what the module will check for the tank (`closeToSee`): the module's rti
   mark is found only within 60 yd and in line of sight of the TANK's own position (`RtiTargetValue.h:89,92`,
   `PossibleAttackTargetsValue.cpp:387`; a miss whispers "I dont see my rti attack target", `AttackAction.cpp:163`, and
-  the tank never moves). The tank's position is the roster's, the line is the navmesh walkability ray (the `Sight` port;
-  none or unknown leaves the judging to the module). A skull the tank cannot see makes the agent step toward it like
-  `pullStep` (the party gathers at 10 yd, so the tank follows) and look again, at most `PlayCloseTries` = 4 steps and
-  `PlayCloseTime` = 90 s; `pull_sight` {group, seen, known, try, yd} is recorded at each look. Spent, the order is made
-  anyway and an unanswered pull stops `pull-no-sight` (not `pull-failed`). The boss pull does the same. Never a GM line.
+  the tank never moves). The tank's position is its live unit in the view (the roster's row on the run's map stands in
+  for one the view lacks), the line is the navmesh walkability ray (the `Sight` port; none or unknown leaves the
+  judging to the module). A skull the tank cannot see makes the agent walk to the nearest point of the navmesh path
+  to the skull whose ray is clear (`sightStand`, sampled every `PlaySightStepYd` = 2 yd and never nearer than
+  `PlaySightTouchYd` = 5 yd) — a straight line toward the skull can keep the party on a ledge whose lip hides it
+  (the trogg cave's shelf, 2026-11-23: four straight steps to 9.7 yd and still no sight, the skull 4 yd below on the
+  lower floor) — or, when its own stand already has the line and the tank has not yet come beside it, wait for the
+  tank there. It then waits up to `PlayTankWait` = 15 s for the tank to come within `PlayTankBesideYd` = 5 yd of
+  that stand and looks again from where the tank then stands — the module reads the line from the tank, not the
+  agent. With no path or ray answer it steps toward the skull like `pullStep` (5 yd, never nearer than
+  `PlayPullMinYd` = 10 yd). At most `PlayCloseTries` = 4 steps and `PlayCloseTime` = 90 s from the first look;
+  `pull_sight` {group, seen, known, try, yd} is recorded at each look. Spent, the order is made anyway and an
+  unanswered pull stops `pull-no-sight` (not `pull-failed`). The boss pull does the same. Never a GM line.
 - Walk stops (avoid, walk, time) end the pull exactly as they end a walk.
 
 ## Part B: `--last-leg` keeps the whole plan and ends the run at a leg
