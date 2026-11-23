@@ -113,6 +113,14 @@ func (r *Runner) repeatTeardown(ctx context.Context, rep *Repeat) []map[string]a
 		}
 		return rows
 	}
+	// The core's GM combat-log watch ends with the repeat: left running it would keep the session receiving the
+	// party's combat packets into the next trial. off needs no unit; a core without the command refuses it and the
+	// teardown goes on.
+	if rep.Guard != nil {
+		if err := rep.Guard.CombatLogWatch(ctx, "", "off"); err != nil && !IsDisconnected(err) {
+			r.logf("%s rep%d: combat-log watch off: %v", rep.TrialID, rep.Index, err)
+		}
+	}
 	// The forced role is cleared before anything else: a stale role would
 	// drive the bot's next fight.
 	if _, err := tb.RoleSelf(ctx, "clear"); err != nil && !IsDisconnected(err) {

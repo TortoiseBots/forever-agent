@@ -350,6 +350,25 @@ func (c *Client) GMSetHP(ctx context.Context, guid string, hp int) error {
 	return c.call(ctx, "gm_set_hp", map[string]any{"guid": guid, "hp": hp}, nil, 15*time.Second)
 }
 
+// GMSetCurrentHP sets one unit's current health through the serve's
+// select-then-`.modify currenthp` hand, leaving its maximum alone: a unit
+// hurt this way keeps the maximum the server gave it. The serve refuses a
+// dead unit, hp below 1 and hp above the maximum.
+func (c *Client) GMSetCurrentHP(ctx context.Context, guid string, hp int) error {
+	return c.call(ctx, "gm_set_hp", map[string]any{"guid": guid, "hp": hp, "current_only": true}, nil, 15*time.Second)
+}
+
+// GMCombatLog starts the core's GM combat-log watch on one unit ("unit"),
+// on that unit and its group ("group"), or stops it ("off", which needs no
+// guid). A core older than 0.1.38 answers with the unsupported-core code.
+func (c *Client) GMCombatLog(ctx context.Context, guid, mode string) error {
+	p := map[string]any{"mode": mode}
+	if guid != "" {
+		p["guid"] = guid
+	}
+	return c.call(ctx, "gm_combatlog", p, nil, 15*time.Second)
+}
+
 // GMAura puts spell on (or removes it from) one unit through the serve's
 // select-then-`.aura`/`.unaura` hand.
 func (c *Client) GMAura(ctx context.Context, guid string, spell int, remove bool) error {

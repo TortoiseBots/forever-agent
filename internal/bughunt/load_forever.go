@@ -22,7 +22,10 @@ type foreverSummary struct {
 	RunID    string          `json:"run_id"`
 	Instance uint32          `json:"instance"`
 	Bosses   map[string]bool `json:"bosses"`
-	Watch    *struct {
+	// CombatLogWatch is the watch's GM combat-log watch: group or unit (the run's log holds the whole fight), off
+	// (the operator turned it off) or unsupported (the core has no such command). An older summary carries none.
+	CombatLogWatch string `json:"combatlog_watch,omitempty"`
+	Watch          *struct {
 		State    string            `json:"state"`
 		Frames   int               `json:"frames"`
 		Bosses   map[string]string `json:"bosses"`
@@ -108,6 +111,7 @@ func loadWatch(path, ds string, skipCombat bool) (*Run, error) {
 	if sum := readForeverSummary(filepath.Join(dir, simple+".forever-run.json")); sum != nil {
 		r.bossesFrom(sum)
 		r.recapSum = sum
+		r.CombatLogWatch = sum.CombatLogWatch
 	}
 	if !skipCombat {
 		rows, err := readCombatLog(filepath.Join(dir, simple+".combatlog.jsonl"))

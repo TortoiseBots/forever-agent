@@ -30,6 +30,11 @@ func skipNoCombatLog(r *Run) string {
 	if len(r.Combat) == 0 {
 		return "no combat log"
 	}
+	// A watch without the core's GM combat-log watch holds only the rows its observer saw in range: a rule that
+	// needs the whole fight cannot judge a log that is knowingly partial.
+	if r.CombatLogWatch == "off" || r.CombatLogWatch == "unsupported" {
+		return "combat log in range only"
+	}
 	if !r.cover().ok {
 		return "combat log has no timed rows"
 	}

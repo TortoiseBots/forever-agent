@@ -168,6 +168,10 @@ func (r *Run) Watch(ctx context.Context) Result {
 		}
 	}
 	if r.stopReason == "" {
+		// The party is in: the core's GM combat-log watch now sees it whole, from any distance (B of SPEC #109).
+		r.startCombatlogWatch(ctx)
+	}
+	if r.stopReason == "" {
 		r.states = append(r.states, "WATCH")
 		r.watchStart(ctx, w)
 		if r.stopReason == "" {
@@ -1244,6 +1248,12 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	defer cancel()
 	wallDeadline := time.Now().Add(budget)
 	outOfTime := func() bool { return fctx.Err() != nil || !time.Now().Before(wallDeadline) }
+	// The core's watch ends with the run's, whatever ended it: an ordinary end, a budget, or an error exit.
+	{
+		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
+		r.stopCombatlogWatch(cctx)
+		ccancel()
+	}
 	if w.have && (w.state == "running" || w.state == "paused" || w.state == "") {
 		reason := r.stopReason
 		if reason == "" {
@@ -1385,6 +1395,9 @@ func (r *Run) watchResult(w *watchRun) Result {
 		res.Trace = r.rec.TracePath()
 		res.Clear = r.rec.sum.Clear
 	}
+	// The combat-log watch the run asked for (or could not start): group, unit, off, unsupported. It is set after
+	// the recorder's summary replaces the result's, so both a recorded watch and a dry one carry it.
+	res.Summary.CombatLogWatch = r.combatlogMode
 	return res
 }
 

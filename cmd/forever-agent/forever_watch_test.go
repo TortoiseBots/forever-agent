@@ -81,3 +81,28 @@ func TestForeverWatchWipeBudgetFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestForeverWatchCombatLogWatchFlag: --combatlog-watch takes group (the default), unit or off, and nothing else; the
+// dry watch's log says which watch it started (or that it started none).
+func TestForeverWatchCombatLogWatchFlag(t *testing.T) {
+	code, stdout, stderr := runWatchCmd(t, "--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead",
+		"--enter", "none", "--poll", "1")
+	if code != 0 {
+		t.Fatalf("default: exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "combat-log watch on the tank (group)") {
+		t.Fatalf("the default watch did not start the group watch:\n%s", stdout)
+	}
+	code, stdout, stderr = runWatchCmd(t, "--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead",
+		"--enter", "none", "--poll", "1", "--combatlog-watch", "off")
+	if code != 0 {
+		t.Fatalf("off: exit %d: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "combat-log watch on the tank") {
+		t.Fatalf("off started a watch:\n%s", stdout)
+	}
+	if code, _, _ := runWatchCmd(t, "--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead",
+		"--combatlog-watch", "everyone"); code != 2 {
+		t.Fatalf("--combatlog-watch everyone: exit %d, want 2", code)
+	}
+}

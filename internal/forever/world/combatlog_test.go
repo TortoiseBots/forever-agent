@@ -4,10 +4,12 @@ package world
 // dispatch feeds are the trials runner's raw row shape; these tests use made-up names.
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/forever/combat"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 func TestCombatLogSincePages(t *testing.T) {
@@ -198,5 +200,33 @@ func TestCombatRowGains(t *testing.T) {
 		if _, ok := plainMap[key]; ok {
 			t.Fatalf("a plain row carries %q: %s", key, plain)
 		}
+	}
+}
+
+// TestCombatRowsKeepUnknownGUIDs: a watch sees the party's whole fight from any distance, so a row's caster or
+// target is often a unit this client's object store has never held. Such a row stays in the log with the guid it
+// names and an empty name: a dropped row would make the log look as if the fight never happened.
+func TestCombatRowsKeepUnknownGUIDs(t *testing.T) {
+	s := newSession(Options{Logf: func(string, ...any) {}}, &Report{Counts: make(map[string]int)}, context.Background())
+	defer s.pumpCancel()
+	caster := wire.GUID{Low: 0x1234, High: 0x0100000000000000}
+	target := wire.GUID{Low: 0x4321, High: 0x0100000000000000}
+	if _, ok := s.world.Object(caster); ok {
+		t.Fatal("the test's caster is already in the model")
+	}
+	s.combatRow("melee", s.Now(), 0, 17, caster, target, "")
+	rows, _, _, _ := s.CombatLog().Since(0, 10)
+	if len(rows) != 1 {
+		t.Fatalf("the ring holds %d rows, want the unknown-guid row", len(rows))
+	}
+	row := rows[0]
+	if row.Source.GUID != caster.String() || row.Source.Name != "" {
+		t.Fatalf("source %+v, want %s with no name", row.Source, caster)
+	}
+	if row.Target.GUID != target.String() || row.Target.Name != "" {
+		t.Fatalf("target %+v, want %s with no name", row.Target, target)
+	}
+	if row.Amount != 17 {
+		t.Fatalf("amount %d, want 17", row.Amount)
 	}
 }

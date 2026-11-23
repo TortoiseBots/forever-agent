@@ -74,6 +74,25 @@ func TestServeGMHandCommand(t *testing.T) {
 	}
 }
 
+// TestServeGMHandCommandCurrentHP: `.modify currenthp` is a unit command of the selected unit, like `.modify hp`
+// (ForeverCore's cs_modify.cpp:73,152-175). Without it a raw line would classify None and bypass the trial-units
+// boundary that holds the life-changing lines.
+func TestServeGMHandCommandCurrentHP(t *testing.T) {
+	for _, text := range []string{".modify currenthp 5", ".mod cur 5", ".MOD CUR 5", "!modify currenthp 5"} {
+		class, name := serveGMHandCommand(text)
+		if class != serveGMHandSelected || name != "" {
+			t.Fatalf("%q answered class %d name %q, want the selected unit", text, class, name)
+		}
+	}
+	// A subcommand that is not a modifier is still nothing.
+	if class, _ := serveGMHandCommand(".modify currenthp"); class != serveGMHandSelected {
+		t.Fatalf("the bare subcommand answered class %d, want selected", class)
+	}
+	if class, _ := serveGMHandCommand(".modify currency 5"); class != serveGMHandNone {
+		t.Fatalf(".modify currency answered class %d, want none", class)
+	}
+}
+
 // TestServeRawGMRefusesUnitCommands: with --allow-gm-units on but nothing registered, every spelling of a unit line
 // is the typed -32006 and sends nothing; the raw path cannot do what the typed hands refuse.
 func TestServeRawGMRefusesUnitCommands(t *testing.T) {
@@ -90,7 +109,7 @@ func TestServeRawGMRefusesUnitCommands(t *testing.T) {
 
 	for _, text := range []string{
 		".die", ".DIE", "die", ".kill", ".damage 5",
-		".modify hp 100", ".modify    HP 100", ".mod h 5", ".modify mana 100",
+		".modify hp 100", ".modify    HP 100", ".mod h 5", ".modify mana 100", ".modify currenthp 5", ".mod cur 5",
 		".aura 845", ".au 845", ".unaura 845", ".aura self 845",
 	} {
 		a.mustFail(t, "gm", map[string]any{"text": text}, rpc.CodeForbidden, "not registered")

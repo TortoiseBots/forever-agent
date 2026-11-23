@@ -456,6 +456,14 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, trialArg, 
 		return nil
 	}
 	marks.Add(map[string]any{"kind": "setup_ok", "guids": setupDoc["guids"]})
+	// The core's GM combat-log watch on the trial's subject (the player): the serve then collects the fight's rows
+	// from any distance, which is what the hurt-and-heal situations need when the healer stands off. A core without
+	// the command refuses it: one log line, and the repeat goes on with the in-range log.
+	if playerGUID != "" && !r.dry() {
+		if err := guard.CombatLogWatch(ctx, playerGUID, "unit"); err != nil && !IsDisconnected(err) {
+			r.logf("%s rep%d: combat-log watch: %v (the log is in range only)", id, index, err)
+		}
+	}
 	collect.Start(ctx)
 	outcome := map[string]any{"ended": "dry"}
 	if r.Situation != nil {

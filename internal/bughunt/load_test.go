@@ -67,10 +67,11 @@ func writeWatch(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	sum := map[string]any{
-		"run_id":   runID,
-		"instance": 309,
-		"bosses":   map[string]bool{"5678": true},
-		"watch":    map[string]any{"state": "running", "frames": 2, "bosses": map[string]string{"1234": "alive", "5678": "dead"}},
+		"run_id":          runID,
+		"instance":        309,
+		"bosses":          map[string]bool{"5678": true},
+		"watch":           map[string]any{"state": "running", "frames": 2, "bosses": map[string]string{"1234": "alive", "5678": "dead"}},
+		"combatlog_watch": "group",
 	}
 	b, _ := json.Marshal(sum)
 	if err := os.WriteFile(filepath.Join(dir, runID+".forever-run.json"), b, 0o644); err != nil {
@@ -129,6 +130,9 @@ func TestLoadWatchRecording(t *testing.T) {
 	}
 	if _, ok := r.BossEntries[5678]; !ok {
 		t.Fatalf("boss entries %v, want 5678 from the summary's dead set", r.BossEntries)
+	}
+	if r.CombatLogWatch != "group" {
+		t.Fatalf("combatlog_watch %q, want group from the summary", r.CombatLogWatch)
 	}
 	if len(r.Combat) != 2 || r.Combat[0].Seq != 1 || r.Combat[1].Amount != 120 || r.Combat[1].Kind != "heal" {
 		t.Fatalf("combat rows %+v", r.Combat)
@@ -668,5 +672,50 @@ func TestLoadWatchNoCombatSkipsTheLog(t *testing.T) {
 	}
 	if len(r.Frames) != len(full.Frames) || r.Name != full.Name {
 		t.Fatalf("the frames differ: %d against %d", len(r.Frames), len(full.Frames))
+	}
+}
+
+// TestCombatLogWatchInRangeOnly: a watch that could not start the core's GM combat-log watch (off, or an old core
+// without the command) holds only the rows the client saw in range. A rule that needs the whole fight must skip
+// with a reason that says so, never judge a partial log as if it were complete.
+func TestCombatLogWatchInRangeOnly(t *testing.T) {
+	const runID = "r-20261120T100000-abcd"
+	for _, mode := range []string{"off", "unsupported"} {
+		dir := t.TempDir()
+		writeWatch(t, dir)
+		path := filepath.Join(dir, runID+".forever-run.json")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sum map[string]any
+		if err := json.Unmarshal(raw, &sum); err != nil {
+			t.Fatal(err)
+		}
+		sum["combatlog_watch"] = mode
+		raw, _ = json.Marshal(sum)
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r, err := LoadWatch(dir, "ds")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.CombatLogWatch != mode {
+			t.Fatalf("combatlog_watch %q, want %q", r.CombatLogWatch, mode)
+		}
+		if why := skipNoCombatLog(r); why != "combat log in range only" {
+			t.Fatalf("%s: skip reason %q, want the in-range one", mode, why)
+		}
+	}
+	// A log the watch read whole (group or unit) keeps judging as before.
+	dir := t.TempDir()
+	writeWatch(t, dir)
+	r, err := LoadWatch(dir, "ds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := skipNoCombatLog(r); why == "combat log in range only" {
+		t.Fatalf("a group watch skipped its log as in-range: %q", why)
 	}
 }

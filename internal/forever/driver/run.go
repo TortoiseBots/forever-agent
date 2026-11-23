@@ -164,6 +164,10 @@ type Config struct {
 	// CombatMaxBytes bounds the watch's <run_id>.combatlog.jsonl; zero takes DefaultCombatMaxBytes. A page that
 	// would cross it is not written and the summary carries combat_truncated.
 	CombatMaxBytes int64
+	// CombatLogWatch is the watch's GM combat-log watch (dungeon-watch's --combatlog-watch): "group" or "unit"
+	// starts it on the tank once the party is in, "off" sends nothing; empty is off for every other run. A core
+	// without the command is one warning line and the run goes on (the summary then says "unsupported").
+	CombatLogWatch string
 	// Logf prints the watch's progress lines; nil prints nothing.
 	Logf func(format string, args ...any)
 }
@@ -224,6 +228,9 @@ type Run struct {
 	rec   *Recorder
 	// combat is the session's own combat log; the watch drains it into the record (nil writes none).
 	combat CombatLog
+	// combatlogMode is the GM combat-log watch this run started ("group", "unit", "off") or "unsupported" when the
+	// core could not start one; it is what the summary's combatlog_watch carries.
+	combatlogMode string
 
 	start  time.Time
 	states []string

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
@@ -134,6 +135,8 @@ func (c *dungeonCommander) Act(ctx context.Context, a driver.Action) (driver.Act
 		return c.gmOn(ctx, false)
 	case driver.ActionGMVisible:
 		return c.gmOn(ctx, true)
+	case driver.ActionGMCombatLog:
+		return c.combatLog(ctx, a.Who, a.Mode)
 	case driver.ActionRunStart:
 		return runAction(c.client.RunStart(ctx, a.Who, a.Plan))
 	case driver.ActionRunStop:
@@ -208,6 +211,98 @@ func (c *dungeonCommander) gmOn(ctx context.Context, visible bool) (driver.Actio
 		n = len(rep.Raw)
 	}
 	return coreReply("gm", n, err)
+}
+
+// combatLog sends the core's `.gm combatlog [group|off]` (cs_gm.cpp:195-232). The command acts on the selected
+// unit, so a start resolves the named character from this client's own world view, selects it and waits (bounded)
+// for the server's echo of the selection before the line; off needs no unit. A core without the command answers
+// "no such command", which is the unsupported-core code the driver logs once and goes on from.
+func (c *dungeonCommander) combatLog(ctx context.Context, who, mode string) (driver.ActionReport, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	line := ""
+	switch mode {
+	case "unit":
+		line = ".gm combatlog"
+	case "group":
+		line = ".gm combatlog group"
+	case "off":
+		line = ".gm combatlog off"
+	default:
+		return driver.ActionReport{}, fmt.Errorf("world: combatlog watch: %q is not group, unit or off", mode)
+	}
+	if mode != "off" {
+		guid, err := c.combatLogUnit(ctx, who)
+		if err != nil {
+			return driver.ActionReport{}, err
+		}
+		if err := c.s.transport().Send(wire.CMSGSetSelection, combat.BuildSetSelection(guid)); err != nil {
+			return driver.ActionReport{}, dungeonPortErr(fmt.Errorf("world: combatlog watch: select %s: %w", guid, err))
+		}
+		c.s.waitOwnTarget(ctx, guid, serveGMSelectWait)
+	}
+	rep, err := c.Run(ctx, line, c.client.Base)
+	if err != nil {
+		if errors.Is(err, command.ErrNoReply) {
+			// The core printed nothing: the line ran (a core whose command table does not know it prints its
+			// unknown-command line instead, checked below).
+			return driver.ActionReport{Verb: "gm"}, nil
+		}
+		return driver.ActionReport{}, dungeonPortErr(err)
+	}
+	n := 0
+	if rep != nil {
+		n = len(rep.Raw)
+		for _, ln := range rep.Raw {
+			if strings.Contains(strings.ToLower(ln), "no such command") {
+				return driver.ActionReport{}, &tbcmd.CommandError{Code: "unsupported-core", Cmd: "gm combatlog"}
+			}
+		}
+	}
+	return driver.ActionReport{Verb: "gm", Confirmed: true, Count: n}, nil
+}
+
+// combatLogUnit resolves the character a combat-log watch is started on: a player this client can name, asked for
+// with the model's own name queries while a short bound runs. The watch starts right after the party is in, before
+// the frame ticks that would otherwise learn the tank's name, so the wait is what makes the first attempt land.
+func (c *dungeonCommander) combatLogUnit(ctx context.Context, who string) (wire.GUID, error) {
+	name := strings.TrimSpace(who)
+	if name == "" {
+		return wire.EmptyGUID, errors.New("world: combatlog watch: a start needs the unit's name")
+	}
+	w := dungeonWorld{s: c.s}
+	clock := dungeonClock{s: c.s}
+	deadline := c.s.Now().Add(3 * time.Second)
+	for {
+		if guid, ok := w.PlayerGUID(name); ok {
+			return guid, nil
+		}
+		if !c.s.Now().Before(deadline) {
+			return wire.EmptyGUID, fmt.Errorf("world: combatlog watch: no player named %s is in view yet", chat.SanitiseName(name))
+		}
+		if err := clock.Sleep(ctx, 250*time.Millisecond); err != nil {
+			return wire.EmptyGUID, dungeonPortErr(err)
+		}
+	}
+}
+
+// waitOwnTarget waits (bounded) for the server's echo of a selection in the character's target field, the signal the
+// serve hands use before a line that acts on the selected unit. A core that never echoes it costs the bound and the
+// line still goes out: the watch is a read, and failing it would cost the whole log.
+func (s *session) waitOwnTarget(ctx context.Context, guid wire.GUID, wait time.Duration) {
+	self, ok := s.world.Object(s.selfOrMover())
+	if !ok {
+		return
+	}
+	deadline := s.Now().Add(wait)
+	clock := dungeonClock{s: s}
+	for s.Now().Before(deadline) {
+		if self.Info.Target == guid {
+			return
+		}
+		if err := clock.Sleep(ctx, 50*time.Millisecond); err != nil {
+			return
+		}
+	}
 }
 
 // teleOutside sends the commander's GM teleport to the plan's named outside place.

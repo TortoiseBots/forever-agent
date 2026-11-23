@@ -38,6 +38,33 @@ func CleanupRun(ctx context.Context, runDir string, ledger *Ledger, openSlot fun
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
+	// A repeat that died before its teardown may have left the core's GM combat-log watch running. Every serve dir
+	// the ledger names is told to stop it first: off takes no unit, and a serve that has no watch answers that
+	// anyway. The stop is best-effort and writes no row: the kills below are the report.
+	watchDirs := map[string]bool{}
+	for _, row := range ledger.Rows() {
+		if d, _ := row["dir"].(string); d != "" {
+			watchDirs[d] = true
+		}
+	}
+	watchOrder := make([]string, 0, len(watchDirs))
+	for dir := range watchDirs {
+		watchOrder = append(watchOrder, dir)
+	}
+	sort.Strings(watchOrder)
+	watchTimeout := timeout
+	if watchTimeout <= 0 {
+		watchTimeout = 10 * time.Second
+	}
+	for _, dir := range watchOrder {
+		rpc, err := openSlot(dir)
+		if err != nil {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, watchTimeout)
+		_ = NewClient(rpc).GMCombatLog(cctx, "", "off")
+		cancel()
+	}
 	for _, dir := range dirs {
 		rpc, err := openSlot(dir)
 		client := NewClient(rpc)

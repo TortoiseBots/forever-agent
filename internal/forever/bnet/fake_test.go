@@ -341,7 +341,11 @@ type fakeLogin struct {
 	realms []fakeRealm
 	// logonBuilds receives the application_version of every logon this fake sees, in order; a test that cares
 	// reads them (the automatic-build login logs on twice: once with its probe build, once with the realm's).
-	logonBuilds  chan uint32
+	logonBuilds chan uint32
+	// joinStatus, when set, is the status the realm join answers with for the connection's logged-on build (0 is
+	// ERROR_OK and the normal join answer). It is the core's two build-related statuses a real server can send:
+	// 0x800000DF (wrong build) and 0x800000E1 (realm not permitted).
+	joinStatus   func(build uint32) uint32
 	restFailBody string // when set, the SRP request answers 500 with this body
 	rpcDrip      bool   // when set, the RPC port never answers the connect request
 
@@ -845,6 +849,11 @@ func (f *fakeLogin) handleClientRequest(c fakeConn, h header, body []byte, logon
 		}
 		if !f.joinable(address) {
 			f.fail("realm address %#x is not one the list carried", address)
+		}
+		if f.joinStatus != nil {
+			if status := f.joinStatus(logonBuild); status != 0 {
+				return c.writeFrame(header{ServiceID: serviceIDResponse, Token: h.Token, Status: status}, nil)
+			}
 		}
 		ticket := map[string]any{"gameAccount": "agent#0000", "platform": fourCCWn64, "type": fourCCWoW, "clientArch": fourCCTextX64}
 		ticketJSON, err := json.Marshal(ticket)
