@@ -1,0 +1,114 @@
+{
+  "scenario": "forever-ritual-summon",
+  "description": "Two Forever serve slots, the warlock A and the summon target B in one party on another zone: A targets B and casts Ritual of Summoning (698), B's event log carries summon_request, B answers with accept_summon and its status reports the map the vars name (MAP). A's bots (BOT1, BOT2) are invited so the ritual can fill its casters: the module that makes grouped bots use the ritual is a separate ticket, so run this row after it ships.",
+  "server": "forever",
+  "vars": {
+    "BOT1": "Botone",
+    "BOT2": "Bottwo",
+    "MAP": "1"
+  },
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 20,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "A's party: B and the two bots"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "invite",
+      "params": {
+        "name": "${B.character}"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "B",
+      "method": "accept_invite"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "check_rpc",
+      "session": "B",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "invite",
+      "params": {
+        "name": "${BOT1}"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "invite",
+      "params": {
+        "name": "${BOT2}"
+      }
+    },
+    {
+      "do": "section",
+      "title": "A summons B: B's log carries summon_request, B accepts and lands on A's map"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "target",
+      "params": {
+        "name": "${B.character}"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "cast",
+      "params": {
+        "spell_id": 698
+      }
+    },
+    {
+      "do": "expect",
+      "session": "B",
+      "kind": "summon_request",
+      "match": ".*",
+      "timeout_s": 60
+    },
+    {
+      "do": "rpc",
+      "session": "B",
+      "method": "accept_summon"
+    },
+    {
+      "do": "check_rpc",
+      "session": "B",
+      "method": "status",
+      "path": "map",
+      "match": "^${MAP}$",
+      "within_s": 60
+    }
+  ]
+}

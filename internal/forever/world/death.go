@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/death"
 	"github.com/pjerra/forever-agent/internal/forever/npc"
@@ -149,6 +150,8 @@ var (
 	ErrGraveyardMap = errors.New("world: the release landed on a map other than its graveyard's")
 	// ErrNoResurrectOffer is an answer to an offer that is not there (or has expired).
 	ErrNoResurrectOffer = errors.New("world: there is no resurrection offer to answer")
+	// ErrNoSummonOffer is accept_summon with no SMSG_SUMMON_REQUEST held.
+	ErrNoSummonOffer = errors.New("world: there is no summon offer to answer")
 	// ErrResurrectOfferer is an offer --accept-resurrect-from does not accept: its offerer is not that unit, or the
 	// model has no name for it.
 	ErrResurrectOfferer = errors.New("world: the resurrection offer is not from the unit --accept-resurrect-from names")
@@ -606,6 +609,26 @@ func (s *session) handleDeath(p worldconn.Packet) error {
 			}
 		}
 		s.deathStep(now, "a resurrection is offered: spell %d from %s, sickness %v", o.SpellID, s.fight.name(o.Offerer), o.Sickness)
+	case wire.SMSGSummonRequest:
+		o, err := death.ParseSummonRequest(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		// The server holds one summon request per player (Player.cpp:27648): the latest offer is the one it will
+		// answer, and an answer to an older one is refused, so the new offer replaces it.
+		s.summon = &o
+		s.event(Event{
+			Kind:       events.KindSummonRequest,
+			Source:     s.eventName("", o.Summoner),
+			SourceGUID: eventGUID(o.Summoner),
+			Data: map[string]any{
+				"summoner": eventGUID(o.Summoner),
+				"area":     o.AreaID,
+				"reason":   int(o.Reason),
+			},
+		})
+		s.deathStep(now, "a summon is offered: area %d, reason %d, from %s", o.AreaID, o.Reason, s.eventName("", o.Summoner))
 	case wire.SMSGCorpseLocation:
 		c, err := death.ParseCorpseLocation(p.Payload)
 		if err != nil {
@@ -1113,6 +1136,31 @@ func (s *session) AcceptResurrect(ctx context.Context) error {
 	}
 	s.deathStep(s.transport().Now(), "alive again (%s)", d.revivedBy)
 	return nil
+}
+
+// clearSummonOffer forgets the held summon offer: it was answered, or a teleport or map change moved the character
+// away from the portal that made it.
+func (s *session) clearSummonOffer() { s.summon = nil }
+
+// AcceptSummon answers the held summon offer with CMSG_SUMMON_RESPONSE (MovementPackets.cpp:1079-1083): the
+// summoner's GUID and the Accept bit. It reports the summoner and the bit it sent. The offer is forgotten once the
+// answer is on the wire (an answer to an older offer is refused by the server, Player.cpp:27648), so a second call
+// is ErrNoSummonOffer; a send that fails keeps it, so the caller can retry.
+func (s *session) AcceptSummon(accept bool) (wire.GUID, bool, error) {
+	o := s.summon
+	if o == nil {
+		return wire.EmptyGUID, false, ErrNoSummonOffer
+	}
+	if err := s.transport().Send(wire.CMSGSummonResponse, death.BuildSummonResponse(o.Summoner, accept)); err != nil {
+		return wire.EmptyGUID, false, fmt.Errorf("summon: CMSG_SUMMON_RESPONSE: %w", err)
+	}
+	s.summon = nil
+	answer := "accepted"
+	if !accept {
+		answer = "declined"
+	}
+	s.opts.logf("world: the summon from %s is %s (area %d)", s.eventName("", o.Summoner), answer, o.AreaID)
+	return o.Summoner, accept, nil
 }
 
 // DeclineResurrect answers the pending offer with 1 (decline) and forgets it.

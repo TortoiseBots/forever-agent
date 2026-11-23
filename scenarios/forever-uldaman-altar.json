@@ -1,0 +1,52 @@
+{
+  "scenario": "forever-uldaman-altar",
+  "description": "One Forever serve slot standing in Uldaman: A looks up the altar (game object entry 133234), uses it and its event log carries a gameobject change. The altar's ritual needs its other users nearby (the module ticket), so the state change follows them; the summoning half is forever-ritual-summon. use_object's own result names the object, and the run's only gameobject event is the altar's.",
+  "server": "forever",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 20,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "A finds the altar in its view"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "gameobjects",
+      "params": {
+        "entry": 133234,
+        "within": 30
+      },
+      "save": {
+        "ALTAR": "0.guid"
+      }
+    },
+    {
+      "do": "section",
+      "title": "A uses the altar; its log carries a gameobject change"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "use_object",
+      "params": {
+        "guid": "${ALTAR}",
+        "wait_ms": 5000
+      }
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "kind": "gameobject",
+      "match": ".*",
+      "timeout_s": 30
+    }
+  ]
+}

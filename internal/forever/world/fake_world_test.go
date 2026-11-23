@@ -289,6 +289,12 @@ type fakeServer struct {
 	serveAccept   string
 	serveAccepted bool
 	serveLeft     bool // the fake saw CMSG_LEAVE_GROUP
+	// Round #110: the summon offer. serveSummon sends one SMSG_SUMMON_REQUEST after the create blocks, with the
+	// summoner's name in a name answer first. summonGUID is the summoner; summonAnswers is what the fake saw,
+	// under mu.
+	serveSummon   bool
+	summonGUID    wire.GUID
+	summonAnswers []serveSummonAnswer
 	// serveNoKill keeps the creature alive after a swing, so an attack call stays running until a test drops the
 	// link or asks it to stop.
 	serveNoKill bool

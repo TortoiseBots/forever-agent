@@ -569,7 +569,13 @@ func (rr *run) doCheckRPC(ctx context.Context, s *Step, n int) bool {
 			pass = string(gb2) == string(wb2)
 			reason = fmt.Sprintf("got %s", cut(string(redactJSON(gb, rr.tokens())), 200))
 		case s.HasRe:
-			re, _ := compileRegexp(s.MatchRe)
+			pat, perr := expand(s.MatchRe, rr.vars, true)
+			if perr != nil {
+				rr.errorf(n, desc, "%v", perr)
+				rr.skipRest(n + 1)
+				return false
+			}
+			re, _ := compileRegexp(pat)
 			str := render(v)
 			pass = re.MatchString(str)
 			reason = fmt.Sprintf("got %s", cut(redactAll(str, rr.tokens()), 200))

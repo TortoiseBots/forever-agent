@@ -159,10 +159,13 @@ type ServeGameObject struct {
 }
 
 // ServeUseObjectResult is use_object's answer. Outcome is the answering event's kind, "state_changed" or "none".
+// Ritual says the object is a summoning ritual (game object type 18): a use that answers "none" there is the
+// ritual waiting for its other users, not a failed use (GameObject.cpp:3195-3235).
 type ServeUseObjectResult struct {
 	Since   uint64           `json:"since"`
 	OK      bool             `json:"ok"`
 	Object  ServeGameObject  `json:"object"`
+	Ritual  bool             `json:"ritual,omitempty"`
 	Outcome string           `json:"outcome"`
 	Event   *Event           `json:"event"`
 	Hint    string           `json:"hint,omitempty"`
@@ -682,7 +685,8 @@ func (s *session) serveUseObject(parent context.Context, p serveUseObjectParams)
 	}
 	defer cancel()
 	deadline, _ := ctx.Deadline()
-	res := ServeUseObjectResult{Since: s.EventLog().Last(), Object: s.serveGameObjectRow(obj, s.Now()), Outcome: "none"}
+	res := ServeUseObjectResult{Since: s.EventLog().Last(), Object: s.serveGameObjectRow(obj, s.Now()), Outcome: "none",
+		Ritual: obj.Info.HasGameObject && obj.Info.GOType == goTypeRitual}
 	if refusal, err := s.releaseHeld(parent, ctx); err != nil {
 		return res, err
 	} else if refusal != "" {
@@ -752,6 +756,10 @@ func (s *session) useObjectHint(obj *objects.Object) string {
 }
 
 // ---- gameobjects ----
+
+// goTypeRitual is GameobjectTypes' ritual (SharedDefines.h:3165-3215): index 18 of gameObjectTypeNames, the
+// summoning ritual a use makes one caster of (GameObject.cpp:3138-3235).
+const goTypeRitual int8 = 18
 
 // gameObjectTypeNames is GameobjectTypes (SharedDefines.h:3165-3215), lower-cased.
 var gameObjectTypeNames = []string{

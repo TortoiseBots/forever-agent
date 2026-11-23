@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/death"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/gmwalk"
 	"github.com/pjerra/forever-agent/internal/forever/items"
@@ -525,6 +526,9 @@ type session struct {
 
 	// Round 6: the death flow's own state (phase, corpse, reclaim deadline, pending offer).
 	death *deathWatch
+	// summon is the last summon offer (SMSG_SUMMON_REQUEST). It is cleared when it is answered, or when the
+	// character teleports or changes map: the offer belongs to the place the portal stands in.
+	summon *death.SummonOffer
 
 	// Round 3: the world model, the character's own GUID once the create block names it, and the mover.
 	world *objects.World
@@ -2231,6 +2235,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		if t.MoverGUID == s.self {
 			s.endFall()
 			s.selfTeleports++
+			s.clearSummonOffer()
 			s.statedSelfPosition(t.X, t.Y, t.Z, s.transport().Now())
 			if s.taxiFlight.pending {
 				// The server moved the character itself: whatever the flight was, it is over (the flight's own
@@ -2327,7 +2332,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 	case wire.SMSGGuildInvite, wire.SMSGGuildEventPlayerJoined, wire.SMSGGuildCommandResult:
 		return s.handleGuild(p)
 	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
-		wire.SMSGResurrectRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
+		wire.SMSGResurrectRequest, wire.SMSGSummonRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
 		wire.SMSGStandStateUpdate, wire.SMSGMoveSetRunSpeed,
 		wire.SMSGMoveSetSwimSpeed, wire.SMSGMoveSetWaterWalk, wire.SMSGMoveSetLandWalk:
 		return s.handleDeath(p)

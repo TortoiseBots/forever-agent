@@ -106,6 +106,13 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		// A pending invite for accept_invite: the inviter leads the roster the accept's answer brings.
 		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite("Inviter", inviter, true))
 	}
+	if f.serveSummon {
+		// The summoner's name first, so the offer's event names it (the server named it in an earlier query),
+		// then the offer itself.
+		c.writeFrame(table.TranslateServerCore(wire.SMSGQueryPlayerNamesResponse),
+			playerNamesAnswer(f.t, map[wire.GUID]string{f.summonGUID: "Summoner"}))
+		c.writeFrame(table.TranslateServerCore(wire.SMSGSummonRequest), fakeSummonRequest(f.summonGUID, 0x46010046, 1519, 1, false))
+	}
 	if frame := f.groupFrame(); frame != nil {
 		// G2: the group the daemon is already in (the group-control scene's roster).
 		c.writeFrame(fakeSMSGPartyUpdate, frame)
@@ -146,6 +153,17 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			if echo {
 				c.writeFrame(fakeSMSGUpdateObject, buildTargetValues(guid, sel))
 			}
+		case wire.CMSGSummonResponse:
+			r := wire.NewReader(payload)
+			summoned := wire.ReadPackedGUID(r)
+			accept := r.ReadBit()
+			if r.Err() != nil || r.Remaining() != 0 {
+				f.failf("serve: CMSG_SUMMON_RESPONSE is not the server's layout (%d left, %v)", r.Remaining(), r.Err())
+				return
+			}
+			f.mu.Lock()
+			f.summonAnswers = append(f.summonAnswers, serveSummonAnswer{guid: summoned, accept: accept})
+			f.mu.Unlock()
 		case wire.CMSGMoveSetFacing, wire.CMSGMoveStartForward, wire.CMSGMoveHeartbeat, wire.CMSGMoveStop:
 		case wire.CMSGAttackSwing:
 			f.mu.Lock()
