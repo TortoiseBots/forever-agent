@@ -106,6 +106,38 @@ checksum. `actions/cache` keeps the folder keyed on the release tag and the SHA2
 If the `TB_DATA_TOKEN` secret is absent (forks, or before the owner adds it), the job prints
 `navmesh checks skipped: TB_DATA_TOKEN not set` and succeeds without running the navmesh tests or the plan check.
 
+### Forever navmesh subset
+
+The same workflow's `forever-navmesh` job runs `internal/navmesh`'s Forever tests (`forever_real_test.go`). They need
+the Forever repack, a different generation from the Turtle mmaps (four-digit names, its own header and flag bits), so
+the job downloads a subset from the same private release under its own tag (`FOREVER_DATA_TAG`, currently
+`forever-mmaps-subset-1`), sets `FOREVER_MMAPS_DIR` and `FOREVER_MMAPS_SUBSET=1`, and runs
+`go test -v -run 'TestForeverReal' ./internal/navmesh/`. A second step then fails unless the log carries
+`--- PASS:` for `TestForeverRealMap0HumanStart`, `TestForeverRealMap389Ragefire` and `TestForeverRealEveryTileLoads`:
+without those lines the package skipped and proved nothing. `FOREVER_MMAPS_SUBSET` tells the every-tile test that
+the folder is the subset rather than the whole repack, so it loads every tile present but does not demand the
+repack's 74 maps and 3000+ tiles. `TestForeverRealRoadRoute` may skip with its own message (the repack has no
+`NAV_ROAD` polygon).
+
+The subset is the whole of Ragefire Chasm plus one block of map 0:
+
+- `0389.mmap` and every `0389_*.mmtile` (Ragefire Chasm);
+- `0000.mmap` and the tiles within one tile of the tile holding the human start (`-8913,-118`), a 3 x 3 block.
+
+`tools/forevermeshsubset` builds it; nothing is committed (the files are derived from client data):
+
+```sh
+go run ./tools/forevermeshsubset --src PATH --dst forever-mmaps --map 389 --near 0:-8913,-118:1
+tar --zstd -cf forever-mmaps.tar.zst -C forever-mmaps .
+sha256sum forever-mmaps.tar.zst > SHA256SUMS
+```
+
+Upload both files to a new release tag of the data repository and set `FOREVER_DATA_TAG` in `navmesh.yml` to it. The
+archive is well under 50 MB, and the cache key is the tag plus the `SHA256SUMS` hash, so a new tag downloads once.
+`tools/forevermeshsubset` refuses a destination inside the source, a map without its `.mmap`, and a symlink (it never
+follows one). Without `TB_DATA_TOKEN` the job prints `forever navmesh checks skipped: TB_DATA_TOKEN not set` and
+passes.
+
 ### The `TB_DATA_TOKEN` secret
 
 Create a **fine-grained personal access token** with:
