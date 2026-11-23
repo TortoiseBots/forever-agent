@@ -122,6 +122,11 @@ const (
 	CMSGSetAssistantLeader             uint32 = 0x43007B
 	CMSGUpdateRaidTarget               uint32 = 0x43007C
 	CMSGRequestPartyMemberStats        uint32 = 0x43007F
+	// The guild invite flow this client sends (Opcodes.h:40, 429, 439). The accept carries the invite's packed
+	// guild GUID (GuildPackets.cpp:159-162); the decline and the leave carry no body (GuildHandler.cpp:82, :125-129).
+	CMSGGuildAcceptInvite      uint32 = 0x430029
+	CMSGGuildDeclineInvitation uint32 = 0x43002A
+	CMSGGuildLeave             uint32 = 0x2E0003
 
 	SMSGChat                       uint32 = 0x4A0001
 	SMSGChatPlayerAmbiguous        uint32 = 0x4A0004
@@ -150,6 +155,11 @@ const (
 	SMSGReadyCheckStarted          uint32 = 0x450099
 	SMSGReadyCheckResponse         uint32 = 0x45009A
 	SMSGReadyCheckCompleted        uint32 = 0x45009B
+	// The guild invite flow the server sends (Opcodes.h:1625, 1634, 1646; GuildPackets.cpp:146-155, :186-214,
+	// :254-269).
+	SMSGGuildInvite            uint32 = 0x510012
+	SMSGGuildEventPlayerJoined uint32 = 0x510032
+	SMSGGuildCommandResult     uint32 = 0x510002
 
 	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
 	SMSGUpdateObject       uint32 = 0x5C0000
@@ -540,6 +550,9 @@ var clientNames = map[uint32]string{
 	CMSGSetAssistantLeader:             "CMSG_SET_ASSISTANT_LEADER",
 	CMSGUpdateRaidTarget:               "CMSG_UPDATE_RAID_TARGET",
 	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",
+	CMSGGuildAcceptInvite:              "CMSG_ACCEPT_GUILD_INVITE",
+	CMSGGuildDeclineInvitation:         "CMSG_GUILD_DECLINE_INVITATION",
+	CMSGGuildLeave:                     "CMSG_GUILD_LEAVE",
 	CMSGSetSelection:                   "CMSG_SET_SELECTION",
 	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",
 	CMSGGossipSelectOption:             "CMSG_GOSSIP_SELECT_OPTION",

@@ -570,6 +570,9 @@ type session struct {
 	// Round 5: the bounded chat log and the party model.
 	chat  *chat.Log
 	party *party.State
+	// The guild invite flow (#113): the held invite, the last command result and the accepted invite's guild name
+	// (guild_session.go). Only the session goroutine touches it.
+	guild *guildState
 	// channels is the chat channel model (channel_session.go).
 	channels *channelState
 	// nameAsks is, per player guid, when a dungeon port last sent a name query for it and how many it has sent: an
@@ -2321,6 +2324,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGSendRaidTargetUpdateSingle, wire.SMSGSendRaidTargetUpdateAll,
 		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		return s.handleParty(p)
+	case wire.SMSGGuildInvite, wire.SMSGGuildEventPlayerJoined, wire.SMSGGuildCommandResult:
+		return s.handleGuild(p)
 	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
 		wire.SMSGResurrectRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
 		wire.SMSGStandStateUpdate, wire.SMSGMoveSetRunSpeed,

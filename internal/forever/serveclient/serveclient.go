@@ -183,6 +183,8 @@ type Status struct {
 	ComboPoints      uint8     `json:"combo_points"`
 	ComboTarget      GUID      `json:"combo_target,omitzero"`
 	GCDMS            int64     `json:"gcd_ms"`
+	Guild            GUID      `json:"guild,omitzero"`
+	GuildName        string    `json:"guild_name,omitempty"`
 	State            string    `json:"state"`
 	Error            string    `json:"error,omitempty"`
 	ReconnectAttempt int       `json:"reconnect_attempt,omitempty"`

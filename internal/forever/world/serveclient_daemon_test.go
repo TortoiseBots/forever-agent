@@ -272,7 +272,7 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 func TestStatusKeysPinContract(t *testing.T) {
 	pinned := []string{
 		"base_time", "character", "combo_points", "combo_target", "dead", "error", "falling",
-		"gcd_ms", "ghost", "guid", "health", "in_combat", "latency_ms", "level", "map",
+		"gcd_ms", "ghost", "guid", "guild", "guild_name", "health", "in_combat", "latency_ms", "level", "map",
 		"max_health", "max_power", "mono_ms", "o", "on_taxi", "parse_errors", "power", "power_type",
 		"reconnect_attempt", "reconnect_limit", "server_packets", "state", "target", "team",
 		"teleport_seq", "wall_offset_ms", "x", "y", "z", "z_unknown",

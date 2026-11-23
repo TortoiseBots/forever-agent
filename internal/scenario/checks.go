@@ -463,6 +463,8 @@ func (rr *run) doCheckDB(ctx context.Context, s *Step, n int) bool {
 func checkRPCDesc(s *Step) string {
 	base := fmt.Sprintf("rpc[%s] %s %s", s.Session, s.Method, s.Path)
 	switch {
+	case s.Absent:
+		return base + " absent"
 	case s.HasEq:
 		raw, _ := json.Marshal(s.Equals)
 		return base + " == " + string(raw)
@@ -519,6 +521,13 @@ func (rr *run) doCheckRPC(ctx context.Context, s *Step, n int) bool {
 		}
 		v, found := pathValue(raw, s.Path)
 		if !found {
+			if s.Absent {
+				line := fmt.Sprintf("  PASS %s (absent)", desc)
+				rr.emit(Record{T: "check", Step: n, Session: s.Session, Raw: line, Norm: line, Status: "PASS"})
+				rr.checks = append(rr.checks, CheckResult{Step: n, Desc: desc, Status: "PASS"})
+				rr.passed++
+				return true
+			}
 			if s.WithinS == 0 || !rr.now().Before(deadline) {
 				reason := fmt.Sprintf("path %s not in the result", s.Path)
 				if !rr.failf(n, desc, reason, rr.onFailOf(s)) {
@@ -533,6 +542,15 @@ func (rr *run) doCheckRPC(ctx context.Context, s *Step, n int) bool {
 				return false
 			}
 			continue
+		}
+		if s.Absent {
+			gotRaw, _ := json.Marshal(v)
+			reason := fmt.Sprintf("path %s is in the result (%s)", s.Path, cut(string(redactJSON(gotRaw, rr.tokens())), 200))
+			if !rr.failf(n, desc, reason, rr.onFailOf(s)) {
+				rr.skipRest(n + 1)
+				return false
+			}
+			return true
 		}
 		var reason string
 		pass := false
