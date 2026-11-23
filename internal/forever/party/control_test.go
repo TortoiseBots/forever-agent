@@ -341,7 +341,7 @@ func TestMarkNames(t *testing.T) {
 func TestGroupControlOpcodesTranslate(t *testing.T) {
 	table := wire.NewOpcodeTable(70707, 70707) // the live realm and its build
 	for _, core := range []uint32{wire.CMSGSetPartyLeader, wire.CMSGSetAssistantLeader, wire.CMSGSetLootMethod, wire.CMSGUpdateRaidTarget,
-		wire.CMSGConvertRaid, wire.CMSGChangeSubGroup, wire.CMSSwapSubGroups} {
+		wire.CMSGConvertRaid, wire.CMSGChangeSubGroup, wire.CMSGSwapSubGroups} {
 		w, ok := table.WireForClient(core)
 		if !ok || w == wire.UnknownOpcode {
 			t.Errorf("%s (0x%06X) has no wire number", wire.ClientName(core), core)
