@@ -3,6 +3,7 @@
   "name": "razorfen_kraul",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 47,
   "entrance": {"x": 1942.27, "y": 1544.23, "z": 83.3055},
   "entrance_trigger": 244,

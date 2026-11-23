@@ -3,6 +3,7 @@
   "name": "blackfathom_deeps",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 48,
   "entrance": {"x": -150.234, "y": 106.594, "z": -39.779},
   "entrance_trigger": 257,

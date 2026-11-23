@@ -3,6 +3,7 @@
   "name": "crescent_grove",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 802,
   "entrance": {"x": 579.13, "y": 90.7, "z": 276.11},
   "entrance_trigger": 5004,

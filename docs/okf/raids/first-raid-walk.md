@@ -17,6 +17,9 @@ status: draft
 
 # Walk your first raid
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 You walk a raid plan the server knows, with hired bots and the TortoiseBots run leader, and stop before the first boss. This takes one command plus reading the summary.
 
 ## Before you start

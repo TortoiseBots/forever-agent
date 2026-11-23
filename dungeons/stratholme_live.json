@@ -3,6 +3,7 @@
   "name": "stratholme_live",
   "kind": "dungeon",
   "status": "draft (census-fixed, not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 329,
   "entrance": {"x": 3392.92, "y": -3395.03, "z": 143.135},
   "entrance_trigger": 2216,

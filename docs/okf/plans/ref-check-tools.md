@@ -19,6 +19,9 @@ status: draft
 
 # plan-check, trash-check, path-check
 
+> **Turtle only command.** `path-check` here runs against the Turtle stack; against a Forever server use
+> `forever path-check` (see `forever-agent help`).
+
 ## plan-check
 
 Usage: `turtle-agent plan-check [--dir dungeons] --mmaps DIR [--from-leg N [--from-pull-group N]] [--spawns DIR] [--floor-aware] [--approach-hops] [--strict] [--json] <plan>... | turtle-agent plan-check --mmaps DIR --sql FILE [--plan NAME] [--spawns DIR] [--strict] [--json]`[^plan-check].

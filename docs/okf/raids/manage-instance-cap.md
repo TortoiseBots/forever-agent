@@ -17,6 +17,9 @@ status: draft
 
 # Stay under the instance cap
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 The core lets an account enter only N distinct instance ids an hour, and its list lives in the worldserver's memory. Every walk that enters a fresh instance is written to a per-server ledger (`instance-cap.json` beside the slots file), and the count is the core's own: per pool account, N fresh instance ids in the last hour.[^instcap]
 
 ## 1. Read the wait line

@@ -2,6 +2,9 @@
 # Run the remote Uldaman dungeon with one command: the agent binary of origin/main's SHA (built once on the test VM), the login (only
 # if the agent is not logged in already), dungeon_run with the prepare block, a poll every 30 s, and trace-score at the end.
 #
+# Turtle only: this drives the Turtle 1.12 stack and the Turtle-only commands (login, dungeon_run, trace-score, pulltest); a Forever
+# server has no equivalent yet (#108). See docs/turtle/README.md.
+#
 #   tools/run-uldaman.sh [--mode commander|observe|leader] [--brain PRESET] [--rotation NAME] [--role ROLE]
 #                        [--hire [--rehire] [--level N]] [--relogin] [--no-fresh] [--from-leg N [--pull-group M] [--start-here]]
 #                        [--pulltest LEG:GROUP[:TRIES[:RESET]]] [--force-start] [--keep-loot-setting] [--logout] [--print-params]

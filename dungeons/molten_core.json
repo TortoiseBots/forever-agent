@@ -3,6 +3,7 @@
   "name": "molten_core",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 409,
   "entrance": {"x": 1091.89, "y": -466.99, "z": -105.08},
   "entrance_trigger": 2886,

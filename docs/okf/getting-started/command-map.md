@@ -30,7 +30,7 @@ Every `turtle-agent` subcommand, and where it is documented. This area owns `log
 - [The agent and its RPC](../agent/index.md): the calls `rpc` sends (`status`, `gm`, `commander`, movement, combat, loot, vendors, quests).
 - [Dungeon runs](../dungeons/index.md): the `dungeon_*` calls.
 - [Raids](../raids/index.md): `raid-walk`, `raid-autopilot`, `raid-suite`, `decisions`.
-- [Plans](../plans/index.md): `plan-export`, `plan-diff`, `plan-probe`, `plan-scout`, `route-oracle`, `route-edits`. `plan-check` and `trash-check` are covered in [plan-check, trash-check, path-check](../plans/ref-check-tools.md); `patrol-record` in [plan scout, plan-probe, patrol-record](../plans/ref-scout-probe.md).
+- [Plans](../plans/index.md): `plan-export`, `plan-diff`, `plan-list`, `plan-probe`, `plan-scout`, `route-oracle`, `route-edits`. `plan-check` and `trash-check` are covered in [plan-check, trash-check, path-check](../plans/ref-check-tools.md); `patrol-record` in [plan scout, plan-probe, patrol-record](../plans/ref-scout-probe.md).
 - [Navigation and world data](../navigation/index.md): `path-check`, `map`, `minimap-extract`. `plan-check`, `trash-check`, `stage-check` and `patrol-record` flags are listed in [Check commands](../navigation/check-commands.md).
 - [Combat](../combat/index.md): `rotation`, `pulltest`, `fight-score`, `tune-diff`.
 - [Observability and testing](../observability/index.md): `dashboard`, `dashboard-replay`, `capture`, `capture-stats`, `scrub-check`, `trace-score`, `scenario`. `stage-check` and `trash-check` examples live in [Offline plan checks](../observability/offline-checks-guide.md) with flags in [Commands](../observability/commands-reference.md).

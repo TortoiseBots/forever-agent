@@ -19,6 +19,9 @@ status: draft
 
 # Replay one hop with path-check
 
+> **Turtle only.** `path-check` runs against the Turtle stack. Against a Forever server, use `forever path-check`
+> (see `forever-agent help`).
+
 You rerun one step of a walk offline: the same offline plan the agent uses, plus the server's own path query, side by side. Use it when a live walk refused a hop and you want to know why.
 
 ## 1. Take the hop's endpoints from the log

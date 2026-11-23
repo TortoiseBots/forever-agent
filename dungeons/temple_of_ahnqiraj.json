@@ -3,6 +3,7 @@
   "name": "temple_of_ahnqiraj",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 531,
   "entrance": {"x": -8221.35, "y": 2014.34, "z": 129.071},
   "entrance_trigger": 4010,

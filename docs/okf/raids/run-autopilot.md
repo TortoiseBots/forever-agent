@@ -17,6 +17,9 @@ status: draft
 
 # Supervise raids with the autopilot
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `turtle-agent raid-autopilot <walk-dir>` keeps a walk dir's raids running without a worker watching them. It reads `<walk-dir>/targets.txt`, one goal per line, launches a `raid-walk` for each id, and re-places any walk that ends, stalls or loses progress until every goal is met.[^auto-cmd]
 
 ## 1. Write targets.txt

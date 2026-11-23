@@ -17,6 +17,9 @@ status: draft
 
 # Until clauses and autopilot goals
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `--until` tells the run leader where the run stops, and the word goes to `run start`, so the server's status label must show `until <clause> (step N)`.[^until]
 
 ## The five clauses

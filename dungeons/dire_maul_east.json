@@ -3,6 +3,7 @@
   "name": "dire_maul_east",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 429,
   "entrance": {"x": -203.166, "y": -322.997, "z": -2.72467},
   "entrance_trigger": 3184,

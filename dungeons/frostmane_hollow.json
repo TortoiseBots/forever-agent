@@ -3,6 +3,7 @@
   "name": "frostmane_hollow",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 822,
   "entrance": {"x": -7522.73, "y": -3588.76, "z": 199.981},
   "entrance_trigger": 5662,

@@ -3,6 +3,7 @@
   "name": "emerald_sanctum",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 807,
   "entrance": {"x": 2762.25, "y": 2972.77, "z": 26.903},
   "entrance_trigger": 5017,

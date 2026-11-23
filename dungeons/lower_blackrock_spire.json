@@ -3,6 +3,7 @@
   "name": "lower_blackrock_spire",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 229,
   "entrance": {"x": 78.3534, "y": -226.841, "z": 49.7662},
   "entrance_trigger": 1468,

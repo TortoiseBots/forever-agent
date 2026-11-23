@@ -19,6 +19,9 @@ status: draft
 
 # Check your first rotation
 
+> **Turtle only.** `rotation` and the rotation files it plays are the Turtle brain; a Forever server has no
+> replacement yet (`forever-agent help`).
+
 You take a rotation file from idea to proof: see what is built in, read one, check yours, and compare two arms on the same pull. Nothing here logs in; the first three steps read files only.
 
 ## 1. See the built-ins

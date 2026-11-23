@@ -3,6 +3,7 @@
   "name": "gnomeregan",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 90,
   "entrance": {"x": -329.098, "y": -3.20722, "z": -152.851},
   "entrance_trigger": 324,

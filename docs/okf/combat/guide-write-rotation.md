@@ -17,6 +17,9 @@ status: draft
 
 # Write a rotation
 
+> **Turtle only.** `rotation` and the rotation files it plays are the Turtle brain; a Forever server has no
+> replacement yet (`forever-agent help`).
+
 A rotation is a JSON file (version 1): a priority list of one class and spec that the brain plays instead of the Go strategy it replaces.
 
 ## 1. Copy the shape

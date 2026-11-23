@@ -4,10 +4,20 @@ A headless **WoW Forever** client for [ForeverCore](https://github.com/Karrz1/Tr
 one character in, with no game window, and exposes it over a local JSON-RPC API, so server-side behaviour can be
 tested from scripts.
 
-**Status: early port; the character can log in and out, but there is no gameplay yet.** This repository starts as a
-copy of [turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers).
-The 1.12 game layer still speaks the 1.12 protocol. Rounds 1 and 2 wrote the Forever login and the world socket up
-to "the server treats the player as fully in the world"; movement, objects and gameplay come next.
+**Status: the Forever client works; the Turtle 1.12 stack is still in the tree for the Turtle-only commands** (see
+[docs/turtle/README.md](docs/turtle/README.md)). This repository started as a copy of
+[turtle-agent](https://github.com/pjerra/turtle-agent) (the same tool for vanilla 1.12 / Turtle WoW servers) and is now
+the Forever client: the login, the world socket, objects, movement, inventory, chat, quests, vendors, flight paths, the
+dungeon driver and the watch all speak the ForeverCore protocol. The table below says what has been run against a live
+server and what has only been run against the fake world.
+
+## Turtle-only commands
+
+Some commands still serve the Turtle stack alone: `login` (Forever logs in through `forever serve`), `raid-walk` and
+its helpers, `rotation`, `map`, the capture and scoring tools, and a few others. `forever-agent help` ends each of their
+lines with `[Turtle only; Forever: <x>]`, and every one of them refuses a Forever server before any lease, login, file
+write or child process. The Turtle packages and documents are listed in
+[docs/turtle/README.md](docs/turtle/README.md).
 
 | Part | State |
 |---|---|
@@ -42,7 +52,7 @@ to "the server treats the player as fully in the world"; movement, objects and g
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
-| Game layer on the new packets | not started |
+| Game layer on the new packets | **Works** (round 3 onward: objects, movement, inventory, chat, quests, vendors, trainers, flight paths, loot and game objects; each row says what has been proved live) |
 | Trials (behaviour test bench, in Go, as `forever-agent trials`) | **Every situation kind and the class sweep (round A5): `trials run` provisions live and drives `tank_damage`, `caster_mob`, `pack`, `cc_target`, `debuff`, `ooc_buffs` and `ooc_hurt` (arenas, the HP governor, the pulled debuff, the cc mark, the ooc meal window and hurt cadence); `trials forever-data-check` asks the live server every spell, item and mob entry the trials and kits name into `forever-data-report.json` (ok/unknown/differs); `trials sweep --classes warrior,priest,mage,rogue` runs tanks first, one card per trial, plus `sweep.md`; `trials cleanup` replays a ledger; see [docs/forever/TRIALS-A5-NOTES.md](docs/forever/TRIALS-A5-NOTES.md); dummy spell/damage bench (issue #18): `dummy` situation kind, per-spell damage + reaction tallies against a per-class table and a trial file beside it (`internal/trials/dummybench/testdata`), report card per spell; unmeasured bounds stay UNKNOWN, strangers INVALID; see [docs/forever/DUMMY-BENCH-NOTES.md](docs/forever/DUMMY-BENCH-NOTES.md)** |
 
 `forever-agent forever login-check --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL` logs in through the

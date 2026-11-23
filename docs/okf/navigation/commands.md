@@ -21,6 +21,9 @@ status: draft
 
 # Navigation commands
 
+> **Turtle only commands.** `map` and `path-check` on this page run against the Turtle stack only; against a Forever
+> server use `forever run-map` and `forever path-check` (see `forever-agent help`).
+
 Every flag of the four navigation commands. All flags have the defaults shown; a flag marked required has no working default. Exit 0 draws, records or replays; exit 2 is a usage error; other exits are listed per command. `patrol-record` accepts flags before or after the slot dir; `map`, `path-check` and `minimap-extract` take no positional arguments besides `path-check`'s coordinates after `--`. On/off flags take `=` when you give a value (for example `--background=false`); a space-separated value after an on/off flag is not read as its value.
 
 ## map

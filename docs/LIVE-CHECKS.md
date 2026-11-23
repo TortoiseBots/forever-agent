@@ -1,5 +1,9 @@
 # Live checks still open
 
+> **Turtle only.** These checks run the Turtle 1.12 client and the Turtle-only commands; against a Forever server use
+> the command `forever-agent help` prints as each one's replacement (some have none yet). The Turtle stack is listed in
+> [docs/turtle/README.md](turtle/README.md).
+
 Things the code review raised that only a running server can settle. Each is a short, one-off run.
 
 ## Anticheat as a player account (final review M4)

@@ -17,6 +17,9 @@ status: draft
 
 # Fault injection
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `--inject` makes the walk inject a controlled fault and measure what the raid does about it. It is refused with `--place`, and the autopilot refuses it. Give at most 4 faults, each kind at most once; `kill-mt` needs an `ot` batch in the roster, or nobody would take over.[^inject]
 
 ## Grammar

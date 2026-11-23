@@ -22,6 +22,9 @@ status: draft
 
 # Score one pack
 
+> **Turtle only.** `pulltest` scores a pack of a Turtle run leader; a Forever server has no replacement
+> (`forever-agent help`).
+
 A pull test pulls one pull group several times with the same party and scores each try. It answers "does this pack go down cleanly" in minutes instead of a full clear, and two results side by side compare two builds. The party must stand at the pack in a partly-cleared instance.
 
 ## 1. Run the test

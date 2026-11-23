@@ -1,5 +1,8 @@
 # Raids
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 Walk a raid plan with hired bots using `raid-walk`, keep many raids running with `raid-autopilot`, and regression-check plans with `raid-suite`.
 
 ## Start here

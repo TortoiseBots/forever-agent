@@ -3,6 +3,7 @@
   "name": "dire_maul_west",
   "kind": "dungeon",
   "status": "live-checked",
+  "forever_status": "todo",
   "map": 429,
   "entrance": {"x": -65.6559, "y": 159.561, "z": -3.4647},
   "entrance_trigger": 3186,

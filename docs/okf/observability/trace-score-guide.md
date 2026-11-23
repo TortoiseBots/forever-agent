@@ -15,6 +15,8 @@ status: draft
 
 # Re-score a trace
 
+> **Turtle only.** `trace-score` runs against the Turtle stack; a Forever server has no replacement (`forever-agent help`).
+
 `turtle-agent trace-score` reads trace files and prints each check's verdict with its measured value and threshold. It logs in to nothing.
 
 ## 1. Score one or more traces

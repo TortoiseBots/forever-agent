@@ -3,6 +3,7 @@
   "name": "scarlet_armory",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 189,
   "entrance": {"x": 1608.1, "y": -318.919, "z": 18.6714},
   "entrance_trigger": 612,

@@ -17,6 +17,9 @@ status: draft
 
 # Rotation file format
 
+> **Turtle only.** `rotation` and the rotation files it plays are the Turtle brain; a Forever server has no
+> replacement yet (`forever-agent help`).
+
 Version 1. `rotation check` enforces all of this against the spell data. Unknown `when` fields are an error.
 
 ## Top level

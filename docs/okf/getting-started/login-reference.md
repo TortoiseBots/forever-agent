@@ -17,6 +17,9 @@ status: draft
 
 # login
 
+> **Turtle only.** `login` runs against the Turtle stack. Against a Forever server, log in through `forever serve`
+> (see `forever-agent help`).
+
 ```text
 turtle-agent login [--config FILE] [--capture FILE] [--stay DURATION] [--rpc ADDR] [--reconnect N] [--create race,class[,gender]] [--tune FILE] [--pid-file FILE] [--follow LEAD --follow-plan PLAN [--follow-assist]] [<account>] <character>
 ```

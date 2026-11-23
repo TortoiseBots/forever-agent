@@ -3,6 +3,7 @@
   "name": "lower_karazhan_halls",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 532,
   "entrance": {"x": -11104.3, "y": -1999.42, "z": 49.89},
   "entrance_trigger": 5018,

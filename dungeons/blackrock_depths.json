@@ -3,6 +3,7 @@
   "name": "blackrock_depths",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 230,
   "entrance": {"x": 456.929, "y": 34.0923, "z": -68.0896},
   "entrance_trigger": 1466,

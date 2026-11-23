@@ -22,6 +22,9 @@ status: draft
 
 # Draw a run map
 
+> **Turtle only.** `map` runs against the Turtle stack. Against a Forever server, use `forever run-map` (see
+> `forever-agent help`).
+
 You draw an already-recorded run as a top-down map: one SVG per floor, and optionally a single-file HTML replay with a time slider. No server, no login: the command reads files and writes pictures.
 
 ## 1. Give it positions

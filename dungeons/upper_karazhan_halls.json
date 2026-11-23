@@ -3,6 +3,7 @@
   "name": "upper_karazhan_halls",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 814,
   "entrance": {"x": -11048.2, "y": -1985.84, "z": 101.57},
   "entrance_tele": "karaforty",

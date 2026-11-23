@@ -146,6 +146,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return decisionsCmd(ctx, args[1:], stdout, stderr)
 	case "plan-diff":
 		return planDiffCmd(args[1:], stdout, stderr)
+	case "plan-list":
+		return planListCmd(args[1:], stdout, stderr)
 	case "raid-suite":
 		return raidSuiteCmd(ctx, args[1:], stdout, stderr)
 	case "forever":
@@ -192,6 +194,7 @@ const usageText = `usage:
   forever-agent walk-preflight [--server NAME]... [--binary PATH] [--json] <walk-dir>
   forever-agent decisions pull --dash-url URL --dash-user U --dash-pass-file FILE [--dash-insecure-http] --commander C [--since T] [--until T] --out DIR [--max-mib N]
   forever-agent plan-diff <old> <new> [--plan NAME] [--json] [--out DIR] [--svg FILE] [--minimaps DIR] [--picture worldmap|minimap|navmesh|none] [--fail-on-change]
+  forever-agent plan-list [--dir dungeons] [--json]
   forever-agent raid-autopilot [--foreground] [--binary PATH] [--poll D] [--stall D] [--settle D] [--status-every D] [--instance-cap-per-account N] [--dry-run] <walk-dir>
   forever-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server m910q] [--slot N] [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH] [--dash-insecure-http] [--mmaps DIR] [--slots FILE] [--binary PATH] [--compare-only] [--dry-run] [--json]
   forever-agent trash-check [--dir dungeons] [--sql FILE [--plan NAME]] [--spawns DIR] [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 10] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any] [<plan>|<path.json>] | forever-agent trash-check --forever --sql FILE [--plan NAME] --spawns FILE [--patrols FILE]... [--mmaps DIR] [--level N] [--json] [--out DIR] [--fail-on danger|patrol|any]

@@ -3,6 +3,7 @@
   "name": "scarlet_graveyard",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 189,
   "entrance": {"x": 1687.27, "y": 1050.09, "z": 18.6773},
   "entrance_trigger": 45,

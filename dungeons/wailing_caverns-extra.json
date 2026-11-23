@@ -3,6 +3,7 @@
   "name": "wailing_caverns-extra",
   "kind": "dungeon",
   "status": "draft (the Disciple of Naralex event of Wailing Caverns, written offline from script_waypoint 3678 and the escort script, machine-checked, never walked and never run live; the return from Verdan is the live-probed hop pair (no GM needed, 3 of 3 on 2026-10-22), the rest of the event is not run live, and the plan is not exported to the run leader; not for running before that)",
+  "forever_status": "todo",
   "map": 43,
   "entrance": {"x": -158.441, "y": 131.601, "z": -74.2552},
   "entrance_trigger": 228,

@@ -3,6 +3,7 @@
   "name": "stormwind_stockade",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 34,
   "entrance": {"x": 48.9849, "y": 0.483882, "z": -16.3942},
   "entrance_trigger": 101,

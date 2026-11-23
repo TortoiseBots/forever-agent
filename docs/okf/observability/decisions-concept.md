@@ -17,6 +17,8 @@ status: draft
 
 # Decision captures
 
+> **Turtle only.** `decisions` runs against the Turtle stack; a Forever server has no replacement (`forever-agent help`).
+
 The TortoiseBots observability daemon — a separate program from the turtle-agent dashboard — records what its commanders decided: one decision capture per commander per window. `internal/tbdash` is the client that talks to that daemon's JSON API; the password never leaves its file except into the login request, and never reaches an error text.
 
 A pull fetches, per capture, `index.json` plus the `seg-NNNN.jsonl` segment files into `<out>/decisions`, with a manifest beside them. The pull stops at the budget (default 1024 MiB) and says so: `decisions: budget stopped the pull at 1024 MiB`.

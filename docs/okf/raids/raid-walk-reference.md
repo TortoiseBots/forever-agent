@@ -15,6 +15,9 @@ status: draft
 
 # `raid-walk` flags
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 Usage: `turtle-agent raid-walk <plan> [--server <server>] [--slot N] ...` or `turtle-agent raid-walk report <dir> ...`. A leading plan moves past the flags before parsing, so flags-first callers parse as before. On/off flags (`--place`, `--decisions`, `--allow-split-ledger`) take `=`: `--flag=off` turns one off, and a bare flag means on.[^walk-cmd]
 
 ## Identity and inputs

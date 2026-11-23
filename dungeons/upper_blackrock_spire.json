@@ -3,6 +3,7 @@
   "name": "upper_blackrock_spire",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 229,
   "entrance": {"x": 138.726, "y": -318.182, "z": 70.9562},
   "entrance_tele": "ubrs",

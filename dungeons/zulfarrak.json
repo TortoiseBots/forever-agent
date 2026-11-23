@@ -2,6 +2,7 @@
   "version": 1,
   "name": "zulfarrak",
   "status": "live-checked",
+  "forever_status": "todo",
   "map": 209,
   "entrance": {"x": 1212.7, "y": 842, "z": 8.9},
   "entrance_trigger": 924,

@@ -1,5 +1,9 @@
 # Observability and testing
 
+> **Turtle only commands.** The Turtle-only commands on these pages (`capture`, `capture-stats`, `map`,
+> `dashboard-replay`, `fight-score`, `trace-score`, `decisions`) run against the Turtle stack; `forever-agent help`
+> prints each one's Forever replacement (some have none yet).
+
 The dashboard, captures, traces, events and scenarios: watch a run live, record what happened, and check it afterwards.
 
 ## Watch it live

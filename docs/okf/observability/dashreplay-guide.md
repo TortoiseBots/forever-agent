@@ -19,6 +19,9 @@ status: draft
 
 # Replay a recording into a test daemon
 
+> **Turtle only.** `dashboard-replay` replays Turtle dashboard recordings; a Forever server has no replacement
+> (`forever-agent help`).
+
 `dashboard-replay` feeds a recorded TortoiseBots run to the observability daemon's real UDP port, so its Commanders tab and fight debugger can be exercised on a laptop with no server, no bots and no game client. It logs in to nothing and reads no settings, token or key file.
 
 ## 1. Check what a recording would send
