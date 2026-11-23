@@ -1,0 +1,133 @@
+{
+  "id": "priest-holy-low-mana-innervate",
+  "title": "Holy priest at 15 percent mana in a fight: the Balance druid innervates the healer",
+  "group": "healers",
+  "class": "priest",
+  "spec": "holy",
+  "player": {
+    "class": "warrior",
+    "level": 60,
+    "talents": {
+      "tree": "arms",
+      "spells": [
+        16462,
+        12286
+      ]
+    },
+    "stance": 71,
+    "forced_role": null,
+    "auras": [],
+    "items": []
+  },
+  "bot": {
+    "class": "priest",
+    "spec": "holy",
+    "role": "healer",
+    "level": 60,
+    "gear": "blue",
+    "items": [],
+    "mana_pct": 15,
+    "cc_mark": null
+  },
+  "extra_bots": [
+    {
+      "class": "druid",
+      "spec": "balance",
+      "role": "dps",
+      "level": 60,
+      "gear": "blue",
+      "items": []
+    }
+  ],
+  "situation": {
+    "kind": "tank_damage",
+    "mobs": {
+      "role": "melee",
+      "count": 2,
+      "level_delta": -2,
+      "refill": true
+    },
+    "hp_band": [
+      35,
+      80
+    ],
+    "floor_pct": 12,
+    "victim": "player",
+    "pull_after_s": 0,
+    "ooc_wait_s": 0,
+    "debuff": null,
+    "max_rescues_per_min": 12
+  },
+  "setup_checks": [
+    "player_level",
+    "player_visible",
+    "player_talents",
+    "player_stance",
+    "player_forced_role",
+    "bot_present",
+    "bot_level",
+    "bot_role",
+    "bot_spec",
+    "bot_mana",
+    "grouped",
+    "mobs_ready",
+    "config_read",
+    "extra_bots_present",
+    "extra_bots_role",
+    "extra_bots_in_group"
+  ],
+  "duration_s": 60,
+  "repeats": 2,
+  "min_valid_s": 45,
+  "rules": [
+    {
+      "id": "DRU-BAL-INNERVATE-HEALER",
+      "desc": "Innervate on the low-mana healer: in a fight where the Holy priest hire sits at 15 percent mana, the Balance druid hire casts Innervate on it within 20 s of the fight starting",
+      "source": "ai/playerbot/strategy/druid/BalanceDruidStrategy.cpp:290-301 (the Balance buff strategy fires innervate in combat at ACTION_HIGH + 1); ai/playerbot/strategy/druid/DruidTriggers.h:503-531 (InnervateTrigger: a target under AiPlayerbot.InnervateManaThreshold, from boost targets or FindBestInnervateTarget); ai/playerbot/strategy/druid/DruidInnervateHelper.h:14 (FindBestInnervateTarget); ai/playerbot/PlayerbotAIConfig.cpp:741 (AiPlayerbot.InnervateManaThreshold default 25); TortoiseBots upstream/dev 0c56cf649",
+      "expect_today": "PASS",
+      "why_expect": "15 percent is under the 25 percent threshold and the priest is the only party member on mana (the warrior has none; the druid spends its own but innervates another), so FindBestInnervateTarget returns the priest and the combat row fires at ACTION_HIGH + 1. Expected PASS on TortoiseBots upstream/dev 0c56cf649",
+      "check": {
+        "metric": "first",
+        "where": {
+          "kind": "cast",
+          "src": "$extra1",
+          "dst": "$bot",
+          "spell": "Innervate"
+        }
+      },
+      "pass_if": "<= 20"
+    },
+    {
+      "id": "DRU-BAL-INNERVATE-NOT-PLAYER",
+      "desc": "Companion: the druid never innervates the warrior: no Innervate cast of the druid aims at the player in the fight",
+      "source": "ai/playerbot/strategy/druid/DruidTriggers.h:503-531 (InnervateTrigger.IsTargetValid: the target's mana percent must be under AiPlayerbot.InnervateManaThreshold); ai/playerbot/strategy/druid/DruidInnervateHelper.h:14 (FindBestInnervateTarget walks the group's mana users); ai/playerbot/PlayerbotAIConfig.cpp:741; TortoiseBots upstream/dev 0c56cf649",
+      "expect_today": "PASS",
+      "why_expect": "a warrior has no mana pool, so GetManaPercent on the player cannot pass the 25 percent threshold and InnervateTrigger cannot select it",
+      "check": {
+        "metric": "count",
+        "where": {
+          "kind": "cast",
+          "src": "$extra1",
+          "dst": "$player",
+          "spell": "Innervate"
+        }
+      },
+      "pass_if": "== 0"
+    },
+    {
+      "id": "DRU-BAL-INNERVATE-PRECOND",
+      "desc": "Precondition: the priest hire cast something at least 3 times in the window, so a fight where the healer never acted is not read as a missed Innervate",
+      "source": "precondition: any cast by the low-mana hire; the healer rows are ai/playerbot/strategy/priest/HolyPriestStrategy.cpp:29-72 (heals and shields on the player), TortoiseBots upstream/dev 0c56cf649",
+      "expect_today": "?",
+      "why_expect": "15 percent of a level 60 priest's pool is one or two heals; free rows and regen may add a third cast inside 60 s, so whether the floor is 3 is the open question (the same question PRI-LOWMANA-HEALS leaves open at level 40)",
+      "check": {
+        "metric": "count",
+        "where": {
+          "kind": "cast",
+          "src": "$bot"
+        }
+      },
+      "pass_if": ">= 3"
+    }
+  ]
+}
