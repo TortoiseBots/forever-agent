@@ -28,6 +28,7 @@ func TestRunDispatchesEveryUsageCommand(t *testing.T) {
 		"rotation":        {"bogus-subcommand"},
 		"dashboard":       {"--help"},
 		"minimap-extract": {},
+		"casc-cat":        {},
 		"plan-export":     {},
 		"plan-check":      {},
 		"path-check":      {},
