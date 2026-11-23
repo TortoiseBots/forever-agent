@@ -651,6 +651,9 @@ type session struct {
 	fightSender objects.Sender
 	// serve is the RPC loop's state when this session is serving (forever serve); nil for a one-shot run.
 	serveRT *serveRuntime
+	// mapRec is the map_snapshot recorder while this session serves: started when the session enters the world
+	// (install), stopped on teardown, so a reconnect leaves none behind.
+	mapRec *serveMapRecorder
 	// Round LOOT-1: the open window, the rolls it started and the game object used last (loot.go).
 	loot *lootWatch
 	// Round P2 (ticket #90): the pet's control bar, its mode and the last pet the character's own Summon named
@@ -857,6 +860,8 @@ func (s *session) authenticate(ctx context.Context, deadline time.Duration) erro
 // afterwards. A serving daemon calls it on the old session before logging in again, so the new login never shares a
 // socket, a pump or a model with the dropped one.
 func (s *session) teardown() {
+	// The recorder first: its sampler may be blocked on the session goroutine, and this runs on that goroutine.
+	s.mapRec.stop()
 	s.pumpCancel()
 	if s.captureRun != nil {
 		_ = s.captureRun.close()

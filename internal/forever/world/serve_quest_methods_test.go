@@ -653,7 +653,7 @@ func TestServeQuestMethodsRefuseBeforeAnySend(t *testing.T) {
 
 func TestServeQuestMethodsAreRegistered(t *testing.T) {
 	ported, notPortedNames := ServeRPCMethods()
-	for _, name := range []string{"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log"} {
+	for _, name := range []string{"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log", "map_snapshot"} {
 		if slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s is still listed as not ported", name)
 		}
@@ -661,7 +661,7 @@ func TestServeQuestMethodsAreRegistered(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 	}
-	for _, name := range []string{"lfg_status", "map_snapshot"} {
+	for _, name := range []string{"lfg_status"} {
 		if !slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s should stay not ported", name)
 		}

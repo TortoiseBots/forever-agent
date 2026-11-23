@@ -39,6 +39,9 @@ type ServeConfig struct {
 	Token string
 	// NavmeshDir enables path_to and walk_path. Empty answers those methods with a typed not-configured error.
 	NavmeshDir string
+	// PlansDir is the folder map_snapshot and the plan overlay read (--plans-dir; the same folder
+	// dungeon_run's plans live in). Empty takes "dungeons".
+	PlansDir string
 	// CaptureDir is the debug capture of the serving session (Options.CaptureDir): each link writes a new run
 	// directory under it, so a reconnect starts a fresh run and the dropped link's files stay as they were. A parent
 	// inside a git work tree is refused before the login, because a capture holds a run's identifiers.
@@ -195,6 +198,8 @@ type serveState struct {
 	// q and nav belong to the loop goroutine: q is rebuilt when a session is installed, nav outlives the sessions.
 	q   *command.Session
 	nav *navmesh.Planner
+	// plansDir is where map_snapshot reads a plan (--plans-dir; the same folder dungeon_run's plans live in).
+	plansDir string
 	// cmdr is the commander method's controller, built for the first session and reset by every install (a
 	// re-entry drops what the old session knew about the module's packages). It belongs to the loop goroutine.
 	cmdr *commanderCtl
@@ -275,6 +280,10 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		maxBackoff:   cfg.reconnectMaxBackoff,
 		loginTimeout: cfg.reconnectLoginTimeout,
 		allowGMUnits: cfg.AllowGMUnits,
+		plansDir:     cfg.PlansDir,
+	}
+	if st.plansDir == "" {
+		st.plansDir = "dungeons"
 	}
 	if st.backoff <= 0 {
 		st.backoff = serveReconnectBackoff
@@ -372,6 +381,17 @@ func (st *serveState) install(s *session, epoch uint64) {
 	st.resetCommander(s)
 	st.onlineSince = time.Now()
 	st.session.Store(s)
+	// The session is in the world: the map recorder keeps the run from here until teardown.
+	s.mapRec = newServeMapRecorder(st)
+}
+
+// plansFolder is the plan folder map_snapshot reads: the configured one, else "dungeons" (the daemon's default and
+// the Turtle serve's).
+func (st *serveState) plansFolder() string {
+	if st.plansDir == "" {
+		return "dungeons"
+	}
+	return st.plansDir
 }
 
 // reconnect logs the world in again after the link dropped. The old session is torn down first (readers stopped,

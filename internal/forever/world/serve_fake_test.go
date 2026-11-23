@@ -906,7 +906,12 @@ func TestServeNotPortedAndUnknown(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 
 	a.mustFail(t, "lfg_status", map[string]any{}, -32003, "not ported on this server")
-	a.mustFail(t, "map_snapshot", map[string]any{}, -32003, "not ported on this server")
+	// map_snapshot is ported: the daemon's own frame draws the character and the creature the fake sent.
+	var mapped ServeMapResult
+	json.Unmarshal(a.mustCall(t, "map_snapshot", nil), &mapped)
+	if mapped.Members < 1 || !strings.Contains(mapped.SVG, "<svg") {
+		t.Fatalf("map_snapshot: %+v", mapped)
+	}
 	a.mustFail(t, "no_such_method", nil, -32601, "Method not found")
 
 	// teleport left the list with #99: it answers its own argument refusal, never the port.
