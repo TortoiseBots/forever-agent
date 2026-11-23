@@ -376,7 +376,7 @@ func (st *serveState) install(s *session, epoch uint64) {
 	}
 	s.serveRT = &serveRuntime{st: st, epoch: epoch}
 	st.rt.Store(s.serveRT)
-	st.q = command.NewSession(&cmdLink{s: s})
+	st.q = command.NewSession(&cmdLink{s: s, owner: true})
 	st.epoch.Store(epoch)
 	st.resetCommander(s)
 	st.onlineSince = time.Now()

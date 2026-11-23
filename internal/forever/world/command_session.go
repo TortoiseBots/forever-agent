@@ -67,13 +67,21 @@ type cmdLink struct {
 	// probe marks the one link that may send the probe while the guard is unconfirmed. No other link can send a
 	// command line: SendCommand refuses it, so runOne, tbcmd.Client and any future caller are guarded alike.
 	probe bool
+	// owner lets the unconfirmed guard pass a `.bot` line (the owner commands of a normal player, never a GM
+	// line); every other command text still needs the GM confirmation. Only the serve channel sets it.
+	owner bool
+}
+
+// isOwnerLine reports whether text is a `.bot` owner command, the one command family a player account runs.
+func isOwnerLine(text string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), serveBotPrefix+" ")
 }
 
 func (l *cmdLink) SendCommand(ctx context.Context, text string) error {
 	if l.s.gmStop != nil {
 		return l.s.gmStop
 	}
-	if !l.probe && command.IsCommandText(text) && !l.s.gmConfirmed {
+	if !l.probe && command.IsCommandText(text) && !l.s.gmConfirmed && !(l.owner && isOwnerLine(text)) {
 		return errCommandNotConfirmed
 	}
 	return l.s.SendCommandCtx(ctx, text)

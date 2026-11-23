@@ -196,10 +196,11 @@ func (s *session) serveBot(ctx context.Context, line string, wait time.Duration)
 	return s.serveCommandLine(ctx, line, wait)
 }
 
-// serveCommandLine confirms the GM guard on first use and then runs one command through the session's serialised
-// command channel.
+// serveCommandLine runs one command through the session's serialised command channel. A `.bot` line is an owner
+// command: a normal player (a Battle.net owner) runs it, so it is sent without the GM probe. Every other line
+// (`.tb`, the GM lines) confirms the GM guard on first use.
 func (s *session) serveCommandLine(ctx context.Context, line string, wait time.Duration) (*command.Reply, error) {
-	if !s.gmConfirmed {
+	if !s.gmConfirmed && !isOwnerLine(line) {
 		if err := s.confirmGM(ctx); err != nil {
 			return nil, err
 		}
@@ -211,7 +212,7 @@ func (s *session) serveCommandLine(ctx context.Context, line string, wait time.D
 		}
 		opts.Deadline = wait
 	}
-	return s.serveCommandOptions(ctx, line, opts)
+	return s.serveRunLine(ctx, line, opts)
 }
 
 // serveCommandOptions is serveCommandLine for a caller that brings its own options: the typed `.tb` client sets
@@ -223,6 +224,12 @@ func (s *session) serveCommandOptions(ctx context.Context, line string, opts com
 			return nil, err
 		}
 	}
+	return s.serveRunLine(ctx, line, opts)
+}
+
+// serveRunLine puts one line on the serialised command channel, whose link enforces the guard for every line but
+// a `.bot` owner command.
+func (s *session) serveRunLine(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
 	return s.serveRT.st.q.Run(ctx, line, s.commandOptions(opts))
 }
 

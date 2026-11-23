@@ -936,6 +936,48 @@ func TestServeGMAndBot(t *testing.T) {
 	f.wait(t)
 }
 
+// An owner's `.bot` line is a normal player's command: it goes out without the GM probe. Every other line (`.tb`,
+// the GM lines) still confirms the GM guard first.
+func TestServeBotOwnerLineNeedsNoGM(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	f.serveGMSay = func(said string) (string, bool) {
+		if said == ".bot who" {
+			return "OWNER-WHO-ANSWER", true
+		}
+		return "", false
+	}
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+
+	var bot ServeCommand
+	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".bot who"}), &bot)
+	if !strings.Contains(strings.Join(bot.Lines, "|"), "OWNER-WHO-ANSWER") {
+		t.Fatalf("bot answered %+v\n%s", bot, steps.joined())
+	}
+	f.mu.Lock()
+	probed, lines := f.serveGMSent, append([]string(nil), f.serveGMLines...)
+	f.mu.Unlock()
+	if probed {
+		t.Fatalf("a .bot owner line sent the GM probe: %v", lines)
+	}
+	if len(lines) != 1 || lines[0] != ".bot who" {
+		t.Fatalf("lines said = %v, want only .bot who", lines)
+	}
+
+	// A module line outside the owner family stays behind the GM guard: the probe goes first.
+	a.mustCall(t, "bot", map[string]any{"line": ".tb state"})
+	f.mu.Lock()
+	probed = f.serveGMSent
+	f.mu.Unlock()
+	if !probed {
+		t.Fatal("a .tb line was sent without the GM probe")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 func TestServePartyAndAddon(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
