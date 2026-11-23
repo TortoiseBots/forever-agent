@@ -55,10 +55,11 @@ func TestScenarioRitualFilesCheck(t *testing.T) {
 // so a number read from a method can be compared with a var.
 func TestRunnerCheckRPCMatchExpandsVars(t *testing.T) {
 	f := parseFile(t, `{"scenario":"t","sessions":{"A":{"rpc":"127.0.0.1:8774"}},"vars":{"MAP":"1"},"steps":[
-		{"do":"check_rpc","session":"A","method":"status","path":"map","match":"^${MAP}$"}
+		{"do":"check_rpc","session":"A","method":"where","path":"map","match":"^${MAP}$"}
 	]}`)
 	a := &fakeCaller{}
-	a.results = map[string]fakeResult{"status": {Result: map[string]any{"map": 1}}}
+	// "status" is answered by the fake itself (character, last_seq), so the number comes from another method.
+	a.results = map[string]fakeResult{"where": {Result: map[string]any{"map": 1}}}
 	clk := newFakeClock()
 	res, _ := runWith(t, f, map[string]*fakeCaller{"A": a}, nil, clk)
 	if res.Passed != 1 || res.Failed != 0 || res.Exit != 0 {

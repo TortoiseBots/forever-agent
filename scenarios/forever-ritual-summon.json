@@ -94,6 +94,7 @@
       "do": "expect",
       "session": "B",
       "kind": "summon_request",
+      "match": ".*",
       "timeout_s": 60
     },
     {

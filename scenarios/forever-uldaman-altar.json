@@ -45,6 +45,7 @@
       "do": "expect",
       "session": "A",
       "kind": "gameobject",
+      "match": ".*",
       "timeout_s": 30
     }
   ]
