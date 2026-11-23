@@ -843,6 +843,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		return s.serveTeardown(ctx, st, p)
 	}))
 	registerItemInfoMethods(srv, st)
+	registerCombatNearMethods(srv, st)
 	registerItemMethods(srv, st)
 	registerLootMethods(srv, st)
 	registerNPCMethods(srv, st)

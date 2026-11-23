@@ -85,6 +85,57 @@ func expandAny(v any, vars map[string]string) (any, error) {
 	}
 }
 
+// expandParams expands rpc and check_rpc parameters. It is expandAny with one addition: a parameter whose whole
+// template is one ${name} reference and whose variable holds a number is sent as a JSON number, because a params
+// decoder reads numbers, not their decimal text, and a scenario's vars carry coordinates and windows (camp_x,
+// watch_s) as strings. Mixed text ("x${n}"), a non-numeric value and a missing var go through expand unchanged.
+func expandParams(v any, vars map[string]string) (any, error) {
+	switch t := v.(type) {
+	case string:
+		if name, ok := wholeVar(t); ok {
+			if raw, ok := vars[name]; ok {
+				if n, err := strconv.ParseFloat(raw, 64); err == nil {
+					return n, nil
+				}
+			}
+		}
+		return expand(t, vars, false)
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			x, err := expandParams(e, vars)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = x
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			x, err := expandParams(e, vars)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = x
+		}
+		return out, nil
+	}
+	return v, nil
+}
+
+// wholeVar reports whether s is exactly one ${name} reference (no surrounding text).
+func wholeVar(s string) (string, bool) {
+	if len(s) < 4 || !strings.HasPrefix(s, "${") || !strings.HasSuffix(s, "}") {
+		return "", false
+	}
+	name := s[2 : len(s)-1]
+	if name == "" || strings.ContainsAny(name, "${}") {
+		return "", false
+	}
+	return name, true
+}
+
 // refs lists the ${name} references in s.
 func refs(s string) []string {
 	var out []string

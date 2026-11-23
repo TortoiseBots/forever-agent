@@ -488,7 +488,7 @@ func (rr *run) doCheckRPC(ctx context.Context, s *Step, n int) bool {
 		rr.skipRest(n + 1)
 		return false
 	}
-	params, err := expandAny(s.Params, rr.vars)
+	params, err := expandParams(s.Params, rr.vars)
 	if err != nil {
 		rr.errorf(n, desc, "%v", err)
 		rr.skipRest(n + 1)

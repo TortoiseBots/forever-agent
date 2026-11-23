@@ -1,0 +1,152 @@
+{
+  "scenario": "forever-camp-step-aside",
+  "description": "One Forever serve slot, not grouped: A walks to a camp, proves the camp is free with combat_near (who others, 5 s window), then works the nearest mob_entry for three attack/sleep rounds. The final combat_near over the whole watch_s window must count no stranger hits on mobs within 30 yd: the pool bots around the camp left the mobs to the real player. Set camp_x/y/z and mob_entry to the level-matched camp before the run; a camp that already has stranger hits fails the baseline step named camp busy and the run stops.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    }
+  },
+  "vars": {
+    "camp_x": "-8893",
+    "camp_y": "-118",
+    "camp_z": "3.4",
+    "mob_entry": "6",
+    "watch_s": "180"
+  },
+  "settle_s": 1,
+  "timeout_s": 15,
+  "on_fail": "continue",
+  "max_minutes": 10,
+  "steps": [
+    {
+      "do": "section",
+      "title": "A walks to the camp and checks that it is free"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "walk_to",
+      "params": {
+        "x": "${camp_x}",
+        "y": "${camp_y}",
+        "z": "${camp_z}"
+      }
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "name": "camp busy",
+      "method": "combat_near",
+      "params": {
+        "who": "others",
+        "window_s": 5
+      },
+      "path": "count",
+      "equals": 0,
+      "on_fail": "stop",
+      "note": "no stranger hit a mob near the camp in the last 5 s; a busy camp stops the run"
+    },
+    {
+      "do": "section",
+      "title": "A works the nearest mob_entry for three rounds"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "note": "units is nearest first, so 0 is the nearest mob_entry within 60 yd",
+      "params": {
+        "entry": "${mob_entry}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "mob_guid": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${mob_guid}",
+        "for_ms": 18000
+      }
+    },
+    {
+      "do": "sleep",
+      "seconds": 20
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "entry": "${mob_entry}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "mob_guid": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${mob_guid}",
+        "for_ms": 18000
+      }
+    },
+    {
+      "do": "sleep",
+      "seconds": 20
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "entry": "${mob_entry}",
+        "within": 60,
+        "limit": 1
+      },
+      "save": {
+        "mob_guid": "0.guid"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "attack",
+      "params": {
+        "guid": "${mob_guid}",
+        "for_ms": 18000
+      }
+    },
+    {
+      "do": "sleep",
+      "seconds": 20
+    },
+    {
+      "do": "section",
+      "title": "no stranger hit a mob at the camp for the whole watch"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "name": "bots stepped aside",
+      "method": "combat_near",
+      "params": {
+        "radius": 30,
+        "window_s": "${watch_s}",
+        "who": "others"
+      },
+      "path": "count",
+      "equals": 0,
+      "within_s": 5
+    }
+  ]
+}
