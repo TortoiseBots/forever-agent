@@ -597,6 +597,77 @@ func TestServeQuestHelloQuestOnlyGiver(t *testing.T) {
 	}
 }
 
+// questOnlyGiver adds a quest-only giver (quest flag, no gossip flag) whose hello is answered by answer.
+func questOnlyGiver(t *testing.T, q *questWorld, answer func(giver wire.GUID)) wire.GUID {
+	t.Helper()
+	only := wire.GUID{Low: 0xFA6, High: uint64(objects.TypeUnit) << 58}
+	u, err := objects.ParseUpdateObject(fakeUnitCreateBlock(fakePackedGUID(only), 0, 0, 0, 0, 0, questGiverEntry+2, 100, 100, 5, npc.NPCFlagQuestGiver))
+	if err != nil || len(u.Blocks) == 0 {
+		t.Fatalf("the quest-only giver: %v", err)
+	}
+	q.world.Apply(u, q.now)
+	inner := q.onSend
+	q.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		if core == wire.CMSGQuestGiverHello {
+			if answer != nil {
+				answer(only)
+			}
+			return
+		}
+		inner(f, core, payload)
+	}
+	return only
+}
+
+// TestServeQuestHelloSingleQuestOpensDetails is the #92 failing case: a giver with exactly one quest for this
+// character gets no quest list from the core, it opens the quest itself (Player::SendPreparedQuest, the single
+// element case sends SMSG_QUESTGIVER_QUEST_DETAILS), so a hello that waits for a list alone reports "no quest
+// answer within 5s" on a working giver.
+func TestServeQuestHelloSingleQuestOpensDetails(t *testing.T) {
+	q := questMaskWorld(t)
+	only := questOnlyGiver(t, q, func(giver wire.GUID) {
+		q.deliver(wire.SMSGQuestGiverQuestDetails, questDetailsFrom(giver, questNew, 5001, 4, "Only Quest"))
+	})
+	res, err := q.s.serveQuestHello(context.Background(), serveQuestParams{GUID: GUID(only)})
+	if err != nil {
+		t.Fatalf("quest_hello: %v\n%s", err, joinLines(q.lines))
+	}
+	if !res.OK || res.Event == nil || res.Event.Kind != events.KindQuestDetails || res.Since >= res.Event.Seq {
+		t.Fatalf("hello answered %+v\n%s", res, joinLines(q.lines))
+	}
+	if res.Event.Data["quest_id"] != questNew || res.Event.Data["title"] != "Only Quest" {
+		t.Fatalf("details event data %+v", res.Event.Data)
+	}
+}
+
+// TestServeQuestHelloSingleTurnInOpensRequestItems: the same single-quest case for a quest this character carries.
+func TestServeQuestHelloSingleTurnInOpensRequestItems(t *testing.T) {
+	q := questMaskWorld(t)
+	only := questOnlyGiver(t, q, func(giver wire.GUID) {
+		q.deliver(wire.SMSGQuestGiverRequestItems, questRequestFrom(giver, questTaken, requestItemsReady, 4))
+	})
+	res, err := q.s.serveQuestHello(context.Background(), serveQuestParams{GUID: GUID(only)})
+	if err != nil {
+		t.Fatalf("quest_hello: %v\n%s", err, joinLines(q.lines))
+	}
+	if !res.OK || res.Event == nil || res.Event.Kind != events.KindQuestRequestItems || res.Event.Data["quest_id"] != questTaken {
+		t.Fatalf("hello answered %+v\n%s", res, joinLines(q.lines))
+	}
+}
+
+// TestServeQuestHelloOtherGiversDetailsDoNotCount: details from another giver are not this hello's answer.
+func TestServeQuestHelloOtherGiversDetailsDoNotCount(t *testing.T) {
+	q := questMaskWorld(t)
+	other := wire.GUID{Low: 0xFA7, High: uint64(objects.TypeUnit) << 58}
+	only := questOnlyGiver(t, q, func(wire.GUID) {
+		q.deliver(wire.SMSGQuestGiverQuestDetails, questDetailsFrom(other, questNew, 5001, 4, "Elsewhere"))
+	})
+	res, err := q.s.serveQuestHello(context.Background(), serveQuestParams{GUID: GUID(only)})
+	if err == nil && res.OK {
+		t.Fatalf("another giver's details answered the hello: %+v", res)
+	}
+}
+
 // TestServeQuestMethodsRefuseBeforeAnySend: bad parameters, an unknown or distant unit and a unit that gives no quests
 // are RPC errors raised before the call's own packet.
 func TestServeQuestMethodsRefuseBeforeAnySend(t *testing.T) {
