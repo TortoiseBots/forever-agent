@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	KindSession     = "session"      // state changes: in_world, logout_pending, logged_out, disconnected, teleported, falling, knocked_back, landed, reconnected
-	KindChat        = "chat"         // say, party, yell, emote, channel, monster speech
-	KindWhisper     = "whisper"      // whispers in and out
-	KindSystem      = "system"       // system messages, GM command output, notifications
-	KindParty       = "party"        // invites, command results, joins and leaves
-	KindPartyStats  = "party_stats"  // SMSG_PARTY_MEMBER_STATS
+	KindSession    = "session"     // state changes: in_world, logout_pending, logged_out, disconnected, teleported, falling, knocked_back, landed, reconnected
+	KindChat       = "chat"        // say, party, yell, emote, channel, monster speech
+	KindWhisper    = "whisper"     // whispers in and out
+	KindSystem     = "system"      // system messages, GM command output, notifications
+	KindParty      = "party"       // invites, command results, joins and leaves
+	KindPartyStats = "party_stats" // SMSG_PARTY_MEMBER_STATS
+	// KindGuild is the guild invite flow: Text invite, joined or result; data.guild_name, inviter, result, command.
+	KindGuild       = "guild"
 	KindMelee       = "melee"        // SMSG_ATTACKERSTATEUPDATE
 	KindSpellDamage = "spell_damage" // SMSG_SPELLNONMELEEDAMAGELOG
 	KindPeriodic    = "periodic"     // SMSG_PERIODICAURALOG

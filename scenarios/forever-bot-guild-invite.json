@@ -1,0 +1,76 @@
+{
+  "scenario": "forever-bot-guild-invite",
+  "description": "One Forever serve slot (A, in no guild) and a bot of a bot-run guild in var bot: A whispers the phrase the module answers, the bot's guild invite reaches A as a guild event, A accepts it and status reads the guild name back; the leave ends the run. The fake serve plays the module's side (ticket #113, module part #30).",
+  "vars": {
+    "bot": "Guildbot"
+  },
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "continue",
+  "max_minutes": 5,
+  "steps": [
+    {
+      "do": "section",
+      "title": "A starts guildless"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "guild",
+      "absent": true
+    },
+    {
+      "do": "section",
+      "title": "A asks the bot for an invite; the invite arrives as a guild event"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "chat",
+      "params": {
+        "type": "whisper",
+        "to": "${bot}",
+        "text": "can I join your guild"
+      }
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "kind": "guild",
+      "match": "invite",
+      "timeout_s": 30
+    },
+    {
+      "do": "section",
+      "title": "A accepts the invite; status names the guild"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "accept_guild_invite"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "guild_name",
+      "match": ".+",
+      "within_s": 5
+    }
+  ],
+  "finally": [
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "guild_leave",
+      "ignore_error": true
+    }
+  ]
+}

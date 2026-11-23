@@ -1,0 +1,43 @@
+{
+  "note": "Payloads only (the 4-byte opcode stripped), hand-built from the core's writers (GuildInvite::Write, GuildPackets.cpp:186-214; PlayerJoinedAppearance, :254-269; GuildCommandResult, :146-155) because no capture holds a guild packet. Every GUID is synthetic and every name is a run of one letter, so no original identifier is committed: the guild GUID is low word 2 with the guild type (28) in the high word, the type byte a packed GUID must carry (ObjectGuid.cpp operator>>), the joined player's is low word 3 with the player type nibble. Realm ids are 4242 and the emblem fields 1..5.",
+  "packets": [
+    {
+      "name": "guild_invite",
+      "opcode": "0x510012",
+      "payload": "200e24009210000092100000018002700000000000000100000002000000030000000400000005000000d2040000507070707070707050707070707070474747474747474747",
+      "synthetic_guids": [
+        "01800270"
+      ],
+      "rewritten": [
+        "the inviter name replaced by a run of the same length",
+        "the surname replaced by a run of the same length",
+        "the guild name replaced by a run of the same length",
+        "the old guild name empty",
+        "realm ids set to 4242, the emblems to 1..5, the achievement points to 1234"
+      ]
+    },
+    {
+      "name": "guild_member_joined",
+      "opcode": "0x510032",
+      "payload": "01800308921000002400507070707070707070",
+      "synthetic_guids": [
+        "01800308"
+      ],
+      "rewritten": [
+        "the player guid synthetic with the player type nibble",
+        "the name replaced by a run of the same length",
+        "the surname empty",
+        "the realm id set to 4242"
+      ]
+    },
+    {
+      "name": "guild_command_result",
+      "opcode": "0x510002",
+      "payload": "0001085070707070707070",
+      "synthetic_guids": null,
+      "rewritten": [
+        "the name replaced by a run of the same length"
+      ]
+    }
+  ]
+}

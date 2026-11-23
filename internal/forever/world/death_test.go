@@ -421,8 +421,44 @@ func unitValuesBody(retailBit int, write func(*wire.Buffer)) []byte {
 	v.WriteU32(1 << objects.TypeUnit)
 	classic := 0
 	{
-		// classicUnitBit for a retail bit <= 71 is the bit itself (UpdateFields.cpp:1322-1335).
+		// classicUnitBit (UpdateFields.cpp:1322-1348), the realm's two steps on: a retail bit <= 71 is the bit
+		// itself, and the groups above it are renumbered.
 		c := retailBit
+		switch {
+		case c == 230:
+			c = 141
+		case c == 231:
+			c = 86
+		case c == 232:
+			c = 87
+		case c == 70:
+			c = 71
+		case c == 71:
+			c = 70
+		case c <= 71:
+		case c <= 84:
+			c++
+		case c <= 92:
+			c += 3
+		case c <= 95:
+			c += 4
+		case c == 96:
+		case c <= 101:
+			c += 3
+		case c <= 105:
+			c += 4
+		case c <= 122:
+			c += 5
+		case c <= 127:
+			c += 6
+		case c == 128:
+		case c <= 133:
+			c += 5
+		case c == 134:
+			c = 140
+		default:
+			c += 9
+		}
 		if c >= 140 {
 			c++
 		}

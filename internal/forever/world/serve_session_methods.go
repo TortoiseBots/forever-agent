@@ -613,6 +613,17 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("leave_group", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.serveLeaveGroup(ctx)
 	}))
+	// The guild invite flow (#113): each hand sends its packet and answers only once the state it changes is read
+	// back. The decline's answer is the core's silence, so it has no wait.
+	srv.Register("accept_guild_invite", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.serveAcceptGuildInvite(ctx)
+	}))
+	srv.Register("decline_guild_invite", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.serveDeclineGuildInvite()
+	}))
+	srv.Register("guild_leave", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.serveGuildLeave(ctx)
+	}))
 	// Group control (#95 G2): each sends its packet and answers only once the readback confirms it.
 	srv.Register("promote", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {
 		return serveEmpty{}, s.groupPromote(ctx, p.Name)

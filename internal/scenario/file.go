@@ -152,6 +152,9 @@ type Step struct {
 	MatchRe string `json:"-"`
 	HasRe   bool   `json:"-"`
 	Len     *int64 `json:"-"`
+	// Absent makes the check pass only when path is not in the result at all
+	// (an omitted JSON key), the form a "status has no guild" check takes.
+	Absent bool `json:"-"`
 
 	SettleS    float64 `json:"-"`
 	HasSettleS bool    `json:"-"`
@@ -415,7 +418,7 @@ var stepFields = map[string]map[string]bool{
 	"expect":     {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "timeout_s": true, "capture": true},
 	"expect_not": {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "kind": true, "prefix": true, "channel": true, "source": true, "match": true, "within_s": true},
 	"check_db":   {"do": true, "note": true, "name": true, "on_fail": true, "within_s": true, "op": true, "table": true, "where": true, "rows": true, "item": true, "count": true, "server": true},
-	"check_rpc":  {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "method": true, "params": true, "path": true, "equals": true, "match": true, "len": true, "within_s": true, "timeout_s": true},
+	"check_rpc":  {"do": true, "note": true, "name": true, "on_fail": true, "session": true, "method": true, "params": true, "path": true, "equals": true, "match": true, "len": true, "absent": true, "within_s": true, "timeout_s": true},
 }
 
 func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
@@ -820,8 +823,22 @@ func parseStep(raw json.RawMessage, n int, inFinally bool) (*Step, error) {
 		_, hasEq := kv["equals"]
 		_, hasRe := kv["match"]
 		_, hasLen := kv["len"]
-		if (hasEq && hasRe) || (hasEq && hasLen) || (hasRe && hasLen) || (!hasEq && !hasRe && !hasLen) {
-			return nil, fmt.Errorf("step %d (check_rpc): exactly one of equals, match, len", n)
+		_, hasAbsent := kv["absent"]
+		modes := 0
+		for _, has := range []bool{hasEq, hasRe, hasLen, hasAbsent} {
+			if has {
+				modes++
+			}
+		}
+		if modes != 1 {
+			return nil, fmt.Errorf("step %d (check_rpc): exactly one of equals, match, len, absent", n)
+		}
+		if hasAbsent {
+			var absent bool
+			if !g("absent", &absent) || !absent {
+				return nil, fmt.Errorf("step %d (check_rpc): absent must be true", n)
+			}
+			s.Absent = true
 		}
 		if hasEq {
 			var eq any

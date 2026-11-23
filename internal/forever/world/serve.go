@@ -866,6 +866,10 @@ type ServeStatus struct {
 	ComboPoints  uint8     `json:"combo_points"`
 	ComboTarget  GUID      `json:"combo_target,omitzero"`
 	GCDMS        int64     `json:"gcd_ms"`
+	// Guild is the character's own guild (UNIT_FIELD_GUILD_GUID), omitted while it has none; GuildName is the guild
+	// of the invite the last accept confirmed, empty when no accept has been confirmed this session.
+	Guild     GUID   `json:"guild,omitzero"`
+	GuildName string `json:"guild_name,omitempty"`
 	// State is the link's lifecycle: "online", "reconnecting" (see ReconnectAttempt/ReconnectLimit) or "offline".
 	State string `json:"state"`
 	// Error is why the link is not online: the drop's reason while reconnecting, the last attempt's failure (or
@@ -935,6 +939,10 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 		}
 	}
 	out.OnTaxi = s.selfOnTaxi() || s.taxiFlight.pending
+	out.Guild = GUID(s.selfGuildGUID())
+	if s.guild != nil && s.guild.accepted != nil {
+		out.GuildName = s.guild.accepted.GuildName
+	}
 	pts, ctarget := s.comboPoints()
 	out.ComboPoints = pts
 	if pts > 0 {

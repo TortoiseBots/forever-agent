@@ -340,6 +340,52 @@ func TestClientOpcodeTranslation(t *testing.T) {
 	}
 }
 
+// TestGuildOpcodesTranslate: the guild invite flow's six opcodes are the core's numbers and survive the translation
+// in both directions on the pinned build. A wrong constant is caught by the name, which is keyed by the core number.
+func TestGuildOpcodesTranslate(t *testing.T) {
+	table := NewOpcodeTable(realmBuild70707, realmBuild70707)
+	for _, c := range []struct {
+		core uint32
+		name string
+	}{
+		{SMSGGuildInvite, "SMSG_GUILD_INVITE"},
+		{SMSGGuildEventPlayerJoined, "SMSG_GUILD_EVENT_PLAYER_JOINED"},
+		{SMSGGuildCommandResult, "SMSG_GUILD_COMMAND_RESULT"},
+	} {
+		if got := ServerName(c.core); got != c.name {
+			t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w := table.TranslateServerCore(c.core)
+		if w == UnknownOpcode {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if got := table.TranslateServerWire(w); got != c.core {
+			t.Errorf("%s: wire 0x%06X named 0x%06X, want 0x%06X", c.name, w, got, c.core)
+		}
+	}
+	for _, c := range []struct {
+		core uint32
+		name string
+	}{
+		{CMSGGuildAcceptInvite, "CMSG_ACCEPT_GUILD_INVITE"},
+		{CMSGGuildDeclineInvitation, "CMSG_GUILD_DECLINE_INVITATION"},
+		{CMSGGuildLeave, "CMSG_GUILD_LEAVE"},
+	} {
+		if got := ClientName(c.core); got != c.name {
+			t.Errorf("ClientName(0x%06X) = %q, want %q", c.core, got, c.name)
+		}
+		w, ok := table.WireForClient(c.core)
+		if !ok {
+			t.Errorf("%s has no wire number", c.name)
+			continue
+		}
+		if got := table.TranslateClientWire(w); got != c.core {
+			t.Errorf("client wire 0x%06X named 0x%06X, want %s", w, got, c.name)
+		}
+	}
+}
+
 // TestPetOpcodesTranslate: the seven pet opcodes of round P1 are in the core's tables and survive the translation
 // in both directions. The three client packets are explicit entries of the client's own table (0x3F0021, 0x3F0022
 // and 0x3F0026), not the plain group arithmetic, so a body is pinned to the number the real client sends.
