@@ -1,0 +1,94 @@
+{
+  "scenario": "forever-instance-entry",
+  "description": "Two Forever serve slots grouped: A invites B and B accepts (the K3 sample's steps), then A takes the Ragefire Chasm entrance trigger. Both sessions report map 389 and both event logs carry the serve's map_change session event.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 20,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "A and B group: invite, accept, both read in_group"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "invite",
+      "params": {
+        "name": "${B.character}"
+      }
+    },
+    {
+      "do": "rpc",
+      "session": "B",
+      "method": "accept_invite"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "check_rpc",
+      "session": "B",
+      "method": "party",
+      "path": "in_group",
+      "equals": true,
+      "within_s": 5
+    },
+    {
+      "do": "section",
+      "title": "A takes the entrance; the group is on map 389"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "area_trigger",
+      "params": {
+        "id": 4712
+      }
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "map",
+      "equals": 389,
+      "within_s": 10
+    },
+    {
+      "do": "check_rpc",
+      "session": "B",
+      "method": "status",
+      "path": "map",
+      "equals": 389,
+      "within_s": 10
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "kind": "session",
+      "match": "map_change",
+      "timeout_s": 20
+    },
+    {
+      "do": "expect",
+      "session": "B",
+      "kind": "session",
+      "match": "map_change",
+      "timeout_s": 20
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "scenario": "forever-patrol-read",
+  "description": "One Forever serve slot: two units reads 3 s apart, each inside a 60 yd radius, pin two different positions of the patrol creature (the fake serve walks it 5 yd per second of wall clock). A creature that stood still would never answer either check.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "continue",
+  "max_minutes": 5,
+  "steps": [
+    {
+      "do": "section",
+      "title": "first units read: the patrol creature is at its first pinned position"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "within": 60
+      },
+      "path": "0.x",
+      "equals": 110,
+      "within_s": 60
+    },
+    {
+      "do": "sleep",
+      "seconds": 3
+    },
+    {
+      "do": "section",
+      "title": "second units read: the creature has moved on to the second position"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "units",
+      "params": {
+        "within": 60
+      },
+      "path": "0.x",
+      "equals": 140,
+      "within_s": 60
+    }
+  ]
+}
