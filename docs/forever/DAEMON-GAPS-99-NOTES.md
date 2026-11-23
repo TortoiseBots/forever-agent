@@ -53,8 +53,19 @@ alive and always confirms the selection first. The raw `gm` path's classifier is
 `mount_item.go`: the bag item `entry` is used once through the item-use path (`CMSG_USE_ITEM`) with the on-use spell the
 caller names, and the existing display wait decides (non-zero `UNIT_FIELD_MOUNTDISPLAYID`, or a refusing
 `SMSG_MOUNT_RESULT`, `SpellPackets.cpp:1156`). The item's on-use spell lives in its ItemEffect row, which is not a
-queried record here (`use_item` says the same), so an entry alone is refused by name instead of guessed. The act verb
-`mount entry=N spell=M` does the same. Taxi and mount guards for flights are #107's.
+queried record here (`use_item` says the same), so an entry alone is refused by name instead of guessed.
+
+The live re-check (#99) showed what that row holds for a ForeverCore mount item: the on-use spell is a learn spell
+(55884) and the mount spell is the item's ON_LEARN effect (458 for the Brown Horse Bridle; `ItemTemplate.h:126,132`).
+`Player::CastItemUseSpell` (Player.cpp:9707-9744) casts the on-use spell with the item, `Spell::EffectLearnSpell`
+(SpellEffects.cpp:2170-2214) then learns the ON_LEARN spell, and no display follows. The call therefore uses the item
+once, reads the spell `SMSG_LEARNED_SPELLS` names during the use, casts it when it is a mount spell
+(`spells.IsMount`) and waits for the display from that cast. A spell already known teaches nothing
+(`Player::LearnSpell` sends no packet for a known spell, Player.cpp:3521-3536), so a named spell the character knows
+and that is a mount spell is cast without the item, and the spell an earlier use of the same item taught is reused
+the same way (`itemLearn.taught`). A use that teaches several spells, a spell that is not a mount, a use that
+teaches nothing, a refused cast and a dropped use each name their own step. The act verb `mount entry=N spell=M` does
+the same and its line names the taught spell. Taxi and mount guards for flights are #107's.
 
 ## Create on login
 

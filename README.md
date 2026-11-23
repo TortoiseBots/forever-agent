@@ -164,7 +164,12 @@ The feature rounds add `inv`, `equip`, `store`, `swap`, `split`, `destroy`, `use
 its value. The spell must be one the character knows (`SMSG_SEND_KNOWN_SPELLS`) and is cast once; the wait for the
 display is 4 s and a silent server is a clear failure, not a second cast. A character already mounted is answered
 as it is. `{"entry": N, "spell": M}` is the item form: the bag item N is used once (`CMSG_USE_ITEM`, the item's
-on-use spell M is named by the caller) and the same display wait decides; an entry alone is refused by name. `dismount` sends the empty `CMSG_CANCEL_MOUNT_AURA`
+on-use spell M is named by the caller) and the same display wait decides; an entry alone is refused by name. On
+ForeverCore a mount item's on-use spell is a learn spell (55884) and the mount spell is the item's ON_LEARN effect
+(458 for the Brown Horse Bridle): the use teaches it (`SMSG_LEARNED_SPELLS`) and the call casts the one mount spell
+it taught, then waits for the display. A spell already known teaches nothing, so a named spell the character knows
+and that is a mount spell is cast without the item, and so is the spell an earlier use of the same item taught.
+`dismount` sends the empty `CMSG_CANCEL_MOUNT_AURA`
 (SpellHandler.cpp:338) and is done when the field reaches zero within 2 s; a character on foot answers without a
 packet.
 

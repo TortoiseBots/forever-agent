@@ -146,6 +146,11 @@ func (f *itemWorld) server(core uint32, payload []byte) {
 		}
 	case wire.SMSGCastFailed, wire.SMSGSpellGo, wire.SMSGSpellStart:
 		f.s.handleCombat(worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload})
+	case wire.SMSGLearnedSpells:
+		// A learned spell goes through the session's own dispatch: the spell book owns that packet.
+		if err := f.s.handle(f.s.ctx, event{p: worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload}}); err != nil {
+			f.t.Fatalf("%s: %v", wire.ServerName(core), err)
+		}
 	default:
 		f.t.Fatalf("the fake has no answer for %s", wire.ServerName(core))
 	}
