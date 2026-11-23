@@ -72,8 +72,15 @@ type Commander interface {
 	RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error)
 	// CommanderStatus reads a commander's binding card (`.tb commander status <name>`, every card for an empty
 	// name): a read, never an order. Each bound bot's record carries the module's own guid of it, which a watch
-	// needs because its observer is neither in the party nor, as a rule, in view of it.
+	// needs because its observer is neither in the party nor, as a rule, in view of it. A raid watch also reads the
+	// card's own raid flag and each member's subgroup (1-8) from it.
 	CommanderStatus(ctx context.Context, commander string) (tbcmd.CommanderReport, error)
+	// ConvertRaid turns the group this character leads into a raid (CMSG_CONVERT_RAID) and waits for the roster that
+	// shows it (SPEC #108 R2). RaidMove moves a member to a subgroup (1-8) with CMSG_CHANGE_SUB_GROUP. They are the
+	// group layer's own sends, gated there by the rank rule and read back by the roster: a raid watch sends them
+	// before PREPARE, and the watch sends no order at all after its run starts.
+	ConvertRaid(ctx context.Context) error
+	RaidMove(ctx context.Context, name string, subgroup int) error
 }
 
 // World is the commander's own client: where it stands, what it sees and the one client packet the entry phase needs.

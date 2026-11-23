@@ -154,6 +154,13 @@ type Config struct {
 	// Watch runs the watch machine (dungeon-watch) instead of the driver's own run: PREPARE and ENTER as
 	// dungeon-run does, then the module's run, and from then on no order of ours.
 	Watch bool
+	// Raid makes that watch a raid watch (forever raid-watch): the plan is a raid plan (Route.Raid), the party is its
+	// size (10, 20 or 40), the commander's card must show Raid and at least that many members before PREPARE (one
+	// convert_raid when this character leads the group), and Layout is applied with raid_move.
+	Raid bool
+	// Layout is the raid watch's layout, in the order the file named it: a bot's name and the subgroup (1-8) it is
+	// moved to before PREPARE. Empty sends no move.
+	Layout []RaidSlot
 	// Watchdog overrides Limits.Watchdog; Poll overrides Limits.WatchPoll.
 	Watchdog time.Duration
 	Poll     time.Duration
@@ -211,6 +218,8 @@ type Result struct {
 	Exit        int
 	Trace       string
 	SummaryFile string
+	// RaidSummaryFile is a raid watch's summary.json (the tb-raid-walk shape), when the watch had an --out folder.
+	RaidSummaryFile string
 	// FightUnresolved is set when the stop left a fight running: nothing was sent at the stop.
 	FightUnresolved bool
 	// StopUnconfirmed is set when a watch's cleanup phase ended with the module's record still not stopped: the
@@ -304,6 +313,9 @@ type Run struct {
 	// commander is the module's own party commander, from its roster: the bot the party is bound to and the one a
 	// watched run has to bring to the tank's side. It is never the character this client runs.
 	commander string
+	// partyRoles is each adopted party member's role word (tank, healer, dps), by lower-case name: the raid summary's
+	// formation and the healer's follow distance read it. Empty for a run that names its own five.
+	partyRoles map[string]string
 	// memberGUID is a watched party member's guid by its lower-case name, once known: from the commander's binding
 	// card (the module's own guid of each bound bot, which needs no view of the party) or from this client's model.
 	// The first answer is kept, so a member's identity never changes within a run. cardReadAt is the last card
@@ -352,6 +364,10 @@ type fight struct {
 func New(cfg Config, route *Route, cmd Commander, w World, walk Walker, clock Clock) *Run {
 	if cfg.Enter == "" {
 		cfg.Enter = "tele"
+	}
+	if cfg.Raid {
+		// A raid is watched, never led by this client: the module's own run leads it (SPEC #108 R3).
+		cfg.Watch = true
 	}
 	if cfg.Limits.Prepare == 0 {
 		cfg.Limits = DefaultLimits()
@@ -606,7 +622,7 @@ func (r *Run) reportComplete() bool {
 	if r.rep == nil || r.repErr != nil {
 		return false
 	}
-	if r.rep.Records != len(r.rep.Bots) || r.rep.Count < r.rep.Records || len(r.rep.Bots) != 5 {
+	if r.rep.Records != len(r.rep.Bots) || r.rep.Count < r.rep.Records || len(r.rep.Bots) != r.partySize() {
 		return false
 	}
 	for _, name := range r.cfg.Party {
@@ -807,7 +823,7 @@ func (r *Run) wipeNow() bool {
 	if r.rep.End["wipe"] == "yes" {
 		return true
 	}
-	if len(r.deadBots()) == 5 {
+	if len(r.deadBots()) == r.partySize() {
 		return true
 	}
 	tank, healer := r.bot(r.cfg.Tank()), r.bot(r.cfg.Healer())
@@ -930,13 +946,57 @@ func (r *Run) botGUIDs() map[string]string {
 }
 
 // roleName is a party member's label, the only identifier the summary and the trace carry: tank, healer, dps1..dps3.
+// A raid is larger than five, so its labels come from the roster's own roles instead (tank1, tank2, heal1.., dps5):
+// the slot words would call a second tank or healer a damage dealer.
 func (r *Run) roleName(name string) string {
 	for i, n := range r.cfg.Party {
 		if n == name {
+			if r.cfg.Raid {
+				if label, ok := r.raidRoleLabel(name); ok {
+					return label
+				}
+			}
 			return roleAt(i)
 		}
 	}
 	return "party"
+}
+
+// raidRoleLabel is a raid member's label: its roster role and its place among that role's members (tank1, tank2,
+// heal1, dps5). false when the roster's roles do not name it.
+func (r *Run) raidRoleLabel(name string) (string, bool) {
+	role := strings.ToLower(r.partyRoles[partyNameKey(name)])
+	word := map[string]string{"tank": "tank", "healer": "heal", "dps": "dps"}[role]
+	if word == "" {
+		return "", false
+	}
+	n := 0
+	for _, other := range r.cfg.Party {
+		if strings.ToLower(r.partyRoles[partyNameKey(other)]) != role {
+			continue
+		}
+		n++
+		if strings.EqualFold(other, name) {
+			break
+		}
+	}
+	return fmt.Sprintf("%s%d", word, n), true
+}
+
+// traceRoleOf is the trace's role word for a member: one of tank, heal and dps. A raid reads the roster's own role
+// (its second tank is a tank, not a damage dealer by slot); a dungeon party keeps the slot's word.
+func (r *Run) traceRoleOf(name string, slot int) string {
+	if r.cfg.Raid {
+		switch strings.ToLower(r.partyRoles[partyNameKey(name)]) {
+		case "tank":
+			return "tank"
+		case "healer":
+			return "heal"
+		case "dps":
+			return "dps"
+		}
+	}
+	return traceRole(slot)
 }
 
 // roleAt is the label of the party slot.
@@ -959,7 +1019,7 @@ func (r *Run) PartyMembers() []trace.Member { return r.partyMembers() }
 func (r *Run) partyMembers() []trace.Member {
 	var out []trace.Member
 	for i, name := range r.cfg.Party {
-		m := trace.Member{G: r.roleName(name), Name: r.roleName(name), Role: traceRole(i)}
+		m := trace.Member{G: r.roleName(name), Name: r.roleName(name), Role: r.traceRoleOf(name, i)}
 		if g, ok := r.world.PlayerGUID(name); ok && !g.IsZero() {
 			m.G = g.String()
 		}

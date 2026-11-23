@@ -94,6 +94,17 @@ func (c *dungeonCommander) CommanderStatus(ctx context.Context, commander string
 	return rep, dungeonPortErr(err)
 }
 
+// ConvertRaid and RaidMove are the group layer's raid calls (SPEC #108 R2): this character's own client packets, sent
+// by the session's group layer, gated there by the raid's rank rule and read back by the party roster. They are not
+// `.tb` lines, so they never pass the command transport.
+func (c *dungeonCommander) ConvertRaid(ctx context.Context) error {
+	return dungeonPortErr(c.s.convertRaid(ctx))
+}
+
+func (c *dungeonCommander) RaidMove(ctx context.Context, name string, subgroup int) error {
+	return dungeonPortErr(c.s.raidMove(ctx, wire.EmptyGUID, name, subgroup, ""))
+}
+
 func (c *dungeonCommander) RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error) {
 	rep, err := c.client.RunEvents(ctx, leader, since, hasSince)
 	return rep, dungeonPortErr(err)
