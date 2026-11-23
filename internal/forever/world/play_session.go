@@ -79,7 +79,29 @@ func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
 		World:  dungeonWorld{s: s},
 		Walker: dungeonWalker{s: s},
 		Clock:  dungeonClock{s: s},
+		Sight:  playSight{s: s},
 	}
+}
+
+// playSight is the pull's line-of-sight stand-in: the navmesh's walkability ray over the run's map (the same one
+// plan-scout's walk_ray answers; the agent holds no collision geometry). A mesh that cannot say (no navmesh folder, an end
+// off the mesh) is unknown, and the run leaves the judging to the module.
+type playSight struct {
+	s *session
+}
+
+var _ driver.Sight = playSight{}
+
+func (w playSight) InSight(from, to driver.Vec3) (in, known bool) {
+	p, err := w.s.navPlanner()
+	if err != nil {
+		return false, false
+	}
+	ray, err := p.Raycast(w.s.world.MapID(), from, to)
+	if err != nil || !ray.Known {
+		return false, false
+	}
+	return ray.Clear, true
 }
 
 // --- Owner: bot-commands v1 over the command channel ---

@@ -246,6 +246,9 @@ type PlayPorts struct {
 	Clock  Clock
 	// Combat is the session's combat log, optional: the run copies its rows into its record for the spell judge.
 	Combat CombatLog
+	// Sight is the line-of-sight stand-in the pull's close-in reads, optional: with none, the pull goes to the module
+	// as before and only its refusal says the tank could not see the skull.
+	Sight Sight
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -261,6 +264,9 @@ type playRun struct {
 	// sent is every line that passed the send gate, in order.
 	sent  []string
 	notes []string
+
+	// sightBlocked is the last look's verdict of the pull in hand: the tank could not see the skull.
+	sightBlocked bool
 
 	stopReason string
 	lost       bool
