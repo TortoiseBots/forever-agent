@@ -3,7 +3,9 @@
 package navmesh
 
 // The real repack mmaps (never committed): set FOREVER_MMAPS_DIR to the folder holding MMMM.mmap and
-// MMMM_XX_YY.mmtile files. The tests run on the laptop only and skip in CI.
+// MMMM_XX_YY.mmtile files. Without the folder the tests skip. CI's forever-navmesh job fetches a subset built by
+// tools/forevermeshsubset and marks it with FOREVER_MMAPS_SUBSET=1 (the every-tile test drops its whole-repack
+// floor for a subset folder, docs/CI.md).
 
 import (
 	"encoding/binary"
@@ -480,7 +482,10 @@ func TestForeverRealEveryTileLoads(t *testing.T) {
 		maps++
 	}
 	t.Logf("loaded %d tiles of %d maps, none refused", tiles, maps)
-	if maps < 70 || tiles < 3000 {
+	// The whole-repack floor is the laptop run's check that the folder is the full repack. CI fetches a
+	// tools/forevermeshsubset folder (Ragefire Chasm and a block of map 0), which the forever-navmesh job marks with
+	// FOREVER_MMAPS_SUBSET; there every tile present must still load, but the count is the subset's.
+	if os.Getenv("FOREVER_MMAPS_SUBSET") == "" && (maps < 70 || tiles < 3000) {
 		t.Fatalf("%d tiles of %d maps, want the whole repack", tiles, maps)
 	}
 }
