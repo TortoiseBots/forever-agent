@@ -29,6 +29,13 @@ func eventLine(e events.Event) string {
 			return raw
 		}
 	}
+	// A party row's text is the name the packet carried (the inviter for an invite); its packet state ("invite",
+	// "roster", ...) is in data, so a scenario can wait for an invite without knowing the bot's name.
+	if e.Kind == events.KindParty {
+		if state, ok := e.Data["state"].(string); ok && state != "" && !strings.Contains(e.Text, state) {
+			return e.Text + " " + state
+		}
+	}
 	return e.Text
 }
 

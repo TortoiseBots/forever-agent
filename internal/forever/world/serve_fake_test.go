@@ -27,13 +27,16 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
+// serveInviterGUID is the GUID the fake's invite and its accept roster carry.
+var serveInviterGUID = wire.GUID{Low: 0x9001, High: 0x0800000000000000}
+
 // serveDaemon answers the packets the serving methods can send. It is deliberately tolerant: this test is about the
 // daemon's dispatch and typed answers, while the opcode translation and the packet layouts are pinned by the
 // one-shot scenarios.
 func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	guid := mustGUID(f.clientGUID)
 	table := wire.NewOpcodeTable(70707, 70707)
-	inviter := wire.GUID{Low: 0x9001, High: 0x0800000000000000}
+	inviter := serveInviterGUID
 	partyGUID := wire.GUID{Low: 0xBEEF, High: 0x1B00000000000000}
 	f.mu.Lock()
 	f.serveSessions++
@@ -107,7 +110,11 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 	}
 	if f.serveInvite {
 		// A pending invite for accept_invite: the inviter leads the roster the accept's answer brings.
-		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite("Inviter", inviter, true))
+		inviteName := f.serveInviteName
+		if inviteName == "" {
+			inviteName = "Inviter"
+		}
+		c.writeFrame(fakeSMSGPartyInvite, fakePartyInvite(inviteName, inviter, true))
 	}
 	if f.serveSummon {
 		// The summoner's name first, so the offer's event names it (the server named it in an earlier query),
@@ -325,6 +332,8 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 					f.failf("serve: the client declined an invite it was told to accept")
 					return
 				}
+				// The roster's leader is the invite's GUID; its name stays "Inviter" even when a test names the
+				// invite otherwise, so a result taken from the roster leader names the wrong bot.
 				c.writeFrame(fakeSMSGPartyUpdate, fakePartyUpdate(partyGUID, inviter, guid, []wire.GUID{inviter, guid}, []string{"Inviter", "Testchar"}, false))
 			case "refuse":
 				c.writeFrame(fakeSMSGPartyResult, fakePartyResult(0, 4, "Inviter")) // group-full

@@ -288,7 +288,10 @@ type fakeServer struct {
 	serveInvite   bool
 	serveAccept   string
 	serveAccepted bool
-	serveLeft     bool // the fake saw CMSG_LEAVE_GROUP
+	// serveInviteName names the inviter the pending invite carries (default "Inviter"), while the roster the accept
+	// brings names its leader "Inviter": a result taken from the roster leader instead of the invite differs.
+	serveInviteName string
+	serveLeft       bool // the fake saw CMSG_LEAVE_GROUP
 	// Round #110: the summon offer. serveSummon sends one SMSG_SUMMON_REQUEST after the create blocks, with the
 	// summoner's name in a name answer first. summonGUID is the summoner; summonAnswers is what the fake saw,
 	// under mu.
