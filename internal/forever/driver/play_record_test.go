@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // playRecordRig is a fight rig whose fake also casts (a scripted combat log) and answers `.bot who`.
@@ -162,5 +165,105 @@ func TestPlayTraceCarriesNoCharacterNames(t *testing.T) {
 				t.Fatalf("%s names %q", filepath.Base(file), name)
 			}
 		}
+	}
+}
+
+// petFrameRig is a fight rig whose hunter bot's pet stands by the party, with the trace written. One bot falls behind
+// on the walk itself, so the walk's party polls (the walk-time samples) write frames before the fight's ticks do.
+func petFrameRig(t *testing.T) (*playRig, wire.GUID) {
+	t.Helper()
+	pet := fightGUID(7)
+	straggled := false
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+		f.EmitCasts = true
+		f.AddUnit(Unit{GUID: pet, Entry: 11320, Pos: Vec3{35, 2, 0}, Owner: f.botGUID(playBots[2])})
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if straggled {
+				return
+			}
+			straggled = true
+			delete(f.Moved, "botfour")
+			f.BotPos["botfour"] = Vec3{f.SelfPos[0] + 60, f.SelfPos[1], f.SelfPos[2]}
+			// It catches up ten seconds later: a few party polls of the walk, each one a frame.
+			f.Clock.After(10*time.Second, func() { f.Moved["botfour"] = true })
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	rig.ports.Combat = rig.fake
+	return rig, pet
+}
+
+// TestPlayFrameCarriesPets: a party member's pet is the frame's pet, never one of its mobs — in the walk frames and in
+// the fight frames.
+func TestPlayFrameCarriesPets(t *testing.T) {
+	rig, pet := petFrameRig(t)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	walk, fight := 0, 0
+	for _, fr := range tf.Frames {
+		inFight := false
+		for _, b := range fr.Bots {
+			if b.Combat {
+				inFight = true
+			}
+		}
+		isPet := false
+		for _, p := range fr.Pets {
+			if strings.EqualFold(p.G, pet.String()) {
+				isPet = true
+			}
+		}
+		for _, m := range fr.Mobs {
+			if strings.EqualFold(m.G, pet.String()) {
+				t.Fatalf("the pet is a mob in the frame at %d ms", fr.T)
+			}
+		}
+		switch {
+		case isPet && inFight:
+			fight++
+		case isPet:
+			walk++
+		}
+	}
+	if walk == 0 {
+		t.Fatal("no walk frame carries the pet")
+	}
+	if fight == 0 {
+		t.Fatal("no fight frame carries the pet")
+	}
+}
+
+// TestBughuntPetRuleRunsOnPlayTrace: the bug hunter loads a player run's trace and sees the pet a watch carries too, so
+// its pet rule runs on a player run.
+func TestBughuntPetRuleRunsOnPlayTrace(t *testing.T) {
+	rig, _ := petFrameRig(t)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	r, err := bughunt.LoadWatch(rig.cfg.Out, "")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	pets := map[string]bool{}
+	for _, fr := range r.Frames {
+		for _, p := range fr.Pets {
+			pets[p.G] = true
+		}
+	}
+	if len(pets) != 1 {
+		t.Fatalf("loaded %d pet(s); want the hunter's one", len(pets))
+	}
+	if hits := bughunt.Rule7(r); len(hits) != 0 {
+		t.Fatalf("rule 7 flagged the idle pet: %+v", hits)
 	}
 }
