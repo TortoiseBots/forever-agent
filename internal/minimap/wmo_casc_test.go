@@ -353,7 +353,7 @@ func TestWMOBlockYardsFromClient(t *testing.T) {
 		}
 		perGroup := map[int][2]int{}
 		for _, b := range blocks {
-			if b.WMOID != f.root {
+			if b.WMOID != f.wmoID {
 				continue
 			}
 			h := perGroup[int(b.GroupNum)]
