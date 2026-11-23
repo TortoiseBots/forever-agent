@@ -68,5 +68,11 @@ byte is in this change or its tests.
 
 ## Gates
 
-- Full suite: `vm-test ta ~/wt-proof3` (RESULT line below).
-- Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --last-leg oggleflint`.
+- Full suite on the clean committed tree: `vm-test ta ~/wt-proof3` —
+  `RESULT: PASS  kind=ta wt=wt-proof3 sha=38290af3 dirty=0 files=2757 runner=yulon-ubuntu2` (rc=0, 834 s; the run
+  is `go test -count=1 -timeout 20m ./... && go vet ./...`).
+- Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --last-leg oggleflint`
+  ends `play: stop clear ... clear=true` with one BOSS state (the legs after oggleflint are not walked). With a
+  recording (`--out DIR --min-active 0`) the same run prints `card: CLEARED` and `verdict: PASS`, and the summary
+  carries `"last_leg": "oggleflint"`, `"clear": true`. (A `--dry` run without `--out` has no record, so `playVerdict`
+  answers `no-play-record` and the command exits non-zero — its long-standing behaviour, not this change.)
