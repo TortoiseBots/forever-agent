@@ -70,7 +70,7 @@ func TestParseGuildInvite(t *testing.T) {
 	if inv.InviterRealm != 4242 || inv.GuildRealm != 4242 || inv.OldGuildRealm != 0 {
 		t.Fatalf("realms %d %d %d", inv.InviterRealm, inv.GuildRealm, inv.OldGuildRealm)
 	}
-	if want := (wire.GUID{Low: 2}); inv.Guild != want {
+	if want := (wire.GUID{Low: 2, High: uint64(28) << 58}); inv.Guild != want {
 		t.Fatalf("guild guid %s, want %s", inv.Guild, want)
 	}
 	if !inv.OldGuild.IsZero() {
@@ -145,9 +145,9 @@ func TestParseGuildCommandResult(t *testing.T) {
 // (GuildPackets.cpp:159-162). Decline and leave carry no body at all (Opcodes.h:429, :439, GuildHandler.cpp:82,
 // :125-129).
 func TestBuildGuildAccept(t *testing.T) {
-	g := wire.GUID{Low: 2}
+	g := wire.GUID{Low: 2, High: uint64(28) << 58}
 	b := BuildAccept(g)
-	want := []byte{0x01, 0x00, 0x02}
+	want := []byte{0x01, 0x80, 0x02, 0x70}
 	if !bytes.Equal(b, want) {
 		t.Fatalf("BuildAccept(%s) = % X, want % X", g, b, want)
 	}

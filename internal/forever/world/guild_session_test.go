@@ -190,8 +190,8 @@ func TestStatusGuildField(t *testing.T) {
 	}
 
 	// The unit field names one guild and the accepted invite another: the answer must name the field's guild.
-	fieldGuild := wire.GUID{Low: 2}
-	inviteGuild := wire.GUID{Low: 0xAB}
+	fieldGuild := wire.GUID{Low: 2, High: uint64(28) << 58}
+	inviteGuild := wire.GUID{Low: 0xAB, High: uint64(28) << 58}
 	setSelfGuild(t, s, self, fieldGuild)
 	s.guildInit().accepted = &guild.Invite{Guild: inviteGuild, GuildName: "GGGGGGGGG"}
 
@@ -227,7 +227,7 @@ func TestServeAcceptGuildInviteNoInvite(t *testing.T) {
 // join arrives, then succeeds; the invite is consumed by the accept, so a second accept has nothing to accept.
 func TestServeAcceptGuildInviteWaitsForJoin(t *testing.T) {
 	s, f, self := newGuildWorld(t)
-	guildGUID := wire.GUID{Low: 2}
+	guildGUID := wire.GUID{Low: 2, High: uint64(28) << 58} // HighGuid::Guild (ObjectGuid.h:138): a packed GUID with no type byte reads back empty (ObjectGuid.cpp operator>>)
 	if err := s.handleGuild(worldconn.Packet{Core: wire.SMSGGuildInvite, Payload: buildGuildInvitePacket(guildGUID, "GGGGGGGGG", "Pppppppp")}); err != nil {
 		t.Fatalf("the invite: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestServeAcceptGuildInviteTimesOut(t *testing.T) {
 	old := guildConfirmWait
 	guildConfirmWait = 60 * time.Millisecond
 	t.Cleanup(func() { guildConfirmWait = old })
-	if err := s.handleGuild(worldconn.Packet{Core: wire.SMSGGuildInvite, Payload: buildGuildInvitePacket(wire.GUID{Low: 2}, "GGGGGGGGG", "Pppppppp")}); err != nil {
+	if err := s.handleGuild(worldconn.Packet{Core: wire.SMSGGuildInvite, Payload: buildGuildInvitePacket(wire.GUID{Low: 2, High: uint64(28) << 58}, "GGGGGGGGG", "Pppppppp")}); err != nil {
 		t.Fatalf("the invite: %v", err)
 	}
 	// The server's refusal arrives with the accept: it changes nothing, it is only named.
@@ -306,7 +306,7 @@ func TestServeGuildLeaveNotInGuild(t *testing.T) {
 		t.Fatalf("a refused leave sent %d packet(s)", n)
 	}
 
-	setSelfGuild(t, s, self, wire.GUID{Low: 2})
+	setSelfGuild(t, s, self, wire.GUID{Low: 2, High: uint64(28) << 58})
 	s.guildInit().accepted = &guild.Invite{GuildName: "GGGGGGGGG"}
 	done := make(chan error, 1)
 	go func() { done <- s.serveGuildLeave(context.Background()) }()
