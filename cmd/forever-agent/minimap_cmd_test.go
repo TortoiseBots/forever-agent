@@ -73,3 +73,35 @@ func TestMinimapForeverRunsRunForever(t *testing.T) {
 		t.Fatalf("the refusal does not name worldmap: %q", stderr.String())
 	}
 }
+
+// TestCascAndClientTogetherRefused: --casc replaces --client. Giving both is a usage error that names both, a
+// --forever run needs one of them, and --casc or --product without --forever is refused the other way round.
+func TestCascAndClientTogetherRefused(t *testing.T) {
+	dir := t.TempDir()
+	for name, args := range map[string][]string{
+		"both":          {"minimap-extract", "--forever", "--client", dir, "--casc", dir, "--db2", dir, "--out", dir},
+		"neither":       {"minimap-extract", "--forever", "--db2", dir, "--out", dir},
+		"product":       {"minimap-extract", "--forever", "--client", dir, "--product", "wow", "--db2", dir, "--out", dir},
+		"casc no fv":    {"minimap-extract", "--client", dir, "--casc", dir, "--out", dir},
+		"product no fv": {"minimap-extract", "--client", dir, "--product", "wow", "--out", dir},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(t.Context(), args, &out, &errb); code != exitUsage {
+			t.Errorf("%s: exit %d, want %d (%s)", name, code, exitUsage, errb.String())
+		}
+	}
+	var out, errb bytes.Buffer
+	code := run(t.Context(), []string{"minimap-extract", "--forever", "--client", dir, "--casc", dir, "--db2", dir, "--out", dir}, &out, &errb)
+	if code != exitUsage || !strings.Contains(errb.String(), "--client") || !strings.Contains(errb.String(), "--casc") {
+		t.Fatalf("both flags: exit %d, stderr %q, want a refusal naming --client and --casc", code, errb.String())
+	}
+	// With --casc, --prefer worldmap is allowed: the run goes on to open the install (there is none here) instead of
+	// being refused as a usage error, which is what the listfile form gets.
+	out.Reset()
+	errb.Reset()
+	code = run(t.Context(), []string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir, "--out", dir,
+		"--prefer", "worldmap"}, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), ".build.info") {
+		t.Fatalf("--casc with --prefer worldmap: exit %d, stderr %q, want the install's .build.info read", code, errb.String())
+	}
+}

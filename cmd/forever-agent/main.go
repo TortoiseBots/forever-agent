@@ -176,7 +176,7 @@ func usage(w io.Writer) {
   forever-agent rotation list | show [--level N] <name|file> | check <file>...
   forever-agent dashboard [--listen 127.0.0.1:8790] [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR] [--plans-dir DIR[,DIR]] [--edit --mmaps-dir DIR]
   forever-agent dashboard-replay <recording-dir|file.jsonl> [--to host:port] [--speed N] [--max-gap D] [--loop] [--dry-run] [--i-know] | convert <api-dump-dir> [--out <dir>]
-  forever-agent minimap-extract --client DIR --out DIR [--maps 70,209|all-instances] [--mmaps DIR] [--list]
+  forever-agent minimap-extract --client DIR|--forever (--client DIR | --casc DIR [--product P]) --db2 DIR --out DIR [--maps 70,209|all-instances] [--mmaps DIR] [--list]
   forever-agent casc-cat --install DIR [--product P] --fdid N --out FILE
   forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot] [--carrier-chests] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)
   forever-agent plan-export --forever [--report] [--dir dungeons] [--mmaps DIR] [--stamp YYYYMMDDHHMMSS] [--force] --out DIR|FILE (<plan>... | --all-live)

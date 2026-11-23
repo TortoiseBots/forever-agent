@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/blp"
+	"github.com/pjerra/forever-agent/internal/casc"
 	"github.com/pjerra/forever-agent/internal/db2"
 )
 
@@ -21,7 +22,7 @@ import (
 // from Map.db2. An indoor map (a WMO dungeon) has no terrain tiles and gets the navmesh render.
 const (
 	foreverMinimapDir  = "world/minimaps"
-	foreverNoWorldMap  = "no world map picture: this client's world maps are not read (they are UiMapArt, not a 1.12 WorldMapArea)"
+	foreverNoWorldMap  = "no world map picture: a listfile folder has no world-map textures; --casc reads this client's UiMapArt maps"
 	foreverNoTiles     = "no minimap picture: the client has no terrain tiles for this map (an indoor dungeon is a WMO)"
 	foreverNoDirReason = "no minimap picture: the client extract has no world/minimaps folder"
 )
@@ -34,13 +35,33 @@ const (
 	foreverMaxPixels = 8192 * 8192
 )
 
-// foreverPrefer is the order the Forever sources are tried in: the tile picture, then the navmesh.
+// foreverPrefer is the order the Forever sources are tried in: the tile picture, then the navmesh. A CASC run
+// can also ask for the world map first; the listfile run has no world-map textures and refuses it.
 var foreverPrefer = []string{KindMinimap, KindNavmesh}
 
-// RunForever extracts the images of the chosen maps from the 1.60 client data: the loose minimap tiles
-// of a CASC extractor's listfile-named folder and Map.db2 of the server's extracted DBC folder. The
+// RunForever extracts the images of the chosen maps from the 1.60 client data: the loose minimap tiles of a CASC
+// extractor's listfile-named folder (ClientDir), or the install itself (CascDir, whose FileDataIDs give the WDT
+// terrain textures and the UiMapArt world-map textures), plus Map.db2 of the server's extracted DBC folder. The
 // files are the same <id>.png + <id>.json as Run's, so the dashboard and plan-diff read them unchanged.
 func RunForever(o Options) ([]Result, error) {
+	var src fileSource
+	switch {
+	case o.CascDir != "" && o.ClientDir != "":
+		return nil, errors.New("RunForever needs one of ClientDir and CascDir: --casc replaces --client")
+	case o.CascDir != "":
+		s, err := casc.Open(o.CascDir, o.Product)
+		if err != nil {
+			return nil, err
+		}
+		defer s.Close()
+		src = s
+	}
+	return runForever(o, src)
+}
+
+// runForever is RunForever with its texture source already open: a CASC install in a run, a test double in tests,
+// nil for the listfile folder.
+func runForever(o Options, src fileSource) ([]Result, error) {
 	logf := o.Log
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -50,8 +71,14 @@ func RunForever(o Options) ([]Result, error) {
 		prefer = foreverPrefer
 	}
 	for _, k := range prefer {
-		if k != KindMinimap && k != KindNavmesh {
-			return nil, fmt.Errorf("--prefer: %q is not a Forever source (minimap, navmesh)", k)
+		switch k {
+		case KindMinimap, KindNavmesh:
+		case KindWorldMap:
+			if src == nil {
+				return nil, errors.New("--prefer: worldmap needs --casc (this client's world maps are UiMapArt textures, not in a listfile folder)")
+			}
+		default:
+			return nil, fmt.Errorf("--prefer: %q is not a Forever source (minimap, worldmap with --casc, navmesh)", k)
 		}
 	}
 	if o.DB2Dir == "" {
@@ -111,8 +138,15 @@ func RunForever(o Options) ([]Result, error) {
 			return nil, err
 		}
 	}
+	var tables *cascTables
+	if src != nil {
+		var err error
+		if tables, err = openCASCTables(o.DB2Dir, logf); err != nil {
+			return nil, err
+		}
+	}
 	dirs, dirOK := foreverDirs(o.ClientDir)
-	if !dirOK {
+	if src == nil && !dirOK {
 		logf("%s: %s", o.ClientDir, foreverNoDirReason)
 	}
 	var out []Result
@@ -133,7 +167,18 @@ func RunForever(o Options) ([]Result, error) {
 				res.Error = err
 			}
 		}
-		if !dirOK {
+		if src != nil {
+			l, ok, reason, terr := terrainFromCASC(src, r.WdtFileDataID)
+			if terr != nil {
+				fail(terr)
+			}
+			if ok {
+				have[KindMinimap] = []Layer{l}
+			} else {
+				reasons[KindMinimap] = reason
+				notes = append(notes, reason)
+			}
+		} else if !dirOK {
 			reasons[KindMinimap] = foreverNoDirReason
 			notes = append(notes, foreverNoDirReason)
 		} else if tiles, terr := foreverTiles(dirs, r.Directory); terr != nil {
@@ -179,15 +224,28 @@ func RunForever(o Options) ([]Result, error) {
 				have[KindNavmesh] = []Layer{{Kind: KindNavmesh, Meta: nmeta, Img: nimg}}
 			}
 		}
-		// The dashboard always has a world-map slot; say why this client gives none instead of leaving
-		// the 1.12 wording to stand.
-		reasons[KindWorldMap] = foreverNoWorldMap
+		if src != nil {
+			l, ok, reason, werr := worldMapCASC(tables, src, r.ID, logf)
+			if werr != nil {
+				fail(werr)
+			}
+			if ok {
+				have[KindWorldMap] = []Layer{l}
+			} else {
+				reasons[KindWorldMap] = reason
+				notes = append(notes, reason)
+			}
+		} else {
+			// The dashboard always has a world-map slot; say why this client gives none instead of leaving
+			// the 1.12 wording to stand.
+			reasons[KindWorldMap] = foreverNoWorldMap
+		}
 		for _, k := range prefer {
 			if ls := have[k]; len(ls) > 0 && res.Kind == KindNone {
 				res.Kind = k
 			}
 		}
-		for _, k := range []string{res.Kind, KindMinimap, KindNavmesh} {
+		for _, k := range []string{res.Kind, KindMinimap, KindWorldMap, KindNavmesh} {
 			if k == KindNone {
 				continue
 			}
@@ -349,64 +407,112 @@ func foreverTiles(dirs map[string]string, directory string) (map[Tile]string, er
 	return out, nil
 }
 
+// tileLoader gives one tile's bytes with a name for the error messages, or errTileSkipped for a texture the
+// install does not hold.
+type tileLoader func(t Tile) (data []byte, name string, err error)
+
 // stitchFiles lays a map's loose tile pictures on one image, one tile at a time (a 64 x 64 map at
 // 256 px is 16384 px across; the decoded tiles must not all be held). Every tile is the same square
 // size, or the picture is refused: a mixed grid has no single PxPerYard for the reader of <id>.json.
 func stitchFiles(tiles map[Tile]string) (image.Image, Meta, error) {
-	r0, c0, r1, c1 := 1<<30, 1<<30, -1, -1
-	keys := make([]Tile, 0, len(tiles))
-	for t := range tiles {
-		r0, r1 = min(r0, t.Row), max(r1, t.Row)
-		c0, c1 = min(c0, t.Col), max(c1, t.Col)
-		keys = append(keys, t)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Row != keys[j].Row {
-			return keys[i].Row < keys[j].Row
-		}
-		return keys[i].Col < keys[j].Col
+	img, m, drawn, err := stitchTileGrid(sortedTileKeys(tiles), func(t Tile) ([]byte, string, error) {
+		data, err := os.ReadFile(tiles[t])
+		return data, filepath.Base(tiles[t]), err
 	})
-	first, err := decodeTile(tiles[keys[0]])
 	if err != nil {
-		return nil, Meta{}, err
+		return nil, m, err
 	}
-	px := first.Bounds().Dx()
-	m := Bounds(r0, c0, r1, c1, px)
-	if m.Width > foreverMaxSide || m.Height > foreverMaxSide || int64(m.Width)*int64(m.Height) > foreverMaxPixels {
-		return nil, m, fmt.Errorf("image would be %dx%d; the cap is %d px a side and %d px in all (%d MiB)",
-			m.Width, m.Height, foreverMaxSide, foreverMaxPixels, foreverMaxPixels*4>>20)
+	if drawn == 0 {
+		return nil, m, errors.New("none of the listed tiles is installed")
 	}
-	img := image.NewNRGBA(image.Rect(0, 0, m.Width, m.Height))
-	for i, t := range keys {
-		tile := first
-		if i > 0 {
-			if tile, err = decodeTile(tiles[t]); err != nil {
-				return nil, m, err
-			}
-		}
-		b := tile.Bounds()
-		if b.Dx() != px || b.Dy() != px {
-			return nil, m, fmt.Errorf("tile %s is %dx%d; the first tile is %d px", filepath.Base(tiles[t]), b.Dx(), b.Dy(), px)
-		}
-		at := image.Pt((t.Col-c0)*px, (t.Row-r0)*px)
-		draw.Draw(img, image.Rectangle{at, at.Add(image.Pt(px, px))}, tile, tile.Bounds().Min, draw.Src)
-	}
-	m.Source, m.Tiles, m.From = KindMinimap, len(keys), fromTerrain
 	return img, m, nil
 }
 
-// decodeTile reads and decodes one BLP tile.
-func decodeTile(path string) (*image.NRGBA, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// stitchTileGrid lays the tiles of a grid on one image, decoding one tile at a time. drawn is how many tiles it
+// laid (a skipped tile leaves a hole); a grid with no readable tile gives a nil picture and drawn 0. The Meta is
+// the grid's world bounds, which the world map overrides from its assignment.
+func stitchTileGrid(keys []Tile, load tileLoader) (*image.NRGBA, Meta, int, error) {
+	if len(keys) == 0 {
+		return nil, Meta{}, 0, errors.New("no tiles")
 	}
+	r0, c0, r1, c1 := 1<<30, 1<<30, -1, -1
+	for _, t := range keys {
+		r0, r1 = min(r0, t.Row), max(r1, t.Row)
+		c0, c1 = min(c0, t.Col), max(c1, t.Col)
+	}
+	decode := func(t Tile) (*image.NRGBA, string, error) {
+		data, name, err := load(t)
+		if err != nil {
+			return nil, name, err
+		}
+		img, err := decodeTileBytes(data, name)
+		return img, name, err
+	}
+	var first Tile
+	var firstImg *image.NRGBA
+	var firstName string
+	for _, t := range keys {
+		img, name, err := decode(t)
+		if errors.Is(err, errTileSkipped) {
+			continue
+		}
+		if err != nil {
+			return nil, Meta{}, 0, err
+		}
+		first, firstImg, firstName = t, img, name
+		break
+	}
+	if firstImg == nil {
+		return nil, Meta{}, 0, nil
+	}
+	px := firstImg.Bounds().Dx()
+	m := Bounds(r0, c0, r1, c1, px)
+	if m.Width > foreverMaxSide || m.Height > foreverMaxSide || int64(m.Width)*int64(m.Height) > foreverMaxPixels {
+		return nil, m, 0, fmt.Errorf("image would be %dx%d; the cap is %d px a side and %d px in all (%d MiB)",
+			m.Width, m.Height, foreverMaxSide, foreverMaxPixels, foreverMaxPixels*4>>20)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, m.Width, m.Height))
+	put := func(t Tile, name string, tile *image.NRGBA) error {
+		b := tile.Bounds()
+		if b.Dx() != px || b.Dy() != px {
+			return fmt.Errorf("tile %s is %dx%d; the first tile is %d px", name, b.Dx(), b.Dy(), px)
+		}
+		at := image.Pt((t.Col-c0)*px, (t.Row-r0)*px)
+		draw.Draw(img, image.Rectangle{at, at.Add(image.Pt(px, px))}, tile, tile.Bounds().Min, draw.Src)
+		return nil
+	}
+	if err := put(first, firstName, firstImg); err != nil {
+		return nil, m, 0, err
+	}
+	drawn := 1
+	for _, t := range keys {
+		if t == first {
+			continue
+		}
+		tile, name, err := decode(t)
+		if errors.Is(err, errTileSkipped) {
+			continue
+		}
+		if err != nil {
+			return nil, m, 0, err
+		}
+		if err := put(t, name, tile); err != nil {
+			return nil, m, 0, err
+		}
+		drawn++
+	}
+	m.Source, m.Tiles, m.From = KindMinimap, drawn, fromTerrain
+	return img, m, drawn, nil
+}
+
+// decodeTileBytes decodes one BLP tile; name is the tile's file name or FileDataID in the error messages.
+func decodeTileBytes(data []byte, name string) (*image.NRGBA, error) {
 	img, err := blp.Decode(data)
 	if err != nil {
-		return nil, fmt.Errorf("tile %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("tile %s: %w", name, err)
 	}
 	if b := img.Bounds(); b.Dx() != b.Dy() {
-		return nil, fmt.Errorf("tile %s is %dx%d; the tiles must be square", filepath.Base(path), b.Dx(), b.Dy())
+		return nil, fmt.Errorf("tile %s is %dx%d; the tiles must be square", name, b.Dx(), b.Dy())
 	}
 	return img, nil
 }

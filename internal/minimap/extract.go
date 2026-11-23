@@ -104,6 +104,8 @@ type Result struct {
 // Options configure Run.
 type Options struct {
 	ClientDir string // the client's Data folder (Run), or the CASC extractor's listfile-named folder (RunForever)
+	CascDir   string // RunForever: the CASC install itself (--casc), whose textures are read by FileDataID; excludes ClientDir
+	Product   string // RunForever with CascDir: the .build.info product row when several are active
 	DB2Dir    string // RunForever: the server's extracted dbc/<locale> folder, with Map.db2
 	OutDir    string
 	MmapsDirs []string // optional: server mmaps folders, for the navmesh render
