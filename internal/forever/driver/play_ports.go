@@ -114,3 +114,9 @@ type PlayerPort interface {
 	// lever's state. A caller must not keep the slice.
 	Objects() []PlayObject
 }
+
+// Sight is the agent's stand-in for the server's line-of-sight test between two points (the module judges sight on the
+// world's collision geometry, which the agent does not hold). known is false when it cannot say.
+type Sight interface {
+	InSight(from, to Vec3) (in, known bool)
+}

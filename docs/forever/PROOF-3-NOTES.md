@@ -18,6 +18,14 @@ byte is in this change or its tests.
   `pull_step` and gathers the party again. An agent already inside 10 yd does not move. The loop still ends as
   `pull-failed` after two unanswered attempts. `pullWalk` is set for the step walk too: a pull is in flight, so a
   pack met on the few yards of the step must not overwrite the pull.
+- Before the first order the agent checks what the module will check for the tank (`closeToSee`): the module's rti
+  mark is found only within 60 yd and in line of sight of the TANK's own position (`RtiTargetValue.h:89,92`,
+  `PossibleAttackTargetsValue.cpp:387`; a miss whispers "I dont see my rti attack target", `AttackAction.cpp:163`, and
+  the tank never moves). The tank's position is the roster's, the line is the navmesh walkability ray (the `Sight` port;
+  none or unknown leaves the judging to the module). A skull the tank cannot see makes the agent step toward it like
+  `pullStep` (the party gathers at 10 yd, so the tank follows) and look again, at most `PlayCloseTries` = 4 steps and
+  `PlayCloseTime` = 90 s; `pull_sight` {group, seen, known, try, yd} is recorded at each look. Spent, the order is made
+  anyway and an unanswered pull stops `pull-no-sight` (not `pull-failed`). The boss pull does the same. Never a GM line.
 - Walk stops (avoid, walk, time) end the pull exactly as they end a walk.
 
 ## Part B: `--last-leg` keeps the whole plan and ends the run at a leg

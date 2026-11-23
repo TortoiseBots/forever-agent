@@ -34,6 +34,18 @@ const (
 	// (§3.8).
 	PlayRestHP   = 80
 	PlayRestMana = 70
+	// PlayModuleSightYd is the range of the module's own "can the tank see its rti target" check: the 3D distance to the
+	// marked unit must be within AiPlayerbot.SightDistance (60 yd; forever/conf/aiplayerbot.conf.dist:896) of the bot.
+	// RtiTargetValue::CalculateMark (ai/playerbot/strategy/values/RtiTargetValue.h:89) calls
+	// PossibleAttackTargetsValue::IsPossibleTarget with that distance (PossibleAttackTargetsValue.cpp:387,
+	// IsWithinDistInMap), and then requires bot->IsWithinLOSInMap(unit) (RtiTargetValue.h:92). A mark that fails either
+	// test makes AttackRTITargetAction whisper "I dont see my rti attack target" (AttackAction.cpp:163) and the tank
+	// never moves. Both tests are made from the TANK's own position, not the agent's.
+	PlayModuleSightYd = 60.0
+	// The close-in that puts the tank where that check passes is bounded two ways: at most PlayCloseTries steps (of
+	// PlayPullStepYd each, so 20 yd walked in all) and at most PlayCloseTime from the first look.
+	PlayCloseTries = 4
+	PlayCloseTime  = 90 * time.Second
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -73,6 +85,13 @@ func (p *playRun) pull(ctx context.Context) string {
 		p.pack = -1
 		return StateLegWalk
 	}
+	// The module orders the tank onto the mark only when the tank itself sees it; from a stand it cannot see the skull
+	// from, the agent closes in before the first order (and the tank follows).
+	first, _ := p.skullAndCross(members)
+	p.closeToSee(ctx, g.ID, first)
+	if p.stopReason != "" {
+		return ""
+	}
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"group": g.ID})
@@ -96,8 +115,81 @@ func (p *playRun) pull(ctx context.Context) string {
 			}
 		}
 	}
-	p.stop("pull-failed")
+	p.stopPullFailed()
 	return ""
+}
+
+// stopPullFailed ends a pull no one answered: "pull-no-sight" when the last look said the tank could not see the skull
+// (the module's own refusal, closeToSee's bounds spent), else "pull-failed".
+func (p *playRun) stopPullFailed() {
+	if p.sightBlocked {
+		p.stop("pull-no-sight")
+		return
+	}
+	p.stop("pull-failed")
+}
+
+// skullSeen is the module's check for the tank (see PlayModuleSightYd): the skull within PlayModuleSightYd of where the
+// tank stands, and in line of sight from there. The agent holds no collision geometry, so the line is the navmesh's
+// walkability ray (the same stand-in plan-scout uses); known is false when there is no such port or the mesh cannot
+// say, and the caller then lets the module judge. The tank's position is the roster's; the agent's own stands in for it
+// when the roster has none on the run's map (the tank follows beside the agent).
+func (p *playRun) skullSeen(skull Unit) (seen, known bool) {
+	from := p.self
+	if m, ok := p.member(p.cfg.Bots[0]); ok && m.Map == p.selfMap {
+		from = m.Pos
+	}
+	if dist3(from, skull.Pos) > PlayModuleSightYd {
+		return false, true
+	}
+	if p.ports.Sight == nil {
+		return true, false
+	}
+	in, ok := p.ports.Sight.InSight(from, skull.Pos)
+	if !ok {
+		return true, false
+	}
+	return in, true
+}
+
+// closeToSee puts the tank where the module's check passes before the pull is ordered. While the skull is out of the
+// tank's range or sight, the agent steps toward it along pullStep's line (5 yd, never nearer than PlayPullMinYd) and
+// gathers the party, so the tank closes in behind its leader, and looks again. It is bounded by PlayCloseTries and
+// PlayCloseTime; spent, or with no step left to take, the pull is ordered as it stands (the module is
+// the judge) and p.sightBlocked names the refusal if it comes. A stop of the run's own is the run's.
+func (p *playRun) closeToSee(ctx context.Context, group int, skull Unit) {
+	p.sightBlocked = false
+	if skull.GUID.IsZero() {
+		return
+	}
+	start := p.now()
+	for try := 0; ; try++ {
+		p.refreshSelf()
+		u, ok := unitByGUID(p.ports.World.Units(), skull.GUID)
+		if !ok {
+			return
+		}
+		seen, known := p.skullSeen(u)
+		p.rec.Event(p.now(), "pull_sight", map[string]any{
+			"group": group, "seen": seen, "known": known, "try": try, "yd": dist3(p.self, u.Pos),
+		})
+		if !known || seen {
+			return
+		}
+		p.sightBlocked = true
+		if try >= PlayCloseTries || p.now().Sub(start) >= PlayCloseTime {
+			return
+		}
+		to := pullStepPoint(p.self, u.Pos)
+		d := dist3(p.self, to)
+		if d <= 0.01 {
+			return // inside PlayPullMinYd already: nothing nearer to try
+		}
+		if !p.pullStep(ctx, u) {
+			return
+		}
+		p.sightBlocked = false
+	}
 }
 
 // pullApproach walks the agent to the plan's stand for the group (unless it already stands within PlayArriveYd of it),
@@ -175,6 +267,10 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	// The plan's entries to kill before the boss are the skull first, in its order; the boss is the skull once they are
 	// down, and the cross goes on the next unit of the order.
 	skull, cross := p.bossOrder(b, members)
+	p.closeToSee(ctx, -1, skull)
+	if p.stopReason != "" {
+		return ""
+	}
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": b.Entry})
@@ -186,7 +282,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 			return ""
 		}
 	}
-	p.stop("pull-failed")
+	p.stopPullFailed()
 	return ""
 }
 

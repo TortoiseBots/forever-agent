@@ -141,6 +141,12 @@ type PlayFake struct {
 	// combat log (CombatRows), the evidence the spell judge reads. The dry command sets it; the rows are the fake's own.
 	EmitCasts bool
 	combat    [][]byte
+	// SightFunc, when set, is the fake's line of sight (true = in sight): it answers the agent's Sight port and makes the
+	// module's attack order refuse the way the real one does when the tank does not see its mark (out of
+	// PlayModuleSightYd or out of sight from where the tank stands): the order is logged, the tank does nothing.
+	// BlindOrders counts those refusals.
+	SightFunc   func(from, to Vec3) bool
+	BlindOrders int
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
 }
@@ -440,9 +446,35 @@ func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, err
 	m.f.send(botcmd.VerbAttack, name)
 	rep, err := m.GoldenOwner.Attack(ctx, name)
 	if err == nil {
+		if m.f.tankBlind(name) {
+			m.f.BlindOrders++
+			return rep, err
+		}
 		m.f.engage(m.f.Selected, m.f.AggroDelay)
 	}
 	return rep, err
+}
+
+// tankBlind says whether the order's bot is the tank and the module would not find its mark: the real module's
+// RtiTargetValue::CalculateMark fails on range or line of sight from the bot's own position.
+func (f *PlayFake) tankBlind(name string) bool {
+	if f.SightFunc == nil || len(f.GoldenOwner.Bots) == 0 || !strings.EqualFold(name, f.GoldenOwner.Bots[0].Name) {
+		return false
+	}
+	u, ok := unitByGUID(f.units, f.Selected)
+	if !ok {
+		return false
+	}
+	from := f.botPos(f.GoldenOwner.bot(name))
+	return dist3(from, u.Pos) > PlayModuleSightYd || !f.SightFunc(from, u.Pos)
+}
+
+// InSight is the Sight port over SightFunc; without one the fake cannot say.
+func (f *PlayFake) InSight(from, to Vec3) (bool, bool) {
+	if f.SightFunc == nil {
+		return false, false
+	}
+	return f.SightFunc(from, to), true
 }
 
 // Summon is `.bot summon`: the bot moves to the agent's map and side.
