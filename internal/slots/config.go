@@ -3,6 +3,7 @@ package slots
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,7 +40,10 @@ type Slot struct {
 	Reserved        string   `json:"reserved,omitempty"`
 }
 
-var neverLeasable = map[string]string{
+// turtleNeverLeasable is the owner's never-lease list for the three Turtle test
+// servers. It is applied through Slot.Reserved. A Forever server marks such
+// slots with `reserved` in its own slots file instead.
+var turtleNeverLeasable = map[string]string{
 	"m910q/3":          "owner rule: never slot 3 on m910q",
 	"tortoise-test2/3": "owner rule: never slot 3 on tortoise-test2",
 	"tortoise-test3/3": "owner rule: never slot 3 on tortoise-test3",
@@ -99,6 +103,29 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// IsForeverServer reports whether the slots table at slotsPath has a top-level
+// `forever` block for name: that block is what makes a server a Forever server,
+// and the Turtle-only commands refuse one. A missing table is not Forever (a box
+// that never configured one has none); a table that exists but does not load is
+// an error, so a damaged file is never read as "not Forever".
+func IsForeverServer(slotsPath, name string) (bool, error) {
+	if slotsPath == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(slotsPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	cfg, err := Load(slotsPath)
+	if err != nil {
+		return false, err
+	}
+	_, ok := cfg.Forever[name]
+	return ok, nil
 }
 
 func (c *Config) validate(path string) error {
@@ -175,13 +202,13 @@ func (c *Config) Find(server, id string) (*Server, *Slot, error) {
 	for i := range srv.Slots {
 		if srv.Slots[i].ID == id {
 			sl := srv.Slots[i]
-			if text, ok := neverLeasable[server+"/"+id]; ok && sl.Reserved == "" {
+			if text, ok := turtleNeverLeasable[server+"/"+id]; ok && sl.Reserved == "" {
 				sl.Reserved = text
 			}
 			return srv, &sl, nil
 		}
 	}
-	if text, ok := neverLeasable[server+"/"+id]; ok {
+	if text, ok := turtleNeverLeasable[server+"/"+id]; ok {
 		return srv, &Slot{ID: id, Reserved: text}, nil
 	}
 	ids := make([]string, 0, len(srv.Slots))

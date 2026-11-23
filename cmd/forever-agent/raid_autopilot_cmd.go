@@ -282,6 +282,14 @@ func raidAutopilotCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
 		return exitUsage
 	}
+	// Every target's walk launches raid-walk --server <header server>: a
+	// Forever one is not this (Turtle) autopilot's, before the dry run or any
+	// pid file.
+	for _, t := range targets {
+		if refused, code := refuseTurtleOnly("raid-autopilot", t.Server, "", scopeForever("raid-autopilot"), stderr); refused {
+			return code
+		}
+	}
 	if o.dryRun {
 		for _, t := range targets {
 			out := filepath.Join(o.walkDir, fmt.Sprintf("%s-1", t.ID))

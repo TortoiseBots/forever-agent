@@ -305,7 +305,7 @@ func (s *Store) acquireLocked(server, slot string, any bool, holder string, ttl 
 	if any {
 		for i := range srv.Slots {
 			sl := srv.Slots[i]
-			if text, ok := neverLeasable[server+"/"+sl.ID]; ok && sl.Reserved == "" {
+			if text, ok := turtleNeverLeasable[server+"/"+sl.ID]; ok && sl.Reserved == "" {
 				sl.Reserved = text
 			}
 			if sl.Reserved != "" {
@@ -349,7 +349,7 @@ func (s *Store) acquireLocked(server, slot string, any bool, holder string, ttl 
 		parts := make([]string, 0, len(srv.Slots))
 		for i := range srv.Slots {
 			sl := srv.Slots[i]
-			if text, ok := neverLeasable[server+"/"+sl.ID]; ok && sl.Reserved == "" {
+			if text, ok := turtleNeverLeasable[server+"/"+sl.ID]; ok && sl.Reserved == "" {
 				sl.Reserved = text
 			}
 			switch {
@@ -513,7 +513,7 @@ func (s *Store) List(server string) ([]SlotState, error) {
 			srv := &servers[si]
 			for i := range srv.Slots {
 				sl := srv.Slots[i]
-				if text, ok := neverLeasable[srv.Name+"/"+sl.ID]; ok && sl.Reserved == "" {
+				if text, ok := turtleNeverLeasable[srv.Name+"/"+sl.ID]; ok && sl.Reserved == "" {
 					sl.Reserved = text
 				}
 				st := SlotState{Server: srv.Name, Slot: sl}

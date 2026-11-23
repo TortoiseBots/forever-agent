@@ -24,6 +24,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/patrols"
+	"github.com/pjerra/forever-agent/internal/slotdir"
 	"github.com/pjerra/forever-agent/internal/world"
 )
 
@@ -127,6 +128,17 @@ func patrolRecordCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	return patrolRecordCmdEnv(ctx, args, stdout, stderr, patrolRecordEnvDefault())
 }
 
+// patrolRecordRefuseForever refuses a Forever server's slot dir without
+// --forever, before the dir's client is opened. The server comes from the
+// dir's slot.json; an unreadable dir is left for openSlotClient's own message.
+func patrolRecordRefuseForever(dir string, stderr io.Writer) (bool, int) {
+	_, m, err := slotdir.Read(dir)
+	if err != nil || m.Server == "" {
+		return false, exitOK
+	}
+	return refusePassForever("patrol-record", m.Server, m.SlotsPath, stderr)
+}
+
 // patrolRecordCmdEnv parses the command line, settles the z question, then
 // records. Exit: 0 recorded, 22 stopped for safety, 15 slot refused or the
 // agent is gone, 16 an RPC error, 2 usage.
@@ -180,6 +192,13 @@ func patrolRecordCmdEnv(ctx context.Context, args []string, stdout, stderr io.Wr
 	if o.entries, err = patrolRecordParseEntries(*entriesFlag); err != nil {
 		fmt.Fprintf(stderr, "patrol-record: %v\n", err)
 		return exitUsage
+	}
+	// A Forever server's slot dir is recorded through a serve slot
+	// (--forever): refuse before the dir's client is opened.
+	if !o.forever {
+		if refused, code := patrolRecordRefuseForever(o.dir, stderr); refused {
+			return code
+		}
 	}
 	if *zFlag != "" {
 		z, err := strconv.ParseFloat(*zFlag, 32)

@@ -318,6 +318,13 @@ as today (plans included) but writes no `settings.json` and prints the `forever 
 child runs; `slot.json` carries the real server, slot, holder and lease id, so `teardown` and `rpc` work on
 the dir. `forever serve --dir` keeps a matching `slot.json` and refuses a foreign non-empty dir.
 `--mmaps-dir` is refused with `--forever` (a serve takes `--navmesh` itself).
+
+**Slots.** A slot marked `reserved` in the slots file is never leased: the reason string stands in place of its
+account, character, port and `settings_from`, and `lease` and `slot setup` apply it before anything else. The three
+Turtle test servers' slot 3 entries are reserved in the code (`turtleNeverLeasable`); a Forever server marks such
+slots with `reserved` in its own slots file instead. A server with a top-level `forever` block in the slots file is a
+Forever server: the Turtle-only commands refuse it before any lease, login or file write, and each of their usage
+lines says what serves it instead (`forever-agent` with no arguments prints the list).
 `forever-agent forever char-create --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --name NAME --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)`
 logs in like world-check and stops at the character screen: it lists the account's characters, sends
 `CMSG_CREATE_CHARACTER` and lists again. The appearance is explicit: each `--choice OPTION:CHOICE` pair is sent as

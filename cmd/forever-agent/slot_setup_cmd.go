@@ -49,6 +49,10 @@ func slotSetupCmd(args []string, stdout, stderr io.Writer) int {
 	if o.forever {
 		return slotSetupForeverCmd(o, stdout, stderr)
 	}
+	// A Forever server's slot is set up with --forever, before the lease.
+	if refused, code := refusePassForever("slot setup", o.server, o.slotsPath, stderr); refused {
+		return code
+	}
 	b, code := slotSetupPrepare(o, stderr)
 	if code != exitOK {
 		return code

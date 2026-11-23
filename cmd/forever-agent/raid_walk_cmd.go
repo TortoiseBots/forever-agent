@@ -243,6 +243,10 @@ func raidWalkCmd(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		fmt.Fprintln(stderr, "raid-walk never uses slot 3 (owner rule)")
 		return exitSlotRefused
 	}
+	// A Forever server is not this (Turtle) walk's: refuse before the lease.
+	if refused, code := refuseTurtleOnly("raid-walk", o.server, o.slotsPath, scopeForever("raid-walk"), stderr); refused {
+		return code
+	}
 	if !o.dryRun && !slotsSupported() {
 		return slotsUnsupported("raid-walk", stderr)
 	}

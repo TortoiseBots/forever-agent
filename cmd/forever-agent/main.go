@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -160,8 +161,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func usage(w io.Writer) {
-	fmt.Fprintln(w, `usage:
+// usageText is the help. usage marks the Turtle-only lines from commandScopes,
+// so a command's scope and its help text cannot disagree.
+const usageText = `usage:
   forever-agent login [--config FILE] [--capture FILE] [--stay DURATION] [--rpc ADDR] [--reconnect N] [--tune FILE] [--pid-file FILE] [<account>] <character>
   forever-agent fleet --config FILE [--settings FILE] [--stagger DURATION] [--wait DURATION] [--reconnect N] [--stop-on-failure]
   forever-agent fleet --forever --config FILE --slots FILE [--server NAME] [--stagger DURATION] [--wait DURATION] [--stop-on-failure]
@@ -184,6 +186,7 @@ func usage(w io.Writer) {
   forever-agent path-check --mmaps DIR --map N x y z x y z [--json]
   forever-agent patrol-record <slot-dir> --map M --area x,y,r [--z Z] --minutes N [--sample-ms 1000] [--out FILE] [--spawns DIR] [--mmaps DIR] [--entries e1,e2]
   forever-agent plan-probe [--dir dungeons] [--sql FILE [--plan NAME]] --mmaps DIR [--json] [--out DIR] [--from-step N] [<plan>|<path.json>] | forever-agent plan-probe --forever --sql FILE [--plan NAME] --mmaps DIR --spawns FILE [--json] [--out DIR] [--from-step N]
+  forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--spawns DIR] [--from LEG] [--until LEG] [--out DIR] [--json] [--fix-out FILE] [--fail-on fail|warn] [--live <server>|--forever --live --slot DIR] [--slots FILE] [--forever [--parent MAP=PARENT]]
 
   forever-agent raid-walk <plan> [--server m910q] [--slot N] [--holder NAME] [--dir DIR] [--sql FILE] [--until boss|none|step N|leg L] [--from leg L|step N] [--speed X] [--hires FILE] [--enter auto|near|tele] [--hold-minutes M] [--max-run-minutes 90] [--paused-wait 10m] [--auto-resume K] [--reset-wait 5m] [--wipe-resume K] [--wipe-end fast] [--wipe-rest 10m] [--revive-at-raid=false] [--patrols FILE] [--out DIR] [--dash-url URL] [--dash-user TADASH] [--dash-pass-file PATH] [--dash-insecure-http] [--decisions on|off] [--decisions-max-mib N] [--mmaps DIR] [--slots FILE] [--binary PATH] [--instance-cap-per-account N] [--reuse-instance] [--dry-run]
   forever-agent walk-preflight [--server NAME]... [--binary PATH] [--json] <walk-dir>
@@ -206,5 +209,10 @@ func usage(w io.Writer) {
   forever-agent route-edits list [--edit-dir DIR] [--json] [<plan>] | export [--edit-dir DIR] [--config-dir DIR] --to DIR <plan> [vN|latest] | promote [--edit-dir DIR] --worktree PATH <plan> vN
   forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL
   forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...
-  forever-agent version`)
+  forever-agent version`
+
+func usage(w io.Writer) {
+	for _, line := range strings.Split(usageText, "\n") {
+		fmt.Fprintln(w, markScope(line))
+	}
 }
