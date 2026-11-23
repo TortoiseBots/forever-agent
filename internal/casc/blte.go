@@ -149,3 +149,6 @@ func be32(b []byte) uint32 {
 
 // be24 reads a big-endian 24-bit value.
 func be24(b []byte) uint32 { return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]) }
+
+// be16 reads a big-endian 16-bit value.
+func be16(b []byte) uint16 { return uint16(b[0])<<8 | uint16(b[1]) }

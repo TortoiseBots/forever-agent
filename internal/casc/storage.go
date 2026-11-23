@@ -1,6 +1,8 @@
 package casc
 
 import (
+	"bytes"
+	"crypto/md5"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -22,6 +24,8 @@ type Storage struct {
 	cfg   *Config
 	index *Index
 	files map[uint32]*os.File
+	enc   *Encoding // read on the first ReadFileDataID
+	root  *Root     // read on the first ReadFileDataID
 }
 
 // Open opens the CASC install at installDir. The build row is the one of product, or the only active row when
@@ -87,6 +91,91 @@ func (s *Storage) ReadEKey(ekey []byte) ([]byte, error) {
 		return nil, fmt.Errorf("casc: the span header at data.%03d %#x says %d bytes, the index says %d", e.archive, e.offset, got, e.size)
 	}
 	return DecodeBLTE(span[30:])
+}
+
+// ReadFileDataID returns the decoded content of the file the root names with id. The encoding file and the root are
+// read on the first call; a FileDataID the root does not name is ErrNotFound, and a file whose decoded bytes do not
+// hash to the root's content key is an error rather than a silently wrong picture.
+func (s *Storage) ReadFileDataID(id uint32) ([]byte, error) {
+	enc, err := s.encodingFile()
+	if err != nil {
+		return nil, err
+	}
+	root, err := s.rootFile(enc)
+	if err != nil {
+		return nil, err
+	}
+	e, ok := root.files[id]
+	if !ok {
+		return nil, fmt.Errorf("casc: FileDataID %d is not in the root: %w", id, ErrNotFound)
+	}
+	ekey, err := enc.EKeyFor(e.ckey)
+	if err != nil {
+		return nil, fmt.Errorf("casc: FileDataID %d: %w", id, err)
+	}
+	data, err := s.ReadEKey(ekey)
+	if err != nil {
+		return nil, fmt.Errorf("casc: FileDataID %d: %w", id, err)
+	}
+	if got := md5.Sum(data); !bytes.Equal(got[:], e.ckey) {
+		return nil, fmt.Errorf("casc: FileDataID %d decodes to content %x, the root says %x", id, got, e.ckey)
+	}
+	return data, nil
+}
+
+// encodingFile reads and parses the encoding file the build config names, on first use.
+func (s *Storage) encodingFile() (*Encoding, error) {
+	if s.enc != nil {
+		return s.enc, nil
+	}
+	data, err := s.ReadEKey(s.cfg.Encoding.EKey)
+	if err != nil {
+		return nil, fmt.Errorf("casc: read the encoding file: %w", err)
+	}
+	if err := checkContentKey(data, s.cfg.Encoding.CKey, "encoding file"); err != nil {
+		return nil, err
+	}
+	enc, err := ParseEncoding(data)
+	if err != nil {
+		return nil, err
+	}
+	s.enc = enc
+	return enc, nil
+}
+
+// rootFile reads the root the build config names through enc, on first use.
+func (s *Storage) rootFile(enc *Encoding) (*Root, error) {
+	if s.root != nil {
+		return s.root, nil
+	}
+	ekey, err := enc.EKeyFor(s.cfg.Root)
+	if err != nil {
+		return nil, fmt.Errorf("casc: root file: %w", err)
+	}
+	data, err := s.ReadEKey(ekey)
+	if err != nil {
+		return nil, fmt.Errorf("casc: read the root file: %w", err)
+	}
+	if err := checkContentKey(data, s.cfg.Root, "root file"); err != nil {
+		return nil, err
+	}
+	root, err := ParseRoot(data)
+	if err != nil {
+		return nil, err
+	}
+	s.root = root
+	return root, nil
+}
+
+// checkContentKey verifies that data hashes to the content key the build config gives for it.
+func checkContentKey(data, ckey []byte, what string) error {
+	if len(ckey) != md5.Size {
+		return fmt.Errorf("casc: %s content key is %d bytes", what, len(ckey))
+	}
+	if got := md5.Sum(data); !bytes.Equal(got[:], ckey) {
+		return fmt.Errorf("casc: the %s hashes to %x, the build config says %x", what, got, ckey)
+	}
+	return nil
 }
 
 // archiveFile returns the open data.NNN file, opening it on first use.
