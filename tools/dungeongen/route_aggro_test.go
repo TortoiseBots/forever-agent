@@ -309,7 +309,7 @@ func TestRouteIntoLaterPacksDefaultsDetectionTo20(t *testing.T) {
 // Counts are measured on origin/dev (the ZG count must drop when W25-1 lands: the Arlokk terrace reordering walks
 // each approach on its pack's level; the comment then says so).
 var routeAggroKnownFailing = map[string]int{
-	"ragefire_chasm":       164,                                                                       // ci-lint fix round (was 152): the new approach rows add walked segments past later packs.
+	"ragefire_chasm":       153,                                                                       // proof-2 (was 164): the step-14 Trogg pair and Shaman five-pack are one pull, so one fewer split pull walks segments past later packs.
 	"wailing_caverns":      128,                                                                       // second-server trim (was 180): the dropped zandara and vangros legs walk no segments past later packs.
 	"deadmines":            603,                                                                       // second-server trim (was 748, then 644): the dropped lab legs walk no segments past later packs, and rhahk_zor lost its lab-return via (a direct mine walk: 41 fewer).
 	"uldaman":              246,                                                                       // ci-lint fix round (was 247): the new approach rows add walked segments past later packs.
