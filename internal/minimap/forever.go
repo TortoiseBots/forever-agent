@@ -175,8 +175,21 @@ func runForever(o Options, src fileSource) ([]Result, error) {
 			if ok {
 				have[KindMinimap] = []Layer{l}
 			} else {
-				reasons[KindMinimap] = reason
-				notes = append(notes, reason)
+				// An indoor map has no terrain tiles: the client draws the WMO's own block textures.
+				ls, wok, wreason, werr := wmoFromCASC(src, tables.blocks, r.WdtFileDataID, o.WMOBlockYards, logf)
+				if werr != nil {
+					fail(werr)
+					reasons[KindMinimap] = werr.Error()
+					notes = append(notes, werr.Error())
+				} else if wok {
+					have[KindMinimap] = ls
+				} else {
+					if wreason != "" {
+						reason = wreason
+					}
+					reasons[KindMinimap] = reason
+					notes = append(notes, reason)
+				}
 			}
 		} else if !dirOK {
 			reasons[KindMinimap] = foreverNoDirReason
@@ -251,7 +264,7 @@ func runForever(o Options, src fileSource) ([]Result, error) {
 			}
 			for _, l := range have[k] {
 				l.Meta.Map, l.Meta.Name = r.ID, r.MapName
-				if l.Kind == KindMinimap {
+				if l.Kind == KindMinimap && l.Meta.From == "" {
 					l.Meta.From = fromTerrain
 				}
 				dup := false

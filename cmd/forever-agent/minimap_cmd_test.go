@@ -100,8 +100,40 @@ func TestCascAndClientTogetherRefused(t *testing.T) {
 	out.Reset()
 	errb.Reset()
 	code = run(t.Context(), []string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir, "--out", dir,
-		"--prefer", "worldmap"}, &out, &errb)
+		"--wmo-block-yards", "128", "--prefer", "worldmap"}, &out, &errb)
 	if code != 1 || !strings.Contains(errb.String(), ".build.info") {
 		t.Fatalf("--casc with --prefer worldmap: exit %d, stderr %q, want the install's .build.info read", code, errb.String())
+	}
+}
+
+// TestMinimapWMOProbeFlags: --wmo-probe is a --forever --casc report that writes nothing, so it needs the install, an
+// explicit map list and no --out; --wmo-block-yards is the same install's flag and must be positive.
+func TestMinimapWMOProbeFlags(t *testing.T) {
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"probe without casc": {[]string{"minimap-extract", "--forever", "--client", dir, "--db2", dir,
+			"--maps", "60", "--wmo-probe"}, "--forever --casc"},
+		"probe with out": {[]string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir,
+			"--maps", "60", "--wmo-probe", "--out", dir}, "drop --out"},
+		"probe all instances": {[]string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir,
+			"--wmo-probe"}, "--maps"},
+		"yards without casc": {[]string{"minimap-extract", "--forever", "--client", dir, "--db2", dir,
+			"--out", dir, "--wmo-block-yards", "128"}, "--forever --casc"},
+		"yards missing": {[]string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir,
+			"--out", dir, "--maps", "60"}, "--wmo-probe"},
+		"yards zero": {[]string{"minimap-extract", "--forever", "--casc", dir, "--db2", dir,
+			"--out", dir, "--wmo-block-yards", "0"}, "--wmo-probe"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(t.Context(), tc.args, &out, &errb); code != exitUsage {
+			t.Errorf("%s: exit %d, want %d (%s)", name, code, exitUsage, errb.String())
+			continue
+		}
+		if !strings.Contains(errb.String(), tc.want) {
+			t.Errorf("%s: stderr %q, want it to name %q", name, errb.String(), tc.want)
+		}
 	}
 }

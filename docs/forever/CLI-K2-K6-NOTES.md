@@ -393,3 +393,34 @@ places it by the assignment's world region and UI rect: the region covers the Ui
 picture, X to the right and Y down, and `px_per_yard` is its west-east scale. `--prefer worldmap` works on this
 path only, and the three UiMap tables are required in `--db2` (`Map.db2`'s own field and layout checks apply to
 each: field count and layout hash as in `UiMapArtTileMeta`, `UiMapAssignmentMeta` and `UiMapXMapArtMeta`).
+
+## 12. #104 round 4: dungeon interiors from the WMO
+
+An indoor map has no terrain tiles: its WDT is WMO-only, and the client draws the WMO groups' own block textures.
+`minimap-extract --forever --casc INSTALL --db2 DIR --maps 389 --wmo-probe` reports one map and writes nothing:
+the WDT's root WMO FileDataID (the MODF row whose flags say its Id is a FileDataID, else the MWID entry that Id
+indexes), the root's MOHD WMO id, every MOGI group's box, the `WMOMinimapTexture` rows of that id and the block size
+those boxes imply. The rows are keyed by the MOHD id, not by the root file's FileDataID; the client's BlockY pallet
+stores 0x100+BlockY (all 33 values of build 70959), so the byte is the low 8 bits.
+
+That block size is the round's open value, and it is not written anywhere in the client data: a group of E yards
+covered by n blocks spans E/n <= block < E/(n-1). The groups of the Ragefire Chasm and the Wailing Caverns interiors
+give (124.34, 148.85] and (127.08, 128.76] yd, so the value is 128 yd (`minimap.WMOBlockYards`, pinned by
+`TestWMOBlockYardsFromClient` when `TURTLE_CASC_INSTALL` and `TURTLE_DBC_DIR` are set). The textures agree: a group's
+whole minimap image is padded to powers of two at 2 px a yard and cut into 256-px tiles, so a full block's texture is
+256x256 px and an edge tile is 256x128 or 64x256 (Ragefire Chasm's and the Wailing Caverns' blocks match). The
+composition places each tile at the group box's minimum plus (BlockX, BlockY) * blockYards, at the tile's own pixel
+extent (a trimmed tile reaches less far), and the picture is at 2 px a yard; groups are split into floors by their
+boxes' heights with mapview's floor gap, the lowest floor is
+`<id>.png` and the higher ones `-2f`, `-3f`, all with `"from": "wmo"`. `WMOMinimapTexture.db2` is read when
+`--db2` holds it (the other tables stay); `--forever --casc` requires `--wmo-block-yards`, and a run without it is a
+usage error naming the flag and the probe, so the code never draws at a guessed size.
+
+Tests: `TestWMOBlocksPlaced` (block 1,0 below and 0,1 right of block 0,0, with another WMO's row present),
+`TestWMOProbeListsGroups` (root FileDataID, boxes, rows of this WMO only, the implied size), `TestWMONeedsBlockYards`
+(the missing size is an error naming `--wmo-probe`, also through `runForever`), `TestCascWMOInterior` (a full
+`--forever --casc` run writes `60.png` with `"from": "wmo"`), `TestWMOFloorsByHeight` (two floors, the second
+suffixed `-2f`), and the db2 reader's `TestWMOMinimapTextureFields`, `TestWMOMinimapTextureLayoutRefusesOther` and
+`TestWMOMinimapTextureNeedsParent`. Mutations: BlockX/BlockY swapped and the WMOID filter dropped are both caught
+by `TestWMOBlocksPlaced`.
+

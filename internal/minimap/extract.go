@@ -114,6 +114,9 @@ type Options struct {
 	Prefer    []string // order of the sources for <id>.png; DefaultPrefer when empty
 	ListOnly  bool     // report what would be extracted, write nothing
 	Log       func(format string, args ...any)
+	// WMOBlockYards is the client's WMOMinimapTexture block side in yards (round 4's measured value, WMOBlockYards).
+	// RunForever composes an indoor map's picture only when it is set; 0 makes that map fail and name the probe.
+	WMOBlockYards float64
 }
 
 const translatePath = `Textures\Minimap\md5translate.trs`
