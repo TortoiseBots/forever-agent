@@ -17,7 +17,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--capture-dir DIR]")
 		fmt.Fprintln(stderr, "       forever-agent forever spell-score [--json] [--min-active 30] [--fail-unknown] --oracle DIR [--spells DIR] <watch dir|trace>")
 		fmt.Fprintln(stderr, "       forever-agent forever capture-stats <dir>")
-		fmt.Fprintln(stderr, "       forever-agent forever scrub-check [--slots FILE] [--account EMAIL]... [--password-file FILE] <dir>...")
+		fmt.Fprintln(stderr, "       forever-agent forever scrub-check [--slots FILE] [--account EMAIL]... [--password-file FILE] [--session-key-file FILE]... [--auth-token-file FILE]... [--redact DIR] <dir>...")
+		fmt.Fprintln(stderr, "       forever-agent forever capture-events [--kinds a,b] [--out FILE [--force]] <dir>")
 		fmt.Fprintln(stderr, "       forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]")
 		fmt.Fprintln(stderr, "       forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--dx YARDS] [--dy YARDS]")
 		fmt.Fprintln(stderr, "       forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen DURATION]")
@@ -122,6 +123,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverSpellScoreCmd(args[1:], stdout, stderr)
 	case "capture-stats":
 		return foreverCaptureStatsCmd(args[1:], stdout, stderr)
+	case "capture-events":
+		return foreverCaptureEventsCmd(args[1:], stdout, stderr)
 	case "scrub-check":
 		return foreverScrubCmd(args[1:], stdout, stderr)
 	default:

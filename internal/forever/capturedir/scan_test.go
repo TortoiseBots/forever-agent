@@ -19,20 +19,21 @@ func TestScanReadsEveryFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(run, "notes.txt"), []byte("UPPER "+strings.ToUpper("needle-abc")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	found, files, err := Check(filepath.Dir(run), [][]byte{[]byte("needle-abc")})
+	found, files, err := Check(filepath.Dir(run), []Needle{{Bytes: []byte("needle-abc"), Kind: KindAccount}})
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
 	if files != 4 { // two payloads, manifest.tsv, notes.txt
 		t.Fatalf("%d files read, want 4", files)
 	}
-	if len(found) != 1 || found[0].Run != "20261123T120000Z-01020304" || found[0].File != "notes.txt" || found[0].Needle != 0 {
+	if len(found) != 1 || found[0].Run != "20261123T120000Z-01020304" || found[0].File != "notes.txt" ||
+		found[0].Needle != 0 || found[0].Kind != KindAccount {
 		t.Fatalf("findings %+v", found)
 	}
 }
 
 func TestScanRefusesShortNeedle(t *testing.T) {
-	_, err := Scan(t.TempDir(), [][]byte{[]byte("ab")})
+	_, err := Scan(t.TempDir(), []Needle{{Bytes: []byte("ab")}})
 	if !errors.Is(err, capture.ErrSecretTooShort) {
 		t.Fatalf("err %v, want ErrSecretTooShort", err)
 	}
@@ -48,7 +49,7 @@ func TestScanRefusesOversizedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	_, err = Scan(run, [][]byte{[]byte("needle-abc")})
+	_, err = Scan(run, []Needle{{Bytes: []byte("needle-abc")}})
 	if err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("err %v, want an oversized-file refusal", err)
 	}
@@ -67,7 +68,7 @@ func TestScanRefusesOversizedRun(t *testing.T) {
 		}
 		f.Close()
 	}
-	_, err := Scan(run, [][]byte{[]byte("needle-abc")})
+	_, err := Scan(run, []Needle{{Bytes: []byte("needle-abc")}})
 	if err == nil || !strings.Contains(err.Error(), "in total") {
 		t.Fatalf("err %v, want the run-total refusal", err)
 	}
