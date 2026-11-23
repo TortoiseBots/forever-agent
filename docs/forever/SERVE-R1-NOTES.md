@@ -30,7 +30,7 @@ printed, and the session uses the same login, the same two sockets, the same mov
 
 ## Method table
 
-122 methods of the old daemon plus one addition (`bot`, below): 34 DONE, 89 NOT-PORTED.
+122 methods of the old daemon plus two additions (`bot` and `combat_near`, below): 35 DONE, 89 NOT-PORTED.
 
 DONE means the ForeverCore code exists in `internal/forever` and the method runs it; NOT-PORTED means there is no
 ForeverCore implementation behind the old semantics, so the method answers the typed error.
@@ -56,6 +56,7 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `chat_log` | DONE | The chat log as the old page (`since`, `limit`, `wait_ms`): seq, chat type name, source, channel, text. It is the chat model, not the 78-kind event log. |
 | `logout` | DONE | The full logout (request, response and completion), then the daemon stops. |
 | `events` | DONE | The session's own combat log (`since`, `limit` up to 1,000, `wait_ms` up to 2,000) as the trials runner's raw rows, answered as `{events, next, oldest, dropped}`. The ring outlives a reconnect. See round A1's notes; the wait runs off the session goroutine, on the ring's own new-row signal. |
+| `combat_near` | DONE (addition, #111) | Who else hit mobs near a point in the last N seconds: `x`/`y`/`z` (default the mover's position), `radius` 5-100 (default 30, measured 2D), `window_s` 1-600 (default 60, on `mono_ms`), `who` `others` (default: rows outside the party) or `party`. Reads the event log's melee, spell damage, periodic and spell-go rows whose source is another player and whose target is a creature the model places within the radius; answers `count` (hit rows), `players` (`guid`, `name`, `hits`, `first_ms`, `last_ms`; hits desc, then name), `mobs` and `unplaced` (rows whose target the model cannot place). Round #111; `scenarios/forever-camp-step-aside.json` is the fake-serve scenario. |
 | `map_snapshot` | NOT-PORTED | The old drawing is built from the 1.12 world model and navmesh. |
 
 ### Chat, GM and group

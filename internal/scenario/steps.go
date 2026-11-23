@@ -548,7 +548,7 @@ func (rr *run) doRPC(ctx context.Context, s *Step, n int, inFinally bool) bool {
 	if !ok {
 		return false
 	}
-	params, err := expandAny(s.Params, rr.vars)
+	params, err := expandParams(s.Params, rr.vars)
 	if err != nil {
 		return rr.checkErr(n, s, err)
 	}
