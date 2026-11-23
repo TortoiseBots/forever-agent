@@ -941,7 +941,7 @@ func (p *playRun) packInWay() (int, bool) {
 	claim := MatchPacks(units, groups, len(groups))
 	best, bestD := -1, math.Inf(1)
 	consider := func(g *Group, u Unit) {
-		if p.pulled[g.ID] || u.Dead || u.Friendly {
+		if p.pulled[g.ID] || u.Dead || u.Friendly || p.partyOwned(u) {
 			return
 		}
 		if d := dist3(u.Pos, p.self); d <= PlayPullYd && d < bestD {
@@ -1043,17 +1043,33 @@ func (p *playRun) patrolHold(ctx context.Context) bool {
 }
 
 // strangerNear says whether a live hostile stands within yd of the agent that no pack of the plan claims and that the
-// plan does not name (a boss and a boss's adds are named; the run goes to them itself).
+// plan does not name (a boss and a boss's adds are named; the run goes to them itself). A party member's pet is not a
+// stranger: it stands by the party and fights for it.
 func (p *playRun) strangerNear(yd float64) bool {
 	units := p.ports.World.Units()
 	groups := p.route.AllGroups()
 	claim := MatchPacks(units, groups, len(groups))
 	known := p.knownEntries()
 	for ui, u := range units {
-		if u.Dead || u.Friendly || dist3(u.Pos, p.self) > yd || known[u.Entry] {
+		if u.Dead || u.Friendly || dist3(u.Pos, p.self) > yd || known[u.Entry] || p.partyOwned(u) {
 			continue
 		}
 		if _, ok := claim.GroupOf(ui); !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// partyOwned says whether the unit is a pet of the party: it has an owner, and that owner's GUID is a roster member's
+// (the agent included, the roster does). The hunter bot's pet is owned by its bot, not marked friendly, and stands by
+// the party: without this it reads as a stranger the plan does not know.
+func (p *playRun) partyOwned(u Unit) bool {
+	if u.Owner.IsZero() {
+		return false
+	}
+	for _, m := range p.roster() {
+		if m.GUID == u.Owner {
 			return true
 		}
 	}

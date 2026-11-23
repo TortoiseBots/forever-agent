@@ -82,8 +82,11 @@ type watchRun struct {
 	frameThreatBlind  bool
 	pauseLog          []PauseNote
 	pauseSeen         map[int]bool
-	bosses            map[uint32]string
-	bossAt            time.Time
+	// unknownKinds are the event kinds this client cannot name that the ring already carried: one line each, the
+	// rest ignored. A kind unknown once is not worth a line per event.
+	unknownKinds map[string]bool
+	bosses       map[uint32]string
+	bossAt       time.Time
 	// encounters are the instance's own pull/kill/wipe packets, on the module run's clock.
 	encounters []EncounterRecord
 	lastLine   string
@@ -120,7 +123,7 @@ func (r *Run) Watch(ctx context.Context) Result {
 	r.lastProgress = r.start
 	r.refreshSelf()
 	w := &watchRun{
-		pauseSeen: map[int]bool{}, bosses: map[uint32]string{},
+		pauseSeen: map[int]bool{}, bosses: map[uint32]string{}, unknownKinds: map[string]bool{},
 		legs: map[int]*LegRecord{}, legSeen: map[int]bool{},
 		steps: map[[2]int]*StepRecord{}, stepSeen: map[[2]int]bool{},
 	}
@@ -819,8 +822,30 @@ func (r *Run) watchEvent(w *watchRun, ev tbcmd.RunEvent) {
 	w.lastEvent = r.now()
 	w.events++
 	r.progress()
+	if !ev.Known {
+		// A kind this client cannot name is kept (the server's vocabulary can grow) and ignored: one line per kind,
+		// never a fatal read and never a touch of the wipe/pause pair.
+		if !w.unknownKinds[ev.Kind] {
+			w.unknownKinds[ev.Kind] = true
+			r.logf("watch: unknown event kind=%s (kept, ignored)", ev.Kind)
+		}
+		return
+	}
 	w.noteEvent(ev)
 	switch ev.Kind {
+	case "self-recover":
+		// The module brought the party back by itself: there is no rescue to make, and the pair a wipe left is no
+		// longer the pause's. The trace records when.
+		w.wipePending = false
+		w.onWipe = false
+		w.wipeAt = time.Time{}
+		if r.rec != nil {
+			at := r.now()
+			if !w.startedAt.IsZero() {
+				at = w.startedAt.Add(time.Duration(ev.T) * time.Second)
+			}
+			r.rec.Event(at, "self_recover", map[string]any{"at_s": ev.T})
+		}
 	case "wipe":
 		w.wipePending = true
 		w.wipeSeq = ev.Seq

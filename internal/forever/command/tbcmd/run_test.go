@@ -219,7 +219,7 @@ func TestRunEventRefusals(t *testing.T) {
 		name string
 		line string
 	}{
-		{"unknown kind", "event seq=1 t=0 kind=lunch step=1 leg=1 why= #T"},
+		{"bad kind shape", "event seq=1 t=0 kind=Lunch! step=1 leg=1 why= #T"},
 		{"zero seq", "event seq=0 t=0 kind=start why= #T"},
 		{"missing why", "event seq=1 t=0 kind=start step=1 leg=1 #T"},
 		{"bad step", "event seq=1 t=0 kind=start step=x leg=1 why= #T"},
@@ -249,6 +249,43 @@ func TestRunEventRefusals(t *testing.T) {
 		RunEvents(context.Background(), "Tankbot", 0, false)
 	if !errors.Is(err, ErrBadReport) {
 		t.Fatalf("last-below-newest err %v", err)
+	}
+}
+
+// TestRunEventUnknownKindKept: the module's event vocabulary can grow on the server; a kind outside this client's
+// list is kept and marked unknown, never a fatal read (one unreadable record would end the watch blind).
+func TestRunEventUnknownKindKept(t *testing.T) {
+	r := oneReply("run-begin #T", "event seq=1 t=4 kind=lunch step=1 leg=1 why= #T",
+		"run-end count=1 records=1 verb=events lead=Tankbot last=1 #T")
+	rep, err := NewClient(r).RunEvents(context.Background(), "Tankbot", 0, false)
+	if err != nil {
+		t.Fatalf("an unknown event kind must be kept, not refused: %v", err)
+	}
+	if len(rep.Events) != 1 || rep.Events[0].Kind != "lunch" || rep.Events[0].Known {
+		t.Fatalf("events %+v, want one kept unknown lunch", rep.Events)
+	}
+}
+
+// TestRunEventsModuleKinds: the four kinds the module writes and this client used to refuse are known words.
+func TestRunEventsModuleKinds(t *testing.T) {
+	r := oneReply("run-begin #T",
+		"event seq=1 t=0 kind=self-recover step=1 leg=1 why= #T",
+		"event seq=2 t=1 kind=cc step=2 leg=1 why= #T",
+		"event seq=3 t=2 kind=cc-clear step=3 leg=1 why= #T",
+		"event seq=4 t=3 kind=gather-wait step=4 leg=1 why= #T",
+		"run-end count=4 records=4 verb=events lead=Tankbot last=4 #T")
+	rep, err := NewClient(r).RunEvents(context.Background(), "Tankbot", 0, false)
+	if err != nil {
+		t.Fatalf("RunEvents: %v", err)
+	}
+	want := []string{"self-recover", "cc", "cc-clear", "gather-wait"}
+	if len(rep.Events) != len(want) {
+		t.Fatalf("%d events, want %d", len(rep.Events), len(want))
+	}
+	for i, ev := range rep.Events {
+		if ev.Kind != want[i] || !ev.Known {
+			t.Fatalf("event %d: %+v, want known %q", i, ev, want[i])
+		}
 	}
 }
 
