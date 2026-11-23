@@ -360,11 +360,11 @@ func (s *rpcSession) connect(ctx context.Context) (connectResponse, error) {
 }
 
 // logon sends the login ticket and waits for OnLogonComplete.
-func (s *rpcSession) sendLogon(ctx context.Context, ticket string, clientBuild uint32) (*logonResult, error) {
+func (s *rpcSession) sendLogon(ctx context.Context, ticket string, clientBuild uint32, locale string) (*logonResult, error) {
 	req := logonRequest{
 		Program:              "WoW",
 		Platform:             "Wn64",
-		Locale:               "enUS",
+		Locale:               locale,
 		ApplicationVersion:   int32(clientBuild),
 		CachedWebCredentials: []byte(ticket),
 	}

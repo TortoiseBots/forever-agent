@@ -143,9 +143,9 @@ func (o Options) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, o.redact
 
 func (o Options) redacted() string {
 	return fmt.Sprintf(
-		"bnet.Options{rest=%q rpc=%q ca=%q server-name=%q account=<redacted %d chars> password=<redacted> build=%d timeout=%s deadline=%s}",
+		"bnet.Options{rest=%q rpc=%q ca=%q server-name=%q account=<redacted %d chars> password=<redacted> build=%d locale=%q timeout=%s deadline=%s}",
 		sanitizeServerText(o.RESTAddr), sanitizeServerText(o.RPCAddr), sanitizeServerText(o.CAFile),
-		sanitizeServerText(o.ServerName), len(o.Account), o.ClientBuild, o.Timeout, o.Deadline)
+		sanitizeServerText(o.ServerName), len(o.Account), o.ClientBuild, o.resolvedLocale(), o.Timeout, o.Deadline)
 }
 
 // logonResult carries the 64-byte session key and the account's battle tag.

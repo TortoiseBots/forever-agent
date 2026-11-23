@@ -189,6 +189,8 @@ type Status struct {
 	Error            string    `json:"error,omitempty"`
 	ReconnectAttempt int       `json:"reconnect_attempt,omitempty"`
 	ReconnectLimit   int       `json:"reconnect_limit,omitempty"`
+	Locale           string    `json:"locale"`
+	Addon            string    `json:"addon"`
 }
 
 // Aura is one aura a unit holds: the spell, the caster's guid, the stack

@@ -877,6 +877,11 @@ type ServeStatus struct {
 	Error            string `json:"error,omitempty"`
 	ReconnectAttempt int    `json:"reconnect_attempt,omitempty"`
 	ReconnectLimit   int    `json:"reconnect_limit,omitempty"`
+	// Locale is the client language this session claims (--locale; enUS when it claims none) and Addon is the
+	// add-on transport's switch: "on", or "off" when the session was started with --addon off (it then never
+	// registers a prefix, so the server never sees it as a TBM or bot-module client).
+	Locale string `json:"locale"`
+	Addon  string `json:"addon"`
 }
 
 func raceTeam(race uint8) string {
@@ -900,6 +905,10 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 		Team: raceTeam(s.report.Character.Race), ZUnknown: s.zUnknown, TeleportSeq: s.teleportSeq,
 		LatencyMS: uint32(s.report.Latency.Milliseconds()),
 		MonoMS:    events.MonoMS(), BaseTime: events.BaseTime(), WallOffsetMS: events.WallOffsetMS(),
+		Locale: s.opts.statusLocale(), Addon: "on",
+	}
+	if s.opts.AddonOff {
+		out.Addon = "off"
 	}
 	if s.world != nil {
 		out.Map = s.world.MapID()

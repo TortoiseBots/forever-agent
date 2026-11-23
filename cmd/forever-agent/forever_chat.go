@@ -24,13 +24,17 @@ import (
 
 // foreverCommon is the login part every Forever command shares.
 type foreverCommon struct {
-	restAddr      string
-	rpcAddr       string
-	caFile        string
-	serverName    string
-	clientBuild   uint
-	account       string
-	gameAccount   int
+	restAddr    string
+	rpcAddr     string
+	caFile      string
+	serverName  string
+	clientBuild uint
+	account     string
+	gameAccount int
+	// locale is the client language the agent claims (--locale): a name from bnet.Locales, never empty after the
+	// flags are registered (the default is enUS). The logon request and the realm list ticket carry it, and a serve
+	// session reports it in status.
+	locale        string
 	character     string
 	allowRedirect bool
 	// worldChecksBuildAuthKey says the world server verifies the session digest (Network.SkipBuildAuthKeyCheck = 0).
@@ -56,6 +60,7 @@ func (c *foreverCommon) connectionFlags(fs *flag.FlagSet) {
 	fs.UintVar(&c.clientBuild, "build", 0, "client build to claim (default: the newest build this client knows that the realm accepts and, when the command opens a world socket, the world server accepts)")
 	fs.StringVar(&c.account, "account", "", "account e-mail or name")
 	fs.IntVar(&c.gameAccount, "game-account", 0, "game account to join, by the join ticket's #N (default: the first listed; a realm that joins another is logged into again on the next)")
+	fs.StringVar(&c.locale, "locale", bnet.DefaultLocale, "client language to claim: one of "+strings.Join(bnet.Locales, ", "))
 }
 
 // flags registers the connection flags plus the ones an entering command takes. Every Forever command that logs in
@@ -77,6 +82,9 @@ func (c *foreverCommon) checkConnection(cmd string) error {
 	}
 	if c.gameAccount < 0 {
 		return fmt.Errorf("%s: --game-account is 1 or more", cmd)
+	}
+	if !bnet.ValidLocale(c.locale) {
+		return fmt.Errorf("%s: --locale must be one of %s", cmd, strings.Join(bnet.Locales, ", "))
 	}
 	return nil
 }
@@ -149,6 +157,7 @@ func (c *foreverCommon) loginWithPassword(ctx context.Context, cmd string, stdou
 		Password:      password,
 		ClientBuild:   uint32(c.clientBuild),
 		GameAccount:   c.gameAccount,
+		Locale:        c.locale,
 		Logf:          logf,
 		WorldAccept:   worldAccept,
 		BeforeAttempt: c.beforeAttempt,
@@ -202,6 +211,7 @@ func (c *foreverCommon) withLogin(result *bnet.Result, stdout io.Writer, opts wo
 	opts.WorldConn = result.WorldConn
 	opts.Character = c.character
 	opts.GameAccounts = result.GameAccounts
+	opts.Locale = c.locale
 	opts.AllowInstanceRedirect = c.allowRedirect
 	opts.Logf = func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)

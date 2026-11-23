@@ -1,0 +1,41 @@
+{
+  "scenario": "forever-addon-hint",
+  "description": "Module #46: a session started with --addon off never registers an add-on prefix, so the server must tell a real player once where to get the add-on. A (--addon off) gets one hint after entering the world - a whisper or a system line, the module's own text - and nothing again in the same session. HINT_RE is the module's stable line as the runner matches it: a ${var} in a match is matched literally, so give the exact text fragment, not a regexp. WAIT_S (90) is the bound it must arrive in (the expect step's timeout_s).",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8770",
+      "server": "forever"
+    }
+  },
+  "vars": {
+    "HINT_RE": "add-on",
+    "WAIT_S": "90"
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "stop",
+  "steps": [
+    {
+      "do": "section",
+      "title": "the hint arrives once, inside the wait"
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "note": "no kind: a whisper or a system line both count",
+      "match": "${HINT_RE}",
+      "timeout_s": 90
+    },
+    {
+      "do": "section",
+      "title": "and not again in the same session"
+    },
+    {
+      "do": "expect_not",
+      "session": "A",
+      "note": "once per character: the module must not repeat the hint",
+      "match": "${HINT_RE}",
+      "within_s": 120
+    }
+  ]
+}

@@ -172,7 +172,7 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--addon on|off] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -194,11 +194,21 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	fs.Var(&createChoices, "create-choice", "with --create: appearance choice OPTION:CHOICE (repeatable; sent as given)")
 	createNoAppearance := fs.Bool("create-no-appearance", false, "with --create: a test character with no appearance choices")
 	budgetAddr := fs.String("login-budget", "", "loopback address of the fleet's shared login budget (set by `fleet`; its token is in the environment)")
+	addon := fs.String("addon", "on", "add-on transport: on registers the TBM and bot-module prefixes when a command needs one, off never registers any (the session never speaks TBM)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(stderr, usage)
+		return exitUsage
+	}
+	addonOff := false
+	switch strings.ToLower(strings.TrimSpace(*addon)) {
+	case "on":
+	case "off":
+		addonOff = true
+	default:
+		fmt.Fprintln(stderr, "forever serve: --addon must be on or off")
 		return exitUsage
 	}
 	var budget *budgetClient
@@ -336,6 +346,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		return exitAuth
 	}
 	opts := common.withLogin(result, stdout, world.Options{
+		AddonOff: addonOff,
 		Serve: &world.ServeConfig{
 			Listener:        ln,
 			Token:           token,
