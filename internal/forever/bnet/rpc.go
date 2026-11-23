@@ -35,6 +35,14 @@ const (
 // maxRPCBody is the server's own cap on one message body (src/server/bnetserver/Server/Session.cpp:78).
 const maxRPCBody = 0x100000
 
+// The realm join's own two build-related statuses (src/server/bnetserver/Services/BattlenetRpcErrorCodes.h:648,650).
+// They are the core's enum: a wrong build is ERROR_USER_SERVER_VERSION_MISMATCH, while a realm that is closed, whose
+// population is offline, or whose security level is above the account's is ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM.
+const (
+	statusUserServerVersionMismatch     = 0x800000DF // ERROR_USER_SERVER_VERSION_MISMATCH
+	statusUserServerNotPermittedOnRealm = 0x800000E1 // ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM
+)
+
 // rpcError is a non-zero status in a response header.
 type rpcError struct {
 	ServiceHash uint32
@@ -56,6 +64,8 @@ func rpcStatusName(status uint32) string {
 		return "ERROR_DENIED"
 	case 0x1C:
 		return "ERROR_BAD_VERSION"
+	case statusUserServerVersionMismatch:
+		return "ERROR_USER_SERVER_VERSION_MISMATCH"
 	case 0x34:
 		return "ERROR_GAME_ACCOUNT_BANNED"
 	case 0x35:
@@ -78,7 +88,7 @@ func rpcStatusName(status uint32) string {
 		return "ERROR_UTIL_SERVER_INVALID_IDENTITY_ARGS"
 	case 0x80000073:
 		return "ERROR_UTIL_SERVER_FAILED_TO_SERIALIZE_RESPONSE"
-	case 0x800000E1:
+	case statusUserServerNotPermittedOnRealm:
 		return "ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM"
 	case 0x8000012C:
 		return "ERROR_WOW_SERVICES_TIMED_OUT"

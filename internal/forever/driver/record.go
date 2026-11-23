@@ -76,7 +76,11 @@ type RunSummary struct {
 	StopReason string          `json:"stop_reason"`
 	LastLeg    string          `json:"last_leg"`
 	Instance   uint32          `json:"instance"`
-	Pulls      []PullRecord    `json:"pulls"`
+	// CombatLogWatch is a watch's GM combat-log watch: group or unit when the core started one, off when the
+	// operator turned it off, unsupported when the core has no such command (the log is then in range only).
+	// Bug-hunt reads it to skip rules that need the whole log. Other modes leave it empty.
+	CombatLogWatch string       `json:"combatlog_watch,omitempty"`
+	Pulls          []PullRecord `json:"pulls"`
 	// Watch is set for a watched run: the module's own progress and counters, plus what the watcher did (the
 	// practice rescues and the pauses it saw). A dungeon-run leaves it nil.
 	Watch *RunWatch `json:"watch,omitempty"`

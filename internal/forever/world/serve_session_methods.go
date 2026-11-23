@@ -356,6 +356,25 @@ type ServeActResult struct {
 type serveGMSetHPParams struct {
 	GUID GUID   `json:"guid"`
 	HP   *int64 `json:"hp"`
+	// CurrentOnly sends `.modify currenthp <hp>`, which sets the current health and leaves the maximum alone
+	// (cs_modify.cpp:152-175). Without it the line is `.modify hp <hp>`, which sets both.
+	CurrentOnly bool `json:"current_only,omitempty"`
+}
+
+// serveGMCombatLogParams is gm_combatlog's call: the unit to watch through, or none for off, and the mode. A watch
+// needs a selected unit that is not the GM; group also needs a grouped player (cs_gm.cpp:195-232).
+type serveGMCombatLogParams struct {
+	GUID GUID   `json:"guid,omitempty"`
+	Name string `json:"name,omitempty"`
+	Mode string `json:"mode"`
+}
+
+// ServeCombatLogWatch is gm_combatlog's result: the mode asked for, whether the core started a watch, and the core's
+// own answer line. Watching is true only when that line is the watch's ("Combat log watch on ...").
+type ServeCombatLogWatch struct {
+	Mode     string `json:"mode"`
+	Watching bool   `json:"watching"`
+	Text     string `json:"text"`
 }
 
 type serveGMAuraParams struct {
@@ -549,6 +568,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("gm_set_hp", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMSetHPParams) (ServeCommand, error) {
 		return s.serveGMSetHP(ctx, p)
+	}))
+	srv.Register("gm_combatlog", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMCombatLogParams) (ServeCombatLogWatch, error) {
+		return s.serveGMCombatLog(ctx, p)
 	}))
 	srv.Register("gm_aura", serveCallTyped(st, func(s *session, ctx context.Context, p serveGMAuraParams) (ServeCommand, error) {
 		return s.serveGMAura(ctx, p)
@@ -1121,7 +1143,8 @@ const (
 // serveGMHandCommand classifies one raw gm text. It is the core's own command table that decides which lines act on
 // a unit's life, health, power, auras or damage: `.die` (Chat.cpp:885), `.damage` (:939), `.aura`/`.unaura`
 // (:874-875), `.revive` (:887) and the `.modify` subcommands `hp`, `mana`, `rage` and `energy` (:360-365; the
-// ForeverCore table adds the generic `power` and `runicpower`, which this 1.12 client can still be pointed at).
+// ForeverCore table adds the generic `power` and `runicpower`, and its `currenthp` — cs_modify.cpp:73,152-175 — all
+// of which this 1.12 client can still be pointed at).
 // `.kill` is not in the 1.12 table but is kept as the fatal alias the trials tooling uses. Matching is the core's
 // own:
 // case-insensitive, and a typed token matches a command name when the name starts with it (hasStringAbbr, so
@@ -1159,7 +1182,7 @@ func serveGMHandCommand(text string) (serveGMHandClass, string) {
 		if len(fields) < 2 {
 			return serveGMHandNone, ""
 		}
-		if serveGMNameIs(strings.ToLower(fields[1]), "hp", "mana", "rage", "energy", "power", "runicpower") {
+		if serveGMNameIs(strings.ToLower(fields[1]), "hp", "currenthp", "mana", "rage", "energy", "power", "runicpower") {
 			return serveGMHandSelected, ""
 		}
 		return serveGMHandNone, ""
@@ -1368,9 +1391,82 @@ func (s *session) serveGMKill(ctx context.Context, p serveUnitParams) (ServeComm
 	return s.serveGMResult(ctx, ".die")
 }
 
-// serveGMSetHP sets one unit's health with `.modify hp <hp>`. The core's command sets the selected player's health
-// and its maximum to that one value (cs_modify.cpp:137-149); passing the unit's own maximum is therefore a refill
-// and the maximum does not change.
+// serveGMCombatLog starts or stops the core's GM combat-log watch (`.gm combatlog [group|off]`, cs_gm.cpp:195-232).
+// unit and group select the unit first, as every unit hand does; off needs no unit. The result's Watching is the
+// core's own verdict: only "Combat log watch on ..." is a watch, everything else is an error carrying the reply. A
+// core older than 0.1.38 answers "no such command", which is the unsupported-core code the callers branch on.
+func (s *session) serveGMCombatLog(ctx context.Context, p serveGMCombatLogParams) (ServeCombatLogWatch, error) {
+	mode := strings.ToLower(strings.TrimSpace(p.Mode))
+	out := ServeCombatLogWatch{Mode: mode}
+	line := ""
+	switch mode {
+	case "unit", "group":
+		line = ".gm combatlog"
+		if mode == "group" {
+			line = ".gm combatlog group"
+		}
+	case "off":
+		line = ".gm combatlog off"
+	default:
+		return ServeCombatLogWatch{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "gm_combatlog: mode must be unit, group or off"}
+	}
+	if mode != "off" {
+		o, err := s.serveUnitByName(p.GUID, p.Name)
+		if err != nil {
+			return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: %w", err)
+		}
+		if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
+			return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: %w", err)
+		}
+	}
+	rep, err := s.serveGM(ctx, line)
+	if err != nil {
+		return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: %w", err)
+	}
+	text := combatLogReply(rep)
+	out.Text = text
+	if strings.Contains(strings.ToLower(text), "no such command") {
+		return ServeCombatLogWatch{}, &rpc.Error{
+			Code:    rpc.CodeGame,
+			Message: "gm_combatlog: unsupported-core: the core has no .gm combatlog (needs 0.1.38 or later)",
+			Data:    map[string]any{"code": "unsupported-core"},
+		}
+	}
+	if text == "" {
+		return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: the server sent no answer")
+	}
+	if mode == "off" {
+		// Both of the core's answers to off are a stop: "Combat log watch stopped." and "You have no combat log
+		// watch." Nothing else is a stop.
+		if strings.HasPrefix(text, "Combat log watch stopped") || strings.HasPrefix(text, "You have no combat log watch") {
+			return out, nil
+		}
+		return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: %s", text)
+	}
+	if !strings.HasPrefix(text, "Combat log watch on") {
+		return ServeCombatLogWatch{}, fmt.Errorf("gm_combatlog: %s", text)
+	}
+	out.Watching = true
+	return out, nil
+}
+
+// combatLogReply is the core's answer line: the first non-empty line of the reply, which is one line on this core.
+func combatLogReply(rep *command.Reply) string {
+	if rep == nil {
+		return ""
+	}
+	for _, ln := range rep.Raw {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// serveGMSetHP sets one unit's health. `.modify hp <hp>` sets the selected player's health and its maximum to that
+// one value (cs_modify.cpp:137-149), so passing the unit's own maximum is a refill; `.modify currenthp <hp>` (the
+// current_only form) sets the current health and leaves the maximum alone, which is how a unit is hurt without
+// replacing its maximum.
 func (s *session) serveGMSetHP(ctx context.Context, p serveGMSetHPParams) (ServeCommand, error) {
 	if p.HP == nil {
 		return ServeCommand{}, errors.New("gm_set_hp needs hp")
@@ -1388,6 +1484,9 @@ func (s *session) serveGMSetHP(ctx context.Context, p serveGMSetHPParams) (Serve
 	}
 	if err := s.serveSelectConfirmed(ctx, o, serveGMSelectWait); err != nil {
 		return ServeCommand{}, fmt.Errorf("gm_set_hp: %w", err)
+	}
+	if p.CurrentOnly {
+		return s.serveGMResult(ctx, fmt.Sprintf(".modify currenthp %d", hp))
 	}
 	return s.serveGMResult(ctx, fmt.Sprintf(".modify hp %d", hp))
 }

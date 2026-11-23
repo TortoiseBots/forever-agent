@@ -38,6 +38,7 @@ func TestActionVocabularyIsClassified(t *testing.T) {
 		ActionEnter, ActionTeleCommander, ActionTeleParty, ActionTeleTo, ActionTeleOutside, ActionAppear,
 		ActionDeathRecap,
 		ActionRevive, ActionInstanceLeave, ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible,
+		ActionGMCombatLog,
 		ActionRunStart, ActionRunStop, ActionRunPause, ActionRunResume,
 	}
 	if len(actionClasses) != len(all) {
@@ -61,7 +62,8 @@ func TestActionVocabularyIsClassified(t *testing.T) {
 		ActionEnter: actionMove, ActionTeleCommander: actionMove, ActionTeleParty: actionMove, ActionTeleTo: actionMove,
 		ActionTeleOutside: actionMove, ActionAppear: actionMove, ActionInstanceLeave: actionMove,
 		ActionRevive: actionState, ActionInstanceReset: actionState, ActionGMOn: actionState,
-		ActionGMVisible: actionState, ActionInstanceInfo: actionRead, ActionDeathRecap: actionRead,
+		ActionGMVisible: actionState, ActionGMCombatLog: actionState, ActionInstanceInfo: actionRead,
+		ActionDeathRecap: actionRead,
 	} {
 		if got, _ := classifyAction(k); got != want {
 			t.Errorf("classifyAction(%d) = %v, want %v", k, got, want)

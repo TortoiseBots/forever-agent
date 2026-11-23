@@ -226,7 +226,7 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 			lines = []string{"TBM:ACTION_ACK|cc moon|bot:Atank|1|Atank"}
 		}
 		writeRPCResult(w, req.ID, map[string]any{"sent": p.Line, "complete": true, "lines": lines})
-	case "gm", "chat", "tbm", "cast", "gm_kill", "gm_set_hp", "gm_aura", "attack", "stop_attack":
+	case "gm", "chat", "tbm", "cast", "gm_kill", "gm_set_hp", "gm_aura", "gm_combatlog", "attack", "stop_attack":
 		writeRPCResult(w, req.ID, map[string]any{})
 	default:
 		writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)

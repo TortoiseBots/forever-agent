@@ -562,3 +562,78 @@ func TestLoginAgainstVectorEvidence(t *testing.T) {
 		})
 	}
 }
+
+// TestLoginJoinVersionMismatchTriesNextBuild: the realm list accepted the claimed build, but the realm's join
+// answered ERROR_USER_SERVER_VERSION_MISMATCH (0x800000DF, RealmList.cpp:454-471). With no build pinned that is the
+// same verdict the list's flag gives, so the login tries the next known build (newest first) instead of failing;
+// the realm's own build is not named, so there is no hint to jump to.
+func TestLoginJoinVersionMismatchTriesNextBuild(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	// The list accepts every build (Realm.AlsoAcceptBuilds): the join is the one refusing, so only the join's answer
+	// decides the retry.
+	f.realms = []fakeRealm{{
+		address: 0x46010046, name: "TestRealm", population: 1,
+		build: wire.Build70959, alsoAccept: []uint32{wire.Build70938, wire.Build70707},
+	}}
+	f.joinStatus = func(build uint32) uint32 {
+		if build == wire.Build70707 {
+			return 0
+		}
+		return 0x800000DF
+	}
+
+	result, err := Login(context.Background(), f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ClientBuild != wire.Build70707 {
+		t.Fatalf("claimed %d, want %d after the two join mismatches", result.ClientBuild, wire.Build70707)
+	}
+	wantLogonBuilds(t, f, wire.Build70959, wire.Build70938, wire.Build70707)
+}
+
+// TestLoginJoinNotPermittedNoRetry: ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM (0x800000E1) is the realm's policy, not
+// the build (a closed realm, a security level). Another build cannot pass it, so the login answers it at once.
+func TestLoginJoinNotPermittedNoRetry(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realms = []fakeRealm{{
+		address: 0x46010046, name: "TestRealm", population: 1,
+		build: wire.Build70959, alsoAccept: []uint32{wire.Build70938, wire.Build70707},
+	}}
+	f.joinStatus = func(uint32) uint32 { return 0x800000E1 }
+
+	_, err := Login(context.Background(), f.options())
+	if err == nil {
+		t.Fatal("a realm that is not permitted was joined")
+	}
+	if !errors.Is(err, ErrRealmNotPermitted) {
+		t.Fatalf("err = %v, want ErrRealmNotPermitted", err)
+	}
+	if !strings.Contains(err.Error(), "ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM") {
+		t.Fatalf("the error does not name the status: %v", err)
+	}
+	wantLogonBuilds(t, f, wire.Build70959)
+}
+
+// TestLoginExplicitBuildJoinMismatchIsError: a pinned build is never silently replaced. The join's mismatch names the
+// claimed build and no realm build (the core's join answer carries none), and it is returned as the login's error.
+func TestLoginExplicitBuildJoinMismatchIsError(t *testing.T) {
+	f := newFakeLogin(t)
+	defer f.close()
+	f.realmBuild = wire.Build70959
+	f.joinStatus = func(uint32) uint32 { return 0x800000DF }
+
+	opts := f.options()
+	opts.ClientBuild = wire.Build70959
+	_, err := Login(context.Background(), opts)
+	if err == nil {
+		t.Fatal("a join mismatch under a pinned build logged in")
+	}
+	var mismatch *RealmMismatch
+	if !errors.As(err, &mismatch) || mismatch.Claimed != wire.Build70959 || mismatch.RealmBuild != 0 {
+		t.Fatalf("err = %v, want a RealmMismatch claiming %d with no realm build", err, wire.Build70959)
+	}
+	wantLogonBuilds(t, f, wire.Build70959)
+}

@@ -1290,7 +1290,7 @@ func (f *Fake) defaultAction(a Action) {
 		}
 		f.selfMap = f.route.Portal.MapID()
 		f.selfPos = f.route.Portal.PosOr(f.route.Entrance)
-	case ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible:
+	case ActionInstanceReset, ActionInstanceInfo, ActionGMOn, ActionGMVisible, ActionGMCombatLog:
 		// The scripted world has nothing to change for these: the reset needs a party already outside, the report is
 		// an empty list, and the GM modes change the commander's own flags.
 	}

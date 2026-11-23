@@ -61,6 +61,9 @@ const (
 	// ActionGMOn and ActionGMVisible switch the commander's GM mode on.
 	ActionGMOn
 	ActionGMVisible
+	// ActionGMCombatLog starts (group, unit) or stops (off) the core's GM combat-log watch on the unit Action.Who
+	// names: the watch then sees the whole fight from any distance (`.gm combatlog [group]`, cs_gm.cpp:195-232).
+	ActionGMCombatLog
 	// ActionRunStart starts the module's own run of the plan for the leader's party. It is fight-starting: from
 	// then on the module pulls, so it needs the fight gate.
 	ActionRunStart
@@ -87,6 +90,8 @@ type Action struct {
 	Pos Vec3
 	// Dest is ActionTeleOutside's named place, from the plan's outside_tele.
 	Dest string
+	// Mode is ActionGMCombatLog's watch mode: "group" or "unit" to start it, "off" to stop it.
+	Mode string
 	// Recovery marks the wipe's recovery teleports: the one moving action that does not wait for a party with nobody
 	// dead, because raising and gathering the party is what it does. It still needs a fresh report.
 	Recovery bool
@@ -132,6 +137,7 @@ var actionClasses = map[ActionKind]actionClass{
 	ActionInstanceReset: actionState,
 	ActionGMOn:          actionState,
 	ActionGMVisible:     actionState,
+	ActionGMCombatLog:   actionState,
 	ActionInstanceInfo:  actionRead,
 	ActionDeathRecap:    actionRead,
 	ActionRunStart:      actionFight,
@@ -201,6 +207,8 @@ func (a Action) String() string {
 		return "gm on"
 	case ActionGMVisible:
 		return "gm visible on"
+	case ActionGMCombatLog:
+		return "gm combatlog " + a.Mode
 	case ActionRunStart:
 		return "run start " + a.Who + " " + a.Plan
 	case ActionRunStop:
@@ -224,7 +232,7 @@ func (a Action) who() string {
 	switch a.Kind {
 	case ActionEnter, ActionTeleParty:
 		return "party"
-	case ActionTeleOutside, ActionAppear, ActionGMOn, ActionGMVisible:
+	case ActionTeleOutside, ActionAppear, ActionGMOn, ActionGMVisible, ActionGMCombatLog:
 		return "commander"
 	}
 	if a.Who == "" {
@@ -281,8 +289,10 @@ func (r *Run) act(ctx context.Context, a Action) (ActionReport, string) {
 		return ActionReport{}, "link"
 	}
 	// A pending stop refuses every action except the stop path's own run commands: sending a pause or a stop after
-	// the run ended is the watcher's ordinary end, and nothing else may be sent once the run is stopping.
-	if r.stopReason != "" && class != actionPassive && class != actionRead {
+	// the run ended is the watcher's ordinary end, and nothing else may be sent once the run is stopping. The one
+	// other exception is the GM combat-log watch's stop: it belongs to the cleanup that a stop begins, and leaving
+	// it out is exactly what a teardown must not do.
+	if r.stopReason != "" && class != actionPassive && class != actionRead && !(a.Kind == ActionGMCombatLog && a.Mode == "off") {
 		return ActionReport{}, "stop"
 	}
 	var why string

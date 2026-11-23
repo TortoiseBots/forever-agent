@@ -517,6 +517,59 @@ func (g *Guard) SetHP(ctx context.Context, guid string, hp int) error {
 	})
 }
 
+// SetCurrentHP sets one in-scope unit's current health through gm_set_hp's current-only form, leaving its maximum
+// alone: the hand that makes a hurt unit without a hurt maximum.
+func (g *Guard) SetCurrentHP(ctx context.Context, guid string, hp int) error {
+	class := g.where(guid)
+	if class != TargetSelf && class != TargetHire {
+		return &GmRefused{Text: "gm_set_hp " + guid + " (outside this trial's scope)"}
+	}
+	return g.hand(ctx, "gm_set_hp", guid, class, func() error {
+		return g.client.GMSetCurrentHP(ctx, normGUIDOf(guid), hp)
+	})
+}
+
+// CombatLogWatch starts (unit, group) or stops (off) the core's GM combat-log watch. A start is held to the trial's
+// own scope; off names no unit and is allowed anywhere.
+func (g *Guard) CombatLogWatch(ctx context.Context, guid, mode string) error {
+	switch mode {
+	case "off":
+		return g.handFree(ctx, "gm_combatlog", "gm_combatlog off", func() error {
+			return g.client.GMCombatLog(ctx, "", mode)
+		})
+	case "unit", "group":
+	default:
+		return fmt.Errorf("gm_combatlog: mode must be unit, group or off")
+	}
+	class := g.where(guid)
+	if class != TargetSelf && class != TargetHire {
+		return &GmRefused{Text: "gm_combatlog " + guid + " (outside this trial's scope)"}
+	}
+	return g.hand(ctx, "gm_combatlog", guid, class, func() error {
+		return g.client.GMCombatLog(ctx, normGUIDOf(guid), mode)
+	})
+}
+
+// handFree is hand for a line that names no unit: the abort check and the ledger row, then the one RPC.
+func (g *Guard) handFree(ctx context.Context, kind, line string, call func() error) error {
+	if fn := g.abortFn(); fn != nil && fn() != "" {
+		return &Disconnected{err: fmt.Errorf("aborted: %s", fn())}
+	}
+	if g.dryRun {
+		g.record(kind, line, "")
+		return nil
+	}
+	g.record(kind, line, "")
+	err := call()
+	if IsNoReply(err) {
+		if g.marks != nil {
+			g.marks.Add(map[string]any{"kind": "gm_silent", "kind_detail": kind})
+		}
+		return nil
+	}
+	return err
+}
+
 // RemoveAura strips one aura from an in-scope unit through gm_aura.
 func (g *Guard) RemoveAura(ctx context.Context, guid string, spell int) error {
 	class := g.where(guid)

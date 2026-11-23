@@ -16,12 +16,13 @@ import (
 )
 
 // adapterMethods is the driver adapter's whole method set: the five port methods, the send the module's typed client
-// runs over, and the three builders of the core's tokenless lines. A method outside it (a raw setup line, a new
-// escape hatch) fails the test.
+// runs over, the builders of the core's tokenless lines and the combat-log watch's unit resolution. A method outside
+// it (a raw setup line, a new escape hatch) fails the test.
 var adapterMethods = map[string]bool{
 	"State": true, "Threat": true, "Order": true, "Party": true, "Act": true,
 	"RunStatus": true, "RunEvents": true, "CommanderStatus": true,
 	"Run": true, "gmOn": true, "teleOutside": true, "appear": true, "deathRecap": true,
+	"combatLog": true, "combatLogUnit": true,
 }
 
 // TestOnlySendReachesTheCommandChannel: the driver adapter's only call of the command session's Run is the send the

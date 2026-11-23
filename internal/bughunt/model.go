@@ -214,6 +214,10 @@ type Run struct {
 	CastTimes map[string][]float64
 	// BossEntries are the entries a watch's instance report listed, which rule 3 does not count as adds.
 	BossEntries map[uint32]string
+	// CombatLogWatch is a watch's GM combat-log watch (group, unit, off or unsupported): with off or unsupported the
+	// combat log holds only the rows the client saw in range, so a rule that needs the whole fight must skip. Empty
+	// is an older summary, which judged its log as before.
+	CombatLogWatch string
 	// ByGUID maps a canonical guid to the run's own identity for that unit (a watch keys members by guid, a trials
 	// repeat by character name), and GUIDOf is the reverse. A combat row's guid becomes the run's identity through
 	// them, so the rules join a row to a frame whatever the run keys its members by.

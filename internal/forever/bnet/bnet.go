@@ -112,7 +112,9 @@ func (e *RealmError) Unwrap() error { return e.Err }
 
 // RealmMismatch is the realm list's VersionMismatch flag: the realm does not accept the build the login claimed
 // (RealmList.cpp: FillRealmEntry sets the flag and shows the realm's own build). Login's automatic-build path uses
-// RealmBuild as the hint for the next claim; an explicit build returns it as the login's error.
+// RealmBuild as the hint for the next claim; an explicit build returns it as the login's error. The realm join's
+// own ERROR_USER_SERVER_VERSION_MISMATCH (RealmList.cpp:454-471) raises the same type with RealmBuild 0, because
+// that answer names no build of the realm.
 type RealmMismatch struct {
 	Realm      string // the realm's name as the server sent it; sanitise before printing
 	Claimed    uint32 // the build the login claimed
@@ -120,9 +122,26 @@ type RealmMismatch struct {
 }
 
 func (e *RealmMismatch) Error() string {
+	if e.RealmBuild == 0 {
+		// The realm join's answer (ERROR_USER_SERVER_VERSION_MISMATCH) names no build of the realm: the list that
+		// accepted the claim showed none, so the refusal is the join's own word only.
+		return fmt.Sprintf("bnet: realm %q does not accept client build %d (the realm join refused it and names no realm build)",
+			sanitizeServerText(e.Realm), e.Claimed)
+	}
 	return fmt.Sprintf("bnet: realm %q does not accept client build %d (the realm is build %d)",
 		sanitizeServerText(e.Realm), e.Claimed, e.RealmBuild)
 }
+
+// ErrRealmNotPermitted is the realm join's ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM (BattlenetRpcErrorCodes.h:650):
+// the realm is closed, offline, or above the account's security level (RealmList.cpp:454-471). Another client build
+// cannot pass it, so the login answers it at once and never retries.
+var ErrRealmNotPermitted = errors.New(
+	"bnet: the realm does not permit this account (ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM: the realm is closed, or the account's security level is too low for it)")
+
+// errRealmBuildMismatch is the join's ERROR_USER_SERVER_VERSION_MISMATCH (BattlenetRpcErrorCodes.h:648) before the
+// realm's name is at hand: joinRealm raises it, and loginOnce turns it into the *RealmMismatch the build selection
+// reads (the join answer names no realm build, so the mismatch carries none).
+var errRealmBuildMismatch = errors.New("bnet: the realm join refused the client build")
 
 // supportedBuildList is the builds this client knows, in the message's order.
 func supportedBuildList() string {
@@ -266,6 +285,11 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 			continue
 		}
 		done()
+		// A closed realm (or one above the account's security level) refuses every build: that is the realm's
+		// policy, not the claim, and no retry can pass it.
+		if errors.Is(err, ErrRealmNotPermitted) {
+			return nil, err
+		}
 		var mismatch *RealmMismatch
 		if !errors.As(err, &mismatch) {
 			return nil, err
@@ -479,6 +503,9 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 	// ---- RPC: realm join
 	join, err := rpc.joinRealm(ctx, realm.WowRealmAddress)
 	if err != nil {
+		if errors.Is(err, errRealmBuildMismatch) {
+			return nil, &RealmError{Err: &RealmMismatch{Realm: realm.Name, Claimed: opts.ClientBuild}}
+		}
 		return nil, &RealmError{Err: err}
 	}
 	var ticket realmJoinTicket
@@ -660,6 +687,17 @@ func (s *rpcSession) joinRealm(ctx context.Context, realmAddress uint32) (*joinA
 	}}
 	body, err := s.call(ctx, gameUtilitiesServiceHash, gameUtilitiesProcessRequest, req.marshal())
 	if err != nil {
+		// The core answers a wrong build and a realm that will not have the account as two different statuses
+		// (BattlenetRpcErrorCodes.h:648,650): only the first is worth another attempt with another build.
+		var re *rpcError
+		if errors.As(err, &re) {
+			switch re.Status {
+			case statusUserServerVersionMismatch:
+				return nil, errRealmBuildMismatch
+			case statusUserServerNotPermittedOnRealm:
+				return nil, ErrRealmNotPermitted
+			}
+		}
 		return nil, fmt.Errorf("bnet: realm join: %w", err)
 	}
 	resp, err := unmarshalClientResponse(body)
