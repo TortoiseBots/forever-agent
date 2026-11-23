@@ -157,6 +157,10 @@ type Config struct {
 	// Watchdog overrides Limits.Watchdog; Poll overrides Limits.WatchPoll.
 	Watchdog time.Duration
 	Poll     time.Duration
+	// Attach makes a watch of a run started elsewhere: it sends no `.tb run start`, and polls until the leader's one
+	// running run (or a paused one) is there to attach to. AttachWait bounds that wait (--attach-wait; 300 s when 0).
+	Attach     bool
+	AttachWait time.Duration
 	// FrameEvery is the watch's frame interval: every that long it reads `.tb state` and `.tb threat` and writes one
 	// trace frame plus the new combat-log rows. Zero writes no frames; the command's minimum is two seconds, which
 	// is also the module's own cost boundary for the two reads.

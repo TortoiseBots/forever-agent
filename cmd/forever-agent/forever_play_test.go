@@ -140,7 +140,7 @@ func TestDungeonPlayFlagErrors(t *testing.T) {
 // TestPlayConfigCarriesFlags: --max-wipes and --max-minutes reach the run's config (a flag that is read and dropped
 // would give every run the default budget).
 func TestPlayConfigCarriesFlags(t *testing.T) {
-	cfg := playConfig("ragefire_chasm", [4]string{"A", "B", "C", "D"}, 45, 5, true, "out", "id")
+	cfg := playConfig("ragefire_chasm", [4]string{"A", "B", "C", "D"}, 45, 5, "", true, "out", "id")
 	if cfg.MaxWipes != 5 || cfg.MaxMinutes != 45 || !cfg.Disband || cfg.Out != "out" || cfg.Bots[3] != "D" || cfg.RunID != "id" {
 		t.Fatalf("config = %+v", cfg)
 	}
@@ -267,5 +267,39 @@ func TestDungeonPlayJudgesItsOwnTrace(t *testing.T) {
 	}
 	if empty == 0 {
 		t.Fatalf("the folder read judged %v; want the other run's empty log to show (the test's trap is not set)", byDir)
+	}
+}
+
+// TestPlayCmdLastLegChecksTheName: --last-leg is checked against the plan's legs before anything is sent, and the
+// usage message lists them.
+func TestPlayCmdLastLegChecksTheName(t *testing.T) {
+	route, err := driver.LoadPlayRoute(rfcPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runPlayCmd(t, "--dry", "--plan", rfcPlan(), "--bots", playBotsArg, "--character", "Hero", "--last-leg", "nowhere")
+	if code != exitUsage {
+		t.Fatalf("exit %d stderr %q; want a usage error", code, stderr)
+	}
+	if !strings.Contains(stderr, "nowhere") || !strings.Contains(stderr, route.Legs[0].Name) || !strings.Contains(stderr, route.Legs[len(route.Legs)-1].Name) {
+		t.Fatalf("stderr = %q; want it to name the bad leg and list every leg", stderr)
+	}
+}
+
+// TestPlayCmdLastLegDry: a dry run cut at a leg clears once that leg's boss is down.
+func TestPlayCmdLastLegDry(t *testing.T) {
+	route, err := driver.LoadPlayRoute(rfcPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := route.Legs[3].Name
+	code, stdout, stderr := runPlayCmd(t, "--dry", "--plan", rfcPlan(), "--bots", playBotsArg, "--character", "Hero", "--last-leg", name)
+	// A dry run without --out has no record to judge, so the verdict fails; the run's own clear is what the flag is
+	// about, and the single BOSS state is the proof that the legs after it were not walked.
+	if !strings.Contains(stdout, "clear=true") {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	if n := strings.Count(stdout, " BOSS "); n != 1 {
+		t.Fatalf("the run entered %d boss states; want one (the cut leg's)\n%s", n, stdout)
 	}
 }

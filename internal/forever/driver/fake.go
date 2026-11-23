@@ -172,15 +172,19 @@ type Fake struct {
 	// one with no leader flag, that PREPARE must refuse.
 	OnParty func(tbcmd.PartyReport) tbcmd.PartyReport
 	OnState func(f *Fake, n int) error
+	// OnStatus, when set, is asked at each run-status read with its number (from 1): a test scripts a run that shows
+	// up after a few reads, or one whose state changes while the watch waits for it.
+	OnStatus func(f *Fake, n int)
 
 	// RefuseActions answers that action with the module's error line of this code.
 	RefuseActions map[ActionKind]string
 
-	stateCalls int
-	orderSnap  *tbcmd.StateReport
-	whole      bool
-	wipeFlag   bool
-	stops      int
+	stateCalls  int
+	statusCalls int
+	orderSnap   *tbcmd.StateReport
+	whole       bool
+	wipeFlag    bool
+	stops       int
 	// DistMissingAt makes that state call (1-based) leave every dm key out.
 	DistMissingAt int
 	// StaleAt makes that state call a report taken before the last order: it returns the snapshot the fake took when
@@ -1139,6 +1143,10 @@ func (f *Fake) runState() tbcmd.RunState {
 
 // RunStatus reads the scripted module's run record.
 func (f *Fake) RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error) {
+	f.statusCalls++
+	if f.OnStatus != nil {
+		f.OnStatus(f, f.statusCalls)
+	}
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.RunReport{}, err
 	}
@@ -1168,6 +1176,20 @@ func (f *Fake) RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, e
 		rep.Pending, rep.HasPending = true, true
 	}
 	return rep, nil
+}
+
+// StartForeignRun puts the module's run in the given state as another client's start would have (dungeon-watch
+// --attach): the record, its start event and its scripted progress, with no action of the watch's.
+func (f *Fake) StartForeignRun(state string) {
+	if f.run != nil || len(f.cfg.Party) == 0 {
+		return
+	}
+	if err := f.startRun(Action{Kind: ActionRunStart, Who: f.cfg.Party[0], Plan: f.route.Name}); err != nil {
+		return
+	}
+	if state != "" && state != "running" {
+		f.run.state = state
+	}
 }
 
 // RunEvents reads the scripted module's event ring above a sequence.

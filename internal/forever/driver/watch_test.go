@@ -1010,3 +1010,173 @@ func TestFrameGUIDKeepsAGUIDName(t *testing.T) {
 		t.Fatalf("%d name lookups for a guid text", wc.n)
 	}
 }
+
+// --- proof-3 part C: dungeon-watch --attach follows a run another client started ---
+
+// TestWatchAttachSendsNoStart: with --attach the watch sends no `.tb run start`; it attaches to the running run and
+// follows it to its end.
+func TestWatchAttachSendsNoStart(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.StartForeignRun("running")
+	res := run.Watch(context.Background())
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+	if res.Stop != "done" || !res.Clear {
+		t.Fatalf("stop %q clear %v, want done\n%s", res.Stop, res.Clear, strings.Join(*logs, "\n"))
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=running") {
+		t.Fatalf("no attach line:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchAttachWaitsForRunningRun: the run is not there for the first two reads; the third shows it running and the
+// watch attaches, still with no start of its own.
+func TestWatchAttachWaitsForRunningRun(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.OnStatus = func(f *Fake, n int) {
+		if n == 3 {
+			f.StartForeignRun("running")
+		}
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=running") {
+		t.Fatalf("no attach line:\n%s", strings.Join(*logs, "\n"))
+	}
+}
+
+// TestWatchAttachPausedRun: a run already paused is attached too, with its state applied (its pause is the watch's
+// own, and the pause budget ends the watch as paused-stuck).
+func TestWatchAttachPausedRun(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	// A paused run sends no event and no finish: the watch's own pause budget is what ends this watch.
+	f.ScriptRun(FakeRunScript{Silent: true})
+	f.StartForeignRun("paused")
+	res := run.Watch(context.Background())
+	// The attach applies the run's paused state (the watch ends on the pause budget and its own stop then moves the
+	// module's record on, so the attach line is the evidence the state was read).
+	if !strings.Contains(strings.Join(*logs, "\n"), "watch: attached state=paused") {
+		t.Fatalf("no attach line for the paused run:\n%s", strings.Join(*logs, "\n"))
+	}
+	if res.Stop != StopPausedStuck {
+		t.Fatalf("stop %q, want %q\n%s", res.Stop, StopPausedStuck, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+}
+
+// TestWatchAttachTimeout: a leader with no run to attach to ends the watch as start:attach-timeout, with no start.
+func TestWatchAttachTimeout(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	cfg.AttachWait = 30 * time.Second
+	run, f, _ := newWatch(t, cfg)
+	res := run.Watch(context.Background())
+	if res.Stop != "start:attach-timeout" {
+		t.Fatalf("stop %q, want start:attach-timeout", res.Stop)
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+}
+
+// TestWatchAttachRunsNoEntry: with --attach the party is already in another client's run, so the watch runs no entry
+// step at all: the CLI's default --enter tele would otherwise travel and teleport a party it does not command. The
+// same config without --attach does run the entry, so the check is not vacuous.
+func TestWatchAttachRunsNoEntry(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Enter = "tele" // the CLI's default: the entry the review found running before an attach
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second})
+	f.StartForeignRun("running")
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "enter"); n != 0 {
+		t.Fatalf("%d enter actions on an attached watch; want none\n%s", n, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "tele"); n != 0 {
+		t.Fatalf("%d teleport actions on an attached watch; want none\n%s", n, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "gm"); n != 0 {
+		t.Fatalf("%d GM lines on an attached watch; want none\n%s", n, strings.Join(*logs, "\n"))
+	}
+	for _, st := range res.States {
+		switch st {
+		case StatePrepare, StateTravel, StateEnter:
+			t.Fatalf("state %s ran on an attached watch; states %v", st, res.States)
+		}
+	}
+	// The roster is still read: the party's names come from it, for the roles and the member lines.
+	if len(run.cfg.Party) != 5 {
+		t.Fatalf("party %q, want the roster's five on attach", run.cfg.Party)
+	}
+
+	ctl := watchConfig()
+	ctl.Enter = "tele"
+	crun, cf, clogs := newWatch(t, ctl)
+	cf.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second})
+	if res := crun.Watch(context.Background()); res.Stop != "done" {
+		t.Fatalf("control stop %q, want done\n%s", res.Stop, strings.Join(*clogs, "\n"))
+	}
+	if n := countActions(cf, "enter"); n == 0 {
+		t.Fatalf("the control watch sent no enter action; the attach check would pass for the wrong reason\n%s",
+			strings.Join(*clogs, "\n"))
+	}
+}
+
+// TestWatchAttachRefusesAnotherPlan: an attached run whose plan is not --plan is refused with both plans named,
+// before anything is applied, and no start is sent.
+func TestWatchAttachRefusesAnotherPlan(t *testing.T) {
+	cfg := watchConfig()
+	cfg.Attach = true
+	run, f, logs := newWatch(t, cfg)
+	f.StartForeignRun("running")
+	f.run.plan = "other-dungeon"
+	res := run.Watch(context.Background())
+	if res.Stop != "start:attach-plan" {
+		t.Fatalf("stop %q, want start:attach-plan\n%s", res.Stop, strings.Join(*logs, "\n"))
+	}
+	if n := countActions(f, "run start"); n != 0 {
+		t.Fatalf("%d run start actions; want none on an attached watch", n)
+	}
+	if o := f.Orders(); len(o) != 0 {
+		t.Fatalf("the refusal sent %d actions: %+v; want none (no start, no stop, no read of another plan's run)", len(o), o)
+	}
+	line := strings.Join(*logs, "\n")
+	if !strings.Contains(line, `plan "other-dungeon", not --plan "scenario"`) {
+		t.Fatalf("the refusal does not name both plans:\n%s", line)
+	}
+	if strings.Contains(line, "watch: attached") {
+		t.Fatalf("the watch attached to a run of another plan:\n%s", line)
+	}
+}
+
+// TestWatchForeignBotWithoutAttachStops: a start the module refuses as foreign-bot ends the watch, and the log says
+// that a run started elsewhere can be watched with --attach.
+func TestWatchForeignBotWithoutAttachStops(t *testing.T) {
+	run, f, logs := newWatch(t, watchConfig())
+	f.RefuseActions = map[ActionKind]string{ActionRunStart: "foreign-bot"}
+	res := run.Watch(context.Background())
+	if res.Stop != "start:foreign-bot" {
+		t.Fatalf("stop %q, want start:foreign-bot", res.Stop)
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "a run started elsewhere can be watched with --attach") {
+		t.Fatalf("no --attach hint:\n%s", strings.Join(*logs, "\n"))
+	}
+}

@@ -33,28 +33,27 @@ func (r *Run) prepare(ctx context.Context) string {
 	if r.lost {
 		return ""
 	}
-	party, err := r.cmd.Party(ctx)
-	if errors.Is(err, ErrLinkLost) {
-		r.linkLost()
-		return ""
-	}
-	if err != nil {
-		r.stop("prepare:party")
-		return ""
-	}
-	var why string
 	if r.cfg.Watch {
 		// A watch is not one of our parties: the tank is the bot the module's run names, the commander is one of
 		// the module's own bots outside it, and the roster is where the five names come from. PREPARE then checks it
 		// exactly as a run does (levels, roles, online, commanded).
-		r.commander = party.Commander
-		why = r.adoptRoster(party)
+		if !r.adoptWatchParty(ctx) {
+			return ""
+		}
 	} else {
-		why = rosterWhy(r.cfg, party)
-	}
-	if why != "" {
-		r.stop("prepare:" + why)
-		return ""
+		party, err := r.cmd.Party(ctx)
+		if errors.Is(err, ErrLinkLost) {
+			r.linkLost()
+			return ""
+		}
+		if err != nil {
+			r.stop("prepare:party")
+			return ""
+		}
+		if why := rosterWhy(r.cfg, party); why != "" {
+			r.stop("prepare:" + why)
+			return ""
+		}
 	}
 	// The commander comes to the tank's side before the party's readiness rule reads the block its absence causes
 	// (`stuck=blocked:bot in an instance`). The watch made one attempt before PREPARE, on the roster it reads for this
@@ -146,6 +145,27 @@ func rosterWhy(cfg Config, p tbcmd.PartyReport) string {
 		return "roles"
 	}
 	return ""
+}
+
+// adoptWatchParty reads the module's roster and adopts it as the watch's own, with PREPARE's own rules: the party's
+// five names, their roles and the commander. It sends nothing, so a watch attached to a run started elsewhere
+// (--attach) reads the party of a run another client commands without running PREPARE's lines or any placement.
+func (r *Run) adoptWatchParty(ctx context.Context) bool {
+	party, err := r.cmd.Party(ctx)
+	if errors.Is(err, ErrLinkLost) {
+		r.linkLost()
+		return false
+	}
+	if err != nil {
+		r.stop("prepare:party")
+		return false
+	}
+	r.commander = party.Commander
+	if why := r.adoptRoster(party); why != "" {
+		r.stop("prepare:" + why)
+		return false
+	}
+	return true
 }
 
 // adoptRoster fills a watch's party from the module's roster: the tank first (so every role lookup has the tank

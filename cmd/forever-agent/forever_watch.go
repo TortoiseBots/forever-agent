@@ -2,8 +2,10 @@ package main
 
 // forever dungeon-watch: watch a dungeon run a server module leads. The client brings the party in as a run does
 // (PREPARE, ENTER), starts the module's run with one typed action and then only reads: status, events and the
-// instance report. It never orders a bot during the run. The safety budgets (watchdog, time, wipes, the practice
-// rescue) live in the driver's watch machine; this file is the flags, the dry mode and the report.
+// instance report. It never orders a bot during the run. With --attach the party is already in a run another client
+// started: the watch runs no entry at all, attaches to that run and only reads it. The safety budgets (watchdog,
+// time, wipes, the practice rescue) live in the driver's watch machine; this file is the flags, the dry mode and the
+// report.
 
 import (
 	"bytes"
@@ -21,7 +23,7 @@ import (
 )
 
 func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	const usage = "usage: forever-agent forever dungeon-watch --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -37,6 +39,8 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 	watchdog := fs.Int("watchdog-minutes", 10, "pause and end the watch when no new run event arrives for this many minutes")
 	pause := fs.Int("pause-minutes", 5, "end the watch as paused-stuck when the module's pause stands this many minutes")
 	poll := fs.Int("poll", 2, "the status and event poll interval in seconds (1-30)")
+	attach := fs.Bool("attach", false, "attach to the leader's run started elsewhere instead of starting one: no entry step runs, and the run must be the --plan's")
+	attachWait := fs.Duration("attach-wait", 300*time.Second, "how long --attach waits for that run (1s-24h)")
 	frameEvery := fs.Int("frame-every", 2, "the frame interval in seconds: each tick reads `.tb state` and `.tb threat` and records one frame, 0 turns frames off (2-60)")
 	combatMaxMB := fs.Int("combat-max-mb", driver.DefaultCombatMaxBytes>>20, "the combat-log file's size bound in MiB: a page that would cross it is not written and the summary says the log is truncated (1-4096)")
 	combatlogWatch := fs.String("combatlog-watch", "group", "the core's GM combat-log watch (.gm combatlog): group (the tank and its party, the default), unit (the tank only) or off; a core without the command logs one warning and records the in-range log")
@@ -82,6 +86,10 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintln(stderr, "forever dungeon-watch: --poll is 1-30 seconds")
 		return exitUsage
 	}
+	if *attachWait < time.Second || *attachWait > 24*time.Hour {
+		fmt.Fprintln(stderr, "forever dungeon-watch: --attach-wait is 1s-24h")
+		return exitUsage
+	}
 	if *frameEvery != 0 && (*frameEvery < 2 || *frameEvery > 60) {
 		fmt.Fprintln(stderr, "forever dungeon-watch: --frame-every is 2-60 seconds, or 0 for no frames")
 		return exitUsage
@@ -123,6 +131,8 @@ func foreverDungeonWatchCmd(ctx context.Context, args []string, stdout, stderr i
 		Watch:          true,
 		Watchdog:       time.Duration(*watchdog) * time.Minute,
 		Poll:           time.Duration(*poll) * time.Second,
+		Attach:         *attach,
+		AttachWait:     *attachWait,
 		FrameEvery:     time.Duration(*frameEvery) * time.Second,
 		CombatMaxBytes: int64(*combatMaxMB) << 20,
 		CombatLogWatch: *combatlogWatch,

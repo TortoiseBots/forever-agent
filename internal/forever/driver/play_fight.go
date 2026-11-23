@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"strconv"
 	"time"
@@ -21,15 +22,24 @@ const (
 	// PlayPullYd is how near the way a live pack unit stands before the run pulls it (20 yd): a pack in the way is
 	// fought before the walk goes on.
 	PlayPullYd = 20.0
+	// PlayPullGatherYd is how near the agent every bot must stand before a pull is marked and ordered (10 yd): the
+	// tank follows behind, so a pull taken before it is beside the agent can leave it out of the pack's sight.
+	PlayPullGatherYd = 10.0
+	// PlayPullStepYd is how far a retry pull steps toward the skull after a first pull no one answered (5 yd); the
+	// step never ends nearer than PlayPullMinYd to the skull (10 yd), and an agent already inside that ring does not
+	// move.
+	PlayPullStepYd = 5.0
+	PlayPullMinYd  = 10.0
 	// PlayRestHP and PlayRestMana are REST's bars: every member's health at 80 per cent, and a mana user's pool at 70
 	// (§3.8).
 	PlayRestHP   = 80
 	PlayRestMana = 70
 )
 
-// pull is the pack in the way: the skull goes on the plan's kill order's entry in it (else on the unit nearest the
-// agent), the cross on the nearest other one, the agent selects the skull and orders the tank onto it, and the run
-// waits for the pack to turn on the party. A pull no one answers is tried once more and then stops the run.
+// pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
+// on the plan's kill order's entry in the pack (else on the unit nearest the agent), the cross on the nearest other
+// one, the agent selects the skull and orders the tank onto it, and the run waits for the pack to turn on the party.
+// A pull no one answers is tried once more from PlayPullStepYd nearer the skull and then stops the run.
 func (p *playRun) pull(ctx context.Context) string {
 	if p.bossRun {
 		if leg := p.leg(); leg != nil && leg.Boss != nil {
@@ -52,6 +62,17 @@ func (p *playRun) pull(ctx context.Context) string {
 		return StateLegWalk
 	}
 	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: g.ID, Entries: g.Entries, Mobs: len(members)})
+	// A pack pull is made from the plan's stand with the party beside the agent: the tank follows behind, so a pull
+	// taken wherever the leg walk stopped can leave it out of the pack's sight (proof-3 part A).
+	if !p.pullApproach(ctx, g) {
+		return ""
+	}
+	members = p.liveMembers(g)
+	if len(members) == 0 {
+		p.pulled[g.ID] = true
+		p.pack = -1
+		return StateLegWalk
+	}
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"group": g.ID})
@@ -69,9 +90,69 @@ func (p *playRun) pull(ctx context.Context) string {
 			p.pack = -1
 			return StateLegWalk
 		}
+		if attempt == 0 {
+			if u, ok := unitByGUID(members, p.skull); ok && !p.pullStep(ctx, u) {
+				return ""
+			}
+		}
 	}
 	p.stop("pull-failed")
 	return ""
+}
+
+// pullApproach walks the agent to the plan's stand for the group (unless it already stands within PlayArriveYd of it),
+// records `pull_stand`, and waits for the party at PlayPullGatherYd: the pull is marked and ordered only then.
+func (p *playRun) pullApproach(ctx context.Context, g Group) bool {
+	stand := g.Stand(p.self)
+	if dist3(p.self, stand) > PlayArriveYd {
+		// No nested pull and no patrol hold on the way to the stand: the walk is the pull's own approach.
+		p.pullWalk = true
+		p.walkTo(ctx, stand, false, false)
+		p.pullWalk = false
+		if p.stopReason != "" {
+			return false
+		}
+	}
+	p.rec.Event(p.now(), "pull_stand", map[string]any{
+		"group": g.ID, "x": stand[0], "y": stand[1], "z": stand[2], "yd": dist3(stand, g.Centre),
+	})
+	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt)
+}
+
+// pullStep moves the agent closer after a pull no one answered: the walk goes to PlayPullStepYd along the line to the
+// skull, never nearer than PlayPullMinYd to it, records `pull_step`, and gathers the party again before the retry.
+func (p *playRun) pullStep(ctx context.Context, skull Unit) bool {
+	p.refreshSelf()
+	to := pullStepPoint(p.self, skull.Pos)
+	if d := dist3(p.self, to); d > 0.01 {
+		p.rec.Event(p.now(), "pull_step", map[string]any{"x": to[0], "y": to[1], "z": to[2], "yd": d})
+		p.pullWalk = true
+		p.walkTo(ctx, to, false, false)
+		p.pullWalk = false
+		if p.stopReason != "" {
+			return false
+		}
+	}
+	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt)
+}
+
+// pullStepPoint is the point a retry pull steps to: PlayPullStepYd from `from` toward the skull, and no nearer than
+// PlayPullMinYd to the skull; `from` itself when it already stands inside that ring.
+func pullStepPoint(from, skull Vec3) Vec3 {
+	d := dist3(from, skull)
+	if d <= PlayPullMinYd {
+		return from
+	}
+	step := math.Min(PlayPullStepYd, d-PlayPullMinYd)
+	if step <= 0 {
+		return from
+	}
+	f := step / d
+	return Vec3{
+		from[0] + float32(float64(skull[0]-from[0])*f),
+		from[1] + float32(float64(skull[1]-from[1])*f),
+		from[2] + float32(float64(skull[2]-from[2])*f),
+	}
 }
 
 // pullBoss is the boss of the leg: the pull's orders with the boss as the skull and the plan's entries to kill before

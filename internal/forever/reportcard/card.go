@@ -48,28 +48,30 @@ type Card struct {
 	Plan    string `json:"plan"`
 	Mode    string `json:"mode"`
 	// Verdict is one word (CLEARED, STOPPED or FAILED); VerdictText is the one-line sentence the brief asks for.
-	Verdict     string     `json:"verdict"`
-	VerdictText string     `json:"verdict_text"`
-	Clear       bool       `json:"clear"`
-	State       string     `json:"state"`
-	StopReason  string     `json:"stop_reason"`
-	Why         string     `json:"why,omitempty"`
-	Leg         int        `json:"leg"`
-	LegName     string     `json:"leg_name,omitempty"`
-	Step        int        `json:"step"`
-	Steps       int        `json:"steps"`
-	ElapsedS    float64    `json:"elapsed_s"`
-	Pull        int        `json:"pull"`
-	Pulls       int        `json:"pulls"`
-	Deaths      int        `json:"deaths"`
-	Wipes       int        `json:"wipes"`
-	Pauses      int        `json:"pauses"`
-	Rescues     int        `json:"rescues"`
-	Thresholds  Thresholds `json:"thresholds"`
-	Legs        []Leg      `json:"legs"`
-	DeathLog    []Death    `json:"death_log,omitempty"`
-	PauseLog    []Pause    `json:"pause_log,omitempty"`
-	Flags       []Flag     `json:"flags"`
+	Verdict     string `json:"verdict"`
+	VerdictText string `json:"verdict_text"`
+	Clear       bool   `json:"clear"`
+	State       string `json:"state"`
+	StopReason  string `json:"stop_reason"`
+	Why         string `json:"why,omitempty"`
+	Leg         int    `json:"leg"`
+	LegName     string `json:"leg_name,omitempty"`
+	// LastLeg is the leg the run ended on (the record's own field): a run cut with --last-leg ends here.
+	LastLeg    string     `json:"last_leg,omitempty"`
+	Step       int        `json:"step"`
+	Steps      int        `json:"steps"`
+	ElapsedS   float64    `json:"elapsed_s"`
+	Pull       int        `json:"pull"`
+	Pulls      int        `json:"pulls"`
+	Deaths     int        `json:"deaths"`
+	Wipes      int        `json:"wipes"`
+	Pauses     int        `json:"pauses"`
+	Rescues    int        `json:"rescues"`
+	Thresholds Thresholds `json:"thresholds"`
+	Legs       []Leg      `json:"legs"`
+	DeathLog   []Death    `json:"death_log,omitempty"`
+	PauseLog   []Pause    `json:"pause_log,omitempty"`
+	Flags      []Flag     `json:"flags"`
 }
 
 // Leg is one leg's numbers: its time, its pulls and re-pulls, its steps, and its deaths, wipes and pauses.
@@ -126,7 +128,7 @@ func Build(sum driver.RunSummary, th Thresholds) Card {
 	c := Card{
 		Schema: Schema, Version: Version, RunID: sum.RunID, Plan: sum.Plan, Mode: sum.Mode,
 		Clear: sum.Clear, StopReason: sum.StopReason, ElapsedS: sum.DurationS, Thresholds: th,
-		Legs: []Leg{}, Flags: []Flag{},
+		LastLeg: sum.LastLeg, Legs: []Leg{}, Flags: []Flag{},
 	}
 	w := sum.Watch
 	if w == nil {
