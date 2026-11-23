@@ -33,6 +33,9 @@ const (
 	FlagDestroyed uint16 = 0x010
 )
 
+// Member flags (Group.h:59-72): the assistant bit the party update carries in each member's flags byte.
+const FlagAssistant uint8 = 0x01
+
 // GroupType (Group.h:89-91).
 const (
 	GroupTypeNone   uint8 = 0
@@ -294,6 +297,7 @@ type Member struct {
 	Connected     bool
 	Subgroup      uint8
 	Flags         uint8
+	Assistant     bool // Flags&FlagAssistant: a raid assistant
 	RolesAssigned uint8
 	RolesUnknown  uint8
 	Class         uint8
@@ -395,6 +399,7 @@ func ParseUpdateWithAudit(p []byte, audit bool) (Update, Audit, error) {
 		m.GUID = wire.ReadPackedGUID(b)
 		m.Subgroup = b.ReadU8()
 		m.Flags = b.ReadU8()
+		m.Assistant = m.Flags&FlagAssistant != 0
 		m.RolesAssigned = b.ReadU8()
 		m.RolesUnknown = b.ReadU8()
 		m.Class = b.ReadU8()

@@ -883,8 +883,8 @@ func TestRosterDestroyedThenSetSelf(t *testing.T) {
 	}
 }
 
-// TestRaidRosterValidation: a 6-to-40-member roster goes through the same validation before Raid and InParty are
-// set; a valid one is reported as not modelled, an invalid one is rejected like any other.
+// TestRaidRosterValidation: a 6-to-40-member roster is a raid and is modelled like a party, after the same
+// validation; a roster over the raid limit is refused before it is modelled.
 func TestRaidRosterValidation(t *testing.T) {
 	us := wire.GUID{Low: 0x20, High: 0x0800000000000000}
 	raid := func(n int) []Member {
@@ -898,18 +898,35 @@ func TestRaidRosterValidation(t *testing.T) {
 		}
 		return out
 	}
-	t.Run("valid raid", func(t *testing.T) {
+	for _, n := range []int{MaxPartyMembers + 1, 10, MaxRaidMembers} {
+		t.Run(fmt.Sprintf("%d members modelled", n), func(t *testing.T) {
+			s := NewState()
+			s.SetSelf(us)
+			members := raid(n)
+			u := rosterUpdate(us, us, members...)
+			u.Flags = FlagRaid
+			if !s.ApplyUpdate(u) {
+				t.Fatalf("a %d-member raid roster was refused: %q", n, s.LastInvalid)
+			}
+			if !s.Raid || !s.InParty || !s.RosterValid || len(s.Members) != n || s.Listed != n {
+				t.Fatalf("raid %v in party %v valid %v members %d listed %d", s.Raid, s.InParty, s.RosterValid, len(s.Members), s.Listed)
+			}
+			if s.InvalidRosters != 0 {
+				t.Fatalf("%d invalid rosters", s.InvalidRosters)
+			}
+		})
+	}
+	t.Run("over the raid limit", func(t *testing.T) {
 		s := NewState()
 		s.SetSelf(us)
-		members := raid(MaxPartyMembers + 1)
-		if s.ApplyUpdate(rosterUpdate(us, us, members...)) {
-			t.Fatal("a raid roster was modelled as a party")
+		members := raid(MaxRaidMembers + 1)
+		u := rosterUpdate(us, us, members...)
+		u.Flags = FlagRaid
+		if s.ApplyUpdate(u) {
+			t.Fatal("a 41-member roster was modelled")
 		}
-		if !s.Raid || !s.InParty || s.RosterValid || len(s.Members) != 0 || s.Listed != len(members) {
-			t.Fatalf("raid %v in party %v valid %v members %d listed %d", s.Raid, s.InParty, s.RosterValid, len(s.Members), s.Listed)
-		}
-		if s.InvalidRosters != 0 {
-			t.Fatalf("%d invalid rosters", s.InvalidRosters)
+		if s.Raid || s.InParty || s.RosterValid || len(s.Members) != 0 || !strings.Contains(s.LastInvalid, "over the raid limit") {
+			t.Fatalf("raid %v in party %v valid %v members %d reason %q", s.Raid, s.InParty, s.RosterValid, len(s.Members), s.LastInvalid)
 		}
 	})
 	t.Run("raid with a duplicate GUID", func(t *testing.T) {

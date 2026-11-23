@@ -73,6 +73,48 @@ func BuildSetPartyLeader(target wire.GUID) []byte {
 	return b.Bytes()
 }
 
+// MaxSubgroups is the raid's subgroup count (the core's eight subgroups, five slots each, Group.cpp:1735-1738), so
+// a wire subgroup is 0..7 and the serve reports it 1..8.
+const MaxSubgroups = 8
+
+// BuildConvertRaid is CMSG_CONVERT_RAID (PartyPackets.cpp:395-398): one bit, Raid, flushed. The core converts only
+// for the leader of a group of two or more and answers with a party result then the converted roster
+// (GroupHandler.cpp:489-497), so the caller confirms the conversion through the roster's flags word.
+func BuildConvertRaid(raid bool) []byte {
+	b := wire.NewWriter()
+	b.WriteBit(raid)
+	b.FlushBits()
+	return b.Bytes()
+}
+
+// BuildChangeSubGroup is CMSG_CHANGE_SUB_GROUP (PartyPackets.cpp:633-640): the packed target GUID, a uint8 subgroup,
+// the optional-index bit, then the index. A subgroup at or above 8 is refused here: the core reads it into a uint8
+// and drops a raid change for a subgroup outside 0..7 with no answer (GroupHandler.cpp:519-521).
+func BuildChangeSubGroup(target wire.GUID, sub uint8) ([]byte, error) {
+	if sub >= MaxSubgroups {
+		return nil, fmt.Errorf("party: subgroup %d is outside 0..%d", sub, MaxSubgroups-1)
+	}
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, target)
+	b.WriteU8(sub)
+	b.WriteBit(true) // the party index follows
+	b.FlushBits()
+	b.WriteU8(0) // party index, GROUP_CATEGORY_HOME
+	return b.Bytes(), nil
+}
+
+// BuildSwapSubGroups is CMSG_SWAP_SUB_GROUPS (PartyPackets.cpp:642-649): the optional-index bit, the two packed
+// GUIDs, then the index. The server trades the two members' subgroups and answers with the party update.
+func BuildSwapSubGroups(a, b wire.GUID) []byte {
+	w := wire.NewWriter()
+	w.WriteBit(true) // the party index follows
+	w.FlushBits()
+	wire.WritePackedGUID(w, a)
+	wire.WritePackedGUID(w, b)
+	w.WriteU8(0) // party index
+	return w.Bytes()
+}
+
 // BuildSetAssistantLeader is CMSG_SET_ASSISTANT_LEADER (PartyPackets.cpp:407-414): the index bit and the apply bit
 // share the first byte, then the member and the index. The server sets or clears MEMBER_FLAG_ASSISTANT and sends
 // no answer; the member's flag in the next party update is the readback (GroupHandler.cpp:549-558).

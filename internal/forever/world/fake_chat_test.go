@@ -243,15 +243,19 @@ func (f *fakeServer) serveChat(c, realm *fakeConn) {
 
 // fakePartyUpdate writes SMSG_PARTY_UPDATE for this build (PartyPackets.cpp:584-627) with no optional blocks.
 func fakePartyUpdate(partyGUID, leader, self wire.GUID, members []wire.GUID, names []string, destroyed bool) []byte {
-	return fakePartyUpdateFull(partyGUID, leader, self, members, names, nil, nil, false, destroyed)
+	return fakePartyUpdateFull(partyGUID, leader, self, members, names, nil, nil, nil, false, false, destroyed)
 }
 
-// fakePartyUpdateFull is fakePartyUpdate with the per-member flags (flags parallels members, nil leaves every member
-// at 0: the assistant bit is 0x01), the optional loot block (PartyPackets.cpp:565-577) and allOnline: every member's
-// Connected bit, where fakePartyUpdate sets only the first one's.
-func fakePartyUpdateFull(partyGUID, leader, self wire.GUID, members []wire.GUID, names []string, memberFlags []uint8, loot *party.LootSettings, allOnline, destroyed bool) []byte {
+// fakePartyUpdateFull is fakePartyUpdate with the per-member flags and subgroups (both parallel members, nil leaves
+// every member at 0: the assistant bit is 0x01 and the subgroup is the 0-based wire value), a raid flags word, the
+// optional loot block (PartyPackets.cpp:565-577) and allOnline: every member's Connected bit, where fakePartyUpdate
+// sets only the first one's.
+func fakePartyUpdateFull(partyGUID, leader, self wire.GUID, members []wire.GUID, names []string, memberFlags, subgroups []uint8, loot *party.LootSettings, raid, allOnline, destroyed bool) []byte {
 	b := wire.NewWriter()
 	flags := uint16(0)
+	if raid {
+		flags |= party.FlagRaid
+	}
 	typ := uint8(party.GroupTypeNormal)
 	// MyIndex is the slot the receiving player has in the list, -1 when it has none: Group::SendUpdateToPlayer
 	// sets it from the member slot it was handed (Group.cpp:862-875), and the model now requires the member at
@@ -293,7 +297,11 @@ func fakePartyUpdateFull(partyGUID, leader, self wire.GUID, members []wire.GUID,
 		if i < len(memberFlags) {
 			mflags = memberFlags[i]
 		}
-		b.WriteU8(0)                            // subgroup
+		sub := uint8(0)
+		if i < len(subgroups) {
+			sub = subgroups[i]
+		}
+		b.WriteU8(sub)                          // subgroup
 		b.WriteU8(mflags)                       // flags (MEMBER_FLAG_ASSISTANT is 0x01)
 		b.WriteU8(0)                            // roles assigned
 		b.WriteU8(0)                            // roles unknown

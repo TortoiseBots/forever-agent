@@ -316,6 +316,8 @@ type PartyMember struct {
 	Online    bool   `json:"online"`
 	Dead      bool   `json:"dead"`
 	Leader    bool   `json:"leader"`
+	Assistant bool   `json:"assistant,omitempty"` // a raid assistant
+	Subgroup  int    `json:"subgroup,omitempty"`  // raid subgroup 1-8; 0 in a party
 	Health    int32  `json:"health"`
 	MaxHealth int32  `json:"max_health"`
 	PowerType uint8  `json:"power_type,omitempty"`
@@ -335,6 +337,9 @@ type PartyMark struct {
 // Party is the party method's result.
 type Party struct {
 	InGroup       bool          `json:"in_group"`
+	Raid          bool          `json:"raid,omitempty"`
+	Assistant     bool          `json:"assistant,omitempty"`
+	Subgroup      int           `json:"subgroup,omitempty"`
 	Leader        GUID          `json:"leader,omitempty"`
 	Members       []PartyMember `json:"members"`
 	PendingInvite string        `json:"pending_invite,omitempty"`

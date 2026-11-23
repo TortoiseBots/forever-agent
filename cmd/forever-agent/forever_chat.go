@@ -400,7 +400,7 @@ func printPartySummary(w io.Writer, report *world.Report) {
 	state := "no group"
 	switch {
 	case p.Raid:
-		state = "raid: not handled in this round"
+		state = "in a raid"
 	case p.InParty:
 		state = "in a group"
 	case p.Destroyed:
@@ -415,7 +415,14 @@ func printPartySummary(w io.Writer, report *world.Report) {
 		fmt.Fprintf(w, "  mark %s on %s\n", m.Icon, safeName(m.Name))
 	}
 	for _, m := range p.Members {
-		line := fmt.Sprintf("  %s connected=%v subgroup=%d class=%d roles=%d", safeName(m.Name), m.Connected, m.Subgroup, m.Class, m.RolesAssigned)
+		sub := 0
+		if p.Raid {
+			sub = int(m.Subgroup) + 1
+		}
+		line := fmt.Sprintf("  %s connected=%v subgroup=%d class=%d roles=%d", safeName(m.Name), m.Connected, sub, m.Class, m.RolesAssigned)
+		if m.Assistant {
+			line += " assistant"
+		}
 		if m.Full {
 			line += fmt.Sprintf(" %d/%d hp %d/%d power level %d auras %d", m.Health, m.MaxHealth, m.CurrentPower, m.MaxPower, m.Level, m.Auras)
 		}
