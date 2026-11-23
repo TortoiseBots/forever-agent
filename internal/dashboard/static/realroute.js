@@ -74,12 +74,13 @@
     return out;
   }
 
-  // One line for the legend: what the route holds.
+  // One line for the legend: what the route holds, and which navmesh it was drawn on (the dashboard's --mmaps-format).
   function summaryText(doc) {
     if (!doc || !doc.summary) return "";
     const s = doc.summary;
     let t = s.stops + " stops, " + s.segments + " walks, " + Math.round(s.length) + " yd";
     if (s.failed) t += ", " + s.failed + " cannot be pathed";
+    if (doc.format) t += " \u00b7 navmesh: " + doc.format;
     return t + (doc.edited ? " (with your edits, not saved)" : "");
   }
 

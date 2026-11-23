@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/dashboard"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 )
 
@@ -30,7 +31,7 @@ func editSetup(t *testing.T) (p *dashboard.Poller, cfg, src, edits, tokens, mmap
 
 func TestDashboardEditSetupRefusesWhatIsNotSafe(t *testing.T) {
 	p, cfg, src, edits, tokens, mmaps := editSetup(t)
-	ed, planner, err := newEditor(p, src, edits, tokens, mmaps, nil)
+	ed, planner, err := newEditor(p, src, edits, tokens, mmaps, nil, navmesh.MaNGOS, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,16 +40,25 @@ func TestDashboardEditSetupRefusesWhatIsNotSafe(t *testing.T) {
 		t.Fatal("no editor")
 	}
 	cases := map[string]func() error{
-		"no mmaps folder": func() error { _, _, err := newEditor(p, src, edits, tokens, "", nil); return err },
-		"mmaps is a file": func() error { _, _, err := newEditor(p, src, edits, tokens, tokens, nil); return err },
-		"no source":       func() error { _, _, err := newEditor(p, "", edits, tokens, mmaps, nil); return err },
-		"missing tokens":  func() error { _, _, err := newEditor(p, src, edits, tokens+"x", mmaps, nil); return err },
+		"no mmaps folder": func() error { _, _, err := newEditor(p, src, edits, tokens, "", nil, navmesh.MaNGOS, nil); return err },
+		"mmaps is a file": func() error {
+			_, _, err := newEditor(p, src, edits, tokens, tokens, nil, navmesh.MaNGOS, nil)
+			return err
+		},
+		"no source": func() error {
+			_, _, err := newEditor(p, "", edits, tokens, mmaps, nil, navmesh.MaNGOS, nil)
+			return err
+		},
+		"missing tokens": func() error {
+			_, _, err := newEditor(p, src, edits, tokens+"x", mmaps, nil, navmesh.MaNGOS, nil)
+			return err
+		},
 		"open tokens": func() error {
 			if err := os.Chmod(tokens, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			defer os.Chmod(tokens, 0o600)
-			_, _, err := newEditor(p, src, edits, tokens, mmaps, nil)
+			_, _, err := newEditor(p, src, edits, tokens, mmaps, nil, navmesh.MaNGOS, nil)
 			return err
 		},
 		"edits in a slot's folder": func() error {
@@ -56,7 +66,7 @@ func TestDashboardEditSetupRefusesWhatIsNotSafe(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer os.Remove(filepath.Join(cfg, "settings-1.json"))
-			_, _, err := newEditor(p, src, edits, tokens, mmaps, nil)
+			_, _, err := newEditor(p, src, edits, tokens, mmaps, nil, navmesh.MaNGOS, nil)
 			return err
 		},
 	}

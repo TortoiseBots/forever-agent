@@ -58,6 +58,10 @@ Every flag and its default:
 | `--embed-from` | none | extra `http://host:port` origins that may show the page in a frame |
 | `--config-dir` | `<user config dir>/turtle-agent` | settings files and the `rpc-<port>.token` files |
 | `--mmaps-dir` | none | the navmesh folder of the server the plans run on; enables the real-route plan view |
+| `--mmaps-format` | `turtle` | the generation of `--mmaps-dir`: `turtle` (the 1.12 ancestor's MaNGOS v6 files) or `forever` (ForeverCore's v16 files) |
+| `--parent` | none | with `--mmaps-format forever`: the server's instance parent rule, `MAP=PARENT` pairs comma separated (`389=0`); refused otherwise |
+
+The format is never guessed from the folder: with `--mmaps-format forever` the folder must hold at least one `MMMM_XX_YY.mmtile` file, with `turtle` one `NNNYYXX.mmtile`, so the wrong format stops the dashboard at start with `--mmaps-dir DIR has no Forever tiles` instead of leaving every plan point off the mesh.
 
 The table above leaves out the `--edit*` and `--control*` flags on purpose: route editing lives in [Turn on route editing](route-editing-guide.md) and run controls in [Control a run from the dashboard](run-controls-guide.md), with every flag also listed in [Command and flag reference](commands-reference.md).
 
@@ -76,6 +80,14 @@ A non-loopback `--listen` prints `dashboard: warning: ... is not loopback; anyon
 ## 5. Draw the real route on the plan view
 
 With `--mmaps-dir`, the plan view (`#/plan/<name>`) draws the path the bots walk, not just the plan file's points: every walk leg to leg (`link: true`), pull-group approaches cut at the look point, amber dotted `direct` hops, violet `check_skip` and `gm_cross` hops, and unpathable segments dashed red with the reason on hover. Without a navmesh the endpoint answers 503.
+
+On a Forever server the folder is its `data/mmaps` copy, read as the v16 generation, and an instance map that has no tile of its own takes its parent map's: Ragefire Chasm (389) is an instance of Eastern Kingdoms (0), so the island puzzles in `internal/navmesh` pass `389=0`. The same rule on the dashboard:
+
+```sh
+turtle-agent dashboard --mmaps-format forever --mmaps-dir <walk-dir>/mmaps --parent 389=0 --plans-dir <walk-dir>/dungeons
+```
+
+The route's status line then ends `navmesh: forever`, and the editor checks every version on that mesh. Nothing is built in: without `--parent` an instance reads only its own tile files, exactly as the server does before anyone gives it a parent.
 
 ## 6. Real route numbers
 

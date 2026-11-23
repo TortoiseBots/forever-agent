@@ -18,7 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
-const dashboardUsage = "usage: forever-agent dashboard [--listen 127.0.0.1:8790] [--allow-host HOST[,HOST]] [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR] [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--embed-from ORIGIN[,ORIGIN]] [--config-dir DIR] [--mmaps-dir DIR]\n" +
+const dashboardUsage = "usage: forever-agent dashboard [--listen 127.0.0.1:8790] [--allow-host HOST[,HOST]] [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR] [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--embed-from ORIGIN[,ORIGIN]] [--config-dir DIR] [--mmaps-dir DIR [--mmaps-format turtle|forever] [--parent MAP=PARENT[,MAP=PARENT]]]\n" +
 	"                          [--edit [--edit-dir DIR] [--edit-source DIR] [--edit-tokens FILE] [--edit-allow-default-dir FILE[,FILE]] [--edit-trust-local [--edit-trust-label LABEL]]]\n" +
 	"                          [--control [--control-tokens FILE] [--control-trust-local [--control-trust-label LABEL]] [--control-log FILE]]\n" +
 	"  serves a read-only live page of the running agents (README \"Live dashboard\"); with --edit or --control the page can also write.\n" +
@@ -61,6 +61,8 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	controlTrustLabel := fs.String("control-trust-label", "owner", "with --control-trust-local: the label in the --control-tokens file whose token the trusted controls are made as")
 	controlLog := fs.String("control-log", filepath.Join(home, ".local", "state", "forever-agent", "dashboard-control.jsonl"), "with --control: every control appends who sent it and what the agent answered (a request and a result line each, no token); the folder is made 0700, the file 0600")
 	editMmaps := fs.String("mmaps-dir", "", "the navmesh folder of the server the plans are run on (a check on another server's mesh proves nothing): the plan view draws the real route on it (GET /api/plan/<name>/route); required with --edit")
+	mmapsFormat := fs.String("mmaps-format", "turtle", `the mmap generation of --mmaps-dir: "turtle" (the 1.12 ancestor's MaNGOS v6 files) or "forever" (ForeverCore's v16 files); never guessed from the folder, so the wrong one stops the dashboard at start`)
+	parent := fs.String("parent", "", "with --mmaps-format forever: the server's instance parent rule, MAP=PARENT pairs comma separated (for example 389=0), so an instance with no tile of its own uses the parent map's")
 	cfgDir := fs.String("config-dir", dashboard.DefaultConfigDir(), "folder with settings*.json and the rpc-<port>.token files")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -72,6 +74,20 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil {
 		fmt.Fprintln(stderr, "dashboard: --listen:", err)
+		return exitUsage
+	}
+	format, err := dashNavFormat(*mmapsFormat)
+	if err != nil {
+		fmt.Fprintln(stderr, "dashboard: --mmaps-format:", err)
+		return exitUsage
+	}
+	parents, err := parseParentPairs(*parent)
+	if err != nil {
+		fmt.Fprintln(stderr, "dashboard: --parent:", err)
+		return exitUsage
+	}
+	if len(parents) > 0 && format != navmesh.Forever {
+		fmt.Fprintln(stderr, "dashboard: --parent needs --mmaps-format forever: the instance parent rule is a Forever server's")
 		return exitUsage
 	}
 	if !netutil.IsLoopback(host) {
@@ -119,14 +135,14 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	var editor *dashboard.Editor
 	if *editMmaps != "" && !*edit { // the real route needs the navmesh, not the editor
 		mm := expandHome(*editMmaps)
-		if st, err := os.Stat(mm); err != nil || !st.IsDir() {
-			fmt.Fprintf(stderr, "dashboard: --mmaps-dir %s is not a folder\n", mm)
+		planner, err := openDashNav(mm, format, parents)
+		if err != nil {
+			fmt.Fprintln(stderr, "dashboard:", err)
 			return exitUsage
 		}
-		planner := navmesh.NewPlanner(mm)
 		defer planner.Close()
-		p.SetNavmesh(planner, mm)
-		fmt.Fprintf(stderr, "dashboard: the plan view draws the real route on the navmesh in %s\n", mm)
+		p.SetNavmesh(dashNav(planner, format), mm)
+		fmt.Fprintf(stderr, "dashboard: the plan view draws the real route on the %s navmesh in %s\n", dashNavFormatName(format), mm)
 	}
 	if *trustLocal && !*edit {
 		fmt.Fprintln(stderr, "dashboard: --edit-trust-local needs --edit")
@@ -137,7 +153,7 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if src == "" && len(planDirs) > 0 {
 			src = planDirs[0]
 		}
-		ed, planner, err := newEditor(p, src, expandHome(*editDir), expandHome(*editTokens), expandHome(*editMmaps), splitList(*editAllow))
+		ed, planner, err := newEditor(p, src, expandHome(*editDir), expandHome(*editTokens), expandHome(*editMmaps), splitList(*editAllow), format, parents)
 		if err != nil {
 			fmt.Fprintln(stderr, "dashboard: --edit:", err)
 			return exitUsage
@@ -234,12 +250,9 @@ func checkControlTokens(controlPath string, control *routeedit.Tokens, editPath 
 
 // newEditor sets up the route editor: the token file, the versions folder, the navmesh the plans are checked on, and the check that the folders
 // stay clear of every slot's plan folder. The planner is the caller's to close.
-func newEditor(p *dashboard.Poller, source, editDir, tokens, mmaps string, allowDefault []string) (*dashboard.Editor, *navmesh.Planner, error) {
+func newEditor(p *dashboard.Poller, source, editDir, tokens, mmaps string, allowDefault []string, format navmesh.Format, parents map[uint32]uint32) (*dashboard.Editor, *navmesh.Planner, error) {
 	if mmaps == "" {
 		return nil, nil, errors.New("--mmaps-dir is needed: the navmesh folder of the server the plans are run on")
-	}
-	if st, err := os.Stat(mmaps); err != nil || !st.IsDir() {
-		return nil, nil, fmt.Errorf("--mmaps-dir %s is not a folder", mmaps)
 	}
 	if source == "" {
 		return nil, nil, errors.New("--edit-source (or a --plans-dir) is needed")
@@ -252,14 +265,84 @@ func newEditor(p *dashboard.Poller, source, editDir, tokens, mmaps string, allow
 	if err != nil {
 		return nil, nil, err
 	}
-	planner := navmesh.NewPlanner(mmaps)
-	ed, err := dashboard.NewEditor(p, dashboard.EditConfig{Source: source, Store: store, Tokens: tk, Nav: planner, Mmaps: mmaps, AllowDefaultDir: allowDefault})
+	planner, err := openDashNav(mmaps, format, parents)
+	if err != nil {
+		return nil, nil, err
+	}
+	ed, err := dashboard.NewEditor(p, dashboard.EditConfig{Source: source, Store: store, Tokens: tk, Nav: dashNav(planner, format), Mmaps: mmaps, AllowDefaultDir: allowDefault})
 	if err != nil {
 		planner.Close()
 		return nil, nil, err
 	}
 	return ed, planner, nil
 }
+
+// openDashNav opens the navmesh the plan view draws and the editor checks plans on. The generation is the one named, never guessed: the folder
+// must hold at least one tile file that generation's own parser accepts, so a wrong --mmaps-format fails at start instead of leaving every plan
+// point off the mesh. parents is the server's instance parent rule for the Forever format (navmesh.NewForeverPlanner).
+func openDashNav(dir string, format navmesh.Format, parents map[uint32]uint32) (*navmesh.Planner, error) {
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("--mmaps-dir %s is not a folder", dir)
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("--mmaps-dir %s: %w", dir, err)
+	}
+	for _, e := range ents {
+		if _, _, _, ok := format.TileParse(e.Name()); ok {
+			return navmesh.NewPlannerFormat(dir, format, parents), nil
+		}
+	}
+	return nil, fmt.Errorf("--mmaps-dir %s has no %s tiles", dir, dashNavFormatName(format))
+}
+
+// dashNavFormat reads the --mmaps-format value.
+func dashNavFormat(s string) (navmesh.Format, error) {
+	switch strings.TrimSpace(s) {
+	case "turtle":
+		return navmesh.MaNGOS, nil
+	case "forever":
+		return navmesh.Forever, nil
+	}
+	return 0, fmt.Errorf("%q: want turtle or forever", s)
+}
+
+// dashNavFormatName is an mmap generation as the flag and the messages name it.
+func dashNavFormatName(f navmesh.Format) string {
+	if f == navmesh.Forever {
+		return "Forever"
+	}
+	return "Turtle"
+}
+
+// dashNav is the planner as the plan view and the editor take it: the Turtle planner itself, and a Forever one behind dashForeverNav. A
+// v16 tile set cannot replay the 1.12 core's own path query, so the wrapper offers no ServerPath and the plan check plans every hop with
+// the v16 walk instead of refusing the plan: the same rule plan-check --forever applies with its foreverNav.
+func dashNav(p *navmesh.Planner, format navmesh.Format) dashboard.Nav {
+	if format == navmesh.Forever {
+		return dashForeverNav{p}
+	}
+	return p
+}
+
+// dashForeverNav is a v16 planner as the dashboard's checks take it (dungeon.Navmesh, the routeedit floor snaps and the planner's own
+// generation), without ServerQuerier.
+type dashForeverNav struct{ p *navmesh.Planner }
+
+func (n dashForeverNav) Plan(mapID uint32, from, to navmesh.Vec3) (navmesh.Path, error) {
+	return n.p.Plan(mapID, from, to)
+}
+func (n dashForeverNav) Raycast(mapID uint32, from, to navmesh.Vec3) (navmesh.Ray, error) {
+	return n.p.Raycast(mapID, from, to)
+}
+func (n dashForeverNav) Nearest(mapID uint32, pt navmesh.Vec3) (navmesh.Vec3, bool, error) {
+	return n.p.Nearest(mapID, pt)
+}
+func (n dashForeverNav) Floors(mapID uint32, x, y, lo, hi float32) ([]navmesh.Floor, error) {
+	return n.p.Floors(mapID, x, y, lo, hi)
+}
+func (n dashForeverNav) SetAvoid(mapID uint32, boxes []navmesh.Box) { n.p.SetAvoid(mapID, boxes) }
+func (n dashForeverNav) Format() navmesh.Format                     { return n.p.Format() }
 
 // splitList splits a comma list, leaving out empty items.
 func splitList(s string) []string {
