@@ -311,7 +311,7 @@ func buildManifest(t *testing.T) string {
 	}
 	sort.Strings(paths)
 	var b strings.Builder
-	b.WriteString("tbm-contract v1 rev 1 proto 1 min-addon 1\n")
+	b.WriteString("tbm-contract v1 rev 2 proto 1 min-addon 1\n")
 	for _, rel := range paths {
 		data, err := fs.ReadFile(tbmcontract.V1, path.Join("v1", rel))
 		if err != nil {
