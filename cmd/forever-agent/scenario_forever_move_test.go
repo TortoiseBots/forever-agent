@@ -37,10 +37,6 @@ const (
 	patrolBaseX = 100.0
 	patrolStepX = 5.0
 	patrolSpan  = 100.0
-	// patrolX1 and patrolX2 are the two positions the patrol scenario pins:
-	// the creature passes the first 2 s and the second 8 s into each 40 s loop.
-	patrolX1 = 110.0
-	patrolX2 = 140.0
 	// The trigger ids the fake's table answers; the scenarios carry them.
 	triggerMapChange = 4711
 	triggerRagefire  = 4712
