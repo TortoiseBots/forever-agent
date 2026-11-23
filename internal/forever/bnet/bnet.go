@@ -72,6 +72,14 @@ type Options struct {
 	// is returned as it is.
 	BeforeAttempt func(ctx context.Context) error
 
+	// GameAccount picks the game account the realm joins, by the join ticket's #N suffix (--game-account): Login
+	// tries the listed game accounts in order until the realm joins that one. 0 asks for the first listed, as before.
+	GameAccount int
+
+	// pickAccount is the listed game account one login attempt asks for (0-based). Login's retry moves it; callers
+	// never set it.
+	pickAccount int
+
 	// srpPrivate pins the client private to a test vector's value. It is unexported so no caller can weaken the
 	// randomness; only the package's own tests set it.
 	srpPrivate *big.Int
@@ -83,9 +91,12 @@ type Result struct {
 	LoginTicket   string // "TC-" + 40 hex, for reference only; treat as a secret
 	AccountID     uint64 // Battle.net account id
 	GameAccountID uint64 // game account id (low half of the EntityId)
-	SessionKey    []byte // 64 bytes from OnLogonComplete
-	ClientSecret  []byte // 32 bytes this client put into Param_ClientInfo
-	JoinSecret    []byte // 32 bytes: the server's half of the key the world socket will need
+	// GameAccounts is how many game accounts the login listed: a world error naming a missing character says so
+	// only when there is more than one to choose from (--game-account).
+	GameAccounts int
+	SessionKey   []byte // 64 bytes from OnLogonComplete
+	ClientSecret []byte // 32 bytes this client put into Param_ClientInfo
+	JoinSecret   []byte // 32 bytes: the server's half of the key the world socket will need
 
 	JoinTicket   []byte // RealmJoinTicket JSON, the blob CMSG_AUTH_SESSION carries
 	RealmName    string
@@ -194,6 +205,9 @@ func LoadRoots(path string) (*x509.CertPool, error) {
 // (GameUtilitiesService.cpp:312 and :344 pass session->GetBuild()), so every attempt is the whole sequence again. A
 // non-zero ClientBuild always wins and is claimed as given (one world authentication, no retry).
 func Login(ctx context.Context, opts Options) (*Result, error) {
+	if opts.GameAccount < 0 {
+		return nil, errors.New("bnet: --game-account is 1 or more (0 keeps the first listed)")
+	}
 	if opts.ServerName == "" {
 		opts.ServerName = DefaultServerName
 	}
@@ -220,15 +234,11 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		return actx, done, nil
 	}
 	if opts.ClientBuild != 0 {
-		actx, done, err := begin()
+		result, actx, done, err := attemptLogin(begin, opts)
 		if err != nil {
 			return nil, err
 		}
 		defer done()
-		result, err := loginOnce(actx, opts)
-		if err != nil {
-			return nil, err
-		}
 		return acceptWorld(actx, opts, result)
 	}
 	supported := wire.SupportedClientBuilds()
@@ -254,11 +264,7 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 		}
 		probe := opts
 		probe.ClientBuild = build
-		actx, done, err := begin()
-		if err != nil {
-			return nil, err
-		}
-		result, err := loginOnce(actx, probe)
+		result, actx, done, err := attemptLogin(begin, probe)
 		if err == nil {
 			realmName = result.RealmName
 			if opts.WorldAccept == nil {
@@ -284,7 +290,6 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 			opts.logf("client build: the world server does not accept build %d (ERROR_BAD_VERSION); trying the next known build", build)
 			continue
 		}
-		done()
 		// A closed realm (or one above the account's security level) refuses every build: that is the realm's
 		// policy, not the claim, and no retry can pass it.
 		if errors.Is(err, ErrRealmNotPermitted) {
@@ -316,6 +321,46 @@ func Login(ctx context.Context, opts Options) (*Result, error) {
 	return nil, &RealmError{Err: fmt.Errorf(
 		"bnet: realm %q accepts none of the client builds this client knows (%s); the realm is build %d; pass --build N to claim a build anyway",
 		sanitizeServerText(realmName), supportedBuildList(), hint)}
+}
+
+// attemptLogin starts one login attempt — begin runs the hook and hands the attempt its context — and retries on the
+// next listed game account when --game-account named one the realm did not join. Each retry passes BeforeAttempt, as a
+// real login: the caller's rate keeps counting them. The successful attempt's context and cancel come back live, so
+// the caller runs WorldAccept on them and closes them with done.
+func attemptLogin(begin func() (context.Context, context.CancelFunc, error), opts Options) (*Result, context.Context, context.CancelFunc, error) {
+	for pick := 0; ; pick++ {
+		actx, done, err := begin()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		try := opts
+		try.pickAccount = pick
+		result, err := loginOnce(actx, try)
+		if err == nil {
+			return result, actx, done, nil
+		}
+		done()
+		var mismatch *gameAccountMismatch
+		if !errors.As(err, &mismatch) {
+			return nil, nil, nil, err
+		}
+		if pick+1 >= mismatch.count {
+			return nil, nil, nil, fmt.Errorf("bnet: no game account #%d", opts.GameAccount)
+		}
+		opts.logf("login: the realm joined game account #%s, not #%d; the next listed account is tried",
+			mismatch.got, opts.GameAccount)
+	}
+}
+
+// gameAccountMismatch says the realm joined a game account other than the one --game-account named: the attempt is
+// closed and the login renewed on the next listed account, up to the listed count.
+type gameAccountMismatch struct {
+	got   string
+	count int
+}
+
+func (e *gameAccountMismatch) Error() string {
+	return fmt.Sprintf("bnet: the realm joined game account #%s, not the one asked for", e.got)
 }
 
 // acceptWorld runs Options.WorldAccept for a login the realm accepted and stores the socket it hands back.
@@ -443,6 +488,12 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("bnet: logon succeeded but the account has no game account")
 	}
 	gameAccount := logon.GameAccountIDs[0]
+	if opts.pickAccount > 0 {
+		if opts.pickAccount >= len(logon.GameAccountIDs) {
+			return nil, fmt.Errorf("bnet: no game account #%d", opts.GameAccount)
+		}
+		gameAccount = logon.GameAccountIDs[opts.pickAccount]
+	}
 	if gameAccount.Low > math.MaxUint32 {
 		// the realm list ticket identity carries a uint32 game account id
 		return nil, fmt.Errorf("bnet: game account id %d does not fit the realm list request", gameAccount.Low)
@@ -454,6 +505,7 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 		LoginTicket:   login.LoginTicket,
 		AccountID:     logon.AccountID.Low,
 		GameAccountID: gameAccount.Low,
+		GameAccounts:  len(logon.GameAccountIDs),
 		SessionKey:    logon.SessionKey,
 	}
 
@@ -514,6 +566,19 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if ticket.GameAccount == "" {
 		return nil, errors.New("bnet: realm join ticket has no game account")
+	}
+	if opts.GameAccount > 0 {
+		got := ticket.GameAccount
+		if i := strings.LastIndexByte(got, '#'); i >= 0 {
+			got = got[i+1:]
+		}
+		// The suffix is the game account's number; a server may pad it, so it is read as a number, not as text.
+		n, err := strconv.Atoi(got)
+		if err != nil || n != opts.GameAccount {
+			// The realm joined another of the account's game accounts: this attempt is closed and Login logs in
+			// again on the next listed one.
+			return nil, &gameAccountMismatch{got: got, count: len(logon.GameAccountIDs)}
+		}
 	}
 	var addresses realmListServerIPAddresses
 	if err := decodeCompressed(join.addresses, "JSONRealmListServerIPAddresses", &addresses); err != nil {

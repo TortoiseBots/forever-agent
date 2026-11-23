@@ -30,6 +30,7 @@ type foreverCommon struct {
 	serverName    string
 	clientBuild   uint
 	account       string
+	gameAccount   int
 	character     string
 	allowRedirect bool
 	// worldChecksBuildAuthKey says the world server verifies the session digest (Network.SkipBuildAuthKeyCheck = 0).
@@ -54,6 +55,7 @@ func (c *foreverCommon) connectionFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.serverName, "server-name", bnet.DefaultServerName, "name to verify in the login server's certificate")
 	fs.UintVar(&c.clientBuild, "build", 0, "client build to claim (default: the newest build this client knows that the realm accepts and, when the command opens a world socket, the world server accepts)")
 	fs.StringVar(&c.account, "account", "", "account e-mail or name")
+	fs.IntVar(&c.gameAccount, "game-account", 0, "game account to join, by the join ticket's #N (default: the first listed; a realm that joins another is logged into again on the next)")
 }
 
 // flags registers the connection flags plus the ones an entering command takes. Every Forever command that logs in
@@ -72,6 +74,9 @@ func (c *foreverCommon) checkConnection(cmd string) error {
 	}
 	if c.clientBuild > 0xFFFFFFFF {
 		return fmt.Errorf("%s: --build must be a client build number", cmd)
+	}
+	if c.gameAccount < 0 {
+		return fmt.Errorf("%s: --game-account is 1 or more", cmd)
 	}
 	return nil
 }
@@ -143,6 +148,7 @@ func (c *foreverCommon) loginWithPassword(ctx context.Context, cmd string, stdou
 		Account:       c.account,
 		Password:      password,
 		ClientBuild:   uint32(c.clientBuild),
+		GameAccount:   c.gameAccount,
 		Logf:          logf,
 		WorldAccept:   worldAccept,
 		BeforeAttempt: c.beforeAttempt,
@@ -195,6 +201,7 @@ func (c *foreverCommon) withLogin(result *bnet.Result, stdout io.Writer, opts wo
 	opts.RealmBuild = result.RealmBuild
 	opts.WorldConn = result.WorldConn
 	opts.Character = c.character
+	opts.GameAccounts = result.GameAccounts
 	opts.AllowInstanceRedirect = c.allowRedirect
 	opts.Logf = func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)

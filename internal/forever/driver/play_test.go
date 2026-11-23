@@ -12,6 +12,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/tactics"
+	"github.com/pjerra/forever-agent/internal/trace"
 )
 
 // playPlan is one small dungeon: a portal on the outer map, one leg with one pack and one boss, no steps. Hand-made:
@@ -48,11 +49,17 @@ type playRig struct {
 // newPlayRig builds the rig from playPlan; mut, when set, scripts the fake before the run starts.
 func newPlayRig(t *testing.T, mut func(*PlayFake)) *playRig {
 	t.Helper()
-	route, err := NewPlayRoute(playPlan())
+	return newPlayRigOn(t, mustPlayRoute(t, playPlan()), mut)
+}
+
+// mustPlayRoute builds a route from a plan, failing the test when the plan is refused.
+func mustPlayRoute(t *testing.T, plan *dungeon.Plan) *Route {
+	t.Helper()
+	route, err := NewPlayRoute(plan)
 	if err != nil {
 		t.Fatalf("the play route refused the test plan: %v", err)
 	}
-	return newPlayRigOn(t, route, mut)
+	return route
 }
 
 // newPlayRigOn is newPlayRig over a route the test built itself.
@@ -143,12 +150,45 @@ func TestPlayDisbandsBeforeLogout(t *testing.T) {
 }
 
 // TestPlayRefusesStartFarFromPortal: the run never travels by GM, so a start more than 300 yd from the portal is a
-// stop before any line is sent.
+// stop before any line is sent, with the start_place event the trace keeps.
 func TestPlayRefusesStartFarFromPortal(t *testing.T) {
 	rig := newPlayRig(t, func(f *PlayFake) { f.SelfPos = Vec3{f.SelfPos[0] + 400, f.SelfPos[1], f.SelfPos[2]} })
+	rig.cfg.Out = t.TempDir()
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "not-near-portal" {
 		t.Fatalf("stop = %q; want not-near-portal", res.Stop)
+	}
+	if len(rig.fake.Actions) != 0 {
+		t.Fatalf("the run sent %d lines before the start check; want none", len(rig.fake.Actions))
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	seen := false
+	for _, ev := range tf.Events {
+		if ev.Ev == "start_place" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("the trace has no start_place event")
+	}
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[len(res.Notes)-1], "yd from the plan's portal") {
+		t.Fatalf("notes %v; want the distance line", res.Notes)
+	}
+}
+
+// TestPlayRefusesStartInsideInstance: a character already on the dungeon map has nowhere to start the plan's walk
+// (plans have no approach leg), so the run stops inside-instance before a line.
+func TestPlayRefusesStartInsideInstance(t *testing.T) {
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.GoldenOwner.SelfMap = f.Route.Map
+		f.SelfPos = f.Route.Entrance
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "inside-instance" {
+		t.Fatalf("stop = %q; want inside-instance", res.Stop)
 	}
 	if len(rig.fake.Actions) != 0 {
 		t.Fatalf("the run sent %d lines before the start check; want none", len(rig.fake.Actions))
@@ -170,7 +210,8 @@ func TestPlayBotBusyStops(t *testing.T) {
 	}
 }
 
-// TestPlayTankTooWeak: the plan's tank preflight is read from the roster's max health.
+// TestPlayTankTooWeak: the plan's tank preflight is read from the roster's max health; the stop records what the
+// roster said in the trace's tank_gate event.
 func TestPlayTankTooWeak(t *testing.T) {
 	plan := playPlan()
 	plan.TankMinHP = 950
@@ -183,9 +224,57 @@ func TestPlayTankTooWeak(t *testing.T) {
 	fake.SetBotHP("Botone", 900, 900)
 	fake.ClearBosses()
 	ports := PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock}
-	res := Play(context.Background(), route, ports, PlayConfig{Plan: route.Name, Bots: playBots})
+	out := t.TempDir()
+	cfg := PlayConfig{Plan: route.Name, Bots: playBots, Out: out}
+	res := Play(context.Background(), route, ports, cfg)
 	if res.Stop != "tank-too-weak" {
 		t.Fatalf("stop = %q; want tank-too-weak", res.Stop)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	seen := false
+	for _, ev := range tf.Events {
+		if ev.Ev == "tank_gate" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("the trace has no tank_gate event")
+	}
+}
+
+// TestPlayTankOverBandPasses: the floor is the band's middle; a tank above the band's top goes on with less max
+// health (700 against a floor of 800 at band 13-18, level 22).
+func TestPlayTankOverBandPasses(t *testing.T) {
+	plan := playPlan()
+	plan.TankMinHP = 800
+	plan.LevelBand = []int{13, 18}
+	rig := newPlayRigOn(t, mustPlayRoute(t, plan), func(f *PlayFake) {
+		f.SetBotHP("Botone", 700, 700)
+		f.GoldenOwner.Bots[0].Level = 22
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop == "tank-too-weak" {
+		t.Fatalf("a tank above the band stopped the run; want it to pass")
+	}
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+}
+
+// TestPlayTankGateIgnoresCurrentHP: the preflight is the tank's max health; a tank hurt now (300 of 900) passes.
+func TestPlayTankGateIgnoresCurrentHP(t *testing.T) {
+	plan := playPlan()
+	plan.TankMinHP = 800
+	rig := newPlayRigOn(t, mustPlayRoute(t, plan), func(f *PlayFake) { f.SetBotHP("Botone", 300, 900) })
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop == "tank-too-weak" {
+		t.Fatal("the preflight read the tank's current health; want its max")
+	}
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
 	}
 }
 

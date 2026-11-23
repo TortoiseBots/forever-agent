@@ -500,7 +500,20 @@ func (p *playRun) prepare(ctx context.Context) string {
 		return ""
 	}
 	portal := p.route.Portal
-	if portal == nil || p.selfMap != portal.Map || dist3(p.self, portal.Pos) > PlayPortalYd {
+	if portal == nil {
+		p.stop("not-near-portal")
+		return ""
+	}
+	dist := dist3(p.self, portal.Pos)
+	if p.selfMap != portal.Map || dist > PlayPortalYd {
+		if p.selfMap == p.route.Map {
+			// Plans have no approach leg: a character already inside the instance has nowhere to start the walk from.
+			p.stop("inside-instance")
+			return ""
+		}
+		p.rec.Event(p.now(), "start_place", map[string]any{"map": p.selfMap, "dist_yd": dist, "portal_map": portal.Map})
+		p.notes = append(p.notes, fmt.Sprintf("the character is %.0f yd from the plan's portal (limit %.0f yd)",
+			dist, PlayPortalYd))
 		p.stop("not-near-portal")
 		return ""
 	}
@@ -583,18 +596,49 @@ func (p *playRun) form(ctx context.Context) string {
 		return ""
 	}
 	p.rec.Event(p.now(), "loot_method", map[string]any{"method": party.LootName(PlayLootMethod), "threshold": PlayLootThreshold})
-	if p.route.TankMinHP > 0 {
-		tank := p.cfg.Bots[0]
-		m, ok := p.member(tank)
-		if !ok || m.MaxHP < p.route.TankMinHP {
-			p.stop("tank-too-weak")
-			return ""
-		}
-	}
 	if !p.learnParty(ctx) {
 		return ""
 	}
+	if p.route.TankMinHP > 0 && !p.tankGate(ctx) {
+		return ""
+	}
 	return StateTravel
+}
+
+// tankGate is the plan's tank preflight, read after `.bot who` so the tank's level is known: a tank whose max health
+// reaches the plan's floor passes, and so does one above the plan's level band (the floor is the band's middle). A
+// roster that has not read the tank's max health yet is polled up to Form; one that never does stops tank-hp-unknown.
+// The stop records what the roster said, in the trace's tank_gate event.
+func (p *playRun) tankGate(ctx context.Context) bool {
+	tank := p.cfg.Bots[0]
+	floor := p.route.TankMinHP
+	m, ok := p.member(tank)
+	if ok && m.MaxHP == 0 {
+		deadline := p.now().Add(p.lim.Form)
+		for m.MaxHP == 0 && p.now().Before(deadline) {
+			if !p.sleep(ctx, p.lim.Poll) {
+				return false
+			}
+			m, ok = p.member(tank)
+			if !ok {
+				break
+			}
+		}
+	}
+	level := p.who[strings.ToLower(tank)].level
+	switch {
+	case !ok || m.MaxHP == 0:
+		p.rec.Event(p.now(), "tank_gate", map[string]any{"hp": m.HP, "max_hp": m.MaxHP, "level": level, "floor": floor})
+		p.stop("tank-hp-unknown")
+		return false
+	case m.MaxHP >= floor:
+		return true
+	case p.route.LevelHi > 0 && level > p.route.LevelHi:
+		return true
+	}
+	p.rec.Event(p.now(), "tank_gate", map[string]any{"hp": m.HP, "max_hp": m.MaxHP, "level": level, "floor": floor})
+	p.stop("tank-too-weak")
+	return false
 }
 
 // waitOnline waits until the roster lists a bot, up to limit.
