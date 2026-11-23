@@ -3,6 +3,7 @@
   "name": "stormwrought_ruins",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 818,
   "entrance": {"x": -5632.67, "y": -4393.33, "z": 249.982},
   "entrance_trigger": 5347,

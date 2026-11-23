@@ -8,7 +8,7 @@ sources:
   - id: readme
     resource: https://github.com/pjerra/turtle-agent/blob/dev/README.md
   - id: design
-    resource: https://github.com/pjerra/turtle-agent/blob/dev/docs/superpowers/specs/2026-10-12-turtle-agent-design.md
+    resource: https://github.com/pjerra/turtle-agent/blob/dev/docs/turtle/history/2026-10-12-turtle-agent-design.md
 generated:
   by: muse-spark-1.3/omp
   at: 2026-11-05T21:25:00+01:00

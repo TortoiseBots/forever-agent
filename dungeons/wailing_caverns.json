@@ -3,6 +3,7 @@
   "name": "wailing_caverns",
   "kind": "dungeon",
   "status": "mapped (not live-checked)",
+  "forever_status": "todo",
   "map": 43,
   "entrance": {"x": -158.441, "y": 131.601, "z": -74.2552},
   "entrance_trigger": 228,

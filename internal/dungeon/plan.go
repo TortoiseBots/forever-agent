@@ -66,6 +66,20 @@ const (
 	DraftStatus = "draft (not mapped, not live-checked)"
 )
 
+// Forever status: where the plan stands on the Forever side, apart from the Turtle status above (a plan can be
+// live-checked on the Turtle stack and still never exported). The first word is one of these four; the rest is free
+// text naming what is missing or when it happened ("todo (not exported)", "exported (2026-11-20)").
+const (
+	// ForeverNA is a plan of Turtle-custom content, which a Forever server does not have at all.
+	ForeverNA = "n/a"
+	// ForeverTodo is a plan that has not been exported for a Forever server yet.
+	ForeverTodo = "todo"
+	// ForeverExported is a plan whose rows tools/dungeongen has written for a Forever server.
+	ForeverExported = "exported"
+	// ForeverLiveChecked is a plan that has been run on a Forever server.
+	ForeverLiveChecked = "live-checked"
+)
+
 // RaidSpec is a raid plan's group: how many players and, as a placeholder until a raid has been run, the roles they are split into.
 // Size is 10, 20 or 40 and Tanks + Healers + DPS must add up to it.
 type RaidSpec struct {
@@ -83,6 +97,9 @@ type Plan struct {
 	Kind string `json:"kind,omitempty"`
 	// Status says how far the plan has been checked: draft, mapped or live-checked, then free text (see StatusDraft). Absent: not said.
 	Status string `json:"status,omitempty"`
+	// ForeverStatus says where the plan stands on the Forever side (see ForeverNA): n/a, todo, exported or
+	// live-checked, then free text. Absent: not said.
+	ForeverStatus string `json:"forever_status,omitempty"`
 	// Team is the party the plan needs ("alliance" or "horde"), when some of its steps only work for one: Shadowfang Keep's
 	// courtyard_door gossip (Deathstalker Adamant 3849, faction template 68 = Undercity) is refused to an Alliance party, whose
 	// tank gets `npc-busy`; the run leader has no team column on a gossip row, so dungeon_run refuses the other team before the
@@ -882,6 +899,7 @@ type rawPlan struct {
 	Name        string            `json:"name"`
 	Kind        string            `json:"kind"`
 	Status      string            `json:"status"`
+	Forever     string            `json:"forever_status"`
 	Team        string            `json:"team"`
 	Fleers      []uint32          `json:"fleers"`
 	Raid        *RaidSpec         `json:"raid"`
@@ -1377,6 +1395,14 @@ func (c *checker) kindStatus(p *Plan, rp *rawPlan) {
 			c.fail("status", "%q: start with %s, %s or %s", rp.Status, StatusDraft, StatusMapped, StatusLiveChecked)
 		} else {
 			p.Status = rp.Status
+		}
+	}
+	if rp.Forever != "" {
+		word, _, _ := strings.Cut(rp.Forever, " ")
+		if !slices.Contains([]string{ForeverNA, ForeverTodo, ForeverExported, ForeverLiveChecked}, word) {
+			c.fail("forever_status", "%q: start with %s, %s, %s or %s", rp.Forever, ForeverNA, ForeverTodo, ForeverExported, ForeverLiveChecked)
+		} else {
+			p.ForeverStatus = rp.Forever
 		}
 	}
 	c.team("team", rp.Team)

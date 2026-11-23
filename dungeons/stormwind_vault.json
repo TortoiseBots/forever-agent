@@ -3,6 +3,7 @@
   "name": "stormwind_vault",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 35,
   "entrance": {"x": -0.91, "y": 40.57, "z": -24.23},
   "entrance_trigger": 107,

@@ -3,6 +3,7 @@
   "name": "sunken_temple",
   "kind": "dungeon",
   "status": "live-checked",
+  "forever_status": "todo",
   "map": 109,
   "entrance": {"x": -315.903, "y": 100.197, "z": -131.849},
   "entrance_trigger": 446,

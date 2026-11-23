@@ -3,6 +3,7 @@
   "name": "maraudon_purple",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 349,
   "entrance": {"x": 755.078, "y": -617.696, "z": -32.9222},
   "entrance_trigger": 3134,

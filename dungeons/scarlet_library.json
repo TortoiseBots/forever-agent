@@ -3,6 +3,7 @@
   "name": "scarlet_library",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 189,
   "entrance": {"x": 253.672, "y": -206.624, "z": 18.6773},
   "entrance_trigger": 614,

@@ -126,6 +126,6 @@ The old `README.md` (about 5400 lines) was a manual; this bundle is now the manu
 
 ## What the docs deliberately leave out
 
-- `docs/CI.md`, `docs/TORTOISEBOTS-VISION.md`, `docs/PLANS.md`, `docs/LIVE-CHECKS.md`, `docs/ROTATIONS.md`: companion docs outside this bundle; the pages above link to them where the README did.
+- `docs/CI.md`, `docs/TORTOISEBOTS-VISION.md`, `docs/PLANS.md`, `docs/LIVE-CHECKS.md`, `docs/ROTATIONS.md`, `docs/turtle/README.md`: companion docs outside this bundle; the pages above link to them where the README did.
 - Live anecdotes (run numbers, dates, walk ids): kept only where a docs page needs them as evidence; not carried as narrative.
 - The README's stale claims (fixed to the code): RFC is `mapped`, not draft; `gm_cross` is still used by Naxxramas and Upper Karazhan Halls; exactly three raid tiers are sourced (`onyxias_lair:2`, `zul_gurub:1`, `ruins_of_ahnqiraj:1`); rest defaults are 90/60/35; `bad_targets` holds 2 s (10 s only for a self-target); the auto-tried Opening spells are 6477, 3365, 6247, 6478, 22810 (21651 explicit only); mesh-unavailable exits are 2, not 1.

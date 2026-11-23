@@ -15,6 +15,9 @@ status: draft
 
 # The instance cap ledger
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 The core lets an account enter only N distinct instance ids an hour (`MAX_INSTANCE_PER_ACCOUNT_PER_HOUR`), and its list lives in the worldserver's memory. The local test core is patched to 30; the stock core is 5. The ledger is the walk's local mirror of that list, so walks do not burn the hourly budget blindly.[^instcap]
 
 ## Per account, not per raid

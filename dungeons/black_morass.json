@@ -3,6 +3,7 @@
   "name": "black_morass",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 269,
   "entrance": {"x": -2002.5, "y": 6575.3, "z": -154.9},
   "entrance_trigger": 1632,

@@ -189,6 +189,7 @@ func TestPlanListFirstFolderWinsAndBuildFillsTheRest(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(d1, "tiny.json"), tiny, 0o644))
 	must(t, os.WriteFile(filepath.Join(d2, "tiny.json"), []byte("{}"), 0o644))
 	must(t, os.WriteFile(filepath.Join(d2, "Not A Name.json"), tiny, 0o644))
+	must(t, os.WriteFile(filepath.Join(d2, "listed.json"), []byte(`{"version":1,"name":"listed","status":"draft (not mapped, not live-checked)","forever_status":"todo (not exported)","map":1,"entrance":{"x":0,"y":0,"z":0},"legs":[{"to":{"x":0,"y":0,"z":0},"pull_groups":[{"entries":[1],"positions":[{"x":0,"y":0,"z":0}]}]}]}`), 0o644))
 	c := newPlanCache([]string{d1, d2})
 	by := map[string]PlanInfo{}
 	for _, pi := range c.list() {
@@ -199,6 +200,12 @@ func TestPlanListFirstFolderWinsAndBuildFillsTheRest(t *testing.T) {
 	}
 	if by["uldaman"].Source.Role != "build" {
 		t.Errorf("a plan only the build has: %+v", by["uldaman"])
+	}
+	if by["listed"].Status != "draft (not mapped, not live-checked)" || by["listed"].ForeverStatus != "todo (not exported)" {
+		t.Errorf("listed: %+v", by["listed"])
+	}
+	if b, err := json.Marshal(by["listed"]); err != nil || !strings.Contains(string(b), `"forever_status":"todo (not exported)"`) {
+		t.Errorf("the plan list's field is not forever_status: %s %v", b, err)
 	}
 	if _, ok := by["Not A Name"]; ok {
 		t.Error("a file that is not a plan name is not listed")

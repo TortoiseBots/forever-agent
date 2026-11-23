@@ -21,6 +21,9 @@ status: draft
 
 # Raid walks, autopilot and suite
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 Three commands drive TortoiseBots parties through raids for testing.
 
 - `turtle-agent raid-walk <plan>` walks one raid plan with hired bots and the TortoiseBots run leader. It leases a slot, logs the slot agent in, puts the commander outside the entrance, hires the roster, binds the raid to its main tank, enters, starts the run with an `until` clause, watches it and tears everything down.[^walk-cmd]

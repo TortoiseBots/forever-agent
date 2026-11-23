@@ -3,6 +3,7 @@
   "name": "timbermaw_hold",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 819,
   "entrance": {"x": -8133.95, "y": -3450.47, "z": 224.748},
   "entrance_trigger": 5613,

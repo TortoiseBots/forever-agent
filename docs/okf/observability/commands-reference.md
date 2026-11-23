@@ -33,6 +33,10 @@ status: draft
 
 # Command and flag reference
 
+> **Turtle only commands.** `login`, `scrub-check`, `capture`, `capture-stats`, `map`, `dashboard-replay`,
+> `fight-score`, `trace-score` and `decisions` here run against the Turtle stack only; against a Forever server use the
+> replacement `forever-agent help` prints for each (some have none yet).
+
 Every command in this area, every flag, its default, and an example. Exit 2 everywhere means bad flags or arguments.
 
 ## `turtle-agent dashboard`

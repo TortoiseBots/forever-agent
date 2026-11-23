@@ -3,6 +3,7 @@
   "name": "scarlet_cathedral",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 189,
   "entrance": {"x": 853.179, "y": 1319.18, "z": 18.6714},
   "entrance_trigger": 610,

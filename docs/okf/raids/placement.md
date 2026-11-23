@@ -17,6 +17,9 @@ status: draft
 
 # How placement works
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `--place` puts the raid at a staged start inside its instance instead of walking it in from the door. The walk clears the corridor of the legs it skips, judges the start point quiet itself, teleports the raid onto it, and verifies the landing — all in the same instance, up to four tries.[^place]
 
 ## The staged start

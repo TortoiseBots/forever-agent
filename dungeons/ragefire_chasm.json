@@ -3,6 +3,7 @@
   "name": "ragefire_chasm",
   "kind": "dungeon",
   "status": "mapped (not live-checked)",
+  "forever_status": "exported",
   "map": 389,
   "entrance": {"x": 0.797643, "y": -8.23429, "z": -15.5288},
   "entrance_trigger": 2230,

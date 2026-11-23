@@ -19,6 +19,9 @@ status: draft
 
 # Tune a live run
 
+> **Turtle only.** `tune-diff` runs against the Turtle stack; a Forever server has no replacement
+> (`forever-agent help`).
+
 A commander run reads a tunables file: one JSON object of key to number. Change a value mid-run with `tune_set`; read back what the run changed with `tune-diff`. Keys starting with `_` are comments. Every change lands at the next leg or pull-group start, never mid-step.
 
 ## 1. Give the run a tunables file

@@ -19,6 +19,9 @@ status: draft
 
 # Troubleshooting raids
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 ## `raid-walk never uses slot 3 (owner rule)`
 
 You passed `--slot 3` (or a pair including it). Slot 3 is never used, for every server. Pick another slot. Exit 15.

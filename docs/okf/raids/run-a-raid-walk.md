@@ -15,6 +15,9 @@ status: draft
 
 # Run a raid walk
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 ## 1. Pick the `until` clause
 
 `--until` defaults to `boss`: the walk stops before the first boss step, so a trash walk never wakes a boss. Your options:[^walk-cmd]

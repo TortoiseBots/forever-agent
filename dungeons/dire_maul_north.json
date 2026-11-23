@@ -3,6 +3,7 @@
   "name": "dire_maul_north",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 429,
   "entrance": {"x": 254.92, "y": -19.463, "z": -2.5596},
   "entrance_trigger": 3189,

@@ -3,6 +3,7 @@
   "name": "naxxramas",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 533,
   "entrance": {"x": 3005.87, "y": -3435.01, "z": 293.882},
   "entrance_trigger": 4055,

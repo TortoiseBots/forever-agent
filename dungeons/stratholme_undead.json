@@ -3,6 +3,7 @@
   "name": "stratholme_undead",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 329,
   "entrance": {"x": 3590.87, "y": -3643.22, "z": 138.491},
   "entrance_trigger": 2214,

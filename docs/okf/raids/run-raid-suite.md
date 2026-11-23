@@ -17,6 +17,9 @@ status: draft
 
 # Regression-check plans with the suite
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `turtle-agent raid-suite` walks a list of raid plans one after another, each with `raid-walk`, and judges each walk against the last good walk of the same plan in a history dir. It is the regression check for the raid plans.[^suite-cmd]
 
 ## 1. Describe the raids

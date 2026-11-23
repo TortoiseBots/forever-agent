@@ -3,6 +3,7 @@
   "name": "onyxias_lair",
   "kind": "raid",
   "status": "draft (prepped 2026-11-09 for core 1181dev b26c3cc; not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 249,
   "entrance": {"x": 30.8916, "y": -54.079, "z": -5.02784},
   "entrance_trigger": 2848,

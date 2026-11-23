@@ -15,6 +15,9 @@ status: draft
 
 # Hire gear tiers
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 The walk hires and refits at the kit a player holds when the raid is next: a wipe at the right tier is a gear-set tuning finding, never fixed by raising the tier. The hire gear tier comes from a committed table, one row per raid, from the mercenary unlock quests.[^tiers]
 
 ## The table

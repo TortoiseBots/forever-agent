@@ -3,6 +3,7 @@
   "name": "karazhan_crypt",
   "kind": "dungeon",
   "status": "draft (reordered 2026-10-25: upper floors, shaft dive, lower crypt last; Corpsemuncher leg 6 by the shaft climb (swim hand-off), probe T0 2026-10-28; not live-checked; hivaxxis reordered after r40 slot5b; lower-crypt pools dry 2026-10-26)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 800,
   "entrance": {"x": -11068.1, "y": -1806.4, "z": 52.7},
   "entrance_trigger": 5008,

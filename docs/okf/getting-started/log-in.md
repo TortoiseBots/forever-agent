@@ -17,6 +17,9 @@ status: draft
 
 # Log a character in
 
+> **Turtle only.** `login` runs against the Turtle stack. Against a Forever server, log in through `forever serve`
+> (see `forever-agent help`).
+
 `login` logs one character in and keeps it online with the RPC server running. Run one process per character.
 
 ## Steps

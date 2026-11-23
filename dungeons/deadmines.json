@@ -3,6 +3,7 @@
   "name": "deadmines",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 36,
   "entrance": {"x": -14.5732, "y": -385.475, "z": 62.4561},
   "entrance_trigger": 78,

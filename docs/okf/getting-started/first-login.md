@@ -19,6 +19,9 @@ status: draft
 
 # First login
 
+> **Turtle only.** `login` runs against the Turtle stack. Against a Forever server, log in through `forever serve`
+> (see `forever-agent help`).
+
 This tutorial takes you from a fresh checkout to a character standing in the world that answers an RPC call. It takes about ten minutes plus the build.
 
 ## What you need

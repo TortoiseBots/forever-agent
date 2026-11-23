@@ -3,6 +3,7 @@
   "name": "scholomance",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 289,
   "entrance": {"x": 190.819, "y": 126.329, "z": 137.227},
   "entrance_trigger": 2567,

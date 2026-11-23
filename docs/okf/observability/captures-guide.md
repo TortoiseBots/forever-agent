@@ -15,6 +15,9 @@ status: draft
 
 # Record and decode a capture
 
+> **Turtle only.** `capture` and `capture-stats` run against the Turtle stack. Against a Forever server, use
+> `forever capture-events` and `forever capture-stats` (see `forever-agent help`).
+
 ## 1. Record a session
 
 ```sh

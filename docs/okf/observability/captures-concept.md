@@ -17,6 +17,9 @@ status: draft
 
 # Captures
 
+> **Turtle only.** `capture` and `capture-stats` run against the Turtle stack. Against a Forever server, use
+> `forever capture-events` and `forever capture-stats` (see `forever-agent help`).
+
 A capture is the decrypted world packets of one session, written to a file (`TWCAP1` magic, then one record per packet: direction, time, opcode, body). It exists so a bug can be replayed offline: the packet parser, the session handlers and the map drawer all read captures instead of a live server.
 
 What it holds: every decrypted world packet after the handshake, in both directions.

@@ -23,7 +23,7 @@ The first leg of `dungeons/uldaman.json`, as the loader reads it. A test parses 
 
 ```json
 {
-  "version": 1, "name": "uldaman", "map": 70,
+  "version": 1, "name": "uldaman", "forever_status": "todo", "map": 70,
   "entrance": {"x": -228.9, "y": 46.1, "z": -46},
   "legs": [
     {"name": "keystone", "to": {"x": -247.5, "y": 173.1, "z": -43.5},
@@ -42,6 +42,7 @@ The first leg of `dungeons/uldaman.json`, as the loader reads it. A test parses 
 - `version` is 1. `name` matches the file stem (`a-z`, `0-9`, `_`, `-`).
 - `kind` is `dungeon` (the default) or `raid`.
 - `status` is the truth about readiness, for example `draft (not mapped, not live-checked)`. See [Draft, mapped, live-checked](plan-lifecycle.md).
+- `forever_status` says where the plan stands on the **Forever** side, apart from its Turtle `status`: `n/a` (Turtle-custom content a Forever server does not have at all), `todo` (not exported for a Forever server yet), `exported` (`tools/dungeongen` has written its rows for one) or `live-checked` (it has been run on one), then free text. `forever-agent plan-list` prints it, and the dashboard's `/api/plans` carries it as `forever_status`.
 - `map` is the instance map id. `entrance` is where the party starts inside; `entrance_trigger` is the area trigger at the portal; `entrance_tele` and `outside_tele` are `game_tele` names; `portal` is the entrance portal on the outer map.
 - `level_band` is `[low, high]`; the hired party takes the middle as its level.
 - `legs` is the run in order. You need at least one leg.

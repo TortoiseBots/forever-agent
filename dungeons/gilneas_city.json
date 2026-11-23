@@ -3,6 +3,7 @@
   "name": "gilneas_city",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 815,
   "entrance": {"x": -1100, "y": 2237.75, "z": 182.86},
   "entrance_trigger": 5014,

@@ -1,5 +1,8 @@
 # Rotations: the file format and how to A/B one
 
+> **Turtle only.** A rotation is Turtle-stack data (`rotation`, the Turtle brain); a Forever server has no replacement
+> yet, and `forever-agent help` says so. The Turtle stack is listed in [docs/turtle/README.md](turtle/README.md).
+
 A rotation is the priority list of one class and spec for the agent's own character, as a JSON file the bot brain plays instead of the Go
 strategy it replaces. The full reference is [Rotation file format](okf/combat/reference-rotation-format.md); this is the short version, and the recipe to test a change.
 

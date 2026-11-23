@@ -3,6 +3,7 @@
   "name": "dragonmaw_retreat",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "n/a (Turtle custom content)",
   "map": 816,
   "entrance": {"x": -6105.44, "y": -3629.89, "z": 242.478},
   "entrance_trigger": 5343,

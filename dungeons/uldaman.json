@@ -2,6 +2,7 @@
   "version": 1,
   "name": "uldaman",
   "status": "live-checked",
+  "forever_status": "todo",
   "map": 70,
   "entrance": {"x": -228.9, "y": 46.1, "z": -46},
   "entrance_trigger": 286,

@@ -3,6 +3,7 @@
   "name": "blackwing_lair",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 469,
   "entrance": {"x": -7672.32, "y": -1107.05, "z": 396.651},
   "entrance_trigger": 3726,

@@ -68,6 +68,7 @@ var commandScopes = map[string]commandScope{
 	"rpc":             {},
 	"trials":          {},
 	"plan-diff":       {},
+	"plan-list":       {},
 	"forever":         {},
 	"bughunt":         {},
 	"version":         {},

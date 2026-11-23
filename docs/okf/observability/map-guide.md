@@ -15,6 +15,9 @@ status: draft
 
 # Draw the run map
 
+> **Turtle only.** `map` runs against the Turtle stack. Against a Forever server, use `forever run-map` (see
+> `forever-agent help`).
+
 `turtle-agent map` draws a run as a top-down map from what the agent already recorded, so a run can be read at a glance. It renders nothing live and takes no screenshots: the images are SVG (standard library only), with an optional single-file HTML replay.
 
 ## 1. Draw a capture

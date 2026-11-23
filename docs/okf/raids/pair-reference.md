@@ -15,6 +15,9 @@ status: draft
 
 # Two raids at once
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `turtle-agent raid-walk <plan> [<plan2>] --slot A,B` walks two raids at the same time, one per slot. Slot `3` is refused before anything for any server (exit 15); a repeated id is a usage error (exit 2). One plan walks that plan on both slots (two instances of it); two plans walk `plan1` on A and `plan2` on B.[^pair]
 
 ## How the two walks run

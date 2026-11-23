@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.27.1 (pinned in `~/.local/go`, standard library only: `crypto/sha1`, `math/big`, `compress/zlib`, `net/http`, `encoding/json`), GNU make, Python 3.12 + pytest in the existing `~/wow-play-harness/.venv`.
 
-**Spec:** docs/superpowers/specs/2026-10-12-turtle-agent-design.md
+**Spec:** docs/turtle/history/2026-10-12-turtle-agent-design.md
 
 ## Global Constraints
 

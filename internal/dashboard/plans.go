@@ -239,12 +239,14 @@ func copyText(a Agent, name string, cp PlanCopy, runDir, slotErr string) string 
 
 // PlanInfo is one line of the plan list.
 type PlanInfo struct {
-	Name   string     `json:"name"`
-	Map    uint32     `json:"map,omitempty"`
-	Legs   int        `json:"legs,omitempty"`
-	Status string     `json:"status,omitempty"`
-	Source PlanSource `json:"source"`
-	Error  string     `json:"error,omitempty"`
+	Name   string `json:"name"`
+	Map    uint32 `json:"map,omitempty"`
+	Legs   int    `json:"legs,omitempty"`
+	Status string `json:"status,omitempty"`
+	// ForeverStatus is Plan.ForeverStatus: where the plan stands on the Forever side, apart from its Turtle status.
+	ForeverStatus string     `json:"forever_status,omitempty"`
+	Source        PlanSource `json:"source"`
+	Error         string     `json:"error,omitempty"`
 }
 
 // list names every plan the dashboard can draw: the files of its folders (the first folder that has a name wins) and the plans of the build
@@ -276,6 +278,7 @@ func (c *planCache) list() []PlanInfo {
 		pi := PlanInfo{Name: n, Source: src, Error: errText}
 		if plan != nil {
 			pi.Map, pi.Legs, pi.Status = plan.Map, len(plan.Legs), plan.Status
+			pi.ForeverStatus = plan.ForeverStatus
 		}
 		out = append(out, pi)
 	}

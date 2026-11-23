@@ -15,6 +15,9 @@ status: draft
 
 # Score a finished fight
 
+> **Turtle only.** `fight-score` reads Turtle dashboard recordings; a Forever server has no replacement
+> (`forever-agent help`).
+
 `turtle-agent fight-score` reads finished fights the way the dashboard's fight debugger reads them: the two tank readings with the debugger's exact rules, then one line per bot the spells oracle warns about. It reads files only and never logs in.
 
 ## 1. Score a fight dump

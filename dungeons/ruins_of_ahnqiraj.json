@@ -3,6 +3,7 @@
   "name": "ruins_of_ahnqiraj",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
+  "forever_status": "todo",
   "map": 509,
   "entrance": {"x": -8436.53, "y": 1519.17, "z": 31.907},
   "entrance_trigger": 4008,

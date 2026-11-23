@@ -19,6 +19,9 @@ status: draft
 
 # Draw your first run map
 
+> **Turtle only.** `map` runs against the Turtle stack. Against a Forever server, use `forever run-map` (see
+> `forever-agent help`).
+
 You take a capture file from a logged-in run and draw it as a top-down SVG: the party's routes, the creatures they fought, and the pulls and deaths along the way.
 
 You need a built `turtle-agent` binary (or `go run ./cmd/turtle-agent`) and a capture file. The repo's `testdata/captures/m6-fight.twcap` works: a 7-minute fight in the open world on map 1 (Kalimdor).

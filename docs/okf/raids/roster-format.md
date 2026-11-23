@@ -15,6 +15,9 @@ status: draft
 
 # Roster file format
 
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+
 `--hires FILE` takes a `tb-raid-roster` v1 or v2 file. The walk hires batches in order and learns each batch's names by diffing `party` before and after the hire.[^roster]
 
 ```json
