@@ -172,7 +172,7 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -183,6 +183,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	tokenFile := fs.String("token-file", "", "RPC bearer token file (default: rpc-<port>.token in --dir or the working directory)")
 	noAuth := fs.Bool("no-auth", false, "serve without a bearer token (loopback and Host checks only)")
 	navmesh := fs.String("navmesh", "", "mmaps folder that enables path_to and walk_path")
+	plansDir := fs.String("plans-dir", "dungeons", "folder map_snapshot reads a plan from")
 	parents := mapPairs{}
 	fs.Var(parents, "parent", "MAP=PARENT: an instance map whose missing tile comes from that parent (repeatable)")
 	grace := fs.Duration("disconnect-grace", 30*time.Second, "how long the RPC stays up once the reconnect budget is spent (the daemon is offline)")
@@ -339,6 +340,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			Listener:        ln,
 			Token:           token,
 			NavmeshDir:      *navmesh,
+			PlansDir:        *plansDir,
 			Parents:         parents,
 			DisconnectGrace: *grace,
 			AllowGMUnits:    *allowGMUnits,

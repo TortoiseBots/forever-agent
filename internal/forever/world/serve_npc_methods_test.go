@@ -433,7 +433,7 @@ func TestServeGossipSelect(t *testing.T) {
 
 func TestServeNPCMethodsAreRegistered(t *testing.T) {
 	ported, notPortedNames := ServeRPCMethods()
-	for _, name := range []string{"vendor_list", "buy", "sell", "gossip_hello", "gossip_select"} {
+	for _, name := range []string{"vendor_list", "buy", "sell", "gossip_hello", "gossip_select", "map_snapshot"} {
 		if slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s is still listed as not ported", name)
 		}
@@ -441,7 +441,7 @@ func TestServeNPCMethodsAreRegistered(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 	}
-	for _, name := range []string{"lfg_status", "map_snapshot"} {
+	for _, name := range []string{"lfg_status"} {
 		if !slices.Contains(notPortedNames, name) {
 			t.Fatalf("%s should stay not ported", name)
 		}

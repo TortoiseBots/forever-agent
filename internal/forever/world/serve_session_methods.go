@@ -712,6 +712,9 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("dynamic_objects", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) ([]ServeDynamicObject, error) {
 		return s.serveDynamicObjects()
 	}))
+	srv.Register("map_snapshot", serveReadTyped(st, func(s *session, _ context.Context, p ServeMapParams) (ServeMapResult, error) {
+		return s.serveMapSnapshot(p, st.plansFolder())
+	}))
 	srv.Register("face", serveCallTyped(st, func(s *session, _ context.Context, p serveUnitParams) (serveEmpty, error) {
 		o, err := s.serveUnitByName(p.GUID, p.Name)
 		if err != nil {
@@ -1846,7 +1849,6 @@ var notPortedMethods = []string{
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
-	"map_snapshot",
 	"plan_check",
 	"raid_move",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",

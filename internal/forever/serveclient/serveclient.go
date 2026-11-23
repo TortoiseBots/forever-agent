@@ -345,6 +345,41 @@ type Party struct {
 	Marks         []PartyMark `json:"marks,omitempty"`
 }
 
+// MapParams is map_snapshot's arguments (serve's ServeMapParams): the floor to draw, a plan to overlay, how the
+// floors split, whether the navmesh is drawn, and whether the single-file replay is wanted too.
+type MapParams struct {
+	Floor      int     `json:"floor,omitempty"`
+	Plan       string  `json:"plan,omitempty"`
+	Floors     string  `json:"floors,omitempty"`
+	Background *bool   `json:"background,omitempty"`
+	HTML       bool    `json:"html,omitempty"`
+	Pad        float32 `json:"pad,omitempty"`
+}
+
+// MapSnapshot is map_snapshot's answer (serve's ServeMapResult): the run's extent, what it holds, the notes and the
+// image (an SVG, and the single-file replay when HTML was asked for).
+type MapSnapshot struct {
+	Map        uint32   `json:"map"`
+	Floor      int      `json:"floor"`
+	Floors     []string `json:"floors"`
+	Seconds    float64  `json:"seconds"`
+	Members    int      `json:"members"`
+	Creatures  int      `json:"creatures"`
+	Events     int      `json:"events"`
+	Background bool     `json:"background"`
+	Notes      []string `json:"notes"`
+	SVG        string   `json:"svg"`
+	HTML       string   `json:"html,omitempty"`
+}
+
+// MapSnapshot reads map_snapshot: the picture of the run so far on the daemon's current map. It answers while the
+// link is down (the recorder's model is still there); a session not in the world answers a typed game error.
+func (c *Client) MapSnapshot(ctx context.Context, params MapParams) (MapSnapshot, error) {
+	var m MapSnapshot
+	err := c.call(ctx, "map_snapshot", params, &m, defaultTimeout)
+	return m, err
+}
+
 // Command is a gm/bot method's result: the line sent and the server's
 // visible answer.
 type Command struct {
