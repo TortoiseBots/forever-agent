@@ -816,7 +816,11 @@ func (s *session) actMount(ctx context.Context, a *actState, step ActStep) error
 		return s.actFail(a, step, err)
 	}
 	if p.Entry > 0 {
-		s.actOK(a, step, fmt.Sprintf("entry %d, display %d", p.Entry, out.DisplayID))
+		detail := fmt.Sprintf("entry %d, display %d", p.Entry, out.DisplayID)
+		if out.Learned != 0 {
+			detail = fmt.Sprintf("entry %d, taught spell %d, display %d", p.Entry, out.Learned, out.DisplayID)
+		}
+		s.actOK(a, step, detail)
 		return nil
 	}
 	s.actOK(a, step, fmt.Sprintf("spell %d, display %d, %d cast(s)", p.Spell, out.DisplayID, out.Attempts))

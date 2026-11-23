@@ -43,6 +43,8 @@ type ServeMount struct {
 	Spell     int32 `json:"spell,omitempty"`
 	Entry     int32 `json:"entry,omitempty"`
 	Attempts  int   `json:"attempts,omitempty"`
+	// Learned is the spell an item use taught, which the call then cast (a mount item's ON_LEARN mount spell).
+	Learned int32 `json:"learned_spell,omitempty"`
 }
 
 // mountWatch is the last mount packet this session saw. Only the session goroutine touches it; serveMount resets it

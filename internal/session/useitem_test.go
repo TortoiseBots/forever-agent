@@ -401,3 +401,157 @@ func TestLearnAfterTheWaitIsNotCast(t *testing.T) {
 	h.notSent(opcode.CMSGCastSpell)
 	h.logout()
 }
+
+// learned458 is SMSG_LEARNED_SPELL: the Brown Horse, the mount spell a ForeverCore bridle (item 5656) teaches
+// through its ON_LEARN effect (ItemTemplate.h:132).
+var learned458 = []byte{0xca, 0x01, 0x00, 0x00}
+
+// A ForeverCore mount item's on-use spell is a learn spell (55884): the use teaches the mount spell and the agent
+// casts that, as it does for a vanilla bridle. The call names the item and its on-use spell.
+func TestMountItemUnknownMountUsesThenCastsTaughtSpell(t *testing.T) {
+	ctx := context.Background()
+	h := start(t, Options{})
+	h.enterWorld()
+	h.send(opcode.SMSGUpdateObject, ownInventory(map[uint8]packet.GUID{25: swordGUID}, map[packet.GUID][2]uint32{swordGUID: {5656, 1}}))
+	waitFor(t, func() bool { return len(h.s.Inventory()) == 1 })
+	done := make(chan MountInfo, 1)
+	go func() {
+		info, err := h.s.Mount(ctx, MountRef{Item: EquipRef{Entry: 5656}, Spell: 55884}, 3*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- info
+	}()
+	h.expect(opcode.CMSGUseItem)
+	h.send(opcode.SMSGLearnedSpell, learned458)
+	if p := h.expect(opcode.CMSGCastSpell); string(p.Body) != string(game.BuildCastSpell(458, 0)) {
+		t.Fatalf("the taught spell went out as % X", p.Body)
+	}
+	h.send(opcode.SMSGMountresult, gametest.ResultCode(10))
+	mountUp(h, 2404, 458)
+	if info := <-done; !info.Mounted || info.DisplayID != 2404 || info.Via != "item" || info.Learned != 458 {
+		t.Fatalf("%+v", info)
+	}
+	if p, err := h.srv.Expect(opcode.CMSGUseItem, 100*time.Millisecond); err == nil {
+		t.Fatalf("a second use went out: % X", p.Body)
+	}
+	h.logout()
+}
+
+// The mount spell a known item teaches is cast on its own: the character knows it, so a use would teach nothing.
+func TestMountItemKnownMountSpellCastsWithoutTheItem(t *testing.T) {
+	ctx := context.Background()
+	h := start(t, Options{})
+	h.enterWorld()
+	h.send(opcode.SMSGInitialSpells, gametest.InitialSpells([]uint32{458}, nil))
+	waitFor(t, func() bool { return h.s.SpellState().Known(458) })
+	h.send(opcode.SMSGUpdateObject, ownInventory(map[uint8]packet.GUID{25: swordGUID}, map[packet.GUID][2]uint32{swordGUID: {5656, 1}}))
+	waitFor(t, func() bool { return len(h.s.Inventory()) == 1 })
+	done := make(chan MountInfo, 1)
+	go func() {
+		info, err := h.s.Mount(ctx, MountRef{Item: EquipRef{Entry: 5656}, Spell: 458}, 3*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- info
+	}()
+	if p := h.expect(opcode.CMSGCastSpell); string(p.Body) != string(game.BuildCastSpell(458, 0)) {
+		t.Fatalf("the known spell went out as % X", p.Body)
+	}
+	h.notSent(opcode.CMSGUseItem)
+	mountUp(h, 2404, 458)
+	if info := <-done; !info.Mounted || info.Via != "spell" || info.Learned != 0 {
+		t.Fatalf("%+v", info)
+	}
+	h.logout()
+}
+
+// A second mount by the same item casts the spell its first use taught: the spell is known now, so the item is
+// not used again.
+func TestMountItemReusesTheTaughtSpell(t *testing.T) {
+	ctx := context.Background()
+	h := start(t, Options{})
+	h.enterWorld()
+	h.send(opcode.SMSGUpdateObject, ownInventory(map[uint8]packet.GUID{25: swordGUID}, map[packet.GUID][2]uint32{swordGUID: {5656, 1}}))
+	waitFor(t, func() bool { return len(h.s.Inventory()) == 1 })
+	done := make(chan MountInfo, 1)
+	go func() {
+		info, err := h.s.Mount(ctx, MountRef{Item: EquipRef{Entry: 5656}}, 3*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- info
+	}()
+	h.expect(opcode.CMSGUseItem)
+	h.send(opcode.SMSGLearnedSpell, learned458)
+	h.expect(opcode.CMSGCastSpell)
+	mountUp(h, 2404, 458)
+	if info := <-done; !info.Mounted || info.Learned != 458 {
+		t.Fatalf("%+v", info)
+	}
+	// Dismount, then mount again by the item: only the cast goes out this time.
+	down := make(chan MountInfo, 1)
+	go func() {
+		info, err := h.s.Dismount(ctx, 0, 3*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		down <- info
+	}()
+	h.expect(opcode.CMSGCancelAura)
+	h.send(opcode.SMSGUpdateObject, selfValues(map[uint16]uint32{objects.UnitMountDisplay: 0, objects.UnitAura + 5: 0}))
+	if info := <-down; info.Mounted {
+		t.Fatalf("%+v", info)
+	}
+	again := make(chan MountInfo, 1)
+	go func() {
+		info, err := h.s.Mount(ctx, MountRef{Item: EquipRef{Entry: 5656}}, 3*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		again <- info
+	}()
+	if p := h.expect(opcode.CMSGCastSpell); string(p.Body) != string(game.BuildCastSpell(458, 0)) {
+		t.Fatalf("the remembered spell went out as % X", p.Body)
+	}
+	h.notSent(opcode.CMSGUseItem)
+	mountUp(h, 2404, 458)
+	if info := <-again; !info.Mounted || info.Via != "spell" {
+		t.Fatalf("%+v", info)
+	}
+	h.logout()
+}
+
+// A use the server refuses is an error that names the cast, not a mount that never came.
+func TestMountItemUseFailureIsNamed(t *testing.T) {
+	h := start(t, Options{})
+	h.enterWorld()
+	h.send(opcode.SMSGUpdateObject, ownInventory(map[uint8]packet.GUID{25: swordGUID}, map[packet.GUID][2]uint32{swordGUID: {5656, 1}}))
+	waitFor(t, func() bool { return len(h.s.Inventory()) == 1 })
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.s.Mount(context.Background(), MountRef{Item: EquipRef{Entry: 5656}, Spell: 55884}, 3*time.Second)
+		done <- err
+	}()
+	h.expect(opcode.CMSGUseItem)
+	h.send(opcode.SMSGCastResult, packet.NewWriter().U32(55884).U8(2).U8(66).Bytes())
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "cast failed") || !strings.Contains(err.Error(), "SpellCastResult 66") {
+		t.Fatalf("%v", err)
+	}
+	h.notSent(opcode.CMSGCastSpell)
+	h.logout()
+}
+
+// A use that teaches nothing (a use already known, or a dropped one) says so instead of a bare timeout.
+func TestMountItemNoLearnIsNamed(t *testing.T) {
+	h := start(t, Options{})
+	h.enterWorld()
+	h.send(opcode.SMSGUpdateObject, ownInventory(map[uint8]packet.GUID{25: swordGUID}, map[packet.GUID][2]uint32{swordGUID: {5656, 1}}))
+	waitFor(t, func() bool { return len(h.s.Inventory()) == 1 })
+	if _, err := h.s.Mount(context.Background(), MountRef{Item: EquipRef{Entry: 5656}, Spell: 55884}, 400*time.Millisecond); err == nil ||
+		!strings.Contains(err.Error(), "taught no spell") || !strings.Contains(err.Error(), "spell_id") {
+		t.Fatalf("%v", err)
+	}
+	h.notSent(opcode.CMSGCastSpell)
+	h.logout()
+}

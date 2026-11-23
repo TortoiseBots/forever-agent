@@ -733,6 +733,10 @@ type session struct {
 	// Round W4: the last mount answer this session saw (mount.go): SMSG_MOUNT_RESULT's int32, kept for the cast
 	// loop's wait. Only the session goroutine touches it.
 	mount mountWatch
+	// itemLearn is the answer an item mount waits on (mount_item.go): how many spells SMSG_LEARNED_SPELLS named
+	// this session, the newest one, and the spell each mount item taught. It is never reset by a mount call.
+	// Only the session goroutine touches it.
+	itemLearn itemLearnWatch
 	// Round BG-A1: the battleground watch's decoded state (world states,
 	// invite, match end, join refusal). Only the session goroutine touches it.
 	bg *bgState
@@ -2728,6 +2732,12 @@ func (s *session) handleCombat(p worldconn.Packet) {
 		s.trainer.learned = append(s.trainer.learned[:0], v.Spells...)
 		for _, e := range v.Spells {
 			s.learnSpell(e)
+		}
+		// An item mount reads them too (mount_item.go): a use whose learn effect teaches a mount spell is
+		// confirmed by this packet, and the spell it names is the one to cast.
+		s.itemLearn.learns += uint64(len(v.Spells))
+		if n := len(v.Spells); n > 0 {
+			s.itemLearn.learned = v.Spells[n-1].SpellID
 		}
 	case wire.SMSGSupercededSpells:
 		v, err := combat.ParseSupercededSpells(p.Payload)

@@ -27,7 +27,11 @@ type mountState struct {
 	seq      uint64   // counts SMSG_MOUNTRESULT and SMSG_DISMOUNTRESULT
 	learns   uint64   // counts SMSG_LEARNED_SPELL: a bridle teaches its mount spell and is used up
 	learned  uint32   // the newest spell SMSG_LEARNED_SPELL named
-	wakes    notifier
+	// taught maps a mount item's entry to the spell its use taught this session. A second mount by
+	// the same item casts that spell instead of using the item again: a use whose learn effect
+	// teaches a spell already known is a silent no-op (ForeverCore Player.cpp:3521-3536).
+	taught map[uint32]uint32
+	wakes  notifier
 }
 
 func (s *Session) registerUseItem() {
@@ -75,15 +79,33 @@ func (s *Session) Mounted() bool { return s.store.Field(s.selfGUID(), objects.Un
 // A vanilla mount item is a bridle. Its use is a cast of its own (spell 46499, "Add Mount to
 // Collection", about 4 s in agent.cap #4300-#4321) that teaches the mount spell and uses the item
 // up: SMSG_LEARNED_SPELL comes with that cast's end, and no mount follows (SpellEffects.cpp:2241,
-// Player.cpp:4591). After a learn the agent waits learnQuiet for another, then casts the spell it
-// taught when that is a mount spell (spells.IsMount), the wait has not run out and no mount, failure
-// or refusal came. Anything else is an error that names the spell, and nothing is cast.
+// Player.cpp:4591). ForeverCore's mount items use the same shape with the on-use spell 55884 and
+// the mount spell as the item's ON_LEARN effect (ItemTemplate.h:132; EffectLearnSpell learns it,
+// SpellEffects.cpp:2170-2214). The effect rows are not readable from the agent: the 1.12 item
+// query carries no spells (game.ParseItemQueryResponse) and the packed spell table has no 55884
+// (tools/spellnamegen reads spell_template), so the learn is read from the server's reply, the
+// SMSG_LEARNED_SPELL its use sends. After a learn the agent waits learnQuiet for another, then casts
+// the one spell it taught when that is a mount spell (spells.IsMount), the wait has not run out and
+// no mount, failure or refusal came. A spell the call names beside the item is cast on its own
+// when the character knows it and it is a mount spell: the item has nothing to teach then
+// (Player::LearnSpell sends no SMSG_LEARNED_SPELL for a spell already known, Player.cpp:3521-3536).
+// The same holds for the spell an earlier call of this session learned from the item. Anything else
+// is an error that names the step, and nothing is cast.
 func (s *Session) Mount(ctx context.Context, ref MountRef, wait time.Duration) (MountInfo, error) {
 	if ref.Spell == 0 && ref.Item.Entry == 0 && ref.Item.Slot == nil {
 		return MountInfo{}, errors.New("mount needs an item_entry (or bag and slot), or a spell_id")
 	}
+	itemRef := ref.Item.Entry != 0 || ref.Item.Slot != nil
+	if ref.Spell != 0 && (!itemRef || (s.spellState.Known(ref.Spell) && spells.IsMount(ref.Spell))) {
+		return s.castMount(ctx, ref.Spell, wait)
+	}
+	if ref.Item.Entry != 0 {
+		if t := s.itemTaught(ctx, ref.Item.Entry); t != 0 && s.spellState.Known(t) && spells.IsMount(t) {
+			return s.castMount(ctx, t, wait)
+		}
+	}
 	info := MountInfo{Via: "item"}
-	var seq, failed, learns uint64
+	var seq, failed, learns, entry uint64
 	_, err := s.do(ctx, func() (any, error) {
 		if err := s.inWorld(); err != nil {
 			return nil, err
@@ -92,41 +114,83 @@ func (s *Session) Mount(ctx context.Context, ref MountRef, wait time.Duration) (
 			return nil, errors.New("already mounted")
 		}
 		seq, failed, learns, s.mount.result = s.mount.seq, s.mount.failed, s.mount.learns, nil
-		if ref.Spell != 0 {
-			info.Via = "spell"
-			return nil, s.conn.WritePacket(opcode.CMSGCastSpell, game.BuildCastSpell(ref.Spell, 0))
-		}
 		it, err := s.pickItem(ref.Item)
 		if err != nil {
 			return nil, err
 		}
+		entry = uint64(it.Entry)
 		return nil, s.conn.WritePacket(opcode.CMSGUseItem, game.BuildUseItem(it.Bag, it.Slot, 0))
 	})
 	if err != nil {
 		return MountInfo{}, err
 	}
 	deadline := time.Now().Add(wait)
-	bridle := ref.Spell == 0
 	err = s.await(ctx, wait, &s.mount.wakes, func() bool {
-		return s.mountSettled(seq, failed) || (bridle && s.mount.learns > learns)
+		return s.mountSettled(seq, failed) || s.mount.learns > learns
 	})
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return MountInfo{}, err
 	}
-	if bridle {
-		if err := s.settleLearns(ctx, learns, deadline); err != nil {
-			return MountInfo{}, err
+	if err := s.settleLearns(ctx, learns, deadline); err != nil {
+		return MountInfo{}, err
+	}
+	taught, cerr := s.castLearned(ctx, learns, failed, seq, deadline)
+	if cerr != nil {
+		return info, cerr
+	}
+	if taught != 0 {
+		info.Learned = taught
+		if entry != 0 {
+			s.rememberTaught(ctx, uint32(entry), taught)
 		}
-		taught, cerr := s.castLearned(ctx, learns, failed, seq, deadline)
-		if cerr != nil {
-			return info, cerr
-		}
-		if taught != 0 {
-			info.Learned = taught
-			err = s.await(ctx, time.Until(deadline), &s.mount.wakes, func() bool { return s.mountSettled(seq, failed) })
-		}
+		err = s.await(ctx, time.Until(deadline), &s.mount.wakes, func() bool { return s.mountSettled(seq, failed) })
 	}
 	return s.mountInfo(ctx, info, err, "mounted", failed)
+}
+
+// castMount casts one spell the character knows or that the server will judge, and waits for the
+// display. It is the call's whole work when no item is used or its use has nothing to teach.
+func (s *Session) castMount(ctx context.Context, spell uint32, wait time.Duration) (MountInfo, error) {
+	info := MountInfo{Via: "spell"}
+	var seq, failed uint64
+	_, err := s.do(ctx, func() (any, error) {
+		if err := s.inWorld(); err != nil {
+			return nil, err
+		}
+		if s.Mounted() {
+			return nil, errors.New("already mounted")
+		}
+		seq, failed, s.mount.result = s.mount.seq, s.mount.failed, nil
+		return nil, s.conn.WritePacket(opcode.CMSGCastSpell, game.BuildCastSpell(spell, 0))
+	})
+	if err != nil {
+		return MountInfo{}, err
+	}
+	err = s.await(ctx, wait, &s.mount.wakes, func() bool { return s.mountSettled(seq, failed) })
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return MountInfo{}, err
+	}
+	return s.mountInfo(ctx, info, err, "mounted", failed)
+}
+
+// itemTaught is the spell this session's use of item entry taught, 0 when none did.
+func (s *Session) itemTaught(ctx context.Context, entry uint32) uint32 {
+	v, err := s.do(ctx, func() (any, error) { return s.mount.taught[entry], nil })
+	if err != nil {
+		return 0
+	}
+	return v.(uint32)
+}
+
+// rememberTaught records the spell a mount item's use taught, for a later mount by the same item.
+func (s *Session) rememberTaught(ctx context.Context, entry, spell uint32) {
+	s.do(ctx, func() (any, error) {
+		if s.mount.taught == nil {
+			s.mount.taught = map[uint32]uint32{}
+		}
+		s.mount.taught[entry] = spell
+		return nil, nil
+	})
 }
 
 // mountSettled reports whether a mount call that began at seq and failed has its answer: the
@@ -275,6 +339,9 @@ func (s *Session) mountInfo(ctx context.Context, info MountInfo, waitErr error, 
 		}
 		if failReason != "" {
 			reason = "the cast failed: " + failReason
+		}
+		if info.Via == "item" && info.Learned == 0 && info.Result == "" && failReason == "" {
+			reason = "the use taught no spell and set no mount display: if the item teaches a mount spell the character already knows, cast it with spell_id; otherwise the use was refused or dropped (read the inventory_error and spell_fail events)"
 		}
 		if info.Learned != 0 {
 			reason = fmt.Sprintf("the item taught spell %d, which was cast: %s", info.Learned, reason)
