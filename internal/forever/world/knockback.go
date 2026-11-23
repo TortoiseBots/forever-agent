@@ -66,6 +66,8 @@ type selfFlight struct {
 	landY      float32
 	landZ      float32
 	nextBeat   time.Time
+	// fall marks a fall from rest after a teleport (fall.go): no knockback bit, no takeoff row, no landing row.
+	fall bool
 }
 
 // selfLanding is the mover's own landing before the server states where the mover is. The client flies a flat arc, so
@@ -295,6 +297,15 @@ func (s *session) flightTick(now time.Time) error {
 			return nil
 		}
 		t := now.Sub(f.start).Seconds()
+		if f.fall {
+			if err := s.sendFallBeat(now, t); err != nil {
+				return err
+			}
+			for !f.nextBeat.After(now) {
+				f.nextBeat = f.nextBeat.Add(knockBeat)
+			}
+			return nil
+		}
 		x, y, z := f.pos(t)
 		s.mover.SetFlightPosition(x, y, z)
 		fallMS := now.Sub(f.start).Milliseconds()
@@ -310,6 +321,9 @@ func (s *session) flightTick(now time.Time) error {
 			f.nextBeat = f.nextBeat.Add(knockBeat)
 		}
 		return nil
+	}
+	if f.fall {
+		return s.landFall(now)
 	}
 	s.mover.SetFlightPosition(f.landX, f.landY, f.landZ)
 	if err := s.transport().Send(wire.CMSGMoveFallLand, objects.BuildMovementPacket(s.mover.LandingInfo(now))); err != nil {

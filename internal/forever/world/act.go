@@ -747,13 +747,13 @@ func (s *session) actClose(ctx context.Context, a *actState, step ActStep) error
 	return nil
 }
 
-// actMount mounts the character: `mount spell=N` runs the method's cast loop, and `mount entry=N` answers the same
-// needs-item-use refusal the method does.
+// actMount mounts the character: `mount spell=N` runs the method's cast loop, `mount entry=N spell=M` uses the mount
+// item N whose on-use spell is M (mount_item.go), and `mount entry=N` alone answers the method's refusal.
 func (s *session) actMount(ctx context.Context, a *actState, step ActStep) error {
 	spellText, haveSpell := step.Args["spell"]
 	entryText, haveEntry := step.Args["entry"]
-	if haveSpell == haveEntry {
-		return s.actFail(a, step, fmt.Errorf("mount needs exactly one of spell= or entry="))
+	if !haveSpell && !haveEntry {
+		return s.actFail(a, step, fmt.Errorf("mount needs exactly one of spell= or entry= (an item mount also needs spell=)"))
 	}
 	var p serveMountParams
 	if haveSpell {
@@ -762,7 +762,8 @@ func (s *session) actMount(ctx context.Context, a *actState, step ActStep) error
 			return s.actFail(a, step, fmt.Errorf("spell=%q is not a spell id", spellText))
 		}
 		p.Spell = spell
-	} else {
+	}
+	if haveEntry {
 		var entry int32
 		if _, err := fmt.Sscanf(entryText, "%d", &entry); err != nil || entry <= 0 {
 			return s.actFail(a, step, fmt.Errorf("entry=%q is not an item entry", entryText))

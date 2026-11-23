@@ -528,6 +528,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		}
 		return s.serveGMResult(ctx, line)
 	}))
+	registerGapMethods(srv, st) // #99: teleport, gm_evade, gm_respawn
 	srv.Register("gm_kill", serveCallTyped(st, func(s *session, ctx context.Context, p serveUnitParams) (ServeCommand, error) {
 		return s.serveGMKill(ctx, p)
 	}))
@@ -898,6 +899,11 @@ func (s *session) attackFor(ctx context.Context, guid wire.GUID, d time.Duration
 func (s *session) serveGMResult(ctx context.Context, text string) (ServeCommand, error) {
 	rep, err := s.serveGM(ctx, text)
 	if err != nil {
+		return ServeCommand{}, err
+	}
+	// A `.go xyz` above the navmesh's ground starts the fall (fall.go): the line is done when the character has
+	// landed, so the call that follows does not meet a mover that is still in the air.
+	if err := s.waitFallLanded(ctx); err != nil {
 		return ServeCommand{}, err
 	}
 	return commandResult(strings.TrimSpace(text), rep), nil
@@ -1713,7 +1719,6 @@ var notPortedMethods = []string{
 	"brain_start", "brain_status", "brain_stop",
 	"convert_raid",
 	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"gm_evade", "gm_respawn",
 	"join_channel", "leave_channel",
 	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 	"lfg_role_check_answer", "lfg_status",
@@ -1721,7 +1726,6 @@ var notPortedMethods = []string{
 	"plan_check",
 	"raid_move",
 	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
-	"teleport",
 	"trade", "trade_accept", "trade_cancel", "trade_expect", "trade_open", "trade_set_item", "trade_status",
 	"train", "trainer_list", "tt", "tune_list", "tune_set",
 }

@@ -105,7 +105,7 @@ var ErrMapChange = errors.New("objects: the character is between maps")
 
 // ErrAirborne refuses ordinary movement while a knockback flight is under way: a real client cannot walk, turn or
 // stop in the air, and the server would see a movement packet that contradicts the jump block of the ack.
-var ErrAirborne = errors.New("objects: the character is in the air after a knockback")
+var ErrAirborne = errors.New("objects: the character is in the air (a knockback or a fall)")
 
 // BeginMapChange closes the movement window (SMSG_TRANSFER_PENDING). A leg in progress is abandoned: its straight
 // line belongs to the old map, and the wait that drives it returns ErrMapChange.
@@ -165,8 +165,20 @@ func (m *Mover) EndKnockback() { m.airborne = false }
 // and the jump block of a knockback. descending adds MOVEMENTFLAG_FALLING_FAR, as the real client does once the
 // arc turns down (the same pairing internal/session sends).
 func (m *Mover) FlightInfo(at time.Time, jump *JumpInfo, descending bool) MovementInfo {
+	return m.airInfo(at, jump, descending, FlagKnockback)
+}
+
+// FallInfo is FlightInfo for a plain fall (after a teleport above the ground): the same block without the knockback
+// bit, which only a thrown mover carries.
+func (m *Mover) FallInfo(at time.Time, jump *JumpInfo, descending bool) MovementInfo {
+	return m.airInfo(at, jump, descending, 0)
+}
+
+// airInfo builds an airborne block: the standing flags with the moving and ground bits cleared, FlagFalling, extra,
+// and FlagFallingFar when descending.
+func (m *Mover) airInfo(at time.Time, jump *JumpInfo, descending bool, extra uint64) MovementInfo {
 	flags := m.base() &^ (FlagMaskMoving | FlagFallingFar | FlagTouchingGround | FlagDisableGravity | FlagRoot | FlagWalking | FlagKnockback)
-	flags |= FlagFalling | FlagKnockback
+	flags |= FlagFalling | extra
 	if descending {
 		flags |= FlagFallingFar
 	}

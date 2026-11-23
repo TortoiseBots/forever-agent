@@ -6,8 +6,7 @@ package world
 // core answers by removing the mount aura (Opcodes.h:173, SpellHandler.cpp:338): the end is the field going back to
 // zero within dismountWait.
 //
-// Item mounts (a mount item whose use casts the spell) need the item-use round (R2, items/packets.go BuildUseItem):
-// until that is on the branch, `mount entry=N` answers that it needs item use instead of guessing a packet layout.
+// Item mounts (a mount item whose use casts the spell) are mount_item.go's: `mount entry=N spell=M`.
 
 import (
 	"context"
@@ -30,11 +29,7 @@ const (
 // variable so a test can shorten it.
 var mountWait = 4 * time.Second
 
-// ErrMountNeedsItemUse is `mount entry=N`'s answer while item use is not ported: the entry names an item, and
-// using an item is a packet (CMSG_USE_ITEM) this round does not build.
-var ErrMountNeedsItemUse = errors.New("mount: an entry mount needs item use, which this server does not port yet")
-
-// serveMountParams is mount's call: a spell to cast, or an item entry to use (answering needs item use for now).
+// serveMountParams is mount's call: a spell to cast, or an item entry to use together with the item's on-use spell.
 type serveMountParams struct {
 	Spell int32 `json:"spell,omitempty"`
 	Entry int32 `json:"entry,omitempty"`
@@ -86,6 +81,9 @@ func ParseMountResult(payload []byte) (int32, error) {
 // mounted is answered as it is, without a cast the server would refuse; one on a taxi flight is refused (its display
 // is the flight's own).
 func (s *session) serveMount(ctx context.Context, p serveMountParams) (ServeMount, error) {
+	if p.Entry > 0 && p.Spell > 0 {
+		return s.serveMountItem(ctx, p)
+	}
 	if (p.Spell > 0) == (p.Entry > 0) {
 		return ServeMount{}, errors.New("mount needs exactly one of spell or entry")
 	}
@@ -93,7 +91,7 @@ func (s *session) serveMount(ctx context.Context, p serveMountParams) (ServeMoun
 		return ServeMount{}, err
 	}
 	if p.Entry > 0 {
-		return ServeMount{}, ErrMountNeedsItemUse
+		return ServeMount{}, ErrMountItemNeedsSpell
 	}
 	if !s.knowsSpell(p.Spell) {
 		return ServeMount{}, fmt.Errorf("mount: spell %d is not one this character knows (%d known spell(s)), so it is not cast", p.Spell, len(s.known))

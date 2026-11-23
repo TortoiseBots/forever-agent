@@ -141,10 +141,18 @@ The feature rounds add `inv`, `equip`, `store`, `swap`, `split`, `destroy`, `use
 `UNIT_FIELD_MOUNTDISPLAYID` goes non-zero; a non-zero `SMSG_MOUNT_RESULT` is the server's refusal and is named with
 its value. The spell must be one the character knows (`SMSG_SEND_KNOWN_SPELLS`) and is cast once; the wait for the
 display is 4 s and a silent server is a clear failure, not a second cast. A character already mounted is answered
-as it is. `{"entry": N}` is the item form, which needs item use (round R2) and
-answers `needs item use` until that is ported. `dismount` sends the empty `CMSG_CANCEL_MOUNT_AURA`
+as it is. `{"entry": N, "spell": M}` is the item form: the bag item N is used once (`CMSG_USE_ITEM`, the item's
+on-use spell M is named by the caller) and the same display wait decides; an entry alone is refused by name. `dismount` sends the empty `CMSG_CANCEL_MOUNT_AURA`
 (SpellHandler.cpp:338) and is done when the field reaches zero within 2 s; a character on foot answers without a
 packet.
+
+Test-setup hands (#99; see [docs/forever/DAEMON-GAPS-99-NOTES.md](docs/forever/DAEMON-GAPS-99-NOTES.md)):
+`teleport {x, y, z, map?}` sends `.go xyz`, waits for the server's own move of the character and, when `--navmesh`
+puts ground at least a yard under the point, for the fall the client flies from there (`fell`, `drop_yd`, the landing
+`z`); `gm_evade {guid|name}` (`.npc evade`) and `gm_respawn {guid|name}` (`.respawn`, a dead creature only) select the
+creature with the server's echo confirmed first and keep the `--allow-gm-units` / `trial_units` boundary. `forever
+serve --create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)` creates the character
+on login when the account lacks it (a character already there sends nothing).
 
 `follow_start {"lead": "NAME", "near": 3, "far": 8, "lost_s": 30, "tick_ms": 250}` runs one follow loop behind
 another character: beyond `far` yards it walks once to `near` yards behind the leader (the core's facing: `(cos o, sin o)`) on

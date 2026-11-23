@@ -623,6 +623,12 @@ type session struct {
 	// Round A7: the map change's state and the navmesh planner (per map: a new world drops it).
 	mapChg  mapChange
 	planner *navmesh.Planner
+	// floors, when set, answers the fall's floor query instead of the planner (fall.go); only tests set it.
+	floors floorSource
+	// fallStarts counts the falls dropAfterTeleport started, so a teleport can say whether it fell.
+	fallStarts uint64
+	// ground is what the last near teleport found under the character (fall.go).
+	ground groundNote
 
 	// Round 5 debug capture (Options.CaptureDir): one run directory per link, opened on the first packet.
 	captureRun *captureRun
@@ -2197,6 +2203,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		s.world.ApplyTeleport(t, s.transport().Now())
 		s.cancelKnockback(t.MoverGUID)
 		if t.MoverGUID == s.self {
+			s.endFall()
 			s.selfTeleports++
 			s.statedSelfPosition(t.X, t.Y, t.Z, s.transport().Now())
 			if s.taxiFlight.pending {
@@ -2229,6 +2236,7 @@ func (s *session) handle(ctx context.Context, ev event) error {
 			}
 			s.teleportSeq++
 			s.opts.logf("world: SMSG_MOVE_TELEPORT answered (map %d, client position %.2f %.2f %.2f)", s.world.MapID(), t.X, t.Y, t.Z)
+			s.dropAfterTeleport(t.X, t.Y, t.Z, s.transport().Now())
 		}
 	case wire.SMSGMoveRoot, wire.SMSGMoveUnroot:
 		guid, _, err := objects.ParseMoverFlag(p.Payload)
