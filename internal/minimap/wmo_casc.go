@@ -40,9 +40,9 @@ const (
 // wmoCascMaxBlocks bounds the block textures one map reads, so a hostile table cannot make the run read forever.
 const wmoCascMaxBlocks = 16384
 
-// wmoCascMissingBlockYards is the error of a WMO composition that was given no block size. It names the probe, which
+// errWMOMissingBlockYards is the error of a WMO composition that was given no block size. It names the probe, which
 // prints the measured value, so the caller is never left with a silent default.
-var wmoCascMissingBlockYards = errors.New("the WMO interior picture needs --wmo-block-yards: the client's block size is " +
+var errWMOMissingBlockYards = errors.New("the WMO interior picture needs --wmo-block-yards: the client's block size is " +
 	strconv.FormatFloat(WMOBlockYards, 'g', -1, 64) + " yd, measured with `minimap-extract --wmo-probe`")
 
 // wdtMODF is one WDT MODF entry: the WMO placement of a WMO-only map. Flags bit 0x8 says Id is the root file's
@@ -297,7 +297,7 @@ func wmoFromCASC(src fileSource, blocks []db2.WMOMinimapTexture, wdtID int32, bl
 		return nil, false, reason, err
 	}
 	if blockYards <= 0 {
-		return nil, false, "", fmt.Errorf("map WDT %d: %w", wdtID, wmoCascMissingBlockYards)
+		return nil, false, "", fmt.Errorf("map WDT %d: %w", wdtID, errWMOMissingBlockYards)
 	}
 	if blocks == nil {
 		return nil, false, cascNoWMOTable, nil
