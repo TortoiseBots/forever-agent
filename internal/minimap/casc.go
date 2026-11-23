@@ -41,6 +41,9 @@ type cascTables struct {
 	assignments []db2.UiMapAssignment
 	arts        []db2.UiMapXMapArt
 	tiles       []db2.UiMapArtTile
+	// blocks are WMOMinimapTexture's rows, for the indoor maps (round 4). The table is optional: a run that only
+	// wants terrain or world maps reads the three UiMap tables alone. nil means the --db2 folder has no table.
+	blocks []db2.WMOMinimapTexture
 }
 
 // openCASCTables reads the three UiMap tables of the world map from the server's extracted dbc folder. They are
@@ -80,6 +83,20 @@ func openCASCTables(dir string, logf func(string, ...any)) (*cascTables, error) 
 	}
 	if t.tiles, _, err = f.UiMapArtTiles(); err != nil {
 		return nil, err
+	}
+	// WMOMinimapTexture feeds the indoor pictures only, so a folder without it still serves terrain and world maps;
+	// the indoor map then gets a reason naming the table instead of failing every map of the run.
+	if p, ok := findFold(dir, "WMOMinimapTexture.db2"); ok {
+		f, err := db2.Open(p)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range f.Notes {
+			logf("%s: %s", "WMOMinimapTexture.db2", n)
+		}
+		if t.blocks, _, err = f.WMOMinimapTextures(); err != nil {
+			return nil, err
+		}
 	}
 	return t, nil
 }

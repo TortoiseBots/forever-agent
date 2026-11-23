@@ -12,10 +12,13 @@ import (
 
 const minimapUsage = "usage: forever-agent minimap-extract --client <Data dir> --out <dir> [--maps 70,209|all-instances] [--mmaps DIR] [--prefer minimap,worldmap,navmesh] [--list] [--verbose]\n" +
 	"       forever-agent minimap-extract --forever (--client <extract dir> | --casc <install> [--product P]) --db2 <dbc dir> --out <dir> [...]\n" +
+	"       forever-agent minimap-extract --forever --casc <install> --db2 <dbc dir> --maps <id> --wmo-probe\n" +
 	"  reads the game client's MPQ archives and writes <out>/<map>.png + <map>.json for the dashboard (README \"Minimaps\")\n" +
 	"  the minimap picture is the terrain tiles, the client's indoor WMO tiles, or the WMO tiles over the terrain\n" +
 	"  with --forever: --db2 is the server's dbc/<locale> with Map.db2; --client is an outside CASC extractor's listfile folder,\n" +
-	"  --casc the CASC install itself (.build.info): --casc also reads the world map (UiMapArt) textures by FileDataID"
+	"  --casc the CASC install itself (.build.info): --casc also reads the world map (UiMapArt) and the dungeon interiors'\n" +
+	"  WMO block textures by FileDataID; with --casc, --wmo-block-yards is required (its client value is measured with\n" +
+	"  --wmo-probe, which prints the blocks and the size they imply and writes nothing)"
 
 // minimapCmd extracts the in-game minimaps of maps from the client the owner owns.
 func minimapCmd(args []string, stdout, stderr io.Writer) int {
@@ -30,12 +33,14 @@ func minimapCmd(args []string, stdout, stderr io.Writer) int {
 	casc := fs.String("casc", "", "with --forever: the CASC install folder (holding .build.info), whose FileDataIDs give the terrain and world-map textures; replaces --client")
 	product := fs.String("product", "", "with --forever --casc: the .build.info product row to read when several are active")
 	db2Dir := fs.String("db2", "", "with --forever: the server's dbc/<locale> folder holding Map.db2")
+	wmoProbe := fs.Bool("wmo-probe", false, "with --forever --casc: report the map's root WMO FileDataID, its groups' boxes and the WMOMinimapTexture blocks with the block size they imply; writes nothing")
+	wmoBlockYards := fs.Float64("wmo-block-yards", 0, "with --forever --casc: yards per WMOMinimapTexture block of an indoor map (measure it with --wmo-probe)")
 	list := fs.Bool("list", false, "only report what each map would get; write nothing")
 	verbose := fs.Bool("verbose", false, "log every map and every skipped tile to stderr")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if fs.NArg() != 0 || (*out == "" && !*list) {
+	if fs.NArg() != 0 || (*out == "" && !*list && !*wmoProbe) {
 		fmt.Fprintln(stderr, minimapUsage)
 		return exitUsage
 	}
@@ -79,6 +84,52 @@ func minimapCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "minimap-extract:", err)
 		return exitUsage
 	}
+	blockYardsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		blockYardsSet = blockYardsSet || f.Name == "wmo-block-yards"
+	})
+	if *wmoProbe {
+		if !*forever || *casc == "" {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-probe needs --forever --casc (it reads the install's WDT and WMO files)")
+			return exitUsage
+		}
+		if *out != "" {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-probe writes nothing: drop --out")
+			return exitUsage
+		}
+		if all {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-probe needs --maps <id>[,<id>...]: one report per map named")
+			return exitUsage
+		}
+		if *wmoBlockYards < 0 {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-block-yards must be more than 0; the client's value is measured with --wmo-probe")
+			return exitUsage
+		}
+		popt := minimap.Options{CascDir: expandHome(*casc), Product: *product, DB2Dir: expandHome(*db2Dir), Maps: ids}
+		if *verbose {
+			popt.Log = func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) }
+		}
+		if err := minimap.RunWMOProbe(minimap.WMOProbeOptions{Options: popt, Out: stdout}); err != nil {
+			fmt.Fprintln(stderr, "minimap-extract:", err)
+			return 1
+		}
+		return exitOK
+	}
+	if !blockYardsSet && *forever && *casc != "" {
+		fmt.Fprintf(stderr, "minimap-extract: --forever --casc needs --wmo-block-yards: the client's block is %v yd, measured with --wmo-probe\n",
+			minimap.WMOBlockYards)
+		return exitUsage
+	}
+	if blockYardsSet {
+		if !*forever || *casc == "" {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-block-yards is a --forever --casc flag (the listfile path places WMO tiles itself)")
+			return exitUsage
+		}
+		if *wmoBlockYards <= 0 {
+			fmt.Fprintln(stderr, "minimap-extract: --wmo-block-yards must be more than 0; the client's value is measured with --wmo-probe")
+			return exitUsage
+		}
+	}
 	var pref []string
 	if *prefer != "" {
 		pref, err = minimap.ParsePrefer(*prefer)
@@ -97,7 +148,8 @@ func minimapCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	opts := minimap.Options{ClientDir: expandHome(*client), CascDir: expandHome(*casc), Product: *product,
 		DB2Dir: expandHome(*db2Dir), OutDir: expandHome(*out),
-		MmapsDirs: splitDirs(*mmaps), Maps: ids, All: all, Prefer: pref, ListOnly: *list}
+		MmapsDirs: splitDirs(*mmaps), Maps: ids, All: all, Prefer: pref, ListOnly: *list,
+		WMOBlockYards: *wmoBlockYards}
 	if *verbose {
 		opts.Log = func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) }
 	}
