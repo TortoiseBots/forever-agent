@@ -35,10 +35,18 @@ byte is in this change or its tests.
 ## Part C: `dungeon-watch --attach`
 
 - Flags `--attach` (bool) and `--attach-wait` (duration, default `300s`) → `driver.Config.Attach` / `AttachWait`.
+- With `--attach` the watch runs no entry at all: the party is already in and another client commands it, so no GM
+  line, no move and no PREPARE, TRAVEL or ENTER step goes out (the CLI's default `--enter tele` never fires). The
+  roster is still read, by PREPARE's own rules, for the party's five names, their roles and the commander
+  (`adoptWatchParty`, the read-only half of PREPARE). The same-map check (`enter:party-map`) is skipped too: the
+  attach checks the run itself instead.
 - With `--attach`, `watchStart` sends no `.tb run start`: `watchAttach` polls `.tb run status <leader>` at `cfg.Poll`
   until exactly one run of the leader is `running` (a `paused` one is attached too, with its state applied), records
   `run_start` with `"attached": true`, applies the record, copies `legSeen`/`FirstS` from `HasLeg` and `lastSeq` from
   `HasEv`, and logs `watch: attached state=<state>`. On timeout: `start:attach-timeout`.
+- The attached run's plan must be the watch's own (`--plan`): a run of another plan is refused before anything is
+  applied, with both plans named (`watch: attach refused: the leader's run is plan %q, not --plan %q; …`) and the
+  stop `start:attach-plan`.
 - Without `--attach` the start path is unchanged; a `foreign-bot` refusal now also logs
   `watch: start refused foreign-bot; a run started elsewhere can be watched with --attach`.
 - The fake gained `StartForeignRun(state)` (a run as another client's start would leave it) and an `OnStatus` hook
@@ -53,7 +61,10 @@ byte is in this change or its tests.
 - `cmd/forever-agent/forever_play_test.go`: `TestPlayCmdLastLegChecksTheName` (the exit-2 usage error lists the legs),
   `TestPlayCmdLastLegDry` (a dry run cut at a leg clears).
 - `internal/forever/driver/watch_test.go`: `TestWatchAttachSendsNoStart`, `TestWatchAttachWaitsForRunningRun`,
-  `TestWatchAttachPausedRun`, `TestWatchAttachTimeout`, `TestWatchForeignBotWithoutAttachStops`.
+  `TestWatchAttachPausedRun`, `TestWatchAttachTimeout`, `TestWatchAttachRunsNoEntry`,
+  `TestWatchAttachRefusesAnotherPlan`, `TestWatchForeignBotWithoutAttachStops`. The first four are the attach path; the
+  two new ones are the review notes (no entry step, the plan check), and `TestWatchAttachRunsNoEntry` carries a
+  control watch without `--attach` that does send its enter action.
 
 ## Mutations (each must fail the named test)
 
@@ -65,12 +76,20 @@ byte is in this change or its tests.
 | `packInWay` not skipped during the pull walk | TestPullStandWalkNoNestedPull | caught (the test also checks the pack met on the way is fought at its own pull; with the mutation the interrupted pull marks it fought) |
 | `knownEntries` from the cut legs only | TestPlayLastLegKeepsLaterLegsKnown | caught |
 | `--attach` still sends start | TestWatchAttachSendsNoStart | caught |
+| entry still runs on attach (`if false && r.cfg.Attach` in `Watch`) | TestWatchAttachRunsNoEntry | caught |
+| no plan check on attach (the `st.Plan != r.route.Name` block removed) | TestWatchAttachRefusesAnotherPlan | caught |
 
 ## Gates
 
 - Full suite on the clean committed tree: `vm-test ta ~/wt-proof3` —
   `RESULT: PASS  kind=ta wt=wt-proof3 sha=38290af3 dirty=0 files=2757 runner=yulon-ubuntu2` (rc=0, 834 s; the run
   is `go test -count=1 -timeout 20m ./... && go vet ./...`).
+- Round 2, rebased onto `origin/main` (e281d846) with the two review notes fixed: the PR's gate command,
+  `vm-test ta ~/wt-proof3 -- 'go test -timeout 20m ./internal/forever/... ./cmd/... && go vet ./...'` —
+  `RESULT: PASS  kind=ta wt=wt-proof3 sha=a7f6a06c dirty=0 files=2793 runner=yulon-ubuntu2` (rc=0, 872 s; the same
+  command also passed at 294e5c13, 1124 s, before the two `gofmt`-only amend commits). Each new test's mutation was
+  re-run on its own (mutation 1: rc=1, `TestWatchAttachRunsNoEntry` FAIL, 23 s; mutation 2: rc=1,
+  `TestWatchAttachRefusesAnotherPlan` FAIL, 8 s).
 - Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --last-leg oggleflint`
   ends `play: stop clear ... clear=true` with one BOSS state (the legs after oggleflint are not walked). With a
   recording (`--out DIR --min-active 0`) the same run prints `card: CLEARED` and `verdict: PASS`, and the summary

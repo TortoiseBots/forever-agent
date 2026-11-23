@@ -138,12 +138,22 @@ func (r *Run) Watch(ctx context.Context) Result {
 	// the end: PREPARE reads again and names its own failure.
 	r.legs = nil
 	st := StatePrepare
-	if r.readCommander(ctx) {
-		r.commanderToTank(ctx, commanderMoveBudget)
-	}
-	if r.stopReason == "" && !r.lost {
-		r.states = append(r.states, st)
-		st = r.prepare(ctx)
+	if r.cfg.Attach {
+		// A watch that attaches to a run started elsewhere (--attach) runs no entry: the party is already in and
+		// another client commands it, so no GM line, no move and no PREPARE, TRAVEL or ENTER step goes out. The
+		// roster is still read, with PREPARE's own rules, for the party's names, its roles and the commander; the
+		// run's own plan is checked when the attach finds it.
+		if r.adoptWatchParty(ctx) {
+			st = StateLegWalk
+		}
+	} else {
+		if r.readCommander(ctx) {
+			r.commanderToTank(ctx, commanderMoveBudget)
+		}
+		if r.stopReason == "" && !r.lost {
+			r.states = append(r.states, st)
+			st = r.prepare(ctx)
+		}
 	}
 	w.roles = r.watchRoles()
 	if r.stopReason == "" && st == StateTravel {
@@ -160,8 +170,9 @@ func (r *Run) Watch(ctx context.Context) Result {
 	// The same-map check is the party's own: every member on the plan's map in one instance. The observer may stand
 	// anywhere; with --enter none this is the one check that the party was placed as the watch expects. The observer's
 	// own teleport polls the state after ENTER verified the party, so a failed or stale read there is re-read, not a
-	// placement.
-	if r.stopReason == "" && !r.partyPlaced(ctx) {
+	// placement. A watch attached to a run started elsewhere runs no entry and checks the run instead: the attach
+	// refuses a run of another plan, whose map this check would report as a party out of place.
+	if r.stopReason == "" && !r.cfg.Attach && !r.partyPlaced(ctx) {
 		if r.stopReason == "" {
 			r.logf("watch: the party is not on the plan's map %d in one instance", r.route.Map)
 			r.stop("enter:party-map")
@@ -306,8 +317,9 @@ func (r *Run) watchStart(ctx context.Context, w *watchRun) {
 }
 
 // watchAttach waits for the run another client started (--attach) and attaches to it: no `.tb run start` is sent.
-// The leader's one run in state running is the run; a paused one is attached too, with its state applied. The wait
-// is bounded by --attach-wait (300 s by default) and ends as `start:attach-timeout`.
+// The leader's one run in state running is the run; a paused one is attached too, with its state applied. A run whose
+// plan is not this watch's plan is refused with both plans named (start:attach-plan), before anything is applied. The
+// wait is bounded by --attach-wait (300 s by default) and ends as `start:attach-timeout`.
 func (r *Run) watchAttach(ctx context.Context, w *watchRun) {
 	wait := r.cfg.AttachWait
 	if wait <= 0 {
@@ -330,6 +342,13 @@ func (r *Run) watchAttach(ctx context.Context, w *watchRun) {
 			}
 		case len(rep.Runs) == 1 && (rep.Runs[0].State == "running" || rep.Runs[0].State == "paused"):
 			st := rep.Runs[0]
+			if st.Plan != r.route.Name {
+				// A watch follows a run of its own plan: the report card, the legs and the map are the plan's. A run
+				// of another plan is refused before anything is applied, and the refusal names both plans.
+				r.logf("watch: attach refused: the leader's run is plan %q, not --plan %q; a watch attaches only to a run of its own plan", st.Plan, r.route.Name)
+				r.stop("start:attach-plan")
+				return
+			}
 			// The attach time is the watch's run zero on the trace's clock, as a start's reply time is.
 			w.startedAt = r.now()
 			w.lastEvent = w.startedAt
@@ -1303,6 +1322,13 @@ const InterruptedStopBudget = 60 * time.Second
 // still has to reach the server for the summary to record the state the run ended with.
 func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	if r.lost {
+		r.watchSummary(w)
+		return
+	}
+	if r.cfg.Attach && !w.have {
+		// The watch never attached: the leader has no run for it (start:attach-timeout) or has one of another plan
+		// (start:attach-plan), which is not this watch's to stop or to read further. Nothing was sent and nothing
+		// is waited for; a run found in the confirmation reads below would only report our own stop unconfirmed.
 		r.watchSummary(w)
 		return
 	}

@@ -182,9 +182,9 @@ type Fake struct {
 	stateCalls  int
 	statusCalls int
 	orderSnap   *tbcmd.StateReport
-	whole      bool
-	wipeFlag   bool
-	stops      int
+	whole       bool
+	wipeFlag    bool
+	stops       int
 	// DistMissingAt makes that state call (1-based) leave every dm key out.
 	DistMissingAt int
 	// StaleAt makes that state call a report taken before the last order: it returns the snapshot the fake took when
