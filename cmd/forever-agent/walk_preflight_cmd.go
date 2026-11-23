@@ -19,6 +19,11 @@ func walkPreflightCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	if code != exitOK {
 		return code
 	}
+	// The filter names the servers the walk commands run on: a Forever one is
+	// not this (Turtle) preflight's.
+	if refused, code := refuseTurtleOnlyIn("walk-preflight", opts.Servers, "", scopeForever("walk-preflight"), stderr); refused {
+		return code
+	}
 	rep, err := preflight.Run(ctx, opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "walk-preflight: %v\n", err)

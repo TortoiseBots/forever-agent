@@ -163,6 +163,14 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if o.instanceCapPerAccount < 1 {
 		return fail("--instance-cap-per-account must be 1 or more, not %d", o.instanceCapPerAccount)
 	}
+	// The Turtle live pass leases a slot on a test server: a Forever server is
+	// not one, whatever its name (before the test-server list check, so the
+	// refusal names the real reason).
+	if o.live != "" && !o.forever {
+		if refused, code := refuseTurtleOnly("plan-scout", o.live, o.slots, foreverPlanScoutLive, stderr); refused {
+			return code
+		}
+	}
 	switch {
 	case o.forever && o.spawns == "":
 		return fail("--forever needs --spawns DIR (the world export tools/dungeongen/export-forever.sh writes)")

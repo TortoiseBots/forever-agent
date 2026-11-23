@@ -171,6 +171,10 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "raid-suite never uses slot 3 (owner rule)")
 		return exitSlotRefused
 	}
+	// A Forever server is not this (Turtle) suite's: refuse before the lease.
+	if refused, code := refuseTurtleOnly("raid-suite", o.server, o.slotsPath, scopeForever("raid-suite"), stderr); refused {
+		return code
+	}
 	entries, code := raidSuiteEntries(o, stderr)
 	if code != exitOK {
 		return code
