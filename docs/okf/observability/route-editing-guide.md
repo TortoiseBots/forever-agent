@@ -33,6 +33,8 @@ Every flag and its default:
 | --- | --- | --- |
 | `--edit` | off | turns the editor on (on/off: takes `=`, e.g. `--edit=true`) |
 | `--mmaps-dir` | none, required with `--edit` | the navmesh of the server the plans run on; every version records it |
+| `--mmaps-format` | `turtle` | the generation of `--mmaps-dir`: `turtle` or `forever`; the editor checks every version on that mesh, and the wrong format stops the dashboard at start |
+| `--parent` | none | with `--mmaps-format forever`: the server's instance parent rule, `MAP=PARENT` pairs such as `389=0` |
 | `--edit-source` | the first `--plans-dir` | whose plan files an edit starts from; must not lie inside any slot's `dungeons_dir` |
 | `--edit-dir` | `~/turtle-agent-route-edits` | where versions go: `<plan>/vNNNN.json`, `vNNNN.meta.json`, `vNNNN.diff` |
 | `--edit-tokens` | `<user config dir>/turtle-agent/route-edit-tokens` | `label token` lines, mode 0600 |

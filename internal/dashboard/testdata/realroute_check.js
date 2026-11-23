@@ -82,6 +82,8 @@ assert.ok(R.stopTip(doc.stops[2]).includes("warning: detour"));
 assert.ok(R.stopTip(doc.stops[4]).includes("in view already"));
 assert.strictEqual(R.summaryText(doc), "5 stops, 5 walks, 412 yd, 1 cannot be pathed");
 assert.ok(R.summaryText(Object.assign({}, doc, { edited: true })).endsWith("(with your edits, not saved)"));
+assert.strictEqual(R.summaryText(Object.assign({}, doc, { format: "forever" })), "5 stops, 5 walks, 412 yd, 1 cannot be pathed \u00b7 navmesh: forever");
+assert.ok(R.summaryText(Object.assign({}, doc, { format: "turtle", edited: true })).endsWith("navmesh: turtle (with your edits, not saved)"));
 assert.strictEqual(R.summaryText(null), "");
 
 // ---- the drawing

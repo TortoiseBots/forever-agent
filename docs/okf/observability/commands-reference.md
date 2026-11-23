@@ -51,6 +51,8 @@ Serves the live page. Read-only unless `--edit` or `--control` is given. Exits 2
 | `--embed-from` | none | extra `http://host:port` origins that may frame the page |
 | `--config-dir` | `<user config dir>/turtle-agent` | settings files and `rpc-<port>.token` files |
 | `--mmaps-dir` | none | navmesh folder of the server the plans run on; enables the real-route view, required with `--edit` |
+| `--mmaps-format` | `turtle` | the generation of `--mmaps-dir`: `turtle` (the 1.12 ancestor's MaNGOS v6 files) or `forever` (ForeverCore's v16 files); never guessed, so the wrong one stops at start (`--mmaps-dir DIR has no Forever tiles`) |
+| `--parent` | none | with `--mmaps-format forever`: the server's instance parent rule, `MAP=PARENT` pairs comma separated (`389=0`); refused with the Turtle format |
 | `--edit` | off | turn on the route editor (`POST /api/edit/<plan>`) (on/off: takes `=`, e.g. `--edit=true`) |
 | `--edit-dir` | `~/turtle-agent-route-edits` | where versions go (`<plan>/vNNNN.json`, `.meta.json`, `.diff`) |
 | `--edit-source` | the first `--plans-dir` | whose plan files an edit starts from |

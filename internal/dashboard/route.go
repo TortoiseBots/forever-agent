@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // The real route (README "Route editor"): the path the bots walk, as the navmesh planner draws it, instead of the straight 2D stubs of the plan
@@ -73,15 +74,31 @@ type RouteSummary struct {
 
 // RouteDoc is the answer of the route endpoint.
 type RouteDoc struct {
-	Plan    string          `json:"plan"`
-	Map     uint32          `json:"map"`
-	SHA256  string          `json:"sha256"` // of the plan the route is for
-	Mmaps   string          `json:"mmaps"`
+	Plan   string `json:"plan"`
+	Map    uint32 `json:"map"`
+	SHA256 string `json:"sha256"` // of the plan the route is for
+	Mmaps  string `json:"mmaps"`
+	// Format is the mmap generation the route was drawn on, in the dashboard's flag's words ("turtle" or "forever"), so the page's status
+	// line says which mesh the picture is on. Empty when the navmesh does not name one.
+	Format  string          `json:"format,omitempty"`
 	Edited  bool            `json:"edited,omitempty"` // the plan is the file with the editor's ops applied
 	Stops   []RouteStopView `json:"stops"`
 	Segs    []RouteSegView  `json:"segments"`
 	Summary RouteSummary    `json:"summary"`
 	Millis  int64           `json:"computed_ms"`
+}
+
+// FormatNamer is the optional part of a Navmesh that names its mmap generation (navmesh.Planner.Format).
+type FormatNamer interface {
+	Format() navmesh.Format
+}
+
+// navFormatLabel names a generation as the dashboard's --mmaps-format flag does.
+func navFormatLabel(f navmesh.Format) string {
+	if f == navmesh.Forever {
+		return "forever"
+	}
+	return "turtle"
 }
 
 // r1 is round1 without a negative zero (which JSON would write as -0).
@@ -213,9 +230,10 @@ type routeEntry struct {
 // routeService traces plans on one navmesh and keeps the answers by what they are for: the sha256 of the plan and the mmaps folder. A plan is
 // traced once per version of its file (or of its edit); the same request again is a lookup.
 type routeService struct {
-	nav   dungeon.Navmesh
-	mmaps string
-	run   sync.Mutex // one trace at a time: a trace is a burst of planner calls, and a drag in the editor can ask many
+	nav    dungeon.Navmesh
+	mmaps  string
+	format string     // the nav's own generation (FormatNamer), for the page's status line
+	run    sync.Mutex // one trace at a time: a trace is a burst of planner calls, and a drag in the editor can ask many
 
 	mu       sync.Mutex
 	m        map[string]*routeEntry
@@ -225,7 +243,11 @@ type routeService struct {
 }
 
 func newRouteService(nav dungeon.Navmesh, mmaps string) *routeService {
-	return &routeService{nav: nav, mmaps: mmaps, m: map[string]*routeEntry{}, now: time.Now}
+	rs := &routeService{nav: nav, mmaps: mmaps, m: map[string]*routeEntry{}, now: time.Now}
+	if fn, ok := nav.(FormatNamer); ok {
+		rs.format = navFormatLabel(fn.Format())
+	}
+	return rs
 }
 
 // get returns the answer for plan, whose bytes (or canonical form, for an edit) have sha256 sha. A request that arrives while the same trace is
@@ -286,6 +308,7 @@ func (rs *routeService) compute(e *routeEntry, plan *dungeon.Plan, sha string, e
 		return
 	}
 	doc := BuildRouteDoc(plan, tr, sha, rs.mmaps, edited)
+	doc.Format = rs.format
 	doc.Millis = rs.now().Sub(t0).Milliseconds()
 	b, err := json.Marshal(doc)
 	if err != nil {
