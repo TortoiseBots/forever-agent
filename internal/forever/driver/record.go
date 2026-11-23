@@ -383,10 +383,11 @@ type PlayFrameBot struct {
 	Combat bool
 }
 
-// PlayFrame writes one frame of a player run from the party roster and the hostile units in view. The first frame a
-// bot is in also writes its party record (guid, role, class and level), which the spell judge joins the combat log
-// on. It reports whether the writer kept the frame (it samples). A frame never carries a character name.
-func (r *Recorder) PlayFrame(t time.Time, bots []PlayFrameBot, units []Unit) bool {
+// PlayFrame writes one frame of a player run from the party roster, the agent's own GUID and the hostile units in
+// view. The first frame a bot is in also writes its party record (guid, role, class and level), which the spell judge
+// joins the combat log on. A unit owned by a party member (the agent included) is the frame's pet, not a mob. It
+// reports whether the writer kept the frame (it samples). A frame never carries a character name.
+func (r *Recorder) PlayFrame(t time.Time, selfGUID string, bots []PlayFrameBot, units []Unit) bool {
 	if r == nil || r.trace == nil {
 		return false
 	}
@@ -416,8 +417,12 @@ func (r *Recorder) PlayFrame(t time.Time, bots []PlayFrameBot, units []Unit) boo
 			r.trace.Party(ms, trace.Member{G: g, Name: b.Name, Role: b.Role, Class: b.Class, Level: b.Level})
 		}
 	}
+	members := frameMembers(f.Bots)
+	if g := strings.ToUpper(strings.TrimSpace(selfGUID)); g != "" {
+		members[g] = true
+	}
 	for _, u := range units {
-		if u.Friendly {
+		if u.Friendly || (!u.Owner.IsZero() && members[strings.ToUpper(u.Owner.String())]) {
 			continue
 		}
 		pct := 0
@@ -429,6 +434,7 @@ func (r *Recorder) PlayFrame(t time.Time, bots []PlayFrameBot, units []Unit) boo
 			Combat: !u.Dead && !u.Target.IsZero(), Target: u.Target.String(), Cast: u.Cast, Entry: u.Entry,
 		})
 	}
+	f.Pets = framePets(members, units)
 	return r.trace.Frame(f)
 }
 

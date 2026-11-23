@@ -127,7 +127,7 @@ func (p *playRun) sample(units []Unit) {
 			bots = append(bots, PlayFrameBot{Member: m, Name: playSlot(i), Role: traceRole(i), Class: w.class, Level: w.level, Combat: p.inFight})
 		}
 	}
-	if p.rec.PlayFrame(p.now(), bots, units) {
+	if p.rec.PlayFrame(p.now(), p.ports.Group.Leader().String(), bots, units) {
 		p.frames++
 	}
 	p.drainCombat()

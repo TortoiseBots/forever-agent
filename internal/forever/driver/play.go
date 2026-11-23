@@ -1339,7 +1339,7 @@ func (p *playRun) sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	}
 	if !p.inFight {
-		p.sample(nil)
+		p.sample(p.ports.World.Units())
 	}
 	if err := p.ports.Clock.Sleep(ctx, d); err != nil {
 		p.stop("interrupt")
