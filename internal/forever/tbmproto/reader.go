@@ -43,7 +43,11 @@ type Hello struct {
 	Proto, MinAddon               int
 	HasProto, HasVersion, HasCaps bool
 	Caps                          []string
-	LatestModule, LatestAddon     string
+	// Verbs is the module's verb set from the VERBS stream, lowercased and in
+	// the order received; HasVerbs reports whether the stream committed.
+	Verbs                     []string
+	HasVerbs                  bool
+	LatestModule, LatestAddon string
 }
 
 // Check accepts a hello only when the trailer is whole: TRANSPORT plus

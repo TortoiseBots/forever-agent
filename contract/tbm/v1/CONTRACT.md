@@ -30,9 +30,20 @@ TortoiseBotsForeverManager PROTOCOL.md. Only what v1 pins down is here.
 
 ## 3. Transports (D3)
 
-- `chat`: `.bot <command>` as a whisper to self; the hello uses it.
+- `addon-self`: `<command>` with prefix `TBM` as an add-on whisper to
+  self (`receiver == player`). The hello uses it while the transport is
+  unknown; `TBM:TRANSPORT|none` keeps it.
 - `addon`: `<command>` with prefix `TBM` on PARTY, only after
   `TBM:TRANSPORT|party`. No `whisper` word in v1.
+- `chat`: `.bot <command>` as a whisper to self, for `--transport chat`
+  only.
+- The core echoes an add-on whisper to self back without `TBM:`; the
+  echo is ignored, not a reply.
+- A command ends at the message it is answered by: `roster` and `list`
+  at the TRANSPORT line, `alts` at `ALTSUM_END`, every other command at
+  the ACTION_ACK or ACTION_ERR whose intent is the second word for
+  `action`, else the first word, or the intent `-`; anything else is a
+  timeout.
 
 ## 4. Chunking (D4)
 
@@ -53,11 +64,18 @@ TortoiseBotsForeverManager PROTOCOL.md. Only what v1 pins down is here.
   (8 fields, `-` is none). 6- and 7-field rows still read: a 7th field
   holding a CC mark id (moon, circle, square, cross, triangle, diamond,
   star, skull) is the mark, else the class name.
+- TBF dev emits 7-field rows (the 7th is the class name); 8 fields stays
+  the target.
 
 ## 7. Round 1 message set (D7)
 
 - Hello trailer: TRANSPORT, PROTO, VERSION, CAPS, LATEST; commands
   `roster` and `version`. Status: BOTSTATE stream and single updates.
+- VERBS: `VERBS_BEGIN|n`, then `VERBS|a,b,...` lines holding whole
+  tokens split on commas (trimmed, non-empty, lowercased), then
+  `VERBS_END`. The BEGIN count is in tokens; a mismatch is a
+  `stream-count` and leaves the set unset. An older module omits the
+  stream: the hello check does not require it.
 - Roster: ROSTER_BEGIN/ROSTER/ALTBOTS/ROSTER_END, ROSTER_ERROR;
   CC_ASSIGN_* and CLAIMED_* are count-checked only. Command echo:
   ACTION_ACK, ACTION_ERR. All else is unknown, recorded, not an error.
@@ -67,16 +85,17 @@ TortoiseBotsForeverManager PROTOCOL.md. Only what v1 pins down is here.
 - One record per line; `#` and blank lines skipped. `case <name>`
   (equal to the file stem) comes first; `desc` is free text; `module
   yes` marks canonical module output, re-emitted byte for byte.
-- `send <addon|chat> <command>` is followed by one `frame` or
+- `send <addon|addon-self|chat> <command>` is followed by one `frame` or
   `encode-error <code>`. Frames: `frame addon <CH> <PREFIX> <text>` and
   `frame chat <CH> <text>`. Receives: `recv addon <CH> <PREFIX> <text>`
   and `recv system <text>`. `expect <path> <value>` runs after Finish.
 - In texts and values `\n` is LF, `\\` is a backslash, `{rep N C}`
   repeats C N times. `(empty)` is the empty string; unset Proto is `0`.
-- Paths: hello.complete|transport|proto|min_addon|version|caps|
-  latest_module|latest_addon|check (caps comma-joined; check `ok` or a
-  code), roster.committed|count|`<i>`.guid|name|class|state|grouped|
-  location|cc_mark|class_name|error|error_message, altbots
+- Paths: hello.complete|transport|proto|min_addon|version|caps|verbs|
+  has_verbs|latest_module|latest_addon|check (caps comma-joined, verbs
+  comma-joined; check `ok` or a code), roster.committed|count|
+  `<i>`.guid|name|class|state|grouped|location|cc_mark|class_name|
+  error|error_message, altbots
   (comma-joined), botstate.count|`<Name>`, ack.count|`<i>`.intent|
   scope|count|detail, err.count|`<i>`.intent|code|message,
   problems.count|problem.`<i>` (codes), unknown.count, ignored.count.

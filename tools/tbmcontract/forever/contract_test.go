@@ -63,8 +63,8 @@ func TestForeverContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 23 {
-		t.Fatalf("want 23 v1 cases, got %d", len(cases))
+	if len(cases) != 28 {
+		t.Fatalf("want 28 v1 cases, got %d", len(cases))
 	}
 	caseDir := writeCaseFiles(t, cases)
 	for _, c := range cases {

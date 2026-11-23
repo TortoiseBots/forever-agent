@@ -21,6 +21,7 @@ func TestHelloAndDo(t *testing.T) {
 	}
 	fake := NewFakeModule(cases)
 	c := New(fake)
+	c.SetTransport(tbmproto.TransportChat)
 
 	hello, err := c.Hello(context.Background(), 2*time.Second)
 	if err != nil {
@@ -113,5 +114,115 @@ func TestDoUnknownCommandTimesOut(t *testing.T) {
 	c.transport = tbmproto.TransportAddon
 	if _, err := c.Do(context.Background(), "action nonsense", 150*time.Millisecond); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("unknown command = %v, want ErrTimeout", err)
+	}
+}
+
+// TestHelloAddonSelfUngrouped is the ungrouped default: with no transport
+// forced, roster goes out as an add-on whisper to self, the core's echo comes
+// back and is ignored, and TRANSPORT|none keeps the transport there.
+func TestHelloAddonSelfUngrouped(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(NewFakeModule(cases))
+	if c.Transport() != tbmproto.TransportAddonSelf {
+		t.Fatalf("default transport = %q, want addon-self", c.Transport())
+	}
+	hello, err := c.Hello(context.Background(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("addon-self hello: %v", err)
+	}
+	if !hello.Complete || hello.Transport != "none" {
+		t.Fatalf("addon-self hello = %+v, want complete on none", hello)
+	}
+	if !hello.HasVerbs {
+		t.Fatalf("hello verbs = %v, want the VERBS stream", hello.Verbs)
+	}
+	if got := strings.Join(hello.Verbs, ","); got != "action,action:follow,roster" {
+		t.Fatalf("hello verbs = %q", got)
+	}
+	if err := hello.Check(); err != nil {
+		t.Fatalf("addon-self hello check: %v", err)
+	}
+	if c.Transport() != tbmproto.TransportAddonSelf {
+		t.Fatalf("transport after none = %q, want addon-self", c.Transport())
+	}
+}
+
+// TestDoBehaviorAck is the command-end rule: behavior answers a BOTSTATE
+// stream first; the command ends at its own ACK, not at the stream's END.
+func TestDoBehaviorAck(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(NewFakeModule(cases))
+	if _, err := c.Hello(context.Background(), 2*time.Second); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	// behavior is a grouped command: its case frame is on PARTY.
+	c.SetTransport(tbmproto.TransportAddon)
+	res, err := c.Do(context.Background(), "behavior Alpha", 2*time.Second)
+	if err != nil {
+		t.Fatalf("behavior Alpha: %v", err)
+	}
+	if len(res.Acks) != 1 {
+		t.Fatalf("behavior acks = %d, want 1", len(res.Acks))
+	}
+	if a := res.Acks[0]; a.Intent != "behavior" || a.Scope != "bot:Alpha" || a.Count != 1 {
+		t.Fatalf("behavior ack = %+v", a)
+	}
+	if len(res.BotState) != 1 {
+		t.Fatalf("behavior botstate = %v, want the stream before the ACK", res.BotState)
+	}
+}
+
+// TestDoUnsupportedVerb: an unknown verb is answered with ACTION_ERR naming it,
+// so the command ends instead of timing out.
+func TestDoUnsupportedVerb(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(NewFakeModule(cases))
+	if _, err := c.Hello(context.Background(), 2*time.Second); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	res, err := c.Do(context.Background(), "version", 2*time.Second)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if len(res.Errs) != 1 {
+		t.Fatalf("version errs = %d, want 1", len(res.Errs))
+	}
+	if e := res.Errs[0]; e.Intent != "version" || e.Code != "unsupported" {
+		t.Fatalf("version err = %+v", e)
+	}
+}
+
+// TestFakeSelfEcho proves the fake delivers the core's self echo of an add-on
+// whisper to self before the module's answer: the ungrouped hello's ignored
+// count depends on it.
+func TestFakeSelfEcho(t *testing.T) {
+	cases, err := tbmproto.LoadCases(tbmcontract.V1, "v1/cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewFakeModule(cases)
+	if err := f.RegisterAddonPrefixes(tbmproto.Prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SendAddonSelf(tbmproto.Prefix, "roster"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	in, err := f.Next(ctx)
+	if err != nil {
+		t.Fatalf("self echo: %v", err)
+	}
+	if in.Kind != "addon" || in.Channel != "WHISPER" || in.Prefix != tbmproto.Prefix || in.Text != "roster" {
+		t.Fatalf("first delivery = %+v, want the self echo", in)
 	}
 }

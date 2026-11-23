@@ -185,6 +185,15 @@ for raw in fh:lines() do
         local kind = parts[1]
         if kind == "case" then
             caseName = parts[2]
+        elseif kind == "send" then
+            -- The replay sends nothing: it only feeds the module the replies.
+            -- Every contract transport is accepted, so a case naming one the
+            -- format later grows fails here instead of passing silently.
+            local tr = parts[2]
+            assert(tr == "addon" or tr == "addon-self" or tr == "chat",
+                "bad send transport in: " .. line)
+        elseif kind == "frame" or kind == "encode-error" then
+            -- Paired with the send above; only the replies matter to TBFM.
         elseif kind == "recv" then
             if parts[2] == "addon" then
                 assert(#parts >= 5, "bad recv addon line: " .. line)
@@ -383,6 +392,13 @@ local function checkExpect(p, want)
         check(p, TB.serverVersion or "(empty)", want)
     elseif p == "hello.caps" then
         checkCaps(want)
+    elseif p == "hello.verbs" or p == "hello.has_verbs" then
+        -- Known gap at bebebef: TBFM does not parse the VERBS stream yet
+        -- (no serverVerbs field, VERBS lines fall through as unknown). The
+        -- entry stops passing once TBFM exposes the verbs so it gets retired.
+        if TB.serverVerbs ~= nil or TB.GetServerVerbs ~= nil then
+            fail("%s: TBFM now stores VERBS; remove the known-gap entry", p)
+        end
     elseif p == "hello.latest_module" then
         check(p, TB.latestModule or "-", want)
     elseif p == "hello.latest_addon" then

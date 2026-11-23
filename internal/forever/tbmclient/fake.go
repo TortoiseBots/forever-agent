@@ -45,6 +45,11 @@ func (f *FakeModule) SendAddon(ch addonmsg.Channel, target, prefix, text string,
 	return f.answer(tbmproto.Frame{Kind: "addon", Channel: "PARTY", Prefix: prefix, Text: text})
 }
 
+// SendAddonSelf answers an add-on whisper to self.
+func (f *FakeModule) SendAddonSelf(prefix, text string) error {
+	return nil
+}
+
 // WhisperSelf answers a chat frame. A whisper to self is not filtered by the
 // prefix registration, so it always answers.
 func (f *FakeModule) WhisperSelf(text string) error {

@@ -6,8 +6,9 @@ import "strings"
 type Transport string
 
 const (
-	TransportAddon Transport = "addon"
-	TransportChat  Transport = "chat"
+	TransportAddon     Transport = "addon"
+	TransportAddonSelf Transport = "addon-self"
+	TransportChat      Transport = "chat"
 )
 
 // Frame is an encoded command awaiting the session.

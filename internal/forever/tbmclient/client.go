@@ -19,6 +19,7 @@ import (
 type Conn interface {
 	RegisterAddonPrefixes(prefixes ...string) error
 	SendAddon(ch addonmsg.Channel, target, prefix, text string, logged bool) error
+	SendAddonSelf(prefix, text string) error
 	WhisperSelf(text string) error
 	Next(ctx context.Context) (tbmproto.Incoming, error)
 }

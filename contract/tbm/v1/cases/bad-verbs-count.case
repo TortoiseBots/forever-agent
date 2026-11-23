@@ -1,0 +1,9 @@
+case bad-verbs-count
+desc VERBS_END with fewer tokens than BEGIN is a stream-count and leaves the VERBS set unset
+recv addon WHISPER TBM TBM:VERBS_BEGIN|3
+recv addon WHISPER TBM TBM:VERBS|action,roster
+recv addon WHISPER TBM TBM:VERBS_END
+expect hello.has_verbs false
+expect hello.verbs (empty)
+expect problems.count 1
+expect problem.0 stream-count

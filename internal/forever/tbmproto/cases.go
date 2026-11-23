@@ -75,7 +75,7 @@ func ParseCase(name string, data []byte) (Case, error) {
 			pendingSend = false
 			rec.Fields = []string{rest[0]}
 		case "send":
-			if len(rest) < 1 || (rest[0] != "addon" && rest[0] != "chat") {
+			if len(rest) < 1 || (rest[0] != "addon" && rest[0] != "addon-self" && rest[0] != "chat") {
 				return fail(lineNo, "bad send transport")
 			}
 			if pendingSend {

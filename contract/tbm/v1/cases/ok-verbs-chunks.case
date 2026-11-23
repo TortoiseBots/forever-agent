@@ -1,0 +1,10 @@
+case ok-verbs-chunks
+desc the VERBS stream counts whole tokens across lines; tokens are trimmed and lowercased
+recv addon WHISPER TBM TBM:VERBS_BEGIN|4
+recv addon WHISPER TBM TBM:VERBS|action,roster
+recv addon WHISPER TBM TBM:VERBS|action:follow, inventory
+recv addon WHISPER TBM TBM:VERBS_END
+expect hello.has_verbs true
+expect hello.verbs action,roster,action:follow,inventory
+expect unknown.count 0
+expect problems.count 0

@@ -49,6 +49,16 @@ func (a *tbmAdapter) SendAddon(ch addonmsg.Channel, target, prefix, text string,
 	return a.s.SendAddon(ch, target, prefix, text, logged)
 }
 
+// SendAddonSelf sends one add-on whisper to this character's own name, the
+// add-on whisper transport the ungrouped hello uses.
+func (a *tbmAdapter) SendAddonSelf(prefix, text string) error {
+	name := a.s.report.Character.Name
+	if name == "" {
+		return fmt.Errorf("tbm: the character's name is not known yet")
+	}
+	return a.s.SendAddon(addonmsg.Whisper, name, prefix, text, false)
+}
+
 // WhisperSelf sends the chat command as a whisper to this character's own name. The chat transport has no other
 // way to reach the module, and the core delivers a self whisper back to the sender.
 func (a *tbmAdapter) WhisperSelf(text string) error {
@@ -69,7 +79,7 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 	a.s.initAddon()
 	for {
 		if m, ok := a.s.addon.Next(); ok {
-			if !tbmAcceptAddon(m) {
+			if !tbmAcceptAddon(m, a.s.report.Character.GUID) {
 				continue
 			}
 			return tbmproto.Incoming{
@@ -96,7 +106,7 @@ func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
 // tbmAcceptAddon keeps only what the module sends: the contract's replies arrive as add-on whispers. A party,
 // raid or guild frame under the TBM prefix is another player's and never completes a hello or a command. The
 // sender's identity is not bound yet; the live proof (R4) settles what the module's sender GUID is.
-func tbmAcceptAddon(m addonmsg.Message) bool { return m.Channel == addonmsg.Whisper }
+func tbmAcceptAddon(m addonmsg.Message, own wire.GUID) bool { return m.Channel == addonmsg.Whisper }
 
 // tbmAcceptChat keeps only system messages: the module's chat-transport replies are system lines, so a say, party
 // or whisper line cannot forge a TBM: record.
