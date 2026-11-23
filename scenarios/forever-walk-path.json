@@ -1,0 +1,71 @@
+{
+  "scenario": "forever-walk-path",
+  "description": "One Forever serve slot: path_to a point 20 yd east of the human start answers a complete path of two points, and walk_to lands the character on it. check_rpc has no numeric tolerance, so the fake serve stops exactly on the point and status.x equals the target's x.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "path_to answers a complete path of two points"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "path_to",
+      "params": {
+        "x": -8893,
+        "y": -118,
+        "z": 3.4
+      },
+      "path": "status",
+      "equals": "complete",
+      "within_s": 5
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "path_to",
+      "params": {
+        "x": -8893,
+        "y": -118,
+        "z": 3.4
+      },
+      "path": "points",
+      "len": 2,
+      "within_s": 5
+    },
+    {
+      "do": "section",
+      "title": "walk_to lands the character on the point"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "walk_to",
+      "params": {
+        "x": -8893,
+        "y": -118,
+        "z": 3.4
+      }
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "x",
+      "equals": -8893,
+      "within_s": 10
+    }
+  ]
+}

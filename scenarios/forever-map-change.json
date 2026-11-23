@@ -1,0 +1,39 @@
+{
+  "scenario": "forever-map-change",
+  "description": "One Forever serve slot: area_trigger takes the character through a trigger that changes its map, and status reports the destination map.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8765",
+      "server": "forever"
+    },
+    "B": {
+      "rpc": "127.0.0.1:8766",
+      "server": "forever"
+    }
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "continue",
+  "steps": [
+    {
+      "do": "section",
+      "title": "the trigger changes the map and status shows it"
+    },
+    {
+      "do": "rpc",
+      "session": "A",
+      "method": "area_trigger",
+      "params": {
+        "id": 4711
+      }
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "map",
+      "equals": 1,
+      "within_s": 10
+    }
+  ]
+}
