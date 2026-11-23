@@ -323,6 +323,7 @@ func (s *session) servePartyInfo() ServePartyInfo {
 		return out
 	}
 	out.InGroup = s.party.RosterValid && s.party.InParty
+	out.Raid = s.party.Raid
 	out.Leader = GUID(s.party.LeaderGUID)
 	if s.party.Invite != nil {
 		out.PendingInvite = s.party.Invite.InviterName
@@ -331,13 +332,24 @@ func (s *session) servePartyInfo() ServePartyInfo {
 		return out
 	}
 	for _, m := range s.party.SnapshotOf() {
-		out.Members = append(out.Members, ServePartyMember{
+		row := ServePartyMember{
 			Name: m.Name, GUID: GUID(m.GUID), Online: m.Connected,
 			Dead: m.Full && m.Health == 0, Leader: m.GUID == s.party.LeaderGUID,
 			Health: m.Health, MaxHealth: m.MaxHealth, Level: m.Level,
 			PowerType: m.PowerType, Power: int32(m.CurrentPower), MaxPower: int32(m.MaxPower),
 			Zone: m.ZoneID,
-		})
+		}
+		if s.party.Raid {
+			// The wire subgroup is 0-based; the raid frame numbers the subgroups 1-8. The assistant bit is a raid
+			// rank (Group.h:59-72), so a party reports neither.
+			row.Subgroup = int(m.Subgroup) + 1
+			row.Assistant = m.Assistant
+		}
+		if m.GUID == s.party.SelfGUID {
+			out.Subgroup = row.Subgroup
+			out.Assistant = row.Assistant
+		}
+		out.Members = append(out.Members, row)
 	}
 	if s.party.HasLoot {
 		out.LootMethod = party.LootName(s.party.Loot.Method)

@@ -84,16 +84,16 @@ func ParseLootSpec(s string) (party.LootMethod, int, error) {
 // wrapped so the command layer needs no party import.
 func ParseRaidMark(s string) (party.Mark, bool) { return party.ParseMarkName(s) }
 
-// groupRoster checks the precondition every group call shares: a party the model holds a valid roster for. A raid is
-// refused by name: the model keeps no raid roster (party.State.Raid is set with RosterValid false), so no rank or
-// member can be read from it.
+// groupRoster checks the precondition every group call shares: a group the model holds a valid roster for. A raid is
+// refused by name: the raid ranks differ (an assistant may mark icons, GroupHandler.cpp:456-479) and the raid
+// operations come with the raid walk, so the party ranks below are not the raid's.
 func (s *session) groupRoster(what string) error {
 	s.initChat()
 	switch {
 	case !s.party.InParty:
 		return fmt.Errorf("%s: not in a group", what)
 	case s.party.Raid:
-		return fmt.Errorf("%s: the party model keeps no raid roster", what)
+		return fmt.Errorf("%s: raid group control is not ported yet", what)
 	case !s.party.RosterValid:
 		return fmt.Errorf("%s: no valid party roster (%s)", what, s.party.LastInvalid)
 	}
@@ -244,8 +244,8 @@ func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, 
 }
 
 // groupMark sets a raid target icon on a unit, or clears the icon with an empty target, and waits for the icon slot.
-// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479), which the
-// model cannot read because it keeps no raid roster (groupRoster refuses a raid by name).
+// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479), so a raid
+// is refused by groupRoster until the raid ranks are modelled with the raid operations.
 func (s *session) groupMark(ctx context.Context, target wire.GUID, mark party.Mark) error {
 	const what = "mark"
 	if err := s.groupRoster(what); err != nil {

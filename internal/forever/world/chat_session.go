@@ -415,10 +415,6 @@ func (s *session) handleParty(p worldconn.Packet) error {
 
 // printParty prints the model after a change.
 func (s *session) printParty() {
-	if s.party.Raid {
-		s.opts.logf("party: raid: not handled in this round (%d members listed)", s.party.Listed)
-		return
-	}
 	if !s.party.InParty {
 		switch {
 		case s.party.Destroyed:
@@ -438,10 +434,21 @@ func (s *session) printParty() {
 	if s.party.HasLoot {
 		loot = ", loot " + party.LootName(s.party.Loot.Method)
 	}
-	s.opts.logf("party: %d member(s), leader %s%s", len(s.party.Members), chat.SanitiseName(s.party.LeaderName()), loot)
+	label := "party"
+	if s.party.Raid {
+		label = "raid"
+	}
+	s.opts.logf("%s: %d member(s), leader %s%s", label, len(s.party.Members), chat.SanitiseName(s.party.LeaderName()), loot)
 	for _, m := range s.party.SnapshotOf() {
+		sub := 0
+		if s.party.Raid {
+			sub = int(m.Subgroup) + 1
+		}
 		line := fmt.Sprintf("  %s connected=%v subgroup=%d class=%d roles=%d",
-			chat.SanitiseName(m.Name), m.Connected, m.Subgroup, m.Class, m.RolesAssigned)
+			chat.SanitiseName(m.Name), m.Connected, sub, m.Class, m.RolesAssigned)
+		if m.Assistant {
+			line += " assistant"
+		}
 		if m.Full {
 			line += fmt.Sprintf(" %d/%d hp %d/%d power level %d auras %d", m.Health, m.MaxHealth, m.CurrentPower, m.MaxPower, m.Level, m.Auras)
 		}
@@ -774,11 +781,10 @@ func (s *session) partyCheck(ctx context.Context) error {
 		}
 		return nil
 	}
-	// Leave: only when the client believes it holds a VALID party roster. Without a group the server ignores the
-	// packet, so sending it would claim an outcome the run did not have; a raid is reported, not handled.
+	// Leave: only when the client believes it holds a VALID roster. Without a group the server ignores the packet,
+	// so sending it would claim an outcome the run did not have. A raid's roster is modelled like a party's and
+	// CMSG_LEAVE_GROUP has no raid restriction, so a raid member leaves with the same packet.
 	switch {
-	case s.party.Raid:
-		s.opts.logf("party-check: raid: not handled in this round, so no leave was sent")
 	case s.party.RosterValid:
 		if err := s.Send(wire.CMSGLeaveGroup, party.BuildLeaveGroup()); err != nil {
 			return err

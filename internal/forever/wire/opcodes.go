@@ -116,6 +116,9 @@ const (
 	CMSGSetLootMethod                  uint32 = 0x430074
 	CMSGLeaveGroup                     uint32 = 0x430075
 	CMSGSetPartyLeader                 uint32 = 0x430076
+	CMSGChangeSubGroup                 uint32 = 0x430078
+	CMSGSwapSubGroups                  uint32 = 0x430079
+	CMSGConvertRaid                    uint32 = 0x43007A
 	CMSGSetAssistantLeader             uint32 = 0x43007B
 	CMSGUpdateRaidTarget               uint32 = 0x43007C
 	CMSGRequestPartyMemberStats        uint32 = 0x43007F
@@ -531,6 +534,9 @@ var clientNames = map[uint32]string{
 	CMSGSetLootMethod:                  "CMSG_SET_LOOT_METHOD",
 	CMSGLeaveGroup:                     "CMSG_LEAVE_GROUP",
 	CMSGSetPartyLeader:                 "CMSG_SET_PARTY_LEADER",
+	CMSGChangeSubGroup:                 "CMSG_CHANGE_SUB_GROUP",
+	CMSGSwapSubGroups:                  "CMSG_SWAP_SUB_GROUPS",
+	CMSGConvertRaid:                    "CMSG_CONVERT_RAID",
 	CMSGSetAssistantLeader:             "CMSG_SET_ASSISTANT_LEADER",
 	CMSGUpdateRaidTarget:               "CMSG_UPDATE_RAID_TARGET",
 	CMSGRequestPartyMemberStats:        "CMSG_REQUEST_PARTY_MEMBER_STATS",

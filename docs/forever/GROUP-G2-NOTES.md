@@ -21,10 +21,11 @@ roster"), an offline promote target, a value `party.BuildSetLootMethod`/`BuildUp
 outside 0..7. A command that waits out its 5 s fails with "the server did not confirm it within 5s (a refused group
 command gets no answer)": this core answers a refused group command with nothing at all.
 
-Ranks and limits the model cannot satisfy are refused by name rather than guessed: a raid roster is not modelled
-(`party.State.Raid` is set with `RosterValid` false), so every call answers "the party model keeps no raid roster",
-and the mark rule for a raid (leader or assistant) cannot be evaluated either. Convert to raid and raid moves stay
-with the raid card: `convert_raid` and `raid_move` remain not-ported serve methods.
+Ranks and limits the model cannot satisfy are refused by name rather than guessed: G2 predates the raid roster (G1's
+model set `party.State.Raid` with `RosterValid` false), so every call answered "the party model keeps no raid
+roster". R1 of #108 models the raid roster (docs/forever/RAID-R1-NOTES.md), so the refusal reads "raid group control
+is not ported yet": the raid ranks differ (an assistant may mark icons) and the raid operations come with the raid
+walk. `convert_raid` and `raid_move` remain not-ported serve methods.
 
 `groupPromote` also refuses this character itself ("already leads the group"), so the leader readback always moves.
 

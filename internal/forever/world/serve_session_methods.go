@@ -38,7 +38,12 @@ type ServePath struct {
 
 // ServePartyInfo is the party method's result.
 type ServePartyInfo struct {
-	InGroup       bool               `json:"in_group"`
+	InGroup bool `json:"in_group"`
+	// Raid is the roster's raid flag; Assistant and Subgroup describe this character (its subgroup is 1-8, as the
+	// raid frame numbers them, and 0 in a party).
+	Raid          bool               `json:"raid,omitempty"`
+	Assistant     bool               `json:"assistant,omitempty"`
+	Subgroup      int                `json:"subgroup,omitempty"`
 	Leader        GUID               `json:"leader,omitempty"`
 	Members       []ServePartyMember `json:"members"`
 	PendingInvite string             `json:"pending_invite,omitempty"`
@@ -85,6 +90,8 @@ type ServePartyMember struct {
 	Online    bool   `json:"online"`
 	Dead      bool   `json:"dead"`
 	Leader    bool   `json:"leader"`
+	Assistant bool   `json:"assistant,omitempty"` // a raid assistant
+	Subgroup  int    `json:"subgroup,omitempty"`  // raid subgroup 1-8; 0 in a party
 	Health    int32  `json:"health"`
 	MaxHealth int32  `json:"max_health"`
 	PowerType uint8  `json:"power_type,omitempty"`

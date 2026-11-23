@@ -101,15 +101,17 @@ func (f *fakeServer) groupUpdateLocked() []byte {
 		}
 	}
 	flags := make([]uint8, len(guids))
+	subgroups := make([]uint8, len(guids))
 	for i, g := range guids {
 		flags[i] = f.groupFlags[g]
+		subgroups[i] = f.groupSubgroup[strings.ToLower(names[i])]
 	}
-	return fakePartyUpdateFull(fakeGroupPartyGUID, leader, mustGUID(f.clientGUID), guids, names, flags, f.groupLoot, true, false)
+	return fakePartyUpdateFull(fakeGroupPartyGUID, leader, mustGUID(f.clientGUID), guids, names, flags, subgroups, f.groupLoot, f.groupRaid, true, false)
 }
 
 // groupDestroyedFrame is the update the fake sends when the group is gone: the destroyed flag and no roster.
 func groupDestroyedFrame(self wire.GUID) []byte {
-	return fakePartyUpdateFull(fakeGroupPartyGUID, wire.EmptyGUID, self, nil, nil, nil, nil, false, true)
+	return fakePartyUpdateFull(fakeGroupPartyGUID, wire.EmptyGUID, self, nil, nil, nil, nil, nil, false, false, true)
 }
 
 // parseFakeGroupLeader reads CMSG_SET_PARTY_LEADER (PartyPackets.cpp:289-295).

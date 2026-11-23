@@ -25,7 +25,6 @@ const (
 	EventDestroyed
 	EventLeaderChanged
 	EventCommandResult
-	EventRaidNotHandled
 	EventLostInvite
 	EventInvalidRoster
 	EventUnexpectedRoster
@@ -40,7 +39,7 @@ type Event struct {
 	Name      string
 }
 
-// State is the party the client believes it is in. It is bounded: at most MaxPartyMembers members, MaxEvents
+// State is the party the client believes it is in. It is bounded: at most MaxRaidMembers members, MaxEvents
 // events and MaxLog-sized strings (the caller sanitises before printing).
 //
 // Trust: an update replaces the roster only after validateRoster accepts it and, when a transition is pending, the
@@ -51,14 +50,14 @@ type Event struct {
 // server sends zeros there, GroupHandler.cpp:617-634).
 type State struct {
 	InParty   bool
-	Raid      bool // a roster over MaxPartyMembers: validated, parsed and bounded, not modelled
+	Raid      bool // the roster carries the group's raid flag (FlagRaid), whatever its size
 	Destroyed bool
 	// SelfGUID is the character's own GUID, set from the world's ThisIsYou create block. A roster without it is
 	// not the client's party, so a hostile roster cannot make the client act as if it were.
 	SelfGUID wire.GUID
 	// RosterValid is true only for the last roster that passed validateRoster and the pending transition's check
 	// (this character in it exactly once at MyIndex, a normal party type, a party GUID, no empty or duplicate GUIDs,
-	// the leader listed, at most MaxPartyMembers). Party chat, member-stat requests, the uninvite and CMSG_LEAVE_GROUP
+	// the leader listed, at most MaxRaidMembers). Party chat, member-stat requests, the uninvite and CMSG_LEAVE_GROUP
 	// are gated on it: an invalid or unexpected snapshot clears it, so a stale roster is never acted on.
 	RosterValid        bool
 	LastInvalid        string // why the most recent roster was rejected, "" when it was valid
@@ -197,6 +196,9 @@ func (s *State) DropHeld() bool {
 // SendUpdateToPlayer never sends because it returns first (Group.cpp:843-849, :862-875). The remaining rules are
 // this package's: no empty or duplicate GUIDs, this character present exactly once at MyIndex, the leader listed.
 func (s *State) validateRoster(u Update) string {
+	if len(u.Members) > MaxRaidMembers {
+		return fmt.Sprintf("%d members is over the raid limit of %d", len(u.Members), MaxRaidMembers)
+	}
 	if u.Type != GroupTypeNormal {
 		return fmt.Sprintf("party type %d is not a normal group", u.Type)
 	}
@@ -276,6 +278,7 @@ func (s *State) rejectRoster(reason string) {
 		s.Stale = &Roster{LeaderGUID: s.LeaderGUID, Members: s.SnapshotOf()}
 	}
 	s.InParty = false
+	s.Raid = false
 	s.RosterValid = false
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil
@@ -285,7 +288,8 @@ func (s *State) rejectRoster(reason string) {
 // ApplyUpdate merges SMSG_PARTY_UPDATE and reports whether it produced a valid, modelled roster. A destroyed update
 // ends the party. A roster that fails validateRoster, or the pending transition's check, is counted, ends the party
 // (see rejectRoster) and is reported: a hostile or stale roster must not make the client act on a group that is not
-// its own. A raid-sized roster is validated by the same rules before Raid and InParty are set.
+// its own. A raid-sized roster is validated by the same rules and modelled like a party, up to MaxRaidMembers;
+// Raid is the roster's raid flag (FlagRaid), not the member count.
 func (s *State) ApplyUpdate(u Update) bool {
 	s.Updates++
 	return s.apply(u)
@@ -325,18 +329,6 @@ func (s *State) apply(u Update) bool {
 		return false
 	}
 	s.LastUnexpected = ""
-	if len(u.Members) > MaxPartyMembers {
-		// A raid-sized (or bot-module) roster: validated above, then parsed and bounded, not modelled.
-		s.Raid = true
-		s.InParty = true
-		s.RosterValid = false
-		s.LastInvalid = ""
-		s.Stale = nil
-		s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
-		s.Order = nil
-		s.addEvent(Event{Kind: EventRaidNotHandled, Text: fmt.Sprintf("%d members", len(u.Members))})
-		return false
-	}
 	s.Destroyed = false
 	s.RosterValid = true
 	s.LastInvalid = ""
@@ -361,13 +353,14 @@ func (s *State) apply(u Update) bool {
 	if u.HasDifficulty {
 		s.Difficulty = u.Difficulty
 	}
-	s.Raid = false
+	s.Raid = u.Flags&FlagRaid != 0
 	old := s.Members
 	members := make(map[wire.GUID]*Member, len(u.Members))
 	order := make([]wire.GUID, 0, len(u.Members))
 	for i := range u.Members {
 		entry := u.Members[i]
 		m := entry
+		m.Assistant = m.Flags&FlagAssistant != 0
 		if prev, ok := old[m.GUID]; ok && prev.Full {
 			// Keep what a full state taught us about health, power, level and position.
 			m.Full = prev.Full
