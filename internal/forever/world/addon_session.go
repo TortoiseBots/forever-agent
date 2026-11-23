@@ -81,12 +81,19 @@ const (
 	addonRegistrationUnknown
 )
 
+// ErrAddonOff is a registration asked of a session started with the add-on off (--addon off): such a session never
+// registers a prefix, and so never speaks TBM or a bot module.
+var ErrAddonOff = errors.New("world: add-on is off for this session")
+
 // RegisterAddonPrefixes replaces this client's registered prefix list. The server appends to its own list, so the
 // unregister-all packet goes first (the order the core's own comment expects, WorldSession.cpp:1302-1313); the
 // local list is cleared as soon as that packet left, and set to the new list only once the registration packet
 // left too. A failed registration packet therefore never leaves the old prefixes exposed as registered: the state
-// is unknown until a later call completes both packets.
+// is unknown until a later call completes both packets. A session with the add-on off refuses everything here.
 func (s *session) RegisterAddonPrefixes(prefixes ...string) error {
+	if s.opts.AddonOff {
+		return ErrAddonOff
+	}
 	s.initAddon()
 	list, err := addonmsg.NormalisePrefixes(prefixes)
 	if err != nil {

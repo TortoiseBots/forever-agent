@@ -1,0 +1,48 @@
+{
+  "scenario": "forever-locale-texts",
+  "description": "Module #43: bot texts use the player's session locale. A enters with --locale deDE, status reports the language, A greets a bot (BOT names it, BOT_CMD is the module line), and the reply must carry the German line DE_RE. A ${var} in a match is matched literally, so DE_RE is the exact text fragment of the module's deDE line, not a regexp; BOT_CMD spells the bot's name out because a var cannot reference another var.",
+  "sessions": {
+    "A": {
+      "rpc": "127.0.0.1:8771",
+      "server": "forever"
+    }
+  },
+  "vars": {
+    "BOT": "Ta",
+    "BOT_CMD": "hire Ta",
+    "DE_RE": "Hallo"
+  },
+  "settle_s": 1,
+  "timeout_s": 10,
+  "on_fail": "stop",
+  "steps": [
+    {
+      "do": "section",
+      "title": "the session claims deDE"
+    },
+    {
+      "do": "check_rpc",
+      "session": "A",
+      "method": "status",
+      "path": "locale",
+      "equals": "deDE"
+    },
+    {
+      "do": "section",
+      "title": "a bot text comes back in that language"
+    },
+    {
+      "do": "bot",
+      "session": "A",
+      "command": "${BOT_CMD}",
+      "settle_s": 5
+    },
+    {
+      "do": "expect",
+      "session": "A",
+      "note": "the module's deDE line for the greeting",
+      "match": "${DE_RE}",
+      "timeout_s": 30
+    }
+  ]
+}

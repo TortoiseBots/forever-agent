@@ -80,16 +80,22 @@ pass that check. There the login stops at the refusal and names both causes inst
 build works the error names each one and which side refused it. A pinned `--build` is claimed as given, and
 the world server's refusal is the command's error. By default the
 instance socket `SMSG_CONNECT_TO` names must be on the host the realm socket is connected to;
-`--allow-instance-redirect` permits a different host for clustered servers.
+`--allow-instance-redirect` permits a different host for clustered servers. `--locale NAME` (default `enUS`) is the
+client language the agent claims: the logon request carries it and the realm list ticket's `TextLocale`/`AudioLocale`
+are its fourCC, which the realm join stores as the account's locale and the world session reads back (a bot text a
+server module sends in the session locale goes out in it).
 
 `forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME
 [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR]
-[--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--capture-dir DIR] [--login-budget ADDR]` keeps that character in the world
+[--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--addon on|off] [--capture-dir DIR] [--login-budget ADDR]` keeps that character in the world
 and serves the local JSON-RPC socket the old daemon serves: `POST /rpc`, one JSON-RPC 2.0 object, a bearer
 token, loopback only, the same error codes. The password comes from `--password-file` or
 `FOREVER_PASSWORD` and is never printed. The listener is bound before the login; `--listen` defaults to
 `127.0.0.1:8765`. `--dir DIR` writes `slot.json`, `agent.pid` and `rpc-<port>.token`, so `rpc DIR status`
-works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `status`,
+works unchanged; without it the token file is `rpc-<port>.token` in the working directory. `--addon off` starts a
+session that never registers an add-on prefix, so it never speaks TBM or a bot module and the server sees it as a
+player without the add-on (`status.addon` says `off`; any add-on command, `bot` included, is refused with
+`world: add-on is off for this session`). `status`,
 `inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, the trade methods (`trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, and `cast` with `trade_slot`: [docs/forever/DAEMON-TRADE-NOTES.md](docs/forever/DAEMON-TRADE-NOTES.md)), `trainer_list`, `train`, the mail methods `mail_list`, `mail_read`, `mail_take_item`, `mail_take_money`, `mail_delete`, `mail_return`, `mail_send` and `mail_status` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-NOTES.md](docs/forever/WORLDLIFE-106-NOTES.md)), `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects`, `roll`, `taxi`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `accept_guild_invite`,
 `decline_guild_invite`, `guild_leave`, `convert_raid`, `raid_move`
@@ -99,7 +105,7 @@ works unchanged; without it the token file is `rpc-<port>.token` in the working 
 `map_snapshot` (the picture of the run so far: `members`, `creatures`, `events`, `floors`, `notes`, `svg` and, with `html`, the single-file replay; `plan` draws a plan from `--plans-dir`, default `dungeons`, the same name rule `dungeon_run` uses; the navmesh background comes from `--navmesh`), `area_trigger`, the five death methods, `addon_send`, `join_channel`, `leave_channel`, `channel_list`, `teardown`, `mount`, `dismount`, `pet`, `pet_action`, `follow_start`,
 `follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. Every other old method answers a typed `not ported on this server` error. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`) and `cc` (present and `true` while an aura crowd-controls the unit: the aura's spell has a sleep, freeze, knockout, polymorph, banish, shackle, turn or sapped mechanic in the generated spell data, or, without a mechanic, a crowd-control name such as Polymorph or Shackle Undead; Gouge never counts), and `status`
-carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target`, `gcd_ms`, `guild` (the character's own guild GUID, omitted while it has none) and `guild_name` (the guild of the invite the last accept confirmed) and `on_taxi` (true while on a flight), and a `unit` row carries `mount_display_id` (non-zero
+carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target`, `gcd_ms`, `guild` (the character's own guild GUID, omitted while it has none), `guild_name` (the guild of the invite the last accept confirmed), `on_taxi` (true while on a flight), `locale` (the client language the session claims, from `--locale`) and `addon` (`on`, or `off` for a session started with `--addon off`, which never registers an add-on prefix), and a `unit` row carries `mount_display_id` (non-zero
 while that unit is mounted). `events` (`since`, `limit` up to 1,000,
 `wait_ms` up to 2,000) reads the session's own 4,096-row combat log as the trials runner's raw rows and
 answers `{events, next, oldest, dropped}`, also while reconnecting: the ring is handed to the session that

@@ -38,6 +38,7 @@ type Options struct {
 	Account     string                           // account e-mail or name as typed into the login form
 	Password    string                           // password; case is significant for SRP v2 accounts
 	ClientBuild uint32                           // client build to claim; 0 = the newest build this client knows that the realm accepts (see Login)
+	Locale      string                           // client language to claim (a name from Locales; "" = DefaultLocale)
 	Timeout     time.Duration                    // one RPC call or one HTTP request (0 = 30 s)
 	Deadline    time.Duration                    // the whole login, from the form to the join answer (0 = 2 min)
 	Logf        func(format string, args ...any) // one line per completed step; may be nil
@@ -480,7 +481,7 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 		digits(uint64(connect.ServerID.Label)), digits(uint64(connect.ServerID.Epoch)), digits(connect.ServerTime),
 		len(connect.Ciid), connect.UseBindlessRPC)
 
-	logon, err := rpc.sendLogon(ctx, login.LoginTicket, opts.ClientBuild)
+	logon, err := rpc.sendLogon(ctx, login.LoginTicket, opts.ClientBuild, opts.resolvedLocale())
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +516,7 @@ func loginOnce(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("bnet: client secret: %w", err)
 	}
 
-	ticketBlob, err := rpc.realmListTicket(ctx, uint32(gameAccount.Low), result.ClientSecret, opts.ClientBuild)
+	ticketBlob, err := rpc.realmListTicket(ctx, uint32(gameAccount.Low), result.ClientSecret, opts.ClientBuild, opts.resolvedLocale())
 	if err != nil {
 		return nil, &RealmError{Err: err}
 	}
@@ -622,7 +623,7 @@ func digits(n uint64) int {
 
 // realmListTicket sends Command_RealmListTicketRequest_v1 with Param_Identity and Param_ClientInfo and returns the
 // ticket blob the server answers with (src/server/bnetserver/Services/GameUtilitiesService.cpp:240-301).
-func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, secret []byte, clientBuild uint32) ([]byte, error) {
+func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, secret []byte, clientBuild uint32, locale string) ([]byte, error) {
 	identity, err := json.Marshal(realmListTicketIdentity{GameAccountID: gameAccountID, GameAccountRegion: 2})
 	if err != nil {
 		return nil, err
@@ -634,8 +635,8 @@ func (s *rpcSession) realmListTicket(ctx context.Context, gameAccountID uint32, 
 		Type:             fourCCWoW,
 		TimeZone:         "UTC",
 		CurrentTime:      now,
-		TextLocale:       fourCCEnUS,
-		AudioLocale:      fourCCEnUS,
+		TextLocale:       localeFourCC(locale),
+		AudioLocale:      localeFourCC(locale),
 		VersionDataBuild: clientBuild,
 		Version:          clientVersion{Major: 1, Minor: 60, Revis: 1, Build: clientBuild},
 		Secret:           jsonBytes(secret),

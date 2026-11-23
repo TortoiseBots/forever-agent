@@ -344,6 +344,10 @@ type fakeLogin struct {
 	// logonBuilds receives the application_version of every logon this fake sees, in order; a test that cares
 	// reads them (the automatic-build login logs on twice: once with its probe build, once with the realm's).
 	logonBuilds chan uint32
+	// logonLocales receives each logon's locale string, and clientLocales each realm list ticket's client info
+	// locale fourCCs as {TextLocale, AudioLocale}. A test reads them after Login returns.
+	logonLocales  chan string
+	clientLocales chan [2]uint32
 	// joinStatus, when set, is the status the realm join answers with for the connection's logged-on build (0 is
 	// ERROR_OK and the normal join answer). It is the core's two build-related statuses a real server can send:
 	// 0x800000DF (wrong build) and 0x800000E1 (realm not permitted).
@@ -481,6 +485,8 @@ func newFakeLoginWith(t *testing.T, srp *fakeSRP) *fakeLogin {
 		ticket:          "TC-" + strings.Repeat("AB", 20),
 		errs:            make(chan error, 16),
 		logonBuilds:     make(chan uint32, 4),
+		logonLocales:    make(chan string, 4),
+		clientLocales:   make(chan [2]uint32, 4),
 		realmPopulation: 1, realmBuild: wire.Build70938,
 	}
 
@@ -600,6 +606,22 @@ func (f *fakeLogin) options() Options {
 func (f *fakeLogin) recordLogonBuild(build uint32) {
 	select {
 	case f.logonBuilds <- build:
+	default:
+	}
+}
+
+// recordLogonLocale hands the logon's locale to a waiting test without ever blocking the handler.
+func (f *fakeLogin) recordLogonLocale(locale string) {
+	select {
+	case f.logonLocales <- locale:
+	default:
+	}
+}
+
+// recordClientLocales hands one realm list ticket's locale fourCCs to a waiting test.
+func (f *fakeLogin) recordClientLocales(text, audio uint32) {
+	select {
+	case f.clientLocales <- [2]uint32{text, audio}:
 	default:
 	}
 }
@@ -742,9 +764,10 @@ func (f *fakeLogin) serveRPC(raw net.Conn) {
 				f.fail("logon request: %v", err)
 				return
 			}
-			if logon.program != "WoW" || logon.platform != "Wn64" || logon.locale != "enUS" {
-				f.fail("logon program/platform/locale = %q/%q/%q", logon.program, logon.platform, logon.locale)
+			if logon.program != "WoW" || logon.platform != "Wn64" {
+				f.fail("logon program/platform = %q/%q", logon.program, logon.platform)
 			}
+			f.recordLogonLocale(logon.locale)
 			if logon.build == 0 {
 				f.fail("logon application_version = 0")
 			}
@@ -826,6 +849,7 @@ func (f *fakeLogin) handleClientRequest(c *fakeConn, h header, body []byte, logo
 		if info.Info.PlatformType != fourCCWin || info.Info.ClientArch != fourCCTextX64 || info.Info.Type != fourCCWoW {
 			f.fail("client variant %08X/%08X/%08X", info.Info.PlatformType, info.Info.ClientArch, info.Info.Type)
 		}
+		f.recordClientLocales(info.Info.TextLocale, info.Info.AudioLocale)
 		ticket := append([]byte("AuthRealmListTicket"), 0)
 		return f.respond(c, h, putBytes(nil, 1, attrBlob("Param_RealmListTicket", ticket).marshal()))
 

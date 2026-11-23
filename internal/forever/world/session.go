@@ -158,6 +158,11 @@ type Options struct {
 	// and accept flow party-check uses, but the group is kept until the add-on listen ends and then left.
 	AddonInvite     string
 	AddonAcceptFrom string
+	// #114: Locale is the client language this session claims (a bnet locale name; empty is enUS) and AddonOff turns
+	// the add-on transport off (--addon off): RegisterAddonPrefixes refuses with ErrAddonOff, so the session never
+	// registers a prefix and never speaks TBM. status reports both.
+	Locale   string
+	AddonOff bool
 	// Round TBM: forever tbm-check. TBMCheck runs the TBM client's hello and the requested commands through the
 	// session's add-on and chat paths. TBMTransport is auto, addon, addon-self or chat; TBMCommands are run in
 	// order after the hello; TBMTimeout bounds each hello and command; TBMRaw appends every accepted message to
@@ -252,6 +257,15 @@ func (o *Options) logf(format string, args ...any) {
 	if o.Logf != nil {
 		o.Logf(format, args...)
 	}
+}
+
+// statusLocale is Options.Locale for status: the core's default language when the session claims none. The command's
+// own flag already defaults to enUS, so this only covers a caller that builds Options by hand.
+func (o Options) statusLocale() string {
+	if o.Locale == "" {
+		return "enUS"
+	}
+	return o.Locale
 }
 
 // Report is what the run observed.
