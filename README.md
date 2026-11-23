@@ -101,6 +101,8 @@ what is hostile to the character and `false` only what is not. A `unit` row also
 `pet` (its Summon), and a pet's `pet_number`, `created_by_spell` and `creature_family`; `units` takes an optional
 `owner` GUID that keeps only the units whose owner is that one, which is how a party's hunter pets are listed.
 
+The auction house is served by `auction_hello`, `auction_browse`, `auction_items`, `auction_owned`, `auction_sell`, `auction_bid`, `auction_cancel`, `auction_quote` and `auction_buy` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-AH-NOTES.md](docs/forever/WORLDLIFE-106-AH-NOTES.md)).
+
 A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
 the link drops), and every login attempt (the first login, each build the automatic selection probes, each reconnect's) waits for its turn in the same login rate the other
 commands keep: this process's 14-per-300 s window, the hour-start hold and, with `--login-budget` (set by a fleet), the

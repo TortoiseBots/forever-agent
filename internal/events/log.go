@@ -140,6 +140,19 @@ const (
 	KindMailList   = "mail_list"   // SMSG_MAIL_LIST_RESULT: data.total, count, mails (rows without bodies)
 	KindMailResult = "mail_result" // SMSG_MAIL_COMMAND_RESULT: data.command, ok, error, reason, mail_id, attach_id, quantity
 	KindMailNew    = "mail_new"    // SMSG_NOTIFY_RECEIVED_MAIL: new mail is waiting, data.delay
+	// The auction house (README "Auction house"): the hello, the lists, each command's result, the commodity quote and the
+	// four notifications.
+	KindAuctionHello    = "auction_hello"     // SMSG_AUCTION_HELLO_RESPONSE: data.house_id, open
+	KindAuctionBuckets  = "auction_buckets"   // SMSG_AUCTION_LIST_BUCKETS_RESULT: data.count, total, more
+	KindAuctionItems    = "auction_items"     // SMSG_AUCTION_LIST_ITEMS_RESULT: data.count, total, quantity, commodities, item_id
+	KindAuctionOwned    = "auction_owned"     // SMSG_AUCTION_LIST_OWNED_ITEMS_RESULT: data.count, sold
+	KindAuctionQuote    = "auction_quote"     // SMSG_AUCTION_GET_COMMODITY_QUOTE_RESULT: data.item_id, available, total_price
+	KindAuctionResult   = "auction_result"    // SMSG_AUCTION_COMMAND_RESULT: data.command, ok, error, reason, auction_id
+	KindAuctionWon      = "auction_won"       // SMSG_AUCTION_WON_NOTIFICATION: data.auction_id, item_id
+	KindAuctionOutbid   = "auction_outbid"    // SMSG_AUCTION_OUTBID_NOTIFICATION: data.auction_id, item_id, bid
+	KindAuctionOwnerBid = "auction_owner_bid" // SMSG_AUCTION_OWNER_BID_NOTIFICATION: a bid on the player's auction
+	KindAuctionClosed   = "auction_closed"    // SMSG_AUCTION_CLOSED_NOTIFICATION: data.auction_id, item_id, sold
+
 )
 
 // ChatKinds is what the chat_log method returns.

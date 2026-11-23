@@ -791,6 +791,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerTrainerMethods(srv, st)
 	registerMailMethods(srv, st)
 	registerTradeMethods(srv, st)
+	registerAuctionMethods(srv, st)
 
 	for _, name := range notPortedMethods {
 		name := name
