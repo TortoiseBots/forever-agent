@@ -39,12 +39,18 @@ func playMaxWipes(n int) int {
 }
 
 // deadWait is the character's own death: it waits for a resurrect offer, answers a party member's and declines anyone
-// else's, and releases when the wait is up. A released ghost walks back through the portal, where the core raises it
-// because its corpse is in the instance, and the run goes on (§3.10).
+// else's, and releases when the wait is up. With the party's healer alive the hold lasts past the party's fight: the
+// Rez clock starts once no roster member is in combat, and RezHold caps the whole wait from the death. A released
+// ghost walks back through the portal, where the core raises it because its corpse is in the instance, and the run
+// goes on (§3.10).
 func (p *playRun) deadWait(ctx context.Context) string {
 	p.rec.Event(p.now(), "dead_wait", map[string]any{"from": p.deadFrom})
 	released := false
-	deadline := p.now().Add(p.lim.Rez)
+	deadAt := p.now()
+	clockFrom := deadAt.Add(p.lim.Rez) // no healer to wait for: today's plain clock
+	holdAt := deadAt.Add(p.lim.RezHold)
+	holding := p.healerCanRez()
+	var rezAt time.Time // the Rez clock with a healer: set once the party is out of combat
 	for {
 		p.latchWipe()
 		if p.ports.Player.Phase() == PhaseAlive {
@@ -67,18 +73,28 @@ func (p *playRun) deadWait(ctx context.Context) string {
 			}
 			p.rec.Event(p.now(), "rez_declined", map[string]any{"by": offer.By})
 		}
-		if !released && !p.now().Before(deadline) {
-			if err := p.ports.Player.Release(); err != nil {
-				p.playerErr(err, "release")
-				return ""
+		if !released {
+			now := p.now()
+			due := !now.Before(clockFrom)
+			if holding {
+				if rezAt.IsZero() && !p.aggro() {
+					rezAt = now.Add(p.lim.Rez)
+				}
+				due = (!rezAt.IsZero() && !now.Before(rezAt)) || !now.Before(holdAt)
 			}
-			released = true
-			p.rec.Event(p.now(), "release", nil)
-			if !p.ghostRun(ctx) {
-				return ""
+			if due {
+				if err := p.ports.Player.Release(); err != nil {
+					p.playerErr(err, "release")
+					return ""
+				}
+				released = true
+				p.rec.Event(p.now(), "release", nil)
+				if !p.ghostRun(ctx) {
+					return ""
+				}
+				p.latchWipe()
+				continue
 			}
-			p.latchWipe()
-			continue
 		}
 		if p.timeUp() {
 			p.stop("time")
@@ -88,6 +104,16 @@ func (p *playRun) deadWait(ctx context.Context) string {
 			return ""
 		}
 	}
+}
+
+// healerCanRez says whether the party's healer (the second bot) stands alive and no ghost: the member a dead character
+// and a regroup wait for.
+func (p *playRun) healerCanRez() bool {
+	if len(p.cfg.Bots) < 2 {
+		return false
+	}
+	m, ok := p.member(p.cfg.Bots[1])
+	return ok && m.Online && !m.Dead && !m.Ghost
 }
 
 // afterDeath is where the run goes once the character is up: back into the fight it died in while that fight is still
@@ -139,27 +165,53 @@ func (p *playRun) ghostRun(ctx context.Context) bool {
 	return true
 }
 
+// ghostTries is how many routes a released ghost walks for the portal: a partial route is walked to its end and the
+// walk replanned from there, at most this many times.
+const ghostTries = 4
+
+// ghostGainYd is what each ghost route must take off the distance left to the portal: a partial route that ends no
+// nearer is a route that cannot get there.
+const ghostGainYd = 5.0
+
 // ghostWalk walks a released ghost to the plan's portal on the portal map: the navmesh route, cut into segments like
 // any other walk, but with no party polling (the bots are dead or still inside, and a ghost cannot summon them), no
-// avoid box and no pull — the outer map's ground is not the plan's.
+// avoid box and no pull — the outer map's ground is not the plan's. The navmesh only routes to the mesh's edge, so a
+// partial route is walked to its end and the walk replanned from where it stopped; each try must gain ghostGainYd on
+// the portal, or the run stops recover:path.
 func (p *playRun) ghostWalk(ctx context.Context, to Vec3) bool {
-	route, err := p.ports.Walker.Path(p.self, to)
-	if err != nil {
-		p.playerErr(err, "recover")
+	p.refreshSelf()
+	failed := func(kind string) bool {
+		p.rec.Event(p.now(), "ghost_path_failed", map[string]any{
+			"from": p.self, "to": to, "left_yd": dist3(p.self, to), "kind": kind,
+		})
+		p.stop("recover:path")
 		return false
 	}
-	if route.Kind != navmesh.RouteComplete {
-		p.stop("recover:" + string(route.Kind))
-		return false
-	}
-	for _, seg := range SplitRoute(route.Points, PlaySegmentYd) {
-		if err := p.ports.Walker.Walk(ctx, seg); err != nil {
+	for try := 1; ; try++ {
+		from := p.self
+		left := dist3(from, to)
+		route, err := p.ports.Walker.Path(from, to)
+		if err != nil {
 			p.playerErr(err, "recover")
 			return false
 		}
+		if route.Kind == navmesh.RouteNone {
+			return failed(string(route.Kind))
+		}
+		for _, seg := range SplitRoute(route.Points, PlaySegmentYd) {
+			if err := p.ports.Walker.Walk(ctx, seg); err != nil {
+				p.playerErr(err, "recover")
+				return false
+			}
+		}
+		p.refreshSelf()
+		if route.Kind == navmesh.RouteComplete {
+			return true
+		}
+		if left-dist3(p.self, to) < ghostGainYd || try >= ghostTries {
+			return failed(string(route.Kind))
+		}
 	}
-	p.refreshSelf()
-	return true
 }
 
 // waitAlive waits until the character stands up again, up to limit.
@@ -211,6 +263,20 @@ func (p *playRun) wipe(ctx context.Context) string {
 		}
 		if !p.ghostRun(ctx) {
 			return ""
+		}
+	}
+	// A bot down with the healer alive is the module's own raise, not a rescue: the run waits BotRez, while the
+	// party is out of combat, for the down bots to stand up, and only those still down get the whispers.
+	if p.healerCanRez() && len(p.downBots()) > 0 {
+		botDeadline := p.now().Add(p.lim.BotRez)
+		for len(p.downBots()) > 0 && !p.aggro() && p.now().Before(botDeadline) {
+			if !p.sleep(ctx, p.lim.Poll) {
+				return ""
+			}
+			if p.timeUp() {
+				p.stop("time")
+				return ""
+			}
 		}
 	}
 	for _, name := range p.downBots() {

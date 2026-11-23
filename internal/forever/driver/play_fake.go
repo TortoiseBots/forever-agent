@@ -121,6 +121,8 @@ type PlayFake struct {
 	TriggerFails bool
 	// OnWalk, when set, is asked before a walk of that destination: a test scripts the party's state there.
 	OnWalk func(f *PlayFake, to Vec3)
+	// PathFunc, when set, answers the walker's route: a test scripts a partial route (the navmesh's edge) or none.
+	PathFunc func(from, to Vec3) navmesh.Route
 
 	// The fight. A unit the group is ordered onto turns on the tank (and its pack-mates on their own members) after
 	// AggroDelay, and loses playHitPerTick of its health on every FightTick until it dies. BotPower is a bot's power:
@@ -881,8 +883,11 @@ func (f *PlayFake) EncounterOpen() bool { return false }
 
 // --- Walker ---
 
-// Path is a straight line: the fake does not use the map data.
+// Path is a straight line: the fake does not use the map data. A test's PathFunc answers instead.
 func (f *PlayFake) Path(from, to Vec3) (navmesh.Route, error) {
+	if f.PathFunc != nil {
+		return f.PathFunc(from, to), nil
+	}
 	return navmesh.Route{
 		Kind: navmesh.RouteComplete, Corners: 2, Start: from, End: to,
 		Points: []Vec3{from, to}, Length: float32(dist3(from, to)),

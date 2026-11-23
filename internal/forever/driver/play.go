@@ -89,9 +89,15 @@ type PlayLimits struct {
 	TankBreak    time.Duration // the skull on a non-tank member this long re-orders the tank
 	Rest         time.Duration // REST's cap
 	Rez          time.Duration // a dead character's wait for a resurrect offer, and a ghost's raise on arrival
-	Recover      time.Duration // one wipe's whole recovery, before the run ends unrecovered
-	CorpseWord   time.Duration // between the release whispers and the corpse-run ones
-	Loot         time.Duration // the loot of one fight
+	// RezHold is how long a dead character with a living party healer stays down for the healer's offer, measured
+	// from the death: the Rez clock starts once the party is out of combat, and this caps the whole wait.
+	RezHold time.Duration
+	// BotRez is how long a regroup waits, out of combat and with the healer alive, for the healer to raise a down bot
+	// before the run falls back to its whispers.
+	BotRez     time.Duration
+	Recover    time.Duration // one wipe's whole recovery, before the run ends unrecovered
+	CorpseWord time.Duration // between the release whispers and the corpse-run ones
+	Loot       time.Duration // the loot of one fight
 }
 
 // DefaultPlayLimits is the player run's table of defaults, from the spec's round P2a.
@@ -117,6 +123,8 @@ func DefaultPlayLimits() PlayLimits {
 		TankBreak:    3 * time.Second,
 		Rest:         180 * time.Second,
 		Rez:          30 * time.Second,
+		RezHold:      180 * time.Second,
+		BotRez:       120 * time.Second,
 		Recover:      10 * time.Minute,
 		CorpseWord:   10 * time.Second,
 		Loot:         10 * time.Second,
@@ -185,6 +193,12 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	}
 	if l.Rez == 0 {
 		l.Rez = d.Rez
+	}
+	if l.RezHold == 0 {
+		l.RezHold = d.RezHold
+	}
+	if l.BotRez == 0 {
+		l.BotRez = d.BotRez
 	}
 	if l.Recover == 0 {
 		l.Recover = d.Recover
