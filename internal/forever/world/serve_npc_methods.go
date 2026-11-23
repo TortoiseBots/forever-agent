@@ -355,6 +355,18 @@ func (s *session) serveHello(parent context.Context, guid GUID, waitMS int, need
 	res.OK = true
 	res.Menu = gossipMenuOf(a)
 	res.Event = s.firstEventSince(res.Since, events.KindGossip, events.KindQuestList)
+	if res.Event == nil {
+		// The giver's one quest, opened by the core itself (no menu, no list).
+		if d := s.offeredDetails(unit.GUID); d != nil {
+			res.Event = s.methodEvent(events.KindQuestDetails, unit.GUID, map[string]any{
+				"quest_id": d.QuestID, "title": d.Title, "objectives": questObjectives(d.Objectives),
+			}, "")
+		} else if r := s.offeredRequest(unit.GUID); r != nil {
+			res.Event = s.methodEvent(events.KindQuestRequestItems, unit.GUID, map[string]any{
+				"quest_id": r.QuestID, "completable": r.StatusFlags == requestItemsReady,
+			}, "")
+		}
+	}
 	if res.Event == nil && a.quests != nil {
 		quests := make([]map[string]any, 0, len(a.quests.Quests))
 		for _, q := range a.quests.Quests {

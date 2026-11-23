@@ -619,6 +619,10 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 	// The stored answer follows this open: a menu left from an earlier exchange must not satisfy the wait.
 	s.actMenu, s.actQuest = nil, nil
 	useQuestHello := npcNeedsQuestHello(a.npc.Info.NpcFlags)
+	// A quest giver with exactly one quest and no gossip option answers neither a menu nor a list: the core opens
+	// the quest itself (Player::SendPreparedGossip, Player::SendPreparedQuest), so those answers count too.
+	givesQuests := a.npc.Info.NpcFlags&npc.NPCFlagQuestGiver != 0
+	s.quest.details, s.quest.request = nil, nil
 	if useQuestHello {
 		if err := s.transport().Send(wire.CMSGQuestGiverHello, npc.BuildQuestGiverHello(guid)); err != nil {
 			return s.actFail(a, step, fmt.Errorf("CMSG_QUEST_GIVER_HELLO: %w", err))
@@ -628,17 +632,33 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 			return s.actFail(a, step, fmt.Errorf("CMSG_TALK_TO_GOSSIP: %w", err))
 		}
 	}
-	menu, quests, found, err := s.waitActAnswer(ctx, guid, actMenuWait, useQuestHello)
+	menu, quests, found, err := s.waitActAnswer(ctx, guid, actMenuWait, givesQuests)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
 	if !found {
 		if useQuestHello {
-			return s.actFail(a, step, fmt.Errorf("no quest answer within %s", actMenuWait))
+			return s.actFail(a, step, fmt.Errorf("no quest answer within %s (the core sends nothing when this character has no quest to take or turn in here: Player.cpp SendPreparedQuest returns on an empty quest menu)", actMenuWait))
 		}
 		return s.actFail(a, step, fmt.Errorf("no gossip menu within %s", actMenuWait))
 	}
 	a.menuNPC = !useQuestHello
+	if menu == nil && quests == nil {
+		// The core opened the one quest itself: its details (a quest to take) or its request-items screen (a
+		// turn-in). There is no menu to choose from.
+		a.menu = npc.GossipMessage{Unit: guid}
+		a.hasMenu = true
+		a.menuNPC = false
+		switch {
+		case s.offeredDetails(guid) != nil:
+			d := s.offeredDetails(guid)
+			s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("quest %d offered: %q", d.QuestID, d.Title))
+		default:
+			r := s.offeredRequest(guid)
+			s.actOK(a, ActStep{Verb: actVerbOpen}, fmt.Sprintf("quest %d asks for items: %q", r.QuestID, r.Title))
+		}
+		return nil
+	}
 	if quests != nil {
 		// A quest-only NPC answers the hello with its quest list; there is no gossip menu to choose from.
 		a.menu = npc.GossipMessage{Unit: guid}
@@ -653,8 +673,26 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 	return nil
 }
 
-// waitActAnswer waits up to wait for the answer of the NPC guid: its gossip menu, or (questList) its quest list. The
-// answers land on the session (handleNPC stores them); only one from this NPC counts. found is false when none came.
+// offeredDetails is the quest details the giver guid sent, or nil.
+func (s *session) offeredDetails(guid wire.GUID) *quest.Details {
+	if d := s.quest.details; d != nil && d.Giver == guid {
+		return d
+	}
+	return nil
+}
+
+// offeredRequest is the request-items screen the giver guid sent, or nil.
+func (s *session) offeredRequest(guid wire.GUID) *quest.RequestItems {
+	if r := s.quest.request; r != nil && r.Giver == guid {
+		return r
+	}
+	return nil
+}
+
+// waitActAnswer waits up to wait for the answer of the NPC guid: its gossip menu, or (questList) its quest list,
+// quest details or request-items screen (nil menu and nil list, found true: read them with offeredDetails and
+// offeredRequest). The answers land on the session (handleNPC stores them); only one from this NPC counts. found
+// is false when none came.
 func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.Duration, questList bool) (*npc.GossipMessage, *quest.QuestList, bool, error) {
 	end := s.transport().Now().Add(wait)
 	for {
@@ -665,6 +703,9 @@ func (s *session) waitActAnswer(ctx context.Context, guid wire.GUID, wait time.D
 		if q := s.actQuest; questList && q != nil && q.Giver == guid {
 			s.actQuest = nil
 			return nil, q, true, nil
+		}
+		if questList && (s.offeredDetails(guid) != nil || s.offeredRequest(guid) != nil) {
+			return nil, nil, true, nil
 		}
 		if err := s.linkDead(); err != nil {
 			return nil, nil, false, err
