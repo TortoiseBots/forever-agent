@@ -43,9 +43,17 @@ func MmapParams() []byte {
 // MmapParamsForever is a map's MMMM.mmap file: the 40-byte Forever header (magic, generator version 16,
 // the same 28-byte dtNavMeshParams, and an empty off-mesh table; MMapDefines.h:29-37).
 func MmapParamsForever() []byte {
+	return MmapParamsForeverMax(4)
+}
+
+// MmapParamsForeverMax is MmapParamsForever with the map's maximum tile count: dtNavMeshParams.maxTiles,
+// a power of two at least the number of tiles written. A fixture of more than four tiles needs it, or
+// dtNavMesh::addTile refuses the extra files.
+func MmapParamsForeverMax(maxTiles int32) []byte {
 	var b bytes.Buffer
 	put(&b, []uint32{mmapMagic, foreverMmapVer})
-	b.Write(MmapParams())
+	put(&b, []float32{0, -500, 0, Tile, Tile})
+	put(&b, []int32{maxTiles, 1 << 16})
 	put(&b, uint32(0))
 	return b.Bytes()
 }
@@ -53,17 +61,28 @@ func MmapParamsForever() []byte {
 // BuildTile is a whole .mmtile file holding polys at tile (tx, ty), every polygon with the
 // given flags (nil: all NAV_GROUND). Shared edges become neighbour links.
 func BuildTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
-	return buildTile(polys, flags, tx, ty, mmapVer, 0)
+	return buildTile(polys, flags, tx, ty, mmapVer, 0, false)
 }
 
 // BuildForeverTile is BuildTile in ForeverCore's mmaps_generator format: generator version 16 in the
 // tile header and the Forever area id for each polygon's flags (ground 11, steep 10, water 9,
 // magma/slime 8, road 7; MMapDefines.h:58-70). The Detour payload is the same version 7 tile.
 func BuildForeverTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
-	return buildTile(polys, flags, tx, ty, foreverMmapVer, 1)
+	return buildTile(polys, flags, tx, ty, foreverMmapVer, 1, false)
 }
 
-func buildTile(polys []Poly, flags []uint16, tx, ty int32, mmapVersion uint32, usesLiquids uint32) []byte {
+// BuildBorderForeverTile is BuildForeverTile with the polygon edges that lie on the tile's own border
+// marked as Detour external portals (DT_EXT_LINK|side, DetourNavMesh.cpp connectExtLinks), so that
+// dtNavMesh::addTile links them to the tile beside them: a fixture of several tiles must use this, or
+// a path stops at the border it crosses.
+func BuildBorderForeverTile(polys []Poly, flags []uint16, tx, ty int32) []byte {
+	return buildTile(polys, flags, tx, ty, foreverMmapVer, 1, true)
+}
+
+// dtExtLink is Detour's external-link flag for a polygon edge on its tile's border (DT_EXT_LINK).
+const dtExtLink = 0x8000
+
+func buildTile(polys []Poly, flags []uint16, tx, ty int32, mmapVersion uint32, usesLiquids uint32, borders bool) []byte {
 	if flags == nil {
 		flags = make([]uint16, len(polys))
 		for i := range flags {
@@ -111,6 +130,11 @@ func buildTile(polys []Poly, flags []uint16, tx, ty int32, mmapVersion uint32, u
 					n = uint16(other + 1)
 					links++
 					break
+				}
+			}
+			if n == 0 && borders {
+				if side, ok := borderSide(verts[ids[k]], verts[ids[(k+1)%len(ids)]], tx, ty); ok {
+					n = dtExtLink | side
 				}
 			}
 			neis[pi] = append(neis[pi], n)
@@ -181,6 +205,27 @@ func buildTile(polys []Poly, flags []uint16, tx, ty int32, mmapVersion uint32, u
 	put(&out, []uint32{mmapMagic, dtVersion, mmapVersion, uint32(h.Len()), usesLiquids})
 	out.Write(h.Bytes())
 	return out.Bytes()
+}
+
+// borderSide is the Detour side of a polygon edge that lies on the tile's own border: 0 (+x), 2 (+z),
+// 4 (-x) or 6 (-z) in Detour coordinates, i.e. +y, +x, -y and -x in world coordinates, since the tile
+// payload stores (x, y, z) as Detour (y, z, x). ok is false for an edge inside the tile.
+func borderSide(a, b [3]float32, tx, ty int32) (uint16, bool) {
+	const eps = 1e-3
+	on := func(v, line float32) bool { return math.Abs(float64(v-line)) <= eps }
+	x0, x1 := float32(ty)*Tile, float32(ty+1)*Tile // world x is Detour z
+	y0, y1 := float32(tx)*Tile, float32(tx+1)*Tile // world y is Detour x
+	switch {
+	case on(a[0], x0) && on(b[0], x0):
+		return 6, true
+	case on(a[0], x1) && on(b[0], x1):
+		return 2, true
+	case on(a[1], y0) && on(b[1], y0):
+		return 4, true
+	case on(a[1], y1) && on(b[1], y1):
+		return 0, true
+	}
+	return 0, false
 }
 
 // areaFor is the polygon area stored in the tile. The 1.12 fixture always wrote 1; Forever's generator
@@ -277,12 +322,14 @@ func WriteDirFlags(t testing.TB, mapID uint32, polys []Poly, flags []uint16) str
 
 // ForeverTile is one tile file of a Forever fixture: polys in WoW (x, y, z) and the Detour tile index
 // (TX from world y, TY from world x, both relative to the header's origin). AtX/AtY name the file; zero
-// values take the tile's centre.
+// values take the tile's centre. Borders marks the poly edges on the tile's border as external portals,
+// so addTile links them to the tiles beside it (BuildBorderForeverTile); a one-tile fixture needs none.
 type ForeverTile struct {
 	TX, TY   int32
 	Polys    []Poly
 	Flags    []uint16
 	AtX, AtY float32
+	Borders  bool
 }
 
 // WriteForeverDir writes MMMM.mmap and one Forever tile, named for the map and the tile holding (12, 12).
@@ -308,19 +355,30 @@ func tileCoord(v float32) int32 { return int32(math.Floor(float64(v / Tile))) }
 // WriteForeverTiles writes a Forever map and the given tiles into a new temporary directory.
 func WriteForeverTiles(t testing.TB, mapID uint32, tiles []ForeverTile) string {
 	t.Helper()
+	return WriteForeverTilesMax(t, mapID, tiles, 4)
+}
+
+// WriteForeverTilesMax is WriteForeverTiles with the map's maxTiles (a power of two at least the
+// number of tiles: dtNavMesh::addTile refuses files past it).
+func WriteForeverTilesMax(t testing.TB, mapID uint32, tiles []ForeverTile, maxTiles int32) string {
+	t.Helper()
 	dir := t.TempDir()
 	write := func(name string, data []byte) {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write(foreverMmapName(mapID), MmapParamsForever())
+	write(foreverMmapName(mapID), MmapParamsForeverMax(maxTiles))
 	for _, tile := range tiles {
 		x, y := tile.AtX, tile.AtY
 		if x == 0 && y == 0 {
 			x, y = (float32(tile.TY)+0.5)*Tile, (float32(tile.TX)+0.5)*Tile
 		}
-		write(foreverTileName(mapID, x, y), BuildForeverTile(tile.Polys, tile.Flags, tile.TX, tile.TY))
+		build := BuildForeverTile
+		if tile.Borders {
+			build = BuildBorderForeverTile
+		}
+		write(foreverTileName(mapID, x, y), build(tile.Polys, tile.Flags, tile.TX, tile.TY))
 	}
 	return dir
 }
