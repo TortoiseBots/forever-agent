@@ -10,6 +10,10 @@ import (
 	"os"
 )
 
+// AfterCheck, when a test sets it, runs between the check and the open, so a test can replace the
+// file in that window. Production code leaves it nil.
+var AfterCheck func()
+
 // Read returns at most limit bytes of path. It refuses anything but a regular file (a
 // symlink is not followed) that only its owner can access, and a file swapped between the
 // check and the open.
@@ -23,6 +27,9 @@ func Read(path string, limit int64) ([]byte, error) {
 	}
 	if info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("mode %04o; run: chmod 600 %s", info.Mode().Perm(), path)
+	}
+	if AfterCheck != nil {
+		AfterCheck()
 	}
 	f, err := os.Open(path)
 	if err != nil {

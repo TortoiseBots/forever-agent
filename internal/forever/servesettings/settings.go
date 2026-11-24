@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/bnet"
+	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/slots"
 )
 
@@ -110,21 +111,13 @@ type Settings struct {
 // field, never a value.
 func Load(path string) (Settings, error) {
 	p := slots.ExpandTilde(path)
-	info, err := os.Lstat(p)
+	// privfile.Read checks the file it opened, not a path that may have been replaced since: the
+	// settings file may name the account and its password, so it is a private file like a token.
+	raw, err := privfile.Read(p, maxFileBytes+1)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Settings{}, fmt.Errorf("settings %s: no such file", p)
 		}
-		return Settings{}, fmt.Errorf("settings %s: %v", p, err)
-	}
-	if !info.Mode().IsRegular() {
-		return Settings{}, fmt.Errorf("settings %s: not a regular file", p)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return Settings{}, fmt.Errorf("settings %s has mode %04o; it may name a slot's account and password, run: chmod 600 %s", p, perm, p)
-	}
-	raw, err := os.ReadFile(p)
-	if err != nil {
 		return Settings{}, fmt.Errorf("settings %s: %v", p, err)
 	}
 	if len(raw) > maxFileBytes {

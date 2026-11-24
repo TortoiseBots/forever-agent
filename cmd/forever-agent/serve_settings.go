@@ -4,11 +4,13 @@ package main
 // always wins, then the file, then the flag's default.
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/servesettings"
+	"github.com/pjerra/forever-agent/internal/privfile"
 )
 
 // serveFlagOverrides are the flags a settings file may fill. The pointers are the flag package's
@@ -98,7 +100,8 @@ func serveFromSettings(st servesettings.Settings, set map[string]bool, c *foreve
 
 // servePasswordFor resolves the password: an explicit --password-file wins over the settings file
 // (an empty one means the environment), the file's password_file comes before an inline password,
-// and FOREVER_PASSWORD is the last resort. The value is never printed on any path.
+// and FOREVER_PASSWORD is the last resort. The flag's file keeps the old loose read; a settings
+// file's password_file is strict. The value is never printed on any path.
 func servePasswordFor(passwordFileSet bool, passwordFile string, st *servesettings.Settings) (string, error) {
 	if passwordFileSet {
 		if passwordFile == "" {
@@ -108,11 +111,32 @@ func servePasswordFor(passwordFileSet bool, passwordFile string, st *servesettin
 	}
 	if st != nil {
 		if st.PasswordFile != "" {
-			return servePassword(st.PasswordFile)
+			return serveSettingsPassword(st.PasswordFile)
 		}
 		if st.Password != "" {
 			return st.Password, nil
 		}
 	}
 	return os.Getenv("FOREVER_PASSWORD"), nil
+}
+
+// serveSettingsPassword reads the file a settings file's password_file names. Unlike --password-file,
+// which has always read any file the user can read, this file is named by a settings file that is
+// itself private, so it must be private too: privfile.Read refuses a symlink, a loose mode and a
+// file swapped between its check and its open. The error names the path and the problem, never a
+// value.
+func serveSettingsPassword(path string) (string, error) {
+	raw, err := privfile.Read(path, 4096+1)
+	if err != nil {
+		return "", fmt.Errorf("settings password_file %s: %v", path, err)
+	}
+	if len(raw) > 4096 {
+		return "", fmt.Errorf("settings password_file %s: more than 4096 bytes", path)
+	}
+	s := strings.TrimSuffix(string(raw), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	if s == "" {
+		return "", fmt.Errorf("settings password_file %s is empty", path)
+	}
+	return s, nil
 }

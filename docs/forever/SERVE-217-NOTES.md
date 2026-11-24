@@ -59,7 +59,7 @@ Example (no real host, account or path; `example.invalid` is reserved):
 | `capture_dir` | `--capture-dir` | Packet capture parent (keep it outside the repository). |
 | `disconnect_grace` | `--disconnect-grace` | Duration string, `0` to `10m`. |
 | `allow_gm_units` | `--allow-gm-units` | Boolean, test bench only. |
-| `password_file` | `--password-file` | A file holding the password (one trailing newline is dropped). |
+| `password_file` | `--password-file` | A file holding the password (one trailing newline is dropped). A settings file's path must be a regular, non-symlinked `chmod 600` file of at most 4096 bytes; the `--password-file` flag itself keeps its old, looser read. |
 | `password` | — | The password inline; prefer `password_file`. |
 
 Rules:
@@ -67,7 +67,13 @@ Rules:
 - **Unknown keys are refused** and the error names the key, so a misspelt key cannot silently
   leave a default in place.
 - The file must be a **regular, non-symlinked file only its owner can read** (`chmod 600`): it may
-  name the account's password and the slot's account.
+  name the account's password and the slot's account. The read checks the opened file against
+  the one it inspected, so a file swapped in between is refused rather than run.
+- A `password_file` the settings file names is held to the same rule — regular, not a symlink,
+  `chmod 600`, at most 4096 bytes — because it is the slot's bearer secret; a loose mode or a
+  symlink is a usage error naming the path and the problem, never the content. The
+  `--password-file` **flag** keeps its historical, looser read (any file the user can read): to get
+  the check, name the file in the settings file instead of on the command line.
 - A **relative path is relative to the settings file's folder**, not the shell's working folder;
   a leading `~/` is the home folder. That makes `"dir": "."` and `"ca": "config/ca.pem"` sensible
   inside a slot dir.

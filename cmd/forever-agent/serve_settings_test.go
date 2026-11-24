@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/servesettings"
+	"github.com/pjerra/forever-agent/internal/privfile"
 )
 
 // settableServeFlags registers serve's flags in a set the test can fill from a settings file.
@@ -126,6 +127,118 @@ func TestServePasswordPrecedence(t *testing.T) {
 	}
 	if got, err := servePasswordFor(false, "", nil); err != nil || got != "env-secret" {
 		t.Fatalf("environment: %q %v", got, err)
+	}
+}
+
+// TestServeSettingsPasswordFileMustBePrivate: a settings file's password_file is a bearer secret,
+// so it must be a regular, non-symlinked file only its owner can access, at most 4096 bytes. A
+// loose mode, a symlink or an over-long file is refused, and the error names the path and the
+// problem, never the content.
+func TestServeSettingsPasswordFileMustBePrivate(t *testing.T) {
+	dir := t.TempDir()
+	const secret = "Zq7-settings-pw-5512"
+	write := func(name, body string, mode os.FileMode) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	private := write("pw", secret+"\n", 0o600)
+	loose := write("loose-pw", secret+"\n", 0o644)
+	link := filepath.Join(dir, "link-pw")
+	if err := os.Symlink(private, link); err != nil {
+		t.Fatal(err)
+	}
+	big := write("big-pw", strings.Repeat("x", 4097), 0o600)
+	for name, path := range map[string]string{"loose": loose, "symlink": link, "over 4096 bytes": big} {
+		got, err := servePasswordFor(false, "", &servesettings.Settings{PasswordFile: path})
+		if err == nil {
+			t.Errorf("%s: accepted (%q)", name, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: the error does not name the path: %v", name, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: the error leaks the password: %v", name, err)
+		}
+	}
+	if got, err := servePasswordFor(false, "", &servesettings.Settings{PasswordFile: private}); err != nil || got != secret {
+		t.Fatalf("private password file: %q %v", got, err)
+	}
+}
+
+// TestServeSettingsPasswordFileSwappedAfterTheCheckIsRefused: the settings path is read through
+// privfile.Read, so a password file replaced between its check and its open is refused instead of
+// read.
+func TestServeSettingsPasswordFileSwappedAfterTheCheckIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pw")
+	if err := os.WriteFile(path, []byte("checked-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other-pw")
+	if err := os.WriteFile(other, []byte("swapped-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	privfile.AfterCheck = func() {
+		if swapped {
+			return
+		}
+		swapped = true
+		if err := os.Rename(other, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { privfile.AfterCheck = nil }()
+	got, err := servePasswordFor(false, "", &servesettings.Settings{PasswordFile: path})
+	if err == nil || !strings.Contains(err.Error(), "changed while being read") {
+		t.Fatalf("a password file swapped after the check was read: %q, %v", got, err)
+	}
+}
+
+// TestServePasswordFlagKeepsItsLooseFileBehaviour: --password-file has always read any file the
+// user can read (servePassword on main). Only a settings file's password_file is strict, so an
+// existing flag user is not broken.
+func TestServePasswordFlagKeepsItsLooseFileBehaviour(t *testing.T) {
+	dir := t.TempDir()
+	loose := filepath.Join(dir, "flag-pw")
+	if err := os.WriteFile(loose, []byte("flag-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := servePasswordFor(true, loose, nil); err != nil || got != "flag-secret" {
+		t.Fatalf("--password-file with mode 0644: %q %v", got, err)
+	}
+}
+
+// TestServeSettingsPasswordFileIsRefusedBeforeTheLog: a password_file with a loose mode stops
+// serve with a usage error that names the path and the fix, and the secret reaches no output.
+func TestServeSettingsPasswordFileIsRefusedBeforeTheLog(t *testing.T) {
+	dir := t.TempDir()
+	const secret = "Zq7-serve-file-pw-7731"
+	pw := filepath.Join(dir, "pw")
+	if err := os.WriteFile(pw, []byte(secret+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "settings.json")
+	body := `{"account":"TESTACC","character":"Gbmage","rest":"127.0.0.1:1","rpc":"127.0.0.1:2",
+	  "ca":"` + filepath.Join(dir, "none.pem") + `","password_file":"` + pw + `",
+	  "listen":"127.0.0.1:0"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	if code := foreverServeCmd(context.Background(), []string{"--settings", path}, &out, &errOut); code != exitUsage {
+		t.Fatalf("loose password_file: exit %d, stdout %q stderr %q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(errOut.String(), pw) || !strings.Contains(errOut.String(), "chmod 600") {
+		t.Errorf("the error does not name the path and the fix: %q", errOut.String())
+	}
+	if strings.Contains(out.String()+errOut.String(), secret) {
+		t.Fatalf("the logs leak the password:\nstdout %q\nstderr %q", out.String(), errOut.String())
 	}
 }
 

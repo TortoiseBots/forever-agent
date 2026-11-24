@@ -62,6 +62,8 @@ func (m mapPairs) Set(s string) error {
 }
 
 // servePassword reads the password: the file's bytes with one trailing newline removed, or the environment.
+// --password-file has always taken any file the user can read; a settings file's password_file goes through
+// serveSettingsPassword, which is strict.
 func servePassword(path string) (string, error) {
 	if path == "" {
 		return os.Getenv("FOREVER_PASSWORD"), nil

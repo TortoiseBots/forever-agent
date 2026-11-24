@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/privfile"
 )
 
 const testPassword = "Zq7-fixture-pw-9141"
@@ -116,6 +118,36 @@ func TestLoadRefusesAnUnreadableOrBadFile(t *testing.T) {
 	}
 	if _, err := Load(link); err == nil {
 		t.Error("a symlink was accepted")
+	}
+}
+
+// TestLoadRefusesASettingsFileSwappedAfterTheCheck: the file is read through privfile.Read, which
+// compares the opened file with the one it checked; a file moved over the path in that window is
+// refused, so an attacker-substituted settings file cannot start the serve.
+func TestLoadRefusesASettingsFileSwappedAfterTheCheck(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSettings(t, dir, `{"account":"checked@example.invalid"}`, 0o600)
+	other := filepath.Join(dir, "other.json")
+	if err := os.WriteFile(other, []byte(`{"account":"swapped@example.invalid"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	privfile.AfterCheck = func() {
+		if swapped {
+			return
+		}
+		swapped = true
+		if err := os.Rename(other, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { privfile.AfterCheck = nil }()
+	s, err := Load(path)
+	if err == nil {
+		t.Fatalf("a settings file swapped after the check was loaded: %+v", s)
+	}
+	if !strings.Contains(err.Error(), "changed while being read") {
+		t.Errorf("unclear swap error: %v", err)
 	}
 }
 
