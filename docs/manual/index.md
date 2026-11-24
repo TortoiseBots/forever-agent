@@ -86,3 +86,8 @@ When you want to drive a character from a script, read the daemon area; for a du
 # History
 
 * [Update log](log.md) - When each area of the manual was written and what changed since.
+
+# The old Turtle stack
+
+* [turtle/](turtle/) - The pages for the 1.12 Turtle stack the repository still carries, and how they relate to the Forever manual.
+* [Where the old bundle went](developers/old-bundle-map.md) - Every page of the former `docs/okf` bundle, its class, and the page that now holds it.

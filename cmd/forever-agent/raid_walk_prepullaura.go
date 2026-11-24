@@ -1343,7 +1343,7 @@ func (w *walk) prepullAuraCombatClear(ctx context.Context, where string) error {
 
 // prepullRaid reads the raid the run's commander leads from the commander's view. The walk's own `party` RPC is the
 // PLAYER's group, and a TurtleBots raid is the hired bots' own raid: the player that drives the walk stands outside
-// it, so every raid seat is a hire (docs/okf/raids/roster-format.md). Walk 101: the slot answered `in_group:false`
+// it, so every raid seat is a hire (docs/manual/turtle/raids/roster-format.md). Walk 101: the slot answered `in_group:false`
 // with no members while the run leader's view held the 20 bots, so the fire saw 0 bots and still recorded the boss
 // row. The view's party records are the run leader's raid (guid, name, health, dead state, map), which is where the fire
 // looks for the walk's hires: a frame member the walk never hired is watched for combat but never targeted, and a hire

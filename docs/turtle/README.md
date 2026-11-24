@@ -36,4 +36,5 @@ These stay in the tree, under their own names, because plans, scripts and code c
 - `docs/turtle/DUNGEON-PROGRESS.md` — the Turtle dungeon tracker (moved here by #102).
 - `docs/turtle/history/` — the 2026-10-12 turtle-agent plan and design (Turtle design history, moved here by #102).
 
-Forever's own notes live in `docs/forever/`, and the manual in `docs/okf/`.
+Forever's own notes live in `docs/forever/`, and the manual in `docs/manual/`. The Turtle pages of that manual are
+under `docs/manual/turtle/`.

@@ -20,3 +20,7 @@ rules, and the practical steps for a new command or daemon method.
 
 * [Privacy and captures](privacy-and-captures.md) - What must never be committed or shared from a run, what the packet captures contain, and how to check and scrub one.
 * [Contributing](contributing.md) - The rules and checks a change to forever-agent must pass before it is merged.
+
+# History
+
+* [Where the old bundle went](old-bundle-map.md) - Every page of the former docs/okf bundle, its class, and the page that now holds it.

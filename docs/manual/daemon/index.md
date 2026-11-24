@@ -11,6 +11,7 @@ calling it, what it can tell you, how it moves the character, and the two logs i
 # Reading the world
 
 * [Status and world reads](status-and-world-reads.md) - Read the character's own state and the units, game objects, ground spells, item data and map picture around it.
+* [Death and the corpse run](death-and-corpse-run.md) - Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, or accept a resurrect.
 * [Events and logs](events-and-logs.md) - Read the combat log, the session's ordered event stream and the chat log, with cursors and long-poll waits.
 
 # Moving
