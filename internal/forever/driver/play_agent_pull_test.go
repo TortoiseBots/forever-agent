@@ -1,0 +1,429 @@
+package driver
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/trace"
+)
+
+// The leading player's own pull (part of #88, live 2026-11-24 session 7): the tank's sight of the marked skull never
+// passes from where it stands (the server's line of sight from a mob that spawns over the tunnel floor), the refusal's
+// steps are spent, and the agent pulls the mob itself the way a player leading a group does: it hits the skull, the
+// mob turns on it, it walks back to the pull stand where the bots wait, and the tank is ordered onto the mob once it
+// stands beside it. The boss pull never uses it.
+
+// spawnSight is the module's own line of sight for the live tunnel pull: the tank does not see a mob standing at its
+// spawn over the tunnel floor (y 22), and sees it once it has come down to the party (y under 20).
+func spawnSight(from, to Vec3) bool { return to[1] < 20 }
+
+// agentPullRig is the live pull's shape: the plan's stand at (40,5), the skull (11319) 17 yd up the tunnel at (42,22),
+// the pack's other unit at (38,18), and the module's own line of sight scripted by sight.
+func agentPullRig(t *testing.T, sight func(from, to Vec3) bool, mut func(*PlayFake)) *playRig {
+	t.Helper()
+	rig := refusalRig(t, sight, 0)
+	if mut != nil {
+		mut(rig.fake)
+	}
+	return rig
+}
+
+// playEvents is the run's trace indexed by event name, each the first event of that name.
+func playEvents(t *testing.T, rig *playRig) map[string]trace.Event {
+	t.Helper()
+	out := map[string]trace.Event{}
+	for _, ev := range playEventList(t, rig) {
+		if _, ok := out[ev.Ev]; !ok {
+			out[ev.Ev] = ev
+		}
+	}
+	return out
+}
+
+// playEventList is the run's trace events in order.
+func playEventList(t *testing.T, rig *playRig) []trace.Event {
+	t.Helper()
+	tf, err := trace.Read(filepath.Join(rig.cfg.Out, rig.cfg.RunID+".jsonl"))
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	return tf.Events
+}
+
+// playEventCount is how many events of that name the trace holds.
+func playEventCount(t *testing.T, rig *playRig, name string) int {
+	t.Helper()
+	n := 0
+	for _, ev := range playEventList(t, rig) {
+		if ev.Ev == name {
+			n++
+		}
+	}
+	return n
+}
+
+// standWalks counts the walks that ended at the pull stand (the approach and the agent pull's own walk back).
+func standWalks(f *PlayFake) *int {
+	n := 0
+	f.OnWalk = func(f *PlayFake, to Vec3) {
+		if dist3(to, Vec3{40, 5, 0}) <= 0.5 {
+			n++
+		}
+	}
+	return &n
+}
+
+// TestAgentPullTankBlindStillBringsTheMob: the tank never sees the skull while it stands at its spawn, the refusal
+// steps are spent, and the agent pulls the skull itself: it swings at it, the mob turns on it, it walks back to the
+// pull stand, and the tank (which sees the mob once it stands beside it) takes it and the fight ends normally.
+func TestAgentPullTankBlindStillBringsTheMob(t *testing.T) {
+	rig := agentPullRig(t, spawnSight, nil)
+	stands := standWalks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the agent pulls the blind skull and the tank takes it)", res.Stop)
+	}
+	ev := playEvents(t, rig)
+	for _, name := range []string{"agent_pull", "agent_pull_engaged", "agent_pull_back"} {
+		if _, ok := ev[name]; !ok {
+			t.Fatalf("the trace has no %s event: %v", name, ev)
+		}
+	}
+	if !(ev["agent_pull"].T < ev["agent_pull_engaged"].T && ev["agent_pull_engaged"].T <= ev["agent_pull_back"].T) {
+		t.Fatalf("the agent pull's events are out of order: pull %d ms, engaged %d ms, back %d ms",
+			ev["agent_pull"].T, ev["agent_pull_engaged"].T, ev["agent_pull_back"].T)
+	}
+	if why, _ := ev["agent_pull"].D["why"].(string); why != "sight" {
+		t.Fatalf("agent_pull why = %q; want sight (the tank refused the skull's mark)", why)
+	}
+	if n, _ := ev["agent_pull"].D["refusals"].(float64); n < 1 {
+		t.Fatalf("agent_pull refusals = %v; want the tank's refusals counted", ev["agent_pull"].D["refusals"])
+	}
+	// The agent opened the pull with its own swing.
+	if len(rig.fake.agentAttacks) == 0 {
+		t.Fatalf("the agent never attacked the skull itself")
+	}
+	// The tank was ordered only once the mob stood within its engage distance of it (the line of sight from the tank
+	// passes there).
+	if yd, ok := ev["agent_pull_back"].D["tank_yd"].(float64); !ok || yd > PlayTankEngageYd {
+		t.Fatalf("agent_pull_back tank_yd = %v; want the mob within %.0f yd of the tank",
+			ev["agent_pull_back"].D["tank_yd"], PlayTankEngageYd)
+	}
+	// The approach and the agent pull's walk back both stood on the plan's stand.
+	if *stands < 2 {
+		t.Fatalf("the agent stood on the pull stand %d time(s); want the approach and the walk back", *stands)
+	}
+}
+
+// TestAgentPullUnreachableIsBounded: a skull beyond the group's pull distance from the stand cannot be fetched: the
+// agent's own pull stops right away (no walk, no swing) and the pull fails bounded, not after a walk into the instance.
+func TestAgentPullUnreachableIsBounded(t *testing.T) {
+	plan := playFightPlan()
+	// A stand 52 yd from the skull: the pull distance (20 yd) cannot cover the mob even inside the agent's reach.
+	plan.Legs[0].PullGroups[0].Approach = []dungeon.Point{{X: 40, Y: -30}}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(Vec3, Vec3) bool { return false }
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one bounded try", n)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none (the mob is out of the pull distance)", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing at a mob it cannot reach", rig.fake.agentAttacks)
+	}
+	// Bounded by the refusal's own time plus the agent pull's clocks, not by the run's.
+	ev := playEvents(t, rig)
+	if bound := PlayRefuseTime + time.Minute; ev["agent_pull"].T-ev["pull_refused"].T > int64(bound/time.Millisecond) {
+		t.Fatalf("the unreachable pull took %d ms from its first refusal; want under %v",
+			ev["agent_pull"].T-ev["pull_refused"].T, bound)
+	}
+}
+
+// TestAgentPullLowHealthNeverWalksIn: with the character under its health floor, the agent never walks into the mob:
+// it keeps to the party (back at the pull stand) and the pull fails bounded. It never stands and tanks.
+func TestAgentPullLowHealthNeverWalksIn(t *testing.T) {
+	rig := agentPullRig(t, spawnSight, func(f *PlayFake) {
+		f.SetSelfHP(300, 1000) // 30 per cent: under PlayAgentPullHP
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (a low agent does not pull)", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one bounded try", n)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none (a low agent never engages)", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing under its health floor", rig.fake.agentAttacks)
+	}
+	if d := dist3(rig.fake.SelfPos, Vec3{40, 5, 0}); d > PlayPullGatherYd+1 {
+		t.Fatalf("the agent ended %.1f yd from the pull stand; want it retreating to the party", d)
+	}
+}
+
+// TestAgentPullIsNotTheBossPull: a pack the tank cannot see is pulled by the agent itself; the leg's boss, which the
+// tank cannot see from its plan position, is not: the boss pull keeps its own flow and the run stops there.
+func TestAgentPullIsNotTheBossPull(t *testing.T) {
+	// The pack's mobs (x 38-42) are seen once they stand at the party's feet; the boss (x 60) never is.
+	bossBlind := func(from, to Vec3) bool { return to[0] < 55 && to[1] < 20 }
+	rig := agentPullRig(t, bossBlind, nil)
+	bossGUID := wire.GUID{}
+	if u, ok := rig.fake.UnitOf(200); ok {
+		bossGUID = u.GUID
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed at the boss (the agent's own pull is not the boss's)", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want only the pack's one", n)
+	}
+	ev := playEvents(t, rig)["agent_pull"]
+	if g, ok := ev.D["group"].(float64); !ok || int(g) != 0 {
+		t.Fatalf("agent_pull group = %v; want the pack's group 0", ev.D["group"])
+	}
+	if !bossGUID.IsZero() {
+		for _, g := range rig.fake.agentAttacks {
+			if g == bossGUID {
+				t.Fatalf("the agent attacked the boss itself; the boss pull keeps its own flow")
+			}
+		}
+	}
+}
+
+// TestAgentPullWaitsForTheTankOrder: a skull that already stands inside the agent's own reach is still the tank's
+// pull first (the Codex review of 2026-11-24): being near after the close-in walk is no fallback eligibility, so the
+// tank is ordered, answers, and the agent never opens the pull itself.
+func TestAgentPullWaitsForTheTankOrder(t *testing.T) {
+	plan := sightWallPlan()
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 8, 0}}) // 3.6 yd from the stand
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the tank's own pull)", res.Stop)
+	}
+	if playActionAt(rig.fake.Actions, ".bot attack Botone") < 0 {
+		t.Fatalf("the tank was never ordered: %v", rig.fake.Actions)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("agent_pull events = %d; want none (the tank would answer its order)", n)
+	}
+	if n := playEventCount(t, rig, "pull_refused"); n != 0 {
+		t.Fatalf("pull_refused events = %d; want the tank's order answered", n)
+	}
+}
+
+// TestAgentPullInReachSkipsTheRetries: a skull inside the agent's own reach after the tank's first explicit sight
+// refusal is not stepped closer to again: in reach only skips the REMAINING step-closer retries, never the first tank
+// order, and the agent pulls it from where it stands.
+func TestAgentPullInReachSkipsTheRetries(t *testing.T) {
+	plan := sightWallPlan()
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 8, 0}}) // 3.6 yd from the stand
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(Vec3, Vec3) bool { return false } // the core never sees it from the tank
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (the core never sees it from the tank, the boss pull included)", res.Stop)
+	}
+	// The pack pull's own order: one explicit refusal, then the agent's pull — never the other way round, and no
+	// step-closer retry (the mob stood inside the agent's reach). The boss pull after it refuses again; only the
+	// events before the agent's pull are this case's.
+	events := playEventList(t, rig)
+	pulled := -1
+	for i, ev := range events {
+		if ev.Ev == "agent_pull" {
+			pulled = i
+			break
+		}
+	}
+	if pulled < 0 {
+		t.Fatalf("the trace has no agent_pull")
+	}
+	refused, refusals, steps := -1, 0, 0
+	for i, ev := range events[:pulled] {
+		switch ev.Ev {
+		case "pull_refused":
+			refusals++
+			if refused < 0 {
+				refused = i
+			}
+		case "pull_step":
+			if b, ok := ev.D["refused"].(bool); ok && b {
+				steps++
+			}
+		}
+	}
+	if steps != 0 {
+		t.Fatalf("the refusal stepped %d time(s) before the agent's pull; want none (the mob stood in reach)", steps)
+	}
+	if refusals != 1 || refused < 0 {
+		t.Fatalf("refusals %d at %d before the agent's pull; want the one explicit refusal", refusals, refused)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one pull", n)
+	}
+	if why, _ := playEvents(t, rig)["agent_pull"].D["why"].(string); why != "reach" {
+		t.Fatalf("agent_pull why = %q; want reach", why)
+	}
+	if len(rig.fake.agentAttacks) == 0 {
+		t.Fatalf("the agent never attacked the refused skull")
+	}
+}
+
+// groupNoLeader stands in for a Group port the server answered without a leader once lose says so (the run's own
+// prepare needs the leader).
+type groupNoLeader struct {
+	GroupPort
+	lose *bool
+}
+
+func (g groupNoLeader) Leader() wire.GUID {
+	if *g.lose {
+		return wire.GUID{}
+	}
+	return g.GroupPort.Leader()
+}
+
+// groupSelfRow stands in for a Group port whose roster row of the leader is missing (drop) or has no maximum.
+type groupSelfRow struct {
+	GroupPort
+	drop bool
+}
+
+func (g groupSelfRow) Roster() []PartyMember {
+	lead := g.GroupPort.Leader()
+	out := make([]PartyMember, 0, len(g.GroupPort.Roster()))
+	for _, m := range g.GroupPort.Roster() {
+		if m.GUID == lead {
+			if g.drop {
+				continue
+			}
+			m.MaxHP = 0
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// TestAgentPullUnknownHealthFailsClosed: the agent's own strength is not known (no leader, no roster row, no maximum):
+// unknown is not safe, so the agent never walks in or swings, and the run ends pull-failed with the reason recorded.
+func TestAgentPullUnknownHealthFailsClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		wrap func(g GroupPort, lose *bool) GroupPort
+	}{
+		{"missing leader", func(g GroupPort, lose *bool) GroupPort { return groupNoLeader{GroupPort: g, lose: lose} }},
+		{"missing row", func(g GroupPort, _ *bool) GroupPort { return groupSelfRow{GroupPort: g, drop: true} }},
+		{"zero max health", func(g GroupPort, _ *bool) GroupPort { return groupSelfRow{GroupPort: g} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := agentPullRig(t, spawnSight, nil)
+			var lose bool
+			// The first tank order is the pull's own: from then on the server no longer answers a leader.
+			rig.fake.OnUnits = func(f *PlayFake) {
+				if _, ok := f.Line(".bot attack Botone"); ok {
+					lose = true
+				}
+			}
+			rig.ports.Group = tc.wrap(rig.fake, &lose)
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "pull-failed" {
+				t.Fatalf("stop = %q; want pull-failed (unknown health is not safe to pull)", res.Stop)
+			}
+			if len(rig.fake.agentAttacks) != 0 {
+				t.Fatalf("the agent attacked %v; want no swing with unknown health", rig.fake.agentAttacks)
+			}
+			if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+				t.Fatalf("agent_pull events = %d; want the one pull that failed", n)
+			}
+			if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+				t.Fatalf("agent_pull_engaged events = %d; want none", n)
+			}
+			failed := playEvents(t, rig)["agent_pull_failed"]
+			if failed.Ev == "" {
+				t.Fatalf("the trace has no agent_pull_failed event")
+			}
+			if why, _ := failed.D["reason"].(string); why != "health-unknown" {
+				t.Fatalf("agent_pull_failed reason = %q; want health-unknown", why)
+			}
+		})
+	}
+}
+
+// TestAgentPullNeighbourAssists: the server's social aggro answers the agent's own swing too (the fake now models it):
+// a neighbour of the hit mob inside the assist radius joins, the pair is fought at the pull stand, the neighbour is
+// the pull's add, and the agent never walks further than the plan's pull distance from the stand.
+func TestAgentPullNeighbourAssists(t *testing.T) {
+	neighbour := fightGUID(9)
+	plan := sightWallPlan()
+	plan.Legs[0].Boss = nil // the boss walk would be a walk of its own, past the pack's pull
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.AddUnit(Unit{GUID: neighbour, Entry: 11321, Pos: Vec3{44, 24, 0}}) // 2.8 yd from the skull
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = spawnSight
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	stand := Vec3{40, 5, 0}
+	far := 0.0
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if d := dist3(to, stand); d > far {
+			far = d
+		}
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the agent pulls the skull, the neighbour follows and both are fought)", res.Stop)
+	}
+	if far > PlayPullYd+0.01 {
+		t.Fatalf("the agent walked %.1f yd from the stand; want no further than the pull distance %.0f", far, PlayPullYd)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one pull", n)
+	}
+	if len(res.Summary.Pulls) == 0 {
+		t.Fatal("the fight left no pull record")
+	}
+	if got := res.Summary.Pulls[0].Adds; got != 1 {
+		t.Fatalf("the pull's adds = %d; want the assisting neighbour counted", got)
+	}
+	if u, ok := rig.fake.UnitOf(11321); !ok || !u.Dead {
+		t.Fatalf("the neighbour = %+v; want it brought by the agent's hit and killed at the stand", u)
+	}
+}

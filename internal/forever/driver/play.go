@@ -104,6 +104,10 @@ type PlayLimits struct {
 	Recover    time.Duration // one wipe's whole recovery, before the run ends unrecovered
 	CorpseWord time.Duration // between the release whispers and the corpse-run ones
 	Loot       time.Duration // the loot of one fight
+	// PullReach is how long the agent's own pull may spend walking to the mob, and PullBack how long it may spend
+	// bringing it back to the party: the agent pulls the skull itself when the tank's sight never passes (#88).
+	PullReach time.Duration
+	PullBack  time.Duration
 	// BossHealMana and BossTankHP are the pre-boss gate's floors, per cent: a party still short after both rest windows
 	// may be pulled at the healer's mana and the tank's health, or not at all (`boss-not-ready`). The gate fails
 	// closed: a tank or healer missing from the roster, dead, a ghost, or without a readable bar is a deficiency too.
@@ -139,6 +143,8 @@ func DefaultPlayLimits() PlayLimits {
 		Recover:      10 * time.Minute,
 		CorpseWord:   10 * time.Second,
 		Loot:         10 * time.Second,
+		PullReach:    20 * time.Second,
+		PullBack:     20 * time.Second,
 		BossHealMana: 50,
 		BossTankHP:   70,
 	}
@@ -222,6 +228,12 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	if l.Loot == 0 {
 		l.Loot = d.Loot
 	}
+	if l.PullReach == 0 {
+		l.PullReach = d.PullReach
+	}
+	if l.PullBack == 0 {
+		l.PullBack = d.PullBack
+	}
 	if l.BossHealMana == 0 {
 		l.BossHealMana = d.BossHealMana
 	}
@@ -293,9 +305,11 @@ type playRun struct {
 	// gateStatsErr records the pre-boss gate's first failed member-stats request (the wait's own error is recorded once).
 	gateStatsErr bool
 	// refused is set when the last engage's tank order was refused by the module (its whisper), and refusedOut when
-	// engageSeen spent its bounds on refusals: the pull stops then.
+	// engageSeen spent its bounds on refusals: the pull stops then. reachedOut says the bounds ended because the skull
+	// already stood inside the agent's own reach (the remaining step-closer retries were skipped).
 	refused    bool
 	refusedOut bool
+	reachedOut bool
 
 	stopReason string
 	lost       bool
@@ -321,6 +335,12 @@ type playRun struct {
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool
+	// pullStand is the plan's pull stand for the group in hand: the agent's own pull never walks further than
+	// PlayPullYd beyond it. agentPulled and agentPulledUnit remember the group and the stranger whose own pull the
+	// agent already made: at most one per group.
+	pullStand       Vec3
+	agentPulled     map[int]bool
+	agentPulledUnit map[wire.GUID]bool
 	// stranger is the unit the patrol hold pulled as its own pull (a live hostile the plan does not know that stands
 	// in the way): the pull's own marks, sight stand and bounds, and the leg goes on after it.
 	stranger wire.GUID
@@ -398,6 +418,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		farSince: map[string]time.Time{}, farStopAt: map[string]time.Time{}, farStage: map[string]int{},
 		farSummon: newSummonWaiter(), bosses: map[string]bool{},
 		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, encStarted: map[uint32]bool{}, bossEnc: map[uint32]bool{},
+		agentPulled: map[int]bool{}, agentPulledUnit: map[wire.GUID]bool{},
 		strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, strangerRetry: map[wire.GUID]time.Time{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
