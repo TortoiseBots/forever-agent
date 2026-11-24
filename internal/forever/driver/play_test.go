@@ -344,6 +344,56 @@ func TestPlayStragglerFollowThenSummon(t *testing.T) {
 	}
 }
 
+// TestPlayWaitNearSummonCooldownRetries: a summon refused on-cooldown at 90 s waits out the cooldown (bounded by
+// SummonWait) and summons again instead of stopping straggler at 150 s (9a).
+func TestPlayWaitNearSummonCooldownRetries(t *testing.T) {
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.Stuck["botfour"] = true
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			f.GoldenOwner.Bots[3].Map = 999
+			f.GoldenOwner.Bots[3].SummonCooldownUntil = f.Clock.Now().Add(200 * time.Second)
+			f.BotPos["botfour"] = Vec3{f.SelfPos[0] + 100, f.SelfPos[1], f.SelfPos[2]}
+			f.OnWalk = nil
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear after waiting out summon cooldown", res.Stop)
+	}
+	summons := rig.fake.Lines(".bot summon Botfour")
+	if len(summons) != 2 {
+		t.Fatalf("summons = %v; want 2 (initial refusal then retry after cooldown)", summons)
+	}
+}
+
+// TestPlayWaitNearSummonInCombatRetries: a summon refused in-combat waits until combat ends and retries instead of
+// stopping straggler at 150 s (9a).
+func TestPlayWaitNearSummonInCombatRetries(t *testing.T) {
+	mob := fightGUID(41)
+	rig := newPlayRig(t, func(f *PlayFake) {
+		f.Stuck["botfour"] = true
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			f.GoldenOwner.Bots[3].Map = 999
+			f.GoldenOwner.Bots[3].InCombat = true
+			f.BotPos["botfour"] = Vec3{f.SelfPos[0] + 100, f.SelfPos[1], f.SelfPos[2]}
+			f.AddUnit(Unit{GUID: mob, Entry: 700, Pos: Vec3{200, 0, 0}, Combat: true, Target: f.botGUID("Botfour")})
+			f.Clock.After(165*time.Second, func() {
+				f.GoldenOwner.Bots[3].InCombat = false
+				f.RemoveUnit(mob)
+			})
+			f.OnWalk = nil
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear after combat ends", res.Stop)
+	}
+	summons := rig.fake.Lines(".bot summon Botfour")
+	if len(summons) < 2 {
+		t.Fatalf("summons = %v; want retry after combat ends", summons)
+	}
+}
+
 // TestPlaySendsOnlyBotLines: the one send gate admits a bot-commands v1 line and the two whisper words, nothing else.
 func TestPlaySendsOnlyBotLines(t *testing.T) {
 	p := &playRun{}

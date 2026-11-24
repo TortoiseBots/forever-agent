@@ -21,6 +21,7 @@ type OwnerBot struct {
 	InParty             bool
 	Map                 uint32
 	SummonCooldownUntil time.Time
+	InCombat            bool
 	Dead                bool
 	// Ghost is set for a dead bot that released: it is at the spirit healer until the whisper `corpse run` brings it
 	// back (B-6).
@@ -174,6 +175,8 @@ func (o *GoldenOwner) Summon(ctx context.Context, name string) (botcmd.Reply, er
 		return o.refuse(botcmd.VerbSummon, bot, "not-in-group", "it is not in your group")
 	case b.Dead:
 		return o.refuse(botcmd.VerbSummon, bot, "dead", "it is dead")
+	case b.InCombat:
+		return o.refuse(botcmd.VerbSummon, bot, "in-combat", "it is in combat")
 	case b.Map == o.SelfMap:
 		return o.refuse(botcmd.VerbSummon, bot, "already-on-map", "it is already on your map")
 	case o.Clock != nil && !b.SummonCooldownUntil.IsZero() && o.Clock.Now().Before(b.SummonCooldownUntil):

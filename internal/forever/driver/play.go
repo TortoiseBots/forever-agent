@@ -322,9 +322,11 @@ type playRun struct {
 	pullSet []wire.GUID
 	skull   wire.GUID
 
-	// farSince and farStage are the straggler timers, by normalised bot name.
-	farSince map[string]time.Time
-	farStage map[string]int
+	// farSince, farStopAt, farStage and farSummon are the straggler timers, by normalised bot name.
+	farSince  map[string]time.Time
+	farStopAt map[string]time.Time
+	farStage  map[string]int
+	farSummon summonWaiter
 
 	// bosses is the clear's evidence: every plan boss, dead or not.
 	bosses map[string]bool
@@ -364,7 +366,8 @@ type playRun struct {
 func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *Result {
 	p := &playRun{
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
-		farSince: map[string]time.Time{}, farStage: map[string]int{}, bosses: map[string]bool{},
+		farSince: map[string]time.Time{}, farStopAt: map[string]time.Time{}, farStage: map[string]int{},
+		farSummon: newSummonWaiter(), bosses: map[string]bool{},
 		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
@@ -1056,10 +1059,131 @@ func (p *playRun) packInWay() (int, bool) {
 	return best, best >= 0
 }
 
+// summonWaiter tracks per-bot summon retries across on-cooldown and in-combat refusals.
+type summonWaiter struct {
+	stage       map[string]int
+	retryAt     map[string]time.Time
+	cooldown    map[string]bool
+	combatUntil map[string]time.Time
+}
+
+func newSummonWaiter() summonWaiter {
+	return summonWaiter{
+		stage:       map[string]int{},
+		retryAt:     map[string]time.Time{},
+		cooldown:    map[string]bool{},
+		combatUntil: map[string]time.Time{},
+	}
+}
+
+func (w *summonWaiter) clear() {
+	clear(w.stage)
+	clear(w.retryAt)
+	clear(w.cooldown)
+	clear(w.combatUntil)
+}
+
+func (w *summonWaiter) forget(name string) {
+	delete(w.stage, name)
+	delete(w.retryAt, name)
+	delete(w.cooldown, name)
+	delete(w.combatUntil, name)
+}
+
+// summonRetryEvery spaces the summon attempts while the module keeps refusing one: an in-combat bot whose fight the
+// agent's own view does not show still says in-combat, and a command per poll tick would flood the channel.
+const summonRetryEvery = 5 * time.Second
+
+// step attempts or advances one summon retry for name, extending *extendUntil when waiting on a cooldown or combat.
+// It returns false if a fatal error stopped the run.
+func (w *summonWaiter) step(p *playRun, ctx context.Context, name string, now time.Time, arriveWindow time.Duration, extendUntil *time.Time) bool {
+	if w.stage[name] >= 2 {
+		return true
+	}
+	extend := func(until time.Time) {
+		if extendUntil != nil && until.After(*extendUntil) {
+			*extendUntil = until
+		}
+	}
+	if until := w.retryAt[name]; !until.IsZero() {
+		if now.Before(until) {
+			extend(until.Add(arriveWindow))
+			return true
+		}
+		w.retryAt[name] = time.Time{}
+	}
+	if w.stage[name] == 1 && !w.combatUntil[name].IsZero() {
+		if !now.Before(w.combatUntil[name]) {
+			w.stage[name] = 2
+			return true
+		}
+		if p.inCombat() {
+			// The party is still fighting: the summon can only be refused, so spare the command channel.
+			extend(now.Add(arriveWindow))
+			return true
+		}
+	}
+	rep, err := p.summon(ctx, name)
+	if p.fatal(err) {
+		return false
+	}
+	switch {
+	case err == nil:
+		w.stage[name] = 2
+		if w.cooldown[name] || !w.combatUntil[name].IsZero() {
+			extend(now.Add(arriveWindow))
+		}
+	case errors.Is(err, botcmd.ErrRefused) && rep.Code == "on-cooldown" && !w.cooldown[name]:
+		w.cooldown[name] = true
+		w.stage[name] = 1
+		until := now.Add(p.lim.SummonWait)
+		w.retryAt[name] = until
+		w.combatUntil[name] = time.Time{}
+		p.rec.Event(now, "summon_cooldown", map[string]any{"bot": p.slot(name)})
+		extend(until.Add(arriveWindow))
+	case errors.Is(err, botcmd.ErrRefused) && rep.Code == "in-combat":
+		if w.combatUntil[name].IsZero() {
+			w.combatUntil[name] = now.Add(p.lim.Fight)
+			p.rec.Event(now, "summon_combat", map[string]any{"bot": p.slot(name)})
+		}
+		if now.Before(w.combatUntil[name]) {
+			w.stage[name] = 1
+			w.retryAt[name] = now.Add(summonRetryEvery)
+			extend(now.Add(arriveWindow))
+		} else {
+			w.stage[name] = 2
+		}
+	default:
+		w.stage[name] = 2
+	}
+	return true
+}
+
+// inCombat reports whether the party is currently seen in combat.
+func (p *playRun) inCombat() bool {
+	for _, u := range p.ports.World.Units() {
+		if u.Dead {
+			continue
+		}
+		if !u.Friendly && p.partyMember(u.Target) {
+			return true
+		}
+		if u.Combat && p.partyMember(u.GUID) {
+			return true
+		}
+	}
+	return false
+}
+
 // waitNear waits until every bot stands within yd of the agent on its map. A far bot gets one follow at followAt, one
-// summon at summonAt (none when it is not positive: the portal's walk is inside the party's follow) and ends the run
-// at stopAt. It reports whether the party is near (false when the run stopped or the context ended).
+// summon at summonAt (none when it is not positive: the portal's walk is inside the party's follow), waits out a
+// cooldown or in-combat refusal, and ends the run at stopAt. It reports whether the party is near (false when the run
+// stopped or the context ended).
 func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, stopAt time.Duration) bool {
+	arriveWindow := p.lim.SummonArrive
+	if d := stopAt - summonAt; summonAt > 0 && d > arriveWindow {
+		arriveWindow = d
+	}
 	for {
 		if p.timeUp() {
 			p.stop("time")
@@ -1068,24 +1192,29 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 		far := p.farBots(yd)
 		if len(far) == 0 {
 			clear(p.farSince)
+			clear(p.farStopAt)
 			clear(p.farStage)
+			p.farSummon.clear()
 			return true
 		}
 		// A bot that came back starts its timers afresh the next time it falls behind.
 		for _, name := range p.cfg.Bots {
 			if !slices.Contains(far, name) {
 				delete(p.farSince, name)
+				delete(p.farStopAt, name)
 				delete(p.farStage, name)
+				p.farSummon.forget(name)
 			}
 		}
 		now := p.now()
 		for _, name := range far {
 			if p.farSince[name].IsZero() {
 				p.farSince[name] = now
+				p.farStopAt[name] = now.Add(stopAt)
 				p.rec.Event(now, "straggler", map[string]any{"bot": p.slot(name)})
 			}
 			d := now.Sub(p.farSince[name])
-			if d >= stopAt {
+			if !now.Before(p.farStopAt[name]) {
 				p.stop("straggler")
 				return false
 			}
@@ -1095,11 +1224,12 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 				}
 				p.farStage[name] = 1
 			}
-			if summonAt > 0 && d >= summonAt && p.farStage[name] < 2 {
-				if _, err := p.summon(ctx, name); p.fatal(err) {
+			if summonAt > 0 && d >= summonAt {
+				stopDeadline := p.farStopAt[name]
+				if !p.farSummon.step(p, ctx, name, now, arriveWindow, &stopDeadline) {
 					return false
 				}
-				p.farStage[name] = 2
+				p.farStopAt[name] = stopDeadline
 			}
 		}
 		if !p.sleep(ctx, p.lim.Poll) {

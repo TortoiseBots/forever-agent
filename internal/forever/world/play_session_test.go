@@ -20,6 +20,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
 	"github.com/pjerra/forever-agent/internal/forever/death"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/loot"
+	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -670,6 +672,22 @@ func TestPlaySessionGossipWithoutTheUnitFails(t *testing.T) {
 	}
 }
 
+func TestPlaySessionGossipMenuTimeoutReturnsErrNoGossipMenu(t *testing.T) {
+	s, _ := newPlaySession(t)
+	guid := unitGUID(31)
+	// The mover stands at (10,20,30): the NPC is within the 4-yd interaction reach, so the open gets as far as the
+	// menu wait.
+	u, err := objects.ParseUpdateObject(fakeUnitCreateBlock(fakePackedGUID(guid), 389, 12, 21, 30, 7, 4001, 100, 100, 5, npc.NPCFlagGossip))
+	if err != nil {
+		t.Fatalf("create NPC: %v", err)
+	}
+	s.world.Apply(u, time.Now())
+	p := newPlayPlayer(context.Background(), s)
+	if err := p.Gossip(context.Background(), 4001, 0); !errors.Is(err, driver.ErrNoGossipMenu) {
+		t.Fatalf("Gossip on menu timeout = %v; want driver.ErrNoGossipMenu", err)
+	}
+}
+
 func TestPlaySessionBindsAllSixPorts(t *testing.T) {
 	s, _ := newPlaySession(t)
 	ports := newPlayPorts(context.Background(), s)
@@ -695,5 +713,123 @@ func TestPlayRefusalsCountTheModulesSightWhisper(t *testing.T) {
 	}
 	if got := port.SightRefusals("Ppri"); got != 0 {
 		t.Fatalf("Ppri's refusals = %d; want 0", got)
+	}
+}
+
+func TestPlaySessionOwnerRetriesOnceOnUnrelatedChatNoReply(t *testing.T) {
+	s, sc := newPlaySession(t)
+	attempts := 0
+	sc.onSay = func(text string) {
+		attempts++
+		if text == ".bot follow Botone" {
+			if attempts == 1 {
+				// Unrelated system line fills the collector and closes on the quiet window without the .bot reply.
+				sc.sys("Something unrelated happened")
+				return
+			}
+			sc.sys("TortoiseBots: follow Botone: ok following you")
+		}
+	}
+	o := newPlayOwner(s)
+	rep, err := o.Follow(context.Background(), "Botone")
+	if err != nil {
+		t.Fatalf("Follow after one unrelated-chat no-reply = %v; want retry success", err)
+	}
+	if !rep.OK || attempts != 2 {
+		t.Fatalf("rep=%+v attempts=%d; want OK on 2nd attempt", rep, attempts)
+	}
+	// If the retry also gets no reply, it still returns ErrNoReply after 2 attempts.
+	attempts = 0
+	sc.onSay = func(string) {
+		attempts++
+		sc.sys("Still unrelated")
+	}
+	if _, err := o.Follow(context.Background(), "Botone"); !errors.Is(err, botcmd.ErrNoReply) || attempts != 2 {
+		t.Fatalf("persistent no-reply: err=%v attempts=%d; want ErrNoReply after 2 attempts", err, attempts)
+	}
+}
+
+func TestPlaySessionGroupMarkRetriesAndIsNonFatal(t *testing.T) {
+	s, sc := newPlaySession(t)
+	partyScene(t, s)
+	prev := groupConfirmWait
+	groupConfirmWait = 30 * time.Millisecond
+	t.Cleanup(func() { groupConfirmWait = prev })
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	target := unitGUID(7)
+
+	// Missed echo on first try, confirmed on retry.
+	markSends := 0
+	sc.on[wire.CMSGUpdateRaidTarget] = func([]byte) {
+		markSends++
+		if markSends == 2 {
+			s.party.MarkUpdates++
+			s.party.Marks[party.MarkSkull] = target
+		}
+	}
+	if err := g.Mark(target, party.MarkSkull); err != nil {
+		t.Fatalf("Mark with retry echo = %v; want nil", err)
+	}
+	if markSends != 2 {
+		t.Fatalf("markSends = %d; want 2", markSends)
+	}
+
+	// Missed echo on both tries with live link: non-fatal.
+	sc.on[wire.CMSGUpdateRaidTarget] = func([]byte) {}
+	before := sc.count(wire.CMSGUpdateRaidTarget)
+	if err := g.Mark(target, party.MarkCross); err != nil {
+		t.Fatalf("Mark with unconfirmed echo = %v; want nil (non-fatal)", err)
+	}
+	if got := sc.count(wire.CMSGUpdateRaidTarget) - before; got != 2 {
+		t.Fatalf("sent %d mark packets on double miss; want 2", got)
+	}
+
+	// Dead link must remain fatal.
+	s.setLinkDead(sideInstance, errors.New("gone"))
+	if err := g.Mark(target, party.MarkSkull); !errors.Is(err, driver.ErrLinkLost) {
+		t.Fatalf("Mark on dead link = %v; want driver.ErrLinkLost", err)
+	}
+}
+
+func TestPlaySessionLootAutoClosedWindowRetriesAndIsNonFatal(t *testing.T) {
+	prev := lootReleaseWait
+	lootReleaseWait = 30 * time.Millisecond
+	t.Cleanup(func() { lootReleaseWait = prev })
+
+	// Case 1: server sends SMSG_LOOT_RELEASE_ALL when the item is taken (auto-closed window).
+	s, sc := newPlaySession(t)
+	corpse := unitGUID(21)
+	addUnitOnMap(t, s, corpse, 389, 10, 22, 30, 0, 40, unitDynFlagLootable)
+	lootGUID := wire.GUID{Low: 0x900, High: 15 << 58}
+	sc.on[wire.CMSGLootUnit] = func([]byte) {
+		sc.serverEvent(wire.SMSGLootResponse, fakeLootWindow(corpse, lootGUID, 2, 0, []fakeItemDef{{listID: 0, itemID: 2589, count: 1, uiType: loot.SlotAllowLoot}}))
+	}
+	sc.on[wire.CMSGLootItem] = func([]byte) {
+		sc.serverEvent(wire.SMSGLootRemoved, fakeRemoved(corpse, lootGUID, 0))
+		sc.serverEvent(wire.SMSGLootReleaseAll, nil)
+	}
+	p := newPlayPlayer(context.Background(), s)
+	if err := p.Loot(context.Background(), corpse); err != nil {
+		t.Fatalf("Loot with SMSG_LOOT_RELEASE_ALL = %v; want nil", err)
+	}
+	// The server's ReleaseAll may land just before or just after the client's own release of the emptied window;
+	// either way the auto-close is not an error and it forces no second release.
+	if got := sc.count(wire.CMSGLootRelease); got > 1 {
+		t.Fatalf("sent CMSG_LOOT_RELEASE %d times after SMSG_LOOT_RELEASE_ALL; want at most 1", got)
+	}
+
+	// Case 2: window auto-closed silently (no SMSG_LOOT_RELEASE): the release is retried once, then the target's
+	// cleanup release gives the window back once more; all three go unanswered and the run still goes on.
+	s2, sc2 := newPlaySession(t)
+	addUnitOnMap(t, s2, corpse, 389, 10, 22, 30, 0, 40, unitDynFlagLootable)
+	sc2.on[wire.CMSGLootUnit] = func([]byte) {
+		sc2.serverEvent(wire.SMSGLootResponse, fakeLootWindow(corpse, lootGUID, 2, 0, nil))
+	}
+	p2 := newPlayPlayer(context.Background(), s2)
+	if err := p2.Loot(context.Background(), corpse); err != nil {
+		t.Fatalf("Loot with unconfirmed release = %v; want nil (non-fatal)", err)
+	}
+	if got := sc2.count(wire.CMSGLootRelease); got != 3 {
+		t.Fatalf("CMSG_LOOT_RELEASE count = %d; want 3 (initial, one retry, one cleanup)", got)
 	}
 }

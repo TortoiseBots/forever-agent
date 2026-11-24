@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
@@ -487,5 +488,76 @@ func TestPlayBotRezByHealerSkipsWhispers(t *testing.T) {
 	}
 	if whispers := playWhispers(rig.fake); len(whispers) != 0 {
 		t.Fatalf("whispers = %v; want none while the healer raises the bot itself", whispers)
+	}
+}
+
+// TestPlayWipeFollowsAndSummonsFarRevivedBots: after a wipe, bots that revive alive but far away (or on another map,
+// including one whose summon is on cooldown) are told to follow and summoned so recovery finishes instead of timing out
+// wipe-unrecovered (9b).
+func TestPlayWipeFollowsAndSummonsFarRevivedBots(t *testing.T) {
+	wiped := false
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+		f.NoAnswer["botthree"] = true
+		f.NoAnswer["botfour"] = true
+		f.OnFightTick = func(f *PlayFake) {
+			if wiped {
+				return
+			}
+			wiped = true
+			playWipe(f)
+			// Both bots revive alive outside the instance 25 s later; Botthree's summon is on cooldown for 40 s.
+			f.Clock.After(25*time.Second, func() {
+				b3 := f.GoldenOwner.Bots[2]
+				b3.Dead, b3.Ghost, b3.Map = false, false, f.Route.Portal.Map
+				b3.SummonCooldownUntil = f.Clock.Now().Add(40 * time.Second)
+				f.BotPos["botthree"] = Vec3{200, 0, 0}
+
+				b4 := f.GoldenOwner.Bots[3]
+				b4.Dead, b4.Ghost, b4.Map = false, false, f.Route.Portal.Map
+				f.BotPos["botfour"] = Vec3{200, 0, 0}
+			})
+		}
+	})
+	rig.cfg.Limits.SummonWait = 45 * time.Second
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear after following and summoning far revived bots", res.Stop, res.Clear)
+	}
+	if _, ok := rig.fake.Line(".bot follow Botfour"); !ok {
+		t.Fatal("Botfour was never ordered to follow after reviving")
+	}
+	if _, ok := rig.fake.Line(".bot summon Botfour"); !ok {
+		t.Fatal("Botfour was never summoned after reviving on another map")
+	}
+	if summons := rig.fake.Lines(".bot summon Botthree"); len(summons) != 2 {
+		t.Fatalf("Botthree summons = %v; want 2 (cooldown refusal then retry)", summons)
+	}
+}
+
+// TestPlayLootErrorRetriesOnceAndContinues: a transient or persistent non-ErrCannotLoot loot failure retries once and
+// goes on to the remaining corpses instead of stopping the run "loot" (9d).
+func TestPlayLootErrorRetriesOnceAndContinues(t *testing.T) {
+	first, second := fightGUID(1), fightGUID(2)
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: first, Entry: 11320, Pos: Vec3{38, 8, 0}, Dead: true, HP: 0})
+		f.AddUnit(Unit{GUID: second, Entry: 11320, Pos: Vec3{40, 10, 0}, Dead: true, HP: 0})
+		f.LootFail = map[wire.GUID]int{first: 1, second: 5}
+		f.SpawnBosses()
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear (loot errors must be non-fatal)", res.Stop, res.Clear)
+	}
+	lootedFirst := false
+	for _, g := range rig.fake.Looted {
+		if g == first {
+			lootedFirst = true
+		}
+	}
+	if !lootedFirst {
+		t.Fatalf("looted = %v; want first corpse looted after one retry", rig.fake.Looted)
 	}
 }

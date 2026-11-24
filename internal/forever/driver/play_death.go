@@ -292,6 +292,8 @@ func (p *playRun) wipe(ctx context.Context) string {
 			return ""
 		}
 	}
+	followed := map[string]bool{}
+	summoner := newSummonWaiter()
 	for {
 		if p.allRecovered() {
 			p.rec.Event(p.now(), "recovered", map[string]any{"seconds": p.now().Sub(started).Seconds()})
@@ -304,6 +306,21 @@ func (p *playRun) wipe(ctx context.Context) string {
 		if !p.now().Before(deadline) {
 			p.stop("wipe-unrecovered")
 			return ""
+		}
+		if len(p.downBots()) == 0 {
+			now := p.now()
+			for _, name := range p.farBots(PlayRecoverYd) {
+				if !followed[name] {
+					if _, err := p.follow(ctx, name); p.fatal(err) {
+						return ""
+					}
+					followed[name] = true
+					continue
+				}
+				if !summoner.step(p, ctx, name, now, p.lim.SummonArrive, nil) {
+					return ""
+				}
+			}
 		}
 		if !p.sleep(ctx, p.lim.Poll) {
 			return ""
@@ -327,16 +344,21 @@ func (p *playRun) loot(ctx context.Context) string {
 			break
 		}
 		p.looted[u.GUID] = true
-		switch err := p.ports.Player.Loot(ctx, u.GUID); {
+		var err error
+		for attempt := range 2 {
+			err = p.ports.Player.Loot(ctx, u.GUID)
+			if err == nil || errors.Is(err, ErrCannotLoot) || errors.Is(err, ErrLinkLost) {
+				break
+			}
+			p.rec.Event(p.now(), "loot_error", map[string]any{"entry": u.Entry, "attempt": attempt + 1, "error": err.Error()})
+		}
+		switch {
 		case err == nil:
 			p.rec.Event(p.now(), "loot", map[string]any{"entry": u.Entry})
 		case errors.Is(err, ErrCannotLoot):
 			p.rec.Event(p.now(), "loot_refused", map[string]any{"entry": u.Entry})
 		case errors.Is(err, ErrLinkLost):
 			p.linkLost()
-			return ""
-		default:
-			p.stop("loot")
 			return ""
 		}
 	}

@@ -99,6 +99,10 @@ const (
 	actSubmenuWait = time.Second
 )
 
+// errActNoMenu is actOpen's answer when the server sent neither a menu nor a quest answer: the NPC opened nothing.
+// A plan step retries it (a menu may lag the event that adds its option), so it is named rather than only worded.
+var errActNoMenu = errors.New("world: the NPC opened no menu")
+
 // ActStep is one parsed `--step 'verb k=v'` line.
 type ActStep struct {
 	Verb string
@@ -679,9 +683,9 @@ func (s *session) actOpen(ctx context.Context, a *actState, step ActStep) error 
 	}
 	if !found {
 		if useQuestHello {
-			return s.actFail(a, step, fmt.Errorf("no quest answer within %s (the core sends nothing when this character has no quest to take or turn in here: Player.cpp SendPreparedQuest returns on an empty quest menu)", actMenuWait))
+			return s.actFail(a, step, fmt.Errorf("no quest answer within %s (the core sends nothing when this character has no quest to take or turn in here: Player.cpp SendPreparedQuest returns on an empty quest menu): %w", actMenuWait, errActNoMenu))
 		}
-		return s.actFail(a, step, fmt.Errorf("no gossip menu within %s", actMenuWait))
+		return s.actFail(a, step, fmt.Errorf("no gossip menu within %s: %w", actMenuWait, errActNoMenu))
 	}
 	a.menuNPC = !useQuestHello
 	if menu == nil && quests == nil {

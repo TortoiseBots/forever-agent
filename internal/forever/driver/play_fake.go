@@ -77,10 +77,12 @@ type PlayFake struct {
 	objects     []PlayObject
 	UseNoChange map[uint32]bool
 	// GossipMissing is how many talks answer a menu without the plan's option (ErrNoGossipOption) before the menu has
-	// it, and GossipErr answers every talk instead.
-	GossipMissing int
-	GossipErr     error
-	epoch         uint64
+	// it, GossipMenuTimeout is how many talks time out waiting for the menu (ErrNoGossipMenu), and GossipErr answers
+	// every talk instead.
+	GossipMissing     int
+	GossipMenuTimeout int
+	GossipErr         error
+	epoch             uint64
 
 	// Actions is every port call the fake can see, in order and on the run's clock: the `.bot` lines and the group
 	// commands (as "loot-method", "mark" and "disband"). Walks is every polyline the walker was given.
@@ -104,9 +106,11 @@ type PlayFake struct {
 	Looted      []wire.GUID
 	LootRefused []wire.GUID
 	Votes       []PlayVote
-	// Rolls is the items whose roll is open on a corpse, and NoLoot the corpses the character may not loot.
-	Rolls  map[wire.GUID][]string
-	NoLoot map[wire.GUID]bool
+	// Rolls is the items whose roll is open on a corpse, NoLoot the corpses the character may not loot, and
+	// LootFail how many times Loot on that corpse answers a transient non-ErrCannotLoot error.
+	Rolls    map[wire.GUID][]string
+	NoLoot   map[wire.GUID]bool
+	LootFail map[wire.GUID]int
 	// Released and Rezzed are the character's own release and accept, Declined the offers it refused. Offer is the
 	// resurrect offer that is up, if any.
 	Released bool
@@ -824,6 +828,10 @@ func (f *PlayFake) DeclineRez() error {
 // Loot opens one corpse: a corpse the character may not loot answers ErrCannotLoot, and every roll open on the one it
 // opens is answered greed (D-9).
 func (f *PlayFake) Loot(ctx context.Context, guid wire.GUID) error {
+	if f.LootFail[guid] > 0 {
+		f.LootFail[guid]--
+		return fmt.Errorf("loot failed for %s", guid)
+	}
 	if f.NoLoot[guid] {
 		f.LootRefused = append(f.LootRefused, guid)
 		return ErrCannotLoot
@@ -857,6 +865,10 @@ func (f *PlayFake) Gossip(ctx context.Context, entry uint32, option int) error {
 	f.Gossips = append(f.Gossips, option)
 	if f.GossipErr != nil {
 		return f.GossipErr
+	}
+	if f.GossipMenuTimeout > 0 {
+		f.GossipMenuTimeout--
+		return ErrNoGossipMenu
 	}
 	if f.GossipMissing > 0 {
 		f.GossipMissing--
