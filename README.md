@@ -967,6 +967,7 @@ It reads the slot's token file itself and prints only the call's `result`. See
 - Fight with data: rotations, tactics, the brain: [combat](docs/okf/combat/index.md).
 - Watch it live, record and score it: [observability](docs/okf/observability/index.md).
 - Watch a battleground (WSG/AB queue, passive observer, score/flag/node record, report card): `forever-agent forever bg-watch --map wsg|ab [--dry]` (see [BG-A1 notes](docs/forever/BG-A1-NOTES.md)).
+- Check a navmesh path for water, offline: `go run ./cmd/liqcheck <navmesh dir> x y z [x y z ...]` plans each leg on map 43 and reports its wet points (first point, liquid level) and the dry, water-avoiding plan beside it; `go run ./cmd/wcwet <navmesh dir> <walk.tsv> [-tsv]` does the same for every leg of a walk's TSV (first wet point, surface, ground, depth). Neither needs a server or a capture.
 
 - Check a Forever run before it starts: `forever-agent forever preflight --mode dungeon-watch|dungeon-run|dungeon-play ...` checks the serve slot (pid and port), its lease, the plan and its export file (`--export`: the file only, not the rows the server loaded), the module answering `.tb state party` over the serve link (`--serve-dir`), the SOAP console (`--soap-user`) and the named bots (exist, online, owned by the player's account for `dungeon-play`). Exit 0 all good (warnings print), 13 a check failed. The three run commands make the same preflight before they log in; `--preflight-only` stops after it, `--no-preflight` skips it. SOAP is loopback only, so the preflight runs on the server's host.
 
