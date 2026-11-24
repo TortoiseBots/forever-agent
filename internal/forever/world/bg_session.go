@@ -49,12 +49,18 @@ type bgState struct {
 	completeInitAt time.Time
 	// failReason is the last FAILED status reason text.
 	failReason string
+	// queues is the round R9 queue evidence the act steps read (bg_queue.go): the list, the per-slot statuses and
+	// the queue a bg-queue step selected.
+	queues bgQueues
 }
 
 // bgInit returns the state, making it on first use.
 func (s *session) bgInit() *bgState {
 	if s.bg == nil {
 		s.bg = &bgState{worlds: map[int32]int32{}}
+	}
+	if s.bg.queues.queues == nil {
+		s.bg.queues.queues = map[uint32]*bgQueueState{}
 	}
 	return s.bg
 }
@@ -79,6 +85,13 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// The queue steps keep one status per ticket slot (bg_queue.go); a status for another queue leaves the
+		// selected one alone.
+		st.queues.queues[q.Header.Ticket.ID] = &bgQueueState{
+			slot:    q.Header.Ticket.ID,
+			queueID: queueIDOf(q.Header.QueueIDs),
+			queued:  &q,
+		}
 		s.opts.logf("world: %s: avg wait %ds, wait %ds", wire.ServerName(p.Core), q.AvgWait, q.Wait)
 	case wire.SMSGBattlefieldStatusNeedConfirmation:
 		c, err := bg.ParseStatusNeedConfirmation(p.Payload)
@@ -89,6 +102,12 @@ func (s *session) handleBG(p worldconn.Packet) error {
 		c.Expires = time.Now().Add(time.Duration(c.Timeout) * time.Millisecond)
 		st.invite = &c
 		st.inviteExpires = c.Expires
+		st.queues.queues[c.Header.Ticket.ID] = &bgQueueState{
+			slot:          c.Header.Ticket.ID,
+			queueID:       queueIDOf(c.Header.QueueIDs),
+			needConfirm:   &c,
+			needConfirmAt: s.transport().Now(),
+		}
 		s.opts.logf("world: %s: map %d, instance %d, timeout %dms", wire.ServerName(p.Core), c.Map, c.Header.InstanceID, c.Timeout)
 	case wire.SMSGBattlefieldStatusActive:
 		a, err := bg.ParseStatusActive(p.Payload)
@@ -100,12 +119,21 @@ func (s *session) handleBG(p worldconn.Packet) error {
 		st.active = true
 		st.invite = nil
 		st.inviteExpires = time.Time{}
+		st.queues.queues[a.Header.Ticket.ID] = &bgQueueState{
+			slot:    a.Header.Ticket.ID,
+			queueID: queueIDOf(a.Header.QueueIDs),
+			active:  &a,
+		}
 		s.opts.logf("world: %s: map %d, instance %d, elapsed %dms", wire.ServerName(p.Core), a.Map, a.Header.InstanceID, a.Start)
 	case wire.SMSGBattlefieldStatusNone:
-		if _, err := bg.ParseStatusNone(p.Payload); err != nil {
+		t, err := bg.ParseStatusNone(p.Payload)
+		if err != nil {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// NONE names only the slot: the queue that occupied it is gone, every other slot stays.
+		delete(st.queues.queues, t.ID)
+		st.queues.keepNone(t)
 		// The status none after an invite means the server removed the
 		// entry at the window's end; the invite stays for the watcher to
 		// stop as expired (its Expires has passed) rather than waiting out
@@ -117,6 +145,9 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			return nil
 		}
 		st.failReason = fmt.Sprintf("the server refused the join (reason %d)", f.Reason)
+		// A refusal ends the queue it names, not the other queue the character may still sit in.
+		delete(st.queues.queues, f.Ticket.ID)
+		st.queues.keepFail(f)
 		s.opts.logf("world: %s: reason %d", wire.ServerName(p.Core), f.Reason)
 	case wire.SMSGInitWorldStates:
 		w, err := bg.ParseInitWorldStates(p.Payload)
@@ -221,7 +252,13 @@ func (s *session) handleBG(p worldconn.Packet) error {
 		}
 		s.opts.logf("world: %s: state %d", wire.ServerName(p.Core), p.Payload[0])
 	case wire.SMSGBattlefieldList:
-		s.opts.logf("world: %s (%d byte(s))", wire.ServerName(p.Core), len(p.Payload))
+		l, err := bg.ParseList(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		st.queues.list = &l
+		s.opts.logf("world: %s: list id %d, levels %d-%d, %d battlefield(s)", wire.ServerName(p.Core), l.ListID, l.MinLevel, l.MaxLevel, len(l.Battlefields))
 	case wire.SMSGUpdateCapturePoint:
 		if _, err := bg.ParseCapturePoint(p.Payload); err != nil {
 			s.noteParseError(p, err)
