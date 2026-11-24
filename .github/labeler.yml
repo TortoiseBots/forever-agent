@@ -1,0 +1,154 @@
+# Path and branch rules for actions/labeler (.github/workflows/label-pr.yml).
+#
+# labeler only ADDS labels: a label a person removed comes back only when a rule matches again, and the workflow keeps
+# `sync-labels: false` so nothing is ever removed.
+#
+# The vocabulary is minimatch: `*` never crosses `/`, `**/` matches zero or more directories. A pattern without a
+# leading `**/` is anchored at the repository root. `head-branch` is a list of regular expressions on the branch name.
+#
+# tools/label_issue.py --backfill reads this same file (the changed-file globs and the branch regexes), so a path rule
+# lives here only and the backfill cannot drift from the action.
+#
+# `any:` ORs its matchers; a plain list of matchers ANDs them.
+
+bug:
+  - head-branch: ["^fix/"]
+
+enhancement:
+  - head-branch: ["^feat/"]
+
+documentation:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - "docs/**"
+              - "**/*.md"
+      - head-branch: ["^docs/"]
+
+data:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - "data/**"
+      - head-branch: ["^data/"]
+
+ci:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - ".github/**"
+              - "Makefile"
+              - "scripts/**"
+      - head-branch: ["^ci/"]
+
+daemon:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/world/serve*"
+          - "internal/rpc/**"
+          - "internal/forever/serveclient/**"
+
+player-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/items/**"
+          - "internal/forever/npc/**"
+          - "internal/forever/quest/**"
+          - "internal/forever/loot/**"
+          - "internal/forever/trade/**"
+          - "internal/forever/mail/**"
+          - "internal/forever/auction/**"
+          - "internal/forever/taxi/**"
+          - "internal/forever/chat/**"
+          - "internal/forever/pet/**"
+          - "internal/forever/**/*_act.go"
+
+dungeon:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/driver/**"
+          - "internal/dungeon/**"
+          - "internal/forever/runmap/**"
+
+plans:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "dungeons/**"
+          - "internal/plan*/**"
+          - "internal/trashcheck/**"
+          - "internal/route*/**"
+          - "internal/patrols/**"
+          - "tools/dungeongen/**"
+
+raid:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/raidwalk/**"
+          - "**/raid*.go"
+
+battleground:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/bg/**"
+
+bots:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/botctl/**"
+          - "internal/forever/command/**"
+          - "internal/forever/cmdctl/**"
+          - "internal/forever/pbc/**"
+          - "contract/**"
+          - "contracts/**"
+
+commander:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/command/**"
+          - "internal/forever/cmdctl/**"
+
+addon:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/addonmsg/**"
+          - "internal/forever/tbmclient/**"
+          - "internal/forever/tbmproto/**"
+          - "internal/tbm/**"
+          - "internal/addonhost/**"
+
+dashboard:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/dashboard/**"
+          - "internal/dashreplay/**"
+          - "internal/tbdash/**"
+
+movement:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/navmesh/**"
+          - "internal/forever/objects/**"
+          - "internal/forever/follow/**"
+
+combat:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/combat/**"
+          - "internal/foreverspells/**"
+          - "internal/spellstate/**"
+          - "internal/forever/spelljudge/**"
+          - "internal/kbspells/**"
+
+guild:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/forever/guild/**"
+
+testing:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/trials/**"
+          - "internal/bughunt/**"
+          - "internal/trace*/**"
+          - "internal/scenario/**"
+          - "scenarios/**"

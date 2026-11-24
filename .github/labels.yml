@@ -1,0 +1,82 @@
+# The labels the automatic labelling owns (tools/sync_labels.py reads this file).
+#
+# sync_labels.py creates each label here and updates its colour and description; it NEVER deletes a label and NEVER
+# renames one. The people-owned labels are not listed and are never touched: the priority labels (Must have,
+# Should have, Nice to have, Maybe later) and TortoiseBots.
+#
+# Format, one label per block (sync_labels.py reads exactly this shape; a value may be quoted):
+#
+#   - name: <spelling>
+#     color: "<6 hex digits>"
+#     description: "<one line>"
+#
+# The area labels share the repo's area colour (#1d76db) and the "Area: ..." description prefix.
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+- name: documentation
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+- name: enhancement
+  color: "a2eeef"
+  description: "New feature or request"
+- name: dungeon
+  color: "1d76db"
+  description: "Area: dungeons, LFT, run leader, dungeon tactics"
+- name: dashboard
+  color: "1d76db"
+  description: "Area: the observability dashboard"
+- name: commander
+  color: "1d76db"
+  description: "Area: remote commander and its cmd orders"
+- name: addon
+  color: "1d76db"
+  description: "Area: the TortoiseBotsManager addon and chat commands"
+- name: movement
+  color: "1d76db"
+  description: "Area: pathing, travel, getting stuck"
+- name: combat
+  color: "1d76db"
+  description: "Area: combat, class and spec behaviour, pulls"
+- name: guild
+  color: "1d76db"
+  description: "Area: guilds and guild orders"
+- name: gear
+  color: "1d76db"
+  description: "Area: gear choice, loot rolls, item stats"
+- name: stability
+  color: "1d76db"
+  description: "Area: crashes, freezes, database errors"
+- name: daemon
+  color: "1d76db"
+  description: "Area: the daemon, its RPC methods and session serving"
+- name: player-actions
+  color: "1d76db"
+  description: "Area: what a bot does: items, quests, loot, trade, mail, auction, taxi, chat, pets"
+- name: raid
+  color: "1d76db"
+  description: "Area: raid walks and the raid suite"
+- name: battleground
+  color: "1d76db"
+  description: "Area: battlegrounds"
+- name: plans
+  color: "1d76db"
+  description: "Area: dungeon plans, routes, patrols and the plan tools"
+- name: testing
+  color: "1d76db"
+  description: "Area: trials, bug hunts, traces and scenarios"
+- name: bots
+  color: "1d76db"
+  description: "Area: bot control, commander commands and the contract"
+- name: ci
+  color: "1d76db"
+  description: "Area: workflows, the Makefile and scripts"
+- name: data
+  color: "1d76db"
+  description: "Area: the committed game data"
+- name: live-check
+  color: "1d76db"
+  description: "Area: a live check of a running server"
+- name: parity
+  color: "1d76db"
+  description: "Area: parity re-scoring against TortoiseBots"
