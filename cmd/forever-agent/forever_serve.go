@@ -355,11 +355,17 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 				return exitSlotRefused
 			}
 			// The keeper logs renewals to stdout: the command waits for it (below) before it returns,
-			// so no goroutine writes to an output the caller already owns again.
+			// so no goroutine writes to an output the caller already owns again. The wait is bounded:
+			// a renewal stuck in a write must not keep a shutdown from returning, and its lock wait
+			// already ends with ctx (slots.Store.RenewContext).
 			keepDone := lease.keep(ctx, cancel, stdout)
 			defer func() {
 				cancel()
-				<-keepDone
+				select {
+				case <-keepDone:
+				case <-time.After(serveLeaseStopWait):
+					fmt.Fprintf(stdout, "serve: the lease keeper did not stop within %s; not waiting for it\n", serveLeaseStopWait)
+				}
 			}()
 		}
 	}

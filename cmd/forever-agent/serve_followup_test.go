@@ -356,7 +356,12 @@ func TestServeDirLock(t *testing.T) {
 	dir := t.TempDir()
 	release, err := lockServeDir(dir)
 	if err != nil {
-		t.Fatalf("first lock: %v", err)
+		// A build without flock refuses the dir (serve_lock_other.go) rather than serve it unlocked;
+		// the refusal must say why.
+		if !strings.Contains(err.Error(), "flock") {
+			t.Fatalf("a build without the dir lock must refuse the dir and name the lock: %v", err)
+		}
+		return
 	}
 	if _, err := lockServeDir(dir); err == nil || !strings.Contains(err.Error(), "another forever serve") {
 		t.Fatalf("second lock on one dir: %v", err)

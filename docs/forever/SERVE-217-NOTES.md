@@ -146,6 +146,32 @@ blocks a later serve (the file is not removed; the lock, not the file, is the cl
 second serve with a *different* port on an existing manifest is refused earlier, by the manifest's
 port check, with the same exit code.)
 
+The lock is `flock(2)`, so every Unix build (`serve_lock_unix.go`) has it and a build without it
+(`serve_lock_other.go`, Windows) **refuses `--dir`** with a clear line naming the platform instead of
+serving the dir unlocked — half a rule is not the rule. A serve without `--dir` writes no manifest,
+token file or lease, so it has no dir to exclude and still runs there:
+`one serve per --dir needs a file lock (flock), which this build does not provide: <dir> cannot be
+served here; serve without --dir, or run forever serve on Linux or macOS` with exit 15.
+
+The lock is a **kernel** flock, so a slot dir on a network filesystem is only as good as that
+filesystem's flock: NFSv4 emulates it and a stalled server can block the lock for minutes. The serve
+survives that: its keeper renews under the lease store's lock, the keeper's wait for that lock ends
+with the serve's context (`slots.Store.RenewContext`, a poll of `LOCK_NB`), and the command's wait
+for the keeper is bounded (`serveLeaseStopWait`, 5 s): a renewal stuck in a lock or in a write is
+logged (`serve: the lease keeper did not stop within 5s; not waiting for it`) and the command
+returns. Keep a slot dir on a local disk when the runs are timed; the flock rules above are stated
+for a local filesystem.
+
+### The lease keeper's lifetime
+
+`lease.keep` returns a done channel, and the command cancels the keeper and waits for it before it
+returns, so no renewal line reaches stdout after the command has returned (a test holds a renewal
+inside its write and requires the command to stay blocked until the write finishes). The wait is
+bounded by `serveLeaseStopWait`: a keeper that cannot leave a write is named in one line and left to
+the process exit rather than holding the command forever. The keeper's own lock wait is the run's
+context, so the common case (another lease command holds the store's lock) ends the keeper at once
+and needs no bound.
+
 ### Interaction: `trials run` on a leased serve slot
 
 `trials run` takes its own lease on the slot (holder `trials` by default,

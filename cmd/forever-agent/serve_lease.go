@@ -29,6 +29,10 @@ var (
 	serveLeaseTTL   = 15 * time.Minute
 	serveLeaseRenew = 5 * time.Minute
 	serveLeaseRetry = time.Minute
+	// serveLeaseStopWait bounds the command's wait for the keeper at shutdown: a renewal stuck in a
+	// write (a held pipe, a full disk) must not keep the command from returning. A variable so a
+	// test can shorten it.
+	serveLeaseStopWait = 5 * time.Second
 )
 
 // serveLease is one serve's lease: the slot.json's holder and lease id, and the store that owns
@@ -131,10 +135,14 @@ func (l *serveLease) renewOnce(ctx context.Context, cancel context.CancelFunc, l
 		if ctx.Err() != nil {
 			return true
 		}
-		cur, err := l.store.Renew(l.server, l.slot, l.holder, l.leaseID, serveLeaseTTL)
+		cur, err := l.store.RenewContext(ctx, l.server, l.slot, l.holder, l.leaseID, serveLeaseTTL)
 		if err == nil {
 			fmt.Fprintf(log, "serve: lease %s/%s renewed until %s\n", l.server, l.slot, cur.Expires.UTC().Format(time.RFC3339))
 			return false
+		}
+		if ctx.Err() != nil {
+			// The wait for the store's lock ended with the run: not a failure, just the shutdown.
+			return true
 		}
 		var refusal *slots.Refusal
 		if errors.As(err, &refusal) {

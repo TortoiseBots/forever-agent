@@ -1,6 +1,7 @@
 package slots
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -275,7 +276,13 @@ func (s *Store) isStale(l *Lease) bool {
 func (s *Store) IsStale(l *Lease) bool { return s.isStale(l) }
 
 func (s *Store) withLock(fn func() error) error {
-	unlock, err := lockDir(s.Dir)
+	return s.withLockContext(context.Background(), fn)
+}
+
+// withLockContext is withLock, but a holder elsewhere cannot keep it past ctx: the wait for the
+// lock ends with ctx and fn is not run.
+func (s *Store) withLockContext(ctx context.Context, fn func() error) error {
+	unlock, err := lockDirContext(ctx, s.Dir)
 	if err != nil {
 		return err
 	}
@@ -431,8 +438,14 @@ func (s *Store) acquireLocked(server, slot string, any bool, holder string, ttl 
 }
 
 func (s *Store) Renew(server, slot, holder, leaseID string, ttl time.Duration) (Lease, error) {
+	return s.RenewContext(context.Background(), server, slot, holder, leaseID, ttl)
+}
+
+// RenewContext is Renew, but a lock held elsewhere ends the wait with ctx: a long-lived holder's
+// renewal must not outlive the run it keeps the lease for.
+func (s *Store) RenewContext(ctx context.Context, server, slot, holder, leaseID string, ttl time.Duration) (Lease, error) {
 	var out Lease
-	err := s.withLock(func() error {
+	err := s.withLockContext(ctx, func() error {
 		if _, _, err := s.Cfg.Find(server, slot); err != nil {
 			return err
 		}
