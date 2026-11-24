@@ -250,6 +250,18 @@ type Session struct {
 // NewSession wraps conn so Run calls are serialised.
 func NewSession(conn Transport) *Session { return &Session{conn: conn} }
 
+// Exclusive runs fn with the session's one-run lock held, so no Run begins while fn runs. It is for a caller with its
+// own transport that still has to own the channel for one reply: the daemon's preflight reads a tokenless console
+// command beside the queue, and a tokenless reply carries no marker to tell its lines from another command's (the
+// reason this Session runs one command at a time), so the exclusion is what keeps another command's answer out of
+// its quiet window. fn must not call Run: the lock is not reentrant. A wait for the lock is a command in flight, and
+// every run is bounded by its own deadline.
+func (s *Session) Exclusive(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fn()
+}
+
 // Run is Run on the session's connection, one at a time.
 func (s *Session) Run(ctx context.Context, line string, opts Options) (*Reply, error) {
 	s.mu.Lock()

@@ -338,6 +338,53 @@ func (c *concurrentTransport) Pump(ctx context.Context, feed func(chat.Line), do
 	return nil
 }
 
+// TestSessionExclusiveHoldsTheChannel: no run starts while Exclusive's fn runs. That is what keeps another command's
+// reply out of a tokenless run's quiet window (the daemon's preflight read runs beside the queue and takes its lines
+// from a tap): the exclusion, not the time of the send, is the scope.
+func TestSessionExclusiveHoldsTheChannel(t *testing.T) {
+	tr := &enteredTransport{entered: make(chan struct{}, 1)}
+	q := NewSession(tr)
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- q.Exclusive(func() error {
+			close(inside)
+			<-release
+			return nil
+		})
+	}()
+	<-inside
+	ran := make(chan struct{})
+	go func() {
+		_, _ = q.Run(context.Background(), ".server info", Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond})
+		close(ran)
+	}()
+	select {
+	case <-tr.entered:
+		t.Fatal("a run started while the channel was exclusive")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	<-ran
+	if len(tr.entered) != 1 {
+		t.Fatalf("the run did not start after the release")
+	}
+}
+
+// enteredTransport signals the pump's start.
+type enteredTransport struct{ entered chan struct{} }
+
+func (t *enteredTransport) SendCommand(context.Context, string) error { return nil }
+
+func (t *enteredTransport) Pump(context.Context, func(chat.Line), func() bool) error {
+	t.entered <- struct{}{}
+	return nil
+}
+
 func TestSessionSerialisesRuns(t *testing.T) {
 	conn := &concurrentTransport{}
 	q := NewSession(conn)

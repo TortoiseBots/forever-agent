@@ -84,18 +84,39 @@ func (c serveConsole) Run(ctx context.Context, line string) (string, error) {
 	return strings.Join(rep.RawText, "\n"), nil
 }
 
-// servePreflightCommand runs one tokenless command for the preflight without holding the session queue for the
+// preflightCommand runs one tokenless command for the preflight without holding the session queue for the
 // reply's whole wait. It is the command-channel shape of the TBM methods' off-queue wait (tbm_adapter.go): the GM
 // guard, the send and each packet-pump slice are separate short calls, and a chat tap queues the reply lines as the
 // session goroutine sees them while Pump hands them to the collector on its own goroutine. A tokenless reply ends
 // at its quiet window, so the tap is the only way to hear it without owning the queue.
+//
+// The run holds the command channel's one-run lock (command.Session.Exclusive), so no other command starts inside
+// its reply: the core's console answer carries no marker that would tell its lines from a dashboard `bot` call's or a
+// module probe's, and a stray "Player not found!" from another command would refuse the preflight (a "not found" is
+// the report's own "does not exist" row). The lock is the channel's serialisation, not the session queue: status and
+// every other call still answer while the read waits.
 func (st *serveState) preflightCommand(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
 	c := &preflightCommand{st: st}
 	if err := c.prepare(ctx, opts); err != nil {
 		return nil, err
 	}
 	defer c.close()
-	return command.Run(ctx, c, line, c.opts)
+	var rep *command.Reply
+	err := st.exclusiveCommand(func() error {
+		var rerr error
+		rep, rerr = command.Run(ctx, c, line, c.opts)
+		return rerr
+	})
+	return rep, err
+}
+
+// exclusiveCommand runs fn as the command channel's only run. A daemon that never installed a channel (no session
+// yet) has nothing to exclude, so fn runs alone.
+func (st *serveState) exclusiveCommand(fn func() error) error {
+	if st.q == nil {
+		return fn()
+	}
+	return st.q.Exclusive(fn)
 }
 
 // preflightCommand is a command.Transport over the serving session that never waits on the session queue: prepare
@@ -138,7 +159,13 @@ func (c *preflightCommand) prepare(ctx context.Context, base command.Options) er
 	return nil
 }
 
-// SendCommand sends the line and installs the tap in one queued call, so no reply line can arrive between them.
+// SendCommand sends the line and installs the tap in one queued call, so the tap's window starts with its own command:
+// no line the session handled before the send reaches it. The command channel's one-run lock keeps other commands out
+// of the window (preflightCommand); what it cannot exclude is a line already on the wire from a command that ran
+// before the preflight (a tokenless run's tail is waited out only for a tokened one, command.Session) or an
+// unsolicited system line (an announcement, another player's GM output). A tokenless core reply carries no marker to
+// tell those from its own answer, so the quiet window can still take one: a stray "Player not found!" would be read
+// as the bot not existing.
 func (c *preflightCommand) SendCommand(ctx context.Context, text string) error {
 	_, err := c.st.call(ctx, func(s *session) (any, error) {
 		if s.gmStop != nil {

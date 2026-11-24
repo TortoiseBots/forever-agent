@@ -59,8 +59,13 @@ with no path, so it reports the CLI's own "no --export" warning. A blocked check
 lines in the `-32003` message and sends nothing. A daemon started without `--dir` cannot check the slot, the lease
 or the module link, so it refuses too, naming `forever dungeon-watch`. The preflight runs off the session queue:
 the GM guard, each send and each 50 ms packet slice is its own short queued call, so `status` and the other methods
-answer while a slow console or module is waited for. A `.pinfo` reply that stops before its Account line is reported
-as cut off, not as a character that does not exist; a console answer of nothing refuses with the read's bound.
+answer while a slow console or module is waited for. Each read holds the command channel's one-run lock
+(`command.Session.Exclusive`) for its whole reply, so no other command runs inside a tokenless `.pinfo` answer's
+quiet window: the console's text carries no marker that would tell it from a dashboard `bot` call's reply, and a
+stray "Player not found!" would refuse the run. A reply already on the wire from a command that ran before the read
+can still fall inside that window (a tokenless run's tail is waited out only for a tokened one), which the code
+notes. A `.pinfo` reply that stops before its Account line is reported as cut off, not as a character that does not
+exist; a console answer of nothing refuses with the read's bound.
 
 `plan_check {name, from_leg?, from_pull_group?}` walks the plan from the serve's plans folder (`--plans-dir`, default
 `dungeons`) on a scratch Forever planner over the serve's `--navmesh` (its own tile cache, so a walk on the session

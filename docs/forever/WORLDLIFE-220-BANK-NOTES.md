@@ -83,7 +83,9 @@ Every answer carries `since` (the event-log cursor before the call's first packe
 
 Refusals before any packet (RPC errors): no banker GUID, an unknown or distant unit, a unit without the banker flag, a
 bank command with the bank not open, a missing or bad selector, an equipped item or a worn bag, a position that is not
-a bank position, a withdraw of an entry that is in the bank more than once, and every `bank_buy_slot` call.
+a bank position, a withdraw of the tab bag itself (a 255/63-71 slot or `item_entry` 242709, `ITEM_CHARACTER_BANK_TAB_BAG`:
+the bank's own furniture, the container the tab's slots live in), a withdraw of an entry that is in the bank more than
+once, and every `bank_buy_slot` call.
 
 ## Why `bank_buy_slot` refuses
 

@@ -321,12 +321,17 @@ func (s *session) serveBankWithdraw(parent context.Context, p serveBankParams) (
 }
 
 // bankItemToWithdraw picks the bank item a withdraw names: bag and slot (the bank's positions, 255/63-71 or a bank bag
-// 63-71 and its slot), or an entry that is in the bank once.
+// 63-71 and its slot), or an entry that is in the bank once. The tab bag itself is refused both ways: the bag in
+// 255/63-71 is the bank's own furniture, the container a tab's slots live in (Player.cpp:2403-2406 equips it there),
+// and an auto-store of it would ask the server to move the bank's slots, not an item.
 func bankItemToWithdraw(inv items.Inventory, p serveBankParams) (items.Item, error) {
 	if p.Slot != nil {
 		pos, err := bankPos("bank_withdraw", p.Bag, p.Slot)
 		if err != nil {
 			return items.Item{}, err
+		}
+		if isTabBagSlot(pos) {
+			return items.Item{}, fmt.Errorf("bank_withdraw: %d/%d is the bank's own tab bag, not an item to withdraw", pos.Container, pos.Slot)
 		}
 		if it, ok := bankRowAt(inv, pos); ok {
 			return it, nil
@@ -338,6 +343,9 @@ func bankItemToWithdraw(inv items.Inventory, p serveBankParams) (items.Item, err
 	}
 	if p.ItemEntry == nil {
 		return items.Item{}, errors.New("bank_withdraw needs bag=<container> with slot=<slot>, or item_entry=<item id>")
+	}
+	if *p.ItemEntry == bank.TabBagEntry {
+		return items.Item{}, fmt.Errorf("bank_withdraw: item %d is the bank's own tab bag, not an item to withdraw", *p.ItemEntry)
 	}
 	var found []items.Item
 	for _, it := range bankRows(inv) {

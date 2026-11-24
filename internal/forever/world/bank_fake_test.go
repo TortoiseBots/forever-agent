@@ -550,6 +550,34 @@ func TestServeBankWithdrawByEntry(t *testing.T) {
 	}
 }
 
+// TestServeBankWithdrawRefusesTheTabBag: the bag in the tab slot is the bank's own furniture — the container the
+// tab's slots live in (Player.cpp:2403-2406) — so neither its slot (255/63) nor its entry
+// (ITEM_CHARACTER_BANK_TAB_BAG) names an item a withdraw can move, and nothing is sent. An item inside the tab bag
+// is still a withdraw: the refusal is the bag row, not the tab's contents.
+func TestServeBankWithdrawRefusesTheTabBag(t *testing.T) {
+	b := newBankWorld(t)
+	b.openBank(t)
+	slot, entry := int(bankBagSlot), int32(bankBagEntry)
+	cases := map[string]serveBankParams{
+		"the tab bag's own slot": {GUID: GUID(bankUnitGUID), Slot: &slot},
+		"the tab bag's entry":    {GUID: GUID(bankUnitGUID), ItemEntry: &entry},
+	}
+	sent := len(b.stores)
+	for name, p := range cases {
+		if _, err := b.s.serveBankWithdraw(context.Background(), p); err == nil || !strings.Contains(err.Error(), "tab bag") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if len(b.stores) != sent {
+		t.Fatalf("a refused withdraw of the tab bag sent %d packet(s)", len(b.stores)-sent)
+	}
+	bag, idx := int(bankBagSlot), 0
+	res, err := b.s.serveBankWithdraw(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID), Bag: &bag, Slot: &idx})
+	if err != nil || !res.OK || res.Item == nil || res.Item.GUID != GUID(bankHeldGUID) {
+		t.Fatalf("an item inside the tab bag: %+v %v", res, err)
+	}
+}
+
 // TestServeBankBuySlotRefusesBeforeSending: the core prices a tab from the character's own tab count
 // (HandleBuyBankTab, BankHandler.cpp:186-196) and ignores every field of the request, and this client does not decode
 // ActivePlayerData::NumCharacterBankTabs, so the price cannot be known, a short purse cannot be refused and the purchase
@@ -602,11 +630,52 @@ func (b *bankWorld) handlePacket(core uint32, payload []byte) {
 	}
 }
 
+// emptyMailListPayload writes SMSG_MAIL_LIST_RESULT with no mail (MailListResult::Write, MailPackets.cpp:171-180): a
+// mailbox list that starts the interaction and names no unit.
+func emptyMailListPayload() []byte {
+	b := wire.NewWriter()
+	b.WriteU32(0)
+	b.WriteI32(0)
+	return b.Bytes()
+}
+
+// auctionHelloPayload writes SMSG_AUCTION_HELLO_RESPONSE for the named auctioneer (AuctionHelloResponse::Write): the
+// unit, the two delivery delays, the house and the open bit.
+func auctionHelloPayload(unit wire.GUID) []byte {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, unit)
+	b.WriteU32(3600)
+	b.WriteU32(1800)
+	b.WriteI32(2)
+	b.WriteBit(true)
+	b.FlushBits()
+	return b.Bytes()
+}
+
+// battlefieldListPayload writes SMSG_BATTLEFIELD_LIST from the named battlemaster with no battlefield rows
+// (BattlegroundPackets.cpp: the master, the list id, the levels, the count and the two bits).
+func battlefieldListPayload(master wire.GUID) []byte {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, master)
+	b.WriteI32(2)
+	b.WriteU8(10)
+	b.WriteU8(60)
+	b.WriteU32(0)
+	b.WriteBit(false)
+	b.WriteBit(false)
+	b.FlushBits()
+	return b.Bytes()
+}
+
 // TestBankInteractionReplacedRefusesBankCommands: the core keeps one interaction per player and every StartInteraction
 // replaces it (SendListInventory, ItemHandler.cpp:626; SendTrainerList, NPCHandler.cpp:125; SendGossipMenu,
-// GossipDef.cpp:220-222). CanUseBank then reads the interaction's source unit (ItemHandler.cpp:1229-1248), so a bank
-// opened for the banker stops being answered and every mutating method must refuse before sending. The same unit with
-// another window (a merchant's open result, a gossip menu) keeps it: its banker flag still passes that check.
+// GossipDef.cpp:220-222; SendTaxiMenu, TaxiHandler.cpp:100; SendQuestGiverQuestDetails, GossipDef.cpp:484;
+// SendAuctionHello, AuctionHouseHandler.cpp:999; SendBattlegroundList, BattlegroundMgr.cpp:510; the mailbox's list).
+// CanUseBank then reads the interaction's source unit (ItemHandler.cpp:1229-1248), so a bank opened for the banker
+// stops being answered and every mutating method must refuse before sending. The same unit with another window (a
+// merchant's open result, a gossip menu) keeps it: its banker flag still passes that check. The tap is per handler:
+// dropping the bankInteractionAt call from any one of the mail, taxi, quest, auction or battlemaster handler fails
+// this test on that case alone.
 func TestBankInteractionReplacedRefusesBankCommands(t *testing.T) {
 	other := wire.GUID{Low: 0xBA77, High: uint64(9) << 58}
 	cases := []struct {
@@ -621,6 +690,15 @@ func TestBankInteractionReplacedRefusesBankCommands(t *testing.T) {
 		{"gossip menu", func(b *bankWorld) {
 			b.handlePacket(wire.SMSGGossipMessage, buildGossipMessage(other, 7, 1, 0, "hello"))
 		}},
+		{"mail list", func(b *bankWorld) { b.handlePacket(wire.SMSGMailListResult, emptyMailListPayload()) }},
+		{"taxi window", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGShowTaxiNodes, showTaxiNodesPayload(other, 1, taxiLandMask(), taxiUseMask()))
+		}},
+		{"quest details", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGQuestGiverQuestDetails, questDetailsFrom(other, 5001, 4, 1, "Elsewhere"))
+		}},
+		{"auction hello", func(b *bankWorld) { b.handlePacket(wire.SMSGAuctionHelloResponse, auctionHelloPayload(other)) }},
+		{"battlefield list", func(b *bankWorld) { b.handlePacket(wire.SMSGBattlefieldList, battlefieldListPayload(other)) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
