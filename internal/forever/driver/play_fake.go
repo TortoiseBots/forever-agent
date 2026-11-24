@@ -195,7 +195,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
 		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
 		NoAggro: map[wire.GUID]int{}, UseNoChange: map[uint32]bool{},
-		BotPower:    map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
+		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
 	}
 	f.Module = &PlayModule{GoldenOwner: owner, f: f}
