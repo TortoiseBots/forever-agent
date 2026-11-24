@@ -97,7 +97,7 @@ knowledge-base rotations (`make spellnames`, `make kb-rotations`).
 stacked feature branch. Its jobs:
 
 - `lint`: formatting, vet, a no-cgo build, the shard scripts' self-tests, the cross-build, the
-  user manual's OKF check (`make docs-check`), the differential table against the pinned trials
+  user manual's OKF check and coverage (`make docs-check`), the differential table against the pinned trials
   reference checkout (Python 3.12), staticcheck, then a cgo build.
 - `race-shards`: the suite under `-race` in nine jobs, at most six at once.
 - `race-shards-check`: every test and package was run exactly once across the shards.
@@ -127,6 +127,31 @@ afterwards. A draft PR skips every job, the required check included.
   on the wire, and the evidence you actually ran (the test name, the command, the output line).
 - Report only what you observed. Mark anything inferred. Never put account names or passwords in
   a report, a capture, a fixture or a PR.
+
+# Keeping the docs current
+
+[DOCS-SYNC.md](../../../DOCS-SYNC.md) is the rule: every change a user can see (a command, a
+flag or its default, a daemon method or its parameters, an output field, an error or refusal text,
+a file format, a settings key, a plan field, a stop reason, an install or build step) updates the
+matching page under `docs/manual/` in the same PR; a new feature gets a page or a section, and a
+removed or limited feature loses every sentence that still promises it. `README.md` changes when
+the quick start, the feature list or the status changes. The code wins when the two disagree.
+
+- The page's frontmatter keeps `type`, `title` and `description`; `generated` says who wrote it and
+  when, `sources` lists the files the facts come from, and `verified` appears only after a person
+  checked the page against a live server.
+- Add one line to `docs/manual/log.md` under today's date.
+- Copy names, flags, defaults and error texts from the code you opened, and use placeholders only
+  (no hosts, accounts, character names or private paths).
+
+`make docs-check` runs the manual's checker and its tests. Beyond the OKF rules it fails on a
+registered command that no page mentions, on a daemon method missing from
+[the method index](../daemon/method-index.md), and on a command or method the manual names that
+the code no longer registers. The CI job `docs-sync` fails a PR that changes
+`cmd/forever-agent/`, a serve method file (`internal/forever/world/serve*_methods.go`) or adds a
+flag, and changes nothing under `docs/manual/` or `README.md`. A change with truly no
+user-visible effect says so in the PR body, on its own line: `Docs: not needed, because ...`.
+
 
 # Related pages
 

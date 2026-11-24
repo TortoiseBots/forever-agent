@@ -2,7 +2,7 @@
 
 * [What forever-agent is](what-is-forever-agent.md) - What the agent does, which server it speaks to, and which parts have been run against a live server.
 * [Install and build](install-and-build.md) - Build forever-agent from source, run its checks, and know what a build without cgo can still do.
-* [Your first login](first-login.md) - Prove that the agent can reach a ForeverCore server with login-check and world-check, then start a session.
+* [Your first login](first-login.md) - Prove that the agent can reach a ForeverCore server with login-check and world-check, create or delete a character, then start a session.
 
 # Configure
 

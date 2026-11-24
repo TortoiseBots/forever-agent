@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Movement
-description: Move the character with straight walks, navmesh routes and follow loops, and ask the navmesh what ground is walkable.
+description: Move the character with straight walks, navmesh routes and follow loops, ask the navmesh what ground is walkable, and check a walk live.
 tags: [daemon, movement, navmesh, follow, pathing]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-movement
     resource: internal/forever/world/serve_session.go
@@ -18,6 +18,8 @@ sources:
     resource: internal/forever/follow/follow.go
   - id: mover
     resource: internal/forever/objects/mover.go
+  - id: walk-check
+    resource: cmd/forever-agent/forever_walk.go
 ---
 
 # What this is
@@ -161,6 +163,37 @@ refused once does not end the loop: it retries, one attempt per gap, then toward
 instead of the point behind it.
 
 Two characters following each other settle inside `far` instead of chasing: a documented limit.
+
+# forever walk-check
+
+A one-shot live check of the client's object model and movement, with no daemon: it logs in, settles, prints what it
+understood of the objects around the character and the nearest units, walks `--dx`/`--dy` yards from the spawn,
+stands `--pause`, walks back, prints the position the client itself believes, and logs out. With `--navmesh` it walks
+a navmesh route to an absolute point on the current map instead of the Dx/Dy walk.
+
+```bash
+forever-agent forever walk-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 8s] [--dx 8] [--dy 0] [--pause 3s] \
+    [--navmesh DIR --to-x X --to-y Y --to-z Z [--parent MAP=PARENT[,..]]]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stay` | `8s` | How long to settle in the world before the summary and the walk, 0-10m. |
+| `--dx`, `--dy` | `8`, `0` | Yards to walk from the spawn, each -200 to 200. |
+| `--pause` | `3s` | How long to stand at the far point before walking back. |
+| `--navmesh` | none | A Forever mmaps folder: walk a navmesh route to the absolute `--to-x/--to-y/--to-z` target instead of the Dx/Dy walk. |
+| `--parent` | none | With `--navmesh`: `MAP=PARENT` instance pairs, comma separated. |
+
+The last lines are the check:
+
+```text
+walk-check: Mychar on map 0: 148 objects (140 created, 8 updated, 0 destroyed, 0 out of range) in 9 updates
+walk-check: from 12.00 -3.00 -44.00 to 20.00 -3.00 -44.00 and back to 12.00 -3.00 -44.00
+walk-check: client position 12.00 -3.00 -44.00 (orientation 0.75), 3 monster moves, 2 movement relays, 0 teleports, 0 map changes, 0 names asked
+```
+
+Exit `0` when the run completes; `5` when the world server refuses the session or the run fails after login.
 
 # Examples
 

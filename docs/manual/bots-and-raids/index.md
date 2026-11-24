@@ -1,6 +1,6 @@
 # Bots
 
-* [Ordering bots](bot-control.md) - How the agent talks to a bot module, which commands it sends, and which of your bots it may order.
+* [Ordering bots](bot-control.md) - How the agent talks to a bot module, which commands it sends, which of your bots it may order, and the live checks that drive the module end to end.
 * [The add-on protocol](addon-protocol.md) - How the agent exchanges add-on messages with a server's bot module and how to check that exchange.
 
 # Raids

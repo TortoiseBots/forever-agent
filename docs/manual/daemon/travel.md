@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Teleports and travel
-description: Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights.
+description: Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights, and check the map handling live.
 tags: [daemon, teleport, mount, taxi, area-trigger]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-gm-gaps
     resource: internal/forever/world/serve_gm_gaps.go
@@ -14,6 +14,8 @@ sources:
     resource: internal/forever/world/taxi_serve.go
   - id: serve-mapchange
     resource: internal/forever/world/mapchange.go
+  - id: map-check
+    resource: cmd/forever-agent/forever_map.go
 ---
 
 # What this is
@@ -109,6 +111,35 @@ A flight is the server's: without `wait_landing` the call returns at takeoff, an
 the taxi (the server's fifteen-minute ceiling) while `status.on_taxi` is true and `taxi_flight` events mark
 takeoff and landing. No movement goes out until the landing is seen. `no_takeoff` means the request went
 out and the server neither refused it nor started a flight within the wait; a late flight may still start.
+
+# forever map-check
+
+A one-shot live check of the client's map handling, no daemon involved: it logs in, settles, prints the map the client
+is on, optionally sends one area trigger, then stays in the world and follows every map change the server makes.
+Each change is printed with the from and to map, the reason, the difficulty, the client's own position and the
+objects the new map has five seconds later.
+
+```bash
+forever-agent forever map-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--settle 3s] [--stay 60s] [--area-trigger ID]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--settle` | `3s` | How long to settle in the world before the map is printed and the trigger sent, 0-1m. |
+| `--stay` | `60s` | How long to stay and follow map changes, 0-30m. |
+| `--area-trigger` | `0` | Send `CMSG_AREA_TRIGGER` for this id once, after the settle; `0` sends none. |
+
+The summary is three lines and then one line per change:
+
+```text
+map-check: Mychar ended on map 389 (difficulty 0) at 12.00 -3.00 -44.00, 148 object(s)
+map-check: 1 transfer pending(s), 1 followed, 0 aborted, 1 area trigger(s) sent, 0 same-map teleport(s)
+  1: map 0 -> 389 (reason 4), difficulty 0, position 12.00 -3.00 -44.00, 148 object(s) after the wait
+```
+
+A refused transfer prints its reason and argument and says the client stayed on the old map. Exit `0` when the run
+completes; `5` when the world server refuses the session or the run fails after login.
 
 # Examples
 

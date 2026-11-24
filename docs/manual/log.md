@@ -1,5 +1,11 @@
 # Directory Update Log
 
+## 2026-11-25
+
+* **Creation**: Added [DOCS-SYNC.md](../../DOCS-SYNC.md), the rule that every change a user can see updates this manual in the same pull request, and wired it into `AGENTS.md`, `CLAUDE.md`, the pull request template, the contributing page and the README.
+* **Update**: Documented the commands this manual left out: `stage-check` (plan tools), `forever char-create` and `forever char-delete` (first login), `forever death-check` and `forever deathrecap` (death and the corpse run), `forever fb-check` and `forever fb-dungeon` (bot control), `forever gm-walk` and `forever gm-convert` (route tools), `forever loot-check` and `forever object-use` (quests and loot), `forever map-check` (travel), `forever party-check` (groups) and `forever walk-check` (movement).
+* **Update**: The checker now fails on a registered command that no page mentions and on a daemon method missing from the method index, and on a command or method the pages name that the code no longer registers; deliberate omissions go in `.undocumented-commands` or `.undocumented-methods` with a reason.
+
 ## 2026-11-24
 
 * **Creation**: Established the [getting-started](getting-started/) area: what the agent is, how to build it, a first login, settings and slots, the safety and GM guard rules, the glossary and troubleshooting.

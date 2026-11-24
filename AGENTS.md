@@ -2,6 +2,14 @@
 
 Rules for AI agents (and people) who use or change forever-agent.
 
+## Docs follow the code
+
+Read [DOCS-SYNC.md](DOCS-SYNC.md). Every change a user can see (a command, a flag or its default, a daemon method or
+its parameters, an output field, an error text, a file format, a settings key, a plan field, a stop reason, an
+install or build step) updates the matching page under `docs/manual/` in the same PR; a new feature gets a page or a
+section. A change with no user-visible effect says so in the PR body: `Docs: not needed, because ...`.
+`make docs-check` checks the manual and its command and method coverage.
+
 forever-agent is a headless client for **ForeverCore** servers (a TrinityCore-lineage core; the client claims a
 Forever build). The Turtle 1.12 stack this repository grew from still sits beside it for the Turtle-only commands
 (issue #102 deleted nothing): its packages and documents are listed in [docs/turtle/README.md](docs/turtle/README.md),
@@ -34,4 +42,4 @@ commands with their Forever replacement.
 - The build the login claims is the core's (`forever login-check --build` pins one; the realm list is a hint, the world
   server decides). A build change is checked against a running core, not guessed.
 - Prefer features that make vision checks possible (positions, auras, NPC use, loot, travel).
-- `make test` and `make build` must pass. Update README.md for every new RPC or field.
+- `make test` and `make build` must pass. Update the manual (and README.md where it carries the same text) for every new command, RPC or field, per [DOCS-SYNC.md](DOCS-SYNC.md).

@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Route tools
-description: Score a plan's route against the navmesh, walk it on a live server, edit and promote routes, rebuild a leg's waypoints and record patrol loops.
+description: Score a plan's route against the navmesh, walk it on a live server, edit and promote routes, rebuild a leg's waypoints, record patrol loops and record a GM's walk as world data.
 tags: [dungeons, routes, navmesh, tools]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:55:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: route-oracle-cmd
     resource: cmd/forever-agent/route_oracle_cmd.go
@@ -22,6 +22,14 @@ sources:
     resource: tools/dungeongen/route_aggro_cmd.go
   - id: patrol-record
     resource: cmd/forever-agent/patrol_record_cmd.go
+  - id: gm-walk
+    resource: cmd/forever-agent/forever_gmwalk.go
+  - id: gm-walk-core
+    resource: internal/forever/world/gm_walk.go
+  - id: gm-convert
+    resource: cmd/forever-agent/forever_gmconvert.go
+  - id: gmwalk-convert
+    resource: internal/forever/gmwalk/io.go
 ---
 
 # What these tools answer
@@ -197,3 +205,38 @@ The area radius is 10-200 yd, the recording 1-60 minutes, the sample 500-5000 ms
 leases nothing, logs in nothing and sends only its allow-list of GM lines (`.gm on`, `.gm visible off`, one
 `.go xyz` into the area, `.gm visible on` at the end); it never attacks, casts, targets or moves the character. Exit
 `22` means the recording stopped for safety (combat, death, lost world) — the file is still written.
+
+# forever gm-walk and forever gm-convert
+
+Records a game master walking a route in game, then turns that recording into the world data the server module reads.
+`gm-walk` logs in as a real client, follows the GM named by `--follow`, samples the GM's own position, and treats the
+GM's whisper (or a nearby say) as the marks that make points, danger zones and road splits; the agent only follows and
+prints, it never moves the GM. `gm-convert` takes no login at all: it validates a recording and rewrites it.
+
+```bash
+forever-agent forever gm-walk --follow NAME [--marks-from gm|any] [--sample 2s] [--tolerance 1.0] \
+    [--follow-yd 6] [--out FILE] [--module-out FILE] [--force] [--dry FILE] [--settle 4s] \
+    [--timeout 60m] --rest host:port --rpc host:port --ca FILE --account EMAIL --character NAME
+
+forever-agent forever gm-convert --in FILE --out FILE [--module-out FILE] [--force]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--follow` | required (or `--dry`) | The GM character to follow; its whisper or nearby say carries the marks. |
+| `--marks-from` | `gm` | Whose lines may mark: `gm` (only `--follow`) or `any` (any sender's whisper or nearby say). |
+| `--sample` | `2s` | Position sample interval, at most `1m`. |
+| `--tolerance` | `1.0` | Road-thinning tolerance in yards, 0-100. |
+| `--follow-yd` | `6` | How close the agent stays to the GM, 0-100 yards. |
+| `--out` | `gm-walk-<map>-<utc-timestamp>.json` | The world-data file; never overwritten unless `--force`. File names never carry a character name. |
+| `--module-out` | none | The module-shape file beside it: `handcrafted_road` rows plus zone and point proposals; never overwritten unless `--force`. |
+| `--dry` | none | Replay a hand-made recording instead of the network (test data, never a capture). |
+| `--settle` | `4s` | How long to settle in the world before the follow starts, 0-2m. |
+| `--timeout` | `60m` | The whole run's budget (login, follow, logout), 1m-6h. |
+
+`gm-convert --in` reads a recording and writes two files: `--out` is the same shape, validated and normalised, and
+`--module-out` is the converter's `handcrafted_road` rows with the zone and point proposals (a one-point road has no
+hop to render and is reported as dropped). Both are refused when the file exists, unless `--force`.
+
+Exit codes: `0` done; `2` a usage or recording error (`--in`/`--out` missing, an unreadable file, a flag out of its
+range); `5` a file could not be written (or, for `gm-walk`, the world server refused the session).

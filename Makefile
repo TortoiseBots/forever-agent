@@ -29,11 +29,13 @@ vet:
 	$(GO) vet ./...
 
 # The user manual under docs/manual is an OKF v0.2 bundle: every page's frontmatter, every index and log file, every
-# link and the privacy rules are checked by tools/verify_okf.py. The checker's own tests run first, so a broken
-# checker cannot pass the manual.
+# link and the privacy rules are checked by tools/verify_okf.py, and every registered command and daemon method must
+# be documented (the rule is DOCS-SYNC.md). The checkers' own tests run first, so a broken checker cannot pass the
+# manual; the docs-sync decision that the CI job runs per pull request is tested with them.
 docs-check:
 	python3 -m unittest tools/test_verify_okf.py
 	python3 tools/verify_okf.py
+	python3 -m unittest tools/test_verify_docs_sync.py
 
 # Fuzz every Fuzz* target of the SMSG parsers, FUZZTIME each (go test -fuzz takes one target at a time).
 # `make test` runs only their seeds. A crash is saved under <package>/testdata/fuzz/<target>/: commit it

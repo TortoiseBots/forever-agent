@@ -1,10 +1,10 @@
 ---
 type: Method Reference
 title: Death and the corpse run
-description: "Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, or accept a resurrect."
+description: "Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, accept a resurrect, and run the live death checks."
 tags: [daemon, death, corpse, methods]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-death
     resource: internal/forever/world/serve_session_methods.go
@@ -12,6 +12,10 @@ sources:
     resource: internal/forever/world/death.go
   - id: method-index
     resource: docs/manual/daemon/method-index.md
+  - id: death-check
+    resource: cmd/forever-agent/forever_death.go
+  - id: deathrecap
+    resource: cmd/forever-agent/forever_deathrecap.go
 ---
 
 # What this is
@@ -117,6 +121,49 @@ The Forever drivers treat a dead member as a recovery, not a stop, while one mem
 resurrection, then run the ghost back, accept a summon, or use the entrance trigger, within their own budgets. A run
 that cannot recover ends with a stop reason such as `dead-wait`, `wipe-unrecovered` or `recover:path`; see
 [Stop reasons](../dungeons/stop-reasons.md). There is nothing to call by hand for that path.
+
+# The live checks: forever death-check and forever deathrecap
+
+`forever death-check` runs the whole sequence with no daemon: it logs in like `forever fight-check`, settles, and
+waits for the character to die. It never kills the character itself (a server console command or a mob does that).
+Then it does what a player does: release the spirit, ask the server where the corpse is, run back and reclaim it.
+
+```bash
+forever-agent forever death-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 3s] [--death-wait 5m] \
+    [--accept-resurrect [--accept-resurrect-from NAME] [--resurrect-wait 1m]] \
+    [--spirit-healer] [--navmesh DIR [--parent MAP=PARENT[,..]]] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stay` | `3s` | How long to settle before waiting for the death, 0-10m. |
+| `--death-wait` | `5m` | How long to wait for the character to die, at most 1h. |
+| `--accept-resurrect` | off | Wait for a resurrection offer and accept it instead of the corpse run. |
+| `--accept-resurrect-from` | any | With `--accept-resurrect`: only answer an offer from this unit. |
+| `--resurrect-wait` | `1m` | With `--accept-resurrect`: how long to wait for an offer before falling back to the corpse run. |
+| `--spirit-healer` | off | Release, then walk to the spirit healer at the graveyard and use it instead of the corpse run. |
+| `--navmesh` | none | A Forever mmaps folder: run the corpse run (and the walk to the healer) on a navmesh route instead of a straight line. |
+| `--parent` | none | With `--navmesh`: `MAP=PARENT` instance pairs, comma separated. |
+
+The summary names the phase, how the character came back, the corpse and the announced reclaim delay; each step is
+printed with its time. Exit `0` when the flow completes; `5` when nothing killed the character within `--death-wait`
+or a step fails after login; `6` when the link is lost.
+
+`forever deathrecap` is the text helper over the command channel: it logs in like `forever cmd-check`, runs the GM
+guard, asks `.deathrecap <name>` once and prints the parsed timeline of the core's last recorded death of that
+player.
+
+```bash
+forever-agent forever deathrecap [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME --name NAME [--stay 4s] [--quiet DURATION] [--timeout DURATION]
+```
+
+The name is normalised the way the game does it (one word, first letter upper-case) and validated, so a second
+command can never ride along. `--quiet` (at most 30s, the default is 1.5s) ends a tokenless command after that long
+without a reply line and `--timeout` (at most 2m, default 15s) is its hard deadline. A core without the command's
+server-side support answers `the server has no .deathrecap command (a core without PR #380)`; a player the core has
+no recording for answers `no recording for "<name>"`. Both exit `0`; a login failure exits `3` or `4` and a world failure `5`.
 
 # Related
 

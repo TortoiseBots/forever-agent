@@ -1,0 +1,8 @@
+# Daemon methods left out of docs/manual/daemon/method-index.md on purpose: one "name # reason" per line.
+#
+# tools/verify_okf.py fails when a method the serve registers has no row in the method index, unless its name is
+# here, and it fails on an entry here that is not a registered method (so the list cannot rot). Empty today: every
+# registered method has a row.
+#
+# Example:
+# debug_dump # a bench-only method, not for users

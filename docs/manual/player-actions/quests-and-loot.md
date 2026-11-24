@@ -1,10 +1,10 @@
 ---
 type: Method Reference
 title: Quests and loot
-description: Take, hand in and abandon quests, read the quest log, and loot corpses, chests and game objects, including group rolls.
+description: Take, hand in and abandon quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the loot and object checks live.
 tags: [player-actions, quests, loot, gameobjects, rolls]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: quest-methods
     resource: internal/forever/world/serve_quest_methods.go
@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/world/loot.go
   - id: method-frame
     resource: internal/forever/world/serve_method_frame.go
+  - id: loot-check
+    resource: cmd/forever-agent/forever_loot.go
 ---
 
 This page covers talking a quest through from a quest giver, reading the quest log, and everything around loot:
@@ -182,6 +184,40 @@ object) and `item_slot`, or by neither when exactly one roll is open. `roll_id` 
 Refusals, before any packet: no roll open, more than one open (the message lists them), a roll that ended, one this
 client already voted on, and a vote the roll does not allow. A roll started for another corpse stays open while
 another window is looted.
+
+# Live checks: forever loot-check and forever object-use
+
+Two one-shot live checks, no daemon involved. `loot-check` settles, finds the nearest lootable thing (a dead creature
+of `--entry`, or a chest), kills it first when it is still alive, opens the window, votes on a group roll when one was
+asked for, takes the money and the items it may take, and releases the window. `object-use` finds the nearest game
+object of `--entry` and reports its state before and after the use.
+
+```bash
+forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] \
+    [--at x,y,z] [--at-range 2] [--range 30] [--stay 8s] [--fight-for 60s]
+
+forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME --entry N [--at x,y,z] [--at-range 2] [--range 30] [--stay 8s]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--entry` | `0` (`loot-check`: the nearest dead creature or chest) / required (`object-use`: a game-object entry) | The creature or game-object entry to pick. |
+| `--roll` | none | Vote on a group roll: `need`, `greed` or `pass`. `need` is never sent unless you ask for it. |
+| `--take` | `0` | How many items to take from the window; `0` takes every item the window allows, at most 18. |
+| `--money` | on | Take the window's money. |
+| `--at` | none | `x,y,z` of the chest or object when several of that entry are in range; `--at-range` (default 2 yd, 0.5-100) sets how close it must be. |
+| `--range` | `30` | How far to look for a target, 1-200 yards. |
+| `--stay` | `8s` | How long to settle in the world before choosing the target, 0-10m. |
+| `--fight-for` | `60s` | `loot-check` only: how long a target that is still alive is fought before giving up, 0-5m. |
+
+Both print the object's state (`open`, `lootable`, ...; `object-use`) or the loot window with one line per item slot and
+per roll, then the packet counts. Neither prints an identifier; a roll's winner is a role (`you`, `another player`,
+`nobody`).
+
+Exit codes: `0` done; `2` a usage error; `5` a world refusal or a failed run after login; `6` the link was lost;
+`11` the character died; `12` several objects of that entry are in range and `--at` named none — nothing was sent.
 
 # Examples
 

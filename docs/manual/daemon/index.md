@@ -11,13 +11,13 @@ calling it, what it can tell you, how it moves the character, and the two logs i
 # Reading the world
 
 * [Status and world reads](status-and-world-reads.md) - Read the character's own state and the units, game objects, ground spells, item data and map picture around it.
-* [Death and the corpse run](death-and-corpse-run.md) - Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, or accept a resurrect.
+* [Death and the corpse run](death-and-corpse-run.md) - Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, accept a resurrect, and run the live death checks.
 * [Events and logs](events-and-logs.md) - Read the combat log, the session's ordered event stream and the chat log, with cursors and long-poll waits.
 
 # Moving
 
-* [Movement](movement.md) - Move the character with straight walks, navmesh routes and follow loops, and ask the navmesh what ground is walkable.
-* [Teleports and travel](travel.md) - Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights.
+* [Movement](movement.md) - Move the character with straight walks, navmesh routes and follow loops, ask the navmesh what ground is walkable, and check a walk live.
+* [Teleports and travel](travel.md) - Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights, and check the map handling live.
 
 # Reference
 

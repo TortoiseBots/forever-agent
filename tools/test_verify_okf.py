@@ -63,6 +63,32 @@ FOREVER_GO = (
     "}\n"
 )
 
+# The three registration shapes the checker parses: literal names, a map literal a range walks, and the
+# notPortedMethods slice.
+SERVE_METHODS_GO = (
+    "package world\n"
+    "\n"
+    "func registerMethods(srv *rpc.Server, st *serveState) {\n"
+    '\tsrv.Register("status", nil)\n'
+    '\tsrv.Register("walk_to", nil)\n'
+    "\tregisterMailMethods(srv, st)\n"
+    "}\n"
+    "\n"
+    "func registerMailMethods(srv *rpc.Server, st *serveState) {\n"
+    "\tfor name, fn := range map[string]func(*session) error{\n"
+    '\t\t"mail_list": (*session).serveMailList,\n'
+    "\t} {\n"
+    "\t\tfn := fn\n"
+    "\t\tsrv.Register(name, fn)\n"
+    "\t}\n"
+    "}\n"
+    "\n"
+    "var notPortedMethods = []string{\n"
+    '\t"dungeon_run", "tune_set",\n'
+    "}\n"
+)
+
+
 
 def page(title="A page", description="What the page lets the reader do.", body="# What this is\n\nText.\n"):
     return (
@@ -122,16 +148,49 @@ def write(root, path, text):
         handle.write(text)
 
 
+METHOD_INDEX = page(
+    title="Method index",
+    description="Every method the daemon registers.",
+    body="# Methods\n\n| Method | Params |\n|---|---|\n| `status` | `{}` |\n| `walk_to` | `x`, `y`, `z` |\n| `mail_list` | `guid` |\n",
+)
+
+NOT_PORTED = page(
+    title="Methods not ported",
+    description="The names that answer not ported.",
+    body="# Names\n\n| Methods | Area |\n|---|---|\n| `dungeon_run`, `tune_set` | The old driver |\n",
+)
+
+
 def good_bundle(root):
     write(root, "docs/manual/index.md", ROOT_INDEX)
     write(root, "docs/manual/log.md", LOG)
     write(root, "docs/manual/getting-started/index.md", AREA_INDEX)
-    page_text = page(body="# What this is\n\nSee the [daemon page](../daemon/serve.md) and [the log](../log.md).\n")
-    write(root, "docs/manual/getting-started/page.md", page_text)
-    write(root, "docs/manual/daemon/index.md", "# Daemon\n\n* [forever serve](serve.md) - The session daemon.\n")
-    write(root, "docs/manual/daemon/serve.md", page(title="forever serve", description="Run the session daemon."))
+    write(
+        root,
+        "docs/manual/getting-started/page.md",
+        page(body="# What this is\n\nSee the [daemon page](../daemon/serve.md) and [the log](../log.md).\n"),
+    )
+    write(
+        root,
+        "docs/manual/daemon/index.md",
+        "# Daemon\n\n* [forever serve](serve.md) - The session daemon.\n"
+        "* [Method index](method-index.md) - Every method the daemon registers.\n"
+        "* [Methods not ported](not-ported-methods.md) - The names that answer not ported.\n",
+    )
+    serve_body = (
+        "# What this is\n\n```sh\nforever-agent version\nforever-agent lease acquire example --slot 1 --holder work\n"
+        "forever-agent forever serve --dir ./slot\nforever-agent forever rpc ./slot status\n```\n"
+    )
+    write(
+        root,
+        "docs/manual/daemon/serve.md",
+        page(title="forever serve", description="Run the session daemon.", body=serve_body),
+    )
+    write(root, "docs/manual/daemon/method-index.md", METHOD_INDEX)
+    write(root, "docs/manual/daemon/not-ported-methods.md", NOT_PORTED)
     write(root, "cmd/forever-agent/main.go", MAIN_GO)
     write(root, "cmd/forever-agent/forever_login.go", FOREVER_GO)
+    write(root, "internal/forever/world/serve_methods.go", SERVE_METHODS_GO)
 
 
 class BundleTest(unittest.TestCase):
@@ -365,6 +424,116 @@ class BundleTest(unittest.TestCase):
             page(body="# What\n\nRun forever-agent nosuch when you like.\n"),
         )
         self.assertEqual(self.problems(), [])
+
+    # Command coverage: every registered command is mentioned somewhere, and the allow-list cannot rot.
+
+    def test_registered_command_must_be_mentioned(self):
+        write(
+            self.root,
+            "cmd/forever-agent/main.go",
+            MAIN_GO.replace('\tcase "lease":', '\tcase "unlisted":\n\t\treturn exitUsage\n\tcase "lease":'),
+        )
+        self.assertProblem("registered command 'unlisted' is in no manual page")
+
+    def test_command_allow_list_allows_a_missing_command(self):
+        write(
+            self.root,
+            "cmd/forever-agent/main.go",
+            MAIN_GO.replace('\tcase "lease":', '\tcase "unlisted":\n\t\treturn exitUsage\n\tcase "lease":'),
+        )
+        write(self.root, "docs/manual/.undocumented-commands", "# hidden commands\nunlisted # a debug-only command\n")
+        self.assertEqual(self.problems(), [])
+
+    def test_command_allow_list_entry_must_be_registered(self):
+        write(self.root, "docs/manual/.undocumented-commands", "nosuch # a command that is gone\n")
+        self.assertProblem("allow-list entry 'nosuch' is not a registered command")
+
+    def test_command_allow_list_entry_needs_a_reason(self):
+        write(self.root, "docs/manual/.undocumented-commands", "version\n")
+        self.assertProblem("allow-list entry 'version' has no reason")
+
+    def test_forever_subcommand_needs_the_forever_form(self):
+        write(
+            self.root,
+            "cmd/forever-agent/forever_login.go",
+            FOREVER_GO.replace('\tcase "rpc":', '\tcase "zzz":\n\t\treturn exitUsage\n\tcase "rpc":'),
+        )
+        write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\n`zzz` alone is not the form.\n"))
+        self.assertProblem("registered forever subcommand 'zzz'")
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nRun `forever zzz` to check it.\n"),
+        )
+        self.assertEqual(self.problems(), [])
+
+    # Method coverage: the method index and the not-ported page against the serve's registration.
+
+    def test_parse_method_registry_reads_all_three_shapes(self):
+        implemented, not_ported = verify_okf.parse_method_registry([SERVE_METHODS_GO])
+        self.assertEqual(implemented, {"status", "walk_to", "mail_list"})
+        self.assertEqual(not_ported, {"dungeon_run", "tune_set"})
+
+    def test_registered_method_must_be_in_the_index(self):
+        write(
+            self.root,
+            "internal/forever/world/serve_methods.go",
+            SERVE_METHODS_GO.replace(
+                'srv.Register("status", nil)',
+                'srv.Register("status", nil)\n\tsrv.Register("undocumented_method", nil)',
+            ),
+        )
+        self.assertProblem("registered daemon method 'undocumented_method' has no row")
+
+    def test_method_allow_list_allows_a_missing_method(self):
+        write(
+            self.root,
+            "internal/forever/world/serve_methods.go",
+            SERVE_METHODS_GO.replace(
+                'srv.Register("status", nil)',
+                'srv.Register("status", nil)\n\tsrv.Register("bench_only", nil)',
+            ),
+        )
+        write(self.root, "docs/manual/.undocumented-methods", "bench_only # a bench-only method\n")
+        self.assertEqual(self.problems(), [])
+
+    def test_method_allow_list_entry_must_be_registered(self):
+        write(self.root, "docs/manual/.undocumented-methods", "nosuch # a method that is gone\n")
+        self.assertProblem("allow-list entry 'nosuch' is not a registered daemon method")
+
+    def test_index_method_must_be_registered(self):
+        write(
+            self.root,
+            "docs/manual/daemon/method-index.md",
+            page(
+                title="Method index",
+                description="Every method the daemon registers.",
+                body="# Methods\n\n| Method | Params |\n|---|---|\n| `status` | `{}` |\n"
+                "| `walk_to` | `x` |\n| `mail_list` | `guid` |\n| `ghost` | none |\n",
+            ),
+        )
+        self.assertProblem("method 'ghost' is not registered by the serve")
+
+    def test_not_ported_method_must_be_on_its_page(self):
+        write(
+            self.root,
+            "internal/forever/world/serve_methods.go",
+            SERVE_METHODS_GO.replace('"dungeon_run", "tune_set",', '"dungeon_run", "tune_set", "lfg_status",'),
+        )
+        self.assertProblem("not-ported method 'lfg_status' is named in no row")
+
+    def test_not_ported_page_method_must_still_be_unimplemented(self):
+        write(
+            self.root,
+            "docs/manual/daemon/not-ported-methods.md",
+            page(
+                title="Methods not ported",
+                description="The names that answer not ported.",
+                body="# Names\n\n| Methods | Area |\n|---|---|\n"
+                "| `dungeon_run`, `tune_set`, `status` | The old driver |\n",
+            ),
+        )
+        self.assertProblem("method 'status' is not in notPortedMethods any more")
 
 
 class CommandLineTest(unittest.TestCase):

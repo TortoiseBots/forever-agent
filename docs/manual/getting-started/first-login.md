@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Your first login
-description: Prove that the agent can reach a ForeverCore server with login-check and world-check, then start a session.
+description: Prove that the agent can reach a ForeverCore server with login-check and world-check, create or delete a character, then start a session.
 tags: [getting-started, login, world-check, serve]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: forever-login
     resource: cmd/forever-agent/forever_login.go
@@ -18,6 +18,10 @@ sources:
     resource: internal/forever/bnet/locale.go
   - id: main
     resource: cmd/forever-agent/main.go
+  - id: char-screen
+    resource: cmd/forever-agent/forever_charcreate.go
+  - id: char-screen-core
+    resource: internal/forever/world/charcreate.go
 ---
 
 The first thing to do with a new server is prove two things in order: that the account can log in through the
@@ -149,6 +153,38 @@ The `--dir` becomes a slot directory: `slot.json`, `agent.pid` and `rpc-8765.tok
 place a password comes from a file (one line, at most 4096 bytes, one trailing newline allowed; the daemon does
 not check the file's permissions, so keep it `0600` yourself); every other command uses `FOREVER_PASSWORD`.
 See [The session daemon](../daemon/serve.md) and [RPC basics](../daemon/rpc-basics.md).
+
+# The character screen: forever char-create and forever char-delete
+
+Both commands log in like `forever world-check` (the same connection flags and `FOREVER_PASSWORD`), authenticate the
+world socket, and work on the character screen without entering the world. Both list the account's characters before
+and after, so a rerun shows what is actually there.
+
+```bash
+bin/forever-agent forever char-create --name NAME [--surname NAME] --race R --class C [--sex 0|1] \
+    (--choice OPTION:CHOICE ... | --no-appearance) --rest example.invalid:1119 --rpc example.invalid:1119 \
+    --ca ./ca.pem --account ACCOUNT
+
+bin/forever-agent forever char-delete (--name NAME [--surname NAME] | --guid 0xHIGH_LOW) \
+    --yes NAME --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem --account ACCOUNT
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--name` | required | The character name (for `char-delete`, its full name may carry the surname after the first blank). |
+| `--surname` | none | The character's surname, when it is not part of `--name`. |
+| `--race`, `--class` | required, 1-255 | Race and class ids (`ChrRaces.dbc`, `ChrClasses.dbc`). |
+| `--sex` | `0` | `0` male, `1` female. |
+| `--choice OPTION:CHOICE` | none | One appearance choice, repeatable and sent as given. |
+| `--no-appearance` | off | For test characters: create with no appearance choices. `--choice` and this are exclusive. |
+| `--guid 0xHIGH_LOW` | none | `char-delete`: delete exactly this GUID instead of resolving `--name`. |
+| `--yes NAME` | required | `char-delete`: the resolved character's full name; without the match nothing is sent. |
+
+The result code is the core's own name (`char-create: Mychar -> CHAR_CREATE_SUCCESS` and the like).
+`char-delete` first resolves the name from the account's list and deletes by GUID; `--yes` must repeat the resolved
+full name, so a typo can never delete a character. A create or delete that was sent and never answered exits `32`:
+the character may or may not exist, so list the account's characters before retrying (the server may hold a delete
+for its own 30-second pending-delete bound).
 
 # Exit codes you will meet here
 

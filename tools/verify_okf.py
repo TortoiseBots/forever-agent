@@ -66,7 +66,31 @@ Commands (fenced code blocks in every .md page):
     cmd/forever-agent/main.go and cmd/forever-agent/forever_login.go with the
     CASE_LABEL regex (the case labels of switch args[0]).
 
+Command coverage (the whole bundle):
+  * every command the binary registers is mentioned in at least one manual
+    page, as a command line ("forever-agent <word>", or "forever-agent forever
+    <word>" for a subcommand) or in backticks ("forever <word>" for a
+    subcommand, or the bare word for a top-level command);
+  * docs/manual/.undocumented-commands holds the names deliberately left out
+    (hidden or debug commands), one "name # reason" per line; an entry that is
+    not a registered command is a problem, so the list cannot rot.
+
+Method coverage (a serve's method table against docs/manual/daemon):
+  * the registered methods are read from internal/forever/world/*.go (never a
+    _test.go file) with three patterns, all inside that package: the string
+    argument of a call "srv.Register(\"name\"", the string keys of a map
+    literal that a "for name, fn := range map[string]..." walks and registers
+    with "srv.Register(name", and the names in the notPortedMethods slice;
+  * every implemented method is a row of docs/manual/daemon/method-index.md,
+    and every method named in a row of that page is registered; a method the
+    page leaves out on purpose is a "name # reason" line of
+    docs/manual/.undocumented-methods, and an entry there that names no
+    registered method is a problem;
+  * every notPortedMethods name is in docs/manual/daemon/not-ported-methods.md,
+    and every method named in that page's names table is still not ported.
+
 Reserved names: "index.md" and "log.md" may not be concept pages (OKF 3.1).
+Names that start with a dot (the two allow-lists) are not pages.
 """
 
 import datetime
@@ -130,6 +154,28 @@ ARGS0_SWITCH = "switch args[0] {"
 COMMAND_LINE = re.compile(r"^(?:[$>]\s*)?(?P<path>(?:[^\s/]+/)*forever-agent)(?:\s+(?P<rest>.*))?$")
 # Commands are words: a line such as "forever-agent 0.1.0" is output, not a command.
 COMMAND_WORD = re.compile(r"^[a-z][a-z0-9-]*$")
+
+# The command-coverage allow-list and the method-coverage allow-list: names deliberately left unwritten, one
+# "name # reason" per line. They live inside the bundle but start with a dot, so they are not pages.
+UNDOCUMENTED_COMMANDS = posixpath.join(BUNDLE, ".undocumented-commands")
+UNDOCUMENTED_METHODS = posixpath.join(BUNDLE, ".undocumented-methods")
+
+# A backticked phrase: "forever serve", "forever-agent forever serve --dir ./slot".
+BACKTICK = re.compile(r"`([^`\n]+)`")
+
+# A method-index table row: the first column is the method in backticks.
+METHOD_ROW = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|")
+
+# The serve registers a method by name in three shapes, all inside internal/forever/world:
+#   srv.Register("status", ...)                       a literal name;
+#   for name, fn := range map[string]...{ "mail_list": ... } { srv.Register(name, ...) }
+#                                                     a map literal a range walks;
+#   var notPortedMethods = []string{"tt", ...}         the old daemon's unimplemented names.
+# The map and slice patterns are the ones the package uses today, and a test fixture pins them.
+REGISTER_CALL = re.compile(r'srv\.Register\("([^"]+)"')
+REGISTER_MAP_START = re.compile(r"range\s+map\[string\]")
+REGISTER_MAP_KEYS = re.compile(r'"([^"\n]+)"\s*:')
+NOT_PORTED_LIST = re.compile(r"var\s+notPortedMethods\s*=\s*\[\]string\s*\{(.*?)\}", re.S)
 
 KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*))?$")
 
@@ -492,6 +538,79 @@ def load_command_registry(root):
     return parse_command_registry(*texts)
 
 
+def _registration_map_keys(text):
+    """The string keys of every map literal a `range` walks that then registers by name.
+
+    The package writes "for name, fn := range map[string]T{...} { srv.Register(name, ...) }". For each such range
+    the literal's braces are matched, and its quoted keys count only when "srv.Register(name" follows the literal
+    (a map ranged for anything else is not a method registration).
+    """
+    keys = set()
+    pos = 0
+    while True:
+        start = REGISTER_MAP_START.search(text, pos)
+        if not start:
+            return keys
+        opening = text.find("{", start.end())
+        if opening < 0:
+            return keys
+        depth = 0
+        closing = opening
+        while closing < len(text):
+            char = text[closing]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            closing += 1
+        body = text[opening + 1:closing]
+        if "srv.Register(name" in text[closing + 1:closing + 400]:
+            keys.update(REGISTER_MAP_KEYS.findall(body))
+        pos = closing + 1
+
+
+def parse_method_registry(texts):
+    """Return (implemented methods, not-ported methods) parsed from internal/forever/world's Go sources.
+
+    See the three registration shapes at REGISTER_CALL.
+    """
+    implemented = set()
+    not_ported = set()
+    for text in texts:
+        implemented.update(REGISTER_CALL.findall(text))
+        implemented.update(_registration_map_keys(text))
+        for block in NOT_PORTED_LIST.findall(text):
+            not_ported.update(_quoted_names(block))
+    return implemented, not_ported
+
+
+def _quoted_names(block):
+    return re.findall(r'"([^"\n]+)"', block)
+
+
+def load_method_registry(root):
+    """Read internal/forever/world's method registration, or None when that tree is not under root."""
+    directory = os.path.join(root, "internal", "forever", "world")
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return None
+    texts = []
+    for name in names:
+        if not name.endswith(".go") or name.endswith("_test.go"):
+            continue
+        try:
+            with open(os.path.join(directory, name), encoding="utf-8") as handle:
+                texts.append(handle.read())
+        except OSError:
+            return None
+    if not texts:
+        return None
+    return parse_method_registry(texts)
+
+
 def _check_commands(rel, text, registry, report):
     top, forever = registry
     in_fence = False
@@ -514,6 +633,186 @@ def _check_commands(rel, text, registry, report):
             continue
         if command == "forever" and len(rest) >= 2 and COMMAND_WORD.match(rest[1]) and rest[1] not in forever:
             report(rel, number, "unknown forever subcommand: %s" % rest[1])
+
+
+def _note_command_line(line, top, forever):
+    """Record the commands one command line names (`forever-agent <word> [forever <word>]`)."""
+    match = COMMAND_LINE.match(line.strip())
+    if not match:
+        return
+    words = (match.group("rest") or "").split()
+    if not words or not COMMAND_WORD.match(words[0]):
+        return
+    top.add(words[0])
+    if words[0] == "forever" and len(words) >= 2 and COMMAND_WORD.match(words[1]):
+        forever.add(words[1])
+
+
+def command_mentions(text):
+    """Return (top-level, forever-subcommand) command names one page mentions.
+
+    A mention is a command line in a fenced block (optionally behind a path or a shell prompt) or a backticked
+    phrase: `forever-agent <word> ...`, `forever <word> ...`, or a bare backticked word for a top-level command.
+    """
+    top, forever = set(), set()
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            _note_command_line(stripped, top, forever)
+        for span in BACKTICK.findall(line):
+            span = span.strip()
+            if span.startswith("forever-agent "):
+                _note_command_line(span, top, forever)
+            elif span.startswith("forever "):
+                words = span.split()
+                if len(words) >= 2 and COMMAND_WORD.match(words[1]):
+                    forever.add(words[1])
+            elif COMMAND_WORD.match(span):
+                top.add(span)
+    return top, forever
+
+
+def _read_allowlist(root, rel, report):
+    """Read one "name # reason" per line; return {name: line number}. A line without a reason is a problem."""
+    path = os.path.join(root, rel)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return {}
+    entries = {}
+    for number, line in enumerate(lines, start=1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        name, sep, reason = text.partition("#")
+        name = name.strip()
+        if not name:
+            report(rel, number, "allow-list line has no name")
+            continue
+        if not sep or not reason.strip():
+            report(rel, number, "allow-list entry %r has no reason after #" % name)
+            continue
+        if " " in name:
+            report(rel, number, "allow-list entry %r is not one name" % name)
+            continue
+        entries[name] = number
+    return entries
+
+
+def _bundle_pages(root):
+    bundle = os.path.join(root, BUNDLE)
+    for directory, dirs, files in os.walk(bundle):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(files):
+            if name.endswith(".md"):
+                full = os.path.join(directory, name)
+                with open(full, encoding="utf-8") as handle:
+                    yield os.path.join(*os.path.relpath(full, root).split(os.sep)), handle.read()
+
+
+def _check_command_coverage(root, registry, report):
+    """Every registered command is mentioned in a page, and the allow-list names registered commands only."""
+    top, forever = registry
+    mentioned_top, mentioned_forever = set(), set()
+    for _, text in _bundle_pages(root):
+        found_top, found_forever = command_mentions(text)
+        mentioned_top |= found_top
+        mentioned_forever |= found_forever
+    allowed = _read_allowlist(root, UNDOCUMENTED_COMMANDS, report)
+    for command in sorted(top - mentioned_top - set(allowed)):
+        report(
+            posixpath.join(BUNDLE, "index.md"),
+            0,
+            "registered command %r is in no manual page (as `forever-agent %s` or in backticks); document it, or "
+            "add it to %s with a reason" % (command, command, UNDOCUMENTED_COMMANDS),
+        )
+    for command in sorted(forever - mentioned_forever - set(allowed)):
+        report(
+            posixpath.join(BUNDLE, "index.md"),
+            0,
+            "registered forever subcommand %r is in no manual page (as `forever %s` or a command line); document it, "
+            "or add it to %s with a reason" % (command, command, UNDOCUMENTED_COMMANDS),
+        )
+    for name, number in sorted(allowed.items()):
+        if name not in top and name not in forever:
+            report(
+                UNDOCUMENTED_COMMANDS,
+                number,
+                "allow-list entry %r is not a registered command (the list cannot rot)" % name,
+            )
+
+
+def _method_index_names(text):
+    """The method names of an index page's table rows (the first column, in backticks)."""
+    names = set()
+    for line in text.splitlines():
+        match = METHOD_ROW.match(line)
+        if match:
+            names.add(match.group(1))
+    return names
+
+
+def _not_ported_names(text):
+    """The method names of the names table's first column (the other columns name replacements, not old methods)."""
+    names = set()
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        first = line.split("|")[1]
+        names.update(re.findall(r"`([A-Za-z0-9_]+)`", first))
+    return names
+
+
+def _read_page(root, rel):
+    try:
+        with open(os.path.join(root, rel), encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def _check_method_coverage(root, registry, report):
+    """The method index and the not-ported page agree with the serve's method table."""
+    implemented, not_ported = registry
+    index_rel = posixpath.join(BUNDLE, "daemon", "method-index.md")
+    index_text = _read_page(root, index_rel)
+    if index_text is None:
+        report(index_rel, 0, "the method index page is missing")
+        return
+    documented = _method_index_names(index_text)
+    allowed = _read_allowlist(root, UNDOCUMENTED_METHODS, report)
+    for method in sorted(implemented - documented - set(allowed)):
+        report(
+            index_rel,
+            0,
+            "registered daemon method %r has no row in this page; document it, or add it to %s with a reason"
+            % (method, UNDOCUMENTED_METHODS),
+        )
+    for method in sorted(documented - implemented):
+        report(index_rel, 0, "method %r is not registered by the serve (the page cannot outlive the code)" % method)
+    for name, number in sorted(allowed.items()):
+        if name not in implemented and name not in not_ported:
+            report(
+                UNDOCUMENTED_METHODS,
+                number,
+                "allow-list entry %r is not a registered daemon method (the list cannot rot)" % name,
+            )
+
+    not_ported_rel = posixpath.join(BUNDLE, "daemon", "not-ported-methods.md")
+    not_ported_text = _read_page(root, not_ported_rel)
+    if not_ported_text is None:
+        report(not_ported_rel, 0, "the not-ported methods page is missing")
+        return
+    listed = _not_ported_names(not_ported_text)
+    for method in sorted(not_ported - listed):
+        report(not_ported_rel, 0, "not-ported method %r is named in no row of this page" % method)
+    for method in sorted(listed - not_ported):
+        report(not_ported_rel, 0, "method %r is not in notPortedMethods any more (the page cannot outlive the code)" % method)
 
 
 def _children(directory):
@@ -573,13 +872,18 @@ def check_bundle(root):
         return ["%s: bundle directory not found" % posixpath.join(BUNDLE)]
 
     registry = load_command_registry(root)
+    method_registry = load_method_registry(root)
     for directory, dirs, files in os.walk(bundle):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         dirs.sort()
         names = set(files)
         rel_dir = posixpath.join(*os.path.relpath(directory, root).split(os.sep))
         if "index.md" not in names:
             report(posixpath.join(rel_dir, "index.md"), 0, "directory has no index.md")
         for name in sorted(files):
+            if name.startswith("."):
+                # The coverage allow-lists: plain text, not pages, and their entries are checked once below.
+                continue
             full = os.path.join(directory, name)
             rel = posixpath.join(*os.path.relpath(full, root).split(os.sep))
             if not name.endswith(".md"):
@@ -611,6 +915,11 @@ def check_bundle(root):
             _check_privacy(rel, text, report)
             if registry is not None:
                 _check_commands(rel, text, registry, report)
+
+    if registry is not None:
+        _check_command_coverage(root, registry, report)
+    if method_registry is not None:
+        _check_method_coverage(root, method_registry, report)
 
     return problems
 

@@ -1,10 +1,10 @@
 ---
 type: Method Reference
 title: Groups, raids and guilds
-description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, and handle guild invites.
+description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go
@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/world/raidctl.go
   - id: guild-session
     resource: internal/forever/world/guild_session.go
+  - id: party-check
+    resource: cmd/forever-agent/forever_chat.go
 ---
 
 These methods cover the group a character is in (a party, or a raid converted from it) and the guild: inviting,
@@ -106,6 +108,43 @@ than the one being moved.
 An invite is held from the guild-invite message; the accept consumes it, so a second accept has nothing to take and
 a decline after an accept has nothing to decline. `guild_leave` on a character that is not in a guild is refused
 with `guild_leave: not in a guild`.
+
+# Check a party live: forever party-check
+
+One-shot live check of the group code, with no daemon: it logs in like `forever world-check`, enters the world, does
+what you asked (invite, accept or decline an invite, uninvite, promote, set the loot method, mark a creature), prints
+what came back and logs out.
+
+```bash
+forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 5s] [--invite NAME | --accept-from NAME | --decline-from NAME] \
+    [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--loot METHOD[:THRESHOLD]] \
+    [--mark ICON] [--wait-join DURATION] [--settle 4s]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--settle` | `4s` | How long to settle in the world before acting, 0-1m. |
+| `--stay` | `5s` | How long to stay in the group before leaving, 0-2m. |
+| `--invite NAME` | none | Invite this character name. |
+| `--accept-from NAME`, `--decline-from NAME` | none | Wait for an invite from this name and accept or decline it. Choose one side: `--invite` and these are exclusive. |
+| `--uninvite NAME` | none | After the group formed, uninvite this member, `--invite` only (only the inviter can). |
+| `--promote NAME` | none | Promote this member to leader and wait for the roster that shows it. |
+| `--promote-back DURATION` | `0` | With `--promote`: then wait up to this long for the new leader to promote this character back (an agent session on the other side); at most 2m. |
+| `--loot METHOD[:THRESHOLD]` | none | Set the loot method and read the roster back: `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`, `personal-loot`, or `0..5`; threshold 2-6, default 2. |
+| `--mark ICON` | none | Set this raid target icon on the nearest attackable creature and read the icon list back: `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. |
+| `--wait-join DURATION` | `0` | With `--invite`: wait up to this long for the group to form (stats, party line, stay); at most 2m. |
+
+The summary is the roster the session saw, in the same fields as the `party` method:
+
+```text
+party-check: in a group, 2 member(s), leader Mychar, loot free-for-all
+  Mychar connected=true subgroup=0 class=1 roles=0 assistant 1500/1500 hp 100/100 power level 12 auras 2
+  Otherchar connected=true subgroup=0 class=4 roles=0
+```
+
+Exit `0` when the run completes; `5` when the world server refuses the session or a step fails after login; `2` a
+usage error (both invite sides given, `--promote-back` without `--promote`, a word that is not a loot method or icon).
 
 # Examples
 

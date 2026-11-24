@@ -109,7 +109,9 @@ is the same list with the details.
 * Code changes: [Contributing](docs/manual/developers/contributing.md) has the checks a change must pass, the branch
   flow and the rules for pull requests. The short form is `make test`, `gofmt`, `staticcheck ./...`, and PRs against
   `dev`; `main` only takes `dev` after review.
-* Documentation changes: run `make docs-check` before you push.
+* Documentation changes: run `make docs-check` before you push. Every change a user can see updates the manual page
+  it changes in the same PR, per [DOCS-SYNC.md](DOCS-SYNC.md); a change with no user-visible effect says `Docs: not
+  needed, because ...` in the PR body.
 
 ## Licence
 

@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Ordering bots
-description: How the agent talks to a bot module, which commands it sends, and which of your bots it may order.
+description: How the agent talks to a bot module, which commands it sends, which of your bots it may order, and the live checks that drive the module end to end.
 tags: [bots-and-raids, bots, orders, commander]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: bot-commands
     resource: contracts/bot-commands/v1/README.md
@@ -14,6 +14,10 @@ sources:
     resource: internal/forever/command/fbcmd/fbcmd.go
   - id: fb-replies
     resource: internal/forever/command/fbcmd/replies.go
+  - id: fb-check
+    resource: cmd/forever-agent/forever_fb.go
+  - id: fb-dungeon
+    resource: cmd/forever-agent/forever_fb_dungeon.go
   - id: cmdctl
     resource: internal/forever/cmdctl/cmdctl.go
   - id: cmdctl-verbs
@@ -149,6 +153,52 @@ by reading the bot again instead of waiting for an acknowledgement.
 
 State is read over the add-on protocol, not over chat: the roster and one bot's
 detail. See [the add-on protocol](addon-protocol.md).
+
+# The live checks: forever fb-check and forever fb-dungeon
+
+Two one-shot commands that drive the Forever Bots module over the wire, with no daemon involved.
+
+`forever fb-check` logs in like `forever world-check`, proves the module answers (`.bot about`; until it does, no
+other `.bot` line is sent), adds bots with the module's chat commands, reads the roster and one bot's detail through
+the add-on protocol, gives orders by whisper (the bot's answer) or as a party word, dismisses the bots and logs out.
+
+```bash
+forever-agent forever fb-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--add CLASS[:ROLE] ...] [--order WORD|party:WORD ...] \
+    [--dismiss NAME|all] [--stay 0s] [--settle 4s] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--add` | `warrior:dps` once | A bot to add: `CLASS` or `CLASS:ROLE` (role `tank`, `healer` or `dps`); repeatable. |
+| `--order` | `follow`, `stay` | An order word sent to every added bot by whisper, or `party:WORD` for a party word; repeatable. |
+| `--dismiss` | `all` | Which bots to dismiss at the end: a name, or `all`. |
+| `--stay` | `0s` | How long to stay after the last step, 0-10m. |
+| `--settle` | `4s` | How long to settle in the world before the first command, 0-1m. |
+| `--capture-dir` | none | Write every packet the combat, chat, party and add-on handlers see into a new run directory under this path (outside the repository). |
+
+`forever fb-dungeon` fills the party to five with the module's `.bot lfg`, queues a dungeon with `.bot dungeon`, and
+waits until both the module's finder says `inside` and the client's own map change confirmed the instance. It then
+hands the lead to the tank bot and watches for `--watch` seconds, reporting the finder's state, the bots' health and
+deaths, the tank's party lines and the module's event pushes; at the end it leads off, leaves the dungeon and
+dismisses the bots.
+
+```bash
+forever-agent forever fb-dungeon [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--dungeon rfc] [--role tank|healer|dps] [--watch 600] [--leave=false] \
+    [--settle 4s] [--stay 0s] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dungeon` | `rfc` | The dungeon word the module's finder knows (a short word like `rfc`, a name, or `any`). |
+| `--role` | empty | This character's role; empty lets the module read it from the class. |
+| `--watch` | `600` | Seconds to watch inside the dungeon, 0-3600. |
+| `--leave` | on | Leave the dungeon when the watch ends; `--leave=false` stays inside. |
+
+Both print the same identifier-free lines the session reports (`fb-check: module: ...`, `fb-dungeon: party of 5: ...`,
+one line per stage) and then the packet counts. Exit `0` when the run completes; `5` when the world server refuses the
+session or the run fails after login; `2` a usage error (an unknown class, role, order word or dungeon word).
 
 # Commanding a party: the `.tb` channel
 

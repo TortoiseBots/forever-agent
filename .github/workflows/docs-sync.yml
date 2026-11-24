@@ -1,0 +1,42 @@
+name: docs-sync
+
+# DOCS-SYNC.md's machine-checkable half: a pull request that changes the CLI, a serve method file or a flag must
+# change docs/manual/ or README.md, or say why no doc was needed. The decision is tools/verify_docs_sync.py (tested in
+# tools/test_verify_docs_sync.py and run by `make docs-check`). A body added later re-runs the job through `edited`.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+concurrency:
+  group: docs-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-sync:
+    # Draft PRs are work in progress; the job runs when the PR is ready, like the test gate.
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The body goes through an environment variable: a pull request body with shell syntax is only text.
+      - name: the docs follow the code
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" >"$RUNNER_TEMP/changed.txt"
+          git diff --unified=0 "$BASE_SHA...$HEAD_SHA" >"$RUNNER_TEMP/change.diff"
+          python3 tools/verify_docs_sync.py \
+            --changed-files "$RUNNER_TEMP/changed.txt" \
+            --diff "$RUNNER_TEMP/change.diff"

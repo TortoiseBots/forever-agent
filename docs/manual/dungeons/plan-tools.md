@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: Plan tools
-description: Check, lint, probe, export, scout and compare a dungeon plan offline, before it costs a run.
+description: Check, lint, probe, stage, export, scout and compare a dungeon plan offline, before it costs a run.
 tags: [dungeons, tools, checks, export]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
 sources:
   - id: plan-check
     resource: cmd/forever-agent/plan_check_cmd.go
@@ -12,6 +12,8 @@ sources:
     resource: cmd/forever-agent/plan_probe_cmd.go
   - id: trash-check-cmd
     resource: cmd/forever-agent/trash_check_cmd.go
+  - id: stage-check-cmd
+    resource: cmd/forever-agent/stage_check_cmd.go
   - id: plan-scout-cmd
     resource: cmd/forever-agent/plan_scout_cmd.go
   - id: plan-export-cmd
@@ -153,6 +155,42 @@ pack no row pulls there), `patrol` (a loop crosses the route or a stand), `own` 
 `clear`. The text ends with `<plan>: N steps, M segments: a clear, b own, c patrol, d danger` and the model's own
 caveats: positions are static, patrol phase is unknown without a recording, and there is no line of sight, so aggro
 through a wall is over-counted.
+
+# stage-check
+
+Answers where a server-side run leader would stage the party for one leg, offline: the leg's first row (or, without
+rows, its first plan point), whether the server's path query can walk from that point to the leg's next point, the
+dangers a fresh instance still holds, and where a safe point before the leg sits when the first point cannot be
+staged. It runs the same `dungeon.StageLeg` checks the driver's staging uses, so a leg that would refuse to stage is
+refused here first.
+
+```bash
+forever-agent stage-check [--dir dungeons] --mmaps DIR [--cleared-through LEG] [--server-steps N] [--json] <plan> <leg>
+forever-agent stage-check --forever --mmaps DIR --sql FILE [--plan NAME] [--cleared-through LEG] [--json] <plan> <leg>
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dir` | `dungeons` | The folder with the plan files. |
+| `--mmaps` | required | The mesh folder: `<map>.mmap` and tiles, or with `--forever` the 16-format `MMMM.mmap` files. |
+| `--forever` | off | Stage on the Forever side's inputs: the run leader's exported migration (`--sql`) for the first row, on v16 tiles. With `--forever`, `--sql` is required. |
+| `--sql` | none | With `--forever`: the migration the leg's first row is read from (`plan-export --forever` output). |
+| `--plan` | the `<plan>` argument | With `--forever --sql`: the plan in the file when it holds several. |
+| `--cleared-through` | none | Legs `0..this one` count as cleared, so their packs are dead when this leg stages. |
+| `--server-steps` | `0` | The step count `.bot run list` shows for the plan; it picks the exporter option set the first row comes from. Old-server runs only. |
+| `--json` | off | Print the result as JSON with the same fields the RPC's `staged: false, dry_run: true` result carries. |
+
+The leg may be a number (0-based) or a name. Exit codes: `0` the leg stages; `13` it refuses (the reason, the back-off
+point and the earlier-leg proposal are printed); `2` a usage error, an unknown plan or leg, or a mesh that cannot
+answer. The text form is one line per finding:
+
+```text
+<plan> leg 3 <name>: stage at 12.0 -300.5 -44.0 (leg_first; first point from rows)
+proposal: before_leg leg 2 <name> at 10.0 -295.0 -44.0 (12 yd back)
+```
+
+`first point from rows` means the exporter's first row was used; `from plan` means the leg's first plan point was
+(an optional or `skip_export` leg is not exported, and a note says so).
 
 # plan-export
 
