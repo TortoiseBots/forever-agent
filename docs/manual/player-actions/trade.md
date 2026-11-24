@@ -93,25 +93,25 @@ is open. The trade must complete for the enchant to apply. See [spells and comba
 Hand over 5 linen cloth and 50 copper:
 
 ```
-forever rpc ./slots/ACCOUNT trade '{"to": "Otherchar", "items": [{"item": 2589, "count": 5}], "gold": 50}'
+forever-agent forever rpc ./slots/ACCOUNT trade '{"to": "Otherchar", "items": [{"item": 2589, "count": 5}], "gold": 50}'
 ```
 
 Step by step, the other player offering the trade:
 
 ```
-forever rpc ./slots/ACCOUNT trade_expect '{"from": "Otherchar", "wait_ms": 20000}'
-forever rpc ./slots/ACCOUNT trade_set_gold '{"gold": 500}'
-forever rpc ./slots/ACCOUNT trade_status '{}'
-forever rpc ./slots/ACCOUNT trade_accept '{"wait_ms": 20000}'
+forever-agent forever rpc ./slots/ACCOUNT trade_expect '{"from": "Otherchar", "wait_ms": 20000}'
+forever-agent forever rpc ./slots/ACCOUNT trade_set_gold '{"gold": 500}'
+forever-agent forever rpc ./slots/ACCOUNT trade_status '{}'
+forever-agent forever rpc ./slots/ACCOUNT trade_accept '{"wait_ms": 20000}'
 ```
 
 Step by step, this side offering the trade:
 
 ```
-forever rpc ./slots/ACCOUNT trade_open '{"to": "Otherchar", "open_wait_ms": 20000}'
-forever rpc ./slots/ACCOUNT trade_set_item '{"trade_slot": 0, "item_entry": 2589}'
-forever rpc ./slots/ACCOUNT trade_set_gold '{"gold": 500}'
-forever rpc ./slots/ACCOUNT trade_accept '{"wait_ms": 20000}'
+forever-agent forever rpc ./slots/ACCOUNT trade_open '{"to": "Otherchar", "open_wait_ms": 20000}'
+forever-agent forever rpc ./slots/ACCOUNT trade_set_item '{"trade_slot": 0, "item_entry": 2589}'
+forever-agent forever rpc ./slots/ACCOUNT trade_set_gold '{"gold": 500}'
+forever-agent forever rpc ./slots/ACCOUNT trade_accept '{"wait_ms": 20000}'
 ```
 
 There are no trade act steps: a script that trades uses the `act` method's sibling calls, or drives the trade from

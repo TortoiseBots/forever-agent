@@ -69,32 +69,32 @@ server drops pet orders while mounted), a bar that has not arrived, and an unkno
 Read the pet:
 
 ```
-forever rpc ./slots/ACCOUNT pet '{}'
+forever-agent forever rpc ./slots/ACCOUNT pet '{}'
 ```
 
 Send the pet at the selected target:
 
 ```
-forever rpc ./slots/ACCOUNT pet_action '{"action": "attack"}'
+forever-agent forever rpc ./slots/ACCOUNT pet_action '{"action": "attack"}'
 ```
 
 Set it defensive and make it follow:
 
 ```
-forever rpc ./slots/ACCOUNT pet_action '{"action": "defensive"}'
-forever rpc ./slots/ACCOUNT pet_action '{"action": "follow"}'
+forever-agent forever rpc ./slots/ACCOUNT pet_action '{"action": "defensive"}'
+forever-agent forever rpc ./slots/ACCOUNT pet_action '{"action": "follow"}'
 ```
 
 Cast a bar spell by name at the selected target:
 
 ```
-forever rpc ./slots/ACCOUNT pet_action '{"action": "cast", "name": "Growl"}'
+forever-agent forever rpc ./slots/ACCOUNT pet_action '{"action": "cast", "name": "Growl"}'
 ```
 
 Turn autocast on for the spell in bar slot 4:
 
 ```
-forever rpc ./slots/ACCOUNT pet_action '{"action": "autocast_on", "slot": 4}'
+forever-agent forever rpc ./slots/ACCOUNT pet_action '{"action": "autocast_on", "slot": 4}'
 ```
 
 # What you see

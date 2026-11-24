@@ -163,7 +163,8 @@ Writes a plan as one idempotent world migration for the bot module's run leader:
 forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot [--carrier-chests]] \
     [--gm-cross-direct] [--approach-hops] [--floor-aware] [--skip-legs NAME,...] [--with-optional NAME,...] \
     [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)
-forever-agent plan-export --forever [--report] ... --out DIR|FILE (<plan>... | --all-live)
+forever-agent plan-export --forever ... --out DIR|FILE (<plan>... | --all-live)
+forever-agent plan-export --forever --report [--dir dungeons] [<plan>...]
 ```
 
 | Flag | Default | Meaning |
@@ -181,7 +182,7 @@ forever-agent plan-export --forever [--report] ... --out DIR|FILE (<plan>... | -
 | `--stamp` | now, UTC | The migration's timestamp. |
 | `--force` | off | Replace an existing file; never edit a migration that is applied. |
 | `--forever` | off | Write the rows a ForeverCore server module reads (its own object entries from `alt_entries`, one unit row per pack member), and refuse a plan field the format cannot carry. |
-| `--report` | off | With `--forever`: print one record per plan file (exported, or refused and why) and write nothing. |
+| `--report` | off | With `--forever`: print one record per plan file (exported, or refused and why) and write nothing; it cannot be combined with `--out`. |
 
 A file whose base name is not `YYYYMMDDHHMMSS_world.sql` gets a note: the server's updater will not take it. The
 written migration is read back and compared with the built rows before it is left on disk.
@@ -194,8 +195,8 @@ adds a live pass on a test server (a GM account on a leased slot) and merges wha
 ```bash
 forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--spawns DIR] [--from LEG] \
     [--until LEG] [--party-level N] [--out DIR] [--json] [--fix-out FILE] [--apply-fixes DIR] \
-    [--fail-on fail|warn] [--live <server>] [--slot N] [--holder NAME] [--slots FILE] [--binary PATH] \
-    [--walk-budget 5m] [--max-minutes 20] [--forever [--parent MAP=PARENT]] [--live --slot DIR]
+    [--fail-on fail|warn] [--live <server> [--slot N] [--holder NAME] [--slots FILE] [--binary PATH] \
+    | --forever [--parent MAP=PARENT] [--live --slot DIR]] [--walk-budget 5m] [--max-minutes 20]
 ```
 
 - `--mmaps` defaults to `~/forever-agent-mmaps`; `--spawns` to the map's export under `tools/dungeongen/testdata`.

@@ -103,7 +103,7 @@ ends at the first `UNCONFIRMED` leg: without a confirmed position there is no ho
 What you see is one line per leg and a final line:
 
 ```text
-route-walk: leg 1 entrance           PASS        110.2 of  110.2 yd, 8 point(s), max deviation 0.41 yd, max snap 0.00 yd
+route-walk: leg 0 entrance           PASS        110.2 of  110.2 yd, 8 point(s), max deviation 0.41 yd, max snap 0.00 yd
 route-walk: 1 leg(s), verdict PASS, 110.2 yd planned, 110.4 yd confirmed, 2m1s
 ```
 

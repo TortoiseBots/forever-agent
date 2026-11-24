@@ -60,7 +60,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [forever raid-autopilot](bots-and-raids/raid-autopilot.md) - Keep the Forever raids of a walk folder running and restarting without a person watching each one.
 * [Battlegrounds](bots-and-raids/battlegrounds.md) - Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
 * [forever fleet](bots-and-raids/fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
-* [Watching bots on a dashboard](bots-and-raids/dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and replay recordings.
+* [Watching bots on a dashboard](bots-and-raids/dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 
 # Testing
 

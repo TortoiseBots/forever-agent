@@ -30,9 +30,14 @@ Concept pages (every .md file except index.md and log.md):
   * "status" is one of draft, stable or deprecated.
 
 index.md (every directory):
+  * every directory under the bundle root has one, the root included;
   * no frontmatter, except the bundle root, which may carry only okf_version;
   * lists every concept page and every subdirectory of its own directory
     exactly once, through a link that resolves.
+
+Non-Markdown files:
+  * the bundle holds only .md files; any other file is a problem (assets
+    live outside the bundle).
 
 log.md (every directory):
   * no frontmatter;
@@ -49,8 +54,17 @@ Privacy (every file in the bundle, and nothing outside it):
   * no IPv4 address except loopback (127.0.0.0/8); the agent's own defaults
     are loopback addresses, and every other address is a real host somewhere;
   * no absolute home directory path and no Windows drive path;
-  * no "password=<value>" assignment (a placeholder such as
-    password=<password> or password=$ENV is fine).
+  * no assigned secret value: password/passwd/secret/token keys with a quoted or
+    unquoted value, in a flag, shell assignment, JSON or YAML. A placeholder
+    (<password>, PASSWORD, $ENV, ...) is fine, and a *_file/*_env/*_path key
+    names a place or a variable, not a secret.
+
+Commands (fenced code blocks in every .md page):
+  * a line that starts with forever-agent (optionally behind a path or a shell
+    prompt) names a registered top-level command, and one under "forever" names
+    a registered forever subcommand. The registrations are read from
+    cmd/forever-agent/main.go and cmd/forever-agent/forever_login.go with the
+    CASE_LABEL regex (the case labels of switch args[0]).
 
 Reserved names: "index.md" and "log.md" may not be concept pages (OKF 3.1).
 """
@@ -89,7 +103,33 @@ GENERATED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 IPV4 = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\d)")
 HOME_PATH = re.compile(r"/home/")
 WINDOWS_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:\\")
-PASSWORD_VALUE = re.compile(r"(?i)\bpassword\s*=\s*([^\s]*)")
+
+# A secret-like key and its assigned value, in the forms the manual can carry: a flag (--password=x),
+# a shell assignment (PASSWORD=x, export DB_PASSWORD=x), JSON/YAML (password: x, "password": "x").
+# The key match starts after a non-word character so --password=x is seen (the dash is allowed in the
+# key, and a word before it is not).
+SECRET_ASSIGNMENT = re.compile(
+    r"(?<![\w-])(?P<key>[A-Za-z0-9_-]*(?:password|passwd|secret|token)[A-Za-z0-9_-]*)"
+    r'\s*["\']?\s*[:=]\s*'
+    r'(?P<value>"[^"]*"|\'[^\']*\'|[^\s,;)\]}]+)',
+    re.IGNORECASE,
+)
+# The value of one of these keys is a place, a variable name or an identifier, not the secret itself.
+SECRET_KEY_SUFFIX = re.compile(r"(?i)(file|env|path|dir)$")
+# Placeholder values the manual is allowed to show. Everything else must match a form in _placeholder_value.
+PLACEHOLDER_VALUES = {"...", "REDACTED", "redacted"}
+
+# The top-level commands are the case labels of the switch on args[0] in cmd/forever-agent/main.go;
+# the forever subcommands are the case labels of the switch on args[0] in foreverCmd, in
+# cmd/forever-agent/forever_login.go. Both are read with this one regex, so a command the code does
+# not register cannot appear in an example.
+CASE_LABEL = re.compile(r'^\s*case "([^"]+)":')
+ARGS0_SWITCH = "switch args[0] {"
+
+# A line that starts a forever-agent command, optionally behind a shell prompt or a path.
+COMMAND_LINE = re.compile(r"^(?:[$>]\s*)?(?P<path>(?:[^\s/]+/)*forever-agent)(?:\s+(?P<rest>.*))?$")
+# Commands are words: a line such as "forever-agent 0.1.0" is output, not a command.
+COMMAND_WORD = re.compile(r"^[a-z][a-z0-9-]*$")
 
 KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*))?$")
 
@@ -376,6 +416,25 @@ def _check_links(rel, text, root, report):
             report(rel, number, "link does not resolve: %s (looked for %s)" % (target, resolved))
 
 
+def _placeholder_value(value):
+    """True for a value the manual may show in place of a secret."""
+    value = _strip_quotes(value.strip())
+    if not value or value in PLACEHOLDER_VALUES:
+        return True
+    if value.startswith("<") and value.endswith(">"):
+        return True
+    if value.startswith("$") or value.startswith("`"):
+        return True
+    if value.startswith("%") and value.endswith("%"):
+        return True
+    if value.startswith("-"):
+        # Prose such as "no password: --pass-file ..." names the flag that carries the password.
+        return True
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+        return True
+    return False
+
+
 def _check_privacy(rel, text, report):
     for number, line in enumerate(text.splitlines(), start=1):
         for match in IPV4.finditer(line):
@@ -387,10 +446,74 @@ def _check_privacy(rel, text, report):
             report(rel, number, "absolute home directory path: %s" % line.strip()[:120])
         if WINDOWS_PATH.search(line):
             report(rel, number, "Windows drive path: %s" % line.strip()[:120])
-        for match in PASSWORD_VALUE.finditer(line):
-            value = match.group(1)
-            if value and value[0] not in "<${%\"'":
-                report(rel, number, "password value in the manual: %s" % match.group(0)[:120])
+        for match in SECRET_ASSIGNMENT.finditer(line):
+            if SECRET_KEY_SUFFIX.search(match.group("key")):
+                continue
+            if _placeholder_value(match.group("value")):
+                continue
+            report(rel, number, "secret value in the manual: %s" % match.group(0)[:120])
+
+
+def _switch_commands(text, marker):
+    """The case labels of the first switch on args[0] after marker, one per line."""
+    start = text.find(marker)
+    if start < 0:
+        return set()
+    start = text.find(ARGS0_SWITCH, start)
+    if start < 0:
+        return set()
+    names = set()
+    depth = 0
+    for line in text[start:].splitlines():
+        depth += line.count("{") - line.count("}")
+        match = CASE_LABEL.match(line)
+        if match:
+            names.add(match.group(1))
+        if depth <= 0 and names:
+            break
+    return names
+
+
+def parse_command_registry(main_text, forever_text):
+    """Return (top-level commands, forever subcommands) parsed from the two Go files' switches."""
+    return _switch_commands(main_text, "func run("), _switch_commands(forever_text, "func foreverCmd(")
+
+
+def load_command_registry(root):
+    """Read cmd/forever-agent's registration, or None when that tree is not under root."""
+    paths = [os.path.join(root, "cmd", "forever-agent", name) for name in ("main.go", "forever_login.go")]
+    try:
+        texts = []
+        for path in paths:
+            with open(path, encoding="utf-8") as handle:
+                texts.append(handle.read())
+    except OSError:
+        return None
+    return parse_command_registry(*texts)
+
+
+def _check_commands(rel, text, registry, report):
+    top, forever = registry
+    in_fence = False
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            continue
+        match = COMMAND_LINE.match(stripped)
+        if not match:
+            continue
+        rest = (match.group("rest") or "").split()
+        if not rest or not COMMAND_WORD.match(rest[0]):
+            continue
+        command = rest[0]
+        if command not in top:
+            report(rel, number, "unknown forever-agent command: %s" % command)
+            continue
+        if command == "forever" and len(rest) >= 2 and COMMAND_WORD.match(rest[1]) and rest[1] not in forever:
+            report(rel, number, "unknown forever subcommand: %s" % rest[1])
 
 
 def _children(directory):
@@ -449,13 +572,22 @@ def check_bundle(root):
     if not os.path.isdir(bundle):
         return ["%s: bundle directory not found" % posixpath.join(BUNDLE)]
 
+    registry = load_command_registry(root)
     for directory, dirs, files in os.walk(bundle):
         dirs.sort()
+        names = set(files)
+        rel_dir = posixpath.join(*os.path.relpath(directory, root).split(os.sep))
+        if "index.md" not in names:
+            report(posixpath.join(rel_dir, "index.md"), 0, "directory has no index.md")
         for name in sorted(files):
-            if not name.endswith(".md"):
-                continue
             full = os.path.join(directory, name)
             rel = posixpath.join(*os.path.relpath(full, root).split(os.sep))
+            if not name.endswith(".md"):
+                report(rel, 0, "not a Markdown file: the bundle holds only .md pages (assets live outside it)")
+                with open(full, encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
+                _check_privacy(rel, text, report)
+                continue
             with open(full, encoding="utf-8") as handle:
                 text = handle.read()
             is_root = rel == posixpath.join(BUNDLE, "index.md")
@@ -477,6 +609,8 @@ def check_bundle(root):
 
             _check_links(rel, text, root, report)
             _check_privacy(rel, text, report)
+            if registry is not None:
+                _check_commands(rel, text, registry, report)
 
     return problems
 

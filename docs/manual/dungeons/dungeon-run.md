@@ -142,8 +142,10 @@ A dry run with `--out` writes the same files. Without `--out` the run writes not
 # Common problems
 
 - `the plan is refused: ...` — the loader's message names the field. Fix the plan, not the command line.
-- `prepare: party` / `prepare: roster` / `prepare: roles` / `prepare: leader` — the party's roster does not match
-  the five names: a member offline, under level 10, missing a role, or the wrong member flagged leader.
+- `prepare:party` / `prepare:roster` / `prepare:names` / `prepare:offline` / `prepare:level` / `prepare:roles` /
+  `prepare:leader` / `prepare:commander` — the party's roster does not match the five names: the module's roster read
+  failed, a member is missing, offline or under level 10, a role is missing, or the leader or commander is not the
+  tank. [Stop reasons](stop-reasons.md) lists each one.
 - `prepare:gm` or `prepare:gm-visible` — the account may not turn GM mode on; the run stops before anything moves.
 - `stuck` or `budget` — no progress within the plan's watchdog levels or the run's minutes are spent; the stop
   reasons page lists what each means.

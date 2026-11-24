@@ -110,41 +110,41 @@ with `guild_leave: not in a guild`.
 Invite a player:
 
 ```
-forever rpc ./slots/ACCOUNT invite '{"name": "Otherchar"}'
+forever-agent forever rpc ./slots/ACCOUNT invite '{"name": "Otherchar"}'
 ```
 
 On the invited character's session, accept and read the roster:
 
 ```
-forever rpc ./slots/OTHER accept_invite '{}'
-forever rpc ./slots/OTHER party '{}'
+forever-agent forever rpc ./slots/OTHER accept_invite '{}'
+forever-agent forever rpc ./slots/OTHER party '{}'
 ```
 
 Promote a member, then set need-before-greed from uncommon up:
 
 ```
-forever rpc ./slots/ACCOUNT promote '{"name": "Otherchar"}'
-forever rpc ./slots/ACCOUNT loot_method '{"method": "need-before-greed", "threshold": 2}'
+forever-agent forever rpc ./slots/ACCOUNT promote '{"name": "Otherchar"}'
+forever-agent forever rpc ./slots/ACCOUNT loot_method '{"method": "need-before-greed", "threshold": 2}'
 ```
 
 Mark the skull and read the icons:
 
 ```
-forever rpc ./slots/ACCOUNT mark '{"name": "Kobold Vermin", "icon": "skull"}'
-forever rpc ./slots/ACCOUNT marks '{}'
+forever-agent forever rpc ./slots/ACCOUNT mark '{"guid": "0x00000000000000A1", "icon": "skull"}'
+forever-agent forever rpc ./slots/ACCOUNT marks '{}'
 ```
 
 Convert to a raid and move a member to subgroup 3:
 
 ```
-forever rpc ./slots/ACCOUNT convert_raid '{}'
-forever rpc ./slots/ACCOUNT raid_move '{"name": "Otherchar", "subgroup": 3}'
+forever-agent forever rpc ./slots/ACCOUNT convert_raid '{}'
+forever-agent forever rpc ./slots/ACCOUNT raid_move '{"name": "Otherchar", "subgroup": 3}'
 ```
 
 Leave the group:
 
 ```
-forever rpc ./slots/ACCOUNT leave_group '{}'
+forever-agent forever rpc ./slots/ACCOUNT leave_group '{}'
 ```
 
 # What you see

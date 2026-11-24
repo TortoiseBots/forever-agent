@@ -29,7 +29,8 @@ The plan file is the single source of truth. Exported run-leader rows are genera
 
 The repository ships a plan for every dungeon and raid the server has under `dungeons/`. `docs/PLANS.md` is the generated table of
 all of them (map, level band, legs, status, mmaps, what the instance needs besides killing); it is written by
-`go run ./tools/dungeongen` from `tools/dungeongen/plans.json` and the plan files, so do not edit it by hand.
+`go run ./tools/dungeongen -spec tools/dungeongen/plans.json -table docs/PLANS.md` from `tools/dungeongen/plans.json`
+and the plan files, so do not edit it by hand.
 
 # File name and loader
 

@@ -59,8 +59,8 @@ The oracle's own rules live in `internal/kbspells/forever`: one file per class w
 Text output is one line per party member, in the party's order:
 
 ```
-Mychar (warrior tank): spec protection (role tank); missing core: Shield Slam; ok
-Healbot (paladin heal): spec holy (role heal); wrong class: Sunder Armor (warrior)
+Mychar (warrior tank): spec protection (role tank); missing core: Shield Slam
+Healbot (paladin heal): spec holy (role heal); ok; wrong class: Sunder Armor (warrior)
 Castbot (mage dps): spec frost (signature Frostbolt 41); ok
 ```
 
@@ -78,9 +78,10 @@ With `--json`:
       "role": "heal",
       "spec": "holy",
       "spec_how": "role heal",
-      "casts": 96,
+      "level": "fail",
+      "text": "spec holy (role heal); ok; wrong class: Sunder Armor (warrior)",
       "wrong_class": ["Sunder Armor (warrior)"],
-      "text": "spec holy (role heal); wrong class: Sunder Armor (warrior)"
+      "casts": 96
     }
   ]
 }

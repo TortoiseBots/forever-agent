@@ -135,39 +135,39 @@ purse, then pass `force: true`.
 Read a mailbox:
 
 ```
-forever rpc ./slots/ACCOUNT mail_list '{"guid": "0x0000000000000b20"}'
+forever-agent forever rpc ./slots/ACCOUNT mail_list '{"guid": "0x0000000000000b20"}'
 ```
 
 Take the attachment at index 0 of mail 12345:
 
 ```
-forever rpc ./slots/ACCOUNT mail_take_item '{"guid": "0x0000000000000b20", "mail_id": 12345, "index": 0}'
+forever-agent forever rpc ./slots/ACCOUNT mail_take_item '{"guid": "0x0000000000000b20", "mail_id": 12345, "index": 0}'
 ```
 
 Send 50 silver with a note:
 
 ```
-forever rpc ./slots/ACCOUNT mail_send '{"guid": "0x0000000000000b20", "to": "Otherchar", "subject": "repair bill", "body": "thanks", "money": 5000}'
+forever-agent forever rpc ./slots/ACCOUNT mail_send '{"guid": "0x0000000000000b20", "to": "Otherchar", "subject": "repair bill", "body": "thanks", "money": 5000}'
 ```
 
 Open the house and search for "linen":
 
 ```
-forever rpc ./slots/ACCOUNT auction_hello '{"guid": "0x0000000000000c30"}'
-forever rpc ./slots/ACCOUNT auction_browse '{"guid": "0x0000000000000c30", "name": "linen"}'
+forever-agent forever rpc ./slots/ACCOUNT auction_hello '{"guid": "0x0000000000000c30"}'
+forever-agent forever rpc ./slots/ACCOUNT auction_browse '{"guid": "0x0000000000000c30", "name": "linen"}'
 ```
 
 Quote and buy 20 of item 2589:
 
 ```
-forever rpc ./slots/ACCOUNT auction_quote '{"guid": "0x0000000000000c30", "item_id": 2589, "quantity": 20}'
-forever rpc ./slots/ACCOUNT auction_buy '{"guid": "0x0000000000000c30", "item_id": 2589, "quantity": 20}'
+forever-agent forever rpc ./slots/ACCOUNT auction_quote '{"guid": "0x0000000000000c30", "item_id": 2589, "quantity": 20}'
+forever-agent forever rpc ./slots/ACCOUNT auction_buy '{"guid": "0x0000000000000c30", "item_id": 2589, "quantity": 20}'
 ```
 
 Post a green item for 2 gold buyout:
 
 ```
-forever rpc ./slots/ACCOUNT auction_sell '{"guid": "0x0000000000000c30", "slot": 35, "min_bid": 500, "buyout": 2000, "hours": 24}'
+forever-agent forever rpc ./slots/ACCOUNT auction_sell '{"guid": "0x0000000000000c30", "slot": 35, "min_bid": 500, "buyout": 2000, "hours": 24}'
 ```
 
 From a script, the mail steps `mail`, `mail-take`, `mail-money`, `mail-delete` and `send-mail` cover the mailbox;

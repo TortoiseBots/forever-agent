@@ -97,28 +97,28 @@ for the add-on message protocol see [the add-on protocol](../bots-and-raids/addo
 Say something nearby:
 
 ```
-forever rpc ./slots/ACCOUNT chat '{"type": "say", "text": "pulling in 10"}'
+forever-agent forever rpc ./slots/ACCOUNT chat '{"type": "say", "text": "pulling in 10"}'
 ```
 
 Whisper a player:
 
 ```
-forever rpc ./slots/ACCOUNT chat '{"type": "whisper", "to": "Otherchar", "text": "on my way"}'
+forever-agent forever rpc ./slots/ACCOUNT chat '{"type": "whisper", "to": "Otherchar", "text": "on my way"}'
 ```
 
 Join a channel, speak in it, list it, leave it:
 
 ```
-forever rpc ./slots/ACCOUNT join_channel '{"name": "worlddefense"}'
-forever rpc ./slots/ACCOUNT chat '{"type": "channel", "to": "worlddefense", "text": "kobolds at the mine"}'
-forever rpc ./slots/ACCOUNT channel_list '{"name": "worlddefense"}'
-forever rpc ./slots/ACCOUNT leave_channel '{"name": "worlddefense"}'
+forever-agent forever rpc ./slots/ACCOUNT join_channel '{"name": "worlddefense"}'
+forever-agent forever rpc ./slots/ACCOUNT chat '{"type": "channel", "to": "worlddefense", "text": "kobolds at the mine"}'
+forever-agent forever rpc ./slots/ACCOUNT channel_list '{"name": "worlddefense"}'
+forever-agent forever rpc ./slots/ACCOUNT leave_channel '{"name": "worlddefense"}'
 ```
 
 Follow the whisper log for 20 seconds:
 
 ```
-forever rpc ./slots/ACCOUNT chat_log '{"since": 0, "wait_ms": 20000}'
+forever-agent forever rpc ./slots/ACCOUNT chat_log '{"since": 0, "wait_ms": 20000}'
 ```
 
 # What you see
@@ -134,6 +134,6 @@ JSON-RPC error raised before any packet.
 - `chat: a whisper needs a target name: ...` — `to` was missing.
 - `chat: the message starts with /, . or !, which the server runs as a command instead of saying it`.
 - `chat: the message's '|' markup is malformed ...` — escape or remove the bar.
-- `chat: a channel add-on message names its channel, channel:NAME` — only for `addon_send`.
+- `addon_send: a channel add-on message names its channel, channel:NAME` — only for `addon_send`.
 - `leave_channel: the server says this character is not on [NAME]`.
 - `join_channel: the server refused: wrong password [NAME]` and the other notice names.

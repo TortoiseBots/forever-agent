@@ -49,7 +49,7 @@ for the fall to land.
 | `sent` | The command line sent. |
 | `map`, `x`, `y`, `z` | Where the character stands afterwards. |
 | `fell`, `drop_yd` | A fall was flown, and how far. |
-| `seq` | The session's teleport counter. |
+| `teleport_seq` | The session's teleport counter. |
 | `z_unknown` | The height is not trustworthy. |
 | `ground` | `standing` (ground within a yard), `landed` (a fall was flown), or `unknown`. |
 | `ground_why` | Why the ground is unknown: no navmesh, no floor in reach, a failed query, water, or a far teleport (which starts no fall). |
