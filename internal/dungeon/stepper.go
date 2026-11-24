@@ -79,19 +79,21 @@ type Action struct {
 	Step  int
 	Label string // for logs: "leg 2 (ironaya): use_object 124371"
 
-	To        Point             // walk target
-	Direct    bool              // walk: a straight-line step (`cmd move ... direct`), not a navmesh path (Waypoint.Direct)
-	GMCross   bool              // walk: a GM moves the party to To (Waypoint.GMCross); remote runs only
-	Exact     bool              // walk: the waypoint is Exact (Waypoint.Exact): its point must be reached tightly (remote.go tightenTo)
-	Entries   []uint32          // pull: the group's entries
-	Positions []Point           // pull: where its members stand
-	Ambush    bool              // pull: the group is stealthed (PullGroup.Ambush)
-	Radius    float32           // pull: PullGroup.Radius, 0 for the default
-	Patrol    *Patrol           // pull: PullGroup.Patrol, nil when no patrol comes by
-	Skip      []uint32          // pull and boss: entries not to wait for
-	Boss      *Boss             // boss
-	Object    *world.GameObject // use
-	GUID      world.GUID        // use (0 when the agent does not see the object: an entry-form action, see Entry)
+	To        Point    // walk target
+	Direct    bool     // walk: a straight-line step (`cmd move ... direct`), not a navmesh path (Waypoint.Direct)
+	GMCross   bool     // walk: a GM moves the party to To (Waypoint.GMCross); remote runs only
+	Exact     bool     // walk: the waypoint is Exact (Waypoint.Exact): its point must be reached tightly (remote.go tightenTo)
+	Entries   []uint32 // pull: the group's entries
+	Positions []Point  // pull: where its members stand
+	Ambush    bool     // pull: the group is stealthed (PullGroup.Ambush)
+	Radius    float32  // pull: PullGroup.Radius, 0 for the default
+	// MemberRadius is PullGroup.MemberRadius: the radius the pack match uses over Positions, 0 for Radius.
+	MemberRadius float32
+	Patrol       *Patrol           // pull: PullGroup.Patrol, nil when no patrol comes by
+	Skip         []uint32          // pull and boss: entries not to wait for
+	Boss         *Boss             // boss
+	Object       *world.GameObject // use
+	GUID         world.GUID        // use (0 when the agent does not see the object: an entry-form action, see Entry)
 	// Entry and EntryAt are set when the World names objects by entry (EntryWorld): the order says `entry:<Entry>@EntryAt` and the server
 	// finds the object, so Object and GUID are only the agent's own copy, if it sees one (the fallback when the server finds nothing).
 	Entry     uint32
@@ -351,7 +353,7 @@ func (s *Stepper) next() Action {
 				}
 				gate = note
 			}
-			return Action{Kind: ActPull, Leg: s.leg, Step: -1, Entries: g.Entries, Positions: g.Positions, Ambush: g.Ambush, Radius: g.Radius, Patrol: g.Patrol, Skip: l.Skip, TeamGate: gate,
+			return Action{Kind: ActPull, Leg: s.leg, Step: -1, Entries: g.Entries, Positions: g.Positions, Ambush: g.Ambush, Radius: g.Radius, MemberRadius: g.MemberRadius, Patrol: g.Patrol, Skip: l.Skip, TeamGate: gate,
 				Label: s.label("%s", PullGroupRef(s.idx, len(l.PullGroups)))}
 		case phSteps, phAfter:
 			steps := l.Steps

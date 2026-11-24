@@ -2160,7 +2160,7 @@ func (r *Run) patrolGroup(g Group, units []Unit, claim packClaim) (Group, bool) 
 			if other.ID == g.ID {
 				continue
 			}
-			if entryIn(other.Entries, u.Entry) && other.NearestPosition(u.Pos) <= float64(other.RadiusYd()) {
+			if entryIn(other.Entries, u.Entry) && other.NearestPosition(u.Pos) <= float64(other.MatchRadiusYd()) {
 				return other, true
 			}
 		}

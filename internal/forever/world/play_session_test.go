@@ -833,3 +833,82 @@ func TestPlaySessionLootAutoClosedWindowRetriesAndIsNonFatal(t *testing.T) {
 		t.Fatalf("CMSG_LOOT_RELEASE count = %d; want 3 (initial, one retry, one cleanup)", got)
 	}
 }
+
+// TestPlaySessionRequestStatsWaitsForTheStates: the Group port asks for the members' own states with
+// CMSG_REQUEST_PARTY_MEMBER_STATS and returns once they merged, so a caller that needs a member's map or position is
+// not left reading the roster's last push.
+func TestPlaySessionRequestStatsWaitsForTheStates(t *testing.T) {
+	s, sc := newPlaySession(t)
+	_, healer, _, _ := partyScene(t, s)
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	sc.on[wire.CMSGRequestPartyMemberStats] = func([]byte) {
+		s.party.ApplyMemberState(party.MemberState{
+			GUID: healer, Status: party.StatusOnline, Health: 80, MaxHealth: 80, ZoneID: 2437, X: 10, Y: 20, Z: 30,
+		})
+	}
+	if err := g.RequestStats(context.Background(), []wire.GUID{healer}); err != nil {
+		t.Fatalf("RequestStats: %v", err)
+	}
+	if n := sc.count(wire.CMSGRequestPartyMemberStats); n != 1 {
+		t.Fatalf("sent %v; want one member stats request", sc.cores())
+	}
+	for _, m := range g.Roster() {
+		if m.Name != "Bothealer" {
+			continue
+		}
+		if m.HP != 80 || m.MaxHP != 80 || m.Pos != (driver.Vec3{10, 20, 30}) {
+			t.Fatalf("the healer after the request: %+v; want the merged 80/80 at 10 20 30", m)
+		}
+	}
+}
+
+// TestPlaySessionGroupRosterTrustsTheUnitView: a member the client sees is online, on this map and whatever the
+// roster's last push said about its death state. The recovery's "all five alive nearby" must not wait on a stale
+// Online or Dead flag (§3.10).
+func TestPlaySessionGroupRosterTrustsTheUnitView(t *testing.T) {
+	s, _ := newPlaySession(t)
+	tank, _, _, _ := partyScene(t, s)
+	s.party.Members[tank].Connected = false
+	// The roster still says dead and a ghost from before the raise; the unit in view is up at full health.
+	s.party.Members[tank].Status = party.StatusOnline | party.StatusDead | party.StatusGhost
+	s.party.Members[tank].Health = 0
+	addUnitOnMap(t, s, tank, 389, 30, 40, 50, 95, 100, 0)
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	for _, m := range g.Roster() {
+		if m.Name != "Bottank" {
+			continue
+		}
+		if !m.Online || m.Map != 389 {
+			t.Fatalf("a member in view reads %+v; want online on map 389", m)
+		}
+		if m.Dead || m.Ghost {
+			t.Fatalf("a member alive in view reads dead %v ghost %v; want alive at once, not after a stats answer", m.Dead, m.Ghost)
+		}
+		return
+	}
+	t.Fatal("the roster has no Bottank")
+}
+
+// TestPlaySessionGroupMemberFactsKeepTheTwoReadings: the recovery's dump must show which source said what. A member
+// the client sees alive shows the roster's stale dead bit next to the unit view's live health, not one merged row.
+func TestPlaySessionGroupMemberFactsKeepTheTwoReadings(t *testing.T) {
+	s, _ := newPlaySession(t)
+	tank, _, _, _ := partyScene(t, s)
+	s.party.Members[tank].Status = party.StatusOnline | party.StatusDead
+	s.party.Members[tank].Health = 0
+	addUnitOnMap(t, s, tank, 389, 30, 40, 50, 95, 100, 0)
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	for _, f := range g.MemberFacts() {
+		if f.Name != "Bottank" {
+			continue
+		}
+		if !f.InView || !f.ViewHasUnit || f.ViewDead || f.ViewHP != 95 || f.ViewMaxHP != 100 {
+			t.Fatalf("the tank's unit view reads %+v; want the 95/100 unit in view", f)
+		}
+		if !f.RosterDead || f.RosterHP != 0 {
+			t.Fatalf("the tank's roster row reads %+v; want the stale dead bit and 0 health", f)
+		}
+		return
+	}
+	t.Fatal("the facts have no Bottank")
+}

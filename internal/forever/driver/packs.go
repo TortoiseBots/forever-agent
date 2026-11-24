@@ -3,6 +3,7 @@ package driver
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -44,7 +45,7 @@ func MatchPacks(units []Unit, groups []Group, groupCount int) packClaim {
 	}
 	for gi := range groups {
 		g := &groups[gi]
-		r := float64(g.RadiusYd())
+		r := float64(g.MatchRadiusYd())
 		for ui := range units {
 			u := units[ui]
 			if u.Friendly || u.Entry == 0 || u.Entry == VoidwalkerEntry || !entryIn(g.Entries, u.Entry) {
@@ -54,9 +55,7 @@ func MatchPacks(units []Unit, groups []Group, groupCount int) packClaim {
 			if d > r || d >= best[ui] {
 				continue // out of the group, or a nearer group already claimed it
 			}
-			best[ui] = d
-			c.units[g.ID] = append(c.units[g.ID], ui)
-			c.of[ui] = g.ID
+			c.claim(g.ID, ui, d, best)
 		}
 	}
 	// The Voidwalker pass runs after the owners are known: it may only join a group one of its own's members stands in.
@@ -67,7 +66,7 @@ func MatchPacks(units []Unit, groups []Group, groupCount int) packClaim {
 		}
 		for gi := range groups {
 			g := &groups[gi]
-			if g.NearestPosition(u.Pos) > float64(g.RadiusYd()) {
+			if g.NearestPosition(u.Pos) > float64(g.MatchRadiusYd()) {
 				continue
 			}
 			near := false
@@ -82,13 +81,23 @@ func MatchPacks(units []Unit, groups []Group, groupCount int) packClaim {
 			}
 			d := g.NearestPosition(u.Pos)
 			if d < best[ui] {
-				best[ui] = d
-				c.units[g.ID] = append(c.units[g.ID], ui)
-				c.of[ui] = g.ID
+				c.claim(g.ID, ui, d, best)
 			}
 		}
 	}
 	return c
+}
+
+// claim puts a unit in a group and takes it out of the group that claimed it before: a unit that fits two groups
+// belongs to the nearer one alone, or a merged pull's radius would also hand the party units another plan group owns
+// (Run B, 2026-11-24: the trogg cave's merged pull ordered the party onto the neighbouring pair's trogg).
+func (c *packClaim) claim(group, ui int, d float64, best []float64) {
+	if prev, ok := c.of[ui]; ok && prev != group {
+		c.units[prev] = slices.DeleteFunc(c.units[prev], func(i int) bool { return i == ui })
+	}
+	best[ui] = d
+	c.units[group] = append(c.units[group], ui)
+	c.of[ui] = group
 }
 
 // entryIn reports whether one of the entries is e.

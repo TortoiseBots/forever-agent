@@ -50,6 +50,31 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+// TestPullGroupMemberRadius: a group may name a smaller radius for the match over its positions than the row's Radius,
+// which still has to cover the whole group from its centre (the Ragefire Chasm step-14 merge: 20 for the row, 10 for
+// the match).
+func TestPullGroupMemberRadius(t *testing.T) {
+	const plan = `{"version":1,"name":"t","map":1,"entrance":{"x":0,"y":0,"z":0},"legs":[{"to":{"x":0,"y":0,"z":0},"pull_groups":[{"entries":[1,1],"positions":[{"x":0,"y":0,"z":0},{"x":30,"y":0,"z":0}],"radius":20,"member_radius":10}]}]}`
+	p, err := Parse("t.json", []byte(plan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := p.Legs[0].PullGroups[0]
+	if g.Radius != 20 || g.MemberRadius != 10 {
+		t.Fatalf("radii: %+v", g)
+	}
+	out, err := Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"member_radius": 10`) {
+		t.Fatalf("Marshal dropped member_radius:\n%s", out)
+	}
+	if _, err := Parse("t.json", []byte(strings.Replace(plan, `"member_radius":10`, `"member_radius":61`, 1))); err == nil {
+		t.Fatal("a member_radius over 60 yards was accepted")
+	}
+}
+
 // Each mistake is reported with the leg and the field, and one pass reports all of them.
 func TestParseErrors(t *testing.T) {
 	step := func(s string) string {

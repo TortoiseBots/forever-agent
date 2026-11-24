@@ -419,8 +419,8 @@ func TestModelFlow(t *testing.T) {
 	if !s.ApplyMemberState(ms) {
 		t.Fatal("the state was not merged")
 	}
-	if m := s.Members[ms.GUID]; !m.Full || m.Health != 80 || m.Auras != 3 {
-		t.Fatalf("member after the state: %+v", m)
+	if m := s.Members[ms.GUID]; !m.Full || m.Health != 80 || m.Auras != 3 || !m.Connected {
+		t.Fatalf("member after the state: %+v (a live state marks the member connected)", m)
 	}
 	// A state for an unknown GUID is counted, never created.
 	if s.ApplyMemberState(MemberState{GUID: wire.GUID{Low: 99, High: 0x0800000000000000}, Status: StatusOnline}) {
@@ -438,6 +438,11 @@ func TestModelFlow(t *testing.T) {
 	s.ApplyMemberState(MemberState{GUID: ms.GUID, Status: StatusOffline})
 	if m := s.Members[ms.GUID]; m.Connected || m.Full {
 		t.Fatalf("the offline state was merged as data: %+v", m)
+	}
+	// A live state again marks it connected: the next state a logged-in bot sends is the readback of its return.
+	s.ApplyMemberState(MemberState{GUID: ms.GUID, Status: StatusOnline, Health: 20, MaxHealth: 100})
+	if m := s.Members[ms.GUID]; !m.Connected || !m.Full || m.Health != 20 {
+		t.Fatalf("the member after its next live state: %+v", m)
 	}
 	// Leader change by name.
 	s.ApplyLeaderChanged(LeaderChanged{Name: "Beta"})

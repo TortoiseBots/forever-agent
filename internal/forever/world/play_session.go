@@ -38,6 +38,9 @@ var (
 	playReplyQuiet = 700 * time.Millisecond
 	// playReplyDeadline bounds one whole request.
 	playReplyDeadline = 8 * time.Second
+	// playStatsWait bounds one party member stats request: the server answers its own members on its next update, so a
+	// wait this long with no state merged is a server that has none to send.
+	playStatsWait = 2 * time.Second
 )
 
 const (
@@ -288,8 +291,10 @@ func (g *playGroup) Roster() []driver.PartyMember {
 		o, inView := s.world.Object(m.GUID)
 		self := m.GUID == s.party.SelfGUID
 		if inView || self {
-			// In view the character is on this map; the zone it stands in is now known to belong to it.
+			// In view the character is on this map; the zone it stands in is now known to belong to it. A member the
+			// client sees is online, whatever the roster's last push said.
 			pm.Map = cur
+			pm.Online = true
 			if m.ZoneID != 0 {
 				g.zoneMap[m.ZoneID] = cur
 			}
@@ -306,12 +311,73 @@ func (g *playGroup) Roster() []driver.PartyMember {
 			pm.Dead, pm.Ghost = s.selfDead(), s.world.GhostAt(m.GUID)
 		case inView:
 			g.fillFromModel(&pm, o, true, now)
-			pm.Dead = pm.Dead || s.world.DeadAt(m.GUID)
-			pm.Ghost = pm.Ghost || s.world.GhostAt(m.GUID)
+			// A member the client sees takes its death state from the unit alone: the roster's Status bit is one push
+			// old, and an alive bot standing next to the agent must not stay "dead" until a stats answer clears it.
+			pm.Dead, pm.Ghost = s.world.DeadAt(m.GUID), s.world.GhostAt(m.GUID)
 		}
 		out = append(out, pm)
 	}
 	return out
+}
+
+// MemberFacts is every member as the two sources read it: the roster's last push and, for a member the client sees,
+// the unit view. Roster merges them; the recovery's one-time dump writes both, so a stalled wait shows which source
+// said what.
+func (g *playGroup) MemberFacts() []driver.MemberFacts {
+	s := g.s
+	s.initChat()
+	if !s.party.InParty || !s.party.RosterValid {
+		return nil
+	}
+	now := s.Now()
+	members := s.party.SnapshotOf()
+	out := make([]driver.MemberFacts, 0, len(members))
+	for _, m := range members {
+		f := driver.MemberFacts{
+			Name:         m.Name,
+			GUID:         m.GUID,
+			RosterOnline: m.Connected,
+			RosterDead:   m.Status&party.StatusDead != 0,
+			RosterGhost:  m.Status&party.StatusGhost != 0,
+			RosterHP:     int(m.Health),
+			RosterMaxHP:  int(m.MaxHealth),
+			RosterZone:   m.ZoneID,
+			RosterPos:    driver.Vec3{float32(m.X), float32(m.Y), float32(m.Z)},
+		}
+		if o, ok := s.world.Object(m.GUID); ok {
+			x, y, z := o.Position(now)
+			f.InView = true
+			f.ViewHasUnit = o.Info.HasUnit
+			f.ViewDead = s.world.DeadAt(m.GUID)
+			f.ViewGhost = s.world.GhostAt(m.GUID)
+			f.ViewHP, f.ViewMaxHP = int(o.Info.Health), int(o.Info.MaxHealth)
+			f.ViewPos = driver.Vec3{x, y, z}
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// RequestStats is CMSG_REQUEST_PARTY_MEMBER_STATS for the given members, then a bounded wait for their states to
+// merge: the answers come back as SMSG_PARTY_MEMBER_FULL_STATE, which the packet loop applies to the model. A server
+// that answers none ends the wait silent, not as an error; a dead or cut link is the link's error.
+func (g *playGroup) RequestStats(ctx context.Context, guids []wire.GUID) error {
+	s := g.s
+	s.initChat()
+	if len(guids) == 0 || !s.party.InParty || !s.party.RosterValid {
+		return nil
+	}
+	before := s.party.States
+	if err := s.SendCtx(ctx, wire.CMSGRequestPartyMemberStats, party.BuildRequestMemberStats(guids)); err != nil {
+		return playPortErr(err)
+	}
+	want := before + len(guids)
+	for end := time.Now().Add(playStatsWait); time.Now().Before(end) && s.party.States < want; {
+		if err := s.collect(ctx, 100*time.Millisecond); err != nil {
+			return playPortErr(err)
+		}
+	}
+	return nil
 }
 
 // fillFromModel takes what the object model knows over the member stats, which are one packet old and a whole

@@ -1631,7 +1631,11 @@ func (d *Driver) orderEach(ctx context.Context, rw *restWatch, rec *gateRec, st 
 // doPull pulls each member group of the action: the leader targets the nearest member and the tank walks up and
 // pulls it (.bot action pullback); the fight ends when the pack is dead.
 func (d *Driver) doPull(ctx context.Context, a Action) error {
-	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: a.Radius, passed: map[world.GUID]bool{}}
+	radius := a.Radius
+	if a.MemberRadius > 0 {
+		radius = a.MemberRadius // the members by position: the row's Radius covers them all from the centre
+	}
+	sp := fightSpec{pick: a.Entries, track: a.Entries, skip: a.Skip, anchors: a.Positions, limit: d.cfg.FightTimeout, sneak: true, radius: radius, passed: map[world.GUID]bool{}}
 	// A group whose members in view all carry a stealth aura cannot be pulled (the companions never attack what they
 	// cannot see); with none in view the plan's flag decides. Members in view without the aura are pulled as usual.
 	if cs := d.candidates(sp, sp.pick); (len(cs) == 0 && a.Ambush) || (len(cs) > 0 && allStealthed(cs)) {

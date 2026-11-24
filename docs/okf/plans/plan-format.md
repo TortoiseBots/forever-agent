@@ -78,7 +78,8 @@ A leg is one stretch: walk `via` points, then `to`, clear `pull_groups` in order
 
 A pull group is one pack: `entries` (creature entries) and `positions` (where members stand; the first is the pull target)[^plan-struct]. The extras:
 
-- `radius` (default 25): how far from a position a unit may stand and still count as a member.
+- `radius` (default 25): how far from a position a unit may stand and still count as a member. `plan-export` also writes it as the pull row's radius around the group's mean centre (the distance at which the module's run leader finds the group), so a merged group whose members stand far apart needs a `radius` that covers them all from that centre.
+- `member_radius`: the radius the match over `positions` uses, for the agent's drivers that take a group member by member (0 or absent: `radius`). Ragefire Chasm's step-14 merge sets `radius` 20 for its exported row and `member_radius` 10 so its match keeps the seven spawns and takes no neighbouring camp.
 - `ambush`: stealthed pack; the driver walks through and fights what shows itself.
 - `patrol`: a pack that walks a `path` of waypoints in a loop, with `period_s` for one round. `period_estimate: true` means the round is only estimated, so the driver does not predict its phase.
 - `approach`: up to four points the run leader walks before pulling; the last is the stand. The own driver ignores them.
