@@ -112,7 +112,9 @@ preflight through the same `internal/forever/fpreflight` functions `forever dung
 plans folder with `driver.LoadWatchRoute`, the serve slot `--dir` wrote and its lease, the module link
 (`.tb state party` over the command channel) and the lead through the serve character's own GM console (`.pinfo`,
 the same command the SOAP preflight runs). A failed check refuses the call with the failed lines and sends nothing;
-a daemon started without `--dir` refuses and points at `forever dungeon-watch`), `dungeon_status` (`all` with no lead),
+a daemon started without `--dir` refuses and points at `forever dungeon-watch`. The preflight waits off the session
+queue (its sends and 50 ms packet slices are separate short calls), so `status` and the other methods answer while a
+slow console or module is read), `dungeon_status` (`all` with no lead),
 `dungeon_stop {lead_bot?, reason?}`, `dungeon_pause`, `dungeon_resume` — the module's own run control, answered as
 `{sent, runs}` with the module's run records; `plan_check {name, from_leg?, from_pull_group?}`, the CLI's plan check
 over the serve's `--plans-dir` and `--navmesh` (unchecked with the reason in `skipped` without a navmesh);

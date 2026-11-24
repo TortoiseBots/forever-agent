@@ -374,20 +374,56 @@ func TestServeDungeonRunPreflightConsoleCutOffReplyRefuses(t *testing.T) {
 }
 
 // TestServeDungeonRunPreflightConsoleSilentReplyRefuses: a console that answers nothing refuses the start with the
-// read's own bound, and sends nothing.
+// read's own bound, and sends nothing. While that 5 s read waits, status answers: the preflight's console wait is
+// off the session queue (pump slices), so it holds no other method. Mutation: one queued call for the read blocks
+// status for the whole wait.
 func TestServeDungeonRunPreflightConsoleSilentReplyRefuses(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	started := &atomic.Int32{}
 	f.serveCommander = serveRunScenes(started)
-	pinfoAnswer(f, func(string) (string, bool) { return "", true })
+	asked := make(chan struct{})
+	var once sync.Once
+	pinfoAnswer(f, func(string) (string, bool) {
+		once.Do(func() { close(asked) })
+		return "", true
+	})
 	defer f.close()
 	scene := &servePreflightScene{probe: servePreflightProbe{pid: 42, alive: true, listening: true}}
 	dir := t.TempDir()
 	a, steps := newDungeonPreflightDaemon(t, f, scene, writePlans(t), dir)
 	writeServeSlot(t, dir, a.port(t), "forever", "")
 
-	a.mustFail(t, "dungeon_run", map[string]any{"plan": "ragefire_chasm", "lead_bot": "Tanka"}, -32003, "no answer within "+serveConsoleWait.String())
+	type reply struct {
+		rerr *rpcError
+		err  error
+	}
+	done := make(chan reply, 1)
+	go func() {
+		_, rerr, err := a.tryCall("dungeon_run", map[string]any{"plan": "ragefire_chasm", "lead_bot": "Tanka"})
+		done <- reply{rerr: rerr, err: err}
+	}()
+	select {
+	case <-asked:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the console was never asked\n%s", steps.joined())
+	}
+	// Let the read enter its pump slices before timing the queue.
+	time.Sleep(200 * time.Millisecond)
+	startedAt := time.Now()
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("status took %s while the console read waited (the queue was held)", elapsed)
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("dungeon_run: %v", r.err)
+	}
+	if r.rerr == nil || r.rerr.Code != -32003 || !strings.Contains(r.rerr.Message, "no answer within "+serveConsoleWait.String()) {
+		t.Fatalf("dungeon_run: %+v, want the console's no-answer refusal", r.rerr)
+	}
 	mustNoRunStart(t, f)
 	if started.Load() != 0 {
 		t.Fatalf("a run was started with no console answer\n%s", steps.joined())

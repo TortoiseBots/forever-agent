@@ -57,8 +57,10 @@ command channel; and the called lead, read with `.pinfo` through the serve chara
 command and parser the CLI's SOAP console runs; the daemon is given no SOAP endpoint). The plan export is checked
 with no path, so it reports the CLI's own "no --export" warning. A blocked check refuses the call with the failed
 lines in the `-32003` message and sends nothing. A daemon started without `--dir` cannot check the slot, the lease
-or the module link, so it refuses too, naming `forever dungeon-watch`. The preflight runs off the session queue;
-each session read it makes is its own short call.
+or the module link, so it refuses too, naming `forever dungeon-watch`. The preflight runs off the session queue:
+the GM guard, each send and each 50 ms packet slice is its own short queued call, so `status` and the other methods
+answer while a slow console or module is waited for. A `.pinfo` reply that stops before its Account line is reported
+as cut off, not as a character that does not exist; a console answer of nothing refuses with the read's bound.
 
 `plan_check {name, from_leg?, from_pull_group?}` walks the plan from the serve's plans folder (`--plans-dir`, default
 `dungeons`) on a scratch Forever planner over the serve's `--navmesh` (its own tile cache, so a walk on the session

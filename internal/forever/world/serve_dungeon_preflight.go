@@ -36,8 +36,8 @@ import (
 
 // The preflight's own session waits: the console's quiet window after the last `.pinfo` line, and how long a console
 // read or the module probe may take. Neither wait runs on the session queue: the send is one short queued call and
-// the reply is collected off the queue in servePreflightPump slices (servePreflightCommand), so status and every
-// other call keep answering while the console or the module is heard from.
+// the reply is collected off the queue in servePreflightPump slices (preflightCommand), so status and every other
+// call keep answering while the console or the module is heard from.
 const (
 	serveConsoleQuiet       = 500 * time.Millisecond
 	serveConsoleWait        = 5 * time.Second
@@ -73,6 +73,9 @@ func (c serveConsole) Run(ctx context.Context, line string) (string, error) {
 		Quiet: serveConsoleQuiet, Deadline: serveConsoleWait,
 	})
 	if err != nil {
+		if errors.Is(err, command.ErrNoReply) {
+			return "", fmt.Errorf("no answer within %s", serveConsoleWait)
+		}
 		return "", err
 	}
 	if !rep.Complete || len(rep.RawText) == 0 {
@@ -83,9 +86,9 @@ func (c serveConsole) Run(ctx context.Context, line string) (string, error) {
 
 // servePreflightCommand runs one tokenless command for the preflight without holding the session queue for the
 // reply's whole wait. It is the command-channel shape of the TBM methods' off-queue wait (tbm_adapter.go): the GM
-// guard, the send and each packet-pump slice are separate short calls, and a chat tap feeds the collector from the
-// session goroutine while the collector waits on this one. A tokenless reply ends at its quiet window, so the tap
-// is the only way to hear it without owning the queue.
+// guard, the send and each packet-pump slice are separate short calls, and a chat tap queues the reply lines as the
+// session goroutine sees them while Pump hands them to the collector on its own goroutine. A tokenless reply ends
+// at its quiet window, so the tap is the only way to hear it without owning the queue.
 func (st *serveState) preflightCommand(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
 	c := &preflightCommand{st: st}
 	if err := c.prepare(ctx, opts); err != nil {
