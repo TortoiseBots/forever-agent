@@ -172,12 +172,17 @@ type Options struct {
 	// Round TBM: forever tbm-check. TBMCheck runs the TBM client's hello and the requested commands through the
 	// session's add-on and chat paths. TBMTransport is auto, addon, addon-self or chat; TBMCommands are run in
 	// order after the hello; TBMTimeout bounds each hello and command; TBMRaw appends every accepted message to
-	// that file as case recv records for a live capture.
+	// that file as case recv records for a live capture. TBMBots are the owned bot names the setup step adds with
+	// `.bot add` before the hello (a module answers no-bots without a party); TBMBotWait bounds the wait for them to
+	// join (60 s when zero); TBMKeepBots leaves them in the party instead of removing them on exit.
 	TBMCheck     bool
 	TBMTransport string
 	TBMCommands  []string
 	TBMTimeout   time.Duration
 	TBMRaw       string
+	TBMBots      []string
+	TBMBotWait   time.Duration
+	TBMKeepBots  bool
 	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
 	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
 	// collector's defaults for every command of the run.
