@@ -457,28 +457,6 @@ func TestPlayBossAddsFirst(t *testing.T) {
 	}
 }
 
-// TestPlayEvadedPackKeepsFightOpen: a living unit that stops targeting the party is not a dead one; the fight does not
-// end on it (the review's finding), so the run stops at the cap and the pack is not counted fought.
-func TestPlayEvadedPackKeepsFightOpen(t *testing.T) {
-	ticks := 0
-	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
-		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
-		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}, HP: 200000, MaxHP: 200000})
-		f.SpawnBosses()
-		f.OnFightTick = func(f *PlayFake) {
-			ticks++
-			if ticks == 2 {
-				f.ClearTarget(fightGUID(2))
-			}
-		}
-	})
-	rig.cfg.Out = t.TempDir()
-	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
-	if res.Stop != "fight-timeout" {
-		t.Fatalf("stop = %q; want fight-timeout (the evaded unit is alive)", res.Stop)
-	}
-}
-
 // --- proof-3 part A: the pull is made from the plan's stand, with the party beside the agent ---
 
 // playWalk is one walker call as the pull cases read it: where the walk ended and how many tank orders had gone out

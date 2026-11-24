@@ -161,6 +161,10 @@ type PlayFake struct {
 	// NonHostileFactions are the faction templates the fake's Reactions port answers friendly or neutral; any other
 	// faction (the zero one included) is hostile.
 	NonHostileFactions map[int32]bool
+	// NoAggro is how many of a unit's aggro events the fake swallows, by guid: a mob that never joins the fight (a
+	// pillar between it and the party), or one that evades when it is ordered. Each due pack's settle skips the unit
+	// and counts one off; when the count is spent the unit turns on the party as usual.
+	NoAggro map[wire.GUID]int
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
 }
@@ -190,7 +194,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
 		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
-		UseNoChange: map[uint32]bool{},
+		NoAggro: map[wire.GUID]int{}, UseNoChange: map[uint32]bool{},
 		BotPower:    map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
 	}
@@ -349,6 +353,10 @@ func (f *PlayFake) settle() {
 		for i := range f.units {
 			u := &f.units[i]
 			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || !u.Target.IsZero() {
+				continue
+			}
+			if n := f.NoAggro[u.GUID]; n > 0 {
+				f.NoAggro[u.GUID] = n - 1
 				continue
 			}
 			u.Target = a.target
