@@ -10,11 +10,15 @@
 //
 // Rule "talents imply spells" (AOTC-TALENTS-IMPLY-SPELLS): for the bot's level group, the talents most
 // players of its spec take (share at or above MinTalentShare) that grant an ACTIVE spell join the
-// spell judge's should-have-cast list (kbspells.BotCasts.Expected). A talent the bot does not have is
-// never expected, and a record with no talent data reports the expectations without failing.
+// spell judge's should-have-cast list (kbspells.BotCasts.Expected), per combat window the bot's own
+// samples prove. A talent the record proves learned is expected and fails when never cast; a talent
+// absent from a partial read-back (the runner learns the spec's marker kit, not the build) is
+// unproven, so it never turns a PASS; a record with no talent data or no combat reports what it has
+// and judges nothing.
 //
 // Both rules are opt-in (trials score --player-data) and no trial definition names them: they read
-// the run's own record (the ledger's equip and learn read-backs, the events' casts) and the tables.
+// the run's own record (the setup's bot_items read-back, the ledger's equip and learn read-backs,
+// the samples' combat flags, the events' casts) and the tables.
 package playdata
 
 import (
@@ -53,8 +57,13 @@ const (
 	// judged; shorter fights say nothing.
 	TalentMinActiveS = 30.0
 	// TalentCooldownFactor is the guard on long cooldowns: a spell whose cooldown is longer than
-	// the fight divided by this factor is not expected in it (a 3 min spell in a 60 s fight).
+	// the combat window divided by this factor is not expected in it (a 3 min spell in a 60 s
+	// fight).
 	TalentCooldownFactor = 2.0
+	// CombatGapS joins two in-combat samples into one combat window when they are at most this
+	// many seconds apart: the runner samples at 1 Hz, so a longer gap is a break in the fight,
+	// not a missing tick.
+	CombatGapS = 3.0
 )
 
 // Item is one equipped item as the record carries it. Entry and Name may be 0/"" when a record
@@ -67,21 +76,35 @@ type Item struct {
 	Stats []string
 }
 
+// CombatWindow is one stretch [From, To] of the repeat's re-based seconds in which the bot's own
+// samples place it in combat. A window starts and ends on the bot's in_combat flag, not on the
+// repeat's clock: setup, travel and waiting are not fight time.
+type CombatWindow struct {
+	From float64
+	To   float64
+}
+
 // Record is one repeat's view of the bot the rules judge: what it is, what it wore, what talents it
-// learned, what it cast, and how long it was active.
+// learned, what it cast, and when it was in combat.
 type Record struct {
 	Bot     string
 	Class   string
 	Spec    string
 	Role    string
 	Level   int
-	ActiveS float64
+	ActiveS float64 // total seconds inside Combat's windows, 0 when ActiveKnown is false
 
 	Equipped      []Item
 	EquippedKnown bool
 	Talents       []int64
 	TalentsKnown  bool
-	Casts         map[string]int
+	// TalentsComplete says the talent list is the bot's full learned set. The runner's
+	// `bot_talents` read-back learns the spec's marker kit, not the build, so it is partial:
+	// a common talent absent from it may be trained or not.
+	TalentsComplete bool
+	Casts           map[string]int
+	Combat          []CombatWindow
+	ActiveKnown     bool
 }
 
 // Tables is the player-data view the rules read; *aotc.Data is the shipped one.

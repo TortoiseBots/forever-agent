@@ -91,7 +91,8 @@ func fixture() *fakeTables {
 				{Class: "warrior", Spec: "protection", Slot: "Head", Population: aotc.PopulationBestGeared, Pct: 12},
 				{Class: "mage", Spec: "fire", Slot: "Head", Population: aotc.PopulationBestGeared, Pct: 9},
 			}},
-			4: {ID: 4, Name: "Unlisted Thing", Slots: []string{"Head"}},
+			4:  {ID: 4, Name: "Unlisted Thing", Slots: []string{"Head"}},
+			10: {ID: 10, Name: "Cloth Belt", Slots: []string{"Waist"}},
 		},
 	}
 }
@@ -218,12 +219,14 @@ func TestGearFitsSpec(t *testing.T) {
 }
 
 // TestTalentsImplySpells is the talent rule's table: a trained talent spell is expected (and fails
-// when never cast), an untrained one is not expected, a long cooldown is not expected in a short
-// fight, and no talent data reports the expectations without judging.
+// when never cast) once the read-back proves the full build, a partial marker-kit read-back makes an
+// absent talent unproven (never PASS, never FAIL), a long cooldown is not expected in a short combat
+// window, and no talent data or no proven combat reports the expectations without judging.
 func TestTalentsImplySpells(t *testing.T) {
 	tables := fixture()
 	in := testInputs(t, tables)
 	casts := map[string]int{"Renew": 4, "Flash Heal": 6}
+	combat := func(from, to float64) []CombatWindow { return []CombatWindow{{From: from, To: to}} }
 	cases := []struct {
 		name     string
 		rec      Record
@@ -235,66 +238,115 @@ func TestTalentsImplySpells(t *testing.T) {
 		{
 			name: "expected and never cast",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				TalentsKnown: true, Talents: []int64{15237}, Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{15237}, Casts: casts},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Holy Nova (Holy Nova, 73.9% of holy): never cast in 60 s"},
+			wantLine: []string{"Holy Nova (Holy Nova, 73.9% of holy): never cast in 60 s of combat"},
 		},
 		{
 			name: "expected and cast",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				TalentsKnown: true, Talents: []int64{15237},
-				Casts: map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 3}},
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{15237},
+				Casts:   map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 3}},
 			verdict: VerdictPass, k: 1, n: 1,
 			wantLine: []string{"Holy Nova (Holy Nova): cast"},
 		},
 		{
-			name: "a talent the bot does not have is not expected",
+			name: "a partial marker kit never turns a false PASS",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				TalentsKnown: true, Talents: []int64{14751}, Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true,
+				Talents: []int64{14751}, Casts: casts},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"talent data is partial", "Holy Nova (Holy Nova, 73.9% of holy): not in the recorded talent learning"},
+		},
+		{
+			name: "a partial marker kit: a cast talent and an unproven sibling is INCONCLUSIVE",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 400,
+				ActiveKnown: true, Combat: combat(0, 400), TalentsKnown: true,
+				Talents: []int64{15237},
+				Casts:   map[string]int{"Renew": 4, "Holy Nova": 3}},
+			verdict: VerdictInconclusive, k: 1, n: 1,
+			wantLine: []string{"Holy Nova (Holy Nova): cast", "Inner Focus (Inner Focus, 91.8% of holy): not in the recorded talent learning"},
+		},
+		{
+			name: "a complete build: a talent the bot does not have is not expected",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14751}, Casts: casts},
 			verdict:  VerdictPass,
 			wantLine: []string{"Holy Nova: not trained, so not expected", "Inner Focus: cooldown 180 s"},
 		},
 		{
-			name: "a long cooldown in a short fight is not expected",
-			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				TalentsKnown: true, Talents: []int64{14751, 15237},
-				Casts: map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 1}},
-			verdict: VerdictPass, k: 1, n: 1,
-			wantLine: []string{"Inner Focus: cooldown 180 s, longer than the 60 s fight"},
-		},
-		{
 			name: "the same cooldown in a long fight is expected",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 400,
-				TalentsKnown: true, Talents: []int64{14751}, Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 400), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14751}, Casts: casts},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Inner Focus (Inner Focus, 91.8% of holy): never cast in 400 s"},
+			wantLine: []string{"Inner Focus (Inner Focus, 91.8% of holy): never cast in 400 s of combat"},
+		},
+		{
+			name: "a long cooldown in a short fight is not expected",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14751, 15237},
+				Casts:   map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 1}},
+			verdict: VerdictPass, k: 1, n: 1,
+			wantLine: []string{"Inner Focus: cooldown 180 s, longer than every combat window"},
+		},
+		{
+			name: "a cooldown is judged per combat window, not per summed repeat",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 120,
+				ActiveKnown: true, Combat: []CombatWindow{{From: 0, To: 60}, {From: 100, To: 160}},
+				TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14751}, Casts: casts},
+			verdict:  VerdictPass,
+			wantLine: []string{"Inner Focus: cooldown 180 s, longer than every combat window the rule judges (longest 60 s)"},
 		},
 		{
 			name: "no talent data reports, never fails",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 60), Casts: casts},
 			verdict:  VerdictInconclusive,
 			wantLine: []string{"no talent data in the record", "Holy Nova (Holy Nova, 73.9% of holy)"},
 		},
 		{
 			name: "a passive talent is no expectation",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				TalentsKnown: true, Talents: []int64{14901}, Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14901}, Casts: casts},
 			verdict:  VerdictPass,
 			wantLine: []string{"Holy Nova: not trained, so not expected", "Inner Focus: cooldown 180 s"},
 			wantNot:  []string{"Spiritual Guidance"},
 		},
 		{
-			name: "a fight too short to judge",
-			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 10,
-				TalentsKnown: true, Talents: []int64{15237}, Casts: casts},
+			name: "no proven combat says nothing",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60,
+				TalentsKnown: true, TalentsComplete: true, Talents: []int64{15237}, Casts: casts},
 			verdict:  VerdictInconclusive,
-			wantLine: []string{"below the 30 s the rule judges"},
+			wantLine: []string{"no combat participation in the record", "Holy Nova (Holy Nova, 73.9% of holy)"},
+		},
+		{
+			name: "a short combat window is not a fight",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 10,
+				ActiveKnown: true, Combat: combat(0, 10), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{15237}, Casts: casts},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"none of the 3 common talents' spells fits a 10 s combat window", "no combat window reached the 30 s"},
+		},
+		{
+			name: "a long repeat with short combat is not judged",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 20,
+				ActiveKnown: true, Combat: []CombatWindow{{From: 0, To: 10}, {From: 500, To: 510}},
+				TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{15237}, Casts: casts},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"no combat window reached the 30 s"},
 		},
 		{
 			name: "a level with no points",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 5, ActiveS: 60,
-				TalentsKnown: true, Casts: casts},
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, Casts: casts},
 			verdict:  VerdictInconclusive,
 			wantLine: []string{"level 5 has no talent points"},
 		},
@@ -316,12 +368,13 @@ func TestTalentsImplySpells(t *testing.T) {
 					t.Fatalf("evidence %q names %q, which is not an expectation", joined, not)
 				}
 			}
+			if tc.verdict != VerdictPass && row.Reason == "" {
+				t.Fatal("a non-pass rule has no reason")
+			}
 		})
 	}
 }
 
-// TestGearStatPriorityBranches pins the two fine readings apart: an item's own matching stat is
-// enough, and a spec's own listed item needs no stats at all.
 func TestLevelGroup(t *testing.T) {
 	for level, want := range map[int]string{
 		5: "", 10: "10-19", 19: "10-19", 20: "20-29", 39: "30-39", 40: "40-49", 50: "50-59", 59: "50-59", 60: "60", 70: "60",

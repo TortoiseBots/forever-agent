@@ -29,8 +29,9 @@ Typed accessors:
 ## Rule "gear fits the spec" (`AOTC-GEAR-FITS-SPEC`)
 
 Input: the bot's class, spec, level and equipped items from the run's own record (the setup's proven
-`bot_items` read-back and the ledger's `equip` rows; the serve has no equipment read and this
-repository carries no item stats). Per item:
+`bot_items` read-back, which is the final equipment state, or — when no read-back proved one — the
+ledger's `equip` rows replayed in order, each piece replacing the one before it in its slot; the
+serve has no equipment read and this repository carries no item stats). Per item:
 
 - **FINE** when the item is among the items the spec's level 60 players wear in that slot.
 - **FINE** when the item's own primary stats (when the record carries them) include one of the spec's
@@ -51,12 +52,17 @@ active spell in the Forever spell table (`internal/foreverspells`, not passive) 
 judge's should-have-cast list (`kbspells.BotCasts.Expected`, judged like the spec's core list). The
 rule:
 
-- judges only spells whose cooldown fits the fight (`TalentCooldownFactor`; a 3 minute spell is not
-  expected in a 60 s fight) and only after `TalentMinActiveS` (30 s),
-- expects only a talent the record proves learned (the ledger's `bot_talents` read-back); a talent the
-  bot does not have is never expected,
-- reports the expectations and judges nothing (INCONCLUSIVE) when the record carries no talent data,
-- FAILs only a trained talent spell never cast.
+- judges only spells whose cooldown fits a combat window (`TalentCooldownFactor`; a 3 minute spell is
+  not expected in a 60 s fight) and only a window of at least `TalentMinActiveS` (30 s),
+- reads combat time from the bot's own `in_combat` samples (`CombatGapS` joins consecutive
+  in-combat samples into one window), never from the repeat's scored time: setup, waiting and travel
+  are no fight, so a long repeat with a short fight is INCONCLUSIVE, never a FAIL,
+- expects only a talent the record proves learned: a trained talent's spell that is never cast
+  FAILs, an absent one is treated as untrained only when the read-back declares the full build
+  (`complete`); with the runner's partial marker-kit read-back an absent pick is unproven, so it can
+  turn a PASS into INCONCLUSIVE but never into a FAIL,
+- reports the expectations and judges nothing (INCONCLUSIVE) when the record carries no talent data
+  or no proven combat participation.
 
 ## Wiring
 
@@ -76,11 +82,16 @@ Thresholds are named constants in `internal/trials/playdata/playdata.go`.
 - The gear data is level 60 only; the talent data has a level group per decade.
 - An item outside the top 20 of a spec's slot list is not evidence against it (the table is top 20),
   so such an item is UNPROVEN, never a mismatch on its absence alone.
-- The rules read the trials record (setup.json's `bot_items` read-back and the ledger's `equip` and
-  `bot_talents` rows). A watch record carries neither items nor talents, so a watch is not judged by
-  them today; the resistance-gear read-out (#20) is the piece that would feed a watch.
+- The rules read the trials record (setup.json's `bot_items` read-back, the ledger's `equip` and
+  `bot_talents` rows, the samples' bot combat flags). A watch record carries neither items nor
+  talents, so a watch is not judged by them today; the resistance-gear read-out (#20) is the piece
+  that would feed a watch.
 - The `bot_talents` read-back lists the spec's marker kit (`specs.json`), not a full talent build: a
-  talent outside that kit reads as not trained, so the rule reports the expectations rather than
-  failing on them. Once the record carries the full picks, the same rule fails a missing cast.
+  talent outside that kit is unproven, so the rule reports it and returns INCONCLUSIVE instead of a
+  PASS on absent picks. A read-back that declares `complete` holds the full learned set, and absence
+  then means untrained. No runner writes such a row yet.
+- Active time is the bot's own `in_combat` samples. A record without bot samples, or whose bot was
+  never in combat, is INCONCLUSIVE: the rule does not substitute the scored time or the configured
+  duration.
 - The site reads the live server: a private build can differ. Player choices are the reference; the
   server's own data wins.

@@ -16,7 +16,7 @@ var repDirRe = regexp.MustCompile(`^rep(\d+)$`)
 func TrialRows(trialDir string, trial map[string]any, in Inputs) []any {
 	out := []any{}
 	for _, rep := range repDirs(trialDir) {
-		rec := LoadRep(rep, trial)
+		rec := LoadRep(rep, trial, in.Tables)
 		for _, row := range Rows(rec, in) {
 			row.Rep = filepath.Base(rep)
 			out = append(out, row.Doc())

@@ -17,9 +17,10 @@ type talentExpectation struct {
 
 // talentRow judges the should-have-cast spells the bot's talent build implies (rule
 // AOTC-TALENTS-IMPLY-SPELLS): the talents at or above MinTalentShare that grant an active spell, the
-// bot has, and whose cooldown fits the fight join the spell judge's expectation. It fails only a
-// trained talent spell never cast; a record with no talent data reports the expectations and judges
-// nothing.
+// bot has, and whose cooldown fits one of its combat windows, join the spell judge's expectation.
+// It fails only a talent spell the record proves trained and never cast; a record with no talent
+// data, with only a partial talent read-back (the runner learns the spec's marker kit, not the
+// build), or with no proven combat reports what it has and judges nothing it cannot prove.
 func talentRow(rec Record, in Inputs) Row {
 	row := Row{ID: RuleTalents, Verdict: VerdictInconclusive}
 	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)
@@ -28,7 +29,7 @@ func talentRow(rec Record, in Inputs) Row {
 		return row
 	}
 	if !in.Tables.SpecKnown(class, spec) {
-		row.Reason = fmt.Sprintf("no player data for %s/%s (spec-population.csv)", class, rec.Spec)
+		row.Reason = fmt.Sprintf("no player data for %s/%s (spec-population.csv)", class, spec)
 		return row
 	}
 	group := LevelGroup(rec.Level)
@@ -50,27 +51,53 @@ func talentRow(rec Record, in Inputs) Row {
 		row.Reason = fmt.Sprintf("none of the %d common talents grants an active spell", len(picks))
 		return row
 	}
-	// The cooldown guard comes first: a spell on cooldown for longer than the fight could not have
-	// been cast in it, so it is no expectation with or without talent data.
+	// Combat, not the repeat's scored time: setup, waiting and travel are no fight, so a long
+	// repeat with a short fight must not fail a spell the bot had no chance to cast.
+	if !rec.ActiveKnown || len(rec.Combat) == 0 {
+		row.Evidence = sortedEvidence(expectationLines(expectations, spec))
+		row.Reason = "no combat participation in the record: the bot's samples never flag combat"
+		return row
+	}
+	// Eligibility is per combat window: a spell on cooldown for longer than a window cannot have
+	// been cast in it, and a window shorter than TalentMinActiveS says nothing.
 	var fitting []talentExpectation
 	var skipped []string
+	var longest float64
+	for _, window := range rec.Combat {
+		if length := window.To - window.From; length > longest {
+			longest = length
+		}
+	}
 	for _, e := range expectations {
-		if e.CooldownMS > 0 && float64(e.CooldownMS) > rec.ActiveS*1000*TalentCooldownFactor {
-			skipped = append(skipped, fmt.Sprintf("%s: cooldown %d s, longer than the %.0f s fight", e.Spell, e.CooldownMS/1000, rec.ActiveS))
+		fits := false
+		for _, window := range rec.Combat {
+			length := window.To - window.From
+			if length < TalentMinActiveS {
+				continue
+			}
+			if e.CooldownMS <= 0 || float64(e.CooldownMS) <= length*1000*TalentCooldownFactor {
+				fits = true
+				break
+			}
+		}
+		if fits {
+			fitting = append(fitting, e)
 			continue
 		}
-		fitting = append(fitting, e)
+		if e.CooldownMS > 0 {
+			skipped = append(skipped, fmt.Sprintf("%s: cooldown %d s, longer than every combat window the rule judges (longest %.0f s)",
+				e.Spell, e.CooldownMS/1000, longest))
+			continue
+		}
+		skipped = append(skipped, fmt.Sprintf("%s: no combat window reached the %.0f s the rule judges", e.Spell, TalentMinActiveS))
 	}
 	if len(fitting) == 0 {
-		row.Reason = fmt.Sprintf("none of the %d common talents' spells fits a %.0f s fight", len(picks), rec.ActiveS)
+		row.Evidence = sortedEvidence(skipped)
+		row.Reason = fmt.Sprintf("none of the %d common talents' spells fits a %.0f s combat window", len(picks), longest)
 		return row
 	}
 	if !rec.TalentsKnown {
-		lines := make([]string, 0, len(fitting))
-		for _, e := range fitting {
-			lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s)", e.Spell, e.Talent.Talent, e.Talent.PickPct, spec))
-		}
-		row.Evidence = sortedEvidence(lines)
+		row.Evidence = sortedEvidence(expectationLines(fitting, spec))
 		row.Reason = "no talent data in the record: the expectations are reported, nothing is judged"
 		return row
 	}
@@ -78,28 +105,36 @@ func talentRow(rec Record, in Inputs) Row {
 	for _, id := range rec.Talents {
 		learned[id] = true
 	}
-	var expected, untrained []string
+	var expected, untrained, unproven []string
 	var judged []talentExpectation
 	for _, e := range fitting {
-		if !learned[e.Talent.SpellID] {
+		if learned[e.Talent.SpellID] {
+			judged = append(judged, e)
+			expected = append(expected, e.Spell)
+			continue
+		}
+		if rec.TalentsComplete {
 			untrained = append(untrained, fmt.Sprintf("%s: not trained, so not expected", e.Spell))
 			continue
 		}
-		judged = append(judged, e)
-		expected = append(expected, e.Spell)
+		// The marker kit's read-back proves what it learned, never what the bot did not: an
+		// absent talent may be trained outside the kit.
+		unproven = append(unproven, fmt.Sprintf("%s (%s, %.1f%% of %s): not in the recorded talent learning, so its pick is unproven (the read-back is the marker kit, not the build)",
+			e.Spell, e.Talent.Talent, e.Talent.PickPct, spec))
 	}
 	if len(judged) == 0 {
+		if len(unproven) > 0 {
+			row.Evidence = sortedEvidence(append(unproven, skipped...))
+			row.Reason = fmt.Sprintf("talent data is partial: none of the %d talent spells is proven trained", len(fitting))
+			return row
+		}
 		row.Verdict = VerdictPass
 		row.Evidence = sortedEvidence(append(untrained, skipped...))
-		row.Reason = fmt.Sprintf("no trained talent spell is expected in a %.0f s fight", rec.ActiveS)
-		return row
-	}
-	if rec.ActiveS < TalentMinActiveS {
-		row.Evidence = sortedEvidence(append(untrained, skipped...))
-		row.Reason = fmt.Sprintf("%.0f s active is below the %.0f s the rule judges", rec.ActiveS, TalentMinActiveS)
+		row.Reason = "no trained talent spell is expected in the recorded combat"
 		return row
 	}
 	if in.Oracle == nil {
+		row.Evidence = sortedEvidence(append(append(unproven, untrained...), skipped...))
 		row.Reason = "no spell oracle in this build"
 		return row
 	}
@@ -121,11 +156,12 @@ func talentRow(rec Record, in Inputs) Row {
 	for _, e := range judged {
 		if missing[strings.ToLower(e.Spell)] {
 			never++
-			lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s): never cast in %.0f s", e.Spell, e.Talent.Talent, e.Talent.PickPct, spec, rec.ActiveS))
+			lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s): never cast in %.0f s of combat", e.Spell, e.Talent.Talent, e.Talent.PickPct, spec, rec.ActiveS))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s (%s): cast", e.Spell, e.Talent.Talent))
 	}
+	lines = append(lines, unproven...)
 	lines = append(lines, untrained...)
 	lines = append(lines, skipped...)
 	row.Evidence = sortedEvidence(lines)
@@ -136,9 +172,23 @@ func talentRow(rec Record, in Inputs) Row {
 		row.Reason = fmt.Sprintf("%d of %d trained talent spells were never cast", never, len(judged))
 		return row
 	}
+	if len(unproven) > 0 {
+		row.Reason = fmt.Sprintf("the %d trained talent spells were cast; %d common talent spells are unproven with only the marker-kit read-back", len(judged), len(unproven))
+		return row
+	}
 	row.Verdict = VerdictPass
 	row.Reason = fmt.Sprintf("all %d trained talent spells were cast", len(judged))
 	return row
+}
+
+// expectationLines names the should-have-cast spells of a talent build, for a row that reports the
+// expectations without judging them.
+func expectationLines(expectations []talentExpectation, spec string) []string {
+	lines := make([]string, 0, len(expectations))
+	for _, e := range expectations {
+		lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s)", e.Spell, e.Talent.Talent, e.Talent.PickPct, spec))
+	}
+	return lines
 }
 
 // talentExpectations is the common picks that grant an active spell of the bot's own class: the
