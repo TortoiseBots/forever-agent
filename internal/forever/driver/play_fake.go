@@ -155,6 +155,12 @@ type PlayFake struct {
 	ModuleSight  func(from, to Vec3) bool
 	RefuseOrders int
 	refusals     map[string]int
+	// AttackCode, when set, is asked for the unit the tank's attack order lands on: a code it returns is the module's
+	// refusal of that order (the live `not-attackable` on a friendly quest giver) and the order does nothing.
+	AttackCode func(target wire.GUID) string
+	// NonHostileFactions are the faction templates the fake's Reactions port answers friendly or neutral; any other
+	// faction (the zero one included) is hostile.
+	NonHostileFactions map[int32]bool
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
 }
@@ -461,6 +467,11 @@ func (m *PlayModule) Stay(ctx context.Context, name string) (botcmd.Reply, error
 // party the way a pulled pack does.
 func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, error) {
 	m.f.send(botcmd.VerbAttack, name)
+	if m.f.AttackCode != nil {
+		if code := m.f.AttackCode(m.f.Selected); code != "" {
+			return m.GoldenOwner.refuse(botcmd.VerbAttack, name, code, "the core says this bot may not attack that unit")
+		}
+	}
 	rep, err := m.GoldenOwner.Attack(ctx, name)
 	if err == nil {
 		if m.f.tankBlind(name) {
@@ -900,6 +911,11 @@ func (f *PlayFake) Self() (Vec3, uint32, uint64, bool) {
 func (f *PlayFake) Units() []Unit {
 	f.settle()
 	return f.units
+}
+
+// HostileToPlayer is the Reactions port: every faction is hostile but the ones a test listed in NonHostileFactions.
+func (f *PlayFake) HostileToPlayer(u Unit) (hostile, known bool) {
+	return !f.NonHostileFactions[u.Faction], true
 }
 
 // PlayerGUID is a party member's guid.

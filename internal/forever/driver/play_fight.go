@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
@@ -146,14 +147,27 @@ func (p *playRun) pull(ctx context.Context) string {
 	return ""
 }
 
+// cannotAttackCode says whether the module's refusal code of an attack order means the unit cannot be attacked or is
+// no longer there to be attacked: the codes the pull flow's refusal handling knows (dungeon.classify's dead,
+// no-target and unreachable kinds, and the core's own not-attackable). Waiting or retrying does not change them.
+func cannotAttackCode(code string) bool {
+	switch strings.ToLower(code) {
+	case "not-attackable", "no-target", "dead-target", "dead", "unreachable", "evading", "evade":
+		return true
+	}
+	return false
+}
+
 // maxStrangerPulls bounds the pulls of one stranger: a unit pulled twice that ends back on the way (an evade) is left
 // behind on the third hold, so a mobile unknown cannot keep the leg from its boss.
 const maxStrangerPulls = 2
 
 // pullStranger pulls the unit the patrol hold gave up waiting on as its own pull: the plan's sight stand, the skull
-// mark, the tank's order and the same two attempts from a step nearer as a pack's pull. It is a pull like any other:
-// the failure rules are the pack's (two unanswered attempts end the run), and a unit gone from the view by now is
-// dropped so the leg walks on.
+// mark, the tank's order and the same two attempts from a step nearer as a pack's pull. The unit was only a patrol
+// candidate, never a planned pull, so a pull that cannot be done does not end the run: the tank's refusal that the unit
+// cannot be attacked (a friendly quest giver), the sight refused out, or two attempts no one answered give the unit up
+// with the reason in the record (giveUpStranger) and the leg walks on to its next pull. A unit gone from the view by
+// now is dropped the same way. A stop of the run's own (time, a lost link) stays the run's.
 func (p *playRun) pullStranger(ctx context.Context) string {
 	guid := p.stranger
 	p.refreshSelf()
@@ -169,6 +183,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 	if p.stopReason != "" {
 		return ""
 	}
+	reason := "no-answer"
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": u.Entry})
@@ -185,7 +200,15 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 		if p.stopReason != "" {
 			return ""
 		}
+		if cannotAttackCode(p.orderCode) {
+			reason = "order-refused:" + p.orderCode
+			break
+		}
 		if p.refusedOut {
+			reason = "refused"
+			if p.sightBlocked {
+				reason = "no-sight"
+			}
 			break
 		}
 		if attempt == 0 {
@@ -194,9 +217,19 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 			}
 		}
 	}
+	return p.giveUpStranger(u, reason)
+}
+
+// giveUpStranger lets a patrol candidate go: the reason is recorded, the unit is no candidate any more (the hold does
+// not start on it again) and the leg walks on. It is bounded by the unit's own two pulls at most.
+func (p *playRun) giveUpStranger(u Unit, reason string) string {
+	p.rec.Event(p.now(), "patrol_unpullable", map[string]any{
+		"guid": u.GUID.String(), "entry": u.Entry, "reason": reason,
+		"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2],
+	})
+	p.strangerGaveUp[u.GUID] = true
 	p.stranger = wire.GUID{}
-	p.stopPullFailed()
-	return ""
+	return StateLegWalk
 }
 
 // stopPullFailed ends a pull no one answered: "pull-no-sight" when the last look said the tank could not see the skull
@@ -514,8 +547,13 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 		p.pullSet = append(p.pullSet, u.GUID)
 	}
 	p.refused = false
+	p.orderCode = ""
 	before := p.sightRefusals()
 	if !p.order(ctx, p.cfg.Bots[0], skull.GUID) {
+		return false
+	}
+	if !p.stranger.IsZero() && cannotAttackCode(p.orderCode) {
+		// The held unit may not be attacked: waiting out the pull window would not change the module's answer.
 		return false
 	}
 	deadline := p.now().Add(p.lim.Pull)
@@ -1162,6 +1200,7 @@ func (p *playRun) order(ctx context.Context, bot string, target wire.GUID) bool 
 		return true
 	}
 	if errors.Is(err, botcmd.ErrRefused) {
+		p.orderCode = rep.Code
 		p.rec.Event(p.now(), "order_refused", map[string]any{"bot": p.slot(bot), "code": rep.Code})
 		return true
 	}
