@@ -118,6 +118,10 @@ sent is in the model.
 | `auction_owned` | implemented |
 | `auction_quote` | implemented |
 | `auction_sell` | implemented |
+| `bank_buy_slot` | implemented |
+| `bank_deposit` | implemented |
+| `bank_list` | implemented |
+| `bank_withdraw` | implemented |
 | `bot` | implemented |
 | `bot_view` | implemented |
 | `brain_start` | refused: the client brain is retired on Forever: the module's bots fight on the server, so a client brain has nothing to drive |
