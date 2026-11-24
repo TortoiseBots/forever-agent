@@ -21,7 +21,9 @@ labels yet:
 
 --prune, with --backfill, is the one-time clean-up after a rule was narrowed: an OPEN issue also loses each label the
 automation can apply that the current rules no longer give. It only removes from the automation's own label set below
-and never a label a rule still gives; the people-owned labels are outside that set. The workflow never uses it.
+and never a label a rule still gives; the people-owned labels are outside that set. A label carries no record of who
+added it, so a `bug`, `enhancement` or keyword label a person set by hand and no rule gives is removed too, and the run
+says so first. The workflow never uses it.
 
   python3 -I tools/label_issue.py --backfill --prune --dry-run
   python3 -I tools/label_issue.py --backfill --prune
@@ -61,6 +63,11 @@ RULES = (
 # Every label the automation can apply, and so the only set --prune may remove from. All of them are in
 # .github/labels.yml; the people-owned labels are not (the tests check both).
 AUTOMATION_LABELS = frozenset(label for label, _, _ in RULES) | {"bug", "enhancement"}
+
+# A label carries no record of who added it, so --prune cannot tell one this script added from one a person set by
+# hand: a `bug`, `enhancement` or keyword label no rule still gives goes too. Both prune runs print this first.
+PRUNE_NOTE = ("prune: a label does not record who added it, so a hand-set bug, enhancement or keyword label that no "
+              "rule gives is removed too")
 
 # Title only. A whole word from here is a bug report; the repo's titles say "fix", "crash", "broken" and so on.
 BUG_WORDS = re.compile(r"\b(?:fix(?:es|ed)?|fails?|broken|refused|crash(?:es|ed)?)\b", re.IGNORECASE)
@@ -279,9 +286,12 @@ def backfill(repo, limit, dry_run, runner=run_gh, prune=False):
     """Label every open issue and pull request missing these labels; returns (items, added, removed).
 
     With `prune`, an issue also loses every label of AUTOMATION_LABELS that the current rules no longer give; a label a
-    rule still gives, and every label outside that set (the people-owned ones), is left alone.
+    rule still gives, and every label outside that set (the people-owned ones), is left alone. A label records who
+    added it nowhere, so a person's own `bug`, `enhancement` or keyword label goes too (PRUNE_NOTE).
     """
     rules = parse_labeler(LABELER_FILE.read_text(encoding="utf8"))
+    if prune:
+        print(PRUNE_NOTE)
     items = 0
     added = 0
     removed = 0

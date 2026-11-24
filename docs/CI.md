@@ -260,6 +260,11 @@ touches the labels the automation applies (the `RULES` labels and `bug`/`enhance
 `.github/labels.yml` (the people-owned priority labels and `TortoiseBots`), and never a label a rule still gives. The
 workflow never uses it:
 
+**It cannot tell who added a label.** GitHub records no author on a label, so `bug`, `enhancement` and the keyword
+labels (`documentation`, `dungeon`, `daemon`, …) are removed even when a person set one by hand and no rule now gives
+it. Read the `--dry-run` lines before applying; the dry-run prints a `prune:` line saying so first, and so does the
+apply run.
+
 ```sh
 python3 -I tools/label_issue.py --backfill --prune --dry-run   # "issue 115: -raid", changes nothing
 python3 -I tools/label_issue.py --backfill --prune             # applies the clean-up
@@ -267,8 +272,10 @@ python3 -I tools/label_issue.py --backfill --prune             # applies the cle
 
 Both scripts take `--repo OWNER/REPO` (default `$REPO`, else the current repository) and need the `gh` CLI with a token
 that can edit the repository. Their tests are part of `make tools-test` (`make test` runs it too) and of the `lint` job,
-so a rule change cannot merge without them:
+so a rule change cannot merge without them; `tools/test_workflows.py` holds the two labelling workflows to their
+invariants (the issue trigger, the SHA pins, no checkout in `label-pr.yml`, the minimal permissions, no event
+expression in a `run:` script):
 
 ```sh
-python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py
+python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py tools/test_workflows.py
 ```

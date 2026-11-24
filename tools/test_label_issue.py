@@ -399,6 +399,8 @@ class PruneTest(unittest.TestCase):
         self.assertEqual((2, 3, 3), (items, added, removed))
         self.assertFalse([c for c in calls if c[:2] == ["api", "--method"]])
         self.assertEqual([
+            "prune: a label does not record who added it, so a hand-set bug, enhancement or keyword label that no "
+            "rule gives is removed too",
             "issue 115: -raid",
             "issue 115: +testing,enhancement",
             "issue 216: -dungeon,-documentation",
