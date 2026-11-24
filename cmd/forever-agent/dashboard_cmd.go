@@ -131,6 +131,8 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "dashboard: --tests-dir %s is not a folder: no files will be linked\n", testsDir)
 		testsDir = ""
 	}
+	// A Forever slot's live map (map_snapshot, drawn by the daemon) is polled by the poller itself: every 5 s, never
+	// under 2 s, under a 10 s bound (internal/dashboard/live_map.go), so no flag is needed here.
 	p := dashboard.NewPoller(dashboard.Options{ConfigDir: expandHome(*cfgDir), Agents: *agents, TestsDir: testsDir, TracesDir: expandHome(*traces), PlansDirs: planDirs, MinimapDir: minimapDir(expandHome(*minimaps), stderr)})
 	var editor *dashboard.Editor
 	if *editMmaps != "" && !*edit { // the real route needs the navmesh, not the editor

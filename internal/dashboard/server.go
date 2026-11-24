@@ -131,6 +131,25 @@ func HandlerFull(p *Poller, testsDir string, allowHosts, embedFrom []string, ed 
 	mux.HandleFunc("/api/minimap/", func(w http.ResponseWriter, r *http.Request) {
 		serveMinimapLayers(w, r, p.opt.MinimapDir)
 	})
+	// The live map: a Forever serve's own map_snapshot drawing, as an image. The poller refreshes it at its bounded
+	// rate, so this route never calls the serve and never waits: it serves the last picture or says there is none.
+	mux.HandleFunc("/api/map/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/map/")
+		if !validAgentID(id) {
+			http.NotFound(w, r)
+			return
+		}
+		info, svg := p.LiveMap(id)
+		w.Header().Set("Cache-Control", "no-store")
+		if !info.Have || len(svg) == 0 {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "no live map for %s: %s\n", id, liveMapWhy(info))
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+		w.Write(svg)
+	})
 	mux.HandleFunc("/minimap/", func(w http.ResponseWriter, r *http.Request) {
 		serveMinimapImage(w, r, p.opt.MinimapDir)
 	})

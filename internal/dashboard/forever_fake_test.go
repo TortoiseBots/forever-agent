@@ -27,12 +27,13 @@ type foreverFakeServe struct {
 	failed    map[string]bool
 	notPorted map[string]bool
 	refused   map[string]string // method -> the message of a -32003 game refusal
+	delays    map[string]time.Duration
 	srv       *httptest.Server
 }
 
 func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 	t.Helper()
-	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}, refused: map[string]string{}}
+	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}, refused: map[string]string{}, delays: map[string]time.Duration{}}
 	f.results["status"] = foreverStatusJSON
 	f.results["party"] = foreverPartyJSON
 	f.results["commander"] = foreverCommanderJSON
@@ -49,7 +50,15 @@ func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 		f.calls = append(f.calls, rpcCall{req.Method, req.Params, r.Header.Get("Authorization")})
 		res, failed, notPorted := f.results[req.Method], f.failed[req.Method], f.notPorted[req.Method]
 		refusal, refused := f.refused[req.Method]
+		delay := f.delays[req.Method]
 		f.mu.Unlock()
+		if delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return // the caller gave up (a bounded call): answer nothing
+			}
+		}
 		switch {
 		case refused:
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":` + jsonStr(refusal) + `}}`))
@@ -125,6 +134,47 @@ func (f *foreverFakeServe) fail(t *testing.T, method string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failed[method] = true
+}
+
+// heal makes method answer again (the serve came back).
+func (f *foreverFakeServe) heal(t *testing.T, method string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.failed, method)
+}
+
+// setResult replaces method's answer (the live map tests give map_snapshot a picture).
+func (f *foreverFakeServe) setResult(t *testing.T, method, result string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.results[method] = result
+}
+
+// delay makes method wait d (bounded by the caller's context, like a slow daemon); 0 clears it.
+func (f *foreverFakeServe) delay(t *testing.T, method string, d time.Duration) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d <= 0 {
+		delete(f.delays, method)
+		return
+	}
+	f.delays[method] = d
+}
+
+// count is how many times method was called so far.
+func (f *foreverFakeServe) count(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.Method == method {
+			n++
+		}
+	}
+	return n
 }
 
 // parseURL returns the fake's host:port.

@@ -221,5 +221,21 @@ function fakeH(tag, attrs, ...kids) {
 
   ctl.render(box, Object.assign({}, card, { elsewhere: [] }));
   assert.ok(line.hidden, "no elsewhere line when every bot is on the shown map");
+
+  // The panel draws the serve's live map, and turns it into one line when the serve is gone (live_map).
+  const lm = { have: true, state: "live", map: 36, floor: 0, floors: ["ground"], members: 2, creatures: 1, seconds: 42.5, at: "2026-11-24T20:00:00Z", age_ms: 2000 };
+  ctl.render(box, Object.assign({}, card, { elsewhere: [], live_map: lm }));
+  const lbox = find(box, (n) => n.className === "livemap");
+  assert.ok(lbox && !lbox.hidden, "the live map box is drawn");
+  const img = find(lbox, (n) => n.tag === "img");
+  assert.strictEqual(img.src, "/api/map/" + encodeURIComponent(card.id) + "?at=" + encodeURIComponent(lm.at));
+  assert.ok(!img.hidden, "the picture is shown");
+  assert.ok(/map 36 · 2 members · 1 hostile/.test(text(find(lbox, (n) => (n.className || "").indexOf("lmcap") >= 0))), "the caption names the picture");
+
+  ctl.render(box, Object.assign({}, card, { online: false, elsewhere: [], live_map: { have: false, state: "no-serve", reason: "world: offline: test down" } }));
+  assert.ok(find(lbox, (n) => n.tag === "img").hidden, "a gone serve shows no picture");
+  const lmlin = find(lbox, (n) => (n.className || "").indexOf("lmlin") >= 0);
+  assert.ok(/^No live map: world: offline: test down$/.test(text(lmlin)) && !lmlin.hidden, "the gone serve is said in words");
+  assert.ok(!lbox.hidden, "the box stays, with the reason");
   console.log("ok placement");
 })().catch((e) => { console.error(e); process.exit(1); });

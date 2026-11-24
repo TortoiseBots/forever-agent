@@ -67,6 +67,8 @@ The table above leaves out the `--edit*` and `--control*` flags on purpose: rout
 
 The page polls each agent every 1.5 s (`Interval`), with a 2 s bound per agent (`CallTimeout`). On a turtle agent it calls four RPC methods only: `status`, `dungeon_status`, `tune_list`, and `bot_view`. On a serve slot it calls `status`, `party`, `commander {op:status}`, `units {within:100}`, and the `event_log` tail.
 
+A serve slot's card also carries the daemon's own live map: `map_snapshot` (the party members and the hostile creatures on the Forever mesh, drawn from the session's recorder over the navmesh) is asked every 5 s, never faster than 2 s, under a 10 s bound, and on a goroutine of its own so a slow or gone serve never delays the poll or the page. The drawing is served at `GET /api/map/<id>` as `image/svg+xml` (the card carries only the facts: map, members, hostiles, the picture's time), and the Positions panel draws it. A serve that does not answer leaves a clear `No live map: <reason>` (HTTP 503 on the route) instead of a stale picture; the next good answer draws again. The plan view and the trace digest the page draws for replays are unchanged: the live map is the one picture only the daemon can draw.
+
 ## 4. Open the page from another machine
 
 Serve on a Tailscale address and name it:

@@ -22,7 +22,13 @@ type Options struct {
 	MinimapDir  string        // images from `forever-agent minimap-extract` (<map>.png + <map>.json), drawn under the plan; "" for none
 	Interval    time.Duration // poll period
 	CallTimeout time.Duration // bound on one agent's polls
-	Now         func() time.Time
+	// LiveMapEvery is how often a Forever slot is asked for its map_snapshot drawing (default 5 s, never under
+	// 2 s: see live_map.go). A poll never waits for the answer.
+	LiveMapEvery time.Duration
+	// LiveMapTimeout bounds one map_snapshot call (default 10 s): a serve that hangs shows "no serve" instead of
+	// holding the slot.
+	LiveMapTimeout time.Duration
+	Now            func() time.Time
 }
 
 // Poller polls the agents on a fixed period and keeps the latest answer as ready-made JSON, so that a request does no work.
@@ -49,6 +55,9 @@ type Poller struct {
 
 	foreverProg map[string]foreverProgress // agent id -> the run's last progress mark (the card's stall)
 	foreverFeed map[string]*foreverFeed    // agent id -> the event_log tail already shown on the card
+
+	liveMaps  map[string]*liveMapEntry // agent id -> the Forever slot's last map_snapshot answer (live_map.go)
+	liveAsked sync.WaitGroup           // the map asks in flight (see live_map.go's waitLiveMaps)
 }
 
 // NewPoller applies the defaults.
@@ -68,7 +77,7 @@ func NewPoller(o Options) *Poller {
 	if o.Agents == "" {
 		o.Agents = "auto"
 	}
-	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}, foreverProg: map[string]foreverProgress{}, foreverFeed: map[string]*foreverFeed{}}
+	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}, foreverProg: map[string]foreverProgress{}, foreverFeed: map[string]*foreverFeed{}, liveMaps: map[string]*liveMapEntry{}}
 	p.state = []byte(`{"agents":[],"offline":[]}`)
 	return p
 }
@@ -113,11 +122,14 @@ func (p *Poller) Tick(ctx context.Context) {
 			if a.Kind == AgentForever {
 				cl, err := serveclient.New(a.Addr, a.TokenPath)
 				if err != nil {
-					c := BuildForeverCard(Inputs{Agent: a, StatusErr: err.Error()})
+					p.markLiveMapGone(a.ID, err.Error())
+					c := BuildForeverCard(Inputs{Agent: a, StatusErr: err.Error(), LiveMap: p.liveMapInfo(a.ID, now)})
 					res[i] = result{c, nil}
 					return
 				}
 				c, raw := p.pollForeverOne(ctx, a, cl, now)
+				// The map ask runs on its own goroutine, at its own cadence: the poll never waits for it.
+				p.refreshLiveMap(ctx, a, cl, now)
 				res[i] = result{c, raw}
 				return
 			}

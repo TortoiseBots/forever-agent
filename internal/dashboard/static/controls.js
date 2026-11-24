@@ -73,6 +73,36 @@
     return { shapes: PLACE_SHAPES, gaps: PLACE_GAPS, anchors: PLACE_ANCHORS, who: PLACE_WHO };
   }
 
+  // ---- the live map (the serve's own picture of the party and the hostiles) ----
+
+  // liveMapPanel is the Positions panel's picture: the Forever serve's map_snapshot drawing (the party members and
+  // the hostile creatures on the Forever mesh, drawn by the daemon), which the dashboard asks for at its own bounded
+  // rate (internal/dashboard/live_map.go). The page adds no rate of its own: the picture is fetched again only when
+  // the card's version (live_map.at) changes. Pure of the DOM, so it is tested under node. A turtle card and the plan
+  // view keep the recorded frames: they have no live map.
+  function plural(n, word) { const c = n || 0; return c + " " + word + (c === 1 ? "" : "s"); }
+  function liveMapPanel(card) {
+    if (!card || card.synthetic || card.kind !== "forever") return null;
+    const lm = card.live_map || null;
+    if (!lm || !lm.have) {
+      const why = (lm && lm.reason) ? String(lm.reason) : (card.online ? "the serve has not drawn one yet" : "the serve is not answering");
+      return { src: null, version: "", alt: "", caption: "", notes: [], line: "No live map: " + why };
+    }
+    const version = String(lm.at || "");
+    const bits = ["map " + lm.map, plural(lm.members, "member"), plural(lm.creatures, "hostile")];
+    if (lm.floors && lm.floors.length > 1) bits.push("floor " + ((lm.floor || 0) + 1) + " of " + lm.floors.length);
+    if (lm.seconds) bits.push(Math.round(lm.seconds) + " s of the run");
+    if (typeof lm.age_ms === "number" && lm.age_ms > 0) bits.push("drawn " + Math.max(1, Math.round(lm.age_ms / 1000)) + " s ago");
+    return {
+      src: "/api/map/" + encodeURIComponent(card.id) + "?at=" + encodeURIComponent(version),
+      version: version,
+      alt: "Live map drawn by the serve: map " + lm.map + ", " + plural(lm.members, "party member") + " and " + plural(lm.creatures, "hostile creature"),
+      caption: bits.join(" \u00b7 "),
+      notes: (lm.notes || []).map(String),
+      line: "",
+    };
+  }
+
   // The world's coordinate bound (Trinity::IsValidMapCoord): a point outside
   // it is not on the map. The Go handler checks the same bound, the card's
   // map id and the module's 100 yd reach; this is the page's first refusal.
@@ -311,14 +341,51 @@
       paintPlace(s, card);
     }
 
+    // paintLiveMap shows the serve's picture, or one line saying why there is none. The img is fetched again only
+    // when the card's version changes (the server's own cadence): the page never adds a rate of its own.
+    function paintLiveMap(s, lm) {
+      const L = s.liveMap;
+      L.box.hidden = !lm;
+      if (!lm) return;
+      if (lm.src) {
+        if (L.version !== lm.version) { L.version = lm.version; L.img.src = lm.src; }
+        L.img.alt = lm.alt;
+        L.img.hidden = false;
+        L.cap.textContent = lm.caption;
+        L.cap.hidden = false;
+      } else {
+        // No picture: the img is only hidden (its last drawing is never shown as if it were live), and the next
+        // picture sets the src again because the version was cleared.
+        L.version = null;
+        L.img.hidden = true;
+        L.cap.hidden = true;
+      }
+      L.line.textContent = lm.line || "";
+      L.line.hidden = !lm.line;
+      L.notes.replaceChildren(...(lm.notes || []).map((t) => h("div", { text: t })));
+      L.notes.hidden = !(lm.notes && lm.notes.length);
+    }
+
     // paintPlace draws (once per control box) and refreshes the Positions
-    // panel: Shape, Gap, Anchor, Facing, Who and the seven buttons. Map
-    // point mode arms the next click on the card's map svg to pick the
-    // point (crosshair cursor, Esc cancels); the page sends only when the
-    // card's map is known.
+    // panel: the serve's live map, then Shape, Gap, Anchor, Facing, Who and
+    // the seven buttons. Map point mode arms the next click on the card's map
+    // svg to pick the point (crosshair cursor, Esc cancels); the page sends
+    // only when the card's map is known. The live map is there whenever the
+    // card is a Forever slot, a gone serve included: its line says why.
     function paintPlace(s, card) {
-      const panel = placePanel(card);
-      s.placeBox.hidden = !panel;
+      const panel = placePanel(card), lmv = liveMapPanel(card);
+      s.placeBox.hidden = !panel && !lmv;
+      if (!panel && !lmv) return;
+      if (!s.liveMap) {
+        s.placeHead = h("h4", { text: "Positions" });
+        s.liveMap = { box: h("div", { class: "livemap" }), img: h("img", { class: "lmimg", alt: "" }),
+          cap: h("div", { class: "lmcap muted", hidden: true }), line: h("div", { class: "lmlin muted", hidden: true }),
+          notes: h("div", { class: "lmnotes muted", hidden: true }), version: null };
+        s.liveMap.img.hidden = true;
+        s.liveMap.box.append(s.liveMap.img, s.liveMap.cap, s.liveMap.line, s.liveMap.notes);
+        s.placeBox.append(s.placeHead, s.liveMap.box);
+      }
+      paintLiveMap(s, lmv);
       if (!panel) return;
       if (!s.place) {
         const box = s.placeBox;
@@ -355,7 +422,6 @@
           resume: mk("resume", "Resume", "Follow again (end the fall back)."),
           elsewhere: h("div", { class: "muted", hidden: true }) };
         box.append(
-          h("h4", { text: "Positions" }),
           h("label", { text: "Shape " }, shape),
           h("label", { text: "Gap " }, gap, gapNum),
           h("label", { text: "Anchor " }, anchor),
@@ -479,6 +545,6 @@
 
   const api = { runButtons, orderButtons, ORDER_VERBS, confirmText, logLines, create, VERBS,
     PLACE_SHAPES, PLACE_GAPS, PLACE_ANCHORS, PLACE_WHO, unproject, placePanel, placeArgs,
-    armPointPick, disarmPointPick, MAP_BOUND };
+    armPointPick, disarmPointPick, MAP_BOUND, liveMapPanel };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.CTL = api;
 })(typeof self !== "undefined" ? self : this);
