@@ -112,13 +112,13 @@ func trialLevelOf(target int) map[string]any {
 // (or none), and the level it leaves behind never passes the target or 60.
 func TestLevelStepOneDeltaFromTheCurrentLevel(t *testing.T) {
 	cases := []struct {
-		name       string
-		start      int
-		target     int
-		wantDelta  int
-		wantSend   bool
-		wantOK     bool
-		wantEnd    int
+		name      string
+		start     int
+		target    int
+		wantDelta int
+		wantSend  bool
+		wantOK    bool
+		wantEnd   int
 	}{
 		{"from 1", 1, 60, 59, true, true, 60},
 		{"from 30", 30, 60, 30, true, true, 60},
