@@ -137,9 +137,10 @@ The rest of the code table is in `internal/rpc/server.go`: `-32700` parse, `-326
 `-32601` method not found, `-32602` invalid params, `-32000` internal, `-32001` not in world,
 `-32005` reconnecting, `-32006` forbidden.
 
-A method the daemon does not implement yet is registered from `notPortedMethods` and answers
-`<name>: not ported on this server` with `-32003`. Move the name out of that list when you
-implement it; do not leave both registrations.
+A method the daemon does not implement is registered from `refusedMethods` (`serve_rpc_methods.go`) with a
+documented reason and answers `<name>: <reason>` with `-32003`; the generated
+[docs/forever/METHOD-TABLE.md](../../forever/METHOD-TABLE.md) lists every refused name. Remove its
+`refusedMethods` row and register the real body when you implement it; do not leave both registrations.
 
 # 5. Gates
 

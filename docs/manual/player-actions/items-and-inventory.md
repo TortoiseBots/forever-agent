@@ -39,6 +39,9 @@ really has 35-50), the bank 63+ and the buyback 72-83. A position is either a ba
 | `use_item` | `item_entry` or `bag` + `slot`, `spell_id`, `target` | the item's row |
 | `mount` | `spell` or `entry` (+ `spell`) | mount state |
 | `dismount` | none | mount state |
+| `bank_list` | `guid`, `wait_ms` | the bank's contents |
+| `bank_deposit`, `bank_withdraw` | `guid`, `item_entry` or `bag` + `slot`, `wait_ms` | the moved item's bank row |
+| `bank_buy_slot` | `guid` | always refused |
 
 # inv
 
@@ -112,6 +115,26 @@ effect row is not a record the client can look up. `target` is an optional unit 
 stone needs none); a unit target must be in the world model.
 
 The call fails with the cast failure's name when the server refuses the use, and answers the item's row otherwise.
+
+# The bank
+
+The bank methods read and move items in the character's bank. `bank_list` opens the banker (`CMSG_BANKER_ACTIVATE`)
+and answers the tab bags in the player's slots 63-71 and what is inside them. A deposit or a withdraw needs that
+open — the core drops a bank packet whose interaction is not the banker's — and any later NPC window (a vendor's
+list, a trainer's, a gossip menu) closes it, so call `bank_list` again before the next move. The banker is a unit in
+the world model, within reach, with the banker flag; the methods never walk to one.
+
+| Method | Parameters | Answer |
+|---|---|---|
+| `bank_list` | `guid` (the banker), `wait_ms` | `{since, ok, event, banker, items[]}`; a row is `guid`, `bag`, `slot`, `item_entry`, `count`, `unconfirmed` |
+| `bank_deposit` | `guid`, the carried item by `item_entry` or `bag` + `slot`, `wait_ms` | the same shape, with `item` for the moved row |
+| `bank_withdraw` | `guid`, the bank item by `item_entry` or `bag` + `slot` (bank positions), `wait_ms` | the same shape, with `item` |
+| `bank_buy_slot` | `guid` | always refused: the client does not read the tab count the core prices a tab from, so it cannot check the price or prove the purchase; buy the tab in the bank window |
+
+A deposit names a carried position (player slots 0-62, or a bag 30-33 and its slot) and refuses an item that is
+equipped, a worn bag, or not confirmed in a slot yet. A withdraw names a bank position (player slots 63-71, or a
+bank bag 63-71 and its slot); an `item_entry` that sits in the bank more than once is refused, because only `bag`
+and `slot` name the stack.
 
 # mount and dismount
 

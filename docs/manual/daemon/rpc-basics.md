@@ -93,8 +93,9 @@ Notes:
 - `-32005` is temporary: wait and call again. The Go client in the repository retries every 2 s for up to
   60 s and then surfaces the code; `forever rpc` prints it at once.
 - `-32002` is final for this daemon: the process exits after `--disconnect-grace`.
-- A method the old daemon had but this one does not implement answers `-32003` with
-  `<method>: not ported on this server`, never an empty success.
+- A name the old daemon had that this one has no Forever meaning for answers `-32003` with
+  `<method>: <reason>`, the reason naming what to use instead; never an empty success. No method is marked
+  "not ported" any more (see [methods the daemon refuses](not-ported-methods.md)).
 
 # One call at a time
 
@@ -127,7 +128,8 @@ forever-agent forever rpc [--timeout DUR] [--raw] [--leave-party] <dir> <method|
 
 `<params-json>` is a JSON object (or array); `-` reads it from stdin (up to 1 MiB). Anything else is a usage
 error. `list` takes no params: the command calls `status` first (so a stopped daemon fails here), then prints
-every registered method name, one per line, with the not-implemented ones marked ` (not ported)`.
+every registered method name, one per line: an implemented method bare, a refused one as
+`name (refused: <reason>)`.
 
 Output: the result as indented JSON (`--raw`: one line). An error answer prints `error: <code> <message>` on
 stderr.
@@ -179,7 +181,7 @@ curl -s -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
 | `error: -32602 invalid params: json: unknown field "..."` | The daemon rejects unknown fields. Check the method's parameters in the [method index](method-index.md). |
 | `error: -32005 world: reconnecting: ...` | The world link is down and being logged in again. Wait and retry; the message names the attempt. |
 | `error: -32002 world: offline: ...` | The reconnect budget is spent. Restart the daemon; `status` shows the last error. |
-| `error: -32003 <method>: not ported on this server` | The method belongs to the older daemon and is not implemented here. |
+| `error: -32003 <method>: <reason>` | The name belongs to the older daemon and has no Forever meaning here; the reason says what to use instead. |
 
 # Related
 

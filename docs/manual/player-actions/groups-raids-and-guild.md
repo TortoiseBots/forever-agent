@@ -79,7 +79,9 @@ unit by `guid` or by a roster member's `name` and sets that icon on it; the meth
 group's end.
 
 The older daemon's group-finder methods (`lfg_join`, `lfg_leave`, `lfg_listings`, `lfg_status`, `lfg_auto`, the
-proposal answers and `lfg_listing_role`) are not ported by `forever serve`: they answer "not ported on this server".
+proposal answers and `lfg_listing_role`) are refused by `forever serve` with a `-32003` error: the client dungeon
+finder is not built on Forever, and the module's own finder fills the party and queues (`forever fb-dungeon`, and
+the module's `.bot lfg` and `.bot dungeon` commands).
 
 # Raid control
 

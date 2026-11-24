@@ -20,6 +20,16 @@ sources:
     resource: internal/forever/world/serve_mail_methods.go
   - id: method-groups-auction
     resource: internal/forever/world/serve_auction_methods.go
+  - id: method-groups-bank
+    resource: internal/forever/world/serve_bank_methods.go
+  - id: method-groups-dungeon
+    resource: internal/forever/world/serve_dungeon_methods.go
+  - id: method-plan-check
+    resource: internal/forever/world/serve_plan_check.go
+  - id: method-bot-view
+    resource: internal/forever/world/serve_bot_view.go
+  - id: method-tbm
+    resource: internal/forever/world/serve_tbm_methods.go
 ---
 
 # What this is
@@ -28,9 +38,9 @@ One table row per method the daemon registers, grouped the way the command-line 
 lists the JSON fields the method reads; a method with `{}` reads none (any field is refused with `-32602`).
 `forever rpc DIR list` prints the same names from the running server.
 
-Names the older daemon had but this one does not implement are on
-[methods not ported](not-ported-methods.md). They answer `-32003 <method>: not ported on this server`, never
-an empty success.
+The older daemon's names are registered too: an implemented one is a row here, a refused one answers
+`-32003 <method>: <reason>` and is listed on [methods the daemon refuses](not-ported-methods.md). An old caller
+never gets an empty success.
 
 Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md).
 
@@ -98,6 +108,15 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `equip` | `item_entry`, `bag`, `slot` | Equip or swap an item | [Items](../player-actions/items-and-inventory.md) |
 | `use_item` | `item_entry`, `bag`, `slot`, `target`, `spell_id` | Use an item | [Items](../player-actions/items-and-inventory.md) |
 
+# The bank
+
+| Method | Params | What it does | Page |
+|---|---|---|---|
+| `bank_list` | `guid`, `wait_ms` | Open the banker and read the tab bags (player slots 63-71) and their contents | [The bank](../player-actions/items-and-inventory.md#the-bank) |
+| `bank_deposit` | `guid`, `item_entry` or `bag`+`slot`, `wait_ms` | Move one carried item into the bank | [The bank](../player-actions/items-and-inventory.md#the-bank) |
+| `bank_withdraw` | `guid`, `item_entry` or `bag`+`slot` (bank positions), `wait_ms` | Move one item from the bank into the bags | [The bank](../player-actions/items-and-inventory.md#the-bank) |
+| `bank_buy_slot` | `guid` | Always refused before any packet: the client cannot read the tab count the price comes from | [The bank](../player-actions/items-and-inventory.md#the-bank) |
+
 # Loot and game objects
 
 | Method | Params | What it does | Page |
@@ -158,6 +177,17 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `accept_guild_invite` | `{}` | Accept a guild invite | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `decline_guild_invite` | `{}` | Decline a guild invite | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `guild_leave` | `{}` | Leave the guild | [Groups](../player-actions/groups-raids-and-guild.md) |
+
+# Dungeon runs
+
+| Method | Params | What it does | Page |
+|---|---|---|---|
+| `dungeon_run` | `plan`, `lead_bot` | Start a module-led run (`.tb run start <lead> <plan>`); the CLI's start preflight runs first (plan, slot and lease, module link, the lead via `.pinfo`) and a failed check refuses with its lines, sending nothing | [dungeon-run](../dungeons/dungeon-run.md) |
+| `dungeon_status` | `lead_bot` | The module's run records; no lead reads every run | [dungeon-watch](../dungeons/dungeon-watch.md) |
+| `dungeon_stop` | `lead_bot`, `reason` | Stop a run (`.tb run stop`) | [dungeon-watch](../dungeons/dungeon-watch.md) |
+| `dungeon_pause` | `lead_bot` | Pause a run (`.tb run pause`) | [dungeon-watch](../dungeons/dungeon-watch.md) |
+| `dungeon_resume` | `lead_bot` | Resume a run (`.tb run resume`) | [dungeon-watch](../dungeons/dungeon-watch.md) |
+| `plan_check` | `name`, `from_leg`, `from_pull_group` | Check a plan from the serve's `--plans-dir` over its `--navmesh`; without one the findings say `skipped` with the reason | [Plan tools](../dungeons/plan-tools.md) |
 
 # Trade
 
@@ -241,16 +271,20 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 |---|---|---|---|
 | `bot` | `line`, `wait_ms` | One `.bot` or `.tb` command line | [Bot control](../bots-and-raids/bot-control.md) |
 | `commander` | `op`, `lead_bot`, `bots`, `verb`, `args`, `wait_ms`, `pause_run`, `leave_party`, `on` | Bind, unbind, order or run the bot module's leader | [Bot control](../bots-and-raids/bot-control.md) |
+| `bot_view` | `bots`, `wait_ms` | The party roster joined to the world model, one row per bot (`in_party`, `online`, `dead`, `in_view`, and the unit row while in view); `wait_ms` (at most 2 s) lets a just-sent unit land first | [Bot control](../bots-and-raids/bot-control.md) |
+| `tbm_handshake` | `transport`, `wait_ms` | The TBM hello: the roster probe, then the trailer and the transport it switches to | [Add-on protocol](../bots-and-raids/addon-protocol.md) |
+| `tbm_send` | `command`, `transport`, `wait_ms` | One TBM command and its answer, off the session queue (`wait_ms` 5 s by default, capped at 15 s); one exchange runs at a time | [Add-on protocol](../bots-and-raids/addon-protocol.md) |
+| `tbm` | `command`, `via`, `wait_ms` | `tbm_send` under the old name (`via` is accepted as the transport) | [Add-on protocol](../bots-and-raids/addon-protocol.md) |
 
-# Not ported
+# Refused
 
-The older daemon's other names are registered too, so an old caller gets a reason instead of "method not
-found". They all answer `-32003 <method>: not ported on this server`; the list is on
-[methods not ported](not-ported-methods.md).
+No method is "not ported" any more: an old name that has no Forever meaning answers
+`-32003 <method>: <reason>`, and the reason names what to use. The refused names and their reasons are on
+[methods the daemon refuses](not-ported-methods.md).
 
 # Related
 
 - [RPC basics](rpc-basics.md), [forever serve](serve.md)
 - [Status and world reads](status-and-world-reads.md), [Movement](movement.md),
   [Teleports and travel](travel.md), [Events and logs](events-and-logs.md)
-- [Methods not ported](not-ported-methods.md)
+- [Methods the daemon refuses](not-ported-methods.md)
