@@ -1,0 +1,32 @@
+name: label-pr
+
+# Path and branch labels for pull requests, through the official actions/labeler (the rules are in
+# .github/labeler.yml).
+#
+# `pull_request_target` is safe here because the job NEVER checks out the pull request's code: labeler reads the
+# changed-file list from the event and adds labels through the API. Nothing from the PR's branch is fetched or run, so
+# a fork's PR cannot change what this job executes. The two permissions are what that needs: `contents: read` for the
+# rules file, `pull-requests: write` to add the labels only.
+#
+# `sync-labels` stays false (the default): the action only adds labels, so it never removes one a person set.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: label-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: false

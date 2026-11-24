@@ -1,0 +1,43 @@
+name: label-issues
+
+# Keyword labels on the title and body of an issue (the rules are in tools/label_issue.py). The script reads both from
+# environment variables, never interpolated into the shell, so a title or body that looks like shell syntax is only
+# text and cannot run anything.
+#
+# The script only ADDS labels from its own table: the people-owned labels (the priority labels, TortoiseBots) and any
+# label a person removed are never touched.
+#
+# `contents: read` is for checking out the script itself from the default branch (sparse: just that file); the issue text
+# is never code. `issues: write` is the only write permission.
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: label-issues-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/label_issue.py
+          sparse-checkout-cone-mode: false
+
+      - name: label the issue by its title and body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python3 -I tools/label_issue.py

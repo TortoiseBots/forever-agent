@@ -16,3 +16,5 @@ settings.json
 /cmd/forever-agent/forever-agent
 /cmd/forever-agent/forever-agent.exe
 /forever-agent
+__pycache__/
+*.pyc

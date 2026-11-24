@@ -179,3 +179,51 @@ Runs nightly at 03:17 UTC and by hand: `make fuzz FUZZTIME=2m` (2 minutes per `F
 `internal/objects` and `internal/tbm`), with a 60-minute job timeout. A crash fails the job and the new corpus files
 under `**/testdata/fuzz/**` are uploaded as the `fuzz-corpus` artifact (14 days) so the seed can be committed with the
 fix.
+
+## Automatic labels
+
+Two workflows label work by itself, one for pull requests and one for issues. They only ADD: a label a person set stays,
+a label a person removed is not put back, and the people-owned labels (the priority labels `Must have`, `Should have`,
+`Nice to have`, `Maybe later`, and `TortoiseBots`) are never touched. The labels the automation owns and their colours
+and descriptions are in `.github/labels.yml`; `tools/sync_labels.py` creates and updates them (it never deletes or
+renames one).
+
+| Workflow | Trigger | Rules | Labels |
+|---|---|---|---|
+| `label-pr.yml` | `pull_request_target`: opened, synchronize, reopened | `.github/labeler.yml` (changed files and branch name), through the official `actions/labeler@v5` | the area labels, `bug` on `fix/*`, `enhancement` on `feat/*`, `documentation` on `docs/*`, `data` on `data/*`, `ci` on `ci/*` |
+| `label-issues.yml` | `issues`: opened, edited | `tools/label_issue.py` (`RULES`, whole words, case-insensitive, title and body) | e.g. "Ragefire", "dungeon run" -> `dungeon`; "raid" -> `raid`; "navmesh" -> `plans`; "vendor" -> `player-actions`; "live run" -> `live-check`; a bug word in the title -> `bug`; otherwise an `Agent:`/`[agent]` title -> `enhancement` |
+
+`label-pr.yml` runs on `pull_request_target` and never checks out the pull request's code: labeler reads the changed-file
+list from the event and labels through the API, so a fork's branch cannot change what the job runs. Its permissions are
+`contents: read` and `pull-requests: write` only. `label-issues.yml` passes the title and body to the script as
+environment variables, never on the command line, so an issue text with shell syntax is only text; its only write
+permission is `issues: write` (`contents: read` is for checking out the script itself from the default branch).
+
+### Adding a rule
+
+- **A path or branch rule:** add the label block to `.github/labeler.yml`. `any:` ORs its matchers, a plain list ANDs
+  them; `**/` spans zero or more directories and `*` never crosses `/`. The backfill reads the same file, so nothing else
+  changes.
+- **A keyword rule:** add `("<label>", r"<alternatives>")` to `RULES` in `tools/label_issue.py`. The alternatives are
+  matched case-insensitively between word boundaries (`braid` is not `raid`).
+- **A new label:** add its `name`/`color`/`description` block to `.github/labels.yml`, then run
+  `python3 -I tools/sync_labels.py`; the workflows pick it up from the rule files.
+
+### The backfill
+
+`tools/label_issue.py --backfill` labels every open issue (by its title and body) and every open pull request (by its
+changed files, with the path rules of `.github/labeler.yml`; branch-name rules apply only to new pushes, not to the
+backfill). It skips items that already have a label and only adds the missing ones:
+
+```sh
+python3 -I tools/label_issue.py --backfill --dry-run   # "issue 12: +dungeon,bug", changes nothing
+python3 -I tools/label_issue.py --backfill             # applies them
+python3 -I tools/sync_labels.py --dry-run              # the labels first: create/update, never delete
+```
+
+Both scripts take `--repo OWNER/REPO` (default `$REPO`, else the current repository) and need the `gh` CLI with a token
+that can edit the repository. Their tests run by hand (they are not part of `make test`, like `tools/kbrotgen`'s):
+
+```sh
+python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py
+```
