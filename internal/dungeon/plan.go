@@ -67,15 +67,20 @@ const (
 )
 
 // Forever status: where the plan stands on the Forever side, apart from the Turtle status above (a plan can be
-// live-checked on the Turtle stack and still never exported). The first word is one of these four; the rest is free
+// live-checked on the Turtle stack and still never exported). The first word is one of these five; the rest is free
 // text naming what is missing or when it happened ("todo (not exported)", "exported (2026-11-20)").
 const (
 	// ForeverNA is a plan of Turtle-custom content, which a Forever server does not have at all.
 	ForeverNA = "n/a"
 	// ForeverTodo is a plan that has not been exported for a Forever server yet.
 	ForeverTodo = "todo"
-	// ForeverExported is a plan whose rows tools/dungeongen has written for a Forever server.
+	// ForeverExported is a plan whose rows tools/dungeongen has written for a Forever server and whose spawn data the
+	// Forever world export has been checked against.
 	ForeverExported = "exported"
+	// ForeverRefused is a plan checked against ForeverCore data that cannot be cleared for a Forever run: plan-export
+	// refuses a field it has no row for, or the plan's spawns or route do not match the Forever world export and tiles at
+	// the points it relies on. The free text names the reason.
+	ForeverRefused = "refused"
 	// ForeverLiveChecked is a plan that has been run on a Forever server.
 	ForeverLiveChecked = "live-checked"
 )
@@ -97,7 +102,7 @@ type Plan struct {
 	Kind string `json:"kind,omitempty"`
 	// Status says how far the plan has been checked: draft, mapped or live-checked, then free text (see StatusDraft). Absent: not said.
 	Status string `json:"status,omitempty"`
-	// ForeverStatus says where the plan stands on the Forever side (see ForeverNA): n/a, todo, exported or
+	// ForeverStatus says where the plan stands on the Forever side (see ForeverNA): n/a, todo, exported, refused or
 	// live-checked, then free text. Absent: not said.
 	ForeverStatus string `json:"forever_status,omitempty"`
 	// Team is the party the plan needs ("alliance" or "horde"), when some of its steps only work for one: Shadowfang Keep's
@@ -1409,8 +1414,8 @@ func (c *checker) kindStatus(p *Plan, rp *rawPlan) {
 	}
 	if rp.Forever != "" {
 		word, _, _ := strings.Cut(rp.Forever, " ")
-		if !slices.Contains([]string{ForeverNA, ForeverTodo, ForeverExported, ForeverLiveChecked}, word) {
-			c.fail("forever_status", "%q: start with %s, %s, %s or %s", rp.Forever, ForeverNA, ForeverTodo, ForeverExported, ForeverLiveChecked)
+		if !slices.Contains([]string{ForeverNA, ForeverTodo, ForeverExported, ForeverRefused, ForeverLiveChecked}, word) {
+			c.fail("forever_status", "%q: start with %s, %s, %s, %s or %s", rp.Forever, ForeverNA, ForeverTodo, ForeverExported, ForeverRefused, ForeverLiveChecked)
 		} else {
 			p.ForeverStatus = rp.Forever
 		}

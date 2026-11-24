@@ -2,7 +2,11 @@ package worldspawn
 
 import (
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // The core's GroupAIFlags (CreatureGroups.h:28-31). They are NOT worldspawn's option bits: 0x1 says the members assist
@@ -58,6 +62,9 @@ func LoadForeverDB(dir string, mapID uint32) (*World, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := loadForeverObjects(w, dir, &notes); err != nil {
+		return nil, nil, err
+	}
 	if len(w.Spawns) == 0 {
 		return nil, nil, fmt.Errorf("%w: %s, map %d (a wrong database name or map id writes the header only)", ErrNoSpawns, dir, mapID)
 	}
@@ -78,6 +85,43 @@ func LoadForeverDB(dir string, mapID uint32) (*World, []string, error) {
 			unknown, len(w.Spawns)))
 	}
 	return w, notes, nil
+}
+
+// loadForeverObjects reads the export's gameobjects.tsv (guid, entry, name, type, flags, x, y, z, state: the spawns of
+// the map's game objects) into World.Objects, the list the plan tools' object-presence lint reads. The world export
+// carries them, so plan-check --forever --spawns DIR checks a plan's doors, levers and chests without a separate TSV. An
+// export without the file (an older script) leaves the list empty and gets a note: the lint then says it cannot check.
+func loadForeverObjects(w *World, dir string, notes *[]string) error {
+	t, err := readTSV(filepath.Join(dir, "gameobjects.tsv"))
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		*notes = append(*notes, "gameobjects.tsv: no game object rows (the export has none, or predates the file): the object lint cannot check a plan's doors")
+		return nil
+	}
+	if err := t.require("guid", "entry", "x", "y", "z"); err != nil {
+		return err
+	}
+	for _, row := range t.rows {
+		guid, err := strconv.ParseUint(strings.TrimSpace(row.m["guid"]), 10, 64)
+		if err != nil {
+			return fmt.Errorf("%s:%d: guid: %v", t.path, row.line, err)
+		}
+		entry, err := strconv.ParseUint(strings.TrimSpace(row.m["entry"]), 10, 32)
+		if err != nil {
+			return fmt.Errorf("%s:%d: entry: %v", t.path, row.line, err)
+		}
+		r := rowReader{t: t, row: row}
+		o := Object{GUID: guid, Entry: uint32(entry), Pos: dungeon.Point{
+			X: float32(r.num("x")), Y: float32(r.num("y")), Z: float32(r.num("z")),
+		}}
+		if r.err != nil {
+			return r.err
+		}
+		w.Objects = append(w.Objects, o)
+	}
+	return nil
 }
 
 // foreverNotes replaces Load's link notes with the Forever reason: the server has no creature_linking tables.
