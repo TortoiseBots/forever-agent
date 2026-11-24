@@ -4,8 +4,9 @@ package world
 // only through its gossip option (Player.cpp:15160-15181): the core adds "Train me." to the menu when a trainer's
 // menu lacks it, and the option's handler sends the list (Player.cpp:15304-15312). A trainer without a gossip flag
 // has no option to select, so the step asks with CMSG_TRAINER_LIST, the Hello-shaped ask the list handler serves
-// (NPCHandler.cpp:97-110). A purchase is confirmed only by a learned-spell answer that names the spell
-// (Player::LearnSpell); a refusal names its reason.
+// (NPCHandler.cpp:97-110). A purchase is confirmed by a learned-spell answer that names the spell or the rank it
+// teaches (a castable list spell is taught by casting, and the answer points back with Superceded,
+// Trainer::TeachSpell); a refusal names its reason.
 
 import (
 	"context"
@@ -89,8 +90,10 @@ func (s *session) learnBlocked(list *npc.TrainerList, row npc.TrainerSpell) erro
 }
 
 // trainerOpen opens the trainer and returns the list it sent: the "Train me." option when the NPC has a gossip menu,
-// otherwise CMSG_TRAINER_LIST.
-func (s *session) trainerOpen(ctx context.Context, unit *objects.Object) (*npc.TrainerList, error) {
+// otherwise CMSG_TRAINER_LIST. A creature can carry several Trainer rows, one per trainer service (the core resolves
+// the service from the selected option, NPCHandler.cpp:106-127), so pick selects the "Train me." option with that id
+// instead of the first; hasPick false takes the first.
+func (s *session) trainerOpen(ctx context.Context, unit *objects.Object, pick int32, hasPick bool) (*npc.TrainerList, error) {
 	guid := unit.GUID
 	if err := s.transport().Send(wire.CMSGSetSelection, combat.BuildSetSelection(guid)); err != nil {
 		return nil, fmt.Errorf("CMSG_SET_SELECTION: %w", err)
@@ -108,14 +111,47 @@ func (s *session) trainerOpen(ctx context.Context, unit *objects.Object) (*npc.T
 		if !found {
 			return nil, fmt.Errorf("no gossip menu within %s", actMenuWait)
 		}
-		option, ok := menu.OptionNPC(npc.GossipOptionTrainer)
-		if !ok {
+		trainers := make([]npc.GossipOption, 0, len(menu.Options))
+		for _, o := range menu.Options {
+			if o.NPC == npc.GossipOptionTrainer {
+				trainers = append(trainers, o)
+			}
+		}
+		if len(trainers) == 0 {
 			return nil, fmt.Errorf("the menu has no trainer option (%d option(s))", len(menu.Options))
+		}
+		option := trainers[0]
+		if hasPick {
+			picked := false
+			for _, o := range trainers {
+				if o.ID == pick {
+					option, picked = o, true
+					break
+				}
+			}
+			if !picked {
+				ids := make([]int32, 0, len(trainers))
+				for _, o := range trainers {
+					ids = append(ids, o.ID)
+				}
+				return nil, fmt.Errorf("the menu's %d trainer option(s) %v carry no option %d", len(trainers), ids, pick)
+			}
+		} else if len(trainers) > 1 {
+			ids := make([]int32, 0, len(trainers))
+			for _, o := range trainers {
+				ids = append(ids, o.ID)
+			}
+			s.opts.logf("world: trainer: the menu has %d Train me. options %v; option= picks one (taking %d)", len(trainers), ids, option.ID)
 		}
 		if err := s.transport().Send(wire.CMSGGossipSelectOption,
 			npc.BuildGossipSelectOption(guid, menu.MenuID, option.ID, "")); err != nil {
 			return nil, fmt.Errorf("CMSG_GOSSIP_SELECT_OPTION: %w", err)
 		}
+	} else if hasPick {
+		// A trainer without a gossip flag is asked with CMSG_TRAINER_LIST, so there is no row to pick: the server
+		// answers the one list it holds for the NPC.
+		return nil, fmt.Errorf("entry %d has no gossip menu, so option= cannot pick a trainer row (CMSG_TRAINER_LIST asks it directly)",
+			unit.Info.Entry)
 	} else if err := s.transport().Send(wire.CMSGTrainerList, npc.BuildTrainerList(guid)); err != nil {
 		return nil, fmt.Errorf("CMSG_TRAINER_LIST: %w", err)
 	}
@@ -133,14 +169,32 @@ func (s *session) trainerOpen(ctx context.Context, unit *objects.Object) (*npc.T
 	return &list, nil
 }
 
+// trainerPick reads the trainer step's optional option=: the id of the gossip "Train me." row to select, so a
+// creature with several Trainer rows can name the one it wants.
+func trainerPick(step ActStep) (int32, bool, error) {
+	raw, ok := step.Args["option"]
+	if !ok {
+		return 0, false, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, false, fmt.Errorf("option=%q is not a gossip option id", raw)
+	}
+	return int32(id), true, nil
+}
+
 // actTrainer opens the current trainer and prints its list: the greeting, one line per spell, then the step's own
-// line.
+// line. option= picks one of the menu's Trainer rows (the first otherwise).
 func (s *session) actTrainer(ctx context.Context, a *actState, step ActStep) error {
+	pick, hasPick, err := trainerPick(step)
+	if err != nil {
+		return s.actFail(a, step, err)
+	}
 	unit, err := s.trainerTarget(a, actVerbTrainer)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
-	list, err := s.trainerOpen(ctx, unit)
+	list, err := s.trainerOpen(ctx, unit, pick, hasPick)
 	if err != nil {
 		return s.actFail(a, step, err)
 	}
@@ -163,7 +217,8 @@ func (s *session) actTrainer(ctx context.Context, a *actState, step ActStep) err
 }
 
 // actLearn buys one spell from the open trainer: the list must be this NPC's (the server matches its id and the
-// interaction, NPCHandler.cpp:134-152), and success is a learned-spell answer that names the spell.
+// interaction, NPCHandler.cpp:134-152), and success is a learned-spell answer that names the spell or the rank it
+// teaches (Superceded names the bought one).
 func (s *session) actLearn(ctx context.Context, a *actState, step ActStep) error {
 	if err := step.requireKeys("spell"); err != nil {
 		return s.actFail(a, step, err)
@@ -205,9 +260,16 @@ func (s *session) actLearn(ctx context.Context, a *actState, step ActStep) error
 		return s.actFail(a, step, fmt.Errorf("CMSG_TRAINER_BUY_SPELL: %w", err))
 	}
 	learned := func() bool {
-		for _, l := range s.trainer.learned {
-			if l.SpellID == spell {
-				return true
+		for _, p := range s.trainer.learned {
+			for _, l := range p.Spells {
+				if l.SpellID == spell {
+					return true
+				}
+				// A castable list spell is learned by casting its next rank (Trainer::TeachSpell): the answer names
+				// the taught rank with the bought spell in its Superceded link.
+				if l.Superceded != nil && *l.Superceded == spell {
+					return true
+				}
 			}
 		}
 		return false

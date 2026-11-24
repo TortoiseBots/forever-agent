@@ -2752,8 +2752,12 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			s.noteParseError(p, err)
 			return
 		}
-		// The trainer watch reads the same rows: a purchase is confirmed by this packet, whichever learned it.
-		s.trainer.learned = append(s.trainer.learned[:0], v.Spells...)
+		// The trainer watch reads the same packets: a purchase is confirmed by any learned-spell answer in its
+		// window, and two can land in one poll (the last slot kept only the second).
+		s.trainer.learned = append(s.trainer.learned, v)
+		if n := len(s.trainer.learned); n > trainerLearnedPackets {
+			s.trainer.learned = s.trainer.learned[n-trainerLearnedPackets:]
+		}
 		for _, e := range v.Spells {
 			s.learnSpell(e)
 		}

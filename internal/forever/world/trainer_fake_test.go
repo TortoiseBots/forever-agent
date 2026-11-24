@@ -45,6 +45,15 @@ type trainerWorld struct {
 	// noTrainerOption answers the hello with a menu that has no trainer option, so the gossip flow has nothing to
 	// select.
 	noTrainerOption bool
+	// taught, when set, is the rank the learned answer names instead of the bought spell, with the bought spell in
+	// its Superceded link (a castable list spell is taught by casting its next rank, Trainer::TeachSpell).
+	taught int32
+	// burst, when set, is one learned packet per spell id, delivered in this order after one charge: both land
+	// before the step's first poll.
+	burst []int32
+	// twoOptions opens a menu with two "Train me." options (ids trainerOption and trainerOption+1); selecting the
+	// second answers a list of trainerID+1.
+	twoOptions bool
 }
 
 // newTrainerWorld plants one trainer of the given flags at the character's own position and answers its packets. The
@@ -117,6 +126,10 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 		if g := guidOf(payload); g != trainerNPCGUID {
 			f.t.Fatalf("CMSG_TALK_TO_GOSSIP names %s", g)
 		}
+		if tr.twoOptions {
+			tr.deliver(wire.SMSGGossipMessage, twoTrainerMenuPayload(trainerNPCGUID))
+			return
+		}
 		if tr.noTrainerOption {
 			tr.deliver(wire.SMSGGossipMessage, buildGossipMessage(trainerNPCGUID, trainerMenuID, trainerOption,
 				npc.GossipOptionVendor, "Let me browse your goods."))
@@ -128,7 +141,16 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 		b := wire.NewReader(payload)
 		g := wire.ReadPackedGUID(b)
 		menu, option := b.ReadI32(), b.ReadI32()
-		if g != trainerNPCGUID || menu != trainerMenuID || option != trainerOption {
+		if g != trainerNPCGUID || menu != trainerMenuID {
+			f.t.Fatalf("the select names %s menu %d option %d", g, menu, option)
+		}
+		if tr.twoOptions && option == trainerOption+1 {
+			// The second row is another trainer service: its list carries its own id.
+			tr.selected = option
+			tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID+1, trainerSpells()))
+			return
+		}
+		if option != trainerOption {
 			f.t.Fatalf("the select names %s menu %d option %d", g, menu, option)
 		}
 		tr.selected = option
@@ -169,6 +191,16 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 				}
 				tr.server(wire.SMSGUpdateObject, activeUpdate(nil, &coin))
 			}
+		}
+		if len(tr.burst) != 0 {
+			for _, id := range tr.burst {
+				tr.deliver(wire.SMSGLearnedSpells, learnedSpellsPayload(id))
+			}
+			return
+		}
+		if tr.taught != 0 {
+			tr.deliver(wire.SMSGLearnedSpells, learnedSpellsTaughtPayload(tr.taught, tr.lastSpell))
+			return
 		}
 		tr.deliver(wire.SMSGLearnedSpells, learnedSpellsPayload(tr.lastSpell))
 	}
@@ -254,6 +286,62 @@ func learnedSpellsPayload(spell int32) []byte {
 	b.FlushBits()
 	b.WriteBit(false) // SuppressMessaging
 	b.WriteBit(false) // TraitGrantedByAura
+	b.FlushBits()
+	return b.Bytes()
+}
+
+// learnedSpellsTaughtPayload writes SMSG_LEARNED_SPELLS with one spell whose Superceded link names the bought list
+// spell: the rank a castable learn teaches (Trainer::TeachSpell casts it, and LearnSpell writes the chain back).
+func learnedSpellsTaughtPayload(taught, superseded int32) []byte {
+	b := wire.NewWriter()
+	b.WriteU32(1) // count
+	b.WriteU32(0) // SpecializationID
+	b.WriteI32(0) // MinActionBarSlot
+	b.WriteI32(taught)
+	b.WriteBit(false) // Favorite
+	b.WriteBit(false) // EquipableSpellInvSlot
+	b.WriteBit(true)  // Superceded
+	b.WriteBit(false) // TraitDefinitionID
+	b.FlushBits()
+	b.WriteI32(superseded)
+	b.WriteBit(false) // SuppressMessaging
+	b.WriteBit(false) // TraitGrantedByAura
+	b.FlushBits()
+	return b.Bytes()
+}
+
+// twoTrainerMenuPayload writes a gossip menu with two "Train me." options (ids trainerOption and trainerOption+1):
+// the writer flushes each option's bit block before its strings (NPCPackets.cpp:42-72), so every option carries its
+// own block, flush and text bytes.
+func twoTrainerMenuPayload(unit wire.GUID) []byte {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, unit)
+	b.WriteI32(trainerMenuID)
+	b.WriteI32(0)
+	b.WriteI32(0)
+	b.WriteU32(2) // two options
+	b.WriteU32(0) // no quest text
+	const text = "Train me."
+	for _, id := range []int32{trainerOption, trainerOption + 1} {
+		b.WriteI32(id)
+		b.WriteU32(npc.GossipOptionTrainer)
+		b.WriteU8(0)  // option flags
+		b.WriteU64(0) // cost
+		b.WriteU32(0) // language
+		b.WriteU32(0) // no treasure
+		b.WriteI32(0) // flags
+		b.WriteI32(0) // order
+		b.WriteBits(uint64(len(text)), 12)
+		b.WriteBits(0, 12) // confirm
+		b.WriteBits(0, 2)  // status
+		b.WriteBit(false)  // no spell
+		b.WriteBit(false)  // no icon
+		b.WriteBits(1, 8)  // empty SizedCString: length 1, no bytes
+		b.FlushBits()
+		b.WriteString(text)
+	}
+	b.WriteBit(false) // no random text
+	b.WriteBit(false) // no broadcast text
 	b.FlushBits()
 	return b.Bytes()
 }
