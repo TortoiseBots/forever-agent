@@ -27,13 +27,14 @@ type foreverFakeServe struct {
 	failed    map[string]bool
 	notPorted map[string]bool
 	refused   map[string]string // method -> the message of a -32003 game refusal
+	errText   map[string]string // method -> the message of a -32002 link failure
 	delays    map[string]time.Duration
 	srv       *httptest.Server
 }
 
 func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 	t.Helper()
-	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}, refused: map[string]string{}, delays: map[string]time.Duration{}}
+	f := &foreverFakeServe{results: map[string]string{}, failed: map[string]bool{}, notPorted: map[string]bool{}, refused: map[string]string{}, errText: map[string]string{}, delays: map[string]time.Duration{}}
 	f.results["status"] = foreverStatusJSON
 	f.results["party"] = foreverPartyJSON
 	f.results["commander"] = foreverCommanderJSON
@@ -50,6 +51,7 @@ func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 		f.calls = append(f.calls, rpcCall{req.Method, req.Params, r.Header.Get("Authorization")})
 		res, failed, notPorted := f.results[req.Method], f.failed[req.Method], f.notPorted[req.Method]
 		refusal, refused := f.refused[req.Method]
+		linkText := f.errText[req.Method]
 		delay := f.delays[req.Method]
 		f.mu.Unlock()
 		if delay > 0 {
@@ -63,7 +65,10 @@ func newForeverFakeServe(t *testing.T) *foreverFakeServe {
 		case refused:
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":` + jsonStr(refusal) + `}}`))
 		case failed:
-			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"world: offline: test down"}}`))
+			if linkText == "" {
+				linkText = "world: offline: test down"
+			}
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":` + jsonStr(linkText) + `}}`))
 		case notPorted:
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":` + jsonStr(req.Method+": not ported on this server") + `}}`))
 		case res == "":
@@ -134,6 +139,37 @@ func (f *foreverFakeServe) fail(t *testing.T, method string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failed[method] = true
+}
+
+// failText makes method answer -32002 with the test's own message (the token tests put a token in it).
+func (f *foreverFakeServe) failText(t *testing.T, method, text string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed[method] = true
+	delete(f.refused, method)
+	delete(f.notPorted, method)
+	f.errText[method] = text
+}
+
+// refuse makes method answer a -32003 game refusal with the test's own message.
+func (f *foreverFakeServe) refuse(t *testing.T, method, text string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.failed, method)
+	delete(f.notPorted, method)
+	f.refused[method] = text
+}
+
+// notPortedMethod makes method answer the daemon's "not ported on this server" -32003.
+func (f *foreverFakeServe) notPortedMethod(t *testing.T, method string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.failed, method)
+	delete(f.refused, method)
+	f.notPorted[method] = true
 }
 
 // heal makes method answer again (the serve came back).

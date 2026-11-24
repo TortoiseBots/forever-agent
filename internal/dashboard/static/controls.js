@@ -1,7 +1,8 @@
 "use strict";
 // The run controls' page part (README "Controls (--control)"): the buttons of one agent's card, the confirm texts and the control log, and
 // the DOM that sends one control. The choice of buttons is a pure function of the card (tested under node); the page puts every string in with
-// textContent. The box is shown only when GET /api/control/status says the controls are on.
+// textContent. The controls are shown only when GET /api/control/status says they are on; the Positions panel's live map is the serve's own
+// read-only picture (no token involved), so it is drawn even without --control.
 (function (root) {
   // ---- the buttons of a card (D14 / README "Controls"): the matrix, with no DOM ----
   function runButtons(card) {
@@ -304,7 +305,8 @@
       const logPre = h("pre", { class: "ctllogpre" });
       s.log.append(h("summary", { text: "Control log (last 5)" }), logPre);
       s.logPre = logPre;
-      s.el.append(s.title, s.row, s.orderRow, s.placeBox, h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token), s.msg, s.log);
+      s.tokenRow = h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token);
+      s.el.append(s.title, s.row, s.orderRow, s.placeBox, s.tokenRow, s.msg, s.log);
       states.set(card.id, s);
       return s;
     }
@@ -331,13 +333,15 @@
     }
 
     function paint(s, card) {
+      const on = st.enabled === true;
       const specs = runButtons(card);
       const orders = orderButtons(card);
       s.card = card; // the buttons keep the card and its specs current: a click never sends last poll's state
       s.specs = new Map(specs.concat(orders).map((x) => [(x.action || "run") + ":" + x.verb, x]));
       paintRow(s.row, s.btns, specs, s);
       paintRow(s.orderRow, s.orderBtns, orders, s);
-      s.orderRow.hidden = orders.length === 0;
+      s.row.hidden = !on; // read-only: the live map is drawn, the controls themselves are not
+      s.orderRow.hidden = !on || orders.length === 0;
       paintPlace(s, card);
     }
 
@@ -348,9 +352,10 @@
       L.box.hidden = !lm;
       if (!lm) return;
       if (lm.src) {
-        if (L.version !== lm.version) { L.version = lm.version; L.img.src = lm.src; }
+        // A new version is fetched; the picture is shown once it loads, never before (a 503 race leaves the
+        // previous drawing or a broken icon on screen otherwise).
+        if (L.version !== lm.version) { L.version = lm.version; L.img.hidden = true; L.img.src = lm.src; }
         L.img.alt = lm.alt;
-        L.img.hidden = false;
         L.cap.textContent = lm.caption;
         L.cap.hidden = false;
       } else {
@@ -359,6 +364,7 @@
         L.version = null;
         L.img.hidden = true;
         L.cap.hidden = true;
+        L.err.hidden = true;
       }
       L.line.textContent = lm.line || "";
       L.line.hidden = !lm.line;
@@ -380,15 +386,32 @@
         s.placeHead = h("h4", { text: "Positions" });
         s.liveMap = { box: h("div", { class: "livemap" }), img: h("img", { class: "lmimg", alt: "" }),
           cap: h("div", { class: "lmcap muted", hidden: true }), line: h("div", { class: "lmlin muted", hidden: true }),
-          notes: h("div", { class: "lmnotes muted", hidden: true }), version: null };
+          err: h("div", { class: "lmerr muted", hidden: true }), notes: h("div", { class: "lmnotes muted", hidden: true }), version: null };
         s.liveMap.img.hidden = true;
-        s.liveMap.box.append(s.liveMap.img, s.liveMap.cap, s.liveMap.line, s.liveMap.notes);
-        s.placeBox.append(s.placeHead, s.liveMap.box);
+        // A picture that fails to load (a 503 race, a dropped link) is said, and the same version is asked for
+        // again on the next paint: a failed load is never a broken icon that no poll retries.
+        s.liveMap.img.addEventListener("error", () => {
+          const L = s.liveMap;
+          L.version = null;
+          L.img.hidden = true;
+          L.err.textContent = "The live map did not load: the dashboard will ask for it again on its next poll.";
+          L.err.hidden = false;
+        });
+        s.liveMap.img.addEventListener("load", () => {
+          const L = s.liveMap;
+          L.err.hidden = true;
+          L.img.hidden = !L.version;
+        });
+        s.liveMap.box.append(s.liveMap.img, s.liveMap.cap, s.liveMap.line, s.liveMap.err, s.liveMap.notes);
+        s.placeForm = h("div", { class: "placeform", hidden: true });
+        s.placeBox.append(s.placeHead, s.liveMap.box, s.placeForm);
       }
       paintLiveMap(s, lmv);
+      // The placement controls are a control: a card that is offline (no panel) keeps its live map line only.
+      s.placeForm.hidden = !panel || st.enabled !== true;
       if (!panel) return;
       if (!s.place) {
-        const box = s.placeBox;
+        const box = s.placeForm;
         const shape = h("select", { class: "pshape", "aria-label": "shape" });
         shape.append(...panel.shapes.map((v) => h("option", { value: v, text: v })));
         shape.value = "circle";
@@ -448,7 +471,6 @@
       // A placement request in flight holds every send button: a second click sends nothing until the answer (or an error) repaints.
       const sending = [...s.busy].some((k) => k.indexOf("place:") === 0);
       for (const b of [s.place.place, s.place.release, s.place.rallyHere, s.place.rallyPoint, s.place.rallyClear, s.place.fallback, s.place.resume]) b.disabled = sending;
-      s.placeBox.hidden = false;
     }
 
     async function sendPlace(s, card, verb) {
@@ -530,12 +552,21 @@
     return {
       render(el, card) {
         ask();
-        if (st.enabled !== true || !card || card.synthetic) { el.hidden = true; return; }
-        el.hidden = false;
+        if (!card || card.synthetic) { el.hidden = true; return; }
+        // The live map is the serve's own read-only picture (no token involved): it is drawn without --control,
+        // while every control (buttons, placement, token, log) stays hidden until the server enables them.
+        const on = st.enabled === true;
+        el.hidden = !on && !liveMapPanel(card);
+        if (el.hidden) return;
         const s = state(card);
         el.replaceChildren(s.el);
+        s.title.hidden = !on;
+        s.tokenRow.hidden = !on;
+        s.msg.hidden = !on;
+        s.log.hidden = !on;
         s.token.hidden = st.trusted;
         paint(s, card);
+        if (!on) return;
         const now = Date.now();
         if (!s.logAt || now - s.logAt > 10000) { s.logAt = now; refreshLog(s, card); }
       },

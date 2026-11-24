@@ -28,6 +28,11 @@ assert.notStrictEqual(C.liveMapPanel(card({ live_map: lm({ at: "2026-11-24T20:00
 assert.ok(/1 member · 1 hostile/.test(C.liveMapPanel(card({ live_map: lm({ members: 1 }) })).caption));
 assert.ok(/floor 2 of 3/.test(C.liveMapPanel(card({ live_map: lm({ floor: 1, floors: ["a", "b", "c"] }) })).caption));
 
+// Eastern Kingdoms is map 0: the caption names it, never "map undefined" (the card always carries "map")
+assert.ok(/^map 0 · 2 members · 1 hostile/.test(C.liveMapPanel(card({ live_map: lm({ map: 0 }) })).caption),
+  C.liveMapPanel(card({ live_map: lm({ map: 0 }) })).caption);
+assert.ok(/^Live map drawn by the serve: map 0, /.test(C.liveMapPanel(card({ live_map: lm({ map: 0 }) })).alt));
+
 // no serve: the reason the server gave is the line, and no picture is requested
 const gone = C.liveMapPanel(card({ online: false, live_map: { have: false, state: "no-serve", reason: "serveclient: status: rpc error -32002: world: offline" } }));
 assert.strictEqual(gone.src, null, "a gone serve never leaves a stale picture");

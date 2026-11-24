@@ -390,5 +390,5 @@ button.ctl:disabled { opacity: .5; cursor: default; }
 .livemap[hidden] { display: none; }
 .livemap .lmimg { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
 .livemap .lmimg[hidden] { display: none; }
-.livemap .lmcap, .livemap .lmlin, .livemap .lmnotes { font-size: 12px; margin-top: 3px; }
-.livemap .lmlin[hidden], .livemap .lmnotes[hidden] { display: none; }
+.livemap .lmcap, .livemap .lmlin, .livemap .lmerr, .livemap .lmnotes { font-size: 12px; margin-top: 3px; }
+.livemap .lmlin[hidden], .livemap .lmerr[hidden], .livemap .lmnotes[hidden] { display: none; }

@@ -350,3 +350,194 @@ func TestLiveMapKeepsTheRecordedFramesPath(t *testing.T) {
 		t.Fatalf("the trace digest of a run with no trace: %d", resp2.StatusCode)
 	}
 }
+
+// TestLiveMapOfflineServeIsNotAsked pins the review's finding 3, first half: a serve whose status call failed is not
+// asked for a map_snapshot. The daemon still answers map_snapshot from its recorder while the world link is down, so
+// asking would flip the card back from the clear no-serve state to a stale "live" one between polls.
+func TestLiveMapOfflineServeIsNotAsked(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.setResult(t, "map_snapshot", liveMapAnswer(liveMapSVG1))
+	clk := &liveMapClock{t: t0}
+	p, id := newLiveMapPoller(t, f, Options{LiveMapEvery: 5 * time.Second, LiveMapTimeout: 2 * time.Second}, clk)
+
+	liveMapTick(t, p)
+	if lm := liveMapCard(t, p, id).LiveMap; lm == nil || !lm.Have {
+		t.Fatalf("first picture: %+v", lm)
+	}
+
+	f.fail(t, "status")
+	clk.add(6 * time.Second)
+	p.Tick(context.Background())
+	p.waitLiveMaps() // one poll only: nothing else publishes
+	if n := f.count("map_snapshot"); n != 1 {
+		t.Fatalf("an offline serve was asked for its map: %d asks", n)
+	}
+	card := liveMapCard(t, p, id)
+	if card.Online {
+		t.Fatalf("the card of a gone serve is online: %+v", card)
+	}
+	if lm := card.LiveMap; lm == nil || lm.Have || lm.State != "no-serve" || !strings.Contains(lm.Reason, "test down") {
+		t.Fatalf("the offline serve's map: %+v", lm)
+	}
+}
+
+// TestLiveMapLateAnswerCannotOverwriteNoServe pins finding 3, second half: an ask started while the serve answered can
+// land after the status call has failed; it must not put the old picture (or a "live" state) back on the card.
+func TestLiveMapLateAnswerCannotOverwriteNoServe(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.setResult(t, "map_snapshot", liveMapAnswer(liveMapSVG1))
+	f.delay(t, "map_snapshot", 750*time.Millisecond)
+	clk := &liveMapClock{t: t0}
+	p, id := newLiveMapPoller(t, f, Options{LiveMapEvery: 5 * time.Second, LiveMapTimeout: 2 * time.Second}, clk)
+	srv := httptest.NewServer(Handler(p, "", nil))
+	t.Cleanup(srv.Close)
+
+	p.Tick(context.Background()) // the map ask is in flight
+	f.fail(t, "status")
+	clk.add(6 * time.Second)
+	p.Tick(context.Background()) // status fails: the card says no serve
+	p.waitLiveMaps()             // the slow answer lands after that
+	info, svg := p.LiveMap(id)
+	if info.State != "no-serve" || info.Have || len(svg) != 0 {
+		t.Fatalf("a late answer overwrote the no-serve state: %+v, %d bytes", info, len(svg))
+	}
+	if !strings.Contains(info.Reason, "test down") {
+		t.Errorf("the reason: %q", info.Reason)
+	}
+	if code, _, _ := getLiveMap(t, srv, id); code != http.StatusServiceUnavailable {
+		t.Fatalf("a stale picture is served: %d", code)
+	}
+}
+
+// TestLiveMapCadenceFloor pins the 2 s floor: a setting under it asks no faster than the floor.
+func TestLiveMapCadenceFloor(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.setResult(t, "map_snapshot", liveMapAnswer(liveMapSVG1))
+	clk := &liveMapClock{t: t0}
+	p, _ := newLiveMapPoller(t, f, Options{LiveMapEvery: 200 * time.Millisecond, LiveMapTimeout: 2 * time.Second}, clk)
+
+	p.Tick(context.Background())
+	p.waitLiveMaps()
+	clk.add(1 * time.Second)
+	p.Tick(context.Background())
+	p.waitLiveMaps()
+	if n := f.count("map_snapshot"); n != 1 {
+		t.Fatalf("asked inside the 2 s floor: %d asks", n)
+	}
+	clk.add(1 * time.Second)
+	p.Tick(context.Background())
+	p.waitLiveMaps()
+	if n := f.count("map_snapshot"); n != 2 {
+		t.Fatalf("the floor window did not ask: %d asks", n)
+	}
+}
+
+// TestLiveMapWaitingAndNotPorted pins what the serve's own answers mean: an empty drawing and the daemon's "the
+// character is not in the world" are "waiting", while a daemon without map_snapshot ported is "no-serve" (it will
+// never draw one), not a run that has not started.
+func TestLiveMapWaitingAndNotPorted(t *testing.T) {
+	f := newForeverFakeServe(t)
+	clk := &liveMapClock{t: t0}
+	p, id := newLiveMapPoller(t, f, Options{LiveMapEvery: 5 * time.Second, LiveMapTimeout: 2 * time.Second}, clk)
+
+	// A good answer with no picture: nothing to draw yet.
+	f.setResult(t, "map_snapshot", `{"map":36,"svg":""}`)
+	liveMapTick(t, p)
+	lm := liveMapCard(t, p, id).LiveMap
+	if lm == nil || lm.Have || lm.State != "waiting" || !strings.Contains(lm.Reason, "empty map") {
+		t.Fatalf("an empty drawing: %+v", lm)
+	}
+
+	// The daemon's typed game refusal: its character is not in the world yet.
+	f.refuse(t, "map_snapshot", "map_snapshot: the character is not in the world")
+	clk.add(6 * time.Second)
+	liveMapTick(t, p)
+	lm = liveMapCard(t, p, id).LiveMap
+	if lm == nil || lm.Have || lm.State != "waiting" || !strings.Contains(lm.Reason, "not in the world") {
+		t.Fatalf("a refused call that is not a failure: %+v", lm)
+	}
+
+	// A daemon without map_snapshot ported never draws one: a gone picture, not a waiting run.
+	f.notPortedMethod(t, "map_snapshot")
+	clk.add(6 * time.Second)
+	liveMapTick(t, p)
+	lm = liveMapCard(t, p, id).LiveMap
+	if lm == nil || lm.Have || lm.State != "no-serve" || !strings.Contains(lm.Reason, "not ported") {
+		t.Fatalf("a daemon without map_snapshot: %+v", lm)
+	}
+}
+
+// TestLiveMapScrubsTheToken pins that the bearer token never reaches a card or the page in a serve's error text.
+func TestLiveMapScrubsTheToken(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.setResult(t, "map_snapshot", liveMapAnswer(liveMapSVG1))
+	clk := &liveMapClock{t: t0}
+	p, id := newLiveMapPoller(t, f, Options{LiveMapEvery: 5 * time.Second, LiveMapTimeout: 2 * time.Second}, clk)
+
+	liveMapTick(t, p)
+	f.failText(t, "status", "world: offline: link refused for "+testAgentToken)
+	clk.add(6 * time.Second)
+	p.Tick(context.Background())
+	p.waitLiveMaps()
+	lm := liveMapCard(t, p, id).LiveMap
+	if lm == nil || lm.State != "no-serve" {
+		t.Fatalf("the gone serve: %+v", lm)
+	}
+	if strings.Contains(lm.Reason, testAgentToken) || !strings.Contains(lm.Reason, "<redacted>") {
+		t.Fatalf("the status error's token reached the card: %q", lm.Reason)
+	}
+	if strings.Contains(string(p.State()), testAgentToken) {
+		t.Fatalf("the status error's token reached /api/state: %s", p.State())
+	}
+
+	f.heal(t, "status")
+	liveMapTick(t, p)
+	f.failText(t, "map_snapshot", "map_snapshot failed with "+testAgentToken)
+	clk.add(6 * time.Second)
+	liveMapTick(t, p)
+	lm = liveMapCard(t, p, id).LiveMap
+	if lm == nil || lm.State != "no-serve" {
+		t.Fatalf("the failed map call: %+v", lm)
+	}
+	if strings.Contains(lm.Reason, testAgentToken) || !strings.Contains(lm.Reason, "<redacted>") {
+		t.Fatalf("the map error's token reached the card: %q", lm.Reason)
+	}
+}
+
+// TestLiveMapMapZeroIsSerialized pins finding 4: Eastern Kingdoms is map 0, and a card whose picture is map 0 still
+// carries "map" (never an omitted field the page draws as "map undefined").
+func TestLiveMapMapZeroIsSerialized(t *testing.T) {
+	f := newForeverFakeServe(t)
+	f.setResult(t, "map_snapshot", strings.Replace(liveMapAnswer(liveMapSVG1), `"map":36`, `"map":0`, 1))
+	clk := &liveMapClock{t: t0}
+	p, id := newLiveMapPoller(t, f, Options{LiveMapEvery: 5 * time.Second, LiveMapTimeout: 2 * time.Second}, clk)
+
+	liveMapTick(t, p)
+	card := liveMapCard(t, p, id)
+	if card.LiveMap == nil || !card.LiveMap.Have || card.LiveMap.Map != 0 {
+		t.Fatalf("the map 0 picture: %+v", card.LiveMap)
+	}
+	var st struct {
+		Agents []struct {
+			ID      string                     `json:"id"`
+			LiveMap map[string]json.RawMessage `json:"live_map"`
+		} `json:"agents"`
+	}
+	must(t, json.Unmarshal(p.State(), &st))
+	for _, a := range st.Agents {
+		if a.ID != id {
+			continue
+		}
+		raw, ok := a.LiveMap["map"]
+		if !ok {
+			t.Fatalf("map 0 was omitted from the card: %s", p.State())
+		}
+		var m uint32
+		must(t, json.Unmarshal(raw, &m))
+		if m != 0 {
+			t.Fatalf("map: %s", raw)
+		}
+		return
+	}
+	t.Fatalf("no card for %s", id)
+}

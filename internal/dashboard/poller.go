@@ -128,8 +128,12 @@ func (p *Poller) Tick(ctx context.Context) {
 					return
 				}
 				c, raw := p.pollForeverOne(ctx, a, cl, now)
-				// The map ask runs on its own goroutine, at its own cadence: the poll never waits for it.
-				p.refreshLiveMap(ctx, a, cl, now)
+				// The map ask runs on its own goroutine, at its own cadence: the poll never waits for it. A gone
+				// serve is not asked: its map_snapshot still answers from the recorder while the world link is
+				// down, and the card must keep the clear no-serve state (live_map.go).
+				if c.Online {
+					p.refreshLiveMap(ctx, a, cl, now)
+				}
 				res[i] = result{c, raw}
 				return
 			}

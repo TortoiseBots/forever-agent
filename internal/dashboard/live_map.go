@@ -33,7 +33,7 @@ const (
 type LiveMapInfo struct {
 	Have       bool      `json:"have"`
 	State      string    `json:"state"`
-	Map        uint32    `json:"map,omitempty"`
+	Map        uint32    `json:"map"` // never omitted: Eastern Kingdoms is map 0
 	Floor      int       `json:"floor"`
 	Floors     []string  `json:"floors,omitempty"`
 	Members    int       `json:"members,omitempty"`
@@ -52,6 +52,7 @@ type liveMapEntry struct {
 	svg     []byte
 	busy    bool      // an ask is in flight: a second one never stacks behind it
 	lastTry time.Time // when the last ask started (the cadence is measured from here, not from the answer)
+	gen     uint64    // bumped when the serve goes away: an ask that started before it must not land
 }
 
 // liveMapEvery is the cadence in force: the option, never under the floor.
@@ -92,6 +93,7 @@ func (p *Poller) refreshLiveMap(ctx context.Context, a Agent, cl *serveclient.Cl
 		return
 	}
 	e.busy, e.lastTry = true, now
+	gen := e.gen
 	p.liveAsked.Add(1)
 	p.mu.Unlock()
 	go func() {
@@ -99,13 +101,13 @@ func (p *Poller) refreshLiveMap(ctx context.Context, a Agent, cl *serveclient.Cl
 		fctx, cancel := context.WithTimeout(ctx, p.liveMapTimeout())
 		defer cancel()
 		m, err := cl.MapSnapshot(fctx, serveclient.MapParams{})
-		p.finishLiveMap(a.ID, cl.Token(), m, err)
+		p.finishLiveMap(a.ID, cl.Token(), gen, m, err)
 	}()
 }
 
 // finishLiveMap keeps one answer: the picture and its facts, or the clear reason there is none. A failed call drops
 // the old picture: a stale drawing pinned under a live run misleads more than its absence does.
-func (p *Poller) finishLiveMap(id, token string, m serveclient.MapSnapshot, err error) {
+func (p *Poller) finishLiveMap(id, token string, gen uint64, m serveclient.MapSnapshot, err error) {
 	info := LiveMapInfo{}
 	var svg []byte
 	switch {
@@ -123,8 +125,10 @@ func (p *Poller) finishLiveMap(id, token string, m serveclient.MapSnapshot, err 
 	default:
 		msg := scrubText(token, err.Error())
 		info.Reason = msg
-		if code, ok := serveclient.CodeOf(err); ok && code == rpc.CodeGame {
-			// The daemon's own "nothing to draw yet": its character is not in the world. Not a gone serve.
+		if code, ok := serveclient.CodeOf(err); ok && code == rpc.CodeGame &&
+			!strings.Contains(msg, "not ported on this server") {
+			// The daemon's own "nothing to draw yet": its character is not in the world. Not a gone serve. A
+			// daemon without map_snapshot ported is a gone picture instead: its -32003 names the method.
 			info.State = "waiting"
 		} else {
 			info.State = "no-serve"
@@ -138,6 +142,12 @@ func (p *Poller) finishLiveMap(id, token string, m serveclient.MapSnapshot, err 
 	if e == nil {
 		e = &liveMapEntry{}
 		p.liveMaps[id] = e
+	}
+	if e.gen != gen {
+		// The serve went away, or its slot was reset, while this ask ran: the answer is older than the state.
+		e.busy = false
+		p.mu.Unlock()
+		return
 	}
 	e.info, e.svg, e.busy = info, svg, false
 	p.mu.Unlock()
@@ -156,6 +166,7 @@ func (p *Poller) markLiveMapGone(id, reason string) {
 		e = &liveMapEntry{}
 		p.liveMaps[id] = e
 	}
+	e.gen++ // an ask in flight started before this: its answer must not overwrite the gone state
 	e.info = LiveMapInfo{State: "no-serve", Reason: reason}
 	e.svg = nil
 }
