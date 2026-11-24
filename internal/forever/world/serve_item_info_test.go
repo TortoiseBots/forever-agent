@@ -107,6 +107,40 @@ func TestServeItemInfoAnswersRowsInOrder(t *testing.T) {
 	}
 }
 
+// TestServeItemInfoEntryForm: one entry may be named as `entry` as well as `entries` (the docs and the issue's example
+// used `entry`, the method only took `entries`); both at once is refused, and so is a bad single id.
+func TestServeItemInfoEntryForm(t *testing.T) {
+	fake := &dbFake{t: t}
+	s := dbSession(t, fake)
+	go func() {
+		dbAnswer(t, s, tables.TableItemSparse, 2589, tables.StatusValid, itemSparseRecord("Linen Cloth", 1))
+		dbAnswer(t, s, tables.TableItem, 2589, tables.StatusValid, itemRecord(7, 5))
+	}()
+	one := int32(2589)
+	out, err := s.serveItemInfo(serveItemInfoParams{Entry: &one})
+	if err != nil {
+		t.Fatalf("item_info entry: %v", err)
+	}
+	if len(out.Items) != 1 || out.Items[0].ItemEntry != 2589 || !out.Items[0].Found || out.Items[0].Name != "Linen Cloth" {
+		t.Fatalf("entry rows %+v", out.Items)
+	}
+	asked := len(fake.asked)
+	for _, p := range []serveItemInfoParams{
+		{Entry: &one, Entries: []int32{2589}},
+		{Entry: ptrInt32(0)},
+		{Entry: ptrInt32(-2)},
+	} {
+		if _, err := s.serveItemInfo(p); err == nil {
+			t.Fatalf("%+v was accepted", p)
+		}
+	}
+	if len(fake.asked) != asked {
+		t.Fatal("a refused call sent a query")
+	}
+}
+
+func ptrInt32(v int32) *int32 { return &v }
+
 func TestServeItemInfoParams(t *testing.T) {
 	fake := &dbFake{t: t}
 	s := dbSession(t, fake)

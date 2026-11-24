@@ -138,14 +138,19 @@ type Info struct {
 	GOFlags       uint32
 	GOFaction     int32
 
-	// corpse (CorpseData), dynamic object (DynamicObjectData)
+	// corpse (CorpseData), dynamic object (DynamicObjectData), area trigger (AreaTriggerData)
 	HasCorpse        bool
 	HasDynamicObject bool
-	Owner            wire.GUID
-	CorpseDisplayID  uint32
-	Caster           wire.GUID
-	SpellID          int32
-	DynRadius        float32 // DynamicObjectData.Radius (UpdateFields.cpp:7789)
+	// HasAreaTrigger is set by a TYPEID_AREATRIGGER create whose SpellID, caster and bounds radius were decoded
+	// (AreaTriggerData::WriteCreate, UpdateFields.cpp:8644-8706). This core announces a ground spell's area with
+	// such an object when the spell's effect is SPELL_EFFECT_CREATE_AREATRIGGER (Blizzard 10 and Flamestrike 2120
+	// carry effect 179 in the 1.60.1.70959 data), not with a TYPEID_DYNAMICOBJECT; DynamicObjects lists both.
+	HasAreaTrigger  bool
+	Owner           wire.GUID
+	CorpseDisplayID uint32
+	Caster          wire.GUID
+	SpellID         int32
+	DynRadius       float32 // DynamicObjectData.Radius (UpdateFields.cpp:7789), AreaTriggerData.BoundsRadius2D (:8662)
 
 	// item (UF::ItemData) and, for a bag, its container (UF::ContainerData); nil when the object is not one.
 	Item      *ItemData
@@ -1403,6 +1408,32 @@ func (i *Info) readDynamicObjectCreate(b *wire.Buffer) error {
 	b.Skip(4) // CastTime
 	// A create carries every field, but only a unit or game object create marks them (Fields.all): without these
 	// three the merge would drop the caster, the spell and the radius.
+	i.f.Caster, i.f.SpellID, i.f.DynRadius = true, true, true
+	return b.Err()
+}
+
+// readAreaTriggerCreate is the head of AreaTriggerData::WriteCreate (UpdateFields.cpp:8644-8706): the six override
+// curves, the caster, the duration, the five time-to-target fields, the spell, the spell for visuals, the cast visual
+// and the bounds radius. A ground spell on this core is an area trigger, not a dynamic object: Blizzard 10 and
+// Flamestrike 2120 carry SPELL_EFFECT_CREATE_AREATRIGGER (179) in the 1.60.1.70959 SpellEffect data, and
+// Spell::EffectCreateAreaTrigger creates an AreaTrigger with the spell's dest as its position (SpellEffects.cpp:5669-
+// 5681, AreaTrigger.cpp:168-212). The rest of the create (the visual animation, the curve ids, the facing, the shape
+// variant, the shape curve) is left to the block's declared size, like every other tail this round does not decode.
+func (i *Info) readAreaTriggerCreate(b *wire.Buffer) error {
+	i.HasAreaTrigger = true
+	for range 6 {
+		// OverrideScaleCurve, ExtraScaleCurve, OverrideMoveCurveX/Y/Z, OverrideShapeCurve (OverrideCurve::WriteCreate,
+		// UpdateFields.cpp:7977-7987): StartTimeOffset, two XY points, ParameterCurve, then the override-active bit.
+		b.Skip(4 + 2*8 + 4)
+		b.Skip(1) // the OverrideActive bit, flushed to its own byte
+	}
+	i.Caster = i.guid(b)
+	b.Skip(4)     // Duration
+	b.Skip(5 * 4) // TimeToTarget, TimeToTargetScale, TimeToTargetExtraScale, TimeToTargetPos, TimeToTargetShape
+	i.SpellID = b.ReadI32()
+	b.Skip(4)                     // SpellForVisuals
+	b.Skip(8)                     // SpellVisual
+	i.DynRadius = b.ReadFloat32() // BoundsRadius2D = the create properties' shape search radius
 	i.f.Caster, i.f.SpellID, i.f.DynRadius = true, true, true
 	return b.Err()
 }

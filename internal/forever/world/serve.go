@@ -832,23 +832,27 @@ func (g *GUID) UnmarshalJSON(b []byte) error {
 
 // ServeStatus is the status method's result: where the character is, what it is doing, and the session's errors.
 type ServeStatus struct {
-	Character   string  `json:"character,omitempty"`
-	Team        string  `json:"team,omitempty"`
-	GUID        GUID    `json:"guid"`
-	Level       int32   `json:"level,omitempty"`
-	Map         uint32  `json:"map"`
-	X           float32 `json:"x"`
-	Y           float32 `json:"y"`
-	Z           float32 `json:"z"`
-	O           float32 `json:"o"`
-	Target      GUID    `json:"target,omitempty"`
-	Health      int64   `json:"health"`
-	MaxHealth   int64   `json:"max_health"`
-	Power       int32   `json:"power"`
-	MaxPower    int32   `json:"max_power"`
-	PowerType   uint8   `json:"power_type,omitempty"`
-	InCombat    bool    `json:"in_combat"`
-	Falling     bool    `json:"falling"`
+	Character string  `json:"character,omitempty"`
+	Team      string  `json:"team,omitempty"`
+	GUID      GUID    `json:"guid"`
+	Level     int32   `json:"level,omitempty"`
+	Map       uint32  `json:"map"`
+	X         float32 `json:"x"`
+	Y         float32 `json:"y"`
+	Z         float32 `json:"z"`
+	O         float32 `json:"o"`
+	Target    GUID    `json:"target,omitempty"`
+	Health    int64   `json:"health"`
+	MaxHealth int64   `json:"max_health"`
+	Power     int32   `json:"power"`
+	MaxPower  int32   `json:"max_power"`
+	PowerType uint8   `json:"power_type,omitempty"`
+	InCombat  bool    `json:"in_combat"`
+	Falling   bool    `json:"falling"`
+	// FallMS is the computed flight left of a fall in progress, and FallLandZ the floor it will land on; both are
+	// omitted when no fall of the client's own is in the air (a teleport above the ground starts one, fall.go).
+	FallMS      int64   `json:"fall_ms,omitempty"`
+	FallLandZ   float32 `json:"fall_land_z,omitempty"`
 	ZUnknown    bool    `json:"z_unknown"`
 	TeleportSeq uint64  `json:"teleport_seq"`
 	LatencyMS   uint32  `json:"latency_ms"`
@@ -916,6 +920,11 @@ func (s *session) serveStatus(st *serveState) ServeStatus {
 	if s.mover != nil {
 		out.X, out.Y, out.Z, out.O = s.mover.Position()
 		out.Falling = s.mover.Flags&(objects.FlagFalling|objects.FlagFallingFar) != 0 || s.mover.Airborne()
+		if f := s.flight; f != nil && f.fall {
+			out.Falling = true
+			out.FallLandZ = f.landZ
+			out.FallMS = max(f.land.Sub(now).Milliseconds(), 0)
+		}
 	} else {
 		p := s.report.Position
 		out.X, out.Y, out.Z, out.O = p[0], p[1], p[2], p[3]
@@ -1022,9 +1031,12 @@ type ServeUnit struct {
 }
 
 // ServeDynamicObject is one row of the dynamic_objects method: a ground spell's area (Blizzard, a fire patch), with
-// the flat distance from the mover, -1 while the object has no position.
+// the flat distance from the mover, -1 while the object has no position. Kind names the object type the area came in:
+// "dynamic object" (a persistent area aura) or "area trigger" (SPELL_EFFECT_CREATE_AREATRIGGER, which this core uses
+// for Blizzard and Flamestrike).
 type ServeDynamicObject struct {
 	GUID     GUID    `json:"guid"`
+	Kind     string  `json:"kind"`
 	SpellID  int32   `json:"spell_id"`
 	Caster   GUID    `json:"caster"`
 	Radius   float32 `json:"radius"`
@@ -1079,7 +1091,7 @@ func (s *session) serveDynamicObjects() ([]ServeDynamicObject, error) {
 	list := s.world.DynamicObjects(s.MoverX(), s.MoverY())
 	out := make([]ServeDynamicObject, 0, len(list))
 	for _, d := range list {
-		out = append(out, ServeDynamicObject{GUID: GUID(d.GUID), SpellID: d.SpellID, Caster: GUID(d.Caster),
+		out = append(out, ServeDynamicObject{GUID: GUID(d.GUID), Kind: d.Kind, SpellID: d.SpellID, Caster: GUID(d.Caster),
 			Radius: d.Radius, X: d.X, Y: d.Y, Z: d.Z, Distance: d.Distance})
 	}
 	return out, nil

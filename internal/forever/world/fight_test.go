@@ -717,14 +717,20 @@ func buildSpellGo(caster, casterUnit, castID wire.GUID, spellID int32, castTime 
 // buildCastFailed is SMSG_CAST_FAILED (SpellPackets.cpp:556-567): the cast id, the spell and its visual, the reason
 // with its two arguments, and the unit that failed it (none).
 func buildCastFailed(castID wire.GUID, spellID, reason int32) []byte {
+	return buildCastFailedArgs(castID, spellID, reason, -1, -1)
+}
+
+// buildCastFailedArgs is buildCastFailed with the two FillSpellCastFailedArgs arguments a refusal can carry (the
+// missing reagent or tool item, the totem category, the spell focus).
+func buildCastFailedArgs(castID wire.GUID, spellID, reason, arg1, arg2 int32) []byte {
 	b := wire.NewWriter()
 	wire.WritePackedGUID(b, castID)
 	b.WriteI32(spellID)
 	b.WriteI32(0) // SpellXSpellVisualID
 	b.WriteI32(0) // ScriptVisualID
 	b.WriteI32(reason)
-	b.WriteI32(-1) // Arg1
-	b.WriteI32(-1) // Arg2
+	b.WriteI32(arg1)
+	b.WriteI32(arg2)
 	wire.WritePackedGUID(b, wire.EmptyGUID)
 	return b.Bytes()
 }

@@ -80,10 +80,21 @@ func CrowdControlled(auras []Aura, t *foreverspells.Table, nameOf func(int32) st
 	return false
 }
 
+// The kinds DynamicObjects lists.
+const (
+	// KindDynamicObject is a TYPEID_DYNAMICOBJECT (a persistent area aura: Rain of Fire, a consecration, a fire patch).
+	KindDynamicObject = "dynamic object"
+	// KindAreaTrigger is a TYPEID_AREATRIGGER whose create named a spell (a ground spell of this core: Blizzard,
+	// Flamestrike; Spell::EffectCreateAreaTrigger).
+	KindAreaTrigger = "area trigger"
+)
+
 // DynamicObject is the area a ground spell leaves (Blizzard, Rain of Fire, a consecration, a fire patch under a boss):
-// the spell, its caster, the radius and the distance from the asker.
+// the spell, its caster, the radius and the distance from the asker. This core sends the two spell shapes as two object
+// types (see Kind): a dynamic object for a persistent area aura, an area trigger for SPELL_EFFECT_CREATE_AREATRIGGER.
 type DynamicObject struct {
 	GUID    wire.GUID
+	Kind    string
 	SpellID int32
 	Caster  wire.GUID
 	Radius  float32
@@ -92,17 +103,24 @@ type DynamicObject struct {
 	Distance float32
 }
 
-// DynamicObjects lists the dynamic objects the model holds, nearest first to (x, y); the ones without a position
-// (no packet ever gave them one) come last with distance -1.
+// DynamicObjects lists the ground-spell areas the model holds, nearest first to (x, y): every dynamic object, and every
+// area trigger whose create carried a spell (a portal trigger a create ever shows would carry none and is left out).
+// The ones without a position (no packet ever gave them one) come last with distance -1.
 func (w *World) DynamicObjects(x, y float32) []DynamicObject {
 	w.mu.RLock()
 	out := make([]DynamicObject, 0, 8)
 	for _, o := range w.objects {
-		if !o.Info.HasDynamicObject && o.Type != TypeDynamicObject {
+		var kind string
+		switch {
+		case o.Info.HasDynamicObject || o.Type == TypeDynamicObject:
+			kind = KindDynamicObject
+		case o.Info.HasAreaTrigger && o.Info.SpellID != 0:
+			kind = KindAreaTrigger
+		default:
 			continue
 		}
-		d := DynamicObject{GUID: o.GUID, SpellID: o.Info.SpellID, Caster: o.Info.Caster, Radius: o.Info.DynRadius,
-			X: o.X, Y: o.Y, Z: o.Z, Distance: -1}
+		d := DynamicObject{GUID: o.GUID, Kind: kind, SpellID: o.Info.SpellID, Caster: o.Info.Caster,
+			Radius: o.Info.DynRadius, X: o.X, Y: o.Y, Z: o.Z, Distance: -1}
 		if o.Positioned {
 			d.Distance = float32(math.Hypot(float64(o.X-x), float64(o.Y-y)))
 		}

@@ -63,6 +63,10 @@ type Mover struct {
 	// (UNIT_FLAG_ON_TAXI), so no movement packet of any caller goes out. The session sets it on the mover it builds;
 	// nil means no guard (a plain mover in a test).
 	Refuse func() error
+	// Cross, when set, sees the mover's own position after every movement packet a walk sends (start, heartbeat,
+	// facing, stop), and may send packets of its own: the session arms its area-trigger watch here, so a volume the
+	// walk enters is taken from inside it, as a real client's own trigger table does. Its error ends the walk.
+	Cross func(pos [3]float32) error
 	// Logf, when set, receives one line per step.
 	Logf func(format string, args ...any)
 	// X, Y, Z, O is the client's belief about where the character is; the walk updates it.
@@ -145,6 +149,14 @@ func (m *Mover) logf(format string, args ...any) {
 	if m.Logf != nil {
 		m.Logf(format, args...)
 	}
+}
+
+// crossed offers the mover's position to Cross, if a watch is armed.
+func (m *Mover) crossed() error {
+	if m.Cross == nil {
+		return nil
+	}
+	return m.Cross([3]float32{m.X, m.Y, m.Z})
 }
 
 // Position returns the client's belief about its own position.
@@ -365,6 +377,10 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
 		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
 	}
+	if err := m.crossed(); err != nil {
+		_ = m.send(wire.CMSGMoveStop, base)
+		return err
+	}
 	m.walking = true
 	defer func() { m.walking = false }()
 	m.logf("walk: start forward from %.2f %.2f %.2f to %.2f %.2f %.2f (%.2f yd, facing %.2f, run %.1f yd/s)",
@@ -434,6 +450,9 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			if err := m.sendAt(wire.CMSGMoveStop, base, arrival); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			m.logf("walk: stop at %.2f %.2f %.2f (%.2f yd in %s, %d heartbeats)", m.X, m.Y, m.Z, dist,
 				now.Sub(start).Round(time.Millisecond), heartbeats)
 			return ctx.Err()
@@ -447,6 +466,10 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 		m.advance(sx, sy, sz, tx, ty, tz, dist, start, now)
 		if err := m.send(wire.CMSGMoveHeartbeat, base|FlagForward); err != nil {
 			return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+		}
+		if err := m.crossed(); err != nil {
+			_ = m.send(wire.CMSGMoveStop, base)
+			return err
 		}
 		heartbeats++
 		last = now
@@ -541,6 +564,10 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 	}
 	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
 		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
+	}
+	if err := m.crossed(); err != nil {
+		_ = m.send(wire.CMSGMoveStop, base)
+		return err
 	}
 	m.walking = true
 	defer func() { m.walking = false }()
@@ -675,6 +702,9 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			if err := m.sendAt(wire.CMSGMoveStop, base, arrival); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			m.logf("path: stop at %.2f %.2f %.2f (%.2f yd in %s)", m.X, m.Y, m.Z, total,
 				now.Sub(start).Round(time.Millisecond))
 			return ctx.Err()
@@ -692,12 +722,18 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			if err := m.Face(nextDir); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			lastSend = now
 			turn++
 		}
 		if !now.Before(lastSend.Add(HeartbeatInterval)) && m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
 			if err := m.sendAt(wire.CMSGMoveHeartbeat, base|FlagForward, now); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+			}
+			if err := m.crossed(); err != nil {
+				return err
 			}
 			lastSend = now
 		}

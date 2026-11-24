@@ -49,7 +49,8 @@ type CombatRow struct {
 	Target  CombatActor `json:"target"`
 	SpellID int32       `json:"spell_id"`
 	Amount  int32       `json:"amount"`
-	// Reason is set on a spell_fail (the core's SpellCastResult in words, combat.SpellFailureName), on a melee row
+	// Reason is set on a spell_fail (the core's SpellCastResult in words, with the missing item/category/focus
+	// argument the core filled: combat.SpellFailureResult), on a melee row
 	// that did not land normally (the victim state, combat.VictimStateName), on a miss or resist, and on an
 	// environmental row (the damage type, combat.EnvironmentalName).
 	Reason string `json:"reason,omitempty"`

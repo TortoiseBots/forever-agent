@@ -169,6 +169,8 @@ type Status struct {
 	PowerType        uint8     `json:"power_type,omitempty"`
 	InCombat         bool      `json:"in_combat"`
 	Falling          bool      `json:"falling"`
+	FallMS           int64     `json:"fall_ms,omitempty"`
+	FallLandZ        float32   `json:"fall_land_z,omitempty"`
 	ZUnknown         bool      `json:"z_unknown"`
 	TeleportSeq      uint64    `json:"teleport_seq"`
 	LatencyMS        uint32    `json:"latency_ms"`
@@ -894,8 +896,10 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	// Reading the (bounded) rest of the body lets the connection be reused.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// Reading the (bounded) rest of the body lets the connection be reused. The bound leaves room for a
+	// map_snapshot with the navmesh background, which is far past a few megabytes; an over-bound reply is an error
+	// naming the bound instead of a cut body that reads as bad JSON.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, nil, ErrUnauthorized
 	}
@@ -904,6 +908,9 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if int64(len(raw)) > maxReplyBytes {
+		return nil, nil, fmt.Errorf("bad reply: larger than the %d-byte bound", maxReplyBytes)
 	}
 	var reply struct {
 		JSONRPC string          `json:"jsonrpc"`
@@ -936,6 +943,10 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 // requestID is the id of every request: a client sends one call at a time
 // per connection, so one id is enough, and a reply is checked against it.
 const requestID = 1
+
+// maxReplyBytes bounds one reply body. A map_snapshot with the navmesh background is the biggest answer a method
+// gives; the bound is generous so it is never the thing that cuts one.
+const maxReplyBytes = 64 << 20
 
 // Status reads status: where the character is, what it is doing, and the
 // link's lifecycle (state online/reconnecting/offline).

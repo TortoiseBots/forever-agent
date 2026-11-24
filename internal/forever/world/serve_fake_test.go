@@ -524,6 +524,9 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		case wire.CMSGAreaTrigger:
 			f.mu.Lock()
 			f.serveArea = true
+			if r := wire.NewReader(payload); r.Remaining() >= 4 {
+				f.serveAreas = append(f.serveAreas, r.ReadI32())
+			}
 			f.mu.Unlock()
 		case wire.CMSGLogoutRequest:
 			f.mu.Lock()
@@ -860,6 +863,74 @@ func TestServeWalkAndFace(t *testing.T) {
 	}
 	a.mustFail(t, "path_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
 	a.mustFail(t, "walk_ray", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeWalkCrossesArmedAreaTrigger: a client sends CMSG_AREA_TRIGGER itself on stepping into a trigger; the walked
+// volume arms once and sends exactly once per crossing (issue #228's Deadmines portal row: the walk alone moved no
+// map because nothing was sent, and the explicit area_trigger call did).
+func TestServeWalkCrossesArmedAreaTrigger(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	deadline := time.Now().Add(5 * time.Second)
+	var st ServeStatus
+	for {
+		var units []ServeUnit
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		json.Unmarshal(a.mustCall(t, "status", nil), &st)
+		if len(units) > 0 && st.X != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no position after 5 s\n%s", steps.joined())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The volume straddles the walk's line, 5 yd ahead of the character, with a 3 yd reach: the leg starts outside,
+	// samples inside twice and ends outside, so exactly one packet goes out.
+	cx := st.X + 5
+	var watch ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{
+		"id": 78, "x": cx, "y": st.Y, "z": st.Z, "radius": 3,
+	}), &watch)
+	if len(watch.Triggers) != 1 || watch.Triggers[0].ID != 78 || watch.Triggers[0].Radius != 3 {
+		t.Fatalf("armed %+v", watch.Triggers)
+	}
+	f.mu.Lock()
+	before := len(f.serveAreas)
+	f.mu.Unlock()
+	a.mustCall(t, "walk_to", map[string]any{"x": cx + 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	first := append([]int32(nil), f.serveAreas[before:]...)
+	f.mu.Unlock()
+	if len(first) != 1 || first[0] != 78 {
+		t.Fatalf("the crossing sent %v, want one trigger 78\n%s", first, steps.joined())
+	}
+	// Walking back crosses it again: once per crossing, not once per volume.
+	a.mustCall(t, "walk_to", map[string]any{"x": cx - 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	back := append([]int32(nil), f.serveAreas[before:]...)
+	f.mu.Unlock()
+	if len(back) != 2 || back[0] != 78 || back[1] != 78 {
+		t.Fatalf("the second crossing sent %v, want two triggers\n%s", back, steps.joined())
+	}
+	// Clearing arms nothing; a walk then sends nothing new.
+	var cleared ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"clear": true}), &cleared)
+	if len(cleared.Triggers) != 0 {
+		t.Fatalf("after clear %+v", cleared.Triggers)
+	}
+	a.mustCall(t, "walk_to", map[string]any{"x": cx + 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	after := len(f.serveAreas)
+	f.mu.Unlock()
+	if after != before+2 {
+		t.Fatalf("a cleared watch sent %d more packets", after-(before+2))
+	}
 	a.stop(t)
 	f.wait(t)
 }

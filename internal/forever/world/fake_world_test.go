@@ -283,6 +283,7 @@ type fakeServer struct {
 	serveStop       bool
 	serveLogout     bool
 	serveArea       bool
+	serveAreas      []int32 // every CMSG_AREA_TRIGGER id, in the order the fake saw them
 	serveCast       bool
 	serveGMSent     bool
 	serveBotSent    bool

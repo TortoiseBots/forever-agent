@@ -163,9 +163,101 @@ func TestServeDynamicObjects(t *testing.T) {
 	raw, _ := json.Marshal(r)
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
-	for _, k := range []string{"guid", "spell_id", "caster", "radius", "x", "y", "z", "distance"} {
+	for _, k := range []string{"guid", "kind", "spell_id", "caster", "radius", "x", "y", "z", "distance"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("JSON key %q missing in %s", k, raw)
 		}
+	}
+	if m["kind"] != objects.KindDynamicObject {
+		t.Errorf("kind is %v, want %q", m["kind"], objects.KindDynamicObject)
+	}
+}
+
+// r7AreaTriggerPayload is an SMSG_UPDATE_OBJECT with one area trigger create block at a stationary position
+// (AreaTriggerData::WriteCreate, UpdateFields.cpp:8644-8706; the head this round decodes, then a tail the block's
+// declared size frames). This is how the core sends Blizzard 10 and Flamestrike 2120 on this client.
+func r7AreaTriggerPayload(guid, caster wire.GUID, spellID int32, radius float32, duration uint32, x, y, z float32) []byte {
+	mv := wire.NewWriter()
+	for i := range 21 {
+		mv.WriteBit(i == 7) // Stationary
+	}
+	mv.FlushBits()
+	mv.WriteU32(0)
+	mv.WriteFloat32(x)
+	mv.WriteFloat32(y)
+	mv.WriteFloat32(z)
+	mv.WriteFloat32(0)
+	v := wire.NewWriter()
+	v.WriteU8(0)
+	v.WriteU8(3)   // fragCGObject
+	v.WriteU8(209) // Tag_AreaTrigger
+	v.WriteU8(0xFF)
+	v.WriteU8(1) // CGObject is an indirect fragment: its existence byte
+	v.WriteI32(0)
+	v.WriteU32(0)
+	v.WriteFloat32(1)
+	for range 6 { // the six override curves
+		v.WriteU32(0)
+		v.WriteFloat32(0)
+		v.WriteFloat32(0)
+		v.WriteFloat32(0)
+		v.WriteFloat32(0)
+		v.WriteU32(0)
+		v.WriteBits(0, 1)
+		v.FlushBits()
+	}
+	wire.WritePackedGUID(v, caster)
+	v.WriteU32(duration)
+	for range 5 {
+		v.WriteU32(0)
+	}
+	v.WriteI32(spellID)
+	v.WriteI32(spellID)
+	v.WriteI32(777)
+	v.WriteI32(0)
+	v.WriteFloat32(radius)
+	v.WriteBytes([]byte{0xAA, 0xBB}) // the tail: not decoded, framed by the size
+	val := v.Bytes()
+
+	block := wire.NewWriter()
+	block.WriteU8(objects.UpdateCreateObject)
+	wire.WritePackedGUID(block, guid)
+	block.WriteU8(objects.TypeAreaTrigger)
+	block.WriteBytes(mv.Bytes())
+	block.WriteU32(uint32(len(val)))
+	block.WriteBytes(val)
+	out := wire.NewWriter()
+	out.WriteU16(0)
+	out.WriteU32(1)
+	out.WriteBit(true)
+	out.WriteBit(false)
+	out.FlushBits()
+	out.WriteU32(uint32(len(block.Bytes())))
+	out.WriteBytes(block.Bytes())
+	return out.Bytes()
+}
+
+// TestServeDynamicObjectsAreaTrigger: a ground spell this core sends as an area trigger lists through dynamic_objects
+// with kind "area trigger" and its spell's radius and caster: the live session's Blizzard and Flamestrike polled an
+// empty list because only TYPEID_DYNAMICOBJECT was read (issue #228).
+func TestServeDynamicObjectsAreaTrigger(t *testing.T) {
+	s, self := r7Session(t)
+	guid := wire.GUID{Low: 0x66, High: 0x1000000000000000}
+	mx, my := s.MoverX(), s.MoverY()
+	dispatchSpellPacket(t, s, wire.SMSGUpdateObject, r7AreaTriggerPayload(guid, self, 10, 8, 8000, mx+3, my+4, 0))
+	rows, err := s.serveDynamicObjects()
+	if err != nil {
+		t.Fatalf("dynamic_objects: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want 1: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if wire.GUID(r.GUID) != guid || r.Kind != objects.KindAreaTrigger || r.SpellID != 10 ||
+		wire.GUID(r.Caster) != self || r.Radius != 8 {
+		t.Fatalf("row %+v", r)
+	}
+	if r.Distance != 5 {
+		t.Fatalf("distance %v, want the flat 5", r.Distance)
 	}
 }

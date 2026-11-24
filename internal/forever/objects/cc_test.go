@@ -204,4 +204,109 @@ func TestDynamicObjectsList(t *testing.T) {
 	if len(w.DynamicObjects(1000, 1000)) != 4 {
 		t.Fatal("the list does not depend on the asker")
 	}
+	for _, d := range got {
+		if d.Kind != KindDynamicObject {
+			t.Fatalf("%v is kind %q, want %q", d.GUID, d.Kind, KindDynamicObject)
+		}
+	}
+}
+
+// writeAreaTriggerCreate writes the head of AreaTriggerData::WriteCreate after ObjectData (UpdateFields.cpp:8644-
+// 8706): six override curves, Caster, Duration, the five time-to-target fields, SpellID, SpellForVisuals, SpellVisual
+// and BoundsRadius2D, then tail bytes this round leaves to the block's declared size.
+func writeAreaTriggerCreate(v *wire.Buffer, caster wire.GUID, spellID int32, radius float32, duration uint32) {
+	v.WriteU8(fragCGObject)
+	v.WriteU8(209) // Tag_AreaTrigger: a tag id, unchanged by the +1 rule (WowCSEntityDefinitions.h:67)
+	v.WriteU8(0xFF)
+	v.WriteU8(1)
+	v.WriteI32(0)     // ObjectData: Entry
+	v.WriteU32(0)     // DynamicFlags
+	v.WriteFloat32(1) // Scale
+	for range 6 {     // the override curves
+		v.WriteU32(0)     // StartTimeOffset
+		v.WriteFloat32(0) // Points[0]
+		v.WriteFloat32(0)
+		v.WriteFloat32(0) // Points[1]
+		v.WriteFloat32(0)
+		v.WriteU32(0)     // ParameterCurve
+		v.WriteBits(0, 1) // OverrideActive
+		v.FlushBits()
+	}
+	wire.WritePackedGUID(v, caster)
+	v.WriteU32(duration)
+	for range 5 { // the time-to-target fields
+		v.WriteU32(0)
+	}
+	v.WriteI32(spellID)
+	v.WriteI32(spellID) // SpellForVisuals
+	v.WriteI32(777)     // SpellVisual.SpellXSpellVisualID
+	v.WriteI32(0)
+	v.WriteFloat32(radius)
+	v.WriteBytes([]byte{0xAA, 0xBB, 0xCC}) // the tail (visual animation, curves, shape): not decoded
+}
+
+// buildAreaTriggerCreate is one create block for an area trigger with a stationary position.
+func buildAreaTriggerCreate(guid, caster wire.GUID, spellID int32, radius float32, duration uint32, pos *[3]float32) []byte {
+	mv := wire.NewWriter()
+	for i := range 21 {
+		mv.WriteBit(i == 7 && pos != nil) // bit 7 is Stationary
+	}
+	mv.FlushBits()
+	mv.WriteU32(0)
+	if pos != nil {
+		mv.WriteFloat32(pos[0])
+		mv.WriteFloat32(pos[1])
+		mv.WriteFloat32(pos[2])
+		mv.WriteFloat32(0)
+	}
+	values := wire.NewWriter()
+	values.WriteU8(0)
+	writeAreaTriggerCreate(values, caster, spellID, radius, duration)
+	return buildCreate(guid, TypeAreaTrigger, mv.Bytes(), values.Bytes())
+}
+
+// TestAreaTriggerGroundSpellListsAsAreaTrigger: this core sends Blizzard (10) and Flamestrike (2120) as a
+// TYPEID_AREATRIGGER create (SPELL_EFFECT_CREATE_AREATRIGGER), so its spell, caster, bounds radius and position list
+// through DynamicObjects with kind "area trigger", next to a dynamic object's "dynamic object"; an area trigger without
+// a spell (a portal) stays out of the list.
+func TestAreaTriggerGroundSpellListsAsAreaTrigger(t *testing.T) {
+	w := NewWorld(0)
+	now := time.Unix(1700000000, 0)
+	caster := wire.GUID{Low: 0x77, High: 0x0100000000000000}
+	area := wire.GUID{Low: 0x21, High: 0x1000000000000000}
+	door := wire.GUID{Low: 0x22, High: 0x1000000000000000}
+	dyn := wire.GUID{Low: 0x23, High: 0x0F00000000000000}
+	for _, tc := range []struct {
+		payload  []byte
+		complete bool
+	}{
+		// An area trigger's create carries much more than the head this round decodes; the block must still be
+		// framed by its declared size and in sync, and the decoded head is not an unparsed block.
+		{buildAreaTriggerCreate(area, caster, 10, 8, 8000, &[3]float32{6, 8, 90}), false},
+		{buildAreaTriggerCreate(door, wire.EmptyGUID, 0, 2, 0, &[3]float32{1, 1, 90}), false},
+		{buildDynamicObjectCreate(dyn, caster, 2120, 5, 0, &[3]float32{0, 0, 90}), true},
+	} {
+		u, err := ParseUpdateObject(tc.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b := u.Blocks[0]; b.Unparsed != ReasonNone || b.ValuesComplete != tc.complete {
+			t.Fatalf("block %v: unparsed %q complete %v (want complete %v)", b.GUID, b.Unparsed, b.ValuesComplete, tc.complete)
+		}
+		w.Apply(u, now)
+	}
+	got := w.DynamicObjects(0, 0)
+	if len(got) != 2 {
+		t.Fatalf("%d rows, want the Blizzard area trigger and the dynamic object: %+v", len(got), got)
+	}
+	if got[0].GUID != dyn || got[1].GUID != area {
+		t.Fatalf("order %v %v, want the dynamic object at (0,0) first", got[0].GUID, got[1].GUID)
+	}
+	if a := got[1]; a.Kind != KindAreaTrigger || a.SpellID != 10 || a.Caster != caster || a.Radius != 8 ||
+		a.X != 6 || a.Y != 8 || a.Z != 90 || a.Distance != 10 {
+		t.Fatalf("the area trigger row %+v", a)
+	}
+	if d := got[0]; d.Kind != KindDynamicObject || d.SpellID != 2120 || d.Radius != 5 {
+		t.Fatalf("the dynamic object row %+v", d)
+	}
 }

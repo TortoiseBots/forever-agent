@@ -702,6 +702,9 @@ func mergeInfo(dst *Info, src Info) {
 	if src.HasDynamicObject {
 		dst.HasDynamicObject = true
 	}
+	if src.HasAreaTrigger {
+		dst.HasAreaTrigger = true
+	}
 	if f.Caster {
 		dst.Caster = src.Caster
 	}
