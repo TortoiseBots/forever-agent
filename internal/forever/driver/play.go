@@ -318,9 +318,11 @@ type playRun struct {
 	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
 	pulled     map[int]bool
 	bossKilled map[uint32]bool
-	// pullSet is every unit the pull brought and skull the one its marks and orders point at.
-	pullSet []wire.GUID
-	skull   wire.GUID
+	// pullSet is every unit the pull brought and skull the one its marks and orders point at; pullGone is the pull's
+	// units the fight dropped as out of combat (a member that never aggroed): alive and unconfirmed.
+	pullSet  []wire.GUID
+	pullGone []wire.GUID
+	skull    wire.GUID
 
 	// farSince and farStage are the straggler timers, by normalised bot name.
 	farSince map[string]time.Time

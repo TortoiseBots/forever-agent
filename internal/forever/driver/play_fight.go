@@ -462,7 +462,9 @@ func pullStepPoint(from, skull Vec3) Vec3 {
 }
 
 // pullBoss is the boss of the leg: the pull's orders with the boss as the skull and the plan's entries to kill before
-// it as its adds.
+// it as its adds. The party is gathered within the pull's distance and rests to its bars before the boss is marked and
+// ordered (the boss walk keeps the bots at PlayFollowYd), and a retry reads the pull again: an add that died in the
+// wait is no longer its skull.
 func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	p.refreshSelf()
 	u, ok := p.bossUnit(b.Entry)
@@ -470,13 +472,16 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 		p.stop("bosses-alive")
 		return ""
 	}
-	members := []Unit{u}
-	for _, x := range p.ports.World.Units() {
-		if x.Dead || x.Friendly || x.GUID == u.GUID || !slices.Contains(b.First, x.Entry) {
-			continue
-		}
-		members = append(members, x)
+	// The party first: the boss walk pauses only past PlayFollowYd, and a boss pulled with the tank 35 yd behind is
+	// the tank's pull to lose.
+	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
+		return ""
 	}
+	// And the bars: the rest's own cap, no more (a party still short goes on, as rest's timeout does).
+	if !p.ready() && !p.restWait(ctx) {
+		return ""
+	}
+	members := p.bossMembers(b, u)
 	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{b.Entry}, Boss: true, Mobs: len(members)})
 	// The plan's entries to kill before the boss are the skull first, in its order; the boss is the skull once they are
 	// down, and the cross goes on the next unit of the order.
@@ -488,6 +493,18 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": b.Entry})
+			bu, ok := p.bossUnit(b.Entry)
+			if !ok {
+				// The boss is off the view: dead (its kill is latched) or gone. The leg's walk judges it.
+				p.bossRun = false
+				return StateLegWalk
+			}
+			members = p.bossMembers(b, bu)
+			skull, cross = p.bossOrder(b, members)
+			if skull.GUID.IsZero() {
+				p.bossRun = false
+				return StateLegWalk
+			}
 		}
 		if p.engageSeen(ctx, members, skull, cross) {
 			return StateFight
@@ -501,6 +518,18 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	}
 	p.stopPullFailed()
 	return ""
+}
+
+// bossMembers is the boss pull's set: the boss and the plan's First entries that are living in the view.
+func (p *playRun) bossMembers(b *Boss, boss Unit) []Unit {
+	members := []Unit{boss}
+	for _, x := range p.ports.World.Units() {
+		if x.Dead || x.Friendly || x.GUID == boss.GUID || !slices.Contains(b.First, x.Entry) {
+			continue
+		}
+		members = append(members, x)
+	}
+	return members
 }
 
 // bossOrder is the boss fight's kill order over the living units of the pull: the leg's First entries in the plan's
@@ -558,6 +587,12 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 	}
 	deadline := p.now().Add(p.lim.Pull)
 	for {
+		units := p.ports.World.Units()
+		// A pull whose set is down (or gone from the view) before it ever turned on the party is answered: a one-shot
+		// add and a mob killed by a dot never aggro, and waiting out the window would only fail a won pull.
+		if p.pullCleared(units) {
+			return true
+		}
 		if p.aggro() {
 			return true
 		}
@@ -646,24 +681,34 @@ func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross U
 	}
 }
 
-// refusalStand is where the party steps after a refusal: PlayPullStepYd along the navmesh path from the agent to the
-// skull (the way the party can walk, round a lip or a pillar), and never nearer than PlaySightTouchYd to the skull;
-// the straight line when the mesh gives no path. It is the agent's own position when it already stands that near.
+// refusalStand is where the party steps after a refusal. The module reads the line from the TANK, so the step is
+// measured from where the tank stands: PlayPullStepYd along the navmesh path from the tank to the skull (the way the
+// party can walk, round a lip or a pillar), never nearer than PlaySightTouchYd to the skull; the straight line when
+// the mesh gives no path, and the agent's own position when the tank's is unknown. An agent already on the skull's
+// feet steps onto the mob itself: what a blind tank that trails needs then is the party closer, not a stand further
+// on (a stand measured from the agent there was the agent's own position, and one refusal ended the pull).
 func (p *playRun) refusalStand(skull Vec3) Vec3 {
 	p.refreshSelf()
-	d := dist3(p.self, skull)
+	if dist3(p.self, skull) <= PlaySightTouchYd+0.01 {
+		return skull
+	}
+	from := p.self
+	if at, ok := p.tankPos(); ok {
+		from = at
+	}
+	d := dist3(from, skull)
 	if d-PlaySightTouchYd <= 0.01 {
-		return p.self
+		return from
 	}
 	step := math.Min(PlayPullStepYd, d-PlaySightTouchYd)
-	if route, err := p.ports.Walker.Path(p.self, skull); err == nil && len(route.Points) >= 2 {
+	if route, err := p.ports.Walker.Path(from, skull); err == nil && len(route.Points) >= 2 {
 		return alongPath(route.Points, step, skull, PlaySightTouchYd)
 	}
 	f := step / d
 	return Vec3{
-		p.self[0] + float32(float64(skull[0]-p.self[0])*f),
-		p.self[1] + float32(float64(skull[1]-p.self[1])*f),
-		p.self[2] + float32(float64(skull[2]-p.self[2])*f),
+		from[0] + float32(float64(skull[0]-from[0])*f),
+		from[1] + float32(float64(skull[1]-from[1])*f),
+		from[2] + float32(float64(skull[2]-from[2])*f),
 	}
 }
 
@@ -716,7 +761,7 @@ func (p *playRun) fight(ctx context.Context) string {
 	deadline := start.Add(p.lim.Fight)
 	agentAt := start.Add(p.lim.AgentHit)
 	swinging := false
-	var calm, broke time.Time
+	var calm, broke, idle time.Time
 	adds := 0
 	// A fight resumed after the character's death has lost its selection, and the module's attack takes the requester's
 	// selected unit: the skull is selected again before either order.
@@ -747,6 +792,7 @@ func (p *playRun) fight(ctx context.Context) string {
 		units := p.ports.World.Units()
 		p.sample(units)
 		p.noteDeaths()
+		p.latchBoss()
 		if p.wiped() {
 			return p.endFight(ctx, adds, units)
 		}
@@ -756,15 +802,31 @@ func (p *playRun) fight(ctx context.Context) string {
 		}
 		live, extra := p.engaged(units)
 		adds = max(adds, extra)
-		if live == 0 && !p.pullAlive(units) {
+		switch {
+		case live > 0:
+			calm, idle = time.Time{}, time.Time{}
+		case !p.pullAlive(units):
+			idle = time.Time{}
 			if calm.IsZero() {
 				calm = now
 			}
 			if now.Sub(calm) >= p.lim.FightQuiet {
 				return p.endFight(ctx, adds, units)
 			}
-		} else {
+		default:
+			// Nothing of the pull is on the party and one of its units still stands: a member that never aggroed (a
+			// pillar between it and the party) or one that evaded would hold the fight open to its cap. A unit gets the
+			// pull's own window (counted from the last order that named it) to turn on the party: a boss that waits for
+			// the tank to walk to it is not idle. Past it the unit is dropped from the pull, so the fight can end; it is
+			// alive, so its pack is not counted fought and the run pulls the pack again.
 			calm = time.Time{}
+			if idle.IsZero() {
+				idle = now
+			}
+			if now.Sub(idle) >= max(p.lim.FightQuiet, p.lim.Pull) {
+				p.dropIdle(units)
+				idle = time.Time{}
+			}
 		}
 		if !now.Before(deadline) {
 			p.stop("fight-timeout")
@@ -776,7 +838,9 @@ func (p *playRun) fight(ctx context.Context) string {
 				if !p.mark(ctx, next.GUID, party.MarkSkull) || !p.mark(ctx, cross.GUID, party.MarkCross) {
 					return ""
 				}
-				if !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
+				// The tank goes with them: a pack member that never came at the party (behind a pillar) is the one
+				// still up, and no TankBreak order will come for a skull nothing targets.
+				if !p.order(ctx, p.cfg.Bots[0], p.skull) || !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
 					return ""
 				}
 				if swinging {
@@ -785,7 +849,7 @@ func (p *playRun) fight(ctx context.Context) string {
 						return ""
 					}
 				}
-				broke = time.Time{}
+				broke, idle = time.Time{}, time.Time{}
 			}
 		}
 		if u, ok := unitByGUID(units, p.skull); ok && !u.Dead && !u.Target.IsZero() && p.partyMember(u.Target) && u.Target != p.tankGUID() {
@@ -823,13 +887,16 @@ func (p *playRun) fight(ctx context.Context) string {
 func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	_ = p.ports.Player.StopAttack()
 	p.drainEncounters()
+	// The boss's kill is read before a wipe or a bot's corpse can take the run off the fight: the view is the last
+	// one that saw it.
+	p.latchBoss()
 	p.rec.UpdatePull(func(r *PullRecord) { r.Adds = adds })
 	p.rec.PullEnd(p.now(), 0)
 	p.noteDeaths()
 	boss := p.bossRun
 	down := p.pullDown(units)
 	p.bossRun = false
-	p.skull, p.pullSet = wire.GUID{}, p.pullSet[:0]
+	p.skull, p.pullSet, p.pullGone = wire.GUID{}, p.pullSet[:0], p.pullGone[:0]
 	// Nobody walks on while a member is down (§3.10): the whole party is the budget's wipe, the character's own death
 	// takes the resurrect wait, and a bot's corpse alone is a regroup that costs no wipe.
 	switch {
@@ -901,6 +968,40 @@ func (p *playRun) rest(ctx context.Context) string {
 	}
 }
 
+// restWait waits the rest's cap for the party's bars before a boss pull, the agent sitting as REST does: the run does
+// not open a boss fight on a half-empty party. A party still short when the cap passes goes on, as rest's own timeout
+// does. It reports false only when the run itself ended.
+func (p *playRun) restWait(ctx context.Context) bool {
+	started := p.now()
+	p.rec.Event(started, "boss_rest", map[string]any{"leg": p.legName()})
+	if err := p.ports.Player.Rest(ctx, p.lim.Rest); err != nil {
+		if errors.Is(err, ErrLinkLost) {
+			p.linkLost()
+		} else {
+			p.stop("rest")
+		}
+		return false
+	}
+	deadline := started.Add(p.lim.Rest)
+	for {
+		if p.ready() {
+			p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds()})
+			return true
+		}
+		if p.timeUp() {
+			p.stop("time")
+			return false
+		}
+		if !p.now().Before(deadline) {
+			p.rec.Event(p.now(), "boss_rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds()})
+			return true
+		}
+		if !p.sleep(ctx, p.lim.Poll) {
+			return false
+		}
+	}
+}
+
 // boss is the leg's boss: the run walks to it (the plan's approach points first), waits for a patrolling boss that the
 // plan says waits, and pulls it. A boss the view never shows is not dead, so the run stops (bosses-alive).
 func (p *playRun) boss(ctx context.Context) string {
@@ -922,7 +1023,13 @@ func (p *playRun) boss(ctx context.Context) string {
 			return StatePull // a pack, or a hostile the plan does not know, in the way to the boss is fought first
 		}
 	}
-	deadline := p.now().Add(time.Duration(b.WaitS) * time.Second)
+	// A plan that says the boss waits 0 s means "it is there": the spawn's update can still trail the walk, so the
+	// look is given a pull's window rather than a single check.
+	wait := time.Duration(b.WaitS) * time.Second
+	if wait <= 0 {
+		wait = p.lim.Pull
+	}
+	deadline := p.now().Add(wait)
 	for {
 		if _, ok := p.bossUnit(b.Entry); ok {
 			p.bossRun = true
@@ -1143,25 +1250,54 @@ func (p *playRun) bossUnit(entry uint32) (Unit, bool) {
 	return Unit{}, false
 }
 
-// drainEncounters reads the instance's encounter events: an end with success kills the leg's boss, so the clear is
-// judged from the fight and not only from the last view (§3.9).
+// drainEncounters reads the instance's encounter events: an end with success and a boss's kill credit both kill the
+// leg's boss, so the clear is judged from the fight and not only from the last view (§3.9).
 func (p *playRun) drainEncounters() {
 	for _, ev := range p.ports.World.Encounters() {
-		if ev.Kind != "end" || !ev.Success {
+		if (ev.Kind != "end" || !ev.Success) && ev.Kind != "boss_kill" {
 			continue
 		}
 		leg := p.leg()
 		if leg == nil || leg.Boss == nil {
 			continue
 		}
+		if p.bossKilled[leg.Boss.Entry] {
+			continue
+		}
 		p.bossKilled[leg.Boss.Entry] = true
-		p.rec.Event(p.now(), "boss_kill", map[string]any{"entry": leg.Boss.Entry, "encounter": ev.EncounterID})
+		p.rec.Event(p.now(), "boss_kill", map[string]any{"entry": leg.Boss.Entry, "encounter": ev.EncounterID, "kind": ev.Kind})
 	}
 }
 
-// bossDone says whether a plan boss is dead: its unit's dead flag, or an encounter's end with success.
+// bossDone says whether a plan boss is dead: an encounter's end, a kill credit, or its unit's dead flag. A unit seen
+// dead latches the kill: a corpse that despawns (or leaves the view) before the run's verdict, and a bot's death
+// during the kill, cannot turn a killed boss back into a live one.
 func (p *playRun) bossDone(entry uint32) bool {
-	return p.bossKilled[entry] || bossDead(p.ports.World.Units(), entry)
+	if entry == 0 {
+		return false
+	}
+	if p.bossKilled[entry] {
+		return true
+	}
+	if !bossDead(p.ports.World.Units(), entry) {
+		return false
+	}
+	p.bossKilled[entry] = true
+	p.rec.Event(p.now(), "boss_seen_dead", map[string]any{"entry": entry})
+	return true
+}
+
+// latchBoss latches the running boss fight's kill the moment its unit is seen dead: the fight's own evidence is read
+// before a wipe, a despawn or the next view can lose it.
+func (p *playRun) latchBoss() {
+	if !p.bossRun {
+		return
+	}
+	leg := p.leg()
+	if leg == nil || leg.Boss == nil {
+		return
+	}
+	p.bossDone(leg.Boss.Entry)
 }
 
 // mark sets one raid target icon; a group command the server does not confirm stops the run (D-7).
@@ -1229,12 +1365,46 @@ func (p *playRun) pullAlive(units []Unit) bool {
 	return false
 }
 
+// dropIdle drops the pull's living units that are not on the party from the fight's set, and remembers them: they keep
+// the fight open (an evade, a member that never aggroed), and after the quiet window they are the fight's leftovers,
+// not its mobs. The unit stays alive and unconfirmed, so its pack is not counted fought and the run pulls it again.
+func (p *playRun) dropIdle(units []Unit) {
+	keep := p.pullSet[:0]
+	for _, g := range p.pullSet {
+		u, ok := unitByGUID(units, g)
+		if !ok || u.Dead || u.Friendly || p.partyMember(u.Target) {
+			keep = append(keep, g)
+			continue
+		}
+		p.pullGone = append(p.pullGone, g)
+		p.rec.Event(p.now(), "pull_drop", map[string]any{"guid": g.String(), "entry": u.Entry})
+	}
+	p.pullSet = keep
+}
+
+// pullCleared says whether every unit of the pull is dead or gone from the view: a pull whose set was killed before
+// it turned on the party was answered by that, and a retry would order a corpse.
+func (p *playRun) pullCleared(units []Unit) bool {
+	for _, g := range p.pullSet {
+		if u, ok := unitByGUID(units, g); ok && !u.Dead {
+			return false
+		}
+	}
+	return true
+}
+
 // pullDown says whether every unit of the pull is confirmed dead in the view. A unit that left the view is not
-// confirmed: its pack is not marked fought, so the run pulls it again when it shows.
+// confirmed: its pack is not marked fought, so the run pulls it again when it shows. A unit the fight dropped as out
+// of combat is not confirmed either: it is still alive.
 func (p *playRun) pullDown(units []Unit) bool {
 	for _, g := range p.pullSet {
 		u, ok := unitByGUID(units, g)
 		if !ok || !u.Dead {
+			return false
+		}
+	}
+	for _, g := range p.pullGone {
+		if u, ok := unitByGUID(units, g); !ok || !u.Dead {
 			return false
 		}
 	}

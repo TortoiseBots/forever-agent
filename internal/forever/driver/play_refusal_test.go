@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/dungeon"
 )
 
 // The tank's refusal (part of #88, live 2026-11-24 session 3): the agent's own sight check said the tank saw the
@@ -145,4 +147,73 @@ func TestPlayPullNoRefusalPortUnchanged(t *testing.T) {
 	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 2 {
 		t.Fatalf("the tank was ordered %d times; want 2 (the try and the retry)", n)
 	}
+}
+
+// TestPlayPullRefusalNearTheSkullIsNotAStop: the agent already stands 4.5 yd from the skull (inside the pull's own
+// touch distance) and the tank trails it; the module refuses the first order once. The refusal must not be an
+// immediate stop on the first try: the party steps to the mob, waits (bounded) for the tank, re-marks and re-orders,
+// and the retry is answered.
+func TestPlayPullRefusalNearTheSkullIsNotAStop(t *testing.T) {
+	plan := playFightPlan()
+	plan.Legs[0].PullGroups[0] = dungeon.PullGroup{
+		Entries:   []uint32{11320, 11319},
+		Positions: []dungeon.Point{{X: 42, Y: 22}},
+		Approach:  []dungeon.Point{{X: 42, Y: 17.5}},
+	}
+	skull := fightGUID(2)
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: skull, Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		// The tank's own live unit trails the agent: the refusal's step is read from it.
+		f.AddUnit(Unit{GUID: f.botGUID("Botone"), Pos: Vec3{42, 19.5, 0}, Friendly: true})
+		f.RefuseOrders = 1
+	})
+	rig.ports.Refusals = rig.fake
+	walks := logPlayWalks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (one refusal near the skull is not the pull's end)", res.Stop)
+	}
+	if rig.fake.BlindOrders != 1 {
+		t.Fatalf("the module refused %d orders; want 1 (the scripted one)", rig.fake.BlindOrders)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n < 2 {
+		t.Fatalf("the tank was ordered %d times; want the refused order and the retry", n)
+	}
+	var stepped bool
+	for _, w := range *walks {
+		if dist3(w.To, Vec3{42, 22, 0}) < 0.1 {
+			stepped = true
+		}
+	}
+	if !stepped {
+		t.Fatalf("the party never stepped to the mob; walks %v", *walks)
+	}
+}
+
+// TestPlayPullRefusalStepsFromTheTank: the refusal's step is measured from where the TANK stands, not the agent: the
+// agent stands 17 yd out, the tank 20, so the retry's stand is the tank's 5-yd ring, not the agent's.
+func TestPlayPullRefusalStepsFromTheTank(t *testing.T) {
+	rig := newPlayFightRig(t, sightWallPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: f.botGUID("Botone"), Pos: Vec3{42, 2, 0}, Friendly: true})
+		f.RefuseOrders = 1
+	})
+	rig.ports.Refusals = rig.fake
+	walks := logPlayWalks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	// 5 yd from the tank (42,2) toward the skull (42,22): the agent's own step would end near (40.6,10).
+	want := Vec3{42, 7, 0}
+	for _, w := range *walks {
+		if dist3(w.To, want) < 0.1 {
+			return
+		}
+	}
+	t.Fatalf("no walk stepped to the tank's stand %v; walks %v", want, *walks)
 }
