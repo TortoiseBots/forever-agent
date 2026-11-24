@@ -356,6 +356,7 @@ func TestPlayWaitNearSummonCooldownRetries(t *testing.T) {
 			f.OnWalk = nil
 		}
 	})
+	rig.cfg.Out = t.TempDir()
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "clear" {
 		t.Fatalf("stop = %q; want clear after waiting out summon cooldown", res.Stop)
@@ -363,6 +364,22 @@ func TestPlayWaitNearSummonCooldownRetries(t *testing.T) {
 	summons := rig.fake.Lines(".bot summon Botfour")
 	if len(summons) != 2 {
 		t.Fatalf("summons = %v; want 2 (initial refusal then retry after cooldown)", summons)
+	}
+	// The wait is logged with its length, so a long wait is never silent.
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	logged := false
+	for _, ev := range tf.Events {
+		if ev.Ev == "summon_cooldown" {
+			if secs, ok := ev.D["wait_seconds"].(float64); ok && secs > 0 {
+				logged = true
+			}
+		}
+	}
+	if !logged {
+		t.Fatal("no summon_cooldown event with wait_seconds in the trace")
 	}
 }
 

@@ -1139,12 +1139,12 @@ func (w *summonWaiter) step(p *playRun, ctx context.Context, name string, now ti
 		until := now.Add(p.lim.SummonWait)
 		w.retryAt[name] = until
 		w.combatUntil[name] = time.Time{}
-		p.rec.Event(now, "summon_cooldown", map[string]any{"bot": p.slot(name)})
+		p.rec.Event(now, "summon_cooldown", map[string]any{"bot": p.slot(name), "wait_seconds": p.lim.SummonWait.Seconds(), "reply": rep.Text})
 		extend(until.Add(arriveWindow))
 	case errors.Is(err, botcmd.ErrRefused) && rep.Code == "in-combat":
 		if w.combatUntil[name].IsZero() {
 			w.combatUntil[name] = now.Add(p.lim.Fight)
-			p.rec.Event(now, "summon_combat", map[string]any{"bot": p.slot(name)})
+			p.rec.Event(now, "summon_combat", map[string]any{"bot": p.slot(name), "wait_seconds": p.lim.Fight.Seconds(), "reply": rep.Text})
 		}
 		if now.Before(w.combatUntil[name]) {
 			w.stage[name] = 1
