@@ -130,6 +130,9 @@ type PlayFake struct {
 	TriggerFails bool
 	// OnWalk, when set, is asked before a walk of that destination: a test scripts the party's state there.
 	OnWalk func(f *PlayFake, to Vec3)
+	// OnRest, when set, is asked before the party is sat down: the pre-boss gate's rows are scripted there, after the
+	// pull's gather and before the gate's first read.
+	OnRest func(f *PlayFake)
 	// PathFunc, when set, answers the walker's route: a test scripts a partial route (the navmesh's edge) or none.
 	PathFunc func(from, to Vec3) navmesh.Route
 
@@ -834,7 +837,12 @@ func (f *PlayFake) friendTarget(g wire.GUID) bool {
 }
 
 // Rest sits the agent down; the fake's party is always rested.
-func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error { return nil }
+func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error {
+	if f.OnRest != nil {
+		f.OnRest(f)
+	}
+	return nil
+}
 
 // Phase is the character's state.
 func (f *PlayFake) Phase() PlayerPhase { return f.SelfPhase }

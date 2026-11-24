@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strconv"
@@ -511,8 +512,9 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
 		return ""
 	}
-	// And the bars: the rest's own cap, no more (a party still short goes on, as rest's timeout does).
-	if !p.ready() && !p.restWait(ctx) {
+	// And the bars: the gate is read even when ready() says the party is rested, because ready() skips a corpse (and
+	// any row it lacks) and the gate may not.
+	if !p.restWait(ctx) {
 		return ""
 	}
 	members := p.bossMembers(b, u)
@@ -1065,48 +1067,91 @@ func (p *playRun) rest(ctx context.Context) string {
 
 // restWait waits the rest's cap for the party's bars before a boss pull, the agent sitting as REST does: the run does
 // not open a boss fight on a half-empty party. A timeout does not open that gate (the review of 2026-11-24): the party
-// is ordered to rest again and given a second window of the same length; if it is still short, the boss is pulled only
-// when the gate's floors hold (the healer at BossHealMana of its pool and the tank at BossTankHP of its health), and the
-// run stops `boss-not-ready` otherwise. Every event names the members still under their bars and their values, so the
-// real cause is visible. It reports false only when the run itself ended or stopped at the gate.
+// is ordered to rest again and given a second window of the same length. After the windows the boss is pulled only when
+// the gate holds: the configured tank and healer are both in fresh party state, alive, and show bars at or above the
+// gate's floors (the healer at BossHealMana of its mana and the tank at BossTankHP of its health). Anything else is a
+// NAMED deficiency and the run stops `boss-not-ready` (the Codex review of 2026-11-24: the gate failed open when a row
+// was missing, the member was dead or a ghost, a bar had no maximum, or the healer's power was not mana). A downed role
+// is no short bar: it goes to the recovery a death before a pull gets (gateRecover), and the gate runs again. It
+// reports false only when the run itself ended or stopped at the gate.
 func (p *playRun) restWait(ctx context.Context) bool {
 	short := []map[string]any(nil)
-	for window := 0; window < 2; window++ {
-		started := p.now()
-		ev := "boss_rest"
-		if window > 0 {
-			ev = "boss_rest_again"
-		}
-		p.rec.Event(started, ev, map[string]any{"leg": p.legName()})
-		if err := p.ports.Player.Rest(ctx, p.lim.Rest); err != nil {
-			if errors.Is(err, ErrLinkLost) {
-				p.linkLost()
-			} else {
-				p.stop("rest")
+	recovered := false
+	for attempt := 0; attempt < 2; attempt++ {
+		stopResting := false
+		for window := 0; window < 2 && !stopResting; window++ {
+			started := p.now()
+			ev := "boss_rest"
+			if window > 0 {
+				ev = "boss_rest_again"
 			}
-			return false
-		}
-		deadline := started.Add(p.lim.Rest)
-		for {
-			if p.ready() {
-				p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1})
-				return true
-			}
-			if p.timeUp() {
-				p.stop("time")
+			p.rec.Event(started, ev, map[string]any{"leg": p.legName()})
+			if err := p.ports.Player.Rest(ctx, p.lim.Rest); err != nil {
+				if errors.Is(err, ErrLinkLost) {
+					p.linkLost()
+				} else {
+					p.stop("rest")
+				}
 				return false
 			}
-			if !p.now().Before(deadline) {
+			deadline := started.Add(p.lim.Rest)
+			statsAt := started
+			for {
+				// The gate judges fresh state: the roster is only as fresh as the server's last push.
+				if now := p.now(); !now.Before(statsAt) {
+					if !p.gateStats(ctx) {
+						return false
+					}
+					statsAt = now.Add(recoverRefreshEvery)
+				}
+				deficient := p.bossGateShort()
+				if p.ready() {
+					if len(deficient) == 0 {
+						p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1})
+						return true
+					}
+					// Rested, but a role the gate needs is down or unusable: no further window mends that.
+					stopResting = true
+					break
+				}
+				if p.gateDown(deficient) {
+					stopResting = true // a corpse is no bar rest can mend: the recovery, then the gate again
+					break
+				}
+				if p.timeUp() {
+					p.stop("time")
+					return false
+				}
+				if !p.now().Before(deadline) {
+					break
+				}
+				if !p.sleep(ctx, p.lim.Poll) {
+					return false
+				}
+			}
+			if stopResting {
 				break
 			}
-			if !p.sleep(ctx, p.lim.Poll) {
+			short = p.shortBars()
+			p.rec.Event(p.now(), "boss_rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1, "short": short})
+		}
+		// A downed role is a death, not a short bar: the recovery, once, then the gate runs again on what it brought.
+		if !p.gateStats(ctx) {
+			return false
+		}
+		if attempt == 0 && !recovered && p.gateDown(p.bossGateShort()) {
+			recovered = true
+			if !p.gateRecover(ctx) {
 				return false
 			}
+			continue
 		}
-		short = p.shortBars()
-		p.rec.Event(p.now(), "boss_rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1, "short": short})
+		break
 	}
-	// Both windows spent: the gate's floors, or the run does not pull.
+	// The windows are spent: the gate's floors, or the run does not pull.
+	if !p.gateStats(ctx) {
+		return false
+	}
 	gate := map[string]any{
 		"healer_mana": p.gatePct(p.cfg.Bots[1], true),
 		"tank_hp":     p.gatePct(p.cfg.Bots[0], false),
@@ -1120,6 +1165,147 @@ func (p *playRun) restWait(ctx context.Context) bool {
 	}
 	p.rec.Event(p.now(), "boss_pull_min_bars", gate)
 	return true
+}
+
+// gateRoleNames are the two roles the gate needs: the configured tank and healer, in that order.
+func (p *playRun) gateRoleNames() []string {
+	out := make([]string, 0, 2)
+	for i := 0; i < 2 && i < len(p.cfg.Bots); i++ {
+		if p.cfg.Bots[i] != "" {
+			out = append(out, p.cfg.Bots[i])
+		}
+	}
+	return out
+}
+
+// gateDownNames are the gate's roles that are dead or ghosts: the recovery's, never a rest's.
+func (p *playRun) gateDownNames() []string {
+	var out []string
+	for _, name := range p.gateRoleNames() {
+		if m, ok := p.member(name); ok && (m.Dead || m.Ghost) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// gateDown says whether the gate's deficiencies include a downed role (dead or a ghost).
+func (p *playRun) gateDown(def []map[string]any) bool {
+	for _, row := range def {
+		switch row["why"] {
+		case "dead", "a ghost":
+			return true
+		}
+	}
+	return false
+}
+
+// gateStats asks for the gate's roles' fresh party state: a roster row is only as fresh as the server's last push. A
+// failed request is recorded once and the gate judges the roster it holds (a missing or unknown row fails closed); a
+// lost link ends the run.
+func (p *playRun) gateStats(ctx context.Context) bool {
+	var guids []wire.GUID
+	for _, name := range p.gateRoleNames() {
+		if m, ok := p.member(name); ok && !m.GUID.IsZero() {
+			guids = append(guids, m.GUID)
+		}
+	}
+	if len(guids) == 0 {
+		return true
+	}
+	if err := p.ports.Group.RequestStats(ctx, guids); err != nil {
+		if errors.Is(err, ErrLinkLost) {
+			p.linkLost()
+			return false
+		}
+		if !p.gateStatsErr {
+			p.gateStatsErr = true
+			p.rec.Event(p.now(), "boss_gate_stats_error", map[string]any{"error": err.Error()})
+		}
+	}
+	return true
+}
+
+// gateRecover is the gate's way with a downed tank or healer: the same recovery a death before a pull gets. A standing
+// healer raises a downed bot itself (BotRez); then the run sends the wipe's release and corpse-run whispers and reads
+// fresh party state until no role is down. The whole wait is bounded by the recovery's Recover limit. It reports false
+// only when the run itself ended; a role still down at the bound is left to the gate, whose rows are the stop's
+// account (`boss-not-ready`).
+func (p *playRun) gateRecover(ctx context.Context) bool {
+	started := p.now()
+	deadline := started.Add(p.lim.Recover)
+	p.rec.Event(started, "boss_gate_recover", map[string]any{"down": p.slots(p.gateDownNames())})
+	// The healer's own raise, as the regroup's first wait takes it.
+	if p.healerCanRez() {
+		botDeadline := p.now().Add(p.lim.BotRez)
+		for !p.now().After(botDeadline) && len(p.gateDownNames()) > 0 {
+			if !p.gateStats(ctx) {
+				return false
+			}
+			if p.timeUp() {
+				p.stop("time")
+				return false
+			}
+			if !p.sleep(ctx, p.lim.Poll) {
+				return false
+			}
+		}
+	}
+	if !p.gateStats(ctx) {
+		return false
+	}
+	// The wipe's whispers: the dead release, then the ghosts run their corpses back.
+	released := false
+	for _, name := range p.gateRoleNames() {
+		if m, ok := p.member(name); ok && m.Dead {
+			if !p.whisper(ctx, name, botcmd.WhisperRelease) {
+				return false
+			}
+			released = true
+		}
+	}
+	if released && !p.sleep(ctx, p.lim.CorpseWord) {
+		return false
+	}
+	for _, name := range p.gateRoleNames() {
+		if m, ok := p.member(name); ok && m.Ghost {
+			if !p.whisper(ctx, name, botcmd.WhisperCorpseRun) {
+				return false
+			}
+		}
+	}
+	statsAt := time.Time{}
+	for {
+		if len(p.gateDownNames()) == 0 {
+			p.rec.Event(p.now(), "boss_gate_recovered", map[string]any{
+				"seconds": p.now().Sub(started).Seconds(),
+				"gate":    p.bossGateShort(),
+			})
+			return true
+		}
+		if p.timeUp() {
+			p.stop("time")
+			return false
+		}
+		if !p.now().Before(deadline) {
+			// The bound passed with a role still down: the gate's own rows are the stop's account, so it does not
+			// invent a second stop reason here.
+			p.rec.Event(p.now(), "boss_gate_recover_timeout", map[string]any{
+				"seconds": p.now().Sub(started).Seconds(),
+				"down":    p.slots(p.gateDownNames()),
+			})
+			return true
+		}
+		if now := p.now(); !now.Before(statsAt) {
+			if !p.gateStats(ctx) {
+				return false
+			}
+			statsAt = now.Add(recoverRefreshEvery)
+		}
+		if !p.sleep(ctx, p.lim.Poll) {
+			return false
+		}
+	}
 }
 
 // shortBars names the party's members under the rest's bars, with their values: the pre-boss gate's own account of a
@@ -1140,21 +1326,65 @@ func (p *playRun) shortBars() []map[string]any {
 	return out
 }
 
-// bossGateShort names the members under the gate's floors: the tank below BossTankHP of its health and the healer below
-// BossHealMana of its pool. A dead, ghost or unknown member is skipped, as ready skips it: a corpse is no short bar.
+// bossGateShort names every gate deficiency: a role the roster lacks, one that is offline, dead or a ghost, a bar it
+// cannot read (no maximum) and a bar under its floor. The gate fails CLOSED (the Codex review of 2026-11-24): a
+// missing, dead or unknown tank or healer is a deficiency, never a row to skip.
 func (p *playRun) bossGateShort() []map[string]any {
-	out := []map[string]any{}
-	if m, ok := p.member(p.cfg.Bots[0]); ok && !m.Dead && !m.Ghost {
-		if m.MaxHP > 0 && m.HP*100 < m.MaxHP*p.lim.BossTankHP {
-			out = append(out, p.barRow(m, "hp", p.lim.BossTankHP, m.HP, m.MaxHP))
-		}
+	var out []map[string]any
+	tank, healer := "", ""
+	if len(p.cfg.Bots) > 0 {
+		tank = p.cfg.Bots[0]
 	}
-	if m, ok := p.member(p.cfg.Bots[1]); ok && !m.Dead && !m.Ghost {
-		if m.PowerType == 0 && m.MaxPower > 0 && m.Power*100 < m.MaxPower*p.lim.BossHealMana {
-			out = append(out, p.barRow(m, "mana", p.lim.BossHealMana, m.Power, m.MaxPower))
-		}
+	if len(p.cfg.Bots) > 1 {
+		healer = p.cfg.Bots[1]
 	}
+	out = append(out, p.gateBar(tank, "hp", false)...)
+	out = append(out, p.gateBar(healer, "mana", true)...)
 	return out
+}
+
+// gateBar is one role's gate deficiency, if any: the tank's health (mana false) or the healer's mana pool (mana true).
+// Every reason is named, so a stop says which member and what is wrong with it.
+func (p *playRun) gateBar(name, bar string, mana bool) []map[string]any {
+	who := "tank"
+	if mana {
+		who = "heal"
+	}
+	if name == "" {
+		return []map[string]any{{"who": who, "bar": bar, "why": "no member is configured"}}
+	}
+	m, ok := p.member(name)
+	switch {
+	case !ok:
+		return []map[string]any{p.gateWhy(name, bar, "not in the party roster", 0, 0)}
+	case !m.Online:
+		return []map[string]any{p.gateWhy(name, bar, "offline", 0, 0)}
+	case m.Dead:
+		return []map[string]any{p.gateWhy(name, bar, "dead", 0, 0)}
+	case m.Ghost:
+		return []map[string]any{p.gateWhy(name, bar, "a ghost", 0, 0)}
+	case mana && m.PowerType != 0:
+		return []map[string]any{p.gateWhy(name, bar, fmt.Sprintf("power is not mana (type %d)", m.PowerType), m.Power, m.MaxPower)}
+	case mana && m.MaxPower <= 0:
+		return []map[string]any{p.gateWhy(name, bar, "unknown bar (no maximum mana)", m.Power, m.MaxPower)}
+	case !mana && m.MaxHP <= 0:
+		return []map[string]any{p.gateWhy(name, bar, "unknown bar (no maximum health)", m.HP, m.MaxHP)}
+	case mana && m.Power*100 < m.MaxPower*p.lim.BossHealMana:
+		return []map[string]any{p.barRow(m, bar, p.lim.BossHealMana, m.Power, m.MaxPower)}
+	case !mana && m.HP*100 < m.MaxHP*p.lim.BossTankHP:
+		return []map[string]any{p.barRow(m, bar, p.lim.BossTankHP, m.HP, m.MaxHP)}
+	}
+	return nil
+}
+
+// gateWhy is one named gate deficiency: who (its slot, never its name), the bar the gate needs, what is wrong, and the
+// reading when there was one.
+func (p *playRun) gateWhy(name, bar, why string, value, max int) map[string]any {
+	row := map[string]any{"who": p.slot(name), "bar": bar, "why": why}
+	if value != 0 || max != 0 {
+		row["value"], row["max"] = value, max
+	}
+	return row
 }
 
 // barRow is one member's short bar for the gate's events: who (its slot, never its name), the bar, its value and

@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -306,22 +307,181 @@ func TestPlayBossRestBelowMinimumStops(t *testing.T) {
 	}
 }
 
-// TestPlayBossGateSkipsADeadMember: a corpse's bars are no bar, as ready's own rule says: a dead healer is not a
-// short one, and the gate never stops the run for it.
-func TestPlayBossGateSkipsADeadMember(t *testing.T) {
-	rig := newPlayRig(t, func(f *PlayFake) {
-		for _, b := range f.GoldenOwner.Bots {
-			b.Online, b.InParty = true, true
+// playBossGateRig is a boss-only run whose party rows are poisoned when the pre-boss gate begins. The rest sees the
+// party as the server last pushed it (FreezeRoster) and the gate's fresh member stats expose the live party: the state
+// a delayed push can hide, and the state the gate must judge.
+func playBossGateRig(t *testing.T, mutate func(*PlayFake)) *playRig {
+	t.Helper()
+	rig := newPlayFightRig(t, playBossOnlyPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		armed := true
+		f.OnRest = func(f *PlayFake) {
+			if !armed {
+				return
+			}
+			armed = false
+			f.FreezeRoster()
+			if mutate != nil {
+				mutate(f)
+			}
 		}
-		f.GoldenOwner.Bots[1].Dead = true // the healer is a corpse
-		f.SetBotPower("Bottwo", 0, 0, 1000)
 	})
-	p := &playRun{cfg: rig.cfg, route: rig.route, lim: rig.cfg.Limits.withDefaults(),
-		ports: PlayPorts{Group: rig.fake, World: rig.fake}}
-	if !p.ready() {
-		t.Fatal("a corpse's empty mana kept the party from ready")
+	rig.cfg.Limits.Rest = 10 * time.Second
+	rig.cfg.Limits.BotRez = 4 * time.Second
+	rig.cfg.Limits.CorpseWord = time.Second
+	rig.cfg.Limits.Recover = 20 * time.Second
+	rig.cfg.Out = t.TempDir()
+	return rig
+}
+
+// playGateRow finds one row of a gate event by the member's slot and the bar.
+func playGateRow(t *testing.T, ev trace.Event, who, bar string) map[string]any {
+	t.Helper()
+	rows, _ := ev.D["gate"].([]any)
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		if row["who"] == who && row["bar"] == bar {
+			return row
+		}
 	}
-	if short := p.bossGateShort(); len(short) != 0 {
-		t.Fatalf("the gate's short list = %v; want none: a dead member is skipped", short)
+	t.Fatalf("gate = %v; want a row for %s's %s", ev.D["gate"], who, bar)
+	return nil
+}
+
+// TestPlayBossGateMissingRolesStop: a tank or healer the party roster lacks is a named gate deficiency, never a row
+// that ready() skips: no attack order goes out and the run stops boss-not-ready (the Codex review's fail-open finding).
+func TestPlayBossGateMissingRolesStop(t *testing.T) {
+	cases := []struct {
+		name string
+		bot  int
+		who  string
+		bar  string
+	}{
+		{"tank", 0, "tank", "hp"},
+		{"healer", 1, "heal", "mana"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := playBossGateRig(t, func(f *PlayFake) {
+				f.GoldenOwner.Bots[tc.bot].InParty = false // the roster row is gone; the walk still saw it
+			})
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "boss-not-ready" || res.Clear {
+				t.Fatalf("stop = %q clear = %v; want boss-not-ready and no clear", res.Stop, res.Clear)
+			}
+			if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 0 {
+				t.Fatalf("the tank was ordered %d times; want none: a missing %s was pulled", n, tc.name)
+			}
+			events := playTraceEvents(t, res, "boss_not_ready")
+			if len(events) != 1 {
+				t.Fatalf("boss_not_ready events = %d; want 1", len(events))
+			}
+			row := playGateRow(t, events[0], tc.who, tc.bar)
+			if row["why"] != "not in the party roster" {
+				t.Fatalf("gate row = %v; want the %s named missing from the roster", row, tc.name)
+			}
+		})
+	}
+}
+
+// TestPlayBossGateDeadRolesStop: a dead tank or healer goes to the gate's recovery, not around the gate. The bots do
+// not answer the corpse-run whisper here, so the recovery runs out at its bound: no attack order, and boss-not-ready
+// names the corpse.
+func TestPlayBossGateDeadRolesStop(t *testing.T) {
+	cases := []struct {
+		name string
+		bot  int
+		who  string
+		bar  string
+	}{
+		{"tank", 0, "tank", "hp"},
+		{"healer", 1, "heal", "mana"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := playBossGateRig(t, func(f *PlayFake) {
+				f.GoldenOwner.Bots[tc.bot].Dead = true
+				f.NoAnswer[strings.ToLower(playBots[tc.bot])] = true // it never comes back from the corpse run
+			})
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "boss-not-ready" || res.Clear {
+				t.Fatalf("stop = %q clear = %v; want boss-not-ready and no clear", res.Stop, res.Clear)
+			}
+			if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 0 {
+				t.Fatalf("the tank was ordered %d times; want none: a dead %s was pulled", n, tc.name)
+			}
+			if n := len(playTraceEvents(t, res, "boss_gate_recover")); n != 1 {
+				t.Fatalf("boss_gate_recover events = %d; want 1 (a death is the recovery's, not a skip)", n)
+			}
+			events := playTraceEvents(t, res, "boss_not_ready")
+			if len(events) != 1 {
+				t.Fatalf("boss_not_ready events = %d; want 1", len(events))
+			}
+			row := playGateRow(t, events[0], tc.who, tc.bar)
+			if row["why"] != "dead" {
+				t.Fatalf("gate row = %v; want the %s named dead", row, tc.name)
+			}
+		})
+	}
+}
+
+// TestPlayBossGateUnusableBarsStop: a bar with no maximum and a healer whose power is not mana are named deficiencies
+// too: the gate fails closed and the boss is not pulled.
+func TestPlayBossGateUnusableBarsStop(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(*PlayFake)
+		who  string
+		bar  string
+		why  string
+	}{
+		{"tank unknown health", func(f *PlayFake) { f.SetBotHP("Botone", 900, 0) }, "tank", "hp", "unknown bar (no maximum health)"},
+		{"healer unknown mana", func(f *PlayFake) { f.SetBotPower("Bottwo", 0, 1000, 0) }, "heal", "mana", "unknown bar (no maximum mana)"},
+		{"healer not mana", func(f *PlayFake) { f.SetBotPower("Bottwo", 1, 1000, 1000) }, "heal", "mana", "power is not mana"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := playBossGateRig(t, tc.mut)
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "boss-not-ready" || res.Clear {
+				t.Fatalf("stop = %q clear = %v; want boss-not-ready and no clear", res.Stop, res.Clear)
+			}
+			if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 0 {
+				t.Fatalf("the tank was ordered %d times; want none: an unusable bar was pulled", n)
+			}
+			events := playTraceEvents(t, res, "boss_not_ready")
+			if len(events) != 1 {
+				t.Fatalf("boss_not_ready events = %d; want 1", len(events))
+			}
+			row := playGateRow(t, events[0], tc.who, tc.bar)
+			why, _ := row["why"].(string)
+			if !strings.HasPrefix(why, tc.why) {
+				t.Fatalf("gate row = %v; want the reason %q", row, tc.why)
+			}
+		})
+	}
+}
+
+// TestPlayBossGateRecoversAndPulls: a dead tank with the healer standing goes through the gate's recovery (the healer's
+// raise, the release and the corpse run), comes back alive, and the party then passes the gate and pulls the boss.
+func TestPlayBossGateRecoversAndPulls(t *testing.T) {
+	rig := playBossGateRig(t, func(f *PlayFake) {
+		f.GoldenOwner.Bots[0].Dead = true // the tank; the healer stands and the party answers its corpse run
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear after the recovery", res.Stop, res.Clear)
+	}
+	if n := len(playTraceEvents(t, res, "boss_gate_recover")); n != 1 {
+		t.Fatalf("boss_gate_recover events = %d; want 1", n)
+	}
+	if n := len(playTraceEvents(t, res, "boss_gate_recovered")); n != 1 {
+		t.Fatalf("boss_gate_recovered events = %d; want 1", n)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n == 0 {
+		t.Fatal("the tank was never ordered after it came back; want the pull")
+	}
+	if n := len(playTraceEvents(t, res, "boss_not_ready")); n != 0 {
+		t.Fatalf("boss_not_ready events = %d; want none: the party recovered", n)
 	}
 }

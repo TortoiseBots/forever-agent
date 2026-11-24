@@ -213,6 +213,8 @@ func splitBots(s string) ([4]string, error) {
 func playDry(ctx context.Context, route *driver.Route, cfg driver.PlayConfig, character string) *driver.Result {
 	clock := driver.NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
 	fake := driver.NewPlayFake(route, clock, character, cfg.Bots[:]...)
+	// The configured healer is a mana user: the pre-boss gate reads its pool (the fake's unscripted bots are rage).
+	fake.SetBotPower(cfg.Bots[1], 0, 1000, 1000)
 	// One class per slot, so the judge has a tank, a healer and two damage dealers to read.
 	for i, class := range [4]string{"Warrior", "Priest", "Rogue", "Mage"} {
 		fake.SetBotClass(cfg.Bots[i], class)
