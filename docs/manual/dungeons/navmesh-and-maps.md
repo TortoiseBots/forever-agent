@@ -87,7 +87,8 @@ forever-agent path-check --mmaps DIR --map N [--json] [--ray] -- X1 Y1 Z1 X2 Y2 
 It prints the offline path (status, length, reason) and the server's answer (type, verdict, actual end, how short it
 came, start and end distance); `--ray` adds the walkability ray (`known`, `clear`, hit distance). Exit `0` on a
 replayed hop, `1` when a query itself fails (no tiles, no engine), `2` on a usage error. Note that `path-check` reads
-the 1.12 format only; for a ForeverCore mesh use `plan-check --forever` or `forever route-walk`.
+the 1.12 format only; for a ForeverCore mesh use `plan-check --forever` or `forever route-walk`. `forever-agent help`
+marks it `[Turtle only; Forever: forever path-check]`; it reads files only, so it refuses no server.
 
 # minimap-extract
 
@@ -139,6 +140,9 @@ file behind.
 Draws a run as a top-down map: one SVG per floor, and with `--html` a single-file replay with a time slider. The
 positions come from a capture, botwatch samples or both; the navmesh can be the background; a plan can be drawn over
 it.
+
+`map` is Turtle-only: `forever-agent help` marks it `[Turtle only; Forever: forever run-map]`. It reads files only,
+so it refuses no server; a Forever run's map is `forever run-map` (below).
 
 ```bash
 forever-agent map [--capture FILE] [--events FILE] [--report FILE] [--botwatch FILE [--members a,b]] \

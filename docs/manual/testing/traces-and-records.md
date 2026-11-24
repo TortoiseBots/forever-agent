@@ -116,6 +116,9 @@ The combat log is bounded by `--combat-max-mb` (default 64) and the record says 
 
 # Scoring a trace again: trace-score
 
+`forever-agent help` marks `trace-score` `[Turtle only; Forever: none]`. It reads files only, so it refuses no
+server; the trace files it reads are described below.
+
 ```
 forever-agent trace-score [--json] [--summary] [--set check=value]... <trace.jsonl>...
 ```
