@@ -19,6 +19,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/reportcard"
 	"github.com/pjerra/forever-agent/internal/forever/world"
+	"github.com/pjerra/forever-agent/internal/tactics"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
@@ -42,9 +43,9 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		cmdName = "forever raid-watch"
 		planHint = "raid plan file (version 1, with its raid block)"
 	}
-	usage := "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	usage := "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE] [--module-tactics FILE]"
 	if raid {
-		usage = "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--layout FILE] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+		usage = "usage: forever-agent " + cmdName + " --leader NAME --plan FILE [--layout FILE] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--enter tele|portal|none] [--max-minutes N] [--max-wipes N] [--practice=true] [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE] [--module-tactics FILE]"
 	}
 	fs := flag.NewFlagSet(cmdName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -66,6 +67,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 	frameEvery := fs.Int("frame-every", 2, "the frame interval in seconds: each tick reads `.tb state` and `.tb threat` and records one frame, 0 turns frames off (2-60)")
 	combatMaxMB := fs.Int("combat-max-mb", driver.DefaultCombatMaxBytes>>20, "the combat-log file's size bound in MiB: a page that would cross it is not written and the summary says the log is truncated (1-4096)")
 	combatlogWatch := fs.String("combatlog-watch", "group", "the core's GM combat-log watch (.gm combatlog): group (the tank and its party, the default), unit (the tank only) or off; a core without the command logs one warning and records the in-range log")
+	moduleTactics := fs.String("module-tactics", "", "the module's ai_boss_tactic rows as JSON (one object per row: map, boss_entry, kind, target_entry, spell_id, priority, param) to judge the plan's fight steps against in the report; without it the report says the check was not made")
 	th := reportcard.DefaultThresholds()
 	fs.IntVar(&th.Repulls, "repulls", th.Repulls, "report card: flag a step re-pulled more than this many times")
 	fs.IntVar(&th.MemberDeaths, "member-deaths", th.MemberDeaths, "report card: flag a member with at least this many deaths and two above the next")
@@ -150,6 +152,14 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		fmt.Fprintf(stderr, cmdName+": the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused
 	}
+	var module *tactics.Module
+	if *moduleTactics != "" {
+		module, err = tactics.LoadModule(*moduleTactics)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: --module-tactics: %v\n", cmdName, err)
+			return exitUsage
+		}
+	}
 	var layout []driver.RaidSlot
 	if layoutPath != "" {
 		layout, err = driver.LoadRaidLayout(layoutPath)
@@ -186,7 +196,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 	cfg.Limits.WatchPause = time.Duration(*pause) * time.Minute
 
 	if *dry {
-		return dungeonWatchDry(ctx, cfg, route, th, *drawMap, stdout, stderr)
+		return dungeonWatchDry(ctx, cfg, route, th, *drawMap, module, stdout, stderr)
 	}
 	if err := common.check(cmdName); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -212,6 +222,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 	if report != nil && report.Watch != nil {
 		printWatchResult(stdout, report.Watch)
 		writeCard(stdout, report.Watch.Summary, th, report.Watch.SummaryFile)
+		reportTactics(stdout, *plan, module, report.Watch.SummaryFile)
 		if *drawMap {
 			writeWatchMap(ctx, stdout, report.Watch.Trace, *plan, *navmeshDir)
 		}
@@ -236,7 +247,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 
 // dungeonWatchDry plays the whole watch over the scripted module: the plan's legs, the module's progress, its pause
 // on a wipe, the practice rescue and its end.
-func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route, th reportcard.Thresholds, drawMap bool, stdout, stderr io.Writer) int {
+func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route, th reportcard.Thresholds, drawMap bool, module *tactics.Module, stdout, stderr io.Writer) int {
 	cmdName := "forever dungeon-watch"
 	if cfg.Raid {
 		cmdName = "forever raid-watch"
@@ -261,6 +272,7 @@ func dungeonWatchDry(ctx context.Context, cfg driver.Config, route *driver.Route
 	res := run.Watch(ctx)
 	printWatchResult(stdout, &res)
 	writeCard(stdout, res.Summary, th, res.SummaryFile)
+	reportTactics(stdout, cfg.Plan, module, res.SummaryFile)
 	if drawMap {
 		writeWatchMap(ctx, stdout, res.Trace, cfg.Plan, "")
 	}
