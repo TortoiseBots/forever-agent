@@ -179,6 +179,9 @@ type PlayFake struct {
 	NoAggro map[wire.GUID]int
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
+	// OnUnits, when set, is asked before every read of the view: a test scripts a unit that leaves a snapshot or two (a
+	// delayed push, a range transition) with RemoveUnit and puts it back with AddUnit. The hook must not read the view.
+	OnUnits func(f *PlayFake)
 }
 
 // The fake's fight numbers: a scripted unit's health when a test gave it none, and what the group takes off a unit
@@ -976,6 +979,9 @@ func (f *PlayFake) Self() (Vec3, uint32, uint64, bool) {
 
 // Units is the scripted view, with the packs whose aggro is due settled first.
 func (f *PlayFake) Units() []Unit {
+	if f.OnUnits != nil {
+		f.OnUnits(f)
+	}
 	f.settle()
 	return f.units
 }
