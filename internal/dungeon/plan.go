@@ -357,7 +357,15 @@ type PullGroup struct {
 	// Radius is how far from one of Positions a unit of the group's entries may stand and still be a member (yards;
 	// 0: the driver's PackRadius, 25). Packs of the same entry that stand closer to each other than that, such as the
 	// two rows of Stonevault Ambushers at the Uldaman Keystone, need a smaller one so that each group takes its own.
+	// The export writes it as the pull row's radius around the group's mean centre, so a group whose members stand far
+	// apart needs a Radius that covers them all from that centre; an agent-driven run that matches by Positions and
+	// would then sweep a neighbouring camp says MemberRadius.
 	Radius float32 `json:"radius,omitempty"`
+	// MemberRadius is Radius for the matching over Positions alone (yards; 0: Radius). The Forever agent's packs and
+	// the run-leader driver take a group's members by position, so a merged pull whose members span 30 yd needs a
+	// small one to keep the neighbouring packs out while its exported row still owns every member from the centre
+	// (Ragefire Chasm's step-14 merge: Radius 20 for the row, MemberRadius 10 for the match).
+	MemberRadius float32 `json:"member_radius,omitempty"`
 	// Team limits the group to a leader of that team ("alliance" or "horde"); the driver skips it for the other (see Team).
 	Team string `json:"team,omitempty"`
 	// Equiv names a set of equivalent packs of the leg (same mobs, same kind of ground): the pull-test scenario (dungeon_run pulltest)
@@ -970,12 +978,14 @@ type rawPullGroup struct {
 	Positions []rawPoint `json:"positions"`
 	Ambush    bool       `json:"ambush"`
 	Radius    float32    `json:"radius"`
-	Team      string     `json:"team"`
-	Equiv     string     `json:"equiv"`
-	NeedsWalk bool       `json:"needs_walk"`
-	Patrol    *rawPatrol `json:"patrol"`
-	Approach  []rawPoint `json:"approach"`
-	Hold      *rawHold   `json:"hold"`
+	// MemberRadius is PullGroup.MemberRadius.
+	MemberRadius float32    `json:"member_radius"`
+	Team         string     `json:"team"`
+	Equiv        string     `json:"equiv"`
+	NeedsWalk    bool       `json:"needs_walk"`
+	Patrol       *rawPatrol `json:"patrol"`
+	Approach     []rawPoint `json:"approach"`
+	Hold         *rawHold   `json:"hold"`
 	// StandPull is PullGroup.StandPull.
 	StandPull bool `json:"stand_pull"`
 	// ClearYd is PullGroup.ClearYd.
@@ -1548,7 +1558,7 @@ func (c *checker) leg(path string, r *rawLeg) Leg {
 	}
 	for i, g := range r.PullGroups {
 		gp := fmt.Sprintf("%s.pull_groups[%d]", path, i)
-		pg := PullGroup{Entries: g.Entries, Ambush: g.Ambush, Radius: g.Radius, Team: g.Team, Equiv: g.Equiv, NeedsWalk: g.NeedsWalk}
+		pg := PullGroup{Entries: g.Entries, Ambush: g.Ambush, Radius: g.Radius, MemberRadius: g.MemberRadius, Team: g.Team, Equiv: g.Equiv, NeedsWalk: g.NeedsWalk}
 		c.team(gp+".team", g.Team)
 		if len(g.Equiv) > MaxEquivLen || strings.TrimSpace(g.Equiv) != g.Equiv {
 			c.fail(gp+".equiv", "%q: a label of at most %d characters, with no space around it", g.Equiv, MaxEquivLen)
@@ -1561,6 +1571,9 @@ func (c *checker) leg(path string, r *rawLeg) Leg {
 			}
 		} else if g.Radius < 0 || g.Radius > maxR {
 			c.fail(gp+".radius", "%g: use 0 (the default) or 1-60 yards", g.Radius)
+		}
+		if g.MemberRadius != 0 && (g.MemberRadius < 0 || g.MemberRadius > 60) {
+			c.fail(gp+".member_radius", "%g: use 0 (Radius) or 1-60 yards", g.MemberRadius)
 		}
 		c.entries(gp+".entries", g.Entries, true)
 		if len(g.Positions) == 0 {

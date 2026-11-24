@@ -71,6 +71,12 @@ type PartyMember struct {
 type GroupPort interface {
 	// Roster is the party's members, this character included; empty when it leads no group.
 	Roster() []PartyMember
+	// RequestStats asks the server for fresh member states of the given members (CMSG_REQUEST_PARTY_MEMBER_STATS) and
+	// waits, bounded by the port's own window, for the answers to merge. The roster is otherwise refreshed only by the
+	// server's own pushes — a group update carries no health, position or zone — and a member that was released,
+	// resurrected and summoned gets none at all (Run B, 2026-11-24: the recovery read a roster that still placed two
+	// live bots at the graveyard for ten minutes). A caller that needs a member's state asks here.
+	RequestStats(ctx context.Context, guids []wire.GUID) error
 	// Leader is the current leader's guid, empty when there is no group.
 	Leader() wire.GUID
 	// LootMethod sets the loot method and threshold and waits for the party update that shows it.

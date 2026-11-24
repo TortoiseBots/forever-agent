@@ -3,10 +3,12 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
@@ -24,6 +26,12 @@ const (
 	PlayLootYd = 30.0
 	// PlayRecoverYd is how near the agent a recovered party must stand (§3.10, 40 yd).
 	PlayRecoverYd = 40.0
+	// recoverLogEvery is how often the recovery's wait says what it is still waiting on: a silent ten minutes is not a
+	// diagnosis, and the wait may run to its ten-minute deadline.
+	recoverLogEvery = 30 * time.Second
+	// recoverRefreshEvery spaces the member stats requests of the wait: the roster is only as fresh as the server's
+	// last push, and a bot raised and summoned after a wipe got none (Run B, 2026-11-24).
+	recoverRefreshEvery = 3 * time.Second
 )
 
 // playMaxWipes is the wipe budget's reading of the config (D-14): 0 is the milestone's 2, a negative value is no
@@ -294,8 +302,12 @@ func (p *playRun) wipe(ctx context.Context) string {
 	}
 	followed := map[string]bool{}
 	summoner := newSummonWaiter()
+	lastWait := started
+	statsAt := time.Time{}
+	statsErr := false
 	for {
-		if p.allRecovered() {
+		waiting := p.recoverPending()
+		if len(waiting) == 0 {
 			p.rec.Event(p.now(), "recovered", map[string]any{"seconds": p.now().Sub(started).Seconds()})
 			return StateRest
 		}
@@ -306,6 +318,34 @@ func (p *playRun) wipe(ctx context.Context) string {
 		if !p.now().Before(deadline) {
 			p.stop("wipe-unrecovered")
 			return ""
+		}
+		// The check's numbers must be fresh: the roster is only as fresh as the server's last push, and a bot raised,
+		// resurrected and summoned after a wipe gets no push at all (Run B, 2026-11-24: the roster still placed two bots
+		// on the graveyard's map while every bot stood alive within 7 yd of the agent for ten minutes). The members the
+		// check is waiting on have their own member states asked for, at most every few seconds.
+		if now := p.now(); !now.Before(statsAt) {
+			if guids := recoverGUIDs(waiting); len(guids) > 0 {
+				if err := p.ports.Group.RequestStats(ctx, guids); err != nil {
+					if errors.Is(err, ErrLinkLost) {
+						p.linkLost()
+						return ""
+					}
+					if !statsErr {
+						p.rec.Event(now, "recover_stats_error", map[string]any{"error": err.Error()})
+						statsErr = true
+					}
+				}
+			}
+			statsAt = now.Add(recoverRefreshEvery)
+		}
+		// And the wait says what it is waiting on, every half minute, so no ten minutes pass without a reason in the
+		// record (§3.10).
+		if p.now().Sub(lastWait) >= recoverLogEvery {
+			p.rec.Event(p.now(), "recover_wait", map[string]any{
+				"seconds": p.now().Sub(started).Seconds(),
+				"waiting": p.recoverRows(waiting),
+			})
+			lastWait = p.now()
 		}
 		if len(p.downBots()) == 0 {
 			now := p.now()
@@ -431,23 +471,70 @@ func (p *playRun) downBots() []string {
 	return out
 }
 
-// allRecovered says whether every bot is alive on the agent's map within PlayRecoverYd, the agent itself alive: the
-// spec's "all five alive within 40 yd" (§3.10).
-func (p *playRun) allRecovered() bool {
-	if p.ports.Player.Phase() != PhaseAlive {
-		return false
+// recoverWait is one member the recovery is still waiting on: the bot's name (empty for the agent itself), its guid
+// when the roster lists it, and what the run thinks its state is.
+type recoverWait struct {
+	name string
+	guid wire.GUID
+	why  string
+}
+
+// recoverPending is the recovery's check: what still stands between the run and the spec's "all five alive within
+// 40 yd" (§3.10). The agent's own position and map are re-read first (the wait may run ten minutes), then every bot
+// is read from the roster the way the group port keeps it — fresh for a member in view, as the server last said for
+// one out of view. An empty result is the recovery.
+func (p *playRun) recoverPending() []recoverWait {
+	p.refreshSelf()
+	var out []recoverWait
+	if phase := p.ports.Player.Phase(); phase != PhaseAlive {
+		out = append(out, recoverWait{why: "the agent is " + string(phase)})
 	}
 	roster := p.roster()
 	for _, name := range p.cfg.Bots {
 		m, ok := findMember(roster, name)
-		if !ok || !m.Online || m.Dead || m.Ghost || m.Map != p.selfMap {
-			return false
-		}
-		if dist3(m.Pos, p.self) > PlayRecoverYd {
-			return false
+		switch {
+		case !ok:
+			out = append(out, recoverWait{name: name, why: "not in the party roster"})
+		case !m.Online:
+			out = append(out, recoverWait{name: name, guid: m.GUID, why: "offline"})
+		case m.Dead:
+			out = append(out, recoverWait{name: name, guid: m.GUID, why: "dead"})
+		case m.Ghost:
+			out = append(out, recoverWait{name: name, guid: m.GUID, why: "a ghost"})
+		case m.Map != p.selfMap:
+			out = append(out, recoverWait{name: name, guid: m.GUID,
+				why: fmt.Sprintf("on a map the agent is not on (member %d, agent %d)", m.Map, p.selfMap)})
+		case dist3(m.Pos, p.self) > PlayRecoverYd:
+			out = append(out, recoverWait{name: name, guid: m.GUID,
+				why: fmt.Sprintf("%.0f yd from the agent (the recovery needs %.0f)", dist3(m.Pos, p.self), PlayRecoverYd)})
 		}
 	}
-	return true
+	return out
+}
+
+// recoverGUIDs are the guids of the members the wait may ask the server for: a member the roster lacks has no guid a
+// stats request could name.
+func recoverGUIDs(waiting []recoverWait) []wire.GUID {
+	out := make([]wire.GUID, 0, len(waiting))
+	for _, w := range waiting {
+		if !w.guid.IsZero() {
+			out = append(out, w.guid)
+		}
+	}
+	return out
+}
+
+// recoverRows is the waiting list as the trace carries it: the slot, never a character name.
+func (p *playRun) recoverRows(waiting []recoverWait) []map[string]any {
+	out := make([]map[string]any, 0, len(waiting))
+	for _, w := range waiting {
+		bot := "agent"
+		if w.name != "" {
+			bot = p.slot(w.name)
+		}
+		out = append(out, map[string]any{"bot": bot, "why": w.why})
+	}
+	return out
 }
 
 // noteDeaths counts the members that are down, once each until they stand up again: the summary's deaths, never the

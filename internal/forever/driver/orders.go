@@ -191,7 +191,7 @@ func (r *Run) clearOfPacks(pts []Vec3, margin float64) bool {
 			continue
 		}
 		g := r.groups[gid]
-		clear := float64(g.RadiusYd()) + margin
+		clear := float64(g.MatchRadiusYd()) + margin
 		for _, p := range g.Positions {
 			if distPolyline(p, pts) <= clear {
 				return false

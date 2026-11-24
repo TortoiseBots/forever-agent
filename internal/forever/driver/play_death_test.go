@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,7 +129,8 @@ func TestPlayTwoWipesRecoverThirdEnds(t *testing.T) {
 }
 
 // TestPlayRecoveryTimeout: a bot that never runs back keeps the recovery one check short of ten minutes and then ends
-// the run (wipe-unrecovered).
+// the run (wipe-unrecovered). The wait says what it is still waiting on every half minute: a silent ten minutes is not
+// a diagnosis.
 func TestPlayRecoveryTimeout(t *testing.T) {
 	wiped := false
 	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
@@ -154,6 +157,86 @@ func TestPlayRecoveryTimeout(t *testing.T) {
 	}
 	if res.Summary.DurationS < 600 {
 		t.Fatalf("the run lasted %.0f s; want at least the recovery's 10 minutes", res.Summary.DurationS)
+	}
+	tf, err := trace.Read(filepath.Join(rig.cfg.Out, rig.cfg.RunID+".jsonl"))
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var waits []map[string]any
+	for i := range tf.Events {
+		if tf.Events[i].Ev == "recover_wait" {
+			waits = append(waits, tf.Events[i].D)
+		}
+	}
+	if len(waits) < 15 {
+		t.Fatalf("the wait logged %d time(s); want it to say every 30 s what it waits on over its ten minutes", len(waits))
+	}
+	last := waits[len(waits)-1]
+	named := false
+	if rows, ok := last["waiting"].([]any); ok {
+		for _, r := range rows {
+			row, ok := r.(map[string]any)
+			if !ok || row["bot"] != "heal" {
+				continue
+			}
+			if why := fmt.Sprint(row["why"]); why == "dead" || why == "a ghost" {
+				named = true
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("the last wait %v does not say which member it waits on and what it thinks its state is", last)
+	}
+}
+
+// TestPlayWipeRecoversFromAStaleRoster: the bots the fight killed are released and come back alive at the agent's side,
+// but the party roster still says what it said while they were down — dead, at the graveyard, on no map the run can
+// place — because the server pushed no member state and the run never asked. The recovery must ask for the members'
+// own states and go on within the minute; reading the stale roster alone waits out the ten minutes (Run B,
+// 2026-11-24: stop wipe-unrecovered with every bot alive and gathered in the frames).
+func TestPlayWipeRecoversFromAStaleRoster(t *testing.T) {
+	wiped := false
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 12, 0}})
+		f.SpawnBosses()
+		f.OnFightTick = func(f *PlayFake) {
+			if wiped {
+				return
+			}
+			wiped = true
+			// The tank and the healer go down, and the roster freezes while they are dead: the release, the corpse run
+			// and the raise change the bot table, never the roster.
+			f.GoldenOwner.Bots[0].Dead = true
+			f.GoldenOwner.Bots[1].Dead = true
+			f.FreezeRoster()
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear after asking for the raised bots' own states (states %s)",
+			res.Stop, res.Clear, strings.Join(res.States, " "))
+	}
+	if rig.fake.StatsRequests == 0 {
+		t.Fatal("the recovery never asked the server for the party's member states")
+	}
+	tf, err := trace.Read(filepath.Join(rig.cfg.Out, rig.cfg.RunID+".jsonl"))
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	recovered := -1.0
+	for i := range tf.Events {
+		if tf.Events[i].Ev == "recovered" {
+			recovered, _ = tf.Events[i].D["seconds"].(float64)
+		}
+	}
+	if recovered < 0 {
+		t.Fatal("the trace has no recovered event")
+	}
+	if recovered > 120 {
+		t.Fatalf("the recovery took %.0f s; want it inside two minutes of the regroup", recovered)
 	}
 }
 

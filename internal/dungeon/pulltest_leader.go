@@ -146,7 +146,7 @@ func (d *Driver) ptTry(ctx context.Context, spec PulltestSpec, leg Leg, cur, try
 	}
 	d.fightKills, d.fightFirst, d.fightLast = 0, time.Time{}, time.Time{}
 	a := Action{Kind: ActPull, Leg: spec.Leg, Step: -1, Label: fmt.Sprintf("pulltest leg %d (%s): try %d, pull group %d", spec.Leg, leg.Name, try, cur),
-		Entries: pg.Entries, Positions: pg.Positions, Radius: pg.Radius, Skip: leg.Skip}
+		Entries: pg.Entries, Positions: pg.Positions, Radius: pg.Radius, MemberRadius: pg.MemberRadius, Skip: leg.Skip}
 	err := d.doPull(ctx, a)
 	// The fight is over (or failed): read the character's numbers before the rest gate drinks or sits it down.
 	var dmg CombatTotals

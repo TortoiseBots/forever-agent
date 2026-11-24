@@ -38,6 +38,9 @@ var (
 	playReplyQuiet = 700 * time.Millisecond
 	// playReplyDeadline bounds one whole request.
 	playReplyDeadline = 8 * time.Second
+	// playStatsWait bounds one party member stats request: the server answers its own members on its next update, so a
+	// wait this long with no state merged is a server that has none to send.
+	playStatsWait = 2 * time.Second
 )
 
 const (
@@ -288,8 +291,10 @@ func (g *playGroup) Roster() []driver.PartyMember {
 		o, inView := s.world.Object(m.GUID)
 		self := m.GUID == s.party.SelfGUID
 		if inView || self {
-			// In view the character is on this map; the zone it stands in is now known to belong to it.
+			// In view the character is on this map; the zone it stands in is now known to belong to it. A member the
+			// client sees is online, whatever the roster's last push said.
 			pm.Map = cur
+			pm.Online = true
 			if m.ZoneID != 0 {
 				g.zoneMap[m.ZoneID] = cur
 			}
@@ -312,6 +317,28 @@ func (g *playGroup) Roster() []driver.PartyMember {
 		out = append(out, pm)
 	}
 	return out
+}
+
+// RequestStats is CMSG_REQUEST_PARTY_MEMBER_STATS for the given members, then a bounded wait for their states to
+// merge: the answers come back as SMSG_PARTY_MEMBER_FULL_STATE, which the packet loop applies to the model. A server
+// that answers none ends the wait silent, not as an error; a dead or cut link is the link's error.
+func (g *playGroup) RequestStats(ctx context.Context, guids []wire.GUID) error {
+	s := g.s
+	s.initChat()
+	if len(guids) == 0 || !s.party.InParty || !s.party.RosterValid {
+		return nil
+	}
+	before := s.party.States
+	if err := s.SendCtx(ctx, wire.CMSGRequestPartyMemberStats, party.BuildRequestMemberStats(guids)); err != nil {
+		return playPortErr(err)
+	}
+	want := before + len(guids)
+	for end := time.Now().Add(playStatsWait); time.Now().Before(end) && s.party.States < want; {
+		if err := s.collect(ctx, 100*time.Millisecond); err != nil {
+			return playPortErr(err)
+		}
+	}
+	return nil
 }
 
 // fillFromModel takes what the object model knows over the member stats, which are one packet old and a whole

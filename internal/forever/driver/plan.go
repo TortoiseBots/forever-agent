@@ -125,9 +125,12 @@ type Group struct {
 	Entries   []uint32
 	Positions []Vec3
 	Radius    float32
-	Approach  []Vec3
-	Patrol    *Patrol
-	Centre    Vec3
+	// MemberRadius is the plan's member_radius: the radius the pack match uses where the plan sets one, because the
+	// exported row's Radius must cover the whole group from its mean centre while the match works from the positions.
+	MemberRadius float32
+	Approach     []Vec3
+	Patrol       *Patrol
+	Centre       Vec3
 }
 
 // RadiusYd is the group's radius in yards, the plan's or the driver's default.
@@ -136,6 +139,15 @@ func (g Group) RadiusYd() float32 {
 		return g.Radius
 	}
 	return DefaultPackRadius
+}
+
+// MatchRadiusYd is the radius a member may stand from one of the group's positions: the plan's member_radius when it
+// has one, else RadiusYd.
+func (g Group) MatchRadiusYd() float32 {
+	if g.MemberRadius > 0 {
+		return g.MemberRadius
+	}
+	return g.RadiusYd()
 }
 
 // Patrol is a group of mobs that walks a fixed path.
@@ -414,7 +426,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 			if len(entries) == 0 {
 				continue
 			}
-			g := Group{ID: nextID, Leg: i, Index: j, Entries: entries, Radius: pg.Radius}
+			g := Group{ID: nextID, Leg: i, Index: j, Entries: entries, Radius: pg.Radius, MemberRadius: pg.MemberRadius}
 			nextID++
 			for _, pos := range pg.Positions {
 				g.Positions = append(g.Positions, vec(pos))

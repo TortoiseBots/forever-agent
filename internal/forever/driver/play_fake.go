@@ -98,6 +98,11 @@ type PlayFake struct {
 	// Marks are the icons set and Disbanded whether the group was disbanded.
 	Marks     []party.MarkEntry
 	Disbanded bool
+	// frozen is the roster served while it is set: what the party said when FreezeRoster took it. A stats request
+	// clears it, the way the server's SMSG_PARTY_MEMBER_FULL_STATE answers would.
+	frozen []PartyMember
+	// StatsRequests is how many member stats requests the Group port got.
+	StatsRequests int
 
 	// Selected and Attacked are the agent's own selection and attack, Looted the corpses it opened, and LootRefused
 	// the corpses it tried and may not loot. Votes is every roll the character answered greed (§3.7, D-9).
@@ -584,8 +589,17 @@ func (m *PlayModule) Who(ctx context.Context) (botcmd.Reply, error) {
 
 // --- GroupPort ---
 
-// Roster is the party: the agent plus every online bot of the table that is in it.
+// Roster is the party: the agent plus every online bot of the table that is in it. A frozen roster (FreezeRoster)
+// answers what the party said when it was frozen until a member stats request merges the live table again.
 func (f *PlayFake) Roster() []PartyMember {
+	if f.frozen != nil {
+		return append([]PartyMember(nil), f.frozen...)
+	}
+	return f.rosterLive()
+}
+
+// rosterLive is the party as the fake's own table stands.
+func (f *PlayFake) rosterLive() []PartyMember {
 	out := []PartyMember{{
 		Name: f.SelfName, GUID: f.selfGUID, Online: true, Dead: f.SelfPhase != PhaseAlive,
 		Ghost: f.SelfPhase == PhaseGhost, HP: f.selfHP[0], MaxHP: f.selfHP[1], Pos: f.SelfPos, Map: f.SelfMap,
@@ -640,6 +654,20 @@ func (f *PlayFake) botPos(b *OwnerBot) Vec3 {
 		return p
 	}
 	return f.SelfPos
+}
+
+// FreezeRoster freezes the party roster as it stands: every later Roster answers those rows — what a member was last
+// seen as (dead, far, on a map the run cannot place) — until a member stats request merges the live table again. The
+// fake's stand-in for the server that pushed nothing after a release, a resurrection and a summon (Run B, 2026-11-24).
+func (f *PlayFake) FreezeRoster() {
+	f.frozen = append([]PartyMember(nil), f.rosterLive()...)
+}
+
+// RequestStats is the request that refreshes the roster: the fake answers by serving the live table again.
+func (f *PlayFake) RequestStats(ctx context.Context, guids []wire.GUID) error {
+	f.StatsRequests++
+	f.frozen = nil
+	return nil
 }
 
 // Leader is the agent's own guid: the run leads the party.

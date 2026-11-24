@@ -833,3 +833,46 @@ func TestPlaySessionLootAutoClosedWindowRetriesAndIsNonFatal(t *testing.T) {
 		t.Fatalf("CMSG_LOOT_RELEASE count = %d; want 3 (initial, one retry, one cleanup)", got)
 	}
 }
+
+// TestPlaySessionRequestStatsWaitsForTheStates: the Group port asks for the members' own states with
+// CMSG_REQUEST_PARTY_MEMBER_STATS and returns once they merged, so a caller that needs a member's map or position is
+// not left reading the roster's last push.
+func TestPlaySessionRequestStatsWaitsForTheStates(t *testing.T) {
+	s, sc := newPlaySession(t)
+	_, healer, _, _ := partyScene(t, s)
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	sc.on[wire.CMSGRequestPartyMemberStats] = func([]byte) {
+		s.party.ApplyMemberState(party.MemberState{
+			GUID: healer, Status: party.StatusOnline, Health: 80, MaxHealth: 80, ZoneID: 2437, X: 10, Y: 20, Z: 30,
+		})
+	}
+	if err := g.RequestStats(context.Background(), []wire.GUID{healer}); err != nil {
+		t.Fatalf("RequestStats: %v", err)
+	}
+	if n := sc.count(wire.CMSGRequestPartyMemberStats); n != 1 {
+		t.Fatalf("sent %v; want one member stats request", sc.cores())
+	}
+	for _, m := range g.Roster() {
+		if m.Name != "Bothealer" {
+			continue
+		}
+		if m.HP != 80 || m.MaxHP != 80 || m.Pos != (driver.Vec3{10, 20, 30}) {
+			t.Fatalf("the healer after the request: %+v; want the merged 80/80 at 10 20 30", m)
+		}
+	}
+}
+
+// TestPlaySessionGroupRosterTrustsTheUnitView: a member the client sees is online and on this map, whatever the
+// roster's last push said. The recovery's "all five alive nearby" must not wait on a stale Online flag (§3.10).
+func TestPlaySessionGroupRosterTrustsTheUnitView(t *testing.T) {
+	s, _ := newPlaySession(t)
+	tank, _, _, _ := partyScene(t, s)
+	s.party.Members[tank].Connected = false
+	addUnitOnMap(t, s, tank, 389, 30, 40, 50, 95, 100, 0)
+	g := &playGroup{ctx: context.Background(), s: s, zoneMap: map[uint16]uint32{}}
+	for _, m := range g.Roster() {
+		if m.Name == "Bottank" && (!m.Online || m.Map != 389) {
+			t.Fatalf("a member in view reads %+v; want online on map 389", m)
+		}
+	}
+}

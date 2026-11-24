@@ -406,6 +406,9 @@ func (s *State) ApplyMemberState(ms MemberState) bool {
 		return true
 	}
 	m.Full = true
+	// A state that is not the offline one is a member the party still has: the flag the roster updates carry is the
+	// one that goes stale when a bot logs out and back in (Run B, 2026-11-24, the recovery's Online check).
+	m.Connected = true
 	m.Status = ms.Status
 	m.Level = ms.Level
 	m.Health = ms.Health
