@@ -183,9 +183,10 @@ func rpcPostCall(ctx context.Context, port int, token, method string, params jso
 }
 
 // rpcMaxReply bounds one reply body. It is a variable so a test can lower it. A map_snapshot with the navmesh
-// background is far past the 1 MiB this started at; the old bound cut the body mid-JSON and the CLI reported "invalid
-// JSON: unexpected end of JSON input" instead of naming the bound.
-var rpcMaxReply int64 = 64 << 20
+// background is far past the 1 MiB this started at (the old bound cut the body mid-JSON, and the CLI reported
+// "invalid JSON: unexpected end of JSON input" instead of naming the bound); 16 MiB is twice the measured worst case
+// (docs/forever/SESSION-A-FIX-NOTES.md), not the blanket 64 MiB this first became.
+var rpcMaxReply int64 = 16 << 20
 
 // readReplyBody reads a reply body up to rpcMaxReply and refuses a longer one by name: a cut body is not JSON and an
 // "invalid JSON" error hides that the agent answered at all.

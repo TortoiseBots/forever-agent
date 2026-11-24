@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"github.com/pjerra/forever-agent/internal/forever/runmap"
 	"github.com/pjerra/forever-agent/internal/rpc"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -289,6 +291,90 @@ func TestEnvelopeChecked(t *testing.T) {
 		t.Fatal("parse error accepted")
 	} else if code, ok := CodeOf(err); !ok || code != rpc.CodeParse {
 		t.Fatalf("parse error: %v", err)
+	}
+}
+
+// roundTripFunc is an http.RoundTripper that answers without a socket.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestClientDecodesALargeReplyOnce: a large reply is decoded straight into the caller's value, at the cost of one
+// decoder buffer and the value. The client used to read the whole body, unmarshal the envelope (a copy of the result
+// as json.RawMessage) and then unmarshal that result into the value, so a call held the body, the result copy and the
+// value at once. The measured total allocation is pinned here; most of it is encoding/json growing its buffer to hold
+// the 2 MiB string token (doubling leaves about two payloads of capacity and as much again in discarded buffers), and
+// the bound below is what keeps a real near-limit answer cheap: 16 MiB where the branch first had 64.
+func TestClientDecodesALargeReplyOnce(t *testing.T) {
+	const size = 2 << 20
+	filler := strings.Repeat("x", size)
+	body := `{"jsonrpc":"2.0","id":1,"result":{"svg":"` + filler + `"}}`
+	c, err := New("127.0.0.1:1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.hc = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	var out struct {
+		SVG string `json:"svg"`
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := c.call(context.Background(), "map_snapshot", nil, &out, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if out.SVG != filler {
+		t.Fatalf("the result decoded to %d bytes, want the %d-byte payload", len(out.SVG), size)
+	}
+	alloc := after.TotalAlloc - before.TotalAlloc
+	t.Logf("one %d-byte reply allocated %d bytes (%.2fx)", size, alloc, float64(alloc)/float64(size))
+	// Measured 5.02x on the first run of this shape: the decoder's buffer growth (about 4 payloads) and the string
+	// value (1). Anything that buffers the body as well would add another payload and a copy of the result.
+	if alloc > 6*size {
+		t.Fatalf("one %d-byte reply allocated %d bytes (%.2fx); more than the decoder's buffer and the value",
+			size, alloc, float64(alloc)/float64(size))
+	}
+}
+
+// TestClientRefusesAnOverBoundReplyByName: a body past the bound is named as such instead of being cut and read as
+// invalid JSON (the shape of the #228 failure the bound exists for), and a body inside the bound still decodes.
+func TestClientRefusesAnOverBoundReplyByName(t *testing.T) {
+	old := maxReplyBytes
+	defer func() { maxReplyBytes = old }()
+	body := `{"jsonrpc":"2.0","id":1,"result":{"state":"online"}}`
+	c, _ := rawDaemon(t, 200, body)
+	// One byte under the body: the reply is over the bound and is named as such.
+	maxReplyBytes = int64(len(body)) - 1
+	_, err := c.Status(context.Background())
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("larger than the %d-byte bound", maxReplyBytes)) {
+		t.Fatalf("an over-bound reply gave %v, want the named %d-byte bound", err, maxReplyBytes)
+	}
+	// A body inside the bound still decodes.
+	maxReplyBytes = int64(len(body))
+	if st, err := c.Status(context.Background()); err != nil || st.State != "online" {
+		t.Fatalf("a reply exactly at the bound: %+v, %v", st, err)
+	}
+}
+
+// TestReplyBoundIsSixteenMiB: the branch first set the bound to 64 MiB on the guess that a map_snapshot with the
+// navmesh background was "far past a few megabytes". A floor at mapview's 40000-polygon cap measures 1.8 MiB, so 16
+// MiB covers eight such floors; a body past that is refused by name. This test names no constant of the package, so it
+// also ran against the pushed tree, where the 64 MiB bound accepted the same body and decoded it.
+func TestReplyBoundIsSixteenMiB(t *testing.T) {
+	// A valid envelope whose result string runs past the bound: the decoder reads to the limit and the refusal names
+	// it.
+	body := `{"jsonrpc":"2.0","id":1,"result":"` + strings.Repeat("x", 16<<20) + `"}`
+	c, _ := rawDaemon(t, 200, body)
+	_, err := c.Status(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216-byte bound") {
+		t.Fatalf("a %d-byte reply gave %v, want the named sixteen MiB bound", len(body), err)
 	}
 }
 

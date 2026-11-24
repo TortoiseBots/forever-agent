@@ -57,9 +57,11 @@ below records the tool requirement.
 (the same call with `background: false` was 8.6 KB), so the body was cut mid-JSON and the error was
 `invalid JSON: unexpected end of JSON input` — the agent had answered.
 
-**Fix.** `readReplyBody` (`cmd/forever-agent/rpc_cmd.go`, also used by `teardown`) reads up to `rpcMaxReply` (64 MiB) and
-refuses a longer body by name; `serveclient`'s bound rises to the same 64 MiB with the same named refusal. The encode
-side was unbounded already.
+**Fix.** `readReplyBody` (`cmd/forever-agent/rpc_cmd.go`, also used by `teardown`) reads up to `rpcMaxReply` and
+refuses a longer body by name; `serveclient`'s bound matches it with the same named refusal. The encode side was
+unbounded already. The value is 16 MiB, from the measured worst case in the review follow-ups below (it first became
+64 MiB, which the adversarial pass showed was a blanket bound several times larger than any answer and paid for in
+transient copies).
 
 **Test.** `TestRPCReadsAReplyOverOneMiB` reads a 2 MiB reply whole and an over-bound body as
 `larger than the …-byte bound`.
@@ -76,11 +78,15 @@ sends (start, heartbeat, facing, stop in `MoveTo` and `WalkPath`), and `world/tr
 `area_trigger_watch {id, map?, x?, y?, z?, radius?}` (the character's own position when no point is given, radius default
 4 yd, `clear` empties the list). A volume that was not inside and is inside now sends `CMSG_AREA_TRIGGER` once
 (`EnterAreaTrigger`, entered + from client); leaving re-arms it, so each crossing sends exactly once. A volume armed under
-the character sends at once.
+the character sends at once. Arming the same id again keeps its entered state, so a retried call is not a second
+crossing; a volume smaller than the gap between two heartbeats is entered from an inserted sample at the path's closest
+approach. Both are the adversarial pass's findings and are worked through in the review follow-ups below.
 
 **Why 4 yd by default.** The volume is the caller's; the default is small enough to stand inside a classic entrance
 sphere — the entries the 70959 client data still carries are 7 yd across a portal that sits exactly on the plan's point
-(Stormwind Vault's 107) — and large enough that a walking leg (3.5 yd per heartbeat at 7 yd/s) samples it.
+(Stormwind Vault's 107) — and large enough that a walking leg (3.5 yd per heartbeat at 7 yd/s) usually samples it. A
+sphere the line only cuts through is sampled at its closest approach, so the default is a convenience, not a bound on
+what can be watched.
 
 **Test.** `TestServeWalkCrossesArmedAreaTrigger`: arm a volume across the walk's line, walk through it (one packet), walk
 back (a second), clear (none).
@@ -108,6 +114,57 @@ floor), and the raw gm path is still landed when it answers.
 is refused. The docs (README, `DAEMON-D1-NOTES.md`) say so.
 
 **Test.** `TestServeItemInfoEntryForm`.
+
+## Review follow-ups (adversarial pass, 24 Nov)
+
+A second read of the branch found three things in the new code. Each has a test that fails on the branch as pushed
+(`vm-test ta` on a worktree detached at `8a77173ac` with only the new tests copied in):
+`--- FAIL: TestServeAreaTriggerRearmIsIdempotent` (`two identical re-arms sent 3 packets, want the one entry`),
+`--- FAIL: TestServeWalkPassesThroughAnArmedAreaTriggerBetweenHeartbeats` (`the pass-through sent 0 packets, want one
+crossing`) and `--- FAIL: TestReplyBoundIsSixteenMiB` (`a 16777252-byte reply gave serveclient: status: bad result: json:
+cannot unmarshal string into Go value of type serveclient.Status, want the named sixteen MiB bound`: the pushed 64 MiB
+bound read and decoded the whole body). The allocation measurement that drove the third fix, on the same pushed tree,
+was `one 2097152-byte reply allocated 8968624 bytes (4.28x)`.
+
+**Re-arming a trigger repeated its action (high).** `serveAreaTriggerWatch` deleted the volume's entered state on every
+arm (`trigger.go`, `delete(s.triggersIn, v.ID)`) and then ran the crossing test at the character's position, so an
+identical retry — the caller's RPC reply lost — sent `CMSG_AREA_TRIGGER` again from inside the volume. The core accepts
+that packet from a player inside (`MiscHandler.cpp:556-561`: `if (packet.Entered != player->IsInAreaTrigger(atEntry))`
+→ "too far, ignore") and runs the trigger's script, so a portal teleports again. The entered state is kept now: an
+unchanged volume stays entered, a changed volume the character is inside stays entered, and one that leaves the
+character outside clears it (the state is reconciled from the position, never assumed). `TestServeAreaTriggerRearmIsIdempotent`
+arms a volume under the character once, retries the identical call twice, widens it, moves it 50 yd away and arms it
+back: exactly two packets, the entry and the re-entry.
+
+**A pass-through between heartbeats was invisible (medium).** `triggerCrossing` tested only the positions the walk
+reported, and heartbeats are 500 ms apart (3.5 yd at 7 yd/s), so a volume smaller than that gap could be crossed with
+both sampled ends outside and nothing sent. `objects.Mover` gained a `Samples` hook, asked before every movement packet
+for points on the segment from the last reported position to the next one; it sends a heartbeat at each on the leg's own
+timeline, so the trigger goes out from a position inside the volume — the only position `IsInAreaTrigger` accepts
+(`Player.cpp:2068`, `IsInDist` against the entry's radius). `triggerSamples` answers only for a straight line that
+crosses a sphere with both sampled ends outside (the closest approach is strictly inside), in travel order; an endpoint
+inside needs no inserted packet. A move the server makes (teleport, new world, a fall or knockback flight) clears the
+segment start, so no sample is taken across it. Tests: `TestServeWalkPassesThroughAnArmedAreaTriggerBetweenHeartbeats`
+(0.5 yd sphere 1.75 yd ahead: one packet, and none on the next walk), `TestMoverReportsTheSampleSamplesNames` (40 yd/s,
+the inserted heartbeat's position and interpolated time, and `Cross` seeing it before the sampled position),
+`TestTriggerSamples*` and `TestSegmentClosest*` (geometry, order, clamping).
+
+**The 64 MiB reply bound cost several copies of it (medium).** `serveclient.post` read the whole body with
+`io.ReadAll`, unmarshalled the envelope (a copy of the result as `json.RawMessage`) and then unmarshalled that result
+into the caller's value: the body, the result copy and the value were all live, and 64 MiB was a guess at the largest
+answer. `decodeReply` streams the body through `json.Decoder` and decodes the result field straight into the caller's
+value, so the body is not kept after the call, there is no result copy, and an over-bound body is still refused by
+name. The bound is measured: mapview draws at most 40000 background polygons on a floor (`svg.go`, `writeBackground`'s
+`maxPolys`), and a synthetic floor at that cap measures 1,925,982 bytes of SVG (1.8 MiB) and 1,934,416 bytes of HTML;
+six such floors measure 11,557,161 and 11,565,775 bytes (11.0 MiB). `maxReplyBytes` and the CLI's `rpcMaxReply` are
+16 MiB: eight floors at the drawing cap, and a quarter of the earlier 64 MiB. One 2 MiB reply's total allocation
+measures 10,517,432 bytes (5.02x, about four payloads of it the decoder growing its buffer for the string token; the
+old path measured 8,968,624, 4.28x, for the same reply), so the memory bound is the limit itself: 16 MiB at that
+allocation is about 80 MB of transient per call where 64 MiB reached about 270 MB, and concurrent calls no longer
+multiply a guessed limit.
+`TestClientDecodesALargeReplyOnce` pins the allocation, `TestReplyBoundIsSixteenMiB` pins the bound (a 16 MiB reply
+was accepted before this commit), `TestClientRefusesAnOverBoundReplyByName` the named refusal, and
+`TestRPCReadsAReplyOverOneMiB` still pins the CLI's.
 
 ## Live follow-ups (not changed here)
 

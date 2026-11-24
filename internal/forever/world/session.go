@@ -3011,6 +3011,7 @@ func (s *session) applyUpdate(u *objects.Update) {
 					Logf:       s.opts.logf,
 					Refuse:     s.taxiMovementBlocked,
 					Cross:      s.triggerCrossing,
+					Samples:    s.triggerSamples,
 					X:          b.Movement.X,
 					Y:          b.Movement.Y,
 					Z:          b.Movement.Z,
