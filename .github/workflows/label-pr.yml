@@ -4,11 +4,16 @@ name: label-pr
 # .github/labeler.yml).
 #
 # `pull_request_target` is safe here because the job NEVER checks out the pull request's code: labeler reads the
-# changed-file list from the event and adds labels through the API. Nothing from the PR's branch is fetched or run, so
-# a fork's PR cannot change what this job executes. The two permissions are what that needs: `contents: read` for the
-# rules file, `pull-requests: write` to add the labels only.
+# changed-file list from the event and `.github/labeler.yml` from the BASE ref through the API, then adds labels through
+# the API. Nothing from the PR's branch is fetched or run, so a fork's PR cannot change what this job executes. There is
+# deliberately no actions/checkout step: the action does not need a working tree, and a checkout of the PR's merge ref
+# here would be exactly the risk this trigger avoids. The two permissions are what the job needs: `contents: read` for
+# the rules file (read through the API), `pull-requests: write` to add the labels only.
 #
 # `sync-labels` stays false (the default): the action only adds labels, so it never removes one a person set.
+#
+# The action is pinned to a full commit SHA (the version in the comment); a new version comes in a reviewed PR that
+# updates both.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -26,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5
         with:
           configuration-path: .github/labeler.yml
           sync-labels: false

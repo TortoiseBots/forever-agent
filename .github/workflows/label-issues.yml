@@ -4,14 +4,18 @@ name: label-issues
 # environment variables, never interpolated into the shell, so a title or body that looks like shell syntax is only
 # text and cannot run anything.
 #
-# The script only ADDS labels from its own table: the people-owned labels (the priority labels, TortoiseBots) and any
-# label a person removed are never touched.
+# It runs ONCE, when the issue opens: keyword labels describe the text at that moment. A later edit does not re-add a
+# label a person removed, and does not chase the labels the new text no longer matches; a person's correction stands.
+#
+# The script only ADDS labels from its own table: the people-owned labels (the priority labels, TortoiseBots) are never
+# touched.
 #
 # `contents: read` is for checking out the script itself from the default branch (sparse: just that file); the issue text
-# is never code. `issues: write` is the only write permission.
+# is never code. `issues: write` is the only write permission. The action is pinned to a full commit SHA (the version in
+# the comment); a new version comes in a reviewed PR that updates both.
 on:
   issues:
-    types: [opened, edited]
+    types: [opened]
 
 concurrency:
   group: label-issues-${{ github.event.issue.number }}
@@ -26,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           sparse-checkout: |

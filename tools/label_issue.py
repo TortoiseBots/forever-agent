@@ -6,19 +6,29 @@ passes in the environment, never through the shell (the same text is only data h
 
   ISSUE_NUMBER=12 ISSUE_TITLE=... ISSUE_BODY=... GH_TOKEN=... python3 -I tools/label_issue.py
 
-RULES below is the keyword table: each entry is a label and a regular expression matched case-insensitively on whole
-words in the title and body. Two title rules follow: a bug word adds `bug`, otherwise a title starting "Agent:" or
-"[agent]" adds `enhancement`. The script only ADDS labels from its own tables; it never removes one, and the
-people-owned labels (the priority labels, TortoiseBots) are not among them.
+RULES below is the keyword table: each entry is a label, a regular expression matched case-insensitively on whole
+words, and the scope it reads. A "title" rule reads the title only: its word is too common in a body (a list of tickets
+can say "raids" once, or a settings file's field list can say "plans") to mean the issue is about that area. A "both"
+rule reads "title\nbody". Two title rules follow: a bug word adds `bug`, otherwise a title starting "Agent:" or
+"[agent]" adds `enhancement`. The script only ADDS labels from its own tables in its default (workflow) mode; it never
+removes one there, and the people-owned labels (the priority labels, TortoiseBots) are not among them.
 
---backfill labels every OPEN issue and OPEN pull request that does not have these labels yet:
+--backfill labels every OPEN issue (title and body) and OPEN pull request (changed files) that does not have these
+labels yet:
 
   python3 -I tools/label_issue.py --backfill --dry-run
   python3 -I tools/label_issue.py --backfill
 
-Issues use RULES on title and body. Pull requests use their changed files against the path rules of
+--prune, with --backfill, is the one-time clean-up after a rule was narrowed: an OPEN issue also loses each label the
+automation can apply that the current rules no longer give. It only removes from the automation's own label set below
+and never a label a rule still gives; the people-owned labels are outside that set. The workflow never uses it.
+
+  python3 -I tools/label_issue.py --backfill --prune --dry-run
+  python3 -I tools/label_issue.py --backfill --prune
+
+Issues use RULES on each rule's scope. Pull requests use their changed files against the path rules of
 .github/labeler.yml, which is parsed here, so the path table exists in one file only. --dry-run prints one line per
-item, "issue N: +a,+b" or "pr N: +a,+b", and changes nothing.
+change, "issue N: +a,+b", "issue N: -c" or "pr N: +a,+b", and changes nothing.
 """
 import argparse
 import json
@@ -27,30 +37,38 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
-# (label, alternatives). Matched on whole words, case-insensitive, over "title\nbody": \b keeps "braid" out of `raid`
-# and "emails" out of `mail`. Plural and hyphen variants where the prose uses them.
+# (label, alternatives, scope). Matched on whole words, case-insensitive: \b keeps "braid" out of `raid` and "emails"
+# out of `mail`. Plural and hyphen variants where the prose uses them. "title" reads the title only: those words appear
+# in bodies in lists and quotations that do not make the issue about that area; "both" reads "title\nbody".
 RULES = (
-    ("dungeon", r"dungeons?|dungeon-play|dungeon-watch|dungeon run|ragefire|wailing"),
-    ("raid", r"raids?"),
-    ("battleground", r"battlegrounds?|bg-watch"),
-    ("plans", r"plans?|routes?|navmesh"),
-    ("daemon", r"daemons?|serve|rpc|methods?"),
-    ("dashboard", r"dashboards?"),
-    ("addon", r"add-?ons?|tbm"),
-    ("testing", r"bench|benchmarks?|trials?|spell-score|fight-score|bug-hunter"),
-    ("player-actions", r"bank|mail|auctions?|trade|vendors?|quests?|loot|trainers?|taxi"),
-    ("live-check", r"live (?:sessions?|checks?|runs?)"),
-    ("parity", r"parity"),
-    ("documentation", r"docs|documentation|readme|manuals?"),
+    ("dungeon", r"dungeons?|dungeon-play|dungeon-watch|dungeon run|ragefire|wailing", "title"),
+    ("raid", r"raids?", "title"),
+    ("battleground", r"battlegrounds?|bg-watch", "title"),
+    ("plans", r"dungeon plans?|plan files?|plan-check|plan-probe|plan tools|route tools|navmesh", "both"),
+    ("daemon", r"daemons?", "both"),
+    ("dashboard", r"dashboards?", "title"),
+    ("guild", r"guilds?", "title"),
+    ("addon", r"add-?ons?|tbm", "both"),
+    ("testing", r"bench|benchmarks?|trials?|spell-score|fight-score|bug-hunter", "both"),
+    ("player-actions", r"bank|mail|auctions?|trade|vendors?|quests?|loot|trainers?|taxi", "both"),
+    ("live-check", r"live (?:sessions?|checks?|runs?)", "both"),
+    ("parity", r"parity", "both"),
+    ("documentation", r"docs|documentation|readme|manuals?", "title"),
 )
+
+# Every label the automation can apply, and so the only set --prune may remove from. All of them are in
+# .github/labels.yml; the people-owned labels are not (the tests check both).
+AUTOMATION_LABELS = frozenset(label for label, _, _ in RULES) | {"bug", "enhancement"}
 
 # Title only. A whole word from here is a bug report; the repo's titles say "fix", "crash", "broken" and so on.
 BUG_WORDS = re.compile(r"\b(?:fix(?:es|ed)?|fails?|broken|refused|crash(?:es|ed)?)\b", re.IGNORECASE)
 # "otherwise a title starting Agent: or [agent] with no bug word -> enhancement": the agent writes those titles.
 AGENT_TITLE = re.compile(r"^\s*(?:agent:|\[agent\])", re.IGNORECASE)
 
-COMPILED_RULES = tuple((label, re.compile(r"\b(?:" + pattern + r")\b", re.IGNORECASE)) for label, pattern in RULES)
+COMPILED_RULES = tuple((label, re.compile(r"\b(?:" + pattern + r")\b", re.IGNORECASE), scope)
+                       for label, pattern, scope in RULES)
 
 ROOT = Path(__file__).resolve().parent.parent
 LABELER_FILE = ROOT / ".github" / "labeler.yml"
@@ -58,15 +76,16 @@ LABELER_FILE = ROOT / ".github" / "labeler.yml"
 
 def labels_for_text(title, body):
     """The labels RULES and the title rules give this issue text, in table order, each once."""
-    text = (title or "") + "\n" + (body or "")
+    title = title or ""
+    both = title + "\n" + (body or "")
     labels = []
-    for label, pattern in COMPILED_RULES:
-        if pattern.search(text) and label not in labels:
+    for label, pattern, scope in COMPILED_RULES:
+        if pattern.search(title if scope == "title" else both) and label not in labels:
             labels.append(label)
-    if BUG_WORDS.search(title or ""):
+    if BUG_WORDS.search(title):
         if "bug" not in labels:
             labels.append("bug")
-    elif AGENT_TITLE.match(title or "") and "enhancement" not in labels:
+    elif AGENT_TITLE.match(title) and "enhancement" not in labels:
         labels.append("enhancement")
     return labels
 
@@ -216,6 +235,10 @@ def _existing_names(item):
     return {label["name"] for label in item.get("labels") or []}
 
 
+def _ordered_names(item):
+    return [label["name"] for label in item.get("labels") or []]
+
+
 def _apply(kind, number, labels, repo, dry_run, runner):
     line = "%s %s: +%s" % (kind, number, ",".join(labels))
     print(line)
@@ -227,6 +250,15 @@ def _apply(kind, number, labels, repo, dry_run, runner):
     for label in labels:
         args += ["-f", "labels[]=" + label]
     runner(args)
+
+
+def _remove(kind, number, labels, repo, dry_run, runner):
+    print("%s %s: -%s" % (kind, number, ",-".join(labels)))
+    if dry_run:
+        return
+    for label in labels:
+        runner(["api", "--method", "DELETE",
+                "repos/%s/issues/%s/labels/%s" % (repo, number, quote(label, safe=""))])
 
 
 def label_env_issue(repo, dry_run, runner=run_gh):
@@ -243,21 +275,33 @@ def label_env_issue(repo, dry_run, runner=run_gh):
     return len(labels)
 
 
-def backfill(repo, limit, dry_run, runner=run_gh):
-    """Label every open issue and pull request missing these labels; returns (items, labels) counts."""
+def backfill(repo, limit, dry_run, runner=run_gh, prune=False):
+    """Label every open issue and pull request missing these labels; returns (items, added, removed).
+
+    With `prune`, an issue also loses every label of AUTOMATION_LABELS that the current rules no longer give; a label a
+    rule still gives, and every label outside that set (the people-owned ones), is left alone.
+    """
     rules = parse_labeler(LABELER_FILE.read_text(encoding="utf8"))
     items = 0
     added = 0
+    removed = 0
     issues = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--limit", str(limit),
                       "--json", "number,title,body,labels"], runner) or []
     for issue in issues:
         wanted = labels_for_text(issue.get("title"), issue.get("body"))
-        missing = [label for label in wanted if label not in _existing_names(issue)]
-        if not missing:
-            continue
-        _apply("issue", issue["number"], missing, repo, dry_run, runner)
-        items += 1
-        added += len(missing)
+        current = _existing_names(issue)
+        missing = [label for label in wanted if label not in current]
+        stale = []
+        if prune:
+            stale = [label for label in _ordered_names(issue) if label in AUTOMATION_LABELS and label not in wanted]
+        if missing or stale:
+            items += 1
+        if stale:
+            _remove("issue", issue["number"], stale, repo, dry_run, runner)
+            removed += len(stale)
+        if missing:
+            _apply("issue", issue["number"], missing, repo, dry_run, runner)
+            added += len(missing)
     pulls = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--limit", str(limit),
                      "--json", "number"], runner) or []
     for pull in pulls:
@@ -272,21 +316,25 @@ def backfill(repo, limit, dry_run, runner=run_gh):
         items += 1
         added += len(missing)
     mode = "dry-run" if dry_run else "applied"
-    print("%s: %d issues and pull requests, %d labels" % (mode, items, added))
-    return items, added
+    print("%s: %d issues and pull requests, %d labels added, %d removed" % (mode, items, added, removed))
+    return items, added, removed
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Label issues by keywords and pull requests by changed files.")
     parser.add_argument("--backfill", action="store_true",
                         help="label every open issue and pull request missing these labels")
+    parser.add_argument("--prune", action="store_true",
+                        help="with --backfill: also remove the automation labels an issue's current rules no longer give")
     parser.add_argument("--dry-run", action="store_true", help="print the labels, change nothing")
     parser.add_argument("--repo", default=None, help="OWNER/REPO (default: $REPO, else the current repository)")
     parser.add_argument("--limit", type=int, default=500, help="how many open issues/pull requests to read")
     args = parser.parse_args(argv)
+    if args.prune and not args.backfill:
+        parser.error("--prune only works with --backfill")
     repo = args.repo or default_repo()
     if args.backfill:
-        backfill(repo, args.limit, args.dry_run)
+        backfill(repo, args.limit, args.dry_run, prune=args.prune)
     else:
         label_env_issue(repo, args.dry_run)
     return 0

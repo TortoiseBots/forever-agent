@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Tests of the automatic labelling scripts (tools/label_issue.py, tools/sync_labels.py).
 
-Run them from the module root (they are not part of `make test`):
+Run them from the module root (`make tools-test` runs this module and tools/test_sync_labels.py; CI's `lint` job calls
+that target):
 
   python3 -m unittest tools/test_label_issue.py
 
@@ -23,7 +24,7 @@ import sync_labels
 ROOT = Path(__file__).resolve().parent.parent
 LABELS_FILE = ROOT / ".github" / "labels.yml"
 
-# One phrase per rule, from the brief's examples, to prove each rule fires.
+# One phrase per rule, from the brief's examples, to prove each rule fires. The title-scoped rules appear as titles.
 RULE_SAMPLES = (
     ("dungeon", "dungeon run stopped at the first pull"),
     ("dungeon", "dungeon-play did not enter Ragefire Chasm"),
@@ -33,14 +34,17 @@ RULE_SAMPLES = (
     ("raid", "raids are missing from the suite"),
     ("battleground", "bg-watch never joined"),
     ("battleground", "the battleground queue is empty"),
-    ("plans", "the plan for RFC is stale"),
-    ("plans", "plans need a new route"),
+    ("plans", "the dungeon plan for RFC is stale"),
+    ("plans", "the plan file is stale"),
+    ("plans", "plan-check reports a bad point"),
+    ("plans", "the plan-probe found nothing"),
+    ("plans", "the plan tools are stale"),
+    ("plans", "the route tools are stale"),
     ("plans", "navmesh files are missing"),
     ("daemon", "the daemon forgot the session"),
-    ("daemon", "serve answers nothing"),
-    ("daemon", "the rpc method returned an error"),
-    ("daemon", "a method is missing"),
+    ("daemon", "the daemon method returned an error"),
     ("dashboard", "the dashboard is empty"),
+    ("guild", "the guild bank lost its gold"),
     ("addon", "the add-on lost the chat"),
     ("addon", "the addon shows no buttons"),
     ("addon", "TBM says the wrong thing"),
@@ -77,7 +81,59 @@ class RulesTest(unittest.TestCase):
                 self.assertIn(label, label_issue.labels_for_text(text, ""))
 
     def test_rules_read_the_body_too(self):
-        self.assertEqual(["raid"], label_issue.labels_for_text("nothing here", "the raid wiped"))
+        self.assertEqual(["parity"], label_issue.labels_for_text("nothing here", "the parity re-score differs"))
+
+    def test_title_only_rules_ignore_the_body(self):
+        bodies = ("the raid wiped", "the dungeon finder", "a battleground queue", "the dashboard is empty",
+                  "guild orders", "the docs are stale")
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual([], label_issue.labels_for_text("nothing here", body))
+
+    def test_real_titles_do_not_get_body_word_labels(self):
+        # Real titles of the issues the first backfill over-labelled; the bodies are not copied. Each of these words
+        # appearing in a body (a list of module tickets, a settings file's field list, a "docs" aside) is not enough.
+        cases = (
+            (217, "Agent: a serve holds and renews its lease; a Forever settings file (parity re-score T3)",
+             ("plans", "daemon")),
+            (115, "[agent] Bench rules for class and healing features",
+             ("raid", "battleground", "dungeon", "dashboard", "guild")),
+            (216, "Agent: finish the daemon method table (parity re-score T1, T10, T11, T15)",
+             ("dungeon", "documentation")),
+            (228,
+             "Agent: fixes from the world-reads live session (dynamic objects, trade-slot cast, map snapshot default, "
+             "area trigger on walk)",
+             ("documentation",)),
+        )
+        for number, title, absent in cases:
+            labels = label_issue.labels_for_text(title, "")
+            for label in absent:
+                with self.subTest(issue=number, label=label):
+                    self.assertNotIn(label, labels)
+
+    def test_issue_216_title_still_gets_daemon(self):
+        labels = label_issue.labels_for_text(
+            "Agent: finish the daemon method table (parity re-score T1, T10, T11, T15)", "")
+        self.assertIn("daemon", labels)
+        self.assertIn("enhancement", labels)
+
+    def test_issue_228_title_keeps_its_area_labels(self):
+        labels = label_issue.labels_for_text(
+            "Agent: fixes from the world-reads live session (dynamic objects, trade-slot cast, map snapshot default, "
+            "area trigger on walk)", "")
+        self.assertIn("player-actions", labels)
+        self.assertIn("live-check", labels)
+        self.assertIn("bug", labels)
+
+    def test_plans_needs_a_plan_phrase_not_the_bare_word(self):
+        for text in ("the plan for RFC is stale", "plans need a new route", "the route is wrong"):
+            with self.subTest(text=text):
+                self.assertNotIn("plans", label_issue.labels_for_text("", text))
+
+    def test_daemon_needs_the_word_daemon(self):
+        for text in ("serve answers nothing", "the rpc method returned an error", "a method is missing"):
+            with self.subTest(text=text):
+                self.assertNotIn("daemon", label_issue.labels_for_text("", text))
 
     def test_word_boundaries(self):
         for text in ("braid", "the braided path", "emails", "mailbox", "servers", "planter", "upgrade nothing"):
@@ -125,20 +181,23 @@ class RulesTest(unittest.TestCase):
         if marker.exists():
             marker.unlink()
         title = '`touch %s` $(touch %s) ; touch %s | "<script>" \\ $HOME' % (marker, marker, marker)
-        body = "'; DROP TABLE labels; --\n" + "x" * 1_000_000 + "\nraid"
+        body = "'; DROP TABLE labels; --\n" + "x" * 1_000_000 + "\nparity"
         labels = label_issue.labels_for_text(title, body)
-        self.assertEqual(["raid"], labels)
+        self.assertEqual(["parity"], labels)
         self.assertFalse(marker.exists())
 
     def test_very_long_body_with_a_rule(self):
-        body = "raid " * 20_000
-        self.assertEqual(["raid"], label_issue.labels_for_text("", body))
+        body = "parity " * 20_000
+        self.assertEqual(["parity"], label_issue.labels_for_text("", body))
 
     def test_every_rule_is_a_known_label(self):
         owned = {label["name"] for label in sync_labels.parse_labels(LABELS_FILE.read_text(encoding="utf8"))}
-        for label, _ in label_issue.RULES:
+        for label, _, _ in label_issue.RULES:
             self.assertIn(label, owned)
-        self.assertTrue({"bug", "enhancement"} <= owned)
+        self.assertTrue(label_issue.AUTOMATION_LABELS <= owned)
+        self.assertTrue({"bug", "enhancement"} <= label_issue.AUTOMATION_LABELS)
+        self.assertTrue({"Must have", "Should have", "Nice to have", "Maybe later", "TortoiseBots"}.isdisjoint(
+            label_issue.AUTOMATION_LABELS))
 
 
 class LabelerFileTest(unittest.TestCase):
@@ -267,19 +326,19 @@ class BackfillTest(unittest.TestCase):
         calls = []
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            items, added = label_issue.backfill("o/r", 500, True, fake_gh(calls))
-        self.assertEqual((2, 4), (items, added))
+            items, added, removed = label_issue.backfill("o/r", 500, True, fake_gh(calls))
+        self.assertEqual((2, 4, 0), (items, added, removed))
         self.assertFalse([c for c in calls if c[:2] == ["api", "--method"]])
         lines = out.getvalue().splitlines()
         self.assertEqual(["issue 7: +dungeon,bug", "pr 9: +documentation,daemon",
-                          "dry-run: 2 issues and pull requests, 4 labels"], lines)
+                          "dry-run: 2 issues and pull requests, 4 labels added, 0 removed"], lines)
 
     def test_applies_only_the_missing_labels(self):
         calls = []
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            items, added = label_issue.backfill("o/r", 500, False, fake_gh(calls))
-        self.assertEqual((2, 4), (items, added))
+            items, added, removed = label_issue.backfill("o/r", 500, False, fake_gh(calls))
+        self.assertEqual((2, 4, 0), (items, added, removed))
         edits = [c for c in calls if c[:2] == ["api", "--method"]]
         self.assertEqual([
             ["api", "--method", "POST", "repos/o/r/issues/7/labels",
@@ -287,6 +346,7 @@ class BackfillTest(unittest.TestCase):
             ["api", "--method", "POST", "repos/o/r/issues/9/labels",
              "-f", "labels[]=documentation", "-f", "labels[]=daemon"],
         ], edits)
+        self.assertFalse([c for c in edits if c[2] == "DELETE"])
 
     def test_nothing_to_do(self):
         calls = []
@@ -300,7 +360,82 @@ class BackfillTest(unittest.TestCase):
             raise AssertionError(args)
 
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual((0, 0), label_issue.backfill("o/r", 500, False, runner))
+            self.assertEqual((0, 0, 0), label_issue.backfill("o/r", 500, False, runner))
+
+
+class PruneTest(unittest.TestCase):
+    """The one-time clean-up: remove only automation labels the current rules no longer give."""
+
+    def _runner(self):
+        calls = []
+
+        def runner(args):
+            calls.append(args)
+            if args[:2] == ["issue", "list"]:
+                return json.dumps([
+                    {"number": 115, "title": "[agent] Bench rules for class and healing features",
+                     "body": "module ticket: Raid consumables for bots",
+                     "labels": [{"name": "raid"}, {"name": "Must have"}]},
+                    {"number": 216, "title": "Agent: finish the daemon method table",
+                     "body": "the old Turtle dungeon driver modes and the docs say so",
+                     "labels": [{"name": "daemon"}, {"name": "dungeon"}, {"name": "documentation"},
+                                {"name": "TortoiseBots"}]},
+                    {"number": 300, "title": "nothing at all", "body": "a quiet issue",
+                     "labels": [{"name": "stability"}]},
+                ])
+            if args[:2] == ["pr", "list"]:
+                return "[]"
+            if args[:2] == ["api", "--method"]:
+                return ""
+            raise AssertionError("unexpected gh call: %r" % (args,))
+
+        return runner, calls
+
+    def test_dry_run_prints_removals_and_changes_nothing(self):
+        runner, calls = self._runner()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            items, added, removed = label_issue.backfill("o/r", 500, True, runner, prune=True)
+        self.assertEqual((2, 3, 3), (items, added, removed))
+        self.assertFalse([c for c in calls if c[:2] == ["api", "--method"]])
+        self.assertEqual([
+            "issue 115: -raid",
+            "issue 115: +testing,enhancement",
+            "issue 216: -dungeon,-documentation",
+            "issue 216: +enhancement",
+            "dry-run: 2 issues and pull requests, 3 labels added, 3 removed",
+        ], out.getvalue().splitlines())
+
+    def test_applies_the_removals_and_keeps_everything_else(self):
+        runner, calls = self._runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            items, added, removed = label_issue.backfill("o/r", 500, False, runner, prune=True)
+        self.assertEqual((2, 3, 3), (items, added, removed))
+        calls = [c for c in calls if c[:2] == ["api", "--method"]]
+        self.assertEqual([
+            ["api", "--method", "DELETE", "repos/o/r/issues/115/labels/raid"],
+            ["api", "--method", "POST", "repos/o/r/issues/115/labels",
+             "-f", "labels[]=testing", "-f", "labels[]=enhancement"],
+            ["api", "--method", "DELETE", "repos/o/r/issues/216/labels/dungeon"],
+            ["api", "--method", "DELETE", "repos/o/r/issues/216/labels/documentation"],
+            ["api", "--method", "POST", "repos/o/r/issues/216/labels", "-f", "labels[]=enhancement"],
+        ], calls)
+        # The people-owned labels and a label no rule gives are never removed.
+        flat = json.dumps(calls)
+        for name in ("Must have", "TortoiseBots", "stability", "daemon"):
+            self.assertNotIn("/labels/" + name, flat)
+
+    def test_a_label_a_rule_still_gives_is_not_removed(self):
+        runner, calls = self._runner()
+        with contextlib.redirect_stdout(io.StringIO()):
+            label_issue.backfill("o/r", 500, False, runner, prune=True)
+        deletes = [c for c in calls if c[:2] == ["api", "--method"] and c[2] == "DELETE"]
+        self.assertNotIn(["api", "--method", "DELETE", "repos/o/r/issues/216/labels/daemon"], deletes)
+
+    def test_prune_needs_backfill(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                label_issue.main(["--prune", "--dry-run"])
 
 
 class EnvModeTest(unittest.TestCase):

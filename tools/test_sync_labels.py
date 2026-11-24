@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of tools/sync_labels.py (the labels.yml parser and the idempotent create/update pass).
 
-Run them from the module root (not part of `make test`):
+Run them from the module root (`make tools-test`; CI's `lint` job calls it):
 
   python3 -m unittest tools/test_sync_labels.py
 

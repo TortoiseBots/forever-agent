@@ -6,13 +6,18 @@ CORE ?= $(HOME)/tortoise-wow
 DBC ?= $(HOME)/tortoise-docker-penqle/data/dbc
 export GOTOOLCHAIN := local
 
-.PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract tbm-contract-forever addon-host
+.PHONY: test fuzz fmt fmt-check vet nocgo build cross opcodes spellnames tbm-contract tbm-contract-forever addon-host tools-test
 
 # The package timeout is 20m: cmd/forever-agent runs about 1500 tests under -race and takes 8-10 minutes, so Go's 10m
 # default leaves no room on a loaded machine. CI runs the same checks as parallel jobs, with the race tests in 9 shards
 # (docs/CI.md); this target is the single-machine equivalent.
-test: fmt-check vet nocgo
+test: fmt-check vet nocgo tools-test
 	$(GO) test -race -count=1 -timeout 20m ./...
+
+# The Python tool tests: the automatic label rules and the label sync (no network, no `gh`; both inject a runner).
+# CI's `lint` job runs this too, so a rule change cannot merge without its tests.
+tools-test:
+	python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py
 
 fmt:
 	$(GOFMT) -w .
