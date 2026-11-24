@@ -815,14 +815,15 @@ func (p *playRun) fight(ctx context.Context) string {
 			}
 		default:
 			// Nothing of the pull is on the party and one of its units still stands: a member that never aggroed (a
-			// pillar between it and the party) or one that evaded would hold the fight open to its cap. After the quiet
-			// window it is dropped from the pull, so the fight can end; it is alive, so its pack is not counted fought
-			// and the run pulls the pack again.
+			// pillar between it and the party) or one that evaded would hold the fight open to its cap. A unit gets the
+			// pull's own window (counted from the last order that named it) to turn on the party: a boss that waits for
+			// the tank to walk to it is not idle. Past it the unit is dropped from the pull, so the fight can end; it is
+			// alive, so its pack is not counted fought and the run pulls the pack again.
 			calm = time.Time{}
 			if idle.IsZero() {
 				idle = now
 			}
-			if now.Sub(idle) >= p.lim.FightQuiet {
+			if now.Sub(idle) >= max(p.lim.FightQuiet, p.lim.Pull) {
 				p.dropIdle(units)
 				idle = time.Time{}
 			}
@@ -848,7 +849,7 @@ func (p *playRun) fight(ctx context.Context) string {
 						return ""
 					}
 				}
-				broke = time.Time{}
+				broke, idle = time.Time{}, time.Time{}
 			}
 		}
 		if u, ok := unitByGUID(units, p.skull); ok && !u.Dead && !u.Target.IsZero() && p.partyMember(u.Target) && u.Target != p.tankGUID() {

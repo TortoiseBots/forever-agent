@@ -223,6 +223,25 @@ func TestPlayNeverAggroedUnitIsDropped(t *testing.T) {
 	}
 }
 
+// TestPlayBossSlowToEngageIsNotDropped: the plan's add dies and the boss behind it has not turned on the party yet (the
+// tank is still walking to it, 8 s): the boss is the pull's unit, not an idle one, and the fight stays open to the
+// pull's window instead of ending bosses-alive after the quiet limit.
+func TestPlayBossSlowToEngageIsNotDropped(t *testing.T) {
+	plan := playFightPlan()
+	plan.Legs[0].PullGroups = nil
+	plan.Legs[0].Boss.First = []uint32{201}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AggroDelay = 8 * time.Second
+		f.AddUnit(Unit{GUID: fightGUID(7), Entry: 201, Pos: Vec3{58, 2, 0}})
+		f.SpawnBosses()
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the boss was only slow to engage)", res.Stop)
+	}
+}
+
 // --- 6: the boss pull's gates ---
 
 // TestPlayBossPullGathersTheParty: a bot 20 yd behind the agent passes the walk's own follow bound (35 yd) but not the
