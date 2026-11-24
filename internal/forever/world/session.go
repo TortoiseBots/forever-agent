@@ -93,6 +93,12 @@ type Options struct {
 	// of the stay, then the command logs out like every other one-shot mode.
 	Act             []ActStep
 	AcceptResurrect bool
+	// MailTo is `forever act --mail-to NAME=GUID`, the send-mail allow-list, MailMoneyCap its `--mail-money-cap`
+	// and PayCOD its `--pay-cod`: a send only goes to a listed recipient and never above the cap, and a COD mail
+	// is only taken when the caller allowed paying it.
+	MailTo       map[string]wire.GUID
+	MailMoneyCap int64
+	PayCOD       bool
 	// AcceptResurrectFrom is --accept-resurrect-from NAME: with AcceptResurrect it answers only an offer whose
 	// offerer the model knows by that name. Empty accepts an offer from any GUID, which is the default: the server
 	// already decides who may offer a resurrection (MiscHandler.cpp:520-521).

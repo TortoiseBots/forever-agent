@@ -37,6 +37,8 @@ const (
 	NPCFlagTrainer uint32 = 0x00000010
 	// NPCFlagFlightmaster is UNIT_NPC_FLAG_FLIGHTMASTER (UnitDefines.h:333): the flag every taxi handler checks.
 	NPCFlagFlightmaster uint32 = 0x00002000
+	// NPCFlagMailbox is UNIT_NPC_FLAG_MAILBOX (UnitDefines.h:346): the creature answers the mailbox packets.
+	NPCFlagMailbox uint32 = 0x04000000
 )
 
 // IsVendor reports whether a creature's flags make it a vendor (any of the five vendor bits).
@@ -52,6 +54,9 @@ func IsTrainer(flags uint32) bool { return flags&NPCFlagTrainer != 0 }
 // IsFlightmaster reports whether a creature's flags carry the flight-master bit every taxi handler checks
 // (TaxiHandler.cpp:35-76, :159-166).
 func IsFlightmaster(flags uint32) bool { return flags&NPCFlagFlightmaster != 0 }
+
+// IsMailbox reports whether a creature's flags make it a mailbox (MailHandler.cpp CanOpenMailBox).
+func IsMailbox(flags uint32) bool { return flags&NPCFlagMailbox != 0 }
 
 // InteractionMerchant is PlayerInteractionType::Merchant (DBCEnums.h:2236): the interaction SMSG_NPC_INTERACTION_OPEN_RESULT
 // names when a vendor opens.
