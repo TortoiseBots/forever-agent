@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/bnet"
+	"github.com/pjerra/forever-agent/internal/forever/servesettings"
 	"github.com/pjerra/forever-agent/internal/forever/world"
 	"github.com/pjerra/forever-agent/internal/netutil"
 	"github.com/pjerra/forever-agent/internal/privfile"
@@ -172,12 +173,14 @@ func serveManifest(dir, tokenFile, account, character string, port int, noAuth, 
 }
 
 func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--addon on|off] [--capture-dir DIR] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
+	const usage = "usage: forever-agent forever serve [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--password-file FILE] [--listen HOST:PORT] [--dir DIR] [--token-file FILE] [--no-auth] [--navmesh DIR] [--parent MAP=PARENT] [--plans-dir DIR] [--disconnect-grace DURATION] [--allow-gm-units] [--addon on|off] [--capture-dir DIR] [--settings FILE] [--force] [--login-budget ADDR] [--create RACE,CLASS[,SEX] (--create-choice OPTION:CHOICE ... | --create-no-appearance)]"
 	fs := flag.NewFlagSet("forever serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
 	common.flags(fs)
-	passwordFile := fs.String("password-file", "", "file holding the account password (default: FOREVER_PASSWORD)")
+	settingsPath := fs.String("settings", "", "settings file for a Forever slot (account, character, rest/rpc/ca, navmesh, plans and serve's other flags); a flag given on the command line wins over the file")
+	force := fs.Bool("force", false, "start even when the slot's lease has expired (the serve renews it); never takes a live lease from another holder")
+	passwordFile := fs.String("password-file", "", "file holding the account password (default: FOREVER_PASSWORD, or the settings file's password_file/password)")
 	listen := fs.String("listen", "127.0.0.1:8765", "loopback address the RPC socket listens on")
 	dir := fs.String("dir", "", "slot-style dir: slot.json, the pid file and the token file are written there so the rpc client works")
 	tokenFile := fs.String("token-file", "", "RPC bearer token file (default: rpc-<port>.token in --dir or the working directory)")
@@ -202,6 +205,26 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
+	// A settings file fills the flags the command line did not set. The serve may cancel its own
+	// run: a renewal that loses the lease to another holder stops it cleanly.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	var settings *servesettings.Settings
+	if *settingsPath != "" {
+		st, err := servesettings.Load(*settingsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever serve: %v\n", err)
+			return exitUsage
+		}
+		settings = &st
+		serveFromSettings(st, set, &common, serveFlagOverrides{
+			listen: listen, dir: dir, tokenFile: tokenFile, navmesh: navmesh, plansDir: plansDir,
+			captureDir: captureDir, addon: addon, noAuth: noAuth, allowGMUnits: allowGMUnits,
+			parents: parents, grace: grace,
+		})
+	}
 	addonOff := false
 	switch strings.ToLower(strings.TrimSpace(*addon)) {
 	case "on":
@@ -225,7 +248,11 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		budget = newBudgetClient(*budgetAddr, tok)
 	}
 	if err := common.check("forever serve"); err != nil {
-		fmt.Fprintln(stderr, err)
+		if settings != nil {
+			fmt.Fprintf(stderr, "%v (from --settings %s and the command line)\n", err, *settingsPath)
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
 		return exitUsage
 	}
 	create, err := parseServeCreate(*createSpec, createChoices, *createNoAppearance)
@@ -250,13 +277,13 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			return exitUsage
 		}
 	}
-	password, err := servePassword(*passwordFile)
+	password, err := servePasswordFor(set["password-file"], *passwordFile, settings)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever serve: %v\n", err)
 		return exitUsage
 	}
 	if password == "" {
-		fmt.Fprintln(stderr, "forever serve: no password (set FOREVER_PASSWORD or pass --password-file)")
+		fmt.Fprintln(stderr, "forever serve: no password (set FOREVER_PASSWORD, pass --password-file, or give password/password_file in --settings)")
 		return exitUsage
 	}
 
@@ -269,6 +296,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	keepManifest := false
+	var lease *serveLease
 	if *dir != "" {
 		if info, err := os.Lstat(*dir); err == nil {
 			if !info.IsDir() {
@@ -291,6 +319,20 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		if err != nil {
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
 			return exitUsage
+		}
+		lease, err = openServeLease(*dir)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever serve: %v\n", err)
+			return exitSlotRefused
+		}
+		if lease != nil {
+			// The lease is the slot's, so an expired one or another holder's stops the serve before it
+			// logs in; --force only overrides the clock.
+			if err := lease.adopt(*force); err != nil {
+				fmt.Fprintf(stderr, "forever serve: %v\n", err)
+				return exitSlotRefused
+			}
+			lease.keep(ctx, cancel, stdout)
 		}
 	}
 	if *tokenFile == "" {
@@ -339,6 +381,11 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
 	if err != nil {
 		gate.failed(err)
+		if lease != nil {
+			if _, lost := lease.lostReason(); lost {
+				return exitServeLeaseLost
+			}
+		}
 		if code, isLogin := loginExit(err, stderr); isLogin {
 			return code
 		}
@@ -371,6 +418,13 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stdout, "rpc: authentication off")
 	}
 	report, err := world.Enter(ctx, opts)
+	if lease != nil {
+		// A renewal that found another holder cancelled the run and already logged why; the exit
+		// code says the stop was the lease, not the game or the network.
+		if _, lost := lease.lostReason(); lost {
+			return exitServeLeaseLost
+		}
+	}
 	if report != nil {
 		fmt.Fprintf(stdout, "serve: %d server packet(s) in %d opcode(s)\n", reportTotal(report), len(report.Counts))
 	}
