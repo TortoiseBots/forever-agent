@@ -227,9 +227,12 @@ bin/forever-agent teardown --gm off ./slot
 
 `teardown` reads the dir's `slot.json`, stops a running follow loop over RPC if there is one, sends the GM line
 (`--gm off` by default; `on` and `keep` are the other values), logs the character out, ends the agent by its pid
-file, removes secrets and releases the lease. `--dry-run` plans the steps and sends nothing; `--json` prints the
-steps. It accepts both a `slot setup --forever` dir (the lease is released) and a bare `forever serve --dir` (no
-lease exists, so that step is skipped). Exit 14 means a step failed; a lease refusal is recorded as skipped.
+file, removes secrets and releases the lease. `--keep-lease` leaves the lease in place, and `--release-anyway`
+releases it even when a game-side step failed (by default a game-side failure keeps it); `--slots FILE` names the
+slot table instead of the one recorded in `slot.json`. `--dry-run` plans the steps and sends nothing; `--json`
+prints the steps. It accepts both a `slot setup --forever` dir (the lease is released) and a bare `forever serve
+--dir` (no lease exists, so that step is skipped). Exit 14 means a step failed; a lease refusal is recorded as
+skipped.
 
 # The settings file (old stack only)
 

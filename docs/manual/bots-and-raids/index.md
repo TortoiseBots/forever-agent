@@ -16,3 +16,4 @@
 # Dashboards
 
 * [Watching bots on a dashboard](dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and replay recordings.
+* [Editing a route on the dashboard](dashboard-route-editing.md) - Turn on the dashboard's route editor, save a navmesh-checked version of a plan's route, and move that version into the repository.

@@ -179,14 +179,14 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
-// The example in the plan format page (docs/okf/plans/plan-format.md) is a plan the loader accepts.
+// The example in the plans page (docs/manual/dungeons/plans.md) is a plan the loader accepts.
 func TestReadmeExampleParses(t *testing.T) {
-	b, err := os.ReadFile("../../docs/okf/plans/plan-format.md")
+	b, err := os.ReadFile("../../docs/manual/dungeons/plans.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	i := strings.Index(s, "## Example")
+	i := strings.Index(s, "# Examples")
 	if i < 0 {
 		t.Fatal("no Example section")
 	}

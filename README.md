@@ -80,7 +80,8 @@ per page, written for the person using the agent.
 | [Testing](docs/manual/testing/index.md) | How a run is judged, trials, scenarios, bug hunter, report cards | [How a run is judged](docs/manual/testing/overview.md) |
 | [Developers](docs/manual/developers/index.md) | Architecture, package map, contracts, adding commands and methods | [Architecture](docs/manual/developers/architecture.md) |
 
-The old 1.12 / Turtle documentation is untouched beside it in [docs/okf](docs/okf/index.md) and
+The 1.12 / Turtle stack the repository still carries has its own pages in the same manual, under
+[docs/manual/turtle](docs/manual/turtle/index.md); the Turtle history notes stay in
 [docs/turtle/README.md](docs/turtle/README.md).
 
 ## Project status

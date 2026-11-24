@@ -1,0 +1,58 @@
+---
+type: Guide
+title: Score a fight
+description: Judge finished fights against the spell oracle, and compare two pull tests.
+tags: [turtle, combat, oracle, testing]
+status: stable
+generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:45:00Z }
+sources:
+  - id: fight-score
+    resource: cmd/forever-agent/fight_score_cmd.go
+  - id: pulltest-cmd
+    resource: cmd/forever-agent/pulltest_cmd.go
+  - id: kbspells-judge
+    resource: internal/kbspells/judge.go
+---
+
+This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore server.
+
+# Score a fight
+
+`fight-score` reads Turtle dashboard recordings by default; a Forever (Classic 1.60) run's fight record is scored
+against the Forever spell data with `--set spell_oracle=forever` (`forever-agent help`). No fight record names its core,
+so the selected oracle is used as asked; the Forever selection adds a warning to the reading (the JSON `warnings`
+array and a `warning:` line) that the record could not confirm its origin.
+
+Two offline commands judge what already happened. `fight-score` reads finished fight JSON and scores each bot against its spec's spell lists; `pulltest` prints one pull-test result or the change between two. Both read files only and never log in. Warnings never fail: `fight-score` exits 0, or 2 on usage.
+
+## 1. Score one fight
+
+```sh
+turtle-agent fight-score combat-fight-1.json
+```
+
+Each fight prints `fight <id> <commander> <s> s, <n> bots, spell oracle <name>` (the oracle that produced the reading), then the debugger's two tank checks (`mt_sunder`, `ot_taunt`) and one oracle line per bot with a warning: a missing core spell or a never spell. Fights under the minimum length score `na` instead.
+
+## 2. Name the tanks
+
+```sh
+turtle-agent fight-score --mt <name> --ot <name1>,<name2> combat-fight-1.json
+```
+
+Without `--mt` the first tank in the fight is the main tank; without `--ot` the other tanks are the off-tanks.
+
+## 3. Tune the threshold
+
+```sh
+turtle-agent fight-score --set spell_oracle=20 combat-fight-1.json
+```
+
+`--set` changes a threshold as `check=value`. `spell_oracle` (default 20) is the seconds of a fight a bot must be active before it is judged. `--set` takes any known trace-score threshold id, but only the oracle one changes a fight score; an unknown id is refused (`--set: no threshold for check "x" (have ...)`). `--json` prints the reading as JSON instead of a table. Put flags before the file names: this command uses plain flag parsing.
+
+## 4. Compare two pull tests
+
+```sh
+turtle-agent pulltest --compare a.json b.json
+```
+
+A result is the `<trace without .jsonl>.pulltest.json` file beside the trace, or a `dungeon_status` answer saved as JSON. The comparison prints which brain and rotation digest each side played, warns for fewer than 3 scored tries and when the two are not the same pull, then the party and character rows, each marked better, worse or same. Without `--compare`, `turtle-agent pulltest <result.json>` prints one result as a table; `--json` prints JSON. Put flags before the file names: this command uses plain flag parsing.
