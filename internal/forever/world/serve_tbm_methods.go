@@ -25,11 +25,15 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
-// The TBM methods' bounds: the command's own wait, defaulting to the CLI's 5 s and never more than 2 minutes (the
-// module answers a command in well under a second; a long bound only covers a slow link).
+// The TBM methods' bounds. A command waits the CLI's 5 s by default and never more than 15 s: the handler's wait runs
+// off the session queue (serveTBMRun), but a longer bound only makes a caller wait, and a silent module must not hold
+// a request for two minutes. serveTBMPump is one packet-pump slice per queued call, so the queue answers every other
+// method between slices; serveTBMCloseWait bounds the queued call that removes the exchange's chat tap.
 const (
 	serveTBMWaitDefault = 5 * time.Second
-	serveTBMWaitMax     = 2 * time.Minute
+	serveTBMWaitMax     = 15 * time.Second
+	serveTBMPump        = 50 * time.Millisecond
+	serveTBMCloseWait   = 2 * time.Second
 )
 
 // serveTBMHelloParams is tbm_handshake's: the transport to try ("auto" follows the module's own answer, "addon",
@@ -108,15 +112,19 @@ type ServeTBMResult struct {
 	Ignored         int               `json:"ignored,omitempty"`
 }
 
-// registerTBMMethods wires the three TBM methods. Each takes the session's chat feed over for the length of the
-// call (tbm_adapter.go) and gives it back afterwards, so the command channel keeps its lines.
+// registerTBMMethods wires the three TBM methods. Their handler runs on the RPC goroutine, not on the session
+// queue: the tap install, every send and each pump slice is its own short queued call (tbm_adapter.go), so the
+// module's answer is waited for off the queue and status, dungeon_stop and every other call keep answering. One
+// exchange runs at a time (the module speaks one TBM client): st.tbmGate serialises them without touching the
+// session queue.
 func registerTBMMethods(srv *rpc.Server, st *serveState) {
-	srv.Register("tbm_handshake", serveCallTyped(st, func(s *session, ctx context.Context, p serveTBMHelloParams) (ServeTBMHello, error) {
-		a := newTBMAdapter(s)
-		defer a.close()
-		return serveTBMHello(ctx, a, p.Transport, serveTBMTimeout(p.WaitMS))
+	srv.Register("tbm_handshake", rpc.Typed(func(ctx context.Context, p serveTBMHelloParams) (ServeTBMHello, error) {
+		timeout := serveTBMTimeout(p.WaitMS)
+		return serveTBMRun(ctx, st, timeout, func(ctx context.Context, a tbmclient.Conn) (ServeTBMHello, error) {
+			return serveTBMHello(ctx, a, p.Transport, timeout)
+		})
 	}))
-	send := func(s *session, ctx context.Context, p serveTBMSendParams) (ServeTBMResult, error) {
+	send := func(ctx context.Context, p serveTBMSendParams) (ServeTBMResult, error) {
 		if strings.TrimSpace(p.Command) == "" {
 			return ServeTBMResult{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "tbm: command is required (e.g. \"roster\" or \"action follow\")"}
 		}
@@ -124,15 +132,41 @@ func registerTBMMethods(srv *rpc.Server, st *serveState) {
 		if strings.TrimSpace(transport) == "" {
 			transport = p.Via // the old daemon's name for the same choice
 		}
-		a := newTBMAdapter(s)
-		defer a.close()
-		return serveTBMCommand(ctx, a, transport, p.Command, serveTBMTimeout(p.WaitMS))
+		timeout := serveTBMTimeout(p.WaitMS)
+		return serveTBMRun(ctx, st, timeout, func(ctx context.Context, a tbmclient.Conn) (ServeTBMResult, error) {
+			return serveTBMCommand(ctx, a, transport, p.Command, timeout)
+		})
 	}
-	srv.Register("tbm_send", serveCallTyped(st, send))
-	srv.Register("tbm", serveCallTyped(st, send))
+	srv.Register("tbm_send", rpc.Typed(send))
+	srv.Register("tbm", rpc.Typed(send))
 }
 
-// serveTBMTimeout is the wait a TBM call gets: the default (the CLI's 5 s) for zero, at most two minutes.
+// serveTBMRun runs one TBM exchange: the link must be up, one exchange at a time, the adapter's tap installed for
+// its length, and the whole exchange bounded by timeout.
+func serveTBMRun[R any](ctx context.Context, st *serveState, timeout time.Duration, fn func(context.Context, tbmclient.Conn) (R, error)) (R, error) {
+	var zero R
+	if err := st.actionError(); err != nil {
+		return zero, serveError(err)
+	}
+	select {
+	case st.tbmGate <- struct{}{}:
+		defer func() { <-st.tbmGate }()
+	case <-ctx.Done():
+		return zero, serveError(ctx.Err())
+	case <-st.done:
+		return zero, serveError(ErrLinkLost)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	a := newServeTBMAdapter(st)
+	if err := a.open(ctx); err != nil {
+		return zero, serveError(err)
+	}
+	defer a.close()
+	return fn(ctx, a)
+}
+
+// serveTBMTimeout is the wait a TBM call gets: the default (the CLI's 5 s) for zero, at most 15 s.
 func serveTBMTimeout(waitMS int) time.Duration {
 	if waitMS <= 0 {
 		return serveTBMWaitDefault
@@ -171,10 +205,9 @@ func serveTBMHello(ctx context.Context, conn tbmclient.Conn, transport string, t
 	}
 	h, err := cli.Hello(ctx, timeout)
 	if err != nil {
-		if errors.Is(err, tbmclient.ErrTimeout) {
-			return ServeTBMHello{}, &rpc.Error{Code: rpc.CodeTimeout, Message: fmt.Sprintf("tbm_handshake: the module did not finish the hello within %s", timeout)}
-		}
-		return ServeTBMHello{}, &rpc.Error{Code: rpc.CodeGame, Message: "tbm_handshake: " + err.Error()}
+		return ServeTBMHello{}, serveTBMError("tbm_handshake", err, func() string {
+			return fmt.Sprintf("tbm_handshake: the module did not finish the hello within %s", timeout)
+		})
 	}
 	out := serveTBMHelloRows(h)
 	out.After = string(cli.Transport())
@@ -189,12 +222,27 @@ func serveTBMCommand(ctx context.Context, conn tbmclient.Conn, transport, comman
 	}
 	res, err := cli.Do(ctx, command, timeout)
 	if err != nil {
-		if errors.Is(err, tbmclient.ErrTimeout) {
-			return ServeTBMResult{}, &rpc.Error{Code: rpc.CodeTimeout, Message: fmt.Sprintf("tbm_send: the module did not answer %q within %s", command, timeout)}
-		}
-		return ServeTBMResult{}, &rpc.Error{Code: rpc.CodeGame, Message: "tbm_send: " + err.Error()}
+		return ServeTBMResult{}, serveTBMError("tbm_send", err, func() string {
+			return fmt.Sprintf("tbm_send: the module did not answer %q within %s", command, timeout)
+		})
 	}
 	return serveTBMResultRows(command, string(cli.Transport()), res), nil
+}
+
+// serveTBMError maps the client's error onto the RPC's: its own timeout is -32004, a lost or re-entering link keeps
+// its -32002/-32005, and anything else is the module's answer (-32003) under the method's name.
+func serveTBMError(method string, err error, timeout func() string) error {
+	if errors.Is(err, tbmclient.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return &rpc.Error{Code: rpc.CodeTimeout, Message: timeout()}
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		return re
+	}
+	if isServeLinkLost(err) || errors.Is(err, context.Canceled) {
+		return serveError(err)
+	}
+	return &rpc.Error{Code: rpc.CodeGame, Message: method + ": " + err.Error()}
 }
 
 // serveTBMHelloRows types the hello's trailer.

@@ -266,7 +266,14 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			}
 			if say := f.serveGMSay; say != nil && (strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!")) {
 				if text, ok := say(said); ok {
-					c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", text))
+					// The core's ChatHandler::SendSysMessage sends one SMSG_CHAT per line
+					// (Chat.cpp:111-125), so a reply's lines arrive as separate packets, not one frame with
+					// newlines; ("", true) is a command that printed nothing at all.
+					if text != "" {
+						for _, ln := range strings.Split(text, "\n") {
+							c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", ln))
+						}
+					}
 					continue
 				}
 			}

@@ -49,6 +49,17 @@ is passed through. The answer is `{sent, runs}` with the module's run records ty
 them. `dungeon_skip` and `dungeon_stage` are refused: a module-led run has no client-side step control, and an
 agent-led run's start step is `forever dungeon-run --from-leg/--legs`.
 
+`dungeon_run` is the one mutation that starts something, so it makes the CLI's start preflight first, through the
+same functions (`internal/forever/fpreflight`) as the module-led command whose `.tb run start` it sends
+(`forever dungeon-watch`): the plan `--plans-dir` holds, loaded by `driver.LoadWatchRoute`; the serve slot
+`forever serve --dir` wrote, its lease and its port; the module answering `.tb state party` over this session's
+command channel; and the called lead, read with `.pinfo` through the serve character's own GM console (the same
+command and parser the CLI's SOAP console runs; the daemon is given no SOAP endpoint). The plan export is checked
+with no path, so it reports the CLI's own "no --export" warning. A blocked check refuses the call with the failed
+lines in the `-32003` message and sends nothing. A daemon started without `--dir` cannot check the slot, the lease
+or the module link, so it refuses too, naming `forever dungeon-watch`. The preflight runs off the session queue;
+each session read it makes is its own short call.
+
 `plan_check {name, from_leg?, from_pull_group?}` walks the plan from the serve's plans folder (`--plans-dir`, default
 `dungeons`) on a scratch Forever planner over the serve's `--navmesh` (its own tile cache, so a walk on the session
 keeps its tiles). It answers the check's findings (`checked`, `skipped`, `plan`, `map`, `points`, `issues`,
@@ -58,7 +69,10 @@ of the daemon's check: no serve flag names a spawns folder, and `plan-check --fo
 
 **The TBM methods are implemented, the add-on host is not (e).** `tbm_handshake`, `tbm_send` and `tbm` are the TBM
 client `forever tbm-check` already runs (`internal/forever/tbmclient` over this session's add-on layer): the hello
-(roster probe, then the trailer and the transport commands switch to), and one command with its answer. `tbm` is
+(roster probe, then the trailer and the transport commands switch to), and one command with its answer. The wait
+runs off the session queue: the tap install, every send and each 50 ms packet slice is its own short queued call,
+one exchange runs at a time, and `wait_ms` (5 s by default) is capped at 15 s, so `status` and the dungeon verbs
+answer while a silent module is waited for. `tbm` is
 `tbm_send` under the old name (its old transport parameter `via` is accepted too). `addon_start`, `addon_stop`,
 `addon_state`, `addon_tick`, `addon_click`, `tbm_buttons` and `tbm_click` are refused: they need an add-on HOST
 (a real add-on running headless), which is a separate, later ticket; the ported half of the add-on layer is

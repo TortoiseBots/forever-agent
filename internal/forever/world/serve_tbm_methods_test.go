@@ -7,6 +7,7 @@ package world
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -98,6 +99,82 @@ func TestServeTBMDaemon(t *testing.T) {
 	a.mustFail(t, "tbm", map[string]any{}, -32602, "command is required")
 	// The old daemon's transport name (via) is accepted where transport is; a bad one names the four choices.
 	a.mustFail(t, "tbm_send", map[string]any{"command": "roster", "via": "carrier-pigeon"}, -32602, "auto, addon, addon-self or chat")
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeTBMDaemonDoesNotHoldTheQueue: a TBM exchange waits for a silent module off the session queue, so status
+// and dungeon_stop answer while it waits, and the wait has a fixed upper bound (15 s, whatever wait_ms says).
+// Mutation: running the exchange as one queued call blocks both until the wait ends.
+func TestServeTBMDaemonDoesNotHoldTheQueue(t *testing.T) {
+	if got := serveTBMTimeout(10 * 60 * 1000); got != 15*time.Second {
+		t.Fatalf("wait_ms is capped at %s, not %s", got, 15*time.Second)
+	}
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		switch {
+		case line == ".tb state party":
+			return commanderStateLines("Tanka")
+		case strings.HasPrefix(line, ".tb commander status"):
+			return commanderCardLines("Tanka", "Tanka")
+		case strings.HasPrefix(line, ".tb run stop "):
+			return []string{"run-begin #T",
+				"run lead=Tanka plan=ragefire_chasm state=stopped step=1 steps=80 leg=0 legname=tunnel kind=pull " +
+					"phase=pull note=stopped pull=0 pulls=51 boss= deaths=0 wipes=0 pauses=0 elapsed=39 ev=3 #T",
+				"run-end count=1 records=1 verb=stop #T"}
+		}
+		return nil
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	// Warm the GM guard once (the first command of a session pays the probe's quiet window) so the timing below
+	// measures the queue, not the guard.
+	a.mustCall(t, "bot", map[string]any{"line": ".tb state party"})
+
+	// The module answers nothing (the fake drops add-on traffic), so the exchange pumps for its whole wait.
+	type reply struct {
+		rerr *rpcError
+		err  error
+	}
+	done := make(chan reply, 1)
+	go func() {
+		_, rerr, err := a.tryCall("tbm_send", map[string]any{"command": "roster", "transport": "addon", "wait_ms": 3000})
+		done <- reply{rerr: rerr, err: err}
+	}()
+	// Let the exchange install its tap and enter its first pump slice.
+	time.Sleep(200 * time.Millisecond)
+
+	started := time.Now()
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("status took %s while a TBM exchange waited (the queue was held)", elapsed)
+	}
+
+	started = time.Now()
+	var out ServeDungeonRun
+	json.Unmarshal(a.mustCall(t, "dungeon_stop", map[string]any{"lead_bot": "Tanka"}), &out)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("dungeon_stop took %s while a TBM exchange waited (the queue was held)", elapsed)
+	}
+	if len(out.Sent) != 1 || !strings.HasPrefix(out.Sent[0], ".tb run stop Tanka") {
+		t.Fatalf("dungeon_stop sent %q\n%s", out.Sent, steps.joined())
+	}
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("tbm_send: %v", r.err)
+		}
+		if r.rerr == nil || r.rerr.Code != rpc.CodeTimeout {
+			t.Fatalf("tbm_send on a silent module: %+v, want the typed timeout", r.rerr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("tbm_send did not end after its wait")
+	}
 	a.stop(t)
 	f.wait(t)
 }

@@ -23,6 +23,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/command"
+	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
@@ -42,6 +43,10 @@ type ServeConfig struct {
 	// PlansDir is the folder map_snapshot and the plan overlay read (--plans-dir; the same folder
 	// dungeon_run's plans live in). Empty takes "dungeons".
 	PlansDir string
+	// Dir is the `forever serve --dir` whose slot.json, pid file and token file the daemon wrote. dungeon_run's
+	// start preflight checks that slot, its lease and the module link against it (the same checks the CLI makes
+	// with --serve-dir); without it the method refuses to start a run.
+	Dir string
 	// CaptureDir is the debug capture of the serving session (Options.CaptureDir): each link writes a new run
 	// directory under it, so a reconnect starts a fresh run and the dropped link's files stay as they were. A parent
 	// inside a git work tree is refused before the login, because a capture holds a run's identifiers.
@@ -70,6 +75,9 @@ type ServeConfig struct {
 	reconnectBackoff      time.Duration
 	reconnectMaxBackoff   time.Duration
 	reconnectLoginTimeout time.Duration
+	// preflight, when set, replaces the effects dungeon_run's start preflight runs through (the tests' fake
+	// process probe and console). Nil takes the daemon's own: the live /proc probe and its own command channel.
+	preflight func(st *serveState) fpreflight.Deps
 }
 
 // PermanentLoginError is what a Relogin returns for a failure no later attempt can fix (a wrong password, an unknown,
@@ -200,6 +208,15 @@ type serveState struct {
 	nav *navmesh.Planner
 	// plansDir is where map_snapshot reads a plan (--plans-dir; the same folder dungeon_run's plans live in).
 	plansDir string
+	// dir is the `forever serve --dir` the daemon wrote its slot.json, pid and token file into (ServeConfig.Dir):
+	// dungeon_run's start preflight checks the slot, its lease and the module link against it.
+	dir string
+	// preflight replaces the start preflight's effects in the tests (ServeConfig.preflight). Nil takes the live
+	// process probe and the daemon's own command channel.
+	preflight func(st *serveState) fpreflight.Deps
+	// tbmGate serialises TBM exchanges: the module speaks one TBM client at a time. It is not the session queue, so
+	// a waiting exchange holds no other method behind it.
+	tbmGate chan struct{}
 	// cmdr is the commander method's controller, built for the first session and reset by every install (a
 	// re-entry drops what the old session knew about the module's packages). It belongs to the loop goroutine.
 	cmdr *commanderCtl
@@ -281,6 +298,9 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		loginTimeout: cfg.reconnectLoginTimeout,
 		allowGMUnits: cfg.AllowGMUnits,
 		plansDir:     cfg.PlansDir,
+		dir:          cfg.Dir,
+		preflight:    cfg.preflight,
+		tbmGate:      make(chan struct{}, 1),
 	}
 	if st.plansDir == "" {
 		st.plansDir = "dungeons"

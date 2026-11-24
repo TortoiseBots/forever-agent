@@ -16,6 +16,10 @@
 // A run's party must already be bound to this character (the `commander bind` method, or `forever dungeon-watch`'s
 // own bring-in): a start names a lead of one of the character's own bindings, and the module refuses a lead the
 // character does not command (the typed `not-owned` refusal, as everywhere else).
+//
+// dungeon_run makes the CLI's start preflight first (serve_dungeon_preflight.go): the plan, the serve slot and its
+// lease, the module link and the named lead, through the same fpreflight functions `forever dungeon-watch` runs. A
+// failed check refuses the method and nothing is sent.
 package world
 
 import (
@@ -52,20 +56,36 @@ type ServeDungeonRun struct {
 
 // registerDungeonMethods wires the five run verbs and plan_check to the serve state's controller.
 func registerDungeonMethods(srv *rpc.Server, st *serveState) {
-	srv.Register("dungeon_run", serveCallTyped(st, func(s *session, ctx context.Context, p serveDungeonRunParams) (ServeDungeonRun, error) {
+	srv.Register("dungeon_run", rpc.Typed(func(ctx context.Context, p serveDungeonRunParams) (ServeDungeonRun, error) {
 		plan := strings.TrimSpace(p.Plan)
-		if plan == "" || strings.ContainsAny(plan, " \t") {
-			return ServeDungeonRun{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "dungeon_run: plan is the module's one-word plan name (e.g. ragefire_chasm)"}
+		if !servePlanName.MatchString(plan) {
+			return ServeDungeonRun{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: `dungeon_run: plan is the module's one-word plan name in the serve's plans folder (e.g. ragefire_chasm: a-z, 0-9, _ and -)`}
 		}
-		c, err := s.serveDungeonCtl()
+		// The lead and the character are resolved on the session goroutine (the controller reads the module's
+		// cards); the start preflight and the start itself are their own calls, so the preflight's waits never hold
+		// the queue. Nothing is sent until the preflight has passed.
+		character, lead, err := st.serveDungeonTarget(ctx, p.LeadBot)
 		if err != nil {
-			return ServeDungeonRun{}, err
+			return ServeDungeonRun{}, serveError(err)
 		}
-		lead, err := serveDungeonLead(ctx, c, p.LeadBot, "start")
+		if err := st.serveRunPreflight(ctx, character, plan, lead); err != nil {
+			return ServeDungeonRun{}, serveError(err)
+		}
+		v, err := st.call(ctx, func(s *session) (any, error) {
+			c, err := s.serveDungeonCtl()
+			if err != nil {
+				return nil, err
+			}
+			return serveDungeonAnswer(c.Run(ctx, "start", lead, plan))
+		})
 		if err != nil {
-			return ServeDungeonRun{}, err
+			return ServeDungeonRun{}, serveError(err)
 		}
-		return serveDungeonAnswer(c.Run(ctx, "start", lead, plan))
+		out, ok := v.(ServeDungeonRun)
+		if !ok {
+			return ServeDungeonRun{}, &rpc.Error{Code: rpc.CodeInternal, Message: "internal: dungeon_run result type"}
+		}
+		return out, nil
 	}))
 	srv.Register("dungeon_status", serveCallTyped(st, func(s *session, ctx context.Context, p serveDungeonLeadParams) (ServeDungeonRun, error) {
 		c, err := s.serveDungeonCtl()
@@ -96,6 +116,30 @@ func registerDungeonMethods(srv *rpc.Server, st *serveState) {
 		return s.serveDungeonVerb(ctx, "resume", p.LeadBot)
 	}))
 	registerPlanCheck(srv, st)
+}
+
+// serveDungeonTarget resolves dungeon_run's lead and the character's name on the session goroutine: the lead from
+// the character's own bindings (or the named one), the name the preflight's console reads.
+func (st *serveState) serveDungeonTarget(ctx context.Context, leadBot string) (character, lead string, err error) {
+	v, err := st.call(ctx, func(s *session) (any, error) {
+		c, err := s.serveDungeonCtl()
+		if err != nil {
+			return nil, err
+		}
+		lead, err := serveDungeonLead(ctx, c, leadBot, "start")
+		if err != nil {
+			return nil, err
+		}
+		return [2]string{s.report.Character.Name, lead}, nil
+	})
+	if err != nil {
+		return "", "", err
+	}
+	out, ok := v.([2]string)
+	if !ok {
+		return "", "", &rpc.Error{Code: rpc.CodeInternal, Message: "internal: dungeon_run target type"}
+	}
+	return out[0], out[1], nil
 }
 
 // serveDungeonVerb runs one of the two verbs that take no argument.

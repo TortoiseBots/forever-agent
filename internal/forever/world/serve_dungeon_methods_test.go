@@ -22,6 +22,8 @@ func dungeonRunScene(state string) func(line string) []string {
 		switch {
 		case strings.HasPrefix(line, ".tb commander status"):
 			return commanderCardLines("Tanka", "Tanka", "Heala")
+		case line == ".tb state party":
+			return commanderStateLines("Tanka")
 		case strings.HasPrefix(line, ".tb run start "):
 			return []string{"run-begin #T", rec("running"), "run-end count=1 records=1 verb=start #T"}
 		case strings.HasPrefix(line, ".tb run status "):
@@ -42,9 +44,7 @@ func TestServeDungeonRunVerbs(t *testing.T) {
 	f.serveMode = true
 	f.serveCommander = dungeonRunScene("running")
 	defer f.close()
-	steps := &stepLog{}
-	a := startServeDaemon(t, f, steps)
-	waitServeState(t, a, "online", steps)
+	a, steps := dungeonRunDaemon(t, f)
 
 	var out ServeDungeonRun
 	json.Unmarshal(a.mustCall(t, "dungeon_run", map[string]any{"plan": "ragefire_chasm", "lead_bot": "Tanka"}), &out)
@@ -115,9 +115,7 @@ func TestServeDungeonRunDefaultLead(t *testing.T) {
 	f.serveMode = true
 	f.serveCommander = dungeonRunScene("running")
 	defer f.close()
-	steps := &stepLog{}
-	a := startServeDaemon(t, f, steps)
-	waitServeState(t, a, "online", steps)
+	a, _ := dungeonRunDaemon(t, f)
 
 	var out ServeDungeonRun
 	json.Unmarshal(a.mustCall(t, "dungeon_run", map[string]any{"plan": "ragefire_chasm"}), &out)
@@ -138,9 +136,7 @@ func TestServeDungeonRunRefusals(t *testing.T) {
 		return nil
 	}
 	defer f.close()
-	steps := &stepLog{}
-	a := startServeDaemon(t, f, steps)
-	waitServeState(t, a, "online", steps)
+	a, _ := dungeonRunDaemon(t, f)
 
 	a.mustFail(t, "dungeon_run", map[string]any{}, -32602, "plan is the module's one-word plan name")
 	a.mustFail(t, "dungeon_run", map[string]any{"plan": "two words"}, -32602, "one-word plan name")
@@ -153,4 +149,19 @@ func TestServeDungeonRunRefusals(t *testing.T) {
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// dungeonRunDaemon starts the daemon a dungeon_run test needs: a plans folder with the real ragefire plan, a serve
+// dir whose slot.json names the running daemon, and a preflight whose process probe and console are the test's (the
+// live probe reads /proc, which the test binary can never satisfy).
+func dungeonRunDaemon(t *testing.T, f *fakeServer) (*serveAgent, *stepLog) {
+	t.Helper()
+	scene := &servePreflightScene{
+		probe:   servePreflightProbe{pid: 42, alive: true, listening: true},
+		console: newTestConsole("XXXXXX", "Tanka"),
+	}
+	dir := t.TempDir()
+	a, steps := newDungeonPreflightDaemon(t, f, scene, writePlans(t), dir)
+	writeServeSlot(t, dir, a.port(t), "forever", "")
+	return a, steps
 }

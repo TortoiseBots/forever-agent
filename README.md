@@ -107,14 +107,21 @@ player without the add-on (`status.addon` says `off`; any add-on command, `bot` 
 `stop_attack`, `cast`, `cancel_cast`, `cast_state` (the current cast, `gcd` / `gcd_known`, `last_cast`, `last_failure`, `failures`, `combo_points` / `combo_target`, active `cooldowns`), `spells` (the spellbook: `spell_id`, `name`, `rank`, `highest`, `meta`, `level`, `passive`, `cooldown_ms`, `category`, `category_cd_ms`, `gcd_ms`, `mechanic`, `dispel`, `class`; it filters on `spell_id`, `name` and `highest`, and hides passive spells unless `passive` is true), `dynamic_objects` (the ground spells in view, nearest the mover first: `guid`, `spell_id`, `caster`, `radius`, `x`, `y`, `z`, `distance`, the flat distance from the mover, `-1` while no packet gave the object a position), `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `map_snapshot` (the picture of the run so far: `members`, `creatures`, `events`, `floors`, `notes`, `svg` and, with `html`, the single-file replay; `plan` draws a plan from `--plans-dir`, default `dungeons`, the same name rule `dungeon_run` uses; the navmesh background comes from `--navmesh`), `area_trigger`, the five death methods, `addon_send`, `join_channel`, `leave_channel`, `channel_list`, `teardown`, `mount`, `dismount`, `pet`, `pet_action`, `follow_start`,
 `follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. There is no "not ported" method left: every other old name is implemented here or answers a typed refusal naming its reason (the client brain and its tuning, the client dungeon finder, the add-on host and its buttons, the run's step verbs, the Turtle test toolkit: [docs/forever/METHOD-TABLE.md](docs/forever/METHOD-TABLE.md)). #216 added the last ones:
-`dungeon_run {plan, lead_bot?}` (`.tb run start <lead> <plan>`), `dungeon_status` (`all` with no lead),
+`dungeon_run {plan, lead_bot?}` (`.tb run start <lead> <plan>`; before it sends, the daemon makes the CLI's start
+preflight through the same `internal/forever/fpreflight` functions `forever dungeon-watch` runs: the plan in the
+plans folder with `driver.LoadWatchRoute`, the serve slot `--dir` wrote and its lease, the module link
+(`.tb state party` over the command channel) and the lead through the serve character's own GM console (`.pinfo`,
+the same command the SOAP preflight runs). A failed check refuses the call with the failed lines and sends nothing;
+a daemon started without `--dir` refuses and points at `forever dungeon-watch`), `dungeon_status` (`all` with no lead),
 `dungeon_stop {lead_bot?, reason?}`, `dungeon_pause`, `dungeon_resume` — the module's own run control, answered as
 `{sent, runs}` with the module's run records; `plan_check {name, from_leg?, from_pull_group?}`, the CLI's plan check
 over the serve's `--plans-dir` and `--navmesh` (unchecked with the reason in `skipped` without a navmesh);
 `bot_view {bots?, wait_ms?}`, the party roster joined to the world model (one row per bot: `in_party`, `online`,
 `dead`, `in_view` and the `unit` row while in view) instead of the old perception frames; and `tbm_handshake`,
 `tbm_send {command, transport?, wait_ms?}` and `tbm` (the same, under the old name and its `via`), the TBM client
-`forever tbm-check` runs. A `unit` row
+`forever tbm-check` runs. A TBM call waits for the module off the session queue (each send and each 50 ms packet
+slice is its own short queued call, and one exchange runs at a time), so `status` and the dungeon verbs answer while
+it waits; `wait_ms` defaults to 5 s and is capped at 15 s. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`) and `cc` (present and `true` while an aura crowd-controls the unit: the aura's spell has a sleep, freeze, knockout, polymorph, banish, shackle, turn or sapped mechanic in the generated spell data, or, without a mechanic, a crowd-control name such as Polymorph or Shackle Undead; Gouge never counts), and `status`
 carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target`, `gcd_ms`, `guild` (the character's own guild GUID, omitted while it has none), `guild_name` (the guild of the invite the last accept confirmed), `on_taxi` (true while on a flight), `locale` (the client language the session claims, from `--locale`) and `addon` (`on`, or `off` for a session started with `--addon off`, which never registers an add-on prefix), and a `unit` row carries `mount_display_id` (non-zero
 while that unit is mounted). `events` (`since`, `limit` up to 1,000,
