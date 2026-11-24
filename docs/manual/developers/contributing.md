@@ -97,8 +97,8 @@ knowledge-base rotations (`make spellnames`, `make kb-rotations`).
 stacked feature branch. Its jobs:
 
 - `lint`: formatting, vet, a no-cgo build, the shard scripts' self-tests, the cross-build, the
-  differential table against the pinned trials reference checkout (Python 3.12), staticcheck, then
-  a cgo build.
+  user manual's OKF check (`make docs-check`), the differential table against the pinned trials
+  reference checkout (Python 3.12), staticcheck, then a cgo build.
 - `race-shards`: the suite under `-race` in nine jobs, at most six at once.
 - `race-shards-check`: every test and package was run exactly once across the shards.
 - `test`: the single required check; it fails when any job was skipped, cancelled or failed.

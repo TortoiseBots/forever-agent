@@ -16,6 +16,8 @@ sources:
     resource: AGENTS.md
 ---
 
+<p align="center"><img src="../../assets/forever-agent-banner.jpg" alt="forever-agent: a headless WoW Forever client" width="100%"></p>
+
 forever-agent is a headless client for **ForeverCore** servers: one process logs one character into the world
 with no game window and exposes it over a local JSON-RPC socket, so server-side behaviour can be driven and
 tested from scripts. It is an unofficial community project, not affiliated with Blizzard Entertainment, and you
@@ -82,6 +84,29 @@ tested against a fake server; it does not mean the behaviour has been seen on a 
 | drive a dungeon or a raid | `forever dungeon-play`, `forever dungeon-watch`, `forever raid-watch` | [Dungeon play](../dungeons/dungeon-play.md), [Dungeon watch](../dungeons/dungeon-watch.md) |
 | order bots | `forever rpc DIR bot`, `commander` | [Bot control](../bots-and-raids/bot-control.md) |
 | check a run before starting it | `forever preflight` | [Preflight](../dungeons/preflight.md) |
+
+# The old 1.12 stack
+
+These top-level commands serve the old stack alone; each refuses a Forever server before any lease, login, file write
+or child process, and `forever-agent` with no arguments marks its line in the command list with its replacement.
+The Turtle packages and the old documentation are under `docs/turtle/`.
+
+| Turtle-only command | Forever replacement |
+|---|---|
+| `login` | `forever serve` |
+| `scrub-check` | `forever scrub-check` |
+| `capture` (replay) | `forever capture-events` |
+| `capture-stats` | `forever capture-stats` |
+| `map` | `forever run-map` |
+| `path-check` | `forever path-check` |
+| `raid-walk`, `raid-suite`, `walk-preflight` | none yet: `forever raid-watch` and `raid-autopilot --forever` are the Forever path |
+| `trace-score` | none: it reads a 1.12 run trace |
+| `pulltest`, `decisions`, `tune-diff` | none: Turtle test and tuning tools |
+| `rotation` | none: the Turtle brain |
+| `fight-score`, `dashboard-replay` | none: they read Turtle dashboard recordings |
+
+Every other command works on both stacks, or takes `--forever` where its Forever mode differs; the pages of this
+manual say which on each command page.
 
 # What the agent does not do
 

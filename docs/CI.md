@@ -15,7 +15,7 @@ branch), as parallel jobs that end in one job named `test` (12 jobs a run, at mo
 
 | Job | What it runs |
 |---|---|
-| `lint` | `make fmt-check vet nocgo`, the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `make tools-test` (the automatic label rules and the label sync), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
+| `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), `make docs-check` (the manual under `docs/manual` as an OKF bundle: `tools/verify_okf.py` and its tests), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `make tools-test` (the automatic label rules and the label sync), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
 | `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, at most 6 running at once, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
 | `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
 | `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |

@@ -24,6 +24,10 @@ sources:
     resource: internal/trials/live/run.go
   - id: scenario-cmd
     resource: cmd/forever-agent/scenario_cmd.go
+  - id: capture-events
+    resource: cmd/forever-agent/forever_capture_events.go
+  - id: capture-stats
+    resource: cmd/forever-agent/forever_capture_stats.go
 ---
 
 Every run leaves files behind, and those files are the whole basis of the testing tools: nothing is judged from a live socket when a recording will do. A dungeon run or brain session writes a run trace and its summary; a watch adds its combat log and run record; the trials bench writes a run folder; a scenario writes its transcripts. This page says what each file is, what it holds, and how `trace-score` reads a trace again after the fact.
@@ -155,6 +159,56 @@ r-20261124T190001-a1b2  dungeon_run group zul_gurub  1832 s  PASS
 ```
 
 Exit `11` when any check failed, `0` otherwise, `2` for a usage error or an unreadable trace. The `--json` form gives a script the same verdicts and the spell report in one object.
+
+# Replaying a capture
+
+A `forever serve --capture-dir DIR` capture holds the run's raw server packets. Two commands read one back offline;
+neither opens a socket and neither writes to the capture. Read
+[Privacy and captures](../developers/privacy-and-captures.md) before sharing what they print: the payloads are the
+server's, so they carry whatever the run carried.
+
+## `forever capture-events`
+
+```text
+forever-agent forever capture-events [--kinds a,b] [--out FILE [--force]] <dir>
+```
+
+It replays one capture directory (one run, or a parent holding several runs) through the world session and prints one
+JSON event per line: the same keys the serve `event_log` method answers (`seq`, `time`, `kind`, ...). The times are
+synthetic - the run directory's clock plus 100 ms per record - and the summary on stderr says so.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--kinds a,b` | every kind | keep only the named event kinds |
+| `--out FILE` | stdout | write the events to a file (mode `0600`) instead of stdout |
+| `--force` | off | let `--out` replace an existing file; never a capture file, and `--out` may not be the capture itself |
+
+Opcodes the writer never captures (time syncs, movement relays, the map change's own traffic) are counted as skipped
+rather than dispatched, because a capture holding one was edited. The last lines on stderr count the records handled,
+skipped, unparsed and sent, list the unknown opcodes by name, and break the events down per kind. Exit `0` on success,
+`2` for a usage error or an unreadable capture.
+
+```sh
+forever-agent forever capture-events --kinds chat,party --out ./events.jsonl ./captures
+```
+
+## `forever capture-stats`
+
+```text
+forever-agent forever capture-stats <dir>
+```
+
+It prints one row per opcode - its name, the packet count and the payload bytes - then the totals. It reads the runs'
+`manifest.tsv` files only, never a payload, so it still answers after the payloads were deleted and it never prints a
+captured byte.
+
+```text
+opcode                              packets        bytes
+SMSG_UPDATE_OBJECT                      812      1043321
+TOTAL                                  2910      2910504
+```
+
+Exit `0` on success, `2` for a usage error or an unreadable directory.
 
 # Examples
 
