@@ -104,6 +104,11 @@ class DecideTest(unittest.TestCase):
     def test_a_doc_change_outside_the_manual_does_not_count(self):
         self.assertEqual(len(decide(["cmd/forever-agent/main.go", "docs/CI.md"])), 1)
 
+    def test_bookkeeping_only_does_not_satisfy_the_rule(self):
+        for path in ("docs/manual/log.md", "docs/manual/index.md", "docs/manual/daemon/index.md"):
+            with self.subTest(path=path):
+                self.assertEqual(len(decide(["cmd/forever-agent/main.go", path])), 1)
+
     def test_added_lines_strip_the_diff_markers(self):
         diff = (
             "--- a/x.go\n"

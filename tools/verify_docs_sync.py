@@ -20,7 +20,8 @@ The rule, in the checker's terms:
   * a trigger is a changed path under cmd/forever-agent/, a changed internal/forever/world/serve*_methods.go, or an
     added line that calls a flag constructor on any FlagSet variable (fs.String, flags.Bool, flag.Duration,
     fs.Var, ...) or any Register call;
-  * a trigger passes when the pull request changes a path under docs/manual/ or README.md;
+  * a trigger passes when the pull request changes a concept page under docs/manual/ (an index.md or
+    log.md alone is bookkeeping and does not count) or README.md;
   * it also passes when the body has, outside a fenced block, a line "Docs: not needed, because <reason>";
   * anything else fails, and the message names the trigger and points at DOCS-SYNC.md.
 
@@ -41,9 +42,11 @@ CLI_PREFIX = "cmd/forever-agent/"
 METHOD_PREFIX = "internal/forever/world/serve"
 METHOD_SUFFIX = "_methods.go"
 
-# A changed path that satisfies the rule.
+# A changed path that satisfies the rule: a concept page, or README.md. The update log and the
+# index files are bookkeeping; changing only one of them does not document a code change.
 DOC_PREFIX = "docs/manual/"
 DOC_FILE = "README.md"
+BOOKKEEPING = ("docs/manual/log.md",)
 
 # The flag package's constructors and Var-style registrations, on any FlagSet variable (fs, flags,
 # flag, ...): an added line that calls one adds a flag. A registered daemon method (any Register call)
@@ -63,14 +66,20 @@ WAIVER_LINE = re.compile(r"^Docs:\s*not needed,\s*because\s+\S", re.IGNORECASE)
 RULE_FILE = "DOCS-SYNC.md"
 
 MESSAGE = (
-    "this pull request changes what a user sees (%s) and changes nothing under %s or %s. "
+    "this pull request changes what a user sees (%s) and changes no concept page under %s and not %s. "
     "Update the manual page the change belongs to (the table in %s says which page), or put a line "
     "\"%s, because <reason>\" in the pull request body when the change has no user-visible effect."
 )
 
 
 def _is_doc(path):
-    return path == DOC_FILE or path.startswith(DOC_PREFIX)
+    if path == DOC_FILE:
+        return True
+    if not path.startswith(DOC_PREFIX) or not path.endswith(".md"):
+        return False
+    if path in BOOKKEEPING or path.endswith("/index.md"):
+        return False
+    return True
 
 
 def _is_trigger_path(path):

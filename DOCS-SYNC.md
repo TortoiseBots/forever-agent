@@ -55,8 +55,10 @@ line saying what changed and when.
   backticked word in prose does not count.
 - The CI job `docs-sync` fails a pull request that changes `cmd/forever-agent/`, a serve method file
   (`internal/forever/world/serve*_methods.go`), or an added line that calls a flag constructor on any `FlagSet`
-  variable or any `Register` call, and changes nothing under `docs/manual/` or `README.md`. Its message names the
-  rule; the pull request checklist carries it too.
+  variable or any `Register` call, and changes no concept page under `docs/manual/` and not `README.md`. The
+  manual's `log.md` and the index files are bookkeeping: changing only one of them does not satisfy the gate, and
+  the checker cannot tell whether the page you changed is the right one. Its message names the rule; the pull
+  request checklist carries it too.
 - A change with truly no user-visible effect says so in the pull request body, on its own line and outside a
   fenced block: `Docs: not needed, because <the reason>`.
 
