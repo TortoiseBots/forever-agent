@@ -48,7 +48,8 @@ func TestPlayBossKillCreditCountsTheKill(t *testing.T) {
 	plan := playFightPlan()
 	plan.Legs[0].PullGroups = nil
 	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
-		f.SpawnBosses()
+		// A boss with health to last: it is alive in the fight when it leaves the view, never seen dead.
+		f.AddUnit(Unit{GUID: f.newGUID(200), Entry: 200, Pos: Vec3{60, 0, 0}, HP: 200000, MaxHP: 200000})
 		scheduled := false
 		f.OnWalk = func(f *PlayFake, to Vec3) {
 			if scheduled || dist3(to, Vec3{60, 0, 0}) > 0.5 {
