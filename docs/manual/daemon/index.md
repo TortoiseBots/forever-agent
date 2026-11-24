@@ -22,4 +22,4 @@ calling it, what it can tell you, how it moves the character, and the two logs i
 # Reference
 
 * [Method index](method-index.md) - Every method a forever serve daemon registers, with its parameters, what it does and the page that explains it.
-* [Methods not ported](not-ported-methods.md) - The older daemon's method names that a forever serve session registers but does not implement, and what to use instead.
+* [Methods the daemon refuses](not-ported-methods.md) - The old daemon's method names a serve refuses, the reason each gives, and what to use instead.

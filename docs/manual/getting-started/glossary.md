@@ -116,5 +116,6 @@ worked.
 **`-32006`** — the RPC error code for a call a boundary refused (a GM hand with the flag off, or a target outside
 the allowlist). The call changed nothing.
 
-**not ported** — a daemon method this server has a name for but does not answer; `forever rpc DIR list` marks
-those rows `(not ported)`.
+**refused method** — a daemon method name the server answers `-32003 <name>: <reason>` and does nothing;
+`forever rpc DIR list` prints those rows `name (refused: <reason>)`. No method is "not ported" any more: every old
+name is implemented or refused with its reason.

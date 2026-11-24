@@ -181,8 +181,11 @@ The orders the agent may send:
 | `loot <tgt> [bot] [itemId]`, `open\|use <tgt> [bot]`, `gossip <tgt> [bot] [option]`, `state [bot]`, `lootmethod <method> [threshold]` | `.tb cmd <verb> ...` | The task package. |
 | `place`, `rally`, `fallback`, `resume` | `.tb cmd <verb> ...` | The placement package: a held formation and a fall-back point. |
 
-`view`, `scout`, `ritual`, `summon` and `layout` are not ported on this server: the
-agent refuses them itself instead of sending a line that would fail.
+`view` answers a `-32003` refusal: the old perception frames have no Forever
+equivalent; read the module's state with `commander status` or `run status`.
+`scout`, `ritual`, `summon` and `layout` are not commander ops on this daemon: it
+answers `-32602` listing the ops it takes (`bind`, `unbind`, `status`, `cmd`,
+`run`, `view`), so the agent sends nothing.
 
 Before any order that mutates something, the agent reads the commander card
 (`.tb commander status <self>`) and reads it again after the line. A target that is
