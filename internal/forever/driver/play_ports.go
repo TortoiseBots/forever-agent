@@ -120,3 +120,12 @@ type PlayerPort interface {
 type Sight interface {
 	InSight(from, to Vec3) (in, known bool)
 }
+
+// Refusals is the module's refusals of an attack order as the agent's client hears them. The module whispers "I dont
+// see my rti attack target" (AttackAction.cpp:163) to the player who ordered when the bot finds no rti target: the
+// mark out of AiPlayerbot.SightDistance, out of the core's line of sight from the bot, or not attackable
+// (RtiTargetValue.h CalculateMark). SightRefusals is how many such whispers the bot has sent since the session began;
+// the run compares the count before and after an order.
+type Refusals interface {
+	SightRefusals(bot string) int
+}

@@ -121,6 +121,7 @@ func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bo
 func (s *session) feedCommand(line chat.Line) {
 	if line.Type == chat.TypeWhisper {
 		s.fbRememberWhisper(line)
+		s.noteSightRefusal(line)
 	}
 	if line.Type == chat.TypeSay && s.isSelf(line) && command.IsCommandText(line.Text) {
 		s.gmConfirmed = false
@@ -448,4 +449,23 @@ func (s *session) printTBState(ctx context.Context, q *command.Session) error {
 			power, b.State, b.Move, tgt, ord, rest)
 	}
 	return nil
+}
+
+// sightRefusalText is the module's refusal of an attack order whose bot finds no rti target (AttackAction.cpp:163
+// AttackRTITargetAction: "I dont see my rti attack target"), matched in lower case.
+const sightRefusalText = "dont see my rti attack target"
+
+// noteSightRefusal counts one whisper of the module's sight refusal under its sender's name.
+func (s *session) noteSightRefusal(line chat.Line) {
+	if !strings.Contains(strings.ToLower(line.Text), sightRefusalText) {
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(line.SenderName))
+	if name == "" {
+		return
+	}
+	if s.sightRefusals == nil {
+		s.sightRefusals = map[string]int{}
+	}
+	s.sightRefusals[name]++
 }

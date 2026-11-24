@@ -643,6 +643,9 @@ type session struct {
 	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
 	// was sent (a late acknowledgement must not be taken for the next order's).
 	fbHeardWhispers []chat.Line
+	// sightRefusals counts the module's "I dont see my rti attack target" whispers per sender (lower-cased name): a
+	// player run reads it after a tank order (driver.Refusals).
+	sightRefusals map[string]int
 	// Round A2: the module's unsolicited EVENT_PUSH frames seen during the finder's requests, kept for the dungeon
 	// watch. The buffer is bounded; fbEventsDropped counts what the bound pushed out.
 	fbEvents        []pbc.Event
