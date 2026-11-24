@@ -30,8 +30,11 @@ const (
 	// diagnosis, and the wait may run to its ten-minute deadline.
 	recoverLogEvery = 30 * time.Second
 	// recoverRefreshEvery spaces the member stats requests of the wait: the roster is only as fresh as the server's
-	// last push, and a bot raised and summoned after a wipe got none (Run B, 2026-11-24).
+	// last push, and a bot raised and summoned after a wipe may get none (Run B, 2026-11-24).
 	recoverRefreshEvery = 3 * time.Second
+	// recoverDumpAfter is when the wait writes every member's roster row and unit-view reading once: the Run B stall
+	// left no roster in the log, so its cause stays a guess; the next stall shows both sources.
+	recoverDumpAfter = 60 * time.Second
 )
 
 // playMaxWipes is the wipe budget's reading of the config (D-14): 0 is the milestone's 2, a negative value is no
@@ -305,6 +308,7 @@ func (p *playRun) wipe(ctx context.Context) string {
 	lastWait := started
 	statsAt := time.Time{}
 	statsErr := false
+	dumped := false
 	for {
 		waiting := p.recoverPending()
 		if len(waiting) == 0 {
@@ -320,9 +324,10 @@ func (p *playRun) wipe(ctx context.Context) string {
 			return ""
 		}
 		// The check's numbers must be fresh: the roster is only as fresh as the server's last push, and a bot raised,
-		// resurrected and summoned after a wipe gets no push at all (Run B, 2026-11-24: the roster still placed two bots
-		// on the graveyard's map while every bot stood alive within 7 yd of the agent for ten minutes). The members the
-		// check is waiting on have their own member states asked for, at most every few seconds.
+		// resurrected and summoned after a wipe may get no push at all (Run B, 2026-11-24: the roster was silent for
+		// ten minutes while the trace frames showed every bot alive within 7 yd of the agent; no roster row was
+		// written, so the stale roster is the likely, not the proven, cause). The members the check is waiting on have
+		// their own member states asked for, at most every few seconds.
 		if now := p.now(); !now.Before(statsAt) {
 			if guids := recoverGUIDs(waiting); len(guids) > 0 {
 				if err := p.ports.Group.RequestStats(ctx, guids); err != nil {
@@ -346,6 +351,16 @@ func (p *playRun) wipe(ctx context.Context) string {
 				"waiting": p.recoverRows(waiting),
 			})
 			lastWait = p.now()
+		}
+		// A minute of waiting is not a reason: write every member's two readings once, so the next stall names its
+		// cause instead of leaving it to the frames.
+		if !dumped && p.now().Sub(started) >= recoverDumpAfter {
+			p.rec.Event(p.now(), "recover_dump", map[string]any{
+				"seconds": p.now().Sub(started).Seconds(),
+				"waiting": p.recoverRows(waiting),
+				"members": p.memberFactRows(),
+			})
+			dumped = true
 		}
 		if len(p.downBots()) == 0 {
 			now := p.now()
@@ -533,6 +548,33 @@ func (p *playRun) recoverRows(waiting []recoverWait) []map[string]any {
 			bot = p.slot(w.name)
 		}
 		out = append(out, map[string]any{"bot": bot, "why": w.why})
+	}
+	return out
+}
+
+// memberFactRows is every member as the one-time dump carries it: the slot, never a character name, the roster's last
+// push, and the unit view when the client sees the member.
+func (p *playRun) memberFactRows() []map[string]any {
+	facts := p.ports.Group.MemberFacts()
+	out := make([]map[string]any, 0, len(facts))
+	for _, f := range facts {
+		row := map[string]any{
+			"bot": p.slot(f.Name),
+			"roster": map[string]any{
+				"online": f.RosterOnline, "dead": f.RosterDead, "ghost": f.RosterGhost,
+				"hp": f.RosterHP, "max_hp": f.RosterMaxHP, "zone": f.RosterZone,
+				"x": f.RosterPos[0], "y": f.RosterPos[1], "z": f.RosterPos[2],
+			},
+			"in_view": f.InView,
+		}
+		if f.InView {
+			row["view"] = map[string]any{
+				"unit": f.ViewHasUnit, "dead": f.ViewDead, "ghost": f.ViewGhost,
+				"hp": f.ViewHP, "max_hp": f.ViewMaxHP,
+				"x": f.ViewPos[0], "y": f.ViewPos[1], "z": f.ViewPos[2],
+			}
+		}
+		out = append(out, row)
 	}
 	return out
 }

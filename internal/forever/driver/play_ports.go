@@ -65,17 +65,45 @@ type PartyMember struct {
 	Map       uint32
 }
 
+// MemberFacts is one party member as the two sources read it: the roster's last member-stats push, and the client's
+// own unit view when it sees the member. Roster merges the two; the recovery's one-time dump writes both, because the
+// cause of Run B's ten-minute stall is not proven and the run log held no roster row at all.
+type MemberFacts struct {
+	Name string
+	GUID wire.GUID
+	// The roster: the last SMSG_GROUP_LIST or SMSG_PARTY_MEMBER_FULL_STATE push.
+	RosterOnline bool
+	RosterDead   bool
+	RosterGhost  bool
+	RosterHP     int
+	RosterMaxHP  int
+	RosterZone   uint16
+	RosterPos    Vec3
+	// The unit view, when the client holds the member as an object (InView). ViewHasUnit is false for an object whose
+	// unit fields never arrived: its health and death are unknown, not zero.
+	InView      bool
+	ViewHasUnit bool
+	ViewDead    bool
+	ViewGhost   bool
+	ViewHP      int
+	ViewMaxHP   int
+	ViewPos     Vec3
+}
+
 // GroupPort is the party this character leads: the roster the run reads and the group commands a player may send.
 // Every command waits for the server's own readback (D-7) and answers an error when none comes, because this core
 // refuses a group command silently: no readback is the only evidence a refusal leaves.
 type GroupPort interface {
 	// Roster is the party's members, this character included; empty when it leads no group.
 	Roster() []PartyMember
+	// MemberFacts is every member's raw roster row and unit-view reading, in roster order: what the recovery's
+	// one-time dump writes, so a stall shows which source said what. Empty when there is no group.
+	MemberFacts() []MemberFacts
 	// RequestStats asks the server for fresh member states of the given members (CMSG_REQUEST_PARTY_MEMBER_STATS) and
 	// waits, bounded by the port's own window, for the answers to merge. The roster is otherwise refreshed only by the
 	// server's own pushes — a group update carries no health, position or zone — and a member that was released,
-	// resurrected and summoned gets none at all (Run B, 2026-11-24: the recovery read a roster that still placed two
-	// live bots at the graveyard for ten minutes). A caller that needs a member's state asks here.
+	// resurrected and summoned may get none at all (Run B, 2026-11-24: no fresh roster for ten minutes; the run log
+	// cannot say what the roster held at the stop). A caller that needs a member's state asks here.
 	RequestStats(ctx context.Context, guids []wire.GUID) error
 	// Leader is the current leader's guid, empty when there is no group.
 	Leader() wire.GUID

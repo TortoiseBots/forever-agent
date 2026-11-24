@@ -311,10 +311,49 @@ func (g *playGroup) Roster() []driver.PartyMember {
 			pm.Dead, pm.Ghost = s.selfDead(), s.world.GhostAt(m.GUID)
 		case inView:
 			g.fillFromModel(&pm, o, true, now)
-			pm.Dead = pm.Dead || s.world.DeadAt(m.GUID)
-			pm.Ghost = pm.Ghost || s.world.GhostAt(m.GUID)
+			// A member the client sees takes its death state from the unit alone: the roster's Status bit is one push
+			// old, and an alive bot standing next to the agent must not stay "dead" until a stats answer clears it.
+			pm.Dead, pm.Ghost = s.world.DeadAt(m.GUID), s.world.GhostAt(m.GUID)
 		}
 		out = append(out, pm)
+	}
+	return out
+}
+
+// MemberFacts is every member as the two sources read it: the roster's last push and, for a member the client sees,
+// the unit view. Roster merges them; the recovery's one-time dump writes both, so a stalled wait shows which source
+// said what.
+func (g *playGroup) MemberFacts() []driver.MemberFacts {
+	s := g.s
+	s.initChat()
+	if !s.party.InParty || !s.party.RosterValid {
+		return nil
+	}
+	now := s.Now()
+	members := s.party.SnapshotOf()
+	out := make([]driver.MemberFacts, 0, len(members))
+	for _, m := range members {
+		f := driver.MemberFacts{
+			Name:         m.Name,
+			GUID:         m.GUID,
+			RosterOnline: m.Connected,
+			RosterDead:   m.Status&party.StatusDead != 0,
+			RosterGhost:  m.Status&party.StatusGhost != 0,
+			RosterHP:     int(m.Health),
+			RosterMaxHP:  int(m.MaxHealth),
+			RosterZone:   m.ZoneID,
+			RosterPos:    driver.Vec3{float32(m.X), float32(m.Y), float32(m.Z)},
+		}
+		if o, ok := s.world.Object(m.GUID); ok {
+			x, y, z := o.Position(now)
+			f.InView = true
+			f.ViewHasUnit = o.Info.HasUnit
+			f.ViewDead = s.world.DeadAt(m.GUID)
+			f.ViewGhost = s.world.GhostAt(m.GUID)
+			f.ViewHP, f.ViewMaxHP = int(o.Info.Health), int(o.Info.MaxHealth)
+			f.ViewPos = driver.Vec3{x, y, z}
+		}
+		out = append(out, f)
 	}
 	return out
 }

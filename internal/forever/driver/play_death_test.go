@@ -163,13 +163,38 @@ func TestPlayRecoveryTimeout(t *testing.T) {
 		t.Fatalf("trace: %v", err)
 	}
 	var waits []map[string]any
+	var dumps []map[string]any
 	for i := range tf.Events {
-		if tf.Events[i].Ev == "recover_wait" {
+		switch tf.Events[i].Ev {
+		case "recover_wait":
 			waits = append(waits, tf.Events[i].D)
+		case "recover_dump":
+			dumps = append(dumps, tf.Events[i].D)
 		}
 	}
 	if len(waits) < 15 {
 		t.Fatalf("the wait logged %d time(s); want it to say every 30 s what it waits on over its ten minutes", len(waits))
+	}
+	// The one-time dump: a minute in, once, every member's roster row and unit view, so a stall names its cause.
+	if len(dumps) != 1 {
+		t.Fatalf("the wait dumped the party %d time(s); want once", len(dumps))
+	}
+	dump := dumps[0]
+	if at, _ := dump["seconds"].(float64); at < 60 || at > 120 {
+		t.Fatalf("the dump came at %.0f s; want at 60 s of waiting", at)
+	}
+	members, _ := dump["members"].([]any)
+	if len(members) != 5 {
+		t.Fatalf("the dump has %d member(s); want the agent and the four bots", len(members))
+	}
+	for _, m := range members {
+		row, ok := m.(map[string]any)
+		if !ok {
+			t.Fatalf("a dump row is %T", m)
+		}
+		if _, ok := row["roster"].(map[string]any); !ok || row["bot"] == nil {
+			t.Fatalf("the dump row %v lacks a slot or the roster reading", row)
+		}
 	}
 	last := waits[len(waits)-1]
 	named := false

@@ -658,9 +658,25 @@ func (f *PlayFake) botPos(b *OwnerBot) Vec3 {
 
 // FreezeRoster freezes the party roster as it stands: every later Roster answers those rows — what a member was last
 // seen as (dead, far, on a map the run cannot place) — until a member stats request merges the live table again. The
-// fake's stand-in for the server that pushed nothing after a release, a resurrection and a summon (Run B, 2026-11-24).
+// fake's stand-in for a server that pushed nothing after a release, a resurrection and a summon, one likely reading of
+// Run B (2026-11-24; the run log has no roster dump).
 func (f *PlayFake) FreezeRoster() {
 	f.frozen = append([]PartyMember(nil), f.rosterLive()...)
+}
+
+// MemberFacts is the dump's raw rows: the fake has one source (its own party table), so each row carries the roster
+// reading only.
+func (f *PlayFake) MemberFacts() []MemberFacts {
+	roster := f.Roster()
+	out := make([]MemberFacts, 0, len(roster))
+	for _, m := range roster {
+		out = append(out, MemberFacts{
+			Name: m.Name, GUID: m.GUID,
+			RosterOnline: m.Online, RosterDead: m.Dead, RosterGhost: m.Ghost,
+			RosterHP: m.HP, RosterMaxHP: m.MaxHP, RosterPos: m.Pos,
+		})
+	}
+	return out
 }
 
 // RequestStats is the request that refreshes the roster: the fake answers by serving the live table again.
