@@ -143,9 +143,78 @@ func TestServeStopsWhenTheKeeperIsStuckWriting(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("the command waited for a keeper stuck in a write past its bound; stdout %q", out.String())
 	}
-	if !strings.Contains(out.String(), "did not stop within 100ms") {
-		t.Fatalf("the bounded wait did not say so: %q", out.String())
+	// The bound's line goes out on its own goroutine (the output may be what stalled the keeper), so
+	// it can land just after the command returned.
+	waitFor(t, "the bounded wait's line", func() bool {
+		return strings.Contains(out.String(), "did not stop within 100ms")
+	})
+	// The keeper is out of the command but not out of the process: it may still be inside a lease
+	// write, so the dir must stay claimed until it ends. A second serve starting now would adopt the
+	// lease the old keeper could stamp last.
+	if _, err := lockServeDir(dir); err == nil || !strings.Contains(err.Error(), "another forever serve") {
+		t.Fatalf("the dir was released while its keeper was still alive: %v", err)
 	}
 	close(out.release)
 	time.Sleep(50 * time.Millisecond) // let the released write finish before the test's dirs go
+	waitFor(t, "the dir lock after the keeper ended", func() bool {
+		r, err := lockServeDir(dir)
+		if err != nil {
+			return false
+		}
+		r()
+		return true
+	})
+}
+
+// TestServeStopsWhenTheTimeoutLineCannotBeWritten: the bounded wait's own line goes to the output
+// that stalled the keeper. Written on the shutdown path, it would block there again and the bound
+// would mean nothing (a full pipe is the very reason the keeper can be stuck), so it goes out on its
+// own goroutine and the command returns regardless.
+func TestServeStopsWhenTheTimeoutLineCannotBeWritten(t *testing.T) {
+	dir, _, _, port := serveLeaseFixture(t, serveLeaseTTL)
+	settings := serveSettingsListening(t, dir, fmt.Sprintf("127.0.0.1:%d", port))
+	serveShortRenew(t, 10*time.Millisecond)
+	oldWait := serveLeaseStopWait
+	serveLeaseStopWait = 100 * time.Millisecond
+	t.Cleanup(func() { serveLeaseStopWait = oldWait })
+	entered := make(chan struct{})
+	var once sync.Once
+	serveStage(t,
+		func(context.Context) (*bnet.Result, error) { return serveStubResult(), nil },
+		func(ctx context.Context, _ world.Options) (*world.Report, error) {
+			once.Do(func() { close(entered) })
+			<-ctx.Done()
+			return &world.Report{Counts: map[string]int{}}, nil
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := newGatedWriter()
+	var errOut syncBuf
+	code := make(chan int, 1)
+	go func() { code <- foreverServeCmd(ctx, []string{"--settings", settings, "--dir", dir}, out, &errOut) }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the serve never reached the world; stdout %q stderr %q", out.String(), errOut.String())
+	}
+
+	out.holdWrites()
+	select {
+	case <-out.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no renewal write to hold; stdout %q", out.String())
+	}
+	out.holdTimeoutLine()
+	cancel()
+	select {
+	case got := <-code:
+		if got != exitOK {
+			t.Fatalf("exit %d, want %d; stdout %q stderr %q", got, exitOK, out.String(), errOut.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the bounded wait's own line blocked the shutdown; stdout %q", out.String())
+	}
+	close(out.release)
+	time.Sleep(50 * time.Millisecond) // let the released writes finish before the test's dirs go
 }

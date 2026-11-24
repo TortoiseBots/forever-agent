@@ -158,9 +158,9 @@ filesystem's flock: NFSv4 emulates it and a stalled server can block the lock fo
 survives that: its keeper renews under the lease store's lock, the keeper's wait for that lock ends
 with the serve's context (`slots.Store.RenewContext`, a poll of `LOCK_NB`), and the command's wait
 for the keeper is bounded (`serveLeaseStopWait`, 5 s): a renewal stuck in a lock or in a write is
-logged (`serve: the lease keeper did not stop within 5s; not waiting for it`) and the command
-returns. Keep a slot dir on a local disk when the runs are timed; the flock rules above are stated
-for a local filesystem.
+logged (`serve: the lease keeper did not stop within 5s; the dir stays locked until it does`) and the
+command returns. Keep a slot dir on a local disk when the runs are timed; the flock rules above are
+stated for a local filesystem.
 
 ### The lease keeper's lifetime
 
@@ -168,9 +168,23 @@ for a local filesystem.
 returns, so no renewal line reaches stdout after the command has returned (a test holds a renewal
 inside its write and requires the command to stay blocked until the write finishes). The wait is
 bounded by `serveLeaseStopWait`: a keeper that cannot leave a write is named in one line and left to
-the process exit rather than holding the command forever. The keeper's own lock wait is the run's
-context, so the common case (another lease command holds the store's lock) ends the keeper at once
-and needs no bound.
+the process exit rather than holding the command forever. That line goes out on its **own goroutine**:
+the output is a reason the keeper can be stuck (a full pipe), so writing it on the shutdown path could
+block there again and make the bound meaningless. While the keeper is alive the dir stays **locked**:
+the bounded branch hands `serve.lock` to the keeper, which releases it as it ends, so a second serve
+cannot start on the dir and adopt a lease the old keeper could still stamp as its own process. (The
+process exit releases the lock too; the hand-off is what keeps a serve inside a longer-lived process
+honest.) The keeper's own lock wait is the run's context, so the common case (another lease command
+holds the store's lock) ends the keeper at once and needs no bound.
+
+The exit code is chosen **after** the keeper has been joined: a lease lost during the run is recorded
+by then, and it outranks the code the login or the world produced (`serveVerdict`). A supervisor
+therefore never reads a lost lease as a clean stop or as an auth failure.
+
+A renewal refusal is the lease's verdict **whatever the run's context says**: it is recorded and
+reported (exit 13) before the shutdown is taken into account, so a lease lost as the serve is
+cancelled is not reported as a clean stop. Only the error of a lock wait that ended with the run is
+read as the shutdown, and it is neither a loss nor a `renew failed` line.
 
 ### Interaction: `trials run` on a leased serve slot
 

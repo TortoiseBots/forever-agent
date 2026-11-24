@@ -23,6 +23,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/forever/world"
+	"github.com/pjerra/forever-agent/internal/slots"
 )
 
 // serveStubResult is a login result a staged command can carry: no socket, only the fields
@@ -231,13 +232,14 @@ func TestServeLostLeaseExits13DuringLogin(t *testing.T) {
 // gatedWriter holds a keeper renewal inside Write until the test releases it. It records writes that
 // arrive after the command returned, which is the "no write after return" rule.
 type gatedWriter struct {
-	mu       sync.Mutex
-	b        strings.Builder
-	hold     bool
-	blocked  chan struct{} // closed when a held write reached Write
-	release  chan struct{}
-	returned bool
-	after    int
+	mu          sync.Mutex
+	b           strings.Builder
+	holdRenew   bool
+	holdTimeout bool
+	blocked     chan struct{} // closed when a held write reached Write
+	release     chan struct{}
+	returned    bool
+	after       int
 }
 
 func newGatedWriter() *gatedWriter {
@@ -245,8 +247,10 @@ func newGatedWriter() *gatedWriter {
 }
 
 func (w *gatedWriter) Write(p []byte) (int, error) {
+	s := string(p)
 	w.mu.Lock()
-	hold := w.hold && strings.Contains(string(p), "renewed until")
+	hold := (w.holdRenew && strings.Contains(s, "renewed until")) ||
+		(w.holdTimeout && strings.Contains(s, "did not stop within"))
 	if hold {
 		select {
 		case <-w.blocked:
@@ -266,15 +270,25 @@ func (w *gatedWriter) Write(p []byte) (int, error) {
 	return w.b.Write(p)
 }
 
+// holdWrites holds a renewal line inside Write.
 func (w *gatedWriter) holdWrites() {
 	w.mu.Lock()
-	w.hold = true
+	w.holdRenew = true
+	w.mu.Unlock()
+}
+
+// holdTimeoutLine holds the bounded wait's own line inside Write: the output that stalled the keeper
+// is the one that line would go to.
+func (w *gatedWriter) holdTimeoutLine() {
+	w.mu.Lock()
+	w.holdTimeout = true
 	w.mu.Unlock()
 }
 
 func (w *gatedWriter) returnedNow() {
 	w.mu.Lock()
-	w.hold = false
+	w.holdRenew = false
+	w.holdTimeout = false
 	w.returned = true
 	w.mu.Unlock()
 }
@@ -347,6 +361,62 @@ func TestServeWaitsForTheKeeper(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := out.postReturnWrites(); n != 0 {
 		t.Fatalf("%d write(s) to the output after the command returned", n)
+	}
+}
+
+// TestServeRenewRefusalWinsOverAConcurrentShutdown: a refusal that comes back as the run is being
+// cancelled is still the lease's verdict. Classifying the shutdown first would drop the loss (and
+// exit 13 with it); classifying the cancellation as a failure would log a retry that never happens.
+func TestServeRenewRefusalWinsOverAConcurrentShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lost := &serveLease{server: "test1", slot: "1", holder: "w-a", leaseID: "id"}
+	var log syncBuf
+	if stop := lost.renewFailed(ctx, &slots.Refusal{Msg: "test1/1 is not leased by w-a (held by w-b)"}, cancel, &log); !stop {
+		t.Fatal("a refusal must stop the keeper")
+	}
+	if _, isLost := lost.lostReason(); !isLost {
+		t.Fatalf("a refusal seen during the shutdown was dropped: %q", log.String())
+	}
+	if !strings.Contains(log.String(), "not ours any more") {
+		t.Fatalf("the loss was not logged: %q", log.String())
+	}
+
+	// A wait for the store's lock that ended with the run is the shutdown: not a loss, no line.
+	quiet := &serveLease{server: "test1", slot: "1", holder: "w-a", leaseID: "id"}
+	var quietLog syncBuf
+	if stop := quiet.renewFailed(ctx, errors.New("flock /x/leases/.lock: context canceled"), cancel, &quietLog); !stop {
+		t.Fatal("a cancelled lock wait must stop the keeper")
+	}
+	if _, isLost := quiet.lostReason(); isLost {
+		t.Fatal("a cancelled lock wait was recorded as a lost lease")
+	}
+	if quietLog.String() != "" {
+		t.Fatalf("a cancelled lock wait was logged as a renewal failure: %q", quietLog.String())
+	}
+}
+
+// TestServeVerdictAfterTheKeeperJoined: the verdict is read once the keeper has stopped, and a lost
+// lease outranks whatever the login or the world produced. A refusal it already saw is recorded even
+// when the run is being cancelled, so the reordered check cannot miss it.
+func TestServeVerdictAfterTheKeeperJoined(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lost := &serveLease{server: "test1", slot: "1", holder: "w-a", leaseID: "id"}
+	var log syncBuf
+	if stop := lost.renewFailed(ctx, &slots.Refusal{Msg: "test1/1 is not leased by w-a (held by w-b)"}, cancel, &log); !stop {
+		t.Fatal("a refusal must stop the keeper")
+	}
+	for _, code := range []int{exitOK, exitWorld, exitAuth} {
+		if got := serveVerdict(lost, code); got != exitServeLeaseLost {
+			t.Fatalf("lease lost: exit %d for a %d result, want %d", got, code, exitServeLeaseLost)
+		}
+	}
+	if got := serveVerdict(&serveLease{}, exitWorld); got != exitWorld {
+		t.Fatalf("a live lease changed the code to %d", got)
+	}
+	if got := serveVerdict(nil, exitOK); got != exitOK {
+		t.Fatalf("a serve without a lease changed the code to %d", got)
 	}
 }
 

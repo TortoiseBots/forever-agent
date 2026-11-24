@@ -140,24 +140,35 @@ func (l *serveLease) renewOnce(ctx context.Context, cancel context.CancelFunc, l
 			fmt.Fprintf(log, "serve: lease %s/%s renewed until %s\n", l.server, l.slot, cur.Expires.UTC().Format(time.RFC3339))
 			return false
 		}
-		if ctx.Err() != nil {
-			// The wait for the store's lock ended with the run: not a failure, just the shutdown.
+		if l.renewFailed(ctx, err, cancel, log) {
 			return true
 		}
-		var refusal *slots.Refusal
-		if errors.As(err, &refusal) {
-			l.setLost(fmt.Sprintf("lease %s/%s is not ours any more (%v): stopping the serve", l.server, l.slot, err))
-			fmt.Fprintf(log, "serve: %s\n", l.reason)
-			cancel()
-			return true
-		}
-		fmt.Fprintf(log, "serve: lease %s/%s renew failed: %v; retrying in %s\n", l.server, l.slot, err, serveLeaseRetry)
 		select {
 		case <-ctx.Done():
 			return true
 		case <-time.After(serveLeaseRetry):
 		}
 	}
+}
+
+// renewFailed classifies a failed renewal; true says the ticker must stop. A refusal is the lease's
+// verdict and is recorded whatever the run's context says: a lease lost as the serve shuts down must
+// still be reported (exit 13), not written off as the shutdown. Only an error that is the wait for
+// the store's lock ending with ctx is the shutdown, and it is neither a loss nor a failure line. Any
+// other error is logged and retried.
+func (l *serveLease) renewFailed(ctx context.Context, err error, cancel context.CancelFunc, log io.Writer) bool {
+	var refusal *slots.Refusal
+	if errors.As(err, &refusal) {
+		l.setLost(fmt.Sprintf("lease %s/%s is not ours any more (%v): stopping the serve", l.server, l.slot, err))
+		fmt.Fprintf(log, "serve: %s\n", l.reason)
+		cancel()
+		return true
+	}
+	if ctx.Err() != nil {
+		return true
+	}
+	fmt.Fprintf(log, "serve: lease %s/%s renew failed: %v; retrying in %s\n", l.server, l.slot, err, serveLeaseRetry)
+	return false
 }
 
 func (l *serveLease) setLost(reason string) {
@@ -172,4 +183,17 @@ func (l *serveLease) lostReason() (string, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.reason, l.lost
+}
+
+// serveVerdict is the command's exit code once the keeper has been joined: a lease lost during the
+// run outranks the code the login or the world produced, so a supervisor never reads a lost lease as
+// a clean stop. Call it after the keeper has stopped, never before.
+func serveVerdict(lease *serveLease, code int) int {
+	if lease == nil {
+		return code
+	}
+	if _, lost := lease.lostReason(); lost {
+		return exitServeLeaseLost
+	}
+	return code
 }
