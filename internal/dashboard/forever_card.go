@@ -104,6 +104,7 @@ func BuildForeverCard(in Inputs) Card {
 	c := Card{ID: in.Agent.ID, RPC: in.Agent.Addr, Kind: "forever", Orders: []Order{}, Changes: []Change{}, Bots: []BotView{}, Mobs: []MobView{}, Events: []Event{}}
 	c.Run = RunInfo{State: "idle", Phase: "idle", Leg: -1}
 	c.Stall.Level = "none"
+	c.LiveMap = in.LiveMap // set before the status branch: an offline card still says why there is no map
 	var st foreverStatus
 	if len(in.Status) > 0 && json.Unmarshal(in.Status, &st) == nil && st.Character != "" {
 		c.Online = true

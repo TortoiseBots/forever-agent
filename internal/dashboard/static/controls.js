@@ -1,7 +1,8 @@
 "use strict";
 // The run controls' page part (README "Controls (--control)"): the buttons of one agent's card, the confirm texts and the control log, and
 // the DOM that sends one control. The choice of buttons is a pure function of the card (tested under node); the page puts every string in with
-// textContent. The box is shown only when GET /api/control/status says the controls are on.
+// textContent. The controls are shown only when GET /api/control/status says they are on; the Positions panel's live map is the serve's own
+// read-only picture (no token involved), so it is drawn even without --control.
 (function (root) {
   // ---- the buttons of a card (D14 / README "Controls"): the matrix, with no DOM ----
   function runButtons(card) {
@@ -71,6 +72,36 @@
   function placePanel(card) {
     if (!card || !card.online || card.synthetic || card.kind !== "forever") return null;
     return { shapes: PLACE_SHAPES, gaps: PLACE_GAPS, anchors: PLACE_ANCHORS, who: PLACE_WHO };
+  }
+
+  // ---- the live map (the serve's own picture of the party and the hostiles) ----
+
+  // liveMapPanel is the Positions panel's picture: the Forever serve's map_snapshot drawing (the party members and
+  // the hostile creatures on the Forever mesh, drawn by the daemon), which the dashboard asks for at its own bounded
+  // rate (internal/dashboard/live_map.go). The page adds no rate of its own: the picture is fetched again only when
+  // the card's version (live_map.at) changes. Pure of the DOM, so it is tested under node. A turtle card and the plan
+  // view keep the recorded frames: they have no live map.
+  function plural(n, word) { const c = n || 0; return c + " " + word + (c === 1 ? "" : "s"); }
+  function liveMapPanel(card) {
+    if (!card || card.synthetic || card.kind !== "forever") return null;
+    const lm = card.live_map || null;
+    if (!lm || !lm.have) {
+      const why = (lm && lm.reason) ? String(lm.reason) : (card.online ? "the serve has not drawn one yet" : "the serve is not answering");
+      return { src: null, version: "", alt: "", caption: "", notes: [], line: "No live map: " + why };
+    }
+    const version = String(lm.at || "");
+    const bits = ["map " + lm.map, plural(lm.members, "member"), plural(lm.creatures, "hostile")];
+    if (lm.floors && lm.floors.length > 1) bits.push("floor " + ((lm.floor || 0) + 1) + " of " + lm.floors.length);
+    if (lm.seconds) bits.push(Math.round(lm.seconds) + " s of the run");
+    if (typeof lm.age_ms === "number" && lm.age_ms > 0) bits.push("drawn " + Math.max(1, Math.round(lm.age_ms / 1000)) + " s ago");
+    return {
+      src: "/api/map/" + encodeURIComponent(card.id) + "?at=" + encodeURIComponent(version),
+      version: version,
+      alt: "Live map drawn by the serve: map " + lm.map + ", " + plural(lm.members, "party member") + " and " + plural(lm.creatures, "hostile creature"),
+      caption: bits.join(" \u00b7 "),
+      notes: (lm.notes || []).map(String),
+      line: "",
+    };
   }
 
   // The world's coordinate bound (Trinity::IsValidMapCoord): a point outside
@@ -274,7 +305,8 @@
       const logPre = h("pre", { class: "ctllogpre" });
       s.log.append(h("summary", { text: "Control log (last 5)" }), logPre);
       s.logPre = logPre;
-      s.el.append(s.title, s.row, s.orderRow, s.placeBox, h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token), s.msg, s.log);
+      s.tokenRow = h("label", { class: "ctltoken" }, h("span", { text: "Token " }), s.token);
+      s.el.append(s.title, s.row, s.orderRow, s.placeBox, s.tokenRow, s.msg, s.log);
       states.set(card.id, s);
       return s;
     }
@@ -301,27 +333,85 @@
     }
 
     function paint(s, card) {
+      const on = st.enabled === true;
       const specs = runButtons(card);
       const orders = orderButtons(card);
       s.card = card; // the buttons keep the card and its specs current: a click never sends last poll's state
       s.specs = new Map(specs.concat(orders).map((x) => [(x.action || "run") + ":" + x.verb, x]));
       paintRow(s.row, s.btns, specs, s);
       paintRow(s.orderRow, s.orderBtns, orders, s);
-      s.orderRow.hidden = orders.length === 0;
+      s.row.hidden = !on; // read-only: the live map is drawn, the controls themselves are not
+      s.orderRow.hidden = !on || orders.length === 0;
       paintPlace(s, card);
     }
 
+    // paintLiveMap shows the serve's picture, or one line saying why there is none. The img is fetched again only
+    // when the card's version changes (the server's own cadence): the page never adds a rate of its own.
+    function paintLiveMap(s, lm) {
+      const L = s.liveMap;
+      L.box.hidden = !lm;
+      if (!lm) return;
+      if (lm.src) {
+        // A new version is fetched; the picture is shown once it loads, never before (a 503 race leaves the
+        // previous drawing or a broken icon on screen otherwise).
+        if (L.version !== lm.version) { L.version = lm.version; L.img.hidden = true; L.img.src = lm.src; }
+        L.img.alt = lm.alt;
+        L.cap.textContent = lm.caption;
+        L.cap.hidden = false;
+      } else {
+        // No picture: the img is only hidden (its last drawing is never shown as if it were live), and the next
+        // picture sets the src again because the version was cleared.
+        L.version = null;
+        L.img.hidden = true;
+        L.cap.hidden = true;
+        L.err.hidden = true;
+      }
+      L.line.textContent = lm.line || "";
+      L.line.hidden = !lm.line;
+      L.notes.replaceChildren(...(lm.notes || []).map((t) => h("div", { text: t })));
+      L.notes.hidden = !(lm.notes && lm.notes.length);
+    }
+
     // paintPlace draws (once per control box) and refreshes the Positions
-    // panel: Shape, Gap, Anchor, Facing, Who and the seven buttons. Map
-    // point mode arms the next click on the card's map svg to pick the
-    // point (crosshair cursor, Esc cancels); the page sends only when the
-    // card's map is known.
+    // panel: the serve's live map, then Shape, Gap, Anchor, Facing, Who and
+    // the seven buttons. Map point mode arms the next click on the card's map
+    // svg to pick the point (crosshair cursor, Esc cancels); the page sends
+    // only when the card's map is known. The live map is there whenever the
+    // card is a Forever slot, a gone serve included: its line says why.
     function paintPlace(s, card) {
-      const panel = placePanel(card);
-      s.placeBox.hidden = !panel;
+      const panel = placePanel(card), lmv = liveMapPanel(card);
+      s.placeBox.hidden = !panel && !lmv;
+      if (!panel && !lmv) return;
+      if (!s.liveMap) {
+        s.placeHead = h("h4", { text: "Positions" });
+        s.liveMap = { box: h("div", { class: "livemap" }), img: h("img", { class: "lmimg", alt: "" }),
+          cap: h("div", { class: "lmcap muted", hidden: true }), line: h("div", { class: "lmlin muted", hidden: true }),
+          err: h("div", { class: "lmerr muted", hidden: true }), notes: h("div", { class: "lmnotes muted", hidden: true }), version: null };
+        s.liveMap.img.hidden = true;
+        // A picture that fails to load (a 503 race, a dropped link) is said, and the same version is asked for
+        // again on the next paint: a failed load is never a broken icon that no poll retries.
+        s.liveMap.img.addEventListener("error", () => {
+          const L = s.liveMap;
+          L.version = null;
+          L.img.hidden = true;
+          L.err.textContent = "The live map did not load: the dashboard will ask for it again on its next poll.";
+          L.err.hidden = false;
+        });
+        s.liveMap.img.addEventListener("load", () => {
+          const L = s.liveMap;
+          L.err.hidden = true;
+          L.img.hidden = !L.version;
+        });
+        s.liveMap.box.append(s.liveMap.img, s.liveMap.cap, s.liveMap.line, s.liveMap.err, s.liveMap.notes);
+        s.placeForm = h("div", { class: "placeform", hidden: true });
+        s.placeBox.append(s.placeHead, s.liveMap.box, s.placeForm);
+      }
+      paintLiveMap(s, lmv);
+      // The placement controls are a control: a card that is offline (no panel) keeps its live map line only.
+      s.placeForm.hidden = !panel || st.enabled !== true;
       if (!panel) return;
       if (!s.place) {
-        const box = s.placeBox;
+        const box = s.placeForm;
         const shape = h("select", { class: "pshape", "aria-label": "shape" });
         shape.append(...panel.shapes.map((v) => h("option", { value: v, text: v })));
         shape.value = "circle";
@@ -355,7 +445,6 @@
           resume: mk("resume", "Resume", "Follow again (end the fall back)."),
           elsewhere: h("div", { class: "muted", hidden: true }) };
         box.append(
-          h("h4", { text: "Positions" }),
           h("label", { text: "Shape " }, shape),
           h("label", { text: "Gap " }, gap, gapNum),
           h("label", { text: "Anchor " }, anchor),
@@ -382,7 +471,6 @@
       // A placement request in flight holds every send button: a second click sends nothing until the answer (or an error) repaints.
       const sending = [...s.busy].some((k) => k.indexOf("place:") === 0);
       for (const b of [s.place.place, s.place.release, s.place.rallyHere, s.place.rallyPoint, s.place.rallyClear, s.place.fallback, s.place.resume]) b.disabled = sending;
-      s.placeBox.hidden = false;
     }
 
     async function sendPlace(s, card, verb) {
@@ -464,12 +552,21 @@
     return {
       render(el, card) {
         ask();
-        if (st.enabled !== true || !card || card.synthetic) { el.hidden = true; return; }
-        el.hidden = false;
+        if (!card || card.synthetic) { el.hidden = true; return; }
+        // The live map is the serve's own read-only picture (no token involved): it is drawn without --control,
+        // while every control (buttons, placement, token, log) stays hidden until the server enables them.
+        const on = st.enabled === true;
+        el.hidden = !on && !liveMapPanel(card);
+        if (el.hidden) return;
         const s = state(card);
         el.replaceChildren(s.el);
+        s.title.hidden = !on;
+        s.tokenRow.hidden = !on;
+        s.msg.hidden = !on;
+        s.log.hidden = !on;
         s.token.hidden = st.trusted;
         paint(s, card);
+        if (!on) return;
         const now = Date.now();
         if (!s.logAt || now - s.logAt > 10000) { s.logAt = now; refreshLog(s, card); }
       },
@@ -479,6 +576,6 @@
 
   const api = { runButtons, orderButtons, ORDER_VERBS, confirmText, logLines, create, VERBS,
     PLACE_SHAPES, PLACE_GAPS, PLACE_ANCHORS, PLACE_WHO, unproject, placePanel, placeArgs,
-    armPointPick, disarmPointPick, MAP_BOUND };
+    armPointPick, disarmPointPick, MAP_BOUND, liveMapPanel };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.CTL = api;
 })(typeof self !== "undefined" ? self : this);

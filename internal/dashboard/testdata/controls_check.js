@@ -166,7 +166,10 @@ function fakeH(tag, attrs, ...kids) {
     replaceChildren(...xs) { el.children = xs.slice(); },
     addEventListener(t, f) { (el.listeners[t] = el.listeners[t] || []).push(f); },
     removeEventListener() {}, remove() {},
+    fire(t, ev) { for (const f of el.listeners[t] || []) f(ev || {}); },
     click() { if (!el.disabled) for (const f of el.listeners.click || []) f({ defaultPrevented: false }); } };
+  let srcVal;
+  Object.defineProperty(el, "src", { get() { return srcVal === undefined ? "" : srcVal; }, set(v) { srcVal = v; el.srcSets = (el.srcSets || 0) + 1; } });
   Object.defineProperty(el, "options", { get() { return el.children.filter((c) => c.tag === "option"); } });
   Object.defineProperty(el, "selectedOptions", { get() { return []; } });
   Object.defineProperty(el, "value", { get() { if (el._v !== undefined) return el._v; const o = el.options[0]; return o ? o.value : ""; }, set(v) { el._v = v; } });
@@ -221,5 +224,83 @@ function fakeH(tag, attrs, ...kids) {
 
   ctl.render(box, Object.assign({}, card, { elsewhere: [] }));
   assert.ok(line.hidden, "no elsewhere line when every bot is on the shown map");
+
+  // The panel draws the serve's live map, and turns it into one line when the serve is gone (live_map).
+  const lm = { have: true, state: "live", map: 36, floor: 0, floors: ["ground"], members: 2, creatures: 1, seconds: 42.5, at: "2026-11-24T20:00:00Z", age_ms: 2000 };
+  ctl.render(box, Object.assign({}, card, { elsewhere: [], live_map: lm }));
+  const lbox = find(box, (n) => n.className === "livemap");
+  assert.ok(lbox && !lbox.hidden, "the live map box is drawn");
+  const img = find(lbox, (n) => n.tag === "img");
+  assert.strictEqual(img.src, "/api/map/" + encodeURIComponent(card.id) + "?at=" + encodeURIComponent(lm.at));
+  img.fire("load");
+  assert.ok(!img.hidden, "the picture is shown once it loads");
+  assert.ok(/map 36 · 2 members · 1 hostile/.test(text(find(lbox, (n) => (n.className || "").indexOf("lmcap") >= 0))), "the caption names the picture");
+
+  ctl.render(box, Object.assign({}, card, { online: false, elsewhere: [], live_map: { have: false, state: "no-serve", reason: "world: offline: test down" } }));
+  assert.ok(find(lbox, (n) => n.tag === "img").hidden, "a gone serve shows no picture");
+  const lmlin = find(lbox, (n) => (n.className || "").indexOf("lmlin") >= 0);
+  assert.ok(/^No live map: world: offline: test down$/.test(text(lmlin)) && !lmlin.hidden, "the gone serve is said in words");
+  assert.ok(!lbox.hidden, "the box stays, with the reason");
+
+  // ---- read-only mode (no --control): the live map is drawn, the controls themselves are not (finding 1) ----
+  global.fetch = (url) => url === "/api/control/status"
+    ? Promise.resolve({ ok: false, status: 404, json: async () => null })
+    : Promise.resolve({ ok: true, status: 200, json: async () => ({ lines: [] }) });
+  const ro = C.create({ h: fakeH, rerender() {}, footer() {} });
+  const roBox = fakeH("div", { hidden: true });
+  const roCard = Object.assign({}, card, { online: true, elsewhere: [], live_map: lm });
+  ro.render(roBox, roCard);
+  await settle(); await settle();
+  ro.render(roBox, roCard);
+  assert.ok(!roBox.hidden, "read-only: the box stays for the live map");
+  const roLm = find(roBox, (n) => n.className === "livemap");
+  assert.ok(roLm && !roLm.hidden, "read-only: the serve's picture is still drawn");
+  assert.strictEqual(find(roLm, (n) => n.tag === "img").src,
+    "/api/map/" + encodeURIComponent(card.id) + "?at=" + encodeURIComponent(lm.at), "read-only: the picture's endpoint");
+  const roForm = find(roBox, (n) => n.className === "placeform");
+  assert.ok(roForm && roForm.hidden, "read-only: the placement controls are hidden");
+  const roTitle = find(roBox, (n) => n.tag === "h3" && n.textContent === "Controls");
+  assert.ok(roTitle && roTitle.hidden, "read-only: the Controls heading is hidden");
+  const roRow = find(roBox, (n) => n.className === "ctlrow");
+  assert.ok(roRow && roRow.hidden, "read-only: the run buttons are hidden");
+  assert.ok(find(roBox, (n) => n.className === "ctltoken").hidden, "read-only: no token field is shown");
+
+  // ---- online -> offline: the placement controls go, the live map's reason line stays (finding 2) ----
+  global.fetch = (url) => url === "/api/control/status"
+    ? Promise.resolve({ ok: true, status: 200, json: async () => ({ enabled: true, local_trusted: true, trust_nonce: "n" }) })
+    : Promise.resolve({ ok: true, status: 200, json: async () => ({ lines: [] }) });
+  const od = C.create({ h: fakeH, rerender() {}, footer() {} });
+  const odBox = fakeH("div", { hidden: true });
+  od.render(odBox, roCard);
+  await settle(); await settle();
+  od.render(odBox, roCard);
+  const odForm = find(odBox, (n) => n.className === "placeform");
+  assert.ok(odForm && !odForm.hidden, "controls on: the placement controls are drawn");
+  assert.ok(find(odForm, (n) => n.tag === "button" && n.textContent === "Place"), "controls on: the Place button is drawn");
+  od.render(odBox, Object.assign({}, roCard, { online: false, live_map: { have: false, state: "no-serve", reason: "world: offline: test down" } }));
+  assert.ok(odForm.hidden, "an offline card hides the placement controls");
+  const odBoxEl = find(odBox, (n) => n.className === "placebox");
+  assert.ok(odBoxEl && !odBoxEl.hidden, "the live map's line stays on an offline card");
+  assert.ok(!find(odBox, (n) => (n.className || "").indexOf("lmlin") >= 0).hidden, "the offline line is shown");
+
+  // ---- a picture that fails to load is retried, and says so until it loads (finding 5) ----
+  const eb = fakeH("div", { hidden: true });
+  od.render(eb, roCard);
+  await settle(); await settle();
+  od.render(eb, roCard);
+  const ebImg = find(eb, (n) => n.tag === "img");
+  assert.ok(ebImg.hidden, "a picture is hidden until it loads");
+  ebImg.fire("load");
+  assert.ok(!ebImg.hidden, "a loaded picture is shown");
+  const sets = ebImg.srcSets;
+  const ebErr = find(eb, (n) => (n.className || "").indexOf("lmerr") >= 0);
+  assert.ok(ebErr, "the live map has a load-failure line");
+  ebImg.fire("error");
+  assert.ok(ebImg.hidden, "a failed picture is hidden");
+  assert.ok(!ebErr.hidden && /did not load/.test(text(ebErr)), "the failed picture says why");
+  od.render(eb, roCard);
+  assert.strictEqual(ebImg.srcSets, sets + 1, "the same version is asked for again after a load failure");
+  ebImg.fire("load");
+  assert.ok(!ebImg.hidden && ebErr.hidden, "the retried picture is shown and the failure line goes");
   console.log("ok placement");
 })().catch((e) => { console.error(e); process.exit(1); });

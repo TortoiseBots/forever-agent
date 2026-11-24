@@ -51,6 +51,8 @@ curl -X POST http://127.0.0.1:8790/api/control/<slot>/run \
   -d '{"verb":"pause","confirm":true}'
 ```
 
+The Positions panel also draws the serve's own live map above its buttons: the daemon's `map_snapshot` (the party members and the hostile creatures on the Forever mesh), asked by the dashboard every 5 s and served at `GET /api/map/<id>` — a read-only picture, no token involved. A serve that stops answering turns it into one line, `No live map: <reason>`, never a stale drawing, and the panel fills again when the serve is back. Turtle cards and the plan view have no live map: they keep drawing the recorded frames.
+
 ## 4. Read the control log
 
 Each control appends two lines: the request (who, via, agent, verb) and the result (`ok`, `error`, or `indeterminate` when the RPC answer could not be read). The page's `GET /api/control/<id>/log?n=20` shows the last result lines, newest last. An `indeterminate` answer means the command may already have run: read the run state before repeating it.

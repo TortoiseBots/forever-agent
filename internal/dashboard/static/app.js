@@ -185,7 +185,7 @@ function makeCard(c) {
   const parts = {}, rec = { geo: null, card: c, svg: null, layerName: null, layerApplied: null, pick: null,
     v: null, goal: null, fit: null, mode: "fit", followOn: followPref, paused: false, following: false, followScale: null, raf: 0, geoName: null, viewLoaded: null, avail: null };
   parts.head = h("div", { class: "chead" });
-  parts.controls = h("div", { class: "controls", hidden: true }); // the run controls' box (controls.js), hidden unless --control
+  parts.controls = h("div", { class: "controls", hidden: true }); // the run controls' box (controls.js): a Forever card's live map, and its controls unless read-only
   parts.stage = h("div", { class: "stage" });
   parts.map = h("div", { class: "map" });
   parts.info = h("div", { class: "info" });
