@@ -15,10 +15,10 @@ status: draft
 
 # Score a finished fight
 
-> **Turtle only.** `fight-score` reads Turtle dashboard recordings; a Forever server has no replacement
-> (`forever-agent help`).
-
 `turtle-agent fight-score` reads finished fights the way the dashboard's fight debugger reads them: the two tank readings with the debugger's exact rules, then one line per bot the spells oracle warns about. It reads files only and never logs in.
+
+The default spell data is the Turtle knowledge base. A Forever (Classic 1.60) run's fight record is scored against the
+Forever spell data with `--set spell_oracle=forever` (see §5).
 
 ## 1. Score a fight dump
 
@@ -54,3 +54,22 @@ Every flag and its default:
 ## 4. Mind the exit code
 
 Exit 0 whatever the warnings say; 2 on usage. Warnings are readings, not failures.
+
+## 5. Score a Forever run's fight
+
+```sh
+forever-agent fight-score --set spell_oracle=forever <walk-dir>/combat-fight-1.json
+```
+
+`--set spell_oracle=forever` selects the oracle and common lists of the Forever spell data: the `oracle` rows judge each
+bot against its Forever class spec, and `ot_taunt` uses the Forever taunt list (Taunt, Mocking Blow, Challenging Shout,
+Growl, Challenging Roar: Hand of Reckoning is a Turtle spell and reads as no taunt). The input is the module's fight
+record in the forms it is stored in: the dashboard detail `{fight, warnings}`, the bare fight object, or the
+`COMBAT_FIGHT` datagram. A `--set spell_oracle=SECONDS` number still sets the seconds a bot must be active to be judged,
+so both may be given:
+
+```sh
+forever-agent fight-score --set spell_oracle=forever --set spell_oracle=30 <walk-dir>/combat-fight-1.json
+```
+
+Without the option the Turtle data is read, as before.

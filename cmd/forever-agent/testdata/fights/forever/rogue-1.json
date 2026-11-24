@@ -1,0 +1,100 @@
+{
+  "fight": {
+    "id": "forever-rogue-1",
+    "commander": "Testrun",
+    "commander_guid": 1,
+    "group": 1,
+    "map": 1,
+    "plan": "test",
+    "leg": "test",
+    "step": 1,
+    "kind": "pull",
+    "start": 1000000000,
+    "dur_ms": 40000,
+    "outcome": "kill",
+    "boss": 0,
+    "boss_name": "",
+    "planned": [],
+    "engaged": [
+      {
+        "e": 1,
+        "n": "Testmob",
+        "c": 1
+      }
+    ],
+    "bots": [
+      {
+        "name": "Tankbot",
+        "guid": 2,
+        "class": "warrior",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 3200,
+        "heal": 0,
+        "over": 0,
+        "taken": 5400,
+        "casts": 15,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sunder Armor",
+            "c": 8
+          },
+          {
+            "n": "Shield Slam",
+            "c": 2
+          },
+          {
+            "n": "Revenge",
+            "c": 2
+          },
+          {
+            "n": "Heroic Strike",
+            "c": 3
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Roguebot",
+        "guid": 3,
+        "class": "rogue",
+        "role": "dps",
+        "sub": 0,
+        "dmg": 6100,
+        "heal": 0,
+        "over": 0,
+        "taken": 2600,
+        "casts": 20,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sinister Strike",
+            "c": 10
+          },
+          {
+            "n": "Eviscerate",
+            "c": 5
+          },
+          {
+            "n": "Slice and Dice",
+            "c": 3
+          },
+          {
+            "n": "Cold Blood",
+            "c": 1
+          },
+          {
+            "n": "Expose Armor",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      }
+    ],
+    "deaths": []
+  },
+  "warnings": []
+}

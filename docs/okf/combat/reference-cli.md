@@ -19,8 +19,9 @@ status: draft
 
 # Combat CLI
 
-> **Turtle only commands.** `rotation`, `fight-score` and `pulltest` on this page run against the Turtle stack only;
-> against a Forever server use the replacement `forever-agent help` prints for each (some have none yet).
+> **Turtle commands.** `rotation` and `pulltest` on this page run against the Turtle stack only; against a Forever
+> server use the replacement `forever-agent help` prints (some have none yet). `fight-score` also scores a Forever
+> run's fight record with `--set spell_oracle=forever`.
 
 Three offline commands. None logs in; `rotation` and `pulltest` read files only. Exit 0 on success, 2 on bad flags, arguments or files.
 

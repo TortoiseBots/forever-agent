@@ -1,0 +1,133 @@
+{
+  "fight": {
+    "id": "forever-paladin-1",
+    "commander": "Testrun",
+    "commander_guid": 1,
+    "group": 1,
+    "map": 1,
+    "plan": "test",
+    "leg": "test",
+    "step": 1,
+    "kind": "pull",
+    "start": 1000000000,
+    "dur_ms": 40000,
+    "outcome": "kill",
+    "boss": 0,
+    "boss_name": "",
+    "planned": [],
+    "engaged": [
+      {
+        "e": 1,
+        "n": "Testmob",
+        "c": 1
+      }
+    ],
+    "bots": [
+      {
+        "name": "Tankbot",
+        "guid": 2,
+        "class": "warrior",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 3200,
+        "heal": 0,
+        "over": 0,
+        "taken": 5400,
+        "casts": 15,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sunder Armor",
+            "c": 8
+          },
+          {
+            "n": "Shield Slam",
+            "c": 2
+          },
+          {
+            "n": "Revenge",
+            "c": 2
+          },
+          {
+            "n": "Heroic Strike",
+            "c": 3
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Paladinbot",
+        "guid": 3,
+        "class": "paladin",
+        "role": "healer",
+        "sub": 0,
+        "dmg": 300,
+        "heal": 0,
+        "over": 0,
+        "taken": 600,
+        "casts": 13,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Holy Light",
+            "c": 5
+          },
+          {
+            "n": "Flash of Light",
+            "c": 5
+          },
+          {
+            "n": "Purify",
+            "c": 2
+          },
+          {
+            "n": "Holy Shock",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Palatank",
+        "guid": 4,
+        "class": "paladin",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 1800,
+        "heal": 0,
+        "over": 0,
+        "taken": 6200,
+        "casts": 12,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Hand of Reckoning",
+            "c": 2
+          },
+          {
+            "n": "Seal of Righteousness",
+            "c": 5
+          },
+          {
+            "n": "Judgement",
+            "c": 2
+          },
+          {
+            "n": "Consecration",
+            "c": 2
+          },
+          {
+            "n": "Holy Shield",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      }
+    ],
+    "deaths": []
+  },
+  "warnings": []
+}

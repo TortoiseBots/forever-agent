@@ -19,8 +19,8 @@ status: draft
 
 # Score a fight
 
-> **Turtle only.** `fight-score` reads Turtle dashboard recordings; a Forever server has no replacement
-> (`forever-agent help`).
+`fight-score` reads Turtle dashboard recordings by default; a Forever (Classic 1.60) run's fight record is scored
+against the Forever spell data with `--set spell_oracle=forever` (`forever-agent help`).
 
 Two offline commands judge what already happened. `fight-score` reads finished fight JSON and scores each bot against its spec's spell lists; `pulltest` prints one pull-test result or the change between two. Both read files only and never log in. Warnings never fail: `fight-score` exits 0, or 2 on usage.
 

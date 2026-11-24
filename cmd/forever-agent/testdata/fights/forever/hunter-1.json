@@ -1,0 +1,96 @@
+{
+  "fight": {
+    "id": "forever-hunter-1",
+    "commander": "Testrun",
+    "commander_guid": 1,
+    "group": 1,
+    "map": 1,
+    "plan": "test",
+    "leg": "test",
+    "step": 1,
+    "kind": "pull",
+    "start": 1000000000,
+    "dur_ms": 40000,
+    "outcome": "kill",
+    "boss": 0,
+    "boss_name": "",
+    "planned": [],
+    "engaged": [
+      {
+        "e": 1,
+        "n": "Testmob",
+        "c": 1
+      }
+    ],
+    "bots": [
+      {
+        "name": "Tankbot",
+        "guid": 2,
+        "class": "warrior",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 3200,
+        "heal": 0,
+        "over": 0,
+        "taken": 5400,
+        "casts": 15,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sunder Armor",
+            "c": 8
+          },
+          {
+            "n": "Shield Slam",
+            "c": 2
+          },
+          {
+            "n": "Revenge",
+            "c": 2
+          },
+          {
+            "n": "Heroic Strike",
+            "c": 3
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Hunterbot",
+        "guid": 3,
+        "class": "hunter",
+        "role": "dps",
+        "sub": 0,
+        "dmg": 5200,
+        "heal": 0,
+        "over": 0,
+        "taken": 900,
+        "casts": 28,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Auto Shot",
+            "c": 20
+          },
+          {
+            "n": "Arcane Shot",
+            "c": 6
+          },
+          {
+            "n": "Bestial Wrath",
+            "c": 1
+          },
+          {
+            "n": "Concussive Shot",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      }
+    ],
+    "deaths": []
+  },
+  "warnings": []
+}

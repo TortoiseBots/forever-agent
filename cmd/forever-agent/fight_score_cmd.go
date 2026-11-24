@@ -15,7 +15,12 @@ import (
 
 const fightScoreUsage = "usage: forever-agent fight-score [--json] [--mt NAME] [--ot A,B] [--set spell_oracle=S] <combat-fight.json>...\n" +
 	"  scores finished fights the way the dashboard's fight debugger reads them (mt_sunder, ot_taunt) and judges each bot\n" +
-	"  against its KB spec's spell lists; exit 0 (warnings never fail), 2 on usage"
+	"  against its KB spec's spell lists; --set spell_oracle=forever judges a Forever run against the Forever spell data,\n" +
+	"  and --set spell_oracle=SECONDS (any other number) still sets the fight seconds a bot must be active to be judged;\n" +
+	"  exit 0 (warnings never fail), 2 on usage"
+
+// foreverOracle is the --set spell_oracle value that selects the Forever spell data instead of a number of seconds.
+const foreverOracle = "forever"
 
 // fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one.
 type fightJSON struct {
@@ -76,10 +81,25 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := tracecheck.Defaults()
 	cfg.SpellOracleActiveS = 20 // a fight is judged after 20 s of it, not a trace's minute
+	var oracle *kbspells.Oracle
 	for _, s := range sets {
 		k, v, ok := strings.Cut(s, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			fmt.Fprintf(stderr, "--set %q: want check=number\n", s)
+			return exitUsage
+		}
+		if k == tracecheck.IDSpellOracle && strings.EqualFold(v, foreverOracle) {
+			o, err := kbspells.ForeverDefault()
+			if err != nil {
+				fmt.Fprintf(stderr, "--set spell_oracle=forever: %v\n", err)
+				return exitUsage
+			}
+			oracle = o
+			continue
+		}
 		n, err := strconv.ParseFloat(v, 64)
-		if !ok || err != nil {
+		if err != nil {
 			fmt.Fprintf(stderr, "--set %q: want check=number\n", s)
 			return exitUsage
 		}
@@ -88,7 +108,9 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	oracle := kbspells.Default()
+	if oracle == nil {
+		oracle = kbspells.Default()
+	}
 	for _, path := range fs.Args() {
 		f, err := readFightFile(path)
 		if err != nil {
