@@ -1,10 +1,11 @@
 #!/bin/sh
 # Fetch TortoiseBotsForeverManager at the pinned commit into .cache/ (ignored by git)
 # using plain git clone --depth 1 (no GitHub API) and print the directory.
+# Pin: 2.4.1-forever.3 (main, 2026-11-23); contract rev 2, PROTO level 1.
 # Exit 3 when it is not cached and cannot be cloned.
 set -eu
 
-ADDON_COMMIT=bebebef8b164c54612f6918cf3c94b99ca705efd
+ADDON_COMMIT=7e980230ad41cc57fc415943f1e9686e2734b079
 ADDON_REPO=TortoiseBots/TortoiseBotsForeverManager
 
 root=$(cd "$(dirname "$0")/../../.." && pwd)

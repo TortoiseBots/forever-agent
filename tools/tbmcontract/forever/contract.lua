@@ -248,9 +248,10 @@ for i, rec in ipairs(recvs) do
     end
 end
 
--- ── 6. Known TBFM bebebef contract gaps (pinned to commit bebebef) ──────────
--- Each entry verifies the exact observed bebebef behavior AND stops passing if
--- a future TBFM bump fixes the gap so the entry gets retired.
+-- ── 6. Known TBFM contract gaps at the pinned commit ───────────────────────
+-- Each entry verifies the exact behavior observed at the pin (7e98023,
+-- 2.4.1-forever.3) AND stops passing if a future TBFM bump fixes the gap so
+-- the entry gets retired.
 local DRIFTS = {
     ["ok-multiline-message"] = function()
         check("hello.version", TB.serverVersion or "(empty)", "v0.1.0-forever")
@@ -304,7 +305,7 @@ local DRIFTS = {
 
 -- Cases where all standard expects run except a single pinned-commit quirk.
 local EXPECT_DRIFTS = {
-    -- At bebebef, Roster.lua updates state[name].altBot in place on TBM:ALTBOTS
+    -- At the pin, Roster.lua updates state[name].altBot in place on TBM:ALTBOTS
     -- and clears state in commitSnapshot on ROSTER_END, so ALTBOTS sent inside
     -- the stream before ROSTER_END is wiped.
     ["ok-roster-three:altbots"] = function(want)
@@ -322,7 +323,7 @@ if DRIFTS[caseName] then
         print(string.format("FAIL: %d mismatch(es) in %s", #mismatches, caseName))
         os.exit(1)
     end
-    print("ok: " .. caseName .. " (bebebef known drift verified)")
+    print("ok: " .. caseName .. " (pinned-commit known drift verified)")
     os.exit(0)
 end
 
@@ -393,11 +394,26 @@ local function checkExpect(p, want)
     elseif p == "hello.caps" then
         checkCaps(want)
     elseif p == "hello.verbs" or p == "hello.has_verbs" then
-        -- Known gap at bebebef: TBFM does not parse the VERBS stream yet
-        -- (no serverVerbs field, VERBS lines fall through as unknown). The
-        -- entry stops passing once TBFM exposes the verbs so it gets retired.
-        if TB.serverVerbs ~= nil or TB.GetServerVerbs ~= nil then
-            fail("%s: TBFM now stores VERBS; remove the known-gap entry", p)
+        -- The add-on keeps a verb set (TB._serverVerbs, TB.ServerVerbsKnown)
+        -- committed only when the VERBS stream's token count matches BEGIN.
+        -- It stores no order, so the contract's comma-joined list is compared
+        -- as a set here; the agent's reader keeps the received order.
+        local known = TB.ServerVerbsKnown and TB.ServerVerbsKnown()
+        if p == "hello.has_verbs" then
+            check(p, tostring(known and true or false), want)
+        else
+            local got = {}
+            for tok in pairs(TB._serverVerbs or {}) do got[tok] = true end
+            local wantSet = {}
+            if want ~= "" and want ~= "(empty)" then
+                for _, tok in ipairs(splitChar(want, ",")) do wantSet[tok] = true end
+            end
+            for tok in pairs(wantSet) do
+                if not got[tok] then fail("%s: addon lacks verb %s", p, tok) end
+            end
+            for tok in pairs(got) do
+                if not wantSet[tok] then fail("%s: addon has unexpected verb %s", p, tok) end
+            end
         end
     elseif p == "hello.latest_module" then
         check(p, TB.latestModule or "-", want)
