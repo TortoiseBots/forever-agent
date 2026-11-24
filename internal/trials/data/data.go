@@ -5,7 +5,9 @@
 // The `forever` subdirectory is the ForeverCore overlay: rows the live server proved (arenas,
 // mobs, the bot gear kits and the spec markers), merged over the copied tables by key. An
 // overlay row wins over the base row with the same key; an overlay file left empty adds
-// nothing. Never guess a row here: an entry is added only after a read-back on the server.
+// nothing. Never guess a row here: an entry is added only after a read-back on the server,
+// or — for a spec kit's spell ids — from the generated Forever spell table
+// (internal/foreverspells: one id per ability name, with its level), never a hand-typed id.
 package data
 
 import (
