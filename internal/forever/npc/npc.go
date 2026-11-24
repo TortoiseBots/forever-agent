@@ -61,6 +61,7 @@ func IsFlightmaster(flags uint32) bool { return flags&NPCFlagFlightmaster != 0 }
 // IsBattlemaster reports whether a creature's flags make it a battlemaster (BattleGroundHandler.cpp
 // HandleBattlemasterHelloOpcode checks the flag before answering the list).
 func IsBattlemaster(flags uint32) bool { return flags&NPCFlagBattlemaster != 0 }
+
 // IsMailbox reports whether a creature's flags make it a mailbox (MailHandler.cpp CanOpenMailBox).
 func IsMailbox(flags uint32) bool { return flags&NPCFlagMailbox != 0 }
 
