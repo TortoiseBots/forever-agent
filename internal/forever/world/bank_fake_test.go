@@ -1,12 +1,12 @@
 package world
 
 // The bank methods against the handler-boundary fake: the fake answers the client's packets the way the core does — a
-// banker interaction with SMSG_NPC_INTERACTION_OPEN_RESULT (SendShowBank, BankHandler.cpp:312-320), an auto-store with
-// the player's slot and the bank bag's own update plus the item's new container (Bag::StoreItem,
-// Bag.cpp:161-174 sets the item's ContainedIn and sends it), a tab purchase with the money and the tab (HandleBuyBankTab)
-// — and every method must read its outcome from the server's own words. The failing case is
-// TestServeBankDepositThroughMethods: a deposit that returns before the bank bag's update, or reports the item still
-// carried, fails it.
+// banker interaction with SMSG_NPC_INTERACTION_OPEN_RESULT (SendShowBank, BankHandler.cpp:312-320) and an auto-store with
+// the player's slot and the bank bag's own update plus the item's new container (Bag::StoreItem, Bag.cpp:161-174 sets the
+// item's ContainedIn and sends it) — and every method must read its outcome from the server's own words. The failing
+// case is TestServeBankDepositThroughMethods: a deposit that returns before the bank bag's update, or reports the item
+// still carried, fails it. TestBankInteractionReplacedRefusesBankCommands fails if a bank opened for one unit stays
+// usable after the server's interaction moved to another (CanUseBank reads the interaction's source unit).
 
 import (
 	"context"
@@ -50,16 +50,12 @@ type bankWorld struct {
 	// recorded client packets
 	activates [][]byte
 	stores    [][]byte
-	buys      [][]byte
 	// silent answers nothing to the named requests.
 	silent map[uint32]bool
 	// openRefused answers the banker interaction with success false.
 	openRefused bool
 	// refuse answers a store with this equip result, naming the item (SendEquipError(msg, item, nullptr)).
 	refuse int32
-	// buyRefused answers the tab purchase with EQUIP_ERR_BANK_FULL, which names no item
-	// (SendEquipError(EQUIP_ERR_BANK_FULL), BankHandler.cpp:200-205).
-	buyRefused bool
 	// bagSlots is the tab bag's contents the fake keeps between the moves (index to item).
 	bagSlots map[int]wire.GUID
 }
@@ -275,19 +271,6 @@ func (b *bankWorld) answer(f *itemWorld, core uint32, payload []byte) {
 		f.server(wire.SMSGUpdateObject, containerSlotUpdate(bankBagGUID, slot, wire.GUID{}))
 		f.server(wire.SMSGUpdateObject, itemContainerUpdate(item, itemSelf))
 		f.server(wire.SMSGUpdateObject, slotsUpdate(itemSelf, map[int]wire.GUID{withdrawSlot: item}))
-	case wire.CMSGBuyAccountBankTab:
-		b.buys = append(b.buys, append([]byte(nil), payload...))
-		if g := wire.ReadPackedGUID(r); g != bankUnitGUID {
-			f.t.Fatalf("the purchase names %s, want the banker", g)
-		}
-		if typ := r.ReadU8(); typ != bank.BankTypeCharacter {
-			f.t.Fatalf("the purchase's bank type is %d, want %d", typ, bank.BankTypeCharacter)
-		}
-		if b.buyRefused {
-			f.server(wire.SMSGInventoryChangeFailure, bankChangeFailure(wire.EmptyGUID, bankFullResult))
-		}
-		// A purchase the fake accepts answers with the money and the tab: an ActivePlayerData update this client does
-		// not walk, so nothing more goes out (the live server's own shape).
 	case wire.CMSGCloseInteraction:
 		// The close interaction has no answer; it ends the bank window (bank.go).
 		wire.ReadPackedGUID(r)
@@ -402,19 +385,17 @@ func TestServeBankListSilentAndRefused(t *testing.T) {
 func TestServeBankCommandsNeedAnOpenBank(t *testing.T) {
 	b := newBankWorld(t)
 	entry := int32(26)
-	tab := 1
 	for name, fn := range map[string]func(context.Context, serveBankParams) (ServeBankResult, error){
 		"deposit":  b.s.serveBankDeposit,
 		"withdraw": b.s.serveBankWithdraw,
-		"buy_slot": b.s.serveBankBuySlot,
 	} {
 		p := bankParams()
-		p.ItemEntry, p.Tab = &entry, &tab
+		p.ItemEntry = &entry
 		if _, err := fn(context.Background(), p); err == nil || !strings.Contains(err.Error(), "the bank is not open") {
 			t.Fatalf("%s without an open bank: %v", name, err)
 		}
 	}
-	if len(b.stores)+len(b.buys) != 0 {
+	if len(b.stores) != 0 {
 		t.Fatal("a refused call sent a packet")
 	}
 }
@@ -569,49 +550,24 @@ func TestServeBankWithdrawByEntry(t *testing.T) {
 	}
 }
 
-func TestServeBankBuySlotPriceAndGold(t *testing.T) {
-	b := newBankWorld(t)
-	b.openBank(t) // the purse holds 1000 copper
-	tab := 1      // 1000 copper: exactly what the purse holds
-	res, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID), Tab: &tab})
-	if err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
-		t.Fatalf("a purchase nothing proves: %+v %v", res, err)
-	}
-	if len(b.buys) != 1 || res.Price != 1000 || res.Tab == nil || *res.Tab != 1 {
-		t.Fatalf("%d purchase(s), answer %+v", len(b.buys), res)
-	}
-	// A tab the purse cannot pay for is refused before any packet.
-	tab = 2
-	sent := len(b.buys)
-	if _, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID), Tab: &tab}); err == nil ||
-		!strings.Contains(err.Error(), "10000 copper") {
-		t.Fatalf("an unaffordable tab: %v", err)
-	}
-	if len(b.buys) != sent {
-		t.Fatal("the refused purchase sent a packet")
-	}
-	// A missing or impossible tab is refused too (the price is BankTab.db2's row for it).
-	if _, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID)}); err == nil {
-		t.Fatal("a purchase without tab passed")
-	}
-	tab = bank.MaxCharacterTabs
-	if _, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID), Tab: &tab}); err == nil {
-		t.Fatal("tab 9 passed")
-	}
-}
-
-func TestServeBankBuySlotRefused(t *testing.T) {
+// TestServeBankBuySlotRefusesBeforeSending: the core prices a tab from the character's own tab count
+// (HandleBuyBankTab, BankHandler.cpp:186-196) and ignores every field of the request, and this client does not decode
+// ActivePlayerData::NumCharacterBankTabs, so the price cannot be known, a short purse cannot be refused and the purchase
+// cannot be read back. The method answers with that reason and sends nothing: a caller-supplied tab was only a guess
+// (a stale one passed the gold check for a cheaper tab than the server charged and reported a false price).
+func TestServeBankBuySlotRefusesBeforeSending(t *testing.T) {
 	b := newBankWorld(t)
 	b.openBank(t)
-	b.buyRefused = true
-	tab := 1
-	res, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID), Tab: &tab})
-	if err != nil {
-		t.Fatalf("a refusal was an RPC error: %v", err)
+	sent := len(b.activates) + len(b.stores)
+	res, err := b.s.serveBankBuySlot(context.Background(), serveBankParams{GUID: GUID(bankUnitGUID)})
+	if err == nil || !strings.Contains(err.Error(), "NumCharacterBankTabs is not decoded") || !strings.Contains(err.Error(), "Nothing was sent") {
+		t.Fatalf("buy_slot: %+v %v", res, err)
 	}
-	if res.OK || res.Event == nil || res.Event.Kind != events.KindBank || res.Event.Data["command"] != "buy_slot" ||
-		res.Event.Data["error"] != "bank_full" || !strings.Contains(res.Event.Text, "buy_slot of tab 1 refused") {
-		t.Fatalf("answer %+v", res)
+	if res.OK || res.Event != nil {
+		t.Fatalf("the refusal answered %+v", res)
+	}
+	if len(b.activates)+len(b.stores) != sent {
+		t.Fatal("the refused purchase sent a packet")
 	}
 }
 
@@ -634,6 +590,87 @@ func TestBankOpenIsOnlyABankerInteraction(t *testing.T) {
 	}
 	if b.s.bankOpenBanker() != wire.EmptyGUID {
 		t.Fatal("the closed banker is still open")
+	}
+}
+
+// handlePacket feeds one server packet through the session's own dispatch, where every answer that starts an NPC
+// interaction is handled.
+func (b *bankWorld) handlePacket(core uint32, payload []byte) {
+	b.t.Helper()
+	if err := b.s.handle(context.Background(), event{p: worldconn.Packet{Core: core, Name: wire.ServerName(core), Payload: payload}}); err != nil {
+		b.t.Fatalf("%s: %v", wire.ServerName(core), err)
+	}
+}
+
+// TestBankInteractionReplacedRefusesBankCommands: the core keeps one interaction per player and every StartInteraction
+// replaces it (SendListInventory, ItemHandler.cpp:626; SendTrainerList, NPCHandler.cpp:125; SendGossipMenu,
+// GossipDef.cpp:220-222). CanUseBank then reads the interaction's source unit (ItemHandler.cpp:1229-1248), so a bank
+// opened for the banker stops being answered and every mutating method must refuse before sending. The same unit with
+// another window (a merchant's open result, a gossip menu) keeps it: its banker flag still passes that check.
+func TestBankInteractionReplacedRefusesBankCommands(t *testing.T) {
+	other := wire.GUID{Low: 0xBA77, High: uint64(9) << 58}
+	cases := []struct {
+		name string
+		open func(*bankWorld)
+	}{
+		{"merchant open result", func(b *bankWorld) {
+			b.deliver(wire.SMSGNPCInteractionOpenResult, bankerOpenPayload(other, 5, true))
+		}},
+		{"vendor list", func(b *bankWorld) { b.handlePacket(wire.SMSGVendorInventory, vendorListPayload(other, nil)) }},
+		{"trainer list", func(b *bankWorld) { b.handlePacket(wire.SMSGTrainerList, trainerListPayload(other, 1, nil)) }},
+		{"gossip menu", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGGossipMessage, buildGossipMessage(other, 7, 1, 0, "hello"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBankWorld(t)
+			b.openBank(t)
+			sent := len(b.activates) + len(b.stores)
+			tc.open(b)
+			if b.s.bankOpenBanker() != wire.EmptyGUID {
+				t.Fatalf("%s left the bank open", tc.name)
+			}
+			slot := bankDepositSlot
+			bag, idx := int(bankBagSlot), 0
+			for name, call := range map[string]func(context.Context, serveBankParams) (ServeBankResult, error){
+				"deposit":  b.s.serveBankDeposit,
+				"withdraw": b.s.serveBankWithdraw,
+			} {
+				p := serveBankParams{GUID: GUID(bankUnitGUID), Slot: &slot}
+				if name == "withdraw" {
+					p = serveBankParams{GUID: GUID(bankUnitGUID), Bag: &bag, Slot: &idx}
+				}
+				if _, err := call(context.Background(), p); err == nil || !strings.Contains(err.Error(), "the bank is not open") {
+					t.Fatalf("%s after %s: %v", name, tc.name, err)
+				}
+			}
+			if _, err := b.s.serveBankBuySlot(context.Background(), bankParams()); err == nil {
+				t.Fatal("buy_slot passed")
+			}
+			if len(b.activates)+len(b.stores) != sent {
+				t.Fatal("a refused bank call sent a packet")
+			}
+			// bank_list at the banker opens it again.
+			b.openBank(t)
+		})
+	}
+	// The same unit keeps the bank: a merchant's open result and a gossip menu from the banker itself both leave the
+	// server's interaction source on a banker in reach.
+	for name, open := range map[string]func(*bankWorld){
+		"merchant open result": func(b *bankWorld) {
+			b.deliver(wire.SMSGNPCInteractionOpenResult, bankerOpenPayload(bankUnitGUID, 5, true))
+		},
+		"gossip menu": func(b *bankWorld) {
+			b.handlePacket(wire.SMSGGossipMessage, buildGossipMessage(bankUnitGUID, 7, 1, 0, "hello"))
+		},
+	} {
+		b := newBankWorld(t)
+		b.openBank(t)
+		open(b)
+		if b.s.bankOpenBanker() != bankUnitGUID {
+			t.Fatalf("%s on the banker closed the bank", name)
+		}
 	}
 }
 

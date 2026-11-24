@@ -395,15 +395,15 @@ const (
 	SMSGMailQueryNextTimeResult uint32 = 0x450201
 )
 
-// The character bank of issue #220 (Opcodes.h:88-89, 101, 146): the banker interaction that opens the bank window, the
+// The character bank of issue #220 (Opcodes.h:88-89, 146): the banker interaction that opens the bank window and the
 // auto-store that banks one item or takes it back (HandleAutoStoreBankItemOpcode, BankHandler.cpp:105-145: one packet
-// and two directions, the source position deciding which), and the tab purchase that answers with the money and the
-// tab-1 equip (HandleBuyBankTab, BankHandler.cpp:149-233). There is no bank window packet: bank items are the player's
-// own slots 63-71 and the bags in them, which the InvSlots and ContainerData updates carry.
+// and two directions, the source position deciding which). There is no bank window packet: bank items are the player's
+// own slots 63-71 and the bags in them, which the InvSlots and ContainerData updates carry. The tab purchase
+// (CMSG_BUY_ACCOUNT_BANK_TAB, Opcodes.h:146) is not built: the core prices it from the character's tab count, which
+// this client does not read back (world.serveBankBuySlot).
 const (
 	CMSGBankerActivate    uint32 = 0x3E0049
 	CMSGAutoStoreBankItem uint32 = 0x400002
-	CMSGBuyAccountBankTab uint32 = 0x3E0128
 )
 
 // The auction house of issue #106 part 2 (Opcodes.h:70-85, 1179-1195): the client's hello, browse, bucket listing, own
@@ -632,7 +632,6 @@ var clientNames = map[uint32]string{
 
 	CMSGBankerActivate:    "CMSG_BANKER_ACTIVATE",
 	CMSGAutoStoreBankItem: "CMSG_AUTOSTORE_BANK_ITEM",
-	CMSGBuyAccountBankTab: "CMSG_BUY_ACCOUNT_BANK_TAB",
 
 	CMSGMailGetList:                       "CMSG_MAIL_GET_LIST",
 	CMSGMailTakeMoney:                     "CMSG_MAIL_TAKE_MONEY",

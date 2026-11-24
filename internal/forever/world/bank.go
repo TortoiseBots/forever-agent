@@ -7,8 +7,11 @@ package world
 // banker flag, in reach).
 //
 // bankWatch is the one packet a bank method waits on: SMSG_NPC_INTERACTION_OPEN_RESULT for a banker interaction, which
-// the NPC handler records here as well as in the vendor watch (the packet serves every interaction). A close
-// interaction for that banker clears the open, and the methods refuse until bank_list opens it again.
+// the NPC handler records here as well as in the vendor watch (the packet serves every interaction). The core keeps one
+// interaction per player (PlayerTalkClass->GetInteractionData()) and CanUseBank reads its source unit (ItemHandler.cpp:
+// 1229-1248), so a close interaction for that banker, or any answer that starts the interaction on another unit (a
+// vendor's list, a trainer's, a gossip menu), clears the open; the methods refuse until bank_list opens it again.
+// bankInteractionAt is that second rule's one entry point.
 
 import (
 	"github.com/pjerra/forever-agent/internal/forever/bank"
@@ -35,16 +38,21 @@ type bankWatch struct {
 	// can tell its own answer from the one it already held.
 	open    *npc.InteractionOpenResult
 	openSeq int
-	// opened is the banker whose bank window this session opened: bank_deposit, bank_withdraw and bank_buy_slot
-	// refuse without it (the core drops a bank command whose interaction is not open). A close interaction for that
-	// banker clears it.
+	// opened is the banker the server's one interaction is on: bank_deposit and bank_withdraw refuse without it (the
+	// core reads the interaction's source unit, CanUseBank, ItemHandler.cpp:1229-1248). A close interaction for that
+	// banker, or any answer that starts the interaction on another unit, clears it.
 	opened wire.GUID
 }
 
-// recordBankOpen applies one SMSG_NPC_INTERACTION_OPEN_RESULT. A refusal of an open the session held closes it, so the
-// methods refuse until a new open succeeds.
+// recordBankOpen applies one SMSG_NPC_INTERACTION_OPEN_RESULT. A banker interaction the server accepted is the open
+// bank; a refusal of an open the session held closes it, and one of another kind moves the interaction off the banker
+// (the core's one interaction is now the vendor's, the merchant's), so the methods refuse until a new open succeeds.
 func (s *session) recordBankOpen(r npc.InteractionOpenResult) {
 	if r.InteractionType != bank.InteractionCharacterBanker && r.InteractionType != interactionBanker {
+		// Another kind of interaction on that unit replaced the banker's, which is what makes the bank commands stop
+		// being answered: CanUseBank resolves the interaction's source unit, not its type (ItemHandler.cpp:1229-1248),
+		// so the bank stays usable only when the unit itself is the banker whose bank is open.
+		s.bankInteractionAt(r.NPC)
 		return
 	}
 	open := r
@@ -54,6 +62,20 @@ func (s *session) recordBankOpen(r npc.InteractionOpenResult) {
 	case r.Success:
 		s.bank.opened = r.NPC
 	case s.bank.opened == r.NPC:
+		s.bank.opened = wire.GUID{}
+	}
+}
+
+// bankInteractionAt records a server answer that started the player's one interaction (PlayerTalkClass->
+// GetInteractionData().StartInteraction) on `guid`, or on a unit the answer does not name when guid is zero. Every
+// StartInteraction overwrites the previous one — the gossip menu (GossipDef.cpp:220-222), the quest list and its
+// dialogs (:420, :484, :588, :671), the vendor's list (ItemHandler.cpp:599, :626), the trainer's (NPCHandler.cpp:125),
+// the flight master's (TaxiHandler.cpp:100), the auctioneer's (AuctionHouseHandler.cpp:999), the mailbox's
+// (MailHandler.cpp:622) and the battlemaster's (BattlegroundMgr.cpp:510) — and a bank command is answered only while
+// the interaction's source unit is a banker in reach (CanUseBank, ItemHandler.cpp:1229-1248). So an interaction on
+// another unit closes the bank; the same unit keeps it (its banker flag still passes that check).
+func (s *session) bankInteractionAt(guid wire.GUID) {
+	if s.bank.opened != guid {
 		s.bank.opened = wire.GUID{}
 	}
 }

@@ -258,6 +258,8 @@ func (s *session) handleBG(p worldconn.Packet) error {
 			return nil
 		}
 		st.queues.list = &l
+		// SendBattlegroundList starts the interaction on the battlemaster (BattlegroundMgr.cpp:510).
+		s.bankInteractionAt(l.Master)
 		s.opts.logf("world: %s: list id %d, levels %d-%d, %d battlefield(s)", wire.ServerName(p.Core), l.ListID, l.MinLevel, l.MaxLevel, len(l.Battlefields))
 	case wire.SMSGUpdateCapturePoint:
 		if _, err := bg.ParseCapturePoint(p.Payload); err != nil {

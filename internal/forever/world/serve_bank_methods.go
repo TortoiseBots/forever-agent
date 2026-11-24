@@ -3,14 +3,15 @@ package world
 // The character bank daemon methods (issue #220): bank_list, bank_deposit, bank_withdraw and bank_buy_slot, beside the
 // mail and auction layers. The core has no bank window packet: bank_list opens the banker interaction (CMSG_BANKER_ACTIVATE)
 // and answers the bank's contents as the inventory model holds them (the tab bags in slots 63-71 and what is in them),
-// the two moves send the one auto-store packet the core reads in both directions, and the tab purchase names its price
-// from BankTab.db2's character rows before it goes out.
+// and the two moves send the one auto-store packet the core reads in both directions. bank_buy_slot refuses before
+// sending: the core prices a tab from the character's tab count, which this client does not read back.
 //
-// A banker must be open before any of them works: the core answers a bank command only while the interaction it started
-// is open (CanUseBank, ItemHandler.cpp:1229-1248) and drops the rest silently, so a method without it is an RPC error
-// raised before any packet. A move's outcome is the inventory model's own place for the item (the client's guess never
-// names a bank destination, so a bank position can only be the server's word); a server refusal is a result with ok
-// false and its name, and a move the server never confirmed is a result with ok false and reason unconfirmed.
+// A banker must be the server's current interaction before a move works: the core answers a bank command only while the
+// interaction it started is on that banker (CanUseBank, ItemHandler.cpp:1229-1248) and drops the rest silently, so a
+// method without it is an RPC error raised before any packet; any later NPC window on another unit closes it (bank.go).
+// A move's outcome is the inventory model's own place for the item (the client's guess never names a bank destination,
+// so a bank position can only be the server's word); a server refusal is a result with ok false and its name, and a
+// move the server never confirmed is a result with ok false and reason unconfirmed.
 
 import (
 	"context"
@@ -27,8 +28,8 @@ import (
 )
 
 const (
-	// bankAnswerWait bounds the banker interaction and the tab purchase: the server answers both at once, so a silent
-	// one is a refusal or an unknown outcome, not a longer wait.
+	// bankAnswerWait bounds the banker interaction: the server answers it at once, so a silent one is a refusal or an
+	// unknown outcome, not a longer wait.
 	bankAnswerWait = 5 * time.Second
 	// bankMoveWait bounds a deposit or a withdraw: the answers are the player's own slots and a bag's own update, and
 	// items.ConfirmWindow is how long an own move may take before the client stops trusting its guess.
@@ -38,10 +39,6 @@ const (
 // serveBankParams is the parameter object of the bank methods; each reads the fields it needs and refuses the rest.
 type serveBankParams struct {
 	GUID GUID `json:"guid"`
-	// Tab is the character tab bank_buy_slot buys: the character's tab count (its BankTab OrderIndex, 0-8). The server
-	// always grants its own next tab, so the number is the caller's statement of the character's state, read here only
-	// for the price.
-	Tab *int `json:"tab,omitempty"`
 	// The item a deposit or a withdraw names: by entry, or by bag and slot. A deposit's positions are the character's
 	// carried ones (255/0-62, or a bag 30-33 and its slot); a withdraw's are the bank's (255/63-71, or a bank bag 63-71
 	// and its slot).
@@ -62,25 +59,15 @@ type ServeBankItem struct {
 	Unconfirmed bool   `json:"unconfirmed,omitempty"`
 }
 
-// ServeBankCopper is the purse before a tab purchase and as the client read it after: an estimate, because the
-// purchase's own update may land after the answer.
-type ServeBankCopper struct {
-	Before uint64 `json:"before"`
-	After  uint64 `json:"after"`
-}
-
 // ServeBankResult is every bank method's answer. Since is the event-log cursor before the call's first packet; Event
 // is the bank row that answers the call.
 type ServeBankResult struct {
-	Since  uint64           `json:"since"`
-	OK     bool             `json:"ok"`
-	Event  *Event           `json:"event"`
-	Banker GUID             `json:"banker,omitempty"`
-	Items  []ServeBankItem  `json:"items,omitempty"`
-	Item   *ServeBankItem   `json:"item,omitempty"`
-	Copper *ServeBankCopper `json:"copper,omitempty"`
-	Tab    *int             `json:"tab,omitempty"`
-	Price  uint64           `json:"price,omitempty"`
+	Since  uint64          `json:"since"`
+	OK     bool            `json:"ok"`
+	Event  *Event          `json:"event"`
+	Banker GUID            `json:"banker,omitempty"`
+	Items  []ServeBankItem `json:"items,omitempty"`
+	Item   *ServeBankItem  `json:"item,omitempty"`
 }
 
 // registerBankMethods wires the bank methods into the method table.
@@ -400,61 +387,17 @@ func (s *session) bankRefused(unit wire.GUID, command string, it items.Item, f i
 	return s.methodEvent(events.KindBank, unit, data, command+" refused: "+f.Name())
 }
 
-// serveBankBuySlot buys the character's next bank tab. The server charges BankTab.db2's row for the character's own tab
-// count and drops the request silently when the purse cannot pay it, so the call names the tab, reports its price from
-// the same table and refuses before any packet when the purse is short.
-func (s *session) serveBankBuySlot(parent context.Context, p serveBankParams) (ServeBankResult, error) {
-	if p.Tab == nil {
-		return ServeBankResult{}, errors.New("bank_buy_slot needs tab=<the character's tab count, 0-8>: the core charges BankTab.db2's row for that index and this client does not read the count back")
-	}
-	price, err := bank.CharacterTabCost(*p.Tab)
-	if err != nil {
-		return ServeBankResult{}, fmt.Errorf("bank_buy_slot: %w", err)
-	}
-	ctx, cancel, err := methodCtx(parent, p.WaitMS, methodWaitDefaultMS, methodWaitMaxMS)
-	if err != nil {
-		return ServeBankResult{}, err
-	}
-	defer cancel()
-	unit, err := s.methodBankOpen(p.GUID, "bank_buy_slot")
-	if err != nil {
-		return ServeBankResult{}, err
-	}
-	inv, err := s.bankInventory("bank_buy_slot")
-	if err != nil {
-		return ServeBankResult{}, err
-	}
-	if inv.Coinage < price {
-		return ServeBankResult{}, fmt.Errorf("bank_buy_slot: tab %d costs %d copper and the purse holds %d: %d short", *p.Tab, price, inv.Coinage, price-inv.Coinage)
-	}
-	res := ServeBankResult{Since: s.EventLog().Last(), Banker: GUID(unit.GUID), Tab: p.Tab, Price: price}
-	failed := s.invFail
-	if err := s.transport().Send(wire.CMSGBuyAccountBankTab, bank.BuildBuyTab(unit.GUID, bank.BankTypeCharacter)); err != nil {
-		return res, fmt.Errorf("CMSG_BUY_ACCOUNT_BANK_TAB: %w", err)
-	}
-	paid := func() bool {
-		cur := s.inventoryNow()
-		return cur.Known && price > 0 && cur.Coinage+price <= inv.Coinage
-	}
-	answered, err := s.actUntil(ctx, bankAnswerWait, func() bool { return s.invFail != failed || paid() })
-	if err != nil {
-		return res, sentTimeout(err, res.Since)
-	}
-	switch {
-	case s.invFail != nil && s.invFail != failed:
-		f := *s.invFail
-		data := map[string]any{"command": "buy_slot", "ok": false, "reason": "equip_error", "error": f.Name(), "tab": *p.Tab, "price": price}
-		res.Event = s.methodEvent(events.KindBank, unit.GUID, data, fmt.Sprintf("buy_slot of tab %d refused: %s", *p.Tab, f.Name()))
-		return res, nil
-	case answered && paid():
-		res.OK = true
-		res.Copper = &ServeBankCopper{Before: inv.Coinage, After: s.inventoryNow().Coinage}
-		res.Event = s.methodEvent(events.KindBank, unit.GUID, map[string]any{"command": "buy_slot", "ok": true,
-			"tab": *p.Tab, "price": price, "copper_before": res.Copper.Before, "copper_after": res.Copper.After},
-			fmt.Sprintf("buy_slot ok tab %d for %d copper", *p.Tab, price))
-		return res, nil
-	}
-	return res, sentTimeout(unknownOutcomeError{fmt.Sprintf("buy_slot: the tab %d purchase went out and nothing proves it either way (the tab purchase's own update carries the tab count and the tab's settings, fields this client does not walk): check the bank window and the purse", *p.Tab)}, res.Since)
+// serveBankBuySlot refuses the character tab purchase before any packet. The core charges BankTab.db2's row for the
+// character's own tab count, ignores every field of the request (HandleBuyBankTab, BankHandler.cpp:149-233), and drops
+// the request silently when the purse cannot pay it (BankHandler.cpp:193-195). This client does not decode
+// ActivePlayerData::NumCharacterBankTabs (the walk stops after AccountBankCoinage, objects/values.go), so it can neither
+// name the price the server will charge, refuse a purse that is short of that price, nor read the purchase back: the
+// update that carries the tab count and its settings is skipped whole, so the purse in the model does not move. A
+// caller-supplied tab was only a guess — a stale one passed the gold check for a cheaper tab than the server charged
+// and the reported price was false (the adversarial review of #234) — so the method is kept, but it answers with the
+// reason instead of sending. Buying a tab needs the ActivePlayerData walk that round R2 left out.
+func (s *session) serveBankBuySlot(context.Context, serveBankParams) (ServeBankResult, error) {
+	return ServeBankResult{}, errors.New("bank_buy_slot: the character's tab count is not read back (ActivePlayerData::NumCharacterBankTabs is not decoded), so this client cannot know the price the core will charge, refuse a short purse, or prove the purchase; buy the tab in the bank window. Nothing was sent")
 }
 
 // bankAwait waits for one bank move to show in the model: done reports whether the item is where the server had to put

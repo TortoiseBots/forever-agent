@@ -67,6 +67,9 @@ func (s *session) handleMail(p worldconn.Packet) error {
 		}
 		s.mail.list = &l
 		s.mail.listSeq++
+		// The list starts the interaction on the mailbox it was asked for (MailHandler.cpp:622) but names no unit
+		// (MailListResult::Write, MailPackets.cpp:171-180), so the bank closes whatever it was.
+		s.bankInteractionAt(wire.EmptyGUID)
 		s.eventMailList(l)
 	case wire.SMSGMailCommandResult:
 		r, err := mail.ParseCommandResult(p.Payload)

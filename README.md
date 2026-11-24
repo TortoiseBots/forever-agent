@@ -128,10 +128,11 @@ The auction house is served by `auction_hello`, `auction_browse`, `auction_items
 
 The character bank is served by `bank_list` (opens the banker with `CMSG_BANKER_ACTIVATE` and answers the tab bags in
 the player's slots 63-71 and what is inside them), `bank_deposit` and `bank_withdraw` (one item, by bag and slot or by
-entry, with its new place read back from the inventory model) and `bank_buy_slot` (the character tab's price from the
-`BankTab.db2` character rows, refused before any packet when the purse is short). A banker must be open — `bank_list`
-— before the other three work: the core drops a bank command whose interaction is not open. Details, the price table
-and the one limit (the tab count is not read back, so `bank_buy_slot` takes `tab`) are in
+entry, with its new place read back from the inventory model) and `bank_buy_slot`, which refuses before any packet: the
+core prices a tab from the character's own tab count, which this client does not read back, so it can neither check the
+price nor prove the purchase. A banker must be open — `bank_list` — before a deposit or a withdraw works, and any
+later NPC window (a vendor's list, a trainer's, a gossip menu) closes it: the core drops a bank command whose
+interaction is not on that banker. Details and the tab limit are in
 [docs/forever/WORLDLIFE-220-BANK-NOTES.md](docs/forever/WORLDLIFE-220-BANK-NOTES.md).
 
 A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
