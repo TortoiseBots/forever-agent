@@ -40,6 +40,8 @@ const (
 	// NPCFlagBattlemaster is UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:340): the creature answers the battlemaster
 	// hello with the battleground list.
 	NPCFlagBattlemaster uint32 = 0x00100000
+	// NPCFlagMailbox is UNIT_NPC_FLAG_MAILBOX (UnitDefines.h:346): the creature answers the mailbox packets.
+	NPCFlagMailbox uint32 = 0x04000000
 )
 
 // IsVendor reports whether a creature's flags make it a vendor (any of the five vendor bits).
@@ -59,6 +61,8 @@ func IsFlightmaster(flags uint32) bool { return flags&NPCFlagFlightmaster != 0 }
 // IsBattlemaster reports whether a creature's flags make it a battlemaster (BattleGroundHandler.cpp
 // HandleBattlemasterHelloOpcode checks the flag before answering the list).
 func IsBattlemaster(flags uint32) bool { return flags&NPCFlagBattlemaster != 0 }
+// IsMailbox reports whether a creature's flags make it a mailbox (MailHandler.cpp CanOpenMailBox).
+func IsMailbox(flags uint32) bool { return flags&NPCFlagMailbox != 0 }
 
 // InteractionMerchant is PlayerInteractionType::Merchant (DBCEnums.h:2236): the interaction SMSG_NPC_INTERACTION_OPEN_RESULT
 // names when a vendor opens.

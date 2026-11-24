@@ -8,9 +8,12 @@ package tbcmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
@@ -117,5 +120,153 @@ func TestBGStatusBadNumber(t *testing.T) {
 	}
 	if _, err := parseBGStatus(rep); err == nil {
 		t.Fatal("a malformed number parsed as zero")
+	}
+}
+
+// The module's real `.tb bg status` rows (grammar of the battleground round, docs section 22): a config row, a maps
+// row with repeated keys, an instance row, bot rows with `move_age=2s`, a queued row and the end row. No names or
+// hosts: the bot names are the module's documentation names.
+var bgModuleReply = []string{
+	"TortoiseBots: bg: enabled=1 maps=wsg,ab fill=1 autonomous=0 min_per_team=5 max_instances=2 max_bots=50 max_minutes=45 queued=1 inside=2 events=15",
+	"TortoiseBots: bg maps: wsg map=489 list=2 enabled=1 stands=2 ab map=529 list=3 enabled=1 nodes=5",
+	"TortoiseBots: bg instance=3 map=wsg status=wait-join score=0-0 alliance=1h+5b horde=0h+6b",
+	"TortoiseBots: bg bot=Mwarrior role=- objective=- map=wsg instance=3 team=alliance alive=1 move_age=2s",
+	"TortoiseBots: bg bot=Mpriest role=defender objective=hold node=blacksmith map=wsg instance=3 team=alliance alive=0 move_age=1m10s future_key=x",
+	"TortoiseBots: bg bot=Mrogue role=- objective=- map=wsg instance=4 team=horde alive=1 move_age=-",
+	"TortoiseBots: bg queued bot=Mother map=wsg bracket=10-19 since=3s invited=0",
+	"TortoiseBots: bg-end verb=status lines=7 #s1",
+}
+
+func TestBGStatusModuleReply(t *testing.T) {
+	c := bgClient(bgModuleReply...)
+	out, err := c.BGStatus(context.Background())
+	if err != nil {
+		t.Fatalf("BGStatus: %v", err)
+	}
+	if out.Map != "wsg" || out.Status != "wait-join" || out.AllH != 1 || out.AllB != 5 || out.HordeH != 0 || out.HordeB != 6 {
+		t.Fatalf("instance = %+v", out)
+	}
+	if out.Team != "alliance" || out.ScoreA != 0 || out.ScoreH != 0 {
+		t.Fatalf("team/score = %+v", out)
+	}
+	// Only the watcher's instance: the instance 4 bot and the queued bot are not rows.
+	if len(out.Bots) != 2 {
+		t.Fatalf("bots = %+v", out.Bots)
+	}
+	if out.Bots[0].MoveAgeS != 2 || !out.Bots[0].Alive || out.Bots[0].Role != "-" || out.Bots[0].Objective != "" {
+		t.Fatalf("bot 0 = %+v", out.Bots[0])
+	}
+	if out.Bots[1].MoveAgeS != 70 || out.Bots[1].Alive || out.Bots[1].Node != "blacksmith" || out.Bots[1].Objective != "hold" {
+		t.Fatalf("bot 1 = %+v", out.Bots[1])
+	}
+}
+
+// Through the real collector: the rows have no token, every row has the module prefix, and the end row ends it.
+func TestBGStatusModuleReplyThroughCollector(t *testing.T) {
+	var lines []chat.Line
+	for _, l := range bgModuleReply {
+		lines = append(lines, chat.Line{Type: chat.TypeSystem, Text: l})
+	}
+	clock := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	tr := &bgTransport{lines: lines, clock: &clock}
+	c := NewClient(command.NewSession(tr))
+	c.Token = func() (string, error) { return "s1", nil }
+	c.Base.Now = func() time.Time { return clock }
+	out, err := c.BGStatus(context.Background())
+	if err != nil {
+		t.Fatalf("BGStatus: %v", err)
+	}
+	if len(out.Bots) != 2 || out.Bots[1].MoveAgeS != 70 || out.Team != "alliance" {
+		t.Fatalf("report = %+v", out)
+	}
+}
+
+func TestBGStatusModuleOffAndEmpty(t *testing.T) {
+	off := &command.Reply{Token: "s1", Complete: true, End: "bg-end", Raw: []string{
+		"TortoiseBots: bg: enabled=0 maps=- fill=0 queued=0 inside=0 events=0",
+		"TortoiseBots: bg-end verb=status lines=1 #s1",
+	}}
+	for _, l := range off.Raw {
+		off.Lines = append(off.Lines, command.ParseReplyLine(l))
+	}
+	if _, err := parseBGStatus(off); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("a disabled module: %v", err)
+	}
+	// Enabled with nobody inside yet (the human is still queued): an empty, not-in-progress report.
+	idle := &command.Reply{Token: "s1", Complete: true, End: "bg-end", Raw: []string{
+		"TortoiseBots: bg: enabled=1 maps=wsg fill=1 queued=1 inside=0 events=1",
+		"TortoiseBots: bg queued bot=Mother map=wsg bracket=10-19 since=3s invited=0",
+		"TortoiseBots: bg-end verb=status lines=2 #s1",
+	}}
+	for _, l := range idle.Raw {
+		idle.Lines = append(idle.Lines, command.ParseReplyLine(l))
+	}
+	out, err := parseBGStatus(idle)
+	if err != nil || out.Status != "" || len(out.Bots) != 0 {
+		t.Fatalf("idle = %+v err %v", out, err)
+	}
+}
+
+func TestBGStatusBadModuleValues(t *testing.T) {
+	for _, row := range []string{
+		"bg instance=3 map=wsg status=in-progress score=x-y alliance=1h+5b horde=0h+6b",
+		"bg instance=3 map=wsg status=in-progress score=0-0 alliance=many horde=0h+6b",
+		"bg bot=Mwarrior role=- map=wsg instance=3 alive=1 move_age=soon",
+	} {
+		rep := &command.Reply{Token: "s1", Complete: true, End: "bg-end", Raw: []string{row, "bg-end verb=status lines=1 #s1"}}
+		for _, l := range rep.Raw {
+			rep.Lines = append(rep.Lines, command.ParseReplyLine(l))
+		}
+		if _, err := parseBGStatus(rep); !errors.Is(err, ErrBadValue) {
+			t.Errorf("%q: err = %v, want ErrBadValue", row, err)
+		}
+	}
+}
+
+func TestBGAgeForms(t *testing.T) {
+	for in, want := range map[string]float64{"2s": 2, "1m30s": 90, "70": 70, "2.5": 2.5, "-": 0, "": 0, "250ms": 0.25} {
+		row := command.ParseReplyLine("bg bot=M move_age=" + in)
+		if in == "" {
+			row = command.ParseReplyLine("bg bot=M")
+		}
+		got, err := bgAge(row, "move_age")
+		if err != nil || got != want {
+			t.Errorf("move_age=%q: %v, %v (want %v)", in, got, err, want)
+		}
+	}
+}
+
+// bgTransport replays scripted system lines through the collector, one clock tick per line.
+type bgTransport struct {
+	lines []chat.Line
+	clock *time.Time
+}
+
+func (t *bgTransport) SendCommand(context.Context, string) error { return nil }
+
+func (t *bgTransport) Pump(_ context.Context, feed func(chat.Line), done func() bool) error {
+	for _, l := range t.lines {
+		*t.clock = t.clock.Add(100 * time.Millisecond)
+		feed(l)
+		if done() {
+			return nil
+		}
+	}
+	return errors.New("the script ended before the reply did")
+}
+
+// Humans in two matches: the module's answer is global and names no requester, so the watcher's match cannot be
+// told; the parser refuses instead of reporting the first one.
+func TestBGStatusHumansInTwoInstancesRefused(t *testing.T) {
+	rep := &command.Reply{Token: "s1", Complete: true, End: "bg-end", Raw: []string{
+		"TortoiseBots: bg instance=3 map=wsg status=in-progress score=1-0 alliance=1h+4b horde=0h+5b",
+		"TortoiseBots: bg instance=4 map=ab status=in-progress score=0-0 alliance=0h+5b horde=1h+4b",
+		"TortoiseBots: bg-end verb=status lines=2 #s1",
+	}}
+	for _, l := range rep.Raw {
+		rep.Lines = append(rep.Lines, command.ParseReplyLine(l))
+	}
+	if _, err := parseBGStatus(rep); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("err = %v, want ErrBadReport", err)
 	}
 }

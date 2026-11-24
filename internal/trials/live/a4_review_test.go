@@ -496,7 +496,7 @@ func TestEnsureLevelUnreadableIsUnknownAndNeverLevelsUp(t *testing.T) {
 	}
 }
 
-func TestEnsureLevelEachAttemptHasItsOwnDeadline(t *testing.T) {
+func TestEnsureLevelOneSendLandsWithinItsDeadline(t *testing.T) {
 	w := &levelWorld{level: 30}
 	ps, _ := levelPlayer(t, w)
 	row, err := ps.ensureLevel(context.Background(), map[string]any{"player": map[string]any{"level": float64(40)}})
@@ -504,7 +504,7 @@ func TestEnsureLevelEachAttemptHasItsOwnDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !rowOK(row) || intOf(row["value"]) != 40 {
-		t.Fatalf("one shared 0.5 s budget starved the attempt: %v", row)
+		t.Fatalf("one send of +10 did not land on a 0.5 s step: %v", row)
 	}
 }
 

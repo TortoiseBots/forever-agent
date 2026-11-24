@@ -1034,6 +1034,12 @@ const (
 	Build70707 = 70707
 	Build70938 = 70938
 	Build70959 = 70959
+	// Build71037 is the next 1.60.1 client build. ForeverCore 0.1.39 adds its build_info row (auth update
+	// 2026_11_20_70) and it uses the 70790 numbering (Classic.Build70790.FirstBuild covers every later build), so
+	// the opcode table treats it as the 70938/70959 class. It is NOT in SupportedClientBuilds: a login claims it
+	// only when pinned (--build 71037, which also needs 71037 in the realm's Realm.AlsoAcceptBuilds and
+	// Network.SkipBuildAuthKeyCheck = 1), until one live login on 71037 has checked its packet layouts.
+	Build71037 = 71037
 )
 
 // SupportedClientBuilds returns the builds a login may claim on its own (Options.ClientBuild 0), oldest first. A

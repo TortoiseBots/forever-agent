@@ -20,8 +20,11 @@ import (
 // consumables luggage, role, party, and the read-backs each step proves
 // itself with. The `blue` bot kit has no Forever item source yet
 // (gear_kits.json covers warriors only), so a spec that wants worn gear is
-// SKIPPED with needs=bot_items (never a pass without a scan/equip
-// read-back); consumables prove through `ItemScan` (exists=yes).
+// SKIPPED with needs=bot_items (never a pass without a scan/equip read-back);
+// consumables prove through `ItemScan` (exists=yes). For an extra hire a
+// SKIPPED kit is noted on extra_bots_present and does not fail it: presence is
+// the hire, the kit is a SKIP the main hire's bot_items row reports the same
+// way, and a kit the overlay does carry still fails presence on a refusal.
 //
 // A bot is a pool character named in the slot config's `pool` block (D5:
 // invented names `Atank Bheal Cmage Dcmd` style): the runner never invents
@@ -346,8 +349,17 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 		}
 		if len(spec.Items) > 0 || spec.Gear != "" {
 			if r := p.ensureBotGear(ctx, spec, name); r != nil && !rowOK(r) {
-				presentOK = false
-				presentEv = append(presentEv, fmt.Sprintf("extra%d items: %s", i+1, rowEvidence(r)))
+				ev := rowEvidence(r)
+				if skippedIn(ev) == "bot_items" {
+					// The overlay carries no such kit (no Forever item
+					// source): a SKIP, not a missing hire. Presence is the
+					// hire; the main hire's bot_items row is a SKIP too, and
+					// a trial that does not list it still runs.
+					presentEv = append(presentEv, fmt.Sprintf("extra%d gear: %s", i+1, ev))
+				} else {
+					presentOK = false
+					presentEv = append(presentEv, fmt.Sprintf("extra%d items: %s", i+1, ev))
+				}
 			}
 		}
 	}

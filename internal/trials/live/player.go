@@ -28,6 +28,26 @@ import (
 // never a FAIL. Every other failed step is a failed row the setup round
 // retries once.
 
+// MaxPlayerLevel is the server's level cap: the level step never asks for a
+// delta that would take the character past it, and a trial target above it is
+// refused (level 61 is not a level on this core).
+const MaxPlayerLevel = 60
+
+// levelTarget reads trial["player"]["level"] (40 when absent or bad). A target
+// above MaxPlayerLevel is refused with the reason: the row fails and nothing
+// is sent, never a .levelup toward it.
+func levelTarget(trial map[string]any) (int, string) {
+	player, _ := trial["player"].(map[string]any)
+	f, ok := numOf(player["level"])
+	if !ok || f < 1 {
+		return 40, ""
+	}
+	if target := int(f); target > MaxPlayerLevel {
+		return MaxPlayerLevel, fmt.Sprintf("REFUSED: the trial target %d is above the level cap %d; no .levelup sent", target, MaxPlayerLevel)
+	}
+	return int(f), ""
+}
+
 // PlayerSetup owns the player side of one repeat's setup.
 type PlayerSetup struct {
 	Client *Client
@@ -123,55 +143,109 @@ func (p *PlayerSetup) SetupPlayer(ctx context.Context, trial map[string]any) ([]
 	return rows, nil
 }
 
-// ensureLevel brings the player to the trial level via `.levelup` (signed
-// delta) and reads it back from `status`. Every read, every send and every
-// wait has its own deadline (one budget over three attempts ran dry early),
-// and a level that cannot be read is UNKNOWN: the row fails UNVERIFIED and
-// nothing is sent, never `.levelup` of (want - 0).
+// ensureLevel brings the player to the trial level via ONE `.levelup` (signed
+// delta) and reads it back from `status`. The delta comes from the level read
+// first, the target is clamped to MaxPlayerLevel, and a sent delta is never
+// repeated: this core's `status` can keep the old level after `.levelup` (the
+// 2026-11-24 run read 30 after each `.levelup 30`, sent it three times and
+// left the character at 120, then 150), so a retried row or a later repeat
+// that still reads the old level fails UNVERIFIED with the sent delta named
+// instead of sending it again. A level that cannot be read is UNKNOWN: the
+// row fails UNVERIFIED and nothing is sent, never `.levelup` of (want - 0).
+// A trial target above the cap is refused before anything is read or sent.
 func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (map[string]any, error) {
-	want := trialLevel(trial)
+	target, refused := levelTarget(trial)
+	if refused != "" {
+		return rowOf("player_level", false, nil, refused), nil
+	}
+	guid := p.playerGUIDOf(ctx)
 	level, known := p.playerLevel(ctx)
 	if !known {
 		return rowOf("player_level", false, "unknown",
-			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from status; no .levelup sent", want)), nil
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from status; no .levelup sent", target)), nil
 	}
-	if level == want {
-		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, want)), nil
+	if level == target {
+		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, target)), nil
+	}
+	if sent := p.levelUpSent(guid, level); sent != 0 {
+		return rowOf("player_level", false, level, fmt.Sprintf(
+			"UNVERIFIED: level %d (target %d): a .levelup of %+d was already sent in this run and the read-back still shows %d; not sent again",
+			level, target, sent, level)), nil
 	}
 	lowered := ""
-	if level > want {
+	if level > target {
 		lowered = fmt.Sprintf("lowered from %d; ", level)
 	}
 	// The core's `.levelup <n>` moves the level BY n (the delta, not an
-	// absolute level), so the row re-reads before each step and waits for
-	// the server to land it: a retried row must not add the delta twice.
-	for attempt := 0; attempt < 3 && level != want; attempt++ {
-		sctx, cancel := p.ctxOf(ctx)
-		err := p.Guard.Send(sctx, "levelup", TargetSelf, p.playerGUIDOf(sctx), itoa(want-level))
-		cancel()
-		if err != nil {
-			return rowOf("player_level", false, level, ".levelup refused: "+err.Error()), nil
+	// absolute level). levelTarget already capped the target at 60, so one
+	// delta from the level read first lands exactly on it.
+	delta := target - level
+	sctx, cancel := p.ctxOf(ctx)
+	err := p.Guard.Send(sctx, "levelup", TargetSelf, guid, itoa(delta))
+	cancel()
+	if err != nil {
+		return rowOf("player_level", false, level, ".levelup refused: "+err.Error()), nil
+	}
+	p.recordLevelUp(guid, level, delta)
+	// Wait for the server to land it on a read of its own.
+	deadline := time.Now().Add(p.timeoutOf())
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return rowOf("player_level", false, level, "UNVERIFIED: interrupted while waiting for .levelup to land"), nil
+		case <-time.After(p.poll()):
 		}
-		deadline := time.Now().Add(p.timeoutOf())
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return rowOf("player_level", false, level, "UNVERIFIED: interrupted while waiting for .levelup to land"), nil
-			case <-time.After(p.poll()):
-			}
-			if got, ok := p.playerLevel(ctx); ok && got != level {
-				level = got
-				break
-			}
+		if got, ok := p.playerLevel(ctx); ok && got != level {
+			level = got
+			break
 		}
 	}
 	got, ok := p.playerLevel(ctx)
 	if !ok {
 		return rowOf("player_level", false, "unknown",
-			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable after .levelup", want)), nil
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable after .levelup", target)), nil
 	}
 	level = got
-	return rowOf("player_level", level == want, level, fmt.Sprintf("%slevel %d (target %d, .levelup delta)", lowered, level, want)), nil
+	if level != target {
+		return rowOf("player_level", false, level, fmt.Sprintf(
+			"UNVERIFIED: %slevel %d (target %d, .levelup %+d sent); the read-back did not reach the target and the .levelup is never repeated",
+			lowered, level, target, delta)), nil
+	}
+	return rowOf("player_level", true, level, fmt.Sprintf("%slevel %d (target %d, .levelup delta)", lowered, level, target)), nil
+}
+
+// levelUpSent sums the `.levelup` deltas this run already sent on guid from
+// the level still read now: a delta whose pre-send level the read has left
+// behind landed, and only a delta the read has NOT moved from may be the
+// stale one. The rows live in the run's ledger, so a second repeat or a
+// rebuilt PlayerSetup (the setup round retries a row) sees them.
+func (p *PlayerSetup) levelUpSent(guid string, level int) int {
+	if p.Ledger == nil {
+		return 0
+	}
+	total := 0
+	for _, r := range p.Ledger.OfKind("levelup") {
+		if g, _ := r["guid"].(string); normGUIDOf(g) != normGUIDOf(guid) {
+			continue
+		}
+		if from, ok := numOf(r["from"]); !ok || int(from) != level {
+			continue
+		}
+		if d, ok := numOf(r["delta"]); ok {
+			total += int(d)
+		}
+	}
+	return total
+}
+
+// recordLevelUp logs a sent `.levelup` delta (and the level it was sent from)
+// for levelUpSent.
+func (p *PlayerSetup) recordLevelUp(guid string, from, delta int) {
+	if p.Ledger == nil {
+		return
+	}
+	p.Ledger.Add(map[string]any{"kind": "levelup", "guid": guid, "from": int64(from), "delta": int64(delta),
+		"line": fmt.Sprintf(".levelup %+d", delta)})
 }
 
 // playerLevel reads the session character's level from `status`, on its own

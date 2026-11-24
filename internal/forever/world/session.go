@@ -93,6 +93,12 @@ type Options struct {
 	// of the stay, then the command logs out like every other one-shot mode.
 	Act             []ActStep
 	AcceptResurrect bool
+	// MailTo is `forever act --mail-to NAME=GUID`, the send-mail allow-list, MailMoneyCap its `--mail-money-cap`
+	// and PayCOD its `--pay-cod`: a send only goes to a listed recipient and never above the cap, and a COD mail
+	// is only taken when the caller allowed paying it.
+	MailTo       map[string]wire.GUID
+	MailMoneyCap int64
+	PayCOD       bool
 	// AcceptResurrectFrom is --accept-resurrect-from NAME: with AcceptResurrect it answers only an offer whose
 	// offerer the model knows by that name. Empty accepts an offer from any GUID, which is the default: the server
 	// already decides who may offer a resurrection (MiscHandler.cpp:520-521).
@@ -166,12 +172,17 @@ type Options struct {
 	// Round TBM: forever tbm-check. TBMCheck runs the TBM client's hello and the requested commands through the
 	// session's add-on and chat paths. TBMTransport is auto, addon, addon-self or chat; TBMCommands are run in
 	// order after the hello; TBMTimeout bounds each hello and command; TBMRaw appends every accepted message to
-	// that file as case recv records for a live capture.
+	// that file as case recv records for a live capture. TBMBots are the owned bot names the setup step adds with
+	// `.bot add` before the hello (a module answers no-bots without a party); TBMBotWait bounds the wait for them to
+	// join (60 s when zero); TBMKeepBots leaves them in the party instead of removing them on exit.
 	TBMCheck     bool
 	TBMTransport string
 	TBMCommands  []string
 	TBMTimeout   time.Duration
 	TBMRaw       string
+	TBMBots      []string
+	TBMBotWait   time.Duration
+	TBMKeepBots  bool
 	// Round A6: forever cmd-check. CommandCheck enters with the command channel; CommandLines are sent in order
 	// after the GM guard; CommandTBState reads the typed state table; CommandQuiet and CommandTimeout override the
 	// collector's defaults for every command of the run.
@@ -643,6 +654,9 @@ type session struct {
 	// fbHeardWhispers keeps the most recent whisper lines so an order can drain the ones that arrived before it
 	// was sent (a late acknowledgement must not be taken for the next order's).
 	fbHeardWhispers []chat.Line
+	// sightRefusals counts the module's "I dont see my rti attack target" whispers per sender (lower-cased name): a
+	// player run reads it after a tank order (driver.Refusals).
+	sightRefusals map[string]int
 	// Round A2: the module's unsolicited EVENT_PUSH frames seen during the finder's requests, kept for the dungeon
 	// watch. The buffer is bounded; fbEventsDropped counts what the bound pushed out.
 	fbEvents        []pbc.Event

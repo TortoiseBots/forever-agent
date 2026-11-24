@@ -30,3 +30,33 @@ func TestTBMAcceptOnlyModuleTraffic(t *testing.T) {
 		}
 	}
 }
+
+// TestTBMOwnerLine pins the setup step's whole grammar: the two owner verbs on a normalised character name, and
+// nothing else -- no other verb, no other prefix, no second word, no name the v1 builder would rewrite.
+func TestTBMOwnerLine(t *testing.T) {
+	for _, ok := range []string{".bot add Botone", ".bot remove Botone", ".bot add Aa"} {
+		if !tbmOwnerLineAllowed(ok) {
+			t.Fatalf("%q must pass the setup step's gate", ok)
+		}
+	}
+	for _, bad := range []string{
+		".bot logout Botone",
+		".bot follow Botone",
+		".bot who",
+		".gm on",
+		".tele orgrimmar",
+		".bot add",
+		".bot add Botone Bottwo",
+		".bot add botone", // the builder writes Botone: the line is not the normalised one
+		".bot add Bot1",
+		".bot add Bot\\one",
+		"bot add Botone",
+		" .bot add Botone",
+		".bot add Botone\n.gm on",
+		".bot add Botone\r.tele a",
+	} {
+		if tbmOwnerLineAllowed(bad) {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
+}

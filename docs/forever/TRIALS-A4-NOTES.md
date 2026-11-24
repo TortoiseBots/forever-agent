@@ -103,8 +103,13 @@ nothing in either card claims a PASS or a FAIL.
 - A pool bot reused across runs can be left dead: the setup revives it
   (`.tb revive`) and refills it before anything is measured.
 - `.levelup` moves the level BY its argument and answers no line: the row
-  re-reads the level, polls for the move and never re-applies a delta a
-  retry already applied.
+  computes its delta from the level it read first, sends at most one
+  `.levelup` per setup (the target capped at 60; a target above the cap is
+  refused) and polls for the move. This core's `status` can keep the old
+  level after `.levelup` (2026-11-24: 30 after each `.levelup 30`), so a sent
+  delta is written to the run ledger and never repeated: a retried row or a
+  later repeat that still reads the old level fails UNVERIFIED and sends
+  nothing more (three sends left the character at 120, then 150).
 - One game account cannot hold two sessions on this core: a bot logged in
   on the master's account kicks the master off, and a kicked session's
   reconnect cannot reuse its join ticket. The bot pool must live on its own
@@ -162,7 +167,7 @@ before the fix (`a4_review_test.go`, `a4_defects_test.go`,
 | `Guids.Mobs` set once; refills, out-of-window and unclaimed spawns outside cleanup | every summon is ledgered at once (before the level read, so a kill of an out-of-window mob is not refused); `Guids.Mobs` gains each valid summon at once; an `.npc add temp` whose unit was not claimed ledgers every fresh candidate; a spawn with no candidate at all is counted and fails the teardown row (UNIDENTIFIED); teardown kills `Guids.Mobs` plus every ledgered summon an earlier repeat did not already prove gone | `TestEverySummonIsInGuidsMobsAtOnce`, `TestUnclaimedButSpawnedMobsAreLedgeredAndKilled`, `TestOutOfWindowSummonIsLedgeredBeforeItIsKilled`, `TestTeardownKillsLedgeredMobsOutsideGuidsMobs` |
 | arena lock released before the repeat teardown | the lock is held by the `LiveSituation` until `Finish`, which the runner calls after teardown on every path | `TestArenaLockHeldUntilFinish`, `TestFinishRunsOnEveryRepeatExit` |
 | SKIPPED, setup error, Disconnected and panic bypassed teardown; Ctrl-C cancelled the kills | `RunTrial` defers the trial teardown (hires stay/free/logout, item clear) and `runRepeat` defers the repeat teardown plus `Finish`; the hire names are known to the repeat the moment `.tb login` succeeds (`Provisioner.OnHire`); teardown runs on `context.WithoutCancel` with its own deadline (`Runner.TeardownTimeout`, 2 min) and its guard abort is `Runner.TeardownAbort`: only a lost lease stops it, a Ctrl-C does not | `TestEveryExitPathRunsTrialTeardown`, `TestTeardownRunsOnAFreshContextAfterCtrlC` |
-| `ensureLevel` one shared deadline; a read error read as level 0 then `.levelup`; mana matched by name | every read, send and wait has its own deadline; `playerLevel` returns `(level, known)` and an unknown level fails the row `UNVERIFIED` with nothing sent; `ensureMana` matches the hire by its party guid and an unreadable power is unknown, never 0% | `TestEnsureLevelUnreadableIsUnknownAndNeverLevelsUp`, `TestEnsureLevelEachAttemptHasItsOwnDeadline`, `TestEnsureManaMatchesTheHireByGuid`, `TestEnsureManaUnreadablePowerIsUnknownNotZero` |
+| `ensureLevel` one shared deadline; a read error read as level 0 then `.levelup`; mana matched by name | every read, send and wait has its own deadline; `playerLevel` returns `(level, known)` and an unknown level fails the row `UNVERIFIED` with nothing sent; `ensureMana` matches the hire by its party guid and an unreadable power is unknown, never 0% | `TestEnsureLevelUnreadableIsUnknownAndNeverLevelsUp`, `TestEnsureLevelOneSendLandsWithinItsDeadline`, `TestLevelStepOneDeltaFromTheCurrentLevel`, `TestLevelStepStaleReadSendsOnceAndNeverRepeats`, `TestLevelStepRefusesATargetAboveTheCap`, `TestEnsureManaMatchesTheHireByGuid`, `TestEnsureManaUnreadablePowerIsUnknownNotZero` |
 | heal teardown claimed success without proof, skipped extras, and passed the hire's guid as a name | the refill is `.tb hurt <name> 100` for the hire and every extra, then each unit (self included) is read back by its recorded guid until full or the wait ends; an unreadable or not-full unit fails the row | `TestHealTeardownRefillsAndProvesHireAndExtras`, `TestHealTeardownFailsWhenTheHireIsNotReallyFull` |
 | lows | `Guard.Send` checks the guid for hire and summon targets against the trial's scope (cleanup passes its ledger guids); the dir-lock takeover age is `FOREVER_TRIALS_LOCK_TAKEOVER` (default 6 h) and every takeover is logged; the governor plans under its mutex, makes the serve call outside it and applies the result under it, so `EndedNow` never waits on a serve call | `TestGuardChecksTheGuidForHireAndSummonTargets`, `TestWindowsLockTakeoverAgeIsConfigurableAndLogged`, `TestGovernorNeverHoldsItsMutexAcrossABlockingCall` |
 

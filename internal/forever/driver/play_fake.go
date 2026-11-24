@@ -147,6 +147,14 @@ type PlayFake struct {
 	// BlindOrders counts those refusals.
 	SightFunc   func(from, to Vec3) bool
 	BlindOrders int
+	// ModuleSight, when set, is the module's own line of sight in place of SightFunc: the agent's Sight port still
+	// answers from SightFunc, so a test scripts the two disagreeing (the live 2026-11-24 tunnel pull: the navmesh ray
+	// said clear at 21 yd, the core's line of sight did not). RefuseOrders is how many of the tank's next attack orders
+	// the module refuses whatever the sight (a mark the module did not find yet). Every refusal whispers the module's
+	// "I dont see my rti attack target" to the agent; SightRefusals counts them per bot.
+	ModuleSight  func(from, to Vec3) bool
+	RefuseOrders int
+	refusals     map[string]int
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
 }
@@ -457,6 +465,10 @@ func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, err
 	if err == nil {
 		if m.f.tankBlind(name) {
 			m.f.BlindOrders++
+			if m.f.refusals == nil {
+				m.f.refusals = map[string]int{}
+			}
+			m.f.refusals[strings.ToLower(name)]++
 			return rep, err
 		}
 		m.f.engage(m.f.Selected, m.f.AggroDelay)
@@ -467,7 +479,18 @@ func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, err
 // tankBlind says whether the order's bot is the tank and the module would not find its mark: the real module's
 // RtiTargetValue::CalculateMark fails on range or line of sight from the bot's own position.
 func (f *PlayFake) tankBlind(name string) bool {
-	if f.SightFunc == nil || len(f.GoldenOwner.Bots) == 0 || !strings.EqualFold(name, f.GoldenOwner.Bots[0].Name) {
+	if len(f.GoldenOwner.Bots) == 0 || !strings.EqualFold(name, f.GoldenOwner.Bots[0].Name) {
+		return false
+	}
+	if f.RefuseOrders > 0 {
+		f.RefuseOrders--
+		return true
+	}
+	sight := f.SightFunc
+	if f.ModuleSight != nil {
+		sight = f.ModuleSight
+	}
+	if sight == nil {
 		return false
 	}
 	u, ok := unitByGUID(f.units, f.Selected)
@@ -482,8 +505,11 @@ func (f *PlayFake) tankBlind(name string) bool {
 			from = bu.Pos
 		}
 	}
-	return dist3(from, u.Pos) > PlayModuleSightYd || !f.SightFunc(from, u.Pos)
+	return dist3(from, u.Pos) > PlayModuleSightYd || !sight(from, u.Pos)
 }
+
+// SightRefusals is the Refusals port: how many "I dont see my rti attack target" whispers the bot sent so far.
+func (f *PlayFake) SightRefusals(bot string) int { return f.refusals[strings.ToLower(bot)] }
 
 // InSight is the Sight port over SightFunc; without one the fake cannot say.
 func (f *PlayFake) InSight(from, to Vec3) (bool, bool) {
