@@ -96,11 +96,11 @@ The run's counters, the lines it sent by their first words, its states, the judg
 
 ```text
 play: stop clear, 9 pulls, 0 wipes, 0 deaths, 47.3 min, gm_lines=0, clear=true
-lines: .bot add=4, .bot attack=9, .bot cmd=0, .bot follow=1, whisper release=1
+lines: .bot add=4, .bot attack=9, .bot follow=1, whisper release=1
 states: PREPARE FORM TRAVEL ENTER LEG_WALK PULL FIGHT ...
 summary: runs/play-rfc/r-20261124T190000-ef56.forever-run.json
 trace: runs/play-rfc/r-20261124T190000-ef56.jsonl
-judge: TANK (Warrior tank) 18: ...
+judge: tank (warrior tank) warn: spec protection (role tank); missing core: Shield Slam
 verdict: PASS
 ```
 

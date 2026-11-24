@@ -11,3 +11,4 @@
 * **Creation**: Established the [developers](developers/) area: architecture, the package map, the contracts, the wire and packet rules, adding a command or a daemon method, privacy and captures, and contributing.
 * **Creation**: Wrote the bundle root [index](index.md) and this log, and added `tools/verify_okf.py`, the checker that keeps the frontmatter, the indexes, the links and the privacy rules of every page in shape.
 * **Update**: Replaced the long repository README with a short front page; the reference material it carried now lives in the area pages it belongs to.
+* **Update**: Corrected command examples, flags, method parameters and quoted messages against the code; the checker now requires an index in every directory, rejects non-Markdown files, catches quoted secret values and rejects an unknown `forever-agent` command in a fenced example.

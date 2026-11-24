@@ -115,7 +115,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 |---|---|---|---|
 | `vendor_list` | `guid`, `wait_ms` | A vendor's list | [Vendors](../player-actions/vendors-and-gossip.md) |
 | `buy` | `guid`, `item_entry`, `muid`, `count`, `wait_ms` | Buy from a vendor | [Vendors](../player-actions/vendors-and-gossip.md) |
-| `sell` | `guid`, `bag`, `slot`, `count`, `wait_ms` | Sell to a vendor | [Vendors](../player-actions/vendors-and-gossip.md) |
+| `sell` | `guid`, `item_entry`, `bag`, `slot`, `count`, `force`, `wait_ms` | Sell to a vendor | [Vendors](../player-actions/vendors-and-gossip.md) |
 | `gossip_hello` | `guid`, `wait_ms` | Open an NPC's gossip menu | [Vendors](../player-actions/vendors-and-gossip.md) |
 | `gossip_select` | `guid`, `option`, `code`, `wait_ms` | Pick a gossip option | [Vendors](../player-actions/vendors-and-gossip.md) |
 
@@ -179,20 +179,20 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `mail_list` | `guid`, `wait_ms` | A mailbox's mails | [Mail and auction](../player-actions/mail-and-auction.md) |
 | `mail_read` | `guid`, `mail_id`, `wait_ms` | Read one mail | [Mail and auction](../player-actions/mail-and-auction.md) |
 | `mail_take_item` | `guid`, `mail_id`, `index`, `force`, `wait_ms` | Take an attachment | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `mail_take_money` | `guid`, `mail_id`, `force`, `wait_ms` | Take money (a COD must be forced) | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `mail_take_money` | `guid`, `mail_id`, `wait_ms` | Take the money the mail holds | [Mail and auction](../player-actions/mail-and-auction.md) |
 | `mail_delete` | `guid`, `mail_id`, `force`, `wait_ms` | Delete a mail | [Mail and auction](../player-actions/mail-and-auction.md) |
 | `mail_return` | `guid`, `mail_id`, `wait_ms` | Return a mail | [Mail and auction](../player-actions/mail-and-auction.md) |
 | `mail_send` | `guid`, `to`, `subject`, `body`, `money`, `cod`, `attachments`, `force`, `wait_ms` | Send a mail | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `mail_status` | `guid`, `wait_ms` | The mailbox's state | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_hello` | `guid` | Open an auctioneer | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_browse` | `guid`, `min_level`, `max_level`, `offset`, `item_id` | Browse auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_items` | `guid`, `item_id`, `offset` | List one item's auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_owned` | `guid` | The character's auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_sell` | `guid`, `item_entry`, `bag`, `slot`, `count`, `commodity`, `min_bid`, `buyout`, `unit_price`, `hours` | Post an auction | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_bid` | `guid`, `auction_id`, `amount` | Bid on an auction | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_cancel` | `guid`, `auction_id` | Cancel an own auction | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_quote` | `guid`, `item_id`, `quantity` | Commodity quote | [Mail and auction](../player-actions/mail-and-auction.md) |
-| `auction_buy` | `guid`, `auction_id`, `quantity` | Buy out an auction | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `mail_status` | `wait_ms` | Next-mail timer and senders of unread mail | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_hello` | `guid`, `wait_ms` | Open an auctioneer | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_browse` | `guid`, `name`, `min_level`, `max_level`, `offset`, `wait_ms` | Browse auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_items` | `guid`, `item_id`, `item_level`, `offset`, `wait_ms` | List one item's auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_owned` | `guid`, `offset`, `wait_ms` | The character's auctions | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_sell` | `guid`, `item_entry`, `bag`, `slot`, `count`, `commodity`, `min_bid`, `buyout`, `unit_price`, `hours`, `force`, `wait_ms` | Post an auction | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_bid` | `guid`, `auction_id`, `amount`, `force`, `wait_ms` | Bid on an auction | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_cancel` | `guid`, `auction_id`, `item_id`, `force`, `wait_ms` | Cancel an own auction | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_quote` | `guid`, `item_id`, `quantity`, `wait_ms` | Commodity quote | [Mail and auction](../player-actions/mail-and-auction.md) |
+| `auction_buy` | `guid`, `item_id`, `quantity`, `force`, `wait_ms` | Buy the quantity the last commodity quote named | [Mail and auction](../player-actions/mail-and-auction.md) |
 
 # Trainers, flight paths and pets
 

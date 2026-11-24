@@ -131,37 +131,37 @@ item's own spell is not guessed.
 Read the money and every item:
 
 ```
-forever rpc ./slots/ACCOUNT inv '{}'
+forever-agent forever rpc ./slots/ACCOUNT inv '{}'
 ```
 
 Backpack rows with names, bag contents included:
 
 ```
-forever rpc ./slots/ACCOUNT inventory '{"bags": true, "names": true}'
+forever-agent forever rpc ./slots/ACCOUNT inventory '{"bags": true, "names": true}'
 ```
 
 Equip the item in the first backpack slot:
 
 ```
-forever rpc ./slots/ACCOUNT equip '{"slot": 35}'
+forever-agent forever rpc ./slots/ACCOUNT equip '{"slot": 35}'
 ```
 
 Use a potion whose on-use spell is 4390 (the item is in backpack slot 40):
 
 ```
-forever rpc ./slots/ACCOUNT use_item '{"slot": 40, "spell_id": 4390}'
+forever-agent forever rpc ./slots/ACCOUNT use_item '{"slot": 40, "spell_id": 4390}'
 ```
 
 Mount with a spell the character knows:
 
 ```
-forever rpc ./slots/ACCOUNT mount '{"spell": 458}'
+forever-agent forever rpc ./slots/ACCOUNT mount '{"spell": 458}'
 ```
 
 Dismount:
 
 ```
-forever rpc ./slots/ACCOUNT dismount '{}'
+forever-agent forever rpc ./slots/ACCOUNT dismount '{}'
 ```
 
 # What you see

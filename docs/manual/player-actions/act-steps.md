@@ -47,7 +47,8 @@ run; the steps after it do not run. A step that opens a menu prints its options 
 With the one-shot command:
 
 ```
-forever act --account ACCOUNT --character Mychar --password-file ./pass \
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
   --step 'npc entry=1234' --step 'vendor' --step 'buy entry=2589 n=5'
 ```
 
@@ -61,8 +62,8 @@ forever act --account ACCOUNT --character Mychar --password-file ./pass \
 | `--mail-money-cap N` | 10000 | The most copper one `send-mail` may carry. |
 | `--pay-cod` | off | Let `mail-take` pay a COD mail's copper to its sender. |
 
-The command also takes the login flags every `forever` command takes (`--account`, `--character`, `--password-file`,
-`--rest`, `--rpc`, `--ca`, ...); see [first login](../getting-started/first-login.md).
+The command needs `--rest`, `--rpc`, `--ca`, `--account` and `--character`; the password comes from
+`FOREVER_PASSWORD`. Only `forever serve` reads `--password-file`; see [first login](../getting-started/first-login.md).
 
 The whole run has a deadline of five minutes plus the settle time plus a full flight budget for every `fly` step, so
 a long flight is never cut mid-air.
@@ -70,7 +71,7 @@ a long flight is never cut mid-air.
 As a daemon method:
 
 ```
-forever rpc ./slots/ACCOUNT act '{"steps": ["npc entry=1234", "vendor"], "timeout_ms": 30000}'
+forever-agent forever rpc ./slots/ACCOUNT act '{"steps": ["npc entry=1234", "vendor"], "timeout_ms": 30000}'
 ```
 
 `timeout_ms` 0 or absent is the default (60 seconds, or the flights' budget for a script with `fly`); the most is ten
@@ -197,7 +198,8 @@ server's name query to confirm the GUID; the wallet must read back as the exact 
 A vendor run: walk to the vendor, open it, sell the junk, repair, buy potions.
 
 ```
-forever act --account ACCOUNT --character Mychar --password-file ./pass \
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
   --step 'npc entry=1234' \
   --step 'vendor' \
   --step 'sell-junk' \
@@ -208,7 +210,8 @@ forever act --account ACCOUNT --character Mychar --password-file ./pass \
 A quest round trip, then a flight from the same script:
 
 ```
-forever act --account ACCOUNT --character Mychar --password-file ./pass \
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
   --step 'npc entry=823' --step 'open' --step 'select option=1' \
   --step 'quest-accept id=7' --step 'quests' \
   --step 'npc entry=1571' --step 'taxi-nodes' --step 'fly node=4'
@@ -217,7 +220,8 @@ forever act --account ACCOUNT --character Mychar --password-file ./pass \
 Training:
 
 ```
-forever act --account ACCOUNT --character Mychar --password-file ./pass \
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
   --step 'npc entry=911' --step 'trainer' --step 'learn spell=19740'
 ```
 

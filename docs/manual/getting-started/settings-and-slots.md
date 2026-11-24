@@ -229,7 +229,7 @@ bin/forever-agent teardown --gm off ./slot
 (`--gm off` by default; `on` and `keep` are the other values), logs the character out, ends the agent by its pid
 file, removes secrets and releases the lease. `--dry-run` plans the steps and sends nothing; `--json` prints the
 steps. It accepts both a `slot setup --forever` dir (the lease is released) and a bare `forever serve --dir` (no
-lease exists, so that step is skipped). Exit 14 means a step failed; exit 15 means the lease refused.
+lease exists, so that step is skipped). Exit 14 means a step failed; a lease refusal is recorded as skipped.
 
 # The settings file (old stack only)
 

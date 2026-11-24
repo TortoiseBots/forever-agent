@@ -23,10 +23,45 @@ import verify_okf  # noqa: E402  (the module under test sits next to this file)
 # Privacy fixtures are assembled from pieces so that this file does not match
 # the tree-wide privacy scan that runs nightly (privacy-scan.yml).
 HOME_PATH = "/ho" + "me/alice/project"
-PASSWORD_VALUE = "password=" + "hunter2"
+LITERAL_VALUE = "hunt" + "er2"
+PASSWORD_VALUE = "password=" + LITERAL_VALUE
 WINDOWS_PATH = "C:" + "\\Users\\alice"
 
 GOOD_AT = "2026-11-24T20:35:00Z"
+
+# The checker reads these two switches the way it reads cmd/forever-agent's own files.
+MAIN_GO = (
+    "package main\n"
+    "\n"
+    "func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {\n"
+    '\tswitch args[0] {\n'
+    '\tcase "version":\n'
+    "\t\treturn exitOK\n"
+    '\tcase "lease":\n'
+    "\t\treturn leaseCmd(args[1:], stdout, stderr)\n"
+    '\tcase "forever":\n'
+    "\t\treturn foreverCmd(ctx, args[1:], stdout, stderr)\n"
+    "\tdefault:\n"
+    "\t\treturn exitUsage\n"
+    "\t}\n"
+    "\n"
+    'const usageText = "usage: forever-agent version"\n'
+)
+
+FOREVER_GO = (
+    "package main\n"
+    "\n"
+    "func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {\n"
+    '\tswitch args[0] {\n'
+    '\tcase "serve":\n'
+    "\t\treturn foreverServeCmd(ctx, args[1:], stdout, stderr)\n"
+    '\tcase "rpc":\n'
+    "\t\treturn foreverRPCCmd(args[1:], stdout, stderr)\n"
+    "\tdefault:\n"
+    "\t\treturn exitUsage\n"
+    "\t}\n"
+    "}\n"
+)
 
 
 def page(title="A page", description="What the page lets the reader do.", body="# What this is\n\nText.\n"):
@@ -95,6 +130,8 @@ def good_bundle(root):
     write(root, "docs/manual/getting-started/page.md", page_text)
     write(root, "docs/manual/daemon/index.md", "# Daemon\n\n* [forever serve](serve.md) - The session daemon.\n")
     write(root, "docs/manual/daemon/serve.md", page(title="forever serve", description="Run the session daemon."))
+    write(root, "cmd/forever-agent/main.go", MAIN_GO)
+    write(root, "cmd/forever-agent/forever_login.go", FOREVER_GO)
 
 
 class BundleTest(unittest.TestCase):
@@ -252,10 +289,81 @@ class BundleTest(unittest.TestCase):
 
     def test_privacy_password_value(self):
         write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\nRun it with %s.\n" % PASSWORD_VALUE))
-        self.assertProblem("password value in the manual")
+        self.assertProblem("secret value in the manual")
+
+    def test_privacy_quoted_and_nested_secret_values(self):
+        forms = (
+            'password="%s"' % LITERAL_VALUE,
+            "password='%s'" % LITERAL_VALUE,
+            '"password": "%s"' % LITERAL_VALUE,
+            "password: %s" % LITERAL_VALUE,
+            "export DB_PASSWORD=%s" % LITERAL_VALUE,
+            "--password=%s" % LITERAL_VALUE,
+            "token: abc123",
+        )
+        for form in forms:
+            with self.subTest(form=form):
+                write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\nRun it with %s.\n" % form))
+                self.assertProblem("secret value in the manual")
 
     def test_privacy_password_placeholder_is_allowed(self):
-        write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\nRun it with --password=<password>.\n"))
+        body = (
+            "# What\n\nRun it with --password=<password>, password=\"$PASSWORD\",\n"
+            "\"password\": \"<password>\", password_file: \"./password.txt\",\n"
+            "export FOREVER_PASSWORD='<password>', GH_TOKEN=...\n"
+            "and a prose line, no password: --pass-file or FOREVER_PASSWORD.\n"
+        )
+        write(self.root, "docs/manual/getting-started/page.md", page(body=body))
+        self.assertEqual(self.problems(), [])
+
+    def test_directory_without_index(self):
+        os.remove(os.path.join(self.root, "docs", "manual", "getting-started", "index.md"))
+        self.assertProblem("directory has no index.md")
+
+    def test_non_markdown_file_is_an_error(self):
+        write(self.root, "docs/manual/getting-started/diagram.png", "not really a picture\n")
+        self.assertProblem("not a Markdown file")
+
+    def test_privacy_in_non_markdown_file(self):
+        write(self.root, "docs/manual/notes.txt", "Connect to 203.0.113.9.\n")
+        self.assertProblem("not a Markdown file")
+        self.assertProblem("IPv4 address in the manual: 203.0.113.9")
+
+    def test_unknown_command_in_fence(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n```sh\nforever-agent nosuch --x\n```\n"),
+        )
+        self.assertProblem("unknown forever-agent command: nosuch")
+
+    def test_unknown_forever_subcommand_in_fence(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n```sh\nforever-agent forever nosuch --x\n```\n"),
+        )
+        self.assertProblem("unknown forever subcommand: nosuch")
+
+    def test_registered_commands_pass(self):
+        body = (
+            "# What\n\n```sh\nforever-agent version\n"
+            "forever-agent forever serve --dir ./slot\n"
+            "bin/forever-agent lease acquire example --slot 1 --holder work\n```\n"
+        )
+        write(self.root, "docs/manual/getting-started/page.md", page(body=body))
+        self.assertEqual(self.problems(), [])
+
+    def test_version_output_is_not_a_command(self):
+        write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\n```text\nforever-agent 0.1.0\n```\n"))
+        self.assertEqual(self.problems(), [])
+
+    def test_command_outside_a_fence_is_ignored(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nRun forever-agent nosuch when you like.\n"),
+        )
         self.assertEqual(self.problems(), [])
 
 

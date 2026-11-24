@@ -1,7 +1,7 @@
 ---
 type: Guide
 title: Watching bots on a dashboard
-description: Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and replay recordings.
+description: Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 tags: [bots-and-raids, dashboard, roster, replay]
 status: stable
 generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
@@ -24,11 +24,11 @@ sources:
     resource: internal/dashreplay/send.go
 ---
 
-Three commands watch bots on a screen. `forever dash-bots` reads the roster
+Two commands in the Forever stack watch bots on a screen. `forever dash-bots` reads the roster
 dashboard a server's bot manager already serves. `forever dashboard` serves the
 agent's own live page, which draws the bots of each daemon and — with run controls
-on — lets you order and place them. `dashboard-replay` feeds a recorded dashboard
-history to a test daemon.
+on — lets you order and place them. A third command, `dashboard-replay`, is
+Turtle-only and is not part of the Forever workflow (see the end of this page).
 
 # dash-bots: the server's roster dashboard
 
@@ -156,37 +156,16 @@ The panel sends to `POST /api/control/<id>/place` under the same token and nonce
 gate as the run buttons; the request body's verbs are `place`, `place_follow`,
 `rally`, `fallback` and `resume`.
 
-# dashboard-replay
+# Replaying a recording is Turtle-only
 
-```
-forever-agent dashboard-replay <recording-dir|file.jsonl> [--to host:port]
-    [--speed N] [--max-gap D] [--loop] [--dry-run] [--i-know]
-forever-agent dashboard-replay convert <api-dump-dir> [--out <dir>]
-```
+`forever-agent dashboard-replay` feeds a Turtle dashboard recording to a TortoiseBots observability daemon's UDP
+port. `forever-agent help` marks it `[Turtle only; Forever: none: Turtle dashboard recordings]`, and the Forever
+stack has no replacement: it reads a `replay.jsonl` of datagrams (or converts an API dump folder to one), not a
+Forever roster watch. The Forever equivalent for watching a roster is `forever dash-bots --watch --record`, which
+writes a roster watch to read, not a replayable recording.
 
-It feeds a recording to a TortoiseBots observability daemon's UDP port: the
-folder's `replay.jsonl`, or the API dumps in a folder that has none, converted in
-memory. It logs in to nothing and reads no settings or token file.
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `--to` | `127.0.0.1:9195` | The daemon's UDP address. |
-| `--speed` | `1` | Play this many times faster than recorded (> 0). |
-| `--max-gap` | `10s` | The longest pause between two datagrams; the daemon calls a commander list stale after 12 s. |
-| `--loop` | off | Start over with a newer session after the last datagram. |
-| `--dry-run` | off | Check the target and print the schedule; send nothing. |
-| `--i-know` | off | Allow a non-loopback target. A production daemon must not take replays: a replay's session is newer than a running module's, so it overwrites what the live daemon shows until the module restarts. |
-
-The target is checked before the file is read: a non-loopback target without
-`--i-know` exits 17. `convert` writes `<out>/replay.jsonl` (default: the dump
-folder) as mode 0600 through a temporary file, with a header line and one datagram
-per line, and prints the datagram count and types.
-
-```sh
-# Check what a recording would send, then play it to a test daemon at 4x.
-forever-agent dashboard-replay ./recordings/trial-7 --dry-run
-forever-agent dashboard-replay ./recordings/trial-7 --to 127.0.0.1:9195 --speed 4
-```
+The command names no server, account or slot and logs in to nothing, so it hits no Forever refusal; it is simply
+outside the Forever workflow. Do not use it against the agent's own dashboard from this page.
 
 # Examples
 

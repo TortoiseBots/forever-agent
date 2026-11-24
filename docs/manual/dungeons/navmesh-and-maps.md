@@ -97,8 +97,8 @@ Extracts the in-game minimaps of maps from the client, for the dashboard's map l
 ```bash
 forever-agent minimap-extract --client <Data dir> --out <dir> [--maps 70,209|all-instances] [--mmaps DIR] \
     [--prefer minimap,worldmap,navmesh] [--list] [--verbose]
-forever-agent minimap-extract --forever (--client <extract dir> | --casc <install> [--product P]) \
-    --db2 <dbc dir> --out <dir> [--maps ...] [--mmaps DIR] [--wmo-block-yards YD]
+forever-agent minimap-extract --forever (--client <extract dir> | --casc <install> [--product P] --wmo-block-yards YD) \
+    --db2 <dbc dir> --out <dir> [--maps ...] [--mmaps DIR]
 forever-agent minimap-extract --forever --casc <install> --db2 <dbc dir> --maps <id> --wmo-probe
 ```
 
@@ -107,7 +107,7 @@ forever-agent minimap-extract --forever --casc <install> --db2 <dbc dir> --maps 
 - `--forever` needs `--db2`, the server's extracted `dbc/<locale>` folder holding `Map.db2`; `--casc` reads the
   install directly and replaces `--client`.
 - `--maps` takes ids or `all-instances` (every dungeon and raid of `Map.dbc`). `--out` gets `<map>.png` and
-  `<map>.json` per map; each layer also keeps `<map>.<kind>.png` and, for another floor, `<map>.<kind><n>f.png`
+  `<map>.json` per map; each layer also keeps `<map>.<kind>.png` and, for another floor, `<map>.<kind>-<n>f.png`
   with its `.json`.
 - `--prefer` is the order of sources for the main picture: `minimap` (the terrain tiles, and the client's indoor WMO
   tiles), `worldmap` (the map picture of the area) and `navmesh` (a height-shaded render of the server's floor).

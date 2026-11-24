@@ -156,31 +156,31 @@ unattackable is refused before the first swing.
 List the highest rank of every known spell whose name contains "Heal":
 
 ```
-forever rpc ./slots/ACCOUNT spells '{"name": "heal", "highest": true}'
+forever-agent forever rpc ./slots/ACCOUNT spells '{"name": "heal", "highest": true}'
 ```
 
 Cast a spell at the selected target:
 
 ```
-forever rpc ./slots/ACCOUNT cast '{"spell_id": 133}'
+forever-agent forever rpc ./slots/ACCOUNT cast '{"spell_id": 133}'
 ```
 
 Is the fireball cast done, and what is left on cooldown?
 
 ```
-forever rpc ./slots/ACCOUNT cast_state '{}'
+forever-agent forever rpc ./slots/ACCOUNT cast_state '{}'
 ```
 
 Kill the nearest wolf, giving up after 40 seconds:
 
 ```
-forever rpc ./slots/ACCOUNT attack '{"name": "Wolf", "for_ms": 40000}'
+forever-agent forever rpc ./slots/ACCOUNT attack '{"name": "Wolf", "for_ms": 40000}'
 ```
 
 Stop fighting:
 
 ```
-forever rpc ./slots/ACCOUNT stop_attack '{}'
+forever-agent forever rpc ./slots/ACCOUNT stop_attack '{}'
 ```
 
 # What you see

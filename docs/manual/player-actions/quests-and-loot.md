@@ -38,7 +38,7 @@ methods never walk to it.
 | `quest_abandon` | `quest_id` | ok |
 | `quest_log` | none | the character's quest log |
 
-The quest id is required and must be positive everywhere it is named (`id %d is not a positive quest id`), and
+The quest id is required and must be positive everywhere it is named (`quest_id %d is not a positive quest id`), and
 every method that names a giver requires the quest-giver flag.
 
 ## quest_hello and quest_query
@@ -188,38 +188,38 @@ another window is looted.
 Accept a quest from the giver:
 
 ```
-forever rpc ./slots/ACCOUNT quest_accept '{"guid": "0x0000000000000a30", "quest_id": 783}'
+forever-agent forever rpc ./slots/ACCOUNT quest_accept '{"guid": "0x0000000000000a30", "quest_id": 783}'
 ```
 
 Hand it in and read the reward screen:
 
 ```
-forever rpc ./slots/ACCOUNT quest_complete '{"guid": "0x0000000000000a30", "quest_id": 783}'
+forever-agent forever rpc ./slots/ACCOUNT quest_complete '{"guid": "0x0000000000000a30", "quest_id": 783}'
 ```
 
 Take the first reward row:
 
 ```
-forever rpc ./slots/ACCOUNT quest_reward '{"guid": "0x0000000000000a30", "quest_id": 783, "choice": 0}'
+forever-agent forever rpc ./slots/ACCOUNT quest_reward '{"guid": "0x0000000000000a30", "quest_id": 783, "choice": 0}'
 ```
 
 Loot a corpse and take everything:
 
 ```
-forever rpc ./slots/ACCOUNT loot '{"name": "Kobold Vermin"}'
-forever rpc ./slots/ACCOUNT loot_take '{"all": true}'
+forever-agent forever rpc ./slots/ACCOUNT loot '{"name": "Kobold Vermin"}'
+forever-agent forever rpc ./slots/ACCOUNT loot_take '{"all": true}'
 ```
 
 Open a chest and take what is in it:
 
 ```
-forever rpc ./slots/ACCOUNT open_object '{"guid": "0x0000000000000b10", "take": true}'
+forever-agent forever rpc ./slots/ACCOUNT open_object '{"guid": "0x0000000000000b10", "take": true}'
 ```
 
 Vote need on the open roll:
 
 ```
-forever rpc ./slots/ACCOUNT roll '{"choice": "need"}'
+forever-agent forever rpc ./slots/ACCOUNT roll '{"choice": "need"}'
 ```
 
 # What you see

@@ -111,37 +111,39 @@ is an option the menu does not have. Options that carry a text code (the "enter 
 Open a vendor and read its list (the GUID is the creature's, from `units`):
 
 ```
-forever rpc ./slots/ACCOUNT vendor_list '{"guid": "0x0000000000000a2c"}'
+forever-agent forever rpc ./slots/ACCOUNT vendor_list '{"guid": "0x0000000000000a2c"}'
 ```
 
 Buy five of the row with muid 12:
 
 ```
-forever rpc ./slots/ACCOUNT buy '{"guid": "0x0000000000000a2c", "muid": 12, "count": 5}'
+forever-agent forever rpc ./slots/ACCOUNT buy '{"guid": "0x0000000000000a2c", "muid": 12, "count": 5}'
 ```
 
 Sell the stack in the first backpack slot (35):
 
 ```
-forever rpc ./slots/ACCOUNT sell '{"guid": "0x0000000000000a2c", "slot": 35}'
+forever-agent forever rpc ./slots/ACCOUNT sell '{"guid": "0x0000000000000a2c", "slot": 35}'
 ```
 
 Talk to a quest giver and read its menu:
 
 ```
-forever rpc ./slots/ACCOUNT gossip_hello '{"guid": "0x0000000000000a30"}'
+forever-agent forever rpc ./slots/ACCOUNT gossip_hello '{"guid": "0x0000000000000a30"}'
 ```
 
 Choose option 1 of that menu:
 
 ```
-forever rpc ./slots/ACCOUNT gossip_select '{"guid": "0x0000000000000a30", "option": 1}'
+forever-agent forever rpc ./slots/ACCOUNT gossip_select '{"guid": "0x0000000000000a30", "option": 1}'
 ```
 
 From a script, the same flow is three act steps; see [act steps](act-steps.md):
 
 ```
-forever act --account ACCOUNT --character Mychar --step 'npc entry=1234' --step 'vendor' --step 'buy entry=2589 n=5'
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
+  --step 'npc entry=1234' --step 'vendor' --step 'buy entry=2589 n=5'
 ```
 
 # What you see

@@ -154,7 +154,7 @@ The sweep picks every trial whose hired bot class is one of `--classes`, runs th
 # Cleaning up
 
 ```sh
-forever-agent trials cleanup ./runs/2026-11-24-paladin --slots F
+forever-agent trials cleanup --slots F ./runs/2026-11-24-paladin
 ```
 
 Cleanup replays the run's `ledger.jsonl`: it kills every summon it logged (through the GM guard), clears auras, frees bots and releases the slot leases the ledger holds. A missing serve is not fatal — its rows report the skip. Pass `--slots` when the leases must be released. Exit `0` when nothing is left over, `1` when a row could not be completed.

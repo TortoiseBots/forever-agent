@@ -109,31 +109,33 @@ flight master's own node is refused.
 Read what a trainer teaches:
 
 ```
-forever rpc ./slots/ACCOUNT trainer_list '{"guid": "0x0000000000000d10"}'
+forever-agent forever rpc ./slots/ACCOUNT trainer_list '{"guid": "0x0000000000000d10"}'
 ```
 
 Buy one spell:
 
 ```
-forever rpc ./slots/ACCOUNT train '{"guid": "0x0000000000000d10", "spell_id": 19740}'
+forever-agent forever rpc ./slots/ACCOUNT train '{"guid": "0x0000000000000d10", "spell_id": 19740}'
 ```
 
 Open a flight master's window:
 
 ```
-forever rpc ./slots/ACCOUNT taxi '{"guid": "0x0000000000000d20"}'
+forever-agent forever rpc ./slots/ACCOUNT taxi '{"guid": "0x0000000000000d20"}'
 ```
 
 Fly to node 4 and wait for the landing:
 
 ```
-forever rpc ./slots/ACCOUNT taxi '{"guid": "0x0000000000000d20", "node": 4, "wait_landing": true}'
+forever-agent forever rpc ./slots/ACCOUNT taxi '{"guid": "0x0000000000000d20", "node": 4, "wait_landing": true}'
 ```
 
 From a script:
 
 ```
-forever act --account ACCOUNT --character Mychar --step 'npc entry=1234' --step 'trainer' --step 'learn spell=19740'
+forever-agent forever act --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+  --account ACCOUNT --character Mychar \
+  --step 'npc entry=1234' --step 'trainer' --step 'learn spell=19740'
 ```
 
 # What you see
