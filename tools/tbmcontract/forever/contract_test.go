@@ -77,11 +77,36 @@ func TestForeverContract(t *testing.T) {
 	}
 }
 
+// pinnedAddonVersion is the TortoiseBotsForeverManager release the cases were
+// last verified against. fetch.sh pins the commit; this pins what that commit
+// says it is, so a pin that silently ages out fails instead of drifting.
+const pinnedAddonVersion = "2.4.1-forever.3"
+
+func TestPinnedAddonVersion(t *testing.T) {
+	addonDir := requireAddonAndLua(t)
+	b, err := os.ReadFile(filepath.Join(addonDir, "TortoiseBotsForeverManager.toc"))
+	if err != nil {
+		t.Fatalf("read TBFM toc: %v", err)
+	}
+	version := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "## Version:"); ok {
+			version = strings.TrimSpace(v)
+			break
+		}
+	}
+	if version != pinnedAddonVersion {
+		t.Fatalf("pinned add-on is version %q, the contract was verified against %q (bump fetch.sh or the constant together)", version, pinnedAddonVersion)
+	}
+}
+
 func TestDriverRejectsBrokenCase(t *testing.T) {
 	addonDir := requireAddonAndLua(t)
 	cases := map[string]string{
 		"broken-version": "case broken-version\nrecv system TBM:VERSION|v0.1.0-forever\nexpect hello.version wrong-version\n",
 		"broken-roster":  "case broken-roster\nrecv system TBM:ROSTER_BEGIN|2\nrecv system TBM:ROSTER|101|Alpha|1|online|1|Elwynn|-|Warrior\nrecv system TBM:ROSTER_END\nexpect roster.committed true\n",
+		// The add-on commits action,roster; an expect naming only action must fail.
+		"broken-verbs": "case broken-verbs\nrecv system TBM:VERBS_BEGIN|2\nrecv system TBM:VERBS|action,roster\nrecv system TBM:VERBS_END\nexpect hello.has_verbs true\nexpect hello.verbs action\n",
 	}
 	dir := t.TempDir()
 	for name, body := range cases {

@@ -19,6 +19,17 @@ skip() {
 
 command -v "$LUA" >/dev/null 2>&1 || skip "$LUA not found (apt install lua5.1)"
 addon=$("$here/fetch.sh") || { [ -z "${TBFM_ADDON_DIR:-}" ] || exit 1; skip "addon not cached and not downloadable"; }
+# The fetched commit must still be the release the cases were verified against:
+# a bump to fetch.sh without re-checking the cases fails here (an explicit
+# TBFM_ADDON_DIR is the caller's own checkout and is left alone).
+PINNED_VERSION=2.4.1-forever.3
+if [ -z "${TBFM_ADDON_DIR:-}" ]; then
+	got=$(sed -n 's/^## Version:[[:space:]]*//p' "$addon/TortoiseBotsForeverManager.toc" | tr -d '\r')
+	[ "$got" = "$PINNED_VERSION" ] || {
+		echo "tbm-forever-contract: pinned addon is version $got, the cases were verified against $PINNED_VERSION" >&2
+		exit 1
+	}
+fi
 echo "tbm-forever-contract: addon $(basename "$addon") ($(ls "$addon"/*.lua | wc -l) lua files), $("$LUA" -v 2>&1)"
 
 if [ "$#" -gt 0 ]; then

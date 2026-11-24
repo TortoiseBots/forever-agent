@@ -78,6 +78,7 @@ tbm-contract:
 	GO=$(GO) tools/tbmcontract/run.sh $(foreach e,$(EVENTS),--events $(e))
 
 # Replay contract/tbm/v1/cases/*.case through TortoiseBotsForeverManager (Lua 5.1, git clone --depth 1).
+# Pinned to 2.4.1-forever.3 (7e98023, 2026-11-23); tools/tbmcontract/forever/fetch.sh holds the commit.
 # Needs lua5.1 and, on first run, network; it skips with a message without them.
 tbm-contract-forever:
 	tools/tbmcontract/forever/run.sh
