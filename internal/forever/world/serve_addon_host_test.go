@@ -2,9 +2,9 @@ package world
 
 // T9's add-on host against the fake server: a real (tiny, synthetic) add-on loads in the lua5.1 sidecar, registers
 // its prefix through the session's own registration packets, sends a frame the fake sees, receives a delivered
-// frame as CHAT_MSG_ADDON, has a too-long frame refused by the transport (the server's 255-byte limit), and an
-// add-on handler error leaves the daemon serving. No real add-on's files are here: tinyAddon is written for this
-// test.
+// frame as CHAT_MSG_ADDON, has a too-long frame refused by the transport (the server's 255-byte limit), an add-on
+// handler error leaves the daemon serving, and a handler that loops leaves it answering too (the sidecar's calls
+// run off the session loop). No real add-on's files are here: tinyAddon is written for this test.
 //
 // Mutations these tests catch: registering the add-on's list without the session's own (the PBC union), letting
 // the transport truncate instead of refusing (TestServeAddonHostRefusesTooLongFrame sees a 300-byte packet),
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/forever/addonhost"
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -175,15 +176,6 @@ func waitRegistered(t *testing.T, hook *addonHostWire, prefix string, want bool)
 	}
 	reg, unreg := hook.registration()
 	t.Fatalf("the fake's list never became %s = %v (registration %v, unregister-all %d)", prefix, want, reg, unreg)
-}
-
-func containsString(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // startAddonHostServe starts the fake serve daemon with the hook installed and returns the agent and the hook.
@@ -487,6 +479,71 @@ func TestServeAddonHostErrorDoesNotKillTheServe(t *testing.T) {
 		t.Fatalf("status %+v after an add-on error", status)
 	}
 	a.mustCall(t, "units", nil)
+	a.stop(t)
+	f.wait(t)
+}
+
+// A handler that loops must not hold the session: the sidecar's calls run on the host's own goroutine, so while
+// the add-on spins (until CallTimeout kills it) the daemon still collects packets and answers RPCs, and only the
+// add-on host ends.
+func TestServeAddonHostStaysResponsiveWhileLuaLoops(t *testing.T) {
+	old := addonhost.CallTimeout
+	addonhost.CallTimeout = time.Second
+	t.Cleanup(func() { addonhost.CallTimeout = old })
+
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := filepath.Join(t.TempDir(), "SpinAddon")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SpinAddon.toc"), []byte("## Title: Spin\nSpin.lua\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The prefix is what gives the hook the session's socket; the spin is the handler under test.
+	spin := `
+RegisterAddonMessagePrefix("SPIN")
+local f = CreateFrame("Frame", "SpinFrame")
+f:RegisterEvent("CHAT_MSG_SYSTEM")
+f:SetScript("OnEvent", function()
+    if arg1 == "spin" then while true do end end
+end)
+`
+	if err := os.WriteFile(filepath.Join(dir, "Spin.lua"), []byte(spin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir}), &serveAddonHostState{})
+	waitRegistered(t, hook, "SPIN", true)
+	c := hook.connection(t)
+	c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "spin"))
+	// One loop turn feeds the line to the sidecar and the handler starts looping there.
+	time.Sleep(200 * time.Millisecond)
+
+	var status ServeStatus
+	began := time.Now()
+	json.Unmarshal(a.mustCall(t, "status", nil), &status)
+	if elapsed := time.Since(began); elapsed > 500*time.Millisecond {
+		t.Fatalf("status took %s while the add-on looped: the session loop was held", elapsed)
+	}
+	if status.State != "online" {
+		t.Fatalf("status %+v while the add-on looped", status)
+	}
+
+	// The stuck call costs the add-on its host, not the daemon.
+	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
+		return !s.Running && strings.Contains(s.Error, "took over")
+	})
+	if st.Running || !strings.Contains(st.Error, "took over") {
+		t.Fatalf("addon_state after the loop %+v", st)
+	}
+	a.mustCall(t, "units", nil)
+	json.Unmarshal(a.mustCall(t, "status", nil), &status)
+	if status.State != "online" {
+		t.Fatalf("status %+v after the stuck host was killed", status)
+	}
 	a.stop(t)
 	f.wait(t)
 }

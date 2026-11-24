@@ -6,7 +6,12 @@
 //
 // A sidecar rather than a Go Lua VM: the add-on runs on the same C Lua 5.1 an add-on is written for, the module
 // keeps no dependencies, and an add-on that errors or loops cannot take the daemon down: a call that does not
-// answer in time kills the process, and a handler error is recorded (State.Errors) and the dispatch goes on.
+// answer in CallTimeout kills the process, and a handler error is recorded (State.Errors) and the dispatch goes
+// on. The sidecar's address space is bounded too (MemoryLimit), so an add-on cannot exhaust the host's memory.
+//
+// The add-on's folder is read once, in this process, before the interpreter starts: every .toc and source path is
+// resolved and must stay beneath the folder's own resolved path, so neither a symlink nor a ".." line can make the
+// sidecar read or run a file outside it.
 //
 // The add-on message transport is not here: the caller registers State.Prefixes with its session and sends each
 // Out through it (internal/forever/addonmsg's opcodes and channel kinds), so this package only knows the client
@@ -28,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed lua/*.lua
@@ -36,8 +42,18 @@ var luaFiles embed.FS
 // DefaultLua is the interpreter the host runs when none is given.
 const DefaultLua = "lua5.1"
 
-// CallTimeout bounds one call: an add-on that runs longer is taken to be stuck.
-var CallTimeout = 10 * time.Second
+// CallTimeout bounds one call: an add-on that runs longer is taken to be stuck. A frame update is milliseconds of
+// work, and the daemon's own steps never wait for the sidecar, so a stuck call costs the add-on its host, not the
+// session.
+var CallTimeout = 3 * time.Second
+
+// MemoryLimit is the address space one sidecar may use, in bytes. It is enforced by the kernel before lua5.1
+// starts (RLIMIT_AS on Linux); 0 leaves the sidecar unlimited.
+var MemoryLimit int64 = 256 << 20
+
+// maxAddonBytes bounds one add-on folder: its .toc and sources are read into this process before the sidecar
+// starts, so an add-on's whole code is a handful of megabytes, never an unbounded read.
+const maxAddonBytes = 8 << 20
 
 // ErrStopped is returned by calls after the sidecar has exited or was stopped.
 var ErrStopped = errors.New("addon host stopped")
@@ -51,12 +67,7 @@ type Out struct {
 	Text    string `json:"text,omitempty"`
 	To      string `json:"to,omitempty"`   // addon whisper target, chat whisper target
 	Name    string `json:"name,omitempty"` // target: the unit or player the add-on named
-	Error   string `json:"error,omitempty"`
 }
-
-// Sink performs an Out; its error is kept on the Out and does not fail the call (the client would not tell the
-// add-on either).
-type Sink func(Out) error
 
 // Unit is one unit the mock's Unit* functions answer for.
 type Unit struct {
@@ -123,6 +134,7 @@ type State struct {
 // Host is one running sidecar. Calls are serialised.
 type Host struct {
 	mu     sync.Mutex
+	addon  addonTOC
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	lines  chan []byte
@@ -133,31 +145,58 @@ type Host struct {
 	waitMu   sync.Mutex
 	err      error // why the process ended
 	stderr   *tail
-	sink     Sink
 	next     int
 }
 
+// addonTOC is one add-on folder read and checked before the interpreter starts: the .toc's title and version and
+// each file it names, with its source. The sidecar never opens a file of the add-on's own, so this is the only
+// place the add-on's code comes from.
+type addonTOC struct {
+	Name    string        `json:"name"`
+	Title   string        `json:"title"`
+	Version string        `json:"version"`
+	Files   []addonSource `json:"files"`
+}
+
+// addonSource is one file the .toc names: the name it names it by, and its text.
+type addonSource struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
 // Start runs lua5.1 (from PATH) on the extracted host scripts and the add-on in addonDir, whose .toc it finds.
+// The add-on's .toc and sources are read and checked here: every path must stay beneath addonDir's resolved path.
 // The scripts' temp directory is removed as soon as the host has read them. Replies come on the child's file
 // descriptor 3; its stdout and stderr only feed Stderr.
-func Start(addonDir string, sink Sink) (*Host, error) {
+func Start(addonDir string) (*Host, error) {
+	dir, err := filepath.EvalSymlinks(addonDir)
+	if err != nil {
+		return nil, fmt.Errorf("add-on folder: %w", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("add-on folder: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("add-on folder %s is not a directory", addonDir)
+	}
+	addon, err := readAddon(dir)
+	if err != nil {
+		return nil, err
+	}
 	path, err := exec.LookPath(DefaultLua)
 	if err != nil {
 		return nil, fmt.Errorf("%s not found (apt install lua5.1): %w", DefaultLua, err)
 	}
-	toc, err := findTOC(addonDir)
+	scripts, err := os.MkdirTemp("", "forever-agent-addonhost-")
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", "forever-agent-addonhost-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir) // read by the time hello answers (or the start failed)
+	defer os.RemoveAll(scripts) // read by the time hello answers (or the start failed)
 	for _, name := range []string{"host.lua", "json.lua", "mock.lua"} {
 		b, err := luaFiles.ReadFile("lua/" + name)
 		if err == nil {
-			err = os.WriteFile(filepath.Join(dir, name), b, 0o600)
+			err = os.WriteFile(filepath.Join(scripts, name), b, 0o600)
 		}
 		if err != nil {
 			return nil, err
@@ -167,11 +206,16 @@ func Start(addonDir string, sink Sink) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{lines: make(chan []byte, 64), exited: make(chan struct{}), quit: make(chan struct{}), stderr: &tail{max: 4096}, sink: sink}
-	h.cmd = exec.Command(path, filepath.Join(dir, "host.lua"), addonDir, toc)
+	h := &Host{addon: addon, lines: make(chan []byte, 64), exited: make(chan struct{}), quit: make(chan struct{}), stderr: &tail{max: 4096}}
+	h.cmd = exec.Command(path, filepath.Join(scripts, "host.lua"))
 	h.cmd.Stdout, h.cmd.Stderr = h.stderr, h.stderr
 	h.cmd.ExtraFiles = []*os.File{protoW} // fd 3 in the child
 	setDeathSignal(h.cmd)
+	if err := limitSidecar(h.cmd, MemoryLimit); err != nil {
+		protoR.Close()
+		protoW.Close()
+		return nil, err
+	}
 	if h.stdin, err = h.cmd.StdinPipe(); err != nil {
 		protoR.Close()
 		protoW.Close()
@@ -232,11 +276,97 @@ func findTOC(dir string) (string, error) {
 	return "", fmt.Errorf("%s holds %d .toc files (%s): point the daemon at the one add-on's folder", dir, len(tocs), strings.Join(tocs, ", "))
 }
 
+// readAddon reads the folder's .toc and every file it names. dir is the folder's resolved path; each path is
+// resolved again and must stay beneath it, so a symlink pointing out and a path that climbs out are both refused
+// here, before any interpreter sees the add-on. The .toc's own syntax is the client's: a header line ("## Title:",
+// "## Version:") and a .lua line per file, trailing whitespace trimmed, backslashes as path separators.
+func readAddon(dir string) (addonTOC, error) {
+	a := addonTOC{Name: filepath.Base(dir)}
+	tocName, err := findTOC(dir)
+	if err != nil {
+		return a, err
+	}
+	tocPath, err := contained(dir, tocName)
+	if err != nil {
+		return a, fmt.Errorf("the .toc: %w", err)
+	}
+	raw, err := os.ReadFile(tocPath)
+	if err != nil {
+		return a, fmt.Errorf("the .toc: %w", err)
+	}
+	total := len(raw)
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.ReplaceAll(line, "\r", "")
+		if v, ok := tocHeader(line, "## Version:"); ok {
+			a.Version = v
+			continue
+		}
+		if v, ok := tocHeader(line, "## Title:"); ok {
+			a.Title = v
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := strings.TrimRight(line, " \t\v\f")
+		if !strings.HasSuffix(name, ".lua") {
+			continue
+		}
+		rel := strings.ReplaceAll(name, "\\", "/")
+		if strings.HasPrefix(rel, "/") || strings.Contains(rel, "..") {
+			return a, fmt.Errorf("the .toc names a file outside the add-on: %s", name)
+		}
+		file, err := contained(dir, rel)
+		if err != nil {
+			return a, fmt.Errorf("the .toc names %s: %w", name, err)
+		}
+		src, err := os.ReadFile(file)
+		if err != nil {
+			return a, fmt.Errorf("the .toc names %s: %w", name, err)
+		}
+		if !utf8.Valid(src) {
+			// The source travels as JSON text; anything else would be replaced by U+FFFD on the way, so it is
+			// refused by name instead of run mangled.
+			return a, fmt.Errorf("the .toc names %s, which is not UTF-8 text", name)
+		}
+		total += len(src)
+		if total > maxAddonBytes {
+			return a, fmt.Errorf("the add-on's .toc and sources are over %d bytes", maxAddonBytes)
+		}
+		a.Files = append(a.Files, addonSource{Name: name, Source: string(src)})
+	}
+	return a, nil
+}
+
+// tocHeader is one .toc header line's value, trimmed; an empty value is not a header (as the client reads it).
+func tocHeader(line, prefix string) (string, bool) {
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	v := strings.TrimSpace(line[len(prefix):])
+	return v, v != ""
+}
+
+// contained resolves name under root (already resolved) and refuses anything that does not stay beneath it: a
+// symlink pointing outside the add-on is refused like a path that climbs out.
+func contained(root, name string) (string, error) {
+	full := filepath.Join(root, filepath.FromSlash(name))
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s resolves outside %s (%s)", name, root, resolved)
+	}
+	return resolved, nil
+}
+
 // Load runs the load op: the .toc's files, ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
 // character is in world.
 func (h *Host) Load(world World, inWorld bool) (LoadResult, []Out, error) {
 	var res LoadResult
-	raw, outs, err := h.Call("load", map[string]any{"world": world, "in_world": inWorld})
+	raw, outs, err := h.Call("load", map[string]any{"world": world, "in_world": inWorld, "addon": h.addon})
 	if err != nil {
 		return res, outs, err
 	}
@@ -296,7 +426,8 @@ func (h *Host) State() (State, []Out, error) {
 }
 
 // Call runs op with params (a JSON object, or nil) and returns its result and the Outs the add-on produced on
-// the way, each already passed to the sink.
+// the way, in the order it asked for them. The caller performs them on its session; a failure to perform one does
+// not fail the call (the client would not tell the add-on either).
 func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -323,8 +454,6 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 		return nil, nil, h.stopped()
 	}
 	var outs []Out
-	// The budget is the add-on's own time: what the sink spends sending is added back.
-	deadline := time.Now().Add(CallTimeout)
 	timer := time.NewTimer(CallTimeout)
 	defer timer.Stop()
 	for {
@@ -344,17 +473,6 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 			if m.Out != "" {
 				var o Out
 				json.Unmarshal(line, &o)
-				if h.sink != nil {
-					began := time.Now()
-					if err := h.sink(o); err != nil {
-						o.Error = err.Error()
-					}
-					deadline = deadline.Add(time.Since(began))
-					if !timer.Stop() {
-						<-timer.C
-					}
-					timer.Reset(time.Until(deadline))
-				}
 				outs = append(outs, o)
 				continue
 			}

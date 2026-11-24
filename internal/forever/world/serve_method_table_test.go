@@ -53,13 +53,13 @@ func TestServeMethodTableRefusals(t *testing.T) {
 		}
 	}
 	// The names the brief names one by one are on the right side of the table: the client brain and its tuning,
-	// the client dungeon finder, the add-on host and its buttons, the two step verbs and the Turtle toolkit are
-	// refused; the run verbs, plan_check, bot_view and the three TBM methods are implemented.
+	// the client dungeon finder, the add-on's own buttons, the two step verbs and the Turtle toolkit are refused;
+	// the add-on host, the run verbs, plan_check, bot_view and the three TBM methods are implemented.
 	for _, name := range []string{
 		"brain_start", "brain_status", "brain_stop", "tune_list", "tune_set",
 		"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
 		"lfg_role_check_answer", "lfg_status",
-		"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
+		"addon_click",
 		"tbm_buttons", "tbm_click", "dungeon_skip", "dungeon_stage", "tt",
 	} {
 		if _, ok := ServeRefusal(name); !ok {
@@ -67,6 +67,7 @@ func TestServeMethodTableRefusals(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
+		"addon_start", "addon_state", "addon_stop", "addon_tick",
 		"dungeon_run", "dungeon_status", "dungeon_stop", "dungeon_pause", "dungeon_resume",
 		"plan_check", "bot_view", "tbm", "tbm_handshake", "tbm_send",
 	} {

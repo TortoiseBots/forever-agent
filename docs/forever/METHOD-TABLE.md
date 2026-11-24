@@ -81,16 +81,18 @@ keeps its tiles). It answers the check's findings (`checked`, `skipped`, `plan`,
 no `--navmesh` or the map's tiles, exactly as the old daemon did. The world export lints (`--spawns`) are not part
 of the daemon's check: no serve flag names a spawns folder, and `plan-check --forever --spawns` runs them.
 
-**The TBM methods are implemented, the add-on host is not (e).** `tbm_handshake`, `tbm_send` and `tbm` are the TBM
-client `forever tbm-check` already runs (`internal/forever/tbmclient` over this session's add-on layer): the hello
-(roster probe, then the trailer and the transport commands switch to), and one command with its answer. The wait
-runs off the session queue: the tap install, every send and each 50 ms packet slice is its own short queued call,
-one exchange runs at a time, and `wait_ms` (5 s by default) is capped at 15 s, so `status` and the dungeon verbs
-answer while a silent module is waited for. `tbm` is
-`tbm_send` under the old name (its old transport parameter `via` is accepted too). `addon_start`, `addon_stop`,
-`addon_state`, `addon_tick`, `addon_click`, `tbm_buttons` and `tbm_click` are refused: they need an add-on HOST
-(a real add-on running headless), which is a separate, later ticket; the ported half of the add-on layer is
-`addon_send`.
+**The TBM methods are implemented; the add-on host runs the add-on itself, its buttons stay refused (e).**
+`tbm_handshake`, `tbm_send` and `tbm` are the TBM client `forever tbm-check` already runs
+(`internal/forever/tbmclient` over this session's add-on layer): the hello (roster probe, then the trailer and the
+transport commands switch to), and one command with its answer. The wait runs off the session queue: the tap
+install, every send and each 50 ms packet slice is its own short queued call, one exchange runs at a time, and
+`wait_ms` (5 s by default) is capped at 15 s, so `status` and the dungeon verbs answer while a silent module is
+waited for. `tbm` is `tbm_send` under the old name (its old transport parameter `via` is accepted too).
+`addon_start`, `addon_state`, `addon_tick` and `addon_stop` run a real add-on headless in a `lua5.1` sidecar on a
+client mock, its folder read and containment-checked by the daemon, its address space and call time bounded, and its
+calls off the session goroutine ([ADDON-R1-NOTES.md](ADDON-R1-NOTES.md#the-add-on-host-t9)). `addon_click`,
+`tbm_buttons` and `tbm_click` are refused: they click a button of a TortoiseBotsManager panel, which is that
+add-on's own UI table, not a client feature.
 
 **`bot_view` is implemented (f).** The old `bot_view` read the 1.12 module's perception frames. The data already
 exists in this daemon: the party roster joined to the world model. `bot_view {bots?, wait_ms?}` answers one snapshot
@@ -112,12 +114,12 @@ sent is in the model.
 | `accept_resurrect` | implemented |
 | `accept_summon` | implemented |
 | `act` | implemented |
-| `addon_click` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
+| `addon_click` | refused: addon_click drives a button of the TortoiseBotsManager panel: the button table is that add-on's own UI, so addon_start runs the add-on's own events and slash commands instead |
 | `addon_send` | implemented |
-| `addon_start` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
-| `addon_state` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
-| `addon_stop` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
-| `addon_tick` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
+| `addon_start` | implemented |
+| `addon_state` | implemented |
+| `addon_stop` | implemented |
+| `addon_tick` | implemented |
 | `area_trigger` | implemented |
 | `area_trigger_watch` | implemented |
 | `assistant` | implemented |
@@ -240,8 +242,8 @@ sent is in the model.
 | `target` | implemented |
 | `taxi` | implemented |
 | `tbm` | implemented |
-| `tbm_buttons` | refused: the TBM buttons are the add-on's own UI table, so they need the add-on host (a later ticket); tbm_handshake and tbm_send speak the protocol without one |
-| `tbm_click` | refused: the TBM buttons are the add-on's own UI table, so they need the add-on host (a later ticket); tbm_handshake and tbm_send speak the protocol without one |
+| `tbm_buttons` | refused: the TBM buttons are the add-on's own UI table, so they need that add-on's panel; tbm_handshake and tbm_send speak the protocol without one |
+| `tbm_click` | refused: the TBM buttons are the add-on's own UI table, so they need that add-on's panel; tbm_handshake and tbm_send speak the protocol without one |
 | `tbm_handshake` | implemented |
 | `tbm_send` | implemented |
 | `teardown` | implemented |

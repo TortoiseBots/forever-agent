@@ -13,6 +13,12 @@ package world
 // transport and the refusal is kept on its sent row (the real client sends no chunking of its own; an add-on's
 // protocol chunks itself, as the bot module's TBM protocol does). A Lua handler that raises is recorded in the
 // add-on's own errors and the dispatch goes on, so a broken add-on never takes the daemon with it.
+//
+// The sidecar is another process and a call can take CallTimeout to answer (a looping handler is killed only when
+// the budget runs out), so the sidecar calls run on the host's own goroutine: the loop prepares one job (the world
+// pushes, the events to fire, a tick) and never waits for it, and the job's answer is applied on the loop when it
+// arrives. The session therefore keeps collecting packets and answering RPCs while the add-on is busy; an add-on
+// that raised or was killed only ends the host, never the daemon.
 
 import (
 	"context"
@@ -21,6 +27,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
@@ -107,8 +114,41 @@ type serveAddonTick struct {
 	Sent  []serveAddonSent `json:"sent,omitempty"`
 }
 
-// serveAddonHost is the daemon's one add-on host. Everything runs on the serve loop goroutine, so there is no
-// mutex: the sidecar calls are made from the methods and from the loop's own step.
+// addonCallKind is what one sidecar call does.
+type addonCallKind uint8
+
+const (
+	addonPushWorld  addonCallKind = iota // hand the add-on the units it may ask about
+	addonSendEvents                      // fire game events at the add-on's frames
+	addonTick                            // advance the clock and run OnUpdate
+	addonReadState                       // read what the add-on did so far
+)
+
+// addonCall is one sidecar call a job runs, in order.
+type addonCall struct {
+	kind   addonCallKind
+	world  addonhost.World
+	events []addonhost.Event
+	ms     int
+}
+
+// addonJob is what the loop hands the host's goroutine: the calls one turn needs, in order. It is built and
+// consumed on the loop, then run on the host's goroutine and dropped there.
+type addonJob struct {
+	calls []addonCall
+}
+
+// addonJobResult is one job's answer, applied on the loop: everything the add-on asked for, the clock a tick
+// reached, the state a state call read, or why the host broke.
+type addonJobResult struct {
+	outs  []addonhost.Out
+	clock float64
+	state *addonhost.State
+	err   error
+}
+
+// serveAddonHost is the daemon's one add-on host. Its fields are owned by the serve loop goroutine; the worker
+// goroutine reads jobs and results channels and holds the sidecar pointer it was started with.
 type serveAddonHost struct {
 	h          *addonhost.Host
 	dir        string
@@ -123,8 +163,15 @@ type serveAddonHost struct {
 	sent       []serveAddonSent
 	received   []serveAddonReceived
 	dropped    int
-	lastErr    string // the last contained error (a registration or a feed failure)
-	err        error  // why the host ended
+	lastErr    string              // the last contained error (a registration or a feed failure)
+	err        error               // why the host ended
+	state      *addonhost.State    // what the last state read answered, nil before the first
+	jobs       chan *addonJob      // at most one queued: submit refuses while a job is out
+	results    chan addonJobResult // the worker's answers, drained on the loop
+	quit       chan struct{}
+	quitOnce   sync.Once
+	workerDone chan struct{}
+	busy       bool // a job is with the worker
 }
 
 func registerAddonHostMethods(srv *rpc.Server, st *serveState) {
@@ -168,26 +215,29 @@ func (st *serveState) addonStart(s *session, p serveAddonStartParams) (serveAddo
 	}
 	// The cursor goes in before anything the add-on does while loading: a frame the server delivers during the
 	// registration (or a plugin's own startup) is still fed, never skipped as already seen.
-	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: s.EventLog().Seq()}
+	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: s.EventLog().Seq(),
+		jobs: make(chan *addonJob, 1), results: make(chan addonJobResult, 1), quit: make(chan struct{}),
+		workerDone: make(chan struct{})}
 	for _, prefix := range p.Prefixes {
 		if !slices.Contains(a.registered, prefix) {
 			a.registered = append(a.registered, prefix)
 		}
 	}
 	st.addon = a
-	h, err := addonhost.Start(a.dir, a.sink(st))
+	h, err := addonhost.Start(a.dir)
 	if err != nil {
 		st.addon = nil
 		return serveAddonHostState{}, err
 	}
 	a.h = h
+	go a.work(h)
 	res, outs, err := h.Load(a.worldOf(s), true)
-	a.note(outs)
 	if err != nil {
-		h.Close()
+		a.stop()
 		st.addon = nil
 		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
 	}
+	st.performAddonOuts(a, outs)
 	a.name, a.version, a.files = res.Name, res.Version, res.Files
 	for _, prefix := range res.Prefixes {
 		if !slices.Contains(a.registered, prefix) {
@@ -195,15 +245,13 @@ func (st *serveState) addonStart(s *session, p serveAddonStartParams) (serveAddo
 		}
 	}
 	if err := a.ensureRegistered(s); err != nil {
-		h.Close()
+		a.stop()
 		st.addon = nil
 		return serveAddonHostState{}, fmt.Errorf("addon_start: registering the add-on's prefixes: %w", err)
 	}
 	a.world = ""
-	if err := a.pushWorld(s); err != nil {
-		h.Close()
-		st.addon = nil
-		return serveAddonHostState{}, fmt.Errorf("addon_start: the world: %w", err)
+	if w, ok := a.worldCall(s); ok {
+		a.submit(&addonJob{calls: []addonCall{{kind: addonPushWorld, world: w}}})
 	}
 	return st.addonHostState(s)
 }
@@ -215,7 +263,7 @@ func (st *serveState) addonStop(s *session) (serveAddonHostState, error) {
 		return serveAddonHostState{Running: false}, errors.New("addon_stop: the add-on host is not running")
 	}
 	st.addon = nil
-	a.h.Close()
+	a.stop()
 	if err := a.unregister(s); err != nil {
 		// The host is stopped whatever the registration answer: say the prefixes may still be on the session's list.
 		return serveAddonHostState{Running: false, Error: fmt.Sprintf("addon_stop: the host stopped, but unregistering its prefixes failed: %v", err)}, nil
@@ -223,42 +271,49 @@ func (st *serveState) addonStop(s *session) (serveAddonHostState, error) {
 	return serveAddonHostState{Running: false}, nil
 }
 
-// addonState feeds the add-on what arrived since its last read and answers what it did.
+// addonState queues what arrived since the host's last feed and answers what it did: the state a read answered
+// before, plus everything a finished job produced. The read itself runs on the host's goroutine, so a busy add-on
+// never holds this call.
 func (st *serveState) addonState(s *session) (serveAddonHostState, error) {
-	if st.addon == nil {
+	a := st.addon
+	if a == nil {
 		return serveAddonHostState{Running: false}, errors.New("addon_state: the add-on host is not running (addon_start)")
 	}
-	if err := st.addon.feed(s); err != nil {
-		st.addon.fail(err)
+	st.drainAddon()
+	if a.h != nil && !a.busy {
+		calls := a.harvest(s)
+		a.submit(&addonJob{calls: append(calls, addonCall{kind: addonReadState})})
 	}
 	return st.addonHostState(s)
 }
 
-// addonTick advances the add-on's clock and runs OnUpdate.
+// addonTick advances the add-on's clock and runs OnUpdate. A manual clock moves only on this call, so it answers
+// with the tick's own result: it waits for the job (bounded by CallTimeout), while the daemon's own ticks never
+// wait for the add-on.
 func (st *serveState) addonTick(s *session, p serveAddonTickParams) (serveAddonTick, error) {
 	a := st.addon
 	if a == nil || a.h == nil {
 		return serveAddonTick{}, errors.New("addon_tick: the add-on host is not running (addon_start)")
 	}
-	if err := a.feed(s); err != nil {
-		a.fail(err)
-		return serveAddonTick{}, err
-	}
 	ms := p.MS
 	if ms <= 0 {
 		ms = addonHostStepMS
 	}
-	clock, outs, err := a.h.Tick(ms)
-	a.note(outs)
-	if err != nil {
-		a.fail(err)
-		return serveAddonTick{}, err
+	if calls := a.harvest(s); len(calls) > 0 {
+		if _, ok := st.runAddonNow(a, calls); !ok {
+			return serveAddonTick{}, a.endError()
+		}
+	}
+	res, ok := st.runAddonNow(a, []addonCall{{kind: addonTick, ms: ms}})
+	if !ok {
+		return serveAddonTick{}, a.endError()
 	}
 	a.lastTick = time.Now()
-	return serveAddonTick{Clock: clock, Sent: a.sentNow(outs)}, nil
+	return serveAddonTick{Clock: res.clock, Sent: sentRows(res.outs)}, nil
 }
 
-// addonHostState is addon_state's answer from a running or ended host.
+// addonHostState is addon_state's answer from a running or ended host: what the last state read answered, plus
+// everything a finished job produced since.
 func (st *serveState) addonHostState(s *session) (serveAddonHostState, error) {
 	a := st.addon
 	if a == nil {
@@ -275,16 +330,8 @@ func (st *serveState) addonHostState(s *session) (serveAddonHostState, error) {
 	if a.manual {
 		out.Clock = "manual"
 	}
-	if a.h != nil {
-		stt, outs, err := a.h.State()
-		if err != nil {
-			a.fail(err)
-			out.Running = false
-			out.Error = a.errText()
-		} else {
-			a.note(outs)
-			out.Errors, out.Chat = stt.Errors, stt.Chat
-		}
+	if a.state != nil {
+		out.Errors, out.Chat = a.state.Errors, a.state.Chat
 	}
 	if a.h != nil {
 		out.Stderr = a.h.Stderr()
@@ -300,38 +347,177 @@ func addonInboxOf(s *session) serveAddonInbox {
 	return serveAddonInbox{Total: s.addon.Total, Unregistered: s.addon.Unregistered, Bad: s.addon.Bad, Waiting: s.addon.Len()}
 }
 
-// addonHostStep is the daemon loop's own turn: it feeds the add-on what arrived and, on a real clock, ticks it by
-// the time that passed. It never returns an error: a broken host is closed and its reason kept for addon_state.
+// addonHostStep is the daemon loop's own turn: the answers the host's goroutine finished are applied here, then
+// the next job (what arrived, and on a real clock the OnUpdate tick) is queued. It never returns an error and never
+// waits for the add-on: a broken host is closed and its reason kept for addon_state.
 func (st *serveState) addonHostStep(s *session) {
+	st.drainAddon()
 	a := st.addon
-	if a == nil || a.h == nil {
+	if a == nil || a.h == nil || a.busy {
 		return
 	}
-	if err := a.feed(s); err != nil {
-		a.fail(err)
+	calls := a.harvest(s)
+	if !a.manual {
+		now := time.Now()
+		if elapsed := now.Sub(a.lastTick); elapsed >= addonHostStepMS*time.Millisecond {
+			ms := int(elapsed / time.Millisecond)
+			a.lastTick = a.lastTick.Add(time.Duration(ms) * time.Millisecond)
+			calls = append(calls, addonCall{kind: addonTick, ms: ms})
+		}
+	}
+	if len(calls) > 0 {
+		a.submit(&addonJob{calls: calls})
+	}
+}
+
+// drainAddon applies every answer the host's goroutine finished, on the loop (the Outs go through the session
+// here, never on the host's goroutine).
+func (st *serveState) drainAddon() {
+	for {
+		a := st.addon
+		if a == nil {
+			return
+		}
+		select {
+		case res := <-a.results:
+			a.busy = false
+			st.applyAddon(a, res)
+		default:
+			return
+		}
+	}
+}
+
+// runAddonNow runs one job and waits for its answer, applying it on the loop. Only addon_tick uses it, and only
+// because a manual clock answers from that tick's own result; the daemon's own steps never wait.
+func (st *serveState) runAddonNow(a *serveAddonHost, calls []addonCall) (addonJobResult, bool) {
+	if a.busy {
+		select {
+		case res := <-a.results:
+			a.busy = false
+			st.applyAddon(a, res)
+		case <-a.quit:
+			return addonJobResult{}, false
+		}
+	}
+	if !a.submit(&addonJob{calls: calls}) {
+		return addonJobResult{}, false
+	}
+	select {
+	case res := <-a.results:
+		a.busy = false
+		st.applyAddon(a, res)
+		return res, a.h != nil
+	case <-a.quit:
+		return addonJobResult{}, false
+	}
+}
+
+// applyAddon takes one finished job: its Outs are performed on this session (the add-on's send is the client's),
+// its state is kept for addon_state, and an error ends the host.
+func (st *serveState) applyAddon(a *serveAddonHost, res addonJobResult) {
+	if res.err != nil {
+		a.fail(res.err)
 		return
 	}
-	if a.manual {
-		return
+	if res.state != nil {
+		a.state = res.state
 	}
-	now := time.Now()
-	elapsed := now.Sub(a.lastTick)
-	if elapsed < addonHostStepMS*time.Millisecond {
-		return
+	st.performAddonOuts(a, res.outs)
+}
+
+// performAddonOuts performs the add-on's requests on this session, in order, and keeps one row per request with
+// the sink's refusal on it (the client would not tell the add-on either).
+func (st *serveState) performAddonOuts(a *serveAddonHost, outs []addonhost.Out) {
+	sink := a.sink(st)
+	for _, o := range outs {
+		row := serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To}
+		if err := sink(o); err != nil {
+			row.Error = err.Error()
+		}
+		a.sent = append(a.sent, row)
 	}
-	ms := int(elapsed / time.Millisecond)
-	a.lastTick = a.lastTick.Add(time.Duration(ms) * time.Millisecond)
-	_, outs, err := a.h.Tick(ms)
-	a.note(outs)
-	if err != nil {
-		a.fail(err)
+	if len(a.sent) > addonHostKeep {
+		a.sent = append([]serveAddonSent(nil), a.sent[len(a.sent)-addonHostKeep:]...)
 	}
+}
+
+// submit queues one job for the host's goroutine: at most one is out at a time, so the order the loop prepared is
+// the order the add-on runs them in, and a job never piles up behind a slow add-on.
+func (a *serveAddonHost) submit(job *addonJob) bool {
+	if a.busy || a.h == nil || len(job.calls) == 0 {
+		return false
+	}
+	select {
+	case a.jobs <- job:
+		a.busy = true
+		return true
+	default:
+		return false
+	}
+}
+
+// work is the host's own goroutine: one job at a time, an answer back to the loop. It holds the sidecar pointer it
+// was started with, so the loop may drop its own copy when the host ends.
+func (a *serveAddonHost) work(h *addonhost.Host) {
+	defer close(a.workerDone)
+	for {
+		select {
+		case <-a.quit:
+			return
+		case job := <-a.jobs:
+			res := runAddonJob(h, job)
+			select {
+			case a.results <- res:
+			case <-a.quit:
+				return
+			}
+		}
+	}
+}
+
+// runAddonJob runs one job's calls in order on the sidecar.
+func runAddonJob(h *addonhost.Host, job *addonJob) addonJobResult {
+	var res addonJobResult
+	for _, c := range job.calls {
+		var outs []addonhost.Out
+		var err error
+		switch c.kind {
+		case addonPushWorld:
+			outs, err = h.PushWorld(c.world)
+		case addonSendEvents:
+			outs, err = h.SendEvents(c.events)
+		case addonTick:
+			res.clock, outs, err = h.Tick(c.ms)
+		case addonReadState:
+			var st addonhost.State
+			st, outs, err = h.State()
+			res.state = &st
+		}
+		res.outs = append(res.outs, outs...)
+		if err != nil {
+			res.err = err
+			return res
+		}
+	}
+	return res
+}
+
+// stop ends the host: no new job, the sidecar closed, and the goroutine waited for (its current call ends with the
+// sidecar, so this is bounded by the host's own close).
+func (a *serveAddonHost) stop() {
+	a.quitOnce.Do(func() { close(a.quit) })
+	if a.h != nil {
+		a.h.Close()
+	}
+	<-a.workerDone
+	a.busy = false
 }
 
 // addonHostClose stops the sidecar when the daemon ends; the socket is going away, so nothing is unregistered.
 func (st *serveState) addonHostClose() {
-	if st.addon != nil && st.addon.h != nil {
-		st.addon.h.Close()
+	if st.addon != nil {
+		st.addon.stop()
 		st.addon.h = nil
 	}
 }
@@ -344,20 +530,26 @@ func (a *serveAddonHost) errText() string {
 	return a.lastErr
 }
 
+// endError is the RPC error of a call whose host ended before it could answer.
+func (a *serveAddonHost) endError() error {
+	if msg := a.errText(); msg != "" {
+		return fmt.Errorf("the add-on host ended: %s", msg)
+	}
+	return errors.New("the add-on host ended")
+}
+
 // fail ends a host whose sidecar broke: a protocol error or a stuck call leaves nothing to talk to.
 func (a *serveAddonHost) fail(err error) {
-	if a.h != nil {
-		a.h.Close()
-		a.h = nil
-	}
 	if a.err == nil {
 		a.err = err
 	}
+	a.stop()
+	a.h = nil
 }
 
 // sink performs one Out on the session the daemon holds now (a re-entry replaces it). A failure is kept on the
-// Out (the client would not tell the add-on).
-func (a *serveAddonHost) sink(st *serveState) addonhost.Sink {
+// sent row (the client would not tell the add-on).
+func (a *serveAddonHost) sink(st *serveState) func(addonhost.Out) error {
 	return func(o addonhost.Out) error {
 		s := st.session.Load()
 		if s == nil {
@@ -473,37 +665,26 @@ func (a *serveAddonHost) unregister(s *session) error {
 	return s.RegisterAddonPrefixes(keep...)
 }
 
-// note keeps what the add-on asked for during a call, bounded.
-func (a *serveAddonHost) note(outs []addonhost.Out) {
-	for _, o := range outs {
-		a.sent = append(a.sent, serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To, Error: o.Error})
-	}
-	if len(a.sent) > addonHostKeep {
-		a.sent = append([]serveAddonSent(nil), a.sent[len(a.sent)-addonHostKeep:]...)
-	}
-}
-
-// sentNow is note's answer for the call the caller just made.
-func (a *serveAddonHost) sentNow(outs []addonhost.Out) []serveAddonSent {
+// sentRows is the answer rows for one call's Outs, before any is performed (addon_tick's `sent`).
+func sentRows(outs []addonhost.Out) []serveAddonSent {
 	rows := make([]serveAddonSent, 0, len(outs))
 	for _, o := range outs {
-		rows = append(rows, serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To, Error: o.Error})
+		rows = append(rows, serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To})
 	}
 	return rows
 }
 
-// feed turns the session's events above the cursor into the add-on's game events, pushing the world where the
-// group changed, and records the add-on frames the host's prefixes delivered.
-func (a *serveAddonHost) feed(s *session) error {
-	if a.h == nil {
-		return a.err
-	}
+// harvest turns the session's events above the cursor into the calls the sidecar must run, in order: the world
+// where the group changed, then the events it translates. The received rows are kept here, on the loop, and the
+// cursor moves now: the job's events are its own, and a job that fails takes them with it (the host is dead then).
+func (a *serveAddonHost) harvest(s *session) []addonCall {
 	if err := a.ensureRegistered(s); err != nil {
 		// The add-on's frames cannot arrive while its prefix is not registered; the next turn tries again.
 		a.lastErr = err.Error()
 	}
-	log := s.EventLog()
+	var calls []addonCall
 	var batch []addonhost.Event
+	log := s.EventLog()
 	last := a.cursor
 	for range addonHostPages {
 		rows, next, dropped, more := log.Since(last, EventPageMax)
@@ -515,12 +696,12 @@ func (a *serveAddonHost) feed(s *session) error {
 			if addonWorldChanged(ev) {
 				// The world goes first, so PARTY_MEMBERS_CHANGED (or the loading screen's entry) is at its place
 				// in the stream; the event itself then follows the ordinary translation below.
-				if err := a.sendBatch(batch); err != nil {
-					return err
+				if len(batch) > 0 {
+					calls = append(calls, addonCall{kind: addonSendEvents, events: batch})
+					batch = nil
 				}
-				batch = nil
-				if err := a.pushWorld(s); err != nil {
-					return err
+				if w, ok := a.worldCall(s); ok {
+					calls = append(calls, addonCall{kind: addonPushWorld, world: w})
 				}
 			}
 			if ev.Kind == events.KindAddon {
@@ -536,21 +717,11 @@ func (a *serveAddonHost) feed(s *session) error {
 			break
 		}
 	}
-	if err := a.sendBatch(batch); err != nil {
-		return err
+	if len(batch) > 0 {
+		calls = append(calls, addonCall{kind: addonSendEvents, events: batch})
 	}
 	a.cursor = last
-	return nil
-}
-
-// sendBatch hands one batch to the add-on and keeps what it sent.
-func (a *serveAddonHost) sendBatch(batch []addonhost.Event) error {
-	if len(batch) == 0 {
-		return nil
-	}
-	outs, err := a.h.SendEvents(batch)
-	a.note(outs)
-	return err
+	return calls
 }
 
 // receive keeps one delivered add-on frame, bounded.
@@ -565,20 +736,15 @@ func (a *serveAddonHost) receive(ev Event) {
 	}
 }
 
-// pushWorld sends the units the add-on may ask about when they changed.
-func (a *serveAddonHost) pushWorld(s *session) error {
+// worldCall is the world to push when it changed since the last push: the units the add-on may ask about.
+func (a *serveAddonHost) worldCall(s *session) (addonhost.World, bool) {
 	w := a.worldOf(s)
 	b, err := json.Marshal(w)
-	if err != nil {
-		return err
-	}
-	if string(b) == a.world {
-		return nil
+	if err != nil || string(b) == a.world {
+		return addonhost.World{}, false
 	}
 	a.world = string(b)
-	outs, err := a.h.PushWorld(w)
-	a.note(outs)
-	return err
+	return w, true
 }
 
 // worldOf is what the session knows of the units a client exposes to add-ons: player, target, party1..4 (the

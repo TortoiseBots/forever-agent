@@ -9,8 +9,8 @@
 //	tbm_send        one command, read until its answer (an ACK or ERR with the command's intent);
 //	tbm             the old name for the same thing: one command and its answer.
 //
-// The add-on HOST (running a real add-on headless, which is what addon_* and the buttons need) is a later ticket;
-// these three need no host, only the module's own answers.
+// These three need no add-on host (serve_addon_host.go runs that add-on's own events and slash commands, not its
+// panel): they speak the protocol themselves over the session's add-on layer.
 package world
 
 import (

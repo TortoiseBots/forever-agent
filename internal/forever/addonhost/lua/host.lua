@@ -1,7 +1,7 @@
 -- Headless Forever add-on host: runs a real add-on's Lua on the client mock (lua/mock.lua), driven by the
 -- daemon over stdin/stdout, one JSON request per line.
 --
---   lua5.1 host.lua <addon dir> <toc file>
+--   lua5.1 host.lua
 --
 -- stdin: {"id":n,"op":"...",...}. File descriptor 3 (never stdout, so nothing the add-on or Lua prints can pass
 -- for a frame): one JSON line per reply, {"id":n,"result":...} or {"id":n,"error":"..."}, and before it, while
@@ -9,14 +9,17 @@
 -- (SendAddonMessage, SendChatMessage, TargetUnit, TargetByName). The daemon performs those on its session. The
 -- host exits at the end of stdin.
 --
--- The add-on runs sandboxed: each of its files gets an environment (setfenv) holding only the mocked client API
--- and safe parts of the Lua library (string, table, math, date). os, io, loadfile, dofile, require, package and
--- debug stay local to the host, so an add-on cannot write files or read the protocol.
+-- The add-on's files come in the load request as text: the daemon reads the .toc and its sources, checks that
+-- every one stays inside the add-on's folder, and this host never opens a file of the add-on's own. Each file
+-- gets an environment (setfenv) holding only the mocked client API and safe parts of the Lua library (string,
+-- table, math, date). os, io, loadfile, loadstring, dofile, require, package and debug stay local to the host, so
+-- an add-on cannot write files, read the protocol or load code of its own choosing.
 --
 -- Ops:
 --   hello   {}                        the host has read its scripts and is ready
---   load    {world, in_world}         load the .toc files, fire ADDON_LOADED, then PLAYER_LOGIN and
---                                     PLAYER_ENTERING_WORLD when the character is in world
+--   load    {world, in_world, addon}  run the addon's files (name, title, version, files:[{name,source}]), fire
+--                                     ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
+--                                     character is in world
 --   world   {world}                   the units the add-on may ask about (player, target, party, raid); fires
 --                                     PARTY_MEMBERS_CHANGED and RAID_ROSTER_UPDATE where the group changed
 --   events  {events:[{event,args}]}   fire game events to the frames that registered them
@@ -26,12 +29,6 @@
 
 local here = (arg[0]:match("^(.*)/[^/]*$")) or "."
 local json = dofile(here .. "/json.lua")
-local addonDir = arg[1]
-local tocName = arg[2]
-if not addonDir or not tocName then
-    io.stderr:write("usage: lua5.1 host.lua <addon dir> <toc file>\n")
-    os.exit(2)
-end
 
 local proto = io.open("/dev/fd/3", "w")
 if not proto then
@@ -177,38 +174,26 @@ end
 -- ── ops ─────────────────────────────────────────────────────────────────────
 local ops = {}
 local loaded = false
-local addonName = string.match(addonDir, "([^/]+)$") or "Addon"
-local version, files = nil, {}
+local addonName, title, version = "Addon", nil, ""
+local files = {}
 
 function ops.hello() return {} end
 
 function ops.load(p)
     if loaded then error("the add-on is already loaded", 0) end
-    local toc = io.open(addonDir .. "/" .. tocName, "r")
-    if not toc then error("cannot read " .. tocName .. " in " .. addonDir, 0) end
-    local title
-    for line in toc:lines() do
-        line = string.gsub(line, "\r", "")
-        local v = string.match(line, "^## Version:%s*(.-)%s*$")
-        if v and v ~= "" then version = v end
-        local t = string.match(line, "^## Title:%s*(.-)%s*$")
-        if t and t ~= "" then title = t end
-        if not string.find(line, "^#") and string.find(line, "%.lua%s*$") then
-            files[#files + 1] = (string.gsub(line, "%s+$", ""))
-        end
-    end
-    toc:close()
+    local addon = p.addon or {}
+    addonName = addon.name or "Addon"
+    title = addon.title
+    version = addon.version or ""
     setWorld(p.world)
-    for _, file in ipairs(files) do
-        file = string.gsub(file, "\\", "/")
-        if string.find(file, "^/") or string.find(file, "%.%.") then
-            error("the .toc names a file outside the add-on: " .. file, 0)
-        end
-        local chunk, err = loadfile(addonDir .. "/" .. file)
-        if not chunk then error("cannot load " .. file .. ": " .. tostring(err), 0) end
+    for _, file in ipairs(addon.files or {}) do
+        local name = tostring(file.name)
+        local chunk, err = loadstring(tostring(file.source), "@" .. name)
+        if not chunk then error("cannot load " .. name .. ": " .. tostring(err), 0) end
         setfenv(chunk, E)
         local ok, rerr = pcall(chunk)
-        if not ok then error(file .. " raised while loading: " .. tostring(rerr), 0) end
+        if not ok then error(name .. " raised while loading: " .. tostring(rerr), 0) end
+        files[#files + 1] = name
     end
     loaded = true
     fireEvent("ADDON_LOADED", { addonName })
@@ -216,7 +201,7 @@ function ops.load(p)
         fireEvent("PLAYER_LOGIN", {})
         fireEvent("PLAYER_ENTERING_WORLD", {})
     end
-    return { name = addonName, title = title or addonName, version = version or "", files = json.array(files),
+    return { name = addonName, title = title or addonName, version = version, files = json.array(files),
         prefixes = json.array(addonhost_prefixes()) }
 end
 
@@ -256,7 +241,7 @@ function ops.cmd(p)
 end
 
 function ops.state()
-    return { clock = clock, loaded = loaded, name = addonName, version = version or "", files = json.array(files),
+    return { clock = clock, loaded = loaded, name = addonName, version = version, files = json.array(files),
         prefixes = json.array(addonhost_prefixes()), errors = json.array(errors),
         chat = json.array(addonhost_chat_log()), frames = #addonhost_frames() }
 end
