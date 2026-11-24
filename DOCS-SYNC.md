@@ -53,12 +53,12 @@ line saying what changed and when.
 - A command is documented as a command: a line in a code block (`forever-agent <word>`, or
   `forever-agent forever <word>` for a subcommand), a heading naming it, or a table row naming it. A bare
   backticked word in prose does not count.
-- The CI job `docs-sync` fails a pull request that changes `cmd/forever-agent/`, a serve method file
-  (`internal/forever/world/serve*_methods.go`), or an added line that calls a flag constructor on any `FlagSet`
-  variable or any `Register` call, and changes no concept page under `docs/manual/` and not `README.md`. The
-  manual's `log.md` and the index files are bookkeeping: changing only one of them does not satisfy the gate, and
-  the checker cannot tell whether the page you changed is the right one. Its message names the rule; the pull
-  request checklist carries it too.
+- The CI job `docs-sync` fails a pull request that changes `cmd/forever-agent/`, a serve or session source
+  (`internal/forever/world/serve*.go`, `*_session.go`), or an added or removed line that calls a flag constructor
+  on any `FlagSet` variable or any `Register` call, and changes no concept page under `docs/manual/`. README.md is
+  updated with the manual when it carries the same text, but it does not satisfy the gate alone; the manual's
+  `log.md` and the index files are bookkeeping and never do. The checker cannot tell whether the page you changed
+  is the right one. Its message names the rule; the pull request checklist carries it too.
 - A change with truly no user-visible effect says so in the pull request body, on its own line and outside a
   fenced block: `Docs: not needed, because <the reason>`.
 

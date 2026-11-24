@@ -2,9 +2,10 @@
 """Decide whether a pull request keeps the docs in step with the code.
 
 DOCS-SYNC.md is the rule: a change a user can see updates docs/manual/ in the same pull request. This script is the
-part a machine can check: a pull request that changes the CLI (cmd/forever-agent/), a serve method file
-(internal/forever/world/serve*_methods.go), adds a flag or registers a method has to change something under
-docs/manual/ or README.md, or say in its body why no doc was needed.
+part a machine can check: a pull request that changes the CLI (cmd/forever-agent/), a serve or session source
+(internal/forever/world/serve*.go, *_session.go), adds a flag or registers (or removes) a method has to change a
+concept page under docs/manual/, or say in its body why no doc was needed. README.md carries some of the same text
+but does not satisfy the rule on its own.
 
 Usage:
     python3 tools/verify_docs_sync.py --changed-files FILE --diff FILE
@@ -17,11 +18,11 @@ The decision itself (decide) is a pure function of the changed paths, the added 
 unit-tested in tools/test_verify_docs_sync.py.
 
 The rule, in the checker's terms:
-  * a trigger is a changed path under cmd/forever-agent/, a changed internal/forever/world/serve*_methods.go, or an
-    added line that calls a flag constructor on any FlagSet variable (fs.String, flags.Bool, flag.Duration,
-    fs.Var, ...) or any Register call;
-  * a trigger passes when the pull request changes a concept page under docs/manual/ (an index.md or
-    log.md alone is bookkeeping and does not count) or README.md;
+  * a trigger is a changed path under cmd/forever-agent/, a changed internal/forever/world/serve*.go or
+    *_session.go (not a _test.go), or an added or removed line that calls a flag constructor on any FlagSet
+    variable (fs.String, flags.Bool, flag.Duration, fs.Var, ...) or any Register call;
+  * a trigger passes when the pull request changes a concept page under docs/manual/ (an index.md, log.md or
+    README.md alone is bookkeeping and does not count);
   * it also passes when the body has, outside a fenced block, a line "Docs: not needed, because <reason>";
   * anything else fails, and the message names the trigger and points at DOCS-SYNC.md.
 
@@ -37,15 +38,15 @@ import os
 import re
 import sys
 
-# The paths whose change means a user can see something new: the CLI, and the serve's method registration files.
+# The paths whose change means a user can see something new: the CLI, and the serve and session
+# sources (they register methods and hold method behaviour, not only the serve*_methods.go files).
 CLI_PREFIX = "cmd/forever-agent/"
-METHOD_PREFIX = "internal/forever/world/serve"
-METHOD_SUFFIX = "_methods.go"
+WORLD_PREFIX = "internal/forever/world/"
 
-# A changed path that satisfies the rule: a concept page, or README.md. The update log and the
-# index files are bookkeeping; changing only one of them does not document a code change.
+# A changed path that satisfies the rule: a concept page under docs/manual/. README.md carries the
+# same text for some pages but does not satisfy the rule alone; the update log and the index files
+# are bookkeeping and never do.
 DOC_PREFIX = "docs/manual/"
-DOC_FILE = "README.md"
 BOOKKEEPING = ("docs/manual/log.md",)
 
 # The flag package's constructors and Var-style registrations, on any FlagSet variable (fs, flags,
@@ -66,15 +67,13 @@ WAIVER_LINE = re.compile(r"^Docs:\s*not needed,\s*because\s+\S", re.IGNORECASE)
 RULE_FILE = "DOCS-SYNC.md"
 
 MESSAGE = (
-    "this pull request changes what a user sees (%s) and changes no concept page under %s and not %s. "
+    "this pull request changes what a user sees (%s) and changes no concept page under %s. "
     "Update the manual page the change belongs to (the table in %s says which page), or put a line "
     "\"%s, because <reason>\" in the pull request body when the change has no user-visible effect."
 )
 
 
 def _is_doc(path):
-    if path == DOC_FILE:
-        return True
     if not path.startswith(DOC_PREFIX) or not path.endswith(".md"):
         return False
     if path in BOOKKEEPING or path.endswith("/index.md"):
@@ -85,8 +84,10 @@ def _is_doc(path):
 def _is_trigger_path(path):
     if path.startswith(CLI_PREFIX):
         return True
+    if not path.startswith(WORLD_PREFIX) or not path.endswith(".go") or path.endswith("_test.go"):
+        return False
     name = path.rsplit("/", 1)[-1]
-    return path.startswith(METHOD_PREFIX) and name.endswith(METHOD_SUFFIX)
+    return name.startswith("serve") or name.endswith("_session.go")
 
 
 def _waived(body):
@@ -116,12 +117,22 @@ def added_lines(diff_text):
     return added
 
 
-def decide(changed_paths, diff_lines, body):
+def removed_lines(diff_text):
+    """The lines a unified diff removes, without its --- headers."""
+    removed = []
+    for line in diff_text.splitlines():
+        if line.startswith("-") and not line.startswith("---"):
+            removed.append(line[1:])
+    return removed
+
+
+def decide(changed_paths, diff_lines, body, removed_lines=()):
     """Return the problems a pull request has (empty means it may merge).
 
     changed_paths: every path the pull request changes.
     diff_lines: the lines the diff adds (see added_lines).
     body: the pull request body.
+    removed_lines: the lines the diff removes; a removed flag or registration is a trigger too.
     """
     triggers = []
     cli = sorted(path for path in changed_paths if path.startswith(CLI_PREFIX))
@@ -132,7 +143,8 @@ def decide(changed_paths, diff_lines, body):
         triggers.append("the CLI (%s)" % ", ".join(cli[:3]) + (", ..." if len(cli) > 3 else ""))
     if methods:
         triggers.append("the serve's method table (%s)" % ", ".join(methods))
-    flag_lines = [line.strip() for line in diff_lines if _is_flag_or_register_line(line)]
+    trigger_lines = list(diff_lines) + list(removed_lines)
+    flag_lines = [line.strip() for line in trigger_lines if _is_flag_or_register_line(line)]
     if flag_lines:
         triggers.append("a new flag or method registration (%s)" % flag_lines[0][:120])
     if not triggers:
@@ -141,7 +153,7 @@ def decide(changed_paths, diff_lines, body):
         return []
     if _waived(body):
         return []
-    return [MESSAGE % (", ".join(triggers), DOC_PREFIX, DOC_FILE, RULE_FILE, WAIVER)]
+    return [MESSAGE % (", ".join(triggers), DOC_PREFIX, RULE_FILE, WAIVER)]
 
 
 def _is_flag_or_register_line(line):
@@ -166,7 +178,12 @@ def main(argv):
     except OSError as error:
         print("verify_docs_sync: %v" % error, file=sys.stderr)
         return 2
-    problems = decide(changed, added_lines(diff), os.environ.get("PR_BODY", ""))
+    problems = decide(
+        changed,
+        added_lines(diff),
+        os.environ.get("PR_BODY", ""),
+        removed_lines(diff),
+    )
     for problem in problems:
         print("docs-sync: %s" % problem)
     if problems:

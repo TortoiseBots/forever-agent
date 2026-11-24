@@ -20,8 +20,8 @@ sys.path.insert(0, HERE)
 import verify_docs_sync  # noqa: E402  (the module under test sits next to this file)
 
 
-def decide(paths, added=(), body=""):
-    return verify_docs_sync.decide(paths, list(added), body)
+def decide(paths, added=(), body="", removed_lines=()):
+    return verify_docs_sync.decide(paths, list(added), body, removed_lines=removed_lines)
 
 
 class DecideTest(unittest.TestCase):
@@ -40,15 +40,29 @@ class DecideTest(unittest.TestCase):
             decide(["cmd/forever-agent/forever_map.go", "docs/manual/daemon/travel.md"]), []
         )
 
-    def test_a_cli_change_with_the_readme_passes(self):
-        self.assertEqual(decide(["cmd/forever-agent/main.go", "README.md"]), [])
+    def test_the_readme_alone_does_not_satisfy(self):
+        self.assertEqual(len(decide(["cmd/forever-agent/main.go", "README.md"])), 1)
+
+    def test_a_cli_change_with_a_manual_page_and_the_readme_passes(self):
+        self.assertEqual(
+            decide(["cmd/forever-agent/main.go", "docs/manual/daemon/travel.md", "README.md"]), []
+        )
 
     def test_a_serve_method_file_is_a_trigger(self):
         problems = decide(["internal/forever/world/serve_mail_methods.go"])
         self.assertIn("serve's method table", problems[0])
 
-    def test_another_serve_file_is_not_a_trigger(self):
-        self.assertEqual(decide(["internal/forever/world/serve_session.go"]), [])
+    def test_another_serve_or_session_file_is_a_trigger(self):
+        for path in ("internal/forever/world/serve_session.go", "internal/forever/world/serve_gm_gaps.go",
+                     "internal/forever/world/addon_session.go"):
+            with self.subTest(path=path):
+                self.assertEqual(len(decide([path])), 1)
+
+    def test_an_unrelated_world_file_is_not_a_trigger(self):
+        self.assertEqual(decide(["internal/forever/world/route_walk.go"]), [])
+
+    def test_an_unchanged_method_file_is_not_a_trigger(self):
+        self.assertEqual(decide(["internal/forever/world/serve_methods_test.go"]), [])
 
     def test_a_test_file_under_cmd_is_a_trigger(self):
         # The CLI rule is by path: a test that pins behaviour is still a CLI change.
@@ -61,7 +75,7 @@ class DecideTest(unittest.TestCase):
 
     def test_an_added_flag_with_a_doc_passes(self):
         added = ['\tstay := fs.Duration("stay", 60*time.Second, "how long to stay")']
-        self.assertEqual(decide(["README.md"], added), [])
+        self.assertEqual(decide(["docs/manual/dungeons/route-tools.md"], added), [])
 
     def test_a_line_that_only_mentions_a_flag_call_is_not_a_trigger(self):
         added = ["// fs.String names a flag; this is prose in a comment"]
@@ -96,6 +110,20 @@ class DecideTest(unittest.TestCase):
     def test_an_added_register_call_is_a_trigger(self):
         added = ['srv.Register("bank_open", nil)']
         self.assertIn("a new flag", decide(["internal/forever/world/bank_open.go"], added)[0])
+
+    def test_a_removed_register_call_is_a_trigger(self):
+        removed = ['srv.Register("bank_open", nil)']
+        problems = decide(
+            ["internal/forever/world/bank_open.go"], [], "", removed_lines=removed
+        )
+        self.assertIn("a new flag", problems[0])
+
+    def test_a_removed_flag_is_a_trigger(self):
+        removed = ['\tstay := fs.Duration("stay", 60*time.Second, "how long to stay")']
+        problems = decide(
+            ["internal/forever/world/route_walk.go"], [], "", removed_lines=removed
+        )
+        self.assertIn("a new flag", problems[0])
 
     def test_a_comment_that_names_register_is_not_a_trigger(self):
         added = ["// srv.Register is where the method table grows; this is prose in a comment"]
