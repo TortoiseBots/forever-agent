@@ -27,9 +27,11 @@ PR_FILE = WORKFLOWS / "label-pr.yml"
 
 # A pinned action: name@<40 hex>. A tag (`@v4`) or a short SHA would not survive an upstream tag move.
 SHA_PIN = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
-# `${{ github.event... }}` with any spacing, including the `${{-` trim marker and bracket access (`event['issue']`);
-# `github.event_name` is not the event payload and does not match.
-EVENT_EXPRESSION = re.compile(r"\$\{\{-?\s*github\.event\b")
+# `${{ github.event... }}` in any spelling GitHub accepts: the `${{-` trim marker, no space after `{{`, spaces around
+# the dot (`github . event`), bracket access (`github['event']`) and upper case. `github.event_name` (and the bracket
+# form of it) is a string constant, not the payload, and does not match.
+EVENT_EXPRESSION = re.compile(
+    r"\$\{\{-?\s*github\s*(?:\.\s*event\b|\[\s*['\"]?event['\"]?\s*\])", re.IGNORECASE)
 
 KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*):(?: (.*))?$")
 ITEM = re.compile(r"^- (.*)$")
@@ -266,10 +268,14 @@ def assert_pinned_actions(doc):
 
 
 def assert_no_checkout(doc):
-    """No action in this file is a checkout: a checkout of the pull request's code is the risk label-pr avoids."""
+    """No action in this file is a checkout: a checkout of the pull request's code is the risk label-pr avoids.
+
+    GitHub resolves an owner and repository name case-insensitively, so `Actions/Checkout@<sha>` is the same action as
+    `actions/checkout@<sha>`: the reference is compared before its `@` and casefolded.
+    """
     uses = assert_pinned_actions(doc)
     for action in uses:
-        if "checkout" in action:
+        if "checkout" in action.split("@", 1)[0].casefold():
             raise AssertionError("a checkout step: %s" % action)
 
 
@@ -345,8 +351,9 @@ class LabelPrTest(unittest.TestCase):
 SHA = "11d5960a326750d5838078e36cf38b85af677262"
 
 
-def workflow_step(step):
-    """A valid workflow in the parser's subset with one step (`- uses: ...` or `- run: ...`) replaced."""
+def workflow_steps(*steps):
+    """A valid workflow in the parser's subset whose one job runs exactly `steps` (each without its leading `- `)."""
+    body = "".join("      - %s\n" % step for step in steps)
     return """name: t
 on:
   issues:
@@ -357,9 +364,12 @@ jobs:
   j:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@%s
-      - %s
-""" % (SHA, step)
+%s""" % body
+
+
+def workflow_step(step):
+    """The same with the pinned checkout first and one step under test."""
+    return workflow_steps("uses: actions/checkout@" + SHA, step)
 
 
 class StrictParseTest(unittest.TestCase):
@@ -457,14 +467,34 @@ class BypassTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_no_event_expression(doc)
 
+    def test_a_checkout_in_another_case(self):
+        doc = parse_workflow(workflow_steps("uses: Actions/Checkout@" + SHA))
+        with self.assertRaises(AssertionError):
+            assert_no_checkout(doc)
+
+    def test_a_whitespace_separated_expression(self):
+        doc = parse_workflow(workflow_step("run: echo \"${{ github . event . issue . title }}\""))
+        with self.assertRaises(AssertionError):
+            assert_no_event_expression(doc)
+
+    def test_a_bracket_notation_expression(self):
+        doc = parse_workflow(workflow_step("run: echo \"${{ github['event']['issue']['title'] }}\""))
+        with self.assertRaises(AssertionError):
+            assert_no_event_expression(doc)
+
+    def test_an_uppercase_expression(self):
+        doc = parse_workflow(workflow_step("run: echo \"${{ GITHUB.EVENT.issue.title }}\""))
+        with self.assertRaises(AssertionError):
+            assert_no_event_expression(doc)
+
+    def test_event_name_is_not_the_event(self):
+        doc = parse_workflow(workflow_step("run: echo \"${{ github.event_name }} ${{ github['event_name'] }}\""))
+        assert_no_event_expression(doc)
+
     def test_an_expression_in_a_literal_block(self):
         doc = parse_workflow(workflow_step("run: |\n          echo \"${{ github.event.issue.body }}\""))
         with self.assertRaises(AssertionError):
             assert_no_event_expression(doc)
-
-    def test_event_name_and_secrets_are_not_event_payloads(self):
-        doc = parse_workflow(workflow_step("run: echo \"${{ github.event_name }} ${{ secrets.GITHUB_TOKEN }}\""))
-        assert_no_event_expression(doc)
 
     def test_a_job_level_permissions_block(self):
         text = workflow_step("run: python3 -c pass").replace(
