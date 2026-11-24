@@ -120,7 +120,11 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `addon_send` | DONE | Registers the prefix and sends one add-on message on `party`, `raid`, `instance`, `guild`, `officer` or `whisper:NAME`. |
 | `commander` | DONE (round C3) | Remote control of the module's bots over the session's own command channel: `bind`, `unbind`, `status`, `cmd` and `run`, with the binding card, per-bot lines and run records as typed results; a refusal is `-32003` with its code first. `view` is the cut op. See [CMDCTL-C3-NOTES.md](CMDCTL-C3-NOTES.md). |
 | `bot_view`, `tbm`, `tbm_handshake`, `tbm_click`, `tbm_buttons`, `tbm_send` | NOT-PORTED | These speak the 1.12 module protocol; the ForeverCore module uses the command channel (`bot`, `commander`). |
-| `addon_start`, `addon_stop`, `addon_state`, `addon_tick`, `addon_click` | NOT-PORTED | No headless add-on host in the ForeverCore client. |
+| `addon_start` | DONE (T9) | Loads a real add-on headless in a lua5.1 sidecar (`internal/forever/addonhost`): its `.toc` and files on a client mock, its prefixes registered through this session's own `addonmsg` packets, the frames it sends performed on the party, raid, instance, guild, officer or whisper kind, and the session's events fed back as the client's game events. See [ADDON-R1-NOTES.md](ADDON-R1-NOTES.md#the-add-on-host-t9). |
+| `addon_state` | DONE (T9) | Feeds the running add-on what arrived and answers its name, version, prefixes, the frames it sent (with a refused one's error) and received, its contained handler errors and chat lines. |
+| `addon_tick` | DONE (T9) | Advances a manual-clock add-on by the given milliseconds and runs `OnUpdate`; a real clock is ticked by the daemon loop itself. |
+| `addon_stop` | DONE (T9) | Ends the sidecar and takes the add-on's prefixes off this session's list, leaving the other prefixes registered. |
+| `addon_click` | NOT-PORTED | Clicks a TortoiseBotsManager button, so it needs that add-on's own button table: the host runs an add-on that acts from its own events and slash commands. |
 
 ### The rest of the old method set
 

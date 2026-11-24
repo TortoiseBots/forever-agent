@@ -238,6 +238,10 @@ type serveState struct {
 	followCtx    context.Context
 	followCancel context.CancelFunc
 	mapEpochBase uint64
+	// addon is the daemon's one add-on host (serve_addon_host.go), nil before addon_start and after addon_stop. It
+	// outlives a session like the RPC listener: a re-entry re-registers its prefixes on the new session. The loop
+	// goroutine owns it.
+	addon *serveAddonHost
 }
 
 type serveCall struct {
@@ -323,6 +327,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	st.install(s, 1)
 	st.setState(serveOnline, "")
 	defer func() {
+		st.addonHostClose()
 		if cur := st.session.Load(); cur != nil {
 			cur.teardown()
 		}
@@ -373,6 +378,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 			return cur.serveLogout(st)
 		}
 		cur.serveIdleTick()
+		st.addonHostStep(cur)
 		if err := cur.collect(ctx, 50*time.Millisecond); err != nil {
 			if isServeLinkLost(err) {
 				continue // the top of the loop sees the dead link and reconnects
