@@ -170,6 +170,13 @@ type fakeServer struct {
 	fbWhispers []string
 	fbPBC      []string
 	fbRegs     []string
+	// Round TBM R4b: the tbm-check scenario (serveTBM in fake_tbm_test.go). tbmNoJoin names the bots whose add
+	// answer is ok but that never join the party; tbmParty is the group the fake says the character leads; tbmSays
+	// is what the fake heard, under mu.
+	tbm       bool
+	tbmNoJoin []string
+	tbmParty  []string
+	tbmSays   []string
 	// Round A2: the dungeon run (serveFBDungeon in fake_fb_dungeon_test.go). fbDungeon selects it, fbDungeonCase
 	// the entry/watch/link case; fbRealm is the realm socket the helper needs for the map change, fbdQueued/fbdPolls
 	// follow the finder's state, and fbMapCounter numbers the client's new worlds.
@@ -1194,6 +1201,10 @@ func (f *fakeServer) serveInstance(realm *fakeConn) {
 	}
 	if f.fb {
 		f.serveFB(c, realm)
+		return
+	}
+	if f.tbm {
+		f.serveTBM(c, realm)
 		return
 	}
 	if f.addon {
