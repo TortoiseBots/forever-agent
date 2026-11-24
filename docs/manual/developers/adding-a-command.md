@@ -130,12 +130,14 @@ The codes in `main.go` are the contract with scripts:
 | 10 | `exitLogoutIncomplete` | The logout ended without an answer; the character may stay in world. |
 | 11 | `exitDead` | The character died during the run. |
 | 12 | `exitAmbiguous` | Several candidates and none named; nothing was sent. |
-| 13 | `exitPreflight` | A preflight check failed; the run did not start. |
+| 13 | `exitPreflight`, `exitServeLeaseLost` | A preflight check failed; or `forever serve` stopped because its slot lease went to another holder. |
 
 A command that needs its own code defines a constant in its file (`exitCheckFailed` 1 in
-path-check, `exitSlotRefused` 15 in the lease and slot commands, `exitReplayRefused` 17 in
-`dashboard-replay`). One overlap exists today: 12 is also `exitRouteWalk`, a route that walked but
-found a leg that did not pass. Do not add another meaning to a code that already has one.
+path-check, `exitSlotRefused` 15 in the lease and slot commands, `exitServeLeaseLost` 13 in
+`forever serve`, `exitReplayRefused` 17 in `dashboard-replay`). Two overlaps exist today: 12 is
+also `exitRouteWalk`, a route that walked but found a leg that did not pass, and 13 is both
+`exitPreflight` and `exitServeLeaseLost` (the serve's slot lease). Do not add another meaning to a
+code that already has one.
 
 # 6. Turtle-only commands
 

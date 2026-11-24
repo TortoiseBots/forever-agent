@@ -50,7 +50,7 @@ paths and numbers are placeholders.
 | 10 | a logout ended without a confirmed answer |
 | 11 | a fight-check character died |
 | 12 | `loot-check`/`object-use` found several candidates and no `--at` |
-| 13 | a preflight found a failure |
+| 13 | a preflight found a failure, or a `forever serve` stopped because its slot lease went to another holder |
 | 14 | a teardown step failed |
 | 15 | a slot or lease refused the operation |
 | 16 | the daemon answered a typed JSON-RPC error |
@@ -72,8 +72,10 @@ export FOREVER_PASSWORD='<password>'
 ```
 
 `forever serve` is the one command that also takes `--password-file FILE` (one line, at most 4096 bytes, one
-trailing newline allowed; its permissions are not checked, so keep it `0600`). `password file <path> is empty`
-and `password file: more than 4096 bytes` are its two content refusals.
+trailing newline allowed; the flag's permissions are not checked, so keep it `0600`). `password file <path> is
+empty` and `password file: more than 4096 bytes` are its two content refusals. A `--settings` file can name a
+`password_file` (strictly checked: `0600`, regular, not a symlink, at most 4096 bytes) or a `password` inline,
+and `FOREVER_PASSWORD` is the last resort.
 
 ## `settings <path> has mode 0644; it holds passwords, run: chmod 600 <path>`
 
@@ -85,6 +87,13 @@ must also be `0700`. Check with `ls -l`, fix with `chmod 600 <file>` and `chmod 
 
 The settings loader refuses keys it does not know, so a typo in a key name fails loudly instead of being
 ignored. Compare the key with the list in [Settings, slots and leases](./settings-and-slots.md).
+
+## `forever serve: settings <path>: mode 0644; run: chmod 600 <path>` (exit 2)
+
+The `--settings` file of a Forever serve must be a private regular file: `0644` or more, a symlink, a missing
+file or one larger than 256 KiB is refused before any login. The `password_file` such a file names is held to
+the same rule (and at most 4096 bytes); the `--password-file` flag is still read loosely. Malformed JSON, an
+unknown key and an out-of-range value are usage errors too, each naming the field and never a value.
 
 ## `rpc must be a loopback host:port (127.0.0.1, ::1 or localhost)` / `RPC listen address must be a loopback ...`
 
@@ -213,6 +222,18 @@ this machine, `lease reap` removes the dead lease at once instead of waiting.
 `renew` and `release` need the `--lease-id` printed by `acquire`; the holder name alone is not enough. The lead
 may pass `--force` to release another holder's lease. A lease acquired again after a takeover has a new id, so
 the old one answers `lease id mismatch: it was re-acquired`.
+
+## `forever serve: lease example/1 expired at ...: renew it (...) or pass --force` (exit 15)
+
+The slot's lease lapsed between `slot setup` and the serve. Renew it as printed, or pass `--force` to start
+anyway and let the serve renew it: `--force` overrides only the clock, never another holder's live lease and
+never a lease id that changed.
+
+## `serve: lease example/1 is not ours any more (...): stopping the serve` (exit 13)
+
+A renewal found the slot leased to another holder, or the slot re-acquired under a new id. The serve stopped
+instead of running on that slot. Check `lease list example`, then `teardown` the dir and set the slot up again
+with a holder that matches the lease.
 
 ## `slot setup: example/1 is not leased by work: run forever-agent lease acquire example --slot 1 --holder work first`
 

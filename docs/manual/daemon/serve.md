@@ -33,10 +33,12 @@ or `forever act` instead (see [getting started](../getting-started/what-is-forev
 
 ```
 forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account EMAIL --character NAME [flags]
+forever-agent forever serve --settings FILE [flags]
 ```
 
-`--rest`, `--rpc`, `--ca` and `--account` are required, as is `--character`. The password comes from
-`FOREVER_PASSWORD` or `--password-file`, and is never printed or written.
+`--rest`, `--rpc`, `--ca` and `--account` are required, as is `--character`, unless a `--settings` file supplies
+them. The password comes from `--password-file`, the settings file's `password_file` or `password`, or
+`FOREVER_PASSWORD`, and is never printed or written.
 
 # Flags
 
@@ -53,9 +55,11 @@ forever-agent forever serve --rest HOST:PORT --rpc HOST:PORT --ca FILE --account
 | `--character NAME` | — (required) | Character to enter the world with. |
 | `--allow-instance-redirect` | off | Accept an instance redirect naming a host other than the realm socket's (clustered servers). |
 | `--world-checks-build-auth-key` | off | The world server verifies the build auth key. Without it the agent assumes the setup default (the check is skipped). |
-| `--password-file FILE` | — | File holding the account password (one trailing newline is removed). Without it the password comes from `FOREVER_PASSWORD`. |
+| `--password-file FILE` | — | File holding the account password (one trailing newline is removed). Without it the settings file's `password_file` or `password` is used, then `FOREVER_PASSWORD`. |
+| `--settings FILE` | — | A Forever slot's settings file: fills every flag the command line left unset (account, character, rest/rpc/ca, listen, dir, navmesh, plans, password and the rest). A relative path inside it is relative to the file's folder. See [the settings file](#a-settings-file). |
 | `--listen HOST:PORT` | `127.0.0.1:8765` | Loopback address the RPC socket listens on. Another host is refused; port `0` picks a free port. |
-| `--dir DIR` | — | A serve slot directory: `slot.json` and `agent.pid` are written there, and the token file by default, so `forever rpc DIR ...` works. |
+| `--dir DIR` | — | A serve slot directory: `slot.json` and `agent.pid` are written there, and the token file by default, so `forever rpc DIR ...` works. On a dir made by `slot setup --forever`, the serve holds the slot's lease. |
+| `--force` | off | Start even when the slot's lease has expired (the serve renews it). It overrides only the clock: never another holder's lease, and never a `slot.json` whose lease id changed. |
 | `--token-file FILE` | `rpc-<port>.token` in `--dir`, else the working directory | Where the bearer token file is written. |
 | `--no-auth` | off | Serve without a bearer token. Loopback, `Host` and `Origin` checks still apply. |
 | `--navmesh DIR` | — | Folder of the server's mmaps files. Enables `path_to`, `walk_path` and `walk_ray`, and is needed by follow. |
@@ -76,15 +80,20 @@ so the shared login rate is spent twice.
 
 # What it does
 
-1. Validates its flags, then binds the RPC listener before the login, so a port conflict fails fast.
-2. When `--dir` is given, checks the directory before writing anything. An empty directory (or a missing one)
+1. Reads `--settings`, if given, and fills every flag the command line left unset; a broken, loose or
+   unknown-key file is exit `2` before any login.
+2. Validates its flags, then binds the RPC listener before the login, so a port conflict fails fast.
+3. When `--dir` is given, checks the directory before writing anything. An empty directory (or a missing one)
    gets a fresh `slot.json`. A directory made by `slot setup --forever`, or by an earlier `serve`, is kept when
    it names the same directory, port, character and account. A mismatched, unreadable or foreign non-empty
    directory is refused; `serve` never overwrites it.
-3. Logs in through the login server, selects a build, enters the world with `--character` and keeps the link
+4. When that `slot.json` names a lease, adopts it before the login: renews it once (a 15-minute TTL, with the
+   serve's pid recorded), then renews it every 5 minutes. An expired lease is refused unless `--force`
+   (exit `15`).
+5. Logs in through the login server, selects a build, enters the world with `--character` and keeps the link
    alive (realm pings, name queries for players coming into view).
-4. Serves `POST /rpc` until Ctrl-C, SIGTERM, the `logout` method, a successful `teardown`, or a lost link
-   whose reconnect budget ran out.
+6. Serves `POST /rpc` until Ctrl-C, SIGTERM, the `logout` method, a successful `teardown`, a lost link
+   whose reconnect budget ran out, or a lease renewal that found the slot taken by another holder (exit `13`).
 
 The RPC listener's details are on [RPC basics](rpc-basics.md); the methods are listed in the
 [method index](method-index.md).
@@ -107,15 +116,52 @@ rpc: token file /path/to/slot/rpc-8765.token
 While running, state changes are logged with an `rpc:` prefix: `rpc: the world link dropped: <cause>;
 state reconnecting`, each failed attempt, `rpc: state online again (...)`, and the teardown lines.
 
+# A settings file
+
+`--settings FILE` starts a slot from one file instead of a long command line. A flag given on the command line
+always wins; the file fills the flags the command line left unset. The file must be a regular, non-symlinked
+`0600` file, unknown keys are refused, and a relative path inside it is relative to the file's own folder (so
+`"dir": "."` is the slot dir). A broken file is exit `2` before any login, and the password is never printed.
+The key table, the password precedence and every refusal are on
+[Settings, slots and leases](../getting-started/settings-and-slots.md).
+
+```sh
+forever-agent forever serve --settings ./slot1/settings.json
+```
+
+# The slot lease
+
+`slot setup --forever` records the lease it took in the slot dir's `slot.json`. A serve started with `--dir` on
+that dir adopts the lease before the login and renews it every 5 minutes (the lease lasts 15 minutes), so a live
+serve never loses its slot and a dead one frees it within minutes; the lease records the serve's pid, so
+`lease reap` frees a crashed serve at once. Per renewal it prints:
+
+```
+serve: lease example/1 renewed until 20:45:00Z
+```
+
+- A renewal that fails for a reason that may pass (a lock timeout, an I/O error) is logged as
+  `serve: lease example/1 renew failed: ...; retrying in 1m0s` and retried every minute.
+- An expired lease refuses the start with exit `15`; `--force` overrides only the clock, never another
+  holder's lease and never a `slot.json` whose lease id changed.
+- A renewal that finds the lease taken by another holder prints
+  `serve: lease example/1 is not ours any more (...): stopping the serve` and stops the serve with exit `13`.
+- The serve does not release a lease it did not take; `teardown DIR` releases a setup slot's lease.
+- A bare `forever serve --dir` with no lease in its `slot.json` holds none.
+
+The lease commands and the slot layout are on [Settings, slots and leases](../getting-started/settings-and-slots.md).
+
 # Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Clean end: Ctrl-C, SIGTERM, `logout` or `teardown`. The character was logged out first. |
-| `2` | Bad flags or arguments, or a problem with `--dir`, the token file, `--navmesh` or `--capture-dir`. Nothing was logged in. |
+| `2` | Bad flags or arguments, or a problem with `--settings`, `--dir`, the token file, `--navmesh` or `--capture-dir`. Nothing was logged in. |
 | `3` | The login server rejected the login. |
 | `4` | The realm is missing or offline. |
 | `5` | The world server rejected the session, or the reconnect budget was spent (the daemon is offline). |
+| `13` | A lease renewal found the slot's lease taken by another holder (or re-acquired under a new id); the serve stopped rather than run on another holder's slot. |
+| `15` | The slot's lease refused the start: expired without `--force`, held by another holder, re-acquired, or the `slot.json`'s slots file or slot is gone. |
 
 # Stopping it
 
@@ -198,7 +244,11 @@ forever-agent forever serve ... --addon off
 | Message | Cause and fix |
 |---|---|
 | `forever serve: --rest, --rpc, --ca and --account are required` | A required flag is missing. `--character` is checked in the same block. |
-| `forever serve: no password (set FOREVER_PASSWORD or pass --password-file)` | Neither source holds a password. An empty password file is refused too. |
+| `forever serve: no password (set FOREVER_PASSWORD, pass --password-file, or give password/password_file in --settings)` | No source holds a password. An empty password file is refused too. |
+| `forever serve: settings <path>: mode 0644; run: chmod 600 <path>` | The `--settings` file, or the `password_file` it names, must be private, regular and not a symlink. |
+| `forever serve: settings <path> is not valid settings JSON: unknown field "x"` | A misspelt key is refused, not ignored. Compare with the key table in [settings and slots](../getting-started/settings-and-slots.md). |
+| `forever serve: lease example/1 expired at ...: renew it (... ) or pass --force` (exit 15) | The slot's lease lapsed. Renew it as printed, or pass `--force` to let this serve renew it; another holder's live lease is still never taken. |
+| `serve: lease example/1 is not ours any more (...): stopping the serve` (exit 13) | A renewal found the slot leased to another holder or re-acquired under a new id. The serve stopped instead of running on that slot; adjust the slot's holder or setup again. |
 | `rpc: RPC listen address must be a loopback address (...)` | `--listen` names a non-loopback host. Use `127.0.0.1`, `::1` or `localhost`. |
 | `<dir> is not empty and has no slot.json: pick an empty --dir or one made by slot setup --forever` | `--dir` points at a directory `serve` did not create and will not overwrite. |
 | `<dir>/slot.json is for port N, this serve listens on M` | The slot was made for another port. Reuse the same `--listen`, or a fresh directory. |
