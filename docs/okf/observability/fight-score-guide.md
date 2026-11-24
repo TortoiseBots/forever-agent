@@ -56,8 +56,7 @@ Every flag and its default:
 
 ## 4. Mind the exit code
 
-Exit 0 whatever the warnings say; 2 on usage — including a fight in the bot module's record format scored without
-`--set spell_oracle=forever` (§5). Warnings are readings, not failures.
+Exit 0 whatever the warnings say; 2 on usage only. A warning is part of the reading, not a failure.
 
 ## 5. Score a Forever run's fight
 
@@ -76,14 +75,17 @@ so both may be given:
 forever-agent fight-score --set spell_oracle=forever --set spell_oracle=30 <walk-dir>/combat-fight-1.json
 ```
 
-The record's origin is its format: no core writes a build, core or source field into a fight record, but the bot
-module's record carries keys the legacy Turtle dump does not (a bot's `tail_spells`, and on newer emitters
-`boss_phase`/`boss_phase_entry` and `dropped`). That format is the Forever mark, in all three storage forms:
+No fight record names its core. Both builds of the bot module write the same fight JSON (the fight record writer is
+line-for-line the same in both, `boss_phase`, `dropped` and a bot's `tail_spells` included), the datagram's `v` is the
+protocol version (12 in both), the dashboard detail adds only its warnings, and a watch/play run's `forever-run`
+summary is a separate file. So the selected oracle is used as asked, and an explicitly selected `spell_oracle=forever`
+adds a warning to the reading:
 
-- A module record scored without the option is refused with exit 2:
-  `<file>: the bot module's fight record (tail_spells/boss_phase) is a Forever record: score it with --set spell_oracle=forever`.
-  No partial reading is printed, so a Forever fight cannot be judged by the Turtle data by omission.
-- A legacy Turtle record (none of those keys) scored with `spell_oracle=forever` still scores, with a `warning:` line on
-  stderr that names the legacy format, and the reading names the oracle.
+```
+fight 5-3 Glacienne 52 s, 39 bots, spell oracle forever
+warning: no provenance marker in the fight record (no core or build field): scored with the Forever spell data as selected (spell_oracle=forever); the record does not name its core
+```
 
-Without the option the Turtle data is read, as before.
+The warning is part of the result: the JSON has a `warnings` array (`[]` on a reading that needs none) beside
+`spell_oracle`, and the text reading prints one `warning:` line per warning. It does not fail the command (exit stays 0),
+and nothing is refused: without the option the Turtle data is read, as before, for every record shape.

@@ -15,10 +15,11 @@ import (
 
 const fightScoreUsage = "usage: forever-agent fight-score [--json] [--mt NAME] [--ot A,B] [--set spell_oracle=S] <combat-fight.json>...\n" +
 	"  scores finished fights the way the dashboard's fight debugger reads them (mt_sunder, ot_taunt) and judges each bot\n" +
-	"  against its KB spec's spell lists; --set spell_oracle=forever judges a Forever run against the Forever spell data and\n" +
-	"  is required for the bot module's fight record (it carries tail_spells/boss_phase; a legacy Turtle dump with the option\n" +
-	"  is scored with a warning), and --set spell_oracle=SECONDS (any other number) still sets the fight seconds a bot must\n" +
-	"  be active to be judged; the reading names the oracle that produced it; exit 0 (warnings never fail), 2 on usage"
+	"  against its KB spec's spell lists; --set spell_oracle=forever reads the Forever spell data instead (the Turtle\n" +
+	"  knowledge base is the default; no fight record names its core, so an explicitly selected oracle is used as asked and\n" +
+	"  the reading warns that the record could not confirm it), and --set spell_oracle=SECONDS (any other number) still sets\n" +
+	"  the fight seconds a bot must be active to be judged; the reading names the oracle that produced it; exit 0 (warnings\n" +
+	"  never fail), 2 on usage"
 
 // The two oracles the reading can name: the Turtle knowledge base (the default) and the Forever spell data.
 const (
@@ -26,20 +27,20 @@ const (
 	turtleOracle  = "turtle"
 )
 
-// moduleFormatKeys mark the bot module's own fight record, whichever wrapper it is stored in: every current emitter writes
-// the per-bot tail_spells and boss_phase/boss_phase_entry (the Turtle-lineage module also writes dropped, the bounded one
-// spells_cut/truncated). The legacy Turtle dump predates all of them, so their absence is what "legacy" means here — no
-// core writes a build, core or source field into a fight record.
-var moduleFormatKeys = []string{"boss_phase", "boss_phase_entry", "dropped", "spells_cut", "truncated"}
+// A fight record has no provenance marker to decide its core from. Both builds of the bot module write the same fight
+// JSON (the fight record writer is line-for-line the same in both, including boss_phase, dropped, spells_cut/truncated
+// and a bot's tail_spells), the COMBAT_FIGHT envelope's v is the protocol version (12 in both), and the dashboard
+// detail adds only its own warnings. A Forever watch/play run's forever-run summary is a separate file, not part of a
+// fight file. So the selected oracle is used as asked; an explicit spell_oracle=forever on such a record warns in the
+// reading (the warning below) rather than pretending the record proved its origin. The no-option path keeps the Turtle
+// reading it has always had.
 
-// fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one. moduleFormat is read from the
-// record's keys, never serialized: it is the record's provenance (see moduleFormatKeys).
+// fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one.
 type fightJSON struct {
-	ID           string    `json:"id"`
-	Commander    string    `json:"commander"`
-	DurMS        int64     `json:"dur_ms"`
-	Bots         []fighter `json:"bots"`
-	moduleFormat bool
+	ID        string    `json:"id"`
+	Commander string    `json:"commander"`
+	DurMS     int64     `json:"dur_ms"`
+	Bots      []fighter `json:"bots"`
 }
 
 type fighter struct {
@@ -71,6 +72,9 @@ type fightScore struct {
 	MT          *scoreRow          `json:"mt_sunder,omitempty"`
 	OTs         []scoreRow         `json:"ot_taunt"`
 	Oracle      []kbspells.Finding `json:"oracle"`
+	// Warnings are the reading's own caveats (empty on a reading that needs none): they are part of the result, so a
+	// --json consumer sees them beside the findings, and the text reading prints one line per warning.
+	Warnings []string `json:"warnings"`
 }
 
 // fightScoreCmd reads finished fight JSON (the debugger's input: {fight, warnings}, a bare fight, or a COMBAT_FIGHT datagram)
@@ -132,15 +136,9 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)
 			return exitUsage
 		}
-		// The record's provenance is its format: a module record is a Forever record, so the Turtle data is never
-		// silently read for it. A legacy Turtle dump under the Forever oracle still scores, visibly.
-		if f.moduleFormat && oracleName != foreverOracle {
-			fmt.Fprintf(stderr, "%s: the bot module's fight record (tail_spells/boss_phase) is a Forever record: score it with --set spell_oracle=forever\n", path)
-			return exitUsage
-		}
-		if !f.moduleFormat && oracleName == foreverOracle {
-			fmt.Fprintf(stderr, "warning: %s: legacy Turtle fight record scored with the Forever spell data (spell_oracle=forever); the bot module's record (tail_spells/boss_phase) is the Forever one\n", path)
-		}
+		// The record names no core (see the note above the type): the selected oracle decides the reading. An explicit
+		// Forever selection on a record that cannot confirm it is a Forever one is a reading caveat, not a refusal
+		// (scoreFight adds it).
 		r := scoreFight(f, *mtName, *otNames, cfg, oracle, oracleName)
 		if *asJSON {
 			_ = json.NewEncoder(stdout).Encode(r)
@@ -169,36 +167,16 @@ func readFightFile(path string) (*fightJSON, error) {
 	if f.DurMS <= 0 && len(f.Bots) == 0 {
 		return nil, fmt.Errorf("not a fight: no duration and no bots")
 	}
-	f.moduleFormat = moduleFightRecord(b)
 	return &f, nil
 }
 
-// moduleFightRecord reports whether a fight object is the bot module's own record: it carries one of the module's keys
-// (moduleFormatKeys, or a bot's tail_spells) that the legacy Turtle dump does not. It reads the raw object because the
-// parsed fight cannot tell a missing key from a zero value.
-func moduleFightRecord(fight json.RawMessage) bool {
-	var keys map[string]json.RawMessage
-	if json.Unmarshal(fight, &keys) != nil {
-		return false
-	}
-	for _, k := range moduleFormatKeys {
-		if _, ok := keys[k]; ok {
-			return true
-		}
-	}
-	var bots []map[string]json.RawMessage
-	if raw, ok := keys["bots"]; ok && json.Unmarshal(raw, &bots) == nil {
-		for _, b := range bots {
-			if _, ok := b["tail_spells"]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *kbspells.Oracle, oracleName string) fightScore {
-	r := fightScore{Fight: f.ID, Commander: f.Commander, SpellOracle: oracleName, DURMS: f.DurMS}
+	r := fightScore{Fight: f.ID, Commander: f.Commander, SpellOracle: oracleName, DURMS: f.DurMS, Warnings: []string{}}
+	if oracleName == foreverOracle {
+		// The record could not prove it is a Forever one (no marker exists); the user asked for this oracle, so it is
+		// used, and the reading says the origin was not checked.
+		r.Warnings = append(r.Warnings, "no provenance marker in the fight record (no core or build field): scored with the Forever spell data as selected (spell_oracle=forever); the record does not name its core")
+	}
 	mt := mainTank(f, mtName)
 	r.MT = sunderRow(f, mt, o.Common.Limits)
 	for _, b := range offTanks(f, mt, otNames) {
@@ -331,6 +309,9 @@ func tauntRow(b *fighter, taunts []string) scoreRow {
 
 func printFightScore(w io.Writer, f *fightJSON, r fightScore) {
 	fmt.Fprintf(w, "fight %s %s %.0f s, %d bots, spell oracle %s\n", r.Fight, r.Commander, float64(f.DurMS)/1000, len(f.Bots), r.SpellOracle)
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(w, "warning: %s\n", warning)
+	}
 	if r.MT != nil {
 		printScoreRow(w, *r.MT)
 	}

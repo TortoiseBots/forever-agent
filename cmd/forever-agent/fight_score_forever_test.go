@@ -66,6 +66,7 @@ type scoreResult struct {
 	Fight       string             `json:"fight"`
 	SpellOracle string             `json:"spell_oracle"`
 	Oracle      []kbspells.Finding `json:"oracle"`
+	Warnings    []string           `json:"warnings"`
 }
 
 // scoreJSON reads the --json reading.
@@ -191,85 +192,159 @@ func TestFightScoreForeverModuleRecord(t *testing.T) {
 	}
 }
 
-// TestFightScoreModuleRecordNeedsOracle: the module's fight record format is itself the Forever mark — no core writes a
-// build/core/source field into a fight, but the module's record carries the per-bot tail_spells (and, on newer emitters,
-// boss_phase/boss_phase_entry and dropped) the legacy Turtle dump does not. Every module fixture scored without
-// spell_oracle=forever is refused with a message that says how to select it, and no partial reading is printed.
-func TestFightScoreModuleRecordNeedsOracle(t *testing.T) {
+// TestFightScoreModuleRecordUnmarked: a fight record carries no provenance marker in either bot module build, so a
+// module fixture (a bot's tail_spells here; the boss_phase/dropped shape is TestFightScoreCurrentTurtleRecordNoOption)
+// is never refused: without the option it is read with the Turtle data exactly as before, and an explicitly selected
+// Forever oracle reads it with a warning that is part of the reading (the JSON warnings array and a text line), in every
+// storage form.
+func TestFightScoreModuleRecordUnmarked(t *testing.T) {
 	for _, c := range foreverClasses {
 		t.Run(c.class, func(t *testing.T) {
 			path := foreverFightPath(c.class)
 			code, out, errOut := runFightScoreRaw(t, path)
-			if code != exitUsage {
-				t.Fatalf("%s: exit %d, want %d (a refusal): %s", path, code, exitUsage, out)
+			if code != exitOK {
+				t.Fatalf("%s without the option: exit %d, want %d: %s", path, code, exitOK, errOut)
 			}
-			if strings.TrimSpace(out) != "" {
-				t.Fatalf("%s: printed a reading without the oracle:\n%s", path, out)
+			if strings.Contains(errOut, "warning:") {
+				t.Fatalf("%s: the no-option reading warned on stderr: %q", path, errOut)
 			}
-			if !strings.Contains(errOut, "spell_oracle=forever") || !strings.Contains(errOut, "module") {
-				t.Fatalf("%s: stderr does not tell the user to select the oracle: %q", path, errOut)
+			r := scoreJSON(t, path)
+			if r.SpellOracle != turtleOracle || len(r.Warnings) != 0 {
+				t.Fatalf("%s without the option: spell_oracle %q warnings %v, want turtle and none", path, r.SpellOracle, r.Warnings)
 			}
-			// A numeric spell_oracle alone still selects the Turtle data: the module record is refused the same way.
-			if code, _, errOut := runFightScoreRaw(t, "--set", "spell_oracle=30", path); code != exitUsage || !strings.Contains(errOut, "spell_oracle=forever") {
-				t.Fatalf("%s with only a seconds threshold: exit %d, stderr %q", path, code, errOut)
+			if header := scoreLines(out)[0]; !strings.Contains(header, "spell oracle turtle") {
+				t.Fatalf("%s: text header does not name the oracle: %q", path, header)
+			}
+			// A numeric spell_oracle alone still selects the Turtle data: no refusal, no warning.
+			rn := scoreJSON(t, "--set", "spell_oracle=30", path)
+			if rn.SpellOracle != turtleOracle || len(rn.Warnings) != 0 {
+				t.Fatalf("%s with only a seconds threshold: spell_oracle %q warnings %v", path, rn.SpellOracle, rn.Warnings)
+			}
+			// The explicit Forever selection: scored as asked, with the warning in the result.
+			rf := scoreJSON(t, "--set", "spell_oracle=forever", path)
+			if rf.SpellOracle != foreverOracle || len(rf.Warnings) != 1 || !strings.Contains(rf.Warnings[0], "no provenance marker") {
+				t.Fatalf("%s under the Forever data: spell_oracle %q warnings %v", path, rf.SpellOracle, rf.Warnings)
+			}
+			text, errText := runFightScore(t, "--set", "spell_oracle=forever", path)
+			if !strings.Contains(text, "warning: ") || !strings.Contains(text, "no provenance marker") {
+				t.Fatalf("%s: the text reading lacks the warning:\n%s", path, text)
+			}
+			if strings.Contains(errText, "warning:") {
+				t.Fatalf("%s: the warning is only supposed to be part of the reading: %q", path, errText)
 			}
 		})
 	}
-	// The wrapper is not the format: the bare fight object and the COMBAT_FIGHT datagram are the same module record and
-	// are refused without the option too.
+	// The wrapper is not the record: the bare fight object and the COMBAT_FIGHT datagram read the same, with the same
+	// warning under the Forever oracle and none without it.
 	for _, form := range moduleRecordForms(t, foreverFightPath("rogue"))[1:] {
-		if code, _, errOut := runFightScoreRaw(t, form); code != exitUsage || !strings.Contains(errOut, "spell_oracle=forever") {
-			t.Fatalf("%s: exit %d, stderr %q", filepath.Base(form), code, errOut)
+		if code, _, errOut := runFightScoreRaw(t, form); code != exitOK {
+			t.Fatalf("%s without the option: exit %d: %s", filepath.Base(form), code, errOut)
+		}
+		if r := scoreJSON(t, form); len(r.Warnings) != 0 || r.SpellOracle != turtleOracle {
+			t.Fatalf("%s without the option: spell_oracle %q warnings %v", filepath.Base(form), r.SpellOracle, r.Warnings)
+		}
+		if r := scoreJSON(t, "--set", "spell_oracle=forever", form); len(r.Warnings) != 1 {
+			t.Fatalf("%s under the Forever data: warnings %v", filepath.Base(form), r.Warnings)
 		}
 	}
 }
 
-// TestFightScoreLegacyTurtleWarnsUnderForever: the legacy Turtle fight record — no module keys — scored with
-// spell_oracle=forever still scores, but says so on stderr and names the oracle in the reading; the Forever taunt list
-// really judged it (the paladin off-tank's Hand of Reckoning reads as no taunt).
-func TestFightScoreLegacyTurtleWarnsUnderForever(t *testing.T) {
+// TestFightScoreUnmarkedWarnsUnderForever: any record scored with an explicitly selected Forever oracle warns that the
+// record has no provenance marker, and the warning is in the reading, not only on stderr. The Forever taunt list really
+// judged the legacy Turtle record (the paladin off-tank's Hand of Reckoning reads as no taunt).
+func TestFightScoreUnmarkedWarnsUnderForever(t *testing.T) {
 	path := "testdata/fights/combat-fight-5-3.json"
 	code, out, errOut := runFightScoreRaw(t, "--set", "spell_oracle=forever", "--mt", "Ragemeister", "--ot", "Brun", path)
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"warning:", "legacy Turtle", "forever"} {
-		if !strings.Contains(errOut, want) {
-			t.Fatalf("stderr lacks %q: %q", want, errOut)
-		}
-	}
 	if header := scoreLines(out)[0]; !strings.Contains(header, "spell oracle forever") {
 		t.Fatalf("text header does not name the oracle: %q", header)
+	}
+	if !strings.Contains(out, "warning: no provenance marker") {
+		t.Fatalf("the text reading lacks the provenance warning:\n%s", out)
+	}
+	if strings.Contains(errOut, "warning:") {
+		t.Fatalf("the warning is not part of the reading: %q", errOut)
 	}
 	if l := scoreLine(t, out, "ot_taunt", "Brun"); !strings.Contains(l, "warn") || !strings.Contains(l, "no taunt") {
 		t.Fatalf("Forever ot_taunt on the legacy record: %q", l)
 	}
-	if r := scoreJSON(t, "--set", "spell_oracle=forever", path); r.SpellOracle != "forever" {
-		t.Fatalf("--json spell_oracle: %q", r.SpellOracle)
+	r := scoreJSON(t, "--set", "spell_oracle=forever", path)
+	if r.SpellOracle != "forever" || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "no provenance marker") {
+		t.Fatalf("--json: spell_oracle %q warnings %v", r.SpellOracle, r.Warnings)
 	}
 }
 
-// TestFightScoreNamesOracle: every reading names the oracle that produced it, in the JSON field and the text header.
+// TestFightScoreOraclesJudgeDifferently proves the two oracles are not interchangeable and that the command's Forever
+// path really reads the Forever table. The witness is the warrior arms spec: the Forever table's core is Mortal Strike +
+// Heroic Strike and its situational list holds Rend, while the Turtle KB's arms core is Mortal Strike + Slam + Execute
+// and its lists do not know Rend (the spell id tables differ too: Turtle Rend ranks 6547-6551 and 11575-11577 are absent
+// from the Forever table, which has ids of its own). The same casts therefore judge ok under Forever and warn under
+// Turtle. Replacing kbspells.ForeverDefault() with kbspells.Default() in fightScoreCmd makes the two readings equal and
+// fails this test (TestFightScoreForeverClasses' warrior arms assertion fails with it).
+func TestFightScoreOraclesJudgeDifferently(t *testing.T) {
+	forever, err := kbspells.ForeverDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	casts := map[string]int{"Mortal Strike": 1, "Heroic Strike": 1, "Rend": 1}
+	bot := kbspells.BotCasts{Name: "Warriorbot", Class: "warrior", Role: "dps", Casts: casts, ActiveS: 40}
+	f, d := forever.Judge(bot, 20), kbspells.Default().Judge(bot, 20)
+	if f.Level != "ok" || f.Spec != "arms" {
+		t.Fatalf("Forever oracle: %+v, want arms ok", f)
+	}
+	if d.Level != "warn" || d.Spec != "arms" {
+		t.Fatalf("Turtle oracle: %+v, want arms warn", d)
+	}
+	if !slices.Contains(d.Missing, "Slam") || !slices.Contains(d.Missing, "Execute") || !slices.Contains(d.OffList, "Rend") {
+		t.Fatalf("Turtle oracle does not name its different expectation: %+v", d)
+	}
+	if slices.Contains(f.OffList, "Rend") || len(f.Missing) != 0 {
+		t.Fatalf("Forever oracle does not know Rend/its core: %+v", f)
+	}
+	if reflect.DeepEqual(f, d) {
+		t.Fatalf("the two oracles judged the same casts identically: %+v", f)
+	}
+
+	// The command path: the same fixture, with and without the Forever selection, gets the two readings.
+	path := foreverFightPath("warrior")
+	turtleBot := findingFor(t, scoreOracle(t, path), "Warriorbot")
+	foreverBot := findingFor(t, scoreOracle(t, "--set", "spell_oracle=forever", path), "Warriorbot")
+	if turtleBot.Level != "warn" || foreverBot.Level != "ok" {
+		t.Fatalf("command oracle path: turtle %q, forever %q", turtleBot.Level, foreverBot.Level)
+	}
+	if reflect.DeepEqual(turtleBot, foreverBot) {
+		t.Fatalf("the command scored both oracles identically: %+v", turtleBot)
+	}
+}
+
+// TestFightScoreNamesOracle: every reading names the oracle that produced it, in the JSON field and the text header,
+// and only an explicitly selected Forever oracle adds the unmarked-record warning to the reading.
 func TestFightScoreNamesOracle(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		args []string
-		want string
+		name     string
+		args     []string
+		want     string
+		warnings int
 	}{
-		{"legacy turtle", []string{"testdata/fights/combat-fight-5-3.json"}, "turtle"},
-		{"legacy turtle seconds", []string{"--set", "spell_oracle=30", "testdata/fights/combat-fight-5-3.json"}, "turtle"},
-		{"module forever", []string{"--set", "spell_oracle=forever", foreverFightPath("warrior")}, "forever"},
+		{"turtle default", []string{"testdata/fights/combat-fight-5-3.json"}, "turtle", 0},
+		{"turtle seconds", []string{"--set", "spell_oracle=30", "testdata/fights/combat-fight-5-3.json"}, "turtle", 0},
+		{"forever", []string{"--set", "spell_oracle=forever", foreverFightPath("warrior")}, "forever", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if r := scoreJSON(t, c.args...); r.SpellOracle != c.want {
-				t.Fatalf("--json spell_oracle = %q, want %q", r.SpellOracle, c.want)
+			if r := scoreJSON(t, c.args...); r.SpellOracle != c.want || len(r.Warnings) != c.warnings {
+				t.Fatalf("--json spell_oracle = %q warnings %v, want %q and %d", r.SpellOracle, r.Warnings, c.want, c.warnings)
 			}
 			text, errOut := runFightScore(t, c.args...)
 			if header := scoreLines(text)[0]; !strings.Contains(header, "spell oracle "+c.want) {
 				t.Fatalf("text header does not name the oracle: %q", header)
 			}
+			if got := strings.Count(text, "warning: "); got != c.warnings {
+				t.Fatalf("text reading has %d warning lines, want %d:\n%s", got, c.warnings, text)
+			}
 			if strings.Contains(errOut, "warning:") {
-				t.Fatalf("unexpected warning on a matching record: %q", errOut)
+				t.Fatalf("warning outside the reading: %q", errOut)
 			}
 		})
 	}
