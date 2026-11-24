@@ -1,7 +1,7 @@
 # The plan's fight steps checked against the module's boss tactics rows
 
-Parity re-score T13 (`FA-parity-rescore-2026-11-24.md`, row "Tactics in plans"), issue #222: read the bot module's
-tactics data for a watch record and flag every plan step that contradicts it, so the check is not a hand-written file.
+Issue #222: read the bot module's tactics data for a watch record and flag every plan step that contradicts it, so the
+check is not a hand-written file.
 
 ## What was built
 
@@ -22,24 +22,28 @@ forever-agent forever dungeon-watch ... --module-tactics FILE
 ```
 
 `FILE` is the table's rows as a JSON array, one object per row, keyed by the column names the check reads (`map`,
-`boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`, `param`; `comment` is kept and unused). An export of
-`SELECT map, boss_entry, kind, target_entry, spell_id, priority, param FROM ai_boss_tactic` (or `JSON_ARRAYAGG` of
-it) gives the file. A column the check does not read is not refused — the table grows columns (the aura, seek, anchor
-and burn kinds each added some), and a stricter reader would refuse every export after a module change. A row's own
-shape is checked: map, boss and kind are required, an `interrupt` row needs a spell, a `kill_first` row a target, an
-`avoid_cast` row a spell and its yards, a duplicate key and a wrong-typed field are errors naming the file and the row.
+`boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`, `param`, `hp_min`, `hp_max`; `comment` is kept and
+unused). The health band is part of the table's primary key, so it is read (two phase bands of one boss are two rows)
+but not compared: the check judges a fight's steps, not the phase it stands in. An export of
+`SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic` (or
+`JSON_ARRAYAGG` of it) gives the file. A column the check does not read is not refused — the table grows columns (the
+aura, seek, anchor and burn kinds each added some), and a stricter reader would refuse every export after a module
+change. A row's own shape is checked: map, boss and kind are required, an `interrupt` row needs a spell, a
+`kill_first` row a target, an `avoid_cast` row a spell and its yards, a duplicate key and a wrong-typed field are
+errors naming the file and the row; a file that is not a JSON array (including `null`) is refused too.
 
 **The check** (`internal/tactics/module.go`, `internal/tactics/compare.go`, called from
 `cmd/forever-agent/forever_watch_tactics.go`). A "fight step" is one instruction of a plan boss's tactics block: one
-`interrupt` entry, one `kill_first` entry, one `never_target` entry, one `move_out` row. After the run, for every plan
-boss with a block, the report compares the steps with the module's rows for that map and boss entry on the three axes
-the two vocabularies share:
+`interrupt` entry, one `kill_first` entry, one `never_target` entry, one `move_out` row. The watch takes the plan's
+blocks from the plan it loaded before the run (the driver's route drops them), so a plan edited during a long watch
+is not what the report judges. After the run, for every plan boss with a block, the report compares the steps with the
+module's rows for that map and boss entry on the three axes the two vocabularies share:
 
 | Axis | The plan says | The module's rows say | Conflict |
 |---|---|---|---|
 | interrupts | `interrupt` (ids or names) | `interrupt` spells | a plan spell no module interrupt row names; a name is resolved through the Forever spell table (all its ids) |
-| kill order | `kill_first`, `never_target` | `kill_first` targets with priorities | an entry with no module row; the plan's order against the module's priorities (lower first, equal is one wave); a `never_target` that is a module `kill_first` |
-| avoid | `move_out` cast rows with yards | `avoid_cast` rows with yards | a spell with no module row; plan yards smaller than the row's |
+| kill order | `kill_first`, `never_target` | `kill_first` targets with priorities | an entry with no module row; the plan's order against the module's priorities (lower first, equal is one wave); a `never_target` that is a module `kill_first`; a `never_target` no module row contradicts is not checked (the table has no `never_target` kind) |
+| avoid | `move_out` cast rows with yards | `avoid_cast` rows with yards | a spell with no module row; plan yards smaller than the widest row's (a name's every id is checked, and a spell with several rows must meet the widest) |
 
 The block's `dispel` and `no_dispel` steps and a `move_out` ground rule are listed as not checked: the module's table
 has a dispel rank, not a dispel instruction, and no ground-effect kind, so no row of it can judge those. A boss the
@@ -63,30 +67,33 @@ plan with nothing to judge says not checked as well: the section is never an agr
 The fixtures are synthetic (map 999, boss 9001, entries 8001/8002, spells 7001-7004 and 999001/999002; a dry watch
 writes the recorded run the command test reads):
 
-- `TestLoadModule`, `TestLoadModuleHostile` (twelve hostile files: no map/boss/kind, an interrupt without a spell, a
+- `TestLoadModule`, `TestLoadModuleHealthBands` (two phase bands of one boss are two rows; the same bands twice is a
+  duplicate), `TestLoadModuleHostile` (thirteen hostile files: no map/boss/kind, an interrupt without a spell, a
   `kill_first` without a target, an `avoid_cast` without spell or yards, a negative priority, a string map, a negative
-  spell, a duplicate key, a missing file), `TestLoadModuleCaps` (rows and bytes past the bounds).
+  spell, a duplicate key, a `null` file, a missing file), `TestLoadModuleCaps` (rows and bytes past the bounds).
 - `TestCompareAgreeingPlan` (no conflict, the steps counted), `TestCompareInterruptNotInModule` (one extra interrupt,
   the module's own list in the line), `TestComparePartialBlock` (a one-axis block contradicts nothing on the others),
   `TestCompareKillOrder` (a reversed order, the module's priorities named), `TestCompareNeverTarget` (a plan that never
-  attacks the module's first kill), `TestCompareMoveOut` (a smaller radius, a spell with no row, a ground rule not
-  checked), `TestCompareBossWithoutRows` (not checked, never a pass), `TestCompareWithoutSpellData`, 
-  `TestCompareDispelNotChecked`, `TestCompareEmptyPlanBlock`.
+  attacks the module's first kill), `TestCompareNeverTargetWithoutModuleRow` (not checked, never a pass),
+  `TestCompareMoveOut` (a smaller radius, a spell with no row, a ground rule not checked), `TestCompareMoveOutEveryID`
+  (a name's second id and a spell's strictest row), `TestCompareMoveOutAgrees` (the row's radius met or exceeded),
+  `TestCompareMoveOutMalformed` (neither cast nor ground is not checked), `TestCompareBossWithoutRows` (not checked,
+  never a pass), `TestCompareWithoutSpellData`, `TestCompareDispelNotChecked`, `TestCompareEmptyPlanBlock`.
 - `TestWatchTacticsContradictingStep` (the dry watch's report names the step and writes the check beside the record),
+  `TestWatchTacticsLiveReport` (the live branch's report, with the session stubbed, runs the same check),
   `TestWatchTacticsAgreeingPlan`, `TestWatchTacticsNotChecked`, `TestWatchTacticsBadFile` (a usage error naming the
   flag), `TestWatchTacticsEmptyPlan`.
 
 ## Gates
 
-Run on the VM (`vm-test ta wt-fa-222`), the lines quoted from its log:
+Run on the build VM (`vm-test ta <worktree>`), the lines quoted from its log:
 
 ```
 gofmt -l .                      -> (no output)
 go vet ./...                    -> rc=0
 CGO_ENABLED=0 go build ./...    -> rc=0
 staticcheck ./...               -> rc=0 (no finding)
-RESULT: PASS kind=ta sha=6ce6b9479 dirty=0 files=2939 runner=yulon-ubuntu2
-rc=0  vm_duration=1012s  laptop_wall=1060s
+RESULT: PASS kind=ta sha=<sha> dirty=0 files=<n>
 ```
 
 ## Known limits
@@ -98,13 +105,13 @@ rc=0  vm_duration=1012s  laptop_wall=1060s
   `anchor`, the aura kinds) are not checked and are listed as such where they are plan steps.
 - A plan step that names a spell by name is resolved through the build's Forever spell table; a name the table does
   not hold is not checked (the plan loader refuses a misspelled name in a shipped plan already).
-- The section is printed by the watch, not by `forever run-report`: the check needs the plan file and the module's
-  rows, neither of which a saved record carries. A record written with the check keeps the lines beside it.
+- The section is printed by the watch, not by `forever run-report`: the check needs the plan the watch loaded and the
+  module's rows, neither of which a saved record carries. A record written with the check keeps the lines beside it.
 
 ## Live checks for the lead's live queue
 
-None needed for the code (every test is synthetic, in the dry watch). The first session that carries a real export
-should check, on a test server:
+None needed for the code (every test is synthetic, and the live branch's report is driven with a stubbed session). The
+first session that carries a real export should check, on a test server:
 
 1. **The file matches the server.** `SELECT ... FROM ai_boss_tactic` on the same slot the watch runs against, and a
    plan whose block was written from those rows (Uldaman's Revelosh, Wailing Caverns' Serpentis) reports the agreement.

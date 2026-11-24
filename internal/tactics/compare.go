@@ -27,9 +27,10 @@ type BossBlock struct {
 	Tactics *Tactics
 }
 
-// Conflict is one plan fight step the module's rows contradict, or one module row the plan's steps do not carry.
-// Step is the plan's instruction as written ("interrupt \"Ice Bolt\"", "kill_first 7209") or "(none)" for a module
-// row the plan lacks; Why is what the module's rows say instead.
+// Conflict is one plan fight step the module's rows contradict. Step is the plan's instruction as written
+// ("interrupt \"Ice Bolt\"", "kill_first 7209", the whole kill order for an order conflict); Why is what the module's
+// rows say instead. A module row the plan's block does not mention is not a conflict: the plan's block names the
+// steps it cares about, and the check judges only those.
 type Conflict struct {
 	Leg     int
 	LegName string
@@ -204,10 +205,13 @@ func (d *differ) killOrder() {
 		}
 	}
 	for _, e := range t.NeverTarget {
-		d.rep.Steps++
+		step := fmt.Sprintf("never_target %d", e)
 		if _, ok := priority[e]; ok {
-			d.conflict(fmt.Sprintf("never_target %d", e), "the module kills it first")
+			d.rep.Steps++
+			d.conflict(step, "the module kills it first")
+			continue
 		}
+		d.uncheck(step, "the module's rows have no never_target kind, so nothing says whether its bots attack it")
 	}
 	// The plan's own order against the module's priorities: the first pair they disagree on, once.
 	for i := range t.KillFirst {
@@ -225,21 +229,29 @@ func (d *differ) killOrder() {
 }
 
 // moveOuts compares the plan's move_out steps with the module's avoid rows (kind avoid_cast): a spell the module has no
-// row for is a step no one runs, and a smaller radius is a plan that leaves less room than the module will. A ground
-// effect has no module row, so it is listed as not checked.
+// row for is a step no one runs, and a smaller radius is a plan that leaves less room than the module will. A name
+// resolves to every id the spell table has, and one spell's rows may leave different radii (a target entry or a health
+// band): the widest of them is the plan's requirement. A ground effect has no module row, so it is listed as not
+// checked.
 func (d *differ) moveOuts() {
+	// A spell may have several avoid_cast rows (a target entry or a health band splits them): the plan must leave the
+	// widest radius any of them leaves.
 	avoid := map[uint32]float32{}
 	for _, r := range d.rows {
-		if _, ok := avoid[r.Spell]; ok || r.Kind != KindAvoidCast {
+		if r.Kind != KindAvoidCast {
 			continue
 		}
-		avoid[r.Spell] = r.Param
+		if yards, ok := avoid[r.Spell]; !ok || r.Param > yards {
+			avoid[r.Spell] = r.Param
+		}
 	}
 	for _, mv := range d.block.Tactics.MoveOut {
 		if mv.Ground != nil {
 			d.uncheck(spellStep("move_out", *mv.Ground)+" (ground)", "the module's rows have no ground-effect row the check reads")
+			continue
 		}
 		if mv.Cast == nil {
+			d.uncheck("move_out", "the rule names neither a cast nor a ground effect")
 			continue
 		}
 		step := spellStep("move_out", *mv.Cast)
@@ -248,18 +260,24 @@ func (d *differ) moveOuts() {
 			continue
 		}
 		d.rep.Steps++
+		// A name may resolve to several ids (every rank): the row of any one of them counts, and the widest it leaves
+		// is the radius the plan must reach.
+		var yards float32
 		found := false
 		for _, id := range ids {
-			if yards, ok := avoid[id]; ok {
+			if r, ok := avoid[id]; ok {
 				found = true
-				if mv.YardsOf() < yards {
-					d.conflict(step, fmt.Sprintf("the plan leaves %g yd; the module's avoid_cast row leaves %g yd", mv.YardsOf(), yards))
+				if r > yards {
+					yards = r
 				}
-				break
 			}
 		}
 		if !found {
 			d.conflict(step, "the module's rows have no avoid_cast row for it")
+			continue
+		}
+		if mv.YardsOf() < yards {
+			d.conflict(step, fmt.Sprintf("the plan leaves %g yd; the module's avoid_cast row leaves %g yd", mv.YardsOf(), yards))
 		}
 	}
 }

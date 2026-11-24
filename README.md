@@ -737,11 +737,13 @@ The report also judges the plan's fight steps. A plan's bosses[].tactics block i
 exported: the module's bots fight by their own `ai_boss_tactic` rows), so a plan step the module's rows contradict or
 do not carry is a step nobody runs. With `--module-tactics FILE` — the module's `ai_boss_tactic` rows as a JSON array,
 one object per row with the table's column names (`map`, `boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`,
-`param`; an export of `SELECT map, boss_entry, kind, target_entry, spell_id, priority, param FROM ai_boss_tactic`
-gives it) — the watch's report checks every plan fight step (one interrupt entry, one kill_first or never_target entry,
+`param`, `hp_min`, `hp_max`; the health band is part of the table's key and is read but not compared, and an export of
+`SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic` gives it)
+— the watch's report checks every plan fight step (one interrupt entry, one kill_first or never_target entry,
 one move_out row) against those rows once the run ends: the interrupts a plan names, the kill order (the entries and
-their order by the module's priorities), a never_target the module kills first, and a move_out whose spell the module
-has no avoid_cast row for or whose yards are smaller than the row's. Each disagreement is one `tactics:` line naming
+their order by the module's priorities), a never_target the module kills first (one it has no row for is not checked:
+the table has no never_target kind), and a move_out whose spell the module has no avoid_cast row for or whose yards
+are smaller than the widest row's (a name's every id is checked). Each disagreement is one `tactics:` line naming
 the leg, the boss, the plan's step and the module's answer, and the lines are written beside the record as
 `<run_id>.tactics-check.txt`. A plan step no module row can answer (a dispel or no_dispel step, a ground rule, a boss
 the file does not name) is listed as not checked, and without the flag the report says the check was not made: the

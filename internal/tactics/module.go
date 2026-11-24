@@ -28,8 +28,10 @@ const (
 )
 
 // ModuleRow is one row of the module's ai_boss_tactic table. A field the check does not read (tactic_mode, window_s,
-// the cycle and spot columns, hp gates) is not typed here and is ignored: the table grows columns and an export must
-// not be refused for carrying them. Map, Boss and Kind are the row's identity; the primary key adds Target and Spell.
+// the cycle and spot columns, bot_aura) is not typed here and is ignored: the table grows columns and an export must
+// not be refused for carrying them. Map, Boss and Kind are the row's identity; the primary key adds Target, Spell and
+// the row's health band (HpMin, HpMax), which are typed so a boss's phase-banded rows are distinct rows. The band is
+// not compared: the check judges a fight's steps, not the phase it stands in.
 type ModuleRow struct {
 	Map      uint32  `json:"map"`
 	Boss     uint32  `json:"boss_entry"`
@@ -38,6 +40,8 @@ type ModuleRow struct {
 	Spell    uint32  `json:"spell_id"`
 	Priority int     `json:"priority"`
 	Param    float32 `json:"param"`
+	HpMin    int     `json:"hp_min"`
+	HpMax    int     `json:"hp_max"`
 	Comment  string  `json:"comment"`
 }
 
@@ -48,10 +52,11 @@ type Module struct {
 }
 
 // LoadModule reads a module tactics file: a JSON array with one object per ai_boss_tactic row, keyed by its column
-// names (map, boss_entry, kind, target_entry, spell_id, priority, param; comment is for a reader, not the check).
-// The rows are checked as a whole: a row without a map, a boss entry or a kind, an interrupt row without a spell, a
-// kill_first row without a target, a second row with the same key or a field of the wrong type is an error naming the
-// file and the row, never a zero that would quietly judge a fight against nothing.
+// names (map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max; comment is for a reader, not
+// the check). The rows are checked as a whole: a file that is not an array, a row without a map, a boss entry or a
+// kind, an interrupt row without a spell, a kill_first row without a target, a second row with the same key or a
+// field of the wrong type is an error naming the file and the row, never a zero that would quietly judge a fight
+// against nothing.
 func LoadModule(path string) (*Module, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -76,6 +81,9 @@ func LoadModule(path string) (*Module, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%s: not a JSON array of ai_boss_tactic rows: %v", path, err)
 	}
+	if raw == nil {
+		return nil, fmt.Errorf("%s: not a JSON array of ai_boss_tactic rows: the file is null", path)
+	}
 	m := &Module{byMap: map[uint32]map[uint32][]ModuleRow{}}
 	seen := map[ModuleRow]bool{}
 	for i, elem := range raw {
@@ -90,7 +98,7 @@ func LoadModule(path string) (*Module, error) {
 		key := r
 		key.Priority, key.Param, key.Comment = 0, 0, ""
 		if seen[key] {
-			return nil, fmt.Errorf("%s: row %d: a second row for map %d boss %d kind %q target %d spell %d", path, i, r.Map, r.Boss, r.Kind, r.Target, r.Spell)
+			return nil, fmt.Errorf("%s: row %d: a second row for map %d boss %d kind %q target %d spell %d hp %d-%d", path, i, r.Map, r.Boss, r.Kind, r.Target, r.Spell, r.HpMin, r.HpMax)
 		}
 		seen[key] = true
 		if len(seen) > MaxModuleRows {

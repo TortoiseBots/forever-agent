@@ -70,9 +70,33 @@ func TestLoadModule(t *testing.T) {
 	}
 }
 
+// TestLoadModuleHealthBands: hp_min and hp_max are part of the table's primary key, so a boss's phase-banded rows for
+// the same kind and spell are two rows, not a duplicate.
+func TestLoadModuleHealthBands(t *testing.T) {
+	js := `[
+	 {"map":999,"boss_entry":9001,"kind":"interrupt","spell_id":7001,"hp_min":75,"hp_max":100},
+	 {"map":999,"boss_entry":9001,"kind":"interrupt","spell_id":7001,"hp_min":0,"hp_max":75}
+	]`
+	m, err := LoadModule(moduleFile(t, js))
+	if err != nil {
+		t.Fatalf("a boss's phase-banded rows: %v", err)
+	}
+	rows := m.Rows(999, 9001)
+	if len(rows) != 2 || rows[0].HpMin != 75 || rows[0].HpMax != 100 || rows[1].HpMin != 0 || rows[1].HpMax != 75 {
+		t.Fatalf("the rows' health bands: %+v", rows)
+	}
+	// The same key twice, health bands included, is still a duplicate.
+	dup := `[{"map":999,"boss_entry":9001,"kind":"interrupt","spell_id":7001,"hp_min":75,"hp_max":100},
+	         {"map":999,"boss_entry":9001,"kind":"interrupt","spell_id":7001,"hp_min":75,"hp_max":100}]`
+	if _, err := LoadModule(moduleFile(t, dup)); err == nil || !strings.Contains(err.Error(), "row 1: a second row") {
+		t.Fatalf("a duplicate with the same bands: %v", err)
+	}
+}
+
 func TestLoadModuleHostile(t *testing.T) {
 	cases := []struct{ name, js, want string }{
 		{"not json", `{"map":999}`, "not a JSON array"},
+		{"null file", `null`, "not a JSON array"},
 		{"no map", `[{"boss_entry":9001,"kind":"interrupt","spell_id":1}]`, "row 0: no map"},
 		{"no boss", `[{"map":999,"kind":"interrupt","spell_id":1}]`, "row 0: no boss_entry"},
 		{"no kind", `[{"map":999,"boss_entry":9001,"kind":"  "}]`, "row 0: no kind"},
@@ -285,6 +309,116 @@ func TestCompareDispelNotChecked(t *testing.T) {
 	}
 	if rep.NotChecked() {
 		t.Fatal("one judged step beside one unchecked step reads as wholly unchecked")
+	}
+}
+
+// TestCompareNeverTargetWithoutModuleRow: the module's table has no never_target kind, so a never_target entry it does
+// not contradict is not a judged step: nothing in the module says the bots leave the unit alone.
+func TestCompareNeverTargetWithoutModuleRow(t *testing.T) {
+	nameOf, idsOf := testNames()
+	rep := Compare(loadTestModule(t), []BossBlock{{
+		Leg: 0, LegName: "sentinel", Map: 999, Entry: 9001,
+		Tactics: &Tactics{NeverTarget: []uint32{8003}},
+	}}, nameOf, idsOf)
+	if rep.Steps != 0 || len(rep.Conflicts) != 0 || len(rep.Unchecked) != 1 {
+		t.Fatalf("a never_target the module does not contradict: %+v", rep)
+	}
+	line := rep.Unchecked[0]
+	for _, want := range []string{"never_target 8003", "no never_target"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("unchecked line %q has no %q", line, want)
+		}
+	}
+	if !rep.NotChecked() {
+		t.Fatal("an unchecked never_target reads as a judged step")
+	}
+}
+
+// TestCompareMoveOutEveryID: a name with several ids is judged against every id, and the rows' strictest radius per
+// spell is the one the plan must meet.
+func TestCompareMoveOutEveryID(t *testing.T) {
+	nameOf := func(id uint32) string {
+		if id == 7003 || id == 7005 {
+			return "Shadow Nova"
+		}
+		return ""
+	}
+	idsOf := func(name string) []uint32 {
+		if name == "Shadow Nova" {
+			return []uint32{7003, 7005}
+		}
+		return nil
+	}
+	// Two ids: the first id's row leaves less than the plan's 8 yd, the second's leaves more.
+	m := &Module{byMap: map[uint32]map[uint32][]ModuleRow{999: {9002: {
+		{Map: 999, Boss: 9002, Kind: KindAvoidCast, Spell: 7003, Param: 6},
+		{Map: 999, Boss: 9002, Kind: KindAvoidCast, Spell: 7005, Param: 13},
+	}}}, rows: 2}
+	rep := Compare(m, []BossBlock{{
+		Leg: 4, LegName: "bat", Map: 999, Entry: 9002,
+		Tactics: &Tactics{MoveOut: []MoveOut{{Cast: &SpellRef{Name: "Shadow Nova"}, Yards: 8}}},
+	}}, nameOf, idsOf)
+	if len(rep.Conflicts) != 1 || rep.Steps != 1 {
+		t.Fatalf("the second id's radius: %+v", rep)
+	}
+	if got := rep.Conflicts[0].String(); !strings.Contains(got, "the module's avoid_cast row leaves 13 yd") {
+		t.Fatalf("radius line: %s", got)
+	}
+	// Two rows for one spell: the stricter row is the requirement.
+	m = &Module{byMap: map[uint32]map[uint32][]ModuleRow{999: {9002: {
+		{Map: 999, Boss: 9002, Kind: KindAvoidCast, Spell: 7003, Target: 0, Param: 6},
+		{Map: 999, Boss: 9002, Kind: KindAvoidCast, Spell: 7003, Target: 8001, Param: 13},
+	}}}, rows: 2}
+	rep = Compare(m, []BossBlock{{
+		Leg: 4, LegName: "bat", Map: 999, Entry: 9002,
+		Tactics: &Tactics{MoveOut: []MoveOut{{Cast: &SpellRef{ID: 7003}, Yards: 8}}},
+	}}, nameOf, idsOf)
+	if len(rep.Conflicts) != 1 || rep.Steps != 1 {
+		t.Fatalf("the strictest avoid row: %+v", rep)
+	}
+	if got := rep.Conflicts[0].String(); !strings.Contains(got, "leaves 13 yd") {
+		t.Fatalf("strictest row line: %s", got)
+	}
+}
+
+// TestCompareMoveOutAgrees: a plan that leaves at least the row's radius (its stated one, or the default) agrees. It
+// pins the comparison to "smaller than", so a plan equal to or wider than the row is never a conflict.
+func TestCompareMoveOutAgrees(t *testing.T) {
+	nameOf, idsOf := testNames()
+	for _, c := range []struct {
+		name  string
+		yards float32
+	}{
+		{"wider than the row", 20},
+		{"the default radius over the row", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := &Module{byMap: map[uint32]map[uint32][]ModuleRow{999: {9002: {
+				{Map: 999, Boss: 9002, Kind: KindAvoidCast, Spell: 7003, Param: 8},
+			}}}, rows: 1}
+			rep := Compare(m, []BossBlock{{
+				Leg: 4, LegName: "bat", Map: 999, Entry: 9002,
+				Tactics: &Tactics{MoveOut: []MoveOut{{Cast: &SpellRef{ID: 7003}, Yards: c.yards}}},
+			}}, nameOf, idsOf)
+			if len(rep.Conflicts) != 0 || rep.Steps != 1 {
+				t.Fatalf("a plan leaving %g yd against the row's 8: %+v", c.yards, rep)
+			}
+		})
+	}
+}
+
+// TestCompareMoveOutMalformed: a move_out rule with neither a cast nor a ground effect is not checked, never skipped.
+func TestCompareMoveOutMalformed(t *testing.T) {
+	nameOf, idsOf := testNames()
+	rep := Compare(loadTestModule(t), []BossBlock{{
+		Leg: 4, LegName: "bat", Map: 999, Entry: 9002,
+		Tactics: &Tactics{MoveOut: []MoveOut{{Yards: 10}}},
+	}}, nameOf, idsOf)
+	if len(rep.Unchecked) != 1 || rep.Steps != 0 {
+		t.Fatalf("a rule with neither cast nor ground: %+v", rep)
+	}
+	if !strings.Contains(rep.Unchecked[0], "neither a cast nor a ground") {
+		t.Fatalf("unchecked line %q", rep.Unchecked[0])
 	}
 }
 

@@ -5,11 +5,16 @@ package main
 // synthetic: map 999 and its bosses, entries and spells exist nowhere.
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/world"
 )
 
 // tacticsPlan writes a one-boss plan whose boss interrupts spell 999002 (an id the Forever spell table does not name, so the report prints the bare id) and returns its
@@ -118,6 +123,36 @@ func TestWatchTacticsBadFile(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--module-tactics") || !strings.Contains(stderr, "row 0: no boss_entry") {
 		t.Fatalf("stderr: %s", stderr)
+	}
+}
+
+// TestWatchTacticsLiveReport: the live watch's report runs the check too. The session is stubbed (a live watch needs
+// a server), and the result it hands back is the one the command's live branch prints: removing the tactics section
+// from that branch leaves this test with no tactics line.
+func TestWatchTacticsLiveReport(t *testing.T) {
+	old := watchEnter
+	t.Cleanup(func() { watchEnter = old })
+	watchEnter = func(context.Context, *foreverCommon, string, io.Writer, world.Options) (*world.Report, error) {
+		return &world.Report{Watch: &driver.Result{
+			Stop:    "stopped",
+			Summary: driver.RunSummary{Watch: &driver.RunWatch{}},
+		}}, nil
+	}
+	t.Setenv("FOREVER_PASSWORD", "pw-secret")
+	code, stdout, stderr := runWatchCmd(t,
+		"--plan", tacticsPlan(t), "--leader", "Tank", "--character", "Lead", "--enter", "none",
+		"--rest", "127.0.0.1:1", "--rpc", "127.0.0.1:1", "--ca", "ca.pem", "--account", "harness",
+		"--no-preflight", "--poll", "1", "--module-tactics", moduleRows(t, 999001))
+	if code != exitWorld {
+		t.Fatalf("exit %d, want %d: %s\n%s", code, exitWorld, stderr, stdout)
+	}
+	for _, want := range []string{
+		"tactics: 1 plan fight step checked against the module's 1 row: 1 disagree",
+		`tactics: leg 0 "hall" boss 9001: interrupt 999002: the module's rows interrupt 999001 only`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("live report has no %q:\n%s", want, stdout)
+		}
 	}
 }
 

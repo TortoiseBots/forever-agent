@@ -11,7 +11,7 @@ package main
 // ai_boss_tactic (its run status, run events, instance info and the run's own files carry progress, not tactics), and
 // this round invents no module command. The file is the table's rows in JSON, which an export of the table gives:
 //
-//	SELECT map, boss_entry, kind, target_entry, spell_id, priority, param FROM ai_boss_tactic
+//	SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic
 //
 // one object per row with those column names. Without the flag the report says the check was not made, never that the
 // plan agrees.
@@ -27,13 +27,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/tactics"
 )
 
-// tacticsBlocks reads the plan again for its bosses' tactics blocks. The driver's route drops them (a watched run does
-// not act on them), so the report reads the plan file itself; a plan already loaded once refuses nothing new here.
-func tacticsBlocks(planPath string) ([]tactics.BossBlock, error) {
-	p, err := dungeon.Load(planPath)
-	if err != nil {
-		return nil, err
-	}
+// tacticsBlocks is the plan's boss fight steps: one block per leg with a boss, keyed by the plan's map and the boss
+// entry the module's rows are keyed by. The watch takes them from the plan it loaded before the run starts, so a plan
+// edited while the watch runs is not what the report judges.
+func tacticsBlocks(p *dungeon.Plan) []tactics.BossBlock {
 	var blocks []tactics.BossBlock
 	for i, leg := range p.Legs {
 		if leg.Boss == nil {
@@ -41,7 +38,7 @@ func tacticsBlocks(planPath string) ([]tactics.BossBlock, error) {
 		}
 		blocks = append(blocks, tactics.BossBlock{Leg: i, LegName: leg.Name, Map: p.Map, Entry: leg.Boss.Entry, Tactics: leg.Boss.Tactics})
 	}
-	return blocks, nil
+	return blocks
 }
 
 // spellReaders is the Forever spell table's two readings for the check: a spell's name for an id and the ids a name
@@ -56,13 +53,9 @@ func spellReaders() (func(uint32) string, func(string) []uint32) {
 
 // tacticsSection is the watch report's tactics lines: one header line, one line per plan fight step the module's rows
 // contradict, one line per step they cannot answer, and — without module data — one not-checked line and nothing else.
-func tacticsSection(planPath string, module *tactics.Module) []string {
+func tacticsSection(blocks []tactics.BossBlock, module *tactics.Module) []string {
 	if module == nil {
 		return []string{"tactics: not checked (no --module-tactics file): the plan's fight steps are only judged against the module's boss tactics rows"}
-	}
-	blocks, err := tacticsBlocks(planPath)
-	if err != nil {
-		return []string{fmt.Sprintf("tactics: not checked (the plan could not be read again: %v)", err)}
 	}
 	var count int
 	for _, b := range blocks {
@@ -112,9 +105,10 @@ func plural(n int, noun string) string {
 }
 
 // reportTactics prints the tactics section and keeps it beside the record, as <run_id>.tactics-check.txt, when the watch
-// kept a record: the watch log alone would lose what a saved record needs.
-func reportTactics(stdout io.Writer, planPath string, module *tactics.Module, summaryFile string) {
-	lines := tacticsSection(planPath, module)
+// kept a record: the watch log alone would lose what a saved record needs. The blocks come from the plan the command
+// loaded before the watch, never from a later read of the file.
+func reportTactics(stdout io.Writer, blocks []tactics.BossBlock, module *tactics.Module, summaryFile string) {
+	lines := tacticsSection(blocks, module)
 	for _, l := range lines {
 		fmt.Fprintln(stdout, l)
 	}
