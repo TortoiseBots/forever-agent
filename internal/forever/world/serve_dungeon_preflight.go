@@ -107,6 +107,7 @@ type preflightCommand struct {
 
 	mu      sync.Mutex
 	pending []chat.Line // lines the tap delivered since the last pump slice
+	closed  bool        // the run is over: a tap whose removal had to wait queues nothing more
 
 	s      *session // the session the tap was installed on
 	remove func()   // the tap's remover, session goroutine only
@@ -162,7 +163,9 @@ func (c *preflightCommand) SendCommand(ctx context.Context, text string) error {
 // collect between slices), so it never calls the collector itself: only Pump does, on its own goroutine.
 func (c *preflightCommand) deliver(line chat.Line) {
 	c.mu.Lock()
-	c.pending = append(c.pending, line)
+	if !c.closed {
+		c.pending = append(c.pending, line)
+	}
 	c.mu.Unlock()
 }
 
@@ -202,6 +205,7 @@ func (c *preflightCommand) Pump(ctx context.Context, feed func(chat.Line), done 
 // with it.
 func (c *preflightCommand) close() {
 	c.mu.Lock()
+	c.closed = true
 	s, remove := c.s, c.remove
 	c.pending = nil
 	c.mu.Unlock()
