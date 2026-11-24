@@ -101,8 +101,14 @@ func (l *serveLease) adopt(force bool) error {
 // (another holder, or a lease id that changed) is not transient: the serve is on another holder's
 // slot, so it records the reason and cancels the run. A transient failure is logged and retried
 // every serveLeaseRetry; the lease is never silently dropped.
-func (l *serveLease) keep(ctx context.Context, cancel context.CancelFunc, log io.Writer) {
+//
+// The returned channel is closed by the keeper goroutine as it exits. The command waits on it before
+// it returns: a renewal still logging when the command has returned would write to the same output
+// and the same log from a goroutine the caller no longer owns.
+func (l *serveLease) keep(ctx context.Context, cancel context.CancelFunc, log io.Writer) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		t := time.NewTicker(serveLeaseRenew)
 		defer t.Stop()
 		for {
@@ -116,6 +122,7 @@ func (l *serveLease) keep(ctx context.Context, cancel context.CancelFunc, log io
 			}
 		}
 	}()
+	return done
 }
 
 // renewOnce renews until it succeeds, is refused or ctx ends; true says the ticker must stop.

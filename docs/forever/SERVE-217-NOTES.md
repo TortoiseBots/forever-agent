@@ -91,8 +91,8 @@ Rules:
 with the old agent's walk heartbeat rule:
 
 - it renews the lease **at start** and then **every 5 minutes**; the lease is **15 minutes** long,
-  so a live serve never loses it and a dead one frees its slot within minutes (the lease also
-  records the serve's pid, so the reap frees it at once);
+  so a live serve never loses it and a dead one frees its slot at once (the lease records the
+  serve's pid; see "A dead serve frees its slot at once" below);
 - a failed renewal that may pass (a lock timeout, an I/O error) is logged loudly and retried every
   minute — never silently dropped;
 - an **expired lease refuses the start** with a line naming the slot and its expiry and the two
@@ -109,6 +109,42 @@ The renewal log lines are, per renewal, `serve: lease <server>/<slot> renewed un
 `teardown` remains the command that ends the game presence and frees the lease; the serve itself
 does not release a lease it did not take (the lease's recorded pid makes it stale the moment the
 serve is gone).
+
+### A dead serve frees its slot at once; its `slot.json` keeps a stale lease id
+
+Every renewal stamps the lease with the serve's process: its pid, host, pid namespace and start time
+(the same record a walk's lease carries). A reader on the same host (`lease list`, `lease reap`, a
+`lease acquire` or `slot setup`) sees a pid that is gone or was reused and treats the lease as stale
+at once, so **a serve that dies frees its slot immediately**, not after the 15-minute expiry:
+`lease reap` (and any acquire) can take the slot over the moment the process is gone. This is
+intended; the expiry is the fallback for a holder on another host or one this platform cannot check.
+
+The dead serve's `slot.json` is not rewritten, so it still names the dead serve's lease id while the
+slots file's lease has been taken over (or released) by someone else. That too is intended: the
+manifest is a record of the setup (server, slot, holder, lease id, dir paths), not a claim, and the
+lease file is the truth. The stale manifest is harmless — a serve started from it refuses, and names
+the way out:
+
+- `lease <server>/<slot> is not this slot's any more (held by <holder> since ...)` when the slot was
+  taken over by another holder;
+- `lease <server>/<slot> was re-acquired (the slot.json holds another lease id)` when the same holder
+  re-acquired or the lease was released and taken again;
+- `lease <server>/<slot> is gone` when the lease was only released.
+
+Run `slot setup --forever` again for that dir to record the new lease, or clear the dir and let serve
+write a fresh bare manifest.
+
+### One serve per slot dir
+
+The dir's `slot.json`, token file, pid file and lease are one serve's, so a second `forever serve`
+on the same `--dir` is refused **whatever its `--listen` host and port** would be: the serve takes
+`serve.lock` in the dir for its whole run with a non-blocking exclusive lock (flock). The lock is
+released by the kernel when the process ends, however it ends, so a leftover `serve.lock` never
+blocks a later serve (the file is not removed; the lock, not the file, is the claim). The refusal is
+`another forever serve is already running in <dir> (pid <n>): stop it or serve another --dir` with
+**exit code 15**, before the lease is touched and before anything is written to the server. (A
+second serve with a *different* port on an existing manifest is refused earlier, by the manifest's
+port check, with the same exit code.)
 
 ### Interaction: `trials run` on a leased serve slot
 

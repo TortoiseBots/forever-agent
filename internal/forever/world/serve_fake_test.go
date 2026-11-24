@@ -1179,6 +1179,34 @@ func TestServeCleanShutdown(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeCancelledContextLogsOut: a lost lease cancels the serve's context, and Enter must log the
+// character out rather than only drop the sockets (server-side it would stay online until the link
+// timed out). The fake server answers the logout only if CMSG_LOGOUT_REQUEST arrives, and the run
+// must report the completion.
+func TestServeCancelledContextLogsOut(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+	a.cancel()
+	r := a.awaitResult(t)
+	if r.err != nil {
+		t.Fatalf("cancelled serve: %v\n%s", r.err, steps.joined())
+	}
+	rep := r.v.(*Report)
+	if !rep.LogoutComplete {
+		t.Fatalf("a cancelled serving context did not log the character out: %+v\n%s", rep.Logout, steps.joined())
+	}
+	// The fake server only sends SMSG_LOGOUT_COMPLETE after the request; the session's readers are
+	// closed after it, so the character is not left to the server's own timeout.
+	if !strings.Contains(steps.joined(), "rpc: shutting down, logging out") {
+		t.Fatalf("the session ended without serveLogout:\n%s", steps.joined())
+	}
+	f.wait(t)
+}
+
 // waitServeState polls status until it reports want, and returns that answer.
 func waitServeState(t *testing.T, a *serveAgent, want string, steps *stepLog) ServeStatus {
 	t.Helper()
