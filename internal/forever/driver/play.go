@@ -255,6 +255,10 @@ type PlayPorts struct {
 	// Sight is the line-of-sight stand-in the pull's close-in reads, optional: with none, the pull goes to the module
 	// as before and only its refusal says the tank could not see the skull.
 	Sight Sight
+	// Refusals is the module's sight refusals as the client heard them, optional: with it, a tank order the module
+	// refuses ("I dont see my rti attack target") is read at once and the pull steps in toward the skull and orders
+	// again; with none, a refused order waits out the pull window as before.
+	Refusals Refusals
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -273,6 +277,10 @@ type playRun struct {
 
 	// sightBlocked is the last look's verdict of the pull in hand: the tank could not see the skull.
 	sightBlocked bool
+	// refused is set when the last engage's tank order was refused by the module (its whisper), and refusedOut when
+	// engageSeen spent its bounds on refusals: the pull stops then.
+	refused    bool
+	refusedOut bool
 
 	stopReason string
 	lost       bool

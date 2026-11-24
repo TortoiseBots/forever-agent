@@ -677,3 +677,23 @@ func TestPlaySessionBindsAllSixPorts(t *testing.T) {
 		t.Fatalf("a port is unbound: %+v", ports)
 	}
 }
+
+// TestPlayRefusalsCountTheModulesSightWhisper: the module's "I dont see my rti attack target" whisper (AttackAction.cpp
+// :163) is counted under its sender for the run's Refusals port; other whispers and other senders are not.
+func TestPlayRefusalsCountTheModulesSightWhisper(t *testing.T) {
+	s := &session{}
+	var port driver.Refusals = playRefusals{s: s}
+	s.feedCommand(chat.Line{Type: chat.TypeWhisper, Text: "I dont see my rti attack target", SenderName: "Ptank"})
+	s.feedCommand(chat.Line{Type: chat.TypeWhisper, Text: "Got [Conjured Rye]x18 from Pmag", SenderName: "Ptank"})
+	s.feedCommand(chat.Line{Type: chat.TypeParty, Text: "I dont see my rti attack target", SenderName: "Ptank"})
+	s.feedCommand(chat.Line{Type: chat.TypeWhisper, Text: "I dont see my rti attack target", SenderName: "Phun"})
+	if got := port.SightRefusals("Ptank"); got != 1 {
+		t.Fatalf("Ptank's refusals = %d; want 1 (one refusal whisper)", got)
+	}
+	if got := port.SightRefusals("phun"); got != 1 {
+		t.Fatalf("Phun's refusals = %d; want 1 (matched without case)", got)
+	}
+	if got := port.SightRefusals("Ppri"); got != 0 {
+		t.Fatalf("Ppri's refusals = %d; want 0", got)
+	}
+}

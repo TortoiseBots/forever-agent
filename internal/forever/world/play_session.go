@@ -80,7 +80,22 @@ func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
 		Walker: dungeonWalker{s: s},
 		Clock:  dungeonClock{s: s},
 		Sight:  playSight{s: s},
+		// The packet loop counts the module's sight refusals (feedCommand); the run reads them on its own goroutine,
+		// the same one that pumps the session.
+		Refusals: playRefusals{s: s},
 	}
+}
+
+// playRefusals is the Refusals port over the session's count of the module's "I dont see my rti attack target"
+// whispers.
+type playRefusals struct {
+	s *session
+}
+
+var _ driver.Refusals = playRefusals{}
+
+func (r playRefusals) SightRefusals(bot string) int {
+	return r.s.sightRefusals[strings.ToLower(strings.TrimSpace(bot))]
 }
 
 // playSight is the pull's line-of-sight stand-in: the navmesh's walkability ray over the run's map (the same one

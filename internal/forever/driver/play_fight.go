@@ -60,6 +60,13 @@ const (
 	// most PlayCloseTime from the first look.
 	PlayCloseTries = 4
 	PlayCloseTime  = 90 * time.Second
+	// The tank's refusal (the module's whisper "I dont see my rti attack target") is the module's own verdict on
+	// sight, whatever the agent's navmesh ray said (live 2026-11-24: the ray clear at 21 yd, the core's line of sight
+	// not). Each refusal steps the party PlayPullStepYd along the navmesh path toward the skull (never nearer than
+	// PlaySightTouchYd), waits for the tank and orders again (the order re-sends the mark); at most PlayRefuseTries
+	// steps and PlayRefuseTime from the first refusal, then the pull stops pull-failed as before.
+	PlayRefuseTries = 4
+	PlayRefuseTime  = 90 * time.Second
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -114,11 +121,14 @@ func (p *playRun) pull(ctx context.Context) string {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"group": g.ID})
 		}
 		skull, cross := p.skullAndCross(members)
-		if p.engage(ctx, members, skull, cross) {
+		if p.engageSeen(ctx, members, skull, cross) {
 			return StateFight
 		}
 		if p.stopReason != "" {
 			return ""
+		}
+		if p.refusedOut {
+			break
 		}
 		members = p.liveMembers(g)
 		if len(members) == 0 {
@@ -168,12 +178,15 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 			p.stranger = wire.GUID{}
 			return StateLegWalk
 		}
-		if p.engage(ctx, members, skull, Unit{}) {
+		if p.engageSeen(ctx, members, skull, Unit{}) {
 			p.stranger = wire.GUID{}
 			return StateFight
 		}
 		if p.stopReason != "" {
 			return ""
+		}
+		if p.refusedOut {
+			break
 		}
 		if attempt == 0 {
 			if skull, ok := unitByGUID(p.ports.World.Units(), guid); ok && !p.pullStep(ctx, skull) {
@@ -443,11 +456,14 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": b.Entry})
 		}
-		if p.engage(ctx, members, skull, cross) {
+		if p.engageSeen(ctx, members, skull, cross) {
 			return StateFight
 		}
 		if p.stopReason != "" {
 			return ""
+		}
+		if p.refusedOut {
+			break
 		}
 	}
 	p.stopPullFailed()
@@ -497,6 +513,8 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 	for _, u := range members {
 		p.pullSet = append(p.pullSet, u.GUID)
 	}
+	p.refused = false
+	before := p.sightRefusals()
 	if !p.order(ctx, p.cfg.Bots[0], skull.GUID) {
 		return false
 	}
@@ -504,6 +522,19 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 	for {
 		if p.aggro() {
 			return true
+		}
+		// The module's whisper is its verdict: the tank found no rti target. Waiting out the window would not change
+		// it (the tank stands still), so the caller reacts now.
+		if p.sightRefusals() > before {
+			p.refused = true
+			tankYd := -1.0
+			if at, ok := p.tankPos(); ok {
+				tankYd = dist3(at, skull.Pos)
+			}
+			p.rec.Event(p.now(), "pull_refused", map[string]any{
+				"target": skull.GUID.String(), "yd": dist3(p.self, skull.Pos), "tank_yd": tankYd,
+			})
+			return false
 		}
 		if p.timeUp() {
 			p.stop("time")
@@ -515,6 +546,123 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 		if !p.sleep(ctx, p.lim.Poll) {
 			return false
 		}
+	}
+}
+
+// sightRefusals is the tank's refusal count so far, 0 with no Refusals port.
+func (p *playRun) sightRefusals() int {
+	if p.ports.Refusals == nil || len(p.cfg.Bots) == 0 {
+		return 0
+	}
+	return p.ports.Refusals.SightRefusals(p.cfg.Bots[0])
+}
+
+// engageSeen is engage plus the reaction to the tank's refusal. A refused order means the module did not find the
+// skull from where the tank stands, whatever the agent's own check said: the party steps toward the skull along the
+// navmesh path (refusalStand), the agent waits (bounded) for the tank to come beside the new stand, and engage marks
+// and orders again. Bounded by PlayRefuseTries steps and PlayRefuseTime from the first refusal; spent, or with no step
+// left to take, refusedOut is set and the caller stops the pull. A pull that is not refused (no answer at all) is
+// engage's as before.
+func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross Unit) bool {
+	p.refusedOut = false
+	var first time.Time
+	for try := 0; ; try++ {
+		if p.engage(ctx, members, skull, cross) {
+			return true
+		}
+		if p.stopReason != "" || !p.refused {
+			return false
+		}
+		if first.IsZero() {
+			first = p.now()
+		}
+		p.refreshSelf()
+		u, ok := unitByGUID(p.ports.World.Units(), skull.GUID)
+		if !ok || u.Dead {
+			return false
+		}
+		if try >= PlayRefuseTries || p.now().Sub(first) >= PlayRefuseTime {
+			p.refusedOut = true
+			return false
+		}
+		stand := p.refusalStand(u.Pos)
+		d := dist3(p.self, stand)
+		if d <= 0.01 {
+			p.refusedOut = true // nothing nearer to try
+			return false
+		}
+		p.rec.Event(p.now(), "pull_step", map[string]any{"x": stand[0], "y": stand[1], "z": stand[2], "yd": d, "refused": true})
+		p.pullWalk = true
+		p.walkTo(ctx, stand, false, false)
+		p.pullWalk = false
+		if p.stopReason != "" {
+			return false
+		}
+		// The module reads the line from the TANK: the next order waits (bounded) for it to come beside the stand,
+		// and goes out regardless (the module is the judge).
+		p.waitTankNear(ctx, stand, PlayTankBesideYd)
+		if p.stopReason != "" {
+			return false
+		}
+		skull = u
+	}
+}
+
+// refusalStand is where the party steps after a refusal: PlayPullStepYd along the navmesh path from the agent to the
+// skull (the way the party can walk, round a lip or a pillar), and never nearer than PlaySightTouchYd to the skull;
+// the straight line when the mesh gives no path. It is the agent's own position when it already stands that near.
+func (p *playRun) refusalStand(skull Vec3) Vec3 {
+	p.refreshSelf()
+	d := dist3(p.self, skull)
+	if d-PlaySightTouchYd <= 0.01 {
+		return p.self
+	}
+	step := math.Min(PlayPullStepYd, d-PlaySightTouchYd)
+	if route, err := p.ports.Walker.Path(p.self, skull); err == nil && len(route.Points) >= 2 {
+		return alongPath(route.Points, step, skull, PlaySightTouchYd)
+	}
+	f := step / d
+	return Vec3{
+		p.self[0] + float32(float64(skull[0]-p.self[0])*f),
+		p.self[1] + float32(float64(skull[1]-p.self[1])*f),
+		p.self[2] + float32(float64(skull[2]-p.self[2])*f),
+	}
+}
+
+// alongPath is the point yd along the polyline from its first point, cut short where the path would first come
+// within floor of skull: the last point of the path when it is shorter.
+func alongPath(points []Vec3, yd float64, skull Vec3, floor float64) Vec3 {
+	at := points[0]
+	left := yd
+	for i := 1; i < len(points) && left > 0; i++ {
+		a, b := points[i-1], points[i]
+		seg := dist3(a, b)
+		if seg <= 0 {
+			continue
+		}
+		n := max(1, int(math.Ceil(seg/0.5)))
+		part := seg / float64(n)
+		for k := 1; k <= n; k++ {
+			next := lerpVec(a, b, float64(k)/float64(n))
+			if dist3(next, skull) < floor {
+				return at
+			}
+			if part >= left {
+				return lerpVec(at, next, left/part)
+			}
+			left -= part
+			at = next
+		}
+	}
+	return at
+}
+
+// lerpVec is the point f of the way from a to b.
+func lerpVec(a, b Vec3, f float64) Vec3 {
+	return Vec3{
+		a[0] + float32(float64(b[0]-a[0])*f),
+		a[1] + float32(float64(b[1]-a[1])*f),
+		a[2] + float32(float64(b[2]-a[2])*f),
 	}
 }
 
