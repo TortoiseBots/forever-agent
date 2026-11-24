@@ -116,6 +116,10 @@ A trial argument is any of: the embedded path (`healers/paladin-holy-heal-latenc
 
 The command leases the slot, renews the lease while it runs, provisions the player and bot with read-backs, drives the situation, then scores the folder. A lease renewal failure aborts the run and still tears down. Exit codes: `0` done, `1` run or score error, `2` usage, `5` the server disconnected, `15` the slot was refused or is already held by this holder.
 
+A serve started from a `slot setup --forever` dir holds that slot's lease for its whole run, so `trials run` on
+the same slot is refused `held by <holder>` (exit `15`) while the serve runs. Run the bench against a bare
+`forever serve --dir` (a `slot.json` with no lease), or a slot no serve leases.
+
 # Scoring a run folder
 
 ```sh

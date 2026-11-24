@@ -26,12 +26,15 @@ sources:
     resource: cmd/forever-agent/forever_serve.go
 ---
 
-There are two configuration paths in the repository. The **settings file** (`settings.json`) belongs to the
+There are three configuration paths in the repository. The **settings file** (`settings.json`) belongs to the
 old 1.12 stack: `forever-agent login` and the Turtle-only tools read it, a Forever command does not. The **slots
 file** plus **slot directories** belong to the Forever path: the slots file names servers and their slots, and a
-slot's per-server `forever` block carries the connection flags the Forever tools use.
+slot's per-server `forever` block carries the connection flags the Forever tools use. A Forever serve may also be
+started from its own **serve settings file**, named with `--settings FILE`: it holds one slot's account,
+endpoints and serve flags and is a different file from the old `settings.json`.
 
-If you only use Forever commands, you need a slots file and slot directories, not a settings file.
+If you only use Forever commands, you need a slots file and slot directories (and, if you like, a serve settings
+file), not an old settings file.
 
 # The slots file
 
@@ -191,6 +194,32 @@ bin/forever-agent lease reap --dry-run
 * `reap` removes leases of holders that died on this host (pid gone or reused); `--dry-run` prints
   `would reap ...`. Another host's lease is left to its expiry.
 
+## A serve holds its lease
+
+`slot setup --forever` records the lease it was made under in the slot dir's `slot.json` (`server`, `slot`,
+`holder`, `lease_id`, `slots_path`). `forever serve --dir` now holds that lease for the whole run, on the old
+agent's heartbeat rule:
+
+* it renews the lease **at start** and then **every 5 minutes**; the lease is **15 minutes** long, so a live
+  serve never loses it and a dead one frees its slot within minutes (the lease also records the serve's pid, so
+  `lease reap` frees it at once);
+* a renewal that fails for a reason that may pass (a lock timeout, an I/O error) is logged
+  `serve: lease <server>/<slot> renew failed: ...; retrying in <duration>` and retried every minute — never
+  silently dropped;
+* an **expired lease refuses the start** (exit `15`) with a line naming the slot and its expiry and the two ways
+  out: `renew it (forever-agent lease renew ...) or pass --force`. `--force` overrides only the clock: it never
+  takes a live lease from another holder, and a `slot.json` whose lease id changed (the slot was re-acquired or
+  released) is refused with or without it;
+* a renewal that finds the lease **taken by another holder** prints
+  `serve: lease <server>/<slot> is not ours any more (...): stopping the serve` and the serve stops cleanly with
+  exit `13` — it never keeps running on another holder's slot;
+* a bare `forever serve --dir` (no `slot setup`, no lease in its `slot.json`) holds no lease, as before;
+  `teardown` remains the command that ends the game presence and releases the lease.
+
+`trials run` takes its own lease on the slot (holder `trials` by default) before it opens the serve dir, so a
+`trials run` against a slot a leased serve holds is refused `held by <holder>` (exit `15`). Run the trials
+against a bare `forever serve --dir`, or a slot no serve leases, until the two designs are reconciled.
+
 # Setting up a slot
 
 A Forever slot is set up in two steps: lease it, then build its directory.
@@ -218,6 +247,82 @@ serve: /path/to/ta-work/forever-agent forever serve --rest example.invalid:1119 
 
 `--mmaps-dir` is refused with `--forever`: a serve takes its navmesh folder from its own `--navmesh` flag, not
 from the slot.
+
+# The Forever settings file (`forever serve --settings`)
+
+A Forever slot can be started from one settings file instead of a long command line:
+
+```text
+forever-agent forever serve --settings /srv/forever/slot1/settings.json
+```
+
+A flag given on the command line always wins; the file fills every flag the command line left unset; a flag
+neither names keeps its default. `--create`, `--create-choice`, `--create-no-appearance` and `--login-budget`
+have no key and stay on the command line (a one-off character or a fleet child's wiring).
+
+```json
+{
+  "account": "slot1@example.invalid",
+  "character": "Slotchar",
+  "rest": "login.example.invalid:1119",
+  "rpc": "login.example.invalid:1118",
+  "ca": "config/ca.pem",
+  "server_name": "example.invalid",
+  "build": 70959,
+  "game_account": 1,
+  "locale": "enUS",
+  "listen": "127.0.0.1:28771",
+  "dir": ".",
+  "navmesh": "~/forever/maps/mmaps",
+  "plans_dir": "dungeons",
+  "addon": "on",
+  "disconnect_grace": "30s",
+  "password_file": "password"
+}
+```
+
+| Key | Serve flag | Meaning |
+|---|---|---|
+| `account`, `character` | `--account`, `--character` | The slot's account and character. |
+| `rest`, `rpc`, `ca` | `--rest`, `--rpc`, `--ca` | The Forever login endpoints and the root CA file. |
+| `server_name` | `--server-name` | Name verified in the login certificate. |
+| `build` | `--build` | Client build; `0` or absent is the automatic pick. |
+| `game_account` | `--game-account` | Join ticket `#N`; absent is the first listed. |
+| `locale` | `--locale` | One of the client languages. |
+| `allow_instance_redirect`, `world_checks_build_auth_key` | the same flags | Booleans. |
+| `listen` | `--listen` | RPC listen address. |
+| `dir` | `--dir` | The slot dir: `slot.json`, pid and token files. `.` is the settings file's folder. |
+| `token_file` | `--token-file` | Default: `rpc-<port>.token` in `dir`. |
+| `no_auth` | `--no-auth` | Boolean. |
+| `navmesh` | `--navmesh` | The mmaps folder. |
+| `plans_dir` | `--plans-dir` | Folder `map_snapshot` reads a plan from. |
+| `parents` | `--parent` | `{"36": 43}` is `--parent 36=43`; the file sets the whole map, and a `--parent` flag on the command line sets the whole map too. |
+| `addon` | `--addon` | `"on"` or `"off"`. |
+| `capture_dir` | `--capture-dir` | Packet capture parent (keep it outside the repository). |
+| `disconnect_grace` | `--disconnect-grace` | Duration string, `0` to `10m`. |
+| `allow_gm_units` | `--allow-gm-units` | Boolean, test bench only. |
+| `password_file` | `--password-file` | A file holding the password (one trailing newline is dropped). |
+| `password` | — | The password inline; prefer `password_file`. |
+
+Rules:
+
+- **Unknown keys are refused** and the error names the key, so a misspelt key cannot silently leave a default in
+  place. Malformed JSON, a trailing value after the object and an out-of-range value are refused too, each as a
+  usage error (exit `2`) before any login.
+- The file must be a **regular, non-symlinked file only its owner can read** (`chmod 600`), at most 256 KiB: it
+  may name the account's password and the slot's account. The read checks the opened file against the one it
+  inspected, so a file swapped in between is refused rather than used.
+- A `password_file` the settings file names is held to the same rule — regular, not a symlink, `chmod 600`, at
+  most 4096 bytes — because it is the slot's bearer secret; a loose mode or a symlink is a usage error naming the
+  path and the problem, never the content. The `--password-file` **flag** keeps its historical, looser read (any
+  file you can read): to get the check, name the file in the settings file instead of on the command line.
+- **A relative path is relative to the settings file's folder**, not the shell's working folder; a leading `~/`
+  is your home folder. That is what makes `"dir": "."` and `"ca": "config/ca.pem"` sensible inside a slot dir.
+- **Password precedence:** an explicit `--password-file` (an empty one means the environment), then
+  `password_file`, then `password`, then `FOREVER_PASSWORD`. `password` and `password_file` together are refused.
+  The password is never printed, on any path.
+- A settings-file problem is reported as `forever serve: settings <path>: <problem>` (or with
+  `(from --settings <path> and the command line)` when the merged flags are still incomplete).
 
 # Tearing a slot down
 
