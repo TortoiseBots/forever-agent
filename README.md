@@ -106,7 +106,15 @@ player without the add-on (`status.addon` says `off`; any add-on command, `bot` 
 [docs/forever/RAID-R2-NOTES.md](docs/forever/RAID-R2-NOTES.md)), `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state` (the current cast, `gcd` / `gcd_known`, `last_cast`, `last_failure`, `failures`, `combo_points` / `combo_target`, active `cooldowns`), `spells` (the spellbook: `spell_id`, `name`, `rank`, `highest`, `meta`, `level`, `passive`, `cooldown_ms`, `category`, `category_cd_ms`, `gcd_ms`, `mechanic`, `dispel`, `class`; it filters on `spell_id`, `name` and `highest`, and hides passive spells unless `passive` is true), `dynamic_objects` (the ground spells in view, nearest the mover first: `guid`, `spell_id`, `caster`, `radius`, `x`, `y`, `z`, `distance`, the flat distance from the mover, `-1` while no packet gave the object a position), `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `map_snapshot` (the picture of the run so far: `members`, `creatures`, `events`, `floors`, `notes`, `svg` and, with `html`, the single-file replay; `plan` draws a plan from `--plans-dir`, default `dungeons`, the same name rule `dungeon_run` uses; the navmesh background comes from `--navmesh`), `area_trigger`, the five death methods, `addon_send`, `join_channel`, `leave_channel`, `channel_list`, `teardown`, `mount`, `dismount`, `pet`, `pet_action`, `follow_start`,
-`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. Every other old method answers a typed `not ported on this server` error. A `unit` row
+`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. There is no "not ported" method left: every other old name is implemented here or answers a typed refusal naming its reason (the client brain and its tuning, the client dungeon finder, the add-on host and its buttons, the run's step verbs, the Turtle test toolkit: [docs/forever/METHOD-TABLE.md](docs/forever/METHOD-TABLE.md)). #216 added the last ones:
+`dungeon_run {plan, lead_bot?}` (`.tb run start <lead> <plan>`), `dungeon_status` (`all` with no lead),
+`dungeon_stop {lead_bot?, reason?}`, `dungeon_pause`, `dungeon_resume` — the module's own run control, answered as
+`{sent, runs}` with the module's run records; `plan_check {name, from_leg?, from_pull_group?}`, the CLI's plan check
+over the serve's `--plans-dir` and `--navmesh` (unchecked with the reason in `skipped` without a navmesh);
+`bot_view {bots?, wait_ms?}`, the party roster joined to the world model (one row per bot: `in_party`, `online`,
+`dead`, `in_view` and the `unit` row while in view) instead of the old perception frames; and `tbm_handshake`,
+`tbm_send {command, transport?, wait_ms?}` and `tbm` (the same, under the old name and its `via`), the TBM client
+`forever tbm-check` runs. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`) and `cc` (present and `true` while an aura crowd-controls the unit: the aura's spell has a sleep, freeze, knockout, polymorph, banish, shackle, turn or sapped mechanic in the generated spell data, or, without a mechanic, a crowd-control name such as Polymorph or Shackle Undead; Gouge never counts), and `status`
 carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target`, `gcd_ms`, `guild` (the character's own guild GUID, omitted while it has none), `guild_name` (the guild of the invite the last accept confirmed), `on_taxi` (true while on a flight), `locale` (the client language the session claims, from `--locale`) and `addon` (`on`, or `off` for a session started with `--addon off`, which never registers an add-on prefix), and a `unit` row carries `mount_display_id` (non-zero
 while that unit is mounted). `events` (`since`, `limit` up to 1,000,
@@ -280,8 +288,9 @@ and absent on `unknown-verb`; P6 is present when `.tb cmd state <bot>` (one of t
 a P3-only module answers), and absent without a probe once P3 is known absent; PL is present when `.tb cmd place` without its shape answers `error code=missing-argument cmd=cmd` and absent on the order grammar's refusal (`invalid`, `unknown-verb`, `unsupported`; a module without PL refuses the word there). Only those definite answers are remembered, until the world link is re-entered; a
 timeout (the probe keeps its own 3 s budget, so a silent module never costs the caller's whole deadline), a deadline, `not-bound`, `not-in-world`, any other code or an unexpected reply is not remembered and
 answers `not-available: <verb>: the module's answer to the <package> probe is not known (...)`, and the next call
-probes again. `view` is the port's cut verb:
-`commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
+probes again. `view` is the cut op (the 1.12 module's
+perception frames have no Forever equivalent: `commander view: the old perception frames have no Forever equivalent;
+read the module's state with commander status or run status`). Every refusal is `-32003` with its code first in the message
 (`not-available`, `run-active`, `not-owned`, `lead-mismatch`, `refused`, `bind-refused`, or the module's own error code); a lost or
 re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
 every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
@@ -293,14 +302,15 @@ with the same account and character (up to 8 attempts, 2 s doubling to 60 s apar
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
 state (`online`, `reconnecting`, `offline`); while `reconnecting` every action answers `-32005` and nothing is queued
 for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
-(default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
+(default 30 s) and then exits with a world error. [docs/forever/METHOD-TABLE.md](docs/forever/METHOD-TABLE.md)
+has the method table.
 
 `forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]` is the CLI client of
 that socket: one method call with a JSON object or array (or `-` for stdin, or nothing), printing the pretty JSON
 result (compact with `--raw`) or the typed `error: <code> <message>` with exit 16. `list` first calls the selected
-daemon's `status`, then prints every method the socket answers, with the ones this server does not port marked
-`(not ported)`; a stopped daemon fails `list` like any other call, so the table is never printed for a socket nobody
-answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
+daemon's `status`, then prints every method the socket answers: an implemented name bare, a refused one with its
+reason (`name (refused: <why>)`), so one list says what the daemon does with every old name; a stopped daemon fails
+`list` like any other call, so the table is never printed for a socket nobody answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
 token file, nothing but 127.0.0.1). A call the server refuses answers its typed error; a daemon that is not running
 is `forever rpc: cannot reach` with exit 15. Ctrl-C or an expired `--timeout` aborts the HTTP request (the connection
 is closed) and the command waits for the call to stop before exiting 1 with `cancelled:` or `timed out after ...`; no

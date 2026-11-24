@@ -1,12 +1,12 @@
 package world
 
 // The RPC method table of forever serve. A method whose ForeverCore code exists in this package is registered with
-// its typed params; every other method the old daemon served is registered as a typed "not ported on this server"
-// error, so an old caller gets a name and a reason, never an empty success.
+// its typed params; every old name this server does not implement is registered in serve_rpc_methods.go with its
+// documented refusal, so an old caller gets a name and its reason, never an empty success and never a bare
+// "not ported".
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -861,12 +861,12 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerTradeMethods(srv, st)
 	registerAuctionMethods(srv, st)
 
-	for _, name := range notPortedMethods {
-		name := name
-		srv.Register(name, func(ctx context.Context, raw json.RawMessage) (any, error) {
-			return nil, notPorted(name)
-		})
-	}
+	registerDungeonMethods(srv, st) // #216: dungeon_run/status/stop/pause/resume and plan_check
+	registerBotViewMethods(srv, st) // #216: bot_view
+	registerTBMMethods(srv, st)     // #216: tbm, tbm_handshake, tbm_send
+	// #216: the old names this server refuses answer -32003 with their
+	// documented reason (serve_rpc_methods.go); no name is left "not ported".
+	registerRefusedMethods(srv)
 }
 
 func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
@@ -1902,18 +1902,4 @@ func (s *session) serveDeath() ServeDeath {
 		}
 	}
 	return out
-}
-
-// notPortedMethods are the old daemon's methods this server does not implement. The names are the daemon's own, so
-// a caller that was written for it gets the reason instead of "method not found".
-var notPortedMethods = []string{
-	"addon_click", "addon_start", "addon_state", "addon_stop", "addon_tick",
-	"bot_view",
-	"brain_start", "brain_status", "brain_stop",
-	"dungeon_pause", "dungeon_resume", "dungeon_run", "dungeon_skip", "dungeon_stage", "dungeon_status", "dungeon_stop",
-	"lfg_auto", "lfg_join", "lfg_leave", "lfg_listing_role", "lfg_listings", "lfg_proposal_answer",
-	"lfg_role_check_answer", "lfg_status",
-	"plan_check",
-	"tbm", "tbm_buttons", "tbm_click", "tbm_handshake", "tbm_send",
-	"tt", "tune_list", "tune_set",
 }

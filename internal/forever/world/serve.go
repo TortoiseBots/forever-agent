@@ -764,12 +764,6 @@ func serveError(err error) error {
 	}
 }
 
-// notPorted is the typed answer of every method this server does not implement. It is an error, never an empty
-// success: a caller must be able to tell "not on this server" from "done".
-func notPorted(method string) error {
-	return &rpc.Error{Code: rpc.CodeGame, Message: method + ": not ported on this server"}
-}
-
 // GUID is the JSON form of a wire GUID: an "0x" hex string, 32 digits for a 128-bit GUID and shorter for the
 // empty one. It accepts the same form back, so a status GUID can be passed to target or attack unchanged.
 type GUID wire.GUID

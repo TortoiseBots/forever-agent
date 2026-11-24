@@ -293,14 +293,14 @@ func TestSpellsServeFilters(t *testing.T) {
 	}
 }
 
-// TestSpellsMethodTable: `spells` is served, not listed as not ported.
+// TestSpellsMethodTable: `spells` is served, not listed as refused.
 func TestSpellsMethodTable(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	if !slices.Contains(ported, "spells") {
 		t.Fatal("spells is not a served method")
 	}
-	if slices.Contains(notPorted, "spells") {
-		t.Fatal("spells is still on the not-ported list")
+	if slices.Contains(refused, "spells") {
+		t.Fatal("spells is still on the refused list")
 	}
 }
 
