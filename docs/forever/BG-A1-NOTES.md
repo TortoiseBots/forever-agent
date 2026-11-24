@@ -132,6 +132,28 @@ One `TBM:BG` record answers the poll:
 Then one `TBM:BG_BOT` row per bot: `role`, `objective`, `node` (the AB node
 it is assigned to), `alive`, `move_age`. No row carries a character name.
 
+ForeverCore's module answers with plain `bg ...` rows instead, behind its
+`TortoiseBots: ` system-message prefix and with the token on the end row only:
+
+```
+bg: enabled=1 ...
+bg maps: ...
+bg instance=3 map=wsg status=in-progress score=1-0 alliance=1h+4b horde=0h+5b
+bg bot=<id> role=fc objective=flag node=- map=wsg instance=3 team=alliance alive=1 move_age=2s
+bg queued ...
+bg-end verb=status lines=N #token
+```
+
+The poll reads both grammars. In the real rows the side counts are `1h+5b`
+forms, `move_age` is a duration (`2s`, `1m30s`, `-`), the watcher's instance
+is the first instance row holding a human, unknown keys and the maps/queued
+rows are skipped so a later module round cannot break the poll, and
+`enabled=0` is a refused poll. When humans appear in two instances the
+module's answer cannot say which match is the watcher's, so the parser
+refuses it (`ErrBadReport`) rather than report the wrong match. The
+collector's `Options.BareBody` is what takes the untagged body rows: a line
+carrying another token is still not this command's reply.
+
 The watch reads the escort share from `fc_escorts` (the module sees the
 battlefield; the passive observer does not), the per-side deaths from the
 `*_deaths` fields, and an AB node's defenders from the bot rows whose
@@ -241,6 +263,13 @@ whole machine:
 * Refusals: `--map xx`, `--role xx`, `--role fc`, `--poll 0/31`, the
   threshold ranges, `--team-of 1` and a `--run-id` with a separator all exit
   before any send.
+
+## ForeverCore 0.1.39
+
+The owner-only AttackPower block of a unit create is 23 writes, 92 bytes, with nothing after `TaxiNodesID`
+(`UpdateFields.cpp:1190-1263`); before 0.1.39 it was 80 bytes plus three owner-only int32 after `TaxiNodesID` — the
+same 92 in all — so the decode skips 92 once and is aligned on both cores. Client build 71037 is named and checked
+to share the 70790 numbering, but it is not claimed on its own until one live login has checked its packet layouts.
 
 ## Files
 
