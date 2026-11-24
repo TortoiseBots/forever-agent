@@ -80,7 +80,14 @@ writes the recorded run the command test reads):
 
 Run on the VM (`vm-test ta wt-fa-222`), the lines quoted from its log:
 
-RESULT-GATE-PLACEHOLDER
+```
+gofmt -l .                      -> (no output)
+go vet ./...                    -> rc=0
+CGO_ENABLED=0 go build ./...    -> rc=0
+staticcheck ./...               -> rc=0 (no finding)
+RESULT: PASS kind=ta sha=6ce6b9479 dirty=0 files=2939 runner=yulon-ubuntu2
+rc=0  vm_duration=1012s  laptop_wall=1060s
+```
 
 ## Known limits
 
