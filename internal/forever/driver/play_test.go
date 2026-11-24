@@ -833,21 +833,150 @@ func TestPlayUnreachableStrangerIsLeftBehind(t *testing.T) {
 	}
 }
 
-// TestPlayStrangerPullFailureStops: the extra pull is a pull like any other, with its bounds: two orders no one
-// answers end the run as pull-failed, and the boss is never reached.
-func TestPlayStrangerPullFailureStops(t *testing.T) {
+// playEventReasons is the "reason" of every record event with that name, in order.
+func playEventReasons(t *testing.T, res *Result, ev string) []string {
+	t.Helper()
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var out []string
+	for _, e := range tf.Events {
+		if e.Ev == ev {
+			r, _ := e.D["reason"].(string)
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestPlayStrangerNoAnswerGoesOn: a patrol candidate no one answers (two orders, the unit never turns on the party)
+// is given up with the reason recorded, and the leg goes on to its boss; it does not end the run pull-failed (the
+// RFC run of 2026-11-24 ended there on a unit that was only a patrol candidate). The boss is pulled normally.
+func TestPlayStrangerNoAnswerGoesOn(t *testing.T) {
 	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
 		f.SpawnBosses()
 		f.AddUnit(Unit{GUID: fightGUID(14), Entry: 700, Pos: Vec3{40, 15, 0}})
-		// `.bot attack` never brings the unit on the party: the pull's own two attempts run out.
+		// `.bot attack` never brings the unit on the party while the walk is at the leg's end; the boss's walk lifts it.
+		f.AggroDelay = 10 * time.Minute
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if dist3(to, Vec3{60, 0, 0}) < 8 {
+				f.AggroDelay = 0
+			}
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: a candidate no one answered is given up, the boss is pulled", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || u.Dead {
+		t.Fatalf("the candidate = %+v; want it alive and unpulled", u)
+	}
+	if r := playEventReasons(t, res, "patrol_unpullable"); len(r) != 1 || r[0] != "no-answer" {
+		t.Fatalf("patrol_unpullable reasons = %v; want [no-answer]", r)
+	}
+}
+
+// TestPlayStrangerRealPullKeepsFailureRules: the same two unanswered orders on the plan's own pack still end the run
+// pull-failed: only a patrol candidate is let go.
+func TestPlayStrangerRealPullKeepsFailureRules(t *testing.T) {
+	rig := newPlayFightRig(t, playPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
 		f.AggroDelay = 10 * time.Minute
 	})
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "pull-failed" {
-		t.Fatalf("stop = %q; want pull-failed (the extra pull's own failure rules)", res.Stop)
+		t.Fatalf("stop = %q; want pull-failed for a planned pack no one answered", res.Stop)
 	}
-	if n := len(rig.fake.Lines(".bot attack ")); n != 2 {
-		t.Fatalf("attack orders = %d; want the two attempts of one pull", n)
+}
+
+// TestPlayStrangerNotAttackableGoesOn: the tank answers the order for the held unit `not-attackable` (the live Maur
+// Grimtotem): one order, no retry, the unit is given up with the code recorded, and the boss is pulled. The unit is
+// left unmarked as a pull target afterwards and never held again.
+func TestPlayStrangerNotAttackableGoesOn(t *testing.T) {
+	stranger := fightGUID(16)
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{40, 15, 0}})
+		f.AttackCode = func(target wire.GUID) string {
+			if target == stranger {
+				return "not-attackable"
+			}
+			return ""
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: a refused candidate is given up, the boss is pulled", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || u.Dead {
+		t.Fatalf("the candidate = %+v; want it alive", u)
+	}
+	if r := playEventReasons(t, res, "patrol_unpullable"); len(r) != 1 || r[0] != "order-refused:not-attackable" {
+		t.Fatalf("patrol_unpullable reasons = %v; want [order-refused:not-attackable]", r)
+	}
+	if n := len(playEventReasons(t, res, "order_refused")); n != 1 {
+		t.Fatalf("order_refused events = %d; want 1: the refused order is not retried", n)
+	}
+	if h := len(playEventReasons(t, res, "patrol_pull")); h != 1 {
+		t.Fatalf("patrol_pull events = %d; want one: the given-up unit is not held or pulled again", h)
+	}
+}
+
+// TestPlayStrangerCandidatesAreIgnored: a unit that is never a patrol candidate does not start the hold at all: no
+// patrol_hold, no patrol_pull, no mark, and the leg walks on to its boss. Each case is a stationary unit that would
+// otherwise be held and pulled (it is hostile by every other test of the hold).
+func TestPlayStrangerCandidatesAreIgnored(t *testing.T) {
+	cases := []struct {
+		name string
+		plan func() *dungeon.Plan
+		unit Unit
+		mut  func(*PlayFake)
+	}{
+		{"skip-listed", func() *dungeon.Plan {
+			p := playStrangerPlan()
+			p.Legs[0].Skip = []uint32{700}
+			return p
+		}, Unit{Entry: 700, Pos: Vec3{40, 15, 0}}, nil},
+		{"friendly-faction", playStrangerPlan, Unit{Entry: 700, Pos: Vec3{40, 15, 0}, Faction: 35, Flags: 768},
+			func(f *PlayFake) { f.NonHostileFactions = map[int32]bool{35: true} }},
+		{"not-attackable-flags", playStrangerPlan, Unit{Entry: 700, Pos: Vec3{40, 15, 0}, Flags: 0x100}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			guid := fightGUID(17)
+			rig := newPlayFightRig(t, c.plan(), func(f *PlayFake) {
+				f.SpawnBosses()
+				u := c.unit
+				u.GUID = guid
+				f.AddUnit(u)
+				if c.mut != nil {
+					c.mut(f)
+				}
+			})
+			rig.cfg.Out = t.TempDir()
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "clear" || !res.Clear {
+				t.Fatalf("stop = %q clear = %v; want clear", res.Stop, res.Clear)
+			}
+			tf, err := trace.Read(res.Trace)
+			if err != nil {
+				t.Fatalf("trace: %v", err)
+			}
+			for _, ev := range []string{"patrol_hold", "patrol_pull"} {
+				if first, _ := playTraceEvent(tf.Events, ev); first >= 0 {
+					t.Fatalf("%s at %d ms; want none: the unit is no patrol candidate", ev, first)
+				}
+			}
+			for _, m := range rig.fake.Marks {
+				if m.Target == guid {
+					t.Fatalf("the unit was marked %v; want it left alone", m)
+				}
+			}
+		})
 	}
 }
 

@@ -308,6 +308,13 @@ type playRun struct {
 	stranger wire.GUID
 	// strangerPulls counts the pulls of each stranger, so one that evades is not pulled forever.
 	strangerPulls map[wire.GUID]int
+	// strangerGaveUp is the strangers the run found not pullable (the tank's `not-attackable`, an order no one answered):
+	// they are no patrol candidates any more, so one that stays on the way cannot hold the walk again.
+	strangerGaveUp map[wire.GUID]bool
+	// reaction caches the hostility verdict per faction template for the patrol hold (known answers only).
+	reaction map[int32]bool
+	// orderCode is the code of the module's refusal of the last attack order, empty when it was not refused.
+	orderCode string
 	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
 	pulled     map[int]bool
 	bossKilled map[uint32]bool
@@ -358,7 +365,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 	p := &playRun{
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
 		farSince: map[string]time.Time{}, farStage: map[string]int{}, bosses: map[string]bool{},
-		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, strangerPulls: map[wire.GUID]int{},
+		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
 	if p.ports.Clock == nil {
@@ -1204,7 +1211,10 @@ func (p *playRun) reachable(to Vec3) bool {
 
 // strangerNear is the nearest live hostile within yd of the agent that no pack of the plan claims and that the plan
 // does not name (a boss and a boss's adds are named; the run goes to them itself). A party member's pet is not a
-// stranger: it stands by the party and fights for it.
+// stranger: it stands by the party and fights for it. Nor is a unit the party cannot or must not fight, which the
+// hold never starts on: one a leg's skip list names (the plan says it is no pull: a quest giver, an escort, a rare),
+// one whose faction is not hostile to the character, one whose unit flags make it unattackable, and one the run
+// already found not pullable.
 func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 	units := p.ports.World.Units()
 	groups := p.route.AllGroups()
@@ -1213,7 +1223,7 @@ func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 	var best Unit
 	bestD := math.Inf(1)
 	for ui, u := range units {
-		if u.Dead || u.Friendly || known[u.Entry] || p.partyOwned(u) {
+		if u.Dead || u.Friendly || known[u.Entry] || p.partyOwned(u) || p.strangerGaveUp[u.GUID] {
 			continue
 		}
 		if _, ok := claim.GroupOf(ui); ok {
@@ -1223,9 +1233,41 @@ func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 		if d > yd || d >= bestD {
 			continue
 		}
+		if p.skipListed(u.Entry) || u.Flags&UnitNotAttackable != 0 || p.notHostile(u) {
+			continue
+		}
 		best, bestD = u, d
 	}
 	return best, bestD < math.Inf(1)
+}
+
+// skipListed says whether any leg's skip list names the entry: the plan itself says it is no pull.
+func (p *playRun) skipListed(entry uint32) bool {
+	for i := range p.route.Legs {
+		if p.route.Legs[i].Skip[entry] {
+			return true
+		}
+	}
+	return false
+}
+
+// notHostile says whether the unit's faction is friendly or neutral to the character, by the World's Reactions port
+// (the core's own faction relation). A port that is absent or does not know leaves the unit a candidate: the pull's
+// own refusal then lets it go (pullStranger).
+func (p *playRun) notHostile(u Unit) bool {
+	if hostile, ok := p.reaction[u.Faction]; ok {
+		return !hostile
+	}
+	r, ok := p.ports.World.(Reactions)
+	if !ok {
+		return false
+	}
+	hostile, known := r.HostileToPlayer(u)
+	if !known {
+		return false
+	}
+	p.reaction[u.Faction] = hostile
+	return !hostile
 }
 
 // partyOwned says whether the unit is a pet of the party: it has an owner, and that owner's GUID is a roster member's

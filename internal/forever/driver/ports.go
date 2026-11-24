@@ -49,6 +49,23 @@ type Unit struct {
 	Friendly bool
 	// Owner is the unit's owner GUID (SummonedBy, else CreatedBy, else CharmedBy), zero when unowned.
 	Owner wire.GUID
+	// Faction is the unit's faction template id and Flags its unit flags, as the update fields carry them (0 when the
+	// view does not know). The patrol hold reads them: the reaction through Reactions, the flags for UnitNotAttackable.
+	Faction int32
+	Flags   uint32
+}
+
+// UnitNotAttackable is the unit flags that make a unit impossible to attack for a player (UnitDefines.h):
+// NON_ATTACKABLE, NOT_ATTACKABLE_1 and IMMUNE_TO_PC. A quest giver the party must not touch carries IMMUNE_TO_PC (the
+// live RFC run's Maur Grimtotem: flags 768).
+const UnitNotAttackable uint32 = 0x2 | 0x80 | 0x100
+
+// Reactions is an optional port of World: whether a unit's faction is hostile to the agent's own character, by the
+// faction templates' own relation (the core's IsHostileTo). known is false when the answer is not available (a template
+// the server did not give, a link in trouble); the caller then keeps the unit a candidate and leaves the verdict to the
+// pull's own failure rules.
+type Reactions interface {
+	HostileToPlayer(u Unit) (hostile, known bool)
 }
 
 // Alive reports whether the unit can still be fought.

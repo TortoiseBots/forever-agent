@@ -400,6 +400,8 @@ func (w dungeonWorld) Units() []driver.Unit {
 			Ghost:    w.s.world.GhostAt(o.GUID),
 			Friendly: friendlyUnit(o),
 			Owner:    owner,
+			Faction:  o.Info.FactionTemplate,
+			Flags:    o.Info.Flags,
 		}
 		if cs, ok := w.s.world.Combat(o.GUID); ok && cs.Cast != nil {
 			u.Cast = uint32(cs.Cast.SpellID)
@@ -407,6 +409,20 @@ func (w dungeonWorld) Units() []driver.Unit {
 		out = append(out, u)
 	}
 	return out
+}
+
+// HostileToPlayer is the driver's Reactions port: the unit's faction template against the character's own, the core's
+// IsHostileTo (the session's cached DB2 lookup; only the units the patrol hold asks about cost a fetch). An unknown
+// template or a failed fetch is not known.
+func (w dungeonWorld) HostileToPlayer(u driver.Unit) (hostile, known bool) {
+	if u.Faction <= 0 {
+		return false, false
+	}
+	h, err := w.s.hostileToSelf(u.Faction)
+	if err != nil {
+		return false, false
+	}
+	return h, true
 }
 
 // friendlyUnit is what the model can say about a unit that must not be pulled: another player, or a creature with
