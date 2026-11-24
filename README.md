@@ -362,10 +362,15 @@ regular manifests and prints line numbers, never manifest text.
 
 `forever-agent fleet --forever --config FILE --slots FILE [--server NAME] [--stagger D] [--wait D]
 [--stop-on-failure]` runs one `forever serve` per fleet-file member (`{account, character, dir, listen,
-password_file}`) instead of one old `login` child. The serve's connection flags come from the slots file's
-`forever` block (`rest`, `rpc`, `ca`, `build`; `--server` picks it when the file names more than one). Each
+password_file, game_account}`) instead of one old `login` child. The serve's connection flags come from the slots
+file's `forever` block (`rest`, `rpc`, `ca`, `build`; `--server` picks it when the file names more than one). Each
 child is `forever serve --dir <dir> --listen <listen> --account <account> --character <character>
---password-file <file>` plus those flags; the fleet file carries no secret, only paths and names. `online`
+--password-file <file>` plus those flags; `game_account` (1 or more, the serve's own `--game-account`) picks the
+game account the login joins, and its absence means the first listed. Because only the login service knows how many
+game accounts an account holds, a member that names no `game_account` costs one login to the login service before
+the fleet starts (no world socket, no character, paced by the same budget): an account that lists several, or one
+the login refuses, stops the fleet then with exit 2 and the file field to add, instead of a serve failing at the
+world after its login was spent. The fleet file carries no secret, only paths and names. `online`
 (the serve link lifecycle) counts as in world, on this path only; starts are paced one login per 5 s under the
 per-IP limit. Before any login every member is checked against the slots file: its account must be a slot
 account, its character allowed, and no live lease of another holder may hold that account; accounts are
@@ -652,11 +657,16 @@ The live mode has not been run against a server yet; what the first attempt must
 round's notes.
 `forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--dash-insecure-http] [--watch [--interval 2s]]`
 reads the roster dashboard of a server: the typed login, every logged-in bot (class, level, health, power, map, zone,
-instance, position, target, group, kind and state) and the heartbeat. Without `--watch` it prints that roster once.
-With `--watch` the first read is the baseline and every later read prints only the changes: a bot that died, a bot
+instance, position, target, group, kind and state) and the heartbeat. The heartbeat is taken from the bots answer when
+the dashboard sends it there, and otherwise from `GET /api/v1/status` (this port keeps it there; a dashboard with no
+such route is a roster without a heartbeat, not a failed read). Without `--watch` it prints that roster once.
+With `--watch` the first read is the baseline: it prints the roster, then every later read prints the heartbeat line
+(`roster: N bot(s), M human(s); states ...`) at the `--interval` pace, followed by the changes: a bot that died, a bot
 whose state says moving but whose position has not changed for `--stuck-after` (default 20 s), a bot in combat with
 no bot of its group in combat for `--lone-combat-after` (default 5 s), and a bot more than `--group-distance`
 (default 60 yd) from the centre of its group. Each condition is reported once and fires again only after it cleared.
+The dashboard's own macro states (`busy`, `stalled` and `resting`) are states like any other: a bot in one is in the
+roster and in the far-from-group and death rules, and only a `moving` bot can be reported stuck.
 `--record FILE` (with `--watch`) appends one JSON line per good read — the read's time and the roster exactly as it
 was decoded — so a watch's whole history can be replayed offline; a line's names are the dashboard's own.
 The password comes from the private `--pass-file` or `FOREVER_DASH_PASSWORD`, never a flag; `--timeout` (default

@@ -181,6 +181,11 @@ func TestRosterReloginsOnceOn401(t *testing.T) {
 			fmt.Fprint(w, `{"success":true}`)
 			return
 		}
+		if r.URL.Path == "/api/v1/status" {
+			// The heartbeat fallback's own read, not a roster read.
+			fmt.Fprint(w, `{"bots":0,"humans":0,"states":{}}`)
+			return
+		}
 		atomic.AddInt32(&reads, 1)
 		c, err := r.Cookie("s")
 		if err != nil || c.Value != "v" {
@@ -221,7 +226,7 @@ func TestDecodeRosterRefusesContractBreaks(t *testing.T) {
 		{"no name", `{"bots":[{"guid":1,"kind":"pool","state":"idle"}]}`, "name"},
 		{"no kind", `{"bots":[{"name":"A","guid":1,"state":"idle"}]}`, "kind"},
 		{"unknown kind", `{"bots":[{"name":"A","guid":1,"kind":"pet","state":"idle"}]}`, "kind"},
-		{"unknown state", `{"bots":[{"name":"A","guid":1,"kind":"pool","state":"resting"}]}`, "state"},
+		{"unknown state", `{"bots":[{"name":"A","guid":1,"kind":"pool","state":"sleeping"}]}`, "state"},
 		{"not an object", `{"bots":[5]}`, "record"},
 		{"null record", `{"bots":[null]}`, "name"},
 	}
@@ -378,4 +383,86 @@ func TestRosterNon200IsAnHTTPError(t *testing.T) {
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// TestRosterTakesTheHeartbeatFromStatus is #236 point 2: this port answers GET /api/v1/bots with a bare list and
+// keeps the heartbeat on GET /api/v1/status, so a bots answer without one asks the status route. A dashboard with
+// neither leaves the roster without a heartbeat and is not an error.
+func TestRosterTakesTheHeartbeatFromStatus(t *testing.T) {
+	var statusReads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+		case "/api/v1/bots":
+			fmt.Fprint(w, `[{"name":"Ash","guid":1,"kind":"pool","state":"busy","hp":10,"max_hp":10,"map":0,"instance":"","x":0,"y":0,"z":0}]`)
+		case "/api/v1/status":
+			atomic.AddInt32(&statusReads, 1)
+			fmt.Fprint(w, `{"online":true,"seq":7,"diff":12.5,"humans":2,"bots":3,"states":{"busy":0.5,"idle":0.5}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, 2*time.Second)
+	r, err := c.Roster(context.Background())
+	if err != nil {
+		t.Fatalf("Roster: %v", err)
+	}
+	if len(r.Bots) != 1 || r.Bots[0].State != StateBusy {
+		t.Fatalf("bots = %+v, want the busy bot kept", r.Bots)
+	}
+	if r.Heartbeat == nil {
+		t.Fatal("no heartbeat: the status route's counts were not read")
+	}
+	if r.Heartbeat.Bots != 3 || r.Heartbeat.Humans != 2 || r.Heartbeat.States["busy"] != 0.5 {
+		t.Fatalf("heartbeat = %+v", r.Heartbeat)
+	}
+	if n := atomic.LoadInt32(&statusReads); n != 1 {
+		t.Fatalf("%d status reads, want 1", n)
+	}
+}
+
+// TestRosterWithoutAStatusRouteIsStillARoster: a dashboard that has no status route is a roster without a heartbeat,
+// never a failed read.
+func TestRosterWithoutAStatusRouteIsStillARoster(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/login" {
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, 2*time.Second)
+	r, err := c.Roster(context.Background())
+	if err == nil {
+		t.Fatalf("Roster = %+v, want the refused bots read", r)
+	}
+
+	// The same dashboard with a bots answer but no status route: the roster stands, without a heartbeat.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+		case "/api/v1/bots":
+			fmt.Fprint(w, `[]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv2.Close()
+	c2 := newTestClient(t, srv2.URL, 2*time.Second)
+	r2, err := c2.Roster(context.Background())
+	if err != nil {
+		t.Fatalf("Roster: %v", err)
+	}
+	if r2.Heartbeat != nil {
+		t.Fatalf("heartbeat = %+v, want nil", r2.Heartbeat)
+	}
 }

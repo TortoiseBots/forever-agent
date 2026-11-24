@@ -771,3 +771,37 @@ func TestServeUseObjectReportsAHalfSentUse(t *testing.T) {
 		t.Fatal("the use itself was not sent")
 	}
 }
+
+// TestServeRollVoteAlias is #236 point 5: the roll takes vote as choice's alias (the live examples spell it vote),
+// choice keeps working, and two different words are refused before any packet.
+func TestServeRollVoteAlias(t *testing.T) {
+	l := newLootWorld(t)
+	l.startRolls(lootIDA, loot.FlagPass|loot.FlagGreed, 0, 1)
+	zero, one := 0, 1
+
+	if _, err := l.s.serveRoll(serveRollParams{Choice: "need", Vote: "greed"}); err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("two different words answered %v", err)
+	}
+	if len(l.votes) != 0 {
+		t.Fatalf("a refused vote was sent: %v", l.votes)
+	}
+
+	// vote alone names the vote, exactly as choice does.
+	res, err := l.s.serveRoll(serveRollParams{Looted: GUID(lootIDA), ItemSlot: &zero, Vote: "greed"})
+	if err != nil || res.ItemSlot != 0 || res.Choice != "greed" {
+		t.Fatalf("roll by vote: %+v %v", res, err)
+	}
+	if len(l.votes) != 1 || l.votes[0].vote != loot.RollGreed {
+		t.Fatalf("votes %v", l.votes)
+	}
+	// Both, the same word: accepted.
+	res, err = l.s.serveRoll(serveRollParams{Looted: GUID(lootIDA), ItemSlot: &one, Choice: "greed", Vote: "Greed"})
+	if err != nil || res.ItemSlot != 1 || res.Choice != "greed" {
+		t.Fatalf("roll by both: %+v %v", res, err)
+	}
+	// Neither: refused with both names.
+	if _, err := l.s.serveRoll(serveRollParams{Looted: GUID(lootIDA), ItemSlot: &zero}); err == nil ||
+		!strings.Contains(err.Error(), "choice") || !strings.Contains(err.Error(), "vote") {
+		t.Fatalf("no word answered %v", err)
+	}
+}

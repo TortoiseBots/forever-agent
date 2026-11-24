@@ -41,7 +41,10 @@ world model, walked within 4 yd, INTERACTION_DISTANCE 5.0 minus a step, ObjectDe
 navmesh when `--navmesh` is set and are refused without it unless the step carries `straight=1` (a straight line at
 an invented height is the repo's no-go, so it is an explicit choice), `open` (talk or quest hello by flags, prints
 the menu or the quest list), `select option=`, `close` (`CMSG_CLOSE_INTERACTION`). Each step prints one line:
-`step N verb ok|fail reason`. `--steps FILE` reads lines; `--step 'verb k=v'` repeats on the command line.
+`step N verb ok|fail reason`. Every refused step gets its `fail` line, whichever verb it is: the step runner adds it
+for a verb that returns its refusal without printing one (#236 point 4: the item verbs, split and destroy among them,
+used to answer `ok:false` with no line at all), and a verb that prints its own (wait, gm, goto) keeps one. `--steps
+FILE` reads lines; `--step 'verb k=v'` repeats on the command line.
 
 Step syntax: a value is one word, or double-quoted (`note="a b c"`, `\"` and `\\` escapes) when it has spaces;
 `line=` takes the whole rest of the step, so `gm line=.additem 6948 1` works.

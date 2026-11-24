@@ -433,3 +433,101 @@ func TestServeRaidMoveNoReadbackFails(t *testing.T) {
 	a.stop(t)
 	f.wait(t)
 }
+
+// memberRow returns a party row by its name, zero when the roster has none.
+func memberRow(info ServePartyInfo, name string) ServePartyMember {
+	for _, m := range info.Members {
+		if m.Name == name {
+			return m
+		}
+	}
+	return ServePartyMember{}
+}
+
+// TestServeAssistantInRaid is #236 point 1: the leader sets and clears a raid member's assistant flag
+// (CMSG_SET_ASSISTANT_LEADER), the party method reports the flag, and the refusals the rank has (a non-leader, an
+// unknown member) go out by name before any packet. The flag is a raid rank only: in a party the core drops the
+// packet (Group.cpp:1758-1762), so the call is refused before it is sent.
+func TestServeAssistantInRaid(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustCall(t, "assistant", map[string]any{"name": "Bottwo"})
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if row := memberRow(info, "Bottwo"); !row.Assistant {
+		t.Fatalf("Bottwo is not an assistant after the call: %+v\n%s", info, steps.joined())
+	}
+	// The flag is beside the rank, not instead of it: the leader stays the leader.
+	if row := memberRow(info, "Testchar"); !row.Leader {
+		t.Fatalf("the leader lost the rank: %+v", info)
+	}
+
+	a.mustCall(t, "assistant", map[string]any{"name": "Bottwo", "clear": true})
+	// A fresh struct: `assistant` is omitted when false, so unmarshalling into the old one would keep the stale true.
+	var cleared ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &cleared)
+	if row := memberRow(cleared, "Bottwo"); row.Assistant {
+		t.Fatalf("Bottwo is still an assistant after the clear:\n%s\n%+v", steps.joined(), cleared)
+	}
+	f.mu.Lock()
+	seen := append([]fakeAssistSeen(nil), f.groupSeenAssistant...)
+	f.mu.Unlock()
+	if len(seen) != 2 || !seen[0].Apply || seen[1].Apply {
+		t.Fatalf("the fake saw %+v, want an apply then a clear", seen)
+	}
+	if seen[0].GUID != fakeGroupMemberGUID(1) {
+		t.Fatalf("the packet names %v, want Bottwo", seen[0].GUID)
+	}
+	// A member already in the asked state costs no packet.
+	a.mustCall(t, "assistant", map[string]any{"name": "Bottwo", "clear": true})
+	f.mu.Lock()
+	again := len(f.groupSeenAssistant)
+	f.mu.Unlock()
+	if again != 2 {
+		t.Fatalf("a redundant clear sent %d packet(s), want none", again-2)
+	}
+	a.mustFail(t, "assistant", map[string]any{"name": "Nobody"}, -32003, "no member named Nobody")
+	a.stop(t)
+	f.wait(t)
+
+	// A member that does not lead: refused before the packet (GroupHandler.cpp:551).
+	g := newFakeServer(t)
+	g.serveMode = true
+	raidScene(g)
+	g.groupLeaderName = "Bottwo"
+	defer g.close()
+	steps = &stepLog{}
+	b := startServeDaemon(t, g, steps)
+	awaitGroup(t, b, steps, 10)
+	b.mustFail(t, "assistant", map[string]any{"name": "Botthree"}, -32003, "only the leader can")
+	g.mu.Lock()
+	sent := len(g.groupSeenAssistant)
+	g.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("a refused rank sent %d CMSG_SET_ASSISTANT_LEADER", sent)
+	}
+	b.stop(t)
+	g.wait(t)
+
+	// A server that answers nothing: the flag never comes back, so the call fails with its own words.
+	h := newFakeServer(t)
+	h.serveMode = true
+	raidScene(h)
+	h.groupSilent = true
+	defer h.close()
+	old := groupConfirmWait
+	groupConfirmWait = 300 * time.Millisecond
+	t.Cleanup(func() { groupConfirmWait = old })
+	steps = &stepLog{}
+	c := startServeDaemon(t, h, steps)
+	awaitGroup(t, c, steps, 10)
+	c.mustFail(t, "assistant", map[string]any{"name": "Bottwo"}, -32003, "did not confirm")
+	c.stop(t)
+	h.wait(t)
+}

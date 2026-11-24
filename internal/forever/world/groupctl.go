@@ -100,9 +100,10 @@ func (s *session) groupRoster(what string) error {
 	return nil
 }
 
-// groupLeaderRank is groupRoster plus the rank the core asks of the leader-only commands (promote, assistant, loot,
-// disband): CMSG_SET_PARTY_LEADER, CMSG_SET_ASSISTANT_LEADER, CMSG_SET_LOOT_METHOD and the uninvites of a disband
-// are taken only from Group::IsLeader (GroupHandler.cpp:289-328, :407-427, :549-558).
+// groupLeaderRank is groupRoster plus the rank the core asks of the leader-only party commands (promote, loot,
+// disband): CMSG_SET_PARTY_LEADER, CMSG_SET_LOOT_METHOD and the uninvites of a disband are taken only from
+// Group::IsLeader (GroupHandler.cpp:289-328, :407-427). The assistant rank is the raid's and lives in
+// raidLeaderRank (raidctl.go).
 func (s *session) groupLeaderRank(what string) error {
 	if err := s.groupRoster(what); err != nil {
 		return err
@@ -198,17 +199,26 @@ func (s *session) groupPromote(ctx context.Context, name string) error {
 	return s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool { return s.party.LeaderGUID == m.GUID })
 }
 
-// groupAssistant sets or clears a member's assistant flag (CMSG_SET_ASSISTANT_LEADER) and waits for the roster that
-// carries the flag. The server's own answer is silence (GroupHandler.cpp:549-558): the member's flag in the next
-// party update is the readback.
+// groupAssistant sets or clears a raid member's assistant flag (CMSG_SET_ASSISTANT_LEADER) and waits for the roster
+// that carries the flag. The flag is a raid rank: the core sets it only in a raid group and only from the leader,
+// silently refusing both a party and anyone else (Group::SetGroupMemberFlag, Group.cpp:1758-1802, called by
+// GroupHandler.cpp:545-555), so a party is refused here before the packet. The server broadcasts a fresh roster after
+// the change: the member's flags byte in it is the readback (Group.h:59-72).
 func (s *session) groupAssistant(ctx context.Context, name string, apply bool) error {
 	const what = "assistant"
-	if err := s.groupLeaderRank(what); err != nil {
+	if err := s.raidLeaderRank(what); err != nil {
 		return err
+	}
+	if !s.party.Raid {
+		return fmt.Errorf("%s: needs a raid: convert_raid first", what)
 	}
 	m, err := s.groupMember(what, name)
 	if err != nil {
 		return err
+	}
+	if m.Assistant == apply {
+		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
+		return nil
 	}
 	if err := s.Send(wire.CMSGSetAssistantLeader, party.BuildSetAssistantLeader(m.GUID, apply)); err != nil {
 		return err

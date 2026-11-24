@@ -79,7 +79,10 @@ type serveRollParams struct {
 	Looted   GUID   `json:"looted,omitempty"`
 	ItemSlot *int   `json:"item_slot,omitempty"`
 	RollID   uint32 `json:"roll_id,omitempty"`
-	Choice   string `json:"choice"`
+	Choice   string `json:"choice,omitempty"`
+	// Vote is choice's alias: the live notes' examples spell the field vote (#236 point 5). Give one, or both with
+	// the same word.
+	Vote string `json:"vote,omitempty"`
 }
 
 // ServeLootItem is one row of a loot window: Slot is the LootListID the server numbered it with.
@@ -844,16 +847,37 @@ func (s *session) serveGameObjects(p serveGameObjectsParams) ([]ServeGameObject,
 
 // ---- roll ----
 
+// rollChoiceWord resolves the roll's word from choice and its vote alias (#236 point 5: the live notes' examples say
+// vote, the method's own field is choice). One of them, or both with the same word; two different words are refused
+// rather than silently picked between.
+func rollChoiceWord(choice, vote string) (string, error) {
+	c := strings.ToLower(strings.TrimSpace(choice))
+	v := strings.ToLower(strings.TrimSpace(vote))
+	switch {
+	case c != "" && v != "" && c != v:
+		return "", fmt.Errorf("roll: choice %q and its alias vote %q disagree: give one", choice, vote)
+	case c != "":
+		return c, nil
+	default:
+		return v, nil
+	}
+}
+
+// serveRoll votes on an open group roll. The roll is named by looted and item_slot, or it is the only open one.
 func (s *session) serveRoll(p serveRollParams) (ServeRollResult, error) {
 	if p.RollID != 0 {
 		return ServeRollResult{}, errors.New("rolls are named by looted and item_slot on this server (roll_id is not accepted)")
 	}
-	vote, ok, err := loot.VoteFromWord(strings.ToLower(strings.TrimSpace(p.Choice)))
+	word, err := rollChoiceWord(p.Choice, p.Vote)
+	if err != nil {
+		return ServeRollResult{}, err
+	}
+	vote, ok, err := loot.VoteFromWord(word)
 	if err != nil {
 		return ServeRollResult{}, err
 	}
 	if !ok {
-		return ServeRollResult{}, errors.New("roll needs choice: need, greed or pass")
+		return ServeRollResult{}, errors.New("roll needs choice (or its alias vote): need, greed or pass")
 	}
 	lootGUID := wire.GUID(p.Looted)
 	if lootGUID.IsZero() != (p.ItemSlot == nil) {

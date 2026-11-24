@@ -181,6 +181,7 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 				printDashRoster(stdout, r)
 				primed = true
 			} else {
+				printDashHeartbeat(stdout, r)
 				for _, e := range events {
 					printDashEvent(stdout, e)
 				}
@@ -196,8 +197,10 @@ func foreverDashBotsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 }
 
-// printDashRoster prints the heartbeat when the dashboard sends one, then one line per bot.
-func printDashRoster(w io.Writer, r *roster.Roster) {
+// printDashHeartbeat prints the dashboard's own line: the bot and human counts and, when it sends them, the state
+// ratios. It is the watch's heartbeat (#236 point 2): a watch prints it on every good read, at the --interval pace
+// (the dashboard's own snapshot cycle is 2 s), so the line is a sign of life even when nothing else changed.
+func printDashHeartbeat(w io.Writer, r *roster.Roster) {
 	if hb := r.Heartbeat; hb != nil {
 		fmt.Fprintf(w, "roster: %d bot(s), %d human(s)", hb.Bots, hb.Humans)
 		if len(hb.States) > 0 {
@@ -213,9 +216,14 @@ func printDashRoster(w io.Writer, r *roster.Roster) {
 			fmt.Fprintf(w, "; states %s", strings.Join(parts, ", "))
 		}
 		fmt.Fprintln(w)
-	} else {
-		fmt.Fprintf(w, "roster: %d bot(s)\n", len(r.Bots))
+		return
 	}
+	fmt.Fprintf(w, "roster: %d bot(s)\n", len(r.Bots))
+}
+
+// printDashRoster prints the heartbeat, then one line per bot.
+func printDashRoster(w io.Writer, r *roster.Roster) {
+	printDashHeartbeat(w, r)
 	bots := append([]roster.Bot(nil), r.Bots...)
 	sort.Slice(bots, func(i, j int) bool {
 		if bots[i].Name != bots[j].Name {

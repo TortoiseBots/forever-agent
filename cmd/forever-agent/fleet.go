@@ -152,7 +152,7 @@ func fleetCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fs.SetOutput(stderr)
 	fleetPath := fs.String("config", "", "fleet file: {\"members\":[{\"account\",\"character\",\"rpc\"}]} (required)")
 	settingsPath := fs.String("settings", config.DefaultPath(), "settings file (realmd address, accounts)")
-	forever := fs.Bool("forever", false, "run `forever serve` children (members {account,character,dir,listen,password_file}) instead of `login` children")
+	forever := fs.Bool("forever", false, "run `forever serve` children (members {account,character,dir,listen,password_file,game_account}) instead of `login` children")
 	slotsPath := fs.String("slots", "", "slots file holding the per-server `forever` block (the serve's connection flags; --forever only)")
 	serverFlag := fs.String("server", "", "server whose `forever` block supplies the serve's connection flags (--forever only)")
 	stagger := fs.Duration("stagger", 2*time.Second, "pause between starting children (realmd throttles logins)")
