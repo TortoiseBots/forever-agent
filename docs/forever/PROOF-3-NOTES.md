@@ -174,3 +174,44 @@ every pull and stopped `patrol` at the oggleflint leg). The run's own trace sett
 - Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --character <name>
   --last-leg oggleflint` ends `play: stop clear, 14 pulls, 0 wipes, 0 deaths, 2.5 min, gm_lines=0, clear=true`, the
   states end `LEG_WALK BOSS PULL FIGHT LOOT REST LEG_WALK DONE LEAVE STOP`, and the card's verdict is PASS.
+
+### Part E (2026-11-24): the hold's review follow-ups and the boss-kill id
+
+The post-merge review of Part D (the third reviewer) and item 7 of the 2026-11-24 early-stop review, verified in the
+code at `origin/main` before each change:
+
+- **The skip list is the active leg's** (`skipListed`): it looped over every leg, so an entry the *next* leg skips
+  (a quest giver there) hid a hostile patrol of the same entry on this leg. The plan has no plan-wide skip, only
+  `leg.skip`, so the active leg is the whole list.
+- **A given-up unit stays given up for the run** (`endHold`): `unreachable` and `pulled-twice` recorded
+  `patrol_skip` without remembering the unit, so the same unit started a fresh `PlayStillAfter` (20 s) hold at every
+  waypoint inside its circle. Every `patrol_skip` reason now also marks `strangerGaveUp`.
+- **`evading` is not "cannot be attacked"**: it was in `cannotAttackCode`, so one evade gave the unit up for good.
+  It is now `evadeCode`: `engage` re-sends the order every `PlayEvadeWait` (5 s) inside the pull's own window
+  (`order_again` event), and a stranger whose order is *still* refused `evading` at the window's end is left alone
+  for `PlayEvadeWait` (`patrol_evade` event, `strangerRetry`) and pulled again by a later hold — bounded by
+  `maxStrangerPulls` (2), after which `endHold` remembers it.
+- **An unknown reaction is never friendly** (`notHostile`): faction 0 (the unit's data has not arrived) is a
+  candidate without asking the port, and an unknown template is never cached as a verdict.
+- **A patrol in the way is fought, not cleared** (`liveMembers`): the pack's claim is `MatchPacks`' radius, and a
+  patrol walks out of it, so `packInWay` could pick a group by its patrol and `pull` then found no members and marked
+  it `pulled` without a fight. The group's live patrol members within `PlayPullYd` are now part of its pull.
+- **A cleared group does not name its entries** (`planNames`, in place of `knownEntries`): the hold skipped every
+  entry any group named, cleared or not, so a patrol unit met after its pack was fought was walked past. A unit is
+  skipped only when a boss, a boss's add or an *uncleared* group names it (or an uncleared group claims it).
+- **The boss-kill id** (`drainEncounters`): an encounter `start` now records its id, and the starts seen after the
+  current boss pull began (`bossEnc`, from `bossSince`) are that boss's. An `end`/`boss_kill` whose id is not one of
+  them is another fight's (`boss_kill_other` event) and does not mark this leg's boss dead. A run that saw no
+  encounter start at all keeps the credit as its only evidence (the credit-only case of
+  `TestPlayBossKillCreditCountsTheKill`).
+- Review items checked and **not changed**: `pullStranger`'s `return ""` after a failed `pullStep` is not a bare
+  abort (every `pullStep` false path sets `stopReason` or loses the link: `walkTo`, `waitNear`, `sleep`); the
+  Reactions blame for a cross-faction party is not reachable here (`PartyMember` carries no race/faction, an
+  agent-led `.bot` party is the leader's faction, and the plans' `boss.team` names the known cross-team bosses); a
+  yellow neutral mob does not aggro unprovoked, so it is no patrol candidate by design.
+
+Tests: `internal/forever/driver/play_stops_c_test.go`:
+`TestPlaySkipListIsTheActiveLeg`, `TestPlayUnreachableStrangerIsRemembered`,
+`TestPlayEvadingStrangerIsOrderedAgain`, `TestPlayUnknownReactionIsNotFriendly`,
+`TestPlayPatrolInTheWayIsPulledNotCleared`, `TestPlayClearedGroupPatrolUnitIsPulled`,
+`TestPlayBossKillCreditOwnEncounterCounts`, `TestPlayBossKillCreditForeignEncounterIgnored`.

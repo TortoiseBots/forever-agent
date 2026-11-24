@@ -163,8 +163,11 @@ type PlayFake struct {
 	// refusal of that order (the live `not-attackable` on a friendly quest giver) and the order does nothing.
 	AttackCode func(target wire.GUID) string
 	// NonHostileFactions are the faction templates the fake's Reactions port answers friendly or neutral; any other
-	// faction (the zero one included) is hostile.
+	// faction is hostile, but the ones it does not know.
 	NonHostileFactions map[int32]bool
+	// UnknownFactions are the faction templates the fake's Reactions port does not know (known false: the unit's data
+	// has not arrived). The zero faction is unknown like the real adapter's, never friendly.
+	UnknownFactions map[int32]bool
 	// NoAggro is how many of a unit's aggro events the fake swallows, by guid: a mob that never joins the fight (a
 	// pillar between it and the party), or one that evades when it is ordered. Each due pack's settle skips the unit
 	// and counts one off; when the count is spent the unit turns on the party as usual.
@@ -933,8 +936,13 @@ func (f *PlayFake) Units() []Unit {
 	return f.units
 }
 
-// HostileToPlayer is the Reactions port: every faction is hostile but the ones a test listed in NonHostileFactions.
+// HostileToPlayer is the Reactions port: every faction is hostile but the ones a test listed in NonHostileFactions;
+// the zero faction and the ones in UnknownFactions are not known (a unit whose data has not arrived), as the real
+// adapter answers for a template the view does not carry.
 func (f *PlayFake) HostileToPlayer(u Unit) (hostile, known bool) {
+	if u.Faction <= 0 || f.UnknownFactions[u.Faction] {
+		return false, false
+	}
 	return !f.NonHostileFactions[u.Faction], true
 }
 
