@@ -60,14 +60,14 @@ line.
       "character": "Tankone",
       "dir": "./slots/account-one",
       "listen": "127.0.0.1:8765",
-      "password_file": "/home/example/.config/forever/password-one"
+      "password_file": "./secrets/password-one"
     },
     {
       "account": "ACCOUNT_TWO",
       "character": "Healerone",
       "dir": "./slots/account-two",
       "listen": "127.0.0.1:8766",
-      "password_file": "/home/example/.config/forever/password-two"
+      "password_file": "./secrets/password-two"
     }
   ]
 }

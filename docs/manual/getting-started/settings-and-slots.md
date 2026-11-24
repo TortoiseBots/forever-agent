@@ -211,9 +211,9 @@ bin/forever-agent slot setup --forever example 1 --holder work --binary bin/fore
   start line:
 
 ```text
-slot example/1 ready in /home/USER/ta-work
+slot example/1 ready in /path/to/ta-work
 account ACCOUNT, character Mychar, port 8765
-serve: /home/USER/ta-work/forever-agent forever serve --rest example.invalid:1119 --rpc example.invalid:1119 --ca /path/to/ca.pem --account ACCOUNT --character Mychar --password-file <password-file> --listen 127.0.0.1:8765 --dir /home/USER/ta-work
+serve: /path/to/ta-work/forever-agent forever serve --rest example.invalid:1119 --rpc example.invalid:1119 --ca /path/to/ca.pem --account ACCOUNT --character Mychar --password-file <password-file> --listen 127.0.0.1:8765 --dir /path/to/ta-work
 ```
 
 `--mmaps-dir` is refused with `--forever`: a serve takes its navmesh folder from its own `--navmesh` flag, not
