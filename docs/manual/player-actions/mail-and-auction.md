@@ -14,6 +14,8 @@ sources:
     resource: internal/forever/world/serve_auction_methods.go
 ---
 
+> **Not yet proven on a live server.** The mail act steps and the auction methods are exercised against the scripted world; no live run of them has been made yet. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 This page covers the two mailbox-style services: mail (a mailbox creature or mailbox game object) and the auction
 house (an auctioneer). Both use the same pattern: a call sends one request and waits for the server's answer, and a
 read that gets no answer is a result with `ok: false`, while a command that gets no answer is an error that says its

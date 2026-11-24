@@ -23,7 +23,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # `walk-preflight` reference
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `turtle-agent walk-preflight <walk-dir>` checks a walk directory before any raid-walk starts. It reads every `cmd-*.txt`
 file and the autopilot's `targets.txt` (one command per file, one command or target per line; blank and `#` lines are

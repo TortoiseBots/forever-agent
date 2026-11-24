@@ -189,11 +189,30 @@ A problem line (`problem[0]: stream-count`) is the protocol telling you a messag
 did not hold together; the command still ran, so read the problem before you
 trust the counts.
 
-For the raw transport alone, `forever addon-check` registers one prefix, optionally
-sends one message on a chosen kind, and prints every message that arrives for the
-prefix during `--listen` (10 s by default). Its `--prefix`, `--send`, `--channel`,
-`--invite` and `--accept-from` flags are described by its own usage line; it sends
-no protocol of its own.
+# The raw transport: `forever addon-check`
+
+`addon-check` is the raw transport check, with no protocol of its own: it registers one prefix, optionally sends
+one message on a chosen kind, and prints every message that arrives for the prefix during `--listen`.
+
+```bash
+forever-agent forever addon-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME --prefix PREFIX [--send TEXT] [--channel party|raid|instance|guild|officer|whisper:NAME] \
+    [--invite NAME | --accept-from NAME] [--listen 10s] [--stay 4s] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--prefix` | required | The add-on prefix to register and listen for, 1-16 bytes of valid UTF-8. |
+| `--send TEXT` | none | One add-on text to send after registering, at most 255 bytes. |
+| `--channel` | `party` | The kind `--send` goes out on: `party`, `raid`, `instance`, `guild`, `officer` or `whisper:NAME`. Sending on a custom channel is not supported. |
+| `--invite NAME`, `--accept-from NAME` | none | Form or join the two-client party proof; the two flags are exclusive. |
+| `--listen DURATION` | `10s` | How long to listen for add-on messages, 0-2m. |
+| `--stay` | `4s` | How long to settle in the world before registering, 0-1m. |
+| `--capture-dir DIR` | none | Write every packet the handlers see into a new run directory. Keep it outside the repository. |
+
+The server's limits are checked before anything is sent (prefix, text, channel and whisper name), so a bad one is
+a usage error and never a login. Output is identifier-free counts and the messages' prefixes and senders. Exit `0`
+when the run completes; `2` a usage error; `5` the world server refused the session or the character.
 
 # Common problems
 

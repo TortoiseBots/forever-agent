@@ -15,7 +15,7 @@ such line with its Forever replacement.
 ## What you can do
 
 * Prove that a server's login and world path work: `forever login-check`, `forever world-check`.
-* Keep characters in the world and drive them: `forever serve` plus `forever rpc`, or `forever fleet` for several
+* Keep characters in the world and drive them: `forever serve` plus `forever rpc`, or `fleet --forever` for several
   accounts at once.
 * Order the server's bot module and run a party through a dungeon (`forever dungeon-play`, `forever dungeon-watch`)
   or a raid (`forever raid-watch`), with a preflight that checks the slot, plan, module and bots first.

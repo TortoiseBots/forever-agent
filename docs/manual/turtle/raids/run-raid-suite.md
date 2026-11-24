@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Regression-check plans with the suite
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `turtle-agent raid-suite` walks a list of raid plans one after another, each with `raid-walk`, and judges each walk against the last good walk of the same plan in a history dir. It is the regression check for the raid plans.[^suite-cmd]
 

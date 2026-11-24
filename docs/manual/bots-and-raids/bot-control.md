@@ -250,10 +250,10 @@ flags), every bound member (bot, class, role, level, health, power, map, zone,
 position, raid subgroup, held placement slot), the commander's last eight orders,
 and the run record when one of its bots is running.
 
-The module's optional packages are asked about once per session, and the answer is
-remembered until the character re-enters the world. The agent calls them `P3` (the
-order grammar), `P6` (the task package) and `PL` (the placement package), and its
-`not-available` answer names the one it asked about. A package the module lacks
+The module's optional packages — the order grammar, the task package and the
+placement package — are asked about once per session, and the answer is remembered
+until the character re-enters the world; a `not-available` answer names the package
+it asked about. A package the module lacks
 makes its verbs answer `not-available`; no verb is emulated with another.
 
 # Where the agent exposes this

@@ -119,11 +119,13 @@ from client data.
 ```sh
 bin/forever-agent forever serve ... --navmesh /path/to/forever-mmaps
 bin/forever-agent forever path-check --navmesh /path/to/forever-mmaps --map 389 \
-    --from 10,10,10 --to 20,20,10
+    --from 10,10,10 --to 20,20,10 [--server-filter]
 ```
 
 `--parent MAP=PARENT` teaches the planner that an instance map's missing tiles come from a parent map
-(`--parent 389=1` for Ragefire Chasm on map 1). The daemon takes the same flag. See
+(`--parent 389=1` for Ragefire Chasm on map 1). `--server-filter` uses the server's own player filter (ground,
+steep, water, lava and road; nothing excluded) instead of the safe walk filter the live walker uses (ground,
+steep, water and road; lava and slime excluded). The daemon takes the same flag. See
 [Navmesh and maps](../dungeons/navmesh-and-maps.md).
 
 # Installing into a slot

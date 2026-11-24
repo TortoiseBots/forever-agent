@@ -45,7 +45,7 @@ sends a packet.
 | `corpse_map`, `corpse_x`, `corpse_y`, `corpse_z` | number | The corpse's map and position, when the client knows it. |
 
 ```json
-{"dead": true, "ghost": false, "phase": "corpse", "released": false,
+{"dead": true, "ghost": false, "phase": "dead", "released": false,
  "resurrect": false, "reclaim_in_ms": 28400,
  "corpse_map": 389, "corpse_x": -1287.2, "corpse_y": -2379.1, "corpse_z": 91.6}
 ```
@@ -56,8 +56,8 @@ sends a packet.
 |---|---|---|---|
 | `release_spirit` | `{}` | `{}` | nothing when the spirit is already released (it is a no-op); `world: the character is not dead` when alive; `world: the character is not in the world yet` before login. |
 | `corpse_query` | `{}` | `{found, map, x, y, z}` | `world: the corpse's location is not known` when no answer arrives in 3 s or the answer names no corpse; `world: the corpse is on a transport (not supported)`; the character not being in the world. |
-| `reclaim_corpse` | `{}` | `{}` | `world: the character's spirit is not released` before a release; `world: the character is not dead` when alive; `world: the corpse's location is not known`; `world: the corpse is on another map`; `world: the character is farther from its corpse than the reclaim radius` (39 yd); `world: the corpse cannot be reclaimed yet` while the announced delay runs; `world: the server refused the corpse reclaim` when the server answers nothing. |
-| `accept_resurrect` | `{}` | `{}` | `world: the character is not dead` when alive; `world: there is no resurrection offer to answer` when the offer expired or none arrived; `world: the resurrection did not happen` when the answer did not revive the character. |
+| `reclaim_corpse` | `{}` | `{}` | `world: the character's spirit is not released` when alive or dead without a release; `world: the corpse's location is not known`; `world: the corpse is on another map`; `world: the character is farther from its corpse than the reclaim radius` (39 yd); `world: the corpse cannot be reclaimed yet` while the announced delay runs; `world: the server refused the corpse reclaim` when the server answers nothing. |
+| `accept_resurrect` | `{}` | the `death_status` object (`dead`, `ghost`, `phase`, `released`, `resurrect`, ...) | `world: the character is not dead` when alive; `world: there is no resurrection offer to answer` when the offer expired or none arrived; `world: the resurrection did not happen` when the answer did not revive the character. |
 | `accept_summon` | `accept` (bool, default `true`) | `{summoner, accepted}` | `world: there is no summon offer to answer`; the character not being in the world. |
 | `area_trigger` | `id` (int, required) | `{}` | `area_trigger: needs a trigger id` for `0` or less; a send error. |
 

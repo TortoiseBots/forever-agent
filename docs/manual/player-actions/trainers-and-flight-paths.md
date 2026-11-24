@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/world/taxi_act.go
 ---
 
+> **Not yet proven on a live server.** The trainer and flight-path methods and their `act` steps are exercised against the scripted world; a live run is the next step for them. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 Two NPC services that both start from a creature within about 4 yards (the methods never walk): a trainer and a
 flight master. Both share the session's interactive state with the vendor and quest methods, so a call that names a
 different NPC starts that state over.

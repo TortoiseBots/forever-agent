@@ -23,4 +23,4 @@ rules, and the practical steps for a new command or daemon method.
 
 # History
 
-* [Where the old bundle went](old-bundle-map.md) - Every page of the former docs/okf bundle, its class, and the page that now holds it.
+* [Where the old bundle went](old-bundle-map.md) - Every page of the former docs/okf bundle, its class, and the page in this manual that now holds it.

@@ -21,7 +21,7 @@ sources:
   - id: connredact
     resource: internal/forever/worldconn/redact.go
   - id: tbdash
-    resource: internal/tbdash/tbdash.go
+    resource: internal/tbdash/client.go
   - id: privfile
     resource: internal/privfile/privfile.go
   - id: config

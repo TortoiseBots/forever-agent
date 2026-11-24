@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Supervise raids with the autopilot
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `turtle-agent raid-autopilot <walk-dir>` keeps a walk dir's raids running without a worker watching them. It reads `<walk-dir>/targets.txt`, one goal per line, launches a `raid-walk` for each id, and re-places any walk that ends, stalls or loses progress until every goal is met.[^auto-cmd]
 

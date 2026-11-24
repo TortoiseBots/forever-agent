@@ -183,6 +183,32 @@ Stop fighting:
 forever-agent forever rpc ./slots/ACCOUNT stop_attack '{}'
 ```
 
+# A live fight: forever fight-check
+
+One-shot live check of the combat path, no daemon: it logs in, settles, picks one living creature, fights it for
+`--fight-for` and prints what the client understood of the fight.
+
+```bash
+forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 8s] [--entry N] [--level-min N] [--level-max N] [--fight-for 60s] \
+    [--capture-dir DIR] [--provoke]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stay` | `8s` | How long to settle in the world before choosing the target, 0-10m. |
+| `--entry` | `0` | Creature template entry to fight; `0` takes the nearest living creature in the level band within 40 yd. |
+| `--level-min` | `0` | Lowest target level; `0` means three below the character's own level, 0-60. |
+| `--level-max` | `0` | Highest target level; `0` means two above the character's own level, 0-60. |
+| `--fight-for` | `60s` | How long to fight before giving up, more than 0 and at most 5m. |
+| `--capture-dir DIR` | none | Write every packet the combat, chat and party handlers see into a new run directory. Keep it outside the repository. |
+| `--provoke` | off | Debug: provoke refusals a fight log otherwise has no packet for (an out-of-range swing, a cast with no rage). |
+
+The summary is identifier-free: whether the target died, got away or survived, its entry and level and health,
+swings, misses, casts and aura events, damage dealt and taken, the character's own health and power, experience
+gained, and one row per cast result. Exit `0` when the target died; `2` a usage error; `5` the world server refused
+the session; `6` the link was lost; `11` the character died.
+
 # What you see
 
 A successful `cast`, `cancel_cast` and `stop_attack` answer `{}`. `spells` answers an array (possibly empty),

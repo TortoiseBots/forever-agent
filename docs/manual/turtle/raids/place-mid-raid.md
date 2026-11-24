@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Start partway into an instance
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `--place` (with `--from`) starts the raid partway into its instance instead of at the door, so several raids on one server can each work a different boss leg. It only runs on the test servers, needs `--sql`, and is refused with `--inject`.[^walk-cmd]
 

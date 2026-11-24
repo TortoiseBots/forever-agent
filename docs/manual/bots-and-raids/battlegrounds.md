@@ -18,16 +18,14 @@ sources:
     resource: cmd/forever-agent/forever_bgwatch_dry.go
 ---
 
+> **Not yet proven on a live server.** The three queue steps and the watch are exercised against the scripted world; nothing here has been run against a real match yet, and a live battleground run is the next step. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 Two things in the agent involve a battleground. The three scripted **queue
 steps** let any character queue, accept and leave through the core's own
 battlemaster packets — you combine them with walks and other steps in `forever
 act`. **`forever bg-watch`** goes further: it queues its character, accepts, plays
 the match as a passive observer, records the whole match and prints a report card
 about the bots' behaviour.
-
-What is proven: the queue steps and the watch work against the scripted world; a
-live battleground run is the next step, and nothing here has been run against a
-real match yet.
 
 # Queue steps
 

@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Fault injection
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `--inject` makes the walk inject a controlled fault and measure what the raid does about it. It is refused with `--place`, and the autopilot refuses it. Give at most 4 faults, each kind at most once; `kill-mt` needs an `ot` batch in the roster, or nobody would take over.[^inject]
 

@@ -12,7 +12,7 @@
       change a user can see, **or** the next line says why none was needed.
 - [ ] No private data: no hosts, accounts, character names, paths or capture files in this PR.
 
-Docs: <!-- "not needed, because ..." when nothing user-visible changed; delete otherwise -->
+Docs: <!-- "not needed, because <reason>" when nothing user-visible changed; delete this line otherwise -->
 
 ## Evidence
 

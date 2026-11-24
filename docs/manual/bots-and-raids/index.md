@@ -11,9 +11,9 @@
 # Battlegrounds and fleets
 
 * [Battlegrounds](battlegrounds.md) - Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
-* [forever fleet](fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
+* [fleet](fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
 
 # Dashboards
 
-* [Watching bots on a dashboard](dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and replay recordings.
+* [Watching bots on a dashboard](dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 * [Editing a route on the dashboard](dashboard-route-editing.md) - Turn on the dashboard's route editor, save a navmesh-checked version of a plan's route, and move that version into the repository.

@@ -20,6 +20,8 @@ sources:
     resource: cmd/forever-agent/forever_loot.go
 ---
 
+> **Not yet proven on a live server.** The quest, loot and game-object methods, their `act` steps and the live checks `loot-check` and `object-use` are exercised against the scripted world; a live run is the next step for each. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 This page covers talking a quest through from a quest giver, reading the quest log, and everything around loot:
 corpse and object windows, taking items and money, opening chests, using game objects, finding them, and group
 rolls.
@@ -198,7 +200,7 @@ forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE
     [--at x,y,z] [--at-range 2] [--range 30] [--stay 8s] [--fight-for 60s]
 
 forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
-    --character NAME --entry N [--at x,y,z] [--at-range 2] [--range 30] [--stay 8s]
+    --character NAME --entry N [--at x,y,z] [--at-range 2] [--range 40] [--stay 8s]
 ```
 
 | Flag | Default | Meaning |
@@ -208,7 +210,7 @@ forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE
 | `--take` | `0` | How many items to take from the window; `0` takes every item the window allows, at most 18. |
 | `--money` | on | Take the window's money. |
 | `--at` | none | `x,y,z` of the chest or object when several of that entry are in range; `--at-range` (default 2 yd, 0.5-100) sets how close it must be. |
-| `--range` | `30` | How far to look for a target, 1-200 yards. |
+| `--range` | `30` (`loot-check`) / `40` (`object-use`) | How far to look for a target, 1-200 yards. |
 | `--stay` | `8s` | How long to settle in the world before choosing the target, 0-10m. |
 | `--fight-for` | `60s` | `loot-check` only: how long a target that is still alive is fought before giving up, 0-5m. |
 

@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # `raid-walk report` reference
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 Usage: `turtle-agent raid-walk report <dir> [--spell ID[,ID]...] [--window 5s] [--clock-offset 1h] [--log FILE] [--fights FILE] [--md FILE] [--json FILE] [--out DIR]`. It reads a finished walk's folder and turns it into the per-pull table the walks otherwise build by hand. It reads files only: no server, no login, no settings or token file.[^report-cmd]
 

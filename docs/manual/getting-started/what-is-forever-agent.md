@@ -16,8 +16,6 @@ sources:
     resource: AGENTS.md
 ---
 
-<p align="center"><img src="../../assets/forever-agent-banner.jpg" alt="forever-agent: a headless WoW Forever client" width="100%"></p>
-
 forever-agent is a headless client for **ForeverCore** servers: one process logs one character into the world
 with no game window and exposes it over a local JSON-RPC socket, so server-side behaviour can be driven and
 tested from scripts. It is an unofficial community project, not affiliated with Blizzard Entertainment, and you
@@ -54,7 +52,7 @@ processes.
 # What has been proven, and what has not
 
 The table below says honestly what has been run against a live server and what has only been exercised against
-a scripted (fake) world. The long per-round notes are under `docs/forever/`.
+a scripted (fake) world. The long development notes are under `docs/forever/`.
 
 | Part | State |
 |---|---|

@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/world/act.go
 ---
 
+> **Not yet proven on a live server.** The vendor and gossip methods and their `act` steps are exercised against the scripted world; a live run is the next step for them. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 These methods talk to a creature: open a vendor and its list, buy and sell, and open a gossip menu and choose an
 option. They share the session's interactive state with each other and with the quest and trainer methods, which
 has two consequences worth reading once:

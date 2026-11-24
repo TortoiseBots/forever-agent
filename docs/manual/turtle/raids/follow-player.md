@@ -15,7 +15,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Follow the lead bot as a player
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 `follow_start` walks your character behind the lead bot of a bot-led run, on the lead's own trail. It never moves ahead of the lead, sends no chat and no GM line, and refuses to run beside `dungeon_run`: the two own the same movement mode, so one must stop before the other starts.[^follow]
 

@@ -35,7 +35,7 @@ It is read-only: nothing here writes a lease, a file or a server setting, and no
 | `plan` | The plan file | The plan does not load; its error names the field. |
 | `export` | `--export`: the plan's Forever-format migration file or its folder (the folder's `plan_<name>.sql`) | No `--export` (warning), an unreadable or unparsable file, no plan of that name, a different map, or no legs. |
 | `module` | The serve link: one cheap read, `.tb state party` | No serve dir to open, an unopenable link (check the serve's token file), an error or an incomplete answer, or a server that does not know the line (the bot module is not loaded). |
-| `soap` | The SOAP console: a `.pinfo` read | No endpoint configured (warning), an endpoint that does not answer, or a character that does not exist. |
+| `console` | The SOAP console: a `.pinfo` read | No endpoint configured (warning), an endpoint that does not answer, or a character that does not exist. |
 | `bots` | The same `.pinfo` read, one per name | A bot that does not exist, a bot not owned by the player's account (a play run needs its own bots; a run or a watch needs them to exist), or an unreadable answer. Offline bots are a warning: the run logs them in. |
 
 The export check reads the **file**: no console or module command reads back which plan rows the server holds, so a
@@ -86,8 +86,8 @@ preflight: OK   lease   lease held by runner until 21:40:12Z
 preflight: OK   plan    plan ragefire_chasm, map 389
 preflight: OK   export  plan_ragefire_chasm.sql: map 389, 9 leg(s) (the file only: the rows the server loaded are not read)
 preflight: OK   module  .tb state party answered, 3 line(s)
-preflight: WARN soap    no SOAP endpoint configured: the server is not read -- fix: pass --soap-user and a password file
-preflight: WARN bots    the bots are not checked without SOAP
+preflight: WARN console no console configured: the server is not read -- fix: pass --soap-user and a password file
+preflight: WARN bots    the bots are not checked without a console
 preflight: 7 check line(s): 2 warning(s), 0 failure(s)
 ```
 

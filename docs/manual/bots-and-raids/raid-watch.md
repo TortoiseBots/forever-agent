@@ -22,6 +22,8 @@ sources:
     resource: internal/dungeon/plan.go
 ---
 
+> **Not yet proven on a live server.** The watch is exercised against the scripted world; no live raid run has been made with it yet, and the first live run is what proves the live path end to end. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 `forever raid-watch` brings a raid party in as a raid plan asks, starts the
 server module's own run, and then only reads: the module's progress, its events
 and its instance report. It never orders a bot during the run. It is the raid
@@ -33,11 +35,6 @@ read.
 Use it when the module (not this client) runs the fights and you want the run
 observed, bounded, and recorded — for example overnight, or while you watch the
 first pulls of a new plan.
-
-What is proven: the watch works against the scripted world; no live raid run has
-been made with it yet. The live path is wired end to end, and the first live
-attempt is what proves the module's commander card, its run answers and the raid
-summary against a real server.
 
 # Synopsis
 

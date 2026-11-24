@@ -75,9 +75,31 @@ class DecideTest(unittest.TestCase):
         body = "We wrote docs: not needed in the description of something else.\n"
         self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
 
-    def test_the_waiver_without_a_reason_still_opts_out(self):
-        # The rule asks for a reason; a machine cannot judge it, so the line itself is the signal.
-        self.assertEqual(decide(["cmd/forever-agent/forever_map.go"], body="Docs: not needed\n"), [])
+    def test_the_waiver_needs_a_reason(self):
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body="Docs: not needed\n")), 1)
+        self.assertEqual(
+            len(decide(["cmd/forever-agent/forever_map.go"], body="Docs: not needed, because\n")), 1
+        )
+
+    def test_a_waiver_inside_a_fenced_block_does_not_count(self):
+        body = "What changed\n\n```\nDocs: not needed, because the example is only text.\n```\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+
+    def test_a_flag_on_another_flag_set_is_a_trigger(self):
+        added = ['\tstay := flags.Duration("stay", 60*time.Second, "how long to stay")']
+        self.assertIn("a new flag", decide(["internal/forever/world/route_walk.go"], added)[0])
+
+    def test_the_flag_package_itself_is_a_trigger(self):
+        added = ['fs := flag.NewFlagSet("check", flag.ContinueOnError)']
+        self.assertIn("a new flag", decide(["cmd/tool/main.go"], added)[0])
+
+    def test_an_added_register_call_is_a_trigger(self):
+        added = ['srv.Register("bank_open", nil)']
+        self.assertIn("a new flag", decide(["internal/forever/world/bank_open.go"], added)[0])
+
+    def test_a_comment_that_names_register_is_not_a_trigger(self):
+        added = ["// srv.Register is where the method table grows; this is prose in a comment"]
+        self.assertEqual(decide(["docs/PLANS.md"], added), [])
 
     def test_a_doc_change_outside_the_manual_does_not_count(self):
         self.assertEqual(len(decide(["cmd/forever-agent/main.go", "docs/CI.md"])), 1)

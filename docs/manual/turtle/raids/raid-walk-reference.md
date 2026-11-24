@@ -15,7 +15,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # `raid-walk` flags
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 Usage: `turtle-agent raid-walk <plan> [--server <server>] [--slot N] ...` or `turtle-agent raid-walk report <dir> ...`. A leading plan moves past the flags before parsing, so flags-first callers parse as before. On/off flags (`--place`, `--decisions`, `--allow-split-ledger`) take `=`: `--flag=off` turns one off, and a bare flag means on.[^walk-cmd]
 

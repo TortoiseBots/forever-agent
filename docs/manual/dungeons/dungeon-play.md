@@ -18,6 +18,8 @@ sources:
     resource: internal/forever/driver/record.go
 ---
 
+> **Not yet proven on a live server.** The run machine, its walker and its fight logic are exercised against the scripted (fake) world; no live dungeon run of `forever dungeon-play` has been made yet, so its verdict covers the client side only. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 # Synopsis
 
 ```bash

@@ -17,7 +17,7 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 # Recover from wipes
 
 > **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, `forever-agent help` prints their replacement (none yet, #108).
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
 
 By default (`--wipe-resume 0`) a wipe ends the walk with exit 19. Raise `--wipe-resume` to revive and resume instead. With `--wipe-end fast` (the autopilot passes it for `--gm-instance-data` and `--boss-wipe-fresh` goals) a wipe at a boss row ends at once, with no reset wait and no revive recipe (every dead hire still gets a bare `.revive <name>`): the next launch takes a fresh instance and this copy is discarded.
 

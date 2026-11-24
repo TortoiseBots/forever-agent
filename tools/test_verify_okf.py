@@ -64,7 +64,7 @@ FOREVER_GO = (
 )
 
 # The three registration shapes the checker parses: literal names, a map literal a range walks, and the
-# notPortedMethods slice.
+# refusedMethods slice.
 SERVE_METHODS_GO = (
     "package world\n"
     "\n"
@@ -83,8 +83,9 @@ SERVE_METHODS_GO = (
     "\t}\n"
     "}\n"
     "\n"
-    "var notPortedMethods = []string{\n"
-    '\t"dungeon_run", "tune_set",\n'
+    "var refusedMethods = []serveRefusal{\n"
+    '\t{name: "dungeon_run", why: "the old driver"},\n'
+    '\t{name: "tune_set", why: "the brain is retired"},\n'
     "}\n"
 )
 
@@ -101,9 +102,9 @@ def page(title="A page", description="What the page lets the reader do.", body="
         "generated: { by: omp/deepseek-v4.1-flash, at: %s }\n"
         "sources:\n"
         "  - id: sample\n"
-        "    resource: cmd/forever-agent/forever_serve.go\n"
+        "    resource: cmd/forever-agent/main.go\n"
         "  - id: other\n"
-        "    resource: internal/rpc/server.go\n"
+        "    resource: internal/forever/world/serve_methods.go\n"
         "---\n"
         "\n%s" % (title, description, GOOD_AT, body)
     )
@@ -156,7 +157,7 @@ METHOD_INDEX = page(
 
 NOT_PORTED = page(
     title="Methods not ported",
-    description="The names that answer not ported.",
+    description="The names that answer with a refusal.",
     body="# Names\n\n| Methods | Area |\n|---|---|\n| `dungeon_run`, `tune_set` | The old driver |\n",
 )
 
@@ -173,9 +174,9 @@ def good_bundle(root):
     write(
         root,
         "docs/manual/daemon/index.md",
-        "# Daemon\n\n* [forever serve](serve.md) - The session daemon.\n"
+        "# Daemon\n\n* [forever serve](serve.md) - Run the session daemon.\n"
         "* [Method index](method-index.md) - Every method the daemon registers.\n"
-        "* [Methods not ported](not-ported-methods.md) - The names that answer not ported.\n",
+        "* [Methods not ported](not-ported-methods.md) - The names that answer with a refusal.\n",
     )
     serve_body = (
         "# What this is\n\n```sh\nforever-agent version\nforever-agent lease acquire example --slot 1 --holder work\n"
@@ -458,21 +459,25 @@ class BundleTest(unittest.TestCase):
             "cmd/forever-agent/forever_login.go",
             FOREVER_GO.replace('\tcase "rpc":', '\tcase "zzz":\n\t\treturn exitUsage\n\tcase "rpc":'),
         )
-        write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\n`zzz` alone is not the form.\n"))
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n`zzz` alone is not the form.\n\n```sh\nforever zzz\n```\n"),
+        )
         self.assertProblem("registered forever subcommand 'zzz'")
         write(
             self.root,
             "docs/manual/getting-started/page.md",
-            page(body="# What\n\nRun `forever zzz` to check it.\n"),
+            page(body="# What\n\nRun it:\n\n```sh\nforever-agent forever zzz\n```\n"),
         )
         self.assertEqual(self.problems(), [])
 
     # Method coverage: the method index and the not-ported page against the serve's registration.
 
     def test_parse_method_registry_reads_all_three_shapes(self):
-        implemented, not_ported = verify_okf.parse_method_registry([SERVE_METHODS_GO])
+        implemented, refused = verify_okf.parse_method_registry([SERVE_METHODS_GO])
         self.assertEqual(implemented, {"status", "walk_to", "mail_list"})
-        self.assertEqual(not_ported, {"dungeon_run", "tune_set"})
+        self.assertEqual(refused, {"dungeon_run", "tune_set"})
 
     def test_registered_method_must_be_in_the_index(self):
         write(
@@ -518,9 +523,209 @@ class BundleTest(unittest.TestCase):
         write(
             self.root,
             "internal/forever/world/serve_methods.go",
-            SERVE_METHODS_GO.replace('"dungeon_run", "tune_set",', '"dungeon_run", "tune_set", "lfg_status",'),
+            SERVE_METHODS_GO.replace(
+                '\t{name: "tune_set", why: "the brain is retired"},\n',
+                '\t{name: "tune_set", why: "the brain is retired"},\n'
+                '\t{name: "lfg_status", why: "no client finder"},\n',
+            ),
         )
-        self.assertProblem("not-ported method 'lfg_status' is named in no row")
+        self.assertProblem("refused method 'lfg_status' is named in no row")
+
+    # The parser bypasses the review demonstrated: several labels on one case, a nested switch, and a
+    # brace inside a string or a raw string.
+
+    def test_case_labels_can_name_several_commands(self):
+        text = MAIN_GO.replace(
+            '\tcase "lease":',
+            '\tcase "one", "two":\n\t\treturn exitUsage\n\tcase "lease":',
+        )
+        top, _ = verify_okf.parse_command_registry(text, FOREVER_GO)
+        self.assertIn("one", top)
+        self.assertIn("two", top)
+
+    def test_a_nested_switch_case_is_not_a_command(self):
+        text = MAIN_GO.replace(
+            '\tcase "lease":\n\t\treturn leaseCmd(args[1:], stdout, stderr)',
+            '\tcase "lease":\n'
+            "\t\tswitch x {\n"
+            '\t\tcase "nested":\n'
+            "\t\t}\n"
+            "\t\treturn leaseCmd(args[1:], stdout, stderr)",
+        )
+        top, _ = verify_okf.parse_command_registry(text, FOREVER_GO)
+        self.assertIn("lease", top)
+        self.assertNotIn("nested", top)
+
+    def test_braces_in_strings_do_not_end_the_switch(self):
+        text = MAIN_GO.replace(
+            '\tcase "lease":',
+            '\tcase "brace":\n'
+            '\t\t_ = "}"\n'
+            '\t\t_ = `case "ghost":`\n'
+            '\tcase "lease":',
+        )
+        top, _ = verify_okf.parse_command_registry(text, FOREVER_GO)
+        self.assertIn("brace", top)
+        self.assertIn("lease", top)
+        self.assertNotIn("ghost", top)
+
+    def test_a_tilde_fence_is_scanned_for_commands(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n~~~sh\nforever-agent nosuch --x\n~~~\n"),
+        )
+        self.assertProblem("unknown forever-agent command: nosuch")
+
+    def test_an_indented_code_block_is_scanned_for_commands(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n    forever-agent nosuch --x\n"),
+        )
+        self.assertProblem("unknown forever-agent command: nosuch")
+
+    def test_a_crlf_page_is_a_problem(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page().replace("\n", "\r\n"),
+        )
+        self.assertProblem("CRLF line endings")
+
+    def test_a_source_resource_must_exist(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page().replace("resource: internal/forever/world/serve_methods.go", "resource: internal/gone/gone.go"),
+        )
+        self.assertProblem("source resource does not exist")
+
+    def test_a_source_url_is_not_a_path(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page().replace("resource: internal/forever/world/serve_methods.go", "resource: https://example.invalid/doc"),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_a_missing_anchor_is_a_problem(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nSee [nowhere](../daemon/serve.md#no-such-heading).\n"),
+        )
+        self.assertProblem("link anchor does not resolve")
+
+    def test_an_existing_anchor_passes(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nSee [there](../daemon/serve.md#what-this-is).\n"),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_an_index_description_must_match_the_page(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/index.md",
+            "# Getting started\n\n* [A page](page.md) - A different summary.\n",
+        )
+        self.assertProblem("index description does not match")
+
+    # Commands are documented as commands, not as a word in backticks.
+
+    def test_a_bare_backticked_command_is_not_documentation(self):
+        write(
+            self.root,
+            "cmd/forever-agent/main.go",
+            MAIN_GO.replace('\tcase "lease":', '\tcase "unlisted":\n\t\treturn exitUsage\n\tcase "lease":'),
+        )
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n`unlisted` is mentioned in prose only.\n"),
+        )
+        self.assertProblem("registered command 'unlisted' is in no manual page")
+
+    def test_a_heading_documents_a_command(self):
+        write(
+            self.root,
+            "cmd/forever-agent/main.go",
+            MAIN_GO.replace('\tcase "lease":', '\tcase "unlisted":\n\t\treturn exitUsage\n\tcase "lease":'),
+        )
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n## unlisted\n\nWhat the command does.\n"),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_a_table_row_documents_a_command(self):
+        write(
+            self.root,
+            "cmd/forever-agent/main.go",
+            MAIN_GO.replace('\tcase "lease":', '\tcase "unlisted":\n\t\treturn exitUsage\n\tcase "lease":'),
+        )
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\n| Command | What it does |\n|---|---|\n| `forever-agent unlisted` | A check. |\n"),
+        )
+        self.assertEqual(self.problems(), [])
+
+    # The privacy rule: e-mail addresses, all the home path forms, and real host names.
+
+    def test_privacy_email_address(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nWrite to %s.\n" % ("alice" + "@" + "real" + ".org")),
+        )
+        self.assertProblem("e-mail address in the manual")
+
+    def test_privacy_placeholder_email_is_allowed(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nWrite to %s.\n" % ("account" + "@" + "example.com")),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_privacy_root_path(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nSave it in %s.\n" % ("/ro" + "ot/secret")),
+        )
+        self.assertProblem("absolute home directory path")
+
+    def test_privacy_users_path(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nSave it in %s.\n" % ("/Us" + "ers/alice/secret")),
+        )
+        self.assertProblem("absolute home directory path")
+
+    def test_privacy_host_name(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nConnect to %s.\n" % ("db" + ".real" + ".org")),
+        )
+        self.assertProblem("host name in the manual: db.real.org")
+
+    def test_privacy_allowed_hosts(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(
+                body="# What\n\nSee https://github.com/x, %s and %s.\n"
+                % ("trinity.actual" + ".battle" + ".net", "login" + ".example.invalid")
+            ),
+        )
+        self.assertEqual(self.problems(), [])
 
     def test_not_ported_page_method_must_still_be_unimplemented(self):
         write(
@@ -528,12 +733,12 @@ class BundleTest(unittest.TestCase):
             "docs/manual/daemon/not-ported-methods.md",
             page(
                 title="Methods not ported",
-                description="The names that answer not ported.",
+                description="The names that answer with a refusal.",
                 body="# Names\n\n| Methods | Area |\n|---|---|\n"
                 "| `dungeon_run`, `tune_set`, `status` | The old driver |\n",
             ),
         )
-        self.assertProblem("method 'status' is not in notPortedMethods any more")
+        self.assertProblem("method 'status' is not in refusedMethods any more")
 
 
 class CommandLineTest(unittest.TestCase):

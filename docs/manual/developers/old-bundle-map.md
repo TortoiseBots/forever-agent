@@ -23,6 +23,25 @@ The repository carried an older OKF bundle at `docs/okf`: 167 markdown files wri
 
 Every Turtle page starts with the line "This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore server." and keeps the command refusals the code performs. The old area names are kept under `turtle/`, so links between Turtle pages still resolve.
 
+# The old README's sections
+
+The long README (1025 lines before it was replaced) was a front page and a reference in one. Its front-page matter
+stayed in [README.md](../../../README.md); its reference matter moved to the pages below. "Kept" means the section
+is still in README.md because it is repository-level text, not user documentation.
+
+| Old README section | Where it is now |
+|---|---|
+| Title, status paragraph and the ticket-number references | [README.md](../../../README.md) and [what forever-agent is](../getting-started/what-is-forever-agent.md); the ticket numbers were replaced by plain statements |
+| `## Turtle-only commands` build/status table | [What has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not) and [the Turtle section](../turtle/index.md) |
+| The per-command reference under it (`forever login-check`, `world-check`, `walk-check`, `map-check`, `chat-check`, `party-check`, `cmd-check`, `addon-check`, `death-check`, `loot-check`, `object-use`, `fight-check`, `char-create`, `char-delete`, `route-walk`, the plan and minimap tools) | The area pages: [first login](../getting-started/first-login.md), [movement](../daemon/movement.md), [travel](../daemon/travel.md), [chat](../player-actions/chat.md), [groups](../player-actions/groups-raids-and-guild.md), [command channel](../getting-started/safety-and-gm-guards.md#the-command-permission-probe), [add-on protocol](../bots-and-raids/addon-protocol.md), [death and the corpse run](../daemon/death-and-corpse-run.md), [quests and loot](../player-actions/quests-and-loot.md), [spells and combat](../player-actions/spells-and-combat.md), [route tools](../dungeons/route-tools.md), [plan tools](../dungeons/plan-tools.md), [navmesh and maps](../dungeons/navmesh-and-maps.md) |
+| `## Quick start` | [Install and build](../getting-started/install-and-build.md) and [your first login](../getting-started/first-login.md) |
+| `## What you can do with it` | [What forever-agent is](../getting-started/what-is-forever-agent.md#which-commands-you-will-reach-for-first) and the area indexes |
+| `## Scrub a Forever capture` | [Scrubbing a capture before sharing it](../testing/ci-and-local-checks.md#scrubbing-a-capture-before-sharing-it) and [Privacy and captures](privacy-and-captures.md) |
+| `## Replay a Forever capture` | [Replaying a capture](../testing/traces-and-records.md#replaying-a-capture) |
+| `## Documentation` | [The manual's index](../index.md) |
+| `## Development` | [Contributing](contributing.md) |
+| `## Licence` | Kept in [README.md](../../../README.md) and [LICENSE](../../../LICENSE): repository-level text, not a manual page |
+
 # The table
 
 ## about

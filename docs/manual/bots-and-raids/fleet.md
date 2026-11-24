@@ -1,6 +1,6 @@
 ---
 type: Command
-title: forever fleet
+title: fleet
 description: Keep several Forever daemons online at once, one per account, from a single supervisor.
 tags: [bots-and-raids, fleet, daemon, slots]
 status: stable

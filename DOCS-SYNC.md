@@ -44,15 +44,25 @@ line saying what changed and when.
 ## How it is checked
 
 - `make docs-check` runs the manual's checker (`tools/verify_okf.py`) and its tests. It fails on a broken page,
-  a link that does not resolve, a secret or host in the manual, a registered command that no page mentions, a
-  daemon method missing from `daemon/method-index.md`, and a method or command in the manual that the code no
-  longer registers. A command or method left out on purpose goes in `docs/manual/.undocumented-commands` or
+  a CRLF file, a link or `#anchor` that does not resolve, a `sources[].resource` that does not exist, an index
+  entry whose description differs from the page's own description, a secret, e-mail address, home path or unknown
+  host name, a registered command that no page documents as a command, a daemon method missing from
+  `daemon/method-index.md`, and a method or command in the manual that the code no longer registers. A command or
+  method left out on purpose goes in `docs/manual/.undocumented-commands` or
   `docs/manual/.undocumented-methods` with a reason.
+- A command is documented as a command: a line in a code block (`forever-agent <word>`, or
+  `forever-agent forever <word>` for a subcommand), a heading naming it, or a table row naming it. A bare
+  backticked word in prose does not count.
 - The CI job `docs-sync` fails a pull request that changes `cmd/forever-agent/`, a serve method file
-  (`internal/forever/world/serve*_methods.go`) or adds a flag, and changes nothing under `docs/manual/` or
-  `README.md`. Its message names the rule; the pull request checklist carries it too.
-- A change with truly no user-visible effect says so in the pull request body, on its own line:
-  `Docs: not needed, because <the reason>`.
+  (`internal/forever/world/serve*_methods.go`), or an added line that calls a flag constructor on any `FlagSet`
+  variable or any `Register` call, and changes nothing under `docs/manual/` or `README.md`. Its message names the
+  rule; the pull request checklist carries it too.
+- A change with truly no user-visible effect says so in the pull request body, on its own line and outside a
+  fenced block: `Docs: not needed, because <the reason>`.
+
+What the machine cannot see: a change to a plan field, a stop reason, an output field, an error or refusal text,
+or a file format that no changed path or added call marks as user-visible. The diff has no trigger for those, so
+the author must still open the page the table above names.
 
 ## For AI agents
 

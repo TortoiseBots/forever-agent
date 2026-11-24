@@ -121,6 +121,31 @@ Follow the whisper log for 20 seconds:
 forever-agent forever rpc ./slots/ACCOUNT chat_log '{"since": 0, "wait_ms": 20000}'
 ```
 
+# A live check: forever chat-check
+
+One-shot live check of the chat path, no daemon: it logs in like `forever world-check`, enters the world, sends
+what you asked for, prints every line it hears for `--listen` and logs out.
+
+```bash
+forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 4s] [--say TEXT] [--whisper NAME:TEXT] [--emote TEXT] [--listen 10s] \
+    [--watch NAME] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stay` | `4s` | How long to settle in the world before sending, 0-1m. |
+| `--say TEXT` | none | A say line to send. |
+| `--whisper NAME:TEXT` | none | A whisper; the name must be a character name. |
+| `--emote TEXT` | none | A text emote to send. |
+| `--listen DURATION` | `10s` | How long to listen for chat after sending, 0-2m. |
+| `--watch NAME` | none | Print that player's position from the world model once a second for `--listen` instead of the chat log. |
+| `--capture-dir DIR` | none | Write every packet the combat, chat and party handlers see into a new run directory under this path. Keep it outside the repository. |
+
+The output is identifier-free: a count of chat lines, notices, player-not-found answers, restricted lines, emote
+animations and text emotes, then one line per chat type. Exit `0` on success; `2` a usage error; `5` the world
+server refused the session or the character; the login codes are the same as `forever world-check`.
+
 # What you see
 
 `chat` answers `{}` once the line is on the wire. `chat_log` answers a page object; `join_channel` and

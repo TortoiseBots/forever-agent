@@ -24,8 +24,10 @@ sources:
     resource: internal/dashreplay/send.go
 ---
 
+> **Not yet proven on a live server.** The roster dashboard client and its watch are built and exercised against the scripted world; no live run against a server's dashboard has been made. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 Two commands in the Forever stack watch bots on a screen. `forever dash-bots` reads the roster
-dashboard a server's bot manager already serves. `forever dashboard` serves the
+dashboard a server's bot manager already serves. `forever-agent dashboard` serves the
 agent's own live page, which draws the bots of each daemon and — with run controls
 on — lets you order and place them. A third command, `dashboard-replay`, is
 Turtle-only and is not part of the Forever workflow (see the end of this page).

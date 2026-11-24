@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/driver/record.go
 ---
 
+> **Not yet proven on a live server.** The run machine is exercised with `--dry` against the scripted world; its live mode is wired but no live dungeon run has been made. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 # Synopsis
 
 ```bash

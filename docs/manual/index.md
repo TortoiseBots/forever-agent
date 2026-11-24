@@ -59,7 +59,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [forever raid-watch](bots-and-raids/raid-watch.md) - Watch a raid the server's own bot module leads, from outside, with budgets and a raid summary at the end.
 * [forever raid-autopilot](bots-and-raids/raid-autopilot.md) - Keep the Forever raids of a walk folder running and restarting without a person watching each one.
 * [Battlegrounds](bots-and-raids/battlegrounds.md) - Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
-* [forever fleet](bots-and-raids/fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
+* [fleet](bots-and-raids/fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
 * [Watching bots on a dashboard](bots-and-raids/dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 
 # Testing
@@ -90,4 +90,4 @@ When you want to drive a character from a script, read the daemon area; for a du
 # The old Turtle stack
 
 * [turtle/](turtle/) - The pages for the 1.12 Turtle stack the repository still carries, and how they relate to the Forever manual.
-* [Where the old bundle went](developers/old-bundle-map.md) - Every page of the former `docs/okf` bundle, its class, and the page that now holds it.
+* [Where the old bundle went](developers/old-bundle-map.md) - Every page of the former docs/okf bundle, its class, and the page in this manual that now holds it.

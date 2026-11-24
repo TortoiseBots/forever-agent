@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/driver/record.go
 ---
 
+> **Not yet proven on a live server.** The watch machine is exercised against the scripted module; its live mode is wired but has not been run against a real server. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 # Synopsis
 
 ```bash

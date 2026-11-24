@@ -1,7 +1,7 @@
 name: docs-sync
 
-# DOCS-SYNC.md's machine-checkable half: a pull request that changes the CLI, a serve method file or a flag must
-# change docs/manual/ or README.md, or say why no doc was needed. The decision is tools/verify_docs_sync.py (tested in
+# DOCS-SYNC.md's machine-checkable half: a pull request that changes the CLI, a serve method file, adds a flag or
+# registers a method must change docs/manual/ or README.md, or say why no doc was needed. The decision is tools/verify_docs_sync.py (tested in
 # tools/test_verify_docs_sync.py and run by `make docs-check`). A body added later re-runs the job through `edited`.
 on:
   pull_request:

@@ -271,5 +271,5 @@ share that capture; `--redact DIR` writes a masked copy and the original is neve
 # When nothing here fits
 
 Read the run's own files before guessing: the daemon's stdout, the run's trace and `<run_id>.forever-run.json`
-summary, and the unit's `status`. The per-round notes under `docs/forever/` say what was proven and where a
+summary, and the unit's `status`. The development notes under `docs/forever/` say what was proven and where a
 feature's first live check must start.

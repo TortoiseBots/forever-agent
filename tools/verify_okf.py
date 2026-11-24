@@ -53,24 +53,30 @@ Links (every file in the bundle):
 Privacy (every file in the bundle, and nothing outside it):
   * no IPv4 address except loopback (127.0.0.0/8); the agent's own defaults
     are loopback addresses, and every other address is a real host somewhere;
-  * no absolute home directory path and no Windows drive path;
+  * no absolute home directory path (/home/, /root/, /Users/) and no Windows
+    drive path; no e-mail address except example.invalid or example.com; no
+    host name outside a short allow-list (github.com, battle.net domains,
+    example.invalid, localhost);
   * no assigned secret value: password/passwd/secret/token keys with a quoted or
     unquoted value, in a flag, shell assignment, JSON or YAML. A placeholder
     (<password>, PASSWORD, $ENV, ...) is fine, and a *_file/*_env/*_path key
     names a place or a variable, not a secret.
 
-Commands (fenced code blocks in every .md page):
+Every page is LF-only: a CRLF line ending is a problem.
+
+Commands (fenced code blocks and indented code blocks in every .md page):
   * a line that starts with forever-agent (optionally behind a path or a shell
     prompt) names a registered top-level command, and one under "forever" names
     a registered forever subcommand. The registrations are read from
-    cmd/forever-agent/main.go and cmd/forever-agent/forever_login.go with the
-    CASE_LABEL regex (the case labels of switch args[0]).
+    cmd/forever-agent/main.go and cmd/forever-agent/forever_login.go by
+    tokenizing the switch on args[0] (comments, strings and runes are skipped,
+    case labels at the switch's own depth only, several labels per case).
 
 Command coverage (the whole bundle):
-  * every command the binary registers is mentioned in at least one manual
-    page, as a command line ("forever-agent <word>", or "forever-agent forever
-    <word>" for a subcommand) or in backticks ("forever <word>" for a
-    subcommand, or the bare word for a top-level command);
+  * every command the binary registers is documented in at least one manual
+    page as a command: a line in a code block ("forever-agent <word>", or
+    "forever-agent forever <word>" for a subcommand), a heading naming it, or a
+    table row naming it. A bare backticked word in prose does not count;
   * docs/manual/.undocumented-commands holds the names deliberately left out
     (hidden or debug commands), one "name # reason" per line; an entry that is
     not a registered command is a problem, so the list cannot rot.
@@ -80,14 +86,21 @@ Method coverage (a serve's method table against docs/manual/daemon):
     _test.go file) with three patterns, all inside that package: the string
     argument of a call "srv.Register(\"name\"", the string keys of a map
     literal that a "for name, fn := range map[string]..." walks and registers
-    with "srv.Register(name", and the names in the notPortedMethods slice;
+    with "srv.Register(name", and the name fields of the refusedMethods slice;
   * every implemented method is a row of docs/manual/daemon/method-index.md,
     and every method named in a row of that page is registered; a method the
     page leaves out on purpose is a "name # reason" line of
     docs/manual/.undocumented-methods, and an entry there that names no
     registered method is a problem;
-  * every notPortedMethods name is in docs/manual/daemon/not-ported-methods.md,
-    and every method named in that page's names table is still not ported.
+  * every refusedMethods name is in docs/manual/daemon/not-ported-methods.md,
+    and every method named in that page's names table is still refused.
+
+Frontmatter sources: every sources[].resource (and a top-level resource) that
+is a repository-relative path must exist.
+
+Links: an anchor (#heading) on a link to a bundle page must match a heading of
+that page. An index entry's description must equal the page's frontmatter
+description.
 
 Reserved names: "index.md" and "log.md" may not be concept pages (OKF 3.1).
 Names that start with a dot (the two allow-lists) are not pages.
@@ -126,7 +139,26 @@ GENERATED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 IPV4 = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\d)")
 HOME_PATH = re.compile(r"/home/")
+ROOT_PATH = re.compile(r"/root/")
+USERS_PATH = re.compile(r"/Users/")
 WINDOWS_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:\\")
+
+# An e-mail address; example.invalid and example.com are the placeholders the manual may show.
+EMAIL = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,}))(?![\w-])")
+EMAIL_DOMAINS = ("example.invalid", "example.com")
+
+# A host name: a dotted name with a TLD the manual could name. The allow-list holds the domains the
+# docs legitimately link to; everything else is a real host somewhere and is reported.
+HOSTNAME = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+"
+    r"(?:com|net|org|io|invalid|local|dev|gg|tv|xyz|me|co|uk|biz|info|app|cloud|host|site|online|tech|store|page|link|ai))"
+    r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])",
+    re.IGNORECASE,
+)
+ALLOWED_HOSTS = ("github.com", "battle.net", "example.invalid", "example.com")
+ALLOWED_HOST_SUFFIXES = (".github.com", ".battle.net", ".example.invalid", ".example.com")
+LOCAL_HOSTS = ("localhost",)
 
 # A secret-like key and its assigned value, in the forms the manual can carry: a flag (--password=x),
 # a shell assignment (PASSWORD=x, export DB_PASSWORD=x), JSON/YAML (password: x, "password": "x").
@@ -145,15 +177,18 @@ PLACEHOLDER_VALUES = {"...", "REDACTED", "redacted"}
 
 # The top-level commands are the case labels of the switch on args[0] in cmd/forever-agent/main.go;
 # the forever subcommands are the case labels of the switch on args[0] in foreverCmd, in
-# cmd/forever-agent/forever_login.go. Both are read with this one regex, so a command the code does
-# not register cannot appear in an example.
-CASE_LABEL = re.compile(r'^\s*case "([^"]+)":')
-ARGS0_SWITCH = "switch args[0] {"
-
-# A line that starts a forever-agent command, optionally behind a shell prompt or a path.
+# cmd/forever-agent/forever_login.go. The switch is tokenized (comments and string/rune literals are
+# skipped) and its labels are read only at the switch's own brace depth, so a nested switch's case and
+# a "case" line inside a string are not commands. A case may name several labels: case "a", "b":.
 COMMAND_LINE = re.compile(r"^(?:[$>]\s*)?(?P<path>(?:[^\s/]+/)*forever-agent)(?:\s+(?P<rest>.*))?$")
 # Commands are words: a line such as "forever-agent 0.1.0" is output, not a command.
 COMMAND_WORD = re.compile(r"^[a-z][a-z0-9-]*$")
+# A heading or a table row documents a command only when it names the command form
+# ("forever-agent <word>", "forever-agent forever <word>" or "forever <word>"); a bare backticked
+# word in prose does not.
+COMMAND_FORM = re.compile(r"^(?:forever-agent\s+(?:forever\s+)?|forever\s+)([a-z][a-z0-9-]*)\b")
+MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+FENCE = re.compile(r"^(`{3,}|~{3,})")
 
 # The command-coverage allow-list and the method-coverage allow-list: names deliberately left unwritten, one
 # "name # reason" per line. They live inside the bundle but start with a dot, so they are not pages.
@@ -170,11 +205,14 @@ METHOD_ROW = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|")
 #   srv.Register("status", ...)                       a literal name;
 #   for name, fn := range map[string]...{ "mail_list": ... } { srv.Register(name, ...) }
 #                                                     a map literal a range walks;
-#   var notPortedMethods = []string{"tt", ...}         the old daemon's unimplemented names.
+#   var refusedMethods = []serveRefusal{ {name: "tt", why: ...}, ... }
+#                                                     the old daemon's names this server refuses.
 # The map and slice patterns are the ones the package uses today, and a test fixture pins them.
 REGISTER_CALL = re.compile(r'srv\.Register\("([^"]+)"')
 REGISTER_MAP_START = re.compile(r"range\s+map\[string\]")
 REGISTER_MAP_KEYS = re.compile(r'"([^"\n]+)"\s*:')
+REFUSED_LIST = re.compile(r"var\s+refusedMethods\s*=\s*\[\]serveRefusal\s*\{(.*?)\n\}", re.S)
+REFUSED_NAME = re.compile(r'\bname:\s*"([^"\n]+)"')
 NOT_PORTED_LIST = re.compile(r"var\s+notPortedMethods\s*=\s*\[\]string\s*\{(.*?)\}", re.S)
 
 KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*))?$")
@@ -358,7 +396,37 @@ def _nonempty(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def _check_concept(rel, data, report):
+def _is_repo_path(value):
+    """True for a repository-relative path (not a URL, an absolute path or a placeholder)."""
+    if not _nonempty(value):
+        return False
+    value = value.strip()
+    if value.startswith(("http://", "https://", "//", "/", "<")):
+        return False
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+        return False
+    return True
+
+
+def _check_sources(rel, data, root, report):
+    """Every sources[].resource (and a top-level resource) that is a repo path must exist."""
+    resources = []
+    sources = data.get("sources")
+    if isinstance(sources, list):
+        for source in sources:
+            if isinstance(source, dict) and "resource" in source:
+                resources.append(source["resource"])
+    if "resource" in data:
+        resources.append(data["resource"])
+    for resource in resources:
+        if not _is_repo_path(resource):
+            continue
+        path = resource.strip()
+        if not os.path.exists(os.path.join(root, path)):
+            report(rel, 0, "source resource does not exist: %s" % path)
+
+
+def _check_concept(rel, data, root, report):
     page_type = data.get("type")
     if not _nonempty(page_type):
         report(rel, 0, "frontmatter has no type")
@@ -396,6 +464,8 @@ def _check_concept(rel, data, report):
         report(rel, 0, "frontmatter has no status")
     elif status not in STATUSES:
         report(rel, 0, "unknown status %r (one of: %s)" % (status, ", ".join(STATUSES)))
+
+    _check_sources(rel, data, root, report)
 
 
 def _check_log(rel, text, report):
@@ -450,16 +520,63 @@ def _resolve(page_rel, target):
     return posixpath.normpath(joined)
 
 
+def _slugs(text):
+    """The GitHub-style heading anchors of a page (duplicates get -1, -2, ...)."""
+    slugs = set()
+    counts = {}
+    fence = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = FENCE.match(stripped)
+        if fence is not None:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
+                fence = None
+            continue
+        if match:
+            fence = (match.group(1)[0], len(match.group(1)))
+            continue
+        heading = MD_HEADING.match(line)
+        if not heading:
+            continue
+        title = heading.group(1).replace("`", "").strip()
+        slug = re.sub(r"[^\w\- ]", "", title.lower(), flags=re.UNICODE).strip().replace(" ", "-")
+        count = counts.get(slug, 0)
+        counts[slug] = count + 1
+        slugs.add(slug if count == 0 else "%s-%d" % (slug, count))
+    return slugs
+
+
 def _check_links(rel, text, root, report):
     for number, target in _links(text):
+        if target.startswith("<") and target.endswith(">"):
+            target = target[1:-1]
+        target = target.strip()
+        if not target or target.startswith("//"):
+            continue
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
+            continue
+        fragment = None
+        if "#" in target:
+            target, fragment = target.split("#", 1)
+        target = target.split("?", 1)[0]
+        if not target:
+            if fragment and fragment not in _slugs(text):
+                report(rel, number, "link anchor does not resolve: #%s" % fragment)
+            continue
         resolved = _resolve(rel, target)
         if resolved is None:
             continue
         if resolved == ".." or resolved.startswith("../"):
             report(rel, number, "link leaves the repository: %s" % target)
             continue
-        if not os.path.exists(os.path.join(root, resolved)):
+        full = os.path.join(root, resolved)
+        if not os.path.exists(full):
             report(rel, number, "link does not resolve: %s (looked for %s)" % (target, resolved))
+            continue
+        if fragment and resolved.endswith(".md") and (resolved + "/").startswith(BUNDLE + "/"):
+            page_text = _read_page(root, resolved)
+            if page_text is not None and fragment not in _slugs(page_text):
+                report(rel, number, "link anchor does not resolve: %s#%s" % (target, fragment))
 
 
 def _placeholder_value(value):
@@ -481,6 +598,13 @@ def _placeholder_value(value):
     return False
 
 
+def _allowed_host(host):
+    host = host.lower()
+    if host in LOCAL_HOSTS or host in ALLOWED_HOSTS:
+        return True
+    return any(host.endswith(suffix) for suffix in ALLOWED_HOST_SUFFIXES)
+
+
 def _check_privacy(rel, text, report):
     for number, line in enumerate(text.splitlines(), start=1):
         for match in IPV4.finditer(line):
@@ -490,8 +614,24 @@ def _check_privacy(rel, text, report):
             report(rel, number, "IPv4 address in the manual: %s" % address)
         if HOME_PATH.search(line):
             report(rel, number, "absolute home directory path: %s" % line.strip()[:120])
+        if ROOT_PATH.search(line):
+            report(rel, number, "absolute home directory path: %s" % line.strip()[:120])
+        if USERS_PATH.search(line):
+            report(rel, number, "absolute home directory path: %s" % line.strip()[:120])
         if WINDOWS_PATH.search(line):
             report(rel, number, "Windows drive path: %s" % line.strip()[:120])
+        for match in EMAIL.finditer(line):
+            domain = match.group(2).lower()
+            if any(domain == allowed or domain.endswith("." + allowed) for allowed in EMAIL_DOMAINS):
+                continue
+            report(rel, number, "e-mail address in the manual: %s" % match.group(1))
+        for match in HOSTNAME.finditer(line):
+            host = match.group(1)
+            if match.start() > 0 and line[match.start() - 1] == "@":
+                continue
+            if _allowed_host(host):
+                continue
+            report(rel, number, "host name in the manual: %s" % host)
         for match in SECRET_ASSIGNMENT.finditer(line):
             if SECRET_KEY_SUFFIX.search(match.group("key")):
                 continue
@@ -500,23 +640,144 @@ def _check_privacy(rel, text, report):
             report(rel, number, "secret value in the manual: %s" % match.group(0)[:120])
 
 
+def _go_tokens(text):
+    """Yield (kind, value, line) for Go source, skipping comments and keeping literals whole.
+
+    Kinds are "ident", "string", "rune" and "punct". A brace inside a string, a raw string or a
+    comment is therefore never counted as a brace.
+    """
+    tokens = []
+    index = 0
+    line = 1
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\n":
+            line += 1
+            index += 1
+            continue
+        if char in " \t\r":
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            end = text.find("\n", index)
+            index = length if end < 0 else end
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            end = text.find("*/", index + 2)
+            if end < 0:
+                break
+            line += text.count("\n", index, end)
+            index = end + 2
+            continue
+        if char == '"':
+            start_line = line
+            index += 1
+            value = []
+            while index < length:
+                char = text[index]
+                if char == "\\" and index + 1 < length:
+                    value.append({"n": "\n", "t": "\t", "r": "\r"}.get(text[index + 1], text[index + 1]))
+                    index += 2
+                    continue
+                if char == '"':
+                    index += 1
+                    break
+                if char == "\n":
+                    line += 1
+                value.append(char)
+                index += 1
+            tokens.append(("string", "".join(value), start_line))
+            continue
+        if char == "`":
+            start_line = line
+            end = text.find("`", index + 1)
+            if end < 0:
+                end = length
+            value = text[index + 1:end]
+            line += value.count("\n")
+            tokens.append(("string", value, start_line))
+            index = end + 1
+            continue
+        if char == "'":
+            index += 1
+            while index < length:
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                if text[index] == "'":
+                    index += 1
+                    break
+                if text[index] == "\n":
+                    line += 1
+                index += 1
+            tokens.append(("rune", "", line))
+            continue
+        if char.isalpha() or char == "_":
+            start = index
+            index += 1
+            while index < length and (text[index].isalnum() or text[index] == "_"):
+                index += 1
+            tokens.append(("ident", text[start:index], line))
+            continue
+        tokens.append(("punct", char, line))
+        index += 1
+    return tokens
+
+
 def _switch_commands(text, marker):
-    """The case labels of the first switch on args[0] after marker, one per line."""
+    """The case labels of the first switch on args[0] after marker, one per label.
+
+    The token stream is walked with a brace depth; a label counts only at the switch's own depth,
+    so a case inside a nested switch or an if block is not a top-level command. A case line may
+    name several labels (case "a", "b":); every string literal before the colon is one.
+    """
     start = text.find(marker)
     if start < 0:
         return set()
-    start = text.find(ARGS0_SWITCH, start)
-    if start < 0:
-        return set()
+    tokens = _go_tokens(text[start:])
     names = set()
     depth = 0
-    for line in text[start:].splitlines():
-        depth += line.count("{") - line.count("}")
-        match = CASE_LABEL.match(line)
-        if match:
-            names.add(match.group(1))
-        if depth <= 0 and names:
-            break
+    index = 0
+    body_depth = None
+    while index < len(tokens):
+        kind, value, _ = tokens[index]
+        if kind == "punct" and value == "{":
+            depth += 1
+            index += 1
+            continue
+        if kind == "punct" and value == "}":
+            depth -= 1
+            if body_depth is not None and depth < body_depth:
+                break
+            index += 1
+            continue
+        if body_depth is None:
+            # switch args[0] {
+            if (
+                kind == "ident" and value == "switch"
+                and index + 5 < len(tokens)
+                and tokens[index + 1][1] == "args"
+                and tokens[index + 2][1] == "["
+                and tokens[index + 3][1] == "0"
+                and tokens[index + 4][1] == "]"
+                and tokens[index + 5][1] == "{"
+            ):
+                body_depth = depth + 1
+                index += 5
+                continue
+            index += 1
+            continue
+        if depth == body_depth and kind == "ident" and value == "case":
+            index += 1
+            while index < len(tokens):
+                kind, value, _ = tokens[index]
+                if kind == "string":
+                    names.add(value)
+                elif kind == "punct" and value in ":}":
+                    break
+                index += 1
+        index += 1
     return names
 
 
@@ -572,18 +833,21 @@ def _registration_map_keys(text):
 
 
 def parse_method_registry(texts):
-    """Return (implemented methods, not-ported methods) parsed from internal/forever/world's Go sources.
+    """Return (implemented methods, refused methods) parsed from internal/forever/world's Go sources.
 
-    See the three registration shapes at REGISTER_CALL.
+    See the three registration shapes at REGISTER_CALL. The older notPortedMethods slice is read
+    too, so a tree that still uses it is not silently empty.
     """
     implemented = set()
-    not_ported = set()
+    refused = set()
     for text in texts:
         implemented.update(REGISTER_CALL.findall(text))
         implemented.update(_registration_map_keys(text))
+        for block in REFUSED_LIST.findall(text):
+            refused.update(REFUSED_NAME.findall(block))
         for block in NOT_PORTED_LIST.findall(text):
-            not_ported.update(_quoted_names(block))
-    return implemented, not_ported
+            refused.update(_quoted_names(block))
+    return implemented, refused
 
 
 def _quoted_names(block):
@@ -611,16 +875,31 @@ def load_method_registry(root):
     return parse_method_registry(texts)
 
 
-def _check_commands(rel, text, registry, report):
-    top, forever = registry
-    in_fence = False
+def _code_lines(text):
+    """Yield (line number, line) for fenced code (``` and ~~~) and indented code blocks."""
+    fence = None
     for number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
+        match = FENCE.match(stripped)
+        if fence is None:
+            if match:
+                fence = (match.group(1)[0], len(match.group(1)))
+                continue
+            if line.startswith("\t"):
+                yield number, line[1:]
+            elif line.startswith("    "):
+                yield number, line[4:]
             continue
-        if not in_fence:
+        if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
+            fence = None
             continue
+        yield number, line
+
+
+def _check_commands(rel, text, registry, report):
+    top, forever = registry
+    for number, line in _code_lines(text):
+        stripped = line.strip()
         match = COMMAND_LINE.match(stripped)
         if not match:
             continue
@@ -648,31 +927,44 @@ def _note_command_line(line, top, forever):
         forever.add(words[1])
 
 
-def command_mentions(text):
-    """Return (top-level, forever-subcommand) command names one page mentions.
+def _note_command_form(phrase, top, forever):
+    """Record a heading or table cell that names a command form."""
+    phrase = phrase.strip()
+    match = COMMAND_FORM.match(phrase)
+    if match:
+        word = match.group(1)
+        if phrase.startswith("forever ") and not phrase.startswith("forever-agent"):
+            forever.add(word)
+        elif phrase.startswith("forever-agent forever "):
+            forever.add(word)
+        else:
+            top.add(word)
+        return
+    if re.fullmatch(r"[a-z][a-z0-9-]*", phrase):
+        top.add(phrase)
 
-    A mention is a command line in a fenced block (optionally behind a path or a shell prompt) or a backticked
-    phrase: `forever-agent <word> ...`, `forever <word> ...`, or a bare backticked word for a top-level command.
+
+def command_mentions(text):
+    """Return (top-level, forever-subcommand) command names one page documents.
+
+    A command is documented only as a command: a line in a fenced or indented code block that starts
+    with forever-agent (`forever-agent <word>`, `forever-agent forever <word>`), a heading that names
+    that form or is the command word itself, or a table row whose first cell names the form. A bare
+    backticked word in prose is not documentation.
     """
     top, forever = set(), set()
-    in_fence = False
+    for _, line in _code_lines(text):
+        _note_command_line(line, top, forever)
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
+        heading = MD_HEADING.match(line)
+        if heading:
+            _note_command_form(heading.group(1).strip().strip("`").strip(), top, forever)
             continue
-        if in_fence:
-            _note_command_line(stripped, top, forever)
-        for span in BACKTICK.findall(line):
-            span = span.strip()
-            if span.startswith("forever-agent "):
-                _note_command_line(span, top, forever)
-            elif span.startswith("forever "):
-                words = span.split()
-                if len(words) >= 2 and COMMAND_WORD.match(words[1]):
-                    forever.add(words[1])
-            elif COMMAND_WORD.match(span):
-                top.add(span)
+        if line.lstrip().startswith("|"):
+            cells = line.split("|")
+            if len(cells) > 1:
+                for span in BACKTICK.findall(cells[1]):
+                    _note_command_form(span.strip(), top, forever)
     return top, forever
 
 
@@ -777,8 +1069,8 @@ def _read_page(root, rel):
 
 
 def _check_method_coverage(root, registry, report):
-    """The method index and the not-ported page agree with the serve's method table."""
-    implemented, not_ported = registry
+    """The method index and the refused-methods page agree with the serve's method table."""
+    implemented, refused = registry
     index_rel = posixpath.join(BUNDLE, "daemon", "method-index.md")
     index_text = _read_page(root, index_rel)
     if index_text is None:
@@ -796,23 +1088,23 @@ def _check_method_coverage(root, registry, report):
     for method in sorted(documented - implemented):
         report(index_rel, 0, "method %r is not registered by the serve (the page cannot outlive the code)" % method)
     for name, number in sorted(allowed.items()):
-        if name not in implemented and name not in not_ported:
+        if name not in implemented and name not in refused:
             report(
                 UNDOCUMENTED_METHODS,
                 number,
                 "allow-list entry %r is not a registered daemon method (the list cannot rot)" % name,
             )
 
-    not_ported_rel = posixpath.join(BUNDLE, "daemon", "not-ported-methods.md")
-    not_ported_text = _read_page(root, not_ported_rel)
-    if not_ported_text is None:
-        report(not_ported_rel, 0, "the not-ported methods page is missing")
+    refused_rel = posixpath.join(BUNDLE, "daemon", "not-ported-methods.md")
+    refused_text = _read_page(root, refused_rel)
+    if refused_text is None:
+        report(refused_rel, 0, "the not-ported methods page is missing")
         return
-    listed = _not_ported_names(not_ported_text)
-    for method in sorted(not_ported - listed):
-        report(not_ported_rel, 0, "not-ported method %r is named in no row of this page" % method)
-    for method in sorted(listed - not_ported):
-        report(not_ported_rel, 0, "method %r is not in notPortedMethods any more (the page cannot outlive the code)" % method)
+    listed = _not_ported_names(refused_text)
+    for method in sorted(refused - listed):
+        report(refused_rel, 0, "refused method %r is named in no row of this page" % method)
+    for method in sorted(listed - refused):
+        report(refused_rel, 0, "method %r is not in refusedMethods any more (the page cannot outlive the code)" % method)
 
 
 def _children(directory):
@@ -849,6 +1141,34 @@ def _check_index(rel, text, root, is_root, report):
         if resolved is None:
             continue
         listed.setdefault(resolved, []).append(number)
+
+    entry = re.compile(r"^\s*[*+-]\s+\[[^\]]*\]\(\s*([^)\s]+)\s*\)\s*[-–—]\s*(.+?)\s*$")
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = entry.match(line)
+        if not match:
+            continue
+        resolved = _resolve(rel, match.group(1))
+        if resolved is None or not resolved.endswith(".md"):
+            continue
+        if posixpath.basename(resolved) in RESERVED:
+            continue
+        page_text = _read_page(root, resolved)
+        if page_text is None:
+            continue
+        try:
+            data, _ = parse_frontmatter(page_text)
+        except FrontmatterError:
+            continue
+        page_description = data.get("description")
+        if not _nonempty(page_description):
+            continue
+        if page_description.strip() != match.group(2).strip():
+            report(
+                rel,
+                number,
+                "index description does not match %s: %r != %r"
+                % (resolved, match.group(2).strip(), page_description.strip()),
+            )
 
     directory = posixpath.dirname(rel)
     for name in _children(os.path.join(root, directory)):
@@ -888,12 +1208,14 @@ def check_bundle(root):
             rel = posixpath.join(*os.path.relpath(full, root).split(os.sep))
             if not name.endswith(".md"):
                 report(rel, 0, "not a Markdown file: the bundle holds only .md pages (assets live outside it)")
-                with open(full, encoding="utf-8", errors="replace") as handle:
+                with open(full, encoding="utf-8", errors="replace", newline="") as handle:
                     text = handle.read()
                 _check_privacy(rel, text, report)
                 continue
-            with open(full, encoding="utf-8") as handle:
+            with open(full, encoding="utf-8", newline="") as handle:
                 text = handle.read()
+            if "\r\n" in text or "\r" in text:
+                report(rel, 1, "CRLF line endings: every page is written with LF")
             is_root = rel == posixpath.join(BUNDLE, "index.md")
 
             if name == "index.md":
@@ -909,7 +1231,7 @@ def check_bundle(root):
                     report(rel, 1, "frontmatter does not parse: %s" % error)
                     data = None
                 if data is not None:
-                    _check_concept(rel, data, report)
+                    _check_concept(rel, data, root, report)
 
             _check_links(rel, text, root, report)
             _check_privacy(rel, text, report)

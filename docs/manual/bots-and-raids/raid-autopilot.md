@@ -16,6 +16,8 @@ sources:
     resource: internal/slots
 ---
 
+> **Not yet proven on a live server.** The `--forever` supervisor is exercised against a fake binary; no live raid run has been made, so the slot configuration and the watch's summaries are not proven end to end yet. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 `raid-autopilot --forever` is a supervisor for several Forever raid runs at once.
 It reads a targets file in a walk folder, launches `forever raid-watch` for each
 target on its own slot, watches each attempt, and on every end, a stall it can see,
@@ -27,10 +29,7 @@ Use it when you want a raid farmed or re-run unattended: a target restarts until
 its goal (the whole plan, a leg, or one boss) is met, and a target that needs a
 person is escalated and left alone instead of looping.
 
-What is proven: the `--forever` supervisor is wired against a fake binary; no live
-raid run has been made with it yet. Its files, lease handling, decision rule and
-YIELD are exercised that way, and a first live run is what proves the slot
-configuration and the watch's summaries end to end.
+
 
 # Synopsis
 

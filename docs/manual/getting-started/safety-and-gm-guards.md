@@ -142,6 +142,28 @@ The guard stays active for the whole run: a say echo at any later point resets i
 owner commands are the one family a normal player account may send without the GM confirmation; every other
 command text still needs it.
 
+## The command
+
+```bash
+forever-agent forever cmd-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME [--stay 4s] [--line TEXT]... [--tb-state TARGET] [--quiet 1.5s] [--timeout 15s] \
+    [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stay` | `4s` | How long to settle in the world before the probe, 0-1m. |
+| `--line TEXT` | none | A command line to send after the probe; repeatable, sent in order (`--line ".server info"`). |
+| `--tb-state TARGET` | none | Read the module's typed state table after the lines: a bot's name, `party`, or `party <leader>`. |
+| `--quiet DURATION` | `1.5s` | A reply with no token ends after this long without a line, 0-30s. |
+| `--timeout DURATION` | `15s` | Hard deadline of one command, 0-2m. |
+| `--capture-dir DIR` | none | Write every packet the combat, chat and party handlers see into a new run directory under this path. Keep it outside the repository. |
+
+Give at least one `--line` or `--tb-state`. Output is one line per command (its reply count and what ended it)
+plus the chat totals and packet counts. Exit `0` when the run completes; `2` a usage error; `5` the world server
+refused the session or the character. A command whose reply arrived incomplete is reported, not retried, because
+a retry could run the command twice.
+
 # SOAP: setup with no client
 
 `forever soap` runs one console command over the core's SOAP endpoint. The endpoint is plain HTTP, so:
