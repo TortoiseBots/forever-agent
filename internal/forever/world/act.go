@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/bg"
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/follow"
@@ -73,6 +74,10 @@ const (
 	actVerbTaxiStatus = "taxi-status"
 	actVerbFly        = "fly"
 
+	// Round R9's battleground queue steps (bg_act.go).
+	actVerbBGQueue  = "bg-queue"
+	actVerbBGAccept = "bg-accept"
+	actVerbBGLeave  = "bg-leave"
 	// Round R7's mail steps (mail_act.go).
 	actVerbMail       = "mail"
 	actVerbMailTake   = "mail-take"
@@ -150,9 +155,10 @@ func ParseActStep(line string) (ActStep, error) {
 		actVerbQuestStatus, actVerbQuests, actVerbQuestAccept, actVerbQuestProgress, actVerbQuestComplete,
 		actVerbQuestReward, actVerbQuestAbandon,
 		actVerbTrainer, actVerbLearn, actVerbTaxiNodes, actVerbTaxiStatus, actVerbFly,
+		actVerbBGQueue, actVerbBGAccept, actVerbBGLeave,
 		actVerbMail, actVerbMailTake, actVerbMailMoney, actVerbMailDelete, actVerbSendMail:
 	default:
-		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, trainer, learn, taxi-nodes, taxi-status, fly, mail, mail-take, mail-money, mail-delete, send-mail)", verb)
+		return ActStep{}, fmt.Errorf("world: unknown act verb %q (wait, gm, goto, npc, open, select, close, inv, mount, dismount, follow, equip, store, swap, split, destroy, use, vendor, buy, sell, sell-junk, buyback, repair, quest-status, quests, quest-accept, quest-progress, quest-complete, quest-reward, quest-abandon, trainer, learn, taxi-nodes, taxi-status, fly, mail, mail-take, mail-money, mail-delete, send-mail, bg-queue, bg-accept, bg-leave)", verb)
 	}
 	return step, nil
 }
@@ -212,6 +218,11 @@ type actState struct {
 	hasTrainer bool
 	taxi       *taxi.ShowTaxiNodes
 	hasTaxi    bool
+	// bgMaster is the battlemaster the last `bg-queue` probed and bgList the list it answered; accept and leave
+	// name the queue those set.
+	bgMaster    wire.GUID
+	hasBGMaster bool
+	bgList      bg.List
 	// mailbox is the mailbox the last `mail` step opened and mails the list it read: the take, money and delete
 	// steps act on that mailbox's current list, never on a stale copy.
 	mailbox    wire.GUID
@@ -320,6 +331,12 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 		return s.actTaxiStatus(ctx, a, step)
 	case actVerbFly:
 		return s.actFly(ctx, a, step)
+	case actVerbBGQueue:
+		return s.actBGQueue(ctx, a, step)
+	case actVerbBGAccept:
+		return s.actBGAccept(ctx, a, step)
+	case actVerbBGLeave:
+		return s.actBGLeave(ctx, a, step)
 	case actVerbMail:
 		return s.actMail(ctx, a, step)
 	case actVerbMailTake:

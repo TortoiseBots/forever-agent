@@ -438,11 +438,14 @@ const (
 // the queue/port/leave/status/log/spirit-queue client packets this client sends, and the status/world-state/match/
 // positions/join/leave/spirit-time/capture server packets it reads.
 const (
-	CMSGAreaSpiritHealerQuery    uint32 = 0x3E0046
-	CMSGAreaSpiritHealerQueue    uint32 = 0x3E0047
-	CMSGBattlefieldLeave         uint32 = 0x3D001F
-	CMSGBattlefieldList          uint32 = 0x3D002A
-	CMSGBattlefieldPort          uint32 = 0x3E00C7
+	CMSGAreaSpiritHealerQuery uint32 = 0x3E0046
+	CMSGAreaSpiritHealerQueue uint32 = 0x3E0047
+	CMSGBattlefieldLeave      uint32 = 0x3D001F
+	CMSGBattlefieldList       uint32 = 0x3D002A
+	CMSGBattlefieldPort       uint32 = 0x3E00C7
+	// CMSGBattlemasterHello is the battlemaster's list probe (NPCPackets.cpp:94-97): the packed GUID of the NPC the
+	// character stands next to. The handler answers SMSG_BATTLEFIELD_LIST.
+	CMSGBattlemasterHello        uint32 = 0x3D018F
 	CMSGBattlemasterJoin         uint32 = 0x3E00BD
 	CMSGBattlemasterJoinArena    uint32 = 0x3E00BE
 	CMSGPVPLogData               uint32 = 0x3D0028
@@ -644,6 +647,7 @@ var clientNames = map[uint32]string{
 	CMSGBattlefieldLeave:         "CMSG_BATTLEFIELD_LEAVE",
 	CMSGBattlefieldList:          "CMSG_BATTLEFIELD_LIST",
 	CMSGBattlefieldPort:          "CMSG_BATTLEFIELD_PORT",
+	CMSGBattlemasterHello:        "CMSG_BATTLEMASTER_HELLO",
 	CMSGBattlemasterJoin:         "CMSG_BATTLEMASTER_JOIN",
 	CMSGPVPLogData:               "CMSG_PVP_LOG_DATA",
 	CMSGRequestBattlefieldStatus: "CMSG_REQUEST_BATTLEFIELD_STATUS",

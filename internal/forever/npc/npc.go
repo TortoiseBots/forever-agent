@@ -37,6 +37,9 @@ const (
 	NPCFlagTrainer uint32 = 0x00000010
 	// NPCFlagFlightmaster is UNIT_NPC_FLAG_FLIGHTMASTER (UnitDefines.h:333): the flag every taxi handler checks.
 	NPCFlagFlightmaster uint32 = 0x00002000
+	// NPCFlagBattlemaster is UNIT_NPC_FLAG_BATTLEMASTER (UnitDefines.h:340): the creature answers the battlemaster
+	// hello with the battleground list.
+	NPCFlagBattlemaster uint32 = 0x00100000
 	// NPCFlagMailbox is UNIT_NPC_FLAG_MAILBOX (UnitDefines.h:346): the creature answers the mailbox packets.
 	NPCFlagMailbox uint32 = 0x04000000
 )
@@ -54,6 +57,10 @@ func IsTrainer(flags uint32) bool { return flags&NPCFlagTrainer != 0 }
 // IsFlightmaster reports whether a creature's flags carry the flight-master bit every taxi handler checks
 // (TaxiHandler.cpp:35-76, :159-166).
 func IsFlightmaster(flags uint32) bool { return flags&NPCFlagFlightmaster != 0 }
+
+// IsBattlemaster reports whether a creature's flags make it a battlemaster (BattleGroundHandler.cpp
+// HandleBattlemasterHelloOpcode checks the flag before answering the list).
+func IsBattlemaster(flags uint32) bool { return flags&NPCFlagBattlemaster != 0 }
 
 // IsMailbox reports whether a creature's flags make it a mailbox (MailHandler.cpp CanOpenMailBox).
 func IsMailbox(flags uint32) bool { return flags&NPCFlagMailbox != 0 }
