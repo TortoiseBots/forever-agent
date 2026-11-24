@@ -175,39 +175,48 @@ func newPlayOwner(s *session) *playOwner {
 	return &playOwner{s: s, c: c}
 }
 
+func retryBotNoReply[T any](ctx context.Context, o *playOwner, what string, fn func() (T, error)) (T, error) {
+	v, err := fn()
+	if (errors.Is(err, botcmd.ErrNoReply) || errors.Is(err, command.ErrNoReply)) && ctx.Err() == nil && o.s.linkDead() == nil {
+		o.s.opts.logf("play: %s returned no reply; retrying once", what)
+		return fn()
+	}
+	return v, err
+}
+
 func (o *playOwner) Add(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Add(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "add", func() (botcmd.Reply, error) { return o.c.Add(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 func (o *playOwner) Logout(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Logout(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "logout", func() (botcmd.Reply, error) { return o.c.Logout(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 func (o *playOwner) Follow(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Follow(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "follow", func() (botcmd.Reply, error) { return o.c.Follow(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 func (o *playOwner) Stay(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Stay(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "stay", func() (botcmd.Reply, error) { return o.c.Stay(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 func (o *playOwner) Attack(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Attack(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "attack", func() (botcmd.Reply, error) { return o.c.Attack(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 func (o *playOwner) Summon(ctx context.Context, bot string) (botcmd.Reply, error) {
-	r, err := o.c.Summon(ctx, bot)
+	r, err := retryBotNoReply(ctx, o, "summon", func() (botcmd.Reply, error) { return o.c.Summon(ctx, bot) })
 	return r, dungeonPortErr(err)
 }
 
 // Who reads `.bot who` and answers its header as the Owner port's reply; the rows stay in Rows.
 func (o *playOwner) Who(ctx context.Context) (botcmd.Reply, error) {
-	rows, err := o.c.Who(ctx)
+	rows, err := retryBotNoReply(ctx, o, "who", func() ([]botcmd.WhoRow, error) { return o.c.Who(ctx) })
 	if err != nil {
 		return botcmd.Reply{}, dungeonPortErr(err)
 	}
@@ -343,9 +352,25 @@ func (g *playGroup) LootMethod(method party.LootMethod, threshold int) error {
 	return dungeonPortErr(g.s.groupLootMethod(g.ctx, method, "", threshold))
 }
 
-// Mark sets one raid target icon and waits for its slot.
+// Mark sets one raid target icon and waits for its slot. A missed echo is retried once; if it is still missed with
+// the link alive, the mark is logged and left non-fatal (the fight's own evidence says whether it worked).
 func (g *playGroup) Mark(target wire.GUID, mark party.Mark) error {
-	return dungeonPortErr(g.s.groupMark(g.ctx, target, mark))
+	for attempt := range 2 {
+		err := g.s.groupMark(g.ctx, target, mark)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errGroupUnconfirmed) || g.ctx.Err() != nil || g.s.linkDead() != nil {
+			return dungeonPortErr(err)
+		}
+		if attempt == 0 {
+			g.s.opts.logf("play: mark %s on %s unconfirmed (%v); retrying once", party.MarkName(mark), target, err)
+			continue
+		}
+		g.s.opts.logf("play: mark %s on %s unconfirmed after retry (%v); continuing", party.MarkName(mark), target, err)
+		return nil
+	}
+	return nil
 }
 
 // Disband uninvites every other member (no disband packet exists) and waits for the group's end.
@@ -650,7 +675,16 @@ func (p *playPlayer) Loot(ctx context.Context, guid wire.GUID) error {
 	if err := s.voteRolls(ctx, s.loot.window, true, loot.RollGreed); err != nil {
 		return playPortErr(err)
 	}
-	return playPortErr(s.takeLoot(ctx, s.loot.window, 0, true))
+	if err := s.takeLoot(ctx, s.loot.window, 0, true); err != nil {
+		if errors.Is(err, ErrLootReleaseUnconfirmed) && s.linkDead() == nil && ctx.Err() == nil {
+			// The window stays for lootTarget's deferred release, which gives it back once more and records the
+			// outcome: an auto-closed window ignores both, and the run goes on either way.
+			s.opts.logf("play: %v; continuing", err)
+			return nil
+		}
+		return playPortErr(err)
+	}
+	return nil
 }
 
 // UseObject uses the game object of this entry that stands nearest the point (CMSG_GAMEOBJ_USE), walking into reach
@@ -672,6 +706,10 @@ func (p *playPlayer) UseObject(ctx context.Context, entry uint32, stand driver.V
 	}
 	if s.loot.window != nil {
 		if rerr := s.releaseLoot(ctx, s.loot.window); rerr != nil {
+			if errors.Is(rerr, ErrLootReleaseUnconfirmed) && s.linkDead() == nil && ctx.Err() == nil {
+				s.opts.logf("play: %v; continuing", rerr)
+				return nil
+			}
 			return playPortErr(rerr)
 		}
 	}
@@ -692,6 +730,10 @@ func (p *playPlayer) Gossip(ctx context.Context, entry uint32, option int) error
 		return playPortErr(err)
 	}
 	if err := s.actOpen(ctx, a, step(actVerbOpen, nil)); err != nil {
+		// A menu the NPC never opened is the step's to retry; a dead link or the run's own end is not.
+		if errors.Is(err, errActNoMenu) && ctx.Err() == nil {
+			return driver.ErrNoGossipMenu
+		}
 		return playPortErr(err)
 	}
 	has := false

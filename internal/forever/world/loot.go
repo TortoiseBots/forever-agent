@@ -24,6 +24,8 @@ var (
 	// ErrNoLootWindow is an open the server never answered: a creature with nothing to loot is answered with
 	// silence by HandleLootOpcode (LootHandler.cpp:213-259), so this is its normal refusal.
 	ErrNoLootWindow = errors.New("world: the server sent no loot window")
+	// ErrLootReleaseUnconfirmed is a release the server never confirmed (e.g. an auto-closed window).
+	ErrLootReleaseUnconfirmed = errors.New("world: the server did not confirm the loot release")
 )
 
 // LootRefusal is the refusal's own reason (LootError, Loot.h:137-153).
@@ -44,7 +46,6 @@ const (
 	lootWindowWait    = 4 * time.Second
 	lootRollStartWait = 1500 * time.Millisecond
 	lootAnswerWait    = 4 * time.Second
-	lootReleaseWait   = 3 * time.Second
 	lootRollSlack     = 3 * time.Second
 	// lootRollWaitMax caps the wait for a roll's result. The start's RollTimeMs is the server's choice (a uint32,
 	// up to ~49 days) and nothing but the run's own deadline bounds it otherwise, so one absurd start would swallow
@@ -59,6 +60,9 @@ const (
 	// interaction range (ObjectDefines.h:24, GameObject::IsAtInteractDistance, GameObject.cpp:4405-4437).
 	lootReach = 4.0
 )
+
+// lootReleaseWait bounds the wait for a release confirmation. A variable so tests shorten it.
+var lootReleaseWait = 3 * time.Second
 
 // rollKey identifies one roll: the loot it belongs to and the item's slot.
 type rollKey struct {
@@ -91,7 +95,9 @@ type lootWatch struct {
 	removed     int
 	coinRemoved int
 	money       *loot.MoneyNotify
-	releases    int
+	// released is the server's confirmation for the window open now: cleared when a window opens and set by its
+	// release, so a corpse released earlier does not confirm this one.
+	released bool
 	// rolls is keyed by loot GUID and slot; order keeps them in arrival order for the report.
 	rolls map[rollKey]*rollWatch
 	order []rollKey
@@ -108,6 +114,7 @@ func (l *lootWatch) reset() {
 	l.removed = 0
 	l.coinRemoved = 0
 	l.money = nil
+	l.released = false
 	l.rolls = make(map[rollKey]*rollWatch)
 	l.order = nil
 }
@@ -137,6 +144,8 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 			return nil
 		}
 		s.loot.window = r
+		s.loot.released = false
+		s.report.Loot.Released = false
 		s.eventLoot(events.KindLootOpen, r.Loot, map[string]any{"coins": r.Coins, "items": len(r.Items), "method": r.Method})
 	case wire.SMSGLootRemoved:
 		r, err := loot.ParseRemoved(p.Payload)
@@ -179,12 +188,12 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 		if err != nil {
 			return fmt.Errorf("world: SMSG_LOOT_RELEASE: %w", err)
 		}
-		s.loot.releases++
 		// SMSG_LOOT_RELEASE names the window's OWNER, not the LootObject: DoLootRelease sends
 		// `player->SendLootRelease(lguid)` with lguid = loot->GetOwnerGUID(), and Player::SendLootRelease puts that
 		// guid in LootObj (LootHandler.cpp:269-283, Player.cpp:10102-10108). The LootObject GUID the window's own
 		// Loot field carries is what CMSG_LOOT_ITEM and the removals name, never the release.
 		if s.loot.window != nil && r.Loot == s.loot.window.Owner {
+			s.loot.released = true
 			s.report.Loot.Released = true
 		}
 		if s.methodLoot != nil && r.Loot == s.methodLoot.Owner {
@@ -193,6 +202,10 @@ func (s *session) handleLoot(p worldconn.Packet) error {
 	case wire.SMSGLootReleaseAll:
 		// No payload: the server closed every window of this player (WorldSession::DoLootReleaseAll).
 		s.methodLoot = nil
+		if s.loot.window != nil {
+			s.loot.released = true
+			s.report.Loot.Released = true
+		}
 	case wire.SMSGLootList:
 		if _, err := loot.ParseList(p.Payload); err != nil {
 			return fmt.Errorf("world: SMSG_LOOT_LIST: %w", err)
@@ -547,22 +560,30 @@ func (s *session) takeLoot(ctx context.Context, w *loot.Response, take int, mone
 	return s.releaseLoot(ctx, w)
 }
 
-// releaseLoot sends CMSG_LOOT_RELEASE for the unit the window belongs to and waits for its confirmation.
+// releaseLoot sends CMSG_LOOT_RELEASE for the unit the window belongs to and waits for its confirmation. A release
+// the server never answers is sent once more (an auto-closed window may swallow the first) and then reported as
+// ErrLootReleaseUnconfirmed, which the run logs and goes on from.
 func (s *session) releaseLoot(ctx context.Context, w *loot.Response) error {
+	if s.loot.released {
+		return nil
+	}
 	link := s.transport()
-	if err := link.Send(wire.CMSGLootRelease, loot.BuildLootRelease(w.Owner)); err != nil {
-		return fmt.Errorf("world: CMSG_LOOT_RELEASE: %w", err)
+	closed := func() bool { return s.loot.released }
+	for attempt := range 2 {
+		if err := link.Send(wire.CMSGLootRelease, loot.BuildLootRelease(w.Owner)); err != nil {
+			return fmt.Errorf("world: CMSG_LOOT_RELEASE: %w", err)
+		}
+		if _, err := s.lootWait(ctx, "the release answer", lootReleaseWait, closed); err != nil {
+			return err
+		}
+		if s.loot.released {
+			return nil
+		}
+		if attempt == 0 {
+			s.opts.logf("loot: the server did not confirm the loot release; retrying once")
+		}
 	}
-	closed := func() bool {
-		return s.loot.releases > 0 && s.report.Loot.Released
-	}
-	if _, err := s.lootWait(ctx, "the release answer", lootReleaseWait, closed); err != nil {
-		return err
-	}
-	if !s.report.Loot.Released {
-		return fmt.Errorf("world: the server did not confirm the loot release")
-	}
-	return nil
+	return ErrLootReleaseUnconfirmed
 }
 
 // releaseLeftover is the release a run owes the server when it ends after a window was accepted and before its own

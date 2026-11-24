@@ -9,6 +9,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // The player run's plan steps (round P4, §3.11): the four kinds a character of its own can do between a leg's packs and
@@ -319,5 +320,128 @@ func TestPlayRouteRefusesUseObjectProof(t *testing.T) {
 	_, err := NewPlayRoute(playStepPlan(st))
 	if err == nil || !strings.Contains(err.Error(), "use_object.proof") {
 		t.Fatalf("err = %v; want a refusal naming use_object.proof", err)
+	}
+}
+
+// TestPlayStepWaitsForStrangerPullBeforeActing: a step's walk interrupted by a stranger/patrol pull must pull the
+// stranger and walk all the way to the step's stand before acting on the object (8a).
+func TestPlayStepWaitsForStrangerPullBeforeActing(t *testing.T) {
+	step := dungeon.Step{UseObject: &dungeon.UseObject{
+		ObjectRef: dungeon.ObjectRef{Entry: 4072, Near: &dungeon.Point{X: 28, Y: -80, Z: 0}},
+		Stand:     &dungeon.Point{X: 30, Y: -80, Z: 0},
+	}}
+	p := playStepPlan(step)
+	p.Legs[0].Boss = &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 30, Y: -95, Z: 0}}
+	route, err := NewPlayRoute(p)
+	if err != nil {
+		t.Fatalf("NewPlayRoute: %v", err)
+	}
+	stranger := fightGUID(31)
+	rig := newPlayRigOn(t, route, func(f *PlayFake) {
+		f.AddObject(PlayObject{Entry: 4072, Pos: Vec3{28, -80, 0}, State: "ready"})
+		// Along the segment from (40,0,0) toward (30,-80,0), within PlayPatrolYd of (36,-32,0)
+		// and far from the object's stand (30,-80,0).
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{36, -32, 0}})
+		// SplitRoute only splits at vertices in Route.Points, so give the straight walk intermediate vertices.
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			var pts []Vec3
+			n := max(1, int(dist3(from, to)/15)+1)
+			for i := 0; i <= n; i++ {
+				t := float64(i) / float64(n)
+				pts = append(pts, Vec3{
+					from[0] + float32(float64(to[0]-from[0])*t),
+					from[1] + float32(float64(to[1]-from[1])*t),
+					from[2] + float32(float64(to[2]-from[2])*t),
+				})
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Corners: len(pts), Start: from, End: to, Points: pts, Length: float32(dist3(from, to))}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || !u.Dead {
+		t.Fatalf("stranger = %+v; want it pulled and killed before the step acted", u)
+	}
+	standReachedAt := -1
+	for i, w := range rig.fake.Walks {
+		if len(w) > 0 && dist3(Vec3(w[len(w)-1]), Vec3{30, -80, 0}) <= PlayArriveYd {
+			standReachedAt = i
+			break
+		}
+	}
+	if standReachedAt < 0 {
+		t.Fatalf("the character never reached the step's stand {30,-80,0} (walks %v)", rig.fake.Walks)
+	}
+}
+
+// TestPlayWaitForHostilesGoneIgnoresPartyPets: a hostiles_gone wait skips non-friendly units owned by party members
+// (hunter/warlock pets) (8b).
+func TestPlayWaitForHostilesGoneIgnoresPartyPets(t *testing.T) {
+	step := dungeon.Step{WaitFor: &dungeon.WaitFor{
+		HostilesGone: &dungeon.HostilesGone{Radius: 15, Center: &dungeon.Point{X: 30, Y: -40, Z: 0}},
+		TimeoutS:     2,
+	}}
+	route, err := NewPlayRoute(playStepPlan(step))
+	if err != nil {
+		t.Fatalf("NewPlayRoute: %v", err)
+	}
+	rig := newPlayRigOn(t, route, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(1), Entry: 11320, Pos: Vec3{30, -40, 0}, Owner: f.botGUID(playBots[2])})
+		f.AddUnit(Unit{GUID: petGUID(2), Entry: 11321, Pos: Vec3{31, -40, 0}, Owner: f.SelfGUID()})
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (party pets must not block hostiles_gone)", res.Stop)
+	}
+}
+
+// TestPlayGossipRetriesWhenNPCAppearsLate: a gossip step retries within its retry budget if the NPC is not in view
+// on the first tick (8c).
+func TestPlayGossipRetriesWhenNPCAppearsLate(t *testing.T) {
+	route, err := NewPlayRoute(playStepPlan(playGossipStep(dungeon.GossipByAgent, 10)))
+	if err != nil {
+		t.Fatalf("NewPlayRoute: %v", err)
+	}
+	rig := newPlayRigOn(t, route, func(f *PlayFake) {
+		scheduled := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if scheduled || dist3(to, Vec3{40, 0, 0}) > 2 {
+				return
+			}
+			scheduled = true
+			// Spawn after the leg walk + step arrival, well within the 10 s retry budget.
+			f.Clock.After(8*time.Second, func() {
+				f.AddUnit(Unit{Entry: 3678, Pos: Vec3{30, -40, 0}, Friendly: true})
+			})
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if !slices.Equal(rig.fake.Gossips, []int{0}) {
+		t.Fatalf("gossips = %v; want [0]", rig.fake.Gossips)
+	}
+}
+
+// TestPlayGossipRetriesWhenMenuTimesOut: a gossip step retries within its retry budget when opening the menu times
+// out (8c).
+func TestPlayGossipRetriesWhenMenuTimesOut(t *testing.T) {
+	route, err := NewPlayRoute(playStepPlan(playGossipStep(dungeon.GossipByAgent, 10)))
+	if err != nil {
+		t.Fatalf("NewPlayRoute: %v", err)
+	}
+	rig := newPlayRigOn(t, route, func(f *PlayFake) {
+		f.AddUnit(Unit{Entry: 3678, Pos: Vec3{30, -40, 0}, Friendly: true})
+		f.GossipMenuTimeout = 2
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if !slices.Equal(rig.fake.Gossips, []int{0, 0, 0}) {
+		t.Fatalf("gossips = %v; want three attempts [0 0 0]", rig.fake.Gossips)
 	}
 }

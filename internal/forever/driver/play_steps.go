@@ -35,6 +35,10 @@ const (
 	PlayObjectUseWait = 10 * time.Second
 )
 
+// ErrNoGossipMenu is what Gossip answers when opening the NPC's menu times out: the NPC is not ready to talk yet, so
+// the step asks again within its retry budget.
+var ErrNoGossipMenu = errors.New("driver: the NPC opened no gossip menu")
+
 // Step is one scripted step of a leg as a player run reads it: exactly one of the four kinds is set.
 type Step struct {
 	Use    *UseStep
@@ -377,7 +381,33 @@ func (p *playRun) stepGossip(ctx context.Context, st *GossipStep) string {
 	p.refreshSelf()
 	npc, seen := p.creatureNear(st.NPC, st.Near, st.HasNear)
 	if !seen {
-		return p.stepFail("gossip", fmt.Sprintf("no creature %d is in view", st.NPC))
+		switch {
+		case st.HasStand:
+			p.walkTo(ctx, st.Stand, false, false)
+		case st.HasNear:
+			p.walkTo(ctx, standOff(p.self, st.Near), false, false)
+		}
+		if next, ok := p.stepArrived(); !ok {
+			return next
+		}
+		waitDeadline := p.now().Add(st.retry())
+		for {
+			p.refreshSelf()
+			npc, seen = p.creatureNear(st.NPC, st.Near, st.HasNear)
+			if seen {
+				break
+			}
+			if p.timeUp() {
+				p.stop("time")
+				return ""
+			}
+			if !p.now().Before(waitDeadline) {
+				return p.stepFail("gossip", fmt.Sprintf("no creature %d is in view", st.NPC))
+			}
+			if !p.sleep(ctx, p.lim.Poll) {
+				return ""
+			}
+		}
 	}
 	if npc.Dead {
 		return p.stepFail("gossip", fmt.Sprintf("the NPC %d is dead", st.NPC))
@@ -396,12 +426,15 @@ func (p *playRun) stepGossip(ctx context.Context, st *GossipStep) string {
 		case err == nil:
 			p.rec.Event(p.now(), "gossip", map[string]any{"npc": st.NPC, "option": st.Option})
 			return StateLegWalk
-		case errors.Is(err, ErrNoGossipOption):
+		case errors.Is(err, ErrNoGossipOption), errors.Is(err, ErrNoGossipMenu):
 			if p.timeUp() {
 				p.stop("time")
 				return ""
 			}
 			if !p.now().Before(deadline) {
+				if errors.Is(err, ErrNoGossipMenu) {
+					return p.stepFail("gossip", fmt.Sprintf("the menu of %d did not open for %v", st.NPC, st.retry()))
+				}
 				return p.stepFail("gossip", fmt.Sprintf("the menu of %d lacked option %d for %v", st.NPC, st.Option, st.retry()))
 			}
 			if !p.sleep(ctx, p.lim.Poll) {
@@ -459,7 +492,7 @@ func (p *playRun) waitHolds(st *WaitStep, seen *bool) bool {
 			centre = st.Gone.Centre
 		}
 		for _, u := range p.ports.World.Units() {
-			if u.Dead || u.Friendly {
+			if u.Dead || u.Friendly || p.partyOwned(u) {
 				continue
 			}
 			if dist3(u.Pos, centre) <= float64(st.Gone.Radius) {
@@ -533,7 +566,7 @@ func (p *playRun) stepArrived() (string, bool) {
 	switch {
 	case p.stopReason != "":
 		return "", false
-	case p.pack >= 0:
+	case p.pack >= 0 || !p.stranger.IsZero():
 		return StatePull, false
 	}
 	return "", true

@@ -139,6 +139,10 @@ func (s *session) waitRaidConfirm(ctx context.Context, what string, timeout time
 	return s.waitGroupReadback(ctx, what, timeout, "the server did not apply it", "the core drops a refused raid command silently", check)
 }
 
+// errGroupUnconfirmed is a group command's readback that never came. The command may still have been applied (the
+// echo was lost), so a caller that can afford the order being missed treats it as a miss, not a refusal.
+var errGroupUnconfirmed = errors.New("the readback did not come")
+
 // waitGroupReadback polls check after every packet until it holds or timeout passes; a timeout is "<what>:
 // <refusal> within <timeout> (<hint>)".
 func (s *session) waitGroupReadback(ctx context.Context, what string, timeout time.Duration, refusal, hint string, check func() bool) error {
@@ -152,7 +156,7 @@ func (s *session) waitGroupReadback(ctx context.Context, what string, timeout ti
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return fmt.Errorf("%s: %s within %s (%s)", what, refusal, timeout, hint)
+			return fmt.Errorf("%s: %s within %s (%s): %w", what, refusal, timeout, hint, errGroupUnconfirmed)
 		}
 		if remaining > groupConfirmPoll {
 			remaining = groupConfirmPoll
