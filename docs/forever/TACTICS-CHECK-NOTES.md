@@ -86,14 +86,16 @@ writes the recorded run the command test reads):
 
 ## Gates
 
-Run on the build VM (`vm-test ta <worktree>`), the lines quoted from its log:
+Run on the build VM (`vm-test ta <worktree>`), one command gated stage by stage, the lines quoted from its log
+(tree `2eae5d800`, dirty=0):
 
 ```
 gofmt -l .                      -> (no output)
-go vet ./...                    -> rc=0
+staticcheck ./...               -> rc=0 (staticcheck 2026.2.2, no finding)
 CGO_ENABLED=0 go build ./...    -> rc=0
-staticcheck ./...               -> rc=0 (no finding)
-RESULT: PASS kind=ta sha=<sha> dirty=0 files=<n>
+go test -count=1 -timeout 20m ./... -> ok
+go vet ./...                    -> rc=0
+RESULT: PASS kind=ta sha=2eae5d800 dirty=0 files=2958
 ```
 
 ## Known limits
