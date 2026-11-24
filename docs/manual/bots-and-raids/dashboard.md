@@ -108,6 +108,18 @@ the character, its party, the bots it commands, the mobs around them and the las
 event rows. The page is read-only unless `--control` (run controls) or `--edit`
 (the route editor, described in [route tools](../dungeons/route-tools.md)) is on.
 
+The page polls each agent every 1.5 s, with a 2 s bound per agent. On a Forever serve slot it asks `status`,
+`party`, `commander {op:status}`, `units {within:100}` and the `event_log` tail; on a Turtle card it asks
+`status`, `dungeon_status`, `tune_list` and `bot_view`.
+
+A Forever card also carries the serve's own live map: `map_snapshot` — the party members and the hostile creatures
+on the Forever mesh, drawn by the daemon from its session recorder over the navmesh — asked every 5 s (never faster
+than 2 s) under a 10 s bound, on a goroutine of its own, so a slow or gone serve never delays the poll or the page.
+The card carries the facts (map, floor, members, hostiles, the picture's time); the drawing is
+`GET /api/map/<id>` as `image/svg+xml`, and the Positions panel draws it. A serve that does not answer shows
+`No live map: <reason>` (the route answers HTTP 503) instead of a stale picture, and the next good answer draws
+again. The plan view and the trace digest of a replay are unchanged: they keep drawing the recorded frames.
+
 `--control` adds the run actions: pause, resume, skip and stop a run, a set of
 order buttons and the Positions panel. Its rules:
 
@@ -151,6 +163,11 @@ module's typed-point reach) is refused. `Place` needs the commander card, which 
 also what the panel's Who list checks names against: a card that cannot be read
 means nothing is sent. The Who list takes the fixed words above, any member's name
 on the card, a class name, or `group1` to `group8`.
+
+The panel also draws the serve's own live map above its buttons: the `/api/map/<id>` picture of the party and
+the hostiles on the Forever mesh, refreshed by the dashboard's own 5 s poll and read-only (no control token). A
+serve that stops answering turns it into one line, `No live map: <reason>`, never a stale drawing; Turtle cards
+and the plan view keep drawing the recorded frames.
 
 The panel sends to `POST /api/control/<id>/place` under the same token and nonce
 gate as the run buttons; the request body's verbs are `place`, `place_follow`,

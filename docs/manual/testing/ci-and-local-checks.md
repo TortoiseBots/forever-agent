@@ -72,7 +72,7 @@ To run the full CI on a branch without a PR, push it as `ci/<name>`; delete the 
 
 | Job | Contents |
 |---|---|
-| `lint` | `make fmt-check vet nocgo`, the shard scripts' self-tests, `make cross`, `make docs-check` (the user manual as an OKF bundle), the differential table against a pinned `tortoise-trials` checkout (Python 3.12), `staticcheck ./...` pinned to 2026.2.2, then a cgo build |
+| `lint` | `make fmt-check vet nocgo`, the shard scripts' self-tests, `make cross`, `make docs-check` (the user manual as an OKF bundle), `make tools-test` (the automatic label rules and the label sync), the differential table against a pinned `tortoise-trials` checkout (Python 3.12), `staticcheck ./...` pinned to 2026.2.2, then a cgo build |
 | `race-shards` | `go test -race -count=1 -timeout 20m` over the whole module in nine jobs |
 | `race-shards-check` | fails unless the nine shards, together, ran every test and package exactly once |
 | `test` | the required check: passes only when the three above did; a skipped or cancelled job fails it |
