@@ -48,6 +48,12 @@ const (
 	PlaySegmentYd = 15.0
 	// PlayPatrolYd is how near the way a live patrol holds the walk (20 yd).
 	PlayPatrolYd = 20.0
+	// PlayStillYd and PlayStillAfter are the patrol hold's movement test: a unit that has not left a PlayStillYd
+	// circle in PlayStillAfter is not a patrol that will walk off (the oggleflint run of 2026-11-24: a static hostile
+	// stood at one point for the run's whole 17 min while the hold waited its 120 s, then stopped the run), so the
+	// hold ends there and the unit is pulled like any other, or left behind when it cannot be.
+	PlayStillYd    = 1.0
+	PlayStillAfter = 20 * time.Second
 
 	// PlayLootMethod and PlayLootThreshold are D-9: group loot at the uncommon threshold.
 	PlayLootMethod    = party.GroupLoot
@@ -289,6 +295,11 @@ type playRun struct {
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool
+	// stranger is the unit the patrol hold pulled as its own pull (a live hostile the plan does not know that stands
+	// in the way): the pull's own marks, sight stand and bounds, and the leg goes on after it.
+	stranger wire.GUID
+	// strangerPulls counts the pulls of each stranger, so one that evades is not pulled forever.
+	strangerPulls map[wire.GUID]int
 	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
 	pulled     map[int]bool
 	bossKilled map[uint32]bool
@@ -339,7 +350,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 	p := &playRun{
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
 		farSince: map[string]time.Time{}, farStage: map[string]int{}, bosses: map[string]bool{},
-		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{},
+		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, strangerPulls: map[wire.GUID]int{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
 	if p.ports.Clock == nil {
@@ -812,7 +823,7 @@ func (p *playRun) legWalk(ctx context.Context) string {
 		if p.stopReason != "" {
 			return ""
 		}
-		if p.pack >= 0 {
+		if p.pack >= 0 || !p.stranger.IsZero() {
 			return StatePull
 		}
 		p.walkAt++
@@ -952,7 +963,8 @@ func (p *playRun) checkExact(to Vec3, exact bool) {
 }
 
 // walkSegments walks the segments, polling the party and the way between them. A pack of the leg that stands in the
-// way is the pull that comes first (P2b); a live patrol the plan does not know holds the walk and then stops it.
+// way is the pull that comes first (P2b); a live hostile the plan does not know holds the walk, and is then pulled as
+// its own pull, or left behind when it cannot be.
 func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd {
 	for _, seg := range segs {
 		if p.timeUp() {
@@ -983,8 +995,8 @@ func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd
 				p.pack = g
 				return walkPulling
 			}
-			if p.patrolHold(ctx) {
-				return walkStopped
+			if end := p.patrolHold(ctx); end != walkArrived {
+				return end
 			}
 		}
 	}
@@ -1082,47 +1094,130 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 }
 
 // patrolHold holds the walk while a live hostile the plan knows nothing about stands near the agent, up to the patrol
-// budget, and then stops the run. A hostile a pack or a patrol of the plan names is pulled instead (packInWay): the
-// plan's packs do not walk out of the way, and a player run fights what comes at it. It reports whether the run
-// stopped.
-func (p *playRun) patrolHold(ctx context.Context) bool {
-	if !p.strangerNear(PlayPatrolYd) {
-		return false
+// budget. A hostile a pack or a patrol of the plan names is pulled instead (packInWay): the plan's packs do not walk
+// out of the way, and a player run fights what comes at it.
+//
+// A unit that does not move for PlayStillAfter is not a patrol (the run of 2026-11-24 held its whole 120 s on a static
+// hostile at the oggleflint boss, standing at one point through every frame of the run, and then stopped it): the hold
+// ends there, and what the walk does with the unit is endHold's. It returns the walk's end: walkArrived to walk on,
+// walkPulling when the unit is a pull of its own, walkStopped when the run stopped.
+func (p *playRun) patrolHold(ctx context.Context) walkEnd {
+	p.refreshSelf()
+	if p.selfMap != p.route.Map {
+		// Not the instance: the plan's strangers are the instance's, and a hostile met on the way to the portal is the
+		// open world's, which the party fights only when it aggros (packInWay's rule, and the walk goes on).
+		return walkArrived
 	}
-	p.rec.Event(p.now(), "patrol_hold", map[string]any{"leg": p.legIdx})
-	deadline := p.now().Add(p.lim.Patrol)
+	u, ok := p.strangerNear(PlayPatrolYd)
+	if !ok {
+		return walkArrived
+	}
+	start := p.now()
+	p.rec.Event(start, "patrol_hold", map[string]any{
+		"leg": p.legIdx, "guid": u.GUID.String(), "entry": u.Entry,
+		"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2], "yd": dist3(u.Pos, p.self),
+	})
+	deadline := start.Add(p.lim.Patrol)
+	guid, anchor, moved := u.GUID, u.Pos, false
 	for {
 		if !p.sleep(ctx, p.lim.Poll) {
-			return true
+			return walkStopped
 		}
 		p.refreshSelf()
-		if !p.strangerNear(PlayPatrolYd) {
-			return false
+		now := p.now()
+		cur, near := p.strangerNear(PlayPatrolYd)
+		if !near {
+			// It left the way: the patrol the hold waited for, or a unit gone from the view.
+			p.rec.Event(now, "patrol_left", map[string]any{
+				"guid": guid.String(), "moved": moved, "seconds": now.Sub(start).Seconds(),
+			})
+			return walkArrived
 		}
-		if !p.now().Before(deadline) {
-			p.stop("patrol")
-			return true
+		if cur.GUID != guid || dist3(cur.Pos, anchor) > PlayStillYd {
+			// A nearer unit took the spot, or this one moved: something is walking there.
+			guid, anchor, moved = cur.GUID, cur.Pos, true
+		}
+		if !moved && now.Sub(start) >= PlayStillAfter {
+			return p.endHold(cur, false)
+		}
+		if !now.Before(deadline) {
+			return p.endHold(cur, moved)
 		}
 	}
 }
 
-// strangerNear says whether a live hostile stands within yd of the agent that no pack of the plan claims and that the
-// plan does not name (a boss and a boss's adds are named; the run goes to them itself). A party member's pet is not a
+// endHold decides what the walk does with the unit the hold waited on. A live hostile the party can reach is pulled
+// as its own pull, which is the pull's own bounds and failure rules (a pull no one answers twice ends the run as
+// pull-failed); anything else is left behind with the reason in the record and the leg walks on, the boss's pull
+// being the leg's own business and not this unit's.
+func (p *playRun) endHold(u Unit, moved bool) walkEnd {
+	why := ""
+	switch {
+	case u.Dead:
+		why = "dead"
+	case u.Friendly:
+		why = "friendly"
+	case p.strangerPulls[u.GUID] >= maxStrangerPulls:
+		why = "pulled-twice"
+	case !p.reachable(u.Pos):
+		why = "unreachable"
+	}
+	if p.stopReason != "" || p.lost {
+		return walkStopped
+	}
+	if why != "" {
+		p.rec.Event(p.now(), "patrol_skip", map[string]any{
+			"guid": u.GUID.String(), "entry": u.Entry, "moved": moved, "reason": why,
+			"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2],
+		})
+		return walkArrived
+	}
+	p.stranger = u.GUID
+	p.strangerPulls[u.GUID]++
+	p.rec.Event(p.now(), "patrol_pull", map[string]any{
+		"guid": u.GUID.String(), "entry": u.Entry, "moved": moved,
+		"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2], "yd": dist3(u.Pos, p.self),
+	})
+	return walkPulling
+}
+
+// reachable says whether the navmesh walks from where the agent stands to pos. It is the pull's own stand: a unit
+// the party cannot walk to is not pulled for (a link lost is the run's).
+func (p *playRun) reachable(to Vec3) bool {
+	route, err := p.ports.Walker.Path(p.self, to)
+	if err != nil {
+		if errors.Is(err, ErrLinkLost) {
+			p.linkLost()
+		}
+		return false
+	}
+	return route.Kind == navmesh.RouteComplete
+}
+
+// strangerNear is the nearest live hostile within yd of the agent that no pack of the plan claims and that the plan
+// does not name (a boss and a boss's adds are named; the run goes to them itself). A party member's pet is not a
 // stranger: it stands by the party and fights for it.
-func (p *playRun) strangerNear(yd float64) bool {
+func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 	units := p.ports.World.Units()
 	groups := p.route.AllGroups()
 	claim := MatchPacks(units, groups, len(groups))
 	known := p.knownEntries()
+	var best Unit
+	bestD := math.Inf(1)
 	for ui, u := range units {
-		if u.Dead || u.Friendly || dist3(u.Pos, p.self) > yd || known[u.Entry] || p.partyOwned(u) {
+		if u.Dead || u.Friendly || known[u.Entry] || p.partyOwned(u) {
 			continue
 		}
-		if _, ok := claim.GroupOf(ui); !ok {
-			return true
+		if _, ok := claim.GroupOf(ui); ok {
+			continue
 		}
+		d := dist3(u.Pos, p.self)
+		if d > yd || d >= bestD {
+			continue
+		}
+		best, bestD = u, d
 	}
-	return false
+	return best, bestD < math.Inf(1)
 }
 
 // partyOwned says whether the unit is a pet of the party: it has an owner, and that owner's GUID is a roster member's

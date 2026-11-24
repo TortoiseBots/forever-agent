@@ -11,6 +11,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/tactics"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
@@ -686,13 +687,302 @@ func TestPlayAgentPetIsNotAStranger(t *testing.T) {
 	}
 }
 
-// TestPlayStrangerStillStops: a hostile owned by nobody in the party still holds the walk and ends it as patrol.
-func TestPlayStrangerStillStops(t *testing.T) {
-	rig := newPlayRig(t, func(f *PlayFake) {
-		f.AddUnit(Unit{GUID: petGUID(3), Entry: 11320, Pos: Vec3{42, 0, 0}, Owner: wire.GUID{Low: 0x999}})
+// playStrangerPlan is one leg of no pack and one boss: the walk runs from the entrance (10) to the leg's end (40)
+// and on to the boss (60), so a unit a test puts beside it is met on the way and the boss is still ahead.
+func playStrangerPlan() *dungeon.Plan {
+	return &dungeon.Plan{
+		Version: 1, Name: "test_stranger", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 40},
+			Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}},
+		}},
+	}
+}
+
+// playTraceEvent is the record's times for one event: its first and last t in ms, zero when the event is absent.
+func playTraceEvent(events []trace.Event, name string) (first, last int64) {
+	first, last = -1, -1
+	for _, ev := range events {
+		if ev.Ev != name {
+			continue
+		}
+		if first < 0 {
+			first = ev.T
+		}
+		last = ev.T
+	}
+	return first, last
+}
+
+// TestPlayPatrolWalksOffTheWay: a live hostile the plan does not know, standing near the walk, that walks off during
+// the hold leaves the walk exactly as it was: no pull, no stop, and the leg's boss is pulled.
+func TestPlayPatrolWalksOffTheWay(t *testing.T) {
+	patrol := fightGUID(11)
+	scheduled := false
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: patrol, Entry: 700, Pos: Vec3{40, 15, 0}})
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if scheduled || dist3(to, Vec3{40, 0, 0}) > 2 {
+				return
+			}
+			scheduled = true
+			// The walk to the leg's end takes 4.3 s; the patrol walks off 8 s in, the hold's third poll, well past
+			// PlayPatrolYd.
+			f.Clock.After(8*time.Second, func() { f.MoveUnit(patrol, Vec3{40, 80, 0}) })
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: a patrol that walks off is waited for, not stopped for", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || u.Dead {
+		t.Fatalf("the patrol = %+v; want it alive and unpulled", u)
+	}
+	for _, m := range rig.fake.Marks {
+		if m.Target == patrol {
+			t.Fatalf("the patrol was marked %v; want it left alone", m)
+		}
+	}
+}
+
+// TestPlayStationaryStrangerIsPulled: a live hostile the plan does not know that does not move is not a patrol (the
+// RFC run's stop, 2026-11-24: a static mob at the oggleflint boss held the walk 120 s and ended the run). The hold
+// ends by the movement test, the unit is pulled as its own pull with the module's sight stand, and the leg goes on to
+// its boss. A unit owned outside the party is pulled the same way.
+func TestPlayStationaryStrangerIsPulled(t *testing.T) {
+	stranger := petGUID(12)
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{40, 15, 0}, Owner: wire.GUID{Low: 0x999}})
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the stranger is pulled, then the boss", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || !u.Dead {
+		t.Fatalf("the stranger = %+v; want it pulled and killed", u)
+	}
+	marked := false
+	for _, m := range rig.fake.Marks {
+		if m.Target == stranger && m.Mark == party.MarkSkull {
+			marked = true
+		}
+	}
+	if !marked {
+		t.Fatalf("marks = %v; want the skull on the stranger", rig.fake.Marks)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	hold, _ := playTraceEvent(tf.Events, "patrol_hold")
+	pulled, _ := playTraceEvent(tf.Events, "patrol_pull")
+	if hold < 0 || pulled < 0 {
+		t.Fatalf("trace events: patrol_hold at %d, patrol_pull at %d; want both", hold, pulled)
+	}
+	if d := time.Duration(pulled-hold) * time.Millisecond; d < PlayStillAfter || d >= 60*time.Second {
+		t.Fatalf("the pull came %v after the hold began; want it after PlayStillAfter (%v, the movement test) and well inside the %v budget",
+			d, PlayStillAfter, 120*time.Second)
+	}
+}
+
+// TestPlayUnreachableStrangerIsLeftBehind: a stranger the navmesh cannot reach is not pulled: the reason is recorded
+// and the leg goes on to its boss.
+func TestPlayUnreachableStrangerIsLeftBehind(t *testing.T) {
+	stranger := fightGUID(13)
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{40, 15, 0}})
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			if dist3(to, Vec3{40, 15, 0}) < 3 {
+				return navmesh.Route{Kind: navmesh.RouteNone, Start: from, End: to}
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Corners: 2, Start: from, End: to,
+				Points: []Vec3{from, to}, Length: float32(dist3(from, to))}
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: an unreachable stranger is left behind, the boss is pulled", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || u.Dead {
+		t.Fatalf("the stranger = %+v; want it alive and unpulled", u)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var reasons []string
+	for _, ev := range tf.Events {
+		if ev.Ev == "patrol_skip" {
+			if r, _ := ev.D["reason"].(string); r != "" {
+				reasons = append(reasons, r)
+			}
+		}
+	}
+	if !slices.Contains(reasons, "unreachable") {
+		t.Fatalf("patrol_skip reasons = %v; want unreachable", reasons)
+	}
+}
+
+// TestPlayStrangerPullFailureStops: the extra pull is a pull like any other, with its bounds: two orders no one
+// answers end the run as pull-failed, and the boss is never reached.
+func TestPlayStrangerPullFailureStops(t *testing.T) {
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: fightGUID(14), Entry: 700, Pos: Vec3{40, 15, 0}})
+		// `.bot attack` never brings the unit on the party: the pull's own two attempts run out.
+		f.AggroDelay = 10 * time.Minute
 	})
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
-	if res.Stop != "patrol" {
-		t.Fatalf("stop = %q; want patrol (a stranger with an owner outside the party still stops the walk)", res.Stop)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (the extra pull's own failure rules)", res.Stop)
+	}
+	if n := len(rig.fake.Lines(".bot attack ")); n != 2 {
+		t.Fatalf("attack orders = %d; want the two attempts of one pull", n)
+	}
+}
+
+// playStrangerLoopPlan is one leg whose walk meets a point three times: the leg's via (40), its end (50) and the
+// boss's walk (60), all within PlayPatrolYd of (50, 12).
+func playStrangerLoopPlan() *dungeon.Plan {
+	p := playStrangerPlan()
+	p.Legs[0].Via = []dungeon.Waypoint{{Point: dungeon.Point{X: 40}}}
+	p.Legs[0].To = dungeon.Point{X: 50}
+	p.Legs[0].Boss = &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}}
+	return p
+}
+
+// TestPlayStrangerPulledTwiceIsLeftBehind: a stranger that evades twice is bounded at two pulls (maxStrangerPulls):
+// the third hold leaves it with the reason recorded, and the leg's boss is pulled. Nothing loops on it.
+func TestPlayStrangerPulledTwiceIsLeftBehind(t *testing.T) {
+	stranger := fightGUID(15)
+	var reAdd func()
+	ticks := 0
+	rig := newPlayFightRig(t, playStrangerLoopPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		pos := Vec3{50, 12, 0}
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: pos})
+		reAdd = func() { f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: pos}) }
+		// The first two fights: the unit vanishes on the first tick (an evade) and stands there again 4 s later.
+		f.OnFightTick = func(f *PlayFake) {
+			if ticks >= 2 || !slices.ContainsFunc(f.Units(), func(u Unit) bool { return u.GUID == stranger && !u.Dead }) {
+				return
+			}
+			ticks++
+			f.RemoveUnit(stranger)
+			f.Clock.After(4*time.Second, reAdd)
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: two pulls at most, then the boss", res.Stop, res.Clear)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	pulls := 0
+	var reasons []string
+	for _, ev := range tf.Events {
+		switch ev.Ev {
+		case "patrol_pull":
+			pulls++
+		case "patrol_skip":
+			if r, _ := ev.D["reason"].(string); r != "" {
+				reasons = append(reasons, r)
+			}
+		}
+	}
+	if pulls != maxStrangerPulls {
+		t.Fatalf("patrol pulls = %d; want %d", pulls, maxStrangerPulls)
+	}
+	if !slices.Contains(reasons, "pulled-twice") {
+		t.Fatalf("patrol_skip reasons = %v; want pulled-twice", reasons)
+	}
+}
+
+// TestPlayMovingStrangerWaitsTheBudget: a unit that keeps moving but never leaves the hold's circle is waited for the
+// whole patrol budget (the movement test cannot clear it), and then pulled like the still one; nothing stops the run.
+func TestPlayMovingStrangerWaitsTheBudget(t *testing.T) {
+	stranger := fightGUID(16)
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{40, 15, 0}})
+		var shuffle func(n int)
+		shuffle = func(n int) {
+			if n == 0 {
+				return
+			}
+			f.Clock.After(6*time.Second, func() {
+				pos := Vec3{40, 10, 0}
+				if n%2 == 0 {
+					pos = Vec3{40, 15, 0}
+				}
+				f.MoveUnit(stranger, pos)
+				shuffle(n - 1)
+			})
+		}
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if dist3(to, Vec3{40, 0, 0}) <= 2 {
+				shuffle(3) // 6, 12 and 18 s in: past PlayStillAfter, inside the hold
+			}
+		}
+	})
+	rig.cfg.Limits.Patrol = 30 * time.Second
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: a moving stranger is waited for, then pulled", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || !u.Dead {
+		t.Fatalf("the stranger = %+v; want it pulled and killed", u)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	hold, _ := playTraceEvent(tf.Events, "patrol_hold")
+	pulled, _ := playTraceEvent(tf.Events, "patrol_pull")
+	if hold < 0 || pulled < 0 {
+		t.Fatalf("trace events: patrol_hold at %d, patrol_pull at %d; want both", hold, pulled)
+	}
+	if d := time.Duration(pulled-hold) * time.Millisecond; d < 30*time.Second || d >= 60*time.Second {
+		t.Fatalf("the pull came %v after the hold began; want it at the %v budget's end", d, 30*time.Second)
+	}
+}
+
+// TestPlayStrangerOutsideTheInstanceIsNotHeld: the hold is the instance's. A hostile the plan does not know on the
+// open map (the walk to the portal) is not waited for and not pulled: the walk to the portal goes on.
+func TestPlayStrangerOutsideTheInstanceIsNotHeld(t *testing.T) {
+	stranger := fightGUID(17)
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.SelfPos = Vec3{250, 0, 0} // on the portal's map, 150 yd out: the walk to the portal ends where the unit stands
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: Vec3{100, 15, 0}})
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: an open-map hostile is not the hold's", res.Stop, res.Clear)
+	}
+	if u, ok := rig.fake.UnitOf(700); !ok || u.Dead {
+		t.Fatalf("the open-map hostile = %+v; want it alive and unpulled", u)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	if hold, _ := playTraceEvent(tf.Events, "patrol_hold"); hold >= 0 {
+		t.Fatalf("patrol_hold at %d ms; want none outside the instance", hold)
 	}
 }
